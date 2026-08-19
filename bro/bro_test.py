@@ -2,838 +2,56 @@ import asyncio
 import json
 import os
 import signal
-import subprocess
 from pathlib import Path
 from typing import ClassVar, Optional
 from unittest.mock import MagicMock
 
 import pytest
 
-import bro.bro
+import bro.bro as bro_module
 import bro.llm.llms.echo as llm_llms_echo
 import bro.llm.mcp as llm_mcp
 import bro.workspace.banner as workspace_banner
 from bro.base import credentials
 from bro.base.condition import ConditionError, iff, when
-from bro.bro import BaseBro, BroRaised, feature, set_default_tracker_factory
+from bro.bro import BaseBro, BroRaised, feature
 from bro.datasources.file import FileSource
 from bro.datasources.man import ManPage, ManSource
 from bro.datasources.searchable import Hit, SearchableDataSource
-from bro.llm.llm import LLM
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, MCPServerSpec, describe
-from bro.llm.observer import (
-  NullObserver,
-  ObservedEvent,
-  Observer,
-  TurnCompletedEvent,
-  TurnFailedEvent,
-  TurnRefusedEvent,
-  TurnStartedEvent,
-)
-from bro.llm.tracker import NullTracker, Tracker
-
-
-class MockLLM(LLM):
-  def __init__(self, response: str = 'mock', mcp_servers: Optional[list[MCPServer]] = None):
-    super().__init__(mcp_servers)
-    self.response = response
-    self.send_calls: list[list[dict]] = []
-
-  async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
-    self.send_calls.append(messages)
-    return self.response
-
-
-class CapturingObserver(Observer):
-  def __init__(self):
-    self.events: list[ObservedEvent] = []
-
-  def on_event(self, event: ObservedEvent) -> None:
-    self.events.append(event)
+from bro.llm.tracker import ToolStepSource
 
 
 class EchoBro(BaseBro):
   name = 'echo'
   description = 'echoes input'
 
-  def __init__(self, response: str = 'echoed'):
-    super().__init__(system_prompt='you echo')
-    self._response = response
-
-  def _create_llm(self, *, hold: str) -> LLM:
-    return MockLLM(response=self._response)
-
-
-class TestBroRun:
-  @pytest.mark.asyncio
-  async def test_run_returns_response(self):
-    bro = EchoBro(response='hello back')
-    result = await bro.run('hello', surface='test')
-    assert result == 'hello back'
-
-  @pytest.mark.asyncio
-  async def test_run_emits_turn_boundaries_with_the_exact_return_value(self):
-    observer = CapturingObserver()
-
-    result = await EchoBro(response='exact reply').run('hello', observer=observer, surface='test')
-
-    assert result == 'exact reply'
-    assert observer.events == [TurnStartedEvent('hello'), TurnCompletedEvent('exact reply')]
-
-  @pytest.mark.asyncio
-  async def test_run_owns_a_context_managed_observer(self):
-    class ContextObserver(CapturingObserver):
-      def __init__(self):
-        super().__init__()
-        self.entered = False
-        self.exited = False
-
-      def __enter__(self):
-        self.entered = True
-        return self
-
-      def __exit__(self, exception_type, exception, traceback):
-        self.exited = True
-
-    observer = ContextObserver()
-    await EchoBro().run('hello', observer=observer, surface='test')
-    assert observer.entered is True
-    assert observer.exited is True
-
-  @pytest.mark.asyncio
-  async def test_run_emits_failure_before_propagating_it(self):
-    class FailingLLM(MockLLM):
-      async def send(self, messages, *, request_timeout=None):
-        raise RuntimeError('provider failed')
-
-    class FailingBro(EchoBro):
-      def _create_llm(self, *, hold: str) -> LLM:
-        return FailingLLM()
-
-    observer = CapturingObserver()
-    with pytest.raises(RuntimeError, match='provider failed'):
-      await FailingBro().run('hello', observer=observer, surface='test')
-    assert observer.events == [TurnStartedEvent('hello'), TurnFailedEvent('provider failed')]
-
-  @pytest.mark.asyncio
-  async def test_run_wires_observer_through_to_llm(self):
-    captured: list[Observer] = []
-
-    class ExplicitObserver(NullObserver):
-      pass
-
-    class WireBro(BaseBro):
-      name = 'wire'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-      def _create_llm(self, *, hold: str):
-        captured.append(self._observer)
-        return MockLLM()
-
-    explicit = ExplicitObserver()
-    await WireBro().run('hi', observer=explicit, surface='test')
-    assert len(captured) == 1
-    assert captured[0] is explicit
-
-  @pytest.mark.asyncio
-  async def test_run_without_an_observer_renders_nothing(self):
-    bro = EchoBro()
-    await bro.run('hi', surface='test')
-    assert isinstance(bro._observer, NullObserver)
-
-  @pytest.mark.asyncio
-  async def test_run_explicit_tracker_overrides_default(self):
-    captured: list[Tracker] = []
-
-    class ExplicitTracker(NullTracker):
-      pass
-
-    class WireBro(BaseBro):
-      name = 'tracker-run'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='hi')
-
-      def _create_llm(self, *, hold: str):
-        captured.append(self._tracker)
-        return MockLLM()
-
-    explicit = ExplicitTracker()
-    await WireBro().run('input', tracker=explicit, surface='test')
-    assert len(captured) == 1
-    assert captured[0] is explicit
-
-  @pytest.mark.asyncio
-  async def test_run_calls_start_and_end_trail(self):
-    calls: list[tuple[str, dict]] = []
-
-    class RecordingTracker(NullTracker):
-      def start_trail(
-        self,
-        bro,
-        llm_spec,
-        system_prompt,
-        forked_from,
-        interactive,
-        surface,
-        hold='unattended',
-        summoned_by=None,
-      ) -> str:
-        calls.append(
-          (
-            'start',
-            {
-              'bro': bro,
-              'llm_spec': llm_spec,
-              'system_prompt': system_prompt,
-              'interactive': interactive,
-              'surface': surface,
-              'forked_from': forked_from,
-              'summoned_by': summoned_by,
-            },
-          )
-        )
-        return 'tid'
-
-      def end_trail(self, reason, detail=None) -> None:
-        calls.append(('end', {'reason': reason}))
-
-    class TraceBro(BaseBro):
-      name = 'trace-bro'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='base prompt')
-
-      def _create_llm(self, *, hold: str):
-        return MockLLM(response='ok')
-
-    await TraceBro().run('hello', tracker=RecordingTracker(), surface='test')
-    assert [c[0] for c in calls] == ['start', 'end']
-    start_kwargs = calls[0][1]
-    assert start_kwargs['bro'] == 'trace-bro'
-    assert start_kwargs['interactive'] is False
-    assert start_kwargs['surface'] == 'test'
-    assert start_kwargs['forked_from'] is None
-    assert start_kwargs['summoned_by'] is None
-    assert 'base prompt' in start_kwargs['system_prompt']
-    assert calls[1][1]['reason'] == 'ok'
-
-  @pytest.mark.asyncio
-  async def test_run_passes_summoned_by_from_the_launch_env(self, monkeypatch):
-    captured: list[Optional[dict]] = []
-
-    class RecordingTracker(NullTracker):
-      def start_trail(
-        self,
-        bro,
-        llm_spec,
-        system_prompt,
-        forked_from,
-        interactive,
-        surface,
-        hold='unattended',
-        summoned_by=None,
-      ) -> str:
-        captured.append(summoned_by)
-        return 'tid'
-
-    class TraceBro(BaseBro):
-      name = 'trace-bro'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='base prompt')
-
-      def _create_llm(self, *, hold: str):
-        return MockLLM(response='ok')
-
-    monkeypatch.setenv('RIDE_SUMMONER', '{"trail_id":"T-parent"}')
-    await TraceBro().run('hello', tracker=RecordingTracker(), surface='test')
-    assert captured == [{'trail_id': 'T-parent'}]
-    # consumed on read: a nested in-process run spawned by this process's tools
-    # must not inherit the marker and re-stamp the parent's summoned_by
-    assert 'RIDE_SUMMONER' not in os.environ
-    await TraceBro().run('again', tracker=RecordingTracker(), surface='test')
-    monkeypatch.setenv('RIDE_SUMMONER', '{"trail_id":"T-universal","step_id":7,"index":2}')
-    await TraceBro().run('universal pointer', tracker=RecordingTracker(), surface='test')
-    monkeypatch.setenv('RIDE_SUMMONER', '{"target":"bro","trail_id":"T-legacy"}')
-    await TraceBro().run('legacy direct', tracker=RecordingTracker(), surface='test')
-    monkeypatch.setenv('RIDE_SUMMONER', '{"session":"c:legacy-root"}')
-    await TraceBro().run('legacy session', tracker=RecordingTracker(), surface='test')
-    assert captured == [
-      {'trail_id': 'T-parent'},
-      None,
-      {'trail_id': 'T-universal', 'step_id': 7, 'index': 2},
-      {'trail_id': 'T-legacy'},
-      None,
-    ]
-
-  @pytest.mark.asyncio
-  async def test_run_end_reason_is_raised_on_bro_raised(self):
-    calls: list[str] = []
-
-    class RecordingTracker(NullTracker):
-      def end_trail(self, reason, detail=None) -> None:
-        calls.append(reason)
-
-    class RaiseBro(BaseBro):
-      name = 'raise-bro'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-      def _create_llm(self, *, hold: str):
-        class Boom(MockLLM):
-          async def send(self, messages, *, request_timeout=None):
-            raise BroRaised('nope')
-
-        return Boom()
-
-    with pytest.raises(BroRaised):
-      await RaiseBro().run('x', tracker=RecordingTracker(), surface='test')
-    assert calls == ['raised']
-
-  @pytest.mark.asyncio
-  async def test_run_end_reason_is_error_on_generic_exception(self):
-    calls: list[tuple] = []
-
-    class RecordingTracker(NullTracker):
-      def step(self, kind, body, **extras) -> None:
-        calls.append(('step', kind, body))
-
-      def end_trail(self, reason, detail=None) -> None:
-        calls.append(('end', reason))
-
-    class BoomBro(BaseBro):
-      name = 'boom-bro'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-      def _create_llm(self, *, hold: str):
-        class Boom(MockLLM):
-          async def send(self, messages, *, request_timeout=None):
-            raise RuntimeError('kaboom')
-
-        return Boom()
-
-    with pytest.raises(RuntimeError):
-      await BoomBro().run('x', tracker=RecordingTracker(), surface='test')
-    # the exception is recorded as an error step before the trail closes, so
-    # the trail carries the failure cause rather than a bare end reason.
-    assert calls == [('step', 'error', calls[0][2]), ('end', 'error')]
-    body = calls[0][2]
-    assert body['message'] == 'kaboom'
-    assert 'RuntimeError: kaboom' in body['traceback']
-    assert 'in send' in body['traceback']
-
-  @pytest.mark.asyncio
-  async def test_run_error_step_failure_does_not_mask_the_run_error(self):
-    calls: list[str] = []
-
-    class BrokenTracker(NullTracker):
-      def step(self, kind, body, **extras) -> None:
-        raise ConnectionError('tracker down')
-
-      def end_trail(self, reason, detail=None) -> None:
-        calls.append(reason)
-
-    class BoomBro(BaseBro):
-      name = 'boom-bro'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-      def _create_llm(self, *, hold: str):
-        class Boom(MockLLM):
-          async def send(self, messages, *, request_timeout=None):
-            raise RuntimeError('kaboom')
-
-        return Boom()
-
-    with pytest.raises(RuntimeError, match='kaboom'):
-      await BoomBro().run('x', tracker=BrokenTracker(), surface='test')
-    assert calls == ['error']
-
-  def test_default_tracker_factory_can_be_swapped(self):
-    sentinel = NullTracker()
-
-    class FactoryBro(BaseBro):
-      name = 'factory-bro'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    set_default_tracker_factory(lambda: sentinel)
-    try:
-      assert FactoryBro()._make_tracker() is sentinel
-    finally:
-      set_default_tracker_factory(NullTracker)
-
-  def test_default_factory_records_without_a_trails_config(self, monkeypatch, tmp_path):
-    # `_default_factory` refuses to silently fall back to `NullTracker`: with no
-    # credential to select a backend, the run records to local storage.
-    from bro import bro as bro_module
-    from bro.base import credentials
-    from bro.trails.local import LocalStore
-    from bro.trails.record.bro import Recorder
-
-    monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path))
-    monkeypatch.setattr(credentials, 'BRO_DIR', str(tmp_path))
-    monkeypatch.setattr(credentials, '_default_store', None)
-    monkeypatch.setattr('bro.trails.store.paths.project_root', lambda: tmp_path)
-    monkeypatch.delenv(bro_module._TRAILS_DISABLED_ENV, raising=False)
-
-    tracker = bro_module._default_factory()
-
-    assert isinstance(tracker, Recorder)
-    assert isinstance(tracker._store, LocalStore)
-
-  # presence is what counts (same convention as NO_COLOR / RIDE_IN_CONTAINER):
-  # any value, including '' and '0', enables the switch. unset it to record.
-  @pytest.mark.parametrize('value', ['1', '', '0', 'whatever'])
-  def test_default_factory_disabled_by_env_var(self, monkeypatch, value):
-    # the kill switch wins before any backend resolution.
-    from bro import bro as bro_module
-
-    monkeypatch.setenv(bro_module._TRAILS_DISABLED_ENV, value)
-    assert isinstance(bro_module._default_factory(), NullTracker)
-
-  @pytest.mark.asyncio
-  async def test_run_passes_system_and_user_messages(self):
-    llm = MockLLM()
-
-    class CaptureBro(BaseBro):
-      name = 'capture'
-      description = 'captures messages'
-
-      def __init__(self):
-        super().__init__(system_prompt='be helpful')
-
-      def _create_llm(self, *, hold: str):
-        return llm
-
-    bro = CaptureBro()
-    await bro.run('test input', surface='test')
-    assert len(llm.send_calls) == 1
-    messages = llm.send_calls[0]
-    assert len(messages) == 2
-    assert messages[0]['role'] == 'system'
-    assert 'be helpful' in messages[0]['content']
-    assert messages[1] == {'role': 'user', 'content': 'test input'}
-
-
-class TestBroLifetime:
-  def test_exit_closes_the_live_servers(self):
-    # what a session holds — the dev toolset's background jobs are the built-in
-    # case — is released when its lifetime ends, not at interpreter exit.
-    closed: list[str] = []
-
-    class _ClosingServer(InProcessMCPServer):
-      def close(self) -> None:
-        closed.append(self.namespace)
-
-    class _Holder(EchoBro):
-      tools: ClassVar = [_server_layer(MCPServerSpec(build=lambda: _ClosingServer('holder', [])))]
-
-    bro = _Holder()
-    with bro:
-      bro._live_mcp_servers()
-      assert closed == []
-    assert closed == ['holder']
-
-  def test_exit_survives_a_failing_server_teardown(self):
-    class _BrokenServer(InProcessMCPServer):
-      def close(self) -> None:
-        raise RuntimeError('teardown exploded')
-
-    class _Holder(EchoBro):
-      tools: ClassVar = [_server_layer(MCPServerSpec(build=lambda: _BrokenServer('broken', [])))]
-
-    bro = _Holder()
-    with bro:
-      bro._live_mcp_servers()
-    assert bro._last_end_reason == 'ok'
-
-  def test_exit_without_send_is_safe(self):
-    bro = EchoBro()
-    with bro:
-      pass
-    assert bro.trail_id is None
-
-  @pytest.mark.parametrize(
-    'exception,reason,detail',
-    [
-      (BroRaised('blocked'), 'raised', 'blocked'),
-      (RuntimeError('broken'), 'error', 'broken'),
-    ],
-  )
-  def test_exit_maps_the_lifetime_outcome(self, exception, reason, detail):
-    ends: list[tuple[str, Optional[str]]] = []
-
-    class RecordingTracker(NullTracker):
-      def end_trail(self, reason, detail=None) -> None:
-        ends.append((reason, detail))
-
-    bro = EchoBro()
-    bro._tracker = RecordingTracker()
-    with pytest.raises(type(exception)):
-      with bro:
-        raise exception
-    assert ends == [(reason, detail)]
-
-  def test_keyboard_interrupt_is_a_clean_tui_exit(self):
-    ends: list[str] = []
-
-    class RecordingTracker(NullTracker):
-      def end_trail(self, reason, detail=None) -> None:
-        ends.append(reason)
-
-    bro = EchoBro()
-    bro._tracker = RecordingTracker()
-    with pytest.raises(KeyboardInterrupt):
-      with bro:
-        raise KeyboardInterrupt
-    assert ends == ['ok']
-
-  @pytest.mark.asyncio
-  async def test_context_ends_one_interactive_conversation(self):
-    calls: list[str] = []
-
-    class RecordingTracker(NullTracker):
-      def start_trail(self, *args, **kwargs) -> str:
-        calls.append('start')
-        return 'tid'
-
-      def end_trail(self, reason, detail=None) -> None:
-        calls.append(f'end:{reason}')
-
-    bro = EchoBro()
-    with bro:
-      await bro.send('first', tracker=RecordingTracker(), surface='test')
-      await bro.send('second', surface='test')
-    assert calls == ['start', 'end:ok']
-
-
-class TestBroSend:
-  @pytest.mark.asyncio
-  async def test_send_returns_response(self):
-    bro = EchoBro(response='hello')
-    result = await bro.send('hi', surface='test')
-    assert result == 'hello'
-
-  @pytest.mark.asyncio
-  async def test_send_reuses_llm(self):
-    llm_instances = []
-
-    class TrackBro(BaseBro):
-      name = 'track'
-      description = 'tracks'
-
-      def __init__(self):
-        super().__init__(system_prompt='track')
-
-      def _create_llm(self, *, hold: str):
-        llm = MockLLM()
-        llm_instances.append(llm)
-        return llm
-
-    bro = TrackBro()
-    await bro.send('a', surface='test')
-    await bro.send('b', surface='test')
-    assert len(llm_instances) == 1
-
-  @pytest.mark.asyncio
-  async def test_send_first_call_includes_system_prompt(self):
-    llm = MockLLM()
-
-    class CaptureBro(BaseBro):
-      name = 'capture'
-      description = 'captures'
-
-      def __init__(self):
-        super().__init__(system_prompt='be helpful')
-
-      def _create_llm(self, *, hold: str):
-        return llm
-
-    bro = CaptureBro()
-    await bro.send('hi', surface='test')
-    assert len(llm.send_calls) == 1
-    messages = llm.send_calls[0]
-    assert len(messages) == 2
-    assert messages[0]['role'] == 'system'
-    assert 'be helpful' in messages[0]['content']
-    assert messages[1] == {'role': 'user', 'content': 'hi'}
-
-  @pytest.mark.asyncio
-  async def test_send_wires_explicit_observer(self):
-    captured: list[Observer] = []
-
-    class ExplicitObserver(NullObserver):
-      pass
-
-    class WireBro(BaseBro):
-      name = 'wire-send'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-      def _create_llm(self, *, hold: str):
-        captured.append(self._observer)
-        return MockLLM()
-
-    explicit = ExplicitObserver()
-    bro = WireBro()
-    await bro.send('hi', observer=explicit, surface='test')
-    await bro.send('again', surface='test')
-    assert len(captured) == 1
-    assert captured[0] is explicit
-
-  @pytest.mark.asyncio
-  async def test_send_without_an_observer_renders_nothing(self):
-    bro = EchoBro()
-    await bro.send('hi', surface='test')
-    assert isinstance(bro._observer, NullObserver)
-
-  @pytest.mark.asyncio
-  async def test_send_first_call_starts_interactive_trail(self):
-    calls: list[tuple[str, dict]] = []
-
-    class RecordingTracker(NullTracker):
-      def start_trail(
-        self,
-        bro,
-        llm_spec,
-        system_prompt,
-        forked_from,
-        interactive,
-        surface,
-        hold='unattended',
-        summoned_by=None,
-      ) -> str:
-        calls.append(
-          (
-            'start',
-            {'interactive': interactive, 'surface': surface, 'hold': hold, 'bro': bro},
-          )
-        )
-        return 'tid'
-
-    class SendBro(BaseBro):
-      name = 'send-bro'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-      def _create_llm(self, *, hold: str):
-        return MockLLM()
-
-    bro = SendBro()
-    await bro.send('first', tracker=RecordingTracker(), surface='test')
-    await bro.send('second', surface='test')
-    # start_trail fires once — interactive trails span the whole conversation.
-    assert [c[0] for c in calls] == ['start']
-    assert calls[0][1]['interactive'] is True
-    assert calls[0][1]['surface'] == 'test'
-    assert calls[0][1]['bro'] == 'send-bro'
-    assert bro.trail_id == 'tid'
-
-  @pytest.mark.asyncio
-  async def test_send_labels_trail_with_callers_surface(self):
-    calls: list[str] = []
-
-    class RecordingTracker(NullTracker):
-      def start_trail(
-        self,
-        bro,
-        llm_spec,
-        system_prompt,
-        forked_from,
-        interactive,
-        surface,
-        hold='unattended',
-        summoned_by=None,
-      ) -> str:
-        calls.append(surface)
-        return 'tid'
-
-    class SendBro(BaseBro):
-      name = 'send-bro'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-      def _create_llm(self, *, hold: str):
-        return MockLLM()
-
-    bro = SendBro()
-    await bro.send('first', tracker=RecordingTracker(), surface='call')
-    # surface labels the trail header, so only the opening send matters
-    await bro.send('second', surface='ignored')
-    assert calls == ['call']
-
-  @pytest.mark.asyncio
-  async def test_send_rebinds_observer_on_later_sends(self):
-    # a preseeded bro (bro.fork) builds its LLM before the interactive surface
-    # exists; the surface's renderer must take effect when attached later.
-    class MarkerObserver(NullObserver):
-      pass
-
-    class WireBro(BaseBro):
-      name = 'wire-send'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-      def _create_llm(self, *, hold: str):
-        return MockLLM()
-
-    bro = WireBro()
-    await bro.send('first', surface='test')
-    assert bro._llm is not None
-    attached = MarkerObserver()
-    await bro.send('second', observer=attached, surface='test')
-    assert bro._observer is attached
-    assert bro._llm.observer is attached
-
-  @pytest.mark.asyncio
-  async def test_send_subsequent_calls_only_user(self):
-    llm = MockLLM()
-
-    class CaptureBro(BaseBro):
-      name = 'capture'
-      description = 'captures'
-
-      def __init__(self):
-        super().__init__(system_prompt='be helpful')
-
-      def _create_llm(self, *, hold: str):
-        return llm
-
-    bro = CaptureBro()
-    await bro.send('first', surface='test')
-    await bro.send('second', surface='test')
-    assert len(llm.send_calls) == 2
-    messages = llm.send_calls[1]
-    assert len(messages) == 1
-    assert messages[0] == {'role': 'user', 'content': 'second'}
-
-  @pytest.mark.asyncio
-  async def test_run_does_not_affect_send_llm(self):
-    llm_instances = []
-
-    class TrackBro(BaseBro):
-      name = 'track'
-      description = 'tracks'
-
-      def __init__(self):
-        super().__init__(system_prompt='track')
-
-      def _create_llm(self, *, hold: str):
-        llm = MockLLM()
-        llm_instances.append(llm)
-        return llm
-
-    bro = TrackBro()
-    await bro.run('one-shot', surface='test')
-    await bro.send('first', surface='test')
-    await bro.send('second', surface='test')
-    assert len(llm_instances) == 2
-
-
-class GatedBro(BaseBro):
-  name = 'gated'
-  description = 'declares secrets for credential-gate tests'
-  # two manifest names on top of the default openai spec's `openai`
-  extra_secrets = ('alpha', 'beta')
-
   def __init__(self):
-    super().__init__(system_prompt='gated')
-    self.mock_llm = MockLLM(response='ran')
-
-  def _create_llm(self, *, hold: str) -> LLM:
-    return self.mock_llm
+    super().__init__(system_prompt='you echo')
 
 
-@pytest.mark.credential_gate
-class TestCredentialGate:
-  """the run-start credential gate: every name in `needed_secrets()` plus
-  `llm_spec.needed_secrets()` must resolve before any machinery runs."""
+class StubRun:
+  """the `LiveRun` an assembly test binds the service tools to."""
 
-  @pytest.mark.asyncio
-  async def test_run_refuses_listing_every_missing_name(self, monkeypatch):
-    monkeypatch.setattr(credentials, 'available', lambda name: False)
-    gated = GatedBro()
-    observer = CapturingObserver()
-    with pytest.raises(BroRaised, match='missing credentials: alpha, beta, openai'):
-      await gated.run('hi', observer=observer, surface='test')
-    assert observer.events == [
-      TurnStartedEvent('hi'),
-      TurnFailedEvent('gated cannot start: missing credentials: alpha, beta, openai'),
-    ]
-    assert len(gated.mock_llm.send_calls) == 0
+  def __init__(self, trail_id: Optional[str] = None, tool_step: Optional[ToolStepSource] = None):
+    self.trail_id = trail_id
+    self.current_tool_step_id = tool_step
 
-  @pytest.mark.asyncio
-  async def test_run_proceeds_when_all_resolve(self, monkeypatch):
-    monkeypatch.setattr(credentials, 'available', lambda name: True)
-    gated = GatedBro()
-    assert await gated.run('hi', surface='test') == 'ran'
 
-  @pytest.mark.asyncio
-  async def test_send_reports_missing_names_in_reply(self, monkeypatch):
-    available = {'beta', 'openai'}
-    monkeypatch.setattr(credentials, 'available', lambda name: name in available)
-    gated = GatedBro()
-    observer = CapturingObserver()
-    reply = await gated.send('hi', observer=observer, surface='test')
-    assert reply == 'gated cannot start: missing credentials: alpha'
-    assert observer.events == [
-      TurnStartedEvent('hi'),
-      TurnRefusedEvent('gated cannot start: missing credentials: alpha'),
-    ]
-    assert len(gated.mock_llm.send_calls) == 0
-    # the LLM stays unbuilt, so a later send re-checks the store
-    available.add('alpha')
-    assert await gated.send('hi', surface='test') == 'ran'
+def _native_servers(
+  bro: BaseBro, *, hold: str = 'unattended', run: Optional[StubRun] = None
+) -> list[MCPServer]:
+  return bro.native_mcp_servers(hold=hold, live_run=run if run is not None else StubRun())
 
-  def test_missing_secrets_ignores_the_optional_tier(self, monkeypatch):
 
-    monkeypatch.setattr(credentials, 'available', lambda name: False)
-
-    class OptionalSource(SearchableDataSource):
-      name = 'opt'
-      summary = 'declares only an optional secret'
-      optional_secrets = ('gamma',)
-
-      async def search(self, query: str, limit: int = 5) -> list[Hit]:
-        return []
-
-      async def _fetch_content(self, id: str) -> str:
-        return ''
-
-    class OptionalBro(BaseBro):
-      name = 'optional'
-      description = 'no required secrets'
-      llm_spec = llm_llms_echo.LLMSpec()
-      data_sources: ClassVar = [OptionalSource()]
-
-    optional_bro = OptionalBro()
-    assert optional_bro.optional_secrets() == ('gamma',)
-    assert optional_bro.missing_secrets() == ()
+def _service_server(bro: BaseBro, *, run: Optional[StubRun] = None) -> MCPServer:
+  return bro_module._build_service_server(
+    bro,
+    include_raise=True,
+    harness='bro',
+    wire='bare',
+    live_run=run if run is not None else StubRun(),
+  )
 
 
 class _StubSource(SearchableDataSource):
@@ -1439,50 +657,6 @@ class TestFeatures:
     monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
     assert bro.has_feature('x') is False
 
-
-class TestWorkspaceProvisioning:
-  def _accounting_bro(self):
-    class AccountingBro(EchoBro):
-      name = 'accounting'
-      features: ClassVar = {'commit-accounting': True}
-
-    return AccountingBro()
-
-  def _repo(self, tmp_path, monkeypatch):
-    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
-    monkeypatch.chdir(tmp_path)
-    return tmp_path / '.git' / 'hooks'
-
-  @pytest.mark.asyncio
-  async def test_run_installs_the_footer_hooks_in_a_managed_workspace(self, tmp_path, monkeypatch):
-    hooks = self._repo(tmp_path, monkeypatch)
-    monkeypatch.setenv('RIDE_WORKSPACE', 'provision-test')
-    await self._accounting_bro().run('hi', surface='test')
-    for hook_name in ('commit-msg', 'post-commit'):
-      assert (hooks / hook_name).exists()
-
-  @pytest.mark.asyncio
-  async def test_no_install_outside_a_managed_workspace(self, tmp_path, monkeypatch):
-    hooks = self._repo(tmp_path, monkeypatch)
-    await self._accounting_bro().run('hi', surface='test')
-    assert not (hooks / 'commit-msg').exists()
-
-  @pytest.mark.asyncio
-  async def test_no_install_without_the_feature(self, tmp_path, monkeypatch):
-    hooks = self._repo(tmp_path, monkeypatch)
-    monkeypatch.setenv('RIDE_WORKSPACE', 'provision-test')
-    await EchoBro().run('hi', surface='test')
-    assert not (hooks / 'commit-msg').exists()
-
-  def test_a_hook_already_present_is_left_alone(self, tmp_path, monkeypatch):
-    hooks = self._repo(tmp_path, monkeypatch)
-    hooks.mkdir(parents=True, exist_ok=True)
-    (hooks / 'commit-msg').write_text('#!/bin/sh\n# the repository installed me\n')
-    monkeypatch.setenv('RIDE_WORKSPACE', 'provision-test')
-    self._accounting_bro()._provision_workspace()
-    assert (hooks / 'commit-msg').read_text() == '#!/bin/sh\n# the repository installed me\n'
-    assert (hooks / 'post-commit').exists()
-
   def test_undeclared_feature_name_raises(self):
     class NoFeature(BaseBro):
       name = 'no-feature'
@@ -1714,6 +888,30 @@ class TestOptionalSecrets:
     assert 'shared' in bro.needed_secrets()
     assert bro.optional_secrets() == ()
 
+  def test_missing_secrets_ignores_the_optional_tier(self, monkeypatch):
+    monkeypatch.setattr(credentials, 'available', lambda name: False)
+
+    class OptionalSource(SearchableDataSource):
+      name = 'opt'
+      summary = 'declares only an optional secret'
+      optional_secrets = ('gamma',)
+
+      async def search(self, query: str, limit: int = 5) -> list[Hit]:
+        return []
+
+      async def _fetch_content(self, id: str) -> str:
+        return ''
+
+    class OptionalBro(BaseBro):
+      name = 'optional'
+      description = 'no required secrets'
+      llm_spec = llm_llms_echo.LLMSpec()
+      data_sources: ClassVar = [OptionalSource()]
+
+    optional_bro = OptionalBro()
+    assert optional_bro.optional_secrets() == ('gamma',)
+    assert optional_bro.missing_secrets() == ()
+
 
 class TestNeedsDocker:
   def test_default_is_false(self):
@@ -1735,15 +933,15 @@ async def _collect_tool_names(servers):
   return names
 
 
-async def _find_tool(bro: BaseBro, name: str):
-  for candidate in await bro._service_server.list_tools():
+async def _find_tool(bro: BaseBro, name: str, *, run: Optional[StubRun] = None):
+  for candidate in await _service_server(bro, run=run).list_tools():
     if candidate.name == name:
       return candidate
   raise AssertionError(f'no {name!r} tool on the service server')
 
 
 async def _find_raise_tool(bro: BaseBro):
-  for tool in await bro._service_server.list_tools():
+  for tool in await _service_server(bro).list_tools():
     if tool.name == 'raise':
       return tool
   raise AssertionError('raise tool not found on bro service server')
@@ -1753,14 +951,14 @@ class TestRaise:
   @pytest.mark.asyncio
   async def test_raise_tool_included_in_non_interactive_mode(self):
     bro = EchoBro()
-    names = await _collect_tool_names(bro._mcp_servers_for(hold='unattended'))
+    names = await _collect_tool_names(_native_servers(bro, hold='unattended'))
     assert 'raise' in names
 
   @pytest.mark.asyncio
   async def test_raise_tool_excluded_at_every_other_hold(self):
     bro = EchoBro()
     for hold in ('detached', 'attended', 'guided'):
-      names = await _collect_tool_names(bro._mcp_servers_for(hold=hold))
+      names = await _collect_tool_names(_native_servers(bro, hold=hold))
       assert 'raise' not in names
 
   @pytest.mark.asyncio
@@ -1799,7 +997,9 @@ class TestClaudeRaise:
       assert 'raise' not in names
 
   async def _mcp_raise_tool(self):
-    server = bro.bro._build_service_server(EchoBro(), include_raise=True, harness='bro', wire='mcp')
+    server = bro_module._build_service_server(
+      EchoBro(), include_raise=True, harness='bro', wire='mcp'
+    )
     for tool in await server.list_tools():
       if tool.name == 'raise':
         return tool
@@ -1852,7 +1052,7 @@ class TestClaudeRaise:
 class TestSessionModePrompts:
   def test_non_interactive_runs_pin_the_unattended_hold(self):
     bro = EchoBro()
-    prompt = bro._system_prompt_for(hold='unattended')
+    prompt = bro.system_prompt_for(hold='unattended')
     assert '`bro::raise`' in prompt
     assert 'unclear' in prompt
     assert bro.system_prompt in prompt
@@ -1869,7 +1069,7 @@ class TestSessionModePrompts:
 
   def test_interactive_runs_pin_the_guided_hold(self):
     bro = EchoBro()
-    prompt = bro._system_prompt_for(hold='guided')
+    prompt = bro.system_prompt_for(hold='guided')
     assert 'clarifying question' in prompt
     assert bro.system_prompt in prompt
     assert '# Guided session' in prompt
@@ -1880,8 +1080,8 @@ class TestBannerTool:
   @pytest.mark.asyncio
   async def test_present_on_both_service_builds(self):
     bro = EchoBro()
-    non_interactive = await _collect_tool_names(bro._mcp_servers_for(hold='unattended'))
-    interactive = await _collect_tool_names(bro._mcp_servers_for(hold='guided'))
+    non_interactive = await _collect_tool_names(_native_servers(bro, hold='unattended'))
+    interactive = await _collect_tool_names(_native_servers(bro, hold='guided'))
     assert 'banner' in non_interactive
     assert 'banner' in interactive
 
@@ -1897,12 +1097,12 @@ class TestBannerTool:
       return 'kind: container'
 
     monkeypatch.setattr(workspace_banner, 'render_banner', fake_render_banner)
-    bro = EchoBro()
-    tool = await _find_tool(bro, 'banner')
+    run = StubRun()
+    tool = await _find_tool(EchoBro(), 'banner', run=run)
     assert await tool.call({}) == 'kind: container'
     assert captured == {'llm': True, 'bro': 'echo', 'trail_id': None}
     # the run's trail opens after the tool is built, so it is read per call
-    bro.trail_id = '01trail'
+    run.trail_id = '01trail'
     await tool.call({})
     assert captured['trail_id'] == '01trail'
 
@@ -1923,7 +1123,7 @@ class TestSummonTool:
   async def test_absent_without_a_channel(self):
     # conftest drops BROKER_CHANNEL, so the plain construction has no channel
     bro = EchoBro()
-    names = await _collect_tool_names([bro._service_server])
+    names = await _collect_tool_names([_service_server(bro)])
     assert 'summon' not in names
     assert 'summon_check' not in names
 
@@ -1931,8 +1131,8 @@ class TestSummonTool:
   async def test_present_on_both_service_builds_when_a_channel_is_set(self, monkeypatch):
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     bro = EchoBro()
-    non_interactive = await _collect_tool_names(bro._mcp_servers_for(hold='unattended'))
-    interactive = await _collect_tool_names(bro._mcp_servers_for(hold='guided'))
+    non_interactive = await _collect_tool_names(_native_servers(bro, hold='unattended'))
+    interactive = await _collect_tool_names(_native_servers(bro, hold='guided'))
     # interactive surfaces (`call`) summon too — only `raise` is non-interactive-only
     assert {'summon', 'summon_check'} <= set(non_interactive)
     assert {'summon', 'summon_check'} <= set(interactive)
@@ -1943,10 +1143,10 @@ class TestSummonTool:
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     monkeypatch.delenv(summon_status.STATUS_ENV, raising=False)
-    names = await _collect_tool_names(EchoBro()._mcp_servers_for(hold='unattended'))
+    names = await _collect_tool_names(_native_servers(EchoBro(), hold='unattended'))
     assert 'summon_list' not in names
     monkeypatch.setenv(summon_status.STATUS_ENV, '/anywhere/ws.status.json')
-    names = await _collect_tool_names(EchoBro()._mcp_servers_for(hold='unattended'))
+    names = await _collect_tool_names(_native_servers(EchoBro(), hold='unattended'))
     assert 'summon_list' in names
 
   @pytest.mark.asyncio
@@ -2001,10 +1201,9 @@ class TestSummonTool:
 
     monkeypatch.setattr(summon_module, 'open_client', lambda: client)
     monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
-    bro = EchoBro()
-    bro._tracker.current_tool_step_id = {'step_id': 42, 'index': 3}
+    run = StubRun(tool_step={'step_id': 42, 'index': 3})
     tool = None
-    for candidate in await bro._service_server.list_tools():
+    for candidate in await _service_server(EchoBro(), run=run).list_tools():
       if candidate.name == 'summon':
         tool = candidate
     assert tool is not None
@@ -2179,10 +1378,10 @@ class TestSummonTool:
     # call budget; their summon descriptions carry the timeout caution
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     bro_instance = EchoBro()
-    mcp_build = bro.bro._build_service_server(
+    mcp_build = bro_module._build_service_server(
       bro_instance, include_raise=False, harness='bro', wire='mcp'
     )
-    bare_build = bro.bro._build_service_server(
+    bare_build = bro_module._build_service_server(
       bro_instance, include_raise=False, harness='bro', wire='bare'
     )
     mcp_tools = {t.name: t for t in await mcp_build.list_tools()}
@@ -2245,67 +1444,13 @@ class TestSummonTool:
     monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
     bro = EchoBro()
     tool = None
-    for candidate in await bro._service_server.list_tools():
+    for candidate in await _service_server(bro).list_tools():
       if candidate.name == 'summon':
         tool = candidate
     assert tool is not None
     # a generic exception is the agent-loop tool-error contract (vs ToolControlSignal)
     with pytest.raises(summon_module.SummonError, match='summon denied'):
       await tool.call({'target': 'dev', 'prompt': 'deploy'})
-
-  @pytest.mark.asyncio
-  async def test_run_creates_llm_with_the_unattended_hold(self):
-    captured: list[str] = []
-
-    class CaptureBro(BaseBro):
-      name = 'capture-mode'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-      def _create_llm(self, *, hold: str):
-        captured.append(hold)
-        return MockLLM()
-
-    await CaptureBro().run('input', surface='test')
-    assert captured == ['unattended']
-
-  @pytest.mark.asyncio
-  async def test_run_hold_override_reaches_the_llm_build(self):
-    captured: list[str] = []
-
-    class CaptureBro(BaseBro):
-      name = 'capture-mode'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-      def _create_llm(self, *, hold: str):
-        captured.append(hold)
-        return MockLLM()
-
-    await CaptureBro().run('input', hold='attended', surface='test')
-    assert captured == ['attended']
-
-  @pytest.mark.asyncio
-  async def test_send_creates_llm_with_the_guided_hold(self):
-    captured: list[str] = []
-
-    class CaptureBro(BaseBro):
-      name = 'capture-mode'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-      def _create_llm(self, *, hold: str):
-        captured.append(hold)
-        return MockLLM()
-
-    await CaptureBro().send('input', surface='test')
-    assert captured == ['guided']
 
 
 class TestPersona:
@@ -2316,16 +1461,3 @@ class TestPersona:
 class TestAgentIdentity:
   def test_agent_namespaces_the_bro_name(self):
     assert EchoBro().agent == 'bro//echo'
-
-  def test_create_llm_threads_the_agent_identity(self):
-    from bro.llm.llms.echo import LLMSpec as EchoSpec
-
-    class PlainBro(BaseBro):
-      name = 'plain'
-      description = 'd'
-      llm_spec = EchoSpec()
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    assert PlainBro()._create_llm(hold='unattended').agent == 'bro//plain'

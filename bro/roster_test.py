@@ -17,10 +17,22 @@ from bro.bro import BaseBro
 from bro.llm.mcp import MCPServer, Tool
 from bro.registry import create_bro, declared_specs
 
+
+class _NoRun:
+  """the `LiveRun` a bro assembled outside a run has: no trail, no tool position."""
+
+  trail_id = None
+  current_tool_step_id = None
+
+
+def _native_servers(bro: BaseBro) -> list[MCPServer]:
+  return bro.native_mcp_servers(hold='unattended', live_run=_NoRun())
+
+
 # (surface label, server-list builder) — the three consuming harnesses a bro's
 # declared components serve
 _SURFACES = [
-  ('bro-native', lambda bro: bro._mcp_servers_for(hold='unattended')),
+  ('bro-native', _native_servers),
   ('claude-bro', lambda bro: bro.claude_bro_mcp_servers()),
   ('claude-persona', lambda bro: bro.claude_persona_mcp_servers()),
 ]
@@ -89,7 +101,7 @@ async def test_served_tool_text_stays_inside_the_roster(name):
 async def test_lead_exposes_the_rewind_read_surface_as_generated_commands():
   lead = create_bro('lead')
   tools = {}
-  for server in lead._mcp_servers_for(hold='unattended'):
+  for server in _native_servers(lead):
     if server.namespace == 'sh':
       tools.update({tool.name: tool for tool in await server.list_tools()})
 

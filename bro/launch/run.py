@@ -19,6 +19,7 @@ from bro.launch.llm_flags import (
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.mcp import HOLDS
 from bro.llm.providers import LLMSelectionError
+from bro.native.runner import Runner
 from bro.trails.display.config import OutputRoute, PresetName, preset
 from bro.trails.display.core import DisplaySession
 from bro.trails.display.live import LiveDisplayObserver
@@ -84,7 +85,7 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     observer = _ask_observer(bro.name)
     hold = args['hold'] if args['hold'] is not None else 'unattended'
     try:
-      asyncio.run(bro.run(args['input'], observer=observer, surface='ask', hold=hold))
+      asyncio.run(Runner(bro).run(args['input'], observer=observer, surface='ask', hold=hold))
     except BroRaised:
       return 1
     except KeyboardInterrupt:
