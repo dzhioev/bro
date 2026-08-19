@@ -15,8 +15,8 @@ from textual.screen import ModalScreen
 from textual.widgets import Static, TextArea
 from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
-from bro.bro import BaseBro
 from bro.launch.call import INTERRUPTED_NOTICE
+from bro.native.runner import Runner
 from bro.show import format_card
 from bro.trails.display import (
   DisplayRecord,
@@ -110,14 +110,14 @@ class ChatApp(App):
 
   def __init__(
     self,
-    bro: BaseBro,
+    runner: Runner,
     initial: Optional[str],
     history: Optional[list[DisplayRecord]] = None,
     hold: str = 'guided',
     preset_name: PresetName = PresetName.CALL,
   ):
     super().__init__()
-    self._bro = bro
+    self._runner = runner
     self._initial = initial
     self._hold = hold
     self._history = history if history is not None else []
@@ -135,7 +135,7 @@ class ChatApp(App):
   async def on_mount(self) -> None:
     self.query_one('#input-bar', MessageInput).focus()
     renderer = TextualRenderer(self.query_one('#history', TrailView))
-    configuration = preset(self._preset_name, context_label=self._bro.name)
+    configuration = preset(self._preset_name, context_label=self._runner.bro.name)
     self._display_session = self._display_lifetime.enter_context(
       DisplaySession(configuration, renderer)
     )
@@ -163,7 +163,7 @@ class ChatApp(App):
       key=self._surface_key('banner'),
       origin=Origin.SURFACE,
       timestamp=datetime.now().astimezone().isoformat(),
-      content=render_banner(llm=False, bro=self._bro.name),
+      content=render_banner(llm=False, bro=self._runner.bro.name),
       trusted_visual=True,
     )
 
@@ -201,7 +201,7 @@ class ChatApp(App):
     if observer is None or session is None:
       raise RuntimeError('chat display is not mounted')
     try:
-      await self._bro.send(text, observer=observer, surface='call', hold=self._hold)
+      await self._runner.send(text, observer=observer, surface='call', hold=self._hold)
     except asyncio.CancelledError:
       if self.is_running:
         observer.close_activity()
@@ -249,5 +249,5 @@ class ChatApp(App):
     return True
 
   async def action_show_stats(self) -> None:
-    card = await format_card(self._bro, include_system_prompt=False)
+    card = await format_card(self._runner.bro, include_system_prompt=False)
     await self.push_screen(StatsScreen(card))

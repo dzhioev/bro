@@ -16,6 +16,7 @@ import pytest
 import bro.llm.llms.openai as llm_llms_openai
 import bro.llm.usage as usage
 from bro.base import credentials
+from bro.native.runner import Runner
 from bros.dev import Dev
 
 pytestmark = pytest.mark.skipif(
@@ -54,8 +55,8 @@ def staged_repo(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_dev_commit_carries_the_footer(staged_repo):
-  bro = _ProbeDev.create(llm_llms_openai.LLMSpec(reasoning_effort='low'))
-  await bro.run(
+  runner = Runner(_ProbeDev.create(llm_llms_openai.LLMSpec(reasoning_effort='low')))
+  await runner.run(
     'Commit the staged change in this repository with an appropriate message '
     'following the repository conventions. Do not push.',
     surface='llm-test',

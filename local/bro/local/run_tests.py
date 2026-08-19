@@ -96,6 +96,7 @@ PYTEST_FILES = [
   'bro/bro_test.py',
   'bro/channel_test.py',
   'bro/fork_test.py',
+  'bro/native/runner_test.py',
   'bro/roster_test.py',
   'bro/spells_test.py',
   'bro/datasources/current_time_test.py',

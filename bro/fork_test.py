@@ -614,9 +614,9 @@ class TestForkLinkage:
     tracker = _RecordingTracker()
     context, _, _ = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
-      bro = fork(forked_from_trail, 2, tracker=tracker, surface='call')
+      runner = fork(forked_from_trail, 2, tracker=tracker, surface='call')
     assert tracker.headers[0]['surface'] == 'call'
-    assert bro.trail_id == 'forked-trail-id'
+    assert runner.trail_id == 'forked-trail-id'
 
   def test_records_resolved_system_prompt(self):
     forked_from_trail = _simple_trail()
@@ -631,11 +631,11 @@ class TestForkLinkage:
     tracker = _RecordingTracker()
     context, _, created = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
-      bro = fork(
+      runner = fork(
         forked_from_trail, 2, system_prompt='swapped prompt', tracker=tracker, surface='test'
       )
     assert tracker.headers[0]['system_prompt'] == 'swapped prompt'
-    assert bro.system_prompt == 'swapped prompt'
+    assert runner.bro.system_prompt == 'swapped prompt'
     # prefix on the new OpenAI's seam carries the override at index 0
     seeded = created[0]._input_prefix
     assert seeded is not None
@@ -673,16 +673,16 @@ class TestForkRecording:
     forked_from_trail = _simple_trail()
     context, _, _ = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
-      bro = fork(forked_from_trail, 2, record=False, surface='test')
-    assert isinstance(bro._tracker, NullTracker)
+      runner = fork(forked_from_trail, 2, record=False, surface='test')
+    assert isinstance(runner._tracker, NullTracker)
 
   def test_record_true_uses_explicit_tracker(self):
     forked_from_trail = _simple_trail()
     tracker = _RecordingTracker()
     context, _, _ = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
-      bro = fork(forked_from_trail, 2, tracker=tracker, surface='test')
-    assert bro._tracker is tracker
+      runner = fork(forked_from_trail, 2, tracker=tracker, surface='test')
+    assert runner._tracker is tracker
 
 
 class TestForkSpec:
@@ -727,8 +727,8 @@ class TestForkServerSidePath:
       [_fake_response(output=[_message_item('continuation')])]
     )
     with context:
-      bro = fork(forked_from_trail, 2, record=False, surface='test')
-      result = await bro.send('follow up', surface='test')
+      runner = fork(forked_from_trail, 2, record=False, surface='test')
+      result = await runner.send('follow up', surface='test')
     assert result == 'continuation'
     assert len(captured) == 1
     assert captured[0].get('previous_response_id') == 'r1'
@@ -742,8 +742,8 @@ class TestForkServerSidePath:
       [_fake_response(output=[_message_item('continuation')])]
     )
     with context:
-      bro = fork(forked_from_trail, 2, tracker=tracker, surface='test')
-      await bro.send('follow up', surface='test')
+      runner = fork(forked_from_trail, 2, tracker=tracker, surface='test')
+      await runner.send('follow up', surface='test')
     user_inputs = [s for s in tracker.steps if s[0] == 'user_input']
     # the replayed user input does NOT get re-emitted on the new trail — only
     # the new message the caller passed to .send()
@@ -760,9 +760,9 @@ class TestForkServerSidePath:
       ]
     )
     with context:
-      bro = fork(forked_from_trail, 2, record=False, surface='test')
-      await bro.send('msg one', surface='test')
-      await bro.send('msg two', surface='test')
+      runner = fork(forked_from_trail, 2, record=False, surface='test')
+      await runner.send('msg one', surface='test')
+      await runner.send('msg two', surface='test')
     # first send carries the seeded fork-point response_id; the second chains
     # off the first response's id. interleaved calls only ship the new user
     # message — the prefix lives server-side throughout.
@@ -788,8 +788,8 @@ class TestForkClientSideReplay:
       [_fake_response(output=[_message_item('rerun')])]
     )
     with context:
-      bro = fork(forked_from_trail, 1, record=False, surface='test')
-      assert await bro.send('rerun please', surface='test') == 'rerun'
+      runner = fork(forked_from_trail, 1, record=False, surface='test')
+      assert await runner.send('rerun please', surface='test') == 'rerun'
     api_input = captured[0]['input']
     # forking right after the first user_input replays system + that input, then
     # the new user message lands at the end (re-ask path)
@@ -822,8 +822,8 @@ class TestForkClientSideReplay:
       [_fake_response(output=[_message_item('forked answer')])]
     )
     with context:
-      bro = fork(forked_from_trail, 3, record=False, surface='test')
-      await bro.send('actually try this', surface='test')
+      runner = fork(forked_from_trail, 3, record=False, surface='test')
+      await runner.send('actually try this', surface='test')
     api_input = captured[0]['input']
     assert api_input == [
       {'role': 'system', 'content': _SYS_TEXT},
@@ -868,8 +868,8 @@ class TestForkClientSideReplay:
       # forcing client-side via a no-op system_prompt override — the path
       # picker treats any override as "client-side only" since the cached
       # server-side prefix can't be restated.
-      bro = fork(forked_from_trail, 5, system_prompt=_SYS_TEXT, record=False, surface='test')
-      await bro.send('next', surface='test')
+      runner = fork(forked_from_trail, 5, system_prompt=_SYS_TEXT, record=False, surface='test')
+      await runner.send('next', surface='test')
     api_input = captured[0]['input']
     # prefix preserves: system, user, function_call, function_call_output (with
     # matching call_id), final assistant message — then the new user message
@@ -890,8 +890,8 @@ class TestForkClientSideReplay:
     override = openai_module.LLMSpec(model='gpt-5.4-mini')
     context, captured, _ = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
-      bro = fork(forked_from_trail, 2, llm_spec=override, record=False, surface='test')
-      await bro.send('next', surface='test')
+      runner = fork(forked_from_trail, 2, llm_spec=override, record=False, surface='test')
+      await runner.send('next', surface='test')
     assert captured[0].get('previous_response_id') is None
     api_input = captured[0]['input']
     assert api_input[0] == {'role': 'system', 'content': _SYS_TEXT}
@@ -905,8 +905,10 @@ class TestForkClientSideReplay:
     forked_from_trail = _simple_trail()
     context, captured, _ = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
-      bro = fork(forked_from_trail, 2, system_prompt='swapped prompt', record=False, surface='test')
-      await bro.send('next', surface='test')
+      runner = fork(
+        forked_from_trail, 2, system_prompt='swapped prompt', record=False, surface='test'
+      )
+      await runner.send('next', surface='test')
     assert captured[0].get('previous_response_id') is None
     assert captured[0]['input'][0] == {'role': 'system', 'content': 'swapped prompt'}
 
@@ -922,9 +924,9 @@ class TestForkClientSideReplay:
       ]
     )
     with context:
-      bro = fork(forked_from_trail, 2, system_prompt=_SYS_TEXT, record=False, surface='test')
-      await bro.send('msg one', surface='test')
-      await bro.send('msg two', surface='test')
+      runner = fork(forked_from_trail, 2, system_prompt=_SYS_TEXT, record=False, surface='test')
+      await runner.send('msg one', surface='test')
+      await runner.send('msg two', surface='test')
     # second call goes through `previous_response_id` and only ships the new
     # user message — the replayed prefix never re-injects
     assert captured[1].get('previous_response_id') == 'resp_a'

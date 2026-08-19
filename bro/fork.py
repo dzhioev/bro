@@ -1,5 +1,6 @@
-"""forking of recorded bro.trails.a *fork* spins up a fresh bro preseeded with a forked_from trail's prefix and
-lets the caller continue with `.send(next_message)`. the new run gets its own
+"""forking of recorded bro trails. a *fork* spins up a fresh runner preseeded with
+a forked_from trail's prefix and lets the caller continue with
+`.send(next_message)`. the new run gets its own
 trail with `forked_from={trail_id, step_id}` so the source → child edge is
 queryable through the fork index.
 
@@ -28,9 +29,9 @@ from collections.abc import Callable
 from typing import Any, Optional, cast
 
 import bro.llm.llms.openai as llm_llms_openai
-from bro.bro import BaseBro
 from bro.llm.llm import LLM, LLMSpec, NativeLLMSpec
 from bro.llm.tracker import NullTracker, Tracker
+from bro.native.runner import Runner
 from bro.registry import create_bro
 from bro.trails.lineage import walk_chain
 from bro.trails.model import ForkedFrom, RecordedTrail, Step
@@ -180,9 +181,9 @@ def fork(
   surface: str,
   hold: Optional[str] = None,
   fetch_forked_from: Optional[Callable[[str], RecordedTrail]] = None,
-) -> BaseBro:
-  """spin up a fresh bro preseeded with the forked_from trail's prefix up to
-  `up_to_step_id`. call `.send(next_message)` on the returned bro to continue
+) -> Runner:
+  """spin up a fresh runner preseeded with the forked_from trail's prefix up to
+  `up_to_step_id`. call `.send(next_message)` on the returned runner to continue
   the conversation.
 
   `llm_spec` defaults to the forked_from's spec (rehydrated via `LLMSpec.from_dict`);
@@ -199,9 +200,9 @@ def fork(
   `hold` replaces the recorded hold fragment when provided; that prompt change
   selects client-side replay. Omit it to preserve the recorded prompt.
 
-  `record=False` pins the new bro to a `NullTracker` — handy for one-shot
+  `record=False` pins the new runner to a `NullTracker` — handy for one-shot
   exploration where the fork's trail is not worth keeping. `record=True` (the
-  default) uses the explicit `tracker` if given, otherwise the bro's default
+  default) uses the explicit `tracker` if given, otherwise the runner's default
   factory (the production default; tests use `NullTracker` via `conftest.py`).
   `surface` labels the driving program on the new trail; every caller supplies
   it explicitly.
@@ -244,19 +245,15 @@ def fork(
     system_prompt_override=effective_system_prompt if prompt_changed else None,
   )
   # This value is the complete recorded prompt, including its hold fragment;
-  # pre-assigning it bypasses BaseBro's fresh-run fragment append.
+  # pre-assigning it bypasses the runner's fresh-run fragment append.
   bro.system_prompt = effective_system_prompt
   effective_hold = hold if hold is not None else 'guided'
 
-  bro._tracker = (
-    NullTracker() if not record else (tracker if tracker is not None else bro._make_tracker())
+  runner = Runner(bro)
+  runner._tracker = (
+    NullTracker() if not record else (tracker if tracker is not None else runner._make_tracker())
   )
-  inner_llm = spec.create_llm(
-    mcp_servers=bro._mcp_servers_for(hold=effective_hold),
-    observer=bro._observer,
-    tracker=bro._tracker,
-    agent=bro.agent,
-  )
+  inner_llm = runner._create_llm(hold=effective_hold)
   if use_server_side:
     _seed_response_id(inner_llm, fork_step.extras['response_id'])
   else:
@@ -264,17 +261,17 @@ def fork(
     if prompt_changed:
       prefix[0] = {'role': 'system', 'content': effective_system_prompt}
     _preseed(inner_llm, prefix)
-  # pre-assigning _llm makes BaseBro.send take the subsequent-call branch on
+  # pre-assigning _llm makes Runner.send take the subsequent-call branch on
   # the first .send(next_message) — it ships `[{'role': 'user', 'content': ...}]`
   # straight to the wrapped LLM, which either prepends the replayed prefix
   # (client-side) or passes `previous_response_id=<seeded>` (server-side).
-  bro._llm = inner_llm
+  runner._llm = inner_llm
 
   forked_from = ForkedFrom(
     trail_id=forked_from_trail.header.id,
     step_id=up_to_step_id,
   )
-  trail_id = bro._tracker.start_trail(
+  trail_id = runner._tracker.start_trail(
     bro=bro.name,
     llm_spec=spec.dump(),
     system_prompt=effective_system_prompt,
@@ -283,8 +280,8 @@ def fork(
     surface=surface,
     hold=effective_hold,
   )
-  bro.trail_id = trail_id if len(trail_id) > 0 else None
-  return bro
+  runner.trail_id = trail_id if len(trail_id) > 0 else None
+  return runner
 
 
 def _replace_hold_fragment(

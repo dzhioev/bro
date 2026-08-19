@@ -3,9 +3,9 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from bro.bro import BaseBro
 from bro.fork import fork, latest_fork_point
 from bro.llm.llm import NativeLLMSpec
+from bro.native.runner import Runner
 from bro.trails.display import DisplayRecord, RecordedAdapter
 from bro.trails.store import TrailsStore, fetch_recorded_trail
 
@@ -16,7 +16,7 @@ _CALL_ENTRY_POINT = 'call'
 
 @dataclass(frozen=True)
 class ResumedCall:
-  bro: BaseBro
+  runner: Runner
   history: list[DisplayRecord]
   trail_id: str
 
@@ -59,7 +59,7 @@ def resume(
     raise ValueError(f'trail {trail_id} belongs to bro {trail.header.bro!r}, not {bro_name!r}')
   history = conversation_history(client, trail_id)
   fork_step_id = at if at is not None else latest_fork_point(trail)
-  bro = fork(
+  runner = fork(
     trail,
     fork_step_id,
     llm_spec=llm_spec,
@@ -67,4 +67,4 @@ def resume(
     hold=hold,
     fetch_forked_from=lambda forked_from_id: fetch_recorded_trail(client, forked_from_id),
   )
-  return ResumedCall(bro=bro, history=history, trail_id=trail_id)
+  return ResumedCall(runner=runner, history=history, trail_id=trail_id)

@@ -1,12 +1,8 @@
 import os
-import traceback
 from abc import ABC
-from collections.abc import Callable
-from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from types import TracebackType
-from typing import Any, ClassVar, Optional, Self
+from typing import Any, ClassVar, Optional, Protocol, Self
 
 import bro.llm.llms.openai as llm_llms_openai
 import bro.llm.mcp as llm_mcp
@@ -18,60 +14,11 @@ from bro.channel import BroChannel
 from bro.datasources.base import DataSource
 from bro.datasources.man import ManPage, manual
 from bro.launch.hold import UNATTENDED, session_hold
-from bro.llm.llm import EFFORT_LEVELS, LLM, NativeLLMSpec
-from bro.llm.observer import (
-  NullObserver,
-  Observer,
-  TurnCompletedEvent,
-  TurnFailedEvent,
-  TurnRefusedEvent,
-  TurnStartedEvent,
-)
-from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
+from bro.llm.llm import EFFORT_LEVELS, NativeLLMSpec
+from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, hold_fragment
-from bro.summon import summoned_by_from_env
-from bro.trails.record.bro import Recorder
 
 DEFAULT_LLM_SPEC: NativeLLMSpec = llm_llms_openai.LLMSpec()
-
-
-_TRAILS_DISABLED_ENV = 'TRAILS_DISABLED'
-
-
-def _observer_scope(observer: Observer) -> AbstractContextManager[Observer]:
-  if isinstance(observer, AbstractContextManager):
-    return observer
-  return nullcontext(observer)
-
-
-def _default_factory() -> Tracker:
-  # explicit kill switch wins over everything: define `TRAILS_DISABLED` (to any
-  # value, presence is what counts — same convention as `NO_COLOR` /
-  # `RIDE_IN_CONTAINER`) to skip recording for a process — local dev, ad-hoc runs,
-  # or repairing trails-server itself (recording is otherwise mandatory and
-  # crash-on-failure, so a broken server blocks every bro). this only governs the default
-  # factory: a per-run `tracker=` and a custom `set_default_tracker_factory(...)`
-  # still take precedence.
-  if os.environ.get(_TRAILS_DISABLED_ENV) is not None:
-    return NullTracker()
-  # recording is otherwise on, and `NullTracker` opt-in:
-  # - kill switch: `TRAILS_DISABLED` set in the environment.
-  # - tests: `conftest.py`'s `set_default_tracker_factory(NullTracker)`.
-  # - one-shot exploration: `bro.run(..., surface='experiment', tracker=NullTracker())`.
-  from bro.trails.store import default_store
-
-  return Recorder(default_store())
-
-
-# default factory for the per-run `Tracker` an unconfigured bro uses. swap with
-# `set_default_tracker_factory(...)` — `conftest.py` pins it to `NullTracker`
-# so tests never try to record.
-_default_tracker_factory: Callable[[], Tracker] = _default_factory
-
-
-def set_default_tracker_factory(factory: Callable[[], Tracker]) -> None:
-  global _default_tracker_factory
-  _default_tracker_factory = factory
 
 
 _SHARED_PROMPTS_DIR = Path(__file__).resolve().parent / 'prompts' / 'shared'
@@ -139,6 +86,19 @@ def _render_spells(*, include_cast: bool) -> str:
       'the marker only names it.',
     ]
   )
+
+
+class LiveRun(Protocol):
+  """the in-flight run the service tools report against, implemented by whatever
+  drives the bro in this process. Both facts are read at call time: the trail
+  opens after the service server is built, and the tool position moves with
+  every call. A process that assembles a bro without running one has none."""
+
+  @property
+  def trail_id(self) -> Optional[str]: ...
+
+  @property
+  def current_tool_step_id(self) -> Optional[ToolStepSource]: ...
 
 
 class BroRaised(llm_mcp.ToolControlSignal):
@@ -286,33 +246,30 @@ _BANNER_DESCRIPTION = (
 )
 
 
-def _banner_tool(bro: 'BaseBro', variables: Variables) -> llm_mcp.Tool:
+def _banner_tool(bro: 'BaseBro', live_run: Optional[LiveRun], variables: Variables) -> llm_mcp.Tool:
   # the same facts `ride banner --llm` prints, rendered in-process. the bro name is
   # passed explicitly because an in-process run's environment carries the
-  # launcher's RIDE_BRO (or none), not this bro's; the trail id is read at call
-  # time because the run's trail opens after this server is built. the workspace
-  # import stays function-local so `import bro` stays cheap.
+  # launcher's RIDE_BRO (or none), not this bro's. the workspace import stays
+  # function-local so `import bro` stays cheap.
   def _banner() -> str:
     from bro.workspace.banner import render_banner
 
-    return render_banner(llm=True, bro=bro.name, trail_id=bro.trail_id)
+    trail_id = None if live_run is None else live_run.trail_id
+    return render_banner(llm=True, bro=bro.name, trail_id=trail_id)
 
   return llm_mcp.FunctionTool(
     _banner, name='banner', description=_BANNER_DESCRIPTION, variables=variables
   )
 
 
-def _summon_tool(
-  variables: Variables, current_tool_step_id: Callable[[], Optional[ToolStepSource]]
-) -> llm_mcp.Tool:
+def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.Tool:
   # a fresh channel client per call, opened on the loop and closed in `finally`
   # so a cancelled tool call (the MCP client timed out or aborted) unblocks the
   # off-loop wait: the broxy sees the waiter go, and the terminal buffers for a
   # later summon_check instead of feeding an abandoned thread. the blocking wait
   # runs off-loop so an interactive surface stays responsive under a long summon.
-  # `current_tool_step_id` names the summon call's projected source (None on
-  # surfaces without an in-process tracker), so the child's `summoned_by` can
-  # carry the precise fork position.
+  # the run's tool position names the summon call's projected source, so the
+  # child's `summoned_by` can carry the precise fork position.
   from bro import summon as summon_client
 
   async def _summon(
@@ -327,7 +284,7 @@ def _summon_tool(
     llm: Optional[str] = None,
     harness: Optional[str] = None,
   ) -> str:
-    source = current_tool_step_id()
+    source = None if live_run is None else live_run.current_tool_step_id
     step_id = source['step_id'] if source is not None else None
     index = source['index'] if source is not None else None
     if detach:
@@ -446,8 +403,16 @@ _SERVICE_TOOL_NAMES = (
 
 
 def _build_service_server(
-  bro: 'BaseBro', *, include_raise: bool, harness: llm_mcp.Harness, wire: llm_mcp.Wire
+  bro: 'BaseBro',
+  *,
+  include_raise: bool,
+  harness: llm_mcp.Harness,
+  wire: llm_mcp.Wire,
+  live_run: Optional[LiveRun] = None,
 ) -> llm_mcp.MCPServer:
+  # built only on the paths that serve a bro, never at construction: deriving the
+  # FunctionTool schemas below pulls the mcp/fastmcp stack (~1s), which metadata
+  # surfaces (credential scoping, prompt composition, `bro show`) must not pay.
   # the roster is decided by the caller's surface and local process state:
   # `banner` is unconditional; `cast` needs spells and its optional secret;
   # `skill` bridges only harnesses without a native loader; `raise` only makes
@@ -481,7 +446,7 @@ def _build_service_server(
     'tools': SetVariable(frozenset(mounted), universe=frozenset(_SERVICE_TOOL_NAMES)),
   }
 
-  tools: list[llm_mcp.Tool] = [_banner_tool(bro, variables)]
+  tools: list[llm_mcp.Tool] = [_banner_tool(bro, live_run, variables)]
   if has_cast:
     tools.append(spell_store.build_cast_tool(bro, harness=harness, wire=wire))
   if harness == 'bro':
@@ -489,9 +454,7 @@ def _build_service_server(
   if include_raise:
     tools.append(_raise_tool(wire, variables))
   if has_broker:
-    # read at call time from the run's live tracker; a serving process where the
-    # bro never runs (the session MCP server) keeps the NullTracker's None
-    tools.append(_summon_tool(variables, lambda: bro._tracker.current_tool_step_id))
+    tools.append(_summon_tool(variables, live_run))
     tools.append(_summon_check_tool(variables))
     if has_summon_list:
       tools.append(_summon_list_tool(variables))
@@ -678,8 +641,6 @@ class BaseBro(ABC):
   # bro-native one; set in __init__, consumed by `ride solo|along --raw`
   claude_system_prompt: str
 
-  _llm: Optional[LLM] = None
-
   def __init_subclass__(cls, **kwargs: Any) -> None:
     super().__init_subclass__(**kwargs)
     for attribute_name, value in vars(cls).items():
@@ -756,27 +717,6 @@ class BaseBro(ABC):
     # built lazily by _live_mcp_servers(): metadata surfaces (needed_secrets on
     # hosts, prompt composition) never construct live servers.
     self._live_mcp: Optional[list[llm_mcp.MCPServer]] = None
-    # lazy for the same reason: building service FunctionTools derives their
-    # schemas, which imports the mcp/fastmcp stack (~1s) — metadata surfaces
-    # never pay it.
-    self._service_server_cache: Optional[llm_mcp.MCPServer] = None
-    self._llm = None
-    # a bro renders only through an observer its caller passes: an embedding
-    # application must not get terminal output, or a display session, it never
-    # asked for.
-    self._observer: Observer = NullObserver()
-    # sibling of _observer — the tracker records the run for offline analysis
-    # rather than rendering it to stderr. swapped in BaseBro.run() / .send() the
-    # same way _observer is.
-    self._tracker: Tracker = NullTracker()
-    # the id of the trail the current run records to — set when the trail opens
-    # (first send / run start, or by bro.fork on a preseeded bro); None until
-    # then and when recording is off. surfaces read it to point the user at the
-    # recorded conversation (e.g. `call`'s resume hint).
-    self.trail_id: Optional[str] = None
-    self._lifetime_active = False
-    self._last_end_reason: Optional[EndReason] = None
-    self._last_end_detail: Optional[str] = None
     # explicit `system_prompt=...` arg overrides MRO collection — escape hatch
     # for callers that need a dynamic prompt (e.g. PM injects current time).
     if system_prompt is not None:
@@ -956,103 +896,6 @@ class BaseBro(ABC):
     required = set(self.needed_secrets()) | set(self.llm_spec.needed_secrets())
     return tuple(sorted(name for name in required if not credentials.available(name)))
 
-  def _start_refusal(self) -> Optional[str]:
-    # the run-start credential gate: the refusal listing every missing secret,
-    # or None to start. checked before any machinery (tracker, LLM, live
-    # servers) so a missing secret surfaces at start, not mid-run at first use;
-    # each surface delivers it per its mode — run() raises and send() returns it.
-    missing = self.missing_secrets()
-    if len(missing) == 0:
-      return None
-    return f'{self.name} cannot start: missing credentials: {", ".join(missing)}'
-
-  def _provision_workspace(self) -> None:
-    # feature-declared workspace provisioning, run at session start (ride's
-    # in-place runner is the claude-harness counterpart): a commit-accounting
-    # persona gets the footer hooks installed into its managed workspace, so
-    # agent commits carry the token footer with no session involvement. scoped
-    # to managed workspaces — an in-process run in an arbitrary repo must not
-    # write into it — and hooks already present are left alone.
-    if not self.has_feature('commit-accounting') or os.environ.get('RIDE_WORKSPACE') is None:
-      return
-    from bro.workflow.commit_footer import install_hooks
-
-    install_hooks(Path.cwd(), overwrite=False)
-
-  def _start(
-    self,
-    input: str,
-    *,
-    interactive: bool,
-    hold: str,
-    observer: Observer,
-    tracker: Optional[Tracker],
-    surface: str,
-    summoned_by: Optional[dict[str, Any]],
-  ) -> tuple[LLM, list[dict], str]:
-    # the shared start sequence of run() and send(): pin the resolved observer
-    # and the tracker — a caller-supplied one wins (tests inject recording
-    # fakes) — on self before _create_llm, so the LLM construction path picks
-    # them up, then build the LLM, compose the hold prompt, open the trail, and
-    # seed the message list.
-    self._provision_workspace()
-    self._observer = observer
-    self._tracker = tracker if tracker is not None else self._make_tracker()
-    llm = self._create_llm(hold=hold)
-    system_prompt = self._system_prompt_for(hold=hold)
-    trail_id = self._tracker.start_trail(
-      bro=self.name,
-      llm_spec=self.llm_spec.dump(),
-      system_prompt=system_prompt,
-      forked_from=None,
-      interactive=interactive,
-      surface=surface,
-      hold=hold,
-      summoned_by=summoned_by,
-    )
-    self.trail_id = trail_id if len(trail_id) > 0 else None
-    messages = [
-      {'role': 'system', 'content': system_prompt},
-      {'role': 'user', 'content': input},
-    ]
-    return llm, messages, trail_id
-
-  def __enter__(self) -> Self:
-    if self._lifetime_active:
-      raise RuntimeError('bro lifetime is already active')
-    self._lifetime_active = True
-    self._last_end_reason = None
-    self._last_end_detail = None
-    return self
-
-  def __exit__(
-    self,
-    exception_type: Optional[type[BaseException]],
-    exception: Optional[BaseException],
-    exception_traceback: Optional[TracebackType],
-  ) -> bool:
-    del exception_type, exception_traceback
-    if self._lifetime_active is not True:
-      raise RuntimeError('bro lifetime is not active')
-
-    reason: EndReason = 'ok'
-    detail: Optional[str] = None
-    if isinstance(exception, BroRaised):
-      reason = 'raised'
-      detail = exception.reason
-    elif isinstance(exception, Exception):
-      reason = 'error'
-      detail = str(exception)
-      self._record_error_step(exception)
-
-    self._close_live_servers()
-    self._lifetime_active = False
-    self._last_end_reason = reason
-    self._last_end_detail = detail
-    log.verbose('bro lifetime ended: %s', reason)
-    self._tracker.end_trail(reason, detail=detail)
-    return False
-
   @classmethod
   def create(cls, llm_spec: NativeLLMSpec) -> Self:
     # factory for a construction-time LLMSpec override — applied after the bro's
@@ -1063,110 +906,6 @@ class BaseBro(ABC):
     bro = cls()
     bro.llm_spec = llm_spec
     return bro
-
-  async def run(
-    self,
-    input: str,
-    observer: Optional[Observer] = None,
-    tracker: Optional[Tracker] = None,
-    request_timeout: Optional[float] = None,
-    *,
-    surface: str,
-    hold: str = 'unattended',
-  ) -> str:
-    effective_observer = observer if observer is not None else NullObserver()
-    with _observer_scope(effective_observer):
-      effective_observer.on_event(TurnStartedEvent(input))
-      refusal = self._start_refusal()
-      if refusal is not None:
-        effective_observer.on_event(TurnFailedEvent(refusal))
-        raise BroRaised(refusal)
-      try:
-        llm, messages, trail_id = self._start(
-          input,
-          interactive=False,
-          hold=hold,
-          observer=effective_observer,
-          tracker=tracker,
-          surface=surface,
-          summoned_by=summoned_by_from_env(),
-        )
-      except Exception as error:
-        effective_observer.on_event(TurnFailedEvent(str(error)))
-        raise
-      log.info('run started%s', f' (trail {trail_id})' if len(trail_id) > 0 else '')
-      channel = self._make_channel()
-      if channel is not None:
-        channel.started(trail_id)
-      result: Optional[str] = None
-      try:
-        with self:
-          try:
-            result = await llm.send(messages, request_timeout=request_timeout)
-          except Exception as error:
-            effective_observer.on_event(TurnFailedEvent(str(error)))
-            raise
-          effective_observer.on_event(TurnCompletedEvent(result))
-          return result
-      finally:
-        if channel is not None:
-          if self._last_end_reason is None:
-            raise RuntimeError('run lifetime ended without an outcome')
-          channel_result = result if self._last_end_reason == 'ok' else self._last_end_detail
-          channel.completed(channel_result, self._last_end_reason)
-          channel.close()
-
-  async def send(
-    self,
-    message: str,
-    observer: Optional[Observer] = None,
-    tracker: Optional[Tracker] = None,
-    request_timeout: Optional[float] = None,
-    *,
-    surface: str,
-    hold: str = 'guided',
-  ) -> str:
-    if self._llm is None:
-      effective_observer = observer if observer is not None else NullObserver()
-      effective_observer.on_event(TurnStartedEvent(message))
-      refusal = self._start_refusal()
-      if refusal is not None:
-        # in-reply report; the LLM stays unbuilt, so a later send re-checks
-        effective_observer.on_event(TurnRefusedEvent(refusal))
-        return refusal
-      # the tracker is locked in on first send (the LLM is constructed once and
-      # records one trail); later calls can't swap it. surface (the trail
-      # header's surface label) and hold are locked in the same way.
-      try:
-        self._llm, messages, _ = self._start(
-          message,
-          interactive=True,
-          hold=hold,
-          observer=effective_observer,
-          tracker=tracker,
-          surface=surface,
-          summoned_by=None,
-        )
-      except Exception as error:
-        effective_observer.on_event(TurnFailedEvent(str(error)))
-        raise
-    else:
-      if observer is not None:
-        # unlike the tracker, the observer is rebindable mid-conversation: a
-        # preseeded bro (bro.fork) built its LLM before the interactive surface
-        # existed, so the surface attaches its renderer on its first send.
-        self._observer = observer
-        self._llm.observer = observer
-      effective_observer = self._observer
-      effective_observer.on_event(TurnStartedEvent(message))
-      messages = [{'role': 'user', 'content': message}]
-    try:
-      result = await self._llm.send(messages, request_timeout=request_timeout)
-    except Exception as error:
-      effective_observer.on_event(TurnFailedEvent(str(error)))
-      raise
-    effective_observer.on_event(TurnCompletedEvent(result))
-    return result
 
   def _servers_with_spell_tools(
     self,
@@ -1181,14 +920,6 @@ class BaseBro(ABC):
       return servers
     return [*servers, spell_store.build_spell_server(self, harness=harness, wire=wire)]
 
-  @property
-  def _service_server(self) -> llm_mcp.MCPServer:
-    if self._service_server_cache is None:
-      self._service_server_cache = _build_service_server(
-        self, include_raise=True, harness='bro', wire='bare'
-      )
-    return self._service_server_cache
-
   def _live_mcp_servers(self) -> list[llm_mcp.MCPServer]:
     # specs materialize here, on first tool use — always in a serving process,
     # post-secrets — and are built once: a live server may hold real resources
@@ -1198,10 +929,10 @@ class BaseBro(ABC):
       self._live_mcp.extend(ds.as_mcp_server() for ds in self._data_sources)
     return self._live_mcp
 
-  def _close_live_servers(self) -> None:
-    # a live server may hold real resources, and the lifetime is the seam that
-    # releases them. best-effort: a failing teardown must not mask the run's own
-    # outcome.
+  def close(self) -> None:
+    """release the live MCP servers this bro materialized; a bro whose tools were
+    never used holds none. Best-effort: a failing teardown must not mask the
+    outcome of whatever ran the bro."""
     if self._live_mcp is None:
       return
     for server in self._live_mcp:
@@ -1210,20 +941,24 @@ class BaseBro(ABC):
       except Exception as error:
         log.warning('failed to close the %s server: %s', server.namespace, error)
 
-  def _mcp_servers_for(self, *, hold: str) -> list[llm_mcp.MCPServer]:
+  def native_mcp_servers(self, *, hold: str, live_run: LiveRun) -> list[llm_mcp.MCPServer]:
     # the in-process LLM builds (always bare wire): the `raise` service tool
     # mounts only at the unattended hold — with no human channel the agent
     # needs a way to abort; every other level reports blockers in its reply,
     # as its hold fragment instructs (same gate as the claude assemblies).
-    # non-unattended builds recreate the service server without `raise` rather
-    # than dropping it wholesale.
-    service_server = (
-      self._service_server
-      if hold == 'unattended'
-      else _build_service_server(self, include_raise=False, harness='bro', wire='bare')
-    )
     return self._servers_with_spell_tools(
-      [*self._live_mcp_servers(), service_server], harness='bro', wire='bare'
+      [
+        *self._live_mcp_servers(),
+        _build_service_server(
+          self,
+          include_raise=hold == 'unattended',
+          harness='bro',
+          wire='bare',
+          live_run=live_run,
+        ),
+      ],
+      harness='bro',
+      wire='bare',
     )
 
   def claude_bro_mcp_servers(self) -> list[llm_mcp.MCPServer]:
@@ -1262,7 +997,9 @@ class BaseBro(ABC):
     )
     return self._servers_with_spell_tools(servers, harness='claude', wire='mcp')
 
-  def _system_prompt_for(self, *, hold: str) -> str:
+  def system_prompt_for(self, *, hold: str) -> str:
+    """the bro-native system prompt under a hold — the composed prompt plus that
+    level's fragment."""
     # the hold is pinned at run start, so the matching hold fragment is
     # injected rather than detected by the agent — run() defaults unattended,
     # send() guided, with the launch surfaces overriding per their --hold flag
@@ -1274,31 +1011,3 @@ class BaseBro(ABC):
       creds=credentials.known_names(),
     )
     return f'{self.system_prompt}\n\n{fragment}'
-
-  def _record_error_step(self, error: BaseException) -> None:
-    # best-effort: recording the failure must never mask it — the tracker may
-    # well be down for the same reason the run is failing.
-    try:
-      self._tracker.step(
-        'error', {'message': str(error), 'traceback': ''.join(traceback.format_exception(error))}
-      )
-    except Exception as step_error:
-      log.warning('failed to record the error step: %s', step_error)
-
-  def _make_tracker(self) -> Tracker:
-    return _default_tracker_factory()
-
-  def _make_channel(self) -> Optional[BroChannel]:
-    # None (no BROKER_CHANNEL in the environment) keeps the lifecycle emission inert
-    return BroChannel.from_env()
-
-  def _create_llm(self, *, hold: str) -> LLM:
-    return self.llm_spec.create_llm(
-      mcp_servers=self._mcp_servers_for(hold=hold),
-      observer=self._observer,
-      tracker=self._tracker,
-      # the LLM publishes cumulative usage under the bro's surface identity (the
-      # usage file must be self-describing — an in-process run's RIDE_BRO is the
-      # launcher's, not this bro's).
-      agent=self.agent,
-    )
