@@ -17,8 +17,8 @@ jobs:
         # every stage `run-tests` names, one runner each
         stage: [lint, types, unit, benchmark, docker]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - name: sync the workspace
         run: uv sync --all-packages --all-groups --all-extras
       - name: run-tests
