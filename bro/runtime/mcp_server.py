@@ -26,15 +26,29 @@ __cli_name__ = 'mcp-server'
 
 BEARER_TOKEN_ENV = 'MCP_SERVER_BEARER_TOKEN'
 
-_BRO_PREFIX = 'bro:'
-_PERSONA_PREFIX = 'persona:'
-
-
 _TOOLSET_ENTRY_POINT_GROUP = 'bro.toolsets'
+_TARGET_ENTRY_POINT_GROUP = 'bro.mcp.targets'
 
 
 def _toolset_entry_points() -> tuple[importlib.metadata.EntryPoint, ...]:
   return tuple(importlib.metadata.entry_points(group=_TOOLSET_ENTRY_POINT_GROUP))
+
+
+def _target_entry_points() -> tuple[importlib.metadata.EntryPoint, ...]:
+  return tuple(importlib.metadata.entry_points(group=_TARGET_ENTRY_POINT_GROUP))
+
+
+def _target_forms() -> list[str]:
+  return [f'{entry_point.name}:<value>' for entry_point in _target_entry_points()]
+
+
+def _known_server_forms() -> list[str]:
+  return sorted(
+    [
+      *(entry_point.name for entry_point in _toolset_entry_points()),
+      *_target_forms(),
+    ]
+  )
 
 
 def _toolset_server(namespace: str) -> 'MCPServer':
@@ -45,10 +59,7 @@ def _toolset_server(namespace: str) -> 'MCPServer':
     values = ', '.join(entry_point.value for entry_point in matches)
     raise SystemExit(f'duplicate toolset {namespace!r}: {values}')
   if len(matches) == 0:
-    known = sorted(entry_point.name for entry_point in _toolset_entry_points())
-    raise SystemExit(
-      f'unknown server {namespace!r}; expected one of {known}, bro:<name>, or persona:<name>'
-    )
+    raise SystemExit(f'unknown server {namespace!r}; expected one of {_known_server_forms()}')
   from bro.mcp import Toolset
 
   toolset = matches[0].load()
@@ -57,15 +68,28 @@ def _toolset_server(namespace: str) -> 'MCPServer':
   return toolset.build()
 
 
+def _target_servers(spec: str) -> list['MCPServer']:
+  target, separator, value = spec.partition(':')
+  if separator == '' or value == '':
+    raise SystemExit(f'invalid assembled target {spec!r}; expected one of {_target_forms()}')
+  matches = [entry_point for entry_point in _target_entry_points() if entry_point.name == target]
+  if len(matches) > 1:
+    values = ', '.join(entry_point.value for entry_point in matches)
+    raise SystemExit(f'duplicate assembled target {target!r}: {values}')
+  if len(matches) == 0:
+    raise SystemExit(f'unknown assembled target {target!r}; expected one of {_target_forms()}')
+  resolver = matches[0].load()
+  servers = resolver(value)
+  from bro.llm.mcp import MCPServer
+
+  if not isinstance(servers, list) or not all(isinstance(server, MCPServer) for server in servers):
+    raise TypeError(f'assembled target {target!r} must return a list of MCP servers')
+  return servers
+
+
 def _resolve_servers(spec: str) -> list['MCPServer']:
-  if spec.startswith(_BRO_PREFIX):
-    from bro.registry import create_bro
-
-    return create_bro(spec[len(_BRO_PREFIX) :]).claude_bro_mcp_servers()
-  if spec.startswith(_PERSONA_PREFIX):
-    from bro.registry import create_bro
-
-    return create_bro(spec[len(_PERSONA_PREFIX) :]).claude_persona_mcp_servers()
+  if ':' in spec:
+    return _target_servers(spec)
   return [_toolset_server(spec)]
 
 
@@ -202,10 +226,7 @@ def main(argv: list[str]) -> Optional[int]:
   parser = base_args.Parser(description='generic MCP server: stdio by default, HTTP with --http')
   parser.add_argument(
     'server',
-    help=(
-      f'server to serve: {sorted(entry_point.name for entry_point in _toolset_entry_points())}, '
-      'bro:<name>, or persona:<name>'
-    ),
+    help=f'server to serve: {_known_server_forms()}',
   )
   parser.add_argument(
     '--http',
@@ -232,10 +253,8 @@ def main(argv: list[str]) -> Optional[int]:
       args['port'] is not None or args['port_file'] is not None or args['bearer_token'] is not None
     ):
       raise SystemExit('--port/--port-file/--bearer-token only apply with --http')
-    if args['server'].startswith((_BRO_PREFIX, _PERSONA_PREFIX)):
-      raise SystemExit(
-        'bro:<name> and persona:<name> serve one endpoint per namespace; run them with --http'
-      )
+    if ':' in args['server']:
+      raise SystemExit('assembled targets serve one endpoint per namespace; run them with --http')
     asyncio.run(run(_resolve_servers(args['server'])[0]))
     return None
 

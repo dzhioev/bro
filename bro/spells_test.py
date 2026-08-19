@@ -82,9 +82,11 @@ class _NoRun:
 
 
 def _servers(bro: BaseBro, wire: mcp.Wire) -> list[llm_mcp.MCPServer]:
-  if wire == 'mcp':
-    return bro.claude_bro_mcp_servers()
-  return bro.native_mcp_servers(hold='unattended', live_run=_NoRun())
+  return bro.assemble(harness='bro', wire=wire, include_raise=True, live_run=_NoRun())
+
+
+def _persona_servers(bro: BaseBro) -> list[llm_mcp.MCPServer]:
+  return bro.assemble(harness='claude', wire='mcp', include_raise=True)
 
 
 def _spell_server(bro: BaseBro, *, wire: mcp.Wire = 'bare') -> llm_mcp.MCPServer:
@@ -262,8 +264,8 @@ class TestSpellServer:
     bro = _bro_class(package)()
 
     assert NAMESPACE in {server.namespace for server in _servers(bro, 'bare')}
-    assert NAMESPACE in {server.namespace for server in bro.claude_bro_mcp_servers()}
-    assert NAMESPACE in {server.namespace for server in bro.claude_persona_mcp_servers()}
+    assert NAMESPACE in {server.namespace for server in _servers(bro, 'mcp')}
+    assert NAMESPACE in {server.namespace for server in _persona_servers(bro)}
     registry = ToolRegistry([_spell_server(bro)])
     assert {tool.name for tool in await registry.resolve()} == {'spell__do-work'}
 
@@ -271,8 +273,8 @@ class TestSpellServer:
     package = fake_packages('_spell_empty')
     bro = _bro_class(package)()
     assert NAMESPACE not in {server.namespace for server in _servers(bro, 'bare')}
-    assert NAMESPACE not in {server.namespace for server in bro.claude_bro_mcp_servers()}
-    assert NAMESPACE not in {server.namespace for server in bro.claude_persona_mcp_servers()}
+    assert NAMESPACE not in {server.namespace for server in _servers(bro, 'mcp')}
+    assert NAMESPACE not in {server.namespace for server in _persona_servers(bro)}
 
   def test_declared_server_cannot_claim_reserved_namespace(self, fake_packages):
     package = fake_packages('_spell_reserved')
@@ -297,7 +299,7 @@ class TestSpellServer:
     native_tools = await _service_server(bro).list_tools()
     claude_bro_tools = await _service_server(bro, wire='mcp').list_tools()
     persona_tool_names = {
-      tool.name for server in bro.claude_persona_mcp_servers() for tool in await server.list_tools()
+      tool.name for server in _persona_servers(bro) for tool in await server.list_tools()
     }
 
     native_skill = next(tool for tool in native_tools if tool.name == 'skill')
@@ -344,7 +346,7 @@ class TestSpellServer:
     bare_tool = (await _spell_server(bro).list_tools())[0]
     mcp_tool = (await _spell_server(bro, wire='mcp').list_tools())[0]
     persona_server = next(
-      server for server in bro.claude_persona_mcp_servers() if server.namespace == NAMESPACE
+      server for server in _persona_servers(bro) if server.namespace == NAMESPACE
     )
     persona_tool = (await persona_server.list_tools())[0]
 
@@ -418,7 +420,7 @@ class TestCast:
       tool.name for tool in await _service_server(available_bro, wire='mcp').list_tools()
     }
     persona_service = next(
-      server for server in available_bro.claude_persona_mcp_servers() if server.namespace == 'bro'
+      server for server in _persona_servers(available_bro) if server.namespace == 'bro'
     )
     persona_services = {tool.name for tool in await persona_service.list_tools()}
     assert native_spells == {'do-work'}

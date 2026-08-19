@@ -14,7 +14,6 @@ from bro.base.offload import off_loop
 from bro.channel import BroChannel
 from bro.datasources.base import DataSource
 from bro.datasources.man import ManPage, manual
-from bro.launch.hold import UNATTENDED, session_hold
 from bro.llm.llm import EFFORT_LEVELS, NativeLLMSpec
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, hold_fragment
@@ -463,13 +462,6 @@ def _build_service_server(
   server = llm_mcp.InProcessMCPServer('bro', tools)
   server.tool_universe = _SERVICE_TOOL_NAMES
   return server
-
-
-def _unattended_claude_session() -> bool:
-  # BRO_HOLD carries the session's user-involvement level, RIDE_RUNNER_PID makes
-  # it terminatable (both exported by ride's in-place runner); `raise` needs an
-  # unattended session and a runner to signal.
-  return session_hold() == UNATTENDED and os.environ.get('RIDE_RUNNER_PID') is not None
 
 
 def feature(name: str) -> Condition:
@@ -942,61 +934,31 @@ class BaseBro(ABC):
       except Exception as error:
         log.warning('failed to close the %s server: %s', server.namespace, error)
 
-  def native_mcp_servers(self, *, hold: str, live_run: LiveRun) -> list[llm_mcp.MCPServer]:
-    # the in-process LLM builds (always bare wire): the `raise` service tool
-    # mounts only at the unattended hold — with no human channel the agent
-    # needs a way to abort; every other level reports blockers in its reply,
-    # as its hold fragment instructs (same gate as the claude assemblies).
-    return self._servers_with_spell_tools(
-      [
-        *self._live_mcp_servers(),
-        _build_service_server(
-          self,
-          include_raise=hold == 'unattended',
-          harness='bro',
-          wire='bare',
-          live_run=live_run,
-        ),
-      ],
-      harness='bro',
-      wire='bare',
-    )
-
-  def claude_bro_mcp_servers(self) -> list[llm_mcp.MCPServer]:
-    # the MCP servers a `ride solo|along --raw` Claude Code session mounts (through
-    # the generic server's `bro:<name>` surface): declared servers, spells, and the
-    # service tools. procedures serve the bro branch (`--bare` strips claude's
-    # built-ins, so the session drives work through the bro toolset, not
-    # Monitor/Bash) over mcp wire names. `raise` mounts only for an unattended
-    # session.
-    return self._servers_with_spell_tools(
-      [
-        *self._live_mcp_servers(),
-        _build_service_server(
-          self, include_raise=_unattended_claude_session(), harness='bro', wire='mcp'
-        ),
-      ],
-      harness='bro',
-      wire='mcp',
-    )
-
-  def claude_persona_mcp_servers(self) -> list[llm_mcp.MCPServer]:
-    # the MCP servers a ride-session themed as this bro mounts — claude's full
-    # harness with the bro as its persona, served through the generic server's
-    # `persona:<name>` surface: the declared servers and data sources that hold
-    # on the claude harness — an entry gated to the bro harness (the dev
-    # toolset, the reference FileSources) never mounts, claude's built-in tools
-    # cover it — plus the service server and spells server (`raise` only for an
-    # unattended session). Claude's own skill mechanism remains available.
-    specs, sources = self._components_for('claude')
-    servers: list[llm_mcp.MCPServer] = [spec.build() for spec in specs]
-    servers.extend(ds.as_mcp_server() for ds in sources)
+  def assemble(
+    self,
+    *,
+    harness: mcp.Harness,
+    wire: mcp.Wire,
+    include_raise: bool,
+    live_run: Optional[LiveRun] = None,
+  ) -> list[llm_mcp.MCPServer]:
+    """materialize this declaration for one consuming surface."""
+    if harness == 'bro':
+      servers = list(self._live_mcp_servers())
+    else:
+      specs, sources = self._components_for(harness)
+      servers = [spec.build() for spec in specs]
+      servers.extend(source.as_mcp_server() for source in sources)
     servers.append(
       _build_service_server(
-        self, include_raise=_unattended_claude_session(), harness='claude', wire='mcp'
+        self,
+        include_raise=include_raise,
+        harness=harness,
+        wire=wire,
+        live_run=live_run,
       )
     )
-    return self._servers_with_spell_tools(servers, harness='claude', wire='mcp')
+    return self._servers_with_spell_tools(servers, harness=harness, wire=wire)
 
   def system_prompt_for(self, *, hold: str) -> str:
     """the bro-native system prompt under a hold — the composed prompt plus that

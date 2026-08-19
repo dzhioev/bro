@@ -1,10 +1,11 @@
 """the session recorder daemon the in-place runner starts next to claude.
 
 Every session flavor gets continuous transcript recording to trails from one
-mechanism: the runner spawns `bro.trails.record.claude` before launching claude and
-stops it after claude exits — the stop is the daemon's final append and trail
-end (`trails/record/claude.py` owns the trail model). Deliberately not a Claude
-Code hook: `--raw` sessions run `claude --bare`, which runs no hooks at all.
+mechanism: the runner spawns `ride.claude.trail-recorder` before launching
+claude and stops it after claude exits — the stop is the daemon's final append
+and trail end (`ride/ride/claude/trail_recorder.py` owns transcript acquisition).
+Deliberately not a Claude Code hook: `--raw` sessions run `claude --bare`, which
+runs no hooks at all.
 
 The daemon's stderr goes to the session state dir, among the claude harness's
 own session artifacts; its durable failure signal is the health file
@@ -28,7 +29,7 @@ _STOP_TIMEOUT = 60.0
 
 @dataclass
 class _SessionRecorder:
-  """a session-owned `bro.trails.record.claude` daemon."""
+  """a session-owned `ride.claude.trail-recorder` daemon."""
 
   process: subprocess.Popen
   log_path: Path
@@ -63,7 +64,7 @@ def start_session_recorder(
     raise RuntimeError(f'{SESSION_DIR_ENV} is unset: this session keeps no state dir')
   log_path = session_state / 'session-recorder.log'
   argv = [
-    'bro.trails.record.claude',
+    'ride.claude.trail-recorder',
     '--workspace',
     name,
     '--projects-dir',
