@@ -2,13 +2,13 @@
 
 The environment is rebuilt rather than patched: every variable in the
 framework's own namespaces is cleared before collection, and a test needing one
-sets it itself. This repo is developed from inside managed sessions, so a suite
-would otherwise inherit the running session's broker channel, hold, credential
-scope, workspace, claude config and state dir — and through the state dir, write
-it: the terminating service tools leave the status their session is to report
-there (`bro/workspace/session.py`), so a test exercising them would decide the
-exit status of the session running the suite. Clearing by namespace rather than
-by name is what keeps the next variable the framework invents from having to be
+sets it itself. A suite launched from inside a managed session would otherwise
+inherit the running session's broker channel, hold, credential scope, workspace,
+claude config and state dir — and through the state dir, write it: the
+terminating service tools leave the status their session is to report there
+(`bro/workspace/session.py`), so a test exercising them would decide the exit
+status of the session running the suite. Clearing by namespace rather than by
+name is what keeps the next variable the framework invents from having to be
 discovered the same way. `BRO_LLM_TESTS` is the one name kept: an opt-in a
 caller passes the run deliberately rather than session state it stands in.
 

@@ -13,11 +13,12 @@ root to applying it, the gap being invisible from inside a suite that has one.
 """
 
 import ast
+import inspect
 import os
 import tomllib
 from pathlib import Path
 
-from bro.base.suite_environment_test_helper import (
+from bro.base.suite_environment import (
   KEPT_VARIABLES,
   SESSION_NAMESPACES,
   SESSION_VARIABLES,
@@ -29,6 +30,7 @@ _SOURCES = ('benchmark', 'bro', 'bros', 'dev', 'local', 'native', 'ride')
 
 _REBUILD = rebuild_environment.__name__
 _REBUILD_MODULE = rebuild_environment.__module__
+_REBUILD_SOURCE = Path(inspect.getfile(rebuild_environment)).resolve()
 
 # what the environment brings that is nobody's session state
 _EXTERNAL = frozenset({'NO_COLOR', 'PAGER', 'XDG_DATA_HOME'})
@@ -73,11 +75,13 @@ def _sources() -> list[Path]:
     found.extend(
       path
       for path in (_ROOT / source).rglob('*.py')
-      # tests name variables they set themselves; the policy is about what the
-      # framework reads from the environment it is handed. dot directories are
-      # where a member's own `.venv` puts its third-party sources
+      # tests name variables they set themselves, and the rebuild names the ones
+      # it pins; the policy is about what the framework reads from the
+      # environment it is handed. dot directories are where a member's own
+      # `.venv` puts its third-party sources
       if not path.name.endswith(('_test.py', '_test_helper.py'))
       and path.name != 'conftest.py'
+      and path.resolve() != _REBUILD_SOURCE
       and not any(part.startswith('.') for part in path.relative_to(_ROOT).parts)
     )
   return found

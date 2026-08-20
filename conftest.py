@@ -38,7 +38,7 @@ import pytest
 
 import bro.llm.usage as usage
 from bro.base import log
-from bro.base.suite_environment_test_helper import rebuild_environment
+from bro.base.suite_environment import rebuild_environment
 from bro.llm.tracker import NullTracker
 from bro.native.runner import set_default_tracker_factory
 

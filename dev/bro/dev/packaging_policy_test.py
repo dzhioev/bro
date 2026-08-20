@@ -72,6 +72,16 @@ def test_distribution_roots_take_projects_outside_the_workspace(tmp_path):
   ]
 
 
+def test_reports_a_required_module_the_exclusion_drops(tmp_path):
+  (tmp_path / 'pyproject.toml').write_text(_PROJECT + 'wheel-exclude = ["**/helper.py"]\n')
+  (tmp_path / 'thing').mkdir()
+  (tmp_path / 'thing' / '__init__.py').write_text('')
+  (tmp_path / 'thing' / 'helper.py').write_text('')
+
+  with pytest.raises(AssertionError, match='no wheel ships thing/helper.py'):
+    assert_packaging_policy(tmp_path, required_modules=('thing/helper.py',))
+
+
 def test_reports_a_distribution_built_without_the_exclusion(tmp_path):
   (tmp_path / 'pyproject.toml').write_text(_PROJECT)
   (tmp_path / 'thing').mkdir()
