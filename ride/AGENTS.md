@@ -19,6 +19,7 @@
 - `ride/harness.py` — the `Harness` protocol (flag registration and option packing, scope, auth, session reads, and the launch hooks: inner argv flags, the in-place run, container extras, host runner env), the harness roster, and the lazy harness resolver.
 - `ride/bro.py` — native harness implementation: native recipe resolution, the in-place runner spawning `bro run|chat …` with exact-recipe continuation, and the launch hooks.
 - `ride/flags.py` — common session, scope, and LLM flag registration, harness flag registration with the generic requires-`--harness` refusal and option packing, and the default an omitted `--hold` resolves to.
+- `ride/runtime_bundle.py` — installation freeze, content-addressed bundle persistence and locking, host snapshot materialization, session-command shims, and bundle GC.
 - `ride/listing.py`, `ride/clean.py`, `ride/scope_report.py` — lifecycle implementations.
 - `ride/e2e_test.py` — live Docker launch coverage, outside the default test roster.
 - `ride/workspace/` — managed workspace creation, provisioning, container execution, credential hydration, broker spawners, and teardown; see `ride/workspace/AGENTS.md`.
@@ -30,9 +31,9 @@
 - The runtime layer names no Claude detail in its serialized harness options. `SessionSpec.harness_options` belongs to the selected implementation and is validated there.
 - The neutral layer owns both launch bodies; the harness seam supplies scope recipes, auth, LLM resolution, the inner command, session-state reads, and the per-harness launch extras. The in-place runner is the Claude harness's alone — bro workspaces run `bro run|chat`. A managed native container or host worktree is always launched by `ride`; a summon child is spawned by `summon` — except a manual one, which the user launches with `ride along --summoned <token>` against the summoner's provisioned channel.
 - Every harness keeps its session state among the workspace's own records, so reclaiming a workspace is `Workspace.remove()` for all of them and no harness supplies a teardown of its own.
-- Claude workspaces run their checkout's `ride solo|along --in-place`, a hidden inner contract that fails loudly when the workspace tree predates it. Native workspaces run plain `bro run|chat …`, which carries no contract marker — a tree based on a ref that predates the in-process verbs runs its older CLI unguarded, out of support rather than detected.
+- Every outer root freezes the invoking installation into one locked runtime bundle for its full lifetime. Host workspaces run the absolute `ride` from that bundle's snapshot; container workspaces run the checkout-backed image environment.
 - A bro resume reads the broker-published pointer from the workspace's `session/` dir and continues that trail under the recipe recorded in the session spec. No pointer is synthesized when the broker or native trail recording is disabled.
-- Host runtime state lives under the user's checkout-keyed runtime state root, which a launch creates before recording a workspace. Container trails and summon status use dedicated fixed absolute mounts.
+- Workspace state lives under the user's checkout-keyed runtime root. Runtime bundles are installation-wide under `runtime_base()/runtime/`; a shared flock protects each live root and `ride clean` removes only unlocked bundles. Container trails and summon status use dedicated fixed absolute mounts.
 - A pinned mode-verb workspace is never auto-dropped. An unpinned `along` workspace is kept unless `--drop` is explicit; an unpinned `solo` workspace is dropped after a clean exit unless `--keep` is explicit.
 - A solo resume becomes an along session and takes along's host-sensitive default hold; the unattended solo hold describes a run with no human channel.
 - Every reconstructed session argv restates the resolved `--hold`. The inner argv cannot carry `--host`, so a re-parse cannot be trusted to re-derive a hold that was resolved against it.

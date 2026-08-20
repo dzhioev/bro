@@ -25,6 +25,9 @@ dependencies = [
 "bro.native.llm" = "bro.native._entrypoints:bro_native_llm"
 "bro.run" = "bro.native._entrypoints:bro_run"
 
+[project.entry-points."bro.session_commands"]
+"bro" = "bro.native._entrypoints:bro_run"
+
 [tool.uv.sources]
 bro = { workspace = true }
 

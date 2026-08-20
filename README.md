@@ -30,7 +30,7 @@ The base `bro` distribution provides the declaration and inspection APIs, MCP ab
 - `bro[aws]` — the `ssm` credential source
 - `bro[github]` — GitHub App authentication
 
-A repository operated by `ride` provides a root `setup.sh` whose postcondition is an executable `.venv/bin/ride`; when the repository permits `--harness bro`, the same environment must install `bro-native` and provide `.venv/bin/bro`. A consuming development repository normally installs `bro-dev` in its dev dependency group, syncs the workspace, activates the resulting venv, and calls `bro.dev.install`, which installs the commit-footer hooks and `git golc` alias. When the container entrypoint links a pre-built environment into the tree it exports `RIDE_VENV_MANIFEST`, a directory holding the dependency manifests that environment was resolved from at their repository-relative paths; the script must reuse the environment while the tree's own copies still match them and sync when they diverge.
+A repository operated by `ride` provides a root `setup.sh` that provisions its own environment. Host sessions take machinery from the invoking installation's frozen runtime bundle, so that environment need not provide `ride` or `bro`; container sessions take both from the checkout-backed image environment. A consuming development repository normally installs `bro-dev` in its dev dependency group, syncs the workspace, activates the resulting venv, and calls `bro.dev.install`, which installs the commit-footer hooks and `git golc` alias. When the container entrypoint links a pre-built environment into the tree it exports `RIDE_VENV_MANIFEST`, a directory holding the dependency manifests that environment was resolved from at their repository-relative paths; the script must reuse the environment while the tree's own copies still match them and sync when they diverge.
 
 ## Extension entry points
 
@@ -41,8 +41,10 @@ Installed distributions contribute framework extensions through standard Python 
 - `bro.credentials` — credential registry fragments
 - `bro.brog.backends` — task-tracker backends, keyed by backend name
 - `bro.toolsets` — standalone MCP `Toolset` objects, keyed by namespace
+- `bro.mcp.targets` — assembled MCP target resolvers, keyed by target prefix
+- `bro.session_commands` — console scripts exposed on managed-session PATH
 
-Entry-point metadata is written when a distribution is installed, so adding or removing a declaration requires another `uv sync`; editing an already-declared target does not. Name-keyed groups load only the selected entry. Credential registry assembly loads every `bro.credentials` contributor, so those target modules must remain cheap to import.
+Entry-point metadata is written when a distribution is installed, so adding or removing a declaration requires another `uv sync`; editing an already-declared target does not. Name-keyed groups load only the selected entry. Credential registry assembly loads every `bro.credentials` contributor, so those target modules must remain cheap to import. Each `bro.session_commands` entry repeats the name and target of a console script from the same distribution; materialization rejects missing, mismatched, or duplicate declarations.
 
 ## Project configuration
 
