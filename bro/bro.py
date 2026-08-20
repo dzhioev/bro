@@ -104,6 +104,9 @@ class LiveRun(Protocol):
   def current_tool_step_id(self) -> Optional[ToolStepSource]: ...
 
 
+RAISE_EXIT_STATUS = 1
+
+
 class BroRaised(llm_mcp.ToolControlSignal):
   """aborts a Bro run: raised by the `raise` service tool, and by the run-start
   credential gate when required secrets don't resolve."""
@@ -142,7 +145,7 @@ async def _claude_raise(reason: str) -> str:
         channel.completed(reason, 'raised')
         channel.close()
     finally:
-      terminate_session()
+      terminate_session(status=RAISE_EXIT_STATUS)
 
   await off_loop(record_and_kill)
   # never reaches the agent in practice: ending the session interrupts the turn
@@ -192,7 +195,7 @@ async def _claude_answer(answer: str) -> str:
     log.info('answer delivered to the summoner')
     channel.completed(answer, 'ok')
     channel.close()
-    terminate_session()
+    terminate_session(status=0)
 
   await off_loop(record_and_kill)
   # never reaches the agent, for the reason `_claude_raise` gives

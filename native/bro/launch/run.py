@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Optional
 
 import bro.base.args as base_args
 from bro.base import log
-from bro.bro import BaseBro, BroRaised
+from bro.bro import RAISE_EXIT_STATUS, BaseBro, BroRaised
 from bro.launch.llm_flags import (
   EFFORT_HELP,
   FAST_HELP,
@@ -87,7 +87,7 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     try:
       asyncio.run(Runner(bro).run(args['input'], observer=observer, surface='ask', hold=hold))
     except BroRaised:
-      return 1
+      return RAISE_EXIT_STATUS
     except KeyboardInterrupt:
       log.error('interrupted')
       return 130
