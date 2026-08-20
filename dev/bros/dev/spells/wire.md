@@ -1,7 +1,7 @@
 ---
 name: wire
 description: Use this spell to wire the host's credentials for the repository you are working in — deciding which stored instance of each credential kind this project's sessions read, and recording it in the host's `~/.bro.json`. Trigger on "[[wire credentials]]", "configure credentials for this repo", "which github token does this project use", "my sessions pick the wrong task tracker", or a launch that failed on a missing or wrong credential. It runs on the host (a container session cannot reach `~/.bro.json`), changes no repository file, and never invents a secret — a kind with nothing behind it is reported for the user to provide.
-version: 1.0.1
+version: 1.1.0
 ---
 
 # Wire this project's credentials
@@ -14,7 +14,9 @@ A host serves several projects, and its store may hold several instances of one 
 
 ## 2. Learn what the project needs
 
-Resolve the project root (`git rev-parse --git-common-dir`, then its parent — every linked worktree maps to its main checkout, which is what the mapping keys on) and read the repo's `[tool.bro] default` bro from its `pyproject.toml`. That bro is what sessions launched here run as.
+Resolve the project root (`git rev-parse --git-common-dir`, then its parent — every linked worktree maps to its main checkout) and read the repo's `[tool.bro] default` bro from its `pyproject.toml`. That bro is what sessions launched here run as.
+
+The mapping keys on the attachment a session names the project by, and a session may name it either way: the checkout path, or the git URL `ride ... --repo <url>` attaches. Ask the user which their sessions use — `ride list` shows what the existing ones were attached by — and record every identity in use; an attachment with no entry reads nothing this host scopes per project.
 
 `bro show <bro>` lists the credential kinds it needs, its best-effort tier, and its features. `ride scope --repo <root>` states the same thing as an attached launch sees it: every kind a session from this project would hydrate, the instance each reads today, and whether it resolves.
 
@@ -28,12 +30,12 @@ Resolve the project root (`git rev-parse --git-common-dir`, then its parent — 
 
 ## 4. Record the decision
 
-Merge only this project's entry into `~/.bro.json`, leaving every other project's untouched, and show the user the change before writing it. The file's schema — and what `kind+` with no instance after it means — is the module docstring of `bro/base/host_config.py` in the framework's own sources; read it before writing.
+Merge only this project's entries into `~/.bro.json`, leaving every other project's untouched, and show the user the change before writing it. One project attached both ways carries one entry per identity, each with the same selection. The file's schema — and what `kind+` with no instance after it means — is the module docstring of `bro/base/host_config.py` in the framework's own sources; read it before writing.
 
 Kinds the project has no opinion about stay out of the entry.
 
 ## 5. Verify
 
-Re-run `ride scope --repo <root>`: each kind the project selects should now name that instance and read `ok`. A kind reported `MISSING` is a selection pointing at an entry the store cannot resolve — fix it before finishing rather than leaving the user to meet it at their next launch.
+Re-run `ride scope --repo <attachment>` for each identity you recorded: every kind the project selects should now name that instance and read `ok`. A kind reported `MISSING` is a selection pointing at an entry the store cannot resolve; one reported `REFUSED` is a kind this host reads per project that the attachment you passed has no entry for. Fix either before finishing rather than leaving the user to meet it at their next launch.
 
 Close by telling the user what changed and what a session from this project now reads. A launch can still override any of it for one session with `--grant <kind>+<instance>`.

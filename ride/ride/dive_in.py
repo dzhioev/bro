@@ -86,7 +86,9 @@ def _task_system(
   project = project_config(repo)
   bro_name = bro if bro is not None else project.default_bro
   store = launch_view_store(
-    scoped_secrets(bro_name, get_harness(harness).scope_recipe(harness_options), repo=repo),
+    scoped_secrets(
+      bro_name, get_harness(harness).scope_recipe(harness_options), attachment=str(repo)
+    ),
     grant=grant,
     revoke=revoke,
   )

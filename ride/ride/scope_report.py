@@ -27,31 +27,41 @@ def report_scope(
   else:
     bro_name = bro
   recipe = get_harness(harness).scope_recipe(options)
-  credential_root = None if repo is None else repo.credential_root
+  attachment = None if repo is None else repo.identity
   try:
-    selection = bind_project_credentials(credential_root)
-    scoped = scoped_secrets(bro_name, recipe, repo=credential_root)
+    selection = bind_project_credentials(attachment)
+    scoped = scoped_secrets(bro_name, recipe, attachment=attachment)
   except (LaunchScopeError, ValueError) as error:
     print(f'cannot compute the scope: {error}')
     return 1
   print(f'repository: {repo.identity if repo is not None else "(detached)"}')
   print(f'bro:        {bro_name} ({recipe.name})')
-  _print_tier('required', sorted(scoped.required), selection)
-  _print_tier('optional', sorted(scoped.optional - scoped.required), selection)
+  _print_tier('required', sorted(scoped.required), selection, scoped.unbound_kinds)
+  _print_tier(
+    'optional', sorted(scoped.optional - scoped.required), selection, scoped.unbound_kinds
+  )
   return 0
 
 
-def _print_tier(label: str, names: list[str], selection: dict[str, Optional[str]]) -> None:
+def _print_tier(
+  label: str,
+  names: list[str],
+  selection: Optional[dict[str, Optional[str]]],
+  unbound: frozenset[str],
+) -> None:
   if len(names) == 0:
     return
   print(f'{label}:')
   for name in names:
+    if name in unbound:
+      print(f'  {name:<14}{"per project, unbound":<24}REFUSED')
+      continue
     state = 'ok' if credentials.available(name) else 'MISSING'
     print(f'  {name:<14}{_reads(name, selection):<24}{state}')
 
 
-def _reads(kind: str, selection: dict[str, Optional[str]]) -> str:
-  if kind not in selection:
+def _reads(kind: str, selection: Optional[dict[str, Optional[str]]]) -> str:
+  if selection is None or kind not in selection:
     return ''
   instance = selection[kind]
   return f'{kind}+{instance} (project)' if instance is not None else f'{kind} (project)'

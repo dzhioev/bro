@@ -8,18 +8,16 @@ import re
 import shutil
 import subprocess
 import tempfile
-import urllib.parse
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
+from bro.base.git_url import git_url_path, is_git_url, normalize_git_url
 from bro.workspace.git import git_run, rev_parse_commit
 from bro.workspace.paths import project_root, runtime_base
 from bro.workspace.project import ProjectConfig, project_config, project_config_from_text
 
-_SCHEME_URL = re.compile(r'^[A-Za-z][A-Za-z0-9+.-]*://')
-_SCP_URL = re.compile(r'^(?:[^/@:\s]+@)?[^/:\s]+:.+$')
 _SLUG_CHARACTER = re.compile(r'[^a-zA-Z0-9]+')
 
 
@@ -34,10 +32,6 @@ class Repository:
   @property
   def is_url(self) -> bool:
     return self.tree_ref is not None
-
-  @property
-  def credential_root(self) -> Optional[Path]:
-    return None if self.is_url else self.git_dir
 
   @property
   def default_base(self) -> Optional[str]:
@@ -93,45 +87,10 @@ def _validate_relative_path(relative: str) -> None:
     raise ValueError(f'repository path must be relative: {relative!r}')
 
 
-def is_git_url(value: str) -> bool:
-  return _SCHEME_URL.match(value) is not None or _SCP_URL.match(value) is not None
-
-
-def normalize_git_url(value: str) -> str:
-  if _SCHEME_URL.match(value) is not None:
-    parsed = urllib.parse.urlsplit(value)
-    if parsed.hostname is None:
-      if parsed.scheme.lower() != 'file' or parsed.netloc:
-        raise ValueError(f'malformed git URL: {value!r}')
-      netloc = ''
-    else:
-      hostname = parsed.hostname.lower()
-      if ':' in hostname and not hostname.startswith('['):
-        hostname = f'[{hostname}]'
-      user_info = parsed.netloc.rsplit('@', 1)[0] + '@' if '@' in parsed.netloc else ''
-      port = '' if parsed.port is None else f':{parsed.port}'
-      netloc = f'{user_info}{hostname}{port}'
-    path = parsed.path.rstrip('/') or '/'
-    return urllib.parse.urlunsplit((parsed.scheme.lower(), netloc, path, parsed.query, ''))
-  if _SCP_URL.match(value) is not None:
-    host, path = value.split(':', 1)
-    if '@' in host:
-      user, hostname = host.rsplit('@', 1)
-      host = f'{user}@{hostname.lower()}'
-    else:
-      host = host.lower()
-    return f'{host}:{path.rstrip("/")}'
-  raise ValueError(f'not a git URL: {value!r}')
-
-
 def mirror_key(url: str) -> str:
   normalized = normalize_git_url(url)
-  parsed_path = (
-    urllib.parse.urlsplit(normalized).path
-    if _SCHEME_URL.match(normalized)
-    else normalized.split(':', 1)[-1]
-  )
-  slug = _SLUG_CHARACTER.sub('-', parsed_path.strip('/')).strip('-').lower() or 'repository'
+  slug = _SLUG_CHARACTER.sub('-', git_url_path(normalized).strip('/')).strip('-').lower()
+  slug = slug or 'repository'
   slug = slug.removesuffix('-git')[-48:]
   digest = hashlib.sha256(normalized.encode()).hexdigest()[:12]
   return f'{slug}-{digest}'

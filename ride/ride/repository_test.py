@@ -3,11 +3,10 @@ from pathlib import Path
 
 import pytest
 
+from bro.base.git_url import normalize_git_url
 from ride.repository import (
   clean_managed_mirrors,
-  is_git_url,
   mirror_key,
-  normalize_git_url,
   open_repository,
   resolve_repository,
 )
@@ -33,21 +32,12 @@ def _upstream(tmp_path: Path) -> tuple[Path, Path, str]:
   return work, upstream, _git(work, 'rev-parse', 'HEAD')
 
 
-class TestUrlRecognition:
-  def test_scheme_and_scp_urls_are_recognized(self):
-    assert is_git_url('https://github.com/Owner/Repo.git')
-    assert is_git_url('git@github.com:Owner/Repo.git')
-    assert not is_git_url('repository-name')
-
-  def test_normalization_stabilizes_scheme_host_and_trailing_slash(self):
+class TestMirrorKey:
+  def test_two_spellings_of_one_url_share_a_mirror(self):
     first = normalize_git_url('HTTPS://GitHub.COM/Owner/Repo.git/')
     second = normalize_git_url('https://github.com/Owner/Repo.git')
-    assert first == second == 'https://github.com/Owner/Repo.git'
     assert mirror_key(first) == mirror_key(second)
     assert mirror_key(first).startswith('owner-repo-')
-
-  def test_scp_host_is_normalized(self):
-    assert normalize_git_url('git@GitHub.COM:Owner/Repo.git/') == 'git@github.com:Owner/Repo.git'
 
   def test_non_path_non_url_errors_crisply(self):
     with pytest.raises(ValueError, match='existing checkout path or a git URL'):

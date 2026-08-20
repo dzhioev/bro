@@ -175,7 +175,7 @@ def _summoned_credentials(
   harness_name: Optional[str],
   llm: Optional[str],
   *,
-  repo: Optional[Path],
+  attachment: Optional[str],
   grant: Sequence[str] = (),
   revoke: Sequence[str] = (),
 ) -> set[str]:
@@ -187,7 +187,7 @@ def _summoned_credentials(
   scoped = summoned_credential_scope(
     target,
     harness.scope_recipe(harness.default_options()),
-    repo=repo,
+    attachment=attachment,
     grant=list(grant),
     revoke=list(revoke),
     llm_spec=harness.resolve_llm(llm, target),
@@ -316,7 +316,7 @@ def _credential_refusal(
   requester: _Requester,
   target: str,
   *,
-  repo: Optional[Path],
+  attachment: Optional[str],
   grant_credentials: list[str],
   harness_name: Optional[str],
   llm: Optional[str],
@@ -326,18 +326,17 @@ def _credential_refusal(
   names outright, and what the requested `harness`/`llm` add on top of the
   target's own default scope, the driving loop they select contributing
   credentials of its own. Only that delta is bounded — the target's declared
-  credentials are what its allow-list entry sanctions.
+  credentials are what its allow-list entry sanctions. A child scope that cannot
+  be computed at all is a refusal of its own, carrying the reason.
 
   Raises `_Unattributable` when the requester's own scope cannot be read."""
-  from bro.llm.providers import LLMSelectionError
-
   widening: set[str] = set()
   if harness_name is not None or llm is not None:
     try:
       widening = _summoned_credentials(
-        target, harness_name, llm, repo=repo
-      ) - _summoned_credentials(target, None, None, repo=repo)
-    except LLMSelectionError as e:
+        target, harness_name, llm, attachment=attachment
+      ) - _summoned_credentials(target, None, None, attachment=attachment)
+    except ValueError as e:
       return str(e)
   if len(grant_credentials) == 0 and len(widening) == 0:
     return None
@@ -458,9 +457,7 @@ class SummonControl:
       refusal = _credential_refusal(
         requester,
         target,
-        repo=(
-          None if self._workspace.repository is None else self._workspace.repository.credential_root
-        ),
+        attachment=self._workspace.metadata.repo,
         grant_credentials=grant_credentials,
         harness_name=harness_name,
         llm=llm,
@@ -655,16 +652,17 @@ class SummonControl:
       )
     grant, _ = split_scope_overrides(record.grant)
     revoke, _ = split_scope_overrides(record.revoke)
-    return _summoned_credentials(
-      record.target,
-      record.harness,
-      record.llm,
-      repo=(
-        None if self._workspace.repository is None else self._workspace.repository.credential_root
-      ),
-      grant=grant,
-      revoke=revoke,
-    )
+    try:
+      return _summoned_credentials(
+        record.target,
+        record.harness,
+        record.llm,
+        attachment=self._workspace.metadata.repo,
+        grant=grant,
+        revoke=revoke,
+      )
+    except ValueError as error:
+      raise _Unattributable(str(error)) from error
 
   def _root_summoned_by(self) -> Optional[dict[str, Any]]:
     # the root's trail attribution source, per publication channel

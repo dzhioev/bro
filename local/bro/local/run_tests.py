@@ -79,6 +79,7 @@ PYTEST_FILES = [
   'bro/base/condition_test.py',
   'bro/base/configs_test.py',
   'bro/base/credentials_test.py',
+  'bro/base/git_url_test.py',
   'bro/base/host_config_test.py',
   'bro/base/log_test.py',
   'bro/base/lulid_test.py',

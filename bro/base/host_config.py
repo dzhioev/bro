@@ -11,18 +11,27 @@ beside the host's own `--llm` preset names:
         },
         "/home/foo/projects/site": {
           "instances": ["brog+"]
+        },
+        "https://github.com/foo/api.git": {
+          "instances": ["brog+github", "github+acme"]
         }
       },
       "llm": {"sharp": "openai:sol:max"}
     }
 
-a project key is the filesystem path of the operated repo's root (`~` and
-symlinks resolved before matching). its value is that project's policy object,
-carrying `instances`: the `kind+instance` names the project reads, naming each
-kind at most once. the `+` is always written — `kind+` states that the project
-reads the kind's own registry entry, which the registry must then give sources
-of its own. the file is optional: a host holding one instance per kind needs
-none, and a project without an entry reads each kind's own default.
+a project key is the attachment a session names it by: the filesystem path of
+the operated repo's root (`~` and symlinks resolved before matching), or a git
+URL (normalized before matching), so a repository attached both ways carries an
+entry per identity. its value is that project's policy object, carrying
+`instances`: the `kind+instance` names the project reads, naming each kind at
+most once. the `+` is always written — `kind+` states that the project reads the
+kind's own registry entry, which the registry must then give sources of its own.
+
+the file is optional: a host holding one instance per kind needs none. a host
+that does declare project entries reads the kinds they name **per project**, so
+a launch whose attachment no entry names cannot resolve those kinds at all
+(`project_scoped_kinds`) — the kind's own registry entry is one project's
+instance, and handing it to another project is a cross-project credential leak.
 
 `llm` maps a preset name to the `--llm` value it stands for, host-wide rather
 than per project — it is the operator's own shorthand, which every project they
@@ -37,6 +46,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import configs, credentials
+from bro.base.git_url import is_git_url, normalize_git_url
 
 # module-level so tests can point it at a fixture path; read at call time.
 HOST_CONFIG_FILE = configs.DEFAULT_HOST_CONFIG
@@ -75,22 +85,39 @@ def llm_presets() -> dict[str, str]:
   return presets
 
 
-def project_instances(project: Path) -> dict[str, Optional[str]]:
-  """the instance selection `project` reads on this host: kind → the instance
-  backing it, or None where the selection names the kind's own entry. empty when
-  the file has no entry for the project (or does not exist)."""
+def project_instances(attachment: str) -> Optional[dict[str, Optional[str]]]:
+  """the instance selection the project attached as `attachment` reads on this
+  host: kind → the instance backing it, or None where the selection names the
+  kind's own entry. None when no entry names the attachment (or the file does
+  not exist), which is what `project_scoped_kinds` then withholds."""
+  return _selections().get(_attachment_key(attachment))
+
+
+def project_scoped_kinds() -> frozenset[str]:
+  """every credential kind some project entry selects an instance for — the
+  kinds this host reads per project rather than host-wide."""
+  return frozenset(kind for selection in _selections().values() for kind in selection)
+
+
+def _selections() -> dict[str, dict[str, Optional[str]]]:
   path, data = _read()
   projects = data.get(_PROJECTS_KEY, {})
   if not isinstance(projects, dict):
     raise ValueError(f'{path}: {_PROJECTS_KEY} must be a json object')
-  selections = {
-    _resolve_path(key): _project_selection(path, key, value) for key, value in projects.items()
-  }
-  return selections.get(_resolve_path(str(project)), {})
+  selections: dict[str, dict[str, Optional[str]]] = {}
+  for key, value in projects.items():
+    attachment = _attachment_key(key)
+    if attachment in selections:
+      raise ValueError(f'{path}: two project keys name the same attachment {attachment}')
+    selections[attachment] = _project_selection(path, key, value)
+  return selections
 
 
-def _resolve_path(path: str) -> Path:
-  return Path(os.path.expanduser(path)).resolve()
+def _attachment_key(attachment: str) -> str:
+  """a project key and an attachment reduced to the identity they match on."""
+  if is_git_url(attachment):
+    return normalize_git_url(attachment)
+  return str(Path(os.path.expanduser(attachment)).resolve())
 
 
 def _project_selection(path: Path, project: str, value: object) -> dict[str, Optional[str]]:
