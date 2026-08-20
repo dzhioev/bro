@@ -22,7 +22,7 @@ Development requires Python 3.12 or newer, Git, and [uv](https://docs.astral.sh/
 The base `bro` distribution provides the declaration and inspection APIs, MCP abstraction, credential handling, shared workspace/session primitives, prompts, and framework services. Install the distribution for the engine you run:
 
 - `bro-native` — the native LLM loop, the `bro` command (`list`, `show`, `run`, and `chat`), provider clients, and terminal UIs
-- `bro-ride` — the managed-workspace runtime, both harness adapters, `ask` / `call` aliases, and `dive-in`; install `bro-native` alongside it in a repository that launches the native harness
+- `bro-ride` — the managed-workspace runtime, both harness adapters, `ask` / `call` aliases, and `dive-in`
 - `bro[http]` — aiohttp-based clients and services
 - `bro[llm]` — OpenAI LLM access without the agent UI dependencies
 - `bro[runtime]` — the MCP serving front, over stdio or HTTP
@@ -30,7 +30,10 @@ The base `bro` distribution provides the declaration and inspection APIs, MCP ab
 - `bro[aws]` — the `ssm` credential source
 - `bro[github]` — GitHub App authentication
 
-A repository operated by `ride` may provide a root `setup.sh` to provision its own environment; an absent script is logged and skipped. Session machinery always comes from the invoking installation's frozen runtime bundle — a host snapshot or a read-only container volume — so the project environment need not provide `ride` or `bro`. Managed-session PATH contains pinned session commands plus system tools; repository commands use `uv run` or `.venv/bin/`. A consuming development repository normally installs `bro-dev` in its dev dependency group and calls `bro.dev.install` during setup to install the commit-footer hooks and `git golc` alias. When the container entrypoint links the optional project dependency bake into the tree it exports `RIDE_VENV_MANIFEST`, whose staged manifests let setup reuse the environment until the tree's copies diverge.
+A repository operated by `ride` may provide a root `setup.sh` to provision its own environment; an absent script is logged and skipped. Session machinery always comes from the invoking installation's frozen runtime bundle — a host snapshot or a read-only container volume — so the project environment need not provide `ride` or `bro`. The ride installation itself must provide every persona, extension, and engine a session uses, including `bro-native` for `--harness bro`. Managed-session PATH contains pinned session commands plus system tools; repository commands use `uv run` or `.venv/bin/`. A consuming development repository normally installs `bro-dev` in its dev dependency group and calls `bro.dev.install` during setup to install the commit-footer hooks and `git golc` alias. When the container entrypoint links the optional project dependency bake into the tree it exports `RIDE_VENV_MANIFEST`, whose staged manifests let setup reuse the environment until the tree's copies diverge.
+
+> [!NOTE]
+> **Upgrade from checkout-keyed runtime state:** the first outer `ride`, `ask`, or `call` command migrates existing project-keyed workspaces, trails, summon audit, and broker state into the global runtime root. See [`bro/reference/ride.md`](bro/reference/ride.md#runtime-state) for the migration contract.
 
 ## Extension entry points
 
@@ -48,7 +51,7 @@ Entry-point metadata is written when a distribution is installed, so adding or r
 
 ## Project configuration
 
-Every operated repository declares its launch defaults:
+Every repository attached with `--repo` declares its launch defaults; detached sessions read no project configuration:
 
 ```toml
 [tool.bro]

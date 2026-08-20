@@ -94,7 +94,7 @@ def run_summoned_in_container(
   left before the attach, then attached interactively."""
   log_scoped_secrets(launch.name, launch.secrets, launch.optional_secrets)
   workspace.clear_session_end()
-  container_id = prepare_container(launch, workspace.project)
+  container_id = prepare_container(launch)
   claim()
   code = attach_interactive(container_id)
   workspace.record_session_end(code)

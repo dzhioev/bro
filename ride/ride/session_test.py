@@ -1,7 +1,9 @@
 import contextlib
 import json
 import os
+import shlex
 import shutil
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Optional
@@ -117,9 +119,12 @@ def _runtime_bundle(tmp_path) -> RuntimeBundle:
   ride = root / 'host' / 'venv' / 'bin' / 'ride'
   ride.touch()
   ride.chmod(0o755)
-  broker = shutil.which('broker')
-  if broker is not None and not (root / 'host' / 'bin' / 'broker').exists():
-    (root / 'host' / 'bin' / 'broker').symlink_to(broker)
+  for command in ('broker', 'summon'):
+    binary = shutil.which(command)
+    assert binary is not None
+    destination = root / 'host' / 'bin' / command
+    if not destination.exists():
+      destination.symlink_to(binary)
   return RuntimeBundle(root, '3.12')
 
 
@@ -1362,7 +1367,8 @@ client.close(confirm=True)
     # stands in for the in-place runner: register the manual summon, let the
     # external child answer it, and block for the relayed answer
     ride_binary.write_text(
-      f'#!/bin/sh\npython {answer_child} {pending_dir} &\n'
+      f'#!/bin/sh\n{shlex.quote(sys.executable)} {shlex.quote(str(answer_child))} '
+      f'{shlex.quote(str(pending_dir))} &\n'
       "exec summon --manual bro-dev 'pair on this'\n"
     )
     ride_binary.chmod(0o755)

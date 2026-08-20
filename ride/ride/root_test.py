@@ -27,6 +27,38 @@ class _FakeProc:
 
 
 class TestRunInContainerInjection:
+  def test_manual_child_claims_after_prepare_and_before_attach(self, monkeypatch, tmp_path):
+    events: list[str] = []
+    monkeypatch.setattr(
+      ride.root,
+      'prepare_container',
+      lambda launch: events.append('prepare') or 'cid123',
+    )
+    monkeypatch.setattr(
+      ride.root,
+      'attach_interactive',
+      lambda container_id: events.append(f'attach:{container_id}') or 0,
+    )
+    launch = workspace_docker.Launch(
+      name='ws',
+      command=['claude'],
+      env={},
+      secrets=(),
+      docker_sock=False,
+      tty=True,
+      forward_env=False,
+      image='runtime-image',
+      runtime_bundle_hash='bundle-hash',
+    )
+
+    assert (
+      ride.root.run_summoned_in_container(
+        launch, _workspace(tmp_path), claim=lambda: events.append('claim')
+      )
+      == 0
+    )
+    assert events == ['prepare', 'claim', 'attach:cid123']
+
   def test_prepare_then_start_sequence(self, monkeypatch, tmp_path):
     monkeypatch.setenv('BROKER_DISABLED', '1')
     prepared: list = []

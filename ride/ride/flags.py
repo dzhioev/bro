@@ -110,10 +110,9 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
     '--into',
     default=None,
     metavar='REF',
-    help='base a new session on git REF (branch/tag/sha). a REF that only exists on origin is '
-    'fetched automatically; ignored once the workspace exists. '
-    "default: the host checkout's current HEAD for ride along; origin's freshly "
-    'fetched HEAD for dive-in, with the host HEAD as the unreachable-origin fallback',
+    help='base a new attached session on git REF (branch/tag/sha). a REF that only exists on '
+    'origin is fetched automatically; ignored once the workspace exists. default: the local '
+    "checkout's current HEAD or a git URL's freshly fetched origin/HEAD",
   )
   if include_bro:
     parser.add_argument(

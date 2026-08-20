@@ -206,7 +206,7 @@ On exit: `--drop` removes the workspace (`git worktree remove --force` + `git br
 Layout on disk:
 
 - `<runtime-root>/workspaces/<name>/tree/` — the worktree (regular working tree with a `.git` gitfile that points at `<project>/.git/worktrees/<name>/`).
-- `<runtime-root>/workspaces/<name>/tree/.venv` — per-worktree virtualenv created on first launch by `ride` (via the worktree's `setup.sh`).
+- `<runtime-root>/workspaces/<name>/tree/.venv` — the project environment when the repository's optional `setup.sh` creates one; session machinery does not depend on it.
 - `<runtime-root>/workspaces/<name>/claude/projects/<encoded-worktree-path>/` — Claude Code's per-project state for the session, including the session JSONL files, inside the workspace's claude state dir (below). The encoded path is the worktree path with `/` and `.` replaced by `-`.
 
 #### Host claude-state isolation

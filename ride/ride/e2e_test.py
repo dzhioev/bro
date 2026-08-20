@@ -87,7 +87,7 @@ _NAME_PREFIX = 'ride-e2e-'
 _RUNTIME_PYTHON = '/var/ride/runtime/venv/bin/python'
 
 
-# --- in-container probes (source for `python -c`; repo code comes from the baked venv) ---
+# --- in-container probes (source for `python -c`; framework code comes from the runtime volume) ---
 
 # scenario A root: verify the live channel (BROKER_CHANNEL rewritten by the
 # entrypoint to its broxy's local socket, the upstream socket bind-mounted
@@ -242,9 +242,9 @@ sys.exit(5)
 # the image's real one — then execs the runner itself ("$@", the same
 # `ride solo|along --in-place …` invocation `_container_session` sends). the fake records
 # its argv/env to the report file, proving the argv was built in-container by the
-# workspace's own code; under RIDE_E2E_LINGER it waits for the interrupt keypress
-# on its own terminal (exit 7) so the harness can assert `docker stop` reaches
-# claude through tini → runner → the runner-owned pty.
+# frozen runtime; under RIDE_E2E_LINGER it waits for the interrupt keypress on its
+# own terminal (exit 7) so the harness can assert `docker stop` reaches claude
+# through tini → runner → the runner-owned pty.
 _INPLACE_WRAPPER = """
 mkdir -p /tmp/e2e-bin
 cat > /tmp/e2e-bin/claude <<'FAKE'
@@ -281,14 +281,23 @@ from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 from bro.workspace.paths import project_root
 
-launch = Launch(name=os.environ['RIDE_E2E_NAME'],
-                command=json.loads(os.environ['RIDE_E2E_COMMAND']), env={},
+name = os.environ['RIDE_E2E_NAME']
+workspace = Workspace.ensure(name, project_root(), WorkspaceKind.CONTAINER)
+claude_dir = workspace.path / 'claude'
+session_dir = workspace.path / 'session'
+claude_dir.mkdir()
+session_dir.mkdir()
+launch = Launch(name=name,
+                command=json.loads(os.environ['RIDE_E2E_COMMAND']),
+                env={'CLAUDE_CONFIG_DIR': '/home/ride/.claude',
+                     'RIDE_SESSION_DIR': '/var/ride/session'},
                 secrets=tuple(json.loads(os.environ.get('RIDE_E2E_SECRETS', '[]'))),
                 docker_sock=True, tty=True, forward_env=True,
                 image=os.environ['RIDE_E2E_IMAGE'],
                 runtime_bundle_hash=os.environ['RIDE_E2E_RUNTIME_HASH'],
+                extra_mounts=(f'{claude_dir}:/home/ride/.claude',
+                              f'{session_dir}:/var/ride/session'),
                 repo=project_root())
-workspace = Workspace.ensure(launch.name, project_root(), WorkspaceKind.CONTAINER)
 code = run_in_container(launch, workspace)
 loaded = sorted(m for m in sys.modules if m == 'broker' or m.startswith('bro.broker.'))
 print(f'RIDE_E2E_EXIT:{code}', flush=True)
@@ -986,7 +995,22 @@ def scenario_f(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   driver = _Driver(
     env,
     name,
-    _inplace_command('ride', 'ss', '--in-place', '--fast', name),
+    _inplace_command(
+      'ride',
+      'solo',
+      '--in-place',
+      '--workspace',
+      name,
+      '--harness',
+      'claude',
+      '--repo',
+      str(env.project),
+      '--hold',
+      'unattended',
+      '--fast',
+      'bro-dev',
+      'e2e',
+    ),
     extra_env={'RIDE_BRO': 'bro-dev', 'RIDE_E2E_SECRETS': '["brog"]'},
   )
   request.addfinalizer(driver.close)
@@ -1007,7 +1031,7 @@ class TestInPlaceContainerCommand:
     assert '--append-system-prompt' in argv, argv
     assert '--add-dir' not in argv
     mcp_config = json.loads(argv[argv.index('--mcp-config') + 1])
-    assert 'at' in mcp_config['mcpServers']
+    assert 'brog' in mcp_config['mcpServers']
     assert report['session_context_set'] is True
 
   def test_fast_mode_reaches_the_merged_settings(
@@ -1027,7 +1051,23 @@ def scenario_g(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   driver = _Driver(
     env,
     name,
-    _inplace_command('env', 'RIDE_E2E_LINGER=1', 'ride', 'ss', '--in-place', name),
+    _inplace_command(
+      'env',
+      'RIDE_E2E_LINGER=1',
+      'ride',
+      'solo',
+      '--in-place',
+      '--workspace',
+      name,
+      '--harness',
+      'claude',
+      '--repo',
+      str(env.project),
+      '--hold',
+      'unattended',
+      'bro-dev',
+      'e2e',
+    ),
     extra_env={'RIDE_E2E_SECRETS': '["brog"]'},
   )
   request.addfinalizer(driver.close)

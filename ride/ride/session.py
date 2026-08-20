@@ -430,9 +430,7 @@ def _start_session(
     raise ValueError(
       f'resolved attachment {repository.identity!r} does not match session spec {spec.repo!r}'
     )
-  if summoned is not None and not (
-    container_broker_enabled() if container else broker_enabled()
-  ):
+  if summoned is not None and not (container_broker_enabled() if container else broker_enabled()):
     log.error(
       "a manual summon child needs the summoner's broker channel"
       + ('; use --host on this platform' if container else '')
