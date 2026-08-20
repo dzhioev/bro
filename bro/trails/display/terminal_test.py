@@ -178,10 +178,10 @@ def test_chat_preset_uses_timestamped_conversation_lines():
     )
   assert stream.getvalue() == (
     '--- Thu, Jan 1, 2026 ---\n'
-    '[12:34:56] dev · thinking: one two\n'
-    '[12:34:57] dev → repo::search(query=x, sentence=...)\n'
-    '[12:34:58] dev ← repo::search\n'
-    '[12:34:59] dev: done\n'
+    '[18:04:56] dev · thinking: one two\n'
+    '[18:04:57] dev → repo::search(query=x, sentence=...)\n'
+    '[18:04:58] dev ← repo::search\n'
+    '[18:04:59] dev: done\n'
   )
 
 

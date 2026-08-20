@@ -41,6 +41,13 @@ test would read an earlier one's file; and a test parsing `--log` / `--verbose`
 through a real CLI sets the log level, which the next level-sensitive test —
 including every subprocess it spawns — must not see.
 
+Rendered timestamps resolve through the host zone (`datetime.astimezone()`), so
+the suite pins one: unpinned, a display assertion holds only where the developer
+sits; pinned to UTC, it stops catching a dropped conversion. The zone has a
+half-hour offset and no DST, so the rendered values are stable and no whole-hour
+assumption passes. `time.tzset()` is what makes libc read the variable — glibc
+does not re-read it on its own.
+
 `*_llm_test.py` files are live-LLM behavior probes: they run a real bro against
 the configured provider and spend real tokens, so they stay outside the default
 roster and `pytest_collection_modifyitems` below skips them unless
@@ -51,6 +58,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -71,6 +79,7 @@ SESSION_NAMESPACES = (
 )
 SESSION_VARIABLES = frozenset({'AI_AGENT', 'MCP_SERVER_BEARER_TOKEN', 'PWD'})
 KEPT_VARIABLES = frozenset({'BRO_LLM_TESTS'})
+TIMEZONE = 'Asia/Kolkata'
 
 
 def _carries_session_state(name: str) -> bool:
@@ -84,8 +93,14 @@ def _clear_session_environment() -> None:
     del os.environ[name]
 
 
+def _pin_timezone() -> None:
+  os.environ['TZ'] = TIMEZONE
+  time.tzset()
+
+
 set_default_tracker_factory(NullTracker)
 _clear_session_environment()
+_pin_timezone()
 log.set_level(logging.INFO)
 os.environ.pop(log.LEVEL_ENV, None)
 
