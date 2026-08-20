@@ -30,8 +30,8 @@ if TYPE_CHECKING:
 def _settings_command(module: str, *args: str) -> str:
   """a `--settings` command line running `module` under the runner's interpreter.
 
-  claude runs the string through a shell (hence the quoting) whose PATH need not
-  carry the workspace's venv, and the wheel format guarantees no mode for a
+  claude runs the string through a shell (hence the quoting) whose PATH excludes
+  the project environment, and the wheel format guarantees no mode for a
   packaged file outside `.data/scripts` — so a settings command names the
   interpreter, never a console script or a packaged file's own path. `-m`
   re-executes `module` as `__main__`, so only a leaf nothing else imports may be

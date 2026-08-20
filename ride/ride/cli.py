@@ -12,6 +12,7 @@ from bro.llm.providers import LLMSelectionError
 from bro.workspace.banner import banner
 from bro.workspace.paths import RuntimeLocationError, fresh_workspace_name, project_root
 from bro.workspace.project import project_config
+from ride import pending_summon
 from ride.clean import clean_workspaces
 from ride.flags import (
   add_harness_flags,
@@ -21,7 +22,6 @@ from ride.flags import (
   pop_harness_options,
 )
 from ride.harness import get_harness
-from ride import pending_summon
 from ride.listing import list_workspaces
 from ride.repository import Repository, is_git_url, resolve_repository
 from ride.runtime_state import RuntimeStateMigrationError, migrate_legacy_runtime_state
@@ -116,9 +116,13 @@ def build_parser() -> Parser:
   subparsers.add_parser('list', help='list workspaces ([.]=worktree, [o]=container, [x]=abandoned)')
 
   clean = subparsers.add_parser(
-    'clean', help='remove stale workspaces and unlocked runtime bundles'
+    'clean', help='remove stale workspaces, unreferenced mirrors, and unlocked runtime bundles'
   )
-  clean.add_argument('--force', action='store_true', help='remove workspaces even when dirty')
+  clean.add_argument(
+    '--force',
+    action='store_true',
+    help='remove workspaces even when dirty or their repository is unavailable',
+  )
   clean.add_argument('--dry-run', action='store_true', help='show removals without applying them')
   clean.add_argument('names', nargs='*', help='workspaces to clean (default: all)')
 

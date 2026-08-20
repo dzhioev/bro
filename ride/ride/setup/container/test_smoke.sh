@@ -7,12 +7,23 @@ TAG="bro/framework:smoke-test"
 
 # Colima shares the project tree but not the host's default temporary directory.
 SMOKE_TMP="$(mktemp -d "$PROJECT/.smoke-XXXXXX")"
-trap 'rm -rf "$SMOKE_TMP"' EXIT
+cleanup() {
+  if [ -n "${CONSUMER_UV_TAG:-}" ]; then
+    docker image rm -f "$CONSUMER_UV_TAG" >/dev/null 2>&1 || true
+  fi
+  rm -rf "$SMOKE_TMP"
+}
+trap cleanup EXIT
 mkdir -p \
   "$SMOKE_TMP/workspace" "$SMOKE_TMP/claude" "$SMOKE_TMP/bro" \
-  "$SMOKE_TMP/detached-workspace" "$SMOKE_TMP/detached-claude" "$SMOKE_TMP/detached-bro"
-echo '{}' > "$SMOKE_TMP/bro/credentials.json"
-echo '{}' > "$SMOKE_TMP/detached-bro/credentials.json"
+  "$SMOKE_TMP/detached-workspace" "$SMOKE_TMP/detached-claude" "$SMOKE_TMP/detached-bro" \
+  "$SMOKE_TMP/consumer-uv-workspace" "$SMOKE_TMP/consumer-uv-claude" "$SMOKE_TMP/consumer-uv-bro" \
+  "$SMOKE_TMP/consumer-plain-workspace" "$SMOKE_TMP/consumer-plain-claude" \
+  "$SMOKE_TMP/consumer-plain-bro"
+for store in "$SMOKE_TMP/bro" "$SMOKE_TMP/detached-bro" \
+  "$SMOKE_TMP/consumer-uv-bro" "$SMOKE_TMP/consumer-plain-bro"; do
+  echo '{}' > "$store/credentials.json"
+done
 
 echo "building runtime and project images" >&2
 python - "$TAG" "$PROJECT" "$SMOKE_TMP/bundle-hash" >&2 <<'PY'
@@ -36,6 +47,50 @@ with resolve_runtime_bundle() as bundle:
 PY
 BUNDLE_HASH="$(cat "$SMOKE_TMP/bundle-hash")"
 RUNTIME_TAG="$(cat "$SMOKE_TMP/runtime-tag")"
+
+make_consumer_repo() {
+  local directory="$1"
+  local image_repository="$2"
+  mkdir -p "$directory"
+  cat > "$directory/pyproject.toml" <<EOF
+[project]
+name = "consumer-smoke"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+[tool.uv]
+package = false
+
+[tool.bro]
+default = "bro"
+image-repository = "$image_repository"
+EOF
+  git -C "$directory" init --quiet --initial-branch master
+  git -C "$directory" config user.name 'Smoke Test'
+  git -C "$directory" config user.email test@test.com
+  git -C "$directory" remote add origin https://example.invalid/consumer-smoke.git
+}
+
+CONSUMER_UV_REPO="$SMOKE_TMP/consumer-uv-repo"
+CONSUMER_UV_TAG="bro/consumer-uv-smoke:test"
+make_consumer_repo "$CONSUMER_UV_REPO" bro/consumer-uv-smoke
+uv lock --directory "$CONSUMER_UV_REPO"
+! grep -Eq '^name = "bro(-native|-ride|-dev)?"$' "$CONSUMER_UV_REPO/uv.lock"
+git -C "$CONSUMER_UV_REPO" add .
+git -C "$CONSUMER_UV_REPO" commit --quiet -m initial
+
+CONSUMER_PLAIN_REPO="$SMOKE_TMP/consumer-plain-repo"
+make_consumer_repo "$CONSUMER_PLAIN_REPO" bro/consumer-plain-smoke
+git -C "$CONSUMER_PLAIN_REPO" add .
+git -C "$CONSUMER_PLAIN_REPO" commit --quiet -m initial
+
+python - "$CONSUMER_UV_TAG" "$RUNTIME_TAG" "$CONSUMER_UV_REPO" <<'PY'
+import sys
+from pathlib import Path
+from ride.workspace.docker import build_project_image
+
+build_project_image(sys.argv[1], sys.argv[2], Path(sys.argv[3]))
+PY
 
 HOST_REPO="$SMOKE_TMP/host-repo"
 git clone --quiet "$PROJECT" "$HOST_REPO"
@@ -106,6 +161,52 @@ SMOKE
 
 grep -q modified_by_container "$SMOKE_TMP/claude/.claude.json"
 test "$(sha256sum "$SMOKE_TMP/host_claude.json" | cut -d' ' -f1)" = "$HOST_CLAUDE_SHA"
+
+echo "running consumer fixture without bro in its lock" >&2
+docker run --rm \
+  -v "$SMOKE_TMP/consumer-uv-workspace:/workspace" \
+  -v "$CONSUMER_UV_REPO:/host-repo:ro" \
+  -v "$SMOKE_TMP/gitconfig:/host-gitconfig:ro" \
+  -v "$SMOKE_TMP/consumer-uv-claude:/home/ride/.claude" \
+  -v "$SMOKE_TMP/consumer-uv-bro:/home/ride/.bro" \
+  -v "ride-runtime-$BUNDLE_HASH:/var/ride/runtime:ro" \
+  -e "HOME=/home/ride" \
+  -e "CLAUDE_CONFIG_DIR=/home/ride/.claude" \
+  -e "RIDE_WORKSPACE=consumer-uv-smoke" \
+  -e "RIDE_REPO=$CONSUMER_UV_REPO" \
+  -e "RIDE_BRANCH=worktree-consumer-uv-smoke" \
+  "$CONSUMER_UV_TAG" bash -ec '
+    test "$(command -v ride)" = /var/ride/runtime/bin/ride
+    test "$(readlink /workspace/.venv)" = /opt/project-venv
+    /opt/project-venv/bin/python -c '\''import importlib.metadata as m; names = {d.metadata["Name"].lower() for d in m.distributions()}; assert names.isdisjoint({"bro", "bro-native", "bro-ride", "bro-dev"})'\''
+    test ! -e /workspace/setup.sh
+  ' >&2
+
+echo "running consumer fixture without a uv lock or setup.sh" >&2
+python - "$RUNTIME_TAG" "$CONSUMER_PLAIN_REPO" <<'PY'
+import sys
+from pathlib import Path
+from ride.workspace.docker import project_image_tag
+
+assert project_image_tag(sys.argv[1], Path(sys.argv[2])) is None
+PY
+docker run --rm \
+  -v "$SMOKE_TMP/consumer-plain-workspace:/workspace" \
+  -v "$CONSUMER_PLAIN_REPO:/host-repo:ro" \
+  -v "$SMOKE_TMP/gitconfig:/host-gitconfig:ro" \
+  -v "$SMOKE_TMP/consumer-plain-claude:/home/ride/.claude" \
+  -v "$SMOKE_TMP/consumer-plain-bro:/home/ride/.bro" \
+  -v "ride-runtime-$BUNDLE_HASH:/var/ride/runtime:ro" \
+  -e "HOME=/home/ride" \
+  -e "CLAUDE_CONFIG_DIR=/home/ride/.claude" \
+  -e "RIDE_WORKSPACE=consumer-plain-smoke" \
+  -e "RIDE_REPO=$CONSUMER_PLAIN_REPO" \
+  -e "RIDE_BRANCH=worktree-consumer-plain-smoke" \
+  "$RUNTIME_TAG" bash -ec '
+    test "$(command -v ride)" = /var/ride/runtime/bin/ride
+    test ! -e /workspace/.venv
+    test ! -e /workspace/setup.sh
+  ' >&2
 
 echo "running detached entrypoint" >&2
 docker run --rm \

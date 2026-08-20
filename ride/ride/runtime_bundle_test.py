@@ -272,6 +272,27 @@ def test_clean_keeps_a_bundle_when_its_runtime_volume_is_in_use(monkeypatch, tmp
   assert root.is_dir()
 
 
+def test_clean_removes_the_matching_runtime_volume_before_the_bundle(monkeypatch, tmp_path):
+  monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
+  bundle_hash = 'a' * 64
+  root = tmp_path / 'runtime' / bundle_hash
+  root.mkdir(parents=True)
+  commands = []
+
+  def run(command, **_kwargs):
+    commands.append(command)
+    return subprocess.CompletedProcess(command, 0, '', '')
+
+  monkeypatch.setattr(runtime_bundle.subprocess, 'run', run)
+
+  assert runtime_bundle.clean_runtime_bundles() == (1, 0)
+  assert commands == [
+    ['docker', 'volume', 'inspect', f'ride-runtime-{bundle_hash}'],
+    ['docker', 'volume', 'rm', f'ride-runtime-{bundle_hash}'],
+  ]
+  assert not root.exists()
+
+
 def test_installed_distributions_publish_the_session_command_roster():
   commands = runtime_bundle._session_commands(Path(sys.executable))
   assert commands == [

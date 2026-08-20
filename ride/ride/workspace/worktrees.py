@@ -50,9 +50,6 @@ def ensure_host_worktree(
 
 
 def provision_host_worktree(worktree: Path) -> bool:
-  # run the worktree's own setup.sh — the uniform provisioning entry point every
-  # repo ride operates on carries (uv sync plus repository hook installation),
-  # shared with the container entrypoint.
   # RIDE_VENV_MANIFEST is stripped: the container entrypoint exports it for the
   # baked /workspace venv, but a host worktree needs its own environment synced.
   script = worktree / 'setup.sh'

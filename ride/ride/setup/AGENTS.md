@@ -8,4 +8,4 @@ These assets ship in `bro-ride` and are consumed by `ride.workspace.build_contex
 - `container/project.Dockerfile` — the optional project dependency bake layered on the runtime image.
 - `container/entrypoint.sh` and `git.sh` — session setup and repository clone/submodule handling.
 
-The runtime image contains no Python distribution from the ride installation. A frozen runtime bundle is materialized into a named volume and mounted read-only at `/var/ride/runtime`; an optional project image contributes `/opt/project-venv` and its staged manifest set. `bump-claude-code.sh` and `test_smoke.sh` are checkout-only and excluded from the wheel.
+The runtime image contains no Python distribution from the ride installation. A frozen runtime bundle is materialized into a named volume and mounted read-only at `/var/ride/runtime`; an optional project image contributes `/opt/project-venv` and its staged manifest set. `test_smoke.sh` is the host-only image/entrypoint check, including detached and consumer-shaped launches; it and `bump-claude-code.sh` are checkout-only and excluded from the wheel.

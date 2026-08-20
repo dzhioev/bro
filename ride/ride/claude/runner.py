@@ -192,8 +192,8 @@ def run_in_place(spec: 'SessionSpec') -> int:
   with contextlib.ExitStack() as teardown:
     # session-local MCP serving, one mechanism for both flavors: OS-assigned port
     # published via a port file, per-session bearer token. the server imports from
-    # the session runtime selected by PATH — the snapshot on host, the activated
-    # workspace environment in a container.
+    # the session runtime selected by PATH — the snapshot on host, the runtime
+    # volume in a container.
     if options(spec).raw:
       mcp_spec = f'bro:{spec.bro}'
     else:
