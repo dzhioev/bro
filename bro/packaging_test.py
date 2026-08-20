@@ -118,13 +118,7 @@ def _run(script: str, entry_point: str, arguments: list[str], home: Path) -> str
     f'\nsys.argv = {[script, *arguments]!r}\n'
     f'from bro._entrypoints import {entry_point}\n{entry_point}()\n'
   )
-  environment = {
-    key: value
-    for key, value in os.environ.items()
-    # the launching session's scoped credential store outranks the built-in
-    # registry the scripts must run against
-    if key not in ('CREDENTIALS_REGISTRY', 'BRO_CONFIGS_DIR')
-  }
+  environment = dict(os.environ)
   environment['HOME'] = str(home)
   environment[_ALLOWED_ENV] = ' '.join(sorted(_base_modules()))
   result = subprocess.run(

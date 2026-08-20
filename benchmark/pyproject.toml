@@ -52,7 +52,7 @@ max_warnings = "0"
 asyncio_mode = "auto"
 
 [tool.pyright]
-include = ["bro"]
+include = ["bro", "conftest.py"]
 exclude = [".venv/"]
 venvPath = "."
 venv = ".venv"
