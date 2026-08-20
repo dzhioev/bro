@@ -1,5 +1,5 @@
 import os
-import signal
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -86,6 +86,12 @@ class TestRunInPlace:
       (h.projects_dir / 'newer.jsonl').write_text('{}')
       assert ride_runner.run_in_place(_spec(resume=True, arguments=['--foo'])) == 0
       assert h.build.call_args.kwargs['claude_args'] == ['--resume', 'newer', '--foo']
+
+  def test_claude_is_run_against_the_sessions_transcripts(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      assert ride_runner.run_in_place(_spec()) == 0
+      assert h.run_claude.call_args.args[2] == h.projects_dir
 
   def test_recorder_runs_for_the_session_and_stops_after(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
@@ -239,27 +245,6 @@ class TestRunInPlace:
       assert 'CLAUDE_CONFIG_DIR' not in h.run_claude.call_args.args[1]
 
 
-class TestRunClaude:
-  def test_forwards_sigterm_and_returns_child_exit_code(self, tmp_path):
-    bin_dir = tmp_path / 'bin'
-    bin_dir.mkdir()
-    fake = bin_dir / 'claude'
-    # the fake claude SIGTERMs the runner process; the runner's handler must
-    # forward it back down, which the trap converts to exit 7
-    fake.write_text(
-      '#!/usr/bin/env bash\n'
-      'trap "exit 7" TERM\n'
-      'sleep 0.2\n'
-      'kill -TERM $PPID\n'
-      'while true; do sleep 0.05; done\n'
-    )
-    fake.chmod(0o755)
-    previous = signal.getsignal(signal.SIGTERM)
-    env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'}
-    assert ride_runner._run_claude([], env) == 7
-    assert signal.getsignal(signal.SIGTERM) == previous
-
-
 def _fake_claude(tmp_path: Path, script: str) -> dict[str, str]:
   bin_dir = tmp_path / 'bin'
   bin_dir.mkdir(exist_ok=True)
@@ -346,13 +331,14 @@ class TestRunClaudeSummoned:
     assert channel_events == []
     assert capfd.readouterr().out == 'PARTIAL\n'
 
-  def test_a_forwarded_sigterm_suppresses_the_terminal(
-    self, tmp_path, session_state, channel_events
-  ):
+  def test_a_stopped_run_suppresses_the_terminal(self, tmp_path, session_state, channel_events):
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-child')
+    # exit 5 on TERM: the stop must reach claude as the interrupt, not as the
+    # kill the stop falls back to when the interrupt goes unanswered
     env = _fake_claude(
       tmp_path,
-      'trap "exit 0" TERM\nsleep 0.2\nkill -TERM $PPID\nwhile true; do sleep 0.05; done\n',
+      'trap "exit 0" INT\ntrap "exit 5" TERM\nsleep 0.2\nkill -TERM $PPID\n'
+      'while true; do sleep 0.05; done\n',
     )
     assert ride_runner._run_claude_summoned([], env, 'w') == 0
     assert not [event for event in channel_events if event[0] == 'completed']
@@ -373,8 +359,14 @@ class TestRunClaudeSummonedInteractive:
   ):
     monkeypatch.setattr(ride_runner, '_TRAIL_POLL_SECONDS', 0.05)
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-manual')
-    env = _fake_claude(tmp_path, 'sleep 0.4\n')
-    assert ride_runner._run_claude_summoned_interactive([], env, 'my-manual') == 0
+
+    def _linger(*_arguments) -> int:
+      time.sleep(0.4)
+      return 0
+
+    monkeypatch.setattr(ride_runner, 'run_interactive', _linger)
+    transcripts = tmp_path / 'projects'
+    assert ride_runner._run_claude_summoned_interactive([], {}, 'my-manual', transcripts) == 0
     # the terminal belongs to the `answer` service tool; an exit without it
     # surfaces to the summoner as the channel-gone failure
     assert channel_events == [('started', 't-manual', 'my-manual'), ('close',)]

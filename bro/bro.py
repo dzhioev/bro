@@ -145,7 +145,8 @@ async def _claude_raise(reason: str) -> str:
       terminate_session()
 
   await off_loop(record_and_kill)
-  # unreachable in practice — claude dies awaiting this result
+  # never reaches the agent in practice: ending the session interrupts the turn
+  # this call belongs to, and an interrupted turn's pending results are dropped
   return 'the abort is recorded and the session is being terminated. Stop working now.'
 
 
@@ -194,7 +195,7 @@ async def _claude_answer(answer: str) -> str:
     terminate_session()
 
   await off_loop(record_and_kill)
-  # unreachable in practice — claude dies awaiting this result
+  # never reaches the agent, for the reason `_claude_raise` gives
   return 'the answer is recorded and the session is being terminated. Stop working now.'
 
 

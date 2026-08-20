@@ -33,6 +33,7 @@ from ride.claude.claude_argv import build_claude_launch
 from ride.claude.claude_auth import apply_claude_auth
 from ride.claude.claude_config import latest_jsonl, provision_host_claude_dir
 from ride.claude.harness import options
+from ride.claude.interrupt import run_interactive, run_printing
 from ride.claude.mcp import start_session_mcp_server
 from ride.claude.recorder import start_session_recorder
 from ride.claude.session_context import (
@@ -40,7 +41,6 @@ from ride.claude.session_context import (
   build_session_context,
   encode_session_context,
 )
-from ride.inner import run_agent, sigterm_forwarded_to
 
 if TYPE_CHECKING:
   from ride.session import SessionSpec
@@ -67,10 +67,8 @@ def _set_session_context(spec: 'SessionSpec', system_prompt: str, tree: Path) ->
   os.environ[RIDE_SESSION_CONTEXT_ENV] = encode_session_context(records)
 
 
-def _run_claude(argv: list[str], env: dict[str, str]) -> int:
-  # claude's raw-mode TTY already absorbs Ctrl-C, but a SIGTERM aimed at the
-  # runner would otherwise strand claude.
-  return run_agent(['claude', *argv], env)
+def _run_claude(argv: list[str], env: dict[str, str], transcripts: Path) -> int:
+  return run_interactive(['claude', *argv], env, transcripts)
 
 
 # the recorder adopts the transcript and publishes the pointer within its own
@@ -120,35 +118,36 @@ def _run_claude_summoned(argv: list[str], env: dict[str, str], workspace: str) -
   its stdout captured, and the runner emits the run lifecycle a bro-run child
   gets from `BaseBro.run` — `started{trail_id, workspace}` once the session
   recorder publishes the current-trail pointer, and `completed{result,
-  end_reason: ok}` carrying the printed reply after a clean exit. A non-zero or
-  SIGTERMed exit emits no terminal: the broker synthesizes `failed{exit,
-  output_tail}` for the former, and a `raise`- or `answer`-terminated session
-  already sent its own `completed`. The captured reply is echoed to stdout
-  either way, so the child's output tail still carries it."""
-  process = subprocess.Popen(['claude', *argv], env=env, stdout=subprocess.PIPE, text=True)
-  with sigterm_forwarded_to(process) as terminated, _started_watch(workspace) as announced:
-    output, _ = process.communicate()
-  print(output, end='', flush=True)
-  if process.returncode != 0 or terminated.is_set():
-    return process.returncode
+  end_reason: ok}` carrying the printed reply after a clean exit. A non-zero
+  exit or a stopped run emits no terminal: the broker synthesizes `failed{exit,
+  output_tail}` for the former, and a `raise`- or `answer`-ended session already
+  sent its own `completed`. The captured reply is echoed to stdout either way,
+  so the child's output tail still carries it."""
+  with _started_watch(workspace) as announced:
+    run = run_printing(['claude', *argv], env)
+  print(run.output, end='', flush=True)
+  if run.code != 0 or run.stopped:
+    return run.code
   # a run short enough to end inside the recorder's adoption cadence announces
   # here or not at all; the terminal must not wait on recording
   _announce_started(announced, workspace)
   channel = BroChannel.from_env()
   if channel is not None:
-    channel.completed(output.rstrip('\n'), 'ok')
+    channel.completed(run.output.rstrip('\n'), 'ok')
     channel.close()
-  return process.returncode
+  return run.code
 
 
-def _run_claude_summoned_interactive(argv: list[str], env: dict[str, str], workspace: str) -> int:
+def _run_claude_summoned_interactive(
+  argv: list[str], env: dict[str, str], workspace: str, transcripts: Path
+) -> int:
   """the `_run_claude` of a manual summon child: claude runs interactively as
   usual, and the runner only announces `started{trail_id, workspace}`. The
   terminal is the `answer` service tool's own `completed` — a session that ends
   without it produced no answer, which the broker turns into the summoner's
   synthesized failure when the channel goes."""
   with _started_watch(workspace):
-    return _run_claude(argv, env)
+    return _run_claude(argv, env, transcripts)
 
 
 def run_in_place(spec: 'SessionSpec') -> int:
@@ -166,12 +165,12 @@ def run_in_place(spec: 'SessionSpec') -> int:
     os.environ[CLAUDE_CONFIG_DIR_ENV] = str(claude_dir)
     os.environ[SESSION_DIR_ENV] = str(workspace_session_dir(workspace))
 
+  transcripts = claude_projects_dir(tree)
   claude_args = list(spec.arguments)
   if spec.resume:
-    projects_dir = claude_projects_dir(tree)
-    latest = latest_jsonl(projects_dir)
+    latest = latest_jsonl(transcripts)
     if latest is None:
-      log.error('no claude session found in %s', projects_dir)
+      log.error('no claude session found in %s', transcripts)
       return 1
     log.info('resuming session %s', latest.stem)
     claude_args = ['--resume', latest.stem, *claude_args]
@@ -228,10 +227,10 @@ def run_in_place(spec: 'SessionSpec') -> int:
     apply_claude_auth(env, warn_when_missing=not options(spec).raw)
     log.info('launching claude')
     if os.environ.get(SUMMONED_ENV) is None:
-      code = _run_claude(launch.argv, env)
+      code = _run_claude(launch.argv, env, transcripts)
     elif spec.solo:
       code = _run_claude_summoned(launch.argv, env, spec.name)
     else:
-      code = _run_claude_summoned_interactive(launch.argv, env, spec.name)
+      code = _run_claude_summoned_interactive(launch.argv, env, spec.name, transcripts)
 
   return code
