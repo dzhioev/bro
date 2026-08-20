@@ -5,12 +5,12 @@ import pytest
 
 import ride.bro
 import ride.pending_summon
-import ride.scope
 import ride.spawn
 import ride.summon_control
 from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Dispatcher
 from bro.broker.transport import Provisioned
+from bro.llm.llms.echo import LLMSpec as EchoLLMSpec
 from bro.monitor import trail_pointer
 from bro.workspace.paths import workspace_tree
 from ride.workspace.metadata import WorkspaceKind
@@ -193,7 +193,7 @@ class TestSummonHandler:
     assert launch.llm == 'openai:sol:high+fast'
 
   def test_the_harness_forwards_into_the_spawn_and_the_audit(self, tmp_path):
-    control = _control(tmp_path, {'dev'})
+    control = _control(tmp_path, {'dev'}, credential_scope={'claude_code'})
     context = FakeContext()
     control.handle(cast(Dispatcher, context), ROOT, _summon_message(harness='claude'))
     [(launch, _, _)] = context.spawned
@@ -274,12 +274,13 @@ class TestSummonHandler:
       calls.append((target, llm_spec))
       return ScopedSecrets(required={'github'}, optional=set(), docker_sock=False)
 
-    monkeypatch.setattr(ride.scope, 'summoned_credential_scope', capture_scope)
+    monkeypatch.setattr(ride.summon_control, 'summoned_credential_scope', capture_scope)
     control = _control(tmp_path, {'bro-dev'})
     context = FakeContext()
     message = _summon_message(target='bro-dev', llm='echo')
     control.handle(cast(Dispatcher, context), ROOT, message)
     context.origin[CHILD] = (ROOT, message.id)
+    calls.clear()
     control.handle(
       cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['github'])
     )
@@ -293,17 +294,75 @@ class TestSummonHandler:
       calls.append((target, recipe.name, llm_spec.TYPE if llm_spec is not None else None))
       return ScopedSecrets(required={'github'}, optional=set(), docker_sock=False)
 
-    monkeypatch.setattr(ride.scope, 'summoned_credential_scope', capture_scope)
-    control = _control(tmp_path, {'bro-dev'})
+    monkeypatch.setattr(ride.summon_control, 'summoned_credential_scope', capture_scope)
+    control = _control(tmp_path, {'bro-dev'}, credential_scope={'claude_code'})
     context = FakeContext()
     message = _summon_message(target='bro-dev', harness='claude')
     control.handle(cast(Dispatcher, context), ROOT, message)
     context.origin[CHILD] = (ROOT, message.id)
+    calls.clear()
     control.handle(
       cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['github'])
     )
     assert [launch.target for launch, _, _ in context.spawned] == ['bro-dev', 'dev']
     assert calls == [('bro-dev', 'claude-full', 'claude-code')]
+
+  def test_a_harness_needing_a_credential_the_summoner_lacks_is_denied(self, tmp_path):
+    control = _control(tmp_path, {'dev'}, credential_scope={'brog', 'openai'})
+    context = FakeContext()
+    control.handle(cast(Dispatcher, context), ROOT, _summon_message(harness='claude'))
+    assert context.spawned == []
+    [(_, payload)] = context.replies
+    assert (
+      "harness 'claude' needs credential(s) the summoner does not hold: claude_code"
+      in payload['error']
+    )
+
+  def test_an_llm_recipe_needing_a_credential_the_summoner_lacks_is_denied(
+    self, tmp_path, monkeypatch
+  ):
+    from bro.registry import get_class
+
+    # the cast key sits in the optional tier of every bro that has spells, which
+    # would mask what an openai recipe adds to an echo-driven one
+    monkeypatch.setattr(get_class('dev'), 'llm_spec', EchoLLMSpec())
+    monkeypatch.setattr(get_class('dev'), 'spells', {})
+    control = _control(tmp_path, {'dev'}, credential_scope={'brog'})
+    context = FakeContext()
+    control.handle(cast(Dispatcher, context), ROOT, _summon_message(llm='openai:terra'))
+    assert context.spawned == []
+    [(_, payload)] = context.replies
+    assert (
+      "llm 'openai:terra' needs credential(s) the summoner does not hold: openai"
+      in payload['error']
+    )
+
+  def test_only_what_the_harness_adds_is_bounded_by_the_summoner(self, tmp_path):
+    # bro-dev declares brog, github and openai of its own; the summoner holds
+    # none of them
+    control = _control(tmp_path, {'bro-dev'}, credential_scope={'claude_code'})
+    context = FakeContext()
+    message = _summon_message(target='bro-dev', harness='claude')
+    control.handle(cast(Dispatcher, context), ROOT, message)
+    assert context.replies == []
+    assert [launch.target for launch, _, _ in context.spawned] == ['bro-dev']
+
+  def test_naming_the_default_harness_widens_nothing(self, control):
+    context = FakeContext()
+    control.handle(context, ROOT, _summon_message(harness='bro'))
+    assert context.replies == []
+    [(launch, _, _)] = context.spawned
+    assert launch.harness == 'bro'
+
+  def test_a_recipe_the_named_harness_cannot_run_is_denied(self, tmp_path):
+    control = _control(tmp_path, {'dev'}, credential_scope={'claude_code'})
+    context = FakeContext()
+    control.handle(
+      cast(Dispatcher, context), ROOT, _summon_message(harness='claude', llm='openai:terra')
+    )
+    assert context.spawned == []
+    [(_, payload)] = context.replies
+    assert 'the claude harness runs Claude Code, not openai' in payload['error']
 
   def test_no_op_bro_override_is_denied(self, tmp_path):
     # bro-dev already seeds dev: the strictness of the launcher flags holds
@@ -682,6 +741,26 @@ class TestManualSummon:
     )
     control.handle(
       cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['github'])
+    )
+    assert context.spawned == []
+    [(_, payload)] = context.replies
+    assert 'credential scope is not attributable' in payload['error']
+
+  def test_manual_childs_harness_selection_is_denied(self, tmp_path):
+    control = _control(tmp_path, {'bro-dev'}, credential_scope={'claude_code'})
+    context = FakeContext()
+    message = _summon_message(target='bro-dev', manual=True)
+    control.handle(cast(Dispatcher, context), ROOT, message)
+    context.origin[CHILD] = (ROOT, message.id)
+    control.observe_delivery(
+      CHILD,
+      ROOT,
+      Message(
+        type='started', payload={'trail_id': 'T1', 'workspace': 'my-manual'}, in_reply_to=message.id
+      ),
+    )
+    control.handle(
+      cast(Dispatcher, context), CHILD, _summon_message(target='dev', harness='claude')
     )
     assert context.spawned == []
     [(_, payload)] = context.replies

@@ -246,13 +246,15 @@ _SUMMON_DESCRIPTION = (
   'with an optional `+fast` suffix and any field left empty '
   f"(effort is one of {', '.join(EFFORT_LEVELS)}; `::high` keeps the target's own "
   'provider and model, `:opus5` names a model; a recipe the harness cannot run fails the '
-  'spawn rather than switching the harness). its scope is shaped by '
+  'summon rather than switching the harness). its scope is shaped by '
   'the optional `grant` / `revoke` lists — each entry a credential name, or `@bro` '
   "for a summonable target of the child's own. a credential grant replaces the "
   "child's selected same-kind name. you can only grant what you hold yourself (a "
   'credential in your own scope, a bro in your own allow-list), and both directions '
   "are strict, so naming something the child's scope already has (or, for "
-  'a revoke, lacks) fails the summon. '
+  'a revoke, lacks) fails the summon. the same bound covers `harness` / `llm`: a '
+  'driving loop needing a credential you do not hold (claude needs the Claude '
+  'OAuth token) fails the summon, whatever the target itself declares. '
   'fails with the reason when the run raises, errors out, '
   'or dies. `detach: true` returns the request id right after the send instead of '
   'blocking — poll or collect it with `summon_check`. `manual: true` registers a '
