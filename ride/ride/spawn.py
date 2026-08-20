@@ -38,6 +38,7 @@ from bro.workspace.paths import broker_dir, summon_dir, workspace_dir
 from ride.flags import default_hold
 from ride.harness import ContainerExtras, get_harness
 from ride.inner import inner_command
+from ride.repository import Repository, as_repository
 from ride.scope import split_scope_overrides, summoned_credential_scope
 from ride.session import SessionSpec, record_resume_spec
 from ride.summon_control import SummonControl, summon_status_file
@@ -75,7 +76,7 @@ class SummonLaunchSpec(LaunchSpec):
   parent_workspace: Path
   summoner: Optional[dict[str, Any]]
   may_summon: tuple[str, ...]
-  repo: Optional[Path] = None
+  repo: Optional[Repository | Path] = None
   into: Optional[str] = None
   hold: Optional[str] = None
   grant: tuple[str, ...] = ()
@@ -97,7 +98,7 @@ def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> Sessio
   harness = get_harness(launch.harness if launch.harness is not None else DEFAULT_HARNESS)
   return SessionSpec(
     name=workspace_name,
-    repo=None if launch.repo is None else str(launch.repo),
+    repo=None if launch.repo is None else as_repository(launch.repo).identity,
     harness=harness.name,
     workspace_pinned=False,
     host=False,
@@ -125,6 +126,7 @@ def _child_launch(
   extras: ContainerExtras,
   *,
   scoped: ScopedSecrets,
+  repository: Optional[Repository | Path],
   base_ref: Optional[str],
   summoner: Optional[dict[str, Any]],
   may_summon: tuple[str, ...],
@@ -155,7 +157,7 @@ def _child_launch(
     image=container_runtime.image,
     runtime_bundle_hash=container_runtime.bundle_hash,
     extra_mounts=(*extras.mounts, *local_trails_mounts(scoped)),
-    repo=None if spec.repo is None else Path(spec.repo),
+    repo=repository,
   )
 
 
@@ -177,17 +179,17 @@ def _lower_summon(
   on any unresolvable input — the spawner surfaces that as the correlated
   `failed{reason: 'launch'}`; every fallible resolution precedes the workspace
   record, so a failed spawn creates none."""
-  repo = launch.repo
+  repo = None if launch.repo is None else as_repository(launch.repo)
   if launch.into is not None:
     if repo is None:
       raise ValueError('summon into requires an attached repository')
-    base_ref = resolve_ref(repo, launch.into)
+    base_ref = resolve_ref(repo.git_dir, launch.into)
     if base_ref is None:
       raise ValueError(f'cannot resolve summon into ref {launch.into!r}')
   elif repo is None:
     base_ref = None
   else:
-    base_ref = resolve_head(repo, launch.parent_workspace)
+    base_ref = resolve_head(repo.git_dir, launch.parent_workspace)
     if base_ref is None:
       raise ValueError(f"cannot read the summoner's HEAD at {launch.parent_workspace}")
   spec = _child_session_spec(launch, workspace_name)
@@ -200,7 +202,7 @@ def _lower_summon(
   scoped = summoned_credential_scope(
     launch.target,
     harness.scope_recipe(spec.harness_options),
-    repo=repo,
+    repo=None if repo is None else repo.credential_root,
     grant=grant_credentials,
     revoke=revoke_credentials,
     llm_spec=spec.llm_spec,
@@ -213,6 +215,7 @@ def _lower_summon(
     inner_command(spec, harness_flags=harness.inner_flags(spec)),
     harness.container_extras(spec, workspace, scoped),
     scoped=scoped,
+    repository=launch.repo,
     base_ref=base_ref,
     summoner=launch.summoner,
     may_summon=launch.may_summon,

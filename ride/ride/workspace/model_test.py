@@ -4,6 +4,7 @@ import sys
 
 import pytest
 
+from ride.repository import Repository
 from ride.workspace import model
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import (
@@ -285,6 +286,15 @@ class TestDetachedWorkspace:
     workspace.tree.mkdir()
     (workspace.tree / 'result').write_text('x')
     assert workspace.is_clean() == (False, ['detached workspace tree is not empty'])
+
+  def test_url_attachment_is_recorded_as_the_url(self, tmp_path):
+    repository = Repository('https://example.test/owner/repo.git', tmp_path / 'mirror', 'abc')
+    workspace = Workspace.create('remote', repository, WorkspaceKind.CONTAINER)
+    assert workspace.repo == repository.identity
+    assert workspace.metadata.dump()['repo'] == repository.identity
+    assert (
+      Workspace.ensure('remote', repository, WorkspaceKind.CONTAINER).repo == repository.identity
+    )
 
   def test_existing_workspace_refuses_a_different_attachment(self, tmp_path):
     Workspace.create('ws', tmp_path, WorkspaceKind.CONTAINER)

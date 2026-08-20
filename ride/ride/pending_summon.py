@@ -41,6 +41,7 @@ class PendingSummon:
   grant: tuple[str, ...]  # the request's scope overrides, applied at launch
   revoke: tuple[str, ...]
   summoner: Optional[dict[str, Any]]  # the child's summoned_by provenance
+  repo: Optional[str] = None  # attachment identity inherited from the root session
   into: Optional[str] = None  # unresolved ref overriding the parent-HEAD base
 
 

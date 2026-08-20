@@ -40,7 +40,7 @@ def _run_root_via_broker(
     capture_output=False,
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(launch.image, launch.runtime_bundle_hash), workspace.repo
+    ContainerRuntime(launch.image, launch.runtime_bundle_hash), workspace.repository
   )
   return run_root_via_broker(
     broker_launch,

@@ -52,7 +52,13 @@ def _initialize_container_submodules(workspace: Path, host_repository: Path) -> 
       str(host_repository),
     ],
     check=True,
-    env={**os.environ, 'BRO_LOG_LEVEL': 'WARNING'},
+    env={
+      **os.environ,
+      'BRO_LOG_LEVEL': 'WARNING',
+      'GIT_CONFIG_COUNT': '1',
+      'GIT_CONFIG_KEY_0': 'protocol.file.allow',
+      'GIT_CONFIG_VALUE_0': 'always',
+    },
   )
 
 
@@ -130,6 +136,38 @@ def test_recursive_fetch_uses_submodule_upstream_and_keeps_host_fallback(tmp_pat
   _git('fetch', 'host', cwd=container_submodule)
   assert (
     _git('cat-file', '-t', host_only_commit, cwd=container_submodule).stdout.strip() == 'commit'
+  )
+
+
+def test_bare_mirror_initializes_submodules_from_the_committed_url(tmp_path):
+  submodule_upstream = tmp_path / 'submodule-upstream'
+  _initialize_repository(submodule_upstream)
+  _commit(submodule_upstream, 'base')
+
+  superproject = tmp_path / 'superproject'
+  _initialize_repository(superproject)
+  _git(
+    '-c',
+    'protocol.file.allow=always',
+    'submodule',
+    'add',
+    '-q',
+    str(submodule_upstream),
+    'component',
+    cwd=superproject,
+  )
+  _git('commit', '-q', '-m', 'base', cwd=superproject)
+  mirror = tmp_path / 'mirror.git'
+  _git('clone', '-q', '--bare', str(superproject), str(mirror), cwd=tmp_path)
+  workspace = tmp_path / 'workspace'
+  _git('clone', '-q', str(mirror), str(workspace), cwd=tmp_path)
+  _git('config', 'protocol.file.allow', 'always', cwd=workspace)
+
+  _initialize_container_submodules(workspace, mirror)
+
+  assert (workspace / 'component' / 'base').read_text() == 'base'
+  assert _git('remote', 'get-url', 'origin', cwd=workspace / 'component').stdout.strip() == str(
+    submodule_upstream
   )
 
 

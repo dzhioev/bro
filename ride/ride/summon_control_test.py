@@ -13,6 +13,7 @@ from bro.broker.transport import Provisioned
 from bro.llm.llms.echo import LLMSpec as EchoLLMSpec
 from bro.monitor import trail_pointer
 from bro.workspace.paths import workspace_tree
+from ride.repository import Repository
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
@@ -156,7 +157,7 @@ class TestSummonHandler:
       # the root's base-ref inheritance source: the bare session key names a host
       # worktree
       parent_workspace=workspace_tree('ws'),
-      repo=tmp_path,
+      repo=Repository(str(tmp_path), tmp_path),
       summoner=None,
       # dev seeds no summon targets of its own — the child is told exactly that
       may_summon=(),
@@ -409,7 +410,7 @@ class TestSummonHandler:
       prompt='deploy the thing',
       # a child summoner's base-ref inheritance source: its broker-<channel> clone
       parent_workspace=workspace_tree(f'broker-{CHILD}'),
-      repo=tmp_path,
+      repo=Repository(str(tmp_path), tmp_path),
       summoner={'trail_id': 'T1'},
       may_summon=(),
     )
@@ -672,6 +673,7 @@ class TestManualSummon:
     assert pending.target == 'dev'
     assert pending.prompt == 'deploy the thing'
     assert pending.parent_workspace == str(workspace_tree('ws'))
+    assert pending.repo == str(tmp_path.resolve())
     assert pending.may_summon == ()
     [active] = _status(tmp_path)['active']
     assert active['request_id'] == message.id

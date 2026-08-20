@@ -7,6 +7,7 @@ from bro.base.args import Parser
 from bro.launch import llm_flags
 from bro.llm.llms import claude_code, openai as openai_llm
 from bro.llm.providers import LLMSelection, LLMSelectionError
+from bro.workspace.project import ProjectConfig
 
 
 def _parser() -> Parser:
@@ -71,6 +72,14 @@ class TestPresets:
   def test_a_project_preset_expands(self):
     args = _args(['--llm', 'sharp'])
     assert llm_flags.selection_from_args(args) == LLMSelection('openai', 'sol', 'max')
+
+  def test_an_already_read_project_config_supplies_presets(self):
+    config = ProjectConfig(
+      default_bro='bro', image_repository='bro/bro', sections={'llm': {'remote': ':terra'}}
+    )
+    assert llm_flags.selection_from_args(
+      _args(['--llm', 'remote']), project=config
+    ) == LLMSelection(model='terra')
 
   def test_the_host_table_overrides_the_project_per_name(self):
     self.host_file.write_text(json.dumps({'llm': {'sharp': ':fable5'}}))

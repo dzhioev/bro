@@ -458,7 +458,9 @@ class SummonControl:
       refusal = _credential_refusal(
         requester,
         target,
-        repo=self._workspace.repo,
+        repo=(
+          None if self._workspace.repository is None else self._workspace.repository.credential_root
+        ),
         grant_credentials=grant_credentials,
         harness_name=harness_name,
         llm=llm,
@@ -493,7 +495,7 @@ class SummonControl:
         target=target,
         prompt=prompt,
         parent_workspace=requester.workspace,
-        repo=self._workspace.repo,
+        repo=self._workspace.repository,
         summoner=summoned_by,
         may_summon=tuple(sorted(child_allow_list)),
         into=payload.get('into'),
@@ -566,6 +568,7 @@ class SummonControl:
           grant=tuple(grant),
           revoke=tuple(revoke),
           summoner=summoned_by,
+          repo=self._workspace.metadata.repo,
           into=payload.get('into'),
         ),
       )
@@ -656,7 +659,9 @@ class SummonControl:
       record.target,
       record.harness,
       record.llm,
-      repo=self._workspace.repo,
+      repo=(
+        None if self._workspace.repository is None else self._workspace.repository.credential_root
+      ),
       grant=grant,
       revoke=revoke,
     )

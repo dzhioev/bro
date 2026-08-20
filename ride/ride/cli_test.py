@@ -107,6 +107,20 @@ class TestAttachment:
       assert ride_cli.main(['ride', 'along', '--repo', '/repo/subdir', 'dev']) == 0
     assert start.call_args.args[0].repo == '/repo'
 
+  def test_git_url_is_preserved_in_the_session_spec(self, monkeypatch):
+    url = 'https://example.test/owner/repo.git'
+    repository = SimpleNamespace(
+      identity=url,
+      is_url=True,
+      project_config=lambda: SimpleNamespace(default_bro='bro-dev', harness='claude', sections={}),
+    )
+    monkeypatch.setattr(ride_cli, '_resolve_repository_argument', lambda _value: repository)
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'along', '--repo', url, 'dev']) == 0
+    spec, resolved = start.call_args.args
+    assert resolved is repository
+    assert spec.repo == url
+
   def test_into_requires_an_attachment(self, capsys):
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'along', '--into', 'feature', 'dev'])

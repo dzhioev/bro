@@ -128,6 +128,8 @@ class TestRunRootViaBroker:
       return 3
 
     monkeypatch.setattr(ride.spawn, 'run_root_via_broker', fake_run_root)
+    project = tmp_path / 'project'
+    project.mkdir()
     launch = workspace_docker.Launch(
       name='ws',
       command=['claude', '--verbose'],
@@ -139,8 +141,9 @@ class TestRunRootViaBroker:
       forward_env=True,
       image='runtime-image',
       runtime_bundle_hash='bundle-hash',
+      repo=project,
     )
-    workspace = Workspace.create('ws', tmp_path / 'project', WorkspaceKind.CONTAINER)
+    workspace = Workspace.create('ws', project, WorkspaceKind.CONTAINER)
     code = ride.root._run_root_via_broker(launch, workspace, may_summon={'dev'})
     assert code == 3
     assert captured['workspace'] is workspace
@@ -162,6 +165,7 @@ class TestRunRootViaBroker:
         image='runtime-image',
         runtime_bundle_hash='bundle-hash',
         extra_mounts=(f'{summon_dir()}:{CONTAINER_SUMMON_ROOT}:ro',),
+        repo=project,
       ),
       capture_output=False,
     )

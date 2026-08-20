@@ -1,13 +1,16 @@
 """normalized tar contexts for the runtime and project container images."""
 
+import contextlib
 import io
 import subprocess
 import tarfile
+import tempfile
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from bro.shell import shell_dir
 from bro.workspace.project import project_config
+from ride.repository import Repository, as_repository
 
 SETUP_DIR = Path(__file__).resolve().parent.parent / 'setup'
 CONTAINER_DIR = SETUP_DIR / 'container'
@@ -27,12 +30,10 @@ RUNTIME_FILES = {
 PROJECT_FILES = {DOCKERFILE_PATH: CONTAINER_DIR / 'project.Dockerfile'}
 
 _FIXED_MTIME = 0
-# BuildKit hashes stdin-context metadata, so framework-owned modes must not vary
-# with the installation they were read from.
 _INJECTED_MODE = 0o644
 
 
-def _member_directories(project: Path) -> list[Path]:
+def _local_member_directories(project: Path) -> list[Path]:
   table = tomllib.loads((project / 'pyproject.toml').read_text())
   workspace = table.get('tool', {}).get('uv', {}).get('workspace')
   if workspace is None:
@@ -49,40 +50,85 @@ def _member_directories(project: Path) -> list[Path]:
   return members
 
 
-def manifest_paths(project: Path) -> list[str]:
-  """project-relative paths of every manifest uv reads, or none for a non-uv repo.
+def _matches(path: str, patterns: list[str]) -> bool:
+  candidate = PurePosixPath(path)
+  return any(candidate.match(pattern) for pattern in patterns)
 
-  Member pyprojects matter because uv lock entries for editable workspace members
-  carry paths rather than content hashes.
-  """
-  pyproject = project / 'pyproject.toml'
-  lock = project / 'uv.lock'
-  if not lock.is_file():
+
+def _committed_member_directories(repository: Repository, pyproject: bytes) -> list[str]:
+  workspace = tomllib.loads(pyproject.decode()).get('tool', {}).get('uv', {}).get('workspace')
+  if workspace is None:
     return []
-  if not pyproject.is_file():
-    raise FileNotFoundError(f'{project} is missing pyproject.toml')
-  paths = ['pyproject.toml', 'uv.lock']
-  paths += [
-    f'{directory.relative_to(project).as_posix()}/pyproject.toml'
-    for directory in _member_directories(project)
+  files = set(repository.list_files())
+  directories = sorted(
+    name.removesuffix('/pyproject.toml') for name in files if name.endswith('/pyproject.toml')
+  )
+  excluded = workspace.get('exclude', [])
+  return [
+    directory
+    for directory in directories
+    if _matches(directory, workspace.get('members', [])) and not _matches(directory, excluded)
   ]
-  return paths
 
 
-def project_files(project: Path) -> list[str]:
-  """project-relative tracked files included when baking the editable workspace."""
-  command = project_config(project).build_context_command
-  if command is not None:
+def manifest_paths(project: Repository | Path) -> list[str]:
+  """project-relative paths of every manifest uv reads, or none for a non-uv repo."""
+  repository = as_repository(project)
+  lock = repository.read_file('uv.lock')
+  if lock is None:
+    return []
+  pyproject = repository.read_file('pyproject.toml')
+  if pyproject is None:
+    raise FileNotFoundError(f'{repository.identity} is missing pyproject.toml')
+  if repository.is_url:
+    members = _committed_member_directories(repository, pyproject)
+    return ['pyproject.toml', 'uv.lock', *(f'{directory}/pyproject.toml' for directory in members)]
+  return [
+    'pyproject.toml',
+    'uv.lock',
+    *(
+      f'{directory.relative_to(repository.git_dir).as_posix()}/pyproject.toml'
+      for directory in _local_member_directories(repository.git_dir)
+    ),
+  ]
+
+
+@contextlib.contextmanager
+def _committed_tree(repository: Repository):
+  assert repository.tree_ref is not None
+  with tempfile.TemporaryDirectory() as directory:
+    archive = subprocess.run(
+      ['git', 'archive', repository.tree_ref],
+      cwd=repository.git_dir,
+      capture_output=True,
+      check=True,
+    ).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive)) as source:
+      source.extractall(directory, filter='data')
+    yield Path(directory)
+
+
+def project_files(project: Repository | Path) -> list[str]:
+  """project-relative committed files included when baking the editable workspace."""
+  repository = as_repository(project)
+  config = repository.project_config() if repository.is_url else project_config(repository.git_dir)
+  command = config.build_context_command
+  if command is None:
+    return repository.list_files()
+  if not repository.is_url:
+    root = repository.git_dir
     listed = subprocess.run(
-      command, shell=True, cwd=project, capture_output=True, text=True, check=True
+      command, shell=True, cwd=root, capture_output=True, text=True, check=True
     )
-    return [line for line in listed.stdout.splitlines() if len(line) > 0]
-  listed = subprocess.run(['git', 'ls-files', '-z'], cwd=project, capture_output=True, check=True)
-  return [name for name in listed.stdout.decode().split('\0') if len(name) > 0]
+  else:
+    with _committed_tree(repository) as root:
+      listed = subprocess.run(
+        command, shell=True, cwd=root, capture_output=True, text=True, check=True
+      )
+  return [line for line in listed.stdout.splitlines() if line]
 
 
-def _add(archive: tarfile.TarFile, name: str, source: Path, mode: int) -> None:
-  content = source.read_bytes()
+def _add(archive: tarfile.TarFile, name: str, content: bytes, mode: int) -> None:
   info = tarfile.TarInfo(name)
   info.size = len(content)
   info.mtime = _FIXED_MTIME
@@ -90,8 +136,19 @@ def _add(archive: tarfile.TarFile, name: str, source: Path, mode: int) -> None:
   archive.addfile(info, io.BytesIO(content))
 
 
-def _project_mode(source: Path) -> int:
-  return 0o755 if source.stat().st_mode & 0o111 != 0 else 0o644
+def _project_mode(repository: Repository, name: str) -> int:
+  if not repository.is_url:
+    return 0o755 if (repository.git_dir / name).stat().st_mode & 0o111 != 0 else 0o644
+  assert repository.tree_ref is not None
+  result = subprocess.run(
+    ['git', 'ls-tree', repository.tree_ref, '--', name],
+    cwd=repository.git_dir,
+    capture_output=True,
+    text=True,
+    check=True,
+  )
+  mode = result.stdout.split(maxsplit=1)[0]
+  return 0o755 if mode == '100755' else 0o644
 
 
 def _add_directory(archive: tarfile.TarFile, name: str) -> None:
@@ -107,39 +164,49 @@ def _parents(name: str) -> list[str]:
   return ['/'.join(parts[: index + 1]) for index in range(len(parts))]
 
 
-def _archive(entries: dict[str, Path], modes: dict[str, int]) -> bytes:
+def _archive(entries: dict[str, tuple[bytes, int]]) -> bytes:
   directories = {parent for name in entries for parent in _parents(name) if parent not in entries}
   buffer = io.BytesIO()
   with tarfile.open(fileobj=buffer, mode='w', format=tarfile.GNU_FORMAT) as archive:
     for name in sorted(entries.keys() | directories):
       if name in entries:
-        _add(archive, name, entries[name], modes[name])
+        content, mode = entries[name]
+        _add(archive, name, content, mode)
       else:
         _add_directory(archive, name)
   return buffer.getvalue()
 
 
 def assemble_runtime() -> bytes:
-  return _archive(dict(RUNTIME_FILES), dict.fromkeys(RUNTIME_FILES, _INJECTED_MODE))
+  return _archive(
+    {name: (path.read_bytes(), _INJECTED_MODE) for name, path in RUNTIME_FILES.items()}
+  )
 
 
-def assemble_project(project: Path) -> bytes:
+def assemble_project(project: Repository | Path) -> bytes:
   """the optional dependency-bake context for a project with uv manifests."""
-  manifests = manifest_paths(project)
-  if len(manifests) == 0:
-    raise ValueError(f'{project} has no uv manifests')
-  entries = {name: project / name for name in project_files(project) if (project / name).is_file()}
-  collisions = sorted(name for name in entries if name.split('/')[0] == INJECTED_PREFIX)
-  if len(collisions) > 0:
+  repository = as_repository(project)
+  manifests = manifest_paths(repository)
+  if not manifests:
+    raise ValueError(f'{repository.identity} has no uv manifests')
+  names = project_files(repository)
+  collisions = sorted(name for name in names if name.split('/')[0] == INJECTED_PREFIX)
+  if collisions:
     raise ValueError(
       f'{INJECTED_PREFIX}/ is reserved for the framework build assets; '
-      f'{project} carries {", ".join(collisions)}'
+      f'{repository.identity} carries {", ".join(collisions)}'
     )
-  modes = {name: _project_mode(source) for name, source in entries.items()}
-  injected = {
-    **PROJECT_FILES,
-    **{f'{MANIFEST_PREFIX}/{name}': project / name for name in manifests},
-  }
-  entries.update(injected)
-  modes.update(dict.fromkeys(injected, _INJECTED_MODE))
-  return _archive(entries, modes)
+  entries: dict[str, tuple[bytes, int]] = {}
+  for name in names:
+    content = repository.read_file(name)
+    if content is not None:
+      entries[name] = (content, _project_mode(repository, name))
+  entries.update(
+    {name: (path.read_bytes(), _INJECTED_MODE) for name, path in PROJECT_FILES.items()}
+  )
+  for name in manifests:
+    content = repository.read_file(name)
+    if content is None:
+      raise FileNotFoundError(f'{repository.identity} is missing manifest {name}')
+    entries[f'{MANIFEST_PREFIX}/{name}'] = (content, _INJECTED_MODE)
+  return _archive(entries)

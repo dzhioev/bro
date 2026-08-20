@@ -21,7 +21,9 @@ from ride.flags import (
   pop_harness_options,
 )
 from ride.harness import get_harness
+from ride import pending_summon
 from ride.listing import list_workspaces
+from ride.repository import Repository, is_git_url, resolve_repository
 from ride.session import SessionSpec, resume_session, start_session
 from ride.workspace.containers import exec_in_workspace
 from ride.workspace.model import Workspace
@@ -50,8 +52,8 @@ def _add_mode_flags(parser: Parser) -> None:
   parser.add_argument(
     '--repo',
     default=None,
-    metavar='PATH',
-    help='attach the checkout containing PATH (default: detached)',
+    metavar='PATH|URL',
+    help='attach an existing checkout path or git URL (default: detached)',
   )
   parser.add_argument(
     '-w',
@@ -133,7 +135,7 @@ def build_parser() -> Parser:
 
   scope = subparsers.add_parser('scope', help='print a prospective session credential scope')
   scope.add_argument(
-    '--repo', default=None, metavar='PATH', help='attach the checkout containing PATH'
+    '--repo', default=None, metavar='PATH|URL', help='attach an existing checkout path or git URL'
   )
   scope.add_argument('--bro', default=None, help='bro to scope (required when detached)')
   add_harness_flags(scope)
@@ -141,6 +143,13 @@ def build_parser() -> Parser:
   banner_parser = subparsers.add_parser('banner', help='print the session banner')
   banner_parser.add_argument('--llm', action='store_true', help='emit plain key:value lines')
   return parser
+
+
+def _resolve_repository_argument(value: str) -> Repository:
+  if is_git_url(value) or Path(value).expanduser().exists():
+    return resolve_repository(value)
+  root = project_root(Path(value))
+  return Repository(str(root), root)
 
 
 def _parse_mode(parser: Parser, argv: list[str]) -> tuple[dict, list[str]]:
@@ -163,11 +172,20 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
   resume = args.pop('resume')
   summoned_token = args.pop('summoned', None)
   repo_argument = args.pop('repo')
-  repo = (
-    repo_argument
-    if in_place
-    else (None if repo_argument is None else str(project_root(Path(repo_argument))))
-  )
+  summoned = None if summoned_token is None else _peek_summoned(parser, summoned_token)
+  if summoned is not None:
+    if repo_argument is not None:
+      parser.error('--summoned inherits its repository attachment; drop --repo')
+    repo_argument = summoned.repo
+  repository: Optional[Repository] = None
+  if in_place or repo_argument is None:
+    repo = repo_argument
+  else:
+    try:
+      repository = _resolve_repository_argument(repo_argument)
+    except (RuntimeError, ValueError) as error:
+      parser.error(str(error))
+    repo = repository.identity
   if solo:
     keep = args.pop('keep')
     if workspace is not None and keep:
@@ -198,15 +216,15 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     parser.error('--into requires --repo')
   if args['hold'] is None:
     args['hold'] = default_hold(solo=solo, host=args['host'])
-  harness_name = args.pop('harness') or (
-    project_config(Path(repo)).harness if repo is not None else 'claude'
+  config = (
+    None
+    if repository is None
+    else (repository.project_config() if repository.is_url else project_config(repository.git_dir))
   )
+  harness_name = args.pop('harness') or (config.harness if config is not None else 'claude')
   try:
     harness = get_harness(harness_name)
-    canonicalize(
-      args,
-      selection_from_args(args, project=None if repo is None else Path(repo)),
-    )
+    canonicalize(args, selection_from_args(args, project=config))
     drop_piece_flags(args)
   except (LLMSelectionError, ValueError) as error:
     parser.error(str(error))
@@ -214,11 +232,8 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
   args['revoke'] = args['revoke'] or []
   bro = args.pop('bro')
   prompt = args.pop('prompt')
-  summoned = None
-  if summoned_token is not None:
-    summoned = _resolve_summoned(
-      parser, summoned_token, bro=bro, prompt=prompt, in_place=in_place, args=args
-    )
+  if summoned is not None:
+    _validate_summoned(parser, summoned, bro=bro, prompt=prompt, in_place=in_place, args=args)
     prompt = summoned.prompt
     args['grant'] = [*summoned.grant, *args['grant']]
     args['revoke'] = [*summoned.revoke, *args['revoke']]
@@ -248,16 +263,26 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     from ride.inner import run_in_place
 
     return run_in_place(harness, spec)
-  return start_session(spec, summoned=summoned)
+  return start_session(spec, repository, summoned=summoned)
 
 
-def _resolve_summoned(
-  parser: Parser, token: str, *, bro: str, prompt: Optional[str], in_place: bool, args: dict
-):
-  """resolve and validate a `--summoned` launch against its pending record: the
-  summon request fixes the bro, the initial prompt, the base, and the child's
-  summon allow-list; the launch owns everything else."""
-  from ride import pending_summon
+def _peek_summoned(parser: Parser, token: str) -> pending_summon.PendingSummon:
+  try:
+    return pending_summon.peek(token)
+  except (pending_summon.UnknownToken, ValueError) as error:
+    parser.error(str(error))
+
+
+def _validate_summoned(
+  parser: Parser,
+  pending: pending_summon.PendingSummon,
+  *,
+  bro: str,
+  prompt: Optional[str],
+  in_place: bool,
+  args: dict,
+) -> None:
+  """validate a manual child launch against the request's fixed shape."""
   from ride.scope import split_scope_overrides
 
   if in_place:
@@ -272,13 +297,8 @@ def _resolve_summoned(
       "a manual child's summon allow-list was fixed by the summon request; drop the "
       f'@bro override(s): {", ".join(sorted(bro_overrides))}'
     )
-  try:
-    pending = pending_summon.peek(token)
-  except (pending_summon.UnknownToken, ValueError) as error:
-    parser.error(str(error))
   if bro != pending.target:
     parser.error(f'the summon token names bro {pending.target!r}, not {bro!r}')
-  return pending
 
 
 def alias_main(argv: list[str], *, solo: bool) -> int:
@@ -323,13 +343,22 @@ def main(argv: list[str]) -> Optional[int]:
   if command == 'scope':
     from ride.scope_report import report_scope
 
-    repo = None if args['repo'] is None else project_root(Path(args['repo']))
-    if repo is None and args['bro'] is None:
+    try:
+      repository = None if args['repo'] is None else _resolve_repository_argument(args['repo'])
+    except (RuntimeError, ValueError) as error:
+      parser.error(str(error))
+    if repository is None and args['bro'] is None:
       parser.error('ride scope requires --bro when detached')
     harness_name = args['harness'] or (
-      project_config(repo).harness if repo is not None else 'claude'
+      (
+        repository.project_config()
+        if repository is not None and repository.is_url
+        else project_config(None if repository is None else repository.git_dir)
+      ).harness
+      if repository is not None
+      else 'claude'
     )
     options = pop_harness_options(parser, args, harness_name, solo=False, host=False)
-    return report_scope(repo=repo, bro=args['bro'], harness=harness_name, options=options)
+    return report_scope(repo=repository, bro=args['bro'], harness=harness_name, options=options)
   assert command == 'banner'
   return banner(llm=args['llm'])

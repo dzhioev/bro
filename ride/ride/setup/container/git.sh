@@ -18,7 +18,17 @@ initialize_container_submodules() {
         local name="${key#submodule.}"
         name="${name%.path}"
         if [ ! -e "$host_repository/$path/.git" ]; then
-          log VERBOSE "skipping submodule $name: $host_repository/$path not initialized on host"
+          if [ "$(git -C "$host_repository" rev-parse --is-bare-repository)" != "true" ]; then
+            log VERBOSE "skipping submodule $name: $host_repository/$path not initialized on host"
+            continue
+          fi
+          local mirror_upstream
+          mirror_upstream="$(git -C "$workspace" config -f .gitmodules --get "submodule.$name.url")"
+          mirror_upstream="$(container_git_url "$mirror_upstream")"
+          log VERBOSE "initializing submodule $name from $mirror_upstream"
+          git -C "$workspace" \
+              -c "submodule.$name.url=$mirror_upstream" \
+              submodule "${quiet[@]}" update --init -- "$path" >&2
           continue
         fi
 

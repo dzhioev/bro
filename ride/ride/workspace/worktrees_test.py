@@ -67,7 +67,12 @@ class TestEnsureHostWorktree:
   def test_new_branch_uses_base_ref(self, monkeypatch, tmp_path):
     calls = self._recorder(monkeypatch)
     worktree = tmp_path / 'worktree'
-    assert workspace_worktrees.ensure_host_worktree(worktree, 'worktree-x', 'sha123') is True
+    assert (
+      workspace_worktrees.ensure_host_worktree(
+        tmp_path / 'repository', worktree, 'worktree-x', 'sha123'
+      )
+      is True
+    )
     assert self._add_command(calls) == [
       'git',
       'worktree',
@@ -83,7 +88,10 @@ class TestEnsureHostWorktree:
     # the launcher's-HEAD rule: a new worktree bases on the checkout as it stands
     calls = self._recorder(monkeypatch)
     worktree = tmp_path / 'worktree'
-    assert workspace_worktrees.ensure_host_worktree(worktree, 'worktree-x') is True
+    assert (
+      workspace_worktrees.ensure_host_worktree(tmp_path / 'repository', worktree, 'worktree-x')
+      is True
+    )
     assert self._add_command(calls) == [
       'git',
       'worktree',
@@ -98,7 +106,12 @@ class TestEnsureHostWorktree:
   def test_existing_branch_ignores_base_ref(self, monkeypatch, tmp_path):
     calls = self._recorder(monkeypatch, branch_exists=True)
     worktree = tmp_path / 'worktree'
-    assert workspace_worktrees.ensure_host_worktree(worktree, 'worktree-x', 'sha123') is True
+    assert (
+      workspace_worktrees.ensure_host_worktree(
+        tmp_path / 'repository', worktree, 'worktree-x', 'sha123'
+      )
+      is True
+    )
     assert self._add_command(calls) == [
       'git',
       'worktree',
@@ -112,7 +125,10 @@ class TestEnsureHostWorktree:
     # a superproject worktree needs its submodules before its setup.sh can run
     calls = self._recorder(monkeypatch)
     worktree = tmp_path / 'worktree'
-    assert workspace_worktrees.ensure_host_worktree(worktree, 'worktree-x') is True
+    assert (
+      workspace_worktrees.ensure_host_worktree(tmp_path / 'repository', worktree, 'worktree-x')
+      is True
+    )
     update = next(c for c in calls if 'submodule' in c)
     assert update == ['git', '-C', str(worktree), 'submodule', 'update', '--init', '-q']
     assert calls.index(update) > calls.index(self._add_command(calls))
@@ -120,11 +136,19 @@ class TestEnsureHostWorktree:
   def test_failed_submodule_init_fails(self, monkeypatch, tmp_path):
     self._recorder(monkeypatch, submodule_returncode=1)
     worktree = tmp_path / 'worktree'
-    assert workspace_worktrees.ensure_host_worktree(worktree, 'worktree-x') is False
+    assert (
+      workspace_worktrees.ensure_host_worktree(tmp_path / 'repository', worktree, 'worktree-x')
+      is False
+    )
 
   def test_existing_dir_is_noop(self, monkeypatch, tmp_path):
     calls = self._recorder(monkeypatch)
     worktree = tmp_path / 'worktree'
     worktree.mkdir()
-    assert workspace_worktrees.ensure_host_worktree(worktree, 'worktree-x', 'sha123') is True
+    assert (
+      workspace_worktrees.ensure_host_worktree(
+        tmp_path / 'repository', worktree, 'worktree-x', 'sha123'
+      )
+      is True
+    )
     assert calls == []

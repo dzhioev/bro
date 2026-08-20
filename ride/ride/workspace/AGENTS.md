@@ -11,7 +11,7 @@
 
 ## Components
 
-- `build_context.py` — normalized, separate runtime and project-image contexts
+- `build_context.py` — normalized, separate runtime and project-image contexts; path attachments read the working tree, URL attachments the resolved commit
 - `docker.py` — runtime/project image hashing and builds, lazy per-root container-runtime resolution, broker-free launch descriptions, container creation, scoped-store copy, attach suspension, and Docker inspection
 - `metadata.py` — workspace kind and persisted metadata
 - `model.py` — workspace factories, locking, inspection, clean-exit records, and teardown for worktree and container kinds
