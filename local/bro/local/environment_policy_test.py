@@ -1,20 +1,34 @@
-"""every environment variable the sources read is either swept from the test
-environment or declared external.
+"""no pytest run in this repository inherits the session that launched it.
 
-`conftest.py` clears the framework's own namespaces so the suite never inherits
-the session that launched it. That holds only while every variable the framework
-reads lives in one of those namespaces, and nothing makes a new one land there —
-so this walks the sources and fails on a name that is neither swept nor named
-below, leaving whoever invents it to decide which it is.
+`rebuild_environment` clears the framework's own namespaces, and holds only
+while every variable the framework reads lives in one of those namespaces and
+nothing makes a new one land there — so one test walks the sources and fails on
+a name that is neither swept nor declared external below, leaving whoever
+invents it to decide which it is.
+
+The rebuild reaches a run only through the conftest at its pytest root, and this
+repository has more than one such root — a project that ships from here without
+being a workspace member configures pytest itself. So the other test holds every
+root to applying it, the gap being invisible from inside a suite that has one.
 """
 
 import ast
+import os
+import tomllib
 from pathlib import Path
 
-from conftest import KEPT_VARIABLES, SESSION_NAMESPACES, SESSION_VARIABLES
+from bro.base.suite_environment_test_helper import (
+  KEPT_VARIABLES,
+  SESSION_NAMESPACES,
+  SESSION_VARIABLES,
+  rebuild_environment,
+)
 
 _ROOT = Path(__file__).resolve().parents[3]
 _SOURCES = ('benchmark', 'bro', 'bros', 'dev', 'local', 'native', 'ride')
+
+_REBUILD = rebuild_environment.__name__
+_REBUILD_MODULE = rebuild_environment.__module__
 
 # what the environment brings that is nobody's session state
 _EXTERNAL = frozenset({'NO_COLOR', 'PAGER', 'XDG_DATA_HOME'})
@@ -79,6 +93,45 @@ def test_every_read_variable_is_swept_or_external():
           continue
         undeclared.setdefault(name, []).append(str(path.relative_to(_ROOT)))
   assert undeclared == {}, (
-    "environment variables neither swept by conftest's sweep nor declared external: "
+    f'environment variables neither swept by {_REBUILD_MODULE} nor declared external: '
     f'{ {name: sorted(set(paths)) for name, paths in undeclared.items()} }'
+  )
+
+
+def _pytest_roots() -> list[Path]:
+  """every directory a pytest run in this repository roots at."""
+  roots: list[Path] = []
+  for directory, subdirectories, files in os.walk(_ROOT):
+    # dot directories are where a project's own `.venv` puts its third-party
+    # sources, each carrying pyproject files of its own
+    subdirectories[:] = [name for name in subdirectories if not name.startswith('.')]
+    if 'pyproject.toml' not in files:
+      continue
+    metadata = tomllib.loads((Path(directory) / 'pyproject.toml').read_text())
+    if 'pytest' in metadata.get('tool', {}):
+      roots.append(Path(directory))
+  return roots
+
+
+def _rebuilds_the_environment(conftest: Path) -> bool:
+  if not conftest.is_file():
+    return False
+  tree = ast.parse(conftest.read_text())
+  return any(
+    isinstance(node, ast.ImportFrom) and node.module == _REBUILD_MODULE for node in ast.walk(tree)
+  ) and any(
+    isinstance(node, ast.Call) and ast.unparse(node.func).rsplit('.', 1)[-1] == _REBUILD
+    for node in ast.walk(tree)
+  )
+
+
+def test_every_pytest_root_rebuilds_the_environment():
+  inheriting = [
+    str(root.relative_to(_ROOT))
+    for root in _pytest_roots()
+    if not _rebuilds_the_environment(root / 'conftest.py')
+  ]
+  assert inheriting == [], (
+    f'pytest roots whose conftest does not call {_REBUILD_MODULE}.{_REBUILD}, so their '
+    f'suite inherits the session that launched it: {inheriting}'
   )

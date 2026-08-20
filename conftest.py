@@ -4,18 +4,6 @@ pinned to a no-op `Tracker` so tests never try to ship trail data to a
 configured sink — even on a workstation where the production recorder is the
 default via `set_default_tracker_factory`.
 
-The environment is rebuilt rather than patched: every variable in the
-framework's own namespaces is cleared before collection, and a test needing one
-sets it itself. This repo is developed from inside managed sessions, so the
-suite would otherwise inherit the running session's broker channel, hold,
-credential scope, workspace, claude config and state dir — and through the
-state dir, write it: the terminating service tools leave the status their
-session is to report there (`bro/workspace/session.py`), so a test exercising
-them would decide the exit status of the session running the suite. Clearing by
-namespace rather than by name is what keeps the next variable the framework
-invents from having to be discovered the same way. `BRO_LLM_TESTS` is the one
-input kept, being how a caller opts into the live-LLM probes below.
-
 The run-start credential gate is pinned open for the same hermeticity (the
 autouse fixture below): test bros mostly keep the default openai spec, whose
 `openai` key would otherwise gate on the host's real store. Gate tests opt out
@@ -27,26 +15,12 @@ the developer's own checkouts to credential instances, and a launch-scoping test
 runs from inside one of them, so the real file would bind the resolver to
 whatever that checkout reads.
 
-Three variables carry session state without living in those namespaces and are
-named one by one: `PWD`, which the transcript fallback resolves the working
-directory through while `monkeypatch.chdir` never updates it, so a chdir'd test
-would still read the launching session's transcripts; `MCP_SERVER_BEARER_TOKEN`,
-the session-local MCP server's own credential; and `AI_AGENT`, which claude code
-exports and `usage.claude_version` parses the running harness's version out of.
-
-Two of the cleared variables are also dropped or pinned *between* tests, against
-leakage the import-time sweep cannot reach (the autouse fixtures below):
-`usage.publish` mints a usage-file pointer into `os.environ` mid-run, so a later
-test would read an earlier one's file; and a test parsing `--log` / `--verbose`
-through a real CLI sets the log level, which the next level-sensitive test —
-including every subprocess it spawns — must not see.
-
-Rendered timestamps resolve through the host zone (`datetime.astimezone()`), so
-the suite pins one: unpinned, a display assertion holds only where the developer
-sits; pinned to UTC, it stops catching a dropped conversion. The zone has a
-half-hour offset and no DST, so the rendered values are stable and no whole-hour
-assumption passes. `time.tzset()` is what makes libc read the variable — glibc
-does not re-read it on its own.
+Two variables `rebuild_environment` sweeps are also dropped or pinned *between*
+tests, against leakage a once-per-run rebuild cannot reach (the autouse fixtures
+below): `usage.publish` mints a usage-file pointer into `os.environ` mid-run, so
+a later test would read an earlier one's file; and a test parsing `--log` /
+`--verbose` through a real CLI sets the log level, which the next
+level-sensitive test — including every subprocess it spawns — must not see.
 
 `*_llm_test.py` files are live-LLM behavior probes: they run a real bro against
 the configured provider and spend real tokens, so they stay outside the default
@@ -58,51 +32,18 @@ import logging
 import os
 import shutil
 import tempfile
-import time
 from pathlib import Path
 
 import pytest
 
 import bro.llm.usage as usage
 from bro.base import log
+from bro.base.suite_environment_test_helper import rebuild_environment
 from bro.llm.tracker import NullTracker
 from bro.native.runner import set_default_tracker_factory
 
-SESSION_NAMESPACES = (
-  'ANTHROPIC_',
-  'BROKER_',
-  'BRO_',
-  'CLAUDE_',
-  'CREDENTIALS_',
-  'RIDE_',
-  'TRAILS_',
-)
-SESSION_VARIABLES = frozenset({'AI_AGENT', 'MCP_SERVER_BEARER_TOKEN', 'PWD'})
-KEPT_VARIABLES = frozenset({'BRO_LLM_TESTS'})
-TIMEZONE = 'Asia/Kolkata'
-
-
-def _carries_session_state(name: str) -> bool:
-  return (
-    name.startswith(SESSION_NAMESPACES) or name in SESSION_VARIABLES
-  ) and name not in KEPT_VARIABLES
-
-
-def _clear_session_environment() -> None:
-  for name in [name for name in os.environ if _carries_session_state(name)]:
-    del os.environ[name]
-
-
-def _pin_timezone() -> None:
-  os.environ['TZ'] = TIMEZONE
-  time.tzset()
-
-
 set_default_tracker_factory(NullTracker)
-_clear_session_environment()
-_pin_timezone()
-log.set_level(logging.INFO)
-os.environ.pop(log.LEVEL_ENV, None)
+rebuild_environment()
 
 
 def pytest_collection_modifyitems(items):

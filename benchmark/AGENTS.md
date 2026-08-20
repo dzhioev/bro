@@ -15,7 +15,10 @@ never meet in one interpreter. The relocatable bundle builds and installs `bro` 
 from the root workspace instead of adding the engine to this project's environment.
 
 Formatting and linting stay the repository root's, which walks this directory through its
-`[tool.ruff] src`. pytest and pyright run from here instead, inside `.venv`: `run-tests` syncs it and
+`[tool.ruff] src`. The suite's environment rebuild is the root's too, but reaches a run only through
+the conftest at its pytest root — so the `conftest.py` beside this file applies it, and a suite that
+did not would inherit the session running it.
+pytest and pyright run from here instead, inside `.venv`: `run-tests` syncs it and
 drives both, and `--skip benchmark` skips that whole stage. Build the wheel with `uv build` from this
 directory rather than `uv build --package`.
 
