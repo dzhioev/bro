@@ -31,6 +31,9 @@ dependencies = [
 "ride.cli" = "ride._entrypoints:ride_cli"
 "ride.dive-in" = "ride._entrypoints:ride_dive_in"
 
+[project.entry-points."bro.session_commands"]
+"ride" = "ride._entrypoints:ride_cli"
+
 [project.entry-points."bro.mcp.targets"]
 bro = "ride.claude.assembly:resolve_bro_target"
 persona = "ride.claude.assembly:resolve_persona_target"

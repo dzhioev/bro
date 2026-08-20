@@ -31,6 +31,13 @@ dependencies = [
 # bros
 "bros.analyst.scripts.trails-usage" = "bro.dev._entrypoints:bros_analyst_scripts_trails_usage"
 
+[project.entry-points."bro.session_commands"]
+"bro.dev.git-golc" = "bro.dev._entrypoints:bro_dev_git_golc"
+"commit-footer" = "bro.dev._entrypoints:bro_workflow_commit_footer"
+"fold-branch" = "bro.dev._entrypoints:bro_workflow_fold_branch"
+"land-pr" = "bro.dev._entrypoints:bro_workflow_land_pr"
+"poll-pr" = "bro.dev._entrypoints:bro_extra_github_poll_pr"
+
 [project.entry-points.bro]
 analyst = "bros.analyst:Analyst"
 dev = "bros.dev:Dev"

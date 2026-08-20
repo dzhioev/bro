@@ -117,9 +117,8 @@ class _SessionMCPServer:
 def start_session_mcp_server(spec: str, cwd: Path, env: Mapping[str, str]) -> _SessionMCPServer:
   """start `mcp-server <spec> --http` on an OS-assigned port for a session.
 
-  `env` must carry the workspace venv's PATH: the tools serve this workspace's
-  code, so the console script — and the packages it imports — resolve from the
-  workspace, not the launching repo. an OS-assigned port (`--port 0`) avoids
+  `env` must carry the session command PATH so the console script and its imports
+  resolve from the selected runtime. an OS-assigned port (`--port 0`) avoids
   collisions with concurrent sessions in a shared netns; the server binds it
   before its heavy imports and publishes it via `--port-file`, so the wait here
   is milliseconds and a claude connect that lands mid-import sits in the TCP

@@ -90,6 +90,16 @@ bro-local = { workspace = true }
 "trails-server" = "bro._entrypoints:bro_trails_server_server"
 "usage" = "bro._entrypoints:bro_llm_usage"
 
+[project.entry-points."bro.session_commands"]
+"broker" = "bro._entrypoints:bro_broker_cli"
+"broxy" = "bro._entrypoints:bro_broker_broxy"
+"credentials" = "bro._entrypoints:bro_base_credentials"
+"mcp-server" = "bro._entrypoints:bro_runtime_mcp_server"
+"rewind" = "bro._entrypoints:bro_trails_rewind"
+"summon" = "bro._entrypoints:bro_summon"
+"trails-server" = "bro._entrypoints:bro_trails_server_server"
+"usage" = "bro._entrypoints:bro_llm_usage"
+
 [project.entry-points.bro]
 bro = "bros.bro:Bro"
 

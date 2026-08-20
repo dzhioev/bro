@@ -16,12 +16,12 @@ from bro.workspace.paths import (
   ensure_runtime_root,
   in_container,
   project_root,
-  venv_env,
 )
 from ride.flags import default_hold
 from ride.harness import Harness, get_harness
 from ride.inner import inner_command
 from ride.root import run_host_process_via_broker, run_in_container
+from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError, resolve_runtime_bundle
 from ride.scope import LaunchScopeError, preflight_scoped_launch, scoped_secrets
 from ride.trails import local_trails_mounts
 from ride.workspace.containers import broker_enabled
@@ -174,6 +174,7 @@ def _launch_session(
   launch_scope: ScopedLaunch,
   *,
   container: bool,
+  runtime_bundle: RuntimeBundle,
 ) -> int:
   harness = get_harness(spec.harness)
   if container and find_container_id(workspace.tree) is not None:
@@ -192,7 +193,7 @@ def _launch_session(
     return 1
   if container:
     return _container_session(harness, spec, workspace, base_ref, launch_scope)
-  return _host_session(harness, spec, workspace, base_ref, launch_scope)
+  return _host_session(harness, spec, workspace, base_ref, launch_scope, runtime_bundle)
 
 
 def _container_session(
@@ -240,6 +241,7 @@ def _host_session(
   workspace: Workspace,
   base_ref: Optional[str],
   launch_scope: ScopedLaunch,
+  runtime_bundle: RuntimeBundle,
 ) -> int:
   os.chdir(project_root())
   worktree = workspace.tree
@@ -251,19 +253,8 @@ def _host_session(
     return 1
 
   inner = inner_command(spec, harness_flags=harness.inner_flags(spec))
-  inner_binary = worktree / '.venv' / 'bin' / inner[0]
-  if not inner_binary.is_file():
-    log.error(
-      'no %s in %s — the worktree base predates the %s console script; '
-      'rebase it onto origin/master or recreate it',
-      inner[0],
-      inner_binary,
-      inner[0],
-    )
-    return 1
-
-  command = [str(inner_binary), *inner[1:]]
-  runner_env = venv_env(worktree / '.venv')
+  command = [str(runtime_bundle.host_venv / 'bin' / inner[0]), *inner[1:]]
+  runner_env = runtime_bundle.host_session_env(worktree / '.venv')
   runner_env[credentials.REGISTRY_ENV] = str(
     materialize_scoped_store(launch_scope.store, workspace.path / 'credentials')
   )
@@ -306,14 +297,23 @@ def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
 
 
 def start_session(spec: SessionSpec) -> int:
-  harness = get_harness(spec.harness)
-  container = not spec.host
   if in_container():
     log.error(
       'ride cannot start inside a container yet; use `summon` for an isolated sibling '
       'or `bro run|chat` for this container and credential scope'
     )
     return 1
+  try:
+    with resolve_runtime_bundle() as runtime_bundle:
+      return _start_session(spec, runtime_bundle)
+  except RuntimeBundleError as error:
+    log.error('%s', error)
+    return 1
+
+
+def _start_session(spec: SessionSpec, runtime_bundle: RuntimeBundle) -> int:
+  harness = get_harness(spec.harness)
+  container = not spec.host
   os.environ['RIDE_COMMAND'] = ' '.join(spec.to_command_argv())
   os.environ['RIDE_WORKSPACE'] = spec.name
   os.environ.setdefault('BRO_SHELL_COMMAND', os.environ['RIDE_COMMAND'])
@@ -345,6 +345,9 @@ def start_session(spec: SessionSpec) -> int:
     log.error('%s', error)
     return 1
 
+  if spec.host:
+    runtime_bundle.materialize_host()
+
   try:
     workspace = Workspace.ensure(spec.name, project, spec.kind)
   except KindMismatch as error:
@@ -354,7 +357,14 @@ def start_session(spec: SessionSpec) -> int:
   try:
     with workspace.hold_session_lock():
       record_resume_spec(workspace, spec)
-      code = _launch_session(spec, workspace, base_ref, launch, container=container)
+      code = _launch_session(
+        spec,
+        workspace,
+        base_ref,
+        launch,
+        container=container,
+        runtime_bundle=runtime_bundle,
+      )
       return _finish_session(spec, workspace, code)
   except SessionBusy as error:
     log.error('%s', error)

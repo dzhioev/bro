@@ -74,7 +74,7 @@ Core package-source paths in this section are relative to `bro/`, except the top
 
 ## Extension entry points
 
-Installed distributions extend the framework through `bro` (personas), `bro.credential_sources` (minting source types), `bro.credentials` (registry entries), `bro.brog.backends` (task-tracker backends), `bro.toolsets` (standalone MCP toolsets; each entry targets its module's `toolset` object), and `bro.mcp.targets` (assembled target prefixes; each resolver accepts the value after `<prefix>:` and returns live MCP servers). Declarations are installation metadata: run `uv sync` after adding or removing an entry point; editing an already-declared target module needs no reinstall. Name-keyed groups load only the matching entry, while credential-registry assembly loads every `bro.credentials` contribution, so those target modules must remain import-cheap.
+Installed distributions extend the framework through `bro` (personas), `bro.credential_sources` (minting source types), `bro.credentials` (registry entries), `bro.brog.backends` (task-tracker backends), `bro.toolsets` (standalone MCP toolsets; each entry targets its module's `toolset` object), `bro.mcp.targets` (assembled target prefixes; each resolver accepts the value after `<prefix>:` and returns live MCP servers), and `bro.session_commands` (console scripts exposed on managed-session PATH). Declarations are installation metadata: run `uv sync` after adding or removing an entry point; editing an already-declared target module needs no reinstall. Name-keyed groups load only the matching entry, while credential-registry assembly loads every `bro.credentials` contribution, so those target modules must remain import-cheap.
 
 ## Adding a Bro
 

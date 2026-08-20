@@ -100,7 +100,7 @@ def build_parser() -> Parser:
   subparsers.add_parser('list', help='list workspaces ([.]=worktree, [o]=container, [x]=abandoned)')
 
   clean = subparsers.add_parser(
-    'clean', help='remove stale workspaces that have no uncommitted or unpushed changes'
+    'clean', help='remove stale workspaces and unlocked runtime bundles'
   )
   clean.add_argument('--force', action='store_true', help='remove workspaces even when dirty')
   clean.add_argument('--dry-run', action='store_true', help='show removals without applying them')

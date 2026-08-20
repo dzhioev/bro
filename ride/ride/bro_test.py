@@ -8,6 +8,7 @@ import ride.session as ride_session
 from bro.llm.llms.openai import LLMSpec
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_session_dir
 from bro.workspace.paths import CONTAINER_SESSION_DIR
+from ride.runtime_bundle import RuntimeBundle
 from ride.session import ScopedLaunch, SessionSpec
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
@@ -38,6 +39,10 @@ def _spec(**overrides) -> SessionSpec:
   }
   values.update(overrides)
   return SessionSpec(**values)
+
+
+def _runtime_bundle(tmp_path: Path) -> RuntimeBundle:
+  return RuntimeBundle(tmp_path / 'runtime-bundle', '3.12')
 
 
 def _scope(**overrides) -> ScopedLaunch:
@@ -127,7 +132,17 @@ class TestContainerSession:
 
     monkeypatch.setattr(ride_session, 'run_in_container', run)
     spec = _spec(solo=True, hold='unattended')
-    assert ride_session._launch_session(spec, workspace, 'abc123', _scope(), container=True) == 7
+    assert (
+      ride_session._launch_session(
+        spec,
+        workspace,
+        'abc123',
+        _scope(),
+        container=True,
+        runtime_bundle=_runtime_bundle(tmp_path),
+      )
+      == 7
+    )
     launch = captured['launch']
     assert launch.command == [
       'ride', 'solo', '--in-place', '--workspace', 'w', '--harness', 'bro',
@@ -152,7 +167,17 @@ class TestContainerSession:
       lambda launch, *_a, **_k: captured.update(launch=launch) or 0,
     )
     spec = _spec(no_trails=True)
-    assert ride_session._launch_session(spec, workspace, None, _scope(), container=True) == 0
+    assert (
+      ride_session._launch_session(
+        spec,
+        workspace,
+        None,
+        _scope(),
+        container=True,
+        runtime_bundle=_runtime_bundle(tmp_path),
+      )
+      == 0
+    )
     assert captured['launch'].env['TRAILS_DISABLED'] == '1'
     # the session state dir is not trails data — it stays mounted
     assert captured['launch'].extra_mounts == (
@@ -163,7 +188,12 @@ class TestContainerSession:
     workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
     assert (
       ride_session._launch_session(
-        _spec(resume=True, prompt=None), workspace, None, _scope(), container=True
+        _spec(resume=True, prompt=None),
+        workspace,
+        None,
+        _scope(),
+        container=True,
+        runtime_bundle=_runtime_bundle(tmp_path),
       )
       == 1
     )
@@ -175,7 +205,17 @@ class TestContainerSession:
     trail_pointer.write(pointer, 'stale')
     monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: None)
     monkeypatch.setattr(ride_session, 'run_in_container', lambda *_a, **_k: 0)
-    assert ride_session._launch_session(_spec(), workspace, None, _scope(), container=True) == 0
+    assert (
+      ride_session._launch_session(
+        _spec(),
+        workspace,
+        None,
+        _scope(),
+        container=True,
+        runtime_bundle=_runtime_bundle(tmp_path),
+      )
+      == 0
+    )
     assert not pointer.exists()
 
   def test_a_refused_second_launch_leaves_the_active_pointer_alone(self, monkeypatch, tmp_path):
@@ -183,17 +223,29 @@ class TestContainerSession:
     pointer = trail_pointer.session_pointer(workspace.path)
     trail_pointer.write(pointer, 'live')
     monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: 'active')
-    assert ride_session._launch_session(_spec(), workspace, None, _scope(), container=True) == 1
+    assert (
+      ride_session._launch_session(
+        _spec(),
+        workspace,
+        None,
+        _scope(),
+        container=True,
+        runtime_bundle=_runtime_bundle(tmp_path),
+      )
+      == 1
+    )
     assert trail_pointer.read(pointer) == 'live'
 
 
 class TestHostSession:
-  def _workspace(self, tmp_path: Path) -> tuple[Workspace, Path]:
+  def _workspace(self, tmp_path: Path) -> tuple[Workspace, RuntimeBundle]:
     workspace = Workspace.create('w', tmp_path, WorkspaceKind.WORKTREE)
-    ride_binary = workspace.tree / '.venv' / 'bin' / 'ride'
-    ride_binary.parent.mkdir(parents=True)
-    ride_binary.write_text('')
-    return workspace, ride_binary
+    root = tmp_path / 'runtime-bundle'
+    (root / 'host' / 'venv' / 'bin').mkdir(parents=True)
+    (root / 'host' / 'bin').mkdir()
+    (root / 'host' / '.complete').touch()
+    (root / 'host' / 'venv' / 'bin' / 'ride').touch()
+    return workspace, RuntimeBundle(root, '3.12')
 
   def _prepare(self, monkeypatch, tmp_path):
     monkeypatch.setattr(ride_session, 'project_root', lambda: tmp_path)
@@ -204,15 +256,23 @@ class TestHostSession:
       ride_session, 'materialize_scoped_store', lambda _store, path: path / 'credentials.json'
     )
 
-  def test_provisions_and_supervises_the_worktree_runner(self, monkeypatch, tmp_path):
-    workspace, ride_binary = self._workspace(tmp_path)
+  def test_provisions_and_supervises_the_snapshot_runner(self, monkeypatch, tmp_path):
+    workspace, runtime_bundle = self._workspace(tmp_path)
+    ride_binary = runtime_bundle.host_venv / 'bin' / 'ride'
     self._prepare(monkeypatch, tmp_path)
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: True)
     root = MagicMock(return_value=3)
     monkeypatch.setattr(ride_session, 'run_host_process_via_broker', root)
 
     assert (
-      ride_session._launch_session(_spec(host=True), workspace, None, _scope(), container=False)
+      ride_session._launch_session(
+        _spec(host=True),
+        workspace,
+        None,
+        _scope(),
+        container=False,
+        runtime_bundle=runtime_bundle,
+      )
       == 3
     )
     command = root.call_args.args[1]
@@ -225,7 +285,7 @@ class TestHostSession:
     assert workspace.is_clean() == (False, ['last session exited with code 3'])
 
   def test_brokerless_host_run_unsets_an_ambient_channel(self, monkeypatch, tmp_path):
-    workspace, _ = self._workspace(tmp_path)
+    workspace, runtime_bundle = self._workspace(tmp_path)
     self._prepare(monkeypatch, tmp_path)
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/ambient.sock')
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: False)
@@ -233,7 +293,14 @@ class TestHostSession:
     monkeypatch.setattr(ride_session.subprocess, 'run', run)
 
     assert (
-      ride_session._launch_session(_spec(host=True), workspace, None, _scope(), container=False)
+      ride_session._launch_session(
+        _spec(host=True),
+        workspace,
+        None,
+        _scope(),
+        container=False,
+        runtime_bundle=runtime_bundle,
+      )
       == 0
     )
     assert 'BROKER_CHANNEL' not in run.call_args.kwargs['env']
