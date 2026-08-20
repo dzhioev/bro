@@ -1,3 +1,4 @@
+import contextlib
 import dataclasses
 import json
 import os
@@ -22,6 +23,7 @@ from ride import pending_summon
 from ride.flags import default_hold
 from ride.harness import Harness, get_harness
 from ride.inner import inner_command
+from ride.repository import Repository, hold_repository, is_git_url, open_repository
 from ride.root import run_host_process_via_broker, run_in_container, run_summoned_in_container
 from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError, resolve_runtime_bundle
 from ride.scope import LaunchScopeError, preflight_scoped_launch, scoped_secrets
@@ -282,7 +284,7 @@ def _container_session(
       *summoned_mounts,
       f'{session_state}:{CONTAINER_SESSION_DIR}',
     ),
-    repo=workspace.repo,
+    repo=workspace.repository,
   )
   if summoned is not None:
     try:
@@ -308,14 +310,14 @@ def _host_session(
   worktree = workspace.tree
   scoped = launch_scope.scoped
   log_scoped_secrets(spec.name, scoped.required, scoped.optional)
-  if workspace.repo is None:
+  repository = workspace.repository
+  if repository is None:
     worktree.mkdir(parents=True, exist_ok=True)
   else:
-    os.chdir(workspace.repo)
     branch = workspace.metadata.branch
     if branch is None:
       raise ValueError('attached host workspace has no recorded branch')
-    if not ensure_host_worktree(worktree, branch, base_ref):
+    if not ensure_host_worktree(repository.git_dir, worktree, branch, base_ref):
       return 1
     if not provision_host_worktree(worktree):
       return 1
@@ -324,8 +326,8 @@ def _host_session(
   command = [str(runtime_bundle.host_venv / 'bin' / inner[0]), *inner[1:]]
   runner_env = runtime_bundle.host_session_env()
   runner_env['RIDE_HOST_WORKSPACE'] = str(worktree)
-  if spec.repo is not None:
-    runner_env['RIDE_REPO'] = spec.repo
+  if workspace.repo is not None:
+    runner_env['RIDE_REPO'] = str(workspace.repo)
   else:
     runner_env.pop('RIDE_REPO', None)
   runner_env[credentials.REGISTRY_ENV] = str(
@@ -381,7 +383,9 @@ def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
 
 
 def start_session(
-  spec: SessionSpec, summoned: Optional[pending_summon.PendingSummon] = None
+  spec: SessionSpec,
+  repository: Optional[Repository] = None,
+  summoned: Optional[pending_summon.PendingSummon] = None,
 ) -> int:
   if in_container():
     log.error(
@@ -391,7 +395,7 @@ def start_session(
     return 1
   try:
     with resolve_runtime_bundle() as runtime_bundle:
-      return _start_session(spec, runtime_bundle, summoned)
+      return _start_session(spec, runtime_bundle, repository, summoned)
   except RuntimeBundleError as error:
     log.error('%s', error)
     return 1
@@ -400,6 +404,7 @@ def start_session(
 def _start_session(
   spec: SessionSpec,
   runtime_bundle: RuntimeBundle,
+  repository: Optional[Repository] = None,
   summoned: Optional[pending_summon.PendingSummon] = None,
 ) -> int:
   harness = get_harness(spec.harness)
@@ -412,39 +417,27 @@ def _start_session(
     os.environ['RIDE_REPO'] = spec.repo
   os.environ.setdefault('BRO_SHELL_COMMAND', os.environ['RIDE_COMMAND'])
 
-  repo = None if spec.repo is None else Path(spec.repo)
   ensure_runtime_root()
-  base_ref: Optional[str] = None
-  if spec.into is not None:
-    if repo is None:
-      log.error('--into requires --repo')
+  if spec.repo is None:
+    repository = None
+  elif repository is None and not is_git_url(spec.repo):
+    try:
+      repository = open_repository(spec.repo)
+    except (RuntimeError, ValueError) as error:
+      log.error('%s', error)
       return 1
-    base_ref = resolve_ref(repo, spec.into)
-    if base_ref is None:
-      log.error('cannot resolve --into ref: %s', spec.into)
-      return 1
-  if summoned is not None:
-    if not (container_broker_enabled() if container else broker_enabled()):
-      log.error(
-        "a manual summon child needs the summoner's broker channel"
-        + ('; use --host on this platform' if container else '')
-      )
-      return 1
-    # the summon request owns the base: its `into` ref, or the summoner's HEAD
-    # read now — like a spawned child's, at the moment the child starts
-    if summoned.into is not None:
-      if repo is None:
-        log.error('a detached manual summon cannot name an into ref')
-        return 1
-      base_ref = resolve_ref(repo, summoned.into)
-      if base_ref is None:
-        log.error('cannot resolve the summon into ref: %s', summoned.into)
-        return 1
-    elif repo is not None:
-      base_ref = resolve_head(repo, Path(summoned.parent_workspace))
-      if base_ref is None:
-        log.error("cannot read the summoner's HEAD at %s", summoned.parent_workspace)
-        return 1
+  if repository is not None and repository.identity != spec.repo:
+    raise ValueError(
+      f'resolved attachment {repository.identity!r} does not match session spec {spec.repo!r}'
+    )
+  if summoned is not None and not (
+    container_broker_enabled() if container else broker_enabled()
+  ):
+    log.error(
+      "a manual summon child needs the summoner's broker channel"
+      + ('; use --host on this platform' if container else '')
+    )
+    return 1
 
   auth_error = harness.preflight_auth(spec)
   if auth_error is not None:
@@ -455,7 +448,12 @@ def _start_session(
     recipe = dataclasses.replace(recipe, optional_baseline=frozenset())
   try:
     scoped, may_summon, store = preflight_scoped_launch(
-      scoped_secrets(spec.bro, recipe, repo=repo, llm_spec=spec.llm_spec),
+      scoped_secrets(
+        spec.bro,
+        recipe,
+        repo=None if repository is None else repository.credential_root,
+        llm_spec=spec.llm_spec,
+      ),
       spec.bro,
       grant=spec.grant,
       revoke=spec.revoke,
@@ -466,11 +464,38 @@ def _start_session(
 
   if spec.host:
     runtime_bundle.materialize_host()
-  container_runtime = ContainerRuntimeResolver(runtime_bundle, repo)
-
+  repository_context = (
+    contextlib.nullcontext(None) if spec.repo is None else hold_repository(spec.repo)
+  )
   try:
-    workspace = Workspace.ensure(spec.name, repo, spec.kind)
-  except (AttachmentMismatch, KindMismatch) as error:
+    with repository_context as resolved_repository:
+      repository = resolved_repository
+      base_ref = None if repository is None else repository.default_base
+      if spec.into is not None:
+        if repository is None:
+          log.error('--into requires --repo')
+          return 1
+        base_ref = resolve_ref(repository.git_dir, spec.into)
+        if base_ref is None:
+          log.error('cannot resolve --into ref: %s', spec.into)
+          return 1
+      if summoned is not None:
+        if summoned.into is not None:
+          if repository is None:
+            log.error('a detached manual summon cannot name an into ref')
+            return 1
+          base_ref = resolve_ref(repository.git_dir, summoned.into)
+          if base_ref is None:
+            log.error('cannot resolve the summon into ref: %s', summoned.into)
+            return 1
+        elif repository is not None:
+          base_ref = resolve_head(repository.git_dir, Path(summoned.parent_workspace))
+          if base_ref is None:
+            log.error("cannot read the summoner's HEAD at %s", summoned.parent_workspace)
+            return 1
+      container_runtime = ContainerRuntimeResolver(runtime_bundle, repository)
+      workspace = Workspace.ensure(spec.name, repository, spec.kind)
+  except (AttachmentMismatch, KindMismatch, RuntimeError, ValueError) as error:
     log.error('%s', error)
     return 1
   launch = ScopedLaunch(scoped=scoped, may_summon=may_summon, store=store)

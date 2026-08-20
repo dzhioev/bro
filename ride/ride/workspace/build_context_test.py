@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import ride.workspace.build_context as build_context
+from ride.repository import Repository
 
 
 def _project(tmp_path: Path, members: list[str]) -> Path:
@@ -176,3 +177,32 @@ class TestAssemble:
     subprocess.run(['git', 'add', '-A'], cwd=project, check=True)
     with pytest.raises(ValueError, match='reserved'):
       build_context.assemble_project(project)
+
+  def test_url_project_context_reads_the_committed_tree(self, tmp_path):
+    project = _project(tmp_path, ['packages/one'])
+    (project / 'pyproject.toml').write_text(
+      '[tool.bro]\ndefault = "bro"\nbuild-context-command = '
+      '"printf \\"uv.lock\\\\npyproject.toml\\\\npackages/one/pyproject.toml\\\\n\\""\n\n'
+      '[tool.uv.workspace]\nmembers = ["packages/*"]\n'
+    )
+    subprocess.run(['git', 'add', 'pyproject.toml'], cwd=project, check=True)
+    subprocess.run(
+      ['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'tree'],
+      cwd=project,
+      check=True,
+    )
+    bare = tmp_path / 'mirror.git'
+    subprocess.run(['git', 'clone', '-q', '--bare', project, bare], check=True)
+    commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=bare, text=True).strip()
+    repository = Repository('https://example.test/project.git', bare, commit)
+    (project / 'uv.lock').write_text('uncommitted')
+
+    assert build_context.manifest_paths(repository) == [
+      'pyproject.toml',
+      'uv.lock',
+      'packages/one/pyproject.toml',
+    ]
+    with tarfile.open(fileobj=io.BytesIO(build_context.assemble_project(repository))) as archive:
+      lock = archive.extractfile('uv.lock')
+      assert lock is not None
+      assert lock.read() == b'lock'

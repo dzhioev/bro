@@ -3,6 +3,7 @@ import signal
 import pytest
 
 import ride.workspace.docker as workspace_docker
+from ride.repository import Repository
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 
@@ -360,6 +361,23 @@ class TestDockerCreateArgv:
     assert not any('/host-repo' in value for value in argv)
     assert not any(value.startswith('RIDE_REPO=') for value in argv)
     assert not any(value.startswith('RIDE_BRANCH=') for value in argv)
+
+  def test_url_attachment_mounts_the_mirror_and_exports_the_url(self, tmp_path):
+    repository = Repository(
+      'https://example.test/owner/repository.git', tmp_path / 'mirror.git', 'abc'
+    )
+    argv = workspace_docker._docker_create_argv(
+      'tag',
+      'bundle-hash',
+      'ws',
+      repository,
+      tmp_path / 'tree',
+      'worktree-ws',
+      ['claude'],
+      forward_env=False,
+    )
+    assert f'{repository.git_dir}:/host-repo:ro' in argv
+    assert f'RIDE_REPO={repository.identity}' in argv
 
   def test_docker_sock_mounted_by_default(self, build_argv):
     assert '/var/run/docker.sock:/var/run/docker.sock' in build_argv()

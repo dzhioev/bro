@@ -11,6 +11,7 @@ from typing import ClassVar, Optional
 from bro.base import log
 from bro.workspace.git import git_run
 from bro.workspace.paths import workspace_dir, workspace_tree, workspaces_dir
+from ride.repository import Repository, as_repository, is_git_url, open_repository
 from ride.workspace.docker import project_image_tag, runtime_image_tag
 from ride.workspace.metadata import (
   WorkspaceKind,
@@ -50,7 +51,7 @@ def _last_active(tree: Path) -> Optional[float]:
 KILLED = 'killed'
 
 
-def _cleanup_image(repo: Optional[Path]) -> Optional[str]:
+def _cleanup_image(repository: Optional[Repository]) -> Optional[str]:
   """a locally-present session image usable to delete root-owned container files.
 
   prefers the current image tag, then any other locally-present image of the
@@ -58,7 +59,7 @@ def _cleanup_image(repo: Optional[Path]) -> Optional[str]:
   removal with).
   """
   runtime = runtime_image_tag()
-  tag = project_image_tag(runtime, repo) if repo is not None else runtime
+  tag = project_image_tag(runtime, repository) if repository is not None else runtime
   tag = tag or runtime
   if subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True).returncode == 0:
     return tag
@@ -140,8 +141,14 @@ class Workspace(ABC):
     self.metadata = metadata
 
   @property
-  def repo(self) -> Optional[Path]:
-    return None if self.metadata.repo is None else Path(self.metadata.repo)
+  def repo(self) -> Optional[Path | str]:
+    if self.metadata.repo is None:
+      return None
+    return self.metadata.repo if is_git_url(self.metadata.repo) else Path(self.metadata.repo)
+
+  @property
+  def repository(self) -> Optional[Repository]:
+    return None if self.metadata.repo is None else open_repository(self.metadata.repo)
 
   @property
   def path(self) -> Path:
@@ -179,10 +186,13 @@ class Workspace(ABC):
 
   def remove(self, *, force: bool = False) -> None:
     """remove the workspace: the tree and every record kept about it."""
-    if self.repo is not None and not self.repo.is_dir() and not force:
-      raise RuntimeError(
-        f'attached repository no longer exists: {self.repo}; use --force to remove'
-      )
+    if self.repo is not None and not force:
+      try:
+        _ = self.repository
+      except (RuntimeError, ValueError):
+        raise RuntimeError(
+          f'attached repository no longer exists: {self.repo}; use --force to remove'
+        ) from None
     self._release_tree(force=force)
     self._remove_dir()
 
@@ -266,13 +276,18 @@ class Workspace(ABC):
 
   @classmethod
   def create(
-    cls, name: str, repo: Optional[Path], kind: WorkspaceKind, *, throwaway: bool = False
+    cls,
+    name: str,
+    repo: Optional[Repository | Path],
+    kind: WorkspaceKind,
+    *,
+    throwaway: bool = False,
   ) -> 'Workspace':
-    resolved_repo = None if repo is None else str(repo.resolve())
+    repository = None if repo is None else as_repository(repo)
     metadata = WorkspaceMetadata(
       kind=kind,
-      repo=resolved_repo,
-      branch=None if repo is None else workspace_branch(name),
+      repo=None if repository is None else repository.identity,
+      branch=None if repository is None else workspace_branch(name),
       throwaway=throwaway,
     )
     write_metadata(name, metadata)
@@ -280,7 +295,12 @@ class Workspace(ABC):
 
   @classmethod
   def ensure(
-    cls, name: str, repo: Optional[Path], kind: WorkspaceKind, *, throwaway: bool = False
+    cls,
+    name: str,
+    repo: Optional[Repository | Path],
+    kind: WorkspaceKind,
+    *,
+    throwaway: bool = False,
   ) -> 'Workspace':
     if not is_workspace(name):
       return cls.create(name, repo, kind, throwaway=throwaway)
@@ -290,8 +310,8 @@ class Workspace(ABC):
         f'workspace {name!r} is a {workspace.kind} workspace, not {kind}; '
         f'pick another name or remove it with `ride clean --force {name}`'
       )
-    expected_repo = None if repo is None else repo.resolve()
-    if workspace.repo != expected_repo:
+    expected_repo = None if repo is None else as_repository(repo).identity
+    if workspace.metadata.repo != expected_repo:
       raise AttachmentMismatch(
         f'workspace {name!r} is attached to {workspace.repo or "no repository"}, '
         f'not {expected_repo or "no repository"}'
@@ -312,19 +332,23 @@ class WorktreeWorkspace(Workspace):
   kind = WorkspaceKind.WORKTREE
 
   def _release_tree(self, *, force: bool) -> None:
-    repo = self.repo
-    if repo is None:
+    if self.repo is None:
       return
-    if not repo.is_dir():
+    try:
+      repository = self.repository
+    except (RuntimeError, ValueError):
       if force:
         return
-      raise RuntimeError(f'attached repository no longer exists: {repo}; use --force to remove')
+      raise RuntimeError(
+        f'attached repository no longer exists: {self.repo}; use --force to remove'
+      ) from None
+    assert repository is not None
     if self.tree.is_dir():
-      removed = git_run('worktree', 'remove', '--force', str(self.tree), cwd=repo)
+      removed = git_run('worktree', 'remove', '--force', str(self.tree), cwd=repository.git_dir)
       if removed.returncode != 0:
         raise RuntimeError(f'{self.tree}: git worktree remove failed: {removed.stderr.strip()}')
     assert self.metadata.branch is not None
-    deleted = git_run('branch', '-D', self.metadata.branch, cwd=repo)
+    deleted = git_run('branch', '-D', self.metadata.branch, cwd=repository.git_dir)
     if deleted.returncode != 0:
       log.warning('could not delete branch %s: %s', self.metadata.branch, deleted.stderr.strip())
 
@@ -346,7 +370,11 @@ class ContainerWorkspace(Workspace):
     del force
 
   def _remove_dir(self) -> None:
-    _remove_container_dir(self.path, _cleanup_image(self.repo))
+    repository = None
+    if self.repo is not None:
+      with contextlib.suppress(RuntimeError, ValueError):
+        repository = self.repository
+    _remove_container_dir(self.path, _cleanup_image(repository))
 
 
 _KINDS: dict[WorkspaceKind, type[Workspace]] = {

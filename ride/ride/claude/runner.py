@@ -41,6 +41,7 @@ from ride.claude.session_context import (
   build_session_context,
   encode_session_context,
 )
+from ride.repository import is_git_url
 
 if TYPE_CHECKING:
   from ride.session import SessionSpec
@@ -159,11 +160,18 @@ def run_in_place(spec: 'SessionSpec') -> int:
     # isolation"). provisioning is idempotent because both launch layers apply it.
     # Set before anything derives paths or spawns children:
     # the resume resolution below, the hooks, and claude itself all read it.
-    workspace = workspace_dir(spec.name)
-    repo = tree if spec.repo is None else Path(spec.repo)
-    claude_dir = provision_host_claude_dir(workspace, tree, repo)
+    workspace_path = workspace_dir(spec.name)
+    if spec.repo is None:
+      project = tree
+    elif not is_git_url(spec.repo):
+      project = Path(spec.repo)
+    else:
+      common = Path(git_out('rev-parse', '--git-common-dir', cwd=str(tree)))
+      common = common if common.is_absolute() else (tree / common).resolve()
+      project = common.parent if common.name == '.git' else common
+    claude_dir = provision_host_claude_dir(workspace_path, tree, project)
     os.environ[CLAUDE_CONFIG_DIR_ENV] = str(claude_dir)
-    os.environ[SESSION_DIR_ENV] = str(workspace_session_dir(workspace))
+    os.environ[SESSION_DIR_ENV] = str(workspace_session_dir(workspace_path))
 
   transcripts = claude_projects_dir(tree)
   claude_args = list(spec.arguments)

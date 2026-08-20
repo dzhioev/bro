@@ -12,7 +12,7 @@ from typing import Optional
 
 from bro.base import credentials, log
 from bro.workspace.paths import workspace_tree
-from bro.workspace.project import project_config
+from ride.repository import Repository, as_repository
 from ride.runtime_bundle import RuntimeBundle
 from ride.workspace import build_context
 from ride.workspace.build_context import CONTAINER_DIR
@@ -36,17 +36,17 @@ class ContainerRuntimeResolver:
   def __init__(
     self,
     bundle: Optional[RuntimeBundle],
-    repo: Optional[Path] = None,
+    repo: Optional[Repository | Path] = None,
     resolved: Optional[ContainerRuntime] = None,
   ):
     self._bundle = bundle
-    self._repo = repo
+    self._repo = None if repo is None else as_repository(repo)
     self._resolved = resolved
     self._lock = threading.Lock()
 
   @classmethod
   def fixed(
-    cls, runtime: ContainerRuntime, repo: Optional[Path] = None
+    cls, runtime: ContainerRuntime, repo: Optional[Repository | Path] = None
   ) -> 'ContainerRuntimeResolver':
     return cls(None, repo, runtime)
 
@@ -81,7 +81,7 @@ class Launch:
   runtime_bundle_hash: str
   optional_secrets: Collection[str] = ()
   extra_mounts: Collection[str] = ()
-  repo: Optional[Path] = None
+  repo: Optional[Repository | Path] = None
 
 
 # where a container session's broker channel lands: the provisioned host socket is
@@ -183,12 +183,20 @@ def runtime_image_tag(python_version: Optional[str] = None) -> str:
   return f'{_RUNTIME_IMAGE_REPOSITORY}:{_hash_files(inputs, seed=version)}'
 
 
-def project_image_tag(runtime_image: str, project: Path) -> Optional[str]:
-  manifests = build_context.manifest_paths(project)
+def project_image_tag(runtime_image: str, project: Repository | Path) -> Optional[str]:
+  repository = as_repository(project)
+  manifests = build_context.manifest_paths(repository)
   if len(manifests) == 0:
     return None
-  inputs = [(relative, project / relative) for relative in manifests]
-  return f'{project_config(project).image_repository}:{_hash_files(inputs, seed=runtime_image)}'
+  digest = hashlib.sha256(runtime_image.encode())
+  for relative in manifests:
+    content = repository.read_file(relative)
+    if content is None:
+      raise FileNotFoundError(f'{repository.identity} is missing manifest {relative}')
+    digest.update(relative.encode())
+    digest.update(b'\0')
+    digest.update(content)
+  return f'{repository.project_config().image_repository}:{digest.hexdigest()[:12]}'
 
 
 def _image_present(tag: str) -> bool:
@@ -237,7 +245,7 @@ def build_runtime_image(tag: str, python_version: str) -> None:
   )
 
 
-def build_project_image(tag: str, runtime_image: str, project: Path) -> None:
+def build_project_image(tag: str, runtime_image: str, project: Repository | Path) -> None:
   log.info('building project image %s from %s', tag, runtime_image)
   subprocess.run(
     [
@@ -264,7 +272,7 @@ def _ensure_runtime_image(tag: str, python_version: str) -> None:
   _prune_superseded_images(tag)
 
 
-def _ensure_project_image(runtime_image: str, project: Path) -> str:
+def _ensure_project_image(runtime_image: str, project: Repository | Path) -> str:
   tag = project_image_tag(runtime_image, project)
   if tag is None:
     return runtime_image
@@ -300,11 +308,12 @@ def prepare_container(launch: Launch) -> str:
   """create the unstarted container described entirely by `launch`."""
   log.info('creating container workspace %s', launch.name)
   metadata = read_metadata(launch.name)
-  recorded_repo = None if metadata.repo is None else Path(metadata.repo)
-  if launch.repo != recorded_repo:
+  repository = None if launch.repo is None else as_repository(launch.repo)
+  launched_repo = None if repository is None else repository.identity
+  if launched_repo != metadata.repo:
     raise ValueError(
-      f'launch attachment {launch.repo or "none"} does not match workspace attachment '
-      f'{recorded_repo or "none"}'
+      f'launch attachment {launched_repo or "none"} does not match workspace attachment '
+      f'{metadata.repo or "none"}'
     )
   tree = workspace_tree(launch.name)
   tree.mkdir(parents=True, exist_ok=True)
@@ -331,7 +340,7 @@ def _docker_create_argv(
   tag: str,
   runtime_bundle_hash: str,
   name: str,
-  repo: Optional[Path],
+  repo: Optional[Repository | Path],
   tree: Path,
   branch: Optional[str],
   command: list[str],
@@ -343,6 +352,7 @@ def _docker_create_argv(
   extra_mounts: Optional[list[str]] = None,
 ) -> list[str]:
   """the create half of create/copy/start, before the scoped-store injection window."""
+  repository = None if repo is None else as_repository(repo)
   home = Path.home()
   argv = ['docker', 'create']
   if tty:
@@ -368,14 +378,14 @@ def _docker_create_argv(
     '/workspace',
     '--memory=8g',
   ]
-  if repo is not None:
+  if repository is not None:
     if branch is None:
       raise ValueError('attached container workspace has no recorded branch')
     argv += [
       '-v',
-      f'{repo}:/host-repo:ro',
+      f'{repository.git_dir}:/host-repo:ro',
       '-e',
-      f'RIDE_REPO={repo}',
+      f'RIDE_REPO={repository.identity}',
       '-e',
       f'RIDE_BRANCH={branch}',
     ]

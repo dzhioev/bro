@@ -20,6 +20,7 @@ import pytest
 
 import bro.workspace.project as workspace_project
 import ride.workspace.docker as workspace_docker
+from ride.repository import Repository
 from ride.runtime_bundle import resolve_runtime_bundle
 from ride.workspace.docker import Launch
 from ride.workspace.metadata import WorkspaceKind
@@ -184,7 +185,7 @@ def launched(isolated: Isolated) -> Iterator[Launched]:
     monkeypatch.setenv('XDG_DATA_HOME', str(isolated.project.parent / 'state'))
     monkeypatch.setattr(workspace_docker.Path, 'home', lambda: isolated.home)
     config = replace(workspace_project.project_config(checkout), image_repository=_IMAGE_REPOSITORY)
-    monkeypatch.setattr(workspace_docker, 'project_config', lambda _repo: config)
+    monkeypatch.setattr(Repository, 'project_config', lambda _repository: config)
     monkeypatch.setattr(workspace_docker, '_RUNTIME_IMAGE_REPOSITORY', 'bro/launch-smoke-runtime')
     with resolve_runtime_bundle() as bundle:
       runtime_tag = workspace_docker.runtime_image_tag(bundle.python_version)

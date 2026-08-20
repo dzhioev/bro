@@ -20,6 +20,7 @@ from bro.base import credentials
 from bro.monitor import workspace_session_dir
 from bro.workspace.paths import CONTAINER_SESSION_DIR
 from ride import pending_summon
+from ride.repository import Repository
 from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError
 from ride.scope import ScopedSecrets
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
@@ -483,6 +484,21 @@ class TestContainerCommand:
     assert rc == 0
     launch = h.run_in_container.call_args.args[0]
     assert 'RIDE_BASE_REF' not in launch.env
+
+  def test_url_attachment_uses_fresh_origin_head_as_the_default_base(self, tmp_path):
+    repository = Repository('https://example.test/owner/repo.git', tmp_path / 'mirror', 'urlsha')
+    spec = replace(_spec(drop=True), repo=repository.identity)
+    with _ContainerHarness() as harness:
+      with (
+        patch('ride.session.hold_repository', return_value=contextlib.nullcontext(repository)),
+        patch('ride.workspace.model.open_repository', return_value=repository),
+      ):
+        rc = ride_session.start_session(spec, repository)
+    assert rc == 0
+    launch = harness.run_in_container.call_args.args[0]
+    assert launch.env['RIDE_BASE_REF'] == 'urlsha'
+    assert launch.repo == repository
+    assert Workspace.open('w').metadata.repo == repository.identity
 
   def test_into_threads_the_resolved_base_into_the_container_env(self):
     with _ContainerHarness() as h:

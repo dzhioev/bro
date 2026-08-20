@@ -77,9 +77,16 @@ def presets(project: object = _CURRENT_PROJECT) -> dict[str, str]:
   if project is _CURRENT_PROJECT:
     sections = project_sections()
   else:
-    if project is not None and not isinstance(project, Path):
-      raise TypeError(f'project must be a Path or None, not {type(project).__name__}')
-    sections = project_sections_at(project)
+    from bro.workspace.project import ProjectConfig
+
+    if isinstance(project, ProjectConfig):
+      sections = project.sections
+    else:
+      if project is not None and not isinstance(project, Path):
+        raise TypeError(
+          f'project must be a Path, ProjectConfig, or None, not {type(project).__name__}'
+        )
+      sections = project_sections_at(project)
   merged = dict(sections.get('llm', {}))
   for name, value in merged.items():
     if not isinstance(value, str) or value == '':

@@ -152,7 +152,9 @@ class ClaudeHarness:
     self, spec: 'SessionSpec', workspace: Workspace, worktree: Path, env: dict[str, str]
   ) -> None:
     del spec
-    claude_dir = provision_host_claude_dir(workspace.path, worktree, workspace.repo or worktree)
+    repository = workspace.repository
+    project = worktree if repository is None else repository.git_dir
+    claude_dir = provision_host_claude_dir(workspace.path, worktree, project)
     env[CLAUDE_CONFIG_DIR_ENV] = str(claude_dir)
     apply_claude_auth(env)
 

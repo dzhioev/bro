@@ -6,7 +6,9 @@ from typing import Optional
 from bro.base import log
 
 
-def ensure_host_worktree(worktree: Path, branch: str, base_ref: Optional[str] = None) -> bool:
+def ensure_host_worktree(
+  repository: Path, worktree: Path, branch: str, base_ref: Optional[str] = None
+) -> bool:
   # create the worktree if new (git ops run in the project root, the cwd): a
   # `worktree-<name>` branch — based on base_ref (`--into`) when given, else on
   # the checkout's current HEAD — plus submodule alternates so `git submodule
@@ -18,7 +20,9 @@ def ensure_host_worktree(worktree: Path, branch: str, base_ref: Optional[str] = 
   log.info('creating worktree %s', worktree)
   branch_exists = (
     subprocess.run(
-      ['git', 'show-ref', '--verify', '--quiet', f'refs/heads/{branch}'], capture_output=True
+      ['git', 'show-ref', '--verify', '--quiet', f'refs/heads/{branch}'],
+      cwd=repository,
+      capture_output=True,
     ).returncode
     == 0
   )
@@ -28,7 +32,7 @@ def ensure_host_worktree(worktree: Path, branch: str, base_ref: Optional[str] = 
   else:
     base = base_ref if base_ref is not None else 'HEAD'
     add = ['git', 'worktree', 'add', *quiet, str(worktree), '-b', branch, base]
-  if subprocess.run(add).returncode != 0:
+  if subprocess.run(add, cwd=repository).returncode != 0:
     log.error('failed to create worktree %s', worktree)
     return False
   for key, value in (

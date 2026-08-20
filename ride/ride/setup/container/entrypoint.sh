@@ -43,6 +43,10 @@ fi
 # settings.json inside it and syncs credentials; host machine state stays on the
 # host.
 
+log VERBOSE 'installing credential hooks'
+install_hooks="$(credentials install-hooks)"
+eval "$install_hooks"
+
 # Repository setup runs only for an explicitly attached launch.
 if [ -n "${RIDE_REPO:-}" ]; then
 # seed host git config into a writable copy (the host file is bind-mounted
@@ -74,10 +78,10 @@ if [ ! -d /workspace/.git ]; then
   host_origin="$(container_git_url "$host_origin")"
   git remote set-url origin "$host_origin"
   git remote add host /host-repo
-  # refresh refs/remotes/origin/master (the clone copied /host-repo's possibly-stale
-  # local copy) so later ancestry/clean checks and rebases compare against the real
-  # upstream. ref-only — objects are already shared via alternates, no token needed.
-  git fetch "${quiet[@]}" host '+refs/remotes/origin/master:refs/remotes/origin/master' >&2
+  # refresh the mounted repository's origin-tracking refs: a checkout may carry
+  # local-only commits while a managed mirror carries the launch's fresh fetch.
+  # ref-only — objects are already shared via alternates, no token needed.
+  git fetch "${quiet[@]}" host '+refs/remotes/origin/*:refs/remotes/origin/*' >&2
   # branch RIDE_BRANCH (the workspace's recorded branch) from RIDE_BASE_REF — a sha
   # the host resolved for an explicit base (--into <ref>) or a summoned child's
   # inherited summoner HEAD. the HEAD fallback (the clone's checkout, i.e. the
@@ -130,10 +134,6 @@ fi
 
 # Capture before eval so a failed command substitution aborts the launch rather
 # than becoming a successful empty eval.
-log VERBOSE 'installing credential hooks'
-install_hooks="$(credentials install-hooks)"
-eval "$install_hooks"
-
 # One local broker proxy serves the in-container client swarm. A proxy launch
 # failure is expected to degrade the optional broker channel, not the session.
 if [ -n "${BROKER_CHANNEL:-}" ]; then
