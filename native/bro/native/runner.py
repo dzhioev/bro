@@ -8,7 +8,7 @@ from types import TracebackType
 from typing import Any, Optional, Self
 
 from bro.base import log
-from bro.bro import BaseBro, BroRaised
+from bro.bro import AnswerDelivered, BaseBro, BroRaised
 from bro.channel import BroChannel
 from bro.llm.observer import (
   NullObserver,
@@ -21,7 +21,7 @@ from bro.llm.observer import (
 from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
 from bro.native import providers as native_providers
 from bro.native.llm import LLM
-from bro.summon import summoned_by_from_env
+from bro.summon import SUMMONED_ENV, summoned_by_from_env
 from bro.trails.record.bro import Recorder
 
 _TRAILS_DISABLED_ENV = 'TRAILS_DISABLED'
@@ -167,6 +167,8 @@ class Runner:
     if isinstance(exception, BroRaised):
       reason = 'raised'
       detail = exception.reason
+    elif isinstance(exception, AnswerDelivered):
+      pass  # a summoned run's clean end: the surface delivers the answer
     elif isinstance(exception, Exception):
       reason = 'error'
       detail = str(exception)
@@ -219,6 +221,9 @@ class Runner:
         with self:
           try:
             result = await llm.send(messages, request_timeout=request_timeout)
+          except AnswerDelivered as delivered:
+            # the `answer` service tool's explicit end: the answer is the result
+            result = delivered.answer
           except Exception as error:
             effective_observer.on_event(TurnFailedEvent(str(error)))
             raise
@@ -254,18 +259,27 @@ class Runner:
       # records one trail); later calls can't swap it. surface (the trail
       # header's surface label) and hold are locked in the same way.
       try:
-        self._llm, messages, _ = self._start(
+        self._llm, messages, trail_id = self._start(
           message,
           interactive=True,
           hold=hold,
           observer=effective_observer,
           tracker=tracker,
           surface=surface,
-          summoned_by=None,
+          summoned_by=summoned_by_from_env(),
         )
       except Exception as error:
         effective_observer.on_event(TurnFailedEvent(str(error)))
         raise
+      if os.environ.get(SUMMONED_ENV) is not None:
+        # a summoned interactive run announces its trail like a summoned run()
+        # would — the summoner's wait re-arms on it and its own summons need the
+        # workspace fact; an un-summoned conversation announces nothing (its
+        # channel is the enclosing session's, not its own)
+        channel = self._make_channel()
+        if channel is not None:
+          channel.started(trail_id, workspace=os.environ.get('RIDE_WORKSPACE'))
+          channel.close()
     else:
       if observer is not None:
         # unlike the tracker, the observer is rebindable mid-conversation: a
@@ -278,6 +292,8 @@ class Runner:
       messages = [{'role': 'user', 'content': message}]
     try:
       result = await self._llm.send(messages, request_timeout=request_timeout)
+    except AnswerDelivered:
+      raise  # a summoned conversation's clean end — the surface delivers it
     except Exception as error:
       effective_observer.on_event(TurnFailedEvent(str(error)))
       raise

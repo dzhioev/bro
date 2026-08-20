@@ -15,6 +15,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Static, TextArea
 from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
+from bro.bro import AnswerDelivered
 from bro.launch.call import INTERRUPTED_NOTICE
 from bro.native.runner import Runner
 from bro.show import format_card
@@ -127,6 +128,9 @@ class ChatApp(App):
     self._display_session: DisplaySession | None = None
     self._observer: LiveDisplayObserver | None = None
     self._surface_sequence = 0
+    # the answer a summoned conversation delivered before exiting; the chat
+    # surface relays it to the summoner once the app has ended
+    self.delivered: Optional[AnswerDelivered] = None
 
   def compose(self) -> ComposeResult:
     yield TrailView(id='history')
@@ -202,6 +206,12 @@ class ChatApp(App):
       raise RuntimeError('chat display is not mounted')
     try:
       await self._runner.send(text, observer=observer, surface='call', hold=self._hold)
+    except AnswerDelivered as delivered:
+      # a summoned conversation's clean end: remember the answer for the chat
+      # surface to relay and leave the app
+      self.delivered = delivered
+      self.exit()
+      return
     except asyncio.CancelledError:
       if self.is_running:
         observer.close_activity()

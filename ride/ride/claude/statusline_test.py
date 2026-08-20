@@ -71,6 +71,40 @@ class TestSummonSection:
     out = _run(monkeypatch, tmp_path, summons=summons)
     assert '⚡ summoning reviewer 5s (no trail yet)' in out
 
+  def test_unlaunched_manual_summon_shows_the_wait(self, monkeypatch, tmp_path):
+    summons = {
+      'active': [
+        {
+          'request_id': 'TOK-1',
+          'target': 'reviewer',
+          'trail_id': None,
+          'summoner': {'kind': 'root'},
+          'started_at': time.time() - 65,
+          'manual': True,
+        }
+      ],
+      'last': None,
+    }
+    out = _run(monkeypatch, tmp_path, summons=summons)
+    assert '⚡ awaiting manual reviewer launch 1m' in out
+
+  def test_launched_manual_summon_shows_like_any_active_one(self, monkeypatch, tmp_path):
+    summons = {
+      'active': [
+        {
+          'request_id': 'TOK-1',
+          'target': 'reviewer',
+          'trail_id': 'T1',
+          'summoner': {'kind': 'root'},
+          'started_at': time.time() - 5,
+          'manual': True,
+        }
+      ],
+      'last': None,
+    }
+    out = _run(monkeypatch, tmp_path, summons=summons)
+    assert '⚡ summoning reviewer 5s (trail T1)' in out
+
   def test_recent_terminal_outcome_shows(self, monkeypatch, tmp_path):
     summons = {
       'active': [],

@@ -31,6 +31,8 @@ from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
 from bro.workspace.paths import project_root
 from ride.workspace.docker import (
+  CONTAINER_BROKER_ADDRESS,
+  CONTAINER_BROKER_SOCK,
   DETACH_FLAG,
   Launch as DockerLaunch,
   container_running,
@@ -42,8 +44,6 @@ from ride.workspace.model import Workspace
 
 DEFAULT_RING_BYTES = 1 << 16  # 64 KiB — a full traceback + context, bounded
 
-_IN_CONTAINER_SOCK = '/run/broker.sock'  # short fixed path inside the container (sun_path budget)
-_BROKER_ADDRESS = f'unix:{_IN_CONTAINER_SOCK}'
 _DRAIN_CHUNK = 65536
 
 
@@ -94,11 +94,11 @@ class _RingBuffer:
 def _broker_launch(launch: DockerLaunch, channel: Provisioned) -> DockerLaunch:
   """add the provisioned broker channel to a neutral container launch."""
   env = dict(launch.env)
-  env['BROKER_CHANNEL'] = _BROKER_ADDRESS
+  env['BROKER_CHANNEL'] = CONTAINER_BROKER_ADDRESS
   return replace(
     launch,
     env=env,
-    extra_mounts=(*launch.extra_mounts, f'{channel.host_endpoint}:{_IN_CONTAINER_SOCK}'),
+    extra_mounts=(*launch.extra_mounts, f'{channel.host_endpoint}:{CONTAINER_BROKER_SOCK}'),
   )
 
 

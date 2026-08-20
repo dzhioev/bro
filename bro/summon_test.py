@@ -72,7 +72,7 @@ def test_bare_summon_forwards_with_its_own_shell_command(monkeypatch):
   monkeypatch.setattr(
     summon,
     'relay_summon',
-    lambda target, prompt, *, timeout, into, hold, grant, revoke, llm, harness: (
+    lambda target, prompt, *, timeout, into, hold, grant, revoke, llm, harness, manual: (
       calls.append((target, prompt, timeout, into)) or 0
     ),
   )
@@ -80,6 +80,69 @@ def test_bare_summon_forwards_with_its_own_shell_command(monkeypatch):
   assert summon.main(['summon', '--timeout', '60', 'dev', 'deploy']) == 0
   assert calls == [('dev', 'deploy', 60.0, None)]
   assert os.environ['BRO_SHELL_COMMAND'] == 'summon --timeout 60.0 dev deploy'
+
+
+def test_manual_summon_refuses_launch_owned_flags(monkeypatch, caplog):
+  monkeypatch.setenv(CHANNEL_ENV, 'unix:/nonexistent.sock')
+  for flags in (
+    ['--timeout', '60'],
+    ['--hold', 'attended'],
+    ['--harness', 'claude'],
+    ['--llm', ':fable5'],
+  ):
+    assert summon.main(['summon', '--manual', *flags, 'dev', 'work']) == 1
+  assert sum('launch owns' in record.getMessage() for record in caplog.records) == 4
+
+
+class _ManualFakeClient:
+  """a client whose send is acknowledged with the scripted correlated message —
+  the acceptance handshake a manual summon blocks on."""
+
+  def __init__(self, sent: list[dict], acknowledgment: Message):
+    self._sent = sent
+    self._acknowledgment = acknowledgment
+
+  def send(self, message_type, payload):
+    self._sent.append(payload)
+    return Message(type=message_type, id='TOKEN-1', payload=payload)
+
+  def await_any(self, request, timeout):
+    return Message(
+      type=self._acknowledgment.type,
+      payload=self._acknowledgment.payload,
+      in_reply_to=request.id,
+    )
+
+  def __enter__(self):
+    return self
+
+  def __exit__(self, *exc_info):
+    return False
+
+
+def test_manual_detached_summon_waits_for_acceptance_and_prints_the_command(
+  monkeypatch, capsys, caplog
+):
+  sent: list[dict] = []
+  accepted = Message(type='accepted', payload={})
+  monkeypatch.setattr(summon, '_open_client', lambda: _ManualFakeClient(sent, accepted))
+  assert summon.main(['summon', '--manual', '--detach', 'dev', 'work it out']) == 0
+  assert sent == [{'target': 'dev', 'prompt': 'work it out', 'manual': True}]
+  assert capsys.readouterr().out.strip() == 'TOKEN-1'
+  hint = summon.manual_launch_command('TOKEN-1', 'dev')
+  assert any(hint in record.getMessage() for record in caplog.records)
+
+
+def test_denied_manual_summon_fails_at_the_summon_with_no_token(monkeypatch, capsys, caplog):
+  # the denial must surface here — a token printed for a denied summon would
+  # send the user to launch against nothing
+  sent: list[dict] = []
+  denial = Message(type='reply', payload={'error': "summon denied: 'dev' is not in the list"})
+  monkeypatch.setattr(summon, '_open_client', lambda: _ManualFakeClient(sent, denial))
+  assert summon.main(['summon', '--manual', '--detach', 'dev', 'work it out']) == 1
+  assert capsys.readouterr().out == ''
+  assert any('summon denied' in record.getMessage() for record in caplog.records)
+  assert not any('have the user run' in record.getMessage() for record in caplog.records)
 
 
 def test_errors_without_a_channel(monkeypatch, capsys, caplog):
@@ -461,6 +524,7 @@ def test_list_prints_the_recorded_status(tmp_path, monkeypatch, capsys):
         'trail_id': 'T1',
         'summoner': {'kind': 'root'},
         'started_at': 1.0,
+        'manual': False,
       }
     ],
     'last': {

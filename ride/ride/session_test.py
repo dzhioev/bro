@@ -16,6 +16,7 @@ import ride.summon_control
 from bro.base import credentials
 from bro.monitor import workspace_session_dir
 from bro.workspace.paths import CONTAINER_SESSION_DIR
+from ride import pending_summon
 from ride.scope import ScopedSecrets
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
@@ -883,6 +884,62 @@ class TestHostSession:
     assert kwargs['cwd'] == str(worktree)
     assert kwargs['env']['VIRTUAL_ENV'] == str(worktree / '.venv')
 
+  def test_summoned_host_run_attaches_to_the_summoners_socket_and_claims(
+    self, monkeypatch, tmp_path
+  ):
+    # a summoned host session runs the direct spawn — no broker of its own — with
+    # the session broxy kept, pointed at the summoner's socket
+    workspace, _, worktree = self._prepare_launch(monkeypatch, tmp_path)
+    record = _pending_record(tmp_path)
+    monkeypatch.setattr(
+      ride_session,
+      'run_host_process_via_broker',
+      lambda *_a, **_k: pytest.fail('a summoned session must not start its own broker'),
+    )
+    runs: list = []
+
+    def fake_run(argv, **kwargs):
+      runs.append((argv, kwargs))
+      from types import SimpleNamespace
+
+      return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(ride_session.subprocess, 'run', fake_run)
+    spec = _spec(host=True, prompt='pair on this')
+    assert (
+      ride_session._launch_session(
+        spec, workspace, None, _launch_scope(), container=False, summoned=record
+      )
+      == 0
+    )
+    _, kwargs = runs[0]
+    env = kwargs['env']
+    assert env['BROKER_CHANNEL'] == f'unix:{record.socket}'
+    assert env['RIDE_SUMMONED'] == '1'
+    assert env['RIDE_MAY_SUMMON'] == 'dev'
+    assert env['RIDE_WORKSPACE'] == 'w'
+    assert env[ride_session.START_SESSION_BROXY_ENV] == '1'
+    assert kwargs['cwd'] == str(worktree)
+    with pytest.raises(pending_summon.UnknownToken):
+      pending_summon.peek(tmp_path, record.token)
+
+  def test_summoned_host_run_fails_cleanly_on_a_spent_token(self, monkeypatch, tmp_path, caplog):
+    workspace, _, _ = self._prepare_launch(monkeypatch, tmp_path)
+    record = _pending_record(tmp_path)
+    pending_summon.claim(tmp_path, record.token)
+    monkeypatch.setattr(
+      ride_session.subprocess,
+      'run',
+      lambda *_a, **_k: pytest.fail('a spent token must not start a session'),
+    )
+    assert (
+      ride_session._launch_session(
+        _spec(host=True), workspace, None, _launch_scope(), container=False, summoned=record
+      )
+      == 1
+    )
+    assert 'no pending manual summon' in caplog.text
+
   def test_runner_env_gets_the_claude_auth_transform(self, monkeypatch, tmp_path):
     # the outer applies apply_claude_auth to the runner env it spawns, so a
     # worktree whose own runner predates the transform still inherits the token
@@ -1120,3 +1177,173 @@ class TestHostBrokerPingRoundTrip:
     # the session claude state landed in the workspace, seeded from its identity
     seeded = workspace.path / 'claude' / '.claude.json'
     assert json.loads(seeded.read_text())['userID'] == 'u'
+
+
+class TestManualSummonRoundTrip:
+  """a manual summon, live: the root session registers it over a real broker,
+  an external process discovers the pending record, attaches to the provisioned
+  socket as the child, and the blocking summon collects its answer — the whole
+  expected-peer path with no docker and no claude."""
+
+  _ANSWER_CHILD = """
+import json, sys, time
+from pathlib import Path
+from bro.broker.brotocol import Message
+from bro.broker.transport import connect
+
+pending_dir = Path(sys.argv[1])
+deadline = time.time() + 15
+records = []
+while time.time() < deadline:
+  records = list(pending_dir.glob('*.json'))
+  if records:
+    break
+  time.sleep(0.05)
+if not records:
+  sys.exit(3)
+record = json.loads(records[0].read_text())
+client = connect('unix:' + record['socket'])
+client.send(Message(type='started', payload={'trail_id': 't-manual', 'workspace': 'external-ws'}))
+client.send(
+  Message(type='completed', payload={'result': 'the pair verdict', 'end_reason': 'ok'})
+)
+client.close(confirm=True)
+"""
+
+  def test_manual_summon_round_trip_from_a_host_session(self, monkeypatch, capfd, socket_dir):
+    from bro.monitor import trail_pointer as trail_pointer_module
+    from bro.workspace.paths import summon_dir, workspace_dir
+
+    root = socket_dir
+    monkeypatch.setenv('XDG_DATA_HOME', str(root / 'state'))
+    home = root / 'home'
+    home.mkdir()
+    (home / '.claude.json').write_text(json.dumps({'oauthAccount': {'id': 'acct'}, 'userID': 'u'}))
+    monkeypatch.setenv('HOME', str(home))
+    workspace = Workspace.create('w', root, WorkspaceKind.WORKTREE)
+    worktree = workspace.tree
+    answer_child = root / 'answer_child.py'
+    answer_child.write_text(self._ANSWER_CHILD)
+    pending_dir = summon_dir(root) / 'pending'
+    ride_binary = worktree / '.venv' / 'bin' / 'ride'
+    ride_binary.parent.mkdir(parents=True)
+    # stands in for the in-place runner: register the manual summon, let the
+    # external child answer it, and block for the relayed answer
+    ride_binary.write_text(
+      f'#!/bin/sh\npython {answer_child} {pending_dir} &\n'
+      "exec summon --manual bro-dev 'pair on this'\n"
+    )
+    ride_binary.chmod(0o755)
+
+    monkeypatch.setattr(ride_session, 'project_root', lambda: root)
+    monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
+    monkeypatch.setattr(ride_session, 'ensure_host_worktree', lambda *_a: True)
+    monkeypatch.setattr(ride_session, 'provision_host_worktree', lambda *_a: True)
+    monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
+    monkeypatch.setattr(
+      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
+    )
+    monkeypatch.setattr(ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): {})
+    monkeypatch.delenv('BROKER_DISABLED', raising=False)
+    assert (
+      ride_session._launch_session(
+        _spec(host=True), workspace, None, _launch_scope(may_summon={'bro-dev'}), container=False
+      )
+      == 0
+    )
+    # the blocking summon relayed the external child's answer
+    assert 'the pair verdict' in capfd.readouterr().out
+    # the summon ended: the pending record is discarded and the ledger carries ok
+    assert list(pending_dir.glob('*.json')) == []
+    status = json.loads((summon_dir(root) / 'w.status.json').read_text())
+    assert status['active'] == []
+    assert status['last']['outcome'] == 'ok'
+    assert status['last']['trail_id'] == 't-manual'
+    # the started payload's workspace fact routed the trail pointer to the
+    # child's own (user-chosen) workspace
+    pointer = trail_pointer_module.session_pointer(workspace_dir(root, 'external-ws'))
+    assert trail_pointer_module.read(pointer) == 't-manual'
+
+
+def _pending_record(tmp_path, **overrides) -> pending_summon.PendingSummon:
+  record = pending_summon.PendingSummon(
+    **{
+      'token': 'TOK-1',
+      'socket': '/broker/CH.sock',
+      'target': 'bro-dev',
+      'prompt': 'pair on this',
+      'parent_workspace': str(tmp_path / 'parent-tree'),
+      'may_summon': ('dev',),
+      'grant': (),
+      'revoke': (),
+      'summoner': {'trail_id': 'T1'},
+      **overrides,
+    }
+  )
+  pending_summon.write(tmp_path, record)
+  return record
+
+
+class TestSummonedSession:
+  def test_container_summoned_launch_attaches_to_the_summoners_channel(self, tmp_path):
+    record = _pending_record(tmp_path)
+    with (
+      _ContainerHarness() as h,
+      patch('ride.session.run_summoned_in_container', return_value=0) as run,
+      patch('ride.session.container_broker_enabled', return_value=True),
+      patch('ride.session.resolve_head', return_value='parentsha') as head,
+    ):
+      rc = ride_session.start_session(_spec(prompt='pair on this'), summoned=record)
+    assert rc == 0
+    assert h.run_in_container.call_count == 0  # no broker of its own
+    assert head.call_args.args == (tmp_path, ride_session.Path(record.parent_workspace))
+    launch = run.call_args.args[0]
+    assert launch.env['BROKER_CHANNEL'] == 'unix:/run/broker.sock'
+    assert launch.env['RIDE_SUMMONED'] == '1'
+    assert launch.env['RIDE_MAY_SUMMON'] == 'dev'
+    assert launch.env['RIDE_WORKSPACE'] == 'w'
+    assert json.loads(launch.env['RIDE_SUMMONER']) == {'trail_id': 'T1'}
+    assert launch.env['RIDE_BASE_REF'] == 'parentsha'
+    assert f'{record.socket}:/run/broker.sock' in launch.extra_mounts
+    assert launch.tty
+    # the threaded claim consumes the token
+    run.call_args.kwargs['claim']()
+    with pytest.raises(pending_summon.UnknownToken):
+      pending_summon.peek(tmp_path, record.token)
+
+  def test_summon_into_overrides_the_parent_head(self, tmp_path):
+    record = _pending_record(tmp_path, into='release')
+    with (
+      _ContainerHarness(),
+      patch('ride.session.run_summoned_in_container', return_value=0) as run,
+      patch('ride.session.container_broker_enabled', return_value=True),
+      patch('ride.session.resolve_ref', return_value='intosha') as ref,
+    ):
+      rc = ride_session.start_session(_spec(), summoned=record)
+    assert rc == 0
+    assert ref.call_args.args == (tmp_path, 'release')
+    assert run.call_args.args[0].env['RIDE_BASE_REF'] == 'intosha'
+
+  def test_container_summoned_requires_the_broker_channel(self, tmp_path, caplog):
+    record = _pending_record(tmp_path)
+    with (
+      _ContainerHarness() as h,
+      patch('ride.session.container_broker_enabled', return_value=False),
+    ):
+      rc = ride_session.start_session(_spec(), summoned=record)
+    assert rc == 1
+    assert h.run_in_container.call_count == 0
+    assert 'use --host' in caplog.text
+
+  def test_unreadable_parent_head_fails_the_launch(self, tmp_path, caplog):
+    record = _pending_record(tmp_path)
+    with (
+      _ContainerHarness() as h,
+      patch('ride.session.container_broker_enabled', return_value=True),
+      patch('ride.session.resolve_head', return_value=None),
+    ):
+      rc = ride_session.start_session(_spec(), summoned=record)
+    assert rc == 1
+    assert h.run_in_container.call_count == 0
+    assert "cannot read the summoner's HEAD" in caplog.text

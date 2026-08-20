@@ -4,13 +4,15 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Optional
 
 from bro.base import credentials, log
 from bro.launch.broxy import START_SESSION_BROXY_ENV
 from bro.llm.llm import LLMSpec
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_session_dir
-from bro.workspace.git import resolve_ref
+from bro.summon import MAY_SUMMON_ENV, SUMMONED_ENV, SUMMONER_ENV, encode_may_summon
+from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.paths import (
   CONTAINER_SESSION_DIR,
   ensure_runtime_root,
@@ -18,14 +20,20 @@ from bro.workspace.paths import (
   project_root,
   venv_env,
 )
+from ride import pending_summon
 from ride.flags import default_hold
 from ride.harness import Harness, get_harness
 from ride.inner import inner_command
-from ride.root import run_host_process_via_broker, run_in_container
+from ride.root import run_host_process_via_broker, run_in_container, run_summoned_in_container
 from ride.scope import LaunchScopeError, preflight_scoped_launch, scoped_secrets
 from ride.trails import local_trails_mounts
-from ride.workspace.containers import broker_enabled
-from ride.workspace.docker import Launch, find_container_id
+from ride.workspace.containers import broker_enabled, container_broker_enabled
+from ride.workspace.docker import (
+  CONTAINER_BROKER_ADDRESS,
+  CONTAINER_BROKER_SOCK,
+  Launch,
+  find_container_id,
+)
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import KindMismatch, SessionBusy, Workspace
 from ride.workspace.store import ScopedSecrets, log_scoped_secrets, materialize_scoped_store
@@ -167,6 +175,23 @@ def _print_resume_hint(spec: SessionSpec, workspace: Workspace) -> None:
   print(f'  ride resume {workspace.name}')
 
 
+def _summoned_env(
+  summoned: pending_summon.PendingSummon, spec: SessionSpec, address: str
+) -> dict[str, str]:
+  """the env that makes a launch the manual summon child the token names: the
+  summoner's channel, the summoned-child facts, and the workspace name the
+  session announces in its `started` (the base-ref source for its own summons)."""
+  env = {
+    'BROKER_CHANNEL': address,
+    SUMMONED_ENV: '1',
+    MAY_SUMMON_ENV: encode_may_summon(summoned.may_summon),
+    'RIDE_WORKSPACE': spec.name,
+  }
+  if summoned.summoner is not None:
+    env[SUMMONER_ENV] = json.dumps(summoned.summoner, ensure_ascii=False, separators=(',', ':'))
+  return env
+
+
 def _launch_session(
   spec: SessionSpec,
   workspace: Workspace,
@@ -174,6 +199,7 @@ def _launch_session(
   launch_scope: ScopedLaunch,
   *,
   container: bool,
+  summoned: Optional[pending_summon.PendingSummon] = None,
 ) -> int:
   harness = get_harness(spec.harness)
   if container and find_container_id(workspace.tree) is not None:
@@ -191,8 +217,8 @@ def _launch_session(
     log.error('%s', harness.missing_session_error(workspace))
     return 1
   if container:
-    return _container_session(harness, spec, workspace, base_ref, launch_scope)
-  return _host_session(harness, spec, workspace, base_ref, launch_scope)
+    return _container_session(harness, spec, workspace, base_ref, launch_scope, summoned)
+  return _host_session(harness, spec, workspace, base_ref, launch_scope, summoned)
 
 
 def _container_session(
@@ -201,6 +227,7 @@ def _container_session(
   workspace: Workspace,
   base_ref: Optional[str],
   launch_scope: ScopedLaunch,
+  summoned: Optional[pending_summon.PendingSummon],
 ) -> int:
   scoped = launch_scope.scoped
   session_state = workspace_session_dir(workspace.path)
@@ -216,6 +243,10 @@ def _container_session(
     # a run that records nothing binds no trails root
     env['TRAILS_DISABLED'] = '1'
   trails_mounts = () if spec.no_trails else local_trails_mounts(scoped)
+  summoned_mounts = ()
+  if summoned is not None:
+    env.update(_summoned_env(summoned, spec, CONTAINER_BROKER_ADDRESS))
+    summoned_mounts = (f'{summoned.socket}:{CONTAINER_BROKER_SOCK}',)
   launch = Launch(
     name=spec.name,
     command=inner_command(spec, harness_flags=harness.inner_flags(spec)),
@@ -228,9 +259,18 @@ def _container_session(
     extra_mounts=(
       *extras.mounts,
       *trails_mounts,
+      *summoned_mounts,
       f'{session_state}:{CONTAINER_SESSION_DIR}',
     ),
   )
+  if summoned is not None:
+    try:
+      return run_summoned_in_container(
+        launch, workspace, claim=lambda: pending_summon.claim(workspace.project, summoned.token)
+      )
+    except pending_summon.UnknownToken as error:
+      log.error('%s', error)
+      return 1
   return run_in_container(launch, workspace, may_summon=launch_scope.may_summon)
 
 
@@ -240,6 +280,7 @@ def _host_session(
   workspace: Workspace,
   base_ref: Optional[str],
   launch_scope: ScopedLaunch,
+  summoned: Optional[pending_summon.PendingSummon],
 ) -> int:
   os.chdir(project_root())
   worktree = workspace.tree
@@ -273,7 +314,17 @@ def _host_session(
     runner_env['TRAILS_DISABLED'] = '1'
   harness.prepare_host_env(spec, workspace, worktree, runner_env)
   workspace.clear_session_end()
-  if broker_enabled():
+  if summoned is not None:
+    # no broker of its own: the session broxy connects to the summoner's socket,
+    # and the token is claimed only once nothing fallible is left before the run
+    runner_env.update(_summoned_env(summoned, spec, f'unix:{summoned.socket}'))
+    try:
+      pending_summon.claim(workspace.project, summoned.token)
+    except pending_summon.UnknownToken as error:
+      log.error('%s', error)
+      return 1
+    code = subprocess.run(command, cwd=str(worktree), env=runner_env).returncode
+  elif broker_enabled():
     code = run_host_process_via_broker(
       workspace,
       command,
@@ -305,7 +356,9 @@ def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
   return code
 
 
-def start_session(spec: SessionSpec) -> int:
+def start_session(
+  spec: SessionSpec, summoned: Optional[pending_summon.PendingSummon] = None
+) -> int:
   harness = get_harness(spec.harness)
   container = not spec.host
   if in_container():
@@ -326,6 +379,25 @@ def start_session(spec: SessionSpec) -> int:
     if base_ref is None:
       log.error('cannot resolve --into ref: %s', spec.into)
       return 1
+  if summoned is not None:
+    if not (container_broker_enabled() if container else broker_enabled()):
+      log.error(
+        "a manual summon child needs the summoner's broker channel"
+        + ('; use --host on this platform' if container else '')
+      )
+      return 1
+    # the summon request owns the base: its `into` ref, or the summoner's HEAD
+    # read now — like a spawned child's, at the moment the child starts
+    if summoned.into is not None:
+      base_ref = resolve_ref(project, summoned.into)
+      if base_ref is None:
+        log.error('cannot resolve the summon into ref: %s', summoned.into)
+        return 1
+    else:
+      base_ref = resolve_head(project, Path(summoned.parent_workspace))
+      if base_ref is None:
+        log.error("cannot read the summoner's HEAD at %s", summoned.parent_workspace)
+        return 1
 
   auth_error = harness.preflight_auth(spec)
   if auth_error is not None:
@@ -354,7 +426,9 @@ def start_session(spec: SessionSpec) -> int:
   try:
     with workspace.hold_session_lock():
       record_resume_spec(workspace, spec)
-      code = _launch_session(spec, workspace, base_ref, launch, container=container)
+      code = _launch_session(
+        spec, workspace, base_ref, launch, container=container, summoned=summoned
+      )
       return _finish_session(spec, workspace, code)
   except SessionBusy as error:
     log.error('%s', error)

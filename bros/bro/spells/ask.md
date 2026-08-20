@@ -1,7 +1,7 @@
 ---
 name: ask
-description: This spell should be used when the user asks to relay a question or job to another bro — "[[ask researcher to compare the storage options]]", "ask the reviewer whether the change is safe", "have deployer roll out the API", "summon developer". Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials), picks whichever summon client the session has, decides foreground vs background, and relays the answer with the failure modes handled. A summon succeeds only when the target is in the summoner's allow-list — the session reads its own off the banner, fixed at launch — so a denial stays a normal outcome the spell relays.
-version: 1.9.0
+description: This spell should be used when the user asks to relay a question or job to another bro — "[[ask researcher to compare the storage options]]", "ask the reviewer whether the change is safe", "have deployer roll out the API", "summon developer" — including asking for an interactive child the user will drive themselves ("summon a dev session for me", a manual summon). Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials), picks whichever summon client the session has, decides foreground vs background, and relays the answer with the failure modes handled. A summon succeeds only when the target is in the summoner's allow-list — the session reads its own off the banner, fixed at launch — so a denial stays a normal outcome the spell relays.
+version: 1.10.1
 ---
 
 # Ask
@@ -39,6 +39,17 @@ Every summon prints its request id up front (stderr in blocking mode, stdout wit
 
 Without Bash there is no true backgrounding, but the tools cover the long-run case: a blocking `summon` call fits anything conversational (tell the user it may take minutes); for a run that would outlast the surface's tool-call patience, `summon(…, detach: true)` returns the request id, and you check on it with `summon_check` between turns — non-consuming, so polling is safe — collecting with `wait: true` when it reports completed.
 
+## Manual summon — an interactive child the user drives
+
+When the request needs the user *in* the child session — "summon a dev session for me to drive", "open an interactive reviewer I can talk to", or a job that plainly needs human judgment mid-run — make it a **manual summon**: nothing is spawned; instead the host registers the expectation and hands back a token, and the user launches the session themselves.
+
+- **Bash client**: `summon --manual --detach <target> '<prompt>'` — waits for the host to accept, then prints the token (the request id) on stdout and logs the launch command to relay; a denial fails right there, before any token exists. `--into`, `--grant`, `--revoke` still apply; `--timeout`, `--hold`, `--llm`, `--harness` are refused — the user's launch owns those.
+- **Tool client**: `summon` with `manual: true` — returns the token and the launch command once the host accepts; a denial fails the call immediately.
+
+Relay the token to the user as the ready-to-paste command — `ride along --summoned <token> <target>` — and note they may add their own launch flags (`--host`, `--llm`, `--hold`, `--workspace`, a claude/bro harness). The prompt you passed becomes the session's first message; the child bases on this workspace's HEAD *at the moment they launch* (or the `--into` ref you gave).
+
+Then wait like any detached summon: `summon check <token>` polls (pending until the user launches and the child announces itself), `summon watch` streams the start/end events where mounted, and the answer arrives when the child session delivers it via its `answer` tool. There is no timer on a manual summon — pace the polling to human time, and keep working meanwhile. A child session the user quits without delivering surfaces as a failure; that is an answerable outcome, not an error to retry.
+
 ## Relay the answer
 
 The stdout / tool result is the target's terminal reply. Relay it to the user, attributed ("reviewer says: …"), trimmed of nothing substantive. If the user asked for a follow-up action on the answer, continue with it.
@@ -52,7 +63,7 @@ The stdout / tool result is the target's terminal reply. Relay it to the user, a
 
 ## Do not exit with a summon in flight
 
-When the session's root process exits, in-flight summoned children are killed. Before ending the session (or letting it end), wait for pending summons or collect them with `summon check --wait`; if a result was lost this way it is still recoverable from the child's trail.
+When the session's root process exits, in-flight summoned children are killed (an in-flight manual child is only detached — the user's session lives on, but its answer can no longer arrive). Before ending the session (or letting it end), wait for pending summons or collect them with `summon check --wait`; if a result was lost this way it is still recoverable from the child's trail.
 
 ## Stopping one deliberately
 

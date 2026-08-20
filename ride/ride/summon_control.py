@@ -10,7 +10,9 @@ Two layers, both computed per broker root:
   the `summon` request handler (payload validation, per-peer authorization, the
   immediate denial `reply{error}` plus a deny audit entry, the spawn of a
   `SummonLaunchSpec` with the requesting peer as its parent — everything heavy
-  runs off-loop in the spawner, see `ride/ride/spawn.py`), the delivery-tap observer
+  runs off-loop in the spawner, see `ride/ride/spawn.py` — or, for a `manual`
+  request, the expected-peer registration with its pending record, see
+  `ride/ride/pending_summon.py`), the delivery-tap observer
   that tracks each child's trail id and outcome, and the visibility outputs
   those feed: a host-side log line per event, an append-only JSONL audit file
   (the out-of-band trace a session's own narrative cannot suppress; every entry
@@ -80,6 +82,7 @@ from bro.base import credentials, log
 from bro.summon import DEFAULT_HARNESS, DEFAULT_TIMEOUT
 from bro.summon_status import STATUS_ENV
 from bro.workspace.paths import CONTAINER_SUMMON_ROOT, summon_dir, workspace_tree
+from ride import pending_summon
 from ride.harness import HARNESS_NAMES
 from ride.scope import split_scope_overrides
 from ride.workspace.model import Workspace
@@ -88,6 +91,7 @@ if TYPE_CHECKING:
   from bro.broker.brotocol import Message
   from bro.broker.dispatcher import Dispatcher
   from bro.broker.runtime import Peer
+  from bro.broker.transport import Provisioned
 
 __all__ = [
   'STATUS_ENV',
@@ -111,8 +115,12 @@ _PAYLOAD_KEYS = frozenset(
     'revoke',
     'llm',
     'harness',
+    'manual',
   }
 )
+# fields a manual summon refuses: the user's launch owns the session's shape, and
+# there is no host-killable child for a timeout to bound
+_LAUNCH_OWNED_KEYS = ('timeout', 'hold', 'llm', 'harness')
 # the deepest peer a summon may spawn: the root sits at depth 0, its children at
 # 1, grandchildren at 2; a request that would nest deeper is denied — the guard
 # against seed cycles recursing through real containers (see module docstring).
@@ -216,6 +224,12 @@ def _validate(payload: dict[str, Any]) -> Optional[str]:
   harness = payload.get('harness')
   if harness is not None and harness not in HARNESS_NAMES:
     return f"summon 'harness' must be one of {', '.join(HARNESS_NAMES)}"
+  if 'manual' in payload:
+    if payload['manual'] is not True:
+      return "summon 'manual' must be true when present"
+    refused = sorted(key for key in _LAUNCH_OWNED_KEYS if key in payload)
+    if len(refused) > 0:
+      return f"a manual summon's launch owns {', '.join(refused)}; drop the field(s)"
   return None
 
 
@@ -232,7 +246,17 @@ class _ActiveSummon:
   revoke: list[str]
   llm: Optional[str]
   harness: Optional[str]
+  manual: bool = False  # a user-launched child attached over an expected channel
   trail_id: Optional[str] = None
+  # a manual child announces its user-chosen workspace in its `started` payload;
+  # a spawned child's is always its channel-named `broker-<channel>`
+  workspace: Optional[str] = None
+
+
+class _Unattributable(Exception):
+  """a requesting peer whose summon identity cannot be resolved (or, from the
+  credentials thunk, whose credential scope cannot). The message is the denial
+  reason."""
 
 
 @dataclass(frozen=True)
@@ -267,8 +291,9 @@ class SummonControl:
   delivery observer; both run on the broker loop, so everything heavy belongs in
   the spawner and what stays here is kept to the authorization decision itself.
   `log_killed_in_flight` runs once the broker loop ends, even when it raises
-  — root teardown kills in-flight children without a terminal, and their loss must
-  be loud."""
+  — root teardown kills in-flight children without a terminal (a manual child is
+  only detached: the user's session lives on, its channel gone), and their loss
+  must be loud."""
 
   def __init__(
     self,
@@ -301,11 +326,10 @@ class SummonControl:
     from ride.spawn import SummonLaunchSpec
 
     payload = message.payload
-    requester = self._requester(context, peer)
-    if requester is None:
-      self._deny(
-        context, peer, message, None, 'summon denied: cannot attribute the requesting peer to a bro'
-      )
+    try:
+      requester = self._requester(context, peer)
+    except _Unattributable as reason:
+      self._deny(context, peer, message, None, f'summon denied: {reason}')
       return
     error = _validate(payload)
     if error is not None:
@@ -354,7 +378,12 @@ class SummonControl:
       )
       return
     if len(grant_credentials) > 0:
-      beyond = sorted(set(grant_credentials) - requester.credentials())
+      try:
+        held = requester.credentials()
+      except _Unattributable as reason:
+        self._deny(context, peer, message, requester.summoner, f'summon denied: {reason}')
+        return
+      beyond = sorted(set(grant_credentials) - held)
       if len(beyond) > 0:
         self._deny(
           context,
@@ -365,7 +394,6 @@ class SummonControl:
           f'hold: {", ".join(beyond)}',
         )
         return
-    timeout = payload.get('timeout')
     prompt = payload['prompt']
     summoned_by = requester.summoned_by
     step_id = payload.get('step_id')
@@ -373,6 +401,19 @@ class SummonControl:
       summoned_by = {**summoned_by, 'step_id': step_id}
       if payload.get('index') is not None:
         summoned_by['index'] = payload['index']
+    if payload.get('manual', False):
+      self._expect_manual(
+        context,
+        peer,
+        message,
+        requester,
+        summoned_by=summoned_by,
+        child_allow_list=child_allow_list,
+        grant=list(grant),
+        revoke=list(revoke),
+      )
+      return
+    timeout = payload.get('timeout')
     context.spawn(
       SummonLaunchSpec(
         target=target,
@@ -414,12 +455,82 @@ class SummonControl:
     self._audit('spawn', record)
     self._write_status()
 
-  def _requester(self, context: 'Dispatcher', peer: 'Peer') -> Optional['_Requester']:
+  def _expect_manual(
+    self,
+    context: 'Dispatcher',
+    peer: 'Peer',
+    message: 'Message',
+    requester: _Requester,
+    *,
+    summoned_by: Optional[dict[str, Any]],
+    child_allow_list: set[str],
+    grant: list[str],
+    revoke: list[str],
+  ) -> None:
+    """register the authorized manual summon as an expected external child:
+    provision its channel, write the pending record the token (the request id)
+    resolves to, and wait for the user's launch — unbounded by any host timer,
+    since the launch is paced by a human and there is no child to kill."""
+    payload = message.payload
+    target = payload['target']
+    prompt = payload['prompt']
+
+    def _ready(provisioned: 'Provisioned') -> None:
+      # function-local like SummonLaunchSpec in handle (ride/AGENTS.md, "Lazy
+      # broker import")
+      from bro.broker.brotocol import Message, Tag
+
+      pending_summon.write(
+        self._workspace.project,
+        pending_summon.PendingSummon(
+          token=message.id,
+          socket=str(provisioned.host_endpoint),
+          target=target,
+          prompt=prompt,
+          parent_workspace=str(requester.workspace),
+          may_summon=tuple(sorted(child_allow_list)),
+          grant=tuple(grant),
+          revoke=tuple(revoke),
+          summoner=summoned_by,
+          into=payload.get('into'),
+        ),
+      )
+      # the requester's client blocks on this acknowledgment before handing the
+      # token to the user, so it is sent only once the token is claimable
+      context.deliver(peer, Message(type=Tag.ACCEPTED, payload={}, in_reply_to=message.id))
+      record = _ActiveSummon(
+        request_id=message.id,
+        target=target,
+        prompt_head=_prompt_head(prompt),
+        started_at=time.time(),
+        summoner=requester.summoner,
+        depth=requester.depth + 1,
+        allow_list=child_allow_list,
+        grant=grant,
+        revoke=revoke,
+        llm=None,
+        harness=None,
+        manual=True,
+      )
+      self._active[message.id] = record
+      log.info(
+        'summon: %s expecting a manual %s launch (token %s): %s',
+        self._workspace.name,
+        target,
+        message.id,
+        record.prompt_head,
+      )
+      self._audit('expect', record)
+      self._write_status()
+
+    context.expect(peer, timeout=None, ready=_ready)
+
+  def _requester(self, context: 'Dispatcher', peer: 'Peer') -> '_Requester':
     """resolve the requesting peer's summon identity: the root follows the
     session's launch-computed effective allow-list; a summoned child follows the
     list its own summon resolved, attributed through the dispatcher's `origin`
-    topology and this control's spawn records. None when the peer cannot be
-    attributed a bro."""
+    topology and this control's spawn records. Raises `_Unattributable` for a
+    peer that cannot be attributed a bro."""
     if peer == context.root:
       return _Requester(
         allow_list=self._allow_list,
@@ -433,11 +544,18 @@ class SummonControl:
     origin = context.origin.get(peer)
     record = self._active.get(origin[1]) if origin is not None else None
     if record is None:
-      return None
+      raise _Unattributable('cannot attribute the requesting peer to a bro')
     # function-local like SummonLaunchSpec above: ride.spawn imports broker at
     # module level (ride/AGENTS.md, "Lazy broker import")
     from ride.spawn import _workspace_name
 
+    if record.manual and record.workspace is None:
+      # the user-chosen workspace arrives in the child's `started`; before that
+      # there is no base-ref source to inherit from
+      raise _Unattributable(
+        'the manual child has not announced its session start yet; retry shortly'
+      )
+    workspace_name = record.workspace if record.workspace is not None else _workspace_name(peer)
     return _Requester(
       allow_list=set(record.allow_list),
       credentials=lambda: self._child_credentials(record),
@@ -445,7 +563,7 @@ class SummonControl:
       summoned_by={'trail_id': record.trail_id} if record.trail_id is not None else None,
       depth=record.depth,
       list_description=f"{record.target}'s summon allow-list",
-      workspace=workspace_tree(self._workspace.project, _workspace_name(peer)),
+      workspace=workspace_tree(self._workspace.project, workspace_name),
     )
 
   def _child_credentials(self, record: _ActiveSummon) -> set[str]:
@@ -454,6 +572,13 @@ class SummonControl:
     from ride.harness import get_harness
     from ride.scope import summoned_credential_scope
 
+    if record.manual:
+      # a manual child's actual scope was computed by its own launch, from flags
+      # this control never sees — there is no record to recompute it from
+      raise _Unattributable(
+        "a manual child's credential scope is not attributable; grant the "
+        'credential at its own launch instead'
+      )
     harness = get_harness(record.harness if record.harness is not None else DEFAULT_HARNESS)
     grant, _ = split_scope_overrides(record.grant)
     revoke, _ = split_scope_overrides(record.revoke)
@@ -518,6 +643,9 @@ class SummonControl:
       return
     if message.type == Tag.STARTED:
       record.trail_id = message.payload.get('trail_id')
+      workspace = message.payload.get('workspace')
+      if isinstance(workspace, str) and len(workspace) > 0:
+        record.workspace = workspace
       log.info('summon: %s started (trail %s)', record.target, record.trail_id)
       self._write_status()
       return
@@ -530,6 +658,10 @@ class SummonControl:
 
   def _finish(self, record: _ActiveSummon, outcome: str) -> None:
     del self._active[record.request_id]
+    if record.manual:
+      # a manual summon that ended before its token was claimed leaves a record
+      # no launch may consume any more
+      pending_summon.discard(self._workspace.project, record.request_id)
     self._last = summon_status.FinishedSummon(
       request_id=record.request_id,
       target=record.target,
@@ -548,6 +680,18 @@ class SummonControl:
     if len(self._active) == 0:
       return  # nothing killed, and a summon-less session never writes state files
     for record in list(self._active.values()):
+      if record.manual:
+        # the root's exit only closed the channel; a manual child is the user's
+        # own session and lives on, un-summoned
+        log.warning(
+          'summon: root exit detached in-flight manual child %s (token %s, trail %s)',
+          record.target,
+          record.request_id,
+          record.trail_id,
+        )
+        self._audit('end', record, outcome='detached')
+        pending_summon.discard(self._workspace.project, record.request_id)
+        continue
       log.warning(
         'summon: root exit killed in-flight child %s (request %s, trail %s)',
         record.target,
@@ -574,6 +718,8 @@ class SummonControl:
       entry['revoke'] = record.revoke
     if record.harness is not None:
       entry['harness'] = record.harness
+    if record.manual:
+      entry['manual'] = True
     if outcome is not None:
       entry['outcome'] = outcome
     self._append_audit(event, entry)
@@ -601,6 +747,7 @@ class SummonControl:
           trail_id=record.trail_id,
           summoner=record.summoner,
           started_at=record.started_at,
+          manual=record.manual,
         )
         for record in self._active.values()
       ),

@@ -78,22 +78,23 @@ def _run_claude(argv: list[str], env: dict[str, str]) -> int:
 _TRAIL_POLL_SECONDS = 1.0
 
 
-def _announce_started(announced: threading.Event) -> None:
-  """emit `started{trail_id}` once, with the trail id the session recorder
-  published; no-op when it is not published yet or the session has no channel."""
+def _announce_started(announced: threading.Event, workspace: str) -> None:
+  """emit `started{trail_id, workspace}` once, with the trail id the session
+  recorder published; no-op when it is not published yet or the session has no
+  channel."""
   pointer = trail_pointer.path()
   trail_id = trail_pointer.read(pointer) if pointer is not None else None
   if trail_id is None or announced.is_set():
     return
   channel = BroChannel.from_env()
   if channel is not None:
-    channel.started(trail_id)
+    channel.started(trail_id, workspace=workspace)
     channel.close()
   announced.set()
 
 
 @contextlib.contextmanager
-def _started_watch() -> Generator[threading.Event]:
+def _started_watch(workspace: str) -> Generator[threading.Event]:
   """watch for the session recorder's current-trail pointer for the block's
   duration and announce `started` when it lands, yielding the announced event."""
   announced = threading.Event()
@@ -101,7 +102,7 @@ def _started_watch() -> Generator[threading.Event]:
 
   def _watch() -> None:
     while not stop.wait(_TRAIL_POLL_SECONDS):
-      _announce_started(announced)
+      _announce_started(announced, workspace)
       if announced.is_set():
         return
 
@@ -114,30 +115,40 @@ def _started_watch() -> Generator[threading.Event]:
     thread.join()
 
 
-def _run_claude_summoned(argv: list[str], env: dict[str, str]) -> int:
-  """the `_run_claude` of a summoned child: claude runs in print mode with its
-  stdout captured, and the runner emits the run lifecycle a bro-run child gets
-  from `BaseBro.run` — `started{trail_id}` once the session recorder publishes
-  the current-trail pointer, and `completed{result, end_reason: ok}` carrying
-  the printed reply after a clean exit. A non-zero or SIGTERMed exit emits no
-  terminal: the broker synthesizes `failed{exit, output_tail}` for the former,
-  and a `raise`-terminated session already sent its own `completed`. The
-  captured reply is echoed to stdout either way, so the child's output tail
-  still carries it."""
+def _run_claude_summoned(argv: list[str], env: dict[str, str], workspace: str) -> int:
+  """the `_run_claude` of a summoned solo child: claude runs in print mode with
+  its stdout captured, and the runner emits the run lifecycle a bro-run child
+  gets from `BaseBro.run` — `started{trail_id, workspace}` once the session
+  recorder publishes the current-trail pointer, and `completed{result,
+  end_reason: ok}` carrying the printed reply after a clean exit. A non-zero or
+  SIGTERMed exit emits no terminal: the broker synthesizes `failed{exit,
+  output_tail}` for the former, and a `raise`- or `answer`-terminated session
+  already sent its own `completed`. The captured reply is echoed to stdout
+  either way, so the child's output tail still carries it."""
   process = subprocess.Popen(['claude', *argv], env=env, stdout=subprocess.PIPE, text=True)
-  with sigterm_forwarded_to(process) as terminated, _started_watch() as announced:
+  with sigterm_forwarded_to(process) as terminated, _started_watch(workspace) as announced:
     output, _ = process.communicate()
   print(output, end='', flush=True)
   if process.returncode != 0 or terminated.is_set():
     return process.returncode
   # a run short enough to end inside the recorder's adoption cadence announces
   # here or not at all; the terminal must not wait on recording
-  _announce_started(announced)
+  _announce_started(announced, workspace)
   channel = BroChannel.from_env()
   if channel is not None:
     channel.completed(output.rstrip('\n'), 'ok')
     channel.close()
   return process.returncode
+
+
+def _run_claude_summoned_interactive(argv: list[str], env: dict[str, str], workspace: str) -> int:
+  """the `_run_claude` of a manual summon child: claude runs interactively as
+  usual, and the runner only announces `started{trail_id, workspace}`. The
+  terminal is the `answer` service tool's own `completed` — a session that ends
+  without it produced no answer, which the broker turns into the summoner's
+  synthesized failure when the channel goes."""
+  with _started_watch(workspace):
+    return _run_claude(argv, env)
 
 
 def run_in_place(spec: 'SessionSpec') -> int:
@@ -216,9 +227,11 @@ def run_in_place(spec: 'SessionSpec') -> int:
     env['MCP_TOOL_TIMEOUT'] = str(10 * 60 * 1000)
     apply_claude_auth(env, warn_when_missing=not options(spec).raw)
     log.info('launching claude')
-    if os.environ.get(SUMMONED_ENV) is not None:
-      code = _run_claude_summoned(launch.argv, env)
-    else:
+    if os.environ.get(SUMMONED_ENV) is None:
       code = _run_claude(launch.argv, env)
+    elif spec.solo:
+      code = _run_claude_summoned(launch.argv, env, spec.name)
+    else:
+      code = _run_claude_summoned_interactive(launch.argv, env, spec.name)
 
   return code

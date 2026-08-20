@@ -12,7 +12,8 @@
 - `ride/scope.py` — per-surface launch scoping: `ScopeRecipe`, `BRO_RUN_RECIPE`, project-bound credential selection, `scoped_secrets`, the strict launch preflight, scope override splitting, and summoned-child scope computation. In-process `bro run` / `bro chat` create no scope.
 - `ride/root.py` — neutral container and host-process root supervision behind the broker availability gate.
 - `ride/spawn.py` — broker-root composition, root lifecycle handlers, native trail-pointer publication for the root and summoned children, summon lowering — each child composed through its requested harness's seam hooks, with its recorded resume spec — and per-root `SummonControl` wiring.
-- `ride/summon_control.py` — summon host authorization, allow-list resolution, audit/status bookkeeping, and request lifecycle. The peer wire and self-contained CLI are the framework's `bro/summon.py`.
+- `ride/summon_control.py` — summon host authorization, allow-list resolution, audit/status bookkeeping, and request lifecycle — the manual variant included, registered as an expected external peer with its pending record. The peer wire and self-contained CLI are the framework's `bro/summon.py`.
+- `ride/pending_summon.py` — pending manual summons: the record a launch token resolves to, written by the control and one-shot-claimed by the `--summoned` launch.
 - `ride/trails.py` — local-trails mounts for launch descriptions whose computed scope records locally.
 - `ride/identity.py` — managed-session git identity.
 - `ride/harness.py` — the `Harness` protocol (flag registration and option packing, scope, auth, session reads, and the launch hooks: inner argv flags, the in-place run, container extras, host runner env), the harness roster, and the lazy harness resolver.
@@ -27,7 +28,7 @@
 ## Invariants
 
 - The runtime layer names no Claude detail in its serialized harness options. `SessionSpec.harness_options` belongs to the selected implementation and is validated there.
-- The neutral layer owns both launch bodies; the harness seam supplies scope recipes, auth, LLM resolution, the inner command, session-state reads, and the per-harness launch extras. The in-place runner is the Claude harness's alone — bro workspaces run `bro run|chat`. A managed native container or host worktree is always launched by `ride`; a summon child is always launched by `summon`.
+- The neutral layer owns both launch bodies; the harness seam supplies scope recipes, auth, LLM resolution, the inner command, session-state reads, and the per-harness launch extras. The in-place runner is the Claude harness's alone — bro workspaces run `bro run|chat`. A managed native container or host worktree is always launched by `ride`; a summon child is spawned by `summon` — except a manual one, which the user launches with `ride along --summoned <token>` against the summoner's provisioned channel.
 - Every harness keeps its session state among the workspace's own records, so reclaiming a workspace is `Workspace.remove()` for all of them and no harness supplies a teardown of its own.
 - Claude workspaces run their checkout's `ride solo|along --in-place`, a hidden inner contract that fails loudly when the workspace tree predates it. Native workspaces run plain `bro run|chat …`, which carries no contract marker — a tree based on a ref that predates the in-process verbs runs its older CLI unguarded, out of support rather than detected.
 - A bro resume reads the broker-published pointer from the workspace's `session/` dir and continues that trail under the recipe recorded in the session spec. No pointer is synthesized when the broker or native trail recording is disabled.

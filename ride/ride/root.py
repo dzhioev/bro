@@ -1,5 +1,5 @@
 import subprocess
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from dataclasses import replace
 
 from ride.workspace.containers import attach_interactive, container_broker_enabled
@@ -72,6 +72,22 @@ def run_host_process_via_broker(
     may_summon=may_summon,
     credential_scope=credential_scope,
   )
+
+
+def run_summoned_in_container(
+  launch: Launch, workspace: Workspace, *, claim: Callable[[], object]
+) -> int:
+  """run a manual summon child's container launch: no broker of its own — its
+  `BROKER_CHANNEL` already points at the summoner's provisioned socket in
+  `launch.env` — prepared first, the token claimed only once nothing fallible is
+  left before the attach, then attached interactively."""
+  log_scoped_secrets(launch.name, launch.secrets, launch.optional_secrets)
+  workspace.clear_session_end()
+  container_id = prepare_container(launch, workspace.project)
+  claim()
+  code = attach_interactive(container_id)
+  workspace.record_session_end(code)
+  return code
 
 
 def run_in_container(

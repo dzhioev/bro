@@ -231,20 +231,25 @@ def _note_root_started(control: SummonControl, workspace: Workspace):
 
 
 def _note_child_started(project: Path):
-  """publish each summoned child's `started` trail id as its channel-named
-  workspace's session trail pointer — what makes a failed child's surviving
-  workspace resumable. Registered as a delivery observer, which sees only
-  correlated child deliveries — never the root's own `started`, so no pointer is
-  fabricated for a workspace that doesn't exist."""
+  """publish each summoned child's `started` trail id as its workspace's session
+  trail pointer — what makes a failed child's surviving workspace resumable.
+  Registered as a delivery observer, which sees only correlated child deliveries
+  — never the root's own `started`, so no pointer is fabricated for a workspace
+  that doesn't exist. A spawned child's workspace is its channel-named
+  `broker-<channel>`; a manual child names its user-chosen one in the payload."""
 
   def _observe(source: Optional[Peer], target: Peer, message: Message) -> None:
     del target
     if message.type != Tag.STARTED or source is None:
       return
     trail_id = message.payload.get('trail_id')
-    if isinstance(trail_id, str) and len(trail_id) > 0:
-      pointer = trail_pointer.session_pointer(workspace_dir(project, _workspace_name(source)))
-      trail_pointer.write(pointer, trail_id)
+    if not isinstance(trail_id, str) or len(trail_id) == 0:
+      return
+    workspace = message.payload.get('workspace')
+    name = (
+      workspace if isinstance(workspace, str) and len(workspace) > 0 else _workspace_name(source)
+    )
+    trail_pointer.write(trail_pointer.session_pointer(workspace_dir(project, name)), trail_id)
 
   return _observe
 

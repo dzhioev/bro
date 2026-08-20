@@ -12,7 +12,8 @@ from typing import Optional, TextIO
 
 import bro.base.args as base_args
 from bro.base import log
-from bro.bro import BroRaised
+from bro.bro import AnswerDelivered, BroRaised
+from bro.channel import BroChannel
 from bro.launch.llm_flags import (
   EFFORT_HELP,
   FAST_HELP,
@@ -244,18 +245,21 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     initial: Optional[str] = args['what']
     use_tui = _tui_supported()
 
+    delivered: Optional[AnswerDelivered] = None
     try:
       with runner:
         if use_tui:
           from bro.launch.call_tui import ChatApp
 
-          ChatApp(
+          app = ChatApp(
             runner,
             initial,
             history=history,
             hold=hold,
             preset_name=PresetName.CHAT,
-          ).run()
+          )
+          app.run()
+          delivered = app.delivered
         else:
           asyncio.run(
             call_text(
@@ -266,6 +270,8 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
               preset_name=PresetName.CHAT,
             )
           )
+    except AnswerDelivered as escaped:
+      delivered = escaped
     except BroRaised as error:
       log.error('raised: %s', error.reason)
       return 1
@@ -280,3 +286,19 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
           args['bro'],
           runner.trail_id,
         )
+    if delivered is not None:
+      return _relay_summoned_answer(delivered.answer)
+    return None
+
+
+def _relay_summoned_answer(answer: str) -> int:
+  """send a summoned conversation's `answer`-tool result to the summoner as the
+  run terminal — the chat surface's half of the bare `answer` flavor."""
+  channel = BroChannel.from_env()
+  if channel is None:
+    log.error('no broker channel; the answer cannot reach the summoner: %s', answer)
+    return 1
+  channel.completed(answer, 'ok')
+  channel.close()
+  log.info('answer delivered to the summoner')
+  return 0

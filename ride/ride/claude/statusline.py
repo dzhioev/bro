@@ -59,6 +59,10 @@ def _summon_parts(now: float) -> list[str]:
   parts = []
   for active in status.active:
     age = _age(now - active.started_at)
+    if active.manual and active.trail_id is None:
+      # registered but not launched: the user holds the token
+      parts.append(f'{_YELLOW}⚡ awaiting manual {active.target} launch {age}{_RESET}')
+      continue
     parts.append(f'{_YELLOW}⚡ summoning {active.target} {age} ({_trail(active.trail_id)}){_RESET}')
   last = status.last
   if last is not None and now - last.ended_at < _LAST_OUTCOME_TTL:

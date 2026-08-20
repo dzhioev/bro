@@ -20,6 +20,19 @@ and `llm` is the canonical `provider:model:effort+fast` recipe the child runs
 within it (`bro.llm.providers`); a recipe the named harness cannot run fails the
 spawn rather than switching the harness.
 
+`manual: true` makes the request a *manual summon*: the host spawns nothing and
+instead provisions a channel for a child the user launches themselves — the
+request id doubles as the token the user's `ride along --summoned <token>`
+launch consumes (`manual_launch_command` renders the exact command to relay).
+The host acknowledges the registration with an interim `accepted` once the
+token is live, and the manual client waits for it (`ACCEPT_TIMEOUT`), so a
+denial fails at the summon — never later, after a dead token was already handed
+to the user. The child then attaches as a regular summon peer, so the
+check/collect flow is unchanged; the natural shape is `--detach` + polling,
+since the launch is paced by a human. A manual request refuses `timeout`,
+`hold`, `llm`, and `harness` — the user's launch owns the session's shape, and
+there is no host-killable child for a timeout to bound.
+
 Blocking mode sends, prints the request id and the `started` trail id to stderr,
 and relays the terminal: the answer on stdout (exit 0), everything else as a
 `SummonError` on stderr (exit 1) — a `completed` whose `end_reason` is `raised` or
@@ -119,10 +132,18 @@ LAUNCH_TIMEOUT = 1800.0
 # a check is answered by the session broxy locally and immediately — this bound only
 # turns a wedged or unanswering broxy into a clean failure instead of a hang
 CHECK_TIMEOUT = 10.0
+# a manual summon is acknowledged (accepted or denied) by the host handler as soon
+# as it provisions the channel — this bound only turns a wedged host into a clean
+# failure instead of a hang
+ACCEPT_TIMEOUT = 30.0
 # `summon check` exit code while the result is not in yet (0 = answer relayed,
 # 1 = failure, 2 = argparse usage error)
 PENDING_EXIT_CODE = 3
 HOLD_HELP = "the child's user-involvement level; omitted lets the child use its unattended default"
+MANUAL_HELP = (
+  'register a manual summon instead of spawning: the request id becomes the token '
+  'a user-launched `ride along --summoned <token>` session answers'
+)
 HARNESS_HELP = (
   f"the harness the child runs under: '{DEFAULT_HARNESS}' (default — the target's own LLM "
   "process) or 'claude' (a one-shot managed Claude Code session)"
@@ -133,6 +154,12 @@ REVOKE_HELP = (
 )
 INTO_HELP = "base the child's workspace on this git ref instead of the summoner's workspace HEAD"
 DETACH_HELP = 'print the request id and exit after sending; collect it with summon check'
+
+
+def manual_launch_command(request_id: str, target: str) -> str:
+  """the ride command that launches a manual summon's child session — what the
+  summoner relays to the user along with the token (the request id)."""
+  return f'ride along --summoned {request_id} {target}'
 
 
 def encode_may_summon(targets: Collection[str]) -> str:
@@ -218,6 +245,7 @@ def _payload(
   revoke: Optional[list[str]] = None,
   llm: Optional[str] = None,
   harness: Optional[str] = None,
+  manual: bool = False,
 ) -> dict[str, Any]:
   payload: dict[str, Any] = {'target': target, 'prompt': prompt}
   if timeout is not None:
@@ -238,6 +266,8 @@ def _payload(
     payload['llm'] = llm
   if harness is not None:
     payload['harness'] = harness
+  if manual:
+    payload['manual'] = True
   return payload
 
 
@@ -291,13 +321,17 @@ def _await_answer(
 ) -> str:
   """block for the request's terminal and interpret it; returns the answer or
   raises `SummonError` with the failure reason. The wait opens bounded at
-  `max(timeout, LAUNCH_TIMEOUT)` and re-arms to `timeout` on each `started`
+  `max(timeout, LAUNCH_TIMEOUT)` and re-arms to `timeout` on each interim
   (see the module docstring)."""
+  from bro.broker.brotocol import Tag
+
   trail_id: Optional[str] = None
   started_seen = False
 
-  def _started(message: 'Message') -> None:
+  def _interim(message: 'Message') -> None:
     nonlocal trail_id, started_seen
+    if message.type != Tag.STARTED:
+      return
     started_seen = True
     trail_id = message.payload.get('trail_id')
     if on_started is not None and trail_id is not None:
@@ -306,7 +340,7 @@ def _await_answer(
   launch_bound = max(timeout, LAUNCH_TIMEOUT)
   try:
     terminal = client.await_reply(
-      request, launch_bound, on_started=_started, timeout_after_started=timeout
+      request, launch_bound, on_interim=_interim, timeout_after_interim=timeout
     )
   except TimeoutError:
     if started_seen:
@@ -407,6 +441,51 @@ def summon_detached(
     return client.send(SUMMON, payload).id
 
 
+def _await_acceptance(client: 'Client', request: 'Message') -> None:
+  """block until the host acknowledges a manual summon with `accepted`; a denial
+  or failed registration raises `SummonError` with the reason."""
+  from bro.broker.brotocol import Tag
+
+  try:
+    first = client.await_any(request, ACCEPT_TIMEOUT)
+  except TimeoutError:
+    raise SummonError(
+      f'no acknowledgment within {ACCEPT_TIMEOUT:.0f}s of the manual summon — '
+      "check the session's summon audit and host log"
+    ) from None
+  except ConnectionError as e:
+    raise SummonError(f'broker channel closed awaiting the manual summon acknowledgment: {e}') from None  # fmt: skip
+  if first.type == Tag.ACCEPTED:
+    return
+  if first.type in (Tag.REPLY, Tag.FAILED):
+    _interpret_terminal(first, None)  # denials and failed registrations raise here
+  raise SummonError(f'unexpected manual summon acknowledgment {first.type!r}: {first.payload}')
+
+
+def summon_manual(
+  target: str,
+  prompt: str,
+  *,
+  into: Optional[str] = None,
+  grant: Optional[list[str]] = None,
+  revoke: Optional[list[str]] = None,
+  step_id: Optional[int] = None,
+  index: Optional[int] = None,
+) -> str:
+  """register one manual summon and return its token (the request id) once the
+  host acknowledges the registration — so a denial fails here, at the summon,
+  never later at collection: the token a user is told to launch against is a
+  token the host is already expecting. Poll or collect the token with
+  `check_summon` / `collect_summon` like any detached summon. Raises
+  `SummonError` on denial, a failed registration, or a host that never
+  acknowledges."""
+  payload = _payload(target, prompt, into=into, grant=grant, revoke=revoke, manual=True, step_id=step_id, index=index)  # fmt: skip
+  with _open_client() as client:
+    request = client.send(SUMMON, payload)
+    _await_acceptance(client, request)
+    return request.id
+
+
 @dataclass(frozen=True)
 class SummonStatus:
   """a `check_summon` outcome: the answer once a result was readable, `pending`
@@ -440,14 +519,14 @@ def check_summon(request_id: str, *, last_seen: Optional[int] = None) -> SummonS
     trail_id: Optional[str] = None
     interim_count = 0
 
-    def _started(message: 'Message') -> None:
+    def _interim(message: 'Message') -> None:
       nonlocal trail_id, interim_count
       interim_count += 1
       if message.payload.get('trail_id') is not None:
         trail_id = message.payload.get('trail_id')
 
     try:
-      terminal = client.await_reply(check, CHECK_TIMEOUT, on_started=_started)
+      terminal = client.await_reply(check, CHECK_TIMEOUT, on_interim=_interim)
     except TimeoutError:
       raise SummonError(
         f'no check reply within {CHECK_TIMEOUT:.0f}s — the session broxy is not answering'
@@ -568,11 +647,15 @@ def relay_summon(
   revoke: Optional[list[str]] = None,
   llm: Optional[str] = None,
   harness: Optional[str] = None,
+  manual: bool = False,
 ) -> int:
   """send one summon and relay its outcome as a CLI would: the request id and
   the started trail id to stderr, the answer to stdout, any failure as an error
   log line. Returns the exit code — the blocking `summon` CLI mode, exposed for
-  the self-contained blocking `summon` CLI."""
+  the self-contained blocking `summon` CLI. A blocking manual summon prints the
+  launch command to relay once the host accepts (a denial fails right there);
+  note the wait after acceptance is still bounded like any blocking summon, so a
+  user slower than `LAUNCH_TIMEOUT` is better served by `--detach`."""
   payload = _payload(
     target,
     prompt,
@@ -583,6 +666,7 @@ def relay_summon(
     revoke=revoke,
     llm=llm,
     harness=harness,
+    manual=manual,
   )
   try:
     client = _open_client()
@@ -592,6 +676,13 @@ def relay_summon(
   with client:
     request = client.send(SUMMON, payload)
     log.info('summon request %s', request.id)
+    if manual:
+      try:
+        _await_acceptance(client, request)
+      except SummonError as e:
+        log.error('%s', e)
+        return 1
+      log.info('have the user run: %s', manual_launch_command(request.id, target))
     effective = timeout if timeout is not None else DEFAULT_TIMEOUT
     return _relay(
       lambda: _await_answer(
@@ -738,6 +829,7 @@ def main(argv: list[str]) -> Optional[int]:
     metavar='SECONDS',
     help=f'seconds before the host kills the child (default: {DEFAULT_TIMEOUT:.0f})',
   )
+  parser.add_argument('--manual', action='store_true', help=MANUAL_HELP)
   parser.add_argument('--detach', action='store_true', help=DETACH_HELP)
   args = parser.parse(argv)
   try:
@@ -745,20 +837,41 @@ def main(argv: list[str]) -> Optional[int]:
   except LLMSelectionError as error:
     log.error('%s', error)
     return 1
+  if args['manual']:
+    launch_owned = {
+      '--timeout': args['timeout'],
+      '--hold': args['hold'],
+      '--harness': args['harness'],
+      '--llm': args['llm'],
+    }
+    passed = sorted(flag for flag, value in launch_owned.items() if value is not None)
+    if len(passed) > 0:
+      log.error("a manual summon's launch owns %s; drop the flag(s)", ', '.join(passed))
+      return 1
   os.environ.setdefault('BRO_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=['summon'])))
   if args['detach']:
     try:
-      request_id = summon_detached(
-        args['target'],
-        args['prompt'],
-        timeout=args['timeout'],
-        into=args['into'],
-        hold=args['hold'],
-        grant=args['grant'],
-        revoke=args['revoke'],
-        llm=args['llm'],
-        harness=args['harness'],
-      )
+      if args['manual']:
+        request_id = summon_manual(
+          args['target'],
+          args['prompt'],
+          into=args['into'],
+          grant=args['grant'],
+          revoke=args['revoke'],
+        )
+        log.info('have the user run: %s', manual_launch_command(request_id, args['target']))
+      else:
+        request_id = summon_detached(
+          args['target'],
+          args['prompt'],
+          timeout=args['timeout'],
+          into=args['into'],
+          hold=args['hold'],
+          grant=args['grant'],
+          revoke=args['revoke'],
+          llm=args['llm'],
+          harness=args['harness'],
+        )
     except SummonError as error:
       log.error('%s', error)
       return 1
@@ -774,4 +887,5 @@ def main(argv: list[str]) -> Optional[int]:
     revoke=args['revoke'],
     llm=args['llm'],
     harness=args['harness'],
+    manual=args['manual'],
   )
