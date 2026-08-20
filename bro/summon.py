@@ -17,8 +17,10 @@ by the sender's own scope, so a name it does not hold itself comes back denied.
 `harness` names the driving loop the child runs under — `bro` (the default: the
 target's own LLM process) or `claude` (a one-shot managed Claude Code session) —
 and `llm` is the canonical `provider:model:effort+fast` recipe the child runs
-within it (`bro.llm.providers`); a recipe the named harness cannot run fails the
-spawn rather than switching the harness.
+within it (`bro.llm.providers`); a recipe the named harness cannot run comes back
+denied rather than switching the harness. A driving loop authenticates with
+credentials of its own, so the same bound applies to whatever the pair adds on
+top of the target's own default scope.
 
 `manual: true` makes the request a *manual summon*: the host spawns nothing and
 instead provisions a channel for a child the user launches themselves — the

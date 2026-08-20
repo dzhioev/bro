@@ -42,6 +42,9 @@ summons reaches authority the session was not launched with. Both bounds are the
 requester's: `allow_list` for `@bro` values, and its credential scope for the
 rest — the root's threaded in at construction from what the launch hydrated, a
 summoned child's recomputed from its own spawn record (`_child_credentials`).
+`harness` and `llm` widen without naming a credential — the driving loop they
+select brings its own — and answer to the same credential bound, applied to what
+they add on top of the target's own default scope (`_credential_refusal`).
 
 The request's `grant`/`revoke` split by kind: `@bro` values resolve here, on the
 loop, so a malformed or no-op override is denied immediately, while the unified
@@ -72,7 +75,7 @@ imports stay function-local: this module sits on the launch path before the
 
 import json
 import time
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -83,8 +86,8 @@ from bro.summon import DEFAULT_HARNESS, DEFAULT_TIMEOUT
 from bro.summon_status import STATUS_ENV
 from bro.workspace.paths import CONTAINER_SUMMON_ROOT, summon_dir, workspace_tree
 from ride import pending_summon
-from ride.harness import HARNESS_NAMES
-from ride.scope import split_scope_overrides
+from ride.harness import HARNESS_NAMES, get_harness
+from ride.scope import split_scope_overrides, summoned_credential_scope
 from ride.workspace.model import Workspace
 
 if TYPE_CHECKING:
@@ -165,6 +168,29 @@ def summon_allow_list(bro_name: str, *, grant: list[str], revoke: list[str]) -> 
   return credentials.apply_grant_revoke(
     seeds, grant=grant, revoke=revoke, subject='summon allow-list'
   )
+
+
+def _summoned_credentials(
+  target: str,
+  harness_name: Optional[str],
+  llm: Optional[str],
+  *,
+  grant: Sequence[str] = (),
+  revoke: Sequence[str] = (),
+) -> set[str]:
+  """the credential names a summon of `target` under the request's `harness`,
+  `llm` and credential overrides hydrates, across both tiers — the same
+  computation the lowering runs (`ride/ride/spawn.py:_lower_summon`), over the
+  same defaults its session spec records."""
+  harness = get_harness(harness_name if harness_name is not None else DEFAULT_HARNESS)
+  scoped = summoned_credential_scope(
+    target,
+    harness.scope_recipe(harness.default_options()),
+    grant=list(grant),
+    revoke=list(revoke),
+    llm_spec=harness.resolve_llm(llm, target),
+  )
+  return scoped.required | scoped.optional
 
 
 def _prompt_head(prompt: str) -> str:
@@ -284,6 +310,52 @@ class _Requester:
   workspace: Path
 
 
+def _credential_refusal(
+  requester: _Requester,
+  target: str,
+  *,
+  grant_credentials: list[str],
+  harness_name: Optional[str],
+  llm: Optional[str],
+) -> Optional[str]:
+  """why the request's credential widening is refused, or None when it stays
+  inside the requester's own scope. Two widenings, one bound: what `grant`
+  names outright, and what the requested `harness`/`llm` add on top of the
+  target's own default scope, the driving loop they select contributing
+  credentials of its own. Only that delta is bounded — the target's declared
+  credentials are what its allow-list entry sanctions.
+
+  Raises `_Unattributable` when the requester's own scope cannot be read."""
+  from bro.llm.providers import LLMSelectionError
+
+  widening: set[str] = set()
+  if harness_name is not None or llm is not None:
+    try:
+      widening = _summoned_credentials(target, harness_name, llm) - _summoned_credentials(
+        target, None, None
+      )
+    except LLMSelectionError as e:
+      return str(e)
+  if len(grant_credentials) == 0 and len(widening) == 0:
+    return None
+  held = requester.credentials()
+  beyond = sorted(set(grant_credentials) - held)
+  if len(beyond) > 0:
+    return f'cannot grant credential(s) the summoner does not hold: {", ".join(beyond)}'
+  beyond = sorted(widening - held)
+  if len(beyond) > 0:
+    requested = ' and '.join(
+      f'{key} {value!r}'
+      for key, value in (('harness', harness_name), ('llm', llm))
+      if value is not None
+    )
+    return (
+      f'the requested {requested} needs credential(s) the summoner does not '
+      f'hold: {", ".join(beyond)}'
+    )
+  return None
+
+
 class SummonControl:
   """one broker root's summon authorization + bookkeeping (see module docstring).
 
@@ -356,6 +428,8 @@ class SummonControl:
       return
     grant = payload.get('grant', [])
     revoke = payload.get('revoke', [])
+    harness_name = payload.get('harness')
+    llm = payload.get('llm')
     try:
       grant_credentials, grant_bros = split_scope_overrides(grant)
       _, revoke_bros = split_scope_overrides(revoke)
@@ -377,23 +451,19 @@ class SummonControl:
         f'summon itself: {", ".join(beyond)}',
       )
       return
-    if len(grant_credentials) > 0:
-      try:
-        held = requester.credentials()
-      except _Unattributable as reason:
-        self._deny(context, peer, message, requester.summoner, f'summon denied: {reason}')
-        return
-      beyond = sorted(set(grant_credentials) - held)
-      if len(beyond) > 0:
-        self._deny(
-          context,
-          peer,
-          message,
-          requester.summoner,
-          f'summon denied: cannot grant credential(s) the summoner does not '
-          f'hold: {", ".join(beyond)}',
-        )
-        return
+    try:
+      refusal = _credential_refusal(
+        requester,
+        target,
+        grant_credentials=grant_credentials,
+        harness_name=harness_name,
+        llm=llm,
+      )
+    except _Unattributable as reason:
+      refusal = str(reason)
+    if refusal is not None:
+      self._deny(context, peer, message, requester.summoner, f'summon denied: {refusal}')
+      return
     prompt = payload['prompt']
     summoned_by = requester.summoned_by
     step_id = payload.get('step_id')
@@ -425,8 +495,8 @@ class SummonControl:
         hold=payload.get('hold'),
         grant=tuple(grant),
         revoke=tuple(revoke),
-        llm=payload.get('llm'),
-        harness=payload.get('harness'),
+        llm=llm,
+        harness=harness_name,
       ),
       peer,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,
@@ -441,8 +511,8 @@ class SummonControl:
       allow_list=child_allow_list,
       grant=list(grant),
       revoke=list(revoke),
-      llm=payload.get('llm'),
-      harness=payload.get('harness'),
+      llm=llm,
+      harness=harness_name,
     )
     self._active[message.id] = record
     log.info(
@@ -568,10 +638,7 @@ class SummonControl:
 
   def _child_credentials(self, record: _ActiveSummon) -> set[str]:
     """the credential scope a summoned child runs with, recomputed from its own
-    spawn record through the same helper that lowered its launch."""
-    from ride.harness import get_harness
-    from ride.scope import summoned_credential_scope
-
+    spawn record."""
     if record.manual:
       # a manual child's actual scope was computed by its own launch, from flags
       # this control never sees — there is no record to recompute it from
@@ -579,17 +646,11 @@ class SummonControl:
         "a manual child's credential scope is not attributable; grant the "
         'credential at its own launch instead'
       )
-    harness = get_harness(record.harness if record.harness is not None else DEFAULT_HARNESS)
     grant, _ = split_scope_overrides(record.grant)
     revoke, _ = split_scope_overrides(record.revoke)
-    scoped = summoned_credential_scope(
-      record.target,
-      harness.scope_recipe(harness.default_options()),
-      grant=grant,
-      revoke=revoke,
-      llm_spec=harness.resolve_llm(record.llm, record.target),
+    return _summoned_credentials(
+      record.target, record.harness, record.llm, grant=grant, revoke=revoke
     )
-    return scoped.required | scoped.optional
 
   def _root_summoned_by(self) -> Optional[dict[str, Any]]:
     # the root's trail attribution source, per publication channel

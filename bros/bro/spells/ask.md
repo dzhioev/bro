@@ -1,7 +1,7 @@
 ---
 name: ask
 description: This spell should be used when the user asks to relay a question or job to another bro — "[[ask researcher to compare the storage options]]", "ask the reviewer whether the change is safe", "have deployer roll out the API", "summon developer" — including asking for an interactive child the user will drive themselves ("summon a dev session for me", a manual summon). Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials), picks whichever summon client the session has, decides foreground vs background, and relays the answer with the failure modes handled. A summon succeeds only when the target is in the summoner's allow-list — the session reads its own off the banner, fixed at launch — so a denial stays a normal outcome the spell relays.
-version: 1.10.1
+version: 1.11.0
 ---
 
 # Ask
@@ -18,6 +18,8 @@ From the user's wording extract:
 Optional knobs, normally only when the user asks for them: a per-call timeout in seconds (default 1800 — sized for a deploy), a base git ref for the child (default: this workspace's current HEAD, so the target builds on the code as committed here — uncommitted changes never transfer; when the request turns on a specific commit, branch or tag, pass it here rather than naming it in the prompt), the child's hold — its user-involvement level (default unattended; the child runs isolated with no human channel, so raise it only when the user explicitly wants otherwise) — the child's harness — `claude` runs the target as a one-shot managed Claude Code session (default `bro`: the target's own LLM process) — and the child's LLM recipe — `provider:model:effort` with an optional `+fast` suffix and any field left empty, resolved within the child's harness, so `::high` keeps the base provider and model (default: the target bro's own recipe on the bro harness, Claude Code's own on claude).
 
 The child's scope is a knob too: grants and revokes, each value a credential name or `@bro` for a summon target of the target's own. They start from the target's own declarations, not yours — nothing of your scope reaches the child unless you name it, and you can only name what you hold yourself: a credential in your own scope, a bro in your own allow-list. Grant only what the request actually needs and the user asked for: a credential the target's manifest lacks (`staging_api` for an integration run), a different instance of a selected credential kind, or a bro the target has to reach onward (`@reviewer` so a developer child can hand off a review). A credential grant replaces the target's selected same-kind name. Both directions are strict, so naming the exact credential or bro the target already has (or, for a revoke, lacks) fails the summon rather than passing quietly.
+
+The harness and LLM knobs above answer to that same bound, since the driving loop they pick brings credentials of its own: what the pair adds on top of the target's default scope has to be in your scope too, so a session running under the bro harness cannot ask for a `claude` child unless its own launch hydrated the Claude OAuth token. Relay that denial like any other — the fix is on the user's launch line, not in the request.
 
 Exception — set the timeout unprompted when the child's run is open-ended: a full-cycle dev child (a [[fix]] run through [[run pr]] and the review watch, or a [[run pr]] re-entry) idles for human review latency, so the default kills it mid-watch. Size the timeout in hours (e.g. 28800), not minutes.
 
