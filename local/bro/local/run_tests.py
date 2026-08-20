@@ -98,6 +98,7 @@ PYTEST_FILES = [
   'bro/llm/mu_test.py',
   'bro/llm/observer_test.py',
   'bro/llm/tracker_test.py',
+  'bro/mcp_test.py',
   'bro/harness/claude_test.py',
   'bro/bro_test.py',
   'bro/channel_test.py',
