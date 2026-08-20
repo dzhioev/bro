@@ -1,4 +1,4 @@
-"""the packaging policy: no distribution a repository builds ships a test module."""
+"""the packaging policy: what a repository's distributions must and must not ship."""
 
 import subprocess
 import tempfile
@@ -18,10 +18,14 @@ def is_test_module(path: str) -> bool:
   return module in TEST_MODULE_NAMES or module.endswith(TEST_MODULE_SUFFIXES)
 
 
+def wheel_contents(wheel: Path) -> list[str]:
+  with zipfile.ZipFile(wheel) as archive:
+    return archive.namelist()
+
+
 def shipped_test_modules(wheel: Path) -> list[str]:
   """the test modules a built wheel carries."""
-  with zipfile.ZipFile(wheel) as archive:
-    return sorted(name for name in archive.namelist() if is_test_module(name))
+  return sorted(name for name in wheel_contents(wheel) if is_test_module(name))
 
 
 def distribution_roots(repo_root: Path, siblings: Sequence[str] = ()) -> list[Path]:
@@ -50,7 +54,13 @@ def build_wheels(
   return sorted(output_directory.glob('*.whl'))
 
 
-def assert_packaging_policy(repo_root: Path, siblings: Sequence[str] = ()) -> None:
+def assert_packaging_policy(
+  repo_root: Path, siblings: Sequence[str] = (), required_modules: Sequence[str] = ()
+) -> None:
+  """no built wheel ships a test module, and every required module reaches one.
+
+  `required_modules` are paths as a wheel spells them — `package/module.py`.
+  """
   with tempfile.TemporaryDirectory() as directory:
     wheels = build_wheels(repo_root, Path(directory), siblings)
     if len(wheels) == 0:
@@ -58,5 +68,9 @@ def assert_packaging_policy(repo_root: Path, siblings: Sequence[str] = ()) -> No
     problems = [
       f'{wheel.name} ships {module}' for wheel in wheels for module in shipped_test_modules(wheel)
     ]
+    shipped = {name for wheel in wheels for name in wheel_contents(wheel)}
+    problems.extend(
+      f'no wheel ships {module}' for module in required_modules if module not in shipped
+    )
   if len(problems) > 0:
     raise AssertionError('\n'.join(problems))
