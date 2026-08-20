@@ -15,9 +15,10 @@ both sides, like `transport.connect`.
 
 Sticky routing: outbound frames are deframed to learn which local connection
 sent which request id; correlated inbound is routed to exactly that connection.
-A route survives interim messages; the terminal — any correlated type but
-`started`, mirroring `Client.call` — ends the live exchange (the waiter
-detaches), and the conversation stays retained for cursor reads until evicted.
+A route survives interim messages; the terminal — any correlated type outside
+`brotocol.INTERIM_TAGS`, mirroring `Client.call` — ends the live exchange (the
+waiter detaches), and the conversation stays retained for cursor reads until
+evicted.
 
 Mailbox: every correlated inbound message is retained in arrival order under its
 request id — the conversation — numbered by a 1-based sequence. Alongside it the
@@ -89,7 +90,7 @@ from typing import Any, Optional
 
 import bro.base.args as base_args
 from bro.base import log, spawn
-from bro.broker.brotocol import MAX_FRAME_BYTES, Message, ProtocolError, Tag
+from bro.broker.brotocol import INTERIM_TAGS, MAX_FRAME_BYTES, Message, ProtocolError, Tag
 from bro.broker.client import CHANNEL_ENV
 
 __cli_name__ = 'broxy'
@@ -244,7 +245,7 @@ class Broxy:
     if route is None:  # e.g. the route was evicted, or its mailbox entry dropped
       log.warning('broxy: dropping upstream message for unknown request %s', message.in_reply_to)
       return
-    terminal = message.type != Tag.STARTED  # the terminal rule, mirroring Client.call
+    terminal = message.type not in INTERIM_TAGS  # the terminal rule, mirroring Client.call
     waiter = route.waiter
     if waiter is not None and waiter.writer.is_closing():
       route.waiter = None

@@ -5,15 +5,16 @@ are inert where there is no channel.
 
 `request` and `call` are correlate-on-receive: they send the request, then read
 inbound messages until one carries `in_reply_to == request.id`. `request` returns
-the first correlated message; `call` rides through interim `started` messages
-(surfaced to a callback) and returns the first correlated terminal. Uncorrelated
-arrivals are set aside and handed out by later `receive` calls rather than dropped.
-No reader thread — concurrent in-flight requests are a consumer need that has not
-arisen.
+the first correlated message; `call` rides through interim messages
+(`brotocol.INTERIM_TAGS`, surfaced to a callback) and returns the first correlated
+terminal. Uncorrelated arrivals are set aside and handed out by later `receive`
+calls rather than dropped. No reader thread — concurrent in-flight requests are a
+consumer need that has not arisen.
 
-`send` returns the sent message (ids are minted client-side) and `await_reply` is
-`call`'s wait detached from its send, so a consumer can expose the request id the
-moment it is on the wire and block — or reattach — separately.
+`send` returns the sent message (ids are minted client-side); `await_reply` is
+`call`'s wait detached from its send and `await_any` is `request`'s, so a consumer
+can expose the request id the moment it is on the wire and block — or reattach —
+separately.
 """
 
 import os
@@ -23,7 +24,7 @@ from collections.abc import Callable
 from types import TracebackType
 from typing import Any, Optional
 
-from bro.broker.brotocol import Message, Tag
+from bro.broker.brotocol import INTERIM_TAGS, Message
 from bro.broker.transport import ClientTransport, connect
 
 CHANNEL_ENV = 'BROKER_CHANNEL'
@@ -64,41 +65,47 @@ class Client:
     payload: dict[str, Any],
     timeout: Optional[float],
     *,
-    on_started: Optional[Callable[[Message], None]] = None,
+    on_interim: Optional[Callable[[Message], None]] = None,
   ) -> Message:
     """send a typed request and block for the first correlated terminal message.
 
-    Interim correlated `started` messages are surfaced to `on_started` and the wait
-    continues; any other correlated message (`completed` / `failed` / `reply`) is the
-    terminal and is returned. `timeout` bounds the whole call, interims included.
-    Raises as `request` does.
+    Interim correlated messages (`INTERIM_TAGS`: `accepted` / `started`) are
+    surfaced to `on_interim` and the wait continues; any other correlated message
+    (`completed` / `failed` / `reply`) is the terminal and is returned. `timeout`
+    bounds the whole call, interims included. Raises as `request` does.
     """
-    return self.await_reply(self.send(type, payload), timeout, on_started=on_started)
+    return self.await_reply(self.send(type, payload), timeout, on_interim=on_interim)
 
   def await_reply(
     self,
     request: Message,
     timeout: Optional[float],
     *,
-    on_started: Optional[Callable[[Message], None]] = None,
-    timeout_after_started: Optional[float] = None,
+    on_interim: Optional[Callable[[Message], None]] = None,
+    timeout_after_interim: Optional[float] = None,
   ) -> Message:
     """block for the first terminal correlated to an already-sent `request` — the
     detached tail of `call`, for a caller that sent first (to expose the request id)
     and awaits separately. Semantics and errors are exactly `call`'s wait, except
-    when `timeout_after_started` is set: each correlated `started` then re-arms the
+    when `timeout_after_interim` is set: each correlated interim then re-arms the
     deadline to that many seconds from its arrival, so the bound covers the silence
     since the last message rather than the whole wait."""
     deadline = time.monotonic() + timeout if timeout is not None else None
     while True:
       message = self._receive_correlated(request, deadline, timeout)
-      if message.type != Tag.STARTED:
+      if message.type not in INTERIM_TAGS:
         return message
-      if timeout_after_started is not None:
-        deadline = time.monotonic() + timeout_after_started
-        timeout = timeout_after_started
-      if on_started is not None:
-        on_started(message)
+      if timeout_after_interim is not None:
+        deadline = time.monotonic() + timeout_after_interim
+        timeout = timeout_after_interim
+      if on_interim is not None:
+        on_interim(message)
+
+  def await_any(self, request: Message, timeout: Optional[float]) -> Message:
+    """block for the first message correlated to an already-sent `request`,
+    interim or terminal — the detached tail of `request`. Raises as it does."""
+    deadline = time.monotonic() + timeout if timeout is not None else None
+    return self._receive_correlated(request, deadline, timeout)
 
   def _receive_correlated(
     self, request: Message, deadline: Optional[float], timeout: Optional[float]

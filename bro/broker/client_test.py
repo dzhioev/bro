@@ -134,7 +134,7 @@ async def test_call_surfaces_started_and_returns_terminal(socket_dir):
     interims: list[Message] = []
     call_task = asyncio.create_task(
       asyncio.to_thread(
-        client.call, 'summon', {'target': 'dev'}, TIMEOUT, on_started=interims.append
+        client.call, 'summon', {'target': 'dev'}, TIMEOUT, on_interim=interims.append
       )
     )
 
@@ -163,6 +163,48 @@ async def test_call_surfaces_started_and_returns_terminal(socket_dir):
     set_aside = await asyncio.to_thread(client.receive, 0.2)
     assert set_aside is not None
     assert set_aside.id == unrelated.id
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_call_rides_through_accepted_while_await_any_returns_it(socket_dir):
+  # both interim tags ride through a call's wait; await_any is the one surface
+  # that returns the first correlated message as-is — what a manual summon's
+  # acceptance handshake reads
+  async with running_server(socket_dir) as server:
+    provisioned = await server.transport.provision()
+    client = Client(UnixClientTransport(provisioned.host_endpoint))
+    interims: list[Message] = []
+    call_task = asyncio.create_task(
+      asyncio.to_thread(client.call, 'summon', {}, TIMEOUT, on_interim=interims.append)
+    )
+    channel, request_message = await _next(server.sink.messages)
+    await server.transport.send(
+      channel, Message(type='accepted', payload={}, in_reply_to=request_message.id)
+    )
+    await server.transport.send(
+      channel, Message(type='started', payload={'trail_id': 't1'}, in_reply_to=request_message.id)
+    )
+    await server.transport.send(
+      channel,
+      Message(
+        type='completed',
+        payload={'result': 'r', 'end_reason': 'ok'},
+        in_reply_to=request_message.id,
+      ),  # fmt: skip
+    )
+    terminal = await asyncio.wait_for(call_task, TIMEOUT)
+    assert terminal.type == 'completed'
+    assert [interim.type for interim in interims] == ['accepted', 'started']
+
+    sent = client.send('summon', {})
+    any_task = asyncio.create_task(asyncio.to_thread(client.await_any, sent, TIMEOUT))
+    channel, request_message = await _next(server.sink.messages)
+    await server.transport.send(
+      channel, Message(type='accepted', payload={}, in_reply_to=request_message.id)
+    )
+    first = await asyncio.wait_for(any_task, TIMEOUT)
+    assert (first.type, first.in_reply_to) == ('accepted', sent.id)
     client.close()
 
 
@@ -227,7 +269,7 @@ async def test_await_reply_reattaches_to_a_sent_request(socket_dir):
     sent = await asyncio.to_thread(client.send, 'summon', {'target': 'dev'})
     interims: list[Message] = []
     await_task = asyncio.create_task(
-      asyncio.to_thread(client.await_reply, sent, TIMEOUT, on_started=interims.append)
+      asyncio.to_thread(client.await_reply, sent, TIMEOUT, on_interim=interims.append)
     )
 
     channel, request_message = await _next(server.sink.messages)
@@ -251,14 +293,14 @@ async def test_await_reply_reattaches_to_a_sent_request(socket_dir):
 
 @pytest.mark.asyncio
 async def test_await_reply_started_rearms_the_deadline(socket_dir):
-  # timeout_after_started opts out of the whole-wait bound: the interim started
+  # timeout_after_interim opts out of the whole-wait bound: the interim started
   # re-arms the deadline, so a terminal past the initial bound still lands
   async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
     sent = await asyncio.to_thread(client.send, 'summon', {})
     await_task = asyncio.create_task(
-      asyncio.to_thread(client.await_reply, sent, 0.3, timeout_after_started=TIMEOUT)
+      asyncio.to_thread(client.await_reply, sent, 0.3, timeout_after_interim=TIMEOUT)
     )
 
     channel, request_message = await _next(server.sink.messages)
@@ -282,14 +324,14 @@ async def test_await_reply_started_rearms_the_deadline(socket_dir):
 
 @pytest.mark.asyncio
 async def test_await_reply_started_rearm_shortens_a_longer_bound(socket_dir):
-  # the re-arm is to exactly now + timeout_after_started, shortening a still-long
+  # the re-arm is to exactly now + timeout_after_interim, shortening a still-long
   # initial bound too, so post-started silence is caught at the tighter bound
   async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
     sent = await asyncio.to_thread(client.send, 'summon', {})
     await_task = asyncio.create_task(
-      asyncio.to_thread(client.await_reply, sent, TIMEOUT * 4, timeout_after_started=0.2)
+      asyncio.to_thread(client.await_reply, sent, TIMEOUT * 4, timeout_after_interim=0.2)
     )
 
     channel, request_message = await _next(server.sink.messages)

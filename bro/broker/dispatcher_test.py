@@ -7,6 +7,7 @@ from bro.broker.brotocol import Message, Tag
 from bro.broker.dispatcher import DEFAULT_TIMEOUT, Dispatcher, ping_handler, spawn_test_handler
 from bro.broker.runtime import Peer
 from bro.broker.spawn import LaunchSpec
+from bro.broker.transport import Provisioned
 
 _LAUNCH = LaunchSpec()  # opaque marker; the fake Runtime never inspects it
 
@@ -22,9 +23,10 @@ class FakeRuntime:
   def __init__(self):
     self.sent: list[tuple[Peer, Message]] = []
     self.spawns: list[tuple[LaunchSpec, Optional[float]]] = []
+    self.expects: list[Optional[float]] = []
     self.forgotten: list[Peer] = []
     self.killed: list[Peer] = []
-    self.next_peers: list[Peer] = []  # spawn returns these front-to-back
+    self.next_peers: list[Peer] = []  # spawn/expect returns these front-to-back
     self.spawn_error: Optional[BaseException] = None
     self._stopped = asyncio.Event()
 
@@ -33,6 +35,13 @@ class FakeRuntime:
     if self.spawn_error is not None:
       raise self.spawn_error
     return self.next_peers.pop(0)
+
+  async def expect(self, *, timeout: Optional[float]) -> Provisioned:
+    self.expects.append(timeout)
+    if self.spawn_error is not None:
+      raise self.spawn_error
+    peer = self.next_peers.pop(0)
+    return Provisioned(channel=peer, host_endpoint=f'/broker/{peer}.sock')
 
   def send(self, peer: Peer, message: Message) -> None:
     self.sent.append((peer, message))
@@ -189,6 +198,83 @@ async def test_spawn_failure_synthesizes_failed_launch():
   assert failed.payload == {'reason': 'launch', 'error': 'image build exploded'}
   assert dispatcher.origin == {}  # no topology was registered for the never-launched child
   assert dispatcher.pending == {}
+
+
+async def expect_child(
+  dispatcher: Dispatcher, runtime: FakeRuntime, *, parent: Peer = 'parent', request_id: str = 'R'
+) -> tuple[Peer, list[Provisioned]]:
+  """drive an expect request through rule 3 + an inline handler; return the external
+  peer and the provisioned channels the ready callback received."""
+  child = 'external'
+  runtime.next_peers.append(child)
+  provisioned: list[Provisioned] = []
+  dispatcher.on(
+    'expect',
+    lambda context, peer, message: context.expect(peer, timeout=None, ready=provisioned.append),
+  )
+  dispatcher.on_message(parent, Message(type='expect', id=request_id, payload={}))
+  await _settle()
+  return child, provisioned
+
+
+@pytest.mark.asyncio
+async def test_expect_registers_topology_and_hands_the_channel_to_ready():
+  dispatcher, runtime = make_dispatcher()
+  child, provisioned = await expect_child(dispatcher, runtime)
+  assert runtime.expects == [None]
+  assert [p.channel for p in provisioned] == [child]
+  assert dispatcher.origin[child] == ('parent', 'R')
+  assert dispatcher.pending['R'] == 'parent'
+  assert dispatcher.parent[child] == 'parent'
+
+
+@pytest.mark.asyncio
+async def test_expected_peer_lifecycle_routes_and_gone_after_terminal_is_clean():
+  # an expected peer's started/completed route like a spawned child's; the trailing
+  # on_gone finds it finalized and only cleans up.
+  dispatcher, runtime = make_dispatcher()
+  child, _ = await expect_child(dispatcher, runtime)
+  dispatcher.on_message(child, Message(type=Tag.STARTED, payload={'trail_id': 't'}))
+  dispatcher.on_message(
+    child, Message(type=Tag.COMPLETED, payload={'result': 'ok', 'end_reason': 'ok'})
+  )
+  assert [(target, m.type, m.in_reply_to) for target, m in runtime.sent] == [
+    ('parent', Tag.STARTED, 'R'),
+    ('parent', Tag.COMPLETED, 'R'),
+  ]
+  dispatcher.on_gone(child)
+  assert [m.type for _, m in runtime.sent].count(Tag.FAILED) == 0
+  assert runtime.forgotten == [child]
+  assert child not in dispatcher.origin
+
+
+@pytest.mark.asyncio
+async def test_gone_without_terminal_synthesizes_failed_disconnected():
+  dispatcher, runtime = make_dispatcher()
+  child, _ = await expect_child(dispatcher, runtime)
+  dispatcher.on_gone(child)
+  target, failed = runtime.sent[-1]
+  assert (target, failed.type, failed.in_reply_to) == ('parent', Tag.FAILED, 'R')
+  assert failed.payload == {'reason': 'disconnected'}
+  assert runtime.forgotten == [child]
+
+
+@pytest.mark.asyncio
+async def test_expect_failure_synthesizes_failed_launch():
+  dispatcher, runtime = make_dispatcher()
+  runtime.spawn_error = RuntimeError('no socket dir')
+  provisioned: list[Provisioned] = []
+  dispatcher.on(
+    'expect',
+    lambda context, peer, message: context.expect(peer, timeout=None, ready=provisioned.append),
+  )
+  dispatcher.on_message('parent', Message(type='expect', id='R', payload={}))
+  await _settle()
+  assert provisioned == []
+  [(target, failed)] = runtime.sent
+  assert (target, failed.type, failed.in_reply_to) == ('parent', Tag.FAILED, 'R')
+  assert failed.payload == {'reason': 'launch', 'error': 'no socket dir'}
+  assert dispatcher.origin == {}
 
 
 @pytest.mark.asyncio

@@ -9,7 +9,7 @@ import pytest
 from bro.broker.brotocol import Message
 from bro.broker.runtime import Peer, Runtime
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
-from bro.broker.transport import Provisioned
+from bro.broker.transport import Provisioned, connect
 from bro.broker.transports.unix import UnixServerTransport
 
 TIMEOUT = 5.0
@@ -98,6 +98,9 @@ class FakeListener:
 
   def on_timeout(self, peer: Peer) -> None:
     self.events.put_nowait(('timeout', peer))
+
+  def on_gone(self, peer: Peer) -> None:
+    self.events.put_nowait(('gone', peer))
 
 
 @dataclass
@@ -285,6 +288,73 @@ async def test_exit_before_connect_reports_without_birth(socket_dir):
 
     exited = await next_event(env.listener)  # no on_connect: the child never attached
     assert exited == ('exit', peer, 2, '')
+
+
+@pytest.mark.asyncio
+async def test_expect_delivers_messages_then_reports_gone_on_disconnect(socket_dir):
+  # the expected-peer acceptance ordering: everything the peer wrote lands as
+  # on_message before its EOF reports on_gone — the external analogue of
+  # drain-before-decide, with no on_exit (there is no process to reap).
+  async with runtime_harness(socket_dir) as env:
+    provisioned = await env.runtime.expect(timeout=None)
+    peer = provisioned.channel
+
+    def _attach_and_complete() -> None:
+      client = connect('unix:' + provisioned.host_endpoint)
+      client.send(Message(type='completed', payload={'result': 'done', 'end_reason': 'ok'}))
+      client.close()
+
+    await asyncio.to_thread(_attach_and_complete)
+    assert await next_event(env.listener) == ('connect', peer)
+    completed = await next_event(env.listener)
+    assert completed[0] == 'message' and completed[2].type == 'completed'
+    assert await next_event(env.listener) == ('gone', peer)
+
+
+@pytest.mark.asyncio
+async def test_expect_disconnect_without_terminal_reports_gone(socket_dir):
+  async with runtime_harness(socket_dir) as env:
+    provisioned = await env.runtime.expect(timeout=None)
+    peer = provisioned.channel
+
+    def _attach_and_leave() -> None:
+      client = connect('unix:' + provisioned.host_endpoint)
+      client.send(Message(type='started', payload={'trail_id': 't1'}))
+      client.close()
+
+    await asyncio.to_thread(_attach_and_leave)
+    assert await next_event(env.listener) == ('connect', peer)
+    assert (await next_event(env.listener))[0] == 'message'  # started
+    assert await next_event(env.listener) == ('gone', peer)
+
+
+@pytest.mark.asyncio
+async def test_expect_kill_closes_channel_and_reports_gone(socket_dir):
+  # kill on an expected peer that never attached: the channel closes (socket
+  # unlinked) and the wait task reports gone — no process was ever ours to kill.
+  async with runtime_harness(socket_dir) as env:
+    provisioned = await env.runtime.expect(timeout=None)
+    peer = provisioned.channel
+    assert _sock_files(env.control_dir) != []
+
+    env.runtime.kill(peer)
+    assert await next_event(env.listener) == ('gone', peer)
+    await until(lambda: _sock_files(env.control_dir) == [])
+
+
+@pytest.mark.asyncio
+async def test_expect_timeout_reports_timeout_then_gone(socket_dir):
+  async with runtime_harness(socket_dir) as env:
+    provisioned = await env.runtime.expect(timeout=3600.0)
+    peer = provisioned.channel
+    # fire deterministically, as in the spawn timeout test
+    timer = env.runtime._peers[peer].timer
+    assert timer is not None
+    timer.cancel()
+    env.runtime._fire_timeout(peer)
+
+    assert await next_event(env.listener) == ('timeout', peer)
+    assert await next_event(env.listener) == ('gone', peer)
 
 
 @pytest.mark.asyncio
