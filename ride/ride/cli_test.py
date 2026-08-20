@@ -214,6 +214,25 @@ class TestAlong:
 
 
 class TestLifecycle:
+  def test_outer_command_migrates_legacy_runtime_state_first(self):
+    with (
+      patch('ride.cli.migrate_legacy_runtime_state') as migrate,
+      patch('ride.cli.list_workspaces', return_value=0),
+    ):
+      assert ride_cli.main(['ride', 'list']) == 0
+    migrate.assert_called_once_with()
+
+  def test_inner_mode_does_not_run_host_state_migration(self):
+    with (
+      patch('ride.cli.migrate_legacy_runtime_state') as migrate,
+      patch('ride.inner.run_in_place', return_value=0),
+    ):
+      assert (
+        ride_cli.main(['ride', 'solo', '--in-place', '--workspace', 'session', 'dev', 'prompt'])
+        == 0
+      )
+    migrate.assert_not_called()
+
   def test_resume_dispatches_scope_overrides(self):
     with patch('ride.cli.resume_session', return_value=0) as resume:
       assert ride_cli.main(['ride', 'resume', '--grant', '@dev', 'workspace']) == 0
