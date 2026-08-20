@@ -84,9 +84,11 @@ Until process-host mode is available, `ride` refuses to start from inside a cont
 
 ## Runtime state
 
-The runtime command is `ride`, and runtime-owned environment facts use `RIDE_*`. Persistent runtime data lives outside every checkout under the user's global **`<runtime-root>`**: `~/.local/share/ride/`, or `$XDG_DATA_HOME/ride/` where that variable names an absolute path. A launch creates it with mode 0700 on first use. Its top-level stores are `workspaces/`, `runtime/`, `trails/`, `summon/`, and `broker/`; workspace metadata records which repository, if any, each workspace is attached to.
+The runtime command is `ride`, and runtime-owned environment facts use `RIDE_*`. Persistent runtime data lives outside every checkout under the user's global **`<runtime-root>`**: `~/.local/share/ride/`, or `$XDG_DATA_HOME/ride/` where that variable names an absolute path. A launch creates it with mode 0700 on first use. Its top-level stores are `workspaces/`, `runtime/`, `repos/`, `trails/`, `summon/`, and `broker/`; workspace metadata records which repository, if any, each workspace is attached to.
 
-Releases using this layout do not read the former checkout-keyed `<runtime-root>/<project-key>/` directories. Those directories are left in place and may be removed manually after any old sessions using them have ended.
+The first outer `ride`, `ask`, or `call` command after upgrading migrates the former checkout-keyed `<runtime-root>/<project-key>/` roots into these global stores and reports the roots and workspace count it moved. Migration takes a global lock and preflights every source before moving anything: a workspace or store-key collision names both paths and refuses the migration, as does a held workspace lock, a running container, a duplicate trail id, or a summon request id found in more than one audit file. An interrupted migration is completed by the next command; emptied project-key roots are removed.
+
+Migrated worktrees recover their local-checkout attachment from git's worktree metadata and have their registration repaired at the new path. Container clones recover a URL or absolute local attachment from `remote.origin.url`; URL-backed clones are adjusted to the managed mirror's object layout. A workspace whose tree was never materialized has no repository evidence and migrates as detached. A non-empty tree whose attachment cannot be recovered aborts the migration rather than recording a guess or leaving an unusable workspace hidden in the old root.
 
 ### Runtime bundles
 

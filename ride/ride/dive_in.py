@@ -14,7 +14,7 @@ from bro.base.args import Parser
 from bro.workspace.git import fetch_ref
 from bro.workspace.paths import fresh_workspace_name, project_root
 from bro.workspace.project import project_config
-from ride.cli import reports_location_errors
+from ride.cli import reports_runtime_errors
 from ride.flags import add_forwarded_flags, extract_forwarded_argv, pop_harness_options
 from ride.harness import get_harness
 from ride.scope import LaunchScopeError, launch_view_store, scoped_secrets
@@ -171,7 +171,7 @@ def dive_in(
   return subprocess.run(ride_command).returncode
 
 
-@reports_location_errors
+@reports_runtime_errors
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='start a ride session focused on a task')
   parser.add_argument(

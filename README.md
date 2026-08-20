@@ -62,7 +62,7 @@ build-context-command = "git ls-files"    # optional session-image context file 
 
 ## Trails storage
 
-Recording is mandatory, and storage is local unless configured otherwise: with no `~/.bro/trails.json`, a run writes to the checkout's `trails` directory in the runtime state root (`bro/reference/ride.md`, "Runtime state"). Container launch composers bind-mount that host root at the fixed absolute `/var/ride/trails` path inside the container automatically.
+Recording is mandatory, and storage is local unless configured otherwise: with no `~/.bro/trails.json`, a run writes to the global `trails` directory in the runtime state root (`bro/reference/ride.md`, "Runtime state"). Container launch composers bind-mount that host root at the fixed absolute `/var/ride/trails` path inside the container automatically.
 
 The hosted service is the opt-in, `{"backend": "service", "base_url": "https://trails.example", "token": "<bearer>"}`; an existing config with `base_url` and `token` but no `backend` continues to select the service, and `{"backend": "local"}` states the default explicitly. `trails-server` resolves its hosted store from the same credential vocabulary, selecting either local storage or the DynamoDB/S3 shape documented in [`bro/setup/AGENTS.md`](bro/setup/AGENTS.md) — but it requires the credential rather than defaulting, since a server states the backend it serves; only its bearer-auth settings remain command-line/environment flags.
 

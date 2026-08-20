@@ -152,6 +152,7 @@ PYTEST_FILES = [
   'ride/ride/identity_test.py',
   'ride/ride/root_test.py',
   'ride/ride/repository_test.py',
+  'ride/ride/runtime_state_test.py',
   'ride/ride/scope_test.py',
   'ride/ride/trails_test.py',
   'ride/ride/spawn_test.py',

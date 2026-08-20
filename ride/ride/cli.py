@@ -24,6 +24,7 @@ from ride.harness import get_harness
 from ride import pending_summon
 from ride.listing import list_workspaces
 from ride.repository import Repository, is_git_url, resolve_repository
+from ride.runtime_state import RuntimeStateMigrationError, migrate_legacy_runtime_state
 from ride.session import SessionSpec, resume_session, start_session
 from ride.workspace.containers import exec_in_workspace
 from ride.workspace.model import Workspace
@@ -33,15 +34,14 @@ __cli_name__ = 'ride'
 _Main = Callable[[list[str]], Optional[int]]
 
 
-def reports_location_errors(main: _Main) -> _Main:
-  """wrap a console-script main so an unusable runtime location fails as a CLI
-  error rather than a traceback."""
+def reports_runtime_errors(main: _Main) -> _Main:
+  """render runtime location and state migration failures as CLI errors."""
 
   @functools.wraps(main)
   def wrapper(argv: list[str]) -> Optional[int]:
     try:
       return main(argv)
-    except RuntimeLocationError as error:
+    except (RuntimeLocationError, RuntimeStateMigrationError) as error:
       log.error('%s', error)
       return 1
 
@@ -310,14 +310,18 @@ def alias_main(argv: list[str], *, solo: bool) -> int:
   )
   _configure_mode_parser(parser, solo=solo)
   args, harness_arguments = _parse_mode(parser, argv)
+  if not args['in_place']:
+    migrate_legacy_runtime_state()
   return _start_mode(parser, args, harness_arguments, solo=solo)
 
 
-@reports_location_errors
+@reports_runtime_errors
 def main(argv: list[str]) -> Optional[int]:
   parser = build_parser()
   args, harness_arguments = _parse(parser, argv)
   command = args.pop('cmd')
+  if command not in ('solo', 'along') or not args['in_place']:
+    migrate_legacy_runtime_state()
   if command not in ('solo', 'along') and len(harness_arguments) > 0:
     parser.error('`--` harness arguments are accepted only by `ride solo` and `ride along`')
   if command in ('solo', 'along'):
