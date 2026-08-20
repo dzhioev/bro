@@ -173,6 +173,15 @@ class MCPServerSpec:
     )
 
 
+def _validate_native_names(names: object, field: str, verb: str) -> None:
+  if not isinstance(names, tuple) or any(
+    not isinstance(name, str) or len(name) == 0 for name in names
+  ):
+    raise TypeError(f'{field} must be a tuple of non-empty strings')
+  if len(set(names)) != len(names):
+    raise ValueError(f'a tool layer {verb} duplicate names: {names!r}')
+
+
 @dataclass(frozen=True)
 class ToolLayer:
   """one composable layer of server mounts and harness-native tool blocks."""
@@ -183,26 +192,39 @@ class ToolLayer:
   # command to run: the tool is served, and the harness rejects every call whose
   # command is not one of these
   native_tool_commands: tuple[tuple[str, str], ...] = ()
+  # harness-native tools served whole over a block, their calls unrestricted
+  served_native_tool_names: tuple[str, ...] = ()
 
   def __post_init__(self) -> None:
     if not isinstance(self.server_specs, tuple) or any(
       not isinstance(spec, MCPServerSpec) for spec in self.server_specs
     ):
       raise TypeError('server_specs must be a tuple of MCPServerSpec values')
-    names = self.blocked_native_tool_names
-    if not isinstance(names, tuple) or any(
-      not isinstance(name, str) or len(name) == 0 for name in names
-    ):
-      raise TypeError('blocked_native_tool_names must be a tuple of non-empty strings')
-    if len(set(names)) != len(names):
-      raise ValueError(f'a tool layer blocks duplicate names: {names!r}')
+    _validate_native_names(self.blocked_native_tool_names, 'blocked_native_tool_names', 'blocks')
+    _validate_native_names(self.served_native_tool_names, 'served_native_tool_names', 'serves')
     pairs = self.native_tool_commands
     if not isinstance(pairs, tuple) or any(
       not isinstance(value, str) or len(value) == 0 for pair in pairs for value in pair
     ):
       raise TypeError('native_tool_commands must be a tuple of non-empty (name, command) pairs')
-    if len(self.server_specs) == 0 and len(names) == 0 and len(pairs) == 0:
-      raise ValueError('a tool layer must mount a server, block a native tool, or narrow one')
+    if (
+      len(self.server_specs) == 0
+      and len(self.blocked_native_tool_names) == 0
+      and len(pairs) == 0
+      and len(self.served_native_tool_names) == 0
+    ):
+      raise ValueError(
+        'a tool layer must mount a server, block a native tool, narrow one, or serve one'
+      )
+
+  def __or__(self, other: ToolLayer) -> ToolLayer:
+    """both layers' declarations as one layer."""
+    return ToolLayer(
+      server_specs=self.server_specs + other.server_specs,
+      blocked_native_tool_names=self.blocked_native_tool_names + other.blocked_native_tool_names,
+      native_tool_commands=self.native_tool_commands + other.native_tool_commands,
+      served_native_tool_names=self.served_native_tool_names + other.served_native_tool_names,
+    )
 
 
 def mount(toolset: Toolset[Any], *tool_names: str) -> ToolLayer:
@@ -226,6 +248,17 @@ def allow_commands(tool_name: str, *commands: str) -> ToolLayer:
   if len(commands) == 0:
     raise ValueError(f'narrowing {tool_name} needs at least one command')
   return ToolLayer(native_tool_commands=tuple((tool_name, command) for command in commands))
+
+
+def serve(*tool_names: str) -> ToolLayer:
+  """serve the harness-native `tool_names` whole, over a block that withholds them.
+
+  `allow_commands` without the narrowing, for a tool whose argument is not a
+  command line. Like a narrowing, it must name a tool the bro also blocks.
+  """
+  if len(tool_names) == 0:
+    raise ValueError('serving needs at least one tool name')
+  return ToolLayer(served_native_tool_names=tool_names)
 
 
 _COMMAND_WORD = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]*')
