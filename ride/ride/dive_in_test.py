@@ -314,7 +314,7 @@ class TestTaskSystem:
       dive_in, 'project_config', lambda _repo: SimpleNamespace(default_bro='bro-dev')
     )
 
-    def fake_scoped_secrets(bro_name, surface, *, repo):
+    def fake_scoped_secrets(bro_name, surface, *, attachment):
       calls['scoped'] = (bro_name, surface)
       return 'base-scope'
 

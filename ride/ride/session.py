@@ -446,12 +446,7 @@ def _start_session(
     recipe = dataclasses.replace(recipe, optional_baseline=frozenset())
   try:
     scoped, may_summon, store = preflight_scoped_launch(
-      scoped_secrets(
-        spec.bro,
-        recipe,
-        repo=None if repository is None else repository.credential_root,
-        llm_spec=spec.llm_spec,
-      ),
+      scoped_secrets(spec.bro, recipe, attachment=spec.repo, llm_spec=spec.llm_spec),
       spec.bro,
       grant=spec.grant,
       revoke=spec.revoke,

@@ -19,6 +19,9 @@ from ride.workspace.model import Workspace
 
 PARENT_WORKSPACE = Path('/var/ride/0123456789abcdef/workspaces/parent/tree')
 SUMMONER = {'session': 'ws'}
+# the lowering harness stubs the scope computation; the tests that assert on the
+# real one restore this
+_REAL_SCOPED_SECRETS = ride.scope.scoped_secrets
 
 
 def _container_runtime() -> workspace_docker.ContainerRuntimeResolver:
@@ -32,7 +35,7 @@ def lowering_harness(monkeypatch, tmp_path):
   monkeypatch.setattr(
     ride.scope,
     'scoped_secrets',
-    lambda name, surface, repo=None, llm_spec=None: workspace_store.ScopedSecrets(
+    lambda name, surface, attachment=None, llm_spec=None: workspace_store.ScopedSecrets(
       required={'aws', 'trails'}, optional={'openai'}, docker_sock=True
     ),
   )
@@ -139,7 +142,7 @@ class TestSummonLowering:
   def test_the_llm_recipe_selects_the_childs_hydrated_llm_key(self, lowering_harness, monkeypatch):
     captured: list = []
 
-    def capture_scope(name, recipe, repo=None, llm_spec=None):
+    def capture_scope(name, recipe, attachment=None, llm_spec=None):
       captured.append(llm_spec)
       return workspace_store.ScopedSecrets(required=set(), optional=set(), docker_sock=False)
 
@@ -187,6 +190,29 @@ class TestSummonLowering:
       ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime())
     # every fallible resolution precedes the workspace record, so nothing to
     # reclaim is left behind
+    with pytest.raises(ValueError, match='broker-CH'):
+      Workspace.open('broker-CH')
+
+  def test_an_unbindable_project_kind_fails_the_spawn(
+    self, lowering_harness, monkeypatch, tmp_path
+  ):
+    # the summoner's attachment is one no project entry names, so the child is
+    # refused the kinds this host reads per project rather than handed whichever
+    # project the registry's own entry belongs to
+    config = tmp_path / 'bro.json'
+    config.write_text(json.dumps({'projects': {'/elsewhere': {'instances': ['brog+github']}}}))
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+    monkeypatch.setattr(ride.scope, 'scoped_secrets', _REAL_SCOPED_SECRETS)
+    launch = ride.spawn.SummonLaunchSpec(
+      target='bro-dev',
+      prompt='p',
+      parent_workspace=PARENT_WORKSPACE,
+      repo=Path('/proj'),
+      summoner=SUMMONER,
+      may_summon=(),
+    )
+    with pytest.raises(ValueError, match='reads brog per project'):
+      ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime())
     with pytest.raises(ValueError, match='broker-CH'):
       Workspace.open('broker-CH')
 
@@ -439,7 +465,7 @@ class TestClaudeSummonLowering:
   def test_scope_follows_the_claude_recipe(self, claude_harness, monkeypatch):
     captured: list = []
 
-    def capture_scope(name, recipe, repo=None, llm_spec=None):
+    def capture_scope(name, recipe, attachment=None, llm_spec=None):
       captured.append(recipe.name)
       return workspace_store.ScopedSecrets(required=set(), optional=set(), docker_sock=True)
 

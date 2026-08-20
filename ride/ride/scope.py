@@ -5,7 +5,6 @@ the operated project's instance selection.
 """
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from bro.base import credentials, host_config, log
@@ -44,10 +43,13 @@ BRO_RUN_RECIPE = ScopeRecipe(
 )
 
 
-def bind_project_credentials(repo: Optional[Path]) -> dict[str, Optional[str]]:
-  """bind credential resolution to an attachment's selection or kind defaults."""
-  selection = {} if repo is None else host_config.project_instances(repo)
-  credentials.select_instances(selection)
+def bind_project_credentials(attachment: Optional[str]) -> Optional[dict[str, Optional[str]]]:
+  """bind credential resolution to the project the launch operates, named by its
+  repository attachment (a checkout path or a normalized git URL). None when the
+  launch binds no project entry: detached, or an attachment `~/.bro.json` does
+  not name."""
+  selection = None if attachment is None else host_config.project_instances(attachment)
+  credentials.select_instances(selection if selection is not None else {})
   return selection
 
 
@@ -55,7 +57,7 @@ def scoped_secrets(
   bro_name: str,
   recipe: ScopeRecipe,
   *,
-  repo: Optional[Path] = None,
+  attachment: Optional[str] = None,
   llm_spec: Optional['LLMSpec'] = None,
 ) -> ScopedSecrets:
   """the credential scope of a launch running as `bro_name` under `recipe`.
@@ -70,11 +72,13 @@ def scoped_secrets(
 
   computing a scope also binds this process to the operated project's instance
   selection (`bind_project_credentials`) — the scope names kinds, and the launch
-  hydrates whichever instance the project reads.
+  hydrates whichever instance the project reads. Where that binds nothing, the
+  host's per-project kinds ride along as the scope's `unbound_kinds`.
   """
   from bro.registry import create_bro
 
-  bind_project_credentials(repo)
+  selection = bind_project_credentials(attachment)
+  unbound = frozenset() if selection is not None else host_config.project_scoped_kinds()
   required: set[str] = set()
   optional = set(recipe.optional_baseline)
   try:
@@ -88,7 +92,9 @@ def scoped_secrets(
     # no bro to consult, so the per-bro socket rule degrades to no socket (moot
     # anyway — the argv builder re-raises the same KeyError downstream)
     docker_sock = recipe.docker_sock if recipe.docker_sock is not None else False
-    return ScopedSecrets(required=required, optional=optional, docker_sock=docker_sock)
+    return ScopedSecrets(
+      required=required, optional=optional, docker_sock=docker_sock, unbound_kinds=unbound
+    )
   required.update(bro.needed_secrets(harness=recipe.harness))
   if recipe.auth_secret is not None:
     required.add(recipe.auth_secret)
@@ -99,14 +105,16 @@ def scoped_secrets(
     docker_sock = recipe.docker_sock
   else:
     docker_sock = bro.needs_docker
-  return ScopedSecrets(required=required, optional=optional, docker_sock=docker_sock)
+  return ScopedSecrets(
+    required=required, optional=optional, docker_sock=docker_sock, unbound_kinds=unbound
+  )
 
 
 def summoned_credential_scope(
   bro_name: str,
   recipe: ScopeRecipe,
   *,
-  repo: Optional[Path] = None,
+  attachment: Optional[str] = None,
   grant: list[str],
   revoke: list[str],
   llm_spec: Optional['LLMSpec'] = None,
@@ -115,9 +123,9 @@ def summoned_credential_scope(
   — the child harness's — plus the request's overrides. `grant`/`revoke` are the
   credential halves of the request's unified values (`split_scope_overrides`) —
   the `@bro` halves shape the summon allow-list instead. Raises `ValueError` on
-  a no-op override."""
+  a no-op override, or on a kind the launch may not read unbound."""
   return finalize_scoped_secrets(
-    scoped_secrets(bro_name, recipe, repo=repo, llm_spec=llm_spec),
+    scoped_secrets(bro_name, recipe, attachment=attachment, llm_spec=llm_spec),
     grant=grant,
     revoke=revoke,
   )
@@ -125,8 +133,9 @@ def summoned_credential_scope(
 
 class LaunchScopeError(Exception):
   """a launch failed its scope computation or preflight: a malformed or no-op
-  grant/revoke override, an unknown summon target, or an unknown/unresolvable
-  required secret."""
+  grant/revoke override, a credential kind the host reads per project that this
+  launch's attachment binds no entry for, an unknown summon target, or an
+  unknown/unresolvable required secret."""
 
 
 # the unified --grant/--revoke value syntax: a leading `@` marks a bro summon

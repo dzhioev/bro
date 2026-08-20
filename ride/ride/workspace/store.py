@@ -23,11 +23,18 @@ class ScopedSecrets:
   required is hydrated strictly (a missing secret fails launch); optional is the
   best-effort tier (skipped when unresolvable); docker_sock decides the socket
   mount (container launches only — a host session has the host daemon anyway).
+
+  unbound_kinds are the kinds this launch may not read at all: the host selects
+  an instance of each per project and the launch bound no project entry, so the
+  kind resolves to whichever project owns its registry entry. Enforced once the
+  launch's own overrides have had their say (`finalize_scoped_secrets`), since a
+  granted instance names the project outright.
   """
 
   required: set[str]
   optional: set[str]
   docker_sock: bool
+  unbound_kinds: frozenset[str] = frozenset()
 
 
 def _replacement_revokes(scoped_names: set[str], grants: list[str]) -> list[str]:
@@ -70,7 +77,26 @@ def finalize_scoped_secrets(
   )
   required = (scoped.required | set(grant)) & final_names
   optional = final_names - required
-  return ScopedSecrets(required=required, optional=optional, docker_sock=scoped.docker_sock)
+  _refuse_unbound_kinds(final_names, scoped.unbound_kinds)
+  return ScopedSecrets(
+    required=required,
+    optional=optional,
+    docker_sock=scoped.docker_sock,
+    unbound_kinds=scoped.unbound_kinds,
+  )
+
+
+def _refuse_unbound_kinds(names: set[str], unbound: frozenset[str]) -> None:
+  """refuse the scope's kind-addressed reads of a kind the launch may not bind
+  (`ScopedSecrets.unbound_kinds`). A `kind+instance` name passes: it names the
+  instance itself, so nothing is being read on a project's behalf."""
+  refused = sorted(name for name in names if name in unbound)
+  if len(refused) > 0:
+    raise ValueError(
+      f'this host reads {", ".join(refused)} per project, and no project entry names this '
+      f"launch's attachment; add it to ~/.bro.json, or name the instance for this launch "
+      f'(--grant {refused[0]}+<instance>)'
+    )
 
 
 def log_scoped_secrets(subject: str, required: Collection[str], optional: Collection[str]) -> None:

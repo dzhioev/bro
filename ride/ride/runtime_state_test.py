@@ -31,6 +31,16 @@ def _git(*arguments: str, cwd: Path) -> None:
   subprocess.run(['git', *arguments], cwd=cwd, check=True, capture_output=True)
 
 
+def _checkout(base: Path) -> Path:
+  repository = base.parent / 'repository'
+  repository.mkdir(parents=True)
+  _git('init', '--quiet', cwd=repository)
+  _git('config', 'user.name', 'Test', cwd=repository)
+  _git('config', 'user.email', 'test@example.test', cwd=repository)
+  _git('commit', '--allow-empty', '--quiet', '-m', 'initial', cwd=repository)
+  return repository
+
+
 def test_clean_migration_merges_stores_and_backfills_clone_attachment(monkeypatch, caplog):
   base = runtime_base()
   root = _legacy_root(base)
@@ -71,16 +81,44 @@ def test_clean_migration_merges_stores_and_backfills_clone_attachment(monkeypatc
   assert (base / 'summon' / 'session.jsonl').is_file()
   assert (base / 'broker' / 'request.sock').is_file()
   assert '1 workspace(s)' in caplog.text
+  assert 'attached by upstream URL' in caplog.text
+
+
+def test_a_container_workspace_keeps_the_roots_own_checkout_attachment(monkeypatch):
+  # a container clone's origin names the upstream URL, not the checkout the
+  # session was launched against — the root's key is what still names it, and it
+  # is the identity the workspace's host-config project entry is keyed on
+  base = runtime_base()
+  repository = _checkout(base)
+  root = _legacy_root(base, runtime_state._project_key(repository))
+  worktree = _workspace(root, 'worktree-session', kind='worktree')
+  _git(
+    'worktree',
+    'add',
+    '--quiet',
+    '-b',
+    'worktree-worktree-session',
+    str(worktree / 'tree'),
+    cwd=repository,
+  )
+  container = _workspace(root, 'container-session')
+  tree = container / 'tree'
+  tree.mkdir()
+  _git('init', '--quiet', cwd=tree)
+  _git('remote', 'add', 'origin', 'https://example.test/owner/repo.git', cwd=tree)
+  monkeypatch.setattr(runtime_state, '_running_mounts', lambda: set())
+
+  migrate_legacy_runtime_state()
+
+  for name in ('worktree-session', 'container-session'):
+    migrated = base / 'workspaces' / name
+    assert json.loads((migrated / 'meta.json').read_text())['repo'] == str(repository)
+    assert json.loads((migrated / 'resume.json').read_text())['repo'] == str(repository)
 
 
 def test_worktree_attachment_and_registration_follow_the_moved_workspace():
   base = runtime_base()
-  repository = base.parent / 'repository'
-  repository.mkdir(parents=True)
-  _git('init', '--quiet', cwd=repository)
-  _git('config', 'user.name', 'Test', cwd=repository)
-  _git('config', 'user.email', 'test@example.test', cwd=repository)
-  _git('commit', '--allow-empty', '--quiet', '-m', 'initial', cwd=repository)
+  repository = _checkout(base)
   root = _legacy_root(base)
   workspace = _workspace(root, 'session', kind='worktree')
   _git(
@@ -106,12 +144,7 @@ def test_worktree_attachment_and_registration_follow_the_moved_workspace():
 
 def test_partial_rerun_repairs_a_worktree_moved_before_cleanup():
   base = runtime_base()
-  repository = base.parent / 'repository'
-  repository.mkdir(parents=True)
-  _git('init', '--quiet', cwd=repository)
-  _git('config', 'user.name', 'Test', cwd=repository)
-  _git('config', 'user.email', 'test@example.test', cwd=repository)
-  _git('commit', '--allow-empty', '--quiet', '-m', 'initial', cwd=repository)
+  repository = _checkout(base)
   root = _legacy_root(base)
   source = _workspace(root, 'session', kind='worktree')
   _git('worktree', 'add', '--quiet', '-b', 'worktree-session', str(source / 'tree'), cwd=repository)

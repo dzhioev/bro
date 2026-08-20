@@ -2,21 +2,25 @@
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import re
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 from typing import Any, Optional
 
 from bro.base import log
+from bro.base.git_url import is_git_url, normalize_git_url
 from bro.workspace.paths import find_project_root, runtime_base
-from ride.repository import is_git_url, normalize_git_url
 from ride.workspace.metadata import WorkspaceKind, WorkspaceMetadata
 
 _PROJECT_KEY = re.compile(r'^.+-[0-9a-f]{8}$')
+_PROJECT_KEY_BYTES = 4
+_UNSAFE_IN_KEY = re.compile(r'[^A-Za-z0-9._-]')
 _WORKSPACES = 'workspaces'
 _MIGRATION_LOCK = '.state-migration.lock'
 _PENDING_WORKTREES = '.state-migration-worktrees.json'
@@ -33,6 +37,10 @@ class _WorkspaceMigration:
   destination: Path
   metadata: dict[str, Any]
   resume: Optional[dict[str, Any]]
+  # the attachment came off a container clone's `origin` rather than the root's
+  # own checkout, so it names the repository but not the identity the workspace
+  # was launched under
+  url_recovered: bool
 
 
 @dataclass(frozen=True)
@@ -40,6 +48,16 @@ class _MigrationPlan:
   roots: tuple[Path, ...]
   workspaces: tuple[_WorkspaceMigration, ...]
   detached_workspaces: tuple[str, ...]
+  urls_recovered: tuple[str, ...]
+
+
+def _project_key(project: Path) -> str:
+  """the legacy root name a checkout's runtime state lived under: the checkout's
+  own directory name plus a digest of its canonical path. One-way, so it reads a
+  candidate path rather than yielding one."""
+  canonical = str(project.resolve())
+  digest = hashlib.blake2b(canonical.encode(), digest_size=_PROJECT_KEY_BYTES).hexdigest()
+  return f'{_UNSAFE_IN_KEY.sub("-", Path(canonical).name)}-{digest}'
 
 
 def _legacy_roots(base: Path) -> tuple[Path, ...]:
@@ -127,10 +145,35 @@ def _container_attachment(tree: Path) -> Optional[str]:
   return None if root is None else str(root)
 
 
-def _workspace_attachment(path: Path, kind: WorkspaceKind) -> Optional[str]:
+def _root_checkout(root: Path, workspaces: tuple[Path, ...]) -> Optional[str]:
+  """the checkout a legacy project-key root holds the state of.
+
+  Every workspace under one is attached to it: the key derives from the checkout
+  path, and these roots predate both detached sessions and URL attachments. Only
+  a worktree workspace still names the path — its tree is a linked worktree of
+  the checkout, while a container workspace's is a clone whose `origin` the
+  entrypoint retargeted to the upstream URL. `_project_key` confirms a candidate
+  is the checkout this root is keyed on."""
+  for workspace in workspaces:
+    tree = workspace / 'tree'
+    if not tree.is_dir():
+      continue
+    candidate = find_project_root(tree)
+    if candidate is not None and _project_key(candidate) == root.name:
+      return str(candidate)
+  return None
+
+
+def _workspace_attachment(
+  path: Path, kind: WorkspaceKind, checkout: Optional[str]
+) -> tuple[Optional[str], bool]:
+  """the attachment to record for a legacy workspace, and whether it fell back to
+  the URL its clone's `origin` names (`_WorkspaceMigration.url_recovered`)."""
   tree = path / 'tree'
   if not tree.is_dir():
-    return None
+    return None, False
+  if checkout is not None:
+    return checkout, False
   if kind is WorkspaceKind.WORKTREE:
     attachment = _worktree_attachment(tree)
   else:
@@ -139,10 +182,12 @@ def _workspace_attachment(path: Path, kind: WorkspaceKind) -> Optional[str]:
     raise RuntimeStateMigrationError(
       f'cannot recover the repository attachment for materialized legacy workspace {path}'
     )
-  return attachment
+  return attachment, attachment is not None and is_git_url(attachment)
 
 
-def _workspace_migration(source: Path, destination: Path) -> tuple[_WorkspaceMigration, bool]:
+def _workspace_migration(
+  source: Path, destination: Path, checkout: Optional[str]
+) -> _WorkspaceMigration:
   metadata_path = source / 'meta.json'
   metadata = _read_object(metadata_path)
   if metadata.keys() == _OLD_METADATA_FIELDS:
@@ -160,7 +205,7 @@ def _workspace_migration(source: Path, destination: Path) -> tuple[_WorkspaceMig
       raise RuntimeStateMigrationError(
         f'legacy workspace throwaway must be a bool: {metadata_path}'
       )
-    attachment = _workspace_attachment(source, kind)
+    attachment, url_recovered = _workspace_attachment(source, kind, checkout)
     migrated = WorkspaceMetadata(
       kind=kind,
       repo=attachment,
@@ -175,6 +220,7 @@ def _workspace_migration(source: Path, destination: Path) -> tuple[_WorkspaceMig
         f'invalid workspace metadata during migration: {metadata_path}'
       ) from error
     attachment = current.repo
+    url_recovered = False
     migrated = current.dump()
 
   resume_path = source / 'resume.json'
@@ -185,22 +231,24 @@ def _workspace_migration(source: Path, destination: Path) -> tuple[_WorkspaceMig
         f'workspace attachment disagrees between {metadata_path} and {resume_path}'
       )
     resume = {**resume, 'repo': attachment}
-  return _WorkspaceMigration(source, destination, migrated, resume), attachment is None
+  return _WorkspaceMigration(source, destination, migrated, resume, url_recovered)
 
 
-def _legacy_workspaces(roots: tuple[Path, ...]) -> tuple[Path, ...]:
-  workspaces = []
+def _legacy_workspaces(roots: tuple[Path, ...]) -> dict[Path, tuple[Path, ...]]:
+  by_root: dict[Path, tuple[Path, ...]] = {}
   for root in roots:
     store = root / _WORKSPACES
     if not store.exists():
       continue
     if not store.is_dir():
       raise RuntimeStateMigrationError(f'legacy workspace store is not a directory: {store}')
+    workspaces = []
     for workspace in sorted(store.iterdir()):
       if not workspace.is_dir():
         raise RuntimeStateMigrationError(f'legacy workspace entry is not a directory: {workspace}')
       workspaces.append(workspace)
-  return tuple(workspaces)
+    by_root[root] = tuple(workspaces)
+  return by_root
 
 
 @contextlib.contextmanager
@@ -345,28 +393,33 @@ def _preflight_summon_request_ids(base: Path, roots: tuple[Path, ...]) -> None:
 
 
 def _build_plan(
-  base: Path, roots: tuple[Path, ...], workspace_sources: tuple[Path, ...]
+  base: Path, roots: tuple[Path, ...], workspace_sources: dict[Path, tuple[Path, ...]]
 ) -> _MigrationPlan:
   workspace_names: dict[str, Path] = {}
   workspaces: list[_WorkspaceMigration] = []
   detached: list[str] = []
+  urls_recovered: list[str] = []
   container_trees: dict[str, Path] = {}
 
-  for source in workspace_sources:
-    destination = base / _WORKSPACES / source.name
-    other = workspace_names.get(source.name)
-    if other is not None:
-      raise _collision(source, other)
-    if _path_exists(destination):
-      raise _collision(source, destination)
-    migration, is_detached = _workspace_migration(source, destination)
-    workspace_names[source.name] = source
-    workspaces.append(migration)
-    if is_detached:
-      detached.append(source.name)
-    tree = source / 'tree'
-    if migration.metadata['kind'] == WorkspaceKind.CONTAINER.value and tree.is_dir():
-      container_trees[source.name] = tree
+  for root, sources in workspace_sources.items():
+    checkout = _root_checkout(root, sources)
+    for source in sources:
+      destination = base / _WORKSPACES / source.name
+      other = workspace_names.get(source.name)
+      if other is not None:
+        raise _collision(source, other)
+      if _path_exists(destination):
+        raise _collision(source, destination)
+      migration = _workspace_migration(source, destination, checkout)
+      workspace_names[source.name] = source
+      workspaces.append(migration)
+      if migration.metadata.get('repo') is None:
+        detached.append(source.name)
+      if migration.url_recovered:
+        urls_recovered.append(source.name)
+      tree = source / 'tree'
+      if migration.metadata['kind'] == WorkspaceKind.CONTAINER.value and tree.is_dir():
+        container_trees[source.name] = tree
 
   if len(container_trees) > 0:
     mounts = _running_mounts()
@@ -383,7 +436,7 @@ def _build_plan(
         _preflight_store(store, base / store.name, base, planned_files)
   _preflight_trail_ids(base, roots)
   _preflight_summon_request_ids(base, roots)
-  return _MigrationPlan(tuple(roots), tuple(workspaces), tuple(detached))
+  return _MigrationPlan(tuple(roots), tuple(workspaces), tuple(detached), tuple(urls_recovered))
 
 
 def _merge_store(source: Path, destination: Path, base: Path) -> None:
@@ -502,7 +555,7 @@ def migrate_legacy_runtime_state() -> None:
     if len(roots) == 0:
       return
     workspace_sources = _legacy_workspaces(roots)
-    with _hold_workspace_locks(workspace_sources):
+    with _hold_workspace_locks(tuple(chain.from_iterable(workspace_sources.values()))):
       plan = _build_plan(base, roots, workspace_sources)
       _apply_plan(base, plan)
   log.info(
@@ -516,4 +569,11 @@ def migrate_legacy_runtime_state() -> None:
     log.warning(
       'migrated workspace(s) without a recoverable repository attachment as detached: %s',
       ', '.join(plan.detached_workspaces),
+    )
+  if len(plan.urls_recovered) > 0:
+    log.warning(
+      'migrated workspace(s) attached by upstream URL because their legacy root named no '
+      'recoverable checkout, so a host config entry keyed on that checkout no longer '
+      'reaches them: %s',
+      ', '.join(plan.urls_recovered),
     )

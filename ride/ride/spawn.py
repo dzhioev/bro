@@ -202,7 +202,7 @@ def _lower_summon(
   scoped = summoned_credential_scope(
     launch.target,
     harness.scope_recipe(spec.harness_options),
-    repo=None if repo is None else repo.credential_root,
+    attachment=None if repo is None else repo.identity,
     grant=grant_credentials,
     revoke=revoke_credentials,
     llm_spec=spec.llm_spec,
