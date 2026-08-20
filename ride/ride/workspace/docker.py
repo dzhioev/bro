@@ -353,7 +353,6 @@ def _docker_create_argv(
 ) -> list[str]:
   """the create half of create/copy/start, before the scoped-store injection window."""
   repository = None if repo is None else as_repository(repo)
-  home = Path.home()
   argv = ['docker', 'create']
   if tty:
     argv.append('-it')
@@ -362,8 +361,6 @@ def _docker_create_argv(
     '--init',
     '-v',
     f'{tree}:/workspace',
-    '-v',
-    f'{home}/.gitconfig:/host-gitconfig:ro',
     '-v',
     f'ride-runtime-{runtime_bundle_hash}:{_RUNTIME_MOUNT}:ro',
     '-e',

@@ -202,7 +202,9 @@ class TestSource:
     assert json.loads(store['github.cred']) == config
     scoped = json.loads(store[credentials.REGISTRY_FILE])
     assert scoped['github']['sources'] == [{'type': 'github_app', 'file': 'github.cred'}]
-    assert 'credentials get github' in scoped['github']['install']
+    assert scoped['github']['install']['commands']['gh']['env'] == {
+      'GH_TOKEN': {'secret': 'github'}
+    }
     rebuilt = credentials._registry_from_dict(scoped)
     source = rebuilt['github'].sources[0]
     assert isinstance(source, app.Source)

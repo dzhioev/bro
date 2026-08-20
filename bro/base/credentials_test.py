@@ -1,5 +1,8 @@
 import importlib.metadata
 import json
+import os
+import stat
+import subprocess
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -36,7 +39,7 @@ def bro_dir(configs_dir: Path) -> Path:
 TEST_SECRET = 'test_secret'
 _TEST_SECRET_ENTRY = {
   'sources': [{'file': 'test_secret.json'}],
-  'install': 'export TEST_SECRET="$(credentials get \'{{insert #name}}\')"',
+  'install': {'env': {'TEST_SECRET': {'secret': '{{insert #name}}'}}},
 }
 
 
@@ -749,16 +752,9 @@ class TestDefaultRegistry:
     for name in names:
       assert name in registry
 
-  def test_install_file_reference_inlines_the_hook_file(self):
-    # the github entry declares its hook as {"file": ...}; the load inlines the
-    # shell file's text, so the rendered hook carries its content
-    install = credentials.default_registry()['github'].install
-    assert install is not None
-    assert '.local/bin/gh' in install
-
-  def test_install_file_reference_rejected_outside_the_builtin_registry(self):
-    with pytest.raises(ValueError, match='install must be a string'):
-      credentials.Secret.from_dict('x', {'sources': [{'file': 'f'}], 'install': {'file': 'h.sh'}})
+  def test_install_must_be_declared_as_an_object(self):
+    with pytest.raises(ValueError, match='install must be an object'):
+      credentials.Secret.from_dict('x', {'sources': [{'file': 'f'}], 'install': 'export X=1'})
 
   def test_github_declares_no_builtin_source(self):
     # the github kind's sources are host-local (the app minting config in the
@@ -769,19 +765,19 @@ class TestDefaultRegistry:
 
   def test_builtin_hooks_render_the_name_template(self):
     # the checked-in hooks are `{{insert #name}}` templates; a plain kind entry
-    # renders with its own name in the single-quoted insert slot
-    registry = credentials.default_registry()
-    assert registry['github'].install is not None
-    assert 'credentials get github' in registry['github'].install
-    assert '{{' not in registry['github'].install
+    # renders with its own name wherever one appears
+    install = credentials.default_registry()['github'].install
+    assert install is not None
+    assert install['commands']['gh']['env']['GH_TOKEN'] == {'secret': 'github'}
     # non-directive braces are literal text to the engine — the shell function
-    # body in the credential-helper line survives rendering
-    assert '{ echo username=x-access-token' in registry['github'].install
+    # body of the credential helper survives rendering
+    assert '{ echo username=x-access-token' in install['env']['GIT_CONFIG_VALUE_1']
+    assert 'credentials get github' in install['env']['GIT_CONFIG_VALUE_1']
 
   def test_hook_with_unknown_template_variable_raises(self):
     with pytest.raises(template.TemplateError, match='unknown variable'):
       credentials.Secret.from_dict(
-        'x', {'sources': [{'file': 'f'}], 'install': 'echo {{insert #nope}}'}
+        'x', {'sources': [{'file': 'f'}], 'install': {'env': {'X': '{{insert #nope}}'}}}
       )
 
 
@@ -864,11 +860,11 @@ class TestHostRegistry:
     registry = credentials.host_registry()
     variant = registry['github+alice'].install
     assert variant is not None
-    assert 'credentials get github+alice' in variant
+    assert variant['commands']['gh']['env'] == {'GH_TOKEN': {'secret': 'github+alice'}}
     # the kind's own hook still names the kind
     kind = registry['github'].install
     assert kind is not None
-    assert 'credentials get github' in kind
+    assert kind['commands']['gh']['env'] == {'GH_TOKEN': {'secret': 'github'}}
 
   def test_variant_of_hookless_kind_has_no_hook(self, bro_dir: Path):
     _write(
@@ -882,7 +878,7 @@ class TestHostRegistry:
     _write(
       bro_dir,
       credentials.HOST_REGISTRY_FILE,
-      {'github+alice': {'sources': [{'file': 'f'}], 'install': 'export X=1'}},
+      {'github+alice': {'sources': [{'file': 'f'}], 'install': {'env': {'X': '1'}}}},
     )
     with pytest.raises(ValueError, match='the kind entry owns it'):
       credentials.host_registry()
@@ -914,8 +910,7 @@ class TestHostRegistry:
     assert source.file == 'github_token_acme'
     install = registry['github'].install
     assert install is not None
-    assert 'credentials get github' in install
-    assert 'acme' not in install
+    assert install['commands']['gh']['env'] == {'GH_TOKEN': {'secret': 'github'}}
 
   def test_selected_instance_resolves_kind_reads_end_to_end(self, configs_dir: Path, bro_dir: Path):
     _write(
@@ -1417,7 +1412,7 @@ class TestBuildScopedStore:
     _write(configs_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
     registry = {
       'github': credentials.Secret(
-        'github', [_TicketSource('ticket.json')], install='hook for {{insert #name}}'
+        'github', [_TicketSource('ticket.json')], install={'env': {'X': '{{insert #name}}'}}
       ),
       'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
     }
@@ -1438,14 +1433,14 @@ class TestBuildScopedStore:
     _write(configs_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
     registry = {
       'github': credentials.Secret(
-        'github', [_TicketSource('ticket.json')], install='hook for {{insert #name}}'
+        'github', [_TicketSource('ticket.json')], install={'env': {'X': '{{insert #name}}'}}
       ),
       'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
     }
     monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
     store = credentials.build_scoped_store(['brog', 'github'])
     scoped = json.loads(store[credentials.REGISTRY_FILE])
-    assert scoped['github']['install'] == 'hook for github'
+    assert scoped['github']['install'] == {'env': {'X': 'github'}}
 
   def test_pulled_kind_follows_the_selected_instance(
     self, configs_dir: Path, bro_dir: Path, monkeypatch
@@ -1605,10 +1600,11 @@ class TestBuildScopedStore:
     registry = json.loads(store[credentials.REGISTRY_FILE])
     assert set(registry) == {'github'}
     assert registry['github']['sources'] == [{'file': 'github.cred'}]
-    # the hook is re-rendered for the kind name — in-session `eval` pulls the
-    # value via `credentials get github`, the name the scoped store resolves
-    assert 'credentials get github' in registry['github']['install']
-    assert 'github+alice' not in registry['github']['install']
+    # the hook is re-rendered for the kind name — the session reads the value
+    # under `github`, the name its scoped store resolves
+    assert registry['github']['install']['commands']['gh']['env'] == {
+      'GH_TOKEN': {'secret': 'github'}
+    }
     rebuilt = credentials._registry_from_dict(registry)
     assert rebuilt['github'].install == registry['github']['install']
 
@@ -1655,7 +1651,7 @@ class TestBuildScopedStore:
     store = credentials.build_scoped_store(['github'])
     assert store['github.cred'] == b'ghp_acme'
     registry = json.loads(store[credentials.REGISTRY_FILE])
-    assert 'credentials get github' in registry['github']['install']
+    assert 'credentials get github' in registry['github']['install']['env']['GIT_CONFIG_VALUE_1']
 
   def test_two_instances_of_a_kind_raise(self, configs_dir: Path, bro_dir: Path):
     _write(
@@ -1808,6 +1804,15 @@ class TestApplyGrantRevoke:
       credentials.apply_grant_revoke({'a'}, grant=['b'], revoke=['b'])
 
 
+def _hook_registry(tmp_path: Path, **hooks: dict) -> dict[str, credentials.Secret]:
+  """a registry whose secrets declare `hooks` and nothing else."""
+  path = tmp_path / 'hook_registry.json'
+  path.write_text(
+    json.dumps({name: {'sources': [], 'install': hook} for name, hook in hooks.items()})
+  )
+  return credentials.load_registry(path)
+
+
 class TestInstallHooks:
   def test_framework_and_test_secrets_have_install_hooks(self):
     registry = credentials.default_registry()
@@ -1821,7 +1826,9 @@ class TestInstallHooks:
     assert isinstance(source, credentials.LocalSource)
     assert source.file == 'claude_code_oauth_token'
     # install hook exports the env var claude reads above ~/.claude/.credentials.json
-    assert registry['claude_code'].install is not None
+    assert registry['claude_code'].install == {
+      'env': {'CLAUDE_CODE_OAUTH_TOKEN': {'secret': 'claude_code'}}
+    }
 
   def test_test_secret_source_file(self):
     registry = credentials.default_registry()
@@ -1829,42 +1836,119 @@ class TestInstallHooks:
     assert isinstance(source, credentials.LocalSource)
     assert source.file == 'test_secret.json'
 
-  def test_install_hooks_are_source_agnostic(self, configs_dir: Path):
-    # hooks pull their value via `credentials get` at eval time — no resolved file
-    # path is interpolated, so there's no quoting/injection surface. no files
-    # written: presence is no longer a path check.
-    out = credentials.install_hooks()
-    # github → git credential helper + a PATH-front gh wrapper, each pulling the
-    # token via `credentials get` at use time (fresh across minted app tokens);
-    # no ambient GH_TOKEN export — the wrapper sets it per invocation
-    assert 'credential.helper' in out
-    assert 'credentials get github' in out
-    assert '.local/bin/gh' in out
-    assert 'GH_TOKEN' in out
-    assert 'export GH_TOKEN' not in out
-    assert 'TEST_SECRET' in out
-    assert "credentials get 'test_secret'" in out
-    # claude_code → exports CLAUDE_CODE_OAUTH_TOKEN via `credentials get`
-    assert 'CLAUDE_CODE_OAUTH_TOKEN' in out
-    assert "credentials get 'claude_code'" in out
-    # every template directive is rendered away by emit time
-    assert '{{' not in out
-    # no absolute resolver path or source file is interpolated
-    assert str(configs_dir) not in out
-    assert 'test_secret.json' not in out
-    assert 'openai' not in out
+  def test_declared_environment_is_reported(self, tmp_path: Path):
+    registry = _hook_registry(
+      tmp_path,
+      one={'env': {'ONE': '1'}},
+      two={'env': {'TWO': {'path': 'wiring'}}},
+    )
+    directory = tmp_path / 'environment'
+    assert credentials.install_hooks(registry, directory, {}) == {
+      'ONE': '1',
+      'TWO': f'{directory}/wiring',
+    }
 
-  def test_install_hooks_emit_for_all_declared_secrets(self, configs_dir: Path):
-    # presence is no longer a path check: every registry secret that declares a
-    # hook emits even with no local file present. in a scoped container the
-    # registry *is* the hydrated (present) set, so this is the right bound.
-    out = credentials.install_hooks()
-    assert 'credentials get github' in out
-    assert "credentials get 'test_secret'" in out
+  def test_secret_values_resolve_into_files_and_environment(
+    self, configs_dir: Path, tmp_path: Path
+  ):
+    _write(configs_dir, 'test_secret.json', {'token': 't'})
+    registry = _hook_registry(
+      tmp_path,
+      test_secret={
+        'files': {'nested/value': {'secret': TEST_SECRET}},
+        'env': {'TEST_SECRET': {'secret': TEST_SECRET}},
+      },
+    )
+    directory = tmp_path / 'environment'
+    exported = credentials.install_hooks(registry, directory, {})
+    assert json.loads((directory / 'nested' / 'value').read_text()) == {'token': 't'}
+    assert json.loads(exported['TEST_SECRET']) == {'token': 't'}
 
-  def test_cli_install_hooks(self, configs_dir: Path, capsys):
-    assert credentials.main(['credentials', 'install-hooks']) is None
-    assert "credentials get 'test_secret'" in capsys.readouterr().out
+  def test_files_are_written_unreadable_to_others(self, tmp_path: Path):
+    registry = _hook_registry(tmp_path, one={'files': {'wiring': 'text'}})
+    directory = tmp_path / 'environment'
+    credentials.install_hooks(registry, directory, {})
+    assert (directory / 'wiring').read_text() == 'text'
+    assert stat.S_IMODE((directory / 'wiring').stat().st_mode) == 0o600
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+
+  def test_a_path_outside_the_directory_is_refused(self, tmp_path: Path):
+    with pytest.raises(ValueError, match='must be relative'):
+      _hook_registry(tmp_path, one={'files': {'../escape': 'text'}})
+    with pytest.raises(ValueError, match='must be relative'):
+      _hook_registry(tmp_path, one={'env': {'ONE': {'path': '/etc/passwd'}}})
+
+  def test_an_unknown_section_is_refused(self, tmp_path: Path):
+    with pytest.raises(ValueError, match='unknown section'):
+      _hook_registry(tmp_path, one={'run': 'curl evil.example'})
+
+  def test_hooks_contending_for_one_variable_are_refused(self, tmp_path: Path):
+    registry = _hook_registry(tmp_path, one={'env': {'SHARED': 'a'}}, two={'env': {'SHARED': 'b'}})
+    with pytest.raises(ValueError, match='both declare variable SHARED'):
+      credentials.install_hooks(registry, tmp_path / 'environment', {})
+
+  def test_session_directory_is_recreated(self, tmp_path: Path):
+    directory = tmp_path / 'environment'
+    directory.mkdir()
+    (directory / 'stale').write_text('from an earlier session')
+    credentials.install_hooks(_hook_registry(tmp_path, one={'env': {'ONE': '1'}}), directory, {})
+    assert not (directory / 'stale').exists()
+
+  def test_session_directory_is_created_without_hooks(self, tmp_path: Path):
+    directory = tmp_path / 'environment'
+    assert credentials.install_hooks({}, directory, {}) == {}
+    assert directory.is_dir()
+
+  def test_shadowing_a_command_that_is_absent_raises(self, tmp_path: Path):
+    registry = _hook_registry(tmp_path, one={'commands': {'nonesuch': {}}})
+    with pytest.raises(RuntimeError, match='not on the'):
+      credentials.install_hooks(registry, tmp_path / 'environment', {'PATH': str(tmp_path)})
+
+  def test_github_hook_wires_git_and_gh(self, tmp_path: Path):
+    registry = {'github': credentials.default_registry()['github']}
+    directory = tmp_path / 'environment'
+    exported = credentials.install_hooks(registry, directory, {'PATH': os.environ['PATH']})
+    # git reads the session's config from the environment, so the wiring is
+    # nowhere on disk: the empty first helper resets whatever a config outside
+    # the session declares, and the rewrite carries ssh remotes to the helper
+    assert exported['GIT_CONFIG_COUNT'] == '3'
+    assert exported['GIT_CONFIG_KEY_0'] == 'credential.helper'
+    assert exported['GIT_CONFIG_VALUE_0'] == ''
+    assert 'credentials get github' in exported['GIT_CONFIG_VALUE_1']
+    assert exported['GIT_CONFIG_VALUE_2'] == 'git@github.com:'
+    # an inherited token speaks for another identity; the wrapper gives gh its own
+    assert exported['GH_TOKEN'] == ''
+    assert exported['GITHUB_TOKEN'] == ''
+    assert exported['GH_CONFIG_DIR'] == f'{directory}/gh'
+    assert exported['PATH'].split(os.pathsep)[0] == f'{directory}/bin'
+    wrapper = directory / 'bin' / 'gh'
+    assert os.access(wrapper, os.X_OK)
+    assert 'GH_TOKEN="$(credentials get github)"' in wrapper.read_text()
+
+  def test_shadowing_wrapper_runs_the_real_command(self, tmp_path: Path):
+    shadowed = tmp_path / 'real'
+    shadowed.mkdir()
+    (shadowed / 'tool').write_text('#!/usr/bin/env bash\necho "$SHADOW $*"\n')
+    (shadowed / 'tool').chmod(0o700)
+    registry = _hook_registry(tmp_path, one={'commands': {'tool': {'env': {'SHADOW': 'wired'}}}})
+    directory = tmp_path / 'environment'
+    path = os.pathsep.join([str(shadowed), os.environ['PATH']])
+    exported = credentials.install_hooks(registry, directory, {'PATH': path})
+    run = subprocess.run(
+      ['tool', 'argument'],
+      env={'PATH': exported['PATH']},
+      capture_output=True,
+      text=True,
+      check=True,
+    )
+    assert run.stdout == 'wired argument\n'
+
+  def test_cli_prints_the_exported_environment(self, tmp_path: Path, monkeypatch, capsys):
+    registry = tmp_path / 'registry.json'
+    registry.write_text(json.dumps({'one': {'sources': [], 'install': {'env': {'ONE': 'a b'}}}}))
+    monkeypatch.setenv(credentials.REGISTRY_ENV, str(registry))
+    assert credentials.main(['credentials', 'install-hooks', str(tmp_path / 'environment')]) is None
+    assert capsys.readouterr().out == "export ONE='a b'\n"
 
   def test_cli_get_without_name_errors(self, configs_dir: Path, capsys):
     # the get subparser makes name a required positional, so argparse enforces it

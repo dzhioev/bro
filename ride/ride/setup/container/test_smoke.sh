@@ -97,14 +97,6 @@ git clone --quiet "$PROJECT" "$HOST_REPO"
 git -C "$HOST_REPO" remote set-url origin "$(git -C "$PROJECT" remote get-url origin)"
 git -C "$HOST_REPO" update-ref refs/remotes/origin/master HEAD
 
-cat > "$SMOKE_TMP/gitconfig" <<'GC'
-[user]
-    name = Smoke Test
-    email = test@test.com
-[init]
-    defaultBranch = master
-GC
-
 echo '{"projects":{"/workspace":{"smoke_seed":true}}}' > "$SMOKE_TMP/claude/.claude.json"
 echo '{"host_marker":"untouched"}' > "$SMOKE_TMP/host_claude.json"
 HOST_CLAUDE_SHA="$(sha256sum "$SMOKE_TMP/host_claude.json" | cut -d' ' -f1)"
@@ -113,7 +105,6 @@ echo "running entrypoint" >&2
 docker run --rm -i \
   -v "$SMOKE_TMP/workspace:/workspace" \
   -v "$HOST_REPO:/host-repo:ro" \
-  -v "$SMOKE_TMP/gitconfig:/host-gitconfig:ro" \
   -v "$SMOKE_TMP/claude:/home/ride/.claude" \
   -v "$SMOKE_TMP/bro:/home/ride/.bro" \
   -v "ride-runtime-$BUNDLE_HASH:/var/ride/runtime:ro" \
@@ -124,7 +115,9 @@ docker run --rm -i \
   -e "RIDE_BRANCH=worktree-smoke-test" \
   "$TAG" bash -s >&2 <<'SMOKE'
     set -e
-    git config --global --list > /dev/null
+    # the install-hook pass ran: its session directory is there, with no hook to
+    # apply from the empty scoped registry the run mounts
+    test -d "$HOME/.bro-environment"
     test -d /workspace/.git
     cd /workspace
     test "$(git rev-parse HEAD)" = "$(git -C /host-repo rev-parse HEAD)"
@@ -166,7 +159,6 @@ echo "running consumer fixture without bro in its lock" >&2
 docker run --rm \
   -v "$SMOKE_TMP/consumer-uv-workspace:/workspace" \
   -v "$CONSUMER_UV_REPO:/host-repo:ro" \
-  -v "$SMOKE_TMP/gitconfig:/host-gitconfig:ro" \
   -v "$SMOKE_TMP/consumer-uv-claude:/home/ride/.claude" \
   -v "$SMOKE_TMP/consumer-uv-bro:/home/ride/.bro" \
   -v "ride-runtime-$BUNDLE_HASH:/var/ride/runtime:ro" \
@@ -193,7 +185,6 @@ PY
 docker run --rm \
   -v "$SMOKE_TMP/consumer-plain-workspace:/workspace" \
   -v "$CONSUMER_PLAIN_REPO:/host-repo:ro" \
-  -v "$SMOKE_TMP/gitconfig:/host-gitconfig:ro" \
   -v "$SMOKE_TMP/consumer-plain-claude:/home/ride/.claude" \
   -v "$SMOKE_TMP/consumer-plain-bro:/home/ride/.bro" \
   -v "ride-runtime-$BUNDLE_HASH:/var/ride/runtime:ro" \
@@ -224,7 +215,6 @@ ln -s /opt/ride-venv "$SMOKE_TMP/workspace/.venv"
 docker run --rm \
   -v "$SMOKE_TMP/workspace:/workspace" \
   -v "$HOST_REPO:/host-repo:ro" \
-  -v "$SMOKE_TMP/gitconfig:/host-gitconfig:ro" \
   -v "$SMOKE_TMP/claude:/home/ride/.claude" \
   -v "$SMOKE_TMP/bro:/home/ride/.bro" \
   -v "ride-runtime-$BUNDLE_HASH:/var/ride/runtime:ro" \

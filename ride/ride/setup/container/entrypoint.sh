@@ -43,19 +43,15 @@ fi
 # settings.json inside it and syncs credentials; host machine state stays on the
 # host.
 
-log VERBOSE 'installing credential hooks'
-install_hooks="$(credentials install-hooks)"
-eval "$install_hooks"
+# the credential install hooks write their wiring into a directory of the
+# container's own layer, so it dies with the container the way the scoped store
+# does. captured before the eval, so failing hooks abort the launch instead of
+# becoming a successful empty eval.
+session_environment="$(credentials install-hooks "$HOME/.bro-environment")"
+eval "$session_environment"
 
 # Repository setup runs only for an explicitly attached launch.
 if [ -n "${RIDE_REPO:-}" ]; then
-# seed host git config into a writable copy (the host file is bind-mounted
-# read-only at /host-gitconfig; git config --global needs atomic rename).
-# done before the clone so init.defaultBranch suppresses the git hint
-if [ -f /host-gitconfig ] && [ ! -f "$HOME/.gitconfig" ]; then
-  cp /host-gitconfig "$HOME/.gitconfig"
-fi
-
 # mark /workspace safe for git. on Docker for Mac, virtiofs reports the bind
 # mount as root-owned even though ride can read/write it (see uid-remap skip in
 # the root phase); without this, git refuses with "dubious ownership"
