@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from bro.base import log, spawn
-from bro.runtime.mcp_server import BEARER_TOKEN_ENV
+from bro.runtime.mcp_server import BEARER_TOKEN_ENV, __cli_name__ as MCP_SERVER_COMMAND
 
 # how long a runner-owned server may take to bind. the bind needs only
 # mcp-server's cheap module imports (the heavy ones are deferred past it), so
@@ -117,15 +117,14 @@ class _SessionMCPServer:
 def start_session_mcp_server(spec: str, cwd: Path, env: Mapping[str, str]) -> _SessionMCPServer:
   """start `mcp-server <spec> --http` on an OS-assigned port for a session.
 
-  `env` must carry the session command PATH so the console script and its imports
-  resolve from the selected runtime. an OS-assigned port (`--port 0`) avoids
-  collisions with concurrent sessions in a shared netns; the server binds it
-  before its heavy imports and publishes it via `--port-file`, so the wait here
-  is milliseconds and a claude connect that lands mid-import sits in the TCP
-  backlog until uvicorn accepts. runs in its own session (spawn.popen), outside
+  an OS-assigned port (`--port 0`) avoids collisions with concurrent sessions in
+  a shared netns; the server binds it before its heavy imports and publishes it
+  via `--port-file`, so the wait here is milliseconds and a claude connect that
+  lands mid-import sits in the TCP backlog until uvicorn accepts. runs in its own session (spawn.popen), outside
   the terminal's process group, so a Ctrl-C aimed at claude doesn't kill it; the
   caller stops it once claude exits and gates the launch on `wait_healthy`.
-  raises RuntimeError when the server dies or fails to bind in time.
+  raises RuntimeError when the server cannot be started, dies, or fails to bind
+  in time.
   """
   token = secrets.token_urlsafe(32)
   state = Path(tempfile.mkdtemp(prefix='ride-mcp-'))
@@ -133,22 +132,26 @@ def start_session_mcp_server(spec: str, cwd: Path, env: Mapping[str, str]) -> _S
   log_path = state / 'server.log'
   server_env = dict(env)
   server_env[BEARER_TOKEN_ENV] = token
-  with open(log_path, 'w') as log_file:
-    process = spawn.popen(
-      [
-        'mcp-server',
-        spec,
-        '--http',
-        '--port',
-        '0',
-        '--port-file',
-        str(port_file),
-      ],
-      cwd=str(cwd),
-      env=server_env,
-      stdout=log_file,
-      stderr=subprocess.STDOUT,
-    )
+  try:
+    argv = [
+      spawn.console_script(MCP_SERVER_COMMAND),
+      spec,
+      '--http',
+      '--port',
+      '0',
+      '--port-file',
+      str(port_file),
+    ]
+    with open(log_path, 'w') as log_file:
+      process = spawn.popen(
+        argv,
+        cwd=str(cwd),
+        env=server_env,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+      )
+  except OSError as error:
+    raise RuntimeError(f'cannot start the session MCP server: {error}') from error
   deadline = time.monotonic() + _BIND_TIMEOUT
   while True:
     if process.poll() is not None:

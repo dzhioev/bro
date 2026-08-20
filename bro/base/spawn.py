@@ -13,14 +13,21 @@ a timed-out `bash -c 'grep -R ... | sed ...'` would kill only the shell and leav
 signals only the direct child.
 
 `format_result` is the shared shape a finished child takes as agent-tool output.
+
+`console_script` names a child by path instead of by bare name, for the machinery
+a process spawns beside itself.
 """
 
 import asyncio
 import contextlib
+import errno
 import os
 import signal
 import subprocess
+import sys
+import sysconfig
 from collections.abc import AsyncGenerator, Callable
+from pathlib import Path
 from typing import Literal, Optional
 
 from bro.base.text_window import apply_limit
@@ -156,3 +163,15 @@ def popen(command, **kwargs) -> subprocess.Popen:
   kwargs.setdefault('stdin', subprocess.DEVNULL)
   kwargs['start_new_session'] = True
   return subprocess.Popen(command, **kwargs)
+
+
+def console_script(name: str) -> str:
+  """the absolute path of console script `name` in the running interpreter's
+  environment. Machinery a process spawns beside itself resolves this way rather
+  than by bare name: the PATH it was launched with is not required to carry it."""
+  path = Path(sysconfig.get_path('scripts')) / name
+  if not path.is_file():
+    raise FileNotFoundError(
+      errno.ENOENT, f'no console script beside the running {sys.executable}', str(path)
+    )
+  return str(path)
