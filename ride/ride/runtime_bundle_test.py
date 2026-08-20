@@ -28,12 +28,22 @@ build-backend = "uv_build"
 
 
 class _Distribution:
-  def __init__(self, name: str, version: str, direct_url: dict | str | None = None):
+  def __init__(
+    self,
+    name: str,
+    version: str,
+    direct_url: dict | str | None = None,
+    *,
+    egg_info: bool = False,
+  ):
     self.metadata = {'Name': name}
     self.version = version
     self._direct_url = direct_url
+    self._egg_info = egg_info
 
   def read_text(self, filename: str):
+    if filename == 'METADATA':
+      return None if self._egg_info else f'Name: {self.metadata["Name"]}\n'
     assert filename == 'direct_url.json'
     if self._direct_url is None or isinstance(self._direct_url, str):
       return self._direct_url
@@ -201,6 +211,55 @@ def test_refuses_an_unreproducible_installation(monkeypatch, direct_url, message
 
   with pytest.raises(runtime_bundle.RuntimeBundleError, match=message):
     runtime_bundle._classify_installation()
+
+
+@pytest.mark.parametrize('egg_info_first', [False, True])
+def test_a_source_tree_egg_info_does_not_shadow_its_installation(
+  monkeypatch, tmp_path, egg_info_first
+):
+  directory = tmp_path / 'source'
+  directory.mkdir()
+  records = [
+    _Distribution('demo', '1.0', {'url': directory.as_uri(), 'dir_info': {'editable': True}}),
+    _Distribution('demo', '1.0', egg_info=True),
+  ]
+  if egg_info_first:
+    records.reverse()
+  monkeypatch.setattr(runtime_bundle.importlib.metadata, 'distributions', lambda: records)
+
+  _python, pins, local = runtime_bundle._classify_installation()
+
+  assert pins == []
+  assert local == [runtime_bundle._LocalDistribution('demo', directory)]
+
+
+def test_refuses_two_installations_of_one_distribution(monkeypatch):
+  monkeypatch.setattr(
+    runtime_bundle.importlib.metadata,
+    'distributions',
+    lambda: [_Distribution('Demo-Package', '1.0'), _Distribution('demo_package', '2.0')],
+  )
+
+  with pytest.raises(runtime_bundle.RuntimeBundleError, match='duplicate installed distribution'):
+    runtime_bundle._classify_installation()
+
+
+def test_an_egg_info_beside_a_real_editable_installation_classifies_once(
+  monkeypatch, probe, tmp_path
+):
+  egg_info = tmp_path / 'demo.egg-info'
+  egg_info.mkdir()
+  (egg_info / 'PKG-INFO').write_text('Metadata-Version: 2.1\nName: demo\nVersion: 1.0\n')
+  monkeypatch.setattr(
+    runtime_bundle.importlib.metadata,
+    'distributions',
+    lambda: _discover_distributions(path=[str(probe.site_packages['editable']), str(tmp_path)]),
+  )
+
+  _python, pins, local = runtime_bundle._classify_installation()
+
+  assert pins == []
+  assert local == [runtime_bundle._LocalDistribution('demo', probe.source)]
 
 
 def test_a_real_installer_matrix_classifies_by_provenance(monkeypatch, probe):
