@@ -16,7 +16,7 @@ routing, early exit, timeout, teardown, channel-pinned identity); C — the
 launcher; E — SIGINT handling through the attached root; F — the in-place
 session runner as the container command (exit-code propagation, in-container
 argv build: merged --settings, MCP namespaces, RIDE_SESSION_CONTEXT);
-G — SIGTERM forwarding, so `docker stop` lands in claude.
+G — the stop interrupt, so `docker stop` lands in claude as a keypress.
 
 Isolation: every launch runs under a throwaway HOME, data home and project root,
 so no scenario touches the user's own claude or runtime state. The
@@ -243,13 +243,14 @@ sys.exit(5)
 # the image's real one — then execs the runner itself ("$@", the same
 # `ride solo|along --in-place …` invocation `_container_session` sends). the fake records
 # its argv/env to the report file, proving the argv was built in-container by the
-# workspace's own code; under RIDE_E2E_LINGER it traps SIGTERM (exit 7) so the
-# harness can assert `docker stop` reaches claude through tini → runner.
+# workspace's own code; under RIDE_E2E_LINGER it waits for the interrupt keypress
+# on its own terminal (exit 7) so the harness can assert `docker stop` reaches
+# claude through tini → runner → the runner-owned pty.
 _INPLACE_WRAPPER = """
 mkdir -p /tmp/e2e-bin
 cat > /tmp/e2e-bin/claude <<'FAKE'
 #!/usr/bin/env python3
-import json, os, signal, sys, time
+import json, os, signal, sys
 from pathlib import Path
 
 report = {
@@ -261,10 +262,9 @@ if '--settings' in argv:
   report['settings'] = json.loads(argv[argv.index('--settings') + 1])
 Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
 if os.environ.get('RIDE_E2E_LINGER') == '1':
-  signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(7))
+  signal.signal(signal.SIGINT, lambda signum, frame: sys.exit(9))
   Path('/workspace/.e2e-ready').touch()
-  time.sleep(90)
-  sys.exit(5)
+  sys.exit(7 if os.read(0, 1) == b'\\x03' else 8)
 sys.exit(12)
 FAKE
 chmod +x /tmp/e2e-bin/claude
@@ -1008,7 +1008,7 @@ class TestInPlaceContainerCommand:
     assert report['settings']['fastMode'] is True
 
 
-# --- G: SIGTERM forwarding — `docker stop` lands in claude ---------------------
+# --- G: the stop interrupt — `docker stop` lands in claude ---------------------
 
 
 @pytest.fixture(scope='module')
@@ -1032,10 +1032,13 @@ def scenario_g(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
 
 
 class TestDockerStopReachesClaude:
-  def test_sigterm_forwarded_and_exit_code_propagated(self, scenario_g: LiveRun) -> None:
+  def test_the_interrupt_reaches_claude_and_the_exit_code_propagates(
+    self, scenario_g: LiveRun
+  ) -> None:
     # docker stop SIGTERMs pid 1 (tini), which forwards to the exec'd runner,
-    # which forwards to claude — whose TERM handler exits 7. anything else
-    # (SIGKILL after the grace period) would surface as 137/143.
+    # which types the interrupt into claude's terminal — the fake reads it and
+    # exits 7. its SIGINT handler's 9 means the keypress never arrived, and a
+    # SIGKILL after the grace period would surface as 137/143.
     assert scenario_g.reported_exit == '7', scenario_g.output
     assert scenario_g.exit_code == 7
 

@@ -404,6 +404,9 @@ def _claude_user_messages(record: dict, native: dict, message: dict) -> list[dic
       content=content,
       isMeta=native.get('isMeta', False),
       isSidechain=native.get('isSidechain', False),
+      # claude writes an interrupt as a user-role notice of its own, so what
+      # separates it from something a human typed is the message it interrupted
+      interrupted='interruptedMessageId' in native,
     )
   ]
 

@@ -75,6 +75,15 @@ def _raise_call(reason: str) -> str:
   )
 
 
+def _interrupt_notice() -> str:
+  return _record(
+    type='user',
+    uuid='i1',
+    message={'content': [{'type': 'text', 'text': '[Request interrupted by user for tool use]'}]},
+    interruptedMessageId='m1',
+  )
+
+
 _EPHEMERA = json.dumps({'type': 'mode', 'mode': 'normal'})
 
 
@@ -534,6 +543,19 @@ class TestClose:
 
   def test_terminal_raise_ends_the_trail_raised(self, environment, store):
     path = _write_segment(environment, 'seg-1', [_user('go', 'u1'), _raise_call('no api key')])
+    worker = _worker(store, path)
+
+    worker.close()
+
+    end = store.get_trail(worker.trail_id)['end']
+    assert (end['reason'], end['detail']) == ('raised', 'no api key')
+
+  def test_the_interrupt_that_flushed_the_raise_turn_does_not_clear_it(self, environment, store):
+    path = _write_segment(
+      environment,
+      'seg-1',
+      [_user('go', 'u1'), _raise_call('no api key'), _interrupt_notice()],
+    )
     worker = _worker(store, path)
 
     worker.close()

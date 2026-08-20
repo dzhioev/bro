@@ -13,7 +13,7 @@ import os
 import signal
 import subprocess
 import threading
-from collections.abc import Generator, Sequence
+from collections.abc import Callable, Generator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -54,30 +54,34 @@ def inner_command(spec: 'SessionSpec', *, harness_flags: Sequence[str]) -> list[
 
 
 @contextlib.contextmanager
-def sigterm_forwarded_to(process: subprocess.Popen) -> Generator[threading.Event]:
-  """forward SIGTERM to `process` for the block's duration, yielding the event
-  that records a forward happened."""
-  forwarded = threading.Event()
+def stopped_on_sigterm(stop: Callable[[], None]) -> Generator[threading.Event]:
+  """run `stop` when SIGTERM arrives, for the block's duration, yielding the
+  event that records one did. `stop` runs on a thread of its own — ending a
+  harness process gracefully takes seconds, which a signal handler must not
+  spend — and a repeat signal is ignored rather than starting a second."""
+  stopped = threading.Event()
 
-  def _forward(signum, frame):
+  def _stop(signum, frame):
     del signum, frame
-    forwarded.set()
-    process.terminate()
+    if stopped.is_set():
+      return
+    stopped.set()
+    threading.Thread(target=stop, daemon=True).start()
 
-  previous = signal.signal(signal.SIGTERM, _forward)
+  previous = signal.signal(signal.SIGTERM, _stop)
   try:
-    yield forwarded
+    yield stopped
   finally:
     signal.signal(signal.SIGTERM, previous)
 
 
 def run_agent(argv: list[str], env: Optional[dict[str, str]] = None) -> int:
-  """spawn the session's agent process and wait, forwarding SIGTERM to it — a
+  """spawn the session's agent process and wait, terminating it on SIGTERM — a
   SIGTERM aimed at the runner (`docker stop`, kill, terminate_session) would
-  otherwise strand it. the runner keeps waiting after forwarding, so the
+  otherwise strand it. the runner keeps waiting after the stop, so the
   post-exit work still runs."""
   process = subprocess.Popen(argv, env=env)
-  with sigterm_forwarded_to(process):
+  with stopped_on_sigterm(process.terminate):
     return process.wait()
 
 

@@ -101,6 +101,7 @@ def _terminal_raise_reason(messages: Iterator[dict]) -> Optional[str]:
       raised is not None
       and message.get('type') == 'user_input'
       and message.get('isMeta') is not True
+      and message.get('interrupted') is not True
       and _user_content_has_text(message.get('content'))
     ):
       raised = None
