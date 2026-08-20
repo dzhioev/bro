@@ -6,7 +6,9 @@ import asyncio
 import contextlib
 import errno
 import subprocess
+import sys
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -155,3 +157,14 @@ class TestFormatResult:
     assert 'skipped after' in head
     assert tail.splitlines()[-1] == 'line 49'
     assert 'skipped before' in tail
+
+
+class TestConsoleScript:
+  def test_resolves_an_installed_script_beside_the_interpreter(self) -> None:
+    resolved = Path(spawn.console_script('mcp-server'))
+    assert resolved.is_absolute()
+    assert resolved.parent == Path(sys.executable).parent
+
+  def test_an_absent_script_is_not_a_silent_bare_name(self) -> None:
+    with pytest.raises(FileNotFoundError):
+      spawn.console_script('no-such-console-script')

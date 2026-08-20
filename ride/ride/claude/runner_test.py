@@ -114,12 +114,12 @@ class TestRunInPlace:
         'fast_mode': False,
       }
 
-  def test_recorder_start_failure_does_not_block_the_launch(self, monkeypatch, tmp_path):
+  def test_a_recorder_that_cannot_start_ends_the_launch(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      h.start_recorder.return_value = None
-      assert ride_runner.run_in_place(_spec()) == 0
-      assert h.run_claude.call_count == 1
+      h.start_recorder.side_effect = RuntimeError('cannot start the session recorder: nope')
+      assert ride_runner.run_in_place(_spec()) == 1
+      assert h.run_claude.call_count == 0
 
   def test_no_recorder_when_trails_are_disabled(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)

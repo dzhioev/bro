@@ -211,9 +211,12 @@ def run_in_place(spec: 'SessionSpec') -> int:
     # after the session context: the daemon's spawn snapshots os.environ, and
     # RIDE_SESSION_CONTEXT becomes the trail's launch-context attachment
     if os.environ.get('TRAILS_DISABLED') is None:
-      recorder = start_session_recorder(spec.name, tree, os.environ, llm=spec.llm_spec.dump())
-      if recorder is not None:
-        teardown.callback(recorder.stop)
+      try:
+        recorder = start_session_recorder(spec.name, tree, os.environ, llm=spec.llm_spec.dump())
+      except RuntimeError as error:
+        log.error('%s', error)
+        return 1
+      teardown.callback(recorder.stop)
     # the recorder above got its copy; claude's subprocesses must not see the
     # summoner attribution, or a nested in-place run would stamp it on its own
     # trail (bro.summon.summoned_by_from_env owns the semantics)

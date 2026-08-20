@@ -19,18 +19,29 @@ class TestHTTPMCPConfig:
       assert entry['alwaysLoad'] is True
 
 
-def _fake_mcp_server(tmp_path: Path, body: str) -> dict[str, str]:
-  """drop a fake `mcp-server` script on a private PATH and return the env for it.
+@pytest.fixture
+def fake_mcp_server(tmp_path: Path, monkeypatch):
+  """a factory standing a fake `mcp-server` in for the console script the runner
+  resolves, returning the env to launch the server with.
 
   the script sees the real argv (`<spec> --http --port 0 --port-file <path>`)
   and inherited bearer-token environment; `body` runs with $@ available.
   """
-  bin_dir = tmp_path / 'bin'
-  bin_dir.mkdir()
-  script = bin_dir / 'mcp-server'
-  script.write_text(f'#!/usr/bin/env bash\n{textwrap.dedent(body)}\n')
-  script.chmod(0o755)
-  return {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'}
+
+  def _install(body: str) -> dict[str, str]:
+    script = tmp_path / 'mcp-server'
+    script.write_text(f'#!/usr/bin/env bash\n{textwrap.dedent(body)}\n')
+    script.chmod(0o755)
+    monkeypatch.setattr(ride_mcp.spawn, 'console_script', lambda name: str(script))
+    return dict(os.environ)
+
+  return _install
+
+
+def _path_without(command: str) -> str:
+  """the process PATH with every directory holding `command` dropped."""
+  entries = os.environ['PATH'].split(os.pathsep)
+  return os.pathsep.join(entry for entry in entries if not (Path(entry) / command).exists())
 
 
 # fake-server body: binds a real HTTP socket that answers /health with the given
@@ -59,9 +70,8 @@ _HEALTH_SERVER_BODY = """
 
 
 class TestStartSessionMCPServer:
-  def test_reads_port_from_port_file(self, tmp_path):
-    env = _fake_mcp_server(
-      tmp_path,
+  def test_reads_port_from_port_file(self, tmp_path, fake_mcp_server):
+    env = fake_mcp_server(
       """
       while [ "$1" != "--port-file" ]; do shift; done
       echo 45678 > "$2.tmp" && mv "$2.tmp" "$2"
@@ -76,9 +86,8 @@ class TestStartSessionMCPServer:
       server.stop()
     assert server.process.poll() is not None
 
-  def test_passes_spec_on_argv_and_token_in_environment(self, tmp_path):
-    env = _fake_mcp_server(
-      tmp_path,
+  def test_passes_spec_on_argv_and_token_in_environment(self, tmp_path, fake_mcp_server):
+    env = fake_mcp_server(
       f"""
       printf '%s\n' "$@" > {tmp_path}/argv
       printf '%s' "$MCP_SERVER_BEARER_TOKEN" > {tmp_path}/token
@@ -95,32 +104,43 @@ class TestStartSessionMCPServer:
     assert server.endpoint.token not in argv
     assert (tmp_path / 'token').read_text() == server.endpoint.token
 
-  def test_startup_crash_raises(self, tmp_path):
-    env = _fake_mcp_server(tmp_path, 'exit 3')
+  def test_starts_with_the_server_command_absent_from_path(self, tmp_path, fake_mcp_server):
+    env = fake_mcp_server(
+      """
+      while [ "$1" != "--port-file" ]; do shift; done
+      echo 1 > "$2.tmp" && mv "$2.tmp" "$2"
+      exec sleep 60
+      """,
+    )
+    env['PATH'] = _path_without(ride_mcp.MCP_SERVER_COMMAND)
+    server = ride_mcp.start_session_mcp_server('flow', tmp_path, env)
+    server.stop()
+
+  def test_startup_crash_raises(self, tmp_path, fake_mcp_server):
+    env = fake_mcp_server('exit 3')
     with pytest.raises(RuntimeError, match='exited with code 3'):
       ride_mcp.start_session_mcp_server('flow', tmp_path, env)
 
-  def test_bind_timeout_raises_and_kills(self, tmp_path, monkeypatch):
+  def test_bind_timeout_raises_and_kills(self, tmp_path, monkeypatch, fake_mcp_server):
     monkeypatch.setattr(ride_mcp, '_BIND_TIMEOUT', 0.3)
-    env = _fake_mcp_server(tmp_path, 'exec sleep 60')
+    env = fake_mcp_server('exec sleep 60')
     with pytest.raises(RuntimeError, match='did not bind'):
       ride_mcp.start_session_mcp_server('flow', tmp_path, env)
 
 
 class TestWaitHealthy:
-  def test_returns_once_health_answers(self, tmp_path):
-    env = _fake_mcp_server(tmp_path, _HEALTH_SERVER_BODY)
+  def test_returns_once_health_answers(self, tmp_path, fake_mcp_server):
+    env = fake_mcp_server(_HEALTH_SERVER_BODY)
     server = ride_mcp.start_session_mcp_server('bro:dev', tmp_path, env)
     try:
       server.wait_healthy()
     finally:
       server.stop()
 
-  def test_times_out_when_health_never_answers(self, tmp_path, monkeypatch):
+  def test_times_out_when_health_never_answers(self, tmp_path, monkeypatch, fake_mcp_server):
     monkeypatch.setattr(ride_mcp, '_HEALTH_TIMEOUT', 0.3)
     # binds and publishes the port but never serves HTTP, so /health can't answer
-    env = _fake_mcp_server(
-      tmp_path,
+    env = fake_mcp_server(
       """
       while [ "$1" != "--port-file" ]; do shift; done
       echo 45678 > "$2.tmp" && mv "$2.tmp" "$2"
@@ -134,9 +154,8 @@ class TestWaitHealthy:
     finally:
       server.stop()
 
-  def test_server_death_raises(self, tmp_path):
-    env = _fake_mcp_server(
-      tmp_path,
+  def test_server_death_raises(self, tmp_path, fake_mcp_server):
+    env = fake_mcp_server(
       """
       while [ "$1" != "--port-file" ]; do shift; done
       echo 45678 > "$2.tmp" && mv "$2.tmp" "$2"
