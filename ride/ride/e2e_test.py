@@ -249,7 +249,7 @@ _INPLACE_WRAPPER = """
 mkdir -p /tmp/e2e-bin
 cat > /tmp/e2e-bin/claude <<'FAKE'
 #!/usr/bin/env python3
-import json, os, signal, sys
+import json, os, signal, sys, tty
 from pathlib import Path
 
 report = {
@@ -261,6 +261,10 @@ if '--settings' in argv:
   report['settings'] = json.loads(argv[argv.index('--settings') + 1])
 Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
 if os.environ.get('RIDE_E2E_LINGER') == '1':
+  # the fake stands in for a TUI that owns its terminal's mode; anything short of raw
+  # leaves the pty's line discipline to eat the interrupt — as the intr character, or
+  # as input canonical mode withholds until a line delimiter that never comes
+  tty.setraw(0)
   signal.signal(signal.SIGINT, lambda signum, frame: sys.exit(9))
   Path('/workspace/.e2e-ready').touch()
   sys.exit(7 if os.read(0, 1) == b'\\x03' else 8)
