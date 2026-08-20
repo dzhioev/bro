@@ -3,7 +3,12 @@ from collections.abc import Callable, Collection
 from dataclasses import replace
 
 from ride.workspace.containers import attach_interactive, container_broker_enabled
-from ride.workspace.docker import Launch, prepare_container
+from ride.workspace.docker import (
+  ContainerRuntime,
+  ContainerRuntimeResolver,
+  Launch,
+  prepare_container,
+)
 from ride.workspace.model import Workspace
 from ride.workspace.store import log_scoped_secrets
 
@@ -34,11 +39,15 @@ def _run_root_via_broker(
     replace(launch, env=env, extra_mounts=(*launch.extra_mounts, status_mount)),
     capture_output=False,
   )
+  container_runtime = ContainerRuntimeResolver.fixed(
+    ContainerRuntime(launch.image, launch.runtime_bundle_hash)
+  )
   return run_root_via_broker(
     broker_launch,
     workspace=workspace,
     may_summon=may_summon,
     credential_scope=set(launch.secrets) | set(launch.optional_secrets),
+    container_runtime=container_runtime,
   )
 
 
@@ -48,6 +57,7 @@ def run_host_process_via_broker(
   env: dict[str, str],
   may_summon: Collection[str],
   credential_scope: Collection[str],
+  container_runtime: ContainerRuntimeResolver,
   *,
   interactive: bool,
 ) -> int:
@@ -71,6 +81,7 @@ def run_host_process_via_broker(
     workspace=workspace,
     may_summon=may_summon,
     credential_scope=credential_scope,
+    container_runtime=container_runtime,
   )
 
 

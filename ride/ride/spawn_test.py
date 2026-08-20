@@ -21,6 +21,12 @@ PARENT_WORKSPACE = Path('/var/ride/0123456789abcdef/workspaces/parent/tree')
 SUMMONER = {'session': 'ws'}
 
 
+def _container_runtime() -> workspace_docker.ContainerRuntimeResolver:
+  return workspace_docker.ContainerRuntimeResolver.fixed(
+    workspace_docker.ContainerRuntime('runtime-image', 'bundle-hash')
+  )
+
+
 @pytest.fixture
 def lowering_harness(monkeypatch, tmp_path):
   monkeypatch.setattr(ride.spawn, 'project_root', lambda: tmp_path / 'proj')
@@ -51,7 +57,7 @@ class TestSummonLowering:
       summoner=SUMMONER,
       may_summon=(),
     )
-    lowered = ride.spawn._lower_summon(launch, 'broker-CH')
+    lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime())
     assert lowered == ride.spawn.DockerLaunchSpec(
       workspace_docker.Launch(
         name='broker-CH',
@@ -81,6 +87,8 @@ class TestSummonLowering:
         docker_sock=True,
         tty=False,
         forward_env=False,
+        image='runtime-image',
+        runtime_bundle_hash='bundle-hash',
       ),
     )
 
@@ -89,7 +97,7 @@ class TestSummonLowering:
       target='dev', prompt='p', parent_workspace=PARENT_WORKSPACE, summoner=SUMMONER, may_summon=()
     )
     with caplog.at_level('INFO'):
-      ride.spawn._lower_summon(launch, 'broker-CH')
+      ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime())
     assert 'scoped secrets for summoned dev: aws, trails' in caplog.text
 
   def test_hold_rides_the_childs_inner_argv(self, lowering_harness):
@@ -101,7 +109,7 @@ class TestSummonLowering:
       may_summon=(),
       hold='attended',
     )
-    lowered = ride.spawn._lower_summon(launch, 'broker-CH')
+    lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime())
     assert lowered.launch.command[-4:] == ['--hold', 'attended', 'dev', 'deploy the thing']
 
   def test_the_llm_recipe_rides_the_childs_inner_argv(self, lowering_harness):
@@ -113,7 +121,7 @@ class TestSummonLowering:
       may_summon=(),
       llm='openai:sol:high+fast',
     )
-    lowered = ride.spawn._lower_summon(launch, 'broker-CH')
+    lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime())
     assert lowered.launch.command[-6:] == [
       '--hold', 'unattended', '--llm', 'openai:sol:high+fast', 'dev', 'deploy the thing',
     ]  # fmt: skip
@@ -134,7 +142,7 @@ class TestSummonLowering:
       may_summon=(),
       llm='echo',
     )
-    ride.spawn._lower_summon(launch, 'broker-CH')
+    ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime())
     assert captured == [ride.bro.BRO.resolve_llm('echo', 'dev')]
 
   def test_credential_overrides_adjust_the_childs_scope(self, lowering_harness):
@@ -149,7 +157,7 @@ class TestSummonLowering:
       grant=('gmail_creds', '@reviewer'),
       revoke=('openai',),
     )
-    lowered = ride.spawn._lower_summon(launch, 'broker-CH')
+    lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime())
     assert lowered.launch.secrets == {'aws', 'trails', 'gmail_creds'}
     assert lowered.launch.optional_secrets == set()
 
@@ -163,7 +171,7 @@ class TestSummonLowering:
       grant=('aws',),
     )
     with pytest.raises(ValueError, match='already in the scoped credential set'):
-      ride.spawn._lower_summon(launch, 'broker-CH')
+      ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime())
     # every fallible resolution precedes the workspace record, so nothing to
     # reclaim is left behind
     with pytest.raises(ValueError, match='broker-CH'):
@@ -181,7 +189,7 @@ class TestSummonLowering:
       grant=('gmail_creds', '@reviewer'),
       revoke=('openai',),
     )
-    ride.spawn._lower_summon(launch, 'broker-CH')
+    ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime())
     workspace = Workspace.open('broker-CH', tmp_path / 'proj')
     assert workspace.metadata.throwaway
     assert (
@@ -223,7 +231,7 @@ class TestSummonLowering:
     launch = ride.spawn.SummonLaunchSpec(
       target='dev', prompt='p', parent_workspace=PARENT_WORKSPACE, summoner=SUMMONER, may_summon=()
     )
-    lowered = ride.spawn._lower_summon(launch, 'broker-CH')
+    lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime())
     assert lowered.launch.extra_mounts == ('/host/state:/state', '/host/trails:/var/ride/trails')
 
   def test_the_childs_own_allow_list_rides_its_environment(self, lowering_harness):
@@ -234,7 +242,7 @@ class TestSummonLowering:
       summoner=SUMMONER,
       may_summon=('bro', 'reviewer'),
     )
-    lowered = ride.spawn._lower_summon(launch, 'broker-CH')
+    lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime())
     assert lowered.launch.env['RIDE_MAY_SUMMON'] == 'bro,reviewer'
 
   def test_into_overrides_the_inherited_base_ref(self, lowering_harness):
@@ -246,7 +254,7 @@ class TestSummonLowering:
       may_summon=(),
       into='summon',
     )
-    assert ride.spawn._lower_summon(launch, 'broker-CH').launch.env == {
+    assert ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime()).launch.env == {
       'RIDE_BASE_REF': 'REF-SHA',
       'RIDE_BRO': 'dev',
       'RIDE_COMMAND': 'ride solo --hold unattended --harness bro --into summon dev p',
@@ -265,14 +273,14 @@ class TestSummonLowering:
       into='nope',
     )
     with pytest.raises(ValueError, match='nope'):
-      ride.spawn._lower_summon(launch, 'broker-CH')
+      ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime())
 
   def test_unreadable_parent_head_fails_the_spawn(self, lowering_harness):
     launch = ride.spawn.SummonLaunchSpec(
       target='dev', prompt='p', parent_workspace=Path('/gone'), summoner=SUMMONER, may_summon=()
     )
     with pytest.raises(ValueError, match="summoner's HEAD"):
-      ride.spawn._lower_summon(launch, 'broker-CH')
+      ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime())
 
   @pytest.mark.asyncio
   async def test_spawner_lowers_off_loop_and_delegates_to_docker(self, lowering_harness):
@@ -285,7 +293,7 @@ class TestSummonLowering:
         return MagicMock()
 
     docker = RecordingDocker()
-    spawner = ride.spawn.SummonSpawner(docker)
+    spawner = ride.spawn.SummonSpawner(docker, _container_runtime())
     channel = ride.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
     launch = ride.spawn.SummonLaunchSpec(
       target='dev', prompt='p', parent_workspace=PARENT_WORKSPACE, summoner=SUMMONER, may_summon=()
@@ -302,7 +310,7 @@ class TestSummonLowering:
 
   @pytest.mark.asyncio
   async def test_lowering_failure_propagates_out_of_spawn(self, lowering_harness):
-    spawner = ride.spawn.SummonSpawner(ride.spawn.DockerSpawner())
+    spawner = ride.spawn.SummonSpawner(ride.spawn.DockerSpawner(), _container_runtime())
     channel = ride.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
     launch = ride.spawn.SummonLaunchSpec(
       target='dev',
@@ -346,7 +354,7 @@ class TestClaudeSummonLowering:
     return ride.spawn.SummonLaunchSpec(**fields)
 
   def test_lowers_to_a_ride_solo_claude_launch(self, claude_harness):
-    lowered = ride.spawn._lower_summon(self._launch(), 'broker-CH')
+    lowered = ride.spawn._lower_summon(self._launch(), 'broker-CH', _container_runtime())
     assert lowered.launch.command == [
       'ride', 'solo', '--in-place', '--workspace', 'broker-CH', '--harness', 'claude',
       '--hold', 'unattended', 'dev', 'deploy the thing',
@@ -367,7 +375,7 @@ class TestClaudeSummonLowering:
   def test_records_the_claude_resume_spec(self, claude_harness, tmp_path):
     from bro.llm.llms.claude_code import LLMSpec as ClaudeCodeSpec
 
-    ride.spawn._lower_summon(self._launch(llm=':fable5'), 'broker-CH')
+    ride.spawn._lower_summon(self._launch(llm=':fable5'), 'broker-CH', _container_runtime())
     workspace = Workspace.open('broker-CH', tmp_path / 'proj')
     spec = ride.session.load_resume_spec(workspace)
     assert spec is not None
@@ -383,7 +391,7 @@ class TestClaudeSummonLowering:
       return workspace_store.ScopedSecrets(required=set(), optional=set(), docker_sock=True)
 
     monkeypatch.setattr(ride.scope, 'scoped_secrets', capture_scope)
-    ride.spawn._lower_summon(self._launch(), 'broker-CH')
+    ride.spawn._lower_summon(self._launch(), 'broker-CH', _container_runtime())
     assert captured == ['claude-full']
 
   def test_auth_preflight_failure_fails_the_spawn_before_the_workspace(
@@ -393,7 +401,7 @@ class TestClaudeSummonLowering:
 
     monkeypatch.setattr(CLAUDE, 'preflight_auth', lambda spec: 'claude_code secret not resolvable')
     with pytest.raises(ValueError, match='claude_code secret not resolvable'):
-      ride.spawn._lower_summon(self._launch(), 'broker-CH')
+      ride.spawn._lower_summon(self._launch(), 'broker-CH', _container_runtime())
     with pytest.raises(ValueError, match='broker-CH'):
       Workspace.open('broker-CH', tmp_path / 'proj')
 
@@ -401,17 +409,21 @@ class TestClaudeSummonLowering:
     from bro.llm.providers import LLMSelectionError
 
     with pytest.raises(LLMSelectionError, match='runs Claude Code, not openai'):
-      ride.spawn._lower_summon(self._launch(llm='openai:sol'), 'broker-CH')
+      ride.spawn._lower_summon(self._launch(llm='openai:sol'), 'broker-CH', _container_runtime())
     with pytest.raises(ValueError, match='broker-CH'):
       Workspace.open('broker-CH', tmp_path / 'proj')
 
   def test_a_claude_recipe_rides_the_inner_argv(self, claude_harness):
-    lowered = ride.spawn._lower_summon(self._launch(llm=':fable5:high'), 'broker-CH')
+    lowered = ride.spawn._lower_summon(
+      self._launch(llm=':fable5:high'), 'broker-CH', _container_runtime()
+    )
     command = lowered.launch.command
     assert command[command.index('--llm') + 1] == ':fable5:high'
 
   def test_an_explicit_bro_harness_matches_the_default_lowering(self, lowering_harness):
-    explicit = ride.spawn._lower_summon(self._launch(harness='bro'), 'broker-CH')
+    explicit = ride.spawn._lower_summon(
+      self._launch(harness='bro'), 'broker-CH', _container_runtime()
+    )
     assert explicit.launch.command[:7] == [
       'ride', 'solo', '--in-place', '--workspace', 'broker-CH', '--harness', 'bro',
     ]  # fmt: skip
@@ -461,7 +473,12 @@ class TestRunRootViaBroker:
     monkeypatch.setattr(ride.spawn, 'Broker', FakeBroker)
     launch = ride.spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
     workspace = Workspace.create('ws', tmp_path / 'proj', WorkspaceKind.CONTAINER)
-    assert ride.spawn.run_root_via_broker(launch, workspace=workspace) == 3
+    assert (
+      ride.spawn.run_root_via_broker(
+        launch, workspace=workspace, container_runtime=_container_runtime()
+      )
+      == 3
+    )
     assert captured['transport']._dir == broker_dir(tmp_path / 'proj')
     # the composite over both launch modes plus the summon lowering: any root can
     # spawn docker children, summons included

@@ -21,6 +21,7 @@ from bro.workspace.paths import CONTAINER_SESSION_DIR
 from ride import pending_summon
 from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError
 from ride.scope import ScopedSecrets
+from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 
@@ -163,6 +164,10 @@ class _ContainerHarness:
       patch('ride.summon_control.summon_allow_list', return_value=set()),
       patch('ride.claude.harness.load_anthropic_key', return_value={'api_key': 'k'}),
       patch('ride.session.local_trails_mounts', return_value=()),
+      patch(
+        'ride.workspace.docker.ContainerRuntimeResolver.resolve',
+        return_value=ContainerRuntime('runtime-image', 'bundle-hash'),
+      ),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -797,6 +802,9 @@ class TestHostSession:
       launch_scope,
       container=False,
       runtime_bundle=_runtime_bundle(workspace.project),
+      container_runtime=ContainerRuntimeResolver.fixed(
+        ContainerRuntime('runtime-image', 'bundle-hash')
+      ),
     )
 
   def _prepare_launch(self, monkeypatch, tmp_path):
@@ -840,6 +848,7 @@ class TestHostSession:
       env,
       may_summon,
       credential_scope,
+      container_runtime,
       *,
       interactive,
     ):
@@ -850,6 +859,7 @@ class TestHostSession:
           'env': env,
           'may_summon': may_summon,
           'credential_scope': credential_scope,
+          'container_runtime': container_runtime,
           'interactive': interactive,
         }
       )
@@ -864,7 +874,8 @@ class TestHostSession:
       str(ride_binary), 'along', '--in-place', '--workspace', 'w', '--harness', 'claude',
       '--hold', 'attended', '--llm', '::xhigh', 'bro-dev', 'go', '--', '--foo',
     ]  # fmt: skip
-    assert roots[0]['env']['VIRTUAL_ENV'] == str(worktree / '.venv')
+    assert 'VIRTUAL_ENV' not in roots[0]['env']
+    assert str(worktree / '.venv' / 'bin') not in roots[0]['env']['PATH'].split(os.pathsep)
     # the host root gets the session's summon allow-list like container mode
     assert roots[0]['may_summon'] == {'dev'}
     assert roots[0]['interactive']
@@ -881,7 +892,13 @@ class TestHostSession:
     monkeypatch.setattr(ride.spawn, 'run_root_via_broker', fake_run_root)
     assert (
       ride_session.run_host_process_via_broker(
-        workspace, ['ride'], {}, {'dev', 'bro'}, set(), interactive=False
+        workspace,
+        ['ride'],
+        {},
+        {'dev', 'bro'},
+        set(),
+        ContainerRuntimeResolver.fixed(ContainerRuntime('runtime-image', 'bundle-hash')),
+        interactive=False,
       )
       == 0
     )
@@ -924,7 +941,7 @@ class TestHostSession:
       '--hold', 'attended', '--llm', '::xhigh', 'bro-dev', 'go', '--', '--foo',
     ]  # fmt: skip
     assert kwargs['cwd'] == str(worktree)
-    assert kwargs['env']['VIRTUAL_ENV'] == str(worktree / '.venv')
+    assert 'VIRTUAL_ENV' not in kwargs['env']
 
   def test_summoned_host_run_attaches_to_the_summoners_socket_and_claims(
     self, monkeypatch, tmp_path
@@ -956,6 +973,9 @@ class TestHostSession:
         _launch_scope(),
         container=False,
         runtime_bundle=_runtime_bundle(workspace.project),
+        container_runtime=ContainerRuntimeResolver.fixed(
+          ContainerRuntime('runtime-image', 'bundle-hash')
+        ),
         summoned=record,
       )
       == 0
@@ -988,6 +1008,9 @@ class TestHostSession:
         _launch_scope(),
         container=False,
         runtime_bundle=_runtime_bundle(workspace.project),
+        container_runtime=ContainerRuntimeResolver.fixed(
+          ContainerRuntime('runtime-image', 'bundle-hash')
+        ),
         summoned=record,
       )
       == 1
@@ -1196,6 +1219,9 @@ class TestHostBrokerPingRoundTrip:
         _launch_scope(),
         container=False,
         runtime_bundle=runtime_bundle,
+        container_runtime=ContainerRuntimeResolver.fixed(
+          ContainerRuntime('runtime-image', 'bundle-hash')
+        ),
       )
       == 0
     )
@@ -1283,6 +1309,9 @@ client.close(confirm=True)
         _launch_scope(may_summon={'bro-dev'}),
         container=False,
         runtime_bundle=runtime_bundle,
+        container_runtime=ContainerRuntimeResolver.fixed(
+          ContainerRuntime('runtime-image', 'bundle-hash')
+        ),
       )
       == 0
     )

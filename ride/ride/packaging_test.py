@@ -6,9 +6,8 @@ import pytest
 
 _PROJECT = Path(__file__).resolve().parents[1]
 _SHIPPED_SETUP_FILES = {
-  'ride/setup/base_image/Dockerfile',
-  'ride/setup/base_image/build.sh',
   'ride/setup/container/Dockerfile',
+  'ride/setup/container/project.Dockerfile',
   'ride/setup/container/claude-code-version',
   'ride/setup/container/entrypoint.sh',
   'ride/setup/container/git.sh',

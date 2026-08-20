@@ -13,7 +13,7 @@ import tempfile
 import urllib.parse
 import urllib.request
 import zipfile
-from collections.abc import Generator, Iterable
+from collections.abc import Callable, Generator, Iterable
 from dataclasses import dataclass
 from email.message import Message
 from email.parser import Parser
@@ -48,6 +48,14 @@ class RuntimeBundle:
   def host_bin(self) -> Path:
     return self.root / 'host' / 'bin'
 
+  @property
+  def hash(self) -> str:
+    return self.root.name
+
+  @property
+  def container_volume(self) -> str:
+    return f'ride-runtime-{self.hash}'
+
   def materialize_host(self) -> None:
     lock_path = self.root / '.materialize.lock'
     with _locked_file(lock_path, fcntl.LOCK_EX):
@@ -60,17 +68,51 @@ class RuntimeBundle:
       _materialize(self.root, host, sys.executable)
       complete.touch()
 
-  def host_session_env(self, workspace_venv: Path) -> dict[str, str]:
+  def materialize_container(self, image: str) -> None:
+    with _locked_file(self.root / '.materialize.lock', fcntl.LOCK_EX):
+      _run(
+        ['docker', 'volume', 'create', self.container_volume],
+        description='cannot create container runtime volume',
+      )
+      with _materializer_container(self, image) as container_id:
+        complete = subprocess.run(
+          ['docker', 'exec', container_id, 'test', '-f', '/var/ride/runtime/.complete'],
+          capture_output=True,
+        )
+        if complete.returncode == 0:
+          return
+        _container_run(
+          container_id,
+          ['find', '/var/ride/runtime', '-mindepth', '1', '-delete'],
+          description='cannot clear incomplete container runtime',
+        )
+        wheels = sorted((self.root / 'wheels').glob('*.whl'))
+        wheel_names = [wheel.name for wheel in wheels]
+        for wheel in wheels:
+          _assert_pure_wheel(wheel)
+        _materialize(
+          Path('/bundle'),
+          Path('/var/ride/runtime'),
+          '/usr/local/bin/python',
+          wheel_names=wheel_names,
+          run=lambda command, description: _container_run(
+            container_id, command, description=description
+          ),
+        )
+        _container_run(
+          container_id,
+          ['touch', '/var/ride/runtime/.complete'],
+          description='cannot mark container runtime complete',
+        )
+
+  def host_session_env(self) -> dict[str, str]:
     env = dict(os.environ)
     launcher_venv = env.pop('VIRTUAL_ENV', None)
     path_entries = env.get('PATH', '').split(os.pathsep)
     if launcher_venv is not None:
       launcher_bin = os.path.normpath(str(Path(launcher_venv) / 'bin'))
       path_entries = [entry for entry in path_entries if os.path.normpath(entry) != launcher_bin]
-    env['VIRTUAL_ENV'] = str(workspace_venv)
-    env['PATH'] = os.pathsep.join(
-      _unique_paths([str(self.host_bin), str(workspace_venv / 'bin'), *path_entries])
-    )
+    env['PATH'] = os.pathsep.join(_unique_paths([str(self.host_bin), *path_entries]))
     env.pop('PYTHONHOME', None)
     return env
 
@@ -163,6 +205,39 @@ def _run(command: list[str], *, description: str) -> subprocess.CompletedProcess
     return result
   detail = result.stderr.strip() or result.stdout.strip() or f'exit code {result.returncode}'
   raise RuntimeBundleError(f'{description}: {detail}')
+
+
+def _container_run(
+  container_id: str, command: list[str], *, description: str
+) -> subprocess.CompletedProcess[str]:
+  return _run(['docker', 'exec', container_id, *command], description=description)
+
+
+@contextlib.contextmanager
+def _materializer_container(bundle: RuntimeBundle, image: str) -> Generator[str]:
+  result = _run(
+    [
+      'docker',
+      'create',
+      '--entrypoint',
+      'sleep',
+      '-v',
+      f'{bundle.container_volume}:/var/ride/runtime',
+      '-v',
+      f'{bundle.root}:/bundle:ro',
+      image,
+      'infinity',
+    ],
+    description='cannot create container runtime materializer',
+  )
+  container_id = result.stdout.strip()
+  try:
+    _run(
+      ['docker', 'start', container_id], description='cannot start container runtime materializer'
+    )
+    yield container_id
+  finally:
+    subprocess.run(['docker', 'rm', '-f', container_id], capture_output=True)
 
 
 def _wheel_record(path: Path, suffix: str) -> Message:
@@ -312,7 +387,12 @@ def _entry_point_map(distribution: str, group: str, entries: object) -> dict[str
   return result
 
 
-def _session_commands(python: Path) -> list[str]:
+def _session_commands(
+  python: Path,
+  *,
+  run: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> list[str]:
+  command_runner = _run if run is None else run
   script = f'''\
 import importlib.metadata
 import json
@@ -324,7 +404,9 @@ for distribution in importlib.metadata.distributions():
     result.append({{"distribution": distribution.metadata["Name"], "console": console, "declared": declared}})
 print(json.dumps(result))
 '''
-  result = _run([str(python), '-c', script], description='cannot read session command declarations')
+  result = command_runner(
+    [str(python), '-c', script], description='cannot read session command declarations'
+  )
   try:
     declarations = json.loads(result.stdout)
   except json.JSONDecodeError as error:
@@ -356,12 +438,27 @@ print(json.dumps(result))
   return sorted(commands)
 
 
-def _materialize(bundle: Path, host: Path, python: str) -> None:
-  wheels = sorted((bundle / 'wheels').glob('*.whl'))
-  for wheel in wheels:
-    _assert_pure_wheel(wheel)
-  venv = host / 'venv'
-  _run(['uv', 'venv', '--python', python, str(venv)], description='cannot create host runtime venv')
+def _materialize(
+  bundle: Path,
+  target: Path,
+  python: str,
+  *,
+  wheel_names: list[str] | None = None,
+  run: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> None:
+  command_runner = _run if run is None else run
+  wheels = (
+    sorted((bundle / 'wheels').glob('*.whl'))
+    if wheel_names is None
+    else [bundle / 'wheels' / name for name in wheel_names]
+  )
+  if wheel_names is None:
+    for wheel in wheels:
+      _assert_pure_wheel(wheel)
+  venv = target / 'venv'
+  command_runner(
+    ['uv', 'venv', '--python', python, str(venv)], description='cannot create runtime venv'
+  )
   install = [
     'uv',
     'pip',
@@ -373,18 +470,23 @@ def _materialize(bundle: Path, host: Path, python: str) -> None:
     str(bundle / 'pins.txt'),
     *(str(wheel) for wheel in wheels),
   ]
-  _run(install, description='cannot install host runtime bundle')
-  _run(
+  command_runner(install, description='cannot install runtime bundle')
+  command_runner(
     ['uv', 'pip', 'check', '--python', str(venv / 'bin' / 'python')],
-    description='host runtime dependency closure is incomplete',
+    description='runtime dependency closure is incomplete',
   )
-  shim_dir = host / 'bin'
-  shim_dir.mkdir()
-  for command in _session_commands(venv / 'bin' / 'python'):
-    target = venv / 'bin' / command
-    if not target.is_file():
-      raise RuntimeBundleError(f'session command has no materialized console script: {target}')
-    (shim_dir / command).symlink_to(target)
+  shim_dir = target / 'bin'
+  command_runner(['mkdir', str(shim_dir)], description='cannot create runtime command directory')
+  for command in _session_commands(venv / 'bin' / 'python', run=command_runner):
+    command_target = venv / 'bin' / command
+    command_runner(
+      ['test', '-f', str(command_target)],
+      description=f'session command has no materialized console script: {command_target}',
+    )
+    command_runner(
+      ['ln', '-s', str(command_target), str(shim_dir / command)],
+      description=f'cannot create session command shim {command}',
+    )
 
 
 @contextlib.contextmanager
@@ -408,6 +510,23 @@ def resolve_runtime_bundle() -> Generator[RuntimeBundle]:
       handle.close()
 
 
+def _remove_container_volume(bundle_hash: str, *, dry_run: bool) -> bool:
+  volume = f'ride-runtime-{bundle_hash}'
+  try:
+    present = subprocess.run(
+      ['docker', 'volume', 'inspect', volume], capture_output=True, text=True
+    )
+  except FileNotFoundError:
+    return True
+  if present.returncode != 0:
+    detail = present.stderr.lower()
+    return 'no such volume' in detail or 'not found' in detail
+  if dry_run:
+    return True
+  removed = subprocess.run(['docker', 'volume', 'rm', volume], capture_output=True, text=True)
+  return removed.returncode == 0
+
+
 def clean_runtime_bundles(*, dry_run: bool = False) -> tuple[int, int]:
   runtime = runtime_base() / 'runtime'
   if not runtime.is_dir():
@@ -428,6 +547,9 @@ def clean_runtime_bundles(*, dry_run: bool = False) -> tuple[int, int]:
         try:
           fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
+          skipped += 1
+          continue
+        if not _remove_container_volume(root.name, dry_run=dry_run):
           skipped += 1
           continue
         if not dry_run:

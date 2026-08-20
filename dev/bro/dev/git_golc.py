@@ -13,8 +13,8 @@ render `—`.
 
 Repo-local — wired by `bro.dev.install` via `git config --local alias.golc`.
 The footer format is owned by `bro.llm.usage`; the small parser here is a
-deliberate dependency-free duplicate so `git golc` works without the project
-venv active.
+deliberate dependency-free duplicate. The alias resolves its console command
+from PATH, which is the pinned runtime inside a managed session.
 """
 
 from __future__ import annotations

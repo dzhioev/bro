@@ -3,6 +3,8 @@ import os
 import signal
 import socket
 import subprocess
+import sys
+import threading
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,10 +13,47 @@ from typing import Optional
 from bro.base import credentials, log
 from bro.workspace.paths import project_root, workspace_tree
 from bro.workspace.project import project_config
+from ride.runtime_bundle import RuntimeBundle
 from ride.workspace import build_context
-from ride.workspace.build_context import BASE_IMAGE_DIR, CONTAINER_DIR
+from ride.workspace.build_context import CONTAINER_DIR
 from ride.workspace.metadata import read_metadata
 from ride.workspace.store import _bro_tarball
+
+_RUNTIME_IMAGE_REPOSITORY = 'bro/ride-runtime'
+_RUNTIME_MOUNT = '/var/ride/runtime'
+_SMOKE_TEST_TAG = 'bro/framework:smoke-test'
+
+
+@dataclass(frozen=True)
+class ContainerRuntime:
+  image: str
+  bundle_hash: str
+
+
+class ContainerRuntimeResolver:
+  """resolve one root's image and container materialization at most once."""
+
+  def __init__(self, bundle: Optional[RuntimeBundle], resolved: Optional[ContainerRuntime] = None):
+    self._bundle = bundle
+    self._resolved = resolved
+    self._lock = threading.Lock()
+
+  @classmethod
+  def fixed(cls, runtime: ContainerRuntime) -> 'ContainerRuntimeResolver':
+    return cls(None, runtime)
+
+  def resolve(self) -> ContainerRuntime:
+    with self._lock:
+      if self._resolved is not None:
+        return self._resolved
+      if self._bundle is None:
+        raise RuntimeError('container runtime resolver has neither a bundle nor a resolved runtime')
+      runtime_image = runtime_image_tag(self._bundle.python_version)
+      _ensure_runtime_image(runtime_image, self._bundle.python_version)
+      image = _ensure_project_image(runtime_image, project_root())
+      self._bundle.materialize_container(runtime_image)
+      self._resolved = ContainerRuntime(image=image, bundle_hash=self._bundle.hash)
+      return self._resolved
 
 
 @dataclass(frozen=True)
@@ -28,6 +67,8 @@ class Launch:
   docker_sock: bool
   tty: bool
   forward_env: bool
+  image: str
+  runtime_bundle_hash: str
   optional_secrets: Collection[str] = ()
   extra_mounts: Collection[str] = ()
 
@@ -48,8 +89,6 @@ _DOCKER_FORWARD_ENV = (
   'GIT_COMMITTER_EMAIL',
   'BRO_LOG_LEVEL',
   'BRO_SHELL_COMMAND',
-  # docker defaults containers to TERM=xterm (a low color tier that flattens
-  # dim/256-color TUIs); forward the host TERM so in-container colors match.
   'TERM',
   'TERM_PROGRAM',
   'TERM_PROGRAM_VERSION',
@@ -72,15 +111,12 @@ def running_mounts() -> set[str]:
   return {line for line in inspect.stdout.splitlines() if len(line) > 0}
 
 
-# Ctrl+Z must never reach the container pty: the line discipline there would stop a
-# foreground group that no job-control shell can ever resume (docker-init is the
-# session leader). Binding it as the client's detach key makes it a host-side event
-# instead (`suspend_until_continued`).
+# Ctrl+Z must stay a host-side detach event: stopping the container's foreground
+# group would leave no job-control shell able to resume it.
 DETACH_FLAG = '--detach-keys=ctrl-z'
 
 
 def container_running(container_id: str) -> bool:
-  """whether the container currently runs (False once it exited or was removed)."""
   result = subprocess.run(
     ['docker', 'inspect', '--format', '{{.State.Running}}', container_id],
     capture_output=True,
@@ -90,32 +126,19 @@ def container_running(container_id: str) -> bool:
 
 
 def _freezer(verb: str, container_id: str) -> None:
-  """pause/unpause, best-effort: a failure (e.g. the container exited just as the user
-  detached) degrades the freeze, never the session."""
   result = subprocess.run(['docker', verb, container_id], capture_output=True, text=True)
   if result.returncode != 0:
     log.warning('docker %s %s failed: %s', verb, container_id, result.stderr.strip())
 
 
 def suspend_until_continued(container_id: str) -> None:
-  """host-parity Ctrl+Z for an attached session: freeze the whole container (cgroup
-  freezer) and stop this process's own group, so the launching shell reports the job
-  stopped; on `fg` (SIGCONT) thaw the container and return, letting the caller
-  re-attach. With no job-control shell above (an orphaned process group) the kernel
-  discards the self-SIGTSTP, degrading Ctrl+Z to an immediate re-attach."""
   _freezer('pause', container_id)
   os.kill(0, signal.SIGTSTP)
   _freezer('unpause', container_id)
 
 
 def find_container_id(session: Path) -> Optional[str]:
-  """find the running container backing the container workspace mounted at `session`.
-
-  Filters `docker ps` by the workspace's host mount path, which is unique per
-  workspace. Returns the container short id, or None if no running container is
-  bound to that mount. Takes the mount path (not name+project) so this stays a
-  dependency-free leaf — the caller resolves the path.
-  """
+  """the running container whose unique workspace mount is `session`, if any."""
   if not session.is_dir():
     return None
   result = subprocess.run(
@@ -126,47 +149,49 @@ def find_container_id(session: Path) -> Optional[str]:
   if result.returncode != 0:
     return None
   ids = [line for line in result.stdout.splitlines() if len(line) > 0]
-  if len(ids) == 0:
-    return None
-  return ids[0]
+  return None if len(ids) == 0 else ids[0]
 
 
-# tagged by setup/container/test_smoke.sh, which owns its lifecycle
-_SMOKE_TEST_TAG = 'bro/framework:smoke-test'
-
-
-def image_tag() -> str:
-  """content hash of the session image's inputs — the framework's container assets
-  as resolved through the installed package, plus the project's manifest set — as a
-  tag in the project's image repository."""
-  h = hashlib.sha256()
-  project = project_root()
-  framework = (
-    sorted(BASE_IMAGE_DIR.iterdir())
-    + sorted(CONTAINER_DIR.iterdir())
-    + [build_context.SHELL_DIR / name for name in build_context.SHELL_HELPERS]
-  )
-  inputs = [(path.name, path) for path in framework]
-  inputs += [(relative, project / relative) for relative in build_context.manifest_paths(project)]
+def _hash_files(inputs: list[tuple[str, Path]], seed: str = '') -> str:
+  digest = hashlib.sha256(seed.encode())
   for label, path in inputs:
-    if path.is_file():
-      h.update(label.encode())
-      h.update(b'\0')
-      h.update(path.read_bytes())
-  return f'{project_config().image_repository}:{h.hexdigest()[:12]}'
+    if not path.is_file():
+      continue
+    digest.update(label.encode())
+    digest.update(b'\0')
+    digest.update(path.read_bytes())
+  return digest.hexdigest()[:12]
+
+
+def runtime_image_tag(python_version: Optional[str] = None) -> str:
+  version = python_version or f'{sys.version_info.major}.{sys.version_info.minor}'
+  inputs = [(name, path) for name, path in sorted(build_context.RUNTIME_FILES.items())]
+  inputs.append(('project.Dockerfile', CONTAINER_DIR / 'project.Dockerfile'))
+  claude_pin = CONTAINER_DIR / 'claude-code-version'
+  inputs.append(('claude-code-version', claude_pin))
+  return f'{_RUNTIME_IMAGE_REPOSITORY}:{_hash_files(inputs, seed=version)}'
+
+
+def project_image_tag(runtime_image: str, project: Path) -> Optional[str]:
+  manifests = build_context.manifest_paths(project)
+  if len(manifests) == 0:
+    return None
+  inputs = [(relative, project / relative) for relative in manifests]
+  return f'{project_config().image_repository}:{_hash_files(inputs, seed=runtime_image)}'
+
+
+def image_tag(python_version: Optional[str] = None) -> str:
+  runtime = runtime_image_tag(python_version)
+  return project_image_tag(runtime, project_root()) or runtime
+
+
+def _image_present(tag: str) -> bool:
+  return subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True).returncode == 0
 
 
 def _prune_superseded_images(current: str) -> None:
-  """untag session images of `current`'s repository superseded by it.
-
-  every Dockerfile/manifest change mints a new content-hash tag, and the old
-  image would otherwise linger forever (~2.6 GB each). plain `docker image rm`
-  (no -f) refuses images that any container — running or stopped — still
-  references, so live sessions keep theirs and only orphaned tags go. scoping
-  the listing to `current`'s repository keeps one project's builds from
-  evicting another's ([tool.bro] image-repository).
-  """
-  repository = current.split(':')[0]
+  """untag unused predecessors from the current runtime or project repository."""
+  repository = current.rsplit(':', 1)[0]
   listed = subprocess.run(
     ['docker', 'images', repository, '--format', '{{.Repository}}:{{.Tag}}'],
     capture_output=True,
@@ -182,12 +207,11 @@ def _prune_superseded_images(current: str) -> None:
       log.info('pruned superseded image %s', image)
 
 
-def build_image(tag: str, project: Path) -> None:
-  """build the session image under `tag` from `project`'s assembled build context."""
-  version = (CONTAINER_DIR / 'claude-code-version').read_text().strip()
-  log.info('building %s (claude-code %s)', tag, version)
-  # the image builds FROM the local-only bro-base, so refresh that first
-  subprocess.run(['bash', '-e', str(BASE_IMAGE_DIR / 'build.sh')], check=True)
+def build_runtime_image(tag: str, python_version: str) -> None:
+  claude_version = (CONTAINER_DIR / 'claude-code-version').read_text().strip()
+  log.info(
+    'building runtime image %s (python %s, claude-code %s)', tag, python_version, claude_version
+  )
   subprocess.run(
     [
       'docker',
@@ -197,30 +221,57 @@ def build_image(tag: str, project: Path) -> None:
       '-f',
       build_context.DOCKERFILE_PATH,
       '--build-arg',
-      f'CLAUDE_CODE_VERSION={version}',
+      f'PYTHON_VERSION={python_version}',
+      '--build-arg',
+      f'CLAUDE_CODE_VERSION={claude_version}',
       '-',
     ],
-    input=build_context.assemble(project),
+    input=build_context.assemble_runtime(),
     check=True,
   )
 
 
-def _ensure_image(tag: str) -> None:
-  inspect = subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True, text=True)
-  if inspect.returncode == 0:
+def build_project_image(tag: str, runtime_image: str, project: Path) -> None:
+  log.info('building project image %s from %s', tag, runtime_image)
+  subprocess.run(
+    [
+      'docker',
+      'build',
+      '-t',
+      tag,
+      '-f',
+      build_context.DOCKERFILE_PATH,
+      '--build-arg',
+      f'RUNTIME_IMAGE={runtime_image}',
+      '-',
+    ],
+    input=build_context.assemble_project(project),
+    check=True,
+  )
+
+
+def _ensure_runtime_image(tag: str, python_version: str) -> None:
+  if _image_present(tag):
     log.verbose('image %s ready', tag)
     return
-  build_image(tag, project_root())
+  build_runtime_image(tag, python_version)
   _prune_superseded_images(tag)
 
 
-def _create_container(argv: list[str], store_tarball: bytes, name: str) -> str:
-  """`docker create` + `docker cp` of the scoped credential store, returning the container id.
+def _ensure_project_image(runtime_image: str, project: Path) -> str:
+  tag = project_image_tag(runtime_image, project)
+  if tag is None:
+    return runtime_image
+  if _image_present(tag):
+    log.verbose('image %s ready', tag)
+    return tag
+  build_project_image(tag, runtime_image, project)
+  _prune_superseded_images(tag)
+  return tag
 
-  The run-equivalent create/start split exists for exactly this window: the store is
-  injected into the pre-start container's writable layer, so no plaintext touches the
-  host disk and `--rm` removes it with the container. A failed cp removes the created
-  container (a created-never-started container isn't covered by `--rm`)."""
+
+def _create_container(argv: list[str], store_tarball: bytes, name: str) -> str:
+  """create an unstarted container and inject its in-memory scoped store."""
   created = subprocess.run(argv, capture_output=True, text=True)
   if created.returncode != 0:
     raise RuntimeError(f'docker create for {name} failed: {created.stderr.strip()}')
@@ -240,37 +291,33 @@ def _create_container(argv: list[str], store_tarball: bytes, name: str) -> str:
 
 
 def prepare_container(launch: Launch, project: Path) -> str:
-  """materialize the workspace's tree directory and create the unstarted
-  container described by `launch`. the workspace itself must already be
-  recorded — the launch surface creates it (`workspace.model.Workspace`)."""
+  """create the unstarted container described entirely by `launch`."""
   log.info('creating container workspace %s', launch.name)
   branch = read_metadata(project, launch.name).branch
   tree = workspace_tree(project, launch.name)
   tree.mkdir(parents=True, exist_ok=True)
-  tag = image_tag()
-  _ensure_image(tag)
   log.verbose('hydrating the scoped credential store')
   store = credentials.build_scoped_store(launch.secrets, optional=launch.optional_secrets)
-  extra_env = dict(launch.env)
-  extra_mounts = list(launch.extra_mounts)
   argv = _docker_create_argv(
-    tag,
+    launch.image,
+    launch.runtime_bundle_hash,
     launch.name,
     project,
     tree,
     branch,
     launch.command,
     docker_sock=launch.docker_sock,
-    extra_env=extra_env,
+    extra_env=dict(launch.env),
     forward_env=launch.forward_env,
     tty=launch.tty,
-    extra_mounts=extra_mounts,
+    extra_mounts=list(launch.extra_mounts),
   )
   return _create_container(argv, _bro_tarball(store), launch.name)
 
 
 def _docker_create_argv(
   tag: str,
+  runtime_bundle_hash: str,
   name: str,
   project: Path,
   tree: Path,
@@ -283,39 +330,13 @@ def _docker_create_argv(
   tty: bool = True,
   extra_mounts: Optional[list[str]] = None,
 ) -> list[str]:
-  """argv for `docker create` of the session container (run-equivalent, unstarted).
-
-  `docker create -it --rm --init …` then `docker start -a -i <id>` reproduces `docker
-  run -it --rm --init` exactly (TTY, signals, exit code, auto-remove on exit). Splitting them
-  gives `prepare_container` a window to `docker cp` the scoped credential store into
-  the pre-start container's writable layer — no host-side store, no bind mount.
-
-  `tty=False` is the non-TTY variant used by one-shot roots and supervised children.
-  The broker adapter decides whether its streams are inherited separately by a root or
-  captured together for a child. `extra_mounts` adds explicit `-v SRC:DST` bind mounts — the
-  broker child mounts its provisioned host socket → the in-container `/run/broker.sock`.
-
-  `extra_env` adds explicit `-e KEY=VALUE` entries (value set here) — distinct from the
-  `_DOCKER_FORWARD_ENV` loop, which forwards a host var by name.
-
-  `forward_env=False` switches that forward loop off entirely: a broker-spawned
-  child's environment is the explicit snapshot its launcher assembled (`extra_env`)
-  — forwarding the launching process's task/session identity, git author identity,
-  and terminal facts would bake the launcher's values into the child
-  (mis-attributed commits, wrong banner facts). `RIDE_BRO` is deliberately not in
-  the forward set: every launch surface sets the container's bro in `extra_env`,
-  so an ambient value — the calling session's own theming — never leaks in.
-  """
+  """the create half of create/copy/start, before the scoped-store injection window."""
   home = Path.home()
   argv = ['docker', 'create']
   if tty:
     argv.append('-it')
   argv += [
     '--rm',
-    # tini as pid 1 reaps orphaned grandchildren. our entrypoint re-execs into
-    # claude, so without this pid 1 is claude — which doesn't wait() on orphans, so
-    # every group-killed pipeline (spawn.run's timeout path: the dev bro's bash/grep,
-    # infra deploys) would leak a zombie grandchild for the container's lifetime.
     '--init',
     '-v',
     f'{tree}:/workspace',
@@ -323,36 +344,32 @@ def _docker_create_argv(
     f'{project}:/host-repo:ro',
     '-v',
     f'{home}/.gitconfig:/host-gitconfig:ro',
+    '-v',
+    f'ride-runtime-{runtime_bundle_hash}:{_RUNTIME_MOUNT}:ro',
     '-e',
     'HOME=/home/ride',
     '-e',
     f'RIDE_WORKSPACE={name}',
     '-e',
     f'RIDE_BRANCH={branch}',
-    # surface the host-side workspace path inside the container so `ride banner`
-    # can show users where their /workspace mount actually lives on the host
     '-e',
     f'RIDE_HOST_WORKSPACE={tree}',
-    # the host machine's name — a container's own gethostname is the container id
     '-e',
     f'RIDE_HOST={socket.gethostname()}',
     '-w',
     '/workspace',
     '--memory=8g',
   ]
-  # bind-mount the host docker socket so deploy scripts inside the container can
-  # `docker build` / `docker push` against the host daemon (no nested runtime).
-  # gives an in-container process API-level control over host docker, a real but
-  # bounded escalation vector (ride is single-user dev; the rootless-podman
-  # alternative has the same blast radius across more surfaces). gated by
-  # `docker_sock` so a session that does no docker work is denied it, keeping the
-  # scoped boundary intact against prompt-injection exfiltration.
+  # The socket gives the container host-daemon control, so the scoped launch must
+  # opt in explicitly rather than inheriting it with the platform image.
   if docker_sock:
     argv += ['-v', '/var/run/docker.sock:/var/run/docker.sock']
+  # Summoned children pass a complete explicit snapshot and disable ambient
+  # forwarding so the parent's task and identity facts cannot leak into them.
   if forward_env:
-    for var in _DOCKER_FORWARD_ENV:
-      if os.environ.get(var) is not None:
-        argv += ['-e', var]
+    for variable in _DOCKER_FORWARD_ENV:
+      if os.environ.get(variable) is not None:
+        argv += ['-e', variable]
   if extra_mounts is not None:
     for mount in extra_mounts:
       argv += ['-v', mount]

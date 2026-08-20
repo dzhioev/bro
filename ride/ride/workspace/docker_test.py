@@ -145,14 +145,53 @@ class TestImageTag:
     )
     assert workspace_docker.image_tag() != before
 
-  def test_a_framework_shell_helper_edit_changes_the_tag(self, project, monkeypatch, tmp_path):
-    before = workspace_docker.image_tag()
-    setup = tmp_path / 'framework-setup'
-    setup.mkdir()
-    for name in workspace_docker.build_context.SHELL_HELPERS:
-      (setup / name).write_text(f'# {name} edited\n')
-    monkeypatch.setattr(workspace_docker.build_context, 'SHELL_DIR', setup)
-    assert workspace_docker.image_tag() != before
+  def test_a_runtime_asset_edit_changes_only_the_runtime_tag(self, project, monkeypatch, tmp_path):
+    before = workspace_docker.runtime_image_tag('3.12')
+    edited = tmp_path / 'prelude.sh'
+    edited.write_text('# edited\n')
+    files = dict(workspace_docker.build_context.RUNTIME_FILES)
+    files[f'{workspace_docker.build_context.INJECTED_PREFIX}/prelude.sh'] = edited
+    monkeypatch.setattr(workspace_docker.build_context, 'RUNTIME_FILES', files)
+    assert workspace_docker.runtime_image_tag('3.12') != before
+
+  def test_python_minor_changes_the_runtime_tag(self, project):
+    assert workspace_docker.runtime_image_tag('3.12') != workspace_docker.runtime_image_tag('3.13')
+
+  def test_a_repository_without_uv_manifests_uses_the_runtime_image(self, tmp_path):
+    (tmp_path / 'pyproject.toml').write_text('[tool.bro]\ndefault = "bro"\n')
+    runtime = workspace_docker.runtime_image_tag('3.12')
+    assert workspace_docker.project_image_tag(runtime, tmp_path) is None
+
+
+class TestContainerRuntimeResolver:
+  def test_resolves_image_and_volume_once(self, monkeypatch, tmp_path):
+    from ride.runtime_bundle import RuntimeBundle
+
+    bundle = RuntimeBundle(tmp_path / ('a' * 64), '3.12')
+    events: list = []
+    monkeypatch.setattr(workspace_docker, 'project_root', lambda: tmp_path / 'project')
+    monkeypatch.setattr(
+      workspace_docker,
+      '_ensure_runtime_image',
+      lambda tag, version: events.append(('runtime', tag, version)),
+    )
+    monkeypatch.setattr(
+      workspace_docker,
+      '_ensure_project_image',
+      lambda runtime, project: events.append(('project', runtime, project)) or 'project-image',
+    )
+    monkeypatch.setattr(
+      RuntimeBundle,
+      'materialize_container',
+      lambda self, image: events.append(('volume', image)),
+    )
+
+    resolver = workspace_docker.ContainerRuntimeResolver(bundle)
+    first = resolver.resolve()
+    second = resolver.resolve()
+
+    assert first == second == workspace_docker.ContainerRuntime('project-image', 'a' * 64)
+    assert [event[0] for event in events] == ['runtime', 'project', 'volume']
 
 
 class TestPruneSupersededImages:
@@ -214,10 +253,6 @@ class TestPrepareContainer:
     project = tmp_path / 'project'
     workspace = Workspace.create('ws', project, WorkspaceKind.CONTAINER)
     events: list = []
-    monkeypatch.setattr(workspace_docker, 'image_tag', lambda: events.append('tag') or 'image')
-    monkeypatch.setattr(
-      workspace_docker, '_ensure_image', lambda tag: events.append(('ensure', tag))
-    )
     monkeypatch.setattr(
       workspace_docker.credentials,
       'build_scoped_store',
@@ -242,19 +277,25 @@ class TestPrepareContainer:
       docker_sock=False,
       tty=False,
       forward_env=False,
+      image='runtime-image',
+      runtime_bundle_hash='bundle-hash',
       optional_secrets=('openai',),
       extra_mounts=('/host:/container',),
     )
     assert workspace_docker.prepare_container(launch, project) == 'cid'
     assert workspace.tree.is_dir()
-    assert events[0:3] == [
-      'tag',
-      ('ensure', 'image'),
-      ('store', ('github',), ('openai',)),
-    ]
-    argv_event = events[3]
+    assert events[0] == ('store', ('github',), ('openai',))
+    argv_event = events[1]
     assert argv_event[0] == 'argv'
-    assert argv_event[1] == ('image', 'ws', project, workspace.tree, 'worktree-ws', ['claude'])
+    assert argv_event[1] == (
+      'runtime-image',
+      'bundle-hash',
+      'ws',
+      project,
+      workspace.tree,
+      'worktree-ws',
+      ['claude'],
+    )
     assert argv_event[2] == {
       'docker_sock': False,
       'extra_env': {'MARKER': 'x'},
@@ -262,7 +303,7 @@ class TestPrepareContainer:
       'tty': False,
       'extra_mounts': ['/host:/container'],
     }
-    assert events[4] == ('create', ['docker', 'create'], b'TARBALL', 'ws')
+    assert events[2] == ('create', ['docker', 'create'], b'TARBALL', 'ws')
 
 
 class TestDockerCreateArgv:
@@ -272,7 +313,14 @@ class TestDockerCreateArgv:
 
     def build(**kwargs):
       return workspace_docker._docker_create_argv(
-        'tag', 'ws', tmp_path / 'proj', tmp_path / 'tree', 'worktree-ws', ['claude'], **kwargs
+        'tag',
+        'bundle-hash',
+        'ws',
+        tmp_path / 'proj',
+        tmp_path / 'tree',
+        'worktree-ws',
+        ['claude'],
+        **kwargs,
       )
 
     return build
@@ -281,6 +329,9 @@ class TestDockerCreateArgv:
     # `docker create -it --rm` is the unstarted half of `docker run -it --rm`;
     # run_in_container pairs it with `docker start -a -i`.
     assert build_argv()[:4] == ['docker', 'create', '-it', '--rm']
+
+  def test_runtime_bundle_volume_is_read_only_at_the_fixed_path(self, build_argv):
+    assert 'ride-runtime-bundle-hash:/var/ride/runtime:ro' in build_argv()
 
   def test_docker_sock_mounted_by_default(self, build_argv):
     assert '/var/run/docker.sock:/var/run/docker.sock' in build_argv()

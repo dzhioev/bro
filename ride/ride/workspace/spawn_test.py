@@ -34,6 +34,8 @@ class TestDockerLaunchSpec:
       docker_sock=False,
       tty=False,
       forward_env=False,
+      image='runtime-image',
+      runtime_bundle_hash='bundle-hash',
     )
     spec = workspace_spawn.DockerLaunchSpec(launch)
     assert spec.ring_bytes == workspace_spawn.DEFAULT_RING_BYTES == 64 * 1024
@@ -49,6 +51,8 @@ class TestBrokerLaunch:
       docker_sock=False,
       tty=False,
       forward_env=False,
+      image='runtime-image',
+      runtime_bundle_hash='bundle-hash',
       extra_mounts=('/existing:/mount',),
     )
     channel = workspace_spawn.Provisioned(channel='X', host_endpoint='/host/sock.sock')
@@ -499,6 +503,8 @@ class TestCompositeSpawner:
         docker_sock=False,
         tty=False,
         forward_env=False,
+        image='runtime-image',
+        runtime_bundle_hash='bundle-hash',
       )
     )
     process_launch = workspace_spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
@@ -583,6 +589,8 @@ class TestDockerSpawnerModes:
       docker_sock=True,
       tty=True,
       forward_env=True,
+      image='runtime-image',
+      runtime_bundle_hash='bundle-hash',
       optional_secrets=('openai',),
     )
     launch = workspace_spawn.DockerLaunchSpec(docker_launch)
@@ -611,6 +619,8 @@ class TestDockerSpawnerModes:
       docker_sock=False,
       tty=False,
       forward_env=True,
+      image='runtime-image',
+      runtime_bundle_hash='bundle-hash',
     )
     launch = workspace_spawn.DockerLaunchSpec(docker_launch, capture_output=False)
     provisioned = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
@@ -630,6 +640,8 @@ class TestDockerSpawnerModes:
       docker_sock=False,
       tty=False,
       forward_env=False,
+      image='runtime-image',
+      runtime_bundle_hash='bundle-hash',
     )
     launch = workspace_spawn.DockerLaunchSpec(docker_launch)
     provisioned = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
@@ -649,6 +661,8 @@ class TestDockerSpawnerModes:
       docker_sock=False,
       tty=False,
       forward_env=False,
+      image='runtime-image',
+      runtime_bundle_hash='bundle-hash',
     )
     launch = workspace_spawn.DockerLaunchSpec(docker_launch)
     provisioned = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')

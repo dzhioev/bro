@@ -103,66 +103,44 @@ if [ -d /opt/claude-plugins-seed ] && [ ! -f "$HOME/.claude/plugins/installed_pl
   cp -r /opt/claude-plugins-seed/. "$HOME/.claude/plugins/"
 fi
 
-# link in the venv baked into the image (deps + editable workspace already
-# installed, its module finders pointing at /workspace — see the Dockerfile) and
-# name the manifest set it was resolved from, staged at the clone's own relative
-# paths. whether that venv still describes the clone — RIDE_BASE_REF can base it on
-# any ref — is setup.sh's call below, so a diverged clone syncs the bake into
-# shape instead of building an environment from scratch. a pre-existing
-# /workspace/.venv (a reused workspace) keeps its own environment.
-if [ "${RIDE_SKIP_VENV:-}" != "1" ] && [ -d /opt/ride-venv ] && [ ! -e /workspace/.venv ]; then
-  log VERBOSE 'linking the venv baked into the image'
-  ln -s /opt/ride-venv /workspace/.venv
-  export RIDE_VENV_MANIFEST=/opt/ride-venv-manifest
+# Link the optional dependency bake into the clone. A symlink whose old image
+# target disappeared is replaced; any real workspace environment is preserved.
+if [ -L /workspace/.venv ] && [ ! -e /workspace/.venv ]; then
+  rm /workspace/.venv
+fi
+if [ -d /opt/project-venv ]; then
+  if [ ! -e /workspace/.venv ]; then
+    log VERBOSE 'linking the project venv baked into the image'
+    ln -s /opt/project-venv /workspace/.venv
+    export RIDE_VENV_MANIFEST=/opt/project-venv-manifest
+  fi
 fi
 
-# provision the cloned repo through its root setup.sh — the uniform provisioning
-# entry point every repo ride operates on carries (uv sync plus repository-local
-# development hook installation). then activate the venv so child processes
-# inherit it. RIDE_SKIP_VENV (smoke test only) skips the whole venv-dependent block.
-if [ "${RIDE_SKIP_VENV:-}" != "1" ]; then
+if [ -f /workspace/setup.sh ]; then
   /workspace/setup.sh >&2
-  source /workspace/.venv/bin/activate
+else
+  log INFO 'setup.sh not found; skipping project provisioning'
 fi
 
-# secrets resolve from the scoped credential store bind-mounted at ~/.bro (see
-# ride/ride/workspace/docker.py). wire each into the tool that consumes it from outside the resolver (git
-# credential helper, the aws CLI's ~/.aws/credentials, ...) via its registry-declared
-# install hook — one generic step, no per-secret logic here. env exports must
-# persist into `exec`, so this is eval'd in the entrypoint shell.
-#
-# capture before eval: `eval "$(credentials install-hooks)"` would mask a generator
-# crash — the failed command substitution yields empty stdout, `eval ""` exits 0, and
-# set -e never fires, so claude would launch with credentials unwired. a plain
-# assignment propagates the substitution's exit status to set -e, aborting the launch.
-if [ "${RIDE_SKIP_VENV:-}" != "1" ]; then
-  log VERBOSE 'installing credential hooks'
-  install_hooks="$(credentials install-hooks)"
-  eval "$install_hooks"
-fi
+# Capture before eval so a failed command substitution aborts the launch rather
+# than becoming a successful empty eval.
+log VERBOSE 'installing credential hooks'
+install_hooks="$(credentials install-hooks)"
+eval "$install_hooks"
 
-# broxy: one long-lived upstream connection and a local socket for the
-# in-container client swarm. `broxy launch` owns spawn, readiness, and failure
-# cleanup; this entrypoint owns the fail-open launch policy.
+# One local broker proxy serves the in-container client swarm. A proxy launch
+# failure is expected to degrade the optional broker channel, not the session.
 if [ -n "${BROKER_CHANNEL:-}" ]; then
-  if [ "${RIDE_SKIP_VENV:-}" != "1" ] && command -v broxy > /dev/null; then
-    if broxy_launch="$(
-      broxy launch /tmp/broxy.sock --upstream "$BROKER_CHANNEL" --log-file /tmp/broxy.log
-    )"; then
-      IFS=$'\t' read -r BROKER_CHANNEL _ <<< "$broxy_launch"
-      export BROKER_CHANNEL
-      log VERBOSE "broker channel at $BROKER_CHANNEL"
-    else
-      log WARNING 'broxy launch failed (log: /tmp/broxy.log); the session gets no broker channel'
-      unset BROKER_CHANNEL
-    fi
+  if broxy_launch="$(
+    broxy launch /tmp/broxy.sock --upstream "$BROKER_CHANNEL" --log-file /tmp/broxy.log
+  )"; then
+    IFS=$'\t' read -r BROKER_CHANNEL _ <<< "$broxy_launch"
+    export BROKER_CHANNEL
+    log VERBOSE "broker channel at $BROKER_CHANNEL"
   else
-    log WARNING 'broxy unavailable in this workspace; the session gets no broker channel'
+    log WARNING 'broxy launch failed (log: /tmp/broxy.log); the session gets no broker channel'
     unset BROKER_CHANNEL
   fi
 fi
 
-# the tree is prepared; the command (for a Claude ride: the same
-# `ride solo|along --in-place` runner host mode spawns, resolved from the venv activated
-# above) owns everything else — MCP servers, skills, claude itself.
 exec "$@"

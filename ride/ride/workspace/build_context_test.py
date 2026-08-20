@@ -79,10 +79,20 @@ class TestManifestPaths:
       'packages/one/pyproject.toml',
     ]
 
-  def test_missing_lock_raises(self, tmp_path):
+  def test_no_root_manifests_skips_the_project_bake(self, tmp_path):
+    project = tmp_path / 'project'
+    project.mkdir()
+    assert build_context.manifest_paths(project) == []
+
+  def test_pyproject_without_a_uv_lock_skips_the_project_bake(self, tmp_path):
     project = _project(tmp_path, [])
     (project / 'uv.lock').unlink()
-    with pytest.raises(FileNotFoundError, match='uv.lock'):
+    assert build_context.manifest_paths(project) == []
+
+  def test_lock_without_pyproject_raises(self, tmp_path):
+    project = _project(tmp_path, [])
+    (project / 'pyproject.toml').unlink()
+    with pytest.raises(FileNotFoundError, match='pyproject.toml'):
       build_context.manifest_paths(project)
 
 
@@ -98,7 +108,7 @@ class TestProjectFiles:
     _config(monkeypatch)
     project = _project(tmp_path, [])
     (project / 'uv.lock').write_text('edited locally')
-    with tarfile.open(fileobj=io.BytesIO(build_context.assemble(project))) as archive:
+    with tarfile.open(fileobj=io.BytesIO(build_context.assemble_project(project))) as archive:
       extracted = archive.extractfile('uv.lock')
       assert extracted is not None
       assert extracted.read() == b'edited locally'
@@ -110,20 +120,22 @@ class TestProjectFiles:
 
 
 class TestAssemble:
-  def test_injects_the_framework_assets_at_fixed_paths(self, tmp_path, monkeypatch):
+  def test_runtime_context_contains_only_runtime_assets(self):
+    assert _names(build_context.assemble_runtime()) == sorted(build_context.RUNTIME_FILES)
+
+  def test_project_context_injects_the_dockerfile_and_manifests(self, tmp_path, monkeypatch):
     _config(monkeypatch)
     project = _project(tmp_path, ['bro'])
-    names = _names(build_context.assemble(project))
+    names = _names(build_context.assemble_project(project))
     assert build_context.DOCKERFILE_PATH in names
-    for injected in build_context.FRAMEWORK_FILES:
-      assert injected in names
+    assert f'{build_context.INJECTED_PREFIX}/entrypoint.sh' not in names
     for relative in build_context.manifest_paths(project):
       assert f'{build_context.MANIFEST_PREFIX}/{relative}' in names
 
   def test_members_are_sorted_and_parents_precede_children(self, tmp_path, monkeypatch):
     _config(monkeypatch)
     project = _project(tmp_path, ['bro', 'bro-dev'])
-    with tarfile.open(fileobj=io.BytesIO(build_context.assemble(project))) as archive:
+    with tarfile.open(fileobj=io.BytesIO(build_context.assemble_project(project))) as archive:
       names = [member.name for member in archive.getmembers()]
     assert names == sorted(names)
     for name in names:
@@ -137,7 +149,7 @@ class TestAssemble:
     (project / 'run.sh').write_text('#!/bin/sh\n')
     (project / 'run.sh').chmod(0o700)
     subprocess.run(['git', 'add', '-A'], cwd=project, check=True)
-    with tarfile.open(fileobj=io.BytesIO(build_context.assemble(project))) as archive:
+    with tarfile.open(fileobj=io.BytesIO(build_context.assemble_project(project))) as archive:
       members = {member.name: member for member in archive.getmembers()}
     for member in members.values():
       assert member.mtime == 0
@@ -148,16 +160,13 @@ class TestAssemble:
     assert members['run.sh'].mode == 0o755
     assert members['uv.lock'].mode == 0o644
     assert members[build_context.DOCKERFILE_PATH].mode == build_context._INJECTED_MODE
-    assert (
-      members[f'{build_context.INJECTED_PREFIX}/entrypoint.sh'].mode == build_context._INJECTED_MODE
-    )
 
   def test_touching_a_file_leaves_the_archive_identical(self, tmp_path, monkeypatch):
     _config(monkeypatch)
     project = _project(tmp_path, ['bro'])
-    before = build_context.assemble(project)
+    before = build_context.assemble_project(project)
     os.utime(project / 'uv.lock', (10**9, 10**9))
-    assert build_context.assemble(project) == before
+    assert build_context.assemble_project(project) == before
 
   def test_a_project_file_under_the_reserved_prefix_raises(self, tmp_path, monkeypatch):
     _config(monkeypatch)
@@ -166,4 +175,4 @@ class TestAssemble:
     (project / build_context.INJECTED_PREFIX / 'Dockerfile').write_text('FROM scratch')
     subprocess.run(['git', 'add', '-A'], cwd=project, check=True)
     with pytest.raises(ValueError, match='reserved'):
-      build_context.assemble(project)
+      build_context.assemble_project(project)

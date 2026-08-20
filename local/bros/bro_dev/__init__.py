@@ -18,9 +18,8 @@ exactly that and carry it out once the user confirms. Never trim a solution to
 avoid disturbing what is already there, and never offer "nothing existing
 changes" as a merit of a proposal — the merit is the structure left behind.
 
-The environment is normally provisioned with its venv active, so development
-commands and repository CLIs run by bare name. Follow the repository's own docs
-for its formatter, test gate, and package build checks.
+Follow the repository's own docs for its formatter, test gate, and package build
+checks.
 
 Text assets may carry `{{…}}` conditioning directives. Read the `template` man
 page when their exact grammar or rendering semantics matter.

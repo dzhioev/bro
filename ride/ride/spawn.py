@@ -42,7 +42,7 @@ from ride.scope import split_scope_overrides, summoned_credential_scope
 from ride.session import SessionSpec, record_resume_spec
 from ride.summon_control import SummonControl, summon_status_file
 from ride.trails import local_trails_mounts
-from ride.workspace.docker import Launch
+from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver, Launch
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 from ride.workspace.spawn import (
@@ -126,6 +126,7 @@ def _child_launch(
   base_ref: str,
   summoner: Optional[dict[str, Any]],
   may_summon: tuple[str, ...],
+  container_runtime: ContainerRuntime,
 ) -> Launch:
   """a summoned child's container launch around its harness-composed inner
   command and extras: the child facts (`RIDE_SUMMONED`, its own reconstructed
@@ -148,11 +149,17 @@ def _child_launch(
     docker_sock=scoped.docker_sock,
     tty=False,
     forward_env=False,
+    image=container_runtime.image,
+    runtime_bundle_hash=container_runtime.bundle_hash,
     extra_mounts=(*extras.mounts, *local_trails_mounts(scoped)),
   )
 
 
-def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunchSpec:
+def _lower_summon(
+  launch: SummonLaunchSpec,
+  workspace_name: str,
+  container_runtime: ContainerRuntimeResolver,
+) -> DockerLaunchSpec:
   """the blocking half of a summon spawn: compose the child's docker launch —
   the target's own scope, nothing inherited from the summoner, plus whatever the
   request's own grant/revoke names — around the inner command and container
@@ -189,6 +196,7 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
     revoke=revoke_credentials,
     llm_spec=spec.llm_spec,
   )
+  resolved_runtime = container_runtime.resolve()
   workspace = Workspace.ensure(workspace_name, project, WorkspaceKind.CONTAINER, throwaway=True)
   record_resume_spec(workspace, spec)
   run = _child_launch(
@@ -199,6 +207,7 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
     base_ref=base_ref,
     summoner=launch.summoner,
     may_summon=launch.may_summon,
+    container_runtime=resolved_runtime,
   )
   log_scoped_secrets(f'summoned {launch.target}', run.secrets, run.optional_secrets)
   return DockerLaunchSpec(run)
@@ -208,12 +217,18 @@ class SummonSpawner(Spawner):
   """lower a `SummonLaunchSpec` to its docker launch off-loop, then delegate to
   the docker path (which runs its own blocking prepare off-loop too)."""
 
-  def __init__(self, docker: DockerSpawner):
+  def __init__(self, docker: DockerSpawner, container_runtime: ContainerRuntimeResolver):
     self._docker = docker
+    self._container_runtime = container_runtime
 
   async def spawn(self, launch: LaunchSpec, channel: Provisioned) -> ChildHandle:
     assert isinstance(launch, SummonLaunchSpec)
-    lowered = await asyncio.to_thread(_lower_summon, launch, _workspace_name(channel.channel))
+    lowered = await asyncio.to_thread(
+      _lower_summon,
+      launch,
+      _workspace_name(channel.channel),
+      self._container_runtime,
+    )
     return await self._docker.spawn(lowered, channel)
 
 
@@ -269,6 +284,7 @@ def run_root_via_broker(
   workspace: Workspace,
   may_summon: Collection[str] = (),
   credential_scope: Collection[str] = (),
+  container_runtime: ContainerRuntimeResolver,
 ) -> int:
   """run `launch` as the root peer of a broker over the host control dir
   (`bro.workspace.paths.broker_dir`), supervise it on the broker loop until it exits,
@@ -287,8 +303,9 @@ def run_root_via_broker(
   is authorized to summon — its effective outgoing allow-list (`ride/ride/summon_control.py`);
   defaults to deny-all. `credential_scope` names the secrets the root session
   was launched with, the bound on what its summons may grant a child; defaults
-  to grant-nothing. A summoned child follows its own bro's static seeds
-  instead, resolved per request by the control. The summon handler is registered
+  to grant-nothing. `container_runtime` is the root's lazy or already-resolved
+  image and bundle-volume identity, reused by every child. A summoned child follows
+  its own bro's static seeds instead, resolved per request by the control. The summon handler is registered
   either way, so a denied summoner always gets a clean correlated error instead of
   a silent refuse; after the loop ends — cleanly or by an exception unwinding out
   of it — children the root's exit killed mid-flight are logged loudly."""
@@ -302,7 +319,7 @@ def run_root_via_broker(
     {
       DockerLaunchSpec: docker_spawner,
       ProcessLaunchSpec: ProcessSpawner(host_log=host_log),
-      SummonLaunchSpec: SummonSpawner(docker_spawner),
+      SummonLaunchSpec: SummonSpawner(docker_spawner, container_runtime),
     }
   )
   control = SummonControl(

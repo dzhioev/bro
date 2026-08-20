@@ -1,13 +1,4 @@
-"""the container build context: a normalized tar streamed to `docker build -`.
-
-A stdin tar is filtered by no `.dockerignore`, so the archive is exactly what this
-module puts in it: the operated repo's files plus the framework assets the image
-needs, injected from the installed package under `INJECTED_PREFIX`.
-
-Every member is normalized — fixed mtime, zeroed ownership, mode reduced to the
-executable bit — because a stdin context's cache key is the archive's content
-digest, so any metadata churn re-runs the expensive venv bake.
-"""
+"""normalized tar contexts for the runtime and project container images."""
 
 import io
 import subprocess
@@ -20,7 +11,6 @@ from bro.workspace.project import project_config
 
 SETUP_DIR = Path(__file__).resolve().parent.parent / 'setup'
 CONTAINER_DIR = SETUP_DIR / 'container'
-BASE_IMAGE_DIR = SETUP_DIR / 'base_image'
 SHELL_DIR = shell_dir()
 SHELL_HELPERS = ('prelude.sh', 'log.sh', 'strict.sh')
 
@@ -28,22 +18,21 @@ INJECTED_PREFIX = '.bro-container'
 DOCKERFILE_PATH = f'{INJECTED_PREFIX}/Dockerfile'
 MANIFEST_PREFIX = f'{INJECTED_PREFIX}/manifests'
 
-FRAMEWORK_FILES = {
+RUNTIME_FILES = {
   DOCKERFILE_PATH: CONTAINER_DIR / 'Dockerfile',
   f'{INJECTED_PREFIX}/entrypoint.sh': CONTAINER_DIR / 'entrypoint.sh',
   f'{INJECTED_PREFIX}/git.sh': CONTAINER_DIR / 'git.sh',
   **{f'{INJECTED_PREFIX}/{name}': SHELL_DIR / name for name in SHELL_HELPERS},
 }
+PROJECT_FILES = {DOCKERFILE_PATH: CONTAINER_DIR / 'project.Dockerfile'}
 
 _FIXED_MTIME = 0
-# the injected assets carry a fixed mode so the context digest never depends on the
-# modes the framework's own install happened to land. nothing in the image execs
-# them in place — they are sourced, read, or chmod'd by the Dockerfile after the COPY.
+# BuildKit hashes stdin-context metadata, so framework-owned modes must not vary
+# with the installation they were read from.
 _INJECTED_MODE = 0o644
 
 
 def _member_directories(project: Path) -> list[Path]:
-  """the uv workspace member directories declared by `project`'s pyproject.toml."""
   table = tomllib.loads((project / 'pyproject.toml').read_text())
   workspace = table.get('tool', {}).get('uv', {}).get('workspace')
   if workspace is None:
@@ -61,30 +50,27 @@ def _member_directories(project: Path) -> list[Path]:
 
 
 def manifest_paths(project: Path) -> list[str]:
-  """project-relative paths of every manifest uv reads to resolve the environment.
+  """project-relative paths of every manifest uv reads, or none for a non-uv repo.
 
-  The members are listed alongside the root manifests because `uv.lock` records a
-  workspace member as an editable path source with no content hash — the lock is
-  unchanged by an edit to a member's own pyproject.toml.
+  Member pyprojects matter because uv lock entries for editable workspace members
+  carry paths rather than content hashes.
   """
+  pyproject = project / 'pyproject.toml'
+  lock = project / 'uv.lock'
+  if not lock.is_file():
+    return []
+  if not pyproject.is_file():
+    raise FileNotFoundError(f'{project} is missing pyproject.toml')
   paths = ['pyproject.toml', 'uv.lock']
   paths += [
     f'{directory.relative_to(project).as_posix()}/pyproject.toml'
     for directory in _member_directories(project)
   ]
-  missing = [path for path in paths if not (project / path).is_file()]
-  if len(missing) > 0:
-    raise FileNotFoundError(f'{project} is missing {", ".join(missing)}')
   return paths
 
 
 def project_files(project: Path) -> list[str]:
-  """project-relative paths of the repo's own files the context carries.
-
-  `git ls-files` by default — tracked files as they exist in the working tree, so
-  local edits are included while untracked and ignored ones stay out. A repo that
-  needs more overrides the producer with `[tool.bro] build-context-command`.
-  """
+  """project-relative tracked files included when baking the editable workspace."""
   command = project_config().build_context_command
   if command is not None:
     listed = subprocess.run(
@@ -121,24 +107,7 @@ def _parents(name: str) -> list[str]:
   return ['/'.join(parts[: index + 1]) for index in range(len(parts))]
 
 
-def assemble(project: Path) -> bytes:
-  """the build context for `project`'s session image, as a normalized tar."""
-  entries = {name: project / name for name in project_files(project) if (project / name).is_file()}
-  collisions = sorted(name for name in entries if name.split('/')[0] == INJECTED_PREFIX)
-  if len(collisions) > 0:
-    raise ValueError(
-      f'{INJECTED_PREFIX}/ is reserved for the framework build assets; '
-      f'{project} carries {", ".join(collisions)}'
-    )
-  modes = {name: _project_mode(source) for name, source in entries.items()}
-  injected = {
-    **FRAMEWORK_FILES,
-    **{f'{MANIFEST_PREFIX}/{name}': project / name for name in manifest_paths(project)},
-  }
-  entries.update(injected)
-  modes.update(dict.fromkeys(injected, _INJECTED_MODE))
-  # a parent's name is a strict prefix of its children's, so one sort orders every
-  # directory ahead of what it holds
+def _archive(entries: dict[str, Path], modes: dict[str, int]) -> bytes:
   directories = {parent for name in entries for parent in _parents(name) if parent not in entries}
   buffer = io.BytesIO()
   with tarfile.open(fileobj=buffer, mode='w', format=tarfile.GNU_FORMAT) as archive:
@@ -148,3 +117,29 @@ def assemble(project: Path) -> bytes:
       else:
         _add_directory(archive, name)
   return buffer.getvalue()
+
+
+def assemble_runtime() -> bytes:
+  return _archive(dict(RUNTIME_FILES), dict.fromkeys(RUNTIME_FILES, _INJECTED_MODE))
+
+
+def assemble_project(project: Path) -> bytes:
+  """the optional dependency-bake context for a project with uv manifests."""
+  manifests = manifest_paths(project)
+  if len(manifests) == 0:
+    raise ValueError(f'{project} has no uv manifests')
+  entries = {name: project / name for name in project_files(project) if (project / name).is_file()}
+  collisions = sorted(name for name in entries if name.split('/')[0] == INJECTED_PREFIX)
+  if len(collisions) > 0:
+    raise ValueError(
+      f'{INJECTED_PREFIX}/ is reserved for the framework build assets; '
+      f'{project} carries {", ".join(collisions)}'
+    )
+  modes = {name: _project_mode(source) for name, source in entries.items()}
+  injected = {
+    **PROJECT_FILES,
+    **{f'{MANIFEST_PREFIX}/{name}': project / name for name in manifests},
+  }
+  entries.update(injected)
+  modes.update(dict.fromkeys(injected, _INJECTED_MODE))
+  return _archive(entries, modes)

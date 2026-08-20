@@ -4,7 +4,7 @@ How to bring up a fresh checkout, plus what the framework reads out of `~/.bro`.
 
 ## Setup
 
-A repository operated by `ride` provides a root `setup.sh` that provisions its project environment. Host sessions take their machinery from the invoking installation's runtime snapshot, so the worktree environment need not provide `ride` or `bro`; container sessions take those commands from the checkout-backed image environment. The script runs `uv sync`, activates that environment long enough for `bro.dev.install` to install repository hooks, and skips the sync while the environment the container entrypoint linked in still describes the tree — it compares the tree's dependency manifests against the copies `RIDE_VENV_MANIFEST` names on every run, so a rebase that moves them re-syncs mid-session.
+A repository operated by `ride` may provide a root `setup.sh` to provision its project environment; an absent script is logged and skipped. Session machinery comes from the invoking installation's frozen runtime bundle in both modes, so the project environment need not provide `ride` or `bro`. A setup script can run `uv sync`, activate the project environment only for its own provisioning process, and call `bro.dev.install`; managed sessions keep that environment off PATH. In containers, `RIDE_VENV_MANIFEST` names the optional project's staged manifests so setup can reuse the bake until the tree diverges.
 
 The framework repository is a uv workspace whose root publishes `bro`; `native/` publishes `bro-native`, `dev/` publishes `bro-dev`, `ride/` publishes `bro-ride`, and `local/` publishes this checkout's `bro-local` persona and scripts. `uv sync --all-packages --all-groups --all-extras` creates the root `.venv`, installs all five editably, and registers each distribution's committed console-script bridge. The root owns the tool configuration and development gate for every member.
 
@@ -12,7 +12,7 @@ Prerequisites are documented in `README.md`. `setup_env.sh` remains an optional 
 
 ### Worktrees
 
-`ride` creates a fresh `.venv` in each host worktree by running that worktree's `setup.sh`. Container workspaces receive the image's baked environment, which the same setup entry point syncs only once the workspace's manifests have moved away from it. Never run `uv sync` against the main checkout from inside another worktree: editable installs record absolute source paths.
+A host worktree's `setup.sh` may create its `.venv`. Container workspaces receive an optional project dependency bake at `/opt/project-venv`; setup syncs it once the workspace manifests move away from the staged baseline. Neither environment enters the session PATH. Never run `uv sync` against the main checkout from inside another worktree: editable installs record absolute source paths.
 
 ## Files
 

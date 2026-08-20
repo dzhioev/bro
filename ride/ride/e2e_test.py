@@ -20,11 +20,10 @@ G — the stop interrupt, so `docker stop` lands in claude as a keypress.
 
 Isolation: every launch runs under a throwaway HOME, data home and project root,
 so no scenario touches the user's own claude or runtime state. The
-project root is a local git clone of this checkout — its `pyproject.toml` /
-`uv.lock` are byte-identical, so `_image_tag()` resolves to the already-built
-image, and the container's baked venv serves this branch's committed
-`broker`/`bro` code to the in-container probes (launcher code comes from this
-checkout's editable venv, uncommitted changes included). The tree lives under
+project root is a local git clone of this checkout. The launcher freezes the
+current installation, materializes its container runtime volume, and resolves the
+clone's project image before the scenarios start; the runtime volume serves the
+`broker`/`bro` code to in-container probes. The tree lives under
 a short `mkdtemp` dir directly in the system temp dir: the broker socket path
 must fit `sun_path` (~108 bytes), which rules out deeper roots.
 
@@ -60,6 +59,7 @@ from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Broker, Dispatcher, ping_handler, spawn_test_handler
 from bro.broker.runtime import Peer
 from bro.broker.transports.unix import UnixServerTransport
+from ride.runtime_bundle import resolve_runtime_bundle
 from ride.workspace.docker import find_container_id
 from ride.workspace.spawn import DockerLaunchSpec, DockerSpawner
 
@@ -86,6 +86,7 @@ pytestmark = [
 ]
 
 _NAME_PREFIX = 'ride-e2e-'
+_RUNTIME_PYTHON = '/var/ride/runtime/venv/bin/python'
 
 
 # --- in-container probes (source for `python -c`; repo code comes from the baked venv) ---
@@ -285,7 +286,9 @@ from bro.workspace.paths import project_root
 launch = Launch(name=os.environ['RIDE_E2E_NAME'],
                 command=json.loads(os.environ['RIDE_E2E_COMMAND']), env={},
                 secrets=tuple(json.loads(os.environ.get('RIDE_E2E_SECRETS', '[]'))),
-                docker_sock=True, tty=True, forward_env=True)
+                docker_sock=True, tty=True, forward_env=True,
+                image=os.environ['RIDE_E2E_IMAGE'],
+                runtime_bundle_hash=os.environ['RIDE_E2E_RUNTIME_HASH'])
 workspace = Workspace.ensure(launch.name, project_root(), WorkspaceKind.CONTAINER)
 code = run_in_container(launch, workspace)
 loaded = sorted(m for m in sys.modules if m == 'broker' or m.startswith('bro.broker.'))
@@ -305,6 +308,8 @@ class IsolatedEnv:
   home: Path
   data_home: Path
   runtime_root: Path
+  image: str
+  runtime_bundle_hash: str
 
   @property
   def broker_dir(self) -> Path:
@@ -384,22 +389,23 @@ def isolated_env() -> Iterator[IsolatedEnv]:
   (home / '.gitconfig').write_text(
     '[user]\n\tname = ride e2e\n\temail = e2e@invalid\n[init]\n\tdefaultBranch = master\n'
   )
-  # the clone's pyproject/uv.lock are identical to the checkout's, so this resolves to
-  # the image real sessions already built; builds only on a host that never launched one
   with pytest.MonkeyPatch.context() as monkeypatch:
     monkeypatch.setattr(workspace_docker, 'project_root', lambda: project)
-    workspace_docker._ensure_image(workspace_docker.image_tag())
     monkeypatch.setenv('XDG_DATA_HOME', str(data_home))
     runtime_root = workspace_paths.runtime_root(project)
-  env = IsolatedEnv(
-    root=root,
-    project=project,
-    home=home,
-    data_home=data_home,
-    runtime_root=runtime_root,
-  )
-  yield env
-  _remove_stray_containers(env)
+    with resolve_runtime_bundle() as bundle:
+      runtime = workspace_docker.ContainerRuntimeResolver(bundle).resolve()
+      env = IsolatedEnv(
+        root=root,
+        project=project,
+        home=home,
+        data_home=data_home,
+        runtime_root=runtime_root,
+        image=runtime.image,
+        runtime_bundle_hash=runtime.bundle_hash,
+      )
+      yield env
+      _remove_stray_containers(env)
   shutil.rmtree(root, ignore_errors=True)
 
 
@@ -439,6 +445,8 @@ class _Driver:
     driver_env['HOME'] = str(env.home)
     driver_env['RIDE_E2E_NAME'] = name
     driver_env['RIDE_E2E_COMMAND'] = json.dumps(command)
+    driver_env['RIDE_E2E_IMAGE'] = env.image
+    driver_env['RIDE_E2E_RUNTIME_HASH'] = env.runtime_bundle_hash
     driver_env['XDG_DATA_HOME'] = str(env.data_home)
     driver_env.update(extra_env)
     master, slave = pty.openpty()
@@ -559,7 +567,7 @@ def _container_gone(env: IsolatedEnv, name: str, timeout: float) -> bool:
 def scenario_a(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> LiveRun:
   env = isolated_env
   name = f'{_NAME_PREFIX}a-root'
-  driver = _Driver(env, name, ['python', '-c', _PROBE_A], extra_env={})
+  driver = _Driver(env, name, [_RUNTIME_PYTHON, '-c', _PROBE_A], extra_env={})
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)
   sockets = env.sockets()
@@ -629,12 +637,14 @@ def _run_broker_scenario(
   root = DockerLaunchSpec(
     workspace_docker.Launch(
       name=name,
-      command=['python', '-c', _PROBE_B_ROOT],
+      command=[_RUNTIME_PYTHON, '-c', _PROBE_B_ROOT],
       env={'RIDE_E2E_DEADLINE': str(probe_deadline), 'RIDE_E2E_EXIT_AFTER': exit_after},
       secrets=(),
       docker_sock=False,
       tty=False,
       forward_env=False,
+      image=env.image,
+      runtime_bundle_hash=env.runtime_bundle_hash,
     )
   )
   child = DockerLaunchSpec(
@@ -646,6 +656,8 @@ def _run_broker_scenario(
       docker_sock=False,
       tty=False,
       forward_env=False,
+      image=env.image,
+      runtime_bundle_hash=env.runtime_bundle_hash,
     )
   )
   facade = Broker(
@@ -701,7 +713,7 @@ def b_clean(isolated_env: IsolatedEnv) -> BrokerRun:
   return _run_broker_scenario(
     isolated_env,
     'clean',
-    ['python', '-c', _CHILD_CLEAN],
+    [_RUNTIME_PYTHON, '-c', _CHILD_CLEAN],
     default_timeout=600,
     probe_deadline=120,
   )
@@ -712,7 +724,7 @@ def b_early_exit(isolated_env: IsolatedEnv) -> BrokerRun:
   return _run_broker_scenario(
     isolated_env,
     'early',
-    ['python', '-c', _CHILD_EARLY_EXIT],
+    [_RUNTIME_PYTHON, '-c', _CHILD_EARLY_EXIT],
     default_timeout=600,
     probe_deadline=120,
   )
@@ -734,7 +746,7 @@ def b_teardown(isolated_env: IsolatedEnv) -> BrokerRun:
   return _run_broker_scenario(
     isolated_env,
     'teardown',
-    ['python', '-c', _CHILD_STARTED_THEN_HANG],
+    [_RUNTIME_PYTHON, '-c', _CHILD_STARTED_THEN_HANG],
     default_timeout=600,
     probe_deadline=120,
     exit_after='started',
@@ -817,7 +829,7 @@ def scenario_c(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   env = isolated_env
   name = f'{_NAME_PREFIX}c-root'
   driver = _Driver(
-    env, name, ['python', '-c', _PROBE_NO_CHANNEL], extra_env={'BROKER_DISABLED': '1'}
+    env, name, [_RUNTIME_PYTHON, '-c', _PROBE_NO_CHANNEL], extra_env={'BROKER_DISABLED': '1'}
   )
   request.addfinalizer(driver.close)
   run = LiveRun(exit_code=-1, output='')
@@ -875,7 +887,7 @@ def scenario_d(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   (shadow / 'sitecustomize.py').write_text(_BROKER_SHADOW)
   name = f'{_NAME_PREFIX}d-root'
   driver = _Driver(
-    env, name, ['python', '-c', _PROBE_NO_CHANNEL], extra_env={'PYTHONPATH': str(shadow)}
+    env, name, [_RUNTIME_PYTHON, '-c', _PROBE_NO_CHANNEL], extra_env={'PYTHONPATH': str(shadow)}
   )
   request.addfinalizer(driver.close)
   run = LiveRun(exit_code=-1, output='')
@@ -908,7 +920,7 @@ class TestBrokerUnimportable:
 def scenario_e_ctrl_c(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> LiveRun:
   env = isolated_env
   name = f'{_NAME_PREFIX}e-ctrlc-root'
-  driver = _Driver(env, name, ['python', '-c', _PROBE_SIGINT], extra_env={})
+  driver = _Driver(env, name, [_RUNTIME_PYTHON, '-c', _PROBE_SIGINT], extra_env={})
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)
   driver.write(b'\x03')  # ^C on the session terminal, forwarded raw into the container tty
@@ -922,7 +934,7 @@ def scenario_e_ctrl_c(isolated_env: IsolatedEnv, request: pytest.FixtureRequest)
 def scenario_e_targeted(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> LiveRun:
   env = isolated_env
   name = f'{_NAME_PREFIX}e-targeted-root'
-  driver = _Driver(env, name, ['python', '-c', _PROBE_SIGINT], extra_env={})
+  driver = _Driver(env, name, [_RUNTIME_PYTHON, '-c', _PROBE_SIGINT], extra_env={})
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)
   container_id = find_container_id(env.tree(name))

@@ -53,7 +53,7 @@ def provision_host_worktree(worktree: Path) -> bool:
   # baked /workspace venv, but a host worktree needs its own environment synced.
   script = worktree / 'setup.sh'
   if not script.is_file():
-    log.warning('%s not found (worktree on an old base?); skipping provisioning', script)
+    log.info('%s not found; skipping project provisioning', script)
     return True
   env = {k: v for k, v in os.environ.items() if k != 'RIDE_VENV_MANIFEST'}
   if subprocess.run([str(script)], cwd=str(worktree), env=env).returncode != 0:

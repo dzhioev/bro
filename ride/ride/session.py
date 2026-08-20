@@ -31,6 +31,7 @@ from ride.workspace.containers import broker_enabled, container_broker_enabled
 from ride.workspace.docker import (
   CONTAINER_BROKER_ADDRESS,
   CONTAINER_BROKER_SOCK,
+  ContainerRuntimeResolver,
   Launch,
   find_container_id,
 )
@@ -200,6 +201,7 @@ def _launch_session(
   *,
   container: bool,
   runtime_bundle: RuntimeBundle,
+  container_runtime: ContainerRuntimeResolver,
   summoned: Optional[pending_summon.PendingSummon] = None,
 ) -> int:
   harness = get_harness(spec.harness)
@@ -218,9 +220,18 @@ def _launch_session(
     log.error('%s', harness.missing_session_error(workspace))
     return 1
   if container:
-    return _container_session(harness, spec, workspace, base_ref, launch_scope, summoned)
+    return _container_session(
+      harness, spec, workspace, base_ref, launch_scope, container_runtime, summoned
+    )
   return _host_session(
-    harness, spec, workspace, base_ref, launch_scope, runtime_bundle, summoned
+    harness,
+    spec,
+    workspace,
+    base_ref,
+    launch_scope,
+    runtime_bundle,
+    container_runtime,
+    summoned,
   )
 
 
@@ -230,6 +241,7 @@ def _container_session(
   workspace: Workspace,
   base_ref: Optional[str],
   launch_scope: ScopedLaunch,
+  container_runtime: ContainerRuntimeResolver,
   summoned: Optional[pending_summon.PendingSummon],
 ) -> int:
   scoped = launch_scope.scoped
@@ -250,6 +262,7 @@ def _container_session(
   if summoned is not None:
     env.update(_summoned_env(summoned, spec, CONTAINER_BROKER_ADDRESS))
     summoned_mounts = (f'{summoned.socket}:{CONTAINER_BROKER_SOCK}',)
+  resolved_runtime = container_runtime.resolve()
   launch = Launch(
     name=spec.name,
     command=inner_command(spec, harness_flags=harness.inner_flags(spec)),
@@ -259,6 +272,8 @@ def _container_session(
     docker_sock=scoped.docker_sock,
     tty=not spec.solo,
     forward_env=True,
+    image=resolved_runtime.image,
+    runtime_bundle_hash=resolved_runtime.bundle_hash,
     extra_mounts=(
       *extras.mounts,
       *trails_mounts,
@@ -284,6 +299,7 @@ def _host_session(
   base_ref: Optional[str],
   launch_scope: ScopedLaunch,
   runtime_bundle: RuntimeBundle,
+  container_runtime: ContainerRuntimeResolver,
   summoned: Optional[pending_summon.PendingSummon],
 ) -> int:
   os.chdir(project_root())
@@ -297,7 +313,7 @@ def _host_session(
 
   inner = inner_command(spec, harness_flags=harness.inner_flags(spec))
   command = [str(runtime_bundle.host_venv / 'bin' / inner[0]), *inner[1:]]
-  runner_env = runtime_bundle.host_session_env(worktree / '.venv')
+  runner_env = runtime_bundle.host_session_env()
   runner_env[credentials.REGISTRY_ENV] = str(
     materialize_scoped_store(launch_scope.store, workspace.path / 'credentials')
   )
@@ -324,6 +340,7 @@ def _host_session(
       runner_env,
       launch_scope.may_summon,
       scoped.required | scoped.optional,
+      container_runtime,
       interactive=not spec.solo,
     )
   else:
@@ -425,6 +442,7 @@ def _start_session(
 
   if spec.host:
     runtime_bundle.materialize_host()
+  container_runtime = ContainerRuntimeResolver(runtime_bundle)
 
   try:
     workspace = Workspace.ensure(spec.name, project, spec.kind)
@@ -442,6 +460,7 @@ def _start_session(
         launch,
         container=container,
         runtime_bundle=runtime_bundle,
+        container_runtime=container_runtime,
         summoned=summoned,
       )
       return _finish_session(spec, workspace, code)

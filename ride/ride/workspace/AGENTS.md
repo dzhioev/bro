@@ -11,8 +11,8 @@
 
 ## Components
 
-- `build_context.py` — normalized container build context; injects `ride.setup` image assets and shell preludes resolved from the installed `bro` package
-- `docker.py` — broker-free container launch description, image hashing/building, container creation, scoped-store copy, attach suspension, and Docker inspection
+- `build_context.py` — normalized, separate runtime and project-image contexts
+- `docker.py` — runtime/project image hashing and builds, lazy per-root container-runtime resolution, broker-free launch descriptions, container creation, scoped-store copy, attach suspension, and Docker inspection
 - `metadata.py` — workspace kind and persisted metadata
 - `model.py` — workspace factories, locking, inspection, clean-exit records, and teardown for worktree and container kinds
 - `worktrees.py` — host worktree creation and provisioning through the operated repository's `setup.sh`

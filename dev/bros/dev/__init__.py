@@ -18,6 +18,10 @@ recall. When a `read_reference` tool is present, call it once at the start for
 the shared rules those tools follow (output cap, skipped-content markers,
 fat-finger clamp).
 
+In a managed ride session, bare commands resolve from the pinned runtime, not the
+repository environment. Run repository commands through `uv run <command>` or an
+explicit `.venv/bin/<command>` path.
+
 Caution:
 - You have full filesystem and shell access. Be deliberate with destructive
   operations (`rm -rf`, `git reset --hard`, force pushes, dropping branches).
