@@ -12,7 +12,7 @@ from typing import Optional, TextIO
 
 import bro.base.args as base_args
 from bro.base import log
-from bro.bro import AnswerDelivered, BroRaised
+from bro.bro import RAISE_EXIT_STATUS, AnswerDelivered, BroRaised
 from bro.channel import BroChannel
 from bro.launch.llm_flags import (
   EFFORT_HELP,
@@ -274,7 +274,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
       delivered = escaped
     except BroRaised as error:
       log.error('raised: %s', error.reason)
-      return 1
+      return RAISE_EXIT_STATUS
     except KeyboardInterrupt:
       return 130
     finally:

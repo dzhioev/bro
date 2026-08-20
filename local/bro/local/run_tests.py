@@ -215,6 +215,7 @@ PYTEST_FILES = [
   'local/bro/local/shell_policy_test.py',
   'local/bro/local/setup_test.py',
   'local/bro/local/packaging_policy_test.py',
+  'local/bro/local/environment_policy_test.py',
   'dev/bro/dev/packaging_policy_test.py',
   'dev/bro/dev/distribution_test.py',
   'dev/bro/dev/sync_scripts_test.py',

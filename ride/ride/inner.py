@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Optional
 
 from bro.launch.broxy import session_broxy
 from bro.registry import create_bro
+from bro.workspace.session import clear_requested_exit_status, requested_exit_status
 from ride.identity import bro_git_identity_env
 
 if TYPE_CHECKING:
@@ -91,6 +92,7 @@ def run_in_place(harness: 'Harness', spec: 'SessionSpec') -> int:
   # RIDE_BRO themes the session (banner, statusLine)
   os.environ['RIDE_BRO'] = spec.bro
   create_bro(spec.bro).provision_workspace(Path.cwd())
+  clear_requested_exit_status()
   # a host launch signals the session broxy through BRO_START_SESSION_BROXY (in
   # a container the entrypoint started one and BROKER_CHANNEL already points at
   # it), rewriting BROKER_CHANNEL before anything the session spawns inherits
@@ -98,4 +100,6 @@ def run_in_place(harness: 'Harness', spec: 'SessionSpec') -> int:
   # broxy cannot run the channel is unset — the session runs without one — and
   # the launch proceeds.
   with session_broxy():
-    return harness.run_in_place(spec)
+    code = harness.run_in_place(spec)
+  requested = requested_exit_status()
+  return code if requested is None else requested

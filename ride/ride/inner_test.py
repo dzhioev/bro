@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import bro.workspace.session as workspace_session
 import ride.cli as ride_cli
 import ride.inner as ride_inner
 from bro.launch.broxy import START_SESSION_BROXY_ENV
@@ -98,6 +99,37 @@ class TestRunInPlace:
       assert os.environ['GIT_AUTHOR_NAME'] == 'dev'
     declaration.provision_workspace.assert_called_once_with(tmp_path)
     harness.run_in_place.assert_called_once()
+
+
+class TestRequestedExitStatus:
+  def _run(self, monkeypatch, tmp_path, harness_code: int) -> int:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
+    monkeypatch.setattr(ride_inner, 'bro_git_identity_env', lambda _name: {})
+    monkeypatch.setattr(ride_inner, 'create_bro', lambda _name: MagicMock())
+    harness = MagicMock()
+    harness.run_in_place.return_value = harness_code
+    return ride_inner.run_in_place(harness, _spec(bro='dev'))
+
+  def test_the_requested_status_outranks_the_harness_exit(self, monkeypatch, tmp_path):
+    harness = MagicMock()
+    harness.run_in_place.side_effect = lambda _spec: workspace_session.terminate_session(4) or 0
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
+    monkeypatch.setenv('RIDE_RUNNER_PID', str(os.getpid()))
+    monkeypatch.setattr(os, 'kill', lambda pid, sig: None)
+    monkeypatch.setattr(ride_inner, 'bro_git_identity_env', lambda _name: {})
+    monkeypatch.setattr(ride_inner, 'create_bro', lambda _name: MagicMock())
+    assert ride_inner.run_in_place(harness, _spec(bro='dev')) == 4
+
+  def test_the_harness_exit_stands_when_nothing_asked(self, monkeypatch, tmp_path):
+    assert self._run(monkeypatch, tmp_path, 3) == 3
+
+  def test_an_earlier_runs_request_does_not_carry_over(self, monkeypatch, tmp_path):
+    session = tmp_path / 'session'
+    session.mkdir()
+    (session / workspace_session.FILENAME).write_text('9')
+    assert self._run(monkeypatch, tmp_path, 0) == 0
 
 
 class TestSessionBroxy:

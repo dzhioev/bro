@@ -994,8 +994,9 @@ class TestMCPRaise:
     raise AssertionError('raise tool not found on the mcp service build')
 
   @pytest.mark.asyncio
-  async def test_mcp_raise_records_channel_and_kills_the_runner(self, monkeypatch):
+  async def test_mcp_raise_records_channel_and_kills_the_runner(self, monkeypatch, tmp_path):
     monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
     channel = MagicMock()
     monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: channel)
     kills: list[tuple[int, int]] = []
@@ -1007,8 +1008,9 @@ class TestMCPRaise:
     assert kills == [(4242, signal.SIGTERM)]
 
   @pytest.mark.asyncio
-  async def test_mcp_raise_kills_without_a_channel(self, monkeypatch):
+  async def test_mcp_raise_kills_without_a_channel(self, monkeypatch, tmp_path):
     monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
     monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: None)
     kills: list[tuple[int, int]] = []
     monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
@@ -1017,8 +1019,9 @@ class TestMCPRaise:
     assert kills == [(4242, signal.SIGTERM)]
 
   @pytest.mark.asyncio
-  async def test_mcp_raise_kills_even_when_the_channel_emission_fails(self, monkeypatch):
+  async def test_mcp_raise_kills_even_when_the_channel_emission_fails(self, monkeypatch, tmp_path):
     monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
     channel = MagicMock()
     channel.completed.side_effect = ConnectionError('channel closed')
     monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: channel)
@@ -1070,10 +1073,11 @@ class TestAnswer:
     monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
     assert 'answer' in await self._names('mcp')
 
-  async def _tool(self, wire, monkeypatch):
+  async def _tool(self, wire, monkeypatch, tmp_path):
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/x.sock')
     monkeypatch.setenv('RIDE_SUMMONED', '1')
     monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
     server = bro_module._build_service_server(
       EchoBro(), include_raise=False, harness='bro', wire=wire
     )
@@ -1083,32 +1087,32 @@ class TestAnswer:
     raise AssertionError('answer tool not found on the service build')
 
   @pytest.mark.asyncio
-  async def test_bare_answer_ends_the_run_with_the_answer(self, monkeypatch):
-    tool = await self._tool('bare', monkeypatch)
+  async def test_bare_answer_ends_the_run_with_the_answer(self, monkeypatch, tmp_path):
+    tool = await self._tool('bare', monkeypatch, tmp_path)
     with pytest.raises(bro_module.AnswerDelivered) as exception:
       await tool.call({'answer': 'the verdict'})
     assert exception.value.answer == 'the verdict'
 
   @pytest.mark.asyncio
-  async def test_mcp_answer_records_the_terminal_and_kills_the_runner(self, monkeypatch):
+  async def test_mcp_answer_records_the_terminal_and_kills_the_runner(self, monkeypatch, tmp_path):
     channel = MagicMock()
     monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: channel)
     kills: list[tuple[int, int]] = []
     monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
-    tool = await self._tool('mcp', monkeypatch)
+    tool = await self._tool('mcp', monkeypatch, tmp_path)
     await tool.call({'answer': 'the verdict'})
     channel.completed.assert_called_once_with('the verdict', 'ok')
     channel.close.assert_called_once_with()
     assert kills == [(4242, signal.SIGTERM)]
 
   @pytest.mark.asyncio
-  async def test_mcp_answer_without_a_channel_spares_the_session(self, monkeypatch):
+  async def test_mcp_answer_without_a_channel_spares_the_session(self, monkeypatch, tmp_path):
     # unlike raise, an undeliverable answer must not kill the session — the
     # summoner would never hear it; the agent gets the error instead
     monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: None)
     kills: list[tuple[int, int]] = []
     monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
-    tool = await self._tool('mcp', monkeypatch)
+    tool = await self._tool('mcp', monkeypatch, tmp_path)
     with pytest.raises(RuntimeError, match='cannot reach the summoner'):
       await tool.call({'answer': 'the verdict'})
     assert kills == []

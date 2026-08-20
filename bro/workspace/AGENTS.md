@@ -8,6 +8,6 @@ The framework keeps the dependency-light workspace contracts that core services 
 - `paths.py` — project-root and runtime-root resolution, checkout-keyed state paths, fixed in-container mount paths, workspace naming, venv environment helpers, and `RuntimeLocationError`
 - `project.py` — validated `[tool.bro]` project configuration and per-bro project sections
 - `banner.py` — typed session facts plus visual and LLM renderings, consumed by launch surfaces and the `bro::banner` service tool
-- `session.py` — in-session termination through `RIDE_RUNNER_PID`
+- `session.py` — in-session termination through `RIDE_RUNNER_PID`, carrying the status the session is to report
 
 Consumers import submodules directly; this package is not a re-export hub.
