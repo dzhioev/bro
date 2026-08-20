@@ -16,6 +16,15 @@ from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
 
+def _materialize_store(_store, directory: Path) -> Path:
+  """the scoped store as a launch materializes it: the registry file its
+  install-hook pass reads back, holding no secret and so no hook."""
+  directory.mkdir(parents=True, exist_ok=True)
+  registry = directory / 'credentials.json'
+  registry.write_text('{}')
+  return registry
+
+
 def _spec(**overrides) -> SessionSpec:
   values = {
     'name': 'w',
@@ -261,9 +270,7 @@ class TestHostSession:
     monkeypatch.setattr(ride_session.os, 'chdir', lambda _path: None)
     monkeypatch.setattr(ride_session, 'ensure_host_worktree', lambda *_args: True)
     monkeypatch.setattr(ride_session, 'provision_host_worktree', lambda *_args: True)
-    monkeypatch.setattr(
-      ride_session, 'materialize_scoped_store', lambda _store, path: path / 'credentials.json'
-    )
+    monkeypatch.setattr(ride_session, 'materialize_scoped_store', _materialize_store)
 
   def test_provisions_and_supervises_the_snapshot_runner(self, monkeypatch, tmp_path):
     workspace, runtime_bundle = self._workspace(tmp_path)

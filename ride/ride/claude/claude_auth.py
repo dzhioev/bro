@@ -34,8 +34,8 @@ def apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) -
   both launch surfaces gate on it before anything is created, and
   `warn_when_missing` diagnoses a runner that reaches this layer without the
   preflight contract. a `--raw` session authenticates via apiKeyHelper and
-  resolves no token by design. containers get the same var from the secret's
-  registry install hook as well; re-applying it here is idempotent.
+  resolves no token by design. a managed session already carries the same var
+  from the secret's registry install hook; re-applying it here is idempotent.
   """
   for var in _OUTRANKING_AUTH_VARS:
     if env.pop(var, None) is not None:

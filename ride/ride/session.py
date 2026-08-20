@@ -330,8 +330,12 @@ def _host_session(
     runner_env['RIDE_REPO'] = str(workspace.repo)
   else:
     runner_env.pop('RIDE_REPO', None)
-  runner_env[credentials.REGISTRY_ENV] = str(
-    materialize_scoped_store(launch_scope.store, workspace.path / 'credentials')
+  registry = materialize_scoped_store(launch_scope.store, workspace.path / 'credentials')
+  runner_env[credentials.REGISTRY_ENV] = str(registry)
+  runner_env.update(
+    credentials.install_hooks(
+      credentials.load_registry(registry), workspace.path / 'environment', runner_env
+    )
   )
   runner_env[SESSION_DIR_ENV] = str(workspace_session_dir(workspace.path))
   runner_env[START_SESSION_BROXY_ENV] = '1'

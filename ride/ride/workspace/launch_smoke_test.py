@@ -54,10 +54,9 @@ _RUNNING_TIMEOUT = 120.0
 
 @dataclass(frozen=True)
 class Isolated:
-  """the throwaway tree and home one launch runs against."""
+  """the throwaway tree one launch runs against."""
 
   project: Path
-  home: Path
 
 
 @dataclass(frozen=True)
@@ -145,12 +144,11 @@ def _start_and_observe(container_id: str, workspace: Path) -> tuple[bool, str]:
 
 @pytest.fixture(scope='module')
 def isolated() -> Iterator[Isolated]:
-  """a standalone clone of the checkout plus a synthetic home.
+  """a standalone clone of the checkout.
 
   the launch mounts the clone at /host-repo and roots its workspace dir under it.
   a clone rather than the checkout itself because the entrypoint clones that mount
-  with `--shared`, which a linked worktree cannot serve. the home carries the
-  `.gitconfig` the launch bind-mounts, keeping the real one off the container.
+  with `--shared`, which a linked worktree cannot serve.
   """
   root = Path(tempfile.mkdtemp(prefix='bro-launch-smoke-'))
   checkout = _checkout()
@@ -169,12 +167,7 @@ def isolated() -> Iterator[Isolated]:
   subprocess.run(
     ['git', '-C', str(project), 'update-ref', 'refs/remotes/origin/master', 'HEAD'], check=True
   )
-  home = root / 'home'
-  home.mkdir()
-  (home / '.gitconfig').write_text(
-    '[user]\n\tname = launch smoke\n\temail = smoke@invalid\n[init]\n\tdefaultBranch = master\n'
-  )
-  yield Isolated(project=project, home=home)
+  yield Isolated(project=project)
   shutil.rmtree(root, ignore_errors=True)
 
 
@@ -183,7 +176,6 @@ def launched(isolated: Isolated) -> Iterator[Launched]:
   checkout = _checkout()
   with pytest.MonkeyPatch.context() as monkeypatch:
     monkeypatch.setenv('XDG_DATA_HOME', str(isolated.project.parent / 'state'))
-    monkeypatch.setattr(workspace_docker.Path, 'home', lambda: isolated.home)
     config = replace(workspace_project.project_config(checkout), image_repository=_IMAGE_REPOSITORY)
     monkeypatch.setattr(Repository, 'project_config', lambda _repository: config)
     monkeypatch.setattr(workspace_docker, '_RUNTIME_IMAGE_REPOSITORY', 'bro/launch-smoke-runtime')

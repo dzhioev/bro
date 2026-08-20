@@ -28,6 +28,7 @@ from ride.scope import ScopedSecrets
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
+from ride.workspace.store import materialize_scoped_store
 
 
 @pytest.fixture(autouse=True)
@@ -97,11 +98,26 @@ def _resume(
   )
 
 
+def _materialize_store(_store, directory: Path) -> Path:
+  """the scoped store as a launch materializes it: the registry file its
+  install-hook pass reads back, holding no secret and so no hook."""
+  directory.mkdir(parents=True, exist_ok=True)
+  registry = directory / 'credentials.json'
+  registry.write_text('{}')
+  return registry
+
+
+def _scoped_store() -> dict[str, bytes]:
+  """a hydrated scope with no secret in it — the registry file `build_scoped_store`
+  always emits, and nothing else."""
+  return {credentials.REGISTRY_FILE: b'{}'}
+
+
 def _launch_scope(**overrides) -> ride_session.ScopedLaunch:
   base = {
     'scoped': ScopedSecrets({'github'}, set(), True),
     'may_summon': set(),
-    'store': {},
+    'store': _scoped_store(),
   }
   base.update(overrides)
   return ride_session.ScopedLaunch(**base)
@@ -363,7 +379,7 @@ class TestDetachedSession:
       patch('ride.session.get_harness', return_value=harness),
       patch('ride.session.ensure_host_worktree') as ensure_worktree,
       patch('ride.session.provision_host_worktree') as provision_worktree,
-      patch('ride.session.materialize_scoped_store', return_value=tmp_path / 'registry'),
+      patch('ride.session.materialize_scoped_store', new=_materialize_store),
       patch('ride.session.broker_enabled', return_value=False),
       patch('ride.session.subprocess.run', return_value=MagicMock(returncode=0)),
     ):
@@ -831,7 +847,9 @@ class TestConcurrentSessionGuard:
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
     )
-    monkeypatch.setattr(ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): {})
+    monkeypatch.setattr(
+      ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): _scoped_store()
+    )
     monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
     # the shared active-container refusal probes docker ahead of the launch body
     monkeypatch.setattr(ride_session, 'find_container_id', lambda tree: None)
@@ -911,12 +929,10 @@ class TestHostSession:
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets({'github'}, set(), True)
     )
-    monkeypatch.setattr(ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): {})
     monkeypatch.setattr(
-      ride_session,
-      'materialize_scoped_store',
-      lambda store, directory: directory / 'credentials.json',
+      ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): _scoped_store()
     )
+    monkeypatch.setattr(ride_session, 'materialize_scoped_store', _materialize_store)
     monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
     return workspace, ride_binary, worktree
 
@@ -1185,7 +1201,7 @@ class TestHostSession:
 
     def fake_materialize(store, directory):
       materialized.update(store=store, directory=directory)
-      return directory / 'credentials.json'
+      return _materialize_store(store, directory)
 
     monkeypatch.setattr(ride_session, 'materialize_scoped_store', fake_materialize)
     runs: list = []
@@ -1201,6 +1217,21 @@ class TestHostSession:
     assert runs[0][1]['env']['CREDENTIALS_REGISTRY'] == str(registry)
     assert materialized['store'] == {'x.cred': b'v'}
     assert materialized['directory'] == registry.parent
+
+  def test_runner_env_carries_the_installed_credential_wiring(self, monkeypatch, tmp_path):
+    workspace, _, _ = self._prepare_launch(monkeypatch, tmp_path)
+    monkeypatch.setattr(ride_session, 'broker_enabled', lambda: True)
+    monkeypatch.setattr(ride_session, 'materialize_scoped_store', materialize_scoped_store)
+    root = MagicMock(return_value=0)
+    monkeypatch.setattr(ride_session, 'run_host_process_via_broker', root)
+    hook = {'files': {'file': 'wired'}, 'env': {'WIRED': 'yes'}}
+    store = {
+      credentials.REGISTRY_FILE: json.dumps({'x': {'sources': [], 'install': hook}}).encode()
+    }
+
+    assert self._host_session(_spec(host=True), workspace, _launch_scope(store=store)) == 0
+    assert root.call_args.args[2]['WIRED'] == 'yes'
+    assert (workspace.path / 'environment' / 'file').read_text() == 'wired'
 
   def test_grant_and_revoke_shape_and_log_the_hydrated_scope(self, monkeypatch, tmp_path, caplog):
     from types import SimpleNamespace
@@ -1291,7 +1322,9 @@ class TestHostBrokerPingRoundTrip:
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
     )
-    monkeypatch.setattr(ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): {})
+    monkeypatch.setattr(
+      ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): _scoped_store()
+    )
     monkeypatch.delenv('BROKER_DISABLED', raising=False)
     assert (
       ride_session._launch_session(
@@ -1381,7 +1414,9 @@ client.close(confirm=True)
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
     )
-    monkeypatch.setattr(ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): {})
+    monkeypatch.setattr(
+      ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): _scoped_store()
+    )
     monkeypatch.delenv('BROKER_DISABLED', raising=False)
     assert (
       ride_session._launch_session(

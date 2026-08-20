@@ -76,13 +76,15 @@ import importlib.metadata
 import json
 import os
 import re
+import shlex
+import shutil
 import sys
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar, Optional, Protocol
 
 from bro.base import configs, log, template
@@ -420,41 +422,54 @@ class Secret:
   priority). the resolver treats the value as an opaque text blob — callers pick
   the shape, `get()` for the raw text or `get_json()` to parse it as a json object.
 
-  `install` is an optional shell hook that wires the secret into the tool that
-  consumes it from *outside* the resolver (git, the aws CLI, ...). The registry
-  declares it as a `bro.base.template` text over the `#name` variable —
-  `credentials get '{{insert #name}}'` — so one kind-level hook serves every
-  instance of the kind. The raw template is kept (`install_template`) and
+  `install` is an optional hook that wires the secret into the tool that
+  consumes it from *outside* the resolver (git, the `gh` and aws CLIs) —
+  declared as the files, environment and shadowed commands a session needs,
+  never as code to run (`install_hooks` applies it and owns the schema). Every
+  string in it is a `bro.base.template` text over the `#name` variable —
+  `{"secret": "{{insert #name}}"}` — so one kind-level hook serves every
+  instance of the kind. The raw declaration is kept (`install_template`) and
   rendered per name by `install_for`, because the name an entry resolves under
   is not always its own: a scoped store materializes a variant under its kind
   name. `install` is the hook rendered with the secret's own name, computed
-  eagerly so a malformed template fails at registry load. The container
-  entrypoint `eval`s the hook after hydration; it pulls the value via
-  `credentials get` at eval time, so per-secret wiring lives in the registry
-  with no interpolated path and the entrypoint stays generic."""
+  eagerly so a malformed template fails at registry load."""
 
-  def __init__(self, name: str, sources: Sequence[Source], *, install: Optional[str] = None):
+  def __init__(self, name: str, sources: Sequence[Source], *, install: Optional[dict] = None):
     self.name = name
     self.sources = sources
     self.install_template = install
     self.install = self.install_for(name)
 
-  def install_for(self, name: str) -> Optional[str]:
+  def install_for(self, name: str) -> Optional[dict]:
     """the install hook rendered with `#name` bound to `name`, or None when the
     secret declares no hook."""
     if self.install_template is None:
       return None
-    return template.render(self.install_template, {'name': StringVariable(name)})
+    install = _render_install(self.install_template, name)
+    _validate_install(name, install)
+    return install
 
   @classmethod
   def from_dict(cls, name: str, data: dict) -> Secret:
     install = data.get('install')
-    if install is not None and not isinstance(install, str):
-      raise ValueError(
-        f'secret {name!r}: install must be a string — file references resolve only '
-        'in the built-in registry'
-      )
+    if install is not None and not isinstance(install, dict):
+      raise ValueError(f'secret {name!r}: install must be an object, got {type(install).__name__}')
     return cls(name, [_source_from_dict(s) for s in data['sources']], install=install)
+
+
+def _render_install(install: dict, name: str) -> dict:
+  """the hook with every string value rendered for `name`; keys are paths,
+  variables and command names, and stay as declared."""
+  variables = {'name': StringVariable(name)}
+
+  def render(value: object) -> object:
+    if isinstance(value, str):
+      return template.render(value, variables)
+    if isinstance(value, dict):
+      return {key: render(item) for key, item in value.items()}
+    raise ValueError(f'install hook for {name!r} carries an unexpected {type(value).__name__}')
+
+  return {section: render(value) for section, value in install.items()}
 
 
 def _parse_json_object(name: str, raw: str) -> dict:
@@ -673,16 +688,8 @@ def _contributed_registry_data() -> dict[str, dict]:
 
 
 def _builtin_registry_data() -> dict:
-  """the built-in registry merged with installed credential contributions.
-
-  An `install` of the form `{"file": "<path>"}` loads a built-in hook relative
-  to the registry. Contributed and generated registries carry hooks as strings.
-  """
+  """the built-in registry merged with installed credential contributions."""
   data = json.loads(_BUILTIN_REGISTRY_PATH.read_text())
-  for entry in data.values():
-    install = entry.get('install')
-    if isinstance(install, dict):
-      entry['install'] = (_BUILTIN_REGISTRY_PATH.parent / install['file']).read_text().rstrip('\n')
   data.update(_contributed_registry_data())
   return data
 
@@ -821,6 +828,12 @@ def select_instances(selection: dict[str, Optional[str]]) -> None:
     _default_store = None
 
 
+def load_registry(path: Path) -> dict[str, Secret]:
+  """the registry a generated `credentials.json` declares, for a caller reading
+  one it is not itself bound to — a launch holding a session's scoped store."""
+  return _registry_from_dict(json.loads(path.read_text()))
+
+
 def _load_registry() -> dict[str, Secret]:
   # CREDENTIALS_REGISTRY points the process at an explicit registry file, above
   # every other source of one — for a run that must resolve against a specific
@@ -829,14 +842,14 @@ def _load_registry() -> dict[str, Secret]:
   # against the wrong secret set.
   override = os.environ.get(REGISTRY_ENV)
   if override is not None and override != '':
-    return _registry_from_dict(json.loads(Path(override).read_text()))
+    return load_registry(Path(override))
   # a generated registry file in either search dir (`BRO_CONFIGS_DIR` for a
   # deployed service, `~/.bro` for a scoped per-container store) overrides the
   # host registry wholesale; absent everywhere → the host registry (built-in
   # defaults + host-local additions).
   path = _find_in_search_dirs(REGISTRY_FILE)
   if path is not None:
-    return _registry_from_dict(json.loads(path.read_text()))
+    return load_registry(path)
   return host_registry()
 
 
@@ -955,7 +968,7 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   scoped: dict[str, dict] = {}
   pending_references: list[tuple[str, str]] = []
 
-  def materialize(name: str, value: str, cacheable: bool, install: Optional[str]) -> None:
+  def materialize(name: str, value: str, cacheable: bool, install: Optional[dict]) -> None:
     # resolve generically on the host (doubling as launch-time validation), then
     # let the winning source pick its scoped representation under a uniform
     # `{kind}.cred` — Source.materialize_scoped owns the per-source semantics
@@ -1095,19 +1108,160 @@ def apply_grant_revoke(
   return result
 
 
-def install_hooks() -> str:
-  """shell wiring each secret into the tool that consumes it from outside the
-  resolver (git, the aws CLI, ...), for the container entrypoint to `eval`. each
-  secret declares a static `install` hook in the registry that pulls its value via
-  `credentials get` at eval time — no path interpolation. a hook emits for every
-  registry secret that declares one: in a scoped container the registry is exactly
-  the hydrated (present) set, since `build_scoped_store` only includes resolvable
-  secrets."""
-  lines: list[str] = []
-  for secret in _load_registry().values():
-    if secret.install is not None:
-      lines.append(secret.install)
-  return '\n'.join(lines)
+# a hook's declared sections. `commands` is the one that defers: its wrapper
+# applies the declared environment per invocation, which is how a session reads a
+# short-lived minted secret fresh instead of one baked in at install.
+_INSTALL_SECTIONS = ('files', 'env', 'commands')
+_INSTALL_VALUE_KEYS = ('path', 'secret')
+
+
+def _validate_install(name: str, install: dict) -> None:
+  """check a hook's declared shape once rendered, which `Secret` does eagerly, so
+  a malformed one fails at registry load rather than at the launch applying it."""
+  unknown = sorted(set(install) - set(_INSTALL_SECTIONS))
+  if len(unknown) > 0:
+    raise ValueError(
+      f'secret {name!r}: install declares unknown section(s) {", ".join(unknown)}; '
+      f'known: {", ".join(_INSTALL_SECTIONS)}'
+    )
+  for section in ('files', 'env', 'commands'):
+    if section in install and not isinstance(install[section], dict):
+      raise ValueError(f'secret {name!r}: install {section} must be an object')
+  for path, value in install.get('files', {}).items():
+    _validate_install_path(name, path)
+    _validate_install_value(name, value)
+  for value in install.get('env', {}).values():
+    _validate_install_value(name, value)
+  for command, spec in install.get('commands', {}).items():
+    if len(command) == 0 or '/' in command:
+      raise ValueError(f'secret {name!r}: install shadows a malformed command {command!r}')
+    if not isinstance(spec, dict) or set(spec) - {'env'} != set():
+      raise ValueError(f'secret {name!r}: install command {command!r} declares only env')
+    for value in spec.get('env', {}).values():
+      _validate_install_value(name, value)
+
+
+def _validate_install_path(name: str, path: str) -> None:
+  """a hook names its files relative to the directory it is given, which is the
+  whole of what it may write."""
+  candidate = PurePosixPath(path)
+  if candidate.is_absolute() or '..' in candidate.parts or len(candidate.parts) == 0:
+    raise ValueError(
+      f'secret {name!r}: install path {path!r} must be relative to the install directory'
+    )
+
+
+def _validate_install_value(name: str, value) -> None:
+  if isinstance(value, str):
+    return
+  if not isinstance(value, dict) or len(value) != 1 or set(value) - set(_INSTALL_VALUE_KEYS):
+    raise ValueError(
+      f'secret {name!r}: install value must be text or one of '
+      f'{", ".join("{" + key + ": ...}" for key in _INSTALL_VALUE_KEYS)}, got {value!r}'
+    )
+  ((key, target),) = value.items()
+  if not isinstance(target, str):
+    raise ValueError(f'secret {name!r}: install {key} must name a string, got {target!r}')
+  if key == 'path':
+    _validate_install_path(name, target)
+  else:
+    parse_name(target)
+
+
+def install_hooks(
+  registry: Mapping[str, Secret], directory: Path, env: Mapping[str, str]
+) -> dict[str, str]:
+  """apply `registry`'s install hooks and return the environment they declare.
+
+  a hook wires its secret into a tool that reads it from outside the resolver.
+  It declares three things and no code runs on its behalf, so a session running
+  as the operator, in the operator's own home, applies the same hooks a
+  container does:
+
+  - `files` — written under `directory` at 0600, named relative to it
+  - `env` — variables for the caller to apply to the session environment
+  - `commands` — a tool shadowed by a wrapper first on the session's PATH, which
+    applies the wrapper's own environment to each invocation
+
+  A value is text, `{"path": "<relative path>"}` for a path inside `directory`,
+  or `{"secret": "<name>"}` for a credential's value — resolved as late as its
+  position allows, which in a wrapper is per invocation, so a short-lived minted
+  secret is never baked in. `directory` is recreated, so a session never
+  inherits an earlier one's wiring, and two hooks contending for one file,
+  variable or command fail here rather than silently ordering.
+
+  Every secret of `registry` that declares a hook is applied — for a scoped
+  store, exactly the hydrated set, since `build_scoped_store` carries only
+  resolvable secrets.
+  """
+  hooks = {name: secret.install for name, secret in registry.items() if secret.install is not None}
+  if directory.exists():
+    shutil.rmtree(directory)
+  directory.mkdir(parents=True)
+  directory.chmod(0o700)
+  if len(hooks) == 0:
+    return {}
+  log.verbose('installing credential hooks into %s', directory)
+  exported: dict[str, str] = {}
+  owners: dict[str, str] = {}
+  binaries = directory / 'bin'
+  for name in sorted(hooks):
+    hook = hooks[name]
+    for path, value in hook.get('files', {}).items():
+      _claim(owners, f'file {path}', name)
+      file = directory / path
+      file.parent.mkdir(parents=True, exist_ok=True)
+      file.write_text(_install_value(value, directory))
+      file.chmod(0o600)
+    for variable, value in hook.get('env', {}).items():
+      _claim(owners, f'variable {variable}', name)
+      exported[variable] = _install_value(value, directory)
+    for command, spec in hook.get('commands', {}).items():
+      _claim(owners, f'command {command}', name)
+      binaries.mkdir(exist_ok=True)
+      wrapper = binaries / command
+      wrapper.write_text(_command_wrapper(name, command, spec.get('env', {}), directory, env))
+      wrapper.chmod(0o700)
+  if binaries.is_dir():
+    exported['PATH'] = os.pathsep.join([str(binaries), env.get('PATH', '')])
+  return exported
+
+
+def _claim(owners: dict[str, str], subject: str, name: str) -> None:
+  owner = owners.setdefault(subject, name)
+  if owner != name:
+    raise ValueError(f'install hooks for {owner!r} and {name!r} both declare {subject}')
+
+
+def _install_value(value, directory: Path) -> str:
+  """a declared value as the session reads it: text as written, a path resolved
+  against the install directory, a secret resolved through the ambient store."""
+  if isinstance(value, str):
+    return value
+  ((key, target),) = value.items()
+  return str(directory / target) if key == 'path' else default_store().get_instance(target)
+
+
+def _command_wrapper(
+  name: str, command: str, variables: Mapping[str, object], directory: Path, env: Mapping[str, str]
+) -> str:
+  """the shadowing wrapper's text: the command it shadows, run with the declared
+  variables. a `secret` value resolves per invocation, through the `credentials`
+  command the session carries."""
+  target = shutil.which(command, path=env.get('PATH'))
+  if target is None:
+    raise RuntimeError(
+      f'the install hook for {name!r} shadows {command!r}, which is not on the '
+      f"session's PATH — install it, or revoke {name!r} for this launch"
+    )
+  assignments = []
+  for variable, value in variables.items():
+    if isinstance(value, dict) and 'secret' in value:
+      assignments.append(f'{variable}="$(credentials get {value["secret"]})"')
+    else:
+      assignments.append(f'{variable}={shlex.quote(_install_value(value, directory))}')
+  run = ' '.join([*assignments, 'exec', shlex.quote(target), '"$@"'])
+  return f'#!/usr/bin/env bash\n{run}\n'
 
 
 def _get(name: str, field: Optional[str], as_json: bool, instance: bool) -> Optional[int]:
@@ -1144,8 +1298,10 @@ def _list_available(instance: bool) -> None:
       print(name)
 
 
-def _print_hooks() -> None:
-  print(install_hooks())
+def _install_hooks(directory: str) -> None:
+  exported = install_hooks(_load_registry(), Path(directory), os.environ)
+  for name in sorted(exported):
+    print(f'export {name}={shlex.quote(exported[name])}')
 
 
 def main(argv: list[str]) -> Optional[int]:
@@ -1178,7 +1334,13 @@ def main(argv: list[str]) -> Optional[int]:
     help='list resolvable storage names (kind+instance entries included) instead of kinds',
   )
   list_parser.set_handler(_list_available)
-  subparser.add_parser(
-    'install-hooks', help='print shell install hooks for the container entrypoint to eval'
-  ).set_handler(_print_hooks)
+  hooks_parser = subparser.add_parser(
+    'install-hooks',
+    help='apply the install hooks into a session directory and print the environment '
+    'they export, for a session launcher to eval',
+  )
+  hooks_parser.add_argument(
+    'directory', help='the session directory the hooks write their files into'
+  )
+  hooks_parser.set_handler(_install_hooks)
   return parser.dispatch(argv)
