@@ -1,5 +1,7 @@
+import contextlib
 import json
 import os
+import shutil
 from dataclasses import replace
 from typing import Optional
 from unittest.mock import MagicMock, patch
@@ -17,6 +19,7 @@ from bro.base import credentials
 from bro.monitor import workspace_session_dir
 from bro.workspace.paths import CONTAINER_SESSION_DIR
 from ride import pending_summon
+from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError
 from ride.scope import ScopedSecrets
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
@@ -102,11 +105,31 @@ def _workspace(tmp_path, kind: WorkspaceKind = WorkspaceKind.CONTAINER) -> Works
   return Workspace.ensure('w', tmp_path, kind)
 
 
+def _runtime_bundle(tmp_path) -> RuntimeBundle:
+  root = tmp_path / 'runtime-bundle'
+  (root / 'host' / 'venv' / 'bin').mkdir(parents=True, exist_ok=True)
+  (root / 'host' / 'bin').mkdir(exist_ok=True)
+  (root / 'host' / '.complete').touch()
+  ride = root / 'host' / 'venv' / 'bin' / 'ride'
+  ride.touch()
+  ride.chmod(0o755)
+  broker = shutil.which('broker')
+  if broker is not None and not (root / 'host' / 'bin' / 'broker').exists():
+    (root / 'host' / 'bin' / 'broker').symlink_to(broker)
+  return RuntimeBundle(root, '3.12')
+
+
 @pytest.fixture(autouse=True)
 def configured_project(monkeypatch, tmp_path):
   # every launch path takes the workspace session lock and records a resume spec
   # under the project root; keep both off the real repo
   monkeypatch.setattr(ride_session, 'project_root', lambda: tmp_path)
+
+  @contextlib.contextmanager
+  def resolved_runtime_bundle():
+    yield _runtime_bundle(tmp_path)
+
+  monkeypatch.setattr(ride_session, 'resolve_runtime_bundle', resolved_runtime_bundle)
   # the suite itself may run inside a container; without this every launch would
   # hit the nested-launch refusal
   monkeypatch.setattr(ride_session, 'in_container', lambda: False)
@@ -158,6 +181,20 @@ class _ContainerHarness:
     for p in reversed(self._patches):
       p.__exit__(*exception)
     return False
+
+
+class TestRuntimeBundle:
+  def test_resolution_failure_precedes_workspace_creation(self, monkeypatch, tmp_path, caplog):
+    @contextlib.contextmanager
+    def fail_resolution():
+      raise RuntimeBundleError('unclassifiable installation')
+      yield
+
+    monkeypatch.setattr(ride_session, 'resolve_runtime_bundle', fail_resolution)
+
+    assert ride_session.start_session(_spec(name='fresh')) == 1
+    assert 'unclassifiable installation' in caplog.text
+    assert not (tmp_path / 'var' / 'ride' / 'workspaces' / 'fresh').exists()
 
 
 class TestNestedLaunch:
@@ -753,13 +790,18 @@ class TestHostSession:
     return workspace, workspace.tree
 
   def _host_session(self, spec, workspace, launch_scope):
-    return ride_session._launch_session(spec, workspace, None, launch_scope, container=False)
+    return ride_session._launch_session(
+      spec,
+      workspace,
+      None,
+      launch_scope,
+      container=False,
+      runtime_bundle=_runtime_bundle(workspace.project),
+    )
 
   def _prepare_launch(self, monkeypatch, tmp_path):
     workspace, worktree = self._fake_workspace(monkeypatch, tmp_path, has_session=False)
-    ride_binary = worktree / '.venv' / 'bin' / 'ride'
-    ride_binary.parent.mkdir(parents=True)
-    ride_binary.write_text('')
+    ride_binary = _runtime_bundle(tmp_path).host_venv / 'bin' / 'ride'
     monkeypatch.setattr(workspace_project, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(ride_session, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
@@ -786,7 +828,7 @@ class TestHostSession:
     monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
     return workspace, ride_binary, worktree
 
-  def test_broker_supervises_the_worktrees_own_in_place_runner(self, monkeypatch, tmp_path):
+  def test_broker_supervises_the_snapshot_in_place_runner(self, monkeypatch, tmp_path):
     workspace, ride_binary, worktree = self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: True)
     monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: {'dev'})
@@ -908,7 +950,13 @@ class TestHostSession:
     spec = _spec(host=True, prompt='pair on this')
     assert (
       ride_session._launch_session(
-        spec, workspace, None, _launch_scope(), container=False, summoned=record
+        spec,
+        workspace,
+        None,
+        _launch_scope(),
+        container=False,
+        runtime_bundle=_runtime_bundle(workspace.project),
+        summoned=record,
       )
       == 0
     )
@@ -934,15 +982,20 @@ class TestHostSession:
     )
     assert (
       ride_session._launch_session(
-        _spec(host=True), workspace, None, _launch_scope(), container=False, summoned=record
+        _spec(host=True),
+        workspace,
+        None,
+        _launch_scope(),
+        container=False,
+        runtime_bundle=_runtime_bundle(workspace.project),
+        summoned=record,
       )
       == 1
     )
     assert 'no pending manual summon' in caplog.text
 
   def test_runner_env_gets_the_claude_auth_transform(self, monkeypatch, tmp_path):
-    # the outer applies apply_claude_auth to the runner env it spawns, so a
-    # worktree whose own runner predates the transform still inherits the token
+    # the outer applies auth to the runner env before the snapshot inner starts
     workspace, ride_binary, worktree = self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: False)
 
@@ -963,8 +1016,7 @@ class TestHostSession:
     assert runs[0][1]['env']['CLAUDE_CODE_OAUTH_TOKEN'] == 'applied'
 
   def test_runner_env_points_at_the_private_claude_config_dir(self, monkeypatch, tmp_path):
-    # the outer provisions the per-session state dir and exports CLAUDE_CONFIG_DIR
-    # itself, so a worktree whose own runner predates the config dir is covered too
+    # the outer provisions the per-session state before the snapshot inner starts
     workspace, _, _ = self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: False)
     runs: list = []
@@ -1088,31 +1140,6 @@ class TestHostSession:
     assert ride_session.start_session(_spec(name='fresh', host=True)) == 1
     assert not (tmp_path / 'var' / 'ride' / 'workspaces' / 'fresh').exists()
 
-  def test_missing_inner_ride_fails_before_spawn(self, monkeypatch, tmp_path):
-    workspace, worktree = self._fake_workspace(monkeypatch, tmp_path, has_session=False)
-    monkeypatch.setattr(workspace_project, 'project_root', lambda: tmp_path)
-    monkeypatch.setattr(ride_session, 'project_root', lambda: tmp_path)
-    monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
-    monkeypatch.setattr(ride_session, 'ensure_host_worktree', lambda *_a: True)
-    monkeypatch.setattr(ride_session, 'provision_host_worktree', lambda *_a: True)
-    monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
-    monkeypatch.setattr(
-      claude_harness,
-      'provision_host_claude_dir',
-      lambda ws, wt, project: tmp_path / 'claude-config',
-    )
-    monkeypatch.setattr(
-      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
-    )
-    monkeypatch.setattr(ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): {})
-    monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
-
-    def boom(*_a, **_k):
-      raise AssertionError('must not spawn without the inner ride')
-
-    monkeypatch.setattr(ride_session.subprocess, 'run', boom)
-    assert self._host_session(_spec(host=True), workspace, _launch_scope()) == 1
-
   def test_resume_guard_fails_fast_before_worktree_create(self, monkeypatch, tmp_path):
     workspace, _ = self._fake_workspace(monkeypatch, tmp_path, has_session=False)
     monkeypatch.setattr(workspace_project, 'project_root', lambda: tmp_path)
@@ -1145,13 +1172,10 @@ class TestHostBrokerPingRoundTrip:
     (home / '.claude.json').write_text(json.dumps({'oauthAccount': {'id': 'acct'}, 'userID': 'u'}))
     monkeypatch.setenv('HOME', str(home))
     workspace = Workspace.create('w', root, WorkspaceKind.WORKTREE)
-    worktree = workspace.tree
-    ride_binary = worktree / '.venv' / 'bin' / 'ride'
-    ride_binary.parent.mkdir(parents=True)
-    # stands in for the in-place runner: the real `broker` CLI resolves from the
-    # ambient venv PATH (retained through _venv_env) and rides BROKER_CHANNEL
+    workspace.tree.mkdir(parents=True)
+    runtime_bundle = _runtime_bundle(root)
+    ride_binary = runtime_bundle.host_venv / 'bin' / 'ride'
     ride_binary.write_text('#!/bin/sh\nexec broker request ping "{}" --timeout 30\n')
-    ride_binary.chmod(0o755)
 
     monkeypatch.setattr(ride_session, 'project_root', lambda: root)
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
@@ -1166,7 +1190,12 @@ class TestHostBrokerPingRoundTrip:
     monkeypatch.delenv('BROKER_DISABLED', raising=False)
     assert (
       ride_session._launch_session(
-        _spec(host=True), workspace, None, _launch_scope(), container=False
+        _spec(host=True),
+        workspace,
+        None,
+        _launch_scope(),
+        container=False,
+        runtime_bundle=runtime_bundle,
       )
       == 0
     )
@@ -1221,12 +1250,12 @@ client.close(confirm=True)
     (home / '.claude.json').write_text(json.dumps({'oauthAccount': {'id': 'acct'}, 'userID': 'u'}))
     monkeypatch.setenv('HOME', str(home))
     workspace = Workspace.create('w', root, WorkspaceKind.WORKTREE)
-    worktree = workspace.tree
+    workspace.tree.mkdir(parents=True)
     answer_child = root / 'answer_child.py'
     answer_child.write_text(self._ANSWER_CHILD)
     pending_dir = summon_dir(root) / 'pending'
-    ride_binary = worktree / '.venv' / 'bin' / 'ride'
-    ride_binary.parent.mkdir(parents=True)
+    runtime_bundle = _runtime_bundle(root)
+    ride_binary = runtime_bundle.host_venv / 'bin' / 'ride'
     # stands in for the in-place runner: register the manual summon, let the
     # external child answer it, and block for the relayed answer
     ride_binary.write_text(
@@ -1248,7 +1277,12 @@ client.close(confirm=True)
     monkeypatch.delenv('BROKER_DISABLED', raising=False)
     assert (
       ride_session._launch_session(
-        _spec(host=True), workspace, None, _launch_scope(may_summon={'bro-dev'}), container=False
+        _spec(host=True),
+        workspace,
+        None,
+        _launch_scope(may_summon={'bro-dev'}),
+        container=False,
+        runtime_bundle=runtime_bundle,
       )
       == 0
     )

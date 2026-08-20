@@ -1,8 +1,8 @@
 """the in-place Claude session runner (`ride solo|along --in-place`).
 
 The inner layer of the launch stack: it assumes its cwd is a prepared workspace
-tree (host worktree or container clone) with the workspace venv active, and owns
-everything that runs next to claude — resume resolution, the claude argv, the
+tree (host worktree or container clone) under the session runtime environment,
+and owns everything that runs next to claude — resume resolution, the claude argv, the
 session-local MCP server, launch declarations, and the session recorder daemon. The outer `ride solo|along` (mode-specific by nature: worktree
 ensure / container machinery) validates policy once and spawns this runner in
 the workspace, so it re-runs no policy gates.
@@ -183,9 +183,9 @@ def run_in_place(spec: 'SessionSpec') -> int:
 
   with contextlib.ExitStack() as teardown:
     # session-local MCP serving, one mechanism for both flavors: OS-assigned port
-    # published via a port file, per-session bearer token. the tools serve this
-    # workspace's code (the runner's cwd and venv) — the bro's own toolset under
-    # --raw, the persona's claude-harness namespaces for a ride-session.
+    # published via a port file, per-session bearer token. the server imports from
+    # the session runtime selected by PATH — the snapshot on host, the activated
+    # workspace environment in a container.
     if options(spec).raw:
       mcp_spec = f'bro:{spec.bro}'
     else:

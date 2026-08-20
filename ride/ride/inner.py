@@ -3,9 +3,9 @@ the prepared workspace, and what ride does there before the harness's own
 session starts.
 
 The outer layer (`ride/session.py`) prepares the workspace and spawns this
-module's `--in-place` entry inside it — a host worktree runner or the container's
-main process. Everything a session carries regardless of the agent loop driving
-it lives here; the harness supplies only its own runner.
+module's `--in-place` entry with that workspace as cwd — from the runtime snapshot
+on the host or the container environment. Everything a session carries regardless
+of the agent loop driving it lives here; the harness supplies only its own runner.
 """
 
 import contextlib

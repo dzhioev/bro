@@ -2,6 +2,7 @@ from typing import Optional
 
 from bro.base import log
 from bro.workspace.paths import project_root
+from ride.runtime_bundle import clean_runtime_bundles
 from ride.workspace.docker import running_mounts
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
@@ -53,5 +54,8 @@ def clean_workspaces(
       log.info('removed %s', workspace.name)
     removed += 1
 
+  runtime_removed, runtime_skipped = clean_runtime_bundles(dry_run=dry_run)
+  action = 'would clean' if dry_run else 'cleaned'
+  log.info('%s %d runtime bundle(s), skipped %d active', action, runtime_removed, runtime_skipped)
   log.info('cleaned %d workspace(s), skipped %d, failed %d', removed, skipped, failed)
   return 1 if failed > 0 else 0

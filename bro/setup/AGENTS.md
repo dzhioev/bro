@@ -4,7 +4,7 @@ How to bring up a fresh checkout, plus what the framework reads out of `~/.bro`.
 
 ## Setup
 
-A repository operated by `ride` provides a root `setup.sh` with one postcondition: `.venv/bin/ride` works. The script runs `uv sync`, activates that environment long enough for `bro.dev.install` to install repository hooks, and skips the sync while the environment the container entrypoint linked in still describes the tree — it compares the tree's dependency manifests against the copies `RIDE_VENV_MANIFEST` names on every run, so a rebase that moves them re-syncs mid-session.
+A repository operated by `ride` provides a root `setup.sh` that provisions its project environment. Host sessions take their machinery from the invoking installation's runtime snapshot, so the worktree environment need not provide `ride` or `bro`; container sessions take those commands from the checkout-backed image environment. The script runs `uv sync`, activates that environment long enough for `bro.dev.install` to install repository hooks, and skips the sync while the environment the container entrypoint linked in still describes the tree — it compares the tree's dependency manifests against the copies `RIDE_VENV_MANIFEST` names on every run, so a rebase that moves them re-syncs mid-session.
 
 The framework repository is a uv workspace whose root publishes `bro`; `native/` publishes `bro-native`, `dev/` publishes `bro-dev`, `ride/` publishes `bro-ride`, and `local/` publishes this checkout's `bro-local` persona and scripts. `uv sync --all-packages --all-groups --all-extras` creates the root `.venv`, installs all five editably, and registers each distribution's committed console-script bridge. The root owns the tool configuration and development gate for every member.
 
