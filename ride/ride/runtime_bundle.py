@@ -143,29 +143,102 @@ def _canonical_name(name: str) -> str:
   return re.sub(r'[-_.]+', '-', name).lower()
 
 
-def _local_source(distribution: importlib.metadata.Distribution, text: str) -> Path:
+def _local_source(url: str) -> Path | None:
+  """the path a `file://` installation URL names, or None for a remote URL."""
+  parsed = urllib.parse.urlparse(url)
+  if parsed.scheme != 'file' or parsed.netloc not in ('', 'localhost'):
+    return None
+  return Path(urllib.request.url2pathname(urllib.parse.unquote(parsed.path))).resolve()
+
+
+def _direct_url_section(name: str, metadata: dict, key: str) -> dict | None:
+  section = metadata.get(key)
+  if section is not None and not isinstance(section, dict):
+    raise RuntimeBundleError(f'{name}: malformed {key} in direct_url.json')
+  return section
+
+
+def _archive_hash(name: str, archive_info: dict) -> str | None:
+  hashes = _direct_url_section(name, archive_info, 'hashes')
+  digest = None if hashes is None else hashes.get('sha256')
+  if digest is None:
+    return None
+  if not isinstance(digest, str) or len(digest) == 0:
+    raise RuntimeBundleError(f'{name}: malformed archive sha256 in direct_url.json')
+  return f'sha256={digest}'
+
+
+def _vcs_requirement(name: str, url: str, subdirectory: str | None, vcs_info: dict) -> str:
+  vcs = vcs_info.get('vcs')
+  if not isinstance(vcs, str) or len(vcs) == 0:
+    raise RuntimeBundleError(f'{name}: direct_url.json names no version control system for {url}')
+  commit = vcs_info.get('commit_id')
+  if not isinstance(commit, str) or len(commit) == 0:
+    raise RuntimeBundleError(
+      f'{name}: direct_url.json records no resolved {vcs} commit for {url}; reinstall it with an '
+      'installer that records one'
+    )
+  fragment = '' if subdirectory is None else f'#subdirectory={subdirectory}'
+  return f'{name} @ {vcs}+{url}@{commit}{fragment}'
+
+
+def _archive_installation(
+  name: str, url: str, subdirectory: str | None, archive_info: dict
+) -> str | _LocalDistribution:
+  source = _local_source(url)
+  if source is None:
+    fragments: list[str] = []
+    if (digest := _archive_hash(name, archive_info)) is not None:
+      fragments.append(digest)
+    if subdirectory is not None:
+      fragments.append(f'subdirectory={subdirectory}')
+    return f'{name} @ {url}' + ('' if len(fragments) == 0 else '#' + '&'.join(fragments))
+  if subdirectory is not None:
+    raise RuntimeBundleError(
+      f'{name}: cannot carry a local archive holding its project in {subdirectory!r}: '
+      f'{source}; reinstall it from that source directory'
+    )
+  if not source.is_file():
+    raise RuntimeBundleError(f'{name}: local installation archive is missing: {source}')
+  return _LocalDistribution(name, source)
+
+
+def _directory_installation(name: str, url: str, subdirectory: str | None) -> _LocalDistribution:
+  source = _local_source(url)
+  if source is None:
+    raise RuntimeBundleError(f'{name}: unsupported directory installation URL {url!r}')
+  if subdirectory is not None:
+    source = source / subdirectory
+  if not source.is_dir():
+    raise RuntimeBundleError(f'{name}: local installation source is not a directory: {source}')
+  return _LocalDistribution(name, source)
+
+
+def _direct_installation(name: str, text: str) -> str | _LocalDistribution:
+  """what reproduces a PEP 610 direct installation elsewhere: a requirement line naming a
+  fetchable source, or a local source the bundle carries as a wheel of its own."""
   try:
     direct_url = json.loads(text)
   except json.JSONDecodeError as error:
-    raise RuntimeBundleError(
-      f'{distribution.metadata["Name"]}: malformed direct_url.json: {error}'
-    ) from error
+    raise RuntimeBundleError(f'{name}: malformed direct_url.json: {error}') from error
   if not isinstance(direct_url, dict):
-    raise RuntimeBundleError(f'{distribution.metadata["Name"]}: malformed direct_url.json')
+    raise RuntimeBundleError(f'{name}: malformed direct_url.json')
   url = direct_url.get('url')
-  if not isinstance(url, str):
-    raise RuntimeBundleError(f'{distribution.metadata["Name"]}: direct_url.json has no URL')
-  parsed = urllib.parse.urlparse(url)
-  if parsed.scheme != 'file' or parsed.netloc not in ('', 'localhost'):
-    raise RuntimeBundleError(
-      f'{distribution.metadata["Name"]}: unsupported direct installation URL {url!r}'
-    )
-  source = Path(urllib.request.url2pathname(urllib.parse.unquote(parsed.path)))
-  if not source.is_dir():
-    raise RuntimeBundleError(
-      f'{distribution.metadata["Name"]}: local installation source is not a directory: {source}'
-    )
-  return source.resolve()
+  if not isinstance(url, str) or len(url) == 0:
+    raise RuntimeBundleError(f'{name}: direct_url.json has no URL')
+  subdirectory = direct_url.get('subdirectory')
+  if subdirectory is not None and (not isinstance(subdirectory, str) or len(subdirectory) == 0):
+    raise RuntimeBundleError(f'{name}: malformed subdirectory in direct_url.json')
+  if (vcs_info := _direct_url_section(name, direct_url, 'vcs_info')) is not None:
+    return _vcs_requirement(name, url, subdirectory, vcs_info)
+  if (archive_info := _direct_url_section(name, direct_url, 'archive_info')) is not None:
+    return _archive_installation(name, url, subdirectory, archive_info)
+  if _direct_url_section(name, direct_url, 'dir_info') is not None:
+    return _directory_installation(name, url, subdirectory)
+  raise RuntimeBundleError(
+    f'{name}: direct_url.json records no installation source for {url}; reinstall it from an '
+    'index, a version control URL, an archive, or a local directory'
+  )
 
 
 def _classify_installation() -> tuple[str, list[str], list[_LocalDistribution]]:
@@ -190,7 +263,11 @@ def _classify_installation() -> tuple[str, list[str], list[_LocalDistribution]]:
         raise RuntimeBundleError(f'{name}: installed distribution has no version')
       pins.append(f'{name}=={version}')
     else:
-      local.append(_LocalDistribution(name, _local_source(distribution, direct_url)))
+      installation = _direct_installation(name, direct_url)
+      if isinstance(installation, _LocalDistribution):
+        local.append(installation)
+      else:
+        pins.append(installation)
   pins.sort(key=str.casefold)
   local.sort(key=lambda item: item.name.casefold())
   return python, pins, local
@@ -257,29 +334,34 @@ def _build_wheels(local: list[_LocalDistribution], wheels: Path) -> list[Path]:
   for distribution in local:
     output = wheels / _canonical_name(distribution.name)
     output.mkdir()
-    _run(
-      [
-        'uv',
-        'build',
-        '--wheel',
-        '--no-build-logs',
-        '--out-dir',
-        str(output),
-        str(distribution.source),
-      ],
-      description=f'cannot build local distribution {distribution.name}',
-    )
+    if distribution.source.suffix == '.whl':
+      shutil.copyfile(distribution.source, output / distribution.source.name)
+    else:
+      _run(
+        [
+          'uv',
+          'build',
+          '--wheel',
+          '--no-build-logs',
+          '--out-dir',
+          str(output),
+          str(distribution.source),
+        ],
+        description=f'cannot build local distribution {distribution.name}',
+      )
     candidates = list(output.glob('*.whl'))
     if len(candidates) != 1:
       raise RuntimeBundleError(
-        f'{distribution.name}: uv build produced {len(candidates)} wheels, expected one'
+        f'{distribution.name}: local distribution yielded {len(candidates)} wheels, expected one'
       )
     wheel = candidates[0]
     built_name = _wheel_record(wheel, '.dist-info/METADATA').get('Name')
     if not isinstance(built_name, str) or _canonical_name(built_name) != _canonical_name(
       distribution.name
     ):
-      raise RuntimeBundleError(f'{distribution.name}: uv build produced a wheel for {built_name!r}')
+      raise RuntimeBundleError(
+        f'{distribution.name}: local distribution yielded a wheel for {built_name!r}'
+      )
     if wheel.name in names:
       raise RuntimeBundleError(f'duplicate built wheel filename: {wheel.name}')
     names.add(wheel.name)

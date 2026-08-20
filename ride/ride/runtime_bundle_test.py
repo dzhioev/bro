@@ -1,27 +1,109 @@
 import errno
 import fcntl
+import importlib.metadata
 import json
 import os
 import shutil
 import subprocess
 import sys
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 import ride.runtime_bundle as runtime_bundle
 
+_discover_distributions = importlib.metadata.distributions
+
+_PROBE_PYPROJECT = """\
+[project]
+name = "demo"
+version = "1.0"
+
+[build-system]
+requires = ["uv_build>=0.9,<0.99"]
+build-backend = "uv_build"
+"""
+
 
 class _Distribution:
-  def __init__(self, name: str, version: str, direct_url: dict | None = None):
+  def __init__(self, name: str, version: str, direct_url: dict | str | None = None):
     self.metadata = {'Name': name}
     self.version = version
     self._direct_url = direct_url
 
   def read_text(self, filename: str):
     assert filename == 'direct_url.json'
-    return None if self._direct_url is None else json.dumps(self._direct_url)
+    if self._direct_url is None or isinstance(self._direct_url, str):
+      return self._direct_url
+    return json.dumps(self._direct_url)
+
+
+@dataclass(frozen=True)
+class _ProbeInstallation:
+  """one trivial distribution, installed by real `uv` every way an installation can arise."""
+
+  source: Path
+  wheel: Path
+  commit: str
+  site_packages: dict[str, Path]
+
+
+def _uv(*arguments: str) -> None:
+  subprocess.run(['uv', *arguments], check=True, capture_output=True)
+
+
+@pytest.fixture(scope='module')
+def probe(tmp_path_factory) -> _ProbeInstallation:
+  root = tmp_path_factory.mktemp('provenance')
+  source = root / 'source'
+  (source / 'src' / 'demo').mkdir(parents=True)
+  (source / 'pyproject.toml').write_text(_PROBE_PYPROJECT)
+  (source / 'src' / 'demo' / '__init__.py').touch()
+  _uv('build', '--wheel', '--out-dir', str(root / 'dist'), str(source))
+  git = ['git', '-C', str(source), '-c', 'user.email=probe@invalid', '-c', 'user.name=probe']
+  subprocess.run([*git, 'init', '--quiet'], check=True, capture_output=True)
+  subprocess.run([*git, 'add', '--all'], check=True, capture_output=True)
+  subprocess.run([*git, 'commit', '--quiet', '--message', 'probe'], check=True, capture_output=True)
+  commit = subprocess.run(
+    [*git, 'rev-parse', 'HEAD'], check=True, capture_output=True, text=True
+  ).stdout.strip()
+  wheel = next((root / 'dist').glob('*.whl'))
+  installations = {
+    'index': ['--no-index', '--find-links', str(root / 'dist'), 'demo==1.0'],
+    'directory': [str(source)],
+    'editable': ['--editable', str(source)],
+    'git': [f'git+{source.as_uri()}'],
+    'wheel': [str(wheel)],
+  }
+  site_packages = {}
+  for kind, arguments in installations.items():
+    venv = root / f'venv-{kind}'
+    _uv('venv', '--python', sys.executable, str(venv))
+    _uv('pip', 'install', '--python', str(venv / 'bin' / 'python'), *arguments)
+    site_packages[kind] = _site_packages(venv)
+  return _ProbeInstallation(source, wheel, commit, site_packages)
+
+
+def _site_packages(venv: Path) -> Path:
+  return next((venv / 'lib').glob('python*/site-packages'))
+
+
+def _read_installation(monkeypatch, site_packages: Path) -> None:
+  monkeypatch.setattr(
+    runtime_bundle.importlib.metadata,
+    'distributions',
+    lambda: _discover_distributions(path=[str(site_packages)]),
+  )
+
+
+def _classify(
+  monkeypatch, site_packages: Path
+) -> tuple[list[str], list[runtime_bundle._LocalDistribution]]:
+  _read_installation(monkeypatch, site_packages)
+  _python, pins, local = runtime_bundle._classify_installation()
+  return pins, local
 
 
 def _pure_wheel(path: Path) -> None:
@@ -32,33 +114,135 @@ def _pure_wheel(path: Path) -> None:
     )
 
 
-def test_classifies_index_and_local_distributions(monkeypatch, tmp_path):
-  local = tmp_path / 'local'
-  local.mkdir()
+def test_classifies_every_supported_provenance(monkeypatch, tmp_path):
+  directory = tmp_path / 'source'
+  (directory / 'nested').mkdir(parents=True)
+  wheel = tmp_path / 'carried-1.0-py3-none-any.whl'
+  wheel.touch()
   distributions = [
     _Distribution('Index-Package', '2.0'),
-    _Distribution('Local_Package', '1.0', {'url': local.as_uri(), 'dir_info': {'editable': True}}),
+    _Distribution(
+      'Editable-Package', '1.0', {'url': directory.as_uri(), 'dir_info': {'editable': True}}
+    ),
+    _Distribution('Directory-Package', '1.0', {'url': directory.as_uri(), 'dir_info': {}}),
+    _Distribution(
+      'Nested-Package', '1.0', {'url': directory.as_uri(), 'dir_info': {}, 'subdirectory': 'nested'}
+    ),
+    _Distribution('Wheel-Package', '1.0', {'url': wheel.as_uri(), 'archive_info': {}}),
+    _Distribution(
+      'Git-Package',
+      '1.0',
+      {
+        'url': 'https://github.com/dzhioev/bro.git',
+        'vcs_info': {'vcs': 'git', 'commit_id': 'c0ffee', 'requested_revision': 'master'},
+        'subdirectory': 'ride',
+      },
+    ),
+    _Distribution(
+      'Mercurial-Package',
+      '1.0',
+      {'url': 'https://example.invalid/repo', 'vcs_info': {'vcs': 'hg', 'commit_id': 'beef'}},
+    ),
+    _Distribution(
+      'Download-Package',
+      '1.0',
+      {'url': 'https://example.invalid/download.whl', 'archive_info': {'hashes': {'sha256': 'ab'}}},
+    ),
+    _Distribution(
+      'Unhashed-Package', '1.0', {'url': 'https://example.invalid/plain.whl', 'archive_info': {}}
+    ),
   ]
   monkeypatch.setattr(runtime_bundle.importlib.metadata, 'distributions', lambda: distributions)
 
-  python, pins, local_distributions = runtime_bundle._classify_installation()
+  python, pins, local = runtime_bundle._classify_installation()
 
   assert python == f'{sys.version_info.major}.{sys.version_info.minor}'
-  assert pins == ['Index-Package==2.0']
-  assert local_distributions == [runtime_bundle._LocalDistribution('Local_Package', local)]
+  assert pins == [
+    'Download-Package @ https://example.invalid/download.whl#sha256=ab',
+    'Git-Package @ git+https://github.com/dzhioev/bro.git@c0ffee#subdirectory=ride',
+    'Index-Package==2.0',
+    'Mercurial-Package @ hg+https://example.invalid/repo@beef',
+    'Unhashed-Package @ https://example.invalid/plain.whl',
+  ]
+  assert local == [
+    runtime_bundle._LocalDistribution('Directory-Package', directory),
+    runtime_bundle._LocalDistribution('Editable-Package', directory),
+    runtime_bundle._LocalDistribution('Nested-Package', directory / 'nested'),
+    runtime_bundle._LocalDistribution('Wheel-Package', wheel),
+  ]
 
 
-def test_rejects_a_direct_archive_install(monkeypatch, tmp_path):
-  archive = tmp_path / 'package.whl'
-  archive.touch()
+@pytest.mark.parametrize(
+  ('direct_url', 'message'),
+  [
+    ('{', 'malformed direct_url.json'),
+    ({'dir_info': {}}, 'has no URL'),
+    ({'url': 'https://example.invalid/x.whl'}, 'records no installation source'),
+    (
+      {'url': 'https://example.invalid/repo', 'vcs_info': {'commit_id': 'beef'}},
+      'no version control',
+    ),
+    ({'url': 'https://example.invalid/repo', 'vcs_info': {'vcs': 'git'}}, 'no resolved git commit'),
+    ({'url': 'https://example.invalid/src', 'dir_info': {}}, 'unsupported directory installation'),
+    ({'url': 'file:///absent/source', 'dir_info': {}}, 'is not a directory'),
+    ({'url': 'file:///absent/package.whl', 'archive_info': {}}, 'archive is missing'),
+    (
+      {'url': 'file:///absent/package.tar.gz', 'archive_info': {}, 'subdirectory': 'inner'},
+      'reinstall it from that source directory',
+    ),
+  ],
+)
+def test_refuses_an_unreproducible_installation(monkeypatch, direct_url, message):
   monkeypatch.setattr(
     runtime_bundle.importlib.metadata,
     'distributions',
-    lambda: [_Distribution('archive', '1', {'url': archive.as_uri()})],
+    lambda: [_Distribution('demo', '1.0', direct_url)],
   )
 
-  with pytest.raises(runtime_bundle.RuntimeBundleError, match='not a directory'):
+  with pytest.raises(runtime_bundle.RuntimeBundleError, match=message):
     runtime_bundle._classify_installation()
+
+
+def test_a_real_installer_matrix_classifies_by_provenance(monkeypatch, probe):
+  assert _classify(monkeypatch, probe.site_packages['index']) == (['demo==1.0'], [])
+  assert _classify(monkeypatch, probe.site_packages['git']) == (
+    [f'demo @ git+{probe.source.as_uri()}@{probe.commit}'],
+    [],
+  )
+  carried = [runtime_bundle._LocalDistribution('demo', probe.source)]
+  assert _classify(monkeypatch, probe.site_packages['directory']) == ([], carried)
+  assert _classify(monkeypatch, probe.site_packages['editable']) == ([], carried)
+  assert _classify(monkeypatch, probe.site_packages['wheel']) == (
+    [],
+    [runtime_bundle._LocalDistribution('demo', probe.wheel)],
+  )
+
+
+def test_a_git_installation_materializes_from_its_pin(monkeypatch, probe, tmp_path):
+  monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
+  _read_installation(monkeypatch, probe.site_packages['git'])
+
+  with runtime_bundle.resolve_runtime_bundle() as bundle:
+    bundle.materialize_host()
+
+    assert (bundle.root / 'pins.txt').read_text() == (
+      f'demo @ git+{probe.source.as_uri()}@{probe.commit}\n'
+    )
+    assert _classify(monkeypatch, _site_packages(bundle.host_venv))[0] == [
+      f'demo @ git+{probe.source.as_uri()}@{probe.commit}'
+    ]
+
+
+def test_a_host_snapshot_reresolves_to_its_own_bundle(monkeypatch, probe, tmp_path):
+  monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
+  _read_installation(monkeypatch, probe.site_packages['directory'])
+
+  with runtime_bundle.resolve_runtime_bundle() as bundle:
+    bundle.materialize_host()
+    _read_installation(monkeypatch, _site_packages(bundle.host_venv))
+
+    with runtime_bundle.resolve_runtime_bundle() as snapshot:
+      assert snapshot.hash == bundle.hash
 
 
 def test_bundle_hash_covers_pins_python_and_wheel_bytes(tmp_path):
