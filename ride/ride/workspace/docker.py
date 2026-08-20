@@ -32,6 +32,13 @@ class Launch:
   extra_mounts: Collection[str] = ()
 
 
+# where a container session's broker channel lands: the provisioned host socket is
+# bind-mounted at this short fixed path (sun_path budget), and BROKER_CHANNEL
+# carries the matching address for the entrypoint's broxy
+CONTAINER_BROKER_SOCK = '/run/broker.sock'
+CONTAINER_BROKER_ADDRESS = f'unix:{CONTAINER_BROKER_SOCK}'
+
+
 _DOCKER_FORWARD_ENV = (
   'RIDE_COMMAND',
   'RIDE_TASK_ID',

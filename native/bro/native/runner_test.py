@@ -6,7 +6,7 @@ import pytest
 import bro.mcp as mcp
 import bro.native.runner as native_runner
 from bro.base import credentials
-from bro.bro import BaseBro, BroRaised
+from bro.bro import AnswerDelivered, BaseBro, BroRaised
 from bro.broker.brotocol import Message
 from bro.broker.client import CHANNEL_ENV, Client
 from bro.broker.transport import ClientTransport
@@ -426,6 +426,7 @@ class TestLifetime:
     'exception,reason,detail',
     [
       (BroRaised('blocked'), 'raised', 'blocked'),
+      (AnswerDelivered('done'), 'ok', None),
       (RuntimeError('broken'), 'error', 'broken'),
     ],
   )
@@ -827,6 +828,37 @@ class TestRunLifecycle:
     runner = _ChannelRunner(channel, _StubLLM(response='chat'))
     assert await runner.send('hi', surface='test') == 'chat'
     assert transport.sent == []
+
+  @pytest.mark.asyncio
+  async def test_answer_delivered_completes_the_run_with_the_answer(self):
+    channel, transport = _make_channel()
+    runner = _ChannelRunner(channel, _StubLLM(error=AnswerDelivered('the answer')))
+    result = await runner.run('input', tracker=_TrailIDTracker(), surface='test')
+    assert result == 'the answer'
+    assert [m.type for m in transport.sent] == ['started', 'completed']
+    assert transport.sent[1].payload == {'result': 'the answer', 'end_reason': 'ok'}
+
+  @pytest.mark.asyncio
+  async def test_summoned_send_announces_started_with_the_workspace(self, monkeypatch):
+    monkeypatch.setenv('RIDE_SUMMONED', '1')
+    monkeypatch.setenv('RIDE_WORKSPACE', 'my-manual')
+    channel, transport = _make_channel()
+    runner = _ChannelRunner(channel, _StubLLM(response='chat'))
+    assert await runner.send('hi', tracker=_TrailIDTracker(), surface='test') == 'chat'
+    assert [m.type for m in transport.sent] == ['started']
+    assert transport.sent[0].payload == {'trail_id': 'trail-42', 'workspace': 'my-manual'}
+    assert transport.closed is True
+    # only the conversation's first send announces
+    assert await runner.send('more', surface='test') == 'chat'
+    assert [m.type for m in transport.sent] == ['started']
+
+  @pytest.mark.asyncio
+  async def test_send_propagates_answer_delivered_to_the_surface(self):
+    channel, transport = _make_channel()
+    runner = _ChannelRunner(channel, _StubLLM(error=AnswerDelivered('done')))
+    with pytest.raises(AnswerDelivered):
+      await runner.send('hi', surface='test')
+    assert transport.sent == []  # the surface owns the delivery
 
 
 class TestAgentIdentity:

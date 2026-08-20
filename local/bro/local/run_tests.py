@@ -154,6 +154,7 @@ PYTEST_FILES = [
   'ride/ride/trails_test.py',
   'ride/ride/spawn_test.py',
   'ride/ride/summon_control_test.py',
+  'ride/ride/pending_summon_test.py',
   'ride/ride/claude/claude_argv_test.py',
   'ride/ride/claude/claude_config_test.py',
   'ride/ride/alias_test.py',

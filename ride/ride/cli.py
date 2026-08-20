@@ -74,6 +74,14 @@ def _configure_mode_parser(parser: Parser, *, solo: bool) -> None:
       action='store_true',
       help='remove an automatically named workspace after a clean exit',
     )
+    parser.add_argument(
+      '--summoned',
+      default=None,
+      metavar='TOKEN',
+      help='attach this session as the manual summon child TOKEN names: the pending '
+      'record fixes the bro, the initial prompt, and the base, and the answer goes '
+      'back to the waiting summoner',
+    )
   parser.add_argument('bro', help='bro personality to run the harness as')
   if solo:
     parser.add_argument('prompt', help='prompt to answer')
@@ -144,6 +152,7 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
   workspace = args.pop('workspace')
   in_place = args.pop('in_place')
   resume = args.pop('resume')
+  summoned_token = args.pop('summoned', None)
   if solo:
     keep = args.pop('keep')
     if workspace is not None and keep:
@@ -183,6 +192,14 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
   args['revoke'] = args['revoke'] or []
   bro = args.pop('bro')
   prompt = args.pop('prompt')
+  summoned = None
+  if summoned_token is not None:
+    summoned = _resolve_summoned(
+      parser, summoned_token, bro=bro, prompt=prompt, in_place=in_place, args=args
+    )
+    prompt = summoned.prompt
+    args['grant'] = [*summoned.grant, *args['grant']]
+    args['revoke'] = [*summoned.revoke, *args['revoke']]
   harness_options = pop_harness_options(parser, args, harness_name, solo=solo, host=args['host'])
   try:
     resolved_llm = harness.resolve_llm(args['llm'], bro)
@@ -208,7 +225,37 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     from ride.inner import run_in_place
 
     return run_in_place(harness, spec)
-  return start_session(spec)
+  return start_session(spec, summoned=summoned)
+
+
+def _resolve_summoned(
+  parser: Parser, token: str, *, bro: str, prompt: Optional[str], in_place: bool, args: dict
+):
+  """resolve and validate a `--summoned` launch against its pending record: the
+  summon request fixes the bro, the initial prompt, the base, and the child's
+  summon allow-list; the launch owns everything else."""
+  from ride import pending_summon
+  from ride.scope import split_scope_overrides
+
+  if in_place:
+    parser.error('--summoned is an outer launch flag; the inner run inherits it via the env')
+  if prompt is not None:
+    parser.error('--summoned takes its initial prompt from the summon request; drop the prompt')
+  if args['into'] is not None:
+    parser.error('--summoned takes its base from the summon request; drop --into')
+  _, bro_overrides = split_scope_overrides([*args['grant'], *args['revoke']])
+  if len(bro_overrides) > 0:
+    parser.error(
+      "a manual child's summon allow-list was fixed by the summon request; drop the "
+      f'@bro override(s): {", ".join(sorted(bro_overrides))}'
+    )
+  try:
+    pending = pending_summon.peek(project_root(), token)
+  except (pending_summon.UnknownToken, ValueError) as error:
+    parser.error(str(error))
+  if bro != pending.target:
+    parser.error(f'the summon token names bro {pending.target!r}, not {bro!r}')
+  return pending
 
 
 def alias_main(argv: list[str], *, solo: bool) -> int:

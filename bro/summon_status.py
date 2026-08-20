@@ -21,13 +21,16 @@ STATUS_ENV = 'RIDE_SUMMON_STATUS'
 
 @dataclass(frozen=True)
 class ActiveSummon:
-  """a summon the host authorized and has not yet seen end."""
+  """a summon the host authorized and has not yet seen end. A manual entry is
+  waiting for (or running as) a user-launched child; until its `started` lands,
+  `trail_id` is None and the request id is the launch token."""
 
   request_id: str
   target: str
   trail_id: Optional[str]
   summoner: dict[str, Any]
   started_at: float
+  manual: bool = False
 
 
 @dataclass(frozen=True)

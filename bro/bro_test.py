@@ -1037,6 +1037,83 @@ class TestMCPRaise:
     assert 'terminates the session' not in bare_tool.description
 
 
+class TestAnswer:
+  """the summoned run's delivery tool: mounted only where a summoned child can
+  actually send the terminal, ending the run by exception (bare) or by channel
+  emission + session termination (mcp)."""
+
+  async def _names(self, wire) -> set[str]:
+    server = bro_module._build_service_server(
+      EchoBro(), include_raise=False, harness='bro', wire=wire
+    )
+    return {tool.name for tool in await server.list_tools()}
+
+  @pytest.mark.asyncio
+  async def test_mounted_for_a_summoned_run_with_a_channel(self, monkeypatch):
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/x.sock')
+    monkeypatch.setenv('RIDE_SUMMONED', '1')
+    assert 'answer' in await self._names('bare')
+
+  @pytest.mark.asyncio
+  async def test_unmounted_without_the_summoned_mark_or_channel(self, monkeypatch):
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/x.sock')
+    assert 'answer' not in await self._names('bare')
+    monkeypatch.delenv('BROKER_CHANNEL')
+    monkeypatch.setenv('RIDE_SUMMONED', '1')
+    assert 'answer' not in await self._names('bare')
+
+  @pytest.mark.asyncio
+  async def test_mcp_flavor_needs_a_killable_session(self, monkeypatch):
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/x.sock')
+    monkeypatch.setenv('RIDE_SUMMONED', '1')
+    assert 'answer' not in await self._names('mcp')
+    monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
+    assert 'answer' in await self._names('mcp')
+
+  async def _tool(self, wire, monkeypatch):
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/x.sock')
+    monkeypatch.setenv('RIDE_SUMMONED', '1')
+    monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
+    server = bro_module._build_service_server(
+      EchoBro(), include_raise=False, harness='bro', wire=wire
+    )
+    for tool in await server.list_tools():
+      if tool.name == 'answer':
+        return tool
+    raise AssertionError('answer tool not found on the service build')
+
+  @pytest.mark.asyncio
+  async def test_bare_answer_ends_the_run_with_the_answer(self, monkeypatch):
+    tool = await self._tool('bare', monkeypatch)
+    with pytest.raises(bro_module.AnswerDelivered) as exception:
+      await tool.call({'answer': 'the verdict'})
+    assert exception.value.answer == 'the verdict'
+
+  @pytest.mark.asyncio
+  async def test_mcp_answer_records_the_terminal_and_kills_the_runner(self, monkeypatch):
+    channel = MagicMock()
+    monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: channel)
+    kills: list[tuple[int, int]] = []
+    monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
+    tool = await self._tool('mcp', monkeypatch)
+    await tool.call({'answer': 'the verdict'})
+    channel.completed.assert_called_once_with('the verdict', 'ok')
+    channel.close.assert_called_once_with()
+    assert kills == [(4242, signal.SIGTERM)]
+
+  @pytest.mark.asyncio
+  async def test_mcp_answer_without_a_channel_spares_the_session(self, monkeypatch):
+    # unlike raise, an undeliverable answer must not kill the session — the
+    # summoner would never hear it; the agent gets the error instead
+    monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: None)
+    kills: list[tuple[int, int]] = []
+    monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
+    tool = await self._tool('mcp', monkeypatch)
+    with pytest.raises(RuntimeError, match='cannot reach the summoner'):
+      await tool.call({'answer': 'the verdict'})
+    assert kills == []
+
+
 class TestSessionModePrompts:
   def test_non_interactive_runs_pin_the_unattended_hold(self):
     bro = EchoBro()

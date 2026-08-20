@@ -4,11 +4,13 @@ from typing import cast
 import pytest
 
 import ride.bro
+import ride.pending_summon
 import ride.scope
 import ride.spawn
 import ride.summon_control
 from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Dispatcher
+from bro.broker.transport import Provisioned
 from bro.monitor import trail_pointer
 from bro.workspace.paths import workspace_tree
 from ride.workspace.metadata import WorkspaceKind
@@ -69,7 +71,7 @@ GRANDCHILD = 'GRANDCHILD-CHANNEL'
 
 class FakeContext:
   """the Dispatcher surface `SummonControl.handle` drives: root exposure, the
-  origin topology, plus the reply/spawn routing primitives, recorded for
+  origin topology, plus the reply/spawn/expect routing primitives, recorded for
   assertions."""
 
   def __init__(self):
@@ -77,12 +79,23 @@ class FakeContext:
     self.origin: dict = {}  # spawned peer -> (parent, spawning request id)
     self.replies: list = []  # (peer, payload)
     self.spawned: list = []  # (launch, peer, timeout)
+    self.expected: list = []  # (peer, timeout)
+    self.delivered: list = []  # (peer, message)
 
   def reply(self, peer, payload):
     self.replies.append((peer, payload))
 
+  def deliver(self, peer, message):
+    self.delivered.append((peer, message))
+
   def spawn(self, launch, peer, *, timeout=None):
     self.spawned.append((launch, peer, timeout))
+
+  def expect(self, peer, *, timeout, ready):
+    # the real Dispatcher registers topology then calls ready once the channel
+    # is provisioned; here it resolves synchronously to a test-chosen endpoint
+    self.expected.append((peer, timeout))
+    ready(Provisioned(channel=CHILD, host_endpoint=f'/broker/{CHILD}.sock'))
 
 
 def _workspace(tmp_path, name='ws') -> Workspace:
@@ -574,3 +587,125 @@ class TestSummonLedger:
     end_record = _audit(tmp_path)[-1]
     assert end_record['outcome'] == 'killed'
     assert end_record['trail_id'] == 'T1'
+
+
+class TestManualSummon:
+  def _register(self, control, context=None) -> tuple[FakeContext, Message]:
+    context = context if context is not None else FakeContext()
+    message = _summon_message(manual=True)
+    control.handle(cast(Dispatcher, context), ROOT, message)
+    return context, message
+
+  def test_manual_summon_expects_instead_of_spawning(self, control, tmp_path):
+    context, message = self._register(control)
+    assert context.replies == []
+    assert context.spawned == []
+    # no host timer: the launch is paced by a human
+    assert context.expected == [(ROOT, None)]
+    # the registration is acknowledged once the token is claimable
+    [(accepted_peer, accepted)] = context.delivered
+    assert accepted_peer == ROOT
+    assert (accepted.type, accepted.in_reply_to) == ('accepted', message.id)
+    pending = ride.pending_summon.peek(tmp_path, message.id)
+    assert pending.socket == f'/broker/{CHILD}.sock'
+    assert pending.target == 'dev'
+    assert pending.prompt == 'deploy the thing'
+    assert pending.parent_workspace == str(workspace_tree(tmp_path, 'ws'))
+    assert pending.may_summon == ()
+    [active] = _status(tmp_path)['active']
+    assert active['request_id'] == message.id
+    assert active['manual'] is True
+    assert active['trail_id'] is None
+    [expect_record] = _audit(tmp_path)
+    assert expect_record['event'] == 'expect'
+    assert expect_record['manual'] is True
+
+  def test_manual_summon_refuses_launch_owned_fields(self, control):
+    context = FakeContext()
+    for field in ({'timeout': 60}, {'hold': 'attended'}, {'llm': ':fable5'}, {'harness': 'claude'}):
+      control.handle(cast(Dispatcher, context), ROOT, _summon_message(manual=True, **field))
+    assert context.expected == []
+    assert len(context.replies) == 4
+    assert all('launch owns' in payload['error'] for _, payload in context.replies)
+
+  def test_manual_summon_is_authorized_like_a_spawned_one(self, tmp_path):
+    control = _control(tmp_path, set())
+    context, _ = self._register(control)
+    assert context.expected == []
+    [(_, payload)] = context.replies
+    assert 'not in' in payload['error']
+
+  def test_started_workspace_becomes_the_nested_base_source(self, tmp_path):
+    # the manual child names its user-chosen workspace in `started`; its own
+    # summons then inherit that workspace as the base-ref source
+    control = _control(tmp_path, {'bro-dev'})
+    context = FakeContext()
+    message = _summon_message(target='bro-dev', manual=True)
+    control.handle(cast(Dispatcher, context), ROOT, message)
+    context.origin[CHILD] = (ROOT, message.id)
+    control.observe_delivery(
+      CHILD,
+      ROOT,
+      Message(
+        type='started', payload={'trail_id': 'T1', 'workspace': 'my-manual'}, in_reply_to=message.id
+      ),
+    )
+    control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='dev'))
+    launch, peer, _ = context.spawned[-1]
+    assert peer == CHILD
+    assert launch.parent_workspace == workspace_tree(tmp_path, 'my-manual')
+    assert launch.summoner == {'trail_id': 'T1'}
+
+  def test_nested_summon_before_started_is_denied(self, tmp_path):
+    control = _control(tmp_path, {'bro-dev'})
+    context = FakeContext()
+    message = _summon_message(target='bro-dev', manual=True)
+    control.handle(cast(Dispatcher, context), ROOT, message)
+    context.origin[CHILD] = (ROOT, message.id)
+    control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='dev'))
+    assert context.spawned == []
+    [(_, payload)] = context.replies
+    assert 'has not announced its session start' in payload['error']
+
+  def test_manual_childs_credential_grant_is_denied(self, tmp_path):
+    control = _control(tmp_path, {'bro-dev'})
+    context = FakeContext()
+    message = _summon_message(target='bro-dev', manual=True)
+    control.handle(cast(Dispatcher, context), ROOT, message)
+    context.origin[CHILD] = (ROOT, message.id)
+    control.observe_delivery(
+      CHILD,
+      ROOT,
+      Message(
+        type='started', payload={'trail_id': 'T1', 'workspace': 'my-manual'}, in_reply_to=message.id
+      ),
+    )
+    control.handle(
+      cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['github'])
+    )
+    assert context.spawned == []
+    [(_, payload)] = context.replies
+    assert 'credential scope is not attributable' in payload['error']
+
+  def test_finish_discards_an_unclaimed_pending_record(self, control, tmp_path):
+    _, message = self._register(control)
+    control.observe_delivery(
+      CHILD,
+      ROOT,
+      Message(type='failed', payload={'reason': 'disconnected'}, in_reply_to=message.id),
+    )
+    with pytest.raises(ride.pending_summon.UnknownToken):
+      ride.pending_summon.peek(tmp_path, message.id)
+    assert _status(tmp_path)['last']['outcome'] == 'failed:disconnected'
+
+  def test_root_teardown_detaches_a_manual_child(self, control, tmp_path, caplog):
+    _, message = self._register(control)
+    control.log_killed_in_flight()
+    assert any(
+      'root exit detached in-flight manual child dev' in record.getMessage()
+      for record in caplog.records
+    )
+    end_record = _audit(tmp_path)[-1]
+    assert end_record['outcome'] == 'detached'
+    with pytest.raises(ride.pending_summon.UnknownToken):
+      ride.pending_summon.peek(tmp_path, message.id)

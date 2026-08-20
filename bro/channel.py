@@ -10,11 +10,15 @@ deferred to runtime and `from_env()` also returns `None` when the `broker`
 package is not importable (an environment provisioned before broker existed),
 so importing `bro` never depends on broker being installed.
 
-Wired into `BaseBro.run` only (LLM-process children). A claude-code `--raw`
-session never calls `BaseBro.run` — it has no in-process return value — so it
-auto-emits no lifecycle, by design. The one claude-session emission is the
-`raise` service tool's `completed{raised}`, sent mid-session; the dispatcher
-deliberately leaves the root un-finalized on it, so the channel keeps serving.
+Wired into `Runner.run` (LLM-process children), and into `Runner.send`'s first
+turn for a *summoned* interactive conversation — a manual summon child on the
+bro harness announces `started` there, and its terminal is the `answer` service
+tool's. An un-summoned interactive conversation emits nothing: its channel is
+the enclosing session's, not its own. A claude-code `--raw` session never calls
+`Runner.run` — it has no in-process return value — so it auto-emits no
+lifecycle, by design. The claude-session emissions are the `raise` and `answer`
+service tools' `completed`, sent mid-session; the dispatcher deliberately
+leaves a root un-finalized on one, so the channel keeps serving.
 """
 
 from typing import TYPE_CHECKING, Optional
@@ -40,10 +44,16 @@ class BroChannel:
       return None
     return cls(client)
 
-  def started(self, trail_id: str) -> None:
+  def started(self, trail_id: str, *, workspace: Optional[str] = None) -> None:
+    """announce the run's trail. `workspace` names the session's workspace where
+    the host cannot derive it (a manual summon child's is user-chosen; a spawned
+    child's is its channel-named one)."""
     from bro.broker.brotocol import Tag
 
-    self._client.send(Tag.STARTED, {'trail_id': trail_id})
+    payload: dict[str, Optional[str]] = {'trail_id': trail_id}
+    if workspace is not None:
+      payload['workspace'] = workspace
+    self._client.send(Tag.STARTED, payload)
 
   def completed(self, result: Optional[str], end_reason: EndReason) -> None:
     from bro.broker.brotocol import Tag

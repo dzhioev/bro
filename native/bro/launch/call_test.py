@@ -10,7 +10,7 @@ import pytest
 
 import bro.llm.llms.echo as llm_llms_echo
 import bro.llm.llms.openai as llm_llms_openai
-from bro.bro import BaseBro
+from bro.bro import AnswerDelivered, BaseBro
 from bro.launch.call import call_text, chat_main
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.mcp import MCPServer
@@ -240,6 +240,34 @@ def test_chat_starts_an_empty_repl_and_defaults_to_guided(monkeypatch):
 
   assert _chat(['bro', 'record']) is None
   assert captured == [(None, 'guided', PresetName.CHAT)]
+
+
+def test_chat_relays_a_delivered_answer_to_the_summoner(monkeypatch):
+  async def deliver(*args, **kwargs):
+    raise AnswerDelivered('the verdict')
+
+  channel = MagicMock()
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
+  monkeypatch.setattr('bro.launch.call.call_text', deliver)
+  monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call.BroChannel.from_env', staticmethod(lambda: channel))
+
+  assert _chat(['bro', 'record']) == 0
+  channel.completed.assert_called_once_with('the verdict', 'ok')
+  channel.close.assert_called_once_with()
+
+
+def test_chat_fails_a_delivered_answer_without_a_channel(monkeypatch, capsys):
+  async def deliver(*args, **kwargs):
+    raise AnswerDelivered('the verdict')
+
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
+  monkeypatch.setattr('bro.launch.call.call_text', deliver)
+  monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call.BroChannel.from_env', staticmethod(lambda: None))
+
+  assert _chat(['bro', 'record']) == 1
+  assert 'cannot reach the summoner' in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -543,6 +571,26 @@ async def test_tui_turn_error_renders_as_error_bubble(monkeypatch):
     assert app.screen.get_selected_text() == "RuntimeError: failed [status='down']"
     assert bubble.styles.border_left[1] == bubble.styles.color
     assert bubble.styles.border_left[1] != app.query_one('MessageBubble.bro').styles.border_left[1]
+
+
+@pytest.mark.asyncio
+async def test_tui_answer_delivered_exits_carrying_the_answer(monkeypatch):
+  from bro.launch.call_tui import ChatApp
+
+  async def deliver(*args, **kwargs):
+    raise AnswerDelivered('the verdict')
+
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  runner = _MockRunner()
+  monkeypatch.setattr(runner, 'send', deliver)
+  app = ChatApp(runner, None)
+  async with app.run_test(size=(80, 40)) as pilot:
+    app._begin_turn()
+    app._send_to_bro('finish it')
+    await app.workers.wait_for_complete()
+    await pilot.pause()
+  assert app.delivered is not None
+  assert app.delivered.answer == 'the verdict'
 
 
 @pytest.mark.asyncio

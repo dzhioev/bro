@@ -113,6 +113,16 @@ class BroRaised(llm_mcp.ToolControlSignal):
     self.reason = reason
 
 
+class AnswerDelivered(llm_mcp.ToolControlSignal):
+  """ends a summoned Bro run with its explicit answer: raised by the `answer`
+  service tool's bare flavor; the surface that drives the run turns it into the
+  run's `completed{result, end_reason: ok}`."""
+
+  def __init__(self, answer: str):
+    super().__init__(answer)
+    self.answer = answer
+
+
 def _raise(reason: str) -> str:
   raise BroRaised(reason)
 
@@ -160,6 +170,53 @@ def _raise_tool(wire: mcp.Wire, variables: Variables) -> llm_mcp.Tool:
   )
 
 
+def _answer(answer: str) -> str:
+  raise AnswerDelivered(answer)
+
+
+async def _claude_answer(answer: str) -> str:
+  # the claude twin of _claude_raise, for the clean end: no exception can end
+  # the consuming claude session, so send the terminal over the broker channel,
+  # then terminate the session. Unlike raise, an undeliverable answer must not
+  # kill the session — without a channel the summoner would never hear it, so
+  # that errors back to the agent instead.
+  from bro.workspace.session import terminate_session
+
+  def record_and_kill() -> None:
+    channel = BroChannel.from_env()
+    if channel is None:
+      raise RuntimeError(
+        'no broker channel: the answer cannot reach the summoner; surface it to the user instead'
+      )
+    log.info('answer delivered to the summoner')
+    channel.completed(answer, 'ok')
+    channel.close()
+    terminate_session()
+
+  await off_loop(record_and_kill)
+  # unreachable in practice — claude dies awaiting this result
+  return 'the answer is recorded and the session is being terminated. Stop working now.'
+
+
+_ANSWER_DESCRIPTION = (
+  'deliver the final answer of this summoned session to the summoner waiting on '
+  'it, and end the session. This session runs on behalf of another session; call '
+  'this exactly once, when the work is done — in an attended session, once the '
+  'user confirms nothing is left — with a self-contained answer: the summoner '
+  'sees nothing else of this session. A session that ends without this call '
+  'reports no answer and surfaces to the summoner as a failure.'
+  '{{when #wire = mcp}} The call records the answer and terminates the session; '
+  'nothing after it will run.{{end}}'
+)
+
+
+def _answer_tool(wire: mcp.Wire, variables: Variables) -> llm_mcp.Tool:
+  target = _answer if wire == 'bare' else _claude_answer
+  return llm_mcp.FunctionTool(
+    target, name='answer', description=_ANSWER_DESCRIPTION, variables=variables
+  )
+
+
 # the {{when #wire = mcp}} blocks render only into the MCP-served builds
 # (persona and --raw claude sessions consume the toolset over streamable HTTP,
 # where the harness bounds a silent tool call at MCP_TOOL_TIMEOUT — short of a
@@ -194,7 +251,14 @@ _SUMMON_DESCRIPTION = (
   'a revoke, lacks) fails the summon. '
   'fails with the reason when the run raises, errors out, '
   'or dies. `detach: true` returns the request id right after the send instead of '
-  'blocking — poll or collect it with `summon_check`.'
+  'blocking — poll or collect it with `summon_check`. `manual: true` registers a '
+  'manual summon instead of spawning: the call returns as soon as the host '
+  'accepts (a denial fails it right there) with a token and a `ride` command — '
+  'relay both to the user, who launches the child session themselves, '
+  'interactively and at their own pace; the session then answers like any summon, '
+  'so poll the token with `summon_check` (a manual summon never blocks for the '
+  'answer, and it refuses `timeout`/`hold`/`llm`/`harness` — the user’s launch '
+  'owns those). use it when the child needs the user in the loop.'
   '{{when #wire = mcp}} CAUTION: this tool is served over MCP, and the harness '
   'times a silent tool call out after ten minutes while a child working a real '
   'task typically runs longer — such a blocking summon dies client-side with a '
@@ -286,10 +350,34 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
     revoke: Optional[list[str]] = None,
     llm: Optional[str] = None,
     harness: Optional[str] = None,
+    manual: bool = False,
   ) -> str:
     source = None if live_run is None else live_run.current_tool_step_id
     step_id = source['step_id'] if source is not None else None
     index = source['index'] if source is not None else None
+    if manual:
+      launch_owned = {'timeout': timeout, 'hold': hold, 'llm': llm, 'harness': harness}
+      passed = sorted(name for name, value in launch_owned.items() if value is not None)
+      if len(passed) > 0:
+        raise ValueError(f"a manual summon's launch owns {', '.join(passed)}; drop the field(s)")
+      # a manual child is launched and paced by a human, so the manual path only
+      # waits for the host's acceptance — a blocking wait for the answer would
+      # outlive any transport budget
+      token = await off_loop(
+        summon_client.summon_manual,
+        target,
+        prompt,
+        into=into,
+        grant=grant,
+        revoke=revoke,
+        step_id=step_id,
+        index=index,
+      )
+      command = summon_client.manual_launch_command(token, target)
+      return (
+        f'manual summon accepted; token {token}. relay the launch command to the '
+        f'user: `{command}` — then poll the token with summon_check'
+      )
     if detach:
       return await off_loop(
         summon_client.summon_detached,
@@ -399,6 +487,7 @@ _SERVICE_TOOL_NAMES = (
   'cast',
   'skill',
   'raise',
+  'answer',
   'summon',
   'summon_check',
   'summon_list',
@@ -420,13 +509,23 @@ def _build_service_server(
   # `banner` is unconditional; `cast` needs spells and its optional secret;
   # `skill` bridges only harnesses without a native loader; `raise` only makes
   # sense non-interactively (a caller to abort to — interactive callers pass
-  # include_raise=False); `summon`/`summon_check` need a broker channel and
+  # include_raise=False); `answer` is the summoned run's delivery surface — it
+  # needs the summoned mark and a channel to send the terminal on, plus a
+  # killable session on the mcp wire (the bare flavor ends the run by
+  # exception); `summon`/`summon_check` need a broker channel and
   # `summon_list` the session's summon-status file on top. the decided roster
   # then feeds the tools' rendering vocabulary: service tools are harness
   # features, the one tool surface that conditions on system facts, so `#wire`
   # is injected next to the `#tools` roster.
+  from bro.summon import SUMMONED_ENV
+
   has_cast = len(bro.spells) > 0 and spell_store.cast_available()
   has_broker = os.environ.get('BROKER_CHANNEL') is not None
+  has_answer = (
+    has_broker
+    and os.environ.get(SUMMONED_ENV) is not None
+    and (wire == 'bare' or os.environ.get('RIDE_RUNNER_PID') is not None)
+  )
   has_summon_list = False
   if has_broker:
     from bro import summon_status
@@ -440,6 +539,8 @@ def _build_service_server(
     mounted.append('skill')
   if include_raise:
     mounted.append('raise')
+  if has_answer:
+    mounted.append('answer')
   if has_broker:
     mounted.extend(['summon', 'summon_check'])
   if has_summon_list:
@@ -456,6 +557,8 @@ def _build_service_server(
     tools.append(spell_store.build_skill_tool())
   if include_raise:
     tools.append(_raise_tool(wire, variables))
+  if has_answer:
+    tools.append(_answer_tool(wire, variables))
   if has_broker:
     tools.append(_summon_tool(variables, live_run))
     tools.append(_summon_check_tool(variables))

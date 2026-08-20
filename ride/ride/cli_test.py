@@ -198,3 +198,68 @@ class TestLifecycle:
     monkeypatch.setenv('XDG_DATA_HOME', 'share')
     assert ride_cli.main(['ride', 'list']) == 1
     assert 'XDG_DATA_HOME must be an absolute path' in caplog.text
+
+
+class TestSummonedLaunch:
+  @pytest.fixture
+  def pending(self, monkeypatch, tmp_path):
+    import ride.pending_summon as pending_summon
+
+    record = pending_summon.PendingSummon(
+      token='TOK-1',
+      socket='/broker/CH.sock',
+      target='dev',
+      prompt='work this out with the user',
+      parent_workspace=str(tmp_path / 'parent'),
+      may_summon=('bro',),
+      grant=('aws',),
+      revoke=('openai',),
+      summoner={'trail_id': 'T1'},
+    )
+    monkeypatch.setattr(ride_cli, 'project_root', lambda: tmp_path)
+    pending_summon.write(tmp_path, record)
+    return record
+
+  def test_summoned_launch_takes_prompt_and_scope_from_the_record(self, pending):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', 'dev']) == 0
+    spec = start.call_args.args[0]
+    assert spec.prompt == 'work this out with the user'
+    assert spec.grant == ['aws']
+    assert spec.revoke == ['openai']
+    assert start.call_args.kwargs['summoned'] == pending
+
+  def test_user_credential_overrides_layer_on_the_records(self, pending):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--grant', 'github', 'dev'])
+    assert start.call_args.args[0].grant == ['aws', 'github']
+
+  def test_summoned_refuses_a_prompt(self, pending, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', 'dev', 'my own prompt'])
+    assert 'takes its initial prompt from the summon request' in capsys.readouterr().err
+
+  def test_summoned_refuses_into(self, pending, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--into', 'master', 'dev'])
+    assert 'takes its base from the summon request' in capsys.readouterr().err
+
+  def test_summoned_refuses_bro_overrides(self, pending, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--grant', '@bro', 'dev'])
+    assert 'drop the @bro override(s): bro' in capsys.readouterr().err
+
+  def test_summoned_validates_the_bro_against_the_record(self, pending, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', 'bro'])
+    assert "names bro 'dev', not 'bro'" in capsys.readouterr().err
+
+  def test_unknown_token_is_a_cli_error(self, pending, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'along', '--summoned', 'TOK-9', 'dev'])
+    assert 'no pending manual summon for token' in capsys.readouterr().err
+
+  def test_solo_has_no_summoned_flag(self, pending, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'solo', '--summoned', 'TOK-1', 'dev', 'p'])
+    capsys.readouterr()
