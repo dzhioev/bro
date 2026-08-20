@@ -17,7 +17,8 @@ Two invariants carry the design:
 - **`failed` is the only synthesized event.** Children emit `started` / `completed`; the
   Dispatcher never fabricates those. `failed` is reserved for a child that could not report
   its own end — an `on_exit` without a preceding `completed` (`reason='exit'`), an
-  `on_timeout` (`reason='timeout'`, after the Runtime already killed the peer), or a
+  `on_timeout` (`reason='timeout'`, after the Runtime already killed the peer), an
+  `on_gone` without one (`reason='disconnected'`, an expected peer's channel ended), or a
   `spawn` whose launch raised (`reason='launch'`, before any peer existed).
 
 The root is a uniform peer: `run(root)` spawns it like any other and awaits its `on_exit`.
@@ -37,7 +38,7 @@ from bro.base import log
 from bro.broker.brotocol import Message, Tag
 from bro.broker.runtime import Peer, Runtime
 from bro.broker.spawn import LaunchSpec, Spawner
-from bro.broker.transport import ServerTransport
+from bro.broker.transport import Provisioned, ServerTransport
 
 # request-lifecycle bound for a spawned child (LLM children run for minutes)
 DEFAULT_TIMEOUT = 600.0
@@ -57,6 +58,7 @@ class RuntimeCommands(Protocol):
   """the mechanism-layer commands the Dispatcher issues; the real `Runtime` satisfies it."""
 
   async def spawn(self, launch: LaunchSpec, *, timeout: Optional[float]) -> Peer: ...
+  async def expect(self, *, timeout: Optional[float]) -> Provisioned: ...
   def send(self, peer: Peer, message: Message) -> None: ...
   def kill(self, peer: Peer) -> None: ...
   def forget(self, peer: Peer) -> None: ...
@@ -145,6 +147,42 @@ class Dispatcher:
 
     task.add_done_callback(_registered)
 
+  def expect(
+    self,
+    parent: Peer,
+    *,
+    timeout: Optional[float],
+    ready: Callable[[Provisioned], None],
+  ) -> None:
+    """register an expected external peer as a child of `parent`, correlated to the
+    in-flight request — `spawn` for a peer someone else launches. Once the channel
+    is provisioned and the topology registered, `ready` receives it (on the loop)
+    so the handler can publish the endpoint to whatever launches the peer; a
+    provisioning failure synthesizes `failed{reason: 'launch'}` back to `parent`.
+    `timeout` bounds the whole expectation; None leaves it unbounded — an external
+    peer's arrival is paced by its launcher, not by this host."""
+    in_reply_to = self._request_id()
+    task = asyncio.ensure_future(self.runtime.expect(timeout=timeout))
+
+    def _registered(finished: asyncio.Task) -> None:
+      if finished.cancelled():
+        return
+      error = finished.exception()
+      if error is not None:
+        log.warning(f'broker dispatcher: expect failed: {error!r}')
+        failed = Message(
+          type=Tag.FAILED,
+          payload={'reason': 'launch', 'error': str(error)},
+          in_reply_to=in_reply_to,
+        )
+        self._deliver_observed(None, parent, failed)
+        return
+      provisioned = finished.result()
+      self._register_child(provisioned.channel, parent, in_reply_to)
+      ready(provisioned)
+
+    task.add_done_callback(_registered)
+
   @contextlib.contextmanager
   def _as_active(self, message: Message) -> Generator[None]:
     previous = self._active
@@ -184,6 +222,13 @@ class Dispatcher:
     if peer not in self.finalized:
       self._fail(peer, {'reason': 'timeout'})
       self.finalized.add(peer)
+
+  def on_gone(self, peer: Peer) -> None:
+    # an expected peer's channel ended — its `on_exit`: every frame it wrote was
+    # already delivered, so an un-finalized peer produced no terminal.
+    if peer not in self.finalized:
+      self._fail(peer, {'reason': 'disconnected'})
+    self._cleanup(peer)
 
   # --- the four routing rules, checked in order ---------------------------
 

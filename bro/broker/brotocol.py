@@ -24,6 +24,7 @@ class ProtocolError(Exception):
 class Tag:
   """substrate built-in message-type tags; consumer tags are open strings."""
 
+  ACCEPTED = 'accepted'  # correlated acknowledgment: the request is authorized and registered
   STARTED = 'started'  # {trail_id}
   COMPLETED = 'completed'  # {result, end_reason}  end_reason: ok|raised|error
   FAILED = 'failed'  # {reason: 'exit'|'timeout'|'launch', exit_code?, output_tail?, error?}
@@ -34,6 +35,11 @@ class Tag:
   )
   PING = 'ping'  # acceptance round-trip
   SPAWN = 'spawn'  # acceptance: spawn a throwaway child
+
+
+# correlated messages that precede a request's terminal: waits ride through them
+# and the broxy keeps the route live across them
+INTERIM_TAGS = frozenset({Tag.ACCEPTED, Tag.STARTED})
 
 
 @dataclass(frozen=True)

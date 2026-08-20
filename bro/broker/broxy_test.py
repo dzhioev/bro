@@ -153,7 +153,7 @@ async def test_call_rides_interim_started_through_the_broxy():
     client = _local_client(harness)
     interims: list[Message] = []
     call_task = asyncio.create_task(
-      asyncio.to_thread(client.call, 'summon', {}, TIMEOUT, on_started=interims.append)
+      asyncio.to_thread(client.call, 'summon', {}, TIMEOUT, on_interim=interims.append)
     )
 
     channel, request = await _next(harness.sink.messages)
@@ -171,6 +171,26 @@ async def test_call_rides_interim_started_through_the_broxy():
     assert terminal.type == 'completed'
     assert [interim.payload for interim in interims] == [{'trail_id': 't1'}]
     client.close()
+
+
+@pytest.mark.asyncio
+async def test_accepted_is_interim_and_leaves_the_conversation_pending():
+  # an accepted delivered and read must not spend the conversation: a manual
+  # summon's client detaches right after it, and the token stays checkable
+  async with running_broxy() as harness:
+    client = _local_client(harness)
+    request = client.send('summon', {'manual': True})
+    channel, seen = await _next(harness.sink.messages)
+    assert seen.id == request.id
+    await harness.transport.send(channel, Message(type='accepted', payload={}, in_reply_to=request.id))  # fmt: skip
+    first = await asyncio.to_thread(client.await_any, request, TIMEOUT)
+    assert first.type == 'accepted'
+    client.close()
+
+    checker = _local_client(harness)
+    reply = await asyncio.to_thread(checker.call, 'check', {'id': request.id}, TIMEOUT)
+    assert reply.payload['state'] == 'pending'
+    checker.close()
 
 
 @pytest.mark.asyncio
@@ -221,7 +241,7 @@ async def test_claim_replays_buffered_messages_in_order():
     claimer = _local_client(harness)
     interims: list[Message] = []
     terminal = await asyncio.to_thread(
-      claimer.call, 'claim', {'id': request.id}, TIMEOUT, on_started=interims.append
+      claimer.call, 'claim', {'id': request.id}, TIMEOUT, on_interim=interims.append
     )
     assert [interim.payload for interim in interims] == [{'trail_id': 't1'}]
     assert terminal.type == 'completed'
@@ -410,7 +430,7 @@ async def test_check_replays_a_buffered_terminal_without_consuming():
       checker = _local_client(harness)
       interims: list[Message] = []
       terminal = await asyncio.to_thread(
-        checker.call, 'check', {'id': request.id}, TIMEOUT, on_started=interims.append
+        checker.call, 'check', {'id': request.id}, TIMEOUT, on_interim=interims.append
       )
       assert [interim.payload for interim in interims] == [{'trail_id': 't1'}]
       assert terminal.type == 'completed'
@@ -538,7 +558,7 @@ async def test_cursor_read_marks_read_and_spends_the_collect():
     reader = _local_client(harness)
     interims: list[Message] = []
     terminal = await asyncio.to_thread(
-      reader.call, 'check', {'id': request.id, 'last_seen': 0}, TIMEOUT, on_started=interims.append
+      reader.call, 'check', {'id': request.id, 'last_seen': 0}, TIMEOUT, on_interim=interims.append
     )
     assert [interim.payload for interim in interims] == [{'trail_id': 't1'}]
     assert terminal.payload == {'result': 'ok', 'end_reason': 'ok'}
@@ -565,7 +585,7 @@ async def test_cursor_read_pending_window_ends_with_a_state_reply():
     reader = _local_client(harness)
     interims: list[Message] = []
     marker = await asyncio.to_thread(
-      reader.call, 'check', {'id': request.id, 'last_seen': 0}, TIMEOUT, on_started=interims.append
+      reader.call, 'check', {'id': request.id, 'last_seen': 0}, TIMEOUT, on_interim=interims.append
     )
     assert [interim.payload for interim in interims] == [{'trail_id': 't1'}]
     assert marker.type == Tag.REPLY
@@ -677,7 +697,7 @@ async def test_mailbox_bound_never_evicts_a_live_wait():
     waiter = _local_client(harness)
     interims: list[Message] = []
     waiter_task = asyncio.create_task(
-      asyncio.to_thread(waiter.call, 'summon', {}, TIMEOUT, on_started=interims.append)
+      asyncio.to_thread(waiter.call, 'summon', {}, TIMEOUT, on_interim=interims.append)
     )
     _, request = await _next(harness.sink.messages)
     await harness.transport.send(
