@@ -241,21 +241,47 @@ def _direct_installation(name: str, text: str) -> str | _LocalDistribution:
   )
 
 
+def _distribution_name(distribution: importlib.metadata.Distribution) -> str:
+  name = distribution.metadata['Name']
+  if not isinstance(name, str) or len(name) == 0:
+    raise RuntimeBundleError('installed distribution has no name')
+  return name
+
+
+def _installed_distributions() -> list[importlib.metadata.Distribution]:
+  """one metadata record per installed distribution.
+
+  Discovery walks every `sys.path` entry, so an editable installation that puts its own source
+  tree on the path also surfaces the `*.egg-info` a setuptools build left there. That legacy
+  record carries `PKG-INFO` where a PEP 376 installation record carries `METADATA`; beside one the
+  installer wrote for the same distribution it is a build artifact of that installation rather
+  than a second one.
+  """
+  records: dict[str, list[importlib.metadata.Distribution]] = {}
+  for distribution in importlib.metadata.distributions():
+    canonical = _canonical_name(_distribution_name(distribution))
+    records.setdefault(canonical, []).append(distribution)
+  installed: list[importlib.metadata.Distribution] = []
+  for candidates in records.values():
+    installation_records = [
+      candidate for candidate in candidates if candidate.read_text('METADATA') is not None
+    ]
+    kept = candidates if len(installation_records) == 0 else installation_records
+    if len(kept) > 1:
+      raise RuntimeBundleError(
+        f'duplicate installed distribution {_distribution_name(kept[0])!r} '
+        f'(also provided as {_distribution_name(kept[1])!r})'
+      )
+    installed.append(kept[0])
+  return installed
+
+
 def _classify_installation() -> tuple[str, list[str], list[_LocalDistribution]]:
   python = f'{sys.version_info.major}.{sys.version_info.minor}'
   pins: list[str] = []
   local: list[_LocalDistribution] = []
-  seen: dict[str, str] = {}
-  for distribution in importlib.metadata.distributions():
-    name = distribution.metadata['Name']
-    if not isinstance(name, str) or len(name) == 0:
-      raise RuntimeBundleError('installed distribution has no name')
-    canonical = _canonical_name(name)
-    if canonical in seen:
-      raise RuntimeBundleError(
-        f'duplicate installed distribution {name!r} (also provided as {seen[canonical]!r})'
-      )
-    seen[canonical] = name
+  for distribution in _installed_distributions():
+    name = _distribution_name(distribution)
     direct_url = distribution.read_text('direct_url.json')
     if direct_url is None:
       version = distribution.version
