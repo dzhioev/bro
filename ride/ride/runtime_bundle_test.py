@@ -139,10 +139,14 @@ def test_materializer_installs_exact_snapshot_checks_closure_and_builds_shims(
       (Path(command[-1]) / 'bin').mkdir(parents=True)
       (Path(command[-1]) / 'bin' / 'python').touch()
       (Path(command[-1]) / 'bin' / 'summon').touch()
+    elif command[0] == 'mkdir':
+      Path(command[1]).mkdir()
+    elif command[0] == 'ln':
+      Path(command[-1]).symlink_to(command[-2])
     return subprocess.CompletedProcess(command, 0, '', '')
 
   monkeypatch.setattr(runtime_bundle, '_run', run)
-  monkeypatch.setattr(runtime_bundle, '_session_commands', lambda _python: ['summon'])
+  monkeypatch.setattr(runtime_bundle, '_session_commands', lambda _python, run=None: ['summon'])
   host = bundle / 'host'
   host.mkdir()
 
@@ -154,6 +158,40 @@ def test_materializer_installs_exact_snapshot_checks_closure_and_builds_shims(
   assert str(wheel) in commands[1]
   assert commands[2][:3] == ['uv', 'pip', 'check']
   assert (host / 'bin' / 'summon').resolve() == host / 'venv' / 'bin' / 'summon'
+
+
+def test_container_materialization_populates_a_named_volume_once(monkeypatch, tmp_path):
+  root = tmp_path / ('a' * 64)
+  (root / 'wheels').mkdir(parents=True)
+  bundle = runtime_bundle.RuntimeBundle(root, '3.12')
+  calls: list[list[str]] = []
+  materialized: list[tuple] = []
+
+  def run(command, *args, **kwargs):
+    del args, kwargs
+    calls.append(command)
+    if command[:2] == ['docker', 'create']:
+      return subprocess.CompletedProcess(command, 0, 'container-id\n', '')
+    if command[:5] == ['docker', 'exec', 'container-id', 'test', '-f']:
+      return subprocess.CompletedProcess(command, 1, '', '')
+    return subprocess.CompletedProcess(command, 0, '', '')
+
+  monkeypatch.setattr(runtime_bundle.subprocess, 'run', run)
+  monkeypatch.setattr(
+    runtime_bundle,
+    '_materialize',
+    lambda *args, **kwargs: materialized.append((args, kwargs)),
+  )
+
+  bundle.materialize_container('runtime-image')
+
+  assert calls[0][:3] == ['docker', 'volume', 'create']
+  create = next(command for command in calls if command[:2] == ['docker', 'create'])
+  assert f'{bundle.container_volume}:/var/ride/runtime' in create
+  assert f'{root}:/bundle:ro' in create
+  assert materialized[0][0] == (Path('/bundle'), Path('/var/ride/runtime'), '/usr/local/bin/python')
+  assert any(command[-2:] == ['touch', '/var/ride/runtime/.complete'] for command in calls)
+  assert calls[-1] == ['docker', 'rm', '-f', 'container-id']
 
 
 def test_session_command_declaration_must_match_the_distributions_console_script(
@@ -182,17 +220,15 @@ def test_host_session_environment_scrubs_launcher_activation(monkeypatch, tmp_pa
   root = tmp_path / 'bundle'
   bundle = runtime_bundle.RuntimeBundle(root, '3.12')
   launcher = tmp_path / 'launcher'
-  workspace = tmp_path / 'workspace'
   monkeypatch.setenv('VIRTUAL_ENV', str(launcher))
   monkeypatch.setenv('PATH', os.pathsep.join([str(launcher / 'bin'), '/usr/local/bin', '/usr/bin']))
   monkeypatch.setenv('PYTHONHOME', '/python')
 
-  env = bundle.host_session_env(workspace)
+  env = bundle.host_session_env()
 
-  assert env['VIRTUAL_ENV'] == str(workspace)
+  assert 'VIRTUAL_ENV' not in env
   assert env['PATH'].split(os.pathsep) == [
     str(bundle.host_bin),
-    str(workspace / 'bin'),
     '/usr/local/bin',
     '/usr/bin',
   ]
@@ -211,6 +247,7 @@ def test_resolver_holds_the_bundle_lock(monkeypatch, tmp_path):
 
 def test_clean_removes_unlocked_bundles_and_keeps_locked_ones(monkeypatch, tmp_path):
   monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
+  monkeypatch.setattr(runtime_bundle, '_remove_container_volume', lambda *_a, **_k: True)
   runtime = tmp_path / 'runtime'
   unlocked = runtime / ('a' * 64)
   locked = runtime / ('b' * 64)
@@ -223,6 +260,16 @@ def test_clean_removes_unlocked_bundles_and_keeps_locked_ones(monkeypatch, tmp_p
 
   assert not unlocked.exists()
   assert locked.exists()
+
+
+def test_clean_keeps_a_bundle_when_its_runtime_volume_is_in_use(monkeypatch, tmp_path):
+  monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
+  monkeypatch.setattr(runtime_bundle, '_remove_container_volume', lambda *_a, **_k: False)
+  root = tmp_path / 'runtime' / ('a' * 64)
+  root.mkdir(parents=True)
+
+  assert runtime_bundle.clean_runtime_bundles() == (0, 1)
+  assert root.is_dir()
 
 
 def test_installed_distributions_publish_the_session_command_roster():

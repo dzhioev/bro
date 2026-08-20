@@ -4,7 +4,7 @@ cd "$DIR"
 
 # RIDE_VENV_MANIFEST names a directory holding, at their repository-relative paths,
 # the dependency manifests that the venv already linked into this tree was
-# resolved from (the ride container entrypoint links the image's baked venv in and
+# resolved from (the ride container entrypoint links the project dependency bake and
 # exports it). The link outlives the match — a rebase across a dependency bump
 # moves this tree's copies — so the comparison runs on every invocation.
 manifests_match() {

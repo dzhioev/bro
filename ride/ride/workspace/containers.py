@@ -15,13 +15,7 @@ from ride.workspace.model import Workspace
 
 
 def exec_in_workspace(name: str, command: list[str]) -> int:
-  """exec a command in the running container backing the named workspace.
-
-  With no command, starts an interactive bash. Either way, `/workspace/.venv` is
-  sourced first so the workspace's console scripts (created by `uv sync`) are on
-  PATH; the prompt's `(.venv)` prefix is dropped after `.bashrc` re-runs, but
-  VIRTUAL_ENV and PATH survive.
-  """
+  """exec a command in the running container backing the named workspace."""
   project = project_root()
   try:
     workspace = Workspace.open(name, project)
@@ -37,16 +31,7 @@ def exec_in_workspace(name: str, command: list[str]) -> int:
   if container_id is None:
     log.error('no running container for workspace %r', name)
     return 1
-  if len(command) == 0:
-    docker_command = ['bash', '-c', 'source /workspace/.venv/bin/activate 2>/dev/null; exec bash']
-  else:
-    docker_command = [
-      'bash',
-      '-c',
-      'source /workspace/.venv/bin/activate 2>/dev/null; exec "$@"',
-      'ride-exec',
-      *command,
-    ]
+  docker_command = ['bash'] if len(command) == 0 else command
   # run as ride, not the image's default root: docker exec ignores the entrypoint's
   # gosu drop, so without -u every exec'd command runs as root and writes
   # root-owned files into the bind-mounted /workspace that the host user can't

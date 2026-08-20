@@ -1,5 +1,5 @@
 #!/usr/bin/env -S bash -e
 # append the token-accounting footer to the proposed commit message; a no-op
 # without an agent usage source in the environment. the hook is installed by
-# bro provisioning, and commits run with the project venv active.
+# bro provisioning and resolves commit-footer from the session's pinned PATH.
 exec commit-footer --append "$1"

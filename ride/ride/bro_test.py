@@ -10,6 +10,7 @@ from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_session_dir
 from bro.workspace.paths import CONTAINER_SESSION_DIR
 from ride.runtime_bundle import RuntimeBundle
 from ride.session import ScopedLaunch, SessionSpec
+from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
@@ -43,6 +44,10 @@ def _spec(**overrides) -> SessionSpec:
 
 def _runtime_bundle(tmp_path: Path) -> RuntimeBundle:
   return RuntimeBundle(tmp_path / 'runtime-bundle', '3.12')
+
+
+def _container_runtime() -> ContainerRuntimeResolver:
+  return ContainerRuntimeResolver.fixed(ContainerRuntime('runtime-image', 'bundle-hash'))
 
 
 def _scope(**overrides) -> ScopedLaunch:
@@ -140,6 +145,7 @@ class TestContainerSession:
         _scope(),
         container=True,
         runtime_bundle=_runtime_bundle(tmp_path),
+        container_runtime=_container_runtime(),
       )
       == 7
     )
@@ -175,6 +181,7 @@ class TestContainerSession:
         _scope(),
         container=True,
         runtime_bundle=_runtime_bundle(tmp_path),
+        container_runtime=_container_runtime(),
       )
       == 0
     )
@@ -194,6 +201,7 @@ class TestContainerSession:
         _scope(),
         container=True,
         runtime_bundle=_runtime_bundle(tmp_path),
+        container_runtime=_container_runtime(),
       )
       == 1
     )
@@ -213,6 +221,7 @@ class TestContainerSession:
         _scope(),
         container=True,
         runtime_bundle=_runtime_bundle(tmp_path),
+        container_runtime=_container_runtime(),
       )
       == 0
     )
@@ -231,6 +240,7 @@ class TestContainerSession:
         _scope(),
         container=True,
         runtime_bundle=_runtime_bundle(tmp_path),
+        container_runtime=_container_runtime(),
       )
       == 1
     )
@@ -272,6 +282,7 @@ class TestHostSession:
         _scope(),
         container=False,
         runtime_bundle=runtime_bundle,
+        container_runtime=_container_runtime(),
       )
       == 3
     )
@@ -300,6 +311,7 @@ class TestHostSession:
         _scope(),
         container=False,
         runtime_bundle=runtime_bundle,
+        container_runtime=_container_runtime(),
       )
       == 0
     )

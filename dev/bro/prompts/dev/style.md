@@ -30,4 +30,6 @@
 
 - Diagnose before you patch. State the upstream cause of a failure before reaching for a workaround — a patch you can't trace to a root cause is a guess, and a workaround over one you do understand is debt to flag, not hide.
 
+- In a managed ride session, treat bare commands as pinned session commands, not repository commands. Run repository tools through `uv run <command>` or an explicit `.venv/bin/<command>` path; do not activate the workspace venv over the session `PATH`.
+
 - Run tests, type checkers, and formatters before declaring work done — if the repo has them.

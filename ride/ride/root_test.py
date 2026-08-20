@@ -50,6 +50,8 @@ class TestRunInContainerInjection:
       docker_sock=True,
       tty=True,
       forward_env=True,
+      image='runtime-image',
+      runtime_bundle_hash='bundle-hash',
     )
     assert ride.root.run_in_container(launch, _workspace(tmp_path)) == 7
     assert prepared == [(launch, tmp_path / 'project')]
@@ -75,6 +77,8 @@ class TestRunInContainerInjection:
       docker_sock=False,
       tty=False,
       forward_env=False,
+      image='runtime-image',
+      runtime_bundle_hash='bundle-hash',
     )
     assert ride.root.run_in_container(launch, _workspace(tmp_path)) == 0
     # no pty, so no Ctrl+Z to intercept — and a zero exit must not probe the container
@@ -100,6 +104,8 @@ class TestRunInContainerBrokerRoute:
       docker_sock=False,
       tty=True,
       forward_env=True,
+      image='runtime-image',
+      runtime_bundle_hash='bundle-hash',
     )
     code = ride.root.run_in_container(launch, _workspace(tmp_path), may_summon={'dev'})
     assert code == 5
@@ -114,7 +120,7 @@ class TestRunRootViaBroker:
   def test_builds_the_attached_launch_and_delegates(self, monkeypatch, tmp_path):
     captured: dict = {}
 
-    def fake_run_root(launch, *, workspace, may_summon, credential_scope):
+    def fake_run_root(launch, *, workspace, may_summon, credential_scope, container_runtime):
       captured['launch'] = launch
       captured['workspace'] = workspace
       captured['may_summon'] = may_summon
@@ -131,6 +137,8 @@ class TestRunRootViaBroker:
       docker_sock=True,
       tty=True,
       forward_env=True,
+      image='runtime-image',
+      runtime_bundle_hash='bundle-hash',
     )
     workspace = Workspace.create('ws', tmp_path / 'project', WorkspaceKind.CONTAINER)
     code = ride.root._run_root_via_broker(launch, workspace, may_summon={'dev'})
@@ -151,6 +159,8 @@ class TestRunRootViaBroker:
         docker_sock=True,
         tty=True,
         forward_env=True,
+        image='runtime-image',
+        runtime_bundle_hash='bundle-hash',
         extra_mounts=(f'{summon_dir(tmp_path / "project")}:{CONTAINER_SUMMON_ROOT}:ro',),
       ),
       capture_output=False,

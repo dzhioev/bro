@@ -40,10 +40,9 @@ switch of its own. `record_session_spend()` promotes that remainder to the
 baseline once the footers are published, so it is credited exactly once.
 
 State lives in a gitignored `<repo>/.token_accounting_state.json`; git history
-carries only the durable per-class deltas / agents. Runs through bro.base.args, so
-it needs the project venv active (the editable install puts `base` and `usage` on
-the path even when invoked by file path); the hooks surface a failure rather than
-swallowing it, so committing without the venv is caught.
+carries only the durable per-class deltas / agents. The installed hooks resolve
+this command from PATH — the pinned runtime in a managed session — and surface a
+failure rather than swallowing it.
 """
 
 from __future__ import annotations

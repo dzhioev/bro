@@ -1,15 +1,10 @@
 """live check of the container launch path: a cold image tag must build, and the
 container prepared from it must reach running state.
 
-Drives the real host docker daemon through the production entry points —
-`image_tag` → `_ensure_image` → `prepare_container` → `docker start`. Two
-properties the run depends on:
-
-- the image is tagged into a repository of this test's own, because
-  `_ensure_image` untags every superseded image of the repository it builds
-  into, and a real session's images must stay out of that reach;
-- the tag is removed before the launch, so the build branch is the only one
-  `_ensure_image` can take.
+Drives the real host docker daemon through the production entry points: runtime
+bundle resolution, runtime/project image builds, volume materialization,
+`prepare_container`, and `docker start`. The images use repositories owned by the
+test and both tags are removed before resolution, forcing the cold-build path.
 """
 
 import contextlib
@@ -25,6 +20,7 @@ import pytest
 
 import bro.workspace.project as workspace_project
 import ride.workspace.docker as workspace_docker
+from ride.runtime_bundle import resolve_runtime_bundle
 from ride.workspace.docker import Launch
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
@@ -191,35 +187,41 @@ def launched(isolated: Isolated) -> Iterator[Launched]:
     monkeypatch.setattr(workspace_docker.Path, 'home', lambda: isolated.home)
     config = replace(workspace_project.project_config(), image_repository=_IMAGE_REPOSITORY)
     monkeypatch.setattr(workspace_docker, 'project_config', lambda: config)
-    tag = workspace_docker.image_tag()
-    with _cold_image(tag):
-      image_before = _image_present(tag)
-      launch = Launch(
-        name=_WORKSPACE_NAME,
-        command=_SESSION_COMMAND,
-        # skips the entrypoint's venv-dependent half, which costs a full `uv sync`
-        # whenever the clone's committed manifests differ from the ones the image
-        # baked — an uncommitted manifest edit would otherwise stall the gate
-        env={'RIDE_SKIP_VENV': '1'},
-        secrets=(),
-        docker_sock=False,
-        tty=False,
-        forward_env=False,
-      )
-      recorded = Workspace.create(_WORKSPACE_NAME, isolated.project, WorkspaceKind.CONTAINER)
-      container_id = workspace_docker.prepare_container(launch, isolated.project)
-      running, output = _start_and_observe(container_id, recorded.tree)
-      yield Launched(
-        tag=tag,
-        image_before=image_before,
-        image_after=_image_present(tag),
-        running=running,
-        workspace=recorded.tree,
-        output=output,
-      )
+    monkeypatch.setattr(workspace_docker, '_RUNTIME_IMAGE_REPOSITORY', 'bro/launch-smoke-runtime')
+    with resolve_runtime_bundle() as bundle:
+      runtime_tag = workspace_docker.runtime_image_tag(bundle.python_version)
+      project_tag = workspace_docker.project_image_tag(runtime_tag, checkout)
+      assert project_tag is not None
+      with contextlib.ExitStack() as stack:
+        stack.enter_context(_cold_image(runtime_tag))
+        stack.enter_context(_cold_image(project_tag))
+        image_before = _image_present(project_tag)
+        runtime = workspace_docker.ContainerRuntimeResolver(bundle).resolve()
+        launch = Launch(
+          name=_WORKSPACE_NAME,
+          command=_SESSION_COMMAND,
+          env={},
+          secrets=(),
+          docker_sock=False,
+          tty=False,
+          forward_env=False,
+          image=runtime.image,
+          runtime_bundle_hash=runtime.bundle_hash,
+        )
+        recorded = Workspace.create(_WORKSPACE_NAME, isolated.project, WorkspaceKind.CONTAINER)
+        container_id = workspace_docker.prepare_container(launch, isolated.project)
+        running, output = _start_and_observe(container_id, recorded.tree)
+        yield Launched(
+          tag=project_tag,
+          image_before=image_before,
+          image_after=_image_present(project_tag),
+          running=running,
+          workspace=recorded.tree,
+          output=output,
+        )
 
 
-def test_ensure_image_builds_the_cold_tag(launched: Launched) -> None:
+def test_cold_project_image_is_built(launched: Launched) -> None:
   assert launched.image_before is False, f'{launched.tag} survived removal, so nothing was built'
   assert launched.image_after is True
 
