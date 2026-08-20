@@ -12,6 +12,7 @@ Kept apart from the launcher modules so a surface that only registers the flags
 roster is likewise imported at call time, not at load.
 """
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from bro.base import host_config
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 
 # the flags `--llm` speaks for, and so cannot be combined with.
 _PIECE_FLAGS = ('provider', 'model', 'effort', 'fast')
+_CURRENT_PROJECT = object()
 
 PROVIDER_HELP = 'the provider that answers; selects its default model unless --model names one'
 MODEL_HELP = (
@@ -64,13 +66,21 @@ def add_llm_flags(parser: Parser, *, effort_help: str, fast_help: str) -> None:
   parser.add_exclusive_groups(['llm'], list(_PIECE_FLAGS))
 
 
-def presets() -> dict[str, str]:
-  """the `--llm` preset names in scope: the operated project's `[tool.bro.llm]`
-  table, with the host's own `llm` table overriding it per name. Outside any
-  project only the host's names are in scope."""
-  from bro.workspace.project import project_sections
+def presets(project: object = _CURRENT_PROJECT) -> dict[str, str]:
+  """the project and host `--llm` presets for an explicit attachment.
 
-  merged = dict(project_sections().get('llm', {}))
+  An omitted attachment preserves the cwd-aware behavior of non-ride launchers;
+  explicit `None` is detached and reads host presets only.
+  """
+  from bro.workspace.project import project_sections, project_sections_at
+
+  if project is _CURRENT_PROJECT:
+    sections = project_sections()
+  else:
+    if project is not None and not isinstance(project, Path):
+      raise TypeError(f'project must be a Path or None, not {type(project).__name__}')
+    sections = project_sections_at(project)
+  merged = dict(sections.get('llm', {}))
   for name, value in merged.items():
     if not isinstance(value, str) or value == '':
       raise ValueError(f'[tool.bro.llm] preset {name!r} must be a non-empty string')
@@ -78,7 +88,7 @@ def presets() -> dict[str, str]:
   return merged
 
 
-def selection_from_args(args: dict) -> 'LLMSelection':
+def selection_from_args(args: dict, *, project: object = _CURRENT_PROJECT) -> 'LLMSelection':
   """the LLM selection `args` spells, with a preset name expanded to its value.
 
   A value that already spells a recipe is read as one and the preset table is
@@ -100,7 +110,7 @@ def selection_from_args(args: dict) -> 'LLMSelection':
   try:
     return parse(value)
   except LLMSelectionError:
-    expanded = presets().get(value)
+    expanded = presets(project).get(value)
     if expanded is None:
       raise
   try:

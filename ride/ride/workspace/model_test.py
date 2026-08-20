@@ -6,7 +6,13 @@ import pytest
 
 from ride.workspace import model
 from ride.workspace.metadata import WorkspaceKind
-from ride.workspace.model import ContainerWorkspace, KindMismatch, Workspace, WorktreeWorkspace
+from ride.workspace.model import (
+  AttachmentMismatch,
+  ContainerWorkspace,
+  KindMismatch,
+  Workspace,
+  WorktreeWorkspace,
+)
 
 
 class _FakeProc:
@@ -26,12 +32,12 @@ def _container(name: str, project) -> Workspace:
 
 class TestCleanupImage:
   def test_prefers_current_tag_when_present(self, monkeypatch):
-    monkeypatch.setattr(model, 'image_tag', lambda: 'example/session:cur')
+    monkeypatch.setattr(model, 'runtime_image_tag', lambda: 'example/session:cur')
     monkeypatch.setattr(model.subprocess, 'run', lambda *a, **k: _FakeProc(returncode=0))
-    assert model._cleanup_image() == 'example/session:cur'
+    assert model._cleanup_image(None) == 'example/session:cur'
 
   def test_falls_back_to_an_image_from_the_same_repository(self, monkeypatch):
-    monkeypatch.setattr(model, 'image_tag', lambda: 'example/session:cur')
+    monkeypatch.setattr(model, 'runtime_image_tag', lambda: 'example/session:cur')
 
     def fake_run(argv, *a, **k):
       if argv[1] == 'image':  # docker image inspect -> miss
@@ -39,10 +45,10 @@ class TestCleanupImage:
       return _FakeProc(returncode=0, stdout='example/session:<none>\nexample/session:abc123\n')
 
     monkeypatch.setattr(model.subprocess, 'run', fake_run)
-    assert model._cleanup_image() == 'example/session:abc123'
+    assert model._cleanup_image(None) == 'example/session:abc123'
 
   def test_none_when_no_image(self, monkeypatch):
-    monkeypatch.setattr(model, 'image_tag', lambda: 'example/session:cur')
+    monkeypatch.setattr(model, 'runtime_image_tag', lambda: 'example/session:cur')
 
     def fake_run(argv, *a, **k):
       if argv[1] == 'image':
@@ -50,7 +56,7 @@ class TestCleanupImage:
       return _FakeProc(returncode=0, stdout='')
 
     monkeypatch.setattr(model.subprocess, 'run', fake_run)
-    assert model._cleanup_image() is None
+    assert model._cleanup_image(None) is None
 
 
 class TestRemoveContainerDir:
@@ -126,7 +132,7 @@ class TestRemoveContainerDir:
 
 class TestContainerWorkspaceRemove:
   def test_removes_the_whole_workspace_dir_with_the_cleanup_image(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(model, '_cleanup_image', lambda: 'example/session:img')
+    monkeypatch.setattr(model, '_cleanup_image', lambda _repo: 'example/session:img')
     removed = {}
     monkeypatch.setattr(
       model,
@@ -233,7 +239,7 @@ class TestSessionLock:
     workspace = _worktree('feat', tmp_path)
     with workspace.hold_session_lock():
       with pytest.raises(model.SessionBusy, match=f'feat.*pid {os.getpid()}'):
-        with Workspace.open('feat', tmp_path).hold_session_lock():
+        with Workspace.open('feat').hold_session_lock():
           pass
 
   def test_the_lock_dies_with_its_holder(self, tmp_path):
@@ -266,20 +272,51 @@ class TestSessionLock:
     assert workspace.is_active(set()) is False
 
 
+class TestDetachedWorkspace:
+  def test_metadata_omits_repo_and_branch(self):
+    workspace = Workspace.create('detached', None, WorkspaceKind.CONTAINER)
+    assert workspace.metadata.dump() == {'kind': 'container', 'throwaway': False}
+    assert workspace.repo is None
+    assert workspace.metadata.branch is None
+
+  def test_clean_means_the_tree_is_empty(self):
+    workspace = Workspace.create('detached', None, WorkspaceKind.WORKTREE)
+    assert workspace.is_clean() == (True, [])
+    workspace.tree.mkdir()
+    (workspace.tree / 'result').write_text('x')
+    assert workspace.is_clean() == (False, ['detached workspace tree is not empty'])
+
+  def test_existing_workspace_refuses_a_different_attachment(self, tmp_path):
+    Workspace.create('ws', tmp_path, WorkspaceKind.CONTAINER)
+    with pytest.raises(AttachmentMismatch, match='not no repository'):
+      Workspace.ensure('ws', None, WorkspaceKind.CONTAINER)
+
+  def test_missing_attachment_requires_force_to_remove(self, monkeypatch, tmp_path):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    workspace = Workspace.create('ws', repo, WorkspaceKind.CONTAINER)
+    repo.rmdir()
+    monkeypatch.setattr(model, '_cleanup_image', lambda _repo: None)
+    with pytest.raises(RuntimeError, match='no longer exists.*--force'):
+      workspace.remove()
+    workspace.remove(force=True)
+    assert not workspace.path.exists()
+
+
 class TestKindsAndEnumeration:
   def test_open_reads_the_recorded_kind(self, tmp_path):
     _worktree('h', tmp_path)
     _container('c', tmp_path)
-    assert isinstance(Workspace.open('h', tmp_path), WorktreeWorkspace)
-    assert isinstance(Workspace.open('c', tmp_path), ContainerWorkspace)
+    assert isinstance(Workspace.open('h'), WorktreeWorkspace)
+    assert isinstance(Workspace.open('c'), ContainerWorkspace)
 
   def test_open_raises_for_an_unknown_name(self, tmp_path):
     with pytest.raises(ValueError, match='^workspace not found: gone$'):
-      Workspace.open('gone', tmp_path)
+      Workspace.open('gone')
 
   def test_create_records_kind_branch_and_throwaway(self, tmp_path):
     workspace = Workspace.create('ws', tmp_path, WorkspaceKind.CONTAINER, throwaway=True)
-    reopened = Workspace.open('ws', tmp_path)
+    reopened = Workspace.open('ws')
     assert reopened.metadata == workspace.metadata
     assert reopened.metadata.kind is WorkspaceKind.CONTAINER
     assert reopened.metadata.branch == 'worktree-ws'
@@ -298,7 +335,7 @@ class TestKindsAndEnumeration:
     _worktree('h1', tmp_path)
     _worktree('h2', tmp_path)
     _container('c1', tmp_path)
-    listed = {workspace.name: workspace.kind for workspace in Workspace.all(tmp_path)}
+    listed = {workspace.name: workspace.kind for workspace in Workspace.all()}
     assert listed == {
       'h1': WorkspaceKind.WORKTREE,
       'h2': WorkspaceKind.WORKTREE,

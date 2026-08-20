@@ -44,20 +44,20 @@ class PendingSummon:
   into: Optional[str] = None  # unresolved ref overriding the parent-HEAD base
 
 
-def _path(project: Path, token: str) -> Path:
-  return summon_dir(project) / 'pending' / f'{token}.json'
+def _path(token: str) -> Path:
+  return summon_dir() / 'pending' / f'{token}.json'
 
 
-def write(project: Path, pending: PendingSummon) -> None:
-  path = _path(project, pending.token)
+def write(pending: PendingSummon) -> None:
+  path = _path(pending.token)
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(json.dumps(asdict(pending), ensure_ascii=False, indent=2))
 
 
-def peek(project: Path, token: str) -> PendingSummon:
+def peek(token: str) -> PendingSummon:
   """read the token's record without claiming it. Raises `UnknownToken`."""
   try:
-    data = json.loads(_path(project, token).read_text())
+    data = json.loads(_path(token).read_text())
   except FileNotFoundError:
     raise UnknownToken(
       f'no pending manual summon for token {token!r}: never registered, '
@@ -76,12 +76,12 @@ def peek(project: Path, token: str) -> PendingSummon:
   return loaded
 
 
-def claim(project: Path, token: str) -> PendingSummon:
+def claim(token: str) -> PendingSummon:
   """read and consume the token's record — the unlink decides a race, so exactly
   one caller gets it. Raises `UnknownToken` when there is nothing to claim."""
-  pending = peek(project, token)
+  pending = peek(token)
   try:
-    _path(project, token).unlink()
+    _path(token).unlink()
   except FileNotFoundError:
     raise UnknownToken(
       f'pending manual summon {token!r} was just claimed by another launch'
@@ -89,7 +89,7 @@ def claim(project: Path, token: str) -> PendingSummon:
   return pending
 
 
-def discard(project: Path, token: str) -> None:
+def discard(token: str) -> None:
   """drop the token's record if it still exists — the host's cleanup when a
   manual summon ends unclaimed."""
-  _path(project, token).unlink(missing_ok=True)
+  _path(token).unlink(missing_ok=True)

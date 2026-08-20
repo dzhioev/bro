@@ -48,6 +48,7 @@ class SessionFacts:
   The fields are the documentation — what each renderer may show:
     - in_container — /.dockerenv presence
     - name — workspace name (RIDE_WORKSPACE)
+    - repo — resolved repository attachment (RIDE_REPO), or None when detached
     - bro — the bro the session runs as (RIDE_BRO)
     - host_workspace — host-side path to the workspace dir
     - container_workspace — '/workspace' in a managed container session, else None
@@ -81,6 +82,7 @@ class SessionFacts:
   recording_problem: Optional[str]
   may_summon: Optional[tuple[str, ...]]
   trail_id: Optional[str]
+  repo: Optional[str] = None
 
   @classmethod
   def collect(
@@ -96,20 +98,12 @@ class SessionFacts:
     """
     in_container = paths.in_container()
     name = os.environ.get('RIDE_WORKSPACE') or None
+    repo = os.environ.get('RIDE_REPO') or None
     bro = bro_override if bro_override is not None else (os.environ.get('RIDE_BRO') or None)
     ride_command = os.environ.get('RIDE_COMMAND') or None
     shell_command = os.environ.get('BRO_SHELL_COMMAND') or ride_command
     host_workspace: Optional[str] = os.environ.get('RIDE_HOST_WORKSPACE') or None
     container_workspace: Optional[str] = '/workspace' if in_container and name is not None else None
-
-    if not in_container and host_workspace is None and name is not None:
-      # host worktree case — derive path from the project root + worktree name
-      try:
-        candidate = paths.workspace_tree(paths.project_root(), name)
-      except paths.RuntimeLocationError:
-        candidate = None
-      if candidate is not None and candidate.is_dir():
-        host_workspace = str(candidate)
 
     exec_command = f'ride exec {name}' if in_container and name is not None else None
 
@@ -125,6 +119,7 @@ class SessionFacts:
     return cls(
       in_container=in_container,
       name=name,
+      repo=repo,
       bro=bro,
       host_workspace=host_workspace,
       container_workspace=container_workspace,
@@ -167,6 +162,13 @@ class SessionFacts:
     # the padded label so width math runs on the raw text, not on ANSI bytes
     rows: list[tuple[str, str, str]] = [
       ('ride session:', '', f'{bold}{self.display_name}{reset}'),
+      (
+        'repository:',
+        '',
+        f'{dim}(no repository attached){reset}'
+        if self.repo is None
+        else f'{dim}{self.repo}{reset}',
+      ),
     ]
 
     # `ride command` is the canonical `ride solo|along …` invocation; suppress when it's
@@ -231,6 +233,7 @@ class SessionFacts:
       # needing expansion; the agent should relay it to the user
       lines.append(f'session_recording: {self.recording_problem}')
     lines.append(f'kind: {"container" if self.in_container else "worktree"}')
+    lines.append(f'repo: {self.repo if self.repo is not None else "none (detached)"}')
     pairs: list[tuple[str, str]] = [
       ('name', 'name'),
       ('bro', 'bro'),

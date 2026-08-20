@@ -12,7 +12,7 @@ from ride.workspace.model import Workspace
 
 
 def _exit_record(tmp_path) -> str:
-  return (workspace_dir(tmp_path / 'project', 'ws') / 'exit').read_text()
+  return (workspace_dir('ws') / 'exit').read_text()
 
 
 def _workspace(tmp_path) -> Workspace:
@@ -33,7 +33,7 @@ class TestRunInContainerInjection:
     monkeypatch.setattr(
       ride.root,
       'prepare_container',
-      lambda launch, project: prepared.append((launch, project)) or 'cid123',
+      lambda launch: prepared.append(launch) or 'cid123',
     )
     calls: list[list[str]] = []
 
@@ -54,14 +54,14 @@ class TestRunInContainerInjection:
       runtime_bundle_hash='bundle-hash',
     )
     assert ride.root.run_in_container(launch, _workspace(tmp_path)) == 7
-    assert prepared == [(launch, tmp_path / 'project')]
+    assert prepared == [launch]
     assert calls == [['docker', 'start', '-a', '-i', '--detach-keys=ctrl-z', 'cid123']]
     # the run's end is recorded on the workspace for `ride clean`
     assert _exit_record(tmp_path) == '7'
 
   def test_non_tty_launch_attaches_without_detach_keys(self, monkeypatch, tmp_path):
     monkeypatch.setenv('BROKER_DISABLED', '1')
-    monkeypatch.setattr(ride.root, 'prepare_container', lambda launch, project: 'cid123')
+    monkeypatch.setattr(ride.root, 'prepare_container', lambda launch: 'cid123')
     calls: list[list[str]] = []
 
     def fake_run(argv, *args, **kwargs):
@@ -161,7 +161,7 @@ class TestRunRootViaBroker:
         forward_env=True,
         image='runtime-image',
         runtime_bundle_hash='bundle-hash',
-        extra_mounts=(f'{summon_dir(tmp_path / "project")}:{CONTAINER_SUMMON_ROOT}:ro',),
+        extra_mounts=(f'{summon_dir()}:{CONTAINER_SUMMON_ROOT}:ro',),
       ),
       capture_output=False,
     )

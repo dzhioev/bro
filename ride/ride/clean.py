@@ -1,7 +1,6 @@
 from typing import Optional
 
 from bro.base import log
-from bro.workspace.paths import project_root
 from ride.runtime_bundle import clean_runtime_bundles
 from ride.workspace.docker import running_mounts
 from ride.workspace.metadata import WorkspaceKind
@@ -11,8 +10,7 @@ from ride.workspace.model import Workspace
 def clean_workspaces(
   force: bool = False, dry_run: bool = False, names: Optional[list[str]] = None
 ) -> int:
-  project = project_root()
-  workspaces = Workspace.all(project)
+  workspaces = Workspace.all()
 
   selected = set(names) if names is not None and len(names) > 0 else None
   if selected is not None:
@@ -46,7 +44,7 @@ def clean_workspaces(
       log.info('would remove %s', workspace.name)
     else:
       try:
-        workspace.remove()
+        workspace.remove(force=force)
       except (RuntimeError, OSError) as error:
         log.error('skip %s: %s', workspace.name, error)
         failed += 1

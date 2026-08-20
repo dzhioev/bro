@@ -17,7 +17,6 @@ def _run(
   options=None,
 ):
   with (
-    patch('ride.scope_report.project_root', return_value=Path('/repo')),
     patch(
       'ride.scope_report.project_config',
       return_value=ProjectConfig(default_bro='bro-dev', image_repository='bro/bro-dev'),
@@ -27,7 +26,10 @@ def _run(
     patch('ride.scope_report.credentials.available', available),
   ):
     rc = report_scope(
-      bro=bro, harness=harness, options=options if options is not None else {'raw': False}
+      repo=Path('/repo'),
+      bro=bro,
+      harness=harness,
+      options=options if options is not None else {'raw': False},
     )
   return rc, capsys.readouterr().out, scope
 
@@ -40,8 +42,8 @@ class TestReportScope:
       scoped=ScopedSecrets({'brog', 'github'}, {'openai'}, True),
     )
     assert rc == 0
-    assert 'project: /repo' in out
-    assert 'bro:     bro-dev (claude-full)' in out
+    assert 'repository: /repo' in out
+    assert 'bro:        bro-dev (claude-full)' in out
     assert 'brog+github (project)' in out
     # a kind the project doesn't select reads whatever the host registry binds
     assert 'github' in out
@@ -69,7 +71,7 @@ class TestReportScope:
       bro='dev',
       options={'raw': True},
     )
-    assert 'bro:     dev (claude-raw)' in out
+    assert 'bro:        dev (claude-raw)' in out
     assert scope.call_args.args[0] == 'dev'
 
   def test_bro_harness_uses_the_native_scope_recipe(self, capsys):
@@ -80,5 +82,5 @@ class TestReportScope:
       harness='bro',
       options={},
     )
-    assert 'bro:     bro-dev (bro-run)' in out
+    assert 'bro:        bro-dev (bro-run)' in out
     assert scope.call_args.args[1].name == 'bro-run'

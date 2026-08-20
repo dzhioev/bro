@@ -3,6 +3,7 @@ import os
 import re
 import shlex
 from datetime import UTC
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -43,10 +44,12 @@ def _brog_task(name: str = 'my task'):
 @pytest.fixture
 def fake_proj(monkeypatch, tmp_path):
   monkeypatch.setattr(workspace_paths, 'project_root', lambda: tmp_path)
-  monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda: FRESH_SHA)
-  workspaces = workspace_paths.workspaces_dir(tmp_path)
+  monkeypatch.setattr(dive_in, 'project_root', lambda: tmp_path)
+  (tmp_path / 'pyproject.toml').write_text('[tool.bro]\ndefault = "bro-dev"\n')
+  monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda _repo: FRESH_SHA)
+  workspaces = workspace_paths.workspaces_dir()
   workspaces.mkdir(parents=True)
-  return workspaces
+  return tmp_path
 
 
 class TestLaunchCommand:
@@ -70,6 +73,7 @@ class TestLaunchCommand:
     # Parser.parse strips argv[0] as the program name, matching the console-script bridge.
     args, harness_arguments = _parse_emitted(tokens)
     assert args['cmd'] == 'along'
+    assert args['repo'] == str(fake_proj)
     assert len(args['workspace']) > 0
     assert harness_arguments == []  # nothing leaked into the forwarded REMAINDER
 
@@ -144,14 +148,14 @@ class TestBaseRef:
     assert args['into'] == FRESH_SHA
 
   def test_explicit_into_skips_the_fetch(self, fake_proj, capsys, monkeypatch):
-    monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda: pytest.fail('must not fetch'))
+    monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda _repo: pytest.fail('must not fetch'))
     rc = dive_in.main(['dive-in', '-n', '--into', 'feature'])
     assert rc == 0
     args, harness_arguments = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
     assert args['into'] == 'feature'
 
   def test_unreachable_origin_falls_back_to_the_host_head(self, fake_proj, capsys, monkeypatch):
-    monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda: None)
+    monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda _repo: None)
     rc = dive_in.main(['dive-in', '-n'])
     assert rc == 0
     args, harness_arguments = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
@@ -190,7 +194,7 @@ class TestTaskMode:
   @pytest.fixture(autouse=True)
   def fake_backend(self, monkeypatch):
     monkeypatch.setattr(
-      dive_in, '_task_system', lambda grant, revoke, bro, harness, harness_options: object()
+      dive_in, '_task_system', lambda repo, grant, revoke, bro, harness, harness_options: object()
     )
 
   def test_every_launch_picks_a_fresh_workspace_name(self, fake_proj, monkeypatch, capsys):
@@ -242,7 +246,7 @@ class TestTaskMode:
   def test_prefetch_binds_the_launch_scope_flags(self, fake_proj, monkeypatch, capsys):
     captured = {}
 
-    def fake_task_system(grant, revoke, bro, harness, harness_options):
+    def fake_task_system(repo, grant, revoke, bro, harness, harness_options):
       captured.update(
         grant=grant, revoke=revoke, bro=bro, harness=harness, harness_options=harness_options
       )
@@ -268,7 +272,7 @@ class TestTaskMode:
   def test_scope_without_brog_fails_before_any_launch(self, fake_proj, monkeypatch, capsys):
     from bro.base import credentials
 
-    def no_brog(grant, revoke, bro, harness, harness_options):
+    def no_brog(repo, grant, revoke, bro, harness, harness_options):
       raise credentials.SecretNotFound('brog')
 
     monkeypatch.setattr(dive_in, '_task_system', no_brog)
@@ -279,7 +283,7 @@ class TestTaskMode:
   def test_bad_scope_override_fails_before_any_launch(self, fake_proj, monkeypatch):
     from ride.scope import LaunchScopeError
 
-    def bad_override(grant, revoke, bro, harness, harness_options):
+    def bad_override(repo, grant, revoke, bro, harness, harness_options):
       raise LaunchScopeError("cannot grant 'brog': already in the scoped credential set")
 
     monkeypatch.setattr(dive_in, '_task_system', bad_override)
@@ -306,9 +310,11 @@ class TestTaskSystem:
         calls['read'] = name
         return {'backend': 'github', 'token': 't', 'repo': 'owner/repo'}
 
-    monkeypatch.setattr(dive_in, 'project_config', lambda: SimpleNamespace(default_bro='bro-dev'))
+    monkeypatch.setattr(
+      dive_in, 'project_config', lambda _repo: SimpleNamespace(default_bro='bro-dev')
+    )
 
-    def fake_scoped_secrets(bro_name, surface):
+    def fake_scoped_secrets(bro_name, surface, *, repo):
       calls['scoped'] = (bro_name, surface)
       return 'base-scope'
 
@@ -326,7 +332,9 @@ class TestTaskSystem:
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
-    system = dive_in._task_system(['brog+github'], [], None, 'claude', {'raw': False})
+    system = dive_in._task_system(
+      Path('/repo'), ['brog+github'], [], None, 'claude', {'raw': False}
+    )
     assert calls['scoped'] == ('bro-dev', CLAUDE.scope_recipe({'raw': False}))
     assert calls['view'] == ('base-scope', ['brog+github'], [])
     assert calls['read'] == 'brog'
@@ -337,7 +345,7 @@ class TestTaskSystem:
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
-    dive_in._task_system([], [], 'dev', 'claude', {'raw': True})
+    dive_in._task_system(Path('/repo'), [], [], 'dev', 'claude', {'raw': True})
     assert calls['scoped'] == ('dev', CLAUDE.scope_recipe({'raw': True}))
 
   def test_bro_harness_scopes_the_native_recipe(self, monkeypatch):
@@ -345,7 +353,7 @@ class TestTaskSystem:
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
-    dive_in._task_system([], [], None, 'bro', {})
+    dive_in._task_system(Path('/repo'), [], [], None, 'bro', {})
     assert calls['scoped'] == ('bro-dev', BRO_RUN_RECIPE)
 
 

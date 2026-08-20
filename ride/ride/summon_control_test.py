@@ -155,7 +155,8 @@ class TestSummonHandler:
       prompt='deploy the thing',
       # the root's base-ref inheritance source: the bare session key names a host
       # worktree
-      parent_workspace=workspace_tree(tmp_path, 'ws'),
+      parent_workspace=workspace_tree('ws'),
+      repo=tmp_path,
       summoner=None,
       # dev seeds no summon targets of its own — the child is told exactly that
       may_summon=(),
@@ -270,7 +271,7 @@ class TestSummonHandler:
   def test_a_childs_grant_bound_follows_its_llm_recipe(self, tmp_path, monkeypatch):
     calls: list = []
 
-    def capture_scope(target, recipe, *, grant, revoke, llm_spec=None):
+    def capture_scope(target, recipe, *, repo=None, grant, revoke, llm_spec=None):
       calls.append((target, llm_spec))
       return ScopedSecrets(required={'github'}, optional=set(), docker_sock=False)
 
@@ -290,7 +291,7 @@ class TestSummonHandler:
   def test_a_claude_childs_grant_bound_follows_its_harness(self, tmp_path, monkeypatch):
     calls: list = []
 
-    def capture_scope(target, recipe, *, grant, revoke, llm_spec=None):
+    def capture_scope(target, recipe, *, repo=None, grant, revoke, llm_spec=None):
       calls.append((target, recipe.name, llm_spec.TYPE if llm_spec is not None else None))
       return ScopedSecrets(required={'github'}, optional=set(), docker_sock=False)
 
@@ -407,7 +408,8 @@ class TestSummonHandler:
       target='dev',
       prompt='deploy the thing',
       # a child summoner's base-ref inheritance source: its broker-<channel> clone
-      parent_workspace=workspace_tree(tmp_path, f'broker-{CHILD}'),
+      parent_workspace=workspace_tree(f'broker-{CHILD}'),
+      repo=tmp_path,
       summoner={'trail_id': 'T1'},
       may_summon=(),
     )
@@ -665,11 +667,11 @@ class TestManualSummon:
     [(accepted_peer, accepted)] = context.delivered
     assert accepted_peer == ROOT
     assert (accepted.type, accepted.in_reply_to) == ('accepted', message.id)
-    pending = ride.pending_summon.peek(tmp_path, message.id)
+    pending = ride.pending_summon.peek(message.id)
     assert pending.socket == f'/broker/{CHILD}.sock'
     assert pending.target == 'dev'
     assert pending.prompt == 'deploy the thing'
-    assert pending.parent_workspace == str(workspace_tree(tmp_path, 'ws'))
+    assert pending.parent_workspace == str(workspace_tree('ws'))
     assert pending.may_summon == ()
     [active] = _status(tmp_path)['active']
     assert active['request_id'] == message.id
@@ -712,7 +714,7 @@ class TestManualSummon:
     control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='dev'))
     launch, peer, _ = context.spawned[-1]
     assert peer == CHILD
-    assert launch.parent_workspace == workspace_tree(tmp_path, 'my-manual')
+    assert launch.parent_workspace == workspace_tree('my-manual')
     assert launch.summoner == {'trail_id': 'T1'}
 
   def test_nested_summon_before_started_is_denied(self, tmp_path):
@@ -774,7 +776,7 @@ class TestManualSummon:
       Message(type='failed', payload={'reason': 'disconnected'}, in_reply_to=message.id),
     )
     with pytest.raises(ride.pending_summon.UnknownToken):
-      ride.pending_summon.peek(tmp_path, message.id)
+      ride.pending_summon.peek(message.id)
     assert _status(tmp_path)['last']['outcome'] == 'failed:disconnected'
 
   def test_root_teardown_detaches_a_manual_child(self, control, tmp_path, caplog):
@@ -787,4 +789,4 @@ class TestManualSummon:
     end_record = _audit(tmp_path)[-1]
     assert end_record['outcome'] == 'detached'
     with pytest.raises(ride.pending_summon.UnknownToken):
-      ride.pending_summon.peek(tmp_path, message.id)
+      ride.pending_summon.peek(message.id)

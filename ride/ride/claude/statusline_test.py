@@ -9,7 +9,11 @@ from bro.monitor import health
 from ride.claude import statusline
 
 
-def _run(monkeypatch, tmp_path, status=None, summons=None) -> str:
+def _run(monkeypatch, tmp_path, status=None, summons=None, detached=False) -> str:
+  monkeypatch.delenv('RIDE_WORKSPACE', raising=False)
+  monkeypatch.delenv('RIDE_REPO', raising=False)
+  if detached:
+    monkeypatch.setenv('RIDE_WORKSPACE', 'ws')
   monkeypatch.setattr(health, 'health_path', lambda: tmp_path / 'health.json')
   if status is not None:
     health.write(status, interval=3)
@@ -36,6 +40,9 @@ class TestStatusline:
 
   def test_absent_prints_nothing(self, monkeypatch, tmp_path):
     assert _run(monkeypatch, tmp_path).strip() == ''
+
+  def test_detached_session_shows_the_attachment_state(self, monkeypatch, tmp_path):
+    assert 'no repository attached' in _run(monkeypatch, tmp_path, detached=True)
 
 
 class TestSummonSection:

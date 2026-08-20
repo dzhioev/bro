@@ -29,7 +29,6 @@ from typing import Optional
 from bro.base import log
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
-from bro.workspace.paths import project_root
 from ride.workspace.docker import (
   CONTAINER_BROKER_ADDRESS,
   CONTAINER_BROKER_SOCK,
@@ -371,10 +370,8 @@ def _prepare_docker_spawn(
   launch: DockerLaunchSpec, channel: Provisioned
 ) -> tuple[str, Optional[Workspace]]:
   docker_launch = _broker_launch(launch.launch, channel)
-  project = project_root()
-  # ensured before the prepare, which reads the record
-  workspace = Workspace.ensure(docker_launch.name, project, WorkspaceKind.CONTAINER)
-  container_id = prepare_container(docker_launch, project)
+  workspace = Workspace.ensure(docker_launch.name, docker_launch.repo, WorkspaceKind.CONTAINER)
+  container_id = prepare_container(docker_launch)
   if not workspace.metadata.throwaway:
     return container_id, None
   workspace.clear_session_end()

@@ -152,7 +152,7 @@ class ClaudeHarness:
     self, spec: 'SessionSpec', workspace: Workspace, worktree: Path, env: dict[str, str]
   ) -> None:
     del spec
-    claude_dir = provision_host_claude_dir(workspace.path, worktree, workspace.project)
+    claude_dir = provision_host_claude_dir(workspace.path, worktree, workspace.repo or worktree)
     env[CLAUDE_CONFIG_DIR_ENV] = str(claude_dir)
     apply_claude_auth(env)
 

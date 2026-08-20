@@ -26,7 +26,7 @@ def test_explicit_local_backend_uses_the_project_root(tmp_path, monkeypatch):
   monkeypatch.setattr('bro.trails.store.paths.project_root', lambda: tmp_path)
   store = build_store({'backend': 'local'})
   assert isinstance(store, LocalStore)
-  assert store.root == workspace_paths.trails_dir(tmp_path).resolve()
+  assert store.root == workspace_paths.trails_dir().resolve()
 
 
 def test_dynamo_backend_dispatches_through_the_server_package(monkeypatch):
@@ -51,7 +51,7 @@ def test_unknown_backend_fails():
 
 def test_the_local_root_sits_beside_the_projects_other_state(tmp_path, monkeypatch):
   monkeypatch.setattr('bro.trails.store.paths.project_root', lambda: tmp_path)
-  assert local_root() == workspace_paths.trails_dir(tmp_path)
+  assert local_root() == workspace_paths.trails_dir()
 
 
 def _credential_store(config: Optional[dict]) -> credentials.Store:
@@ -88,7 +88,7 @@ def test_default_store_records_locally_without_the_trails_credential(tmp_path, m
     store = default_store()
 
   assert isinstance(store, LocalStore)
-  assert store.root == workspace_paths.trails_dir(tmp_path).resolve()
+  assert store.root == workspace_paths.trails_dir().resolve()
 
 
 def test_configured_store_builds_the_named_backend():

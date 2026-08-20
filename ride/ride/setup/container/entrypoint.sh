@@ -43,6 +43,8 @@ fi
 # settings.json inside it and syncs credentials; host machine state stays on the
 # host.
 
+# Repository setup runs only for an explicitly attached launch.
+if [ -n "${RIDE_REPO:-}" ]; then
 # seed host git config into a writable copy (the host file is bind-mounted
 # read-only at /host-gitconfig; git config --global needs atomic rename).
 # done before the clone so init.defaultBranch suppresses the git hint
@@ -88,6 +90,7 @@ if [ ! -d /workspace/.git ]; then
   # initialize from host-local clones because the container has no ssh keys
   initialize_container_submodules /workspace /host-repo
 fi
+fi
 
 # pre-create the /workspace transcript directory (trust is granted in the
 # constructed ~/.claude.json, not here)
@@ -103,6 +106,8 @@ if [ -d /opt/claude-plugins-seed ] && [ ! -f "$HOME/.claude/plugins/installed_pl
   cp -r /opt/claude-plugins-seed/. "$HOME/.claude/plugins/"
 fi
 
+# Link and provision the operated repository only when one is attached.
+if [ -n "${RIDE_REPO:-}" ]; then
 # Link the optional dependency bake into the clone. A symlink whose old image
 # target disappeared is replaced; any real workspace environment is preserved.
 if [ -L /workspace/.venv ] && [ ! -e /workspace/.venv ]; then
@@ -120,6 +125,7 @@ if [ -f /workspace/setup.sh ]; then
   /workspace/setup.sh >&2
 else
   log INFO 'setup.sh not found; skipping project provisioning'
+fi
 fi
 
 # Capture before eval so a failed command substitution aborts the launch rather

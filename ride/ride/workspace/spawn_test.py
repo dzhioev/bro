@@ -21,7 +21,7 @@ def _throwaway(name: str, project) -> Workspace:
 
 
 def _exit_record(tmp_path) -> str:
-  return (workspace_dir(tmp_path / 'proj', 'broker-CH') / 'exit').read_text()
+  return (workspace_dir('broker-CH') / 'exit').read_text()
 
 
 class TestDockerLaunchSpec:
@@ -526,29 +526,21 @@ class TestDockerSpawnerModes:
   @pytest.fixture
   def spawn_harness(self, monkeypatch, tmp_path):
     project = tmp_path / 'proj'
-    project_threads: list[int] = []
     prepare_threads: list[int] = []
     workspace_threads: list[int] = []
-
-    def project_root():
-      project_threads.append(threading.get_ident())
-      return project
-
-    monkeypatch.setattr(workspace_spawn, 'project_root', project_root)
     prepared: list = []
 
-    def fake_prepare(launch, prepared_project):
-      prepared.append((launch, prepared_project))
+    def fake_prepare(launch):
+      prepared.append(launch)
       prepare_threads.append(threading.get_ident())
       return 'cid123'
 
     monkeypatch.setattr(workspace_spawn, 'prepare_container', fake_prepare)
     ensured = Workspace.ensure
 
-    def fake_ensure(name, workspace_project, kind, **kwargs):
+    def fake_ensure(name, repo, kind, **kwargs):
       workspace_threads.append(threading.get_ident())
-      assert workspace_project == project
-      workspace = ensured(name, workspace_project, kind, **kwargs)
+      workspace = ensured(name, repo, kind, **kwargs)
       monkeypatch.setattr(workspace, 'remove', lambda: None)
       return workspace
 
@@ -574,7 +566,6 @@ class TestDockerSpawnerModes:
       'starts': starts,
       'start_kwargs': start_kwargs,
       'project': project,
-      'project_threads': project_threads,
       'prepare_threads': prepare_threads,
       'workspace_threads': workspace_threads,
     }
@@ -599,8 +590,7 @@ class TestDockerSpawnerModes:
     try:
       assert isinstance(handle, workspace_spawn._AttachedRoot)
       assert handle.output_tail() == ''
-      prepared, project = spawn_harness['prepared'][0]
-      assert project == spawn_harness['project']
+      prepared = spawn_harness['prepared'][0]
       assert prepared.env['BROKER_CHANNEL'] == 'unix:/run/broker.sock'
       assert '/host/CH.sock:/run/broker.sock' in prepared.extra_mounts
       assert spawn_harness['starts'] == [
@@ -647,7 +637,7 @@ class TestDockerSpawnerModes:
     provisioned = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
     handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned)
     assert isinstance(handle, workspace_spawn._DockerChild)
-    assert spawn_harness['prepared'][0][0].name == 'broker-CH'
+    assert spawn_harness['prepared'][0].name == 'broker-CH'
     assert spawn_harness['starts'] == [['docker', 'start', '-a', 'cid123']]
     assert await handle.wait() == 0
 
@@ -668,7 +658,6 @@ class TestDockerSpawnerModes:
     provisioned = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
     handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned)
     loop_thread = threading.get_ident()
-    assert spawn_harness['project_threads'][0] != loop_thread
     assert spawn_harness['prepare_threads'][0] != loop_thread
     assert spawn_harness['workspace_threads'][0] != loop_thread
     assert await handle.wait() == 0

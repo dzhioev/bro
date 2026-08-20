@@ -130,9 +130,9 @@ _LAUNCH_OWNED_KEYS = ('timeout', 'hold', 'llm', 'harness')
 _MAX_SUMMON_DEPTH = 2
 
 
-def summon_status_file(project: Path, workspace_name: str) -> Path:
+def summon_status_file(workspace_name: str) -> Path:
   """the session's summon-status file, as the host process writes it."""
-  return summon_dir(project) / f'{workspace_name}.status.json'
+  return summon_dir() / f'{workspace_name}.status.json'
 
 
 def container_status_path(workspace_name: str) -> str:
@@ -175,6 +175,7 @@ def _summoned_credentials(
   harness_name: Optional[str],
   llm: Optional[str],
   *,
+  repo: Optional[Path],
   grant: Sequence[str] = (),
   revoke: Sequence[str] = (),
 ) -> set[str]:
@@ -186,6 +187,7 @@ def _summoned_credentials(
   scoped = summoned_credential_scope(
     target,
     harness.scope_recipe(harness.default_options()),
+    repo=repo,
     grant=list(grant),
     revoke=list(revoke),
     llm_spec=harness.resolve_llm(llm, target),
@@ -314,6 +316,7 @@ def _credential_refusal(
   requester: _Requester,
   target: str,
   *,
+  repo: Optional[Path],
   grant_credentials: list[str],
   harness_name: Optional[str],
   llm: Optional[str],
@@ -331,9 +334,9 @@ def _credential_refusal(
   widening: set[str] = set()
   if harness_name is not None or llm is not None:
     try:
-      widening = _summoned_credentials(target, harness_name, llm) - _summoned_credentials(
-        target, None, None
-      )
+      widening = _summoned_credentials(
+        target, harness_name, llm, repo=repo
+      ) - _summoned_credentials(target, None, None, repo=repo)
     except LLMSelectionError as e:
       return str(e)
   if len(grant_credentials) == 0 and len(widening) == 0:
@@ -455,6 +458,7 @@ class SummonControl:
       refusal = _credential_refusal(
         requester,
         target,
+        repo=self._workspace.repo,
         grant_credentials=grant_credentials,
         harness_name=harness_name,
         llm=llm,
@@ -489,6 +493,7 @@ class SummonControl:
         target=target,
         prompt=prompt,
         parent_workspace=requester.workspace,
+        repo=self._workspace.repo,
         summoner=summoned_by,
         may_summon=tuple(sorted(child_allow_list)),
         into=payload.get('into'),
@@ -551,7 +556,6 @@ class SummonControl:
       from bro.broker.brotocol import Message, Tag
 
       pending_summon.write(
-        self._workspace.project,
         pending_summon.PendingSummon(
           token=message.id,
           socket=str(provisioned.host_endpoint),
@@ -633,7 +637,7 @@ class SummonControl:
       summoned_by={'trail_id': record.trail_id} if record.trail_id is not None else None,
       depth=record.depth,
       list_description=f"{record.target}'s summon allow-list",
-      workspace=workspace_tree(self._workspace.project, workspace_name),
+      workspace=workspace_tree(workspace_name),
     )
 
   def _child_credentials(self, record: _ActiveSummon) -> set[str]:
@@ -649,7 +653,12 @@ class SummonControl:
     grant, _ = split_scope_overrides(record.grant)
     revoke, _ = split_scope_overrides(record.revoke)
     return _summoned_credentials(
-      record.target, record.harness, record.llm, grant=grant, revoke=revoke
+      record.target,
+      record.harness,
+      record.llm,
+      repo=self._workspace.repo,
+      grant=grant,
+      revoke=revoke,
     )
 
   def _root_summoned_by(self) -> Optional[dict[str, Any]]:
@@ -722,7 +731,7 @@ class SummonControl:
     if record.manual:
       # a manual summon that ended before its token was claimed leaves a record
       # no launch may consume any more
-      pending_summon.discard(self._workspace.project, record.request_id)
+      pending_summon.discard(record.request_id)
     self._last = summon_status.FinishedSummon(
       request_id=record.request_id,
       target=record.target,
@@ -751,7 +760,7 @@ class SummonControl:
           record.trail_id,
         )
         self._audit('end', record, outcome='detached')
-        pending_summon.discard(self._workspace.project, record.request_id)
+        pending_summon.discard(record.request_id)
         continue
       log.warning(
         'summon: root exit killed in-flight child %s (request %s, trail %s)',

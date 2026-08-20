@@ -1,6 +1,6 @@
 # Managed workspace machinery
 
-`ride.workspace` is the containerization and workspace layer beneath every managed launch. A workspace is `workspaces/<name>/` under the checkout's runtime state root: an isolated tree plus its metadata, lock, exit record, resume record, and host log.
+`ride.workspace` is the containerization and workspace layer beneath every managed launch. A workspace is `<runtime-base>/workspaces/<name>/`: a globally named tree plus its recorded optional repository attachment, lock, exit record, resume record, and host log.
 
 ## Design
 

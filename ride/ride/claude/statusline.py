@@ -1,8 +1,9 @@
 """Claude Code statusLine: session warnings and live summon state.
 
 Prints nothing when there is nothing to say, so Claude keeps its default status
-bar. Two sections, joined into the one line Claude renders:
+bar. Three sections, joined into the one line Claude renders:
 
+- the detached-session state when no repository is attached;
 - a red `⚠ session recording …` warning when the health file reports a failing or
   a stopped recorder — the one coloured channel that survives Claude's
   alternate-screen buffer;
@@ -16,6 +17,7 @@ Claude re-runs this in a fresh interpreter on every render, so its whole import
 closure is a standing cost and must stay small.
 """
 
+import os
 import sys
 import time
 from typing import Optional
@@ -30,6 +32,7 @@ _LAST_OUTCOME_TTL = 900.0
 _RED = '\033[1;31m'
 _YELLOW = '\033[1;33m'
 _GREEN = '\033[1;32m'
+_DIM = '\033[2m'
 _RESET = '\033[0m'
 
 
@@ -78,6 +81,8 @@ def statusline() -> int:
   except OSError:
     pass
   parts = []
+  if os.environ.get('RIDE_WORKSPACE') is not None and os.environ.get('RIDE_REPO') is None:
+    parts.append(f'{_DIM}no repository attached{_RESET}')
   problem = health.problem()
   if problem is not None:
     parts.append(f'{_RED}⚠ session recording {problem}{_RESET}')

@@ -48,6 +48,12 @@ def reports_location_errors(main: _Main) -> _Main:
 
 def _add_mode_flags(parser: Parser) -> None:
   parser.add_argument(
+    '--repo',
+    default=None,
+    metavar='PATH',
+    help='attach the checkout containing PATH (default: detached)',
+  )
+  parser.add_argument(
     '-w',
     '--workspace',
     default=None,
@@ -126,7 +132,10 @@ def build_parser() -> Parser:
   exec_command.add_argument('command', nargs=REMAINDER, help='command and arguments')
 
   scope = subparsers.add_parser('scope', help='print a prospective session credential scope')
-  scope.add_argument('--bro', default=None, help='bro to scope (default: project default)')
+  scope.add_argument(
+    '--repo', default=None, metavar='PATH', help='attach the checkout containing PATH'
+  )
+  scope.add_argument('--bro', default=None, help='bro to scope (required when detached)')
   add_harness_flags(scope)
 
   banner_parser = subparsers.add_parser('banner', help='print the session banner')
@@ -153,6 +162,12 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
   in_place = args.pop('in_place')
   resume = args.pop('resume')
   summoned_token = args.pop('summoned', None)
+  repo_argument = args.pop('repo')
+  repo = (
+    repo_argument
+    if in_place
+    else (None if repo_argument is None else str(project_root(Path(repo_argument))))
+  )
   if solo:
     keep = args.pop('keep')
     if workspace is not None and keep:
@@ -179,12 +194,19 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
       parser.error(f'--in-place cannot be combined with {", ".join(offending)}')
     if workspace is None:
       parser.error('--in-place requires --workspace')
+  if args['into'] is not None and repo is None and summoned_token is None:
+    parser.error('--into requires --repo')
   if args['hold'] is None:
     args['hold'] = default_hold(solo=solo, host=args['host'])
-  harness_name = args.pop('harness') or project_config().harness
+  harness_name = args.pop('harness') or (
+    project_config(Path(repo)).harness if repo is not None else 'claude'
+  )
   try:
     harness = get_harness(harness_name)
-    canonicalize(args, selection_from_args(args))
+    canonicalize(
+      args,
+      selection_from_args(args, project=None if repo is None else Path(repo)),
+    )
     drop_piece_flags(args)
   except (LLMSelectionError, ValueError) as error:
     parser.error(str(error))
@@ -208,6 +230,7 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
   name = workspace if workspace is not None else fresh_workspace_name(f'ride-{bro}')
   spec = SessionSpec(
     name=name,
+    repo=repo,
     harness=harness_name,
     workspace_pinned=workspace is not None,
     drop=drop,
@@ -250,7 +273,7 @@ def _resolve_summoned(
       f'@bro override(s): {", ".join(sorted(bro_overrides))}'
     )
   try:
-    pending = pending_summon.peek(project_root(), token)
+    pending = pending_summon.peek(token)
   except (pending_summon.UnknownToken, ValueError) as error:
     parser.error(str(error))
   if bro != pending.target:
@@ -287,7 +310,7 @@ def main(argv: list[str]) -> Optional[int]:
     return clean_workspaces(force=args['force'], dry_run=args['dry_run'], names=args['names'])
   if command == 'check-clean':
     try:
-      workspace = Workspace.open(args['name'], project_root())
+      workspace = Workspace.open(args['name'])
     except ValueError as error:
       print(str(error), file=sys.stderr)
       return 1
@@ -300,8 +323,13 @@ def main(argv: list[str]) -> Optional[int]:
   if command == 'scope':
     from ride.scope_report import report_scope
 
-    harness_name = args['harness'] or project_config().harness
+    repo = None if args['repo'] is None else project_root(Path(args['repo']))
+    if repo is None and args['bro'] is None:
+      parser.error('ride scope requires --bro when detached')
+    harness_name = args['harness'] or (
+      project_config(repo).harness if repo is not None else 'claude'
+    )
     options = pop_harness_options(parser, args, harness_name, solo=False, host=False)
-    return report_scope(bro=args['bro'], harness=harness_name, options=options)
+    return report_scope(repo=repo, bro=args['bro'], harness=harness_name, options=options)
   assert command == 'banner'
   return banner(llm=args['llm'])

@@ -43,6 +43,8 @@ def inner_command(spec: 'SessionSpec', *, harness_flags: Sequence[str]) -> list[
     *(flag for flag, enabled in flags.items() if enabled),
     *harness_flags,
   ]
+  if spec.repo is not None:
+    parts.extend(['--repo', spec.repo])
   parts.extend(['--hold', spec.hold])
   if spec.llm is not None:
     parts.extend(['--llm', spec.llm])
@@ -91,7 +93,8 @@ def run_in_place(harness: 'Harness', spec: 'SessionSpec') -> int:
   os.environ.update(bro_git_identity_env(spec.bro))
   # RIDE_BRO themes the session (banner, statusLine)
   os.environ['RIDE_BRO'] = spec.bro
-  create_bro(spec.bro).provision_workspace(Path.cwd())
+  if spec.repo is not None:
+    create_bro(spec.bro).provision_workspace(Path.cwd())
   clear_requested_exit_status()
   # a host launch signals the session broxy through BRO_START_SESSION_BROXY (in
   # a container the entrypoint started one and BROKER_CHANNEL already points at

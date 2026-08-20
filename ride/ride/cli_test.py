@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -13,7 +14,7 @@ def project(monkeypatch):
   monkeypatch.setattr(
     ride_cli,
     'project_config',
-    lambda: SimpleNamespace(default_bro='bro-dev', harness='claude'),
+    lambda _repo=None: SimpleNamespace(default_bro='bro-dev', harness='claude'),
   )
   monkeypatch.setattr(ride_cli, 'fresh_workspace_name', lambda base: f'{base}-12345678')
 
@@ -90,6 +91,26 @@ class TestSolo:
     spec = start.call_args.args[0]
     assert spec.no_trails
     assert '--no-trails' in _inner_command(spec)
+
+
+class TestAttachment:
+  def test_mode_launches_detached_by_default(self):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'along', 'dev']) == 0
+    spec = start.call_args.args[0]
+    assert spec.repo is None
+    assert spec.harness == 'claude'
+
+  def test_repo_resolves_any_directory_inside_the_checkout(self, monkeypatch):
+    monkeypatch.setattr(ride_cli, 'project_root', lambda path: Path('/repo'))
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'along', '--repo', '/repo/subdir', 'dev']) == 0
+    assert start.call_args.args[0].repo == '/repo'
+
+  def test_into_requires_an_attachment(self, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'along', '--into', 'feature', 'dev'])
+    assert '--into requires --repo' in capsys.readouterr().err
 
 
 class TestAlong:
@@ -170,10 +191,11 @@ class TestAlong:
     monkeypatch.setattr(
       ride_cli,
       'project_config',
-      lambda: SimpleNamespace(default_bro='bro-dev', harness='bro'),
+      lambda _repo: SimpleNamespace(default_bro='bro-dev', harness='bro'),
     )
+    monkeypatch.setattr(ride_cli, 'project_root', lambda _path: Path('/repo'))
     with patch('ride.cli.start_session', return_value=0) as start:
-      assert ride_cli.main(['ride', 'along', 'dev']) == 0
+      assert ride_cli.main(['ride', 'along', '--repo', '/repo', 'dev']) == 0
     assert start.call_args.args[0].harness == 'bro'
 
 
@@ -186,12 +208,17 @@ class TestLifecycle:
 
   def test_scope_dispatches_harness(self):
     with patch('ride.scope_report.report_scope', return_value=0) as report:
-      assert ride_cli.main(['ride', 'scope', '--harness', 'claude', '--raw']) == 0
-    assert report.call_args.kwargs == {'bro': None, 'harness': 'claude', 'options': {'raw': True}}
+      assert ride_cli.main(['ride', 'scope', '--bro', 'dev', '--harness', 'claude', '--raw']) == 0
+    assert report.call_args.kwargs == {
+      'repo': None,
+      'bro': 'dev',
+      'harness': 'claude',
+      'options': {'raw': True},
+    }
 
   def test_scope_rejects_a_non_selected_harness_flag(self, capsys):
     with pytest.raises(SystemExit):
-      ride_cli.main(['ride', 'scope', '--harness', 'bro', '--raw'])
+      ride_cli.main(['ride', 'scope', '--bro', 'dev', '--harness', 'bro', '--raw'])
     assert '--raw requires --harness claude' in capsys.readouterr().err
 
   def test_an_unusable_runtime_location_is_a_cli_error(self, monkeypatch, caplog):
@@ -216,8 +243,7 @@ class TestSummonedLaunch:
       revoke=('openai',),
       summoner={'trail_id': 'T1'},
     )
-    monkeypatch.setattr(ride_cli, 'project_root', lambda: tmp_path)
-    pending_summon.write(tmp_path, record)
+    pending_summon.write(record)
     return record
 
   def test_summoned_launch_takes_prompt_and_scope_from_the_record(self, pending):

@@ -52,9 +52,7 @@ from typing import Optional
 import pytest
 
 import bro.workspace.paths as workspace_paths
-import ride.spawn
 import ride.workspace.docker as workspace_docker
-import ride.workspace.spawn as workspace_spawn
 from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Broker, Dispatcher, ping_handler, spawn_test_handler
 from bro.broker.runtime import Peer
@@ -288,7 +286,8 @@ launch = Launch(name=os.environ['RIDE_E2E_NAME'],
                 secrets=tuple(json.loads(os.environ.get('RIDE_E2E_SECRETS', '[]'))),
                 docker_sock=True, tty=True, forward_env=True,
                 image=os.environ['RIDE_E2E_IMAGE'],
-                runtime_bundle_hash=os.environ['RIDE_E2E_RUNTIME_HASH'])
+                runtime_bundle_hash=os.environ['RIDE_E2E_RUNTIME_HASH'],
+                repo=project_root())
 workspace = Workspace.ensure(launch.name, project_root(), WorkspaceKind.CONTAINER)
 code = run_in_container(launch, workspace)
 loaded = sorted(m for m in sys.modules if m == 'broker' or m.startswith('bro.broker.'))
@@ -390,11 +389,10 @@ def isolated_env() -> Iterator[IsolatedEnv]:
     '[user]\n\tname = ride e2e\n\temail = e2e@invalid\n[init]\n\tdefaultBranch = master\n'
   )
   with pytest.MonkeyPatch.context() as monkeypatch:
-    monkeypatch.setattr(workspace_docker, 'project_root', lambda: project)
     monkeypatch.setenv('XDG_DATA_HOME', str(data_home))
-    runtime_root = workspace_paths.runtime_root(project)
+    runtime_root = workspace_paths.runtime_base()
     with resolve_runtime_bundle() as bundle:
-      runtime = workspace_docker.ContainerRuntimeResolver(bundle).resolve()
+      runtime = workspace_docker.ContainerRuntimeResolver(bundle, project).resolve()
       env = IsolatedEnv(
         root=root,
         project=project,
@@ -645,6 +643,7 @@ def _run_broker_scenario(
       forward_env=False,
       image=env.image,
       runtime_bundle_hash=env.runtime_bundle_hash,
+      repo=env.project,
     )
   )
   child = DockerLaunchSpec(
@@ -658,6 +657,7 @@ def _run_broker_scenario(
       forward_env=False,
       image=env.image,
       runtime_bundle_hash=env.runtime_bundle_hash,
+      repo=env.project,
     )
   )
   facade = Broker(
@@ -675,9 +675,6 @@ def _run_broker_scenario(
   result: dict[str, int] = {}
   with pytest.MonkeyPatch.context() as monkeypatch:
     monkeypatch.setenv('HOME', str(env.home))
-    monkeypatch.setattr(ride.spawn, 'project_root', lambda: env.project)
-    monkeypatch.setattr(workspace_spawn, 'project_root', lambda: env.project)
-    monkeypatch.setattr(workspace_docker, 'project_root', lambda: env.project)
     thread = threading.Thread(target=lambda: result.update(code=facade.run(root)))
     thread.start()
     max_sockets = 0

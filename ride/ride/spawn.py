@@ -34,7 +34,7 @@ from bro.summon import (
   encode_may_summon,
 )
 from bro.workspace.git import resolve_head, resolve_ref
-from bro.workspace.paths import broker_dir, project_root, summon_dir, workspace_dir
+from bro.workspace.paths import broker_dir, summon_dir, workspace_dir
 from ride.flags import default_hold
 from ride.harness import ContainerExtras, get_harness
 from ride.inner import inner_command
@@ -75,6 +75,7 @@ class SummonLaunchSpec(LaunchSpec):
   parent_workspace: Path
   summoner: Optional[dict[str, Any]]
   may_summon: tuple[str, ...]
+  repo: Optional[Path] = None
   into: Optional[str] = None
   hold: Optional[str] = None
   grant: tuple[str, ...] = ()
@@ -96,6 +97,7 @@ def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> Sessio
   harness = get_harness(launch.harness if launch.harness is not None else DEFAULT_HARNESS)
   return SessionSpec(
     name=workspace_name,
+    repo=None if launch.repo is None else str(launch.repo),
     harness=harness.name,
     workspace_pinned=False,
     host=False,
@@ -123,7 +125,7 @@ def _child_launch(
   extras: ContainerExtras,
   *,
   scoped: ScopedSecrets,
-  base_ref: str,
+  base_ref: Optional[str],
   summoner: Optional[dict[str, Any]],
   may_summon: tuple[str, ...],
   container_runtime: ContainerRuntime,
@@ -136,7 +138,8 @@ def _child_launch(
   env['RIDE_BRO'] = spec.bro
   env['RIDE_COMMAND'] = ' '.join(spec.to_command_argv())
   env[SUMMONED_ENV] = '1'
-  env['RIDE_BASE_REF'] = base_ref
+  if base_ref is not None:
+    env['RIDE_BASE_REF'] = base_ref
   env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
   if summoner is not None:
     env[SUMMONER_ENV] = json.dumps(summoner, ensure_ascii=False, separators=(',', ':'))
@@ -152,6 +155,7 @@ def _child_launch(
     image=container_runtime.image,
     runtime_bundle_hash=container_runtime.bundle_hash,
     extra_mounts=(*extras.mounts, *local_trails_mounts(scoped)),
+    repo=None if spec.repo is None else Path(spec.repo),
   )
 
 
@@ -173,13 +177,17 @@ def _lower_summon(
   on any unresolvable input — the spawner surfaces that as the correlated
   `failed{reason: 'launch'}`; every fallible resolution precedes the workspace
   record, so a failed spawn creates none."""
-  project = project_root()
+  repo = launch.repo
   if launch.into is not None:
-    base_ref = resolve_ref(project, launch.into)
+    if repo is None:
+      raise ValueError('summon into requires an attached repository')
+    base_ref = resolve_ref(repo, launch.into)
     if base_ref is None:
       raise ValueError(f'cannot resolve summon into ref {launch.into!r}')
+  elif repo is None:
+    base_ref = None
   else:
-    base_ref = resolve_head(project, launch.parent_workspace)
+    base_ref = resolve_head(repo, launch.parent_workspace)
     if base_ref is None:
       raise ValueError(f"cannot read the summoner's HEAD at {launch.parent_workspace}")
   spec = _child_session_spec(launch, workspace_name)
@@ -192,12 +200,13 @@ def _lower_summon(
   scoped = summoned_credential_scope(
     launch.target,
     harness.scope_recipe(spec.harness_options),
+    repo=repo,
     grant=grant_credentials,
     revoke=revoke_credentials,
     llm_spec=spec.llm_spec,
   )
   resolved_runtime = container_runtime.resolve()
-  workspace = Workspace.ensure(workspace_name, project, WorkspaceKind.CONTAINER, throwaway=True)
+  workspace = Workspace.ensure(workspace_name, repo, WorkspaceKind.CONTAINER, throwaway=True)
   record_resume_spec(workspace, spec)
   run = _child_launch(
     spec,
@@ -245,7 +254,7 @@ def _note_root_started(control: SummonControl, workspace: Workspace):
   return _handle
 
 
-def _note_child_started(project: Path):
+def _note_child_started():
   """publish each summoned child's `started` trail id as its workspace's session
   trail pointer — what makes a failed child's surviving workspace resumable.
   Registered as a delivery observer, which sees only correlated child deliveries
@@ -264,7 +273,7 @@ def _note_child_started(project: Path):
     name = (
       workspace if isinstance(workspace, str) and len(workspace) > 0 else _workspace_name(source)
     )
-    trail_pointer.write(trail_pointer.session_pointer(workspace_dir(project, name)), trail_id)
+    trail_pointer.write(trail_pointer.session_pointer(workspace_dir(name)), trail_id)
 
   return _observe
 
@@ -312,7 +321,6 @@ def run_root_via_broker(
   targets = sorted(set(may_summon))
   if len(targets) > 0:
     log.info('session may summon: %s', ', '.join(targets))
-  project = workspace.project
   host_log = workspace.host_log
   docker_spawner = DockerSpawner(host_log=host_log)
   spawner = CompositeSpawner(
@@ -326,10 +334,10 @@ def run_root_via_broker(
     allow_list=may_summon,
     credential_scope=credential_scope,
     workspace=workspace,
-    status_file=summon_status_file(project, workspace.name),
-    audit_file=summon_dir(project) / f'{workspace.name}.jsonl',
+    status_file=summon_status_file(workspace.name),
+    audit_file=summon_dir() / f'{workspace.name}.jsonl',
   )
-  facade = Broker(UnixServerTransport(str(broker_dir(project))), spawner)
+  facade = Broker(UnixServerTransport(str(broker_dir())), spawner)
   facade.on(Tag.PING, ping_handler)
   # the root's own lifecycle (a bro run at the session root) has no parent peer to
   # route to; this host process is its parent, so it lands in the host log
@@ -337,7 +345,7 @@ def run_root_via_broker(
   facade.on(Tag.COMPLETED, _log_root_completed)
   facade.on(SUMMON, control.handle)
   facade.add_delivery_observer(control.observe_delivery)
-  facade.add_delivery_observer(_note_child_started(project))
+  facade.add_delivery_observer(_note_child_started())
   try:
     return facade.run(launch)
   finally:

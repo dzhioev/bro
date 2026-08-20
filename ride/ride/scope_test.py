@@ -111,10 +111,9 @@ class TestScopedSecrets:
     config = tmp_path / 'bro.json'
     config.write_text(json.dumps({'projects': {str(tmp_path): {'instances': ['brog+github']}}}))
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-    monkeypatch.setattr('ride.scope.project_root', lambda: tmp_path)
     bound = {}
     monkeypatch.setattr('ride.scope.credentials.select_instances', bound.update)
-    scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE)
+    scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, repo=tmp_path)
     assert bound == {'brog': 'github'}
     assert 'brog' in scoped.required
     assert 'brog+github' not in scoped.required

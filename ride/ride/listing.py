@@ -4,7 +4,6 @@ from typing import Optional
 
 import humanize
 
-from bro.workspace.paths import project_root
 from ride.session import harness_for_workspace
 from ride.workspace.docker import running_mounts
 from ride.workspace.metadata import WorkspaceKind
@@ -25,8 +24,7 @@ def _truncate(s: str, n: int) -> str:
 
 
 def list_workspaces() -> int:
-  project = project_root()
-  workspaces = Workspace.all(project)
+  workspaces = Workspace.all()
   containers = [workspace for workspace in workspaces if workspace.kind is WorkspaceKind.CONTAINER]
 
   def _read(workspace: Workspace) -> tuple[Workspace, Optional[str], Optional[float]]:
@@ -51,15 +49,20 @@ def list_workspaces() -> int:
     entries.append((state, workspace, subject, last))
 
   entries.sort(key=lambda e: (_STATE_ORDER[e[0]], e[1].kind, e[1].name))
-  displays = [workspace.name for _, workspace, _, _ in entries]
-  name_width = max(len(display) for display in displays)
+  name_width = max(len(workspace.name) for _, workspace, _, _ in entries)
+  attachments = [
+    str(workspace.repo) if workspace.repo is not None else '(detached)'
+    for _, workspace, _, _ in entries
+  ]
+  attachment_width = max(len(_truncate(attachment, 50)) for attachment in attachments)
   ages = [_format_age(mtime) if mtime is not None else '' for _, _, _, mtime in entries]
   age_width = max(len(age) for age in ages) if len(ages) > 0 else 0
-  for (state, workspace, subject, _), age in zip(entries, ages, strict=True):
+  for (state, workspace, subject, _), age, attachment in zip(
+    entries, ages, attachments, strict=True
+  ):
     badge = _BADGES[state]
     age_column = f'  {age:<{age_width}}' if len(age) > 0 else ' ' * (age_width + 2)
-    if subject is None:
-      print(f'{badge} {workspace.name:<{name_width}}{age_column}')
-    else:
-      print(f'{badge} {workspace.name:<{name_width}}{age_column}  {_truncate(subject, 80)}')
+    attachment_column = f'  {_truncate(attachment, 50):<{attachment_width}}'
+    subject_column = '' if subject is None else f'  {_truncate(subject, 80)}'
+    print(f'{badge} {workspace.name:<{name_width}}{age_column}{attachment_column}{subject_column}')
   return 0

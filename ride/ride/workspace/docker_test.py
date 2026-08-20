@@ -2,7 +2,6 @@ import signal
 
 import pytest
 
-import bro.workspace.project as workspace_project
 import ride.workspace.docker as workspace_docker
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
@@ -131,19 +130,19 @@ class TestImageTag:
     (tmp_path / 'uv.lock').write_text('lock')
     (tmp_path / 'member').mkdir()
     (tmp_path / 'member' / 'pyproject.toml').write_text('[project]\nname = "member"\n')
-    monkeypatch.setattr(workspace_docker, 'project_root', lambda: tmp_path)
-    monkeypatch.setattr(workspace_project, 'project_root', lambda: tmp_path)
     return tmp_path
 
   def test_repository_comes_from_the_project(self, project):
-    assert workspace_docker.image_tag().startswith('custom-images:')
+    tag = workspace_docker.project_image_tag(workspace_docker.runtime_image_tag(), project)
+    assert tag is not None and tag.startswith('custom-images:')
 
   def test_a_member_manifest_edit_changes_the_tag(self, project):
-    before = workspace_docker.image_tag()
+    runtime = workspace_docker.runtime_image_tag()
+    before = workspace_docker.project_image_tag(runtime, project)
     (project / 'member' / 'pyproject.toml').write_text(
       '[project]\nname = "member"\nversion = "2"\n'
     )
-    assert workspace_docker.image_tag() != before
+    assert workspace_docker.project_image_tag(runtime, project) != before
 
   def test_a_runtime_asset_edit_changes_only_the_runtime_tag(self, project, monkeypatch, tmp_path):
     before = workspace_docker.runtime_image_tag('3.12')
@@ -169,7 +168,6 @@ class TestContainerRuntimeResolver:
 
     bundle = RuntimeBundle(tmp_path / ('a' * 64), '3.12')
     events: list = []
-    monkeypatch.setattr(workspace_docker, 'project_root', lambda: tmp_path / 'project')
     monkeypatch.setattr(
       workspace_docker,
       '_ensure_runtime_image',
@@ -186,12 +184,26 @@ class TestContainerRuntimeResolver:
       lambda self, image: events.append(('volume', image)),
     )
 
-    resolver = workspace_docker.ContainerRuntimeResolver(bundle)
+    resolver = workspace_docker.ContainerRuntimeResolver(bundle, tmp_path / 'project')
     first = resolver.resolve()
     second = resolver.resolve()
 
     assert first == second == workspace_docker.ContainerRuntime('project-image', 'a' * 64)
     assert [event[0] for event in events] == ['runtime', 'project', 'volume']
+
+  def test_detached_runtime_skips_project_image_resolution(self, monkeypatch, tmp_path):
+    from ride.runtime_bundle import RuntimeBundle
+
+    bundle = RuntimeBundle(tmp_path / ('a' * 64), '3.12')
+    monkeypatch.setattr(workspace_docker, '_ensure_runtime_image', lambda tag, version: None)
+    monkeypatch.setattr(
+      workspace_docker,
+      '_ensure_project_image',
+      lambda runtime, repo: pytest.fail('detached launch has no project image'),
+    )
+    monkeypatch.setattr(RuntimeBundle, 'materialize_container', lambda self, image: None)
+    runtime = workspace_docker.ContainerRuntimeResolver(bundle).resolve()
+    assert runtime.image == workspace_docker.runtime_image_tag('3.12')
 
 
 class TestPruneSupersededImages:
@@ -281,8 +293,9 @@ class TestPrepareContainer:
       runtime_bundle_hash='bundle-hash',
       optional_secrets=('openai',),
       extra_mounts=('/host:/container',),
+      repo=project,
     )
-    assert workspace_docker.prepare_container(launch, project) == 'cid'
+    assert workspace_docker.prepare_container(launch) == 'cid'
     assert workspace.tree.is_dir()
     assert events[0] == ('store', ('github',), ('openai',))
     argv_event = events[1]
@@ -332,6 +345,21 @@ class TestDockerCreateArgv:
 
   def test_runtime_bundle_volume_is_read_only_at_the_fixed_path(self, build_argv):
     assert 'ride-runtime-bundle-hash:/var/ride/runtime:ro' in build_argv()
+
+  def test_detached_launch_mounts_only_the_empty_workspace(self, tmp_path):
+    argv = workspace_docker._docker_create_argv(
+      'tag',
+      'bundle-hash',
+      'ws',
+      None,
+      tmp_path / 'tree',
+      None,
+      ['claude'],
+      forward_env=False,
+    )
+    assert not any('/host-repo' in value for value in argv)
+    assert not any(value.startswith('RIDE_REPO=') for value in argv)
+    assert not any(value.startswith('RIDE_BRANCH=') for value in argv)
 
   def test_docker_sock_mounted_by_default(self, build_argv):
     assert '/var/run/docker.sock:/var/run/docker.sock' in build_argv()

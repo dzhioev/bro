@@ -4,6 +4,7 @@
 import os
 import re
 import subprocess
+from pathlib import Path
 from typing import Optional
 
 import bro.brog.model as brog_model
@@ -34,9 +35,9 @@ def _shell_quote(s: str) -> str:
   return "'" + s.replace("'", "'\\''") + "'"
 
 
-def _fresh_origin_head() -> Optional[str]:
+def _fresh_origin_head(repo: Path) -> Optional[str]:
   """origin's default-branch tip, freshly fetched; None when origin is unreachable."""
-  return fetch_ref(project_root(), 'HEAD')
+  return fetch_ref(repo, 'HEAD')
 
 
 def _prefetch_task(system: brog_system.System, task_ref: str) -> tuple[brog_model.Task, str]:
@@ -72,15 +73,20 @@ def _prefetch_task(system: brog_system.System, task_ref: str) -> tuple[brog_mode
 
 
 def _task_system(
-  grant: list[str], revoke: list[str], bro: Optional[str], harness: str, harness_options: dict
+  repo: Path,
+  grant: list[str],
+  revoke: list[str],
+  bro: Optional[str],
+  harness: str,
+  harness_options: dict,
 ) -> brog_system.System:
   """the brog backend for the task prefetch, reading `brog` through the launch's
   own credential binding (`launch_view_store`) — so `--grant`/`--revoke` select
   the same brog config the session's store hydrates."""
-  project = project_config()
+  project = project_config(repo)
   bro_name = bro if bro is not None else project.default_bro
   store = launch_view_store(
-    scoped_secrets(bro_name, get_harness(harness).scope_recipe(harness_options)),
+    scoped_secrets(bro_name, get_harness(harness).scope_recipe(harness_options), repo=repo),
     grant=grant,
     revoke=revoke,
   )
@@ -98,11 +104,13 @@ def dive_in(
   bro: Optional[str] = None,
   harness: str = 'claude',
   harness_options: Optional[dict] = None,
+  repo: Optional[Path] = None,
 ) -> int:
   """launch the session. session shaping — the bro (prompt, spells, MCP
   namespaces) selected by `--bro` or the project default, the harness, or the
   claude `--raw` flavor — rides the forwarded flags; dive-in adds nothing of
   its own beyond binding the task prefetch to the same scope (`_task_system`)."""
+  repo = project_root() if repo is None else repo
   prompt: Optional[str] = None
   if new:
     base = _slugify(command) if command is not None else ''
@@ -114,6 +122,7 @@ def dive_in(
   elif task is not None:
     try:
       system = _task_system(
+        repo,
         grant or [],
         revoke or [],
         bro,
@@ -143,8 +152,17 @@ def dive_in(
     name = fresh_workspace_name('dive-in')
     log.info('workspace: %s', name)
 
-  bro_name = bro if bro is not None else project_config().default_bro
-  ride_command = ['ride', 'along', *forwarded, '--workspace', name, bro_name]
+  bro_name = bro if bro is not None else project_config(repo).default_bro
+  ride_command = [
+    'ride',
+    'along',
+    *forwarded,
+    '--repo',
+    str(repo),
+    '--workspace',
+    name,
+    bro_name,
+  ]
   if prompt is not None:
     ride_command.append(prompt)
   if dry_run:
@@ -174,12 +192,13 @@ def main(argv: list[str]) -> Optional[int]:
     help='initial command for the session (with no task flag, used as the entire prompt; with --new, used as the seed idea for the task; otherwise appended to the prompt)',
   )
   args = parser.parse(argv)
+  repo = project_root()
   os.environ.setdefault(
     'BRO_SHELL_COMMAND',
     ' '.join(parser.reconstruct(args, prog=['dive-in'], exclude=('dry_run',))),
   )
   if args['into'] is None:
-    base_ref = _fresh_origin_head()
+    base_ref = _fresh_origin_head(repo)
     if base_ref is None:
       log.warning('cannot fetch origin HEAD; basing the session on the host checkout HEAD')
     else:
@@ -187,7 +206,7 @@ def main(argv: list[str]) -> Optional[int]:
       args['into'] = base_ref
   # the prefetch binds to the same scope the session launches with, so the
   # scope-shaping flags are read here as well as forwarded
-  harness_name = args['harness'] or project_config().harness
+  harness_name = args['harness'] or project_config(repo).harness
   harness_options = pop_harness_options(
     parser, dict(args), harness_name, solo=False, host=args['host']
   )
@@ -195,6 +214,7 @@ def main(argv: list[str]) -> Optional[int]:
   args['bro'] = None
   forwarded = extract_forwarded_argv(args)
   return dive_in(
+    repo=repo,
     forwarded=forwarded,
     harness=harness_name,
     harness_options=harness_options,

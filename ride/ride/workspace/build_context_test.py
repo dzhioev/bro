@@ -29,7 +29,7 @@ def _config(monkeypatch, build_context_command=None):
   monkeypatch.setattr(
     build_context,
     'project_config',
-    lambda: type('Config', (), {'build_context_command': build_context_command})(),
+    lambda _project: type('Config', (), {'build_context_command': build_context_command})(),
   )
 
 

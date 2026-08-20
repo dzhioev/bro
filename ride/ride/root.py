@@ -29,7 +29,7 @@ def _run_root_via_broker(
   from ride.summon_control import STATUS_ENV, container_status_path, summon_status_file
   from ride.workspace.spawn import DockerLaunchSpec
 
-  status_file = summon_status_file(workspace.project, workspace.name)
+  status_file = summon_status_file(workspace.name)
   status_file.parent.mkdir(parents=True, exist_ok=True)
   env = dict(launch.env)
   env[STATUS_ENV] = container_status_path(workspace.name)
@@ -40,7 +40,7 @@ def _run_root_via_broker(
     capture_output=False,
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(launch.image, launch.runtime_bundle_hash)
+    ContainerRuntime(launch.image, launch.runtime_bundle_hash), workspace.repo
   )
   return run_root_via_broker(
     broker_launch,
@@ -68,7 +68,7 @@ def run_host_process_via_broker(
   from ride.workspace.spawn import ProcessLaunchSpec
 
   launch_env = dict(env)
-  launch_env[STATUS_ENV] = str(summon_status_file(workspace.project, workspace.name))
+  launch_env[STATUS_ENV] = str(summon_status_file(workspace.name))
   launch_env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
   launch = ProcessLaunchSpec(
     command=command,
@@ -120,7 +120,7 @@ def run_in_container(
   if container_broker_enabled():
     code = _run_root_via_broker(launch, workspace, may_summon=may_summon)
   else:
-    container_id = prepare_container(launch, workspace.project)
+    container_id = prepare_container(launch)
     if launch.tty:
       code = attach_interactive(container_id)
     else:
