@@ -180,8 +180,8 @@ class TrailsStore(ABC):
 
 
 def local_root() -> Path:
-  """the local backend's root for the repository the process runs against."""
-  return paths.trails_dir(paths.project_root())
+  """the local backend's global runtime root."""
+  return paths.trails_dir()
 
 
 _TRAILS_SECRET = 'trails'

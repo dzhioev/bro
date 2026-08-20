@@ -182,11 +182,9 @@ def launched(isolated: Isolated) -> Iterator[Launched]:
   checkout = _checkout()
   with pytest.MonkeyPatch.context() as monkeypatch:
     monkeypatch.setenv('XDG_DATA_HOME', str(isolated.project.parent / 'state'))
-    monkeypatch.setattr(workspace_docker, 'project_root', lambda: checkout)
-    monkeypatch.setattr(workspace_project, 'project_root', lambda: checkout)
     monkeypatch.setattr(workspace_docker.Path, 'home', lambda: isolated.home)
-    config = replace(workspace_project.project_config(), image_repository=_IMAGE_REPOSITORY)
-    monkeypatch.setattr(workspace_docker, 'project_config', lambda: config)
+    config = replace(workspace_project.project_config(checkout), image_repository=_IMAGE_REPOSITORY)
+    monkeypatch.setattr(workspace_docker, 'project_config', lambda _repo: config)
     monkeypatch.setattr(workspace_docker, '_RUNTIME_IMAGE_REPOSITORY', 'bro/launch-smoke-runtime')
     with resolve_runtime_bundle() as bundle:
       runtime_tag = workspace_docker.runtime_image_tag(bundle.python_version)
@@ -196,7 +194,7 @@ def launched(isolated: Isolated) -> Iterator[Launched]:
         stack.enter_context(_cold_image(runtime_tag))
         stack.enter_context(_cold_image(project_tag))
         image_before = _image_present(project_tag)
-        runtime = workspace_docker.ContainerRuntimeResolver(bundle).resolve()
+        runtime = workspace_docker.ContainerRuntimeResolver(bundle, isolated.project).resolve()
         launch = Launch(
           name=_WORKSPACE_NAME,
           command=_SESSION_COMMAND,
@@ -207,9 +205,10 @@ def launched(isolated: Isolated) -> Iterator[Launched]:
           forward_env=False,
           image=runtime.image,
           runtime_bundle_hash=runtime.bundle_hash,
+          repo=isolated.project,
         )
         recorded = Workspace.create(_WORKSPACE_NAME, isolated.project, WorkspaceKind.CONTAINER)
-        container_id = workspace_docker.prepare_container(launch, isolated.project)
+        container_id = workspace_docker.prepare_container(launch)
         running, output = _start_and_observe(container_id, recorded.tree)
         yield Launched(
           tag=project_tag,

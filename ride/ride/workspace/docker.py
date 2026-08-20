@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import credentials, log
-from bro.workspace.paths import project_root, workspace_tree
+from bro.workspace.paths import workspace_tree
 from bro.workspace.project import project_config
 from ride.runtime_bundle import RuntimeBundle
 from ride.workspace import build_context
@@ -33,14 +33,22 @@ class ContainerRuntime:
 class ContainerRuntimeResolver:
   """resolve one root's image and container materialization at most once."""
 
-  def __init__(self, bundle: Optional[RuntimeBundle], resolved: Optional[ContainerRuntime] = None):
+  def __init__(
+    self,
+    bundle: Optional[RuntimeBundle],
+    repo: Optional[Path] = None,
+    resolved: Optional[ContainerRuntime] = None,
+  ):
     self._bundle = bundle
+    self._repo = repo
     self._resolved = resolved
     self._lock = threading.Lock()
 
   @classmethod
-  def fixed(cls, runtime: ContainerRuntime) -> 'ContainerRuntimeResolver':
-    return cls(None, runtime)
+  def fixed(
+    cls, runtime: ContainerRuntime, repo: Optional[Path] = None
+  ) -> 'ContainerRuntimeResolver':
+    return cls(None, repo, runtime)
 
   def resolve(self) -> ContainerRuntime:
     with self._lock:
@@ -50,7 +58,9 @@ class ContainerRuntimeResolver:
         raise RuntimeError('container runtime resolver has neither a bundle nor a resolved runtime')
       runtime_image = runtime_image_tag(self._bundle.python_version)
       _ensure_runtime_image(runtime_image, self._bundle.python_version)
-      image = _ensure_project_image(runtime_image, project_root())
+      image = (
+        runtime_image if self._repo is None else _ensure_project_image(runtime_image, self._repo)
+      )
       self._bundle.materialize_container(runtime_image)
       self._resolved = ContainerRuntime(image=image, bundle_hash=self._bundle.hash)
       return self._resolved
@@ -71,6 +81,7 @@ class Launch:
   runtime_bundle_hash: str
   optional_secrets: Collection[str] = ()
   extra_mounts: Collection[str] = ()
+  repo: Optional[Path] = None
 
 
 # where a container session's broker channel lands: the provisioned host socket is
@@ -177,12 +188,7 @@ def project_image_tag(runtime_image: str, project: Path) -> Optional[str]:
   if len(manifests) == 0:
     return None
   inputs = [(relative, project / relative) for relative in manifests]
-  return f'{project_config().image_repository}:{_hash_files(inputs, seed=runtime_image)}'
-
-
-def image_tag(python_version: Optional[str] = None) -> str:
-  runtime = runtime_image_tag(python_version)
-  return project_image_tag(runtime, project_root()) or runtime
+  return f'{project_config(project).image_repository}:{_hash_files(inputs, seed=runtime_image)}'
 
 
 def _image_present(tag: str) -> bool:
@@ -290,11 +296,17 @@ def _create_container(argv: list[str], store_tarball: bytes, name: str) -> str:
   return container_id
 
 
-def prepare_container(launch: Launch, project: Path) -> str:
+def prepare_container(launch: Launch) -> str:
   """create the unstarted container described entirely by `launch`."""
   log.info('creating container workspace %s', launch.name)
-  branch = read_metadata(project, launch.name).branch
-  tree = workspace_tree(project, launch.name)
+  metadata = read_metadata(launch.name)
+  recorded_repo = None if metadata.repo is None else Path(metadata.repo)
+  if launch.repo != recorded_repo:
+    raise ValueError(
+      f'launch attachment {launch.repo or "none"} does not match workspace attachment '
+      f'{recorded_repo or "none"}'
+    )
+  tree = workspace_tree(launch.name)
   tree.mkdir(parents=True, exist_ok=True)
   log.verbose('hydrating the scoped credential store')
   store = credentials.build_scoped_store(launch.secrets, optional=launch.optional_secrets)
@@ -302,9 +314,9 @@ def prepare_container(launch: Launch, project: Path) -> str:
     launch.image,
     launch.runtime_bundle_hash,
     launch.name,
-    project,
+    launch.repo,
     tree,
-    branch,
+    metadata.branch,
     launch.command,
     docker_sock=launch.docker_sock,
     extra_env=dict(launch.env),
@@ -319,9 +331,9 @@ def _docker_create_argv(
   tag: str,
   runtime_bundle_hash: str,
   name: str,
-  project: Path,
+  repo: Optional[Path],
   tree: Path,
-  branch: str,
+  branch: Optional[str],
   command: list[str],
   *,
   docker_sock: bool = True,
@@ -341,8 +353,6 @@ def _docker_create_argv(
     '-v',
     f'{tree}:/workspace',
     '-v',
-    f'{project}:/host-repo:ro',
-    '-v',
     f'{home}/.gitconfig:/host-gitconfig:ro',
     '-v',
     f'ride-runtime-{runtime_bundle_hash}:{_RUNTIME_MOUNT}:ro',
@@ -351,8 +361,6 @@ def _docker_create_argv(
     '-e',
     f'RIDE_WORKSPACE={name}',
     '-e',
-    f'RIDE_BRANCH={branch}',
-    '-e',
     f'RIDE_HOST_WORKSPACE={tree}',
     '-e',
     f'RIDE_HOST={socket.gethostname()}',
@@ -360,6 +368,17 @@ def _docker_create_argv(
     '/workspace',
     '--memory=8g',
   ]
+  if repo is not None:
+    if branch is None:
+      raise ValueError('attached container workspace has no recorded branch')
+    argv += [
+      '-v',
+      f'{repo}:/host-repo:ro',
+      '-e',
+      f'RIDE_REPO={repo}',
+      '-e',
+      f'RIDE_BRANCH={branch}',
+    ]
   # The socket gives the container host-daemon control, so the scoped launch must
   # opt in explicitly rather than inheriting it with the platform image.
   if docker_sock:

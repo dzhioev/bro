@@ -11,7 +11,7 @@ from typing import ClassVar, Optional
 from bro.base import log
 from bro.workspace.git import git_run
 from bro.workspace.paths import workspace_dir, workspace_tree, workspaces_dir
-from ride.workspace.docker import image_tag
+from ride.workspace.docker import project_image_tag, runtime_image_tag
 from ride.workspace.metadata import (
   WorkspaceKind,
   WorkspaceMetadata,
@@ -30,6 +30,10 @@ class KindMismatch(ValueError):
   """a launch asked for a kind the named workspace was not created as."""
 
 
+class AttachmentMismatch(ValueError):
+  """a launch named a different attachment than the workspace records."""
+
+
 def _last_active(tree: Path) -> Optional[float]:
   if not tree.is_dir():
     return None
@@ -46,14 +50,16 @@ def _last_active(tree: Path) -> Optional[float]:
 KILLED = 'killed'
 
 
-def _cleanup_image() -> Optional[str]:
+def _cleanup_image(repo: Optional[Path]) -> Optional[str]:
   """a locally-present session image usable to delete root-owned container files.
 
   prefers the current image tag, then any other locally-present image of the
   project's repository. returns None when none exist (nothing to escalate the
   removal with).
   """
-  tag = image_tag()
+  runtime = runtime_image_tag()
+  tag = project_image_tag(runtime, repo) if repo is not None else runtime
+  tag = tag or runtime
   if subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True).returncode == 0:
     return tag
   listed = subprocess.run(
@@ -117,8 +123,8 @@ def _remove_container_dir(path: Path, image: Optional[str]) -> None:
 
 
 class Workspace(ABC):
-  """a managed workspace: one directory (`path`) holding an isolated copy of the
-  operated repo (`tree`) plus every record kept about it.
+  """a managed workspace: one directory (`path`) holding its writable `tree`,
+  optional repository attachment, and every record kept about it.
 
   The subclasses are the kinds, which differ only in how the tree is
   materialized and released; launch stays with the surfaces (worktrees.py /
@@ -129,18 +135,21 @@ class Workspace(ABC):
 
   kind: ClassVar[WorkspaceKind]
 
-  def __init__(self, name: str, project: Path, metadata: WorkspaceMetadata):
+  def __init__(self, name: str, metadata: WorkspaceMetadata):
     self.name = name
-    self.project = project
     self.metadata = metadata
 
   @property
+  def repo(self) -> Optional[Path]:
+    return None if self.metadata.repo is None else Path(self.metadata.repo)
+
+  @property
   def path(self) -> Path:
-    return workspace_dir(self.project, self.name)
+    return workspace_dir(self.name)
 
   @property
   def tree(self) -> Path:
-    return workspace_tree(self.project, self.name)
+    return workspace_tree(self.name)
 
   @property
   def lockfile(self) -> Path:
@@ -161,17 +170,20 @@ class Workspace(ABC):
     return self.path / 'exit'
 
   @abstractmethod
-  def _release_tree(self) -> None:
-    """release whatever the tree holds outside the workspace directory, before
-    the directory itself goes."""
+  def _release_tree(self, *, force: bool) -> None:
+    """release whatever the tree holds outside the workspace directory."""
 
   @abstractmethod
   def _remove_dir(self) -> None:
     """remove the workspace directory."""
 
-  def remove(self) -> None:
+  def remove(self, *, force: bool = False) -> None:
     """remove the workspace: the tree and every record kept about it."""
-    self._release_tree()
+    if self.repo is not None and not self.repo.is_dir() and not force:
+      raise RuntimeError(
+        f'attached repository no longer exists: {self.repo}; use --force to remove'
+      )
+    self._release_tree(force=force)
     self._remove_dir()
 
   @contextlib.contextmanager
@@ -230,6 +242,10 @@ class Workspace(ABC):
     successfully. the recorded session end is the one deciding factor — anything
     else (a failure, a kill, no record) keeps the workspace for inspection and
     recovery. returns (safe, reasons)."""
+    if self.repo is None:
+      if not self.tree.is_dir() or not any(self.tree.iterdir()):
+        return True, []
+      return False, ['detached workspace tree is not empty']
     try:
       end = self._session_end_file.read_text().strip()
     except FileNotFoundError:
@@ -244,50 +260,50 @@ class Workspace(ABC):
     return _last_active(self.tree)
 
   @classmethod
-  def open(cls, name: str, project: Path) -> 'Workspace':
-    """the workspace `name`, as its recorded metadata describes it. raises
-    `ValueError` when no workspace of that name exists."""
-    metadata = read_metadata(project, name)
-    return _KINDS[metadata.kind](name, project, metadata)
+  def open(cls, name: str) -> 'Workspace':
+    metadata = read_metadata(name)
+    return _KINDS[metadata.kind](name, metadata)
 
   @classmethod
   def create(
-    cls, name: str, project: Path, kind: WorkspaceKind, *, throwaway: bool = False
+    cls, name: str, repo: Optional[Path], kind: WorkspaceKind, *, throwaway: bool = False
   ) -> 'Workspace':
-    """record a new workspace of `kind`. the tree is materialized separately, by
-    the launch surface that needs it."""
-    metadata = WorkspaceMetadata(kind=kind, branch=workspace_branch(name), throwaway=throwaway)
-    write_metadata(project, name, metadata)
-    return _KINDS[kind](name, project, metadata)
+    resolved_repo = None if repo is None else str(repo.resolve())
+    metadata = WorkspaceMetadata(
+      kind=kind,
+      repo=resolved_repo,
+      branch=None if repo is None else workspace_branch(name),
+      throwaway=throwaway,
+    )
+    write_metadata(name, metadata)
+    return _KINDS[kind](name, metadata)
 
   @classmethod
   def ensure(
-    cls, name: str, project: Path, kind: WorkspaceKind, *, throwaway: bool = False
+    cls, name: str, repo: Optional[Path], kind: WorkspaceKind, *, throwaway: bool = False
   ) -> 'Workspace':
-    """the workspace `name`, created as `kind` when it doesn't exist yet.
-
-    an existing workspace keeps the kind it was created as; asking for the other
-    one raises `KindMismatch` rather than running a workspace as something it
-    isn't.
-    """
-    if not is_workspace(project, name):
-      return cls.create(name, project, kind, throwaway=throwaway)
-    workspace = cls.open(name, project)
+    if not is_workspace(name):
+      return cls.create(name, repo, kind, throwaway=throwaway)
+    workspace = cls.open(name)
     if workspace.kind is not kind:
       raise KindMismatch(
         f'workspace {name!r} is a {workspace.kind} workspace, not {kind}; '
         f'pick another name or remove it with `ride clean --force {name}`'
       )
+    expected_repo = None if repo is None else repo.resolve()
+    if workspace.repo != expected_repo:
+      raise AttachmentMismatch(
+        f'workspace {name!r} is attached to {workspace.repo or "no repository"}, '
+        f'not {expected_repo or "no repository"}'
+      )
     return workspace
 
   @classmethod
-  def all(cls, project: Path) -> list['Workspace']:
-    # metadata reads only: the per-workspace I/O (subject/last_active/is_clean)
-    # is left to the parallelized loops in listing.py / clean.py.
-    root = workspaces_dir(project)
+  def all(cls) -> list['Workspace']:
+    root = workspaces_dir()
     if not root.is_dir():
       return []
-    return [cls.open(path.name, project) for path in sorted(root.iterdir()) if path.is_dir()]
+    return [cls.open(path.name) for path in sorted(root.iterdir()) if path.is_dir()]
 
 
 class WorktreeWorkspace(Workspace):
@@ -295,15 +311,20 @@ class WorktreeWorkspace(Workspace):
 
   kind = WorkspaceKind.WORKTREE
 
-  def _release_tree(self) -> None:
-    # a workspace whose tree was never materialized (a launch that failed before
-    # creating it) has no worktree registration to release, and git would refuse
-    # the removal of a path it doesn't know.
+  def _release_tree(self, *, force: bool) -> None:
+    repo = self.repo
+    if repo is None:
+      return
+    if not repo.is_dir():
+      if force:
+        return
+      raise RuntimeError(f'attached repository no longer exists: {repo}; use --force to remove')
     if self.tree.is_dir():
-      removed = git_run('worktree', 'remove', '--force', str(self.tree))
+      removed = git_run('worktree', 'remove', '--force', str(self.tree), cwd=repo)
       if removed.returncode != 0:
         raise RuntimeError(f'{self.tree}: git worktree remove failed: {removed.stderr.strip()}')
-    deleted = git_run('branch', '-D', self.metadata.branch)
+    assert self.metadata.branch is not None
+    deleted = git_run('branch', '-D', self.metadata.branch, cwd=repo)
     if deleted.returncode != 0:
       log.warning('could not delete branch %s: %s', self.metadata.branch, deleted.stderr.strip())
 
@@ -312,8 +333,7 @@ class WorktreeWorkspace(Workspace):
 
 
 class ContainerWorkspace(Workspace):
-  """a workspace whose tree is a fresh clone, bind-mounted into a container as
-  `/workspace`."""
+  """a workspace whose tree is bind-mounted into a container as `/workspace`."""
 
   kind = WorkspaceKind.CONTAINER
 
@@ -322,11 +342,11 @@ class ContainerWorkspace(Workspace):
     # the lock while leaving its container bound to the workspace mount.
     return str(self.tree) in mounts or super().is_active(mounts)
 
-  def _release_tree(self) -> None:
-    pass
+  def _release_tree(self, *, force: bool) -> None:
+    del force
 
   def _remove_dir(self) -> None:
-    _remove_container_dir(self.path, _cleanup_image())
+    _remove_container_dir(self.path, _cleanup_image(self.repo))
 
 
 _KINDS: dict[WorkspaceKind, type[Workspace]] = {

@@ -71,7 +71,7 @@ def manifest_paths(project: Path) -> list[str]:
 
 def project_files(project: Path) -> list[str]:
   """project-relative tracked files included when baking the editable workspace."""
-  command = project_config().build_context_command
+  command = project_config(project).build_context_command
   if command is not None:
     listed = subprocess.run(
       command, shell=True, cwd=project, capture_output=True, text=True, check=True

@@ -258,7 +258,6 @@ class TestHostSession:
     return workspace, RuntimeBundle(root, '3.12')
 
   def _prepare(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(ride_session, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(ride_session.os, 'chdir', lambda _path: None)
     monkeypatch.setattr(ride_session, 'ensure_host_worktree', lambda *_args: True)
     monkeypatch.setattr(ride_session, 'provision_host_worktree', lambda *_args: True)
@@ -276,7 +275,7 @@ class TestHostSession:
 
     assert (
       ride_session._launch_session(
-        _spec(host=True),
+        _spec(host=True, repo=str(tmp_path)),
         workspace,
         None,
         _scope(),
@@ -290,7 +289,7 @@ class TestHostSession:
     env = root.call_args.args[2]
     assert command == [
       str(ride_binary), 'along', '--in-place', '--workspace', 'w', '--harness', 'bro',
-      '--hold', 'attended', 'dev', 'start here',
+      '--repo', str(tmp_path), '--hold', 'attended', 'dev', 'start here',
     ]  # fmt: skip
     assert env[ride_session.START_SESSION_BROXY_ENV] == '1'
     assert workspace.is_clean() == (False, ['last session exited with code 3'])
@@ -305,7 +304,7 @@ class TestHostSession:
 
     assert (
       ride_session._launch_session(
-        _spec(host=True),
+        _spec(host=True, repo=str(tmp_path)),
         workspace,
         None,
         _scope(),

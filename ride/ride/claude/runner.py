@@ -28,7 +28,7 @@ from bro.monitor import (
 )
 from bro.summon import SUMMONED_ENV, SUMMONER_ENV
 from bro.workspace.git import git_out
-from bro.workspace.paths import in_container, project_root, workspace_dir
+from bro.workspace.paths import in_container, workspace_dir
 from ride.claude.claude_argv import build_claude_launch
 from ride.claude.claude_auth import apply_claude_auth
 from ride.claude.claude_config import latest_jsonl, provision_host_claude_dir
@@ -57,7 +57,7 @@ def _set_session_context(spec: 'SessionSpec', system_prompt: str, tree: Path) ->
     base_sha = None
   records = build_session_context(
     system_prompt=system_prompt,
-    branch=f'worktree-{spec.name}',
+    branch=f'worktree-{spec.name}' if spec.repo is not None else None,
     base_sha=base_sha,
     base_ref=spec.into,
     bro=spec.bro,
@@ -159,9 +159,9 @@ def run_in_place(spec: 'SessionSpec') -> int:
     # isolation"). provisioning is idempotent because both launch layers apply it.
     # Set before anything derives paths or spawns children:
     # the resume resolution below, the hooks, and claude itself all read it.
-    project = project_root()
-    workspace = workspace_dir(project, spec.name)
-    claude_dir = provision_host_claude_dir(workspace, tree, project)
+    workspace = workspace_dir(spec.name)
+    repo = tree if spec.repo is None else Path(spec.repo)
+    claude_dir = provision_host_claude_dir(workspace, tree, repo)
     os.environ[CLAUDE_CONFIG_DIR_ENV] = str(claude_dir)
     os.environ[SESSION_DIR_ENV] = str(workspace_session_dir(workspace))
 

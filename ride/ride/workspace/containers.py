@@ -3,7 +3,6 @@ import subprocess
 import sys
 
 from bro.base import log
-from bro.workspace.paths import project_root
 from ride.workspace.docker import (
   DETACH_FLAG,
   container_running,
@@ -16,9 +15,8 @@ from ride.workspace.model import Workspace
 
 def exec_in_workspace(name: str, command: list[str]) -> int:
   """exec a command in the running container backing the named workspace."""
-  project = project_root()
   try:
-    workspace = Workspace.open(name, project)
+    workspace = Workspace.open(name)
   except ValueError as e:
     log.error('%s', e)
     return 1

@@ -60,32 +60,6 @@ def test_linked_worktree_names_the_main_checkout(monkeypatch, tmp_path):
   assert workspace_paths.find_project_root(worktree) == repository.resolve()
 
 
-def test_project_keys_are_stable_and_separate_checkouts(tmp_path):
-  first = tmp_path / 'first'
-  second = tmp_path / 'second'
-  first.mkdir()
-  second.mkdir()
-
-  assert workspace_paths.project_key(first) == workspace_paths.project_key(first)
-  assert workspace_paths.project_key(first) != workspace_paths.project_key(second)
-
-
-def test_project_keys_name_the_checkout(tmp_path):
-  checkout = tmp_path / 'my.repo'
-  checkout.mkdir()
-
-  assert workspace_paths.project_key(checkout).startswith('my.repo-')
-
-
-def test_project_keys_separate_same_named_checkouts(tmp_path):
-  first = tmp_path / 'a' / 'bro'
-  second = tmp_path / 'b' / 'bro'
-  first.mkdir(parents=True)
-  second.mkdir(parents=True)
-
-  assert workspace_paths.project_key(first) != workspace_paths.project_key(second)
-
-
 def test_the_data_home_names_the_runtime_base(monkeypatch, tmp_path):
   monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path))
   assert workspace_paths.runtime_base() == tmp_path / 'ride'
@@ -101,34 +75,31 @@ def test_a_relative_data_home_is_refused(monkeypatch):
     workspace_paths.runtime_base()
 
 
-def test_runtime_paths_share_the_checkout_keyed_root(tmp_path):
-  root = workspace_paths.runtime_root(tmp_path)
-  assert workspace_paths.workspaces_dir(tmp_path) == root / 'workspaces'
-  assert workspace_paths.broker_dir(tmp_path) == root / 'broker'
-  assert workspace_paths.summon_dir(tmp_path) == root / 'summon'
-  assert workspace_paths.trails_dir(tmp_path) == root / 'trails'
+def test_runtime_paths_share_the_flat_root():
+  root = workspace_paths.runtime_base()
+  assert workspace_paths.workspaces_dir() == root / 'workspaces'
+  assert workspace_paths.broker_dir() == root / 'broker'
+  assert workspace_paths.summon_dir() == root / 'summon'
+  assert workspace_paths.trails_dir() == root / 'trails'
 
 
-def test_container_trails_use_the_absolute_mount(monkeypatch, tmp_path):
+def test_container_trails_use_the_absolute_mount(monkeypatch):
   monkeypatch.setenv('RIDE_IN_CONTAINER', '1')
-  assert workspace_paths.trails_dir(tmp_path) == workspace_paths.CONTAINER_TRAILS_ROOT
+  assert workspace_paths.trails_dir() == workspace_paths.CONTAINER_TRAILS_ROOT
 
 
 def test_the_runtime_root_is_created_private_on_first_use(monkeypatch, tmp_path):
   monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
-  project = tmp_path / 'checkout'
-  project.mkdir()
+  root = workspace_paths.ensure_runtime_root()
 
-  root = workspace_paths.ensure_runtime_root(project)
-
-  assert root == workspace_paths.runtime_root(project)
+  assert root == workspace_paths.runtime_base()
   assert stat.S_IMODE(root.stat().st_mode) == 0o700
-  assert workspace_paths.ensure_runtime_root(project) == root
+  assert workspace_paths.ensure_runtime_root() == root
 
 
 def _workspaces_dir(monkeypatch, tmp_path):
-  monkeypatch.setattr(workspace_paths, 'project_root', lambda: tmp_path)
-  workspaces = workspace_paths.workspaces_dir(tmp_path)
+  monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path))
+  workspaces = workspace_paths.workspaces_dir()
   workspaces.mkdir(parents=True)
   return workspaces
 

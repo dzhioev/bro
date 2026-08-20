@@ -45,27 +45,22 @@ def _sections(table: dict) -> dict[str, dict[str, Any]]:
   return {key: value for key, value in table.items() if isinstance(value, dict)}
 
 
-def project_sections() -> dict[str, dict[str, Any]]:
-  """the `[tool.bro.<name>]` sub-tables of the operated repo's pyproject.toml,
-  empty where there is no repo to read one from.
-
-  A sub-table is configuration a reader can do without, so this asks only for
-  what it needs and tolerates the absence of a project — unlike `project_config`,
-  whose launch keys a managed repo must declare. Callers run in whatever
-  directory they were started in, which is not always inside a checkout.
-  """
-  root = find_project_root()
+def project_sections_at(root: Optional[Path]) -> dict[str, dict[str, Any]]:
+  """the `[tool.bro.<name>]` sub-tables for `root`, or empty when detached."""
   if root is None:
     return {}
   pyproject = root / 'pyproject.toml'
   return {} if not pyproject.is_file() else _sections(_bro_table(pyproject))
 
 
-def project_config() -> ProjectConfig:
-  """the `[tool.bro]` table of the operated repo's pyproject.toml, read from
-  `project_root()` — how a repo declares its session defaults. a missing file,
-  required default, or unknown key raises rather than being ignored."""
-  pyproject = project_root() / 'pyproject.toml'
+def project_sections() -> dict[str, dict[str, Any]]:
+  """the optional project sub-tables for the repository containing cwd."""
+  return project_sections_at(find_project_root())
+
+
+def project_config(root: Optional[Path] = None) -> ProjectConfig:
+  """the validated `[tool.bro]` launch table for `root` (cwd when omitted)."""
+  pyproject = (project_root() if root is None else root) / 'pyproject.toml'
   if not pyproject.is_file():
     raise ValueError(f'missing {pyproject}')
   table = _bro_table(pyproject)

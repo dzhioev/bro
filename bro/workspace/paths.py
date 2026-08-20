@@ -1,6 +1,4 @@
-import hashlib
 import os
-import re
 import secrets
 from pathlib import Path
 from typing import Optional
@@ -11,13 +9,10 @@ CONTAINER_TRAILS_ROOT = Path('/var/ride/trails')
 CONTAINER_SUMMON_ROOT = Path('/var/ride/summon')
 CONTAINER_SESSION_DIR = Path('/var/ride/session')
 _DATA_HOME_ENV = 'XDG_DATA_HOME'
-_PROJECT_KEY_BYTES = 4
-_UNSAFE_IN_KEY = re.compile(r'[^A-Za-z0-9._-]')
 
 
 class RuntimeLocationError(ValueError):
-  """the environment names no location to keep a project's runtime state in:
-  nothing names the project, or the data home is not an absolute path."""
+  """the environment names no usable runtime or repository location."""
 
 
 def venv_env(venv: Path) -> dict[str, str]:
@@ -28,12 +23,10 @@ def venv_env(venv: Path) -> dict[str, str]:
 
 
 def find_project_root(directory: Optional[Path] = None) -> Optional[Path]:
-  """the repo whose runtime state `directory` shares, or None where nothing names
-  one — no git on PATH, or no repository around it. The working directory is the
-  default.
+  """the checkout root containing `directory`, or None when there is no checkout.
 
-  resolved through the shared git dir, so every linked worktree of a repo maps to
-  its main checkout. Separate checkouts retain separate roots.
+  Resolved through the shared git dir, so every linked worktree of a repository
+  maps to its main checkout. Separate checkouts retain separate roots.
   """
   try:
     if directory is None:
@@ -51,11 +44,11 @@ def find_project_root(directory: Optional[Path] = None) -> Optional[Path]:
 
 
 def project_root(directory: Optional[Path] = None) -> Path:
-  """`find_project_root` for the callers a project is a precondition of."""
+  """`find_project_root` for callers that require a repository."""
   root = find_project_root(directory)
   if root is None:
     subject = Path.cwd() if directory is None else directory
-    raise RuntimeLocationError(f'{subject} is in no git repository, so it names no project')
+    raise RuntimeLocationError(f'{subject} is in no git repository')
   return root
 
 
@@ -70,72 +63,47 @@ def runtime_base() -> Path:
   return base / 'ride'
 
 
-def project_key(project: Path) -> str:
-  """the stable, path-derived key separating one checkout's runtime state.
-
-  the checkout's own name, so the data root reads as the checkouts it holds,
-  plus a digest of the canonical path, so two checkouts of one name stay apart.
-  """
-  canonical = str(project.resolve())
-  digest = hashlib.blake2b(canonical.encode(), digest_size=_PROJECT_KEY_BYTES).hexdigest()
-  return f'{_UNSAFE_IN_KEY.sub("-", Path(canonical).name)}-{digest}'
-
-
-def runtime_root(project: Path) -> Path:
-  return runtime_base() / project_key(project)
-
-
-def ensure_runtime_root(project: Path) -> Path:
-  """the checkout's runtime root, created if this is the first launch against it.
-
-  kept 0700: a host session materializes its scoped credential store in here.
-  """
-  root = runtime_root(project)
+def ensure_runtime_root() -> Path:
+  """create the global runtime root and keep it private."""
+  root = runtime_base()
   root.mkdir(parents=True, exist_ok=True)
   root.chmod(0o700)
   return root
 
 
-def workspaces_dir(project: Path) -> Path:
-  return runtime_root(project) / 'workspaces'
+def workspaces_dir() -> Path:
+  return runtime_base() / 'workspaces'
 
 
-def workspace_dir(project: Path, name: str) -> Path:
+def workspace_dir(name: str) -> Path:
   """a workspace's own directory: its tree plus every record kept about it."""
-  return workspaces_dir(project) / name
+  return workspaces_dir() / name
 
 
-def workspace_tree(project: Path, name: str) -> Path:
-  # a subdirectory rather than the workspace dir itself: a container binds the
-  # tree as /workspace, and the workspace's records must stay outside that mount.
-  return workspace_dir(project, name) / 'tree'
+def workspace_tree(name: str) -> Path:
+  return workspace_dir(name) / 'tree'
 
 
 def fresh_workspace_name(base: str) -> str:
   """mint a workspace name that no local workspace holds."""
-  project = project_root()
   while True:
     name = f'{base}-{secrets.token_hex(4)}'
-    if not workspace_dir(project, name).exists():
+    if not workspace_dir(name).exists():
       return name
 
 
-def broker_dir(project: Path) -> Path:
-  # One socket file lives here per peer. Keeping the root shallow leaves ample
-  # room under the unix sun_path limit for the channel id.
-  return runtime_root(project) / 'broker'
+def broker_dir() -> Path:
+  return runtime_base() / 'broker'
 
 
-def trails_dir(project: Path) -> Path:
+def trails_dir() -> Path:
   if os.environ.get('RIDE_IN_CONTAINER') is not None:
     return CONTAINER_TRAILS_ROOT
-  return runtime_root(project) / 'trails'
+  return runtime_base() / 'trails'
 
 
-def summon_dir(project: Path) -> Path:
-  # per-session summon audit and live-status files. outside the workspace dirs on
-  # purpose: the audit must survive a workspace drop.
-  return runtime_root(project) / 'summon'
+def summon_dir() -> Path:
+  return runtime_base() / 'summon'
 
 
 def in_container() -> bool:

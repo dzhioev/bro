@@ -42,7 +42,6 @@ class _Harness:
       patch('bro.launch.broxy._start_session_broxy', return_value=self.broxy),
       patch('ride.claude.runner.in_container', return_value=False),
       patch('ride.claude.runner.provision_host_claude_dir', return_value=self.claude_config_dir),
-      patch('ride.claude.runner.project_root', return_value=Path('/main-repo')),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -230,9 +229,7 @@ class TestRunInPlace:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       assert ride_runner.run_in_place(_spec()) == 0
-      h.provision_claude_dir.assert_called_once_with(
-        workspace_dir(Path('/main-repo'), 'w'), tmp_path, Path('/main-repo')
-      )
+      h.provision_claude_dir.assert_called_once_with(workspace_dir('w'), tmp_path, tmp_path)
       env = h.run_claude.call_args.args[1]
       assert env['CLAUDE_CONFIG_DIR'] == str(h.claude_config_dir)
 

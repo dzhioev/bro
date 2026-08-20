@@ -33,14 +33,15 @@ class TestInnerCommand:
       arguments=['--foo'],
     )
     assert _inner_argv(spec) == [
-      'ride', 'along', '--in-place', '--workspace', 'w', '--harness', 'claude',
+      'ride', 'along', '--in-place', '--workspace', 'w', '--harness', 'claude', '--repo', str(spec.repo),
       '--hold', 'attended', '--llm', '::xhigh+fast', 'dev', 'do it', '--', '--foo',
     ]  # fmt: skip
 
   def test_resume_and_raw_carried(self):
-    assert _inner_argv(_spec(resume=True, bro='dev', raw=True)) == [
+    spec = _spec(resume=True, bro='dev', raw=True)
+    assert _inner_argv(spec) == [
       'ride', 'along', '--in-place', '--workspace', 'w', '--harness', 'claude',
-      '--resume', '--raw', '--hold', 'attended', 'dev',
+      '--resume', '--raw', '--repo', str(spec.repo), '--hold', 'attended', 'dev',
     ]  # fmt: skip
 
   def test_the_bro_harness_re_enters_the_same_way(self):
@@ -48,7 +49,7 @@ class TestInnerCommand:
       _spec(solo=True, bro='dev', prompt='go'), harness='bro', harness_options={}
     )
     assert _inner_argv(spec) == [
-      'ride', 'solo', '--in-place', '--workspace', 'w', '--harness', 'bro',
+      'ride', 'solo', '--in-place', '--workspace', 'w', '--harness', 'bro', '--repo', str(spec.repo),
       '--hold', 'attended', 'dev', 'go',
     ]  # fmt: skip
 
@@ -99,6 +100,16 @@ class TestRunInPlace:
       assert os.environ['GIT_AUTHOR_NAME'] == 'dev'
     declaration.provision_workspace.assert_called_once_with(tmp_path)
     harness.run_in_place.assert_called_once()
+
+  def test_detached_session_skips_persona_workspace_provisioning(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ride_inner, 'bro_git_identity_env', lambda _name: {})
+    declaration = MagicMock()
+    monkeypatch.setattr(ride_inner, 'create_bro', lambda _name: declaration)
+    harness = MagicMock()
+    harness.run_in_place.return_value = 0
+    assert ride_inner.run_in_place(harness, dataclasses.replace(_spec(), repo=None)) == 0
+    declaration.provision_workspace.assert_not_called()
 
 
 class TestRequestedExitStatus:

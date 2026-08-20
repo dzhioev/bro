@@ -17,7 +17,6 @@ from bro.workspace.paths import (
   CONTAINER_SESSION_DIR,
   ensure_runtime_root,
   in_container,
-  project_root,
 )
 from ride import pending_summon
 from ride.flags import default_hold
@@ -36,7 +35,7 @@ from ride.workspace.docker import (
   find_container_id,
 )
 from ride.workspace.metadata import WorkspaceKind
-from ride.workspace.model import KindMismatch, SessionBusy, Workspace
+from ride.workspace.model import AttachmentMismatch, KindMismatch, SessionBusy, Workspace
 from ride.workspace.store import ScopedSecrets, log_scoped_secrets, materialize_scoped_store
 from ride.workspace.worktrees import ensure_host_worktree, provision_host_worktree
 
@@ -64,6 +63,7 @@ class SessionSpec:
   subject: Optional[str]
   arguments: list[str]
   harness_options: dict
+  repo: Optional[str] = None
 
   @property
   def llm_spec(self) -> LLMSpec:
@@ -83,6 +83,8 @@ class SessionSpec:
       flags['--keep'] = not self.drop
     verb = 'solo' if self.solo else 'along'
     parts = ['ride', verb, *(flag for flag, enabled in flags.items() if enabled)]
+    if self.repo is not None:
+      parts.extend(['--repo', self.repo])
     parts.extend(['--hold', self.hold])
     if self.llm is not None:
       parts.extend(['--llm', self.llm])
@@ -280,11 +282,12 @@ def _container_session(
       *summoned_mounts,
       f'{session_state}:{CONTAINER_SESSION_DIR}',
     ),
+    repo=workspace.repo,
   )
   if summoned is not None:
     try:
       return run_summoned_in_container(
-        launch, workspace, claim=lambda: pending_summon.claim(workspace.project, summoned.token)
+        launch, workspace, claim=lambda: pending_summon.claim(summoned.token)
       )
     except pending_summon.UnknownToken as error:
       log.error('%s', error)
@@ -300,20 +303,31 @@ def _host_session(
   launch_scope: ScopedLaunch,
   runtime_bundle: RuntimeBundle,
   container_runtime: ContainerRuntimeResolver,
-  summoned: Optional[pending_summon.PendingSummon],
+  summoned: Optional[pending_summon.PendingSummon] = None,
 ) -> int:
-  os.chdir(project_root())
   worktree = workspace.tree
   scoped = launch_scope.scoped
   log_scoped_secrets(spec.name, scoped.required, scoped.optional)
-  if not ensure_host_worktree(worktree, workspace.metadata.branch, base_ref):
-    return 1
-  if not provision_host_worktree(worktree):
-    return 1
+  if workspace.repo is None:
+    worktree.mkdir(parents=True, exist_ok=True)
+  else:
+    os.chdir(workspace.repo)
+    branch = workspace.metadata.branch
+    if branch is None:
+      raise ValueError('attached host workspace has no recorded branch')
+    if not ensure_host_worktree(worktree, branch, base_ref):
+      return 1
+    if not provision_host_worktree(worktree):
+      return 1
 
   inner = inner_command(spec, harness_flags=harness.inner_flags(spec))
   command = [str(runtime_bundle.host_venv / 'bin' / inner[0]), *inner[1:]]
   runner_env = runtime_bundle.host_session_env()
+  runner_env['RIDE_HOST_WORKSPACE'] = str(worktree)
+  if spec.repo is not None:
+    runner_env['RIDE_REPO'] = spec.repo
+  else:
+    runner_env.pop('RIDE_REPO', None)
   runner_env[credentials.REGISTRY_ENV] = str(
     materialize_scoped_store(launch_scope.store, workspace.path / 'credentials')
   )
@@ -328,7 +342,7 @@ def _host_session(
     # and the token is claimed only once nothing fallible is left before the run
     runner_env.update(_summoned_env(summoned, spec, f'unix:{summoned.socket}'))
     try:
-      pending_summon.claim(workspace.project, summoned.token)
+      pending_summon.claim(summoned.token)
     except pending_summon.UnknownToken as error:
       log.error('%s', error)
       return 1
@@ -392,13 +406,20 @@ def _start_session(
   container = not spec.host
   os.environ['RIDE_COMMAND'] = ' '.join(spec.to_command_argv())
   os.environ['RIDE_WORKSPACE'] = spec.name
+  if spec.repo is None:
+    os.environ.pop('RIDE_REPO', None)
+  else:
+    os.environ['RIDE_REPO'] = spec.repo
   os.environ.setdefault('BRO_SHELL_COMMAND', os.environ['RIDE_COMMAND'])
 
-  project = project_root()
-  ensure_runtime_root(project)
+  repo = None if spec.repo is None else Path(spec.repo)
+  ensure_runtime_root()
   base_ref: Optional[str] = None
   if spec.into is not None:
-    base_ref = resolve_ref(project, spec.into)
+    if repo is None:
+      log.error('--into requires --repo')
+      return 1
+    base_ref = resolve_ref(repo, spec.into)
     if base_ref is None:
       log.error('cannot resolve --into ref: %s', spec.into)
       return 1
@@ -412,12 +433,15 @@ def _start_session(
     # the summon request owns the base: its `into` ref, or the summoner's HEAD
     # read now — like a spawned child's, at the moment the child starts
     if summoned.into is not None:
-      base_ref = resolve_ref(project, summoned.into)
+      if repo is None:
+        log.error('a detached manual summon cannot name an into ref')
+        return 1
+      base_ref = resolve_ref(repo, summoned.into)
       if base_ref is None:
         log.error('cannot resolve the summon into ref: %s', summoned.into)
         return 1
-    else:
-      base_ref = resolve_head(project, Path(summoned.parent_workspace))
+    elif repo is not None:
+      base_ref = resolve_head(repo, Path(summoned.parent_workspace))
       if base_ref is None:
         log.error("cannot read the summoner's HEAD at %s", summoned.parent_workspace)
         return 1
@@ -431,7 +455,7 @@ def _start_session(
     recipe = dataclasses.replace(recipe, optional_baseline=frozenset())
   try:
     scoped, may_summon, store = preflight_scoped_launch(
-      scoped_secrets(spec.bro, recipe, llm_spec=spec.llm_spec),
+      scoped_secrets(spec.bro, recipe, repo=repo, llm_spec=spec.llm_spec),
       spec.bro,
       grant=spec.grant,
       revoke=spec.revoke,
@@ -442,11 +466,11 @@ def _start_session(
 
   if spec.host:
     runtime_bundle.materialize_host()
-  container_runtime = ContainerRuntimeResolver(runtime_bundle)
+  container_runtime = ContainerRuntimeResolver(runtime_bundle, repo)
 
   try:
-    workspace = Workspace.ensure(spec.name, project, spec.kind)
-  except KindMismatch as error:
+    workspace = Workspace.ensure(spec.name, repo, spec.kind)
+  except (AttachmentMismatch, KindMismatch) as error:
     log.error('%s', error)
     return 1
   launch = ScopedLaunch(scoped=scoped, may_summon=may_summon, store=store)
@@ -470,9 +494,8 @@ def _start_session(
 
 
 def resume_session(name: str, *, grant: list[str], revoke: list[str]) -> int:
-  project = project_root()
   try:
-    workspace = Workspace.open(name, project)
+    workspace = Workspace.open(name)
   except ValueError as error:
     log.error('%s', error)
     return 1

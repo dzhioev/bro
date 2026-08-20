@@ -34,7 +34,7 @@ def _mcp_record(bro: str, raw: bool) -> dict:
 def build_session_context(
   *,
   system_prompt: str,
-  branch: str,
+  branch: Optional[str],
   base_sha: Optional[str],
   base_ref: Optional[str],
   bro: str,
@@ -58,14 +58,15 @@ def build_session_context(
     {'kind': 'system_prompt', 'subtype': sp_subtype, 'title': sp_title, 'content': system_prompt}
   )
 
-  git_fields: dict = {'branch': branch}
-  if base_sha is not None:
-    git_fields['base_sha'] = base_sha
-  if base_ref is not None:
-    git_fields['base_ref'] = base_ref
-  records.append(
-    {'kind': 'git', 'subtype': 'state', 'title': 'git state at launch', 'fields': git_fields}
-  )
+  if branch is not None:
+    git_fields: dict = {'branch': branch}
+    if base_sha is not None:
+      git_fields['base_sha'] = base_sha
+    if base_ref is not None:
+      git_fields['base_ref'] = base_ref
+    records.append(
+      {'kind': 'git', 'subtype': 'state', 'title': 'git state at launch', 'fields': git_fields}
+    )
 
   records.append(_mcp_record(bro, raw))
 

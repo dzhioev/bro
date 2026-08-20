@@ -2,16 +2,16 @@
 
 At session start, detect your environment. Do not produce any visible output — silently incorporate this context into your planning.
 
-Call the `bro::banner` tool once. It returns the structured session facts as `key: value` lines (`kind`, `name`, `bro`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `ride_command`, `may_summon`, `trail_id`). Interpret them as follows:
+Call the `bro::banner` tool once. It returns the structured session facts as `key: value` lines (`kind`, `repo`, `name`, `bro`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `ride_command`, `may_summon`, `trail_id`). Interpret them as follows:
 
 1. `kind: container` means you are inside a docker container. Managed session containers also report `name`, `workspace_container_path`, and `docker_shell_command`; an unmanaged container omits them rather than claiming `/workspace` belongs to the session:
    - No direct filesystem access to the host
-   - git (push over HTTPS) and the `gh` CLI are pre-authenticated in managed sessions
-   - Push your changes in a managed session; the host cannot see uncommitted work
+   - When `repo` names an attachment, git (push over HTTPS) and the `gh` CLI are pre-authenticated; push changes from the managed session because the host cannot see uncommitted workspace work
+   - `repo: none (detached)` means no repository is attached: `/workspace` is a plain writable directory, not a checkout, so do not infer git state from cwd
    - `docker_shell_command` (`ride exec <name>`) is what the user runs from their host shell to drop into a managed container
    - Bare commands resolve from the root's pinned runtime. Use `uv run <command>` or `.venv/bin/<command>` for repository tools; activate the workspace venv only when a human explicitly wants to replace that ordering in an interactive shell
 
-2. Use the session `name` as a hint about the work scope
+2. Treat `repo` as the attachment fact; never probe cwd git to decide whether the managed session is attached. Use the session `name` as a hint about the work scope.
 
 3. `may_summon` lists the bros this session may summon — plan delegation from it instead of probing: `may_summon: none` means this session delegates to nobody, and the line's absence means the launcher published no list (an unmanaged environment). A listed target can still be denied for another reason, but an unlisted one always is. The list is fixed at launch and nothing in-session widens it; widening means relaunching with `--grant @<bro>`, which is the user's call.
 

@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 from dataclasses import replace
+from pathlib import Path
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
@@ -58,6 +59,7 @@ def _spec(
   resolved_bro = bro if bro is not None else 'bro-dev'
   return ride_session.SessionSpec(
     name=name,
+    repo=str(Path.cwd()),
     harness='claude',
     workspace_pinned=True,
     host=host,
@@ -122,9 +124,8 @@ def _runtime_bundle(tmp_path) -> RuntimeBundle:
 
 @pytest.fixture(autouse=True)
 def configured_project(monkeypatch, tmp_path):
-  # every launch path takes the workspace session lock and records a resume spec
-  # under the project root; keep both off the real repo
-  monkeypatch.setattr(ride_session, 'project_root', lambda: tmp_path)
+  monkeypatch.chdir(tmp_path)
+  monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
 
   @contextlib.contextmanager
   def resolved_runtime_bundle():
@@ -326,6 +327,55 @@ class TestSummonAllowList:
     assert h.run_in_container.call_count == 0
 
 
+class TestDetachedSession:
+  def test_container_launch_records_no_attachment_or_branch(self):
+    spec = replace(_spec(drop=False), repo=None)
+    with _ContainerHarness() as harness:
+      assert ride_session.start_session(spec) == 0
+      assert 'RIDE_REPO' not in os.environ
+      assert '--repo' not in os.environ['RIDE_COMMAND']
+    workspace = Workspace.open('w')
+    assert workspace.repo is None
+    assert workspace.metadata.branch is None
+    launch = harness.run_in_container.call_args.args[0]
+    assert '--repo' not in launch.command
+    assert 'RIDE_BASE_REF' not in launch.env
+
+  def test_into_is_refused_without_an_attachment(self, caplog):
+    spec = replace(_spec(into='feature'), repo=None)
+    with _ContainerHarness() as harness:
+      assert ride_session.start_session(spec) == 1
+    assert '--into requires --repo' in caplog.text
+    harness.run_in_container.assert_not_called()
+
+  def test_host_launch_uses_a_plain_directory_and_skips_project_setup(self, tmp_path):
+    spec = replace(_spec(host=True), repo=None)
+    workspace = Workspace.create('detached-host', None, WorkspaceKind.WORKTREE)
+    harness = MagicMock()
+    harness.inner_flags.return_value = []
+    with (
+      patch('ride.session.get_harness', return_value=harness),
+      patch('ride.session.ensure_host_worktree') as ensure_worktree,
+      patch('ride.session.provision_host_worktree') as provision_worktree,
+      patch('ride.session.materialize_scoped_store', return_value=tmp_path / 'registry'),
+      patch('ride.session.broker_enabled', return_value=False),
+      patch('ride.session.subprocess.run', return_value=MagicMock(returncode=0)),
+    ):
+      code = ride_session._host_session(
+        harness,
+        spec,
+        workspace,
+        None,
+        _launch_scope(),
+        _runtime_bundle(tmp_path),
+        ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
+      )
+    assert code == 0
+    assert workspace.tree.is_dir()
+    ensure_worktree.assert_not_called()
+    provision_worktree.assert_not_called()
+
+
 class TestContainerCommand:
   def test_command_is_the_in_place_invocation(self):
     # the docker command is the same in-place runner host mode spawns; the
@@ -335,7 +385,7 @@ class TestContainerCommand:
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
     assert command == [
-      'ride', 'along', '--in-place', '--workspace', 'w', '--harness', 'claude',
+      'ride', 'along', '--in-place', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
       '--hold', 'attended', '--llm', '::xhigh+fast', 'dev', 'go',
     ]  # fmt: skip
 
@@ -352,6 +402,8 @@ class TestContainerCommand:
       'w',
       '--harness',
       'claude',
+      '--repo',
+      str(Path.cwd()),
       '--hold',
       'attended',
       'dev',
@@ -395,6 +447,8 @@ class TestContainerCommand:
       '--harness',
       'claude',
       '--raw',
+      '--repo',
+      str(Path.cwd()),
       '--hold',
       'attended',
       'dev',
@@ -410,7 +464,7 @@ class TestContainerCommand:
     launch = harness.run_in_container.call_args.args[0]
     assert not launch.tty
     assert launch.command == [
-      'ride', 'solo', '--in-place', '--workspace', 'w', '--harness', 'claude',
+      'ride', 'solo', '--in-place', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
       '--hold', 'unattended', 'bro-dev', 'go',
     ]  # fmt: skip
 
@@ -473,6 +527,8 @@ class TestContainerCommand:
       '--harness',
       'claude',
       '--resume',
+      '--repo',
+      str(Path.cwd()),
       '--hold',
       'attended',
       'bro-dev',
@@ -507,7 +563,7 @@ class TestCommandArgv:
       arguments=['--foo'],
     ).to_command_argv()
     assert parts == [
-      'ride', 'along', '--drop', '--hold', 'attended', '--llm', '::xhigh+fast',
+      'ride', 'along', '--drop', '--repo', str(Path.cwd()), '--hold', 'attended', '--llm', '::xhigh+fast',
       '--harness', 'claude', '--workspace', 'w', '--grant', 'gmail_creds',
       '--grant', '@bro', '--revoke', 'notion', '--into', 'feature', 'dev',
       '--', '--foo',
@@ -519,6 +575,8 @@ class TestCommandArgv:
       'ride',
       'along',
       '--host',
+      '--repo',
+      str(Path.cwd()),
       '--hold',
       'detached',
       '--harness',
@@ -533,6 +591,8 @@ class TestCommandArgv:
     assert _spec(hold='attended').to_command_argv() == [
       'ride',
       'along',
+      '--repo',
+      str(Path.cwd()),
       '--hold',
       'attended',
       '--harness',
@@ -550,6 +610,8 @@ class TestCommandArgv:
     assert automatic.to_command_argv() == [
       'ride',
       'solo',
+      '--repo',
+      str(Path.cwd()),
       '--hold',
       'unattended',
       '--harness',
@@ -561,6 +623,8 @@ class TestCommandArgv:
       'ride',
       'solo',
       '--keep',
+      '--repo',
+      str(Path.cwd()),
       '--hold',
       'unattended',
       '--harness',
@@ -801,7 +865,7 @@ class TestHostSession:
       None,
       launch_scope,
       container=False,
-      runtime_bundle=_runtime_bundle(workspace.project),
+      runtime_bundle=_runtime_bundle(workspace.repo or workspace.path),
       container_runtime=ContainerRuntimeResolver.fixed(
         ContainerRuntime('runtime-image', 'bundle-hash')
       ),
@@ -811,7 +875,6 @@ class TestHostSession:
     workspace, worktree = self._fake_workspace(monkeypatch, tmp_path, has_session=False)
     ride_binary = _runtime_bundle(tmp_path).host_venv / 'bin' / 'ride'
     monkeypatch.setattr(workspace_project, 'project_root', lambda: tmp_path)
-    monkeypatch.setattr(ride_session, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(ride_session, 'ensure_host_worktree', lambda *_a: True)
     monkeypatch.setattr(ride_session, 'provision_host_worktree', lambda *_a: True)
@@ -871,7 +934,7 @@ class TestHostSession:
     assert self._host_session(spec, workspace, scope) == 5
     assert roots[0]['workspace'] is workspace
     assert roots[0]['command'] == [
-      str(ride_binary), 'along', '--in-place', '--workspace', 'w', '--harness', 'claude',
+      str(ride_binary), 'along', '--in-place', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
       '--hold', 'attended', '--llm', '::xhigh', 'bro-dev', 'go', '--', '--foo',
     ]  # fmt: skip
     assert 'VIRTUAL_ENV' not in roots[0]['env']
@@ -937,7 +1000,7 @@ class TestHostSession:
     assert self._host_session(spec, workspace, _launch_scope()) == 0
     argv, kwargs = runs[0]
     assert argv == [
-      str(ride_binary), 'along', '--in-place', '--workspace', 'w', '--harness', 'claude',
+      str(ride_binary), 'along', '--in-place', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
       '--hold', 'attended', '--llm', '::xhigh', 'bro-dev', 'go', '--', '--foo',
     ]  # fmt: skip
     assert kwargs['cwd'] == str(worktree)
@@ -972,7 +1035,7 @@ class TestHostSession:
         None,
         _launch_scope(),
         container=False,
-        runtime_bundle=_runtime_bundle(workspace.project),
+        runtime_bundle=_runtime_bundle(workspace.repo or workspace.path),
         container_runtime=ContainerRuntimeResolver.fixed(
           ContainerRuntime('runtime-image', 'bundle-hash')
         ),
@@ -989,12 +1052,12 @@ class TestHostSession:
     assert env[ride_session.START_SESSION_BROXY_ENV] == '1'
     assert kwargs['cwd'] == str(worktree)
     with pytest.raises(pending_summon.UnknownToken):
-      pending_summon.peek(tmp_path, record.token)
+      pending_summon.peek(record.token)
 
   def test_summoned_host_run_fails_cleanly_on_a_spent_token(self, monkeypatch, tmp_path, caplog):
     workspace, _, _ = self._prepare_launch(monkeypatch, tmp_path)
     record = _pending_record(tmp_path)
-    pending_summon.claim(tmp_path, record.token)
+    pending_summon.claim(record.token)
     monkeypatch.setattr(
       ride_session.subprocess,
       'run',
@@ -1007,7 +1070,7 @@ class TestHostSession:
         None,
         _launch_scope(),
         container=False,
-        runtime_bundle=_runtime_bundle(workspace.project),
+        runtime_bundle=_runtime_bundle(workspace.repo or workspace.path),
         container_runtime=ContainerRuntimeResolver.fixed(
           ContainerRuntime('runtime-image', 'bundle-hash')
         ),
@@ -1166,7 +1229,6 @@ class TestHostSession:
   def test_resume_guard_fails_fast_before_worktree_create(self, monkeypatch, tmp_path):
     workspace, _ = self._fake_workspace(monkeypatch, tmp_path, has_session=False)
     monkeypatch.setattr(workspace_project, 'project_root', lambda: tmp_path)
-    monkeypatch.setattr(ride_session, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
 
     def boom(*_a, **_k):
@@ -1200,7 +1262,6 @@ class TestHostBrokerPingRoundTrip:
     ride_binary = runtime_bundle.host_venv / 'bin' / 'ride'
     ride_binary.write_text('#!/bin/sh\nexec broker request ping "{}" --timeout 30\n')
 
-    monkeypatch.setattr(ride_session, 'project_root', lambda: root)
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(ride_session, 'ensure_host_worktree', lambda *_a: True)
     monkeypatch.setattr(ride_session, 'provision_host_worktree', lambda *_a: True)
@@ -1279,7 +1340,7 @@ client.close(confirm=True)
     workspace.tree.mkdir(parents=True)
     answer_child = root / 'answer_child.py'
     answer_child.write_text(self._ANSWER_CHILD)
-    pending_dir = summon_dir(root) / 'pending'
+    pending_dir = summon_dir() / 'pending'
     runtime_bundle = _runtime_bundle(root)
     ride_binary = runtime_bundle.host_venv / 'bin' / 'ride'
     # stands in for the in-place runner: register the manual summon, let the
@@ -1290,7 +1351,6 @@ client.close(confirm=True)
     )
     ride_binary.chmod(0o755)
 
-    monkeypatch.setattr(ride_session, 'project_root', lambda: root)
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(ride_session, 'ensure_host_worktree', lambda *_a: True)
     monkeypatch.setattr(ride_session, 'provision_host_worktree', lambda *_a: True)
@@ -1319,13 +1379,13 @@ client.close(confirm=True)
     assert 'the pair verdict' in capfd.readouterr().out
     # the summon ended: the pending record is discarded and the ledger carries ok
     assert list(pending_dir.glob('*.json')) == []
-    status = json.loads((summon_dir(root) / 'w.status.json').read_text())
+    status = json.loads((summon_dir() / 'w.status.json').read_text())
     assert status['active'] == []
     assert status['last']['outcome'] == 'ok'
     assert status['last']['trail_id'] == 't-manual'
     # the started payload's workspace fact routed the trail pointer to the
     # child's own (user-chosen) workspace
-    pointer = trail_pointer_module.session_pointer(workspace_dir(root, 'external-ws'))
+    pointer = trail_pointer_module.session_pointer(workspace_dir('external-ws'))
     assert trail_pointer_module.read(pointer) == 't-manual'
 
 
@@ -1344,7 +1404,7 @@ def _pending_record(tmp_path, **overrides) -> pending_summon.PendingSummon:
       **overrides,
     }
   )
-  pending_summon.write(tmp_path, record)
+  pending_summon.write(record)
   return record
 
 
@@ -1373,7 +1433,7 @@ class TestSummonedSession:
     # the threaded claim consumes the token
     run.call_args.kwargs['claim']()
     with pytest.raises(pending_summon.UnknownToken):
-      pending_summon.peek(tmp_path, record.token)
+      pending_summon.peek(record.token)
 
   def test_summon_into_overrides_the_parent_head(self, tmp_path):
     record = _pending_record(tmp_path, into='release')

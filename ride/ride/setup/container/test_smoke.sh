@@ -8,8 +8,11 @@ TAG="bro/framework:smoke-test"
 # Colima shares the project tree but not the host's default temporary directory.
 SMOKE_TMP="$(mktemp -d "$PROJECT/.smoke-XXXXXX")"
 trap 'rm -rf "$SMOKE_TMP"' EXIT
-mkdir -p "$SMOKE_TMP/workspace" "$SMOKE_TMP/claude" "$SMOKE_TMP/bro"
+mkdir -p \
+  "$SMOKE_TMP/workspace" "$SMOKE_TMP/claude" "$SMOKE_TMP/bro" \
+  "$SMOKE_TMP/detached-workspace" "$SMOKE_TMP/detached-claude" "$SMOKE_TMP/detached-bro"
 echo '{}' > "$SMOKE_TMP/bro/credentials.json"
+echo '{}' > "$SMOKE_TMP/detached-bro/credentials.json"
 
 echo "building runtime and project images" >&2
 python - "$TAG" "$PROJECT" "$SMOKE_TMP/bundle-hash" >&2 <<'PY'
@@ -29,8 +32,10 @@ with resolve_runtime_bundle() as bundle:
   build_project_image(tag, runtime, project)
   bundle.materialize_container(runtime)
   output.write_text(bundle.hash)
+  output.with_name('runtime-tag').write_text(runtime)
 PY
 BUNDLE_HASH="$(cat "$SMOKE_TMP/bundle-hash")"
+RUNTIME_TAG="$(cat "$SMOKE_TMP/runtime-tag")"
 
 HOST_REPO="$SMOKE_TMP/host-repo"
 git clone --quiet "$PROJECT" "$HOST_REPO"
@@ -60,6 +65,7 @@ docker run --rm -i \
   -e "HOME=/home/ride" \
   -e "CLAUDE_CONFIG_DIR=/home/ride/.claude" \
   -e "RIDE_WORKSPACE=smoke-test" \
+  -e "RIDE_REPO=$HOST_REPO" \
   -e "RIDE_BRANCH=worktree-smoke-test" \
   "$TAG" bash -s >&2 <<'SMOKE'
     set -e
@@ -101,6 +107,17 @@ SMOKE
 grep -q modified_by_container "$SMOKE_TMP/claude/.claude.json"
 test "$(sha256sum "$SMOKE_TMP/host_claude.json" | cut -d' ' -f1)" = "$HOST_CLAUDE_SHA"
 
+echo "running detached entrypoint" >&2
+docker run --rm \
+  -v "$SMOKE_TMP/detached-workspace:/workspace" \
+  -v "$SMOKE_TMP/detached-claude:/home/ride/.claude" \
+  -v "$SMOKE_TMP/detached-bro:/home/ride/.bro" \
+  -v "ride-runtime-$BUNDLE_HASH:/var/ride/runtime:ro" \
+  -e "HOME=/home/ride" \
+  -e "CLAUDE_CONFIG_DIR=/home/ride/.claude" \
+  -e "RIDE_WORKSPACE=detached-smoke-test" \
+  "$RUNTIME_TAG" bash -c 'test -z "$(find /workspace -mindepth 1 -print -quit)"' >&2
+
 rm "$SMOKE_TMP/workspace/setup.sh" "$SMOKE_TMP/workspace/.venv"
 ln -s /opt/ride-venv "$SMOKE_TMP/workspace/.venv"
 docker run --rm \
@@ -113,6 +130,7 @@ docker run --rm \
   -e "HOME=/home/ride" \
   -e "CLAUDE_CONFIG_DIR=/home/ride/.claude" \
   -e "RIDE_WORKSPACE=smoke-test" \
+  -e "RIDE_REPO=$HOST_REPO" \
   -e "RIDE_BRANCH=worktree-smoke-test" \
   "$TAG" bash -c 'test "$(readlink /workspace/.venv)" = /opt/project-venv' >&2
 

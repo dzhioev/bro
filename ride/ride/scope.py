@@ -5,10 +5,10 @@ the operated project's instance selection.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from bro.base import credentials, host_config, log
-from bro.workspace.paths import project_root
 from ride.workspace.store import ScopedSecrets, finalize_scoped_secrets
 
 if TYPE_CHECKING:
@@ -44,20 +44,19 @@ BRO_RUN_RECIPE = ScopeRecipe(
 )
 
 
-def bind_project_credentials() -> dict[str, Optional[str]]:
-  """bind this process's credential resolution to the operated project's
-  instance selection (`bro.base.host_config`) and return it. every host-side
-  read on a launch's behalf goes through the binding — the scope it hydrates,
-  the bro's feature gates, a prefetch made for the session — so none of them
-  resolves a kind to a different instance than the launch does.
-  """
-  selection = host_config.project_instances(project_root())
+def bind_project_credentials(repo: Optional[Path]) -> dict[str, Optional[str]]:
+  """bind credential resolution to an attachment's selection or kind defaults."""
+  selection = {} if repo is None else host_config.project_instances(repo)
   credentials.select_instances(selection)
   return selection
 
 
 def scoped_secrets(
-  bro_name: str, recipe: ScopeRecipe, *, llm_spec: Optional['LLMSpec'] = None
+  bro_name: str,
+  recipe: ScopeRecipe,
+  *,
+  repo: Optional[Path] = None,
+  llm_spec: Optional['LLMSpec'] = None,
 ) -> ScopedSecrets:
   """the credential scope of a launch running as `bro_name` under `recipe`.
 
@@ -75,7 +74,7 @@ def scoped_secrets(
   """
   from bro.registry import create_bro
 
-  bind_project_credentials()
+  bind_project_credentials(repo)
   required: set[str] = set()
   optional = set(recipe.optional_baseline)
   try:
@@ -107,6 +106,7 @@ def summoned_credential_scope(
   bro_name: str,
   recipe: ScopeRecipe,
   *,
+  repo: Optional[Path] = None,
   grant: list[str],
   revoke: list[str],
   llm_spec: Optional['LLMSpec'] = None,
@@ -117,7 +117,7 @@ def summoned_credential_scope(
   the `@bro` halves shape the summon allow-list instead. Raises `ValueError` on
   a no-op override."""
   return finalize_scoped_secrets(
-    scoped_secrets(bro_name, recipe, llm_spec=llm_spec),
+    scoped_secrets(bro_name, recipe, repo=repo, llm_spec=llm_spec),
     grant=grant,
     revoke=revoke,
   )

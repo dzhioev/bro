@@ -38,6 +38,7 @@ class TestSessionFacts:
       'RIDE_COMMAND',
       'BRO_SHELL_COMMAND',
       'RIDE_HOST_WORKSPACE',
+      'RIDE_REPO',
       summon.MAY_SUMMON_ENV,
     ):
       monkeypatch.delenv(v, raising=False)
@@ -78,38 +79,25 @@ class TestSessionFacts:
     assert facts.shell_command == 'dive-in --hold attended --new '
     assert facts.prompt == 'I want X'
 
-  def test_host_worktree_with_derived_path(self, monkeypatch, tmp_path):
-    project = tmp_path / 'project'
-    worktree = workspace_paths.workspace_tree(project, 'feature')
-    worktree.mkdir(parents=True)
-    monkeypatch.setattr(workspace_paths, 'project_root', lambda: project)
+  def test_host_worktree_reads_paths_from_the_session_environment(self, monkeypatch, tmp_path):
+    worktree = tmp_path / 'tree'
     monkeypatch.setenv('RIDE_WORKSPACE', 'feature')
+    monkeypatch.setenv('RIDE_HOST_WORKSPACE', str(worktree))
+    monkeypatch.setenv('RIDE_REPO', str(tmp_path / 'project'))
     monkeypatch.setenv('RIDE_COMMAND', 'ride along feature')
     facts = SessionFacts.collect()
     assert facts.in_container is False
     assert facts.name == 'feature'
+    assert facts.repo == str(tmp_path / 'project')
     assert facts.bro is None
     assert facts.host_workspace == str(worktree)
     assert facts.container_workspace is None
     assert facts.exec_command is None
-    # BRO_SHELL_COMMAND defaults to RIDE_COMMAND — they're equal in this case
     assert facts.shell_command == 'ride along feature'
     assert facts.ride_command == 'ride along feature'
 
-  def test_a_directory_in_no_repository_leaves_the_path_underived(self, monkeypatch):
-    def no_project():
-      raise workspace_paths.RuntimeLocationError('no project')
-
-    monkeypatch.setattr(workspace_paths, 'project_root', no_project)
+  def test_a_missing_host_path_is_not_derived_from_cwd(self, monkeypatch):
     monkeypatch.setenv('RIDE_WORKSPACE', 'feature')
-
-    assert SessionFacts.collect().host_workspace is None
-
-  def test_an_unusable_data_home_leaves_the_path_underived(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(workspace_paths, 'project_root', lambda: tmp_path / 'project')
-    monkeypatch.setenv('RIDE_WORKSPACE', 'feature')
-    monkeypatch.setenv('XDG_DATA_HOME', 'share')
-
     assert SessionFacts.collect().host_workspace is None
 
   def test_shell_command_falls_back_to_ride_command(self, monkeypatch):
@@ -216,7 +204,7 @@ class TestRenderBanner:
       container_workspace=None,
       exec_command=None,
     ).render_llm()
-    assert out == 'kind: worktree\ntrail_id: none (not published)'
+    assert out == 'kind: worktree\nrepo: none (detached)\ntrail_id: none (not published)'
 
   def test_llm_lists_the_summon_targets(self):
     assert 'may_summon: dev, reviewer' in _facts(may_summon=('dev', 'reviewer')).render_llm()
