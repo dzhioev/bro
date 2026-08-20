@@ -585,7 +585,7 @@ class TestToolLayer:
   @pytest.mark.parametrize(
     ('tool_names', 'error_type', 'message'),
     [
-      ((), ValueError, 'must mount a server, block a native tool, or narrow one'),
+      ((), ValueError, 'must mount a server, block a native tool, narrow one, or serve one'),
       (('',), TypeError, 'non-empty strings'),
       (('Read', 'Read'), ValueError, 'duplicate names'),
     ],
@@ -609,6 +609,23 @@ class TestToolLayer:
   def test_allow_commands_rejects_invalid_declarations(self, commands, error_type, message):
     with pytest.raises(error_type, match=message):
       mcp_mod.allow_commands('Monitor', *commands)
+
+  @pytest.mark.parametrize(
+    ('tool_names', 'error_type', 'message'),
+    [
+      ((), ValueError, 'needs at least one tool name'),
+      (('',), TypeError, 'non-empty strings'),
+      (('TaskStop', 'TaskStop'), ValueError, 'duplicate names'),
+    ],
+  )
+  def test_serve_rejects_invalid_declarations(self, tool_names, error_type, message):
+    with pytest.raises(error_type, match=message):
+      mcp_mod.serve(*tool_names)
+
+  def test_layers_merge_into_one(self):
+    layer = mcp_mod.allow_commands('Monitor', 'watch it') | mcp_mod.serve('TaskStop')
+    assert layer.native_tool_commands == (('Monitor', 'watch it'),)
+    assert layer.served_native_tool_names == ('TaskStop',)
 
   def test_mount_selects_from_one_toolset_type(self):
     toolset = mcp_mod.Toolset('layer')

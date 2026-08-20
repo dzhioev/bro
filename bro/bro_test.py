@@ -503,6 +503,35 @@ class TestToolLayers:
     with pytest.raises(ValueError, match='Monitor is narrowed.*never blocked'):
       InvalidBro().blocked_tool_names('claude')
 
+  def test_serving_takes_a_tool_out_of_the_block_unnarrowed(self):
+    class WatchingBro(BaseBro):
+      name = 'serving'
+      description = 'd'
+      tools: ClassVar = [
+        when(mcp.harness == 'claude', mcp.block('Bash', 'Monitor', 'TaskStop')),
+        when(mcp.harness == 'claude', mcp.allow_commands('Monitor', 'watch it')),
+        when(mcp.harness == 'claude', mcp.serve('TaskStop')),
+      ]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    bro = WatchingBro()
+    assert bro.blocked_tool_names('claude') == ('Bash',)
+    assert bro.narrowed_tool_commands('claude') == {'Monitor': ('watch it',)}
+
+  def test_serving_a_tool_the_bro_never_blocked_raises(self):
+    class InvalidBro(BaseBro):
+      name = 'invalid-serving'
+      description = 'd'
+      tools: ClassVar = [when(mcp.harness == 'claude', mcp.serve('TaskStop'))]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(ValueError, match='TaskStop is served whole but never blocked'):
+      InvalidBro().blocked_tool_names('claude')
+
 
 class TestConditionalComponents:
   # a bro instance composes for the bro harness, so `when`-wrapped entries are

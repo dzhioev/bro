@@ -624,9 +624,14 @@ def _fold_tool_layers(layers: list[mcp.ToolLayer], harness: mcp.Harness) -> _Too
   server_specs: list[mcp.MCPServerSpec] = []
   blocked_names: list[str] = []
   narrowed: dict[str, list[str]] = {}
+  handed_back: dict[str, str] = {}
   for layer in layers:
     server_specs.extend(layer.server_specs)
-    native = layer.blocked_native_tool_names + tuple(name for name, _ in layer.native_tool_commands)
+    native = (
+      layer.blocked_native_tool_names
+      + layer.served_native_tool_names
+      + tuple(name for name, _ in layer.native_tool_commands)
+    )
     if len(native) > 0 and harness != 'claude':
       raise ValueError(
         f'cannot declare native tools {native!r} on the {harness!r} harness; '
@@ -635,13 +640,16 @@ def _fold_tool_layers(layers: list[mcp.ToolLayer], harness: mcp.Harness) -> _Too
     blocked_names.extend(layer.blocked_native_tool_names)
     for name, command in layer.native_tool_commands:
       narrowed.setdefault(name, []).append(command)
+      handed_back[name] = 'narrowed to specific commands'
+    for name in layer.served_native_tool_names:
+      handed_back[name] = 'served whole'
   blocked = dict.fromkeys(blocked_names)
-  for name in narrowed:
-    # a narrowed tool is served, so it leaves the block set the harness withholds
+  for name, form in handed_back.items():
+    # a tool handed back is one the harness serves, so it leaves the block set
     if name not in blocked:
       raise ValueError(
-        f'{name} is narrowed to specific commands but never blocked; narrowing '
-        'only bounds a tool the bro otherwise withholds'
+        f'{name} is {form} but never blocked; handing a native tool back means '
+        'nothing where the bro does not withhold it'
       )
     del blocked[name]
   return _ToolSelection(

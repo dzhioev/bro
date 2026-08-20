@@ -38,9 +38,12 @@ class TestWatch:
   def test_selected_on_claude_only(self):
     entry = claude.watch('summon watch')
     assert select([entry], harness='claude') == [
-      ToolLayer(native_tool_commands=(('Monitor', 'summon watch'),))
+      ToolLayer(
+        native_tool_commands=(('Monitor', 'summon watch'),),
+        served_native_tool_names=('TaskOutput', 'TaskStop'),
+      )
     ]
     assert select([entry], harness='bro') == []
 
-  def test_narrows_a_tool_the_shell_group_withholds(self):
-    assert 'Monitor' in claude.SHELL
+  def test_hands_back_tools_the_shell_group_withholds(self):
+    assert {'Monitor', 'TaskOutput', 'TaskStop'} <= set(claude.SHELL)
