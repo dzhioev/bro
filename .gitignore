@@ -1,10 +1,8 @@
 .DS_Store
 __pycache__/
-build/
 dist/
 .venv
 *.swp
-*.egg-info/
 .smoke-*/
 # runtime-synthesized credential dir (deployed services write it; on the host
 # secrets live in ~/.bro). never commit it
