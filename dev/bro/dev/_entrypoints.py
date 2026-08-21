@@ -17,6 +17,10 @@ def bro_dev_install():
   return _run('bro.dev.install')
 
 
+def bro_dev_markdown_policy():
+  return _run('bro.dev.markdown_policy')
+
+
 def bro_dev_sync_scripts():
   return _run('bro.dev.sync_scripts')
 

@@ -308,10 +308,14 @@ version = "0.1.0"
 source = { editable = "dev" }
 dependencies = [
     { name = "bro" },
+    { name = "markdown-it-py" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "bro", editable = "." }]
+requires-dist = [
+    { name = "bro", editable = "." },
+    { name = "markdown-it-py" },
+]
 
 [[package]]
 name = "bro-local"

@@ -13,7 +13,7 @@ This workspace member owns `pyproject.toml` — its distribution metadata, depen
   - `usage_report.py` aggregates token-accounting footers over a git range
   - `install.py` installs the commit-footer hooks and the repo-local `git golc` alias
   - `git_golc.py` backs that alias with per-commit output-token credits
-  - `shell_policy.py` and `packaging_policy.py` expose reusable repository checks over an explicit root
+  - `shell_policy.py`, `packaging_policy.py`, and `markdown_policy.py` expose reusable repository checks over an explicit root; the last also backs `check-markdown`, which holds a bulk prose reflow to whitespace and nothing else
   - `references.py` declares the `dev-style` source over `bro/prompts/dev/style.md`
 - `bro/workflow/` — development delivery mechanics: co-author and token-accounting commit metadata, branch folding, PR landing, and the packaged git hooks. Its public import paths remain `bro.workflow.*`; its CLIs are `commit-footer`, `fold-branch`, and `land-pr`
 - `bro/extra/github/poll_pr.py` — the `poll-pr` review watcher. The GitHub client and App-auth source it consumes remain in core at `bro.extra.github.api` and `.app`
