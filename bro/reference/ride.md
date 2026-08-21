@@ -102,7 +102,7 @@ A URL attachment is normalized and mapped to `<runtime-root>/repos/<slug>-<diges
 
 ## Workspaces
 
-A workspace is one directory, `<runtime-root>/workspaces/<name>/`, holding its writable tree plus everything the launch machinery records about it. Workspace names are global, so every lifecycle verb identifies one by name from any directory:
+A workspace is one directory, `<runtime-root>/workspaces/<name>/`, holding its writable tree plus everything the launch machinery records about it. Workspace names are global, so every lifecycle verb identifies one by name from any directory. A name is one path component, and one a launch cannot use fails naming it rather than reaching the filesystem. A directory under the store that records no workspace is ignored by enumeration, so a stray entry cannot disable the lifecycle verbs:
 
 ```
 <runtime-root>/workspaces/<name>/

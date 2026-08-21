@@ -6,7 +6,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Optional
 
-from bro.workspace.paths import workspace_dir
+from bro.workspace.paths import is_workspace_name, workspace_dir
 
 _METADATA_FILE = 'meta.json'
 
@@ -65,7 +65,7 @@ def _metadata_file(name: str) -> Path:
 
 
 def is_workspace(name: str) -> bool:
-  return _metadata_file(name).is_file()
+  return is_workspace_name(name) and _metadata_file(name).is_file()
 
 
 def read_metadata(name: str) -> WorkspaceMetadata:

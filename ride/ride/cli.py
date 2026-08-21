@@ -9,8 +9,14 @@ from bro.base import log
 from bro.base.args import REMAINDER, SUPPRESS, Parser
 from bro.launch.llm_flags import canonicalize, drop_piece_flags, selection_from_args
 from bro.llm.providers import LLMSelectionError
+from bro.registry import get_class
 from bro.workspace.banner import banner
-from bro.workspace.paths import RuntimeLocationError, fresh_workspace_name, project_root
+from bro.workspace.paths import (
+  RuntimeLocationError,
+  WorkspaceNameError,
+  fresh_workspace_name,
+  project_root,
+)
 from bro.workspace.project import project_config
 from ride import pending_summon
 from ride.clean import clean_workspaces
@@ -35,13 +41,14 @@ _Main = Callable[[list[str]], Optional[int]]
 
 
 def reports_runtime_errors(main: _Main) -> _Main:
-  """render runtime location and state migration failures as CLI errors."""
+  """render runtime location, workspace name, and state migration failures as
+  CLI errors."""
 
   @functools.wraps(main)
   def wrapper(argv: list[str]) -> Optional[int]:
     try:
       return main(argv)
-    except (RuntimeLocationError, RuntimeStateMigrationError) as error:
+    except (RuntimeLocationError, WorkspaceNameError, RuntimeStateMigrationError) as error:
       log.error('%s', error)
       return 1
 
@@ -243,6 +250,9 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     args['revoke'] = [*summoned.revoke, *args['revoke']]
   harness_options = pop_harness_options(parser, args, harness_name, solo=solo, host=args['host'])
   try:
+    # not every harness's llm resolution consults the registry, so the launch
+    # checks the name itself
+    get_class(bro)
     resolved_llm = harness.resolve_llm(args['llm'], bro)
   except (KeyError, LLMSelectionError, ValueError) as error:
     parser.error(str(error))

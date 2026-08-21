@@ -191,6 +191,12 @@ class TestAlong:
       ride_cli.main(['ride', 'along', '--provider', 'openai', 'dev'])
     assert '--harness bro' in capsys.readouterr().err
 
+  def test_an_unknown_bro_is_named_on_either_harness(self, capsys):
+    for harness in ('claude', 'bro'):
+      with pytest.raises(SystemExit):
+        ride_cli.main(['ride', 'along', '--harness', harness, 'no-such-bro'])
+      assert "unknown bro: 'no-such-bro'" in capsys.readouterr().err
+
   def test_bro_harness_builds_a_native_chat(self):
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'along', '--harness', 'bro', 'dev']) == 0

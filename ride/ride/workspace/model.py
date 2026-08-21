@@ -323,7 +323,11 @@ class Workspace(ABC):
     root = workspaces_dir()
     if not root.is_dir():
       return []
-    return [cls.open(path.name) for path in sorted(root.iterdir()) if path.is_dir()]
+    return [
+      cls.open(path.name)
+      for path in sorted(root.iterdir())
+      if path.is_dir() and is_workspace(path.name)
+    ]
 
 
 class WorktreeWorkspace(Workspace):
