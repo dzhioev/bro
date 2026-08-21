@@ -253,9 +253,9 @@ def _installed_distributions() -> list[importlib.metadata.Distribution]:
 
   Discovery walks every `sys.path` entry, so an editable installation that puts its own source
   tree on the path also surfaces the `*.egg-info` a setuptools build left there. That legacy
-  record carries `PKG-INFO` where a PEP 376 installation record carries `METADATA`; beside one the
-  installer wrote for the same distribution it is a build artifact of that installation rather
-  than a second one.
+  record carries `PKG-INFO` where a PEP 376 installation record carries `METADATA`, and it is a
+  build artifact rather than an installation: beside the installer's record for the same
+  distribution it collapses into it.
   """
   records: dict[str, list[importlib.metadata.Distribution]] = {}
   for distribution in importlib.metadata.distributions():
@@ -266,13 +266,19 @@ def _installed_distributions() -> list[importlib.metadata.Distribution]:
     installation_records = [
       candidate for candidate in candidates if candidate.read_text('METADATA') is not None
     ]
-    kept = candidates if len(installation_records) == 0 else installation_records
-    if len(kept) > 1:
+    if len(installation_records) == 0:
+      artifact = candidates[0]
       raise RuntimeBundleError(
-        f'duplicate installed distribution {_distribution_name(kept[0])!r} '
-        f'(also provided as {_distribution_name(kept[1])!r})'
+        f'{_distribution_name(artifact)}: recorded only by a *.egg-info build artifact under '
+        f'{artifact.locate_file("")}; remove it, or reinstall the distribution with an installer '
+        'that writes an installation record'
       )
-    installed.append(kept[0])
+    if len(installation_records) > 1:
+      raise RuntimeBundleError(
+        f'duplicate installed distribution {_distribution_name(installation_records[0])!r} '
+        f'(also provided as {_distribution_name(installation_records[1])!r})'
+      )
+    installed.append(installation_records[0])
   return installed
 
 
