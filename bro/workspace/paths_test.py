@@ -118,3 +118,19 @@ def test_fresh_workspace_name_regenerates_on_collision(monkeypatch, tmp_path):
   monkeypatch.setattr(workspace_paths.secrets, 'token_hex', lambda _: next(suffixes))
   (workspaces / 'idea-aaaaaa').mkdir()
   assert workspace_paths.fresh_workspace_name('idea') == 'idea-bbbbbb'
+
+
+@pytest.mark.parametrize(
+  'name',
+  ['../escape', 'nested/name', 'ride-\nprompt text', '', '.', '..', '-leading-dash', 'sp ace'],
+)
+def test_a_name_that_is_no_single_path_component_is_refused(monkeypatch, tmp_path, name):
+  _workspaces_dir(monkeypatch, tmp_path)
+  with pytest.raises(workspace_paths.WorkspaceNameError, match='not a usable workspace name'):
+    workspace_paths.workspace_dir(name)
+
+
+def test_the_names_the_launch_surfaces_mint_are_accepted(monkeypatch, tmp_path):
+  workspaces = _workspaces_dir(monkeypatch, tmp_path)
+  for name in ['dive-in-94d6bc49', 'ride-bro-dev-5eae80c6', 'broker-01m0agaa2y-7jrq5n2e', 'ws_1.2']:
+    assert workspace_paths.workspace_dir(name) == workspaces / name

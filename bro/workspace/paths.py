@@ -1,4 +1,5 @@
 import os
+import re
 import secrets
 from pathlib import Path
 from typing import Optional
@@ -9,10 +10,17 @@ CONTAINER_TRAILS_ROOT = Path('/var/ride/trails')
 CONTAINER_SUMMON_ROOT = Path('/var/ride/summon')
 CONTAINER_SESSION_DIR = Path('/var/ride/session')
 _DATA_HOME_ENV = 'XDG_DATA_HOME'
+# a name is one path component, and also becomes a git branch and a docker
+# container name; this is the narrowest of the three
+_WORKSPACE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]*')
 
 
 class RuntimeLocationError(ValueError):
   """the environment names no usable runtime or repository location."""
+
+
+class WorkspaceNameError(ValueError):
+  """a workspace name is not usable as a directory name."""
 
 
 def venv_env(venv: Path) -> dict[str, str]:
@@ -75,8 +83,14 @@ def workspaces_dir() -> Path:
   return runtime_base() / 'workspaces'
 
 
+def is_workspace_name(name: str) -> bool:
+  return _WORKSPACE_NAME.fullmatch(name) is not None
+
+
 def workspace_dir(name: str) -> Path:
   """a workspace's own directory: its tree plus every record kept about it."""
+  if not is_workspace_name(name):
+    raise WorkspaceNameError(f'not a usable workspace name: {name!r}')
   return workspaces_dir() / name
 
 

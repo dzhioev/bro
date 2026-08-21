@@ -4,6 +4,7 @@ import sys
 
 import pytest
 
+from bro.workspace.paths import workspaces_dir
 from ride.repository import Repository
 from ride.workspace import model
 from ride.workspace.metadata import WorkspaceKind
@@ -351,3 +352,13 @@ class TestKindsAndEnumeration:
       'h2': WorkspaceKind.WORKTREE,
       'c1': WorkspaceKind.CONTAINER,
     }
+
+  def test_all_ignores_a_directory_that_records_no_workspace(self, tmp_path):
+    _worktree('h1', tmp_path)
+    (workspaces_dir() / 'leftover').mkdir()
+    assert [workspace.name for workspace in Workspace.all()] == ['h1']
+
+  def test_all_ignores_a_directory_whose_name_is_no_workspace_name(self, tmp_path):
+    _worktree('h1', tmp_path)
+    (workspaces_dir() / 'ride-\nstray prompt text').mkdir()
+    assert [workspace.name for workspace in Workspace.all()] == ['h1']
