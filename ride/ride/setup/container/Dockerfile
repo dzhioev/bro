@@ -13,12 +13,8 @@ RUN apt-get update \
       -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list \
- && curl -fsSL https://download.docker.com/linux/debian/gpg \
-      | gpg --dearmor -o /usr/share/keyrings/docker.gpg \
- && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
-      > /etc/apt/sources.list.d/docker.list \
  && apt-get update \
- && apt-get install -y --no-install-recommends nodejs gh docker-ce-cli docker-buildx-plugin \
+ && apt-get install -y --no-install-recommends nodejs gh \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -44,10 +40,6 @@ if [ -z "${RIDE_BANNER_SHOWN:-}" ] && command -v ride >/dev/null 2>&1; then
   ride banner || true
 fi
 EOF
-
-# The entrypoint reconciles this group's gid with a mounted host Docker socket.
-RUN groupadd -g 999 docker \
- && usermod -aG docker ride
 
 # Claude's settings enable pyright-lsp, but each fresh mounted config also needs
 # the matching installation records to avoid an interactive recommendation.

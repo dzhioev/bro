@@ -61,7 +61,7 @@ def _container_runtime() -> ContainerRuntimeResolver:
 
 def _scope(**overrides) -> ScopedLaunch:
   values = {
-    'scoped': ScopedSecrets({'openai'}, {'trails'}, False),
+    'scoped': ScopedSecrets({'openai'}, {'trails'}),
     'may_summon': {'reviewer'},
     'store': {'credentials.json': b'{}'},
   }

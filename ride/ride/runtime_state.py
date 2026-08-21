@@ -16,6 +16,7 @@ from typing import Any, Optional
 from bro.base import log
 from bro.base.git_url import is_git_url, normalize_git_url
 from bro.workspace.paths import find_project_root, runtime_base
+from ride.workspace.docker import running_mounts
 from ride.workspace.metadata import WorkspaceKind, WorkspaceMetadata
 
 _PROJECT_KEY = re.compile(r'^.+-[0-9a-f]{8}$')
@@ -269,28 +270,11 @@ def _hold_workspace_locks(workspaces: tuple[Path, ...]):
 
 def _running_mounts() -> set[str]:
   try:
-    ids = subprocess.run(['docker', 'ps', '-q'], capture_output=True, text=True)
-  except FileNotFoundError as error:
+    return running_mounts()
+  except (OSError, RuntimeError) as error:
     raise RuntimeStateMigrationError(
-      'cannot verify legacy container workspaces because the docker command is unavailable'
+      f'cannot verify legacy container workspaces: {error}'
     ) from error
-  if ids.returncode != 0:
-    raise RuntimeStateMigrationError(
-      f'cannot verify legacy container workspaces: docker ps failed: {ids.stderr.strip()}'
-    )
-  container_ids = ids.stdout.split()
-  if len(container_ids) == 0:
-    return set()
-  inspect = subprocess.run(
-    ['docker', 'inspect', '--format', '{{range .Mounts}}{{.Source}}\n{{end}}', *container_ids],
-    capture_output=True,
-    text=True,
-  )
-  if inspect.returncode != 0:
-    raise RuntimeStateMigrationError(
-      f'cannot verify legacy container workspaces: docker inspect failed: {inspect.stderr.strip()}'
-    )
-  return {line for line in inspect.stdout.splitlines() if len(line) > 0}
 
 
 def _path_exists(path: Path) -> bool:

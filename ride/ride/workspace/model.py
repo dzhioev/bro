@@ -80,10 +80,10 @@ def _remove_container_dir(path: Path, image: Optional[str]) -> None:
   can't unlink.
 
   container processes can leave files owned by uids that don't match the host
-  user (e.g. a pre-fix `ride exec` ran as root, or root-running tooling reached
-  the docker socket), which a host-side rmtree hits EPERM on. try a plain rmtree
-  first, then escalate to deleting from inside a throwaway root container, which
-  can unlink regardless of owner. raises RuntimeError if removal fails.
+  user (e.g. a pre-fix `ride exec` ran as root), which a host-side rmtree hits
+  EPERM on. try a plain rmtree first, then escalate to deleting from inside a
+  throwaway root container, which can unlink regardless of owner. raises
+  RuntimeError if removal fails.
   """
   try:
     shutil.rmtree(path)

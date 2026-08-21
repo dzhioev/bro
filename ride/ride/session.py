@@ -273,7 +273,6 @@ def _container_session(
     env=env,
     secrets=scoped.required,
     optional_secrets=scoped.optional,
-    docker_sock=scoped.docker_sock,
     tty=not spec.solo,
     forward_env=True,
     image=resolved_runtime.image,

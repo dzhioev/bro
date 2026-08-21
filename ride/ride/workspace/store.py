@@ -21,8 +21,7 @@ class ScopedSecrets:
   """a session launch's credential scope.
 
   required is hydrated strictly (a missing secret fails launch); optional is the
-  best-effort tier (skipped when unresolvable); docker_sock decides the socket
-  mount (container launches only — a host session has the host daemon anyway).
+  best-effort tier (skipped when unresolvable).
 
   unbound_kinds are the kinds this launch may not read at all: the host selects
   an instance of each per project and the launch bound no project entry, so the
@@ -33,7 +32,6 @@ class ScopedSecrets:
 
   required: set[str]
   optional: set[str]
-  docker_sock: bool
   unbound_kinds: frozenset[str] = frozenset()
 
 
@@ -78,12 +76,7 @@ def finalize_scoped_secrets(
   required = (scoped.required | set(grant)) & final_names
   optional = final_names - required
   _refuse_unbound_kinds(final_names, scoped.unbound_kinds)
-  return ScopedSecrets(
-    required=required,
-    optional=optional,
-    docker_sock=scoped.docker_sock,
-    unbound_kinds=scoped.unbound_kinds,
-  )
+  return ScopedSecrets(required=required, optional=optional, unbound_kinds=scoped.unbound_kinds)
 
 
 def _refuse_unbound_kinds(names: set[str], unbound: frozenset[str]) -> None:

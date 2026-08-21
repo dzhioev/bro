@@ -3,7 +3,7 @@ from ride.workspace.store import ScopedSecrets
 
 
 def _scope(required, optional=('openai',)):
-  return ScopedSecrets(set(required), set(optional), False)
+  return ScopedSecrets(set(required), set(optional))
 
 
 class _Store:

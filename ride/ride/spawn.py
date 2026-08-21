@@ -151,7 +151,6 @@ def _child_launch(
     env=env,
     secrets=set(scoped.required),
     optional_secrets=set(scoped.optional),
-    docker_sock=scoped.docker_sock,
     tty=False,
     forward_env=False,
     image=container_runtime.image,

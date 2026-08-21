@@ -5,51 +5,51 @@ import ride.workspace.store as workspace_store
 
 class TestFinalizeScopedSecrets:
   def test_grants_join_required_and_revokes_optional(self):
-    scoped = workspace_store.ScopedSecrets({'github'}, {'openai'}, False)
+    scoped = workspace_store.ScopedSecrets({'github'}, {'openai'})
     result = workspace_store.finalize_scoped_secrets(
       scoped, grant=['gmail_creds'], revoke=['openai']
     )
-    assert result == workspace_store.ScopedSecrets({'github', 'gmail_creds'}, set(), False)
+    assert result == workspace_store.ScopedSecrets({'github', 'gmail_creds'}, set())
 
   def test_grant_replaces_the_selected_credential_of_the_same_kind(self):
-    scoped = workspace_store.ScopedSecrets({'brog', 'github'}, {'openai'}, False)
+    scoped = workspace_store.ScopedSecrets({'brog', 'github'}, {'openai'})
     result = workspace_store.finalize_scoped_secrets(scoped, grant=['brog+github'], revoke=[])
-    assert result == workspace_store.ScopedSecrets({'brog+github', 'github'}, {'openai'}, False)
+    assert result == workspace_store.ScopedSecrets({'brog+github', 'github'}, {'openai'})
 
   def test_grant_can_replace_an_instance_with_the_bare_kind(self):
-    scoped = workspace_store.ScopedSecrets({'brog+github'}, set(), False)
+    scoped = workspace_store.ScopedSecrets({'brog+github'}, set())
     result = workspace_store.finalize_scoped_secrets(scoped, grant=['brog'], revoke=[])
     assert result.required == {'brog'}
 
   def test_replacing_an_optional_credential_promotes_the_grant_to_required(self):
-    scoped = workspace_store.ScopedSecrets(set(), {'openai'}, False)
+    scoped = workspace_store.ScopedSecrets(set(), {'openai'})
     result = workspace_store.finalize_scoped_secrets(scoped, grant=['openai+work'], revoke=[])
-    assert result == workspace_store.ScopedSecrets({'openai+work'}, set(), False)
+    assert result == workspace_store.ScopedSecrets({'openai+work'}, set())
 
   def test_granting_two_instances_of_one_kind_errors(self):
-    scoped = workspace_store.ScopedSecrets(set(), set(), False)
+    scoped = workspace_store.ScopedSecrets(set(), set())
     with pytest.raises(ValueError, match='credential kind.*granted more than once'):
       workspace_store.finalize_scoped_secrets(
         scoped, grant=['brog+github', 'brog+linear'], revoke=[]
       )
 
   def test_explicit_revoke_of_the_replaced_name_is_redundant(self):
-    scoped = workspace_store.ScopedSecrets({'brog'}, set(), False)
+    scoped = workspace_store.ScopedSecrets({'brog'}, set())
     with pytest.raises(ValueError, match="cannot revoke 'brog'"):
       workspace_store.finalize_scoped_secrets(scoped, grant=['brog+github'], revoke=['brog'])
 
   def test_revoke_removes_required(self):
-    scoped = workspace_store.ScopedSecrets({'github'}, {'openai'}, True)
+    scoped = workspace_store.ScopedSecrets({'github'}, {'openai'})
     result = workspace_store.finalize_scoped_secrets(scoped, grant=[], revoke=['github'])
-    assert result == workspace_store.ScopedSecrets(set(), {'openai'}, True)
+    assert result == workspace_store.ScopedSecrets(set(), {'openai'})
 
   def test_grant_of_optional_secret_is_redundant(self):
-    scoped = workspace_store.ScopedSecrets(set(), {'openai'}, True)
+    scoped = workspace_store.ScopedSecrets(set(), {'openai'})
     with pytest.raises(ValueError, match='already in the scoped credential set'):
       workspace_store.finalize_scoped_secrets(scoped, grant=['openai'], revoke=[])
 
   def test_revoke_absent_from_both_tiers_errors(self):
-    scoped = workspace_store.ScopedSecrets({'github'}, {'openai'}, True)
+    scoped = workspace_store.ScopedSecrets({'github'}, {'openai'})
     with pytest.raises(ValueError, match='not in the scoped credential set'):
       workspace_store.finalize_scoped_secrets(scoped, grant=[], revoke=['aws'])
 

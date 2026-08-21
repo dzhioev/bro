@@ -86,6 +86,39 @@ class TestContainerRunning:
     assert workspace_docker.container_running('cid123') is False
 
 
+class TestRunningMounts:
+  def _patch_run(self, monkeypatch, results):
+    monkeypatch.setattr(workspace_docker.subprocess, 'run', lambda argv, *a, **k: results(argv))
+
+  def test_collects_mounts_of_running_containers(self, monkeypatch):
+    def results(argv):
+      if argv[:2] == ['docker', 'ps']:
+        return _FakeProc(returncode=0, stdout='cid1\ncid2\n')
+      return _FakeProc(returncode=0, stdout='/mount/a\n\n/mount/b\n')
+
+    self._patch_run(monkeypatch, results)
+    assert workspace_docker.running_mounts() == {'/mount/a', '/mount/b'}
+
+  def test_no_running_containers_is_an_empty_set(self, monkeypatch):
+    self._patch_run(monkeypatch, lambda argv: _FakeProc(returncode=0, stdout=''))
+    assert workspace_docker.running_mounts() == set()
+
+  def test_unreachable_daemon_raises(self, monkeypatch):
+    self._patch_run(monkeypatch, lambda argv: _FakeProc(returncode=1, stderr='cannot connect'))
+    with pytest.raises(RuntimeError, match='docker ps failed: cannot connect'):
+      workspace_docker.running_mounts()
+
+  def test_inspect_failure_raises(self, monkeypatch):
+    def results(argv):
+      if argv[:2] == ['docker', 'ps']:
+        return _FakeProc(returncode=0, stdout='cid1\n')
+      return _FakeProc(returncode=1, stderr='inspect boom')
+
+    self._patch_run(monkeypatch, results)
+    with pytest.raises(RuntimeError, match='docker inspect failed: inspect boom'):
+      workspace_docker.running_mounts()
+
+
 class TestSuspendUntilContinued:
   def _dance(self, monkeypatch, pause_result=None):
     events: list = []
@@ -287,7 +320,6 @@ class TestPrepareContainer:
       command=['claude'],
       env={'MARKER': 'x'},
       secrets=('github',),
-      docker_sock=False,
       tty=False,
       forward_env=False,
       image='runtime-image',
@@ -311,7 +343,6 @@ class TestPrepareContainer:
       ['claude'],
     )
     assert argv_event[2] == {
-      'docker_sock': False,
       'extra_env': {'MARKER': 'x'},
       'forward_env': False,
       'tty': False,
@@ -379,11 +410,10 @@ class TestDockerCreateArgv:
     assert f'{repository.git_dir}:/host-repo:ro' in argv
     assert f'RIDE_REPO={repository.identity}' in argv
 
-  def test_docker_sock_mounted_by_default(self, build_argv):
-    assert '/var/run/docker.sock:/var/run/docker.sock' in build_argv()
-
-  def test_docker_sock_dropped_when_disabled(self, build_argv):
-    assert '/var/run/docker.sock:/var/run/docker.sock' not in build_argv(docker_sock=False)
+  def test_no_docker_socket_mount(self, build_argv):
+    # the socket is host-daemon control — root on the host, past every scoped
+    # credential boundary — so no session container gets it
+    assert not any('docker.sock' in a for a in build_argv())
 
   def test_base_ref_passed_as_env(self, build_argv):
     argv = build_argv(extra_env={'RIDE_BASE_REF': 'deadbeef'})
