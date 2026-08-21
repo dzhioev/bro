@@ -1,1 +1,2 @@
-After each task manipulation via task-tracker MCP tools (or batch of related manipulations), show a short summary with a markdown hyperlink to the task and what was done — e.g. "[task name](task-url): recorded the merge and closed the task".
+After each task manipulation via task-tracker MCP tools (or batch of related manipulations), show a short summary with a markdown hyperlink to the task and what was done
+— e.g. "[task name](task-url): recorded the merge and closed the task".

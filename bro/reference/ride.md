@@ -1,55 +1,95 @@
 # ride
 
-`ride` is the managed-workspace runtime. It combines a harness implementation with a bro personality, prepares either an isolated container or a host worktree, hydrates the launch scope, supervises the root session and its summons, and records enough state to resume the workspace later.
+`ride` is the managed-workspace runtime.
+It combines a harness implementation with a bro personality, prepares either an isolated container or a host worktree, hydrates the launch scope, supervises the root session and its summons, and records enough state to resume the workspace later.
 
-The runtime is published by the `bro-ride` distribution and depends on the `bro` framework. The framework never imports `ride`: workspace mechanics, credential scoping, broker supervision, and bro composition remain reusable framework layers.
+The runtime is published by the `bro-ride` distribution and depends on the `bro` framework.
+The framework never imports `ride`:
+workspace mechanics, credential scoping, broker supervision, and bro composition remain reusable framework layers.
 
 ## Commands
 
-> **Isolation boundary:** `bro run` and `bro chat` run immediately in the calling process with ambient credentials. They do not isolate, clone a workspace, or hydrate a scoped store. Use `ride solo` / `ask` for an isolated one-shot and `ride along` / `call` for an isolated interactive session.
+> **Isolation boundary:**
+> `bro run` and `bro chat` run immediately in the calling process with ambient credentials.
+> They do not isolate, clone a workspace, or hydrate a scoped store.
+> Use `ride solo` / `ask` for an isolated one-shot and `ride along` / `call` for an isolated interactive session.
 
 ### `ride solo <bro> <prompt>`
 
-Runs one prompt without a TTY and writes the harness reply to stdout. The default harness is Claude Code and the default hold is `unattended`. Claude runs in print mode; the bro harness runs `bro run` with the ask display preset. Both retain the session record needed by `ride resume` when the workspace is kept.
+Runs one prompt without a TTY and writes the harness reply to stdout.
+The default harness is Claude Code and the default hold is `unattended`.
+Claude runs in print mode;
+the bro harness runs `bro run` with the ask display preset.
+Both retain the session record needed by `ride resume` when the workspace is kept.
 
-A launch without `-w / --workspace` receives a fresh name and removes that workspace after a clean exit. `--keep` retains it, and a failed run always keeps it for inspection. `-w NAME` creates or reuses that exact workspace after checking its kind and always retains it.
+A launch without `-w / --workspace` receives a fresh name and removes that workspace after a clean exit.
+`--keep` retains it, and a failed run always keeps it for inspection.
+`-w NAME` creates or reuses that exact workspace after checking its kind and always retains it.
 
 ### `ride along <bro> [prompt]`
 
-Starts an interactive session. The default harness is Claude Code, the default hold is `attended`, and the workspace is kept after exit. `--host` runs the workspace on the host and changes the omitted hold to `guided`, because a non-guided host session skips permission prompts without the container boundary.
+Starts an interactive session.
+The default harness is Claude Code, the default hold is `attended`, and the workspace is kept after exit.
+`--host` runs the workspace on the host and changes the omitted hold to `guided`, because a non-guided host session skips permission prompts without the container boundary.
 
-A launch without `-w / --workspace` receives a fresh name. `-w NAME` creates or reuses that exact workspace after checking its kind; a pinned workspace cannot be combined with `--drop`. For an automatically named workspace, `--drop` removes it only after a clean exit and keeps a failed session for inspection.
+A launch without `-w / --workspace` receives a fresh name.
+`-w NAME` creates or reuses that exact workspace after checking its kind;
+a pinned workspace cannot be combined with `--drop`.
+For an automatically named workspace, `--drop` removes it only after a clean exit and keeps a failed session for inspection.
 
-Both mode verbs start **detached**: `/workspace` is an empty writable directory and no repository is cloned. `--repo PATH|URL` accepts either an existing path inside a checkout (resolved to its root) or a scheme/scp-shaped git URL. A path attachment bases on the checkout's current `HEAD`; a URL attachment fetches its managed mirror and bases on the fresh `origin/HEAD`. `--into REF` selects another branch, tag, or commit, requires `--repo`, and affects only workspace creation. Uncommitted host changes never transfer.
+Both mode verbs start **detached**:
+`/workspace` is an empty writable directory and no repository is cloned.
+`--repo PATH|URL` accepts either an existing path inside a checkout (resolved to its root) or a scheme/scp-shaped git URL.
+A path attachment bases on the checkout's current `HEAD`;
+a URL attachment fetches its managed mirror and bases on the fresh `origin/HEAD`.
+`--into REF` selects another branch, tag, or commit, requires `--repo`, and affects only workspace creation.
+Uncommitted host changes never transfer.
 
-The prompt occupies a positional slot on both mode verbs. Arguments for the harness program therefore follow an explicit separator — they reach the claude binary on the claude harness and the inner `bro run|chat` argv on the bro harness:
+The prompt occupies a positional slot on both mode verbs.
+Arguments for the harness program therefore follow an explicit separator
+— they reach the claude binary on the claude harness and the inner `bro run|chat` argv on the bro harness:
 
 ```console
 ride solo dev 'inspect the launch path' -- --debug mcp
 ride along dev 'continue the inspection' -- --debug mcp
 ```
 
-Shared launch flags are `--repo`, `--host`, `--hold`, `--grant`, `--revoke`, `--into`, `--no-trails`, and the LLM selection set (`--provider`, `--model`, `--effort`, `--fast`, `--llm`). `--grant` and `--revoke` use the framework's unified grammar: credential names shape the scoped store and `@bro` names shape the summon allow-list. `--no-trails` disables trail recording for the session, whichever harness runs: the launch drops the `trails` scope baseline, sets `TRAILS_DISABLED` for the run, and a claude session starts no recorder daemon.
+Shared launch flags are `--repo`, `--host`, `--hold`, `--grant`, `--revoke`, `--into`, `--no-trails`, and the LLM selection set (`--provider`, `--model`, `--effort`, `--fast`, `--llm`).
+`--grant` and `--revoke` use the framework's unified grammar:
+credential names shape the scoped store and `@bro` names shape the summon allow-list.
+`--no-trails` disables trail recording for the session, whichever harness runs:
+the launch drops the `trails` scope baseline, sets `TRAILS_DISABLED` for the run, and a claude session starts no recorder daemon.
 
 ### Lifecycle verbs
 
-- `ride resume <workspace>` relaunches the recorded session recipe, with optional `--grant` / `--revoke` adjustments. Resuming a solo run opens an interactive conversation in the same workspace and re-resolves the hold to `along`'s default (`attended`, or `guided` with `--host`).
+- `ride resume <workspace>` relaunches the recorded session recipe, with optional `--grant` / `--revoke` adjustments.
+  Resuming a solo run opens an interactive conversation in the same workspace and re-resolves the hold to `along`'s default (`attended`, or `guided` with `--host`).
 - `ride list` lists every workspace, its attachment, and its activity state.
-- `ride clean` removes inactive clean workspaces, managed URL mirrors no workspace references, and unlocked runtime bundles; `--force` permits dirty workspaces and removal when an attached repository no longer exists, while `--dry-run` reports only.
+- `ride clean` removes inactive clean workspaces, managed URL mirrors no workspace references, and unlocked runtime bundles;
+  `--force` permits dirty workspaces and removal when an attached repository no longer exists, while `--dry-run` reports only.
 - `ride exec <workspace> [command ...]` enters a running container workspace.
 - `ride check-clean <workspace>` reports whether removal is safe.
-- `ride scope [--repo PATH|URL] [--bro BRO] [--harness HARNESS] [--raw]` prints the prospective credential tiers and selected credential instances. Detached scope requires `--bro`; an attachment may supply the project default.
+- `ride scope [--repo PATH|URL] [--bro BRO] [--harness HARNESS] [--raw]` prints the prospective credential tiers and selected credential instances.
+  Detached scope requires `--bro`;
+  an attachment may supply the project default.
 - `ride banner [--llm]` renders the session facts.
 
 ## Harness selection
 
-`--harness {claude,bro}` selects the driving loop. An attached launch reads `[tool.bro] harness`; a detached launch and an attached project that omits the key use `claude`.
+`--harness {claude,bro}` selects the driving loop.
+An attached launch reads `[tool.bro] harness`;
+a detached launch and an attached project that omits the key use `claude`.
 
-LLM flags resolve within the selected harness. They never switch the harness implicitly. A recipe whose provider the harness cannot run errors with `--harness` as the remedy.
+LLM flags resolve within the selected harness.
+They never switch the harness implicitly.
+A recipe whose provider the harness cannot run errors with `--harness` as the remedy.
 
 ### Harness seam
 
-`ride.harness.Harness` is the runtime boundary. The neutral layer (`ride/ride/session.py`) owns both launch bodies — the container `Launch` composition and the provisioned host-worktree run — and a harness implementation supplies what differs:
+`ride.harness.Harness` is the runtime boundary.
+The neutral layer (`ride/ride/session.py`) owns both launch bodies
+— the container `Launch` composition and the provisioned host-worktree run
+— and a harness implementation supplies what differs:
 
 - its flag registration (`add_flags` reports the dests it registered, so the neutral layer refuses a non-selected harness's flag generically) and the validation and packing of those flags into its serialized options (`parse_options`);
 - the `ScopeRecipe` its packed options select, the auth preflight, and LLM resolution;
@@ -58,51 +98,123 @@ LLM flags resolve within the selected harness. They never switch the harness imp
 - session existence with its resume-refusal wording, the subject read, and the session trail-pointer path;
 - the container extras (env, mounts) and the host runner-env preparation.
 
-`scope_recipe` takes the packed options rather than a full session, so surfaces with no session — `ride scope`, dive-in's task prefetch — resolve their recipe through the same seam.
+`scope_recipe` takes the packed options rather than a full session, so surfaces with no session
+— `ride scope`, dive-in's task prefetch
+— resolve their recipe through the same seam.
 
-The generic scope computation and the bro-run recipe live beside the seam in `ride.scope`, so native launch and summon lowering share the same policy. Claude's full/raw recipes remain private to `ride.claude`; raw is a Claude mode, not a harness value.
+The generic scope computation and the bro-run recipe live beside the seam in `ride.scope`, so native launch and summon lowering share the same policy.
+Claude's full/raw recipes remain private to `ride.claude`;
+raw is a Claude mode, not a harness value.
 
 ## Claude harness
 
-Claude full mode retains Claude Code's built-ins, skills, and base prompt while adding the selected bro's persona, spells, filtered MCP namespaces, and blocked-tool declarations. `--raw` runs `claude --bare` under the bro's own composed prompt and MCP surface. Raw remains container-only and requires the `anthropic` secret; full mode requires the `claude_code` setup token.
+Claude full mode retains Claude Code's built-ins, skills, and base prompt while adding the selected bro's persona, spells, filtered MCP namespaces, and blocked-tool declarations.
+`--raw` runs `claude --bare` under the bro's own composed prompt and MCP surface.
+Raw remains container-only and requires the `anthropic` secret;
+full mode requires the `claude_code` setup token.
 
-The outer runs `ride solo|along --in-place`, a suppressed inner contract. Host mode takes that command from the frozen host snapshot; container mode takes it from the same bundle materialized at `/var/ride/runtime`.
+The outer runs `ride solo|along --in-place`, a suppressed inner contract.
+Host mode takes that command from the frozen host snapshot;
+container mode takes it from the same bundle materialized at `/var/ride/runtime`.
 
 ## Bro harness
 
-The bro harness drives the selected bro's native LLM loop: its in-place runner spawns `bro run|chat …` in the workspace and waits, forwarding SIGTERM to it. Container sessions run the same inner command summoned children get; host sessions provision the workspace worktree and run the runtime snapshot's `ride` under the same broker-root supervision and scoped credential store.
+The bro harness drives the selected bro's native LLM loop:
+its in-place runner spawns `bro run|chat …` in the workspace and waits, forwarding SIGTERM to it.
+Container sessions run the same inner command summoned children get;
+host sessions provision the workspace worktree and run the runtime snapshot's `ride` under the same broker-root supervision and scoped credential store.
 
-The bro harness owns no flags of its own; it rejects Claude's `--raw`.
+The bro harness owns no flags of its own;
+it rejects Claude's `--raw`.
 
-The broker publishes a native root's — and each summoned child's — `started` trail id beside the workspace's `resume.json`. `ride resume` continues that exact trail at its latest consistent point under the recorded native recipe, producing a new trail with `forked_from`; it does not use the globally newest call or the bro class's current recipe. A session without a broker-published pointer — including a broker-disabled launch or `--no-trails` — cannot be resumed and fails with that reason.
+The broker publishes a native root's
+— and each summoned child's
+— `started` trail id beside the workspace's `resume.json`.
+`ride resume` continues that exact trail at its latest consistent point under the recorded native recipe, producing a new trail with `forked_from`;
+it does not use the globally newest call or the bro class's current recipe.
+A session without a broker-published pointer
+— including a broker-disabled launch or `--no-trails`
+— cannot be resumed and fails with that reason.
 
-`bro run <bro> <input>` and `bro chat <bro> [what]` are in-process surfaces: they use ambient credentials and create no workspace or scope. `bro chat --fork [TRAIL_ID] [--at N]` explicitly forks recorded history under the bro class's current recipe; an omitted trail id selects the bro's newest recorded call. `ask` and `call` are aliases of `ride solo` and `ride along`, with no implied flags; `summon` is the self-contained peer client.
+`bro run <bro> <input>` and `bro chat <bro> [what]` are in-process surfaces:
+they use ambient credentials and create no workspace or scope.
+`bro chat --fork [TRAIL_ID] [--at N]` explicitly forks recorded history under the bro class's current recipe;
+an omitted trail id selects the bro's newest recorded call.
+`ask` and `call` are aliases of `ride solo` and `ride along`, with no implied flags;
+`summon` is the self-contained peer client.
 
 ## In-container launches
 
-Until process-host mode is available, `ride` refuses to start from inside a container. Detection is the `bro/workspace/paths.py:in_container()` probe rather than an environment marker, so an unmanaged container and a session predating the runtime's own marker are refused alike. Use `summon` for an isolated sibling child, or `bro run|chat` for a process using the current container and ambient credential scope.
+Until process-host mode is available, `ride` refuses to start from inside a container.
+Detection is the `bro/workspace/paths.py:in_container()` probe rather than an environment marker, so an unmanaged container and a session predating the runtime's own marker are refused alike.
+Use `summon` for an isolated sibling child, or `bro run|chat` for a process using the current container and ambient credential scope.
 
 ## Runtime state
 
-The runtime command is `ride`, and runtime-owned environment facts use `RIDE_*`. Persistent runtime data lives outside every checkout under the user's global **`<runtime-root>`**: `~/.local/share/ride/`, or `$XDG_DATA_HOME/ride/` where that variable names an absolute path. A launch creates it with mode 0700 on first use. Its top-level stores are `workspaces/`, `runtime/`, `repos/`, `trails/`, `summon/`, and `broker/`; workspace metadata records which repository, if any, each workspace is attached to.
+The runtime command is `ride`, and runtime-owned environment facts use `RIDE_*`.
+Persistent runtime data lives outside every checkout under the user's global **`<runtime-root>`**:
+`~/.local/share/ride/`, or `$XDG_DATA_HOME/ride/` where that variable names an absolute path.
+A launch creates it with mode 0700 on first use.
+Its top-level stores are `workspaces/`, `runtime/`, `repos/`, `trails/`, `summon/`, and `broker/`;
+workspace metadata records which repository, if any, each workspace is attached to.
 
-The first outer `ride`, `ask`, or `call` command after upgrading migrates the former checkout-keyed `<runtime-root>/<project-key>/` roots into these global stores and reports the roots and workspace count it moved. Migration takes a global lock and preflights every source before moving anything: a workspace or store-key collision names both paths and refuses the migration, as does a held workspace lock, a running container, a duplicate trail id, or a summon request id found in more than one audit file. An interrupted migration is completed by the next command; emptied project-key roots are removed.
+The first outer `ride`, `ask`, or `call` command after upgrading migrates the former checkout-keyed `<runtime-root>/<project-key>/` roots into these global stores and reports the roots and workspace count it moved.
+Migration takes a global lock and preflights every source before moving anything:
+a workspace or store-key collision names both paths and refuses the migration, as does a held workspace lock, a running container, a duplicate trail id, or a summon request id found in more than one audit file.
+An interrupted migration is completed by the next command;
+emptied project-key roots are removed.
 
-A legacy root is keyed on one checkout and every workspace under it is attached to that checkout, so the migration recovers the path once per root — from a worktree workspace's git metadata, confirmed against the root's own key — and records it for the root's container workspaces too, whose clone `origin` names the upstream URL rather than the checkout they were launched against. A root naming no recoverable checkout falls back to the URL its container clones carry, and the migration reports which workspaces that moved off a path-keyed host-config entry. Migrated worktrees also have their registration repaired at the new path, and URL-backed clones are adjusted to the managed mirror's object layout. A workspace whose tree was never materialized has no repository evidence and migrates as detached. A non-empty tree whose attachment cannot be recovered aborts the migration rather than recording a guess or leaving an unusable workspace hidden in the old root.
+A legacy root is keyed on one checkout and every workspace under it is attached to that checkout, so the migration recovers the path once per root
+— from a worktree workspace's git metadata, confirmed against the root's own key
+— and records it for the root's container workspaces too, whose clone `origin` names the upstream URL rather than the checkout they were launched against.
+A root naming no recoverable checkout falls back to the URL its container clones carry, and the migration reports which workspaces that moved off a path-keyed host-config entry.
+Migrated worktrees also have their registration repaired at the new path, and URL-backed clones are adjusted to the managed mirror's object layout.
+A workspace whose tree was never materialized has no repository evidence and migrates as detached.
+A non-empty tree whose attachment cannot be recovered aborts the migration rather than recording a guess or leaving an unusable workspace hidden in the old root.
 
 ### Runtime bundles
 
-Every outer root freezes the Python installation that invoked `ride`, by each distribution's recorded provenance: index installations become exact `name==version` pins; version-control and remote-archive installations become direct-reference pins at their resolved commit or recorded hash; local sources — a directory or an archive — are carried in the bundle as wheels built or copied from their current contents. The Python major/minor joins the manifest, and a content hash names the persisted bundle under `~/.local/share/ride/runtime/<hash>/` (or `$XDG_DATA_HOME/ride/runtime/<hash>/`). Carrying local sources keeps the snapshot self-reproducing: re-resolving from a materialized bundle's own venv lands on the same hash. A distribution that cannot be pinned reproducibly — a vanished local source, a version-control installation with no resolved commit — fails the launch naming what to reinstall it from, instead of silently escaping the snapshot. The root holds the bundle's shared flock until its session and summoned children exit; `ride clean` removes only bundles whose lock is available.
+Every outer root freezes the Python installation that invoked `ride`, by each distribution's recorded provenance:
+index installations become exact `name==version` pins;
+version-control and remote-archive installations become direct-reference pins at their resolved commit or recorded hash;
+local sources — a directory or an archive
+— are carried in the bundle as wheels built or copied from their current contents.
+The Python major/minor joins the manifest, and a content hash names the persisted bundle under `~/.local/share/ride/runtime/<hash>/` (or `$XDG_DATA_HOME/ride/runtime/<hash>/`).
+Carrying local sources keeps the snapshot self-reproducing:
+re-resolving from a materialized bundle's own venv lands on the same hash.
+A distribution that cannot be pinned reproducibly
+— a vanished local source, a version-control installation with no resolved commit
+— fails the launch naming what to reinstall it from, instead of silently escaping the snapshot.
+The root holds the bundle's shared flock until its session and summoned children exit;
+`ride clean` removes only bundles whose lock is available.
 
-Host mode materializes the bundle once as `host/venv`, checks its dependency closure, and builds `host/bin` as symlinks to console scripts declared through `bro.session_commands`. Container mode uses the same materializer inside the runtime image to populate `ride-runtime-<hash>`, mounted read-only at `/var/ride/runtime`; the volume holds `venv/` and the matching `bin/` shim farm. Materialization is where every pin is fetched, so a version-control or remote-archive pin has to be reachable from the materializing environment — in container mode that is the runtime image's own git and network, without the launcher's credentials. The session PATH starts with the runtime shims and then the system paths in both modes, with the launcher's active venv removed on the host. Repository commands are explicit through `uv run` or `.venv/bin/`. The shims serve the session; the machinery a session spawns for itself — the session MCP server, the recorder daemon — is named by its path in the runtime the spawning process runs from and never looked up on that PATH, so the roster is what a session may run rather than what it needs to work.
+Host mode materializes the bundle once as `host/venv`, checks its dependency closure, and builds `host/bin` as symlinks to console scripts declared through `bro.session_commands`.
+Container mode uses the same materializer inside the runtime image to populate `ride-runtime-<hash>`, mounted read-only at `/var/ride/runtime`;
+the volume holds `venv/` and the matching `bin/` shim farm.
+Materialization is where every pin is fetched, so a version-control or remote-archive pin has to be reachable from the materializing environment
+— in container mode that is the runtime image's own git and network, without the launcher's credentials.
+The session PATH starts with the runtime shims and then the system paths in both modes, with the launcher's active venv removed on the host.
+Repository commands are explicit through `uv run` or `.venv/bin/`.
+The shims serve the session;
+the machinery a session spawns for itself
+— the session MCP server, the recorder daemon
+— is named by its path in the runtime the spawning process runs from and never looked up on that PATH, so the roster is what a session may run rather than what it needs to work.
 
 ### Managed URL mirrors
 
-A URL attachment is normalized and mapped to `<runtime-root>/repos/<slug>-<digest>/`. The directory is a bare repository with `origin` set to the attachment URL and `gc.auto=0`. Every launch naming the URL takes the mirror's flock, fetches without pruning, refreshes `origin/HEAD`, and resolves that commit as the default base. Workspaces share its objects, so neither fetch nor cleanup may prune them; `ride clean` removes the whole mirror only after no workspace metadata references its URL. The launcher's ambient git authentication performs mirror fetches, while the scoped in-session credential hook handles later operations from the workspace clone.
+A URL attachment is normalized and mapped to `<runtime-root>/repos/<slug>-<digest>/`.
+The directory is a bare repository with `origin` set to the attachment URL and `gc.auto=0`.
+Every launch naming the URL takes the mirror's flock, fetches without pruning, refreshes `origin/HEAD`, and resolves that commit as the default base.
+Workspaces share its objects, so neither fetch nor cleanup may prune them;
+`ride clean` removes the whole mirror only after no workspace metadata references its URL.
+The launcher's ambient git authentication performs mirror fetches, while the scoped in-session credential hook handles later operations from the workspace clone.
 
 ## Workspaces
 
-A workspace is one directory, `<runtime-root>/workspaces/<name>/`, holding its writable tree plus everything the launch machinery records about it. Workspace names are global, so every lifecycle verb identifies one by name from any directory. A name is one path component, and one a launch cannot use fails naming it rather than reaching the filesystem. A directory under the store that records no workspace is ignored by enumeration, so a stray entry cannot disable the lifecycle verbs:
+A workspace is one directory, `<runtime-root>/workspaces/<name>/`, holding its writable tree plus everything the launch machinery records about it.
+Workspace names are global, so every lifecycle verb identifies one by name from any directory.
+A name is one path component, and one a launch cannot use fails naming it rather than reaching the filesystem.
+A directory under the store that records no workspace is ignored by enumeration, so a stray entry cannot disable the lifecycle verbs:
 
 ```
 <runtime-root>/workspaces/<name>/
@@ -121,7 +233,18 @@ A workspace is one directory, `<runtime-root>/workspaces/<name>/`, holding its w
   claude/             the claude harness's state dir ("Host claude-state isolation")
 ```
 
-The tree sits in its own subdirectory rather than being the workspace directory itself: a container bind-mounts it as `/workspace`, and the records must stay outside that mount. Whichever harness ran it, everything a session leaves behind is one of these records, so removing the workspace directory is what reclaims it. Of the last three, `session/` is the unconditional one — every session of either harness records into it, and it is the only record the session reaches from *inside* itself, host mode by absolute path and container mode through a bind at `/var/ride/session`, either way named by `RIDE_SESSION_DIR`. That reach is what it exists for: the trail pointer and the recording health signal are published by the session and read back host-side, so both ends need one path. Signals every harness shares sit at its root, a harness's own artifacts under `<harness>/` — where the claude recorder's stderr goes. `credentials/` and `environment/` are written by a host launch of either harness, a container's equivalents living in its own layer instead; and `claude/` belongs to the claude harness in both modes. The one deliberate exception to all of this is the summon audit, under `<runtime-root>/summon/`, because it must survive a workspace drop.
+The tree sits in its own subdirectory rather than being the workspace directory itself:
+a container bind-mounts it as `/workspace`, and the records must stay outside that mount.
+Whichever harness ran it, everything a session leaves behind is one of these records, so removing the workspace directory is what reclaims it.
+Of the last three, `session/` is the unconditional one
+— every session of either harness records into it, and it is the only record the session reaches from *inside* itself, host mode by absolute path and container mode through a bind at `/var/ride/session`, either way named by `RIDE_SESSION_DIR`.
+That reach is what it exists for:
+the trail pointer and the recording health signal are published by the session and read back host-side, so both ends need one path.
+Signals every harness shares sit at its root, a harness's own artifacts under `<harness>/`
+— where the claude recorder's stderr goes.
+`credentials/` and `environment/` are written by a host launch of either harness, a container's equivalents living in its own layer instead;
+and `claude/` belongs to the claude harness in both modes.
+The one deliberate exception to all of this is the summon audit, under `<runtime-root>/summon/`, because it must survive a workspace drop.
 
 `meta.json` is written once at creation and read by every later launch, so nothing downstream re-derives it:
 
@@ -129,26 +252,56 @@ The tree sits in its own subdirectory rather than being the workspace directory 
 {"kind": "container", "repo": "/home/me/project", "branch": "worktree-my-task", "throwaway": false}
 ```
 
-- **`kind`** — where sessions run: `container` (the default) or `worktree` (`--host`). Fixed at creation; a launch naming an existing workspace must request the same kind.
-- **`repo`** — the resolved checkout path or normalized git URL for an attached workspace. Absent when detached; reusing a name with a different attachment is refused.
-- **`branch`** — the attached tree's branch, present if and only if `repo` is present. Host mode branches the worktree on it; container mode passes it to the entrypoint as `RIDE_BRANCH`.
-- **`throwaway`** — the workspace is disposable: its supervisor removes it once its session exits cleanly. Set for the workspaces summoned children run in.
+- **`kind`** — where sessions run:
+  `container` (the default) or `worktree` (`--host`).
+  Fixed at creation;
+  a launch naming an existing workspace must request the same kind.
+- **`repo`** — the resolved checkout path or normalized git URL for an attached workspace.
+  Absent when detached;
+  reusing a name with a different attachment is refused.
+- **`branch`** — the attached tree's branch, present if and only if `repo` is present.
+  Host mode branches the worktree on it;
+  container mode passes it to the entrypoint as `RIDE_BRANCH`.
+- **`throwaway`** — the workspace is disposable:
+  its supervisor removes it once its session exits cleanly.
+  Set for the workspaces summoned children run in.
 
-A detached record is `{"kind": "container", "throwaway": false}`. Its tree is clean exactly when it is empty; an attached workspace retains the recorded-session-end clean rule. Removing an attached workspace whose recorded checkout or managed mirror no longer exists requires `ride clean --force`.
+A detached record is `{"kind": "container", "throwaway": false}`.
+Its tree is clean exactly when it is empty;
+an attached workspace retains the recorded-session-end clean rule.
+Removing an attached workspace whose recorded checkout or managed mirror no longer exists requires `ride clean --force`.
 
 ## The launch stack
 
-Every managed session launches through the same stack, whichever harness drives it. `--host` changes only the outer machinery; `--raw` changes only the claude argv flavor (and the scope recipe the outer computes through the seam):
+Every managed session launches through the same stack, whichever harness drives it.
+`--host` changes only the outer machinery;
+`--raw` changes only the claude argv flavor (and the scope recipe the outer computes through the seam):
 
-- **the neutral outer** (`ride/ride/session.py:start_session`) — mode-specific by nature: policy validation, workspace preparation, session supervision, post-exit UX. It touches the selected harness only through the seam (see "Harness seam"). See "The outer layer".
-- **the inner session** (`ride solo|along --in-place` → `ride/ride/inner.py`), spawned by the outer in the prepared workspace. Host mode invokes the frozen snapshot's absolute `ride`; container mode resolves the same pinned command from `/var/ride/runtime/bin`. One code path for every flag combination and both harnesses carries the session environment and persona provisioning, then hands off to the harness's runner — claude's `ride/ride/claude/runner.py`, or the bro harness's spawn of the native LLM process. See "The in-place session runner".
-- **the claude flavor** — the full mode/raw fork (a **full mode** is the default flavor: claude's full harness themed with the session's bro — prompt, spells, MCP namespaces; `--raw` runs bare claude over the bro's own toolset), confined to the claude argv builder plus the harness's private full/raw `ScopeRecipe` values (the secret manifest), which the outer consumes through the seam. See "The claude argv".
+- **the neutral outer** (`ride/ride/session.py:start_session`)
+  — mode-specific by nature:
+  policy validation, workspace preparation, session supervision, post-exit UX.
+  It touches the selected harness only through the seam (see "Harness seam").
+  See "The outer layer".
+- **the inner session** (`ride solo|along --in-place` → `ride/ride/inner.py`), spawned by the outer in the prepared workspace.
+  Host mode invokes the frozen snapshot's absolute `ride`;
+  container mode resolves the same pinned command from `/var/ride/runtime/bin`.
+  One code path for every flag combination and both harnesses carries the session environment and persona provisioning, then hands off to the harness's runner
+  — claude's `ride/ride/claude/runner.py`, or the bro harness's spawn of the native LLM process.
+  See "The in-place session runner".
+- **the claude flavor** — the full mode/raw fork (a **full mode** is the default flavor:
+  claude's full harness themed with the session's bro — prompt, spells, MCP namespaces;
+  `--raw` runs bare claude over the bro's own toolset), confined to the claude argv builder plus the harness's private full/raw `ScopeRecipe` values (the secret manifest), which the outer consumes through the seam.
+  See "The claude argv".
 
-A neutral session-shaping flag lands once in the outer and reaches both execution modes and every harness; a claude-shaping one lands once in the runner or the argv builder and applies to both modes and both flavors by construction.
+A neutral session-shaping flag lands once in the outer and reaches both execution modes and every harness;
+a claude-shaping one lands once in the runner or the argv builder and applies to both modes and both flavors by construction.
 
 ## Per-project defaults (`[tool.bro]`)
 
-Only `--repo PATH|URL` attaches a repository to `ride solo|along`; cwd is never an implicit attachment. The checkout's working-tree `pyproject.toml`, or the URL attachment's `pyproject.toml` at its resolved base commit, must carry a `[tool.bro]` table declaring its session defaults (`bro/workspace/project.py`). Detached launches read no project file:
+Only `--repo PATH|URL` attaches a repository to `ride solo|along`;
+cwd is never an implicit attachment.
+The checkout's working-tree `pyproject.toml`, or the URL attachment's `pyproject.toml` at its resolved base commit, must carry a `[tool.bro]` table declaring its session defaults (`bro/workspace/project.py`).
+Detached launches read no project file:
 
 ```toml
 [tool.bro]
@@ -160,7 +313,8 @@ build-context-command = "list-files"  # optional: stdout is the session image's 
                                       # replacing the default `git ls-files`
 ```
 
-A `[tool.bro.<name>]` sub-table is carried verbatim and interpreted by whoever declares it — the launch layer validates that its own keys are known and reads no further:
+A `[tool.bro.<name>]` sub-table is carried verbatim and interpreted by whoever declares it
+— the launch layer validates that its own keys are known and reads no further:
 
 ```toml
 [tool.bro.analyst]
@@ -170,89 +324,213 @@ reports = "docs/analyses"            # repo-relative directory the analyst commi
 sharp = "openai:sol:max"             # a `--llm` preset name and the recipe it stands for
 ```
 
-`default` is required and names the **project default bro** used by utilities such as `dive-in` and attached `ride scope`; the mode verbs still require their bro positional. `harness` is optional (`claude` when omitted) and selects `ride`'s default driver. `image-repository` and `build-context-command` are optional. A URL attachment evaluates a build-context command in a temporary extraction of the committed base tree and reads the named files back from that commit. `[tool.bro.llm]` names the repo's `--llm` presets, which the host's own `~/.bro.json` `llm` table overrides per name. `[tool.bro.analyst] reports` is what an analyst session resolves its output directory from. A missing pyproject, table, or default — or an unknown key — fails the launch. Which credential instance backs a kind stays out of the repo: the attachment — checkout path or normalized URL — keys the host's project selection in `~/.bro.json` (`bro/setup/AGENTS.md`, "Host config"), and `--grant`/`--revoke` overrides it per launch. A repository may provide `setup.sh` to provision its worktree environment; the launch logs and skips that step when it is absent. The project environment need not install `bro-ride`, because session machinery comes from the runtime bundle. Personas remain registered through the `bro` entry-point group (`AGENTS.md`, "Register the new bro") — in the invoking installation, whose registry a repository names its default bro out of but contributes nothing to. `dive-in` is deliberately the one cwd-bound launcher: it refuses a cwd outside git, resolves that checkout, and passes it to `ride along --repo` explicitly.
+`default` is required and names the **project default bro** used by utilities such as `dive-in` and attached `ride scope`;
+the mode verbs still require their bro positional.
+`harness` is optional (`claude` when omitted) and selects `ride`'s default driver.
+`image-repository` and `build-context-command` are optional.
+A URL attachment evaluates a build-context command in a temporary extraction of the committed base tree and reads the named files back from that commit.
+`[tool.bro.llm]` names the repo's `--llm` presets, which the host's own `~/.bro.json` `llm` table overrides per name.
+`[tool.bro.analyst] reports` is what an analyst session resolves its output directory from.
+A missing pyproject, table, or default
+— or an unknown key
+— fails the launch.
+Which credential instance backs a kind stays out of the repo:
+the attachment — checkout path or normalized URL
+— keys the host's project selection in `~/.bro.json` (`bro/setup/AGENTS.md`, "Host config"), and `--grant`/`--revoke` overrides it per launch.
+A repository may provide `setup.sh` to provision its worktree environment;
+the launch logs and skips that step when it is absent.
+The project environment need not install `bro-ride`, because session machinery comes from the runtime bundle.
+Personas remain registered through the `bro` entry-point group (`AGENTS.md`, "Register the new bro")
+— in the invoking installation, whose registry a repository names its default bro out of but contributes nothing to.
+`dive-in` is deliberately the one cwd-bound launcher:
+it refuses a cwd outside git, resolves that checkout, and passes it to `ride along --repo` explicitly.
 
 ## The outer layer
 
-Container mode is the default; `--host` selects a same-machine git worktree instead. Whatever the mode and harness, the outer:
+Container mode is the default;
+`--host` selects a same-machine git worktree instead.
+Whatever the mode and harness, the outer:
 
-- validates policy once — a harness flag's constraints are an argv check in its `parse_options` (claude's `--raw` × `--host` gate lives there), and the harness's auth precondition (`preflight_auth`: the `anthropic` key under `--raw`, the `claude_code` setup-token for a full mode; the bro harness preflights nothing — its LLM key rides the scoped store) is a launch preflight, so `ride resume` is gated like the launch that created the session. Neither runs in the inner command (the inner argv never carries `--host`, so the inner has no mode to re-validate);
+- validates policy once — a harness flag's constraints are an argv check in its `parse_options` (claude's `--raw` × `--host` gate lives there), and the harness's auth precondition (`preflight_auth`:
+  the `anthropic` key under `--raw`, the `claude_code` setup-token for a full mode;
+  the bro harness preflights nothing — its LLM key rides the scoped store) is a launch preflight, so `ride resume` is gated like the launch that created the session.
+  Neither runs in the inner command (the inner argv never carries `--host`, so the inner has no mode to re-validate);
 - resolves and flock-holds one runtime bundle for the root's full lifetime, then sets `RIDE_COMMAND` (including the resolved `--repo` when attached) and resolves `--into` against that attachment to a sha;
-- runs every precondition that can reject the launch — the harness's auth preflight and the credential/summon scope preflight — before the workspace is recorded, so a refused launch creates no workspace (a URL resolution may already have refreshed its reusable mirror);
+- runs every precondition that can reject the launch
+  — the harness's auth preflight and the credential/summon scope preflight
+  — before the workspace is recorded, so a refused launch creates no workspace (a URL resolution may already have refreshed its reusable mirror);
 - resolves the workspace, creating it with the selected kind and attachment when absent and refusing either mismatch (see "Workspaces");
 - takes the workspace's session lock, before either mode prepares anything and for the session's whole duration (see "One session per workspace"), and records the spec `ride resume` would relaunch with;
-- on a resume, fails fast when the workspace has no session to continue — the harness's cheap existence check with its own refusal wording (`session_exists` / `missing_session_error`: a claude transcript under the workspace's state dir, a bro trail pointer), run before the tree is materialized for a mistyped name (the claude runner resolves the actual session id later, from its cwd);
-- prepares the workspace (the two mode sections below), then spawns the harness's inner command with the machinery flags it consumed stripped from the inner argv (`--host --drop --grant --revoke --into`); both modes run the frozen bundle, through the host snapshot or container volume;
-- owns the post-exit UX, identical in both modes — the resume hint, `--drop` removal (honored only on a clean exit; see the flag).
+- on a resume, fails fast when the workspace has no session to continue
+  — the harness's cheap existence check with its own refusal wording (`session_exists` / `missing_session_error`:
+  a claude transcript under the workspace's state dir, a bro trail pointer), run before the tree is materialized for a mistyped name (the claude runner resolves the actual session id later, from its cwd);
+- prepares the workspace (the two mode sections below), then spawns the harness's inner command with the machinery flags it consumed stripped from the inner argv (`--host --drop --grant --revoke --into`);
+  both modes run the frozen bundle, through the host snapshot or container volume;
+- owns the post-exit UX, identical in both modes
+  — the resume hint, `--drop` removal (honored only on a clean exit; see the flag).
 
 #### One session per workspace
 
-A second concurrent session on one workspace would mutate the same files and share the gitignored token-accounting state, so a launch holds an exclusive `flock` on the workspace's `lock` file — taken atomically against a racing launcher, released even when the holder dies without unwinding, and covering the whole launch rather than a window inside it. A refused launch names the holding pid. `ride list` and `ride clean` read the same lock as their liveness signal; a container workspace additionally counts a running container bound to its mount, which is what a launcher killed outright leaves behind. The lock releases with the session, so re-entry and `ride resume` afterwards are unaffected.
+A second concurrent session on one workspace would mutate the same files and share the gitignored token-accounting state, so a launch holds an exclusive `flock` on the workspace's `lock` file
+— taken atomically against a racing launcher, released even when the holder dies without unwinding, and covering the whole launch rather than a window inside it.
+A refused launch names the holding pid.
+`ride list` and `ride clean` read the same lock as their liveness signal;
+a container workspace additionally counts a running container bound to its mount, which is what a launcher killed outright leaves behind.
+The lock releases with the session, so re-entry and `ride resume` afterwards are unaffected.
 
 ### Host mode (`ride along --host -w <name> <bro>`)
 
-With an attachment, `ride` owns the worktree lifecycle directly: it prepares the worktree, then spawns the frozen runtime snapshot's `ride solo|along --in-place` with that worktree as cwd — for a claude session it runs plain `claude` (not `claude -w`, so no Claude Code worktree/provisioning hooks are involved), for a bro session the native `bro run|chat …`. On launch:
+With an attachment, `ride` owns the worktree lifecycle directly:
+it prepares the worktree, then spawns the frozen runtime snapshot's `ride solo|along --in-place` with that worktree as cwd
+— for a claude session it runs plain `claude` (not `claude -w`, so no Claude Code worktree/provisioning hooks are involved), for a bro session the native `bro run|chat …`.
+On launch:
 
-1. creates the worktree if new — on the workspace's recorded branch (based on `--into <ref>` when given, else on a path attachment's current `HEAD` or a URL mirror's freshly fetched `origin/HEAD` — see the shared launch flags under "Commands") plus `submodule.alternateLocation=superproject` so submodule updates reuse the superproject's modules, then initializes submodules;
+1. creates the worktree if new
+   — on the workspace's recorded branch (based on `--into <ref>` when given, else on a path attachment's current `HEAD` or a URL mirror's freshly fetched `origin/HEAD`
+   — see the shared launch flags under "Commands") plus `submodule.alternateLocation=superproject` so submodule updates reuse the superproject's modules, then initializes submodules;
 2. runs the worktree's `setup.sh` when present, otherwise logs that project provisioning was skipped;
-3. materializes the runtime bundle's host venv and declared session-command shims, then materializes the scoped store into the workspace's `credentials/` (see "Workspaces"), pointing `CREDENTIALS_REGISTRY` at it in the runner env, applies that store's credential install hooks into the workspace's `environment/` and merges the environment they declare into the runner env — the same hooks a container applies, which is what puts a host session's git and `gh` on its own `github` identity rather than the operator's (see "Scoped credential hydration") — and has the harness prepare the rest of that env (`prepare_host_env` — a claude session's private state dir + `CLAUDE_CONFIG_DIR` + session auth, see "Host claude-state isolation" below; a bro session's git identity + `RIDE_BRO`);
-4. spawns `<bundle>/host/venv/bin/ride` with PATH ordered as `<bundle>/host/bin` then the inherited non-launcher paths. `VIRTUAL_ENV` and the launcher's active-venv PATH entry are removed; the worktree venv is not activated.
+3. materializes the runtime bundle's host venv and declared session-command shims, then materializes the scoped store into the workspace's `credentials/` (see "Workspaces"), pointing `CREDENTIALS_REGISTRY` at it in the runner env,
+   applies that store's credential install hooks into the workspace's `environment/` and merges the environment they declare into the runner env
+   — the same hooks a container applies, which is what puts a host session's git and `gh` on its own `github` identity rather than the operator's (see "Scoped credential hydration")
+   — and has the harness prepare the rest of that env (`prepare_host_env` — a claude session's private state dir + `CLAUDE_CONFIG_DIR` + session auth, see "Host claude-state isolation" below; a bro session's git identity + `RIDE_BRO`);
+4. spawns `<bundle>/host/venv/bin/ride` with PATH ordered as `<bundle>/host/bin` then the inherited non-launcher paths.
+   `VIRTUAL_ENV` and the launcher's active-venv PATH entry are removed;
+   the worktree venv is not activated.
 
 A detached host launch creates a plain empty `tree/` directory instead of a git worktree, skips repository setup and persona workspace provisioning, and runs the same pinned in-place command there.
 
 The harness's auth preflight and the scoped-credential hydration run earlier, in the outer layer, so neither the workspace nor the worktree exists when they fail.
 
-On exit: `--drop` removes the workspace (`git worktree remove --force` + `git branch -D` of its recorded branch, then the directory), but only when the session exited cleanly (exit 0); otherwise the worktree is kept — `ride clean` reclaims cleanly-finished ones later.
+On exit:
+`--drop` removes the workspace (`git worktree remove --force` + `git branch -D` of its recorded branch, then the directory), but only when the session exited cleanly (exit 0);
+otherwise the worktree is kept
+— `ride clean` reclaims cleanly-finished ones later.
 
 Layout on disk:
 
 - `<runtime-root>/workspaces/<name>/tree/` — the worktree (regular working tree with a `.git` gitfile that points at `<project>/.git/worktrees/<name>/`).
-- `<runtime-root>/workspaces/<name>/tree/.venv` — the project environment when the repository's optional `setup.sh` creates one; session machinery does not depend on it.
-- `<runtime-root>/workspaces/<name>/claude/projects/<encoded-worktree-path>/` — Claude Code's per-project state for the session, including the session JSONL files, inside the workspace's claude state dir (below). The encoded path is the worktree path with `/` and `.` replaced by `-`.
+- `<runtime-root>/workspaces/<name>/tree/.venv` — the project environment when the repository's optional `setup.sh` creates one;
+  session machinery does not depend on it.
+- `<runtime-root>/workspaces/<name>/claude/projects/<encoded-worktree-path>/` — Claude Code's per-project state for the session, including the session JSONL files, inside the workspace's claude state dir (below).
+  The encoded path is the worktree path with `/` and `.` replaced by `-`.
 
 #### Host claude-state isolation
 
-A host session runs claude with `CLAUDE_CONFIG_DIR` pointing at the workspace's `claude/` dir — the same variable container mode sets, there naming the dir bind-mounted at `/home/ride/.claude` — so the host's own `~/.claude.json` and `~/.claude/.credentials.json` never enter the session. Without this, claude can prefer the host's rotating OAuth file (or the claude.ai account state riding along in `~/.claude.json`) over the session's setup-token and greet every session with "Please run /login · API Error: 401" once that grant rots. `ride/ride/claude/claude_config.py:provision_host_claude_dir` provisions the dir; both the outer launch and the snapshot's in-place runner apply it idempotently, so the runner sees the same state even when called directly in tests.
+A host session runs claude with `CLAUDE_CONFIG_DIR` pointing at the workspace's `claude/` dir
+— the same variable container mode sets, there naming the dir bind-mounted at `/home/ride/.claude`
+— so the host's own `~/.claude.json` and `~/.claude/.credentials.json` never enter the session.
+Without this, claude can prefer the host's rotating OAuth file (or the claude.ai account state riding along in `~/.claude.json`) over the session's setup-token and greet every session with "Please run /login · API Error: 401" once that grant rots.
+`ride/ride/claude/claude_config.py:provision_host_claude_dir` provisions the dir;
+both the outer launch and the snapshot's in-place runner apply it idempotently, so the runner sees the same state even when called directly in tests.
 
-The dir is provisioned with exactly the container's session state — nothing else from the host `~/.claude` (settings, hooks, permissions, user CLAUDE.md, custom agents) enters the session:
+The dir is provisioned with exactly the container's session state
+— nothing else from the host `~/.claude` (settings, hooks, permissions, user CLAUDE.md, custom agents) enters the session:
 
-- `.claude.json` — seeded once from the same explicit config as the container's (onboarding done, marketplace auto-install marked done, auto-updates off, host account identity), with trust entries for the worktree path *and* the main repo root — claude resolves a linked worktree's trust against the repository root, so the worktree entry alone still prompts — and `installMethod` carried from the host's own config (the session runs the host claude, not the image's npm install).
-- `settings.json` — the same constructed config container mode writes (one `_provision_session_claude_dir` serves both modes, rewriting it each launch), minus the container-only bypass-permissions pre-accept — on a host worktree the `--dangerously-skip-permissions` acceptance dialog stays interactive.
+- `.claude.json` — seeded once from the same explicit config as the container's (onboarding done, marketplace auto-install marked done, auto-updates off, host account identity), with trust entries for the worktree path *and* the main repo root
+  — claude resolves a linked worktree's trust against the repository root, so the worktree entry alone still prompts
+  — and `installMethod` carried from the host's own config (the session runs the host claude, not the image's npm install).
+- `settings.json` — the same constructed config container mode writes (one `_provision_session_claude_dir` serves both modes, rewriting it each launch), minus the container-only bypass-permissions pre-accept
+  — on a host worktree the `--dangerously-skip-permissions` acceptance dialog stays interactive.
 - `plugins/` — first-run copy of the host claude install's plugins dir, the host twin of the entrypoint's `/opt/claude-plugins-seed` copy (same guard file), so the settings' pyright-lsp enable has its matching install records.
 - unlike container mode there is no OAuth file at all to fall back on, which is why a missing `claude_code` secret fails the full mode launch up front instead of degrading to the host's rotating credentials.
 
 ### Container mode (`ride along -w <name> <bro>` — the default)
 
-`/workspace` is always the workspace's writable `tree/` bind. It starts and stays empty for a detached launch. With an attachment, the entrypoint creates a **fresh clone**, not a worktree: the gitfile-based worktree layout does not survive the container boundary, and a clone keeps git state isolated. Layout:
+`/workspace` is always the workspace's writable `tree/` bind.
+It starts and stays empty for a detached launch.
+With an attachment, the entrypoint creates a **fresh clone**, not a worktree:
+the gitfile-based worktree layout does not survive the container boundary, and a clone keeps git state isolated.
+Layout:
 
-- `<runtime-root>/workspaces/<name>/tree/` (host) → `/workspace` rw. Empty on first run; the entrypoint clones into it.
-- the checkout root or managed bare mirror (host) → `/host-repo` ro only when attached. The clone uses `--shared`, so the container reuses the mounted repository's objects via alternates instead of duplicating them.
-- `ride-runtime-<bundle-hash>` → `/var/ride/runtime` ro. Its `bin/` is first on PATH and its `venv/` carries the root's frozen Python installation.
-- a per-launch **scoped credential store** injected into `/home/ride/.bro`. Before the container starts, the host resolves only the secrets the session actually uses into an **in-memory** tar and `docker cp`s it into the created-but-unstarted container — there is no host-side store and no bind mount. It carries one file per resolved secret (its raw text) plus a `credentials.json` registry covering exactly those, so the in-container resolver is bounded to the scoped set — any other secret resolves to a clean `SecretNotFound`. Hydration is **strict** — a missing secret raises on the host before the container is created. Living in the container's own writable layer, the store dies with the container: `--rm` removes it on normal exit, and an orphaned container (a killed `ride`) is reclaimed by `ride clean`'s container GC — secret cleanup piggybacks on the container lifecycle, so no host directory ever holds plaintext and no exit-sweep or signal handlers are needed. See "Scoped credential hydration" below.
-- **github** and **aws** are ordinary scoped secrets — no out-of-band `/run/secrets/github_token` mount, no `~/.aws` mount. Each carries a static **install hook** in the registry, applied generically by `credentials install-hooks` (see "Scoped credential hydration"): `github` → the git configuration the session carries in its own environment — a credential helper over a reset of whatever helper a config outside the session declares, plus the rewrite that carries github ssh remotes to it — and a PATH-front `gh` wrapper, each resolving the token via `credentials get` per operation (a `github_app`-backed instance mints short-lived tokens, so consumers read at use time rather than off a value baked in at install, and `GH_TOKEN` / `GITHUB_TOKEN` inherited from the launching shell are blanked so nothing in the session acts on another identity); `aws` → the shared-credentials file it points the CLI at. No per-secret logic lives in the entrypoint.
-- the session's **broker channel** socket, bind-mounted at the fixed `/run/broker.sock` — absent on macOS hosts (see "The broker channel"). The host's `/var/run/docker.sock` is never mounted: its API is root on the host with no per-caller authorization, so a socket grant would step past every scoped boundary above. Work that needs a daemon — building and pushing the operated project's images, say — goes through the project's CI instead.
-- `<runtime-root>/trails` (host) → `/var/ride/trails` rw when the scoped trails backend is local. In-container readers resolve that fixed absolute path; no state path is relative to `/workspace`.
-- `<runtime-root>/summon` (host) → `/var/ride/summon` ro for broker-supervised containers. `RIDE_SUMMON_STATUS` points at the mounted status file directly, rather than reaching back through `/host-repo`.
+- `<runtime-root>/workspaces/<name>/tree/` (host) → `/workspace` rw.
+  Empty on first run;
+  the entrypoint clones into it.
+- the checkout root or managed bare mirror (host) → `/host-repo` ro only when attached.
+  The clone uses `--shared`, so the container reuses the mounted repository's objects via alternates instead of duplicating them.
+- `ride-runtime-<bundle-hash>` → `/var/ride/runtime` ro.
+  Its `bin/` is first on PATH and its `venv/` carries the root's frozen Python installation.
+- a per-launch **scoped credential store** injected into `/home/ride/.bro`.
+  Before the container starts, the host resolves only the secrets the session actually uses into an **in-memory** tar and `docker cp`s it into the created-but-unstarted container
+  — there is no host-side store and no bind mount.
+  It carries one file per resolved secret (its raw text) plus a `credentials.json` registry covering exactly those, so the in-container resolver is bounded to the scoped set
+  — any other secret resolves to a clean `SecretNotFound`.
+  Hydration is **strict** — a missing secret raises on the host before the container is created.
+  Living in the container's own writable layer, the store dies with the container:
+  `--rm` removes it on normal exit, and an orphaned container (a killed `ride`) is reclaimed by `ride clean`'s container GC
+  — secret cleanup piggybacks on the container lifecycle, so no host directory ever holds plaintext and no exit-sweep or signal handlers are needed.
+  See "Scoped credential hydration" below.
+- **github** and **aws** are ordinary scoped secrets
+  — no out-of-band `/run/secrets/github_token` mount, no `~/.aws` mount.
+  Each carries a static **install hook** in the registry, applied generically by `credentials install-hooks` (see "Scoped credential hydration"):
+  `github` → the git configuration the session carries in its own environment
+  — a credential helper over a reset of whatever helper a config outside the session declares, plus the rewrite that carries github ssh remotes to it
+  — and a PATH-front `gh` wrapper,
+  each resolving the token via `credentials get` per operation (a `github_app`-backed instance mints short-lived tokens, so consumers read at use time rather than off a value baked in at install,
+  and `GH_TOKEN` / `GITHUB_TOKEN` inherited from the launching shell are blanked so nothing in the session acts on another identity);
+  `aws` → the shared-credentials file it points the CLI at.
+  No per-secret logic lives in the entrypoint.
+- the session's **broker channel** socket, bind-mounted at the fixed `/run/broker.sock`
+  — absent on macOS hosts (see "The broker channel").
+  The host's `/var/run/docker.sock` is never mounted:
+  its API is root on the host with no per-caller authorization, so a socket grant would step past every scoped boundary above.
+  Work that needs a daemon
+  — building and pushing the operated project's images, say
+  — goes through the project's CI instead.
+- `<runtime-root>/trails` (host) → `/var/ride/trails` rw when the scoped trails backend is local.
+  In-container readers resolve that fixed absolute path;
+  no state path is relative to `/workspace`.
+- `<runtime-root>/summon` (host) → `/var/ride/summon` ro for broker-supervised containers.
+  `RIDE_SUMMON_STATUS` points at the mounted status file directly, rather than reaching back through `/host-repo`.
 
 Inside the container, the entrypoint (running as root first):
 
-1. Aligns the `ride` user's UID/GID with whoever owns `/workspace` on the host, then re-execs as `ride` (skipped on Docker for Mac when the bind mount reports root-owned via virtiofs — remapping to UID 0 would make claude refuse `--dangerously-skip-permissions`).
-2. Does **not** seed `~/.claude/` from the host — `ride` provisions everything the container needs explicitly (constructed `~/.claude/.claude.json` and `~/.claude/settings.json`, synced credentials; see "Container credential isolation" below). Host machine state (caches, plugins, daemon/session state) deliberately stays on the host.
-3. Applies the scoped store's credential install hooks into `~/.bro-environment` and evals the environment they declare (see "Scoped credential hydration"), then, when attached, marks `/workspace` as a safe git directory. The host's `~/.gitconfig` is no more seeded than `~/.claude` is: a session's git configuration is what its own hooks declare.
-4. When attached and on the first run, clones `/host-repo` into `/workspace` with `--shared`, retargets `origin` to the mounted repository's upstream URL (converting `git@github.com:` to `https://github.com/` so token auth works), and adds `host` as a local remote. Branches `RIDE_BRANCH` from `RIDE_BASE_REF` when set — an explicit `--into`, a URL attachment's fresh `origin/HEAD`, or a summon's inherited base — else from `HEAD`, the path attachment's current commit. The mounted repository's `refs/remotes/origin/*` are ref-refreshed for later clean/rebase checks.
+1. Aligns the `ride` user's UID/GID with whoever owns `/workspace` on the host,
+   then re-execs as `ride` (skipped on Docker for Mac when the bind mount reports root-owned via virtiofs — remapping to UID 0 would make claude refuse `--dangerously-skip-permissions`).
+2. Does **not** seed `~/.claude/` from the host
+   — `ride` provisions everything the container needs explicitly (constructed `~/.claude/.claude.json` and `~/.claude/settings.json`, synced credentials; see "Container credential isolation" below).
+   Host machine state (caches, plugins, daemon/session state) deliberately stays on the host.
+3. Applies the scoped store's credential install hooks into `~/.bro-environment` and evals the environment they declare (see "Scoped credential hydration"), then, when attached, marks `/workspace` as a safe git directory.
+   The host's `~/.gitconfig` is no more seeded than `~/.claude` is:
+   a session's git configuration is what its own hooks declare.
+4. When attached and on the first run, clones `/host-repo` into `/workspace` with `--shared`, retargets `origin` to the mounted repository's upstream URL (converting `git@github.com:` to `https://github.com/` so token auth works),
+   and adds `host` as a local remote.
+   Branches `RIDE_BRANCH` from `RIDE_BASE_REF` when set
+   — an explicit `--into`, a URL attachment's fresh `origin/HEAD`, or a summon's inherited base
+   — else from `HEAD`, the path attachment's current commit.
+   The mounted repository's `refs/remotes/origin/*` are ref-refreshed for later clean/rebase checks.
 5. When attached, initialises submodules from the matching host-local paths in `/host-repo` (since `.gitmodules` uses SSH URLs the container can't auth to), skipping any submodule the host hasn't initialised.
-6. When attached and the optional project image carries `/opt/project-venv`, links it at `/workspace/.venv` and exports `RIDE_VENV_MANIFEST=/opt/project-venv-manifest`. A dangling symlink left by an older image is replaced; a real existing workspace environment is preserved. The repository's `setup.sh` owns manifest reuse and resync from there.
-7. When attached, runs `setup.sh` when present, or logs that project provisioning was skipped. The workspace venv is not activated: PATH remains the pinned runtime shim farm plus system paths.
-8. Installs credential hooks, starts the optional broxy from the pinned runtime, and execs the container command. The entrypoint itself is harness- and flavor-blind.
+6. When attached and the optional project image carries `/opt/project-venv`, links it at `/workspace/.venv` and exports `RIDE_VENV_MANIFEST=/opt/project-venv-manifest`.
+   A dangling symlink left by an older image is replaced;
+   a real existing workspace environment is preserved.
+   The repository's `setup.sh` owns manifest reuse and resync from there.
+7. When attached, runs `setup.sh` when present, or logs that project provisioning was skipped.
+   The workspace venv is not activated:
+   PATH remains the pinned runtime shim farm plus system paths.
+8. Installs credential hooks, starts the optional broxy from the pinned runtime, and execs the container command.
+   The entrypoint itself is harness- and flavor-blind.
 
-Every container-starting surface computes one broker-free `ride.workspace.docker.Launch`: the workspace name, optional resolved repository attachment, command, explicit env snapshot, required/optional credential tiers, TTY and ambient-forwarding policy, extra mounts, resolved image tag, and runtime bundle hash. `prepare_container` consumes that immutable description for workspace mkdir → scoped-store build → `docker create` + store copy; it does not re-resolve images or bundles. Summoned children inherit the root's identifiers. A host root defers their image/volume resolution until its first summon.
+Every container-starting surface computes one broker-free `ride.workspace.docker.Launch`:
+the workspace name, optional resolved repository attachment, command, explicit env snapshot, required/optional credential tiers, TTY and ambient-forwarding policy, extra mounts, resolved image tag, and runtime bundle hash.
+`prepare_container` consumes that immutable description for workspace mkdir → scoped-store build → `docker create` + store copy;
+it does not re-resolve images or bundles.
+Summoned children inherit the root's identifiers.
+A host root defers their image/volume resolution until its first summon.
 
 Container images are split:
 
-- **Runtime image** (`bro/ride-runtime:<hash>`) — Python-minor-matched Debian, system CLIs, pinned Claude Code, the ride user, plugin seed, entrypoint, and shell helpers. Its hash covers those assets, the Claude pin, and Python minor. It contains no Python distribution from the ride installation.
-- **Project image** (`<[tool.bro] image-repository>:<hash>`) — attached launches may add this layer `FROM` the runtime image, with `/opt/project-venv` and the staged uv manifest set. Its hash covers the runtime tag and manifests. A repository with no `pyproject.toml`/`uv.lock` pair skips this layer and runs the runtime image directly.
+- **Runtime image** (`bro/ride-runtime:<hash>`) — Python-minor-matched Debian, system CLIs, pinned Claude Code, the ride user, plugin seed, entrypoint, and shell helpers.
+  Its hash covers those assets, the Claude pin, and Python minor.
+  It contains no Python distribution from the ride installation.
+- **Project image** (`<[tool.bro] image-repository>:<hash>`)
+  — attached launches may add this layer `FROM` the runtime image, with `/opt/project-venv` and the staged uv manifest set.
+  Its hash covers the runtime tag and manifests.
+  A repository with no `pyproject.toml`/`uv.lock` pair skips this layer and runs the runtime image directly.
 
-`ride.workspace.build_context` streams separate normalized contexts to `docker build -`: the runtime context contains only runtime assets; the project context carries tracked project files, its Dockerfile, and the staged manifests under the reserved `.bro-container/` prefix. Superseded tags are pruned per runtime or project repository; plain `docker image rm` leaves any image still referenced by a container.
+`ride.workspace.build_context` streams separate normalized contexts to `docker build -`:
+the runtime context contains only runtime assets;
+the project context carries tracked project files, its Dockerfile, and the staged manifests under the reserved `.bro-container/` prefix.
+Superseded tags are pruned per runtime or project repository;
+plain `docker image rm` leaves any image still referenced by a container.
 
 Network is not restricted by design.
 
@@ -260,150 +538,601 @@ When a container session exits, the workspace directory stays on disk for the ne
 
 #### Ctrl+Z: suspend and resume
 
-Inside the container no job-control shell sits above the session (`docker-init` is the session leader), so a raw Ctrl+Z byte reaching the container pty would stop claude's foreground group with nothing able to ever resume it — a wedged terminal. Every interactive attach therefore binds Ctrl+Z as the docker client's detach key (`--detach-keys=ctrl-z`, replacing the default `ctrl-p,ctrl-q` sequence — so Ctrl-P passes through to claude): the byte never enters the container, and pressing Ctrl+Z detaches the host-side client instead.
+Inside the container no job-control shell sits above the session (`docker-init` is the session leader), so a raw Ctrl+Z byte reaching the container pty would stop claude's foreground group with nothing able to ever resume it
+— a wedged terminal.
+Every interactive attach therefore binds Ctrl+Z as the docker client's detach key (`--detach-keys=ctrl-z`, replacing the default `ctrl-p,ctrl-q` sequence — so Ctrl-P passes through to claude):
+the byte never enters the container, and pressing Ctrl+Z detaches the host-side client instead.
 
-ride tells a detach from a container exit by the container's running state — the client exits 0 either way. On detach it freezes the whole container (`docker pause`, the cgroup freezer) and stops its own process group, so the launching shell reports the job stopped exactly like a host-mode Ctrl+Z; `fg` resumes ride, which thaws the container and re-attaches. The entire session — claude, the MCP server, the session daemons — is frozen while suspended. Both attach paths behave this way (the broker-supervised root and the broker-less fallback); host mode needs none of it — a real shell with job control sits above the session there, so plain job-control suspend already works. With no job-control shell above ride itself (an orphaned process group), the kernel discards the self-stop and Ctrl+Z degrades to a brief pause + re-attach instead of a wedge.
+ride tells a detach from a container exit by the container's running state
+— the client exits 0 either way.
+On detach it freezes the whole container (`docker pause`, the cgroup freezer) and stops its own process group, so the launching shell reports the job stopped exactly like a host-mode Ctrl+Z;
+`fg` resumes ride, which thaws the container and re-attaches.
+The entire session — claude, the MCP server, the session daemons
+— is frozen while suspended.
+Both attach paths behave this way (the broker-supervised root and the broker-less fallback);
+host mode needs none of it
+— a real shell with job control sits above the session there, so plain job-control suspend already works.
+With no job-control shell above ride itself (an orphaned process group), the kernel discards the self-stop and Ctrl+Z degrades to a brief pause + re-attach instead of a wedge.
 
 #### Container credential isolation
 
-The container does **not** bind-mount `~/.claude.json` from the host, nor does the host's OAuth credentials file ever enter the container. Instead, the launch provisions a container-private `.claude.json` in the workspace's `claude/` dir, which reaches claude inside the mounted dir that `CLAUDE_CONFIG_DIR` names (`ride/ride/claude/claude_config.py:container_claude_state` — claude state is `ride along` launch data on the neutral `Launch`, so a bro-harness container, which runs no Claude, mounts no claude state at all), while session auth comes from the `claude_code` token (below):
+The container does **not** bind-mount `~/.claude.json` from the host, nor does the host's OAuth credentials file ever enter the container.
+Instead, the launch provisions a container-private `.claude.json` in the workspace's `claude/` dir, which reaches claude inside the mounted dir that `CLAUDE_CONFIG_DIR` names (`ride/ride/claude/claude_config.py:container_claude_state`
+— claude state is `ride along` launch data on the neutral `Launch`, so a bro-harness container, which runs no Claude, mounts no claude state at all), while session auth comes from the `claude_code` token (below):
 
-- `claude/.claude.json` — constructed once per workspace from an explicit config (`installMethod: global` to match the image's `npm i -g` install, `hasCompletedOnboarding`, `autoUpdates: false`, `projects["/workspace"].hasTrustDialogAccepted: true` so guided sessions skip the folder-trust prompt, and `officialMarketplaceAutoInstallAttempted: true` and `officialMarketplaceAutoInstalled: true` so claude doesn't re-fetch the official plugin marketplace at startup — it's baked into the image) plus the host's account-identity fields (`oauthAccount`, `userID`) so the session starts logged in. Host machine state (project paths, trust history, usage counters, feature caches) is **not** copied. Missing identity is fatal — `ride` aborts asking you to log in on the host first. Subsequent sessions keep whatever the container last wrote. Stops per-project mutations (mcpServers, allowedTools, hasTrustDialogAccepted) from being usable to escalate into the next host session.
-- **Session auth (`CLAUDE_CODE_OAUTH_TOKEN`)** — Full-mode sessions authenticate with this env var, which the **required** `claude_code` secret (a `claude setup-token` long-lived token) exports via its registry install hook. Claude Code reads it above any credentials file, and one stable bearer is shared by every session — so no OAuth credentials file is mounted or synced, and none of the cross-session refresh-token rotation that forced the periodic `/login`. Being required, a missing token fails loudly on the host at scoped-store hydration, before the container starts (not as a turn-1 401 inside it). `--raw`/bro-run containers run `claude --bare` against the `anthropic` api key and request the token only on the full-mode path. Host-mode sessions get the same var injected into the claude subprocess env directly (`ride.claude.claude_auth.apply_claude_auth`, applied idempotently by both the outer host launch and the in-place runner next to claude), and the token is equally required there: the launch aborts up front when the secret doesn't resolve, since the session's private config dir carries no OAuth file to fall back on (see "Host claude-state isolation"). The same transform scrubs inherited `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` from the session env: both outrank `CLAUDE_CODE_OAUTH_TOKEN` in claude's credential precedence, so a value leaking in from the launching shell would silently hijack the session's auth.
-- `claude/settings.json` — constructed fresh each launch (not mounted from the host), holding only UX prefs (spinner verbs, reduced motion, feedback-survey opt-out), an explicit `enabledPlugins` opt-in for the `pyright-lsp` Python language server (the host plugin set no longer leaks in, so the container enables it itself), a `cleanupPeriodDays` pin keeping transcripts forever (they back the session recording), an `autoMemoryEnabled: false` opt-out of claude's default-on auto-memory, and `skipDangerousModePermissionPrompt: true` — the workspace is an isolated clone, so the `--dangerously-skip-permissions` acceptance dialog is pre-answered (container sessions only; a host worktree keeps the dialog). The plugin is *installed* at image-build time (`ride/ride/setup/container/Dockerfile`) and staged at `/opt/claude-plugins-seed`, which the entrypoint copies into the bind-mounted `~/.claude/plugins` on first run — enabling alone isn't enough, claude would otherwise prompt the "LSP Plugin Recommendation" on `.py` files. Host permissions, hooks, plugins, and model/effort pins do not leak in, and the session's own LLM flags plus the merged `--settings` (see "The claude argv") own session config.
-- `<runtime-root>/workspaces/<name>/claude/` (host) → `/home/ride/.claude` (container). Per-workspace overlay of everything else. It is mounted from the host rather than living in the container because the container is `--rm`'d at exit while the workspace outlives it: the transcripts are what `ride resume` continues and what `ride list` reads a subject from, and summon control reads the trail pointer beside them on the host while the session runs.
-- `claude/projects/-workspace/` — where Claude Code stores the session JSONL for `/workspace`. The encoded path `-workspace` is fixed (just `/` replaced with `-`).
+- `claude/.claude.json` — constructed once per workspace from an explicit config (`installMethod: global` to match the image's `npm i -g` install, `hasCompletedOnboarding`, `autoUpdates: false`,
+  `projects["/workspace"].hasTrustDialogAccepted: true` so guided sessions skip the folder-trust prompt,
+  and `officialMarketplaceAutoInstallAttempted: true` and `officialMarketplaceAutoInstalled: true` so claude doesn't re-fetch the official plugin marketplace at startup
+  — it's baked into the image) plus the host's account-identity fields (`oauthAccount`, `userID`) so the session starts logged in.
+  Host machine state (project paths, trust history, usage counters, feature caches) is **not** copied.
+  Missing identity is fatal
+  — `ride` aborts asking you to log in on the host first.
+  Subsequent sessions keep whatever the container last wrote.
+  Stops per-project mutations (mcpServers, allowedTools, hasTrustDialogAccepted) from being usable to escalate into the next host session.
+- **Session auth (`CLAUDE_CODE_OAUTH_TOKEN`)** — Full-mode sessions authenticate with this env var, which the **required** `claude_code` secret (a `claude setup-token` long-lived token) exports via its registry install hook.
+  Claude Code reads it above any credentials file, and one stable bearer is shared by every session
+  — so no OAuth credentials file is mounted or synced, and none of the cross-session refresh-token rotation that forced the periodic `/login`.
+  Being required, a missing token fails loudly on the host at scoped-store hydration, before the container starts (not as a turn-1 401 inside it).
+  `--raw`/bro-run containers run `claude --bare` against the `anthropic` api key and request the token only on the full-mode path.
+  Host-mode sessions get the same var injected into the claude subprocess env directly (`ride.claude.claude_auth.apply_claude_auth`, applied idempotently by both the outer host launch and the in-place runner next to claude),
+  and the token is equally required there:
+  the launch aborts up front when the secret doesn't resolve, since the session's private config dir carries no OAuth file to fall back on (see "Host claude-state isolation").
+  The same transform scrubs inherited `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` from the session env:
+  both outrank `CLAUDE_CODE_OAUTH_TOKEN` in claude's credential precedence, so a value leaking in from the launching shell would silently hijack the session's auth.
+- `claude/settings.json` — constructed fresh each launch (not mounted from the host), holding only UX prefs (spinner verbs, reduced motion, feedback-survey opt-out),
+  an explicit `enabledPlugins` opt-in for the `pyright-lsp` Python language server (the host plugin set no longer leaks in, so the container enables it itself),
+  a `cleanupPeriodDays` pin keeping transcripts forever (they back the session recording), an `autoMemoryEnabled: false` opt-out of claude's default-on auto-memory, and `skipDangerousModePermissionPrompt: true`
+  — the workspace is an isolated clone, so the `--dangerously-skip-permissions` acceptance dialog is pre-answered (container sessions only; a host worktree keeps the dialog).
+  The plugin is *installed* at image-build time (`ride/ride/setup/container/Dockerfile`) and staged at `/opt/claude-plugins-seed`, which the entrypoint copies into the bind-mounted `~/.claude/plugins` on first run
+  — enabling alone isn't enough, claude would otherwise prompt the "LSP Plugin Recommendation" on `.py` files.
+  Host permissions, hooks, plugins, and model/effort pins do not leak in, and the session's own LLM flags plus the merged `--settings` (see "The claude argv") own session config.
+- `<runtime-root>/workspaces/<name>/claude/` (host) → `/home/ride/.claude` (container).
+  Per-workspace overlay of everything else.
+  It is mounted from the host rather than living in the container because the container is `--rm`'d at exit while the workspace outlives it:
+  the transcripts are what `ride resume` continues and what `ride list` reads a subject from, and summon control reads the trail pointer beside them on the host while the session runs.
+- `claude/projects/-workspace/` — where Claude Code stores the session JSONL for `/workspace`.
+  The encoded path `-workspace` is fixed (just `/` replaced with `-`).
 
-This means each container session has its own private `~/.claude.json` (so MCP server allow-lists are per-workspace) and its own session log directory, while authenticating with the shared, non-rotating `claude_code` token (so no session's refresh can blow away another's).
+This means each container session has its own private `~/.claude.json` (so MCP server allow-lists are per-workspace) and its own session log directory, while authenticating with the shared,
+non-rotating `claude_code` token (so no session's refresh can blow away another's).
 
 #### Scoped credential hydration
 
-Both session modes hydrate only the secrets the session's bro declares, scoping each session to a minimal credential set: `ride.root.run_in_container` injects the store into the container's `~/.bro`; a host launch materializes the same store into the workspace's `credentials/` and points `CREDENTIALS_REGISTRY` at its registry (the resolver searches the registry's own directory first), so `credentials`-based workflows — grant/revoke, a missing secret resolving to a clean `SecretNotFound` — behave identically in both modes. On host the scope is a convenience, not a boundary: the session runs as the user and can read the real `~/.bro` directly. Both modes install the store's hooks, so a session's git and `gh` speak for the `github` identity it was scoped with in either one.
+Both session modes hydrate only the secrets the session's bro declares, scoping each session to a minimal credential set:
+`ride.root.run_in_container` injects the store into the container's `~/.bro`;
+a host launch materializes the same store into the workspace's `credentials/` and points `CREDENTIALS_REGISTRY` at its registry (the resolver searches the registry's own directory first), so `credentials`-based workflows
+— grant/revoke, a missing secret resolving to a clean `SecretNotFound`
+— behave identically in both modes.
+On host the scope is a convenience, not a boundary:
+the session runs as the user and can read the real `~/.bro` directly.
+Both modes install the store's hooks, so a session's git and `gh` speak for the `github` identity it was scoped with in either one.
 
-- **The manifest.** A bro's `needed_secrets()` (`bro/bro.py`) is the union of each declared MCP server spec's and data source's `needed_secrets` (pure metadata, no live server construction) and the bro's MRO-collected `extra_secrets`. It is harness-aware — `needed_secrets(harness='claude')` counts only the components that hold on the claude harness, so a full mode never hydrates a secret of a component it doesn't mount. It deliberately omits the LLM key — that is added only by surfaces that run the bro as an LLM process. `bro show <name>` lists it. Components declare what they read — for example, `WebSearch` requires `brave` and `openai.LLMSpec.needed_secrets()` returns `openai`; `extra_secrets` is the escape hatch for environment needs no component expresses.
-- **Which instance.** The manifest names kinds. Computing a scope first binds the resolver to the instance selection the attachment reads (`bro/setup/AGENTS.md`, "Host config"), so a kind hydrates from whichever instance this project reads while the scope, and the session inside it, keep speaking kinds. A scope that binds no entry — detached, or an attachment `~/.bro.json` does not name — may not read any kind that file scopes per project, and fails naming it rather than hydrating another project's instance; the same bound applies to the children such a session summons. `ride scope` prints the attachment, hydrated kinds, selected instances, and refusals.
-- **Which bro.** Scope keys on the selected bro's manifest. `ride solo|along` computes it for the mode verb's bro positional, and summon lowering computes it for the child target. A name the registry does not resolve fails the scope computation, so every launch surface refuses it before creating a workspace, an image, or a container. Direct `bro run` / `bro chat` use ambient credentials and do not call this layer.
-- **Per-recipe sets (strict → request only what's used).** Harness implementations own `ScopeRecipe` values and pass them to `ride/ride/scope.py:scoped_secrets(bro_name, recipe)`, one generic computation with one shared bro-run recipe:
-  - Claude full (`ride.claude`'s private full recipe — dive-in / plain `ride along` / `ride along`): the persona's claude-harness manifest (`needed_secrets(harness='claude')` — exactly the components the session-local `persona:<name>` server mounts, plus `extra_secrets`; a component gated to the bro harness contributes nothing) + the matching optional tier + `claude_code`.
-  - Claude raw (`ride.claude`'s private raw recipe — `claude --bare` serving the bro's own in-process MCP servers): the bro's full `needed_secrets()` + `anthropic` (apiKeyHelper), plus the bro's `optional_secrets()` hydrated best-effort.
-  - bro harness (`BRO_RUN_RECIPE` — the bro as an LLM process in managed sessions and bro-harness summon children): `needed_secrets()` + `llm_spec.needed_secrets()` + `optional_secrets()` (best-effort). A summoned child is scoped through its requested harness's recipe, so a claude-harness child follows the claude-full row instead.
-  - every surface adds `trails` to its optional tier: the credential selects a recording backend rather than enabling recording (`bro/trails/AGENTS.md`), so a launch that cannot resolve it still records and only a session recording through the service needs the value.
-  - `--grant` / `--revoke` (repeatable in both session modes; host scoping is a convenience, not a boundary) layer a per-session override across both tiers. A plain grant joins the required set when its credential kind is absent; when that kind is already selected, it replaces the selected name, so `--grant brog+github` switches from `brog` (or another `brog` instance) without a matching revoke. A revoke removes the exact name from whichever tier contains it (`@bro` values adjust the summon allow-list instead — see the shared launch flags above). Strict — granting the exact selected name, granting one kind twice, or revoking an absent name raises and stops. The mode verbs and `summon` apply the same override grammar to the scope they create; direct `bro run` / `bro chat` create none. Add AWS access to a session with `--grant aws`; withhold a best-effort secret such as `openai` with `--revoke openai`.
-- **Hydration.** `credentials.build_scoped_store(names, optional=…)` returns an in-memory map — one entry per resolved secret (its raw text) plus a scoped `credentials.json` (carrying each secret's `install` hook); `ride` packs it into a tar and `docker cp`s it into the pre-start container's `~/.bro`, so no plaintext ever lands on a host file. The required tier (`names`) is strict: a name not in the host registry raises (a manifest typo), and a declared name with no value also raises (`SecretNotFound`) — both fail loudly on the host, before the container is created. The `optional` tier is best-effort: each name (minus those already required) is materialised when resolvable and silently skipped otherwise, so an absent optional secret degrades a component instead of failing launch. A secret whose `$cred` reference chain reaches a minting source (e.g. a brog config referencing the app-backed `github` kind) materialises with its references intact instead of a frozen expansion — the session re-expands per read and mints its own — and the kinds those references name are hydrated into the scope with it, transitively. A kind pulled in that way is hydrated for the resolver alone, without the install hook a declared credential carries, and a reference spelled at instance level fails the launch (the scoped namespace is kinds-only). A session installs at most one instance of each credential kind (`bro/setup/AGENTS.md` "Configuration" owns the `kind+instance` scheme): declaring two — `github` and `github+alice`, in whichever tiers — fails hydration up front. A `kind+instance` name materializes under its kind name — the scoped registry entry, its cred file, and its install hook (re-rendered for the kind name) — so the scoped store's namespace is kinds-only: readers, `credentials list`, and the `#creds` conditioning fact all address the kind, whichever instance the launch selected (the selection itself is the "Which instance" bullet above).
-- **`aws` is an ordinary secret.** `aws` → `aws_credentials`, the host's AWS shared-credentials INI at `~/.bro/aws_credentials`. Its install hook declares the value as a file in the session directory and `AWS_SHARED_CREDENTIALS_FILE` pointing at it. Deliberately not the `~/.bro` resolver source: `credentials get aws > ~/.bro/aws_credentials` would truncate it via `> samefile`. No `~/.aws` mount, no `AWS_*` forwarding.
-- **Install hooks.** A secret can declare an `install` hook in the registry — the files, environment and shadowed commands its consumer needs (schema in `bro/setup/AGENTS.md`), with every string a template rendered with `#name` bound to the secret's own name at registry load, so one kind-level hook serves every `kind+instance` variant. Nothing a hook declares is code, and the only thing applying one writes is files under the directory it is given: that bound is what makes one hook serve both modes, since a host session applies it as the operator, in the operator's own home. `credentials install-hooks <dir>` applies every hook the registry declares (in a scoped session the registry is exactly the hydrated set) and prints the environment they declare — the container entrypoint `eval`s it for a directory of its own layer, a host launch merges it into the runner env for the workspace's `environment/`. The directory is recreated per launch, so a revoked credential's wiring never outlives its session, and two hooks contending for one file, variable or command fail the launch rather than silently ordering.
-- **The container side.** `bro.base.credentials._load_registry()` searches `BRO_CONFIGS_DIR` when set and then `~/.bro` for `credentials.json`, so the scoped registry injected at `~/.bro` takes effect with the service-only variable unset. Deployed service images that synthesize a config directory set the variable explicitly. The `docker cp`'d files land owned by the tar's uid, so the entrypoint `chown -R`s `~/.bro` to `ride` after its uid remap — keeping the 0600 secret files readable by the resolver and the install hooks on both Linux (ride remapped to the host uid) and Docker for Mac (remap skipped, ride keeps its image uid).
+- **The manifest.**
+  A bro's `needed_secrets()` (`bro/bro.py`) is the union of each declared MCP server spec's and data source's `needed_secrets` (pure metadata, no live server construction) and the bro's MRO-collected `extra_secrets`.
+  It is harness-aware — `needed_secrets(harness='claude')` counts only the components that hold on the claude harness, so a full mode never hydrates a secret of a component it doesn't mount.
+  It deliberately omits the LLM key
+  — that is added only by surfaces that run the bro as an LLM process.
+  `bro show <name>` lists it.
+  Components declare what they read
+  — for example, `WebSearch` requires `brave` and `openai.LLMSpec.needed_secrets()` returns `openai`;
+  `extra_secrets` is the escape hatch for environment needs no component expresses.
+- **Which instance.**
+  The manifest names kinds.
+  Computing a scope first binds the resolver to the instance selection the attachment reads (`bro/setup/AGENTS.md`, "Host config"), so a kind hydrates from whichever instance this project reads while the scope, and the session inside it,
+  keep speaking kinds.
+  A scope that binds no entry
+  — detached, or an attachment `~/.bro.json` does not name
+  — may not read any kind that file scopes per project, and fails naming it rather than hydrating another project's instance;
+  the same bound applies to the children such a session summons.
+  `ride scope` prints the attachment, hydrated kinds, selected instances, and refusals.
+- **Which bro.**
+  Scope keys on the selected bro's manifest.
+  `ride solo|along` computes it for the mode verb's bro positional, and summon lowering computes it for the child target.
+  A name the registry does not resolve fails the scope computation, so every launch surface refuses it before creating a workspace, an image, or a container.
+  Direct `bro run` / `bro chat` use ambient credentials and do not call this layer.
+- **Per-recipe sets (strict → request only what's used).**
+  Harness implementations own `ScopeRecipe` values and pass them to `ride/ride/scope.py:scoped_secrets(bro_name, recipe)`, one generic computation with one shared bro-run recipe:
+  - Claude full (`ride.claude`'s private full recipe — dive-in / plain `ride along` / `ride along`):
+    the persona's claude-harness manifest (`needed_secrets(harness='claude')` — exactly the components the session-local `persona:<name>` server mounts, plus `extra_secrets`;
+    a component gated to the bro harness contributes nothing) + the matching optional tier + `claude_code`.
+  - Claude raw (`ride.claude`'s private raw recipe — `claude --bare` serving the bro's own in-process MCP servers):
+    the bro's full `needed_secrets()` + `anthropic` (apiKeyHelper), plus the bro's `optional_secrets()` hydrated best-effort.
+  - bro harness (`BRO_RUN_RECIPE` — the bro as an LLM process in managed sessions and bro-harness summon children):
+    `needed_secrets()` + `llm_spec.needed_secrets()` + `optional_secrets()` (best-effort).
+    A summoned child is scoped through its requested harness's recipe, so a claude-harness child follows the claude-full row instead.
+  - every surface adds `trails` to its optional tier:
+    the credential selects a recording backend rather than enabling recording (`bro/trails/AGENTS.md`), so a launch that cannot resolve it still records and only a session recording through the service needs the value.
+  - `--grant` / `--revoke` (repeatable in both session modes; host scoping is a convenience, not a boundary) layer a per-session override across both tiers.
+    A plain grant joins the required set when its credential kind is absent;
+    when that kind is already selected, it replaces the selected name, so `--grant brog+github` switches from `brog` (or another `brog` instance) without a matching revoke.
+    A revoke removes the exact name from whichever tier contains it (`@bro` values adjust the summon allow-list instead — see the shared launch flags above).
+    Strict — granting the exact selected name, granting one kind twice, or revoking an absent name raises and stops.
+    The mode verbs and `summon` apply the same override grammar to the scope they create;
+    direct `bro run` / `bro chat` create none.
+    Add AWS access to a session with `--grant aws`;
+    withhold a best-effort secret such as `openai` with `--revoke openai`.
+- **Hydration.**
+  `credentials.build_scoped_store(names, optional=…)` returns an in-memory map
+  — one entry per resolved secret (its raw text) plus a scoped `credentials.json` (carrying each secret's `install` hook);
+  `ride` packs it into a tar and `docker cp`s it into the pre-start container's `~/.bro`, so no plaintext ever lands on a host file.
+  The required tier (`names`) is strict:
+  a name not in the host registry raises (a manifest typo), and a declared name with no value also raises (`SecretNotFound`)
+  — both fail loudly on the host, before the container is created.
+  The `optional` tier is best-effort:
+  each name (minus those already required) is materialised when resolvable and silently skipped otherwise, so an absent optional secret degrades a component instead of failing launch.
+  A secret whose `$cred` reference chain reaches a minting source (e.g. a brog config referencing the app-backed `github` kind) materialises with its references intact instead of a frozen expansion
+  — the session re-expands per read and mints its own
+  — and the kinds those references name are hydrated into the scope with it, transitively.
+  A kind pulled in that way is hydrated for the resolver alone, without the install hook a declared credential carries, and a reference spelled at instance level fails the launch (the scoped namespace is kinds-only).
+  A session installs at most one instance of each credential kind (`bro/setup/AGENTS.md` "Configuration" owns the `kind+instance` scheme):
+  declaring two — `github` and `github+alice`, in whichever tiers
+  — fails hydration up front.
+  A `kind+instance` name materializes under its kind name
+  — the scoped registry entry, its cred file, and its install hook (re-rendered for the kind name)
+  — so the scoped store's namespace is kinds-only:
+  readers, `credentials list`, and the `#creds` conditioning fact all address the kind, whichever instance the launch selected (the selection itself is the "Which instance" bullet above).
+- **`aws` is an ordinary secret.**
+  `aws` → `aws_credentials`, the host's AWS shared-credentials INI at `~/.bro/aws_credentials`.
+  Its install hook declares the value as a file in the session directory and `AWS_SHARED_CREDENTIALS_FILE` pointing at it.
+  Deliberately not the `~/.bro` resolver source:
+  `credentials get aws > ~/.bro/aws_credentials` would truncate it via `> samefile`.
+  No `~/.aws` mount, no `AWS_*` forwarding.
+- **Install hooks.**
+  A secret can declare an `install` hook in the registry
+  — the files, environment and shadowed commands its consumer needs (schema in `bro/setup/AGENTS.md`), with every string a template rendered with `#name` bound to the secret's own name at registry load,
+  so one kind-level hook serves every `kind+instance` variant.
+  Nothing a hook declares is code, and the only thing applying one writes is files under the directory it is given:
+  that bound is what makes one hook serve both modes, since a host session applies it as the operator, in the operator's own home.
+  `credentials install-hooks <dir>` applies every hook the registry declares (in a scoped session the registry is exactly the hydrated set) and prints the environment they declare
+  — the container entrypoint `eval`s it for a directory of its own layer, a host launch merges it into the runner env for the workspace's `environment/`.
+  The directory is recreated per launch, so a revoked credential's wiring never outlives its session, and two hooks contending for one file, variable or command fail the launch rather than silently ordering.
+- **The container side.**
+  `bro.base.credentials._load_registry()` searches `BRO_CONFIGS_DIR` when set and then `~/.bro` for `credentials.json`, so the scoped registry injected at `~/.bro` takes effect with the service-only variable unset.
+  Deployed service images that synthesize a config directory set the variable explicitly.
+  The `docker cp`'d files land owned by the tar's uid, so the entrypoint `chown -R`s `~/.bro` to `ride` after its uid remap
+  — keeping the 0600 secret files readable by the resolver and the install hooks on both Linux (ride remapped to the host uid) and Docker for Mac (remap skipped, ride keeps its image uid).
 
 ### The broker channel
 
-Every session runs as the root peer of a **broker** (see `bro/broker/AGENTS.md`): the outer provisions a unix socket at `<runtime-root>/broker/<channel>.sock` (the flat control dir stays within the ~108-byte `sun_path` limit; dir `0700`, socket `0600`), points `BROKER_CHANNEL` at it, and supervises the session from the broker's event loop until it exits. The modes differ only in the spawner (`ride/ride/workspace/spawn.py`, composed by `ride/ride/spawn.py:run_root_via_broker`):
+Every session runs as the root peer of a **broker** (see `bro/broker/AGENTS.md`):
+the outer provisions a unix socket at `<runtime-root>/broker/<channel>.sock` (the flat control dir stays within the ~108-byte `sun_path` limit;
+dir `0700`, socket `0600`), points `BROKER_CHANNEL` at it, and supervises the session from the broker's event loop until it exits.
+The modes differ only in the spawner (`ride/ride/workspace/spawn.py`, composed by `ride/ride/spawn.py:run_root_via_broker`):
 
 - container — the attached container launch (`ride/ride/root.py:_run_root_via_broker` + `DockerSpawner`), with the socket bind-mounted at the fixed `/run/broker.sock` and `BROKER_CHANNEL` pointing there;
-- host — the runner as a plain subprocess (`ride/ride/root.py:run_host_process_via_broker` + `ProcessSpawner`), `BROKER_CHANNEL` pointing straight at the socket path — no bind-mount hop.
+- host — the runner as a plain subprocess (`ride/ride/root.py:run_host_process_via_broker` + `ProcessSpawner`), `BROKER_CHANNEL` pointing straight at the socket path
+  — no bind-mount hop.
 
-The session's processes don't talk to that channel directly: a **broxy** (the peer-side broker proxy, `bro/broker/broxy.py`) sits in between, holding the one long-lived upstream connection and re-serving the channel on a local socket that `BROKER_CHANNEL` is rewritten to — so the session's short-lived clients (`broker` CLI calls, `BroChannel`, a backgrounded wait) multiplex over the single connection the host's supersede-on-accept semantics expect, and a result whose waiter died stays claimable from the broxy's mailbox. A set `BROKER_CHANNEL` always names a broxy socket — there is no direct-channel topology.
+The session's processes don't talk to that channel directly:
+a **broxy** (the peer-side broker proxy, `bro/broker/broxy.py`) sits in between, holding the one long-lived upstream connection and re-serving the channel on a local socket that `BROKER_CHANNEL` is rewritten to
+— so the session's short-lived clients (`broker` CLI calls, `BroChannel`, a backgrounded wait) multiplex over the single connection the host's supersede-on-accept semantics expect,
+and a result whose waiter died stays claimable from the broxy's mailbox.
+A set `BROKER_CHANNEL` always names a broxy socket
+— there is no direct-channel topology.
 
-The lifecycle is one shared `broxy launch` sequence: it starts `serve` detached with output redirected to the requested log, gates on readiness, kills a failed serve, and prints the local address plus pid. There is no restart supervision: the upstream is the session's own host broker, which never comes back within a session, so a broxy that dies takes the session's channel with it — loudly, as a code bug to surface (`bro/broker/AGENTS.md` owns the policy). Two call sites supply their mode-specific paths and keep launch policy at the edge:
+The lifecycle is one shared `broxy launch` sequence:
+it starts `serve` detached with output redirected to the requested log, gates on readiness, kills a failed serve, and prints the local address plus pid.
+There is no restart supervision:
+the upstream is the session's own host broker, which never comes back within a session, so a broxy that dies takes the session's channel with it
+— loudly, as a code bug to surface (`bro/broker/AGENTS.md` owns the policy).
+Two call sites supply their mode-specific paths and keep launch policy at the edge:
 
-- container — the entrypoint, for every broker-supervised container uniformly (claude sessions, bro-launcher hops, spawned children), from the pinned runtime: socket `/tmp/broxy.sock`, log `/tmp/broxy.log`;
-- host — the session's inner process (`bro/launch/broxy.py:session_broxy`, requested by the outer launch through `BRO_START_SESSION_BROXY`): socket + log in a session tempdir (outside the git tree — a socket in the workspace would dirty `git status` and the clean checks), retaining the returned pid to stop the daemon on session exit.
+- container — the entrypoint, for every broker-supervised container uniformly (claude sessions, bro-launcher hops, spawned children), from the pinned runtime:
+  socket `/tmp/broxy.sock`, log `/tmp/broxy.log`;
+- host — the session's inner process (`bro/launch/broxy.py:session_broxy`, requested by the outer launch through `BRO_START_SESSION_BROXY`):
+  socket + log in a session tempdir (outside the git tree — a socket in the workspace would dirty `git status` and the clean checks), retaining the returned pid to stop the daemon on session exit.
 
-When `broxy launch` cannot run — missing from the session runtime or not ready within the gate — the call site warns and unsets `BROKER_CHANNEL`: the session gets no channel at all, the same shape as `BROKER_DISABLED`; the launch itself still proceeds — like `_broker_enabled`, the gate must never break a launch. A channel-less session's own summons fail immediately at the client, and a channel-less *summoned child* cannot report `completed` — its exit surfaces to the summoner as the synthesized `failed{exit, output_tail}`, with the child's trail as the fallback record.
+When `broxy launch` cannot run
+— missing from the session runtime or not ready within the gate
+— the call site warns and unsets `BROKER_CHANNEL`:
+the session gets no channel at all, the same shape as `BROKER_DISABLED`;
+the launch itself still proceeds
+— like `_broker_enabled`, the gate must never break a launch.
+A channel-less session's own summons fail immediately at the client, and a channel-less *summoned child* cannot report `completed`
+— its exit surfaces to the summoner as the synthesized `failed{exit, output_tail}`, with the child's trail as the fallback record.
 
-The live broker registers the substrate's built-in `ping` handler, so a session can verify its channel with `broker request ping '{}'`; the root-lifecycle log handlers — the root's own `started`/`completed` (a bro run at the session root: a `bro run` container, or an in-process run inside a session) has no parent peer, so the host process logs it as the parent (`root run started (trail …)` / `root run ended: …`); and the `summon` handler — the root launch carries the session's summon allow-list (`run_root_via_broker(may_summon=…)`, computed at launch by `ride/ride/summon_control.py`; see the shared launch flags above) and wires the per-root `SummonControl` enforcing per-peer summon authorization (see "Summoning another bro"). Because the channel sits on the critical path of every launch, a broker defect would too — `BROKER_DISABLED` (presence-checked, parallel to `TRAILS_DISABLED`) is the kill-switch that skips broker provisioning/dispatch entirely (no channel, so no launcher starts a broxy), and a venv that can't import broker degrades the same way with a warning; both fall back to the direct launch (`docker start -a -i` in container mode, a plain runner spawn on host). The post-exit finish (resume hint, `--drop`) runs after `Broker.run()` returns, so it is identical on both paths.
+The live broker registers the substrate's built-in `ping` handler, so a session can verify its channel with `broker request ping '{}'`;
+the root-lifecycle log handlers
+— the root's own `started`/`completed` (a bro run at the session root: a `bro run` container, or an in-process run inside a session) has no parent peer, so the host process logs it as the parent (`root run started (trail …)` / `root run ended: …`);
+and the `summon` handler
+— the root launch carries the session's summon allow-list (`run_root_via_broker(may_summon=…)`, computed at launch by `ride/ride/summon_control.py`;
+see the shared launch flags above) and wires the per-root `SummonControl` enforcing per-peer summon authorization (see "Summoning another bro").
+Because the channel sits on the critical path of every launch, a broker defect would too
+— `BROKER_DISABLED` (presence-checked, parallel to `TRAILS_DISABLED`) is the kill-switch that skips broker provisioning/dispatch entirely (no channel, so no launcher starts a broxy),
+and a venv that can't import broker degrades the same way with a warning;
+both fall back to the direct launch (`docker start -a -i` in container mode, a plain runner spawn on host).
+The post-exit finish (resume hint, `--drop`) runs after `Broker.run()` returns, so it is identical on both paths.
 
-While an interactive root owns the terminal — from the attached child's spawn to its exit — the outer process's own output moves to the workspace's `session.log` (`ride/ride/workspace/spawn.py:_HostLogRedirect`, an fd-level redirect of the host's stdout+stderr): summon lifecycle lines, broker warnings, and the inherited-fd chatter of spawner shell-outs (a mid-session `docker build` for a spawned child) land there instead of painting over the session's raw-mode TUI. The flip is TTY-gated, so a headless run keeps everything on stderr; launch-time output (scoped-secrets lines, a first image build) and the post-exit finish print before and after the attached span, so they stay on the terminal. When anything was written during the span, one post-exit line points at it (`session host log: <path> (<n> lines this session)`); nothing is replayed to the terminal. The statusLine and the durable summon records under `<runtime-root>/summon/` are unaffected — they remain the live surfaces. Unlike the summon records, the host log is diagnostics, not audit: workspace removal (`--drop`, `ride clean`) deletes it with the workspace.
+While an interactive root owns the terminal
+— from the attached child's spawn to its exit
+— the outer process's own output moves to the workspace's `session.log` (`ride/ride/workspace/spawn.py:_HostLogRedirect`, an fd-level redirect of the host's stdout+stderr):
+summon lifecycle lines, broker warnings, and the inherited-fd chatter of spawner shell-outs (a mid-session `docker build` for a spawned child) land there instead of painting over the session's raw-mode TUI.
+The flip is TTY-gated, so a headless run keeps everything on stderr;
+launch-time output (scoped-secrets lines, a first image build) and the post-exit finish print before and after the attached span, so they stay on the terminal.
+When anything was written during the span, one post-exit line points at it (`session host log: <path> (<n> lines this session)`);
+nothing is replayed to the terminal.
+The statusLine and the durable summon records under `<runtime-root>/summon/` are unaffected
+— they remain the live surfaces.
+Unlike the summon records, the host log is diagnostics, not audit:
+workspace removal (`--drop`, `ride clean`) deletes it with the workspace.
 
-Container mode additionally requires a docker daemon that shares the host filesystem. On a macOS host the daemon runs in a VM (Docker Desktop / colima) whose file sharing cannot project a connectable host unix socket: the channel bind mount would break container creation outright — the scoped-store `docker cp` stats its destination by mounting the whole container filesystem, so one unappliable mount fails the launch — and even a mounted socket file could not carry connections across the VM boundary. Container sessions on macOS therefore always take the broker-less path (`ride/ride/workspace/containers.py:container_broker_enabled`). Host sessions keep their channel, whose socket is reached in-process with no daemon in between — but a summon from one still fails at the child's docker launch, which needs the same socket bind mount.
+Container mode additionally requires a docker daemon that shares the host filesystem.
+On a macOS host the daemon runs in a VM (Docker Desktop / colima) whose file sharing cannot project a connectable host unix socket:
+the channel bind mount would break container creation outright
+— the scoped-store `docker cp` stats its destination by mounting the whole container filesystem, so one unappliable mount fails the launch
+— and even a mounted socket file could not carry connections across the VM boundary.
+Container sessions on macOS therefore always take the broker-less path (`ride/ride/workspace/containers.py:container_broker_enabled`).
+Host sessions keep their channel, whose socket is reached in-process with no daemon in between
+— but a summon from one still fails at the child's docker launch, which needs the same socket bind mount.
 
 ### Summoning another bro
 
-A session can summon another bro over its channel: the target runs as a one-shot, non-TTY docker child (unless the summon is *manual* — the user launches an interactive child themselves; see "Manual summon" below) with its own scoped credential set (nothing inherited from the summoner, plus whatever the request's own `grant`/`revoke` names), under the harness the request names — both run `ride solo … --in-place`, the default `bro` harness spawning the target's own LLM process there and `harness: claude` a one-shot managed Claude Code session of the target persona (full mode; the request's `llm` recipe resolves within the named harness and never switches it) — with the root session's attachment: an attached child bases on the summoner's workspace `HEAD` read at summon time (uncommitted changes never transfer; a container summoner's local-only commits are fetched into the host repo first so the child's clone can reach them) unless the request's `into` ref overrides, while a detached root spawns detached children and rejects `into`, and the answer comes back synchronously. A nested bro summon stamps the child trail's `summoned_by.trail_id`; a root session summon omits provenance until the session recorder publishes its current trail id. The UX is the shared `spell::ask` spell (`bros/bro/spells/ask.md`, inherited by every bro); underneath it are two client surfaces over the same request:
+A session can summon another bro over its channel:
+the target runs as a one-shot, non-TTY docker child (unless the summon is *manual* — the user launches an interactive child themselves;
+see "Manual summon" below) with its own scoped credential set (nothing inherited from the summoner, plus whatever the request's own `grant`/`revoke` names), under the harness the request names
+— both run `ride solo … --in-place`, the default `bro` harness spawning the target's own LLM process there and `harness: claude` a one-shot managed Claude Code session of the target persona (full mode;
+the request's `llm` recipe resolves within the named harness and never switches it)
+— with the root session's attachment:
+an attached child bases on the summoner's workspace `HEAD` read at summon time (uncommitted changes never transfer;
+a container summoner's local-only commits are fetched into the host repo first so the child's clone can reach them) unless the request's `into` ref overrides, while a detached root spawns detached children and rejects `into`,
+and the answer comes back synchronously.
+A nested bro summon stamps the child trail's `summoned_by.trail_id`;
+a root session summon omits provenance until the session recorder publishes its current trail id.
+The UX is the shared `spell::ask` spell (`bros/bro/spells/ask.md`, inherited by every bro);
+underneath it are two client surfaces over the same request:
 
-- `summon <target> <prompt>`, for Bash-capable sessions — blocking by default (request id + started trail id on stderr, answer on stdout, non-zero exit with the reason on failure), `--timeout <s>` / `--into <ref>` / `--hold <level>` / `--grant <name>` / `--revoke <name>` / `--harness <name>` plus the LLM flags forwarded into the request (an omitted hold leaves the child's unattended default; grant/revoke and the LLM flags shape the child exactly as they shape a managed run — see the shared launch flags above — except that a summon may only widen the child's credential scope with what the summoning session itself holds, whether it names the credential outright or reaches it through `--harness`/the LLM flags), `--detach` to return right after the send. Any summon is reclaimable by the request id both modes print — detached or a killed foreground wait: `summon check <request-id>` peeks without blocking (the answer if an unread result is in, `still running` + exit 3 if not; rides the broxy's non-marking `check`, so it disturbs neither the retained result nor a live waiter), and `summon check --wait <request-id>` blocks and collects via the broxy's claim — a lock: it fails fast while another waiter is alive, and errors once the result was collected. The broxy retains delivered conversations, so a collected result stays readable: `summon check <request-id> --last-seen N` replays the conversation from sequence N (0 = the start) regardless of read status — the recovery path when the result was read by a wait whose reply never arrived. `summon list` reports the session's summons as the host recorded them — active ones and the last finished one, each with its request id — the rediscovery surface when the id was lost with a dead client. In a claude session, long summons run via the harness's background Bash; `rewind show <trail-id>` peeks mid-run. Contract details in `bro/summon.py`.
-- the bro service tools (`bro::summon` / `bro::summon_check` / `bro::summon_list`), for bro LLM processes and `--raw` sessions — `summon` blocks for the answer (`detach: true` returns the request id instead) and takes the CLI's request fields as parameters (`timeout` / `into` / `hold` / `grant` / `revoke` / `llm` / `harness`); `summon_check` peeks non-blockingly by default, cursor-reads with `last_seen`, and collects with `wait: true`, mirroring the CLI's `check` / `check --last-seen` / `check --wait`; `summon_list` mirrors `summon list` (mounted when the session carries `RIDE_SUMMON_STATUS`). A blocking tool call owns its channel client so a cancelled call aborts the wait instead of leaving a ghost waiter, and the MCP-served builds carry a transport caution (the harness bounds a silent tool call at claude's `MCP_TOOL_TIMEOUT`, short of a long run — those go `detach` + poll; details in `AGENTS.md`).
+- `summon <target> <prompt>`, for Bash-capable sessions
+  — blocking by default (request id + started trail id on stderr, answer on stdout, non-zero exit with the reason on failure),
+  `--timeout <s>` / `--into <ref>` / `--hold <level>` / `--grant <name>` / `--revoke <name>` / `--harness <name>` plus the LLM flags forwarded into the request (an omitted hold leaves the child's unattended default;
+  grant/revoke and the LLM flags shape the child exactly as they shape a managed run — see the shared launch flags above — except that a summon may only widen the child's credential scope with what the summoning session itself holds,
+  whether it names the credential outright or reaches it through `--harness`/the LLM flags), `--detach` to return right after the send.
+  Any summon is reclaimable by the request id both modes print
+  — detached or a killed foreground wait:
+  `summon check <request-id>` peeks without blocking (the answer if an unread result is in, `still running` + exit 3 if not;
+  rides the broxy's non-marking `check`, so it disturbs neither the retained result nor a live waiter), and `summon check --wait <request-id>` blocks and collects via the broxy's claim
+  — a lock:
+  it fails fast while another waiter is alive, and errors once the result was collected.
+  The broxy retains delivered conversations, so a collected result stays readable:
+  `summon check <request-id> --last-seen N` replays the conversation from sequence N (0 = the start) regardless of read status
+  — the recovery path when the result was read by a wait whose reply never arrived.
+  `summon list` reports the session's summons as the host recorded them
+  — active ones and the last finished one, each with its request id
+  — the rediscovery surface when the id was lost with a dead client.
+  In a claude session, long summons run via the harness's background Bash;
+  `rewind show <trail-id>` peeks mid-run.
+  Contract details in `bro/summon.py`.
+- the bro service tools (`bro::summon` / `bro::summon_check` / `bro::summon_list`), for bro LLM processes and `--raw` sessions
+  — `summon` blocks for the answer (`detach: true` returns the request id instead) and takes the CLI's request fields as parameters (`timeout` / `into` / `hold` / `grant` / `revoke` / `llm` / `harness`);
+  `summon_check` peeks non-blockingly by default, cursor-reads with `last_seen`, and collects with `wait: true`, mirroring the CLI's `check` / `check --last-seen` / `check --wait`;
+  `summon_list` mirrors `summon list` (mounted when the session carries `RIDE_SUMMON_STATUS`).
+  A blocking tool call owns its channel client so a cancelled call aborts the wait instead of leaving a ghost waiter,
+  and the MCP-served builds carry a transport caution (the harness bounds a silent tool call at claude's `MCP_TOOL_TIMEOUT`, short of a long run — those go `detach` + poll; details in `AGENTS.md`).
 
-A claude-harness child is scoped through the claude-full recipe — `claude_code` required, no LLM key — and the seam's auth preflight runs in the lowering, so an unresolvable setup token fails the spawn with the preflight's remedy as the correlated launch failure. Its lifecycle comes from the in-place runner rather than `bro.native.runner.Runner.run`: the runner captures the print-mode reply, announces `started{trail_id}` once the session recorder publishes the workspace's current-trail pointer, and sends `completed{result, end_reason: ok}` on a clean exit — a non-zero exit emits no terminal and surfaces as the synthesized `failed{exit, output_tail}` (the echoed reply lands in that tail), while an unattended abort is the `raise` service tool's own `completed{raised}`. The recorder stamps the child trail's `summoned_by` from the summoner attribution, and the child's recorded resume spec is a claude spec, so a kept workspace resumes into the claude conversation.
+A claude-harness child is scoped through the claude-full recipe
+— `claude_code` required, no LLM key
+— and the seam's auth preflight runs in the lowering, so an unresolvable setup token fails the spawn with the preflight's remedy as the correlated launch failure.
+Its lifecycle comes from the in-place runner rather than `bro.native.runner.Runner.run`:
+the runner captures the print-mode reply, announces `started{trail_id}` once the session recorder publishes the workspace's current-trail pointer, and sends `completed{result, end_reason: ok}` on a clean exit
+— a non-zero exit emits no terminal and surfaces as the synthesized `failed{exit, output_tail}` (the echoed reply lands in that tail), while an unattended abort is the `raise` service tool's own `completed{raised}`.
+The recorder stamps the child trail's `summoned_by` from the summoner attribution, and the child's recorded resume spec is a claude spec, so a kept workspace resumes into the claude conversation.
 
 ### Manual summon — an interactive child the user launches
 
-A `manual: true` summon (`summon --manual`, or the `summon` tool's `manual` parameter, which never blocks for the answer) inverts the launch: the host spawns nothing and instead registers an *expected external peer* — a provisioned broker channel awaiting a child someone else starts — and the request id doubles as the launch token. The registration is acknowledged with an interim `accepted` once the token is claimable, and the manual client waits for it, so a denial fails at the summon itself — a token is only ever handed out for a summon the host is expecting. The summoner relays the token to the user, who launches the session at their own pace with `ride along --summoned <token> <target>`: an otherwise normal interactive session — container or `--host`, either harness, the user's own `--llm`/`--hold`/`--workspace` — except it starts no broker of its own; its `BROKER_CHANNEL` points at the summoner's provisioned socket (bind-mounted at the container broker path), so it attaches as a regular summon peer, its own nested summons routing through the summoner's control with per-peer authorization. The request fixes what the summoner authorized — the target bro, the prompt (delivered as the session's first message), the root session's repository attachment, the base (the request's `into` ref, or the summoner's workspace HEAD read at launch, like a spawned child's at its spawn), the child's resolved `may_summon`, and the request's credential grant/revoke seeds (the launch's own `--grant`/`--revoke` layer on top; `@bro` overrides are refused, since the control enforces the list it resolved at request time) — while launch-owned request fields (`timeout`/`hold`/`llm`/`harness`) are refused at the request: the human at the launch owns the session's shape, and there is no host-killable child for a timeout to bound, so a manual summon carries no timer at all.
+A `manual: true` summon (`summon --manual`, or the `summon` tool's `manual` parameter, which never blocks for the answer) inverts the launch:
+the host spawns nothing and instead registers an *expected external peer*
+— a provisioned broker channel awaiting a child someone else starts
+— and the request id doubles as the launch token.
+The registration is acknowledged with an interim `accepted` once the token is claimable, and the manual client waits for it, so a denial fails at the summon itself
+— a token is only ever handed out for a summon the host is expecting.
+The summoner relays the token to the user, who launches the session at their own pace with `ride along --summoned <token> <target>`:
+an otherwise normal interactive session
+— container or `--host`, either harness, the user's own `--llm`/`--hold`/`--workspace`
+— except it starts no broker of its own;
+its `BROKER_CHANNEL` points at the summoner's provisioned socket (bind-mounted at the container broker path), so it attaches as a regular summon peer, its own nested summons routing through the summoner's control with per-peer authorization.
+The request fixes what the summoner authorized
+— the target bro, the prompt (delivered as the session's first message), the root session's repository attachment, the base (the request's `into` ref, or the summoner's workspace HEAD read at launch, like a spawned child's at its spawn),
+the child's resolved `may_summon`, and the request's credential grant/revoke seeds (the launch's own `--grant`/`--revoke` layer on top; `@bro` overrides are refused, since the control enforces the list it resolved at request time)
+— while launch-owned request fields (`timeout`/`hold`/`llm`/`harness`) are refused at the request:
+the human at the launch owns the session's shape, and there is no host-killable child for a timeout to bound, so a manual summon carries no timer at all.
 
-The bridge between the two halves is the pending record (`ride/ride/pending_summon.py`), written under `<runtime-root>/summon/pending/<token>.json` when the channel is provisioned and one-shot-claimed by the launch as its last fallible step before the session starts — a second launch on the same token fails loudly (two sessions must not share one channel), and a summon that ends unclaimed (root teardown, a failure) discards it, so a stale token fails the launch with the reason. The child announces `started{trail_id, workspace}` — the claude in-place runner from its started-watch, the native chat surface on its first turn — carrying the user-chosen workspace name the control needs as the base-ref source for the child's own summons (until it lands, a nested summon from the child is denied with a retry hint, and its credential grants are always denied as unattributable — its actual scope was computed by its own launch). The answer comes back through the `answer` service tool, mounted in every summoned session with a channel: the agent calls it once, when the user confirms the work is done, and the session ends with `completed{result, end_reason: ok}` delivered to the waiting summoner — a session the user quits without it produces no terminal, and the channel's EOF surfaces to the summoner as the synthesized `failed{disconnected}` (channel EOF is an expected peer's death signal: there is no process for the host to reap, and the session's broxy holds one upstream connection per run). Root exit *detaches* an in-flight manual child rather than killing it — the user's session lives on, un-summoned, its channel gone. The summoner's side is the ordinary detach flow: the token works with `summon check` / `summon list` / `summon watch`, showing `pending` until the user launches.
+The bridge between the two halves is the pending record (`ride/ride/pending_summon.py`),
+written under `<runtime-root>/summon/pending/<token>.json` when the channel is provisioned and one-shot-claimed by the launch as its last fallible step before the session starts
+— a second launch on the same token fails loudly (two sessions must not share one channel), and a summon that ends unclaimed (root teardown, a failure) discards it, so a stale token fails the launch with the reason.
+The child announces `started{trail_id, workspace}`
+— the claude in-place runner from its started-watch, the native chat surface on its first turn
+— carrying the user-chosen workspace name the control needs as the base-ref source for the child's own summons (until it lands, a nested summon from the child is denied with a retry hint,
+and its credential grants are always denied as unattributable — its actual scope was computed by its own launch).
+The answer comes back through the `answer` service tool, mounted in every summoned session with a channel:
+the agent calls it once, when the user confirms the work is done, and the session ends with `completed{result, end_reason: ok}` delivered to the waiting summoner
+— a session the user quits without it produces no terminal, and the channel's EOF surfaces to the summoner as the synthesized `failed{disconnected}` (channel EOF is an expected peer's death signal:
+there is no process for the host to reap, and the session's broxy holds one upstream connection per run).
+Root exit *detaches* an in-flight manual child rather than killing it
+— the user's session lives on, un-summoned, its channel gone.
+The summoner's side is the ordinary detach flow:
+the token works with `summon check` / `summon list` / `summon watch`, showing `pending` until the user launches.
 
-Host side, the root's `SummonControl` (`ride/ride/summon_control.py`) validates each request and authorizes it against the requesting peer's own allow-list: the session root follows the launch-computed effective list, and a summoned child follows the list its own summon request resolved — its bro's static `may_summon` seeds under that request's `@bro` grant/revoke, resolved on the broker loop so a malformed or no-op override is denied outright. The host attributes each peer to the bro it spawned for it, so summons chain transitively wherever the seeds chain, and widening is always explicit and bounded by the summoner: its own list never passes through — only what its request names — and it may only name bros it is itself allowed to summon, so authority only narrows down a chain. The credential half of the same flags is bounded the same way, against the summoner's own scoped set (the root's is what its launch hydrated, a summoned peer's is recomputed from its spawn record), and applied in the summon lowering against the child's computed scope, where a bad override fails the launch instead; both halves are recorded in the audit as the summoner issued them. `harness` and `llm` answer to that same credential bound without naming a credential, since the driving loop they select contributes credentials of its own: what the request's pair adds on top of the target's default scope must be in the summoner's set too, so a bro-harness session cannot summon a claude child unless its own launch hydrated `claude_code`. Only that delta is bounded — the target's declared credentials are what the allow-list entry already sanctions, and a summoner routinely holds none of them. Resolving the pair on the loop also settles the recipe: one the named harness cannot run is denied at the request rather than failing the spawn. A peer the control cannot attribute a bro to is denied, and a depth cap (the root sits at depth 0; a summon that would nest past depth 2 is denied) guards against seed cycles recursing through real containers. Denials reply immediately and land in the audit as `deny` entries (reason, request id, summoner, target/prompt head). Each spawned child records `summoned_by` provenance: the requester's trail — a claude session root's from the current-trail pointer its recorder publishes (absent before transcript adoption: the child then records no pointer), a bro peer's from its lifecycle/spawn records — plus the summoning bro's own `tool_call` step id when the request carries one. The authorized spawn goes through the composite spawner with the requesting peer as parent — so host-mode roots spawn docker children too, and a grandchild's lifecycle routes to the child that summoned it; root exit still tears down the whole tree. Every event lands a host log line plus per-session state under `<runtime-root>/summon/`, keyed by the workspace name: `<name>.jsonl` (durable audit: each entry names its actual `summoner` — the root session, or the summoning child's target + trail id — plus target, prompt head, trail id, outcome) and `<name>.status.json` (live status, every entry carrying its `request_id` reattach handle; rendered into the statusLine and served by `summon list` — see `RIDE_SUMMON_STATUS` below). Each authorized launch also carries the list it will be judged against into the run itself (`RIDE_MAY_SUMMON`: the session root's at launch, a summoned child's own resolved list at its spawn), so a peer reads what it may summon off its banner instead of discovering it by denial; enforcement stays entirely host-side. Root exit kills in-flight children with a loud log naming what was killed; a result lost that way stays recoverable from the child's trail, and the child's throwaway workspace — removed only after a clean exit — survives on disk for inspection and recovery. Each authorized spawn records the child's run as its `broker-<channel>` workspace's resume record — the same solo session spec a `ride solo --harness bro` launch would record — so `ride list` shows the child under its prompt and a surviving workspace resumes like any kept solo workspace: `ride resume broker-<channel>` opens an interactive `bro chat` continuing the child's trail (see "Bro harness").
+Host side, the root's `SummonControl` (`ride/ride/summon_control.py`) validates each request and authorizes it against the requesting peer's own allow-list:
+the session root follows the launch-computed effective list, and a summoned child follows the list its own summon request resolved
+— its bro's static `may_summon` seeds under that request's `@bro` grant/revoke, resolved on the broker loop so a malformed or no-op override is denied outright.
+The host attributes each peer to the bro it spawned for it, so summons chain transitively wherever the seeds chain, and widening is always explicit and bounded by the summoner:
+its own list never passes through
+— only what its request names
+— and it may only name bros it is itself allowed to summon, so authority only narrows down a chain.
+The credential half of the same flags is bounded the same way, against the summoner's own scoped set (the root's is what its launch hydrated, a summoned peer's is recomputed from its spawn record),
+and applied in the summon lowering against the child's computed scope, where a bad override fails the launch instead;
+both halves are recorded in the audit as the summoner issued them.
+`harness` and `llm` answer to that same credential bound without naming a credential, since the driving loop they select contributes credentials of its own:
+what the request's pair adds on top of the target's default scope must be in the summoner's set too, so a bro-harness session cannot summon a claude child unless its own launch hydrated `claude_code`.
+Only that delta is bounded
+— the target's declared credentials are what the allow-list entry already sanctions, and a summoner routinely holds none of them.
+Resolving the pair on the loop also settles the recipe:
+one the named harness cannot run is denied at the request rather than failing the spawn.
+A peer the control cannot attribute a bro to is denied, and a depth cap (the root sits at depth 0; a summon that would nest past depth 2 is denied) guards against seed cycles recursing through real containers.
+Denials reply immediately and land in the audit as `deny` entries (reason, request id, summoner, target/prompt head).
+Each spawned child records `summoned_by` provenance:
+the requester's trail — a claude session root's from the current-trail pointer its recorder publishes (absent before transcript adoption: the child then records no pointer), a bro peer's from its lifecycle/spawn records
+— plus the summoning bro's own `tool_call` step id when the request carries one.
+The authorized spawn goes through the composite spawner with the requesting peer as parent
+— so host-mode roots spawn docker children too, and a grandchild's lifecycle routes to the child that summoned it;
+root exit still tears down the whole tree.
+Every event lands a host log line plus per-session state under `<runtime-root>/summon/`, keyed by the workspace name:
+`<name>.jsonl` (durable audit:
+each entry names its actual `summoner` — the root session, or the summoning child's target + trail id — plus target, prompt head, trail id, outcome) and `<name>.status.json` (live status, every entry carrying its `request_id` reattach handle;
+rendered into the statusLine and served by `summon list` — see `RIDE_SUMMON_STATUS` below).
+Each authorized launch also carries the list it will be judged against into the run itself (`RIDE_MAY_SUMMON`:
+the session root's at launch, a summoned child's own resolved list at its spawn), so a peer reads what it may summon off its banner instead of discovering it by denial;
+enforcement stays entirely host-side.
+Root exit kills in-flight children with a loud log naming what was killed;
+a result lost that way stays recoverable from the child's trail, and the child's throwaway workspace
+— removed only after a clean exit
+— survives on disk for inspection and recovery.
+Each authorized spawn records the child's run as its `broker-<channel>` workspace's resume record
+— the same solo session spec a `ride solo --harness bro` launch would record
+— so `ride list` shows the child under its prompt and a surviving workspace resumes like any kept solo workspace:
+`ride resume broker-<channel>` opens an interactive `bro chat` continuing the child's trail (see "Bro harness").
 
 ### The outer↔inner contract
 
-Both modes' outer and inner come from the same frozen installation, so workspace age cannot skew that contract and the operated repository does not need a `ride` console script. `ride clean` sweeps abandoned workspaces, unreferenced managed mirrors, and unlocked runtime bundles; removing a bundle also removes its unused runtime volume, while Docker keeps an in-use volume alive.
+Both modes' outer and inner come from the same frozen installation, so workspace age cannot skew that contract and the operated repository does not need a `ride` console script.
+`ride clean` sweeps abandoned workspaces, unreferenced managed mirrors, and unlocked runtime bundles;
+removing a bundle also removes its unused runtime volume, while Docker keeps an in-use volume alive.
 
 ## The in-place session runner
 
-`ride solo|along --in-place` (`ride/ride/inner.py`) is the inner command of every harness: it assumes its cwd is a prepared workspace and owns what a session carries whichever agent loop drives it. Host mode runs it from the snapshot venv and container mode from the mounted runtime volume; both expose only pinned session shims plus system paths. `--in-place` is help-suppressed — an internal seam, not a user surface — and skips the outer-only policy gates (see "The outer layer").
+`ride solo|along --in-place` (`ride/ride/inner.py`) is the inner command of every harness:
+it assumes its cwd is a prepared workspace and owns what a session carries whichever agent loop drives it.
+Host mode runs it from the snapshot venv and container mode from the mounted runtime volume;
+both expose only pinned session shims plus system paths.
+`--in-place` is help-suppressed — an internal seam, not a user surface
+— and skips the outer-only policy gates (see "The outer layer").
 
-The neutral layer exports the bro git identity (every ride-launched session commits as its bro — see `ride/ride/identity.py`) and `RIDE_BRO`, applies the persona's declared workspace provisioning when attached (`BaseBro.provision_workspace` — the dev family's footer hooks ride it; see the framework's "Adding a Bro"), and wraps the harness's own runner in the session broxy. A harness supplies only `run_in_place`, so nothing a session needs regardless of its agent loop is written twice; the same module builds the inner argv the outer spawns, which is why both harnesses re-enter through one contract.
+The neutral layer exports the bro git identity (every ride-launched session commits as its bro — see `ride/ride/identity.py`) and `RIDE_BRO`,
+applies the persona's declared workspace provisioning when attached (`BaseBro.provision_workspace` — the dev family's footer hooks ride it; see the framework's "Adding a Bro"), and wraps the harness's own runner in the session broxy.
+A harness supplies only `run_in_place`, so nothing a session needs regardless of its agent loop is written twice;
+the same module builds the inner argv the outer spawns, which is why both harnesses re-enter through one contract.
 
-The claude harness's runner (`ride/ride/claude/runner.py`) then, in order: on host, provisions the session's private claude state dir and exports `CLAUDE_CONFIG_DIR` and `RIDE_SESSION_DIR` (see "Host claude-state isolation"; in a container the mounts already provide the private `~/.claude` and session state dir); resolves a resume's claude session id from its cwd's projects dir — claude's own path encoding maps the workspace path to `<config root>/projects/<encoded>` (host `<encoded-worktree-path>` under the session dir, container `-workspace` under `~/.claude`), one derivation for both modes; exports `RIDE_RUNNER_PID` (its own pid, the `raise` tool's kill target) and `BRO_HOLD` from the session's `--hold` level (see the shared launch flags under "Commands"); starts the session-local MCP server and surfaces bro spells (both below); builds the claude argv (below) and captures `RIDE_SESSION_CONTEXT` (see "Forwarded env vars"); starts the session recorder daemon (see "Session recording"); gates on the server's `/health`; then runs `claude` and waits, ending it on a SIGTERM aimed at the runner (`docker stop`, kill, a terminating service tool) as the interrupt a user issues rather than as a signal, so the turn in flight reaches the transcript before claude goes — `ride/ride/claude/interrupt.py` owns that and its per-flavor split. After claude exits it stops the server and the recorder (the stop is the recorder's final append and trail end). The bro harness's runner resolves a resume's trail from the session's current-trail pointer and spawns the native `bro run|chat …` argv.
+The claude harness's runner (`ride/ride/claude/runner.py`) then, in order:
+on host, provisions the session's private claude state dir and exports `CLAUDE_CONFIG_DIR` and `RIDE_SESSION_DIR` (see "Host claude-state isolation"; in a container the mounts already provide the private `~/.claude` and session state dir);
+resolves a resume's claude session id from its cwd's projects dir
+— claude's own path encoding maps the workspace path to `<config root>/projects/<encoded>` (host `<encoded-worktree-path>` under the session dir, container `-workspace` under `~/.claude`), one derivation for both modes;
+exports `RIDE_RUNNER_PID` (its own pid, the `raise` tool's kill target) and `BRO_HOLD` from the session's `--hold` level (see the shared launch flags under "Commands");
+starts the session-local MCP server and surfaces bro spells (both below);
+builds the claude argv (below) and captures `RIDE_SESSION_CONTEXT` (see "Forwarded env vars");
+starts the session recorder daemon (see "Session recording");
+gates on the server's `/health`;
+then runs `claude` and waits, ending it on a SIGTERM aimed at the runner (`docker stop`, kill, a terminating service tool) as the interrupt a user issues rather than as a signal, so the turn in flight reaches the transcript before claude goes
+— `ride/ride/claude/interrupt.py` owns that and its per-flavor split.
+After claude exits it stops the server and the recorder (the stop is the recorder's final append and trail end).
+The bro harness's runner resolves a resume's trail from the session's current-trail pointer and spawns the native `bro run|chat …` argv.
 
 ### The claude argv
 
-One builder for both flavors (`ride/ride/claude/claude_argv.py:build_claude_launch`): the merged `--settings` (fastMode and the statusLine, plus under `--raw` the apiKeyHelper), the forwarded claude args, prompt seeding, and the `--model` / `--effort` / fastMode it reads off the session's claude-code recipe are handled once; only the flavor forks:
+One builder for both flavors (`ride/ride/claude/claude_argv.py:build_claude_launch`):
+the merged `--settings` (fastMode and the statusLine, plus under `--raw` the apiKeyHelper), the forwarded claude args, prompt seeding, and the `--model` / `--effort` / fastMode it reads off the session's claude-code recipe are handled once;
+only the flavor forks:
 
-- **full mode** — the full harness plus the ride-injected `--append-system-prompt` (see "Auto-injected system prompt"), `--dangerously-skip-permissions` under every `--hold` level but guided, the `--mcp-config` mounting the persona's namespaces from the session-local server below, and `--disallowed-tools mcp__claude_ai_*` to keep account-level claude.ai MCP integrations out of the managed session.
-- **raw** — `--bare --strict-mcp-config --tools ''`: no project/user CLAUDE.md, no host MCP servers, no built-in tools, and only the bro's MCP namespaces allowed (`--allowed-tools mcp__<ns>__*`), with the bro's `claude_system_prompt` plus the hold fragment (see "Auto-injected system prompt") as `--system-prompt`. Auth is the `anthropic` secret, read by `ride.claude.print_anthropic_key` and wired as `apiKeyHelper` in the merged `--settings` — a helper avoids the "Detected a custom API key" prompt that `ANTHROPIC_API_KEY` would trigger every session, and flag-level `--settings` (flagSettings, not project/local) means claude executes it without a workspace trust gate.
+- **full mode** — the full harness plus the ride-injected `--append-system-prompt` (see "Auto-injected system prompt"), `--dangerously-skip-permissions` under every `--hold` level but guided,
+  the `--mcp-config` mounting the persona's namespaces from the session-local server below, and `--disallowed-tools mcp__claude_ai_*` to keep account-level claude.ai MCP integrations out of the managed session.
+- **raw** — `--bare --strict-mcp-config --tools ''`:
+  no project/user CLAUDE.md, no host MCP servers, no built-in tools, and only the bro's MCP namespaces allowed (`--allowed-tools mcp__<ns>__*`),
+  with the bro's `claude_system_prompt` plus the hold fragment (see "Auto-injected system prompt") as `--system-prompt`.
+  Auth is the `anthropic` secret, read by `ride.claude.print_anthropic_key` and wired as `apiKeyHelper` in the merged `--settings`
+  — a helper avoids the "Detected a custom API key" prompt that `ANTHROPIC_API_KEY` would trigger every session, and flag-level `--settings` (flagSettings, not project/local) means claude executes it without a workspace trust gate.
 
-The statusLine is ride's, not the operated project's: the merged settings run `<the runner's own interpreter> -m ride.claude.statusline` (detached attachment state + session-recording warning + live summon state, silent otherwise), on a `refreshInterval` clock as well as claude's event-driven renders, so the clock-relative summon state keeps ticking between session events. Both settings commands take that shape — the inner runner's own interpreter running a module — so neither leans on PATH resolution nor on a file mode the wheel format does not guarantee; and flagSettings outranking project settings means a consuming project neither declares a statusLine nor can break the session's with a stale one. The corollary is that a bare `claude` launched outside ride gets claude's default bar.
+The statusLine is ride's, not the operated project's:
+the merged settings run `<the runner's own interpreter> -m ride.claude.statusline` (detached attachment state + session-recording warning + live summon state, silent otherwise),
+on a `refreshInterval` clock as well as claude's event-driven renders, so the clock-relative summon state keeps ticking between session events.
+Both settings commands take that shape
+— the inner runner's own interpreter running a module
+— so neither leans on PATH resolution nor on a file mode the wheel format does not guarantee;
+and flagSettings outranking project settings means a consuming project neither declares a statusLine nor can break the session's with a stale one.
+The corollary is that a bare `claude` launched outside ride gets claude's default bar.
 
 ### Session-local MCP serving
 
-Every session gets its MCP tools from a session-local HTTP server the runner owns — one mechanism for both execution modes and both flavors, dying with the session. The runner starts the PATH-selected `mcp-server <spec> --http` (`bro:<name>` for `--raw`, `persona:<name>` for a full mode) on an OS-assigned port (a fixed port would collide between concurrent sessions sharing a netns) with a per-session bearer token. `mcp-server --http --port 0 --port-file <path>` binds the socket *before* its heavy imports and publishes the real port through the port file, which the runner polls (milliseconds) before building the `--mcp-config` and launching claude; a claude connect that lands mid-import sits in the TCP backlog until uvicorn accepts on the pre-bound socket. The server is terminated when claude exits; a SIGKILLed runner orphans it. Its output lands in a `ride-mcp-*` temp dir alongside the port file.
+Every session gets its MCP tools from a session-local HTTP server the runner owns
+— one mechanism for both execution modes and both flavors, dying with the session.
+The runner starts the PATH-selected `mcp-server <spec> --http` (`bro:<name>` for `--raw`,
+`persona:<name>` for a full mode) on an OS-assigned port (a fixed port would collide between concurrent sessions sharing a netns) with a per-session bearer token.
+`mcp-server --http --port 0 --port-file <path>` binds the socket *before* its heavy imports and publishes the real port through the port file, which the runner polls (milliseconds) before building the `--mcp-config` and launching claude;
+a claude connect that lands mid-import sits in the TCP backlog until uvicorn accepts on the pre-bound socket.
+The server is terminated when claude exits;
+a SIGKILLed runner orphans it.
+Its output lands in a `ride-mcp-*` temp dir alongside the port file.
 
-`bro-ride` contributes both target prefixes through `bro.mcp.targets`; the core `mcp-server` discovers the matching resolver without knowing either target. `ride.claude.assembly` resolves `bro:<name>` through `bro_servers()` — `BaseBro.assemble(harness='bro', wire='mcp', ...)`, yielding declared servers and data sources, the `spell` server, and the bro service server with its `bro::skill` loader — while `persona:<name>` resolves through `persona_servers()` and `assemble(harness='claude', wire='mcp', ...)`, yielding only the additions that hold on the Claude harness (an entry gated `harness == 'bro'`, like the dev toolset, never mounts: Claude's built-ins cover it), plus the `spell` and bro service servers. `bro::cast` joins the service server on either surface when the bro has spells and OpenAI resolves. Selected `block(...)` layers join `--disallowed-tools`, removing the named Claude-native tools; raw sessions already pass `--tools ''`, and selecting a block for their `bro` harness is a declaration error. Persona sessions rely on Claude's native third-party skill mechanism instead of mounting `bro::skill` or generated spell adapters. Both assemblies also mount the `raise` service tool when the session is unattended (`BRO_HOLD=unattended` + `RIDE_RUNNER_PID` in the server's inherited environment — see "Forwarded env vars"), in its terminate-the-session flavor (semantics in `AGENTS.md`, "Interactive vs non-interactive paths"); every other level gets no `raise` — a human exists to report to. Either way there is one streamable-HTTP endpoint per tool namespace; the argv builder mounts each endpoint under its namespace as the claude server key, so tools surface as `mcp__<namespace>__<tool>` — `/tasks` → `mcp__tasks__list_tasks`, `/bro` → `mcp__bro__banner`, `/<name>-source` → `mcp__<name>-source__<tool>` (e.g. `mcp__current-time-source__get_time`) — matching the `bro/prompts/tool_names.md` convention — which is why a `--raw` session's `--system-prompt` is the bro's `claude_system_prompt`, the composition that carries that file as its tool-name rule rather than the bro-native `ns__tool` block. Every server entry in a ride-generated `--mcp-config` carries `alwaysLoad: true`: a headless (`-p`) run then holds its first request until the server is connected, but an interactive session's argv-seeded first prompt does not wait — claude's MCP connects stay async, so that first turn can reach the model with no tools attached. The mitigation for that window is layered twice — `--tools ''` leaves the raw flavor no built-ins, ToolSearch, or harness still-connecting reminder to bridge a toolless first turn: the grounding fragment (`bro/prompts/grounding.md`) closes the composed system prompt, pre-explaining that a missing tool may still be loading and instructing the model to say so and end the turn rather than improvise; and the argv builder prepends a `[launch note: …]` line to the flavor's seeded first prompt (`ride/ride/claude/claude_argv.py`), delivering the same warning inside the racing turn itself — next to the request — where a static system-prompt rule alone measurably loses to concrete-argument pressure. The runner also polls the server's `/health` until ready *before* launching claude, so the configured bro and tool graph's potentially heavy imports is paid off claude's critical path instead of inside that startup block and its connect timeout; the runner's own argv build overlaps the server's import, so much of the wait is already paid when the gate is reached.
+`bro-ride` contributes both target prefixes through `bro.mcp.targets`;
+the core `mcp-server` discovers the matching resolver without knowing either target.
+`ride.claude.assembly` resolves `bro:<name>` through `bro_servers()`
+— `BaseBro.assemble(harness='bro', wire='mcp', ...)`, yielding declared servers and data sources, the `spell` server, and the bro service server with its `bro::skill` loader
+— while `persona:<name>` resolves through `persona_servers()` and `assemble(harness='claude', wire='mcp', ...)`, yielding only the additions that hold on the Claude harness (an entry gated `harness == 'bro'`, like the dev toolset, never mounts:
+Claude's built-ins cover it), plus the `spell` and bro service servers.
+`bro::cast` joins the service server on either surface when the bro has spells and OpenAI resolves.
+Selected `block(...)` layers join `--disallowed-tools`, removing the named Claude-native tools;
+raw sessions already pass `--tools ''`, and selecting a block for their `bro` harness is a declaration error.
+Persona sessions rely on Claude's native third-party skill mechanism instead of mounting `bro::skill` or generated spell adapters.
+Both assemblies also mount the `raise` service tool when the session is unattended (`BRO_HOLD=unattended` + `RIDE_RUNNER_PID` in the server's inherited environment — see "Forwarded env vars"),
+in its terminate-the-session flavor (semantics in `AGENTS.md`, "Interactive vs non-interactive paths");
+every other level gets no `raise`
+— a human exists to report to.
+Either way there is one streamable-HTTP endpoint per tool namespace;
+the argv builder mounts each endpoint under its namespace as the claude server key, so tools surface as `mcp__<namespace>__<tool>`
+— `/tasks` → `mcp__tasks__list_tasks`, `/bro` → `mcp__bro__banner`, `/<name>-source` → `mcp__<name>-source__<tool>` (e.g. `mcp__current-time-source__get_time`)
+— matching the `bro/prompts/tool_names.md` convention
+— which is why a `--raw` session's `--system-prompt` is the bro's `claude_system_prompt`, the composition that carries that file as its tool-name rule rather than the bro-native `ns__tool` block.
+Every server entry in a ride-generated `--mcp-config` carries `alwaysLoad: true`:
+a headless (`-p`) run then holds its first request until the server is connected, but an interactive session's argv-seeded first prompt does not wait
+— claude's MCP connects stay async, so that first turn can reach the model with no tools attached.
+The mitigation for that window is layered twice
+— `--tools ''` leaves the raw flavor no built-ins, ToolSearch, or harness still-connecting reminder to bridge a toolless first turn:
+the grounding fragment (`bro/prompts/grounding.md`) closes the composed system prompt, pre-explaining that a missing tool may still be loading and instructing the model to say so and end the turn rather than improvise;
+and the argv builder prepends a `[launch note: …]` line to the flavor's seeded first prompt (`ride/ride/claude/claude_argv.py`), delivering the same warning inside the racing turn itself
+— next to the request
+— where a static system-prompt rule alone measurably loses to concrete-argument pressure.
+The runner also polls the server's `/health` until ready *before* launching claude, so the configured bro and tool graph's potentially heavy imports is paid off claude's critical path instead of inside that startup block and its connect timeout;
+the runner's own argv build overlaps the server's import, so much of the wait is already paid when the gate is reached.
 
-In container mode the server runs inside the container, so the scoped credential store carries the served tools' own secrets (for a full mode, the persona's claude-harness manifest) — no deployed-server token is involved.
+In container mode the server runs inside the container, so the scoped credential store carries the served tools' own secrets (for a full mode, the persona's claude-harness manifest)
+— no deployed-server token is involved.
 
 ### Bro spells and skills
 
-A bro's spells (`bros/<bro>/spells/*.md`, MRO-merged with derived overrides) are canonical `spell::<name>` tools in both session flavors; `bro::cast` joins the service server when OpenAI resolves, and the Spells contract routes `[[…]]` markers to it rather than to the spells' own tools:
+A bro's spells (`bros/<bro>/spells/*.md`, MRO-merged with derived overrides) are canonical `spell::<name>` tools in both session flavors;
+`bro::cast` joins the service server when OpenAI resolves, and the Spells contract routes `[[…]]` markers to it rather than to the spells' own tools:
 
-- a **full mode** gets the Spells contract through its append prompt and keeps Claude's native third-party skill discovery. Bro spells are not copied into `.claude/skills/` and have no slash-command aliases;
-- a **`--raw` session** gets the Spells contract through the bro's composed system prompt. Because `--bare` has no Claude skill discovery, the bro service server also exposes `bro::skill(name)` and the prompt maps third-party `/<name>` requests to it. An empty body means the requested skill is unavailable.
+- a **full mode** gets the Spells contract through its append prompt and keeps Claude's native third-party skill discovery.
+  Bro spells are not copied into `.claude/skills/` and have no slash-command aliases;
+- a **`--raw` session** gets the Spells contract through the bro's composed system prompt.
+  Because `--bare` has no Claude skill discovery, the bro service server also exposes `bro::skill(name)` and the prompt maps third-party `/<name>` requests to it.
+  An empty body means the requested skill is unavailable.
 
 
 ## Auto-injected system prompt
 
-For every non-raw `ride along` session (regardless of mode), `ride/ride/claude/system_prompt.py:session_append_prompt` builds the `--append-system-prompt` text: the base prompts from `bro/prompts/shared/*` and the top-level reference docs the loader registers (see `bro/prompts/AGENTS.md` for the inventory), plus the session bro's own persona prompts (`BaseBro.persona` — the selected bro), so a full mode carries the bro's policies without running under `--raw`. `shared/` is also injected into every bro; the top-level reference docs are Claude-Code-specific and are **not** injected when `--raw` is used (the raw flavor runs `--bare` with its own `--system-prompt`) — except `tool_names.md`, which reaches `--raw` sessions through the bro's `claude_system_prompt` composition (see `AGENTS.md`).
+For every non-raw `ride along` session (regardless of mode), `ride/ride/claude/system_prompt.py:session_append_prompt` builds the `--append-system-prompt` text:
+the base prompts from `bro/prompts/shared/*` and the top-level reference docs the loader registers (see `bro/prompts/AGENTS.md` for the inventory), plus the session bro's own persona prompts (`BaseBro.persona` — the selected bro),
+so a full mode carries the bro's policies without running under `--raw`.
+`shared/` is also injected into every bro;
+the top-level reference docs are Claude-Code-specific and are **not** injected when `--raw` is used (the raw flavor runs `--bare` with its own `--system-prompt`)
+— except `tool_names.md`, which reaches `--raw` sessions through the bro's `claude_system_prompt` composition (see `AGENTS.md`).
 
-Both flavors also carry the hold fragment, rendered at launch by `bro.prompts.hold_fragment` from the session's `--hold` level (the level files live in `bro/prompts/holds/` — see `bro/prompts/AGENTS.md`, "Hold text"), so a session is told its hold up front rather than detecting it at runtime. Bro-native runs compose the same level files through `bro/bro.py:BaseBro.system_prompt_for`, from the hold their own launch surface picks (`bro/launch/AGENTS.md`, "Display and holds").
+Both flavors also carry the hold fragment, rendered at launch by `bro.prompts.hold_fragment` from the session's `--hold` level (the level files live in `bro/prompts/holds/` — see `bro/prompts/AGENTS.md`, "Hold text"),
+so a session is told its hold up front rather than detecting it at runtime.
+Bro-native runs compose the same level files through `bro/bro.py:BaseBro.system_prompt_for`, from the hold their own launch surface picks (`bro/launch/AGENTS.md`, "Display and holds").
 
 ## Forwarded env vars
 
 Wrappers and session daemons rely on a small set of env vars:
 
-- `RIDE_WORKSPACE` — workspace name. Set by `start_session` in both modes (host and container), and additionally passed into the container via `-e RIDE_WORKSPACE=<name>`. `ride banner` reads it to render the session header.
-- `RIDE_REPO` — the root session's resolved checkout path or normalized git URL, absent when detached. Set explicitly from the session spec; banner and summon lowering read this launch state rather than deriving a repository from cwd.
-- `RIDE_BRANCH` — an attached workspace's recorded branch (see "Workspaces"). Container mode only, passed by `prepare_container`; absent when detached.
-- `RIDE_HOST_WORKSPACE` — host-side absolute path to the workspace tree (`<runtime-root>/workspaces/<name>/tree`), set explicitly in both modes. In a container it names the host path bound at `/workspace`.
-- `RIDE_COMMAND` — the user-visible invocation this session launched under, reconstructed via `SessionSpec.to_command_argv` for telemetry and the banner: the `ride solo|along …` command with its flags, or `ride resume <ref>` for a resume. Set by `start_session`, and by the summon lowering into a summoned child's env from its recorded spec. Defaulted into `BRO_SHELL_COMMAND` if that is not already set.
-- `RIDE_BRO` — names the bro the session runs as (the selected bro). Set explicitly in the container env at every container launch site — a `ride along` container carries its session bro, a bro-harness container or summon child the launched bro (`ride/ride/spawn.py`) — and exported by the inner session layer; deliberately not in `_DOCKER_FORWARD_ENV`, so a calling session's ambient value never leaks into a container that runs a different bro. Purely a theming output — the banner's ASCII Bro logo + bro-name header, the statusLine — never an input: the session's bro identity travels in the spec's own flags.
-- `BRO_HOLD` — the session's user-involvement level (`unattended | detached | attended | guided`); the in-place runner exports it from `--hold`, overwriting any ambient value (a session launched from inside another must not inherit its hold), before the session-local MCP server and claude inherit the environment. Read by the claude service-server assemblies in `bro/bro.py` to gate the `raise` service tool's mount on the unattended level.
-- `RIDE_RUNNER_PID` — the in-place runner's own pid, always (re-)exported next to `BRO_HOLD`. The `raise` service tool's kill target: SIGTERM to the runner ends claude while the runner survives for its teardown, which is how an unattended session's raise terminates the run — reporting the status the tool left in the session state dir rather than whatever the harness process exited with. Its presence co-gates the tool's mount — without a runner to signal there is nothing to terminate.
-- `RIDE_SESSION_DIR` — the session's own state directory (see "Workspaces"): the workspace's `session/` by absolute path in host mode, `/var/ride/session` through the container bind. Set by `start_session` for both harnesses and both modes, and re-derived by the claude in-place runner so it stands alone. Read by `bro/monitor` — a process without it is in no managed session and so has no trail pointer to publish and no recording health to report.
-- `RIDE_TASK_ID` — set by `dive-in` when it has resolved a task (the canonical brog task id); read by the `spell::run-pr` spell to add a `Task: <url>` line to commit messages.
-- `RIDE_SESSION_CONTEXT` — the session's launch context as a JSON list of typed records (system prompt, git state, MCP servers, and the project's root instructions document), built via `ride/ride/claude/session_context.py` by the in-place session runner, next to claude, in both modes. The session recorder uploads it as the trail's launch-context attachment; `rewind` renders it as a `SESSION CONTEXT` preamble. It captures what the model was told but the transcript omits — Claude Code's base harness prompt stays in-process and is not included.
-- `RIDE_BASE_REF` — the sha a URL attachment's fresh `origin/HEAD`, an explicit `--into <ref>`, or a summoned child's inherited summoner `HEAD` resolved to (a manual child's at its `--summoned` launch). Container mode only. The entrypoint checks it out as the new clone's `RIDE_BRANCH`; the sha's objects are reachable through the clone's `/host-repo` alternates. It is unset only for a path attachment's default, where the entrypoint's `HEAD` fallback uses the checkout's current commit. Host mode applies the same base inline via `git worktree add … <ref>`.
-- `RIDE_SUMMONED` — marks a run as a summoned child. The env name is owned by `bro.summon`; set by the summon lowering and by the `--summoned` launch, read by the claude in-place runner to emit the child's run lifecycle over the broker channel (a bro-run child emits from `bro.native.runner.Runner.run`, a summoned interactive one its `started` from `Runner.send`'s first turn) and by the service-server build to mount the `answer` tool.
-- `RIDE_SUMMON_STATUS` — path of the session's live summon-status file (`<runtime-root>/summon/<name>.status.json` on the host, `/var/ride/summon/<name>.status.json` through the container's dedicated read-only bind). The env name and the file's records are owned by `bro.summon_status`; set by the launch surfaces, read by `ride.claude.statusline` to render active summons and the last outcome (see "Summoning another bro").
-- `RIDE_MAY_SUMMON` — the run's own effective summon allow-list, comma-separated and empty when it may summon nothing. The env name and its encoding are owned by `bro.summon`; set by the launch surfaces for a session root and by the summon lowering (or, for a manual child, the `--summoned` launch from the pending record) for a summoned child (its own resolved list, never its summoner's), read by `ride banner` to render the fact. Read-only in the session: the host authorizes against its own copy, so only a relaunch (or the summon that spawns a child) changes what it may summon.
-- `RIDE_IN_CONTAINER=1` — set by the Dockerfile, marking a session running in an image this runtime built. Read by `bro/workspace/paths.py:trails_dir`, which then resolves to the container's fixed trails mount instead of a host runtime root. The nested-launch refusal deliberately reads the container probe instead (see "In-container launches").
-- `BROKER_CHANNEL` — the address of the session's broker channel; when set, it always names a broxy socket. Set at launch to the upstream channel (`unix:/run/broker.sock` in a container — the bind-mounted socket; `unix:<runtime-root>/broker/<channel>.sock` on host) that only the session's broxy talks to, then rewritten by the broxy launcher to the broxy's local socket (`unix:/tmp/broxy.sock` in a container, a session-tempdir socket on host) before anything else inherits it — or unset when the broxy cannot run (see "The broker channel"). Read by `bro.broker.client.Client.from_env` — the `broker` CLI and bro's `BroChannel` ride it — and everything on it is inert when unset (`BROKER_DISABLED`, a container session on a macOS host, a broxy that could not run, or a workspace provisioned before broker existed).
-- `BROKER_DISABLED` — launcher-side presence-checked kill-switch: the session gets no channel socket and no `BROKER_CHANNEL` (see "The broker channel"). Checked before any broker import (`ride/ride/workspace/containers.py:broker_enabled`).
-- Plus the standard `GIT_AUTHOR_*` / `GIT_COMMITTER_*` — explicitly forwarded into the container via `_DOCKER_FORWARD_ENV`. (github and AWS reach a session as the scoped `github` / `aws` secrets via their install hooks, not as forwarded env; an ambient host `GITHUB_TOKEN` is deliberately not forwarded into a container, and blanked by the `github` hook where a host session inherits one.)
+- `RIDE_WORKSPACE` — workspace name.
+  Set by `start_session` in both modes (host and container), and additionally passed into the container via `-e RIDE_WORKSPACE=<name>`.
+  `ride banner` reads it to render the session header.
+- `RIDE_REPO` — the root session's resolved checkout path or normalized git URL, absent when detached.
+  Set explicitly from the session spec;
+  banner and summon lowering read this launch state rather than deriving a repository from cwd.
+- `RIDE_BRANCH` — an attached workspace's recorded branch (see "Workspaces").
+  Container mode only, passed by `prepare_container`;
+  absent when detached.
+- `RIDE_HOST_WORKSPACE` — host-side absolute path to the workspace tree (`<runtime-root>/workspaces/<name>/tree`), set explicitly in both modes.
+  In a container it names the host path bound at `/workspace`.
+- `RIDE_COMMAND` — the user-visible invocation this session launched under, reconstructed via `SessionSpec.to_command_argv` for telemetry and the banner:
+  the `ride solo|along …` command with its flags, or `ride resume <ref>` for a resume.
+  Set by `start_session`, and by the summon lowering into a summoned child's env from its recorded spec.
+  Defaulted into `BRO_SHELL_COMMAND` if that is not already set.
+- `RIDE_BRO` — names the bro the session runs as (the selected bro).
+  Set explicitly in the container env at every container launch site
+  — a `ride along` container carries its session bro, a bro-harness container or summon child the launched bro (`ride/ride/spawn.py`)
+  — and exported by the inner session layer;
+  deliberately not in `_DOCKER_FORWARD_ENV`, so a calling session's ambient value never leaks into a container that runs a different bro.
+  Purely a theming output
+  — the banner's ASCII Bro logo + bro-name header, the statusLine
+  — never an input:
+  the session's bro identity travels in the spec's own flags.
+- `BRO_HOLD` — the session's user-involvement level (`unattended | detached | attended | guided`);
+  the in-place runner exports it from `--hold`, overwriting any ambient value (a session launched from inside another must not inherit its hold), before the session-local MCP server and claude inherit the environment.
+  Read by the claude service-server assemblies in `bro/bro.py` to gate the `raise` service tool's mount on the unattended level.
+- `RIDE_RUNNER_PID` — the in-place runner's own pid, always (re-)exported next to `BRO_HOLD`.
+  The `raise` service tool's kill target:
+  SIGTERM to the runner ends claude while the runner survives for its teardown, which is how an unattended session's raise terminates the run
+  — reporting the status the tool left in the session state dir rather than whatever the harness process exited with.
+  Its presence co-gates the tool's mount
+  — without a runner to signal there is nothing to terminate.
+- `RIDE_SESSION_DIR` — the session's own state directory (see "Workspaces"):
+  the workspace's `session/` by absolute path in host mode, `/var/ride/session` through the container bind.
+  Set by `start_session` for both harnesses and both modes, and re-derived by the claude in-place runner so it stands alone.
+  Read by `bro/monitor` — a process without it is in no managed session and so has no trail pointer to publish and no recording health to report.
+- `RIDE_TASK_ID` — set by `dive-in` when it has resolved a task (the canonical brog task id);
+  read by the `spell::run-pr` spell to add a `Task: <url>` line to commit messages.
+- `RIDE_SESSION_CONTEXT`
+  — the session's launch context as a JSON list of typed records (system prompt, git state, MCP servers, and the project's root instructions document), built via `ride/ride/claude/session_context.py` by the in-place session runner, next to claude,
+  in both modes.
+  The session recorder uploads it as the trail's launch-context attachment;
+  `rewind` renders it as a `SESSION CONTEXT` preamble.
+  It captures what the model was told but the transcript omits
+  — Claude Code's base harness prompt stays in-process and is not included.
+- `RIDE_BASE_REF` — the sha a URL attachment's fresh `origin/HEAD`, an explicit `--into <ref>`, or a summoned child's inherited summoner `HEAD` resolved to (a manual child's at its `--summoned` launch).
+  Container mode only.
+  The entrypoint checks it out as the new clone's `RIDE_BRANCH`;
+  the sha's objects are reachable through the clone's `/host-repo` alternates.
+  It is unset only for a path attachment's default, where the entrypoint's `HEAD` fallback uses the checkout's current commit.
+  Host mode applies the same base inline via `git worktree add … <ref>`.
+- `RIDE_SUMMONED` — marks a run as a summoned child.
+  The env name is owned by `bro.summon`;
+  set by the summon lowering and by the `--summoned` launch,
+  read by the claude in-place runner to emit the child's run lifecycle over the broker channel (a bro-run child emits from `bro.native.runner.Runner.run`,
+  a summoned interactive one its `started` from `Runner.send`'s first turn) and by the service-server build to mount the `answer` tool.
+- `RIDE_SUMMON_STATUS` — path of the session's live summon-status file (`<runtime-root>/summon/<name>.status.json` on the host, `/var/ride/summon/<name>.status.json` through the container's dedicated read-only bind).
+  The env name and the file's records are owned by `bro.summon_status`;
+  set by the launch surfaces, read by `ride.claude.statusline` to render active summons and the last outcome (see "Summoning another bro").
+- `RIDE_MAY_SUMMON` — the run's own effective summon allow-list, comma-separated and empty when it may summon nothing.
+  The env name and its encoding are owned by `bro.summon`;
+  set by the launch surfaces for a session root and by the summon lowering (or, for a manual child, the `--summoned` launch from the pending record) for a summoned child (its own resolved list, never its summoner's),
+  read by `ride banner` to render the fact.
+  Read-only in the session:
+  the host authorizes against its own copy, so only a relaunch (or the summon that spawns a child) changes what it may summon.
+- `RIDE_IN_CONTAINER=1` — set by the Dockerfile, marking a session running in an image this runtime built.
+  Read by `bro/workspace/paths.py:trails_dir`, which then resolves to the container's fixed trails mount instead of a host runtime root.
+  The nested-launch refusal deliberately reads the container probe instead (see "In-container launches").
+- `BROKER_CHANNEL` — the address of the session's broker channel;
+  when set, it always names a broxy socket.
+  Set at launch to the upstream channel (`unix:/run/broker.sock` in a container — the bind-mounted socket; `unix:<runtime-root>/broker/<channel>.sock` on host) that only the session's broxy talks to,
+  then rewritten by the broxy launcher to the broxy's local socket (`unix:/tmp/broxy.sock` in a container, a session-tempdir socket on host) before anything else inherits it
+  — or unset when the broxy cannot run (see "The broker channel").
+  Read by `bro.broker.client.Client.from_env` — the `broker` CLI and bro's `BroChannel` ride it
+  — and everything on it is inert when unset (`BROKER_DISABLED`, a container session on a macOS host, a broxy that could not run, or a workspace provisioned before broker existed).
+- `BROKER_DISABLED` — launcher-side presence-checked kill-switch:
+  the session gets no channel socket and no `BROKER_CHANNEL` (see "The broker channel").
+  Checked before any broker import (`ride/ride/workspace/containers.py:broker_enabled`).
+- Plus the standard `GIT_AUTHOR_*` / `GIT_COMMITTER_*`
+  — explicitly forwarded into the container via `_DOCKER_FORWARD_ENV`.
+  (github and AWS reach a session as the scoped `github` / `aws` secrets via their install hooks, not as forwarded env;
+  an ambient host `GITHUB_TOKEN` is deliberately not forwarded into a container, and blanked by the `github` hook where a host session inherits one.)
 
 ## Session recording
 
-The in-place session runner starts a `ride.claude.trail-recorder` daemon (via `ride/ride/claude/recorder.py`) before launching claude and stops it after claude exits — the stop is the recorder's final append and trail end. One mechanism for every session flavor, deliberately not a Claude Code hook: `--raw` sessions run `claude --bare` (minimal mode), which runs no hooks at all. The daemon records continuously through the backend the session's own `trails` credential selects, and to the local filesystem where the session has none — the scoped baseline hydrates that credential best-effort, so a session records either way unless `--no-trails` turned recording off, in which case the runner starts no daemon. For local storage, the launch description binds the host's `<runtime-root>/trails` at `/var/ride/trails` inside the container, so the trail survives container removal and is visible to host-side `rewind` while the session runs.
+The in-place session runner starts a `ride.claude.trail-recorder` daemon (via `ride/ride/claude/recorder.py`) before launching claude and stops it after claude exits
+— the stop is the recorder's final append and trail end.
+One mechanism for every session flavor, deliberately not a Claude Code hook:
+`--raw` sessions run `claude --bare` (minimal mode), which runs no hooks at all.
+The daemon records continuously through the backend the session's own `trails` credential selects, and to the local filesystem where the session has none
+— the scoped baseline hydrates that credential best-effort, so a session records either way unless `--no-trails` turned recording off, in which case the runner starts no daemon.
+For local storage, the launch description binds the host's `<runtime-root>/trails` at `/var/ride/trails` inside the container, so the trail survives container removal and is visible to host-side `rewind` while the session runs.
 
-The recorder opens one claude-harness *trail* per recorder lifetime and segment stretch and appends newly completed transcript lines at its polling interval; a verified resume opens a fork trail pointing at the prior one, so a whole conversation is a fork chain `rewind show` walks (`ride/ride/claude/trail_recorder.py` owns transcript acquisition; the core trails schema and Claude lineage verdict remain in `bro.trails`). The daemon nominates nothing: it blazes with the transcript's lineage evidence and the store's harness resolver decides the edge, or declines a transcript claude has not finished writing (`bro/trails/AGENTS.md`). The trail carries the launch recipe, the `RIDE_SESSION_CONTEXT` attachment, and the session's location facts, and the recorder publishes its current trail id to the session's trail pointer, from which summon control stamps the session's summoned children with `summoned_by.trail_id` (see "Summoning another bro"). The daemon's stderr goes to `claude/session-recorder.log` in the session state dir; its durable signal is the health file it beats on every attempt (`bro/monitor/health.py`), which the statusLine and `ride banner` surface. The beat carries the outcome and the age at which the reader must give the daemon up, so both a recorder that fails loudly and one that is simply gone — killed by a signal, OOM, a crashed container process — are reported while the session runs. A daemon that cannot be started at all never reaches that signal: the runner ends the launch, since a session that believes it is recording and is not is worse than one that refuses to start. A session whose transcript ends in a `raise` service-tool call gets its trail ended as `raised` with the reason as `end.detail` (a later real user message — a resume moving past the abort — clears it), keeping an unattended session's abort queryable without parsing the jsonl.
+The recorder opens one claude-harness *trail* per recorder lifetime and segment stretch and appends newly completed transcript lines at its polling interval;
+a verified resume opens a fork trail pointing at the prior one, so a whole conversation is a fork chain `rewind show` walks (`ride/ride/claude/trail_recorder.py` owns transcript acquisition;
+the core trails schema and Claude lineage verdict remain in `bro.trails`).
+The daemon nominates nothing:
+it blazes with the transcript's lineage evidence and the store's harness resolver decides the edge, or declines a transcript claude has not finished writing (`bro/trails/AGENTS.md`).
+The trail carries the launch recipe, the `RIDE_SESSION_CONTEXT` attachment, and the session's location facts, and the recorder publishes its current trail id to the session's trail pointer,
+from which summon control stamps the session's summoned children with `summoned_by.trail_id` (see "Summoning another bro").
+The daemon's stderr goes to `claude/session-recorder.log` in the session state dir;
+its durable signal is the health file it beats on every attempt (`bro/monitor/health.py`), which the statusLine and `ride banner` surface.
+The beat carries the outcome and the age at which the reader must give the daemon up, so both a recorder that fails loudly and one that is simply gone
+— killed by a signal, OOM, a crashed container process
+— are reported while the session runs.
+A daemon that cannot be started at all never reaches that signal:
+the runner ends the launch, since a session that believes it is recording and is not is worse than one that refuses to start.
+A session whose transcript ends in a `raise` service-tool call gets its trail ended as `raised` with the reason as `end.detail` (a later real user message — a resume moving past the abort — clears it),
+keeping an unattended session's abort queryable without parsing the jsonl.
 
-Worktree creation and provisioning are likewise owned by `ride` directly (host mode — see "Host mode" above); no Claude Code hooks are wired for either.
+Worktree creation and provisioning are likewise owned by `ride` directly (host mode — see "Host mode" above);
+no Claude Code hooks are wired for either.
