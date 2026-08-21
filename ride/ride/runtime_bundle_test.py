@@ -262,6 +262,22 @@ def test_an_egg_info_beside_a_real_editable_installation_classifies_once(
   assert local == [runtime_bundle._LocalDistribution('demo', probe.source)]
 
 
+def test_refuses_a_distribution_recorded_only_by_an_egg_info(monkeypatch, tmp_path):
+  egg_info = tmp_path / 'demo.egg-info'
+  egg_info.mkdir()
+  (egg_info / 'PKG-INFO').write_text('Metadata-Version: 2.1\nName: demo\nVersion: 1.0\n')
+  monkeypatch.setattr(
+    runtime_bundle.importlib.metadata,
+    'distributions',
+    lambda: _discover_distributions(path=[str(tmp_path)]),
+  )
+
+  with pytest.raises(runtime_bundle.RuntimeBundleError, match='egg-info build artifact') as error:
+    runtime_bundle._classify_installation()
+
+  assert str(tmp_path) in str(error.value)
+
+
 def test_a_real_installer_matrix_classifies_by_provenance(monkeypatch, probe):
   assert _classify(monkeypatch, probe.site_packages['index']) == (['demo==1.0'], [])
   assert _classify(monkeypatch, probe.site_packages['git']) == (
