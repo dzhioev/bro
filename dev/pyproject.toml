@@ -10,18 +10,21 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "bro",
+  "markdown-it-py",
 ]
 
 [project.scripts]
 # bro
 "bro.dev.git-golc" = "bro.dev._entrypoints:bro_dev_git_golc"
 "bro.dev.install" = "bro.dev._entrypoints:bro_dev_install"
+"bro.dev.markdown-policy" = "bro.dev._entrypoints:bro_dev_markdown_policy"
 "bro.dev.sync-scripts" = "bro.dev._entrypoints:bro_dev_sync_scripts"
 "bro.dev.usage-report" = "bro.dev._entrypoints:bro_dev_usage_report"
 "bro.extra.github.poll-pr" = "bro.dev._entrypoints:bro_extra_github_poll_pr"
 "bro.workflow.commit-footer" = "bro.dev._entrypoints:bro_workflow_commit_footer"
 "bro.workflow.fold-branch" = "bro.dev._entrypoints:bro_workflow_fold_branch"
 "bro.workflow.land-pr" = "bro.dev._entrypoints:bro_workflow_land_pr"
+"check-markdown" = "bro.dev._entrypoints:bro_dev_markdown_policy"
 "commit-footer" = "bro.dev._entrypoints:bro_workflow_commit_footer"
 "fold-branch" = "bro.dev._entrypoints:bro_workflow_fold_branch"
 "land-pr" = "bro.dev._entrypoints:bro_workflow_land_pr"

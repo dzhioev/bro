@@ -219,6 +219,7 @@ PYTEST_FILES = [
   'bro/llm/usage_test.py',
   'local/bro/local/run_tests_test.py',
   'local/bro/local/shell_policy_test.py',
+  'local/bro/local/markdown_policy_test.py',
   'local/bro/local/setup_test.py',
   'local/bro/local/packaging_policy_test.py',
   'local/bro/local/environment_policy_test.py',
