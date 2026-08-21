@@ -1,6 +1,8 @@
 # Workspace contracts
 
-The framework keeps the dependency-light workspace contracts that core services read without installing the managed runtime. Workspace creation, provisioning, containers, credential hydration, and teardown live in `ride.workspace`; `bro` never imports `ride`.
+The framework keeps the dependency-light workspace contracts that core services read without installing the managed runtime.
+Workspace creation, provisioning, containers, credential hydration, and teardown live in `ride.workspace`;
+`bro` never imports `ride`.
 
 ## Components
 
@@ -10,4 +12,5 @@ The framework keeps the dependency-light workspace contracts that core services 
 - `banner.py` — typed session facts plus visual and LLM renderings, consumed by launch surfaces and the `bro::banner` service tool
 - `session.py` — in-session termination through `RIDE_RUNNER_PID`, carrying the status the session is to report
 
-Consumers import submodules directly; this package is not a re-export hub.
+Consumers import submodules directly;
+this package is not a re-export hub.

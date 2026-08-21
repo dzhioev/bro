@@ -1,44 +1,96 @@
 # Setup and credential schemas
 
-How to bring up a fresh checkout, plus what the framework reads out of `~/.bro`. Run any script with `--help` for flags.
+How to bring up a fresh checkout, plus what the framework reads out of `~/.bro`.
+Run any script with `--help` for flags.
 
 ## Setup
 
-A repository operated by `ride` may provide a root `setup.sh` to provision its project environment; an absent script is logged and skipped. Session machinery comes from the invoking installation's frozen runtime bundle in both modes, so the project environment need not provide `ride` or `bro`. A setup script can run `uv sync`, activate the project environment only for its own provisioning process, and call `bro.dev.install`; managed sessions keep that environment off PATH. In containers, `RIDE_VENV_MANIFEST` names the optional project's staged manifests so setup can reuse the bake until the tree diverges.
+A repository operated by `ride` may provide a root `setup.sh` to provision its project environment;
+an absent script is logged and skipped.
+Session machinery comes from the invoking installation's frozen runtime bundle in both modes, so the project environment need not provide `ride` or `bro`.
+A setup script can run `uv sync`, activate the project environment only for its own provisioning process, and call `bro.dev.install`;
+managed sessions keep that environment off PATH.
+In containers, `RIDE_VENV_MANIFEST` names the optional project's staged manifests so setup can reuse the bake until the tree diverges.
 
-The framework repository is a uv workspace whose root publishes `bro`; `native/` publishes `bro-native`, `dev/` publishes `bro-dev`, `ride/` publishes `bro-ride`, and `local/` publishes this checkout's `bro-local` persona and scripts. `uv sync --all-packages --all-groups --all-extras` creates the root `.venv`, installs all five editably, and registers each distribution's committed console-script bridge. The root owns the tool configuration and development gate for every member.
+The framework repository is a uv workspace whose root publishes `bro`;
+`native/` publishes `bro-native`,
+`dev/` publishes `bro-dev`,
+`ride/` publishes `bro-ride`,
+and `local/` publishes this checkout's `bro-local` persona and scripts.
+`uv sync --all-packages --all-groups --all-extras` creates the root `.venv`, installs all five editably, and registers each distribution's committed console-script bridge.
+The root owns the tool configuration and development gate for every member.
 
-Prerequisites are documented in `README.md`. `setup_env.sh` remains an optional macOS/Ubuntu reference installer and is not invoked by repository provisioning.
+Prerequisites are documented in `README.md`.
+`setup_env.sh` remains an optional macOS/Ubuntu reference installer and is not invoked by repository provisioning.
 
 ### Worktrees
 
-A host worktree's `setup.sh` may create its `.venv`. Container workspaces receive an optional project dependency bake at `/opt/project-venv`; setup syncs it once the workspace manifests move away from the staged baseline. Neither environment enters the session PATH. Never run `uv sync` against the main checkout from inside another worktree: editable installs record absolute source paths.
+A host worktree's `setup.sh` may create its `.venv`.
+Container workspaces receive an optional project dependency bake at `/opt/project-venv`;
+setup syncs it once the workspace manifests move away from the staged baseline.
+Neither environment enters the session PATH.
+Never run `uv sync` against the main checkout from inside another worktree:
+editable installs record absolute source paths.
 
 ## Files
 
-- `setup_env.sh` — reference host-prerequisite installer for macOS and Ubuntu; invoked by nothing
+- `setup_env.sh` — reference host-prerequisite installer for macOS and Ubuntu;
+  invoked by nothing
 - `versions.sh` and `ubuntu/` — pinned host-tool versions and Ubuntu installers used only by `setup_env.sh`
-- `prelude.sh` — shell-script prelude every executable framework script sources; consumers resolve the packaged directory with `bro-shell-dir`
+- `prelude.sh` — shell-script prelude every executable framework script sources;
+  consumers resolve the packaged directory with `bro-shell-dir`
 - `log.sh` — leveled shell logging thresholded by `BRO_LOG_LEVEL`
 - `strict.sh` — fail-fast shell guards, including command-not-found inside test positions
 - `docker_smoke_test.sh` — packaged sourceable helper for service `verify_deps.sh` scripts
-- `dev/bro/workflow/hooks/post-commit` — packaged by `bro-dev` and installed by `bro.dev.install`; it advances token-accounting state after each commit
+- `dev/bro/workflow/hooks/post-commit` — packaged by `bro-dev` and installed by `bro.dev.install`;
+  it advances token-accounting state after each commit
 
-The managed-session image and its local base-image builder live under `ride/ride/setup/`; `ride.workspace.build_context` injects them together with the shell helpers above.
+The managed-session image and its local base-image builder live under `ride/ride/setup/`;
+`ride.workspace.build_context` injects them together with the shell helpers above.
 
 ## Configuration
 
-Credentials live in the standalone `~/.bro` store; the repo no longer carries them. Readers resolve them through `bro.base.credentials` — `credentials.default_store().get_json(name)` — which searches `BRO_CONFIGS_DIR` when a deployed service sets one, then `~/.bro`; the host leaves the variable unset and searches the store alone. The effective registry merges framework entries from `bro/base/registry.json` with entries contributed by installed distributions through the `bro.credentials` entry-point group. The `credentials get <kind> [--field <key>]` CLI exposes the same resolver to non-Python callers (e.g. the Anthropic apiKeyHelper), while `credentials list` prints the kinds that resolve in the current store — both address kinds by default, and `--instance` switches them to storage names (`kind+instance` variants included); host scripts that write new secrets write directly to `~/.bro`.
+Credentials live in the standalone `~/.bro` store;
+the repo no longer carries them.
+Readers resolve them through `bro.base.credentials`
+— `credentials.default_store().get_json(name)` — which searches `BRO_CONFIGS_DIR` when a deployed service sets one, then `~/.bro`;
+the host leaves the variable unset and searches the store alone.
+The effective registry merges framework entries from `bro/base/registry.json` with entries contributed by installed distributions through the `bro.credentials` entry-point group.
+The `credentials get <kind> [--field <key>]` CLI exposes the same resolver to non-Python callers (e.g. the Anthropic apiKeyHelper), while `credentials list` prints the kinds that resolve in the current store
+— both address kinds by default, and `--instance` switches them to storage names (`kind+instance` variants included);
+host scripts that write new secrets write directly to `~/.bro`.
 
-A host-local `registry.json` — searched along the same path as the secret files — merges per-name over that effective registry: entries that stay out of the repo — credential variants of a checked-in kind, or a kind's own sources when its checked-in entry declares none (the `github` kind). An addition that doesn't declare `install` inherits the built-in entry's hook, so a sources-only kind override keeps the checked-in wiring:
+A host-local `registry.json` — searched along the same path as the secret files
+— merges per-name over that effective registry:
+entries that stay out of the repo
+— credential variants of a checked-in kind, or a kind's own sources when its checked-in entry declares none (the `github` kind).
+An addition that doesn't declare `install` inherits the built-in entry's hook, so a sources-only kind override keeps the checked-in wiring:
 
 ```json
 {"github+alice": {"sources": [{"file": "github_token_alice"}]}}
 ```
 
-A `kind+instance` name declares a variant of the kind named up to the `+` (name grammar owned by `bro/base/credentials.py`). The kind entry owns kind-level behavior — notably the install hook, a template (`bro/reference/template.md`) rendered with `#name` bound to each instance's own name — so a variant declares only its `sources`, and one that carries its own `install` or names a kind the registry lacks fails the load. Instance entries never enter a generated scoped registry: a scoped store materializes a variant under its kind name (entry, cred file, and install hook all speak the kind), so readers of a scoped store address kinds only. A session installs at most one instance of each kind: hydrating two (e.g. `github` and `github+alice`) fails the launch, so grant the desired selection (`--grant github+alice` replaces the selected `github` credential). A kind entry may instead select its default instance durably — `{"github": {"instance": "alice"}}` borrows `github+alice`'s sources while keeping the kind's install hook, so every scope that hydrates `github` reads that variant with no launch flags. Generated registries (a scoped store's `credentials.json`, `CREDENTIALS_REGISTRY`) replace the registry wholesale, so a scoped session stays bounded to exactly its hydrated set and never sees host-local additions it wasn't granted.
+A `kind+instance` name declares a variant of the kind named up to the `+` (name grammar owned by `bro/base/credentials.py`).
+The kind entry owns kind-level behavior
+— notably the install hook, a template (`bro/reference/template.md`) rendered with `#name` bound to each instance's own name
+— so a variant declares only its `sources`, and one that carries its own `install` or names a kind the registry lacks fails the load.
+Instance entries never enter a generated scoped registry:
+a scoped store materializes a variant under its kind name (entry, cred file, and install hook all speak the kind), so readers of a scoped store address kinds only.
+A session installs at most one instance of each kind:
+hydrating two (e.g. `github` and `github+alice`) fails the launch, so grant the desired selection (`--grant github+alice` replaces the selected `github` credential).
+A kind entry may instead select its default instance durably
+— `{"github": {"instance": "alice"}}` borrows `github+alice`'s sources while keeping the kind's install hook, so every scope that hydrates `github` reads that variant with no launch flags.
+Generated registries (a scoped store's `credentials.json`, `CREDENTIALS_REGISTRY`) replace the registry wholesale, so a scoped session stays bounded to exactly its hydrated set and never sees host-local additions it wasn't granted.
 
-An entry's optional `install` hook declares how the secret reaches a tool that reads it from outside the resolver — declared state, never code to run, so the same hook serves a container and a host session running as the operator. Three sections: `files`, written under the session's install directory at 0600 and named relative to it; `env`, the variables the launch applies to the session environment; and `commands`, a tool shadowed by a wrapper first on the session's PATH carrying its own environment per invocation. A value is text, `{"path": "<relative path>"}` for a path inside that directory, or `{"secret": "<name>"}` for a credential's value — resolved as late as its position allows, so a wrapper re-resolves per invocation and a short-lived minted token is never baked in. Every string is a template (`bro/reference/template.md`) rendered with `#name` bound to the entry's own name:
+An entry's optional `install` hook declares how the secret reaches a tool that reads it from outside the resolver
+— declared state, never code to run, so the same hook serves a container and a host session running as the operator.
+Three sections:
+`files`, written under the session's install directory at 0600 and named relative to it;
+`env`, the variables the launch applies to the session environment;
+and `commands`, a tool shadowed by a wrapper first on the session's PATH carrying its own environment per invocation.
+A value is text, `{"path": "<relative path>"}` for a path inside that directory, or `{"secret": "<name>"}` for a credential's value
+— resolved as late as its position allows, so a wrapper re-resolves per invocation and a short-lived minted token is never baked in.
+Every string is a template (`bro/reference/template.md`) rendered with `#name` bound to the entry's own name:
 
 ```json
 {"install": {
@@ -49,26 +101,110 @@ An entry's optional `install` hook declares how the secret reaches a tool that r
 
 ### Host config (`~/.bro.json`)
 
-The registry's `instance` selector decides a kind's instance for the whole host, but one host serves several projects and the right `github` identity or task tracker is usually the project's. `~/.bro.json` — config beside the store rather than a secret inside it — records that mapping, and [[wire]] fills it in from inside a repo. Its `llm` table sits beside the projects: the operator's own `--llm` preset names, host-wide, overriding per name whatever the operated project declares in its `[tool.bro.llm]` (`bro/reference/ride.md`, "Per-project defaults").
+The registry's `instance` selector decides a kind's instance for the whole host, but one host serves several projects and the right `github` identity or task tracker is usually the project's.
+`~/.bro.json` — config beside the store rather than a secret inside it
+— records that mapping, and [[wire]] fills it in from inside a repo.
+Its `llm` table sits beside the projects:
+the operator's own `--llm` preset names, host-wide, overriding per name whatever the operated project declares in its `[tool.bro.llm]` (`bro/reference/ride.md`, "Per-project defaults").
 
-The file's schema is `bro/base/host_config.py`'s module docstring, which the parser there validates against. A project keys on the attachment a session names it by: its local repo root, so every linked worktree maps to its main checkout and one entry covers a checkout's sessions and worktrees alike, or a git URL, normalized on both sides — a repository attached both ways needs an entry per identity. A selection of `kind+` — the kind's own registry entry — needs that entry to declare sources of its own, which a kind entry selecting an instance does not have: two real alternatives need two names.
+The file's schema is `bro/base/host_config.py`'s module docstring, which the parser there validates against.
+A project keys on the attachment a session names it by:
+its local repo root, so every linked worktree maps to its main checkout and one entry covers a checkout's sessions and worktrees alike,
+or a git URL, normalized on both sides
+— a repository attached both ways needs an entry per identity.
+A selection of `kind+`
+— the kind's own registry entry
+— needs that entry to declare sources of its own, which a kind entry selecting an instance does not have:
+two real alternatives need two names.
 
-A launch binds its attachment's selection at the resolver before it computes anything (`ride.scope.bind_project_credentials` over `credentials.select_instances`). The scope it hydrates, the bro's feature gates, and any host-side read on the session's behalf therefore agree on which instance a kind means; `ride scope` prints the result. Where no entry names the attachment — a detached launch, or one this file does not list — the launch binds nothing, and every kind some project entry here names becomes unreadable to it: that kind's registry entry is one project's instance, so a launch that fell back to it would operate another project's tracker or account. Such a launch fails naming the kind, and `ride scope` prints it `REFUSED`; grant the instance (`--grant brog+github`) or give the attachment an entry. A host declaring no project entries scopes nothing per project and every kind reads its registry entry as before. The binding reaches the host registry only — a session's generated registry already carries the instance its launch selected — and a `--grant kind+instance` still overrides it for one launch. Precedence, most specific first: the launch flag, the project's entry here, the registry's own kind-level selector.
+A launch binds its attachment's selection at the resolver before it computes anything (`ride.scope.bind_project_credentials` over `credentials.select_instances`).
+The scope it hydrates, the bro's feature gates, and any host-side read on the session's behalf therefore agree on which instance a kind means;
+`ride scope` prints the result.
+Where no entry names the attachment
+— a detached launch, or one this file does not list
+— the launch binds nothing, and every kind some project entry here names becomes unreadable to it:
+that kind's registry entry is one project's instance, so a launch that fell back to it would operate another project's tracker or account.
+Such a launch fails naming the kind, and `ride scope` prints it `REFUSED`;
+grant the instance (`--grant brog+github`) or give the attachment an entry.
+A host declaring no project entries scopes nothing per project and every kind reads its registry entry as before.
+The binding reaches the host registry only
+— a session's generated registry already carries the instance its launch selected
+— and a `--grant kind+instance` still overrides it for one launch.
+Precedence, most specific first:
+the launch flag,
+the project's entry here,
+the registry's own kind-level selector.
 
-A json secret may reference other secrets instead of embedding copies: `{"$cred": "<name>"}` anywhere in its tree resolves to the referenced secret's value, `{"$cred": "<name>", "field": "<key>"}` to one top-level field (exact semantics in `bro/base/credentials.py`). The resolver expands references before any consumer sees the value, so a scoped store hydrates a granted secret with its references already expanded — self-contained in the container, no grant of the referenced secrets needed. Where the chain reaches a minting source the referrer ships raw instead and hydration pulls the referenced kinds in with it, so the session mints its own (`bro/reference/ride.md`, "Hydration").
+A json secret may reference other secrets instead of embedding copies:
+`{"$cred": "<name>"}` anywhere in its tree resolves to the referenced secret's value,
+`{"$cred": "<name>", "field": "<key>"}` to one top-level field (exact semantics in `bro/base/credentials.py`).
+The resolver expands references before any consumer sees the value, so a scoped store hydrates a granted secret with its references already expanded
+— self-contained in the container, no grant of the referenced secrets needed.
+Where the chain reaches a minting source the referrer ships raw instead and hydration pulls the referenced kinds in with it, so the session mints its own (`bro/reference/ride.md`, "Hydration").
 
-- `brog.json` — the brog task-tracker backend selection. The built-in GitHub backend accepts `{ "backend": "github", "token": ..., "repo": "owner/name"? }`; `repo` omitted derives owner/name from the workspace's `origin` remote at server start. Backends contributed through `bro.brog.backends` own and validate their additional fields.
-- `trails.json` — trails storage selection, and the credential a process may do without: absent, storage is local (`{ "backend": "local" }` states the same explicitly), stored in the global runtime state root (`bro/reference/ride.md`, "Runtime state"). `{ "backend": "service", "base_url": "https://trails.example", "token": "<bearer>" }` selects `NetworkStore`; omitting `backend` from the existing `{ "base_url": ..., "token": ... }` shape still selects it. `{ "backend": "dynamo", "trails_table": "...", "steps_table": "...", "uuid_index": "...", "bucket": "...", "region": "..." }` selects the DynamoDB/S3 store and belongs in the scoped credential of a `trails-server` deployment; client scopes operationally receive a service config or none. The server resolves this same credential through `configured_store()`, which requires it — backend settings are not argv — while bearer auth remains in `TRAILS_BEARER_TOKEN` / `TRAILS_ALLOW_NO_AUTH` (or their matching flags). Every launch scope hydrates the file best-effort, so a host without one still records. A failing or stopped claude recorder surfaces through `session-recorder-health.json` in the session's own state dir (read by the ride status line and `ride banner`); daemon stderr is `claude/session-recorder.log` under it.
+- `brog.json` — the brog task-tracker backend selection.
+  The built-in GitHub backend accepts `{ "backend": "github", "token": ..., "repo": "owner/name"? }`;
+  `repo` omitted derives owner/name from the workspace's `origin` remote at server start.
+  Backends contributed through `bro.brog.backends` own and validate their additional fields.
+- `trails.json` — trails storage selection, and the credential a process may do without:
+  absent, storage is local (`{ "backend": "local" }` states the same explicitly), stored in the global runtime state root (`bro/reference/ride.md`, "Runtime state").
+  `{ "backend": "service", "base_url": "https://trails.example", "token": "<bearer>" }` selects `NetworkStore`;
+  omitting `backend` from the existing `{ "base_url": ..., "token": ... }` shape still selects it.
+  `{ "backend": "dynamo", "trails_table": "...", "steps_table": "...", "uuid_index": "...", "bucket": "...", "region": "..." }` selects the DynamoDB/S3 store and belongs in the scoped credential of a `trails-server` deployment;
+  client scopes operationally receive a service config or none.
+  The server resolves this same credential through `configured_store()`, which requires it
+  — backend settings are not argv
+  — while bearer auth remains in `TRAILS_BEARER_TOKEN` / `TRAILS_ALLOW_NO_AUTH` (or their matching flags).
+  Every launch scope hydrates the file best-effort, so a host without one still records.
+  A failing or stopped claude recorder surfaces through `session-recorder-health.json` in the session's own state dir (read by the ride status line and `ride banner`);
+  daemon stderr is `claude/session-recorder.log` under it.
 - `openai.json` — `{ "api_key": "sk-..." }` for OpenAI-backed LLM runs, optional data-source summaries, and spell interpretation
 - `anthropic.json` — `{ "api_key": "sk-ant-..." }` for Anthropic API use
-- `claude_code_oauth_token` — the long-lived OAuth token from `claude setup-token` (scalar, not json), minted once on the host. Registered as the `claude_code` secret; exported as `CLAUDE_CODE_OAUTH_TOKEN` for every interactive Claude Code session (host: subprocess env; container: registry install hook), so each session presents the same stable subscription bearer instead of the rotating `~/.claude/.credentials.json` OAuth token. `claude --bare` (the raw Claude mode) ignores the variable and authenticates with the `anthropic` key.
+- `claude_code_oauth_token` — the long-lived OAuth token from `claude setup-token` (scalar, not json), minted once on the host.
+  Registered as the `claude_code` secret;
+  exported as `CLAUDE_CODE_OAUTH_TOKEN` for every interactive Claude Code session (host:
+  subprocess env;
+  container:
+  registry install hook), so each session presents the same stable subscription bearer instead of the rotating `~/.claude/.credentials.json` OAuth token.
+  `claude --bare` (the raw Claude mode) ignores the variable and authenticates with the `anthropic` key.
 
-  **Required for native claude code sessions in both modes** (`ride solo|along` / `dive-in`): the token is the session's sole credential — a container mounts no OAuth file, and a host session's private claude state dir carries none either (`bro/reference/ride.md`, "Host claude-state isolation") — so a missing secret fails the launch loudly. Populate it once: `claude setup-token` on the host, then store the printed token in `~/.bro/claude_code_oauth_token`.
+  **Required for native claude code sessions in both modes** (`ride solo|along` / `dive-in`):
+  the token is the session's sole credential
+  — a container mounts no OAuth file, and a host session's private claude state dir carries none either (`bro/reference/ride.md`, "Host claude-state isolation")
+  — so a missing secret fails the launch loudly.
+  Populate it once:
+  `claude setup-token` on the host, then store the printed token in `~/.bro/claude_code_oauth_token`.
 - `brave.json` — `{ "api_key": "<subscription-token>" }` for the `WebSearch` data source
-- `github_app_<app>.json` (name free, referenced by the host registry) — the GitHub App minting config backing the `github` kind: `{ "app_id": ..., "installation_id": ..., "private_key": "<PEM>" }`, ids as strings or numbers, the key embedded, installation id from the installation page URL (or `GET /app/installations` under an app JWT). The framework's checked-in `github` entry declares no sources, only the kind's install hook; `github_app` resolves lazily through the framework's `bro.credential_sources` entry point; the host-local `registry.json` points the kind at the config: `{"github": {"sources": [{"type": "github_app", "file": "github_app_<app>.json"}]}}`.
+- `github_app_<app>.json` (name free, referenced by the host registry)
+  — the GitHub App minting config backing the `github` kind:
+  `{ "app_id": ..., "installation_id": ..., "private_key": "<PEM>" }`, ids as strings or numbers, the key embedded, installation id from the installation page URL (or `GET /app/installations` under an app JWT).
+  The framework's checked-in `github` entry declares no sources, only the kind's install hook;
+  `github_app` resolves lazily through the framework's `bro.credential_sources` entry point;
+  the host-local `registry.json` points the kind at the config:
+  `{"github": {"sources": [{"type": "github_app", "file": "github_app_<app>.json"}]}}`.
 
-  - Resolution mints a one-hour installation token, so the acting identity on pushes, PRs, and issues is the app's bot. Every reader on the host shares one token, held in a `<config>.minted` file beside the minting config and re-minted every five minutes (the GitHub behavior that requires this is in `Source`'s docstring). The minting-source machinery (expiry margin, store-cache bypass, config-not-token scoped hydration) is `bro/base/credentials.py`'s `MintingSource`; the GitHub half, the shared hold included, is `bro/extra/github/app.py`'s `Source`.
-  - The kind's install hook declares the session's git configuration in its environment — a credential helper over a reset of whatever helper a config outside the session carries, and the https rewrite that puts github ssh remotes on it — plus a PATH-front `gh` wrapper. Each resolves the token via `credentials get` at use time, so consumers always read the token currently held; an inherited `GH_TOKEN` / `GITHUB_TOKEN` is blanked, since it speaks for a different identity.
-  - Another app can back a host-local `github+<instance>` variant — `{"github+other": {"sources": [{"type": "github_app", "file": "github_app_other.json"}]}}` — made the default via the kind's `instance` selector, or picked per launch via grant/revoke.
+  - Resolution mints a one-hour installation token, so the acting identity on pushes, PRs, and issues is the app's bot.
+    Every reader on the host shares one token, held in a `<config>.minted` file beside the minting config and re-minted every five minutes (the GitHub behavior that requires this is in `Source`'s docstring).
+    The minting-source machinery (expiry margin, store-cache bypass, config-not-token scoped hydration) is `bro/base/credentials.py`'s `MintingSource`;
+    the GitHub half, the shared hold included, is `bro/extra/github/app.py`'s `Source`.
+  - The kind's install hook declares the session's git configuration in its environment
+    — a credential helper over a reset of whatever helper a config outside the session carries, and the https rewrite that puts github ssh remotes on it
+    — plus a PATH-front `gh` wrapper.
+    Each resolves the token via `credentials get` at use time, so consumers always read the token currently held;
+    an inherited `GH_TOKEN` / `GITHUB_TOKEN` is blanked, since it speaks for a different identity.
+  - Another app can back a host-local `github+<instance>` variant
+    — `{"github+other": {"sources": [{"type": "github_app", "file": "github_app_other.json"}]}}`
+    — made the default via the kind's `instance` selector, or picked per launch via grant/revoke.
 
-**Scoped per-bro hydration.** Managed ride sessions receive a scoped credential store rather than the whole `~/.bro`. The host resolves only the secrets the session uses — the bro's manifest plus per-harness extras (the native recipe's LLM key for the bro harness, session baselines for Claude Code). Container launches pack them (one file per secret plus a scoped `credentials.json` carrying each secret's install hook) into an in-memory tar and `docker cp` that tar into the container's `~/.bro` before it starts, with no host-side store. Host managed sessions materialize the same store into the session claude dir's `.bro` and point `CREDENTIALS_REGISTRY` at it; this is a convenience scope rather than a security boundary because the session runs as the user. In either mode a non-declared secret resolves to a clean `SecretNotFound`, and hydration is strict: a missing required secret fails the launch. Secrets a tool reads from outside the resolver (git, the `gh` and aws CLIs) are wired by registry-declared install hooks, applied generically in both modes into a session directory that bounds what they may write. Full mechanics: `bro/reference/ride.md` ("Scoped credential hydration").
+**Scoped per-bro hydration.**
+Managed ride sessions receive a scoped credential store rather than the whole `~/.bro`.
+The host resolves only the secrets the session uses
+— the bro's manifest plus per-harness extras (the native recipe's LLM key for the bro harness, session baselines for Claude Code).
+Container launches pack them (one file per secret plus a scoped `credentials.json` carrying each secret's install hook) into an in-memory tar and `docker cp` that tar into the container's `~/.bro` before it starts, with no host-side store.
+Host managed sessions materialize the same store into the session claude dir's `.bro` and point `CREDENTIALS_REGISTRY` at it;
+this is a convenience scope rather than a security boundary because the session runs as the user.
+In either mode a non-declared secret resolves to a clean `SecretNotFound`, and hydration is strict:
+a missing required secret fails the launch.
+Secrets a tool reads from outside the resolver (git, the `gh` and aws CLIs) are wired by registry-declared install hooks, applied generically in both modes into a session directory that bounds what they may write.
+Full mechanics:
+`bro/reference/ride.md` ("Scoped credential hydration").

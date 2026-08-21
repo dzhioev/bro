@@ -1,10 +1,12 @@
 # bro-benchmark
 
 `bro-benchmark` runs a bro as an agent under [Harbor](https://github.com/harbor-framework/harbor),
-the harness that distributes and executes Terminal-Bench. It ships as `bro.benchmark`, a portion of
+the harness that distributes and executes Terminal-Bench.
+It ships as `bro.benchmark`, a portion of
 the framework's `bro` namespace package, from a project of its own beside the framework workspace.
 
-Sync its environment before using it — the repository's `./setup.sh` leaves it alone:
+Sync its environment before using it
+— the repository's `./setup.sh` leaves it alone:
 
 ```
 uv sync --directory benchmark --all-groups
@@ -13,7 +15,8 @@ uv sync --directory benchmark --all-groups
 ## The bundle
 
 A benchmark task runs in a foreign image that must not be modified, and several carry no Python at
-all, so the agent brings its own. `benchmark-bundle` builds a relocatable directory holding a pinned
+all, so the agent brings its own.
+`benchmark-bundle` builds a relocatable directory holding a pinned
 standalone CPython, `bro` plus `bro-native` resolved from the framework's lock, and a `bro` shim over
 them:
 
@@ -22,7 +25,8 @@ uv run --project benchmark benchmark-bundle
 ```
 
 It lands in `var/benchmark/bundle` unless `--output` says otherwise, and rebuilding it from one
-commit reproduces the same contents. Copying the directory somewhere is the whole installation, and
+commit reproduces the same contents.
+Copying the directory somewhere is the whole installation, and
 the shim inside it is the framework's `bro` command:
 
 ```
@@ -45,22 +49,33 @@ uv run --project benchmark benchmark-bundle
 uv run --project benchmark harbor job start -c benchmark/bro/benchmark/terminal_bench_2_1.yaml
 ```
 
-The job config is the whole reproducibility contract — dataset revision, the bros under test, the
-model, concurrency, and the retry policy — so a run is described by that file plus the bundle.
-`-k/--n-attempts` repeats each trial. To narrow a run to a subset of tasks, add a `task_names` list
-of globs under the dataset: harbor's `--include-task-name` applies only to a dataset the command
+The job config is the whole reproducibility contract
+— dataset revision, the bros under test, the
+model, concurrency, and the retry policy
+— so a run is described by that file plus the bundle.
+`-k/--n-attempts` repeats each trial.
+To narrow a run to a subset of tasks, add a `task_names` list
+of globs under the dataset:
+harbor's `--include-task-name` applies only to a dataset the command
 line itself names, which would mean restating the pinned revision there.
 
 The score lands in `<jobs_dir>/<job-name>/result.json` (`jobs/` unless `-o` says otherwise), under
-`stats.evals`, one entry per agent and dataset: `pass_at_k`, `reward_stats`, `exception_stats`,
-`n_trials`, `n_errors`. Each trial keeps its own directory beside it, with the bro's activity log
+`stats.evals`, one entry per agent and dataset:
+`pass_at_k`, `reward_stats`, `exception_stats`,
+`n_trials`, `n_errors`.
+Each trial keeps its own directory beside it, with the bro's activity log
 (`agent/bro.log`) and per-model token counts (`agent/usage.json`) as the run's record.
 
 Both are copied out of the container once the trial ends, so a job runs wherever the docker daemon
-is reachable and leaves nothing of a trial on the docker host. Managed sessions carry no docker
-socket, so jobs start from a host shell. Following a run as it happens means reading the log where
-it is being written: `docker exec <task-container> tail -f /logs/agent/bro.log`.
+is reachable and leaves nothing of a trial on the docker host.
+Managed sessions carry no docker
+socket, so jobs start from a host shell.
+Following a run as it happens means reading the log where
+it is being written:
+`docker exec <task-container> tail -f /logs/agent/bro.log`.
 
-The container gets exactly one credential, the LLM key named by the `llm_credential` kwarg — use a
-dedicated, budget-capped instance. It sits in a container where an LLM has unrestricted shell and
+The container gets exactly one credential, the LLM key named by the `llm_credential` kwarg
+— use a
+dedicated, budget-capped instance.
+It sits in a container where an LLM has unrestricted shell and
 internet, and the task instruction is third-party text the bro treats as its request.

@@ -1,28 +1,135 @@
 # Shared low-level utilities
 
-Used across the whole repo. Some modules (`bro.base.args`, `bro.base.log`) happen to import no third-party package at load time, so consumers that run outside the venv (e.g. `bro.workflow.commit_footer` from the commit git hooks) can import them. Some modules expose a CLI (`bro.base.credentials`, `bro.base.time-util`); run those with `--help` for flags.
+Used across the whole repo.
+Some modules (`bro.base.args`, `bro.base.log`) happen to import no third-party package at load time, so consumers that run outside the venv (e.g. `bro.workflow.commit_footer` from the commit git hooks) can import them.
+Some modules expose a CLI (`bro.base.credentials`, `bro.base.time-util`);
+run those with `--help` for flags.
 
 ## Modules
 
-- `args.py` — `Parser` (subclass of `argparse.ArgumentParser`): the one place in the repo that imports `argparse`. Adds repo-wide global flags (`--log`, `--verbose`, `--ic`, `--allow-env`, `--print-env`), per-flag env-var overrides, mutually-exclusive group declarations, `dispatch()` for subcommand handlers registered via `set_handler`, and `reconstruct()` (namespace → canonical argv). `parse(argv)` is the entry every CLI calls — see the "CLI relationship" below. `command_signature(('bro', 'list'))` reads an installed command the other way round, returning an argparse-free `CommandSignature` — the command's summary and the arguments it declares, minus the repo globals — for callers that describe a command to something else. It leans on the CLI relationship twice: the console-script name resolves to its module through the two names `sync-scripts` publishes every CLI under, and the parser is captured by intercepting the `parse` call the module's `main` ends in, so nothing the command does ever runs.
-- `credentials.py` — client-side secret resolver (`__cli_name__ = 'credentials'`). `get` / `get_json` / `try_get` / `available` resolve a kind-addressed secret against an ordered `Source` list, rejecting `kind+instance` names — always the kind's default-instance entry, the only shape a generated scoped registry carries; the storage-addressed `get_instance` / `get_instance_json` / `try_get_instance` siblings read a registry entry by its stored name, plain (the kind's default instance) or `kind+instance`, and the `get` / `list` CLI defaults to kind addressing with `--instance` switching (`known_names` lists the registry): the stored types `local` (searching `BRO_CONFIGS_DIR` when set, then `~/.bro`) and `ssm` (reading an AWS SSM parameter from the region the source names), plus minting types discovered lazily by source `type` through `bro.credential_sources` (`github_app` → `bro/extra/github/app.py`) — `MintingSource` subclasses deriving short-lived values from a minting config file, held on the source until near expiry; the store leaves a minted secret, like any secret whose references reach one, uncached so every read observes a usable value; a json secret's `{"$cred": ...}` reference nodes expand during the resolve (semantics in the module docstring), so consumers see the effective, self-contained value; the default registry is the framework's built-in entries merged first with installed `bro.credentials` entry points and then per-name with a host-local `registry.json` found along the same search path (`host_registry` — `kind+instance` variant entries and sources-only kind overrides inherit the kind's install-hook template; scheme in `bro/setup/AGENTS.md`), a generated `credentials.json` overrides it wholesale, and `CREDENTIALS_REGISTRY=<file>` overrides both for one process, its directory joining the local search path first (so a materialized scoped store resolves wherever it lands). `select_instances` layers a process-scoped instance selection onto that host registry — the same statement a kind entry's `instance` selector makes durably, for a caller holding one the registry cannot carry itself (a launch's operated project), with a None value naming the kind's own entry. `build_scoped_store` emits an in-memory per-session store (`ride` copies it into a container, or materializes it into a host session's state dir; at most one instance per kind, and a `kind+instance` variant materializes under its kind name — entry, cred file, and re-rendered install hook — so the scoped namespace is kinds-only; each secret's winning source picks its scoped representation via `Source.materialize_scoped` — stored text as a plain local file, a minting source's config so the session mints fresh on read, and stored text whose reference chain reaches a minting source raw with references intact, pulling each referenced kind into the scope with it, so the session re-expands and re-mints per read); `scoped_view_store` is its lazy sibling — a kinds-only read-through `Store` over the same selection rules (shared `_scoped_selection`), each read resolving on demand through the selected entry's own sources, for host-side code that reads a credential under a scope's binding without hydrating a store. `apply_grant_revoke` layers strict per-session grant/revoke overrides onto a computed name set (scoped credential sets, summon allow-lists), and `install_hooks` applies a registry's wiring for secrets a tool reads from outside the resolver (git, the `gh` and aws CLIs) — a hook declares files, environment and shadowed commands rather than code to run, so applying one writes nothing but files under the session directory it is given and returns the environment for the caller to apply. Schemas live in `bro/setup/AGENTS.md`.
+- `args.py` — `Parser` (subclass of `argparse.ArgumentParser`):
+  the one place in the repo that imports `argparse`.
+  Adds repo-wide global flags (`--log`, `--verbose`, `--ic`, `--allow-env`, `--print-env`),
+  per-flag env-var overrides,
+  mutually-exclusive group declarations,
+  `dispatch()` for subcommand handlers registered via `set_handler`,
+  and `reconstruct()` (namespace → canonical argv).
+  `parse(argv)` is the entry every CLI calls
+  — see the "CLI relationship" below.
+  `command_signature(('bro', 'list'))` reads an installed command the other way round, returning an argparse-free `CommandSignature`
+  — the command's summary and the arguments it declares, minus the repo globals
+  — for callers that describe a command to something else.
+  It leans on the CLI relationship twice:
+  the console-script name resolves to its module through the two names `sync-scripts` publishes every CLI under,
+  and the parser is captured by intercepting the `parse` call the module's `main` ends in, so nothing the command does ever runs.
+- `credentials.py` — client-side secret resolver (`__cli_name__ = 'credentials'`).
+  `get` / `get_json` / `try_get` / `available` resolve a kind-addressed secret against an ordered `Source` list, rejecting `kind+instance` names
+  — always the kind's default-instance entry, the only shape a generated scoped registry carries;
+  the storage-addressed `get_instance` / `get_instance_json` / `try_get_instance` siblings read a registry entry by its stored name, plain (the kind's default instance) or `kind+instance`,
+  and the `get` / `list` CLI defaults to kind addressing with `--instance` switching (`known_names` lists the registry):
+  the stored types `local` (searching `BRO_CONFIGS_DIR` when set, then `~/.bro`)
+  and `ssm` (reading an AWS SSM parameter from the region the source names),
+  plus minting types discovered lazily by source `type` through `bro.credential_sources` (`github_app` → `bro/extra/github/app.py`)
+  — `MintingSource` subclasses deriving short-lived values from a minting config file, held on the source until near expiry;
+  the store leaves a minted secret, like any secret whose references reach one, uncached so every read observes a usable value;
+  a json secret's `{"$cred": ...}` reference nodes expand during the resolve (semantics in the module docstring), so consumers see the effective, self-contained value;
+  the default registry is the framework's built-in entries merged first with installed `bro.credentials` entry points and then per-name with a host-local `registry.json` found along the same search path (`host_registry`
+  — `kind+instance` variant entries and sources-only kind overrides inherit the kind's install-hook template;
+  scheme in `bro/setup/AGENTS.md`), a generated `credentials.json` overrides it wholesale, and `CREDENTIALS_REGISTRY=<file>` overrides both for one process,
+  its directory joining the local search path first (so a materialized scoped store resolves wherever it lands).
+  `select_instances` layers a process-scoped instance selection onto that host registry
+  — the same statement a kind entry's `instance` selector makes durably, for a caller holding one the registry cannot carry itself (a launch's operated project), with a None value naming the kind's own entry.
+  `build_scoped_store` emits an in-memory per-session store (`ride` copies it into a container, or materializes it into a host session's state dir;
+  at most one instance per kind, and a `kind+instance` variant materializes under its kind name
+  — entry, cred file, and re-rendered install hook
+  — so the scoped namespace is kinds-only;
+  each secret's winning source picks its scoped representation via `Source.materialize_scoped`
+  — stored text as a plain local file,
+  a minting source's config so the session mints fresh on read,
+  and stored text whose reference chain reaches a minting source raw with references intact, pulling each referenced kind into the scope with it,
+  so the session re-expands and re-mints per read);
+  `scoped_view_store` is its lazy sibling
+  — a kinds-only read-through `Store` over the same selection rules (shared `_scoped_selection`), each read resolving on demand through the selected entry's own sources,
+  for host-side code that reads a credential under a scope's binding without hydrating a store.
+  `apply_grant_revoke` layers strict per-session grant/revoke overrides onto a computed name set (scoped credential sets, summon allow-lists),
+  and `install_hooks` applies a registry's wiring for secrets a tool reads from outside the resolver (git, the `gh` and aws CLIs)
+  — a hook declares files, environment and shadowed commands rather than code to run, so applying one writes nothing but files under the session directory it is given and returns the environment for the caller to apply.
+  Schemas live in `bro/setup/AGENTS.md`.
 - `configs.py` — the explicit `BRO_CONFIGS_DIR`, host-local `~/.bro`, the `~/.bro.json` host config beside it, and the installed bro distribution version shared by credential consumers and trail records.
-- `host_config.py` — the host's launch policy (`~/.bro.json`): `project_instances(attachment)` reads the `kind+instance` selections recorded for a repository attachment (checkout path or git URL, normalized through `git_url.py`), None where no entry names it, and `project_scoped_kinds()` names the kinds some entry selects for — what a launch binding no entry may not read at all; the caller names the attachment, since resolving the operated repo belongs to the launch layer; `llm_presets()` reads the host-wide `--llm` preset names (`bro/launch/llm_flags.py` merges them over the operated project's own table). The scheme and its precedence are `bro/setup/AGENTS.md`, "Host config"; `ride.scope.bind_project_credentials` binds the result through `credentials.select_instances`
-- `git_url.py` — git remote URL grammar: `is_git_url`, `normalize_git_url` (the canonical spelling two spellings of one remote compare on), and `git_url_path`. Pure string handling, so callers that never invoke git — a project key match, a config read — reach it without the workspace layer
-- `spawn.py` — `run` / `run_async` / `popen` wrappers that detach every child into a fresh session (`start_new_session=True`, stdin `/dev/null`) so an interactive `/dev/tty` open fails instead of blocking; `run` also SIGKILLs the whole process group on timeout. `run_async` is `run`'s awaitable counterpart for the agent's tool path — always capturing, and reaping the group when the await is cancelled as well as on timeout, so an interrupted tool call leaves no orphan. `kill_group` / `terminate_group` signal a child's whole group directly, for callers that manage lifetime themselves. `format_result` is the shape a finished child takes as agent-tool output — exit code, then the captured streams capped through `text_window`. Used by every agent shell-out. `console_script` resolves a console script beside the running interpreter, for machinery a process spawns beside itself rather than looks up on the PATH it was launched with.
-- `liveness_test_helper.py` — `Liveness`, a FIFO a spawned process holds for as long as it lives: a test asserting that something was reaped blocks on its EOF instead of polling a pid the kernel is free to recycle underneath it.
-- `suite_environment.py` — `rebuild_environment()`, which leaves a test process holding none of the session it started in: the framework's own environment namespaces cleared, the zone pinned, the log level reset. It ships, so a pytest root outside this repository imports it the same way. `SESSION_NAMESPACES` / `SESSION_VARIABLES` / `KEPT_VARIABLES` are the sweep's own statement of what carries session state, for a policy holding the framework to it.
-- `offload.py` — `off_loop(function, …)`, awaiting a blocking call in a daemon thread. The `asyncio.to_thread` alternative wherever a call may still be running when the process wants to exit: the default executor's threads are joined at interpreter shutdown, so one abandoned call there delays the exit by its full remaining runtime. A cancelled `off_loop` await abandons the thread instead, leaving whatever it holds to the caller.
-- `log.py` — module-level `logging` to stderr (`debug` / `verbose` / `info` / `warning` / `error` / `exception`), tagging each record with the caller's module as `scope`. VERBOSE is a custom level between DEBUG and INFO: top-level stages log INFO, stage detail logs VERBOSE. The threshold defaults to INFO, is set per invocation with `--log <level>` (`--verbose` is shorthand for `--log verbose`), and propagates to child processes: `set_level` exports `BRO_LOG_LEVEL`, which both `log.py` (at import) and `bro/setup/log.sh` (the shell-script counterpart, same line shape) read, so a launch CLI's verbosity reaches worktree provisioning, containers, and the inner session runner; an explicit `--log` overrides the inherited value.
-- `lulid.py` — `lulid()`, the repo's id mint: a ULID restyled lowercase and dash-grouped 10-8-8 (`01kwphn3q5-w1fdwep2-apw9ag3b`). The restyle preserves lexicographic order, so lulids sort by mint time and are safe as range/sort keys.
-- `time_util.py` — timezone-aware `Moment` / `Duration` (`datetime` / `timedelta` subclasses), parsers (`parse_moment`, ISO, date), and `utc_now`. Local tz is `Europe/Nicosia`. Prints the current time as a CLI.
-- `name_map.py` — `NameMap`: case-insensitive, whitespace-tolerant name → value lookup (strip + casefold, exact match only). For matching a free-form name an LLM or human emits against a known set; collisions and misses raise with the available names listed.
-- `condition.py` — first-class conditions over typed variables: `==` / `contains` on `var(...)` references build an immutable predicate at declaration time, `evaluate` decides it fail-fast against the facts, `when` / `iff` / `select` gate entries of declarative lists. One evaluator for both fronts — `template.py` directives lower onto it, code builds conditions directly. Full semantics: `bro/reference/conditions.md`.
-- `template.py` — conditional template engine for static agent-facing text (tool descriptions, spell bodies): when/iff/eliff/else blocks and assert guards in `{{…}}` groups terminated by `{{end}}`, conditions lowered onto `condition.py`, plus `{{include}}` splices loaded through a caller-supplied resolver. Grammar and semantics: `bro/reference/template.md`; the consuming front (`render_text`) lives in `bro/mcp.py`.
-- `text_window.py` — windowed views over large text for tool output: `apply_limit` caps to a line + byte budget (keeping head or tail) with inline `[...skipped before/after...]` markers and a fat-finger clamp; `numbered_window` layers a cat -n-numbered partial read (0-based `offset`) on top; `take_head` returns the budget-bounded prefix raw, for callers that paginate over a cursor instead of dropping the excess. `DEFAULT_LIMIT` / `MAX_LIMIT` cap the lines a caller asks for and `BYTE_LIMIT` caps the payload, whichever binds first.
+- `host_config.py` — the host's launch policy (`~/.bro.json`):
+  `project_instances(attachment)` reads the `kind+instance` selections recorded for a repository attachment (checkout path or git URL, normalized through `git_url.py`), None where no entry names it,
+  and `project_scoped_kinds()` names the kinds some entry selects for
+  — what a launch binding no entry may not read at all;
+  the caller names the attachment, since resolving the operated repo belongs to the launch layer;
+  `llm_presets()` reads the host-wide `--llm` preset names (`bro/launch/llm_flags.py` merges them over the operated project's own table).
+  The scheme and its precedence are `bro/setup/AGENTS.md`, "Host config";
+  `ride.scope.bind_project_credentials` binds the result through `credentials.select_instances`
+- `git_url.py` — git remote URL grammar:
+  `is_git_url`, `normalize_git_url` (the canonical spelling two spellings of one remote compare on), and `git_url_path`.
+  Pure string handling, so callers that never invoke git
+  — a project key match, a config read
+  — reach it without the workspace layer
+- `spawn.py` — `run` / `run_async` / `popen` wrappers that detach every child into a fresh session (`start_new_session=True`, stdin `/dev/null`) so an interactive `/dev/tty` open fails instead of blocking;
+  `run` also SIGKILLs the whole process group on timeout.
+  `run_async` is `run`'s awaitable counterpart for the agent's tool path
+  — always capturing, and reaping the group when the await is cancelled as well as on timeout, so an interrupted tool call leaves no orphan.
+  `kill_group` / `terminate_group` signal a child's whole group directly, for callers that manage lifetime themselves.
+  `format_result` is the shape a finished child takes as agent-tool output
+  — exit code, then the captured streams capped through `text_window`.
+  Used by every agent shell-out.
+  `console_script` resolves a console script beside the running interpreter, for machinery a process spawns beside itself rather than looks up on the PATH it was launched with.
+- `liveness_test_helper.py` — `Liveness`, a FIFO a spawned process holds for as long as it lives:
+  a test asserting that something was reaped blocks on its EOF instead of polling a pid the kernel is free to recycle underneath it.
+- `suite_environment.py` — `rebuild_environment()`, which leaves a test process holding none of the session it started in:
+  the framework's own environment namespaces cleared,
+  the zone pinned,
+  the log level reset.
+  It ships, so a pytest root outside this repository imports it the same way.
+  `SESSION_NAMESPACES` / `SESSION_VARIABLES` / `KEPT_VARIABLES` are the sweep's own statement of what carries session state, for a policy holding the framework to it.
+- `offload.py` — `off_loop(function, …)`, awaiting a blocking call in a daemon thread.
+  The `asyncio.to_thread` alternative wherever a call may still be running when the process wants to exit:
+  the default executor's threads are joined at interpreter shutdown, so one abandoned call there delays the exit by its full remaining runtime.
+  A cancelled `off_loop` await abandons the thread instead, leaving whatever it holds to the caller.
+- `log.py` — module-level `logging` to stderr (`debug` / `verbose` / `info` / `warning` / `error` / `exception`), tagging each record with the caller's module as `scope`.
+  VERBOSE is a custom level between DEBUG and INFO:
+  top-level stages log INFO,
+  stage detail logs VERBOSE.
+  The threshold defaults to INFO, is set per invocation with `--log <level>` (`--verbose` is shorthand for `--log verbose`), and propagates to child processes:
+  `set_level` exports `BRO_LOG_LEVEL`, which both `log.py` (at import) and `bro/setup/log.sh` (the shell-script counterpart, same line shape) read, so a launch CLI's verbosity reaches worktree provisioning, containers, and the inner session runner;
+  an explicit `--log` overrides the inherited value.
+- `lulid.py` — `lulid()`, the repo's id mint:
+  a ULID restyled lowercase and dash-grouped 10-8-8 (`01kwphn3q5-w1fdwep2-apw9ag3b`).
+  The restyle preserves lexicographic order, so lulids sort by mint time and are safe as range/sort keys.
+- `time_util.py` — timezone-aware `Moment` / `Duration` (`datetime` / `timedelta` subclasses), parsers (`parse_moment`, ISO, date), and `utc_now`.
+  Local tz is `Europe/Nicosia`.
+  Prints the current time as a CLI.
+- `name_map.py` — `NameMap`:
+  case-insensitive, whitespace-tolerant name → value lookup (strip + casefold, exact match only).
+  For matching a free-form name an LLM or human emits against a known set;
+  collisions and misses raise with the available names listed.
+- `condition.py` — first-class conditions over typed variables:
+  `==` / `contains` on `var(...)` references build an immutable predicate at declaration time,
+  `evaluate` decides it fail-fast against the facts,
+  `when` / `iff` / `select` gate entries of declarative lists.
+  One evaluator for both fronts
+  — `template.py` directives lower onto it, code builds conditions directly.
+  Full semantics:
+  `bro/reference/conditions.md`.
+- `template.py` — conditional template engine for static agent-facing text (tool descriptions, spell bodies):
+  when/iff/eliff/else blocks and assert guards in `{{…}}` groups terminated by `{{end}}`, conditions lowered onto `condition.py`, plus `{{include}}` splices loaded through a caller-supplied resolver.
+  Grammar and semantics:
+  `bro/reference/template.md`;
+  the consuming front (`render_text`) lives in `bro/mcp.py`.
+- `text_window.py` — windowed views over large text for tool output:
+  `apply_limit` caps to a line + byte budget (keeping head or tail) with inline `[...skipped before/after...]` markers and a fat-finger clamp;
+  `numbered_window` layers a cat -n-numbered partial read (0-based `offset`) on top;
+  `take_head` returns the budget-bounded prefix raw, for callers that paginate over a cursor instead of dropping the excess.
+  `DEFAULT_LIMIT` / `MAX_LIMIT` cap the lines a caller asks for and `BYTE_LIMIT` caps the payload, whichever binds first.
 - `source_root.py` — `SOURCE_ROOT`, the installed `bro` package directory, derived from the module's own location.
 - `yesno.py` — `yesno(question, default)` interactive y/n prompt.
 
 ## CLI relationship
 
-Every CLI in the repo is a bare `def main(argv)` whose body builds a `bro.base.args.Parser` and ends in `return fn(**parser.parse(argv))` or `return parser.dispatch(argv)`. The global-argv read happens once, in the owning package's committed `_entrypoints.py` shim, not in `main` — see the root `AGENTS.md` "Commands" section and the committed `_entrypoints.py` of any distribution.
+Every CLI in the repo is a bare `def main(argv)` whose body builds a `bro.base.args.Parser` and ends in `return fn(**parser.parse(argv))` or `return parser.dispatch(argv)`.
+The global-argv read happens once, in the owning package's committed `_entrypoints.py` shim, not in `main`
+— see the root `AGENTS.md` "Commands" section and the committed `_entrypoints.py` of any distribution.
