@@ -24,7 +24,11 @@ def clean_workspaces(
   workspaces.sort(key=lambda workspace: (workspace.kind, workspace.name))
 
   has_containers = any(workspace.kind is WorkspaceKind.CONTAINER for workspace in workspaces)
-  mounts = running_mounts() if has_containers else set()
+  try:
+    mounts = running_mounts() if has_containers else set()
+  except (OSError, RuntimeError) as error:
+    log.error('cannot check for active sessions: %s', error)
+    return 1
 
   removed = 0
   removed_names: set[str] = set()

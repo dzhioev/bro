@@ -1,7 +1,7 @@
 """per-surface launch scoping of a bro run: which credentials each launch
 surface hydrates and which bros the session may summon, computed from the bro's
-own declarations (manifest, optional tier, `may_summon`, `needs_docker`) against
-the operated project's instance selection.
+own declarations (manifest, optional tier, `may_summon`) against the operated
+project's instance selection.
 """
 
 from dataclasses import dataclass
@@ -28,7 +28,6 @@ class ScopeRecipe:
   harness: 'Harness'
   auth_secret: Optional[str]
   llm_key: bool
-  docker_sock: Optional[bool]
   unknown_bro_fallback: bool
   optional_baseline: frozenset[str] = _TRAILS_BASELINE
 
@@ -38,7 +37,6 @@ BRO_RUN_RECIPE = ScopeRecipe(
   harness='bro',
   auth_secret=None,
   llm_key=True,
-  docker_sock=None,
   unknown_bro_fallback=False,
 )
 
@@ -89,25 +87,14 @@ def scoped_secrets(
     if not recipe.unknown_bro_fallback:
       raise
     log.warning('could not resolve bro %r for credential scoping: %s', bro_name, e)
-    # no bro to consult, so the per-bro socket rule degrades to no socket (moot
-    # anyway — the argv builder re-raises the same KeyError downstream)
-    docker_sock = recipe.docker_sock if recipe.docker_sock is not None else False
-    return ScopedSecrets(
-      required=required, optional=optional, docker_sock=docker_sock, unbound_kinds=unbound
-    )
+    return ScopedSecrets(required=required, optional=optional, unbound_kinds=unbound)
   required.update(bro.needed_secrets(harness=recipe.harness))
   if recipe.auth_secret is not None:
     required.add(recipe.auth_secret)
   if recipe.llm_key:
     required.update((llm_spec if llm_spec is not None else bro.llm_spec).needed_secrets())
   optional.update(bro.optional_secrets(harness=recipe.harness))
-  if recipe.docker_sock is not None:
-    docker_sock = recipe.docker_sock
-  else:
-    docker_sock = bro.needs_docker
-  return ScopedSecrets(
-    required=required, optional=optional, docker_sock=docker_sock, unbound_kinds=unbound
-  )
+  return ScopedSecrets(required=required, optional=optional, unbound_kinds=unbound)
 
 
 def summoned_credential_scope(

@@ -274,7 +274,7 @@ class TestSummonHandler:
 
     def capture_scope(target, recipe, *, attachment=None, grant, revoke, llm_spec=None):
       calls.append((target, llm_spec))
-      return ScopedSecrets(required={'github'}, optional=set(), docker_sock=False)
+      return ScopedSecrets(required={'github'}, optional=set())
 
     monkeypatch.setattr(ride.summon_control, 'summoned_credential_scope', capture_scope)
     control = _control(tmp_path, {'bro-dev'})
@@ -294,7 +294,7 @@ class TestSummonHandler:
 
     def capture_scope(target, recipe, *, attachment=None, grant, revoke, llm_spec=None):
       calls.append((target, recipe.name, llm_spec.TYPE if llm_spec is not None else None))
-      return ScopedSecrets(required={'github'}, optional=set(), docker_sock=False)
+      return ScopedSecrets(required={'github'}, optional=set())
 
     monkeypatch.setattr(ride.summon_control, 'summoned_credential_scope', capture_scope)
     control = _control(tmp_path, {'bro-dev'}, credential_scope={'claude_code'})

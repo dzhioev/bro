@@ -193,7 +193,6 @@ def launched(isolated: Isolated) -> Iterator[Launched]:
           command=_SESSION_COMMAND,
           env={},
           secrets=(),
-          docker_sock=False,
           tty=False,
           forward_env=False,
           image=runtime.image,

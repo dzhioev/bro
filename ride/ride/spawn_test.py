@@ -36,7 +36,7 @@ def lowering_harness(monkeypatch, tmp_path):
     ride.scope,
     'scoped_secrets',
     lambda name, surface, attachment=None, llm_spec=None: workspace_store.ScopedSecrets(
-      required={'aws', 'trails'}, optional={'openai'}, docker_sock=True
+      required={'aws', 'trails'}, optional={'openai'}
     ),
   )
   monkeypatch.setattr(ride.spawn, 'local_trails_mounts', lambda scoped: ())
@@ -89,7 +89,6 @@ class TestSummonLowering:
         },
         secrets={'aws', 'trails'},
         optional_secrets={'openai'},
-        docker_sock=True,
         tty=False,
         forward_env=False,
         image='runtime-image',
@@ -144,7 +143,7 @@ class TestSummonLowering:
 
     def capture_scope(name, recipe, attachment=None, llm_spec=None):
       captured.append(llm_spec)
-      return workspace_store.ScopedSecrets(required=set(), optional=set(), docker_sock=False)
+      return workspace_store.ScopedSecrets(required=set(), optional=set())
 
     monkeypatch.setattr(ride.scope, 'scoped_secrets', capture_scope)
     launch = ride.spawn.SummonLaunchSpec(
@@ -467,7 +466,7 @@ class TestClaudeSummonLowering:
 
     def capture_scope(name, recipe, attachment=None, llm_spec=None):
       captured.append(recipe.name)
-      return workspace_store.ScopedSecrets(required=set(), optional=set(), docker_sock=True)
+      return workspace_store.ScopedSecrets(required=set(), optional=set())
 
     monkeypatch.setattr(ride.scope, 'scoped_secrets', capture_scope)
     ride.spawn._lower_summon(self._launch(), 'broker-CH', _container_runtime())

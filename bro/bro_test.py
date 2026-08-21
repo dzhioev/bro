@@ -953,18 +953,6 @@ class TestProvisioning:
     assert applied == [('base', Path('/workspace')), ('derived', Path('/workspace'))]
 
 
-class TestNeedsDocker:
-  def test_default_is_false(self):
-    class Plain(BaseBro):
-      name = 'plain'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    assert Plain().needs_docker is False
-
-
 async def _collect_tool_names(servers):
   names: set[str] = set()
   for server in servers:

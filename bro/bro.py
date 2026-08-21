@@ -741,11 +741,6 @@ class BaseBro(ABC):
   # step is idempotent and leaves state the workspace already carries alone.
   # MRO-walked and concatenated like `extra_secrets`.
   provisioning: tuple[ProvisionStep, ...] = ()
-  # whether the bro does docker work (building/pushing images for deploys) and so
-  # needs the host docker socket. an explicit capability, inherited normally. the
-  # host grants `/var/run/docker.sock` to a `--raw`/bro-run container only when this
-  # is set (claude code sessions get it unconditionally); see ride/ride/scope.py.
-  needs_docker: bool = False
   # subclasses declare their own `system_prompt = "..."` as a class attribute;
   # `__init__` walks the MRO from base to derived and concatenates each class's
   # own contribution. so a `ReviewDev(Dev)` subclass declares only what it adds —

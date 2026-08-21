@@ -74,7 +74,6 @@ class Launch:
   command: list[str]
   env: Mapping[str, str]
   secrets: Collection[str]
-  docker_sock: bool
   tty: bool
   forward_env: bool
   image: str
@@ -109,8 +108,13 @@ _DOCKER_FORWARD_ENV = (
 
 
 def running_mounts() -> set[str]:
+  """the host paths mounted into running containers. raises when docker cannot
+  answer — a caller deciding workspace liveness off this set must not mistake an
+  unreachable daemon for no active sessions."""
   ids = subprocess.run(['docker', 'ps', '-q'], capture_output=True, text=True)
-  if ids.returncode != 0 or len(ids.stdout.split()) == 0:
+  if ids.returncode != 0:
+    raise RuntimeError(f'docker ps failed: {ids.stderr.strip()}')
+  if len(ids.stdout.split()) == 0:
     return set()
   inspect = subprocess.run(
     ['docker', 'inspect', '--format', '{{range .Mounts}}{{.Source}}\n{{end}}', *ids.stdout.split()],
@@ -118,7 +122,7 @@ def running_mounts() -> set[str]:
     text=True,
   )
   if inspect.returncode != 0:
-    return set()
+    raise RuntimeError(f'docker inspect failed: {inspect.stderr.strip()}')
   return {line for line in inspect.stdout.splitlines() if len(line) > 0}
 
 
@@ -327,7 +331,6 @@ def prepare_container(launch: Launch) -> str:
     tree,
     metadata.branch,
     launch.command,
-    docker_sock=launch.docker_sock,
     extra_env=dict(launch.env),
     forward_env=launch.forward_env,
     tty=launch.tty,
@@ -345,7 +348,6 @@ def _docker_create_argv(
   branch: Optional[str],
   command: list[str],
   *,
-  docker_sock: bool = True,
   extra_env: Optional[Mapping[str, str]] = None,
   forward_env: bool = True,
   tty: bool = True,
@@ -386,10 +388,6 @@ def _docker_create_argv(
       '-e',
       f'RIDE_BRANCH={branch}',
     ]
-  # The socket gives the container host-daemon control, so the scoped launch must
-  # opt in explicitly rather than inheriting it with the platform image.
-  if docker_sock:
-    argv += ['-v', '/var/run/docker.sock:/var/run/docker.sock']
   # Summoned children pass a complete explicit snapshot and disable ambient
   # forwarding so the parent's task and identity facts cannot leak into them.
   if forward_env:

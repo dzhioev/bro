@@ -39,7 +39,7 @@ class TestReportScope:
     rc, out, _ = _run(
       capsys,
       selection={'brog': 'github'},
-      scoped=ScopedSecrets({'brog', 'github'}, {'openai'}, True),
+      scoped=ScopedSecrets({'brog', 'github'}, {'openai'}),
     )
     assert rc == 0
     assert 'repository: /repo' in out
@@ -53,21 +53,21 @@ class TestReportScope:
     rc, out, _ = _run(
       capsys,
       selection={'brog': 'github'},
-      scoped=ScopedSecrets({'brog'}, set(), True),
+      scoped=ScopedSecrets({'brog'}, set()),
       available=lambda name: False,
     )
     assert rc == 0
     assert 'MISSING' in out
 
   def test_reads_the_kinds_own_entry_selection(self, capsys):
-    _, out, _ = _run(capsys, selection={'brog': None}, scoped=ScopedSecrets({'brog'}, set(), True))
+    _, out, _ = _run(capsys, selection={'brog': None}, scoped=ScopedSecrets({'brog'}, set()))
     assert 'brog (project)' in out
 
   def test_raw_scopes_the_raw_flavor_and_bro_overrides_the_default(self, capsys):
     _, out, scope = _run(
       capsys,
       selection={},
-      scoped=ScopedSecrets({'trails'}, set(), True),
+      scoped=ScopedSecrets({'trails'}, set()),
       bro='dev',
       options={'raw': True},
     )
@@ -78,7 +78,7 @@ class TestReportScope:
     _, out, scope = _run(
       capsys,
       selection={},
-      scoped=ScopedSecrets({'openai'}, {'trails'}, False),
+      scoped=ScopedSecrets({'openai'}, {'trails'}),
       harness='bro',
       options={},
     )

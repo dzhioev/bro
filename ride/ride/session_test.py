@@ -115,7 +115,7 @@ def _scoped_store() -> dict[str, bytes]:
 
 def _launch_scope(**overrides) -> ride_session.ScopedLaunch:
   base = {
-    'scoped': ScopedSecrets({'github'}, set(), True),
+    'scoped': ScopedSecrets({'github'}, set()),
     'may_summon': set(),
     'store': _scoped_store(),
   }
@@ -176,7 +176,7 @@ class _ContainerHarness:
       patch('ride.session.run_in_container', return_value=0),
       patch(
         'ride.session.scoped_secrets',
-        return_value=ScopedSecrets(set(self.secrets), set(self.optional_secrets), True),
+        return_value=ScopedSecrets(set(self.secrets), set(self.optional_secrets)),
       ),
       patch('ride.claude.harness.credentials.try_get', return_value='tok'),
       patch('ride.scope.credentials.build_scoped_store', return_value={}),
@@ -445,9 +445,7 @@ class TestContainerCommand:
       result = ride_session.start_session(_spec(drop=True))
 
     assert result == 0
-    harness.local_trails_mounts.assert_called_once_with(
-      ScopedSecrets({'github', 'trails'}, set(), True)
-    )
+    harness.local_trails_mounts.assert_called_once_with(ScopedSecrets({'github', 'trails'}, set()))
     launch, workspace = harness.run_in_container.call_args.args[:2]
     assert launch.extra_mounts == (
       '/host/claude:/home/ride/.claude',
@@ -845,7 +843,7 @@ class TestConcurrentSessionGuard:
     # tests drive; without stubs they read the machine's own credential store
     monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
     monkeypatch.setattr(
-      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
+      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set())
     )
     monkeypatch.setattr(
       ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): _scoped_store()
@@ -927,7 +925,7 @@ class TestHostSession:
       lambda ws, wt, project: tmp_path / 'claude-config',
     )
     monkeypatch.setattr(
-      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets({'github'}, set(), True)
+      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets({'github'}, set())
     )
     monkeypatch.setattr(
       ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): _scoped_store()
@@ -1241,7 +1239,7 @@ class TestHostSession:
     monkeypatch.setattr(
       ride_session,
       'scoped_secrets',
-      lambda *_a, **_k: ScopedSecrets({'github', 'notion'}, {'openai'}, True),
+      lambda *_a, **_k: ScopedSecrets({'github', 'notion'}, {'openai'}),
     )
     hydrated: dict = {}
 
@@ -1320,7 +1318,7 @@ class TestHostBrokerPingRoundTrip:
     monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
     monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
     monkeypatch.setattr(
-      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
+      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set())
     )
     monkeypatch.setattr(
       ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): _scoped_store()
@@ -1412,7 +1410,7 @@ client.close(confirm=True)
     monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
     monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
     monkeypatch.setattr(
-      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
+      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set())
     )
     monkeypatch.setattr(
       ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): _scoped_store()

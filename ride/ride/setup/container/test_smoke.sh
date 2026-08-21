@@ -124,7 +124,6 @@ docker run --rm -i \
     test "$(git rev-parse refs/remotes/origin/master)" = "$(git -C /host-repo rev-parse refs/remotes/origin/master)"
 
     aws --version
-    docker --version
     test -d /opt/uv-cache
     test -n "$(ls -A /opt/uv-cache)"
     test -w /opt/uv-cache

@@ -22,6 +22,6 @@ The Claude harness supplies `ride`'s first harness implementation. Its two inter
 - `ride.claude.__init__` imports nothing. The status line runs on a repeated render clock and must retain a small import closure.
 - Imports point directly at leaf modules, never through the package hub.
 - Broker imports remain behind the framework's broker gate; a disabled or unavailable broker must degrade before importing its implementation.
-- Full mode scopes the bro through `harness='claude'`, requires `claude_code`, and always grants the Docker socket. Raw mode scopes through `harness='bro'`, requires `anthropic`, and follows the bro's Docker declaration.
+- Full mode scopes the bro through `harness='claude'` and requires `claude_code`. Raw mode scopes through `harness='bro'` and requires `anthropic`.
 - Settings commands use the runner's interpreter and the `ride.claude` module paths.
 - Machinery the runner spawns — the session MCP server, the recorder daemon — is named by its path in the runtime the runner runs from (`bro.base.spawn.console_script`), never by bare name: the session PATH carries the pinned session commands, and machinery is not among them.

@@ -14,7 +14,6 @@ CLAUDE_RECIPE = ScopeRecipe(
   harness='claude',
   auth_secret='claude_code',
   llm_key=False,
-  docker_sock=True,
   unknown_bro_fallback=True,
 )
 RAW_RECIPE = ScopeRecipe(
@@ -22,7 +21,6 @@ RAW_RECIPE = ScopeRecipe(
   harness='bro',
   auth_secret='anthropic',
   llm_key=False,
-  docker_sock=None,
   unknown_bro_fallback=True,
 )
 
@@ -34,15 +32,9 @@ class SearchBro(Bro):
   extra_secrets = ('catalog',)
 
 
-class DockerBro(Bro):
-  name = 'scope-docker'
-  description = 'docker bro for launch scope tests'
-  needs_docker = True
-
-
 @pytest.fixture(autouse=True)
 def registered_scope_bros(register_test_bros):
-  register_test_bros(SearchBro, DockerBro)
+  register_test_bros(SearchBro)
 
 
 class TestScopedSecrets:
@@ -58,8 +50,6 @@ class TestScopedSecrets:
     # spell casting advertises openai best-effort, and the session-wide baseline
     # adds the recording credential in the same tier
     assert scoped.optional == {'openai', 'trails'}
-    # a normal claude code session keeps the docker socket
-    assert scoped.docker_sock is True
 
   def test_ride_session_set_covers_the_bros_manifest(self):
     scoped = ride.scope.scoped_secrets('scope-search', CLAUDE_RECIPE)
@@ -67,10 +57,9 @@ class TestScopedSecrets:
 
   def test_raw_session_uses_full_manifest_and_anthropic(self):
     # --raw serves the bro's own MCP servers, so it gets the full manifest (brog)
-    # plus anthropic for the apiKeyHelper. bro-dev doesn't deploy → no docker socket.
+    # plus anthropic for the apiKeyHelper.
     scoped = ride.scope.scoped_secrets('bro-dev', RAW_RECIPE)
     assert {'brog', 'github', 'anthropic'} <= scoped.required
-    assert scoped.docker_sock is False
     # --raw runs claude --bare, which ignores CLAUDE_CODE_OAUTH_TOKEN, so the token
     # secret is not requested on this surface
     assert 'claude_code' not in scoped.optional
@@ -83,22 +72,11 @@ class TestScopedSecrets:
     assert 'openai' in scoped.optional
     assert 'openai' not in scoped.required  # optional, not required
 
-  def test_docker_socket_only_when_declared(self):
-    docker_scope = ride.scope.scoped_secrets('scope-docker', RAW_RECIPE)
-    search_scope = ride.scope.scoped_secrets('scope-search', RAW_RECIPE)
-    assert docker_scope.docker_sock is True
-    assert search_scope.docker_sock is False
-    assert {'catalog', 'brave'} <= search_scope.required
-
   def test_bro_run_manifest_plus_llm_key(self):
     # dev runs as an LLM process: its manifest plus its LLM key (openai →
     # openai, which needed_secrets() omits)
     scoped = ride.scope.scoped_secrets('dev', BRO_RUN_RECIPE)
     assert 'openai' in scoped.required
-
-  def test_bro_run_docker_socket_gated_on_needs_docker(self):
-    assert ride.scope.scoped_secrets('scope-docker', BRO_RUN_RECIPE).docker_sock is True
-    assert ride.scope.scoped_secrets('bro-dev', BRO_RUN_RECIPE).docker_sock is False
 
   def test_bro_run_optional_tier_carries_the_bros_optional_secrets(self):
     # searchable data sources advertise openai best-effort for the query-focused
@@ -156,9 +134,6 @@ class TestScopedSecrets:
     scoped = ride.scope.scoped_secrets('nonexistent-bro', CLAUDE_RECIPE)
     assert scoped.required == set()
     assert scoped.optional == set(ride.scope._TRAILS_BASELINE)
-    assert scoped.docker_sock is True
-    # a --raw fallback drops the socket: no bro to consult for needs_docker
-    assert ride.scope.scoped_secrets('nonexistent-bro', RAW_RECIPE).docker_sock is False
 
   def test_unknown_bro_raises_for_bro_run(self):
     with pytest.raises(KeyError):
@@ -222,11 +197,11 @@ class TestPreflightScopedLaunch:
       patch('ride.scope.credentials.build_scoped_store', return_value={'x.cred': b'v'}) as build,
     ):
       scoped, may_summon, store = self._preflight(
-        ride.scope.ScopedSecrets({'github'}, {'openai'}, True),
+        ride.scope.ScopedSecrets({'github'}, {'openai'}),
         grant=['gmail_creds', '@dev'],
         revoke=['@bro'],
       )
-    assert scoped == ride.scope.ScopedSecrets({'github', 'gmail_creds'}, {'openai'}, True)
+    assert scoped == ride.scope.ScopedSecrets({'github', 'gmail_creds'}, {'openai'})
     assert may_summon == {'dev'}
     assert store == {'x.cred': b'v'}
     assert allow_list.call_args == (('bro-dev',), {'grant': ['dev'], 'revoke': ['bro']})
@@ -239,18 +214,18 @@ class TestPreflightScopedLaunch:
       patch('ride.scope.credentials.build_scoped_store', return_value={}),
     ):
       scoped, _, _ = self._preflight(
-        ride.scope.ScopedSecrets({'brog', 'github'}, set(), True),
+        ride.scope.ScopedSecrets({'brog', 'github'}, set()),
         grant=['brog+github'],
       )
     assert scoped.required == {'brog+github', 'github'}
 
   def test_bad_credential_override_raises_launch_scope_error(self):
     with pytest.raises(ride.scope.LaunchScopeError, match='already in the scoped credential set'):
-      self._preflight(ride.scope.ScopedSecrets({'github'}, set(), True), grant=['github'])
+      self._preflight(ride.scope.ScopedSecrets({'github'}, set()), grant=['github'])
 
   def test_bare_bro_mark_raises_launch_scope_error(self):
     with pytest.raises(ride.scope.LaunchScopeError, match="malformed grant/revoke '@'"):
-      self._preflight(ride.scope.ScopedSecrets(set(), set(), True), grant=['@'])
+      self._preflight(ride.scope.ScopedSecrets(set(), set()), grant=['@'])
 
   def test_bad_summon_target_raises_launch_scope_error(self):
     with (
@@ -261,13 +236,11 @@ class TestPreflightScopedLaunch:
       patch('ride.scope.credentials.build_scoped_store', return_value={}),
     ):
       with pytest.raises(ride.scope.LaunchScopeError, match='unknown summon target'):
-        self._preflight(ride.scope.ScopedSecrets(set(), set(), True), grant=['@devoop'])
+        self._preflight(ride.scope.ScopedSecrets(set(), set()), grant=['@devoop'])
 
   def test_an_unbound_project_kind_raises_launch_scope_error(self):
     with pytest.raises(ride.scope.LaunchScopeError, match='reads brog per project'):
-      self._preflight(
-        ride.scope.ScopedSecrets({'brog', 'github'}, set(), True, frozenset({'brog'}))
-      )
+      self._preflight(ride.scope.ScopedSecrets({'brog', 'github'}, set(), frozenset({'brog'})))
 
   def test_naming_the_instance_satisfies_an_unbound_project_kind(self):
     with (
@@ -275,7 +248,7 @@ class TestPreflightScopedLaunch:
       patch('ride.scope.credentials.build_scoped_store', return_value={}),
     ):
       scoped, _, _ = self._preflight(
-        ride.scope.ScopedSecrets({'brog'}, set(), True, frozenset({'brog'})),
+        ride.scope.ScopedSecrets({'brog'}, set(), frozenset({'brog'})),
         grant=['brog+github'],
       )
     assert scoped.required == {'brog+github'}
@@ -291,7 +264,7 @@ class TestPreflightScopedLaunch:
       ),
     ):
       with pytest.raises(ride.scope.LaunchScopeError, match="secret 'github' not found"):
-        self._preflight(ride.scope.ScopedSecrets({'github'}, set(), True))
+        self._preflight(ride.scope.ScopedSecrets({'github'}, set()))
 
 
 class TestLaunchViewStore:
@@ -300,7 +273,7 @@ class TestLaunchViewStore:
     # credential tiers, @names are the summon side and don't reach the view
     with patch('ride.scope.credentials.scoped_view_store', return_value='the-view') as view:
       store = ride.scope.launch_view_store(
-        ride.scope.ScopedSecrets({'brog', 'github'}, {'openai'}, True),
+        ride.scope.ScopedSecrets({'brog', 'github'}, {'openai'}),
         grant=['brog+github', '@dev'],
         revoke=[],
       )
@@ -310,5 +283,5 @@ class TestLaunchViewStore:
   def test_bad_override_raises_launch_scope_error(self):
     with pytest.raises(ride.scope.LaunchScopeError, match='already in the scoped credential set'):
       ride.scope.launch_view_store(
-        ride.scope.ScopedSecrets({'github'}, set(), True), grant=['github'], revoke=[]
+        ride.scope.ScopedSecrets({'github'}, set()), grant=['github'], revoke=[]
       )

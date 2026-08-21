@@ -17,14 +17,6 @@ if [ "$(id -u)" = "0" ] && [ -z "${RIDE_ENTRYPOINT_REEXEC:-}" ]; then
       chown ride:ride /home/ride /home/ride/.claude
     fi
   fi
-  # align the in-container `docker` group's gid with the bind-mounted host
-  # socket's gid so ride can talk to the host daemon without sudo
-  if [ -S /var/run/docker.sock ]; then
-    SOCK_GID="$(stat -c '%g' /var/run/docker.sock)"
-    if [ "$(getent group docker | cut -d: -f3)" != "$SOCK_GID" ]; then
-      groupmod -o -g "$SOCK_GID" docker
-    fi
-  fi
   # the scoped credential store is `docker cp`'d into /home/ride/.bro before start
   # (ride/ride/workspace/docker.py), landing owned by the uid baked into the tar. re-own it to ride after the
   # remap above so the resolver and install hooks (run as ride) can read the 0600

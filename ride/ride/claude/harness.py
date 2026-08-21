@@ -29,7 +29,6 @@ _FULL_SCOPE = ScopeRecipe(
   harness='claude',
   auth_secret='claude_code',
   llm_key=False,
-  docker_sock=True,
   unknown_bro_fallback=True,
 )
 _RAW_SCOPE = ScopeRecipe(
@@ -37,7 +36,6 @@ _RAW_SCOPE = ScopeRecipe(
   harness='bro',
   auth_secret='anthropic',
   llm_key=False,
-  docker_sock=None,
   unknown_bro_fallback=True,
 )
 
