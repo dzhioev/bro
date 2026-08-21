@@ -2,9 +2,10 @@ import re
 
 import pytest
 
+from bro.base.text_window import BYTE_LIMIT
 from bro.datasources import references
 from bro.datasources.file import FileSource
-from bro.datasources.man import PAGE_LIMIT, ManPage, ManSource, manual
+from bro.datasources.man import ManPage, ManSource, manual
 
 
 @pytest.fixture
@@ -43,13 +44,14 @@ def test_declaring_no_pages_raises():
 
 def test_long_page_is_capped_and_resumed_at_the_offset_it_names(tmp_path):
   page = tmp_path / 'long.md'
-  body = '\n'.join(f'line {index}' for index in range(PAGE_LIMIT * 2))
+  lines = [f'line {index} ' + 'x' * 100 for index in range(BYTE_LIMIT // 100)]
+  body = '\n'.join(lines)
   page.write_text(body)
   source = ManSource('man', summary='x', pages=[FileSource('long', summary='x', path=page)])
 
   head = source.read('long')
   assert 'line 0' in head
-  assert f'line {PAGE_LIMIT}\n' not in head
+  assert lines[-1] not in head
   marker = re.search(r'read on with offset=(\d+)', head)
   assert marker is not None
   offset = int(marker.group(1))

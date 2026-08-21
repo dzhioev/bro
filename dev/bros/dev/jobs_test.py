@@ -3,6 +3,7 @@ import time
 
 import pytest
 
+from bro.base.text_window import BYTE_LIMIT
 from bros.dev.jobs import Job, Registry
 
 
@@ -142,11 +143,11 @@ def test_watch_tail_timeout_gives_progress_glimpse_and_jumps_cursor():
 
 
 def test_watch_giant_single_line_pages_mid_line_without_loss():
-  length = 1000
-  job = Job('job-1', f'printf "x%.0s" $(seq 1 {length}); echo')
+  length = BYTE_LIMIT + 500
+  job = Job('job-1', f'head -c {length} /dev/zero | tr "\\0" x; echo')
   _wait_finished(job)
   collected = ''
-  for result in _drain(job, limit=1):  # limit 1 → 150-byte budget per slice
+  for result in _drain(job, limit=1):
     collected += ''.join(_body(result))
   assert collected == 'x' * length
 

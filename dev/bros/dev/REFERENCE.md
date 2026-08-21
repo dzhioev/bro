@@ -7,9 +7,9 @@ Per-tool descriptions are intentionally terse and point here for the shared rule
 
 Tools that return variable-length output (`read_file`, `grep`, `glob`, `bash`, `watch`) take a `limit: int` parameter.
 
-- **Default**: 100 lines / ~15 KB. Fits most useful results without wasting tokens.
-- **Maximum**: 2,000 lines / ~300 KB. Larger values are silently clamped.
-- Byte budget per call = `limit * 150` (rough per-line average).
+- **Default**: 100 lines. Fits most useful results without wasting tokens.
+- **Maximum**: 2,000 lines. Larger values are silently clamped.
+- Every call is capped at ~30 KB as well, whichever binds first: output of few but very long lines stops on bytes rather than on `limit`, and raising `limit` past that buys nothing.
 
 If a result exceeds the budget, the rest is dropped and announced inline via markers (see below). To get more, either:
 

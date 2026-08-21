@@ -8,10 +8,6 @@ from bro.datasources.base import DataSource
 from bro.datasources.file import FileSource
 from bro.llm.mcp import InProcessMCPServer, MCPServer, Tool
 
-# sized so an ordinary page arrives whole and only a long reference is walked
-# across calls
-PAGE_LIMIT = 200
-
 MANUAL_NAME = 'man'
 MANUAL_SUMMARY = 'the reference pages this session carries, read on demand by topic'
 
@@ -33,9 +29,10 @@ class ManSource(DataSource):
   tool listing still knows what can be read; a topic that matches nothing
   raises with the roster listed.
 
-  Output is capped at `PAGE_LIMIT` lines, and a page longer than that closes on
-  the `offset` to resume at, so the rest is read across successive calls with
-  nothing dropped and no counting to do.
+  Output is capped at one window's worth of bytes (`bro.base.text_window`), so
+  an ordinary page arrives whole; a longer reference closes on the `offset` to
+  resume at and is walked across successive calls with nothing dropped and no
+  counting to do.
   """
 
   def __init__(self, name: str, summary: str, pages: Sequence[FileSource]):
@@ -51,7 +48,7 @@ class ManSource(DataSource):
     body = page.read()
     if not 0 <= offset <= len(body):
       raise ValueError(f'offset {offset} is outside the {page.name} page (0..{len(body)})')
-    kept, _ = take_head(body[offset:], PAGE_LIMIT)
+    kept, _ = take_head(body[offset:])
     remaining = len(body) - offset - len(kept)
     if remaining == 0:
       return kept
