@@ -99,7 +99,7 @@ def _parse_parameters(raw: str, path: Path) -> tuple[Parameter, ...]:
 
 def load_spell(name: str, path: Path) -> Spell:
   _validate_name('filename stem', name, path)
-  frontmatter, body = parse_frontmatter(path.read_text())
+  frontmatter, body = parse_frontmatter(path.read_text(), f'spell {path}')
   declared_name = frontmatter.get('name')
   if declared_name is not None and declared_name != name:
     raise ValueError(

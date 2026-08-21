@@ -1,6 +1,16 @@
 ---
 name: report-usage
-description: This spell should be used when the user asks for a usage report over recorded runs — "[[report usage]]", "write the usage report", "how much did we spend last month", "where did the tokens go", "usage report for the last two weeks", "usage for yesterday 12-14, focus on cache balance". Folds every trail in a window into per-class token totals broken down by vendor, model, bro, and harness, optionally emphasising an angle the caller names, reconciles the fold against the trail headers' own aggregates, and commits the report into the directory the operated repository declares for its analyses, together with any change to the generator that produced it, in one commit, leaving the push to whoever owns the branch.
+description:
+
+This spell should be used when the user asks for a usage report over recorded runs
+— "[[report usage]]", "write the usage report", "how much did we spend last month", "where did the tokens go", "usage report for the last two weeks", "usage for yesterday 12-14, focus on cache balance".
+Folds every trail in a window into per-class token totals broken down by vendor, model, bro, and harness,
+optionally emphasising an angle the caller names,
+reconciles the fold against the trail headers' own aggregates,
+and commits the report into the directory the operated repository declares for its analyses,
+together with any change to the generator that produced it, in one commit,
+leaving the push to whoever owns the branch.
+
 parameters: {"window?": "period to report on, in whatever form the caller states it — \"last week\", \"this June\", \"a week till now\", \"yesterday 12-14\", \"since 2026-07-01\"; defaults to the last 30 days", "focus?": "an angle to emphasise beyond the standing aggregates, e.g. \"cache write/read balance\", \"where the reasoning tokens go\", \"which bros grew\""}
 version: 3.1.0
 ---

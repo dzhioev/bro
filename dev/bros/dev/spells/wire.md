@@ -1,6 +1,14 @@
 ---
 name: wire
-description: Use this spell to wire the host's credentials for the repository you are working in — deciding which stored instance of each credential kind this project's sessions read, and recording it in the host's `~/.bro.json`. Trigger on "[[wire credentials]]", "configure credentials for this repo", "which github token does this project use", "my sessions pick the wrong task tracker", or a launch that failed on a missing or wrong credential. It runs on the host (a container session cannot reach `~/.bro.json`), changes no repository file, and never invents a secret — a kind with nothing behind it is reported for the user to provide.
+description:
+
+Use this spell to wire the host's credentials for the repository you are working in
+— deciding which stored instance of each credential kind this project's sessions read, and recording it in the host's `~/.bro.json`.
+Trigger on "[[wire credentials]]", "configure credentials for this repo", "which github token does this project use", "my sessions pick the wrong task tracker",
+or a launch that failed on a missing or wrong credential.
+It runs on the host (a container session cannot reach `~/.bro.json`), changes no repository file, and never invents a secret
+— a kind with nothing behind it is reported for the user to provide.
+
 version: 1.1.0
 ---
 

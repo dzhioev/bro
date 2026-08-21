@@ -1,6 +1,20 @@
 ---
 name: run-pr
-description: This spell should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "[[run pr]]", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (docs sync, policy audit, commit splitting), the repo's commit-message conventions, rebases onto the base branch (master by default), folds the branch into the commits master will carry so what is reviewed is what lands, opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments, failing CI checks, merge conflicts, and APPROVED events. On approval, chains into [[land]] for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
+description:
+
+This spell should be used when the user signals that the worktree's changes are ready for review and a PR should be opened
+— "open a PR", "[[run pr]]", "send for review", "PR it", "ship it", "ready for review", "finalize".
+Covers commit hygiene (docs sync, policy audit, commit splitting),
+the repo's commit-message conventions,
+rebases onto the base branch (master by default),
+folds the branch into the commits master will carry so what is reviewed is what lands,
+opens the PR via `gh pr create`,
+then launches the `poll-pr` review watcher to handle review comments, failing CI checks, merge conflicts, and APPROVED events.
+On approval, chains into [[land]] for the merge step.
+Also the re-entry point for a PR that is already open
+— "resume PR <pr-url-or-number>", "resume the PR", "pick up the review"
+— checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
+
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
 version: 5.0.0
 ---

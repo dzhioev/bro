@@ -1,6 +1,17 @@
 ---
 name: reflect
-description: This spell should be used when the user asks to step back and turn lessons from experience into durable improvements — "[[reflect]]", "reflect on this session", "post-mortem this incident", "what should we learn from this", "how could this have gone better". Analyzes the current session history (or a given situation/incident), separates one-off slips from systemic friction, traces each systemic finding to the durable surface that owns it — a spell, the bro's toolset, the bro's system prompt or shared prompt text, a doc — and drafts concrete edit proposals. After presenting the findings it suggests a delivery per proposal: file it as a task that lands through its own session, or fix it in place when the change is small.
+description:
+
+This spell should be used when the user asks to step back and turn lessons from experience into durable improvements
+— "[[reflect]]", "reflect on this session", "post-mortem this incident", "what should we learn from this", "how could this have gone better".
+Analyzes the current session history (or a given situation/incident),
+separates one-off slips from systemic friction,
+traces each systemic finding to the durable surface that owns it
+— a spell, the bro's toolset, the bro's system prompt or shared prompt text, a doc
+— and drafts concrete edit proposals.
+After presenting the findings it suggests a delivery per proposal:
+file it as a task that lands through its own session, or fix it in place when the change is small.
+
 parameters: {"incident?": "the situation or incident to reflect on instead of the whole current session"}
 version: 1.0.2
 ---

@@ -1,6 +1,14 @@
 ---
 name: audit
-description: Use this spell to run a thorough, read-only audit of a codebase — sweeping for development-policy and style violations, documentation drift, dead or outdated code, module/structure problems, test-coverage gaps, and aesthetic inconsistencies — and to produce a severity-tagged findings report. Trigger on "audit the codebase", "[[audit]]", "do a code audit", "find problems in this repo", or similar. The audit is read-only and makes no changes; what to do with the findings is left to the user.
+description:
+
+Use this spell to run a thorough, read-only audit of a codebase
+— sweeping for development-policy and style violations, documentation drift, dead or outdated code, module/structure problems, test-coverage gaps, and aesthetic inconsistencies
+— and to produce a severity-tagged findings report.
+Trigger on "audit the codebase", "[[audit]]", "do a code audit", "find problems in this repo", or similar.
+The audit is read-only and makes no changes;
+what to do with the findings is left to the user.
+
 version: 1.1.1
 ---
 
