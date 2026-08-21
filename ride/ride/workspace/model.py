@@ -22,6 +22,8 @@ from ride.workspace.metadata import (
   write_metadata,
 )
 
+_MISSING_ATTACHMENT = 'attached repository no longer exists:'
+
 
 class SessionBusy(RuntimeError):
   """a workspace's session lock is held by a live session."""
@@ -184,15 +186,20 @@ class Workspace(ABC):
   def _remove_dir(self) -> None:
     """remove the workspace directory."""
 
+  def _attachment_missing(self) -> bool:
+    """whether this workspace is attached to a repository that no longer resolves."""
+    if self.repo is None:
+      return False
+    try:
+      _ = self.repository
+    except (RuntimeError, ValueError):
+      return True
+    return False
+
   def remove(self, *, force: bool = False) -> None:
     """remove the workspace: the tree and every record kept about it."""
-    if self.repo is not None and not force:
-      try:
-        _ = self.repository
-      except (RuntimeError, ValueError):
-        raise RuntimeError(
-          f'attached repository no longer exists: {self.repo}; use --force to remove'
-        ) from None
+    if self._attachment_missing() and not force:
+      raise RuntimeError(f'{_MISSING_ATTACHMENT} {self.repo}; use --force to remove')
     self._release_tree(force=force)
     self._remove_dir()
 
@@ -248,14 +255,17 @@ class Workspace(ABC):
     self._session_end_file.unlink(missing_ok=True)
 
   def is_clean(self) -> tuple[bool, list[str]]:
-    """whether the workspace is safe to remove: its last session finished
-    successfully. the recorded session end is the one deciding factor — anything
-    else (a failure, a kill, no record) keeps the workspace for inspection and
-    recovery. returns (safe, reasons)."""
+    """whether the workspace is safe to remove: its attachment still resolves and
+    its last session finished successfully. the recorded session end is the
+    deciding factor for an attached workspace whose repository is still there —
+    anything else (a failure, a kill, no record) keeps the workspace for
+    inspection and recovery. returns (safe, reasons)."""
     if self.repo is None:
       if not self.tree.is_dir() or not any(self.tree.iterdir()):
         return True, []
       return False, ['detached workspace tree is not empty']
+    if self._attachment_missing():
+      return False, [f'{_MISSING_ATTACHMENT} {self.repo}']
     try:
       end = self._session_end_file.read_text().strip()
     except FileNotFoundError:
@@ -343,9 +353,7 @@ class WorktreeWorkspace(Workspace):
     except (RuntimeError, ValueError):
       if force:
         return
-      raise RuntimeError(
-        f'attached repository no longer exists: {self.repo}; use --force to remove'
-      ) from None
+      raise RuntimeError(f'{_MISSING_ATTACHMENT} {self.repo}; use --force to remove') from None
     assert repository is not None
     if self.tree.is_dir():
       removed = git_run('worktree', 'remove', '--force', str(self.tree), cwd=repository.git_dir)
