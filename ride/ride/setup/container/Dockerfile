@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+# check=skip=InvalidDefaultArgInFrom
 ARG PYTHON_VERSION
 FROM python:${PYTHON_VERSION}-slim
 

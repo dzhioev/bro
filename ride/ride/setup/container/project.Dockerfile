@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+# check=skip=InvalidDefaultArgInFrom
 ARG RUNTIME_IMAGE
 FROM ${RUNTIME_IMAGE}
 
