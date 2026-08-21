@@ -1,4 +1,5 @@
 from bro.base.text_window import (
+  BYTE_LIMIT,
   DEFAULT_LIMIT,
   MAX_LIMIT,
   _clamp,
@@ -47,12 +48,24 @@ def test_apply_limit_skipped_before_param_carries_into_marker():
   assert 'skipped after' not in out
 
 
-def test_apply_limit_byte_budget_fires_on_one_huge_line():
-  # single line longer than the byte budget: lines-cap is fine but bytes are not.
-  huge = 'x' * (DEFAULT_LIMIT * 150 + 5_000) + '\n'
-  out = apply_limit(huge, limit=DEFAULT_LIMIT, keep='head')
-  # the giant line exceeds byte budget — kept zero lines, after marker reports it.
-  assert 'skipped after: 1 lines' in out
+def test_apply_limit_cuts_one_huge_line_mid_line():
+  huge = 'x' * (BYTE_LIMIT + 5_000) + '\n'
+  body, _, marker = apply_limit(huge, limit=DEFAULT_LIMIT, keep='head').partition('\n[...')
+  assert body == 'x' * BYTE_LIMIT
+  assert 'skipped after: 5.0 KB' in marker
+
+
+def test_apply_limit_cuts_one_huge_line_mid_line_keeping_the_tail():
+  huge = 'x' * (BYTE_LIMIT + 5_000) + '\n'
+  marker, _, body = apply_limit(huge, limit=DEFAULT_LIMIT, keep='tail').partition('...]\n')
+  assert body == 'x' * (BYTE_LIMIT - 1)
+  assert 'skipped before: 5.0 KB' in marker
+
+
+def test_byte_cap_is_independent_of_the_line_limit():
+  content = ''.join('x' * 99 + '\n' for _ in range(MAX_LIMIT))
+  assert len(take_head(content, limit=400)[0]) == len(take_head(content, limit=MAX_LIMIT)[0])
+  assert len(take_head(content, limit=MAX_LIMIT)[0]) <= BYTE_LIMIT
 
 
 def test_apply_limit_clamp_note_in_after_marker():
@@ -118,12 +131,12 @@ def test_take_head_keeps_whole_lines_up_to_limit():
 
 
 def test_take_head_cuts_giant_first_line_mid_line():
-  content = 'x' * 1000 + '\n'
-  kept, _ = take_head(content, limit=1)  # byte budget = 150
-  assert kept == 'x' * 150
+  content = 'x' * (BYTE_LIMIT + 500) + '\n'
+  kept, _ = take_head(content, limit=1)
+  assert kept == 'x' * BYTE_LIMIT
   # successive calls over the remainder still make progress
   rest, _ = take_head(content[len(kept) :], limit=1)
-  assert rest == 'x' * 150
+  assert rest == 'x' * 500 + '\n'
 
 
 def test_take_head_clamps_and_reports():

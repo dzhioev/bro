@@ -11,13 +11,13 @@ over a cursor instead of dropping the excess.
 
 from typing import Literal
 
-# default cap on output lines. Callers can pass `limit=N` to extend, up to
-# MAX_LIMIT (silently clamped beyond). The byte budget is `limit * _BYTES_PER_LINE`,
-# so the default is ~15 KB and the ceiling is ~300 KB — well under OpenAI's
-# 10 MB per-tool-output limit and cheap on input tokens across the agent loop.
+# caps on tool output: at most `limit` lines (callers pass `limit=N` to extend,
+# up to MAX_LIMIT, silently clamped beyond) and at most BYTE_LIMIT bytes,
+# whichever binds first. ~30 KB is well under OpenAI's 10 MB per-tool-output
+# limit and cheap on input tokens across the agent loop.
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 2000
-_BYTES_PER_LINE = 150
+BYTE_LIMIT = 30_000
 
 
 def format_size(byte_count: int) -> str:
@@ -51,15 +51,21 @@ def _clamp(limit: int) -> tuple[int, str]:
   return limit, ''
 
 
-def _take(lines: list[str], effective: int, byte_budget: int) -> list[str]:
+def _take(lines: list[str], effective: int) -> list[str]:
   kept: list[str] = []
   kept_bytes = 0
   for line in lines:
-    if len(kept) >= effective or kept_bytes + len(line) > byte_budget:
+    if len(kept) >= effective or kept_bytes + len(line) > BYTE_LIMIT:
       break
     kept.append(line)
     kept_bytes += len(line)
   return kept
+
+
+def _cut(content: str, keep: Literal['head', 'tail']) -> str:
+  """the widest slice of a line too wide to keep whole, so a window always
+  carries content and a cursor always advances."""
+  return content[:BYTE_LIMIT] if keep == 'head' else content[-BYTE_LIMIT:]
 
 
 def apply_limit(
@@ -70,18 +76,19 @@ def apply_limit(
   skipped_before_lines: int = 0,
   skipped_before_bytes: int = 0,
 ) -> str:
-  """cap content to `limit` lines and `limit * _BYTES_PER_LINE` bytes, keeping
-  the head or tail. Wraps the kept slice with `[...skipped before/after...]`
-  markers reporting what was dropped at each end (including any prior offset
-  surfaced via skipped_before_*)."""
+  """cap content to `limit` lines and `BYTE_LIMIT` bytes, keeping the head or
+  tail. Wraps the kept slice with `[...skipped before/after...]` markers
+  reporting what was dropped at each end (including any prior offset surfaced
+  via skipped_before_*)."""
   effective, clamp_note = _clamp(limit)
-  byte_budget = effective * _BYTES_PER_LINE
   lines = content.splitlines(keepends=True)
   total_lines = len(lines)
   total_bytes = len(content)
 
   source = list(reversed(lines)) if keep == 'tail' else lines
-  kept = _take(source, effective, byte_budget)
+  kept = _take(source, effective)
+  if len(kept) == 0 and len(content) > 0:
+    kept = [_cut(content, keep)]
   kept_bytes = sum(len(line) for line in kept)
   if keep == 'tail':
     kept.reverse()
@@ -110,7 +117,7 @@ def apply_limit(
   return '\n'.join(pieces)
 
 
-def take_head(content: str, limit: int) -> tuple[str, str]:
+def take_head(content: str, limit: int = MAX_LIMIT) -> tuple[str, str]:
   """the head of `content` within the `limit` line + byte budget (clamped), returned
   as a raw prefix for cursor-style pagination: the caller advances a cursor by the
   returned length and serves the remainder on later calls, so unlike `apply_limit`
@@ -118,11 +125,10 @@ def take_head(content: str, limit: int) -> tuple[str, str]:
   exceeds the byte budget it is cut mid-line so the cursor always makes progress.
   Returns (kept_prefix, clamp_note)."""
   effective, clamp_note = _clamp(limit)
-  byte_budget = effective * _BYTES_PER_LINE
-  kept = _take(content.splitlines(keepends=True), effective, byte_budget)
+  kept = _take(content.splitlines(keepends=True), effective)
   if len(kept) == 0 and len(content) > 0:
-    return content[:byte_budget], clamp_note
-  return ''.join(kept), clamp_note
+    return (_cut(content, 'head'), clamp_note)
+  return (''.join(kept), clamp_note)
 
 
 def window(content: str, offset: int = 0, limit: int = DEFAULT_LIMIT) -> str:
