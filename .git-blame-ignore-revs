@@ -1,0 +1,6 @@
+# Revisions that moved prose across lines without changing a word, so that
+# `git blame` reaches past them to the commit that wrote the text. `setup.sh`
+# points git at this file (`bro.dev.install`); GitHub reads it on its own.
+
+# rewrite every tracked markdown with semantic line breaks
+a93b07978bdb6f0b14735c0109458dac3466c51c
