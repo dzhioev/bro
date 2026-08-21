@@ -29,14 +29,12 @@ _FULL_SCOPE = ScopeRecipe(
   harness='claude',
   auth_secret='claude_code',
   llm_key=False,
-  unknown_bro_fallback=True,
 )
 _RAW_SCOPE = ScopeRecipe(
   name='claude-raw',
   harness='bro',
   auth_secret='anthropic',
   llm_key=False,
-  unknown_bro_fallback=True,
 )
 
 

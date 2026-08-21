@@ -7,7 +7,7 @@ project's instance selection.
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
-from bro.base import credentials, host_config, log
+from bro.base import credentials, host_config
 from ride.workspace.store import ScopedSecrets, finalize_scoped_secrets
 
 if TYPE_CHECKING:
@@ -20,6 +20,13 @@ if TYPE_CHECKING:
 _TRAILS_BASELINE = frozenset({'trails'})
 
 
+class LaunchScopeError(Exception):
+  """a launch failed its scope computation or preflight: a bro the installation
+  does not declare, a malformed or no-op grant/revoke override, a credential kind
+  the host reads per project that this launch's attachment binds no entry for, an
+  unknown summon target, or an unknown/unresolvable required secret."""
+
+
 @dataclass(frozen=True)
 class ScopeRecipe:
   """the component and credential policy a harness mode scopes a bro through."""
@@ -28,7 +35,6 @@ class ScopeRecipe:
   harness: 'Harness'
   auth_secret: Optional[str]
   llm_key: bool
-  unknown_bro_fallback: bool
   optional_baseline: frozenset[str] = _TRAILS_BASELINE
 
 
@@ -37,7 +43,6 @@ BRO_RUN_RECIPE = ScopeRecipe(
   harness='bro',
   auth_secret=None,
   llm_key=True,
-  unknown_bro_fallback=False,
 )
 
 
@@ -82,12 +87,7 @@ def scoped_secrets(
   try:
     bro = create_bro(bro_name)
   except KeyError as e:
-    # unknown bro (registry KeyError) only — other failures propagate rather
-    # than collapse into a silently under-scoped session
-    if not recipe.unknown_bro_fallback:
-      raise
-    log.warning('could not resolve bro %r for credential scoping: %s', bro_name, e)
-    return ScopedSecrets(required=required, optional=optional, unbound_kinds=unbound)
+    raise LaunchScopeError(f'unknown bro {bro_name!r}') from e
   required.update(bro.needed_secrets(harness=recipe.harness))
   if recipe.auth_secret is not None:
     required.add(recipe.auth_secret)
@@ -116,13 +116,6 @@ def summoned_credential_scope(
     grant=grant,
     revoke=revoke,
   )
-
-
-class LaunchScopeError(Exception):
-  """a launch failed its scope computation or preflight: a malformed or no-op
-  grant/revoke override, a credential kind the host reads per project that this
-  launch's attachment binds no entry for, an unknown summon target, or an
-  unknown/unresolvable required secret."""
 
 
 # the unified --grant/--revoke value syntax: a leading `@` marks a bro summon
