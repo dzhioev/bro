@@ -57,12 +57,9 @@ class TestSummonAllowList:
     with pytest.raises(ValueError, match='unknown summon target'):
       ride.summon_control.summon_allow_list('bro-dev', grant=[], revoke=['devop'])
 
-  def test_unknown_bro_degrades_to_empty_seeds_with_a_warning(self, caplog):
-    # mirrors credential scoping: an ambient RIDE_BRO this checkout doesn't know
-    # must not break the launch; explicit grants still apply on top
-    result = ride.summon_control.summon_allow_list('no-such-bro', grant=['dev'], revoke=[])
-    assert result == {'dev'}
-    assert any('could not resolve bro' in record.message for record in caplog.records)
+  def test_unknown_bro_raises(self):
+    with pytest.raises(KeyError, match='unknown bro'):
+      ride.summon_control.summon_allow_list('no-such-bro', grant=['dev'], revoke=[])
 
 
 ROOT = 'ROOT-CHANNEL'

@@ -149,19 +149,12 @@ def summon_allow_list(bro_name: str, *, grant: list[str], revoke: list[str]) -> 
   strictly (`credentials.apply_grant_revoke`). every name involved — seed or
   override — must be a registered bro, checked against `registry.known_names()`
   without importing any target module, so a typo fails the launch immediately
-  rather than minutes later as a denied summon. an unknown `bro_name` degrades to
-  empty seeds with a warning, mirroring credential scoping (`scoped_secrets`):
-  an ambient RIDE_BRO this checkout doesn't know must not break the launch."""
+  rather than minutes later as a denied summon."""
   # imported here, not at module level: the registry import pulls the bro class
   # graph, which the pre-gate launch path must not pay for up front
   from bro.registry import create_bro, known_names
 
-  seeds: tuple[str, ...]
-  try:
-    seeds = create_bro(bro_name)._may_summon
-  except KeyError as e:
-    log.warning('could not resolve bro %r for summon scoping: %s', bro_name, e)
-    seeds = ()
+  seeds = create_bro(bro_name)._may_summon
   unknown = sorted((set(seeds) | set(grant) | set(revoke)) - known_names())
   if len(unknown) > 0:
     raise ValueError(f'unknown summon target(s): {", ".join(unknown)}; not in the bro registry')

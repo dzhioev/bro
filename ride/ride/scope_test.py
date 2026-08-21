@@ -14,14 +14,12 @@ CLAUDE_RECIPE = ScopeRecipe(
   harness='claude',
   auth_secret='claude_code',
   llm_key=False,
-  unknown_bro_fallback=True,
 )
 RAW_RECIPE = ScopeRecipe(
   name='test-raw',
   harness='bro',
   auth_secret='anthropic',
   llm_key=False,
-  unknown_bro_fallback=True,
 )
 
 
@@ -130,14 +128,10 @@ class TestScopedSecrets:
   def test_a_single_project_host_withholds_nothing(self):
     assert ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE).unbound_kinds == frozenset()
 
-  def test_unknown_bro_falls_back_to_baseline_on_session_surfaces(self):
-    scoped = ride.scope.scoped_secrets('nonexistent-bro', CLAUDE_RECIPE)
-    assert scoped.required == set()
-    assert scoped.optional == set(ride.scope._TRAILS_BASELINE)
-
-  def test_unknown_bro_raises_for_bro_run(self):
-    with pytest.raises(KeyError):
-      ride.scope.scoped_secrets('nonexistent-bro', BRO_RUN_RECIPE)
+  @pytest.mark.parametrize('recipe', [CLAUDE_RECIPE, RAW_RECIPE, BRO_RUN_RECIPE])
+  def test_unknown_bro_fails_the_scope(self, recipe):
+    with pytest.raises(ride.scope.LaunchScopeError, match="unknown bro 'nonexistent-bro'"):
+      ride.scope.scoped_secrets('nonexistent-bro', recipe)
 
 
 class TestSummonedCredentialScope:
