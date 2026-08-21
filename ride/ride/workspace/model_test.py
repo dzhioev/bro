@@ -225,6 +225,14 @@ class TestIsClean:
     workspace.record_session_end(None)
     assert workspace.is_clean() == (False, ['last session was killed'])
 
+  def test_not_clean_when_the_attachment_no_longer_resolves(self, tmp_path):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    workspace = _worktree('ws', repo)
+    workspace.record_session_end(0)
+    repo.rmdir()
+    assert workspace.is_clean() == (False, [f'attached repository no longer exists: {repo}'])
+
 
 class TestSessionLock:
   def test_idle_workspace_is_inactive(self, tmp_path):
