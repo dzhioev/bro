@@ -57,3 +57,29 @@ members = ["member"]
   assert 'foreign' not in bridge
   assert 'unrelated' not in bridge
   assert sync_scripts.check(project) is True
+
+
+def test_a_git_ignored_directory_contributes_no_scripts(tmp_path):
+  subprocess.run(['git', 'init', '-q'], cwd=tmp_path, check=True)
+  (tmp_path / '.gitignore').write_text('.residue-*/\n')
+  (tmp_path / 'kept.py').write_text('def main(argv):\n  return argv\n')
+  (tmp_path / '.residue-abc' / 'deep').mkdir(parents=True)
+  (tmp_path / '.residue-abc' / 'deep' / 'leftover.py').write_text(
+    'def main(argv):\n  return argv\n'
+  )
+  (tmp_path / 'pyproject.toml').write_text(
+    """[project]
+name = "example"
+version = "0.1.0"
+[project.scripts]
+stale = "_entrypoints:stale"
+"""
+  )
+
+  project = sync_scripts._project(tmp_path)
+  sync_scripts.sync_pyproject(project)
+  sync_scripts.sync_entrypoints(project)
+
+  data = tomllib.loads((tmp_path / 'pyproject.toml').read_text())
+  assert data['project']['scripts'] == {'kept': '_entrypoints:kept'}
+  assert 'leftover' not in (tmp_path / '_entrypoints.py').read_text()

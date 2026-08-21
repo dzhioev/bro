@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base.args import Parser
+from bro.workspace.git import git_run
+from bro.workspace.paths import find_project_root
 
 __cli_name__ = 'sync-scripts'
 
@@ -76,7 +78,21 @@ def _project(path: Path) -> Project:
   )
 
 
+def _ignored_directories(directory: Path) -> set[Path]:
+  """the subdirectories git ignores, resolved. Empty outside a checkout, where
+  SKIP_DIRECTORIES is all there is to go on."""
+  if find_project_root(directory) is None:
+    return set()
+  listed = git_run(
+    'ls-files', '--others', '--ignored', '--exclude-standard', '--directory', cwd=directory
+  )
+  if listed.returncode != 0:
+    raise RuntimeError(f'cannot read the ignore rules for {directory}: {listed.stderr.strip()}')
+  return {(directory / line).resolve() for line in listed.stdout.splitlines() if line.endswith('/')}
+
+
 def _iter_python_files(project: Project):
+  ignored = _ignored_directories(project.directory)
   collected: list[Path] = []
   for directory, directory_names, file_names in os.walk(project.directory):
     directory_names[:] = [
@@ -84,6 +100,7 @@ def _iter_python_files(project: Project):
       for name in directory_names
       if name not in SKIP_DIRECTORIES
       and not name.endswith('.egg-info')
+      and (Path(directory) / name).resolve() not in ignored
       and not (Path(directory) / name / 'pyproject.toml').is_file()
     ]
     relative_directory = Path(directory).relative_to(project.directory)
