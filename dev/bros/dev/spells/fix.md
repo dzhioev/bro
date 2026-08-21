@@ -1,6 +1,17 @@
 ---
 name: fix
-description: This spell should be used when the user points you at a task and asks you to work on it — "[[fix <task-ref>]]", "пофикси", "fix it", "fix this", "work on this task", "tackle X", "let's do <url>", "do this task". Accepts either an existing task ref or seed text for a new task, reads the task description and comment stream, gathers project + sibling context, plans an approach, records development events as task comments, implements + verifies, and hands off to [[run pr]] when the change is ready. The canonical entry point for task-driven development work; `dive-in` seeds this spell as its first user message.
+description:
+
+This spell should be used when the user points you at a task and asks you to work on it
+— "[[fix <task-ref>]]", "пофикси", "fix it", "fix this", "work on this task", "tackle X", "let's do <url>", "do this task".
+Accepts either an existing task ref or seed text for a new task,
+reads the task description and comment stream,
+gathers project + sibling context,
+plans an approach, records development events as task comments, implements + verifies,
+and hands off to [[run pr]] when the change is ready.
+The canonical entry point for task-driven development work;
+`dive-in` seeds this spell as its first user message.
+
 parameters: {"task?": "ref of the existing task to work on", "new?": "seed text for a new task to create first"}
 version: 4.1.2
 ---

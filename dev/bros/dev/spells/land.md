@@ -1,6 +1,15 @@
 ---
 name: land
-description: This spell should be used when the user signals that an open PR should be merged into the PR's base branch — "land it", "land", "merge it", "merge the PR", "merge to master". Checks that the branch still carries the commits [[run pr]] folded it into and runs `land-pr`, which merges the open PR for the current branch in one shot (precondition checks including green CI, a rebase merge that writes nothing to the branch, remote branch cleanup), then records a `merged` comment on the task and closes it to done unless the user explicitly said to keep it open. On APPROVED, [[run pr]] chains into this spell. Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this spell.
+description:
+
+This spell should be used when the user signals that an open PR should be merged into the PR's base branch
+— "land it", "land", "merge it", "merge the PR", "merge to master".
+Checks that the branch still carries the commits [[run pr]] folded it into and runs `land-pr`,
+which merges the open PR for the current branch in one shot (precondition checks including green CI, a rebase merge that writes nothing to the branch, remote branch cleanup),
+then records a `merged` comment on the task and closes it to done unless the user explicitly said to keep it open.
+On APPROVED, [[run pr]] chains into this spell.
+Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this spell.
+
 version: 4.0.0
 ---
 

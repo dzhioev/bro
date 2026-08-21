@@ -1,6 +1,17 @@
 ---
 name: ask
-description: This spell should be used when the user asks to relay a question or job to another bro — "[[ask researcher to compare the storage options]]", "ask the reviewer whether the change is safe", "have deployer roll out the API", "summon developer" — including asking for an interactive child the user will drive themselves ("summon a dev session for me", a manual summon). Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials), picks whichever summon client the session has, decides foreground vs background, and relays the answer with the failure modes handled. A summon succeeds only when the target is in the summoner's allow-list — the session reads its own off the banner, fixed at launch — so a denial stays a normal outcome the spell relays.
+description:
+
+This spell should be used when the user asks to relay a question or job to another bro
+— "[[ask researcher to compare the storage options]]", "ask the reviewer whether the change is safe", "have deployer roll out the API", "summon developer"
+— including asking for an interactive child the user will drive themselves ("summon a dev session for me", a manual summon).
+Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials),
+picks whichever summon client the session has, decides foreground vs background,
+and relays the answer with the failure modes handled.
+A summon succeeds only when the target is in the summoner's allow-list
+— the session reads its own off the banner, fixed at launch
+— so a denial stays a normal outcome the spell relays.
+
 version: 1.11.0
 ---
 
