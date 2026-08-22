@@ -22,13 +22,17 @@ from harbor.cli.config_sources import load_config_source
 
 from bro.base import credentials
 from bro.benchmark.bundle import build, default_root, workspace_root
-from bro.benchmark.harbor_agent import DEFAULT_LLM_CREDENTIAL
 
 # the smallest image in the set, and one carrying neither python3 nor a CA
 # store — so a single trial exercises the bundle and SSL_CERT_FILE for real
 TASK = 'terminal-bench/adaptive-rejection-sampler'
 JOB_CONFIG = Path(__file__).with_name('terminal_bench_2_1.yaml')
 HARBOR = Path(sys.executable).with_name('harbor')
+
+# the credentials the trials will actually hydrate — the config names them
+_LLM_CREDENTIALS = sorted(
+  {agent['kwargs']['llm_credential'] for agent in load_config_source(JOB_CONFIG)['agents']}
+)
 
 
 def _available(*command: str) -> bool:
@@ -46,7 +50,8 @@ pytestmark = [
     not _available('docker', 'compose', 'version'), reason='no docker compose plugin'
   ),
   pytest.mark.skipif(
-    not credentials.available(DEFAULT_LLM_CREDENTIAL), reason='no LLM key resolves'
+    not all(credentials.available(name) for name in _LLM_CREDENTIALS),
+    reason='an LLM key the job config names does not resolve',
   ),
 ]
 

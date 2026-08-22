@@ -34,6 +34,7 @@ from harbor.agents.installed.base import (
   ErrorPattern,
   ModelNotFoundError,
   NetworkConnectionError,
+  NonZeroAgentExitCodeError,
   UnknownApiError,
 )
 from harbor.environments.base import BaseEnvironment
@@ -43,7 +44,8 @@ from harbor.models.trial.result import AgentInfo
 
 from bro.base import credentials
 from bro.benchmark.bundle import Bundle, built, default_root, workspace_root
-from bro.llm.providers import parse
+from bro.llm.llm import FAILURE_CATEGORIES
+from bro.llm.providers import failure_signatures, known_names, parse
 from bro.llm.usage import read_usage_file
 from ride.workspace.store import materialize_scoped_store
 
@@ -61,10 +63,34 @@ AGENT_DIR = EnvironmentPaths.agent_dir
 ACTIVITY_LOG = AGENT_DIR / 'bro.log'
 USAGE_FILE = AGENT_DIR / 'usage.json'
 
-DEFAULT_LLM_CREDENTIAL = 'openai'
-MODEL_PROVIDER = 'openai'
-
 COMPOSE_PROBE = ('docker', 'compose', 'version')
+
+# `FAILURE_CATEGORIES`, as harbor's retry policy speaks them
+_HARBOR_EXCEPTIONS: dict[str, type[NonZeroAgentExitCodeError]] = {
+  'rate-limit': ApiRateLimitError,
+  'server-error': ApiInternalServerError,
+  'network': NetworkConnectionError,
+  'authentication': AgentAuthenticationError,
+  'model-not-found': ModelNotFoundError,
+  'usage-limit': ApiUsageLimitError,
+  'unknown-api': UnknownApiError,
+}
+if set(_HARBOR_EXCEPTIONS) != FAILURE_CATEGORIES:
+  raise RuntimeError(
+    'the failure-category vocabulary moved; realign _HARBOR_EXCEPTIONS with '
+    'bro.llm.llm.FAILURE_CATEGORIES'
+  )
+
+
+def _error_patterns() -> list[ErrorPattern]:
+  """every registered provider's declared failure signatures, as harbor error
+  classifications."""
+  return [
+    ErrorPattern(signature.pattern, _HARBOR_EXCEPTIONS[signature.category])
+    for provider in known_names()
+    for signature in failure_signatures(provider)
+  ]
+
 
 # seconds between the TERM and the KILL when a cancelled phase reaps the bro,
 # and the same grace for the optional in-container `timeout` wrapper
@@ -95,21 +121,24 @@ def docker_compose_missing() -> bool:
 def bare_recipe(model_name: Optional[str]) -> Optional[str]:
   """the `--llm` recipe harbor's `model_name` carries past its provider prefix.
 
-  Everything after `openai/` is the exact `--llm` grammar with the provider
-  slot dropped — `<model>[:<effort>][+fast]` — validated here so a malformed
-  recipe fails at job start rather than inside a graded trial. The framework
-  receives it as `bro run --llm :<recipe>`, whose empty provider slot replaces
-  only what the recipe names and keeps the persona's own spec; naming the
-  provider there would substitute that provider's default recipe and drop
-  knobs such as the compaction threshold. So the prefix is checked and
-  stripped rather than passed on.
+  `model_name` is `<provider>/<recipe>`: a registered provider's name, then the
+  exact `--llm` grammar with the provider slot dropped —
+  `<model>[:<effort>][+fast]` — both validated here so a bad name fails at job
+  start rather than inside a graded trial. The framework receives it as
+  `bro run --llm :<recipe>`, whose empty provider slot replaces only what the
+  recipe names and keeps the persona's own spec; naming the provider there
+  would substitute that provider's default recipe and drop knobs such as the
+  compaction threshold. So the prefix is checked and stripped rather than
+  passed on.
   """
   if model_name is None:
     return None
-  prefix = f'{MODEL_PROVIDER}/'
-  if not model_name.startswith(prefix) or model_name == prefix:
-    raise ValueError(f'model {model_name!r} is not of the form {prefix}<recipe>')
-  recipe = model_name[len(prefix) :]
+  provider, separator, recipe = model_name.partition('/')
+  if separator == '' or recipe == '' or provider not in known_names():
+    raise ValueError(
+      f'model {model_name!r} is not of the form <provider>/<recipe> with a '
+      f'registered provider ({", ".join(known_names())})'
+    )
   parse(f':{recipe}')
   return recipe
 
@@ -209,22 +238,14 @@ class BroAgent(BaseInstalledAgent):
 
   # replaces the inherited list rather than extending it: harbor's defaults are
   # prose needles, and the output scanned here carries the bro's reply to a
-  # third-party task instruction, which reproduces them by accident. These name
-  # the provider exceptions the framework's own failure output carries.
-  ERROR_PATTERNS: ClassVar[list[ErrorPattern]] = [
-    ErrorPattern(r'openai\.RateLimitError', ApiRateLimitError),
-    ErrorPattern(r'openai\.InternalServerError', ApiInternalServerError),
-    ErrorPattern(r'openai\.(APIConnectionError|APITimeoutError)', NetworkConnectionError),
-    ErrorPattern(r'openai\.(AuthenticationError|PermissionDeniedError)', AgentAuthenticationError),
-    ErrorPattern(r'openai\.NotFoundError', ModelNotFoundError),
-    ErrorPattern(r'insufficient_quota', ApiUsageLimitError),
-    ErrorPattern(r'openai\.APIStatusError', UnknownApiError),
-  ]
+  # third-party task instruction, which reproduces them by accident. What scans
+  # instead is the registered providers' own declared failure signatures.
+  ERROR_PATTERNS: ClassVar[list[ErrorPattern]] = _error_patterns()
 
   def __init__(
     self,
     bro: str,
-    llm_credential: str = DEFAULT_LLM_CREDENTIAL,
+    llm_credential: str,
     run_timeout_sec: Any = None,
     *args: Any,
     **kwargs: Any,

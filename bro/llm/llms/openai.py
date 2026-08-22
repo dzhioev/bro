@@ -25,6 +25,19 @@ MODELS: dict[str, str] = {
   'sol': 'gpt-5.6-sol',
 }
 
+# how this provider's client failures read in a run's error output
+FAILURE_SIGNATURES: tuple[llm_llm.FailureSignature, ...] = (
+  llm_llm.FailureSignature(r'openai\.RateLimitError', 'rate-limit'),
+  llm_llm.FailureSignature(r'openai\.InternalServerError', 'server-error'),
+  llm_llm.FailureSignature(r'openai\.(APIConnectionError|APITimeoutError)', 'network'),
+  llm_llm.FailureSignature(
+    r'openai\.(AuthenticationError|PermissionDeniedError)', 'authentication'
+  ),
+  llm_llm.FailureSignature(r'openai\.NotFoundError', 'model-not-found'),
+  llm_llm.FailureSignature(r'insufficient_quota', 'usage-limit'),
+  llm_llm.FailureSignature(r'openai\.APIStatusError', 'unknown-api'),
+)
+
 # neutral effort level (`LLMSpec.with_effort`) → Responses API reasoning_effort.
 _EFFORT_TO_REASONING_EFFORT: dict[str, ReasoningEffort] = {
   'low': 'low',

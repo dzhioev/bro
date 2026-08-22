@@ -8,6 +8,9 @@ DEFAULT_MODEL = 'echo'
 # Echo answers whatever it is asked with, so it has no model roster to name.
 MODELS: dict[str, str] = {}
 
+# and no API to fail against
+FAILURE_SIGNATURES: tuple[llm_llm.FailureSignature, ...] = ()
+
 
 @dataclass(frozen=True)
 class LLMSpec(llm_llm.NativeLLMSpec):
