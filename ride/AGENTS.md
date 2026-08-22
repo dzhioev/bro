@@ -29,7 +29,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   `ScopeRecipe`, `BRO_RUN_RECIPE`, attachment-bound credential selection, `scoped_secrets`, the strict launch preflight, scope override splitting, and summoned-child scope computation.
   In-process `bro run` / `bro chat` create no scope.
 - `ride/root.py` — neutral container and host-process root supervision behind the broker availability gate.
-- `ride/spawn.py` — broker-root composition, root lifecycle handlers, native trail-pointer publication for the root and summoned children, summon lowering
+- `ride/spawn.py` — broker-root composition, the root-lifecycle observer, native trail-pointer publication for the root and summoned children, summon lowering
   — each child composed through its requested harness's seam hooks, with its recorded resume spec
   — and per-root `SummonControl` wiring.
 - `ride/summon_control.py` — summon host authorization, allow-list resolution, audit/status bookkeeping, and request lifecycle

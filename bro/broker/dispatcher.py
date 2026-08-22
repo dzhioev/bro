@@ -1,63 +1,67 @@
-"""Dispatcher — the logic layer: topology, correlation, the routing rules, handlers.
+"""Dispatcher — the logic layer: exchanges, the routing rules, kind handlers.
 
 The `Runtime` (mechanism) reports raw, symmetric lifecycle up to this `Dispatcher`
-(logic), which owns everything protocol: the peer graph (`parent`/`children`), the
-correlation state (`origin[peer]`, `pending[in_reply_to]`), the `finalized` set, the
-handler registry, the delivery observers, the four routing rules, and the synthesis of
-`failed`. It runs only inside `Runtime` callbacks, all on the one event loop, so it is
-a plain synchronous object with no lock.
+(logic), which owns everything protocol: the live exchanges — per exchange the
+requesting peer, the request id, and at most one worker channel — the kind-handler
+registry, the delivery observers, the three routing rules, and the synthesis of
+`result{failed}`. It runs only inside `Runtime` callbacks, all on the one event loop,
+so it is a plain synchronous object with no lock.
 
 Two invariants carry the design:
 
-- **`finalized` ⇒ exactly one terminal.** A peer is finalized when its `completed` is
-  routed or a `failed` is synthesized for it. The set gates every later message from
-  that peer (drop-after-terminal) and suppresses redundant `failed` synthesis, so
-  whichever of `completed` / exit / timeout is processed first wins and the rest are
-  dropped — closing the completed-vs-exit and timeout-vs-completed double-terminal races.
-- **`failed` is the only synthesized event.** Children emit `started` / `completed`; the
-  Dispatcher never fabricates those. `failed` is reserved for a child that could not report
-  its own end — an `on_exit` without a preceding `completed` (`reason='exit'`), an
-  `on_timeout` (`reason='timeout'`, after the Runtime already killed the peer), an
-  `on_gone` without one (`reason='disconnected'`, an expected peer's channel ended), or a
-  `spawn` whose launch raised (`reason='launch'`, before any peer existed).
+- **Exactly one result per exchange.** Delivering a result closes the exchange and a
+  closed exchange is forgotten, so any later message naming it falls to rule 3 and is
+  dropped. Synthesis consults the same table, so whichever of the worker's own result /
+  exit / timeout is processed first wins — closing the result-vs-exit and
+  timeout-vs-result double-terminal races.
+- **`failed` is the only outcome the host originates on a worker's behalf.** A worker's
+  `ok` is always its own; the host synthesizes `result{failed}` only when the worker
+  ends without one — an `on_exit` without it (`reason: 'exit'`), an `on_timeout`
+  (`reason: 'timeout'`, after the Runtime already killed the peer), an `on_gone`
+  without one (`reason: 'disconnected'`, an expected peer's channel ended), or a
+  `spawn` whose launch raised (`reason: 'launch'`, before any peer existed).
 
-The root is a uniform peer: `run(root)` spawns it like any other and awaits its `on_exit`.
-Its only residual specialness is that it has no parent to notify: its exit ends the session
-(no origin, so no `failed` is synthesized for it), and the lifecycle it emits itself goes to
-registered `started` / `completed` handlers when the consumer mounts them (rule 3) and is
-otherwise dropped — never routed or refused.
+The root is a uniform peer with one twist: `run(root)` opens the session's own
+exchange for it, host-anchored — the requester is this process, not a peer — so the
+root announces its run lifecycle like any worker. A host-anchored delivery reaches the
+delivery observers with `target=None` and nobody else, and when the root exits without
+a result the exchange closes silently: the host reads the exit code itself, and the
+exit ends the session.
 """
 
 import asyncio
 import contextlib
 from collections.abc import Callable, Generator
-from dataclasses import replace
+from dataclasses import dataclass
 from typing import Optional, Protocol
 
 from bro.base import log
+from bro.base.lulid import lulid
+from bro.broker import brotocol
 from bro.broker.brotocol import Message, Tag
 from bro.broker.runtime import Peer, Runtime
 from bro.broker.spawn import LaunchSpec, Spawner
 from bro.broker.transport import Provisioned, ServerTransport
 
-# request-lifecycle bound for a spawned child (LLM children run for minutes)
+# request-lifecycle bound for a spawned worker (LLM children run for minutes)
 DEFAULT_TIMEOUT = 600.0
+
+# the reserved kind: answers ok with its own arguments echoed back
+PING = 'ping'
 
 # a handler receives the Dispatcher as its `context` and drives the routing primitives.
 RequestHandler = Callable[['Dispatcher', Peer, Message], None]
 
 # a delivery observer taps correlated deliveries as (source, target, delivered message);
-# source is None when no child ever existed (a launch failure).
-DeliveryObserver = Callable[[Optional[Peer], Peer, Message], None]
-
-# messages a spawned child emits over its own lifecycle; rule 2 routes these to its parent.
-_LIFECYCLE_TAGS = frozenset({Tag.STARTED, Tag.COMPLETED})
+# source is None when no worker ever existed (a launch failure), and target is None on
+# a host-anchored exchange (the root's — this process is the requester).
+DeliveryObserver = Callable[[Optional[Peer], Optional[Peer], Message], None]
 
 
 class RuntimeCommands(Protocol):
   """the mechanism-layer commands the Dispatcher issues; the real `Runtime` satisfies it."""
 
-  async def spawn(self, launch: LaunchSpec, *, timeout: Optional[float]) -> Peer: ...
+  async def spawn(self, launch: LaunchSpec, *, timeout: Optional[float], exchange: str) -> Peer: ...
   async def expect(self, *, timeout: Optional[float]) -> Provisioned: ...
   def send(self, peer: Peer, message: Message) -> None: ...
   def kill(self, peer: Peer) -> None: ...
@@ -66,15 +70,21 @@ class RuntimeCommands(Protocol):
   async def stop(self) -> None: ...
 
 
+@dataclass
+class Exchange:
+  """one live exchange: who awaits its result, and the worker channel answering it
+  (None while the launch is still resolving)."""
+
+  requester: Optional[Peer]  # None: host-anchored — this process is the requester
+  worker: Optional[Peer] = None
+
+
 class Dispatcher:
   def __init__(self, *, default_timeout: float = DEFAULT_TIMEOUT):
     self._runtime: Optional[RuntimeCommands] = None
     self._default_timeout = default_timeout
-    self.parent: dict[Peer, Peer] = {}
-    self.children: dict[Peer, set[Peer]] = {}
-    self.origin: dict[Peer, tuple[Peer, str]] = {}  # spawned peer -> (parent, spawning request id)
-    self.pending: dict[str, Peer] = {}  # request id -> the peer awaiting its reply
-    self.finalized: set[Peer] = set()
+    self.exchanges: dict[str, Exchange] = {}  # live exchanges by request id
+    self.workers: dict[Peer, str] = {}  # worker channel -> the exchange it answers
     self._handlers: dict[str, RequestHandler] = {}
     self._delivery_observers: list[DeliveryObserver] = []
     self._active: Optional[Message] = None  # the request currently being handled (for reply/spawn)
@@ -92,14 +102,14 @@ class Dispatcher:
       raise RuntimeError('dispatcher used before bind()')
     return self._runtime
 
-  def on(self, message_type: str, handler: RequestHandler) -> None:
-    self._handlers[message_type] = handler
+  def on(self, kind: str, handler: RequestHandler) -> None:
+    self._handlers[kind] = handler
 
   def add_delivery_observer(self, observer: DeliveryObserver) -> None:
-    """register a tap on the correlated deliveries that bypass handlers — rule-1/2 routing
-    and synthesized `failed` — so a consumer sees child lifecycle (trail ids, outcomes)
-    without sitting in the message path. Handler-driven `reply` and rule-4 refusals are
-    not deliveries it reports."""
+    """register a tap on the correlated deliveries that bypass handlers — rule-1
+    forwarding and synthesized `failed` — so a consumer sees worker lifecycle (trail
+    ids, outcomes) without sitting in the message path. Handler-driven `reply`, the
+    dispatcher's own denials, and rule-3 refusals are not deliveries it reports."""
     self._delivery_observers.append(observer)
 
   @property
@@ -113,75 +123,70 @@ class Dispatcher:
     self.runtime.send(peer, message)
 
   def reply(self, peer: Peer, payload: dict) -> None:
-    """send a generic correlated reply (`Tag.REPLY`) to the in-flight request's origin peer."""
-    self.deliver(peer, Message(type=Tag.REPLY, payload=payload, in_reply_to=self._request_id()))
+    """answer the in-flight request with its result; `payload` is the result payload
+    (`{outcome, value?, error?, detail?}`)."""
+    self.deliver(peer, Message(type=Tag.RESULT, payload=payload, request=self._request_id()))
 
   def refuse(self, peer: Peer, message: Message) -> None:
-    """decline an unroutable message (rule 4). v1 is parent/child-only, so anything outside
-    that topology is dropped with a log line rather than delivered."""
-    log.warning(f'broker dispatcher: refused {message.type!r} from peer {peer} (no route)')
+    """drop an unroutable progress/result with a log line (rule 3)."""
+    log.warning(f'broker dispatcher: refused {message.type!r} from peer {peer} (no live exchange)')
 
-  def spawn(self, launch: LaunchSpec, parent: Peer, *, timeout: Optional[float] = None) -> None:
-    """spawn `launch` as a child of `parent`, correlated to the in-flight request. Schedules
-    the async `Runtime.spawn` and registers topology when it resolves — the child cannot send
-    a frame until it has been launched and has connected, both strictly after registration.
-    A launch failure synthesizes `failed{reason: 'launch'}` back to `parent` instead."""
-    in_reply_to = self._request_id()
+  def spawn(self, launch: LaunchSpec, requester: Peer, *, timeout: Optional[float] = None) -> None:
+    """spawn `launch` as the worker answering the in-flight request. The exchange opens
+    here — held against id collisions from this point — and the worker channel binds
+    when the launch resolves, before the launched process can have connected and sent
+    a frame. A launch failure closes the exchange with `result{failed, reason:
+    'launch'}` back to `requester` instead."""
+    request_id = self._request_id()
+    self.exchanges[request_id] = Exchange(requester=requester)
     effective_timeout = timeout if timeout is not None else self._default_timeout
-    task = asyncio.ensure_future(self.runtime.spawn(launch, timeout=effective_timeout))
+    task = asyncio.ensure_future(
+      self.runtime.spawn(launch, timeout=effective_timeout, exchange=request_id)
+    )
 
-    def _registered(finished: asyncio.Task) -> None:
+    def _launched(finished: asyncio.Task) -> None:
       if finished.cancelled():
         return
       error = finished.exception()
       if error is not None:
         log.warning(f'broker dispatcher: spawn failed: {error!r}')
-        failed = Message(
-          type=Tag.FAILED,
-          payload={'reason': 'launch', 'error': str(error)},
-          in_reply_to=in_reply_to,
-        )
-        self._deliver_observed(None, parent, failed)
+        self._fail(request_id, None, error=str(error), detail={'reason': 'launch'})
         return
-      self._register_child(finished.result(), parent, in_reply_to)
+      self._bind_worker(finished.result(), request_id)
 
-    task.add_done_callback(_registered)
+    task.add_done_callback(_launched)
 
   def expect(
     self,
-    parent: Peer,
+    requester: Peer,
     *,
     timeout: Optional[float],
     ready: Callable[[Provisioned], None],
   ) -> None:
-    """register an expected external peer as a child of `parent`, correlated to the
-    in-flight request — `spawn` for a peer someone else launches. Once the channel
-    is provisioned and the topology registered, `ready` receives it (on the loop)
-    so the handler can publish the endpoint to whatever launches the peer; a
-    provisioning failure synthesizes `failed{reason: 'launch'}` back to `parent`.
-    `timeout` bounds the whole expectation; None leaves it unbounded — an external
-    peer's arrival is paced by its launcher, not by this host."""
-    in_reply_to = self._request_id()
+    """register an expected external worker for the in-flight request — `spawn` for a
+    peer someone else launches. Once the channel is provisioned and bound, `ready`
+    receives it (on the loop) so the handler can publish the endpoint to whatever
+    launches the peer; a provisioning failure closes the exchange with `result{failed,
+    reason: 'launch'}`. `timeout` bounds the whole expectation; None leaves it
+    unbounded — an external peer's arrival is paced by its launcher, not by this
+    host."""
+    request_id = self._request_id()
+    self.exchanges[request_id] = Exchange(requester=requester)
     task = asyncio.ensure_future(self.runtime.expect(timeout=timeout))
 
-    def _registered(finished: asyncio.Task) -> None:
+    def _provisioned(finished: asyncio.Task) -> None:
       if finished.cancelled():
         return
       error = finished.exception()
       if error is not None:
         log.warning(f'broker dispatcher: expect failed: {error!r}')
-        failed = Message(
-          type=Tag.FAILED,
-          payload={'reason': 'launch', 'error': str(error)},
-          in_reply_to=in_reply_to,
-        )
-        self._deliver_observed(None, parent, failed)
+        self._fail(request_id, None, error=str(error), detail={'reason': 'launch'})
         return
       provisioned = finished.result()
-      self._register_child(provisioned.channel, parent, in_reply_to)
+      self._bind_worker(provisioned.channel, request_id)
       ready(provisioned)
 
-    task.add_done_callback(_registered)
+    task.add_done_callback(_provisioned)
 
   @contextlib.contextmanager
   def _as_active(self, message: Message) -> Generator[None]:
@@ -193,80 +198,88 @@ class Dispatcher:
       self._active = previous
 
   def invoke(self, peer: Peer, message: Message) -> None:
-    """dispatch a fresh typed request to its registered handler (rule 3), exposing the request
-    to `reply` / `spawn` as the in-flight one for the duration of the call."""
-    handler = self._handlers[message.type]
+    """dispatch a request to its kind's handler (rule 2), exposing the request to
+    `reply` / `spawn` as the in-flight one for the duration of the call."""
+    handler = self._handlers[message.kind]
     with self._as_active(message):
       handler(self, peer, message)
 
   # --- Runtime listener (all on the loop) ---------------------------------
 
   def on_connect(self, peer: Peer) -> None:
-    del peer  # topology is registered at spawn time, so birth needs no dispatcher action
+    del peer  # exchanges are registered at spawn time, so birth needs no dispatcher action
 
   def on_message(self, peer: Peer, message: Message) -> None:
-    if peer in self.finalized:
-      return  # drop-after-terminal
-    if self._route(peer, message) and message.type == Tag.COMPLETED:
-      self.finalized.add(peer)
+    if message.type == Tag.REQUEST:
+      self._on_request(peer, message)
+    else:
+      self._on_answer(peer, message)
 
   def on_exit(self, peer: Peer, code: int, output: str) -> None:
-    if peer not in self.finalized:
-      self._fail(peer, {'reason': 'exit', 'exit_code': code, 'output_tail': output})
+    request_id = self.workers.get(peer)
+    if request_id is not None:
+      self._fail(
+        request_id, peer, detail={'reason': 'exit', 'exit_code': code, 'output_tail': output}
+      )
     self._cleanup(peer)
     if peer == self._root and self._root_exit is not None and not self._root_exit.done():
       self._root_exit.set_result(code)
 
   def on_timeout(self, peer: Peer) -> None:
-    # the Runtime already killed the peer; the following on_exit dedupes on `finalized`.
-    if peer not in self.finalized:
-      self._fail(peer, {'reason': 'timeout'})
-      self.finalized.add(peer)
+    # the Runtime already killed the peer; the following on_exit finds the exchange
+    # closed and synthesizes nothing.
+    request_id = self.workers.get(peer)
+    if request_id is not None:
+      self._fail(request_id, peer, detail={'reason': 'timeout'})
 
   def on_gone(self, peer: Peer) -> None:
-    # an expected peer's channel ended — its `on_exit`: every frame it wrote was
-    # already delivered, so an un-finalized peer produced no terminal.
-    if peer not in self.finalized:
-      self._fail(peer, {'reason': 'disconnected'})
+    # an expected worker's channel ended — its `on_exit`: every frame it wrote was
+    # already delivered, so a live exchange got no result from it.
+    request_id = self.workers.get(peer)
+    if request_id is not None:
+      self._fail(request_id, peer, detail={'reason': 'disconnected'})
     self._cleanup(peer)
 
-  # --- the four routing rules, checked in order ---------------------------
+  # --- the three routing rules --------------------------------------------
 
-  def _route(self, peer: Peer, message: Message) -> bool:
-    """apply the routing rules; return True when the source's own message was delivered
-    onward (rules 1-2), False when it was invoked, dropped, or refused (rules 3-4 and the
-    root-lifecycle drop)."""
-    awaiter = self.pending.get(message.in_reply_to) if message.in_reply_to is not None else None
-    if awaiter is not None:  # rule 1: a reply to an awaited request -> its requester, as-is
-      self._deliver_observed(peer, awaiter, message)
-      return True
-    origin = self.origin.get(peer)
-    if origin is not None and message.type in _LIFECYCLE_TAGS:  # rule 2: child lifecycle -> parent
-      parent, in_reply_to = origin
-      self._deliver_observed(peer, parent, replace(message, in_reply_to=in_reply_to))
-      return True
-    if message.in_reply_to is None and message.type in self._handlers:  # rule 3: fresh request
-      self.invoke(peer, message)
-      return False
-    if peer == self._root and message.type in _LIFECYCLE_TAGS:
-      # rule 2's no-parent case: the root's lifecycle has nobody to notify — dropped, not
-      # refused (a consumer that wants it registers `started`/`completed` handlers, which
-      # rule 3 then catches first). Deliberately not finalized either way: the root's
-      # terminal is its exit, and a `completed` over its long-lived channel must not arm
-      # drop-after-terminal against the session's later traffic.
-      return False
-    self.refuse(peer, message)  # rule 4
-    return False
+  def _on_request(self, peer: Peer, message: Message) -> None:
+    """rule 2: a request goes to the handler registered for its kind; no handler —
+    or an id colliding with a live exchange (uniqueness rides on entropy, so a
+    collision is rejected rather than coped with) — means `result{denied}`."""
+    if message.exchange in self.exchanges:
+      self._deny(peer, message.exchange, f'request id {message.exchange} already names a live exchange')  # fmt: skip
+      return
+    if message.kind not in self._handlers:
+      self._deny(peer, message.exchange, f'unknown kind {message.kind!r}')
+      return
+    self.invoke(peer, message)
+
+  def _on_answer(self, peer: Peer, message: Message) -> None:
+    """rule 1: a progress/result naming a live exchange, arriving on that exchange's
+    own worker channel, is forwarded to the requester unchanged — the sender must *be*
+    the worker, so learning another exchange's id gains a peer nothing. Anything else
+    is rule 3: dropped and logged."""
+    exchange = self.exchanges.get(message.request) if message.request is not None else None
+    if exchange is None or exchange.worker != peer:
+      self.refuse(peer, message)
+      return
+    self._deliver_observed(peer, exchange.requester, message)
+    if message.type == Tag.RESULT:
+      self._close(message.exchange)
 
   # --- facade support -----------------------------------------------------
 
   async def run(self, root: LaunchSpec) -> int:
-    """serve, spawn the root as a uniform peer (no request-lifecycle timeout), await its exit,
-    then tear down any outstanding children and return the root's exit code."""
+    """serve, then spawn the root as the uniform worker of a freshly minted
+    host-anchored exchange (no request-lifecycle timeout), await its exit, tear down
+    any outstanding children, and return the root's exit code."""
     self._root_exit = asyncio.get_running_loop().create_future()
     serve_task = asyncio.ensure_future(self.runtime.serve())
     await asyncio.sleep(0)  # let serve install the sink before the root connects
-    self._root = await self.runtime.spawn(root, timeout=None)
+    exchange = lulid()
+    self.exchanges[exchange] = Exchange(requester=None)
+    self._root = await self.runtime.spawn(root, timeout=None, exchange=exchange)
+    self._bind_worker(self._root, exchange)
     try:
       return await self._root_exit
     finally:
@@ -284,45 +297,58 @@ class Dispatcher:
   def _request_id(self) -> str:
     if self._active is None:
       raise RuntimeError('reply()/spawn() called outside a request handler')
-    return self._active.id
+    return self._active.exchange
 
-  def _register_child(self, peer: Peer, parent: Peer, in_reply_to: str) -> None:
-    self.parent[peer] = parent
-    self.children.setdefault(parent, set()).add(peer)
-    self.origin[peer] = (parent, in_reply_to)
-    self.pending[in_reply_to] = parent
+  def _bind_worker(self, peer: Peer, request_id: str) -> None:
+    self.exchanges[request_id].worker = peer
+    self.workers[peer] = request_id
 
-  def _deliver_observed(self, source: Optional[Peer], target: Peer, message: Message) -> None:
-    """deliver + fire the delivery tap — the seam for the correlated deliveries handlers
-    never see (rules 1-2 and synthesized `failed`)."""
-    self.deliver(target, message)
+  def _deny(self, peer: Peer, request_id: str, error: str) -> None:
+    log.warning(f'broker dispatcher: denied request {request_id}: {error}')
+    self.deliver(peer, brotocol.result(request_id, 'denied', error=error))
+
+  def _deliver_observed(
+    self, source: Optional[Peer], target: Optional[Peer], message: Message
+  ) -> None:
+    """deliver + fire the delivery tap — the seam for the correlated deliveries
+    handlers never see (rule-1 forwarding and synthesized `failed`). A host-anchored
+    exchange has no peer to deliver to: its messages reach only the observers."""
+    if target is not None:
+      self.deliver(target, message)
     for observer in self._delivery_observers:
       observer(source, target, message)
 
-  def _fail(self, peer: Peer, payload: dict) -> None:
-    """synthesize a `failed` to the peer's origin parent; a peer with no origin (the root) has
-    nobody to notify, so its death is silent to the graph."""
-    origin = self.origin.get(peer)
-    if origin is None:
+  def _fail(
+    self,
+    request_id: str,
+    source: Optional[Peer],
+    *,
+    error: Optional[str] = None,
+    detail: dict,
+  ) -> None:
+    """close a live exchange with a synthesized `result{failed}` to its requester. A
+    host-anchored exchange closes silently: the root's death is its exit code, which
+    this process reads itself."""
+    exchange = self.exchanges.get(request_id)
+    if exchange is None:
       return
-    parent, in_reply_to = origin
+    self._close(request_id)
+    if exchange.requester is None:
+      return
     self._deliver_observed(
-      peer, parent, Message(type=Tag.FAILED, payload=payload, in_reply_to=in_reply_to)
+      source, exchange.requester, brotocol.result(request_id, 'failed', error=error, detail=detail)
     )
 
+  def _close(self, request_id: str) -> None:
+    exchange = self.exchanges.pop(request_id, None)
+    if exchange is not None and exchange.worker is not None:
+      self.workers.pop(exchange.worker, None)
+
   def _cleanup(self, peer: Peer) -> None:
-    """drop the peer from the graph, correlation state, and the Runtime's bookkeeping."""
-    origin = self.origin.pop(peer, None)
-    if origin is not None:
-      _, in_reply_to = origin
-      self.pending.pop(in_reply_to, None)
-    parent = self.parent.pop(peer, None)
-    if parent is not None:
-      siblings = self.children.get(parent)
-      if siblings is not None:
-        siblings.discard(peer)
-    self.children.pop(peer, None)
-    self.finalized.discard(peer)
+    """drop the peer's exchange (when one is still live) and the Runtime's bookkeeping."""
+    request_id = self.workers.pop(peer, None)
+    if request_id is not None:
+      self.exchanges.pop(request_id, None)
     self.runtime.forget(peer)
 
 
@@ -335,8 +361,8 @@ class Broker:
     self._dispatcher = Dispatcher(default_timeout=default_timeout)
     self._dispatcher.bind(Runtime(transport, spawner, self._dispatcher))
 
-  def on(self, message_type: str, handler: RequestHandler) -> None:
-    self._dispatcher.on(message_type, handler)
+  def on(self, kind: str, handler: RequestHandler) -> None:
+    self._dispatcher.on(kind, handler)
 
   def add_delivery_observer(self, observer: DeliveryObserver) -> None:
     self._dispatcher.add_delivery_observer(observer)
@@ -348,17 +374,18 @@ class Broker:
     self._dispatcher.stop()
 
 
-# --- built-in acceptance handlers -------------------------------------------
+# --- built-in kind handlers -------------------------------------------------
 
 
 def ping_handler(context: Dispatcher, peer: Peer, message: Message) -> None:
-  """reply to a `ping` request with its payload echoed back, correlated to the request."""
-  context.reply(peer, {'pong': message.payload})
+  """the reserved `ping` kind: answer ok with the request's own arguments echoed back."""
+  context.reply(peer, {'outcome': 'ok', 'value': message.args})
 
 
 def spawn_test_handler(launch: LaunchSpec) -> RequestHandler:
-  """a `spawn`-test handler bound to an injected `LaunchSpec`: spawns it as a child of the
-  requester, whose `started` / `completed` then route back as the reply to the spawn request."""
+  """a spawn-test kind handler bound to an injected `LaunchSpec`: spawns it as the
+  worker of the requesting exchange, whose progress and result then flow back to the
+  requester."""
 
   def handler(context: Dispatcher, peer: Peer, _message: Message) -> None:
     context.spawn(launch, peer)

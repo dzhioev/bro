@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from bro.broker import brotocol
 from bro.broker.brotocol import MAX_FRAME_BYTES, Message
 from bro.broker.transport import ChannelID, connect
 from bro.broker.transports.unix import UnixClientTransport, UnixServerTransport
@@ -67,11 +68,9 @@ async def test_delivery_and_channel_authenticity(socket_dir):
     client_a = UnixClientTransport(provisioned_a.host_endpoint)
     client_b = connect('unix:' + provisioned_b.host_endpoint)  # exercises scheme dispatch
 
-    await asyncio.to_thread(client_a.send, Message(type='ping', payload={'who': 'a'}))
+    await asyncio.to_thread(client_a.send, brotocol.progress('X', {'who': 'a'}))
     # B puts a forged claim in its payload; attribution must still follow the socket
-    await asyncio.to_thread(
-      client_b.send, Message(type='ping', payload={'who': 'b', 'claim': 'I am A'})
-    )
+    await asyncio.to_thread(client_b.send, brotocol.progress('X', {'who': 'b', 'claim': 'I am A'}))
 
     seen = {}
     for _ in range(2):
@@ -93,7 +92,7 @@ async def test_accept_fires_on_connect_before_any_message(socket_dir):
     assert await _next(server.sink.connects) == provisioned.channel
     assert server.sink.messages.empty()  # birth precedes the first frame
 
-    await asyncio.to_thread(client.send, Message(type='ping', payload={}))
+    await asyncio.to_thread(client.send, brotocol.progress('X', {}))
     channel, _ = await _next(server.sink.messages)
     assert channel == provisioned.channel
     client.close()
@@ -107,15 +106,15 @@ async def test_server_reply_reaches_only_its_channel(socket_dir):
     client_a = UnixClientTransport(provisioned_a.host_endpoint)
     client_b = UnixClientTransport(provisioned_b.host_endpoint)
     # send so the loop accepts both connections and learns their channels
-    await asyncio.to_thread(client_a.send, Message(type='ping', payload={}))
-    await asyncio.to_thread(client_b.send, Message(type='ping', payload={}))
+    await asyncio.to_thread(client_a.send, brotocol.progress('X', {}))
+    await asyncio.to_thread(client_b.send, brotocol.progress('X', {}))
     for _ in range(2):
       await _next(server.sink.messages)
 
-    await server.transport.send(provisioned_a.channel, Message(type='pong', payload={'r': 1}))
+    await server.transport.send(provisioned_a.channel, brotocol.progress('X', {'r': 1}))
     reply = await asyncio.to_thread(client_a.receive, TIMEOUT)
     assert reply is not None
-    assert reply.type == 'pong'
+    assert reply.type == 'progress'
     assert reply.payload == {'r': 1}
     assert await asyncio.to_thread(client_b.receive, 0.2) is None
     client_a.close()
@@ -129,15 +128,15 @@ async def test_ndjson_framing_coalesced_and_split(socket_dir):
     _, writer = await asyncio.open_unix_connection(provisioned.host_endpoint)
 
     # two frames written in one syscall must deframe into two messages
-    frame1 = Message(type='ping', payload={'n': 1}).to_bytes() + b'\n'
-    frame2 = Message(type='ping', payload={'n': 2}).to_bytes() + b'\n'
+    frame1 = brotocol.progress('X', {'n': 1}).to_bytes() + b'\n'
+    frame2 = brotocol.progress('X', {'n': 2}).to_bytes() + b'\n'
     writer.write(frame1 + frame2)
     await writer.drain()
     numbers = {(await _next(server.sink.messages))[1].payload['n'] for _ in range(2)}
     assert numbers == {1, 2}
 
     # one frame split across two writes must reassemble into one message
-    frame3 = Message(type='ping', payload={'n': 3}).to_bytes() + b'\n'
+    frame3 = brotocol.progress('X', {'n': 3}).to_bytes() + b'\n'
     writer.write(frame3[:4])
     await writer.drain()
     writer.write(frame3[4:])
@@ -166,7 +165,7 @@ async def test_peer_disconnect_notifies_sink(socket_dir):
   async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = UnixClientTransport(provisioned.host_endpoint)
-    await asyncio.to_thread(client.send, Message(type='ping', payload={}))
+    await asyncio.to_thread(client.send, brotocol.progress('X', {}))
     await _next(server.sink.messages)
     client.close()
     assert await _next(server.sink.disconnects) == provisioned.channel
@@ -219,7 +218,7 @@ async def test_host_close_channel_drops_connection(socket_dir):
   async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = UnixClientTransport(provisioned.host_endpoint)
-    await asyncio.to_thread(client.send, Message(type='ping', payload={}))
+    await asyncio.to_thread(client.send, brotocol.progress('X', {}))
     await _next(server.sink.messages)
 
     await server.transport.close(provisioned.channel)

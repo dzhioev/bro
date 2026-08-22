@@ -54,8 +54,12 @@ class TestBrokerLaunch:
       extra_mounts=('/existing:/mount',),
     )
     channel = workspace_spawn.Provisioned(channel='X', host_endpoint='/host/sock.sock')
-    adapted = workspace_spawn._broker_launch(launch, channel)
-    assert adapted.env == {'RIDE_BRO': 'dev', 'BROKER_CHANNEL': 'unix:/run/broker.sock'}
+    adapted = workspace_spawn._broker_launch(launch, channel, 'X-1')
+    assert adapted.env == {
+      'RIDE_BRO': 'dev',
+      'BROKER_CHANNEL': 'unix:/run/broker.sock',
+      'BROKER_EXCHANGE': 'X-1',
+    }
     assert adapted.extra_mounts == (
       '/existing:/mount',
       '/host/sock.sock:/run/broker.sock',
@@ -441,7 +445,7 @@ class TestProcessSpawner:
   async def _spawn(self, command, cwd, env) -> workspace_spawn.ChildHandle:
     launch = workspace_spawn.ProcessLaunchSpec(command=command, cwd=cwd, env=env)
     provisioned = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
-    return await workspace_spawn.ProcessSpawner().spawn(launch, provisioned)
+    return await workspace_spawn.ProcessSpawner().spawn(launch, provisioned, 'X-1')
 
   @pytest.mark.asyncio
   async def test_env_is_the_spec_snapshot_plus_broker_channel(self, monkeypatch, tmp_path):
@@ -455,6 +459,7 @@ class TestProcessSpawner:
     env = json.loads(out.read_text())
     assert env['MARKER'] == 'x'
     assert env['BROKER_CHANNEL'] == 'unix:/host/CH.sock'
+    assert env['BROKER_EXCHANGE'] == 'X-1'
     # a spawn is a pure function of its LaunchSpec: nothing ambient leaks in
     assert 'RIDE_AMBIENT_CANARY' not in env
 
@@ -471,7 +476,7 @@ class TestProcessSpawner:
       command=[sys.executable, '-c', 'pass'], cwd=str(tmp_path), env={}, interactive=False
     )
     provisioned = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
-    handle = await workspace_spawn.ProcessSpawner().spawn(launch, provisioned)
+    handle = await workspace_spawn.ProcessSpawner().spawn(launch, provisioned, 'X-1')
     assert isinstance(handle, workspace_spawn._HeadlessProcess)
     assert await handle.wait() == 0
 
@@ -481,7 +486,7 @@ class TestCompositeSpawner:
     def __init__(self):
       self.spawned: list = []
 
-    async def spawn(self, launch, channel) -> workspace_spawn.ChildHandle:
+    async def spawn(self, launch, channel, exchange) -> workspace_spawn.ChildHandle:
       self.spawned.append(launch)
       return MagicMock()
 
@@ -505,8 +510,8 @@ class TestCompositeSpawner:
       )
     )
     process_launch = workspace_spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
-    await composite.spawn(docker_launch, channel)
-    await composite.spawn(process_launch, channel)
+    await composite.spawn(docker_launch, channel, 'X-1')
+    await composite.spawn(process_launch, channel, 'X-1')
     assert docker.spawned == [docker_launch]
     assert process.spawned == [process_launch]
 
@@ -516,7 +521,7 @@ class TestCompositeSpawner:
     channel = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
     launch = workspace_spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
     with pytest.raises(ValueError, match='ProcessLaunchSpec'):
-      await composite.spawn(launch, channel)
+      await composite.spawn(launch, channel, 'X-1')
 
 
 class TestDockerSpawnerModes:
@@ -582,7 +587,7 @@ class TestDockerSpawnerModes:
     )
     launch = workspace_spawn.DockerLaunchSpec(docker_launch)
     provisioned = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
-    handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned)
+    handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned, 'X-1')
     try:
       assert isinstance(handle, workspace_spawn._AttachedRoot)
       assert handle.output_tail() == ''
@@ -609,7 +614,7 @@ class TestDockerSpawnerModes:
     )
     launch = workspace_spawn.DockerLaunchSpec(docker_launch, capture_output=False)
     provisioned = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
-    handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned)
+    handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned, 'X-1')
     assert isinstance(handle, workspace_spawn._HeadlessRoot)
     assert spawn_harness['starts'] == [['docker', 'start', '-a', 'cid123']]
     assert spawn_harness['start_kwargs'] == [{}]
@@ -629,7 +634,7 @@ class TestDockerSpawnerModes:
     )
     launch = workspace_spawn.DockerLaunchSpec(docker_launch)
     provisioned = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
-    handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned)
+    handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned, 'X-1')
     assert isinstance(handle, workspace_spawn._DockerChild)
     assert spawn_harness['prepared'][0].name == 'broker-CH'
     assert spawn_harness['starts'] == [['docker', 'start', '-a', 'cid123']]
@@ -649,7 +654,7 @@ class TestDockerSpawnerModes:
     )
     launch = workspace_spawn.DockerLaunchSpec(docker_launch)
     provisioned = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
-    handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned)
+    handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned, 'X-1')
     loop_thread = threading.get_ident()
     assert spawn_harness['prepare_threads'][0] != loop_thread
     assert spawn_harness['workspace_threads'][0] != loop_thread

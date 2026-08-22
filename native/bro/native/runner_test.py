@@ -733,7 +733,7 @@ class _ChannelRunner(StubRunner):
 
 def _make_channel() -> tuple[BroChannel, _RecordingTransport]:
   transport = _RecordingTransport()
-  return BroChannel(Client(transport)), transport
+  return BroChannel(Client(transport), 'X'), transport
 
 
 class _TrailIDTracker(NullTracker):
@@ -760,9 +760,9 @@ class TestRunLifecycle:
     runner = _ChannelRunner(channel, _StubLLM(response='the result'))
     result = await runner.run('input', tracker=_TrailIDTracker(), surface='test')
     assert result == 'the result'
-    assert [m.type for m in transport.sent] == ['started', 'completed']
+    assert [m.type for m in transport.sent] == ['progress', 'result']
     assert transport.sent[0].payload == {'trail_id': 'trail-42'}
-    assert transport.sent[1].payload == {'result': 'the result', 'end_reason': 'ok'}
+    assert transport.sent[1].payload == {'outcome': 'ok', 'value': 'the result'}
     assert transport.closed is True
 
   @pytest.mark.asyncio
@@ -771,8 +771,12 @@ class TestRunLifecycle:
     runner = _ChannelRunner(channel, _StubLLM(error=BroRaised('cannot fulfill')))
     with pytest.raises(BroRaised):
       await runner.run('input', surface='test')
-    assert [m.type for m in transport.sent] == ['started', 'completed']
-    assert transport.sent[1].payload == {'result': 'cannot fulfill', 'end_reason': 'raised'}
+    assert [m.type for m in transport.sent] == ['progress', 'result']
+    assert transport.sent[1].payload == {
+      'outcome': 'failed',
+      'error': 'cannot fulfill',
+      'detail': {'reason': 'raised'},
+    }
     assert transport.closed is True
 
   @pytest.mark.asyncio
@@ -781,8 +785,12 @@ class TestRunLifecycle:
     runner = _ChannelRunner(channel, _StubLLM(error=RuntimeError('kaboom')))
     with pytest.raises(RuntimeError):
       await runner.run('input', surface='test')
-    assert [m.type for m in transport.sent] == ['started', 'completed']
-    assert transport.sent[1].payload == {'result': 'kaboom', 'end_reason': 'error'}
+    assert [m.type for m in transport.sent] == ['progress', 'result']
+    assert transport.sent[1].payload == {
+      'outcome': 'failed',
+      'error': 'kaboom',
+      'detail': {'reason': 'error'},
+    }
     assert transport.closed is True
 
   @pytest.mark.asyncio
@@ -813,9 +821,9 @@ class TestRunLifecycle:
         super().send(message)
 
     transport = OrderTransport()
-    runner = _ChannelRunner(BroChannel(Client(transport)), _StubLLM())
+    runner = _ChannelRunner(BroChannel(Client(transport), 'X'), _StubLLM())
     await runner.run('input', tracker=OrderTracker(), surface='test')
-    assert events == ['start_trail', 'started', 'end_trail', 'completed']
+    assert events == ['start_trail', 'progress', 'end_trail', 'result']
 
   @pytest.mark.asyncio
   async def test_run_without_channel_emits_nothing(self, monkeypatch):
@@ -835,8 +843,8 @@ class TestRunLifecycle:
     runner = _ChannelRunner(channel, _StubLLM(error=AnswerDelivered('the answer')))
     result = await runner.run('input', tracker=_TrailIDTracker(), surface='test')
     assert result == 'the answer'
-    assert [m.type for m in transport.sent] == ['started', 'completed']
-    assert transport.sent[1].payload == {'result': 'the answer', 'end_reason': 'ok'}
+    assert [m.type for m in transport.sent] == ['progress', 'result']
+    assert transport.sent[1].payload == {'outcome': 'ok', 'value': 'the answer'}
 
   @pytest.mark.asyncio
   async def test_summoned_send_announces_started_with_the_workspace(self, monkeypatch):
@@ -845,12 +853,12 @@ class TestRunLifecycle:
     channel, transport = _make_channel()
     runner = _ChannelRunner(channel, _StubLLM(response='chat'))
     assert await runner.send('hi', tracker=_TrailIDTracker(), surface='test') == 'chat'
-    assert [m.type for m in transport.sent] == ['started']
+    assert [m.type for m in transport.sent] == ['progress']
     assert transport.sent[0].payload == {'trail_id': 'trail-42', 'workspace': 'my-manual'}
     assert transport.closed is True
     # only the conversation's first send announces
     assert await runner.send('more', surface='test') == 'chat'
-    assert [m.type for m in transport.sent] == ['started']
+    assert [m.type for m in transport.sent] == ['progress']
 
   @pytest.mark.asyncio
   async def test_send_propagates_answer_delivered_to_the_surface(self):
