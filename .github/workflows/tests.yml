@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         # every stage `run-tests` names, one runner each
-        stage: [lint, types, unit, benchmark, docker]
+        stage: [lint, types, unit, benchmark, docker, broker_e2e]
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7

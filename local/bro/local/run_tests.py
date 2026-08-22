@@ -232,12 +232,12 @@ PYTEST_FILES = [
   'dev/bro/dev/install_test.py',
   'dev/bro/dev/shell_policy_test.py',
 ]
-# outside the roster above: it drives the host docker daemon, which the suite's
+# outside the roster above: they drive the host docker daemon, which the suite's
 # in-container leg has none of
 DOCKER_PYTEST_FILE = 'ride/ride/workspace/launch_smoke_test.py'
+BROKER_E2E_PYTEST_FILE = 'ride/ride/e2e_test.py'
 # run from the benchmark project's own environment, the only one that can import
-# it. The `*_e2e_test.py` modules stay out: they build a real bundle and drive
-# docker, and the harbor one spends real tokens
+# it. The harbor e2e stays out of every stage: it spends real tokens
 BENCHMARK_PYTEST_FILES = [
   'bro/benchmark/bundle_test.py',
   'bro/benchmark/harbor_agent_test.py',
@@ -301,6 +301,11 @@ def docker_stage() -> None:
   run(sys.executable, '-m', 'pytest', DOCKER_PYTEST_FILE)
 
 
+def broker_e2e_stage() -> None:
+  print('broker_e2e: broker-supervised container launch seam', file=sys.stderr)
+  run(sys.executable, '-m', 'pytest', BROKER_E2E_PYTEST_FILE)
+
+
 @dataclass(frozen=True)
 class Stage:
   name: str
@@ -314,6 +319,7 @@ STAGES = [
   Stage('unit', unit_stage),
   Stage('benchmark', benchmark_stage),
   Stage('docker', docker_stage, host_only=True),
+  Stage('broker_e2e', broker_e2e_stage, host_only=True),
 ]
 
 

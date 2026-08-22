@@ -3,10 +3,10 @@
 Drives the real launcher against the real docker daemon — the seam the fake
 Transport/Spawner unit suites never touch. Host- and linux-only (needs the host
 daemon; skipped inside a container, and on macOS, where container sessions are
-pinned to the broker-less path — see `_container_broker_enabled`) and, like
-every live integration test, run separately from the default suite:
+pinned to the broker-less path — see `_container_broker_enabled`), run as the
+gate's `broker_e2e` stage:
 
-  pytest ride/e2e_test.py [-k <scenario>]
+  run-tests --only broker_e2e   # or directly: pytest ride/ride/e2e_test.py [-k <scenario>]
 
 The matrix: A — broker-enabled default launch (socket provisioning, the
 entrypoint-owned broxy on the channel, ping round-trip through it); B — child
