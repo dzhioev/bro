@@ -98,6 +98,7 @@ import os, sys, time
 from pathlib import Path
 
 assert os.environ.get('BROKER_CHANNEL') == 'unix:/tmp/broxy.sock', os.environ.get('BROKER_CHANNEL')
+assert os.environ.get('BROKER_EXCHANGE'), 'the launch did not carry the exchange id'
 assert Path('/run/broker.sock').is_socket()
 assert Path('/tmp/broxy.sock').is_socket()
 from bro.channel import BroChannel
@@ -120,8 +121,8 @@ try:
 except TimeoutError:
   print('RIDE_E2E_PING_TIMEOUT', flush=True)
   sys.exit(8)
-assert reply.type == 'reply', reply.type
-assert reply.payload == {'pong': {'n': 1}}, reply.payload
+assert reply.type == 'result', reply.type
+assert reply.payload == {'outcome': 'ok', 'value': {'n': 1}}, reply.payload
 print('RIDE_E2E_PING_OK', flush=True)
 """
 
@@ -134,23 +135,23 @@ from pathlib import Path
 report = {'messages': []}
 
 def main():
-  from bro.broker.brotocol import Message
+  from bro.broker import brotocol
   from bro.broker.transport import connect
 
   deadline = float(os.environ['RIDE_E2E_DEADLINE'])
   exit_after = os.environ['RIDE_E2E_EXIT_AFTER']
   transport = connect(os.environ['BROKER_CHANNEL'])
-  ping = Message(type='ping', payload={'n': 1, 'from': 'forged-peer-identity'})
+  ping = brotocol.request('ping', {'n': 1, 'from': 'forged-peer-identity'})
   transport.send(ping)
   report['ping_id'] = ping.id
   reply = transport.receive(30)
   assert reply is not None, 'no ping reply'
   report['ping_reply'] = {
     'type': reply.type,
-    'in_reply_to': reply.in_reply_to,
+    'request': reply.request,
     'payload': reply.payload,
   }
-  request = Message(type='spawn', payload={})
+  request = brotocol.request('spawn', {})
   start = time.monotonic()
   transport.send(request)
   report['request_id'] = request.id
@@ -161,13 +162,13 @@ def main():
       break
     report['messages'].append({
       'type': message.type,
-      'in_reply_to': message.in_reply_to,
+      'request': message.request,
       'payload': message.payload,
       'elapsed': time.monotonic() - start,
     })
-    if message.type in ('completed', 'failed'):
+    if message.type == 'result':
       break
-    if exit_after == 'started' and message.type == 'started':
+    if exit_after == 'started' and message.type == 'progress':
       break
 
 try:
@@ -218,7 +219,7 @@ from bro.channel import BroChannel
 assert BroChannel.from_env() is None
 inert = subprocess.run(['broker', 'send', 'ping', '{}'], capture_output=True, text=True)
 assert inert.returncode == 0, (inert.returncode, inert.stderr)
-assert 'message not sent' in inert.stderr, inert.stderr
+assert 'request not sent' in inert.stderr, inert.stderr
 print('RIDE_E2E_NO_CHANNEL_OK', flush=True)
 """
 
@@ -677,7 +678,7 @@ def _run_broker_scenario(
   observed_pings: list[tuple[Peer, dict]] = []
 
   def recording_ping(context: Dispatcher, peer: Peer, message: Message) -> None:
-    observed_pings.append((peer, dict(message.payload)))
+    observed_pings.append((peer, dict(message.args)))
     ping_handler(context, peer, message)
 
   facade.on('ping', recording_ping)
@@ -765,9 +766,9 @@ class TestChildLifecycle:
   def test_ping_reply_and_channel_pinned_identity(self, b_clean: BrokerRun) -> None:
     assert 'error' not in b_clean.report, b_clean.report.get('error')
     reply = b_clean.report['ping_reply']
-    assert reply['type'] == 'reply'
-    assert reply['in_reply_to'] == b_clean.report['ping_id']
-    assert reply['payload'] == {'pong': {'n': 1, 'from': 'forged-peer-identity'}}
+    assert reply['type'] == 'result'
+    assert reply['request'] == b_clean.report['ping_id']
+    assert reply['payload'] == {'outcome': 'ok', 'value': {'n': 1, 'from': 'forged-peer-identity'}}
     # the dispatcher attributed the request to the socket's own channel, not the
     # forged payload claim — identity is pinned to the channel the message arrived on
     assert b_clean.root_peer is not None
@@ -777,12 +778,12 @@ class TestChildLifecycle:
     assert b_clean.code == 0
     request_id = b_clean.report['request_id']
     types = [m['type'] for m in b_clean.report['messages']]
-    assert types == ['started', 'completed'], b_clean.report['messages']
+    assert types == ['progress', 'result'], b_clean.report['messages']
     started, completed = b_clean.report['messages']
-    assert started['in_reply_to'] == request_id
+    assert started['request'] == request_id
     assert started['payload'] == {'trail_id': 'e2e-trail'}
-    assert completed['in_reply_to'] == request_id
-    assert completed['payload'] == {'result': 'child-ok', 'end_reason': 'ok'}
+    assert completed['request'] == request_id
+    assert completed['payload'] == {'outcome': 'ok', 'value': 'child-ok'}
     assert b_clean.max_sockets == 2
     assert b_clean.max_live == 2
     assert b_clean.sockets_after == []
@@ -797,24 +798,26 @@ class TestChildLifecycle:
   def test_early_exit_child_synthesizes_failed(self, b_early_exit: BrokerRun) -> None:
     assert b_early_exit.code == 0
     types = [m['type'] for m in b_early_exit.report['messages']]
-    assert types == ['failed'], b_early_exit.report['messages']
+    assert types == ['result'], b_early_exit.report['messages']
     failed = b_early_exit.report['messages'][0]
-    assert failed['in_reply_to'] == b_early_exit.report['request_id']
-    assert failed['payload']['reason'] == 'exit'
-    assert failed['payload']['exit_code'] == 3
+    assert failed['request'] == b_early_exit.report['request_id']
+    assert failed['payload']['outcome'] == 'failed'
+    detail = failed['payload']['detail']
+    assert detail['reason'] == 'exit'
+    assert detail['exit_code'] == 3
     # stdout and stderr are merged into the one output tail
-    assert 'e2e-stdout-marker' in failed['payload']['output_tail']
-    assert 'e2e-stderr-marker' in failed['payload']['output_tail']
+    assert 'e2e-stdout-marker' in detail['output_tail']
+    assert 'e2e-stderr-marker' in detail['output_tail']
     assert b_early_exit.sockets_after == []
     assert b_early_exit.live_after == []
 
   def test_wedged_child_times_out_at_default_timeout(self, b_timeout: BrokerRun) -> None:
     assert b_timeout.code == 0
     types = [m['type'] for m in b_timeout.report['messages']]
-    assert types == ['failed'], b_timeout.report['messages']
+    assert types == ['result'], b_timeout.report['messages']
     failed = b_timeout.report['messages'][0]
-    assert failed['in_reply_to'] == b_timeout.report['request_id']
-    assert failed['payload'] == {'reason': 'timeout'}
+    assert failed['request'] == b_timeout.report['request_id']
+    assert failed['payload'] == {'outcome': 'failed', 'detail': {'reason': 'timeout'}}
     # the timer starts once the child is spawned, strictly after the request went out,
     # and fires at exactly default_timeout; the slack above covers the spawn overhead
     assert 30 <= failed['elapsed'] <= 60, failed['elapsed']
@@ -824,7 +827,7 @@ class TestChildLifecycle:
   def test_children_torn_down_on_root_exit(self, b_teardown: BrokerRun) -> None:
     assert b_teardown.code == 0
     types = [m['type'] for m in b_teardown.report['messages']]
-    assert types == ['started'], b_teardown.report['messages']
+    assert types == ['progress'], b_teardown.report['messages']
     assert b_teardown.sockets_after == []
     assert b_teardown.live_after == [], 'live child container survived the root exit'
 

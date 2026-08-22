@@ -19,7 +19,7 @@ from typing import Any, Optional
 
 from bro.base import log
 from bro.broker.brotocol import Message, Tag
-from bro.broker.dispatcher import Broker, Dispatcher, ping_handler
+from bro.broker.dispatcher import PING, Broker, ping_handler
 from bro.broker.runtime import Peer
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
@@ -232,7 +232,7 @@ class SummonSpawner(Spawner):
     self._docker = docker
     self._container_runtime = container_runtime
 
-  async def spawn(self, launch: LaunchSpec, channel: Provisioned) -> ChildHandle:
+  async def spawn(self, launch: LaunchSpec, channel: Provisioned, exchange: str) -> ChildHandle:
     assert isinstance(launch, SummonLaunchSpec)
     lowered = await asyncio.to_thread(
       _lower_summon,
@@ -240,33 +240,51 @@ class SummonSpawner(Spawner):
       _workspace_name(channel.channel),
       self._container_runtime,
     )
-    return await self._docker.spawn(lowered, channel)
+    return await self._docker.spawn(lowered, channel, exchange)
 
 
-def _note_root_started(control: SummonControl, workspace: Workspace):
-  def _handle(context: Dispatcher, peer: Peer, message: Message) -> None:
-    del context, peer
-    trail_id = message.payload.get('trail_id')
-    log.info('root run started (trail %s)', trail_id)
-    # a bro-run root's own trail is what its summon children are attributed to
-    control.note_root_trail(trail_id)
-    if isinstance(trail_id, str) and len(trail_id) > 0:
-      trail_pointer.write(trail_pointer.session_pointer(workspace.path), trail_id)
+def _root_lifecycle(control: SummonControl, workspace: Workspace):
+  """consume the root's own run lifecycle off the delivery tap. The root answers
+  the session's host-anchored exchange, whose deliveries reach only the
+  observers, with no target peer — the filter that keeps every child delivery
+  out. A started progress publishes the root's trail (what its summon children
+  are attributed to); the run's result is logged, a raised run loudly."""
 
-  return _handle
+  def _observe(source: Optional[Peer], target: Optional[Peer], message: Message) -> None:
+    del source
+    if target is not None:
+      return
+    if message.type == Tag.PROGRESS:
+      trail_id = message.payload.get('trail_id')
+      if trail_id is None:
+        return
+      log.info('root run started (trail %s)', trail_id)
+      control.note_root_trail(trail_id)
+      if isinstance(trail_id, str) and len(trail_id) > 0:
+        trail_pointer.write(trail_pointer.session_pointer(workspace.path), trail_id)
+      return
+    if message.type == Tag.RESULT:
+      detail = message.payload.get('detail')
+      reason = detail.get('reason') if isinstance(detail, dict) else None
+      if reason == 'raised':
+        # a raised run's error is the abort reason — surface it
+        log.warning('root run raised: %s', message.payload.get('error'))
+        return
+      log.info('root run ended: %s', message.payload.get('outcome'))
+
+  return _observe
 
 
 def _note_child_started():
-  """publish each summoned child's `started` trail id as its workspace's session
+  """publish each summoned child's started trail id as its workspace's session
   trail pointer — what makes a failed child's surviving workspace resumable.
-  Registered as a delivery observer, which sees only correlated child deliveries
-  — never the root's own `started`, so no pointer is fabricated for a workspace
-  that doesn't exist. A spawned child's workspace is its channel-named
+  Sees only child deliveries: a host-anchored delivery (the root's, no target
+  peer) is filtered out, so no pointer is fabricated for a workspace that
+  doesn't exist. A spawned child's workspace is its channel-named
   `broker-<channel>`; a manual child names its user-chosen one in the payload."""
 
-  def _observe(source: Optional[Peer], target: Peer, message: Message) -> None:
-    del target
-    if message.type != Tag.STARTED or source is None:
+  def _observe(source: Optional[Peer], target: Optional[Peer], message: Message) -> None:
+    if message.type != Tag.PROGRESS or source is None or target is None:
       return
     trail_id = message.payload.get('trail_id')
     if not isinstance(trail_id, str) or len(trail_id) == 0:
@@ -278,15 +296,6 @@ def _note_child_started():
     trail_pointer.write(trail_pointer.session_pointer(workspace_dir(name)), trail_id)
 
   return _observe
-
-
-def _log_root_completed(context: Dispatcher, peer: Peer, message: Message) -> None:
-  del context, peer
-  if message.payload.get('end_reason') == 'raised':
-    # a raised run's result is the abort reason — surface it
-    log.warning('root run raised: %s', message.payload.get('result'))
-    return
-  log.info('root run ended: %s', message.payload.get('end_reason'))
 
 
 def run_root_via_broker(
@@ -301,11 +310,12 @@ def run_root_via_broker(
   (`bro.workspace.paths.broker_dir`), supervise it on the broker loop until it exits,
   and return its exit code. The spawner is the composite over both ride launch modes plus the summon
   lowering, so any root — host process or container — can spawn docker children.
-  The broker answers the substrate's built-in ping, so a session can verify its
-  channel (`broker request ping '{}'`), and logs the root's own run lifecycle
-  (`started`/`completed`) as its parent. While an interactive root owns the
-  terminal, host output goes to the workspace's host log instead of the shared
-  TTY (see `ride.workspace.spawn._HostLogRedirect`); headless runs keep it on stderr.
+  The broker answers the reserved ping kind, so a session can verify its channel
+  (`broker request ping '{}'`), and consumes the root's own run lifecycle — the
+  progress and result of the session's host-anchored exchange — into the host
+  log. While an interactive root owns the terminal, host output goes to the
+  workspace's host log instead of the shared TTY (see
+  `ride.workspace.spawn._HostLogRedirect`); headless runs keep it on stderr.
 
   `workspace` is the workspace the root session runs in — its name is the root's
   identity in the summon audit, and its records carry the broker-published
@@ -340,14 +350,11 @@ def run_root_via_broker(
     audit_file=summon_dir() / f'{workspace.name}.jsonl',
   )
   facade = Broker(UnixServerTransport(str(broker_dir())), spawner)
-  facade.on(Tag.PING, ping_handler)
-  # the root's own lifecycle (a bro run at the session root) has no parent peer to
-  # route to; this host process is its parent, so it lands in the host log
-  facade.on(Tag.STARTED, _note_root_started(control, workspace))
-  facade.on(Tag.COMPLETED, _log_root_completed)
+  facade.on(PING, ping_handler)
   facade.on(SUMMON, control.handle)
   facade.add_delivery_observer(control.observe_delivery)
   facade.add_delivery_observer(_note_child_started())
+  facade.add_delivery_observer(_root_lifecycle(control, workspace))
   try:
     return facade.run(launch)
   finally:

@@ -14,9 +14,10 @@ Two invariants carry the design:
   task per peer emits `on_exit(peer, code, output)` when the process is reaped.
 - **Drain-before-decide.** On process exit, before emitting `on_exit`, the Runtime waits
   (bounded) for the transport to flush the channel to EOF — reusing `on_disconnect` as
-  the "channel drained" marker. A `completed` the child wrote just before exiting is
+  the "channel drained" marker. A result the child wrote just before exiting is
   already in the host buffer, so the flush delivers it as an `on_message` first and the
-  Dispatcher finalizes on it; `on_exit` then finds the peer terminal. No exit⋀EOF join.
+  Dispatcher closes the exchange on it; `on_exit` then has nothing to synthesize.
+  No exit⋀EOF join.
 
 Birth is `on_connect` (socket accepted) — a peer is alive from when it attaches, not
 from its first message (a `--raw` root may never send one).The request-lifecycle
@@ -81,15 +82,17 @@ class Runtime:
 
   # --- commands (called on the loop) --------------------------------------
 
-  async def spawn(self, launch: LaunchSpec, *, timeout: Optional[float]) -> Peer:
-    """provision a channel, launch the peer, and supervise it. A launch failure rolls
-    back its own registration and re-raises."""
+  async def spawn(self, launch: LaunchSpec, *, timeout: Optional[float], exchange: str) -> Peer:
+    """provision a channel, launch the peer, and supervise it; `exchange` passes
+    through to the spawner (the worker-launch contract: a peer gets its channel
+    and the id of the exchange it answers). A launch failure rolls back its own
+    registration and re-raises."""
     provisioned = await self._transport.provision()
     channel = provisioned.channel
     peer = _PeerState(channel=channel)
     self._peers[channel] = peer
     try:
-      peer.handle = await self._spawner.spawn(launch, provisioned)
+      peer.handle = await self._spawner.spawn(launch, provisioned, exchange)
     except BaseException:
       del self._peers[channel]
       await self._transport.close(channel)

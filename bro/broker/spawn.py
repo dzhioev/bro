@@ -28,7 +28,11 @@ class ChildHandle(ABC):
 
 
 class Spawner(ABC):
-  """launch a peer's process and return a handle the Broker supervises."""
+  """launch a peer's process and return a handle the Broker supervises.
+
+  `exchange` is the id of the exchange the peer is launched to answer; the
+  adapter delivers it to the process beside the channel endpoint, so the peer
+  can correlate its own messages."""
 
   @abstractmethod
-  async def spawn(self, launch: LaunchSpec, channel: Provisioned) -> ChildHandle: ...
+  async def spawn(self, launch: LaunchSpec, channel: Provisioned, exchange: str) -> ChildHandle: ...

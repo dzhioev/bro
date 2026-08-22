@@ -1,8 +1,8 @@
 """broker spawner adapters for container and host-process launches.
 
 `DockerSpawner` unwraps a broker-free `ride.workspace.docker.Launch`, adds the
-provisioned channel socket mount and `BROKER_CHANNEL`, and runs the shared
-blocking container prepare off-loop. A TTY root attaches with inherited stdio
+provisioned channel socket mount plus `BROKER_CHANNEL` and `BROKER_EXCHANGE`,
+and runs the shared blocking container prepare off-loop. A TTY root attaches with inherited stdio
 and host-log redirection; a headless root inherits separate stdout and stderr;
 a headless child captures merged output in a bounded ring and can remove its
 workspace after a clean exit when the workspace records itself throwaway — a
@@ -11,8 +11,9 @@ the complete docker inputs, including the explicit env snapshot and whether
 ambient forwarding is allowed.
 
 `ProcessSpawner` runs a host-session root with inherited stdio, adds the
-provisioned host socket directly to its explicit environment, and applies the
-interactive signal and host-log handling only to interactive launches.
+provisioned host socket and the exchange id directly to its explicit
+environment, and applies the interactive signal and host-log handling only to
+interactive launches.
 
 `CompositeSpawner` dispatches on the concrete `LaunchSpec` type, so a broker
 root of either mode can spawn children of any registered kind.
@@ -62,7 +63,7 @@ class ProcessLaunchSpec(LaunchSpec):
 
   `env` is the child's full environment — an explicit snapshot, never a live
   `os.environ` read (the same purity rule as `DockerLaunchSpec.env`); the spawner
-  sets `BROKER_CHANNEL` on top, pointing at the provisioned socket.
+  sets `BROKER_CHANNEL` and `BROKER_EXCHANGE` on top.
   """
 
   command: list[str]
@@ -90,10 +91,12 @@ class _RingBuffer:
     return bytes(self._buffer)
 
 
-def _broker_launch(launch: DockerLaunch, channel: Provisioned) -> DockerLaunch:
-  """add the provisioned broker channel to a neutral container launch."""
+def _broker_launch(launch: DockerLaunch, channel: Provisioned, exchange: str) -> DockerLaunch:
+  """add the provisioned broker channel and the peer's exchange id to a neutral
+  container launch."""
   env = dict(launch.env)
   env['BROKER_CHANNEL'] = CONTAINER_BROKER_ADDRESS
+  env['BROKER_EXCHANGE'] = exchange
   return replace(
     launch,
     env=env,
@@ -367,9 +370,9 @@ class _HeadlessRoot(ChildHandle):
 
 
 def _prepare_docker_spawn(
-  launch: DockerLaunchSpec, channel: Provisioned
+  launch: DockerLaunchSpec, channel: Provisioned, exchange: str
 ) -> tuple[str, Optional[Workspace]]:
-  docker_launch = _broker_launch(launch.launch, channel)
+  docker_launch = _broker_launch(launch.launch, channel, exchange)
   workspace = Workspace.ensure(docker_launch.name, docker_launch.repo, WorkspaceKind.CONTAINER)
   container_id = prepare_container(docker_launch)
   if not workspace.metadata.throwaway:
@@ -382,9 +385,11 @@ class DockerSpawner(Spawner):
   def __init__(self, host_log: Optional[Path] = None):
     self._host_log = host_log
 
-  async def spawn(self, launch: LaunchSpec, channel: Provisioned) -> ChildHandle:
+  async def spawn(self, launch: LaunchSpec, channel: Provisioned, exchange: str) -> ChildHandle:
     assert isinstance(launch, DockerLaunchSpec)
-    container_id, workspace = await asyncio.to_thread(_prepare_docker_spawn, launch, channel)
+    container_id, workspace = await asyncio.to_thread(
+      _prepare_docker_spawn, launch, channel, exchange
+    )
     if launch.launch.tty:
       process = await asyncio.create_subprocess_exec(
         'docker', 'start', '-a', '-i', DETACH_FLAG, container_id
@@ -408,10 +413,11 @@ class ProcessSpawner(Spawner):
   def __init__(self, host_log: Optional[Path] = None):
     self._host_log = host_log
 
-  async def spawn(self, launch: LaunchSpec, channel: Provisioned) -> ChildHandle:
+  async def spawn(self, launch: LaunchSpec, channel: Provisioned, exchange: str) -> ChildHandle:
     assert isinstance(launch, ProcessLaunchSpec)
     env = dict(launch.env)
     env['BROKER_CHANNEL'] = f'unix:{channel.host_endpoint}'
+    env['BROKER_EXCHANGE'] = exchange
     process = await asyncio.create_subprocess_exec(*launch.command, cwd=launch.cwd, env=env)
     if launch.interactive:
       return _AttachedProcess(process, self._host_log)
@@ -428,8 +434,8 @@ class CompositeSpawner(Spawner):
   def __init__(self, spawners: dict[type[LaunchSpec], Spawner]):
     self._spawners = spawners
 
-  async def spawn(self, launch: LaunchSpec, channel: Provisioned) -> ChildHandle:
+  async def spawn(self, launch: LaunchSpec, channel: Provisioned, exchange: str) -> ChildHandle:
     spawner = self._spawners.get(type(launch))
     if spawner is None:
       raise ValueError(f'no spawner registered for {type(launch).__name__}')
-    return await spawner.spawn(launch, channel)
+    return await spawner.spawn(launch, channel, exchange)

@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import bro.launch.broxy as ride_broxy
+from bro.broker import brotocol
 from bro.broker.brotocol import Message
 from bro.broker.client import Client
 from bro.broker.transport import ChannelID
@@ -80,13 +81,11 @@ async def test_session_broxy_serves_the_rewritten_channel():
       request_task = asyncio.create_task(asyncio.to_thread(client.request, 'ping', {}, TIMEOUT))
       channel, message = await asyncio.wait_for(server.sink.messages.get(), TIMEOUT)
       assert channel == provisioned.channel  # the proxy rides the session's one channel
-      assert message.type == 'ping'
-      await server.transport.send(
-        channel, Message(type='reply', payload={'pong': {}}, in_reply_to=message.id)
-      )
+      assert message.kind == 'ping'
+      await server.transport.send(channel, brotocol.result(message.id, 'ok', value={'pong': {}}))
       reply = await asyncio.wait_for(request_task, TIMEOUT)
-      assert reply.type == 'reply'
-      assert reply.in_reply_to == message.id
+      assert reply.type == 'result'
+      assert reply.request == message.id
       client.close()
     finally:
       broxy.stop()

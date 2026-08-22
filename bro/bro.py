@@ -119,7 +119,7 @@ class BroRaised(llm_mcp.ToolControlSignal):
 class AnswerDelivered(llm_mcp.ToolControlSignal):
   """ends a summoned Bro run with its explicit answer: raised by the `answer`
   service tool's bare flavor; the surface that drives the run turns it into the
-  run's `completed{result, end_reason: ok}`."""
+  run's ok result."""
 
   def __init__(self, answer: str):
     super().__init__(answer)
@@ -180,7 +180,7 @@ def _answer(answer: str) -> str:
 
 async def _claude_answer(answer: str) -> str:
   # the claude twin of _claude_raise, for the clean end: no exception can end
-  # the consuming claude session, so send the terminal over the broker channel,
+  # the consuming claude session, so send the run's result over the broker channel,
   # then terminate the session. Unlike raise, an undeliverable answer must not
   # kill the session — without a channel the summoner would never hear it, so
   # that errors back to the agent instead.
@@ -338,7 +338,7 @@ def _banner_tool(bro: 'BaseBro', live_run: Optional[LiveRun], variables: Variabl
 def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.Tool:
   # a fresh channel client per call, opened on the loop and closed in `finally`
   # so a cancelled tool call (the MCP client timed out or aborted) unblocks the
-  # off-loop wait: the broxy sees the waiter go, and the terminal buffers for a
+  # off-loop wait: the broxy sees the waiter go, and the result buffers for a
   # later summon_check instead of feeding an abandoned thread. the blocking wait
   # runs off-loop so an interactive surface stays responsive under a long summon.
   # the run's tool position names the summon call's projected source, so the
@@ -516,7 +516,7 @@ def _build_service_server(
   # `skill` bridges only harnesses without a native loader; `raise` only makes
   # sense non-interactively (a caller to abort to — interactive callers pass
   # include_raise=False); `answer` is the summoned run's delivery surface — it
-  # needs the summoned mark and a channel to send the terminal on, plus a
+  # needs the summoned mark and a channel to send the result on, plus a
   # killable session on the mcp wire (the bare flavor ends the run by
   # exception); `summon`/`summon_check` need a broker channel and
   # `summon_list` the session's summon-status file on top. the decided roster

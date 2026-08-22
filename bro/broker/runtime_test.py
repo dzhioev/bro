@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from bro.broker import brotocol
 from bro.broker.brotocol import Message
 from bro.broker.runtime import Peer, Runtime
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
@@ -61,7 +62,7 @@ class LocalSpawner(Spawner):
     self.handles: list[LocalChildHandle] = []
     self.raise_on_spawn = False
 
-  async def spawn(self, launch: LaunchSpec, channel: Provisioned) -> ChildHandle:
+  async def spawn(self, launch: LaunchSpec, channel: Provisioned, exchange: str) -> ChildHandle:
     assert isinstance(launch, LocalLaunchSpec)
     if self.raise_on_spawn:
       raise RuntimeError('injected launch failure')
@@ -69,7 +70,11 @@ class LocalSpawner(Spawner):
       sys.executable,
       '-c',
       launch.code,
-      env={**os.environ, 'BROKER_CHANNEL': 'unix:' + channel.host_endpoint},
+      env={
+        **os.environ,
+        'BROKER_CHANNEL': 'unix:' + channel.host_endpoint,
+        'BROKER_EXCHANGE': exchange,
+      },
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,
     )
@@ -149,19 +154,20 @@ def _sock_files(control_dir: str) -> list[str]:
 _CHILD_COMPLETE = """
 import os
 from bro.broker.transport import connect
-from bro.broker.brotocol import Message
+from bro.broker import brotocol
 client = connect(os.environ['BROKER_CHANNEL'])
-client.send(Message(type='started', payload={'trail_id': 't1'}))
-client.send(Message(type='completed', payload={'result': 'ok', 'end_reason': 'ok'}))
+exchange = os.environ['BROKER_EXCHANGE']
+client.send(brotocol.progress(exchange, {'trail_id': 't1'}))
+client.send(brotocol.result(exchange, 'ok', value='done'))
 client.close()
 """
 
 _CHILD_FAIL = """
 import os, sys
 from bro.broker.transport import connect
-from bro.broker.brotocol import Message
+from bro.broker import brotocol
 client = connect(os.environ['BROKER_CHANNEL'])
-client.send(Message(type='started', payload={}))
+client.send(brotocol.progress(os.environ['BROKER_EXCHANGE'], {}))
 sys.stderr.write('boom-traceback')
 sys.stderr.flush()
 client.close()
@@ -171,21 +177,22 @@ sys.exit(3)
 _CHILD_HANG = """
 import os, time
 from bro.broker.transport import connect
-from bro.broker.brotocol import Message
+from bro.broker import brotocol
 client = connect(os.environ['BROKER_CHANNEL'])
-client.send(Message(type='started', payload={}))
+client.send(brotocol.progress(os.environ['BROKER_EXCHANGE'], {}))
 time.sleep(3600)
 """
 
 _CHILD_ECHO = """
 import os
 from bro.broker.transport import connect
-from bro.broker.brotocol import Message
+from bro.broker import brotocol
 client = connect(os.environ['BROKER_CHANNEL'])
-client.send(Message(type='started', payload={}))
+exchange = os.environ['BROKER_EXCHANGE']
+client.send(brotocol.progress(exchange, {}))
 request = client.receive(5.0)
 payload = request.payload if request is not None else None
-client.send(Message(type='completed', payload={'echo': payload, 'end_reason': 'ok'}))
+client.send(brotocol.result(exchange, 'ok', value=payload))
 client.close()
 """
 
@@ -200,13 +207,13 @@ async def test_connect_message_and_clean_exit_after_drain(socket_dir):
   # the canonical acceptance ordering: a completed the child writes just before exiting
   # is delivered as on_message *before* on_exit (drain-before-decide).
   async with runtime_harness(socket_dir) as env:
-    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_COMPLETE), timeout=None)
+    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_COMPLETE), timeout=None, exchange='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
     started = await next_event(env.listener)
-    assert started[0] == 'message' and started[2].type == 'started'
+    assert started[0] == 'message' and started[2].type == 'progress'
     completed = await next_event(env.listener)
-    assert completed[0] == 'message' and completed[2].type == 'completed'
+    assert completed[0] == 'message' and completed[2].type == 'result'
     exited = await next_event(env.listener)
     assert exited == ('exit', peer, 0, '')
 
@@ -214,7 +221,7 @@ async def test_connect_message_and_clean_exit_after_drain(socket_dir):
 @pytest.mark.asyncio
 async def test_early_exit_reports_code_and_output_tail(socket_dir):
   async with runtime_harness(socket_dir) as env:
-    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_FAIL), timeout=None)
+    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_FAIL), timeout=None, exchange='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
     assert (await next_event(env.listener))[0] == 'message'  # started
@@ -226,7 +233,7 @@ async def test_early_exit_reports_code_and_output_tail(socket_dir):
 @pytest.mark.asyncio
 async def test_timeout_kills_then_reports_timeout_and_exit(socket_dir):
   async with runtime_harness(socket_dir) as env:
-    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=3600.0)
+    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=3600.0, exchange='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
     assert (await next_event(env.listener))[0] == 'message'  # started
@@ -246,20 +253,20 @@ async def test_timeout_kills_then_reports_timeout_and_exit(socket_dir):
 @pytest.mark.asyncio
 async def test_send_delivers_message_to_peer(socket_dir):
   async with runtime_harness(socket_dir) as env:
-    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_ECHO), timeout=None)
+    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_ECHO), timeout=None, exchange='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
     assert (await next_event(env.listener))[0] == 'message'  # started
-    env.runtime.send(peer, Message(type='ping', payload={'n': 7}))
+    env.runtime.send(peer, brotocol.progress('x1', {'n': 7}))
     echoed = await next_event(env.listener)
-    assert echoed[0] == 'message' and echoed[2].type == 'completed'
-    assert echoed[2].payload['echo'] == {'n': 7}
+    assert echoed[0] == 'message' and echoed[2].type == 'result'
+    assert echoed[2].payload['value'] == {'n': 7}
 
 
 @pytest.mark.asyncio
 async def test_kill_reaps_the_process(socket_dir):
   async with runtime_harness(socket_dir) as env:
-    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=None)
+    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=None, exchange='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
     assert (await next_event(env.listener))[0] == 'message'  # started
@@ -272,7 +279,7 @@ async def test_kill_reaps_the_process(socket_dir):
 @pytest.mark.asyncio
 async def test_forget_drops_channel_without_exit(socket_dir):
   async with runtime_harness(socket_dir) as env:
-    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=None)
+    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=None, exchange='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
     assert (await next_event(env.listener))[0] == 'message'  # started
@@ -284,7 +291,9 @@ async def test_forget_drops_channel_without_exit(socket_dir):
 @pytest.mark.asyncio
 async def test_exit_before_connect_reports_without_birth(socket_dir):
   async with runtime_harness(socket_dir) as env:
-    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_EXIT_BEFORE_CONNECT), timeout=None)
+    peer = await env.runtime.spawn(
+      LocalLaunchSpec(_CHILD_EXIT_BEFORE_CONNECT), timeout=None, exchange='x1'
+    )
 
     exited = await next_event(env.listener)  # no on_connect: the child never attached
     assert exited == ('exit', peer, 2, '')
@@ -301,13 +310,13 @@ async def test_expect_delivers_messages_then_reports_gone_on_disconnect(socket_d
 
     def _attach_and_complete() -> None:
       client = connect('unix:' + provisioned.host_endpoint)
-      client.send(Message(type='completed', payload={'result': 'done', 'end_reason': 'ok'}))
+      client.send(brotocol.result('x-manual', 'ok', value='done'))
       client.close()
 
     await asyncio.to_thread(_attach_and_complete)
     assert await next_event(env.listener) == ('connect', peer)
     completed = await next_event(env.listener)
-    assert completed[0] == 'message' and completed[2].type == 'completed'
+    assert completed[0] == 'message' and completed[2].type == 'result'
     assert await next_event(env.listener) == ('gone', peer)
 
 
@@ -319,7 +328,7 @@ async def test_expect_disconnect_without_terminal_reports_gone(socket_dir):
 
     def _attach_and_leave() -> None:
       client = connect('unix:' + provisioned.host_endpoint)
-      client.send(Message(type='started', payload={'trail_id': 't1'}))
+      client.send(brotocol.progress('x-manual', {'trail_id': 't1'}))
       client.close()
 
     await asyncio.to_thread(_attach_and_leave)
@@ -362,7 +371,7 @@ async def test_launch_failure_rolls_back_registration(socket_dir):
   async with runtime_harness(socket_dir) as env:
     env.spawner.raise_on_spawn = True
     with pytest.raises(RuntimeError):
-      await env.runtime.spawn(LocalLaunchSpec(_CHILD_COMPLETE), timeout=None)
+      await env.runtime.spawn(LocalLaunchSpec(_CHILD_COMPLETE), timeout=None, exchange='x1')
 
     await until(lambda: _sock_files(env.control_dir) == [])  # the rollback's transport.close ran
     assert env.listener.events.empty()

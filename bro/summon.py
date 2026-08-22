@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 """summon — request another bro on the session's broker channel and get its answer.
 
-The peer side of the summon mechanism: a `summon{target, prompt, timeout?, into?,
-hold?, grant?, revoke?, llm?, harness?}`
-request on the session channel, answered by the host-side handler (`ride/ride/summon_control.py`)
-with `started{trail_id}` and exactly one terminal (`completed` / `failed` /
-`reply{error}`). This module owns the request's wire contract — the type tag, the
-payload keys, the 1800s default timeout — for all its consumers: the self-contained `summon` CLI, the bro service tools (`summon` /
+The peer side of the summon mechanism: a request of kind `summon` with args
+`{target, prompt, timeout?, into?, hold?, grant?, revoke?, llm?, harness?}` on
+the session channel, answered by the host-side handler (`ride/ride/summon_control.py`)
+with a started progress (`{trail_id}`) and exactly one result. This module owns
+the request's wire contract — the kind, the args keys, the 1800s default timeout
+— for all its consumers: the self-contained `summon` CLI, the bro service tools (`summon` /
 `summon_check`, over the library functions `summon_and_wait`, `summon_detached`,
 `check_summon`, `collect_summon`), and the blocking CLI relay helper
 `relay_summon`.
@@ -26,7 +26,7 @@ top of the target's own default scope.
 instead provisions a channel for a child the user launches themselves — the
 request id doubles as the token the user's `ride along --summoned <token>`
 launch consumes (`manual_launch_command` renders the exact command to relay).
-The host acknowledges the registration with an interim `accepted` once the
+The host acknowledges the registration with an acceptance progress once the
 token is live, and the manual client waits for it (`ACCEPT_TIMEOUT`), so a
 denial fails at the summon — never later, after a dead token was already handed
 to the user. The child then attaches as a regular summon peer, so the
@@ -35,11 +35,10 @@ since the launch is paced by a human. A manual request refuses `timeout`,
 `hold`, `llm`, and `harness` — the user's launch owns the session's shape, and
 there is no host-killable child for a timeout to bound.
 
-Blocking mode sends, prints the request id and the `started` trail id to stderr,
-and relays the terminal: the answer on stdout (exit 0), everything else as a
-`SummonError` on stderr (exit 1) — a `completed` whose `end_reason` is `raised` or
-`error` counts as failure. `--detach` prints the request id on stdout and exits
-right after the send.
+Blocking mode sends, prints the request id and the started trail id to stderr,
+and relays the result: the answer on stdout (exit 0), everything else as a
+`SummonError` on stderr (exit 1) — any outcome but `ok` counts as failure.
+`--detach` prints the request id on stdout and exits right after the send.
 
 Any summon is reclaimable by the request id both modes print — detached or a
 blocking wait that was killed mid-flight. `summon check <request-id>` peeks
@@ -64,10 +63,10 @@ timer, so only the backstop bounds it, and a claim that never sees a `started`
 (consumed by the dead waiter) still gets the full run bound — and each correlated
 `started` re-arms it to the effective timeout exactly: the host timer starts before
 the client receives `started`, so the re-armed bound structurally outlives the host
-backstop. The backstop normally delivers a terminal; expiry means it was lost (e.g.
+backstop. The backstop normally delivers the result; expiry means it was lost (e.g.
 sent while the broxy was down) or the launch wedged, and the failure message names
 which phase went silent — no `started` points at the session's checkout-keyed
-summon status/audit, while a lost terminal after `started` points at bro.trails.
+summon status/audit, while a result lost after `started` points at bro.trails.
 `summon list` (`list_summons`) reads the session's summon-status file
 (`RIDE_SUMMON_STATUS`, written host-side by `ride/ride/summon_control.py`) and reports the active
 summons and the last finished one, each with its request id — the rediscovery
@@ -113,7 +112,7 @@ if TYPE_CHECKING:
 
 __cli_name__ = 'summon'
 
-SUMMON = 'summon'  # the request's message-type tag (a consumer tag; not in broker's Tag)
+SUMMON = 'summon'  # the kind a summon request names
 SUMMONER_ENV = 'RIDE_SUMMONER'
 # marks a run as a summoned child — the fact the claude solo runner keys its
 # run-lifecycle emission on (a bro-run child emits from `BaseBro.run` instead)
@@ -222,7 +221,7 @@ def summoned_by_from_env() -> Optional[dict[str, Any]]:
 
 class SummonError(Exception):
   """a summon that produced no usable answer: denied, malformed, raised, failed,
-  or its terminal never arrived. The message is the operator-facing reason."""
+  or its result never arrived. The message is the operator-facing reason."""
 
 
 def _open_client() -> 'Client':
@@ -290,28 +289,29 @@ def _trails_hint(trail_id: Optional[str]) -> str:
   return 'look for the run with `rewind list`'
 
 
-def _interpret_terminal(terminal: 'Message', trail_id: Optional[str]) -> str:
-  """turn a summon terminal into the answer, or raise `SummonError` with the
+def _interpret_result(message: 'Message', trail_id: Optional[str]) -> str:
+  """turn a summon result into the answer, or raise `SummonError` with the
   failure reason."""
-  from bro.broker.brotocol import Tag
-
-  if terminal.type == Tag.COMPLETED:
-    end_reason = terminal.payload.get('end_reason')
-    result = terminal.payload.get('result')
-    if end_reason == 'ok':
-      return result if result is not None else ''
-    raise SummonError(f'summon {end_reason}: {result}')
-  if terminal.type == Tag.FAILED:
-    reason = terminal.payload.get('reason')
-    detail = terminal.payload.get('error', terminal.payload.get('output_tail'))
-    parts = [f'summon failed ({reason})']
-    if detail is not None and len(str(detail).strip()) > 0:
-      parts.append(str(detail).strip())
-    parts.append(_trails_hint(trail_id))
-    raise SummonError('; '.join(parts))
-  if terminal.type == Tag.REPLY:
-    raise SummonError(str(terminal.payload.get('error', terminal.payload)))
-  raise SummonError(f'unexpected summon terminal {terminal.type!r}: {terminal.payload}')
+  payload = message.payload
+  outcome = payload.get('outcome')
+  if outcome == 'ok':
+    value = payload.get('value')
+    return value if value is not None else ''
+  if outcome == 'denied':
+    raise SummonError(str(payload.get('error', payload)))
+  detail = payload.get('detail')
+  detail = detail if isinstance(detail, dict) else {}
+  reason = detail.get('reason')
+  error = payload.get('error')
+  if reason in ('raised', 'error'):
+    # the child's own run ended without an answer; `error` carries its reason
+    raise SummonError(f'summon {reason}: {error}')
+  parts = [f'summon failed ({reason})']
+  diagnostic = error if error is not None else detail.get('output_tail')
+  if diagnostic is not None and len(str(diagnostic).strip()) > 0:
+    parts.append(str(diagnostic).strip())
+  parts.append(_trails_hint(trail_id))
+  raise SummonError('; '.join(parts))
 
 
 def _await_answer(
@@ -321,19 +321,17 @@ def _await_answer(
   timeout: float,
   on_started: Optional[Callable[[str], None]] = None,
 ) -> str:
-  """block for the request's terminal and interpret it; returns the answer or
+  """block for the request's result and interpret it; returns the answer or
   raises `SummonError` with the failure reason. The wait opens bounded at
-  `max(timeout, LAUNCH_TIMEOUT)` and re-arms to `timeout` on each interim
+  `max(timeout, LAUNCH_TIMEOUT)` and re-arms to `timeout` on each progress
   (see the module docstring)."""
-  from bro.broker.brotocol import Tag
-
   trail_id: Optional[str] = None
   started_seen = False
 
   def _interim(message: 'Message') -> None:
     nonlocal trail_id, started_seen
-    if message.type != Tag.STARTED:
-      return
+    if message.payload.get('trail_id') is None:
+      return  # progress without a trail (a manual summon's acceptance) is not a start
     started_seen = True
     trail_id = message.payload.get('trail_id')
     if on_started is not None and trail_id is not None:
@@ -341,29 +339,29 @@ def _await_answer(
 
   launch_bound = max(timeout, LAUNCH_TIMEOUT)
   try:
-    terminal = client.await_reply(
+    result = client.await_reply(
       request, launch_bound, on_interim=_interim, timeout_after_interim=timeout
     )
   except TimeoutError:
     if started_seen:
       raise SummonError(
-        f'no summon terminal within {timeout:.0f}s of started — the result was lost '
+        f'no summon result within {timeout:.0f}s of started — the result was lost '
         f'or the child is still running; {_trails_hint(trail_id)}'
       ) from None
     raise SummonError(
-      f'no started and no terminal within {launch_bound:.0f}s — the child likely '
+      f'no started and no result within {launch_bound:.0f}s — the child likely '
       'never launched; check the session summon status and checkout-keyed runtime audit'
     ) from None
   except ConnectionError as e:
     raise SummonError(f'broker channel closed awaiting the summon result: {e}') from None
-  return _interpret_terminal(terminal, trail_id)
+  return _interpret_result(result, trail_id)
 
 
 def open_client() -> 'Client':
   """a connected channel client for a caller that owns the lifecycle itself. The
   bro service tools open one outside their worker thread so a cancelled tool call
   can close it and unblock the blocking wait — the broxy sees the waiter go and
-  the terminal buffers for a later check/collect (`ClientTransport.close`
+  the result buffers for a later check/collect (`ClientTransport.close`
   documents the cross-thread abort guarantee this rides on). Raises `SummonError`
   when the session has no channel."""
   return _open_client()
@@ -440,12 +438,13 @@ def summon_detached(
     harness=harness,
   )
   with _open_client() as client:
-    return client.send(SUMMON, payload).id
+    return client.send(SUMMON, payload).exchange
 
 
 def _await_acceptance(client: 'Client', request: 'Message') -> None:
-  """block until the host acknowledges a manual summon with `accepted`; a denial
-  or failed registration raises `SummonError` with the reason."""
+  """block until the host acknowledges a manual summon with the acceptance
+  progress; a denial or failed registration raises `SummonError` with the
+  reason."""
   from bro.broker.brotocol import Tag
 
   try:
@@ -457,11 +456,10 @@ def _await_acceptance(client: 'Client', request: 'Message') -> None:
     ) from None
   except ConnectionError as e:
     raise SummonError(f'broker channel closed awaiting the manual summon acknowledgment: {e}') from None  # fmt: skip
-  if first.type == Tag.ACCEPTED:
+  if first.type == Tag.PROGRESS:
     return
-  if first.type in (Tag.REPLY, Tag.FAILED):
-    _interpret_terminal(first, None)  # denials and failed registrations raise here
-  raise SummonError(f'unexpected manual summon acknowledgment {first.type!r}: {first.payload}')
+  _interpret_result(first, None)  # denials and failed registrations raise here
+  raise SummonError(f'unexpected manual summon acknowledgment: {first.payload}')
 
 
 def summon_manual(
@@ -485,7 +483,7 @@ def summon_manual(
   with _open_client() as client:
     request = client.send(SUMMON, payload)
     _await_acceptance(client, request)
-    return request.id
+    return request.exchange
 
 
 @dataclass(frozen=True)
@@ -503,58 +501,65 @@ class SummonStatus:
 
 
 def check_summon(request_id: str, *, last_seen: Optional[int] = None) -> SummonStatus:
-  """non-blocking check on a summon by request id (the broxy's `check`). Without
-  `last_seen`: a non-marking peek — the answer when an unread result is in, else
-  the pending/collected state. With `last_seen` (0 = the start): a cursor read —
-  replays the conversation from that sequence regardless of read status, the
-  recovery path when a result was read by a wait whose reply never arrived; the
-  returned `seq` is the new cursor. Raises `SummonError` when the id is unknown,
-  the summon failed, `last_seen` is ahead of what was read, or no broxy
-  answers."""
+  """non-blocking check on a summon by request id (the broxy's `check` kind).
+  Without `last_seen`: a non-marking peek — the answer when an unread result is
+  in, else the pending/collected state. With `last_seen` (0 = the start): a
+  cursor read — replays the conversation from that sequence regardless of read
+  status, the recovery path when a result was read by a wait whose reply never
+  arrived; the returned `seq` is the new cursor. Raises `SummonError` when the
+  id is unknown, the summon failed, `last_seen` is ahead of what was read, or
+  no broxy answers."""
   from bro.broker.brotocol import Tag
+  from bro.broker.broxy import CHECK_KIND
 
-  payload: dict[str, Any] = {'id': request_id}
+  args: dict[str, Any] = {'id': request_id}
   if last_seen is not None:
-    payload['last_seen'] = last_seen
+    args['last_seen'] = last_seen
   with _open_client() as client:
-    check = client.send(Tag.CHECK, payload)
-    trail_id: Optional[str] = None
-    interim_count = 0
-
-    def _interim(message: 'Message') -> None:
-      nonlocal trail_id, interim_count
-      interim_count += 1
-      if message.payload.get('trail_id') is not None:
-        trail_id = message.payload.get('trail_id')
-
-    try:
-      terminal = client.await_reply(check, CHECK_TIMEOUT, on_interim=_interim)
-    except TimeoutError:
-      raise SummonError(
-        f'no check reply within {CHECK_TIMEOUT:.0f}s — the session broxy is not answering'
-      ) from None
-    except ConnectionError as e:
-      raise SummonError(f'broker channel closed awaiting the check reply: {e}') from None
-    # the broxy's own state replies carry 'state'; every real summon message
-    # (completed / failed / the handler's reply{error}) does not
-    state = terminal.payload.get('state')
-    if state == 'pending' or state == 'collected':
+    check = client.send(CHECK_KIND, args)
+    # the broxy replays window copies on the summon's own exchange id, then closes
+    # the check with its report — correlation separates the two streams
+    conversation: list[Message] = []
+    deadline = time.monotonic() + CHECK_TIMEOUT
+    while True:
+      remaining = deadline - time.monotonic()
+      if remaining <= 0:
+        raise SummonError(
+          f'no check reply within {CHECK_TIMEOUT:.0f}s — the session broxy is not answering'
+        )
+      message = client.receive(remaining)
+      if message is None:
+        # the transport returns None for both timeout and EOF; the deadline says which
+        if time.monotonic() >= deadline:
+          raise SummonError(
+            f'no check reply within {CHECK_TIMEOUT:.0f}s — the session broxy is not answering'
+          )
+        raise SummonError('broker channel closed awaiting the check reply')
+      if message.request == check.id:
+        report = message
+        break
+      if message.request == request_id:
+        conversation.append(message)
+    if report.payload.get('outcome') != 'ok':
+      raise SummonError(str(report.payload.get('error', report.payload)))
+    value = report.payload.get('value')
+    if not isinstance(value, dict):
+      raise SummonError(f'malformed check report: {report.payload}')
+    trail_id = value.get('trail_id')
+    summon_result = next((m for m in conversation if m.type == Tag.RESULT), None)
+    if summon_result is None:
+      state = value.get('state')
       return SummonStatus(
         pending=state == 'pending',
         collected=state == 'collected',
-        trail_id=terminal.payload.get('trail_id', trail_id),
-        seq=terminal.payload.get('seq'),
+        trail_id=trail_id,
+        seq=value.get('seq'),
       )
-    if state == 'unknown':
-      raise SummonError(
-        f'unknown request id {request_id} (not sent through this session, or evicted); '
-        f'{_trails_hint(None)}'
-      )
-    # a real terminal closed the reply: with a cursor, the contiguous window
-    # gives each message's sequence by counting from last_seen
-    seq = last_seen + interim_count + 1 if last_seen is not None else None
     return SummonStatus(
-      pending=False, answer=_interpret_terminal(terminal, trail_id), trail_id=trail_id, seq=seq
+      pending=False,
+      answer=_interpret_result(summon_result, trail_id),
+      trail_id=trail_id,
+      seq=value.get('seq'),
     )
 
 
@@ -565,16 +570,16 @@ def collect_summon(
   on_started: Optional[Callable[[str], None]] = None,
   client: Optional['Client'] = None,
 ) -> str:
-  """claim a summon by request id and block for its answer (the broxy's `claim`).
-  The wait is a lock: fails fast while another waiter is alive, and errors once
-  the result was already collected — re-read that with `check_summon(last_seen=…)`.
+  """claim a summon by request id and block for its answer (the broxy's `claim`
+  kind). The wait is a lock: fails fast while another waiter is alive, and errors
+  once the result was already collected — re-read that with `check_summon(last_seen=…)`.
   With `client` the caller owns the connection's lifecycle (closing it from
   another thread aborts the wait); without, a fresh one is opened and closed per
   call. Raises `SummonError` on any failure."""
-  from bro.broker.brotocol import Tag
+  from bro.broker.broxy import CLAIM_KIND
 
   with _connection(client) as connection:
-    claim = connection.send(Tag.CLAIM, {'id': request_id})
+    claim = connection.send(CLAIM_KIND, {'id': request_id})
     return _await_answer(
       connection,
       claim,
@@ -677,14 +682,14 @@ def relay_summon(
     return 1
   with client:
     request = client.send(SUMMON, payload)
-    log.info('summon request %s', request.id)
+    log.info('summon request %s', request.exchange)
     if manual:
       try:
         _await_acceptance(client, request)
       except SummonError as e:
         log.error('%s', e)
         return 1
-      log.info('have the user run: %s', manual_launch_command(request.id, target))
+      log.info('have the user run: %s', manual_launch_command(request.exchange, target))
     effective = timeout if timeout is not None else DEFAULT_TIMEOUT
     return _relay(
       lambda: _await_answer(

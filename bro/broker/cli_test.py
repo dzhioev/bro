@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import pytest
 
 import bro.broker.cli as broker_cli
+from bro.broker import brotocol
 from bro.broker.brotocol import Message
 from bro.broker.client import CHANNEL_ENV
 from bro.broker.transport import ChannelID
@@ -63,7 +64,7 @@ def test_inert_when_channel_unset(monkeypatch, capsys):
   assert capsys.readouterr().out == ''  # stdout stays data-only
 
 
-def test_payload_must_be_a_json_object(monkeypatch):
+def test_args_must_be_a_json_object(monkeypatch):
   monkeypatch.delenv(CHANNEL_ENV, raising=False)
   with pytest.raises(SystemExit):
     broker_cli.main(['broker', 'send', 'ping', 'not-json'])
@@ -76,13 +77,13 @@ async def test_send_reaches_the_host(socket_dir, monkeypatch):
   async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
-    argv = ['broker', 'send', 'started', '{"trail_id": "t1"}']
+    argv = ['broker', 'send', 'ping', '{"n": 1}']
     assert await asyncio.to_thread(broker_cli.main, argv) == 0
 
     channel, message = await _next(server.sink.messages)
     assert channel == provisioned.channel
-    assert message.type == 'started'
-    assert message.payload == {'trail_id': 't1'}
+    assert message.type == 'request'
+    assert message.payload == {'kind': 'ping', 'args': {'n': 1}}
 
 
 @pytest.mark.asyncio
@@ -95,14 +96,14 @@ async def test_request_prints_the_correlated_reply(socket_dir, monkeypatch, caps
 
     channel, request_message = await _next(server.sink.messages)
     await server.transport.send(
-      channel, Message(type='reply', payload={'pong': True}, in_reply_to=request_message.id)
+      channel, brotocol.result(request_message.id, 'ok', value={'pong': True})
     )
 
     assert await asyncio.wait_for(main_task, TIMEOUT) == 0
     printed = json.loads(capsys.readouterr().out)
-    assert printed['type'] == 'reply'
-    assert printed['in_reply_to'] == request_message.id
-    assert printed['payload'] == {'pong': True}
+    assert printed['type'] == 'result'
+    assert printed['request'] == request_message.id
+    assert printed['payload'] == {'outcome': 'ok', 'value': {'pong': True}}
 
 
 @pytest.mark.asyncio
@@ -124,11 +125,11 @@ async def test_receive_prints_one_message(socket_dir, monkeypatch, capsys):
     main_task = asyncio.create_task(asyncio.to_thread(broker_cli.main, argv))
 
     await _next(server.sink.connects)  # the CLI's client attached
-    await server.transport.send(provisioned.channel, Message(type='status', payload={'n': 7}))
+    await server.transport.send(provisioned.channel, brotocol.progress('X', {'n': 7}))
 
     assert await asyncio.wait_for(main_task, TIMEOUT) == 0
     printed = json.loads(capsys.readouterr().out)
-    assert printed['type'] == 'status'
+    assert printed['type'] == 'progress'
     assert printed['payload'] == {'n': 7}
 
 

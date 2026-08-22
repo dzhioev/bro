@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import pytest
 
 from bro import summon, summon_status
+from bro.broker import brotocol
 from bro.broker.brotocol import Message
 from bro.broker.client import CHANNEL_ENV
 from bro.broker.transport import ChannelID
@@ -98,20 +99,16 @@ class _ManualFakeClient:
   """a client whose send is acknowledged with the scripted correlated message —
   the acceptance handshake a manual summon blocks on."""
 
-  def __init__(self, sent: list[dict], acknowledgment: Message):
+  def __init__(self, sent: list[dict], acknowledge):
     self._sent = sent
-    self._acknowledgment = acknowledgment
+    self._acknowledge = acknowledge  # request id -> the correlated acknowledgment
 
-  def send(self, message_type, payload):
-    self._sent.append(payload)
-    return Message(type=message_type, id='TOKEN-1', payload=payload)
+  def send(self, kind, args):
+    self._sent.append(args)
+    return Message(type='request', id='TOKEN-1', payload={'kind': kind, 'args': args})
 
   def await_any(self, request, timeout):
-    return Message(
-      type=self._acknowledgment.type,
-      payload=self._acknowledgment.payload,
-      in_reply_to=request.id,
-    )
+    return self._acknowledge(request.id)
 
   def __enter__(self):
     return self
@@ -124,7 +121,10 @@ def test_manual_detached_summon_waits_for_acceptance_and_prints_the_command(
   monkeypatch, capsys, caplog
 ):
   sent: list[dict] = []
-  accepted = Message(type='accepted', payload={})
+
+  def accepted(request_id):
+    return brotocol.progress(request_id, {})
+
   monkeypatch.setattr(summon, '_open_client', lambda: _ManualFakeClient(sent, accepted))
   assert summon.main(['summon', '--manual', '--detach', 'dev', 'work it out']) == 0
   assert sent == [{'target': 'dev', 'prompt': 'work it out', 'manual': True}]
@@ -137,7 +137,10 @@ def test_denied_manual_summon_fails_at_the_summon_with_no_token(monkeypatch, cap
   # the denial must surface here — a token printed for a denied summon would
   # send the user to launch against nothing
   sent: list[dict] = []
-  denial = Message(type='reply', payload={'error': "summon denied: 'dev' is not in the list"})
+
+  def denial(request_id):
+    return brotocol.result(request_id, 'denied', error="summon denied: 'dev' is not in the list")
+
   monkeypatch.setattr(summon, '_open_client', lambda: _ManualFakeClient(sent, denial))
   assert summon.main(['summon', '--manual', '--detach', 'dev', 'work it out']) == 1
   assert capsys.readouterr().out == ''
@@ -161,19 +164,10 @@ async def test_blocking_summon_relays_the_answer(socket_dir, monkeypatch, capsys
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
 
     channel, request = await _next(server.sink.messages)
-    assert request.type == 'summon'
-    assert request.payload == {'target': 'dev', 'prompt': 'list the deploy targets'}
-    await server.transport.send(
-      channel, Message(type='started', payload={'trail_id': 'T1'}, in_reply_to=request.id)
-    )
-    await server.transport.send(
-      channel,
-      Message(
-        type='completed',
-        payload={'result': 'alpha, beta', 'end_reason': 'ok'},
-        in_reply_to=request.id,
-      ),
-    )
+    assert request.kind == 'summon'
+    assert request.args == {'target': 'dev', 'prompt': 'list the deploy targets'}
+    await server.transport.send(channel, brotocol.progress(request.id, {'trail_id': 'T1'}))
+    await server.transport.send(channel, brotocol.result(request.id, 'ok', value='alpha, beta'))
 
     assert await asyncio.wait_for(main_task, TIMEOUT) == 0
     assert capsys.readouterr().out == 'alpha, beta\n'
@@ -190,7 +184,7 @@ async def test_timeout_and_into_forward_into_the_request(socket_dir, monkeypatch
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
 
     _, request = await _next(server.sink.messages)
-    assert request.payload == {
+    assert request.args == {
       'target': 'dev',
       'prompt': 'p',
       'timeout': 42.0,
@@ -207,7 +201,7 @@ async def test_hold_forwards_into_the_request(socket_dir, monkeypatch, capsys):
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
 
     _, request = await _next(server.sink.messages)
-    assert request.payload == {
+    assert request.args == {
       'target': 'dev',
       'prompt': 'p',
       'hold': 'attended',
@@ -227,7 +221,7 @@ async def test_scope_and_spec_flags_forward_into_the_request(socket_dir, monkeyp
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
 
     _, request = await _next(server.sink.messages)
-    assert request.payload == {
+    assert request.args == {
       'target': 'dev',
       'prompt': 'p',
       'grant': ['aws', '@bro'],
@@ -247,10 +241,8 @@ async def test_raised_completion_is_a_failure(socket_dir, monkeypatch, capsys, c
     channel, request = await _next(server.sink.messages)
     await server.transport.send(
       channel,
-      Message(
-        type='completed',
-        payload={'result': 'missing credentials', 'end_reason': 'raised'},
-        in_reply_to=request.id,
+      brotocol.result(
+        request.id, 'failed', error='missing credentials', detail={'reason': 'raised'}
       ),
     )
 
@@ -268,12 +260,9 @@ async def test_failed_terminal_carries_a_trails_hint(socket_dir, monkeypatch, ca
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'dev', 'p']))
 
     channel, request = await _next(server.sink.messages)
+    await server.transport.send(channel, brotocol.progress(request.id, {'trail_id': 'T9'}))
     await server.transport.send(
-      channel, Message(type='started', payload={'trail_id': 'T9'}, in_reply_to=request.id)
-    )
-    await server.transport.send(
-      channel,
-      Message(type='failed', payload={'reason': 'timeout'}, in_reply_to=request.id),
+      channel, brotocol.result(request.id, 'failed', detail={'reason': 'timeout'})
     )
 
     assert await asyncio.wait_for(main_task, TIMEOUT) == 1
@@ -292,10 +281,10 @@ async def test_denial_reply_is_a_failure(socket_dir, monkeypatch, capsys, caplog
     channel, request = await _next(server.sink.messages)
     await server.transport.send(
       channel,
-      Message(
-        type='reply',
-        payload={'error': "summon denied: 'bro' is not in this session's summon allow-list"},
-        in_reply_to=request.id,
+      brotocol.result(
+        request.id,
+        'denied',
+        error="summon denied: 'bro' is not in this session's summon allow-list",
       ),
     )
 
@@ -314,19 +303,10 @@ async def test_check_wait_claims_and_relays_the_buffered_answer(socket_dir, monk
     # the broxy would replay buffered messages re-tagged to the claim itself;
     # this stub host answers the claim the same way
     channel, claim = await _next(server.sink.messages)
-    assert claim.type == 'claim'
-    assert claim.payload == {'id': 'REQ-1'}
-    await server.transport.send(
-      channel, Message(type='started', payload={'trail_id': 'T1'}, in_reply_to=claim.id)
-    )
-    await server.transport.send(
-      channel,
-      Message(
-        type='completed',
-        payload={'result': 'late answer', 'end_reason': 'ok'},
-        in_reply_to=claim.id,
-      ),
-    )
+    assert claim.kind == 'claim'
+    assert claim.args == {'id': 'REQ-1'}
+    await server.transport.send(channel, brotocol.progress(claim.id, {'trail_id': 'T1'}))
+    await server.transport.send(channel, brotocol.result(claim.id, 'ok', value='late answer'))
 
     assert await asyncio.wait_for(main_task, TIMEOUT) == 0
     assert capsys.readouterr().out == 'late answer\n'
@@ -342,10 +322,10 @@ async def test_check_wait_unknown_claim_fails_fast(socket_dir, monkeypatch, caps
     channel, claim = await _next(server.sink.messages)
     await server.transport.send(
       channel,
-      Message(
-        type='reply',
-        payload={'error': 'unknown request id NOPE (not sent through this session, or evicted)'},
-        in_reply_to=claim.id,
+      brotocol.result(
+        claim.id,
+        'denied',
+        error='unknown request id NOPE (not sent through this session, or evicted)',
       ),
     )
 
@@ -359,21 +339,16 @@ async def test_check_relays_a_ready_answer(socket_dir, monkeypatch, capsys):
   async with running_server(socket_dir, monkeypatch) as server:
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1']))
 
-    # the broxy replays a buffered terminal re-tagged to the check itself;
-    # this stub host answers the check the same way
+    # the broxy replays window copies on the summon's own exchange id, then
+    # closes the check with its report; this stub host answers the same way
     channel, check = await _next(server.sink.messages)
-    assert check.type == 'check'
-    assert check.payload == {'id': 'REQ-1'}
-    await server.transport.send(
-      channel, Message(type='started', payload={'trail_id': 'T1'}, in_reply_to=check.id)
-    )
+    assert check.kind == 'check'
+    assert check.args == {'id': 'REQ-1'}
+    await server.transport.send(channel, brotocol.progress('REQ-1', {'trail_id': 'T1'}))
+    await server.transport.send(channel, brotocol.result('REQ-1', 'ok', value='ready answer'))
     await server.transport.send(
       channel,
-      Message(
-        type='completed',
-        payload={'result': 'ready answer', 'end_reason': 'ok'},
-        in_reply_to=check.id,
-      ),
+      brotocol.result(check.id, 'ok', value={'state': 'ready', 'seq': 2, 'trail_id': 'T1'}),
     )
 
     assert await asyncio.wait_for(main_task, TIMEOUT) == 0
@@ -388,7 +363,7 @@ async def test_check_pending_exits_3_without_blocking(socket_dir, monkeypatch, c
     channel, check = await _next(server.sink.messages)
     await server.transport.send(
       channel,
-      Message(type='reply', payload={'state': 'pending', 'trail_id': 'T9'}, in_reply_to=check.id),
+      brotocol.result(check.id, 'ok', value={'state': 'pending', 'seq': 0, 'trail_id': 'T9'}),
     )
 
     assert await asyncio.wait_for(main_task, TIMEOUT) == summon.PENDING_EXIT_CODE
@@ -406,7 +381,12 @@ async def test_check_unknown_id_exits_1(socket_dir, monkeypatch, capsys, caplog)
 
     channel, check = await _next(server.sink.messages)
     await server.transport.send(
-      channel, Message(type='reply', payload={'state': 'unknown'}, in_reply_to=check.id)
+      channel,
+      brotocol.result(
+        check.id,
+        'denied',
+        error='unknown request id NOPE (not sent through this session, or evicted)',
+      ),
     )
 
     assert await asyncio.wait_for(main_task, TIMEOUT) == 1
@@ -421,20 +401,16 @@ async def test_check_last_seen_forwards_the_cursor_and_relays(socket_dir, monkey
       asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1', '--last-seen', '0'])
     )
 
-    # the broxy replays the whole conversation re-tagged to the cursor check
+    # the broxy replays the whole conversation on the summon's own exchange id,
+    # then closes the check with its report
     channel, check = await _next(server.sink.messages)
-    assert check.type == 'check'
-    assert check.payload == {'id': 'REQ-1', 'last_seen': 0}
-    await server.transport.send(
-      channel, Message(type='started', payload={'trail_id': 'T1'}, in_reply_to=check.id)
-    )
+    assert check.kind == 'check'
+    assert check.args == {'id': 'REQ-1', 'last_seen': 0}
+    await server.transport.send(channel, brotocol.progress('REQ-1', {'trail_id': 'T1'}))
+    await server.transport.send(channel, brotocol.result('REQ-1', 'ok', value='recovered answer'))
     await server.transport.send(
       channel,
-      Message(
-        type='completed',
-        payload={'result': 'recovered answer', 'end_reason': 'ok'},
-        in_reply_to=check.id,
-      ),
+      brotocol.result(check.id, 'ok', value={'state': 'collected', 'seq': 2, 'trail_id': 'T1'}),
     )
 
     assert await asyncio.wait_for(main_task, TIMEOUT) == 0
@@ -448,8 +424,7 @@ async def test_check_collected_reports_the_cursor_hint(socket_dir, monkeypatch, 
 
     channel, check = await _next(server.sink.messages)
     await server.transport.send(
-      channel,
-      Message(type='reply', payload={'state': 'collected', 'seq': 2}, in_reply_to=check.id),
+      channel, brotocol.result(check.id, 'ok', value={'state': 'collected', 'seq': 2})
     )
 
     assert await asyncio.wait_for(main_task, TIMEOUT) == 1
@@ -474,9 +449,8 @@ def test_check_last_seen_with_wait_errors(monkeypatch, capsys, caplog):
 async def test_check_that_nothing_answers_fails_with_a_hint(
   socket_dir, monkeypatch, capsys, caplog
 ):
-  # a channel with no broxy behind it never answers a check — rule 4 refuses
-  # silently — so the bounded wait must turn that silence into a clean failure
-  # naming the broxy
+  # a wedged broxy never answers a check, so the bounded wait must turn that
+  # silence into a clean failure naming the broxy
   async with running_server(socket_dir, monkeypatch):
     monkeypatch.setattr(summon, 'CHECK_TIMEOUT', 0.1)
     assert await asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1']) == 1
@@ -561,14 +535,12 @@ async def test_wait_after_started_is_bounded_with_a_trails_hint(
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
 
     channel, request = await _next(server.sink.messages)
-    await server.transport.send(
-      channel, Message(type='started', payload={'trail_id': 'T7'}, in_reply_to=request.id)
-    )
+    await server.transport.send(channel, brotocol.progress(request.id, {'trail_id': 'T7'}))
 
     assert await asyncio.wait_for(main_task, TIMEOUT) == 1
     assert capsys.readouterr().out == ''
     assert any(
-      'no summon terminal' in record.getMessage() and 'rewind show T7' in record.getMessage()
+      'no summon result' in record.getMessage() and 'rewind show T7' in record.getMessage()
       for record in caplog.records
     )
 

@@ -180,7 +180,7 @@ that is an answerable outcome, not an error to retry.
 
 ## Relay the answer
 
-The stdout / tool result is the target's terminal reply.
+The stdout / tool result is the target's answer.
 Relay it to the user, attributed ("reviewer says: …"), trimmed of nothing substantive.
 If the user asked for a follow-up action on the answer, continue with it.
 
@@ -207,7 +207,7 @@ If the user asked for a follow-up action on the answer, continue with it.
   or was killed at the timeout.
   The message carries the reason and a trails hint;
   `rewind show <trail-id>` has the full trace.
-- **Wait expired with no terminal**
+- **Wait expired with no result**
   — the result was lost or the child is still running;
   the error says which trail to inspect.
   A killed or detached wait is recoverable:

@@ -1339,7 +1339,7 @@ class TestHostBrokerPingRoundTrip:
       == 0
     )
     # the CLI printed the correlated reply's wire JSON
-    assert '"pong"' in capfd.readouterr().out
+    assert '"outcome": "ok"' in capfd.readouterr().out
     # the channel socket is unlinked once the root exits
     assert list((root / 'var' / 'ride' / 'broker').glob('*.sock')) == []
     # the session claude state landed in the workspace, seeded from its identity
@@ -1356,7 +1356,7 @@ class TestManualSummonRoundTrip:
   _ANSWER_CHILD = """
 import json, sys, time
 from pathlib import Path
-from bro.broker.brotocol import Message
+from bro.broker import brotocol
 from bro.broker.transport import connect
 
 pending_dir = Path(sys.argv[1])
@@ -1371,10 +1371,9 @@ if not records:
   sys.exit(3)
 record = json.loads(records[0].read_text())
 client = connect('unix:' + record['socket'])
-client.send(Message(type='started', payload={'trail_id': 't-manual', 'workspace': 'external-ws'}))
-client.send(
-  Message(type='completed', payload={'result': 'the pair verdict', 'end_reason': 'ok'})
-)
+exchange = record['token']
+client.send(brotocol.progress(exchange, {'trail_id': 't-manual', 'workspace': 'external-ws'}))
+client.send(brotocol.result(exchange, 'ok', value='the pair verdict'))
 client.close(confirm=True)
 """
 

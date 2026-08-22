@@ -7,12 +7,12 @@ Two layers, both computed per broker root:
   session's effective outgoing allow-list here at launch and threads it to
   `run_root_via_broker`.
 - `SummonControl` — the root's summon state, wired up by `run_root_via_broker`:
-  the `summon` request handler (payload validation, per-peer authorization, the
-  immediate denial `reply{error}` plus a deny audit entry, the spawn of a
-  `SummonLaunchSpec` with the requesting peer as its parent — everything heavy
-  runs off-loop in the spawner, see `ride/ride/spawn.py` — or, for a `manual`
-  request, the expected-peer registration with its pending record, see
-  `ride/ride/pending_summon.py`), the delivery-tap observer
+  the `summon` kind handler (args validation, per-peer authorization, the
+  immediate `result{denied}` plus a deny audit entry, the spawn of a
+  `SummonLaunchSpec` with the requesting peer as the exchange's requester —
+  everything heavy runs off-loop in the spawner, see `ride/ride/spawn.py` — or,
+  for a `manual` request, the expected-peer registration with its pending
+  record, see `ride/ride/pending_summon.py`), the delivery-tap observer
   that tracks each child's trail id and outcome, and the visibility outputs
   those feed: a host-side log line per event, an append-only JSONL audit file
   (the out-of-band trace a session's own narrative cannot suppress; every entry
@@ -24,14 +24,14 @@ Authorization is per-peer. The root follows the launch-computed effective list
 above; a summoned child follows the list its own summon request resolved — its
 bro's static MRO-collected `may_summon` seeds under the request's `@bro`
 grant/revoke overrides — recorded at the authorized spawn. The control attributes
-the requesting peer to the bro it spawned for it (the dispatcher's `origin`
-topology plus this control's own spawn records; nothing is read from the wire),
-and a peer it cannot attribute is denied. Provenance rides the same attribution:
+the requesting peer to the bro it spawned for it (the dispatcher's worker index
+plus this control's own spawn records; nothing is read from the wire), and a
+peer it cannot attribute is denied. Provenance rides the same attribution:
 a spawned child's `summoned_by` names the requester's trail — the root's from the
 session's current-trail pointer (the claude recorder publishes it;
 `monitor/trail_pointer.py`) or from the root run's `started` event, a summoned
 child's from its spawn record — plus the requester's own `tool_call` step id when
-the request payload carries one. Summons therefore chain transitively wherever
+the request args carry one. Summons therefore chain transitively wherever
 the seeds chain, bounded by `_MAX_SUMMON_DEPTH` — seeds are declared per-bro, so
 a seed cycle (a → b → a) would otherwise recurse through real containers.
 
@@ -67,8 +67,8 @@ They sit outside the workspace dir so the audit survives a drop. The host proces
 reads the status through the dedicated read-only `/var/ride/summon` bind, while a
 host session reads the host path.
 
-The wire contract (the `summon` tag, payload keys, the 1800s default timeout) is
-owned by the peer-side `bro.summon` module; this module enforces it host-side. Broker
+The wire contract (the `summon` kind, its args keys, the 1800s default timeout)
+is owned by the peer-side `bro.summon` module; this module enforces it host-side. Broker
 imports stay function-local: this module sits on the launch path before the
 `_broker_enabled` gate (see ride/AGENTS.md, "Lazy broker import").
 """
@@ -105,7 +105,7 @@ __all__ = [
 ]
 
 _PROMPT_HEAD_CHARS = 120
-_PAYLOAD_KEYS = frozenset(
+_ARGS_KEYS = frozenset(
   {
     'target',
     'prompt',
@@ -192,35 +192,49 @@ def _prompt_head(prompt: str) -> str:
   return ' '.join(prompt.split())[:_PROMPT_HEAD_CHARS]
 
 
-def _validate(payload: dict[str, Any]) -> Optional[str]:
+def _outcome_tag(payload: dict[str, Any]) -> str:
+  """a summon result's audit/status outcome tag: 'ok', the child run's own end
+  reason ('raised' / 'error'), or 'failed:<reason>' for a host-synthesized
+  failure."""
+  outcome = payload.get('outcome')
+  if outcome != 'failed':
+    return str(outcome)
+  detail = payload.get('detail')
+  reason = detail.get('reason') if isinstance(detail, dict) else None
+  if reason in ('raised', 'error'):
+    return str(reason)
+  return f'failed:{reason}' if reason is not None else 'failed'
+
+
+def _validate(args: dict[str, Any]) -> Optional[str]:
   """the request's shape errors, or None when well-formed. Strict: an unknown key
   is rejected rather than ignored — a typo'd `timout` silently falling back to the
   default would hide the caller's bug."""
   from bro.llm.providers import LLMSelectionError, parse as parse_llm
   from bro.mcp import HOLDS
 
-  unknown = sorted(set(payload) - _PAYLOAD_KEYS)
+  unknown = sorted(set(args) - _ARGS_KEYS)
   if len(unknown) > 0:
     return f'unknown summon field(s): {", ".join(unknown)}'
   for key in ('target', 'prompt'):
-    value = payload.get(key)
+    value = args.get(key)
     if not isinstance(value, str) or len(value) == 0:
       return f'summon needs a non-empty string {key!r}'
-  timeout = payload.get('timeout')
+  timeout = args.get('timeout')
   if timeout is not None and (not isinstance(timeout, (int, float)) or timeout <= 0):
     return "summon 'timeout' must be a positive number of seconds"
-  into = payload.get('into')
+  into = args.get('into')
   if into is not None and (not isinstance(into, str) or len(into) == 0):
     return "summon 'into' must be a non-empty git ref"
-  hold = payload.get('hold')
+  hold = args.get('hold')
   if hold is not None and hold not in HOLDS:
     return f"summon 'hold' must be one of {', '.join(HOLDS)}"
-  step_id = payload.get('step_id')
+  step_id = args.get('step_id')
   if step_id is not None and (
     not isinstance(step_id, int) or isinstance(step_id, bool) or step_id < 0
   ):
     return "summon 'step_id' must be a non-negative int"
-  index = payload.get('index')
+  index = args.get('index')
   if index is not None and (
     step_id is None or not isinstance(index, int) or isinstance(index, bool) or index < 0
   ):
@@ -229,12 +243,12 @@ def _validate(payload: dict[str, Any]) -> Optional[str]:
   # fields above they feed a non-optional consumer (the override split), so a
   # null must be a shape error rather than a default
   for key in ('grant', 'revoke'):
-    if key in payload and (
-      not isinstance(payload[key], list)
-      or not all(isinstance(value, str) and len(value) > 0 for value in payload[key])
+    if key in args and (
+      not isinstance(args[key], list)
+      or not all(isinstance(value, str) and len(value) > 0 for value in args[key])
     ):
       return f'summon {key!r} must be a list of non-empty names'
-  llm = payload.get('llm')
+  llm = args.get('llm')
   if llm is not None:
     if not isinstance(llm, str):
       return "summon 'llm' must be a string"
@@ -242,13 +256,13 @@ def _validate(payload: dict[str, Any]) -> Optional[str]:
       parse_llm(llm)
     except LLMSelectionError as error:
       return f"summon 'llm': {error}"
-  harness = payload.get('harness')
+  harness = args.get('harness')
   if harness is not None and harness not in HARNESS_NAMES:
     return f"summon 'harness' must be one of {', '.join(HARNESS_NAMES)}"
-  if 'manual' in payload:
-    if payload['manual'] is not True:
+  if 'manual' in args:
+    if args['manual'] is not True:
       return "summon 'manual' must be true when present"
-    refused = sorted(key for key in _LAUNCH_OWNED_KEYS if key in payload)
+    refused = sorted(key for key in _LAUNCH_OWNED_KEYS if key in args)
     if len(refused) > 0:
       return f"a manual summon's launch owns {', '.join(refused)}; drop the field(s)"
   return None
@@ -392,13 +406,13 @@ class SummonControl:
   def handle(self, context: 'Dispatcher', peer: 'Peer', message: 'Message') -> None:
     from ride.spawn import SummonLaunchSpec
 
-    payload = message.payload
+    args = message.args
     try:
       requester = self._requester(context, peer)
     except _Unattributable as reason:
       self._deny(context, peer, message, None, f'summon denied: {reason}')
       return
-    error = _validate(payload)
+    error = _validate(args)
     if error is not None:
       self._deny(context, peer, message, requester.summoner, error)
       return
@@ -411,7 +425,7 @@ class SummonControl:
         f'summon denied: summon depth cap ({_MAX_SUMMON_DEPTH}) reached',
       )
       return
-    target = payload['target']
+    target = args['target']
     if target not in requester.allow_list:
       from bro.registry import known_names
 
@@ -421,10 +435,10 @@ class SummonControl:
         error = f'summon denied: {target!r} is not in {requester.list_description}'
       self._deny(context, peer, message, requester.summoner, error)
       return
-    grant = payload.get('grant', [])
-    revoke = payload.get('revoke', [])
-    harness_name = payload.get('harness')
-    llm = payload.get('llm')
+    grant = args.get('grant', [])
+    revoke = args.get('revoke', [])
+    harness_name = args.get('harness')
+    llm = args.get('llm')
     try:
       grant_credentials, grant_bros = split_scope_overrides(grant)
       _, revoke_bros = split_scope_overrides(revoke)
@@ -460,14 +474,14 @@ class SummonControl:
     if refusal is not None:
       self._deny(context, peer, message, requester.summoner, f'summon denied: {refusal}')
       return
-    prompt = payload['prompt']
+    prompt = args['prompt']
     summoned_by = requester.summoned_by
-    step_id = payload.get('step_id')
+    step_id = args.get('step_id')
     if summoned_by is not None and step_id is not None:
       summoned_by = {**summoned_by, 'step_id': step_id}
-      if payload.get('index') is not None:
-        summoned_by['index'] = payload['index']
-    if payload.get('manual', False):
+      if args.get('index') is not None:
+        summoned_by['index'] = args['index']
+    if args.get('manual', False):
       self._expect_manual(
         context,
         peer,
@@ -479,7 +493,7 @@ class SummonControl:
         revoke=list(revoke),
       )
       return
-    timeout = payload.get('timeout')
+    timeout = args.get('timeout')
     context.spawn(
       SummonLaunchSpec(
         target=target,
@@ -488,8 +502,8 @@ class SummonControl:
         repo=self._workspace.repository,
         summoner=summoned_by,
         may_summon=tuple(sorted(child_allow_list)),
-        into=payload.get('into'),
-        hold=payload.get('hold'),
+        into=args.get('into'),
+        hold=args.get('hold'),
         grant=tuple(grant),
         revoke=tuple(revoke),
         llm=llm,
@@ -499,7 +513,7 @@ class SummonControl:
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,
     )
     record = _ActiveSummon(
-      request_id=message.id,
+      request_id=message.exchange,
       target=target,
       prompt_head=_prompt_head(prompt),
       started_at=time.time(),
@@ -511,7 +525,7 @@ class SummonControl:
       llm=llm,
       harness=harness_name,
     )
-    self._active[message.id] = record
+    self._active[message.exchange] = record
     log.info(
       'summon: %s spawning %s (request %s): %s',
       self._workspace.name,
@@ -538,18 +552,18 @@ class SummonControl:
     provision its channel, write the pending record the token (the request id)
     resolves to, and wait for the user's launch — unbounded by any host timer,
     since the launch is paced by a human and there is no child to kill."""
-    payload = message.payload
-    target = payload['target']
-    prompt = payload['prompt']
+    args = message.args
+    target = args['target']
+    prompt = args['prompt']
 
     def _ready(provisioned: 'Provisioned') -> None:
       # function-local like SummonLaunchSpec in handle (ride/AGENTS.md, "Lazy
       # broker import")
-      from bro.broker.brotocol import Message, Tag
+      from bro.broker import brotocol
 
       pending_summon.write(
         pending_summon.PendingSummon(
-          token=message.id,
+          token=message.exchange,
           socket=str(provisioned.host_endpoint),
           target=target,
           prompt=prompt,
@@ -559,14 +573,14 @@ class SummonControl:
           revoke=tuple(revoke),
           summoner=summoned_by,
           repo=self._workspace.metadata.repo,
-          into=payload.get('into'),
+          into=args.get('into'),
         ),
       )
       # the requester's client blocks on this acknowledgment before handing the
       # token to the user, so it is sent only once the token is claimable
-      context.deliver(peer, Message(type=Tag.ACCEPTED, payload={}, in_reply_to=message.id))
+      context.deliver(peer, brotocol.progress(message.exchange, {}))
       record = _ActiveSummon(
-        request_id=message.id,
+        request_id=message.exchange,
         target=target,
         prompt_head=_prompt_head(prompt),
         started_at=time.time(),
@@ -579,7 +593,7 @@ class SummonControl:
         harness=None,
         manual=True,
       )
-      self._active[message.id] = record
+      self._active[message.exchange] = record
       log.info(
         'summon: %s expecting a manual %s launch (token %s): %s',
         self._workspace.name,
@@ -595,8 +609,8 @@ class SummonControl:
   def _requester(self, context: 'Dispatcher', peer: 'Peer') -> '_Requester':
     """resolve the requesting peer's summon identity: the root follows the
     session's launch-computed effective allow-list; a summoned child follows the
-    list its own summon resolved, attributed through the dispatcher's `origin`
-    topology and this control's spawn records. Raises `_Unattributable` for a
+    list its own summon resolved, attributed through the dispatcher's worker
+    index and this control's spawn records. Raises `_Unattributable` for a
     peer that cannot be attributed a bro."""
     if peer == context.root:
       return _Requester(
@@ -608,8 +622,8 @@ class SummonControl:
         list_description="this session's summon allow-list",
         workspace=self._workspace.tree,
       )
-    origin = context.origin.get(peer)
-    record = self._active.get(origin[1]) if origin is not None else None
+    exchange = context.workers.get(peer)
+    record = self._active.get(exchange) if exchange is not None else None
     if record is None:
       raise _Unattributable('cannot attribute the requesting peer to a bro')
     # function-local like SummonLaunchSpec above: ride.spawn imports broker at
@@ -682,45 +696,46 @@ class SummonControl:
     error: str,
   ) -> None:
     log.warning('summon: %s: %s', self._workspace.name, error)
-    context.reply(peer, {'error': error})
+    context.reply(peer, {'outcome': 'denied', 'error': error})
     entry: dict[str, Any] = {
       'request_id': message.id,
       'reason': error,
       'summoner': summoner,
     }
-    target = message.payload.get('target')
+    target = message.args.get('target')
     if isinstance(target, str):
       entry['target'] = target
-    prompt = message.payload.get('prompt')
+    prompt = message.args.get('prompt')
     if isinstance(prompt, str):
       entry['prompt_head'] = _prompt_head(prompt)
     self._append_audit('deny', entry)
 
   # --- the delivery-tap observer (broker loop) -----------------------------------
 
-  def observe_delivery(self, source: Optional['Peer'], target: 'Peer', message: 'Message') -> None:
-    del source, target  # a summon is identified by its request correlation alone
+  def observe_delivery(
+    self, source: Optional['Peer'], target: Optional['Peer'], message: 'Message'
+  ) -> None:
+    del source, target  # a summon is identified by its exchange correlation alone
     from bro.broker.brotocol import Tag
 
-    if message.in_reply_to is None:
+    if message.request is None:
       return
-    record = self._active.get(message.in_reply_to)
+    record = self._active.get(message.request)
     if record is None:
       return
-    if message.type == Tag.STARTED:
-      record.trail_id = message.payload.get('trail_id')
+    if message.type == Tag.PROGRESS:
+      trail_id = message.payload.get('trail_id')
+      if trail_id is None:
+        return  # the acceptance progress announces no start
+      record.trail_id = trail_id
       workspace = message.payload.get('workspace')
       if isinstance(workspace, str) and len(workspace) > 0:
         record.workspace = workspace
       log.info('summon: %s started (trail %s)', record.target, record.trail_id)
       self._write_status()
       return
-    if message.type == Tag.COMPLETED:
-      self._finish(record, str(message.payload.get('end_reason')))
-      return
-    if message.type == Tag.FAILED:
-      self._finish(record, f'failed:{message.payload.get("reason")}')
-      return
+    if message.type == Tag.RESULT:
+      self._finish(record, _outcome_tag(message.payload))
 
   def _finish(self, record: _ActiveSummon, outcome: str) -> None:
     del self._active[record.request_id]

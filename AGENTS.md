@@ -170,7 +170,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   The Claude adapter builds (`ride.claude.assembly.bro_servers` / `persona_servers`) mount `raise` too when the session is unattended and killable (`BRO_HOLD=unattended` + `RIDE_RUNNER_PID` in the environment
   — ride's in-place runner exports them), in the tool's mcp-wire flavor:
   no exception can abort the consuming claude session,
-  so the call emits `completed{result, end_reason: raised}` over the broker channel where one exists,
+  so the call emits the run's `result{failed, reason: raised}` over the broker channel where one exists,
   then terminates the session via `bro.workspace.session.terminate_session` (SIGTERM to the in-place runner,
   which ends claude the way a user's own interrupt would,
   so the closing turn reaches the transcript before it goes
@@ -185,7 +185,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   — the injected fragment tells the agent how to involve the human instead, down to guided's ask-clarifying-questions convention on the interactive paths (`Runner.send()` and the `bro chat` CLI).
   `answer` is `raise`'s twin for a *summoned* run's clean end
   — mounted when the run is a summoned child (`RIDE_SUMMONED`) with a broker channel (mcp flavor additionally killable):
-  the bare flavor ends the run by raising `AnswerDelivered` (the runner or chat surface turns it into `completed{result, end_reason: ok}`), the mcp flavor emits that terminal over the channel then terminates the session;
+  the bare flavor ends the run by raising `AnswerDelivered` (the runner or chat surface turns it into the run's ok result), the mcp flavor emits that result over the channel then terminates the session;
   unlike raise, an undeliverable answer errors back to the agent instead of killing the session.
   Both service builds always mount a `banner` tool
   — the session environment facts of `ride banner --llm` rendered in-process (`bro.workspace.banner.render_banner`, with the bro's name and the run's trail id passed explicitly
@@ -273,14 +273,14 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   its typed records, the `RIDE_SUMMON_STATUS` env var pointing at it, and its atomic write.
   Stdlib-only and apart from `summon.py`, so the claude statusLine's repeated reads never pull the summon client in
 - `channel.py` — `BroChannel`, the bro-side broker consumer:
-  a thin adapter over `bro.broker.client.Client` emitting the run lifecycle to the host dispatcher.
+  a thin adapter over `bro.broker.client.Client` answering the exchange the launch named in `BROKER_EXCHANGE`.
   `Runner.run()` builds one via the `_make_channel()` hook (`BroChannel.from_env()` — `None` when `BROKER_CHANNEL` is unset or the broker package is unimportable; the broker imports are deferred to call time, so importing `bro` never requires broker)
-  and emits `started{trail_id[, workspace]}` right after `start_trail` and `completed{result, end_reason}` after `end_trail`,
-  with `result` defined per end reason (ok → the run's return value, raised → `BroRaised.reason`, error → the exception string).
-  Fires for `Runner.run` (LLM-process children) plus the `started` of a *summoned* interactive conversation (`Runner.send`'s first turn, carrying the workspace fact a manual child's nested summons inherit their base from);
+  and emits the started progress (`{trail_id[, workspace]}`) right after `start_trail` and the run's result after `end_trail`
+  — ok with the run's return value, or failed carrying the end reason (raised → `BroRaised.reason`, error → the exception string).
+  Fires for `Runner.run` (LLM-process children) plus the started of a *summoned* interactive conversation (`Runner.send`'s first turn, carrying the workspace fact a manual child's nested summons inherit their base from);
   an un-summoned `send()` emits nothing, and a claude-code `--raw` session never calls `run()`.
   `close()` confirms delivery (`ClientTransport.close(confirm=True)`)
-  — the lifecycle terminal is typically the process's last act before exit.
+  — the run's result is typically the process's last act before exit.
   `conftest.py` clears the framework's namespaces so tests never emit into a live session channel.
 - `bros/bro/` — the core distribution's sole concrete persona, inside the shared PEP 420 `bros` namespace.
   It defines `Bro(BaseBro)`, the minimal bro registered as `bro`, with a minimal go-to system prompt and no MCP servers.

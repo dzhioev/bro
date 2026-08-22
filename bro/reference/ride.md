@@ -728,13 +728,14 @@ When `broxy launch` cannot run
 the session gets no channel at all, the same shape as `BROKER_DISABLED`;
 the launch itself still proceeds
 — like `_broker_enabled`, the gate must never break a launch.
-A channel-less session's own summons fail immediately at the client, and a channel-less *summoned child* cannot report `completed`
-— its exit surfaces to the summoner as the synthesized `failed{exit, output_tail}`, with the child's trail as the fallback record.
+A channel-less session's own summons fail immediately at the client, and a channel-less *summoned child* cannot report its result
+— its exit surfaces to the summoner as the synthesized `result{failed, reason: exit}` with the output tail, and the child's trail as the fallback record.
 
-The live broker registers the substrate's built-in `ping` handler, so a session can verify its channel with `broker request ping '{}'`;
-the root-lifecycle log handlers
-— the root's own `started`/`completed` (a bro run at the session root: a `bro run` container, or an in-process run inside a session) has no parent peer, so the host process logs it as the parent (`root run started (trail …)` / `root run ended: …`);
-and the `summon` handler
+The live broker registers the reserved `ping` kind, so a session can verify its channel with `broker request ping '{}'`;
+the root-lifecycle observer
+— the root answers the session's own host-anchored exchange (its launch carries the exchange id in `BROKER_EXCHANGE` beside the channel),
+and this host process is the requester, so the root's started progress and closing result land in the host log (`root run started (trail …)` / `root run ended: …`);
+and the `summon` kind handler
 — the root launch carries the session's summon allow-list (`run_root_via_broker(may_summon=…)`, computed at launch by `ride/ride/summon_control.py`;
 see the shared launch flags above) and wires the per-root `SummonControl` enforcing per-peer summon authorization (see "Summoning another bro").
 Because the channel sits on the critical path of every launch, a broker defect would too
@@ -812,8 +813,8 @@ A claude-harness child is scoped through the claude-full recipe
 — `claude_code` required, no LLM key
 — and the seam's auth preflight runs in the lowering, so an unresolvable setup token fails the spawn with the preflight's remedy as the correlated launch failure.
 Its lifecycle comes from the in-place runner rather than `bro.native.runner.Runner.run`:
-the runner captures the print-mode reply, announces `started{trail_id}` once the session recorder publishes the workspace's current-trail pointer, and sends `completed{result, end_reason: ok}` on a clean exit
-— a non-zero exit emits no terminal and surfaces as the synthesized `failed{exit, output_tail}` (the echoed reply lands in that tail), while an unattended abort is the `raise` service tool's own `completed{raised}`.
+the runner captures the print-mode reply, announces the started progress once the session recorder publishes the workspace's current-trail pointer, and sends the exchange's ok result on a clean exit
+— a non-zero exit emits no result and surfaces as the synthesized `result{failed, reason: exit}` (the echoed reply lands in its output tail), while an unattended abort is the `raise` service tool's own `result{failed, reason: raised}`.
 The recorder stamps the child trail's `summoned_by` from the summoner attribution, and the child's recorded resume spec is a claude spec, so a kept workspace resumes into the claude conversation.
 
 ### Manual summon — an interactive child the user launches
@@ -822,7 +823,7 @@ A `manual: true` summon (`summon --manual`, or the `summon` tool's `manual` para
 the host spawns nothing and instead registers an *expected external peer*
 — a provisioned broker channel awaiting a child someone else starts
 — and the request id doubles as the launch token.
-The registration is acknowledged with an interim `accepted` once the token is claimable, and the manual client waits for it, so a denial fails at the summon itself
+The registration is acknowledged with an acceptance progress once the token is claimable, and the manual client waits for it, so a denial fails at the summon itself
 — a token is only ever handed out for a summon the host is expecting.
 The summoner relays the token to the user, who launches the session at their own pace with `ride along --summoned <token> <target>`:
 an otherwise normal interactive session
@@ -838,13 +839,13 @@ the human at the launch owns the session's shape, and there is no host-killable 
 The bridge between the two halves is the pending record (`ride/ride/pending_summon.py`),
 written under `<runtime-root>/summon/pending/<token>.json` when the channel is provisioned and one-shot-claimed by the launch as its last fallible step before the session starts
 — a second launch on the same token fails loudly (two sessions must not share one channel), and a summon that ends unclaimed (root teardown, a failure) discards it, so a stale token fails the launch with the reason.
-The child announces `started{trail_id, workspace}`
+The child announces the started progress (`{trail_id, workspace}`)
 — the claude in-place runner from its started-watch, the native chat surface on its first turn
 — carrying the user-chosen workspace name the control needs as the base-ref source for the child's own summons (until it lands, a nested summon from the child is denied with a retry hint,
 and its credential grants are always denied as unattributable — its actual scope was computed by its own launch).
 The answer comes back through the `answer` service tool, mounted in every summoned session with a channel:
-the agent calls it once, when the user confirms the work is done, and the session ends with `completed{result, end_reason: ok}` delivered to the waiting summoner
-— a session the user quits without it produces no terminal, and the channel's EOF surfaces to the summoner as the synthesized `failed{disconnected}` (channel EOF is an expected peer's death signal:
+the agent calls it once, when the user confirms the work is done, and the session ends with the exchange's ok result delivered to the waiting summoner
+— a session the user quits without it produces no result, and the channel's EOF surfaces to the summoner as the synthesized `result{failed, reason: disconnected}` (channel EOF is an expected peer's death signal:
 there is no process for the host to reap, and the session's broxy holds one upstream connection per run).
 Root exit *detaches* an in-flight manual child rather than killing it
 — the user's session lives on, un-summoned, its channel gone.
