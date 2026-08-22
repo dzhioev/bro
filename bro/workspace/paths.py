@@ -106,10 +106,6 @@ def fresh_workspace_name(base: str) -> str:
       return name
 
 
-def broker_dir() -> Path:
-  return runtime_base() / 'broker'
-
-
 def trails_dir() -> Path:
   if os.environ.get('RIDE_IN_CONTAINER') is not None:
     return CONTAINER_TRAILS_ROOT

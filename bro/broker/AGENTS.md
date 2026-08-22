@@ -37,9 +37,8 @@ The one structural rule to keep straight:
 - **brotocol owns encoding** — `brotocol.py` turns a `Message` into UTF-8 JSON bytes with no delimiter (`to_bytes`) and parses them back (`from_bytes`).
   No framing.
 - **the transport owns framing**
-  — how messages are delimited on a byte stream.
-  The unix adapter uses NDJSON (`json + '\n'`);
-  a future websocket adapter would use native frames over the identical JSON encoding.
+  — how messages are delimited on a byte stream, and how a connection opens.
+  The tcp adapter uses NDJSON (`json + '\n'`) and a one-line attach handshake ahead of it.
 
 `MAX_FRAME_BYTES` (1 MiB) is the protocol constant in `brotocol.py`;
 `ProtocolError` is the wire-violation exception (malformed JSON, an envelope off the three-type shape, an oversize frame), raised by both the codec and the adapter.
@@ -60,11 +59,14 @@ The one structural rule to keep straight:
   — for the receiver's close-back, confirming everything sent was consumed:
   the guarantee a peer whose last send precedes its own exit needs (see the docstring; `BroChannel.close` opts in).
   A plain `close()` also aborts a concurrent `receive` blocked from another thread
-  — the unix adapter wakes the blocked reader through an internal self-pipe before closing (neither a bare fd close nor a shutdown wakes a parked select reliably on macOS)
+  — the tcp adapter wakes the blocked reader through an internal self-pipe before closing (neither a bare fd close nor a shutdown wakes a parked select reliably on macOS)
   — which is how a controller cancels an off-thread wait it abandoned (the bro summon tools ride on it).
-- `transports/unix.py` — the v1 unix-socket adapter:
-  an asyncio unix server on the host side, the synchronous socket client on the peer side.
-  One bound socket file per peer under a constructor-supplied control dir (so broker stays ride-free).
+- `transports/tcp.py` — the one transport adapter:
+  an asyncio server on the host side and the synchronous socket client on the peer side,
+  plus `open_channel` for a peer that already has a loop of its own,
+  and the `read_attach_token` / `acknowledge_attach` halves of the handshake for a server that is not this one.
+  One listening port serves every channel, bound on each host the constructor names (so broker stays ride-free);
+  `Endpoint` (port + token) is the `Provisioned.host_endpoint` a spawner renders into an address for wherever its peer runs.
 - `spawn.py` — the spawn port:
   `Spawner` / `ChildHandle` (ABCs; `spawn` / `wait` / `kill` async, `output_tail` sync) + the `LaunchSpec` marker + `RingBuffer`, the bounded byte buffer behind a handle's `output_tail` (ride's spawner adapters share it).
   `spawn` receives the provisioned channel and the exchange id together
@@ -113,7 +115,7 @@ The one structural rule to keep straight:
   message output on stdout is the wire JSON, one object per line;
   `request`/`receive` exit 1 when no message arrives in `--timeout`.
 - `broxy.py` — the peer-side broker proxy (`broxy` console script):
-  a session-lifetime daemon holding the one upstream connection to the host broker and listening on a local unix socket that `BROKER_CHANNEL` points at,
+  a session-lifetime daemon holding the one upstream connection to the host broker and listening on a loopback port of its own that `BROKER_CHANNEL` points at,
   so the local process swarm multiplexes over the single connection upstream supersede-on-accept expects.
   Sticky per-request-id routing, a bounded in-order mailbox for waiter-gone messages, the local-only `claim` / `check` kinds
   — peer machinery above the wire protocol, deliberately not part of it.
@@ -123,25 +125,28 @@ The one structural rule to keep straight:
   `launch` owns the detached `serve` spawn, log redirection, `await` gate, and failed-launch cleanup;
   invariants below.
 
-## Unix adapter invariants
+## TCP adapter invariants
 
 - **Single loop, no locks.**
   The server is asyncio-native:
-  `provision()` starts one `asyncio.start_unix_server` per channel,
-  each accepted connection runs a read task that NDJSON-deframes into the `Sink`,
+  the first `provision()` binds the one listener,
+  each accepted connection attaches and then runs a read task that NDJSON-deframes into the `Sink`,
   and `send()` writes through that connection's `StreamWriter`.
   Everything runs on the one event loop, so the shared per-channel state needs no lock and two coroutines can't interleave a partial frame.
   A peer that stops reading is absorbed by its own writer's `drain()` backpressure, never by stalling routing to the others.
   A host-side `close()` / `shutdown()` cancels the connection's read task so its EOF doesn't spuriously fire `on_disconnect` (that callback is reserved for peer-initiated drops).
 - **Channel authenticity.**
-  A connection is attributed to the `ChannelID` of the listening socket that accepted it
-  — the anti-forgery primitive.
+  A connection opens with its channel's token alone on the first line and is attributed to the channel that token was minted for
+  — the anti-forgery primitive:
+  any local process can reach the port, so the token is the whole of what a connection proves.
   There is no `from` field on the wire to forge.
-- **Socket lifecycle.**
-  `provision()` does unlink-before-bind + listen before returning (the file must exist for the bind-mount before `docker create`);
-  dir `0700`, socket `0600`;
-  teardown unlinks.
-  The host bind path is subject to the ~108-byte `sun_path` limit, so ride uses the shallow global `<runtime-base>/broker` control dir.
+  The server answers `ok` before any message flows, so a refused attach raises at the client's constructor instead of swallowing everything the peer goes on to send;
+  a connection that never attaches, overruns the line limit, or names an unknown token is closed without an answer.
+- **Channel lifecycle.**
+  `provision()` mints the channel id and its token and returns the `Endpoint` a spawner renders;
+  `close()` retires the token, so the address stops resolving to anything;
+  `shutdown()` retires them all and closes the listener.
+  Every channel shares one ephemeral port, bound on each of the constructor's hosts (a port taken on a later host retries the whole set), so one port number reaches the broker from wherever a peer runs.
 
 ## Runtime invariants
 
@@ -169,7 +174,7 @@ The one structural rule to keep straight:
   The Runtime dedupes birth per peer.
 - **Timeout** fires a `call_later` timer → `kill` + `on_timeout` (already killed);
   the later `on_exit` is the Dispatcher's to dedupe.
-  **Launch failure** rolls back its own registration (unlinks the provisioned socket).
+  **Launch failure** rolls back its own registration (closes the provisioned channel).
   **`forget`** drops the channel + timer + wait task;
   **`stop`** hard-tears-down every peer (kill + cancel) then shuts the transport down.
 
@@ -218,9 +223,10 @@ The one structural rule to keep straight:
 
 ## Broxy invariants
 
-- **One loop, no locks;
-  unix-only on both sides.**
-  The upstream connection and the local server share the broxy's event loop (the unix adapter's concurrency model), and both sides speak that adapter's NDJSON framing.
+- **One loop, no locks.**
+  The upstream connection and the local server share the broxy's event loop (the tcp adapter's concurrency model), and both sides speak that adapter's NDJSON framing and attach handshake.
+  Its local listener is loopback-only and mints one token of its own:
+  every local connection attaches with the same one, so the token authenticates rather than identifies.
   Local delivery is write-only
   — no drain — so one stalled local reader can never stall routing for the others (frames per request are few and model-bounded);
   upstream forwarding does drain, inside the sending connection's own read task, which is what turns a local half-close into the `close(confirm=True)` delivery confirmation.
@@ -270,25 +276,26 @@ The one structural rule to keep straight:
 - **Fail loudly, no restart.**
   `serve` exits 0 only on SIGTERM/SIGINT
   — the launcher's own teardown, the one expected end of a broxy
-  — and 1 on anything else (an unreachable or lost upstream, a poisoned upstream frame), the socket unlinked so the session's channel disappears cleanly.
-  `launch` starts it detached, redirects output to the requested log, gates on readiness, and kills it when that gate fails;
+  — and 1 on anything else (an unreachable or lost upstream, a poisoned upstream frame), the listener dying with the process so the session's channel disappears cleanly.
+  `launch` starts it detached, redirects output to the requested log, reads back the ephemeral address `serve` publishes through `--address-file`, gates on readiness, and kills it when either gate fails;
   callers decide whether a launch failure is fatal.
-  The upstream is the session's own host broker over a local unix socket:
+  The upstream is the session's own host broker:
   it never comes back within a session, so a lost upstream is unrecoverable, and any other failure is a code bug to surface
   — a restart wrapper would only mask it, and the in-memory mailbox dies with the process either way.
 
 ## Tests
 
 `brotocol_test.py` (codec round-trips per type, the builders and accessors, envelope-shape rejection at construction and parse),
-`transports/unix_test.py` (a real unix-socket round-trip driving the asyncio server through a stub async `Sink`, the synchronous client run via `asyncio.to_thread`:
+`transports/tcp_test.py` (a real socket round-trip driving the asyncio server through a stub async `Sink`, the synchronous client run via `asyncio.to_thread` since its attach blocks on the ack the loop owes it:
 delivery,
 `on_connect` at accept,
 NDJSON framing,
 oversize rejection,
-two-channel authenticity,
-host-close vs peer-disconnect,
+two-channel authenticity over the one shared port,
+an unknown or oversize attach refused with no channel born and the listener surviving it,
+host-close retiring the token vs peer-disconnect,
 a client close completing before its own concurrent reader parks in `select` still reading as EOF,
-socket lifecycle),
+shutdown, and the address round-trip through `Endpoint` / `parse_address` / `redacted`),
 and `spawn_test.py` (the `RingBuffer` bound),
 and `job_test.py` (`CommandJob` over real processes: the ring-bounded merged output tail, the explicit env snapshot, exit codes, and the group-wide kill — proven by the drain reaching EOF past the background child),
 and `runtime_test.py` (the `Runtime` over the real asyncio transport + a non-Docker `python -c` spawner + a fake listener:
@@ -329,7 +336,7 @@ the delivery tap — rule-1 + synthesized `failed` observed,
 handler replies and denials untapped — root exposure,
 the `Broker.run` root-exit / `stop` path,
 and one real-loop job round-trip — a live-channel requester answered started-progress-then-derived-result over the real `Runtime` and transport),
-and `client_test.py` + `cli_test.py` (the `Client` and the `broker` CLI over a real `UnixServerTransport`↔`UnixClientTransport` socket round-trip:
+and `client_test.py` + `cli_test.py` (the `Client` and the `broker` CLI over a real `TcpServerTransport`↔`TcpClientTransport` round-trip:
 `from_env` set/unset,
 the worker-side `progress`/`result` emission,
 request correlation with uncorrelated arrivals set aside,

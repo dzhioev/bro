@@ -14,7 +14,7 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
   this package imports those contracts, `bro.base`, and the broker interfaces.
   The framework never imports `ride`.
 - **Lazy broker import.**
-  `spawn.py` is imported only after the `containers.broker_enabled` / `container_broker_enabled` gates.
+  `spawn.py` is imported only after the `containers.broker_enabled` gate.
   `BROKER_DISABLED`, and an environment that cannot import the broker, must short-circuit first.
 - **No re-export hub.**
   Consumers and package code import submodules directly.
@@ -24,10 +24,11 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
 - `build_context.py` — normalized, separate runtime and project-image contexts;
   path attachments read the working tree, URL attachments the resolved commit
 - `docker.py` — runtime/project image hashing and builds, lazy per-root container-runtime resolution, broker-free launch descriptions, container creation, scoped-store copy, attach suspension, and Docker inspection
+  — the bridge gateway a container reaches its host through among it
 - `metadata.py` — workspace kind and persisted metadata
 - `model.py` — workspace factories, locking, inspection, clean-exit records, and teardown for worktree and container kinds
 - `worktrees.py` — host worktree creation and provisioning through the operated repository's `setup.sh`
-- `containers.py` — container execution and attachment plus broker availability gates
+- `containers.py` — container execution and attachment plus the broker availability gate
 - `spawn.py` — Docker and host-process broker spawner adapters, bounded child output, terminal ownership, and host-log redirection
 - `store.py` — scoped credential tiers, override finalization, host materialization, and container tar packing
 - `launch_smoke_test.py` — host-only cold-image launch check, run by the gate's Docker stage

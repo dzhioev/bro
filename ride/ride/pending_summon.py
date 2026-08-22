@@ -5,11 +5,11 @@ channel awaiting an external child) and the user with a token (the request id).
 This module is the bridge between them: `SummonControl` writes one record per
 registered manual summon under `<runtime-root>/summon/pending/<token>.json`,
 and the user's `ride along --summoned <token>` launch reads it back — the
-channel socket to attach to, the authorized child shape (target, allow-list,
-scope overrides), the prompt, and the base-ref inheritance source.
+channel to attach to, the authorized child shape (target, allow-list, scope
+overrides), the prompt, and the base-ref inheritance source.
 
 `claim` is one-shot: exactly one launch may attach to the channel (a second
-connection would supersede the first on the socket), so the unlink decides a
+connection would supersede the first on it), so the unlink decides a
 race — read as much as you like (`peek`) while preflighting, claim last, right
 before the session starts. The host discards the record when the summon ends
 unclaimed (a denial, root teardown), so a stale token fails the launch loudly.
@@ -33,7 +33,8 @@ class PendingSummon:
   """one registered manual summon, keyed by its token (the request id)."""
 
   token: str
-  socket: str  # host path of the provisioned broker channel socket
+  port: int  # the provisioned broker channel: the host's listening port
+  channel_token: str  # and the token that attaches to this summon's channel on it
   target: str
   prompt: str
   parent_workspace: str  # the summoner's tree — the default base-ref source
@@ -43,6 +44,15 @@ class PendingSummon:
   summoner: Optional[dict[str, Any]]  # the child's summoned_by provenance
   repo: Optional[str] = None  # attachment identity inherited from the root session
   into: Optional[str] = None  # unresolved ref overriding the parent-HEAD base
+
+  def address(self, host: Optional[str] = None) -> str:
+    """the channel address for a child that reaches the summoner's host at
+    `host`, or beside it on loopback when none is named."""
+    # function-local like the rest of the launch path: a record is read while
+    # preflighting, before the broker gate (ride/ride/workspace/AGENTS.md)
+    from bro.broker.transports.tcp import LOCAL_HOST, Endpoint
+
+    return Endpoint(port=self.port, token=self.channel_token).address(host or LOCAL_HOST)
 
 
 def _path(token: str) -> Path:

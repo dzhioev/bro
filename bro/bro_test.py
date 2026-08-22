@@ -1070,13 +1070,13 @@ class TestAnswer:
 
   @pytest.mark.asyncio
   async def test_mounted_for_a_summoned_run_with_a_channel(self, monkeypatch):
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/x.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     monkeypatch.setenv('RIDE_SUMMONED', '1')
     assert 'answer' in await self._names('bare')
 
   @pytest.mark.asyncio
   async def test_unmounted_without_the_summoned_mark_or_channel(self, monkeypatch):
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/x.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     assert 'answer' not in await self._names('bare')
     monkeypatch.delenv('BROKER_CHANNEL')
     monkeypatch.setenv('RIDE_SUMMONED', '1')
@@ -1084,14 +1084,14 @@ class TestAnswer:
 
   @pytest.mark.asyncio
   async def test_mcp_flavor_needs_a_killable_session(self, monkeypatch):
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/x.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     monkeypatch.setenv('RIDE_SUMMONED', '1')
     assert 'answer' not in await self._names('mcp')
     monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
     assert 'answer' in await self._names('mcp')
 
   async def _tool(self, wire, monkeypatch, tmp_path):
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/x.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     monkeypatch.setenv('RIDE_SUMMONED', '1')
     monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
     monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
@@ -1215,7 +1215,7 @@ class TestSummonTool:
 
   @pytest.mark.asyncio
   async def test_present_on_both_service_builds_when_a_channel_is_set(self, monkeypatch):
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     bro = EchoBro()
     non_interactive = await _collect_tool_names(_native_servers(bro, hold='unattended'))
     interactive = await _collect_tool_names(_native_servers(bro, hold='guided'))
@@ -1227,7 +1227,7 @@ class TestSummonTool:
   async def test_summon_list_needs_the_status_file_env(self, monkeypatch):
     from bro import summon_status
 
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     monkeypatch.delenv(summon_status.STATUS_ENV, raising=False)
     names = await _collect_tool_names(_native_servers(EchoBro(), hold='unattended'))
     assert 'summon_list' not in names
@@ -1239,7 +1239,7 @@ class TestSummonTool:
   async def test_summon_list_returns_the_recorded_status(self, monkeypatch):
     from bro import summon as summon_module, summon_status
 
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     monkeypatch.setenv(summon_status.STATUS_ENV, '/anywhere/ws.status.json')
     status = {'active': [], 'last': {'request_id': 'R1', 'outcome': 'ok'}}
     monkeypatch.setattr(summon_module, 'list_summons', lambda: status)
@@ -1250,7 +1250,7 @@ class TestSummonTool:
   async def test_calls_summon_and_wait_off_loop(self, monkeypatch):
     from bro import summon as summon_module
 
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     calls: list = []
     client = _FakeSummonClient()
 
@@ -1325,7 +1325,7 @@ class TestSummonTool:
   async def test_detach_returns_the_request_id_without_waiting(self, monkeypatch):
     from bro import summon as summon_module
 
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     calls: list = []
 
     def fake_summon_detached(
@@ -1359,7 +1359,7 @@ class TestSummonTool:
   async def test_check_reports_pending_and_completed(self, monkeypatch):
     from bro import summon as summon_module
 
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     statuses = [
       summon_module.SummonStatus(pending=True, trail_id='T1'),
       summon_module.SummonStatus(pending=False, answer='pong', trail_id='T1'),
@@ -1375,7 +1375,7 @@ class TestSummonTool:
   async def test_check_passes_last_seen_and_reports_the_cursor(self, monkeypatch):
     from bro import summon as summon_module
 
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     calls: list = []
 
     def fake_check_summon(request_id, *, last_seen=None):
@@ -1392,7 +1392,7 @@ class TestSummonTool:
   async def test_check_reports_collected_with_a_reread_hint(self, monkeypatch):
     from bro import summon as summon_module
 
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     status = summon_module.SummonStatus(pending=False, collected=True, seq=2)
     monkeypatch.setattr(summon_module, 'check_summon', lambda request_id, *, last_seen=None: status)
     tool = await _find_tool(EchoBro(), 'summon_check')
@@ -1404,7 +1404,7 @@ class TestSummonTool:
 
   @pytest.mark.asyncio
   async def test_check_wait_with_last_seen_is_an_error(self, monkeypatch):
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     tool = await _find_tool(EchoBro(), 'summon_check')
     with pytest.raises(ValueError, match='last_seen'):
       await tool.call({'request_id': 'REQ-1', 'wait': True, 'last_seen': 0})
@@ -1418,7 +1418,7 @@ class TestSummonTool:
 
     from bro import summon as summon_module
 
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     client = _FakeSummonClient()
     entered = threading.Event()
     release = threading.Event()
@@ -1462,7 +1462,7 @@ class TestSummonTool:
   async def test_transport_caution_only_on_the_mcp_wire(self, monkeypatch):
     # wire 'mcp' builds are consumed over an MCP transport with a client-side
     # call budget; their summon descriptions carry the timeout caution
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     bro_instance = EchoBro()
     mcp_build = bro_module._build_service_server(
       bro_instance, include_raise=False, harness='bro', wire='mcp'
@@ -1480,7 +1480,7 @@ class TestSummonTool:
   async def test_check_wait_collects(self, monkeypatch):
     from bro import summon as summon_module
 
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     calls: list = []
     client = _FakeSummonClient()
 
@@ -1498,7 +1498,7 @@ class TestSummonTool:
 
   @pytest.mark.asyncio
   async def test_check_timeout_without_wait_is_an_error(self, monkeypatch):
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     tool = await _find_tool(EchoBro(), 'summon_check')
     with pytest.raises(ValueError, match='wait'):
       await tool.call({'request_id': 'REQ-1', 'timeout': 60})
@@ -1507,7 +1507,7 @@ class TestSummonTool:
   async def test_summon_failure_propagates_as_the_tool_error(self, monkeypatch):
     from bro import summon as summon_module
 
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
 
     def fake_summon_and_wait(
       target,

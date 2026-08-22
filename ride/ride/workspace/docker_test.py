@@ -15,6 +15,27 @@ class _FakeProc:
     self.stderr = stderr
 
 
+class TestBridgeGateway:
+  def test_reports_the_address_the_daemon_names(self, monkeypatch):
+    monkeypatch.setattr(
+      workspace_docker.subprocess, 'run', lambda *a, **k: _FakeProc(stdout='172.17.0.1\n')
+    )
+    assert workspace_docker.bridge_gateway() == '172.17.0.1'
+
+  def test_reports_none_without_a_daemon(self, monkeypatch):
+    def missing(*a, **k):
+      raise FileNotFoundError('docker')
+
+    monkeypatch.setattr(workspace_docker.subprocess, 'run', missing)
+    assert workspace_docker.bridge_gateway() is None
+
+  def test_reports_none_when_the_daemon_names_no_bridge(self, monkeypatch):
+    monkeypatch.setattr(
+      workspace_docker.subprocess, 'run', lambda *a, **k: _FakeProc(returncode=1, stderr='no such')
+    )
+    assert workspace_docker.bridge_gateway() is None
+
+
 class TestCreateContainer:
   def _patch_run(self, monkeypatch, results):
     calls: list = []
@@ -377,6 +398,10 @@ class TestDockerCreateArgv:
 
   def test_runtime_bundle_volume_is_read_only_at_the_fixed_path(self, build_argv):
     assert 'ride-runtime-bundle-hash:/var/ride/runtime:ro' in build_argv()
+
+  def test_every_container_can_resolve_the_host_it_reaches_its_channel_at(self, build_argv):
+    argv = build_argv()
+    assert argv[argv.index('--add-host') + 1] == f'{workspace_docker.CONTAINER_BROKER_HOST}:host-gateway'  # fmt: skip
 
   def test_detached_launch_mounts_only_the_empty_workspace(self, tmp_path):
     argv = workspace_docker._docker_create_argv(

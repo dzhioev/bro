@@ -10,7 +10,7 @@ from bro.broker import brotocol
 from bro.broker.brotocol import Message
 from bro.broker.client import CHANNEL_ENV
 from bro.broker.transport import ChannelID
-from bro.broker.transports.unix import UnixServerTransport
+from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 
 TIMEOUT = 5.0
 
@@ -35,13 +35,13 @@ class StubSink:
 
 @dataclass
 class Harness:
-  transport: UnixServerTransport
+  transport: TcpServerTransport
   sink: StubSink
 
 
 @contextlib.asynccontextmanager
-async def running_server(socket_dir):
-  transport = UnixServerTransport(str(socket_dir))
+async def running_server():
+  transport = TcpServerTransport([LOCAL_HOST])
   sink = StubSink()
   serve_task = asyncio.create_task(transport.serve(sink))
   await asyncio.sleep(0)  # let serve install the sink before any connection is accepted
@@ -73,10 +73,10 @@ def test_args_must_be_a_json_object(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_send_reaches_the_host(socket_dir, monkeypatch):
-  async with running_server(socket_dir) as server:
+async def test_send_reaches_the_host(monkeypatch):
+  async with running_server() as server:
     provisioned = await server.transport.provision()
-    monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
+    monkeypatch.setenv(CHANNEL_ENV, provisioned.host_endpoint.address(LOCAL_HOST))
     argv = ['broker', 'send', 'ping', '{"n": 1}']
     assert await asyncio.to_thread(broker_cli.main, argv) == 0
 
@@ -87,10 +87,10 @@ async def test_send_reaches_the_host(socket_dir, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_request_prints_the_correlated_reply(socket_dir, monkeypatch, capsys):
-  async with running_server(socket_dir) as server:
+async def test_request_prints_the_correlated_reply(monkeypatch, capsys):
+  async with running_server() as server:
     provisioned = await server.transport.provision()
-    monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
+    monkeypatch.setenv(CHANNEL_ENV, provisioned.host_endpoint.address(LOCAL_HOST))
     argv = ['broker', 'request', 'ping', '--timeout', str(TIMEOUT)]
     main_task = asyncio.create_task(asyncio.to_thread(broker_cli.main, argv))
 
@@ -107,20 +107,20 @@ async def test_request_prints_the_correlated_reply(socket_dir, monkeypatch, caps
 
 
 @pytest.mark.asyncio
-async def test_request_timeout_exits_nonzero(socket_dir, monkeypatch, capsys):
-  async with running_server(socket_dir) as server:
+async def test_request_timeout_exits_nonzero(monkeypatch, capsys):
+  async with running_server() as server:
     provisioned = await server.transport.provision()
-    monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
+    monkeypatch.setenv(CHANNEL_ENV, provisioned.host_endpoint.address(LOCAL_HOST))
     argv = ['broker', 'request', 'ping', '--timeout', '0.2']
     assert await asyncio.to_thread(broker_cli.main, argv) == 1
     assert capsys.readouterr().out == ''
 
 
 @pytest.mark.asyncio
-async def test_receive_prints_one_message(socket_dir, monkeypatch, capsys):
-  async with running_server(socket_dir) as server:
+async def test_receive_prints_one_message(monkeypatch, capsys):
+  async with running_server() as server:
     provisioned = await server.transport.provision()
-    monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
+    monkeypatch.setenv(CHANNEL_ENV, provisioned.host_endpoint.address(LOCAL_HOST))
     argv = ['broker', 'receive', '--timeout', str(TIMEOUT)]
     main_task = asyncio.create_task(asyncio.to_thread(broker_cli.main, argv))
 
@@ -134,10 +134,10 @@ async def test_receive_prints_one_message(socket_dir, monkeypatch, capsys):
 
 
 @pytest.mark.asyncio
-async def test_receive_nothing_exits_nonzero(socket_dir, monkeypatch, capsys):
-  async with running_server(socket_dir) as server:
+async def test_receive_nothing_exits_nonzero(monkeypatch, capsys):
+  async with running_server() as server:
     provisioned = await server.transport.provision()
-    monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
+    monkeypatch.setenv(CHANNEL_ENV, provisioned.host_endpoint.address(LOCAL_HOST))
     argv = ['broker', 'receive', '--timeout', '0.2']
     assert await asyncio.to_thread(broker_cli.main, argv) == 1
     assert capsys.readouterr().out == ''

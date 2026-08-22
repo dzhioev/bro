@@ -12,7 +12,7 @@ from bro.broker.job import CommandJob
 from bro.broker.runtime import Peer, Runtime, job_peer
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned, connect
-from bro.broker.transports.unix import UnixServerTransport
+from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 
 TIMEOUT = 5.0
 _RING_BYTES = 65536
@@ -61,10 +61,12 @@ class LocalChildHandle(ChildHandle):
 class LocalSpawner(Spawner):
   def __init__(self):
     self.handles: list[LocalChildHandle] = []
+    self.channels: list[Provisioned] = []
     self.raise_on_spawn = False
 
   async def spawn(self, launch: LaunchSpec, channel: Provisioned, exchange: str) -> ChildHandle:
     assert isinstance(launch, LocalLaunchSpec)
+    self.channels.append(channel)
     if self.raise_on_spawn:
       raise RuntimeError('injected launch failure')
     process = await asyncio.create_subprocess_exec(
@@ -73,7 +75,7 @@ class LocalSpawner(Spawner):
       launch.code,
       env={
         **os.environ,
-        'BROKER_CHANNEL': 'unix:' + channel.host_endpoint,
+        'BROKER_CHANNEL': channel.host_endpoint.address(LOCAL_HOST),
         'BROKER_EXCHANGE': exchange,
       },
       stdout=asyncio.subprocess.PIPE,
@@ -112,22 +114,21 @@ class FakeListener:
 @dataclass
 class Env:
   runtime: Runtime
+  transport: TcpServerTransport
   spawner: LocalSpawner
   listener: FakeListener
-  control_dir: str
 
 
 @contextlib.asynccontextmanager
-async def runtime_harness(socket_dir):
-  control_dir = str(socket_dir)
-  transport = UnixServerTransport(control_dir)
+async def runtime_harness():
+  transport = TcpServerTransport([LOCAL_HOST])
   spawner = LocalSpawner()
   listener = FakeListener()
   runtime = Runtime(transport, spawner, listener)
   serve_task = asyncio.create_task(runtime.serve())
   await asyncio.sleep(0)  # let serve install the sink before any connection is accepted
   try:
-    yield Env(runtime=runtime, spawner=spawner, listener=listener, control_dir=control_dir)
+    yield Env(runtime=runtime, transport=transport, spawner=spawner, listener=listener)
   finally:
     await runtime.stop()
     await asyncio.wait_for(serve_task, TIMEOUT)
@@ -144,12 +145,6 @@ async def until(predicate) -> None:
   while not predicate():
     assert asyncio.get_running_loop().time() < deadline, 'condition not met within TIMEOUT'
     await asyncio.sleep(0)
-
-
-def _sock_files(control_dir: str) -> list[str]:
-  if not os.path.isdir(control_dir):
-    return []
-  return [name for name in os.listdir(control_dir) if name.endswith('.sock')]
 
 
 _CHILD_COMPLETE = """
@@ -204,10 +199,10 @@ sys.exit(2)
 
 
 @pytest.mark.asyncio
-async def test_connect_message_and_clean_exit_after_drain(socket_dir):
+async def test_connect_message_and_clean_exit_after_drain():
   # the canonical acceptance ordering: a completed the child writes just before exiting
   # is delivered as on_message *before* on_exit (drain-before-decide).
-  async with runtime_harness(socket_dir) as env:
+  async with runtime_harness() as env:
     peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_COMPLETE), timeout=None, exchange='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
@@ -220,8 +215,8 @@ async def test_connect_message_and_clean_exit_after_drain(socket_dir):
 
 
 @pytest.mark.asyncio
-async def test_early_exit_reports_code_and_output_tail(socket_dir):
-  async with runtime_harness(socket_dir) as env:
+async def test_early_exit_reports_code_and_output_tail():
+  async with runtime_harness() as env:
     peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_FAIL), timeout=None, exchange='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
@@ -232,8 +227,8 @@ async def test_early_exit_reports_code_and_output_tail(socket_dir):
 
 
 @pytest.mark.asyncio
-async def test_timeout_kills_then_reports_timeout_and_exit(socket_dir):
-  async with runtime_harness(socket_dir) as env:
+async def test_timeout_kills_then_reports_timeout_and_exit():
+  async with runtime_harness() as env:
     peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=3600.0, exchange='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
@@ -252,8 +247,8 @@ async def test_timeout_kills_then_reports_timeout_and_exit(socket_dir):
 
 
 @pytest.mark.asyncio
-async def test_send_delivers_message_to_peer(socket_dir):
-  async with runtime_harness(socket_dir) as env:
+async def test_send_delivers_message_to_peer():
+  async with runtime_harness() as env:
     peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_ECHO), timeout=None, exchange='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
@@ -265,8 +260,8 @@ async def test_send_delivers_message_to_peer(socket_dir):
 
 
 @pytest.mark.asyncio
-async def test_kill_reaps_the_process(socket_dir):
-  async with runtime_harness(socket_dir) as env:
+async def test_kill_reaps_the_process():
+  async with runtime_harness() as env:
     peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=None, exchange='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
@@ -278,20 +273,20 @@ async def test_kill_reaps_the_process(socket_dir):
 
 
 @pytest.mark.asyncio
-async def test_forget_drops_channel_without_exit(socket_dir):
-  async with runtime_harness(socket_dir) as env:
+async def test_forget_drops_channel_without_exit():
+  async with runtime_harness() as env:
     peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=None, exchange='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
     assert (await next_event(env.listener))[0] == 'message'  # started
     env.runtime.forget(peer)
-    await until(lambda: _sock_files(env.control_dir) == [])  # the scheduled transport.close ran
+    await until(lambda: peer not in env.transport.channels)  # the scheduled transport.close ran
     assert env.listener.events.empty()  # a forgotten peer's exit is not reported
 
 
 @pytest.mark.asyncio
-async def test_exit_before_connect_reports_without_birth(socket_dir):
-  async with runtime_harness(socket_dir) as env:
+async def test_exit_before_connect_reports_without_birth():
+  async with runtime_harness() as env:
     peer = await env.runtime.spawn(
       LocalLaunchSpec(_CHILD_EXIT_BEFORE_CONNECT), timeout=None, exchange='x1'
     )
@@ -301,16 +296,16 @@ async def test_exit_before_connect_reports_without_birth(socket_dir):
 
 
 @pytest.mark.asyncio
-async def test_expect_delivers_messages_then_reports_gone_on_disconnect(socket_dir):
+async def test_expect_delivers_messages_then_reports_gone_on_disconnect():
   # the expected-peer acceptance ordering: everything the peer wrote lands as
   # on_message before its EOF reports on_gone — the external analogue of
   # drain-before-decide, with no on_exit (there is no process to reap).
-  async with runtime_harness(socket_dir) as env:
+  async with runtime_harness() as env:
     provisioned = await env.runtime.expect(timeout=None)
     peer = provisioned.channel
 
     def _attach_and_complete() -> None:
-      client = connect('unix:' + provisioned.host_endpoint)
+      client = connect(provisioned.host_endpoint.address(LOCAL_HOST))
       client.send(brotocol.result('x-manual', 'ok', value='done'))
       client.close()
 
@@ -322,13 +317,13 @@ async def test_expect_delivers_messages_then_reports_gone_on_disconnect(socket_d
 
 
 @pytest.mark.asyncio
-async def test_expect_disconnect_without_terminal_reports_gone(socket_dir):
-  async with runtime_harness(socket_dir) as env:
+async def test_expect_disconnect_without_terminal_reports_gone():
+  async with runtime_harness() as env:
     provisioned = await env.runtime.expect(timeout=None)
     peer = provisioned.channel
 
     def _attach_and_leave() -> None:
-      client = connect('unix:' + provisioned.host_endpoint)
+      client = connect(provisioned.host_endpoint.address(LOCAL_HOST))
       client.send(brotocol.progress('x-manual', {'trail_id': 't1'}))
       client.close()
 
@@ -339,22 +334,22 @@ async def test_expect_disconnect_without_terminal_reports_gone(socket_dir):
 
 
 @pytest.mark.asyncio
-async def test_expect_kill_closes_channel_and_reports_gone(socket_dir):
-  # kill on an expected peer that never attached: the channel closes (socket
-  # unlinked) and the wait task reports gone — no process was ever ours to kill.
-  async with runtime_harness(socket_dir) as env:
+async def test_expect_kill_closes_channel_and_reports_gone():
+  # kill on an expected peer that never attached: the channel closes and the wait
+  # task reports gone — no process was ever ours to kill.
+  async with runtime_harness() as env:
     provisioned = await env.runtime.expect(timeout=None)
     peer = provisioned.channel
-    assert _sock_files(env.control_dir) != []
+    assert peer in env.transport.channels
 
     env.runtime.kill(peer)
     assert await next_event(env.listener) == ('gone', peer)
-    await until(lambda: _sock_files(env.control_dir) == [])
+    await until(lambda: peer not in env.transport.channels)
 
 
 @pytest.mark.asyncio
-async def test_expect_timeout_reports_timeout_then_gone(socket_dir):
-  async with runtime_harness(socket_dir) as env:
+async def test_expect_timeout_reports_timeout_then_gone():
+  async with runtime_harness() as env:
     provisioned = await env.runtime.expect(timeout=3600.0)
     peer = provisioned.channel
     # fire deterministically, as in the spawn timeout test
@@ -372,20 +367,20 @@ def _job(code: str) -> CommandJob:
 
 
 @pytest.mark.asyncio
-async def test_job_reports_exit_and_tail_with_no_channel(socket_dir):
-  async with runtime_harness(socket_dir) as env:
+async def test_job_reports_exit_and_tail_with_no_channel():
+  async with runtime_harness() as env:
     peer = await env.runtime.job(_job('print("job-out")'), timeout=None, exchange='x1')
 
     assert peer == job_peer('x1')
-    assert _sock_files(env.control_dir) == []  # nothing provisioned
+    assert env.transport.channels == frozenset()  # nothing provisioned
     kind, exited_peer, code, output = await next_event(env.listener)
     assert (kind, exited_peer, code) == ('exit', peer, 0)
     assert 'job-out' in output
 
 
 @pytest.mark.asyncio
-async def test_job_failure_reports_code_and_tail(socket_dir):
-  async with runtime_harness(socket_dir) as env:
+async def test_job_failure_reports_code_and_tail():
+  async with runtime_harness() as env:
     code_snippet = 'import sys; sys.stderr.write("job-boom"); sys.exit(4)'
     peer = await env.runtime.job(_job(code_snippet), timeout=None, exchange='x1')
 
@@ -395,8 +390,8 @@ async def test_job_failure_reports_code_and_tail(socket_dir):
 
 
 @pytest.mark.asyncio
-async def test_job_timeout_kills_then_reports_timeout_and_exit(socket_dir):
-  async with runtime_harness(socket_dir) as env:
+async def test_job_timeout_kills_then_reports_timeout_and_exit():
+  async with runtime_harness() as env:
     peer = await env.runtime.job(
       _job('import time; time.sleep(3600)'), timeout=3600.0, exchange='x1'
     )
@@ -413,8 +408,8 @@ async def test_job_timeout_kills_then_reports_timeout_and_exit(socket_dir):
 
 
 @pytest.mark.asyncio
-async def test_job_forget_drops_supervision_without_exit(socket_dir):
-  async with runtime_harness(socket_dir) as env:
+async def test_job_forget_drops_supervision_without_exit():
+  async with runtime_harness() as env:
     peer = await env.runtime.job(_job('import time; time.sleep(3600)'), timeout=None, exchange='x1')
     handle = env.runtime._peers[peer].handle
     assert handle is not None
@@ -426,8 +421,8 @@ async def test_job_forget_drops_supervision_without_exit(socket_dir):
 
 
 @pytest.mark.asyncio
-async def test_job_launch_failure_rolls_back_registration(socket_dir):
-  async with runtime_harness(socket_dir) as env:
+async def test_job_launch_failure_rolls_back_registration():
+  async with runtime_harness() as env:
     missing = CommandJob(command=('/nonexistent-job-binary',), cwd=os.getcwd(), env={})
     with pytest.raises(FileNotFoundError):
       await env.runtime.job(missing, timeout=None, exchange='x1')
@@ -437,11 +432,14 @@ async def test_job_launch_failure_rolls_back_registration(socket_dir):
 
 
 @pytest.mark.asyncio
-async def test_launch_failure_rolls_back_registration(socket_dir):
-  async with runtime_harness(socket_dir) as env:
+async def test_launch_failure_rolls_back_registration():
+  async with runtime_harness() as env:
     env.spawner.raise_on_spawn = True
     with pytest.raises(RuntimeError):
       await env.runtime.spawn(LocalLaunchSpec(_CHILD_COMPLETE), timeout=None, exchange='x1')
 
-    await until(lambda: _sock_files(env.control_dir) == [])  # the rollback's transport.close ran
+    rolled_back = env.spawner.channels[-1].channel
+    await until(
+      lambda: rolled_back not in env.transport.channels
+    )  # the rollback closed the channel
     assert env.listener.events.empty()

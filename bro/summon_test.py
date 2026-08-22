@@ -11,7 +11,7 @@ from bro.broker import brotocol, broxy
 from bro.broker.brotocol import Message
 from bro.broker.client import CHANNEL_ENV
 from bro.broker.transport import ChannelID
-from bro.broker.transports.unix import UnixServerTransport
+from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 
 TIMEOUT = 5.0
 
@@ -36,18 +36,18 @@ class StubSink:
 
 @dataclass
 class Harness:
-  transport: UnixServerTransport
+  transport: TcpServerTransport
   sink: StubSink
 
 
 @contextlib.asynccontextmanager
-async def running_server(socket_dir, monkeypatch):
-  transport = UnixServerTransport(str(socket_dir))
+async def running_server(monkeypatch):
+  transport = TcpServerTransport([LOCAL_HOST])
   sink = StubSink()
   serve_task = asyncio.create_task(transport.serve(sink))
   await asyncio.sleep(0)  # let serve install the sink before any connection is accepted
   provisioned = await transport.provision()
-  monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
+  monkeypatch.setenv(CHANNEL_ENV, provisioned.host_endpoint.address(LOCAL_HOST))
   try:
     yield Harness(transport=transport, sink=sink)
   finally:
@@ -84,7 +84,7 @@ def test_bare_summon_forwards_with_its_own_shell_command(monkeypatch):
 
 
 def test_manual_summon_refuses_launch_owned_flags(monkeypatch, caplog):
-  monkeypatch.setenv(CHANNEL_ENV, 'unix:/nonexistent.sock')
+  monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:1')
   for flags in (
     ['--timeout', '60'],
     ['--hold', 'attended'],
@@ -158,8 +158,8 @@ def test_errors_without_a_channel(monkeypatch, capsys, caplog):
 
 
 @pytest.mark.asyncio
-async def test_blocking_summon_relays_the_answer(socket_dir, monkeypatch, capsys, caplog):
-  async with running_server(socket_dir, monkeypatch) as server:
+async def test_blocking_summon_relays_the_answer(monkeypatch, capsys, caplog):
+  async with running_server(monkeypatch) as server:
     argv = ['summon', 'dev', 'list the deploy targets']
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
 
@@ -178,8 +178,8 @@ async def test_blocking_summon_relays_the_answer(socket_dir, monkeypatch, capsys
 
 
 @pytest.mark.asyncio
-async def test_timeout_and_into_forward_into_the_request(socket_dir, monkeypatch, capsys):
-  async with running_server(socket_dir, monkeypatch) as server:
+async def test_timeout_and_into_forward_into_the_request(monkeypatch, capsys):
+  async with running_server(monkeypatch) as server:
     argv = ['summon', '--detach', '--timeout', '42', '--into', 'summon', 'dev', 'p']
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
 
@@ -195,8 +195,8 @@ async def test_timeout_and_into_forward_into_the_request(socket_dir, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_hold_forwards_into_the_request(socket_dir, monkeypatch, capsys):
-  async with running_server(socket_dir, monkeypatch) as server:
+async def test_hold_forwards_into_the_request(monkeypatch, capsys):
+  async with running_server(monkeypatch) as server:
     argv = ['summon', '--detach', '--hold', 'attended', 'dev', 'p']
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
 
@@ -212,8 +212,8 @@ async def test_hold_forwards_into_the_request(socket_dir, monkeypatch, capsys):
 
 
 @pytest.mark.asyncio
-async def test_scope_and_spec_flags_forward_into_the_request(socket_dir, monkeypatch, capsys):
-  async with running_server(socket_dir, monkeypatch) as server:
+async def test_scope_and_spec_flags_forward_into_the_request(monkeypatch, capsys):
+  async with running_server(monkeypatch) as server:
     argv = [
       'summon', '--detach', '--grant', 'aws', '--grant', '@bro', '--revoke', 'openai',
       '--effort', 'high', '--fast', '--harness', 'claude', 'dev', 'p',
@@ -234,8 +234,8 @@ async def test_scope_and_spec_flags_forward_into_the_request(socket_dir, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_raised_completion_is_a_failure(socket_dir, monkeypatch, capsys, caplog):
-  async with running_server(socket_dir, monkeypatch) as server:
+async def test_raised_completion_is_a_failure(monkeypatch, capsys, caplog):
+  async with running_server(monkeypatch) as server:
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'dev', 'p']))
 
     channel, request = await _next(server.sink.messages)
@@ -255,8 +255,8 @@ async def test_raised_completion_is_a_failure(socket_dir, monkeypatch, capsys, c
 
 
 @pytest.mark.asyncio
-async def test_failed_terminal_carries_a_trails_hint(socket_dir, monkeypatch, capsys, caplog):
-  async with running_server(socket_dir, monkeypatch) as server:
+async def test_failed_terminal_carries_a_trails_hint(monkeypatch, capsys, caplog):
+  async with running_server(monkeypatch) as server:
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'dev', 'p']))
 
     channel, request = await _next(server.sink.messages)
@@ -274,8 +274,8 @@ async def test_failed_terminal_carries_a_trails_hint(socket_dir, monkeypatch, ca
 
 
 @pytest.mark.asyncio
-async def test_denial_reply_is_a_failure(socket_dir, monkeypatch, capsys, caplog):
-  async with running_server(socket_dir, monkeypatch) as server:
+async def test_denial_reply_is_a_failure(monkeypatch, capsys, caplog):
+  async with running_server(monkeypatch) as server:
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'bro', 'p']))
 
     channel, request = await _next(server.sink.messages)
@@ -294,8 +294,8 @@ async def test_denial_reply_is_a_failure(socket_dir, monkeypatch, capsys, caplog
 
 
 @pytest.mark.asyncio
-async def test_check_wait_claims_and_relays_the_buffered_answer(socket_dir, monkeypatch, capsys):
-  async with running_server(socket_dir, monkeypatch) as server:
+async def test_check_wait_claims_and_relays_the_buffered_answer(monkeypatch, capsys):
+  async with running_server(monkeypatch) as server:
     main_task = asyncio.create_task(
       asyncio.to_thread(summon.main, ['summon', 'check', '--wait', 'REQ-1'])
     )
@@ -313,8 +313,8 @@ async def test_check_wait_claims_and_relays_the_buffered_answer(socket_dir, monk
 
 
 @pytest.mark.asyncio
-async def test_check_wait_unknown_claim_fails_fast(socket_dir, monkeypatch, capsys, caplog):
-  async with running_server(socket_dir, monkeypatch) as server:
+async def test_check_wait_unknown_claim_fails_fast(monkeypatch, capsys, caplog):
+  async with running_server(monkeypatch) as server:
     main_task = asyncio.create_task(
       asyncio.to_thread(summon.main, ['summon', 'check', '--wait', 'NOPE'])
     )
@@ -335,8 +335,8 @@ async def test_check_wait_unknown_claim_fails_fast(socket_dir, monkeypatch, caps
 
 
 @pytest.mark.asyncio
-async def test_check_relays_a_ready_answer(socket_dir, monkeypatch, capsys):
-  async with running_server(socket_dir, monkeypatch) as server:
+async def test_check_relays_a_ready_answer(monkeypatch, capsys):
+  async with running_server(monkeypatch) as server:
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1']))
 
     # the broxy replays window copies on the summon's own exchange id, then
@@ -356,8 +356,8 @@ async def test_check_relays_a_ready_answer(socket_dir, monkeypatch, capsys):
 
 
 @pytest.mark.asyncio
-async def test_check_pending_exits_3_without_blocking(socket_dir, monkeypatch, capsys, caplog):
-  async with running_server(socket_dir, monkeypatch) as server:
+async def test_check_pending_exits_3_without_blocking(monkeypatch, capsys, caplog):
+  async with running_server(monkeypatch) as server:
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1']))
 
     channel, check = await _next(server.sink.messages)
@@ -375,8 +375,8 @@ async def test_check_pending_exits_3_without_blocking(socket_dir, monkeypatch, c
 
 
 @pytest.mark.asyncio
-async def test_check_unknown_id_exits_1(socket_dir, monkeypatch, capsys, caplog):
-  async with running_server(socket_dir, monkeypatch) as server:
+async def test_check_unknown_id_exits_1(monkeypatch, capsys, caplog):
+  async with running_server(monkeypatch) as server:
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'check', 'NOPE']))
 
     channel, check = await _next(server.sink.messages)
@@ -395,8 +395,8 @@ async def test_check_unknown_id_exits_1(socket_dir, monkeypatch, capsys, caplog)
 
 
 @pytest.mark.asyncio
-async def test_check_last_seen_forwards_the_cursor_and_relays(socket_dir, monkeypatch, capsys):
-  async with running_server(socket_dir, monkeypatch) as server:
+async def test_check_last_seen_forwards_the_cursor_and_relays(monkeypatch, capsys):
+  async with running_server(monkeypatch) as server:
     main_task = asyncio.create_task(
       asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1', '--last-seen', '0'])
     )
@@ -418,8 +418,8 @@ async def test_check_last_seen_forwards_the_cursor_and_relays(socket_dir, monkey
 
 
 @pytest.mark.asyncio
-async def test_check_collected_reports_the_cursor_hint(socket_dir, monkeypatch, capsys, caplog):
-  async with running_server(socket_dir, monkeypatch) as server:
+async def test_check_collected_reports_the_cursor_hint(monkeypatch, capsys, caplog):
+  async with running_server(monkeypatch) as server:
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1']))
 
     channel, check = await _next(server.sink.messages)
@@ -438,7 +438,7 @@ async def test_check_collected_reports_the_cursor_hint(socket_dir, monkeypatch, 
 
 
 def test_check_last_seen_with_wait_errors(monkeypatch, capsys, caplog):
-  monkeypatch.setenv(CHANNEL_ENV, 'unix:/nonexistent')
+  monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:1')
   argv = ['summon', 'check', 'REQ-1', '--wait', '--last-seen', '0']
   assert summon.main(argv) == 1
   assert capsys.readouterr().out == ''
@@ -446,12 +446,10 @@ def test_check_last_seen_with_wait_errors(monkeypatch, capsys, caplog):
 
 
 @pytest.mark.asyncio
-async def test_check_that_nothing_answers_fails_with_a_hint(
-  socket_dir, monkeypatch, capsys, caplog
-):
+async def test_check_that_nothing_answers_fails_with_a_hint(monkeypatch, capsys, caplog):
   # a wedged broxy never answers a check, so the bounded wait must turn that
   # silence into a clean failure naming the broxy
-  async with running_server(socket_dir, monkeypatch):
+  async with running_server(monkeypatch):
     monkeypatch.setattr(broxy, 'CHECK_TIMEOUT', 0.1)
     assert await asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1']) == 1
     assert capsys.readouterr().out == ''
@@ -518,19 +516,17 @@ def test_list_prints_the_recorded_status(tmp_path, monkeypatch, capsys):
 
 
 def test_check_timeout_without_wait_errors(monkeypatch, capsys, caplog):
-  monkeypatch.setenv(CHANNEL_ENV, 'unix:/nonexistent')
+  monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:1')
   assert summon.main(['summon', 'check', 'REQ-1', '--timeout', '5']) == 1
   assert capsys.readouterr().out == ''
   assert any('--wait' in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio
-async def test_wait_after_started_is_bounded_with_a_trails_hint(
-  socket_dir, monkeypatch, capsys, caplog
-):
+async def test_wait_after_started_is_bounded_with_a_trails_hint(monkeypatch, capsys, caplog):
   # started re-arms the wait to the effective timeout (down from the launch
   # backstop), so a lost terminal becomes a clean failure with a trails hint
-  async with running_server(socket_dir, monkeypatch) as server:
+  async with running_server(monkeypatch) as server:
     argv = ['summon', '--timeout', '0.1', 'dev', 'p']
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
 
@@ -546,13 +542,11 @@ async def test_wait_after_started_is_bounded_with_a_trails_hint(
 
 
 @pytest.mark.asyncio
-async def test_prestarted_expiry_points_at_the_summon_status(
-  socket_dir, monkeypatch, capsys, caplog
-):
+async def test_prestarted_expiry_points_at_the_summon_status(monkeypatch, capsys, caplog):
   # nothing correlated ever arrives: the wait expires at the launch backstop, and
   # the message points at the summon status/audit — a trails hint is a dead end
   # (no trail exists for a child that never launched)
-  async with running_server(socket_dir, monkeypatch):
+  async with running_server(monkeypatch):
     monkeypatch.setattr(summon, 'LAUNCH_TIMEOUT', 0.1)
     argv = ['summon', '--timeout', '0.05', 'dev', 'p']
     assert await asyncio.to_thread(summon.main, argv) == 1

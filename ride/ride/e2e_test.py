@@ -1,14 +1,12 @@
 """live integration test of the broker-supervised container launch seam.
 
 Drives the real launcher against the real docker daemon — the seam the fake
-Transport/Spawner unit suites never touch. Host- and linux-only (needs the host
-daemon; skipped inside a container, and on macOS, where container sessions are
-pinned to the broker-less path — see `_container_broker_enabled`), run as the
-gate's `broker_e2e` stage:
+Transport/Spawner unit suites never touch. Host-only (it needs the host daemon,
+so it is skipped inside a container), run as the gate's `broker_e2e` stage:
 
   run-tests --only broker_e2e   # or directly: pytest ride/ride/e2e_test.py [-k <scenario>]
 
-The matrix: A — broker-enabled default launch (socket provisioning, the
+The matrix: A — broker-enabled default launch (channel provisioning, the
 entrypoint-owned broxy on the channel, ping round-trip through it); B — child
 lifecycle over the real ports (spawn
 routing, early exit, timeout, teardown, channel-pinned identity); C — the
@@ -23,9 +21,7 @@ so no scenario touches the user's own claude or runtime state. The
 project root is a local git clone of this checkout. The launcher freezes the
 current installation, materializes its container runtime volume, and resolves the
 clone's project image before the scenarios start; the runtime volume serves the
-`broker`/`bro` code to in-container probes. The tree lives under
-a short `mkdtemp` dir directly in the system temp dir: the broker socket path
-must fit `sun_path` (~108 bytes), which rules out deeper roots.
+`broker`/`bro` code to in-container probes.
 
 Scenario containers synchronize with the harness through files on the shared
 `/workspace` mount (`.e2e-ready` / `.e2e-continue` / `.e2e-report.json`) —
@@ -38,14 +34,14 @@ import pty
 import re
 import shutil
 import signal
-import stat
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -56,9 +52,10 @@ import ride.workspace.docker as workspace_docker
 from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Broker, Dispatcher, ping_handler, spawn_test_handler
 from bro.broker.runtime import Peer
-from bro.broker.transports.unix import UnixServerTransport
+from bro.broker.transports.tcp import TcpServerTransport, parse_address
 from ride.runtime_bundle import resolve_runtime_bundle
-from ride.workspace.docker import find_container_id
+from ride.spawn import broker_bind_hosts
+from ride.workspace.docker import CONTAINER_BROKER_HOST, find_container_id
 from ride.workspace.spawn import DockerLaunchSpec, DockerSpawner
 
 
@@ -74,9 +71,6 @@ pytestmark = [
     Path('/.dockerenv').is_file(), reason='host-only: drives the host docker daemon'
   ),
   pytest.mark.skipif(not _docker_available(), reason='no reachable docker daemon'),
-  # the seam under test is linux-only: a VM-backed daemon can't bind-mount the host
-  # channel socket, so `_container_broker_enabled` pins macOS to the broker-less path
-  pytest.mark.skipif(sys.platform == 'darwin', reason='broker container seam is linux-only'),
   # a peer killed at broker teardown leaves its docker attach client un-awaited; the
   # subprocess transport's __del__ then runs after its loop closed and raises the benign
   # 'Event loop is closed', which GC surfaces in whatever test happens to run next
@@ -90,17 +84,18 @@ _RUNTIME_PYTHON = '/var/ride/runtime/venv/bin/python'
 # --- in-container probes (source for `python -c`; framework code comes from the runtime volume) ---
 
 # scenario A root: verify the live channel (BROKER_CHANNEL rewritten by the
-# entrypoint to its broxy's local socket, the upstream socket bind-mounted
-# next to it), hand mid-run control to the harness, then run the ping
-# round-trip over the exact live path — through the broxy
+# entrypoint from the upstream host channel to its broxy's own loopback one),
+# hand mid-run control to the harness, then run the ping round-trip over the
+# exact live path — through the broxy
 _PROBE_A = """
 import os, sys, time
 from pathlib import Path
 
-assert os.environ.get('BROKER_CHANNEL') == 'unix:/tmp/broxy.sock', os.environ.get('BROKER_CHANNEL')
+from bro.broker.transports.tcp import parse_address
+channel = os.environ.get('BROKER_CHANNEL')
+assert channel, 'the launch carried no channel'
+assert parse_address(channel)[0] == '127.0.0.1', channel  # the broxy's, not the host's
 assert os.environ.get('BROKER_EXCHANGE'), 'the launch did not carry the exchange id'
-assert Path('/run/broker.sock').is_socket()
-assert Path('/tmp/broxy.sock').is_socket()
 from bro.channel import BroChannel
 channel = BroChannel.from_env()
 assert channel is not None
@@ -325,20 +320,11 @@ class IsolatedEnv:
   runtime_bundle_hash: str
 
   @property
-  def broker_dir(self) -> Path:
-    return self.runtime_root / 'broker'
-
-  @property
   def workspaces_dir(self) -> Path:
     return self.runtime_root / 'workspaces'
 
   def tree(self, name: str) -> Path:
     return self.workspaces_dir / name / 'tree'
-
-  def sockets(self) -> list[Path]:
-    if not self.broker_dir.is_dir():
-      return []
-    return sorted(self.broker_dir.glob('*.sock'))
 
   def live_containers(self) -> list[str]:
     if not self.workspaces_dir.is_dir():
@@ -366,7 +352,6 @@ def _remove_stray_containers(env: 'IsolatedEnv') -> None:
 
 @pytest.fixture(scope='module')
 def isolated_env() -> Iterator[IsolatedEnv]:
-  # short prefix directly under the system temp dir: the socket path must fit sun_path
   root = Path(tempfile.mkdtemp(prefix=_NAME_PREFIX))
   checkout = Path(
     subprocess.run(
@@ -520,13 +505,9 @@ class LiveRun:
 
   exit_code: int
   output: str
-  sockets_during: list[Path] = field(default_factory=list)
-  socket_mode: Optional[int] = None
-  broker_dir_mode: Optional[int] = None
   container_id: Optional[str] = None
-  socket_mounted_at: Optional[str] = None
-  max_sockets: int = 0
-  sockets_after: list[Path] = field(default_factory=list)
+  channel_address: Optional[str] = None  # BROKER_CHANNEL as the container was launched with it
+  serving_after: Optional[bool] = None  # whether that channel's port still accepts
   container_gone_after: bool = False
 
   @property
@@ -541,19 +522,34 @@ class LiveRun:
     return json.loads(raw)
 
 
-def _container_mount_of(container_id: str, source: Path) -> Optional[str]:
-  """the in-container destination `source` is bind-mounted at, or None."""
+def _channel_env(container_id: str) -> Optional[str]:
+  """the BROKER_CHANNEL the container was created with, or None for a broker-less
+  launch."""
   inspect = subprocess.run(
-    ['docker', 'inspect', '--format', '{{json .Mounts}}', container_id],
+    ['docker', 'inspect', '--format', '{{json .Config.Env}}', container_id],
     capture_output=True,
     text=True,
   )
   if inspect.returncode != 0:
     return None
-  for mount in json.loads(inspect.stdout):
-    if mount.get('Source') == str(source):
-      return mount.get('Destination')
+  for entry in json.loads(inspect.stdout):
+    key, _, value = entry.partition('=')
+    if key == 'BROKER_CHANNEL':
+      return value
   return None
+
+
+def _accepts(address: str) -> bool:
+  """whether the channel's port still accepts on this host — the container-facing
+  name it was handed resolves nowhere here, so loopback stands in for it."""
+  _, port, _ = parse_address(address)
+  with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+    probe.settimeout(2)
+    try:
+      probe.connect(('127.0.0.1', port))
+    except OSError:
+      return False
+  return True
 
 
 def _wait_ready(env: IsolatedEnv, name: str, driver: _Driver, timeout: float = 240) -> None:
@@ -582,32 +578,29 @@ def scenario_a(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   driver = _Driver(env, name, [_RUNTIME_PYTHON, '-c', _PROBE_A], extra_env={})
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)
-  sockets = env.sockets()
-  run = LiveRun(exit_code=-1, output='', sockets_during=sockets)
-  if len(sockets) == 1:
-    run.socket_mode = stat.S_IMODE(sockets[0].stat().st_mode)
-    run.broker_dir_mode = stat.S_IMODE(env.broker_dir.stat().st_mode)
-    run.container_id = find_container_id(env.tree(name))
-    if run.container_id is not None:
-      run.socket_mounted_at = _container_mount_of(run.container_id, sockets[0])
+  run = LiveRun(exit_code=-1, output='')
+  run.container_id = find_container_id(env.tree(name))
+  if run.container_id is not None:
+    run.channel_address = _channel_env(run.container_id)
   (env.tree(name) / '.e2e-continue').touch()
   run.exit_code = driver.wait(120)
   run.output = driver.output()
-  run.sockets_after = env.sockets()
+  if run.channel_address is not None:
+    run.serving_after = _accepts(run.channel_address)
   run.container_gone_after = _container_gone(env, name, 15)
   return run
 
 
 class TestBrokerEnabledLaunch:
-  def test_channel_provisioned_and_bind_mounted(self, scenario_a: LiveRun) -> None:
-    assert len(scenario_a.sockets_during) == 1, scenario_a.sockets_during
-    assert scenario_a.broker_dir_mode == 0o700
-    assert scenario_a.socket_mode == 0o600
+  def test_channel_provisioned_under_the_container_facing_host(self, scenario_a: LiveRun) -> None:
     assert scenario_a.container_id is not None
-    assert scenario_a.socket_mounted_at == '/run/broker.sock'
+    assert scenario_a.channel_address is not None
+    host, port, token = parse_address(scenario_a.channel_address)
+    assert host == CONTAINER_BROKER_HOST
+    assert port > 0 and len(token) > 0
 
   def test_teardown_after_root_exit(self, scenario_a: LiveRun) -> None:
-    assert scenario_a.sockets_after == [], 'channel socket not unlinked after the root exited'
+    assert scenario_a.serving_after is False, 'the channel still accepts after the root exited'
     assert scenario_a.container_gone_after, 'session container survived the root exit'
 
   def test_ping_round_trip_over_live_channel(self, scenario_a: LiveRun) -> None:
@@ -628,9 +621,9 @@ class BrokerRun:
   report: dict
   root_peer: Optional[Peer]
   observed_pings: list[tuple[Peer, dict]]
-  max_sockets: int
+  max_channels: int
   max_live: int
-  sockets_after: list[Path]
+  channels_after: frozenset[str]
   live_after: list[str]
   workspace_leaks: list[str]
 
@@ -672,9 +665,8 @@ def _run_broker_scenario(
       repo=env.project,
     )
   )
-  facade = Broker(
-    UnixServerTransport(str(env.broker_dir)), DockerSpawner(), default_timeout=default_timeout
-  )
+  transport = TcpServerTransport(broker_bind_hosts())
+  facade = Broker(transport, DockerSpawner(), default_timeout=default_timeout)
   observed_pings: list[tuple[Peer, dict]] = []
 
   def recording_ping(context: Dispatcher, peer: Peer, message: Message) -> None:
@@ -689,11 +681,11 @@ def _run_broker_scenario(
     monkeypatch.setenv('HOME', str(env.home))
     thread = threading.Thread(target=lambda: result.update(code=facade.run(root)))
     thread.start()
-    max_sockets = 0
+    max_channels = 0
     max_live = 0
     deadline = time.monotonic() + budget
     while thread.is_alive() and time.monotonic() < deadline:
-      max_sockets = max(max_sockets, len(env.sockets()))
+      max_channels = max(max_channels, len(transport.channels))
       max_live = max(max_live, len(env.live_containers()))
       time.sleep(0.25)
     if thread.is_alive():
@@ -709,9 +701,9 @@ def _run_broker_scenario(
     report=report,
     root_peer=facade._dispatcher._root,
     observed_pings=observed_pings,
-    max_sockets=max_sockets,
+    max_channels=max_channels,
     max_live=max_live,
-    sockets_after=env.sockets(),
+    channels_after=transport.channels,
     live_after=env.live_containers(),
     workspace_leaks=env.leaked_dirs(env.workspaces_dir),
   )
@@ -784,9 +776,9 @@ class TestChildLifecycle:
     assert started['payload'] == {'trail_id': 'e2e-trail'}
     assert completed['request'] == request_id
     assert completed['payload'] == {'outcome': 'ok', 'value': 'child-ok'}
-    assert b_clean.max_sockets == 2
+    assert b_clean.max_channels == 2
     assert b_clean.max_live == 2
-    assert b_clean.sockets_after == []
+    assert b_clean.channels_after == frozenset()
     assert b_clean.live_after == []
 
   def test_no_workspace_dirs_leaked_after_parent_exit(self, b_clean: BrokerRun) -> None:
@@ -808,7 +800,7 @@ class TestChildLifecycle:
     # stdout and stderr are merged into the one output tail
     assert 'e2e-stdout-marker' in detail['output_tail']
     assert 'e2e-stderr-marker' in detail['output_tail']
-    assert b_early_exit.sockets_after == []
+    assert b_early_exit.channels_after == frozenset()
     assert b_early_exit.live_after == []
 
   def test_wedged_child_times_out_at_default_timeout(self, b_timeout: BrokerRun) -> None:
@@ -821,14 +813,14 @@ class TestChildLifecycle:
     # the timer starts once the child is spawned, strictly after the request went out,
     # and fires at exactly default_timeout; the slack above covers the spawn overhead
     assert 30 <= failed['elapsed'] <= 60, failed['elapsed']
-    assert b_timeout.sockets_after == []
+    assert b_timeout.channels_after == frozenset()
     assert b_timeout.live_after == [], 'timed-out child container not killed'
 
   def test_children_torn_down_on_root_exit(self, b_teardown: BrokerRun) -> None:
     assert b_teardown.code == 0
     types = [m['type'] for m in b_teardown.report['messages']]
     assert types == ['progress'], b_teardown.report['messages']
-    assert b_teardown.sockets_after == []
+    assert b_teardown.channels_after == frozenset()
     assert b_teardown.live_after == [], 'live child container survived the root exit'
 
 
@@ -844,13 +836,8 @@ def scenario_c(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   )
   request.addfinalizer(driver.close)
   run = LiveRun(exit_code=-1, output='')
-  deadline = time.monotonic() + 240
-  while driver.process.poll() is None and time.monotonic() < deadline:
-    run.max_sockets = max(run.max_sockets, len(env.sockets()))
-    time.sleep(0.25)
-  run.exit_code = driver.wait(30)
+  run.exit_code = driver.wait(270)
   run.output = driver.output()
-  run.sockets_after = env.sockets()
   return run
 
 
@@ -861,10 +848,6 @@ class TestKillSwitch:
 
   def test_short_circuits_before_any_broker_import(self, scenario_c: LiveRun) -> None:
     assert scenario_c.broker_modules == []
-
-  def test_no_socket_provisioned(self, scenario_c: LiveRun) -> None:
-    assert scenario_c.max_sockets == 0
-    assert scenario_c.sockets_after == []
 
 
 # --- D: broker unimportable in the launcher -----------------------------------
@@ -902,13 +885,8 @@ def scenario_d(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   )
   request.addfinalizer(driver.close)
   run = LiveRun(exit_code=-1, output='')
-  deadline = time.monotonic() + 240
-  while driver.process.poll() is None and time.monotonic() < deadline:
-    run.max_sockets = max(run.max_sockets, len(env.sockets()))
-    time.sleep(0.25)
-  run.exit_code = driver.wait(30)
+  run.exit_code = driver.wait(270)
   run.output = driver.output()
-  run.sockets_after = env.sockets()
   return run
 
 
@@ -918,10 +896,6 @@ class TestBrokerUnimportable:
     assert 'broker package not importable' in scenario_d.output
     assert 'RIDE_E2E_NO_CHANNEL_OK' in scenario_d.output
     assert scenario_d.broker_modules == []
-
-  def test_no_socket_provisioned(self, scenario_d: LiveRun) -> None:
-    assert scenario_d.max_sockets == 0
-    assert scenario_d.sockets_after == []
 
 
 # --- E: SIGINT through the attached root --------------------------------------
@@ -934,9 +908,16 @@ def scenario_e_ctrl_c(isolated_env: IsolatedEnv, request: pytest.FixtureRequest)
   driver = _Driver(env, name, [_RUNTIME_PYTHON, '-c', _PROBE_SIGINT], extra_env={})
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)
+  container_id = find_container_id(env.tree(name))
+  address = None if container_id is None else _channel_env(container_id)
   driver.write(b'\x03')  # ^C on the session terminal, forwarded raw into the container tty
-  run = LiveRun(exit_code=driver.wait(60), output=driver.output())
-  run.sockets_after = env.sockets()
+  run = LiveRun(
+    exit_code=driver.wait(60),
+    output=driver.output(),
+    container_id=container_id,
+    channel_address=address,
+  )
+  run.serving_after = None if address is None else _accepts(address)
   run.container_gone_after = _container_gone(env, name, 15)
   return run
 
@@ -949,9 +930,15 @@ def scenario_e_targeted(isolated_env: IsolatedEnv, request: pytest.FixtureReques
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)
   container_id = find_container_id(env.tree(name))
+  address = None if container_id is None else _channel_env(container_id)
   os.kill(driver.process.pid, signal.SIGINT)  # targeted at the launcher, not the terminal group
-  run = LiveRun(exit_code=driver.wait(60), output=driver.output(), container_id=container_id)
-  run.sockets_after = env.sockets()
+  run = LiveRun(
+    exit_code=driver.wait(60),
+    output=driver.output(),
+    container_id=container_id,
+    channel_address=address,
+  )
+  run.serving_after = None if address is None else _accepts(address)
   run.container_gone_after = _container_gone(env, name, 15)
   if not run.container_gone_after and container_id is not None:
     subprocess.run(['docker', 'rm', '-f', container_id], capture_output=True)
@@ -963,13 +950,13 @@ class TestSigintHandling:
     assert 'RIDE_E2E_SIGINT_CAUGHT' in scenario_e_ctrl_c.output
     assert scenario_e_ctrl_c.exit_code == 0, scenario_e_ctrl_c.output
     assert 'Traceback' not in scenario_e_ctrl_c.output
-    assert scenario_e_ctrl_c.sockets_after == []
+    assert scenario_e_ctrl_c.serving_after is False
     assert scenario_e_ctrl_c.container_gone_after
 
   def test_targeted_sigint_does_not_unwind_the_loop(self, scenario_e_targeted: LiveRun) -> None:
     assert 'KeyboardInterrupt' not in scenario_e_targeted.output, scenario_e_targeted.output
     assert 'Traceback' not in scenario_e_targeted.output, scenario_e_targeted.output
-    assert scenario_e_targeted.sockets_after == [], 'teardown did not unlink the channel socket'
+    assert scenario_e_targeted.serving_after is False, 'teardown did not release the channel'
 
   def test_targeted_sigint_tears_down_the_container(self, scenario_e_targeted: LiveRun) -> None:
     assert scenario_e_targeted.container_gone_after, (

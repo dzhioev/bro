@@ -273,7 +273,8 @@ class TestSummonedLaunch:
 
     record = pending_summon.PendingSummon(
       token='TOK-1',
-      socket='/broker/CH.sock',
+      port=7321,
+      channel_token='tk',
       target='dev',
       prompt='work this out with the user',
       parent_workspace=str(tmp_path / 'parent'),

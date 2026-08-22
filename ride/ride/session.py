@@ -28,10 +28,9 @@ from ride.root import run_host_process_via_broker, run_in_container, run_summone
 from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError, resolve_runtime_bundle
 from ride.scope import LaunchScopeError, preflight_scoped_launch, scoped_secrets
 from ride.trails import local_trails_mounts
-from ride.workspace.containers import broker_enabled, container_broker_enabled
+from ride.workspace.containers import broker_enabled
 from ride.workspace.docker import (
-  CONTAINER_BROKER_ADDRESS,
-  CONTAINER_BROKER_SOCK,
+  CONTAINER_BROKER_HOST,
   ContainerRuntimeResolver,
   Launch,
   find_container_id,
@@ -264,10 +263,8 @@ def _container_session(
     # a run that records nothing binds no trails root
     env['TRAILS_DISABLED'] = '1'
   trails_mounts = () if spec.no_trails else local_trails_mounts(scoped)
-  summoned_mounts = ()
   if summoned is not None:
-    env.update(_summoned_env(summoned, spec, CONTAINER_BROKER_ADDRESS))
-    summoned_mounts = (f'{summoned.socket}:{CONTAINER_BROKER_SOCK}',)
+    env.update(_summoned_env(summoned, spec, summoned.address(CONTAINER_BROKER_HOST)))
   resolved_runtime = container_runtime.resolve()
   launch = Launch(
     name=spec.name,
@@ -282,7 +279,6 @@ def _container_session(
     extra_mounts=(
       *extras.mounts,
       *trails_mounts,
-      *summoned_mounts,
       f'{session_state}:{CONTAINER_SESSION_DIR}',
     ),
     repo=workspace.repository,
@@ -345,9 +341,9 @@ def _host_session(
   harness.prepare_host_env(spec, workspace, worktree, runner_env)
   workspace.clear_session_end()
   if summoned is not None:
-    # no broker of its own: the session broxy connects to the summoner's socket,
+    # no broker of its own: the session broxy connects to the summoner's channel,
     # and the token is claimed only once nothing fallible is left before the run
-    runner_env.update(_summoned_env(summoned, spec, f'unix:{summoned.socket}'))
+    runner_env.update(_summoned_env(summoned, spec, summoned.address()))
     try:
       pending_summon.claim(summoned.token)
     except pending_summon.UnknownToken as error:
@@ -435,11 +431,8 @@ def _start_session(
     raise ValueError(
       f'resolved attachment {repository.identity!r} does not match session spec {spec.repo!r}'
     )
-  if summoned is not None and not (container_broker_enabled() if container else broker_enabled()):
-    log.error(
-      "a manual summon child needs the summoner's broker channel"
-      + ('; use --host on this platform' if container else '')
-    )
+  if summoned is not None and not broker_enabled():
+    log.error("a manual summon child needs the summoner's broker channel")
     return 1
 
   auth_error = harness.preflight_auth(spec)

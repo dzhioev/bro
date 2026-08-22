@@ -11,6 +11,7 @@ from bro.broker import brotocol
 from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Dispatcher
 from bro.broker.transport import Provisioned
+from bro.broker.transports.tcp import Endpoint
 from bro.llm.llms.echo import LLMSpec as EchoLLMSpec
 from bro.monitor import trail_pointer
 from bro.workspace.paths import workspace_tree
@@ -94,7 +95,7 @@ class FakeContext:
     # the real Dispatcher registers topology then calls ready once the channel
     # is provisioned; here it resolves synchronously to a test-chosen endpoint
     self.expected.append((peer, timeout))
-    ready(Provisioned(channel=CHILD, host_endpoint=f'/broker/{CHILD}.sock'))
+    ready(Provisioned(channel=CHILD, host_endpoint=Endpoint(port=7321, token='tk')))
 
 
 def _workspace(tmp_path, name='ws') -> Workspace:
@@ -656,7 +657,7 @@ class TestManualSummon:
     assert accepted_peer == ROOT
     assert (accepted.type, accepted.request) == ('progress', message.id)
     pending = ride.pending_summon.peek(message.exchange)
-    assert pending.socket == f'/broker/{CHILD}.sock'
+    assert (pending.port, pending.channel_token) == (7321, 'tk')
     assert pending.target == 'dev'
     assert pending.prompt == 'deploy the thing'
     assert pending.parent_workspace == str(workspace_tree('ws'))

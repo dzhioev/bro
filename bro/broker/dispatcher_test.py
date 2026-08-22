@@ -365,7 +365,7 @@ async def test_duplicate_kind_registration_is_refused():
 
 
 @pytest.mark.asyncio
-async def test_job_round_trips_over_a_real_runtime_and_transport(socket_dir):
+async def test_job_round_trips_over_a_real_runtime_and_transport():
   # the one integration pass over the real loop: a requester on a live channel
   # sends the request, the job's process really runs, and the host's started
   # progress precedes the derived result.
@@ -376,13 +376,13 @@ async def test_job_round_trips_over_a_real_runtime_and_transport(socket_dir):
   from bro.broker.runtime import Runtime
   from bro.broker.spawn import Spawner
   from bro.broker.transport import connect
-  from bro.broker.transports.unix import UnixServerTransport
+  from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 
   class NoSpawner(Spawner):
     async def spawn(self, launch, channel, exchange):
       raise AssertionError('no worker peers in this test')
 
-  transport = UnixServerTransport(str(socket_dir))
+  transport = TcpServerTransport([LOCAL_HOST])
   dispatcher = Dispatcher()
   runtime = Runtime(transport, NoSpawner(), dispatcher)
   dispatcher.bind(runtime)
@@ -400,7 +400,7 @@ async def test_job_round_trips_over_a_real_runtime_and_transport(socket_dir):
 
   def _drive() -> tuple[list[Message], Message]:
     interim: list[Message] = []
-    with Client(connect('unix:' + provisioned.host_endpoint)) as client:
+    with Client(connect(provisioned.host_endpoint.address(LOCAL_HOST))) as client:
       result = client.call('job-test', {}, 10.0, on_interim=interim.append)
     return interim, result
 

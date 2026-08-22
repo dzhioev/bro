@@ -164,23 +164,23 @@ class TestSessionBroxy:
 
   def test_rewrites_the_channel_for_the_session_and_stops_the_broxy(self, monkeypatch, tmp_path):
     broxy = MagicMock()
-    broxy.address = 'unix:/tmp/broxy-test.sock'
-    environment = {'BROKER_CHANNEL': 'unix:/up.sock', START_SESSION_BROXY_ENV: '1'}
+    broxy.address = 'tcp://broxy-token@127.0.0.1:8'
+    environment = {'BROKER_CHANNEL': 'tcp://up-token@127.0.0.1:9', START_SESSION_BROXY_ENV: '1'}
     channel = self._channel_seen_by_the_harness(monkeypatch, tmp_path, environment, broxy)
     assert channel == broxy.address
     broxy.stop.assert_called_once()
 
   def test_unsets_the_channel_when_the_broxy_cannot_start(self, monkeypatch, tmp_path):
-    environment = {'BROKER_CHANNEL': 'unix:/up.sock', START_SESSION_BROXY_ENV: '1'}
+    environment = {'BROKER_CHANNEL': 'tcp://up-token@127.0.0.1:9', START_SESSION_BROXY_ENV: '1'}
     assert self._channel_seen_by_the_harness(monkeypatch, tmp_path, environment, None) is None
 
   def test_an_entrypoint_owned_channel_passes_through(self, monkeypatch, tmp_path):
     # a container carries no BRO_START_SESSION_BROXY signal — only a host launch
     # sets it — so the entrypoint's channel reaches the session untouched
     broxy = MagicMock()
-    environment = {'BROKER_CHANNEL': 'unix:/tmp/broxy.sock'}
+    environment = {'BROKER_CHANNEL': 'tcp://broxy-token@127.0.0.1:8'}
     channel = self._channel_seen_by_the_harness(monkeypatch, tmp_path, environment, broxy)
-    assert channel == 'unix:/tmp/broxy.sock'
+    assert channel == 'tcp://broxy-token@127.0.0.1:8'
     broxy.stop.assert_not_called()
 
 

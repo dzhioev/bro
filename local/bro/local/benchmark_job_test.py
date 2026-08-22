@@ -9,7 +9,7 @@ from bro.broker.client import CHANNEL_ENV
 from bro.broker.dispatcher import Dispatcher
 from bro.broker.job import CommandJob
 from bro.broker.transport import ChannelID
-from bro.broker.transports.unix import UnixServerTransport
+from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 from bro.local import benchmark_job
 
 TIMEOUT = 5.0
@@ -173,13 +173,13 @@ class StubSink:
 
 
 @contextlib.asynccontextmanager
-async def running_server(socket_dir, monkeypatch):
-  transport = UnixServerTransport(str(socket_dir))
+async def running_server(monkeypatch):
+  transport = TcpServerTransport([LOCAL_HOST])
   sink = StubSink()
   serve_task = asyncio.create_task(transport.serve(sink))
   await asyncio.sleep(0)  # let serve install the sink before any connection is accepted
   provisioned = await transport.provision()
-  monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
+  monkeypatch.setenv(CHANNEL_ENV, provisioned.host_endpoint.address(LOCAL_HOST))
   try:
     yield sink
   finally:
@@ -188,8 +188,8 @@ async def running_server(socket_dir, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_start_detach_sends_the_request_and_prints_its_id(socket_dir, monkeypatch, capsys):
-  async with running_server(socket_dir, monkeypatch) as sink:
+async def test_start_detach_sends_the_request_and_prints_its_id(monkeypatch, capsys):
+  async with running_server(monkeypatch) as sink:
     argv = ['benchmark-job', 'start', '-c', CONFIG, '--timeout', '60', '--detach']
     assert await asyncio.to_thread(benchmark_job.main, argv) == 0
     _, message = await asyncio.wait_for(sink.messages.get(), TIMEOUT)
@@ -206,14 +206,14 @@ def test_start_without_a_channel_fails(monkeypatch, capsys, caplog):
 
 
 def test_check_last_seen_with_wait_errors(monkeypatch, capsys, caplog):
-  monkeypatch.setenv(CHANNEL_ENV, 'unix:/nonexistent')
+  monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:1')
   assert benchmark_job.main(['benchmark-job', 'check', 'R-1', '--wait', '--last-seen', '0']) == 1
   assert capsys.readouterr().out == ''
   assert any('--wait' in record.getMessage() for record in caplog.records)
 
 
 def test_check_timeout_without_wait_errors(monkeypatch, caplog):
-  monkeypatch.setenv(CHANNEL_ENV, 'unix:/nonexistent')
+  monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:1')
   assert benchmark_job.main(['benchmark-job', 'check', 'R-1', '--timeout', '5']) == 1
   assert any('--timeout' in record.getMessage() for record in caplog.records)
 

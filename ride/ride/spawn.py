@@ -12,6 +12,7 @@ broker, then supervises the root until exit.
 
 import asyncio
 import json
+import socket
 from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,7 +24,7 @@ from bro.broker.dispatcher import PING, Broker, ping_handler
 from bro.broker.runtime import Peer
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
-from bro.broker.transports.unix import UnixServerTransport
+from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 from bro.monitor import trail_pointer
 from bro.summon import (
   DEFAULT_HARNESS,
@@ -34,7 +35,7 @@ from bro.summon import (
   encode_may_summon,
 )
 from bro.workspace.git import resolve_head, resolve_ref
-from bro.workspace.paths import broker_dir, summon_dir, workspace_dir
+from bro.workspace.paths import summon_dir, workspace_dir
 from ride.flags import default_hold
 from ride.harness import ContainerExtras, get_harness
 from ride.inner import inner_command
@@ -44,7 +45,12 @@ from ride.scope import split_scope_overrides, summoned_credential_scope
 from ride.session import SessionSpec, record_resume_spec
 from ride.summon_control import SummonControl, summon_status_file
 from ride.trails import local_trails_mounts
-from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver, Launch
+from ride.workspace.docker import (
+  ContainerRuntime,
+  ContainerRuntimeResolver,
+  Launch,
+  bridge_gateway,
+)
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 from ride.workspace.spawn import (
@@ -299,6 +305,22 @@ def _note_child_started():
   return _observe
 
 
+def broker_bind_hosts() -> list[str]:
+  """every address the session's channels must answer on: loopback for the peers
+  this process launches beside itself, plus the docker bridge gateway when that
+  is an address of this host, for the ones it launches in containers."""
+  gateway = bridge_gateway()
+  if gateway is None or gateway == LOCAL_HOST:
+    return [LOCAL_HOST]
+  with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+    try:
+      probe.bind((gateway, 0))
+    except OSError:  # a daemon in a VM: its gateway proxies the container to loopback
+      log.verbose('docker bridge gateway %s is not an address of this host', gateway)
+      return [LOCAL_HOST]
+  return [LOCAL_HOST, gateway]
+
+
 def run_root_via_broker(
   launch: LaunchSpec,
   *,
@@ -307,9 +329,8 @@ def run_root_via_broker(
   credential_scope: Collection[str] = (),
   container_runtime: ContainerRuntimeResolver,
 ) -> int:
-  """run `launch` as the root peer of a broker over the host control dir
-  (`bro.workspace.paths.broker_dir`), supervise it on the broker loop until it exits,
-  and return its exit code. The spawner is the composite over both ride launch modes plus the summon
+  """run `launch` as the root peer of a broker on this host, supervise it on the
+  broker loop until it exits, and return its exit code. The spawner is the composite over both ride launch modes plus the summon
   lowering, so any root — host process or container — can spawn docker children.
   The broker answers the reserved ping kind, so a session can verify its channel
   (`broker request ping '{}'`), plus whatever kinds installed distributions
@@ -351,7 +372,7 @@ def run_root_via_broker(
     status_file=summon_status_file(workspace.name),
     audit_file=summon_dir() / f'{workspace.name}.jsonl',
   )
-  facade = Broker(UnixServerTransport(str(broker_dir())), spawner)
+  facade = Broker(TcpServerTransport(broker_bind_hosts()), spawner)
   facade.on(PING, ping_handler)
   facade.on(SUMMON, control.handle)
   for kind, handler in extension_kinds(workspace.tree).items():

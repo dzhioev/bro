@@ -1,11 +1,8 @@
 import asyncio
 import contextlib
-import shutil
 import socket
 import subprocess
-import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,10 +12,12 @@ from bro.broker import brotocol
 from bro.broker.brotocol import Message, Tag
 from bro.broker.broxy import CHECK_KIND, CLAIM_KIND, Broxy
 from bro.broker.client import CHANNEL_ENV, Client
-from bro.broker.transport import ChannelID
-from bro.broker.transports.unix import UnixClientTransport, UnixServerTransport
+from bro.broker.transport import ChannelID, connect
+from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport, parse_address
 
 TIMEOUT = 5.0
+_UPSTREAM_ADDRESS = 'tcp://upstream-token@127.0.0.1:9'
+_LOCAL_ADDRESS = 'tcp://local-token@127.0.0.1:8'
 
 
 class StubSink:
@@ -41,10 +40,10 @@ class StubSink:
 
 @dataclass
 class Harness:
-  transport: UnixServerTransport
+  transport: TcpServerTransport
   sink: StubSink
   channel: ChannelID
-  socket_path: Path
+  address: str
   broxy: Broxy
   run_task: asyncio.Task
 
@@ -52,27 +51,23 @@ class Harness:
 @contextlib.asynccontextmanager
 async def running_broxy(**broxy_kwargs):
   """an upstream broker transport (with a stub sink) plus a Broxy proxying one
-  provisioned channel onto a local socket, both live on the test's loop.
-
-  sockets live in a short /tmp mkdtemp dir, not pytest's tmp_path: the lulid-named
-  channel socket must fit sun_path (~104 bytes on macOS), which the deep per-test
-  dirs — and even the resolved system temp dir — exceed."""
-  socket_dir = Path(tempfile.mkdtemp(prefix='broxy-', dir='/tmp'))
-  transport = UnixServerTransport(str(socket_dir / 'upstream'))
+  provisioned channel onto a local port, both live on the test's loop."""
+  transport = TcpServerTransport([LOCAL_HOST])
   sink = StubSink()
   serve_task = asyncio.create_task(transport.serve(sink))
   await asyncio.sleep(0)  # let serve install the sink before any connection is accepted
   provisioned = await transport.provision()
-  socket_path = socket_dir / 'broxy.sock'
-  broxy = Broxy('unix:' + str(provisioned.host_endpoint), socket_path, **broxy_kwargs)
-  run_task = asyncio.create_task(broxy.run())
-  assert await asyncio.to_thread(broker_broxy._await_ready, str(socket_path), TIMEOUT) == 0
+  broxy = Broxy(provisioned.host_endpoint.address(LOCAL_HOST), **broxy_kwargs)
+  listening: asyncio.Future = asyncio.get_running_loop().create_future()
+  run_task = asyncio.create_task(broxy.run(listening.set_result))
+  address = await asyncio.wait_for(listening, TIMEOUT)
+  assert await asyncio.to_thread(broker_broxy._await_ready, address, TIMEOUT) == 0
   try:
     yield Harness(
       transport=transport,
       sink=sink,
       channel=provisioned.channel,
-      socket_path=socket_path,
+      address=address,
       broxy=broxy,
       run_task=run_task,
     )
@@ -81,7 +76,6 @@ async def running_broxy(**broxy_kwargs):
     await asyncio.wait_for(run_task, TIMEOUT)
     await transport.shutdown()
     await asyncio.wait_for(serve_task, TIMEOUT)
-    shutil.rmtree(socket_dir, ignore_errors=True)
 
 
 async def _next(queue: asyncio.Queue):
@@ -96,15 +90,17 @@ async def _wait_until(condition, message: str):
     await asyncio.sleep(0.01)
 
 
-def _local_client(harness: Harness) -> Client:
-  return Client(UnixClientTransport(str(harness.socket_path)))
+async def _local_client(harness: Harness) -> Client:
+  """the attach handshake blocks on the broxy's ack, so a client is built off the
+  loop thread that has to answer it."""
+  return Client(await asyncio.to_thread(connect, harness.address))
 
 
 async def _detached_request(harness: Harness, kind: str) -> Message:
   """send a request through the broxy and close the connection with the delivery
   handshake, so by return the broxy has detached the waiter — messages for the
   request id deterministically buffer from here on."""
-  transport = UnixClientTransport(str(harness.socket_path))
+  transport = await asyncio.to_thread(connect, harness.address)
   request = brotocol.request(kind, {})
   await asyncio.to_thread(transport.send, request)
   await asyncio.wait_for(asyncio.to_thread(transport.close, True), TIMEOUT)
@@ -116,7 +112,7 @@ async def _detached_request(harness: Harness, kind: str) -> Message:
 async def _check(harness: Harness, args: dict) -> tuple[Message, list[Message]]:
   """run one check on a fresh connection; return its closing report and the window
   copies that preceded it (correlated to the checked conversation, not the check)."""
-  client = _local_client(harness)
+  client = await _local_client(harness)
   try:
     check = client.send(CHECK_KIND, args)
     report = await asyncio.to_thread(client.await_reply, check, TIMEOUT)
@@ -134,7 +130,7 @@ async def _check(harness: Harness, args: dict) -> tuple[Message, list[Message]]:
 @pytest.mark.asyncio
 async def test_request_round_trips_through_the_broxy():
   async with running_broxy() as harness:
-    client = _local_client(harness)
+    client = await _local_client(harness)
     request_task = asyncio.create_task(asyncio.to_thread(client.request, 'ping', {'n': 1}, TIMEOUT))
 
     channel, message = await _next(harness.sink.messages)
@@ -153,8 +149,8 @@ async def test_request_round_trips_through_the_broxy():
 @pytest.mark.asyncio
 async def test_from_env_client_works_through_the_broxy(monkeypatch):
   async with running_broxy() as harness:
-    monkeypatch.setenv(CHANNEL_ENV, 'unix:' + str(harness.socket_path))
-    client = Client.from_env()
+    monkeypatch.setenv(CHANNEL_ENV, harness.address)
+    client = await asyncio.to_thread(Client.from_env)
     assert client is not None
     await asyncio.to_thread(client.send, 'ping', {'n': 1})
     channel, message = await _next(harness.sink.messages)
@@ -166,7 +162,7 @@ async def test_from_env_client_works_through_the_broxy(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_rides_interim_progress_through_the_broxy():
   async with running_broxy() as harness:
-    client = _local_client(harness)
+    client = await _local_client(harness)
     interims: list[Message] = []
     call_task = asyncio.create_task(
       asyncio.to_thread(client.call, 'summon', {}, TIMEOUT, on_interim=interims.append)
@@ -187,7 +183,7 @@ async def test_acceptance_progress_is_interim_and_leaves_the_conversation_pendin
   # an acceptance progress delivered and read must not spend the conversation: a
   # manual summon's client detaches right after it, and the token stays checkable
   async with running_broxy() as harness:
-    client = _local_client(harness)
+    client = await _local_client(harness)
     request = client.send('summon', {'manual': True})
     channel, seen = await _next(harness.sink.messages)
     assert seen.id == request.id
@@ -204,8 +200,8 @@ async def test_acceptance_progress_is_interim_and_leaves_the_conversation_pendin
 @pytest.mark.asyncio
 async def test_concurrent_connections_route_stickily():
   async with running_broxy() as harness:
-    client_a = _local_client(harness)
-    client_b = _local_client(harness)
+    client_a = await _local_client(harness)
+    client_b = await _local_client(harness)
     task_a = asyncio.create_task(
       asyncio.to_thread(client_a.request, 'ping', {'from': 'a'}, TIMEOUT)
     )
@@ -243,7 +239,7 @@ async def test_claim_replays_buffered_messages_in_order():
       'the result never reached the mailbox',
     )
 
-    claimer = _local_client(harness)
+    claimer = await _local_client(harness)
     interims: list[Message] = []
     result = await asyncio.to_thread(
       claimer.call, CLAIM_KIND, {'id': request.id}, TIMEOUT, on_interim=interims.append
@@ -256,7 +252,7 @@ async def test_claim_replays_buffered_messages_in_order():
 
     # the replay read the conversation through its result: the collect path is
     # spent, and a second claim fails fast pointing at the cursor re-read
-    late = _local_client(harness)
+    late = await _local_client(harness)
     reply = await asyncio.to_thread(late.request, CLAIM_KIND, {'id': request.id}, TIMEOUT)
     assert reply.payload['outcome'] == 'denied'
     assert request.id in reply.payload['error']
@@ -267,14 +263,14 @@ async def test_claim_replays_buffered_messages_in_order():
 @pytest.mark.asyncio
 async def test_claim_unknown_id_is_denied_immediately():
   async with running_broxy() as harness:
-    client = _local_client(harness)
+    client = await _local_client(harness)
     reply = await asyncio.to_thread(client.request, CLAIM_KIND, {'id': 'never-minted'}, TIMEOUT)
     assert reply.payload['outcome'] == 'denied'
     assert 'never-minted' in reply.payload['error']
     client.close()
 
     # the claim was handled locally: the only message upstream ever sees is this ping
-    probe = _local_client(harness)
+    probe = await _local_client(harness)
     probe_task = asyncio.create_task(asyncio.to_thread(probe.request, 'ping', {}, TIMEOUT))
     channel, message = await _next(harness.sink.messages)
     assert message.kind == 'ping'
@@ -287,7 +283,7 @@ async def test_claim_unknown_id_is_denied_immediately():
 @pytest.mark.asyncio
 async def test_claim_after_live_result_is_denied():
   async with running_broxy() as harness:
-    client = _local_client(harness)
+    client = await _local_client(harness)
     request_task = asyncio.create_task(asyncio.to_thread(client.request, 'ping', {}, TIMEOUT))
     _, request = await _next(harness.sink.messages)
     await harness.transport.send(harness.channel, brotocol.result(request.id, 'ok'))
@@ -305,7 +301,7 @@ async def test_claim_re_awaits_a_pending_request():
   async with running_broxy() as harness:
     request = await _detached_request(harness, 'summon')
 
-    claimer = _local_client(harness)
+    claimer = await _local_client(harness)
     claim_task = asyncio.create_task(
       asyncio.to_thread(claimer.request, CLAIM_KIND, {'id': request.id}, TIMEOUT)
     )
@@ -326,12 +322,12 @@ async def test_claim_re_awaits_a_pending_request():
 async def test_claim_with_a_live_waiter_fails_fast():
   # the wait is a lock: the original waiter keeps its route; the newcomer errors
   async with running_broxy() as harness:
-    original = UnixClientTransport(str(harness.socket_path))
+    original = await asyncio.to_thread(connect, harness.address)
     request = brotocol.request('summon', {})
     await asyncio.to_thread(original.send, request)
     await _next(harness.sink.messages)
 
-    claimer = _local_client(harness)
+    claimer = await _local_client(harness)
     reply = await asyncio.to_thread(claimer.request, CLAIM_KIND, {'id': request.id}, TIMEOUT)
     assert reply.payload['outcome'] == 'denied'
     assert 'already being awaited' in reply.payload['error']
@@ -352,7 +348,7 @@ async def test_second_claim_while_first_is_live_fails_fast():
   async with running_broxy() as harness:
     request = await _detached_request(harness, 'summon')
 
-    first = _local_client(harness)
+    first = await _local_client(harness)
     first_task = asyncio.create_task(
       asyncio.to_thread(first.request, CLAIM_KIND, {'id': request.id}, TIMEOUT)
     )
@@ -361,7 +357,7 @@ async def test_second_claim_while_first_is_live_fails_fast():
       'the first claim never took the route over',
     )
 
-    second = _local_client(harness)
+    second = await _local_client(harness)
     reply = await asyncio.to_thread(second.request, CLAIM_KIND, {'id': request.id}, TIMEOUT)
     assert reply.payload['outcome'] == 'denied'
     assert 'already being awaited' in reply.payload['error']
@@ -379,7 +375,7 @@ async def test_second_claim_while_first_is_live_fails_fast():
 @pytest.mark.asyncio
 async def test_check_unknown_id_is_denied():
   async with running_broxy() as harness:
-    client = _local_client(harness)
+    client = await _local_client(harness)
     reply = await asyncio.to_thread(client.request, CHECK_KIND, {'id': 'never-minted'}, TIMEOUT)
     assert reply.payload['outcome'] == 'denied'
     assert 'never-minted' in reply.payload['error']
@@ -434,7 +430,7 @@ async def test_check_replays_an_unread_result_without_consuming():
       ]
 
     # the entry is still claimable for real afterwards
-    claimer = _local_client(harness)
+    claimer = await _local_client(harness)
     result = await asyncio.to_thread(claimer.call, CLAIM_KIND, {'id': request.id}, TIMEOUT)
     assert result.payload == {'outcome': 'ok', 'value': 'r'}
     claimer.close()
@@ -443,7 +439,7 @@ async def test_check_replays_an_unread_result_without_consuming():
 @pytest.mark.asyncio
 async def test_check_does_not_disturb_a_live_waiter():
   async with running_broxy() as harness:
-    waiter = _local_client(harness)
+    waiter = await _local_client(harness)
     waiter_task = asyncio.create_task(asyncio.to_thread(waiter.request, 'summon', {}, TIMEOUT))
     _, request = await _next(harness.sink.messages)
 
@@ -461,7 +457,7 @@ async def test_check_does_not_disturb_a_live_waiter():
 @pytest.mark.asyncio
 async def test_check_malformed_args_is_denied():
   async with running_broxy() as harness:
-    client = _local_client(harness)
+    client = await _local_client(harness)
     reply = await asyncio.to_thread(client.request, CHECK_KIND, {'id': 7}, TIMEOUT)
     assert reply.payload['outcome'] == 'denied'
     assert 'string' in reply.payload['error']
@@ -491,7 +487,7 @@ async def test_mailbox_bound_evicts_the_oldest_buffered_request():
       'the over-bound mailbox never evicted the oldest request',
     )
 
-    client = _local_client(harness)
+    client = await _local_client(harness)
     evicted = await asyncio.to_thread(client.request, CLAIM_KIND, {'id': first.id}, TIMEOUT)
     assert evicted.payload['outcome'] == 'denied'
     assert first.id in evicted.payload['error']
@@ -506,7 +502,7 @@ async def test_live_delivered_result_stays_readable_through_a_cursor():
   # delivery no longer destroys the result: after a live request/reply exchange,
   # a plain check reports collected and a cursor read replays the conversation
   async with running_broxy() as harness:
-    client = _local_client(harness)
+    client = await _local_client(harness)
     request_task = asyncio.create_task(asyncio.to_thread(client.request, 'summon', {}, TIMEOUT))
     _, request = await _next(harness.sink.messages)
     await harness.transport.send(harness.channel, brotocol.result(request.id, 'ok', value='r'))
@@ -547,7 +543,7 @@ async def test_cursor_read_marks_read_and_spends_the_collect():
     ]
 
     # the cursor read acknowledged the window through its result: collect is spent
-    reader = _local_client(harness)
+    reader = await _local_client(harness)
     reply = await asyncio.to_thread(reader.request, CLAIM_KIND, {'id': request.id}, TIMEOUT)
     assert reply.payload['outcome'] == 'denied'
     assert 'already collected' in reply.payload['error']
@@ -584,7 +580,7 @@ async def test_cursor_read_from_the_future_is_denied():
       'the started progress never reached the mailbox',
     )
 
-    reader = _local_client(harness)
+    reader = await _local_client(harness)
     reply = await asyncio.to_thread(
       reader.request, CHECK_KIND, {'id': request.id, 'last_seen': 1}, TIMEOUT
     )
@@ -596,7 +592,7 @@ async def test_cursor_read_from_the_future_is_denied():
 @pytest.mark.asyncio
 async def test_check_malformed_last_seen_is_denied():
   async with running_broxy() as harness:
-    client = _local_client(harness)
+    client = await _local_client(harness)
     reply = await asyncio.to_thread(
       client.request, CHECK_KIND, {'id': 'whatever', 'last_seen': -1}, TIMEOUT
     )
@@ -620,7 +616,7 @@ async def test_check_reports_collected_after_a_claim():
       'the result never reached the mailbox',
     )
 
-    claimer = _local_client(harness)
+    claimer = await _local_client(harness)
     await asyncio.to_thread(claimer.call, CLAIM_KIND, {'id': request.id}, TIMEOUT)
     claimer.close()
     report, copies = await _check(harness, {'id': request.id})
@@ -641,7 +637,7 @@ async def test_mailbox_bound_prefers_evicting_a_collected_conversation():
     await harness.transport.send(
       harness.channel, brotocol.result(collected.exchange, 'ok', value='small')
     )
-    collector = _local_client(harness)
+    collector = await _local_client(harness)
     result = await asyncio.to_thread(collector.call, CLAIM_KIND, {'id': collected.id}, TIMEOUT)
     assert result.payload == {'outcome': 'ok', 'value': 'small'}
     collector.close()
@@ -656,7 +652,7 @@ async def test_mailbox_bound_prefers_evicting_a_collected_conversation():
     )
     assert unread.id in harness.broxy._routes
 
-    client = _local_client(harness)
+    client = await _local_client(harness)
     kept = await asyncio.to_thread(client.request, CLAIM_KIND, {'id': unread.id}, TIMEOUT)
     assert kept.payload == {'outcome': 'ok', 'value': filler}
     client.close()
@@ -667,7 +663,7 @@ async def test_mailbox_bound_never_evicts_a_live_wait():
   # an oversized progress on a live wait: no eviction candidate, so the bound is
   # exceeded rather than the wait broken
   async with running_broxy(mailbox_bytes=100) as harness:
-    waiter = _local_client(harness)
+    waiter = await _local_client(harness)
     interims: list[Message] = []
     waiter_task = asyncio.create_task(
       asyncio.to_thread(waiter.call, 'summon', {}, TIMEOUT, on_interim=interims.append)
@@ -691,14 +687,15 @@ async def test_mailbox_bound_never_evicts_a_live_wait():
 @pytest.mark.asyncio
 async def test_malformed_local_frame_drops_only_that_connection():
   async with running_broxy() as harness:
-    raw = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    raw.connect(str(harness.socket_path))
+    host, port, token = parse_address(harness.address)
+    raw = socket.create_connection((host, port), timeout=TIMEOUT)
+    raw.sendall(token.encode() + b'\n')
+    assert await asyncio.to_thread(raw.recv, 1024) == b'ok\n'
     raw.sendall(b'not json\n')
-    raw.settimeout(TIMEOUT)
     assert await asyncio.to_thread(raw.recv, 1024) == b''  # the broxy closed it
     raw.close()
 
-    client = _local_client(harness)
+    client = await _local_client(harness)
     request_task = asyncio.create_task(asyncio.to_thread(client.request, 'ping', {}, TIMEOUT))
     channel, message = await _next(harness.sink.messages)
     await harness.transport.send(channel, brotocol.result(message.id, 'ok'))
@@ -707,17 +704,18 @@ async def test_malformed_local_frame_drops_only_that_connection():
 
 
 @pytest.mark.asyncio
-async def test_clean_stop_exits_zero_and_unlinks_the_socket():
+async def test_clean_stop_exits_zero_and_stops_serving():
   async with running_broxy() as harness:
     harness.broxy.stop()
     assert await asyncio.wait_for(harness.run_task, TIMEOUT) == 0
-    assert not harness.socket_path.exists()
+    with pytest.raises(OSError):
+      await asyncio.to_thread(connect, harness.address)
 
 
 @pytest.mark.asyncio
 async def test_upstream_eof_exits_nonzero_and_closes_local_connections():
   async with running_broxy() as harness:
-    client = _local_client(harness)
+    client = await _local_client(harness)
     await harness.transport.close(harness.channel)
     assert await asyncio.wait_for(harness.run_task, TIMEOUT) == 1
     assert await asyncio.to_thread(client.receive, TIMEOUT) is None  # EOF
@@ -728,72 +726,55 @@ def test_launch_starts_serve_and_prints_address_and_pid(tmp_path, monkeypatch, c
   process = MagicMock(pid=123)
   popen = MagicMock(return_value=process)
   monkeypatch.setattr(broker_broxy.spawn, 'popen', popen)
+  monkeypatch.setattr(broker_broxy, '_await_address', MagicMock(return_value=_LOCAL_ADDRESS))
   monkeypatch.setattr(broker_broxy, '_await_ready', MagicMock(return_value=0))
-  socket_path = tmp_path / 'broxy.sock'
   log_path = tmp_path / 'broxy.log'
 
-  argv = [
-    'broxy',
-    'launch',
-    str(socket_path),
-    '--upstream',
-    'unix:/upstream.sock',
-    '--log-file',
-    str(log_path),
-  ]
+  argv = ['broxy', 'launch', '--upstream', _UPSTREAM_ADDRESS, '--log-file', str(log_path)]
   assert broker_broxy.main(argv) == 0
-  assert capsys.readouterr().out == f'unix:{socket_path}\t123\n'
-  call = popen.call_args
-  assert call.args[0] == [
-    'broxy',
-    'serve',
-    str(socket_path),
-    '--upstream',
-    'unix:/upstream.sock',
-  ]
-  assert call.kwargs['stderr'] == subprocess.STDOUT
+  assert capsys.readouterr().out == f'{_LOCAL_ADDRESS}\t123\n'
+  command = popen.call_args.args[0]
+  assert command[:4] == ['broxy', 'serve', '--upstream', _UPSTREAM_ADDRESS]
+  assert command[4] == '--address-file'
+  assert popen.call_args.kwargs['stderr'] == subprocess.STDOUT
 
 
 def test_launch_stops_serve_when_readiness_fails(tmp_path, monkeypatch):
   process = MagicMock(pid=123)
   monkeypatch.setattr(broker_broxy.spawn, 'popen', MagicMock(return_value=process))
+  monkeypatch.setattr(broker_broxy, '_await_address', MagicMock(return_value=_LOCAL_ADDRESS))
   monkeypatch.setattr(broker_broxy, '_await_ready', MagicMock(return_value=1))
 
-  argv = [
-    'broxy',
-    'launch',
-    str(tmp_path / 'broxy.sock'),
-    '--upstream',
-    'unix:/upstream.sock',
-    '--log-file',
-    str(tmp_path / 'broxy.log'),
-  ]
+  argv = ['broxy', 'launch', '--upstream', _UPSTREAM_ADDRESS, '--log-file', str(tmp_path / 'l')]
   assert broker_broxy.main(argv) == 1
   process.terminate.assert_called_once_with()
   process.wait.assert_called_once_with(timeout=10)
 
 
-def test_serve_requires_an_upstream(tmp_path, monkeypatch):
-  monkeypatch.delenv(CHANNEL_ENV, raising=False)
-  assert broker_broxy.main(['broxy', 'serve', str(tmp_path / 'broxy.sock')]) == 1
+def test_launch_fails_when_serve_dies_before_reporting_an_address(tmp_path, monkeypatch):
+  process = MagicMock(pid=123, returncode=1)
+  process.poll.return_value = 1
+  monkeypatch.setattr(broker_broxy.spawn, 'popen', MagicMock(return_value=process))
 
-
-def test_serve_rejects_a_non_unix_upstream(tmp_path):
-  argv = ['broxy', 'serve', str(tmp_path / 'broxy.sock'), '--upstream', 'ws:x']
+  argv = ['broxy', 'launch', '--upstream', _UPSTREAM_ADDRESS, '--log-file', str(tmp_path / 'l')]
   assert broker_broxy.main(argv) == 1
 
 
-def test_await_succeeds_on_a_listening_socket(socket_dir):
-  path = socket_dir / 'ready.sock'
-  listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-  listener.bind(str(path))
-  listener.listen(1)
-  try:
-    assert broker_broxy.main(['broxy', 'await', str(path)]) == 0
-  finally:
-    listener.close()
+def test_serve_requires_an_upstream(monkeypatch):
+  monkeypatch.delenv(CHANNEL_ENV, raising=False)
+  assert broker_broxy.main(['broxy', 'serve']) == 1
 
 
-def test_await_times_out_on_a_missing_socket(socket_dir):
-  argv = ['broxy', 'await', str(socket_dir / 'missing.sock'), '--timeout', '0.3']
+def test_serve_rejects_an_upstream_that_is_no_channel_address():
+  assert broker_broxy.main(['broxy', 'serve', '--upstream', 'ws:x']) == 1
+
+
+@pytest.mark.asyncio
+async def test_await_succeeds_on_a_listening_broxy():
+  async with running_broxy() as harness:
+    assert await asyncio.to_thread(broker_broxy.main, ['broxy', 'await', harness.address]) == 0
+
+
+def test_await_times_out_on_a_dead_address():
+  argv = ['broxy', 'await', _LOCAL_ADDRESS, '--timeout', '0.3']
   assert broker_broxy.main(argv) == 1

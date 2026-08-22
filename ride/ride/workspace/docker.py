@@ -83,11 +83,30 @@ class Launch:
   repo: Optional[Repository | Path] = None
 
 
-# where a container session's broker channel lands: the provisioned host socket is
-# bind-mounted at this short fixed path (sun_path budget), and BROKER_CHANNEL
-# carries the matching address for the entrypoint's broxy
-CONTAINER_BROKER_SOCK = '/run/broker.sock'
-CONTAINER_BROKER_ADDRESS = f'unix:{CONTAINER_BROKER_SOCK}'
+# how a container reaches its session's broker channel: docker maps this name to
+# the gateway back to the launching host, and BROKER_CHANNEL carries the channel
+# address under it for the entrypoint's broxy
+CONTAINER_BROKER_HOST = 'host.docker.internal'
+
+
+def bridge_gateway() -> Optional[str]:
+  """the address a container on the default bridge reaches its host at, as the
+  daemon reports it, or None when it names none. A daemon in a VM (Docker
+  Desktop, colima) names a gateway inside that VM, which is no address of this
+  host — the caller that tries to bind it is what tells the two apart."""
+  try:
+    result = subprocess.run(
+      ['docker', 'network', 'inspect', 'bridge', '--format', '{{(index .IPAM.Config 0).Gateway}}'],
+      capture_output=True,
+      text=True,
+    )
+  except OSError as error:  # no daemon to launch containers with, so none to reach back
+    log.verbose('no docker bridge gateway (%s)', error)
+    return None
+  if result.returncode != 0:
+    log.verbose('no docker bridge gateway (%s)', result.stderr.strip())
+    return None
+  return result.stdout.strip() or None
 
 
 _DOCKER_FORWARD_ENV = (
@@ -376,6 +395,10 @@ def _docker_create_argv(
     '-w',
     '/workspace',
     '--memory=8g',
+    # a daemon on this host resolves it to the bridge gateway; one in a VM
+    # already serves the name and answers with its own proxy to host loopback
+    '--add-host',
+    f'{CONTAINER_BROKER_HOST}:host-gateway',
   ]
   if repository is not None:
     if branch is None:

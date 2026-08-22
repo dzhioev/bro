@@ -38,14 +38,11 @@ class _SessionBroxy:
 
 
 def _start_session_broxy(upstream: str, env: Mapping[str, str]) -> Optional[_SessionBroxy]:
-  """launch a broxy on a session-tempdir socket, returning None on failure."""
-  state = Path(tempfile.mkdtemp(prefix='ride-broxy-'))
-  socket_path = state / 'broxy.sock'
-  log_path = state / 'broxy.log'
+  """launch a broxy on a loopback port of its own, returning None on failure."""
+  log_path = Path(tempfile.mkdtemp(prefix='ride-broxy-')) / 'broxy.log'
   command = [
     'broxy',
     'launch',
-    str(socket_path),
     '--upstream',
     upstream,
     '--log-file',
@@ -80,7 +77,7 @@ def _start_session_broxy(upstream: str, env: Mapping[str, str]) -> Optional[_Ses
   except ValueError:
     log.warning('broxy launch returned an invalid pid; the session gets no broker channel')
     return None
-  log.verbose('session broxy at %s (pid %d)', address, pid)
+  log.verbose('session broxy listening (pid %d)', pid)  # the address carries its token
   return _SessionBroxy(pid, address, log_path)
 
 

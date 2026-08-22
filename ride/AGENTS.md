@@ -32,6 +32,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/spawn.py` — broker-root composition, the root-lifecycle observer, native trail-pointer publication for the root and summoned children, summon lowering
   — each child composed through its requested harness's seam hooks, with its recorded resume spec
   — and per-root `SummonControl` wiring.
+  The channel listener's bind hosts are derived here:
+  loopback, plus the docker bridge gateway when that is an address of this host.
 - `ride/kinds.py` — the `bro.broker_kinds` entry-point group:
   broker request kinds contributed by installed distributions, each entry a factory `(workspace_tree: Path) -> RequestHandler`, loaded into every root broker beside the built-ins.
 - `ride/summon_control.py` — summon host authorization, allow-list resolution, audit/status bookkeeping, and request lifecycle

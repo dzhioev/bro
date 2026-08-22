@@ -7,7 +7,8 @@ def _record(**overrides) -> pending_summon.PendingSummon:
   return pending_summon.PendingSummon(
     **{
       'token': 'TOK-1',
-      'socket': '/broker/CH.sock',
+      'port': 7321,
+      'channel_token': 'tk',
       'target': 'dev',
       'prompt': 'pair on this',
       'parent_workspace': '/workspaces/parent/tree',

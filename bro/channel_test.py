@@ -34,26 +34,21 @@ class TestBroChannel:
     monkeypatch.delenv(CHANNEL_ENV, raising=False)
     assert BroChannel.from_env() is None
 
-  def test_from_env_raises_when_the_exchange_is_missing(self, monkeypatch, socket_dir):
+  def test_from_env_raises_when_the_exchange_is_missing(self, monkeypatch):
     # a channel without the exchange id is a mis-provisioned launch: the run could
     # not correlate its lifecycle, so it must fail loudly rather than emit garbage
-    import socket
-
-    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    listener.bind(str(socket_dir / 'host.sock'))
-    listener.listen(1)
-    monkeypatch.setenv(CHANNEL_ENV, f'unix:{socket_dir}/host.sock')
+    transport = FakeClientTransport()
+    monkeypatch.setattr('bro.broker.client.connect', lambda address: transport)
+    monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:9')
     monkeypatch.delenv(EXCHANGE_ENV, raising=False)
-    try:
-      with pytest.raises(ValueError, match=EXCHANGE_ENV):
-        BroChannel.from_env()
-    finally:
-      listener.close()
+    with pytest.raises(ValueError, match=EXCHANGE_ENV):
+      BroChannel.from_env()
+    assert transport.closed  # the channel it opened before noticing is released
 
   def test_from_env_returns_none_when_broker_unimportable(self, monkeypatch):
     # an environment provisioned before broker existed: the channel env is set but
     # the package cannot be imported — the hook must stay inert, not crash the run
-    monkeypatch.setenv(CHANNEL_ENV, 'unix:/run/broker.sock')
+    monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:9')
     # None-poisoning makes the import machinery raise ImportError; the submodule must be
     # poisoned too — a cached bro.broker.client would satisfy the from-import on its own
     monkeypatch.setitem(sys.modules, 'bro.broker', None)

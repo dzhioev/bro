@@ -126,11 +126,11 @@ fi
 # failure is expected to degrade the optional broker channel, not the session.
 if [ -n "${BROKER_CHANNEL:-}" ]; then
   if broxy_launch="$(
-    broxy launch /tmp/broxy.sock --upstream "$BROKER_CHANNEL" --log-file /tmp/broxy.log
+    broxy launch --upstream "$BROKER_CHANNEL" --log-file /tmp/broxy.log
   )"; then
     IFS=$'\t' read -r BROKER_CHANNEL _ <<< "$broxy_launch"
     export BROKER_CHANNEL
-    log VERBOSE "broker channel at $BROKER_CHANNEL"
+    log VERBOSE 'broker channel ready'  # the address carries its token
   else
     log WARNING 'broxy launch failed (log: /tmp/broxy.log); the session gets no broker channel'
     unset BROKER_CHANNEL
