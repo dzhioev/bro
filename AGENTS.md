@@ -49,7 +49,10 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
 The repository root carries `pyproject.toml` (core distribution metadata, the workspace table, and the tool config every member runs under), `conftest.py` (test isolation:
 the suite's environment is rebuilt rather than patched by `bro/base/suite_environment.py`, clearing the framework's own namespaces so a run launched from inside a managed session inherits none of it
 — the rebuild lives in core so every pytest root applies it, `benchmark/`'s own conftest included, and `local/bro/local/environment_policy_test.py` enforces both halves repository-wide), `local/` (the `bro-local` member:
-the `bro-dev` persona under `bros/bro_dev/`, `bro/local/run_tests.py`'s explicit test roster behind the `run-tests` console script, and the tests that hold this repository as a whole to a policy
+the `bro-dev` persona under `bros/bro_dev/`, `bro/local/run_tests.py`'s explicit test roster behind the `run-tests` console script,
+the `benchmark` broker kind with its `benchmark-job` session command (`bro/local/benchmark_job.py`
+— a session starts this checkout's benchmark jobs on the host through the broker),
+and the tests that hold this repository as a whole to a policy
 — whatever is meaningful only inside this checkout), and `README.md` (consumer-facing install and extension contract).
 The development style policy is `dev/bro/prompts/dev/style.md`, tool-served to dev sessions as `dev-style-source::read`;
 shell scripts follow `dev/bro/dev/shell_policy.py` (prelude sourcing, shebang), enforced repository-wide by `local/bro/local/shell_policy_test.py`;

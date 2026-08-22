@@ -68,8 +68,19 @@ Each trial keeps its own directory beside it, with the bro's activity log
 
 Both are copied out of the container once the trial ends, so a job runs wherever the docker daemon
 is reachable and leaves nothing of a trial on the docker host.
-Managed sessions carry no docker
-socket, so jobs start from a host shell.
+
+Managed sessions carry no docker socket;
+from inside one, start the job through the session broker instead:
+
+```
+benchmark-job start -c benchmark/bro/benchmark/terminal_bench_2_1.yaml --detach
+benchmark-job check <request-id>
+```
+
+The host runs the same harbor command in the session's workspace tree with its own docker access
+(the `benchmark` broker kind, `local/bro/local/benchmark_job.py`), so the config path, the bundle,
+and the score under `jobs/` are the workspace's own files on both routes.
+
 Following a run as it happens means reading the log where
 it is being written:
 `docker exec <task-container> tail -f /logs/agent/bro.log`.

@@ -555,6 +555,7 @@ def test_clean_removes_the_matching_runtime_volume_before_the_bundle(monkeypatch
 def test_installed_distributions_publish_the_session_command_roster():
   commands = runtime_bundle._session_commands(Path(sys.executable))
   assert commands == [
+    'benchmark-job',
     'bro',
     'bro.dev.git-golc',
     'broker',
