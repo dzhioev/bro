@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 5.0.0
+version: 5.1.0
 ---
 
 # run-pr
@@ -270,8 +270,10 @@ a branch that is final before review cannot account for the work that follows it
 
 ### 9. The mandatory gate: the full test suite
 
-The flow's one mandatory suite pass
+The flow's one mandatory full pass
 — on the final rebased tree, before the change reaches a reviewer.
+It is mandatory *here* because a branch with no PR on it triggers no CI:
+this is the only point in the flow where nothing else will run the suite.
 Run the repo's full verification gate (its own docs name the command and any environment-specific flags).{{when #harness = bro}} Run it with an explicit large `timeout_seconds` (600 fits)
 — `dev::bash`'s default kills a full suite mid-run;
 same for any other long command.{{end}}
@@ -287,6 +289,8 @@ A red gate blocks the PR.
 Do not interpret or triage failures
 — fix with new commits, or propose fixing pre-existing failures in this session or a separate one;
 do not open a PR over failures.
+Re-verify a fix with the narrowest evidence the repo offers (a change-scoped gate selection, the affected test files);
+a second full pass buys nothing this one and the PR's own CI do not.
 
 Earlier full passes (per checkpoint, pre-rebase) are optional and usually redundant
 — this gate re-verifies the exact tree that ships.
@@ -459,14 +463,18 @@ A non-empty `comments` array on an APPROVED review counts as actionable feedback
 Read every comment in the array before chaining.
 
 Handle pending feedback as one batch:
-address every comment that has arrived, then pay one gate pass and one push for the batch
+address every comment that has arrived, then pay one verification pass and one push for the batch
 — not a suite run per comment.
 
 1. Read and understand the feedback (review body + every `comments[]` entry).
 2. Make the requested code changes locally.
 3. Re-run the pre-commit gates (step 2).
 4. Commit (a **new** commit, not `--amend`) with the same conventions as step 5–6.
-5. Run the mandatory gate (step 9).
+5. Verify with the narrowest evidence the repo offers
+   — a change-scoped gate selection, or the affected test files.
+   **Not the full suite:**
+   the push in step 7 puts the branch back through the PR's own CI, which runs the whole gate, and the merge is blocked on it
+   — a full local pass here duplicates a run that is about to happen anyway and that nothing can land without.
 6. Re-fold (step 8):
    the branch has to be back in landing shape before it is pushed, or the approval that follows would cover commits that are not the ones landing.
    Write the plan over the branch as it stands now
@@ -505,14 +513,16 @@ CI went red on what you pushed.
 Fetch the failing run's log (`gh run view --log-failed <run-id>`, the id is the tail of the event's `url`) and diagnose it as your own breakage
 — a failure the local gate missed is the interesting kind (environment-dependent, ordering-dependent, or a file you forgot to stage).
 Fix it exactly like review feedback:
-gates (step 2), a new commit (steps 5–6), the gate (step 9), the re-fold (step 8), a force-with-lease push.
+gates (step 2), a new commit (steps 5–6), step 15's narrow verification, the re-fold (step 8), a force-with-lease push.
 Report the failure and your fix to the user;
 never wait for it to disappear on a re-run you didn't trigger, and never land around it
 — `land-pr` refuses a failed check anyway.
 
 **`conflicts` event**:
 rerun step 7 — the rebase, the in-band resolution default, the escalation bar, and the task comment all apply unchanged
-— then the gate (step 9), then push the rebased branch:
+— then the full gate (step 9), not step 15's narrow pass:
+what may have broken the branch is what landed on the base, which no diff of the branch's own changes points at.
+Then push the rebased branch:
 `git push --force-with-lease origin HEAD`
 — the PR branch, never the base.
 
