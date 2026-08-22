@@ -174,14 +174,15 @@ class TestSpellValidation:
     ('name', 'content', 'match'),
     [
       ('bad.name', _spell(), 'ASCII letters'),
-      ('real', '---\nname: wrong\n---\nbody', 'disagrees'),
+      ('real', '---\nname: wrong\ndescription: real\n---\nbody', 'disagrees'),
+      ('real', '---\nname: real\n---\nbody', 'no description'),
       ('real', _spell(parameters={'bad.name': 'bad'}), 'parameter name'),
       ('real', _spell(parameters={'offset': 'bad'}), 'output paging'),
       ('real', _spell(parameters={'?': 'bad'}), 'parameter name'),
       ('real', _spell(parameters={'same': 'one', 'same?': 'two'}), 'duplicate parameter'),
-      ('real', '---\nparameters: []\n---\nbody', 'JSON object'),
-      ('real', '---\nparameters: {broken\n---\nbody', 'one-line JSON object'),
-      ('real', '---\nparameters: {"arg": 1}\n---\nbody', 'must be strings'),
+      ('real', '---\ndescription: real\nparameters: []\n---\nbody', 'JSON object'),
+      ('real', '---\ndescription: real\nparameters: {broken\n---\nbody', 'one-line JSON object'),
+      ('real', '---\ndescription: real\nparameters: {"arg": 1}\n---\nbody', 'must be strings'),
     ],
   )
   def test_invalid_spells_fail_at_bro_load(self, fake_packages, name, content, match):
