@@ -6,6 +6,37 @@ from typing import ClassVar, Self
 # provider maps these levels onto its own scale.
 EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
 
+# the neutral vocabulary a provider classifies its failures into; a consumer
+# (e.g. a retry policy) maps these categories onto its own exception taxonomy.
+FAILURE_CATEGORIES = frozenset(
+  {
+    'rate-limit',
+    'server-error',
+    'network',
+    'authentication',
+    'model-not-found',
+    'usage-limit',
+    'unknown-api',
+  }
+)
+
+
+@dataclass(frozen=True)
+class FailureSignature:
+  """one provider failure as it reads in a run's error output — the exception
+  spelling the provider's own client emits: a regex over that output, and the
+  `FAILURE_CATEGORIES` category a match indicates."""
+
+  pattern: str
+  category: str
+
+  def __post_init__(self):
+    if self.category not in FAILURE_CATEGORIES:
+      raise ValueError(
+        f'unknown failure category {self.category!r}; expected one of '
+        f'{", ".join(sorted(FAILURE_CATEGORIES))}'
+      )
+
 
 @dataclass(frozen=True)
 class LLMSpec(ABC):

@@ -1,7 +1,7 @@
 import pytest
 
 from bro.llm import providers
-from bro.llm.llm import NativeLLMSpec
+from bro.llm.llm import FAILURE_CATEGORIES, FailureSignature, NativeLLMSpec
 from bro.llm.llms import claude_code, echo, openai as openai_llm
 
 
@@ -121,3 +121,18 @@ class TestNativeSplit:
     for name in providers.known_names():
       spec = providers.default_spec(name)
       assert providers.LLMSpec.from_dict(spec.dump()) == spec
+
+
+class TestFailureSignatures:
+  def test_every_provider_declares_its_signatures(self):
+    for name in providers.known_names():
+      for signature in providers.failure_signatures(name):
+        assert signature.category in FAILURE_CATEGORIES
+
+  def test_openai_names_its_client_exceptions(self):
+    patterns = {signature.pattern for signature in providers.failure_signatures('openai')}
+    assert r'openai\.RateLimitError' in patterns
+
+  def test_a_signature_off_the_category_vocabulary_is_refused(self):
+    with pytest.raises(ValueError, match='unknown failure category'):
+      FailureSignature(pattern='x', category='sprint')

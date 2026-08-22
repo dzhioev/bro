@@ -6,8 +6,8 @@ value, its spec's `TYPE` discriminator, and (where it reads one) its credential
 kind — so a launch, a stored spec, and a hydrated scope all spell it the same.
 
 Adding a provider is a module under `llms/` exporting `LLMSpec`,
-`DEFAULT_MODEL`, and a `MODELS` short-name table, plus its row in
-`_PROVIDER_MODULES`.
+`DEFAULT_MODEL`, a `MODELS` short-name table, and a `FAILURE_SIGNATURES`
+tuple, plus its row in `_PROVIDER_MODULES`.
 """
 
 import dataclasses
@@ -17,7 +17,7 @@ from types import ModuleType
 from typing import Optional
 
 from bro.base import log
-from bro.llm.llm import EFFORT_LEVELS, LLMSpec
+from bro.llm.llm import EFFORT_LEVELS, FailureSignature, LLMSpec
 
 _PROVIDER_MODULES: dict[str, str] = {
   'openai': 'bro.llm.llms.openai',
@@ -63,6 +63,12 @@ def models(provider: str) -> dict[str, str]:
 def default_spec(provider: str) -> LLMSpec:
   """the provider's own default recipe — its default model and no knobs."""
   return _provider_module(provider).LLMSpec()
+
+
+def failure_signatures(provider: str) -> tuple[FailureSignature, ...]:
+  """the provider's declared failure signatures — how its client's failures
+  read in a run's error output, each classified into `FAILURE_CATEGORIES`."""
+  return _provider_module(provider).FAILURE_SIGNATURES
 
 
 def resolve_model(provider: str, model: str) -> str:

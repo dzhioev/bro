@@ -96,19 +96,21 @@ class FakeEnvironment:
 
 
 def agent(tmp_path: Path, **kwargs: Any) -> BroAgent:
+  kwargs.setdefault('llm_credential', 'openai')
   return BroAgent(logs_dir=tmp_path, **kwargs)
 
 
-def test_a_recipe_is_named_within_the_provider_the_framework_serves():
+def test_a_recipe_is_named_within_a_registered_provider():
   assert bare_recipe('openai/gpt-5.6-terra') == 'gpt-5.6-terra'
   assert bare_recipe('openai/gpt-5.6-terra:high') == 'gpt-5.6-terra:high'
   assert bare_recipe('openai/gpt-5.6-terra:high+fast') == 'gpt-5.6-terra:high+fast'
+  assert bare_recipe('claude-code/opus5') == 'opus5'
   assert bare_recipe(None) is None
 
 
 @pytest.mark.parametrize('model_name', ['anthropic/opus', 'gpt-5.6-terra', 'openai/'])
 def test_a_recipe_outside_that_form_is_refused(model_name):
-  with pytest.raises(ValueError, match='openai/'):
+  with pytest.raises(ValueError, match='registered provider'):
     bare_recipe(model_name)
 
 
@@ -119,8 +121,20 @@ def test_a_recipe_off_the_llm_grammar_is_refused(model_name):
 
 
 def test_a_bad_model_fails_before_any_trial_runs(tmp_path):
-  with pytest.raises(ValueError, match='openai/'):
+  with pytest.raises(ValueError, match='registered provider'):
     agent(tmp_path, bro='terminal', model_name='anthropic/opus')
+
+
+def test_a_credential_is_never_implied(tmp_path):
+  with pytest.raises(TypeError, match='llm_credential'):
+    # kwargs arrive dynamically from a job config, so the runtime refusal is
+    # the contract under test
+    BroAgent(logs_dir=tmp_path, bro='terminal')  # pyright: ignore[reportCallIssue]
+
+
+def test_the_error_patterns_are_the_roster_providers_signatures():
+  patterns = {pattern.pattern for pattern in BroAgent.ERROR_PATTERNS}
+  assert r'openai\.RateLimitError' in patterns  # the openai declaration reaches harbor
 
 
 def test_the_recipe_reaches_the_run_with_its_provider_slot_empty():

@@ -21,6 +21,10 @@ MODELS: dict[str, str] = {
   'haiku45': 'claude-haiku-4-5-20251001',
 }
 
+# the harness drives its own loop and surfaces failures as session output, not
+# as exception spellings a caller's error scan could classify
+FAILURE_SIGNATURES: tuple[llm_llm.FailureSignature, ...] = ()
+
 DEFAULT_EFFORT = 'xhigh'
 
 

@@ -27,8 +27,10 @@ The bro-native engine and provider clients live in `bro.native`.
   `NativeLLMSpec` is the marker for recipes the bro-native engine can run;
   a provider whose harness drives its own loop (`claude_code`) remains a bare `LLMSpec`.
 - `providers.py` — the provider roster:
-  `_PROVIDER_MODULES` (name → the module declaring its `LLMSpec` / `DEFAULT_MODEL` / `MODELS` short-name table, imported per name), model resolution (short name, then full id, then verbatim
-  — the table is a convenience, not a whitelist), `provider_of_model`, and `LLMSelection`:
+  `_PROVIDER_MODULES` (name → the module declaring its `LLMSpec` / `DEFAULT_MODEL` / `MODELS` short-name table / `FAILURE_SIGNATURES`, imported per name), model resolution (short name, then full id, then verbatim
+  — the table is a convenience, not a whitelist), `provider_of_model`,
+  `failure_signatures` (how a provider's client failures read in a run's error output, classified into `llm.py`'s neutral `FAILURE_CATEGORIES` — what a consumer's retry policy maps onto its own taxonomy),
+  and `LLMSelection`:
   the `provider:model:effort` grammar with its `+fast` suffix.
   `LLMSelectionError` is the operator-facing failure.
   The flags themselves are `bro/launch/llm_flags.py`.

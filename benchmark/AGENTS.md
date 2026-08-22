@@ -64,9 +64,10 @@ uv run --directory benchmark pytest bro/benchmark/harbor_e2e_test.py
   `run()` is a single
   `bro run <bro> <instruction>` under `setsid`, reaped through a fresh root exec when
   harbor cancels the phase.
-  Harbor's `model_name` carries `openai/` plus a `--llm` recipe with its provider slot dropped
-  — `openai/<model>[:<effort>][+fast]`, mapped onto `--llm :<recipe>`, the spelling
-  that keeps the persona's own spec
+  Harbor's `model_name` carries a registered provider's name plus a `--llm` recipe with its provider slot dropped
+  — `<provider>/<model>[:<effort>][+fast]`, mapped onto `--llm :<recipe>`, the spelling
+  that keeps the persona's own spec;
+  the retry classification is the roster providers' declared failure signatures
 - `bro/benchmark/harbor_environment.py` — `UnmountedDockerEnvironment`, the environment the job
   config names:
   it keeps a trial's logs, artifacts and reward inside the task container for harbor
