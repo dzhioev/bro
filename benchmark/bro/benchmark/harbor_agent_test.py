@@ -20,7 +20,7 @@ from bro.benchmark.harbor_agent import (
   BUNDLE,
   STORE_DIR,
   BroAgent,
-  bare_model,
+  bare_recipe,
   kill_command,
   run_command,
   run_timeout,
@@ -99,15 +99,23 @@ def agent(tmp_path: Path, **kwargs: Any) -> BroAgent:
   return BroAgent(logs_dir=tmp_path, **kwargs)
 
 
-def test_a_model_is_named_within_the_provider_the_framework_serves():
-  assert bare_model('openai/gpt-5.6-terra') == 'gpt-5.6-terra'
-  assert bare_model(None) is None
+def test_a_recipe_is_named_within_the_provider_the_framework_serves():
+  assert bare_recipe('openai/gpt-5.6-terra') == 'gpt-5.6-terra'
+  assert bare_recipe('openai/gpt-5.6-terra:high') == 'gpt-5.6-terra:high'
+  assert bare_recipe('openai/gpt-5.6-terra:high+fast') == 'gpt-5.6-terra:high+fast'
+  assert bare_recipe(None) is None
 
 
 @pytest.mark.parametrize('model_name', ['anthropic/opus', 'gpt-5.6-terra', 'openai/'])
-def test_a_model_outside_that_form_is_refused(model_name):
+def test_a_recipe_outside_that_form_is_refused(model_name):
   with pytest.raises(ValueError, match='openai/'):
-    bare_model(model_name)
+    bare_recipe(model_name)
+
+
+@pytest.mark.parametrize('model_name', ['openai/a:b:c:d', 'openai/gpt+turbo', 'openai/gpt:sprint'])
+def test_a_recipe_off_the_llm_grammar_is_refused(model_name):
+  with pytest.raises(ValueError):
+    bare_recipe(model_name)
 
 
 def test_a_bad_model_fails_before_any_trial_runs(tmp_path):
@@ -115,29 +123,29 @@ def test_a_bad_model_fails_before_any_trial_runs(tmp_path):
     agent(tmp_path, bro='terminal', model_name='anthropic/opus')
 
 
-def test_the_model_reaches_the_run_as_a_model_only_recipe():
+def test_the_recipe_reaches_the_run_with_its_provider_slot_empty():
   command = run_command(
-    bro='terminal', instruction='do it', model='gpt-5.6-terra', timeout_sec=None
+    bro='terminal', instruction='do it', llm='gpt-5.6-terra:high', timeout_sec=None
   )
 
-  assert '--llm :gpt-5.6-terra' in command
+  assert '--llm :gpt-5.6-terra:high' in command
 
 
-def test_no_model_leaves_the_bros_own_recipe():
-  command = run_command(bro='terminal', instruction='do it', model=None, timeout_sec=None)
+def test_no_recipe_leaves_the_bros_own():
+  command = run_command(bro='terminal', instruction='do it', llm=None, timeout_sec=None)
 
   assert '--llm' not in command
 
 
 def test_the_run_drives_the_bundle_shim_in_this_process():
-  command = run_command(bro='terminal', instruction='do it', model=None, timeout_sec=None)
+  command = run_command(bro='terminal', instruction='do it', llm=None, timeout_sec=None)
 
   assert f'{BUNDLE.shim} run terminal' in command
 
 
 def test_the_instruction_is_one_argument_however_it_is_written():
   instruction = "rm -rf / ; echo 'the task instruction is third-party text'"
-  command = run_command(bro='terminal', instruction=instruction, model=None, timeout_sec=None)
+  command = run_command(bro='terminal', instruction=instruction, llm=None, timeout_sec=None)
 
   launch = next(line for line in command.splitlines() if line.startswith('setsid'))
   session = shlex.split(launch)[shlex.split(launch).index('-c') + 1]
@@ -146,22 +154,22 @@ def test_the_instruction_is_one_argument_however_it_is_written():
 
 
 def test_the_activity_log_lands_in_the_trial_directory():
-  command = run_command(bro='terminal', instruction='do it', model=None, timeout_sec=None)
+  command = run_command(bro='terminal', instruction='do it', llm=None, timeout_sec=None)
 
   assert '2> /logs/agent/bro.log' in command
   assert 'tail -c' in command
 
 
 def test_the_bro_runs_in_its_own_process_group():
-  command = run_command(bro='terminal', instruction='do it', model=None, timeout_sec=None)
+  command = run_command(bro='terminal', instruction='do it', llm=None, timeout_sec=None)
 
   assert 'setsid --wait' in command
   assert f'echo $$ > {harbor_agent.PGID_FILE}' in command
 
 
 def test_an_in_container_ceiling_is_opt_in():
-  without = run_command(bro='terminal', instruction='do it', model=None, timeout_sec=None)
-  with_ceiling = run_command(bro='terminal', instruction='do it', model=None, timeout_sec=900)
+  without = run_command(bro='terminal', instruction='do it', llm=None, timeout_sec=None)
+  with_ceiling = run_command(bro='terminal', instruction='do it', llm=None, timeout_sec=900)
 
   assert 'timeout ' not in without
   assert '--kill-after=5 900' in with_ceiling

@@ -15,14 +15,12 @@ datasets:
 # it ships and the purpose-built one is a measured number in a single job
 agents:
   - import_path: bro.benchmark.harbor_agent:BroAgent
-    model_name: openai/gpt-5.6-terra
+    model_name: openai/gpt-5.6-terra:high
     kwargs:
       bro: dev
-      # a dedicated, budget-capped key: the agent phase hands it to an LLM with
-      # unrestricted shell and internet, driven by third-party task text
       llm_credential: openai+benchmark
   - import_path: bro.benchmark.harbor_agent:BroAgent
-    model_name: openai/gpt-5.6-terra
+    model_name: openai/gpt-5.6-terra:high
     kwargs:
       bro: terminal
       llm_credential: openai+benchmark
