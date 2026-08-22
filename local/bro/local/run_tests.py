@@ -158,6 +158,7 @@ PYTEST_FILES = [
   'ride/ride/runtime_state_test.py',
   'ride/ride/scope_test.py',
   'ride/ride/trails_test.py',
+  'ride/ride/kinds_test.py',
   'ride/ride/spawn_test.py',
   'ride/ride/summon_control_test.py',
   'ride/ride/pending_summon_test.py',

@@ -77,11 +77,14 @@ Installed distributions contribute framework extensions through standard Python 
 - `bro.toolsets` — standalone MCP `Toolset` objects, keyed by namespace
 - `bro.mcp.targets` — assembled MCP target resolvers, keyed by target prefix
 - `bro.session_commands` — console scripts exposed on managed-session PATH
+- `bro.broker_kinds` — broker request kinds served by every managed session's host, keyed by kind name;
+  each entry targets a factory `(workspace_tree) -> handler`
 
 Entry-point metadata is written when a distribution is installed, so adding or removing a declaration requires another `uv sync`;
 editing an already-declared target does not.
 Name-keyed groups load only the selected entry.
-Credential registry assembly loads every `bro.credentials` contributor, so those target modules must remain cheap to import.
+Credential registry assembly loads every `bro.credentials` contributor, so those target modules must remain cheap to import;
+broker composition loads every `bro.broker_kinds` contributor, so the same applies there.
 Each `bro.session_commands` entry repeats the name and target of a console script from the same distribution;
 materialization rejects missing, mismatched, or duplicate declarations.
 
