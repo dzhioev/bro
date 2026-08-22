@@ -323,10 +323,14 @@ version = "0.1.0"
 source = { editable = "local" }
 dependencies = [
     { name = "bro" },
+    { name = "bro-dev" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "bro", editable = "." }]
+requires-dist = [
+    { name = "bro", editable = "." },
+    { name = "bro-dev", editable = "dev" },
+]
 
 [[package]]
 name = "bro-native"

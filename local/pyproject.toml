@@ -9,6 +9,7 @@ description = "the bro framework checkout's own persona and scripts"
 requires-python = ">=3.12"
 dependencies = [
   "bro",
+  "bro-dev",
 ]
 
 [project.scripts]
@@ -20,6 +21,7 @@ dependencies = [
 
 [tool.uv.sources]
 bro = { workspace = true }
+bro-dev = { workspace = true }
 
 [project.entry-points.bro]
 bro-dev = "bros.bro_dev:BroDev"
@@ -32,6 +34,7 @@ benchmark = "bro.local.benchmark_job:benchmark_kind"
 
 [tool.deptry.package_module_name_map]
 bro = ["bro", "bros"]
+bro-dev = ["bro", "bros"]
 
 [tool.uv.build-backend]
 module-root = ""

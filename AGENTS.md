@@ -36,6 +36,9 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   and the host-only `docker` (the container entrypoint's postconditions and the launch path from a cold image tag) and `broker_e2e` (the live broker-supervised container launch seam, `ride/ride/e2e_test.py`),
   both skipped when the gate itself runs inside a container.
   `--only` and `--skip` name stages, are repeatable, and are mutually exclusive.
+  Every selected stage runs whatever the ones before it did, and the gate closes on a replay of each failing stage's output and a one-line verdict per stage, so one pass reports every problem the tree has.
+  `--changed` narrows the `unit` roster to the test modules a diff against `--base` (default `origin/master`) can reach through the repository's import graph (`bro.dev.affected_tests`);
+  a roster module with no source module of its own holds a repository-wide invariant and runs whatever changed.
   It must pass cleanly before changes are pushed;
   GitHub runs it on every push and pull request, a runner per stage (`.github/workflows/tests.yml`)
 - `BRO_LLM_TESTS=1 pytest dev/bros/dev/commit_llm_test.py` — live-LLM behavior probes (`*_llm_test.py`):
