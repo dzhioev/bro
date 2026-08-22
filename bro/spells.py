@@ -106,9 +106,12 @@ def load_spell(name: str, path: Path) -> Spell:
       f'spell {path}: frontmatter name={declared_name!r} disagrees with filename '
       f'stem {name!r}; filename is canonical'
     )
+  description = frontmatter.get('description')
+  if description is None:
+    raise ValueError(f'spell {path}: frontmatter declares no description')
   raw_parameters = frontmatter.get('parameters')
   parameters = () if raw_parameters is None else _parse_parameters(raw_parameters, path)
-  return Spell(name, path, frontmatter.get('description', ''), parameters, body)
+  return Spell(name, path, description, parameters, body)
 
 
 def cast_available() -> bool:
