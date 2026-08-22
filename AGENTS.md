@@ -33,11 +33,11 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   `types` (pyright),
   `unit` (the pytest roster, run in parallel),
   `benchmark` (the benchmark project's own: it syncs `benchmark/.venv` and runs pyright and pytest inside it, since the workspace venv cannot import `bro.benchmark` at all),
-  and the host-only `docker` (the container entrypoint's postconditions and the launch path from a cold image tag, skipped when the gate itself runs inside a container).
+  and the host-only `docker` (the container entrypoint's postconditions and the launch path from a cold image tag) and `broker_e2e` (the live broker-supervised container launch seam, `ride/ride/e2e_test.py`),
+  both skipped when the gate itself runs inside a container.
   `--only` and `--skip` name stages, are repeatable, and are mutually exclusive.
   It must pass cleanly before changes are pushed;
   GitHub runs it on every push and pull request, a runner per stage (`.github/workflows/tests.yml`)
-- `pytest ride/ride/e2e_test.py` — live Docker launch e2e, separate from the default suite
 - `BRO_LLM_TESTS=1 pytest dev/bros/dev/commit_llm_test.py` — live-LLM behavior probes (`*_llm_test.py`):
   a real bro against the configured provider, asserting on the artifacts it produces.
   They spend real tokens, so they stay outside the default roster and are collected-but-skipped without the explicit env var
