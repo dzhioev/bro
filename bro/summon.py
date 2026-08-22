@@ -130,9 +130,6 @@ DEFAULT_TIMEOUT = 1800.0
 # far inside it. Independent of the request timeout; once `started` arrives the
 # wait re-arms to the effective timeout (see the module docstring)
 LAUNCH_TIMEOUT = 1800.0
-# a check is answered by the session broxy locally and immediately — this bound only
-# turns a wedged or unanswering broxy into a clean failure instead of a hang
-CHECK_TIMEOUT = 10.0
 # a manual summon is acknowledged (accepted or denied) by the host handler as soon
 # as it provisions the channel — this bound only turns a wedged host into a clean
 # failure instead of a hang
@@ -501,66 +498,36 @@ class SummonStatus:
 
 
 def check_summon(request_id: str, *, last_seen: Optional[int] = None) -> SummonStatus:
-  """non-blocking check on a summon by request id (the broxy's `check` kind).
-  Without `last_seen`: a non-marking peek — the answer when an unread result is
-  in, else the pending/collected state. With `last_seen` (0 = the start): a
-  cursor read — replays the conversation from that sequence regardless of read
-  status, the recovery path when a result was read by a wait whose reply never
-  arrived; the returned `seq` is the new cursor. Raises `SummonError` when the
-  id is unknown, the summon failed, `last_seen` is ahead of what was read, or
-  no broxy answers."""
+  """non-blocking check on a summon by request id (the broxy's `check` kind,
+  read through `bro.broker.broxy.check`). Without `last_seen`: a non-marking
+  peek — the answer when an unread result is in, else the pending/collected
+  state. With `last_seen` (0 = the start): a cursor read — replays the
+  conversation from that sequence regardless of read status, the recovery path
+  when a result was read by a wait whose reply never arrived; the returned
+  `seq` is the new cursor. Raises `SummonError` when the id is unknown, the
+  summon failed, `last_seen` is ahead of what was read, or no broxy answers."""
   from bro.broker.brotocol import Tag
-  from bro.broker.broxy import CHECK_KIND
+  from bro.broker.broxy import CheckDenied, check
 
-  args: dict[str, Any] = {'id': request_id}
-  if last_seen is not None:
-    args['last_seen'] = last_seen
   with _open_client() as client:
-    check = client.send(CHECK_KIND, args)
-    # the broxy replays window copies on the summon's own exchange id, then closes
-    # the check with its report — correlation separates the two streams
-    conversation: list[Message] = []
-    deadline = time.monotonic() + CHECK_TIMEOUT
-    while True:
-      remaining = deadline - time.monotonic()
-      if remaining <= 0:
-        raise SummonError(
-          f'no check reply within {CHECK_TIMEOUT:.0f}s — the session broxy is not answering'
-        )
-      message = client.receive(remaining)
-      if message is None:
-        # the transport returns None for both timeout and EOF; the deadline says which
-        if time.monotonic() >= deadline:
-          raise SummonError(
-            f'no check reply within {CHECK_TIMEOUT:.0f}s — the session broxy is not answering'
-          )
-        raise SummonError('broker channel closed awaiting the check reply')
-      if message.request == check.id:
-        report = message
-        break
-      if message.request == request_id:
-        conversation.append(message)
-    if report.payload.get('outcome') != 'ok':
-      raise SummonError(str(report.payload.get('error', report.payload)))
-    value = report.payload.get('value')
-    if not isinstance(value, dict):
-      raise SummonError(f'malformed check report: {report.payload}')
-    trail_id = value.get('trail_id')
-    summon_result = next((m for m in conversation if m.type == Tag.RESULT), None)
-    if summon_result is None:
-      state = value.get('state')
-      return SummonStatus(
-        pending=state == 'pending',
-        collected=state == 'collected',
-        trail_id=trail_id,
-        seq=value.get('seq'),
-      )
+    try:
+      report = check(client, request_id, last_seen=last_seen)
+    except (CheckDenied, TimeoutError, ConnectionError) as e:
+      raise SummonError(str(e)) from None
+  summon_result = next((m for m in report.conversation if m.type == Tag.RESULT), None)
+  if summon_result is None:
     return SummonStatus(
-      pending=False,
-      answer=_interpret_result(summon_result, trail_id),
-      trail_id=trail_id,
-      seq=value.get('seq'),
+      pending=report.state == 'pending',
+      collected=report.state == 'collected',
+      trail_id=report.trail_id,
+      seq=report.seq,
     )
+  return SummonStatus(
+    pending=False,
+    answer=_interpret_result(summon_result, report.trail_id),
+    trail_id=report.trail_id,
+    seq=report.seq,
+  )
 
 
 def collect_summon(
