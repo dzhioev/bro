@@ -70,39 +70,6 @@ class TestBrokerLaunch:
     assert launch.extra_mounts == ('/existing:/mount',)
 
 
-class TestRingBuffer:
-  def test_under_cap_keeps_everything(self):
-    ring = workspace_spawn._RingBuffer(100)
-    ring.write(b'hello')
-    ring.write(b' world')
-    assert ring.tail() == b'hello world'
-
-  def test_over_cap_keeps_last_bytes(self):
-    ring = workspace_spawn._RingBuffer(4)
-    ring.write(b'abcdefgh')
-    assert ring.tail() == b'efgh'
-
-  def test_trims_across_writes(self):
-    ring = workspace_spawn._RingBuffer(4)
-    ring.write(b'abc')
-    ring.write(b'de')
-    assert ring.tail() == b'bcde'
-
-  def test_single_write_larger_than_cap(self):
-    ring = workspace_spawn._RingBuffer(3)
-    ring.write(b'abcdefg')
-    assert ring.tail() == b'efg'
-
-  def test_exact_cap(self):
-    ring = workspace_spawn._RingBuffer(4)
-    ring.write(b'abcd')
-    assert ring.tail() == b'abcd'
-
-  def test_negative_cap_rejected(self):
-    with pytest.raises(ValueError):
-      workspace_spawn._RingBuffer(-1)
-
-
 class TestHostLogRedirect:
   def test_noop_when_stderr_is_not_a_tty(self, tmp_path):
     # pytest's captured fds are pipes, so the gate sees no terminal

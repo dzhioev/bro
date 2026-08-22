@@ -33,6 +33,10 @@ channel EOF after an attach *is* the death signal (`on_gone`), reliable because 
 consumers that attach hold one connection for their whole run and never reconnect.
 `kill` for an expected peer closes the channel host-side; the external process is not
 ours to kill and simply loses its channel.
+
+A *job* (`job()`) inverts the other half: a process with no channel. Nothing is
+provisioned, the peer id is synthetic (`job_peer`), death is process exit as for a
+spawned peer, and there is no channel to drain or close.
 """
 
 import asyncio
@@ -41,10 +45,19 @@ from typing import Optional, Protocol
 
 from bro.base import log
 from bro.broker.brotocol import Message
+from bro.broker.job import CommandJob, launch as launch_job
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import ChannelID, Provisioned, ServerTransport
 
 Peer = ChannelID  # a peer is its channel
+
+
+def job_peer(exchange: str) -> Peer:
+  """the synthetic peer id a job is supervised under — derivable from the exchange
+  id alone, so the Dispatcher binds the worker before the launch resolves. Real
+  channel ids are lulids, so the prefix cannot collide."""
+  return f'job:{exchange}'
+
 
 # how long to wait for the channel to flush to EOF after the process exits, before
 # emitting on_exit. EOF follows process exit within milliseconds; the bound only guards
@@ -68,6 +81,7 @@ class _PeerState:
   disconnected: asyncio.Event = field(default_factory=asyncio.Event)  # set on channel EOF
   connected: bool = False  # on_connect fired at least once (gates birth + the drain wait)
   external: bool = False  # an expected peer: no handle, death = channel EOF (see docstring)
+  job: bool = False  # a job: no channel, so nothing to drain and nothing to close
   handle: Optional[ChildHandle] = None
   wait_task: Optional[asyncio.Task] = None
   timer: Optional[asyncio.TimerHandle] = None
@@ -96,6 +110,25 @@ class Runtime:
     except BaseException:
       del self._peers[channel]
       await self._transport.close(channel)
+      raise
+    peer.wait_task = asyncio.create_task(self._await_exit(channel))
+    if timeout is not None:
+      loop = asyncio.get_running_loop()
+      peer.timer = loop.call_later(timeout, self._fire_timeout, channel)
+    return channel
+
+  async def job(self, command: CommandJob, *, timeout: Optional[float], exchange: str) -> Peer:
+    """launch `command` as the exchange's job and supervise its process with no
+    channel: the peer id is synthetic (`job_peer(exchange)`), death is process
+    exit, and the drain is skipped — there is nothing buffered to flush. A launch
+    failure rolls back its own registration and re-raises."""
+    channel = job_peer(exchange)
+    peer = _PeerState(channel=channel, job=True)
+    self._peers[channel] = peer
+    try:
+      peer.handle = await launch_job(command)
+    except BaseException:
+      del self._peers[channel]
       raise
     peer.wait_task = asyncio.create_task(self._await_exit(channel))
     if timeout is not None:
@@ -145,7 +178,8 @@ class Runtime:
     wait_task = state.wait_task
     if wait_task is not None and wait_task is not asyncio.current_task():
       wait_task.cancel()
-    self._schedule(self._transport.close(peer))
+    if not state.job:
+      self._schedule(self._transport.close(peer))
 
   async def serve(self) -> None:
     await self._transport.serve(self)

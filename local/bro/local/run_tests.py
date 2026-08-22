@@ -190,6 +190,8 @@ PYTEST_FILES = [
   'ride/ride/workspace/store_test.py',
   'ride/ride/workspace/worktrees_test.py',
   'bro/broker/brotocol_test.py',
+  'bro/broker/spawn_test.py',
+  'bro/broker/job_test.py',
   'bro/broker/runtime_test.py',
   'bro/broker/dispatcher_test.py',
   'bro/broker/client_test.py',

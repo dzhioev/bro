@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import log
-from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
+from bro.broker.spawn import ChildHandle, LaunchSpec, RingBuffer, Spawner
 from bro.broker.transport import Provisioned
 from ride.workspace.docker import (
   CONTAINER_BROKER_ADDRESS,
@@ -72,25 +72,6 @@ class ProcessLaunchSpec(LaunchSpec):
   interactive: bool = True
 
 
-class _RingBuffer:
-  """byte buffer retaining only the last `cap` bytes written."""
-
-  def __init__(self, cap: int):
-    if cap < 0:
-      raise ValueError(f'ring buffer cap must be non-negative, got {cap}')
-    self._cap = cap
-    self._buffer = bytearray()
-
-  def write(self, data: bytes) -> None:
-    self._buffer += data
-    overflow = len(self._buffer) - self._cap
-    if overflow > 0:
-      del self._buffer[:overflow]
-
-  def tail(self) -> bytes:
-    return bytes(self._buffer)
-
-
 def _broker_launch(launch: DockerLaunch, channel: Provisioned, exchange: str) -> DockerLaunch:
   """add the provisioned broker channel and the peer's exchange id to a neutral
   container launch."""
@@ -128,7 +109,7 @@ class _DockerChild(ChildHandle):
   ):
     self._container_id = container_id
     self._process = process
-    self._ring = _RingBuffer(ring_bytes)
+    self._ring = RingBuffer(ring_bytes)
     self._drain = asyncio.create_task(self._drain_output())
     self._workspace = workspace  # a derived throwaway workspace, removed on a clean exit
 

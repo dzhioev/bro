@@ -12,11 +12,13 @@ from bro.broker.dispatcher import (
   ping_handler,
   spawn_test_handler,
 )
-from bro.broker.runtime import Peer
+from bro.broker.job import CommandJob
+from bro.broker.runtime import Peer, job_peer
 from bro.broker.spawn import LaunchSpec
 from bro.broker.transport import Provisioned
 
 _LAUNCH = LaunchSpec()  # opaque marker; the fake Runtime never inspects it
+_JOB = CommandJob(command=('true',), cwd='.', env={})  # ditto
 
 
 def _request(kind: str, request_id: str, args: Optional[dict] = None) -> Message:
@@ -36,6 +38,7 @@ class FakeRuntime:
   def __init__(self):
     self.sent: list[tuple[Peer, Message]] = []
     self.spawns: list[tuple[LaunchSpec, Optional[float], str]] = []
+    self.jobs: list[tuple[CommandJob, Optional[float], str]] = []
     self.expects: list[Optional[float]] = []
     self.forgotten: list[Peer] = []
     self.killed: list[Peer] = []
@@ -48,6 +51,12 @@ class FakeRuntime:
     if self.spawn_error is not None:
       raise self.spawn_error
     return self.next_peers.pop(0)
+
+  async def job(self, command: CommandJob, *, timeout: Optional[float], exchange: str) -> Peer:
+    self.jobs.append((command, timeout, exchange))
+    if self.spawn_error is not None:
+      raise self.spawn_error
+    return job_peer(exchange)
 
   async def expect(self, *, timeout: Optional[float]) -> Provisioned:
     self.expects.append(timeout)
@@ -244,6 +253,167 @@ async def test_spawn_failure_synthesizes_failed_launch_and_closes_the_exchange()
   }
   assert dispatcher.exchanges == {}  # closed; nothing to hold for the never-launched worker
   assert dispatcher.workers == {}
+
+
+async def start_job(
+  dispatcher: Dispatcher,
+  runtime: FakeRuntime,
+  *,
+  requester: Peer = 'requester',
+  request_id: str = 'R',
+) -> Peer:
+  """drive a job request through rule 2 + an inline handler; return the job's
+  synthetic worker peer."""
+  dispatcher.on('job-test', lambda context, peer, message: context.job(_JOB, peer))
+  dispatcher.on_message(requester, _request('job-test', request_id))
+  await _settle()
+  return job_peer(request_id)
+
+
+@pytest.mark.asyncio
+async def test_job_opens_the_exchange_with_the_worker_bound_up_front():
+  # a job's peer id is derivable from the exchange id, so the worker binds before
+  # the launch resolves — no exit can slip between launch and bind.
+  dispatcher, runtime = make_dispatcher()
+  dispatcher.on('job-test', lambda context, peer, message: context.job(_JOB, peer))
+  dispatcher.on_message('requester', _request('job-test', 'R'))
+  worker = job_peer('R')
+  assert dispatcher.exchanges['R'].requester == 'requester'
+  assert dispatcher.exchanges['R'].worker == worker  # bound before the launch resolved
+  assert dispatcher.workers[worker] == 'R'
+  await _settle()
+  assert runtime.jobs == [(_JOB, DEFAULT_TIMEOUT, 'R')]
+
+
+@pytest.mark.asyncio
+async def test_job_launch_delivers_a_started_progress():
+  dispatcher, runtime = make_dispatcher()
+  observed = make_tap(dispatcher)
+  worker = await start_job(dispatcher, runtime)
+  [(target, started)] = runtime.sent
+  assert target == 'requester'
+  assert (started.type, started.request, started.payload) == (Tag.PROGRESS, 'R', {})
+  assert [(source, target, m.type) for source, target, m in observed] == [
+    (worker, 'requester', Tag.PROGRESS)
+  ]
+
+
+@pytest.mark.asyncio
+async def test_job_clean_exit_closes_the_exchange_with_ok_and_the_tail():
+  dispatcher, runtime = make_dispatcher()
+  worker = await start_job(dispatcher, runtime)
+  dispatcher.on_exit(worker, 0, 'job-output')
+  target, done = runtime.sent[-1]
+  assert target == 'requester'
+  assert (done.type, done.request) == (Tag.RESULT, 'R')
+  assert done.payload == {'outcome': 'ok', 'value': {'output_tail': 'job-output'}}
+  assert 'R' not in dispatcher.exchanges
+  assert runtime.forgotten == [worker]
+
+
+@pytest.mark.asyncio
+async def test_job_failing_exit_synthesizes_failed_exit():
+  dispatcher, runtime = make_dispatcher()
+  worker = await start_job(dispatcher, runtime)
+  dispatcher.on_exit(worker, 3, 'job-traceback')
+  target, failed = runtime.sent[-1]
+  assert target == 'requester'
+  assert failed.payload == {
+    'outcome': 'failed',
+    'detail': {'reason': 'exit', 'exit_code': 3, 'output_tail': 'job-traceback'},
+  }
+  assert 'R' not in dispatcher.exchanges
+
+
+@pytest.mark.asyncio
+async def test_job_timeout_synthesizes_failed_and_the_later_exit_dedupes():
+  dispatcher, runtime = make_dispatcher()
+  worker = await start_job(dispatcher, runtime)
+  dispatcher.on_timeout(worker)
+  target, failed = runtime.sent[-1]
+  assert (target, failed.request) == ('requester', 'R')
+  assert failed.payload == {'outcome': 'failed', 'detail': {'reason': 'timeout'}}
+  dispatcher.on_exit(worker, -15, '')  # the Runtime-killed job's reap, exchange closed already
+  terminals = [m for _, m in runtime.sent if m.type == Tag.RESULT]
+  assert len(terminals) == 1
+
+
+@pytest.mark.asyncio
+async def test_job_launch_failure_synthesizes_failed_launch_and_unbinds_the_worker():
+  dispatcher, runtime = make_dispatcher()
+  runtime.spawn_error = RuntimeError('no such command')
+  dispatcher.on('job-test', lambda context, peer, message: context.job(_JOB, peer))
+  dispatcher.on_message('requester', _request('job-test', 'R'))
+  await _settle()
+  [(target, failed)] = runtime.sent  # no started progress precedes the failure
+  assert (target, failed.type, failed.request) == ('requester', Tag.RESULT, 'R')
+  assert failed.payload == {
+    'outcome': 'failed',
+    'error': 'no such command',
+    'detail': {'reason': 'launch'},
+  }
+  assert dispatcher.exchanges == {}
+  assert dispatcher.workers == {}
+
+
+@pytest.mark.asyncio
+async def test_duplicate_kind_registration_is_refused():
+  dispatcher, _ = make_dispatcher()
+  dispatcher.on(PING, ping_handler)
+  with pytest.raises(ValueError):
+    dispatcher.on(PING, ping_handler)
+
+
+@pytest.mark.asyncio
+async def test_job_round_trips_over_a_real_runtime_and_transport(socket_dir):
+  # the one integration pass over the real loop: a requester on a live channel
+  # sends the request, the job's process really runs, and the host's started
+  # progress precedes the derived result.
+  import os
+  import sys
+
+  from bro.broker.client import Client
+  from bro.broker.runtime import Runtime
+  from bro.broker.spawn import Spawner
+  from bro.broker.transport import connect
+  from bro.broker.transports.unix import UnixServerTransport
+
+  class NoSpawner(Spawner):
+    async def spawn(self, launch, channel, exchange):
+      raise AssertionError('no worker peers in this test')
+
+  transport = UnixServerTransport(str(socket_dir))
+  dispatcher = Dispatcher()
+  runtime = Runtime(transport, NoSpawner(), dispatcher)
+  dispatcher.bind(runtime)
+  serve_task = asyncio.create_task(runtime.serve())
+  await asyncio.sleep(0)  # let serve install the sink before the requester connects
+  job = CommandJob(
+    # outlive the launch callback so the started progress deterministically
+    # precedes the exit-derived result
+    command=(sys.executable, '-c', 'import time; print("job-ran"); time.sleep(0.2)'),
+    cwd=os.getcwd(),
+    env=dict(os.environ),
+  )
+  dispatcher.on('job-test', lambda context, peer, message: context.job(job, peer, timeout=30.0))
+  provisioned = await runtime.expect(timeout=None)
+
+  def _drive() -> tuple[list[Message], Message]:
+    interim: list[Message] = []
+    with Client(connect('unix:' + provisioned.host_endpoint)) as client:
+      result = client.call('job-test', {}, 10.0, on_interim=interim.append)
+    return interim, result
+
+  try:
+    interim, result = await asyncio.to_thread(_drive)
+  finally:
+    await runtime.stop()
+    serve_task.cancel()
+    await asyncio.gather(serve_task, return_exceptions=True)
+  [started] = interim
+  assert (started.type, started.payload) == (Tag.PROGRESS, {})
+  assert result.payload['outcome'] == 'ok'
+  assert 'job-ran' in result.payload['value']['output_tail']
 
 
 async def expect_child(
