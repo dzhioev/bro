@@ -11,6 +11,26 @@ class LaunchSpec:
   """opaque launch description — concrete fields live with the concrete Spawner adapter."""
 
 
+class RingBuffer:
+  """byte buffer retaining only the last `cap` bytes written — what backs a
+  handle's `output_tail`."""
+
+  def __init__(self, cap: int):
+    if cap < 0:
+      raise ValueError(f'ring buffer cap must be non-negative, got {cap}')
+    self._cap = cap
+    self._buffer = bytearray()
+
+  def write(self, data: bytes) -> None:
+    self._buffer += data
+    overflow = len(self._buffer) - self._cap
+    if overflow > 0:
+      del self._buffer[:overflow]
+
+  def tail(self) -> bytes:
+    return bytes(self._buffer)
+
+
 class ChildHandle(ABC):
   """the Broker's handle on one spawned peer's process."""
 

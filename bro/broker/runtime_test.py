@@ -8,7 +8,8 @@ import pytest
 
 from bro.broker import brotocol
 from bro.broker.brotocol import Message
-from bro.broker.runtime import Peer, Runtime
+from bro.broker.job import CommandJob
+from bro.broker.runtime import Peer, Runtime, job_peer
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned, connect
 from bro.broker.transports.unix import UnixServerTransport
@@ -364,6 +365,75 @@ async def test_expect_timeout_reports_timeout_then_gone(socket_dir):
 
     assert await next_event(env.listener) == ('timeout', peer)
     assert await next_event(env.listener) == ('gone', peer)
+
+
+def _job(code: str) -> CommandJob:
+  return CommandJob(command=(sys.executable, '-c', code), cwd=os.getcwd(), env=dict(os.environ))
+
+
+@pytest.mark.asyncio
+async def test_job_reports_exit_and_tail_with_no_channel(socket_dir):
+  async with runtime_harness(socket_dir) as env:
+    peer = await env.runtime.job(_job('print("job-out")'), timeout=None, exchange='x1')
+
+    assert peer == job_peer('x1')
+    assert _sock_files(env.control_dir) == []  # nothing provisioned
+    kind, exited_peer, code, output = await next_event(env.listener)
+    assert (kind, exited_peer, code) == ('exit', peer, 0)
+    assert 'job-out' in output
+
+
+@pytest.mark.asyncio
+async def test_job_failure_reports_code_and_tail(socket_dir):
+  async with runtime_harness(socket_dir) as env:
+    code_snippet = 'import sys; sys.stderr.write("job-boom"); sys.exit(4)'
+    peer = await env.runtime.job(_job(code_snippet), timeout=None, exchange='x1')
+
+    kind, exited_peer, code, output = await next_event(env.listener)
+    assert (kind, exited_peer, code) == ('exit', peer, 4)
+    assert 'job-boom' in output
+
+
+@pytest.mark.asyncio
+async def test_job_timeout_kills_then_reports_timeout_and_exit(socket_dir):
+  async with runtime_harness(socket_dir) as env:
+    peer = await env.runtime.job(
+      _job('import time; time.sleep(3600)'), timeout=3600.0, exchange='x1'
+    )
+    # fire deterministically, as in the spawn timeout test
+    timer = env.runtime._peers[peer].timer
+    assert timer is not None
+    timer.cancel()
+    env.runtime._fire_timeout(peer)
+
+    assert await next_event(env.listener) == ('timeout', peer)
+    kind, exited_peer, code, _ = await next_event(env.listener)
+    assert (kind, exited_peer) == ('exit', peer)
+    assert code != 0
+
+
+@pytest.mark.asyncio
+async def test_job_forget_drops_supervision_without_exit(socket_dir):
+  async with runtime_harness(socket_dir) as env:
+    peer = await env.runtime.job(_job('import time; time.sleep(3600)'), timeout=None, exchange='x1')
+    handle = env.runtime._peers[peer].handle
+    assert handle is not None
+
+    env.runtime.forget(peer)
+    await handle.kill()  # reap the process the forget deliberately left alone
+    await asyncio.sleep(0)
+    assert env.listener.events.empty()  # a forgotten job's exit is not reported
+
+
+@pytest.mark.asyncio
+async def test_job_launch_failure_rolls_back_registration(socket_dir):
+  async with runtime_harness(socket_dir) as env:
+    missing = CommandJob(command=('/nonexistent-job-binary',), cwd=os.getcwd(), env={})
+    with pytest.raises(FileNotFoundError):
+      await env.runtime.job(missing, timeout=None, exchange='x1')
+
+    assert env.runtime._peers == {}
+    assert env.listener.events.empty()
 
 
 @pytest.mark.asyncio

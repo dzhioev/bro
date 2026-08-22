@@ -66,12 +66,15 @@ The one structural rule to keep straight:
   an asyncio unix server on the host side, the synchronous socket client on the peer side.
   One bound socket file per peer under a constructor-supplied control dir (so broker stays ride-free).
 - `spawn.py` — the spawn port:
-  `Spawner` / `ChildHandle` (ABCs; `spawn` / `wait` / `kill` async, `output_tail` sync) + the `LaunchSpec` marker.
+  `Spawner` / `ChildHandle` (ABCs; `spawn` / `wait` / `kill` async, `output_tail` sync) + the `LaunchSpec` marker + `RingBuffer`, the bounded byte buffer behind a handle's `output_tail` (ride's spawner adapters share it).
   `spawn` receives the provisioned channel and the exchange id together
   — the worker-launch contract.
+- `job.py` — the job launch:
+  `CommandJob` (command, cwd, and an explicit env snapshot) run by `launch()` as a host process in its own process group — a kill takes whatever children it spawned along (SIGTERM, then SIGKILL after a grace) — with merged output ring-buffered into a `ChildHandle`.
+  The process speaks no protocol; the supervision that speaks for it is `Runtime.job` + `Dispatcher.job`.
 - `runtime.py` — the `Runtime`:
   the mechanism layer that owns the asyncio loop and all mutable per-peer state (channel, `ChildHandle`, the `await handle.wait()` task, the `call_later` timer, the drain event) over the two ports.
-  Commands `spawn(launch, *, timeout, exchange)` / `expect(*, timeout)` / `send` / `kill` / `forget` / `serve` / `stop`;
+  Commands `spawn(launch, *, timeout, exchange)` / `job(command, *, timeout, exchange)` / `expect(*, timeout)` / `send` / `kill` / `forget` / `serve` / `stop`;
   emits raw, symmetric lifecycle up to a synchronous `Listener` (the `Dispatcher`):
   `on_connect` / `on_message` / `on_exit` / `on_timeout` / `on_gone`.
   No exchanges, correlation, or protocol
@@ -86,7 +89,7 @@ The one structural rule to keep straight:
   `on_message` runs the three routing rules;
   `on_exit`/`on_timeout`/`on_gone`/a raising `spawn` launch synthesize `result{failed}`;
   `root` exposes the root peer's channel.
-  The handler primitives `deliver` / `reply` / `refuse` / `spawn` / `expect` / `invoke` are `Dispatcher` methods a handler drives via its `context`.
+  The handler primitives `deliver` / `reply` / `refuse` / `spawn` / `job` / `expect` / `invoke` are `Dispatcher` methods a handler drives via its `context`.
   `Broker` injects the transport + spawner and exposes `on` / `add_delivery_observer` / `run(root) -> int` / `stop`;
   `ping_handler` (the reserved `ping` kind) + `spawn_test_handler` are the built-ins.
 - `client.py` — the peer-side `Client` (synchronous, over `ClientTransport`):
@@ -148,6 +151,8 @@ The one structural rule to keep straight:
   — the external process is not the Runtime's to kill, it just loses its channel.
   No drain step:
   every frame the peer wrote was already delivered in order before EOF.
+- **Jobs invert the other half: a process with no channel.**
+  `job(command, *, timeout, exchange)` provisions nothing — the peer id is synthetic (`job_peer(exchange)`, collision-free against lulid channel ids), death is process exit as for a spawned peer, the drain is skipped, and `forget` has no channel to close.
 - **Drain-before-decide.**
   On process exit, before emitting `on_exit`, the Runtime waits (bounded, `_DRAIN_TIMEOUT`) for the transport to flush the channel to EOF
   — reusing `on_disconnect` as the "channel drained" marker
@@ -174,17 +179,24 @@ The one structural rule to keep straight:
   A result delivery closes the exchange and a closed exchange is forgotten, so any later message naming it falls to rule 3;
   synthesis consults the same table, so whichever of the worker's own result / exit / timeout is processed first wins
   — closing the result-vs-exit and timeout-vs-result double-terminal races.
-  `failed` is the only outcome the host originates on a worker's behalf
+  `failed` is the only outcome the host originates on a worker peer's behalf
   — from `on_exit`-without-a-result (`reason: 'exit'`, with the exit code and output tail),
   `on_timeout` (`reason: 'timeout'`, after the Runtime already killed the peer),
   `on_gone`-without-one (`reason: 'disconnected'`, an expected peer's channel ended),
   or a `Dispatcher.spawn`/`expect` whose launch raised (`reason: 'launch'`, with the error string — no worker ever existed).
   The reason class rides `detail.reason`;
   `error` carries the free-text diagnostic.
+- **A job's every message is host-originated — the third answer shape.**
+  `Dispatcher.job(command, requester, *, timeout)` runs a process that speaks no protocol, so the host speaks for it:
+  a started `progress{}` when the launch resolves, then a result derived from the exit
+  — 0 becomes `result{ok, value: {output_tail}}`, anything else the same `failed{exit}` a mute worker produces, and the timeout / launch-failure synthesis is the worker one.
+  The job exchange opens *with its worker bound* — the synthetic id is derivable up front, so no exit can slip between launch and bind.
 - **Exchanges open at `spawn`/`expect`, workers bind at launch resolution.**
   `Dispatcher.spawn` opens the exchange for the in-flight request immediately (held against id collisions), threads the request id through `Runtime.spawn` to the spawner, and binds the worker channel when the launch resolves;
   `Dispatcher.expect(requester, *, timeout, ready)` does the same for an external peer and hands the provisioned channel to `ready` so the handler can publish the endpoint to whatever launches it.
   A handler that answers inline just `reply()`s — its exchange never enters the table.
+- **One handler per kind.**
+  `on` refuses a kind that already has a handler — two contributions claiming one name are a wiring bug, not a precedence question.
 - **Delivery tap + root exposure.**
   `add_delivery_observer` registers observers fired after each correlated delivery that bypasses handlers
   — rule-1 forwarding and synthesized `failed`
@@ -271,6 +283,12 @@ two-channel authenticity,
 host-close vs peer-disconnect,
 a client close completing before its own concurrent reader parks in `select` still reading as EOF,
 socket lifecycle),
+and `spawn_test.py` (the `RingBuffer` bound),
+and `job_test.py` (`CommandJob` over real processes:
+merged output tail and its ring bound,
+the explicit env snapshot,
+exit codes,
+the group-wide kill — the background child holds the output pipe, so only a group kill lets the drain reach EOF),
 and `runtime_test.py` (the `Runtime` over the real asyncio transport + a non-Docker `python -c` spawner + a fake listener:
 clean result with drain ordering,
 the exchange id handed through the spawn port,
@@ -279,6 +297,11 @@ timeout-kill,
 send/kill/forget,
 exit-before-connect,
 launch-failure rollback,
+the job paths
+— exit + tail with no channel provisioned,
+timeout-then-exit,
+forget without exit,
+launch-failure rollback —
 and the expected-peer paths
 — messages-then-`on_gone` on disconnect,
 gone without a result,
@@ -287,12 +310,14 @@ timeout-then-gone),
 and `dispatcher_test.py` (the three rules + exchange closure + `failed` synthesis against a fake `Runtime`:
 ping's echoed result,
 unknown-kind and id-collision denials,
+duplicate kind registration refused,
 exchange opening with the exchange id riding the spawn,
 rule-1 forwarding with the worker-channel requirement (an impostor naming a live exchange is refused),
 drop-after-close,
 result-then-exit collapsing to one result,
 `failed{exit}` / `failed{timeout}` synthesis with the later exit deduped,
 `failed{launch}` synthesis closing the exchange,
+the job exchange — worker bound up front, started progress delivered and tapped, exit-0 closing with `ok{output_tail}`, failing exit / timeout / launch failure falling to the worker synthesis —
 expect opening the exchange with the channel handed to `ready`,
 expected-peer routing with a post-result `on_gone` cleaning up,
 `failed{disconnected}` synthesis,
@@ -300,7 +325,8 @@ the host-anchored root exchange (observer-only delivery, the channel un-gated by
 the delivery tap — rule-1 + synthesized `failed` observed,
 `source=None` on launch failure,
 handler replies and denials untapped — root exposure,
-and the `Broker.run` root-exit / `stop` path),
+the `Broker.run` root-exit / `stop` path,
+and one real-loop job round-trip — a live-channel requester answered started-progress-then-derived-result over the real `Runtime` and transport),
 and `client_test.py` + `cli_test.py` (the `Client` and the `broker` CLI over a real `UnixServerTransport`↔`UnixClientTransport` socket round-trip:
 `from_env` set/unset,
 the worker-side `progress`/`result` emission,
@@ -331,7 +357,6 @@ clean-stop vs upstream-EOF exit codes,
 and the `launch`/`serve`/`await` CLI edges).
 All in `bro/local/run_tests.py`'s `PYTEST_FILES`.
 No Docker.
-`spawn.py` is ports-only (marker + ABCs), so it carries no test
-— its adapters are exercised by their own suites.
+`spawn.py`'s ports (marker + ABCs) are exercised by the adapters' own suites.
 The live docker seam is covered from the consuming side by `ride/ride/e2e_test.py`;
 the host process seam by `ride/ride/session_test.py`'s live ping round-trip.

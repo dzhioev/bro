@@ -14,12 +14,16 @@ Two invariants carry the design:
   dropped. Synthesis consults the same table, so whichever of the worker's own result /
   exit / timeout is processed first wins — closing the result-vs-exit and
   timeout-vs-result double-terminal races.
-- **`failed` is the only outcome the host originates on a worker's behalf.** A worker's
-  `ok` is always its own; the host synthesizes `result{failed}` only when the worker
-  ends without one — an `on_exit` without it (`reason: 'exit'`), an `on_timeout`
-  (`reason: 'timeout'`, after the Runtime already killed the peer), an `on_gone`
-  without one (`reason: 'disconnected'`, an expected peer's channel ended), or a
-  `spawn` whose launch raised (`reason: 'launch'`, before any peer existed).
+- **`failed` is the only outcome the host originates on a worker peer's behalf.** A
+  worker peer's `ok` is always its own; the host synthesizes `result{failed}` only when
+  the worker ends without one — an `on_exit` without it (`reason: 'exit'`), an
+  `on_timeout` (`reason: 'timeout'`, after the Runtime already killed the peer), an
+  `on_gone` without one (`reason: 'disconnected'`, an expected peer's channel ended),
+  or a `spawn` whose launch raised (`reason: 'launch'`, before any peer existed).
+  A *job* (`job()`) is the exception by definition: its process speaks no protocol, so
+  the host speaks every message on its behalf — a started `progress{}` at launch, and
+  a result derived from the exit: 0 becomes `result{ok}` carrying the output tail,
+  anything else the same `failed{exit}` a mute worker produces.
 
 The root is a uniform peer with one twist: `run(root)` opens the session's own
 exchange for it, host-anchored — the requester is this process, not a peer — so the
@@ -39,7 +43,8 @@ from bro.base import log
 from bro.base.lulid import lulid
 from bro.broker import brotocol
 from bro.broker.brotocol import Message, Tag
-from bro.broker.runtime import Peer, Runtime
+from bro.broker.job import CommandJob
+from bro.broker.runtime import Peer, Runtime, job_peer
 from bro.broker.spawn import LaunchSpec, Spawner
 from bro.broker.transport import Provisioned, ServerTransport
 
@@ -62,6 +67,7 @@ class RuntimeCommands(Protocol):
   """the mechanism-layer commands the Dispatcher issues; the real `Runtime` satisfies it."""
 
   async def spawn(self, launch: LaunchSpec, *, timeout: Optional[float], exchange: str) -> Peer: ...
+  async def job(self, command: CommandJob, *, timeout: Optional[float], exchange: str) -> Peer: ...
   async def expect(self, *, timeout: Optional[float]) -> Provisioned: ...
   def send(self, peer: Peer, message: Message) -> None: ...
   def kill(self, peer: Peer) -> None: ...
@@ -77,6 +83,7 @@ class Exchange:
 
   requester: Optional[Peer]  # None: host-anchored — this process is the requester
   worker: Optional[Peer] = None
+  job: bool = False  # answered by a job: a clean exit is its ok (see on_exit)
 
 
 class Dispatcher:
@@ -103,6 +110,11 @@ class Dispatcher:
     return self._runtime
 
   def on(self, kind: str, handler: RequestHandler) -> None:
+    """register the handler answering `kind`. A kind has exactly one handler —
+    a second registration is a wiring bug (two contributions claiming one name),
+    refused rather than letting registration order decide."""
+    if kind in self._handlers:
+      raise ValueError(f'kind {kind!r} already has a handler')
     self._handlers[kind] = handler
 
   def add_delivery_observer(self, observer: DeliveryObserver) -> None:
@@ -153,6 +165,38 @@ class Dispatcher:
         self._fail(request_id, None, error=str(error), detail={'reason': 'launch'})
         return
       self._bind_worker(finished.result(), request_id)
+
+    task.add_done_callback(_launched)
+
+  def job(self, command: CommandJob, requester: Peer, *, timeout: Optional[float] = None) -> None:
+    """run `command` as the job answering the in-flight request — the third
+    answer shape: the process speaks no protocol, so the host observes it and
+    speaks on its behalf. The exchange opens *and its worker binds* here — a
+    job's peer id is derivable up front, so no exit can slip in between — then a
+    started `progress{}` is delivered when the launch resolves, and the result
+    is derived from the exit in `on_exit`. A launch failure closes the exchange
+    with `result{failed, reason: 'launch'}` instead."""
+    request_id = self._request_id()
+    worker = job_peer(request_id)
+    self.exchanges[request_id] = Exchange(requester=requester, worker=worker, job=True)
+    self.workers[worker] = request_id
+    effective_timeout = timeout if timeout is not None else self._default_timeout
+    task = asyncio.ensure_future(
+      self.runtime.job(command, timeout=effective_timeout, exchange=request_id)
+    )
+
+    def _launched(finished: asyncio.Task) -> None:
+      if finished.cancelled():
+        return
+      error = finished.exception()
+      if error is not None:
+        log.warning(f'broker dispatcher: job launch failed: {error!r}')
+        self._fail(request_id, None, error=str(error), detail={'reason': 'launch'})
+        return
+      exchange = self.exchanges.get(request_id)
+      if exchange is None:
+        return  # the job already ended and its exit closed the exchange
+      self._deliver_observed(worker, exchange.requester, brotocol.progress(request_id, {}))
 
     task.add_done_callback(_launched)
 
@@ -218,9 +262,13 @@ class Dispatcher:
   def on_exit(self, peer: Peer, code: int, output: str) -> None:
     request_id = self.workers.get(peer)
     if request_id is not None:
-      self._fail(
-        request_id, peer, detail={'reason': 'exit', 'exit_code': code, 'output_tail': output}
-      )
+      exchange = self.exchanges.get(request_id)
+      if exchange is not None and exchange.job and code == 0:
+        self._complete_job(request_id, peer, output)
+      else:
+        self._fail(
+          request_id, peer, detail={'reason': 'exit', 'exit_code': code, 'output_tail': output}
+        )
     self._cleanup(peer)
     if peer == self._root and self._root_exit is not None and not self._root_exit.done():
       self._root_exit.set_result(code)
@@ -317,6 +365,21 @@ class Dispatcher:
       self.deliver(target, message)
     for observer in self._delivery_observers:
       observer(source, target, message)
+
+  def _complete_job(self, request_id: str, source: Peer, output: str) -> None:
+    """close a job exchange whose process ended cleanly: exit 0 is the job's ok,
+    delivered with the output tail as its value."""
+    exchange = self.exchanges.get(request_id)
+    if exchange is None:
+      return
+    self._close(request_id)
+    if exchange.requester is None:
+      return
+    self._deliver_observed(
+      source,
+      exchange.requester,
+      brotocol.result(request_id, 'ok', value={'output_tail': output}),
+    )
 
   def _fail(
     self,
