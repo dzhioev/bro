@@ -10,9 +10,9 @@ so the tools under measurement are the ones the framework ships.
 Nothing bro-shaped is constructed or validated in this process. The environment
 harbor runs in resolves `openai` 2.x through litellm while every model call
 happens in the container against the bundle's `openai` 3, so the two majors
-must never share an interpreter: this module reads the framework's base layer
-only, and the bro name crosses into the container as a string for the bundle
-itself to check.
+must never share an interpreter: this module imports nothing that pulls the
+`openai` package in, and the bro name crosses into the container as a string
+for the bundle itself to check.
 """
 
 import asyncio
@@ -43,6 +43,7 @@ from harbor.models.trial.result import AgentInfo
 
 from bro.base import credentials
 from bro.benchmark.bundle import Bundle, built, default_root, workspace_root
+from bro.llm.providers import parse
 from bro.llm.usage import read_usage_file
 from ride.workspace.store import materialize_scoped_store
 
@@ -91,21 +92,26 @@ def docker_compose_missing() -> bool:
     return True
 
 
-def bare_model(model_name: Optional[str]) -> Optional[str]:
-  """the model `-m <provider>/<model>` names, without its provider prefix.
+def bare_recipe(model_name: Optional[str]) -> Optional[str]:
+  """the `--llm` recipe harbor's `model_name` carries past its provider prefix.
 
-  The framework picks a model with `bro run --llm :<model>`, whose empty
-  provider slot replaces only the model and keeps the persona's own recipe;
-  naming the provider there would substitute that provider's default recipe
-  and drop knobs such as the compaction threshold. So the prefix is checked
-  and stripped rather than passed on.
+  Everything after `openai/` is the exact `--llm` grammar with the provider
+  slot dropped — `<model>[:<effort>][+fast]` — validated here so a malformed
+  recipe fails at job start rather than inside a graded trial. The framework
+  receives it as `bro run --llm :<recipe>`, whose empty provider slot replaces
+  only what the recipe names and keeps the persona's own spec; naming the
+  provider there would substitute that provider's default recipe and drop
+  knobs such as the compaction threshold. So the prefix is checked and
+  stripped rather than passed on.
   """
   if model_name is None:
     return None
   prefix = f'{MODEL_PROVIDER}/'
   if not model_name.startswith(prefix) or model_name == prefix:
-    raise ValueError(f'model {model_name!r} is not of the form {prefix}<model>')
-  return model_name[len(prefix) :]
+    raise ValueError(f'model {model_name!r} is not of the form {prefix}<recipe>')
+  recipe = model_name[len(prefix) :]
+  parse(f':{recipe}')
+  return recipe
 
 
 def run_timeout(value: Any) -> Optional[int]:
@@ -135,7 +141,7 @@ def scoped_store(name: str) -> Generator[Path]:
 
 
 def run_command(
-  *, bro: str, instruction: str, model: Optional[str], timeout_sec: Optional[int]
+  *, bro: str, instruction: str, llm: Optional[str], timeout_sec: Optional[int]
 ) -> str:
   """the one command a trial's agent phase runs.
 
@@ -146,8 +152,8 @@ def run_command(
   `setsid` and publishes its process group, which is what `kill_command` reaps.
   """
   arguments = [str(BUNDLE.shim), 'run', bro, instruction]
-  if model is not None:
-    arguments += ['--llm', f':{model}']
+  if llm is not None:
+    arguments += ['--llm', f':{llm}']
   bro_command = shlex.join(arguments)
   if timeout_sec is not None:
     bro_command = f'timeout --signal=TERM --kill-after={TERM_GRACE_SEC} {timeout_sec} {bro_command}'
@@ -227,7 +233,7 @@ class BroAgent(BaseInstalledAgent):
     self._bro = bro
     self._llm_credential = llm_credential
     self._run_timeout_sec = run_timeout(run_timeout_sec)
-    self._model = bare_model(self.model_name)
+    self._llm = bare_recipe(self.model_name)
     if docker_compose_missing():
       self.logger.warning(
         'no docker compose plugin on this host: a job on the docker environment cannot '
@@ -291,7 +297,7 @@ class BroAgent(BaseInstalledAgent):
     command = run_command(
       bro=self._bro,
       instruction=instruction,
-      model=self._model,
+      llm=self._llm,
       timeout_sec=self._run_timeout_sec,
     )
     try:
