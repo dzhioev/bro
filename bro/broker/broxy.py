@@ -94,7 +94,7 @@ import bro.base.args as base_args
 from bro.base import log, spawn
 from bro.broker import brotocol
 from bro.broker.brotocol import MAX_FRAME_BYTES, Message, ProtocolError, Tag
-from bro.broker.client import CHANNEL_ENV
+from bro.broker.client import CHANNEL_ENV, Client
 
 __cli_name__ = 'broxy'
 
@@ -485,6 +485,81 @@ class Broxy:
       if fallback is None and route.waiter is None:
         fallback = request_id
     return fallback
+
+
+# --- the retention client — peer-side reads of the local kinds ------------------
+
+# a check is answered by the session broxy locally and immediately — this bound only
+# turns a wedged or unanswering broxy into a clean failure instead of a hang
+CHECK_TIMEOUT = 10.0
+
+
+class CheckDenied(Exception):
+  """a check the broxy refused: an unknown or evicted id, or a malformed or
+  from-the-future `last_seen`. The message is the broxy's reason."""
+
+
+@dataclass(frozen=True)
+class CheckReport:
+  """one check reading: the conversation state, its highest retained sequence
+  (the new cursor after a cursor read), the trail id retained from a started
+  progress (None where none was announced), and the window copies replayed
+  before the report (empty on a plain pending/collected peek)."""
+
+  state: str  # 'pending' | 'ready' | 'collected'
+  seq: Optional[int]
+  trail_id: Optional[str]
+  conversation: tuple[Message, ...]
+
+
+def check(
+  client: Client,
+  request_id: str,
+  *,
+  last_seen: Optional[int] = None,
+  timeout: Optional[float] = None,
+) -> CheckReport:
+  """read one exchange's retained state over `client` — the `check` kind: the
+  non-marking peek without `last_seen`, the cursor read with it. Replayed window
+  copies keep the exchange's own id while the report correlates to the check
+  itself, so the loop separates the two streams by correlation alone. Raises
+  `CheckDenied` on a refused check, TimeoutError when nothing answers within
+  `timeout` (default `CHECK_TIMEOUT`), ConnectionError on channel EOF."""
+  bound = timeout if timeout is not None else CHECK_TIMEOUT
+  args: dict[str, Any] = {'id': request_id}
+  if last_seen is not None:
+    args['last_seen'] = last_seen
+  check_request = client.send(CHECK_KIND, args)
+  conversation: list[Message] = []
+  deadline = time.monotonic() + bound
+  while True:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+      raise TimeoutError(f'no check reply within {bound:.0f}s — the session broxy is not answering')
+    message = client.receive(remaining)
+    if message is None:
+      # the transport returns None for both timeout and EOF; the deadline says which
+      if time.monotonic() >= deadline:
+        raise TimeoutError(
+          f'no check reply within {bound:.0f}s — the session broxy is not answering'
+        )
+      raise ConnectionError('broker channel closed awaiting the check reply')
+    if message.request == check_request.id:
+      report = message
+      break
+    if message.request == request_id:
+      conversation.append(message)
+  if report.payload.get('outcome') != 'ok':
+    raise CheckDenied(str(report.payload.get('error', report.payload)))
+  value = report.payload.get('value')
+  if not isinstance(value, dict) or not isinstance(value.get('state'), str):
+    raise ProtocolError(f'malformed check report: {report.payload}')
+  return CheckReport(
+    state=value['state'],
+    seq=value.get('seq'),
+    trail_id=value.get('trail_id'),
+    conversation=tuple(conversation),
+  )
 
 
 # --- CLI ----------------------------------------------------------------------

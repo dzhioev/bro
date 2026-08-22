@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import pytest
 
 from bro import summon, summon_status
-from bro.broker import brotocol
+from bro.broker import brotocol, broxy
 from bro.broker.brotocol import Message
 from bro.broker.client import CHANNEL_ENV
 from bro.broker.transport import ChannelID
@@ -452,7 +452,7 @@ async def test_check_that_nothing_answers_fails_with_a_hint(
   # a wedged broxy never answers a check, so the bounded wait must turn that
   # silence into a clean failure naming the broxy
   async with running_server(socket_dir, monkeypatch):
-    monkeypatch.setattr(summon, 'CHECK_TIMEOUT', 0.1)
+    monkeypatch.setattr(broxy, 'CHECK_TIMEOUT', 0.1)
     assert await asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1']) == 1
     assert capsys.readouterr().out == ''
     assert any('broxy' in record.getMessage() for record in caplog.records)
