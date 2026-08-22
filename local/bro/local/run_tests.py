@@ -1,13 +1,17 @@
 #!/usr/bin/env python
+import contextlib
+import functools
 import os
 import subprocess
 import sys
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
 from bro.base.args import Parser
+from bro.dev.affected_tests import changed_paths, import_graph, module_name, reachable
+from bro.dev.packaging_policy import distribution_roots
 
 __cli_name__ = 'run-tests'
 
@@ -227,6 +231,7 @@ PYTEST_FILES = [
   'local/bro/local/setup_test.py',
   'local/bro/local/packaging_policy_test.py',
   'local/bro/local/environment_policy_test.py',
+  'dev/bro/dev/affected_tests_test.py',
   'dev/bro/dev/packaging_policy_test.py',
   'dev/bro/dev/distribution_test.py',
   'dev/bro/dev/sync_scripts_test.py',
@@ -249,9 +254,41 @@ BENCHMARK_PYTEST_FILES = [
 ]
 
 
+FAILURE_REPLAY_LINES = 40
+DEFAULT_BASE = 'origin/master'
+
+_recording: Optional[list[str]] = None
+
+
+@contextlib.contextmanager
+def _record() -> Iterator[list[str]]:
+  """collect what a stage's commands write, so its failure can be replayed last."""
+  global _recording
+  lines: list[str] = []
+  _recording = lines
+  try:
+    yield lines
+  finally:
+    _recording = None
+
+
 def run(*args: str, extra_env: Optional[dict[str, str]] = None, cwd: Optional[Path] = None) -> None:
   env = None if extra_env is None else {**os.environ, **extra_env}
-  subprocess.run(args, check=True, cwd=DIR if cwd is None else cwd, env=env)
+  with subprocess.Popen(
+    args,
+    cwd=DIR if cwd is None else cwd,
+    env=env,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    text=True,
+  ) as process:
+    assert process.stdout is not None
+    for line in process.stdout:
+      sys.stderr.write(line)
+      if _recording is not None:
+        _recording.append(line)
+  if process.returncode:
+    raise subprocess.CalledProcessError(process.returncode, args)
 
 
 def node_env() -> dict[str, str]:
@@ -278,9 +315,29 @@ def types_stage() -> None:
   run(sys.executable, '-m', 'pyright', extra_env=node_env())
 
 
-def unit_stage() -> None:
-  print('pytest: unit suite', file=sys.stderr)
-  run(sys.executable, '-m', 'pytest', '-n', 'auto', *PYTEST_FILES)
+def unit_stage(roster: Sequence[str] = PYTEST_FILES) -> None:
+  scope = (
+    'whole roster'
+    if len(roster) == len(PYTEST_FILES)
+    else f'{len(roster)} of {len(PYTEST_FILES)} modules'
+  )
+  print(f'pytest: unit suite ({scope})', file=sys.stderr)
+  run(sys.executable, '-m', 'pytest', '-n', 'auto', *roster)
+
+
+def reachable_roster(base: str) -> list[str]:
+  """the roster entries a change against `base` reaches, plus the sourceless ones."""
+  source_roots = distribution_roots(DIR, (BENCHMARK,))
+  changed = changed_paths(DIR, base)
+  print(f'{len(changed)} paths changed against {base}', file=sys.stderr)
+  seeds = {name for path in changed if (name := module_name(source_roots, DIR / path)) is not None}
+  hit = reachable(import_graph(DIR, source_roots), seeds)
+  return [
+    test
+    for test in PYTEST_FILES
+    if not (DIR / f'{test.removesuffix("_test.py")}.py').exists()
+    or module_name(source_roots, DIR / test) in hit
+  ]
 
 
 def benchmark_stage() -> None:
@@ -344,13 +401,28 @@ def main(argv: list[str]) -> Optional[int]:
     metavar='STAGE',
     help='skip the named stage, repeatable',
   )
+  parser.add_argument(
+    '--changed',
+    action='store_true',
+    help='narrow the unit roster to the test modules the diff can reach',
+  )
+  parser.add_argument('--base', help=f'the ref --changed diffs against (default: {DEFAULT_BASE})')
   parser.add_exclusive_groups(['only'], ['skip'])
   args = parser.parse(argv)
   only = args['only']
   skip = args['skip'] if args['skip'] is not None else []
+  if args['base'] is not None and not args['changed']:
+    parser.error('--base names the ref --changed diffs against; pass --changed too')
+  stages = STAGES
+  if args['changed']:
+    roster = reachable_roster(args['base'] or DEFAULT_BASE)
+    narrowed = functools.partial(unit_stage, roster)
+    stages = [replace(stage, run=narrowed) if stage.name == 'unit' else stage for stage in STAGES]
   in_container = Path('/.dockerenv').is_file()
 
-  for stage in STAGES:
+  verdicts: list[tuple[str, bool]] = []
+  failures: list[tuple[str, list[str]]] = []
+  for stage in stages:
     if only is not None and stage.name not in only:
       continue
     if stage.name in skip:
@@ -361,8 +433,23 @@ def main(argv: list[str]) -> Optional[int]:
         parser.error(f'the {stage.name} stage drives the host docker daemon; run it on the host')
       print(f'skipping the {stage.name} stage (inside container; run on host)', file=sys.stderr)
       continue
-    stage.run()
-  return None
+    with _record() as recorded:
+      try:
+        stage.run()
+        passed = True
+      except subprocess.CalledProcessError:
+        failures.append((stage.name, recorded[-FAILURE_REPLAY_LINES:]))
+        passed = False
+    verdicts.append((stage.name, passed))
+
+  for name, replay in failures:
+    print(f'\n=== {name} failed ===', file=sys.stderr)
+    sys.stderr.writelines(replay)
+  print(
+    '\ngate: ' + ' | '.join(f'{name} {"ok" if passed else "FAILED"}' for name, passed in verdicts),
+    file=sys.stderr,
+  )
+  return 1 if failures else None
 
 
 if __name__ == '__main__':

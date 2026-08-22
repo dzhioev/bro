@@ -23,6 +23,7 @@ build the wheel with `uv build --package bro-dev`.
   - `git_golc.py` backs that alias with per-commit output-token credits
   - `shell_policy.py`, `packaging_policy.py`, and `markdown_policy.py` expose reusable repository checks over an explicit root;
     the last also backs `check-markdown`, which holds a bulk prose reflow to whitespace and nothing else
+  - `affected_tests.py` reads a diff and the import graph over a repository's source roots, answering which of its modules a change can reach
   - `references.py` declares the `dev-style` source over `bro/prompts/dev/style.md`
 - `bro/workflow/` — development delivery mechanics:
   co-author and token-accounting commit metadata,
