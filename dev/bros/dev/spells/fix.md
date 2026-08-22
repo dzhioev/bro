@@ -13,7 +13,7 @@ The canonical entry point for task-driven development work;
 `dive-in` seeds this spell as its first user message.
 
 parameters: {"task?": "ref of the existing task to work on", "new?": "seed text for a new task to create first"}
-version: 4.1.2
+version: 4.2.0
 ---
 
 {{iff #features contains brog}}
@@ -133,7 +133,7 @@ Implementing is where the recoverable checkpoints accumulate
 ## Step 6 — verify
 
 Run the repo's formatter (the repo's own docs name the command), then verify the change with the cheapest evidence that actually exercises it
-— the affected test files, a CLI smoke, a targeted spell.
+— a change-scoped gate selection where the repo offers one, otherwise the affected test files, a CLI smoke, a targeted spell.
 
 A full test-suite pass here is optional:
 the one mandatory pass is [[run pr]]'s gate, run once on the final rebased tree.
