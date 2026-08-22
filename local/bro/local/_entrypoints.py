@@ -9,5 +9,9 @@ def _run(module):
   return importlib.import_module(module).main(sys.argv)
 
 
+def bro_local_benchmark_job():
+  return _run('bro.local.benchmark_job')
+
+
 def bro_local_run_tests():
   return _run('bro.local.run_tests')

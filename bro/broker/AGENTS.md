@@ -70,7 +70,9 @@ The one structural rule to keep straight:
   `spawn` receives the provisioned channel and the exchange id together
   — the worker-launch contract.
 - `job.py` — the job launch:
-  `CommandJob` (command, cwd, and an explicit env snapshot) run by `launch()` as a host process in its own process group — a kill takes whatever children it spawned along (SIGTERM, then SIGKILL after a grace) — with merged output ring-buffered into a `ChildHandle`.
+  `CommandJob` (command, cwd, and an explicit env snapshot) run by `launch()` as a host process in its own process group
+  — a kill takes whatever children it spawned along (SIGTERM, then SIGKILL after a grace)
+  — with merged output ring-buffered into a `ChildHandle`.
   The process speaks no protocol; the supervision that speaks for it is `Runtime.job` + `Dispatcher.job`.
 - `runtime.py` — the `Runtime`:
   the mechanism layer that owns the asyncio loop and all mutable per-peer state (channel, `ChildHandle`, the `await handle.wait()` task, the `call_later` timer, the drain event) over the two ports.
@@ -115,6 +117,9 @@ The one structural rule to keep straight:
   so the local process swarm multiplexes over the single connection upstream supersede-on-accept expects.
   Sticky per-request-id routing, a bounded in-order mailbox for waiter-gone messages, the local-only `claim` / `check` kinds
   — peer machinery above the wire protocol, deliberately not part of it.
+  The module also carries the kind-neutral retention client:
+  `check(client, request_id, last_seen?)` reads one exchange's retained state into a `CheckReport` (state, seq, trail id, the replayed window), raising `CheckDenied` on a refusal
+  — what `bro/summon.py`'s check and the `benchmark-job` CLI interpret their own way, exercised end to end by their suites.
   `launch` owns the detached `serve` spawn, log redirection, `await` gate, and failed-launch cleanup;
   invariants below.
 
@@ -152,7 +157,8 @@ The one structural rule to keep straight:
   No drain step:
   every frame the peer wrote was already delivered in order before EOF.
 - **Jobs invert the other half: a process with no channel.**
-  `job(command, *, timeout, exchange)` provisions nothing — the peer id is synthetic (`job_peer(exchange)`, collision-free against lulid channel ids), death is process exit as for a spawned peer, the drain is skipped, and `forget` has no channel to close.
+  `job(command, *, timeout, exchange)` provisions nothing
+  — the peer id is synthetic (`job_peer(exchange)`, collision-free against lulid channel ids), death is process exit as for a spawned peer, the drain is skipped, and `forget` has no channel to close.
 - **Drain-before-decide.**
   On process exit, before emitting `on_exit`, the Runtime waits (bounded, `_DRAIN_TIMEOUT`) for the transport to flush the channel to EOF
   — reusing `on_disconnect` as the "channel drained" marker
@@ -284,11 +290,7 @@ host-close vs peer-disconnect,
 a client close completing before its own concurrent reader parks in `select` still reading as EOF,
 socket lifecycle),
 and `spawn_test.py` (the `RingBuffer` bound),
-and `job_test.py` (`CommandJob` over real processes:
-merged output tail and its ring bound,
-the explicit env snapshot,
-exit codes,
-the group-wide kill — the background child holds the output pipe, so only a group kill lets the drain reach EOF),
+and `job_test.py` (`CommandJob` over real processes: the ring-bounded merged output tail, the explicit env snapshot, exit codes, and the group-wide kill — proven by the drain reaching EOF past the background child),
 and `runtime_test.py` (the `Runtime` over the real asyncio transport + a non-Docker `python -c` spawner + a fake listener:
 clean result with drain ordering,
 the exchange id handed through the spawn port,

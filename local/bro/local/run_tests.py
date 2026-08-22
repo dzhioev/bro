@@ -220,6 +220,7 @@ PYTEST_FILES = [
   'ride/ride/setup/container/git_test.py',
   'bro/setup/docker_smoke_test_test.py',
   'bro/llm/usage_test.py',
+  'local/bro/local/benchmark_job_test.py',
   'local/bro/local/run_tests_test.py',
   'local/bro/local/shell_policy_test.py',
   'local/bro/local/markdown_policy_test.py',

@@ -13,6 +13,8 @@ dependencies = [
 
 [project.scripts]
 # bro
+"benchmark-job" = "bro.local._entrypoints:bro_local_benchmark_job"
+"bro.local.benchmark-job" = "bro.local._entrypoints:bro_local_benchmark_job"
 "bro.local.run-tests" = "bro.local._entrypoints:bro_local_run_tests"
 "run-tests" = "bro.local._entrypoints:bro_local_run_tests"
 
@@ -21,6 +23,12 @@ bro = { workspace = true }
 
 [project.entry-points.bro]
 bro-dev = "bros.bro_dev:BroDev"
+
+[project.entry-points."bro.broker_kinds"]
+benchmark = "bro.local.benchmark_job:benchmark_kind"
+
+[project.entry-points."bro.session_commands"]
+"benchmark-job" = "bro.local._entrypoints:bro_local_benchmark_job"
 
 [tool.deptry.package_module_name_map]
 bro = ["bro", "bros"]

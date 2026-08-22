@@ -550,6 +550,17 @@ class TestRunRootViaBroker:
         return 3
 
     monkeypatch.setattr(ride.spawn, 'Broker', FakeBroker)
+
+    def contributed_handler(context, peer, message):
+      del context, peer, message
+
+    kind_trees: list = []
+
+    def fake_extension_kinds(tree):
+      kind_trees.append(tree)
+      return {'contributed': contributed_handler}
+
+    monkeypatch.setattr(ride.spawn, 'extension_kinds', fake_extension_kinds)
     launch = ride.spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
     workspace = Workspace.create('ws', tmp_path / 'proj', WorkspaceKind.CONTAINER)
     assert (
@@ -572,8 +583,12 @@ class TestRunRootViaBroker:
     host_log = workspace.host_log
     assert docker_spawner._host_log == host_log
     assert process_spawner._host_log == host_log
-    assert set(captured['handlers']) == {'ping', 'summon'}
+    assert set(captured['handlers']) == {'ping', 'summon', 'contributed'}
     assert captured['handlers']['ping'] is ride.spawn.ping_handler
+    # installed distributions' kinds register beside the built-ins, built for
+    # this session's workspace tree
+    assert captured['handlers']['contributed'] is contributed_handler
+    assert kind_trees == [workspace.tree]
     # the summon handler and the delivery tap belong to the same per-root control
     control = captured['handlers']['summon'].__self__
     assert isinstance(control, ride.summon_control.SummonControl)
