@@ -25,7 +25,7 @@ class _Harness:
     self.server = MagicMock()
     self.server.endpoint = MCPEndpoint(port=1234, token='tok')
     self.broxy = MagicMock()
-    self.broxy.address = 'unix:/tmp/broxy-test.sock'
+    self.broxy.address = 'tcp://broxy-token@127.0.0.1:8'
 
   def __enter__(self):
     self._patches = [

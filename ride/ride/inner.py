@@ -100,7 +100,7 @@ def run_in_place(harness: 'Harness', spec: 'SessionSpec') -> int:
   # a host launch signals the session broxy through BRO_START_SESSION_BROXY (in
   # a container the entrypoint started one and BROKER_CHANNEL already points at
   # it), rewriting BROKER_CHANNEL before anything the session spawns inherits
-  # the environment. a set BROKER_CHANNEL always names a broxy socket: when the
+  # the environment. a set BROKER_CHANNEL always names a broxy: when the
   # broxy cannot run the channel is unset — the session runs without one — and
   # the launch proceeds.
   with session_broxy():

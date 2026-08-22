@@ -1,6 +1,5 @@
 import os
 import subprocess
-import sys
 
 from bro.base import log
 from ride.workspace.docker import (
@@ -59,25 +58,6 @@ def broker_enabled() -> bool:
     log.warning('broker package not importable; launching without a broker channel')
     return False
   return True
-
-
-def container_broker_enabled() -> bool:
-  """`broker_enabled`, plus the container flavor's docker-daemon constraint.
-
-  the container's channel is the host socket bind-mounted at `/run/broker.sock`,
-  which requires a docker daemon that shares the host filesystem. on macOS the
-  daemon runs in a VM (Docker Desktop / colima) whose file sharing cannot project
-  a host unix socket: the mount is unappliable — which breaks container creation
-  outright, because the scoped store's `docker cp` stats its destination by
-  mounting the whole container filesystem — and even a mounted socket file could
-  not carry connections across the VM boundary. container sessions there run
-  broker-less; the host flavor keeps its channel (its socket is reached
-  in-process, no daemon in between).
-  """
-  if sys.platform == 'darwin':
-    log.info('no broker channel: the macOS docker daemon cannot bind-mount host unix sockets')
-    return False
-  return broker_enabled()
 
 
 def attach_interactive(container_id: str) -> int:

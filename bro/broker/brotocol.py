@@ -3,8 +3,7 @@
 This module owns *encoding* only. A `Message` serializes to UTF-8 JSON with no
 delimiter (`to_bytes`) and parses back from those bytes (`from_bytes`). *Framing* —
 how messages are delimited on a byte stream — is the transport adapter's concern
-(the unix adapter uses NDJSON, `json + '\\n'`). Keeping that seam here means a
-future websocket adapter reuses this exact encoding under native frames.
+(the tcp adapter uses NDJSON, `json + '\\n'`).
 
 The envelope has three types and nothing else: a `request` opens an exchange
 (`id`, `payload: {kind, args}`), and `progress` / `result` answer one (`request`

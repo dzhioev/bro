@@ -30,9 +30,6 @@ roster and `pytest_collection_modifyitems` below skips them unless
 
 import logging
 import os
-import shutil
-import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -102,16 +99,3 @@ def register_test_bros():
 
   for name in registered_names:
     del bro.registry._REGISTRY[name]
-
-
-@pytest.fixture
-def socket_dir():
-  """a short-path tempdir for tests that bind AF_UNIX sockets.
-
-  sun_path caps at ~104 bytes on macOS (108 on Linux), and pytest's tmp_path —
-  the resolved system temp plus per-test naming — exceeds it on macOS before a
-  socket name is even appended. /tmp keeps the whole path well under the cap.
-  """
-  path = Path(tempfile.mkdtemp(prefix='sk-', dir='/tmp'))
-  yield path
-  shutil.rmtree(path, ignore_errors=True)

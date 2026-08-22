@@ -1080,7 +1080,7 @@ class TestHostSession:
     )
     _, kwargs = runs[0]
     env = kwargs['env']
-    assert env['BROKER_CHANNEL'] == f'unix:{record.socket}'
+    assert env['BROKER_CHANNEL'] == record.address()
     assert env['RIDE_SUMMONED'] == '1'
     assert env['RIDE_MAY_SUMMON'] == 'dev'
     assert env['RIDE_WORKSPACE'] == 'w'
@@ -1164,7 +1164,7 @@ class TestHostSession:
     from types import SimpleNamespace
 
     workspace, _, _ = self._prepare_launch(monkeypatch, tmp_path)
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/ambient.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://ambient-token@127.0.0.1:9')
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: False)
     runs: list = []
 
@@ -1296,10 +1296,8 @@ class TestHostBrokerPingRoundTrip:
   provisioning runs for real against a fake HOME, so the test neither depends on
   the machine's claude login nor writes into the real ~/.claude."""
 
-  def test_broker_request_ping_from_a_host_session(self, monkeypatch, capfd, socket_dir):
-    # socket_dir doubles as the project root: the channel socket lands under the
-    # runtime root, whose length the sun_path limit bounds
-    root = socket_dir
+  def test_broker_request_ping_from_a_host_session(self, monkeypatch, capfd, tmp_path):
+    root = tmp_path
     monkeypatch.setenv('XDG_DATA_HOME', str(root / 'state'))
     home = root / 'home'
     home.mkdir()
@@ -1350,7 +1348,7 @@ class TestHostBrokerPingRoundTrip:
 class TestManualSummonRoundTrip:
   """a manual summon, live: the root session registers it over a real broker,
   an external process discovers the pending record, attaches to the provisioned
-  socket as the child, and the blocking summon collects its answer — the whole
+  channel as the child, and the blocking summon collects its answer — the whole
   expected-peer path with no docker and no claude."""
 
   _ANSWER_CHILD = """
@@ -1358,6 +1356,7 @@ import json, sys, time
 from pathlib import Path
 from bro.broker import brotocol
 from bro.broker.transport import connect
+from bro.broker.transports.tcp import LOCAL_HOST, Endpoint
 
 pending_dir = Path(sys.argv[1])
 deadline = time.time() + 15
@@ -1370,18 +1369,18 @@ while time.time() < deadline:
 if not records:
   sys.exit(3)
 record = json.loads(records[0].read_text())
-client = connect('unix:' + record['socket'])
+client = connect(Endpoint(port=record['port'], token=record['channel_token']).address(LOCAL_HOST))
 exchange = record['token']
 client.send(brotocol.progress(exchange, {'trail_id': 't-manual', 'workspace': 'external-ws'}))
 client.send(brotocol.result(exchange, 'ok', value='the pair verdict'))
 client.close(confirm=True)
 """
 
-  def test_manual_summon_round_trip_from_a_host_session(self, monkeypatch, capfd, socket_dir):
+  def test_manual_summon_round_trip_from_a_host_session(self, monkeypatch, capfd, tmp_path):
     from bro.monitor import trail_pointer as trail_pointer_module
     from bro.workspace.paths import summon_dir, workspace_dir
 
-    root = socket_dir
+    root = tmp_path
     monkeypatch.setenv('XDG_DATA_HOME', str(root / 'state'))
     home = root / 'home'
     home.mkdir()
@@ -1447,7 +1446,8 @@ def _pending_record(tmp_path, **overrides) -> pending_summon.PendingSummon:
   record = pending_summon.PendingSummon(
     **{
       'token': 'TOK-1',
-      'socket': '/broker/CH.sock',
+      'port': 7321,
+      'channel_token': 'tk',
       'target': 'bro-dev',
       'prompt': 'pair on this',
       'parent_workspace': str(tmp_path / 'parent-tree'),
@@ -1468,7 +1468,7 @@ class TestSummonedSession:
     with (
       _ContainerHarness() as h,
       patch('ride.session.run_summoned_in_container', return_value=0) as run,
-      patch('ride.session.container_broker_enabled', return_value=True),
+      patch('ride.session.broker_enabled', return_value=True),
       patch('ride.session.resolve_head', return_value='parentsha') as head,
     ):
       rc = ride_session.start_session(_spec(prompt='pair on this'), summoned=record)
@@ -1476,13 +1476,12 @@ class TestSummonedSession:
     assert h.run_in_container.call_count == 0  # no broker of its own
     assert head.call_args.args == (tmp_path, ride_session.Path(record.parent_workspace))
     launch = run.call_args.args[0]
-    assert launch.env['BROKER_CHANNEL'] == 'unix:/run/broker.sock'
+    assert launch.env['BROKER_CHANNEL'] == 'tcp://tk@host.docker.internal:7321'
     assert launch.env['RIDE_SUMMONED'] == '1'
     assert launch.env['RIDE_MAY_SUMMON'] == 'dev'
     assert launch.env['RIDE_WORKSPACE'] == 'w'
     assert json.loads(launch.env['RIDE_SUMMONER']) == {'trail_id': 'T1'}
     assert launch.env['RIDE_BASE_REF'] == 'parentsha'
-    assert f'{record.socket}:/run/broker.sock' in launch.extra_mounts
     assert launch.tty
     # the threaded claim consumes the token
     run.call_args.kwargs['claim']()
@@ -1494,7 +1493,7 @@ class TestSummonedSession:
     with (
       _ContainerHarness(),
       patch('ride.session.run_summoned_in_container', return_value=0) as run,
-      patch('ride.session.container_broker_enabled', return_value=True),
+      patch('ride.session.broker_enabled', return_value=True),
       patch('ride.session.resolve_ref', return_value='intosha') as ref,
     ):
       rc = ride_session.start_session(_spec(), summoned=record)
@@ -1506,18 +1505,18 @@ class TestSummonedSession:
     record = _pending_record(tmp_path)
     with (
       _ContainerHarness() as h,
-      patch('ride.session.container_broker_enabled', return_value=False),
+      patch('ride.session.broker_enabled', return_value=False),
     ):
       rc = ride_session.start_session(_spec(), summoned=record)
     assert rc == 1
     assert h.run_in_container.call_count == 0
-    assert 'use --host' in caplog.text
+    assert "needs the summoner's broker channel" in caplog.text
 
   def test_unreadable_parent_head_fails_the_launch(self, tmp_path, caplog):
     record = _pending_record(tmp_path)
     with (
       _ContainerHarness() as h,
-      patch('ride.session.container_broker_enabled', return_value=True),
+      patch('ride.session.broker_enabled', return_value=True),
       patch('ride.session.resolve_head', return_value=None),
     ):
       rc = ride_session.start_session(_spec(), summoned=record)

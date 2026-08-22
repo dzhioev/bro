@@ -12,8 +12,9 @@ import ride.spawn
 import ride.summon_control
 import ride.workspace.docker as workspace_docker
 import ride.workspace.store as workspace_store
+from bro.broker.transports.tcp import LOCAL_HOST, Endpoint
 from bro.monitor import trail_pointer
-from bro.workspace.paths import broker_dir, summon_dir, workspace_dir
+from bro.workspace.paths import summon_dir, workspace_dir
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 
@@ -365,7 +366,7 @@ class TestSummonLowering:
 
     docker = RecordingDocker()
     spawner = ride.spawn.SummonSpawner(docker, _container_runtime())
-    channel = ride.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
+    channel = ride.spawn.Provisioned(channel='CH', host_endpoint=Endpoint(port=7321, token='tk'))
     launch = ride.spawn.SummonLaunchSpec(
       target='dev',
       prompt='p',
@@ -388,7 +389,7 @@ class TestSummonLowering:
   @pytest.mark.asyncio
   async def test_lowering_failure_propagates_out_of_spawn(self, lowering_harness):
     spawner = ride.spawn.SummonSpawner(ride.spawn.DockerSpawner(), _container_runtime())
-    channel = ride.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
+    channel = ride.spawn.Provisioned(channel='CH', host_endpoint=Endpoint(port=7321, token='tk'))
     launch = ride.spawn.SummonLaunchSpec(
       target='dev',
       prompt='p',
@@ -528,8 +529,22 @@ class TestChildTrailPublication:
     assert not trail_pointer.session_pointer(workspace_dir('broker-CH')).exists()
 
 
+class TestBrokerBindHosts:
+  """the gateway branch that binds is what the `broker_e2e` stage exercises for
+  real; these pin the two ways it falls back to loopback alone."""
+
+  def test_a_host_with_no_docker_bridge_binds_loopback_alone(self, monkeypatch):
+    monkeypatch.setattr(ride.spawn, 'bridge_gateway', lambda: None)
+    assert ride.spawn.broker_bind_hosts() == [LOCAL_HOST]
+
+  def test_a_gateway_that_is_no_address_here_binds_loopback_alone(self, monkeypatch):
+    # what a daemon in a VM reports: its own gateway, which this host cannot bind
+    monkeypatch.setattr(ride.spawn, 'bridge_gateway', lambda: '192.0.2.1')
+    assert ride.spawn.broker_bind_hosts() == [LOCAL_HOST]
+
+
 class TestRunRootViaBroker:
-  def test_wires_control_dir_composite_spawner_handlers_and_run(self, monkeypatch, tmp_path):
+  def test_wires_bind_hosts_composite_spawner_handlers_and_run(self, monkeypatch, tmp_path):
     captured: dict = {}
 
     class FakeBroker:
@@ -569,7 +584,7 @@ class TestRunRootViaBroker:
       )
       == 3
     )
-    assert captured['transport']._dir == broker_dir()
+    assert captured['transport']._bind_hosts[0] == LOCAL_HOST
     # the composite over both launch modes plus the summon lowering: any root can
     # spawn docker children, summons included
     spawner = captured['spawner']

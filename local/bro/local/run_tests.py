@@ -198,7 +198,7 @@ PYTEST_FILES = [
   'bro/broker/client_test.py',
   'bro/broker/cli_test.py',
   'bro/broker/broxy_test.py',
-  'bro/broker/transports/unix_test.py',
+  'bro/broker/transports/tcp_test.py',
   'bro/summon_test.py',
   'bro/summon_status_test.py',
   'native/bro/trails/record/bro_test.py',

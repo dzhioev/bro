@@ -304,7 +304,7 @@ class TestHostSession:
   def test_brokerless_host_run_unsets_an_ambient_channel(self, monkeypatch, tmp_path):
     workspace, runtime_bundle = self._workspace(tmp_path)
     self._prepare(monkeypatch, tmp_path)
-    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/ambient.sock')
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://ambient-token@127.0.0.1:9')
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: False)
     run = MagicMock(return_value=MagicMock(returncode=0))
     monkeypatch.setattr(ride_session.subprocess, 'run', run)

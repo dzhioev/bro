@@ -1,8 +1,8 @@
 """broker spawner adapters for container and host-process launches.
 
-`DockerSpawner` unwraps a broker-free `ride.workspace.docker.Launch`, adds the
-provisioned channel socket mount plus `BROKER_CHANNEL` and `BROKER_EXCHANGE`,
-and runs the shared blocking container prepare off-loop. A TTY root attaches with inherited stdio
+`DockerSpawner` unwraps a broker-free `ride.workspace.docker.Launch`, adds
+`BROKER_CHANNEL` (the provisioned channel under the container-facing host name)
+and `BROKER_EXCHANGE`, and runs the shared blocking container prepare off-loop. A TTY root attaches with inherited stdio
 and host-log redirection; a headless root inherits separate stdout and stderr;
 a headless child captures merged output in a bounded ring and can remove its
 workspace after a clean exit when the workspace records itself throwaway — a
@@ -11,8 +11,8 @@ the complete docker inputs, including the explicit env snapshot and whether
 ambient forwarding is allowed.
 
 `ProcessSpawner` runs a host-session root with inherited stdio, adds the
-provisioned host socket and the exchange id directly to its explicit
-environment, and applies the interactive signal and host-log handling only to
+provisioned channel's loopback address and the exchange id directly to its
+explicit environment, and applies the interactive signal and host-log handling only to
 interactive launches.
 
 `CompositeSpawner` dispatches on the concrete `LaunchSpec` type, so a broker
@@ -30,9 +30,9 @@ from typing import Optional
 from bro.base import log
 from bro.broker.spawn import ChildHandle, LaunchSpec, RingBuffer, Spawner
 from bro.broker.transport import Provisioned
+from bro.broker.transports.tcp import LOCAL_HOST
 from ride.workspace.docker import (
-  CONTAINER_BROKER_ADDRESS,
-  CONTAINER_BROKER_SOCK,
+  CONTAINER_BROKER_HOST,
   DETACH_FLAG,
   Launch as DockerLaunch,
   container_running,
@@ -76,13 +76,9 @@ def _broker_launch(launch: DockerLaunch, channel: Provisioned, exchange: str) ->
   """add the provisioned broker channel and the peer's exchange id to a neutral
   container launch."""
   env = dict(launch.env)
-  env['BROKER_CHANNEL'] = CONTAINER_BROKER_ADDRESS
+  env['BROKER_CHANNEL'] = channel.host_endpoint.address(CONTAINER_BROKER_HOST)
   env['BROKER_EXCHANGE'] = exchange
-  return replace(
-    launch,
-    env=env,
-    extra_mounts=(*launch.extra_mounts, f'{channel.host_endpoint}:{CONTAINER_BROKER_SOCK}'),
-  )
+  return replace(launch, env=env)
 
 
 async def _force_remove(container_id: str) -> None:
@@ -397,7 +393,7 @@ class ProcessSpawner(Spawner):
   async def spawn(self, launch: LaunchSpec, channel: Provisioned, exchange: str) -> ChildHandle:
     assert isinstance(launch, ProcessLaunchSpec)
     env = dict(launch.env)
-    env['BROKER_CHANNEL'] = f'unix:{channel.host_endpoint}'
+    env['BROKER_CHANNEL'] = channel.host_endpoint.address(LOCAL_HOST)
     env['BROKER_EXCHANGE'] = exchange
     process = await asyncio.create_subprocess_exec(*launch.command, cwd=launch.cwd, env=env)
     if launch.interactive:

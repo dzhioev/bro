@@ -469,9 +469,7 @@ Layout:
   and `GH_TOKEN` / `GITHUB_TOKEN` inherited from the launching shell are blanked so nothing in the session acts on another identity);
   `aws` → the shared-credentials file it points the CLI at.
   No per-secret logic lives in the entrypoint.
-- the session's **broker channel** socket, bind-mounted at the fixed `/run/broker.sock`
-  — absent on macOS hosts (see "The broker channel").
-  The host's `/var/run/docker.sock` is never mounted:
+- the host's `/var/run/docker.sock` is **never** mounted:
   its API is root on the host with no per-caller authorization, so a socket grant would step past every scoped boundary above.
   Work that needs a daemon
   — building and pushing the operated project's images, say
@@ -695,32 +693,34 @@ Both modes install the store's hooks, so a session's git and `gh` speak for the 
 ### The broker channel
 
 Every session runs as the root peer of a **broker** (see `bro/broker/AGENTS.md`):
-the outer provisions a unix socket at `<runtime-root>/broker/<channel>.sock` (the flat control dir stays within the ~108-byte `sun_path` limit;
-dir `0700`, socket `0600`), points `BROKER_CHANNEL` at it, and supervises the session from the broker's event loop until it exits.
-The modes differ only in the spawner (`ride/ride/workspace/spawn.py`, composed by `ride/ride/spawn.py:run_root_via_broker`):
+the outer provisions a channel on the session's one listening port, points `BROKER_CHANNEL` at `tcp://<token>@<host>:<port>`, and supervises the session from the broker's event loop until it exits.
+The token is the channel's whole credential
+— a port is reachable by every local process, so a connection is attributed to the channel whose token it opens with.
+The listener binds loopback plus, when the docker daemon runs on this host, the bridge gateway a container reaches back through (`ride/ride/spawn.py:broker_bind_hosts`);
+a daemon in a VM names a gateway that is no address here, so only loopback binds and the VM's own `host.docker.internal` proxy carries the container to it.
+The modes differ only in the spawner (`ride/ride/workspace/spawn.py`, composed by `ride/ride/spawn.py:run_root_via_broker`) and in the host name the address carries:
 
-- container — the attached container launch (`ride/ride/root.py:_run_root_via_broker` + `DockerSpawner`), with the socket bind-mounted at the fixed `/run/broker.sock` and `BROKER_CHANNEL` pointing there;
-- host — the runner as a plain subprocess (`ride/ride/root.py:run_host_process_via_broker` + `ProcessSpawner`), `BROKER_CHANNEL` pointing straight at the socket path
-  — no bind-mount hop.
+- container — the attached container launch (`ride/ride/root.py:_run_root_via_broker` + `DockerSpawner`), the address naming `host.docker.internal`, which every launch maps to the host gateway with `--add-host`;
+- host — the runner as a plain subprocess (`ride/ride/root.py:run_host_process_via_broker` + `ProcessSpawner`), the address naming loopback.
 
 The session's processes don't talk to that channel directly:
-a **broxy** (the peer-side broker proxy, `bro/broker/broxy.py`) sits in between, holding the one long-lived upstream connection and re-serving the channel on a local socket that `BROKER_CHANNEL` is rewritten to
+a **broxy** (the peer-side broker proxy, `bro/broker/broxy.py`) sits in between, holding the one long-lived upstream connection and re-serving the channel on a loopback port of its own that `BROKER_CHANNEL` is rewritten to
 — so the session's short-lived clients (`broker` CLI calls, `BroChannel`, a backgrounded wait) multiplex over the single connection the host's supersede-on-accept semantics expect,
 and a result whose waiter died stays claimable from the broxy's mailbox.
-A set `BROKER_CHANNEL` always names a broxy socket
+A set `BROKER_CHANNEL` always names a broxy
 — there is no direct-channel topology.
 
 The lifecycle is one shared `broxy launch` sequence:
-it starts `serve` detached with output redirected to the requested log, gates on readiness, kills a failed serve, and prints the local address plus pid.
+it starts `serve` detached with output redirected to the requested log, reads back the ephemeral address `serve` publishes, gates on readiness, kills a failed serve, and prints the local address plus pid.
 There is no restart supervision:
 the upstream is the session's own host broker, which never comes back within a session, so a broxy that dies takes the session's channel with it
 — loudly, as a code bug to surface (`bro/broker/AGENTS.md` owns the policy).
 Two call sites supply their mode-specific paths and keep launch policy at the edge:
 
 - container — the entrypoint, for every broker-supervised container uniformly (claude sessions, bro-launcher hops, spawned children), from the pinned runtime:
-  socket `/tmp/broxy.sock`, log `/tmp/broxy.log`;
+  log `/tmp/broxy.log`;
 - host — the session's inner process (`bro/launch/broxy.py:session_broxy`, requested by the outer launch through `BRO_START_SESSION_BROXY`):
-  socket + log in a session tempdir (outside the git tree — a socket in the workspace would dirty `git status` and the clean checks), retaining the returned pid to stop the daemon on session exit.
+  log in a session tempdir, retaining the returned pid to stop the daemon on session exit.
 
 When `broxy launch` cannot run
 — missing from the session runtime or not ready within the gate
@@ -756,15 +756,6 @@ The statusLine and the durable summon records under `<runtime-root>/summon/` are
 — they remain the live surfaces.
 Unlike the summon records, the host log is diagnostics, not audit:
 workspace removal (`--drop`, `ride clean`) deletes it with the workspace.
-
-Container mode additionally requires a docker daemon that shares the host filesystem.
-On a macOS host the daemon runs in a VM (Docker Desktop / colima) whose file sharing cannot project a connectable host unix socket:
-the channel bind mount would break container creation outright
-— the scoped-store `docker cp` stats its destination by mounting the whole container filesystem, so one unappliable mount fails the launch
-— and even a mounted socket file could not carry connections across the VM boundary.
-Container sessions on macOS therefore always take the broker-less path (`ride/ride/workspace/containers.py:container_broker_enabled`).
-Host sessions keep their channel, whose socket is reached in-process with no daemon in between
-— but a summon from one still fails at the child's docker launch, which needs the same socket bind mount.
 
 ### Summoning another bro
 
@@ -829,7 +820,7 @@ The summoner relays the token to the user, who launches the session at their own
 an otherwise normal interactive session
 — container or `--host`, either harness, the user's own `--llm`/`--hold`/`--workspace`
 — except it starts no broker of its own;
-its `BROKER_CHANNEL` points at the summoner's provisioned socket (bind-mounted at the container broker path), so it attaches as a regular summon peer, its own nested summons routing through the summoner's control with per-peer authorization.
+its `BROKER_CHANNEL` points at the summoner's provisioned channel, so it attaches as a regular summon peer, its own nested summons routing through the summoner's control with per-peer authorization.
 The request fixes what the summoner authorized
 — the target bro, the prompt (delivered as the session's first message), the root session's repository attachment, the base (the request's `into` ref, or the summoner's workspace HEAD read at launch, like a spawned child's at its spawn),
 the child's resolved `may_summon`, and the request's credential grant/revoke seeds (the launch's own `--grant`/`--revoke` layer on top; `@bro` overrides are refused, since the control enforces the list it resolved at request time)
@@ -1093,15 +1084,17 @@ Wrappers and session daemons rely on a small set of env vars:
 - `RIDE_IN_CONTAINER=1` — set by the Dockerfile, marking a session running in an image this runtime built.
   Read by `bro/workspace/paths.py:trails_dir`, which then resolves to the container's fixed trails mount instead of a host runtime root.
   The nested-launch refusal deliberately reads the container probe instead (see "In-container launches").
-- `BROKER_CHANNEL` — the address of the session's broker channel;
-  when set, it always names a broxy socket.
-  Set at launch to the upstream channel (`unix:/run/broker.sock` in a container — the bind-mounted socket; `unix:<runtime-root>/broker/<channel>.sock` on host) that only the session's broxy talks to,
-  then rewritten by the broxy launcher to the broxy's local socket (`unix:/tmp/broxy.sock` in a container, a session-tempdir socket on host) before anything else inherits it
+- `BROKER_CHANNEL` — the address of the session's broker channel, `tcp://<token>@<host>:<port>`;
+  when set, it always names a broxy.
+  Set at launch to the upstream channel that only the session's broxy talks to (`host.docker.internal` in a container, loopback on host),
+  then rewritten by the broxy launcher to the broxy's own loopback address before anything else inherits it
   — or unset when the broxy cannot run (see "The broker channel").
+  It carries a credential, so it belongs in no log:
+  `bro.broker.transports.tcp.redacted` is the form that goes in one.
   Read by `bro.broker.client.Client.from_env` — the `broker` CLI and bro's `BroChannel` ride it
-  — and everything on it is inert when unset (`BROKER_DISABLED`, a container session on a macOS host, a broxy that could not run, or a workspace provisioned before broker existed).
+  — and everything on it is inert when unset (`BROKER_DISABLED`, a broxy that could not run, or a workspace provisioned before broker existed).
 - `BROKER_DISABLED` — launcher-side presence-checked kill-switch:
-  the session gets no channel socket and no `BROKER_CHANNEL` (see "The broker channel").
+  the session gets no channel and no `BROKER_CHANNEL` (see "The broker channel").
   Checked before any broker import (`ride/ride/workspace/containers.py:broker_enabled`).
 - Plus the standard `GIT_AUTHOR_*` / `GIT_COMMITTER_*`
   — explicitly forwarded into the container via `_DOCKER_FORWARD_ENV`.

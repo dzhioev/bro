@@ -9,10 +9,8 @@ scheme to its client adapter.
 
 A transport guarantees exactly one thing beyond byte delivery: *channel
 authenticity*. Every message handed to `Sink.on_message` is attributed to the
-channel it physically arrived on; there is no forgeable `from` field. Each adapter
-enforces this its own way — the unix adapter dedicates one socket per peer (a peer
-can reach only the socket it was handed); a websocket adapter would pin by
-token/cert at connect.
+channel the connection attached as; there is no forgeable `from` field. The tcp
+adapter pins that at connect, on the channel token the peer was handed.
 """
 
 from abc import ABC, abstractmethod
@@ -21,14 +19,14 @@ from typing import Any, Optional, Protocol
 
 from bro.broker.brotocol import Message
 
-Address = str  # connection URI carried in BROKER_CHANNEL, e.g. 'unix:/run/broker.sock'
+Address = str  # channel URI carried in BROKER_CHANNEL, e.g. 'tcp://<token>@127.0.0.1:7321'
 ChannelID = str  # opaque host-side handle for one peer's channel
 
 
 @dataclass(frozen=True)
 class Provisioned:
   channel: ChannelID
-  host_endpoint: Any  # opaque to the broker; the Spawner wires it (socket path / url+token)
+  host_endpoint: Any  # opaque to the broker; the Spawner renders it (tcp: port + token)
 
 
 class Sink(Protocol):
@@ -92,15 +90,15 @@ class ClientTransport(ABC):
     channel reached EOF. This is how a controller cancels an off-thread wait it
     abandoned (the summon service tools ride on it); an adapter must implement
     close so that wake-up is reliable, not incidental (a bare fd close is not —
-    the unix adapter wakes the reader through a self-pipe)."""
+    the tcp adapter wakes the reader through a self-pipe)."""
 
 
 def connect(address: Address) -> ClientTransport:
-  scheme, separator, rest = address.partition(':')
+  scheme, separator, _ = address.partition(':')
   if separator == '':
     raise ValueError(f'broker address missing scheme: {address!r}')
-  if scheme == 'unix':
-    from bro.broker.transports.unix import UnixClientTransport
+  from bro.broker.transports import tcp
 
-    return UnixClientTransport(rest)
+  if scheme == tcp.SCHEME:
+    return tcp.TcpClientTransport(address)
   raise ValueError(f'unsupported broker transport scheme: {scheme!r}')

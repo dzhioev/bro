@@ -5,10 +5,7 @@ launch alive without one."""
 import asyncio
 import contextlib
 import os
-import shutil
-import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -17,11 +14,12 @@ import bro.launch.broxy as ride_broxy
 from bro.broker import brotocol
 from bro.broker.brotocol import Message
 from bro.broker.client import Client
-from bro.broker.transport import ChannelID
-from bro.broker.transports.unix import UnixClientTransport, UnixServerTransport
+from bro.broker.transport import ChannelID, connect
+from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 from bro.launch.broxy import _start_session_broxy
 
 TIMEOUT = 10.0
+_DEAD_UPSTREAM = 'tcp://upstream-token@127.0.0.1:9'
 
 
 class StubSink:
@@ -44,17 +42,13 @@ class StubSink:
 
 @dataclass
 class Harness:
-  transport: UnixServerTransport
+  transport: TcpServerTransport
   sink: StubSink
 
 
 @contextlib.asynccontextmanager
 async def running_server():
-  # sockets live in a short /tmp mkdtemp dir, not pytest's tmp_path: the lulid-named
-  # channel socket must fit sun_path (~104 bytes on macOS), which the deep per-test
-  # dirs — and even the resolved system temp dir — exceed
-  socket_dir = Path(tempfile.mkdtemp(prefix='broxy-', dir='/tmp'))
-  transport = UnixServerTransport(str(socket_dir / 'upstream'))
+  transport = TcpServerTransport([LOCAL_HOST])
   sink = StubSink()
   serve_task = asyncio.create_task(transport.serve(sink))
   await asyncio.sleep(0)  # let serve install the sink before any connection is accepted
@@ -63,7 +57,6 @@ async def running_server():
   finally:
     await transport.shutdown()
     await asyncio.wait_for(serve_task, TIMEOUT)
-    shutil.rmtree(socket_dir, ignore_errors=True)
 
 
 @pytest.mark.asyncio
@@ -71,13 +64,11 @@ async def test_session_broxy_serves_the_rewritten_channel():
   async with running_server() as server:
     provisioned = await server.transport.provision()
     broxy = await asyncio.to_thread(
-      _start_session_broxy, 'unix:' + str(provisioned.host_endpoint), os.environ
+      _start_session_broxy, provisioned.host_endpoint.address(LOCAL_HOST), os.environ
     )
     assert broxy is not None
     try:
-      scheme, _, socket_path = broxy.address.partition(':')
-      assert scheme == 'unix'
-      client = Client(UnixClientTransport(socket_path))
+      client = Client(await asyncio.to_thread(connect, broxy.address))
       request_task = asyncio.create_task(asyncio.to_thread(client.request, 'ping', {}, TIMEOUT))
       channel, message = await asyncio.wait_for(server.sink.messages.get(), TIMEOUT)
       assert channel == provisioned.channel  # the proxy rides the session's one channel
@@ -91,25 +82,25 @@ async def test_session_broxy_serves_the_rewritten_channel():
       broxy.stop()
 
 
-def test_start_returns_none_when_the_upstream_is_unreachable(tmp_path, monkeypatch):
+def test_start_returns_none_when_the_upstream_is_unreachable(monkeypatch):
   monkeypatch.setattr(ride_broxy, '_LAUNCH_TIMEOUT', 1.0)
-  broxy = _start_session_broxy('unix:' + str(tmp_path / 'missing.sock'), os.environ)
+  broxy = _start_session_broxy(_DEAD_UPSTREAM, os.environ)
   assert broxy is None
 
 
 def test_start_returns_none_without_the_console_script(tmp_path):
   # a venv without broxy (a workspace based on a pre-broxy ref): the serve
   # spawn itself fails, and the caller is left to unset BROKER_CHANNEL
-  broxy = _start_session_broxy('unix:' + str(tmp_path / 'upstream.sock'), {'PATH': str(tmp_path)})
+  broxy = _start_session_broxy(_DEAD_UPSTREAM, {'PATH': str(tmp_path)})
   assert broxy is None
 
 
 def test_session_broxy_rewrites_only_a_marked_host_root(monkeypatch):
-  daemon = MagicMock(address='unix:/tmp/session-broxy.sock')
+  daemon = MagicMock(address='tcp://local-token@127.0.0.1:8')
   start = MagicMock(return_value=daemon)
   monkeypatch.setattr(ride_broxy, '_start_session_broxy', start)
   monkeypatch.setenv(ride_broxy.START_SESSION_BROXY_ENV, '1')
-  monkeypatch.setenv('BROKER_CHANNEL', 'unix:/tmp/root.sock')
+  monkeypatch.setenv('BROKER_CHANNEL', 'tcp://root-token@127.0.0.1:7')
 
   with ride_broxy.session_broxy():
     assert os.environ['BROKER_CHANNEL'] == daemon.address
@@ -117,16 +108,16 @@ def test_session_broxy_rewrites_only_a_marked_host_root(monkeypatch):
 
   start.assert_called_once()
   daemon.stop.assert_called_once()
-  assert os.environ['BROKER_CHANNEL'] == 'unix:/tmp/root.sock'
+  assert os.environ['BROKER_CHANNEL'] == 'tcp://root-token@127.0.0.1:7'
 
 
 def test_session_broxy_leaves_an_existing_session_channel_alone(monkeypatch):
   start = MagicMock()
   monkeypatch.setattr(ride_broxy, '_start_session_broxy', start)
   monkeypatch.delenv(ride_broxy.START_SESSION_BROXY_ENV, raising=False)
-  monkeypatch.setenv('BROKER_CHANNEL', 'unix:/tmp/existing-broxy.sock')
+  monkeypatch.setenv('BROKER_CHANNEL', 'tcp://existing-token@127.0.0.1:6')
 
   with ride_broxy.session_broxy():
-    assert os.environ['BROKER_CHANNEL'] == 'unix:/tmp/existing-broxy.sock'
+    assert os.environ['BROKER_CHANNEL'] == 'tcp://existing-token@127.0.0.1:6'
 
   start.assert_not_called()

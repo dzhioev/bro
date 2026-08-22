@@ -65,14 +65,3 @@ class TestBrokerGate:
   def test_enabled_by_default(self, monkeypatch):
     monkeypatch.delenv('BROKER_DISABLED', raising=False)
     assert workspace_containers.broker_enabled() is True
-
-  def test_container_gate_degrades_on_macos(self, monkeypatch):
-    # the daemon runs in a VM there — the channel socket can't be bind-mounted
-    monkeypatch.delenv('BROKER_DISABLED', raising=False)
-    monkeypatch.setattr(sys, 'platform', 'darwin')
-    assert workspace_containers.container_broker_enabled() is False
-
-  def test_container_gate_delegates_off_macos(self, monkeypatch):
-    monkeypatch.delenv('BROKER_DISABLED', raising=False)
-    monkeypatch.setattr(sys, 'platform', 'linux')
-    assert workspace_containers.container_broker_enabled() is True

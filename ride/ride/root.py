@@ -2,7 +2,7 @@ import subprocess
 from collections.abc import Callable, Collection
 from dataclasses import replace
 
-from ride.workspace.containers import attach_interactive, container_broker_enabled
+from ride.workspace.containers import attach_interactive, broker_enabled
 from ride.workspace.docker import (
   ContainerRuntime,
   ContainerRuntimeResolver,
@@ -20,7 +20,7 @@ def _run_root_via_broker(
   may_summon: Collection[str],
 ) -> int:
   """run the container launch as the broker's supervised root peer."""
-  # imported here, not at module level: container_broker_enabled() must be able to
+  # imported here, not at module level: broker_enabled() must be able to
   # short-circuit a launch before anything touches the broker package (see its
   # docstring).
   from bro.summon import MAY_SUMMON_ENV, encode_may_summon
@@ -89,7 +89,7 @@ def run_summoned_in_container(
   launch: Launch, workspace: Workspace, *, claim: Callable[[], object]
 ) -> int:
   """run a manual summon child's container launch: no broker of its own — its
-  `BROKER_CHANNEL` already points at the summoner's provisioned socket in
+  `BROKER_CHANNEL` already points at the summoner's provisioned channel in
   `launch.env` — prepared first, the token claimed only once nothing fallible is
   left before the attach, then attached interactively."""
   log_scoped_secrets(launch.name, launch.secrets, launch.optional_secrets)
@@ -117,7 +117,7 @@ def run_in_container(
   # ancestry-changing workflows fetch again before acting; the remaining reader is informational.
   log_scoped_secrets(launch.name, launch.secrets, launch.optional_secrets)
   workspace.clear_session_end()
-  if container_broker_enabled():
+  if broker_enabled():
     code = _run_root_via_broker(launch, workspace, may_summon=may_summon)
   else:
     container_id = prepare_container(launch)

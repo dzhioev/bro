@@ -70,7 +70,7 @@ host session reads the host path.
 The wire contract (the `summon` kind, its args keys, the 1800s default timeout)
 is owned by the peer-side `bro.summon` module; this module enforces it host-side. Broker
 imports stay function-local: this module sits on the launch path before the
-`_broker_enabled` gate (see ride/AGENTS.md, "Lazy broker import").
+`_broker_enabled` gate (see ride/ride/workspace/AGENTS.md, "Lazy broker import").
 """
 
 import json
@@ -564,7 +564,8 @@ class SummonControl:
       pending_summon.write(
         pending_summon.PendingSummon(
           token=message.exchange,
-          socket=str(provisioned.host_endpoint),
+          port=provisioned.host_endpoint.port,
+          channel_token=provisioned.host_endpoint.token,
           target=target,
           prompt=prompt,
           parent_workspace=str(requester.workspace),
@@ -627,7 +628,7 @@ class SummonControl:
     if record is None:
       raise _Unattributable('cannot attribute the requesting peer to a bro')
     # function-local like SummonLaunchSpec above: ride.spawn imports broker at
-    # module level (ride/AGENTS.md, "Lazy broker import")
+    # module level (ride/ride/workspace/AGENTS.md, "Lazy broker import")
     from ride.spawn import _workspace_name
 
     if record.manual and record.workspace is None:
