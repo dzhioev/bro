@@ -38,6 +38,7 @@ from bro.workspace.paths import broker_dir, summon_dir, workspace_dir
 from ride.flags import default_hold
 from ride.harness import ContainerExtras, get_harness
 from ride.inner import inner_command
+from ride.kinds import extension_kinds
 from ride.repository import Repository, as_repository
 from ride.scope import split_scope_overrides, summoned_credential_scope
 from ride.session import SessionSpec, record_resume_spec
@@ -311,7 +312,8 @@ def run_root_via_broker(
   and return its exit code. The spawner is the composite over both ride launch modes plus the summon
   lowering, so any root — host process or container — can spawn docker children.
   The broker answers the reserved ping kind, so a session can verify its channel
-  (`broker request ping '{}'`), and consumes the root's own run lifecycle — the
+  (`broker request ping '{}'`), plus whatever kinds installed distributions
+  contribute (`ride.kinds`), and consumes the root's own run lifecycle — the
   progress and result of the session's host-anchored exchange — into the host
   log. While an interactive root owns the terminal, host output goes to the
   workspace's host log instead of the shared TTY (see
@@ -352,6 +354,8 @@ def run_root_via_broker(
   facade = Broker(UnixServerTransport(str(broker_dir())), spawner)
   facade.on(PING, ping_handler)
   facade.on(SUMMON, control.handle)
+  for kind, handler in extension_kinds(workspace.tree).items():
+    facade.on(kind, handler)
   facade.add_delivery_observer(control.observe_delivery)
   facade.add_delivery_observer(_note_child_started())
   facade.add_delivery_observer(_root_lifecycle(control, workspace))

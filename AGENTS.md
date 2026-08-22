@@ -372,7 +372,8 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
 
 Installed distributions extend the framework through `bro` (personas), `bro.credential_sources` (minting source types), `bro.credentials` (registry entries), `bro.brog.backends` (task-tracker backends), `bro.toolsets` (standalone MCP toolsets;
 each entry targets its module's `toolset` object), `bro.mcp.targets` (assembled target prefixes;
-each resolver accepts the value after `<prefix>:` and returns live MCP servers), and `bro.session_commands` (console scripts exposed on managed-session PATH).
+each resolver accepts the value after `<prefix>:` and returns live MCP servers), `bro.session_commands` (console scripts exposed on managed-session PATH), and `bro.broker_kinds` (request kinds served by every managed session's host broker;
+each entry names the kind and targets a factory `(workspace_tree: Path) -> RequestHandler` — see `ride/ride/kinds.py`).
 Declarations are installation metadata:
 run `uv sync` after adding or removing an entry point;
 editing an already-declared target module needs no reinstall.
