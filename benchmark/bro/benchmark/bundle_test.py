@@ -7,6 +7,7 @@ import pytest
 from bro.benchmark import bundle as bundle_module
 from bro.benchmark.bundle import (
   CPYTHON_VERSION,
+  WHEEL_PACKAGES,
   Bundle,
   build,
   built,
@@ -139,17 +140,18 @@ def test_the_interpreter_is_pinned():
   assert '--no-bin' in python_install_command(Path('/staging'))
 
 
-def test_the_export_is_the_locked_native_surface():
+def test_the_export_is_the_locked_surface_of_every_bundled_distribution():
   command = export_command(Path('/checkout'))
 
   assert '--frozen' in command
-  assert command[command.index('--package') + 1] == 'bro-native'
+  selected = [command[index + 1] for index, item in enumerate(command) if item == '--package']
+  assert selected == list(WHEEL_PACKAGES)
   assert '--no-default-groups' in command
   assert '--no-emit-workspace' in command
 
 
-@pytest.mark.parametrize('package', ['bro', 'bro-native'])
-def test_the_framework_and_native_engine_enter_as_wheels(package):
+@pytest.mark.parametrize('package', WHEEL_PACKAGES)
+def test_every_bundled_distribution_enters_as_a_wheel(package):
   command = wheel_command(Path('/checkout'), Path('/staging'), package)
 
   assert '--wheel' in command

@@ -17,8 +17,8 @@ uv sync --directory benchmark --all-groups
 A benchmark task runs in a foreign image that must not be modified, and several carry no Python at
 all, so the agent brings its own.
 `benchmark-bundle` builds a relocatable directory holding a pinned
-standalone CPython, `bro` plus `bro-native` resolved from the framework's lock, and a `bro` shim over
-them:
+standalone CPython, the framework distributions a bro runs from — `bro`, `bro-native` and `bro-dev`
+— resolved from the framework's lock, and a `bro` shim over them:
 
 ```
 uv run --project benchmark benchmark-bundle
