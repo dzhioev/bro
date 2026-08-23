@@ -559,19 +559,37 @@ class DynamoStore(TrailsStore):
 
   def step_payload_hashes(self, trail_id: str, step_ids: list[int]) -> dict[int, str]:
     self._required_universal_header(trail_id)
+    wanted = {step_id for step_id in step_ids if step_id >= 0}
+    if len(wanted) == 0:
+      return {}
     hashes: dict[int, str] = {}
-    for step_id in sorted({step_id for step_id in step_ids if step_id >= 0}):
-      response = self._dynamo.get_item(
-        TableName=self._steps_table,
-        Key=_ddb_item({'trail_id': trail_id, 'step_id': step_id}),
-        ProjectionExpression='payload_sha256',
-        ConsistentRead=True,
-      )
-      row = _from_ddb_item(response.get('Item'))
-      digest = row.get('payload_sha256') if row is not None else None
-      if isinstance(digest, str):
-        hashes[step_id] = digest
-    return hashes
+    exclusive_start_key: Optional[dict] = None
+    while True:
+      kwargs: dict[str, Any] = {
+        'TableName': self._steps_table,
+        'KeyConditionExpression': 'trail_id = :trail_id AND step_id BETWEEN :start AND :end',
+        'ProjectionExpression': 'step_id, payload_sha256',
+        'ExpressionAttributeValues': {
+          ':trail_id': _ddb(trail_id),
+          ':start': _ddb(min(wanted)),
+          ':end': _ddb(max(wanted)),
+        },
+        'ConsistentRead': True,
+      }
+      if exclusive_start_key is not None:
+        kwargs['ExclusiveStartKey'] = exclusive_start_key
+      response = self._dynamo.query(**kwargs)
+      for item in response.get('Items', []):
+        row = _from_ddb_item(item)
+        if row is None or row['step_id'] not in wanted:
+          continue
+        digest = row.get('payload_sha256')
+        if not isinstance(digest, str):
+          raise ValueError(f'step {trail_id}/{row["step_id"]} carries no payload digest')
+        hashes[row['step_id']] = digest
+      exclusive_start_key = response.get('LastEvaluatedKey')
+      if exclusive_start_key is None:
+        return hashes
 
   def get_step_uuids(self, trail_id: str, *, through: Optional[int] = None) -> list[dict]:
     self._required_universal_header(trail_id)
