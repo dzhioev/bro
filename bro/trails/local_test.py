@@ -93,8 +93,8 @@ def test_lineage_index_reads_only_the_named_segments(tmp_path):
   assert store.find_segment_trails({'segment'}, {'uuid-2'}) == []
   assert store.find_segment_trails({'elsewhere'}, {'uuid-1'}) == []
   assert store.find_segment_trails({'segment'}, set()) == []
-  assert store.get_step_uuids(trail_id) == [{'step_id': 0, 'uuid': 'uuid-1'}]
-  assert store.get_step_uuids(trail_id, through=-1) == []
+  assert store.get_step_uuids({trail_id: None}) == {trail_id: [{'step_id': 0, 'uuid': 'uuid-1'}]}
+  assert store.get_step_uuids({trail_id: -1}) == {trail_id: []}
   assert store.step_payload_hashes(trail_id, [0, 7]) == {0: payload_sha256(raw)}
 
 

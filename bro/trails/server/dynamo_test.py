@@ -691,7 +691,29 @@ def test_uuid_projection_and_point_reads(components):
   assert dynamo.queries[-1]['IndexName'] == 'uuid-index'
   assert dynamo.queries[-1]['ProjectionExpression'] == 'trail_id'
   assert (store.get_step(universal, 1))['body'] == second
-  assert store.get_step_uuids(universal, through=0) == [{'step_id': 0, 'uuid': 'uuid-1'}]
+  assert store.get_step_uuids({universal: 0}) == {universal: [{'step_id': 0, 'uuid': 'uuid-1'}]}
+
+
+def test_chain_uuid_reads_fan_out_in_the_store_thread_pool(components):
+  store, dynamo, _ = components
+  parent = _blaze_claude(store)
+  ancestor = _blaze_claude(store)
+  store.append_records(
+    parent, offset=0, records=[_claude_assistant('message-1', 'first', uuid='uuid-1')]
+  )
+  store.append_records(
+    ancestor, offset=0, records=[_claude_assistant('message-2', 'second', uuid='uuid-2')]
+  )
+
+  query_count = len(dynamo.query_threads)
+  caller_thread = threading.get_ident()
+  uuids = store.get_step_uuids({parent: None, ancestor: 0})
+
+  assert uuids == {
+    parent: [{'step_id': 0, 'uuid': 'uuid-1'}],
+    ancestor: [{'step_id': 0, 'uuid': 'uuid-2'}],
+  }
+  assert all(thread != caller_thread for thread in dynamo.query_threads[query_count:])
 
 
 def test_payload_hashes_come_back_in_one_ranged_query(components):

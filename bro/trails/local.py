@@ -119,7 +119,10 @@ class LocalStore(TrailsStore):
       raise TrailNotFound(f'{trail_id}/{step_id}')
     return rows[0]
 
-  def get_step_uuids(self, trail_id: str, *, through: Optional[int] = None) -> list[dict]:
+  def get_step_uuids(self, bounds: dict[str, Optional[int]]) -> dict[str, list[dict]]:
+    return {trail_id: self._step_uuids(trail_id, through) for trail_id, through in bounds.items()}
+
+  def _step_uuids(self, trail_id: str, through: Optional[int]) -> list[dict]:
     with self._locked(trail_id, shared=True):
       self._read_header(trail_id)
       rows = self._read_rows(trail_id, 0, None if through is None else through + 1)
