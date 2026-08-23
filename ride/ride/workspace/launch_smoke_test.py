@@ -8,9 +8,7 @@ test and both tags are removed before resolution, forcing the cold-build path.
 """
 
 import contextlib
-import shutil
 import subprocess
-import tempfile
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
@@ -20,26 +18,14 @@ import pytest
 
 import bro.workspace.project as workspace_project
 import ride.workspace.docker as workspace_docker
+import ride.workspace.host_docker_test_helper as host_docker
 from ride.repository import Repository
 from ride.runtime_bundle import resolve_runtime_bundle
 from ride.workspace.docker import Launch
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 
-
-def _docker_available() -> bool:
-  try:
-    return subprocess.run(['docker', 'info'], capture_output=True).returncode == 0
-  except FileNotFoundError:
-    return False
-
-
-pytestmark = [
-  pytest.mark.skipif(
-    Path('/.dockerenv').is_file(), reason='host-only: drives the host docker daemon'
-  ),
-  pytest.mark.skipif(not _docker_available(), reason='no reachable docker daemon'),
-]
+pytestmark = host_docker.HOST_DAEMON_ONLY
 
 _IMAGE_REPOSITORY = 'bro/launch-smoke-test'
 _WORKSPACE_NAME = 'launch-smoke-test'
@@ -69,21 +55,6 @@ class Launched:
   running: bool
   workspace: Path
   output: str
-
-
-def _checkout() -> Path:
-  """the tree this test ships in — what the image must be built from.
-
-  not `project_root()`: from a linked worktree that resolves to the main
-  checkout, and a gate run has to build the sources it is checking.
-  """
-  toplevel = subprocess.run(
-    ['git', '-C', str(Path(__file__).resolve().parent), 'rev-parse', '--show-toplevel'],
-    capture_output=True,
-    text=True,
-    check=True,
-  )
-  return Path(toplevel.stdout.strip())
 
 
 def _image_present(tag: str) -> bool:
@@ -150,30 +121,29 @@ def isolated() -> Iterator[Isolated]:
   a clone rather than the checkout itself because the entrypoint clones that mount
   with `--shared`, which a linked worktree cannot serve.
   """
-  root = Path(tempfile.mkdtemp(prefix='bro-launch-smoke-'))
-  checkout = _checkout()
-  project = root / 'project'
-  subprocess.run(['git', 'clone', '--quiet', str(checkout), str(project)], check=True)
-  origin = subprocess.run(
-    ['git', '-C', str(checkout), 'remote', 'get-url', 'origin'],
-    capture_output=True,
-    text=True,
-    check=True,
-  )
-  subprocess.run(
-    ['git', '-C', str(project), 'remote', 'set-url', 'origin', origin.stdout.strip()], check=True
-  )
-  # a clone mirrors the source's local branches only, so seed the ref the entrypoint refreshes
-  subprocess.run(
-    ['git', '-C', str(project), 'update-ref', 'refs/remotes/origin/master', 'HEAD'], check=True
-  )
-  yield Isolated(project=project)
-  shutil.rmtree(root, ignore_errors=True)
+  with host_docker.scratch_root('launch-smoke') as root:
+    checkout = host_docker.checkout()
+    project = root / 'project'
+    subprocess.run(['git', 'clone', '--quiet', str(checkout), str(project)], check=True)
+    origin = subprocess.run(
+      ['git', '-C', str(checkout), 'remote', 'get-url', 'origin'],
+      capture_output=True,
+      text=True,
+      check=True,
+    )
+    subprocess.run(
+      ['git', '-C', str(project), 'remote', 'set-url', 'origin', origin.stdout.strip()], check=True
+    )
+    # a clone mirrors the source's local branches only, so seed the ref the entrypoint refreshes
+    subprocess.run(
+      ['git', '-C', str(project), 'update-ref', 'refs/remotes/origin/master', 'HEAD'], check=True
+    )
+    yield Isolated(project=project)
 
 
 @pytest.fixture(scope='module')
 def launched(isolated: Isolated) -> Iterator[Launched]:
-  checkout = _checkout()
+  checkout = host_docker.checkout()
   with pytest.MonkeyPatch.context() as monkeypatch:
     monkeypatch.setenv('XDG_DATA_HOME', str(isolated.project.parent / 'state'))
     config = replace(workspace_project.project_config(checkout), image_repository=_IMAGE_REPOSITORY)

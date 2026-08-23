@@ -4,6 +4,8 @@ dist/
 .venv
 *.swp
 .smoke-*/
+# throwaway trees the host-docker tests root in the checkout
+.scratch-*/
 # runtime-synthesized credential dir (deployed services write it; on the host
 # secrets live in ~/.bro). never commit it
 .configs
