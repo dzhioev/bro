@@ -952,7 +952,8 @@ The bro harness's runner resolves a resume's trail from the session's current-tr
 ### The claude argv
 
 One builder for both flavors (`ride/ride/claude/claude_argv.py:build_claude_launch`):
-the merged `--settings` (fastMode and the statusLine, plus under `--raw` the apiKeyHelper), the forwarded claude args, prompt seeding, and the `--model` / `--effort` / fastMode it reads off the session's claude-code recipe are handled once;
+the merged `--settings` (fastMode, the statusLine and the attribution opt-out, plus under `--raw` the apiKeyHelper) is built once,
+as are the forwarded claude args, prompt seeding, and the `--model` / `--effort` / fastMode it reads off the session's claude-code recipe;
 only the flavor forks:
 
 - **full mode** — the full harness plus the ride-injected `--append-system-prompt` (see "Auto-injected system prompt"), `--dangerously-skip-permissions` under every `--hold` level but guided,
@@ -971,6 +972,10 @@ Both settings commands take that shape
 — so neither leans on PATH resolution nor on a file mode the wheel format does not guarantee;
 and flagSettings outranking project settings means a consuming project neither declares a statusLine nor can break the session's with a stale one.
 The corollary is that a bare `claude` launched outside ride gets claude's default bar.
+
+Claude's own attribution is off in every managed session
+— its commit trailer, its pull-request line, and the appended session link:
+the framework carries commit attribution of its own, and the same flagSettings rank keeps a consuming project's settings from turning claude's back on.
 
 ### Session-local MCP serving
 
