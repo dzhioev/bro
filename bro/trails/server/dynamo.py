@@ -581,7 +581,14 @@ class DynamoStore(TrailsStore):
       if exclusive_start_key is None:
         return hashes
 
-  def get_step_uuids(self, trail_id: str, *, through: Optional[int] = None) -> list[dict]:
+  def get_step_uuids(self, bounds: dict[str, Optional[int]]) -> dict[str, list[dict]]:
+    trail_ids = sorted(bounds)
+    reads = self._executor.map(
+      lambda trail_id: self._step_uuids(trail_id, bounds[trail_id]), trail_ids
+    )
+    return dict(zip(trail_ids, reads, strict=True))
+
+  def _step_uuids(self, trail_id: str, through: Optional[int]) -> list[dict]:
     self._required_universal_header(trail_id)
     if through is not None and through < 0:
       return []

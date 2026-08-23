@@ -64,7 +64,7 @@ bro · claude recorders                     readers
   the repairs answer 501 where the hosted store has no administration surface, while `DELETE /v1/admin/trails/{id}` reaches the contract method every backend implements.
   The unreported-trail sweep starts only for a `DynamoStore`.
 - `server/dynamo.py` owns `DynamoStore(TrailsStore)`:
-  conditional append transactions, indexes, S3 body spill/resolution, UUID reads, and its store-owned thread pool for UUID-query and spilled-row fan-outs.
+  conditional append transactions, indexes, S3 body spill/resolution, UUID reads, and its store-owned thread pool for UUID-query, fork-chain UUID-read, and spilled-row fan-outs.
   `server/dynamo_types.py` owns Dynamo conversion and row constants.
   `server/operations.py` remains the recompute/check engine and owns the manifested destructive operations, relinking and deletion.
 - Stored rows are served rows.

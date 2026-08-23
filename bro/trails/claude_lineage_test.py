@@ -61,6 +61,29 @@ def _blaze(
   )['id']
 
 
+class _IndexSpy:
+  """a store that records the lineage reads the resolver made of it."""
+
+  def __init__(self, store: LocalStore) -> None:
+    self._store = store
+    self.probes: list[set[str]] = []
+    self.uuid_reads: list[dict[str, Optional[int]]] = []
+
+  def find_segment_trails(self, segments: set[str], uuids: set[str]) -> list[dict]:
+    self.probes.append(set(uuids))
+    return self._store.find_segment_trails(segments, uuids)
+
+  def get_trail(self, trail_id: str) -> dict:
+    return self._store.get_trail(trail_id)
+
+  def get_step_uuids(self, bounds: dict[str, Optional[int]]) -> dict[str, list[dict]]:
+    self.uuid_reads.append(dict(bounds))
+    return self._store.get_step_uuids(bounds)
+
+  def step_payload_hashes(self, trail_id: str, step_ids: list[int]) -> dict[int, str]:
+    return self._store.step_payload_hashes(trail_id, step_ids)
+
+
 class TestSameSegment:
   def test_resume_forks_from_the_recorded_final_row(self, store):
     recorded = [_user('hello', 'u1'), _user('again', 'u2')]
@@ -160,6 +183,26 @@ class TestCopiedHistory:
     # and the new tail are this trail's own
     assert decision.chunks == [[0, 1], [3, 3]]
 
+  def test_the_whole_chain_is_read_in_one_batch(self, store):
+    root_lines = [_user('hello', 'u1')]
+    root_id = _blaze(store, 'seg-1', root_lines)
+    middle_lines = [_user('again', 'u2')]
+    middle_id = _blaze(
+      store, 'seg-1', middle_lines, forked_from={'trail_id': root_id, 'step_id': 0}
+    )
+    parent_lines = [_user('third', 'u3')]
+    parent_id = _blaze(
+      store, 'seg-1', parent_lines, forked_from={'trail_id': middle_id, 'step_id': 0}
+    )
+    spy = _IndexSpy(store)
+    copied = [_meta(), *root_lines, *middle_lines, *parent_lines, _user('resumed', 'u4')]
+
+    decision = resolve(_evidence('seg-2', copied, related=('seg-1',)), spy)
+
+    assert decision.forked_from == {'trail_id': parent_id, 'step_id': 0}
+    assert decision.chunks == [[0, 1], [4, 4]]
+    assert spy.uuid_reads == [{parent_id: None, middle_id: 0, root_id: 0}]
+
   def test_a_two_chunk_trail_is_re_anchored_from_its_matched_rows(self, store):
     """a trail born from a copy holds a head chunk plus a tail, so its rows are
     not one contiguous run of the file it recorded."""
@@ -180,27 +223,6 @@ class TestCopiedHistory:
     assert decision.chunks == [[3, 3]]
 
 
-class _ProbeSpy:
-  """a store that records the uuid sets the resolver probed it with."""
-
-  def __init__(self, store: LocalStore) -> None:
-    self._store = store
-    self.probes: list[set[str]] = []
-
-  def find_segment_trails(self, segments: set[str], uuids: set[str]) -> list[dict]:
-    self.probes.append(set(uuids))
-    return self._store.find_segment_trails(segments, uuids)
-
-  def get_trail(self, trail_id: str) -> dict:
-    return self._store.get_trail(trail_id)
-
-  def get_step_uuids(self, trail_id: str, *, through: Optional[int] = None) -> list[dict]:
-    return self._store.get_step_uuids(trail_id, through=through)
-
-  def step_payload_hashes(self, trail_id: str, step_ids: list[int]) -> dict[int, str]:
-    return self._store.step_payload_hashes(trail_id, step_ids)
-
-
 def _recorded_lines(count: int) -> list[str]:
   return [_user(f'line {index}', f'u{index}') for index in range(count)]
 
@@ -209,7 +231,7 @@ class TestCandidateProbe:
   def test_the_probe_asks_only_about_the_newest_records(self, store):
     recorded = _recorded_lines(80)
     trail_id = _blaze(store, 'seg-1', recorded)
-    spy = _ProbeSpy(store)
+    spy = _IndexSpy(store)
 
     decision = resolve(_evidence('seg-1', [*recorded, _user('more', 'u-new')]), spy)
 
@@ -221,7 +243,7 @@ class TestCandidateProbe:
   def test_a_parent_older_than_the_probe_window_is_still_found(self, store):
     recorded = [_user('hello', 'u-parent')]
     trail_id = _blaze(store, 'seg-1', recorded)
-    spy = _ProbeSpy(store)
+    spy = _IndexSpy(store)
 
     # the transcript grew well past the probe window before this adoption
     decision = resolve(_evidence('seg-1', [*recorded, *_recorded_lines(80)]), spy)
@@ -268,7 +290,7 @@ class TestEvidence:
       def get_trail(self, trail_id: str) -> dict:
         raise AssertionError('unreachable')
 
-      def get_step_uuids(self, trail_id: str, *, through: Optional[int] = None) -> list[dict]:
+      def get_step_uuids(self, bounds: dict[str, Optional[int]]) -> dict[str, list[dict]]:
         raise AssertionError('unreachable')
 
       def step_payload_hashes(self, trail_id: str, step_ids: list[int]) -> dict[int, str]:

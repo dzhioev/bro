@@ -55,7 +55,10 @@ class LineageIndex(Protocol):
 
   def find_segment_trails(self, segments: set[str], uuids: set[str]) -> list[dict]: ...
 
-  def get_step_uuids(self, trail_id: str, *, through: Optional[int] = None) -> list[dict]: ...
+  def get_step_uuids(self, bounds: dict[str, Optional[int]]) -> dict[str, list[dict]]:
+    """Each named trail's uuid-carrying rows in step order, through the
+    inclusive step bound it maps to, or all of them where that bound is None."""
+    ...
 
   def step_payload_hashes(self, trail_id: str, step_ids: list[int]) -> dict[int, str]: ...
 
@@ -101,11 +104,10 @@ def resolve(evidence: dict, index: LineageIndex) -> LineageDecision:
   if len(parsed.uuid_lines) == 0:
     return LineageDecision(adopt=False, reason='transcript carries no record yet')
   for header in _candidates(parsed, index):
-    uuid_lines = [(row['step_id'], row['uuid']) for row in index.get_step_uuids(header['id'])]
     if header.get('native', {}).get('segment') == parsed.segment:
-      decision = _continue_segment(header, uuid_lines, parsed, index)
+      decision = _continue_segment(header, parsed, index)
     else:
-      decision = _continue_copy(header, uuid_lines, parsed, index)
+      decision = _continue_copy(header, parsed, index)
     if decision is not None:
       return decision
   return LineageDecision(reason='no verified parent')
@@ -163,13 +165,14 @@ def _candidates(evidence: _Evidence, index: LineageIndex) -> list[dict]:
 
 
 def _continue_segment(
-  header: dict, uuid_lines: list[tuple[int, str]], evidence: _Evidence, index: LineageIndex
+  header: dict, evidence: _Evidence, index: LineageIndex
 ) -> Optional[LineageDecision]:
   """Claude appended to the segment this trail recorded: the new trail starts
   past the recorded extent and forks from the prior trail's final row."""
   extent = _extent(header)
   if extent == 0:
     return None
+  uuid_lines = _uuid_pairs(index.get_step_uuids({header['id']: None})[header['id']])
   line_by_uuid = evidence.line_by_uuid()
   lines = {step_id: line_by_uuid[uuid] for step_id, uuid in uuid_lines if uuid in line_by_uuid}
   if len(lines) == 0:
@@ -196,12 +199,13 @@ def _continue_segment(
 
 
 def _continue_copy(
-  header: dict, uuid_lines: list[tuple[int, str]], evidence: _Evidence, index: LineageIndex
+  header: dict, evidence: _Evidence, index: LineageIndex
 ) -> Optional[LineageDecision]:
   """Claude forked a new segment re-serializing the history: verify the copy
   against the parent's uuids and keep only the new segment's own contribution —
   the recorded chain is authoritative for the copied part."""
-  cuts = _fork_cuts(uuid_lines, _ancestor_uuids(header, index), evidence)
+  parent_uuid_lines, ancestor_uuids = _chain_uuids(header, index)
+  cuts = _fork_cuts(parent_uuid_lines, ancestor_uuids, evidence)
   if cuts.pending:
     return LineageDecision(adopt=False, reason='history copy still being written')
   if not cuts.verified:
@@ -249,15 +253,22 @@ def _fork_cuts(
   return _ForkCuts(verified=False, pending=pending)
 
 
-def _ancestor_uuids(header: dict, index: LineageIndex) -> set[str]:
-  """Every record uuid carried by the trail's bounded ancestor prefixes."""
-  uuids: set[str] = set()
+def _chain_uuids(header: dict, index: LineageIndex) -> tuple[list[tuple[int, str]], set[str]]:
+  """The trail's own (step index, uuid) pairs, and every record uuid its
+  bounded ancestor prefixes carry."""
+  bounds: dict[str, Optional[int]] = {header['id']: None}
   for ancestor, bound in walk_header_chain(header, index.get_trail)[:-1]:
     assert bound is not None
-    uuids.update(
-      row['uuid'] for row in index.get_step_uuids(ancestor['id'], through=bound['step_id'])
-    )
-  return uuids
+    bounds[ancestor['id']] = bound['step_id']
+  chain = index.get_step_uuids(bounds)
+  ancestor_uuids = {
+    row['uuid'] for trail_id, rows in chain.items() if trail_id != header['id'] for row in rows
+  }
+  return _uuid_pairs(chain[header['id']]), ancestor_uuids
+
+
+def _uuid_pairs(rows: list[dict]) -> list[tuple[int, str]]:
+  return [(row['step_id'], row['uuid']) for row in rows]
 
 
 def _extent(header: dict) -> int:
