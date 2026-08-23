@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """build the relocatable directory a machine with no Python runs `bro` from.
 
-The bundle is self-contained: a pinned standalone CPython, the framework and
-native engine resolved from the workspace lock, and a shim that puts the
-two together. Copying the directory anywhere on a linux/x86_64 glibc machine is
-the whole installation — nothing outside it is read.
+The bundle is self-contained: a pinned standalone CPython, the framework
+distributions a bro runs from resolved against the workspace lock, and a shim
+that puts them together. Copying the directory anywhere on a linux/x86_64 glibc
+machine is the whole installation — nothing outside it is read.
 
 What the bundle contains is decided by the pinned interpreter version here plus
 the workspace `uv.lock`, so two builds of one commit carry the same code.
@@ -27,8 +27,9 @@ from bro.base.source_root import SOURCE_ROOT
 __cli_name__ = 'benchmark-bundle'
 
 CPYTHON_VERSION = '3.12.14'
-NATIVE_PACKAGE = 'bro-native'
-WHEEL_PACKAGES = ('bro', NATIVE_PACKAGE)
+# core, the engine that runs a bro, and the distribution every persona but the
+# minimal `bro` one ships from — a bundle without it registers no other bro
+WHEEL_PACKAGES = ('bro', 'bro-native', 'bro-dev')
 TARGET = ('linux', 'x86_64', 'glibc')
 
 _SHIM = """\
@@ -132,6 +133,7 @@ def python_install_command(into: Path) -> list[str]:
 
 
 def export_command(workspace: Path) -> list[str]:
+  selection = [argument for package in WHEEL_PACKAGES for argument in ('--package', package)]
   return [
     'uv',
     'export',
@@ -140,8 +142,7 @@ def export_command(workspace: Path) -> list[str]:
     '--frozen',
     '--no-default-groups',
     '--no-emit-workspace',
-    '--package',
-    NATIVE_PACKAGE,
+    *selection,
     '--no-hashes',
     '--no-annotate',
     '--no-header',
@@ -248,10 +249,10 @@ def build(workspace: Path, root: Path) -> Bundle:
     _install_interpreter(bundle, staging / 'interpreter')
     requirements = staging / 'requirements.txt'
     requirements.write_text(_capture(export_command(workspace)))
-    log.info('building the framework and native engine wheels')
+    log.info('building the framework wheels')
     for package in WHEEL_PACKAGES:
       _run(wheel_command(workspace, staging / 'wheel', package))
-    log.info('installing bro-native into %s', bundle.site_packages)
+    log.info('installing the framework into %s', bundle.site_packages)
     _run(install_command(bundle, requirements, _wheels(staging / 'wheel')))
   bundle.shim.write_text(shim_text(bundle))
   bundle.shim.chmod(0o755)

@@ -48,9 +48,9 @@ uv run --directory benchmark pytest bro/benchmark/harbor_e2e_test.py
 
 - `bro/benchmark/bundle.py` (`benchmark-bundle`) — builds the relocatable directory a foreign
   container runs `bro` from:
-  a pinned standalone CPython, `bro-native` resolved from the workspace
-  lock with core and engine entering as built wheels, and a shim setting
-  `PYTHONPATH` over the two.
+  a pinned standalone CPython, the dependencies `WHEEL_PACKAGES` resolves to against
+  the workspace lock, those distributions themselves entering as built wheels, and a
+  shim setting `PYTHONPATH` over them.
   `Bundle` is the layout a consumer addresses
   — shim, interpreter,
   site-packages, and the CA store to point `SSL_CERT_FILE` at;
