@@ -8,7 +8,13 @@ import pytest
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
 from bro.trails import backends
-from bro.trails.model import MESSAGE_TYPES, UNREPORTED_END_INFERENCE, BlazeRequest, tools_sha256
+from bro.trails.model import (
+  MESSAGE_TYPES,
+  UNREPORTED_END_INFERENCE,
+  BlazeRequest,
+  payload_sha256,
+  tools_sha256,
+)
 from bro.trails.server import dynamo as dynamo_store, dynamo_types
 from bro.trails.store import AppendConflict, TrailHasForks, TrailNotFound
 
@@ -686,6 +692,25 @@ def test_uuid_projection_and_point_reads(components):
   assert dynamo.queries[-1]['ProjectionExpression'] == 'trail_id, step_id, #uuid'
   assert (store.get_step(universal, 1))['body'] == second
   assert store.get_step_uuids(universal, through=0) == [{'step_id': 0, 'uuid': 'uuid-1'}]
+
+
+def test_payload_hashes_come_back_in_one_ranged_query(components):
+  store, dynamo, _ = components
+  universal = _blaze_claude(store)
+  records = [
+    _claude_assistant(f'message-{index}', 'text', uuid=f'uuid-{index}') for index in range(6)
+  ]
+  store.append_records(universal, offset=0, records=records)
+
+  query_count = len(dynamo.queries)
+  hashes = store.step_payload_hashes(universal, [4, 1, 1, -1, 99])
+
+  assert hashes == {1: payload_sha256(records[1]), 4: payload_sha256(records[4])}
+  [query] = dynamo.queries[query_count:]
+  assert (
+    query['KeyConditionExpression'] == 'trail_id = :trail_id AND step_id BETWEEN :start AND :end'
+  )
+  assert query['ProjectionExpression'] == 'step_id, payload_sha256'
 
 
 def test_launch_context_is_harness_neutral_and_end_adds_no_step(components):
