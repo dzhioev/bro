@@ -154,8 +154,20 @@ Where the chain reaches a minting source the referrer ships raw instead and hydr
   client scopes operationally receive a service config or none.
   The server resolves this same credential through `configured_store()`, which requires it
   — backend settings are not argv
-  — while bearer auth remains in `TRAILS_BEARER_TOKEN` / `TRAILS_ALLOW_NO_AUTH` (or their matching flags).
+  — and reads the tokens it accepts from `trails_tokens.json`, leaving `TRAILS_ALLOW_NO_AUTH` (or `--trails-allow-no-auth`) the only auth setting outside the store.
+  Which token a client holds is the deployment's own call:
+  `token` is opaque to the client, and the session baseline wants a write-only one, since reading the registry is no part of recording.
+  A scope needing another
+  — a bro that reads recorded runs, an operator administering them
+  — takes a `trails+<instance>` variant carrying that token, granted per launch or selected per project.
   Every launch scope hydrates the file best-effort, so a host without one still records.
+- `trails_tokens.json` — the tokens a `trails-server` accepts, each named and carrying its own permissions:
+  `{ "tokens": { "sessions": { "token": "...", "permissions": ["write"] }, "analyst": { "token": "...", "permissions": ["read", "write"] } } }`.
+  `read` serves every trail in the registry, `write` records new ones, and `admin` reaches `/v1/admin/*`;
+  the three are independent, so a recorder's token opens nothing it did not write.
+  It belongs in the scoped credential of the server deployment alone
+  — a client is given one token as its `trails.json` `token`, never this table
+  — and a server that resolves neither it nor `TRAILS_ALLOW_NO_AUTH` fails to start.
   A failing or stopped claude recorder surfaces through `session-recorder-health.json` in the session's own state dir (read by the ride status line and `ride banner`);
   daemon stderr is `claude/session-recorder.log` under it.
 - `openai.json` — `{ "api_key": "sk-..." }` for OpenAI-backed LLM runs, optional data-source summaries, and spell interpretation

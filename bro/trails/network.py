@@ -17,6 +17,7 @@ from bro.trails.model import (
 )
 from bro.trails.store import (
   AppendConflict,
+  PermissionDenied,
   TrailNotFound,
   TrailsStore,
   TransientUnavailable,
@@ -304,6 +305,8 @@ class NetworkStore(TrailsStore):
             extents = _append_conflict_extents(raw)
             if response.status == 409 and extents is not None:
               raise AppendConflict(*extents) from exception
+            if response.status in (401, 403):
+              raise PermissionDenied(str(exception)) from exception
             if response.status == 501:
               raise UnsupportedOperation(str(exception)) from exception
             if is_retryable_status(response.status):
@@ -315,6 +318,7 @@ class NetworkStore(TrailsStore):
         except (
           TrailNotFound,
           AppendConflict,
+          PermissionDenied,
           UnsupportedOperation,
           HTTPStatusError,
           ValueError,

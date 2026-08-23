@@ -32,7 +32,7 @@ import signal
 import socket
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
@@ -44,6 +44,7 @@ from bro.summon import summoned_by_from_env
 from bro.trails.backends import CLAUDE_ADAPTER
 from bro.trails.model import BlazeRequest, payload_sha256
 from bro.trails.record.spine import Recording
+from bro.trails.rows import project_messages
 from bro.trails.store import TrailsStore, default_store
 
 # the bro service `raise` tool's wire name in a claude session's transcript
@@ -90,8 +91,20 @@ def _user_content_has_text(content: Any) -> bool:
   )
 
 
-def _terminal_raise_reason(messages: Iterator[dict]) -> Optional[str]:
-  raised: Optional[str] = None
+def _projected_messages(records: list[str], offset: int) -> list[dict]:
+  """the tool calls and user inputs `records` carry, projected the way the store
+  projects the rows they become. a recording token holds no read permission, so
+  a trail's own writer derives what it needs from what it wrote."""
+  return project_messages(
+    CLAUDE_ADAPTER,
+    [{'step_id': offset + index, 'body': record} for index, record in enumerate(records)],
+    {'tool_call', 'user_input'},
+  )
+
+
+def _fold_raise_reason(raised: Optional[str], messages: Iterable[dict]) -> Optional[str]:
+  """carry the terminal raise reason across a batch: a `raise` call sets it, and
+  anything the human types afterwards clears it again."""
   for message in messages:
     if message.get('type') == 'tool_call' and message.get('tool_name') == _RAISE_TOOL:
       arguments = message.get('arguments')
@@ -224,10 +237,10 @@ class _SegmentRecorder:
     the trail owns everything the file carries past it."""
     self.path = path
     self.trail_id = trail_id
-    self._store = store
     self._recording = Recording(store, trail_id, 0)
     self._pending = pending
     self._position = position
+    self._raised: Optional[str] = None
 
   @property
   def segment(self) -> str:
@@ -250,7 +263,8 @@ class _SegmentRecorder:
       self._position = _Position(signature, byte_extent)
       self._recording.keepalive_if_idle()
       return _Progress.QUIET
-    self._recording.append(records)
+    offset = self._recording.append(records)
+    self._raised = _fold_raise_reason(self._raised, _projected_messages(records, offset))
     self._pending = []
     self._position = _Position(signature, byte_extent)
     log.info(
@@ -270,15 +284,12 @@ class _SegmentRecorder:
     """final append, then end the trail — `ok`, or `raised` with the reason
     when the recorded stream's terminal state is a raise call."""
     self.tick()
-    raised = _terminal_raise_reason(
-      self._store.iter_messages(self.trail_id, types={'tool_call', 'user_input'})
-    )
-    if raised is not None:
-      detail = raised if len(raised) > 0 else 'raise reason unavailable'
+    if self._raised is not None:
+      detail = self._raised if len(self._raised) > 0 else 'raise reason unavailable'
       self._recording.end('raised', detail=detail)
     else:
       self._recording.end('ok')
-    log.info('trail %s ended (%s)', self.trail_id, 'raised' if raised is not None else 'ok')
+    log.info('trail %s ended (%s)', self.trail_id, 'raised' if self._raised is not None else 'ok')
 
 
 class Recorder:

@@ -12,10 +12,17 @@ from aiohttp import web
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest, payload_sha256
 from bro.trails.network import NetworkStore
+from bro.trails.server.auth import TokenTable
 from bro.trails.server.server import create_app
 from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore
 
 _TOKEN = 'contract-token'
+
+
+def _token_table(*permissions: str) -> TokenTable:
+  return TokenTable.from_config(
+    {'tokens': {'contract': {'token': _TOKEN, 'permissions': list(permissions)}}}
+  )
 
 
 def _bro_request(*, bro='dev', body=None, forked_from=None, subject=None):
@@ -67,7 +74,7 @@ def _loopback_server(store: TrailsStore) -> Iterator[str]:
   def run() -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    runner = web.AppRunner(create_app(store, _TOKEN))
+    runner = web.AppRunner(create_app(store, _token_table('read', 'write', 'admin')))
     try:
       loop.run_until_complete(runner.setup())
       listener = socket.socket()

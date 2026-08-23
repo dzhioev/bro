@@ -135,7 +135,12 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
 
 ## Service auth
 
-Bearer auth is mandatory outside an explicit loopback-only `TRAILS_ALLOW_NO_AUTH=1` server run.
-The hosted backend comes from `trails.json`;
-auth remains in `--trails-bearer-token` / `TRAILS_BEARER_TOKEN` and `--trails-allow-no-auth` / `TRAILS_ALLOW_NO_AUTH`.
+Bearer auth is mandatory outside an explicit loopback-only `TRAILS_ALLOW_NO_AUTH=1` server run (`--trails-allow-no-auth`).
+The hosted backend comes from `trails.json` and the tokens it accepts from `trails_tokens.json`, a server-side credential of its own
+— a client holds the one token it presents, never the table naming every token there is.
 Credential schemas are documented in `bro/setup/AGENTS.md`.
+
+`server/auth.py` owns the vocabulary.
+Each token is named and carries its own set of the three permissions, which are independent:
+a session's token records without reading, an analyst's reads and records, an operator's administers.
+Every route declares the permission it demands, and a handler reaching the router without a declaration is answered 500 rather than served open.

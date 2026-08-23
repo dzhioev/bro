@@ -4,7 +4,6 @@
 import asyncio
 import contextlib
 import functools
-import hmac
 import json
 import sys
 from collections.abc import Callable, Coroutine
@@ -13,13 +12,20 @@ from typing import Any, Optional
 from aiohttp import web
 
 import bro.base.args as base_args
-from bro.base import log
+from bro.base import credentials, log
 from bro.trails.model import (
-  LOOPBACK_HOSTS,
   MESSAGE_TYPES,
   BlazeRequest,
   trail_not_found_body,
   validate_end,
+)
+from bro.trails.server.auth import (
+  Permission,
+  TokenTable,
+  declared_permission,
+  presented,
+  requires,
+  resolve_auth,
 )
 from bro.trails.server.dynamo import BodyTooLarge, DynamoStore
 from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore, configured_store
@@ -27,6 +33,7 @@ from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore, configu
 __cli_name__ = 'trails-server'
 
 DEFAULT_PORT = 8004
+HEALTH_PATH = '/health'
 SWEEP_INTERVAL_SECONDS = 600.0
 CHECK_HEARTBEAT_INTERVAL_SECONDS = 5.0
 MAX_REQUEST_BYTES = 64 * 1024 * 1024
@@ -38,14 +45,18 @@ async def _dispatch[Result](operation: Callable[..., Result], *args: Any, **kwar
 
 @web.middleware
 async def _auth_middleware(request: web.Request, handler):
-  if request.path == '/health':
+  if request.path == HEALTH_PATH:
     return await handler(request)
-  expected = request.app['bearer_token']
-  if expected is None:
+  name, granted = presented(request.app['tokens'], request.headers.get('Authorization', ''))
+  if len(granted) == 0:
+    return _error('unauthorized', 401)
+  if request.match_info.http_exception is not None:
     return await handler(request)
-  header = request.headers.get('Authorization', '')
-  if not hmac.compare_digest(header, f'Bearer {expected}'):
-    return web.json_response({'error': 'unauthorized'}, status=401)
+  required = declared_permission(handler)
+  if required is None:
+    return _error(f'{request.method} {request.path} declares no trails permission', 500)
+  if required not in granted:
+    return _error(f'trails token {name!r} may not {required.value}', 403)
   return await handler(request)
 
 
@@ -115,6 +126,7 @@ async def _handle_health(_: web.Request) -> web.Response:
   return web.json_response({'status': 'ok'})
 
 
+@requires(Permission.WRITE)
 async def _handle_blaze(request: web.Request) -> web.Response:
   payload = await _read_json(request)
   if not isinstance(payload, dict):
@@ -132,6 +144,7 @@ async def _handle_blaze(request: web.Request) -> web.Response:
   return web.json_response(result, status=200 if result.get('adopted') is False else 201)
 
 
+@requires(Permission.WRITE)
 async def _handle_append_records(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   payload = await _read_json(request)
@@ -166,6 +179,7 @@ async def _handle_append_records(request: web.Request) -> web.Response:
   return web.json_response(result)
 
 
+@requires(Permission.WRITE)
 async def _handle_set_subject(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   payload = await _read_json(request)
@@ -187,6 +201,7 @@ async def _handle_set_subject(request: web.Request) -> web.Response:
   return web.json_response(updated)
 
 
+@requires(Permission.WRITE)
 async def _handle_end_trail(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   payload = await _read_json(request)
@@ -206,6 +221,7 @@ async def _handle_end_trail(request: web.Request) -> web.Response:
   return web.Response(status=204)
 
 
+@requires(Permission.WRITE)
 async def _handle_keepalive(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   store: TrailsStore = request.app['store']
@@ -216,6 +232,7 @@ async def _handle_keepalive(request: web.Request) -> web.Response:
   return web.Response(status=204)
 
 
+@requires(Permission.READ)
 async def _handle_get_trail(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   store: TrailsStore = request.app['store']
@@ -226,6 +243,7 @@ async def _handle_get_trail(request: web.Request) -> web.Response:
   return web.json_response(trail)
 
 
+@requires(Permission.READ)
 async def _handle_get_context(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   store: TrailsStore = request.app['store']
@@ -236,6 +254,7 @@ async def _handle_get_context(request: web.Request) -> web.Response:
   return web.json_response({'launch_context': context})
 
 
+@requires(Permission.READ)
 async def _handle_get_step(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   step_id = _parse_ordinal(request.match_info['step_id'], name='step_id')
@@ -249,6 +268,7 @@ async def _handle_get_step(request: web.Request) -> web.Response:
   return web.json_response(step)
 
 
+@requires(Permission.READ)
 async def _handle_get_steps(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   after = _parse_optional_ordinal(request.query.get('after'), name='after')
@@ -263,6 +283,7 @@ async def _handle_get_steps(request: web.Request) -> web.Response:
   return web.json_response(result)
 
 
+@requires(Permission.READ)
 async def _handle_get_messages(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   after = _parse_optional_ordinal(request.query.get('after'), name='after')
@@ -300,6 +321,7 @@ def _administered(handler):
   return guarded
 
 
+@requires(Permission.ADMIN)
 @_administered
 async def _handle_recompute(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
@@ -312,6 +334,7 @@ async def _handle_recompute(request: web.Request) -> web.Response:
     return _error(str(exception), 400)
 
 
+@requires(Permission.ADMIN)
 @_administered
 async def _handle_check(request: web.Request) -> web.StreamResponse:
   payload = await _read_json(request)
@@ -333,6 +356,7 @@ async def _handle_check(request: web.Request) -> web.StreamResponse:
     return _error(str(exception), 400)
 
 
+@requires(Permission.ADMIN)
 @_administered
 async def _handle_relink(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
@@ -356,6 +380,7 @@ async def _handle_relink(request: web.Request) -> web.Response:
     return _error(str(exception), 400)
 
 
+@requires(Permission.READ)
 async def _handle_list_trails(request: web.Request) -> web.Response:
   harness = request.query.get('harness')
   bro = request.query.get('bro')
@@ -414,7 +439,7 @@ async def _sweep_loop(admin: DynamoStore, interval_seconds: float) -> None:
 
 def create_app(
   store: TrailsStore,
-  bearer_token: Optional[str],
+  tokens: Optional[TokenTable],
   *,
   admin: Optional[DynamoStore] = None,
   sweep_interval_seconds: Optional[float] = None,
@@ -425,8 +450,8 @@ def create_app(
     raise ValueError('a trails sweep requires a DynamoStore admin surface')
   app = web.Application(middlewares=[_auth_middleware], client_max_size=MAX_REQUEST_BYTES)
   app['store'] = store
-  app['bearer_token'] = bearer_token
-  app.router.add_get('/health', _handle_health)
+  app['tokens'] = tokens
+  app.router.add_get(HEALTH_PATH, _handle_health)
   app.router.add_post('/v1/trails', _handle_blaze)
   app.router.add_get('/v1/trails', _handle_list_trails)
   app.router.add_get('/v1/trails/{trail_id}', _handle_get_trail)
@@ -461,33 +486,20 @@ def create_app(
   return app
 
 
-def resolve_auth(bearer_token: Optional[str], allow_no_auth: bool, host: str) -> Optional[str]:
-  if bearer_token is not None:
-    return bearer_token
-  if not allow_no_auth:
-    raise RuntimeError(
-      'TRAILS_BEARER_TOKEN is required; set TRAILS_ALLOW_NO_AUTH=1 to disable auth'
-    )
-  if host not in LOOPBACK_HOSTS:
-    raise RuntimeError(f'TRAILS_ALLOW_NO_AUTH=1 requires HOST in {sorted(LOOPBACK_HOSTS)}')
-  return None
-
-
 def main(argv: list[str]) -> Optional[int]:
   parser = base_args.Parser(description='trails recording server')
   parser.add_argument('--host', default='0.0.0.0')
   parser.add_argument('--port', type=int, default=DEFAULT_PORT)
-  parser.add_argument('--trails-bearer-token', default=None, secret=True)
   parser.add_argument('--trails-allow-no-auth', action='store_true')
   args = parser.parse(argv)
-  bearer_token = resolve_auth(
-    bearer_token=args['trails_bearer_token'],
+  tokens = resolve_auth(
+    credentials.default_store(),
     allow_no_auth=args['trails_allow_no_auth'],
     host=args['host'],
   )
   store = configured_store()
   admin = store if isinstance(store, DynamoStore) else None
-  auth_description = 'bearer auth' if bearer_token is not None else 'NO AUTH'
+  auth_description = 'NO AUTH' if tokens is None else f'tokens {", ".join(tokens.names())}'
   log.info(
     'starting trails server on %s:%s with %s (%s)',
     args['host'],
@@ -498,7 +510,7 @@ def main(argv: list[str]) -> Optional[int]:
   web.run_app(
     create_app(
       store,
-      bearer_token,
+      tokens,
       admin=admin,
       sweep_interval_seconds=SWEEP_INTERVAL_SECONDS if admin is not None else None,
     ),

@@ -1,6 +1,7 @@
 {
   "brog": {"sources": [{"file": "brog.json"}]},
   "trails": {"sources": [{"file": "trails.json"}]},
+  "trails_tokens": {"sources": [{"file": "trails_tokens.json"}]},
   "openai": {"sources": [{"file": "openai.json"}]},
   "anthropic": {"sources": [{"file": "anthropic.json"}]},
   "claude_code": {
