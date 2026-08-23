@@ -73,7 +73,7 @@ def test_bare_summon_forwards_with_its_own_shell_command(monkeypatch):
   monkeypatch.setattr(
     summon,
     'relay_summon',
-    lambda target, prompt, *, timeout, into, hold, grant, revoke, llm, harness, manual: (
+    lambda target, prompt, *, timeout, into, hold, grant, revoke, share, llm, harness, manual: (
       calls.append((target, prompt, timeout, into)) or 0
     ),
   )

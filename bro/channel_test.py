@@ -64,11 +64,6 @@ class TestBroChannel:
     assert message.request == 'X'
     assert message.payload == {'trail_id': 'trail-1'}
 
-  def test_started_carries_the_workspace_when_given(self):
-    channel, transport = _make_channel()
-    channel.started('trail-1', workspace='ws-1')
-    assert transport.sent[0].payload == {'trail_id': 'trail-1', 'workspace': 'ws-1'}
-
   def test_completed_ok_emits_the_ok_result(self):
     channel, transport = _make_channel()
     channel.completed('the answer', 'ok')

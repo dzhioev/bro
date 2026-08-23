@@ -38,6 +38,7 @@ from bro.broker.client import CHANNEL_ENV, Client
 from bro.broker.dispatcher import Dispatcher, RequestHandler
 from bro.broker.job import CommandJob
 from bro.broker.runtime import Peer
+from bro.kinds import KindContext, tree_path
 
 __cli_name__ = 'benchmark-job'
 
@@ -60,7 +61,7 @@ _ARGS_KEYS = frozenset({'config', 'timeout'})
 def _refusal(workspace_tree: Path, args: dict[str, Any]) -> Optional[str]:
   """why the request is refused, or None when the job may start. Strict on shape
   (an unknown key is a caller bug, not a default) and on the config path: it must
-  stay a file inside the workspace tree."""
+  stay a file inside the workspace tree (`bro.kinds.tree_path`)."""
   unknown = sorted(set(args) - _ARGS_KEYS)
   if len(unknown) > 0:
     return f'unknown benchmark field(s): {", ".join(unknown)}'
@@ -72,11 +73,10 @@ def _refusal(workspace_tree: Path, args: dict[str, Any]) -> Optional[str]:
     not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0
   ):
     return "benchmark 'timeout' must be a positive number of seconds"
-  if Path(config).is_absolute():
-    return "benchmark 'config' must be a path relative to the workspace root"
-  resolved = (workspace_tree / config).resolve()
-  if not resolved.is_relative_to(workspace_tree.resolve()):
-    return f'benchmark config {config!r} escapes the workspace'
+  try:
+    resolved = tree_path(workspace_tree, config)
+  except ValueError as e:
+    return f'benchmark config: {e}'
   if not resolved.is_file():
     return f'no job config at {config!r} in the workspace'
   if not (workspace_tree / 'benchmark' / 'pyproject.toml').is_file():
@@ -84,8 +84,9 @@ def _refusal(workspace_tree: Path, args: dict[str, Any]) -> Optional[str]:
   return None
 
 
-def benchmark_kind(workspace_tree: Path) -> RequestHandler:
-  """the `benchmark` kind for a session rooted at `workspace_tree`."""
+def benchmark_kind(kind_context: KindContext) -> RequestHandler:
+  """the `benchmark` kind for the session `kind_context` describes."""
+  workspace_tree = kind_context.workspace_tree
 
   def handle(context: Dispatcher, peer: Peer, message: Message) -> None:
     args = message.args

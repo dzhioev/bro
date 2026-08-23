@@ -1,4 +1,4 @@
-"""pending manual summons: the host-side record a launch token resolves to.
+"""pending manual summons: the host-side records a launch token resolves to.
 
 A manual summon leaves the host with an expectation (a provisioned broker
 channel awaiting an external child) and the user with a token (the request id).
@@ -11,8 +11,11 @@ overrides), the prompt, and the base-ref inheritance source.
 `claim` is one-shot: exactly one launch may attach to the channel (a second
 connection would supersede the first on it), so the unlink decides a
 race — read as much as you like (`peek`) while preflighting, claim last, right
-before the session starts. The host discards the record when the summon ends
-unclaimed (a denial, root teardown), so a stale token fails the launch loudly.
+before the session starts. The claim leaves a second record behind, under
+`claimed/<token>.json`: the workspace name the claiming launch runs the child
+in, which is how the broker attributes the manual peer (`ride/ride/peers.py`).
+The host discards both records when the summon ends (a denial, root teardown),
+so a stale token fails the launch loudly.
 """
 
 import json
@@ -20,7 +23,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from bro.workspace.paths import summon_dir
+from bro.workspace.paths import is_workspace_name, summon_dir
 
 
 class UnknownToken(Exception):
@@ -59,6 +62,10 @@ def _path(token: str) -> Path:
   return summon_dir() / 'pending' / f'{token}.json'
 
 
+def _claimed_path(token: str) -> Path:
+  return summon_dir() / 'claimed' / f'{token}.json'
+
+
 def write(pending: PendingSummon) -> None:
   path = _path(pending.token)
   path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,9 +94,11 @@ def peek(token: str) -> PendingSummon:
   return loaded
 
 
-def claim(token: str) -> PendingSummon:
+def claim(token: str, *, workspace: str) -> PendingSummon:
   """read and consume the token's record — the unlink decides a race, so exactly
-  one caller gets it. Raises `UnknownToken` when there is nothing to claim."""
+  one caller gets it — and record `workspace`, the name the claiming launch
+  runs the child in, as the token's claimed record. Raises `UnknownToken` when
+  there is nothing to claim."""
   pending = peek(token)
   try:
     _path(token).unlink()
@@ -97,10 +106,27 @@ def claim(token: str) -> PendingSummon:
     raise UnknownToken(
       f'pending manual summon {token!r} was just claimed by another launch'
     ) from None
+  claimed = _claimed_path(token)
+  claimed.parent.mkdir(parents=True, exist_ok=True)
+  claimed.write_text(json.dumps({'token': token, 'workspace': workspace}, ensure_ascii=False))
   return pending
 
 
+def claimed_workspace(token: str) -> Optional[str]:
+  """the workspace name the token's claiming launch recorded, or None while the
+  token is unclaimed."""
+  try:
+    data = json.loads(_claimed_path(token).read_text())
+  except FileNotFoundError:
+    return None
+  workspace = data.get('workspace')
+  if not isinstance(workspace, str) or not is_workspace_name(workspace):
+    raise ValueError(f'claimed summon record {token!r} carries no usable workspace name')
+  return workspace
+
+
 def discard(token: str) -> None:
-  """drop the token's record if it still exists — the host's cleanup when a
-  manual summon ends unclaimed."""
+  """drop the token's records if any still exist — the host's cleanup when a
+  manual summon ends."""
   _path(token).unlink(missing_ok=True)
+  _claimed_path(token).unlink(missing_ok=True)

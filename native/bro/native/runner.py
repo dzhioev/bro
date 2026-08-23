@@ -273,12 +273,11 @@ class Runner:
         raise
       if os.environ.get(SUMMONED_ENV) is not None:
         # a summoned interactive run announces its trail like a summoned run()
-        # would — the summoner's wait re-arms on it and its own summons need the
-        # workspace fact; an un-summoned conversation announces nothing (its
-        # channel is the enclosing session's, not its own)
+        # would — the summoner's wait re-arms on it; an un-summoned conversation
+        # announces nothing (its channel is the enclosing session's, not its own)
         channel = self._make_channel()
         if channel is not None:
-          channel.started(trail_id, workspace=os.environ.get('RIDE_WORKSPACE'))
+          channel.started(trail_id)
           channel.close()
     else:
       if observer is not None:

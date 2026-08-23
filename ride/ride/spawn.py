@@ -11,6 +11,7 @@ broker, then supervises the root until exit.
 """
 
 import asyncio
+import contextlib
 import json
 import socket
 from collections.abc import Collection
@@ -18,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from bro.artifact import GET, MINT
 from bro.base import log
 from bro.broker.brotocol import Message, Tag
 from bro.broker.dispatcher import PING, Broker, ping_handler
@@ -25,6 +27,7 @@ from bro.broker.runtime import Peer
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
+from bro.kinds import KindContext
 from bro.monitor import trail_pointer
 from bro.summon import (
   DEFAULT_HARNESS,
@@ -35,11 +38,13 @@ from bro.summon import (
   encode_may_summon,
 )
 from bro.workspace.git import resolve_head, resolve_ref
-from bro.workspace.paths import summon_dir, workspace_dir
+from bro.workspace.paths import summon_dir, workspace_dir, workspace_tree
+from ride.artifacts import ArtifactControl, ArtifactStore, view_mount
 from ride.flags import default_hold
 from ride.harness import ContainerExtras, get_harness
 from ride.inner import inner_command
 from ride.kinds import extension_kinds
+from ride.peers import Peers
 from ride.repository import Repository, as_repository
 from ride.scope import split_scope_overrides, summoned_credential_scope
 from ride.session import SessionSpec, record_resume_spec
@@ -66,7 +71,7 @@ from ride.workspace.store import ScopedSecrets, log_scoped_secrets
 @dataclass(frozen=True)
 class SummonLaunchSpec(LaunchSpec):
   """an authorized summon as a launch description, cheap to build on the broker
-  loop: the request fields plus the summoner's workspace path (resolved by the
+  loop: the request fields plus the summoner's workspace name (attributed by the
   control at request time — the source the child's default base is read from).
   `SummonSpawner` lowers it to a `DockerLaunchSpec` off-loop — the target-bro
   import, scoped-set computation, and base-ref resolution are all blocking work
@@ -76,11 +81,12 @@ class SummonLaunchSpec(LaunchSpec):
   the child's scope and the whole lists its recorded session spec, while the
   control already resolved the `@bro` halves into `may_summon`, the child's own
   effective allow-list — never the summoner's, which the child is not authorized
-  against."""
+  against. `share` names artifact refs the control already checked against the
+  summoner's own reach; the lowering links them into the child's view."""
 
   target: str
   prompt: str
-  parent_workspace: Path
+  parent: str
   summoner: Optional[dict[str, Any]]
   may_summon: tuple[str, ...]
   repo: Optional[Repository | Path] = None
@@ -88,6 +94,7 @@ class SummonLaunchSpec(LaunchSpec):
   hold: Optional[str] = None
   grant: tuple[str, ...] = ()
   revoke: tuple[str, ...] = ()
+  share: tuple[str, ...] = ()
   llm: Optional[str] = None
   harness: Optional[str] = None
 
@@ -137,6 +144,7 @@ def _child_launch(
   base_ref: Optional[str],
   summoner: Optional[dict[str, Any]],
   may_summon: tuple[str, ...],
+  artifacts_mount: str,
   container_runtime: ContainerRuntime,
 ) -> Launch:
   """a summoned child's container launch around its harness-composed inner
@@ -162,7 +170,7 @@ def _child_launch(
     forward_env=False,
     image=container_runtime.image,
     runtime_bundle_hash=container_runtime.bundle_hash,
-    extra_mounts=(*extras.mounts, *local_trails_mounts(scoped)),
+    extra_mounts=(*extras.mounts, *local_trails_mounts(scoped), artifacts_mount),
     repo=repository,
   )
 
@@ -171,6 +179,7 @@ def _lower_summon(
   launch: SummonLaunchSpec,
   workspace_name: str,
   container_runtime: ContainerRuntimeResolver,
+  artifacts: ArtifactStore,
 ) -> DockerLaunchSpec:
   """the blocking half of a summon spawn: compose the child's docker launch —
   the target's own scope, nothing inherited from the summoner, plus whatever the
@@ -181,10 +190,12 @@ def _lower_summon(
   summoner's own store), unless the request's `into` names a ref (resolved with
   the same fetch-if-unresolvable rule as `ride --into`, but an unresolvable ref
   fails the spawn rather than falling back). The child's workspace is recorded
-  throwaway, so its supervisor removes it once the child exits cleanly. Raises
-  on any unresolvable input — the spawner surfaces that as the correlated
-  `failed{reason: 'launch'}`; every fallible resolution precedes the workspace
-  record, so a failed spawn creates none."""
+  throwaway, so its supervisor removes it once the child exits cleanly. The
+  child's artifact view is created (and the request's `share` refs linked into
+  it) here, where the workspace name exists, before the mount that serves it.
+  Raises on any unresolvable input — the spawner surfaces that as the
+  correlated `failed{reason: 'launch'}`; every fallible resolution precedes the
+  workspace record, so a failed spawn creates none."""
   repo = None if launch.repo is None else as_repository(launch.repo)
   if launch.into is not None:
     if repo is None:
@@ -195,9 +206,10 @@ def _lower_summon(
   elif repo is None:
     base_ref = None
   else:
-    base_ref = resolve_head(repo.git_dir, launch.parent_workspace)
+    parent_tree = workspace_tree(launch.parent)
+    base_ref = resolve_head(repo.git_dir, parent_tree)
     if base_ref is None:
-      raise ValueError(f"cannot read the summoner's HEAD at {launch.parent_workspace}")
+      raise ValueError(f"cannot read the summoner's HEAD at {parent_tree}")
   spec = _child_session_spec(launch, workspace_name)
   harness = get_harness(spec.harness)
   auth_error = harness.preflight_auth(spec)
@@ -216,6 +228,8 @@ def _lower_summon(
   resolved_runtime = container_runtime.resolve()
   workspace = Workspace.ensure(workspace_name, repo, WorkspaceKind.CONTAINER, throwaway=True)
   record_resume_spec(workspace, spec)
+  artifacts.view(workspace_name)
+  artifacts.share(launch.share, to=workspace_name, by=launch.parent)
   run = _child_launch(
     spec,
     inner_command(spec, harness_flags=harness.inner_flags(spec)),
@@ -225,6 +239,7 @@ def _lower_summon(
     base_ref=base_ref,
     summoner=launch.summoner,
     may_summon=launch.may_summon,
+    artifacts_mount=view_mount(artifacts.session, workspace_name),
     container_runtime=resolved_runtime,
   )
   log_scoped_secrets(f'summoned {launch.target}', run.secrets, run.optional_secrets)
@@ -233,19 +248,33 @@ def _lower_summon(
 
 class SummonSpawner(Spawner):
   """lower a `SummonLaunchSpec` to its docker launch off-loop, then delegate to
-  the docker path (which runs its own blocking prepare off-loop too)."""
+  the docker path (which runs its own blocking prepare off-loop too). The
+  child's workspace name is noted into the peer registry first, on the loop —
+  the child cannot connect before its launch resolves, so attribution never
+  finds it unnamed."""
 
-  def __init__(self, docker: DockerSpawner, container_runtime: ContainerRuntimeResolver):
+  def __init__(
+    self,
+    docker: DockerSpawner,
+    container_runtime: ContainerRuntimeResolver,
+    peers: Peers,
+    artifacts: ArtifactStore,
+  ):
     self._docker = docker
     self._container_runtime = container_runtime
+    self._peers = peers
+    self._artifacts = artifacts
 
   async def spawn(self, launch: LaunchSpec, channel: Provisioned, exchange: str) -> ChildHandle:
     assert isinstance(launch, SummonLaunchSpec)
+    workspace_name = _workspace_name(channel.channel)
+    self._peers.note_workspace(exchange, workspace_name)
     lowered = await asyncio.to_thread(
       _lower_summon,
       launch,
-      _workspace_name(channel.channel),
+      workspace_name,
       self._container_runtime,
+      self._artifacts,
     )
     return await self._docker.spawn(lowered, channel, exchange)
 
@@ -282,13 +311,14 @@ def _root_lifecycle(control: SummonControl, workspace: Workspace):
   return _observe
 
 
-def _note_child_started():
+def _note_child_started(peers: Peers):
   """publish each summoned child's started trail id as its workspace's session
   trail pointer — what makes a failed child's surviving workspace resumable.
   Sees only child deliveries: a host-anchored delivery (the root's, no target
   peer) is filtered out, so no pointer is fabricated for a workspace that
-  doesn't exist. A spawned child's workspace is its channel-named
-  `broker-<channel>`; a manual child names its user-chosen one in the payload."""
+  doesn't exist. The name comes from the peer registry — a spawned child's
+  channel-named workspace or a manual child's claimed one — with the worker's
+  channel-derived name covering a non-summon exchange."""
 
   def _observe(source: Optional[Peer], target: Optional[Peer], message: Message) -> None:
     if message.type != Tag.PROGRESS or source is None or target is None:
@@ -296,10 +326,9 @@ def _note_child_started():
     trail_id = message.payload.get('trail_id')
     if not isinstance(trail_id, str) or len(trail_id) == 0:
       return
-    workspace = message.payload.get('workspace')
-    name = (
-      workspace if isinstance(workspace, str) and len(workspace) > 0 else _workspace_name(source)
-    )
+    name = peers.workspace_for(message.request) if message.request is not None else None
+    if name is None:
+      name = _workspace_name(source)
     trail_pointer.write(trail_pointer.session_pointer(workspace_dir(name)), trail_id)
 
   return _observe
@@ -333,7 +362,8 @@ def run_root_via_broker(
   broker loop until it exits, and return its exit code. The spawner is the composite over both ride launch modes plus the summon
   lowering, so any root — host process or container — can spawn docker children.
   The broker answers the reserved ping kind, so a session can verify its channel
-  (`broker request ping '{}'`), plus whatever kinds installed distributions
+  (`broker request ping '{}'`), the artifact kinds over the session store
+  (`ride.artifacts`), plus whatever kinds installed distributions
   contribute (`ride.kinds`), and consumes the root's own run lifecycle — the
   progress and result of the session's host-anchored exchange — into the host
   log. While an interactive root owns the terminal, host output goes to the
@@ -358,29 +388,37 @@ def run_root_via_broker(
     log.info('session may summon: %s', ', '.join(targets))
   host_log = workspace.host_log
   docker_spawner = DockerSpawner(host_log=host_log)
+  peers = Peers(workspace)
+  artifacts = ArtifactStore(workspace, root_in_container=isinstance(launch, DockerLaunchSpec))
   spawner = CompositeSpawner(
     {
       DockerLaunchSpec: docker_spawner,
       ProcessLaunchSpec: ProcessSpawner(host_log=host_log),
-      SummonLaunchSpec: SummonSpawner(docker_spawner, container_runtime),
+      SummonLaunchSpec: SummonSpawner(docker_spawner, container_runtime, peers, artifacts),
     }
   )
   control = SummonControl(
     allow_list=may_summon,
     credential_scope=credential_scope,
     workspace=workspace,
+    peers=peers,
+    artifacts=artifacts,
     status_file=summon_status_file(workspace.name),
     audit_file=summon_dir() / f'{workspace.name}.jsonl',
   )
+  artifact_control = ArtifactControl(artifacts, peers)
   facade = Broker(TcpServerTransport(broker_bind_hosts()), spawner)
   facade.on(PING, ping_handler)
   facade.on(SUMMON, control.handle)
-  for kind, handler in extension_kinds(workspace.tree).items():
+  facade.on(MINT, artifact_control.mint)
+  facade.on(GET, artifact_control.get)
+  for kind, handler in extension_kinds(KindContext(workspace.tree, artifact_control)).items():
     facade.on(kind, handler)
   facade.add_delivery_observer(control.observe_delivery)
-  facade.add_delivery_observer(_note_child_started())
+  facade.add_delivery_observer(_note_child_started(peers))
   facade.add_delivery_observer(_root_lifecycle(control, workspace))
   try:
-    return facade.run(launch)
+    with contextlib.closing(artifacts):
+      return facade.run(launch)
   finally:
     control.log_killed_in_flight()

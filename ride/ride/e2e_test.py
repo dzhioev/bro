@@ -7,7 +7,8 @@ so it is skipped inside a container), run as the gate's `broker_e2e` stage:
   run-tests --only broker_e2e   # or directly: pytest ride/ride/e2e_test.py [-k <scenario>]
 
 The matrix: A — broker-enabled default launch (channel provisioning, the
-entrypoint-owned broxy on the channel, ping round-trip through it); B — child
+entrypoint-owned broxy on the channel, ping round-trip through it, an artifact
+mint/get through the read-only view mount); B — child
 lifecycle over the real ports (spawn
 routing, early exit, timeout, teardown, channel-pinned identity); C — the
 `BROKER_DISABLED` kill-switch; D — degrade when broker is unimportable in the
@@ -86,7 +87,8 @@ _RUNTIME_PYTHON = '/var/ride/runtime/venv/bin/python'
 # scenario A root: verify the live channel (BROKER_CHANNEL rewritten by the
 # entrypoint from the upstream host channel to its broxy's own loopback one),
 # hand mid-run control to the harness, then run the ping round-trip over the
-# exact live path — through the broxy
+# exact live path — through the broxy — and an artifact mint/get proving the
+# read-only view mount serves stored bytes back
 _PROBE_A = """
 import os, sys, time
 from pathlib import Path
@@ -119,6 +121,23 @@ except TimeoutError:
 assert reply.type == 'result', reply.type
 assert reply.payload == {'outcome': 'ok', 'value': {'n': 1}}, reply.payload
 print('RIDE_E2E_PING_OK', flush=True)
+
+from bro.artifact import ArtifactError, get_artifact, mint_artifact
+Path('/workspace/out.bin').write_bytes(b'artifact-payload')
+try:
+  minted = mint_artifact('out.bin', timeout=30)
+  path = get_artifact(minted.ref, timeout=30)
+except ArtifactError as error:
+  print(f'RIDE_E2E_ARTIFACT_FAILED: {error}', flush=True)
+  sys.exit(9)
+content = Path(path).read_bytes()
+assert content == b'artifact-payload', content
+try:
+  Path(path).write_bytes(b'overwrite')
+except OSError:
+  print('RIDE_E2E_ARTIFACT_OK', flush=True)
+else:
+  print('RIDE_E2E_ARTIFACT_WRITABLE', flush=True)
 """
 
 # scenario B root: ping (with a forged identity claim in the payload), then spawn a
@@ -607,6 +626,14 @@ class TestBrokerEnabledLaunch:
     assert 'RIDE_E2E_PING_OK' in scenario_a.output and scenario_a.exit_code == 0, (
       f'a ping over the live launch path got no correlated reply — the launch-path broker '
       f'refuses typed requests (driver exit {scenario_a.exit_code})\n{scenario_a.output}'
+    )
+
+  def test_artifact_round_trip_through_the_read_only_view(self, scenario_a: LiveRun) -> None:
+    # mint over the live channel, read the ref back through the /var/ride/artifacts
+    # bind, and prove the mount is kernel-enforced read-only
+    assert 'RIDE_E2E_ARTIFACT_OK' in scenario_a.output and scenario_a.exit_code == 0, (
+      f'the artifact round trip failed over the live launch path '
+      f'(driver exit {scenario_a.exit_code})\n{scenario_a.output}'
     )
 
 

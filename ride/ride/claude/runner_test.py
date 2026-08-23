@@ -255,8 +255,8 @@ class _RecordingChannel:
   def __init__(self, events: list):
     self._events = events
 
-  def started(self, trail_id: str, *, workspace=None) -> None:
-    self._events.append(('started', trail_id, workspace))
+  def started(self, trail_id: str) -> None:
+    self._events.append(('started', trail_id))
 
   def completed(self, result, end_reason) -> None:
     self._events.append(('completed', result, end_reason))
@@ -289,9 +289,9 @@ class TestRunClaudeSummoned:
   ):
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-child')
     env = _fake_claude(tmp_path, 'echo "THE REPLY"\n')
-    assert ride_runner._run_claude_summoned([], env, 'w') == 0
+    assert ride_runner._run_claude_summoned([], env) == 0
     assert channel_events == [
-      ('started', 't-child', 'w'),
+      ('started', 't-child'),
       ('close',),
       ('completed', 'THE REPLY', 'ok'),
       ('close',),
@@ -305,9 +305,9 @@ class TestRunClaudeSummoned:
     monkeypatch.setattr(ride_runner, '_TRAIL_POLL_SECONDS', 0.05)
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-child')
     env = _fake_claude(tmp_path, 'sleep 0.4\necho LATE\n')
-    assert ride_runner._run_claude_summoned([], env, 'w') == 0
+    assert ride_runner._run_claude_summoned([], env) == 0
     assert channel_events == [
-      ('started', 't-child', 'w'),
+      ('started', 't-child'),
       ('close',),
       ('completed', 'LATE', 'ok'),
       ('close',),
@@ -317,14 +317,14 @@ class TestRunClaudeSummoned:
     self, tmp_path, session_state, channel_events
   ):
     env = _fake_claude(tmp_path, 'echo DONE\n')
-    assert ride_runner._run_claude_summoned([], env, 'w') == 0
+    assert ride_runner._run_claude_summoned([], env) == 0
     assert channel_events == [('completed', 'DONE', 'ok'), ('close',)]
 
   def test_failed_exit_emits_no_terminal_but_echoes(
     self, tmp_path, session_state, channel_events, capfd
   ):
     env = _fake_claude(tmp_path, 'echo PARTIAL\nexit 3\n')
-    assert ride_runner._run_claude_summoned([], env, 'w') == 3
+    assert ride_runner._run_claude_summoned([], env) == 3
     assert channel_events == []
     assert capfd.readouterr().out == 'PARTIAL\n'
 
@@ -337,7 +337,7 @@ class TestRunClaudeSummoned:
       'trap "exit 0" INT\ntrap "exit 5" TERM\nsleep 0.2\nkill -TERM $PPID\n'
       'while true; do sleep 0.05; done\n',
     )
-    assert ride_runner._run_claude_summoned([], env, 'w') == 0
+    assert ride_runner._run_claude_summoned([], env) == 0
     assert not [event for event in channel_events if event[0] == 'completed']
 
   def test_without_a_channel_the_run_still_completes(
@@ -346,7 +346,7 @@ class TestRunClaudeSummoned:
     monkeypatch.delenv('BROKER_CHANNEL', raising=False)
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-child')
     env = _fake_claude(tmp_path, 'echo OK\n')
-    assert ride_runner._run_claude_summoned([], env, 'w') == 0
+    assert ride_runner._run_claude_summoned([], env) == 0
     assert capfd.readouterr().out == 'OK\n'
 
 
@@ -363,10 +363,10 @@ class TestRunClaudeSummonedInteractive:
 
     monkeypatch.setattr(ride_runner, 'run_interactive', _linger)
     transcripts = tmp_path / 'projects'
-    assert ride_runner._run_claude_summoned_interactive([], {}, 'my-manual', transcripts) == 0
+    assert ride_runner._run_claude_summoned_interactive([], {}, transcripts) == 0
     # the terminal belongs to the `answer` service tool; an exit without it
     # surfaces to the summoner as the channel-gone failure
-    assert channel_events == [('started', 't-manual', 'my-manual'), ('close',)]
+    assert channel_events == [('started', 't-manual'), ('close',)]
 
   @pytest.fixture
   def channel_events(self, monkeypatch) -> list:
@@ -405,7 +405,7 @@ class TestSummonedSession:
         'ride.claude.runner._run_claude_summoned_interactive', return_value=7
       ) as interactive:
         assert ride_runner.run_in_place(_spec()) == 7
-      assert interactive.call_args.args[2] == 'w'
+      assert interactive.call_args.args[2] == h.projects_dir
       h.run_claude.assert_not_called()
 
   def test_summoner_attribution_is_dropped_from_claudes_env(self, monkeypatch, tmp_path):

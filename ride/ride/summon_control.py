@@ -24,8 +24,9 @@ Authorization is per-peer. The root follows the launch-computed effective list
 above; a summoned child follows the list its own summon request resolved — its
 bro's static MRO-collected `may_summon` seeds under the request's `@bro`
 grant/revoke overrides — recorded at the authorized spawn. The control attributes
-the requesting peer to the bro it spawned for it (the dispatcher's worker index
-plus this control's own spawn records; nothing is read from the wire), and a
+the requesting peer to the bro it spawned for it — the workspace half of that
+attribution is the shared peer registry (`ride/ride/peers.py`), the summon half
+this control's own spawn records; nothing is read from the wire — and a
 peer it cannot attribute is denied. Provenance rides the same attribution:
 a spawned child's `summoned_by` names the requester's trail — the root's from the
 session's current-trail pointer (the claude recorder publishes it;
@@ -53,13 +54,16 @@ credential half against the child's own computed scope — a bad override fails
 the launch — and records the whole lists in the child's session spec. `harness`
 and `llm` are child-facing: they select the child's driving loop and recipe,
 ride its recorded session spec and inner argv, and shape its computed scope.
+A summon's `share` names artifact refs handed down to the child, under the same
+bound applied here on the loop — the requester may only share what it can
+itself read (`ride/ride/artifacts.py`) — while the view linking rides the spawn
+lowering, where the child's workspace exists.
 
-The same per-request attribution also names the requester's workspace (the root's
-own, a child's from its `broker-<channel>` clone), threaded into
-the spawn as the child's base-ref inheritance source: a summoned child bases on
-its summoner's workspace HEAD unless the request's `into` overrides. The HEAD
-read itself is blocking git work and runs off-loop in the spawner
-(`ride/ride/spawn.py:_lower_summon`); the handler only resolves the path.
+The same per-request attribution also names the requester's workspace, threaded
+into the spawn as the child's base-ref inheritance source: a summoned child
+bases on its summoner's workspace HEAD unless the request's `into` overrides.
+The HEAD read itself is blocking git work and runs off-loop in the spawner
+(`ride/ride/spawn.py:_lower_summon`); the handler only names the workspace.
 
 Both state files live under `bro.workspace.paths.summon_dir`, keyed by the
 workspace name: `<name>.jsonl` (audit) and `<name>.status.json` (live status).
@@ -76,17 +80,19 @@ imports stay function-local: this module sits on the launch path before the
 import json
 import time
 from collections.abc import Callable, Collection, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from bro import summon_status
+from bro.artifact import is_ref
 from bro.base import credentials, log
 from bro.summon import DEFAULT_HARNESS, DEFAULT_TIMEOUT
 from bro.summon_status import STATUS_ENV
-from bro.workspace.paths import CONTAINER_SUMMON_ROOT, summon_dir, workspace_tree
+from bro.workspace.paths import CONTAINER_SUMMON_ROOT, summon_dir
 from ride import pending_summon
 from ride.harness import HARNESS_NAMES, get_harness
+from ride.peers import PeerIdentity, Peers, UnattributablePeer
 from ride.scope import split_scope_overrides, summoned_credential_scope
 from ride.workspace.model import Workspace
 
@@ -95,6 +101,7 @@ if TYPE_CHECKING:
   from bro.broker.dispatcher import Dispatcher
   from bro.broker.runtime import Peer
   from bro.broker.transport import Provisioned
+  from ride.artifacts import ArtifactStore
 
 __all__ = [
   'STATUS_ENV',
@@ -116,6 +123,7 @@ _ARGS_KEYS = frozenset(
     'index',
     'grant',
     'revoke',
+    'share',
     'llm',
     'harness',
     'manual',
@@ -248,6 +256,10 @@ def _validate(args: dict[str, Any]) -> Optional[str]:
       or not all(isinstance(value, str) and len(value) > 0 for value in args[key])
     ):
       return f'summon {key!r} must be a list of non-empty names'
+  if 'share' in args and (
+    not isinstance(args['share'], list) or not all(is_ref(value) for value in args['share'])
+  ):
+    return "summon 'share' must be a list of artifact refs (sha256:<64 hex digits>)"
   llm = args.get('llm')
   if llm is not None:
     if not isinstance(llm, str):
@@ -265,6 +277,8 @@ def _validate(args: dict[str, Any]) -> Optional[str]:
     refused = sorted(key for key in _LAUNCH_OWNED_KEYS if key in args)
     if len(refused) > 0:
       return f"a manual summon's launch owns {', '.join(refused)}; drop the field(s)"
+    if 'share' in args:
+      return "a manual summon's container is not launched by the host, so 'share' cannot be honored"
   return None
 
 
@@ -281,17 +295,9 @@ class _ActiveSummon:
   revoke: list[str]
   llm: Optional[str]
   harness: Optional[str]
+  share: list[str] = field(default_factory=list)  # artifact refs handed down, audited
   manual: bool = False  # a user-launched child attached over an expected channel
   trail_id: Optional[str] = None
-  # a manual child announces its user-chosen workspace in its `started` payload;
-  # a spawned child's is always its channel-named `broker-<channel>`
-  workspace: Optional[str] = None
-
-
-class _Unattributable(Exception):
-  """a requesting peer whose summon identity cannot be resolved (or, from the
-  credentials thunk, whose credential scope cannot). The message is the denial
-  reason."""
 
 
 @dataclass(frozen=True)
@@ -303,8 +309,9 @@ class _Requester:
   `list_description` names the allow-list in denial messages — the two lists have
   different widening levers (relaunching the session vs the summon that spawned
   the peer, or seeding its bro), and the denial reason should point at the right
-  one. `workspace` is the requester's own
-  workspace path — the base-ref inheritance source for the children it summons.
+  one. `identity` is the peer's workspace attribution (`ride/ride/peers.py`) —
+  the name bounds what it may share, the tree is the base-ref inheritance source
+  for the children it summons.
   `credentials` reads the peer's own credential scope, the bound on what it may
   grant; it is a thunk because computing a summoned peer's scope is real work
   (bro import + registry read) that only a request carrying a credential grant
@@ -316,7 +323,7 @@ class _Requester:
   summoned_by: Optional[dict[str, Any]]
   depth: int
   list_description: str
-  workspace: Path
+  identity: PeerIdentity
 
 
 def _credential_refusal(
@@ -336,7 +343,7 @@ def _credential_refusal(
   credentials are what its allow-list entry sanctions. A child scope that cannot
   be computed at all is a refusal of its own, carrying the reason.
 
-  Raises `_Unattributable` when the requester's own scope cannot be read."""
+  Raises `UnattributablePeer` when the requester's own scope cannot be read."""
   widening: set[str] = set()
   if harness_name is not None or llm is not None:
     try:
@@ -382,6 +389,8 @@ class SummonControl:
     allow_list: Collection[str],
     credential_scope: Collection[str] = (),
     workspace: Workspace,
+    peers: Peers,
+    artifacts: 'ArtifactStore',
     status_file: Path,
     audit_file: Path,
   ):
@@ -389,6 +398,8 @@ class SummonControl:
     # the root session's own two scopes bound what its summons may grant a child
     self._credential_scope = set(credential_scope)
     self._workspace = workspace
+    self._peers = peers
+    self._artifacts = artifacts
     self._status_file = status_file
     self._audit_file = audit_file
     self._root_trail_id: Optional[str] = None
@@ -409,7 +420,7 @@ class SummonControl:
     args = message.args
     try:
       requester = self._requester(context, peer)
-    except _Unattributable as reason:
+    except UnattributablePeer as reason:
       self._deny(context, peer, message, None, f'summon denied: {reason}')
       return
     error = _validate(args)
@@ -469,10 +480,27 @@ class SummonControl:
         harness_name=harness_name,
         llm=llm,
       )
-    except _Unattributable as reason:
+    except UnattributablePeer as reason:
       refusal = str(reason)
     if refusal is not None:
       self._deny(context, peer, message, requester.summoner, f'summon denied: {refusal}')
+      return
+    # a summoner can only hand down refs it may read itself; the denial is as
+    # uniform as the read path's — naming a ref that does not exist and naming
+    # one outside the requester's reach are indistinguishable
+    share = args.get('share', [])
+    unreachable = sorted(
+      ref for ref in share if not self._artifacts.reachable(ref, requester.identity.workspace)
+    )
+    if len(unreachable) > 0:
+      self._deny(
+        context,
+        peer,
+        message,
+        requester.summoner,
+        f'summon denied: cannot share artifact(s) the summoner cannot reach: '
+        f'{", ".join(unreachable)}',
+      )
       return
     prompt = args['prompt']
     summoned_by = requester.summoned_by
@@ -481,6 +509,7 @@ class SummonControl:
       summoned_by = {**summoned_by, 'step_id': step_id}
       if args.get('index') is not None:
         summoned_by['index'] = args['index']
+    self._peers.note_summon(context, peer, message.exchange, manual=args.get('manual', False))
     if args.get('manual', False):
       self._expect_manual(
         context,
@@ -498,7 +527,7 @@ class SummonControl:
       SummonLaunchSpec(
         target=target,
         prompt=prompt,
-        parent_workspace=requester.workspace,
+        parent=requester.identity.workspace,
         repo=self._workspace.repository,
         summoner=summoned_by,
         may_summon=tuple(sorted(child_allow_list)),
@@ -506,6 +535,7 @@ class SummonControl:
         hold=args.get('hold'),
         grant=tuple(grant),
         revoke=tuple(revoke),
+        share=tuple(share),
         llm=llm,
         harness=harness_name,
       ),
@@ -522,6 +552,7 @@ class SummonControl:
       allow_list=child_allow_list,
       grant=list(grant),
       revoke=list(revoke),
+      share=list(share),
       llm=llm,
       harness=harness_name,
     )
@@ -568,7 +599,7 @@ class SummonControl:
           channel_token=provisioned.host_endpoint.token,
           target=target,
           prompt=prompt,
-          parent_workspace=str(requester.workspace),
+          parent_workspace=str(requester.identity.tree),
           may_summon=tuple(sorted(child_allow_list)),
           grant=tuple(grant),
           revoke=tuple(revoke),
@@ -610,9 +641,10 @@ class SummonControl:
   def _requester(self, context: 'Dispatcher', peer: 'Peer') -> '_Requester':
     """resolve the requesting peer's summon identity: the root follows the
     session's launch-computed effective allow-list; a summoned child follows the
-    list its own summon resolved, attributed through the dispatcher's worker
-    index and this control's spawn records. Raises `_Unattributable` for a
-    peer that cannot be attributed a bro."""
+    list its own summon resolved, attributed through the shared peer registry
+    (`ride/ride/peers.py`) plus this control's spawn records. Raises
+    `UnattributablePeer` for a peer that cannot be attributed a bro."""
+    identity = self._peers.identity(context, peer)
     if peer == context.root:
       return _Requester(
         allow_list=self._allow_list,
@@ -621,23 +653,12 @@ class SummonControl:
         summoned_by=self._root_summoned_by(),
         depth=0,
         list_description="this session's summon allow-list",
-        workspace=self._workspace.tree,
+        identity=identity,
       )
     exchange = context.workers.get(peer)
     record = self._active.get(exchange) if exchange is not None else None
     if record is None:
-      raise _Unattributable('cannot attribute the requesting peer to a bro')
-    # function-local like SummonLaunchSpec above: ride.spawn imports broker at
-    # module level (ride/ride/workspace/AGENTS.md, "Lazy broker import")
-    from ride.spawn import _workspace_name
-
-    if record.manual and record.workspace is None:
-      # the user-chosen workspace arrives in the child's `started`; before that
-      # there is no base-ref source to inherit from
-      raise _Unattributable(
-        'the manual child has not announced its session start yet; retry shortly'
-      )
-    workspace_name = record.workspace if record.workspace is not None else _workspace_name(peer)
+      raise UnattributablePeer('cannot attribute the requesting peer to a bro')
     return _Requester(
       allow_list=set(record.allow_list),
       credentials=lambda: self._child_credentials(record),
@@ -645,7 +666,7 @@ class SummonControl:
       summoned_by={'trail_id': record.trail_id} if record.trail_id is not None else None,
       depth=record.depth,
       list_description=f"{record.target}'s summon allow-list",
-      workspace=workspace_tree(workspace_name),
+      identity=identity,
     )
 
   def _child_credentials(self, record: _ActiveSummon) -> set[str]:
@@ -654,7 +675,7 @@ class SummonControl:
     if record.manual:
       # a manual child's actual scope was computed by its own launch, from flags
       # this control never sees — there is no record to recompute it from
-      raise _Unattributable(
+      raise UnattributablePeer(
         "a manual child's credential scope is not attributable; grant the "
         'credential at its own launch instead'
       )
@@ -670,7 +691,7 @@ class SummonControl:
         revoke=revoke,
       )
     except ValueError as error:
-      raise _Unattributable(str(error)) from error
+      raise UnattributablePeer(str(error)) from error
 
   def _root_summoned_by(self) -> Optional[dict[str, Any]]:
     # the root's trail attribution source, per publication channel
@@ -726,12 +747,9 @@ class SummonControl:
       return
     if message.type == Tag.PROGRESS:
       trail_id = message.payload.get('trail_id')
-      if trail_id is None:
+      if not isinstance(trail_id, str) or len(trail_id) == 0:
         return  # the acceptance progress announces no start
       record.trail_id = trail_id
-      workspace = message.payload.get('workspace')
-      if isinstance(workspace, str) and len(workspace) > 0:
-        record.workspace = workspace
       log.info('summon: %s started (trail %s)', record.target, record.trail_id)
       self._write_status()
       return
@@ -798,6 +816,8 @@ class SummonControl:
       entry['grant'] = record.grant
     if len(record.revoke) > 0:
       entry['revoke'] = record.revoke
+    if len(record.share) > 0:
+      entry['share'] = record.share
     if record.harness is not None:
       entry['harness'] = record.harness
     if record.manual:

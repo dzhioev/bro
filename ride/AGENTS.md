@@ -35,12 +35,17 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   The channel listener's bind hosts are derived here:
   loopback, plus the docker bridge gateway when that is an address of this host.
 - `ride/kinds.py` — the `bro.broker_kinds` entry-point group:
-  broker request kinds contributed by installed distributions, each entry a factory `(workspace_tree: Path) -> RequestHandler`, loaded into every root broker beside the built-ins.
+  broker request kinds contributed by installed distributions, each entry a factory `(context: bro.kinds.KindContext) -> RequestHandler`, loaded into every root broker beside the built-ins.
+- `ride/peers.py` — peer → workspace attribution for one broker root:
+  the summon records that name each peer's workspace and the chain of summoners above it, shared by summon and artifacts.
+- `ride/artifacts.py` — the session artifact store and the `artifact.mint` / `artifact.get` kinds:
+  reflink-or-copy ingest into content-addressed objects, per-peer view directories behind the read-only `/var/ride/artifacts` mounts, the sharing rules with their uniform denial, the byte cap, and the JSONL audit beside the store.
+  The peer wire and CLI are the framework's `bro/artifact.py`.
 - `ride/summon_control.py` — summon host authorization, allow-list resolution, audit/status bookkeeping, and request lifecycle
   — the manual variant included, registered as an expected external peer with its pending record.
   The peer wire and self-contained CLI are the framework's `bro/summon.py`.
 - `ride/pending_summon.py` — pending manual summons:
-  the record a launch token resolves to, written by the control and one-shot-claimed by the `--summoned` launch.
+  the record a launch token resolves to, written by the control and one-shot-claimed by the `--summoned` launch, whose claim records the child's workspace name — the attribution source for the manual peer.
 - `ride/trails.py` — local-trails mounts for launch descriptions whose computed scope records locally.
 - `ride/identity.py` — managed-session git identity.
 - `ride/harness.py`

@@ -11,11 +11,18 @@ from bro.broker.dispatcher import Dispatcher
 from bro.broker.job import CommandJob
 from bro.broker.transport import ChannelID
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
+from bro.kinds import ArtifactResolver, KindContext
 from bro.local import benchmark_job
 
 TIMEOUT = 5.0
 CONFIG = 'benchmark/bro/benchmark/job.yaml'
 ROOT = 'root-peer'
+
+
+def _kind(tree: Path):
+  return benchmark_job.benchmark_kind(
+    KindContext(workspace_tree=tree, artifacts=cast(ArtifactResolver, object()))
+  )
 
 
 @pytest.fixture
@@ -50,7 +57,7 @@ def _request(args: dict) -> Message:
 
 def _denial(tree, args, *, peer=ROOT, context=None) -> str:
   context = context if context is not None else FakeContext()
-  benchmark_job.benchmark_kind(tree)(cast(Dispatcher, context), peer, _request(args))
+  _kind(tree)(cast(Dispatcher, context), peer, _request(args))
   assert context.jobs == []
   [(target, payload)] = context.replies
   assert target == peer
@@ -62,7 +69,7 @@ class TestBenchmarkKind:
   def test_root_request_starts_the_job(self, tree, monkeypatch):
     monkeypatch.setenv('BENCH_SENTINEL', 'yes')
     context = FakeContext()
-    handle = benchmark_job.benchmark_kind(tree)
+    handle = _kind(tree)
     handle(cast(Dispatcher, context), ROOT, _request({'config': CONFIG}))
     assert context.replies == []
     [(command, requester, timeout)] = context.jobs
@@ -84,15 +91,13 @@ class TestBenchmarkKind:
 
   def test_the_job_runs_outside_the_workspace_tree(self, tree):
     context = FakeContext()
-    benchmark_job.benchmark_kind(tree)(
-      cast(Dispatcher, context), ROOT, _request({'config': CONFIG})
-    )
+    _kind(tree)(cast(Dispatcher, context), ROOT, _request({'config': CONFIG}))
     [(command, _, _)] = context.jobs
     assert not Path(command.cwd).resolve().is_relative_to(tree.resolve())
 
   def test_request_timeout_bounds_the_job(self, tree):
     context = FakeContext()
-    handle = benchmark_job.benchmark_kind(tree)
+    handle = _kind(tree)
     handle(cast(Dispatcher, context), ROOT, _request({'config': CONFIG, 'timeout': 60}))
     [(_, _, timeout)] = context.jobs
     assert timeout == 60.0

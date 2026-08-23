@@ -847,14 +847,13 @@ class TestRunLifecycle:
     assert transport.sent[1].payload == {'outcome': 'ok', 'value': 'the answer'}
 
   @pytest.mark.asyncio
-  async def test_summoned_send_announces_started_with_the_workspace(self, monkeypatch):
+  async def test_summoned_send_announces_started(self, monkeypatch):
     monkeypatch.setenv('RIDE_SUMMONED', '1')
-    monkeypatch.setenv('RIDE_WORKSPACE', 'my-manual')
     channel, transport = _make_channel()
     runner = _ChannelRunner(channel, _StubLLM(response='chat'))
     assert await runner.send('hi', tracker=_TrailIDTracker(), surface='test') == 'chat'
     assert [m.type for m in transport.sent] == ['progress']
-    assert transport.sent[0].payload == {'trail_id': 'trail-42', 'workspace': 'my-manual'}
+    assert transport.sent[0].payload == {'trail_id': 'trail-42'}
     assert transport.closed is True
     # only the conversation's first send announces
     assert await runner.send('more', surface='test') == 'chat'

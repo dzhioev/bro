@@ -70,7 +70,9 @@ bro-local = { workspace = true }
 
 [project.scripts]
 # bro
+"artifact" = "bro._entrypoints:bro_artifact"
 "bro-shell-dir" = "bro._entrypoints:bro_shell"
+"bro.artifact" = "bro._entrypoints:bro_artifact"
 "bro.base.credentials" = "bro._entrypoints:bro_base_credentials"
 "bro.base.time-util" = "bro._entrypoints:bro_base_time_util"
 "bro.broker.broxy" = "bro._entrypoints:bro_broker_broxy"
@@ -91,6 +93,7 @@ bro-local = { workspace = true }
 "usage" = "bro._entrypoints:bro_llm_usage"
 
 [project.entry-points."bro.session_commands"]
+"artifact" = "bro._entrypoints:bro_artifact"
 "broker" = "bro._entrypoints:bro_broker_cli"
 "broxy" = "bro._entrypoints:bro_broker_broxy"
 "credentials" = "bro._entrypoints:bro_base_credentials"

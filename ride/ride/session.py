@@ -183,9 +183,8 @@ def _summoned_env(
   summoned: pending_summon.PendingSummon, spec: SessionSpec, address: str
 ) -> dict[str, str]:
   """the env that makes a launch the manual summon child the token names: the
-  summoner's channel, the exchange the child answers (its token), the
-  summoned-child facts, and the workspace name the session announces in its
-  `started` (the base-ref source for its own summons)."""
+  summoner's channel, the exchange the child answers (its token), and the
+  summoned-child facts."""
   env = {
     'BROKER_CHANNEL': address,
     'BROKER_EXCHANGE': summoned.token,
@@ -286,7 +285,7 @@ def _container_session(
   if summoned is not None:
     try:
       return run_summoned_in_container(
-        launch, workspace, claim=lambda: pending_summon.claim(summoned.token)
+        launch, workspace, claim=lambda: pending_summon.claim(summoned.token, workspace=spec.name)
       )
     except pending_summon.UnknownToken as error:
       log.error('%s', error)
@@ -345,7 +344,7 @@ def _host_session(
     # and the token is claimed only once nothing fallible is left before the run
     runner_env.update(_summoned_env(summoned, spec, summoned.address()))
     try:
-      pending_summon.claim(summoned.token)
+      pending_summon.claim(summoned.token, workspace=spec.name)
     except pending_summon.UnknownToken as error:
       log.error('%s', error)
       return 1
