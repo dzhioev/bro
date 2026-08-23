@@ -426,7 +426,7 @@ both the outer launch and the snapshot's in-place runner apply it idempotently, 
 The dir is provisioned with exactly the container's session state
 — nothing else from the host `~/.claude` (settings, hooks, permissions, user CLAUDE.md, custom agents) enters the session:
 
-- `.claude.json` — seeded once from the same explicit config as the container's (onboarding done, marketplace auto-install marked done, auto-updates off, host account identity), with trust entries for the worktree path *and* the main repo root
+- `.claude.json` — seeded once from the same explicit config as the container's (onboarding done, marketplace auto-install marked done, host account identity), with trust entries for the worktree path *and* the main repo root
   — claude resolves a linked worktree's trust against the repository root, so the worktree entry alone still prompts
   — and `installMethod` carried from the host's own config (the session runs the host claude, not the image's npm install).
 - `settings.json` — the same constructed config container mode writes (one `_provision_session_claude_dir` serves both modes, rewriting it each launch), minus the container-only bypass-permissions pre-accept
@@ -558,7 +558,7 @@ The container does **not** bind-mount `~/.claude.json` from the host, nor does t
 Instead, the launch provisions a container-private `.claude.json` in the workspace's `claude/` dir, which reaches claude inside the mounted dir that `CLAUDE_CONFIG_DIR` names (`ride/ride/claude/claude_config.py:container_claude_state`
 — claude state is `ride along` launch data on the neutral `Launch`, so a bro-harness container, which runs no Claude, mounts no claude state at all), while session auth comes from the `claude_code` token (below):
 
-- `claude/.claude.json` — constructed once per workspace from an explicit config (`installMethod: global` to match the image's `npm i -g` install, `hasCompletedOnboarding`, `autoUpdates: false`,
+- `claude/.claude.json` — constructed once per workspace from an explicit config (`installMethod: global` to match the image's `npm i -g` install, `hasCompletedOnboarding`,
   `projects["/workspace"].hasTrustDialogAccepted: true` so guided sessions skip the folder-trust prompt,
   and `officialMarketplaceAutoInstallAttempted: true` and `officialMarketplaceAutoInstalled: true` so claude doesn't re-fetch the official plugin marketplace at startup
   — it's baked into the image) plus the host's account-identity fields (`oauthAccount`, `userID`) so the session starts logged in.
@@ -579,7 +579,9 @@ Instead, the launch provisions a container-private `.claude.json` in the workspa
   both outrank `CLAUDE_CODE_OAUTH_TOKEN` in claude's credential precedence, so a value leaking in from the launching shell would silently hijack the session's auth.
 - `claude/settings.json` — constructed fresh each launch (not mounted from the host), holding only UX prefs (spinner verbs, reduced motion, feedback-survey opt-out),
   an explicit `enabledPlugins` opt-in for the `pyright-lsp` Python language server (the host plugin set no longer leaks in, so the container enables it itself),
-  a `cleanupPeriodDays` pin keeping transcripts forever (they back the session recording), an `autoMemoryEnabled: false` opt-out of claude's default-on auto-memory, and `skipDangerousModePermissionPrompt: true`
+  a `cleanupPeriodDays` pin keeping transcripts forever (they back the session recording), an `autoMemoryEnabled: false` opt-out of claude's default-on auto-memory,
+  an `env` block turning claude's auto-updater off (`DISABLE_AUTOUPDATER`, so no session replaces the claude install it runs — the image's here, the user's own on host),
+  and `skipDangerousModePermissionPrompt: true`
   — the workspace is an isolated clone, so the `--dangerously-skip-permissions` acceptance dialog is pre-answered (container sessions only; a host worktree keeps the dialog).
   The plugin is *installed* at image-build time (`ride/ride/setup/container/Dockerfile`) and staged at `/opt/claude-plugins-seed`, which the entrypoint copies into the bind-mounted `~/.claude/plugins` on first run
   — enabling alone isn't enough, claude would otherwise prompt the "LSP Plugin Recommendation" on `.py` files.

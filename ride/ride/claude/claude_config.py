@@ -96,14 +96,13 @@ _SESSION_SETTINGS_JSON: dict = {
   'cleanupPeriodDays': 36500,
   # claude's own default is on
   'autoMemoryEnabled': False,
+  'env': {'DISABLE_AUTOUPDATER': '1'},
 }
 
 # the explicit per-session ~/.claude.json base: no onboarding prompts, no
-# marketplace re-fetch, no auto-updates racing the host install. per-mode fields
-# (installMethod, the trusted project entry) and the host account identity are
-# layered on in _seed_claude_json.
+# marketplace re-fetch. per-mode fields (installMethod, the trusted project
+# entry) and the host account identity are layered on in _seed_claude_json.
 _SESSION_CLAUDE_JSON: dict = {
-  'autoUpdates': False,
   'hasCompletedOnboarding': True,
   # the official plugin marketplace is provisioned out of band (the plugin seed
   # — image stage in a container, first-run copy of the host claude install's
@@ -198,9 +197,8 @@ def container_claude_state(workspace: Path) -> tuple[list[str], dict[str, str]]:
 
   the mount carries the host-side state dir into the container, where the state
   must not live: the container is `--rm`'d at exit while the workspace outlives
-  it. the env names that dir to claude and turns off claude's auto-updater (the
-  image owns the install) and its installation checks (doctor would flag the
-  absent host-native ~/.local/bin/claude).
+  it. the env names that dir to claude and turns off its installation checks
+  (doctor would flag the absent host-native ~/.local/bin/claude).
 
   the workspace is an isolated clone, so the `--dangerously-skip-permissions`
   acceptance dialog is pre-answered."""
@@ -213,7 +211,6 @@ def container_claude_state(workspace: Path) -> tuple[list[str], dict[str, str]]:
   mounts = [f'{claude_dir}:{_CONTAINER_CLAUDE_DIR}']
   env = {
     CLAUDE_CONFIG_DIR_ENV: _CONTAINER_CLAUDE_DIR,
-    'DISABLE_AUTOUPDATER': '1',
     'DISABLE_INSTALLATION_CHECKS': '1',
   }
   return mounts, env

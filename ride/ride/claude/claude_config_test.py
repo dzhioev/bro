@@ -168,7 +168,6 @@ class TestContainerClaudeState:
     assert mounts == [f'{claude_dir}:/home/ride/.claude']
     assert env == {
       'CLAUDE_CONFIG_DIR': '/home/ride/.claude',
-      'DISABLE_AUTOUPDATER': '1',
       'DISABLE_INSTALLATION_CHECKS': '1',
     }
 
@@ -182,6 +181,10 @@ class TestContainerClaudeState:
     settings_file = tmp_path / 'ws' / 'claude' / 'settings.json'
     settings = json.loads(settings_file.read_text())
     assert settings['skipDangerousModePermissionPrompt'] is True
+
+
+def test_session_settings_turn_off_the_claude_auto_updater():
+  assert ride_claude_config._SESSION_SETTINGS_JSON['env'] == {'DISABLE_AUTOUPDATER': '1'}
 
 
 class TestPluginSeedContract:
