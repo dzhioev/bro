@@ -42,13 +42,18 @@ from bro.trails.lineage import LineageDecision, walk_header_chain
 # even when the history copy is intact
 _VERIFY_TAIL_UUIDS = 20
 
+# how far back a candidate probe reaches: wide enough to span what claude
+# appends between a recorder's polls, so the parent's newest rows are still
+# inside the window at the tick that adopts the transcript
+_PROBE_TAIL_UUIDS = 64
+
 
 class LineageIndex(Protocol):
   """The row reads a store offers a lineage resolver, always in process."""
 
   def get_trail(self, trail_id: str) -> dict: ...
 
-  def find_segment_steps(self, segments: set[str], uuids: set[str]) -> list[dict]: ...
+  def find_segment_trails(self, segments: set[str], uuids: set[str]) -> list[dict]: ...
 
   def get_step_uuids(self, trail_id: str, *, through: Optional[int] = None) -> list[dict]: ...
 
@@ -95,14 +100,12 @@ def resolve(evidence: dict, index: LineageIndex) -> LineageDecision:
   parsed = _parse_evidence(evidence)
   if len(parsed.uuid_lines) == 0:
     return LineageDecision(adopt=False, reason='transcript carries no record yet')
-  matches = index.find_segment_steps(
-    {parsed.segment, *parsed.related}, {uuid for _, uuid in parsed.uuid_lines}
-  )
-  for header, steps in _candidates(matches, parsed):
+  for header in _candidates(parsed, index):
+    uuid_lines = [(row['step_id'], row['uuid']) for row in index.get_step_uuids(header['id'])]
     if header.get('native', {}).get('segment') == parsed.segment:
-      decision = _continue_segment(header, steps, parsed, index)
+      decision = _continue_segment(header, uuid_lines, parsed, index)
     else:
-      decision = _continue_copy(header, parsed, index)
+      decision = _continue_copy(header, uuid_lines, parsed, index)
     if decision is not None:
       return decision
   return LineageDecision(reason='no verified parent')
@@ -137,47 +140,47 @@ def _parse_evidence(evidence: dict) -> _Evidence:
   )
 
 
-def _candidates(
-  matches: list[dict], evidence: _Evidence
-) -> list[tuple[dict, list[tuple[int, int]]]]:
-  """Trails holding any of the evidence's uuids, newest first, each with the
-  (line, step_id) pairs that matched."""
-  line_by_uuid = evidence.line_by_uuid()
-  found: dict[str, tuple[dict, list[tuple[int, int]]]] = {}
-  for match in matches:
-    trail_id = match['trail_id']
-    step_id = match['step_id']
-    uuid = match['uuid']
-    header = match['header']
-    if (
-      not isinstance(trail_id, str)
-      or not isinstance(step_id, int)
-      or isinstance(step_id, bool)
-      or not isinstance(header, dict)
-      or uuid not in line_by_uuid
-    ):
-      raise ValueError(f'malformed lineage index match: {match!r}')
-    entry = found.setdefault(trail_id, (header, []))
-    entry[1].append((line_by_uuid[uuid], step_id))
-  return sorted(found.values(), key=lambda item: item[0]['started_at'], reverse=True)
+def _candidates(evidence: _Evidence, index: LineageIndex) -> list[dict]:
+  """The trails that could be this transcript's parent, newest first: the ones
+  recording its segment or a sibling and holding one of its records. Both
+  continuations are anchored by the parent's newest rows — a same-segment parent
+  ends where the resume begins, and a copy's chain records end where the new
+  turns start — so the transcript's trailing uuids name the parent whenever one
+  exists, and the rest are asked about only when they name nobody."""
+  segments = {evidence.segment, *evidence.related}
+  uuids = [uuid for _, uuid in evidence.uuid_lines]
+  for probe in (uuids[-_PROBE_TAIL_UUIDS:], uuids[:-_PROBE_TAIL_UUIDS]):
+    if len(probe) == 0:
+      continue
+    headers = index.find_segment_trails(segments, set(probe))
+    if len(headers) == 0:
+      continue
+    for header in headers:
+      if not isinstance(header.get('id'), str) or not isinstance(header.get('started_at'), str):
+        raise ValueError(f'malformed lineage index trail: {header!r}')
+    return sorted(headers, key=lambda header: header['started_at'], reverse=True)
+  return []
 
 
 def _continue_segment(
-  header: dict, steps: list[tuple[int, int]], evidence: _Evidence, index: LineageIndex
+  header: dict, uuid_lines: list[tuple[int, str]], evidence: _Evidence, index: LineageIndex
 ) -> Optional[LineageDecision]:
   """Claude appended to the segment this trail recorded: the new trail starts
   past the recorded extent and forks from the prior trail's final row."""
   extent = _extent(header)
   if extent == 0:
     return None
-  matched = sorted(steps, key=lambda pair: pair[1])
+  line_by_uuid = evidence.line_by_uuid()
+  lines = {step_id: line_by_uuid[uuid] for step_id, uuid in uuid_lines if uuid in line_by_uuid}
+  if len(lines) == 0:
+    return None
+  last_step = max(lines)
   # rows past the last matched one carry no uuid and follow it in the file: a
   # trail's stream is split only where it skipped a history copy, which is
   # always before its own first record
-  last_line = matched[-1][0] + (extent - 1 - matched[-1][1])
+  last_line = lines[last_step] + (extent - 1 - last_step)
   if last_line >= evidence.line_count:
     return None
-  lines = {step_id: line for line, step_id in matched}
   lines[extent - 1] = last_line
   hashes = index.step_payload_hashes(header['id'], sorted(lines))
   # a matching uuid whose line hashes differently is a copy of that row, not
@@ -193,13 +196,12 @@ def _continue_segment(
 
 
 def _continue_copy(
-  header: dict, evidence: _Evidence, index: LineageIndex
+  header: dict, uuid_lines: list[tuple[int, str]], evidence: _Evidence, index: LineageIndex
 ) -> Optional[LineageDecision]:
   """Claude forked a new segment re-serializing the history: verify the copy
   against the parent's uuids and keep only the new segment's own contribution —
   the recorded chain is authoritative for the copied part."""
-  parent_uuid_lines = [(row['step_id'], row['uuid']) for row in index.get_step_uuids(header['id'])]
-  cuts = _fork_cuts(parent_uuid_lines, _ancestor_uuids(header, index), evidence)
+  cuts = _fork_cuts(uuid_lines, _ancestor_uuids(header, index), evidence)
   if cuts.pending:
     return LineageDecision(adopt=False, reason='history copy still being written')
   if not cuts.verified:

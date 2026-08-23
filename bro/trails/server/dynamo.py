@@ -28,6 +28,9 @@ GSI_PK_ATTRIBUTE = 'gsi_pk'
 GSI_PK_VALUE = 'trail'
 UNREPORTED_AFTER_SECONDS = 3600
 SWEEP_WINDOW_DAYS = 30
+# the store's fan-outs wait on network round trips rather than on the CPU, so
+# the pool is sized for concurrent requests rather than cores
+_FAN_OUT_WORKERS = 32
 _ddb = dynamo_types.ddb
 _ddb_item = dynamo_types.ddb_item
 _from_ddb = dynamo_types.from_ddb
@@ -53,7 +56,9 @@ class DynamoStore(TrailsStore):
     self._uuid_index = uuid_index
     self._backends = dict(backends.BACKENDS)
     self._stored_tool_hashes: set[str] = set()
-    self._executor = ThreadPoolExecutor(thread_name_prefix='trails-dynamo')
+    self._executor = ThreadPoolExecutor(
+      max_workers=_FAN_OUT_WORKERS, thread_name_prefix='trails-dynamo'
+    )
     self._operations = Operations(
       dynamo=dynamo,
       s3=s3,
@@ -492,23 +497,23 @@ class DynamoStore(TrailsStore):
     response = self._s3.get_object(Bucket=self._bucket, Key=key)
     return json.loads(response['Body'].read().decode('utf-8'))
 
-  def find_segment_steps(self, segments: set[str], uuids: set[str]) -> list[dict]:
-    """Return row identities carrying any requested UUID, restricted to the
-    trails recording one of `segments`."""
+  def find_segment_trails(self, segments: set[str], uuids: set[str]) -> list[dict]:
+    """Return the headers of the trails holding any requested UUID, restricted
+    to the ones recording one of `segments`."""
     if len(uuids) == 0 or len(segments) == 0:
       return []
     if self._uuid_index is None:
       raise RuntimeError('UUID lookup requires a configured index')
 
-    def find(uuid: str) -> list[dict]:
-      matches: list[dict] = []
+    def find(uuid: str) -> set[str]:
+      trail_ids: set[str] = set()
       exclusive_start_key: Optional[dict] = None
       while True:
         kwargs: dict[str, Any] = {
           'TableName': self._steps_table,
           'IndexName': self._uuid_index,
           'KeyConditionExpression': '#uuid = :uuid',
-          'ProjectionExpression': 'trail_id, step_id, #uuid',
+          'ProjectionExpression': 'trail_id',
           'ExpressionAttributeNames': {'#uuid': 'uuid'},
           'ExpressionAttributeValues': {':uuid': _ddb(uuid)},
         }
@@ -517,31 +522,16 @@ class DynamoStore(TrailsStore):
         response = self._dynamo.query(**kwargs)
         for raw in response.get('Items', []):
           row = _from_ddb_item(raw)
-          if (
-            row is None
-            or not isinstance(row.get('trail_id'), str)
-            or not isinstance(row.get('step_id'), int)
-            or isinstance(row.get('step_id'), bool)
-            or row.get('uuid') != uuid
-          ):
+          if row is None or not isinstance(row.get('trail_id'), str):
             raise ValueError(f'UUID index returned malformed row: {row!r}')
-          matches.append({'trail_id': row['trail_id'], 'step_id': row['step_id'], 'uuid': uuid})
+          trail_ids.add(row['trail_id'])
         exclusive_start_key = response.get('LastEvaluatedKey')
         if exclusive_start_key is None:
-          return matches
+          return trail_ids
 
-    pages = self._executor.map(find, sorted(uuids))
-    matches = [match for page in pages for match in page]
-    headers: dict[str, dict] = {}
-    kept: list[dict] = []
-    for match in matches:
-      trail_id = match['trail_id']
-      if trail_id not in headers:
-        headers[trail_id] = self.get_trail(trail_id)
-      header = headers[trail_id]
-      if header.get('native', {}).get('segment') in segments:
-        kept.append({**match, 'header': header})
-    return sorted(kept, key=lambda row: (row['trail_id'], row['step_id']))
+    found = {trail_id for page in self._executor.map(find, sorted(uuids)) for trail_id in page}
+    headers = [self.get_trail(trail_id) for trail_id in sorted(found)]
+    return [header for header in headers if header.get('native', {}).get('segment') in segments]
 
   def get_step(self, trail_id: str, step_id: int) -> dict:
     header = self._required_universal_header(trail_id)
