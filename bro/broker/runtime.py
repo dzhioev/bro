@@ -41,6 +41,7 @@ spawned peer, and there is no channel to drain or close.
 
 import asyncio
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional, Protocol
 
 from bro.base import log
@@ -117,16 +118,19 @@ class Runtime:
       peer.timer = loop.call_later(timeout, self._fire_timeout, channel)
     return channel
 
-  async def job(self, command: CommandJob, *, timeout: Optional[float], exchange: str) -> Peer:
-    """launch `command` as the exchange's job and supervise its process with no
-    channel: the peer id is synthetic (`job_peer(exchange)`), death is process
-    exit, and the drain is skipped — there is nothing buffered to flush. A launch
-    failure rolls back its own registration and re-raises."""
+  async def job(
+    self, command: CommandJob, *, directory: Path, timeout: Optional[float], exchange: str
+  ) -> Peer:
+    """launch `command` as the exchange's job, collecting its run into
+    `directory`, and supervise its process with no channel: the peer id is
+    synthetic (`job_peer(exchange)`), death is process exit, and the drain is
+    skipped — there is nothing buffered to flush. A launch failure rolls back
+    its own registration and re-raises."""
     channel = job_peer(exchange)
     peer = _PeerState(channel=channel, job=True)
     self._peers[channel] = peer
     try:
-      peer.handle = await launch_job(command)
+      peer.handle = await launch_job(command, directory)
     except BaseException:
       del self._peers[channel]
       raise

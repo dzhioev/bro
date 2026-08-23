@@ -38,8 +38,9 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   broker request kinds contributed by installed distributions, each entry a factory `(context: bro.kinds.KindContext) -> RequestHandler`, loaded into every root broker beside the built-ins.
 - `ride/peers.py` — peer → workspace attribution for one broker root:
   the summon records that name each peer's workspace and the chain of summoners above it, shared by summon and artifacts.
-- `ride/artifacts.py` — the session artifact store and the `artifact.mint` / `artifact.get` kinds:
+- `ride/artifacts.py` — the session artifact store, the `artifact.mint` / `artifact.get` kinds, and the broker's `JobOutput`:
   reflink-or-copy ingest into content-addressed objects, per-peer view directories behind the read-only `/var/ride/artifacts` mounts, the sharing rules with their uniform denial, the byte cap, and the JSONL audit beside the store.
+  A broker job's run directory is staged in the store and collected through the same ingest, reaching the peer that requested the job and its summoners.
   The peer wire and CLI are the framework's `bro/artifact.py`.
 - `ride/summon_control.py` — summon host authorization, allow-list resolution, audit/status bookkeeping, and request lifecycle
   — the manual variant included, registered as an expected external peer with its pending record.

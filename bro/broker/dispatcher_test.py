@@ -1,5 +1,10 @@
 import asyncio
-from typing import Optional
+import json
+import tempfile
+import time
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, Optional
 
 import pytest
 
@@ -12,13 +17,14 @@ from bro.broker.dispatcher import (
   ping_handler,
   spawn_test_handler,
 )
-from bro.broker.job import CommandJob
+from bro.broker.job import STATUS_FILE, STDOUT_FILE, CommandJob
 from bro.broker.runtime import Peer, job_peer
 from bro.broker.spawn import LaunchSpec
 from bro.broker.transport import Provisioned
 
 _LAUNCH = LaunchSpec()  # opaque marker; the fake Runtime never inspects it
-_JOB = CommandJob(command=('true',), cwd='.', env={})  # ditto
+_JOB = CommandJob(command=('true',), env={})  # ditto
+_REF = 'sha256:' + '0' * 64
 
 
 def _request(kind: str, request_id: str, args: Optional[dict] = None) -> Message:
@@ -39,6 +45,7 @@ class FakeRuntime:
     self.sent: list[tuple[Peer, Message]] = []
     self.spawns: list[tuple[LaunchSpec, Optional[float], str]] = []
     self.jobs: list[tuple[CommandJob, Optional[float], str]] = []
+    self.job_directories: list[Path] = []
     self.expects: list[Optional[float]] = []
     self.forgotten: list[Peer] = []
     self.killed: list[Peer] = []
@@ -52,8 +59,11 @@ class FakeRuntime:
       raise self.spawn_error
     return self.next_peers.pop(0)
 
-  async def job(self, command: CommandJob, *, timeout: Optional[float], exchange: str) -> Peer:
+  async def job(
+    self, command: CommandJob, *, directory: Path, timeout: Optional[float], exchange: str
+  ) -> Peer:
     self.jobs.append((command, timeout, exchange))
+    self.job_directories.append(directory)
     if self.spawn_error is not None:
       raise self.spawn_error
     return job_peer(exchange)
@@ -81,17 +91,59 @@ class FakeRuntime:
     self._stopped.set()
 
 
+class FakeJobOutput:
+  """a `bro.broker.dispatcher.JobOutput` over real temp directories: records what
+  it was handed and answers with a fixed value, or raises `collect_error`."""
+
+  def __init__(self):
+    self.opened: list[Path] = []
+    self.collected: list[tuple[Path, Peer]] = []
+    self.runs: list[dict[str, str]] = []  # each run's top-level files, as collect found them
+    self.collect_error: Optional[BaseException] = None
+
+  def open(self) -> Path:
+    directory = Path(tempfile.mkdtemp())
+    self.opened.append(directory)
+    return directory
+
+  async def collect(self, directory: Path, context: Dispatcher, requester: Peer) -> dict:
+    self.collected.append((directory, requester))
+    self.runs.append(
+      {entry.name: entry.read_text() for entry in sorted(directory.iterdir()) if entry.is_file()}
+    )
+    if self.collect_error is not None:
+      raise self.collect_error
+    return {'ref': _REF}
+
+  def status(self, index: int = 0) -> dict[str, Any]:
+    return json.loads(self.runs[index][STATUS_FILE])
+
+
 def make_dispatcher() -> tuple[Dispatcher, FakeRuntime]:
   runtime = FakeRuntime()
-  dispatcher = Dispatcher()
+  dispatcher = Dispatcher(job_output=FakeJobOutput())
   dispatcher.bind(runtime)
   return dispatcher, runtime
+
+
+def job_output(dispatcher: Dispatcher) -> FakeJobOutput:
+  output = dispatcher.job_output
+  assert isinstance(output, FakeJobOutput)
+  return output
 
 
 async def _settle() -> None:
   # let a scheduled Runtime.spawn task and its worker-binding done-callback run.
   for _ in range(4):
     await asyncio.sleep(0)
+
+
+async def _until(condition: Callable[[], bool]) -> None:
+  """wait for a job's collection, whose steps run off the loop, to land."""
+  deadline = time.monotonic() + 5.0
+  while not condition():
+    assert time.monotonic() < deadline, 'the awaited condition never held'
+    await asyncio.sleep(0.005)
 
 
 async def spawn_child(
@@ -283,6 +335,17 @@ async def test_job_opens_the_exchange_with_the_worker_bound_up_front():
   assert dispatcher.workers[worker] == 'R'
   await _settle()
   assert runtime.jobs == [(_JOB, DEFAULT_TIMEOUT, 'R')]
+  assert runtime.job_directories == job_output(dispatcher).opened  # the run it will answer with
+
+
+@pytest.mark.asyncio
+async def test_a_broker_with_no_job_output_runs_no_jobs():
+  runtime = FakeRuntime()
+  dispatcher = Dispatcher()
+  dispatcher.bind(runtime)
+  dispatcher.on('job-test', lambda context, peer, message: context.job(_JOB, peer))
+  with pytest.raises(RuntimeError):
+    dispatcher.on_message('requester', _request('job-test', 'R'))
 
 
 @pytest.mark.asyncio
@@ -299,43 +362,89 @@ async def test_job_launch_delivers_a_started_progress():
 
 
 @pytest.mark.asyncio
-async def test_job_clean_exit_closes_the_exchange_with_ok_and_the_tail():
+async def test_job_clean_exit_closes_the_exchange_with_the_collected_run():
   dispatcher, runtime = make_dispatcher()
+  output = job_output(dispatcher)
   worker = await start_job(dispatcher, runtime)
-  dispatcher.on_exit(worker, 0, 'job-output')
+  dispatcher.on_exit(worker, 0, '')
+  # the reap decides the outcome and forgets the exchange before the collection
+  # it delivers from, so nothing else can answer it
+  assert 'R' not in dispatcher.exchanges
+  await _until(lambda: any(m.type == Tag.RESULT for _, m in runtime.sent))
   target, done = runtime.sent[-1]
   assert target == 'requester'
   assert (done.type, done.request) == (Tag.RESULT, 'R')
-  assert done.payload == {'outcome': 'ok', 'value': {'output_tail': 'job-output'}}
-  assert 'R' not in dispatcher.exchanges
+  assert done.payload == {'outcome': 'ok', 'value': {'ref': _REF}}
+  assert output.collected == [(output.opened[0], 'requester')]
+  assert output.status() == {'reason': 'exit', 'exit_code': 0}
   assert runtime.forgotten == [worker]
+  await _until(lambda: not output.opened[0].exists())  # the store holds its own copy
 
 
 @pytest.mark.asyncio
-async def test_job_failing_exit_synthesizes_failed_exit():
+async def test_job_failing_exit_carries_the_run_into_failed_exit():
   dispatcher, runtime = make_dispatcher()
   worker = await start_job(dispatcher, runtime)
-  dispatcher.on_exit(worker, 3, 'job-traceback')
+  dispatcher.on_exit(worker, 3, '')
+  await _until(lambda: any(m.type == Tag.RESULT for _, m in runtime.sent))
   target, failed = runtime.sent[-1]
   assert target == 'requester'
   assert failed.payload == {
     'outcome': 'failed',
-    'detail': {'reason': 'exit', 'exit_code': 3, 'output_tail': 'job-traceback'},
+    'detail': {'reason': 'exit', 'exit_code': 3, 'ref': _REF},
   }
-  assert 'R' not in dispatcher.exchanges
 
 
 @pytest.mark.asyncio
-async def test_job_timeout_synthesizes_failed_and_the_later_exit_dedupes():
+async def test_job_timeout_answers_from_the_reap_with_one_result():
+  # the Runtime's kill is still in flight when on_timeout fires, so the run is
+  # not final: the reap carries the timeout reason into the single result.
   dispatcher, runtime = make_dispatcher()
+  output = job_output(dispatcher)
   worker = await start_job(dispatcher, runtime)
   dispatcher.on_timeout(worker)
-  target, failed = runtime.sent[-1]
-  assert (target, failed.request) == ('requester', 'R')
-  assert failed.payload == {'outcome': 'failed', 'detail': {'reason': 'timeout'}}
-  dispatcher.on_exit(worker, -15, '')  # the Runtime-killed job's reap, exchange closed already
+  assert [m for _, m in runtime.sent if m.type == Tag.RESULT] == []
+  dispatcher.on_exit(worker, -15, '')
+  await _until(lambda: any(m.type == Tag.RESULT for _, m in runtime.sent))
   terminals = [m for _, m in runtime.sent if m.type == Tag.RESULT]
   assert len(terminals) == 1
+  assert terminals[0].payload == {
+    'outcome': 'failed',
+    'detail': {'reason': 'timeout', 'exit_code': -15, 'ref': _REF},
+  }
+  assert output.status() == {'reason': 'timeout', 'exit_code': -15}
+
+
+@pytest.mark.asyncio
+async def test_job_collection_failure_fails_a_clean_run_and_keeps_it():
+  dispatcher, runtime = make_dispatcher()
+  output = job_output(dispatcher)
+  output.collect_error = RuntimeError('store is full')
+  worker = await start_job(dispatcher, runtime)
+  dispatcher.on_exit(worker, 0, '')
+  await _until(lambda: any(m.type == Tag.RESULT for _, m in runtime.sent))
+  _, failed = runtime.sent[-1]
+  assert failed.payload == {
+    'outcome': 'failed',
+    'error': 'store is full',
+    'detail': {'reason': 'output'},
+  }
+  assert output.opened[0].exists()  # the run is the only copy of what the job produced
+
+
+@pytest.mark.asyncio
+async def test_job_collection_failure_leaves_a_failing_exit_its_own_reason():
+  dispatcher, runtime = make_dispatcher()
+  job_output(dispatcher).collect_error = RuntimeError('store is full')
+  worker = await start_job(dispatcher, runtime)
+  dispatcher.on_exit(worker, 3, '')
+  await _until(lambda: any(m.type == Tag.RESULT for _, m in runtime.sent))
+  _, failed = runtime.sent[-1]
+  assert failed.payload == {
+    'outcome': 'failed',
+    'error': 'store is full',
+    'detail': {'reason': 'exit', 'exit_code': 3},
+  }
 
 
 @pytest.mark.asyncio
@@ -354,6 +463,7 @@ async def test_job_launch_failure_synthesizes_failed_launch_and_unbinds_the_work
   }
   assert dispatcher.exchanges == {}
   assert dispatcher.workers == {}
+  assert not job_output(dispatcher).opened[0].exists()  # no process ran, nothing to collect
 
 
 @pytest.mark.asyncio
@@ -383,16 +493,16 @@ async def test_job_round_trips_over_a_real_runtime_and_transport():
       raise AssertionError('no worker peers in this test')
 
   transport = TcpServerTransport([LOCAL_HOST])
-  dispatcher = Dispatcher()
+  output = FakeJobOutput()
+  dispatcher = Dispatcher(job_output=output)
   runtime = Runtime(transport, NoSpawner(), dispatcher)
   dispatcher.bind(runtime)
   serve_task = asyncio.create_task(runtime.serve())
   await asyncio.sleep(0)  # let serve install the sink before the requester connects
   job = CommandJob(
     # outlive the launch callback so the started progress deterministically
-    # precedes the exit-derived result
+    # precedes the collected result
     command=(sys.executable, '-c', 'import time; print("job-ran"); time.sleep(0.2)'),
-    cwd=os.getcwd(),
     env=dict(os.environ),
   )
   dispatcher.on('job-test', lambda context, peer, message: context.job(job, peer, timeout=30.0))
@@ -412,8 +522,8 @@ async def test_job_round_trips_over_a_real_runtime_and_transport():
     await asyncio.gather(serve_task, return_exceptions=True)
   [started] = interim
   assert (started.type, started.payload) == (Tag.PROGRESS, {})
-  assert result.payload['outcome'] == 'ok'
-  assert 'job-ran' in result.payload['value']['output_tail']
+  assert result.payload == {'outcome': 'ok', 'value': {'ref': _REF}}
+  assert output.runs[0][STDOUT_FILE].strip() == 'job-ran'  # the run the ref stands for
 
 
 async def expect_child(

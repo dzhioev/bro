@@ -8,7 +8,7 @@ import pytest
 
 from bro.broker import brotocol
 from bro.broker.brotocol import Message
-from bro.broker.job import CommandJob
+from bro.broker.job import STDERR_FILE, STDOUT_FILE, CommandJob
 from bro.broker.runtime import Peer, Runtime, job_peer
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned, connect
@@ -363,37 +363,41 @@ async def test_expect_timeout_reports_timeout_then_gone():
 
 
 def _job(code: str) -> CommandJob:
-  return CommandJob(command=(sys.executable, '-c', code), cwd=os.getcwd(), env=dict(os.environ))
+  return CommandJob(command=(sys.executable, '-c', code), env=dict(os.environ))
 
 
 @pytest.mark.asyncio
-async def test_job_reports_exit_and_tail_with_no_channel():
+async def test_job_reports_exit_with_no_channel(tmp_path):
   async with runtime_harness() as env:
-    peer = await env.runtime.job(_job('print("job-out")'), timeout=None, exchange='x1')
+    peer = await env.runtime.job(
+      _job('print("job-out")'), directory=tmp_path, timeout=None, exchange='x1'
+    )
 
     assert peer == job_peer('x1')
     assert env.transport.channels == frozenset()  # nothing provisioned
-    kind, exited_peer, code, output = await next_event(env.listener)
+    kind, exited_peer, code, _ = await next_event(env.listener)
     assert (kind, exited_peer, code) == ('exit', peer, 0)
-    assert 'job-out' in output
+    assert (tmp_path / STDOUT_FILE).read_text().strip() == 'job-out'
 
 
 @pytest.mark.asyncio
-async def test_job_failure_reports_code_and_tail():
+async def test_job_failure_reports_its_code(tmp_path):
   async with runtime_harness() as env:
     code_snippet = 'import sys; sys.stderr.write("job-boom"); sys.exit(4)'
-    peer = await env.runtime.job(_job(code_snippet), timeout=None, exchange='x1')
+    peer = await env.runtime.job(
+      _job(code_snippet), directory=tmp_path, timeout=None, exchange='x1'
+    )
 
-    kind, exited_peer, code, output = await next_event(env.listener)
+    kind, exited_peer, code, _ = await next_event(env.listener)
     assert (kind, exited_peer, code) == ('exit', peer, 4)
-    assert 'job-boom' in output
+    assert (tmp_path / STDERR_FILE).read_text() == 'job-boom'
 
 
 @pytest.mark.asyncio
-async def test_job_timeout_kills_then_reports_timeout_and_exit():
+async def test_job_timeout_kills_then_reports_timeout_and_exit(tmp_path):
   async with runtime_harness() as env:
     peer = await env.runtime.job(
-      _job('import time; time.sleep(3600)'), timeout=3600.0, exchange='x1'
+      _job('import time; time.sleep(3600)'), directory=tmp_path, timeout=3600.0, exchange='x1'
     )
     # fire deterministically, as in the spawn timeout test
     timer = env.runtime._peers[peer].timer
@@ -408,9 +412,11 @@ async def test_job_timeout_kills_then_reports_timeout_and_exit():
 
 
 @pytest.mark.asyncio
-async def test_job_forget_drops_supervision_without_exit():
+async def test_job_forget_drops_supervision_without_exit(tmp_path):
   async with runtime_harness() as env:
-    peer = await env.runtime.job(_job('import time; time.sleep(3600)'), timeout=None, exchange='x1')
+    peer = await env.runtime.job(
+      _job('import time; time.sleep(3600)'), directory=tmp_path, timeout=None, exchange='x1'
+    )
     handle = env.runtime._peers[peer].handle
     assert handle is not None
 
@@ -421,11 +427,11 @@ async def test_job_forget_drops_supervision_without_exit():
 
 
 @pytest.mark.asyncio
-async def test_job_launch_failure_rolls_back_registration():
+async def test_job_launch_failure_rolls_back_registration(tmp_path):
   async with runtime_harness() as env:
-    missing = CommandJob(command=('/nonexistent-job-binary',), cwd=os.getcwd(), env={})
+    missing = CommandJob(command=('/nonexistent-job-binary',), env={})
     with pytest.raises(FileNotFoundError):
-      await env.runtime.job(missing, timeout=None, exchange='x1')
+      await env.runtime.job(missing, directory=tmp_path, timeout=None, exchange='x1')
 
     assert env.runtime._peers == {}
     assert env.listener.events.empty()

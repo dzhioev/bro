@@ -8,7 +8,7 @@ import pytest
 from bro.broker.brotocol import Message, Tag
 from bro.broker.client import CHANNEL_ENV
 from bro.broker.dispatcher import Dispatcher
-from bro.broker.job import CommandJob
+from bro.broker.job import OUTPUT_DIRECTORY, CommandJob
 from bro.broker.transport import ChannelID
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 from bro.kinds import ArtifactResolver, KindContext
@@ -17,6 +17,7 @@ from bro.local import benchmark_job
 TIMEOUT = 5.0
 CONFIG = 'benchmark/bro/benchmark/job.yaml'
 ROOT = 'root-peer'
+REF = 'sha256:' + 'a' * 64
 
 
 def _kind(tree: Path):
@@ -84,16 +85,10 @@ class TestBenchmarkKind:
       '-c',
       str((tree / CONFIG).resolve()),
       '--jobs-dir',
-      str((tree / benchmark_job.JOBS_DIRECTORY).resolve()),
+      OUTPUT_DIRECTORY,
     )
     assert command.env['BENCH_SENTINEL'] == 'yes'  # the host environment rides the job
     assert (requester, timeout) == (ROOT, benchmark_job.DEFAULT_TIMEOUT)
-
-  def test_the_job_runs_outside_the_workspace_tree(self, tree):
-    context = FakeContext()
-    _kind(tree)(cast(Dispatcher, context), ROOT, _request({'config': CONFIG}))
-    [(command, _, _)] = context.jobs
-    assert not Path(command.cwd).resolve().is_relative_to(tree.resolve())
 
   def test_request_timeout_bounds_the_job(self, tree):
     context = FakeContext()
@@ -142,24 +137,25 @@ def _result(request_id: str, payload: dict) -> Message:
 
 
 class TestInterpretResult:
-  def test_ok_returns_the_output_tail(self):
-    message = _result('R', {'outcome': 'ok', 'value': {'output_tail': 'scored'}})
-    assert benchmark_job._interpret_result(message) == 'scored'
+  def test_ok_returns_the_run_ref(self):
+    message = _result('R', {'outcome': 'ok', 'value': {'ref': REF}})
+    assert benchmark_job._interpret_result(message) == REF
+
+  def test_ok_without_a_run_raises(self):
+    message = _result('R', {'outcome': 'ok', 'value': {}})
+    with pytest.raises(benchmark_job.JobError, match='no run'):
+      benchmark_job._interpret_result(message)
 
   def test_denied_raises_with_the_reason(self):
     message = _result('R', {'outcome': 'denied', 'error': 'not the root'})
     with pytest.raises(benchmark_job.JobError, match='not the root'):
       benchmark_job._interpret_result(message)
 
-  def test_failed_exit_names_the_code_and_tail(self):
+  def test_failed_exit_names_the_code_and_the_run(self):
     message = _result(
-      'R',
-      {
-        'outcome': 'failed',
-        'detail': {'reason': 'exit', 'exit_code': 3, 'output_tail': 'harbor-traceback'},
-      },
+      'R', {'outcome': 'failed', 'detail': {'reason': 'exit', 'exit_code': 3, 'ref': REF}}
     )
-    with pytest.raises(benchmark_job.JobError, match='exit code 3.*harbor-traceback'):
+    with pytest.raises(benchmark_job.JobError, match=f'exit code 3.*{REF}'):
       benchmark_job._interpret_result(message)
 
   def test_failed_timeout_names_the_reason(self):
