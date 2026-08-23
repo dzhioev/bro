@@ -24,6 +24,10 @@ The store is wiped at construction and removed at `close()` — it dies with
 the session — while the JSONL audit beside it (`<session>.jsonl`) survives,
 recording mints, gets, shares, and denials.
 
+`JobArtifacts` collects a broker job's run directory the same way: the run is
+staged under the store's `jobs/`, and the ref that closes the job's exchange
+reaches the peer that requested the job and its summoners.
+
 `ArtifactControl` serves the `artifact.mint` / `artifact.get` kinds
 (contract: `bro/artifact.py`) and implements the contributed-kind resolver
 (`bro.kinds.ArtifactResolver`). Attribution and shape validation run on the
@@ -177,7 +181,8 @@ class ArtifactStore:
     self._objects = root / 'objects'
     self._staging = root / 'staging'
     self._views = root / 'shared'
-    for directory in (self._objects, self._staging, self._views):
+    self._jobs = root / 'jobs'
+    for directory in (self._objects, self._staging, self._views, self._jobs):
       directory.mkdir(parents=True)
     self._audit_file = audit_file(workspace.name)
     if root_in_container:
@@ -197,23 +202,45 @@ class ArtifactStore:
     directory.mkdir(exist_ok=True)
     return directory
 
+  def job_run(self) -> Path:
+    """a fresh directory for one broker job's run — inside the store, so an
+    uncollected run dies with the session."""
+    directory = self._jobs / lulid()
+    directory.mkdir()
+    return directory
+
   def mint(self, identity: PeerIdentity, ancestors: Sequence[str], relative: str) -> tuple[str, int]:  # fmt: skip
     """ingest the file or directory at `relative` in the minting peer's tree
     and return its ref and size, shared with the minter and its ancestors.
-    Raises `ArtifactDenied` on any refusal; heavy, called off-loop.
-
-    The source is digested before anything is copied — the dedup probe that
-    makes re-minting unchanged content free of both the copy and the cap, and
-    the point a malformed tree (an escaping symlink, an odd entry type) is
-    refused before any bytes move. A fresh mint stages a copy and commits it
-    under the copy's own digest, so stored bytes always match their ref even
-    when the producer wrote the source mid-mint."""
+    Raises `ArtifactDenied` on any refusal; heavy, called off-loop."""
     try:
       source = tree_path(identity.tree, relative)
     except ValueError as e:
       raise ArtifactDenied(str(e)) from None
     if not source.is_file() and not source.is_dir():
       raise ArtifactDenied(f'no file or directory at {relative!r} in the workspace')
+    return self.adopt(source, identity.workspace, ancestors, event='mint', origin=relative)
+
+  def adopt(
+    self,
+    source: Path,
+    workspace: str,
+    ancestors: Sequence[str],
+    *,
+    event: str,
+    origin: str,
+  ) -> tuple[str, int]:
+    """ingest the host path `source` and return its ref and size, shared with
+    the peer named `workspace` and its `ancestors`; `event` and `origin` are
+    what the audit records it as. Raises `ArtifactDenied` on any refusal;
+    heavy, called off-loop.
+
+    The source is digested before anything is copied — the dedup probe that
+    makes re-ingesting unchanged content free of both the copy and the cap, and
+    the point a malformed tree (an escaping symlink, an odd entry type) is
+    refused before any bytes move. A fresh ingest stages a copy and commits it
+    under the copy's own digest, so stored bytes always match their ref even
+    when the producer wrote the source mid-ingest."""
     try:
       ref = digest_path(source)
     except ValueError as e:
@@ -223,18 +250,18 @@ class ArtifactStore:
       with self._lock:
         over = self._bytes + size > MAX_STORE_BYTES
       if over:
-        raise ArtifactDenied(f'minting {relative!r} would exceed the store byte cap')
+        raise ArtifactDenied(f'ingesting {origin!r} would exceed the store byte cap')
       ref, size = self._ingest(source)
-    shared_with = {identity.workspace, *ancestors}
+    shared_with = {workspace, *ancestors}
     with self._lock:
       self._reach.setdefault(ref, set()).update(shared_with)
     for name in shared_with:
       self._link_into_view(name, ref)
     self.audit(
-      'mint',
+      event,
       {
-        'peer': identity.workspace,
-        'path': relative,
+        'peer': workspace,
+        'path': origin,
         'ref': ref,
         'size': size,
         'shared_with': sorted(shared_with),
@@ -394,6 +421,32 @@ def _validate_get(args: dict[str, Any]) -> Optional[str]:
   if not is_ref(args.get('ref')):
     return "artifact.get needs a well-formed 'ref' (sha256:<64 hex digits>)"
   return None
+
+
+class JobArtifacts:
+  """`bro.broker.dispatcher.JobOutput` over one store: a broker job's run is
+  collected in the store and answered with its ref, reaching the requesting
+  peer and its summoners exactly as that peer's own mint would."""
+
+  def __init__(self, store: ArtifactStore, peers: Peers):
+    self._store = store
+    self._peers = peers
+
+  def open(self) -> Path:
+    return self._store.job_run()
+
+  async def collect(self, directory: Path, context: 'Dispatcher', requester: 'Peer') -> dict:
+    identity = self._peers.identity(context, requester)
+    ancestors = self._peers.ancestors(context, requester)
+    ref, size = await asyncio.to_thread(
+      self._store.adopt,
+      directory,
+      identity.workspace,
+      ancestors,
+      event='job',
+      origin=str(directory),
+    )
+    return {'ref': ref, 'size': size}
 
 
 class ArtifactControl:

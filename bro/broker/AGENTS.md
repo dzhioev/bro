@@ -72,13 +72,15 @@ The one structural rule to keep straight:
   `spawn` receives the provisioned channel and the exchange id together
   — the worker-launch contract.
 - `job.py` — the job launch:
-  `CommandJob` (command, cwd, and an explicit env snapshot) run by `launch()` as a host process in its own process group
+  `CommandJob` (command plus an explicit env snapshot) run by `launch()` as a host process in its own process group
   — a kill takes whatever children it spawned along (SIGTERM, then SIGKILL after a grace)
-  — with merged output ring-buffered into a `ChildHandle`.
+  — plus the fixed layout of the *run directory* it is launched in, which is also its cwd:
+  `stdout` / `stderr` verbatim, the `status.json` `record_status` writes once the process is reaped, and `output/` for whatever the command wants the requester to receive.
+  The run directory is the whole of a job's answer, so nothing is buffered for an output tail.
   The process speaks no protocol; the supervision that speaks for it is `Runtime.job` + `Dispatcher.job`.
 - `runtime.py` — the `Runtime`:
   the mechanism layer that owns the asyncio loop and all mutable per-peer state (channel, `ChildHandle`, the `await handle.wait()` task, the `call_later` timer, the drain event) over the two ports.
-  Commands `spawn(launch, *, timeout, exchange)` / `job(command, *, timeout, exchange)` / `expect(*, timeout)` / `send` / `kill` / `forget` / `serve` / `stop`;
+  Commands `spawn(launch, *, timeout, exchange)` / `job(command, *, directory, timeout, exchange)` / `expect(*, timeout)` / `send` / `kill` / `forget` / `serve` / `stop`;
   emits raw, symmetric lifecycle up to a synchronous `Listener` (the `Dispatcher`):
   `on_connect` / `on_message` / `on_exit` / `on_timeout` / `on_gone`.
   No exchanges, correlation, or protocol
@@ -94,7 +96,8 @@ The one structural rule to keep straight:
   `on_exit`/`on_timeout`/`on_gone`/a raising `spawn` launch synthesize `result{failed}`;
   `root` exposes the root peer's channel.
   The handler primitives `deliver` / `reply` / `refuse` / `spawn` / `job` / `expect` / `invoke` are `Dispatcher` methods a handler drives via its `context`.
-  `Broker` injects the transport + spawner and exposes `on` / `add_delivery_observer` / `run(root) -> int` / `stop`;
+  `JobOutput` is the port a job's answer rides: `open()` hands out a run directory, `collect()` turns the finished one into the result's `value`.
+  `Broker` injects the transport + spawner + `JobOutput` and exposes `on` / `add_delivery_observer` / `run(root) -> int` / `stop`;
   `ping_handler` (the reserved `ping` kind) + `spawn_test_handler` are the built-ins.
 - `client.py` — the peer-side `Client` (synchronous, over `ClientTransport`):
   `from_env()` resolves `BROKER_CHANNEL` via `connect()` and returns `None` when unset;
@@ -162,7 +165,7 @@ The one structural rule to keep straight:
   No drain step:
   every frame the peer wrote was already delivered in order before EOF.
 - **Jobs invert the other half: a process with no channel.**
-  `job(command, *, timeout, exchange)` provisions nothing
+  `job(command, *, directory, timeout, exchange)` provisions nothing
   — the peer id is synthetic (`job_peer(exchange)`, collision-free against lulid channel ids), death is process exit as for a spawned peer, the drain is skipped, and `forget` has no channel to close.
 - **Drain-before-decide.**
   On process exit, before emitting `on_exit`, the Runtime waits (bounded, `_DRAIN_TIMEOUT`) for the transport to flush the channel to EOF
@@ -194,14 +197,25 @@ The one structural rule to keep straight:
   — from `on_exit`-without-a-result (`reason: 'exit'`, with the exit code and output tail),
   `on_timeout` (`reason: 'timeout'`, after the Runtime already killed the peer),
   `on_gone`-without-one (`reason: 'disconnected'`, an expected peer's channel ended),
-  or a `Dispatcher.spawn`/`expect` whose launch raised (`reason: 'launch'`, with the error string — no worker ever existed).
+  a `Dispatcher.spawn`/`expect` whose launch raised (`reason: 'launch'`, with the error string — no worker ever existed),
+  or a job whose run was clean but could not be collected (`reason: 'output'`).
   The reason class rides `detail.reason`;
   `error` carries the free-text diagnostic.
 - **A job's every message is host-originated — the third answer shape.**
   `Dispatcher.job(command, requester, *, timeout)` runs a process that speaks no protocol, so the host speaks for it:
-  a started `progress{}` when the launch resolves, then a result derived from the exit
-  — 0 becomes `result{ok, value: {output_tail}}`, anything else the same `failed{exit}` a mute worker produces, and the timeout / launch-failure synthesis is the worker one.
+  a started `progress{}` when the launch resolves, then one result built from the run directory the process filled.
+  A clean run closes with `result{ok, value}`, the value being whatever the `JobOutput` collected;
+  a failing exit or a timeout closes with `failed{exit}` / `failed{timeout}` carrying that value beside the reason, and the launch-failure synthesis is the worker one.
   The job exchange opens *with its worker bound* — the synthetic id is derivable up front, so no exit can slip between launch and bind.
+  A broker built with no `JobOutput` serves no jobs at all:
+  `job` raises rather than answering a shape nothing collected.
+- **A job answers from its reap, never before it.**
+  The Runtime's timeout kill is still in flight when `on_timeout` fires, so a timed-out job's run directory is not final:
+  the timeout is recorded on the exchange and the reap delivers the one result.
+  That reap decides the outcome and closes the exchange *before* awaiting the collection, which runs off the loop
+  — so a collection that outlives its own timer still cannot produce a second result.
+  A collection that raises fails the exchange and leaves the run directory in place:
+  it is the only copy of what the job produced.
 - **Exchanges open at `spawn`/`expect`, workers bind at launch resolution.**
   `Dispatcher.spawn` opens the exchange for the in-flight request immediately (held against id collisions), threads the request id through `Runtime.spawn` to the spawner, and binds the worker channel when the launch resolves;
   `Dispatcher.expect(requester, *, timeout, ready)` does the same for an external peer and hands the provisioned channel to `ready` so the handler can publish the endpoint to whatever launches it.
@@ -297,7 +311,13 @@ host-close retiring the token vs peer-disconnect,
 a client close completing before its own concurrent reader parks in `select` still reading as EOF,
 shutdown, and the address round-trip through `Endpoint` / `parse_address` / `redacted`),
 and `spawn_test.py` (the `RingBuffer` bound),
-and `job_test.py` (`CommandJob` over real processes: the ring-bounded merged output tail, the explicit env snapshot, exit codes, and the group-wide kill — proven by the drain reaching EOF past the background child),
+and `job_test.py` (`CommandJob` over real processes:
+each stream in its own run file,
+the run directory as both the cwd and the `output/` the job fills,
+the explicit env snapshot,
+exit codes,
+`record_status`,
+and the group-wide kill — proven by a background child that never gets to write its marker),
 and `runtime_test.py` (the `Runtime` over the real asyncio transport + a non-Docker `python -c` spawner + a fake listener:
 clean result with drain ordering,
 the exchange id handed through the spawn port,
@@ -307,7 +327,7 @@ send/kill/forget,
 exit-before-connect,
 launch-failure rollback,
 the job paths
-— exit + tail with no channel provisioned,
+— exit with no channel provisioned, each stream in its run file,
 timeout-then-exit,
 forget without exit,
 launch-failure rollback —
@@ -326,7 +346,15 @@ drop-after-close,
 result-then-exit collapsing to one result,
 `failed{exit}` / `failed{timeout}` synthesis with the later exit deduped,
 `failed{launch}` synthesis closing the exchange,
-the job exchange — worker bound up front, started progress delivered and tapped, exit-0 closing with `ok{output_tail}`, failing exit / timeout / launch failure falling to the worker synthesis —
+the job exchange
+— worker bound up front and its run directory opened,
+started progress delivered and tapped,
+a clean reap closing with the collected `ok{value}` and dropping the run,
+a failing exit carrying that value into `failed{exit}`,
+a timeout answered from the reap as one result,
+a raising collection failing the exchange and keeping the run,
+launch failure falling to the worker synthesis and dropping the run,
+and a broker with no `JobOutput` refusing to run a job —
 expect opening the exchange with the channel handed to `ready`,
 expected-peer routing with a post-result `on_gone` cleaning up,
 `failed{disconnected}` synthesis,
@@ -335,7 +363,7 @@ the delivery tap — rule-1 + synthesized `failed` observed,
 `source=None` on launch failure,
 handler replies and denials untapped — root exposure,
 the `Broker.run` root-exit / `stop` path,
-and one real-loop job round-trip — a live-channel requester answered started-progress-then-derived-result over the real `Runtime` and transport),
+and one real-loop job round-trip — a live-channel requester answered started-progress-then-collected-result over the real `Runtime` and transport),
 and `client_test.py` + `cli_test.py` (the `Client` and the `broker` CLI over a real `TcpServerTransport`↔`TcpClientTransport` round-trip:
 `from_env` set/unset,
 the worker-side `progress`/`result` emission,

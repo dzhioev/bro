@@ -39,7 +39,7 @@ from bro.summon import (
 )
 from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.paths import summon_dir, workspace_dir, workspace_tree
-from ride.artifacts import ArtifactControl, ArtifactStore, view_mount
+from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts, view_mount
 from ride.flags import default_hold
 from ride.harness import ContainerExtras, get_harness
 from ride.inner import inner_command
@@ -363,7 +363,8 @@ def run_root_via_broker(
   lowering, so any root — host process or container — can spawn docker children.
   The broker answers the reserved ping kind, so a session can verify its channel
   (`broker request ping '{}'`), the artifact kinds over the session store
-  (`ride.artifacts`), plus whatever kinds installed distributions
+  (`ride.artifacts`, which also collects the run of any job a kind starts), plus
+  whatever kinds installed distributions
   contribute (`ride.kinds`), and consumes the root's own run lifecycle — the
   progress and result of the session's host-anchored exchange — into the host
   log. While an interactive root owns the terminal, host output goes to the
@@ -407,7 +408,9 @@ def run_root_via_broker(
     audit_file=summon_dir() / f'{workspace.name}.jsonl',
   )
   artifact_control = ArtifactControl(artifacts, peers)
-  facade = Broker(TcpServerTransport(broker_bind_hosts()), spawner)
+  facade = Broker(
+    TcpServerTransport(broker_bind_hosts()), spawner, job_output=JobArtifacts(artifacts, peers)
+  )
   facade.on(PING, ping_handler)
   facade.on(SUMMON, control.handle)
   facade.on(MINT, artifact_control.mint)

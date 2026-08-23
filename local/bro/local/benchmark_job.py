@@ -5,12 +5,11 @@ The `benchmark` kind lets a managed session start a benchmark run without
 holding any docker authority of its own: the session sends one coarse request
 over its broker channel, and the host — where the docker daemon lives — runs
 harbor as a broker job (`Dispatcher.job`), speaking for it: a started
-`progress{}`, then a result derived from the exit — `ok` with the output tail,
-or `failed` with the exit code and tail. Everything the job reads and writes
-lives in the workspace tree the session shares with the host: the config, the
-bundle harbor resolves from the checkout its environment came from
-(`var/benchmark/bundle`), and the score under `jobs/` — each named absolutely,
-since the job itself runs outside the tree.
+`progress{}`, then a result carrying the artifact ref of the job's whole run.
+The config and the bundle harbor resolves from the checkout its environment
+came from (`var/benchmark/bundle`) are the workspace tree's, named absolutely
+since the job runs outside the tree; the score is written into the run's own
+output directory, and reaches the session as artifact content.
 
 Both halves of the kind live here. `benchmark_kind` is the host-side handler
 factory the `bro.broker_kinds` entry point targets; its args are
@@ -22,11 +21,11 @@ client: `start` sends the request (`--detach` prints the request id and exits �
 the natural mode for a multi-hour run), and `check` reattaches by request id
 over the broxy's retention — a non-marking peek by default, `--wait` to block
 and collect, `--last-seen` for the cursor re-read of an already-collected
-result.
+result. Either way what it prints is the run's ref, which `artifact get` turns
+into a readable path.
 """
 
 import os
-import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Optional
@@ -36,15 +35,13 @@ from bro.base import log
 from bro.broker.brotocol import Message, Tag
 from bro.broker.client import CHANNEL_ENV, Client
 from bro.broker.dispatcher import Dispatcher, RequestHandler
-from bro.broker.job import CommandJob
+from bro.broker.job import OUTPUT_DIRECTORY, CommandJob
 from bro.broker.runtime import Peer
 from bro.kinds import KindContext, tree_path
 
 __cli_name__ = 'benchmark-job'
 
 BENCHMARK = 'benchmark'  # the kind a benchmark request names
-# harbor's own default, named explicitly because the job runs outside the tree
-JOBS_DIRECTORY = 'jobs'
 # request-lifecycle bound when the request names no timeout — generous: a full
 # Terminal-Bench 2.1 job across two agents runs for hours
 DEFAULT_TIMEOUT = 12 * 3600.0
@@ -110,13 +107,10 @@ def benchmark_kind(kind_context: KindContext) -> RequestHandler:
       '-c',
       str((workspace_tree / config).resolve()),
       '--jobs-dir',
-      str((workspace_tree / JOBS_DIRECTORY).resolve()),
+      OUTPUT_DIRECTORY,
     )
     context.job(
-      # the tree is a `git clone --shared` whose alternates name a path that
-      # exists only inside the session container, so a host process running git
-      # anywhere under it fails; nothing the job needs is cwd-relative
-      CommandJob(command=command, cwd=tempfile.gettempdir(), env=dict(os.environ)),
+      CommandJob(command=command, env=dict(os.environ)),
       peer,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,
     )
@@ -148,14 +142,16 @@ def _open_client() -> Client:
 
 
 def _interpret_result(message: Message) -> str:
-  """turn a benchmark result into the job's output tail, or raise `JobError`
-  with the failure reason."""
+  """turn a benchmark result into the ref of the job's collected run, or raise
+  `JobError` with the failure reason."""
   payload = message.payload
   outcome = payload.get('outcome')
   if outcome == 'ok':
     value = payload.get('value')
-    tail = value.get('output_tail') if isinstance(value, dict) else None
-    return str(tail) if tail is not None else ''
+    ref = value.get('ref') if isinstance(value, dict) else None
+    if ref is None:
+      raise JobError(f'benchmark job answered ok with no run: {payload}')
+    return str(ref)
   if outcome == 'denied':
     raise JobError(str(payload.get('error', payload)))
   detail = payload.get('detail')
@@ -163,8 +159,9 @@ def _interpret_result(message: Message) -> str:
   parts = [f'benchmark job failed ({detail.get("reason")})']
   if detail.get('exit_code') is not None:
     parts[0] += f' with exit code {detail["exit_code"]}'
+  if detail.get('ref') is not None:
+    parts.append(f'its run is artifact {detail["ref"]}')
   diagnostic = payload.get('error')
-  diagnostic = diagnostic if diagnostic is not None else detail.get('output_tail')
   if diagnostic is not None and len(str(diagnostic).strip()) > 0:
     parts.append(str(diagnostic).strip())
   raise JobError('; '.join(parts))
@@ -266,9 +263,9 @@ def main(argv: list[str]) -> Optional[int]:
   if len(argv) > 1 and argv[1] == 'check':
     parser = base_args.Parser(
       prog='benchmark-job check',
-      description='check on a benchmark job by its request id: print the outcome '
-      f'if the result is in, otherwise report `still running` and exit {PENDING_EXIT_CODE} '
-      'without blocking; --wait blocks and collects instead',
+      description="check on a benchmark job by its request id: print its run's "
+      f'artifact ref if the result is in, otherwise report `still running` and exit '
+      f'{PENDING_EXIT_CODE} without blocking; --wait blocks and collects instead',
     )
     parser.add_argument('request_id', help='request id printed by benchmark-job start')
     parser.add_argument(
@@ -296,8 +293,9 @@ def main(argv: list[str]) -> Optional[int]:
     parser = base_args.Parser(
       prog='benchmark-job start',
       description='start a benchmark job through the session broker: the host runs '
-      'harbor in this workspace with its own docker access; use `benchmark-job check` '
-      'to reattach to a request',
+      'harbor in this workspace with its own docker access and prints the artifact '
+      'ref of the finished run, whose output/ holds the score; use `benchmark-job '
+      'check` to reattach to a request',
     )
     parser.add_argument(
       '-c', '--config', required=True, help='job config path, relative to the workspace root'

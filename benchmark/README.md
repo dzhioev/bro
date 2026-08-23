@@ -79,8 +79,12 @@ benchmark-job check <request-id>
 
 The host runs the same harbor command with its own docker access
 (the `benchmark` broker kind, `local/bro/local/benchmark_job.py`),
-pointed at the workspace's own config and `jobs/` directory, so the config path, the bundle, and the
-score are the workspace's own files on both routes.
+pointed at the workspace's own config and at the job's own directory rather than the checkout's
+`jobs/`.
+`start` and `check` print the artifact ref of the finished run;
+`artifact get <ref>` makes it readable, with the whole `<jobs_dir>` under `output/` beside the run's
+`stdout`, `stderr`, and `status.json`.
+The store dies with the session, so copy out whatever should outlive it.
 
 Following a run as it happens means reading the log where
 it is being written:

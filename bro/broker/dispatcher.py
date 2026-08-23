@@ -22,8 +22,9 @@ Two invariants carry the design:
   or a `spawn` whose launch raised (`reason: 'launch'`, before any peer existed).
   A *job* (`job()`) is the exception by definition: its process speaks no protocol, so
   the host speaks every message on its behalf — a started `progress{}` at launch, and
-  a result derived from the exit: 0 becomes `result{ok}` carrying the output tail,
-  anything else the same `failed{exit}` a mute worker produces.
+  a result built from the run directory the process filled: a clean run becomes
+  `result{ok}` carrying the collected value, anything else the `failed{exit}` /
+  `failed{timeout}` a mute worker produces, carrying that value too.
 
 The root is a uniform peer with one twist: `run(root)` opens the session's own
 exchange for it, host-anchored — the requester is this process, not a peer — so the
@@ -35,15 +36,17 @@ exit ends the session.
 
 import asyncio
 import contextlib
+import shutil
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
-from typing import Optional, Protocol
+from pathlib import Path
+from typing import Any, Optional, Protocol
 
 from bro.base import log
 from bro.base.lulid import lulid
 from bro.broker import brotocol
 from bro.broker.brotocol import Message, Tag
-from bro.broker.job import CommandJob
+from bro.broker.job import CommandJob, record_status
 from bro.broker.runtime import Peer, Runtime, job_peer
 from bro.broker.spawn import LaunchSpec, Spawner
 from bro.broker.transport import Provisioned, ServerTransport
@@ -67,13 +70,43 @@ class RuntimeCommands(Protocol):
   """the mechanism-layer commands the Dispatcher issues; the real `Runtime` satisfies it."""
 
   async def spawn(self, launch: LaunchSpec, *, timeout: Optional[float], exchange: str) -> Peer: ...
-  async def job(self, command: CommandJob, *, timeout: Optional[float], exchange: str) -> Peer: ...
+  async def job(
+    self, command: CommandJob, *, directory: Path, timeout: Optional[float], exchange: str
+  ) -> Peer: ...
   async def expect(self, *, timeout: Optional[float]) -> Provisioned: ...
   def send(self, peer: Peer, message: Message) -> None: ...
   def kill(self, peer: Peer) -> None: ...
   def forget(self, peer: Peer) -> None: ...
   async def serve(self) -> None: ...
   async def stop(self) -> None: ...
+
+
+class JobOutput(Protocol):
+  """where a job's run is collected, and what the exchange answers with.
+
+  The Dispatcher opens a directory per job, the process fills it (the layout is
+  `bro/broker/job.py`'s), and `collect` turns the finished run into the result's
+  `value`."""
+
+  def open(self) -> Path:
+    """a fresh empty directory to collect one job's run into."""
+    ...
+
+  async def collect(self, directory: Path, context: 'Dispatcher', requester: Peer) -> dict:
+    """the value the job's result carries, built from its completed run
+    directory; heavy, so the implementation works off the loop. `requester` is
+    the peer awaiting the result — whom the collected output is attributed to.
+    Raising fails the exchange and leaves the directory in place."""
+    ...
+
+
+@dataclass
+class JobRun:
+  """the run a job exchange answers with: the directory its output is collected
+  from, and whether the host killed the process at its deadline."""
+
+  directory: Path
+  timed_out: bool = False
 
 
 @dataclass
@@ -83,13 +116,23 @@ class Exchange:
 
   requester: Optional[Peer]  # None: host-anchored — this process is the requester
   worker: Optional[Peer] = None
-  job: bool = False  # answered by a job: a clean exit is its ok (see on_exit)
+  job: Optional[JobRun] = None  # answered by a job: its run (see on_exit)
+
+
+def _remove_run(directory: Path) -> None:
+  try:
+    shutil.rmtree(directory)
+  except OSError as e:
+    log.warning(f'broker dispatcher: could not remove the job run directory {directory}: {e}')
 
 
 class Dispatcher:
-  def __init__(self, *, default_timeout: float = DEFAULT_TIMEOUT):
+  def __init__(
+    self, *, default_timeout: float = DEFAULT_TIMEOUT, job_output: Optional[JobOutput] = None
+  ):
     self._runtime: Optional[RuntimeCommands] = None
     self._default_timeout = default_timeout
+    self._job_output = job_output
     self.exchanges: dict[str, Exchange] = {}  # live exchanges by request id
     self.workers: dict[Peer, str] = {}  # worker channel -> the exchange it answers
     self._handlers: dict[str, RequestHandler] = {}
@@ -108,6 +151,12 @@ class Dispatcher:
     if self._runtime is None:
       raise RuntimeError('dispatcher used before bind()')
     return self._runtime
+
+  @property
+  def job_output(self) -> JobOutput:
+    if self._job_output is None:
+      raise RuntimeError('this broker runs no jobs: it was built with no job output')
+    return self._job_output
 
   def on(self, kind: str, handler: RequestHandler) -> None:
     """register the handler answering `kind`. A kind has exactly one handler —
@@ -174,15 +223,16 @@ class Dispatcher:
     speaks on its behalf. The exchange opens *and its worker binds* here — a
     job's peer id is derivable up front, so no exit can slip in between — then a
     started `progress{}` is delivered when the launch resolves, and the result
-    is derived from the exit in `on_exit`. A launch failure closes the exchange
-    with `result{failed, reason: 'launch'}` instead."""
+    is built in `on_exit` from the run directory opened here. A launch failure
+    closes the exchange with `result{failed, reason: 'launch'}` instead."""
     request_id = self._request_id()
     worker = job_peer(request_id)
-    self.exchanges[request_id] = Exchange(requester=requester, worker=worker, job=True)
+    directory = self.job_output.open()
+    self.exchanges[request_id] = Exchange(requester=requester, worker=worker, job=JobRun(directory))
     self.workers[worker] = request_id
     effective_timeout = timeout if timeout is not None else self._default_timeout
     task = asyncio.ensure_future(
-      self.runtime.job(command, timeout=effective_timeout, exchange=request_id)
+      self.runtime.job(command, directory=directory, timeout=effective_timeout, exchange=request_id)
     )
 
     def _launched(finished: asyncio.Task) -> None:
@@ -191,6 +241,7 @@ class Dispatcher:
       error = finished.exception()
       if error is not None:
         log.warning(f'broker dispatcher: job launch failed: {error!r}')
+        _remove_run(directory)  # no process ran, so nothing was collected into it
         self._fail(request_id, None, error=str(error), detail={'reason': 'launch'})
         return
       exchange = self.exchanges.get(request_id)
@@ -263,8 +314,8 @@ class Dispatcher:
     request_id = self.workers.get(peer)
     if request_id is not None:
       exchange = self.exchanges.get(request_id)
-      if exchange is not None and exchange.job and code == 0:
-        self._complete_job(request_id, peer, output)
+      if exchange is not None and exchange.job is not None:
+        self._end_job(request_id, exchange, code)
       else:
         self._fail(
           request_id, peer, detail={'reason': 'exit', 'exit_code': code, 'output_tail': output}
@@ -274,11 +325,18 @@ class Dispatcher:
       self._root_exit.set_result(code)
 
   def on_timeout(self, peer: Peer) -> None:
+    request_id = self.workers.get(peer)
+    if request_id is None:
+      return
+    exchange = self.exchanges.get(request_id)
+    if exchange is not None and exchange.job is not None:
+      # a job answers with its run directory, which the in-flight kill has not
+      # finished writing: the reap closes the exchange, carrying this reason.
+      exchange.job.timed_out = True
+      return
     # the Runtime already killed the peer; the following on_exit finds the exchange
     # closed and synthesizes nothing.
-    request_id = self.workers.get(peer)
-    if request_id is not None:
-      self._fail(request_id, peer, detail={'reason': 'timeout'})
+    self._fail(request_id, peer, detail={'reason': 'timeout'})
 
   def on_gone(self, peer: Peer) -> None:
     # an expected worker's channel ended — its `on_exit`: every frame it wrote was
@@ -366,20 +424,54 @@ class Dispatcher:
     for observer in self._delivery_observers:
       observer(source, target, message)
 
-  def _complete_job(self, request_id: str, source: Peer, output: str) -> None:
-    """close a job exchange whose process ended cleanly: exit 0 is the job's ok,
-    delivered with the output tail as its value."""
-    exchange = self.exchanges.get(request_id)
-    if exchange is None:
-      return
+  def _end_job(self, request_id: str, exchange: Exchange, code: int) -> None:
+    """close a job exchange on its process's reap. The outcome is decided here —
+    the exchange is forgotten before anything is awaited, so a later timeout or
+    exit finds nothing to answer — and the one result waits for the run directory
+    to be collected off the loop."""
+    assert exchange.job is not None
+    run, source, requester = exchange.job, exchange.worker, exchange.requester
+    clean = code == 0 and not run.timed_out
+    status: dict[str, Any] = {
+      'reason': 'timeout' if run.timed_out else 'exit',
+      'exit_code': code,
+    }
     self._close(request_id)
-    if exchange.requester is None:
+    if requester is None:
+      _remove_run(run.directory)
       return
-    self._deliver_observed(
-      source,
-      exchange.requester,
-      brotocol.result(request_id, 'ok', value={'output_tail': output}),
-    )
+    task = asyncio.ensure_future(self._collect_run(run.directory, status, requester))
+
+    def _collected(finished: asyncio.Task) -> None:
+      if finished.cancelled():
+        return
+      error = finished.exception()
+      if error is None:
+        value = finished.result()
+        result = (
+          brotocol.result(request_id, 'ok', value=value)
+          if clean
+          else brotocol.result(request_id, 'failed', detail={**status, **value})
+        )
+      else:
+        # the run is the only copy of what the job produced, so it outlives a
+        # collection that could not turn it into an answer
+        log.warning(f'broker dispatcher: job {request_id} collection failed: {error!r}; its run is kept at {run.directory}')  # fmt: skip
+        # a clean run that produced no answer fails on the collection alone
+        detail = {'reason': 'output'} if clean else status
+        result = brotocol.result(request_id, 'failed', error=str(error), detail=detail)
+      self._deliver_observed(source, requester, result)
+
+    task.add_done_callback(_collected)
+
+  async def _collect_run(self, directory: Path, status: dict[str, Any], requester: Peer) -> dict:
+    """record how the run ended, hand it to the job output, and drop the
+    directory once it has been collected. The two steps this owns run off the
+    loop: a job's output is a tree of arbitrary size."""
+    await asyncio.to_thread(record_status, directory, status)
+    value = await self.job_output.collect(directory, self, requester)
+    await asyncio.to_thread(_remove_run, directory)
+    return value
 
   def _fail(
     self,
@@ -416,12 +508,20 @@ class Dispatcher:
 
 
 class Broker:
-  """the thin facade ride constructs: injects the two ports, exposes `on` / `run` / `stop`."""
+  """the thin facade ride constructs: injects the ports, exposes `on` / `run` / `stop`.
+
+  Without a `job_output` the broker serves no jobs — a handler that calls `job`
+  raises rather than answering a shape nothing collected."""
 
   def __init__(
-    self, transport: ServerTransport, spawner: Spawner, *, default_timeout: float = DEFAULT_TIMEOUT
+    self,
+    transport: ServerTransport,
+    spawner: Spawner,
+    *,
+    default_timeout: float = DEFAULT_TIMEOUT,
+    job_output: Optional[JobOutput] = None,
   ):
-    self._dispatcher = Dispatcher(default_timeout=default_timeout)
+    self._dispatcher = Dispatcher(default_timeout=default_timeout, job_output=job_output)
     self._dispatcher.bind(Runtime(transport, spawner, self._dispatcher))
 
   def on(self, kind: str, handler: RequestHandler) -> None:

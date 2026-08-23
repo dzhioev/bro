@@ -12,8 +12,8 @@ from bro.broker import brotocol
 from bro.broker.dispatcher import Dispatcher
 from bro.kinds import ArtifactDenied
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir, workspace_tree
-from ride.artifacts import ArtifactControl, ArtifactStore
-from ride.peers import PeerIdentity, Peers
+from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts
+from ride.peers import PeerIdentity, Peers, UnattributablePeer
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 
@@ -270,6 +270,34 @@ def control(workspace, store):
 
 def _context(control) -> FakeContext:
   return FakeContext()
+
+
+class TestJobArtifacts:
+  @pytest.fixture
+  def jobs(self, workspace, store):
+    return JobArtifacts(store, Peers(workspace))
+
+  def test_a_run_directory_lives_in_the_store(self, jobs):
+    directory = jobs.open()
+    assert directory.is_dir()
+    assert directory.is_relative_to(ride.artifacts.store_dir('ws'))
+    assert jobs.open() != directory
+
+  @pytest.mark.asyncio
+  async def test_collect_answers_the_ref_the_requester_reaches(self, jobs, store):
+    directory = jobs.open()
+    (directory / 'stdout').write_bytes(b'ran')
+    value = await jobs.collect(directory, cast(Dispatcher, FakeContext()), ROOT)
+    assert value == {'ref': digest_path(directory), 'size': 3}
+    assert store.reachable(value['ref'], 'ws')
+    assert [entry['event'] for entry in _audit()] == ['job']
+
+  @pytest.mark.asyncio
+  async def test_an_unattributable_requester_collects_nothing(self, jobs):
+    directory = jobs.open()
+    (directory / 'stdout').write_bytes(b'ran')
+    with pytest.raises(UnattributablePeer):
+      await jobs.collect(directory, cast(Dispatcher, FakeContext()), CHILD)
 
 
 class TestArtifactControl:
