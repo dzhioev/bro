@@ -42,6 +42,11 @@ class BlazeRequest:
   lineage: Optional[dict[str, Any]] = None
   """harness-specific evidence for the trail's lineage, interpreted by the
   harness adapter's resolver."""
+  attempt_key: Optional[str] = None
+  """the caller's key for one creation attempt: a blaze carrying a key the store
+  has already answered returns that trail again rather than opening another, so
+  a caller whose response was lost converges on its next attempt. a declined
+  adoption creates nothing and leaves the key unanswered."""
 
   def __post_init__(self) -> None:
     for field in ('harness', 'version', 'surface'):
@@ -57,7 +62,7 @@ class BlazeRequest:
     _validate_lineage(self.lineage)
     if self.lineage is not None and self.forked_from is not None:
       raise ValueError('lineage evidence and forked_from are mutually exclusive')
-    for field in ('bro', 'subject'):
+    for field in ('bro', 'subject', 'attempt_key'):
       value = getattr(self, field)
       if value is not None and (not isinstance(value, str) or len(value) == 0):
         raise ValueError(f'{field} must be a non-empty string')
@@ -85,6 +90,7 @@ class BlazeRequest:
       'subject',
       'location',
       'lineage',
+      'attempt_key',
     }
     unknown = set(data) - fields
     if len(unknown) > 0:
@@ -107,6 +113,7 @@ class BlazeRequest:
       subject=data.get('subject'),
       location=data.get('location'),
       lineage=data.get('lineage'),
+      attempt_key=data.get('attempt_key'),
     )
 
   def to_wire(self) -> dict[str, Any]:
@@ -118,7 +125,16 @@ class BlazeRequest:
       'body': self.body,
       'native': self.native,
     }
-    for field in ('bro', 'hold', 'forked_from', 'summoned_by', 'subject', 'location', 'lineage'):
+    for field in (
+      'bro',
+      'hold',
+      'forked_from',
+      'summoned_by',
+      'subject',
+      'location',
+      'lineage',
+      'attempt_key',
+    ):
       value = getattr(self, field)
       if value is not None:
         data[field] = value

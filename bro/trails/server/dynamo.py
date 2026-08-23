@@ -115,6 +115,10 @@ class DynamoStore(TrailsStore):
     adapter.validate_create(request.native)
     if request.harness == 'bro' and request.bro is None:
       raise ValueError('bro is required for the bro harness')
+    if request.attempt_key is not None:
+      recorded = self._recorded_attempt(request.attempt_key)
+      if recorded is not None:
+        return recorded
     decision = None
     forked_from = request.forked_from
     if request.lineage is not None:
@@ -173,28 +177,57 @@ class DynamoStore(TrailsStore):
       seen_billing_keys=seen_billing_keys,
     )
     item.update(state_fields(state, len(rows)))
-    self._dynamo.transact_write_items(
-      TransactItems=[
+    result = backends.blaze_result(trail_id, started_at, decision)
+    transaction_items: list[dict] = [
+      {
+        'Put': {
+          'TableName': self._trails_table,
+          'Item': _ddb_item(item),
+          'ConditionExpression': 'attribute_not_exists(id)',
+        }
+      },
+      *[
+        {
+          'Put': {
+            'TableName': self._steps_table,
+            'Item': _ddb_item(row),
+            'ConditionExpression': 'attribute_not_exists(trail_id)',
+          }
+        }
+        for row in rows
+      ],
+    ]
+    if request.attempt_key is not None:
+      transaction_items.append(
         {
           'Put': {
             'TableName': self._trails_table,
-            'Item': _ddb_item(item),
+            'Item': _ddb_item({'id': _attempt_id(request.attempt_key), 'result': result}),
             'ConditionExpression': 'attribute_not_exists(id)',
           }
-        },
-        *[
-          {
-            'Put': {
-              'TableName': self._steps_table,
-              'Item': _ddb_item(row),
-              'ConditionExpression': 'attribute_not_exists(trail_id)',
-            }
-          }
-          for row in rows
-        ],
-      ],
+        }
+      )
+    try:
+      self._dynamo.transact_write_items(TransactItems=transaction_items)
+    except self._dynamo.exceptions.TransactionCanceledException:
+      if request.attempt_key is None:
+        raise
+      recorded = self._recorded_attempt(request.attempt_key)
+      if recorded is None:
+        raise
+      return recorded
+    return result
+
+  def _recorded_attempt(self, attempt_key: str) -> Optional[dict]:
+    """the blaze result an earlier attempt under this key recorded, or None when
+    the key has opened no trail."""
+    response = self._dynamo.get_item(
+      TableName=self._trails_table,
+      Key=_ddb_item({'id': _attempt_id(attempt_key)}),
+      ConsistentRead=True,
     )
-    return backends.blaze_result(trail_id, started_at, decision)
+    item = _from_ddb_item(response.get('Item'))
+    return None if item is None else item['result']
 
   def _store_context(self, trail_id: str, context: Any) -> None:
     self._s3.put_object(
@@ -789,6 +822,12 @@ def build_dynamo_store(config: dict[str, Any]) -> DynamoStore:
     uuid_index=config['uuid_index'],
     bucket=config['bucket'],
   )
+
+
+def _attempt_id(attempt_key: str) -> str:
+  """the trails-table id an attempt key's answer is recorded under; the `#` is
+  what keeps those ids out of the space trails are minted in."""
+  return f'attempt#{attempt_key}'
 
 
 def _format_iso(moment: datetime) -> str:

@@ -18,7 +18,7 @@ from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore
 _TOKEN = 'contract-token'
 
 
-def _bro_request(*, bro='dev', body=None, forked_from=None, subject=None):
+def _bro_request(*, bro='dev', body=None, forked_from=None, subject=None, attempt_key=None):
   return BlazeRequest(
     harness='bro',
     version='test',
@@ -30,6 +30,7 @@ def _bro_request(*, bro='dev', body=None, forked_from=None, subject=None):
     hold='unattended',
     forked_from=forked_from,
     subject=subject,
+    attempt_key=attempt_key,
   )
 
 
@@ -40,7 +41,7 @@ def _lineage(*records, segment='segment'):
   }
 
 
-def _claude_request(*records, context=None, lineage=None):
+def _claude_request(*records, context=None, lineage=None, attempt_key=None):
   body = {'records': list(records)}
   if context is not None:
     body['launch_context'] = context
@@ -57,6 +58,7 @@ def _claude_request(*records, context=None, lineage=None):
       'harness_version': 'test',
     },
     lineage=lineage,
+    attempt_key=attempt_key,
   )
 
 
@@ -197,6 +199,30 @@ class TestTrailsStoreContract:
     assert verdict['forked_from'] == {'trail_id': trail_id, 'step_id': 1}
     assert verdict['chunks'] == [[2, 2]]
     assert trails_store.get_trail(verdict['id'])['forked_from'] == verdict['forked_from']
+
+  def test_a_replayed_attempt_answers_from_the_trail_its_key_opened(self, trails_store):
+    first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
+    second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
+    parent = trails_store.blaze(_claude_request(first, second))['id']
+    third = json.dumps({'type': 'user', 'uuid': 'uuid-3', 'message': {'content': 'again'}})
+    fourth = json.dumps({'type': 'user', 'uuid': 'uuid-4', 'message': {'content': 'more'}})
+
+    declined = trails_store.blaze(
+      _claude_request(lineage=_lineage(first, second), attempt_key='attempt-1')
+    )
+    opened = trails_store.blaze(
+      _claude_request(lineage=_lineage(first, second, third), attempt_key='attempt-1')
+    )
+    replayed = trails_store.blaze(
+      _claude_request(lineage=_lineage(first, second, third, fourth), attempt_key='attempt-1')
+    )
+
+    assert declined == {'adopted': False, 'reason': 'no line past the recorded extent yet'}
+    # the grown evidence is not resolved again: the key answers with its verdict
+    assert replayed == opened
+    assert [trail['id'] for trail in trails_store.list_trails(forked_from=parent)['trails']] == [
+      opened['id']
+    ]
 
   def test_large_bodies_are_inline(self, trails_store):
     trail_id = trails_store.blaze(_bro_request())['id']

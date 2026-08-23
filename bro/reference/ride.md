@@ -1153,6 +1153,7 @@ a verified resume opens a fork trail pointing at the prior one, so a whole conve
 the core trails schema and Claude lineage verdict remain in `bro.trails`).
 The daemon nominates nothing:
 it blazes with the transcript's lineage evidence and the store's harness resolver decides the edge, or declines a transcript claude has not finished writing (`bro/trails/AGENTS.md`).
+One adoption carries one attempt key across however many ticks it takes, so a blaze whose response is lost converges on the trail the store already opened instead of forking one per tick.
 The trail carries the launch recipe, the `RIDE_SESSION_CONTEXT` attachment, and the session's location facts, and the recorder publishes its current trail id to the session's trail pointer,
 from which summon control stamps the session's summoned children with `summoned_by.trail_id` (see "Summoning another bro").
 The daemon's stderr goes to `claude/session-recorder.log` in the session state dir;

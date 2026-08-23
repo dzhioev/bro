@@ -333,7 +333,7 @@ def components():
     yield store, dynamo_client, s3
 
 
-def _blaze_bro(store: dynamo_store.DynamoStore, **overrides) -> str:
+def _bro_payload(**overrides) -> dict:
   payload = {
     'harness': 'bro',
     'version': '2',
@@ -345,7 +345,11 @@ def _blaze_bro(store: dynamo_store.DynamoStore, **overrides) -> str:
     'body': {'records': [{'kind': 'system_prompt', 'body': 'prompt', 'turn_index': 0}]},
   }
   payload.update(overrides)
-  return (store.blaze(BlazeRequest.from_wire(payload)))['id']
+  return payload
+
+
+def _blaze_bro(store: dynamo_store.DynamoStore, **overrides) -> str:
+  return (store.blaze(BlazeRequest.from_wire(_bro_payload(**overrides))))['id']
 
 
 def _blaze_claude(store: dynamo_store.DynamoStore, **overrides) -> str:
@@ -439,6 +443,34 @@ def test_five_function_registry_and_declared_projection_contract():
       if callable(getattr(adapter, name))
     } == {'parse', 'classify', 'project', 'open', 'validate_create'}
     assert adapter.emitted_message_types <= MESSAGE_TYPES
+
+
+def test_a_replayed_attempt_answers_from_the_trail_its_key_opened(components):
+  store, dynamo, _ = components
+  opened = store.blaze(BlazeRequest.from_wire(_bro_payload(attempt_key='attempt-1')))
+
+  replayed = store.blaze(BlazeRequest.from_wire(_bro_payload(attempt_key='attempt-1', bro='other')))
+
+  assert replayed == opened
+  assert set(dynamo.headers) == {opened['id'], 'attempt#attempt-1'}
+
+
+def test_an_attempt_that_loses_the_write_reads_the_recorded_answer(components, monkeypatch):
+  store, dynamo, _ = components
+  opened = store.blaze(BlazeRequest.from_wire(_bro_payload(attempt_key='attempt-1')))
+  recorded_attempt = store._recorded_attempt
+  reads: list[str] = []
+
+  def raced(attempt_key: str):
+    """the concurrent attempt read the key before the winner recorded it."""
+    reads.append(attempt_key)
+    return None if len(reads) == 1 else recorded_attempt(attempt_key)
+
+  monkeypatch.setattr(store, '_recorded_attempt', raced)
+  raced_result = store.blaze(BlazeRequest.from_wire(_bro_payload(attempt_key='attempt-1')))
+
+  assert raced_result == opened
+  assert set(dynamo.headers) == {opened['id'], 'attempt#attempt-1'}
 
 
 def test_universal_append_uses_ordinals_folds_raw_usage_and_is_idempotent(components):

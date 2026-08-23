@@ -9,6 +9,7 @@ import pytest
 from bro.monitor import health, trail_pointer
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest
+from bro.trails.store import TransientUnavailable
 from ride.claude.trail_recorder import (
   Recorder,
   _attempt,
@@ -22,13 +23,22 @@ from ride.claude.trail_recorder import (
 
 
 class _Store(LocalStore):
-  """a real local store that also records the keepalives it was sent, and fails
-  the number of appends `refusals` is set to."""
+  """a real local store that also records the keepalives it was sent, fails the
+  number of appends `refusals` is set to, and loses the response of the number
+  of blazes `lost_blazes` is set to — those trails are opened all the same."""
 
   def __init__(self, root: Path):
     super().__init__(root)
     self.keepalives: list[str] = []
     self.refusals = 0
+    self.lost_blazes = 0
+
+  def blaze(self, request: BlazeRequest) -> dict:
+    result = super().blaze(request)
+    if self.lost_blazes > 0:
+      self.lost_blazes -= 1
+      raise TransientUnavailable('the blaze response never arrived')
+    return result
 
   def keepalive(self, trail_id: str) -> None:
     self.keepalives.append(trail_id)
@@ -261,6 +271,34 @@ class TestAdoption:
     blazes = len(_trails(store))
     assert second.tick() is False
     assert len(_trails(store)) == blazes
+
+  def test_a_lost_blaze_response_converges_on_the_next_tick(self, environment, store):
+    lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
+    _write_segment(environment, 'seg-1', lines)
+    store.lost_blazes = 1
+    recorder = _recorder(environment, store)
+    with pytest.raises(TransientUnavailable):
+      recorder.tick()
+
+    assert recorder.tick() is True
+
+    [header] = _trails(store)
+    assert _rows(store, header['id']) == lines
+
+  def test_a_lost_blaze_does_not_bind_a_later_segment_to_its_trail(self, environment, store):
+    _write_segment(environment, 'seg-1', [_user('hello', 'u1')])
+    store.lost_blazes = 1
+    recorder = _recorder(environment, store)
+    with pytest.raises(TransientUnavailable):
+      recorder.tick()
+    later = [_user('later', 'u2')]
+    _write_segment(environment, 'seg-2', later)
+
+    assert recorder.tick() is True
+
+    stranded, adopted = _trails(store)
+    assert [stranded['native']['segment'], adopted['native']['segment']] == ['seg-1', 'seg-2']
+    assert _rows(store, adopted['id']) == later
 
 
 class TestAppends:

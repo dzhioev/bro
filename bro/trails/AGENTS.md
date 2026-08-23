@@ -47,6 +47,7 @@ bro · claude recorders                     readers
   `DynamoStore` queries its keys-only uuid index), and returns a fork point with the file ranges the new trail owns, a decline while a history copy is mid-write, or a root.
   Nothing on this path crosses the wire, and continuity across recorder lifetimes comes from the stored rows alone.
 - `local.py` stores each trail under `<root>/trails/<id>/` as `header.json`, `steps.jsonl`, and optional `context.json`, with tool blobs under `<root>/trails/tools/<sha256>.json`.
+  Each answered attempt key's verdict is recorded under `<root>/trails/attempts/<sha256>.json`, behind a lock on the key.
   Appends are ordinal and `flock`-serialized, headers are atomically replaced, bodies remain inline, and listing preserves the selector/cursor contract.
   A stale open header gets `end.inference = unreported` when read.
 - The local root is the global `bro.workspace.paths.trails_dir` under the runtime state root.
@@ -64,6 +65,7 @@ bro · claude recorders                     readers
   the unreported-trail sweep starts only for a `DynamoStore`.
 - `server/dynamo.py` owns `DynamoStore(TrailsStore)`:
   conditional append transactions, indexes, S3 body spill/resolution, UUID reads, and its store-owned thread pool for UUID-query and spilled-row fan-outs.
+  An answered attempt key rides the creation transaction as an `attempt#<key>` item in the trails table, so the attempt that loses that conditional write reads the winner's verdict rather than opening a trail of its own.
   `server/dynamo_types.py` owns Dynamo conversion and row constants.
   `server/operations.py` remains the recompute/check engine and owns manifested relinking.
 - Stored rows are served rows.
@@ -111,6 +113,7 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   `ride.claude.trail_recorder` records Claude transcripts, reporting each adopted segment's evidence and applying the core lineage verdict it gets back.
 - `POST /v1/trails` blazes from `body.records`, resolving `lineage` evidence when the request carries it
   — the response then adds the verdict (`adopted`, `forked_from`, `chunks`) and a declined adoption creates nothing.
+  A request carrying an `attempt_key` is answered from the trail that key already opened, ahead of any lineage resolution, so a caller whose response was lost converges on that trail instead of forking one per attempt.
   `POST /v1/trails/{id}/records` appends at `offset`.
   A committed retry returns the current extent without folding again;
   any other extent mismatch is a conflict.

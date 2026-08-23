@@ -177,6 +177,16 @@ class LocalStore(TrailsStore):
       return json.loads(path.read_text())
 
   def blaze(self, request: BlazeRequest) -> dict:
+    if request.attempt_key is None:
+      return self._open_trail(request, recorded=None)
+    with self._attempt_lock(request.attempt_key) as recorded:
+      if recorded.is_file():
+        return json.loads(recorded.read_text())
+      return self._open_trail(request, recorded=recorded)
+
+  def _open_trail(self, request: BlazeRequest, *, recorded: Optional[Path]) -> dict:
+    """mint the trail `request` opens and answer with its verdict, writing that
+    answer to `recorded` for a replay of the same attempt."""
     adapter = self._adapter(request.harness)
     adapter.validate_create(request.native)
     if request.harness == 'bro' and request.bro is None:
@@ -230,7 +240,10 @@ class LocalStore(TrailsStore):
         _atomic_json(directory / 'context.json', launch_context)
       _atomic_json(directory / 'header.json', header)
       (directory / '.lock').touch()
-    return backends.blaze_result(trail_id, started_at, decision)
+    result = backends.blaze_result(trail_id, started_at, decision)
+    if recorded is not None:
+      _atomic_json(recorded, result)
+    return result
 
   def append_records(
     self,
@@ -315,6 +328,18 @@ class LocalStore(TrailsStore):
     if len(trail_id) == 0 or trail_id in {'.', '..'} or '/' in trail_id or os.sep in trail_id:
       raise ValueError(f'invalid trail id: {trail_id!r}')
     return self.trails_directory / trail_id
+
+  @contextlib.contextmanager
+  def _attempt_lock(self, attempt_key: str) -> Iterator[Path]:
+    """hold `attempt_key` exclusively for the length of one blaze and yield the
+    path its answer is recorded at, so a concurrent attempt under the same key
+    waits for that answer instead of opening a second trail."""
+    directory = self.trails_directory / 'attempts'
+    directory.mkdir(exist_ok=True)
+    name = _sha256(attempt_key.encode())
+    with (directory / f'{name}.lock').open('a+b') as lock:
+      fcntl.flock(lock, fcntl.LOCK_EX)
+      yield directory / f'{name}.json'
 
   @contextlib.contextmanager
   def _locked(self, trail_id: str, *, shared: bool) -> Iterator[None]:

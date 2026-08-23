@@ -38,6 +38,7 @@ from typing import Any, NamedTuple, Optional
 
 from bro.base import configs, credentials, log
 from bro.base.args import Parser
+from bro.base.lulid import lulid
 from bro.launch.hold import session_hold
 from bro.monitor import health, trail_pointer, working_projects_dir
 from bro.summon import summoned_by_from_env
@@ -69,6 +70,15 @@ class _Position(NamedTuple):
 
   signature: _Signature
   byte_extent: int
+
+
+class _Adoption(NamedTuple):
+  """the segment a recorder is trying to adopt and the key its blazes carry. the
+  key is scoped to the segment: replaying it for another one would record that
+  segment's lines into this segment's trail."""
+
+  segment: str
+  attempt_key: str
 
 
 class _Progress(enum.Enum):
@@ -308,6 +318,7 @@ class Recorder:
     # summoned run, and the reader consumes the env var
     self.summoned_by = summoned_by_from_env()
     self._active: Optional[_SegmentRecorder] = None
+    self._adoption: Optional[_Adoption] = None
     self._consumed: set[str] = set()
     self._declined_signature: Optional[_Signature] = None
     # a stale pointer from a previous lifetime must not attribute this
@@ -431,6 +442,8 @@ class Recorder:
   def _blaze(self, segment: str, lineage: dict) -> Optional[dict]:
     """open the trail this transcript continues and return the verdict; None
     when the resolver declines to adopt the segment yet."""
+    if self._adoption is None or self._adoption.segment != segment:
+      self._adoption = _Adoption(segment, lulid())
     body: dict[str, Any] = {'records': []}
     context = _launch_context()
     if context is not None:
@@ -452,11 +465,13 @@ class Recorder:
       hold=session_hold(),
       summoned_by=self.summoned_by,
       lineage=lineage,
+      attempt_key=self._adoption.attempt_key,
     )
     result = self.client.blaze(request)
     if result.get('adopted') is False:
       log.info('segment %s not adopted yet (%s)', segment[:12], result.get('reason'))
       return None
+    self._adoption = None
     trail_id = result['id']
     forked_from = result.get('forked_from')
     if forked_from is None:

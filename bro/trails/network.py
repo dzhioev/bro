@@ -151,9 +151,9 @@ class NetworkStore(TrailsStore):
 
   def blaze(self, request: BlazeRequest) -> dict:
     """open a trail (`POST /v1/trails`, harness-native `body` envelope included);
-    returns `{id, started_at}`. deliberately not retried: creation is the one
-    non-idempotent write, and a duplicate from a lost response would strand an
-    orphan trail — the caller's own next attempt is the retry.
+    returns `{id, started_at}`. not retried here: the caller's own next attempt
+    is the retry, and the request's attempt key is what makes that attempt land
+    on the trail a lost response already opened instead of a second one.
     """
     return self._send('POST', '/v1/trails', request.to_wire(), retry_delays=())
 

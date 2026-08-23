@@ -12,8 +12,8 @@ from bro.base.lulid import lulid
 
 SPILLOVER_THRESHOLD_BYTES = 50 * 1024
 MAX_BODY_BYTES = 10 * 1024 * 1024
-# keeps both DynamoDB transaction limits: 51 operations and under 4 MB when every inline body
-# is just below the spill threshold.
+# a record batch plus the writes framing it stays inside both DynamoDB transaction limits — 100
+# operations, and 4 MB when every inline body is just below the spill threshold.
 MAX_TRANSACTION_RECORDS = 50
 UNIVERSAL_BODY_STORAGE = 'trail_steps_v2'
 
