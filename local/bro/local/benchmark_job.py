@@ -4,13 +4,13 @@
 The `benchmark` kind lets a managed session start a benchmark run without
 holding any docker authority of its own: the session sends one coarse request
 over its broker channel, and the host — where the docker daemon lives — runs
-`uv run --project benchmark harbor job start -c <config>` in the session's
-workspace tree as a broker job (`Dispatcher.job`), speaking for it: a started
+harbor as a broker job (`Dispatcher.job`), speaking for it: a started
 `progress{}`, then a result derived from the exit — `ok` with the output tail,
 or `failed` with the exit code and tail. Everything the job reads and writes
 lives in the workspace tree the session shares with the host: the config, the
-bundle harbor resolves from the checkout it runs in (`var/benchmark/bundle`),
-and the score under `jobs/`.
+bundle harbor resolves from the checkout its environment came from
+(`var/benchmark/bundle`), and the score under `jobs/` — each named absolutely,
+since the job itself runs outside the tree.
 
 Both halves of the kind live here. `benchmark_kind` is the host-side handler
 factory the `bro.broker_kinds` entry point targets; its args are
@@ -26,6 +26,7 @@ result.
 """
 
 import os
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Optional
@@ -41,6 +42,8 @@ from bro.broker.runtime import Peer
 __cli_name__ = 'benchmark-job'
 
 BENCHMARK = 'benchmark'  # the kind a benchmark request names
+# harbor's own default, named explicitly because the job runs outside the tree
+JOBS_DIRECTORY = 'jobs'
 # request-lifecycle bound when the request names no timeout — generous: a full
 # Terminal-Bench 2.1 job across two agents runs for hours
 DEFAULT_TIMEOUT = 12 * 3600.0
@@ -99,15 +102,20 @@ def benchmark_kind(workspace_tree: Path) -> RequestHandler:
       'uv',
       'run',
       '--project',
-      'benchmark',
+      str((workspace_tree / 'benchmark').resolve()),
       'harbor',
       'job',
       'start',
       '-c',
       str((workspace_tree / config).resolve()),
+      '--jobs-dir',
+      str((workspace_tree / JOBS_DIRECTORY).resolve()),
     )
     context.job(
-      CommandJob(command=command, cwd=str(workspace_tree), env=dict(os.environ)),
+      # the tree is a `git clone --shared` whose alternates name a path that
+      # exists only inside the session container, so a host process running git
+      # anywhere under it fails; nothing the job needs is cwd-relative
+      CommandJob(command=command, cwd=tempfile.gettempdir(), env=dict(os.environ)),
       peer,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,
     )
