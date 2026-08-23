@@ -65,9 +65,9 @@ if TYPE_CHECKING:
   from bro.broker.runtime import Peer
   from ride.workspace.model import Workspace
 
-# refusal bound on the store's committed bytes — a runaway-mint guard, not a
+# refusal bound on the store's committed bytes — a runaway-ingest guard, not a
 # quota (the store dies with the session)
-MAX_STORE_BYTES = 8 << 30
+MAX_STORE_BYTES = 32 << 30
 # the Linux ioctl that clones a file's extents; any refusal (another OS, a
 # filesystem that cannot clone, a cross-device pair) falls back to a plain copy
 _FICLONE = 0x40049409
