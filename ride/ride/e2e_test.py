@@ -33,12 +33,10 @@ import json
 import os
 import pty
 import re
-import shutil
 import signal
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -50,6 +48,7 @@ import pytest
 
 import bro.workspace.paths as workspace_paths
 import ride.workspace.docker as workspace_docker
+import ride.workspace.host_docker_test_helper as host_docker
 from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Broker, Dispatcher, ping_handler, spawn_test_handler
 from bro.broker.runtime import Peer
@@ -59,19 +58,8 @@ from ride.spawn import broker_bind_hosts
 from ride.workspace.docker import CONTAINER_BROKER_HOST, find_container_id
 from ride.workspace.spawn import DockerLaunchSpec, DockerSpawner
 
-
-def _docker_available() -> bool:
-  try:
-    return subprocess.run(['docker', 'info'], capture_output=True).returncode == 0
-  except FileNotFoundError:
-    return False
-
-
 pytestmark = [
-  pytest.mark.skipif(
-    Path('/.dockerenv').is_file(), reason='host-only: drives the host docker daemon'
-  ),
-  pytest.mark.skipif(not _docker_available(), reason='no reachable docker daemon'),
+  *host_docker.HOST_DAEMON_ONLY,
   # a peer killed at broker teardown leaves its docker attach client un-awaited; the
   # subprocess transport's __del__ then runs after its loop closed and raises the benign
   # 'Event loop is closed', which GC surfaces in whatever test happens to run next
@@ -371,58 +359,52 @@ def _remove_stray_containers(env: 'IsolatedEnv') -> None:
 
 @pytest.fixture(scope='module')
 def isolated_env() -> Iterator[IsolatedEnv]:
-  root = Path(tempfile.mkdtemp(prefix=_NAME_PREFIX))
-  checkout = Path(
+  with host_docker.scratch_root('broker-e2e') as root:
+    project = root / 'project'
     subprocess.run(
-      ['git', '-C', str(Path(__file__).resolve().parent), 'rev-parse', '--show-toplevel'],
-      capture_output=True,
-      text=True,
-      check=True,
-    ).stdout.strip()
-  )
-  project = root / 'project'
-  subprocess.run(['git', 'clone', '--quiet', str(checkout), str(project)], check=True)
-  data_home = root / 'state'
-  home = root / 'home'
-  home.mkdir()
-  # scenarios that exec the real runner hydrate `brog` (RIDE_E2E_SECRETS): the
-  # session MCP server builds brog's backend from that secret at assembly, so
-  # the health gate needs the stub a real session's scoped store would carry.
-  # construction is offline — nothing contacts GitHub
-  bro_dir = home / '.bro'
-  bro_dir.mkdir()
-  (bro_dir / 'brog.json').write_text(
-    json.dumps(
-      {
-        'backend': 'github',
-        'token': 'e2e',
-        'repo': 'owner/repository',
-      }
+      ['git', 'clone', '--quiet', str(host_docker.checkout()), str(project)], check=True
     )
-  )
-  (home / '.claude.json').write_text(
-    json.dumps({'oauthAccount': {'emailAddress': 'e2e@invalid'}, 'userID': 'ride-e2e'})
-  )
-  (home / '.gitconfig').write_text(
-    '[user]\n\tname = ride e2e\n\temail = e2e@invalid\n[init]\n\tdefaultBranch = master\n'
-  )
-  with pytest.MonkeyPatch.context() as monkeypatch:
-    monkeypatch.setenv('XDG_DATA_HOME', str(data_home))
-    runtime_root = workspace_paths.runtime_base()
-    with resolve_runtime_bundle() as bundle:
-      runtime = workspace_docker.ContainerRuntimeResolver(bundle, project).resolve()
-      env = IsolatedEnv(
-        root=root,
-        project=project,
-        home=home,
-        data_home=data_home,
-        runtime_root=runtime_root,
-        image=runtime.image,
-        runtime_bundle_hash=runtime.bundle_hash,
+    data_home = root / 'state'
+    home = root / 'home'
+    home.mkdir()
+    # scenarios that exec the real runner hydrate `brog` (RIDE_E2E_SECRETS): the
+    # session MCP server builds brog's backend from that secret at assembly, so
+    # the health gate needs the stub a real session's scoped store would carry.
+    # construction is offline — nothing contacts GitHub
+    bro_dir = home / '.bro'
+    bro_dir.mkdir()
+    (bro_dir / 'brog.json').write_text(
+      json.dumps(
+        {
+          'backend': 'github',
+          'token': 'e2e',
+          'repo': 'owner/repository',
+        }
       )
-      yield env
-      _remove_stray_containers(env)
-  shutil.rmtree(root, ignore_errors=True)
+    )
+    (home / '.claude.json').write_text(
+      json.dumps({'oauthAccount': {'emailAddress': 'e2e@invalid'}, 'userID': 'ride-e2e'})
+    )
+    (home / '.gitconfig').write_text(
+      '[user]\n\tname = ride e2e\n\temail = e2e@invalid\n[init]\n\tdefaultBranch = master\n'
+    )
+    with pytest.MonkeyPatch.context() as monkeypatch:
+      monkeypatch.setenv('XDG_DATA_HOME', str(data_home))
+      monkeypatch.setenv('DOCKER_HOST', host_docker.daemon_endpoint())
+      runtime_root = workspace_paths.runtime_base()
+      with resolve_runtime_bundle() as bundle:
+        runtime = workspace_docker.ContainerRuntimeResolver(bundle, project).resolve()
+        env = IsolatedEnv(
+          root=root,
+          project=project,
+          home=home,
+          data_home=data_home,
+          runtime_root=runtime_root,
+          image=runtime.image,
+          runtime_bundle_hash=runtime.bundle_hash,
+        )
+        yield env
+        _remove_stray_containers(env)
 
 
 def _wait_until(

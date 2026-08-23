@@ -32,3 +32,5 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
 - `spawn.py` — Docker and host-process broker spawner adapters, bounded child output, terminal ownership, and host-log redirection
 - `store.py` — scoped credential tiers, override finalization, host materialization, and container tar packing
 - `launch_smoke_test.py` — host-only cold-image launch check, run by the gate's Docker stage
+- `host_docker_test_helper.py` — the checkout to build from, a throwaway root the daemon can bind-mount, the host's daemon endpoint, and the host-only skips
+  — what a test driving the real docker daemon needs from the host it runs on

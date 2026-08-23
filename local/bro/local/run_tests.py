@@ -11,11 +11,13 @@ from typing import Optional
 
 from bro.base.args import Parser
 from bro.dev.affected_tests import changed_paths, import_graph, module_name, reachable
-from bro.dev.packaging_policy import distribution_roots
+from bro.dev.packaging_policy import TEST_MODULE_SUFFIXES, distribution_roots
 
 __cli_name__ = 'run-tests'
 
 DIR = Path(__file__).resolve().parents[3]
+
+TEST_MODULE_PATTERN = f'.*({"|".join(TEST_MODULE_SUFFIXES)})\\.py$'
 
 
 # this checkout's one project outside the workspace, which the root metadata
@@ -34,10 +36,9 @@ DISTRIBUTIONS = [
   Distribution(
     directory='.',
     deptry_exclude=(
-      '.*_test\\.py$',
+      TEST_MODULE_PATTERN,
       'conftest\\.py$',
       'bro/base/yesno\\.py$',
-      'bro/base/log_test_helper\\.py$',
       'bro/setup/',
       '^dev/',
       '^local/',
@@ -53,27 +54,27 @@ DISTRIBUTIONS = [
   ),
   Distribution(
     directory='dev',
-    deptry_exclude=('.*_test\\.py$',),
+    deptry_exclude=(TEST_MODULE_PATTERN,),
     deptry_known_first_party=('bro',),
   ),
   Distribution(
     directory='local',
-    deptry_exclude=('.*_test\\.py$',),
+    deptry_exclude=(TEST_MODULE_PATTERN,),
     deptry_known_first_party=('bro', 'bros'),
   ),
   Distribution(
     directory='native',
-    deptry_exclude=('.*_test\\.py$',),
+    deptry_exclude=(TEST_MODULE_PATTERN,),
     deptry_known_first_party=('bro',),
   ),
   Distribution(
     directory='ride',
-    deptry_exclude=('.*_test\\.py$',),
+    deptry_exclude=(TEST_MODULE_PATTERN,),
     deptry_known_first_party=('bro',),
   ),
   Distribution(
     directory=BENCHMARK,
-    deptry_exclude=('.*_test\\.py$', '.venv/'),
+    deptry_exclude=(TEST_MODULE_PATTERN, '.venv/'),
     deptry_known_first_party=('bro',),
   ),
 ]
