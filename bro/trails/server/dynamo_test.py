@@ -683,13 +683,13 @@ def test_uuid_projection_and_point_reads(components):
 
   query_count = len(dynamo.query_threads)
   caller_thread = threading.get_ident()
-  [match] = store.find_segment_steps({'segment'}, {'uuid-2', 'missing'})
-  assert (match['trail_id'], match['step_id'], match['uuid']) == (universal, 1, 'uuid-2')
-  assert match['header']['native']['segment'] == 'segment'
-  assert store.find_segment_steps({'other-segment'}, {'uuid-2'}) == []
+  [header] = store.find_segment_trails({'segment'}, {'uuid-2', 'missing'})
+  assert header['id'] == universal
+  assert header['native']['segment'] == 'segment'
+  assert store.find_segment_trails({'other-segment'}, {'uuid-2'}) == []
   assert all(thread != caller_thread for thread in dynamo.query_threads[query_count:])
   assert dynamo.queries[-1]['IndexName'] == 'uuid-index'
-  assert dynamo.queries[-1]['ProjectionExpression'] == 'trail_id, step_id, #uuid'
+  assert dynamo.queries[-1]['ProjectionExpression'] == 'trail_id'
   assert (store.get_step(universal, 1))['body'] == second
   assert store.get_step_uuids(universal, through=0) == [{'step_id': 0, 'uuid': 'uuid-1'}]
 

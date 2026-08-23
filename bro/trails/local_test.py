@@ -88,11 +88,11 @@ def test_lineage_index_reads_only_the_named_segments(tmp_path):
   raw = json.dumps({'type': 'user', 'uuid': 'uuid-1', 'message': {'content': 'hello'}})
   trail_id = store.blaze(_claude_request(raw))['id']
 
-  [match] = store.find_segment_steps({'segment'}, {'uuid-1'})
-  assert (match['trail_id'], match['step_id'], match['uuid']) == (trail_id, 0, 'uuid-1')
-  assert match['header']['id'] == trail_id
-  assert store.find_segment_steps({'elsewhere'}, {'uuid-1'}) == []
-  assert store.find_segment_steps({'segment'}, set()) == []
+  [header] = store.find_segment_trails({'segment'}, {'uuid-1'})
+  assert header['id'] == trail_id
+  assert store.find_segment_trails({'segment'}, {'uuid-2'}) == []
+  assert store.find_segment_trails({'elsewhere'}, {'uuid-1'}) == []
+  assert store.find_segment_trails({'segment'}, set()) == []
   assert store.get_step_uuids(trail_id) == [{'step_id': 0, 'uuid': 'uuid-1'}]
   assert store.get_step_uuids(trail_id, through=-1) == []
   assert store.step_payload_hashes(trail_id, [0, 7]) == {0: payload_sha256(raw)}

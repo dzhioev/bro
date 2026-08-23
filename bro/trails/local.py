@@ -92,31 +92,22 @@ class LocalStore(TrailsStore):
       header = self._read_header(trail_id)
     return self._project_header(header)
 
-  def find_segment_steps(self, segments: set[str], uuids: set[str]) -> list[dict]:
-    """Row identities carrying any of `uuids`, in the trails recording one of
-    `segments` — the segment filter is what bounds the scan to a handful of
+  def find_segment_trails(self, segments: set[str], uuids: set[str]) -> list[dict]:
+    """The headers of the trails recording one of `segments` that hold any of
+    `uuids` — the segment filter is what bounds the scan to a handful of
     trails."""
     if len(uuids) == 0 or len(segments) == 0:
       return []
-    matches = []
-    for directory in self.trails_directory.iterdir():
+    headers = []
+    for directory in sorted(self.trails_directory.iterdir()):
       if not directory.is_dir() or not (directory / 'header.json').is_file():
         continue
       header = self.get_trail(directory.name)
       if header.get('native', {}).get('segment') not in segments:
         continue
-      for row in self._read_rows(directory.name):
-        uuid = row.get('uuid')
-        if uuid in uuids:
-          matches.append(
-            {
-              'trail_id': directory.name,
-              'step_id': row['step_id'],
-              'uuid': uuid,
-              'header': header,
-            }
-          )
-    return sorted(matches, key=lambda row: (row['trail_id'], row['step_id']))
+      if any(row.get('uuid') in uuids for row in self._read_rows(directory.name)):
+        headers.append(header)
+    return headers
 
   def get_step(self, trail_id: str, step_id: int) -> dict:
     if step_id < 0:

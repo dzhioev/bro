@@ -180,6 +180,69 @@ class TestCopiedHistory:
     assert decision.chunks == [[3, 3]]
 
 
+class _ProbeSpy:
+  """a store that records the uuid sets the resolver probed it with."""
+
+  def __init__(self, store: LocalStore) -> None:
+    self._store = store
+    self.probes: list[set[str]] = []
+
+  def find_segment_trails(self, segments: set[str], uuids: set[str]) -> list[dict]:
+    self.probes.append(set(uuids))
+    return self._store.find_segment_trails(segments, uuids)
+
+  def get_trail(self, trail_id: str) -> dict:
+    return self._store.get_trail(trail_id)
+
+  def get_step_uuids(self, trail_id: str, *, through: Optional[int] = None) -> list[dict]:
+    return self._store.get_step_uuids(trail_id, through=through)
+
+  def step_payload_hashes(self, trail_id: str, step_ids: list[int]) -> dict[int, str]:
+    return self._store.step_payload_hashes(trail_id, step_ids)
+
+
+def _recorded_lines(count: int) -> list[str]:
+  return [_user(f'line {index}', f'u{index}') for index in range(count)]
+
+
+class TestCandidateProbe:
+  def test_the_probe_asks_only_about_the_newest_records(self, store):
+    recorded = _recorded_lines(80)
+    trail_id = _blaze(store, 'seg-1', recorded)
+    spy = _ProbeSpy(store)
+
+    decision = resolve(_evidence('seg-1', [*recorded, _user('more', 'u-new')]), spy)
+
+    assert decision.forked_from == {'trail_id': trail_id, 'step_id': 79}
+    [probe] = spy.probes
+    assert 'u79' in probe
+    assert 'u0' not in probe
+
+  def test_a_parent_older_than_the_probe_window_is_still_found(self, store):
+    recorded = [_user('hello', 'u-parent')]
+    trail_id = _blaze(store, 'seg-1', recorded)
+    spy = _ProbeSpy(store)
+
+    # the transcript grew well past the probe window before this adoption
+    decision = resolve(_evidence('seg-1', [*recorded, *_recorded_lines(80)]), spy)
+
+    assert decision.forked_from == {'trail_id': trail_id, 'step_id': 0}
+    assert decision.chunks == [[1, 1]]
+    newest, rest = spy.probes
+    assert 'u-parent' not in newest
+    assert 'u-parent' in rest
+
+  def test_a_line_rewritten_before_the_probe_window_fails_the_digests(self, store):
+    recorded = _recorded_lines(80)
+    _blaze(store, 'seg-1', recorded)
+    tampered = [_user('tampered', 'u0'), *recorded[1:], _user('more', 'u-new')]
+
+    decision = resolve(_evidence('seg-1', tampered), store)
+
+    assert decision.forked_from is None
+    assert decision.reason == 'no verified parent'
+
+
 class TestEvidence:
   @pytest.mark.parametrize(
     'evidence',
@@ -196,11 +259,11 @@ class TestEvidence:
     with pytest.raises(ValueError):
       resolve(evidence, store)
 
-  def test_a_malformed_index_match_fails_fast(self, store):
+  def test_a_malformed_index_trail_fails_fast(self, store):
     class Index:
-      def find_segment_steps(self, segments: set[str], uuids: set[str]) -> list[dict]:
+      def find_segment_trails(self, segments: set[str], uuids: set[str]) -> list[dict]:
         del segments, uuids
-        return [{'trail_id': 'T1', 'step_id': None, 'uuid': 'u1', 'header': {}}]
+        return [{'id': 'T1'}]
 
       def get_trail(self, trail_id: str) -> dict:
         raise AssertionError('unreachable')
@@ -211,5 +274,5 @@ class TestEvidence:
       def step_payload_hashes(self, trail_id: str, step_ids: list[int]) -> dict[int, str]:
         raise AssertionError('unreachable')
 
-    with pytest.raises(ValueError, match='malformed lineage index match'):
+    with pytest.raises(ValueError, match='malformed lineage index trail'):
       resolve(_evidence('seg-1', [_user('hello', 'u1')]), Index())
