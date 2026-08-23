@@ -18,7 +18,7 @@ from collections.abc import Generator
 
 import pytest
 
-from bro.benchmark.bundle import build, workspace_root
+from bro.benchmark.bundle import build, host_mismatch, workspace_root
 
 IMAGE = 'ubuntu:24.04'
 INSTALL_DIRECTORY = '/installed-agent'
@@ -31,7 +31,12 @@ def _docker_available() -> bool:
     return False
 
 
-pytestmark = pytest.mark.skipif(not _docker_available(), reason='no reachable docker daemon')
+_HOST_MISMATCH = host_mismatch()
+
+pytestmark = [
+  pytest.mark.skipif(not _docker_available(), reason='no reachable docker daemon'),
+  pytest.mark.skipif(_HOST_MISMATCH is not None, reason=str(_HOST_MISMATCH)),
+]
 
 
 def _docker(*arguments: str) -> str:
