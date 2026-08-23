@@ -21,7 +21,7 @@ import pytest
 from harbor.cli.config_sources import load_config_source
 
 from bro.base import credentials
-from bro.benchmark.bundle import build, default_root, workspace_root
+from bro.benchmark.bundle import build, default_root, host_mismatch, workspace_root
 
 # the smallest image in the set, and one carrying neither python3 nor a CA
 # store — so a single trial exercises the bundle and SSL_CERT_FILE for real
@@ -42,8 +42,11 @@ def _available(*command: str) -> bool:
     return False
 
 
+_HOST_MISMATCH = host_mismatch()
+
 pytestmark = [
   pytest.mark.skipif(not _available('docker', 'info'), reason='no reachable docker daemon'),
+  pytest.mark.skipif(_HOST_MISMATCH is not None, reason=str(_HOST_MISMATCH)),
   # harbor drives every container through the compose CLI plugin, which is
   # installed separately from the engine
   pytest.mark.skipif(
