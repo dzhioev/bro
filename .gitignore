@@ -10,3 +10,8 @@ dist/
 # per-session token-accounting scratch state (bro-dev/bro_dev/claude_commit_footer.py);
 # the .tmp sidecar is its atomic-write staging file
 .token_accounting_state.json*
+# benchmark outputs written into the checkout: the relocatable bundle and
+# harbor's job directories. ruff walks whatever git does not ignore, and the
+# bundle carries a whole CPython stdlib for it to reformat in place
+var/
+jobs/
