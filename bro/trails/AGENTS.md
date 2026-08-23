@@ -36,8 +36,8 @@ bro · claude recorders                     readers
   The `dynamo` branch lazy-imports the server package.
 - `network.py` owns `NetworkStore`, the authenticated wire proxy.
   HTTPS is required except for HTTP loopback hosts.
-  It maps not-found, append-conflict, unsupported-operation, and transient transport failures onto the store errors and owns operation-specific retry schedules.
-  A 404 becomes `TrailNotFound` only when its body reports the missing trail (`model.trail_not_found_body` is the shape both sides read);
+  It maps not-found, append-conflict, refused-permission, unsupported-operation, and transient transport failures onto the store errors and owns operation-specific retry schedules.
+  A 404 becomes `TrailNotFound` only when its body reports the missing trail (`model.trail_not_found_body` is the shape both sides read), and a 409 becomes `TrailHasForks` only when its body names them (`model.trail_has_forks_body`);
   every other 404 surfaces as `HTTPStatusError` carrying what the response said.
   Its concrete `recompute`, `check`, and `relink` methods forward the Dynamo administration endpoints;
   they are not part of `TrailsStore`.
@@ -46,7 +46,7 @@ bro · claude recorders                     readers
   It reads rows through `LineageIndex`, the store-internal surface each backend implements its own way (`LocalStore` filters headers by segment before touching a row;
   `DynamoStore` queries its keys-only uuid index), and returns a fork point with the file ranges the new trail owns, a decline while a history copy is mid-write, or a root.
   Nothing on this path crosses the wire, and continuity across recorder lifetimes comes from the stored rows alone.
-- `local.py` stores each trail under `<root>/trails/<id>/` as `header.json`, `steps.jsonl`, and optional `context.json`, with tool blobs under `<root>/trails/tools/<sha256>.json`.
+- `local.py` stores each trail under `<root>/trails/<id>/` as `header.json`, `steps.jsonl`, and optional `context.json`, with tool blobs under `<root>/trails/tools/<sha256>.json` and delete manifests under `<root>/manifests/delete/`.
   Appends are ordinal and `flock`-serialized, headers are atomically replaced, bodies remain inline, and listing preserves the selector/cursor contract.
   A stale open header gets `end.inference = unreported` when read.
 - The local root is the global `bro.workspace.paths.trails_dir` under the runtime state root.
@@ -60,12 +60,13 @@ bro · claude recorders                     readers
   every synchronous store call runs through `asyncio.to_thread`.
   The process resolves its hosted store with `configured_store()`, whose credential is required
   — a server states the backend it serves.
-  `/v1/admin/*` is mounted on every server and answers 501 where the hosted store has no administration surface;
-  the unreported-trail sweep starts only for a `DynamoStore`.
+  `/v1/admin/*` is mounted on every server;
+  the repairs answer 501 where the hosted store has no administration surface, while `DELETE /v1/admin/trails/{id}` reaches the contract method every backend implements.
+  The unreported-trail sweep starts only for a `DynamoStore`.
 - `server/dynamo.py` owns `DynamoStore(TrailsStore)`:
   conditional append transactions, indexes, S3 body spill/resolution, UUID reads, and its store-owned thread pool for UUID-query and spilled-row fan-outs.
   `server/dynamo_types.py` owns Dynamo conversion and row constants.
-  `server/operations.py` remains the recompute/check engine and owns manifested relinking.
+  `server/operations.py` remains the recompute/check engine and owns the manifested destructive operations, relinking and deletion.
 - Stored rows are served rows.
   Claude message projection reparses the row's `body`;
   reads do not add `raw` or `record`.
@@ -124,9 +125,14 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
 - List queries accept exactly one selector
   — `harness`, `bro`, or `forked_from`
   — plus the common time range and opaque cursor.
+- `DELETE /v1/admin/trails/{id}` removes a trail's rows, whatever they spilled, and its launch-context object, after writing a manifest of the header and rows it takes.
+  Tool blobs are content-addressed and shared across trails, so no single trail's delete removes one.
+  A trail some fork still points at is refused with the children named:
+  a fork's chain walk resolves every ancestor, so a `forked_from` is never left pointing at nothing.
 - `rewind.py` (`rewind`) is the reader CLI for every harness, working through `TrailsStore`:
   it owns argument parsing, queries, follow polling, regex matching, and grep context, while every `show`, `steps`, `list`, `tree`, and `grep` record renders through the matching display preset.
   The text views accept `--output-offset` / `--output-limit` for bounded windows.
+- `admin.py` (`trails`) is the operator CLI beside it, carrying `delete`.
 - `contract_test.py` runs the same contract suite against `LocalStore` and `NetworkStore` over a real loopback aiohttp server backed by `LocalStore`;
   `claude_lineage_test.py` drives the resolver over a real store.
   `ride/ride/claude/trail_recorder_test.py` drives the adapter-owned recorder over one.

@@ -158,6 +158,30 @@ def reported_missing_trail(raw: bytes) -> Optional[str]:
   return trail_id if isinstance(trail_id, str) else None
 
 
+_FORKS_FIELD = 'forks'
+
+
+def trail_has_forks_body(message: str, forks: list[str]) -> dict[str, Any]:
+  """the body a trails server refuses to remove a forked trail with; `forks`
+  names the trails whose lineage still points at it."""
+  return {'error': message, _FORKS_FIELD: forks}
+
+
+def reported_forks(raw: bytes) -> Optional[list[str]]:
+  """the forks a 409 response body blames the refusal on, or None for a 409 from
+  any other conditional write."""
+  try:
+    body = json.loads(raw)
+  except (json.JSONDecodeError, UnicodeDecodeError):
+    return None
+  if not isinstance(body, dict):
+    return None
+  forks = body.get(_FORKS_FIELD)
+  if not isinstance(forks, list) or not all(isinstance(fork, str) for fork in forks):
+    return None
+  return forks
+
+
 def _validate_pointer(value: Any, field: str, *, step_optional: bool) -> None:
   if value is None:
     return

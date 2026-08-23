@@ -14,7 +14,7 @@ from bro.trails.model import BlazeRequest, payload_sha256
 from bro.trails.network import NetworkStore
 from bro.trails.server.auth import TokenTable
 from bro.trails.server.server import create_app
-from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore
+from bro.trails.store import AppendConflict, TrailHasForks, TrailNotFound, TrailsStore
 
 _TOKEN = 'contract-token'
 
@@ -214,6 +214,25 @@ class TestTrailsStoreContract:
 
     assert served == body
     assert trails_store.resolve_body(served) == body
+
+  def test_delete_takes_a_trail_but_refuses_one_a_fork_points_at(self, trails_store):
+    parent = trails_store.blaze(_bro_request())['id']
+    trails_store.append_records(parent, 1, [{'kind': 'user_input', 'body': 'hello'}])
+    child = trails_store.blaze(_bro_request(forked_from={'trail_id': parent, 'step_id': 0}))['id']
+
+    with pytest.raises(TrailHasForks) as refused:
+      trails_store.delete_trail(parent)
+    trails_store.delete_trail(child)
+    removed = trails_store.delete_trail(parent)
+
+    assert refused.value.forks == [child]
+    assert removed['trail_id'] == parent
+    assert removed['extent'] == 2
+    assert len(removed['manifest']) > 0
+    with pytest.raises(TrailNotFound):
+      trails_store.get_trail(parent)
+    with pytest.raises(TrailNotFound):
+      trails_store.delete_trail(parent)
 
   def test_missing_rows_raise_store_neutral_errors(self, trails_store):
     with pytest.raises(TrailNotFound):

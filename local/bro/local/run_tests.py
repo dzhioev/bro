@@ -139,6 +139,7 @@ PYTEST_FILES = [
   'bro/trails/lineage_test.py',
   'bro/trails/claude_lineage_test.py',
   'bro/trails/rewind_test.py',
+  'bro/trails/admin_test.py',
   'bro/trails/server/server_test.py',
   'bro/trails/server/dynamo_test.py',
   'bro/show_test.py',

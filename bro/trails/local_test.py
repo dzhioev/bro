@@ -2,6 +2,7 @@ import hashlib
 import json
 import threading
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -197,3 +198,32 @@ def test_missing_trails_raise_store_neutral_error(tmp_path):
   store = LocalStore(tmp_path)
   with pytest.raises(TrailNotFound):
     store.get_trail('missing')
+
+
+def test_delete_manifests_the_trail_before_removing_its_directory(tmp_path):
+  store = LocalStore(tmp_path)
+  trail_id = store.blaze(_claude_request(json.dumps({'type': 'system'}), context={'cwd': '/w'}))[
+    'id'
+  ]
+
+  result = store.delete_trail(trail_id)
+
+  manifest = json.loads(Path(result['manifest']).read_text())
+  assert manifest['operation'] == 'delete'
+  assert manifest['trail_id'] == trail_id
+  assert manifest['header']['id'] == trail_id
+  assert [step['step_id'] for step in manifest['steps']] == [0]
+  assert not (tmp_path / 'trails' / trail_id).exists()
+  assert Path(result['manifest']).parent == tmp_path / 'manifests' / 'delete'
+
+
+def test_delete_leaves_shared_tool_blobs_alone(tmp_path):
+  store = LocalStore(tmp_path)
+  trail_id = store.blaze(_bro_request())['id']
+  body = [{'type': 'function', 'name': 'read'}]
+  sha256 = hashlib.sha256(canonical_json_bytes(body)).hexdigest()
+  store.append_records(trail_id, 1, [], tools={sha256: body})
+
+  store.delete_trail(trail_id)
+
+  assert (tmp_path / 'trails' / 'tools' / f'{sha256}.json').is_file()

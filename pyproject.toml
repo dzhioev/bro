@@ -81,6 +81,7 @@ bro-local = { workspace = true }
 "bro.runtime.mcp-server" = "bro._entrypoints:bro_runtime_mcp_server"
 "bro.shell" = "bro._entrypoints:bro_shell"
 "bro.summon" = "bro._entrypoints:bro_summon"
+"bro.trails.admin" = "bro._entrypoints:bro_trails_admin"
 "bro.trails.rewind" = "bro._entrypoints:bro_trails_rewind"
 "bro.trails.server.server" = "bro._entrypoints:bro_trails_server_server"
 "broker" = "bro._entrypoints:bro_broker_cli"
@@ -89,6 +90,7 @@ bro-local = { workspace = true }
 "mcp-server" = "bro._entrypoints:bro_runtime_mcp_server"
 "rewind" = "bro._entrypoints:bro_trails_rewind"
 "summon" = "bro._entrypoints:bro_summon"
+"trails" = "bro._entrypoints:bro_trails_admin"
 "trails-server" = "bro._entrypoints:bro_trails_server_server"
 "usage" = "bro._entrypoints:bro_llm_usage"
 

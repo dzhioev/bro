@@ -1,4 +1,4 @@
-"""Aggregate repair, verification, audits, and manifested relinking."""
+"""Aggregate repair, verification, audits, and the manifested destructive operations."""
 
 import json
 from collections.abc import Callable
@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from bro.trails.rows import AggregateState
 from bro.trails.server import dynamo_types
+from bro.trails.store import delete_manifest
 
 _ROW_STORAGE_FIELDS = frozenset(
   {
@@ -285,6 +286,47 @@ class Operations:
       'extent': len(remaining),
       'manifest_s3': manifest_key,
     }
+
+  def delete_trail(self, header: dict) -> dict:
+    """Remove a trail's rows, spilled bodies, launch context and header, in that
+    order — the header goes last so an interrupted delete leaves a trail the same
+    call finishes off rather than rows nothing points at."""
+    trail_id = header['id']
+    rows = self._all_universal_rows(trail_id)
+    timestamp = dynamo_types.now_iso()
+    manifest_key = dynamo_types.delete_manifest_key(trail_id, timestamp)
+    self._s3.put_object(
+      Bucket=self._bucket,
+      Key=manifest_key,
+      Body=json.dumps(
+        delete_manifest(
+          trail_id=trail_id,
+          at=timestamp,
+          header=header,
+          steps=[self._resolve_row_body(header['harness'], row) for row in rows],
+        ),
+        ensure_ascii=False,
+      ).encode('utf-8'),
+      ContentType='application/json',
+    )
+    for row in rows:
+      self._dynamo.delete_item(
+        TableName=self._steps_table,
+        Key=_ddb_item({'trail_id': trail_id, 'step_id': row['step_id']}),
+      )
+    # tool blobs are content-addressed and shared across trails, so they are not
+    # this trail's to remove
+    objects = [row['body_s3'] for row in rows if row.get('body_s3') is not None]
+    context = header.get('context_s3') or header.get('native', {}).get('context_s3')
+    if context is not None:
+      objects.append(context)
+    for key in objects:
+      self._s3.delete_object(Bucket=self._bucket, Key=key)
+    self._dynamo.delete_item(
+      TableName=self._trails_table,
+      Key=_ddb_item({'id': trail_id}),
+    )
+    return {'trail_id': trail_id, 'extent': len(rows), 'manifest': manifest_key}
 
   def _required_migrated_header(self, trail_id: str) -> dict:
     header = self._required_header(trail_id)

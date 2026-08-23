@@ -18,7 +18,7 @@ from bro.trails.model import (
 from bro.trails.rows import AggregateState, state_fields
 from bro.trails.server import dynamo_types
 from bro.trails.server.operations import Operations
-from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore
+from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore, refuse_while_forked
 
 SPILLOVER_THRESHOLD_BYTES = dynamo_types.SPILLOVER_THRESHOLD_BYTES
 MAX_BODY_BYTES = dynamo_types.MAX_BODY_BYTES
@@ -691,6 +691,11 @@ class DynamoStore(TrailsStore):
 
   def relink(self, trail_id: str, forked_from: dict, delete_count: int) -> dict:
     return self._operations.relink(trail_id, forked_from, delete_count)
+
+  def delete_trail(self, trail_id: str) -> dict:
+    header = self._required_header(trail_id)
+    refuse_while_forked(self, trail_id)
+    return self._operations.delete_trail(header)
 
   def close(self) -> None:
     self._executor.shutdown()
