@@ -35,6 +35,10 @@ class UnsupportedOperation(Exception):
   """The hosted backend does not serve this operation."""
 
 
+class PermissionDenied(Exception):
+  """The trails token does not carry the permission this operation needs."""
+
+
 class TrailsStore(ABC):
   @abstractmethod
   def list_trails(
