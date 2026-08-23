@@ -4,9 +4,9 @@ The ride-session/raw fork is confined to here: `--raw` selects a `--bare` claude
 with api-key auth and the bro's own system prompt, a ride-session keeps the full
 harness with the ride-injected append prompt. Both mount their bro's session-local
 MCP namespaces. Everything else — model, the merged `--settings` (fastMode +
-statusLine, plus the apiKeyHelper under `--raw`), `--effort`, the forwarded
-claude args, and prompt seeding is handled once, identically wherever the
-session runs. Model, effort and fast mode come off the session's claude-code
+statusLine + attribution, plus the apiKeyHelper under `--raw`), `--effort`, the
+forwarded claude args, and prompt seeding is handled once, identically wherever
+the session runs. Model, effort and fast mode come off the session's claude-code
 `LLMSpec` (`SessionSpec.llm_spec`).
 """
 
@@ -73,6 +73,10 @@ class ClaudeLaunch:
 # only its event-driven renders
 _STATUSLINE_REFRESH_SECONDS = 1
 
+# claude's built-in attribution, all off — an empty string is its "omit" value
+# for the commit trailer and the pull-request line.
+_ATTRIBUTION = {'commit': '', 'pr': '', 'sessionUrl': False}
+
 # prepended to a raw session's argv-seeded first prompt, which fires before
 # claude's async MCP connects complete (ride/ride/claude/mcp.py:_server_entry); rationale for
 # the turn-local delivery: reference/ride.md "Session-local MCP serving".
@@ -119,6 +123,7 @@ def build_claude_launch(
       'command': _settings_command('ride.claude.statusline'),
       'refreshInterval': _STATUSLINE_REFRESH_SECONDS,
     },
+    'attribution': _ATTRIBUTION,
   }
   argv = ['--model', llm.model]
   bro = create_bro(spec.bro)

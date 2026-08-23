@@ -270,3 +270,10 @@ class TestRawLaunch:
       ride_claude_argv.build_claude_launch(
         _spec(bro='does-not-exist'), claude_args=[], endpoint=_ENDPOINT
       )
+
+
+def test_the_attribution_opt_out_reaches_every_flavor():
+  raw = ride_claude_argv.build_claude_launch(_spec(raw=True), claude_args=[], endpoint=_ENDPOINT)
+  ride_session = _ride_session_launch(_spec(), claude_args=[])
+  for launch in (raw, ride_session):
+    assert _settings(launch.argv)['attribution'] == ride_claude_argv._ATTRIBUTION
