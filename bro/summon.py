@@ -2,7 +2,7 @@
 """summon — request another bro on the session's broker channel and get its answer.
 
 The peer side of the summon mechanism: a request of kind `summon` with args
-`{target, prompt, timeout?, into?, hold?, grant?, revoke?, llm?, harness?}` on
+`{target, prompt, timeout?, into?, hold?, grant?, revoke?, share?, llm?, harness?}` on
 the session channel, answered by the host-side handler (`ride/ride/summon_control.py`)
 with a started progress (`{trail_id}`) and exactly one result. This module owns
 the request's wire contract — the kind, the args keys, the 1800s default timeout
@@ -14,6 +14,8 @@ the request's wire contract — the kind, the args keys, the 1800s default timeo
 `grant` / `revoke` are lists of scope overrides for the child, each value a
 credential name or `@bro` for a summon target of its own; the host bounds a grant
 by the sender's own scope, so a name it does not hold itself comes back denied.
+`share` is a list of artifact refs (`bro/artifact.py`) the child gets read
+access to, bounded the same way — only refs the sender can itself read.
 `harness` names the driving loop the child runs under — `bro` (the default: the
 target's own LLM process) or `claude` (a one-shot managed Claude Code session) —
 and `llm` is the canonical `provider:model:effort+fast` recipe the child runs
@@ -150,6 +152,9 @@ GRANT_HELP = "add a credential (NAME) or summonable bro (@BRO) to the child's sc
 REVOKE_HELP = (
   "remove a credential (NAME) or summonable bro (@BRO) from the child's scope (repeatable)"
 )
+SHARE_HELP = (
+  'give the child read access to an artifact ref this session can itself read (repeatable)'
+)
 INTO_HELP = "base the child's workspace on this git ref instead of the summoner's workspace HEAD"
 DETACH_HELP = 'print the request id and exit after sending; collect it with summon check'
 
@@ -241,6 +246,7 @@ def _payload(
   index: Optional[int] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
+  share: Optional[list[str]] = None,
   llm: Optional[str] = None,
   harness: Optional[str] = None,
   manual: bool = False,
@@ -260,6 +266,8 @@ def _payload(
     payload['grant'] = list(grant)
   if revoke is not None:
     payload['revoke'] = list(revoke)
+  if share is not None:
+    payload['share'] = list(share)
   if llm is not None:
     payload['llm'] = llm
   if harness is not None:
@@ -373,6 +381,7 @@ def summon_and_wait(
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
+  share: Optional[list[str]] = None,
   llm: Optional[str] = None,
   harness: Optional[str] = None,
   step_id: Optional[int] = None,
@@ -395,6 +404,7 @@ def summon_and_wait(
     index=index,
     grant=grant,
     revoke=revoke,
+    share=share,
     llm=llm,
     harness=harness,
   )
@@ -414,6 +424,7 @@ def summon_detached(
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
+  share: Optional[list[str]] = None,
   llm: Optional[str] = None,
   harness: Optional[str] = None,
   step_id: Optional[int] = None,
@@ -431,6 +442,7 @@ def summon_detached(
     index=index,
     grant=grant,
     revoke=revoke,
+    share=share,
     llm=llm,
     harness=harness,
   )
@@ -619,6 +631,7 @@ def relay_summon(
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
+  share: Optional[list[str]] = None,
   llm: Optional[str] = None,
   harness: Optional[str] = None,
   manual: bool = False,
@@ -638,6 +651,7 @@ def relay_summon(
     hold=hold,
     grant=grant,
     revoke=revoke,
+    share=share,
     llm=llm,
     harness=harness,
     manual=manual,
@@ -794,6 +808,7 @@ def main(argv: list[str]) -> Optional[int]:
   add_llm_flags(parser, effort_help=EFFORT_HELP, fast_help=FAST_HELP)
   parser.add_argument('--grant', action='append', default=None, metavar='NAME', help=GRANT_HELP)
   parser.add_argument('--revoke', action='append', default=None, metavar='NAME', help=REVOKE_HELP)
+  parser.add_argument('--share', action='append', default=None, metavar='REF', help=SHARE_HELP)
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP)
   parser.add_argument('--harness', default=None, help=HARNESS_HELP)
@@ -822,6 +837,9 @@ def main(argv: list[str]) -> Optional[int]:
     if len(passed) > 0:
       log.error("a manual summon's launch owns %s; drop the flag(s)", ', '.join(passed))
       return 1
+    if args['share'] is not None:
+      log.error("a manual summon's container is not launched by the host; drop --share")
+      return 1
   os.environ.setdefault('BRO_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=['summon'])))
   if args['detach']:
     try:
@@ -843,6 +861,7 @@ def main(argv: list[str]) -> Optional[int]:
           hold=args['hold'],
           grant=args['grant'],
           revoke=args['revoke'],
+          share=args['share'],
           llm=args['llm'],
           harness=args['harness'],
         )
@@ -859,6 +878,7 @@ def main(argv: list[str]) -> Optional[int]:
     hold=args['hold'],
     grant=args['grant'],
     revoke=args['revoke'],
+    share=args['share'],
     llm=args['llm'],
     harness=args['harness'],
     manual=args['manual'],

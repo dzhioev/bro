@@ -9,6 +9,10 @@ def _run(module):
   return importlib.import_module(module).main(sys.argv)
 
 
+def bro_artifact():
+  return _run('bro.artifact')
+
+
 def bro_base_credentials():
   return _run('bro.base.credentials')
 

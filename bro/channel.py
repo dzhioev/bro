@@ -1,7 +1,7 @@
 """bro-side run-lifecycle emission over the broker channel.
 
 `BroChannel` is the bro framework's consumer of the broker substrate: the
-answering half of a worker peer, emitting `progress{trail_id[, workspace]}` once
+answering half of a worker peer, emitting `progress{trail_id}` once
 the trail is open and the run's closing `result` when it ends — both correlated
 to the exchange id the launch delivered beside the channel (`EXCHANGE_ENV`).
 `from_env()` mirrors `Client.from_env()`: `None` when `BROKER_CHANNEL` is unset,
@@ -14,7 +14,8 @@ importable (an environment provisioned before broker existed), so importing
 Wired into `Runner.run` (LLM-process children), and into `Runner.send`'s first
 turn for a *summoned* interactive conversation — a manual summon child on the
 bro harness announces `started` there, and its result is the `answer` service
-tool's. An un-summoned interactive conversation emits nothing: its channel is
+tool's; the host attributes every peer itself, so the announcement carries
+nothing about where the run lives. An un-summoned interactive conversation emits nothing: its channel is
 the enclosing session's, not its own. A claude-code `--raw` session never calls
 `Runner.run` — it has no in-process return value — so it auto-emits no
 lifecycle, by design. The claude-session emissions are the `raise` and `answer`
@@ -51,14 +52,9 @@ class BroChannel:
       raise ValueError(f'broker channel present but {EXCHANGE_ENV} unset; the launch did not name the exchange this run answers')  # fmt: skip
     return cls(client, exchange)
 
-  def started(self, trail_id: str, *, workspace: Optional[str] = None) -> None:
-    """announce the run's trail. `workspace` names the session's workspace where
-    the host cannot derive it (a manual summon child's is user-chosen; a spawned
-    child's is its channel-named one)."""
-    payload: dict[str, Any] = {'trail_id': trail_id}
-    if workspace is not None:
-      payload['workspace'] = workspace
-    self._client.progress(self._exchange, payload)
+  def started(self, trail_id: str) -> None:
+    """announce the run's trail."""
+    self._client.progress(self._exchange, {'trail_id': trail_id})
 
   def completed(self, result: Optional[str], end_reason: EndReason) -> None:
     # `result` is None only when `run()` unwinds without any of its three

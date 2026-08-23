@@ -1,6 +1,7 @@
 import sys
 
 import bro.summon
+import ride.artifacts
 import ride.root
 import ride.spawn
 import ride.summon_control
@@ -190,7 +191,10 @@ class TestRunRootViaBroker:
         forward_env=True,
         image='runtime-image',
         runtime_bundle_hash='bundle-hash',
-        extra_mounts=(f'{summon_dir()}:{CONTAINER_SUMMON_ROOT}:ro',),
+        extra_mounts=(
+          f'{summon_dir()}:{CONTAINER_SUMMON_ROOT}:ro',
+          ride.artifacts.view_mount('ws', 'ws'),
+        ),
         repo=project,
       ),
       capture_output=False,

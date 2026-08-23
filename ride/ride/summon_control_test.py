@@ -3,7 +3,9 @@ from typing import cast
 
 import pytest
 
+import ride.artifacts
 import ride.bro
+import ride.peers
 import ride.pending_summon
 import ride.spawn
 import ride.summon_control
@@ -105,10 +107,13 @@ def _workspace(tmp_path, name='ws') -> Workspace:
 def _control(
   tmp_path, allow_list, session='ws', credential_scope=()
 ) -> ride.summon_control.SummonControl:
+  workspace = _workspace(tmp_path, session)
   return ride.summon_control.SummonControl(
     allow_list=allow_list,
     credential_scope=credential_scope,
-    workspace=_workspace(tmp_path, session),
+    workspace=workspace,
+    peers=ride.peers.Peers(workspace),
+    artifacts=ride.artifacts.ArtifactStore(workspace, root_in_container=True),
     status_file=tmp_path / 'summon-status.json',
     audit_file=tmp_path / 'audit' / 'ws.jsonl',
   )
@@ -124,13 +129,20 @@ def _summon_message(**overrides) -> Message:
   return brotocol.request('summon', {k: v for k, v in args.items() if v is not None})
 
 
+def _bind_child(control, context, peer, message) -> None:
+  """bind the spawned peer in the context's worker index the way
+  `Dispatcher._bind_worker` would once the launch resolves, and note its
+  workspace the way `SummonSpawner.spawn` does."""
+  context.workers[peer] = message.id
+  control._peers.note_workspace(message.id, f'broker-{peer}')
+
+
 def _summon_child(control, context, peer, target, parent=ROOT) -> Message:
   """handle an authorized summon of `target` from `parent` and bind the spawned
-  peer in the context's worker index, the way `Dispatcher._bind_worker` would
-  once the launch resolves."""
+  peer."""
   message = _summon_message(target=target)
   control.handle(context, parent, message)
-  context.workers[peer] = message.id
+  _bind_child(control, context, peer, message)
   return message
 
 
@@ -153,9 +165,8 @@ class TestSummonHandler:
     assert launch == ride.spawn.SummonLaunchSpec(
       target='dev',
       prompt='deploy the thing',
-      # the root's base-ref inheritance source: the bare session key names a host
-      # worktree
-      parent_workspace=workspace_tree('ws'),
+      # the root's base-ref inheritance source is its own workspace
+      parent='ws',
       repo=Repository(str(tmp_path), tmp_path),
       summoner=None,
       # dev seeds no summon targets of its own — the child is told exactly that
@@ -225,7 +236,7 @@ class TestSummonHandler:
     message = _summon_message(target='dev', grant=['@bro'])
     # cast: FakeContext stands in for the Dispatcher surface structurally
     control.handle(cast(Dispatcher, context), ROOT, message)
-    context.workers[CHILD] = message.id
+    _bind_child(control, context, CHILD, message)
     control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='bro'))
     assert context.replies == []
     assert [launch.target for launch, _, _ in context.spawned] == ['dev', 'bro']
@@ -250,6 +261,31 @@ class TestSummonHandler:
     [(_, payload)] = context.replies
     assert 'does not hold: aws' in payload['error']
 
+  def test_share_rides_the_spawn_and_the_audit(self, tmp_path):
+    control = _control(tmp_path, {'dev'})
+    tree = workspace_tree('ws')
+    tree.mkdir(parents=True)
+    (tree / 'out.bin').write_bytes(b'payload')
+    identity = ride.peers.PeerIdentity(workspace='ws', tree=tree)
+    ref, _ = control._artifacts.mint(identity, (), 'out.bin')
+    context = FakeContext()
+    control.handle(cast(Dispatcher, context), ROOT, _summon_message(share=[ref]))
+    assert context.replies == []
+    [(launch, _, _)] = context.spawned
+    assert launch.share == (ref,)
+    spawn_record = _audit(tmp_path)[-1]
+    assert spawn_record['event'] == 'spawn'
+    assert spawn_record['share'] == [ref]
+
+  def test_sharing_a_ref_the_summoner_cannot_reach_is_denied(self, control):
+    context = FakeContext()
+    ref = f'sha256:{"a" * 64}'
+    control.handle(context, ROOT, _summon_message(share=[ref]))
+    assert context.spawned == []
+    [(_, payload)] = context.replies
+    assert 'cannot share artifact(s) the summoner cannot reach' in payload['error']
+    assert ref in payload['error']
+
   def test_a_childs_grants_are_bounded_by_its_own_scope(self, tmp_path):
     # the bound follows the chain: a summoned bro-dev holds github (its
     # extra_secrets) and can hand that down, but nothing it never held
@@ -257,7 +293,7 @@ class TestSummonHandler:
     context = FakeContext()
     message = _summon_message(target='bro-dev')
     control.handle(cast(Dispatcher, context), ROOT, message)
-    context.workers[CHILD] = message.id
+    _bind_child(control, context, CHILD, message)
     control.handle(
       cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['github'])
     )
@@ -280,7 +316,7 @@ class TestSummonHandler:
     context = FakeContext()
     message = _summon_message(target='bro-dev', llm='echo')
     control.handle(cast(Dispatcher, context), ROOT, message)
-    context.workers[CHILD] = message.id
+    _bind_child(control, context, CHILD, message)
     calls.clear()
     control.handle(
       cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['github'])
@@ -300,7 +336,7 @@ class TestSummonHandler:
     context = FakeContext()
     message = _summon_message(target='bro-dev', harness='claude')
     control.handle(cast(Dispatcher, context), ROOT, message)
-    context.workers[CHILD] = message.id
+    _bind_child(control, context, CHILD, message)
     calls.clear()
     control.handle(
       cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['github'])
@@ -406,7 +442,7 @@ class TestSummonHandler:
       target='dev',
       prompt='deploy the thing',
       # a child summoner's base-ref inheritance source: its broker-<channel> clone
-      parent_workspace=workspace_tree(f'broker-{CHILD}'),
+      parent=f'broker-{CHILD}',
       repo=Repository(str(tmp_path), tmp_path),
       summoner={'trail_id': 'T1'},
       may_summon=(),
@@ -430,6 +466,19 @@ class TestSummonHandler:
     )
     launch, _, _ = context.spawned[-1]
     assert launch.summoner == {'trail_id': 'T1', 'step_id': 7, 'index': 3}
+
+  def test_a_spawned_childs_workspace_announcement_is_ignored(self, tmp_path):
+    # only a manual child names its own workspace; a spawned child's is fixed at
+    # its spawn, so an announced name — even the root's — re-attributes nothing
+    control = _control(tmp_path, {'bro-dev'})
+    context = FakeContext()
+    request = _summon_child(control, context, CHILD, 'bro-dev')
+    control.observe_delivery(
+      CHILD, ROOT, brotocol.progress(request.exchange, {'trail_id': 'T1', 'workspace': 'ws'})
+    )
+    control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='dev'))
+    launch, _, _ = context.spawned[-1]
+    assert launch.parent == f'broker-{CHILD}'
 
   def test_step_id_without_a_requester_trail_is_dropped(self, control, tmp_path):
     # the root session has no trail pointer here, so a position alone would be
@@ -563,6 +612,9 @@ class TestSummonHandler:
       {'target': 'dev', 'prompt': 'p', 'grant': ['']},
       {'target': 'dev', 'prompt': 'p', 'grant': None},  # a null cannot default to no override
       {'target': 'dev', 'prompt': 'p', 'revoke': [7]},
+      {'target': 'dev', 'prompt': 'p', 'share': 'sha256:not-a-list'},
+      {'target': 'dev', 'prompt': 'p', 'share': ['not-a-ref']},
+      {'target': 'dev', 'prompt': 'p', 'share': None},  # a null cannot default to no refs
       {'target': 'dev', 'prompt': 'p', 'llm': '::ludicrous'},
       {'target': 'dev', 'prompt': 'p', 'llm': 'nosuchprovider'},
       {'target': 'dev', 'prompt': 'p', 'llm': 7},
@@ -679,6 +731,17 @@ class TestManualSummon:
     assert len(context.replies) == 4
     assert all('launch owns' in payload['error'] for _, payload in context.replies)
 
+  def test_manual_summon_refuses_share(self, control):
+    context = FakeContext()
+    control.handle(
+      cast(Dispatcher, context),
+      ROOT,
+      _summon_message(manual=True, share=[f'sha256:{"a" * 64}']),
+    )
+    assert context.expected == []
+    [(_, payload)] = context.replies
+    assert "'share' cannot be honored" in payload['error']
+
   def test_manual_summon_is_authorized_like_a_spawned_one(self, tmp_path):
     control = _control(tmp_path, set())
     context, _ = self._register(control)
@@ -686,24 +749,23 @@ class TestManualSummon:
     [(_, payload)] = context.replies
     assert 'not in' in payload['error']
 
-  def test_started_workspace_becomes_the_nested_base_source(self, tmp_path):
-    # the manual child names its user-chosen workspace in `started`; its own
+  def test_claimed_workspace_becomes_the_nested_base_source(self, tmp_path):
+    # the manual child's launch claims the token naming its workspace; its own
     # summons then inherit that workspace as the base-ref source
     control = _control(tmp_path, {'bro-dev'})
     context = FakeContext()
     message = _summon_message(target='bro-dev', manual=True)
     control.handle(cast(Dispatcher, context), ROOT, message)
     context.workers[CHILD] = message.id
-    control.observe_delivery(
-      CHILD, ROOT, brotocol.progress(message.exchange, {'trail_id': 'T1', 'workspace': 'my-manual'})
-    )
+    ride.pending_summon.claim(message.exchange, workspace='my-manual')
+    control.observe_delivery(CHILD, ROOT, brotocol.progress(message.exchange, {'trail_id': 'T1'}))
     control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='dev'))
     launch, peer, _ = context.spawned[-1]
     assert peer == CHILD
-    assert launch.parent_workspace == workspace_tree('my-manual')
+    assert launch.parent == 'my-manual'
     assert launch.summoner == {'trail_id': 'T1'}
 
-  def test_nested_summon_before_started_is_denied(self, tmp_path):
+  def test_nested_summon_before_the_claim_is_denied(self, tmp_path):
     control = _control(tmp_path, {'bro-dev'})
     context = FakeContext()
     message = _summon_message(target='bro-dev', manual=True)
@@ -712,7 +774,7 @@ class TestManualSummon:
     control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='dev'))
     assert context.spawned == []
     [(_, payload)] = context.replies
-    assert 'has not announced its session start' in payload['error']
+    assert 'has not claimed its token' in payload['error']
 
   def test_manual_childs_credential_grant_is_denied(self, tmp_path):
     control = _control(tmp_path, {'bro-dev'})
@@ -720,9 +782,7 @@ class TestManualSummon:
     message = _summon_message(target='bro-dev', manual=True)
     control.handle(cast(Dispatcher, context), ROOT, message)
     context.workers[CHILD] = message.id
-    control.observe_delivery(
-      CHILD, ROOT, brotocol.progress(message.exchange, {'trail_id': 'T1', 'workspace': 'my-manual'})
-    )
+    ride.pending_summon.claim(message.exchange, workspace='my-manual')
     control.handle(
       cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['github'])
     )
@@ -736,9 +796,7 @@ class TestManualSummon:
     message = _summon_message(target='bro-dev', manual=True)
     control.handle(cast(Dispatcher, context), ROOT, message)
     context.workers[CHILD] = message.id
-    control.observe_delivery(
-      CHILD, ROOT, brotocol.progress(message.exchange, {'trail_id': 'T1', 'workspace': 'my-manual'})
-    )
+    ride.pending_summon.claim(message.exchange, workspace='my-manual')
     control.handle(
       cast(Dispatcher, context), CHILD, _summon_message(target='dev', harness='claude')
     )

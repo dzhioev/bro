@@ -275,15 +275,19 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
 - `shell.py` (`bro-shell-dir`) — validates the packaged shell helpers and prints their installed directory for shell consumers
 - `summon.py` (`summon`) — peer-side summon wire contract (the manual variant included) plus the blocking, detached, check, and list client surfaces;
   host enforcement lives in `ride/ride/summon_control.py`
+- `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint` / `artifact.get` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session command;
+  the host store and enforcement live in `ride/ride/artifacts.py`
+- `kinds.py` — the contributed broker-kind contract:
+  the `KindContext` a `bro.broker_kinds` factory receives, the artifact-resolver port it carries, and the workspace-relative path validation shared by kinds that take tree paths
 - `summon_status.py` — the session's live summon-status file:
   its typed records, the `RIDE_SUMMON_STATUS` env var pointing at it, and its atomic write.
   Stdlib-only and apart from `summon.py`, so the claude statusLine's repeated reads never pull the summon client in
 - `channel.py` — `BroChannel`, the bro-side broker consumer:
   a thin adapter over `bro.broker.client.Client` answering the exchange the launch named in `BROKER_EXCHANGE`.
   `Runner.run()` builds one via the `_make_channel()` hook (`BroChannel.from_env()` — `None` when `BROKER_CHANNEL` is unset or the broker package is unimportable; the broker imports are deferred to call time, so importing `bro` never requires broker)
-  and emits the started progress (`{trail_id[, workspace]}`) right after `start_trail` and the run's result after `end_trail`
+  and emits the started progress (`{trail_id}`) right after `start_trail` and the run's result after `end_trail`
   — ok with the run's return value, or failed carrying the end reason (raised → `BroRaised.reason`, error → the exception string).
-  Fires for `Runner.run` (LLM-process children) plus the started of a *summoned* interactive conversation (`Runner.send`'s first turn, carrying the workspace fact a manual child's nested summons inherit their base from);
+  Fires for `Runner.run` (LLM-process children) plus the started of a *summoned* interactive conversation (`Runner.send`'s first turn);
   an un-summoned `send()` emits nothing, and a claude-code `--raw` session never calls `run()`.
   `close()` confirms delivery (`ClientTransport.close(confirm=True)`)
   — the run's result is typically the process's last act before exit.
@@ -379,7 +383,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
 Installed distributions extend the framework through `bro` (personas), `bro.credential_sources` (minting source types), `bro.credentials` (registry entries), `bro.brog.backends` (task-tracker backends), `bro.toolsets` (standalone MCP toolsets;
 each entry targets its module's `toolset` object), `bro.mcp.targets` (assembled target prefixes;
 each resolver accepts the value after `<prefix>:` and returns live MCP servers), `bro.session_commands` (console scripts exposed on managed-session PATH), and `bro.broker_kinds` (request kinds served by every managed session's host broker;
-each entry names the kind and targets a factory `(workspace_tree: Path) -> RequestHandler` — see `ride/ride/kinds.py`).
+each entry names the kind and targets a factory `(context: bro.kinds.KindContext) -> RequestHandler` — see `ride/ride/kinds.py`).
 Declarations are installation metadata:
 run `uv sync` after adding or removing an entry point;
 editing an already-declared target module needs no reinstall.

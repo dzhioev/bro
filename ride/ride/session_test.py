@@ -1092,7 +1092,7 @@ class TestHostSession:
   def test_summoned_host_run_fails_cleanly_on_a_spent_token(self, monkeypatch, tmp_path, caplog):
     workspace, _, _ = self._prepare_launch(monkeypatch, tmp_path)
     record = _pending_record(tmp_path)
-    pending_summon.claim(record.token)
+    pending_summon.claim(record.token, workspace='spender')
     monkeypatch.setattr(
       ride_session.subprocess,
       'run',
@@ -1352,13 +1352,14 @@ class TestManualSummonRoundTrip:
   expected-peer path with no docker and no claude."""
 
   _ANSWER_CHILD = """
-import json, sys, time
+import json, os, sys, time
 from pathlib import Path
 from bro.broker import brotocol
 from bro.broker.transport import connect
 from bro.broker.transports.tcp import LOCAL_HOST, Endpoint
 
 pending_dir = Path(sys.argv[1])
+os.environ['XDG_DATA_HOME'] = str(pending_dir.parent.parent.parent)
 deadline = time.time() + 15
 records = []
 while time.time() < deadline:
@@ -1369,9 +1370,11 @@ while time.time() < deadline:
 if not records:
   sys.exit(3)
 record = json.loads(records[0].read_text())
+from ride import pending_summon
+pending_summon.claim(record['token'], workspace='external-ws')
 client = connect(Endpoint(port=record['port'], token=record['channel_token']).address(LOCAL_HOST))
 exchange = record['token']
-client.send(brotocol.progress(exchange, {'trail_id': 't-manual', 'workspace': 'external-ws'}))
+client.send(brotocol.progress(exchange, {'trail_id': 't-manual'}))
 client.send(brotocol.result(exchange, 'ok', value='the pair verdict'))
 client.close(confirm=True)
 """
@@ -1430,14 +1433,15 @@ client.close(confirm=True)
     )
     # the blocking summon relayed the external child's answer
     assert 'the pair verdict' in capfd.readouterr().out
-    # the summon ended: the pending record is discarded and the ledger carries ok
+    # the summon ended: both token records are discarded and the ledger carries ok
     assert list(pending_dir.glob('*.json')) == []
+    assert list((summon_dir() / 'claimed').glob('*.json')) == []
     status = json.loads((summon_dir() / 'w.status.json').read_text())
     assert status['active'] == []
     assert status['last']['outcome'] == 'ok'
     assert status['last']['trail_id'] == 't-manual'
-    # the started payload's workspace fact routed the trail pointer to the
-    # child's own (user-chosen) workspace
+    # the claimed workspace routed the trail pointer to the child's own
+    # (user-chosen) workspace
     pointer = trail_pointer_module.session_pointer(workspace_dir('external-ws'))
     assert trail_pointer_module.read(pointer) == 't-manual'
 

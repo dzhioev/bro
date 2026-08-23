@@ -31,9 +31,23 @@ def test_peek_round_trips_the_record(tmp_path):
 
 def test_claim_consumes_and_a_second_claim_fails(tmp_path):
   pending_summon.write(_record())
-  assert pending_summon.claim('TOK-1') == _record()
+  assert pending_summon.claim('TOK-1', workspace='my-manual') == _record()
   with pytest.raises(pending_summon.UnknownToken):
-    pending_summon.claim('TOK-1')
+    pending_summon.claim('TOK-1', workspace='my-manual')
+
+
+def test_claim_records_the_launch_workspace(tmp_path):
+  pending_summon.write(_record())
+  assert pending_summon.claimed_workspace('TOK-1') is None
+  pending_summon.claim('TOK-1', workspace='my-manual')
+  assert pending_summon.claimed_workspace('TOK-1') == 'my-manual'
+
+
+def test_an_unusable_claimed_workspace_name_is_refused(tmp_path):
+  pending_summon.write(_record())
+  pending_summon.claim('TOK-1', workspace='not/a workspace')
+  with pytest.raises(ValueError, match='no usable workspace name'):
+    pending_summon.claimed_workspace('TOK-1')
 
 
 def test_unknown_token_names_the_possible_causes(tmp_path):
@@ -41,10 +55,12 @@ def test_unknown_token_names_the_possible_causes(tmp_path):
     pending_summon.peek('TOK-9')
 
 
-def test_discard_is_idempotent(tmp_path):
+def test_discard_is_idempotent_and_drops_the_claimed_record(tmp_path):
   pending_summon.write(_record())
+  pending_summon.claim('TOK-1', workspace='my-manual')
   pending_summon.discard('TOK-1')
   pending_summon.discard('TOK-1')
+  assert pending_summon.claimed_workspace('TOK-1') is None
   with pytest.raises(pending_summon.UnknownToken):
     pending_summon.peek('TOK-1')
 

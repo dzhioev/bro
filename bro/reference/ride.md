@@ -775,7 +775,8 @@ underneath it are two client surfaces over the same request:
 
 - `summon <target> <prompt>`, for Bash-capable sessions
   — blocking by default (request id + started trail id on stderr, answer on stdout, non-zero exit with the reason on failure),
-  `--timeout <s>` / `--into <ref>` / `--hold <level>` / `--grant <name>` / `--revoke <name>` / `--harness <name>` plus the LLM flags forwarded into the request (an omitted hold leaves the child's unattended default;
+  `--timeout <s>` / `--into <ref>` / `--hold <level>` / `--grant <name>` / `--revoke <name>` / `--share <ref>` / `--harness <name>` plus the LLM flags forwarded into the request (an omitted hold leaves the child's unattended default;
+  `--share` hands the child read access to an artifact ref — see "Sharing artifacts between peers";
   grant/revoke and the LLM flags shape the child exactly as they shape a managed run — see the shared launch flags above — except that a summon may only widen the child's credential scope with what the summoning session itself holds,
   whether it names the credential outright or reaches it through `--harness`/the LLM flags), `--detach` to return right after the send.
   Any summon is reclaimable by the request id both modes print
@@ -794,7 +795,7 @@ underneath it are two client surfaces over the same request:
   `rewind show <trail-id>` peeks mid-run.
   Contract details in `bro/summon.py`.
 - the bro service tools (`bro::summon` / `bro::summon_check` / `bro::summon_list`), for bro LLM processes and `--raw` sessions
-  — `summon` blocks for the answer (`detach: true` returns the request id instead) and takes the CLI's request fields as parameters (`timeout` / `into` / `hold` / `grant` / `revoke` / `llm` / `harness`);
+  — `summon` blocks for the answer (`detach: true` returns the request id instead) and takes the CLI's request fields as parameters (`timeout` / `into` / `hold` / `grant` / `revoke` / `share` / `llm` / `harness`);
   `summon_check` peeks non-blockingly by default, cursor-reads with `last_seen`, and collects with `wait: true`, mirroring the CLI's `check` / `check --last-seen` / `check --wait`;
   `summon_list` mirrors `summon list` (mounted when the session carries `RIDE_SUMMON_STATUS`).
   A blocking tool call owns its channel client so a cancelled call aborts the wait instead of leaving a ghost waiter,
@@ -830,10 +831,12 @@ the human at the launch owns the session's shape, and there is no host-killable 
 The bridge between the two halves is the pending record (`ride/ride/pending_summon.py`),
 written under `<runtime-root>/summon/pending/<token>.json` when the channel is provisioned and one-shot-claimed by the launch as its last fallible step before the session starts
 — a second launch on the same token fails loudly (two sessions must not share one channel), and a summon that ends unclaimed (root teardown, a failure) discards it, so a stale token fails the launch with the reason.
-The child announces the started progress (`{trail_id, workspace}`)
-— the claude in-place runner from its started-watch, the native chat surface on its first turn
-— carrying the user-chosen workspace name the control needs as the base-ref source for the child's own summons (until it lands, a nested summon from the child is denied with a retry hint,
+The claim records the user-chosen workspace name beside it (`claimed/<token>.json`), which is how the host attributes the manual peer
+— the base-ref source for the child's own summons and the tree its artifact mints resolve against
+— so attribution comes from the launch machinery on the host, never from anything the child says on the wire (before the claim, a nested summon from the child is denied with a retry hint,
 and its credential grants are always denied as unattributable — its actual scope was computed by its own launch).
+The child announces the started progress (`{trail_id}`)
+— the claude in-place runner from its started-watch, the native chat surface on its first turn.
 The answer comes back through the `answer` service tool, mounted in every summoned session with a channel:
 the agent calls it once, when the user confirms the work is done, and the session ends with the exchange's ok result delivered to the waiting summoner
 — a session the user quits without it produces no result, and the channel's EOF surfaces to the summoner as the synthesized `result{failed, reason: disconnected}` (channel EOF is an expected peer's death signal:
@@ -882,6 +885,35 @@ Each authorized spawn records the child's run as its `broker-<channel>` workspac
 — the same solo session spec a `ride solo --harness bro` launch would record
 — so `ride list` shows the child under its prompt and a surviving workspace resumes like any kept solo workspace:
 `ride resume broker-<channel>` opens an interactive `bro chat` continuing the child's trail (see "Bro harness").
+
+### Sharing artifacts between peers
+
+Peers pass files by content-addressed reference through a session store the host owns (`ride/ride/artifacts.py`; the wire contract, ref grammar, and CLI are `bro/artifact.py`):
+
+- `artifact mint <path>` ingests a file or directory named relative to the minting peer's workspace root
+  — a private reflink-or-copy, so nothing the producer writes afterwards changes stored bytes
+  — and prints its ref:
+  `sha256:` plus the content digest for a file (so `sha256sum` checks it) or the digest of a canonical typed-entry manifest for a directory (`artifact digest <path>` computes either locally, which is how a ref is verified end to end).
+  Re-minting unchanged content answers the same ref without storing anything new;
+  a mint past the session's byte cap is refused rather than evicted.
+- `artifact get <ref>` makes a ref visible to the requesting peer and prints the path it appears at.
+  A container peer reads it under `/var/ride/artifacts`
+  — a per-peer view directory bind-mounted read-only, so a ref shared while the peer runs appears without a remount and writes fail with `EROFS`
+  — while a host-mode root, having no mount namespace, gets a private copy under the workspace's own `artifacts/` directory.
+  Either way the path is not for editing in place;
+  a peer that wants an editable copy makes one.
+- Reach follows the launch tree, and nothing a peer says widens it:
+  a mint is readable by the minting peer and its summoners up to the session root, and a summon request's `share` list (`summon --share <ref>`, the service tool's `share` field) hands refs the summoner itself can read down to the child it spawns.
+  There is no other path
+  — knowing a ref is not access, and a denial is uniform whether or not the ref exists.
+  A manual summon refuses `share` and a manual child's `get` is denied
+  — the host builds no launch for it, so no view is mounted
+  — while its mints flow upward normally, attributed to the workspace its own `--summoned` launch claimed the token with.
+- The store is session-scoped and dies with the session
+  — a resumed session starts empty, so a stale ref fails at its own `artifact get`
+  — while mints, gets, shares, and denials outlive it in a JSONL audit under `<runtime-root>/artifacts/<session>.jsonl`, beside the summon audit.
+
+Kind handlers resolve refs through the same store (`bro.kinds.KindContext.artifacts`), under the same sharing check.
 
 ### The outer↔inner contract
 

@@ -254,7 +254,9 @@ _SUMMON_DESCRIPTION = (
   "are strict, so naming something the child's scope already has (or, for "
   'a revoke, lacks) fails the summon. the same bound covers `harness` / `llm`: a '
   'driving loop needing a credential you do not hold (claude needs the Claude '
-  'OAuth token) fails the summon, whatever the target itself declares. '
+  'OAuth token) fails the summon, whatever the target itself declares. the '
+  'optional `share` list names artifact refs (from `artifact mint`) to hand the '
+  'child read access to — only refs this session can itself read. '
   'fails with the reason when the run raises, errors out, '
   'or dies. `detach: true` returns the request id right after the send instead of '
   'blocking — poll or collect it with `summon_check`. `manual: true` registers a '
@@ -354,6 +356,7 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
     hold: Optional[str] = None,
     grant: Optional[list[str]] = None,
     revoke: Optional[list[str]] = None,
+    share: Optional[list[str]] = None,
     llm: Optional[str] = None,
     harness: Optional[str] = None,
     manual: bool = False,
@@ -366,6 +369,10 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
       passed = sorted(name for name, value in launch_owned.items() if value is not None)
       if len(passed) > 0:
         raise ValueError(f"a manual summon's launch owns {', '.join(passed)}; drop the field(s)")
+      if share is not None:
+        raise ValueError(
+          "a manual summon's container is not launched by the host, so 'share' cannot be honored"
+        )
       # a manual child is launched and paced by a human, so the manual path only
       # waits for the host's acceptance — a blocking wait for the answer would
       # outlive any transport budget
@@ -394,6 +401,7 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
         hold=hold,
         grant=grant,
         revoke=revoke,
+        share=share,
         llm=llm,
         harness=harness,
         step_id=step_id,
@@ -410,6 +418,7 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
         hold=hold,
         grant=grant,
         revoke=revoke,
+        share=share,
         llm=llm,
         harness=harness,
         step_id=step_id,

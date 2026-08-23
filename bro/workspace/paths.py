@@ -8,6 +8,7 @@ from bro.workspace.git import git_run
 
 CONTAINER_TRAILS_ROOT = Path('/var/ride/trails')
 CONTAINER_SUMMON_ROOT = Path('/var/ride/summon')
+CONTAINER_ARTIFACTS_ROOT = Path('/var/ride/artifacts')
 CONTAINER_SESSION_DIR = Path('/var/ride/session')
 _DATA_HOME_ENV = 'XDG_DATA_HOME'
 # a name is one path component, and also becomes a git branch and a docker
@@ -114,6 +115,10 @@ def trails_dir() -> Path:
 
 def summon_dir() -> Path:
   return runtime_base() / 'summon'
+
+
+def artifacts_dir() -> Path:
+  return runtime_base() / 'artifacts'
 
 
 def in_container() -> bool:
