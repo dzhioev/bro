@@ -16,6 +16,7 @@ from bro.base import credentials, log
 from bro.trails.model import (
   MESSAGE_TYPES,
   BlazeRequest,
+  trail_has_forks_body,
   trail_not_found_body,
   validate_end,
 )
@@ -28,7 +29,13 @@ from bro.trails.server.auth import (
   resolve_auth,
 )
 from bro.trails.server.dynamo import BodyTooLarge, DynamoStore
-from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore, configured_store
+from bro.trails.store import (
+  AppendConflict,
+  TrailHasForks,
+  TrailNotFound,
+  TrailsStore,
+  configured_store,
+)
 
 __cli_name__ = 'trails-server'
 
@@ -308,6 +315,21 @@ async def _handle_get_messages(request: web.Request) -> web.Response:
   return web.json_response(result)
 
 
+@requires(Permission.ADMIN)
+async def _handle_delete_trail(request: web.Request) -> web.Response:
+  trail_id = request.match_info['trail_id']
+  store: TrailsStore = request.app['store']
+  try:
+    result = await _dispatch(store.delete_trail, trail_id)
+  except TrailNotFound:
+    return _trail_not_found(trail_id)
+  except TrailHasForks as exception:
+    return web.json_response(trail_has_forks_body(str(exception), exception.forks), status=409)
+  except ValueError as exception:
+    return _error(str(exception), 400)
+  return web.json_response(result)
+
+
 def _administered(handler):
   """Answer 501 rather than routing to an administration surface the hosted
   store does not have."""
@@ -464,6 +486,7 @@ def create_app(
   app.router.add_post('/v1/trails/{trail_id}/end', _handle_end_trail)
   app.router.add_post('/v1/trails/{trail_id}/keepalive', _handle_keepalive)
   app['admin'] = admin
+  app.router.add_delete('/v1/admin/trails/{trail_id}', _handle_delete_trail)
   app.router.add_post('/v1/admin/trails/check', _handle_check)
   app.router.add_post('/v1/admin/trails/{trail_id}/recompute', _handle_recompute)
   app.router.add_post('/v1/admin/trails/{trail_id}/relink', _handle_relink)

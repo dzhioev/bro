@@ -39,6 +39,13 @@ class PermissionDenied(Exception):
   """The trails token does not carry the permission this operation needs."""
 
 
+class TrailHasForks(Exception):
+  def __init__(self, trail_id: str, forks: list[str]):
+    super().__init__(f'trail {trail_id} has forks: {", ".join(forks)}')
+    self.trail_id = trail_id
+    self.forks = forks
+
+
 class TrailsStore(ABC):
   @abstractmethod
   def list_trails(
@@ -165,6 +172,11 @@ class TrailsStore(ABC):
   @abstractmethod
   def keepalive(self, trail_id: str) -> None: ...
 
+  @abstractmethod
+  def delete_trail(self, trail_id: str) -> dict:
+    """Remove a trail and everything only it holds, after recording a manifest of
+    what went; returns `{trail_id, extent, manifest}`."""
+
   def resolve_body(self, body: Any) -> Any:
     return body
 
@@ -280,6 +292,33 @@ def step_from_row(data: dict) -> Step:
     extras=extras,
     usage=data.get('usage'),
   )
+
+
+def refuse_while_forked(store: TrailsStore, trail_id: str) -> None:
+  """Raise while any trail's lineage still points at this one: a fork's chain
+  walk resolves every ancestor, so removing one out from under it would leave a
+  `forked_from` pointing at nothing."""
+  forks = [trail['id'] for trail in store.iter_trails(forked_from=trail_id)]
+  if len(forks) > 0:
+    raise TrailHasForks(trail_id, forks)
+
+
+def manifest_name(trail_id: str, at: str) -> str:
+  """The file name a manifest for one operation on `trail_id` takes."""
+  compact = at.replace(':', '').replace('.', '')
+  return f'{trail_id}-{compact}.json'
+
+
+def delete_manifest(*, trail_id: str, at: str, header: dict, steps: list[dict]) -> dict:
+  """The record a backend writes before removing a trail — everything the delete
+  takes away, so what was there is still readable afterwards."""
+  return {
+    'operation': 'delete',
+    'at': at,
+    'trail_id': trail_id,
+    'header': header,
+    'steps': steps,
+  }
 
 
 def fetch_recorded_trail(store: TrailsStore, trail_id: str) -> RecordedTrail:

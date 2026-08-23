@@ -45,6 +45,10 @@ def bro_summon():
   return _run('bro.summon')
 
 
+def bro_trails_admin():
+  return _run('bro.trails.admin')
+
+
 def bro_trails_rewind():
   return _run('bro.trails.rewind')
 

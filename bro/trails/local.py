@@ -22,7 +22,14 @@ from bro.trails.model import (
   payload_sha256,
   validate_end,
 )
-from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore
+from bro.trails.store import (
+  AppendConflict,
+  TrailNotFound,
+  TrailsStore,
+  delete_manifest,
+  manifest_name,
+  refuse_while_forked,
+)
 
 _DEFAULT_PAGE_SIZE = 100
 _UNREPORTED_AFTER = timedelta(hours=1)
@@ -32,6 +39,7 @@ class LocalStore(TrailsStore):
   def __init__(self, root: Path):
     self.root = root.expanduser().resolve()
     self.trails_directory = self.root / 'trails'
+    self.manifests_directory = self.root / 'manifests'
     self.trails_directory.mkdir(parents=True, exist_ok=True)
 
   def list_trails(
@@ -300,6 +308,25 @@ class LocalStore(TrailsStore):
       header = self._read_header(trail_id)
       header['last_alive_at'] = _now_iso()
       _atomic_json(self._trail_directory(trail_id) / 'header.json', header)
+
+  def delete_trail(self, trail_id: str) -> dict:
+    directory = self._trail_directory(trail_id)
+    if not directory.is_dir():
+      raise TrailNotFound(trail_id)
+    # the scan reads every trail's header under a shared lock of its own, this
+    # one's included, so it cannot run inside the exclusive lock below
+    refuse_while_forked(self, trail_id)
+    with self._locked(trail_id, shared=False):
+      header = self._read_header(trail_id)
+      steps = self._read_rows(trail_id)
+      at = _now_iso()
+      manifest = self.manifests_directory / 'delete' / manifest_name(trail_id, at)
+      _atomic_json(
+        manifest,
+        delete_manifest(trail_id=trail_id, at=at, header=header, steps=steps),
+      )
+      shutil.rmtree(directory)
+    return {'trail_id': trail_id, 'extent': len(steps), 'manifest': str(manifest)}
 
   def close(self) -> None:
     pass

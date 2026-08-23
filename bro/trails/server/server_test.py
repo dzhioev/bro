@@ -6,7 +6,7 @@ import pytest
 from aiohttp import web
 
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest, reported_missing_trail
+from bro.trails.model import BlazeRequest, reported_forks, reported_missing_trail
 from bro.trails.server.auth import (
   TOKENS_SECRET,
   Permission,
@@ -327,6 +327,28 @@ async def test_an_unrouted_path_is_not_a_missing_trail(client):
   response = await (await client).get('/v1/trails/T1/nowhere', headers=_auth())
   assert response.status == 404
   assert reported_missing_trail(await response.read()) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_is_administered_and_reports_a_refusal_as_a_conflict(aiohttp_client, store):
+  parent = store.blaze(BlazeRequest(**_blaze_payload()))['id']
+  child = store.blaze(
+    BlazeRequest(**_blaze_payload(forked_from={'trail_id': parent, 'step_id': 0}))
+  )['id']
+  full = await aiohttp_client(create_app(store, FULL_ACCESS))
+  writer = await aiohttp_client(create_app(store, _tokens('write')))
+
+  unprivileged = await writer.delete(f'/v1/admin/trails/{parent}', headers=_auth())
+  forked = await full.delete(f'/v1/admin/trails/{parent}', headers=_auth())
+  removed = await full.delete(f'/v1/admin/trails/{child}', headers=_auth())
+  missing = await full.delete('/v1/admin/trails/absent', headers=_auth())
+
+  assert unprivileged.status == 403
+  assert forked.status == 409
+  assert reported_forks(await forked.read()) == [child]
+  assert (await removed.json())['trail_id'] == child
+  assert missing.status == 404
+  assert reported_missing_trail(await missing.read()) == 'absent'
 
 
 @pytest.mark.asyncio

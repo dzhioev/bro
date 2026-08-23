@@ -10,7 +10,7 @@ from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from bro.trails import backends
 from bro.trails.model import MESSAGE_TYPES, UNREPORTED_END_INFERENCE, BlazeRequest, tools_sha256
 from bro.trails.server import dynamo as dynamo_store, dynamo_types
-from bro.trails.store import AppendConflict
+from bro.trails.store import AppendConflict, TrailHasForks, TrailNotFound
 
 _serializer = TypeSerializer()
 _deserializer = TypeDeserializer()
@@ -53,6 +53,9 @@ class FakeS3:
     if Key not in self.objects:
       raise FakeClientError({'Error': {'Code': 'NoSuchKey', 'Message': 'missing'}}, 'GetObject')
     return {'Body': io.BytesIO(self.objects[Key])}
+
+  def delete_object(self, *, Key, **_):
+    self.objects.pop(Key, None)
 
 
 class FakeDynamo:
@@ -775,6 +778,54 @@ def test_relink_manifests_before_trimming_and_recomputes(components):
   assert dynamo.headers[trail_id]['turn_count'] == 1
   assert dynamo.universal_steps[(trail_id, 0)]['uuid'] == 'own'
   assert (trail_id, 1) not in dynamo.universal_steps
+
+
+def test_delete_manifests_the_trail_and_takes_only_what_it_owns(components):
+  store, dynamo, s3 = components
+  tool_body = [{'type': 'function', 'name': 'read'}]
+  sha256 = tools_sha256(tool_body)
+  trail_id = _blaze_bro(
+    store,
+    body={
+      'records': [{'kind': 'system_prompt', 'body': 'prompt'}],
+      'launch_context': {'cwd': '/workspace'},
+    },
+  )
+  large = 'x' * (dynamo_store.SPILLOVER_THRESHOLD_BYTES + 1)
+  store.append_records(
+    trail_id,
+    offset=1,
+    records=[{'kind': 'tool_result', 'body': large, 'tools_sha256': sha256}],
+    tools={sha256: tool_body},
+  )
+  spilled = next(key for key in s3.objects if key.startswith(f'trails/steps/{trail_id}/1-'))
+
+  result = store.delete_trail(trail_id)
+
+  assert result == {'trail_id': trail_id, 'extent': 2, 'manifest': result['manifest']}
+  manifest = json.loads(s3.objects[result['manifest']])
+  assert manifest['header']['id'] == trail_id
+  assert [step['body'] for step in manifest['steps']] == ['prompt', large]
+  assert trail_id not in dynamo.headers
+  assert [key for key in dynamo.universal_steps if key[0] == trail_id] == []
+  assert spilled not in s3.objects
+  assert dynamo_types.context_key(trail_id) not in s3.objects
+  assert dynamo_types.tool_blob_key(sha256) in s3.objects
+  with pytest.raises(TrailNotFound):
+    store.delete_trail(trail_id)
+
+
+def test_delete_refuses_a_trail_a_fork_still_points_at(components):
+  store, _, _ = components
+  root = _blaze_bro(store)
+  child = _blaze_bro(store, forked_from={'trail_id': root, 'step_id': 0})
+
+  with pytest.raises(TrailHasForks) as refused:
+    store.delete_trail(root)
+
+  assert refused.value.forks == [child]
+  store.delete_trail(child)
+  assert store.delete_trail(root)['trail_id'] == root
 
 
 def test_list_and_pointer_index_stay_available(components):

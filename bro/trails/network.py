@@ -12,12 +12,14 @@ from urllib.parse import urlencode, urlparse
 from bro.trails.model import (
   LOOPBACK_HOSTS,
   BlazeRequest,
+  reported_forks,
   reported_missing_trail,
   spill_descriptor,
 )
 from bro.trails.store import (
   AppendConflict,
   PermissionDenied,
+  TrailHasForks,
   TrailNotFound,
   TrailsStore,
   TransientUnavailable,
@@ -30,11 +32,12 @@ _KEEPALIVE_RETRY_DELAYS_SECONDS = (0.5,)
 
 
 class HTTPStatusError(Exception):
-  """A non-success response carrying its numeric HTTP status."""
+  """A non-success response carrying its numeric HTTP status and raw body."""
 
-  def __init__(self, status: int, message: str):
+  def __init__(self, status: int, message: str, body: bytes):
     super().__init__(message)
     self.status = status
+    self.body = body
 
 
 def is_retryable_status(status: int) -> bool:
@@ -223,6 +226,15 @@ class NetworkStore(TrailsStore):
       retry_delays=_KEEPALIVE_RETRY_DELAYS_SECONDS,
     )
 
+  def delete_trail(self, trail_id: str) -> dict:
+    try:
+      return self._send('DELETE', f'/v1/admin/trails/{trail_id}', {})
+    except HTTPStatusError as exception:
+      forks = reported_forks(exception.body)
+      if exception.status == 409 and forks is not None:
+        raise TrailHasForks(trail_id, forks) from exception
+      raise
+
   def close(self) -> None:
     with self._lock:
       self._drop_connection()
@@ -297,6 +309,7 @@ class NetworkStore(TrailsStore):
             exception = HTTPStatusError(
               response.status,
               f'{method} {path} -> HTTP {response.status}: {raw.decode(errors="replace")}',
+              raw,
             )
             if response.status == 404:
               missing_trail = reported_missing_trail(raw)

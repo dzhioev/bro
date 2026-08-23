@@ -9,6 +9,7 @@ from typing import Any, Optional
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
 from bro.base.lulid import lulid
+from bro.trails.store import manifest_name
 
 SPILLOVER_THRESHOLD_BYTES = 50 * 1024
 MAX_BODY_BYTES = 10 * 1024 * 1024
@@ -97,5 +98,8 @@ def context_key(trail_id: str) -> str:
 
 
 def relink_manifest_key(trail_id: str, timestamp: str) -> str:
-  compact = timestamp.replace(':', '').replace('.', '')
-  return f'trails/migrations/relink/{trail_id}-{compact}.json'
+  return f'trails/migrations/relink/{manifest_name(trail_id, timestamp)}'
+
+
+def delete_manifest_key(trail_id: str, timestamp: str) -> str:
+  return f'trails/migrations/delete/{manifest_name(trail_id, timestamp)}'
