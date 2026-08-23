@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+from pathlib import Path
 from typing import Optional, cast
 
 import pytest
@@ -69,16 +70,25 @@ class TestBenchmarkKind:
       'uv',
       'run',
       '--project',
-      'benchmark',
+      str((tree / 'benchmark').resolve()),
       'harbor',
       'job',
       'start',
       '-c',
       str((tree / CONFIG).resolve()),
+      '--jobs-dir',
+      str((tree / benchmark_job.JOBS_DIRECTORY).resolve()),
     )
-    assert command.cwd == str(tree)
     assert command.env['BENCH_SENTINEL'] == 'yes'  # the host environment rides the job
     assert (requester, timeout) == (ROOT, benchmark_job.DEFAULT_TIMEOUT)
+
+  def test_the_job_runs_outside_the_workspace_tree(self, tree):
+    context = FakeContext()
+    benchmark_job.benchmark_kind(tree)(
+      cast(Dispatcher, context), ROOT, _request({'config': CONFIG})
+    )
+    [(command, _, _)] = context.jobs
+    assert not Path(command.cwd).resolve().is_relative_to(tree.resolve())
 
   def test_request_timeout_bounds_the_job(self, tree):
     context = FakeContext()

@@ -77,9 +77,10 @@ benchmark-job start -c benchmark/bro/benchmark/terminal_bench_2_1.yaml --detach
 benchmark-job check <request-id>
 ```
 
-The host runs the same harbor command in the session's workspace tree with its own docker access
-(the `benchmark` broker kind, `local/bro/local/benchmark_job.py`), so the config path, the bundle,
-and the score under `jobs/` are the workspace's own files on both routes.
+The host runs the same harbor command with its own docker access
+(the `benchmark` broker kind, `local/bro/local/benchmark_job.py`),
+pointed at the workspace's own config and `jobs/` directory, so the config path, the bundle, and the
+score are the workspace's own files on both routes.
 
 Following a run as it happens means reading the log where
 it is being written:
