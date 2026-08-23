@@ -1,5 +1,6 @@
 import platform
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,16 @@ from bro.benchmark.bundle import (
   wheel_command,
   workspace_root,
 )
+
+
+def _pin_host(
+  monkeypatch, system: str = 'linux', machine: str = 'x86_64', libc: str = 'glibc'
+) -> None:
+  """pin the three facts `host_mismatch` reads, so the machine running the suite
+  decides nothing."""
+  monkeypatch.setattr(sys, 'platform', system)
+  monkeypatch.setattr(platform, 'machine', lambda: machine)
+  monkeypatch.setattr(platform, 'libc_ver', lambda: (libc, ''))
 
 
 def _fake_bundle(root: Path) -> Bundle:
@@ -106,12 +117,14 @@ def test_the_shim_keeps_an_inherited_python_path(tmp_path):
   assert f'PYTHONPATH={bundle.site_packages}:/outer' in result.stdout
 
 
-def test_the_host_this_suite_runs_on_can_build():
+def test_the_targeted_host_can_build(monkeypatch):
+  _pin_host(monkeypatch)
+
   assert host_mismatch() is None
 
 
 def test_an_unrecognised_libc_is_named(monkeypatch):
-  monkeypatch.setattr(platform, 'libc_ver', lambda: ('', ''))
+  _pin_host(monkeypatch, libc='')
 
   assert (
     host_mismatch()
@@ -120,11 +133,11 @@ def test_an_unrecognised_libc_is_named(monkeypatch):
 
 
 def test_a_foreign_architecture_is_named(monkeypatch):
-  monkeypatch.setattr(platform, 'machine', lambda: 'aarch64')
+  _pin_host(monkeypatch, machine='aarch64')
 
-  mismatch = host_mismatch()
-
-  assert mismatch is not None and 'aarch64' in mismatch
+  assert (
+    host_mismatch() == 'the bundle targets linux/x86_64/glibc; this host is linux/aarch64/glibc'
+  )
 
 
 def test_a_build_refuses_a_host_it_does_not_target(monkeypatch, tmp_path):
