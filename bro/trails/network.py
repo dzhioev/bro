@@ -61,7 +61,9 @@ class NetworkStore(TrailsStore):
   share the connection safely with its keepalive thread.
   """
 
-  def __init__(self, base_url: str, token: str, *, timeout: float = 10.0):
+  # the budget covers a blaze whose lineage resolution walks a long transcript,
+  # the one request this store makes that is not answered in well under a second
+  def __init__(self, base_url: str, token: str, *, timeout: float = 30.0):
     self._base_url = base_url.rstrip('/')
     self._token = token
     self._timeout = timeout
