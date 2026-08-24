@@ -73,7 +73,7 @@ class FakeDynamo:
       pass
 
   def __init__(self):
-    self.tables: dict[str, dict[Any, dict]] = {'headers': {}, 'universal': {}}
+    self.tables: dict[str, dict[Any, dict]] = {'headers': {}, 'steps': {}}
     self.queries: list[dict] = []
     self.query_threads: list[int] = []
     self.scans: list[dict] = []
@@ -83,8 +83,8 @@ class FakeDynamo:
     return self.tables['headers']
 
   @property
-  def universal_steps(self) -> dict[tuple[str, int], dict]:
-    return self.tables['universal']
+  def steps(self) -> dict[tuple[str, int], dict]:
+    return self.tables['steps']
 
   @staticmethod
   def _key(table: str, item: dict) -> Any:
@@ -114,9 +114,7 @@ class FakeDynamo:
     if expression is None:
       return True
     values = self._values(operation)
-    if expression == 'attribute_not_exists(id)':
-      return item is None
-    if expression in {'attribute_not_exists(step_id)', 'attribute_not_exists(trail_id)'}:
+    if expression in {'attribute_not_exists(id)', 'attribute_not_exists(trail_id)'}:
       return item is None
     if expression == 'attribute_exists(id)':
       return item is not None
@@ -124,50 +122,12 @@ class FakeDynamo:
       return item is not None and self._field('#forked_from', operation) not in item
     if expression == 'attribute_type(#end, :null_type)':
       return item is not None and item.get(self._field('#end', operation)) is None
-    if expression == '#end = :old':
-      return item is not None and item.get(self._field('#end', operation)) == values[':old']
-    if expression == '#native.#llm = :expected':
-      native = item.get(self._field('#native', operation)) if item is not None else None
-      return isinstance(native, dict) and native.get('llm') == values[':expected']
-    if expression == '#native = :old_native':
-      return (
-        item is not None and item.get(self._field('#native', operation)) == values[':old_native']
-      )
     if expression == '#extent = :extent':
       return item is not None and item.get(self._field('#extent', operation)) == values[':extent']
-    if expression == '#body_storage = :storage':
-      return (
-        item is not None and item.get(self._field('#body_storage', operation)) == values[':storage']
-      )
-    if expression == '#body_storage = :storage AND #extent = :expected_extent':
+    if expression == '#extent = :expected_extent':
       return (
         item is not None
-        and item.get(self._field('#body_storage', operation)) == values[':storage']
         and item.get(self._field('#extent', operation)) == values[':expected_extent']
-      )
-    if expression == '#pointer = :before':
-      return item is not None and item.get(self._field('#pointer', operation)) == values[':before']
-    if expression == (
-      '#harness = :bro AND attribute_not_exists(#body_storage) '
-      'AND #native = :source_native AND #end = :source_end'
-    ):
-      return (
-        item is not None
-        and item.get(self._field('#harness', operation)) == values[':bro']
-        and self._field('#body_storage', operation) not in item
-        and item.get(self._field('#native', operation)) == values[':source_native']
-        and item.get(self._field('#end', operation)) == values[':source_end']
-      )
-    if expression == (
-      '#harness = :claude AND attribute_not_exists(#body_storage) '
-      'AND #native = :source_native AND #end = :source_end'
-    ):
-      return (
-        item is not None
-        and item.get(self._field('#harness', operation)) == values[':claude']
-        and self._field('#body_storage', operation) not in item
-        and item.get(self._field('#native', operation)) == values[':source_native']
-        and item.get(self._field('#end', operation)) == values[':source_end']
       )
     raise AssertionError(f'unsupported condition: {expression}')
 
@@ -337,7 +297,7 @@ def components():
     dynamo=dynamo_client,
     s3=s3,
     trails_table='headers',
-    steps_table='universal',
+    steps_table='steps',
     bucket='bucket',
     uuid_index='uuid-index',
   )
@@ -460,7 +420,7 @@ def test_five_function_registry_and_declared_projection_contract():
     assert adapter.emitted_message_types <= MESSAGE_TYPES
 
 
-def test_universal_append_uses_ordinals_folds_raw_usage_and_is_idempotent(components):
+def test_append_uses_ordinals_folds_raw_usage_and_is_idempotent(components):
   store, dynamo, _ = components
   trail_id = _blaze_bro(store)
   result = store.append_records(
@@ -472,9 +432,7 @@ def test_universal_append_uses_ordinals_folds_raw_usage_and_is_idempotent(compon
     ],
   )
   assert result == {'extent': 3, 'appended': 2}
-  assert sorted(
-    step_id for row_trail, step_id in dynamo.universal_steps if row_trail == trail_id
-  ) == [
+  assert sorted(step_id for row_trail, step_id in dynamo.steps if row_trail == trail_id) == [
     0,
     1,
     2,
@@ -571,12 +529,12 @@ def test_claude_billing_decision_is_stored_across_batches_and_pages(components):
   third = _claude_assistant('message-1', 'third', uuid='uuid-3')
   store.append_records(trail_id, offset=0, records=[first, second])
   store.append_records(trail_id, offset=2, records=[third])
-  assert dynamo.universal_steps[(trail_id, 0)]['usage'] == {
+  assert dynamo.steps[(trail_id, 0)]['usage'] == {
     'input_tokens': 7,
     'output_tokens': 2,
   }
-  assert 'usage' not in dynamo.universal_steps[(trail_id, 1)]
-  assert 'usage' not in dynamo.universal_steps[(trail_id, 2)]
+  assert 'usage' not in dynamo.steps[(trail_id, 1)]
+  assert 'usage' not in dynamo.steps[(trail_id, 2)]
   assert dynamo.headers[trail_id]['native']['usage']['claude-opus']['input_tokens'] == 7
 
   billed = []
@@ -686,37 +644,37 @@ def test_spilled_claude_lines_resolve_in_the_store_thread_pool(components):
 
 def test_candidate_trails_come_from_the_segment_index(components):
   store, dynamo, _ = components
-  universal = _blaze_claude(store)
+  in_segment = _blaze_claude(store)
   elsewhere = _blaze_claude(store, native={**_CLAUDE_NATIVE, 'segment': 'other-segment'})
   first = _claude_assistant('message-1', 'first', uuid='uuid-1')
-  store.append_records(universal, offset=0, records=[first])
+  store.append_records(in_segment, offset=0, records=[first])
 
   query_count = len(dynamo.queries)
   [header] = store.find_segment_trails({'segment'})
 
-  assert header['id'] == universal
+  assert header['id'] == in_segment
   assert header['native']['segment'] == 'segment'
   assert [found['id'] for found in store.find_segment_trails({'other-segment'})] == [elsewhere]
   assert store.find_segment_trails({'missing-segment'}) == []
   assert {query['IndexName'] for query in dynamo.queries[query_count:]} == {
     dynamo_store.SEGMENT_INDEX
   }
-  assert (store.get_step(universal, 0))['body'] == first
+  assert (store.get_step(in_segment, 0))['body'] == first
 
 
 def test_the_mid_write_probe_is_one_keys_only_uuid_query(components):
   store, dynamo, _ = components
-  universal = _blaze_claude(store)
+  recorded = _blaze_claude(store)
   elsewhere = _blaze_claude(store)
   store.append_records(
-    universal, offset=0, records=[_claude_assistant('message-1', 'first', uuid='uuid-1')]
+    recorded, offset=0, records=[_claude_assistant('message-1', 'first', uuid='uuid-1')]
   )
 
   query_count = len(dynamo.queries)
-  assert store.holds_record({universal}, 'uuid-1') is True
+  assert store.holds_record({recorded}, 'uuid-1') is True
 
   assert store.holds_record({elsewhere}, 'uuid-1') is False
-  assert store.holds_record({universal}, 'missing') is False
+  assert store.holds_record({recorded}, 'missing') is False
   assert store.holds_record(set(), 'uuid-1') is False
   probes = dynamo.queries[query_count:]
   assert len(probes) == 3
@@ -738,9 +696,9 @@ def test_launch_context_is_harness_neutral_and_end_adds_no_step(components):
   assert 'context_s3' not in header['native']
   assert store.get_launch_context(trail_id) == {'cwd': '/workspace'}
   assert dynamo_types.context_key(trail_id) in s3.objects
-  before = len(dynamo.universal_steps)
+  before = len(dynamo.steps)
   store.end_trail(trail_id=trail_id, reason='ok', detail=None)
-  assert len(dynamo.universal_steps) == before
+  assert len(dynamo.steps) == before
   assert dynamo.headers[trail_id]['end']['reason'] == 'ok'
 
 
@@ -810,8 +768,8 @@ def test_check_detects_corruption_and_recompute_repairs_rows_and_header(componen
   dynamo.headers[trail_id]['turn_count'] = 9
   dynamo.headers[trail_id]['native']['usage'] = {}
   dynamo.headers[trail_id]['native']['lineage_head']['tail'] = []
-  dynamo.universal_steps[(trail_id, 0)]['uuid'] = 'wrong'
-  dynamo.universal_steps[(trail_id, 0)].pop('usage')
+  dynamo.steps[(trail_id, 0)]['uuid'] = 'wrong'
+  dynamo.steps[(trail_id, 0)].pop('usage')
   checked = store.check(trail_id)
   assert checked['ok'] is False
   fields = {difference['field'] for difference in checked['trails'][0]['differences']}
@@ -826,56 +784,7 @@ def test_check_detects_corruption_and_recompute_repairs_rows_and_header(componen
 
   store.recompute(trail_id)
   assert (store.check(trail_id))['ok'] is True
-  assert dynamo.universal_steps[(trail_id, 0)]['uuid'] == 'uuid-1'
-
-
-def test_the_backfill_stamps_the_segment_key_and_folds_the_heads_a_fork_shares(components):
-  store, dynamo, _ = components
-  root = _blaze_claude(store)
-  root_records = [
-    _claude_assistant(f'message-{index}', 'text', uuid=f'uuid-{index}') for index in range(2)
-  ]
-  store.append_records(root, offset=0, records=root_records)
-  child = _blaze_claude(store, forked_from={'trail_id': root, 'step_id': 1})
-  child_record = _claude_assistant('message-2', 'text', uuid='uuid-2')
-  store.append_records(child, offset=0, records=[child_record])
-  bro_trail = _blaze_bro(store)
-  # the trails a redeploy finds: recorded before an append transaction folded one
-  for trail_id in (root, child):
-    del dynamo.headers[trail_id]['segment']
-    del dynamo.headers[trail_id]['native']['lineage_head']
-
-  result = store.backfill_lineage_heads()
-
-  assert result == {'ok': True, 'stamped': sorted([root, child]), 'contended': []}
-  assert dynamo.headers[child]['segment'] == 'segment'
-  # the conversation's first record is the chain root's, not the fork's own
-  assert dynamo.headers[child]['native']['lineage_head'] == {
-    'chain_first_uuid': 'uuid-0',
-    'tail': [[0, 'uuid-2', payload_sha256(child_record)]],
-    'last_row_digest': payload_sha256(child_record),
-    'cuts': None,
-  }
-  assert dynamo.headers[root]['native']['lineage_head']['tail'] == [
-    [index, f'uuid-{index}', payload_sha256(record)] for index, record in enumerate(root_records)
-  ]
-  assert 'lineage_head' not in dynamo.headers[bro_trail]['native']
-
-
-def test_the_backfill_reports_a_trail_an_append_landed_on(components):
-  store, dynamo, _ = components
-  trail_id = _blaze_claude(store)
-  store.append_records(
-    trail_id, offset=0, records=[_claude_assistant('message-1', 'first', uuid='uuid-1')]
-  )
-  del dynamo.headers[trail_id]['native']['lineage_head']
-  # the trail grew between the row read and the write
-  dynamo.headers[trail_id]['extent'] = 2
-
-  result = store.backfill_lineage_heads()
-
-  assert result == {'ok': False, 'stamped': [], 'contended': [trail_id]}
-  assert 'lineage_head' not in dynamo.headers[trail_id]['native']
+  assert dynamo.steps[(trail_id, 0)]['uuid'] == 'uuid-1'
 
 
 def test_store_check_finds_cross_trail_duplicate_uuids(components):
@@ -929,8 +838,8 @@ def test_relink_manifests_before_trimming_and_recomputes(components):
   head = dynamo.headers[trail_id]['native']['lineage_head']
   assert head['chain_first_uuid'] == 'copied'
   assert [row[1] for row in head['tail']] == ['own']
-  assert dynamo.universal_steps[(trail_id, 0)]['uuid'] == 'own'
-  assert (trail_id, 1) not in dynamo.universal_steps
+  assert dynamo.steps[(trail_id, 0)]['uuid'] == 'own'
+  assert (trail_id, 1) not in dynamo.steps
 
 
 def test_delete_manifests_the_trail_and_takes_only_what_it_owns(components):
@@ -960,7 +869,7 @@ def test_delete_manifests_the_trail_and_takes_only_what_it_owns(components):
   assert manifest['header']['id'] == trail_id
   assert [step['body'] for step in manifest['steps']] == ['prompt', large]
   assert trail_id not in dynamo.headers
-  assert [key for key in dynamo.universal_steps if key[0] == trail_id] == []
+  assert [key for key in dynamo.steps if key[0] == trail_id] == []
   assert spilled not in s3.objects
   assert dynamo_types.context_key(trail_id) not in s3.objects
   assert dynamo_types.tool_blob_key(sha256) in s3.objects

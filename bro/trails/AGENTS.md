@@ -39,7 +39,7 @@ bro · claude recorders                     readers
   It maps not-found, append-conflict, refused-permission, unsupported-operation, and transient transport failures onto the store errors and owns operation-specific retry schedules.
   A 404 becomes `TrailNotFound` only when its body reports the missing trail (`model.trail_not_found_body` is the shape both sides read), and a 409 becomes `TrailHasForks` only when its body names them (`model.trail_has_forks_body`);
   every other 404 surfaces as `HTTPStatusError` carrying what the response said.
-  Its concrete `recompute`, `check`, `relink`, and `backfill_lineage_heads` methods forward the Dynamo administration endpoints;
+  Its concrete `recompute`, `check`, and `relink` methods forward the Dynamo administration endpoints;
   they are not part of `TrailsStore`.
 - `claude_lineage.py` owns the claude evidence contract and resolves lineage from it:
   the adopted segment, its lines' record uuids and digests, and the sibling segments sharing those records.
@@ -50,7 +50,7 @@ bro · claude recorders                     readers
   A trail whose blaze response was lost holds no row to verify, and is attachable on the `cuts` its mint stored instead, which is what makes a blaze idempotent for the segment it names.
   `LineageIndex` is the store-internal surface it reads through, two lookups each backend implements its own way:
   the trails recording a set of segments
-  — `DynamoStore` queries the `segment-started_at-index` GSI over the top-level `segment` attribute, `LocalStore` filters its header scan
+  — `DynamoStore` queries the `segment-started_at-index` GSI (partition `segment`, range `started_at`, projecting the whole header) over the top-level `segment` attribute, `LocalStore` filters its header scan
   — and whether any of them stores one record uuid, the mid-write test and the only row read a resolution can make.
   Nothing on this path crosses the wire, and continuity across recorder lifetimes comes from the stored rows alone, through the head they folded.
 - An attach reopens the trail it names:
@@ -79,9 +79,6 @@ bro · claude recorders                     readers
   conditional append transactions, indexes, S3 body spill/resolution, UUID reads, and its store-owned thread pool for the spilled-row fan-out.
   `server/dynamo_types.py` owns Dynamo conversion and row constants.
   `server/operations.py` remains the recompute/check engine and owns the manifested destructive operations, relinking and deletion.
-  `backfill_lineage_heads` sweeps it there too:
-  a claude trail recorded before the head became part of the append transaction gets one folded from its rows' identities and its chain root's first record.
-  The head is written on its own, conditional on the extent those rows were read at, so a trail an append is landing on is reported rather than overwritten.
 - Stored rows are served rows.
   Claude message projection reparses the row's `body`;
   reads do not add `raw` or `record`.
@@ -105,7 +102,7 @@ bro · claude recorders                     readers
   `validate_create` refuses those fields from a writer, and `AggregateState.replaying` clears them for the recompute/check re-fold.
   `native.lineage_head` (`lineage.py`) is among them, folded for the harnesses whose adapter resolves lineage.
   Its `cuts` are the exception the fold does not derive:
-  the spans the mint verdict awarded, written once at blaze and carried through the replay seed and the backfill.
+  the spans the mint verdict awarded, written once at blaze and carried through the replay seed.
   Client-side stores and recorders do not import `bro.trails.server`.
 - **Recorder placement:**
   core `record/spine.py` owns the shared write spine.
@@ -147,9 +144,6 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
 - List queries accept exactly one selector
   — `harness`, `bro`, or `forked_from`
   — plus the common time range and opaque cursor.
-- `POST /v1/admin/trails/backfill-lineage-heads` is the one-shot sweep behind a deployment that starts folding a head:
-  it must run before the redeployed resolver serves an adoption, since a claude trail without one is recognized as no parent.
-  `DynamoStore` also needs the `segment-started_at-index` GSI (partition `segment`, range `started_at`, projecting the whole header) in place first.
 - `DELETE /v1/admin/trails/{id}` removes a trail's rows, whatever they spilled, and its launch-context object, after writing a manifest of the header and rows it takes.
   Tool blobs are content-addressed and shared across trails, so no single trail's delete removes one.
   A trail some fork still points at is refused with the children named:

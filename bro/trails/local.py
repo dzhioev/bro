@@ -191,7 +191,6 @@ class LocalStore(TrailsStore):
         'surface': request.surface,
         'turn_count': 0,
         'native': native,
-        'body_storage': 'local-jsonl',
         'extent': 0,
       }
       if forked_from is not None:
