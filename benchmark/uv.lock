@@ -238,6 +238,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "bro-local" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -252,9 +253,42 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "bro-local", editable = "../local" },
     { name = "pyright", specifier = "==1.1.411" },
     { name = "pytest", specifier = "==9.1.1" },
     { name = "pytest-asyncio", specifier = "==1.4.0" },
+]
+
+[[package]]
+name = "bro-dev"
+version = "0.1.0"
+source = { editable = "../dev" }
+dependencies = [
+    { name = "bro" },
+    { name = "markdown-it-py" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bro", editable = "../" },
+    { name = "markdown-it-py" },
+]
+
+[[package]]
+name = "bro-local"
+version = "0.1.0"
+source = { editable = "../local" }
+dependencies = [
+    { name = "bro" },
+    { name = "bro-dev" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bro", editable = "../" },
+    { name = "bro-dev", editable = "../dev" },
+    { name = "pyyaml", specifier = "==6.0.3" },
 ]
 
 [[package]]

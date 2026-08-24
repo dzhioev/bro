@@ -12,66 +12,16 @@ so it stays out of the gate's roster:
   uv run --directory benchmark pytest bro/benchmark/harbor_e2e_test.py
 """
 
-import json
 import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-from harbor.cli.config_sources import load_config_source
+from bro.benchmark.bundle import build, default_root, workspace_root
+from bro.benchmark.e2e_test_helper import LIVE_TRIAL, assert_graded_run, one_task_config
 
-from bro.base import credentials
-from bro.base.suite_environment import host_credential_store
-from bro.benchmark.bundle import build, default_root, host_mismatch, workspace_root
-
-# the smallest image in the set, and one carrying neither python3 nor a CA
-# store — so a single trial exercises the bundle and SSL_CERT_FILE for real
-TASK = 'terminal-bench/adaptive-rejection-sampler'
-JOB_CONFIG = Path(__file__).with_name('terminal_bench_2_1.yaml')
 HARBOR = Path(sys.executable).with_name('harbor')
 
-# the credentials the trials will actually hydrate — the config names them
-_LLM_CREDENTIALS = sorted(
-  {agent['kwargs']['llm_credential'] for agent in load_config_source(JOB_CONFIG)['agents']}
-)
-
-
-def _available(*command: str) -> bool:
-  try:
-    return subprocess.run(command, capture_output=True).returncode == 0
-  except FileNotFoundError:
-    return False
-
-
-def _host_holds_the_llm_keys() -> bool:
-  with host_credential_store():
-    return all(credentials.default_store().available_instance(name) for name in _LLM_CREDENTIALS)
-
-
-_HOST_MISMATCH = host_mismatch()
-
-pytestmark = [
-  pytest.mark.skipif(not _available('docker', 'info'), reason='no reachable docker daemon'),
-  pytest.mark.skipif(_HOST_MISMATCH is not None, reason=str(_HOST_MISMATCH)),
-  # harbor drives every container through the compose CLI plugin, which is
-  # installed separately from the engine
-  pytest.mark.skipif(
-    not _available('docker', 'compose', 'version'), reason='no docker compose plugin'
-  ),
-  pytest.mark.skipif(
-    not _host_holds_the_llm_keys(), reason='an LLM key the job config names does not resolve'
-  ),
-]
-
-
-def _one_task_config(directory: Path) -> Path:
-  """the pinned config narrowed to the one task, so the pins stay in one file."""
-  config = load_config_source(JOB_CONFIG)
-  for dataset in config['datasets']:
-    dataset['task_names'] = [TASK]
-  narrowed = directory / 'one-task.json'
-  narrowed.write_text(json.dumps(config))
-  return narrowed
+pytestmark = LIVE_TRIAL
 
 
 def test_a_real_task_is_driven_and_graded(tmp_path):
@@ -85,7 +35,7 @@ def test_a_real_task_is_driven_and_graded(tmp_path):
       'job',
       'start',
       '--config',
-      str(_one_task_config(tmp_path)),
+      str(one_task_config(tmp_path)),
       '--jobs-dir',
       str(jobs),
       '--yes',
@@ -94,13 +44,4 @@ def test_a_real_task_is_driven_and_graded(tmp_path):
     check=True,
   )
 
-  results = sorted(jobs.glob('*/result.json'))
-  assert len(results) == 1
-  stats = json.loads(results[0].read_text())['stats']
-  for name, evaluated in stats['evals'].items():
-    assert evaluated['n_trials'] > 0, f'{name} produced no graded trial'
-    assert evaluated['reward_stats'] != {}, f'{name} produced no reward'
-  # what the reward alone cannot tell: a bro that died on startup is graded zero
-  # like one that worked the task and failed. Tokens mean the loop actually ran,
-  # and that the usage file made it back out of the container
-  assert stats['n_output_tokens'] > 0
+  assert_graded_run(jobs)

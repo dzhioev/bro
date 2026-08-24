@@ -253,7 +253,7 @@ PYTEST_FILES = [
 DOCKER_PYTEST_FILE = 'ride/ride/workspace/launch_smoke_test.py'
 BROKER_E2E_PYTEST_FILE = 'ride/ride/e2e_test.py'
 # run from the benchmark project's own environment, the only one that can import
-# it. The harbor e2e stays out of every stage: it spends real tokens
+# it. The e2e modules stay out of every stage: two of them spend real tokens
 BENCHMARK_PYTEST_FILES = [
   'bro/benchmark/bundle_test.py',
   'bro/benchmark/harbor_agent_test.py',
