@@ -156,7 +156,9 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   `claude_lineage_test.py` drives the resolver over a real store.
   `ride/ride/claude/trail_recorder_test.py` drives the adapter-owned recorder over one.
   `network_test.py` owns transport/retry/error mapping;
-  `server/dynamo_test.py` owns fake-backed Dynamo mechanics.
+  `server/dynamo_test.py` owns Dynamo mechanics over moto-emulated DynamoDB and S3,
+  and its fixture is where the tables, their keys, and every index the store queries are declared
+  — the schema lives nowhere else in this repository.
 
 ## Service auth
 
