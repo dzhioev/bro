@@ -83,19 +83,45 @@ def test_claude_rows_store_body_and_project_messages(tmp_path):
   assert store.get_launch_context(trail_id) == {'workspace': 'one'}
 
 
-def test_lineage_index_reads_only_the_named_segments(tmp_path):
+def test_the_lineage_head_folds_across_appends(tmp_path):
+  store = LocalStore(tmp_path)
+  first = json.dumps({'type': 'user', 'uuid': 'uuid-1', 'message': {'content': 'hello'}})
+  second = json.dumps({'type': 'mode', 'mode': 'normal'})
+  trail_id = store.blaze(_claude_request(first))['id']
+
+  store.append_records(trail_id, 1, [second])
+
+  assert store.get_trail(trail_id)['native']['lineage_head'] == {
+    'chain_first_uuid': 'uuid-1',
+    'tail': [[0, 'uuid-1', payload_sha256(first)]],
+    'last_row_digest': payload_sha256(second),
+  }
+  bro_trail = store.blaze(_bro_request())['id']
+  assert 'lineage_head' not in store.get_trail(bro_trail)['native']
+
+
+def test_a_writer_may_not_send_the_folded_head(tmp_path):
+  store = LocalStore(tmp_path)
+  raw = json.dumps({'type': 'user', 'uuid': 'uuid-1', 'message': {'content': 'hello'}})
+  request = _claude_request(raw)
+  request.native['lineage_head'] = {'chain_first_uuid': 'uuid-9'}
+
+  with pytest.raises(ValueError, match='lineage_head are server-derived'):
+    store.blaze(request)
+
+
+def test_the_lineage_index_answers_by_segment_and_by_record(tmp_path):
   store = LocalStore(tmp_path)
   raw = json.dumps({'type': 'user', 'uuid': 'uuid-1', 'message': {'content': 'hello'}})
   trail_id = store.blaze(_claude_request(raw))['id']
 
-  [header] = store.find_segment_trails({'segment'}, {'uuid-1'})
+  [header] = store.find_segment_trails({'segment'})
   assert header['id'] == trail_id
-  assert store.find_segment_trails({'segment'}, {'uuid-2'}) == []
-  assert store.find_segment_trails({'elsewhere'}, {'uuid-1'}) == []
-  assert store.find_segment_trails({'segment'}, set()) == []
-  assert store.get_step_uuids({trail_id: None}) == {trail_id: [{'step_id': 0, 'uuid': 'uuid-1'}]}
-  assert store.get_step_uuids({trail_id: -1}) == {trail_id: []}
-  assert store.step_payload_hashes(trail_id, [0, 7]) == {0: payload_sha256(raw)}
+  assert store.find_segment_trails({'elsewhere'}) == []
+  assert store.find_segment_trails(set()) == []
+  assert store.holds_record({trail_id}, 'uuid-1') is True
+  assert store.holds_record({trail_id}, 'uuid-2') is False
+  assert store.holds_record(set(), 'uuid-1') is False
 
 
 def test_large_bodies_stay_inline(tmp_path):

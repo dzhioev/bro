@@ -1,13 +1,15 @@
 """Shared aggregate folding, row construction, and message projection."""
 
+from collections.abc import Callable
 from typing import Any, Optional
 
 from bro.trails import backends
+from bro.trails.lineage import LineageHead
 from bro.trails.model import payload_sha256
 
 
 class AggregateState:
-  def __init__(self, header: dict):
+  def __init__(self, header: dict, adapter: backends.Adapter):
     native = dict(header.get('native', {}))
     raw_usage = native.get('usage')
     self.usage = dict(raw_usage) if isinstance(raw_usage, dict) else {}
@@ -18,12 +20,28 @@ class AggregateState:
     last_billed = header.get('last_billed_message_id')
     self.last_billed_message_id = last_billed if isinstance(last_billed, str) else None
     self.subject = header.get('subject')
+    self.head = LineageHead.stored(native) if adapter.resolve_lineage is not None else None
+
+  @classmethod
+  def replaying(cls, header: dict, adapter: backends.Adapter) -> 'AggregateState':
+    """The state a re-fold of a trail's whole row stream starts from: every field
+    the fold derives is cleared, leaving what the trail was minted with."""
+    native = {
+      key: value
+      for key, value in header.get('native', {}).items()
+      if key not in backends.SERVER_DERIVED_NATIVE_FIELDS
+    }
+    native.update(inherited_native(adapter, lambda: header))
+    return cls({'native': native, 'turn_count': 0}, adapter)
 
   def apply(
     self,
     record: backends.ParsedRecord,
     classification: backends.Classification,
     seen_billing_keys: set[str],
+    *,
+    step_id: int,
+    digest: str,
   ) -> Optional[dict]:
     if record.kind is not None:
       self.counts[record.kind] = int(self.counts.get(record.kind, 0)) + 1
@@ -50,7 +68,26 @@ class AggregateState:
           self.last_billed_message_id = billing_key
     self.native['usage'] = self.usage
     self.native['step_counts_by_kind'] = self.counts
+    if self.head is not None:
+      uuid = record.attributes.get('uuid')
+      self.head.fold(
+        step_id=step_id,
+        uuid=uuid if isinstance(uuid, str) else None,
+        payload_sha256=digest,
+      )
+      self.native['lineage_head'] = self.head.fields()
     return contribution
+
+
+def inherited_native(adapter: backends.Adapter, parent: Callable[[], dict]) -> dict:
+  """The native fields a fork of `parent` opens with, which are also the ones a
+  re-fold of a trail's own rows starts from: the conversation's first record,
+  which no trail's rows carry once a history copy is skipped. The parent header
+  is read only where the harness folds a head at all."""
+  if adapter.resolve_lineage is None:
+    return {}
+  head = LineageHead.stored(parent().get('native', {})).inherited()
+  return {'lineage_head': head.fields()}
 
 
 def state_fields(state: AggregateState, extent: int) -> dict:
@@ -81,13 +118,16 @@ def build_rows(
   for step_id, payload in enumerate(payloads, start=offset):
     parsed = adapter.parse(payload)
     classification = adapter.classify(parsed)
-    contribution = state.apply(parsed, classification, seen_billing_keys)
+    digest = payload_sha256(payload)
+    contribution = state.apply(
+      parsed, classification, seen_billing_keys, step_id=step_id, digest=digest
+    )
     row: dict[str, Any] = {
       'trail_id': trail_id,
       'step_id': step_id,
       'ts': parsed.timestamp if parsed.timestamp is not None else default_timestamp,
       'kind': parsed.kind,
-      'payload_sha256': payload_sha256(payload),
+      'payload_sha256': digest,
       'body': parsed.body,
       **parsed.attributes,
     }

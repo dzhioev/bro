@@ -92,22 +92,22 @@ class LocalStore(TrailsStore):
       header = self._read_header(trail_id)
     return self._project_header(header)
 
-  def find_segment_trails(self, segments: set[str], uuids: set[str]) -> list[dict]:
-    """The headers of the trails recording one of `segments` that hold any of
-    `uuids` — the segment filter is what bounds the scan to a handful of
-    trails."""
-    if len(uuids) == 0 or len(segments) == 0:
+  def find_segment_trails(self, segments: set[str]) -> list[dict]:
+    """The headers of the trails recording one of `segments`."""
+    if len(segments) == 0:
       return []
-    headers = []
-    for directory in sorted(self.trails_directory.iterdir()):
-      if not directory.is_dir() or not (directory / 'header.json').is_file():
-        continue
-      header = self.get_trail(directory.name)
-      if header.get('native', {}).get('segment') not in segments:
-        continue
-      if any(row.get('uuid') in uuids for row in self._read_rows(directory.name)):
-        headers.append(header)
-    return headers
+    return [
+      header
+      for directory in sorted(self.trails_directory.iterdir())
+      if directory.is_dir() and (directory / 'header.json').is_file()
+      if (header := self.get_trail(directory.name)).get('native', {}).get('segment') in segments
+    ]
+
+  def holds_record(self, trail_ids: set[str], uuid: str) -> bool:
+    """Whether any of the named trails stores the record `uuid`."""
+    return any(
+      row.get('uuid') == uuid for trail_id in sorted(trail_ids) for row in self._read_rows(trail_id)
+    )
 
   def get_step(self, trail_id: str, step_id: int) -> dict:
     if step_id < 0:
@@ -118,30 +118,6 @@ class LocalStore(TrailsStore):
     if len(rows) == 0:
       raise TrailNotFound(f'{trail_id}/{step_id}')
     return rows[0]
-
-  def get_step_uuids(self, bounds: dict[str, Optional[int]]) -> dict[str, list[dict]]:
-    return {trail_id: self._step_uuids(trail_id, through) for trail_id, through in bounds.items()}
-
-  def _step_uuids(self, trail_id: str, through: Optional[int]) -> list[dict]:
-    with self._locked(trail_id, shared=True):
-      self._read_header(trail_id)
-      rows = self._read_rows(trail_id, 0, None if through is None else through + 1)
-    return [
-      {'step_id': row['step_id'], 'uuid': row['uuid']}
-      for row in rows
-      if isinstance(row.get('uuid'), str)
-    ]
-
-  def step_payload_hashes(self, trail_id: str, step_ids: list[int]) -> dict[int, str]:
-    wanted = set(step_ids)
-    with self._locked(trail_id, shared=True):
-      self._read_header(trail_id)
-      lines = self._read_row_lines(trail_id)
-    return {
-      step_id: _parse_rows(trail_id, lines[step_id : step_id + 1], step_id)[0]['payload_sha256']
-      for step_id in sorted(wanted)
-      if 0 <= step_id < len(lines)
-    }
 
   def get_steps(
     self, trail_id: str, *, after: Optional[int] = None, limit: Optional[int] = None
@@ -185,11 +161,15 @@ class LocalStore(TrailsStore):
       raise ValueError('bro is required for the bro harness')
     decision = None
     forked_from = request.forked_from
+    native = dict(request.native)
     if request.lineage is not None:
       decision = backends.resolve_lineage(adapter, request, self)
       if not decision.adopt:
         return {'adopted': False, 'reason': decision.reason}
       forked_from = decision.forked_from
+    if forked_from is not None:
+      parent_id = forked_from['trail_id']
+      native.update(rows.inherited_native(adapter, lambda: self.get_trail(parent_id)))
     records = adapter.open(request.body).records
     trail_id = lulid()
     started_at = _now_iso()
@@ -205,7 +185,7 @@ class LocalStore(TrailsStore):
         'interactive': request.interactive,
         'surface': request.surface,
         'turn_count': 0,
-        'native': dict(request.native),
+        'native': native,
         'body_storage': 'local-jsonl',
         'extent': 0,
       }
@@ -215,7 +195,7 @@ class LocalStore(TrailsStore):
         value = getattr(request, field)
         if value is not None:
           header[field] = value
-      state = rows.AggregateState(header)
+      state = rows.AggregateState(header, adapter)
       prepared = rows.build_rows(
         trail_id=trail_id,
         offset=0,
@@ -257,12 +237,13 @@ class LocalStore(TrailsStore):
       self._store_tools({} if tools is None else tools)
       if len(records) == 0:
         return {'extent': actual, 'appended': 0}
-      state = rows.AggregateState(header)
+      adapter = self._adapter(header['harness'])
+      state = rows.AggregateState(header, adapter)
       prepared = rows.build_rows(
         trail_id=trail_id,
         offset=offset,
         payloads=records,
-        adapter=self._adapter(header['harness']),
+        adapter=adapter,
         default_timestamp=_now_iso(),
         state=state,
         seen_billing_keys=set(),

@@ -43,9 +43,12 @@ bro · claude recorders                     readers
   they are not part of `TrailsStore`.
 - `claude_lineage.py` owns the claude evidence contract and resolves fork lineage from it:
   the adopted segment, its lines' record uuids and digests, and the sibling segments sharing those records.
-  It reads rows through `LineageIndex`, the store-internal surface each backend implements its own way (`LocalStore` filters headers by segment before touching a row;
-  `DynamoStore` queries its keys-only uuid index), and returns a fork point with the file ranges the new trail owns, a decline while a history copy is mid-write, or a root.
-  Nothing on this path crosses the wire, and continuity across recorder lifetimes comes from the stored rows alone.
+  It verifies that evidence against candidate headers' `lineage_head` and returns a fork point with the file ranges the new trail owns, a decline while a history copy is mid-write, or a root.
+  `LineageIndex` is the store-internal surface it reads through, two lookups each backend implements its own way:
+  the trails recording a set of segments
+  — `DynamoStore` queries the `segment-started_at-index` GSI over the top-level `segment` attribute, `LocalStore` filters its header scan
+  — and whether any of them stores one record uuid, the mid-write test and the only row read a resolution can make.
+  Nothing on this path crosses the wire, and continuity across recorder lifetimes comes from the stored rows alone, through the head they folded.
 - `local.py` stores each trail under `<root>/trails/<id>/` as `header.json`, `steps.jsonl`, and optional `context.json`, with tool blobs under `<root>/trails/tools/<sha256>.json` and delete manifests under `<root>/manifests/delete/`.
   Appends are ordinal and `flock`-serialized, headers are atomically replaced, bodies remain inline, and listing preserves the selector/cursor contract.
   A stale open header gets `end.inference = unreported` when read.
@@ -64,7 +67,7 @@ bro · claude recorders                     readers
   the repairs answer 501 where the hosted store has no administration surface, while `DELETE /v1/admin/trails/{id}` reaches the contract method every backend implements.
   The unreported-trail sweep starts only for a `DynamoStore`.
 - `server/dynamo.py` owns `DynamoStore(TrailsStore)`:
-  conditional append transactions, indexes, S3 body spill/resolution, UUID reads, and its store-owned thread pool for UUID-query, fork-chain UUID-read, and spilled-row fan-outs.
+  conditional append transactions, indexes, S3 body spill/resolution, UUID reads, and its store-owned thread pool for the spilled-row fan-out.
   `server/dynamo_types.py` owns Dynamo conversion and row constants.
   `server/operations.py` remains the recompute/check engine and owns the manifested destructive operations, relinking and deletion.
 - Stored rows are served rows.
@@ -86,6 +89,9 @@ bro · claude recorders                     readers
   It is a view layer only;
   none of its records enter trail storage or server contracts.
 - `rows.py` owns aggregate folding, row construction, and message projection.
+  `backends.SERVER_DERIVED_NATIVE_FIELDS` names what the fold owns:
+  `validate_create` refuses those fields from a writer, and `AggregateState.replaying` clears them for the recompute/check re-fold.
+  `native.lineage_head` (`lineage.py`) is among them, folded for the harnesses whose adapter resolves lineage.
   Client-side stores and recorders do not import `bro.trails.server`.
 - **Recorder placement:**
   core `record/spine.py` owns the shared write spine.

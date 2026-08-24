@@ -15,7 +15,7 @@ from bro.trails.model import (
   payload_sha256,
   validate_end,
 )
-from bro.trails.rows import AggregateState, state_fields
+from bro.trails.rows import AggregateState, inherited_native, state_fields
 from bro.trails.server import dynamo_types
 from bro.trails.server.operations import Operations
 from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore, refuse_while_forked
@@ -26,9 +26,10 @@ BodyTooLarge = dynamo_types.BodyTooLarge
 
 GSI_PK_ATTRIBUTE = 'gsi_pk'
 GSI_PK_VALUE = 'trail'
+SEGMENT_INDEX = 'segment-started_at-index'
 UNREPORTED_AFTER_SECONDS = 3600
 SWEEP_WINDOW_DAYS = 30
-# the store's fan-outs wait on network round trips rather than on the CPU, so
+# the store's fan-out waits on network round trips rather than on the CPU, so
 # the pool is sized for concurrent requests rather than cores
 _FAN_OUT_WORKERS = 32
 _ddb = dynamo_types.ddb
@@ -122,11 +123,15 @@ class DynamoStore(TrailsStore):
       raise ValueError('bro is required for the bro harness')
     decision = None
     forked_from = request.forked_from
+    native = dict(request.native)
     if request.lineage is not None:
       decision = backends.resolve_lineage(adapter, request, self)
       if not decision.adopt:
         return {'adopted': False, 'reason': decision.reason}
       forked_from = decision.forked_from
+    if forked_from is not None:
+      parent_id = forked_from['trail_id']
+      native.update(inherited_native(adapter, lambda: self._required_header(parent_id)))
     trail_id = dynamo_types.new_id()
     started_at = _now_iso()
     launch_context = request.body.get('launch_context')
@@ -148,7 +153,7 @@ class DynamoStore(TrailsStore):
       'interactive': request.interactive,
       'surface': request.surface,
       'turn_count': 0,
-      'native': dict(request.native),
+      'native': native,
       GSI_PK_ATTRIBUTE: GSI_PK_VALUE,
     }
     optional = {
@@ -163,12 +168,15 @@ class DynamoStore(TrailsStore):
     item.update({key: value for key, value in optional.items() if value is not None})
     if forked_from is not None:
       item['forked_from_id'] = forked_from['trail_id']
+    segment = native.get('segment')
+    if segment is not None:
+      item['segment'] = segment
 
     item['body_storage'] = dynamo_types.UNIVERSAL_BODY_STORAGE
     item['extent'] = 0
-    state = AggregateState(item)
+    state = AggregateState(item, adapter)
     seen_billing_keys: set[str] = set()
-    rows = self._prepare_rows(
+    prepared = self._prepare_rows(
       trail_id=trail_id,
       offset=0,
       payloads=opened.records,
@@ -177,7 +185,7 @@ class DynamoStore(TrailsStore):
       state=state,
       seen_billing_keys=seen_billing_keys,
     )
-    item.update(state_fields(state, len(rows)))
+    item.update(state_fields(state, len(prepared)))
     self._dynamo.transact_write_items(
       TransactItems=[
         {
@@ -195,7 +203,7 @@ class DynamoStore(TrailsStore):
               'ConditionExpression': 'attribute_not_exists(trail_id)',
             }
           }
-          for row in rows
+          for row in prepared
         ],
       ],
     )
@@ -231,13 +239,13 @@ class DynamoStore(TrailsStore):
       return {'extent': actual, 'appended': 0}
 
     adapter = self._backend(header['harness'])
-    state = AggregateState(header)
+    state = AggregateState(header, adapter)
     seen_billing_keys: set[str] = set()
     committed = 0
     while committed < len(records):
       chunk = records[committed : committed + dynamo_types.MAX_TRANSACTION_RECORDS]
       chunk_offset = offset + committed
-      rows = self._prepare_rows(
+      prepared = self._prepare_rows(
         trail_id=trail_id,
         offset=chunk_offset,
         payloads=chunk,
@@ -246,7 +254,7 @@ class DynamoStore(TrailsStore):
         state=state,
         seen_billing_keys=seen_billing_keys,
       )
-      new_extent = chunk_offset + len(rows)
+      new_extent = chunk_offset + len(prepared)
       update = self._append_header_update(
         trail_id,
         expected_extent=chunk_offset,
@@ -261,7 +269,7 @@ class DynamoStore(TrailsStore):
             'ConditionExpression': 'attribute_not_exists(trail_id)',
           }
         }
-        for row in rows
+        for row in prepared
       ]
       transaction_items.append({'Update': update})
       try:
@@ -282,7 +290,7 @@ class DynamoStore(TrailsStore):
         raise RuntimeError(
           f'ordinal {chunk_offset} is already occupied at the trail extent'
         ) from exception
-      committed += len(rows)
+      committed += len(prepared)
     return {'extent': offset + committed, 'appended': committed}
 
   def _batch_matches(self, trail_id: str, offset: int, records: list[Any]) -> bool:
@@ -497,41 +505,64 @@ class DynamoStore(TrailsStore):
     response = self._s3.get_object(Bucket=self._bucket, Key=key)
     return json.loads(response['Body'].read().decode('utf-8'))
 
-  def find_segment_trails(self, segments: set[str], uuids: set[str]) -> list[dict]:
-    """Return the headers of the trails holding any requested UUID, restricted
-    to the ones recording one of `segments`."""
-    if len(uuids) == 0 or len(segments) == 0:
-      return []
+  def find_segment_trails(self, segments: set[str]) -> list[dict]:
+    """Return the headers of the trails recording one of `segments`, through the
+    segment index."""
+    return [header for segment in sorted(segments) for header in self._segment_headers(segment)]
+
+  def _segment_headers(self, segment: str) -> list[dict]:
+    headers: list[dict] = []
+    exclusive_start_key: Optional[dict] = None
+    while True:
+      kwargs: dict[str, Any] = {
+        'TableName': self._trails_table,
+        'IndexName': SEGMENT_INDEX,
+        'KeyConditionExpression': '#segment = :segment',
+        'ExpressionAttributeNames': {'#segment': 'segment'},
+        'ExpressionAttributeValues': {':segment': _ddb(segment)},
+        'ScanIndexForward': False,
+      }
+      if exclusive_start_key is not None:
+        kwargs['ExclusiveStartKey'] = exclusive_start_key
+      response = self._dynamo.query(**kwargs)
+      headers.extend(
+        self._project_header(item)
+        for raw in response.get('Items', [])
+        if (item := _from_ddb_item(raw)) is not None
+      )
+      exclusive_start_key = response.get('LastEvaluatedKey')
+      if exclusive_start_key is None:
+        return headers
+
+  def holds_record(self, trail_ids: set[str], uuid: str) -> bool:
+    """Whether any of the named trails stores the record `uuid`, through the
+    keys-only uuid index."""
+    if len(trail_ids) == 0:
+      return False
     if self._uuid_index is None:
       raise RuntimeError('UUID lookup requires a configured index')
-
-    def find(uuid: str) -> set[str]:
-      trail_ids: set[str] = set()
-      exclusive_start_key: Optional[dict] = None
-      while True:
-        kwargs: dict[str, Any] = {
-          'TableName': self._steps_table,
-          'IndexName': self._uuid_index,
-          'KeyConditionExpression': '#uuid = :uuid',
-          'ProjectionExpression': 'trail_id',
-          'ExpressionAttributeNames': {'#uuid': 'uuid'},
-          'ExpressionAttributeValues': {':uuid': _ddb(uuid)},
-        }
-        if exclusive_start_key is not None:
-          kwargs['ExclusiveStartKey'] = exclusive_start_key
-        response = self._dynamo.query(**kwargs)
-        for raw in response.get('Items', []):
-          row = _from_ddb_item(raw)
-          if row is None or not isinstance(row.get('trail_id'), str):
-            raise ValueError(f'UUID index returned malformed row: {row!r}')
-          trail_ids.add(row['trail_id'])
-        exclusive_start_key = response.get('LastEvaluatedKey')
-        if exclusive_start_key is None:
-          return trail_ids
-
-    found = {trail_id for page in self._executor.map(find, sorted(uuids)) for trail_id in page}
-    headers = [self.get_trail(trail_id) for trail_id in sorted(found)]
-    return [header for header in headers if header.get('native', {}).get('segment') in segments]
+    exclusive_start_key: Optional[dict] = None
+    while True:
+      kwargs: dict[str, Any] = {
+        'TableName': self._steps_table,
+        'IndexName': self._uuid_index,
+        'KeyConditionExpression': '#uuid = :uuid',
+        'ProjectionExpression': 'trail_id',
+        'ExpressionAttributeNames': {'#uuid': 'uuid'},
+        'ExpressionAttributeValues': {':uuid': _ddb(uuid)},
+      }
+      if exclusive_start_key is not None:
+        kwargs['ExclusiveStartKey'] = exclusive_start_key
+      response = self._dynamo.query(**kwargs)
+      for raw in response.get('Items', []):
+        row = _from_ddb_item(raw)
+        if row is None or not isinstance(row.get('trail_id'), str):
+          raise ValueError(f'UUID index returned malformed row: {row!r}')
+        if row['trail_id'] in trail_ids:
+          return True
+      exclusive_start_key = response.get('LastEvaluatedKey')
+      if exclusive_start_key is None:
+        return False
 
   def get_step(self, trail_id: str, step_id: int) -> dict:
     header = self._required_universal_header(trail_id)
@@ -546,77 +577,6 @@ class DynamoStore(TrailsStore):
     if row is None:
       raise TrailNotFound(f'{trail_id}/{step_id}')
     return self._resolve_row_body(header['harness'], row)
-
-  def step_payload_hashes(self, trail_id: str, step_ids: list[int]) -> dict[int, str]:
-    self._required_universal_header(trail_id)
-    wanted = {step_id for step_id in step_ids if step_id >= 0}
-    if len(wanted) == 0:
-      return {}
-    hashes: dict[int, str] = {}
-    exclusive_start_key: Optional[dict] = None
-    while True:
-      kwargs: dict[str, Any] = {
-        'TableName': self._steps_table,
-        'KeyConditionExpression': 'trail_id = :trail_id AND step_id BETWEEN :start AND :end',
-        'ProjectionExpression': 'step_id, payload_sha256',
-        'ExpressionAttributeValues': {
-          ':trail_id': _ddb(trail_id),
-          ':start': _ddb(min(wanted)),
-          ':end': _ddb(max(wanted)),
-        },
-        'ConsistentRead': True,
-      }
-      if exclusive_start_key is not None:
-        kwargs['ExclusiveStartKey'] = exclusive_start_key
-      response = self._dynamo.query(**kwargs)
-      for item in response.get('Items', []):
-        row = _from_ddb_item(item)
-        if row is None or row['step_id'] not in wanted:
-          continue
-        digest = row.get('payload_sha256')
-        if not isinstance(digest, str):
-          raise ValueError(f'step {trail_id}/{row["step_id"]} carries no payload digest')
-        hashes[row['step_id']] = digest
-      exclusive_start_key = response.get('LastEvaluatedKey')
-      if exclusive_start_key is None:
-        return hashes
-
-  def get_step_uuids(self, bounds: dict[str, Optional[int]]) -> dict[str, list[dict]]:
-    trail_ids = sorted(bounds)
-    reads = self._executor.map(
-      lambda trail_id: self._step_uuids(trail_id, bounds[trail_id]), trail_ids
-    )
-    return dict(zip(trail_ids, reads, strict=True))
-
-  def _step_uuids(self, trail_id: str, through: Optional[int]) -> list[dict]:
-    self._required_universal_header(trail_id)
-    if through is not None and through < 0:
-      return []
-    expression_values = {':trail_id': _ddb(trail_id)}
-    key_condition = 'trail_id = :trail_id'
-    if through is not None:
-      expression_values[':through'] = _ddb(through)
-      key_condition += ' AND step_id <= :through'
-    rows: list[dict] = []
-    exclusive_start_key: Optional[dict] = None
-    while True:
-      kwargs: dict[str, Any] = {
-        'TableName': self._steps_table,
-        'KeyConditionExpression': key_condition,
-        'ProjectionExpression': 'trail_id, step_id, #uuid',
-        'ExpressionAttributeNames': {'#uuid': 'uuid'},
-        'ExpressionAttributeValues': expression_values,
-      }
-      if exclusive_start_key is not None:
-        kwargs['ExclusiveStartKey'] = exclusive_start_key
-      response = self._dynamo.query(**kwargs)
-      for raw in response.get('Items', []):
-        row = _from_ddb_item(raw)
-        if row is not None and isinstance(row.get('uuid'), str):
-          rows.append({'step_id': row['step_id'], 'uuid': row['uuid']})
-      exclusive_start_key = response.get('LastEvaluatedKey')
-      if exclusive_start_key is None:
-        return rows
 
   def get_steps(
     self,
