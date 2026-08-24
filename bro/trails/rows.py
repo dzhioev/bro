@@ -31,7 +31,7 @@ class AggregateState:
       for key, value in header.get('native', {}).items()
       if key not in backends.SERVER_DERIVED_NATIVE_FIELDS
     }
-    native.update(inherited_native(adapter, lambda: header))
+    native.update(replayed_native(adapter, header))
     return cls({'native': native, 'turn_count': 0}, adapter)
 
   def apply(
@@ -80,13 +80,29 @@ class AggregateState:
 
 
 def inherited_native(adapter: backends.Adapter, parent: Callable[[], dict]) -> dict:
-  """The native fields a fork of `parent` opens with, which are also the ones a
-  re-fold of a trail's own rows starts from: the conversation's first record,
-  which no trail's rows carry once a history copy is skipped. The parent header
-  is read only where the harness folds a head at all."""
+  """The native fields a fork of `parent` opens with: the conversation's first
+  record, which no trail's rows carry once a history copy is skipped. The parent
+  header is read only where the harness folds a head at all."""
   if adapter.resolve_lineage is None:
     return {}
   head = LineageHead.stored(parent().get('native', {})).inherited()
+  return {'lineage_head': head.fields()}
+
+
+def replayed_native(adapter: backends.Adapter, header: dict) -> dict:
+  """The native fields a re-fold of a trail's own row stream starts from: what
+  its fork inherited, plus the spans its mint awarded it."""
+  if adapter.resolve_lineage is None:
+    return {}
+  head = LineageHead.stored(header.get('native', {})).replayed()
+  return {'lineage_head': head.fields()}
+
+
+def minted_native(native: dict, chunks: list[list[int]]) -> dict:
+  """The native fields a trail leaves its mint with once a lineage verdict
+  settled it: the artifact spans it was awarded, which none of its rows record."""
+  head = LineageHead.stored(native)
+  head.cuts = chunks
   return {'lineage_head': head.fields()}
 
 

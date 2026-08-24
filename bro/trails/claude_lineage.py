@@ -4,9 +4,9 @@ Claude Code writes one jsonl *segment* per session id. An interactive resume
 forks a fresh segment whose file re-serializes the conversation history — record
 `uuid`s and `timestamp`s preserved, `sessionId` rewritten, ephemeral records
 dropped — before the new turns; a headless resume appends to the existing
-segment. A trail is the slice of one segment that one recorder lifetime
-uploaded, so every resume opens a new trail that either continues a recorded one
-or starts a root.
+segment. A trail is a segment's recording, shared by every lifetime that records
+that segment, so a resume either attaches to the trail its segment already has,
+forks a fresh one from the conversation it copied, or starts a root.
 
 The evidence a recorder ships is the segment name, one `[uuid | null,
 payload_sha256]` pair per transcript line, and the names of sibling segment
@@ -17,8 +17,8 @@ Resolution reads headers only: a candidate is any trail recording the adopted
 segment or a sibling, and what it is verified against is the `lineage_head` its
 own rows folded (`lineage.py`). Two continuations are verifiable:
 
-- a same-segment resume starts after the recorded extent and forks from the
-  prior trail's final row — every remembered uuid must be present in the file and
+- a same-segment resume attaches to the trail recording it and takes the lines
+  past its recorded extent — every remembered uuid must be present in the file and
   hash to the line it is found on, and the final row, placed from the newest of
   them, must hash to `last_row_digest`;
 - a new-segment resume forks at the newest remembered uuid the copy still holds
@@ -26,6 +26,11 @@ own rows folded (`lineage.py`). Two continuations are verifiable:
   post-copy tail). The copy is located by the conversation's first record, which
   every copy in the chain re-serializes; digests take no part here at all, since
   the rewritten `sessionId` changes every copied line's.
+
+A trail whose blaze response was lost carries no row to verify anything against.
+It is attachable on the `cuts` its own mint stored instead, so a retry converges
+on the trail the lost response opened rather than stranding it and minting
+another.
 
 Claude writes a forked segment in stages — head ephemera, then the re-serialized
 history, then the new turns — so a copy read mid-write carries no line of its
@@ -160,9 +165,14 @@ def _candidates(evidence: _Evidence, index: LineageIndex) -> list[dict]:
 def _continue_segment(
   header: dict, head: LineageHead, evidence: _Evidence
 ) -> Optional[LineageDecision]:
-  """Claude appended to the segment this trail recorded: the new trail starts
-  past the recorded extent and forks from the prior trail's final row."""
+  """Claude appended to the segment this trail recorded: the trail takes the
+  lines past its recorded extent, so the lifetimes recording one segment share
+  one trail."""
   extent = _extent(header)
+  if extent == 0:
+    # a blaze whose response was lost leaves a trail no row can be verified
+    # against; the spans its own mint awarded are what the retry takes over
+    return None if head.cuts is None else _attach(header, extent, head.cuts)
   line_by_uuid = evidence.line_by_uuid()
   found = [(row, line_by_uuid[row.uuid]) for row in head.tail if row.uuid in line_by_uuid]
   # a remembered uuid the file no longer carries means it lost recorded lines
@@ -180,10 +190,11 @@ def _continue_segment(
     return None
   if last_line + 1 == evidence.line_count:
     return LineageDecision(adopt=False, reason='no line past the recorded extent yet')
-  return LineageDecision(
-    forked_from={'trail_id': header['id'], 'step_id': extent - 1},
-    chunks=[[last_line + 1, last_line + 1]],
-  )
+  return _attach(header, extent, [[last_line + 1, last_line + 1]])
+
+
+def _attach(header: dict, extent: int, chunks: list[list[int]]) -> LineageDecision:
+  return LineageDecision(attach_to={'trail_id': header['id'], 'extent': extent}, chunks=chunks)
 
 
 def _continue_copy(

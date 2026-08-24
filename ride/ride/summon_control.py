@@ -697,9 +697,9 @@ class SummonControl:
     # the root's trail attribution source, per publication channel
     # (monitor/trail_pointer.py): a claude session's recorder publishes its
     # current trail at the workspace's session pointer — read per request,
-    # since the recorder opens a new trail per recorder lifetime and the
-    # pointer moves — while a bro-run root announces its trail in the `started`
-    # lifecycle event, noted via note_root_trail. absent both (the early-launch
+    # since the pointer moves as the session's segment turns over — while a
+    # bro-run root announces its trail in the `started` lifecycle event, noted
+    # via note_root_trail. absent both (the early-launch
     # race before transcript adoption, or no recorder at all), provenance
     # degrades to no pointer, never a legacy-shaped one.
     from bro.monitor.trail_pointer import read, session_pointer

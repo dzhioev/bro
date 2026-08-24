@@ -235,6 +235,7 @@ class Operations:
       head = _folded_head(rows)
       root, _ = walk_header_chain(header, parent_header)[0]
       head.chain_first_uuid = _folded_head(rows_of(root['id'])).chain_first_uuid
+      head.cuts = LineageHead.stored(header.get('native', {})).cuts
       segment = header.get('native', {}).get('segment')
       written = self._write_lineage_head(trail_id, segment, head, len(rows))
       (stamped if written else contended).append(trail_id)

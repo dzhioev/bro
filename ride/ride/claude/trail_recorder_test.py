@@ -158,6 +158,7 @@ def _worker(store: LocalStore, path: Path) -> _SegmentRecorder:
     store,
     path,
     store.blaze(request)['id'],
+    extent=0,
     pending=_compose(lines, [[0, len(lines)]]),
     position=_Position(signature, byte_extent),
   )
@@ -333,7 +334,7 @@ class TestAppends:
     assert store.keepalives == [worker.trail_id]
 
 
-class TestLifetimeForks:
+class TestLifetimes:
   def _first_lifetime(self, projects: Path, store: LocalStore, lines: list[str]) -> str:
     _write_segment(projects, 'seg-1', lines)
     recorder = _recorder(projects, store)
@@ -341,7 +342,7 @@ class TestLifetimeForks:
     recorder.finalize()
     return _trails(store)[0]['id']
 
-  def test_same_segment_resume_forks_from_the_final_line(self, environment, store):
+  def test_same_segment_resume_reopens_the_segments_trail(self, environment, store):
     lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
     first_id = self._first_lifetime(environment, store, lines)
     assert store.get_trail(first_id)['end']['reason'] == 'ok'
@@ -351,9 +352,11 @@ class TestLifetimeForks:
     # a second lifetime shares nothing with the first but the store
     assert _recorder(environment, store).tick() is True
 
-    fork = _trails(store)[-1]
-    assert fork['forked_from'] == {'trail_id': first_id, 'step_id': 1}
-    assert _rows(store, fork['id']) == appended
+    [header] = _trails(store)
+    assert header['id'] == first_id
+    assert header['end'] is None
+    assert 'forked_from' not in header
+    assert _rows(store, first_id) == lines + appended
 
   def test_a_rewritten_segment_starts_a_fresh_root(self, environment, store):
     self._first_lifetime(environment, store, [_user('hello', 'u1'), _assistant('hi', 'a1')])
@@ -427,7 +430,7 @@ class TestLifetimeForks:
 
     assert 'forked_from' not in _trails(store)[-1]
 
-  def test_copied_history_skips_records_the_chain_already_stores(self, environment, store):
+  def test_copied_history_skips_records_the_segments_trail_already_stores(self, environment, store):
     root = [_user('hello', 'u1'), _assistant('hi', 'a1')]
     self._first_lifetime(environment, store, root)
     appended = [_user('again', 'u2')]
@@ -437,15 +440,15 @@ class TestLifetimeForks:
     second.finalize()
     second_id = _trails(store)[-1]['id']
 
-    # the leave→resume copy re-serializes the whole conversation, root
-    # lifetime included; only the new segment's own lines may be stored
+    # the leave→resume copy re-serializes the whole conversation, the first
+    # lifetime's lines included; only the new segment's own may be stored
     tail = [_user('third', 'u3')]
     _write_segment(environment, 'seg-2', [_EPHEMERA, *root, *appended, *tail])
 
     assert _recorder(environment, store).tick() is True
 
     fork = _trails(store)[-1]
-    assert fork['forked_from'] == {'trail_id': second_id, 'step_id': 0}
+    assert fork['forked_from'] == {'trail_id': second_id, 'step_id': 2}
     assert _rows(store, fork['id']) == [_EPHEMERA, *tail]
 
 

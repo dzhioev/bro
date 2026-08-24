@@ -1153,9 +1153,10 @@ The daemon records continuously through the backend the session's own `trails` c
 — the scoped baseline hydrates that credential best-effort, so a session records either way unless `--no-trails` turned recording off, in which case the runner starts no daemon.
 For local storage, the launch description binds the host's `<runtime-root>/trails` at `/var/ride/trails` inside the container, so the trail survives container removal and is visible to host-side `rewind` while the session runs.
 
-The recorder opens one claude-harness *trail* per recorder lifetime and segment stretch and appends newly completed transcript lines at its polling interval;
-a verified resume opens a fork trail pointing at the prior one, so a whole conversation is a fork chain `rewind show` walks (`ride/ride/claude/trail_recorder.py` owns transcript acquisition;
+The recorder records one claude-harness *trail* per transcript segment and appends newly completed lines at its polling interval (`ride/ride/claude/trail_recorder.py` owns transcript acquisition;
 the core trails schema and Claude lineage verdict remain in `bro.trails`).
+A verified same-segment resume reopens that segment's trail where the previous lifetime stopped, so a process restart adds no edge;
+an interactive resume's history copy opens a fork trail pointing at the prior one, and a whole conversation is the fork chain `rewind show` walks.
 The daemon nominates nothing:
 it blazes with the transcript's lineage evidence and the store's harness resolver decides the edge, or declines a transcript claude has not finished writing (`bro/trails/AGENTS.md`).
 The trail carries the launch recipe, the `RIDE_SESSION_CONTEXT` attachment, and the session's location facts, and the recorder publishes its current trail id to the session's trail pointer,

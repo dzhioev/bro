@@ -40,25 +40,33 @@ def store(tmp_path: Path) -> LocalStore:
   return LocalStore(tmp_path / 'trails')
 
 
+def _request(segment: str, lines: list[str], **fields: Any) -> BlazeRequest:
+  return BlazeRequest(
+    harness='claude',
+    version='test',
+    interactive=True,
+    surface='ride',
+    body={'records': lines},
+    native={
+      'llm': {'type': 'claude'},
+      'segment': segment,
+      'ride_command': 'ride along ws',
+      'harness_version': 'test',
+    },
+    **fields,
+  )
+
+
 def _blaze(
   store: LocalStore, segment: str, lines: list[str], *, forked_from: Optional[dict] = None
 ) -> str:
-  return store.blaze(
-    BlazeRequest(
-      harness='claude',
-      version='test',
-      interactive=True,
-      surface='ride',
-      body={'records': lines},
-      native={
-        'llm': {'type': 'claude'},
-        'segment': segment,
-        'ride_command': 'ride along ws',
-        'harness_version': 'test',
-      },
-      forked_from=forked_from,
-    )
-  )['id']
+  return store.blaze(_request(segment, lines, forked_from=forked_from))['id']
+
+
+def _adopt(store: LocalStore, segment: str, lines: list[str], **evidence: Any) -> dict:
+  """blaze the way a recorder does: no records, the verdict's spans uploaded
+  afterwards — so a response lost here leaves a trail with no row at all."""
+  return store.blaze(_request(segment, [], lineage=_evidence(segment, lines, **evidence)))
 
 
 class _IndexSpy:
@@ -83,14 +91,15 @@ def _recorded_lines(count: int) -> list[str]:
 
 
 class TestSameSegment:
-  def test_resume_forks_from_the_recorded_final_row(self, store):
+  def test_resume_attaches_to_the_trail_recording_the_segment(self, store):
     recorded = [_user('hello', 'u1'), _user('again', 'u2')]
     trail_id = _blaze(store, 'seg-1', recorded)
 
     decision = resolve(_evidence('seg-1', [*recorded, _user('more', 'u3')]), store)
 
     assert decision.adopt is True
-    assert decision.forked_from == {'trail_id': trail_id, 'step_id': 1}
+    assert decision.forked_from is None
+    assert decision.attach_to == {'trail_id': trail_id, 'extent': 2}
     assert decision.chunks == [[2, 2]]
 
   def test_a_file_that_has_not_grown_is_not_adopted(self, store):
@@ -132,7 +141,12 @@ class TestSameSegment:
     forked_id = _blaze(store, 'seg-1', [], forked_from={'trail_id': parent_id, 'step_id': 1})
 
     head = store.get_trail(forked_id)['native']['lineage_head']
-    assert head == {'chain_first_uuid': 'u1', 'tail': [], 'last_row_digest': None}
+    assert head == {
+      'chain_first_uuid': 'u1',
+      'tail': [],
+      'last_row_digest': None,
+      'cuts': None,
+    }
 
 
 class TestCopiedHistory:
@@ -250,7 +264,7 @@ class TestCopiedHistory:
 
     decision = resolve(_evidence('seg-2', [*forked_file, _user('more', 'u3')]), store)
 
-    assert decision.forked_from == {'trail_id': forked_id, 'step_id': 1}
+    assert decision.attach_to == {'trail_id': forked_id, 'extent': 2}
     assert decision.chunks == [[3, 3]]
 
 
@@ -262,7 +276,7 @@ class TestHeaderReads:
 
     decision = resolve(_evidence('seg-1', [*recorded, _user('more', 'u-new')]), spy)
 
-    assert decision.forked_from == {'trail_id': trail_id, 'step_id': 79}
+    assert decision.attach_to == {'trail_id': trail_id, 'extent': 80}
     assert spy.segment_lookups == [{'seg-1'}]
     assert spy.record_probes == []
 
@@ -273,7 +287,7 @@ class TestHeaderReads:
     # the transcript grew well past the recorded extent before this adoption
     decision = resolve(_evidence('seg-1', [*recorded, *_recorded_lines(80)]), store)
 
-    assert decision.forked_from == {'trail_id': trail_id, 'step_id': 0}
+    assert decision.attach_to == {'trail_id': trail_id, 'extent': 1}
     assert decision.chunks == [[1, 1]]
 
   def test_a_line_rewritten_inside_the_remembered_window_fails_the_digests(self, store):
@@ -295,7 +309,41 @@ class TestHeaderReads:
 
     decision = resolve(_evidence('seg-1', tampered), store)
 
-    assert decision.forked_from == {'trail_id': trail_id, 'step_id': 79}
+    assert decision.attach_to == {'trail_id': trail_id, 'extent': 80}
+
+
+class TestOrphanConvergence:
+  """a blaze whose response was lost mints a trail the caller never learned of;
+  the retry must find it rather than strand it."""
+
+  def test_a_retry_attaches_to_the_root_the_lost_response_minted(self, store):
+    file_lines = [_user('hello', 'u1')]
+    orphan = _adopt(store, 'seg-1', file_lines)
+
+    decision = resolve(_evidence('seg-1', file_lines), store)
+
+    assert decision.attach_to == {'trail_id': orphan['id'], 'extent': 0}
+    assert decision.chunks == [[0, 0]]
+
+  def test_a_retry_takes_over_the_spans_a_lost_copy_verdict_awarded(self, store):
+    recorded = [_user('hello', 'u1'), _user('again', 'u2')]
+    _blaze(store, 'seg-1', recorded)
+    copied = [_meta(), *recorded, _user('resumed', 'u3')]
+    orphan = _adopt(store, 'seg-2', copied, related=('seg-1',))
+
+    decision = resolve(_evidence('seg-2', copied, related=('seg-1',)), store)
+
+    # the copied middle stays the parent's, exactly as the lost verdict said
+    assert decision.attach_to == {'trail_id': orphan['id'], 'extent': 0}
+    assert decision.chunks == [[0, 1], [3, 3]]
+
+  def test_a_trail_minted_without_a_verdict_is_not_attachable(self, store):
+    _blaze(store, 'seg-1', [])
+
+    decision = resolve(_evidence('seg-1', [_user('hello', 'u1')]), store)
+
+    assert decision.attach_to is None
+    assert decision.chunks == [[0, 0]]
 
 
 class TestEvidence:

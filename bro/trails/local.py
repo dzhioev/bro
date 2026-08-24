@@ -15,6 +15,7 @@ from typing import Any, Optional
 
 from bro.base.lulid import lulid
 from bro.trails import backends, rows
+from bro.trails.lineage import LineageDecision
 from bro.trails.model import (
   UNREPORTED_END_INFERENCE,
   BlazeRequest,
@@ -166,10 +167,14 @@ class LocalStore(TrailsStore):
       decision = backends.resolve_lineage(adapter, request, self)
       if not decision.adopt:
         return {'adopted': False, 'reason': decision.reason}
+      if decision.attach_to is not None:
+        return self._attach(request, decision)
       forked_from = decision.forked_from
     if forked_from is not None:
       parent_id = forked_from['trail_id']
       native.update(rows.inherited_native(adapter, lambda: self.get_trail(parent_id)))
+    if decision is not None:
+      native.update(rows.minted_native(native, decision.chunks))
     records = adapter.open(request.body).records
     trail_id = lulid()
     started_at = _now_iso()
@@ -212,7 +217,22 @@ class LocalStore(TrailsStore):
         _atomic_json(directory / 'context.json', launch_context)
       _atomic_json(directory / 'header.json', header)
       (directory / '.lock').touch()
-    return backends.blaze_result(trail_id, started_at, decision)
+    return backends.blaze_result(trail_id, started_at, len(prepared), decision)
+
+  def _attach(self, request: BlazeRequest, decision: LineageDecision) -> dict:
+    """Reopen the trail the verdict attached to for this lifetime, at the extent
+    it was verified against."""
+    assert decision.attach_to is not None
+    trail_id = decision.attach_to['trail_id']
+    extent = decision.attach_to['extent']
+    with self._locked(trail_id, shared=False):
+      header = self._read_header(trail_id)
+      if _extent(header) != extent:
+        return {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
+      header.update(backends.attached_header(header, request))
+      header['last_alive_at'] = _now_iso()
+      _atomic_json(self._trail_directory(trail_id) / 'header.json', header)
+    return backends.blaze_result(trail_id, header['started_at'], extent, decision)
 
   def append_records(
     self,

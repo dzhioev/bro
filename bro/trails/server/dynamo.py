@@ -8,6 +8,7 @@ from typing import Any, Optional
 import boto3
 
 from bro.trails import backends, rows
+from bro.trails.lineage import LineageDecision
 from bro.trails.model import (
   UNREPORTED_END_INFERENCE,
   BlazeRequest,
@@ -15,7 +16,7 @@ from bro.trails.model import (
   payload_sha256,
   validate_end,
 )
-from bro.trails.rows import AggregateState, inherited_native, state_fields
+from bro.trails.rows import AggregateState, inherited_native, minted_native, state_fields
 from bro.trails.server import dynamo_types
 from bro.trails.server.operations import Operations
 from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore, refuse_while_forked
@@ -128,10 +129,14 @@ class DynamoStore(TrailsStore):
       decision = backends.resolve_lineage(adapter, request, self)
       if not decision.adopt:
         return {'adopted': False, 'reason': decision.reason}
+      if decision.attach_to is not None:
+        return self._attach(request, decision)
       forked_from = decision.forked_from
     if forked_from is not None:
       parent_id = forked_from['trail_id']
       native.update(inherited_native(adapter, lambda: self._required_header(parent_id)))
+    if decision is not None:
+      native.update(minted_native(native, decision.chunks))
     trail_id = dynamo_types.new_id()
     started_at = _now_iso()
     launch_context = request.body.get('launch_context')
@@ -207,7 +212,33 @@ class DynamoStore(TrailsStore):
         ],
       ],
     )
-    return backends.blaze_result(trail_id, started_at, decision)
+    return backends.blaze_result(trail_id, started_at, len(prepared), decision)
+
+  def _attach(self, request: BlazeRequest, decision: LineageDecision) -> dict:
+    """Reopen the trail the verdict attached to for this lifetime, conditional on
+    the extent it was verified against."""
+    assert decision.attach_to is not None
+    trail_id = decision.attach_to['trail_id']
+    extent = decision.attach_to['extent']
+    header = self._required_header(trail_id)
+    fields = {**backends.attached_header(header, request), 'last_alive_at': _now_iso()}
+    names = {'#extent': 'extent', **{f'#{field}': field for field in fields}}
+    values = {
+      ':extent': _ddb(extent),
+      **{f':{field}': _ddb(value) for field, value in fields.items()},
+    }
+    try:
+      self._dynamo.update_item(
+        TableName=self._trails_table,
+        Key=_ddb_item({'id': trail_id}),
+        ConditionExpression='#extent = :extent',
+        UpdateExpression='SET ' + ', '.join(f'#{field} = :{field}' for field in fields),
+        ExpressionAttributeNames=names,
+        ExpressionAttributeValues=values,
+      )
+    except self._dynamo.exceptions.ConditionalCheckFailedException:
+      return {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
+    return backends.blaze_result(trail_id, header['started_at'], extent, decision)
 
   def _store_context(self, trail_id: str, context: Any) -> None:
     self._s3.put_object(

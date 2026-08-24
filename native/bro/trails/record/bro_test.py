@@ -84,7 +84,7 @@ class TestRecorderConstructor:
 class TestRecorderStartTrail:
   def test_opens_a_universal_body_and_returns_server_trail_id(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((201, b'{"id": "T-server"}'))
+    fake.queue((201, b'{"id": "T-server", "extent": 1}'))
     tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     trail_id = tracker.start_trail(
       bro='dev',
@@ -124,7 +124,7 @@ class TestRecorderStartTrail:
   )
   def test_serializes_fork_pointers(self, monkeypatch, forked_from, expected):
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((201, b'{"id": "T1"}'))
+    fake.queue((201, b'{"id": "T1", "extent": 1}'))
     tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     tracker.start_trail(
       bro='b',
@@ -156,7 +156,7 @@ class TestRecorderStartTrail:
 class TestRecorderStep:
   def _ready(self, monkeypatch) -> tuple[Recorder, _FakeConnection]:
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((201, b'{"id": "T1"}'))
+    fake.queue((201, b'{"id": "T1", "extent": 1}'))
     tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     tracker.start_trail(
       bro='b',
@@ -279,7 +279,7 @@ class TestRecorderStep:
 class TestRecorderEndTrail:
   def _ready(self, monkeypatch) -> tuple[Recorder, _FakeConnection]:
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((201, b'{"id": "T1"}'))
+    fake.queue((201, b'{"id": "T1", "extent": 1}'))
     tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     tracker.start_trail(
       bro='b', llm_spec={}, system_prompt='p', forked_from=None, interactive=False, surface='x'
@@ -315,7 +315,7 @@ class TestRecorderKeepalive:
   def _start(self, monkeypatch, interval: float) -> tuple[Recorder, _FakeConnection]:
     fake = _install_fake_connection(monkeypatch)
     monkeypatch.setattr(trails_record_spine, 'KEEPALIVE_INTERVAL_SECONDS', interval)
-    fake.queue((201, b'{"id": "T1"}'))
+    fake.queue((201, b'{"id": "T1", "extent": 1}'))
     tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     tracker.start_trail(
       bro='b', llm_spec={}, system_prompt='', forked_from=None, interactive=False, surface='x'
