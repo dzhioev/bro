@@ -10,6 +10,11 @@ The rebuild reaches a run only through the conftest at its pytest root, and this
 repository has more than one such root — a project that ships from here without
 being a workspace member configures pytest itself. So the other test holds every
 root to applying it, the gap being invisible from inside a suite that has one.
+
+It pins the credential resolver's local search path too, which no sweep can
+reach — the roots are module constants, not variables. A third test holds that
+pin from inside a run: nothing the resolver would search exists, so a suite
+resolves only what a test installed itself.
 """
 
 import ast
@@ -18,6 +23,7 @@ import os
 import tomllib
 from pathlib import Path
 
+from bro.base import credentials
 from bro.base.suite_environment import (
   KEPT_VARIABLES,
   SESSION_NAMESPACES,
@@ -138,4 +144,12 @@ def test_every_pytest_root_rebuilds_the_environment():
   assert inheriting == [], (
     f'pytest roots whose conftest does not call {_REBUILD_MODULE}.{_REBUILD}, so their '
     f'suite inherits the session that launched it: {inheriting}'
+  )
+
+
+def test_no_run_reaches_a_credential_store():
+  searched = [directory for directory in credentials._search_dirs() if Path(directory).is_dir()]
+  assert searched == [], (
+    f'credential search directories a suite reaches, so it resolves what their owner holds '
+    f'rather than what a test installed: {searched}'
   )
