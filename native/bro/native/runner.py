@@ -21,7 +21,7 @@ from bro.llm.observer import (
 from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
 from bro.native import providers as native_providers
 from bro.native.llm import LLM
-from bro.summon import SUMMONED_ENV, summoned_by_from_env
+from bro.summon import summoned, summoned_by_from_env
 from bro.trails.record.bro import Recorder
 
 _TRAILS_DISABLED_ENV = 'TRAILS_DISABLED'
@@ -271,7 +271,7 @@ class Runner:
       except Exception as error:
         effective_observer.on_event(TurnFailedEvent(str(error)))
         raise
-      if os.environ.get(SUMMONED_ENV) is not None:
+      if summoned():
         # a summoned interactive run announces its trail like a summoned run()
         # would — the summoner's wait re-arms on it; an un-summoned conversation
         # announces nothing (its channel is the enclosing session's, not its own)

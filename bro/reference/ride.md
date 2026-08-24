@@ -1109,10 +1109,11 @@ Wrappers and session daemons rely on a small set of env vars:
   It is unset only for a path attachment's default, where the entrypoint's `HEAD` fallback uses the checkout's current commit.
   Host mode applies the same base inline via `git worktree add … <ref>`.
 - `RIDE_SUMMONED` — marks a run as a summoned child.
-  The env name is owned by `bro.summon`;
+  The env name is owned by `bro.summon` and read back through its `summoned()` predicate;
   set by the summon lowering and by the `--summoned` launch,
   read by the claude in-place runner to emit the child's run lifecycle over the broker channel (a bro-run child emits from `bro.native.runner.Runner.run`,
-  a summoned interactive one its `started` from `Runner.send`'s first turn) and by the service-server build to mount the `answer` tool.
+  a summoned interactive one its `started` from `Runner.send`'s first turn), by the service-server build to mount the `answer` tool,
+  and by `ride banner` and `bro.prompts.session_fragment` so the run can tell in-session that it owes a summoner an answer.
 - `RIDE_SUMMON_STATUS` — path of the session's live summon-status file (`<runtime-root>/summon/<name>.status.json` on the host, `/var/ride/summon/<name>.status.json` through the container's dedicated read-only bind).
   The env name and the file's records are owned by `bro.summon_status`;
   set by the launch surfaces, read by `ride.claude.statusline` to render active summons and the last outcome (see "Summoning another bro").

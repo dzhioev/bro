@@ -136,9 +136,10 @@ def build_claude_launch(
   mcp_config = http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
   if options(spec).raw:
     settings['apiKeyHelper'] = _settings_command('ride.claude.print_anthropic_key')
-    # the hold fragment renders here — appending the unrendered file would leak
-    # its directives — with the --raw surface's facts: bro harness over mcp wire
-    fragment = prompts.hold_fragment(
+    # the session fragments render here — appending the unrendered files would
+    # leak their directives — with the --raw surface's facts: bro harness over
+    # mcp wire
+    fragment = prompts.session_fragment(
       spec.hold, harness='bro', wire='mcp', creds=credentials.known_names()
     )
     system_prompt = f'{bro.claude_system_prompt}\n\n{fragment}'

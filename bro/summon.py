@@ -116,8 +116,7 @@ __cli_name__ = 'summon'
 
 SUMMON = 'summon'  # the kind a summon request names
 SUMMONER_ENV = 'RIDE_SUMMONER'
-# marks a run as a summoned child — the fact the claude solo runner keys its
-# run-lifecycle emission on (a bro-run child emits from `BaseBro.run` instead)
+# marks a run as a summoned child, written by the surface that launches it
 SUMMONED_ENV = 'RIDE_SUMMONED'
 # carries a run's own effective summon allow-list into it, written by the surface
 # that launches the run: a session root's at launch, a summoned child's at its spawn
@@ -169,6 +168,12 @@ def encode_may_summon(targets: Collection[str]) -> str:
   """an effective summon allow-list as the `MAY_SUMMON_ENV` value: the names
   sorted and comma-joined, empty for a run that may summon nothing."""
   return ','.join(sorted(set(targets)))
+
+
+def summoned() -> bool:
+  """whether this run is a summoned child — a summoner is blocked on the result
+  it owes back through the `answer` tool."""
+  return os.environ.get(SUMMONED_ENV) is not None
 
 
 def may_summon() -> Optional[tuple[str, ...]]:

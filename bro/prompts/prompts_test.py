@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from bro.prompts import PromptLoader, get_prompt, get_prompt_path, hold_fragment
+from bro.prompts import PromptLoader, get_prompt, get_prompt_path, hold_fragment, session_fragment
+from bro.summon import SUMMONED_ENV
 
 
 class TestContainment:
@@ -76,3 +77,24 @@ class TestHoldFragment:
   def test_unknown_hold_raises(self):
     with pytest.raises(ValueError, match='unknown hold'):
       hold_fragment('automatic', harness='claude', wire='mcp')
+
+
+class TestSessionFragment:
+  def test_an_unsummoned_run_gets_the_hold_fragment_alone(self, monkeypatch):
+    monkeypatch.delenv(SUMMONED_ENV, raising=False)
+    assert session_fragment('attended', harness='claude', wire='mcp') == hold_fragment(
+      'attended', harness='claude', wire='mcp'
+    )
+
+  def test_a_summoned_run_carries_the_delivery_contract_at_every_hold(self, monkeypatch):
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    for hold in ('unattended', 'detached', 'attended', 'guided'):
+      fragment = session_fragment(hold, harness='claude', wire='mcp')
+      assert fragment.startswith('# Summoned session')
+      assert '{{' not in fragment
+
+  def test_the_hold_fragment_stays_the_suffix(self, monkeypatch):
+    # the resumed-hold swap in `native/bro/fork.py` replaces it there
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    fragment = session_fragment('guided', harness='claude', wire='mcp')
+    assert fragment.endswith(hold_fragment('guided', harness='claude', wire='mcp'))
