@@ -66,6 +66,7 @@ class SessionFacts:
     - may_summon — the bros the session may summon, as its launch fixed them;
       empty when it may summon none, None when it was launched by a surface that
       publishes no list
+    - summoned — whether another session summoned this one and waits on its result
     - trail_id — the trail the session is being recorded into; None when nothing
       publishes one (recording off, or not started yet)
   """
@@ -81,6 +82,7 @@ class SessionFacts:
   prompt: Optional[str]
   recording_problem: Optional[str]
   may_summon: Optional[tuple[str, ...]]
+  summoned: bool
   trail_id: Optional[str]
   repo: Optional[str] = None
 
@@ -129,6 +131,7 @@ class SessionFacts:
       prompt=prompt,
       recording_problem=health.problem(),
       may_summon=summon.may_summon(),
+      summoned=summon.summoned(),
       trail_id=trail_id,
     )
 
@@ -200,6 +203,9 @@ class SessionFacts:
       # container — the label tracks the destination, not the host that launches it
       rows.append(('docker shell:', '', f'{dim}{self.exec_command}{reset}'))
 
+    if self.summoned:
+      rows.append(('summoned:', '', f'{dim}yes — a summoner is waiting on the answer{reset}'))
+
     if self.may_summon is not None:
       targets = ', '.join(self.may_summon) if len(self.may_summon) > 0 else '(none)'
       rows.append(('may summon:', '', f'{dim}{targets}{reset}'))
@@ -247,8 +253,12 @@ class SessionFacts:
       value = getattr(self, attribute)
       if value is not None:
         lines.append(f'{label}: {value}')
+    # stated either way, unlike the human banner's conditional row: an agent
+    # asking whether it owes a summoner an answer must not have to read a `no`
+    # out of a missing line
+    lines.append(f'summoned: {"yes" if self.summoned else "no"}')
     if self.may_summon is not None:
-      # spelled out when empty: "this session delegates to nobody" is a different
+      # spelled out when empty: "this session may summon nobody" is a different
       # answer from a launch surface that publishes no list at all
       targets = ', '.join(self.may_summon) if len(self.may_summon) > 0 else 'none'
       lines.append(f'may_summon: {targets}')

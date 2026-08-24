@@ -5,7 +5,7 @@ Do not produce any visible output
 — silently incorporate this context into your planning.
 
 Call the `bro::banner` tool once.
-It returns the structured session facts as `key: value` lines (`kind`, `repo`, `name`, `bro`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `ride_command`, `may_summon`, `trail_id`).
+It returns the structured session facts as `key: value` lines (`kind`, `repo`, `name`, `bro`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `ride_command`, `summoned`, `may_summon`, `trail_id`).
 Interpret them as follows:
 
 1. `kind: container` means you are inside a docker container.
@@ -25,19 +25,26 @@ Interpret them as follows:
    never probe cwd git to decide whether the managed session is attached.
    Use the session `name` as a hint about the work scope.
 
-3. `may_summon` lists the bros this session may summon
-   — plan delegation from it instead of probing:
-   `may_summon: none` means this session delegates to nobody,
+3. `summoned` says whether this session owes another one a result.
+   `summoned: yes` means a summoner is blocked on it, and the run delivers through the `bro::answer` tool
+   — whatever the hold, and whoever else is in the conversation.
+   That line is the whole answer to "does this session owe a reply";
+   `may_summon` below is a different question and never answers it.
+
+4. `may_summon` lists the bros this session may summon
+   — the outgoing half, about children this session can spawn, never about where it came from.
+   Plan delegation from it instead of probing:
+   `may_summon: none` means this session may summon nobody,
    and the line's absence means the launcher published no list (an unmanaged environment).
    A listed target can still be denied for another reason, but an unlisted one always is.
    The list is fixed at launch and nothing in-session widens it;
    widening means relaunching with `--grant @<bro>`, which is the user's call.
 
-4. `trail_id` is the trail this session is recorded into.
+5. `trail_id` is the trail this session is recorded into.
    It can roll mid-session
    — never cache it, read it off the banner when you need it.
 
-5. If a `session_recording:` line appears (always first in the output), session recording is broken
+6. If a `session_recording:` line appears (always first in the output), session recording is broken
    — the transcript isn't reaching trails and this session could be lost on `--drop`.
    `FAILING` is a recorder that is erroring;
    `STOPPED` is one that is no longer running at all, so nothing will resume on its own.

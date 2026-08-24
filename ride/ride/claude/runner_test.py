@@ -9,6 +9,7 @@ import ride.claude.runner as ride_runner
 from bro.launch.broxy import START_SESSION_BROXY_ENV
 from bro.llm.llms import claude_code
 from bro.monitor import trail_pointer
+from bro.summon import SUMMONED_ENV
 from bro.workspace.paths import workspace_dir
 from ride.claude.claude_argv import ClaudeLaunch
 from ride.claude.mcp import MCPEndpoint
@@ -49,7 +50,7 @@ class _Harness:
     self.env.pop('BRO_HOLD', None)
     self.env.pop('RIDE_RUNNER_PID', None)
     self.env.pop('BROKER_CHANNEL', None)
-    self.env.pop(ride_runner.SUMMONED_ENV, None)
+    self.env.pop(SUMMONED_ENV, None)
     self.env.pop(START_SESSION_BROXY_ENV, None)
     self.env.pop('CLAUDE_CONFIG_DIR', None)
     self.start_server = entered[2]

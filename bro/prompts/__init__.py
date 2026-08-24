@@ -42,6 +42,28 @@ get_prompt_path = _loader.get_prompt_path
 get_prompt = _loader.get_prompt
 
 
+def session_fragment(
+  hold: str,
+  *,
+  harness: Optional['Harness'] = None,
+  wire: Optional['Wire'] = None,
+  creds: Optional['Iterable[str]'] = None,
+) -> str:
+  """the per-session prompt text a launch surface appends after the composed
+  prompt: the summoned-delivery contract when this run owes a summoner an
+  answer, then the hold fragment last, where instruction recency is strongest.
+  """
+  from bro import mcp, summon
+
+  fragment = hold_fragment(hold, harness=harness, wire=wire, creds=creds)
+  if not summon.summoned():
+    return fragment
+  contract = mcp.render_text(
+    get_prompt('summoned.md'), harness=harness, wire=wire, creds=creds
+  ).strip()
+  return f'{contract}\n\n{fragment}'
+
+
 def hold_fragment(
   hold: str,
   *,
@@ -49,11 +71,11 @@ def hold_fragment(
   wire: Optional['Wire'] = None,
   creds: Optional['Iterable[str]'] = None,
 ) -> str:
-  """render the hold fragment for `hold` — the one rendering path every
-  injection site uses, so the `{{…}}` directives in the hold text never leak
-  unrendered. `hold.md` selects the per-level file on the `#hold` fact,
-  which only this call supplies: everything else renders hold-neutrally and a
-  stray `#hold` directive there raises.
+  """render the hold fragment for `hold` — the one rendering path, so the
+  `{{…}}` directives in the hold text never leak unrendered. `hold.md` selects
+  the per-level file on the `#hold` fact, which only this call supplies:
+  everything else renders hold-neutrally and a stray `#hold` directive there
+  raises.
   """
   from bro import mcp
 

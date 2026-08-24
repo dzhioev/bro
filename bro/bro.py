@@ -17,7 +17,7 @@ from bro.datasources.base import DataSource
 from bro.datasources.man import ManPage, manual
 from bro.llm.llm import EFFORT_LEVELS, NativeLLMSpec
 from bro.llm.tracker import ToolStepSource
-from bro.prompts import get_prompt, hold_fragment
+from bro.prompts import get_prompt, session_fragment
 
 DEFAULT_LLM_SPEC: NativeLLMSpec = llm_llms_openai.LLMSpec()
 
@@ -532,14 +532,12 @@ def _build_service_server(
   # then feeds the tools' rendering vocabulary: service tools are harness
   # features, the one tool surface that conditions on system facts, so `#wire`
   # is injected next to the `#tools` roster.
-  from bro.summon import SUMMONED_ENV
+  from bro.summon import summoned
 
   has_cast = len(bro.spells) > 0 and spell_store.cast_available()
   has_broker = os.environ.get('BROKER_CHANNEL') is not None
   has_answer = (
-    has_broker
-    and os.environ.get(SUMMONED_ENV) is not None
-    and (wire == 'bare' or os.environ.get('RIDE_RUNNER_PID') is not None)
+    has_broker and summoned() and (wire == 'bare' or os.environ.get('RIDE_RUNNER_PID') is not None)
   )
   has_summon_list = False
   if has_broker:
@@ -1101,13 +1099,13 @@ class BaseBro(ABC):
     return self._servers_with_spell_tools(servers, harness=harness, wire=wire)
 
   def system_prompt_for(self, *, hold: str) -> str:
-    """the bro-native system prompt under a hold — the composed prompt plus that
-    level's fragment."""
+    """the bro-native system prompt under a hold — the composed prompt plus the
+    session fragments."""
     # the hold is pinned at run start, so the matching hold fragment is
     # injected rather than detected by the agent — run() defaults unattended,
     # send() guided, with the launch surfaces overriding per their --hold flag
     # (the level files are documented in prompts/AGENTS.md).
-    fragment = hold_fragment(
+    fragment = session_fragment(
       hold,
       harness='bro',
       wire='bare',

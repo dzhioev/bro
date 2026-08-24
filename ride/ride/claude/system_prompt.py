@@ -41,9 +41,9 @@ def session_append_prompt(hold: str, bro_name: str) -> str:
   once with this surface's facts: the claude harness over mcp wire names, with
   the session environment's credentials (this composes in the session's own
   process — in-container for container sessions — so the store is the scoped
-  one). the hold fragment renders separately through
-  `bro.prompts.hold_fragment` — the `#hold` fact is supplied only there, so the
-  base and persona prompts stay hold-neutral.
+  one, and the summoned mark is this session's own). the session fragments
+  render separately through `bro.prompts.session_fragment` — the `#hold` fact is
+  supplied only there, so the base and persona prompts stay hold-neutral.
   """
   # Keep the bro class graph out of this leaf module's import closure.
   import bro.mcp as mcp
@@ -63,7 +63,7 @@ def session_append_prompt(hold: str, bro_name: str) -> str:
     creds=credentials.known_names(),
     extra=bro.vocabulary(),
   )
-  fragment = prompts.hold_fragment(
+  fragment = prompts.session_fragment(
     hold, harness='claude', wire='mcp', creds=credentials.known_names()
   )
   return f'{rendered}\n\n{fragment}'

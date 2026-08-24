@@ -5,7 +5,7 @@ Five loading conventions:
 auto-inject into every bro + `ride solo|along` session (`shared/`);
 serve as a reference doc
 — injected into `ride solo|along` sessions or mounted as a `FileSource` tool (`*.md`);
-inject the hold fragment at launch (`hold.md` composing `holds/`);
+inject the session fragments at launch (`hold.md` composing `holds/`, plus `summoned.md`);
 splice into an opting-in text via `{{include}}` (`fragments/`);
 load explicitly by name (top-level `*.prompt` / `*.prompt.template`).
 
@@ -71,7 +71,20 @@ Current reference docs:
   Bro-native LLM runs compose the `bare` rendering (`ns::tool` → `ns__tool`) into `BaseBro.system_prompt`.
   Deliberately no `FileSource`
 
-## Hold text
+## Session fragments
+
+`bro.prompts.session_fragment(hold, …facts)` renders the text a launch surface appends after the composed prompt, and every injection site calls it
+(`ride/ride/claude/system_prompt.py:session_append_prompt`, `ride/ride/claude/claude_argv.py` for `--raw`, `bro/bro.py:BaseBro.system_prompt_for`).
+It is the summoned-delivery contract when the run is one another session is waiting on, then the hold fragment
+— last, where instruction recency is strongest.
+
+### Summoned contract
+
+`summoned.md` (top level) states what a summoned run owes its summoner and when to deliver it.
+It renders only for a run `bro.summon.summoned()` reports as summoned, and hold-neutrally
+— the duty comes with being summoned, so an attended or guided child carries the same text a spawned unattended one does.
+
+### Hold text
 
 A session's hold — its user-involvement level
 — is one of `unattended | detached | attended | guided`, ordered from no human channel to human-driven.
@@ -88,7 +101,7 @@ the three non-guided level files share `holds/authorization.md`, the full-author
 — detached, attended, guided
 — share `fragments/interaction.md`, the interaction policy.
 `bro.prompts.hold_fragment(hold, …facts)` is the one rendering path
-— every injection site uses it (`ride/ride/claude/system_prompt.py:session_append_prompt`, `ride/ride/claude/claude_argv.py` for `--raw`, `bro/bro.py:BaseBro.system_prompt_for`),
+— `session_fragment` composes it, and `native/bro/fork.py` re-renders it to swap a resumed run's level —
 and it is the only call that supplies the `#hold` fact, so all other text stays hold-neutral mechanically:
 a stray `#hold` directive in a spell or procedure doc raises.
 

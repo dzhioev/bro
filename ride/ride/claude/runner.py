@@ -26,7 +26,7 @@ from bro.monitor import (
   trail_pointer,
   workspace_session_dir,
 )
-from bro.summon import SUMMONED_ENV, SUMMONER_ENV
+from bro.summon import SUMMONER_ENV, summoned
 from bro.workspace.git import git_out
 from bro.workspace.paths import in_container, workspace_dir
 from ride.claude.claude_argv import build_claude_launch
@@ -237,7 +237,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
     env['MCP_TOOL_TIMEOUT'] = str(10 * 60 * 1000)
     apply_claude_auth(env, warn_when_missing=not options(spec).raw)
     log.info('launching claude')
-    if os.environ.get(SUMMONED_ENV) is None:
+    if not summoned():
       code = _run_claude(launch.argv, env, transcripts)
     elif spec.solo:
       code = _run_claude_summoned(launch.argv, env)

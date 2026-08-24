@@ -117,6 +117,7 @@ class TestSessionFacts:
     assert facts.ride_command is None
     assert facts.prompt is None
     assert facts.may_summon is None
+    assert facts.summoned is False
     assert facts.trail_id is None
 
   def test_may_summon_reads_the_launch_published_list(self, monkeypatch):
@@ -126,6 +127,10 @@ class TestSessionFacts:
   def test_may_summon_distinguishes_an_empty_list_from_an_unset_one(self, monkeypatch):
     monkeypatch.setenv(summon.MAY_SUMMON_ENV, '')
     assert SessionFacts.collect().may_summon == ()
+
+  def test_summoned_reads_the_child_mark(self, monkeypatch):
+    monkeypatch.setenv(summon.SUMMONED_ENV, '1')
+    assert SessionFacts.collect().summoned is True
 
   def test_trail_id_reads_the_session_pointer(self):
     trail_pointer.publish('01trail')
@@ -160,6 +165,7 @@ def _facts(**overrides) -> SessionFacts:
     'prompt': None,
     'recording_problem': None,
     'may_summon': None,
+    'summoned': False,
     'trail_id': None,
   }
   base.update(overrides)
@@ -204,7 +210,9 @@ class TestRenderBanner:
       container_workspace=None,
       exec_command=None,
     ).render_llm()
-    assert out == 'kind: worktree\nrepo: none (detached)\ntrail_id: none (not published)'
+    assert (
+      out == 'kind: worktree\nrepo: none (detached)\nsummoned: no\ntrail_id: none (not published)'
+    )
 
   def test_llm_lists_the_summon_targets(self):
     assert 'may_summon: dev, reviewer' in _facts(may_summon=('dev', 'reviewer')).render_llm()
@@ -216,6 +224,11 @@ class TestRenderBanner:
   def test_llm_omits_may_summon_when_no_list_was_published(self):
     assert 'may_summon' not in _facts(may_summon=None).render_llm()
 
+  def test_llm_states_the_summoned_fact_either_way(self):
+    # an agent asking whether it owes a summoner an answer needs a stated `no`
+    assert 'summoned: yes' in _facts(summoned=True).render_llm()
+    assert 'summoned: no' in _facts(summoned=False).render_llm()
+
   def test_llm_emits_the_trail_id(self):
     assert 'trail_id: 01trail' in _facts(trail_id='01trail').render_llm()
 
@@ -226,6 +239,10 @@ class TestRenderBanner:
 
   def test_visual_shows_an_empty_allow_list(self):
     assert '(none)' in _facts(may_summon=()).render_visual()
+
+  def test_visual_shows_the_summoned_row_only_when_summoned(self):
+    assert 'summoned:' in _facts(summoned=True).render_visual()
+    assert 'summoned:' not in _facts(summoned=False).render_visual()
 
   def test_visual_omits_the_unpublished_facts(self):
     out = _facts().render_visual()
