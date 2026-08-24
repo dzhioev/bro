@@ -90,6 +90,7 @@ PYTEST_FILES = [
   'bro/base/lulid_test.py',
   'bro/base/name_map_test.py',
   'bro/base/spawn_test.py',
+  'bro/base/suite_environment_test.py',
   'bro/base/template_test.py',
   'bro/base/text_window_test.py',
   'bro/base/time_util_test.py',

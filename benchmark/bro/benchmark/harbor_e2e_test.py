@@ -21,6 +21,7 @@ import pytest
 from harbor.cli.config_sources import load_config_source
 
 from bro.base import credentials
+from bro.base.suite_environment import host_credential_store
 from bro.benchmark.bundle import build, default_root, host_mismatch, workspace_root
 
 # the smallest image in the set, and one carrying neither python3 nor a CA
@@ -42,6 +43,11 @@ def _available(*command: str) -> bool:
     return False
 
 
+def _host_holds_the_llm_keys() -> bool:
+  with host_credential_store():
+    return all(credentials.default_store().available_instance(name) for name in _LLM_CREDENTIALS)
+
+
 _HOST_MISMATCH = host_mismatch()
 
 pytestmark = [
@@ -53,8 +59,7 @@ pytestmark = [
     not _available('docker', 'compose', 'version'), reason='no docker compose plugin'
   ),
   pytest.mark.skipif(
-    not all(credentials.default_store().available_instance(name) for name in _LLM_CREDENTIALS),
-    reason='an LLM key the job config names does not resolve',
+    not _host_holds_the_llm_keys(), reason='an LLM key the job config names does not resolve'
   ),
 ]
 

@@ -50,8 +50,9 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   `benchmark/`'s is `uv build --directory benchmark`, since it is no member to name with `--package`
 
 The repository root carries `pyproject.toml` (core distribution metadata, the workspace table, and the tool config every member runs under), `conftest.py` (test isolation:
-the suite's environment is rebuilt rather than patched by `bro/base/suite_environment.py`, clearing the framework's own namespaces so a run launched from inside a managed session inherits none of it
-— the rebuild lives in core so every pytest root applies it, `benchmark/`'s own conftest included, and `local/bro/local/environment_policy_test.py` enforces both halves repository-wide), `local/` (the `bro-local` member:
+the suite's environment is rebuilt rather than patched by `bro/base/suite_environment.py`, clearing the framework's own namespaces and pinning the credential resolver's search path off every store,
+so a run launched from inside a managed session inherits none of it and resolves only what a test installed itself
+— the rebuild lives in core so every pytest root applies it, `benchmark/`'s own conftest included, and `local/bro/local/environment_policy_test.py` enforces each part repository-wide), `local/` (the `bro-local` member:
 the `bro-dev` persona under `bros/bro_dev/`, `bro/local/run_tests.py`'s explicit test roster behind the `run-tests` console script,
 the `benchmark` broker kind with its `benchmark-job` session command (`bro/local/benchmark_job.py`
 — a session starts this checkout's benchmark jobs on the host through the broker),

@@ -82,10 +82,12 @@ run those with `--help` for flags.
   a test asserting that something was reaped blocks on its EOF instead of polling a pid the kernel is free to recycle underneath it.
 - `suite_environment.py` — `rebuild_environment()`, which leaves a test process holding none of the session it started in:
   the framework's own environment namespaces cleared,
+  the credential resolver's local search roots pinned off every store,
   the zone pinned,
   the log level reset.
   It ships, so a pytest root outside this repository imports it the same way.
   `SESSION_NAMESPACES` / `SESSION_VARIABLES` / `KEPT_VARIABLES` are the sweep's own statement of what carries session state, for a policy holding the framework to it.
+  `host_credential_store()` lifts the credential pin for a block, for a test that has to ask what the host holds.
 - `offload.py` — `off_loop(function, …)`, awaiting a blocking call in a daemon thread.
   The `asyncio.to_thread` alternative wherever a call may still be running when the process wants to exit:
   the default executor's threads are joined at interpreter shutdown, so one abandoned call there delays the exit by its full remaining runtime.

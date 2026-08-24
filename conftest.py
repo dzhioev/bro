@@ -5,10 +5,10 @@ configured sink — even on a workstation where the production recorder is the
 default via `set_default_tracker_factory`.
 
 The run-start credential gate is pinned open for the same hermeticity (the
-autouse fixture below): test bros mostly keep the default openai spec, whose
-`openai` key would otherwise gate on the host's real store. Gate tests opt out
-with `@pytest.mark.credential_gate` and control `credentials.available`
-themselves.
+autouse fixture below): test bros mostly keep the default openai spec, and no
+suite resolves its `openai` key — `rebuild_environment` pins the credential
+search path away from every store. Gate tests opt out with
+`@pytest.mark.credential_gate` and control `credentials.available` themselves.
 
 `~/.bro.json` is pointed at an absent path (the autouse fixture below): it maps
 the developer's own checkouts to credential instances, and a launch-scoping test
