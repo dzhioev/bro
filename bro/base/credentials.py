@@ -654,6 +654,11 @@ class Store:
     (llm/mcp.py)."""
     return self.try_get(name) is not None
 
+  def available_instance(self, name: str) -> bool:
+    """storage-addressed `available`: whether the registry entry stored under
+    `name` — plain or `kind+instance` — resolves in this store."""
+    return self.try_get_instance(name) is not None
+
   def known_names(self) -> frozenset[str]:
     """every secret name this store's registry knows, resolvable or not."""
     return frozenset(self._registry)
