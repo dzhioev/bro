@@ -12,7 +12,7 @@ A summon succeeds only when the target is in the summoner's allow-list
 — the session reads its own off the banner, fixed at launch
 — so a denial stays a normal outcome the spell relays.
 
-version: 1.11.0
+version: 1.12.0
 ---
 
 # Ask
@@ -36,6 +36,9 @@ From the user's wording extract:
   a target it does not name is denied, and `none` means this session cannot summon at all.
   Being listed is not a promise the run succeeds;
   the failure modes below still apply.
+  Where this session has a shell, read the target's card next:
+  `bro show <name>` prints its description, its tools with their descriptions, its secrets and its spells
+  — what it already knows how to do, in its own terms.
 - **prompt** — the request, rewritten to be fully self-contained.
   The target shares no context with this session:
   no conversation history,
@@ -46,6 +49,11 @@ From the user's wording extract:
   and expectations ("list the deploy targets and their kinds", not "list them").
   Ask for what the user actually wants back
   — the reply is the only thing that returns.
+  Shape the request around the card:
+  name the outcome and leave the mechanics to the target's own tools,
+  which run against paths and setup you cannot see from here.
+  Name a command yourself when running that exact command is the request
+  — not as a guess at how the target would have reached the outcome anyway.
 
 Optional knobs, normally only when the user asks for them:
 a per-call timeout in seconds (default 1800 — sized for a deploy),
