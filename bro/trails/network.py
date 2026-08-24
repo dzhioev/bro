@@ -193,9 +193,6 @@ class NetworkStore(TrailsStore):
       {'trail_id': trail_id} if trail_id is not None else {},
     )
 
-  def backfill_lineage_heads(self) -> dict:
-    return self._send('POST', '/v1/admin/trails/backfill-lineage-heads', {})
-
   def relink(self, trail_id: str, forked_from: dict, delete_count: int) -> dict:
     return self._send(
       'POST',

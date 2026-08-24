@@ -16,7 +16,6 @@ MAX_BODY_BYTES = 10 * 1024 * 1024
 # keeps both DynamoDB transaction limits: 51 operations and under 4 MB when every inline body
 # is just below the spill threshold.
 MAX_TRANSACTION_RECORDS = 50
-UNIVERSAL_BODY_STORAGE = 'trail_steps_v2'
 
 
 class BodyTooLarge(Exception):
@@ -85,7 +84,7 @@ def sha256_hex(payload: bytes) -> str:
   return hashlib.sha256(payload).hexdigest()
 
 
-def universal_spillover_key(trail_id: str, step_id: int, payload: bytes) -> str:
+def spillover_key(trail_id: str, step_id: int, payload: bytes) -> str:
   return f'trails/steps/{trail_id}/{step_id}-{sha256_hex(payload)}.json'
 
 

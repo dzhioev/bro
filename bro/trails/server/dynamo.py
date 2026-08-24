@@ -106,7 +106,7 @@ class DynamoStore(TrailsStore):
       if len(body_payload) < dynamo_types.SPILLOVER_THRESHOLD_BYTES:
         row['body'] = body
         continue
-      key = dynamo_types.universal_spillover_key(trail_id, row['step_id'], body_payload)
+      key = dynamo_types.spillover_key(trail_id, row['step_id'], body_payload)
       self._s3.put_object(
         Bucket=self._bucket,
         Key=key,
@@ -176,8 +176,6 @@ class DynamoStore(TrailsStore):
     segment = native.get('segment')
     if segment is not None:
       item['segment'] = segment
-
-    item['body_storage'] = dynamo_types.UNIVERSAL_BODY_STORAGE
     item['extent'] = 0
     state = AggregateState(item, adapter)
     seen_billing_keys: set[str] = set()
@@ -258,7 +256,7 @@ class DynamoStore(TrailsStore):
   ) -> dict:
     if offset < 0:
       raise ValueError('offset must be non-negative')
-    header = self._required_universal_header(trail_id)
+    header = self._required_header(trail_id)
     actual = self._header_extent(header)
     expected_end = offset + len(records)
     if actual != offset:
@@ -369,7 +367,6 @@ class DynamoStore(TrailsStore):
     new_extent: int,
   ) -> dict:
     names = {
-      '#body_storage': 'body_storage',
       '#extent': 'extent',
       '#last_alive_at': 'last_alive_at',
       '#turn_count': 'turn_count',
@@ -377,7 +374,6 @@ class DynamoStore(TrailsStore):
       '#last_billed': 'last_billed_message_id',
     }
     values = {
-      ':storage': _ddb(dynamo_types.UNIVERSAL_BODY_STORAGE),
       ':expected_extent': _ddb(expected_extent),
       ':extent': _ddb(new_extent),
       ':alive': _ddb(_now_iso()),
@@ -399,7 +395,7 @@ class DynamoStore(TrailsStore):
     return {
       'TableName': self._trails_table,
       'Key': _ddb_item({'id': trail_id}),
-      'ConditionExpression': '#body_storage = :storage AND #extent = :expected_extent',
+      'ConditionExpression': '#extent = :expected_extent',
       'UpdateExpression': 'SET ' + ', '.join(assignments),
       'ExpressionAttributeNames': names,
       'ExpressionAttributeValues': values,
@@ -409,7 +405,7 @@ class DynamoStore(TrailsStore):
   def _header_extent(header: dict) -> int:
     extent = header.get('extent')
     if not isinstance(extent, int) or isinstance(extent, bool) or extent < 0:
-      raise ValueError('migrated trail header has an invalid extent')
+      raise ValueError('trail header has an invalid extent')
     return extent
 
   def set_subject(self, trail_id: str, subject: Optional[str]) -> dict:
@@ -514,12 +510,6 @@ class DynamoStore(TrailsStore):
       raise TrailNotFound(trail_id)
     return item
 
-  def _required_universal_header(self, trail_id: str) -> dict:
-    header = self._required_header(trail_id)
-    if header.get('body_storage') != dynamo_types.UNIVERSAL_BODY_STORAGE:
-      raise ValueError(f'trail {trail_id} has no body in {dynamo_types.UNIVERSAL_BODY_STORAGE}')
-    return header
-
   def _project_header(self, item: dict) -> dict:
     raw_usage = item.get('native', {}).get('usage', {})
     if not isinstance(raw_usage, dict):
@@ -596,7 +586,7 @@ class DynamoStore(TrailsStore):
         return False
 
   def get_step(self, trail_id: str, step_id: int) -> dict:
-    header = self._required_universal_header(trail_id)
+    header = self._required_header(trail_id)
     if step_id < 0:
       raise TrailNotFound(f'{trail_id}/{step_id}')
     response = self._dynamo.get_item(
@@ -619,8 +609,8 @@ class DynamoStore(TrailsStore):
     page_size = 100 if limit is None else limit
     if page_size < 1 or page_size > 500:
       raise ValueError('limit must be between 1 and 500')
-    header = self._required_universal_header(trail_id)
-    return self._query_universal_rows(header, after=after, limit=page_size)
+    header = self._required_header(trail_id)
+    return self._query_rows(header, after=after, limit=page_size)
 
   def get_messages(
     self,
@@ -633,13 +623,13 @@ class DynamoStore(TrailsStore):
     page_size = 100 if limit is None else limit
     if page_size < 1 or page_size > 500:
       raise ValueError('limit must be between 1 and 500')
-    header = self._required_universal_header(trail_id)
+    header = self._required_header(trail_id)
     adapter = self._backend(header['harness'])
-    page = self._query_universal_rows(header, after=after, limit=page_size)
+    page = self._query_rows(header, after=after, limit=page_size)
     messages = rows.project_messages(adapter, page['steps'], types)
     return {'messages': messages, 'next': page['next']}
 
-  def _query_universal_rows(
+  def _query_rows(
     self,
     header: dict,
     *,
@@ -697,9 +687,6 @@ class DynamoStore(TrailsStore):
 
   def relink(self, trail_id: str, forked_from: dict, delete_count: int) -> dict:
     return self._operations.relink(trail_id, forked_from, delete_count)
-
-  def backfill_lineage_heads(self) -> dict:
-    return self._operations.backfill_lineage_heads()
 
   def delete_trail(self, trail_id: str) -> dict:
     header = self._required_header(trail_id)
