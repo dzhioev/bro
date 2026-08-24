@@ -122,11 +122,6 @@ def _fold_raise_reason(raised: Optional[str], messages: Iterable[dict]) -> Optio
   return raised
 
 
-def _read_lines(path: Path) -> list[str]:
-  lines, _ = _read_lines_after(path, 0)
-  return lines
-
-
 def _read_lines_after(path: Path, byte_offset: int) -> tuple[list[str], int]:
   with path.open('rb') as stream:
     stream.seek(byte_offset)
@@ -142,6 +137,18 @@ def _record_uuid(raw: str) -> Optional[str]:
   entry = CLAUDE_ADAPTER.parse(raw).native['record']
   uuid = entry.get('uuid') if isinstance(entry, dict) else None
   return uuid if isinstance(uuid, str) else None
+
+
+def _carries_record(path: Path, uuid: str) -> bool:
+  """whether the transcript at `path` holds the record `uuid`, reading no further
+  than the line that does. the raw line is tested for the uuid before it is
+  parsed, so the only lines that cost a parse are the ones naming it — its own,
+  and whichever record claims it as a parent."""
+  needle = uuid.encode()
+  with path.open('rb') as stream:
+    return any(
+      needle in raw and raw.endswith(b'\n') and _record_uuid(raw.decode()) == uuid for raw in stream
+    )
 
 
 def _evidence_lines(file_lines: list[str]) -> list[_EvidenceLine]:
@@ -434,10 +441,10 @@ class Recorder:
       if other.stem == path.stem:
         continue
       try:
-        other_lines = _read_lines(other)
+        carries = _carries_record(other, first)
       except OSError:
         continue
-      if any(_record_uuid(line) == first for line in other_lines):
+      if carries:
         related.append(other.stem)
     return related
 
