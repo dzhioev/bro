@@ -133,6 +133,8 @@ class FakeDynamo:
       return (
         item is not None and item.get(self._field('#native', operation)) == values[':old_native']
       )
+    if expression == '#extent = :extent':
+      return item is not None and item.get(self._field('#extent', operation)) == values[':extent']
     if expression == '#body_storage = :storage':
       return (
         item is not None and item.get(self._field('#body_storage', operation)) == values[':storage']
@@ -782,6 +784,54 @@ def test_check_detects_corruption_and_recompute_repairs_rows_and_header(componen
   store.recompute(trail_id)
   assert (store.check(trail_id))['ok'] is True
   assert dynamo.universal_steps[(trail_id, 0)]['uuid'] == 'uuid-1'
+
+
+def test_the_backfill_stamps_the_segment_key_and_folds_the_heads_a_fork_shares(components):
+  store, dynamo, _ = components
+  root = _blaze_claude(store)
+  root_records = [
+    _claude_assistant(f'message-{index}', 'text', uuid=f'uuid-{index}') for index in range(2)
+  ]
+  store.append_records(root, offset=0, records=root_records)
+  child = _blaze_claude(store, forked_from={'trail_id': root, 'step_id': 1})
+  child_record = _claude_assistant('message-2', 'text', uuid='uuid-2')
+  store.append_records(child, offset=0, records=[child_record])
+  bro_trail = _blaze_bro(store)
+  # the trails a redeploy finds: recorded before an append transaction folded one
+  for trail_id in (root, child):
+    del dynamo.headers[trail_id]['segment']
+    del dynamo.headers[trail_id]['native']['lineage_head']
+
+  result = store.backfill_lineage_heads()
+
+  assert result == {'ok': True, 'stamped': sorted([root, child]), 'contended': []}
+  assert dynamo.headers[child]['segment'] == 'segment'
+  # the conversation's first record is the chain root's, not the fork's own
+  assert dynamo.headers[child]['native']['lineage_head'] == {
+    'chain_first_uuid': 'uuid-0',
+    'tail': [[0, 'uuid-2', payload_sha256(child_record)]],
+    'last_row_digest': payload_sha256(child_record),
+  }
+  assert dynamo.headers[root]['native']['lineage_head']['tail'] == [
+    [index, f'uuid-{index}', payload_sha256(record)] for index, record in enumerate(root_records)
+  ]
+  assert 'lineage_head' not in dynamo.headers[bro_trail]['native']
+
+
+def test_the_backfill_reports_a_trail_an_append_landed_on(components):
+  store, dynamo, _ = components
+  trail_id = _blaze_claude(store)
+  store.append_records(
+    trail_id, offset=0, records=[_claude_assistant('message-1', 'first', uuid='uuid-1')]
+  )
+  del dynamo.headers[trail_id]['native']['lineage_head']
+  # the trail grew between the row read and the write
+  dynamo.headers[trail_id]['extent'] = 2
+
+  result = store.backfill_lineage_heads()
+
+  assert result == {'ok': False, 'stamped': [], 'contended': [trail_id]}
+  assert 'lineage_head' not in dynamo.headers[trail_id]['native']
 
 
 def test_store_check_finds_cross_trail_duplicate_uuids(components):

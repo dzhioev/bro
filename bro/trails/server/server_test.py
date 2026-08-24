@@ -377,6 +377,7 @@ def test_admin_routes_serve_a_dynamo_backed_store():
 
   assert app['admin'] is store
   assert '/v1/admin/trails/check' in paths
+  assert '/v1/admin/trails/backfill-lineage-heads' in paths
   assert '/v1/admin/trails/{trail_id}/recompute' in paths
   assert '/v1/admin/trails/{trail_id}/relink' in paths
 
