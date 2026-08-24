@@ -27,6 +27,10 @@ BodyTooLarge = dynamo_types.BodyTooLarge
 
 GSI_PK_ATTRIBUTE = 'gsi_pk'
 GSI_PK_VALUE = 'trail'
+ALL_INDEX = 'all-index'
+HARNESS_INDEX = 'harness-started_at-index'
+BRO_INDEX = 'bro-started_at-index'
+FORKED_FROM_INDEX = 'forked-from-id-index'
 SEGMENT_INDEX = 'segment-started_at-index'
 UNREPORTED_AFTER_SECONDS = 3600
 SWEEP_WINDOW_DAYS = 30
@@ -737,17 +741,13 @@ class DynamoStore(TrailsStore):
     if sum(selected) > 1:
       raise ValueError('only one of harness/bro/forked_from may be set')
     if harness is not None:
-      index, partition_name, partition_value = 'harness-started_at-index', 'harness', harness
+      index, partition_name, partition_value = HARNESS_INDEX, 'harness', harness
     elif bro is not None:
-      index, partition_name, partition_value = 'bro-started_at-index', 'bro', bro
+      index, partition_name, partition_value = BRO_INDEX, 'bro', bro
     elif forked_from is not None:
-      index, partition_name, partition_value = (
-        'forked-from-id-index',
-        'forked_from_id',
-        forked_from,
-      )
+      index, partition_name, partition_value = FORKED_FROM_INDEX, 'forked_from_id', forked_from
     else:
-      index, partition_name, partition_value = 'all-index', GSI_PK_ATTRIBUTE, GSI_PK_VALUE
+      index, partition_name, partition_value = ALL_INDEX, GSI_PK_ATTRIBUTE, GSI_PK_VALUE
     response = self._dynamo.query(
       **_range_query(
         table=self._trails_table,

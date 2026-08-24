@@ -1,11 +1,13 @@
-import copy
-import io
 import json
 import threading
-from typing import Any, Optional
+from collections import Counter
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from typing import Optional
 
+import boto3
 import pytest
-from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
+from moto import mock_aws
 
 from bro.trails import backends
 from bro.trails.model import (
@@ -18,291 +20,195 @@ from bro.trails.model import (
 from bro.trails.server import dynamo as dynamo_store, dynamo_types
 from bro.trails.store import AppendConflict, TrailHasForks, TrailNotFound
 
-_serializer = TypeSerializer()
-_deserializer = TypeDeserializer()
+# moto validates the region against the real partition, so the fixture names one
+_REGION = 'eu-west-1'
+_TRAILS_TABLE = 'headers'
+_STEPS_TABLE = 'steps'
+_UUID_INDEX = 'uuid-index'
+_BUCKET = 'bucket'
 
 
-def _serialize(item: dict) -> dict:
-  return {key: _serializer.serialize(value) for key, value in item.items()}
+def _started_at_index(name: str, partition: str) -> dict:
+  return {
+    'IndexName': name,
+    'KeySchema': [
+      {'AttributeName': partition, 'KeyType': 'HASH'},
+      {'AttributeName': 'started_at', 'KeyType': 'RANGE'},
+    ],
+    'Projection': {'ProjectionType': 'ALL'},
+  }
 
 
-def _deserialize(item: dict) -> dict:
-  return {key: _deserializer.deserialize(value) for key, value in item.items()}
+_TRAILS_INDEXES = {
+  dynamo_store.ALL_INDEX: dynamo_store.GSI_PK_ATTRIBUTE,
+  dynamo_store.HARNESS_INDEX: 'harness',
+  dynamo_store.BRO_INDEX: 'bro',
+  dynamo_store.FORKED_FROM_INDEX: 'forked_from_id',
+  dynamo_store.SEGMENT_INDEX: 'segment',
+}
 
 
-class FakeClientError(Exception):
-  def __init__(self, response: dict, operation: str):
-    super().__init__(f'{operation}: {response}')
-    self.response = response
+def _create_tables(dynamo) -> None:
+  dynamo.create_table(
+    TableName=_TRAILS_TABLE,
+    KeySchema=[{'AttributeName': 'id', 'KeyType': 'HASH'}],
+    AttributeDefinitions=[
+      {'AttributeName': name, 'AttributeType': 'S'}
+      for name in ('id', 'started_at', *_TRAILS_INDEXES.values())
+    ],
+    GlobalSecondaryIndexes=[
+      _started_at_index(name, partition) for name, partition in _TRAILS_INDEXES.items()
+    ],
+    BillingMode='PAY_PER_REQUEST',
+  )
+  dynamo.create_table(
+    TableName=_STEPS_TABLE,
+    KeySchema=[
+      {'AttributeName': 'trail_id', 'KeyType': 'HASH'},
+      {'AttributeName': 'step_id', 'KeyType': 'RANGE'},
+    ],
+    AttributeDefinitions=[
+      {'AttributeName': 'trail_id', 'AttributeType': 'S'},
+      {'AttributeName': 'step_id', 'AttributeType': 'N'},
+      {'AttributeName': 'uuid', 'AttributeType': 'S'},
+    ],
+    GlobalSecondaryIndexes=[
+      {
+        'IndexName': _UUID_INDEX,
+        'KeySchema': [
+          {'AttributeName': 'uuid', 'KeyType': 'HASH'},
+          {'AttributeName': 'trail_id', 'KeyType': 'RANGE'},
+        ],
+        'Projection': {'ProjectionType': 'KEYS_ONLY'},
+      }
+    ],
+    BillingMode='PAY_PER_REQUEST',
+  )
 
 
-class FakeS3:
-  class exceptions:
-    ClientError = FakeClientError
+class _Items(Mapping):
+  """One table's items, read live and keyed by the table's key attributes."""
 
-  def __init__(self):
-    self.objects: dict[str, bytes] = {}
-    self.put_counts: dict[str, int] = {}
-    self.get_threads: list[int] = []
+  def __init__(self, dynamo, table: str, key_names: tuple[str, ...]):
+    self._dynamo = dynamo
+    self._table = table
+    self._key_names = key_names
 
-  def put_object(self, *, Key, Body, IfNoneMatch=None, **_):
-    if IfNoneMatch == '*' and Key in self.objects:
-      raise FakeClientError(
-        {'Error': {'Code': 'PreconditionFailed', 'Message': 'already exists'}},
-        'PutObject',
-      )
-    self.objects[Key] = Body if isinstance(Body, bytes) else Body.encode()
-    self.put_counts[Key] = self.put_counts.get(Key, 0) + 1
+  def __getitem__(self, key) -> dict:
+    response = self._dynamo.get_item(
+      TableName=self._table, Key=dynamo_types.ddb_item(self._key(key)), ConsistentRead=True
+    )
+    item = dynamo_types.from_ddb_item(response.get('Item'))
+    if item is None:
+      raise KeyError(key)
+    return item
 
-  def get_object(self, *, Key, **_):
-    self.get_threads.append(threading.get_ident())
-    if Key not in self.objects:
-      raise FakeClientError({'Error': {'Code': 'NoSuchKey', 'Message': 'missing'}}, 'GetObject')
-    return {'Body': io.BytesIO(self.objects[Key])}
+  def __iter__(self) -> Iterator:
+    names = {f'#key{index}': name for index, name in enumerate(self._key_names)}
+    pages = self._dynamo.get_paginator('scan').paginate(
+      TableName=self._table,
+      ProjectionExpression=', '.join(names),
+      ExpressionAttributeNames=names,
+    )
+    for page in pages:
+      for raw in page['Items']:
+        item = dynamo_types.from_ddb_item(raw)
+        assert item is not None
+        values = tuple(item[name] for name in self._key_names)
+        yield values[0] if len(values) == 1 else values
 
-  def delete_object(self, *, Key, **_):
-    self.objects.pop(Key, None)
+  def __len__(self) -> int:
+    return sum(1 for _ in iter(self))
+
+  def _key(self, key) -> dict:
+    values = key if isinstance(key, tuple) else (key,)
+    return dict(zip(self._key_names, values, strict=True))
 
 
-class FakeDynamo:
-  class exceptions:
-    class ConditionalCheckFailedException(Exception):
-      pass
+class Tables:
+  """The stored items keyed the way the tests name them, plus the queries the store issued."""
 
-    class TransactionCanceledException(Exception):
-      pass
-
-  def __init__(self):
-    self.tables: dict[str, dict[Any, dict]] = {'headers': {}, 'steps': {}}
+  def __init__(self, dynamo):
+    self._dynamo = dynamo
     self.queries: list[dict] = []
-    self.query_threads: list[int] = []
-    self.scans: list[dict] = []
+    self.headers = _Items(dynamo, _TRAILS_TABLE, ('id',))
+    self.steps = _Items(dynamo, _STEPS_TABLE, ('trail_id', 'step_id'))
+    dynamo.meta.events.register(
+      'provide-client-params.dynamodb.Query',
+      lambda params, **_: self.queries.append(params),
+    )
 
-  @property
-  def headers(self) -> dict[str, dict]:
-    return self.tables['headers']
+  @contextmanager
+  def editing_header(self, trail_id: str) -> Iterator[dict]:
+    yield from self._editing(_TRAILS_TABLE, self.headers[trail_id])
 
-  @property
-  def steps(self) -> dict[tuple[str, int], dict]:
-    return self.tables['steps']
+  @contextmanager
+  def editing_step(self, trail_id: str, step_id: int) -> Iterator[dict]:
+    yield from self._editing(_STEPS_TABLE, self.steps[trail_id, step_id])
 
-  @staticmethod
-  def _key(table: str, item: dict) -> Any:
-    if table == 'headers':
-      return item['id']
-    return item['trail_id'], item['step_id']
+  def _editing(self, table: str, item: dict) -> Iterator[dict]:
+    yield item
+    self._dynamo.put_item(TableName=table, Item=dynamo_types.ddb_item(item))
 
-  def _read_key(self, table: str, key: dict) -> Any:
-    return self._key(table, _deserialize(key))
 
-  @staticmethod
-  def _names(operation: dict) -> dict[str, str]:
-    return operation.get('ExpressionAttributeNames') or {}
+class _Objects(Mapping[str, bytes]):
+  def __init__(self, s3):
+    self._s3 = s3
 
-  @staticmethod
-  def _values(operation: dict) -> dict[str, Any]:
-    return {
-      key: _deserializer.deserialize(value)
-      for key, value in (operation.get('ExpressionAttributeValues') or {}).items()
-    }
+  def __contains__(self, key: object) -> bool:
+    return key in self._keys()
 
-  def _field(self, token: str, operation: dict) -> str:
-    return self._names(operation).get(token, token)
+  def __iter__(self) -> Iterator[str]:
+    return iter(self._keys())
 
-  def _condition(self, item: Optional[dict], operation: dict) -> bool:
-    expression = operation.get('ConditionExpression')
-    if expression is None:
-      return True
-    values = self._values(operation)
-    if expression in {'attribute_not_exists(id)', 'attribute_not_exists(trail_id)'}:
-      return item is None
-    if expression == 'attribute_exists(id)':
-      return item is not None
-    if expression == 'attribute_not_exists(#forked_from)':
-      return item is not None and self._field('#forked_from', operation) not in item
-    if expression == 'attribute_type(#end, :null_type)':
-      return item is not None and item.get(self._field('#end', operation)) is None
-    if expression == '#extent = :extent':
-      return item is not None and item.get(self._field('#extent', operation)) == values[':extent']
-    if expression == '#extent = :expected_extent':
-      return (
-        item is not None
-        and item.get(self._field('#extent', operation)) == values[':expected_extent']
-      )
-    raise AssertionError(f'unsupported condition: {expression}')
+  def __len__(self) -> int:
+    return len(self._keys())
 
-  @staticmethod
-  def _split_assignments(expression: str) -> list[str]:
-    assignments: list[str] = []
-    depth = 0
-    start = 0
-    for index, character in enumerate(expression):
-      if character == '(':
-        depth += 1
-      elif character == ')':
-        depth -= 1
-      elif character == ',' and depth == 0:
-        assignments.append(expression[start:index].strip())
-        start = index + 1
-    assignments.append(expression[start:].strip())
-    return assignments
+  def __getitem__(self, key: str) -> bytes:
+    return self._s3.get_object(Bucket=_BUCKET, Key=key)['Body'].read()
 
-  def _apply_update(self, table: str, operation: dict) -> None:
-    key = self._read_key(table, operation['Key'])
-    item = self.tables[table].get(key)
-    if not self._condition(item, operation):
-      raise self.exceptions.ConditionalCheckFailedException()
-    assert item is not None
-    names = self._names(operation)
-    values = self._values(operation)
-    expression = operation['UpdateExpression'].removeprefix('SET ')
-    for assignment in self._split_assignments(expression):
-      target, source = (part.strip() for part in assignment.split('=', 1))
-      target_parts = [names.get(part, part) for part in target.split('.')]
-      field = target_parts[-1]
-      if source.startswith('if_not_exists('):
-        if field in item:
-          continue
-        value_name = source.removesuffix(')').split(',')[1].strip()
-      else:
-        value_name = source
-      value = values[value_name]
-      if len(target_parts) == 2 and target_parts[0] == 'native':
-        item['native'][field] = value
-      else:
-        item[field] = value
+  def _keys(self) -> list[str]:
+    pages = self._s3.get_paginator('list_objects_v2').paginate(Bucket=_BUCKET)
+    return [stored['Key'] for page in pages for stored in page.get('Contents', [])]
 
-  def put_item(self, *, TableName, Item, **operation):
-    item = _deserialize(Item)
-    key = self._key(TableName, item)
-    current = self.tables[TableName].get(key)
-    if not self._condition(current, operation):
-      raise self.exceptions.ConditionalCheckFailedException()
-    self.tables[TableName][key] = item
 
-  def delete_item(self, *, TableName, Key, **_):
-    self.tables[TableName].pop(self._read_key(TableName, Key), None)
+class Bucket:
+  """The stored objects, plus the keys the store wrote and the threads its reads ran on."""
 
-  def get_item(self, *, TableName, Key, **_):
-    item = self.tables[TableName].get(self._read_key(TableName, Key))
-    return {'Item': _serialize(item)} if item is not None else {}
-
-  def update_item(self, *, TableName, **operation):
-    self._apply_update(TableName, operation)
-    return {}
-
-  def batch_write_item(self, *, RequestItems):
-    for table, requests in RequestItems.items():
-      for request in requests:
-        operation = request['PutRequest']
-        self.put_item(TableName=table, Item=operation['Item'])
-    return {'UnprocessedItems': {}}
-
-  def transact_write_items(self, *, TransactItems):
-    snapshot = copy.deepcopy(self.tables)
-    codes: list[str] = []
-    failed = False
-    for transaction_item in TransactItems:
-      name, operation = next(iter(transaction_item.items()))
-      try:
-        if name == 'Put':
-          self.put_item(
-            TableName=operation['TableName'],
-            Item=operation['Item'],
-            ConditionExpression=operation.get('ConditionExpression'),
-            ExpressionAttributeNames=operation.get('ExpressionAttributeNames'),
-            ExpressionAttributeValues=operation.get('ExpressionAttributeValues'),
-          )
-        elif name == 'Update':
-          self._apply_update(operation['TableName'], operation)
-        else:
-          raise AssertionError(name)
-      except self.exceptions.ConditionalCheckFailedException:
-        codes.append('ConditionalCheckFailed')
-        failed = True
-      else:
-        codes.append('None')
-    if failed:
-      self.tables = snapshot
-      exception = self.exceptions.TransactionCanceledException('cancelled')
-      exception.response = {'CancellationReasons': [{'Code': code} for code in codes]}  # type: ignore[attr-defined]
-      raise exception
-
-  def query(self, **kwargs):
-    self.queries.append(kwargs)
-    self.query_threads.append(threading.get_ident())
-    table = kwargs['TableName']
-    values = self._values(kwargs)
-    if 'IndexName' in kwargs:
-      partition_name = {
-        'all-index': 'gsi_pk',
-        'bro-started_at-index': 'bro',
-        'harness-started_at-index': 'harness',
-        'forked-from-id-index': 'forked_from_id',
-        'segment-started_at-index': 'segment',
-        'uuid-index': 'uuid',
-      }[kwargs['IndexName']]
-      partition_value = values.get(':partition', values.get(f':{partition_name}'))
-      items = [
-        item for item in self.tables[table].values() if item.get(partition_name) == partition_value
-      ]
-      if ':since' in values:
-        items = [item for item in items if item['started_at'] >= values[':since']]
-      if ':until' in values:
-        items = [item for item in items if item['started_at'] <= values[':until']]
-      if kwargs['IndexName'] == 'uuid-index':
-        items.sort(key=lambda item: (item['trail_id'], item['step_id']))
-      else:
-        items.sort(key=lambda item: item['started_at'], reverse=True)
-    else:
-      trail_id = values[':trail_id']
-      items = [item for item in self.tables[table].values() if item['trail_id'] == trail_id]
-      if 'BETWEEN' in kwargs['KeyConditionExpression']:
-        items = [item for item in items if values[':start'] <= item['step_id'] <= values[':end']]
-      elif '<=' in kwargs['KeyConditionExpression']:
-        items = [item for item in items if item['step_id'] <= values[':through']]
-      items.sort(key=lambda item: item['step_id'])
-      start_key = kwargs.get('ExclusiveStartKey')
-      if start_key is not None:
-        after = _deserialize(start_key)['step_id']
-        items = [item for item in items if item['step_id'] > after]
-    limit = kwargs.get('Limit')
-    page = items if limit is None else items[:limit]
-    response: dict[str, Any] = {'Items': [_serialize(item) for item in page]}
-    if limit is not None and len(items) > limit:
-      last = page[-1]
-      if table == 'headers':
-        response['LastEvaluatedKey'] = _serialize({'id': last['id']})
-      else:
-        response['LastEvaluatedKey'] = _serialize(
-          {'trail_id': last['trail_id'], 'step_id': last['step_id']}
-        )
-    return response
-
-  def scan(self, *, TableName, **kwargs):
-    self.scans.append({'TableName': TableName, **kwargs})
-    items = list(self.tables[TableName].values())
-    if 'FilterExpression' in kwargs:
-      values = self._values(kwargs)
-      requested = set(values.values())
-      items = [item for item in items if item.get('uuid') in requested]
-    return {'Items': [_serialize(item) for item in items]}
+  def __init__(self, s3, reader):
+    # the view reads through its own client so that browsing objects leaves
+    # `get_threads` reporting only what the store itself fetched
+    self.objects = _Objects(reader)
+    self.put_counts: Counter[str] = Counter()
+    self.get_threads: list[int] = []
+    s3.meta.events.register(
+      'provide-client-params.s3.PutObject',
+      lambda params, **_: self.put_counts.update([params['Key']]),
+    )
+    s3.meta.events.register(
+      'provide-client-params.s3.GetObject',
+      lambda params, **_: self.get_threads.append(threading.get_ident()),
+    )
 
 
 @pytest.fixture
 def components():
-  dynamo_client = FakeDynamo()
-  s3 = FakeS3()
-  store = dynamo_store.DynamoStore(
-    dynamo=dynamo_client,
-    s3=s3,
-    trails_table='headers',
-    steps_table='steps',
-    bucket='bucket',
-    uuid_index='uuid-index',
-  )
-  with store:
-    yield store, dynamo_client, s3
+  with mock_aws():
+    session = boto3.Session(region_name=_REGION)
+    dynamo = session.client('dynamodb')
+    s3 = session.client('s3')
+    _create_tables(dynamo)
+    s3.create_bucket(Bucket=_BUCKET, CreateBucketConfiguration={'LocationConstraint': _REGION})
+    store = dynamo_store.DynamoStore(
+      dynamo=dynamo,
+      s3=s3,
+      trails_table=_TRAILS_TABLE,
+      steps_table=_STEPS_TABLE,
+      bucket=_BUCKET,
+      uuid_index=_UUID_INDEX,
+    )
+    with store:
+      yield store, Tables(dynamo), Bucket(s3, session.client('s3'))
 
 
 def _blaze_bro(store: dynamo_store.DynamoStore, **overrides) -> str:
@@ -346,7 +252,7 @@ def _blaze_claude(store: dynamo_store.DynamoStore, **overrides) -> str:
 
 
 def test_build_dynamo_store_uses_the_shared_credential_shape(monkeypatch):
-  clients = {'dynamodb': FakeDynamo(), 's3': FakeS3()}
+  clients = {'dynamodb': object(), 's3': object()}
   regions = []
 
   class FakeSession:
@@ -765,11 +671,13 @@ def test_check_detects_corruption_and_recompute_repairs_rows_and_header(componen
     offset=0,
     records=[_claude_assistant('message-1', 'first', uuid='uuid-1')],
   )
-  dynamo.headers[trail_id]['turn_count'] = 9
-  dynamo.headers[trail_id]['native']['usage'] = {}
-  dynamo.headers[trail_id]['native']['lineage_head']['tail'] = []
-  dynamo.steps[(trail_id, 0)]['uuid'] = 'wrong'
-  dynamo.steps[(trail_id, 0)].pop('usage')
+  with dynamo.editing_header(trail_id) as header:
+    header['turn_count'] = 9
+    header['native']['usage'] = {}
+    header['native']['lineage_head']['tail'] = []
+  with dynamo.editing_step(trail_id, 0) as step:
+    step['uuid'] = 'wrong'
+    step.pop('usage')
   checked = store.check(trail_id)
   assert checked['ok'] is False
   fields = {difference['field'] for difference in checked['trails'][0]['differences']}
@@ -913,7 +821,8 @@ def test_sweep_marks_stale_trails_as_inferred_unreported(components):
   store, dynamo, _ = components
   stale = _blaze_bro(store)
   live = _blaze_bro(store)
-  dynamo.headers[stale]['last_alive_at'] = '2020-01-01T00:00:00.000000Z'
+  with dynamo.editing_header(stale) as header:
+    header['last_alive_at'] = '2020-01-01T00:00:00.000000Z'
 
   assert store.sweep_unreported() == [stale]
   assert dynamo.headers[stale]['end'] == {

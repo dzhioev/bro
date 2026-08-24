@@ -49,6 +49,7 @@ dev = [
   "deptry==0.25.1",
   # starlette.testclient's preferred HTTP client (using httpx 0.x there is deprecated)
   "httpx2==2.10.0",
+  "moto==5.1.19",
   "pyright==1.1.411",
   "pytest==9.1.1",
   "pytest-aiohttp==1.1.1",
