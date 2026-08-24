@@ -306,9 +306,9 @@ class BroAgent(BaseInstalledAgent):
       # task images ship no CA store unless their own layers add one, and the
       # bundle carries certifi's
       'SSL_CERT_FILE': str(BUNDLE.ca_bundle),
-      # `bro run` takes no `--no-trails` flag; the env var is its recording
-      # opt-out
-      'TRAILS_DISABLED': '1',
+      # the run's trails root: it has to stay inside the directory harbor
+      # collects, and out of the filesystem the verifier grades
+      'XDG_DATA_HOME': str(AGENT_DIR),
     }
 
   @override
