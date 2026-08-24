@@ -16,6 +16,9 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+  # the session-side `benchmark-job` CLI and the host-side kind it drives, which
+  # `benchmark_job_e2e_test` runs the broker path through
+  "bro-local",
   "pyright==1.1.411",
   "pytest==9.1.1",
   "pytest-asyncio==1.4.0",
@@ -28,10 +31,12 @@ dev = [
 
 [tool.uv.sources]
 bro = { path = "..", editable = true }
+bro-local = { path = "../local", editable = true }
 bro-ride = { path = "../ride", editable = true }
 
 [tool.deptry.package_module_name_map]
 bro = ["bro", "bros"]
+bro-local = ["bro", "bros"]
 bro-ride = ["ride"]
 # the gate reads this project from the workspace venv, which has no harbor to
 # read the module name off
