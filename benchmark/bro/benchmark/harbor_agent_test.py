@@ -223,14 +223,14 @@ def test_the_kill_reaps_the_group_and_reports_success():
   assert command.endswith('exit 0')
 
 
-def test_the_run_environment_points_at_the_uploaded_store_and_bundle(tmp_path):
+def test_the_run_environment_points_at_the_store_bundle_and_record_root(tmp_path):
   environment = agent(tmp_path, bro='terminal').run_env()
 
   assert environment == {
     'BRO_CONFIGS_DIR': str(STORE_DIR),
     'BRO_USAGE_FILE': '/logs/agent/usage.json',
     'SSL_CERT_FILE': str(BUNDLE.ca_bundle),
-    'TRAILS_DISABLED': '1',
+    'XDG_DATA_HOME': '/logs/agent',
   }
 
 
