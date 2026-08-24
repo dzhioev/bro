@@ -9,7 +9,7 @@ from typing import Optional
 
 import bro.brog.model as brog_model
 import bro.brog.system as brog_system
-from bro.base import credentials, log
+from bro.base import log
 from bro.base.args import Parser
 from bro.workspace.git import fetch_ref
 from bro.workspace.paths import fresh_workspace_name, project_root
@@ -17,7 +17,7 @@ from bro.workspace.project import project_config
 from ride.cli import reports_runtime_errors
 from ride.flags import add_forwarded_flags, extract_forwarded_argv, pop_harness_options
 from ride.harness import get_harness
-from ride.scope import LaunchScopeError, launch_view_store, scoped_secrets
+from ride.scope import LaunchScopeError, launch_scope_errors, launch_view_store, scoped_secrets
 
 __cli_name__ = 'dive-in'
 
@@ -82,17 +82,26 @@ def _task_system(
 ) -> brog_system.System:
   """the brog backend for the task prefetch, reading `brog` through the launch's
   own credential binding (`launch_view_store`) — so `--grant`/`--revoke` select
-  the same brog config the session's store hydrates."""
+  the same brog config the session's store hydrates. every read carries the
+  launch's error surface (`launch_scope_errors`), the deferred ones included: the
+  backend re-reads the config per operation, past this call."""
   project = project_config(repo)
   bro_name = bro if bro is not None else project.default_bro
-  store = launch_view_store(
-    scoped_secrets(
-      bro_name, get_harness(harness).scope_recipe(harness_options), attachment=str(repo)
-    ),
-    grant=grant,
-    revoke=revoke,
-  )
-  return brog_system.build_system(lambda: store.get_json('brog'))
+
+  with launch_scope_errors():
+    store = launch_view_store(
+      scoped_secrets(
+        bro_name, get_harness(harness).scope_recipe(harness_options), attachment=str(repo)
+      ),
+      grant=grant,
+      revoke=revoke,
+    )
+
+    def brog_config() -> dict:
+      with launch_scope_errors():
+        return store.get_json('brog')
+
+    return brog_system.build_system(brog_config)
 
 
 def dive_in(
@@ -122,6 +131,7 @@ def dive_in(
     log.info('workspace: %s', name)
     prompt = '[[fix --new ""]]' if command is None else f'[[fix --new {command}]]'
   elif task is not None:
+    task_ref = task
     try:
       system = _task_system(
         repo,
@@ -131,11 +141,10 @@ def dive_in(
         harness,
         harness_options if harness_options is not None else {},
       )
-    except (LaunchScopeError, credentials.SecretNotFound, ValueError) as error:
+      brog_task, task_block = _prefetch_task(system, task_ref)
+    except LaunchScopeError as error:
       log.error('cannot open the task tracker for the prefetch: %s', error)
       return 1
-    task_ref = task
-    brog_task, task_block = _prefetch_task(system, task_ref)
     log.info('task: %s', brog_task.name)
     # the ref exactly as given — the prefetch block carries the canonical form
     prompt = f'[[fix {task_ref}]]\n\n{task_block}'

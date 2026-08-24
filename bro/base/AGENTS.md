@@ -50,6 +50,7 @@ run those with `--help` for flags.
   so the session re-expands and re-mints per read);
   `scoped_view_store` is its lazy sibling
   — a kinds-only read-through `Store` over the same selection rules (shared `_scoped_selection`), each read resolving on demand through the selected entry's own sources,
+  its `$cred` nodes expanding against the whole registry the way hydration's do,
   for host-side code that reads a credential under a scope's binding without hydrating a store.
   `apply_grant_revoke` layers strict per-session grant/revoke overrides onto a computed name set (scoped credential sets, summon allow-lists),
   and `install_hooks` applies a registry's wiring for secrets a tool reads from outside the resolver (git, the `gh` and aws CLIs)

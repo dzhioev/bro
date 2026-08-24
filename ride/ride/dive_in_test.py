@@ -269,18 +269,7 @@ class TestTaskMode:
     assert args['grant'] == ['brog+github']
     assert args['revoke'] is None
 
-  def test_scope_without_brog_fails_before_any_launch(self, fake_proj, monkeypatch, capsys):
-    from bro.base import credentials
-
-    def no_brog(repo, grant, revoke, bro, harness, harness_options):
-      raise credentials.SecretNotFound('brog')
-
-    monkeypatch.setattr(dive_in, '_task_system', no_brog)
-    rc = dive_in.dive_in(forwarded=[], dry_run=True, task=UUID, revoke=['brog'])
-    assert rc == 1
-    assert capsys.readouterr().out == ''
-
-  def test_bad_scope_override_fails_before_any_launch(self, fake_proj, monkeypatch):
+  def test_a_scope_failure_fails_before_any_launch(self, fake_proj, monkeypatch, capsys):
     from ride.scope import LaunchScopeError
 
     def bad_override(repo, grant, revoke, bro, harness, harness_options):
@@ -289,6 +278,22 @@ class TestTaskMode:
     monkeypatch.setattr(dive_in, '_task_system', bad_override)
     rc = dive_in.dive_in(forwarded=[], dry_run=True, task=UUID, grant=['brog'])
     assert rc == 1
+    assert capsys.readouterr().out == ''
+
+  def test_a_scope_failure_inside_the_prefetch_fails_before_any_launch(
+    self, fake_proj, monkeypatch, capsys
+  ):
+    # the backend re-reads its config per operation, so the read can fail inside
+    # the prefetch itself
+    from ride.scope import LaunchScopeError
+
+    def unreadable(system, ref):
+      raise LaunchScopeError("secret 'brog' is not valid json")
+
+    monkeypatch.setattr(dive_in, '_prefetch_task', unreadable)
+    rc = dive_in.dive_in(forwarded=[], dry_run=True, task=UUID)
+    assert rc == 1
+    assert capsys.readouterr().out == ''
 
   def test_focus_flag_is_rejected(self):
     with pytest.raises(SystemExit):
@@ -302,12 +307,14 @@ class TestTaskMode:
 class TestTaskSystem:
   """the prefetch backend reads `brog` through the launch's own scope binding."""
 
-  def _fake_wiring(self, monkeypatch, calls: dict):
+  def _fake_wiring(self, monkeypatch, calls: dict, read=None):
     from types import SimpleNamespace
 
     class FakeStore:
       def get_json(self, name):
         calls['read'] = name
+        if read is not None:
+          return read()
         return {'backend': 'github', 'token': 't', 'repo': 'owner/repo'}
 
     monkeypatch.setattr(
@@ -355,6 +362,49 @@ class TestTaskSystem:
     self._fake_wiring(monkeypatch, calls)
     dive_in._task_system(Path('/repo'), [], [], None, 'bro', {})
     assert calls['scoped'] == ('bro-dev', BRO_RUN_RECIPE)
+
+  def test_a_malformed_config_names_the_launch(self, monkeypatch):
+    from ride.scope import LaunchScopeError
+
+    def malformed():
+      raise ValueError("secret 'brog' is not valid json")
+
+    self._fake_wiring(monkeypatch, {}, read=malformed)
+    with pytest.raises(LaunchScopeError, match='not valid json'):
+      dive_in._task_system(Path('/repo'), [], [], None, 'claude', {'raw': False})
+
+  def test_an_unresolvable_brog_names_the_launch(self, monkeypatch):
+    from bro.base import credentials
+    from ride.scope import LaunchScopeError
+
+    def unresolvable():
+      raise credentials.SecretNotFound('brog')
+
+    self._fake_wiring(monkeypatch, {}, read=unresolvable)
+    with pytest.raises(LaunchScopeError, match="secret 'brog' not found"):
+      dive_in._task_system(Path('/repo'), [], [], None, 'claude', {'raw': False})
+
+  def test_the_backends_own_re_read_names_the_launch(self, monkeypatch):
+    from ride.scope import LaunchScopeError
+
+    broken: list[bool] = []
+
+    def read():
+      if len(broken) > 0:
+        raise ValueError("secret 'brog' is not valid json")
+      return {'backend': 'github', 'token': 't', 'repo': 'owner/repo'}
+
+    providers: list = []
+
+    def capture(provider, **_):
+      providers.append(provider)
+
+    self._fake_wiring(monkeypatch, {}, read=read)
+    monkeypatch.setattr(brog_system, 'build_system', capture)
+    dive_in._task_system(Path('/repo'), [], [], None, 'claude', {'raw': False})
+    broken.append(True)
+    with pytest.raises(LaunchScopeError, match='not valid json'):
+      providers[0]()
 
 
 class TestPrefetchTask:

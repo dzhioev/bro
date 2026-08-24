@@ -485,6 +485,19 @@ class TestStore:
     assert results == ['v'] * 8
     assert len(calls) == 1
 
+  def test_reads_outside_the_readable_bound_find_nothing(self, configs_dir: Path):
+    _write(configs_dir, 'test_secret.json', {'token': 't'})
+    _write(configs_dir, 'openai.json', {'api_key': 'k'})
+    store = credentials.Store(credentials.host_registry(), readable=[TEST_SECRET])
+    assert store.get_json(TEST_SECRET) == {'token': 't'}
+    assert store.known_names() == frozenset({TEST_SECRET})
+    assert store.sources('openai') == ()
+    assert not store.available('openai')
+
+  def test_a_readable_name_the_registry_lacks_raises(self):
+    with pytest.raises(ValueError, match='readable names outside the registry'):
+      credentials.Store({}, readable=['nonsense'])
+
 
 class TestGetInstance:
   def _store(self, *secrets: credentials.Secret) -> credentials.Store:
@@ -1774,6 +1787,22 @@ class TestScopedViewStore:
     monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
     store = credentials.scoped_view_store(['brog', 'github+bot'])
     assert store.get_json('brog') == {'backend': 'github', 'token': 'ticket_1'}
+
+  def test_reference_outside_the_scope_expands(self, configs_dir: Path, bro_dir: Path):
+    # hydration resolves references against the whole registry, so the view has to as well
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'notion': {'sources': [{'file': 'notion.json'}]}},
+    )
+    _write(bro_dir, 'notion.json', {'token': 'secret-token'})
+    _write(
+      bro_dir, 'brog.json', {'backend': 'notion', 'token': {'$cred': 'notion', 'field': 'token'}}
+    )
+    store = credentials.scoped_view_store(['brog'])
+    assert store.get_json('brog') == {'backend': 'notion', 'token': 'secret-token'}
+    assert store.known_names() == frozenset({'brog'})
+    assert store.try_get('notion') is None
 
 
 class TestApplyGrantRevoke:
