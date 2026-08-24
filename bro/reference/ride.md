@@ -934,7 +934,7 @@ both expose only pinned session shims plus system paths.
 `--in-place` is help-suppressed — an internal seam, not a user surface
 — and skips the outer-only policy gates (see "The outer layer").
 
-The neutral layer exports the bro git identity (every ride-launched session commits as its bro — see `ride/ride/identity.py`) and `RIDE_BRO`,
+The neutral layer exports the bro git identity (every ride-launched session commits as its bro — see `ride/ride/identity.py`), `RIDE_BRO`, and the `BRO_HOLD` / `RIDE_RUNNER_PID` pair (see "Forwarded env vars"),
 applies the persona's declared workspace provisioning when attached (`BaseBro.provision_workspace` — the dev family's footer hooks ride it; see the framework's "Adding a Bro"), and wraps the harness's own runner in the session broxy.
 A harness supplies only `run_in_place`, so nothing a session needs regardless of its agent loop is written twice;
 the same module builds the inner argv the outer spawns, which is why both harnesses re-enter through one contract.
@@ -943,7 +943,6 @@ The claude harness's runner (`ride/ride/claude/runner.py`) then, in order:
 on host, provisions the session's private claude state dir and exports `CLAUDE_CONFIG_DIR` and `RIDE_SESSION_DIR` (see "Host claude-state isolation"; in a container the mounts already provide the private `~/.claude` and session state dir);
 resolves a resume's claude session id from its cwd's projects dir
 — claude's own path encoding maps the workspace path to `<config root>/projects/<encoded>` (host `<encoded-worktree-path>` under the session dir, container `-workspace` under `~/.claude`), one derivation for both modes;
-exports `RIDE_RUNNER_PID` (its own pid, the `raise` tool's kill target) and `BRO_HOLD` from the session's `--hold` level (see the shared launch flags under "Commands");
 starts the session-local MCP server and surfaces bro spells (both below);
 builds the claude argv (below) and captures `RIDE_SESSION_CONTEXT` (see "Forwarded env vars");
 starts the session recorder daemon (see "Session recording");
@@ -1088,11 +1087,11 @@ Wrappers and session daemons rely on a small set of env vars:
   The names are owned by `bro.workspace.human`, whose `session_human()` reads them back:
   a session commits as its bro, so the human it credits reaches its commits only through what the launch carried (`bro.workflow.co_author`).
 - `BRO_HOLD` — the session's user-involvement level (`unattended | detached | attended | guided`);
-  the in-place runner exports it from `--hold`, overwriting any ambient value (a session launched from inside another must not inherit its hold), before the session-local MCP server and claude inherit the environment.
+  the neutral in-place layer exports it from `--hold` for every harness, overwriting any ambient value (a session launched from inside another must not inherit its hold), before anything the session spawns inherits the environment.
   Read by the claude service-server assemblies in `bro/bro.py` to gate the `raise` service tool's mount on the unattended level.
 - `RIDE_RUNNER_PID` — the in-place runner's own pid, always (re-)exported next to `BRO_HOLD`.
   The `raise` service tool's kill target:
-  SIGTERM to the runner ends claude while the runner survives for its teardown, which is how an unattended session's raise terminates the run
+  SIGTERM to the runner ends the harness process while the runner survives for its teardown, which is how an unattended session's raise terminates the run
   — reporting the status the tool left in the session state dir rather than whatever the harness process exited with.
   Its presence co-gates the tool's mount
   — without a runner to signal there is nothing to terminate.

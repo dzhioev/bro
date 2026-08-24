@@ -171,29 +171,6 @@ class TestRunInPlace:
       assert h.run_claude.call_count == 0
       assert h.server.stop.call_count == 1
 
-  def test_exports_the_session_hold(self, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      assert ride_runner.run_in_place(_spec(hold='unattended')) == 0
-      assert h.env['BRO_HOLD'] == 'unattended'
-
-  def test_overwrites_the_ambient_hold(self, monkeypatch, tmp_path):
-    # a session launched from inside an unattended one must not inherit the
-    # hold (the MCP server would otherwise mount `raise` for an attended session)
-    monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      h.env['BRO_HOLD'] = 'unattended'
-      assert ride_runner.run_in_place(_spec(hold='attended')) == 0
-      assert h.env['BRO_HOLD'] == 'attended'
-
-  def test_exports_its_own_pid_as_the_raise_kill_target(self, monkeypatch, tmp_path):
-    # overwriting the ambient value: an inherited pid would name a foreign runner
-    monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      h.env['RIDE_RUNNER_PID'] = '1'
-      assert ride_runner.run_in_place(_spec()) == 0
-      assert h.env['RIDE_RUNNER_PID'] == str(os.getpid())
-
   def test_session_context_set_next_to_claude(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
