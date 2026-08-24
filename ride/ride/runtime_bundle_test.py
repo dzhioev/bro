@@ -617,6 +617,7 @@ def test_installed_distributions_publish_the_session_command_roster():
   assert commands == [
     'artifact',
     'benchmark-job',
+    'benchmark-run',
     'bro',
     'bro.dev.git-golc',
     'broker',
