@@ -1,29 +1,18 @@
 #!/usr/bin/env python
-import subprocess
-
 import pytest
 
 import bro.llm.usage as usage
 from bro.launch.hold import HOLD_VARIABLE
 from bro.workflow.co_author import append_trailer, strip_trailer, trailer
+from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 
 FOOTER = '> created with Claude Code 2.1 | Opus 4.8: ↑(1 0 0) ↓2'
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
-  """a checkout declaring no identity of its own, with the host's config out of
-  reach so what the tests set is all git can see."""
-  subprocess.run(['git', 'init', '-q', '-b', 'master', str(tmp_path)], check=True)
-  monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(tmp_path / 'absent-global'))
-  monkeypatch.setenv('GIT_CONFIG_SYSTEM', str(tmp_path / 'absent-system'))
-  monkeypatch.chdir(tmp_path)
-  return tmp_path
-
-
-def _identity(repo, name: str, email: str) -> None:
-  subprocess.run(['git', 'config', 'user.name', name], cwd=repo, check=True)
-  subprocess.run(['git', 'config', 'user.email', email], cwd=repo, check=True)
+def human(monkeypatch):
+  monkeypatch.setenv(HUMAN_NAME_ENV, 'Ada Lovelace')
+  monkeypatch.setenv(HUMAN_EMAIL_ENV, 'ada@example.com')
 
 
 def _session(monkeypatch, hold: str) -> None:
@@ -33,40 +22,23 @@ def _session(monkeypatch, hold: str) -> None:
 
 class TestTrailer:
   @pytest.mark.parametrize('hold', ['detached', 'attended', 'guided'])
-  def test_an_interactive_session_credits_the_human(self, hold, repo, monkeypatch):
-    _identity(repo, 'Ada Lovelace', 'ada@example.com')
+  def test_an_interactive_session_credits_the_human(self, hold, human, monkeypatch):
     _session(monkeypatch, hold)
     assert trailer() == 'Co-Authored-By: Ada Lovelace <ada@example.com>'
 
-  def test_an_unattended_session_credits_nobody(self, repo, monkeypatch):
-    _identity(repo, 'Ada Lovelace', 'ada@example.com')
+  def test_an_unattended_session_credits_nobody(self, human, monkeypatch):
     _session(monkeypatch, 'unattended')
     assert trailer() is None
 
-  def test_a_human_shell_credits_nobody(self, repo, monkeypatch):
-    _identity(repo, 'Ada Lovelace', 'ada@example.com')
+  def test_a_human_shell_credits_nobody(self, human, monkeypatch):
     monkeypatch.delenv(usage.SESSION_ID_VARIABLE, raising=False)
     monkeypatch.delenv(usage.USAGE_FILE_VARIABLE, raising=False)
     monkeypatch.setenv(HOLD_VARIABLE, 'attended')
     assert trailer() is None
 
-  def test_a_host_declaring_no_identity_credits_nobody(self, repo, monkeypatch):
+  def test_a_launch_naming_no_human_credits_nobody(self, monkeypatch):
     _session(monkeypatch, 'attended')
     assert trailer() is None
-
-  def test_a_half_declared_identity_credits_nobody(self, repo, monkeypatch):
-    subprocess.run(['git', 'config', 'user.name', 'Ada Lovelace'], cwd=repo, check=True)
-    _session(monkeypatch, 'attended')
-    assert trailer() is None
-
-  def test_a_failing_git_stops_the_commit(self, tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(tmp_path / 'absent-global'))
-    monkeypatch.setenv('GIT_CONFIG_SYSTEM', str(tmp_path / 'absent-system'))
-    (tmp_path / '.git').write_text('gitdir: nowhere\n')
-    _session(monkeypatch, 'attended')
-    with pytest.raises(RuntimeError, match='git config --get user.name failed'):
-      trailer()
 
 
 class TestMessageEditing:

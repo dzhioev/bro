@@ -9,6 +9,7 @@ import pytest
 import bro.llm.usage as usage
 import bro.workflow.fold_branch as fold_branch
 from bro.launch.hold import HOLD_VARIABLE
+from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 
 
 def _sh(repo, *args: str) -> str:
@@ -59,6 +60,8 @@ TRAILER = 'Co-Authored-By: test <test@example.com>'
 def _interactive_session(monkeypatch) -> None:
   monkeypatch.setenv(usage.SESSION_ID_VARIABLE, 'fold-test-session')
   monkeypatch.setenv(HOLD_VARIABLE, 'attended')
+  monkeypatch.setenv(HUMAN_NAME_ENV, 'test')
+  monkeypatch.setenv(HUMAN_EMAIL_ENV, 'test@example.com')
 
 
 def _plan_file(tmp_path, *blocks: str) -> str:

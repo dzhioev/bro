@@ -1,4 +1,5 @@
 import json
+import subprocess
 from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 from typing import cast
@@ -19,15 +20,17 @@ import ride.workspace.store as workspace_store
 from bro.broker.dispatcher import Dispatcher
 from bro.broker.transports.tcp import LOCAL_HOST, Endpoint
 from bro.monitor import trail_pointer
+from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 from bro.workspace.paths import summon_dir, workspace_dir, workspace_tree
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 
 PARENT = 'parent'
 SUMMONER = {'session': 'ws'}
-# the lowering harness stubs the scope computation; the tests that assert on the
-# real one restore this
+# the lowering harness stubs the scope computation and the human-identity read;
+# the tests that assert on the real ones restore these
 _REAL_SCOPED_SECRETS = ride.scope.scoped_secrets
+_REAL_HUMAN_IDENTITY = ride.identity.human_git_identity_env
 
 
 def _container_runtime() -> workspace_docker.ContainerRuntimeResolver:
@@ -69,6 +72,7 @@ def lowering_harness(monkeypatch, tmp_path):
     ),
   )
   monkeypatch.setattr(ride.spawn, 'local_trails_mounts', lambda scoped: ())
+  monkeypatch.setattr(ride.spawn, 'human_git_identity_env', lambda repository: {})
   monkeypatch.setattr(
     ride.spawn,
     'resolve_head',
@@ -324,6 +328,28 @@ class TestSummonLowering:
     )
     lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert lowered.launch.env['RIDE_MAY_SUMMON'] == 'bro,reviewer'
+
+  def test_the_child_credits_the_human_of_the_repository_it_shares(
+    self, lowering_harness, monkeypatch, tmp_path
+  ):
+    monkeypatch.setattr(ride.spawn, 'human_git_identity_env', _REAL_HUMAN_IDENTITY)
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(tmp_path / 'absent-global'))
+    monkeypatch.setenv('GIT_CONFIG_SYSTEM', str(tmp_path / 'absent-system'))
+    repository = tmp_path / 'repo'
+    subprocess.run(['git', 'init', '-q', '-b', 'master', str(repository)], check=True)
+    for key, value in (('user.name', 'Ada Lovelace'), ('user.email', 'ada@example.com')):
+      subprocess.run(['git', 'config', key, value], cwd=repository, check=True)
+    launch = ride.spawn.SummonLaunchSpec(
+      target='dev',
+      prompt='p',
+      parent=PARENT,
+      repo=repository,
+      summoner=SUMMONER,
+      may_summon=(),
+    )
+    lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
+    assert lowered.launch.env[HUMAN_NAME_ENV] == 'Ada Lovelace'
+    assert lowered.launch.env[HUMAN_EMAIL_ENV] == 'ada@example.com'
 
   def test_into_overrides_the_inherited_base_ref(self, lowering_harness):
     launch = ride.spawn.SummonLaunchSpec(

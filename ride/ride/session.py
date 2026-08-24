@@ -22,6 +22,7 @@ from bro.workspace.paths import (
 from ride import pending_summon
 from ride.flags import default_hold
 from ride.harness import Harness, get_harness
+from ride.identity import human_git_identity_env
 from ride.inner import inner_command
 from ride.repository import Repository, hold_repository, is_git_url, open_repository
 from ride.root import run_host_process_via_broker, run_in_container, run_summoned_in_container
@@ -203,6 +204,7 @@ def _launch_session(
   base_ref: Optional[str],
   launch_scope: ScopedLaunch,
   *,
+  human_env: dict[str, str],
   container: bool,
   runtime_bundle: RuntimeBundle,
   container_runtime: ContainerRuntimeResolver,
@@ -225,7 +227,7 @@ def _launch_session(
     return 1
   if container:
     return _container_session(
-      harness, spec, workspace, base_ref, launch_scope, container_runtime, summoned
+      harness, spec, workspace, base_ref, launch_scope, human_env, container_runtime, summoned
     )
   return _host_session(
     harness,
@@ -233,6 +235,7 @@ def _launch_session(
     workspace,
     base_ref,
     launch_scope,
+    human_env,
     runtime_bundle,
     container_runtime,
     summoned,
@@ -245,6 +248,7 @@ def _container_session(
   workspace: Workspace,
   base_ref: Optional[str],
   launch_scope: ScopedLaunch,
+  human_env: dict[str, str],
   container_runtime: ContainerRuntimeResolver,
   summoned: Optional[pending_summon.PendingSummon],
 ) -> int:
@@ -253,6 +257,7 @@ def _container_session(
   env: dict[str, str] = {
     'RIDE_BRO': spec.bro,
     SESSION_DIR_ENV: str(CONTAINER_SESSION_DIR),
+    **human_env,
   }
   if base_ref is not None:
     env['RIDE_BASE_REF'] = base_ref
@@ -299,6 +304,7 @@ def _host_session(
   workspace: Workspace,
   base_ref: Optional[str],
   launch_scope: ScopedLaunch,
+  human_env: dict[str, str],
   runtime_bundle: RuntimeBundle,
   container_runtime: ContainerRuntimeResolver,
   summoned: Optional[pending_summon.PendingSummon] = None,
@@ -322,6 +328,7 @@ def _host_session(
   command = [str(runtime_bundle.host_venv / 'bin' / inner[0]), *inner[1:]]
   runner_env = runtime_bundle.host_session_env()
   runner_env['RIDE_HOST_WORKSPACE'] = str(worktree)
+  runner_env.update(human_env)
   if workspace.repo is not None:
     runner_env['RIDE_REPO'] = str(workspace.repo)
   else:
@@ -484,6 +491,7 @@ def _start_session(
             log.error("cannot read the summoner's HEAD at %s", summoned.parent_workspace)
             return 1
       container_runtime = ContainerRuntimeResolver(runtime_bundle, repository)
+      human_env = human_git_identity_env(repository)
       workspace = Workspace.ensure(spec.name, repository, spec.kind)
   except (AttachmentMismatch, KindMismatch, RuntimeError, ValueError) as error:
     log.error('%s', error)
@@ -497,6 +505,7 @@ def _start_session(
         workspace,
         base_ref,
         launch,
+        human_env=human_env,
         container=container,
         runtime_bundle=runtime_bundle,
         container_runtime=container_runtime,

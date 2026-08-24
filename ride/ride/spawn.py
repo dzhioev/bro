@@ -42,6 +42,7 @@ from bro.workspace.paths import summon_dir, workspace_dir, workspace_tree
 from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts, view_mount
 from ride.flags import default_hold
 from ride.harness import ContainerExtras, get_harness
+from ride.identity import human_git_identity_env
 from ride.inner import inner_command
 from ride.kinds import extension_kinds
 from ride.peers import Peers
@@ -141,6 +142,7 @@ def _child_launch(
   *,
   scoped: ScopedSecrets,
   repository: Optional[Repository | Path],
+  human_env: dict[str, str],
   base_ref: Optional[str],
   summoner: Optional[dict[str, Any]],
   may_summon: tuple[str, ...],
@@ -149,9 +151,10 @@ def _child_launch(
 ) -> Launch:
   """a summoned child's container launch around its harness-composed inner
   command and extras: the child facts (`RIDE_SUMMONED`, its own reconstructed
-  `RIDE_COMMAND`, base ref, provenance, allow-list) over an explicit env —
-  nothing forwarded from the spawning process — with no TTY."""
+  `RIDE_COMMAND`, base ref, provenance, allow-list, the human it works for) over
+  an explicit env — nothing forwarded from the spawning process — with no TTY."""
   env = dict(extras.env)
+  env.update(human_env)
   env['RIDE_BRO'] = spec.bro
   env['RIDE_COMMAND'] = ' '.join(spec.to_command_argv())
   env[SUMMONED_ENV] = '1'
@@ -236,6 +239,7 @@ def _lower_summon(
     harness.container_extras(spec, workspace, scoped),
     scoped=scoped,
     repository=launch.repo,
+    human_env=human_git_identity_env(repo),
     base_ref=base_ref,
     summoner=launch.summoner,
     may_summon=launch.may_summon,

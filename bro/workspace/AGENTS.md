@@ -11,6 +11,7 @@ Workspace creation, provisioning, containers, credential hydration, and teardown
 - `project.py` — validated `[tool.bro]` project configuration and per-bro project sections
 - `banner.py` — typed session facts plus visual and LLM renderings, consumed by launch surfaces and the `bro::banner` service tool
 - `session.py` — in-session termination through `RIDE_RUNNER_PID`, carrying the status the session is to report
+- `human.py` — the human a session works for: the environment carrying their git identity, the checkout read that resolves it, and the session read back
 
 Consumers import submodules directly;
 this package is not a re-export hub.

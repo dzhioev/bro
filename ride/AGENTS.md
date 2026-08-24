@@ -48,7 +48,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/pending_summon.py` — pending manual summons:
   the record a launch token resolves to, written by the control and one-shot-claimed by the `--summoned` launch, whose claim records the child's workspace name — the attribution source for the manual peer.
 - `ride/trails.py` — local-trails mounts for launch descriptions whose computed scope records locally.
-- `ride/identity.py` — managed-session git identity.
+- `ride/identity.py` — managed-session git identities:
+  the bro a session commits as, and the launching human it credits, read from the attachment's own git configuration.
 - `ride/harness.py`
   — the `Harness` protocol (flag registration and option packing, scope, auth, session reads, and the launch hooks: inner argv flags, the in-place run, container extras, host runner env), the harness roster, and the lazy harness resolver.
 - `ride/bro.py` — native harness implementation:

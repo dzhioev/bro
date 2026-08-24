@@ -1080,6 +1080,13 @@ Wrappers and session daemons rely on a small set of env vars:
   — the banner's ASCII Bro logo + bro-name header, the statusLine
   — never an input:
   the session's bro identity travels in the spec's own flags.
+- `BRO_HUMAN_NAME` / `BRO_HUMAN_EMAIL` — the human the session works for, as the attached repository's `user.name` / `user.email` name them on the host (`ride/ride/identity.py`).
+  Resolved once per launch, set in both modes, and set by the summon lowering for a child
+  — whose repository is its summoner's, so the two credit the same human.
+  Absent for a detached launch, which has no commits to credit, and for an attachment declaring no identity
+  — which the launch warns about.
+  The names are owned by `bro.workspace.human`, whose `session_human()` reads them back:
+  a session commits as its bro, so the human it credits reaches its commits only through what the launch carried (`bro.workflow.co_author`).
 - `BRO_HOLD` — the session's user-involvement level (`unattended | detached | attended | guided`);
   the in-place runner exports it from `--hold`, overwriting any ambient value (a session launched from inside another must not inherit its hold), before the session-local MCP server and claude inherit the environment.
   Read by the claude service-server assemblies in `bro/bro.py` to gate the `raise` service tool's mount on the unattended level.
