@@ -313,13 +313,16 @@ def test_a_real_installer_matrix_classifies_by_provenance(monkeypatch, probe):
   )
 
 
-def test_a_git_installation_materializes_from_its_pin(monkeypatch, probe, tmp_path):
+def test_a_git_installation_materializes_from_its_pin(monkeypatch, probe, tmp_path, caplog):
   monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
   _read_installation(monkeypatch, probe.site_packages['git'])
 
   with runtime_bundle.resolve_runtime_bundle() as bundle:
-    bundle.materialize_host()
+    with caplog.at_level('INFO'):
+      bundle.materialize_host()
+      bundle.materialize_host()
 
+    assert caplog.text.count(f'materializing runtime bundle {bundle.hash[:12]}') == 1
     assert (bundle.root / 'pins.txt').read_text() == (
       f'demo @ git+{probe.source.as_uri()}@{probe.commit}\n'
     )
@@ -472,7 +475,7 @@ def test_materializer_installs_exact_snapshot_checks_closure_and_builds_shims(
   assert (host / 'bin' / 'summon').resolve() == host / 'venv' / 'bin' / 'summon'
 
 
-def test_container_materialization_populates_a_named_volume_once(monkeypatch, tmp_path):
+def test_container_materialization_populates_a_named_volume_once(monkeypatch, tmp_path, caplog):
   root = tmp_path / ('a' * 64)
   (root / 'wheels').mkdir(parents=True)
   bundle = runtime_bundle.RuntimeBundle(root, '3.12')
@@ -485,7 +488,7 @@ def test_container_materialization_populates_a_named_volume_once(monkeypatch, tm
     if command[:2] == ['docker', 'create']:
       return subprocess.CompletedProcess(command, 0, 'container-id\n', '')
     if command[:5] == ['docker', 'exec', 'container-id', 'test', '-f']:
-      return subprocess.CompletedProcess(command, 1, '', '')
+      return subprocess.CompletedProcess(command, 0 if len(materialized) > 0 else 1, '', '')
     return subprocess.CompletedProcess(command, 0, '', '')
 
   monkeypatch.setattr(runtime_bundle.subprocess, 'run', run)
@@ -495,8 +498,12 @@ def test_container_materialization_populates_a_named_volume_once(monkeypatch, tm
     lambda *args, **kwargs: materialized.append((args, kwargs)),
   )
 
-  bundle.materialize_container('runtime-image')
+  with caplog.at_level('INFO'):
+    bundle.materialize_container('runtime-image')
+    bundle.materialize_container('runtime-image')
 
+  assert len(materialized) == 1
+  assert caplog.text.count(f'materializing runtime bundle {bundle.hash[:12]}') == 1
   assert calls[0][:3] == ['docker', 'volume', 'create']
   create = next(command for command in calls if command[:2] == ['docker', 'create'])
   assert f'{bundle.container_volume}:/var/ride/runtime' in create
