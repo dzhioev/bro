@@ -19,6 +19,7 @@ from email.message import Message
 from email.parser import Parser
 from pathlib import Path
 
+from bro.base import log
 from bro.workspace.paths import runtime_base
 
 _SESSION_COMMAND_GROUP = 'bro.session_commands'
@@ -65,6 +66,7 @@ class RuntimeBundle:
       complete = host / '.complete'
       if complete.is_file():
         return
+      log.info('materializing runtime bundle %s for the host', self.hash[:12])
       shutil.rmtree(host, ignore_errors=True)
       host.mkdir()
       _materialize(self.root, host, sys.executable)
@@ -83,6 +85,7 @@ class RuntimeBundle:
         )
         if complete.returncode == 0:
           return
+        log.info('materializing runtime bundle %s for the container', self.hash[:12])
         _container_run(
           container_id,
           ['find', '/var/ride/runtime', '-mindepth', '1', '-delete'],
