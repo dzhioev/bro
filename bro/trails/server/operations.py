@@ -26,6 +26,13 @@ _ddb_item = dynamo_types.ddb_item
 _from_ddb_item = dynamo_types.from_ddb_item
 
 
+def _row_digest(row: dict) -> str:
+  digest = row.get('payload_sha256')
+  if not isinstance(digest, str):
+    raise ValueError(f'step {row.get("trail_id")}/{row.get("step_id")} carries no payload digest')
+  return digest
+
+
 class Operations:
   def __init__(
     self,
@@ -112,13 +119,8 @@ class Operations:
     return {'trail_id': trail_id, 'ok': len(differences) == 0, 'differences': differences}
 
   def _compute(self, header: dict, rows: list[dict]) -> dict:
-    native = {
-      key: value
-      for key, value in header.get('native', {}).items()
-      if key not in {'usage', 'step_counts_by_kind'}
-    }
-    state = AggregateState({'native': native, 'turn_count': 0})
     adapter = self._backend(header['harness'])
+    state = AggregateState.replaying(header, adapter)
     seen_billing_keys: set[str] = set()
     expected_rows: list[dict] = []
     row_differences: list[dict] = []
@@ -135,7 +137,13 @@ class Operations:
       resolved = self._resolve_row_body(header['harness'], row)
       parsed = adapter.parse(resolved)
       classification = adapter.classify(parsed)
-      contribution = state.apply(parsed, classification, seen_billing_keys)
+      contribution = state.apply(
+        parsed,
+        classification,
+        seen_billing_keys,
+        step_id=expected_step_id,
+        digest=_row_digest(row),
+      )
       expected_rows.append(
         {'kind': parsed.kind, 'attributes': parsed.attributes, 'usage': contribution}
       )

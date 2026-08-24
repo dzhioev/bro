@@ -13,54 +13,43 @@ payload_sha256]` pair per transcript line, and the names of sibling segment
 files sharing its records. A history copy rewrites `sessionId`, so a record uuid
 is the only link from a line back to the row that already holds it.
 
-Two continuations are verifiable:
+Resolution reads headers only: a candidate is any trail recording the adopted
+segment or a sibling, and what it is verified against is the `lineage_head` its
+own rows folded (`lineage.py`). Two continuations are verifiable:
 
 - a same-segment resume starts after the recorded extent and forks from the
-  prior trail's final row, verified by digest — every row the uuids matched,
-  and the trail's final row at the line those matches place it, must hash to
-  the file's line there;
-- a new-segment resume forks from the matching uuid line in the parent and
-  keeps only the new segment's own contribution (pre-copy ephemera plus the
-  post-copy tail): the parent's first record uuid and one of its recent record
-  uuids must both appear in the copy. Recent-tail rather than full-prefix
-  equality, because the copy drops ephemeral records; hashes cannot serve here
-  at all, since the rewritten `sessionId` changes every copied line's digest.
+  prior trail's final row — every remembered uuid must be present in the file and
+  hash to the line it is found on, and the final row, placed from the newest of
+  them, must hash to `last_row_digest`;
+- a new-segment resume forks at the newest remembered uuid the copy still holds
+  and keeps only the new segment's own contribution (pre-copy ephemera plus the
+  post-copy tail). The copy is located by the conversation's first record, which
+  every copy in the chain re-serializes; digests take no part here at all, since
+  the rewritten `sessionId` changes every copied line's.
 
 Claude writes a forked segment in stages — head ephemera, then the re-serialized
-history, then the new turns — and a copy read mid-write verifies as no copy at
-all, so a file whose newest record the chain already stores is not adopted yet.
-`/clear` and failed verification both yield a root rather than an invented edge.
+history, then the new turns — so a copy read mid-write carries no line of its
+own yet: the file ends at the anchor, or it reaches no remembered uuid while its
+newest record is one the segment family already stores. `/clear` and failed
+verification both yield a root rather than an invented edge.
 """
 
 import dataclasses
 from typing import Any, Optional, Protocol
 
-from bro.trails.lineage import LineageDecision, walk_header_chain
-
-# how many of the parent trail's trailing record uuids may end a verified fork
-# copy: the copy drops ephemeral records, so the very last uuids can be missing
-# even when the history copy is intact
-_VERIFY_TAIL_UUIDS = 20
-
-# how far back a candidate probe reaches: wide enough to span what claude
-# appends between a recorder's polls, so the parent's newest rows are still
-# inside the window at the tick that adopts the transcript
-_PROBE_TAIL_UUIDS = 64
+from bro.trails.lineage import LineageDecision, LineageHead
 
 
 class LineageIndex(Protocol):
-  """The row reads a store offers a lineage resolver, always in process."""
+  """The lookups a store offers a lineage resolver, always in process."""
 
-  def get_trail(self, trail_id: str) -> dict: ...
-
-  def find_segment_trails(self, segments: set[str], uuids: set[str]) -> list[dict]: ...
-
-  def get_step_uuids(self, bounds: dict[str, Optional[int]]) -> dict[str, list[dict]]:
-    """Each named trail's uuid-carrying rows in step order, through the
-    inclusive step bound it maps to, or all of them where that bound is None."""
+  def find_segment_trails(self, segments: set[str]) -> list[dict]:
+    """The headers of the trails recording any of `segments`."""
     ...
 
-  def step_payload_hashes(self, trail_id: str, step_ids: list[int]) -> dict[int, str]: ...
+  def holds_record(self, trail_ids: set[str], uuid: str) -> bool:
+    """Whether any of the named trails stores the record `uuid`."""
+    ...
 
 
 @dataclasses.dataclass(frozen=True)
@@ -81,20 +70,26 @@ class _Evidence:
     return lines
 
 
-@dataclasses.dataclass(frozen=True)
-class _ForkCuts:
-  """Where the parent trail's history copy sits in a forked segment: the copy
-  spans [copy_start_line, resume_start_line), and the new segment's own
-  contribution is everything outside it. `anchor_index` is the parent step the
-  fork points at — the last copied record found. `pending` marks a file whose
-  newest record the chain already stores, so nothing of the segment's own is in
-  it yet."""
+class _NewestRecordProbe:
+  """The one uuid query a resolution may need: whether the file's newest record
+  is one the segment family already stores, which is what a history copy looks
+  like before it reaches its own new turns. Asked at most once, for every
+  candidate."""
 
-  verified: bool
-  pending: bool = False
-  copy_start_line: int = 0
-  resume_start_line: int = 0
-  anchor_index: int = 0
+  def __init__(self, index: LineageIndex, family: set[str], uuid: str) -> None:
+    self._index = index
+    self._family = family
+    self._uuid = uuid
+    self._answer: Optional[bool] = None
+
+  def stored_by_family(self) -> bool:
+    if self._answer is None:
+      self._answer = self._index.holds_record(self._family, self._uuid)
+    return self._answer
+
+
+def _copy_in_progress() -> LineageDecision:
+  return LineageDecision(adopt=False, reason='history copy still being written')
 
 
 def resolve(evidence: dict, index: LineageIndex) -> LineageDecision:
@@ -103,11 +98,16 @@ def resolve(evidence: dict, index: LineageIndex) -> LineageDecision:
   parsed = _parse_evidence(evidence)
   if len(parsed.uuid_lines) == 0:
     return LineageDecision(adopt=False, reason='transcript carries no record yet')
-  for header in _candidates(parsed, index):
-    if header.get('native', {}).get('segment') == parsed.segment:
-      decision = _continue_segment(header, parsed, index)
+  candidates = _candidates(parsed, index)
+  probe = _NewestRecordProbe(
+    index, {header['id'] for header in candidates}, parsed.uuid_lines[-1][1]
+  )
+  for header in candidates:
+    head = LineageHead.stored(header['native'])
+    if header['native'].get('segment') == parsed.segment:
+      decision = _continue_segment(header, head, parsed)
     else:
-      decision = _continue_copy(header, parsed, index)
+      decision = _continue_copy(header, head, parsed, probe)
     if decision is not None:
       return decision
   return LineageDecision(reason='no verified parent')
@@ -144,51 +144,39 @@ def _parse_evidence(evidence: dict) -> _Evidence:
 
 def _candidates(evidence: _Evidence, index: LineageIndex) -> list[dict]:
   """The trails that could be this transcript's parent, newest first: the ones
-  recording its segment or a sibling and holding one of its records. Both
-  continuations are anchored by the parent's newest rows — a same-segment parent
-  ends where the resume begins, and a copy's chain records end where the new
-  turns start — so the transcript's trailing uuids name the parent whenever one
-  exists, and the rest are asked about only when they name nobody."""
-  segments = {evidence.segment, *evidence.related}
-  uuids = [uuid for _, uuid in evidence.uuid_lines]
-  for probe in (uuids[-_PROBE_TAIL_UUIDS:], uuids[:-_PROBE_TAIL_UUIDS]):
-    if len(probe) == 0:
-      continue
-    headers = index.find_segment_trails(segments, set(probe))
-    if len(headers) == 0:
-      continue
-    for header in headers:
-      if not isinstance(header.get('id'), str) or not isinstance(header.get('started_at'), str):
-        raise ValueError(f'malformed lineage index trail: {header!r}')
-    return sorted(headers, key=lambda header: header['started_at'], reverse=True)
-  return []
+  recording its segment, and the ones recording a sibling segment its records
+  came from."""
+  headers = index.find_segment_trails({evidence.segment, *evidence.related})
+  for header in headers:
+    if (
+      not isinstance(header.get('id'), str)
+      or not isinstance(header.get('started_at'), str)
+      or not isinstance(header.get('native'), dict)
+    ):
+      raise ValueError(f'malformed lineage index trail: {header!r}')
+  return sorted(headers, key=lambda header: header['started_at'], reverse=True)
 
 
 def _continue_segment(
-  header: dict, evidence: _Evidence, index: LineageIndex
+  header: dict, head: LineageHead, evidence: _Evidence
 ) -> Optional[LineageDecision]:
   """Claude appended to the segment this trail recorded: the new trail starts
   past the recorded extent and forks from the prior trail's final row."""
   extent = _extent(header)
-  if extent == 0:
-    return None
-  uuid_lines = _uuid_pairs(index.get_step_uuids({header['id']: None})[header['id']])
   line_by_uuid = evidence.line_by_uuid()
-  lines = {step_id: line_by_uuid[uuid] for step_id, uuid in uuid_lines if uuid in line_by_uuid}
-  if len(lines) == 0:
+  found = [(row, line_by_uuid[row.uuid]) for row in head.tail if row.uuid in line_by_uuid]
+  # a remembered uuid the file no longer carries means it lost recorded lines
+  if len(head.tail) == 0 or len(found) != len(head.tail):
     return None
-  last_step = max(lines)
-  # rows past the last matched one carry no uuid and follow it in the file: a
+  # a remembered uuid whose line hashes differently is a copy of that row, not it
+  if any(evidence.hashes[line] != row.payload_sha256 for row, line in found):
+    return None
+  anchor, anchor_line = found[-1]
+  # rows past the last remembered one carry no uuid and follow it in the file: a
   # trail's stream is split only where it skipped a history copy, which is
   # always before its own first record
-  last_line = lines[last_step] + (extent - 1 - last_step)
-  if last_line >= evidence.line_count:
-    return None
-  lines[extent - 1] = last_line
-  hashes = index.step_payload_hashes(header['id'], sorted(lines))
-  # a matching uuid whose line hashes differently is a copy of that row, not
-  # the row itself
-  if any(hashes.get(step_id) != evidence.hashes[line] for step_id, line in lines.items()):
+  last_line = anchor_line + (extent - 1 - anchor.step_id)
+  if last_line >= evidence.line_count or evidence.hashes[last_line] != head.last_row_digest:
     return None
   if last_line + 1 == evidence.line_count:
     return LineageDecision(adopt=False, reason='no line past the recorded extent yet')
@@ -199,76 +187,35 @@ def _continue_segment(
 
 
 def _continue_copy(
-  header: dict, evidence: _Evidence, index: LineageIndex
+  header: dict, head: LineageHead, evidence: _Evidence, probe: _NewestRecordProbe
 ) -> Optional[LineageDecision]:
-  """Claude forked a new segment re-serializing the history: verify the copy
-  against the parent's uuids and keep only the new segment's own contribution —
-  the recorded chain is authoritative for the copied part."""
-  parent_uuid_lines, ancestor_uuids = _chain_uuids(header, index)
-  cuts = _fork_cuts(parent_uuid_lines, ancestor_uuids, evidence)
-  if cuts.pending:
-    return LineageDecision(adopt=False, reason='history copy still being written')
-  if not cuts.verified:
-    return None
-  chunks: list[list[int]] = []
-  if cuts.copy_start_line > 0:
-    chunks.append([0, cuts.copy_start_line])
-  chunks.append([cuts.resume_start_line, cuts.resume_start_line])
-  return LineageDecision(
-    forked_from={'trail_id': header['id'], 'step_id': cuts.anchor_index}, chunks=chunks
-  )
-
-
-def _fork_cuts(
-  parent_uuid_lines: list[tuple[int, str]], ancestor_uuids: set[str], evidence: _Evidence
-) -> _ForkCuts:
-  """Locate the recorded chain's history copy in a forked segment and verify it
-  is intact. `parent_uuid_lines` are the parent's (step index, uuid) pairs in
-  step order; `ancestor_uuids` are the records the parent's own ancestors store —
-  the copy re-serializes the whole conversation, so it starts at the earliest
-  line either of them already holds."""
-  if len(parent_uuid_lines) == 0:
-    return _ForkCuts(verified=False)
+  """Claude forked a new segment re-serializing the history: locate the copy by
+  the conversation's first record, anchor the fork at the newest remembered row
+  the file still holds, and keep only the new segment's own contribution — the
+  recorded chain is authoritative for the copied part."""
   line_by_uuid = evidence.line_by_uuid()
-  chain = ancestor_uuids | {uuid for _, uuid in parent_uuid_lines}
-  pending = len(evidence.uuid_lines) == 0 or evidence.uuid_lines[-1][1] in chain
-  parent_start = line_by_uuid.get(parent_uuid_lines[0][1])
-  if parent_start is None:
-    return _ForkCuts(verified=False, pending=pending)
-  ancestor_lines = [line for uuid, line in line_by_uuid.items() if uuid in ancestor_uuids]
-  copy_start = min([parent_start, *ancestor_lines])
-  recent = {uuid for _, uuid in parent_uuid_lines[-_VERIFY_TAIL_UUIDS:]}
-  for step_index, uuid in reversed(parent_uuid_lines):
-    line = line_by_uuid.get(uuid)
-    if line is not None:
-      if uuid not in recent:
-        return _ForkCuts(verified=False, pending=pending)
-      return _ForkCuts(
-        verified=True,
-        pending=pending,
-        copy_start_line=copy_start,
-        resume_start_line=line + 1,
-        anchor_index=step_index,
-      )
-  return _ForkCuts(verified=False, pending=pending)
-
-
-def _chain_uuids(header: dict, index: LineageIndex) -> tuple[list[tuple[int, str]], set[str]]:
-  """The trail's own (step index, uuid) pairs, and every record uuid its
-  bounded ancestor prefixes carry."""
-  bounds: dict[str, Optional[int]] = {header['id']: None}
-  for ancestor, bound in walk_header_chain(header, index.get_trail)[:-1]:
-    assert bound is not None
-    bounds[ancestor['id']] = bound['step_id']
-  chain = index.get_step_uuids(bounds)
-  ancestor_uuids = {
-    row['uuid'] for trail_id, rows in chain.items() if trail_id != header['id'] for row in rows
-  }
-  return _uuid_pairs(chain[header['id']]), ancestor_uuids
-
-
-def _uuid_pairs(rows: list[dict]) -> list[tuple[int, str]]:
-  return [(row['step_id'], row['uuid']) for row in rows]
+  if head.chain_first_uuid is None:
+    return None
+  copy_start_line = line_by_uuid.get(head.chain_first_uuid)
+  if copy_start_line is None:
+    return None
+  anchor = next((row for row in reversed(head.tail) if row.uuid in line_by_uuid), None)
+  if anchor is None:
+    # the copy has not reached the remembered rows: it is still being written
+    # while the file's newest record is one the family stores, and continues
+    # nothing otherwise
+    return _copy_in_progress() if probe.stored_by_family() else None
+  anchor_line = line_by_uuid[anchor.uuid]
+  if anchor_line + 1 == evidence.line_count:
+    return _copy_in_progress()
+  chunks: list[list[int]] = []
+  if copy_start_line > 0:
+    chunks.append([0, copy_start_line])
+  chunks.append([anchor_line + 1, anchor_line + 1])
+  return LineageDecision(
+    forked_from={'trail_id': header['id'], 'step_id': anchor.step_id},
+    chunks=chunks,
+  )
 
 
 def _extent(header: dict) -> int:

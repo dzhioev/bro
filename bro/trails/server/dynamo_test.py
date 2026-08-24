@@ -277,9 +277,10 @@ class FakeDynamo:
         'bro-started_at-index': 'bro',
         'harness-started_at-index': 'harness',
         'forked-from-id-index': 'forked_from_id',
+        'segment-started_at-index': 'segment',
         'uuid-index': 'uuid',
       }[kwargs['IndexName']]
-      partition_value = values.get(':partition', values.get(':uuid'))
+      partition_value = values.get(':partition', values.get(f':{partition_name}'))
       items = [
         item for item in self.tables[table].values() if item.get(partition_name) == partition_value
       ]
@@ -357,18 +358,21 @@ def _blaze_bro(store: dynamo_store.DynamoStore, **overrides) -> str:
   return (store.blaze(BlazeRequest.from_wire(payload)))['id']
 
 
+_CLAUDE_NATIVE = {
+  'llm': {'type': 'claude'},
+  'segment': 'segment',
+  'ride_command': 'ride along',
+  'harness_version': 'unknown',
+}
+
+
 def _blaze_claude(store: dynamo_store.DynamoStore, **overrides) -> str:
   payload = {
     'harness': 'claude',
     'version': '2',
     'interactive': True,
     'surface': 'ride',
-    'native': {
-      'llm': {'type': 'claude'},
-      'segment': 'segment',
-      'ride_command': 'ride along',
-      'harness_version': 'unknown',
-    },
+    'native': dict(_CLAUDE_NATIVE),
     'body': {'records': []},
   }
   payload.update(overrides)
@@ -674,65 +678,44 @@ def test_spilled_claude_lines_resolve_in_the_store_thread_pool(components):
   assert all('raw' not in step and 'record' not in step for step in steps)
 
 
-def test_uuid_projection_and_point_reads(components):
+def test_candidate_trails_come_from_the_segment_index(components):
   store, dynamo, _ = components
   universal = _blaze_claude(store)
+  elsewhere = _blaze_claude(store, native={**_CLAUDE_NATIVE, 'segment': 'other-segment'})
   first = _claude_assistant('message-1', 'first', uuid='uuid-1')
-  second = _claude_assistant('message-2', 'second', uuid='uuid-2')
-  store.append_records(universal, offset=0, records=[first, second])
-
-  query_count = len(dynamo.query_threads)
-  caller_thread = threading.get_ident()
-  [header] = store.find_segment_trails({'segment'}, {'uuid-2', 'missing'})
-  assert header['id'] == universal
-  assert header['native']['segment'] == 'segment'
-  assert store.find_segment_trails({'other-segment'}, {'uuid-2'}) == []
-  assert all(thread != caller_thread for thread in dynamo.query_threads[query_count:])
-  assert dynamo.queries[-1]['IndexName'] == 'uuid-index'
-  assert dynamo.queries[-1]['ProjectionExpression'] == 'trail_id'
-  assert (store.get_step(universal, 1))['body'] == second
-  assert store.get_step_uuids({universal: 0}) == {universal: [{'step_id': 0, 'uuid': 'uuid-1'}]}
-
-
-def test_chain_uuid_reads_fan_out_in_the_store_thread_pool(components):
-  store, dynamo, _ = components
-  parent = _blaze_claude(store)
-  ancestor = _blaze_claude(store)
-  store.append_records(
-    parent, offset=0, records=[_claude_assistant('message-1', 'first', uuid='uuid-1')]
-  )
-  store.append_records(
-    ancestor, offset=0, records=[_claude_assistant('message-2', 'second', uuid='uuid-2')]
-  )
-
-  query_count = len(dynamo.query_threads)
-  caller_thread = threading.get_ident()
-  uuids = store.get_step_uuids({parent: None, ancestor: 0})
-
-  assert uuids == {
-    parent: [{'step_id': 0, 'uuid': 'uuid-1'}],
-    ancestor: [{'step_id': 0, 'uuid': 'uuid-2'}],
-  }
-  assert all(thread != caller_thread for thread in dynamo.query_threads[query_count:])
-
-
-def test_payload_hashes_come_back_in_one_ranged_query(components):
-  store, dynamo, _ = components
-  universal = _blaze_claude(store)
-  records = [
-    _claude_assistant(f'message-{index}', 'text', uuid=f'uuid-{index}') for index in range(6)
-  ]
-  store.append_records(universal, offset=0, records=records)
+  store.append_records(universal, offset=0, records=[first])
 
   query_count = len(dynamo.queries)
-  hashes = store.step_payload_hashes(universal, [4, 1, 1, -1, 99])
+  [header] = store.find_segment_trails({'segment'})
 
-  assert hashes == {1: payload_sha256(records[1]), 4: payload_sha256(records[4])}
-  [query] = dynamo.queries[query_count:]
-  assert (
-    query['KeyConditionExpression'] == 'trail_id = :trail_id AND step_id BETWEEN :start AND :end'
+  assert header['id'] == universal
+  assert header['native']['segment'] == 'segment'
+  assert [found['id'] for found in store.find_segment_trails({'other-segment'})] == [elsewhere]
+  assert store.find_segment_trails({'missing-segment'}) == []
+  assert {query['IndexName'] for query in dynamo.queries[query_count:]} == {
+    dynamo_store.SEGMENT_INDEX
+  }
+  assert (store.get_step(universal, 0))['body'] == first
+
+
+def test_the_mid_write_probe_is_one_keys_only_uuid_query(components):
+  store, dynamo, _ = components
+  universal = _blaze_claude(store)
+  elsewhere = _blaze_claude(store)
+  store.append_records(
+    universal, offset=0, records=[_claude_assistant('message-1', 'first', uuid='uuid-1')]
   )
-  assert query['ProjectionExpression'] == 'step_id, payload_sha256'
+
+  query_count = len(dynamo.queries)
+  assert store.holds_record({universal}, 'uuid-1') is True
+
+  assert store.holds_record({elsewhere}, 'uuid-1') is False
+  assert store.holds_record({universal}, 'missing') is False
+  assert store.holds_record(set(), 'uuid-1') is False
+  probes = dynamo.queries[query_count:]
+  assert len(probes) == 3
+  assert {query['IndexName'] for query in probes} == {'uuid-index'}
+  assert {query['ProjectionExpression'] for query in probes} == {'trail_id'}
 
 
 def test_launch_context_is_harness_neutral_and_end_adds_no_step(components):
@@ -755,6 +738,22 @@ def test_launch_context_is_harness_neutral_and_end_adds_no_step(components):
   assert dynamo.headers[trail_id]['end']['reason'] == 'ok'
 
 
+def test_the_segment_key_and_lineage_head_ride_the_header_writes(components):
+  store, dynamo, _ = components
+  trail_id = _blaze_claude(store)
+  first = _claude_assistant('message-1', 'first', uuid='uuid-1')
+
+  assert dynamo.headers[trail_id]['segment'] == 'segment'
+  store.append_records(trail_id, offset=0, records=[first])
+
+  assert dynamo.headers[trail_id]['native']['lineage_head'] == {
+    'chain_first_uuid': 'uuid-1',
+    'tail': [[0, 'uuid-1', payload_sha256(first)]],
+    'last_row_digest': payload_sha256(first),
+  }
+  assert 'segment' not in dynamo.headers[_blaze_bro(store)]
+
+
 def test_check_detects_corruption_and_recompute_repairs_rows_and_header(components):
   store, dynamo, _ = components
   trail_id = _blaze_claude(store)
@@ -765,12 +764,20 @@ def test_check_detects_corruption_and_recompute_repairs_rows_and_header(componen
   )
   dynamo.headers[trail_id]['turn_count'] = 9
   dynamo.headers[trail_id]['native']['usage'] = {}
+  dynamo.headers[trail_id]['native']['lineage_head']['tail'] = []
   dynamo.universal_steps[(trail_id, 0)]['uuid'] = 'wrong'
   dynamo.universal_steps[(trail_id, 0)].pop('usage')
   checked = store.check(trail_id)
   assert checked['ok'] is False
   fields = {difference['field'] for difference in checked['trails'][0]['differences']}
-  assert {'turn_count', 'native.usage', 'uuid', 'usage', 'billing_contributions'} <= fields
+  assert {
+    'turn_count',
+    'native.usage',
+    'native.lineage_head',
+    'uuid',
+    'usage',
+    'billing_contributions',
+  } <= fields
 
   store.recompute(trail_id)
   assert (store.check(trail_id))['ok'] is True
@@ -823,6 +830,11 @@ def test_relink_manifests_before_trimming_and_recomputes(components):
   assert manifest['deleted_rows'][0]['uuid'] == 'copied'
   assert dynamo.headers[trail_id]['forked_from_id'] == 'parent'
   assert dynamo.headers[trail_id]['turn_count'] == 1
+  # the deleted prefix was the copy of the conversation's opening, so the head
+  # keeps the record it named while the window follows the rows that remain
+  head = dynamo.headers[trail_id]['native']['lineage_head']
+  assert head['chain_first_uuid'] == 'copied'
+  assert [row[1] for row in head['tail']] == ['own']
   assert dynamo.universal_steps[(trail_id, 0)]['uuid'] == 'own'
   assert (trail_id, 1) not in dynamo.universal_steps
 

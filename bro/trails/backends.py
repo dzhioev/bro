@@ -9,6 +9,9 @@ from bro.trails import claude_lineage
 from bro.trails.lineage import LineageDecision
 from bro.trails.model import BlazeRequest
 
+# the native header fields a store folds from a trail's rows
+SERVER_DERIVED_NATIVE_FIELDS = frozenset({'usage', 'step_counts_by_kind', 'lineage_head'})
+
 BRO_STEP_KINDS = frozenset(
   {
     'system_prompt',
@@ -164,8 +167,9 @@ def _bro_open(body: dict) -> OpenedBody:
 
 
 def _validate_server_derived(native: dict) -> None:
-  if 'usage' in native or 'step_counts_by_kind' in native:
-    raise ValueError('native usage and step_counts_by_kind are server-derived')
+  sent = SERVER_DERIVED_NATIVE_FIELDS & set(native)
+  if len(sent) > 0:
+    raise ValueError(f'native {", ".join(sorted(sent))} are server-derived')
 
 
 def _bro_validate_create(native: dict) -> None:
