@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable
 from typing import Any, Optional
 
+from bro.trails.lineage import LineageHead, walk_header_chain
 from bro.trails.rows import AggregateState
 from bro.trails.server import dynamo_types
 from bro.trails.store import delete_manifest
@@ -31,6 +32,23 @@ def _row_digest(row: dict) -> str:
   if not isinstance(digest, str):
     raise ValueError(f'step {row.get("trail_id")}/{row.get("step_id")} carries no payload digest')
   return digest
+
+
+def _migrated(header: dict) -> bool:
+  return header.get('body_storage') == dynamo_types.UNIVERSAL_BODY_STORAGE
+
+
+def _folded_head(rows: list[dict]) -> LineageHead:
+  """The head a trail's rows fold to, from their identities alone."""
+  head = LineageHead()
+  for step_id, row in enumerate(rows):
+    uuid = row.get('uuid')
+    head.fold(
+      step_id=step_id,
+      uuid=uuid if isinstance(uuid, str) else None,
+      payload_sha256=_row_digest(row),
+    )
+  return head
 
 
 class Operations:
@@ -83,11 +101,7 @@ class Operations:
       result = self._check_trail(trail_id)
       return {'ok': result['ok'], 'trails': [result], 'cross_trail_duplicate_uuids': []}
     headers = self._scan_items(self._trails_table)
-    migrated = [
-      header
-      for header in headers
-      if header.get('body_storage') == dynamo_types.UNIVERSAL_BODY_STORAGE
-    ]
+    migrated = [header for header in headers if _migrated(header)]
     results = [self._check_trail(header['id']) for header in migrated]
     duplicates = self._cross_trail_duplicate_uuids()
     return {
@@ -194,6 +208,86 @@ class Operations:
       'row_differences': row_differences,
       'billing_differences': billing_differences,
     }
+
+  def backfill_lineage_heads(self) -> dict:
+    """Fold `native.lineage_head` and stamp the segment index key onto the claude
+    trails recorded before an append transaction carried them."""
+    headers = {header['id']: header for header in self._scan_items(self._trails_table)}
+    identities: dict[str, list[dict]] = {}
+
+    def rows_of(trail_id: str) -> list[dict]:
+      if trail_id not in identities:
+        identities[trail_id] = self._row_identities(trail_id)
+      return identities[trail_id]
+
+    def parent_header(trail_id: str) -> dict:
+      header = headers.get(trail_id)
+      if header is None:
+        raise ValueError(f'trail {trail_id} is forked from a trail the registry has lost')
+      return header
+
+    stamped: list[str] = []
+    contended: list[str] = []
+    for trail_id, header in sorted(headers.items()):
+      if header.get('harness') != 'claude' or not _migrated(header):
+        continue
+      rows = rows_of(trail_id)
+      head = _folded_head(rows)
+      root, _ = walk_header_chain(header, parent_header)[0]
+      head.chain_first_uuid = _folded_head(rows_of(root['id'])).chain_first_uuid
+      segment = header.get('native', {}).get('segment')
+      written = self._write_lineage_head(trail_id, segment, head, len(rows))
+      (stamped if written else contended).append(trail_id)
+    return {'ok': len(contended) == 0, 'stamped': stamped, 'contended': contended}
+
+  def _write_lineage_head(
+    self, trail_id: str, segment: Optional[str], head: LineageHead, extent: int
+  ) -> bool:
+    """Write the head alone, conditional on the extent its rows were read at, so
+    an append landing meanwhile keeps the aggregate it folded."""
+    names = {'#native': 'native', '#lineage_head': 'lineage_head', '#extent': 'extent'}
+    values = {':head': _ddb(head.fields()), ':extent': _ddb(extent)}
+    assignments = ['#native.#lineage_head = :head']
+    if segment is not None:
+      names['#segment'] = 'segment'
+      values[':segment'] = _ddb(segment)
+      assignments.append('#segment = :segment')
+    try:
+      self._dynamo.update_item(
+        TableName=self._trails_table,
+        Key=_ddb_item({'id': trail_id}),
+        ConditionExpression='#extent = :extent',
+        UpdateExpression='SET ' + ', '.join(assignments),
+        ExpressionAttributeNames=names,
+        ExpressionAttributeValues=values,
+      )
+    except self._dynamo.exceptions.ConditionalCheckFailedException:
+      return False
+    return True
+
+  def _row_identities(self, trail_id: str) -> list[dict]:
+    """Each row's step id, record uuid, and payload digest in step order — what
+    the head folds, without reading a body."""
+    rows: list[dict] = []
+    exclusive_start_key: Optional[dict] = None
+    while True:
+      kwargs: dict[str, Any] = {
+        'TableName': self._steps_table,
+        'KeyConditionExpression': 'trail_id = :trail_id',
+        'ProjectionExpression': 'trail_id, step_id, #uuid, payload_sha256',
+        'ExpressionAttributeNames': {'#uuid': 'uuid'},
+        'ExpressionAttributeValues': {':trail_id': _ddb(trail_id)},
+        'ConsistentRead': True,
+      }
+      if exclusive_start_key is not None:
+        kwargs['ExclusiveStartKey'] = exclusive_start_key
+      response = self._dynamo.query(**kwargs)
+      rows.extend(
+        row for item in response.get('Items', []) if (row := _from_ddb_item(item)) is not None
+      )
+      exclusive_start_key = response.get('LastEvaluatedKey')
+      if exclusive_start_key is None:
+        return rows
 
   def _write_recomputed_header(self, header: dict, computed: dict) -> None:
     names = {
@@ -338,7 +432,7 @@ class Operations:
 
   def _required_migrated_header(self, trail_id: str) -> dict:
     header = self._required_header(trail_id)
-    if header.get('body_storage') != dynamo_types.UNIVERSAL_BODY_STORAGE:
+    if not _migrated(header):
       raise ValueError('operation requires a migrated trail body')
     return header
 

@@ -380,6 +380,13 @@ async def _handle_check(request: web.Request) -> web.StreamResponse:
 
 @requires(Permission.ADMIN)
 @_administered
+async def _handle_backfill_lineage_heads(request: web.Request) -> web.StreamResponse:
+  admin: DynamoStore = request.app['admin']
+  return await _stream_json_with_heartbeats(request, _dispatch(admin.backfill_lineage_heads))
+
+
+@requires(Permission.ADMIN)
+@_administered
 async def _handle_relink(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   payload = await _read_json(request)
@@ -488,6 +495,7 @@ def create_app(
   app['admin'] = admin
   app.router.add_delete('/v1/admin/trails/{trail_id}', _handle_delete_trail)
   app.router.add_post('/v1/admin/trails/check', _handle_check)
+  app.router.add_post('/v1/admin/trails/backfill-lineage-heads', _handle_backfill_lineage_heads)
   app.router.add_post('/v1/admin/trails/{trail_id}/recompute', _handle_recompute)
   app.router.add_post('/v1/admin/trails/{trail_id}/relink', _handle_relink)
   if sweep_interval_seconds is not None:

@@ -667,6 +667,9 @@ class DynamoStore(TrailsStore):
   def relink(self, trail_id: str, forked_from: dict, delete_count: int) -> dict:
     return self._operations.relink(trail_id, forked_from, delete_count)
 
+  def backfill_lineage_heads(self) -> dict:
+    return self._operations.backfill_lineage_heads()
+
   def delete_trail(self, trail_id: str) -> dict:
     header = self._required_header(trail_id)
     refuse_while_forked(self, trail_id)

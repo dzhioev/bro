@@ -354,14 +354,17 @@ class TestWrites:
     fake.queue((200, b'{"extent": 2}'))
     fake.queue((200, b'{"ok": true}'))
     fake.queue((200, b'{"extent": 1}'))
+    fake.queue((200, b'\n\n{"stamped": ["T1"]}'))
     client = _client()
     assert client.recompute('T1') == {'extent': 2}
     assert client.check('T1') == {'ok': True}
     assert client.relink('T1', {'trail_id': 'parent', 'step_id': 4}, 1) == {'extent': 1}
+    assert client.backfill_lineage_heads() == {'stamped': ['T1']}
     assert [request[1] for request in fake.requests] == [
       '/v1/admin/trails/T1/recompute',
       '/v1/admin/trails/check',
       '/v1/admin/trails/T1/relink',
+      '/v1/admin/trails/backfill-lineage-heads',
     ]
 
   def test_set_subject_patches_the_header(self, monkeypatch):
