@@ -20,6 +20,7 @@ import ride.spawn
 import ride.summon_control
 from bro.base import credentials
 from bro.monitor import workspace_session_dir
+from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 from bro.workspace.paths import CONTAINER_SESSION_DIR
 from ride import pending_summon
 from ride.repository import Repository
@@ -148,6 +149,10 @@ def _runtime_bundle(tmp_path) -> RuntimeBundle:
 def configured_project(monkeypatch, tmp_path):
   monkeypatch.chdir(tmp_path)
   monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
+  # a launch reads the human it credits out of git; without this the operator's
+  # own configured identity would decide what these launches carry
+  monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(tmp_path / 'gitconfig'))
+  monkeypatch.setenv('GIT_CONFIG_SYSTEM', str(tmp_path / 'gitconfig-system'))
 
   @contextlib.contextmanager
   def resolved_runtime_bundle():
@@ -349,6 +354,32 @@ class TestSummonAllowList:
     assert h.run_in_container.call_count == 0
 
 
+def _configure_human(tmp_path, name: str = 'Ada Lovelace', email: str = 'ada@example.com'):
+  """the launching human's own git configuration, as the host carries it."""
+  (tmp_path / 'gitconfig').write_text(f'[user]\n\tname = {name}\n\temail = {email}\n')
+
+
+class TestHumanIdentity:
+  """the human a session credits travels with its launch: a container carries
+  none of the host's git configuration to read it back from."""
+
+  def test_container_launch_carries_the_attachments_human(self, tmp_path):
+    _configure_human(tmp_path)
+    with _ContainerHarness() as harness:
+      assert ride_session.start_session(_spec(drop=True)) == 0
+    launch = harness.run_in_container.call_args.args[0]
+    assert launch.env[HUMAN_NAME_ENV] == 'Ada Lovelace'
+    assert launch.env[HUMAN_EMAIL_ENV] == 'ada@example.com'
+
+  def test_a_detached_launch_carries_no_human(self, tmp_path):
+    _configure_human(tmp_path)
+    with _ContainerHarness() as harness:
+      assert ride_session.start_session(replace(_spec(drop=True), repo=None)) == 0
+    launch = harness.run_in_container.call_args.args[0]
+    assert HUMAN_NAME_ENV not in launch.env
+    assert HUMAN_EMAIL_ENV not in launch.env
+
+
 class TestDetachedSession:
   def test_container_launch_records_no_attachment_or_branch(self):
     spec = replace(_spec(drop=False), repo=None)
@@ -389,6 +420,7 @@ class TestDetachedSession:
         workspace,
         None,
         _launch_scope(),
+        {},
         _runtime_bundle(tmp_path),
         ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
       )
@@ -505,7 +537,9 @@ class TestContainerCommand:
     assert 'RIDE_BASE_REF' not in launch.env
 
   def test_url_attachment_uses_fresh_origin_head_as_the_default_base(self, tmp_path):
-    repository = Repository('https://example.test/owner/repo.git', tmp_path / 'mirror', 'urlsha')
+    mirror = tmp_path / 'mirror'
+    mirror.mkdir()
+    repository = Repository('https://example.test/owner/repo.git', mirror, 'urlsha')
     spec = replace(_spec(drop=True), repo=repository.identity)
     with _ContainerHarness() as harness:
       with (
@@ -895,12 +929,13 @@ class TestHostSession:
     monkeypatch.setattr(type(workspace), 'remove', lambda self: None)
     return workspace, workspace.tree
 
-  def _host_session(self, spec, workspace, launch_scope):
+  def _host_session(self, spec, workspace, launch_scope, human_env=None):
     return ride_session._launch_session(
       spec,
       workspace,
       None,
       launch_scope,
+      human_env={} if human_env is None else human_env,
       container=False,
       runtime_bundle=_runtime_bundle(workspace.repo or workspace.path),
       container_runtime=ContainerRuntimeResolver.fixed(
@@ -1069,6 +1104,7 @@ class TestHostSession:
         workspace,
         None,
         _launch_scope(),
+        human_env={},
         container=False,
         runtime_bundle=_runtime_bundle(workspace.repo or workspace.path),
         container_runtime=ContainerRuntimeResolver.fixed(
@@ -1104,6 +1140,7 @@ class TestHostSession:
         workspace,
         None,
         _launch_scope(),
+        human_env={},
         container=False,
         runtime_bundle=_runtime_bundle(workspace.repo or workspace.path),
         container_runtime=ContainerRuntimeResolver.fixed(
@@ -1151,6 +1188,16 @@ class TestHostSession:
     monkeypatch.setattr(ride_session.subprocess, 'run', fake_run)
     assert self._host_session(_spec(host=True), workspace, _launch_scope()) == 0
     assert runs[0][1]['env']['CLAUDE_CONFIG_DIR'] == str(tmp_path / 'claude-config')
+
+  def test_host_runner_env_carries_the_human_the_session_credits(self, monkeypatch, tmp_path):
+    workspace, _, _ = self._prepare_launch(monkeypatch, tmp_path)
+    monkeypatch.setattr(ride_session, 'broker_enabled', lambda: True)
+    root = MagicMock(return_value=0)
+    monkeypatch.setattr(ride_session, 'run_host_process_via_broker', root)
+    human = {HUMAN_NAME_ENV: 'Ada Lovelace', HUMAN_EMAIL_ENV: 'ada@example.com'}
+    assert self._host_session(_spec(host=True), workspace, _launch_scope(), human) == 0
+    assert root.call_args.args[2][HUMAN_NAME_ENV] == 'Ada Lovelace'
+    assert root.call_args.args[2][HUMAN_EMAIL_ENV] == 'ada@example.com'
 
   def test_host_runner_env_signals_the_session_broxy(self, monkeypatch, tmp_path):
     workspace, _, _ = self._prepare_launch(monkeypatch, tmp_path)
@@ -1248,8 +1295,12 @@ class TestHostSession:
       return {}
 
     monkeypatch.setattr(ride.scope.credentials, 'build_scoped_store', fake_build)
+    # a stand-in for every process the launch runs, the git the human identity
+    # is read with among them
     monkeypatch.setattr(
-      ride_session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=0)
+      ride_session.subprocess,
+      'run',
+      lambda *_a, **_k: SimpleNamespace(returncode=0, stdout='', stderr=''),
     )
     spec = _spec(host=True, grant=['gmail_creds'], revoke=['notion'])
     with caplog.at_level('INFO'):
@@ -1328,6 +1379,7 @@ class TestHostBrokerPingRoundTrip:
         workspace,
         None,
         _launch_scope(),
+        human_env={},
         container=False,
         runtime_bundle=runtime_bundle,
         container_runtime=ContainerRuntimeResolver.fixed(
@@ -1423,6 +1475,7 @@ client.close(confirm=True)
         workspace,
         None,
         _launch_scope(may_summon={'bro-dev'}),
+        human_env={},
         container=False,
         runtime_bundle=runtime_bundle,
         container_runtime=ContainerRuntimeResolver.fixed(

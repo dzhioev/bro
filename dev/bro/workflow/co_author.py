@@ -5,10 +5,6 @@ nowhere in the commit's authorship. The trailer is the credit GitHub keeps: its
 merge rewrites the committer and preserves only the author and the message, and
 it counts a co-author's commits toward their contributions as it counts an
 author's.
-
-The human is the workspace's own `user.name` / `user.email` — the bro identity
-rides the `GIT_AUTHOR_*` environment and leaves the checkout's configured
-identity as the launching human's.
 """
 
 import re
@@ -16,32 +12,21 @@ from typing import Optional
 
 from bro.launch.hold import interactive_session
 from bro.llm import usage
-from bro.workspace.git import git_run
+from bro.workspace.human import session_human
 
 TRAILER_KEY = 'Co-Authored-By'
 
 _TRAILER_RE = re.compile(rf'^{TRAILER_KEY}:\s*.+$', re.MULTILINE | re.IGNORECASE)
-# `git config --get` answers a key it does not hold with exit 1; every other
-# nonzero code is git failing, which the commit that called it should not survive
-_KEY_ABSENT = 1
-
-
-def _git_config(key: str) -> str:
-  """the checkout's effective value for `key`, empty when it declares none."""
-  result = git_run('config', '--get', key)
-  if result.returncode not in (0, _KEY_ABSENT):
-    raise RuntimeError(f'git config --get {key} failed: {result.stderr.strip()}')
-  return result.stdout.strip()
 
 
 def trailer() -> Optional[str]:
   """the trailer line this session's commits carry, None when it credits nobody."""
   if not usage.agent_session() or not interactive_session():
     return None
-  name, email = _git_config('user.name'), _git_config('user.email')
-  if name == '' or email == '':
+  human = session_human()
+  if human is None:
     return None
-  return f'{TRAILER_KEY}: {name} <{email}>'
+  return f'{TRAILER_KEY}: {human.name} <{human.email}>'
 
 
 def strip_trailer(commit_message: str) -> str:
