@@ -12,6 +12,7 @@ from bro.trails.model import BlazeRequest
 from ride.claude.trail_recorder import (
   Recorder,
   _attempt,
+  _carries_record,
   _compose,
   _Position,
   _Progress,
@@ -332,6 +333,23 @@ class TestAppends:
     worker._recording._last_write_monotonic = time.monotonic() - 120.0
     assert worker.tick() is _Progress.QUIET
     assert store.keepalives == [worker.trail_id]
+
+
+class TestSiblingScan:
+  """the sibling read that names the segments a history copy may have come from."""
+
+  def test_a_record_is_matched_on_its_own_uuid_and_not_on_a_reference_to_it(self, environment):
+    path = _write_segment(environment, 'seg-1', [_user('hello', 'u1', parentUuid='u0')])
+
+    assert _carries_record(path, 'u1') is True
+    assert _carries_record(path, 'u0') is False
+
+  def test_a_line_claude_has_not_finished_writing_carries_no_record_yet(self, environment):
+    path = environment / 'seg-1.jsonl'
+    path.write_text(_user('hello', 'u1') + '\n' + _user('half', 'u2')[:-5])
+
+    assert _carries_record(path, 'u1') is True
+    assert _carries_record(path, 'u2') is False
 
 
 class TestLifetimes:
