@@ -129,7 +129,12 @@ def _deny(context: Dispatcher, peer: Peer, error: str) -> None:
 
 class JobError(Exception):
   """a benchmark job that produced no usable outcome: denied, failed, or its
-  result never arrived. The message is the operator-facing reason."""
+  result never arrived. The message is the operator-facing reason; `ref` names
+  the run a failing job still left behind, where there was one."""
+
+  def __init__(self, reason: str, ref: Optional[str] = None):
+    super().__init__(reason)
+    self.ref = ref
 
 
 def _open_client() -> Client:
@@ -164,7 +169,7 @@ def _interpret_result(message: Message) -> str:
   diagnostic = payload.get('error')
   if diagnostic is not None and len(str(diagnostic).strip()) > 0:
     parts.append(str(diagnostic).strip())
-  raise JobError('; '.join(parts))
+  raise JobError('; '.join(parts), ref=detail.get('ref'))
 
 
 def _await_outcome(client: Client, request: Message, timeout: float) -> str:
@@ -198,24 +203,35 @@ def _relay(await_outcome: Callable[[], str]) -> int:
   return 0
 
 
-def _start(config: str, timeout: Optional[float], detach: bool) -> int:
+def _job_args(config: str, timeout: Optional[float]) -> dict[str, Any]:
   args: dict[str, Any] = {'config': config}
   if timeout is not None:
     args['timeout'] = timeout
+  return args
+
+
+def run_job(config: str, timeout: Optional[float] = None) -> str:
+  """start a benchmark job and block until the host answers, returning the ref
+  of its collected run. Raises `JobError` with the operator-facing reason."""
+  with _open_client() as client:
+    request = client.send(BENCHMARK, _job_args(config, timeout))
+    log.info('benchmark job request %s', request.exchange)
+    return _await_outcome(client, request, timeout if timeout is not None else DEFAULT_TIMEOUT)
+
+
+def _start(config: str, timeout: Optional[float], detach: bool) -> int:
+  if not detach:
+    return _relay(lambda: run_job(config, timeout))
   try:
     client = _open_client()
   except JobError as e:
     log.error('%s', e)
     return 1
   with client:
-    request = client.send(BENCHMARK, args)
+    request = client.send(BENCHMARK, _job_args(config, timeout))
     log.info('benchmark job request %s', request.exchange)
-    if detach:
-      print(request.exchange)
-      return 0
-    return _relay(
-      lambda: _await_outcome(client, request, timeout if timeout is not None else DEFAULT_TIMEOUT)
-    )
+    print(request.exchange)
+    return 0
 
 
 def _collect(request_id: str, timeout: Optional[float]) -> str:

@@ -10,12 +10,16 @@ requires-python = ">=3.12"
 dependencies = [
   "bro",
   "bro-dev",
+  # benchmark-run reads the pinned job config, which is YAML
+  "pyyaml==6.0.3",
 ]
 
 [project.scripts]
 # bro
 "benchmark-job" = "bro.local._entrypoints:bro_local_benchmark_job"
+"benchmark-run" = "bro.local._entrypoints:bro_local_benchmark_run"
 "bro.local.benchmark-job" = "bro.local._entrypoints:bro_local_benchmark_job"
+"bro.local.benchmark-run" = "bro.local._entrypoints:bro_local_benchmark_run"
 "bro.local.run-tests" = "bro.local._entrypoints:bro_local_run_tests"
 "run-tests" = "bro.local._entrypoints:bro_local_run_tests"
 
@@ -31,6 +35,7 @@ benchmark = "bro.local.benchmark_job:benchmark_kind"
 
 [project.entry-points."bro.session_commands"]
 "benchmark-job" = "bro.local._entrypoints:bro_local_benchmark_job"
+"benchmark-run" = "bro.local._entrypoints:bro_local_benchmark_run"
 
 [tool.deptry.package_module_name_map]
 bro = ["bro", "bros"]
