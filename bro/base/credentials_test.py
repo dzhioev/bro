@@ -515,6 +515,27 @@ class TestGetInstance:
   def test_try_get_instance_returns_none_when_unknown(self):
     assert credentials.Store({}).try_get_instance('github+alice') is None
 
+  def test_available_instance_true_when_resolvable(self, configs_dir: Path):
+    _write(configs_dir, 'github_token_alice', 'ghp_alice\n')
+    store = self._store(
+      credentials.Secret('github+alice', [credentials.LocalSource('github_token_alice')])
+    )
+    assert store.available_instance('github+alice') is True
+
+  def test_available_instance_false_when_unresolvable(self, configs_dir: Path):
+    store = self._store(
+      credentials.Secret('github+alice', [credentials.LocalSource('absent_token')])
+    )
+    assert store.available_instance('github+alice') is False
+
+  def test_available_rejects_a_name_available_instance_takes(self, configs_dir: Path):
+    _write(configs_dir, 'github_token_alice', 'ghp_alice\n')
+    store = self._store(
+      credentials.Secret('github+alice', [credentials.LocalSource('github_token_alice')])
+    )
+    with pytest.raises(ValueError, match='kind-addressed'):
+      store.available('github+alice')
+
   def test_unresolvable_name_raises_secret_not_found(self, configs_dir: Path):
     store = self._store(
       credentials.Secret('github+alice', [credentials.LocalSource('absent_token')])

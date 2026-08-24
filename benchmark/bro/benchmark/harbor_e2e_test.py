@@ -53,7 +53,7 @@ pytestmark = [
     not _available('docker', 'compose', 'version'), reason='no docker compose plugin'
   ),
   pytest.mark.skipif(
-    not all(credentials.available(name) for name in _LLM_CREDENTIALS),
+    not all(credentials.default_store().available_instance(name) for name in _LLM_CREDENTIALS),
     reason='an LLM key the job config names does not resolve',
   ),
 ]

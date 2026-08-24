@@ -25,7 +25,7 @@ run those with `--help` for flags.
 - `credentials.py` — client-side secret resolver (`__cli_name__ = 'credentials'`).
   `get` / `get_json` / `try_get` / `available` resolve a kind-addressed secret against an ordered `Source` list, rejecting `kind+instance` names
   — always the kind's default-instance entry, the only shape a generated scoped registry carries;
-  the storage-addressed `get_instance` / `get_instance_json` / `try_get_instance` siblings read a registry entry by its stored name, plain (the kind's default instance) or `kind+instance`,
+  the storage-addressed `get_instance` / `get_instance_json` / `try_get_instance` / `available_instance` siblings read a registry entry by its stored name, plain (the kind's default instance) or `kind+instance`,
   and the `get` / `list` CLI defaults to kind addressing with `--instance` switching (`known_names` lists the registry):
   the stored types `local` (searching `BRO_CONFIGS_DIR` when set, then `~/.bro`)
   and `ssm` (reading an AWS SSM parameter from the region the source names),
