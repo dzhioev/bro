@@ -1,18 +1,19 @@
 """record a Claude Code session's transcript to the trails service.
 
 Claude Code writes one jsonl *segment* per session id under the project's
-transcripts dir. One *trail* is the suffix recorded during one recorder
-lifetime within one segment: the daemon adopts a transcript, appends each newly
-completed line, and ends the trail on segment transition or shutdown. Every
-process resume therefore opens a new trail, and a verified continuation is
-recorded as a fork.
+transcripts dir. One *trail* is the recording of one segment: the daemon adopts
+a transcript, appends each newly completed line, and ends the trail on segment
+transition or shutdown. A later lifetime over the same segment attaches to the
+trail already recording it and appends from where that one stopped, so restarts
+leave a linear conversation linear; only a history copy opens a trail of its own.
 
-The daemon does not decide those forks. It reports what it can see — the segment
-name, its lines' record uuids and digests, and the sibling segment files sharing
-those records — and blazes with that evidence; the store's harness resolver
-answers with the fork point and the line ranges the new trail owns, or declines
-a transcript claude has not finished writing (`bro/trails/claude_lineage.py`).
-The daemon then uploads those ranges and keeps appending to the last one.
+The daemon decides none of that. It reports what it can see — the segment name,
+its lines' record uuids and digests, and the sibling segment files sharing those
+records — and blazes with that evidence; the store's harness resolver answers
+with the trail recording from here, the ordinal to append from, and the line
+ranges that trail owns, or declines a transcript claude has not finished writing
+(`bro/trails/claude_lineage.py`). The daemon then uploads those ranges and keeps
+appending to the last one.
 
 The append endpoint classifies records and folds usage, turns, harness version,
 and claude's generated title into the header. Quiet ticks keep the trail alive
@@ -230,14 +231,16 @@ class _SegmentRecorder:
     path: Path,
     trail_id: str,
     *,
+    extent: int,
     pending: list[str],
     position: _Position,
   ) -> None:
-    """`pending` are the awarded lines and `position` the read they came from;
-    the trail owns everything the file carries past it."""
+    """`extent` is what the trail already holds, `pending` the awarded lines and
+    `position` the read they came from; the trail owns everything the file
+    carries past it."""
     self.path = path
     self.trail_id = trail_id
-    self._recording = Recording(store, trail_id, 0)
+    self._recording = Recording(store, trail_id, extent)
     self._pending = pending
     self._position = position
     self._raised: Optional[str] = None
@@ -410,6 +413,7 @@ class Recorder:
       self.client,
       path,
       verdict['id'],
+      extent=verdict['extent'],
       pending=awarded,
       position=_Position(signature, byte_extent),
     )
@@ -440,8 +444,8 @@ class Recorder:
   # --- trail lifecycle ------------------------------------------------------------
 
   def _blaze(self, segment: str, lineage: dict) -> Optional[dict]:
-    """open the trail this transcript continues and return the verdict; None
-    when the resolver declines to adopt the segment yet."""
+    """settle the trail this transcript records into and return the verdict;
+    None when the resolver declines to adopt the segment yet."""
     body: dict[str, Any] = {'records': []}
     context = _launch_context()
     if context is not None:
@@ -469,6 +473,14 @@ class Recorder:
       log.info('segment %s not adopted yet (%s)', segment[:12], result.get('reason'))
       return None
     trail_id = result['id']
+    if result.get('attached') is True:
+      log.info(
+        'trail %s continues segment %s from step %d',
+        trail_id,
+        segment[:12],
+        result['extent'],
+      )
+      return result
     forked_from = result.get('forked_from')
     if forked_from is None:
       log.info(

@@ -12,6 +12,16 @@ from bro.trails.model import BlazeRequest
 # the native header fields a store folds from a trail's rows
 SERVER_DERIVED_NATIVE_FIELDS = frozenset({'usage', 'step_counts_by_kind', 'lineage_head'})
 
+# the wire reason a blaze answers when the trail its verdict attaches to advanced
+# between the verification and the write, leaving the awarded spans off by that
+# much; the caller's next attempt resolves against the extent it reached
+ATTACH_CONTENDED = 'the trail advanced while attaching'
+
+# the native fields a mint settles for good: `segment` is the key the trail's
+# index answers a lineage lookup on, so an attaching lifetime restamps its own
+# facts over the header but never the identity that lookup found it by
+_MINTED_NATIVE_FIELDS = frozenset({'segment'})
+
 BRO_STEP_KINDS = frozenset(
   {
     'system_prompt',
@@ -72,18 +82,42 @@ def resolve_lineage(adapter: Adapter, request: BlazeRequest, index: Any) -> Line
 
 
 def blaze_result(
-  trail_id: str, started_at: str, decision: Optional[LineageDecision]
+  trail_id: str, started_at: str, extent: int, decision: Optional[LineageDecision]
 ) -> dict[str, Any]:
-  """The create response: the new trail's identity, plus the resolver's verdict
-  when the request carried lineage evidence."""
-  result: dict[str, Any] = {'id': trail_id, 'started_at': started_at}
+  """The blaze response: the recording trail's identity and the ordinal its
+  writer appends from, plus the resolver's verdict when the request carried
+  lineage evidence. An attached trail answers as itself, so its extent is
+  whatever it already recorded."""
+  result: dict[str, Any] = {'id': trail_id, 'started_at': started_at, 'extent': extent}
   if decision is not None:
     result['adopted'] = True
-    result['forked_from'] = decision.forked_from
     result['chunks'] = decision.chunks
+    if decision.attach_to is None:
+      result['forked_from'] = decision.forked_from
+    else:
+      result['attached'] = True
     if decision.reason is not None:
       result['reason'] = decision.reason
   return result
+
+
+def attached_header(header: dict, request: BlazeRequest) -> dict[str, Any]:
+  """The header values a trail takes on when a lifetime attaches to it: the facts
+  the blaze would have minted a trail with, latest-wins over the ones the previous
+  lifetime left, and the end mark cleared so the trail is open again. `summoned_by`
+  is left alone, since the attribution belongs to the run that opened the trail,
+  and the server-derived native fold survives the merge because `validate_create`
+  refuses a writer those fields."""
+  restamped = {
+    key: value for key, value in request.native.items() if key not in _MINTED_NATIVE_FIELDS
+  }
+  return {
+    'end': None,
+    'version': request.version,
+    'hold': request.hold,
+    'location': request.location,
+    'native': {**header.get('native', {}), **restamped},
+  }
 
 
 def add_numeric_maps(left: dict, right: dict) -> dict:

@@ -9,7 +9,7 @@ from typing import Any, NamedTuple, Optional
 # them, and the window is what spans that gap
 _TAIL_ROWS = 20
 
-_HEAD_FIELDS = frozenset({'chain_first_uuid', 'tail', 'last_row_digest'})
+_HEAD_FIELDS = frozenset({'chain_first_uuid', 'tail', 'last_row_digest', 'cuts'})
 
 
 class TailRow(NamedTuple):
@@ -26,11 +26,14 @@ class LineageHead:
   against headers alone: the conversation's first record uuid — set at the root
   and inherited at every fork, since no single trail's rows hold it once a copy
   is skipped — the newest uuid rows, and the digest of the final row, which may
-  carry no uuid of its own."""
+  carry no uuid of its own. ``cuts`` is the one thing here no row carries: the
+  artifact spans the trail was minted to hold, so a trail whose rows never
+  arrived still says what it owns."""
 
   chain_first_uuid: Optional[str] = None
   tail: list[TailRow] = dataclasses.field(default_factory=list)
   last_row_digest: Optional[str] = None
+  cuts: Optional[list[list[int]]] = None
 
   @classmethod
   def stored(cls, native: dict) -> 'LineageHead':
@@ -47,12 +50,17 @@ class LineageHead:
       chain_first_uuid=_optional_text(value.get('chain_first_uuid'), 'chain_first_uuid'),
       tail=[_tail_row(entry) for entry in tail],
       last_row_digest=_optional_text(value.get('last_row_digest'), 'last_row_digest'),
+      cuts=_cuts(value.get('cuts')),
     )
 
   def inherited(self) -> 'LineageHead':
-    """The head a fork of this trail opens with, and the one a re-fold of its own
-    rows starts from."""
+    """The head a fork of this trail opens with."""
     return LineageHead(chain_first_uuid=self.chain_first_uuid)
+
+  def replayed(self) -> 'LineageHead':
+    """The head a re-fold of this trail's own rows starts from: what it inherited,
+    plus the mint spans the rows themselves do not carry."""
+    return LineageHead(chain_first_uuid=self.chain_first_uuid, cuts=self.cuts)
 
   def fold(self, *, step_id: int, uuid: Optional[str], payload_sha256: str) -> None:
     """Carry the head past one more row."""
@@ -70,6 +78,7 @@ class LineageHead:
       'chain_first_uuid': self.chain_first_uuid,
       'tail': [list(row) for row in self.tail],
       'last_row_digest': self.last_row_digest,
+      'cuts': self.cuts,
     }
 
 
@@ -77,6 +86,19 @@ def _optional_text(value: Any, field: str) -> Optional[str]:
   if value is not None and not isinstance(value, str):
     raise ValueError(f'lineage head {field} must be a string or null')
   return value
+
+
+def _cuts(value: Any) -> Optional[list[list[int]]]:
+  if value is None:
+    return None
+  if not isinstance(value, list) or not all(
+    isinstance(cut, list)
+    and len(cut) == 2
+    and all(isinstance(bound, int) and not isinstance(bound, bool) for bound in cut)
+    for cut in value
+  ):
+    raise ValueError(f'lineage head cuts must be [start, end] pairs: {value!r}')
+  return [list(cut) for cut in value]
 
 
 def _tail_row(entry: Any) -> TailRow:
@@ -93,16 +115,23 @@ def _tail_row(entry: Any) -> TailRow:
 
 @dataclasses.dataclass(frozen=True)
 class LineageDecision:
-  """A harness resolver's verdict for a trail about to be blazed: where it forks
-  from, and which ranges of the harness artifact the trail will hold. Each chunk
-  is a half-open ``[start, end)`` range; the last one grows as the artifact does.
-  ``adopt`` is False when the artifact is not yet in a state worth recording, and
-  nothing is created."""
+  """A harness resolver's verdict for a blaze: which trail records the artifact
+  from here, and which of its ranges that trail will hold. Each chunk is a
+  half-open ``[start, end)`` range; the last one grows as the artifact does.
+  A verdict either mints a trail — rooted, or ``forked_from`` an existing one —
+  or names in ``attach_to`` the trail this lifetime continues, with the
+  ``{trail_id, extent}`` the verification was made against. ``adopt`` is False
+  when the artifact is not yet in a state worth recording, and nothing happens."""
 
   adopt: bool = True
   forked_from: Optional[dict[str, Any]] = None
+  attach_to: Optional[dict[str, Any]] = None
   chunks: list[list[int]] = dataclasses.field(default_factory=lambda: [[0, 0]])
   reason: Optional[str] = None
+
+  def __post_init__(self) -> None:
+    if self.forked_from is not None and self.attach_to is not None:
+      raise ValueError('a lineage verdict either forks or attaches, never both')
 
 
 def walk_chain[TrailValue, BoundValue](

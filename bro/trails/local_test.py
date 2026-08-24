@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from bro.trails import backends
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest, canonical_json_bytes, payload_sha256
 from bro.trails.record.bro import Recorder
@@ -25,8 +26,8 @@ def _bro_request(*, bro: str = 'dev', forked_from: dict | None = None) -> BlazeR
   )
 
 
-def _claude_request(raw: str, *, context=None) -> BlazeRequest:
-  body = {'records': [raw]}
+def _claude_request(*records: str, context=None, lineage=None) -> BlazeRequest:
+  body = {'records': list(records)}
   if context is not None:
     body['launch_context'] = context
   return BlazeRequest(
@@ -41,6 +42,7 @@ def _claude_request(raw: str, *, context=None) -> BlazeRequest:
       'harness_version': 'test',
     },
     body=body,
+    lineage=lineage,
   )
 
 
@@ -95,9 +97,51 @@ def test_the_lineage_head_folds_across_appends(tmp_path):
     'chain_first_uuid': 'uuid-1',
     'tail': [[0, 'uuid-1', payload_sha256(first)]],
     'last_row_digest': payload_sha256(second),
+    'cuts': None,
   }
   bro_trail = store.blaze(_bro_request())['id']
   assert 'lineage_head' not in store.get_trail(bro_trail)['native']
+
+
+def test_an_attach_declines_when_the_trail_advanced_under_the_verdict(tmp_path, monkeypatch):
+  store = LocalStore(tmp_path)
+  lines = [
+    json.dumps({'type': 'user', 'uuid': f'uuid-{index}', 'message': {'content': 'hello'}})
+    for index in range(3)
+  ]
+  trail_id = store.blaze(_claude_request(lines[0]))['id']
+  lineage = {
+    'segment': 'segment',
+    'lines': [[json.loads(raw)['uuid'], payload_sha256(raw)] for raw in lines],
+  }
+  stale = store.find_segment_trails({'segment'})
+  store.append_records(trail_id, 1, lines[1:2])
+  monkeypatch.setattr(store, 'find_segment_trails', lambda segments: stale)
+
+  assert store.blaze(_claude_request(lineage=lineage)) == {
+    'adopted': False,
+    'reason': backends.ATTACH_CONTENDED,
+  }
+
+
+def test_an_attach_leaves_the_segment_its_mint_stamped(tmp_path):
+  store = LocalStore(tmp_path)
+  lines = [
+    json.dumps({'type': 'user', 'uuid': f'uuid-{index}', 'message': {'content': 'hello'}})
+    for index in range(2)
+  ]
+  trail_id = store.blaze(_claude_request(lines[0]))['id']
+  request = _claude_request(
+    lineage={
+      'segment': 'segment',
+      'lines': [[json.loads(raw)['uuid'], payload_sha256(raw)] for raw in lines],
+    }
+  )
+  # a writer whose native disagrees with the evidence it was verified on
+  request.native['segment'] = 'elsewhere'
+
+  assert store.blaze(request)['id'] == trail_id
+  assert store.get_trail(trail_id)['native']['segment'] == 'segment'
 
 
 def test_a_writer_may_not_send_the_folded_head(tmp_path):

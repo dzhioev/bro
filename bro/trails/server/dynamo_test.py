@@ -368,7 +368,7 @@ _CLAUDE_NATIVE = {
 }
 
 
-def _blaze_claude(store: dynamo_store.DynamoStore, **overrides) -> str:
+def _claude_payload(**overrides) -> dict:
   payload = {
     'harness': 'claude',
     'version': '2',
@@ -378,7 +378,11 @@ def _blaze_claude(store: dynamo_store.DynamoStore, **overrides) -> str:
     'body': {'records': []},
   }
   payload.update(overrides)
-  return (store.blaze(BlazeRequest.from_wire(payload)))['id']
+  return payload
+
+
+def _blaze_claude(store: dynamo_store.DynamoStore, **overrides) -> str:
+  return (store.blaze(BlazeRequest.from_wire(_claude_payload(**overrides))))['id']
 
 
 def test_build_dynamo_store_uses_the_shared_credential_shape(monkeypatch):
@@ -752,8 +756,47 @@ def test_the_segment_key_and_lineage_head_ride_the_header_writes(components):
     'chain_first_uuid': 'uuid-1',
     'tail': [[0, 'uuid-1', payload_sha256(first)]],
     'last_row_digest': payload_sha256(first),
+    'cuts': None,
   }
   assert 'segment' not in dynamo.headers[_blaze_bro(store)]
+
+
+def test_attaching_reopens_the_trail_conditional_on_the_extent_it_verified(components, monkeypatch):
+  store, dynamo, _ = components
+  trail_id = _blaze_claude(store)
+  recorded = _claude_assistant('message-1', 'first', uuid='uuid-1')
+  store.append_records(trail_id, offset=0, records=[recorded])
+  store.end_trail(trail_id, 'ok')
+  resumed = [
+    _claude_assistant(f'message-{index}', 'text', uuid=f'uuid-{index}') for index in (2, 3)
+  ]
+  lineage = {
+    'segment': 'segment',
+    'lines': [
+      [f'uuid-{index}', payload_sha256(raw)]
+      for index, raw in enumerate([recorded, *resumed], start=1)
+    ],
+  }
+
+  attached = store.blaze(BlazeRequest.from_wire(_claude_payload(lineage=lineage, version='3')))
+
+  assert (attached['id'], attached['extent'], attached['chunks']) == (trail_id, 1, [[1, 1]])
+  assert dynamo.headers[trail_id]['end'] is None
+  assert dynamo.headers[trail_id]['version'] == '3'
+  assert dynamo.headers[trail_id]['native']['lineage_head']['tail'] == [
+    [0, 'uuid-1', payload_sha256(recorded)]
+  ]
+
+  # the race the extent condition covers: an append lands between the header the
+  # verdict was verified against and the write that reopens it
+  stale = store.find_segment_trails({'segment'})
+  store.append_records(trail_id, offset=1, records=resumed[:1])
+  monkeypatch.setattr(store, 'find_segment_trails', lambda segments: stale)
+
+  contended = store.blaze(BlazeRequest.from_wire(_claude_payload(lineage=lineage, version='4')))
+
+  assert contended == {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
+  assert dynamo.headers[trail_id]['version'] == '3'
 
 
 def test_check_detects_corruption_and_recompute_repairs_rows_and_header(components):
@@ -811,6 +854,7 @@ def test_the_backfill_stamps_the_segment_key_and_folds_the_heads_a_fork_shares(c
     'chain_first_uuid': 'uuid-0',
     'tail': [[0, 'uuid-2', payload_sha256(child_record)]],
     'last_row_digest': payload_sha256(child_record),
+    'cuts': None,
   }
   assert dynamo.headers[root]['native']['lineage_head']['tail'] == [
     [index, f'uuid-{index}', payload_sha256(record)] for index, record in enumerate(root_records)

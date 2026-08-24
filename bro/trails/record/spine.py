@@ -23,11 +23,8 @@ class Recording:
 
   @classmethod
   def create(cls, store: TrailsStore, request: BlazeRequest) -> 'Recording':
-    records = request.body.get('records')
-    if not isinstance(records, list):
-      raise ValueError('trail body.records must be a list')
-    trail_id: str = store.blaze(request)['id']
-    return cls(store, trail_id, len(records))
+    opened = store.blaze(request)
+    return cls(store, opened['id'], opened['extent'])
 
   @property
   def extent(self) -> int:

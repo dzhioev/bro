@@ -40,20 +40,21 @@ def _bro_request(*, bro='dev', body=None, forked_from=None, subject=None):
   )
 
 
-def _lineage(*records, segment='segment'):
+def _lineage(*records, segment='segment', related=()):
   return {
     'segment': segment,
     'lines': [[json.loads(record)['uuid'], payload_sha256(record)] for record in records],
+    'related_segments': list(related),
   }
 
 
-def _claude_request(*records, context=None, lineage=None):
+def _claude_request(*records, context=None, lineage=None, version='test', native=None, **fields):
   body = {'records': list(records)}
   if context is not None:
     body['launch_context'] = context
   return BlazeRequest(
     harness='claude',
-    version='test',
+    version=version,
     interactive=True,
     surface='ride',
     body=body,
@@ -62,8 +63,10 @@ def _claude_request(*records, context=None, lineage=None):
       'segment': 'segment',
       'ride_command': 'ride along',
       'harness_version': 'test',
+      **(native if native is not None else {}),
     },
     lineage=lineage,
+    **fields,
   )
 
 
@@ -197,13 +200,69 @@ class TestTrailsStoreContract:
     third = json.dumps({'type': 'user', 'uuid': 'uuid-3', 'message': {'content': 'again'}})
 
     declined = trails_store.blaze(_claude_request(lineage=_lineage(first, second)))
-    verdict = trails_store.blaze(_claude_request(lineage=_lineage(first, second, third)))
+    resumed = trails_store.blaze(_claude_request(lineage=_lineage(first, second, third)))
+    copied = trails_store.blaze(
+      _claude_request(
+        lineage=_lineage(first, second, third, segment='copy', related=('segment',)),
+        native={'segment': 'copy'},
+      )
+    )
 
     assert declined == {'adopted': False, 'reason': 'no line past the recorded extent yet'}
-    assert verdict['adopted'] is True
-    assert verdict['forked_from'] == {'trail_id': trail_id, 'step_id': 1}
-    assert verdict['chunks'] == [[2, 2]]
-    assert trails_store.get_trail(verdict['id'])['forked_from'] == verdict['forked_from']
+    assert resumed['adopted'] is True
+    assert (resumed['id'], resumed['attached'], resumed['extent']) == (trail_id, True, 2)
+    assert resumed['chunks'] == [[2, 2]]
+    assert copied['id'] != trail_id
+    assert copied['forked_from'] == {'trail_id': trail_id, 'step_id': 1}
+    assert trails_store.get_trail(copied['id'])['forked_from'] == copied['forked_from']
+
+  def test_attaching_reopens_the_segments_trail_for_the_new_lifetime(self, trails_store):
+    first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
+    second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
+    opened = trails_store.blaze(
+      _claude_request(first, second, summoned_by={'trail_id': 'summoner', 'step_id': 1})
+    )
+    trails_store.end_trail(opened['id'], 'ok')
+    third = json.dumps({'type': 'user', 'uuid': 'uuid-3', 'message': {'content': 'again'}})
+
+    attached = trails_store.blaze(
+      _claude_request(
+        lineage=_lineage(first, second, third),
+        version='next',
+        hold='unattended',
+        location={'host': 'elsewhere'},
+        native={'llm': {'type': 'claude', 'model': 'other'}, 'ride_command': 'ride along again'},
+      )
+    )
+    trails_store.append_records(opened['id'], attached['extent'], [third])
+
+    assert attached['id'] == opened['id']
+    header = trails_store.get_trail(opened['id'])
+    assert header['end'] is None
+    assert header['extent'] == 3
+    assert (header['version'], header['hold']) == ('next', 'unattended')
+    assert header['location'] == {'host': 'elsewhere'}
+    assert header['native']['llm'] == {'type': 'claude', 'model': 'other'}
+    assert header['native']['ride_command'] == 'ride along again'
+    # what the rows folded is the trail's, not the attaching writer's to reset
+    assert header['native']['step_counts_by_kind'] == {'system': 1, 'user': 2}
+    # the attribution stays with the run that opened the trail
+    assert header['summoned_by'] == {'trail_id': 'summoner', 'step_id': 1}
+
+  def test_a_lost_blaze_response_converges_on_the_trail_it_minted(self, trails_store):
+    first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
+    second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
+    # the response the caller never saw: a trail awarded the whole file, holding
+    # no row yet to be verified against
+    orphan = trails_store.blaze(_claude_request(lineage=_lineage(first, second)))
+
+    retry = trails_store.blaze(_claude_request(lineage=_lineage(first, second)))
+    trails_store.append_records(retry['id'], retry['extent'], [first, second])
+
+    assert retry['id'] == orphan['id']
+    assert (retry['attached'], retry['extent'], retry['chunks']) == (True, 0, [[0, 0]])
+    assert [step['body'] for step in trails_store.iter_steps(orphan['id'])] == [first, second]
+    assert len(list(trails_store.iter_trails(harness='claude'))) == 1
 
   def test_large_bodies_are_inline(self, trails_store):
     trail_id = trails_store.blaze(_bro_request())['id']

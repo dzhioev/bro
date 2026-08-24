@@ -147,8 +147,10 @@ async def _handle_blaze(request: web.Request) -> web.Response:
     result = await _dispatch(store.blaze, blaze_request)
   except ValueError as exception:
     return _error(str(exception), 400)
-  # a resolver that declines to adopt creates nothing, so the response is not 201
-  return web.json_response(result, status=200 if result.get('adopted') is False else 201)
+  # a resolver that declines to adopt creates nothing, and neither does one that
+  # attaches the caller to the trail its segment already has
+  minted = result.get('adopted') is not False and 'attached' not in result
+  return web.json_response(result, status=201 if minted else 200)
 
 
 @requires(Permission.WRITE)

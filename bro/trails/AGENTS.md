@@ -41,14 +41,23 @@ bro · claude recorders                     readers
   every other 404 surfaces as `HTTPStatusError` carrying what the response said.
   Its concrete `recompute`, `check`, `relink`, and `backfill_lineage_heads` methods forward the Dynamo administration endpoints;
   they are not part of `TrailsStore`.
-- `claude_lineage.py` owns the claude evidence contract and resolves fork lineage from it:
+- `claude_lineage.py` owns the claude evidence contract and resolves lineage from it:
   the adopted segment, its lines' record uuids and digests, and the sibling segments sharing those records.
-  It verifies that evidence against candidate headers' `lineage_head` and returns a fork point with the file ranges the new trail owns, a decline while a history copy is mid-write, or a root.
+  It verifies that evidence against candidate headers' `lineage_head` and answers with the file ranges the recording trail owns, plus how that trail is reached:
+  the trail this lifetime attaches to, a fork point for a new one, a decline while a history copy is mid-write, or a root.
+  Trail identity follows the segment:
+  a verified same-segment resume attaches, so a linear conversation stays one trail across process restarts and a fork edge marks an actual fork.
+  A trail whose blaze response was lost holds no row to verify, and is attachable on the `cuts` its mint stored instead, which is what makes a blaze idempotent for the segment it names.
   `LineageIndex` is the store-internal surface it reads through, two lookups each backend implements its own way:
   the trails recording a set of segments
   — `DynamoStore` queries the `segment-started_at-index` GSI over the top-level `segment` attribute, `LocalStore` filters its header scan
   — and whether any of them stores one record uuid, the mid-write test and the only row read a resolution can make.
   Nothing on this path crosses the wire, and continuity across recorder lifetimes comes from the stored rows alone, through the head they folded.
+- An attach reopens the trail it names:
+  each store clears `end` and restamps the blaze's own lifetime facts over the header latest-wins, leaving `summoned_by` to the run that opened the trail and the row-folded aggregate to the rows
+  — `backends.attached_header` is the one place that decides which fields those are.
+  The write is conditional on the extent the verdict was verified against, since an append landing meanwhile would leave the awarded spans off by its length;
+  a lost race answers `backends.ATTACH_CONTENDED` and the caller resolves again.
 - `local.py` stores each trail under `<root>/trails/<id>/` as `header.json`, `steps.jsonl`, and optional `context.json`, with tool blobs under `<root>/trails/tools/<sha256>.json` and delete manifests under `<root>/manifests/delete/`.
   Appends are ordinal and `flock`-serialized, headers are atomically replaced, bodies remain inline, and listing preserves the selector/cursor contract.
   A stale open header gets `end.inference = unreported` when read.
@@ -95,6 +104,8 @@ bro · claude recorders                     readers
   `backends.SERVER_DERIVED_NATIVE_FIELDS` names what the fold owns:
   `validate_create` refuses those fields from a writer, and `AggregateState.replaying` clears them for the recompute/check re-fold.
   `native.lineage_head` (`lineage.py`) is among them, folded for the harnesses whose adapter resolves lineage.
+  Its `cuts` are the exception the fold does not derive:
+  the spans the mint verdict awarded, written once at blaze and carried through the replay seed and the backfill.
   Client-side stores and recorders do not import `bro.trails.server`.
 - **Recorder placement:**
   core `record/spine.py` owns the shared write spine.
@@ -119,8 +130,10 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
 - Core `record/spine.py` owns blaze, ordinal extent validation, batched appends, liveness, and ending;
   `bro-native`'s `record/bro.py` adapts `bro.llm.tracker.Tracker`.
   `ride.claude.trail_recorder` records Claude transcripts, reporting each adopted segment's evidence and applying the core lineage verdict it gets back.
-- `POST /v1/trails` blazes from `body.records`, resolving `lineage` evidence when the request carries it
-  — the response then adds the verdict (`adopted`, `forked_from`, `chunks`) and a declined adoption creates nothing.
+- `POST /v1/trails` blazes from `body.records`, resolving `lineage` evidence when the request carries it.
+  The response names the recording trail and the `extent` its writer appends from, and adds the verdict (`adopted`, `chunks`, and either `forked_from` or `attached`) where evidence was carried.
+  201 is for a trail that was minted;
+  a declined adoption creates nothing and an attach reopens what already existed, so both answer 200.
   `POST /v1/trails/{id}/records` appends at `offset`.
   A committed retry returns the current extent without folding again;
   any other extent mismatch is a conflict.
