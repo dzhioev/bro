@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from bro.launch.broxy import session_broxy
+from bro.launch.hold import HOLD_VARIABLE
 from bro.registry import create_bro
 from bro.workspace.session import clear_requested_exit_status, requested_exit_status
 from ride.identity import bro_git_identity_env
@@ -94,6 +95,11 @@ def run_in_place(harness: 'Harness', spec: 'SessionSpec') -> int:
   os.environ.update(bro_git_identity_env(spec.bro))
   # RIDE_BRO themes the session (banner, statusLine)
   os.environ['RIDE_BRO'] = spec.bro
+  # the hold and this runner's pid overwrite any ambient value: a session
+  # launched from inside another must inherit neither its hold nor a kill target
+  # naming a foreign runner
+  os.environ[HOLD_VARIABLE] = spec.hold
+  os.environ['RIDE_RUNNER_PID'] = str(os.getpid())
   if spec.repo is not None:
     create_bro(spec.bro).provision_workspace(Path.cwd())
   clear_requested_exit_status()

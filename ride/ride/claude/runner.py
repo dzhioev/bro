@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING
 
 from bro.base import log
 from bro.channel import BroChannel
-from bro.launch.hold import HOLD_VARIABLE
 from bro.monitor import (
   CLAUDE_CONFIG_DIR_ENV,
   SESSION_DIR_ENV,
@@ -182,12 +181,6 @@ def run_in_place(spec: 'SessionSpec') -> int:
       return 1
     log.info('resuming session %s', latest.stem)
     claude_args = ['--resume', latest.stem, *claude_args]
-
-  # hold and kill wiring for the `raise` service tool's mounts (bro/bro.py).
-  # both overwrite any ambient value: a session launched from inside another
-  # must not inherit its hold or kill target.
-  os.environ[HOLD_VARIABLE] = spec.hold
-  os.environ['RIDE_RUNNER_PID'] = str(os.getpid())
 
   with contextlib.ExitStack() as teardown:
     # session-local MCP serving, one mechanism for both flavors: OS-assigned port

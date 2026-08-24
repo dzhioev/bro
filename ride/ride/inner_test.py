@@ -13,6 +13,15 @@ from ride.harness import get_harness
 from ride.session_test import _spec
 
 
+@pytest.fixture(autouse=True)
+def isolated_environ():
+  """run_in_place exports the session environment (git identity, RIDE_BRO, the
+  hold, the runner pid) into the live process environment; snapshot-restore it
+  so no test here leaks them into the rest of the suite."""
+  with patch.dict(os.environ, {}, clear=False):
+    yield
+
+
 def _inner_argv(spec) -> list[str]:
   harness = get_harness(spec.harness)
   return ride_inner.inner_command(spec, harness_flags=harness.inner_flags(spec))
@@ -94,12 +103,22 @@ class TestRunInPlace:
     monkeypatch.setattr(ride_inner, 'create_bro', lambda _name: declaration)
     harness = MagicMock()
     harness.run_in_place.return_value = 7
-    with patch.dict(os.environ, {}, clear=False):
-      assert ride_inner.run_in_place(harness, _spec(bro='dev')) == 7
-      assert os.environ['RIDE_BRO'] == 'dev'
-      assert os.environ['GIT_AUTHOR_NAME'] == 'dev'
+    assert ride_inner.run_in_place(harness, _spec(bro='dev')) == 7
+    assert os.environ['RIDE_BRO'] == 'dev'
+    assert os.environ['GIT_AUTHOR_NAME'] == 'dev'
     declaration.provision_workspace.assert_called_once_with(tmp_path)
     harness.run_in_place.assert_called_once()
+
+  def test_the_hold_and_kill_target_overwrite_an_ambient_pair(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ride_inner, 'bro_git_identity_env', lambda _name: {})
+    monkeypatch.setattr(ride_inner, 'create_bro', lambda _name: MagicMock())
+    harness = MagicMock()
+    harness.run_in_place.return_value = 0
+    os.environ.update({'BRO_HOLD': 'unattended', 'RIDE_RUNNER_PID': '1'})
+    assert ride_inner.run_in_place(harness, _spec(hold='attended')) == 0
+    assert os.environ['BRO_HOLD'] == 'attended'
+    assert os.environ['RIDE_RUNNER_PID'] == str(os.getpid())
 
   def test_detached_session_skips_persona_workspace_provisioning(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
