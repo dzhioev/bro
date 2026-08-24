@@ -489,10 +489,20 @@ class Store:
   owning its own refresh, and a secret whose reference expansion embedded one
   is re-expanded per read for the same reason. a json secret's `{"$cred": ...}`
   reference nodes are expanded during the resolve (module docstring), so cached
-  and returned values are always the effective, self-contained text."""
+  and returned values are always the effective, self-contained text.
 
-  def __init__(self, registry: dict[str, Secret]):
+  `readable` bounds the names a reader may address, defaulting to the whole
+  registry. reference expansion resolves through the registry regardless, so a
+  store serving part of one expands exactly what a store over all of it would;
+  a name outside the bound reads as absent."""
+
+  def __init__(self, registry: dict[str, Secret], *, readable: Optional[Iterable[str]] = None):
     self._registry = registry
+    known = frozenset(registry)
+    self._readable = known if readable is None else frozenset(readable)
+    absent = sorted(self._readable - known)
+    if len(absent) > 0:
+      raise ValueError(f'readable names outside the registry: {", ".join(map(repr, absent))}')
     self._cache: dict[str, str] = {}
     self._winners: dict[str, Source] = {}
     self._lock = threading.Lock()
@@ -518,10 +528,13 @@ class Store:
 
   def resolve(self, name: str) -> Optional[tuple[str, bool]]:
     """resolve a secret by its stored registry name to (value, cacheable), or
-    None when no source yields a value. cacheable is False when the winning
-    source — or any source behind the expanded references — declares its values
-    un-cacheable, i.e. a later read may observe a different (re-derived) value;
-    `try_get_instance`/`get_instance` are the value-only spellings."""
+    None when the name is outside the store's readable bound or no source yields
+    a value. cacheable is False when the winning source — or any source behind
+    the expanded references — declares its values un-cacheable, i.e. a later read
+    may observe a different (re-derived) value; `try_get_instance`/`get_instance`
+    are the value-only spellings."""
+    if name not in self._readable:
+      return None
     # one lock around the whole resolve: a secret is fetched at most once even
     # under concurrent callers, and the store is read only a handful of times per
     # process (each value cached on first read), so a lock-free fast path buys
@@ -559,10 +572,12 @@ class Store:
       return self._winners[name]
 
   def sources(self, name: str) -> Sequence[Source]:
-    """the ordered source list registered under `name`, empty when the registry
-    lacks the name. a registry read — nothing is fetched or minted."""
-    secret = self._registry.get(name)
-    return secret.sources if secret is not None else ()
+    """the ordered source list this store reads `name` through, empty when the
+    name is outside its readable bound. a registry read — nothing is fetched or
+    minted."""
+    if name not in self._readable:
+      return ()
+    return self._registry[name].sources
 
   def _expand_references(self, text: str, chain: tuple[str, ...]) -> tuple[str, bool]:
     """substitute every reference node in a json secret's tree; text that isn't
@@ -660,8 +675,8 @@ class Store:
     return self.try_get_instance(name) is not None
 
   def known_names(self) -> frozenset[str]:
-    """every secret name this store's registry knows, resolvable or not."""
-    return frozenset(self._registry)
+    """every secret name this store serves, resolvable or not."""
+    return self._readable
 
   def get_json(self, name: str) -> dict:
     """kind-addressed `get` parsed as a json object. raises if the text isn't
@@ -1052,6 +1067,12 @@ def scoped_view_store(names: Iterable[str], *, optional: Iterable[str] = ()) -> 
   the kind name — the namespace a session's materialized store serves — and a
   read returns the value hydration would materialize from that entry.
 
+  reads are bounded to those kinds while resolution runs against the registry
+  overlaid with them, the registry `build_scoped_store` hydrates against: a
+  `$cred` node naming a kind in scope picks up the launch-selected instance, and
+  one reaching outside it expands through the registry's own entry rather than
+  finding nothing.
+
   nothing is fetched or minted up front: each read resolves on demand through
   the entry's own sources, and a name that cannot resolve surfaces as
   `SecretNotFound` at that read rather than failing a launch. registry-level
@@ -1059,8 +1080,10 @@ def scoped_view_store(names: Iterable[str], *, optional: Iterable[str] = ()) -> 
   code that reads a credential on a launch's behalf without hydrating the
   session's store.
   """
-  selection = _scoped_selection(set(names), set(optional), _load_registry())
-  return Store({parse_name(name)[0]: secret for name, secret, _ in selection})
+  registry = _load_registry()
+  selection = _scoped_selection(set(names), set(optional), registry)
+  scoped = {parse_name(name)[0]: secret for name, secret, _ in selection}
+  return Store({**registry, **scoped}, readable=scoped)
 
 
 def _require_kind_level(name: str, reference: str) -> None:

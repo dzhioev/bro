@@ -4,6 +4,8 @@ own declarations (manifest, optional tier, `may_summon`) against the operated
 project's instance selection.
 """
 
+import contextlib
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
@@ -25,6 +27,18 @@ class LaunchScopeError(Exception):
   does not declare, a malformed or no-op grant/revoke override, a credential kind
   the host reads per project that this launch's attachment binds no entry for, an
   unknown summon target, or an unknown/unresolvable required secret."""
+
+
+@contextlib.contextmanager
+def launch_scope_errors() -> Iterator[None]:
+  """raise whatever a launch's credential scope fails with as a single
+  `LaunchScopeError`, for the surface to render on its own error path. a caller
+  deferring a read through `launch_view_store` wraps it too, so a failure at that
+  read names the launch rather than the credential it stopped on."""
+  try:
+    yield
+  except (ValueError, credentials.SecretNotFound) as e:
+    raise LaunchScopeError(str(e)) from e
 
 
 @dataclass(frozen=True)
@@ -161,12 +175,10 @@ def preflight_scoped_launch(
   # summon_control: the module sits on the pre-gate launch path
   from ride.summon_control import summon_allow_list
 
-  try:
+  with launch_scope_errors():
     scoped, grant_bros, revoke_bros = _finalize_credential_scope(scoped, grant, revoke)
     may_summon = summon_allow_list(bro_name, grant=grant_bros, revoke=revoke_bros)
     store = credentials.build_scoped_store(scoped.required, optional=scoped.optional)
-  except (ValueError, credentials.SecretNotFound) as e:
-    raise LaunchScopeError(str(e)) from e
   return scoped, may_summon, store
 
 
@@ -190,9 +202,9 @@ def launch_view_store(
   (`credentials.scoped_view_store`), for host-side code that reads a credential
   on the session's behalf before the launch exists. `grant`/`revoke` are the
   unified override values; the `@bro` halves shape only the summon side and are
-  ignored here. raises `LaunchScopeError` like the preflight."""
-  try:
+  ignored here. raises `LaunchScopeError` like the preflight; a read through the
+  returned store is the caller's to wrap in `launch_scope_errors`, the store
+  itself being a plain one."""
+  with launch_scope_errors():
     finalized, _, _ = _finalize_credential_scope(scoped, grant, revoke)
     return credentials.scoped_view_store(finalized.required, optional=finalized.optional)
-  except (ValueError, credentials.SecretNotFound) as e:
-    raise LaunchScopeError(str(e)) from e
