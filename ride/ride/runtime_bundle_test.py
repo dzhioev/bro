@@ -116,6 +116,26 @@ def _classify(
   return pins, local
 
 
+def _stamped_wheel(
+  path: Path, date_time: tuple[int, int, int, int, int, int], *, reverse: bool
+) -> None:
+  entries = {
+    'demo/__init__.py': ('value = 1\n', 0o644),
+    'demo/run.sh': ('exit 0\n', 0o755),
+    'demo-1.0.dist-info/METADATA': ('Metadata-Version: 2.1\nName: demo\nVersion: 1.0\n', 0o644),
+    'demo-1.0.dist-info/WHEEL': (
+      'Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n',
+      0o644,
+    ),
+  }
+  with zipfile.ZipFile(path, 'w') as archive:
+    for name in sorted(entries, reverse=reverse):
+      content, mode = entries[name]
+      entry = zipfile.ZipInfo(name, date_time)
+      entry.external_attr = mode << 16
+      archive.writestr(entry, content)
+
+
 def _pure_wheel(path: Path) -> None:
   with zipfile.ZipFile(path, 'w') as archive:
     archive.writestr(
@@ -318,6 +338,39 @@ def test_a_host_snapshot_reresolves_to_its_own_bundle(monkeypatch, probe, tmp_pa
 
     with runtime_bundle.resolve_runtime_bundle() as snapshot:
       assert snapshot.hash == bundle.hash
+
+
+def test_a_stamped_or_reordered_rebuild_freezes_one_bundle(monkeypatch, tmp_path):
+  builds = iter([((2026, 8, 23, 23, 57, 12), False), ((2026, 8, 23, 23, 57, 14), True)])
+
+  def build(command, *, description):
+    del description
+    out_dir = Path(command[command.index('--out-dir') + 1])
+    date_time, reverse = next(builds)
+    _stamped_wheel(out_dir / 'demo-1.0-py3-none-any.whl', date_time, reverse=reverse)
+    return subprocess.CompletedProcess(command, 0, '', '')
+
+  monkeypatch.setattr(runtime_bundle, '_run', build)
+  local = [runtime_bundle._LocalDistribution('demo', tmp_path / 'source')]
+  frozen = []
+  for attempt in ('first', 'second'):
+    staging = tmp_path / attempt
+    staging.mkdir()
+    wheels = runtime_bundle._build_wheels(local, staging)
+    manifest = runtime_bundle._manifest('3.12', [], wheels)
+    frozen.append(runtime_bundle._persist_bundle(tmp_path / 'base', manifest, wheels))
+
+  assert frozen[0] == frozen[1]
+  with zipfile.ZipFile(frozen[0] / 'wheels' / 'demo-1.0-py3-none-any.whl') as carried:
+    assert carried.namelist() == [
+      'demo/__init__.py',
+      'demo/run.sh',
+      'demo-1.0.dist-info/METADATA',
+      'demo-1.0.dist-info/WHEEL',
+    ]
+    assert carried.read('demo/__init__.py') == b'value = 1\n'
+    assert carried.getinfo('demo/run.sh').external_attr >> 16 == 0o755
+    assert len({info.date_time for info in carried.infolist()}) == 1
 
 
 def test_bundle_hash_covers_pins_python_and_wheel_bytes(tmp_path):

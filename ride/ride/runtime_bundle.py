@@ -23,6 +23,8 @@ from bro.workspace.paths import runtime_base
 
 _SESSION_COMMAND_GROUP = 'bro.session_commands'
 _HASH_PATTERN = re.compile(r'[0-9a-f]{64}')
+# the zip epoch, the earliest an entry can carry
+_WHEEL_ENTRY_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
 
 class RuntimeBundleError(RuntimeError):
@@ -397,8 +399,32 @@ def _build_wheels(local: list[_LocalDistribution], wheels: Path) -> list[Path]:
     if wheel.name in names:
       raise RuntimeBundleError(f'duplicate built wheel filename: {wheel.name}')
     names.add(wheel.name)
+    _normalize_wheel(wheel)
     built.append(wheel)
   return sorted(built, key=lambda path: path.name.casefold())
+
+
+def _entry_order(info: zipfile.ZipInfo) -> tuple[bool, str]:
+  """entry sort key: by name, with the `.dist-info` directory last as the wheel format asks."""
+  return info.filename.split('/')[0].endswith('.dist-info'), info.filename
+
+
+def _normalize_wheel(path: Path) -> None:
+  """rewrite the archive so that its bytes follow its contents alone.
+
+  A build backend is free to stamp the build time into the `.dist-info` entries it generates
+  and to lay entries out in whatever order its own walk reached them, so an unchanged source
+  tree otherwise yields wheel bytes that differ per build.
+  """
+  staged = path.with_suffix('.normalizing')
+  with zipfile.ZipFile(path) as source, zipfile.ZipFile(staged, 'w') as target:
+    for info in sorted(source.infolist(), key=_entry_order):
+      entry = zipfile.ZipInfo(info.filename, _WHEEL_ENTRY_TIMESTAMP)
+      entry.compress_type = info.compress_type
+      entry.external_attr = info.external_attr
+      entry.create_system = info.create_system
+      target.writestr(entry, source.read(info))
+  staged.replace(path)
 
 
 def _wheel_digest(path: Path) -> str:

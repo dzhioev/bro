@@ -179,6 +179,8 @@ index installations become exact `name==version` pins;
 version-control and remote-archive installations become direct-reference pins at their resolved commit or recorded hash;
 local sources — a directory or an archive
 — are carried in the bundle as wheels built or copied from their current contents.
+Their entries are laid out in a fixed order and carry one fixed timestamp rather than the build time a backend may record,
+so an unchanged source tree keeps resolving to the bundle it already froze.
 The Python major/minor joins the manifest, and a content hash names the persisted bundle under `~/.local/share/ride/runtime/<hash>/` (or `$XDG_DATA_HOME/ride/runtime/<hash>/`).
 Carrying local sources keeps the snapshot self-reproducing:
 re-resolving from a materialized bundle's own venv lands on the same hash.
