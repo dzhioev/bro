@@ -81,25 +81,28 @@ def run_job(
   jobs_directory: Path,
   visibility: UploadVisibility = UploadVisibility.NONE,
   job_name: Optional[str] = None,
+  attempts: Optional[int] = None,
 ) -> PostRunResult:
   """Run Harbor, then finish the concrete job directory it produced."""
+  if attempts is not None and attempts < 1:
+    raise ValueError(f'attempt depth must be at least one attempt: {attempts}')
   resolved_jobs_directory = jobs_directory.resolve()
   selected_job_name = job_name if job_name is not None else lulid()
   job_directory = _job_directory(resolved_jobs_directory, selected_job_name)
-  subprocess.run(
-    [
-      'harbor',
-      'job',
-      'start',
-      '-c',
-      str(config),
-      '--jobs-dir',
-      str(resolved_jobs_directory),
-      '--job-name',
-      selected_job_name,
-    ],
-    check=True,
-  )
+  command = [
+    'harbor',
+    'job',
+    'start',
+    '-c',
+    str(config),
+    '--jobs-dir',
+    str(resolved_jobs_directory),
+    '--job-name',
+    selected_job_name,
+  ]
+  if attempts is not None:
+    command += ['--n-attempts', str(attempts)]
+  subprocess.run(command, check=True)
   return finish_job(job_directory, visibility)
 
 
@@ -119,6 +122,12 @@ def main(argv: list[str]) -> Optional[int]:
   )
   parser.add_argument('--job-name', help='job directory name (default: a generated id)')
   parser.add_argument(
+    '-k',
+    '--n-attempts',
+    type=int,
+    help="override the config's attempt depth for this run",
+  )
+  parser.add_argument(
     '--upload',
     choices=tuple(UploadVisibility),
     default=UploadVisibility.NONE,
@@ -132,6 +141,7 @@ def main(argv: list[str]) -> Optional[int]:
       jobs_directory=args['jobs_dir'],
       visibility=args['upload'],
       job_name=args['job_name'],
+      attempts=args['n_attempts'],
     )
   except (OSError, RetentionError, subprocess.CalledProcessError, ValueError) as error:
     log.error('benchmark job pipeline failed: %s', error)
