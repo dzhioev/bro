@@ -80,6 +80,36 @@ Each trial keeps its own directory beside it, with the bro's activity log
 (`agent/bro.log`), per-model token counts (`agent/usage.json`) and the trail the run recorded
 (`agent/ride/trails/`) as the run's record.
 
+Compare one of the run's agents with the content-pinned native Claude Code leaderboard reference:
+
+```
+uv run --project benchmark bro.benchmark.compare jobs/<job-name> --agent bro:terminal
+```
+
+The report prints every task in the run with both agents' mean reward and trial count and their signed delta,
+and marks differences larger than `--divergence` or tasks missing from the reference.
+Reference tasks outside the run are omitted,
+so a wave report stays scoped to that wave.
+It closes with task coverage, matching trial totals, task-mean rollups, and divergence counts.
+Use `--reference <submission-json-path-or-url>` to select another Terminal-Bench 2.1 leaderboard submission.
+The first fetch reads its `source_jobs` from the submission,
+filters the Hub rows by the submission's exact agent, version, model, dataset, and materialized trial IDs,
+and honors its disqualifications as reward zero.
+Harbor currently requires `harbor auth login` or `HARBOR_API_KEY` to read those public rows.
+Later reports use the exact cached submission and Hub rows from `references/` beside a local job,
+unless `--refresh-reference` is set.
+
+A retention bucket is also a run input:
+
+```
+uv run --project benchmark bro.benchmark.compare s3://<bucket> --agent bro:terminal \
+  --score-config-sha256 sha256:<digest> --roster-sha256 sha256:<digest>
+```
+
+The command lists complete runs by their `runs/**/retention.json` markers and aggregates all runs in the selected cohort.
+The digest flags can be omitted when the bucket contains only one cohort.
+Reference records for this form are cached under the bucket's `references/` prefix.
+
 They are copied out of the container once the trial ends, so a job runs wherever the docker daemon
 is reachable and leaves nothing of a trial on the docker host.
 

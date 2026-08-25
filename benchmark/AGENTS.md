@@ -81,5 +81,7 @@ BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_
   trajectory conversion, an optional private or public Harbor Hub upload, then durable retention when configured
 - `bro/benchmark/retention.py` — copies every file in a finished run to the configured S3 bucket,
   with the strict run-cost report, a content inventory, and the score-producing config and bundle identity in a manifest uploaded last
+- `bro/benchmark/compare.py` (`bro.benchmark.compare`) — aggregates one local job or one complete retained-run cohort into per-task reward means,
+  resolves a public leaderboard submission and its exact filtered Hub trials through a beside-the-runs cache, and marks task-level deltas against that reference
 - `bro/benchmark/terminal_bench_2_1.yaml` — the pinned harbor job config, and with the bundle the
   whole of what a score depends on
