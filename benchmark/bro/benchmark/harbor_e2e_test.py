@@ -7,9 +7,10 @@ and the verifier grades what it left behind. It runs the documented commands
 rather than the library, so what is checked is the path an operator uses.
 
 It builds a real bundle, drives the host docker daemon and spends real tokens,
-so it stays out of the gate's roster:
+so it stays out of the gate's roster and skips without the repository's token
+opt-in:
 
-  uv run --directory benchmark pytest bro/benchmark/harbor_e2e_test.py
+  BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/harbor_e2e_test.py
 """
 
 import subprocess

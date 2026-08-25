@@ -48,6 +48,7 @@ import os
 import tempfile
 import time
 from collections.abc import Iterator
+from typing import Optional
 
 from bro.base import configs, credentials, log
 
@@ -61,13 +62,23 @@ SESSION_NAMESPACES = (
   'TRAILS_',
 )
 SESSION_VARIABLES = frozenset({'AI_AGENT', 'MCP_SERVER_BEARER_TOKEN', 'PWD'})
-KEPT_VARIABLES = frozenset({'BRO_LLM_TESTS'})
+TOKENS_OPT_IN = 'BRO_LLM_TESTS'
+KEPT_VARIABLES = frozenset({TOKENS_OPT_IN})
 TIMEZONE = 'Asia/Kolkata'
 
 # where both of the resolver's local search roots are pinned: a directory that
 # does not exist, so nothing along the path resolves and nothing accumulates
 # between runs.
 ABSENT_CREDENTIAL_STORE = os.path.join(tempfile.gettempdir(), 'bro-suite-absent-credential-store')
+
+
+def token_spending_skip_reason() -> Optional[str]:
+  """why a test that spends real tokens is skipped, or None where the run asked
+  for it. Every pytest root gates its own spenders on this, so what counts as
+  opting in is decided once."""
+  if os.environ.get(TOKENS_OPT_IN) == '1':
+    return None
+  return f'spends real tokens — set {TOKENS_OPT_IN}=1 to run'
 
 
 def _carries_session_state(name: str) -> bool:

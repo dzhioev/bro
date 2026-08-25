@@ -35,14 +35,15 @@ directory rather than `uv build --package`.
 
 The `*_e2e_test.py` modules stay out of the gate's roster:
 they build a bundle and drive the host
-docker daemon, the way `ride/ride/e2e_test.py` does, and the two that grade a trial spend real
-tokens.
+docker daemon, the way `ride/ride/e2e_test.py` does.
+The two that grade a trial spend real tokens as well, so naming the file is not enough
+— they carry the repository's token opt-in and skip without it.
 Run them explicitly, from `.venv`:
 
 ```
 uv run --directory benchmark pytest bro/benchmark/bundle_e2e_test.py
-uv run --directory benchmark pytest bro/benchmark/harbor_e2e_test.py
-uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
+BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/harbor_e2e_test.py
+BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
 ```
 
 ## Components
