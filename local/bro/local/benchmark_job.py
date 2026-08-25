@@ -109,8 +109,12 @@ def benchmark_kind(kind_context: KindContext) -> RequestHandler:
       '--jobs-dir',
       OUTPUT_DIRECTORY,
     )
+    environment = dict(os.environ)
+    environment['UV_PROJECT_ENVIRONMENT'] = str(
+      (workspace_tree.parent / 'benchmark-venv').resolve()
+    )
     context.job(
-      CommandJob(command=command, env=dict(os.environ)),
+      CommandJob(command=command, env=environment),
       peer,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,
     )

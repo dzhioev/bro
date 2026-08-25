@@ -69,6 +69,7 @@ def _denial(tree, args, *, peer=ROOT, context=None) -> str:
 class TestBenchmarkKind:
   def test_root_request_starts_the_job(self, tree, monkeypatch):
     monkeypatch.setenv('BENCH_SENTINEL', 'yes')
+    monkeypatch.setenv('UV_PROJECT_ENVIRONMENT', '/wrong/shared-environment')
     context = FakeContext()
     handle = _kind(tree)
     handle(cast(Dispatcher, context), ROOT, _request({'config': CONFIG}))
@@ -88,6 +89,9 @@ class TestBenchmarkKind:
       OUTPUT_DIRECTORY,
     )
     assert command.env['BENCH_SENTINEL'] == 'yes'  # the host environment rides the job
+    host_environment = Path(command.env['UV_PROJECT_ENVIRONMENT'])
+    assert host_environment == tree.parent / 'benchmark-venv'
+    assert not host_environment.is_relative_to(tree)
     assert (requester, timeout) == (ROOT, benchmark_job.DEFAULT_TIMEOUT)
 
   def test_request_timeout_bounds_the_job(self, tree):
