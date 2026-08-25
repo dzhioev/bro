@@ -70,6 +70,14 @@ def benchmark_bundle() -> Bundle:
   return built(default_root(workspace_root()))
 
 
+def reported_agent_name(bro: str) -> str:
+  return f'{AGENT_NAME}:{bro}'
+
+
+def reported_agent_version() -> str:
+  return benchmark_bundle().identity
+
+
 # `FAILURE_CATEGORIES`, as harbor's retry policy speaks them
 _HARBOR_EXCEPTIONS: dict[str, type[NonZeroAgentExitCodeError]] = {
   'rate-limit': ApiRateLimitError,
@@ -273,7 +281,7 @@ class BroAgent(BaseInstalledAgent):
 
   @override
   def version(self) -> str:
-    return benchmark_bundle().identity
+    return reported_agent_version()
 
   @override
   def to_agent_info(self) -> AgentInfo:
@@ -283,7 +291,7 @@ class BroAgent(BaseInstalledAgent):
     driving different bros have to report different identities or their trials
     are summed into one.
     """
-    return super().to_agent_info().model_copy(update={'name': f'{AGENT_NAME}:{self._bro}'})
+    return super().to_agent_info().model_copy(update={'name': reported_agent_name(self._bro)})
 
   @override
   async def install(self, environment: BaseEnvironment) -> None:
