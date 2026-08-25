@@ -259,6 +259,9 @@ class TrailsServerStack(Stack):
       )
     ingress_rules[0].override_logical_id(config.load_balancer_ingress_logical_id)
     egress_rules[0].override_logical_id(config.load_balancer_egress_logical_id)
+    # a same-app platform orders the egress rule after these resources, while a
+    # lookup-imported security group generates no such edges; pinning them keeps
+    # both assemblies' templates identical
     egress_rules[0].node.add_dependency(
       task_role,
       task_role.node.find_child('DefaultPolicy'),

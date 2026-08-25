@@ -134,7 +134,7 @@ prepare_image_build() {
 
 build_and_push() {
   if [ "$#" -lt 3 ]; then
-    echo "usage: build_and_push <tag> <dockerfile> <context> [buildx-argument ...]" >&2
+    echo "usage: build_and_push <tag> <dockerfile> [buildx-argument ...] <context>" >&2
     return 2
   fi
   local image_tag="$1" dockerfile="$2"
@@ -146,7 +146,7 @@ build_and_push() {
 
 build_image() {
   if [ "$#" -lt 3 ]; then
-    echo "usage: build_image <tag> <dockerfile> <context> [buildx-argument ...]" >&2
+    echo "usage: build_image <tag> <dockerfile> [buildx-argument ...] <context>" >&2
     return 2
   fi
   local image_tag="$1" dockerfile="$2"

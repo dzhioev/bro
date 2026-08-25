@@ -41,7 +41,7 @@ editable installs record absolute source paths.
   consumers resolve the packaged directory with `bro-shell-dir`
 - `log.sh` — leveled shell logging thresholded by `BRO_LOG_LEVEL`
 - `strict.sh` — fail-fast shell guards, including command-not-found inside test positions
-- `docker_smoke_test.sh` — packaged sourceable helper for service `verify_deps.sh` scripts
+- `docker_smoke_test.sh` — packaged sourceable helper for service image smoke-test scripts
 - `dev/bro/workflow/hooks/post-commit` — packaged by `bro-dev` and installed by `bro.dev.install`;
   it advances token-accounting state after each commit
 
