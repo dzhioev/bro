@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 import boto3
 from boto3.exceptions import Boto3Error
+from botocore.exceptions import BotoCoreError, ClientError
 from harbor.models.job.result import JobResult
 from harbor.models.trial.result import TrialResult
 
@@ -20,7 +21,7 @@ from bro.benchmark.trajectory import job_trajectory_cost_usd
 RETENTION_CREDENTIAL = 'benchmark_retention'
 MANIFEST_FILENAME = 'retention.json'
 MANIFEST_FORMAT = 2
-_PREFIX_ROOT = 'runs'
+PREFIX_ROOT = 'runs'
 _DIGEST_PREFIX = 'sha256:'
 
 
@@ -156,7 +157,7 @@ def _run_prefix(
     timestamp = started_at.strftime('%Y%m%dT%H%M%S.%f')
   return '/'.join(
     (
-      _PREFIX_ROOT,
+      PREFIX_ROOT,
       started_at.strftime('%Y-%m-%d'),
       timestamp,
       f'config-{config_digest.removeprefix(_DIGEST_PREFIX)}',
@@ -222,17 +223,17 @@ def retain_job(job_directory: Path) -> Optional[RetainedRun]:
   manifest, prefix = _manifest(job_directory)
   manifest_path = job_directory / MANIFEST_FILENAME
   manifest_path.write_bytes(_canonical_bytes(manifest) + b'\n')
-  client = boto3.Session(region_name=config.region).client('s3')
   files = [
     path for path in sorted(job_directory.rglob('*')) if path.is_file() and path != manifest_path
   ]
   try:
+    client = boto3.Session(region_name=config.region).client('s3')
     for path in files:
       key = f'{prefix}/{path.relative_to(job_directory).as_posix()}'
       client.upload_file(str(path), config.bucket, key)
     client.upload_file(str(manifest_path), config.bucket, f'{prefix}/{MANIFEST_FILENAME}')
-  except Boto3Error as error:
+  except (Boto3Error, BotoCoreError, ClientError) as error:
     raise RetentionError(
-      f'failed to retain benchmark run in s3://{config.bucket}/{prefix}'
+      f'failed to retain benchmark run in s3://{config.bucket}/{prefix}: {error}'
     ) from error
   return RetainedRun(config.bucket, prefix)

@@ -3,9 +3,12 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 from uuid import UUID
 
 import pytest
+from boto3.exceptions import S3UploadFailedError
+from botocore.exceptions import EndpointConnectionError, NoCredentialsError
 from harbor.models.trajectories import Agent, Metrics, Step, Trajectory
 
 from bro.benchmark import retention
@@ -226,3 +229,23 @@ def test_the_run_cost_report_rejects_an_unpriced_model(monkeypatch, tmp_path):
 
   with pytest.raises(UnpricedModelError, match="no benchmark price for model 'unpriced-model'"):
     retention._manifest(job_directory)
+
+
+@pytest.mark.parametrize(
+  'error',
+  [
+    NoCredentialsError(),
+    EndpointConnectionError(endpoint_url='https://s3.example'),
+    S3UploadFailedError('upload failed'),
+  ],
+)
+def test_an_aws_failure_names_the_run_it_could_not_retain(monkeypatch, tmp_path, error):
+  job_directory = tmp_path / 'job'
+  _write_job(job_directory)
+  s3 = FakeS3()
+  _configure(monkeypatch, s3)
+  monkeypatch.setattr(s3, 'upload_file', Mock(side_effect=error))
+
+  with pytest.raises(retention.RetentionError, match='s3://benchmark-runs/runs/') as raised:
+    retention.retain_job(job_directory)
+  assert str(error) in str(raised.value)
