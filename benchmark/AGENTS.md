@@ -71,5 +71,8 @@ BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_
   it keeps a trial's logs, artifacts and reward inside the task container for harbor
   to copy out, so a job runs wherever the docker daemon is reachable and leaves nothing on the
   docker host
+- `bro/benchmark/trajectory.py` — converts the projected local trail in each finished trial into
+  Harbor's ATIF v1.7 models at `agent/trajectory.json`;
+  `convert_job_trajectories()` is the post-run job-directory sweep
 - `bro/benchmark/terminal_bench_2_1.yaml` — the pinned harbor job config, and with the bundle the
   whole of what a score depends on

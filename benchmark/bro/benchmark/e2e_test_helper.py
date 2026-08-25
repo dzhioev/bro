@@ -11,10 +11,12 @@ from pathlib import Path
 
 import pytest
 from harbor.cli.config_sources import load_config_source
+from harbor.utils.trajectory_validator import TrajectoryValidator
 
 from bro.base import credentials
 from bro.base.suite_environment import host_credential_store, token_spending_skip_reason
 from bro.benchmark.bundle import built, default_root, host_mismatch, workspace_root
+from bro.benchmark.trajectory import convert_job_trajectories
 
 # the smallest image in the set, and one carrying neither python3 nor a CA
 # store — so a single trial exercises the bundle and SSL_CERT_FILE for real
@@ -92,4 +94,11 @@ def assert_graded_run(jobs: Path) -> None:
   assert {result['agent_info']['version'] for result in trial_results} == {expected_version}
   assert len(list(job.rglob('agent/bro.log'))) > 0, 'the trial kept no activity log'
   # the local store's own layout under the run's data home, found rather than spelled
-  assert len(list(job.rglob('agent/ride/trails/*/*/header.json'))) > 0, 'the trial kept no trail'
+  recorded_trails = list(job.rglob('agent/ride/trails/*/*/header.json'))
+  assert len(recorded_trails) > 0, 'the trial kept no trail'
+  recorded_agent_directories = {header.parents[3] for header in recorded_trails}
+  trajectories = convert_job_trajectories(job)
+  assert len(trajectories) == len(recorded_agent_directories)
+  for trajectory in trajectories:
+    validator = TrajectoryValidator()
+    assert validator.validate(trajectory), validator.get_errors()
