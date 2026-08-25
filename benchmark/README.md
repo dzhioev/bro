@@ -59,7 +59,7 @@ A host operator authenticates with `HARBOR_API_KEY` or `harbor auth login` as Ha
 When the host resolves a `benchmark_retention` credential, every run is then copied to its S3 bucket regardless of the Hub setting.
 The credential is a JSON object with the exact fields `bucket` and `region`;
 AWS authentication comes from boto3's ambient credential chain.
-Retention adds `retention.json`, whose config, bundle identity and source commit, optional Hub link, and file hashes make the run independently inspectable.
+Retention adds `retention.json`, whose config, bundle identity and source commit, source-priced run cost, optional Hub link, and file hashes make the run independently inspectable.
 It uploads that manifest last, so its presence marks a complete retained run.
 A host without the credential skips retention and still runs the benchmark.
 

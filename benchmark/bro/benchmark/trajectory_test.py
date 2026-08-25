@@ -8,9 +8,11 @@ from harbor.models.trajectories import Trajectory
 from harbor.utils.trajectory_validator import TrajectoryValidator
 
 import bro.benchmark.trajectory as trajectory_module
+from bro.benchmark.pricing import UnpricedModelError
 from bro.benchmark.trajectory import (
   convert_job_trajectories,
   convert_trial_trajectory,
+  trajectory_cost_usd,
   trajectory_from_store,
 )
 from bro.trails.local import LocalStore
@@ -21,12 +23,12 @@ IDENTITY = f'sha256:{"1" * 64}'
 MODEL = 'gpt-5.6-terra'
 
 
-def _request(*, summoned_by=None) -> BlazeRequest:
+def _request(*, summoned_by=None, model=MODEL) -> BlazeRequest:
   return BlazeRequest(
     harness='bro',
     bro='dev',
     version='test',
-    native={'llm': {'type': 'openai', 'model': MODEL}},
+    native={'llm': {'type': 'openai', 'model': model}},
     body={'records': [{'kind': 'system_prompt', 'body': 'You are a bro.'}]},
     interactive=False,
     surface='benchmark',
@@ -125,9 +127,15 @@ def test_a_recorded_trail_round_trips_through_harbors_validator(tmp_path):
   assert tool_step.metrics.prompt_tokens == 10
   assert tool_step.metrics.cached_tokens == 3
   assert tool_step.metrics.completion_tokens == 4
-  assert tool_step.metrics.cost_usd is None
+  assert tool_step.metrics.cost_usd == pytest.approx(0.0000636)
+  assert tool_step.metrics.extra == {
+    'usage': {'input': 5, 'cache_write': 2, 'cache_read': 3, 'output': 4}
+  }
   assert converted.steps[3].reasoning_content == 'I read it.'
   assert converted.steps[3].message == 'Done.'
+  assert converted.final_metrics is not None
+  assert converted.final_metrics.total_cost_usd == pytest.approx(0.0000796)
+  assert float(trajectory_cost_usd(converted)) == pytest.approx(0.0000796)
 
 
 def test_summoned_trails_are_embedded_and_linked_to_their_call(tmp_path):
@@ -167,6 +175,25 @@ def test_summoned_trails_are_embedded_and_linked_to_their_call(tmp_path):
   references = observation.results[0].subagent_trajectory_ref
   assert references is not None
   assert references[0].trajectory_id == child.trail_id
+  assert converted.final_metrics is not None
+  assert converted.final_metrics.total_cost_usd == pytest.approx(0.000032)
+  assert converted.subagent_trajectories[0].final_metrics is not None
+  assert converted.subagent_trajectories[0].final_metrics.total_cost_usd == pytest.approx(0.000016)
+
+
+def test_an_unpriced_model_keeps_atif_costs_optional_but_fails_a_cost_report(tmp_path):
+  store = LocalStore(tmp_path / 'ride')
+  recording = Recording.create(store, _request(model='unpriced-model'))
+  recording.append([{'kind': 'user_input', 'body': 'Do it.'}, _llm_call(_assistant('Done.'))])
+  recording.end('ok')
+
+  converted = trajectory_from_store(store)
+
+  assert converted.steps[2].metrics is not None
+  assert converted.steps[2].metrics.cost_usd is None
+  assert converted.final_metrics is None
+  with pytest.raises(UnpricedModelError, match="no benchmark price for model 'unpriced-model'"):
+    trajectory_cost_usd(converted)
 
 
 def test_multiple_root_trails_are_rejected(tmp_path):

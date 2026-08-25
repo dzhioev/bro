@@ -3,12 +3,14 @@
 import json
 from collections import defaultdict
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
 from harbor.models.job.result import JobResult
 from harbor.models.trajectories import (
   Agent,
+  FinalMetrics,
   Metrics,
   Observation,
   ObservationResult,
@@ -19,7 +21,8 @@ from harbor.models.trajectories import (
 )
 
 from bro.benchmark.harbor_agent import reported_agent_name, reported_agent_version
-from bro.llm.usage import from_vendor_counts
+from bro.benchmark.pricing import call_cost_usd, optional_call_cost_usd
+from bro.llm.usage import Counts, from_vendor_counts
 from bro.trails.local import LocalStore
 
 TRAILS_DIRECTORY = Path('ride')
@@ -31,6 +34,13 @@ class _ConvertedSteps:
   steps: list[Step]
   calls_by_source: dict[tuple[int, int], str]
   results_by_call: dict[str, ObservationResult]
+  cost_usd: Decimal | None
+
+
+@dataclass
+class _BuiltTrajectory:
+  trajectory: Trajectory
+  cost_usd: Decimal | None
 
 
 def _required_string(value: Any, field: str) -> str:
@@ -61,14 +71,20 @@ def _content(value: Any) -> str | None:
   return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
-def _metrics(raw: Any) -> Metrics:
+def _metrics(model: str, raw: Any) -> tuple[Metrics, Decimal | None]:
   if not isinstance(raw, dict):
     raise ValueError('llm_call usage must be an object')
   counts = from_vendor_counts(raw)
-  return Metrics(
-    prompt_tokens=counts['input'] + counts['cache_write'] + counts['cache_read'],
-    completion_tokens=counts['output'],
-    cached_tokens=counts['cache_read'],
+  cost = optional_call_cost_usd(model, counts)
+  return (
+    Metrics(
+      prompt_tokens=counts['input'] + counts['cache_write'] + counts['cache_read'],
+      completion_tokens=counts['output'],
+      cached_tokens=counts['cache_read'],
+      cost_usd=None if cost is None else float(cost),
+      extra={'usage': counts},
+    ),
+    cost,
   )
 
 
@@ -96,9 +112,10 @@ def _standalone_step(step_id: int, message: dict[str, Any]) -> Step:
 
 def _agent_step(
   step_id: int,
+  model: str,
   messages: list[dict[str, Any]],
   tool_results: dict[str, dict[str, Any]],
-) -> tuple[Step, dict[tuple[int, int], str], dict[str, ObservationResult]]:
+) -> tuple[Step, dict[tuple[int, int], str], dict[str, ObservationResult], Decimal | None]:
   llm_calls = [message for message in messages if message.get('type') == 'llm_call']
   if len(llm_calls) != 1:
     raise ValueError(
@@ -155,6 +172,7 @@ def _agent_step(
   timestamp = llm_call.get('ts')
   if timestamp is not None and not isinstance(timestamp, str):
     raise ValueError('llm_call ts must be a string or null')
+  metrics, cost = _metrics(model, llm_call.get('usage'))
   step = Step(
     step_id=step_id,
     timestamp=timestamp,
@@ -163,15 +181,15 @@ def _agent_step(
     reasoning_content='\n\n'.join(reasoning_content) if len(reasoning_content) > 0 else None,
     tool_calls=calls or None,
     observation=Observation(results=observations) if len(observations) > 0 else None,
-    metrics=_metrics(llm_call.get('usage')),
+    metrics=metrics,
     llm_call_count=1,
   )
   if any(source_step_id != raw_step_id for source_step_id, _ in calls_by_source):
     raise ValueError('tool_call projected outside its llm_call source group')
-  return step, calls_by_source, results_by_call
+  return step, calls_by_source, results_by_call, cost
 
 
-def _convert_steps(messages: list[dict[str, Any]]) -> _ConvertedSteps:
+def _convert_steps(model: str, messages: list[dict[str, Any]]) -> _ConvertedSteps:
   groups: dict[int, list[dict[str, Any]]] = defaultdict(list)
   tool_results: dict[str, dict[str, Any]] = {}
   for message in messages:
@@ -187,15 +205,22 @@ def _convert_steps(messages: list[dict[str, Any]]) -> _ConvertedSteps:
   steps: list[Step] = []
   calls_by_source: dict[tuple[int, int], str] = {}
   results_by_call: dict[str, ObservationResult] = {}
+  total_cost: Decimal | None = Decimal(0)
   for raw_step_id in sorted(groups):
     group = groups[raw_step_id]
     if any(message.get('type') == 'llm_call' for message in group):
-      step, group_calls, group_results = _agent_step(len(steps) + 1, group, tool_results)
+      step, group_calls, group_results, cost = _agent_step(
+        len(steps) + 1, model, group, tool_results
+      )
       overlapping_calls = set(calls_by_source) & set(group_calls)
       if len(overlapping_calls) > 0:
         raise ValueError(f'duplicate projected tool-call sources: {sorted(overlapping_calls)}')
       calls_by_source.update(group_calls)
       results_by_call.update(group_results)
+      if cost is None:
+        total_cost = None
+      elif total_cost is not None:
+        total_cost += cost
       steps.append(step)
       continue
     if len(group) != 1:
@@ -204,7 +229,7 @@ def _convert_steps(messages: list[dict[str, Any]]) -> _ConvertedSteps:
 
   if len(tool_results) > 0:
     raise ValueError(f'tool results have no projected calls: {sorted(tool_results)}')
-  return _ConvertedSteps(steps, calls_by_source, results_by_call)
+  return _ConvertedSteps(steps, calls_by_source, results_by_call, total_cost)
 
 
 def _model_name(header: dict[str, Any]) -> str:
@@ -239,12 +264,14 @@ def _build_trajectory(
   agent_version: str,
   visiting: set[str],
   visited: set[str],
-) -> Trajectory:
+) -> _BuiltTrajectory:
   if trail_id in visiting:
     raise ValueError(f'summoned trail cycle reaches {trail_id}')
   visiting.add(trail_id)
   header = headers[trail_id]
-  converted = _convert_steps(messages[trail_id])
+  model = _model_name(header)
+  converted = _convert_steps(model, messages[trail_id])
+  total_cost = converted.cost_usd
   subagents: list[Trajectory] = []
   for child_id in children.get(trail_id, []):
     pointer = _summoner(headers[child_id])
@@ -265,22 +292,28 @@ def _build_trajectory(
       *(result.subagent_trajectory_ref or []),
       SubagentTrajectoryRef(trajectory_id=child_id, session_id=child_id),
     ]
-    subagents.append(child)
+    if child.cost_usd is None:
+      total_cost = None
+    elif total_cost is not None:
+      total_cost += child.cost_usd
+    subagents.append(child.trajectory)
 
   visiting.remove(trail_id)
   visited.add(trail_id)
-  return Trajectory(
+  trajectory = Trajectory(
     schema_version='ATIF-v1.7',
     session_id=trail_id,
     trajectory_id=trail_id,
     agent=Agent(
       name=reported_agent_name(_required_string(header.get('bro'), 'trail header bro')),
       version=agent_version,
-      model_name=_model_name(header),
+      model_name=model,
     ),
     steps=converted.steps,
+    final_metrics=(None if total_cost is None else FinalMetrics(total_cost_usd=float(total_cost))),
     subagent_trajectories=subagents or None,
   )
+  return _BuiltTrajectory(trajectory, total_cost)
 
 
 def trajectory_from_store(store: LocalStore) -> Trajectory:
@@ -307,7 +340,7 @@ def trajectory_from_store(store: LocalStore) -> Trajectory:
 
   projected = {trail_id: list(store.iter_messages(trail_id)) for trail_id in headers}
   visited: set[str] = set()
-  trajectory = _build_trajectory(
+  built_trajectory = _build_trajectory(
     roots[0],
     headers,
     projected,
@@ -319,7 +352,40 @@ def trajectory_from_store(store: LocalStore) -> Trajectory:
   disconnected = set(headers) - visited
   if len(disconnected) > 0:
     raise ValueError(f'trails are disconnected from the root: {sorted(disconnected)}')
-  return Trajectory.model_validate(trajectory.model_dump(mode='json', exclude_none=True))
+  return Trajectory.model_validate(
+    built_trajectory.trajectory.model_dump(mode='json', exclude_none=True)
+  )
+
+
+def trajectory_cost_usd(trajectory: Trajectory) -> Decimal:
+  """Strictly reprice every recorded LLM call in one ATIF trajectory tree."""
+  model = _required_string(trajectory.agent.model_name, 'trajectory agent.model_name')
+  total = Decimal(0)
+  for step in trajectory.steps:
+    if step.llm_call_count is None:
+      continue
+    if step.llm_call_count != 1:
+      raise ValueError(
+        f'trajectory step {step.step_id} must represent exactly one LLM call for costing'
+      )
+    if step.metrics is None or not isinstance(step.metrics.extra, dict):
+      raise ValueError(f'trajectory step {step.step_id} has no recorded billed-class usage')
+    usage = step.metrics.extra.get('usage')
+    if not isinstance(usage, dict):
+      raise ValueError(f'trajectory step {step.step_id} has no recorded billed-class usage')
+    total += call_cost_usd(model, cast(Counts, usage))
+  for child in trajectory.subagent_trajectories or []:
+    total += trajectory_cost_usd(child)
+  return total
+
+
+def job_trajectory_cost_usd(job_directory: Path) -> Decimal:
+  """Strictly report the total cost of every converted trial in a job."""
+  total = Decimal(0)
+  for path in sorted(job_directory.glob(f'*/agent/{TRAJECTORY_FILENAME}')):
+    trajectory = Trajectory.model_validate_json(path.read_text())
+    total += trajectory_cost_usd(trajectory)
+  return total
 
 
 def convert_trial_trajectory(agent_directory: Path) -> Path:
