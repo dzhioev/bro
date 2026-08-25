@@ -50,14 +50,13 @@ uv run --project benchmark harbor job start -c benchmark/bro/benchmark/terminal_
 ```
 
 The job config is the whole reproducibility contract
-— dataset revision, the bros under test, the
-model, concurrency, and the retry policy
+— dataset digest, the bros under test, the model, concurrency, attempt depth, and the retry policy
 — so a run is described by that file plus the bundle.
-`-k/--n-attempts` repeats each trial.
-To narrow a run to a subset of tasks, add a `task_names` list
-of globs under the dataset:
-harbor's `--include-task-name` applies only to a dataset the command
-line itself names, which would mean restating the pinned revision there.
+The config repeats every trial five times;
+`-k/--n-attempts` overrides that depth when a wave run needs fewer attempts.
+To narrow a run to a subset of tasks, add a `task_names` list of globs under the dataset:
+harbor's `--include-task-name` applies only to a dataset the command line itself names,
+which would mean restating the pinned digest there.
 
 The score lands in `<jobs_dir>/<job-name>/result.json` (`jobs/` unless `-o` says otherwise), under
 `stats.evals`, one entry per agent and dataset:
