@@ -15,10 +15,11 @@ from harbor.models.trial.result import TrialResult
 
 from bro.base import credentials, log
 from bro.benchmark.harbor_agent import benchmark_bundle
+from bro.benchmark.trajectory import job_trajectory_cost_usd
 
 RETENTION_CREDENTIAL = 'benchmark_retention'
 MANIFEST_FILENAME = 'retention.json'
-MANIFEST_FORMAT = 1
+MANIFEST_FORMAT = 2
 _PREFIX_ROOT = 'runs'
 _DIGEST_PREFIX = 'sha256:'
 
@@ -204,6 +205,7 @@ def _manifest(job_directory: Path) -> tuple[dict[str, object], str]:
       'source_commit': bundle.source_commit,
       'framework_revision': framework_revision,
     },
+    'total_cost_usd': float(job_trajectory_cost_usd(job_directory)),
     'files': _inventory(job_directory),
   }
   hub_url = _hub_url(job_directory)

@@ -6,8 +6,10 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+from harbor.models.trajectories import Agent, Metrics, Step, Trajectory
 
 from bro.benchmark import retention
+from bro.benchmark.pricing import UnpricedModelError
 
 JOB_ID = UUID('12345678-1234-5678-1234-567812345678')
 FRAMEWORK_REVISION = 'sha256:' + 'a' * 64
@@ -61,6 +63,23 @@ def _write_job(job_directory: Path, *, uploaded: bool = True) -> dict:
   trial.mkdir(parents=True)
   (trial.parent / 'result.json').write_text(json.dumps(trial_result))
   (trial / 'bro.log').write_text('finished\n')
+  trajectory = Trajectory(
+    agent=Agent(name='bro:dev', version=FRAMEWORK_REVISION, model_name='gpt-5.6-terra'),
+    steps=[
+      Step(
+        step_id=1,
+        source='agent',
+        message='done',
+        llm_call_count=1,
+        metrics=Metrics(
+          prompt_tokens=2,
+          completion_tokens=1,
+          extra={'usage': {'input': 2, 'cache_write': 0, 'cache_read': 0, 'output': 1}},
+        ),
+      )
+    ],
+  )
+  (trial / 'trajectory.json').write_text(trajectory.model_dump_json(exclude_none=True))
   if uploaded:
     (job_directory / 'upload.json').write_text(
       json.dumps({'visibility': 'public', 'url': 'https://hub.example/jobs/1'})
@@ -142,6 +161,7 @@ def test_every_job_file_and_a_last_manifest_land_under_the_stable_key(monkeypatc
     'config.json',
     'result.json',
     'trial-one/agent/bro.log',
+    'trial-one/agent/trajectory.json',
     'trial-one/result.json',
     'upload.json',
     retention.MANIFEST_FILENAME,
@@ -150,10 +170,12 @@ def test_every_job_file_and_a_last_manifest_land_under_the_stable_key(monkeypatc
 
   manifest = json.loads((job_directory / retention.MANIFEST_FILENAME).read_text())
   assert manifest['job_config'] == config
+  assert manifest['format'] == 2
   assert manifest['bundle'] == {
     'source_commit': SOURCE_COMMIT,
     'framework_revision': FRAMEWORK_REVISION,
   }
+  assert manifest['total_cost_usd'] == pytest.approx(0.000016)
   assert manifest['hub_url'] == 'https://hub.example/jobs/1'
   assert set(manifest['files']) == set(uploaded_names) - {retention.MANIFEST_FILENAME}
   assert manifest['files']['trial-one/agent/bro.log'] == {
@@ -190,4 +212,17 @@ def test_a_reported_revision_must_match_the_bundle(monkeypatch, tmp_path):
   )
 
   with pytest.raises(ValueError, match='host bundle'):
+    retention._manifest(job_directory)
+
+
+def test_the_run_cost_report_rejects_an_unpriced_model(monkeypatch, tmp_path):
+  job_directory = tmp_path / 'job'
+  _write_job(job_directory)
+  trajectory_path = job_directory / 'trial-one' / 'agent' / 'trajectory.json'
+  trajectory = json.loads(trajectory_path.read_text())
+  trajectory['agent']['model_name'] = 'unpriced-model'
+  trajectory_path.write_text(json.dumps(trajectory))
+  _configure(monkeypatch, FakeS3())
+
+  with pytest.raises(UnpricedModelError, match="no benchmark price for model 'unpriced-model'"):
     retention._manifest(job_directory)

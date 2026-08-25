@@ -273,6 +273,7 @@ BENCHMARK_PYTEST_FILES = [
   'bro/benchmark/harbor_agent_test.py',
   'bro/benchmark/harbor_environment_test.py',
   'bro/benchmark/job_test.py',
+  'bro/benchmark/pricing_test.py',
   'bro/benchmark/retention_test.py',
   'bro/benchmark/trajectory_test.py',
 ]
