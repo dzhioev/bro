@@ -22,6 +22,21 @@ the script can source `deploy_lib.sh` through `bro-oops-dir` after `uv sync` ins
 Framework-wheel staging builds the current working tree when run from the bro framework checkout.
 In any other checkout it builds the exact bro revision resolved by the consumer's `uv.lock`.
 
+## Operations
+
+The `devoops` persona mounts the `infra` toolset for deploy, verify, restart, ECS status, and HTTP probe operations.
+It adds brog task tools only when a `brog` credential resolves, so the same persona works with any contributed brog backend.
+Its credential manifest is the union of the active target registry, the optional brog component, and the selected harness tools.
+
+Each consuming repository points `[tool.bro.devoops].target-registry` at a `module:attribute` holding a `TargetRegistry`.
+The registry declares its credential requirements and lazily produces named `DeployTarget` values with repository-relative deploy and verification commands.
+Targets may also declare ECS coordinates, changed-path prefixes, and an HTTP probe.
+Probe authentication is data on the probe:
+a fixed header value or an SSM parameter-backed header can be selected without target-specific tool code.
+
+This repository's registry is `oops.deploy_targets:registry`.
+Its `trails-server` target resolves region, cluster, service, and URL from the `infra` credential and runs `oops/trails/server/deploy.sh` and `oops/trails/server/verify.sh`.
+
 ## CDK constructs
 
 `bro.oops.cdk.resolve()` reads the `infra` credential and applies the package's consumer-neutral defaults.

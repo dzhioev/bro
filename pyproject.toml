@@ -121,6 +121,9 @@ default = "bro-dev"
 [tool.bro.analyst]
 reports = "dev/bros/analyst/reports"
 
+[tool.bro.devoops]
+target-registry = "oops.deploy_targets:registry"
+
 [tool.deptry.package_module_name_map]
 python_ulid = ["ulid"]
 

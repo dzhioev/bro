@@ -159,6 +159,7 @@ PYTEST_FILES = [
   'oops/bro/oops/deploy_lib_test.py',
   'oops/bro/oops/distribution_test.py',
   'oops/bro/oops/monitor_ecs_test.py',
+  'oops/bro/oops/mcp_test.py',
   'bro/launch/hold_test.py',
   'bro/launch/llm_flags_test.py',
   'native/bro/launch/call_test.py',

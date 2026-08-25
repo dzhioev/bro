@@ -432,6 +432,7 @@ dependencies = [
     { name = "aws-cdk-lib" },
     { name = "boto3" },
     { name = "bro" },
+    { name = "bro-dev" },
     { name = "constructs" },
 ]
 
@@ -440,6 +441,7 @@ requires-dist = [
     { name = "aws-cdk-lib", specifier = "==2.250.0" },
     { name = "boto3", specifier = "==1.43.40" },
     { name = "bro", editable = "." },
+    { name = "bro-dev", editable = "dev" },
     { name = "constructs", specifier = "==10.6.0" },
 ]
 

@@ -7,6 +7,9 @@ The root repository owns formatting, lint, typing, packaging policy, and the tes
 ## Components
 
 - `bro/oops/assets.py` — validates and locates the shell assets shipped in the wheel
+- `bro/oops/targets.py` — typed deploy-target declarations and the per-repository registry loader
+- `bro/oops/mcp.py` — `infra` MCP operations over the repository's registered targets
+- `bros/devoops/` — the operations persona and its target-driven deploy spell
 - `bro/oops/cdk/config.py` — resolves the `infra` credential into typed deployment configuration and neutral defaults
 - `bro/oops/cdk/platform.py` — shared VPC, ECS cluster, ALB, certificate, and hosted-zone platform plus downstream lookup handles
 - `bro/oops/cdk/ecr.py` — parameterized ECR repository stack
@@ -21,6 +24,7 @@ The root repository owns formatting, lint, typing, packaging policy, and the tes
   `platform-only=true` lets a new account create the platform before service lookups run
 - `trails/server/` — trails image, credential registry, deployment, bootstrap, local-run, and verification scripts
 - `image_build.sh` — the trails target used by the shared CodeBuild buildspec
+- `deploy_targets.py` — this repository's trails-server operations declaration
 
 Build the member with `uv build --package bro-oops`.
 Regenerate its console scripts and committed bridge with `sync-scripts --project oops`.
