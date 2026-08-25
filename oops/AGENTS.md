@@ -7,6 +7,10 @@ The root repository owns formatting, lint, typing, packaging policy, and the tes
 ## Components
 
 - `bro/oops/assets.py` — validates and locates the shell assets shipped in the wheel
+- `bro/oops/cdk/config.py` — resolves the `infra` credential into typed deployment configuration and neutral defaults
+- `bro/oops/cdk/platform.py` — shared VPC, ECS cluster, ALB, certificate, and hosted-zone platform plus downstream lookup handles
+- `bro/oops/cdk/ecr.py` — parameterized ECR repository stack
+- `bro/oops/cdk/image_build.py` — parameterized CodeBuild image-build stack
 - `bro/oops/infra/deploy_lib.sh` — sourceable image-build, ECR, CodeBuild, wheel-staging, and CDK helpers
 - `bro/oops/infra/monitor_ecs.sh` — ECS deployment-state monitor
 - `bro/oops/infra/buildspec.yml` — consumer-configured CodeBuild image-build pattern

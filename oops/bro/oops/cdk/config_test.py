@@ -1,0 +1,97 @@
+from unittest.mock import patch
+
+import pytest
+
+from bro.oops.cdk import from_mapping, resolve
+
+
+def test_defaults_are_consumer_neutral():
+  config = from_mapping({'delegated_subdomain': 'services.example.com'})
+
+  assert config.region == 'us-east-1'
+  assert config.platform.stack_name == 'BroPlatformStack'
+  assert config.platform.cluster_name == 'bro-services'
+  assert config.repositories['server'].repository_name == 'bro-server'
+  assert config.image_build.project_name == 'bro-image-build'
+  assert config.repository_names == ('bro-server',)
+
+
+def test_account_names_are_resolved_from_the_infra_namespace():
+  raw = {
+    'delegated_subdomain': 'apps.example.net',
+    'unrelated_consumer_field': 'preserved',
+    'oops': {
+      'region': 'eu-west-1',
+      'platform': {
+        'stack_name': 'CustomPlatform',
+        'cluster_name': 'custom-services',
+        'vpc_construct_id': 'CustomVpc',
+        'cluster_construct_id': 'CustomCluster',
+        'load_balancer_construct_id': 'CustomAlb',
+      },
+      'repositories': {
+        'api': {
+          'stack_name': 'CustomAPIRepository',
+          'repository_name': 'custom-api',
+          'repository_construct_id': 'APIRepository',
+        },
+        'worker': {
+          'stack_name': 'CustomWorkerRepository',
+          'repository_name': 'custom-worker',
+          'repository_construct_id': 'WorkerRepository',
+        },
+      },
+      'image_build': {
+        'stack_name': 'CustomImageBuild',
+        'project_name': 'custom-image-build',
+        'connection_name': 'custom-github',
+        'source_owner': 'organization',
+        'source_repository': 'application',
+        'buildspec_path': 'deployment/buildspec.yml',
+      },
+    },
+  }
+
+  config = from_mapping(raw)
+
+  assert config.region == 'eu-west-1'
+  assert config.delegated_subdomain == 'apps.example.net'
+  assert config.platform.stack_name == 'CustomPlatform'
+  assert config.platform.cluster_name == 'custom-services'
+  assert config.platform.vpc_construct_id == 'CustomVpc'
+  assert config.repositories['api'].repository_construct_id == 'APIRepository'
+  assert config.repository_names == ('custom-api', 'custom-worker')
+  assert config.image_build.source_owner == 'organization'
+  assert config.image_build.buildspec_path == 'deployment/buildspec.yml'
+
+
+def test_resolve_reads_the_infra_credential():
+  raw = {'delegated_subdomain': 'services.example.com'}
+  with patch('bro.oops.cdk.config.credentials.get_json', return_value=raw) as get_json:
+    config = resolve()
+
+  assert config.delegated_subdomain == 'services.example.com'
+  get_json.assert_called_once_with('infra')
+
+
+@pytest.mark.parametrize(
+  ('raw', 'message'),
+  [
+    ({}, 'infra.delegated_subdomain is required'),
+    (
+      {'delegated_subdomain': 'services.example.com', 'oops': {'platfrom': {}}},
+      'infra.oops has unknown fields: platfrom',
+    ),
+    (
+      {'delegated_subdomain': 'services.example.com', 'oops': {'repositories': {}}},
+      'infra.oops.repositories must contain at least one repository',
+    ),
+    (
+      {'delegated_subdomain': 'services.example.com', 'oops': {'region': 1}},
+      'infra.oops.region must be a non-empty string',
+    ),
+  ],
+)
+def test_invalid_config_fails_fast(raw, message):
+  with pytest.raises(ValueError, match=message):
+    from_mapping(raw)
