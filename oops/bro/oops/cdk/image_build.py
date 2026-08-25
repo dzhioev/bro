@@ -49,6 +49,9 @@ class ImageBuildStack(Stack):
         compute_type=codebuild.ComputeType.MEDIUM,
         privileged=True,
       ),
+      environment_variables={
+        'IMAGE_BUILD_SCRIPT': codebuild.BuildEnvironmentVariable(value=config.image_build_script)
+      },
       cache=codebuild.Cache.local(
         codebuild.LocalCacheMode.SOURCE,
         codebuild.LocalCacheMode.DOCKER_LAYER,

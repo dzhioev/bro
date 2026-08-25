@@ -2,8 +2,9 @@
 
 import json
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import boto3
 
@@ -25,13 +26,62 @@ SPILLOVER_THRESHOLD_BYTES = dynamo_types.SPILLOVER_THRESHOLD_BYTES
 MAX_BODY_BYTES = dynamo_types.MAX_BODY_BYTES
 BodyTooLarge = dynamo_types.BodyTooLarge
 
+
+@dataclass(frozen=True)
+class DynamoAttribute:
+  name: str
+  type: Literal['string', 'number']
+
+
+@dataclass(frozen=True)
+class DynamoIndex:
+  name: str
+  partition_key: DynamoAttribute
+  sort_key: Optional[DynamoAttribute] = None
+  projection: Literal['all', 'keys_only'] = 'all'
+
+
+@dataclass(frozen=True)
+class DynamoTable:
+  name: str
+  partition_key: DynamoAttribute
+  sort_key: Optional[DynamoAttribute] = None
+  indexes: tuple[DynamoIndex, ...] = ()
+
+
 GSI_PK_ATTRIBUTE = 'gsi_pk'
 GSI_PK_VALUE = 'trail'
-ALL_INDEX = 'all-index'
-HARNESS_INDEX = 'harness-started_at-index'
-BRO_INDEX = 'bro-started_at-index'
-FORKED_FROM_INDEX = 'forked-from-id-index'
-SEGMENT_INDEX = 'segment-started_at-index'
+_STARTED_AT = DynamoAttribute('started_at', 'string')
+TRAILS_TABLE = DynamoTable(
+  name='trails-v2',
+  partition_key=DynamoAttribute('id', 'string'),
+  indexes=(
+    DynamoIndex('bro-started_at-index', DynamoAttribute('bro', 'string'), _STARTED_AT),
+    DynamoIndex('harness-started_at-index', DynamoAttribute('harness', 'string'), _STARTED_AT),
+    DynamoIndex('segment-started_at-index', DynamoAttribute('segment', 'string'), _STARTED_AT),
+    DynamoIndex('forked-from-id-index', DynamoAttribute('forked_from_id', 'string'), _STARTED_AT),
+    DynamoIndex('all-index', DynamoAttribute(GSI_PK_ATTRIBUTE, 'string'), _STARTED_AT),
+  ),
+)
+STEPS_TABLE = DynamoTable(
+  name='trail_steps_v2',
+  partition_key=DynamoAttribute('trail_id', 'string'),
+  sort_key=DynamoAttribute('step_id', 'number'),
+  indexes=(
+    DynamoIndex(
+      'uuid-index',
+      DynamoAttribute('uuid', 'string'),
+      projection='keys_only',
+    ),
+  ),
+)
+
+BRO_INDEX = TRAILS_TABLE.indexes[0].name
+HARNESS_INDEX = TRAILS_TABLE.indexes[1].name
+SEGMENT_INDEX = TRAILS_TABLE.indexes[2].name
+FORKED_FROM_INDEX = TRAILS_TABLE.indexes[3].name
+ALL_INDEX = TRAILS_TABLE.indexes[4].name
+UUID_INDEX = STEPS_TABLE.indexes[0].name
 UNREPORTED_AFTER_SECONDS = 3600
 SWEEP_WINDOW_DAYS = 30
 # the store's fan-out waits on network round trips rather than on the CPU, so

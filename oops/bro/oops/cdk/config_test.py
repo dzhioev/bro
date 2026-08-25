@@ -11,9 +11,11 @@ def test_defaults_are_consumer_neutral():
   assert config.region == 'us-east-1'
   assert config.platform.stack_name == 'BroPlatformStack'
   assert config.platform.cluster_name == 'bro-services'
-  assert config.repositories['server'].repository_name == 'bro-server'
+  assert config.repositories['trails'].repository_name == 'bro-trails-server'
   assert config.image_build.project_name == 'bro-image-build'
-  assert config.repository_names == ('bro-server',)
+  assert config.image_build.image_build_script == 'oops/image_build.sh'
+  assert config.trails.spillover_bucket_name == 'bro-trails-{account}'
+  assert config.repository_names == ('bro-trails-server',)
 
 
 def test_account_names_are_resolved_from_the_infra_namespace():
@@ -48,6 +50,13 @@ def test_account_names_are_resolved_from_the_infra_namespace():
         'source_owner': 'organization',
         'source_repository': 'application',
         'buildspec_path': 'deployment/buildspec.yml',
+        'image_build_script': 'deployment/image_build.sh',
+      },
+      'trails': {
+        'stack_name': 'CustomTrails',
+        'repository': 'api',
+        'spillover_bucket_name': 'custom-trails-{account}',
+        'service_name': 'custom-trails',
       },
     },
   }
@@ -63,6 +72,9 @@ def test_account_names_are_resolved_from_the_infra_namespace():
   assert config.repository_names == ('custom-api', 'custom-worker')
   assert config.image_build.source_owner == 'organization'
   assert config.image_build.buildspec_path == 'deployment/buildspec.yml'
+  assert config.image_build.image_build_script == 'deployment/image_build.sh'
+  assert config.trails.stack_name == 'CustomTrails'
+  assert config.trails_repository.repository_name == 'custom-api'
 
 
 def test_resolve_reads_the_infra_credential():
@@ -89,6 +101,28 @@ def test_resolve_reads_the_infra_credential():
     (
       {'delegated_subdomain': 'services.example.com', 'oops': {'region': 1}},
       'infra.oops.region must be a non-empty string',
+    ),
+    (
+      {
+        'delegated_subdomain': 'services.example.com',
+        'oops': {
+          'repositories': {
+            'api': {
+              'stack_name': 'APIRepository',
+              'repository_name': 'api',
+              'repository_construct_id': 'APIRepository',
+            }
+          }
+        },
+      },
+      "infra.oops.trails.repository names unknown repository 'trails'",
+    ),
+    (
+      {
+        'delegated_subdomain': 'services.example.com',
+        'oops': {'trails': {'spillover_bucket_name': 'trails-{region}'}},
+      },
+      'spillover_bucket_name supports only',
     ),
   ],
 )

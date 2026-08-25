@@ -54,11 +54,28 @@ class PlatformHandles:
       'PlatformLoadBalancer',
       load_balancer_tags=stack_tags,
     )
-    https_listener = elbv2.ApplicationListener.from_lookup(
+    listener_lookup = elbv2.ApplicationListener.from_lookup(
       scope,
-      'PlatformHTTPSListener',
+      'PlatformHTTPSListenerLookup',
       listener_port=443,
       load_balancer_tags=stack_tags,
+    )
+    security_groups = load_balancer.connections.security_groups
+    if len(security_groups) != 1:
+      raise ValueError(
+        f'platform load balancer must have one security group, found {len(security_groups)}'
+      )
+    listener_security_group = ec2.SecurityGroup.from_security_group_id(
+      scope,
+      'PlatformLoadBalancerSecurityGroup',
+      security_groups[0].security_group_id,
+      allow_all_outbound=False,
+    )
+    https_listener = elbv2.ApplicationListener.from_application_listener_attributes(
+      scope,
+      'PlatformHTTPSListener',
+      listener_arn=listener_lookup.listener_arn,
+      security_group=listener_security_group,
     )
     return cls(
       vpc=vpc,

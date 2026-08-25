@@ -155,6 +155,7 @@ PYTEST_FILES = [
   'oops/bro/oops/assets_test.py',
   'oops/bro/oops/cdk/config_test.py',
   'oops/bro/oops/cdk/stacks_test.py',
+  'oops/bro/oops/trails_deployment_test.py',
   'oops/bro/oops/deploy_lib_test.py',
   'oops/bro/oops/distribution_test.py',
   'oops/bro/oops/monitor_ecs_test.py',

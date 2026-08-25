@@ -24,66 +24,56 @@ from bro.trails.store import AppendConflict, TrailHasForks, TrailNotFound
 _REGION = 'eu-west-1'
 _TRAILS_TABLE = 'headers'
 _STEPS_TABLE = 'steps'
-_UUID_INDEX = 'uuid-index'
+_UUID_INDEX = dynamo_store.UUID_INDEX
 _BUCKET = 'bucket'
 
 
-def _started_at_index(name: str, partition: str) -> dict:
-  return {
-    'IndexName': name,
-    'KeySchema': [
-      {'AttributeName': partition, 'KeyType': 'HASH'},
-      {'AttributeName': 'started_at', 'KeyType': 'RANGE'},
-    ],
-    'Projection': {'ProjectionType': 'ALL'},
+def _attribute_type(attribute: dynamo_store.DynamoAttribute) -> str:
+  return {'string': 'S', 'number': 'N'}[attribute.type]
+
+
+def _key_schema(
+  partition_key: dynamo_store.DynamoAttribute,
+  sort_key: Optional[dynamo_store.DynamoAttribute],
+) -> list[dict]:
+  keys = [{'AttributeName': partition_key.name, 'KeyType': 'HASH'}]
+  if sort_key is not None:
+    keys.append({'AttributeName': sort_key.name, 'KeyType': 'RANGE'})
+  return keys
+
+
+def _create_table(dynamo, name: str, schema: dynamo_store.DynamoTable) -> None:
+  attributes = {
+    attribute.name: attribute
+    for index in schema.indexes
+    for attribute in (index.partition_key, index.sort_key)
+    if attribute is not None
   }
-
-
-_TRAILS_INDEXES = {
-  dynamo_store.ALL_INDEX: dynamo_store.GSI_PK_ATTRIBUTE,
-  dynamo_store.HARNESS_INDEX: 'harness',
-  dynamo_store.BRO_INDEX: 'bro',
-  dynamo_store.FORKED_FROM_INDEX: 'forked_from_id',
-  dynamo_store.SEGMENT_INDEX: 'segment',
-}
-
-
-def _create_tables(dynamo) -> None:
+  attributes[schema.partition_key.name] = schema.partition_key
+  if schema.sort_key is not None:
+    attributes[schema.sort_key.name] = schema.sort_key
   dynamo.create_table(
-    TableName=_TRAILS_TABLE,
-    KeySchema=[{'AttributeName': 'id', 'KeyType': 'HASH'}],
+    TableName=name,
+    KeySchema=_key_schema(schema.partition_key, schema.sort_key),
     AttributeDefinitions=[
-      {'AttributeName': name, 'AttributeType': 'S'}
-      for name in ('id', 'started_at', *_TRAILS_INDEXES.values())
-    ],
-    GlobalSecondaryIndexes=[
-      _started_at_index(name, partition) for name, partition in _TRAILS_INDEXES.items()
-    ],
-    BillingMode='PAY_PER_REQUEST',
-  )
-  dynamo.create_table(
-    TableName=_STEPS_TABLE,
-    KeySchema=[
-      {'AttributeName': 'trail_id', 'KeyType': 'HASH'},
-      {'AttributeName': 'step_id', 'KeyType': 'RANGE'},
-    ],
-    AttributeDefinitions=[
-      {'AttributeName': 'trail_id', 'AttributeType': 'S'},
-      {'AttributeName': 'step_id', 'AttributeType': 'N'},
-      {'AttributeName': 'uuid', 'AttributeType': 'S'},
+      {'AttributeName': attribute.name, 'AttributeType': _attribute_type(attribute)}
+      for attribute in attributes.values()
     ],
     GlobalSecondaryIndexes=[
       {
-        'IndexName': _UUID_INDEX,
-        'KeySchema': [
-          {'AttributeName': 'uuid', 'KeyType': 'HASH'},
-          {'AttributeName': 'trail_id', 'KeyType': 'RANGE'},
-        ],
-        'Projection': {'ProjectionType': 'KEYS_ONLY'},
+        'IndexName': index.name,
+        'KeySchema': _key_schema(index.partition_key, index.sort_key),
+        'Projection': {'ProjectionType': index.projection.upper()},
       }
+      for index in schema.indexes
     ],
     BillingMode='PAY_PER_REQUEST',
   )
+
+
+def _create_tables(dynamo) -> None:
+  _create_table(dynamo, _TRAILS_TABLE, dynamo_store.TRAILS_TABLE)
+  _create_table(dynamo, _STEPS_TABLE, dynamo_store.STEPS_TABLE)
 
 
 class _Items(Mapping):
