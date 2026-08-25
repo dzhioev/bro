@@ -790,6 +790,19 @@ class TestDefaultRegistry:
     with pytest.raises(ValueError, match='install must be an object'):
       credentials.Secret.from_dict('x', {'sources': [{'file': 'f'}], 'install': 'export X=1'})
 
+  def test_infrastructure_credentials_are_builtin(self):
+    registry = credentials.default_registry()
+    aws_source = registry['aws'].sources[0]
+    infra_source = registry['infra'].sources[0]
+    assert isinstance(aws_source, credentials.LocalSource)
+    assert aws_source.file == 'aws_credentials'
+    assert isinstance(infra_source, credentials.LocalSource)
+    assert infra_source.file == 'infra.json'
+    assert registry['aws'].install == {
+      'files': {'aws/credentials': {'secret': 'aws'}},
+      'env': {'AWS_SHARED_CREDENTIALS_FILE': {'path': 'aws/credentials'}},
+    }
+
   def test_github_declares_no_builtin_source(self):
     # the github kind's sources are host-local (the app minting config in the
     # host registry file); the checked-in entry carries only the install hook
