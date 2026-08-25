@@ -154,12 +154,13 @@ def test_a_job_name_cannot_escape_the_jobs_directory(tmp_path, monkeypatch):
 def test_cli_defaults_to_no_upload(tmp_path, monkeypatch, capsys):
   captured = {}
 
-  def run_job(config, jobs_directory, visibility, job_name):
+  def run_job(config, jobs_directory, visibility, job_name, attempts):
     captured.update(
       config=config,
       jobs_directory=jobs_directory,
       visibility=visibility,
       job_name=job_name,
+      attempts=attempts,
     )
     return job.PostRunResult(tmp_path / 'job', (), None, None)
 
@@ -171,5 +172,34 @@ def test_cli_defaults_to_no_upload(tmp_path, monkeypatch, capsys):
     'jobs_directory': tmp_path,
     'visibility': job.UploadVisibility.NONE,
     'job_name': None,
+    'attempts': None,
   }
   assert capsys.readouterr().out == ''
+
+
+def test_an_attempt_depth_overrides_the_config_for_one_run(tmp_path, monkeypatch):
+  jobs_directory = tmp_path / 'jobs'
+  commands = []
+
+  def run(command, check):
+    commands.append(tuple(command))
+    _write_job_result(jobs_directory / 'chosen-name')
+
+  monkeypatch.setattr(job.subprocess, 'run', run)
+  monkeypatch.setattr(job, 'convert_job_trajectories', lambda directory: [])
+  monkeypatch.setattr(job, 'retain_job', lambda directory: None)
+
+  job.run_job(tmp_path / 'config.yaml', jobs_directory, job_name='chosen-name', attempts=2)
+
+  assert commands[0][-2:] == ('--n-attempts', '2')
+
+
+def test_an_empty_attempt_depth_fails_before_harbor_runs(tmp_path, monkeypatch):
+  monkeypatch.setattr(
+    job.subprocess,
+    'run',
+    lambda *args, **kwargs: pytest.fail('an invalid attempt depth must fail before Harbor runs'),
+  )
+
+  with pytest.raises(ValueError, match='at least one attempt'):
+    job.run_job(Path('config.yaml'), tmp_path, attempts=0)
