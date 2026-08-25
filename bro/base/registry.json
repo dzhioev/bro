@@ -9,6 +9,14 @@
     "install": {"env": {"CLAUDE_CODE_OAUTH_TOKEN": {"secret": "{{insert #name}}"}}}
   },
   "brave": {"sources": [{"file": "brave.json"}]},
+  "aws": {
+    "sources": [{"file": "aws_credentials"}],
+    "install": {
+      "files": {"aws/credentials": {"secret": "{{insert #name}}"}},
+      "env": {"AWS_SHARED_CREDENTIALS_FILE": {"path": "aws/credentials"}}
+    }
+  },
+  "infra": {"sources": [{"file": "infra.json"}]},
   "github": {
     "sources": [],
     "install": {
