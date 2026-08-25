@@ -340,3 +340,30 @@ def test_the_native_claude_code_reference_is_content_pinned():
 
   assert '7131e4375048a0e408a8fb404b5f499d726b695b' in source
   assert source.endswith('anthropic-claude-opus-4-8-high-claude-code.json')
+
+
+def test_a_submission_without_a_source_filter_is_a_comparison_error(tmp_path, monkeypatch, caplog):
+  job_directory = tmp_path / 'job'
+  _write_local_job(job_directory)
+  source = tmp_path / 'submission.json'
+  source.write_text(json.dumps({'source_jobs': [JOB_ID]}))
+
+  async def fetch(job_ids):
+    return []
+
+  monkeypatch.setattr(compare, '_fetch_hub_trial_rows', fetch)
+
+  assert (
+    compare.main(
+      [
+        'bro.benchmark.compare',
+        str(job_directory),
+        '--agent',
+        'bro:terminal',
+        '--reference',
+        str(source),
+      ]
+    )
+    == 1
+  )
+  assert 'no source_filter' in caplog.text
