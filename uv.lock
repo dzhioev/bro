@@ -14,6 +14,7 @@ members = [
     "bro-dev",
     "bro-local",
     "bro-native",
+    "bro-oops",
     "bro-ride",
 ]
 
@@ -362,6 +363,17 @@ requires-dist = [
     { name = "textual", specifier = "==8.2.8" },
     { name = "trafilatura", specifier = "==2.1.0" },
 ]
+
+[[package]]
+name = "bro-oops"
+version = "0.1.0"
+source = { editable = "oops" }
+dependencies = [
+    { name = "bro" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "bro", editable = "." }]
 
 [[package]]
 name = "bro-ride"

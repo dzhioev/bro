@@ -28,7 +28,7 @@ they do not isolate or hydrate a scoped store.
 
 The repository is a [uv](https://docs.astral.sh/uv/) workspace:
 the root publishes `bro`, [`native/`](native/README.md) publishes the native engine, [`ride/`](ride/README.md) publishes the managed-workspace runtime and both harness adapters,
-and [`dev/`](dev/README.md) publishes development tooling for repositories built on the framework.
+[`dev/`](dev/README.md) publishes development tooling, and [`oops/`](oops/README.md) publishes deployment and operations machinery for consumer repositories.
 
 ## Prerequisites
 
@@ -44,6 +44,7 @@ Install the distribution for the engine you run:
 
 - `bro-native` — the native LLM loop, the `bro` command (`list`, `show`, `run`, and `chat`), provider clients, and terminal UIs
 - `bro-ride` — the managed-workspace runtime, both harness adapters, `ask` / `call` aliases, and `dive-in`
+- `bro-oops` — deployment and operations helpers for repositories that deploy bro services
 - `bro[http]` — aiohttp-based clients and services
 - `bro[llm]` — OpenAI LLM access without the agent UI dependencies
 - `bro[runtime]` — the MCP serving front, over stdio or HTTP
@@ -128,7 +129,7 @@ run-tests
 
 `./setup.sh` syncs the editable workspace and installs the repository hooks;
 the formatter and the test gate cover every workspace member, plus [`benchmark/`](benchmark/README.md), which ships from this repository beside the workspace rather than inside it and carries an environment of its own.
-Build the workspace wheels with `uv build --package bro`, `uv build --package bro-native`, `uv build --package bro-dev`, and `uv build --package bro-ride`.
+Build the workspace wheels with `uv build --package bro`, `uv build --package bro-native`, `uv build --package bro-dev`, `uv build --package bro-oops`, and `uv build --package bro-ride`.
 
 ## License
 
