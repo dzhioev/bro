@@ -1,7 +1,7 @@
 # Terminal-Bench 2.1, scored with a bro as the agent under test.
 #
 #   uv run --project benchmark benchmark-bundle
-#   uv run --project benchmark harbor job start -c benchmark/bro/benchmark/terminal_bench_2_1.yaml
+#   uv run --project benchmark bro.benchmark.job -c benchmark/bro/benchmark/terminal_bench_2_1.yaml
 #
 # Every input a score depends on is pinned here or in the bundle the first
 # command builds; `benchmark/README.md` says where the score lands.
