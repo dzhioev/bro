@@ -270,6 +270,7 @@ BROKER_E2E_PYTEST_FILE = 'ride/ride/e2e_test.py'
 # it. The e2e modules stay out of every stage: two of them spend real tokens
 BENCHMARK_PYTEST_FILES = [
   'bro/benchmark/bundle_test.py',
+  'bro/benchmark/compare_test.py',
   'bro/benchmark/harbor_agent_test.py',
   'bro/benchmark/harbor_environment_test.py',
   'bro/benchmark/job_test.py',

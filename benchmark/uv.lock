@@ -260,6 +260,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
+    { name = "botocore" },
     { name = "bro" },
     { name = "bro-ride" },
     { name = "harbor" },
@@ -276,6 +277,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = "==1.43.40" },
+    { name = "botocore", specifier = "==1.43.79" },
     { name = "bro", editable = "../" },
     { name = "bro-ride", editable = "../ride" },
     { name = "harbor", specifier = "==0.21.0" },

@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "boto3==1.43.40",
+  "botocore==1.43.79",
   "bro",
   "bro-ride",
   "harbor==0.21.0",
@@ -31,8 +32,10 @@ benchmark_retention = "bro.benchmark.credentials:RETENTION"
 [project.scripts]
 # bro
 "benchmark-bundle" = "bro.benchmark._entrypoints:bro_benchmark_bundle"
+"benchmark-compare" = "bro.benchmark._entrypoints:bro_benchmark_compare"
 "benchmark-harbor-job" = "bro.benchmark._entrypoints:bro_benchmark_job"
 "bro.benchmark.bundle" = "bro.benchmark._entrypoints:bro_benchmark_bundle"
+"bro.benchmark.compare" = "bro.benchmark._entrypoints:bro_benchmark_compare"
 "bro.benchmark.job" = "bro.benchmark._entrypoints:bro_benchmark_job"
 
 [tool.uv.sources]
