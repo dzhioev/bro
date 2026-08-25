@@ -1,6 +1,9 @@
+import contextlib
 import hashlib
 import json
+import stat
 import threading
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -46,6 +49,19 @@ def _claude_request(*records: str, context=None, lineage=None) -> BlazeRequest:
   )
 
 
+@contextlib.contextmanager
+def _read_only_tree(root: Path) -> Iterator[None]:
+  paths = [root, *root.rglob('*')]
+  modes = {path: stat.S_IMODE(path.stat().st_mode) for path in paths}
+  for path, mode in modes.items():
+    path.chmod(mode & ~0o222)
+  try:
+    yield
+  finally:
+    for path, mode in modes.items():
+      path.chmod(mode)
+
+
 def test_records_and_replays_bro_trails(tmp_path):
   store = LocalStore(tmp_path)
   recorder = Recorder(store)
@@ -65,6 +81,38 @@ def test_records_and_replays_bro_trails(tmp_path):
   assert trail.header.bro == 'dev'
   assert (tmp_path / 'trails' / trail_id / 'header.json').is_file()
   assert (tmp_path / 'trails' / trail_id / 'steps.jsonl').is_file()
+
+
+def test_reads_a_store_without_write_access(tmp_path):
+  writer = LocalStore(tmp_path)
+  raw = json.dumps(
+    {
+      'type': 'user',
+      'uuid': 'uuid-1',
+      'timestamp': '2026-01-01T00:00:00Z',
+      'message': {'content': 'hello'},
+    }
+  )
+  trail_id = writer.blaze(_claude_request(raw, context={'workspace': 'one'}))['id']
+
+  with _read_only_tree(tmp_path):
+    reader = LocalStore(tmp_path)
+    assert reader.get_trail(trail_id)['id'] == trail_id
+    assert reader.get_step(trail_id, 0)['body'] == raw
+    assert reader.get_steps(trail_id)['steps'][0]['body'] == raw
+    assert reader.get_messages(trail_id)['messages'][0]['content'] == 'hello'
+    assert reader.get_launch_context(trail_id) == {'workspace': 'one'}
+    assert reader.list_trails()['trails'][0]['id'] == trail_id
+
+
+def test_read_creates_a_missing_lock_file(tmp_path):
+  store = LocalStore(tmp_path)
+  trail_id = store.blaze(_bro_request())['id']
+  lock_path = tmp_path / 'trails' / trail_id / '.lock'
+  lock_path.unlink()
+
+  assert store.get_trail(trail_id)['id'] == trail_id
+  assert lock_path.is_file()
 
 
 def test_claude_rows_store_body_and_project_messages(tmp_path):
