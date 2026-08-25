@@ -26,7 +26,7 @@ from harbor.models.trial.result import TrialResult
 
 import bro.base.args as base_args
 from bro.base import log
-from bro.benchmark.retention import MANIFEST_FILENAME
+from bro.benchmark.retention import MANIFEST_FILENAME, PREFIX_ROOT
 
 __cli_name__ = 'benchmark-compare'
 
@@ -297,7 +297,7 @@ def _s3_run(
     if value is not None and not _DIGEST_PATTERN.fullmatch(value):
       raise ComparisonError(f'{name} digest must be sha256:<64 lowercase hex characters>')
   client = boto3.Session(region_name=region).client('s3')
-  listing_prefix = f'{requested_prefix}/' if requested_prefix else 'runs/'
+  listing_prefix = f'{requested_prefix}/' if requested_prefix else f'{PREFIX_ROOT}/'
   manifest_keys = [
     key
     for key in _list_s3_keys(client, bucket, listing_prefix)
@@ -499,6 +499,18 @@ def _reference_description(submission: dict[str, Any]) -> str:
   return f'{label or source_filter["agent"]} / {source_filter["model_name"]}'
 
 
+def _reference_input(
+  submission: dict[str, Any], rows: Iterable[dict[str, Any]], source: str
+) -> ReferenceInput:
+  trials = _reference_trials(submission, rows)
+  return ReferenceInput(
+    description=_reference_description(submission),
+    source=source,
+    source_jobs=_source_job_urls(submission),
+    trials=trials,
+  )
+
+
 def _decode_cached_reference(content: bytes, source: str) -> ReferenceInput:
   record = _read_json_object(content, f'cached reference for {source}')
   if record.get('format') != REFERENCE_FORMAT or record.get('source') != source:
@@ -511,12 +523,7 @@ def _decode_cached_reference(content: bytes, source: str) -> ReferenceInput:
     or not all(isinstance(row, dict) for row in rows)
   ):
     raise ComparisonError(f'cached reference for {source} is malformed')
-  return ReferenceInput(
-    description=_reference_description(submission),
-    source=source,
-    source_jobs=_source_job_urls(submission),
-    trials=_reference_trials(submission, rows),
-  )
+  return _reference_input(submission, rows, source)
 
 
 def load_reference(
@@ -529,14 +536,8 @@ def load_reference(
     if cached is not None:
       return _decode_cached_reference(cached, source)
   submission = _read_json_object(_read_reference_submission(source), source)
-  source_job_ids = _source_job_ids(submission)
-  rows = asyncio.run(_fetch_hub_trial_rows(list(source_job_ids)))
-  reference_input = ReferenceInput(
-    description=_reference_description(submission),
-    source=source,
-    source_jobs=tuple(f'{HARBOR_VIEWER_JOBS_URL}/{job_id}' for job_id in source_job_ids),
-    trials=_reference_trials(submission, rows),
-  )
+  rows = asyncio.run(_fetch_hub_trial_rows(list(_source_job_ids(submission))))
+  reference_input = _reference_input(submission, rows, source)
   record = {
     'format': REFERENCE_FORMAT,
     'source': source,
@@ -593,11 +594,7 @@ def compare_rewards(
   for task_name in sorted(ours_by_task):
     ours_mean = ours_by_task[task_name]
     reference_mean = reference_by_task.get(task_name)
-    delta = (
-      ours_mean.mean - reference_mean.mean
-      if ours_mean is not None and reference_mean is not None
-      else None
-    )
+    delta = None if reference_mean is None else ours_mean.mean - reference_mean.mean
     diverges = delta is None or abs(delta) > divergence
     rows.append(ComparisonRow(task_name, ours_mean, reference_mean, delta, diverges))
   return rows
