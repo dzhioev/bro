@@ -63,7 +63,7 @@ dev = [
 ]
 
 [tool.uv.workspace]
-members = ["dev", "local", "native", "ride"]
+members = ["dev", "local", "native", "oops", "ride"]
 
 [tool.uv.sources]
 bro-dev = { workspace = true }
@@ -153,16 +153,16 @@ wheel-exclude = [
 consider_namespace_packages = true
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
-pythonpath = [".", "dev", "local", "native", "ride"]
+pythonpath = [".", "dev", "local", "native", "oops", "ride"]
 max_warnings = "0"
 markers = [
   "credential_gate: run with the real run-start credential gate (opts out of the conftest autouse fixture that pins it open)",
 ]
 
 [tool.pyright]
-include = ["bro", "bros", "dev", "local", "native", "ride", "conftest.py"]
+include = ["bro", "bros", "dev", "local", "native", "oops", "ride", "conftest.py"]
 exclude = ["bro/setup/", ".venv/", "*.egg-info/"]
-extraPaths = [".", "dev", "local", "native", "ride"]
+extraPaths = [".", "dev", "local", "native", "oops", "ride"]
 venvPath = "."
 venv = ".venv"
 
@@ -170,7 +170,7 @@ venv = ".venv"
 line-length = 100
 indent-width = 2
 target-version = "py312"
-src = [".", "dev", "local", "native", "ride", "benchmark"]
+src = [".", "dev", "local", "native", "oops", "ride", "benchmark"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "B", "C4", "UP", "PIE", "RUF012"]

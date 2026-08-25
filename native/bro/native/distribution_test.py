@@ -15,6 +15,7 @@ _PROJECTS = {
   'bro-benchmark': _ROOT / 'benchmark',
   'bro-dev': _ROOT / 'dev',
   'bro-native': _ROOT / 'native',
+  'bro-oops': _ROOT / 'oops',
   'bro-ride': _ROOT / 'ride',
 }
 _NATIVE_DOMAIN = {
@@ -169,6 +170,7 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'textual',
   }
   assert _project_dependencies(_ROOT / 'dev' / 'pyproject.toml') == {'bro', 'markdown-it-py'}
+  assert _project_dependencies(_ROOT / 'oops' / 'pyproject.toml') == {'bro'}
   assert _project_dependencies(_ROOT / 'benchmark' / 'pyproject.toml') >= {'bro', 'bro-ride'}
   root = tomllib.loads((_ROOT / 'pyproject.toml').read_text())
   assert {'agent', 'ride'}.isdisjoint(root['project'].get('optional-dependencies', {}))

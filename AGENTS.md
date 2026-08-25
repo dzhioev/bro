@@ -14,6 +14,7 @@ Run any script with `--help` for flags.
 The repository is a uv workspace whose root publishes the `bro` distribution from `bro/` and `bros/bro/`;
 `native/` publishes `bro-native` (the native engine and `bro` command),
 `dev/` publishes `bro-dev` (the `bro.dev` and `bro.workflow` packages, `poll-pr`, and the development personas),
+`oops/` publishes `bro-oops` (consumer-neutral deployment and operations machinery),
 `ride/` publishes `bro-ride` (top-level `ride`, the managed-workspace runtime and both harness adapters),
 and `local/` is the `bro-local` member (`bro.local`)
 — this checkout's own persona and scripts, kept out of every published wheel by riding the root's `dev` dependency group.
@@ -47,7 +48,7 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   The opt-in is repository-wide rather than theirs alone:
   every pytest root gates its own token spenders on it
 - `sync-scripts --project <directory>` — regenerate a distribution's `[project.scripts]` and committed `_entrypoints.py`, then `uv sync --all-packages --all-groups --all-extras`
-- `uv build --package bro`, `uv build --package bro-native`, `uv build --package bro-dev`, and `uv build --package bro-ride`
+- `uv build --package bro`, `uv build --package bro-native`, `uv build --package bro-dev`, `uv build --package bro-oops`, and `uv build --package bro-ride`
   — build the workspace wheels;
   `benchmark/`'s is `uv build --directory benchmark`, since it is no member to name with `--package`
 

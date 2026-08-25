@@ -1,0 +1,12 @@
+version: 0.2
+
+# TARGET and IMAGE_BUILD_SCRIPT are configured on the CodeBuild project.
+phases:
+  build:
+    commands:
+      - test -n "$TARGET"
+      - test -n "$IMAGE_BUILD_SCRIPT"
+      - curl -LsSf https://astral.sh/uv/install.sh | sh
+      - export PATH="$HOME/.local/bin:$PATH"
+      - uv sync --locked
+      - uv run "$IMAGE_BUILD_SCRIPT" "$TARGET"

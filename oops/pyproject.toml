@@ -1,0 +1,36 @@
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "bro-oops"
+version = "0.1.0"
+description = "deployment infrastructure and operations helpers for bro"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "bro",
+]
+
+[project.scripts]
+# bro
+"bro-oops-dir" = "bro.oops._entrypoints:bro_oops_assets"
+"bro.oops.assets" = "bro.oops._entrypoints:bro_oops_assets"
+
+[tool.uv.sources]
+bro = { workspace = true }
+
+[tool.deptry.package_module_name_map]
+bro = ["bro"]
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = ["bro.oops"]
+namespace = true
+wheel-exclude = [
+  "**/*_test.py",
+  "**/*_test_helper.py",
+  "**/conftest.py",
+  "**/AGENTS.md",
+  "**/*.egg-info",
+]
