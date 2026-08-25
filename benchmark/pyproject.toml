@@ -27,7 +27,9 @@ dev = [
 [project.scripts]
 # bro
 "benchmark-bundle" = "bro.benchmark._entrypoints:bro_benchmark_bundle"
+"benchmark-harbor-job" = "bro.benchmark._entrypoints:bro_benchmark_job"
 "bro.benchmark.bundle" = "bro.benchmark._entrypoints:bro_benchmark_bundle"
+"bro.benchmark.job" = "bro.benchmark._entrypoints:bro_benchmark_job"
 
 [tool.uv.sources]
 bro = { path = "..", editable = true }

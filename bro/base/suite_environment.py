@@ -12,12 +12,14 @@ name is what keeps the next variable the framework invents from having to be
 discovered the same way. `BRO_LLM_TESTS` is the one name kept: an opt-in a
 caller passes the run deliberately rather than session state it stands in.
 
-Three variables carry session state without living in those namespaces and are
+Three fixed variables carry session state without living in those namespaces and are
 named one by one: `PWD`, which the transcript fallback resolves the working
 directory through while `monkeypatch.chdir` never updates it, so a chdir'd test
 would still read the launching session's transcripts; `MCP_SERVER_BEARER_TOKEN`,
 the session-local MCP server's own credential; and `AI_AGENT`, which claude code
 exports and `usage.claude_version` parses the running harness's version out of.
+Credential install hooks may export variables in a tool's own namespace;
+the rebuild discovers those declarations from the installed registry and clears them too.
 
 The credential resolver's local search path is session state no sweep can
 reach: it is two module constants, one captured from `BRO_CONFIGS_DIR` when
@@ -61,7 +63,20 @@ SESSION_NAMESPACES = (
   'RIDE_',
   'TRAILS_',
 )
-SESSION_VARIABLES = frozenset({'AI_AGENT', 'MCP_SERVER_BEARER_TOKEN', 'PWD'})
+
+
+def _credential_install_variables() -> frozenset[str]:
+  return frozenset(
+    variable
+    for secret in credentials.default_registry().values()
+    if secret.install is not None
+    for variable in secret.install.get('env', {})
+  )
+
+
+SESSION_VARIABLES = frozenset({'AI_AGENT', 'MCP_SERVER_BEARER_TOKEN', 'PWD'}) | (
+  _credential_install_variables()
+)
 TOKENS_OPT_IN = 'BRO_LLM_TESTS'
 KEPT_VARIABLES = frozenset({TOKENS_OPT_IN})
 TIMEZONE = 'Asia/Kolkata'

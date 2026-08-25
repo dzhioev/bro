@@ -133,3 +133,30 @@ def test_an_absent_config_fails_before_anything_runs(tmp_path, monkeypatch, capl
   assert main(['benchmark-run', '-c', 'benchmark/nothing.yaml']) == 1
   assert any('no job config' in record.getMessage() for record in caplog.records)
   assert not (tmp_path / 'var').exists()
+
+
+def test_upload_visibility_reaches_the_host_job_and_its_link_is_reported(
+  tmp_path, monkeypatch, capsys
+):
+  config = tmp_path / 'job.yaml'
+  config.write_text(json.dumps(CONFIG))
+  artifact = tmp_path / 'artifact'
+  upload = artifact / 'output' / 'job' / 'upload.json'
+  upload.parent.mkdir(parents=True)
+  upload.write_text(
+    json.dumps({'visibility': 'public', 'url': 'https://hub.harborframework.com/jobs/1'})
+  )
+  captured = {}
+
+  def run_job(config, timeout, visibility):
+    captured.update(config=config, timeout=timeout, visibility=visibility)
+    return 'sha256:' + 'a' * 64
+
+  monkeypatch.setattr('bro.local.benchmark_run.project_root', lambda: tmp_path)
+  monkeypatch.setattr('bro.local.benchmark_run.run_job', run_job)
+  monkeypatch.setattr('bro.local.benchmark_run.get_artifact', lambda ref: str(artifact))
+  monkeypatch.setattr('bro.local.benchmark_run.report', lambda jobs: [])
+
+  assert main(['benchmark-run', '-c', 'job.yaml', '--upload', 'public', '--keep-bundle']) == 0
+  assert captured['visibility'] == 'public'
+  assert 'upload  https://hub.harborframework.com/jobs/1' in capsys.readouterr().out

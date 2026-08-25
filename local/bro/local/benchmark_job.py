@@ -13,25 +13,28 @@ output directory, and reaches the session as artifact content.
 
 Both halves of the kind live here. `benchmark_kind` is the host-side handler
 factory the `bro.broker_kinds` entry point targets; its args are
-`{config, timeout?}` — `config` a job-config path relative to the workspace
+`{config, timeout?, upload}` — `config` a job-config path relative to the workspace
 root (the same spelling inside a container session and on the host), `timeout`
-the seconds before the host kills the run. Only the session root may start
+the seconds before the host kills the run, and `upload` its Harbor Hub visibility
+or `none`. Only the session root may start
 jobs; everything else is denied. The `benchmark-job` CLI is the session-side
 client: `start` sends the request (`--detach` prints the request id and exits —
 the natural mode for a multi-hour run), and `check` reattaches by request id
 over the broxy's retention — a non-marking peek by default, `--wait` to block
 and collect, `--last-seen` for the cursor re-read of an already-collected
-result. Either way what it prints is the run's ref, which `artifact get` turns
-into a readable path.
+result. Either way it prints the run's ref and, for an uploaded run, its Harbor
+Hub link; `artifact get` turns the ref into a readable path.
 """
 
+import json
 import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Optional
 
 import bro.base.args as base_args
-from bro.base import log
+from bro.artifact import ArtifactError, get_artifact
+from bro.base import credentials, log
 from bro.broker.brotocol import Message, Tag
 from bro.broker.client import CHANNEL_ENV, Client
 from bro.broker.dispatcher import Dispatcher, RequestHandler
@@ -48,8 +51,12 @@ DEFAULT_TIMEOUT = 12 * 3600.0
 # `benchmark-job check` exit code while the result is not in yet (0 = answer
 # relayed, 1 = failure, 2 = argparse usage error)
 PENDING_EXIT_CODE = 3
+UPLOAD_VISIBILITIES = ('none', 'private', 'public')
+UPLOAD_RECORD = 'upload.json'
+HARBOR_CREDENTIAL = 'harbor'
+HARBOR_API_KEY_ENV = 'HARBOR_API_KEY'
 
-_ARGS_KEYS = frozenset({'config', 'timeout'})
+_ARGS_KEYS = frozenset({'config', 'timeout', 'upload'})
 
 
 # --- the host side: the `bro.broker_kinds` factory --------------------------------
@@ -70,6 +77,9 @@ def _refusal(workspace_tree: Path, args: dict[str, Any]) -> Optional[str]:
     not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0
   ):
     return "benchmark 'timeout' must be a positive number of seconds"
+  upload = args.get('upload')
+  if upload not in UPLOAD_VISIBILITIES:
+    return f"benchmark 'upload' must be one of: {', '.join(UPLOAD_VISIBILITIES)}"
   try:
     resolved = tree_path(workspace_tree, config)
   except ValueError as e:
@@ -79,6 +89,17 @@ def _refusal(workspace_tree: Path, args: dict[str, Any]) -> Optional[str]:
   if not (workspace_tree / 'benchmark' / 'pyproject.toml').is_file():
     return 'the workspace carries no benchmark project'
   return None
+
+
+def _harbor_api_key(credential_scope: frozenset[str]) -> str:
+  names = sorted(
+    name for name in credential_scope if credentials.parse_name(name)[0] == HARBOR_CREDENTIAL
+  )
+  if len(names) == 0:
+    raise credentials.SecretNotFound(HARBOR_CREDENTIAL)
+  if len(names) != 1:
+    raise ValueError(f'benchmark scope holds multiple Harbor credentials: {", ".join(names)}')
+  return credentials.default_store().get_instance(names[0])
 
 
 def benchmark_kind(kind_context: KindContext) -> RequestHandler:
@@ -101,15 +122,22 @@ def benchmark_kind(kind_context: KindContext) -> RequestHandler:
       'run',
       '--project',
       str((workspace_tree / 'benchmark').resolve()),
-      'harbor',
-      'job',
-      'start',
+      'bro.benchmark.job',
       '-c',
       str((workspace_tree / config).resolve()),
       '--jobs-dir',
       OUTPUT_DIRECTORY,
+      '--upload',
+      args['upload'],
     )
     environment = dict(os.environ)
+    environment.pop(HARBOR_API_KEY_ENV, None)
+    if args['upload'] != 'none':
+      try:
+        environment[HARBOR_API_KEY_ENV] = _harbor_api_key(kind_context.credential_scope)
+      except (credentials.SecretNotFound, ValueError) as error:
+        _deny(context, peer, f'benchmark upload credential: {error}')
+        return
     environment['UV_PROJECT_ENVIRONMENT'] = str(
       (workspace_tree.parent / 'benchmark-venv').resolve()
     )
@@ -197,42 +225,75 @@ def _await_outcome(client: Client, request: Message, timeout: float) -> str:
   return _interpret_result(result)
 
 
+def uploaded_job_url(run_directory: Path) -> Optional[str]:
+  records = sorted((run_directory / OUTPUT_DIRECTORY).glob(f'*/{UPLOAD_RECORD}'))
+  if len(records) == 0:
+    return None
+  if len(records) != 1:
+    raise JobError(f'{run_directory / OUTPUT_DIRECTORY} holds multiple upload records')
+  try:
+    record = json.loads(records[0].read_text())
+  except json.JSONDecodeError as error:
+    raise JobError(f'malformed upload record at {records[0]}: {error}') from error
+  if (
+    not isinstance(record, dict)
+    or set(record) != {'visibility', 'url'}
+    or record.get('visibility') not in {'private', 'public'}
+    or not isinstance(record.get('url'), str)
+    or len(record['url']) == 0
+  ):
+    raise JobError(f'malformed upload record at {records[0]}')
+  return record['url']
+
+
+def _print_outcome(ref: str) -> None:
+  print(ref)
+  try:
+    run_directory = Path(get_artifact(ref))
+  except ArtifactError as error:
+    log.warning('the run is artifact %s, which did not resolve: %s', ref, error)
+    return
+  url = uploaded_job_url(run_directory)
+  if url is not None:
+    print(f'upload  {url}')
+
+
 def _relay(await_outcome: Callable[[], str]) -> int:
   try:
-    result = await_outcome()
+    ref = await_outcome()
+    _print_outcome(ref)
   except JobError as e:
     log.error('%s', e)
     return 1
-  print(result)
   return 0
 
 
-def _job_args(config: str, timeout: Optional[float]) -> dict[str, Any]:
-  args: dict[str, Any] = {'config': config}
+def _job_args(config: str, timeout: Optional[float], upload: str) -> dict[str, Any]:
+  args: dict[str, Any] = {'config': config, 'upload': upload}
   if timeout is not None:
     args['timeout'] = timeout
   return args
 
 
-def run_job(config: str, timeout: Optional[float] = None) -> str:
+def run_job(config: str, timeout: Optional[float] = None, upload: str = 'none') -> str:
   """start a benchmark job and block until the host answers, returning the ref
   of its collected run. Raises `JobError` with the operator-facing reason."""
   with _open_client() as client:
-    request = client.send(BENCHMARK, _job_args(config, timeout))
+    request = client.send(BENCHMARK, _job_args(config, timeout, upload))
     log.info('benchmark job request %s', request.exchange)
     return _await_outcome(client, request, timeout if timeout is not None else DEFAULT_TIMEOUT)
 
 
-def _start(config: str, timeout: Optional[float], detach: bool) -> int:
+def _start(config: str, timeout: Optional[float], upload: str, detach: bool) -> int:
   if not detach:
-    return _relay(lambda: run_job(config, timeout))
+    return _relay(lambda: run_job(config, timeout, upload))
   try:
     client = _open_client()
   except JobError as e:
     log.error('%s', e)
     return 1
   with client:
-    request = client.send(BENCHMARK, _job_args(config, timeout))
+    request = client.send(BENCHMARK, _job_args(config, timeout, upload))
     log.info('benchmark job request %s', request.exchange)
     print(request.exchange)
     return 0
@@ -325,6 +386,12 @@ def main(argv: list[str]) -> Optional[int]:
       type=float,
       metavar='SECONDS',
       help=f'seconds before the host kills the job (default: {DEFAULT_TIMEOUT:.0f})',
+    )
+    parser.add_argument(
+      '--upload',
+      choices=UPLOAD_VISIBILITIES,
+      default='none',
+      help='Harbor Hub visibility, or none to skip upload (default: none)',
     )
     parser.add_argument(
       '--detach',

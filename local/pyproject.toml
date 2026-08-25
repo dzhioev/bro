@@ -33,6 +33,9 @@ bro-dev = "bros.bro_dev:BroDev"
 [project.entry-points."bro.broker_kinds"]
 benchmark = "bro.local.benchmark_job:benchmark_kind"
 
+[project.entry-points."bro.credentials"]
+harbor = "bro.local.credentials:HARBOR"
+
 [project.entry-points."bro.session_commands"]
 "benchmark-job" = "bro.local._entrypoints:bro_local_benchmark_job"
 "benchmark-run" = "bro.local._entrypoints:bro_local_benchmark_run"

@@ -25,7 +25,11 @@ def _entry_point(name: str, value: str) -> importlib.metadata.EntryPoint:
 
 
 def _context(tmp_path) -> KindContext:
-  return KindContext(workspace_tree=tmp_path, artifacts=cast(ArtifactResolver, object()))
+  return KindContext(
+    workspace_tree=tmp_path,
+    artifacts=cast(ArtifactResolver, object()),
+    credential_scope=frozenset(),
+  )
 
 
 class TestExtensionKinds:

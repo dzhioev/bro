@@ -74,5 +74,8 @@ BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_
 - `bro/benchmark/trajectory.py` — converts the projected local trail in each finished trial into
   Harbor's ATIF v1.7 models at `agent/trajectory.json`;
   `convert_job_trajectories()` is the post-run job-directory sweep
+- `bro/benchmark/job.py` (`bro.benchmark.job`) — runs Harbor against a known concrete job directory,
+  then owns the ordered host-side post-run pipeline:
+  trajectory conversion followed by an optional private or public Harbor Hub upload
 - `bro/benchmark/terminal_bench_2_1.yaml` — the pinned harbor job config, and with the bundle the
   whole of what a score depends on

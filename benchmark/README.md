@@ -43,12 +43,18 @@ that will not run.
 Harbor drives every task container through the `docker compose` CLI plugin, which nothing else in
 this repository needs — install it before the first run.
 
-Build the bundle once, then start the job:
+Build the bundle once, then start the job through the post-run pipeline:
 
 ```
 uv run --project benchmark benchmark-bundle
-uv run --project benchmark harbor job start -c benchmark/bro/benchmark/terminal_bench_2_1.yaml
+uv run --project benchmark bro.benchmark.job -c benchmark/bro/benchmark/terminal_bench_2_1.yaml
 ```
+
+`bro.benchmark.job` runs Harbor, converts every recorded trial trail to `agent/trajectory.json`, and then runs the configured post-run operations against the finished concrete job directory.
+It does not upload by default.
+Pass `--upload private` or `--upload public` to run the idempotent `harbor upload` sweep after conversion;
+the command prints the Harbor Hub job link and records it in the job's `upload.json`.
+A host operator authenticates with `HARBOR_API_KEY` or `harbor auth login` as Harbor normally does.
 
 The job config is the whole reproducibility contract
 — dataset digest, the bros under test, the model, concurrency, attempt depth, and the retry policy
@@ -85,15 +91,20 @@ Managed sessions carry no docker socket;
 from inside one, start the job through the session broker instead:
 
 ```
-benchmark-job start -c benchmark/bro/benchmark/terminal_bench_2_1.yaml --detach
+benchmark-job start -c benchmark/bro/benchmark/terminal_bench_2_1.yaml --upload private --detach
 benchmark-job check <request-id>
 ```
 
-The host runs the same harbor command with its own docker access
+`benchmark-run` accepts the same `--upload none|private|public` choice.
+`none` is the default on both session commands.
+For an unattended upload, store the Harbor API key as the `harbor` credential kind and launch the session with `--grant harbor`;
+the broker hydrates that bounded credential into the host job's `HARBOR_API_KEY`.
+
+The host runs `bro.benchmark.job` with its own docker access
 (the `benchmark` broker kind, `local/bro/local/benchmark_job.py`),
 pointed at the workspace's own config and at the job's own directory rather than the checkout's
 `jobs/`.
-`start` and `check` print the artifact ref of the finished run;
+`start` and `check` print the artifact ref of the finished run and the Hub link when it was uploaded;
 `artifact get <ref>` makes it readable, with the whole `<jobs_dir>` under `output/` beside the run's
 `stdout`, `stderr`, and `status.json`.
 The store dies with the session, so copy out whatever should outlive it.

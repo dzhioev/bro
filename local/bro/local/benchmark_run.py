@@ -24,7 +24,12 @@ from bro.artifact import ArtifactError, get_artifact
 from bro.base import log
 from bro.base.lulid import lulid
 from bro.broker.job import OUTPUT_DIRECTORY
-from bro.local.benchmark_job import JobError, run_job
+from bro.local.benchmark_job import (
+  UPLOAD_VISIBILITIES,
+  JobError,
+  run_job,
+  uploaded_job_url,
+)
 from bro.workspace.paths import project_root
 
 __cli_name__ = 'benchmark-run'
@@ -133,6 +138,7 @@ def _run(
   bro: list[str],
   attempts: Optional[int],
   timeout: Optional[float],
+  upload: str,
   keep_bundle: bool,
 ) -> int:
   tree = project_root()
@@ -154,7 +160,7 @@ def _run(
   if not keep_bundle:
     build_bundle(tree)
   try:
-    ref = run_job(str(narrowed_config.relative_to(tree)), timeout)
+    ref = run_job(str(narrowed_config.relative_to(tree)), timeout, upload)
   except JobError as error:
     log.error('%s', error)
     run = _resolved(error.ref) if error.ref is not None else None
@@ -167,6 +173,9 @@ def _run(
   # still a run the operator can open
   print(f'results {run / OUTPUT_DIRECTORY}')
   print(f'config  {narrowed_config}')
+  url = uploaded_job_url(run)
+  if url is not None:
+    print(f'upload  {url}')
   for line in report(run / OUTPUT_DIRECTORY):
     print(line)
   return 0
@@ -198,6 +207,12 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument('--attempts', type=int, metavar='N', help="override the config's n_attempts")
   parser.add_argument(
     '--timeout', type=float, metavar='SECONDS', help='seconds before the host kills the job'
+  )
+  parser.add_argument(
+    '--upload',
+    choices=UPLOAD_VISIBILITIES,
+    default='none',
+    help='Harbor Hub visibility, or none to skip upload (default: none)',
   )
   parser.add_argument(
     '--keep-bundle',

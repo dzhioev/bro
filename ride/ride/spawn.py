@@ -419,7 +419,8 @@ def run_root_via_broker(
   facade.on(SUMMON, control.handle)
   facade.on(MINT, artifact_control.mint)
   facade.on(GET, artifact_control.get)
-  for kind, handler in extension_kinds(KindContext(workspace.tree, artifact_control)).items():
+  kind_context = KindContext(workspace.tree, artifact_control, frozenset(credential_scope))
+  for kind, handler in extension_kinds(kind_context).items():
     facade.on(kind, handler)
   facade.add_delivery_observer(control.observe_delivery)
   facade.add_delivery_observer(_note_child_started(peers))
