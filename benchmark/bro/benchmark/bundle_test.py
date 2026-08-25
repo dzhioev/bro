@@ -53,6 +53,7 @@ def _fake_bundle(root: Path) -> Bundle:
         'cpython': CPYTHON_VERSION,
         'requirements': 'certifi==1\n',
         'shim': '0' * 64,
+        'source_commit': 'a' * 40,
         'target': list(TARGET),
         'wheels': {'bro.whl': '1' * 64},
       }
@@ -92,6 +93,12 @@ def test_built_accepts_a_complete_bundle(tmp_path):
   bundle = _fake_bundle(tmp_path / 'bundle')
 
   assert built(bundle.root) == bundle
+
+
+def test_the_bundle_carries_its_source_commit(tmp_path):
+  bundle = _fake_bundle(tmp_path / 'bundle')
+
+  assert bundle.source_commit == 'a' * 40
 
 
 def test_the_bundle_identity_changes_with_its_framework_wheels(tmp_path):

@@ -14,6 +14,7 @@ from harbor.models.job.result import JobResult
 import bro.base.args as base_args
 from bro.base import log
 from bro.base.lulid import lulid
+from bro.benchmark.retention import RetainedRun, RetentionError, retain_job
 from bro.benchmark.trajectory import convert_job_trajectories
 
 __cli_name__ = 'benchmark-harbor-job'
@@ -38,6 +39,7 @@ class PostRunResult:
   job_directory: Path
   trajectory_paths: tuple[Path, ...]
   upload: Optional[UploadResult]
+  retained: Optional[RetainedRun]
 
 
 def _upload_job(job_directory: Path, visibility: UploadVisibility) -> Optional[UploadResult]:
@@ -64,7 +66,8 @@ def finish_job(
   """Run every ordered post-run operation against one finished Harbor job."""
   trajectory_paths = tuple(convert_job_trajectories(job_directory))
   upload = _upload_job(job_directory, visibility)
-  return PostRunResult(job_directory, trajectory_paths, upload)
+  retained = retain_job(job_directory)
+  return PostRunResult(job_directory, trajectory_paths, upload, retained)
 
 
 def _job_directory(jobs_directory: Path, job_name: str) -> Path:
@@ -103,8 +106,8 @@ def run_job(
 def main(argv: list[str]) -> Optional[int]:
   parser = base_args.Parser(
     prog='bro.benchmark.job',
-    description='run a Harbor job, convert its finished trails to ATIF, and optionally '
-    'upload it to the Harbor Hub',
+    description='run a Harbor job, convert its finished trails to ATIF, optionally upload it '
+    'to the Harbor Hub, and retain it when bucket storage is configured',
   )
   parser.add_argument('-c', '--config', type=Path, required=True, help='Harbor job config')
   parser.add_argument(
@@ -130,10 +133,12 @@ def main(argv: list[str]) -> Optional[int]:
       visibility=args['upload'],
       job_name=args['job_name'],
     )
-  except (OSError, subprocess.CalledProcessError, ValueError) as error:
+  except (OSError, RetentionError, subprocess.CalledProcessError, ValueError) as error:
     log.error('benchmark job pipeline failed: %s', error)
     return 1
   log.info('converted %d trial trajectories', len(result.trajectory_paths))
   if result.upload is not None:
     print(f'uploaded {result.upload.url}')
+  if result.retained is not None:
+    print(f'retained {result.retained.url}')
   return 0

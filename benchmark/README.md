@@ -25,7 +25,7 @@ uv run --project benchmark benchmark-bundle
 ```
 
 It lands in `var/benchmark/bundle` unless `--output` says otherwise.
-Its `bundle.json` manifest identifies the exact framework wheels, dependency pins, interpreter, target, and shim that produced it.
+Its `bundle.json` manifest identifies the source commit, exact framework wheels, dependency pins, interpreter, target, and shim that produced it.
 The canonical manifest digest is the bundle identity Harbor records as `agent_info.version` for every trial.
 Copying the directory somewhere is the whole installation, and
 the shim inside it is the framework's `bro` command:
@@ -51,10 +51,17 @@ uv run --project benchmark bro.benchmark.job -c benchmark/bro/benchmark/terminal
 ```
 
 `bro.benchmark.job` runs Harbor, converts every recorded trial trail to `agent/trajectory.json`, and then runs the configured post-run operations against the finished concrete job directory.
-It does not upload by default.
+It does not upload to the Harbor Hub by default.
 Pass `--upload private` or `--upload public` to run the idempotent `harbor upload` sweep after conversion;
 the command prints the Harbor Hub job link and records it in the job's `upload.json`.
 A host operator authenticates with `HARBOR_API_KEY` or `harbor auth login` as Harbor normally does.
+
+When the host resolves a `benchmark_retention` credential, every run is then copied to its S3 bucket regardless of the Hub setting.
+The credential is a JSON object with the exact fields `bucket` and `region`;
+AWS authentication comes from boto3's ambient credential chain.
+Retention adds `retention.json`, whose config, bundle identity and source commit, optional Hub link, and file hashes make the run independently inspectable.
+It uploads that manifest last, so its presence marks a complete retained run.
+A host without the credential skips retention and still runs the benchmark.
 
 The job config is the whole reproducibility contract
 — dataset digest, the bros under test, the model, concurrency, attempt depth, and the retry policy
@@ -107,7 +114,8 @@ pointed at the workspace's own config and at the job's own directory rather than
 `start` and `check` print the artifact ref of the finished run and the Hub link when it was uploaded;
 `artifact get <ref>` makes it readable, with the whole `<jobs_dir>` under `output/` beside the run's
 `stdout`, `stderr`, and `status.json`.
-The store dies with the session, so copy out whatever should outlive it.
+The artifact store dies with the session;
+a configured retention bucket is the durable copy, while a host without one must copy out anything that should outlive the session.
 
 Following a run as it happens means reading the log where
 it is being written:

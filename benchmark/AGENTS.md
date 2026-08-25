@@ -76,6 +76,8 @@ BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_
   `convert_job_trajectories()` is the post-run job-directory sweep
 - `bro/benchmark/job.py` (`bro.benchmark.job`) — runs Harbor against a known concrete job directory,
   then owns the ordered host-side post-run pipeline:
-  trajectory conversion followed by an optional private or public Harbor Hub upload
+  trajectory conversion, an optional private or public Harbor Hub upload, then durable retention when configured
+- `bro/benchmark/retention.py` — copies every file in a finished run to the configured S3 bucket,
+  with a content inventory and the score-producing config and bundle identity in a manifest uploaded last
 - `bro/benchmark/terminal_bench_2_1.yaml` — the pinned harbor job config, and with the bundle the
   whole of what a score depends on
