@@ -72,13 +72,11 @@ is reachable and leaves nothing of a trial on the docker host.
 
 The trail is a local trails store rooted at the trial's own `agent/` directory.
 Reading one back takes a reader resolving the same way
-— the local backend, at that root
-— over a writable copy of it, since the store takes a lock file even to read:
+— the local backend, at that root:
 
 ```
-cp -r <trial>/agent /tmp/trial && chmod -R u+w /tmp/trial
 echo '{}' > /tmp/no-credentials.json
-CREDENTIALS_REGISTRY=/tmp/no-credentials.json XDG_DATA_HOME=/tmp/trial rewind show <trail-id>
+CREDENTIALS_REGISTRY=/tmp/no-credentials.json XDG_DATA_HOME=<trial>/agent rewind show <trail-id>
 ```
 
 On a host that configures no `trails` credential of its own, `XDG_DATA_HOME` alone is enough.

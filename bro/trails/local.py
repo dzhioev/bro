@@ -342,7 +342,15 @@ class LocalStore(TrailsStore):
     directory = self._trail_directory(trail_id)
     if not directory.is_dir():
       raise TrailNotFound(trail_id)
-    with (directory / '.lock').open('a+b') as lock:
+    lock_path = directory / '.lock'
+    if shared:
+      try:
+        lock = lock_path.open('rb')
+      except FileNotFoundError:
+        lock = lock_path.open('a+b')
+    else:
+      lock = lock_path.open('a+b')
+    with lock:
       fcntl.flock(lock, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
       yield
 
