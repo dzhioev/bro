@@ -47,6 +47,11 @@ def test_run_job_converts_before_uploading_with_explicit_visibility(
 
   monkeypatch.setattr(job.subprocess, 'run', run)
   monkeypatch.setattr(job, 'convert_job_trajectories', convert)
+  monkeypatch.setattr(
+    job,
+    'retain_job',
+    lambda directory: events.append(('retain', str(directory))),
+  )
 
   result = job.run_job(tmp_path / 'config.yaml', jobs_directory, visibility, job_name='chosen-name')
 
@@ -64,6 +69,7 @@ def test_run_job_converts_before_uploading_with_explicit_visibility(
     ),
     ('convert', str(job_directory)),
     ('harbor', 'upload', str(job_directory), f'--{visibility.value}'),
+    ('retain', str(job_directory)),
   ]
   assert result.trajectory_paths == (trajectory,)
   assert result.upload is not None
@@ -75,10 +81,12 @@ def test_run_job_converts_before_uploading_with_explicit_visibility(
   }
 
 
-def test_no_upload_still_converts_the_finished_job(tmp_path, monkeypatch):
+def test_no_upload_still_converts_and_retains_the_finished_job(tmp_path, monkeypatch):
   job_directory = tmp_path / 'job'
   converted = job_directory / 'trial/agent/trajectory.json'
+  retained = job.RetainedRun('bucket', 'runs/job')
   monkeypatch.setattr(job, 'convert_job_trajectories', lambda directory: [converted])
+  monkeypatch.setattr(job, 'retain_job', lambda directory: retained)
   monkeypatch.setattr(
     job.subprocess,
     'run',
@@ -89,6 +97,7 @@ def test_no_upload_still_converts_the_finished_job(tmp_path, monkeypatch):
 
   assert result.trajectory_paths == (converted,)
   assert result.upload is None
+  assert result.retained == retained
   assert not (job_directory / job.UPLOAD_RECORD).exists()
 
 
@@ -97,6 +106,11 @@ def test_a_conversion_failure_prevents_upload(tmp_path, monkeypatch):
     raise ValueError(f'malformed store in {directory}')
 
   monkeypatch.setattr(job, 'convert_job_trajectories', fail_conversion)
+  monkeypatch.setattr(
+    job,
+    'retain_job',
+    lambda directory: pytest.fail('retention must not run after failed conversion'),
+  )
   monkeypatch.setattr(
     job.subprocess,
     'run',
@@ -110,6 +124,11 @@ def test_a_conversion_failure_prevents_upload(tmp_path, monkeypatch):
 def test_a_failed_upload_leaves_no_success_record(tmp_path, monkeypatch):
   job_directory = tmp_path / 'job'
   monkeypatch.setattr(job, 'convert_job_trajectories', lambda directory: [])
+  monkeypatch.setattr(
+    job,
+    'retain_job',
+    lambda directory: pytest.fail('retention must not run after failed upload'),
+  )
 
   def fail_upload(command, check):
     raise subprocess.CalledProcessError(1, command)
@@ -142,7 +161,7 @@ def test_cli_defaults_to_no_upload(tmp_path, monkeypatch, capsys):
       visibility=visibility,
       job_name=job_name,
     )
-    return job.PostRunResult(tmp_path / 'job', (), None)
+    return job.PostRunResult(tmp_path / 'job', (), None, None)
 
   monkeypatch.setattr(job, 'run_job', run_job)
 

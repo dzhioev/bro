@@ -14,6 +14,7 @@ import contextlib
 import hashlib
 import json
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -33,7 +34,7 @@ CPYTHON_VERSION = '3.12.14'
 # minimal `bro` one ships from — a bundle without it registers no other bro
 WHEEL_PACKAGES = ('bro', 'bro-native', 'bro-dev')
 TARGET = ('linux', 'x86_64', 'glibc')
-MANIFEST_FORMAT = 1
+MANIFEST_FORMAT = 2
 
 _SHIM = """\
 #!/bin/sh
@@ -66,6 +67,7 @@ def _load_manifest(path: Path) -> dict[str, object]:
     'cpython',
     'requirements',
     'shim',
+    'source_commit',
     'target',
     'wheels',
   }:
@@ -79,6 +81,8 @@ def _load_manifest(path: Path) -> dict[str, object]:
     or not isinstance(manifest['requirements'], str)
     or manifest['requirements'] == ''
     or not _digest_valid(manifest['shim'])
+    or not isinstance(manifest['source_commit'], str)
+    or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', manifest['source_commit'])
     or not isinstance(target, list)
     or len(target) == 0
     or not all(isinstance(part, str) and part != '' for part in target)
@@ -139,6 +143,10 @@ class Bundle:
     manifest = _load_manifest(self.manifest)
     return f'sha256:{hashlib.sha256(_manifest_bytes(manifest)).hexdigest()}'
 
+  @property
+  def source_commit(self) -> str:
+    return str(_load_manifest(self.manifest)['source_commit'])
+
   def missing(self) -> tuple[Path, ...]:
     parts = (self.shim, self.interpreter, self.command, self.ca_bundle, self.manifest)
     return tuple(part for part in parts if not part.exists())
@@ -161,12 +169,15 @@ def _file_digest(path: Path) -> str:
   return digest.hexdigest()
 
 
-def _bundle_manifest(bundle: Bundle, requirements: str, wheels: list[Path]) -> dict[str, object]:
+def _bundle_manifest(
+  bundle: Bundle, requirements: str, wheels: list[Path], source_commit: str
+) -> dict[str, object]:
   return {
     'format': MANIFEST_FORMAT,
     'cpython': CPYTHON_VERSION,
     'requirements': requirements,
     'shim': hashlib.sha256(shim_text(bundle).encode()).hexdigest(),
+    'source_commit': source_commit,
     'target': list(TARGET),
     'wheels': {wheel.name: _file_digest(wheel) for wheel in wheels},
   }
@@ -274,6 +285,13 @@ def _capture(command: list[str]) -> str:
   return spawn.run(command, capture_output=True, check=True, text=True).stdout
 
 
+def _source_commit(workspace: Path) -> str:
+  commit = _capture(['git', '-C', str(workspace), 'rev-parse', 'HEAD']).strip()
+  if not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', commit):
+    raise ValueError(f'git reported malformed source commit {commit!r}')
+  return commit
+
+
 def _install_interpreter(bundle: Bundle, staging: Path) -> None:
   _run(python_install_command(staging))
   # uv names the installation after the version it resolved and links a
@@ -325,6 +343,7 @@ def build(workspace: Path, root: Path) -> Bundle:
   if root.exists():
     shutil.rmtree(root)
   root.mkdir(parents=True)
+  source_commit = _source_commit(workspace)
   with _staging(root) as staging:
     log.info('installing CPython %s', CPYTHON_VERSION)
     _install_interpreter(bundle, staging / 'interpreter')
@@ -337,7 +356,7 @@ def build(workspace: Path, root: Path) -> Bundle:
     wheels = _wheels(staging / 'wheel')
     log.info('installing the framework into %s', bundle.site_packages)
     _run(install_command(bundle, requirements, wheels))
-    manifest = _bundle_manifest(bundle, requirements_text, wheels)
+    manifest = _bundle_manifest(bundle, requirements_text, wheels, source_commit)
     bundle.manifest.write_bytes(_manifest_bytes(manifest) + b'\n')
   bundle.shim.write_text(shim_text(bundle))
   bundle.shim.chmod(0o755)
