@@ -14,7 +14,7 @@ from harbor.cli.config_sources import load_config_source
 
 from bro.base import credentials
 from bro.base.suite_environment import host_credential_store, token_spending_skip_reason
-from bro.benchmark.bundle import host_mismatch
+from bro.benchmark.bundle import built, default_root, host_mismatch, workspace_root
 
 # the smallest image in the set, and one carrying neither python3 nor a CA
 # store — so a single trial exercises the bundle and SSL_CERT_FILE for real
@@ -80,6 +80,16 @@ def assert_graded_run(jobs: Path) -> None:
   # and that the usage file made it back out of the container
   assert stats['n_output_tokens'] > 0
   job = results[0].parent
+  trial_results = [
+    result
+    for path in job.rglob('result.json')
+    if path != results[0]
+    for result in [json.loads(path.read_text())]
+    if isinstance(result.get('agent_info'), dict)
+  ]
+  assert len(trial_results) > 0, 'the job kept no trial result'
+  expected_version = built(default_root(workspace_root())).identity
+  assert {result['agent_info']['version'] for result in trial_results} == {expected_version}
   assert len(list(job.rglob('agent/bro.log'))) > 0, 'the trial kept no activity log'
   # the local store's own layout under the run's data home, found rather than spelled
   assert len(list(job.rglob('agent/ride/trails/*/*/header.json'))) > 0, 'the trial kept no trail'

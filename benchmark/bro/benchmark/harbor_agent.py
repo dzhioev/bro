@@ -65,6 +65,11 @@ USAGE_FILE = AGENT_DIR / 'usage.json'
 
 COMPOSE_PROBE = ('docker', 'compose', 'version')
 
+
+def benchmark_bundle() -> Bundle:
+  return built(default_root(workspace_root()))
+
+
 # `FAILURE_CATEGORIES`, as harbor's retry policy speaks them
 _HARBOR_EXCEPTIONS: dict[str, type[NonZeroAgentExitCodeError]] = {
   'rate-limit': ApiRateLimitError,
@@ -267,6 +272,10 @@ class BroAgent(BaseInstalledAgent):
     return AGENT_NAME
 
   @override
+  def version(self) -> str:
+    return benchmark_bundle().identity
+
+  @override
   def to_agent_info(self) -> AgentInfo:
     """the recorded identity, qualified by the bro under test.
 
@@ -287,7 +296,7 @@ class BroAgent(BaseInstalledAgent):
     in this task's own image, in the setup phase, so a misconfigured job aborts
     instead of being graded as a run of failed attempts.
     """
-    bundle = built(default_root(workspace_root()))
+    bundle = benchmark_bundle()
     await self.exec_as_root(
       environment, command=f'mkdir -p {BUNDLE.root} {STORE_DIR} && chmod 700 {STORE_DIR}'
     )

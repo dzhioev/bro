@@ -24,8 +24,9 @@ standalone CPython, the framework distributions a bro runs from — `bro`, `bro-
 uv run --project benchmark benchmark-bundle
 ```
 
-It lands in `var/benchmark/bundle` unless `--output` says otherwise, and rebuilding it from one
-commit reproduces the same contents.
+It lands in `var/benchmark/bundle` unless `--output` says otherwise.
+Its `bundle.json` manifest identifies the exact framework wheels, dependency pins, interpreter, target, and shim that produced it.
+The canonical manifest digest is the bundle identity Harbor records as `agent_info.version` for every trial.
 Copying the directory somewhere is the whole installation, and
 the shim inside it is the framework's `bro` command:
 

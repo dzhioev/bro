@@ -11,6 +11,8 @@ the workspace `uv.lock`, so two builds of one commit carry the same code.
 """
 
 import contextlib
+import hashlib
+import json
 import platform
 import shutil
 import subprocess
@@ -31,6 +33,7 @@ CPYTHON_VERSION = '3.12.14'
 # minimal `bro` one ships from — a bundle without it registers no other bro
 WHEEL_PACKAGES = ('bro', 'bro-native', 'bro-dev')
 TARGET = ('linux', 'x86_64', 'glibc')
+MANIFEST_FORMAT = 1
 
 _SHIM = """\
 #!/bin/sh
@@ -39,6 +42,55 @@ PYTHONPATH="$root/{packages}${{PYTHONPATH:+:$PYTHONPATH}}"
 export PYTHONPATH
 exec "$root/{interpreter}" -s "$root/{command}" "$@"
 """
+
+
+def _manifest_bytes(manifest: dict[str, object]) -> bytes:
+  return json.dumps(manifest, ensure_ascii=False, separators=(',', ':'), sort_keys=True).encode()
+
+
+def _digest_valid(value: object) -> bool:
+  return (
+    isinstance(value, str)
+    and len(value) == 64
+    and all(character in '0123456789abcdef' for character in value)
+  )
+
+
+def _load_manifest(path: Path) -> dict[str, object]:
+  try:
+    manifest = json.loads(path.read_text())
+  except (OSError, json.JSONDecodeError) as error:
+    raise ValueError(f'invalid bundle manifest at {path}: {error}') from error
+  if not isinstance(manifest, dict) or set(manifest) != {
+    'format',
+    'cpython',
+    'requirements',
+    'shim',
+    'target',
+    'wheels',
+  }:
+    raise ValueError(f'invalid bundle manifest at {path}: unexpected fields')
+  target = manifest['target']
+  wheels = manifest['wheels']
+  if (
+    manifest['format'] != MANIFEST_FORMAT
+    or not isinstance(manifest['cpython'], str)
+    or manifest['cpython'] == ''
+    or not isinstance(manifest['requirements'], str)
+    or manifest['requirements'] == ''
+    or not _digest_valid(manifest['shim'])
+    or not isinstance(target, list)
+    or len(target) == 0
+    or not all(isinstance(part, str) and part != '' for part in target)
+    or not isinstance(wheels, dict)
+    or len(wheels) == 0
+    or not all(
+      isinstance(filename, str) and filename != '' and _digest_valid(digest)
+      for filename, digest in wheels.items()
+    )
+  ):
+    raise ValueError(f'invalid bundle manifest at {path}: malformed values')
+  return manifest
 
 
 @dataclass(frozen=True)
@@ -78,8 +130,17 @@ class Bundle:
     """the CA store to point `SSL_CERT_FILE` at, for a host that ships none."""
     return self.site_packages / 'certifi' / 'cacert.pem'
 
+  @property
+  def manifest(self) -> Path:
+    return self.root / 'bundle.json'
+
+  @property
+  def identity(self) -> str:
+    manifest = _load_manifest(self.manifest)
+    return f'sha256:{hashlib.sha256(_manifest_bytes(manifest)).hexdigest()}'
+
   def missing(self) -> tuple[Path, ...]:
-    parts = (self.shim, self.interpreter, self.command, self.ca_bundle)
+    parts = (self.shim, self.interpreter, self.command, self.ca_bundle, self.manifest)
     return tuple(part for part in parts if not part.exists())
 
 
@@ -92,6 +153,25 @@ def shim_text(bundle: Bundle) -> str:
   )
 
 
+def _file_digest(path: Path) -> str:
+  digest = hashlib.sha256()
+  with path.open('rb') as file:
+    while chunk := file.read(1024 * 1024):
+      digest.update(chunk)
+  return digest.hexdigest()
+
+
+def _bundle_manifest(bundle: Bundle, requirements: str, wheels: list[Path]) -> dict[str, object]:
+  return {
+    'format': MANIFEST_FORMAT,
+    'cpython': CPYTHON_VERSION,
+    'requirements': requirements,
+    'shim': hashlib.sha256(shim_text(bundle).encode()).hexdigest(),
+    'target': list(TARGET),
+    'wheels': {wheel.name: _file_digest(wheel) for wheel in wheels},
+  }
+
+
 def built(root: Path) -> Bundle:
   """the bundle at `root`, refusing one never built or left incomplete."""
   bundle = Bundle(root)
@@ -99,6 +179,7 @@ def built(root: Path) -> Bundle:
   if len(missing) > 0:
     absent = ', '.join(str(part) for part in missing)
     raise FileNotFoundError(f'no bundle at {root} ({absent} absent); build it with {__cli_name__}')
+  _ = bundle.identity
   return bundle
 
 
@@ -248,12 +329,16 @@ def build(workspace: Path, root: Path) -> Bundle:
     log.info('installing CPython %s', CPYTHON_VERSION)
     _install_interpreter(bundle, staging / 'interpreter')
     requirements = staging / 'requirements.txt'
-    requirements.write_text(_capture(export_command(workspace)))
+    requirements_text = _capture(export_command(workspace))
+    requirements.write_text(requirements_text)
     log.info('building the framework wheels')
     for package in WHEEL_PACKAGES:
       _run(wheel_command(workspace, staging / 'wheel', package))
+    wheels = _wheels(staging / 'wheel')
     log.info('installing the framework into %s', bundle.site_packages)
-    _run(install_command(bundle, requirements, _wheels(staging / 'wheel')))
+    _run(install_command(bundle, requirements, wheels))
+    manifest = _bundle_manifest(bundle, requirements_text, wheels)
+    bundle.manifest.write_bytes(_manifest_bytes(manifest) + b'\n')
   bundle.shim.write_text(shim_text(bundle))
   bundle.shim.chmod(0o755)
   return built(root)

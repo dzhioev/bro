@@ -48,17 +48,13 @@ BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_
 
 ## Components
 
-- `bro/benchmark/bundle.py` (`benchmark-bundle`) — builds the relocatable directory a foreign
-  container runs `bro` from:
-  a pinned standalone CPython, the dependencies `WHEEL_PACKAGES` resolves to against
-  the workspace lock, those distributions themselves entering as built wheels, and a
-  shim setting `PYTHONPATH` over them.
-  `Bundle` is the layout a consumer addresses
-  — shim, interpreter,
-  site-packages, and the CA store to point `SSL_CERT_FILE` at;
-  `built(root)` reports an absent or
-  incomplete bundle rather than building one behind the caller's back
+- `bro/benchmark/bundle.py` (`benchmark-bundle`) — builds the relocatable directory a foreign container runs `bro` from:
+  a pinned standalone CPython, the dependencies `WHEEL_PACKAGES` resolves to against the workspace lock, those distributions themselves entering as built wheels, and a shim setting `PYTHONPATH` over them.
+  Its manifest records those inputs and gives the bundle a content-derived identity.
+  `Bundle` is the layout a consumer addresses — shim, interpreter, site-packages, CA store, manifest, and identity;
+  `built(root)` reports an absent, incomplete, or malformed bundle rather than building one behind the caller's back
 - `bro/benchmark/harbor_agent.py` — `BroAgent`, the `BaseInstalledAgent` harbor imports.
+  Its Harbor version is the uploaded bundle's identity.
   `install()` uploads the bundle and a scoped store holding only the LLM key, then runs
   `bro show <bro>` through the uploaded bundle
   — the one validation the host cannot make, and a
