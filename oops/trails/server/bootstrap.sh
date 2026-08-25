@@ -23,10 +23,12 @@ else
     log INFO 'seeding the sessions token from /trails/bearer-token'
   else
     sessions_token="$(openssl rand -hex 32)"
-    log INFO 'generated a sessions token'
+    log INFO "generated a sessions token (copy to ~/.bro/trails.json): $sessions_token"
   fi
   analyst_token="$(openssl rand -hex 32)"
+  log INFO "generated an analyst token (copy to the trails credential of reading scopes): $analyst_token"
   admin_token="$(openssl rand -hex 32)"
+  log INFO "generated an admin token (copy to the trails credential of administering scopes): $admin_token"
   tokens="$(cat <<JSON
 {
   "tokens": {
@@ -37,11 +39,6 @@ else
 }
 JSON
 )"
-  jq -n \
-    --arg sessions "$sessions_token" \
-    --arg analyst "$analyst_token" \
-    --arg admin "$admin_token" \
-    '{sessions: $sessions, analyst: $analyst, admin: $admin}'
 fi
 
 put_parameter /trails/tokens "$tokens"

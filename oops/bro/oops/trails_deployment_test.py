@@ -11,7 +11,7 @@ _EXECUTABLES = (
   _SERVER / 'deploy.sh',
   _SERVER / 'run_local.sh',
   _SERVER / 'verify.sh',
-  _SERVER / 'verify_deps.sh',
+  _SERVER / 'verify_image.sh',
 )
 
 

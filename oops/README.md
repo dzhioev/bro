@@ -68,7 +68,7 @@ assertion tests inject handles and never query AWS.
 
 The repository app is `deployment/app.py`.
 A deployment first uses its `platform-only=true` context through `trails/server/deploy.sh`, then synthesizes the lookup-based service after the platform exists.
-`trails/server/bootstrap.sh` creates the runtime token parameter, `run_local.sh` serves a local store, `verify_deps.sh` smoke-tests the image, and `verify.sh` monitors the ECS rollout before probing health.
+`trails/server/bootstrap.sh` creates the runtime token parameter, `run_local.sh` serves a local store, `verify_image.sh` smoke-tests the image, and `verify.sh` monitors the ECS rollout before probing health.
 The image uses the shared `bro-server-base`, and `image_build.sh` stages the framework wheel through `deploy_lib.sh` before pushing both commit and latest tags.
 
 ## Development
