@@ -1,3 +1,4 @@
+import json
 import platform
 import subprocess
 import sys
@@ -8,6 +9,8 @@ import pytest
 from bro.benchmark import bundle as bundle_module
 from bro.benchmark.bundle import (
   CPYTHON_VERSION,
+  MANIFEST_FORMAT,
+  TARGET,
   WHEEL_PACKAGES,
   Bundle,
   build,
@@ -43,6 +46,18 @@ def _fake_bundle(root: Path) -> Bundle:
   bundle.command.write_text('')
   bundle.ca_bundle.parent.mkdir(parents=True)
   bundle.ca_bundle.write_text('')
+  bundle.manifest.write_text(
+    json.dumps(
+      {
+        'format': MANIFEST_FORMAT,
+        'cpython': CPYTHON_VERSION,
+        'requirements': 'certifi==1\n',
+        'shim': '0' * 64,
+        'target': list(TARGET),
+        'wheels': {'bro.whl': '1' * 64},
+      }
+    )
+  )
   bundle.shim.write_text(shim_text(bundle))
   bundle.shim.chmod(0o755)
   return bundle
@@ -56,6 +71,7 @@ def test_layout_hangs_off_the_root(tmp_path):
   assert bundle.site_packages == tmp_path / 'bundle' / 'site-packages'
   assert bundle.command == tmp_path / 'bundle' / 'site-packages' / 'bin' / 'bro'
   assert bundle.ca_bundle == tmp_path / 'bundle' / 'site-packages' / 'certifi' / 'cacert.pem'
+  assert bundle.manifest == tmp_path / 'bundle' / 'bundle.json'
 
 
 def test_built_names_the_build_command_for_an_absent_bundle(tmp_path):
@@ -76,6 +92,26 @@ def test_built_accepts_a_complete_bundle(tmp_path):
   bundle = _fake_bundle(tmp_path / 'bundle')
 
   assert built(bundle.root) == bundle
+
+
+def test_the_bundle_identity_changes_with_its_framework_wheels(tmp_path):
+  bundle = _fake_bundle(tmp_path / 'bundle')
+  first = bundle.identity
+  manifest = json.loads(bundle.manifest.read_text())
+  manifest['wheels']['bro.whl'] = '2' * 64
+  bundle.manifest.write_text(json.dumps(manifest))
+
+  assert first.startswith('sha256:')
+  assert len(first) == len('sha256:') + 64
+  assert bundle.identity != first
+
+
+def test_built_refuses_a_malformed_manifest(tmp_path):
+  bundle = _fake_bundle(tmp_path / 'bundle')
+  bundle.manifest.write_text('{')
+
+  with pytest.raises(ValueError, match='invalid bundle manifest'):
+    built(bundle.root)
 
 
 def test_the_shim_runs_the_framework_through_the_bundled_interpreter(tmp_path):

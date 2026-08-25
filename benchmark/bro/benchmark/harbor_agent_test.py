@@ -3,6 +3,7 @@ import json
 import shlex
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Optional, cast
 
 import pytest
@@ -256,12 +257,17 @@ def test_a_credential_the_host_cannot_resolve_fails_before_the_container(store):
       pass
 
 
-def test_the_recorded_identity_names_the_bro_under_test(tmp_path):
+def test_the_recorded_identity_names_the_bro_and_bundle_under_test(monkeypatch, tmp_path):
+  identity = f'sha256:{"1" * 64}'
+  monkeypatch.setattr(harbor_agent, 'benchmark_bundle', lambda: SimpleNamespace(identity=identity))
   dev = agent(tmp_path, bro='dev', model_name='openai/gpt-5.6-terra').to_agent_info()
-  terminal = agent(tmp_path, bro='terminal', model_name='openai/gpt-5.6-terra').to_agent_info()
+  terminal_agent = agent(tmp_path, bro='terminal', model_name='openai/gpt-5.6-terra')
+  terminal = terminal_agent.to_agent_info()
 
   assert dev.name != terminal.name
   assert terminal.name == 'bro:terminal'
+  assert terminal.version == identity
+  assert terminal_agent.version() == identity
   assert terminal.model_info is not None
   assert terminal.model_info.name == 'gpt-5.6-terra'
 
