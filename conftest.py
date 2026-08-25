@@ -35,7 +35,7 @@ import pytest
 
 import bro.llm.usage as usage
 from bro.base import log
-from bro.base.suite_environment import rebuild_environment
+from bro.base.suite_environment import rebuild_environment, token_spending_skip_reason
 from bro.llm.tracker import NullTracker
 from bro.native.runner import set_default_tracker_factory
 
@@ -44,11 +44,10 @@ rebuild_environment()
 
 
 def pytest_collection_modifyitems(items):
-  if os.environ.get('BRO_LLM_TESTS') == '1':
+  reason = token_spending_skip_reason()
+  if reason is None:
     return
-  skip = pytest.mark.skip(
-    reason='live-LLM behavior probe; spends real tokens — set BRO_LLM_TESTS=1 to run'
-  )
+  skip = pytest.mark.skip(reason=f'live-LLM behavior probe; {reason}')
   for item in items:
     if item.path.name.endswith('_llm_test.py'):
       item.add_marker(skip)

@@ -43,7 +43,9 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   GitHub runs it on every push and pull request, a runner per stage (`.github/workflows/tests.yml`)
 - `BRO_LLM_TESTS=1 pytest dev/bros/dev/commit_llm_test.py` — live-LLM behavior probes (`*_llm_test.py`):
   a real bro against the configured provider, asserting on the artifacts it produces.
-  They spend real tokens, so they stay outside the default roster and are collected-but-skipped without the explicit env var
+  They spend real tokens, so they stay outside the default roster and are collected-but-skipped without the explicit env var.
+  The opt-in is repository-wide rather than theirs alone:
+  every pytest root gates its own token spenders on it
 - `sync-scripts --project <directory>` — regenerate a distribution's `[project.scripts]` and committed `_entrypoints.py`, then `uv sync --all-packages --all-groups --all-extras`
 - `uv build --package bro`, `uv build --package bro-native`, `uv build --package bro-dev`, and `uv build --package bro-ride`
   — build the workspace wheels;

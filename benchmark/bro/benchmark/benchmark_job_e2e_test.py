@@ -10,9 +10,10 @@ job's answer is the run directory either way, and `ride/ride/artifacts.py` owns
 the collection that turns one into a ref.
 
 It builds a real bundle, drives the host docker daemon and spends real tokens,
-so it stays out of the gate's roster:
+so it stays out of the gate's roster and skips without the repository's token
+opt-in:
 
-  uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
+  BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
 """
 
 import asyncio
