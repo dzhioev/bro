@@ -174,6 +174,7 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'aws-cdk-lib',
     'boto3',
     'bro',
+    'bro-dev',
     'constructs',
   }
   assert _project_dependencies(_ROOT / 'benchmark' / 'pyproject.toml') >= {'bro', 'bro-ride'}

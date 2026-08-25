@@ -12,6 +12,7 @@ dependencies = [
   "aws-cdk-lib==2.250.0",
   "boto3==1.43.40",
   "bro",
+  "bro-dev",
   "constructs==10.6.0",
 ]
 
@@ -20,15 +21,23 @@ dependencies = [
 "bro-oops-dir" = "bro.oops._entrypoints:bro_oops_assets"
 "bro.oops.assets" = "bro.oops._entrypoints:bro_oops_assets"
 
+[project.entry-points.bro]
+devoops = "bros.devoops:Devoops"
+
+[project.entry-points."bro.toolsets"]
+infra = "bro.oops.mcp:toolset"
+
 [tool.uv.sources]
 bro = { workspace = true }
+bro-dev = { workspace = true }
 
 [tool.deptry.package_module_name_map]
-bro = ["bro"]
+bro = ["bro", "bros"]
+bro-dev = ["bros"]
 
 [tool.uv.build-backend]
 module-root = ""
-module-name = ["bro.oops"]
+module-name = ["bro.oops", "bros.devoops"]
 namespace = true
 wheel-exclude = [
   "**/*_test.py",
