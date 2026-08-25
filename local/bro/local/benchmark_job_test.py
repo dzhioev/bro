@@ -1,7 +1,10 @@
 import asyncio
 import contextlib
+import importlib.metadata
+import json
 from pathlib import Path
 from typing import Optional, cast
+from unittest.mock import Mock
 
 import pytest
 
@@ -20,9 +23,13 @@ ROOT = 'root-peer'
 REF = 'sha256:' + 'a' * 64
 
 
-def _kind(tree: Path):
+def _kind(tree: Path, credential_scope=frozenset()):
   return benchmark_job.benchmark_kind(
-    KindContext(workspace_tree=tree, artifacts=cast(ArtifactResolver, object()))
+    KindContext(
+      workspace_tree=tree,
+      artifacts=cast(ArtifactResolver, object()),
+      credential_scope=credential_scope,
+    )
   )
 
 
@@ -53,7 +60,11 @@ class FakeContext:
 
 
 def _request(args: dict) -> Message:
-  return Message(type=Tag.REQUEST, id='R', payload={'kind': 'benchmark', 'args': args})
+  return Message(
+    type=Tag.REQUEST,
+    id='R',
+    payload={'kind': 'benchmark', 'args': {'upload': 'none', **args}},
+  )
 
 
 def _denial(tree, args, *, peer=ROOT, context=None) -> str:
@@ -69,6 +80,7 @@ def _denial(tree, args, *, peer=ROOT, context=None) -> str:
 class TestBenchmarkKind:
   def test_root_request_starts_the_job(self, tree, monkeypatch):
     monkeypatch.setenv('BENCH_SENTINEL', 'yes')
+    monkeypatch.setenv('HARBOR_API_KEY', 'ambient-key-outside-the-session-scope')
     monkeypatch.setenv('UV_PROJECT_ENVIRONMENT', '/wrong/shared-environment')
     context = FakeContext()
     handle = _kind(tree)
@@ -80,15 +92,16 @@ class TestBenchmarkKind:
       'run',
       '--project',
       str((tree / 'benchmark').resolve()),
-      'harbor',
-      'job',
-      'start',
+      'bro.benchmark.job',
       '-c',
       str((tree / CONFIG).resolve()),
       '--jobs-dir',
       OUTPUT_DIRECTORY,
+      '--upload',
+      'none',
     )
     assert command.env['BENCH_SENTINEL'] == 'yes'  # the host environment rides the job
+    assert 'HARBOR_API_KEY' not in command.env
     host_environment = Path(command.env['UV_PROJECT_ENVIRONMENT'])
     assert host_environment == tree.parent / 'benchmark-venv'
     assert not host_environment.is_relative_to(tree)
@@ -100,6 +113,26 @@ class TestBenchmarkKind:
     handle(cast(Dispatcher, context), ROOT, _request({'config': CONFIG, 'timeout': 60}))
     [(_, _, timeout)] = context.jobs
     assert timeout == 60.0
+
+  def test_upload_without_a_granted_harbor_credential_is_denied(self, tree):
+    error = _denial(tree, {'config': CONFIG, 'upload': 'private'})
+    assert "secret 'harbor' not found" in error
+
+  def test_upload_hydrates_the_scoped_harbor_key_into_the_host_job(self, tree, monkeypatch):
+    store = Mock()
+    store.get_instance.return_value = 'sk-harbor-scoped'
+    monkeypatch.setattr(benchmark_job.credentials, 'default_store', lambda: store)
+    context = FakeContext()
+
+    _kind(tree, frozenset({'harbor+benchmark'}))(
+      cast(Dispatcher, context),
+      ROOT,
+      _request({'config': CONFIG, 'upload': 'public'}),
+    )
+
+    [(command, _, _)] = context.jobs
+    assert command.env['HARBOR_API_KEY'] == 'sk-harbor-scoped'
+    store.get_instance.assert_called_once_with('harbor+benchmark')
 
   def test_non_root_peer_is_denied(self, tree):
     error = _denial(tree, {'config': CONFIG}, peer='child-peer')
@@ -117,6 +150,9 @@ class TestBenchmarkKind:
 
   def test_bad_timeout_is_denied(self, tree):
     assert 'positive number' in _denial(tree, {'config': CONFIG, 'timeout': 0})
+
+  def test_bad_upload_visibility_is_denied(self, tree):
+    assert "'upload' must be one of" in _denial(tree, {'config': CONFIG, 'upload': 'open'})
 
   def test_absolute_config_is_denied(self, tree):
     assert 'relative to the workspace root' in _denial(tree, {'config': str(tree / CONFIG)})
@@ -209,7 +245,7 @@ async def test_start_detach_sends_the_request_and_prints_its_id(monkeypatch, cap
     assert await asyncio.to_thread(benchmark_job.main, argv) == 0
     _, message = await asyncio.wait_for(sink.messages.get(), TIMEOUT)
     assert message.kind == benchmark_job.BENCHMARK
-    assert message.args == {'config': CONFIG, 'timeout': 60.0}
+    assert message.args == {'config': CONFIG, 'upload': 'none', 'timeout': 60.0}
     assert capsys.readouterr().out.strip() == message.id
 
 
@@ -236,3 +272,26 @@ def test_check_timeout_without_wait_errors(monkeypatch, caplog):
 def test_unknown_verb_is_a_usage_error(caplog):
   assert benchmark_job.main(['benchmark-job']) == 2
   assert any('usage' in record.getMessage() for record in caplog.records)
+
+
+def test_uploaded_job_url_reads_the_pipeline_record(tmp_path):
+  record = tmp_path / OUTPUT_DIRECTORY / 'job' / benchmark_job.UPLOAD_RECORD
+  record.parent.mkdir(parents=True)
+  record.write_text(json.dumps({'visibility': 'public', 'url': 'https://hub.example/jobs/1'}))
+
+  assert benchmark_job.uploaded_job_url(tmp_path) == 'https://hub.example/jobs/1'
+
+
+def test_no_upload_record_means_the_run_was_not_published(tmp_path):
+  assert benchmark_job.uploaded_job_url(tmp_path) is None
+
+
+def test_the_local_distribution_contributes_the_harbor_credential_kind():
+  entries = importlib.metadata.entry_points(group='bro.credentials', name='harbor')
+
+  [entry] = entries
+  assert entry.value == 'bro.local.credentials:HARBOR'
+  assert entry.load() == {
+    'sources': [{'file': 'harbor_api_key'}],
+    'install': {'env': {'HARBOR_API_KEY': {'secret': '{{insert #name}}'}}},
+  }

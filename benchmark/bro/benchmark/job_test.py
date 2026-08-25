@@ -1,0 +1,156 @@
+import json
+import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
+from uuid import UUID
+
+import pytest
+from harbor.models.job.result import JobResult, JobStats
+
+from bro.benchmark import job
+
+JOB_ID = UUID('12345678-1234-5678-1234-567812345678')
+
+
+def _write_job_result(job_directory: Path) -> None:
+  job_directory.mkdir(parents=True)
+  now = datetime.now(UTC)
+  result = JobResult(
+    id=JOB_ID,
+    started_at=now,
+    finished_at=now,
+    n_total_trials=1,
+    stats=JobStats(n_completed_trials=1),
+  )
+  (job_directory / 'result.json').write_text(result.model_dump_json())
+
+
+@pytest.mark.parametrize('visibility', [job.UploadVisibility.PRIVATE, job.UploadVisibility.PUBLIC])
+def test_run_job_converts_before_uploading_with_explicit_visibility(
+  tmp_path, monkeypatch, visibility
+):
+  jobs_directory = tmp_path / 'jobs'
+  job_directory = jobs_directory / 'chosen-name'
+  trajectory = job_directory / 'trial' / 'agent' / 'trajectory.json'
+  events = []
+
+  def run(command, check):
+    assert check is True
+    events.append(tuple(command))
+    if command[1:3] == ['job', 'start']:
+      _write_job_result(job_directory)
+
+  def convert(directory):
+    assert directory == job_directory
+    events.append(('convert', str(directory)))
+    return [trajectory]
+
+  monkeypatch.setattr(job.subprocess, 'run', run)
+  monkeypatch.setattr(job, 'convert_job_trajectories', convert)
+
+  result = job.run_job(tmp_path / 'config.yaml', jobs_directory, visibility, job_name='chosen-name')
+
+  assert events == [
+    (
+      'harbor',
+      'job',
+      'start',
+      '-c',
+      str(tmp_path / 'config.yaml'),
+      '--jobs-dir',
+      str(jobs_directory.resolve()),
+      '--job-name',
+      'chosen-name',
+    ),
+    ('convert', str(job_directory)),
+    ('harbor', 'upload', str(job_directory), f'--{visibility.value}'),
+  ]
+  assert result.trajectory_paths == (trajectory,)
+  assert result.upload is not None
+  assert result.upload.visibility == visibility
+  assert result.upload.url.endswith(str(JOB_ID))
+  assert json.loads((job_directory / job.UPLOAD_RECORD).read_text()) == {
+    'visibility': visibility.value,
+    'url': result.upload.url,
+  }
+
+
+def test_no_upload_still_converts_the_finished_job(tmp_path, monkeypatch):
+  job_directory = tmp_path / 'job'
+  converted = job_directory / 'trial/agent/trajectory.json'
+  monkeypatch.setattr(job, 'convert_job_trajectories', lambda directory: [converted])
+  monkeypatch.setattr(
+    job.subprocess,
+    'run',
+    lambda *args, **kwargs: pytest.fail('no upload command should run'),
+  )
+
+  result = job.finish_job(job_directory)
+
+  assert result.trajectory_paths == (converted,)
+  assert result.upload is None
+  assert not (job_directory / job.UPLOAD_RECORD).exists()
+
+
+def test_a_conversion_failure_prevents_upload(tmp_path, monkeypatch):
+  def fail_conversion(directory):
+    raise ValueError(f'malformed store in {directory}')
+
+  monkeypatch.setattr(job, 'convert_job_trajectories', fail_conversion)
+  monkeypatch.setattr(
+    job.subprocess,
+    'run',
+    lambda *args, **kwargs: pytest.fail('upload must not run after failed conversion'),
+  )
+
+  with pytest.raises(ValueError, match='malformed store'):
+    job.finish_job(tmp_path / 'job', job.UploadVisibility.PUBLIC)
+
+
+def test_a_failed_upload_leaves_no_success_record(tmp_path, monkeypatch):
+  job_directory = tmp_path / 'job'
+  monkeypatch.setattr(job, 'convert_job_trajectories', lambda directory: [])
+
+  def fail_upload(command, check):
+    raise subprocess.CalledProcessError(1, command)
+
+  monkeypatch.setattr(job.subprocess, 'run', fail_upload)
+
+  with pytest.raises(subprocess.CalledProcessError):
+    job.finish_job(job_directory, job.UploadVisibility.PRIVATE)
+  assert not (job_directory / job.UPLOAD_RECORD).exists()
+
+
+def test_a_job_name_cannot_escape_the_jobs_directory(tmp_path, monkeypatch):
+  monkeypatch.setattr(
+    job.subprocess,
+    'run',
+    lambda *args, **kwargs: pytest.fail('an invalid job name must fail before Harbor runs'),
+  )
+
+  with pytest.raises(ValueError, match='one path component'):
+    job.run_job(Path('config.yaml'), tmp_path, job_name='../outside')
+
+
+def test_cli_defaults_to_no_upload(tmp_path, monkeypatch, capsys):
+  captured = {}
+
+  def run_job(config, jobs_directory, visibility, job_name):
+    captured.update(
+      config=config,
+      jobs_directory=jobs_directory,
+      visibility=visibility,
+      job_name=job_name,
+    )
+    return job.PostRunResult(tmp_path / 'job', (), None)
+
+  monkeypatch.setattr(job, 'run_job', run_job)
+
+  assert job.main(['bro.benchmark.job', '-c', 'config.yaml', '-o', str(tmp_path)]) == 0
+  assert captured == {
+    'config': Path('config.yaml'),
+    'jobs_directory': tmp_path,
+    'visibility': job.UploadVisibility.NONE,
+    'job_name': None,
+  }
+  assert capsys.readouterr().out == ''

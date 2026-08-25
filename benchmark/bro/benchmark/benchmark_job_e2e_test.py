@@ -149,7 +149,13 @@ def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
   broker = Broker(TcpServerTransport([LOCAL_HOST]), spawner, job_output=runs)
   broker.on(
     BENCHMARK,
-    benchmark_kind(KindContext(workspace_tree=tree, artifacts=cast(ArtifactResolver, object()))),
+    benchmark_kind(
+      KindContext(
+        workspace_tree=tree,
+        artifacts=cast(ArtifactResolver, object()),
+        credential_scope=frozenset(),
+      )
+    ),
   )
 
   with _config_in_the_tree(tree) as config:

@@ -5,7 +5,7 @@ host broker through the `bro.broker_kinds` entry-point group; each entry
 targets a factory `(context: KindContext) -> RequestHandler` (loading:
 `ride/ride/kinds.py`). The contract lives core-side so a contributing
 distribution needs no ride import: the context carries the session's workspace
-tree and the artifact resolver, and `tree_path` is the validation for any path
+tree, artifact resolver, and bounded credential scope, and `tree_path` is the validation for any path
 a peer names relative to that tree.
 """
 
@@ -50,8 +50,8 @@ def tree_path(tree: Path, relative: str) -> Path:
 
 @dataclass(frozen=True)
 class KindContext:
-  """what a contributed kind factory receives: the session's workspace tree and
-  the artifact resolver."""
+  """Host capabilities available to a contributed kind factory."""
 
   workspace_tree: Path
   artifacts: ArtifactResolver
+  credential_scope: frozenset[str]

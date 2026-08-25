@@ -11,3 +11,7 @@ def _run(module):
 
 def bro_benchmark_bundle():
   return _run('bro.benchmark.bundle')
+
+
+def bro_benchmark_job():
+  return _run('bro.benchmark.job')

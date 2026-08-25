@@ -53,12 +53,12 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   `benchmark/`'s is `uv build --directory benchmark`, since it is no member to name with `--package`
 
 The repository root carries `pyproject.toml` (core distribution metadata, the workspace table, and the tool config every member runs under), `conftest.py` (test isolation:
-the suite's environment is rebuilt rather than patched by `bro/base/suite_environment.py`, clearing the framework's own namespaces and pinning the credential resolver's search path off every store,
+the suite's environment is rebuilt rather than patched by `bro/base/suite_environment.py`, clearing the framework's own namespaces plus installed credential-hook variables and pinning the credential resolver's search path off every store,
 so a run launched from inside a managed session inherits none of it and resolves only what a test installed itself
 — the rebuild lives in core so every pytest root applies it, `benchmark/`'s own conftest included, and `local/bro/local/environment_policy_test.py` enforces each part repository-wide), `local/` (the `bro-local` member:
 the `bro-dev` persona under `bros/bro_dev/`, `bro/local/run_tests.py`'s explicit test roster behind the `run-tests` console script,
 the `benchmark` broker kind with its `benchmark-job` session command (`bro/local/benchmark_job.py`
-— a session starts this checkout's benchmark jobs on the host through the broker),
+— a session starts this checkout's host-side score/convert/upload pipeline through the broker),
 and the tests that hold this repository as a whole to a policy
 — whatever is meaningful only inside this checkout), and `README.md` (consumer-facing install and extension contract).
 The development style policy is `dev/bro/prompts/dev/style.md`, tool-served to dev sessions as `dev-style-source::read`;
@@ -282,7 +282,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint` / `artifact.get` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session command;
   the host store and enforcement live in `ride/ride/artifacts.py`
 - `kinds.py` — the contributed broker-kind contract:
-  the `KindContext` a `bro.broker_kinds` factory receives, the artifact-resolver port it carries, and the workspace-relative path validation shared by kinds that take tree paths
+  the `KindContext` a `bro.broker_kinds` factory receives, the artifact-resolver port and bounded credential scope it carries, and the workspace-relative path validation shared by kinds that take tree paths
 - `summon_status.py` — the session's live summon-status file:
   its typed records, the `RIDE_SUMMON_STATUS` env var pointing at it, and its atomic write.
   Stdlib-only and apart from `summon.py`, so the claude statusLine's repeated reads never pull the summon client in
