@@ -13,10 +13,10 @@ _DEFAULT_PLATFORM = {
   'load_balancer_construct_id': 'PlatformAlb',
 }
 _DEFAULT_REPOSITORIES = {
-  'server': {
-    'stack_name': 'BroServerECRStack',
-    'repository_name': 'bro-server',
-    'repository_construct_id': 'ServerRepo',
+  'trails': {
+    'stack_name': 'BroTrailsECRStack',
+    'repository_name': 'bro-trails-server',
+    'repository_construct_id': 'TrailsServerRepo',
   }
 }
 _DEFAULT_IMAGE_BUILD = {
@@ -25,7 +25,16 @@ _DEFAULT_IMAGE_BUILD = {
   'connection_name': 'bro-github',
   'source_owner': 'example',
   'source_repository': 'deployment',
-  'buildspec_path': 'infra/buildspec.yml',
+  'buildspec_path': 'oops/bro/oops/infra/buildspec.yml',
+  'image_build_script': 'oops/image_build.sh',
+}
+_DEFAULT_TRAILS = {
+  'stack_name': 'BroTrailsServerStack',
+  'repository': 'trails',
+  'spillover_bucket_name': 'bro-trails-{account}',
+  'service_name': 'trails-server',
+  'load_balancer_ingress_logical_id': 'TrailsLoadBalancerIngress',
+  'load_balancer_egress_logical_id': 'TrailsLoadBalancerEgress',
 }
 
 
@@ -53,6 +62,17 @@ class ImageBuildConfig:
   source_owner: str
   source_repository: str
   buildspec_path: str
+  image_build_script: str
+
+
+@dataclass(frozen=True)
+class TrailsConfig:
+  stack_name: str
+  repository: str
+  spillover_bucket_name: str
+  service_name: str
+  load_balancer_ingress_logical_id: str
+  load_balancer_egress_logical_id: str
 
 
 @dataclass(frozen=True)
@@ -62,10 +82,20 @@ class InfrastructureConfig:
   platform: PlatformConfig
   repositories: Mapping[str, RepositoryConfig]
   image_build: ImageBuildConfig
+  trails: TrailsConfig
 
   @property
   def repository_names(self) -> tuple[str, ...]:
     return tuple(repository.repository_name for repository in self.repositories.values())
+
+  @property
+  def trails_repository(self) -> RepositoryConfig:
+    try:
+      return self.repositories[self.trails.repository]
+    except KeyError as exception:
+      raise ValueError(
+        f'infra.oops.trails.repository names unknown repository {self.trails.repository!r}'
+      ) from exception
 
 
 def resolve() -> InfrastructureConfig:
@@ -75,7 +105,11 @@ def resolve() -> InfrastructureConfig:
 def from_mapping(raw: Mapping[str, Any]) -> InfrastructureConfig:
   delegated_subdomain = _required_string(raw, 'delegated_subdomain', 'infra')
   namespace = _optional_mapping(raw, 'oops', 'infra')
-  _reject_unknown(namespace, {'region', 'platform', 'repositories', 'image_build'}, 'infra.oops')
+  _reject_unknown(
+    namespace,
+    {'region', 'platform', 'repositories', 'image_build', 'trails'},
+    'infra.oops',
+  )
 
   region = _optional_string(namespace, 'region', _DEFAULT_REGION, 'infra.oops')
   platform = _platform_config(_optional_mapping(namespace, 'platform', 'infra.oops'))
@@ -85,13 +119,17 @@ def from_mapping(raw: Mapping[str, Any]) -> InfrastructureConfig:
     else _DEFAULT_REPOSITORIES
   )
   image_build = _image_build_config(_optional_mapping(namespace, 'image_build', 'infra.oops'))
-  return InfrastructureConfig(
+  trails = _trails_config(_optional_mapping(namespace, 'trails', 'infra.oops'))
+  config = InfrastructureConfig(
     region=region,
     delegated_subdomain=delegated_subdomain,
     platform=platform,
     repositories=repositories,
     image_build=image_build,
+    trails=trails,
   )
+  _ = config.trails_repository
+  return config
 
 
 def _platform_config(overrides: Mapping[str, Any]) -> PlatformConfig:
@@ -141,6 +179,29 @@ def _image_build_config(overrides: Mapping[str, Any]) -> ImageBuildConfig:
     source_owner=_required_string(values, 'source_owner', 'infra.oops.image_build'),
     source_repository=_required_string(values, 'source_repository', 'infra.oops.image_build'),
     buildspec_path=_required_string(values, 'buildspec_path', 'infra.oops.image_build'),
+    image_build_script=_required_string(values, 'image_build_script', 'infra.oops.image_build'),
+  )
+
+
+def _trails_config(overrides: Mapping[str, Any]) -> TrailsConfig:
+  values = _with_defaults(_DEFAULT_TRAILS, overrides, 'infra.oops.trails')
+  bucket_name = _required_string(values, 'spillover_bucket_name', 'infra.oops.trails')
+  unknown_placeholders = bucket_name.replace('{account}', '')
+  if '{' in unknown_placeholders or '}' in unknown_placeholders:
+    raise ValueError(
+      'infra.oops.trails.spillover_bucket_name supports only the {account} placeholder'
+    )
+  return TrailsConfig(
+    stack_name=_required_string(values, 'stack_name', 'infra.oops.trails'),
+    repository=_required_string(values, 'repository', 'infra.oops.trails'),
+    spillover_bucket_name=bucket_name,
+    service_name=_required_string(values, 'service_name', 'infra.oops.trails'),
+    load_balancer_ingress_logical_id=_required_string(
+      values, 'load_balancer_ingress_logical_id', 'infra.oops.trails'
+    ),
+    load_balancer_egress_logical_id=_required_string(
+      values, 'load_balancer_egress_logical_id', 'infra.oops.trails'
+    ),
   )
 
 

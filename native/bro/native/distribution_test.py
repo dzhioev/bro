@@ -172,6 +172,7 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
   assert _project_dependencies(_ROOT / 'dev' / 'pyproject.toml') == {'bro', 'markdown-it-py'}
   assert _project_dependencies(_ROOT / 'oops' / 'pyproject.toml') == {
     'aws-cdk-lib',
+    'boto3',
     'bro',
     'constructs',
   }

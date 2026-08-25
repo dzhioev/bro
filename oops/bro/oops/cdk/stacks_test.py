@@ -6,6 +6,8 @@ from bro.oops.cdk import (
   ImageBuildStack,
   PlatformStack,
   RepositoryStack,
+  TrailsServerStack,
+  create_app,
   from_mapping,
 )
 
@@ -24,7 +26,7 @@ def _stacks(tmp_path):
     hosted_zone=HostedZoneReference(hosted_zone_id=_ZONE_ID, zone_name=_DOMAIN),
     env=environment,
   )
-  repository = RepositoryStack(app, config.repositories['server'], env=environment)
+  repository = RepositoryStack(app, config.repositories['trails'], env=environment)
   image_build = ImageBuildStack(app, config, env=environment)
   return app, platform, repository, image_build
 
@@ -67,10 +69,10 @@ def test_repository_stack_preserves_repository_and_output_ids(tmp_path):
   _, _, stack, _ = _stacks(tmp_path)
   template = assertions.Template.from_stack(stack)
 
-  assert stack.stack_name == 'BroServerECRStack'
-  assert set(template.to_json()['Resources']) == {'ServerRepo9563DA5D'}
+  assert stack.stack_name == 'BroTrailsECRStack'
+  assert set(template.to_json()['Resources']) == {'TrailsServerRepo8F441D85'}
   assert set(template.to_json()['Outputs']) == {'ECRRepoURI'}
-  template.has_resource_properties('AWS::ECR::Repository', {'RepositoryName': 'bro-server'})
+  template.has_resource_properties('AWS::ECR::Repository', {'RepositoryName': 'bro-trails-server'})
 
 
 def test_image_build_stack_is_parameterized_and_preserves_construct_ids(tmp_path):
@@ -94,13 +96,106 @@ def test_image_build_stack_is_parameterized_and_preserves_construct_ids(tmp_path
     {
       'Name': 'bro-image-build',
       'Source': {
-        'BuildSpec': 'infra/buildspec.yml',
+        'BuildSpec': 'oops/bro/oops/infra/buildspec.yml',
         'Location': 'https://github.com/example/deployment.git',
         'ReportBuildStatus': True,
         'Type': 'GITHUB',
       },
+      'Environment': {
+        'EnvironmentVariables': [
+          {
+            'Name': 'IMAGE_BUILD_SCRIPT',
+            'Type': 'PLAINTEXT',
+            'Value': 'oops/image_build.sh',
+          }
+        ]
+      },
     },
   )
+
+
+def test_trails_stack_preserves_resources_and_schema_without_lookups(tmp_path):
+  config = from_mapping({'delegated_subdomain': _DOMAIN})
+  app = cdk.App(outdir=str(tmp_path / 'cdk.out'))
+  environment = cdk.Environment(account=_ACCOUNT, region=config.region)
+  platform = PlatformStack(
+    app,
+    config,
+    hosted_zone=HostedZoneReference(hosted_zone_id=_ZONE_ID, zone_name=_DOMAIN),
+    env=environment,
+  )
+  stack = TrailsServerStack(
+    app,
+    config,
+    platform=platform.handles,
+    image_digest='sha256:' + '1' * 64,
+    env=environment,
+  )
+  template = assertions.Template.from_stack(stack)
+
+  assert stack.stack_name == 'BroTrailsServerStack'
+  assert set(template.to_json()['Resources']) == {
+    'TaskExecutionRole250D2532',
+    'TaskExecutionRoleDefaultPolicyA84DD1B0',
+    'TaskRole30FC0FBB',
+    'TaskRoleDefaultPolicy07FC53DE',
+    'TrailsDNSRecordDF0E7F5D',
+    'TrailsListenerRule6DB69EDC',
+    'TrailsLoadBalancerEgress',
+    'TrailsLoadBalancerIngress',
+    'TrailsService6D10D106',
+    'TrailsServiceSecurityGroup58DDDDEE',
+    'TrailsSpilloverBucket3928E3BC',
+    'TrailsStoreConfigE193DC52',
+    'TrailsTargetGroup3CD82A7D',
+    'TrailsTaskDef58071EE2',
+    'TrailsTaskDeftrailsserverLogGroupCDFF4313',
+    'UniversalTrailStepsTableCB25A5EA',
+    'UniversalTrailsTableF6632AF7',
+  }
+  template.has_resource_properties(
+    'AWS::DynamoDB::Table',
+    {
+      'TableName': 'trails-v2',
+      'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
+    },
+  )
+  template.has_resource_properties(
+    'AWS::DynamoDB::Table',
+    {
+      'TableName': 'trail_steps_v2',
+      'KeySchema': [
+        {'AttributeName': 'trail_id', 'KeyType': 'HASH'},
+        {'AttributeName': 'step_id', 'KeyType': 'RANGE'},
+      ],
+    },
+  )
+  template.has_resource_properties('AWS::S3::Bucket', {'BucketName': f'bro-trails-{_ACCOUNT}'})
+  template.has_resource_properties('AWS::SSM::Parameter', {'Name': '/trails/store-config'})
+  template.has_resource_properties(
+    'AWS::ECS::Service', {'ServiceName': 'trails-server', 'DesiredCount': 2}
+  )
+  template.has_resource_properties('AWS::ElasticLoadBalancingV2::ListenerRule', {'Priority': 30})
+  template.has_resource_properties('AWS::Route53::RecordSet', {'Name': f'trails.{_DOMAIN}.'})
+  assert set(template.to_json()['Outputs']) == {'ServiceURL'}
+
+
+def test_repository_app_can_synthesize_the_platform_before_service_lookups(tmp_path):
+  config = from_mapping({'delegated_subdomain': _DOMAIN})
+  app = cdk.App(outdir=str(tmp_path / 'cdk.out'))
+
+  application, stacks = create_app(
+    config,
+    _ACCOUNT,
+    app=app,
+    platform_only=True,
+    hosted_zone=HostedZoneReference(hosted_zone_id=_ZONE_ID, zone_name=_DOMAIN),
+  )
+
+  assert stacks.repository is None
+  assert stacks.image_build is None
+  assert stacks.trails is None
+  assert [artifact.stack_name for artifact in application.synth().stacks] == ['BroPlatformStack']
 
 
 def test_all_stacks_synthesize_without_aws_access(tmp_path):
@@ -111,5 +206,5 @@ def test_all_stacks_synthesize_without_aws_access(tmp_path):
   assert {artifact.stack_name for artifact in assembly.stacks} == {
     'BroImageBuildStack',
     'BroPlatformStack',
-    'BroServerECRStack',
+    'BroTrailsECRStack',
   }
