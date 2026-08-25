@@ -7,9 +7,8 @@
 # command builds; `benchmark/README.md` says where the score lands.
 
 datasets:
-  # harbor reads a bare integer ref as a dataset revision
   - name: terminal-bench/terminal-bench-2-1
-    ref: "6"
+    ref: "sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a"
 
 # two entries over one dataset, so the difference between the developer bro as
 # it ships and the purpose-built one is a measured number in a single job
@@ -30,7 +29,7 @@ agents:
 environment:
   import_path: bro.benchmark.harbor_environment:UnmountedDockerEnvironment
 
-n_attempts: 1
+n_attempts: 5
 n_concurrent_trials: 8
 
 # only the provider failures BroAgent classifies from the framework's own error
