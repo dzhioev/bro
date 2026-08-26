@@ -362,8 +362,9 @@ class BroAgent(BaseInstalledAgent):
     """map the framework's four token classes onto harbor's three counters.
 
     Not one-to-one: harbor documents `n_input_tokens` as including cache, so it
-    takes the whole prompt. Cost stays unset — the framework's usage accounting
-    carries counts, not prices.
+    takes the whole prompt. Cost stays unset: a price banded on one call's
+    prompt size cannot be recovered from the per-model totals a finished trial
+    publishes.
     """
     usage_file = self.logs_dir / USAGE_FILE.name
     if not usage_file.is_file():
