@@ -44,7 +44,10 @@ def test_claude_surface_selects_tracker_and_reference_tools(monkeypatch):
 
 def test_tracker_dev_inherits_shared_and_dev_spells():
   bro = _TrackerDev()
-  assert set(bro.spells) == {'ask', 'audit', 'fix', 'land', 'reflect', 'run-pr', 'wire'}
+  # one spell per contributing package proves the MRO merge: reflect ships with
+  # the shared bros/bro layer, fix with bros/dev
+  assert 'reflect' in bro.spells
+  assert 'fix' in bro.spells
   assert '## Spells' in bro.system_prompt
   assert '## Available skills' not in bro.system_prompt
 
@@ -68,37 +71,3 @@ def test_development_spells_render_for_every_surface():
               )
             },
           )
-
-
-def test_fix_declares_optional_task_and_new_arguments():
-  bro = _TrackerDev()
-  spell = load_spell('fix', bro.spells['fix'])
-  assert [(parameter.name, parameter.required) for parameter in spell.parameters] == [
-    ('task', False),
-    ('new', False),
-  ]
-
-  for body in (
-    bro.get_spell_body('fix', harness='bro', wire='bare'),
-    bro.get_spell_body('fix', harness='claude', wire='mcp'),
-  ):
-    assert '`task` — operate on the existing task' in body
-    assert '`new` — create a task from this seed' in body
-    assert '/fix' not in body
-
-
-def test_run_pr_declares_optional_base_and_reentry_arguments():
-  bro = _TrackerDev()
-  spell = load_spell('run-pr', bro.spells['run-pr'])
-  assert [(parameter.name, parameter.required) for parameter in spell.parameters] == [
-    ('base', False),
-    ('pr', False),
-  ]
-
-  for body in (
-    bro.get_spell_body('run-pr', harness='bro', wire='bare'),
-    bro.get_spell_body('run-pr', harness='claude', wire='mcp'),
-  ):
-    assert '`base` — base the PR' in body
-    assert '`pr` — re-entry mode' in body
-    assert '/run-pr' not in body

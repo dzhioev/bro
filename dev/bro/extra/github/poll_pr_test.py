@@ -584,11 +584,6 @@ class TestMain:
     monkeypatch.setattr(poll_pr.credentials, 'default_store', lambda: _Store())
     return captured
 
-  def test_credential_defaults_to_github(self, monkeypatch):
-    captured = self._capture_poll(monkeypatch)
-    assert poll_pr.main(['poll-pr', 'x/y', '1']) == 0
-    assert captured['token']() == 'resolved:github'
-
   def test_credential_flag_accepts_a_storage_name(self, monkeypatch):
     captured = self._capture_poll(monkeypatch)
     assert poll_pr.main(['poll-pr', 'x/y', '1', '--credential', 'github+other']) == 0

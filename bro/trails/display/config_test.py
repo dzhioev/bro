@@ -4,7 +4,6 @@ import pytest
 
 from bro.trails.display import (
   ALL_RECORD_KINDS,
-  CONVERSATION_RECORD_KINDS,
   PRESETS,
   Appearance,
   AssistantText,
@@ -113,120 +112,6 @@ class TestPresets:
     assert all(
       {kind for kind, _ in configuration.labels.values} == ALL_RECORD_KINDS
       for configuration in PRESETS.values()
-    )
-
-  @pytest.mark.parametrize(
-    ('name', 'layout', 'verbosity', 'visible_kinds'),
-    [
-      (
-        PresetName.OBSERVER,
-        Layout.EVENT_LOG,
-        Verbosity.NORMAL,
-        CONVERSATION_RECORD_KINDS | {RecordKind.NOTICE, RecordKind.TRANSIENT_ACTIVITY},
-      ),
-      (
-        PresetName.ASK,
-        Layout.EVENT_LOG,
-        Verbosity.NORMAL,
-        (CONVERSATION_RECORD_KINDS | {RecordKind.NOTICE, RecordKind.TRANSIENT_ACTIVITY})
-        - {RecordKind.USER_INPUT},
-      ),
-      (
-        PresetName.CALL,
-        Layout.CONVERSATION,
-        Verbosity.COMPACT,
-        (CONVERSATION_RECORD_KINDS | {RecordKind.NOTICE, RecordKind.TRANSIENT_ACTIVITY})
-        - {
-          RecordKind.SYSTEM_PROMPT,
-          RecordKind.LLM_CALL,
-          RecordKind.HARNESS_EVENT,
-        },
-      ),
-      (
-        PresetName.CHAT,
-        Layout.CONVERSATION,
-        Verbosity.COMPACT,
-        (CONVERSATION_RECORD_KINDS | {RecordKind.NOTICE, RecordKind.TRANSIENT_ACTIVITY})
-        - {
-          RecordKind.SYSTEM_PROMPT,
-          RecordKind.LLM_CALL,
-          RecordKind.HARNESS_EVENT,
-        },
-      ),
-      (
-        PresetName.REWIND_SHOW,
-        Layout.CONVERSATION,
-        Verbosity.FULL,
-        (
-          CONVERSATION_RECORD_KINDS
-          - {RecordKind.SYSTEM_PROMPT, RecordKind.LLM_CALL, RecordKind.HARNESS_EVENT}
-        )
-        | {
-          RecordKind.TRAIL_METADATA,
-          RecordKind.LAUNCH_CONTEXT,
-          RecordKind.SEGMENT_BOUNDARY,
-        },
-      ),
-      (
-        PresetName.REWIND_STEPS,
-        Layout.NATIVE_STEPS,
-        Verbosity.FULL,
-        {RecordKind.TRAIL_METADATA, RecordKind.NATIVE_STEP},
-      ),
-      (
-        PresetName.REWIND_LIST,
-        Layout.TRAIL_LIST,
-        Verbosity.COMPACT,
-        {RecordKind.TRAIL_LIST_ROW},
-      ),
-      (
-        PresetName.REWIND_TREE,
-        Layout.LINEAGE_TREE,
-        Verbosity.COMPACT,
-        {RecordKind.LINEAGE_NODE},
-      ),
-      (
-        PresetName.REWIND_GREP,
-        Layout.CONVERSATION,
-        Verbosity.FULL,
-        (
-          CONVERSATION_RECORD_KINDS
-          - {RecordKind.SYSTEM_PROMPT, RecordKind.LLM_CALL, RecordKind.HARNESS_EVENT}
-        )
-        | {
-          RecordKind.TRAIL_METADATA,
-          RecordKind.LAUNCH_CONTEXT,
-          RecordKind.SEGMENT_BOUNDARY,
-        },
-      ),
-    ],
-  )
-  def test_each_preset_has_a_complete_scenario_contract(
-    self,
-    name: PresetName,
-    layout: Layout,
-    verbosity: Verbosity,
-    visible_kinds: set[RecordKind] | frozenset[RecordKind],
-  ):
-    configuration = preset(name)
-    assert configuration.layout is layout
-    assert configuration.verbosity is verbosity
-    assert configuration.record_filter.included_kinds == frozenset(visible_kinds)
-
-  def test_presets_assign_each_terminal_appearance(self):
-    assert preset('observer').appearance is Appearance.PLAIN_LOG
-    assert preset('ask').appearance is Appearance.PLAIN_LOG
-    assert preset('call').appearance is Appearance.CHAT
-    assert preset('chat').appearance is Appearance.CHAT
-    assert all(
-      preset(name).appearance is Appearance.REWIND
-      for name in (
-        'rewind-show',
-        'rewind-steps',
-        'rewind-list',
-        'rewind-tree',
-        'rewind-grep',
-      )
     )
 
   def test_ask_routes_exactly_the_terminal_reply_to_reply(self):

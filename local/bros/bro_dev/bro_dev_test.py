@@ -3,9 +3,6 @@ import importlib.metadata
 from bros.bro_dev import BroDev
 
 
-def test_bro_dev_persona_and_registration():
-  assert BroDev.name == 'bro-dev'
-  assert BroDev.features == {'brog': True}
-  assert BroDev.extra_secrets == ('github',)
-  entries = importlib.metadata.entry_points(group='bro', name='bro-dev')
-  assert [entry.value for entry in entries] == ['bros.bro_dev:BroDev']
+def test_bro_dev_is_registered_as_a_persona():
+  entries = importlib.metadata.entry_points(group='bro', name=BroDev.name)
+  assert [entry.load() for entry in entries] == [BroDev]

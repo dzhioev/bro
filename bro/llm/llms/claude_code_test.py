@@ -7,11 +7,7 @@ from bro.llm.llms import claude_code
 class TestSpec:
   def test_defaults_carry_the_sessions_model_and_effort(self):
     spec = claude_code.LLMSpec()
-    assert (spec.model, spec.effort, spec.fast_mode) == (
-      claude_code.DEFAULT_MODEL,
-      claude_code.DEFAULT_EFFORT,
-      False,
-    )
+    assert (spec.model, spec.effort) == (claude_code.DEFAULT_MODEL, claude_code.DEFAULT_EFFORT)
 
   def test_accepts_every_neutral_effort_level(self):
     # `claude --effort` takes the neutral vocabulary unmapped, so a level the

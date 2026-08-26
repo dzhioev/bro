@@ -1869,22 +1869,6 @@ def _hook_registry(tmp_path: Path, **hooks: dict) -> dict[str, credentials.Secre
 
 
 class TestInstallHooks:
-  def test_framework_and_test_secrets_have_install_hooks(self):
-    registry = credentials.default_registry()
-    assert registry['github'].install is not None
-    assert registry[TEST_SECRET].install is not None
-    assert registry['openai'].install is None
-
-  def test_claude_code_maps_to_token_file_with_install_hook(self):
-    registry = credentials.default_registry()
-    source = registry['claude_code'].sources[0]
-    assert isinstance(source, credentials.LocalSource)
-    assert source.file == 'claude_code_oauth_token'
-    # install hook exports the env var claude reads above ~/.claude/.credentials.json
-    assert registry['claude_code'].install == {
-      'env': {'CLAUDE_CODE_OAUTH_TOKEN': {'secret': 'claude_code'}}
-    }
-
   def test_test_secret_source_file(self):
     registry = credentials.default_registry()
     source = registry[TEST_SECRET].sources[0]

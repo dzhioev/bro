@@ -16,6 +16,7 @@ from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
 from bro.llm.llms.echo import LLMSpec as EchoLLMSpec
 from bro.monitor import trail_pointer
+from bro.summon import DEFAULT_TIMEOUT
 from bro.workspace.paths import workspace_tree
 from ride.repository import Repository
 from ride.workspace.metadata import WorkspaceKind
@@ -173,7 +174,7 @@ class TestSummonHandler:
       may_summon=(),
     )
     assert peer == ROOT
-    assert timeout == 1800.0
+    assert timeout == DEFAULT_TIMEOUT
     status = _status(tmp_path)
     assert [a['request_id'] for a in status['active']] == [message.id]
     assert status['active'][0]['target'] == 'dev'

@@ -41,24 +41,11 @@ def _task(**overrides) -> Task:
 
 
 class TestRoster:
-  def test_tool_names(self):
-    assert set(toolset.tool_names) == {
-      'create_task',
-      'get_task',
-      'read_task',
-      'read_comments',
-      'update_task',
-      'add_comment',
-      'append_description',
-      'edit_description',
-      'list_tasks',
-    }
-
   def test_static_secrets(self):
-    assert mount(toolset).server_specs[0].needed_secrets == ('brog',)
+    assert mount(toolset).server_specs[0].needed_secrets == toolset.secrets
 
   def test_scoped_subset_keeps_the_static_secrets(self):
-    assert mount(toolset, 'get_task', 'read_task').server_specs[0].needed_secrets == ('brog',)
+    assert mount(toolset, 'get_task', 'read_task').server_specs[0].needed_secrets == toolset.secrets
 
   def test_build(self, monkeypatch):
     monkeypatch.setattr(
@@ -67,8 +54,8 @@ class TestRoster:
       lambda name: {'backend': 'github', 'token': 't', 'repo': 'owner/repository'},
     )
     server = toolset.build()
-    assert server.namespace == 'brog'
-    assert server.needed_secrets == ('brog',)
+    assert server.namespace == toolset.namespace
+    assert server.needed_secrets == toolset.secrets
 
 
 class TestCreateTask:

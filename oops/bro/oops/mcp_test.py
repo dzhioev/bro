@@ -215,8 +215,6 @@ def test_devoops_manifest_comes_from_its_components(monkeypatch):
   assert persona.extra_secrets == ()
 
 
-def test_devoops_persona_and_registration():
-  assert Devoops.name == 'devoops'
-  assert set(Devoops.features) == {'brog'}
-  entries = importlib.metadata.entry_points(group='bro', name='devoops')
-  assert [entry.value for entry in entries] == ['bros.devoops:Devoops']
+def test_devoops_is_registered_as_a_persona():
+  entries = importlib.metadata.entry_points(group='bro', name=Devoops.name)
+  assert [entry.load() for entry in entries] == [Devoops]

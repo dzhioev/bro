@@ -40,10 +40,13 @@ class TestWatch:
     assert select([entry], harness='claude') == [
       ToolLayer(
         native_tool_commands=(('Monitor', 'summon watch'),),
-        served_native_tool_names=('TaskOutput', 'TaskStop'),
+        served_native_tool_names=claude._TASK_CONTROL,
       )
     ]
     assert select([entry], harness='bro') == []
 
   def test_hands_back_tools_the_shell_group_withholds(self):
-    assert {'Monitor', 'TaskOutput', 'TaskStop'} <= set(claude.SHELL)
+    [layer] = select([claude.watch('summon watch')], harness='claude')
+    handed_back = {name for name, _ in layer.native_tool_commands}
+    handed_back |= set(layer.served_native_tool_names)
+    assert handed_back <= set(claude.SHELL)

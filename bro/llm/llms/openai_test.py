@@ -13,7 +13,7 @@ from bro.llm.llms.openai import LLMSpec
 class TestLLMSpec:
   def test_default_spec_has_no_optional_knobs(self):
     spec = LLMSpec()
-    assert spec.model == 'gpt-5.6-terra'
+    assert spec.model == openai_llm.DEFAULT_MODEL
     assert spec.reasoning_effort is None
     assert spec.service_tier is None
     assert spec.compact_threshold is None

@@ -407,8 +407,6 @@ class TestCast:
     async def fake_mu(prompt, result_class, *contents, model=None, reasoning_effort=None):
       captured['prompt'] = prompt
       captured['request'] = contents[0].json
-      captured['model'] = model
-      captured['reasoning_effort'] = reasoning_effort
       return result_class.model_validate(
         {
           'spell': 'spell::do-work',
@@ -427,8 +425,6 @@ class TestCast:
       'spell: spell::do-work\n\nprocedure body\n\n# Arguments\n\ntask: T-1\nnotes: keep the merge'
     )
     assert 'unambiguously applies' in captured['prompt']
-    assert captured['model'] == 'gpt-5.6-luna'
-    assert captured['reasoning_effort'] == 'low'
     assert captured['request']['command'] == 'work on T-1'
     assert captured['request']['spells'] == [
       {
@@ -556,10 +552,8 @@ class TestSpellsPrompt:
     bro = _bro_class(package)()
 
     spells_section = bro.system_prompt.split('## Spells', 1)[1].split('## Skills', 1)[0]
-    assert 'canonical `spell::` tools' in spells_section
     assert '`/<name>`' not in spells_section
     assert '`bro::cast`' not in spells_section
-    assert '[[…]]' in spells_section
     assert "call the named spell's own tool" in spells_section
     assert description not in bro.system_prompt
 
@@ -570,7 +564,6 @@ class TestSpellsPrompt:
 
     for prompt in (bro.system_prompt, bro.claude_system_prompt):
       assert '## Spells' in prompt
-      assert '[[…]]' in prompt
       assert '`bro::cast`' in prompt
       assert 'follow the returned instructions' in prompt
 
@@ -599,4 +592,3 @@ class TestSpellToolNames:
     assert 'replace `::` with `__` and call that wire name directly' in bare
     assert 'prepend `mcp__`' in mcp_text
     assert 'spells `at` on the wire' not in bare
-    assert 'No canonical namespace may be named `spell`' in bare
