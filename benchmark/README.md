@@ -80,6 +80,20 @@ Each trial keeps its own directory beside it, with the bro's activity log
 (`agent/bro.log`), per-model token counts (`agent/usage.json`) and the trail the run recorded
 (`agent/ride/trails/`) as the run's record.
 
+They are copied out of the container once the trial ends,
+so a job runs wherever the docker daemon is reachable and leaves nothing of a trial on the docker host.
+
+The trail is a local trails store under the trial's own `agent/` directory as its data home.
+Reading one back takes a reader resolving the same way
+— the local backend, at that data home:
+
+```
+echo '{}' > /tmp/no-credentials.json
+CREDENTIALS_REGISTRY=/tmp/no-credentials.json XDG_DATA_HOME=<trial>/agent rewind show <trail-id>
+```
+
+On a host that configures no `trails` credential of its own, `XDG_DATA_HOME` alone is enough.
+
 Compare one of the run's agents with the content-pinned native Claude Code leaderboard reference:
 
 ```
@@ -109,20 +123,6 @@ uv run --project benchmark bro.benchmark.compare s3://<bucket> --agent bro:termi
 The command lists complete runs by their `runs/**/retention.json` markers and aggregates all runs in the selected cohort.
 The digest flags can be omitted when the bucket contains only one cohort.
 Reference records for this form are cached under the bucket's `references/` prefix.
-
-They are copied out of the container once the trial ends, so a job runs wherever the docker daemon
-is reachable and leaves nothing of a trial on the docker host.
-
-The trail is a local trails store rooted at the trial's own `agent/` directory.
-Reading one back takes a reader resolving the same way
-— the local backend, at that root:
-
-```
-echo '{}' > /tmp/no-credentials.json
-CREDENTIALS_REGISTRY=/tmp/no-credentials.json XDG_DATA_HOME=<trial>/agent rewind show <trail-id>
-```
-
-On a host that configures no `trails` credential of its own, `XDG_DATA_HOME` alone is enough.
 
 Managed sessions carry no docker socket;
 from inside one, start the job through the session broker instead:
