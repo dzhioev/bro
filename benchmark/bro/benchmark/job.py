@@ -65,6 +65,7 @@ def finish_job(
 ) -> PostRunResult:
   """Run every ordered post-run operation against one finished Harbor job."""
   trajectory_paths = tuple(convert_job_trajectories(job_directory))
+  log.info('converted %d trial trajectories', len(trajectory_paths))
   upload = _upload_job(job_directory, visibility)
   retained = retain_job(job_directory)
   return PostRunResult(job_directory, trajectory_paths, upload, retained)
@@ -146,7 +147,6 @@ def main(argv: list[str]) -> Optional[int]:
   except (OSError, RetentionError, subprocess.CalledProcessError, ValueError) as error:
     log.error('benchmark job pipeline failed: %s', error)
     return 1
-  log.info('converted %d trial trajectories', len(result.trajectory_paths))
   if result.upload is not None:
     print(f'uploaded {result.upload.url}')
   if result.retained is not None:
