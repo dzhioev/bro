@@ -6,16 +6,16 @@ import aws_cdk as cdk
 from bro.oops.cdk.config import InfrastructureConfig
 from bro.oops.cdk.ecr import RepositoryStack
 from bro.oops.cdk.image_build import ImageBuildStack
-from bro.oops.cdk.platform import HostedZoneReference, PlatformHandles, PlatformStack
+from bro.oops.cdk.platform import HostedZoneReference, PlatformStack
 from bro.oops.cdk.trails import TrailsServerStack
 
 
 @dataclass(frozen=True)
 class DeploymentStacks:
   platform: PlatformStack
-  repository: Optional[RepositoryStack]
-  image_build: Optional[ImageBuildStack]
-  trails: Optional[TrailsServerStack]
+  repository: RepositoryStack
+  image_build: ImageBuildStack
+  trails: TrailsServerStack
 
 
 def create_app(
@@ -23,9 +23,7 @@ def create_app(
   account: str,
   *,
   app: Optional[cdk.App] = None,
-  platform_only: bool = False,
   hosted_zone: Optional[HostedZoneReference] = None,
-  platform: Optional[PlatformHandles] = None,
   image_digest: Optional[str] = None,
 ) -> tuple[cdk.App, DeploymentStacks]:
   application = cdk.App() if app is None else app
@@ -36,9 +34,6 @@ def create_app(
     hosted_zone=hosted_zone,
     env=environment,
   )
-  if platform_only:
-    return application, DeploymentStacks(platform_stack, None, None, None)
-
   repository_stack = RepositoryStack(
     application,
     infrastructure_config.trails_repository,
@@ -48,7 +43,7 @@ def create_app(
   trails_stack = TrailsServerStack(
     application,
     infrastructure_config,
-    platform=platform,
+    platform=platform_stack.handles,
     image_digest=image_digest,
     env=environment,
   )

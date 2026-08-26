@@ -9,7 +9,7 @@ source "$DIR/deployment_config.sh"
 load_trails_deployment_config
 
 log INFO 'deploying the platform stack'
-cdk_deploy "$CDK_DIRECTORY" "$TRAILS_PLATFORM_STACK" --context platform-only=true
+cdk_deploy "$CDK_DIRECTORY" "$TRAILS_PLATFORM_STACK"
 
 log INFO 'deploying the trails repository and image-build stacks'
 cdk_deploy "$CDK_DIRECTORY" "$TRAILS_REPOSITORY_STACK" "$TRAILS_IMAGE_BUILD_STACK"

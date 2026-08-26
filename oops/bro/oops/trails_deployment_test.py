@@ -42,7 +42,6 @@ def test_runtime_registry_resolves_store_and_tokens_from_files_then_ssm():
 
 def test_scripts_use_shared_deployment_and_monitoring_assets():
   assert 'source "$(bro-oops-dir)/deploy_lib.sh"' in (_SERVER / 'deploy.sh').read_text()
-  assert '--context platform-only=true' in (_SERVER / 'deploy.sh').read_text()
   assert 'source "$(bro-oops-dir)/deploy_lib.sh"' in (_PROJECT / 'image_build.sh').read_text()
   assert '"$(bro-oops-dir)/monitor_ecs.sh"' in (_SERVER / 'verify.sh').read_text()
 
