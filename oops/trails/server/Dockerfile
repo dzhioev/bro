@@ -7,13 +7,10 @@ RUN set -- /tmp/bro-wheel/*.whl \
  && uv pip install --system --no-cache "$1[trails-server]" \
  && rm -rf /tmp/bro-wheel
 
-ARG BRO_TRAILS_REGION=us-east-1
+ARG AWS_REGION=us-east-1
+ENV AWS_REGION=${AWS_REGION}
 ENV BRO_CONFIGS_DIR=/app/.configs
-COPY oops/trails/server/runtime_credentials.json /tmp/runtime_credentials.json
-RUN mkdir -p "${BRO_CONFIGS_DIR}" \
- && sed "s/__BRO_TRAILS_REGION__/${BRO_TRAILS_REGION}/g" \
-  /tmp/runtime_credentials.json >"${BRO_CONFIGS_DIR}/credentials.json" \
- && rm /tmp/runtime_credentials.json
+COPY oops/trails/server/runtime_credentials.json ${BRO_CONFIGS_DIR}/credentials.json
 
 ENV PORT=8004
 EXPOSE 8004
