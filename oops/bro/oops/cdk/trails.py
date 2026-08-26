@@ -86,20 +86,13 @@ class TrailsServerStack(Stack):
     scope: Construct,
     infrastructure_config: InfrastructureConfig,
     *,
-    platform: Optional[PlatformHandles] = None,
+    platform: PlatformHandles,
     image_digest: Optional[str] = None,
     **kwargs,
   ) -> None:
     config = infrastructure_config.trails
     repository_config = infrastructure_config.trails_repository
     super().__init__(scope, config.stack_name, **kwargs)
-
-    if platform is None:
-      platform = PlatformHandles.lookup(
-        self,
-        infrastructure_config.platform,
-        infrastructure_config.delegated_subdomain,
-      )
 
     repository = ecr.Repository.from_repository_name(
       self,
@@ -259,9 +252,9 @@ class TrailsServerStack(Stack):
       )
     ingress_rules[0].override_logical_id(config.load_balancer_ingress_logical_id)
     egress_rules[0].override_logical_id(config.load_balancer_egress_logical_id)
-    # a same-app platform orders the egress rule after these resources, while a
-    # lookup-imported security group generates no such edges; pinning them keeps
-    # both assemblies' templates identical
+    # a same-app platform orders the egress rule after these resources, while
+    # handles injected around one generate no such edges; pinning them keeps both
+    # assemblies' templates identical
     egress_rules[0].node.add_dependency(
       task_role,
       task_role.node.find_child('DefaultPolicy'),

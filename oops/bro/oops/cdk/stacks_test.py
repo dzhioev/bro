@@ -14,6 +14,7 @@ from bro.oops.cdk import (
 _ACCOUNT = '111111111111'
 _DOMAIN = 'services.example.com'
 _ZONE_ID = 'Z0123456789'
+_DIGEST = 'sha256:' + '1' * 64
 
 
 def _stacks(tmp_path):
@@ -114,7 +115,7 @@ def test_image_build_stack_is_parameterized_and_preserves_construct_ids(tmp_path
   )
 
 
-def test_trails_stack_preserves_resources_and_schema_without_lookups(tmp_path):
+def test_trails_stack_preserves_resources_and_schema(tmp_path):
   config = from_mapping({'delegated_subdomain': _DOMAIN})
   app = cdk.App(outdir=str(tmp_path / 'cdk.out'))
   environment = cdk.Environment(account=_ACCOUNT, region=config.region)
@@ -128,7 +129,7 @@ def test_trails_stack_preserves_resources_and_schema_without_lookups(tmp_path):
     app,
     config,
     platform=platform.handles,
-    image_digest='sha256:' + '1' * 64,
+    image_digest=_DIGEST,
     env=environment,
   )
   template = assertions.Template.from_stack(stack)
@@ -180,7 +181,7 @@ def test_trails_stack_preserves_resources_and_schema_without_lookups(tmp_path):
   assert set(template.to_json()['Outputs']) == {'ServiceURL'}
 
 
-def test_repository_app_can_synthesize_the_platform_before_service_lookups(tmp_path):
+def test_repository_app_wires_the_trails_stack_to_the_platform_stack(tmp_path):
   config = from_mapping({'delegated_subdomain': _DOMAIN})
   app = cdk.App(outdir=str(tmp_path / 'cdk.out'))
 
@@ -188,14 +189,23 @@ def test_repository_app_can_synthesize_the_platform_before_service_lookups(tmp_p
     config,
     _ACCOUNT,
     app=app,
-    platform_only=True,
     hosted_zone=HostedZoneReference(hosted_zone_id=_ZONE_ID, zone_name=_DOMAIN),
+    image_digest=_DIGEST,
   )
 
-  assert stacks.repository is None
-  assert stacks.image_build is None
-  assert stacks.trails is None
-  assert [artifact.stack_name for artifact in application.synth().stacks] == ['BroPlatformStack']
+  assembly = application.synth()
+
+  assert {artifact.stack_name for artifact in assembly.stacks} == {
+    'BroPlatformStack',
+    'BroTrailsECRStack',
+    'BroImageBuildStack',
+    'BroTrailsServerStack',
+  }
+  assert set(stacks.trails.dependencies) == {stacks.platform, stacks.repository}
+  cluster = assertions.Template.from_stack(stacks.trails).to_json()['Resources'][
+    'TrailsService6D10D106'
+  ]['Properties']['Cluster']
+  assert 'Fn::ImportValue' in cluster
 
 
 def test_all_stacks_synthesize_without_aws_access(tmp_path):

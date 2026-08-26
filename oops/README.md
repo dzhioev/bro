@@ -51,9 +51,10 @@ Unknown fields inside `oops` fail resolution so a misspelled live-resource name 
 Its account-specific construct ids are configuration because CloudFormation logical ids must remain stable when an existing stack changes CDK apps.
 Tests can pass `HostedZoneReference` to synthesize without an AWS context lookup.
 
-Service stacks consume a `PlatformHandles` value rather than a same-app stack reference.
-`PlatformHandles.lookup()` finds the VPC and ALB by their CloudFormation stack tag, the ECS cluster by its configured name, the hosted zone by domain, and the HTTPS listener by port.
-A service assertion test should inject `PlatformStack.handles` or a `PlatformHandles` fixture instead of performing those lookups.
+Service stacks take the platform's VPC, cluster, hosted zone, load balancer, and HTTPS listener as a `PlatformHandles` value.
+The app hands them `PlatformStack.handles`, so CloudFormation carries the platform's identifiers as stack exports;
+resolving them to literals instead rewrites immutable properties such as `VpcId`, `Cluster`, and `ListenerArn`, which CloudFormation treats as a change even when the value is unchanged and answers by replacing the service.
+A service assertion test injects its own `PlatformHandles` fixture.
 
 `RepositoryStack` creates one configured ECR repository while preserving its configured construct id.
 `ImageBuildStack` creates the configured GitHub connection and CodeBuild project and grants pushes to every configured repository.
@@ -63,11 +64,9 @@ The project reads the checkout-relative buildspec and image-build script paths f
 
 `bro.oops.cdk.TrailsServerStack` owns the retained DynamoDB tables and S3 spillover bucket, the store-config parameter, the Fargate service, ALB rule, and DNS record.
 Its DynamoDB table, key, and index declarations come from `bro.trails.server.dynamo`.
-Production assembly resolves `PlatformHandles` through lookups;
-assertion tests inject handles and never query AWS.
+Assertion tests inject handles and never query AWS.
 
-The repository app is `deployment/app.py`.
-A deployment first uses its `platform-only=true` context through `trails/server/deploy.sh`, then synthesizes the lookup-based service after the platform exists.
+The repository app is `deployment/app.py`, and `trails/server/deploy.sh` deploys its stacks in dependency order.
 `trails/server/bootstrap.sh` creates the runtime token parameter, `run_local.sh` serves a local store, `verify_image.sh` smoke-tests the image, and `verify.sh` monitors the ECS rollout before probing health.
 The image uses the shared `bro-server-base`, and `image_build.sh` stages the framework wheel through `deploy_lib.sh` before pushing both commit and latest tags.
 
