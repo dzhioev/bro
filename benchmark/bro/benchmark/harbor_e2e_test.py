@@ -18,7 +18,13 @@ import sys
 from pathlib import Path
 
 from bro.benchmark.bundle import build, default_root, workspace_root
-from bro.benchmark.e2e_test_helper import LIVE_TRIAL, assert_graded_run, one_task_config
+from bro.benchmark.e2e_test_helper import (
+  LIVE_TRIAL,
+  assert_graded_run,
+  assert_valid_trajectories,
+  one_task_config,
+)
+from bro.benchmark.trajectory import convert_job_trajectories
 
 HARBOR = Path(sys.executable).with_name('harbor')
 
@@ -45,4 +51,5 @@ def test_a_real_task_is_driven_and_graded(tmp_path):
     check=True,
   )
 
-  assert_graded_run(jobs)
+  job = assert_graded_run(jobs)
+  assert_valid_trajectories(convert_job_trajectories(job), job)

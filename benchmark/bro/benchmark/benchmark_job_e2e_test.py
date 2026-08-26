@@ -5,9 +5,9 @@ checks, the command it builds, the run directory the job fills, and the result
 the CLI turns back into an exit status.
 
 The broker is the real one over its real transport, driving the real CLI as its
-root peer. Only the artifact store a session collects into is stood in for: a
-job's answer is the run directory either way, and `ride/ride/artifacts.py` owns
-the collection that turns one into a ref.
+root peer. Only the artifact store a session collects into and reads back is
+stood in for: a job's answer is the run directory either way, and
+`ride/ride/artifacts.py` owns the collection that turns one into a ref.
 
 It builds a real bundle, drives the host docker daemon and spends real tokens,
 so it stays out of the gate's roster and skips without the repository's token
@@ -26,8 +26,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast, override
 
+from bro.artifact import GET
 from bro.benchmark.bundle import build, default_root, workspace_root
-from bro.benchmark.e2e_test_helper import LIVE_TRIAL, assert_graded_run, one_task_config
+from bro.benchmark.e2e_test_helper import (
+  LIVE_TRIAL,
+  assert_graded_run,
+  assert_valid_trajectories,
+  one_task_config,
+)
+from bro.benchmark.trajectory import TRAJECTORY_FILENAME
+from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Broker, Dispatcher
 from bro.broker.job import OUTPUT_DIRECTORY
 from bro.broker.runtime import Peer
@@ -135,6 +143,11 @@ class _RunDirectories:
     self.runs.append(collected)
     return {'ref': str(collected)}
 
+  def get(self, context: Dispatcher, peer: Peer, message: Message) -> None:
+    """`artifact.get` over the same stand-in: a run's ref is its directory here,
+    so making one visible is answering with it."""
+    context.reply(peer, {'outcome': 'ok', 'value': {'path': message.args['ref']}})
+
 
 @contextlib.contextmanager
 def _config_in_the_tree(tree: Path) -> Generator[str]:
@@ -154,6 +167,7 @@ def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
   runs = _RunDirectories(tmp_path / 'runs')
   spawner = _SessionSpawner()
   broker = Broker(TcpServerTransport([LOCAL_HOST]), spawner, job_output=runs)
+  broker.on(GET, runs.get)
   broker.on(
     BENCHMARK,
     benchmark_kind(
@@ -174,4 +188,7 @@ def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
 
   assert exit_code == 0, spawner.output()
   [run] = runs.runs
-  assert_graded_run(run / OUTPUT_DIRECTORY)
+  job = assert_graded_run(run / OUTPUT_DIRECTORY)
+  # the pipeline's own output, read rather than re-derived: converting here
+  # would pass over a pipeline that never converted
+  assert_valid_trajectories(job.glob(f'*/agent/{TRAJECTORY_FILENAME}'), job)
