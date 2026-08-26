@@ -60,10 +60,13 @@ LIVE_TRIAL = [
 
 
 def one_task_config(directory: Path) -> Path:
-  """the pinned config narrowed to the one task, so the pins stay in one file."""
+  """the pinned config narrowed to the one task, so the pins stay in one file.
+  One attempt per agent is all a graded trial takes, and the pinned score depth
+  would multiply what the live trials spend."""
   config = load_config_source(JOB_CONFIG)
   for dataset in config['datasets']:
     dataset['task_names'] = [TASK]
+  config['n_attempts'] = 1
   narrowed = directory / 'one-task.json'
   narrowed.write_text(json.dumps(config))
   return narrowed
@@ -96,7 +99,7 @@ def assert_graded_run(jobs: Path) -> None:
   # the local store's own layout under the run's data home, found rather than spelled
   recorded_trails = list(job.rglob('agent/ride/trails/*/*/header.json'))
   assert len(recorded_trails) > 0, 'the trial kept no trail'
-  recorded_agent_directories = {header.parents[3] for header in recorded_trails}
+  recorded_agent_directories = {header.parents[4] for header in recorded_trails}
   trajectories = convert_job_trajectories(job)
   assert len(trajectories) == len(recorded_agent_directories)
   for trajectory in trajectories:

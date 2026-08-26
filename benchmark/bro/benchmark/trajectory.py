@@ -25,7 +25,10 @@ from bro.benchmark.pricing import call_cost_usd, optional_call_cost_usd
 from bro.llm.usage import Counts, from_vendor_counts
 from bro.trails.local import LocalStore
 
-TRAILS_DIRECTORY = Path('ride')
+# harbor runs a trial's bro with the trial's `agent/` directory as its data
+# home, so the store the run recorded into is the local backend's root beneath
+# it (`bro.trails.store.local_root`)
+TRAILS_DIRECTORY = Path('ride') / 'trails'
 TRAJECTORY_FILENAME = 'trajectory.json'
 
 
@@ -399,6 +402,16 @@ def convert_trial_trajectory(agent_directory: Path) -> Path:
   return destination
 
 
+def _recorded_a_trail(store_root: Path) -> bool:
+  """whether the trial's store holds one. Opening a store creates its own
+  directories, so a run that ended before blazing a trail leaves the layout
+  behind with nothing in it."""
+  if not (store_root / 'trails').is_dir():
+    return False
+  with LocalStore(store_root) as store:
+    return next(store.iter_trails(max_items=1), None) is not None
+
+
 def convert_job_trajectories(job_directory: Path) -> list[Path]:
   result_path = job_directory / 'result.json'
   if not result_path.is_file():
@@ -412,7 +425,7 @@ def convert_job_trajectories(job_directory: Path) -> list[Path]:
     if not trial_directory.is_dir() or not (trial_directory / 'result.json').is_file():
       continue
     agent_directory = trial_directory / 'agent'
-    if not (agent_directory / TRAILS_DIRECTORY / 'trails').is_dir():
+    if not _recorded_a_trail(agent_directory / TRAILS_DIRECTORY):
       continue
     destinations.append(convert_trial_trajectory(agent_directory))
   return destinations
