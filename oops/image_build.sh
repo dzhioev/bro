@@ -25,5 +25,5 @@ build_and_push \
   "$latest_image" \
   oops/trails/server/Dockerfile \
   -t "$commit_image" \
-  --build-arg "BRO_TRAILS_REGION=$TRAILS_REGION" \
+  --build-arg "AWS_REGION=$TRAILS_REGION" \
   .

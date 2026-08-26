@@ -21,9 +21,9 @@ plain or `kind+instance`, for readers that mean one specific entry. the CLI's
 sources are either stored or minting. two stored types: `local` searches the
 explicit `BRO_CONFIGS_DIR` when set, then `~/.bro/<file>`; deployed services set
 the explicit directory when they synthesize configs, while the host uses only
-`~/.bro`. `ssm` reads an AWS SSM parameter from the region the source names,
-for surfaces that resolve secrets from Parameter Store at runtime instead of
-carrying files. a minting type (a `MintingSource` subclass owned by a domain
+`~/.bro`. `ssm` reads an AWS SSM parameter, from the named region or the
+surface's ambient one, for surfaces that resolve secrets from Parameter Store
+at runtime instead of carrying files. a minting type (a `MintingSource` subclass owned by a domain
 package, e.g. `github_app` in `extra/github/app.py`) derives short-lived values
 from a minting config file found
 along the same local search path; the source keeps the minted value and
@@ -227,18 +227,19 @@ class LocalSource:
 
 
 class SSMSource:
-  """reads an AWS SSM parameter (decrypted) from the region the source names.
-  the region is required: SSM is a regional service, and a non-AWS surface (e.g.
-  a ride container holding only static credentials) has no ambient region to
-  discover, so the registry states it. credentials come from the ambient AWS
-  configuration. a missing parameter falls through to the next source; credential
-  or permission errors propagate — a surface that is supposed to reach SSM but
-  can't is a loud failure, not a silent fallthrough."""
+  """reads an AWS SSM parameter (decrypted). the region names where the
+  parameter lives for surfaces with no ambient AWS region to discover (e.g. a
+  ride container holding only static credentials); a source without one reads
+  the ambient region — which an AWS-hosted service carries in its environment —
+  and boto3 fails loudly where neither exists. credentials come from the
+  ambient AWS configuration. a missing parameter falls through to the next
+  source; credential or permission errors propagate — a surface that is
+  supposed to reach SSM but can't is a loud failure, not a silent fallthrough."""
 
   TYPE = 'ssm'
   CACHEABLE: ClassVar[bool] = True
 
-  def __init__(self, parameter: str, region: str):
+  def __init__(self, parameter: str, region: Optional[str] = None):
     self.parameter = parameter
     self.region = region
 
@@ -258,7 +259,7 @@ class SSMSource:
 
   @classmethod
   def from_dict(cls, data: dict) -> SSMSource:
-    return cls(data['parameter'], data['region'])
+    return cls(data['parameter'], data.get('region'))
 
 
 @dataclass(frozen=True)

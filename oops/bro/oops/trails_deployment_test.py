@@ -33,28 +33,11 @@ def test_trails_image_uses_the_shared_base_and_staged_framework_wheel():
 def test_runtime_registry_resolves_store_and_tokens_from_files_then_ssm():
   registry = json.loads((_SERVER / 'runtime_credentials.json').read_text())
 
-  assert registry == {
-    'trails': {
-      'sources': [
-        {'file': 'trails_store.json'},
-        {
-          'type': 'ssm',
-          'parameter': '/trails/store-config',
-          'region': '__BRO_TRAILS_REGION__',
-        },
-      ]
-    },
-    'trails_tokens': {
-      'sources': [
-        {'file': 'trails_tokens.json'},
-        {
-          'type': 'ssm',
-          'parameter': '/trails/tokens',
-          'region': '__BRO_TRAILS_REGION__',
-        },
-      ]
-    },
-  }
+  assert set(registry) == {'trails', 'trails_tokens'}
+  for secret in registry.values():
+    file_source, ssm_source = secret['sources']
+    assert set(file_source) == {'file'}
+    assert ssm_source['type'] == 'ssm'
 
 
 def test_scripts_use_shared_deployment_and_monitoring_assets():

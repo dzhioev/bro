@@ -191,9 +191,12 @@ class TestSSMSource:
     with pytest.raises(RuntimeError, match='access denied'):
       credentials.SSMSource('/email-pipeline/notion', 'eu-central-1').fetch()
 
-  def test_from_dict_requires_region(self):
-    with pytest.raises(KeyError):
-      credentials.SSMSource.from_dict({'parameter': '/email-pipeline/notion'})
+  def test_fetch_without_region_reads_the_ambient_one(self, monkeypatch):
+    boto3_client = MagicMock()
+    boto3_client.return_value.get_parameter.return_value = {'Parameter': {'Value': 'v'}}
+    monkeypatch.setattr('boto3.client', boto3_client)
+    credentials.SSMSource.from_dict({'parameter': '/email-pipeline/notion'}).fetch()
+    boto3_client.assert_called_once_with('ssm', region_name=None)
 
   def test_registry_parses_local_then_ssm_sources(self, configs_dir: Path):
     _write(
