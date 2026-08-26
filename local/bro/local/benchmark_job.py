@@ -141,6 +141,9 @@ def benchmark_kind(kind_context: KindContext) -> RequestHandler:
     environment['UV_PROJECT_ENVIRONMENT'] = str(
       (workspace_tree.parent / 'benchmark-venv').resolve()
     )
+    # the job's interpreter is that environment's; a launcher venv left named
+    # beside it is a second answer uv reports the conflict over
+    environment.pop('VIRTUAL_ENV', None)
     context.job(
       CommandJob(command=command, env=environment),
       peer,
