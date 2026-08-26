@@ -7,6 +7,7 @@ here once rather than per check.
 
 import json
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,7 @@ from harbor.utils.trajectory_validator import TrajectoryValidator
 from bro.base import credentials
 from bro.base.suite_environment import host_credential_store, token_spending_skip_reason
 from bro.benchmark.bundle import built, default_root, host_mismatch, workspace_root
-from bro.benchmark.trajectory import convert_job_trajectories
+from bro.benchmark.trajectory import TRAILS_DIRECTORY
 
 # the smallest image in the set, and one carrying neither python3 nor a CA
 # store — so a single trial exercises the bundle and SSL_CERT_FILE for real
@@ -72,8 +73,9 @@ def one_task_config(directory: Path) -> Path:
   return narrowed
 
 
-def assert_graded_run(jobs: Path) -> None:
-  """what the job directory of a finished run must hold, whatever drove it."""
+def assert_graded_run(jobs: Path) -> Path:
+  """what the job directory of a finished run must hold, whatever drove it,
+  answering with the concrete job directory inside `jobs`."""
   results = sorted(jobs.glob('*/result.json'))
   assert len(results) == 1
   stats = json.loads(results[0].read_text())['stats']
@@ -96,12 +98,26 @@ def assert_graded_run(jobs: Path) -> None:
   expected_version = built(default_root(workspace_root())).identity
   assert {result['agent_info']['version'] for result in trial_results} == {expected_version}
   assert len(list(job.rglob('agent/bro.log'))) > 0, 'the trial kept no activity log'
-  # the local store's own layout under the run's data home, found rather than spelled
-  recorded_trails = list(job.rglob('agent/ride/trails/*/*/header.json'))
-  assert len(recorded_trails) > 0, 'the trial kept no trail'
-  recorded_agent_directories = {header.parents[4] for header in recorded_trails}
-  trajectories = convert_job_trajectories(job)
-  assert len(trajectories) == len(recorded_agent_directories)
-  for trajectory in trajectories:
+  return job
+
+
+def trailed_agent_directories(job: Path) -> set[Path]:
+  """the trial agent directories whose run recorded a trail, found through the
+  store's own layout under the run's data home rather than spelled."""
+  found = {
+    agent
+    for trial in job.iterdir()
+    for agent in [trial / 'agent']
+    if len(list((agent / TRAILS_DIRECTORY).glob('*/*/header.json'))) > 0
+  }
+  assert len(found) > 0, 'no trial kept a trail'
+  return found
+
+
+def assert_valid_trajectories(trajectories: Iterable[Path], job: Path) -> None:
+  """every trail the run recorded reached ATIF, and every conversion validates."""
+  converted = sorted(trajectories)
+  assert len(converted) == len(trailed_agent_directories(job))
+  for trajectory in converted:
     validator = TrajectoryValidator()
     assert validator.validate(trajectory), validator.get_errors()
