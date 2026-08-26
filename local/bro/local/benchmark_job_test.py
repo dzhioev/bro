@@ -82,6 +82,7 @@ class TestBenchmarkKind:
     monkeypatch.setenv('BENCH_SENTINEL', 'yes')
     monkeypatch.setenv('HARBOR_API_KEY', 'ambient-key-outside-the-session-scope')
     monkeypatch.setenv('UV_PROJECT_ENVIRONMENT', '/wrong/shared-environment')
+    monkeypatch.setenv('VIRTUAL_ENV', '/the/launcher/venv')
     context = FakeContext()
     handle = _kind(tree)
     handle(cast(Dispatcher, context), ROOT, _request({'config': CONFIG}))
@@ -105,6 +106,7 @@ class TestBenchmarkKind:
     host_environment = Path(command.env['UV_PROJECT_ENVIRONMENT'])
     assert host_environment == tree.parent / 'benchmark-venv'
     assert not host_environment.is_relative_to(tree)
+    assert 'VIRTUAL_ENV' not in command.env
     assert (requester, timeout) == (ROOT, benchmark_job.DEFAULT_TIMEOUT)
 
   def test_request_timeout_bounds_the_job(self, tree):
