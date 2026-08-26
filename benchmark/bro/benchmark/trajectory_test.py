@@ -18,6 +18,7 @@ from bro.benchmark.trajectory import (
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest
 from bro.trails.record.spine import Recording
+from bro.trails.store import local_root
 
 IDENTITY = f'sha256:{"1" * 64}'
 MODEL = 'gpt-5.6-terra'
@@ -95,14 +96,22 @@ def _record_trial(store: LocalStore) -> tuple[str, str]:
   return recording.trail_id, call_id
 
 
+def _trial_store(agent_directory, monkeypatch) -> LocalStore:
+  """the store a trial's bro records into, resolved the way a live run does:
+  harbor hands the run the trial's `agent/` directory as its data home."""
+  agent_directory.mkdir(parents=True, exist_ok=True)
+  monkeypatch.setenv('XDG_DATA_HOME', str(agent_directory))
+  return LocalStore(local_root())
+
+
 @pytest.fixture(autouse=True)
 def _bundle_identity(monkeypatch):
   monkeypatch.setattr(trajectory_module, 'reported_agent_version', lambda: IDENTITY)
 
 
-def test_a_recorded_trail_round_trips_through_harbors_validator(tmp_path):
+def test_a_recorded_trail_round_trips_through_harbors_validator(tmp_path, monkeypatch):
   agent_directory = tmp_path / 'agent'
-  store = LocalStore(agent_directory / 'ride')
+  store = _trial_store(agent_directory, monkeypatch)
   trail_id, call_id = _record_trial(store)
 
   destination = convert_trial_trajectory(agent_directory)
@@ -205,7 +214,7 @@ def test_multiple_root_trails_are_rejected(tmp_path):
     trajectory_from_store(store)
 
 
-def test_the_job_walker_converts_every_trial_holding_a_trail(tmp_path):
+def test_the_job_walker_converts_every_trial_holding_a_trail(tmp_path, monkeypatch):
   job_directory = tmp_path / 'job'
   job_directory.mkdir()
   now = datetime.now(UTC)
@@ -220,11 +229,14 @@ def test_the_job_walker_converts_every_trial_holding_a_trail(tmp_path):
   recorded_trial = job_directory / 'errored-with-trail'
   recorded_trial.mkdir()
   (recorded_trial / 'result.json').write_text('{}')
-  store = LocalStore(recorded_trial / 'agent' / 'ride')
-  _record_trial(store)
+  _record_trial(_trial_store(recorded_trial / 'agent', monkeypatch))
   no_trail = job_directory / 'failed-before-agent'
   no_trail.mkdir()
   (no_trail / 'result.json').write_text('{}')
+  empty_store = job_directory / 'died-before-blazing'
+  empty_store.mkdir()
+  (empty_store / 'result.json').write_text('{}')
+  _trial_store(empty_store / 'agent', monkeypatch)
 
   destinations = convert_job_trajectories(job_directory)
 
@@ -232,3 +244,4 @@ def test_the_job_walker_converts_every_trial_holding_a_trail(tmp_path):
   validator = TrajectoryValidator()
   assert validator.validate(destinations[0]), validator.get_errors()
   assert not (no_trail / 'agent' / 'trajectory.json').exists()
+  assert not (empty_store / 'agent' / 'trajectory.json').exists()

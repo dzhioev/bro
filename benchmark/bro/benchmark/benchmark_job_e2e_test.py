@@ -113,20 +113,27 @@ class _SessionSpawner(Spawner):
 class _RunDirectories:
   """the `JobOutput` the session's artifact store stands in for here: it keeps
   each run where the test can read it, and answers with the directory itself as
-  the ref the CLI prints."""
+  the ref the CLI prints.
+
+  Collection takes its own copy the way the artifact store does, because the
+  dispatcher removes the run directory once it has been collected."""
 
   def __init__(self, root: Path):
     self._root = root
+    self._opened = 0
     self.runs: list[Path] = []
 
   def open(self) -> Path:
-    directory = self._root / str(len(self.runs))
+    directory = self._root / f'{self._opened}.staging'
+    self._opened += 1
     directory.mkdir(parents=True)
-    self.runs.append(directory)
     return directory
 
   async def collect(self, directory: Path, context: Dispatcher, requester: Peer) -> dict:
-    return {'ref': str(directory)}
+    collected = self._root / str(len(self.runs))
+    shutil.copytree(directory, collected)
+    self.runs.append(collected)
+    return {'ref': str(collected)}
 
 
 @contextlib.contextmanager
