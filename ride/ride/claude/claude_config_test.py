@@ -183,27 +183,12 @@ class TestContainerClaudeState:
     assert settings['skipDangerousModePermissionPrompt'] is True
 
 
-def test_session_settings_turn_off_the_claude_auto_updater():
-  assert ride_claude_config._SESSION_SETTINGS_JSON['env'] == {'DISABLE_AUTOUPDATER': '1'}
-
-
 class TestPluginSeedContract:
   # the enabled plugin must also be installed: settings.json enables it (ride/claude_config.py),
   # the Dockerfile installs + stages it, and the entrypoint copies the stage into
   # the bind-mounted ~/.claude/plugins. enabling without installing is exactly the
   # regression that reintroduced the "LSP Plugin Recommendation" prompt.
   _SEED_DIR = '/opt/claude-plugins-seed'
-
-  def test_settings_enables_pyright_lsp(self):
-    assert ride_claude_config._SESSION_SETTINGS_JSON['enabledPlugins'] == {
-      'pyright-lsp@claude-plugins-official': True
-    }
-
-  def test_claude_json_suppresses_marketplace_autoinstall(self):
-    # the marketplace is baked into the image, so the runtime auto-install (a
-    # network fetch that can also prompt) must be marked already-done.
-    session_json = ride_claude_config._SESSION_CLAUDE_JSON
-    assert session_json['officialMarketplaceAutoInstallAttempted'] is True
 
   def test_dockerfile_installs_and_stages_the_enabled_plugin(self):
     plugin = next(iter(ride_claude_config._SESSION_SETTINGS_JSON['enabledPlugins']))

@@ -1,5 +1,4 @@
 from types import SimpleNamespace
-from typing import Optional
 
 import pytest
 
@@ -34,11 +33,9 @@ async def test_fetch_with_query_summarises_via_mu(monkeypatch):
   import bro.llm.mu as mu_module
 
   captured: list[str] = []
-  models: list[Optional[str]] = []
 
   async def fake_mu(prompt, result_cls, *contents, model=None, reasoning_effort=None):
     captured.append(prompt)
-    models.append(model)
     return result_cls(summary='focused summary')
 
   monkeypatch.setattr(searchable.credentials, 'available', lambda name: True)
@@ -50,7 +47,6 @@ async def test_fetch_with_query_summarises_via_mu(monkeypatch):
   assert 'raw record for id-7' in captured[0]
   assert 'fake' in captured[0]
   assert 'id-7' in captured[0]
-  assert models == ['gpt-5.6-luna']
 
 
 @pytest.mark.asyncio

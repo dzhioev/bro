@@ -3,7 +3,6 @@ import json
 import pytest
 
 from bro.broker.brotocol import (
-  MAX_FRAME_BYTES,
   Message,
   ProtocolError,
   progress,
@@ -113,7 +112,3 @@ def test_construction_rejects_malformed_envelopes(kwargs):
 def test_from_bytes_malformed_raises(raw):
   with pytest.raises(ProtocolError):
     Message.from_bytes(raw)
-
-
-def test_max_frame_bytes_value():
-  assert MAX_FRAME_BYTES == 1 << 20

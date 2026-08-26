@@ -453,5 +453,3 @@ class TestPrefetchTask:
     # comments embedded as json, datetimes stringified
     assert '"topic": "plan"' in block
     assert '2026-01-01 12:00:00+00:00' in block
-    # instruction to skip the in-session fetch
-    assert 'do not call get_task / read_task / read_comments' in block

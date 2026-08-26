@@ -129,9 +129,8 @@ class TestFailureSignatures:
       for signature in providers.failure_signatures(name):
         assert signature.category in FAILURE_CATEGORIES
 
-  def test_openai_names_its_client_exceptions(self):
-    patterns = {signature.pattern for signature in providers.failure_signatures('openai')}
-    assert r'openai\.RateLimitError' in patterns
+  def test_signatures_reach_the_providers_declaration(self):
+    assert providers.failure_signatures('openai') == openai_llm.FAILURE_SIGNATURES
 
   def test_a_signature_off_the_category_vocabulary_is_refused(self):
     with pytest.raises(ValueError, match='unknown failure category'):
