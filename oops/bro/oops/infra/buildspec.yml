@@ -1,6 +1,7 @@
 version: 0.2
 
-# TARGET and IMAGE_BUILD_SCRIPT are configured on the CodeBuild project.
+# A build environment carries no credential store, so the image-build script
+# takes its target, repository and region from the environment.
 phases:
   build:
     commands:

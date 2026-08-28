@@ -200,7 +200,10 @@ trigger_image_build() {
     --region "$region" \
     --project-name "$project" \
     --source-version "$commit" \
-    --environment-variables-override "name=TARGET,value=${target},type=PLAINTEXT" \
+    --environment-variables-override \
+      "name=TARGET,value=${target},type=PLAINTEXT" \
+      "name=IMAGE_REPOSITORY,value=${repository},type=PLAINTEXT" \
+      "name=IMAGE_REGION,value=${region},type=PLAINTEXT" \
     --query build.id --output text)"
   echo "started build ${build_id} (target ${target}, commit ${commit})"
 
