@@ -44,6 +44,7 @@ dependencies = [
 [project.entry-points.bro]
 analyst = "bros.analyst:Analyst"
 dev = "bros.dev:Dev"
+eyebro = "bros.eyebro:Eyebro"
 lead = "bros.lead:Lead"
 terminal = "bros.terminal:Terminal"
 
@@ -62,6 +63,7 @@ module-name = [
   "bro.workflow",
   "bros.analyst",
   "bros.dev",
+  "bros.eyebro",
   "bros.lead",
   "bros.terminal",
 ]

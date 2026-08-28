@@ -14,6 +14,8 @@ _DEVELOPMENT_DOMAIN = {
   'bro/workflow/hooks/post-commit',
   'bros/dev/__init__.py',
   'bros/dev/spells/fix.md',
+  'bros/eyebro/__init__.py',
+  'bros/eyebro/spells/review-diff.md',
   'bros/lead/__init__.py',
   'bros/lead/spells/run-feature.md',
   'bros/terminal/__init__.py',
@@ -59,7 +61,7 @@ def test_core_github_client_does_not_move_with_poll_pr(wheel_files):
 
 
 def test_development_personas_are_declared_by_bro_dev(entry_points):
-  assert set(entry_points['bro']) == {'analyst', 'dev', 'lead', 'terminal'}
+  assert set(entry_points['bro']) == {'analyst', 'dev', 'eyebro', 'lead', 'terminal'}
 
 
 def test_development_scripts_are_declared_by_bro_dev(entry_points):
