@@ -56,7 +56,7 @@ The repository root carries `pyproject.toml` (core distribution metadata, the wo
 the suite's environment is rebuilt rather than patched by `bro/base/suite_environment.py`, clearing the framework's own namespaces plus installed credential-hook variables and pinning the credential resolver's search path off every store,
 so a run launched from inside a managed session inherits none of it and resolves only what a test installed itself
 — the rebuild lives in core so every pytest root applies it, `benchmark/`'s own conftest included, and `local/bro/local/environment_policy_test.py` enforces each part repository-wide), `local/` (the `bro-local` member:
-the `bro-dev` persona under `bros/bro_dev/`, `bro/local/run_tests.py`'s explicit test roster behind the `run-tests` console script,
+the `bro-dev` and `bro-eyebro` personas under `bros/`, sharing `bro/local/prompts.py`'s framework-project context, `bro/local/run_tests.py`'s explicit test roster behind the `run-tests` console script,
 the `benchmark` broker kind with its `benchmark-job` session command (`bro/local/benchmark_job.py`
 — a session starts this checkout's host-side score/convert/upload pipeline through the broker),
 and the tests that hold this repository as a whole to a policy

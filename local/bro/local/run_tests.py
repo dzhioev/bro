@@ -258,6 +258,7 @@ PYTEST_FILES = [
   'dev/bro/dev/distribution_test.py',
   'dev/bro/dev/sync_scripts_test.py',
   'local/bros/bro_dev/bro_dev_test.py',
+  'local/bros/bro_eyebro/bro_eyebro_test.py',
   'dev/bro/dev/git_golc_test.py',
   'dev/bro/dev/usage_report_test.py',
   'dev/bro/dev/install_test.py',
