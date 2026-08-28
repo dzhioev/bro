@@ -13,7 +13,6 @@ def test_defaults_are_consumer_neutral():
   assert config.platform.cluster_name == 'bro-services'
   assert config.repositories['trails'].repository_name == 'bro-trails-server'
   assert config.image_build.project_name == 'bro-image-build'
-  assert config.image_build.connection_name is None
   assert config.image_build.connection_arn is None
   assert config.image_build.image_build_script == 'oops/image_build.sh'
   assert config.trails.spillover_bucket_name == 'bro-trails-{account}'
@@ -48,7 +47,7 @@ def test_account_names_are_resolved_from_the_infra_namespace():
       'image_build': {
         'stack_name': 'CustomImageBuild',
         'project_name': 'custom-image-build',
-        'connection_name': 'custom-github',
+        'connection_arn': 'arn:aws:codeconnections:eu-west-1:1:connection/custom',
         'source_owner': 'organization',
         'source_repository': 'application',
         'buildspec_path': 'deployment/buildspec.yml',
@@ -129,14 +128,9 @@ def test_resolve_reads_the_infra_credential():
     (
       {
         'delegated_subdomain': 'services.example.com',
-        'oops': {
-          'image_build': {
-            'connection_name': 'custom-github',
-            'connection_arn': 'arn:aws:codeconnections:eu-central-1:1:connection/abc',
-          }
-        },
+        'oops': {'image_build': {'connection_name': 'custom-github'}},
       },
-      'sets both connection_name and connection_arn',
+      'infra.oops.image_build has unknown fields: connection_name',
     ),
   ],
 )

@@ -1,11 +1,9 @@
 from aws_cdk import (
   ArnFormat,
-  CfnOutput,
   Duration,
   Fn,
   Stack,
   aws_codebuild as codebuild,
-  aws_codeconnections as codeconnections,
   aws_iam as iam,
 )
 from constructs import Construct
@@ -21,15 +19,6 @@ class ImageBuildStack(Stack):
     super().__init__(scope, config.stack_name, **kwargs)
 
     connection_arn = config.connection_arn
-    if config.connection_name is not None:
-      connection = codeconnections.CfnConnection(
-        self,
-        'GitHubConnection',
-        connection_name=config.connection_name,
-        provider_type='GitHub',
-      )
-      connection_arn = connection.attr_connection_arn
-      CfnOutput(self, 'ConnectionARN', value=connection_arn)
 
     self.project = codebuild.Project(
       self,

@@ -130,23 +130,6 @@ def test_image_build_stack_without_an_identity_grants_no_connection_access(tmp_p
   assert all('codeconnections:GetConnection' not in s['Action'] for s in statements)
 
 
-def test_image_build_stack_creates_the_named_connection_and_builds_as_it(tmp_path):
-  _, template = _image_build_template(tmp_path, {'connection_name': 'bro-github'})
-
-  resources = template.to_json()['Resources']
-  assert 'GitHubSourceCredential' not in resources
-  template.has_resource_properties(
-    'AWS::CodeConnections::Connection',
-    {'ConnectionName': 'bro-github', 'ProviderType': 'GitHub'},
-  )
-  source = resources['ImageBuild30B7C98D']['Properties']['Source']
-  assert source['ReportBuildStatus'] is True
-  assert source['Auth'] == {
-    'Type': 'CODECONNECTIONS',
-    'Resource': {'Fn::GetAtt': ['GitHubConnection', 'ConnectionArn']},
-  }
-
-
 def test_image_build_stack_builds_as_an_existing_connection(tmp_path):
   arn = 'arn:aws:codeconnections:us-east-1:111111111111:connection/abc'
   _, template = _image_build_template(tmp_path, {'connection_arn': arn})

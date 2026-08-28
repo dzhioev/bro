@@ -58,9 +58,11 @@ A service assertion test injects its own `PlatformHandles` fixture.
 
 `RepositoryStack` creates one configured ECR repository while preserving its configured construct id.
 `ImageBuildStack` creates the configured CodeBuild project, grants it pushes to every configured repository, and reads the checkout-relative buildspec and image-build script paths from the same credential.
-A private source needs a GitHub identity:
-`connection_name` has the stack create a connection, `connection_arn` points the project at one that already exists, and neither leaves a public source unauthenticated.
+A private source needs a GitHub identity, named by `connection_arn`;
+without one the project builds a public source unauthenticated, with build-status reporting off.
 The project names its connection through the source's `Auth` block rather than through a CodeBuild source credential, which is a single default per account and region and so cannot serve two image-build stacks.
+The connection is a prerequisite rather than a stack resource:
+CodeConnections creates one in `PENDING`, a human completes the provider handshake in its console, and CodeBuild refuses a project that references a connection which is not yet `AVAILABLE`.
 
 ## Trails service
 
