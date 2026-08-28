@@ -8,7 +8,7 @@ from typing import Any, ClassVar, Optional, Protocol, Self
 import bro.llm.llms.openai as llm_llms_openai
 import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
-from bro import spells as spell_store
+from bro import spells as spell_store, summon
 from bro.base import credentials, log
 from bro.base.condition import Condition, Entry, Iff, SetVariable, Variables, When, var
 from bro.base.offload import off_loop
@@ -882,6 +882,7 @@ class BaseBro(ABC):
         harness='bro',
         wire=wire,
         creds=credentials.known_names(),
+        may_summon=summon.effective_may_summon(),
         extra=self._feature_vocabulary,
       ).strip()
 
@@ -933,6 +934,7 @@ class BaseBro(ABC):
       harness=harness,
       wire=wire,
       creds=credentials.known_names(),
+      may_summon=summon.effective_may_summon(),
       extra=self._feature_vocabulary,
     ).strip()
 

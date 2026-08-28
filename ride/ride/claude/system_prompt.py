@@ -47,7 +47,7 @@ def session_append_prompt(hold: str, bro_name: str) -> str:
   """
   # Keep the bro class graph out of this leaf module's import closure.
   import bro.mcp as mcp
-  from bro import prompts
+  from bro import prompts, summon
   from bro.base import credentials
   from bro.registry import create_bro
 
@@ -61,6 +61,7 @@ def session_append_prompt(hold: str, bro_name: str) -> str:
     harness='claude',
     wire='mcp',
     creds=credentials.known_names(),
+    may_summon=summon.effective_may_summon(),
     extra=bro.vocabulary(),
   )
   fragment = prompts.session_fragment(

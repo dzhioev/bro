@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 5.2.0
+version: 5.4.0
 ---
 
 # run-pr
@@ -106,6 +106,11 @@ No full-suite run here:
 the suite is the mandatory gate (step 9), run once on the final rebased tree
 — a pass before the rebase is evidence the rebase discards.
 
+{{iff #may_summon contains eyebro}}
+**Policy audit**:
+owned by the eyebro's independent review of the whole branch ("Pre-review by the eyebro", after step 6)
+— nothing to audit per commit.
+{{else}}
 **Policy audit**:
 before each commit, call `dev-style-source::read` and audit that commit's `git diff` against the returned policy text.
 The tool read is part of the gate
@@ -120,6 +125,7 @@ An audit done only in your head is indistinguishable from one skipped, so an int
 a written verdict can't be dropped unnoticed.
 It's the cheapest place to catch a violation
 — the alternative is a review round-trip.
+{{end}}
 
 ### 3. Sync the repo docs
 
@@ -186,6 +192,28 @@ Repeat steps 5–6 for each logical commit.
 
 To verify a new test catches a bug (revert-and-rerun), use `git stash push <path-to-fix-file>`
 — bare `git stash` would also hide the new test, masking the verification.
+
+{{when #may_summon contains eyebro}}
+
+### Pre-review by the eyebro
+
+The branch's style audit:
+one independent review of the whole change, paid once before the PR instead of per commit.
+
+With the branch committed, [[ask]] the eyebro for a style review and wait on the findings
+— the child bases on this workspace's HEAD and shares no context, so the relayed request names what to diff against:
+
+    [[review diff of HEAD against origin/<base>, in terms of the development style policy and the repository's own guides]]
+
+Handle the findings at pre-PR prices:
+fix what is right with further commits (steps 5–6), and let go of what you'd only debate
+— the eyebro reviews the PR next ("Hand the review to the eyebro"), where a finding it still holds returns as a thread.
+No identity constraint binds this step:
+a diff review approves nothing.
+If the ask is denied or fails, audit the branch yourself before moving on:
+call `dev-style-source::read` and audit `git diff origin/<base>..HEAD` against the returned policy, stating the verdict as visible output.
+
+{{end}}
 
 ### 7. Rebase onto the base branch
 
@@ -455,6 +483,27 @@ Stop the watcher with `TaskStop` when chaining into [[land]].
 
 If the `Monitor` schema needs a `ToolSearch` fetch, load `TaskStop` in the same query (`select:Monitor,TaskStop`)
 — the APPROVED handler needs it and shouldn't spend a round trip on it later.
+{{end}}
+{{when #may_summon contains eyebro}}
+
+### Hand the review to the eyebro
+
+Don't wait for a review to arrive — hand it over:
+
+1. Summon the eyebro detached, with the watcher already running
+   — the watcher baselines existing events as seen at start, so a review posted before it starts would never fire.
+   `bro::summon` with `target: eyebro`, `detach: true`, a `timeout` sized in hours (a review conversation outlives the default; `14400` fits), and a self-contained prompt naming the PR
+   — the child shares no context with this session:
+   `[[review pr <pr-url>]]`.
+2. The review then flows through the PR:
+   the eyebro's reviews and comments fire as ordinary step-15 events, your replies and pushed fixes reach it the same way, and its approval chains into [[land]] like any other.
+   Don't wait on the summon result
+   — check the request id (`bro::summon_check`) only when the PR stays quiet past reason.
+3. A summon denied at launch, or a child that raises right away
+   — typically because its GitHub identity is the PR author's own, which GitHub refuses to let approve
+   — stops nothing:
+   report the reason and continue under human review.
+
 {{end}}
 
 ### 15. React to review events
