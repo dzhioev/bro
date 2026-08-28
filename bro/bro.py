@@ -19,7 +19,7 @@ from bro.llm.llm import EFFORT_LEVELS, NativeLLMSpec
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
 
-DEFAULT_LLM_SPEC: NativeLLMSpec = llm_llms_openai.LLMSpec()
+DEFAULT_LLM_SPEC: NativeLLMSpec = llm_llms_openai.LLMSpec(reasoning_effort='medium')
 
 ProvisionStep = Callable[[Path], None]
 
