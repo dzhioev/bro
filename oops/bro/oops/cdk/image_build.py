@@ -20,19 +20,16 @@ class ImageBuildStack(Stack):
     config = infrastructure_config.image_build
     super().__init__(scope, config.stack_name, **kwargs)
 
-    connection = codeconnections.CfnConnection(
-      self,
-      'GitHubConnection',
-      connection_name=config.connection_name,
-      provider_type='GitHub',
-    )
-    source_credential = codebuild.CfnSourceCredential(
-      self,
-      'GitHubSourceCredential',
-      auth_type='CODECONNECTIONS',
-      server_type='GITHUB',
-      token=connection.attr_connection_arn,
-    )
+    connection_arn = config.connection_arn
+    if config.connection_name is not None:
+      connection = codeconnections.CfnConnection(
+        self,
+        'GitHubConnection',
+        connection_name=config.connection_name,
+        provider_type='GitHub',
+      )
+      connection_arn = connection.attr_connection_arn
+      CfnOutput(self, 'ConnectionARN', value=connection_arn)
 
     self.project = codebuild.Project(
       self,
@@ -42,6 +39,7 @@ class ImageBuildStack(Stack):
         owner=config.source_owner,
         repo=config.source_repository,
         webhook=False,
+        report_build_status=connection_arn is not None,
       ),
       build_spec=codebuild.BuildSpec.from_source_filename(config.buildspec_path),
       environment=codebuild.BuildEnvironment(
@@ -58,31 +56,35 @@ class ImageBuildStack(Stack):
       ),
       timeout=Duration.minutes(30),
     )
-    project_resource = self.project.node.default_child
-    assert isinstance(project_resource, codebuild.CfnProject)
-    project_resource.add_dependency(source_credential)
-
-    connection_id = Fn.select(1, Fn.split(':connection/', connection.attr_connection_arn))
-    self.project.add_to_role_policy(
-      iam.PolicyStatement(
-        actions=[
-          'codeconnections:GetConnection',
-          'codeconnections:GetConnectionToken',
-          'codestar-connections:GetConnection',
-          'codestar-connections:GetConnectionToken',
-          'codestar-connections:UseConnection',
-        ],
-        resources=[
-          connection.attr_connection_arn,
-          self.format_arn(
-            service='codestar-connections',
-            resource='connection',
-            resource_name=connection_id,
-            arn_format=ArnFormat.SLASH_RESOURCE_NAME,
-          ),
-        ],
+    if connection_arn is not None:
+      project_resource = self.project.node.default_child
+      assert isinstance(project_resource, codebuild.CfnProject)
+      # the L2 GitHub source exposes no auth property
+      project_resource.add_property_override(
+        'Source.Auth', {'Type': 'CODECONNECTIONS', 'Resource': connection_arn}
       )
-    )
+      connection_id = Fn.select(1, Fn.split(':connection/', connection_arn))
+      self.project.add_to_role_policy(
+        iam.PolicyStatement(
+          actions=[
+            'codeconnections:GetConnection',
+            'codeconnections:GetConnectionToken',
+            'codestar-connections:GetConnection',
+            'codestar-connections:GetConnectionToken',
+            'codestar-connections:UseConnection',
+          ],
+          resources=[
+            connection_arn,
+            self.format_arn(
+              service='codestar-connections',
+              resource='connection',
+              resource_name=connection_id,
+              arn_format=ArnFormat.SLASH_RESOURCE_NAME,
+            ),
+          ],
+        )
+      )
+
     self.project.add_to_role_policy(
       iam.PolicyStatement(actions=['ecr:GetAuthorizationToken'], resources=['*'])
     )
@@ -103,5 +105,3 @@ class ImageBuildStack(Stack):
         ],
       )
     )
-
-    CfnOutput(self, 'ConnectionARN', value=connection.attr_connection_arn)

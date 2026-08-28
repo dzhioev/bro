@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 from bro.base import credentials
 
@@ -22,7 +22,8 @@ _DEFAULT_REPOSITORIES = {
 _DEFAULT_IMAGE_BUILD = {
   'stack_name': 'BroImageBuildStack',
   'project_name': 'bro-image-build',
-  'connection_name': 'bro-github',
+  'connection_name': None,
+  'connection_arn': None,
   'source_owner': 'example',
   'source_repository': 'deployment',
   'buildspec_path': 'oops/bro/oops/infra/buildspec.yml',
@@ -58,7 +59,8 @@ class RepositoryConfig:
 class ImageBuildConfig:
   stack_name: str
   project_name: str
-  connection_name: str
+  connection_name: Optional[str]
+  connection_arn: Optional[str]
   source_owner: str
   source_repository: str
   buildspec_path: str
@@ -172,10 +174,18 @@ def _repository_config(key: str, raw: Mapping[str, Any]) -> RepositoryConfig:
 
 def _image_build_config(overrides: Mapping[str, Any]) -> ImageBuildConfig:
   values = _with_defaults(_DEFAULT_IMAGE_BUILD, overrides, 'infra.oops.image_build')
+  connection_name = _nullable_string(values, 'connection_name', 'infra.oops.image_build')
+  connection_arn = _nullable_string(values, 'connection_arn', 'infra.oops.image_build')
+  if connection_name is not None and connection_arn is not None:
+    raise ValueError(
+      'infra.oops.image_build sets both connection_name and connection_arn: '
+      'a name creates a connection, an arn adopts an existing one'
+    )
   return ImageBuildConfig(
     stack_name=_required_string(values, 'stack_name', 'infra.oops.image_build'),
     project_name=_required_string(values, 'project_name', 'infra.oops.image_build'),
-    connection_name=_required_string(values, 'connection_name', 'infra.oops.image_build'),
+    connection_name=connection_name,
+    connection_arn=connection_arn,
     source_owner=_required_string(values, 'source_owner', 'infra.oops.image_build'),
     source_repository=_required_string(values, 'source_repository', 'infra.oops.image_build'),
     buildspec_path=_required_string(values, 'buildspec_path', 'infra.oops.image_build'),
@@ -206,7 +216,7 @@ def _trails_config(overrides: Mapping[str, Any]) -> TrailsConfig:
 
 
 def _with_defaults(
-  defaults: Mapping[str, str], overrides: Mapping[str, Any], path: str
+  defaults: Mapping[str, Any], overrides: Mapping[str, Any], path: str
 ) -> Mapping[str, Any]:
   _reject_unknown(overrides, set(defaults), path)
   return {**defaults, **overrides}
@@ -230,6 +240,12 @@ def _required_string(raw: Mapping[str, Any], key: str, path: str) -> str:
   if not isinstance(value, str) or value == '':
     raise ValueError(f'{path}.{key} must be a non-empty string')
   return value
+
+
+def _nullable_string(raw: Mapping[str, Any], key: str, path: str) -> Optional[str]:
+  if raw.get(key) is None:
+    return None
+  return _required_string(raw, key, path)
 
 
 def _optional_string(raw: Mapping[str, Any], key: str, default: str, path: str) -> str:
