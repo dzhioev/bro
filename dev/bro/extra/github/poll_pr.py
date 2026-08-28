@@ -1,5 +1,16 @@
 #!/usr/bin/env python
-"""poll a GitHub PR for merge status, merge conflicts, failing checks, new comments, and new reviews."""
+"""poll a GitHub PR for merge status, merge conflicts, failing checks, pushes,
+new comments, and new reviews.
+
+Comment and review events fire for the parties to the PR's review — the PR
+author, the repo owner, and anyone who has posted a review on the PR — minus
+`--self` (the watcher's own login, defaulting to the PR author). Reviewing
+admits a login to the parties, so the same watch serves both sides of a review:
+the author's watch hears whoever starts reviewing, and a reviewer's watch
+(`--self <reviewer>`) hears the author's replies — including an author that is
+a bot account, which is why there is no blanket bot filter: a bot that never
+reviews is not a party and stays silent anyway.
+"""
 
 import contextlib
 import http.client
@@ -94,10 +105,16 @@ def emit_cycle(
   token: str,
   seen_comment_ids: set[int],
   seen_review_ids: set[int],
-  is_actionable: Callable[[str], bool],
+  parties: set[str],
+  self_login: str,
   emit: Callable[[dict[str, Any]], None],
 ) -> None:
   """one polling cycle over comments and reviews, emitting what it finds.
+
+  a comment or review fires when its author is in `parties` and is not
+  `self_login`. posting a review admits the author to `parties`, and reviews
+  are processed before comments so a first-time reviewer's comments fire in
+  the same cycle as the review that admitted them.
 
   mutates `seen_comment_ids` / `seen_review_ids` so subsequent cycles skip
   what was already emitted; an id is marked only once its event is out, so a
@@ -108,23 +125,21 @@ def emit_cycle(
   APPROVED review with an attached "ship after fix" comment would otherwise
   emit as a comment-less APPROVED on one cycle and the comment on the next.
   """
-  for c in _fetch_issue_comments(owner, repo, pr, token):
-    if c['id'] in seen_comment_ids:
-      continue
-    if is_actionable(c.get('user', {}).get('login', '')):
-      emit(_comment_event(c))
-    seen_comment_ids.add(c['id'])
+
+  def actionable(login: str) -> bool:
+    return login != self_login and login in parties
 
   for r in _fetch_reviews(owner, repo, pr, token):
+    login = r.get('user', {}).get('login', '')
+    parties.add(login)
     if r['id'] in seen_review_ids:
       continue
-    login = r.get('user', {}).get('login', '')
     # fetch inline comments AFTER seeing the review so the window in which a
     # comment isn't yet indexed is as small as possible. mark them seen even
     # if the review's author is not actionable — we don't want them to fire
     # as standalone comment events on a later cycle.
     inline = _fetch_review_inline_comments(owner, repo, pr, r['id'], token)
-    if is_actionable(login):
+    if actionable(login):
       emit(
         {
           'event': 'review',
@@ -139,13 +154,20 @@ def emit_cycle(
     seen_review_ids.add(r['id'])
     seen_comment_ids.update(c['id'] for c in inline)
 
+  for c in _fetch_issue_comments(owner, repo, pr, token):
+    if c['id'] in seen_comment_ids:
+      continue
+    if actionable(c.get('user', {}).get('login', '')):
+      emit(_comment_event(c))
+    seen_comment_ids.add(c['id'])
+
   # any inline review comments not bundled with a review fire standalone —
   # covers replies to existing review threads and comments that became
   # visible after the per-review fetch above.
   for c in _fetch_review_comments(owner, repo, pr, token):
     if c['id'] in seen_comment_ids:
       continue
-    if is_actionable(c.get('user', {}).get('login', '')):
+    if actionable(c.get('user', {}).get('login', '')):
       emit(_comment_event(c))
     seen_comment_ids.add(c['id'])
 
@@ -166,6 +188,22 @@ class ConflictTracker:
     if mergeable is True:
       self._conflicted = False
     return False
+
+
+class HeadTracker:
+  """edge-triggered head-movement detection over the PR's head sha: `update`
+  returns the sha once when it differs from the last one seen, and treats a
+  missing sha as no information."""
+
+  def __init__(self, sha: Optional[str]):
+    self._sha = sha
+
+  def update(self, sha: Optional[str]) -> Optional[str]:
+    if sha is None or sha == self._sha:
+      return None
+    moved = self._sha is not None
+    self._sha = sha
+    return sha if moved else None
 
 
 class CheckTracker:
@@ -285,6 +323,7 @@ def poll_pr(
 ) -> int:
   seen_comment_ids: set[int] = set()
   seen_review_ids: set[int] = set()
+  parties: set[str] = set()
   conflicts = ConflictTracker()
   checks = CheckTracker()
   sources = FailureTracker(failure_grace)
@@ -294,8 +333,14 @@ def poll_pr(
     # a watch that starts without it would replay the whole PR as new events
     with _watch_failure('baseline'):
       startup_token = token()
-      repo_owner_login = _owner_login(owner, repo, startup_token)
-      log.info(f'repo owner: {repo_owner_login}')
+      pr_data = _fetch_pr(owner, repo, pr, startup_token)
+      author_login = pr_data['user']['login']
+      head = HeadTracker(pr_data.get('head', {}).get('sha'))
+      if self_login is None:
+        self_login = author_login
+        log.info(f'self: {self_login} (the PR author)')
+      parties.add(author_login)
+      parties.add(_owner_login(owner, repo, startup_token))
 
       for comments in (
         _fetch_issue_comments(owner, repo, pr, startup_token),
@@ -305,16 +350,11 @@ def poll_pr(
           seen_comment_ids.add(c['id'])
       for r in _fetch_reviews(owner, repo, pr, startup_token):
         seen_review_ids.add(r['id'])
+        parties.add(r.get('user', {}).get('login', ''))
       log.info(
-        f'existing comments: {len(seen_comment_ids)}, existing reviews: {len(seen_review_ids)}'
+        f'existing comments: {len(seen_comment_ids)}, existing reviews: {len(seen_review_ids)}, '
+        f'parties: {sorted(parties)}'
       )
-
-    def is_actionable(login: str) -> bool:
-      if self_login is not None and login == self_login:
-        return False
-      if login.endswith('[bot]'):
-        return False
-      return login == repo_owner_login
 
     while True:
       # re-read per cycle so a short-lived minted credential stays fresh across
@@ -331,16 +371,13 @@ def poll_pr(
           _emit({'event': 'closed', 'pr': pr})
           return 1
 
-        # derived here rather than at startup so the derivation rides the loop's
-        # transient-error tolerance
-        if self_login is None:
-          self_login = pr_data['user']['login']
-          log.info(f'self: {self_login} (the PR author)')
-
         if conflicts.update(pr_data.get('mergeable')):
           _emit({'event': 'conflicts', 'pr': pr})
 
         head_sha = pr_data.get('head', {}).get('sha')
+        moved_to = head.update(head_sha)
+        if moved_to is not None:
+          _emit({'event': 'pushed', 'pr': pr, 'head': moved_to})
         if head_sha is not None:
           check_runs = sources.probe(
             'checks', _fetch_check_runs, owner, repo, head_sha, cycle_token
@@ -359,7 +396,8 @@ def poll_pr(
         cycle_token,
         seen_comment_ids,
         seen_review_ids,
-        is_actionable,
+        parties,
+        self_login,
         _emit,
       )
 
@@ -393,7 +431,7 @@ def _token_provider(credential: str) -> Callable[[], str]:
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(
     description='poll a GitHub PR for merge status, merge conflicts, failing checks, '
-    'new comments, and new reviews'
+    'pushes, new comments, and new reviews'
   )
   parser.add_argument(
     'repo', type=_owner_repo, metavar='owner/repo', help='target repo (e.g. owner/repository)'
@@ -415,7 +453,8 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument(
     '--self',
     dest='self_login',
-    help='login to filter out (your own comments); defaults to the PR author',
+    help='login whose events to filter out (your own); defaults to the PR author — '
+    'a reviewer-side watch passes its own login instead',
   )
   namespace = parser.parse(argv)
   owner, repo = namespace['repo']
