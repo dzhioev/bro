@@ -131,8 +131,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   **LLM spec.**
   `llm_spec` is a class-level attribute holding the bro's `NativeLLMSpec`
   — a provider-specific frozen dataclass (e.g. `bro.llm.llms.openai.LLMSpec` with typed `model`, `reasoning_effort`, `service_tier`) that carries the knobs the LLM accepts and validates them in `__post_init__`.
-  Default is a bare `openai.LLMSpec()`
-  — its own default model, no reasoning effort, no service tier;
+  Default is `DEFAULT_LLM_SPEC`, an `openai.LLMSpec`;
   each bro overrides the whole spec at class level.
   Construction-time overrides go through `BaseBro.create(spec)`
   — it instantiates the class then replaces `llm_spec`, so subclass constructors never have to forward anything.

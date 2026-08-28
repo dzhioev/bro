@@ -84,7 +84,7 @@ class TestFormatCard:
 
   @pytest.mark.asyncio
   async def test_identity_omits_reasoning_effort_when_none(self):
-    card = await format_card(_MinimalBro())
+    card = await format_card(_MinimalBro.create(llm_llms_openai.LLMSpec()))
     assert 'reasoning effort' not in card
 
   @pytest.mark.asyncio
