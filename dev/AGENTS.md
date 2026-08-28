@@ -40,7 +40,7 @@ build the wheel with `uv build --package bro-dev`.
   its provisioning declaration installs the commit hooks
 - `bros/eyebro/` — code reviewer with the `review-diff` (revision/branch → findings list) and `review-pr` (drive a PR to a verdict through `poll-pr`) spells.
   It derives from `Bro`, not `Dev`, so the author-side spells stay out of its roster
-- `bros/lead/` — coordinator persona and `run-feature` spell
+- `bros/lead/` — coordinator persona and `orchestrate` spell
 - `bros/terminal/` — standalone container developer, directly derived from `BaseBro`
 - `bros/analyst/` — trail-analysis persona and machinery.
   It mounts the Dev toolset and declares the same commit-hook provisioning;

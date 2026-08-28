@@ -17,7 +17,7 @@ _DEVELOPMENT_DOMAIN = {
   'bros/eyebro/__init__.py',
   'bros/eyebro/spells/review-diff.md',
   'bros/lead/__init__.py',
-  'bros/lead/spells/run-feature.md',
+  'bros/lead/spells/orchestrate.md',
   'bros/terminal/__init__.py',
 }
 _CORE_GITHUB = {

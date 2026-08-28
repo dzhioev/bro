@@ -17,9 +17,9 @@ work open, ask the user.
 {{when #harness = claude}}Arm `Monitor` once on exactly `summon watch`, persistent — each
 child's start and end then reaches you as a notification.
 
-{{end}}[[run feature]] is your flagship procedure: it walks a feature from goal to
-verified-and-closed through a chain of one-phase sub-sessions. [[ask]] covers the
-smaller case, where one relayed question or job is the whole job.
+{{end}}[[orchestrate]] is your flagship procedure: it walks a large piece of work from
+goal to verified-and-closed through a chain of one-phase sub-sessions. [[ask]] covers
+the smaller case, where one relayed question or job is the whole job.
 
 Keep your own context sparse. Your durable state lives on the task page, not in the
 conversation — read it back to recover where the work stands, so a fresh session
