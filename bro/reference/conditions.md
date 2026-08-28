@@ -102,14 +102,24 @@ The facts triple a conditioning surface knows, exported by `bro/mcp.py` as ready
 - `creds` — the set of secrets the environment resolves.
   The supplied universe is closed (the registry's known names) and membership probes `bro.base.credentials.available` lazily
 
-One more fact sits outside the triple:
+Two more facts sit outside the triple.
+
+`may_summon` — the session's effective summon allow-list, as its launch fixed it
+(`bro.summon.effective_may_summon()` off `RIDE_MAY_SUMMON`, an unpublished list collapsed to empty).
+The session-level text surfaces
+— prompt composition, spell bodies, ride's append prompt
+— supply it, so a spell can gate a delegation branch on a target being summonable:
+`{{when #may_summon contains eyebro}}`.
+The universe is the installed persona names plus the list itself, so a typo'd target fails every render while a granted-but-uninstalled one still tests.
+No ready-made placeholder is exported.
+
 `hold` — the session's user-involvement level (`unattended | detached | attended | guided`, the domain is `bro.mcp.HOLDS`).
 It is supplied only when rendering the hold text (`bro.prompts.hold_fragment` → `render_text(hold=…)`), never by the general conditioning surfaces, so hold-neutral text
 — spells, procedure docs
 — fails fast on a stray `#hold` directive.
 No ready-made placeholder is exported.
 
-`bro.mcp.select(entries, harness=…, wire=…, creds=…)` owns the facts-to-variables mapping for declarative lists (`bro.mcp.render_text` is its sibling for text — see `bro/reference/template.md`).
+`bro.mcp.select(entries, harness=…, wire=…, creds=…, may_summon=…)` owns the facts-to-variables mapping for declarative lists (`bro.mcp.render_text` is its sibling for text — see `bro/reference/template.md`).
 Both accept `extra` — a caller-owned vocabulary merged next to the facts (bro features, below).
 A fact the surface doesn't know defines no variable, so a condition referencing it raises.
 Select in the process that consumes the result, where the credential store is the session's own.

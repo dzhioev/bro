@@ -5,6 +5,7 @@ from bro import spells as spell_store
 from bro.base.condition import SetVariable
 from bro.dev import references
 from bro.spells import load_spell
+from bro.summon import MAY_SUMMON_ENV
 from bros.dev import Dev
 
 
@@ -59,15 +60,30 @@ def test_development_spells_render_for_every_surface():
     for harness in get_args(mcp.Harness):
       for wire in get_args(mcp.Wire):
         for enabled in (True, False):
-          mcp.render_text(
-            spell.body,
-            harness=harness,
-            wire=wire,
-            creds=spell_store.credentials.known_names(),
-            extra={
-              'features': SetVariable(
-                lambda name, on=enabled: on,
-                universe=feature_names,
-              )
-            },
-          )
+          for granted in (('eyebro',), ()):
+            mcp.render_text(
+              spell.body,
+              harness=harness,
+              wire=wire,
+              creds=spell_store.credentials.known_names(),
+              may_summon=granted,
+              extra={
+                'features': SetVariable(
+                  lambda name, on=enabled: on,
+                  universe=feature_names,
+                )
+              },
+            )
+
+
+def test_run_pr_hands_review_to_a_granted_eyebro(monkeypatch):
+  bro = _TrackerDev()
+  solo = bro.get_spell_body('run-pr', harness='claude', wire='mcp')
+  assert 'Hand the review to the eyebro' not in solo
+  assert 'Pre-review by the eyebro' not in solo
+  assert 'State the verdict as visible output' in solo
+  monkeypatch.setenv(MAY_SUMMON_ENV, 'eyebro')
+  granted = bro.get_spell_body('run-pr', harness='claude', wire='mcp')
+  assert 'Hand the review to the eyebro' in granted
+  assert 'Pre-review by the eyebro' in granted
+  assert 'State the verdict as visible output' not in granted

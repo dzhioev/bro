@@ -187,6 +187,13 @@ def may_summon() -> Optional[tuple[str, ...]]:
   return tuple(name for name in raw.split(',') if len(name) > 0)
 
 
+def effective_may_summon() -> tuple[str, ...]:
+  """the summon allow-list as a rendering fact (`#may_summon`): the published
+  list, with an unpublished one collapsed to empty — a run whose launcher
+  published no list should plan no delegation."""
+  return may_summon() or ()
+
+
 def summoned_by_from_env() -> Optional[dict[str, Any]]:
   """this run's `summoned_by` trail provenance, read off `SUMMONER_ENV` — None
   when the run was not summoned or its summoner published no trail yet.

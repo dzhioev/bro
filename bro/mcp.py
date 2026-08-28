@@ -63,6 +63,7 @@ def render_text(
   harness: Optional[Harness] = None,
   wire: Optional[Wire] = None,
   creds: Optional[Iterable[str]] = None,
+  may_summon: Optional[Iterable[str]] = None,
   hold: Optional[str] = None,
   extra: Optional[condition.Variables] = None,
 ) -> str:
@@ -71,7 +72,10 @@ def render_text(
   the call site knows: `harness` → `#harness`, `wire` → `#wire`, `creds` →
   `#creds` (the closed universe; membership probes `credentials.available`
   lazily, so render in the process that consumes the text, where the store is
-  the session's own), `hold` → `#hold` (hold text only — supplied by
+  the session's own), `may_summon` → `#may_summon` (the session's effective
+  summon allow-list — `bro.summon.effective_may_summon()`; the universe adds
+  the installed persona names, so a granted-but-uninstalled target still
+  tests), `hold` → `#hold` (hold text only — supplied by
   `bro.prompts.hold_fragment`, no other call site). A fact left None defines no
   variable, so a directive referencing it raises. `extra` merges a
   caller-owned domain vocabulary next to the facts (same shape as
@@ -84,7 +88,9 @@ def render_text(
   """
   if '{{' not in text:
     return text
-  variables = surface_variables(harness=harness, wire=wire, creds=creds, hold=hold)
+  variables = surface_variables(
+    harness=harness, wire=wire, creds=creds, may_summon=may_summon, hold=hold
+  )
   if extra is not None:
     variables.update(extra)
   return template.render(text, variables, _load_prompt)
@@ -102,6 +108,7 @@ def select[T](
   harness: Optional[Harness] = None,
   wire: Optional[Wire] = None,
   creds: Optional[Iterable[str]] = None,
+  may_summon: Optional[Iterable[str]] = None,
   extra: Optional[condition.Variables] = None,
 ) -> list[T]:
   """resolve the `bro.base.condition` wrappers (`when` / `iff`) in a declarative
@@ -109,10 +116,19 @@ def select[T](
   None defines no variable, so a condition referencing it raises. `extra`
   merges a caller-owned domain vocabulary next to the facts, as in
   `render_text`. The conditioning reference is `reference/conditions.md`."""
-  variables = surface_variables(harness=harness, wire=wire, creds=creds)
+  variables = surface_variables(harness=harness, wire=wire, creds=creds, may_summon=may_summon)
   if extra is not None:
     variables.update(extra)
   return condition.select(entries, variables)
+
+
+@functools.cache
+def _persona_names() -> frozenset[str]:
+  # lazy: keeps this layer import-free of the bro class graph (the registry
+  # reads entry-point metadata only, importing no bro module)
+  from bro import registry
+
+  return frozenset(registry.declared_specs())
 
 
 def surface_variables(
@@ -120,6 +136,7 @@ def surface_variables(
   harness: Optional[Harness] = None,
   wire: Optional[Wire] = None,
   creds: Optional[Iterable[str]] = None,
+  may_summon: Optional[Iterable[str]] = None,
   hold: Optional[str] = None,
 ) -> dict[str, condition.StringVariable | condition.SetVariable | bool]:
   """the harness facts as a `Variables` mapping — what `render_text` / `select`
@@ -137,6 +154,9 @@ def surface_variables(
     variables['wire'] = condition.StringVariable(wire, domain=_WIRES)
   if creds is not None:
     variables['creds'] = condition.SetVariable(credentials.available, universe=frozenset(creds))
+  if may_summon is not None:
+    members = frozenset(may_summon)
+    variables['may_summon'] = condition.SetVariable(members, universe=members | _persona_names())
   if hold is not None:
     if hold not in _HOLDS:
       raise ValueError(f'unknown hold {hold!r}; known: {", ".join(HOLDS)}')

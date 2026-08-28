@@ -73,6 +73,25 @@ class TestRenderText:
     assert render_text(text, hold='unattended') == 'U'
     assert render_text(text, hold='guided') == 'other'
 
+  def test_may_summon_membership_is_the_supplied_list(self):
+    text = '{{when #may_summon contains bro}}delegate{{end}}'
+    assert render_text(text, may_summon=['bro']) == 'delegate'
+    # 'bro' is an installed persona (the core entry point), so testing it
+    # against an empty list reads as absent rather than raising
+    assert render_text(text, may_summon=[]) == ''
+
+  def test_may_summon_universe_admits_a_granted_but_uninstalled_target(self):
+    text = '{{when #may_summon contains ghost-bro}}delegate{{end}}'
+    assert render_text(text, may_summon=['ghost-bro']) == 'delegate'
+
+  def test_may_summon_outside_the_universe_raises(self):
+    with pytest.raises(ValueError, match='universe'):
+      render_text('{{when #may_summon contains not-a-bro}}x{{end}}', may_summon=['bro'])
+
+  def test_absent_may_summon_raises_on_reference(self):
+    with pytest.raises(ValueError, match='unknown variable #may_summon'):
+      render_text('{{when #may_summon contains bro}}x{{end}}', harness='bro')
+
   def test_hold_undefined_outside_hold_text(self):
     # the hold fact is supplied only when rendering the hold text, so a
     # stray #hold directive in hold-neutral text fails instead of picking a side

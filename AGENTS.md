@@ -120,7 +120,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   `BaseBro` also auto-prepends every `bro/prompts/shared/*.md` to the system prompt and appends a `## Data sources` block describing each declared `DataSource`.
   When the bro has any namespaced tools or spells it also appends the tool-name rule (`bro/prompts/tool_names.md`, templated on the `#wire` scheme),
   and closes the prompt with the tool-grounding fragment (`bro/prompts/grounding.md`), whose directives render its body only into the claude-bare flavor (see `bro/prompts/AGENTS.md`).
-  Each composed flavor renders once with its surface facts (`bro.mcp.render_text`: harness `bro`, the flavor's wire, the environment's credentials)
+  Each composed flavor renders once with its surface facts (`bro.mcp.render_text`: harness `bro`, the flavor's wire, the environment's credentials and summon allow-list)
   — the wire is where the flavors diverge:
   `system_prompt` (bro-native LLM runs) renders `bare` (`namespace::tool` resolves to the wire name `namespace__tool` the bro's tool list carries),
   while `claude_system_prompt` (what `ride solo|along --raw` passes as claude's `--system-prompt`) renders `mcp`, because there each namespace is mounted as an MCP server and the wire names are `mcp__namespace__tool`.
