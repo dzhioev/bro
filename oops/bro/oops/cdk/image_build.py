@@ -64,26 +64,40 @@ class ImageBuildStack(Stack):
         'Source.Auth', {'Type': 'CODECONNECTIONS', 'Resource': connection_arn}
       )
       connection_id = Fn.select(1, Fn.split(':connection/', connection_arn))
-      self.project.add_to_role_policy(
-        iam.PolicyStatement(
-          actions=[
-            'codeconnections:GetConnection',
-            'codeconnections:GetConnectionToken',
-            'codestar-connections:GetConnection',
-            'codestar-connections:GetConnectionToken',
-            'codestar-connections:UseConnection',
-          ],
-          resources=[
-            connection_arn,
-            self.format_arn(
-              service='codestar-connections',
-              resource='connection',
-              resource_name=connection_id,
-              arn_format=ArnFormat.SLASH_RESOURCE_NAME,
-            ),
-          ],
-        )
+      role = self.project.role
+      assert role is not None
+      # CodeBuild rejects a project whose service role cannot already reach the
+      # connection, so the grant is a policy of its own that the project waits
+      # on; the role's default policy cannot serve, since it names the project
+      # and depending on it would close a cycle
+      connection_access = iam.Policy(
+        self,
+        'ConnectionAccess',
+        statements=[
+          iam.PolicyStatement(
+            actions=[
+              'codeconnections:GetConnection',
+              'codeconnections:GetConnectionToken',
+              'codestar-connections:GetConnection',
+              'codestar-connections:GetConnectionToken',
+              'codestar-connections:UseConnection',
+            ],
+            resources=[
+              connection_arn,
+              self.format_arn(
+                service='codestar-connections',
+                resource='connection',
+                resource_name=connection_id,
+                arn_format=ArnFormat.SLASH_RESOURCE_NAME,
+              ),
+            ],
+          )
+        ],
       )
+      connection_access.attach_to_role(role)
+      connection_access_resource = connection_access.node.default_child
+      assert isinstance(connection_access_resource, iam.CfnPolicy)
+      project_resource.add_dependency(connection_access_resource)
 
     self.project.add_to_role_policy(
       iam.PolicyStatement(actions=['ecr:GetAuthorizationToken'], resources=['*'])
