@@ -13,6 +13,8 @@ def test_defaults_are_consumer_neutral():
   assert config.platform.cluster_name == 'bro-services'
   assert config.repositories['trails'].repository_name == 'bro-trails-server'
   assert config.image_build.project_name == 'bro-image-build'
+  assert config.image_build.connection_name is None
+  assert config.image_build.connection_arn is None
   assert config.image_build.image_build_script == 'oops/image_build.sh'
   assert config.trails.spillover_bucket_name == 'bro-trails-{account}'
   assert config.repository_names == ('bro-trails-server',)
@@ -123,6 +125,18 @@ def test_resolve_reads_the_infra_credential():
         'oops': {'trails': {'spillover_bucket_name': 'trails-{region}'}},
       },
       'spillover_bucket_name supports only',
+    ),
+    (
+      {
+        'delegated_subdomain': 'services.example.com',
+        'oops': {
+          'image_build': {
+            'connection_name': 'custom-github',
+            'connection_arn': 'arn:aws:codeconnections:eu-central-1:1:connection/abc',
+          }
+        },
+      },
+      'sets both connection_name and connection_arn',
     ),
   ],
 )

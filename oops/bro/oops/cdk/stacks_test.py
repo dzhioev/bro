@@ -76,22 +76,27 @@ def test_repository_stack_preserves_repository_and_output_ids(tmp_path):
   template.has_resource_properties('AWS::ECR::Repository', {'RepositoryName': 'bro-trails-server'})
 
 
+def _image_build_template(tmp_path, overrides):
+  config = from_mapping({'delegated_subdomain': _DOMAIN, 'oops': {'image_build': overrides}})
+  app = cdk.App(outdir=str(tmp_path / 'cdk.out'))
+  stack = ImageBuildStack(
+    app,
+    config,
+    env=cdk.Environment(account=_ACCOUNT, region=config.region),
+  )
+  return stack, assertions.Template.from_stack(stack)
+
+
 def test_image_build_stack_is_parameterized_and_preserves_construct_ids(tmp_path):
   _, _, _, stack = _stacks(tmp_path)
   template = assertions.Template.from_stack(stack)
 
   assert stack.stack_name == 'BroImageBuildStack'
   assert set(template.to_json()['Resources']) == {
-    'GitHubConnection',
-    'GitHubSourceCredential',
     'ImageBuildRoleAFF19194',
     'ImageBuildRoleDefaultPolicyBD902299',
     'ImageBuild30B7C98D',
   }
-  template.has_resource_properties(
-    'AWS::CodeConnections::Connection',
-    {'ConnectionName': 'bro-github', 'ProviderType': 'GitHub'},
-  )
   template.has_resource_properties(
     'AWS::CodeBuild::Project',
     {
@@ -99,7 +104,7 @@ def test_image_build_stack_is_parameterized_and_preserves_construct_ids(tmp_path
       'Source': {
         'BuildSpec': 'oops/bro/oops/infra/buildspec.yml',
         'Location': 'https://github.com/example/deployment.git',
-        'ReportBuildStatus': True,
+        'ReportBuildStatus': False,
         'Type': 'GITHUB',
       },
       'Environment': {
@@ -113,6 +118,49 @@ def test_image_build_stack_is_parameterized_and_preserves_construct_ids(tmp_path
       },
     },
   )
+
+
+def test_image_build_stack_without_an_identity_grants_no_connection_access(tmp_path):
+  _, template = _image_build_template(tmp_path, {})
+
+  assert 'Auth' not in template.to_json()['Resources']['ImageBuild30B7C98D']['Properties']['Source']
+  statements = template.to_json()['Resources']['ImageBuildRoleDefaultPolicyBD902299']['Properties'][
+    'PolicyDocument'
+  ]['Statement']
+  assert all('codeconnections:GetConnection' not in s['Action'] for s in statements)
+
+
+def test_image_build_stack_creates_the_named_connection_and_builds_as_it(tmp_path):
+  _, template = _image_build_template(tmp_path, {'connection_name': 'bro-github'})
+
+  resources = template.to_json()['Resources']
+  assert 'GitHubSourceCredential' not in resources
+  template.has_resource_properties(
+    'AWS::CodeConnections::Connection',
+    {'ConnectionName': 'bro-github', 'ProviderType': 'GitHub'},
+  )
+  source = resources['ImageBuild30B7C98D']['Properties']['Source']
+  assert source['ReportBuildStatus'] is True
+  assert source['Auth'] == {
+    'Type': 'CODECONNECTIONS',
+    'Resource': {'Fn::GetAtt': ['GitHubConnection', 'ConnectionArn']},
+  }
+
+
+def test_image_build_stack_builds_as_an_existing_connection(tmp_path):
+  arn = 'arn:aws:codeconnections:us-east-1:111111111111:connection/abc'
+  _, template = _image_build_template(tmp_path, {'connection_arn': arn})
+
+  resources = template.to_json()['Resources']
+  assert 'GitHubConnection' not in resources
+  assert resources['ImageBuild30B7C98D']['Properties']['Source']['Auth'] == {
+    'Type': 'CODECONNECTIONS',
+    'Resource': arn,
+  }
+  statements = resources['ImageBuildRoleDefaultPolicyBD902299']['Properties']['PolicyDocument'][
+    'Statement'
+  ]
+  assert any(arn in str(statement['Resource']) for statement in statements)
 
 
 def test_trails_stack_preserves_resources_and_schema(tmp_path):

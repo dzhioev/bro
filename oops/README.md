@@ -57,8 +57,10 @@ resolving them to literals instead rewrites immutable properties such as `VpcId`
 A service assertion test injects its own `PlatformHandles` fixture.
 
 `RepositoryStack` creates one configured ECR repository while preserving its configured construct id.
-`ImageBuildStack` creates the configured GitHub connection and CodeBuild project and grants pushes to every configured repository.
-The project reads the checkout-relative buildspec and image-build script paths from the same credential.
+`ImageBuildStack` creates the configured CodeBuild project, grants it pushes to every configured repository, and reads the checkout-relative buildspec and image-build script paths from the same credential.
+A private source needs a GitHub identity:
+`connection_name` has the stack create a connection, `connection_arn` points the project at one that already exists, and neither leaves a public source unauthenticated.
+The project names its connection through the source's `Auth` block rather than through a CodeBuild source credential, which is a single default per account and region and so cannot serve two image-build stacks.
 
 ## Trails service
 
