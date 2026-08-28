@@ -157,10 +157,9 @@ def test_image_build_stack_builds_as_an_existing_connection(tmp_path):
     'Type': 'CODECONNECTIONS',
     'Resource': arn,
   }
-  statements = resources['ImageBuildRoleDefaultPolicyBD902299']['Properties']['PolicyDocument'][
-    'Statement'
-  ]
-  assert any(arn in str(statement['Resource']) for statement in statements)
+  access = resources['ConnectionAccessE5344D3B']
+  assert arn in str(access['Properties']['PolicyDocument']['Statement'])
+  assert resources['ImageBuild30B7C98D']['DependsOn'] == ['ConnectionAccessE5344D3B']
 
 
 def test_trails_stack_preserves_resources_and_schema(tmp_path):
