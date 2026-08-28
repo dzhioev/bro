@@ -461,7 +461,7 @@ add tool sources as class attributes too:
   — folded into one paragraph on single spaces, so a long description breaks semantically in the file (one clause per line, for reviewable diffs) and still reaches the tool as one paragraph.
   Filename stem is canonical and validated against `name:`;
   spell and parameter names must fit the wire charset, parameter name `offset` is reserved, and malformed declarations fail at load.
-  Spell names are imperative verb phrases (`fix`, `land`, `run-pr`, `run-feature`), kebab-cased when multi-word.
+  Spell names are imperative verb phrases (`fix`, `land`, `run-pr`, `orchestrate`), kebab-cased when multi-word.
   Prose that refers to *running* one
   — in a spell, a prompt, or a doc
   — marks it `[[…]]`, hyphens as spaces and the phrasing fitted to the sentence (`hand off to [[run pr]]`, `blocks [[land]] later`);

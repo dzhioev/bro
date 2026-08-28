@@ -31,7 +31,7 @@ Passed values appear in the `# Arguments` section appended by the spell tool:
 - `base` — base the PR on this branch instead of `master`:
   rebase onto it (step 7), fold against it (step 8), scope the commit list against it (steps 4, 10), and pass `--base <branch>` to `gh pr create` (step 12).
   Default `master`.
-  A coordinator driving a multi-stage feature passes the feature integration branch here so each stage opens its PR into the feature branch rather than master.
+  A coordinator driving multi-stage work passes its integration branch here so each stage opens its PR into that branch rather than master.
   Below, `<base>` means this value.
 - `pr` — re-entry mode for an existing PR URL or number (typically after a previous session died mid-review).
   Skip the normal workflow and follow "Re-entry: PR already open" below.
