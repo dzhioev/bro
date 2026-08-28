@@ -20,6 +20,21 @@ def test_defaults_are_consumer_neutral():
   assert config.repository_names == ('bro-trails-server',)
 
 
+def test_a_shipped_repository_keeps_the_fields_its_entry_does_not_name():
+  shipped = from_mapping({'delegated_subdomain': 'services.example.com'}).trails_repository
+
+  config = from_mapping(
+    {
+      'delegated_subdomain': 'services.example.com',
+      'oops': {'repositories': {'trails': {'stack_name': 'LegacyTrailsECRStack'}}},
+    }
+  )
+
+  assert config.trails_repository.stack_name == 'LegacyTrailsECRStack'
+  assert config.trails_repository.repository_name == shipped.repository_name
+  assert config.trails_repository.repository_construct_id == shipped.repository_construct_id
+
+
 def test_account_names_are_resolved_from_the_infra_namespace():
   raw = {
     'delegated_subdomain': 'apps.example.net',
@@ -118,6 +133,13 @@ def test_resolve_reads_the_infra_credential():
         },
       },
       "infra.oops.trails.repository names unknown repository 'trails'",
+    ),
+    (
+      {
+        'delegated_subdomain': 'services.example.com',
+        'oops': {'repositories': {'api': {'stack_name': 'APIRepository'}}},
+      },
+      'infra.oops.repositories.api.repository_name is required',
     ),
     (
       {

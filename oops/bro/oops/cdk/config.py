@@ -158,17 +158,13 @@ def _repository_configs(raw: Mapping[str, Any]) -> Mapping[str, RepositoryConfig
 
 
 def _repository_config(key: str, raw: Mapping[str, Any]) -> RepositoryConfig:
-  _reject_unknown(
-    raw,
-    {'stack_name', 'repository_name', 'repository_construct_id'},
-    f'infra.oops.repositories.{key}',
-  )
+  path = f'infra.oops.repositories.{key}'
+  _reject_unknown(raw, {'stack_name', 'repository_name', 'repository_construct_id'}, path)
+  values = {**_DEFAULT_REPOSITORIES.get(key, {}), **raw}
   return RepositoryConfig(
-    stack_name=_required_string(raw, 'stack_name', f'infra.oops.repositories.{key}'),
-    repository_name=_required_string(raw, 'repository_name', f'infra.oops.repositories.{key}'),
-    repository_construct_id=_required_string(
-      raw, 'repository_construct_id', f'infra.oops.repositories.{key}'
-    ),
+    stack_name=_required_string(values, 'stack_name', path),
+    repository_name=_required_string(values, 'repository_name', path),
+    repository_construct_id=_required_string(values, 'repository_construct_id', path),
   )
 
 
