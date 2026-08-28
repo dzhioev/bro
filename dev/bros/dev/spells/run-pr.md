@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 5.1.0
+version: 5.2.0
 ---
 
 # run-pr
@@ -395,8 +395,11 @@ poll-pr <owner>/<repo> <pr_number>
   — a status check on the PR's head commit concluded as a failure.
   Fires once per red episode
   — it re-arms only after nothing is failing again (a re-run that goes green, or a new push).
+- `{"event": "pushed", "pr": N, "head": "..."}`
+  — the PR's head moved to a new commit.
 - `{"event": "comment", "id": N, "user": "...", "body": "...", "path": "...", "url": "..."}`
-  — new comment from the repo owner (bot and self filtered out).
+  — new comment from a party to the review:
+  the PR author, the repo owner, or anyone with a review on the PR (self filtered out — a reviewing session hears the author this way).
   Standalone inline review comments (replies to existing review threads) fire here;
   inline comments attached to a fresh review are bundled into the `review` event instead.
 - `{"event": "review", "id": N, "user": "...", "state": "APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED", "body": "...", "url": "...", "comments": [{"id": N, "path": "...", "line": N, "body": "...", "url": "..."}]}`
@@ -517,6 +520,12 @@ gates (step 2), a new commit (steps 5–6), step 15's narrow verification, the r
 Report the failure and your fix to the user;
 never wait for it to disappear on a re-run you didn't trigger, and never land around it
 — `land-pr` refuses a failed check anyway.
+
+**`pushed` event**:
+usually your own push of review fixes echoing back — nothing to do.
+One you didn't cause means someone else pushed to the PR branch (typically the user amending it directly):
+`git fetch origin` and reset your local branch onto the pushed head before your next commit
+— continuing from the stale head would discard their commits on your next force-with-lease push.
 
 **`conflicts` event**:
 rerun step 7 — the rebase, the in-band resolution default, the escalation bar, and the task comment all apply unchanged
