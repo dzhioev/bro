@@ -38,6 +38,8 @@ build the wheel with `uv build --package bro-dev`.
 - `bros/dev/` — generic developer with the file/shell/search toolset and the audit, credential-wiring, task, PR, and landing spells.
   Its optional `brog` feature mounts tracker tooling;
   its provisioning declaration installs the commit hooks
+- `bros/eyebro/` — code reviewer with the `review-diff` (revision/branch → findings list) and `review-pr` (drive a PR to a verdict through `poll-pr`) spells.
+  It derives from `Bro`, not `Dev`, so the author-side spells stay out of its roster
 - `bros/lead/` — coordinator persona and `run-feature` spell
 - `bros/terminal/` — standalone container developer, directly derived from `BaseBro`
 - `bros/analyst/` — trail-analysis persona and machinery.

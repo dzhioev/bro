@@ -4,8 +4,8 @@
 
 - repository utilities and commit-accounting workflow (`bro.dev`, `bro.workflow`)
 - the `poll-pr` GitHub review watcher
-- the `dev`, `lead`, `terminal`, and `analyst` personas and their spells
-- the development style reference mounted by Dev
+- the `dev`, `eyebro`, `lead`, `terminal`, and `analyst` personas and their spells
+- the development style reference mounted by Dev and Eyebro
 
 Install it in a repository's development dependency group and run `uv sync`.
 Call `bro.dev.install` from the repository's `setup.sh` after activating the venv to install the commit-footer hooks and local `git golc` alias.
