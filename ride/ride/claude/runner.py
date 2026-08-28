@@ -228,7 +228,12 @@ def run_in_place(spec: 'SessionSpec') -> int:
     # claude's MCP tool-call timeout (ms): the ~1-minute default kills
     # legitimately slow tools (vision audits, renders)
     env['MCP_TOOL_TIMEOUT'] = str(10 * 60 * 1000)
-    apply_claude_auth(env, warn_when_missing=not options(spec).raw)
+    raw = options(spec).raw
+    if not raw:
+      # claude resolves fast-mode availability from a stored OAuth credentials
+      # file, and left to guess without one reports it disabled by an organization
+      env['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK'] = '1'
+    apply_claude_auth(env, warn_when_missing=not raw)
     log.info('launching claude')
     if not summoned():
       code = _run_claude(launch.argv, env, transcripts)

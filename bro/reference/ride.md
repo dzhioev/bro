@@ -579,6 +579,8 @@ Instead, the launch provisions a container-private `.claude.json` in the workspa
   the launch aborts up front when the secret doesn't resolve, since the session's private config dir carries no OAuth file to fall back on (see "Host claude-state isolation").
   The same transform scrubs inherited `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` from the session env:
   both outrank `CLAUDE_CODE_OAUTH_TOKEN` in claude's credential precedence, so a value leaking in from the launching shell would silently hijack the session's auth.
+  Full sessions also carry `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK`, since claude resolves fast-mode availability from the credentials file they don't have
+  — left to guess, it reports fast mode as disabled by an organization.
 - `claude/settings.json` — constructed fresh each launch (not mounted from the host), holding only UX prefs (spinner verbs, reduced motion, feedback-survey opt-out),
   an explicit `enabledPlugins` opt-in for the `pyright-lsp` Python language server (the host plugin set no longer leaks in, so the container enables it itself),
   a `cleanupPeriodDays` pin keeping transcripts forever (they back the session recording), an `autoMemoryEnabled: false` opt-out of claude's default-on auto-memory,

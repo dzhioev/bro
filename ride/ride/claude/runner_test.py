@@ -203,6 +203,19 @@ class TestRunInPlace:
       assert ride_runner.run_in_place(_spec()) == 0
       assert h.run_claude.call_args.args[1]['MCP_TOOL_TIMEOUT'] == '600000'
 
+  def test_full_session_skips_claudes_fast_mode_org_check(self, monkeypatch, tmp_path):
+    # pins the name claude itself reads
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      assert ride_runner.run_in_place(_spec()) == 0
+      assert h.run_claude.call_args.args[1]['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK'] == '1'
+
+  def test_raw_session_keeps_claudes_fast_mode_org_check(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      assert ride_runner.run_in_place(_spec(bro='dev', raw=True)) == 0
+      assert 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK' not in h.run_claude.call_args.args[1]
+
   def test_host_session_provisions_and_exports_the_claude_config_dir(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
