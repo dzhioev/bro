@@ -44,7 +44,8 @@ def test_the_workflow_matrix_names_every_gate_stage():
 
 @pytest.fixture
 def repository(monkeypatch, tmp_path):
-  """a checkout whose roster covers both halves of the --changed rule."""
+  """a checkout the whole --changed deduction runs over: a roster covering both
+  halves of its rule, and a nested project only part of the tree reaches."""
 
   def write(path: str, text: str = '') -> None:
     full = tmp_path / path
@@ -60,6 +61,8 @@ def repository(monkeypatch, tmp_path):
   write('thing/elsewhere.py')
   write('thing/elsewhere_test.py', 'from thing import elsewhere\n')
   write('thing/policy_test.py', 'import json\n')
+  write(f'{run_tests.BENCHMARK}/pyproject.toml', '[project]\nname = "probe-benchmark"\n')
+  write(f'{run_tests.BENCHMARK}/bro/benchmark/job.py', 'from thing import store\n')
   for command in (
     ('git', 'init', '-b', 'main'),
     ('git', 'config', 'user.email', 'gate@example.com'),
@@ -79,13 +82,21 @@ def repository(monkeypatch, tmp_path):
       'thing/policy_test.py',
     ],
   )
+  monkeypatch.setattr(
+    run_tests,
+    'DISTRIBUTIONS',
+    [
+      run_tests.Distribution(directory=directory, deptry_exclude=(), deptry_known_first_party=())
+      for directory in ('.', run_tests.BENCHMARK)
+    ],
+  )
   return tmp_path
 
 
 def test_a_change_selects_the_tests_that_reach_it(repository):
   (repository / 'thing/store.py').write_text('CHANGED = 1\n')
 
-  assert run_tests.reachable_roster('main') == [
+  assert run_tests.select('main').roster == [
     'thing/store_test.py',
     'thing/api_test.py',
     'thing/policy_test.py',
@@ -95,10 +106,67 @@ def test_a_change_selects_the_tests_that_reach_it(repository):
 def test_a_test_module_with_no_source_module_of_its_own_always_runs(repository):
   (repository / 'thing/elsewhere.py').write_text('CHANGED = 1\n')
 
-  selected = run_tests.reachable_roster('main')
+  selected = run_tests.select('main').roster
 
   assert 'thing/policy_test.py' in selected
   assert 'thing/store_test.py' not in selected
+
+
+def test_lint_covers_the_innermost_project_holding_the_change(repository):
+  (repository / f'{run_tests.BENCHMARK}/bro/benchmark/job.py').write_text('CHANGED = 1\n')
+
+  selection = run_tests.select('main')
+
+  assert [distribution.directory for distribution in selection.distributions] == [
+    run_tests.BENCHMARK
+  ]
+
+
+def test_lint_covers_the_root_for_a_change_no_nested_project_holds(repository):
+  (repository / 'thing/store.py').write_text('CHANGED = 1\n')
+
+  selection = run_tests.select('main')
+
+  assert [distribution.directory for distribution in selection.distributions] == ['.']
+
+
+def test_a_change_the_benchmark_project_imports_keeps_its_stage(repository):
+  (repository / 'thing/store.py').write_text('CHANGED = 1\n')
+
+  assert run_tests.select('main').dropped == frozenset()
+
+
+def test_a_change_the_benchmark_project_cannot_reach_drops_its_stage(repository):
+  (repository / 'thing/elsewhere.py').write_text('CHANGED = 1\n')
+
+  assert run_tests.select('main').dropped == frozenset({'benchmark'})
+
+
+def test_a_project_metadata_change_keeps_the_benchmark_stage(repository):
+  (repository / 'pyproject.toml').write_text('[tool.uv.workspace]\nmembers = ["member", "other"]\n')
+
+  assert run_tests.select('main').dropped == frozenset()
+
+
+def test_a_dropped_stage_reads_skipped_in_the_verdict(monkeypatch, capsys):
+  ran = []
+  monkeypatch.setattr(
+    run_tests,
+    'STAGES',
+    [
+      run_tests.Stage('types', lambda: ran.append('types')),
+      run_tests.Stage('benchmark', lambda: ran.append('benchmark')),
+    ],
+  )
+  monkeypatch.setattr(
+    run_tests,
+    'select',
+    lambda base: run_tests.Selection(roster=(), distributions=(), dropped=frozenset({'benchmark'})),
+  )
+
+  assert run_tests.main(['run-tests', '--changed']) is None
+  assert ran == ['types']
+  assert 'gate: types ok | benchmark skipped' in capsys.readouterr().err
 
 
 def test_every_selected_stage_runs_and_the_summary_reports_each(monkeypatch, capsys):

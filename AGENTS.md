@@ -38,8 +38,13 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   both skipped when the gate itself runs inside a container.
   `--only` and `--skip` name stages, are repeatable, and are mutually exclusive.
   Every selected stage runs whatever the ones before it did, and the gate closes on a replay of each failing stage's output and a one-line verdict per stage, so one pass reports every problem the tree has.
-  `--changed` narrows the `unit` roster to the test modules a diff against `--base` (default `origin/master`) can reach through the repository's import graph (`bro.dev.affected_tests`);
-  a roster module with no source module of its own holds a repository-wide invariant and runs whatever changed.
+  `--changed` narrows the gate to what a diff against `--base` (default `origin/master`) can reach through the repository's import graph (`bro.dev.affected_tests`):
+  `unit` drops the test modules the change cannot reach
+  — a roster module with no source module of its own holds a repository-wide invariant and runs whatever changed;
+  `lint` runs `sync-scripts` and deptry only for the distributions the change lands in, leaving `ruff` repo-wide;
+  `benchmark` is skipped whole unless the change reaches something that project imports or edits any project's metadata;
+  and `types` is never narrowed, since pyright loads the dependency closure whatever file list it is given, so a shorter list hides errors instead of skipping work.
+  Each stage names the scope it ran, and a stage the narrowing drops reads `skipped` in the closing verdict rather than going missing from it.
   `run-tests --changed` is the pre-push gate;
   the whole gate is the pull request's, a runner per stage (`.github/workflows/tests.yml`, on `pull_request`, on `push` to `master`, and on `workflow_dispatch`
   — a push to a feature branch triggers nothing, so a branch that never opens a PR runs on a dispatch or not at all)

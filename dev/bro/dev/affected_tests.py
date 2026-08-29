@@ -47,8 +47,8 @@ def module_name(source_roots: Sequence[Path], path: Path) -> Optional[str]:
   return None
 
 
-def import_graph(root: Path, source_roots: Sequence[Path]) -> dict[str, set[str]]:
-  """module name → the modules that import it directly."""
+def module_names(root: Path, source_roots: Sequence[Path]) -> dict[Path, str]:
+  """every module under `root`, by the import name its source root gives it."""
   names = {}
   for path in root.rglob('*.py'):
     if SKIPPED_DIRECTORIES.intersection(path.parts):
@@ -56,6 +56,12 @@ def import_graph(root: Path, source_roots: Sequence[Path]) -> dict[str, set[str]
     name = module_name(source_roots, path)
     if name is not None:
       names[path] = name
+  return names
+
+
+def import_graph(root: Path, source_roots: Sequence[Path]) -> dict[str, set[str]]:
+  """module name → the modules that import it directly."""
+  names = module_names(root, source_roots)
   known = set(names.values())
 
   importers: dict[str, set[str]] = {}
