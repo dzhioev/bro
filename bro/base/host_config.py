@@ -70,12 +70,24 @@ _RETIRED_INSTANCES_KEY = 'instances'
 
 
 @dataclass(frozen=True)
+class UnboundKinds:
+  """The kinds a selection refuses, with the attachment key that named no
+  project entry, or None when the launch named no attachment at all."""
+
+  kinds: frozenset[str] = frozenset()
+  attachment: Optional[str] = None
+
+
+NOTHING_UNBOUND = UnboundKinds()
+
+
+@dataclass(frozen=True)
 class CredentialSelection:
   """A merged kind-to-instance selection and its host-config provenance."""
 
   instances: dict[str, Optional[str]]
   layers: dict[str, str]
-  unbound_kinds: frozenset[str] = frozenset()
+  unbound: UnboundKinds = NOTHING_UNBOUND
 
 
 @dataclass(frozen=True)
@@ -125,7 +137,7 @@ def project_selection(attachment: Optional[str]) -> CredentialSelection:
   layers = [(DEFAULTS_LAYER, config.defaults)]
   if project is not None:
     layers.append((PROJECT_LAYER, project.credentials))
-  return _merged(layers, unbound_kinds=_unbound_kinds(config, project))
+  return _merged(layers, unbound=_unbound(config, project, attachment))
 
 
 def launch_selection(attachment: Optional[str], bro: str) -> CredentialSelection:
@@ -140,7 +152,7 @@ def launch_selection(attachment: Optional[str], bro: str) -> CredentialSelection
     bro_credentials = project.bros.get(bro)
     if bro_credentials is not None:
       layers.append((PROJECT_BRO_LAYER, bro_credentials))
-  return _merged(layers, unbound_kinds=_unbound_kinds(config, project))
+  return _merged(layers, unbound=_unbound(config, project, attachment))
 
 
 def tool_selection(cli_name: Optional[str]) -> CredentialSelection:
@@ -162,29 +174,34 @@ def _matching_project(config: _Config, attachment: Optional[str]) -> Optional[_P
   return config.projects.get(_attachment_key(attachment))
 
 
-def _unbound_kinds(config: _Config, project: Optional[_Project]) -> frozenset[str]:
+def _unbound(
+  config: _Config, project: Optional[_Project], attachment: Optional[str]
+) -> UnboundKinds:
   if project is not None:
-    return frozenset()
+    return NOTHING_UNBOUND
   project_kinds = {
     kind
     for candidate in config.projects.values()
     for selection in (candidate.credentials, *candidate.bros.values())
     for kind in selection
   }
-  return frozenset(project_kinds - config.defaults.keys())
+  kinds = frozenset(project_kinds - config.defaults.keys())
+  if len(kinds) == 0:
+    return NOTHING_UNBOUND
+  return UnboundKinds(kinds, None if attachment is None else _attachment_key(attachment))
 
 
 def _merged(
   layers: list[tuple[str, dict[str, Optional[str]]]],
   *,
-  unbound_kinds: frozenset[str] = frozenset(),
+  unbound: UnboundKinds = NOTHING_UNBOUND,
 ) -> CredentialSelection:
   instances: dict[str, Optional[str]] = {}
   sources: dict[str, str] = {}
   for layer, selection in layers:
     instances.update(selection)
     sources.update(dict.fromkeys(selection, layer))
-  return CredentialSelection(instances, sources, unbound_kinds)
+  return CredentialSelection(instances, sources, unbound)
 
 
 def _projects(path: Path, value: object) -> dict[str, _Project]:

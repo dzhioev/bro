@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import credentials, log
+from bro.base.host_config import NOTHING_UNBOUND, UnboundKinds
 
 
 @dataclass(frozen=True)
@@ -24,7 +25,7 @@ class ScopedSecrets:
   required is hydrated strictly (a missing secret fails launch); optional is the
   best-effort tier (skipped when unresolvable).
 
-  unbound_kinds are the kinds this launch may not read at all: a project layer
+  unbound carries the kinds this launch may not read at all: a project layer
   selects each kind, defaults does not, and the launch bound no project entry.
   An instance grant binds the kind explicitly and satisfies that refusal.
   """
@@ -32,7 +33,7 @@ class ScopedSecrets:
   required: set[str]
   optional: set[str]
   selection: dict[str, Optional[str]] = field(default_factory=dict)
-  unbound_kinds: frozenset[str] = frozenset()
+  unbound: UnboundKinds = NOTHING_UNBOUND
 
   def __post_init__(self) -> None:
     for name in self.required | self.optional:
@@ -94,23 +95,28 @@ def finalize_scoped_secrets(
     required.discard(kind)
     optional.discard(kind)
 
-  _refuse_unbound_kinds(required | optional, scoped.unbound_kinds - instance_grants)
+  _refuse_unbound_kinds(required | optional, scoped.unbound, granted=instance_grants)
   return ScopedSecrets(
     required=required,
     optional=optional,
     selection=selection,
-    unbound_kinds=scoped.unbound_kinds,
+    unbound=scoped.unbound,
   )
 
 
-def _refuse_unbound_kinds(kinds: set[str], unbound: frozenset[str]) -> None:
-  refused = sorted(kinds & unbound)
-  if len(refused) > 0:
-    raise ValueError(
-      f'this host reads {", ".join(refused)} per project, and no project entry names this '
-      f"launch's attachment; add it to ~/.bro.json, or name the instance for this launch "
-      f'(--grant {refused[0]}+<instance>)'
-    )
+def _refuse_unbound_kinds(kinds: set[str], unbound: UnboundKinds, *, granted: set[str]) -> None:
+  refused = sorted(kinds & (unbound.kinds - granted))
+  if len(refused) == 0:
+    return
+  cause, remedy = (
+    ('this launch is detached', 'attach the project with --repo')
+    if unbound.attachment is None
+    else (f'no project entry names {unbound.attachment}', 'add it to ~/.bro.json')
+  )
+  raise ValueError(
+    f'this host reads {", ".join(refused)} per project, and {cause}; '
+    f'{remedy}, or name the instance for this launch (--grant {refused[0]}+<instance>)'
+  )
 
 
 def log_scoped_secrets(subject: str, required: Collection[str], optional: Collection[str]) -> None:

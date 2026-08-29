@@ -1,6 +1,7 @@
 import pytest
 
 import ride.workspace.store as workspace_store
+from bro.base.host_config import UnboundKinds
 
 
 class TestFinalizeScopedSecrets:
@@ -68,6 +69,20 @@ class TestFinalizeScopedSecrets:
     scoped = workspace_store.ScopedSecrets({'github'}, {'openai'})
     with pytest.raises(ValueError, match='not in the scoped credential set'):
       workspace_store.finalize_scoped_secrets(scoped, grant=[], revoke=['aws'])
+
+  def test_a_detached_launch_is_refused_an_unbound_kind_and_sent_to_repo(self):
+    scoped = workspace_store.ScopedSecrets(
+      {'brog'}, set(), unbound=UnboundKinds(frozenset({'brog'}))
+    )
+    with pytest.raises(ValueError, match='this launch is detached; attach the project with --repo'):
+      workspace_store.finalize_scoped_secrets(scoped, grant=[], revoke=[])
+
+  def test_an_unnamed_attachment_is_refused_and_named_in_the_remedy(self):
+    scoped = workspace_store.ScopedSecrets(
+      {'brog'}, set(), unbound=UnboundKinds(frozenset({'brog'}), '/repos/api')
+    )
+    with pytest.raises(ValueError, match='no project entry names /repos/api; add it to'):
+      workspace_store.finalize_scoped_secrets(scoped, grant=[], revoke=[])
 
 
 class TestLogScopedSecrets:
