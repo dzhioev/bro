@@ -4,12 +4,12 @@ new comments, and new reviews.
 
 Comment and review events fire for the parties to the PR's review — the PR
 author, the repo owner, and anyone who has posted a review on the PR — minus
-`--self` (the watcher's own login, defaulting to the PR author). Reviewing
-admits a login to the parties, so the same watch serves both sides of a review:
-the author's watch hears whoever starts reviewing, and a reviewer's watch
-(`--self <reviewer>`) hears the author's replies — including an author that is
-a bot account, which is why there is no blanket bot filter: a bot that never
-reviews is not a party and stays silent anyway.
+the account the watch's own token acts for. Reviewing admits a login to the
+parties, so the same watch serves both sides of a review: the author's watch
+hears whoever starts reviewing, and a reviewer's watch hears the author's
+replies — including an author that is a bot account, which is why there is no
+blanket bot filter: a bot that never reviews is not a party and stays silent
+anyway.
 """
 
 import contextlib
@@ -21,8 +21,8 @@ from collections.abc import Callable
 from typing import Any, Optional, TypeVar
 
 from bro.base import credentials, log
-from bro.base.args import ArgumentTypeError, Parser
-from bro.extra.github import api
+from bro.base.args import Parser
+from bro.extra.github import api, pulls
 
 __cli_name__ = 'poll-pr'
 
@@ -33,36 +33,6 @@ T = TypeVar('T')
 
 def _emit(event: dict[str, Any]) -> None:
   print(json.dumps(event), flush=True)
-
-
-def _fetch_pr(owner: str, repo: str, pr: int, token: str) -> dict[str, Any]:
-  url = f'https://api.github.com/repos/{owner}/{repo}/pulls/{pr}'
-  return api.get(url, token)
-
-
-def _fetch_issue_comments(owner: str, repo: str, pr: int, token: str) -> list[dict[str, Any]]:
-  url = f'https://api.github.com/repos/{owner}/{repo}/issues/{pr}/comments?per_page=100'
-  return api.get(url, token)
-
-
-def _fetch_review_comments(owner: str, repo: str, pr: int, token: str) -> list[dict[str, Any]]:
-  url = f'https://api.github.com/repos/{owner}/{repo}/pulls/{pr}/comments?per_page=100'
-  return api.get(url, token)
-
-
-def _fetch_reviews(owner: str, repo: str, pr: int, token: str) -> list[dict[str, Any]]:
-  url = f'https://api.github.com/repos/{owner}/{repo}/pulls/{pr}/reviews?per_page=100'
-  return api.get(url, token)
-
-
-def _fetch_review_inline_comments(
-  owner: str, repo: str, pr: int, review_id: int, token: str
-) -> list[dict[str, Any]]:
-  url = (
-    f'https://api.github.com/repos/{owner}/{repo}/pulls/{pr}/reviews/'
-    f'{review_id}/comments?per_page=100'
-  )
-  return api.get(url, token)
 
 
 def _fetch_check_runs(owner: str, repo: str, sha: str, token: str) -> list[dict[str, Any]]:
@@ -129,7 +99,7 @@ def emit_cycle(
   def actionable(login: str) -> bool:
     return login != self_login and login in parties
 
-  for r in _fetch_reviews(owner, repo, pr, token):
+  for r in pulls.reviews(owner, repo, pr, token):
     login = r.get('user', {}).get('login', '')
     parties.add(login)
     if r['id'] in seen_review_ids:
@@ -138,7 +108,7 @@ def emit_cycle(
     # comment isn't yet indexed is as small as possible. mark them seen even
     # if the review's author is not actionable — we don't want them to fire
     # as standalone comment events on a later cycle.
-    inline = _fetch_review_inline_comments(owner, repo, pr, r['id'], token)
+    inline = pulls.review_inline_comments(owner, repo, pr, r['id'], token)
     if actionable(login):
       emit(
         {
@@ -154,7 +124,7 @@ def emit_cycle(
     seen_review_ids.add(r['id'])
     seen_comment_ids.update(c['id'] for c in inline)
 
-  for c in _fetch_issue_comments(owner, repo, pr, token):
+  for c in pulls.issue_comments(owner, repo, pr, token):
     if c['id'] in seen_comment_ids:
       continue
     if actionable(c.get('user', {}).get('login', '')):
@@ -164,7 +134,7 @@ def emit_cycle(
   # any inline review comments not bundled with a review fire standalone —
   # covers replies to existing review threads and comments that became
   # visible after the per-review fetch above.
-  for c in _fetch_review_comments(owner, repo, pr, token):
+  for c in pulls.review_comments(owner, repo, pr, token):
     if c['id'] in seen_comment_ids:
       continue
     if actionable(c.get('user', {}).get('login', '')):
@@ -318,7 +288,6 @@ def poll_pr(
   pr: int,
   token: Callable[[], str],
   interval: int,
-  self_login: Optional[str],
   failure_grace: float,
 ) -> int:
   seen_comment_ids: set[int] = set()
@@ -333,22 +302,20 @@ def poll_pr(
     # a watch that starts without it would replay the whole PR as new events
     with _watch_failure('baseline'):
       startup_token = token()
-      pr_data = _fetch_pr(owner, repo, pr, startup_token)
-      author_login = pr_data['user']['login']
+      self_login = api.viewer_login(startup_token)
+      log.info(f'self: {self_login}')
+      pr_data = pulls.pull_request(owner, repo, pr, startup_token)
       head = HeadTracker(pr_data.get('head', {}).get('sha'))
-      if self_login is None:
-        self_login = author_login
-        log.info(f'self: {self_login} (the PR author)')
-      parties.add(author_login)
+      parties.add(pr_data['user']['login'])
       parties.add(_owner_login(owner, repo, startup_token))
 
       for comments in (
-        _fetch_issue_comments(owner, repo, pr, startup_token),
-        _fetch_review_comments(owner, repo, pr, startup_token),
+        pulls.issue_comments(owner, repo, pr, startup_token),
+        pulls.review_comments(owner, repo, pr, startup_token),
       ):
         for c in comments:
           seen_comment_ids.add(c['id'])
-      for r in _fetch_reviews(owner, repo, pr, startup_token):
+      for r in pulls.reviews(owner, repo, pr, startup_token):
         seen_review_ids.add(r['id'])
         parties.add(r.get('user', {}).get('login', ''))
       log.info(
@@ -360,7 +327,7 @@ def poll_pr(
       # re-read per cycle so a short-lived minted credential stays fresh across
       # a watch that outlives it
       cycle_token = token()
-      pr_data = sources.probe('pull-request', _fetch_pr, owner, repo, pr, cycle_token)
+      pr_data = sources.probe('pull-request', pulls.pull_request, owner, repo, pr, cycle_token)
 
       if pr_data is not None:
         if pr_data.get('merged'):
@@ -416,13 +383,6 @@ def poll_pr(
     return _WATCH_FAILED_EXIT
 
 
-def _owner_repo(arg: str) -> tuple[str, str]:
-  parts = arg.split('/')
-  if len(parts) != 2:
-    raise ArgumentTypeError('repo must be in owner/repo format')
-  return parts[0], parts[1]
-
-
 def _token_provider(credential: str) -> Callable[[], str]:
   # storage-addressed: the flag may name a kind or a kind+instance variant
   return lambda: credentials.default_store().get_instance(credential)
@@ -434,7 +394,10 @@ def main(argv: list[str]) -> Optional[int]:
     'pushes, new comments, and new reviews'
   )
   parser.add_argument(
-    'repo', type=_owner_repo, metavar='owner/repo', help='target repo (e.g. owner/repository)'
+    'repo',
+    type=pulls.owner_repo,
+    metavar='owner/repo',
+    help='target repo (e.g. owner/repository)',
   )
   parser.add_argument('pr', type=int, help='PR number')
   parser.add_argument(
@@ -450,12 +413,6 @@ def main(argv: list[str]) -> Optional[int]:
     default=300,
     help='seconds an event source may keep failing before the watch reports it and exits',
   )
-  parser.add_argument(
-    '--self',
-    dest='self_login',
-    help='login whose events to filter out (your own); defaults to the PR author — '
-    'a reviewer-side watch passes its own login instead',
-  )
   namespace = parser.parse(argv)
   owner, repo = namespace['repo']
   return poll_pr(
@@ -464,6 +421,5 @@ def main(argv: list[str]) -> Optional[int]:
     pr=namespace['pr'],
     token=_token_provider(namespace['credential']),
     interval=namespace['interval'],
-    self_login=namespace['self_login'],
     failure_grace=namespace['failure_grace'],
   )
