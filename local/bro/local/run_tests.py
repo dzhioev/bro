@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base.args import Parser
-from bro.dev.affected_tests import changed_paths, import_graph, module_name, reachable
+from bro.dev.affected_tests import (
+  changed_paths,
+  import_graph,
+  module_name,
+  module_names,
+  reachable,
+)
 from bro.dev.packaging_policy import TEST_MODULE_SUFFIXES, distribution_roots
 
 __cli_name__ = 'run-tests'
@@ -324,8 +330,14 @@ def node_env() -> dict[str, str]:
   return {'NODE_OPTIONS': '--max-old-space-size=4096'}
 
 
-def lint_stage() -> None:
-  for distribution in DISTRIBUTIONS:
+def lint_stage(distributions: Sequence[Distribution] = DISTRIBUTIONS) -> None:
+  scope = (
+    'every distribution'
+    if len(distributions) == len(DISTRIBUTIONS)
+    else f'{len(distributions)} of {len(DISTRIBUTIONS)} distributions'
+  )
+  print(f'sync-scripts, deptry: {scope}', file=sys.stderr)
+  for distribution in distributions:
     directory = DIR / distribution.directory
     print(f'sync-scripts: verifying {directory} console-script metadata', file=sys.stderr)
     run(sys.executable, '-m', 'bro.dev.sync_scripts', '--check', '--project', str(directory))
@@ -354,19 +366,59 @@ def unit_stage(roster: Sequence[str] = PYTEST_FILES) -> None:
   run(sys.executable, '-m', 'pytest', '-n', 'auto', *roster)
 
 
-def reachable_roster(base: str) -> list[str]:
-  """the roster entries a change against `base` reaches, plus the sourceless ones."""
+@dataclass(frozen=True)
+class Selection:
+  """the gate work a change can reach: what each narrowed stage runs, and what is dropped whole."""
+
+  roster: Sequence[str]
+  distributions: Sequence[Distribution]
+  dropped: frozenset[str]
+
+
+def touched_distributions(changed: Sequence[str]) -> list[Distribution]:
+  """the distributions whose own files a change lands in.
+
+  Distribution directories nest, and both `sync-scripts` and deptry stop at a
+  nested project's root, so the innermost directory holding a path covers it.
+  """
+
+  def covering(path: str) -> str:
+    directories = [
+      distribution.directory
+      for distribution in DISTRIBUTIONS
+      if distribution.directory == '.' or path.startswith(f'{distribution.directory}/')
+    ]
+    return max(directories, key=len)
+
+  covered = {covering(path) for path in changed}
+  return [distribution for distribution in DISTRIBUTIONS if distribution.directory in covered]
+
+
+def select(base: str) -> Selection:
+  """the work a change against `base` can reach, stage by stage."""
   source_roots = distribution_roots(DIR, (BENCHMARK,))
   changed = changed_paths(DIR, base)
   print(f'{len(changed)} paths changed against {base}', file=sys.stderr)
   seeds = {name for path in changed if (name := module_name(source_roots, DIR / path)) is not None}
   hit = reachable(import_graph(DIR, source_roots), seeds)
-  return [
-    test
-    for test in PYTEST_FILES
-    if not (DIR / f'{test.removesuffix("_test.py")}.py').exists()
-    or module_name(source_roots, DIR / test) in hit
-  ]
+  benchmark_reached = (
+    not hit.isdisjoint(module_names(DIR / BENCHMARK, source_roots).values())
+    or any(path.startswith(f'{BENCHMARK}/') for path in changed)
+    # the stage's `uv sync --locked` reads the metadata of every project the
+    # benchmark project installs from a path source, so a change to any of them
+    # can leave the lock committed beside it stale
+    or any(path.endswith('pyproject.toml') for path in changed)
+  )
+  return Selection(
+    roster=[
+      test
+      for test in PYTEST_FILES
+      if not (DIR / f'{test.removesuffix("_test.py")}.py').exists()
+      or module_name(source_roots, DIR / test) in hit
+    ],
+    distributions=touched_distributions(changed),
+    dropped=frozenset() if benchmark_reached else frozenset({'benchmark'}),
+  )
 
 
 def benchmark_stage() -> None:
@@ -433,7 +485,7 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument(
     '--changed',
     action='store_true',
-    help='narrow the unit roster to the test modules the diff can reach',
+    help='narrow the gate to the work the diff can reach',
   )
   parser.add_argument('--base', help=f'the ref --changed diffs against (default: {DEFAULT_BASE})')
   parser.add_exclusive_groups(['only'], ['skip'])
@@ -443,19 +495,33 @@ def main(argv: list[str]) -> Optional[int]:
   if args['base'] is not None and not args['changed']:
     parser.error('--base names the ref --changed diffs against; pass --changed too')
   stages = STAGES
+  dropped: frozenset[str] = frozenset()
   if args['changed']:
-    roster = reachable_roster(args['base'] or DEFAULT_BASE)
-    narrowed = functools.partial(unit_stage, roster)
-    stages = [replace(stage, run=narrowed) if stage.name == 'unit' else stage for stage in STAGES]
+    selected = select(args['base'] or DEFAULT_BASE)
+    narrowed: dict[str, Callable[[], None]] = {
+      'lint': functools.partial(lint_stage, selected.distributions),
+      'unit': functools.partial(unit_stage, selected.roster),
+    }
+    stages = [replace(stage, run=narrowed.get(stage.name, stage.run)) for stage in STAGES]
+    dropped = selected.dropped
   in_container = Path('/.dockerenv').is_file()
 
-  verdicts: list[tuple[str, bool]] = []
+  verdicts: list[tuple[str, str]] = []
   failures: list[tuple[str, list[str]]] = []
   for stage in stages:
     if only is not None and stage.name not in only:
       continue
     if stage.name in skip:
       print(f'skipping the {stage.name} stage (--skip)', file=sys.stderr)
+      continue
+    # unlike --skip, this narrowing is the gate's own deduction, so it owes a
+    # verdict rather than going missing from the closing line
+    if stage.name in dropped:
+      print(
+        f'skipping the {stage.name} stage (--changed: the diff reaches nothing it runs)',
+        file=sys.stderr,
+      )
+      verdicts.append((stage.name, 'skipped'))
       continue
     if stage.host_only and in_container:
       if only is not None:
@@ -469,13 +535,13 @@ def main(argv: list[str]) -> Optional[int]:
       except subprocess.CalledProcessError:
         failures.append((stage.name, recorded[-FAILURE_REPLAY_LINES:]))
         passed = False
-    verdicts.append((stage.name, passed))
+    verdicts.append((stage.name, 'ok' if passed else 'FAILED'))
 
   for name, replay in failures:
     print(f'\n=== {name} failed ===', file=sys.stderr)
     sys.stderr.writelines(replay)
   print(
-    '\ngate: ' + ' | '.join(f'{name} {"ok" if passed else "FAILED"}' for name, passed in verdicts),
+    '\ngate: ' + ' | '.join(f'{name} {verdict}' for name, verdict in verdicts),
     file=sys.stderr,
   )
   return 1 if failures else None
