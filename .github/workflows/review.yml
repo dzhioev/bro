@@ -1,0 +1,31 @@
+name: review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_review:
+
+permissions:
+  pull-requests: read
+
+jobs:
+  # the branch ruleset for reviewed bases requires one check named after this
+  # job. Elsewhere it skips, and a skipped check counts as passed
+  reviewed:
+    name: reviewed by eyebro
+    if: startsWith(github.event.pull_request.base.ref, 'integration/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: a current approving review from the reviewer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEWER: eyebbbbro[bot]
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          REVIEWS: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews
+        run: |
+          verdict=$(gh api "$REVIEWS?per_page=100" | jq -r --arg who "$REVIEWER" '
+            [.[] | select(.user.login == $who)
+                 | select(.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED"))]
+            | last // {} | "\(.state // "NONE") \(.commit_id // "-")"')
+          echo "standing verdict: $verdict; head: $HEAD"
+          test "$verdict" = "APPROVED $HEAD"

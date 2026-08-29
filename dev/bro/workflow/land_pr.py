@@ -10,9 +10,11 @@ included.
 
 Preconditions (each failure aborts with a message on stderr and exit 1):
 - the PR for the current branch exists and is OPEN
-- reviewDecision is APPROVED; `--no-review` waives a *missing* review, but
-  CHANGES_REQUESTED is always refused, and so is REVIEW_REQUIRED — that one is
-  the base branch's own rule, which no flag here reaches
+- the base's review gate is satisfied: reviewDecision is neither
+  CHANGES_REQUESTED nor REVIEW_REQUIRED. Both are GitHub's own verdict on the
+  base's rules, and no flag here reaches either. A base whose rules ask for no
+  review reports none, and nothing here invents one — what a review is worth
+  where GitHub demands none is the flow's to decide, not this command's
 - the body has no unchecked `- [ ]` boxes unless `--allow-unchecked`
 - the worktree is on the commit the PR carries, so the branch holds nothing the
   review never saw
@@ -70,9 +72,7 @@ def _unchecked_boxes(body: str) -> list[str]:
   return [m.group(1).strip() for m in re.finditer(r'^\s*[-*] \[ \] +(.+)$', body, re.MULTILINE)]
 
 
-def _precondition_error(
-  pr: dict[str, Any], no_review: bool, allow_unchecked: bool
-) -> Optional[str]:
+def _precondition_error(pr: dict[str, Any], allow_unchecked: bool) -> Optional[str]:
   if pr['state'] != 'OPEN':
     return f'PR #{pr["number"]} is {pr["state"]}, not OPEN'
   decision = pr['reviewDecision']
@@ -81,14 +81,8 @@ def _precondition_error(
   if decision == 'REVIEW_REQUIRED':
     return (
       f'PR #{pr["number"]} has no approving review and its base branch requires one '
-      "(reviewDecision=REVIEW_REQUIRED); --no-review waives this command's check, not the "
-      'branch rule GitHub enforces at the merge'
-    )
-  if decision != 'APPROVED' and not no_review:
-    shown = decision if decision != '' else 'none'
-    return (
-      f'PR #{pr["number"]} is not approved (reviewDecision={shown}); '
-      'pass --no-review only when the user explicitly waived review'
+      '(reviewDecision=REVIEW_REQUIRED); only a review GitHub grants standing to clears '
+      'that, and nothing here waives it'
     )
   unchecked = _unchecked_boxes(pr['body'])
   if len(unchecked) > 0 and not allow_unchecked:
@@ -228,13 +222,12 @@ def _merge(pr: dict[str, Any]) -> None:
 
 
 def _land(
-  no_review: bool,
   allow_unchecked: bool,
   ignore_checks: bool,
   wait_checks: int,
 ) -> dict:
   pr = _pr_view(_PR_FIELDS)
-  error = _precondition_error(pr, no_review, allow_unchecked) or _head_error(pr)
+  error = _precondition_error(pr, allow_unchecked) or _head_error(pr)
   if error is not None:
     raise LandError(error)
   rollup = pr.get('statusCheckRollup') or []
@@ -264,13 +257,12 @@ def _land(
 
 
 def land_pr(
-  no_review: bool,
   allow_unchecked: bool,
   ignore_checks: bool,
   wait_checks: int,
 ) -> Optional[int]:
   try:
-    result = _land(no_review, allow_unchecked, ignore_checks, wait_checks)
+    result = _land(allow_unchecked, ignore_checks, wait_checks)
   except LandError as error:
     log.error(str(error))
     return 1
@@ -280,14 +272,6 @@ def land_pr(
 
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='merge the approved PR for the current branch in one shot')
-  parser.add_argument(
-    '--no-review',
-    action='store_true',
-    help=(
-      'merge without an APPROVED review (explicit user waiver; a review the base branch '
-      'requires, or changes requested, still refuses)'
-    ),
-  )
   parser.add_argument(
     '--allow-unchecked',
     action='store_true',
