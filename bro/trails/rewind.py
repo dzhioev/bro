@@ -14,6 +14,7 @@ from bro.base.text_window import DEFAULT_LIMIT, window
 from bro.trails.display import (
   ColorMode,
   DisplayConfig,
+  DisplayDataError,
   DisplayRecord,
   DisplaySession,
   PresetName,
@@ -251,7 +252,7 @@ def _grep_lines(
 
 
 def _command_grep(client: TrailsStore, args: dict[str, Any]) -> int:
-  """Exit 0 when at least one line matched, 1 otherwise — like grep."""
+  """Exit 0 when at least one line matched, 1 when none did, 2 when a trail would not render."""
   try:
     regex = re.compile(args['pattern'], re.IGNORECASE if args.get('ignore_case', False) else 0)
   except re.error as exception:
@@ -277,19 +278,27 @@ def _command_grep(client: TrailsStore, args: dict[str, Any]) -> int:
   colors = Colors(should_color(args['color']))
   configuration = _configuration(args, PresetName.REWIND_GREP)
   groups: list[str] = []
+  unrenderable_trails = 0
   for header in headers:
     adapter = RecordedAdapter(client)
-    records = adapter.conversation_records(header)
-    rendered = _retained_document(records, configuration)
+    try:
+      rendered = _retained_document(adapter.conversation_records(header), configuration)
+    except DisplayDataError as exception:
+      # one trail's malformed data must not cost the whole sweep its results
+      unrenderable_trails += 1
+      log.warning('skipping trail %s: %s', header['id'], exception)
+      continue
     matches = _grep_lines(header['id'], rendered, regex, colors, before=before, after=after)
     if len(matches) > 0:
       groups.append('\n'.join(matches))
-  if len(groups) == 0:
-    return 1
-  separator = f'\n{colors.cyan}--{colors.reset}\n' if has_context else '\n'
-  sys.stdout.write(_window_output(separator.join(groups) + '\n', args))
-  sys.stdout.flush()
-  return 0
+  if len(groups) > 0:
+    separator = f'\n{colors.cyan}--{colors.reset}\n' if has_context else '\n'
+    sys.stdout.write(_window_output(separator.join(groups) + '\n', args))
+    sys.stdout.flush()
+  if unrenderable_trails > 0:
+    log.warning('%d of %d trails could not be rendered', unrenderable_trails, len(headers))
+    return 2
+  return 0 if len(groups) > 0 else 1
 
 
 def _command_tree(client: TrailsStore, args: dict[str, Any]) -> int:

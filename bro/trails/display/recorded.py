@@ -1,6 +1,7 @@
 """Adapt trails-server read responses into semantic display records."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
@@ -65,6 +66,17 @@ def _error_content(value: Any, name: str) -> Any:
   if isinstance(value, (str, list)):
     return _text_content(value, name)
   return value
+
+
+@contextmanager
+def _trail_provenance(trail_id: str) -> Iterator[None]:
+  """Malformed recorded data leaves as a display error naming the trail it came from."""
+  try:
+    yield
+  except DisplayDataError:
+    raise
+  except (KeyError, TypeError, ValueError) as exception:
+    raise DisplayDataError(f'malformed recorded trail {trail_id}: {exception}') from exception
 
 
 def _format_timestamp(timestamp: Any) -> str:
@@ -186,34 +198,35 @@ class RecordedAdapter:
 
   def conversation_records(self, header: dict[str, Any]) -> list[DisplayRecord]:
     target_id = _require_string(header.get('id'), 'trail id', nonempty=True)
-    records: list[DisplayRecord] = [self.trail_metadata(header)]
-    records.extend(
-      self.launch_context_records(target_id, self.client.get_launch_context(target_id))
-    )
-    segments = walk_header_chain(header, self.client.get_trail)
-    for segment_index, (segment_header, bound) in enumerate(segments):
-      segment_id = _require_string(segment_header.get('id'), 'segment trail id', nonempty=True)
-      if segment_index > 0:
-        native = segment_header.get('native')
-        segment = native.get('segment') if isinstance(native, dict) else None
-        if segment is not None:
-          segment = _require_string(segment, 'segment id', nonempty=True)
-        records.append(
-          SegmentBoundary(
-            key=f'recorded:{segment_id}:segment-boundary',
-            origin=Origin.RECORDED,
-            timestamp=(
-              segment_header.get('started_at')
-              if isinstance(segment_header.get('started_at'), str)
-              else None
-            ),
-            trail_id=segment_id,
-            segment=segment,
+    with _trail_provenance(target_id):
+      records: list[DisplayRecord] = [self.trail_metadata(header)]
+      records.extend(
+        self.launch_context_records(target_id, self.client.get_launch_context(target_id))
+      )
+      segments = walk_header_chain(header, self.client.get_trail)
+      for segment_index, (segment_header, bound) in enumerate(segments):
+        segment_id = _require_string(segment_header.get('id'), 'segment trail id', nonempty=True)
+        if segment_index > 0:
+          native = segment_header.get('native')
+          segment = native.get('segment') if isinstance(native, dict) else None
+          if segment is not None:
+            segment = _require_string(segment, 'segment id', nonempty=True)
+          records.append(
+            SegmentBoundary(
+              key=f'recorded:{segment_id}:segment-boundary',
+              origin=Origin.RECORDED,
+              timestamp=(
+                segment_header.get('started_at')
+                if isinstance(segment_header.get('started_at'), str)
+                else None
+              ),
+              trail_id=segment_id,
+              segment=segment,
+            )
           )
-        )
-      messages = list(self._bounded_messages(segment_id, bound))
-      records.extend(self.message_records(segment_id, messages))
-    return records
+        messages = list(self._bounded_messages(segment_id, bound))
+        records.extend(self.message_records(segment_id, messages))
+      return records
 
   def native_step_records(self, trail_id: str, steps: Iterable[dict[str, Any]]) -> list[NativeStep]:
     return [self.native_step(trail_id, step) for step in steps]
