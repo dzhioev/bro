@@ -10,7 +10,7 @@ then records a `merged` comment on the task and closes it to done unless the use
 On APPROVED, [[run pr]] chains into this spell.
 Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this spell.
 
-version: 4.1.0
+version: 4.2.0
 ---
 
 # land
@@ -58,7 +58,8 @@ One shot, in order:
 1. Resolves the PR for the current branch and enforces the preconditions
    — fails with a message and a nonzero exit when the PR is not `OPEN`, not `APPROVED`, its body has unchecked `- [ ]` test-plan boxes, the worktree sits on something other than the reviewed head, or the repository disallows rebase merging.
 2. Waits for the PR's status checks to conclude (up to `--wait-checks` seconds, default 480) and refuses to merge while any is pending or failed.
-   A PR with no checks passes straight through.
+   A head no check reported on at all waits the same way and is refused the same way:
+   what an empty rollup says is that nothing verified the commits about to land, which is a reason to hold, not a repo without CI.
    **Give the command room to wait**
    — run it with a tool timeout above the wait budget, not the default.
    A timeout expiry is not a verdict:
@@ -85,10 +86,12 @@ Waiver flags map to explicit user statements from this session
   Otherwise an unchecked box means nobody verified that item:
   surface the failure output (it lists the boxes) and wait.
 - `--ignore-checks` — the user said to merge whatever CI says.
-  It covers both states, pending and failed, and `land-pr` names on stderr every check it merged past
+  It covers every state the gate refuses — pending, failed, and nothing reported at all — and `land-pr` names on stderr what it merged past
   — relay that to the user.
   Reach for it only on the user's explicit say-so about *this* PR's checks;
   a red check is otherwise something to fix or re-run (`gh run rerun --failed <run-id>`), never something to route around.
+  A repo with no CI is the one standing case where the waiver is the normal answer rather than an exception:
+  there is no run to wait for, and the user says so once.
 
 A waived review does not imply waived checks:
 "land it without review" means skip the approval wait, and CI still has to go green.

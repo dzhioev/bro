@@ -40,8 +40,9 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   Every selected stage runs whatever the ones before it did, and the gate closes on a replay of each failing stage's output and a one-line verdict per stage, so one pass reports every problem the tree has.
   `--changed` narrows the `unit` roster to the test modules a diff against `--base` (default `origin/master`) can reach through the repository's import graph (`bro.dev.affected_tests`);
   a roster module with no source module of its own holds a repository-wide invariant and runs whatever changed.
-  It must pass cleanly before changes are pushed;
-  GitHub runs it on every push and pull request, a runner per stage (`.github/workflows/tests.yml`)
+  `run-tests --changed` is the pre-push gate;
+  the whole gate is the pull request's, a runner per stage (`.github/workflows/tests.yml`, on `pull_request`, on `push` to `master`, and on `workflow_dispatch`
+  — a push to a feature branch triggers nothing, so a branch that never opens a PR runs on a dispatch or not at all)
 - `BRO_LLM_TESTS=1 pytest dev/bros/dev/commit_llm_test.py` — live-LLM behavior probes (`*_llm_test.py`):
   a real bro against the configured provider, asserting on the artifacts it produces.
   They spend real tokens, so they stay outside the default roster and are collected-but-skipped without the explicit env var.

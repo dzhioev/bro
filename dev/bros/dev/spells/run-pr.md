@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 5.5.0
+version: 5.6.0
 ---
 
 # run-pr
@@ -102,8 +102,8 @@ Run before committing:
 - The repo's formatter (its own docs name the command).
   Stage any formatter-induced changes alongside your own.
 
-No full-suite run here:
-the suite is the mandatory gate (step 9), run once on the final rebased tree
+No test run here:
+the gate is step 9, paid once on the tree that ships
 — a pass before the rebase is evidence the rebase discards.
 
 {{iff #may_summon contains eyebro}}
@@ -301,32 +301,26 @@ call `dev-style-source::read` and audit `git diff origin/<base>..HEAD` against t
 
 {{end}}
 
-### 9. The mandatory gate: the full test suite
+### 9. The pre-push gate
 
-The flow's one mandatory full pass
-— on the final rebased tree, before the change reaches a reviewer.
-It is mandatory *here* because a branch with no PR on it triggers no CI:
-this is the only point in the flow where nothing else will run the suite.
-Run the repo's full verification gate (its own docs name the command and any environment-specific flags).{{when #harness = bro}} Run it with an explicit large `timeout_seconds` (600 fits)
-— `dev::bash`'s default kills a full suite mid-run;
+The flow's one mandatory local pass
+— on the folded, rebased tree, which is the tree that ships.
+Run the repo's gate over what the change reaches:
+a change-scoped selection where the repo offers one, otherwise the affected test files (the repo's own docs name the command and any environment-specific flags).{{when #harness = bro}} Run it with an explicit large `timeout_seconds` (600 fits)
+— `dev::bash`'s default kills a gate run mid-call;
 same for any other long command.{{end}}
 
-Locally is the default.
-Where the repo's CI runs that same gate against a branch of its own
-— a manual dispatch, a branch trigger
-— pushing the branch (step 11) and waiting on that run counts as the pass, and is the better route when CI is faster or covers stages the workspace cannot run at all.
-What waits for green is the PR, not the push:
-a pushed branch has offered nothing to anyone.
+What this pass is worth is keeping a broken branch away from a reviewer, and a change-scoped selection buys that at a fraction of the price.
+The whole gate is the pull request's:
+its CI runs every stage on the head you push, a runner per stage and stages the workspace often cannot run at all, and the merge is blocked until that run is green.
+The exception is a repo whose CI does not cover pull requests
+— there nothing else will ever run the gate, so run it whole here.
 
 A red gate blocks the PR.
 Do not interpret or triage failures
 — fix with new commits, or propose fixing pre-existing failures in this session or a separate one;
 do not open a PR over failures.
-Re-verify a fix with the narrowest evidence the repo offers (a change-scoped gate selection, the affected test files);
-a second full pass buys nothing this one and the PR's own CI do not.
-
-Earlier full passes (per checkpoint, pre-rebase) are optional and usually redundant
-— this gate re-verifies the exact tree that ships.
+A check that goes red on the PR once it is open is answered in the review rounds like any other finding (step 15).
 
 ### 10. Verify PR scope
 
@@ -350,7 +344,6 @@ git push -u origin HEAD
 
 A branch already on the remote needs `git push --force-with-lease origin HEAD` instead
 — the fold rewrote it.
-A gate that ran on CI (step 9) already pushed this branch, so the command is a no-op there.
 
 ### 12. Open the PR
 
@@ -583,11 +576,12 @@ One you didn't cause means someone else pushed to the PR branch (typically the u
 
 **`conflicts` event**:
 rerun step 7 — the rebase, the in-band resolution default, the escalation bar, and the task comment all apply unchanged
-— then the full gate (step 9), not step 15's narrow pass:
-what may have broken the branch is what landed on the base, which no diff of the branch's own changes points at.
-Then push the rebased branch:
+— then push the rebased branch:
 `git push --force-with-lease origin HEAD`
 — the PR branch, never the base.
+No local pass answers this one:
+what may have broken the branch is what landed on the base, which no diff of the branch's own changes points at, so step 9's selection is scoped to the wrong thing
+— the PR's CI on the pushed head runs every stage, and the merge is blocked on it.
 
 **`merged` / `closed`**:
 someone (the user, a [[land]] run, or external action) terminated the PR.
