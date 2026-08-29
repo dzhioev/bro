@@ -61,6 +61,12 @@ def _text_content(value: Any, name: str) -> str:
   return '\n'.join(parts)
 
 
+def _error_content(value: Any, name: str) -> Any:
+  if isinstance(value, (str, list)):
+    return _text_content(value, name)
+  return value
+
+
 def _format_timestamp(timestamp: Any) -> str:
   if timestamp is None:
     return '-'
@@ -501,7 +507,7 @@ class RecordedAdapter:
           **common,
         )
       if message_type == 'error':
-        return Error(content=_text_content(message.get('content'), 'error content'), **common)
+        return Error(content=_error_content(message.get('content'), 'error content'), **common)
       if message_type == 'harness_event':
         if 'raw' not in message:
           raise ValueError('harness_event raw body is required')

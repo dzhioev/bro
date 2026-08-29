@@ -364,6 +364,23 @@ class TestGrep:
     with pytest.raises(TrailNotFound, match='trail not found'):
       _command_grep(_client(FakeClient()), self._grep_args('needle', trails=['missing']))
 
+  def test_a_structured_error_body_is_searchable(self, capsys):
+    client = FakeClient()
+    client.add_bro(
+      'T-bro',
+      [
+        {
+          'step_id': 0,
+          'kind': 'error',
+          'ts': None,
+          'body': {'message': 'overloaded', 'traceback': 'File "openai.py", line 652, in send'},
+        }
+      ],
+    )
+
+    assert _command_grep(_client(client), self._grep_args('line 652')) == 0
+    assert 'T-bro:' in capsys.readouterr().out
+
 
 class FollowClient(FakeClient):
   def __init__(self):
