@@ -66,8 +66,8 @@ strand the session on an expired value, so the scoped store ships the winning
 source's raw reference-preserving text instead and the session re-expands —
 and re-mints — per read; the kinds such text names are hydrated into the scope
 alongside it, so the session's own registry resolves them
-(`build_scoped_store`). a reference that does not resolve,
-a malformed node, an absent field, or a reference cycle raises.
+(`build_scoped_store`). a reference that does not resolve makes the referring
+secret absent; a malformed node, an absent field, or a reference cycle raises.
 """
 
 from __future__ import annotations
@@ -166,6 +166,14 @@ class SecretNotFound(Exception):
   def __init__(self, name: str):
     super().__init__(f'secret {name!r} not found')
     self.name = name
+
+
+@dataclass(frozen=True)
+class _Unresolved:
+  name: str
+
+
+_Resolution = tuple[str, bool] | _Unresolved
 
 
 class Source(Protocol):
@@ -510,11 +518,10 @@ class Store:
 
   def try_get(self, name: str) -> Optional[str]:
     """kind-addressed `try_get_instance`: resolve a kind to its raw text
-    (stripped), or None when no source yields a value — the non-raising
-    primitive, for callers that treat a missing secret as an expected case.
-    `get` is the strict wrapper that raises on None. a malformed value (a broken
-    reference, a non-UTF-8 file) still raises: absence is expected, corruption
-    is not."""
+    (stripped), or None when no source yields a value, directly or through a
+    reference — the non-raising primitive for callers that treat an absent secret
+    as expected. `get` is the strict wrapper. malformed values still raise:
+    absence is expected, corruption is not."""
     _require_kind(name)
     return self.try_get_instance(name)
 
@@ -530,12 +537,16 @@ class Store:
   def resolve(self, name: str) -> Optional[tuple[str, bool]]:
     """resolve a secret by its stored registry name to (value, cacheable), or
     None when the name is outside the store's readable bound or no source yields
-    a value. cacheable is False when the winning source — or any source behind
-    the expanded references — declares its values un-cacheable, i.e. a later read
-    may observe a different (re-derived) value; `try_get_instance`/`get_instance`
-    are the value-only spellings."""
+    a value, directly or through a reference. cacheable is False when the winning
+    source — or any source behind the expanded references — declares its values
+    un-cacheable, i.e. a later read may observe a different (re-derived) value;
+    `try_get_instance`/`get_instance` are the value-only spellings."""
+    resolved = self._resolution(name)
+    return None if isinstance(resolved, _Unresolved) else resolved
+
+  def _resolution(self, name: str) -> _Resolution:
     if name not in self._readable:
-      return None
+      return _Unresolved(name)
     # one lock around the whole resolve: a secret is fetched at most once even
     # under concurrent callers, and the store is read only a handful of times per
     # process (each value cached on first read), so a lock-free fast path buys
@@ -543,27 +554,32 @@ class Store:
     with self._lock:
       return self._resolve(name, chain=())
 
-  def _resolve(self, name: str, chain: tuple[str, ...]) -> Optional[tuple[str, bool]]:
+  def _resolve(self, name: str, chain: tuple[str, ...]) -> _Resolution:
     """fetch, expand, and cache one secret; `chain` is the stack of secrets whose
-    expansions are in progress, for cycle detection. returns (value, cacheable) —
-    cacheable is False when the winning source, or any source behind the expanded
+    expansions are in progress, for cycle detection. returns (value, cacheable)
+    or the unresolved name — an empty reference propagates its target. cacheable
+    is False when the winning source, or any source behind the expanded
     references, declares its values un-cacheable. callers hold the lock."""
     cached = self._cache.get(name)
     if cached is not None:
       return cached, True
     secret = self._registry.get(name)
     if secret is None:
-      return None
+      return _Unresolved(name)
     for source in secret.sources:
       raw = source.fetch()
-      if raw is not None:
-        self._winners[name] = source
-        value, references_cacheable = self._expand_references(raw.strip(), (*chain, name))
-        cacheable = source.CACHEABLE and references_cacheable
-        if cacheable:
-          self._cache[name] = value
-        return value, cacheable
-    return None
+      if raw is None:
+        continue
+      expanded = self._expand_references(raw.strip(), (*chain, name))
+      if isinstance(expanded, _Unresolved):
+        return expanded
+      value, references_cacheable = expanded
+      self._winners[name] = source
+      cacheable = source.CACHEABLE and references_cacheable
+      if cacheable:
+        self._cache[name] = value
+      return value, cacheable
+    return _Unresolved(name)
 
   def winning_source(self, name: str) -> Source:
     """the source that produced `name`'s value in this store — recorded by the
@@ -580,11 +596,11 @@ class Store:
       return ()
     return self._registry[name].sources
 
-  def _expand_references(self, text: str, chain: tuple[str, ...]) -> tuple[str, bool]:
+  def _expand_references(self, text: str, chain: tuple[str, ...]) -> _Resolution:
     """substitute every reference node in a json secret's tree; text that isn't
     json, or json with no reference nodes, passes through byte-identical. also
     returns whether every referenced secret allowed caching (vacuously True for
-    text with no references)."""
+    text with no references), or the name of an empty reference."""
     try:
       tree = json.loads(text)
     except json.JSONDecodeError:
@@ -592,25 +608,38 @@ class Store:
     if not _contains_reference(tree):
       return text, True
     referenced_cacheable: list[bool] = []
-    substituted = self._substitute_references(tree, chain, referenced_cacheable)
+    unresolved: list[_Unresolved] = []
+    substituted = self._substitute_references(tree, chain, referenced_cacheable, unresolved)
+    if len(unresolved) > 0:
+      return unresolved[0]
     return json.dumps(substituted), all(referenced_cacheable)
 
   def _substitute_references(
-    self, node: Any, chain: tuple[str, ...], referenced_cacheable: list[bool]
+    self,
+    node: Any,
+    chain: tuple[str, ...],
+    referenced_cacheable: list[bool],
+    unresolved: list[_Unresolved],
   ) -> Any:
     if isinstance(node, dict):
       if _REFERENCE_KEY in node:
-        return self._referenced_value(node, chain, referenced_cacheable)
+        return self._referenced_value(node, chain, referenced_cacheable, unresolved)
       return {
-        key: self._substitute_references(value, chain, referenced_cacheable)
+        key: self._substitute_references(value, chain, referenced_cacheable, unresolved)
         for key, value in node.items()
       }
     if isinstance(node, list):
-      return [self._substitute_references(item, chain, referenced_cacheable) for item in node]
+      return [
+        self._substitute_references(item, chain, referenced_cacheable, unresolved) for item in node
+      ]
     return node
 
   def _referenced_value(
-    self, node: dict, chain: tuple[str, ...], referenced_cacheable: list[bool]
+    self,
+    node: dict,
+    chain: tuple[str, ...],
+    referenced_cacheable: list[bool],
+    unresolved: list[_Unresolved],
   ) -> Any:
     referrer = chain[-1]
     unknown = sorted(set(node) - {_REFERENCE_KEY, _REFERENCE_FIELD})
@@ -627,8 +656,9 @@ class Store:
     if target in chain:
       raise ValueError(f'credential reference cycle: {" -> ".join((*chain, target))}')
     resolved = self._resolve(target, chain)
-    if resolved is None:
-      raise ValueError(f'secret {referrer!r} references {target!r}, which does not resolve')
+    if isinstance(resolved, _Unresolved):
+      unresolved.append(resolved)
+      return None
     value, cacheable = resolved
     referenced_cacheable.append(cacheable)
     try:
@@ -657,12 +687,13 @@ class Store:
     return self.get_instance(name)
 
   def get_instance(self, name: str) -> str:
-    """storage-addressed `try_get_instance` that raises `SecretNotFound` when no
-    source yields a value."""
-    value = self.try_get_instance(name)
-    if value is not None:
-      return value
-    raise SecretNotFound(name)
+    """storage-addressed `try_get_instance` that raises `SecretNotFound` for the
+    name that came up empty, including a referenced target."""
+    parse_name(name)
+    resolved = self._resolution(name)
+    if isinstance(resolved, _Unresolved):
+      raise SecretNotFound(resolved.name)
+    return resolved[0]
 
   def available(self, name: str) -> bool:
     """whether the kind `name` resolves in this store. the predicate behind both
