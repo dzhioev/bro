@@ -84,6 +84,74 @@ malformed entries still fail.
 `CREDENTIALS_REGISTRY` and `BRO_CONFIGS_DIR` are retired and fail when set.
 A legacy `<store>/registry.json` or `<store>/credentials.json` fails too.
 Use `BRO_STORE` for a synthesized service or session store.
+
+### One-time host migration
+
+Perform this migration once on each host when the store-based release rolls out, before launching any framework command from that release.
+Stop managed sessions first, and back up both the credential store and host config outside the store:
+
+```bash
+cp -a ~/.bro ~/.bro.before-store-migration
+if [ -e ~/.bro.json ]; then
+  cp -a ~/.bro.json ~/.bro.json.before-store-migration
+fi
+install -d -m 700 ~/.bro/creds
+```
+
+Move each plain built-in credential to its convention path when the source file exists:
+
+| Old path | New path |
+| --- | --- |
+| `~/.bro/brog.json` | `~/.bro/creds/brog.cred` |
+| `~/.bro/trails.json` | `~/.bro/creds/trails.cred` |
+| `~/.bro/trails_tokens.json` | `~/.bro/creds/trails_tokens.cred` |
+| `~/.bro/openai.json` | `~/.bro/creds/openai.cred` |
+| `~/.bro/anthropic.json` | `~/.bro/creds/anthropic.cred` |
+| `~/.bro/claude_code_oauth_token` | `~/.bro/creds/claude_code.cred` |
+| `~/.bro/brave.json` | `~/.bro/creds/brave.cred` |
+| `~/.bro/aws_credentials` | `~/.bro/creds/aws.cred` |
+| `~/.bro/infra.json` | `~/.bro/creds/infra.cred` |
+
+Apply the same rule to contributed kinds:
+the stored name becomes the filename, so `harbor_api_key` registered as `harbor` becomes `creds/harbor.cred`, and `benchmark_retention.json` becomes `creds/benchmark_retention.cred`.
+Preserve file contents exactly and set material files to mode `0600`.
+
+Translate every old `registry.json` entry before removing that file:
+
+- A kind or variant with a plain local source moves that source file to `creds/<entry-name>.cred`.
+  For example, `brog+github` becomes `creds/brog+github.cred`.
+- A minting source moves its config to the same convention path and adds its annotation to `creds.json`, without the old `file` field.
+  For example, `github+dev` backed by `{"type": "github_app", "file": "github_app_dev.json"}` becomes `creds/github+dev.cred` plus `"github+dev": {"type": "github_app"}` in `creds.json`.
+- A source that needs no local material adds only its annotation to `creds.json`.
+  For example, an SSM source keeps `type`, `parameter`, and optional `region` under the same stored name.
+- An ordered source list must become one source for that stored name.
+  Choose the source this host is meant to use, or split consumers into separately synthesized stores when they need different sources.
+- A kind-level `{"instance": "dev"}` selector becomes `kind+dev` in `defaults.creds` in `~/.bro.json`.
+  The variant's material and annotation still use the full stored name.
+
+`creds.json` is one JSON object containing all typed annotations, for example:
+
+```json
+{
+  "github+dev": {"type": "github_app"},
+  "service": {"type": "ssm", "parameter": "/service/credential", "region": "eu-west-1"}
+}
+```
+
+Rewrite the existing host config rather than discarding it:
+preserve `llm`, rename every `projects.<attachment>.instances` list to `projects.<attachment>.creds`, and add the translated registry selectors under `defaults.creds`.
+Add `projects.<attachment>.bros` or `tools` selections only where that consumer needs an override.
+The complete target schema and precedence are in "Host config" below.
+
+After the new material, annotations, and host config are in place, remove `~/.bro/registry.json` and `~/.bro/credentials.json`, and unset `CREDENTIALS_REGISTRY` and `BRO_CONFIGS_DIR` in shell or service configuration.
+Keep the backups until every configured repository and tool has been checked.
+Validate stored names first, then inspect each launch scope from its repository:
+
+```bash
+credentials list --instance
+ride scope --repo /path/to/repository
+```
+
 The `credentials get <kind>` CLI applies the store's explicit selection, while `--instance` addresses one stored name exactly.
 `credentials list` prints every registered kind with its description;
 `credentials list --instance` enumerates convention material and typed annotations without resolving them.

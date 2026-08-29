@@ -1,0 +1,4 @@
+{
+  "trails": {"type": "ssm", "parameter": "/trails/store-config"},
+  "trails_tokens": {"type": "ssm", "parameter": "/trails/tokens"}
+}

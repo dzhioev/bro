@@ -23,7 +23,7 @@ else
     log INFO 'seeding the sessions token from /trails/bearer-token'
   else
     sessions_token="$(openssl rand -hex 32)"
-    log INFO "generated a sessions token (copy to ~/.bro/trails.json): $sessions_token"
+    log INFO "generated a sessions token (set it in the host's trails credential): $sessions_token"
   fi
   analyst_token="$(openssl rand -hex 32)"
   log INFO "generated an analyst token (copy to the trails credential of reading scopes): $analyst_token"

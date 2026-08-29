@@ -589,7 +589,12 @@ def record_session(
   try:
     client = default_store()
   except credentials.SecretNotFound:
-    log.error('config not found: trails (configure ~/.bro/trails.json)')
+    material_path = credentials.default_store().material_path('trails')
+    log.error(
+      'config not found: trails (expected %s; see %s)',
+      material_path,
+      credentials.CREDENTIAL_MIGRATION_GUIDE,
+    )
     health.write('error', 'config not found: trails', interval=None)
     return 1
 

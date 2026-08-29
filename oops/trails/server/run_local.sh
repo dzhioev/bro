@@ -1,16 +1,15 @@
 #!/usr/bin/env -S bash -e
 source "$(bro-shell-dir)/prelude.sh"
 
-DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 token="$(credentials get trails --field token)"
 runtime_directory="$(mktemp -d)"
 trap 'rm -rf "$runtime_directory"' EXIT
 
-cp "$DIR/runtime_credentials.json" "$runtime_directory/credentials.json"
-printf '%s\n' '{"backend": "local"}' >"$runtime_directory/trails_store.json"
+mkdir "$runtime_directory/creds"
+printf '%s\n' '{"backend": "local"}' >"$runtime_directory/creds/trails.cred"
 jq -n --arg token "$token" \
   '{tokens: {local: {token: $token, permissions: ["read", "write", "admin"]}}}' \
-  >"$runtime_directory/trails_tokens.json"
-export CREDENTIALS_REGISTRY="$runtime_directory/credentials.json"
+  >"$runtime_directory/creds/trails_tokens.cred"
+export BRO_STORE="$runtime_directory"
 
 trails-server --allow-env "$@"

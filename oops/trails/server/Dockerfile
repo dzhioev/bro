@@ -9,8 +9,8 @@ RUN set -- /tmp/bro-wheel/*.whl \
 
 ARG AWS_REGION=us-east-1
 ENV AWS_REGION=${AWS_REGION}
-ENV BRO_CONFIGS_DIR=/app/.configs
-COPY oops/trails/server/runtime_credentials.json ${BRO_CONFIGS_DIR}/credentials.json
+ENV BRO_STORE=/app/.configs
+COPY oops/trails/server/creds.json ${BRO_STORE}/creds.json
 
 ENV PORT=8004
 EXPOSE 8004

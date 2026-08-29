@@ -163,7 +163,7 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
 ## Service auth
 
 Bearer auth is mandatory outside an explicit loopback-only `TRAILS_ALLOW_NO_AUTH=1` server run (`--trails-allow-no-auth`).
-The hosted backend comes from `trails.json` and the tokens it accepts from `trails_tokens.json`, a server-side credential of its own
+The hosted backend comes from the `trails` credential and the tokens it accepts from `trails_tokens`, a server-side credential of its own
 — a client holds the one token it presents, never the table naming every token there is.
 Credential schemas are documented in `bro/setup/AGENTS.md`.
 
