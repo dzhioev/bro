@@ -72,53 +72,47 @@ def test_mints_installation_token_via_signed_app_jwt(monkeypatch):
 
 
 @pytest.fixture
-def bro_dir(monkeypatch, tmp_path: Path) -> Path:
-  """isolated credential search roots (as in base/credentials_test.py)"""
-  configs = tmp_path / 'configs'
-  bro = tmp_path / 'bro'
-  configs.mkdir()
-  bro.mkdir()
-  monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(configs))
-  monkeypatch.setattr(credentials, 'BRO_DIR', str(bro))
-  monkeypatch.setattr(credentials, '_default_store', None)
-  return bro
+def material_path(tmp_path: Path) -> Path:
+  path = tmp_path / credentials.MATERIAL_DIR / 'github+bot.cred'
+  path.parent.mkdir()
+  return path
 
 
 class TestSource:
-  def test_registry_parses_github_app_source(self):
-    secret = credentials.Secret.from_dict(
-      'github', {'sources': [{'type': 'github_app', 'file': 'github_app_bot.json'}]}
-    )
-    source = secret.sources[0]
-    assert isinstance(source, app.Source)
-    assert source.file == 'github_app_bot.json'
+  def test_store_parses_github_app_source(self, tmp_path: Path):
+    material = tmp_path / credentials.MATERIAL_DIR / 'github.cred'
+    material.parent.mkdir()
+    material.write_text('{}')
+    (tmp_path / credentials.SOURCES_FILE).write_text(json.dumps({'github': {'type': 'github_app'}}))
+
+    store = credentials.Store(credentials.default_registry(), tmp_path, {})
+
+    assert isinstance(store._sources['github'], app.Source)
 
   def test_mint_normalizes_numeric_ids(self, monkeypatch):
     expires_at = datetime(2026, 7, 18, 13, tzinfo=UTC)
     mint = MagicMock(return_value=app.InstallationToken('ghs_x', expires_at))
     monkeypatch.setattr(app, 'mint_installation_token', mint)
-    minted = app.Source('bot.json').mint(
-      {'app_id': 1234, 'installation_id': 567, 'private_key': 'PEM'}
-    )
+
+    minted = app.Source().mint({'app_id': 1234, 'installation_id': 567, 'private_key': 'PEM'})
+
     assert minted == credentials.Minted('ghs_x', expires_at)
     mint.assert_called_once_with(app_id='1234', installation_id='567', private_key='PEM')
 
   def test_mint_missing_keys_raises(self):
     with pytest.raises(ValueError, match="missing 'installation_id', 'private_key'"):
-      app.Source('bot.json').mint({'app_id': 1})
+      app.Source().mint({'app_id': 1})
 
   def test_mint_non_scalar_id_raises(self):
     with pytest.raises(ValueError, match="'app_id' must be a string or number"):
-      app.Source('bot.json').mint({'app_id': ['x'], 'installation_id': 1, 'private_key': 'P'})
+      app.Source().mint({'app_id': ['x'], 'installation_id': 1, 'private_key': 'P'})
 
   def test_mint_non_string_private_key_raises(self):
     with pytest.raises(ValueError, match="'private_key' must be a string"):
-      app.Source('bot.json').mint({'app_id': 1, 'installation_id': 2, 'private_key': 5})
+      app.Source().mint({'app_id': 1, 'installation_id': 2, 'private_key': 5})
 
-  def _configured(self, bro_dir: Path, monkeypatch, expires_in: timedelta) -> MagicMock:
-    (bro_dir / 'github_app_bot.json').write_text(
-      json.dumps({'app_id': 1, 'installation_id': 2, 'private_key': 'PEM'})
-    )
+  def _configured(self, material_path: Path, monkeypatch, expires_in: timedelta) -> MagicMock:
+    material_path.write_text(json.dumps({'app_id': 1, 'installation_id': 2, 'private_key': 'PEM'}))
     mint = MagicMock(
       side_effect=lambda **_: app.InstallationToken(
         f'ghs_{mint.call_count}', datetime.now(UTC) + expires_in
@@ -127,85 +121,85 @@ class TestSource:
     monkeypatch.setattr(app, 'mint_installation_token', mint)
     return mint
 
-  def test_a_second_source_reads_the_held_token(self, bro_dir: Path, monkeypatch):
-    mint = self._configured(bro_dir, monkeypatch, timedelta(hours=1))
-    first = app.Source('github_app_bot.json').fetch()
-    second = app.Source('github_app_bot.json').fetch()
+  def test_a_second_source_reads_the_held_token(self, material_path: Path, monkeypatch):
+    mint = self._configured(material_path, monkeypatch, timedelta(hours=1))
+
+    first = app.Source().fetch(material_path)
+    second = app.Source().fetch(material_path)
+
     assert first == second == 'ghs_1'
     assert mint.call_count == 1
 
-  def test_a_token_near_expiry_is_reminted(self, bro_dir: Path, monkeypatch):
-    mint = self._configured(bro_dir, monkeypatch, credentials.MintingSource.EXPIRY_MARGIN / 2)
-    assert app.Source('github_app_bot.json').fetch() == 'ghs_1'
-    assert app.Source('github_app_bot.json').fetch() == 'ghs_2'
+  def test_a_token_near_expiry_is_reminted(self, material_path: Path, monkeypatch):
+    mint = self._configured(material_path, monkeypatch, credentials.MintingSource.EXPIRY_MARGIN / 2)
+
+    assert app.Source().fetch(material_path) == 'ghs_1'
+    assert app.Source().fetch(material_path) == 'ghs_2'
     assert mint.call_count == 2
 
-  def test_a_held_token_is_reminted_once_its_lifetime_passes(self, bro_dir: Path, monkeypatch):
-    mint = self._configured(bro_dir, monkeypatch, timedelta(hours=1))
-    assert app.Source('github_app_bot.json').fetch() == 'ghs_1'
-    held_path = bro_dir / 'github_app_bot.json.minted'
+  def test_a_held_token_is_reminted_once_its_lifetime_passes(
+    self, material_path: Path, monkeypatch
+  ):
+    mint = self._configured(material_path, monkeypatch, timedelta(hours=1))
+    assert app.Source().fetch(material_path) == 'ghs_1'
+    held_path = material_path.with_name(f'{material_path.name}.minted')
     held = json.loads(held_path.read_text())
     aged = datetime.now(UTC) - app._HELD_LIFETIME - timedelta(seconds=1)
     held_path.write_text(json.dumps({**held, 'minted_at': aged.isoformat()}))
-    assert app.Source('github_app_bot.json').fetch() == 'ghs_2'
+
+    assert app.Source().fetch(material_path) == 'ghs_2'
     assert mint.call_count == 2
 
-  def test_the_held_token_is_owner_only(self, bro_dir: Path, monkeypatch):
-    self._configured(bro_dir, monkeypatch, timedelta(hours=1))
-    app.Source('github_app_bot.json').fetch()
-    held = bro_dir / 'github_app_bot.json.minted'
+  def test_the_held_token_is_owner_only(self, material_path: Path, monkeypatch):
+    self._configured(material_path, monkeypatch, timedelta(hours=1))
+
+    app.Source().fetch(material_path)
+
+    held = material_path.with_name(f'{material_path.name}.minted')
     assert held.stat().st_mode & 0o777 == 0o600
-    assert sorted(f.name for f in bro_dir.iterdir()) == [
-      'github_app_bot.json',
-      'github_app_bot.json.minted',
-    ]
 
   @pytest.mark.skipif(os.geteuid() == 0, reason='root writes through a read-only directory')
-  def test_a_read_only_store_holds_in_the_process(self, bro_dir: Path, monkeypatch):
-    mint = self._configured(bro_dir, monkeypatch, timedelta(hours=1))
-    source = app.Source('github_app_bot.json')
-    bro_dir.chmod(0o500)
+  def test_a_read_only_store_holds_in_the_process(self, material_path: Path, monkeypatch):
+    mint = self._configured(material_path, monkeypatch, timedelta(hours=1))
+    source = app.Source()
+    material_path.parent.chmod(0o500)
     try:
-      assert source.fetch() == 'ghs_1'
-      assert source.fetch() == 'ghs_1'
+      assert source.fetch(material_path) == 'ghs_1'
+      assert source.fetch(material_path) == 'ghs_1'
       assert mint.call_count == 1
-      # nothing published, so a second process has nothing to read
-      assert app.Source('github_app_bot.json').fetch() == 'ghs_2'
+      assert app.Source().fetch(material_path) == 'ghs_2'
     finally:
-      bro_dir.chmod(0o700)
+      material_path.parent.chmod(0o700)
     assert mint.call_count == 2
-    assert list(bro_dir.glob('*.minted*')) == []
+    assert list(material_path.parent.glob('*.minted*')) == []
 
   @pytest.mark.parametrize('leftover', ['{tru', '{}', '{"token": "ghs_old"}'])
-  def test_an_unreadable_held_token_is_reminted(self, bro_dir: Path, monkeypatch, leftover: str):
-    mint = self._configured(bro_dir, monkeypatch, timedelta(hours=1))
-    (bro_dir / 'github_app_bot.json.minted').write_text(leftover)
-    assert app.Source('github_app_bot.json').fetch() == 'ghs_1'
+  def test_an_unreadable_held_token_is_reminted(
+    self, material_path: Path, monkeypatch, leftover: str
+  ):
+    mint = self._configured(material_path, monkeypatch, timedelta(hours=1))
+    material_path.with_name(f'{material_path.name}.minted').write_text(leftover)
+
+    assert app.Source().fetch(material_path) == 'ghs_1'
     assert mint.call_count == 1
 
-  def test_scoped_store_round_trip(self, bro_dir: Path, monkeypatch):
-    # a github_app-backed variant hydrates as its minting config under the kind
-    # name, and the scoped entry rehydrates back into this Source in-session
+  def test_scoped_store_round_trip(self, tmp_path: Path, monkeypatch):
     config = {'app_id': 1, 'installation_id': 2, 'private_key': 'PEM'}
-    (bro_dir / 'github_app_bot.json').write_text(json.dumps(config))
-    (bro_dir / credentials.HOST_REGISTRY_FILE).write_text(
-      json.dumps(
-        {'github+bot': {'sources': [{'type': 'github_app', 'file': 'github_app_bot.json'}]}}
-      )
+    material = tmp_path / credentials.MATERIAL_DIR / 'github+bot.cred'
+    material.parent.mkdir()
+    material.write_text(json.dumps(config))
+    (tmp_path / credentials.SOURCES_FILE).write_text(
+      json.dumps({'github+bot': {'type': 'github_app'}})
     )
     mint = MagicMock(
       return_value=app.InstallationToken('ghs_x', datetime.now(UTC) + timedelta(hours=1))
     )
     monkeypatch.setattr(app, 'mint_installation_token', mint)
-    store = credentials.build_scoped_store(['github+bot'])
+    source_store = credentials.Store(credentials.default_registry(), tmp_path, {})
+
+    files, kinds = credentials.build_scoped_store(source_store, ['github+bot'])
+
     assert mint.call_count == 1
-    assert json.loads(store['github.cred']) == config
-    scoped = json.loads(store[credentials.REGISTRY_FILE])
-    assert scoped['github']['sources'] == [{'type': 'github_app', 'file': 'github.cred'}]
-    assert scoped['github']['install']['commands']['gh']['env'] == {
-      'GH_TOKEN': {'secret': 'github'}
-    }
-    rebuilt = credentials._registry_from_dict(scoped)
-    source = rebuilt['github'].sources[0]
-    assert isinstance(source, app.Source)
-    assert source.file == 'github.cred'
+    assert json.loads(files['creds/github.cred']) == config
+    assert json.loads(files['creds.json']) == {'github': {'type': 'github_app'}}
+    assert kinds == frozenset({'github'})

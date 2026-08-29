@@ -1,73 +1,20 @@
 #!/usr/bin/env python
-"""client-side credential resolver.
+"""Resolve credentials from one convention-based store.
 
-a reader calls `credentials.get(kind)` for a secret's raw text, or
-`get_json(kind)` to parse it as a json object — without caring where it lives or
-on which surface it runs. both are thin aliases over `default_store()`.
-resolution walks an ordered list of `Source`s per secret; the first source that
-has the value wins.
+The code registry declares credential kinds, descriptions, and optional install
+hooks.
+A store supplies material independently:
+`creds/<name>.cred` is the material for a kind or `kind+instance`, while
+`creds.json` optionally annotates a name with one typed source.
+`BRO_STORE` selects the process store and otherwise defaults to `~/.bro`.
 
-reads come in two addressing families, differing only in the names they accept —
-both resolve entries of whatever registry is loaded. the get family (`get`,
-`try_get`, `get_json`, `available`) is kind-addressed: it takes a kind and
-rejects a `kind+instance` name, always reading the kind's default-instance
-entry — the portable mode, since a generated scoped registry stores every
-hydrated secret under its kind name and so resolves kind reads by construction.
-the get_instance family (`get_instance`, `try_get_instance`,
-`get_instance_json`) is storage-addressed: it takes any stored entry name,
-plain or `kind+instance`, for readers that mean one specific entry. the CLI's
-`get` and `list` default to kind addressing; `--instance` switches them.
-
-sources are either stored or minting. two stored types: `local` searches the
-explicit `BRO_CONFIGS_DIR` when set, then `~/.bro/<file>`; deployed services set
-the explicit directory when they synthesize configs, while the host uses only
-`~/.bro`. `ssm` reads an AWS SSM parameter, from the named region or the
-surface's ambient one, for surfaces that resolve secrets from Parameter Store
-at runtime instead of carrying files. a minting type (a `MintingSource` subclass owned by a domain
-package, e.g. `github_app` in `extra/github/app.py`) derives short-lived values
-from a minting config file found
-along the same local search path; the source keeps the minted value and
-re-mints as expiry nears, and such a secret — like any secret whose references
-reach one — bypasses the store's process-lifetime cache, so every read observes
-a value with usable lifetime left. a generated
-`credentials.json` in either search dir overrides the built-in registry
-(`CREDENTIALS_REGISTRY=<file>` overrides both, process-scoped, and its directory
-joins the local search path first — so a materialized scoped store resolves
-wherever it lands); `build_scoped_store` emits a scoped one (in memory) that
-`ride` `docker cp`s into a container's `~/.bro` — or materializes into a host
-session's state dir — to bound the resolver to a chosen set of secrets.
-
-absent any of those overrides, resolution uses the host registry: the built-in
-defaults merged per-name with a host-local `registry.json` found along the
-same local search path as the secret files — entries that never enter the
-repo, typically `kind+instance` variants of a checked-in kind
-(`github+alice`). the kind entry (the name up to `+`) owns kind-level
-behavior — notably the install hook, a `bro.base.template` text rendered with
-`#name` bound to each instance's own name — so a variant declares only its
-sources. a kind entry may select its default instance by name instead of
-declaring sources: `{"instance": "alice"}` borrows `kind+alice`'s sources,
-keeping the kind's own install hook — the durable, host-owned way to decide
-which variant backs a kind (per-launch grant/revoke overrides it). instance
-entries never enter a generated registry: `build_scoped_store` materializes a
-variant under its kind name, so a scoped store carries kind entries only.
-
-a json secret may reference other secrets instead of embedding copies: an
-object node `{"$cred": "<name>"}` anywhere in its tree is replaced at
-resolution time with the referenced secret's value — the parsed object when
-that value is a json object, the raw text as a json string otherwise — and
-`{"$cred": "<name>", "field": "<key>"}` picks one top-level field of a
-json-object secret. expansion runs inside the store's resolve, before caching,
-so every consumer (`get`, `get_json`, the CLI, `build_scoped_store`) sees the
-effective, self-contained value — in particular a scoped store materializes
-expanded text for a cacheable expansion, keeping the container bounded to its
-declared secrets with no knowledge of the references. an expansion whose
-reference chain reaches a minting source is the exception: freezing it would
-strand the session on an expired value, so the scoped store ships the winning
-source's raw reference-preserving text instead and the session re-expands —
-and re-mints — per read; the kinds such text names are hydrated into the scope
-alongside it, so the session's own registry resolves them
-(`build_scoped_store`). a reference that does not resolve makes the referring
-secret absent; a malformed node, an absent field, or a reference cycle raises.
+Kind-addressed reads apply the store's explicit kind-to-instance selection.
+Storage-addressed reads use the name exactly as written.
+A JSON value may contain `{"$cred": "<name>"}` reference nodes, optionally with
+`"field": "<key>"`.
+A kind-spelled reference applies the same selection and an instance-spelled
+reference reads that stored instance directly.
+References are expanded before values reach consumers.
 """
 
 from __future__ import annotations
@@ -81,7 +28,7 @@ import shutil
 import sys
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
@@ -93,26 +40,20 @@ from bro.base.condition import StringVariable
 
 __cli_name__ = 'credentials'
 
-# local search roots, highest priority first: the explicit service config dir
-# when set, then the standalone `~/.bro` host store. module-level so tests can
-# point them at tmp dirs, and read at fetch time so the overrides take effect.
-CONFIGS_DIR = configs.BRO_CONFIGS_DIR
-BRO_DIR = configs.DEFAULT_BRO_DIR
+STORE_DIR = configs.STORE_DIR
+SOURCES_FILE = 'creds.json'
+MATERIAL_DIR = 'creds'
+MATERIAL_SUFFIX = '.cred'
+MINTED_SUFFIX = '.minted'
 
-# a generated registry file (emitted by `build_scoped_store`) overrides the
-# built-in default when present; absent, resolution falls through to the built-in.
-REGISTRY_FILE = 'credentials.json'
-
-# the process-scoped registry override described in the module docstring.
-REGISTRY_ENV = 'CREDENTIALS_REGISTRY'
-
-# the host-local additions file, searched along the resolver's local path and
-# merged per-name over the built-in registry (`host_registry`) — unlike a
-# generated REGISTRY_FILE, which replaces the registry wholesale to bound it.
-HOST_REGISTRY_FILE = 'registry.json'
+LEGACY_REGISTRY_ENV = 'CREDENTIALS_REGISTRY'
+LEGACY_CONFIGS_ENV = 'BRO_CONFIGS_DIR'
+LEGACY_REGISTRY_FILE = 'registry.json'
+LEGACY_CREDENTIALS_FILE = 'credentials.json'
 
 _CREDENTIAL_SOURCE_GROUP = 'bro.credential_sources'
 _CREDENTIAL_REGISTRY_GROUP = 'bro.credentials'
+_BUILTIN_REGISTRY_PATH = Path(__file__).with_name('registry.json')
 
 
 def _entry_points(group: str) -> tuple[importlib.metadata.EntryPoint, ...]:
@@ -127,15 +68,10 @@ def _entry_point(group: str, name: str) -> Optional[importlib.metadata.EntryPoin
   return matches[0] if len(matches) == 1 else None
 
 
-# a secret name: `kind` or `kind+instance`. the charsets keep every name safe
-# to splice into the single-quoted insert slot of an install-hook template, and
-# safe to type unquoted in a shell.
 _NAME_GRAMMAR = re.compile(r'([a-z0-9_]+)(?:\+([a-z0-9_-]+))?')
 
 
 def parse_name(name: str) -> tuple[str, Optional[str]]:
-  """split a secret name into (kind, instance); a plain name is its own kind
-  with no instance. raises on a name outside the grammar."""
   match = _NAME_GRAMMAR.fullmatch(name)
   if match is None:
     raise ValueError(f'malformed secret name {name!r}; expected kind or kind+instance')
@@ -143,8 +79,6 @@ def parse_name(name: str) -> tuple[str, Optional[str]]:
 
 
 def _require_kind(name: str) -> None:
-  """gate of the kind-addressed read family: the name must be a kind alone,
-  with no instance part."""
   kind, instance = parse_name(name)
   if instance is not None:
     raise ValueError(
@@ -154,15 +88,11 @@ def _require_kind(name: str) -> None:
     )
 
 
-# the reference-node keys of a json secret (module docstring): `$cred` names the
-# referenced secret, `field` optionally picks one top-level field of its object.
 _REFERENCE_KEY = '$cred'
 _REFERENCE_FIELD = 'field'
 
 
 class SecretNotFound(Exception):
-  """no source yielded a value for the named secret."""
-
   def __init__(self, name: str):
     super().__init__(f'secret {name!r} not found')
     self.name = name
@@ -177,82 +107,57 @@ _Resolution = tuple[str, bool] | _Unresolved
 
 
 class Source(Protocol):
-  """a place a secret's raw text might live: the source lifecycle contract.
+  """One source annotation bound to a convention-named material path by Store."""
 
-  a source either stores durable text (its fetch retrieves the value as-is) or
-  derives short-lived values from stored material (`MintingSource`). the
-  contract covers the three lifecycle points the store and the scoped-store
-  build need: producing the value (`fetch`), whether the produced value may be
-  memoized for the process (`CACHEABLE`), and how the source travels into a
-  bounded per-session store (`materialize_scoped`)."""
-
-  # whether the store may cache a fetched value for its lifetime; a source that
-  # mints short-lived values declares False and owns its own refresh instead
   CACHEABLE: ClassVar[bool]
 
-  def fetch(self) -> Optional[str]:
-    """return the raw text, or None when this source doesn't have it (try the next)."""
-    ...
+  def fetch(self, material_path: Path) -> Optional[str]: ...
 
-  def materialize_scoped(self, file: str, value: str) -> tuple[dict, bytes]:
-    """the source's scoped-store representation: the registry source entry and
-    the bytes of the `file` it points at. `value` is the text to embed — the
-    expanded host-resolved value, or the source's raw reference-preserving text
-    when the resolve was un-cacheable (`build_scoped_store` picks). a stored
-    source lands as a plain local entry over that value — the session never
-    learns the host source type; a minting source ships its own config instead,
-    so the session derives fresh values on read."""
-    ...
+  def materialize_scoped(self, material_path: Path, value: str) -> tuple[Optional[dict], bytes]: ...
 
 
 class LocalSource:
-  """reads `file` from the local search path (`_find_in_search_dirs`)."""
+  """Read the convention-named material file."""
 
   TYPE = 'local'
   CACHEABLE: ClassVar[bool] = True
 
-  def __init__(self, file: str):
-    self.file = file
-
-  def fetch(self) -> Optional[str]:
-    path = _find_in_search_dirs(self.file)
-    if path is None:
+  def fetch(self, material_path: Path) -> Optional[str]:
+    if not material_path.is_file():
       return None
     try:
-      text = path.read_text()
-    except UnicodeDecodeError:
-      raise ValueError(f'credential file {path} is not valid UTF-8 text')
+      text = material_path.read_text()
+    except UnicodeDecodeError as error:
+      raise ValueError(f'credential file {material_path} is not valid UTF-8 text') from error
     if '\x00' in text:
-      raise ValueError(f'credential file {path} contains null bytes')
+      raise ValueError(f'credential file {material_path} contains null bytes')
     return text
 
-  def materialize_scoped(self, file: str, value: str) -> tuple[dict, bytes]:
-    return {'file': file}, value.encode()
+  def materialize_scoped(self, material_path: Path, value: str) -> tuple[Optional[dict], bytes]:
+    return None, value.encode()
 
   @classmethod
   def from_dict(cls, data: dict) -> LocalSource:
-    return cls(data['file'])
+    if len(data) > 0:
+      raise ValueError(f'local credential source declares unknown fields: {sorted(data)}')
+    return cls()
 
 
 class SSMSource:
-  """reads an AWS SSM parameter (decrypted). the region names where the
-  parameter lives for surfaces with no ambient AWS region to discover (e.g. a
-  ride container holding only static credentials); a source without one reads
-  the ambient region — which an AWS-hosted service carries in its environment —
-  and boto3 fails loudly where neither exists. credentials come from the
-  ambient AWS configuration. a missing parameter falls through to the next
-  source; credential or permission errors propagate — a surface that is
-  supposed to reach SSM but can't is a loud failure, not a silent fallthrough."""
+  """Read one decrypted AWS SSM parameter."""
 
   TYPE = 'ssm'
   CACHEABLE: ClassVar[bool] = True
 
   def __init__(self, parameter: str, region: Optional[str] = None):
+    if not isinstance(parameter, str) or parameter == '':
+      raise ValueError('ssm credential source parameter must be a non-empty string')
+    if region is not None and (not isinstance(region, str) or region == ''):
+      raise ValueError('ssm credential source region must be a non-empty string')
     self.parameter = parameter
     self.region = region
 
-  def fetch(self) -> Optional[str]:
-    # deferred so surfaces that never resolve an ssm-backed secret don't need boto3
+  def fetch(self, material_path: Path) -> Optional[str]:
     import boto3
 
     client = boto3.client('ssm', region_name=self.region)
@@ -262,155 +167,92 @@ class SSMSource:
       return None
     return response['Parameter']['Value']
 
-  def materialize_scoped(self, file: str, value: str) -> tuple[dict, bytes]:
-    return {'file': file}, value.encode()
+  def materialize_scoped(self, material_path: Path, value: str) -> tuple[Optional[dict], bytes]:
+    return None, value.encode()
 
   @classmethod
   def from_dict(cls, data: dict) -> SSMSource:
+    unknown = sorted(set(data) - {'parameter', 'region'})
+    if len(unknown) > 0:
+      raise ValueError(f'ssm credential source declares unknown fields: {unknown}')
+    if 'parameter' not in data:
+      raise ValueError("ssm credential source is missing 'parameter'")
     return cls(data['parameter'], data.get('region'))
 
 
 @dataclass(frozen=True)
 class Minted:
-  """one minted value with its expiry (timezone-aware)."""
-
   value: str
   expires_at: datetime
 
 
 class MintingSource(ABC):
-  """a source that derives short-lived values from a minting config file on the
-  local search path: a self-contained json object holding whatever material the
-  concrete type's `mint` needs. the source keeps the minted value with its
-  expiry and re-mints once less than `EXPIRY_MARGIN` remains, so a caller that
-  just resolved the secret gets at least that window to use the value. scoped
-  stores ship the config file itself (`materialize_scoped`), so a bounded
-  session re-derives fresh values on read.
-
-  a concrete type names its registry `TYPE`, implements `mint` (validating its
-  own config fields), and registers that type in `bro.credential_sources`."""
+  """Derive short-lived values from the convention-named JSON material file."""
 
   TYPE: ClassVar[str]
   CACHEABLE: ClassVar[bool] = False
-
-  # re-mint threshold: the remaining lifetime below which the held value is stale
   EXPIRY_MARGIN = timedelta(minutes=5)
 
-  def __init__(self, file: str):
-    self.file = file
+  def __init__(self, **parameters: object):
+    self._source_parameters = dict(parameters)
     self._minted: Optional[Minted] = None
 
   @abstractmethod
-  def mint(self, config: dict) -> Minted:
-    """derive a fresh value from the parsed minting config."""
-    ...
+  def mint(self, config: dict) -> Minted: ...
 
-  def fetch(self) -> Optional[str]:
-    config = self.config()
+  def fetch(self, material_path: Path) -> Optional[str]:
+    config = self.config(material_path)
     if config is None:
       return None
     if self._minted is None or datetime.now(UTC) >= self._minted.expires_at - self.EXPIRY_MARGIN:
       self._minted = self.mint(config)
     return self._minted.value
 
-  def config(self) -> Optional[dict]:
-    """the parsed minting config, or None when the file is absent along the
-    search path. a local read — nothing is minted."""
-    text = self._config_text()
+  def config(self, material_path: Path) -> Optional[dict]:
+    text = self._config_text(material_path)
     if text is None:
       return None
-    return self._parse_config(text)
+    return self._parse_config(material_path, text)
 
-  def materialize_scoped(self, file: str, value: str) -> tuple[dict, bytes]:
-    text = self._config_text()
+  def materialize_scoped(self, material_path: Path, value: str) -> tuple[Optional[dict], bytes]:
+    text = self._config_text(material_path)
     if text is None:
-      raise ValueError(f'{self.TYPE} config {self.file!r} disappeared during hydration')
-    return {'type': self.TYPE, 'file': file}, text.encode()
+      raise ValueError(f'{self.TYPE} config {material_path} disappeared during hydration')
+    return {'type': self.TYPE, **self._source_parameters}, text.encode()
 
-  def _config_path(self) -> Optional[Path]:
-    return _find_in_search_dirs(self.file)
-
-  def _config_text(self) -> Optional[str]:
-    path = self._config_path()
-    if path is None:
+  def _config_text(self, material_path: Path) -> Optional[str]:
+    if not material_path.is_file():
       return None
-    return path.read_text()
+    try:
+      return material_path.read_text()
+    except UnicodeDecodeError as error:
+      raise ValueError(f'{self.TYPE} config {material_path} is not valid UTF-8 text') from error
 
-  def _parse_config(self, text: str) -> dict:
+  def _parse_config(self, material_path: Path, text: str) -> dict:
     try:
       config = json.loads(text)
-    except json.JSONDecodeError as e:
-      raise ValueError(f'{self.TYPE} config {self.file!r} is not valid json') from e
+    except json.JSONDecodeError as error:
+      raise ValueError(f'{self.TYPE} config {material_path} is not valid json') from error
     if not isinstance(config, dict):
-      raise ValueError(f'{self.TYPE} config {self.file!r} is not a json object')
+      raise ValueError(f'{self.TYPE} config {material_path} is not a json object')
     return config
 
   @classmethod
   def from_dict(cls, data: dict) -> MintingSource:
-    return cls(data['file'])
-
-
-def _search_dirs() -> list[str]:
-  # an explicit CREDENTIALS_REGISTRY carries its sibling files: a scoped store is
-  # a registry plus the `{name}.cred` files it points at, materialized in one dir
-  # (`build_scoped_store`), so that dir must be searched first for the store to
-  # resolve wherever it lands — the container's ~/.bro needs no override, a host
-  # session's store lives outside the standard dirs.
-  directories: list[str] = []
-  override = os.environ.get(REGISTRY_ENV)
-  if override is not None and override != '':
-    directories.append(str(Path(override).parent))
-  if CONFIGS_DIR is not None:
-    directories.append(CONFIGS_DIR)
-  directories.append(BRO_DIR)
-  return directories
-
-
-def _find_in_search_dirs(file: str) -> Optional[Path]:
-  """locate `file` along the local search path; per file, the first search dir
-  that has it wins (dirs like `$PATH`), absent everywhere → None."""
-  for directory in _search_dirs():
-    path = Path(directory) / file
-    if path.is_file():
-      return path
-  return None
-
-
-def _contains_reference(node: Any) -> bool:
-  if isinstance(node, dict):
-    return _REFERENCE_KEY in node or any(_contains_reference(value) for value in node.values())
-  if isinstance(node, list):
-    return any(_contains_reference(item) for item in node)
-  return False
-
-
-def _referenced_names(text: str) -> set[str]:
-  """every `$cred` target named by a json secret's reference nodes; empty for
-  non-json text, which cannot carry references."""
-
-  def walk(node: Any) -> set[str]:
-    if isinstance(node, dict):
-      if _REFERENCE_KEY in node:
-        return {node[_REFERENCE_KEY]}
-      return {name for value in node.values() for name in walk(value)}
-    if isinstance(node, list):
-      return {name for item in node for name in walk(item)}
-    return set()
-
-  try:
-    tree = json.loads(text)
-  except json.JSONDecodeError:
-    return set()
-  return walk(tree)
+    return cls(**data)
 
 
 def _source_from_dict(data: dict) -> Source:
-  """reconstruct a Source from its `type` discriminator; `type` defaults to local."""
-  type_name = data.get('type', LocalSource.TYPE)
+  if not isinstance(data, dict):
+    raise ValueError(f'credential source annotation must be an object, got {type(data).__name__}')
+  type_name = data.get('type')
+  if not isinstance(type_name, str) or type_name == '':
+    raise ValueError("credential source annotation must carry a non-empty string 'type'")
+  parameters = {key: value for key, value in data.items() if key != 'type'}
   if type_name == LocalSource.TYPE:
-    return LocalSource.from_dict(data)
+    return LocalSource.from_dict(parameters)
   if type_name == SSMSource.TYPE:
-    return SSMSource.from_dict(data)
+    return SSMSource.from_dict(parameters)
   entry_point = _entry_point(_CREDENTIAL_SOURCE_GROUP, type_name)
   if entry_point is None:
     known = sorted(
@@ -423,35 +265,30 @@ def _source_from_dict(data: dict) -> Source:
     raise TypeError(
       f'{_CREDENTIAL_SOURCE_GROUP} entry point {type_name!r} must load a MintingSource class'
     )
-  return source_class.from_dict(data)
+  return source_class.from_dict(parameters)
 
 
-class Secret:
-  """one named credential: an ordered source list (the order is the resolution
-  priority). the resolver treats the value as an opaque text blob — callers pick
-  the shape, `get()` for the raw text or `get_json()` to parse it as a json object.
+class CredentialKind:
+  """Code-owned metadata for one credential kind."""
 
-  `install` is an optional hook that wires the secret into the tool that
-  consumes it from *outside* the resolver (git, the `gh` and aws CLIs) —
-  declared as the files, environment and shadowed commands a session needs,
-  never as code to run (`install_hooks` applies it and owns the schema). Every
-  string in it is a `bro.base.template` text over the `#name` variable —
-  `{"secret": "{{insert #name}}"}` — so one kind-level hook serves every
-  instance of the kind. The raw declaration is kept (`install_template`) and
-  rendered per name by `install_for`, because the name an entry resolves under
-  is not always its own: a scoped store materializes a variant under its kind
-  name. `install` is the hook rendered with the secret's own name, computed
-  eagerly so a malformed template fails at registry load."""
-
-  def __init__(self, name: str, sources: Sequence[Source], *, install: Optional[dict] = None):
+  def __init__(self, name: str, description: str, *, install: Optional[dict] = None):
+    _require_kind(name)
+    if (
+      not isinstance(description, str) or description.strip() != description or '\n' in description
+    ):
+      raise ValueError(f'credential kind {name!r}: description must be one trimmed line')
+    if description == '':
+      raise ValueError(f'credential kind {name!r}: description must not be empty')
+    if install is not None and not isinstance(install, dict):
+      raise ValueError(
+        f'credential kind {name!r}: install must be an object, got {type(install).__name__}'
+      )
     self.name = name
-    self.sources = sources
+    self.description = description
     self.install_template = install
     self.install = self.install_for(name)
 
   def install_for(self, name: str) -> Optional[dict]:
-    """the install hook rendered with `#name` bound to `name`, or None when the
-    secret declares no hook."""
     if self.install_template is None:
       return None
     install = _render_install(self.install_template, name)
@@ -459,16 +296,22 @@ class Secret:
     return install
 
   @classmethod
-  def from_dict(cls, name: str, data: dict) -> Secret:
-    install = data.get('install')
-    if install is not None and not isinstance(install, dict):
-      raise ValueError(f'secret {name!r}: install must be an object, got {type(install).__name__}')
-    return cls(name, [_source_from_dict(s) for s in data['sources']], install=install)
+  def from_dict(cls, name: str, data: dict) -> CredentialKind:
+    if not isinstance(data, dict):
+      raise ValueError(f'credential registry entry {name!r} must be an object')
+    unknown = sorted(set(data) - {'description', 'install'})
+    if len(unknown) > 0:
+      raise ValueError(
+        f'credential registry entry {name!r} carries retired or unknown fields '
+        f'{unknown}; move source configuration to {SOURCES_FILE} and material to '
+        f'{MATERIAL_DIR}/<name>{MATERIAL_SUFFIX}'
+      )
+    if 'description' not in data:
+      raise ValueError(f'credential registry entry {name!r} is missing required description')
+    return cls(name, data['description'], install=data.get('install'))
 
 
 def _render_install(install: dict, name: str) -> dict:
-  """the hook with every string value rendered for `name`; keys are paths,
-  variables and command names, and stay as declared."""
   variables = {'name': StringVariable(name)}
 
   def render(value: object) -> object:
@@ -484,123 +327,145 @@ def _render_install(install: dict, name: str) -> dict:
 def _parse_json_object(name: str, raw: str) -> dict:
   try:
     value = json.loads(raw)
-  except json.JSONDecodeError as e:
-    raise ValueError(f'secret {name!r} is not valid json') from e
+  except json.JSONDecodeError as error:
+    raise ValueError(f'secret {name!r} is not valid json') from error
   if not isinstance(value, dict):
     raise ValueError(f'secret {name!r} is not a json object')
   return value
 
 
+def _contains_reference(node: Any) -> bool:
+  if isinstance(node, dict):
+    return _REFERENCE_KEY in node or any(_contains_reference(value) for value in node.values())
+  if isinstance(node, list):
+    return any(_contains_reference(item) for item in node)
+  return False
+
+
+def _referenced_names(text: str) -> set[str]:
+  def walk(node: Any) -> set[str]:
+    if isinstance(node, dict):
+      if _REFERENCE_KEY in node:
+        target = node[_REFERENCE_KEY]
+        return {target} if isinstance(target, str) else set()
+      return {name for value in node.values() for name in walk(value)}
+    if isinstance(node, list):
+      return {name for item in node for name in walk(item)}
+    return set()
+
+  try:
+    tree = json.loads(text)
+  except json.JSONDecodeError:
+    return set()
+  return walk(tree)
+
+
 class Store:
-  """resolves secrets against a registry, caching resolved values for its
-  lifetime — except values a source declares un-cacheable (`Source.CACHEABLE`,
-  e.g. a minted short-lived token): those re-fetch on every read, the source
-  owning its own refresh, and a secret whose reference expansion embedded one
-  is re-expanded per read for the same reason. a json secret's `{"$cred": ...}`
-  reference nodes are expanded during the resolve (module docstring), so cached
-  and returned values are always the effective, self-contained text.
+  """Resolve one code registry against one exclusive directory and selection."""
 
-  `readable` bounds the names a reader may address, defaulting to the whole
-  registry. reference expansion resolves through the registry regardless, so a
-  store serving part of one expands exactly what a store over all of it would;
-  a name outside the bound reads as absent."""
-
-  def __init__(self, registry: dict[str, Secret], *, readable: Optional[Iterable[str]] = None):
-    self._registry = registry
-    known = frozenset(registry)
-    self._readable = known if readable is None else frozenset(readable)
-    absent = sorted(self._readable - known)
-    if len(absent) > 0:
-      raise ValueError(f'readable names outside the registry: {", ".join(map(repr, absent))}')
+  def __init__(
+    self,
+    registry: Mapping[str, CredentialKind],
+    store_dir: str | Path,
+    selection: Mapping[str, Optional[str]],
+    *,
+    _readable: Optional[Iterable[str]] = None,
+  ):
+    self.registry = dict(registry)
+    self.store_dir = Path(store_dir)
+    self.selection = _validate_selection(selection, self.registry)
+    self._readable = None if _readable is None else frozenset(_readable)
+    if self._readable is not None:
+      unknown = sorted(self._readable - self.registry.keys())
+      if len(unknown) > 0:
+        raise ValueError(f'readable kinds outside the registry: {unknown}')
+    self._sources = self._load_sources()
     self._cache: dict[str, str] = {}
     self._winners: dict[str, Source] = {}
     self._lock = threading.Lock()
 
-  def try_get(self, name: str) -> Optional[str]:
-    """kind-addressed `try_get_instance`: resolve a kind to its raw text
-    (stripped), or None when no source yields a value, directly or through a
-    reference — the non-raising primitive for callers that treat an absent secret
-    as expected. `get` is the strict wrapper. malformed values still raise:
-    absence is expected, corruption is not."""
-    _require_kind(name)
-    return self.try_get_instance(name)
+  def _load_sources(self) -> dict[str, Source]:
+    path = self.store_dir / SOURCES_FILE
+    if not path.is_file():
+      return {}
+    try:
+      data = json.loads(path.read_text())
+    except json.JSONDecodeError as error:
+      raise ValueError(f'credential source file {path} is not valid json') from error
+    if not isinstance(data, dict):
+      raise ValueError(f'credential source file {path} must be a json object')
+    sources: dict[str, Source] = {}
+    for name, annotation in data.items():
+      kind, _ = parse_name(name)
+      if not isinstance(annotation, dict):
+        raise ValueError(f'credential source annotation {name!r} must be an object')
+      type_name = annotation.get('type')
+      if not isinstance(type_name, str) or type_name == '':
+        raise ValueError(
+          f'credential source annotation {name!r} must carry a non-empty string type'
+        )
+      if kind not in self.registry:
+        if (
+          type_name in {LocalSource.TYPE, SSMSource.TYPE}
+          or _entry_point(_CREDENTIAL_SOURCE_GROUP, type_name) is not None
+        ):
+          _source_from_dict(annotation)
+        continue
+      sources[name] = _source_from_dict(annotation)
+    return sources
 
-  def try_get_instance(self, name: str) -> Optional[str]:
-    """storage-addressed read: resolve the registry entry stored under `name` —
-    plain (the kind's default instance) or `kind+instance` — to its raw text
-    (stripped), or None when no source yields a value. `get_instance` is the
-    raising wrapper."""
-    parse_name(name)
-    resolved = self.resolve(name)
-    return resolved[0] if resolved is not None else None
+  def _material_path(self, storage_name: str) -> Path:
+    return self.store_dir / MATERIAL_DIR / f'{storage_name}{MATERIAL_SUFFIX}'
+
+  def selected_name(self, name: str) -> str:
+    kind, instance = parse_name(name)
+    if instance is not None:
+      return name
+    selected = self.selection.get(kind)
+    return kind if selected is None else f'{kind}+{selected}'
+
+  def _source(self, storage_name: str) -> Source:
+    return self._sources.get(storage_name, LocalSource())
 
   def resolve(self, name: str) -> Optional[tuple[str, bool]]:
-    """resolve a secret by its stored registry name to (value, cacheable), or
-    None when the name is outside the store's readable bound or no source yields
-    a value, directly or through a reference. cacheable is False when the winning
-    source — or any source behind the expanded references — declares its values
-    un-cacheable, i.e. a later read may observe a different (re-derived) value;
-    `try_get_instance`/`get_instance` are the value-only spellings."""
-    resolved = self._resolution(name)
+    storage_name = self.selected_name(name)
+    resolved = self._resolution(storage_name, requested=name)
     return None if isinstance(resolved, _Unresolved) else resolved
 
-  def _resolution(self, name: str) -> _Resolution:
-    if name not in self._readable:
-      return _Unresolved(name)
-    # one lock around the whole resolve: a secret is fetched at most once even
-    # under concurrent callers, and the store is read only a handful of times per
-    # process (each value cached on first read), so a lock-free fast path buys
-    # nothing.
-    with self._lock:
-      return self._resolve(name, chain=())
+  def resolve_instance(self, name: str) -> Optional[tuple[str, bool]]:
+    parse_name(name)
+    resolved = self._resolution(name, requested=name)
+    return None if isinstance(resolved, _Unresolved) else resolved
 
-  def _resolve(self, name: str, chain: tuple[str, ...]) -> _Resolution:
-    """fetch, expand, and cache one secret; `chain` is the stack of secrets whose
-    expansions are in progress, for cycle detection. returns (value, cacheable)
-    or the unresolved name — an empty reference propagates its target. cacheable
-    is False when the winning source, or any source behind the expanded
-    references, declares its values un-cacheable. callers hold the lock."""
-    cached = self._cache.get(name)
+  def _resolution(self, storage_name: str, *, requested: str) -> _Resolution:
+    kind, _ = parse_name(storage_name)
+    if kind not in self.registry or (self._readable is not None and kind not in self._readable):
+      return _Unresolved(requested)
+    with self._lock:
+      return self._resolve(storage_name, chain=())
+
+  def _resolve(self, storage_name: str, chain: tuple[str, ...]) -> _Resolution:
+    cached = self._cache.get(storage_name)
     if cached is not None:
       return cached, True
-    secret = self._registry.get(name)
-    if secret is None:
-      return _Unresolved(name)
-    for source in secret.sources:
-      raw = source.fetch()
-      if raw is None:
-        continue
-      expanded = self._expand_references(raw.strip(), (*chain, name))
-      if isinstance(expanded, _Unresolved):
-        return expanded
-      value, references_cacheable = expanded
-      self._winners[name] = source
-      cacheable = source.CACHEABLE and references_cacheable
-      if cacheable:
-        self._cache[name] = value
-      return value, cacheable
-    return _Unresolved(name)
-
-  def winning_source(self, name: str) -> Source:
-    """the source that produced `name`'s value in this store — recorded by the
-    resolve, so call it only after a successful `get`/`try_get`; raises KeyError
-    before one."""
-    with self._lock:
-      return self._winners[name]
-
-  def sources(self, name: str) -> Sequence[Source]:
-    """the ordered source list this store reads `name` through, empty when the
-    name is outside its readable bound. a registry read — nothing is fetched or
-    minted."""
-    if name not in self._readable:
-      return ()
-    return self._registry[name].sources
+    kind, _ = parse_name(storage_name)
+    if kind not in self.registry or (self._readable is not None and kind not in self._readable):
+      return _Unresolved(storage_name)
+    source = self._source(storage_name)
+    raw = source.fetch(self._material_path(storage_name))
+    if raw is None:
+      return _Unresolved(storage_name)
+    expanded = self._expand_references(raw.strip(), (*chain, storage_name))
+    if isinstance(expanded, _Unresolved):
+      return expanded
+    value, references_cacheable = expanded
+    self._winners[storage_name] = source
+    cacheable = source.CACHEABLE and references_cacheable
+    if cacheable:
+      self._cache[storage_name] = value
+    return value, cacheable
 
   def _expand_references(self, text: str, chain: tuple[str, ...]) -> _Resolution:
-    """substitute every reference node in a json secret's tree; text that isn't
-    json, or json with no reference nodes, passes through byte-identical. also
-    returns whether every referenced secret allowed caching (vacuously True for
-    text with no references), or the name of an empty reference."""
     try:
       tree = json.loads(text)
     except json.JSONDecodeError:
@@ -653,9 +518,10 @@ class Store:
     field = node.get(_REFERENCE_FIELD)
     if field is not None and not isinstance(field, str):
       raise ValueError(f'secret {referrer!r}: reference field must be a string, got {field!r}')
-    if target in chain:
-      raise ValueError(f'credential reference cycle: {" -> ".join((*chain, target))}')
-    resolved = self._resolve(target, chain)
+    target_storage = self.selected_name(target)
+    if target_storage in chain:
+      raise ValueError(f'credential reference cycle: {" -> ".join((*chain, target_storage))}')
+    resolved = self._resolve(target_storage, chain)
     if isinstance(resolved, _Unresolved):
       unresolved.append(resolved)
       return None
@@ -680,49 +546,78 @@ class Store:
       )
     return value
 
-  def get(self, name: str) -> str:
-    """kind-addressed `get_instance`: resolve a kind to its raw text, raising
-    `SecretNotFound` when no source yields a value."""
+  def try_get(self, name: str) -> Optional[str]:
     _require_kind(name)
-    return self.get_instance(name)
+    resolved = self.resolve(name)
+    return None if resolved is None else resolved[0]
 
-  def get_instance(self, name: str) -> str:
-    """storage-addressed `try_get_instance` that raises `SecretNotFound` for the
-    name that came up empty, including a referenced target."""
-    parse_name(name)
-    resolved = self._resolution(name)
+  def try_get_instance(self, name: str) -> Optional[str]:
+    resolved = self.resolve_instance(name)
+    return None if resolved is None else resolved[0]
+
+  def get(self, name: str) -> str:
+    _require_kind(name)
+    resolved = self._resolution(self.selected_name(name), requested=name)
     if isinstance(resolved, _Unresolved):
       raise SecretNotFound(resolved.name)
     return resolved[0]
 
-  def available(self, name: str) -> bool:
-    """whether the kind `name` resolves in this store. the predicate behind both
-    the runtime capability gate and the credential template directives
-    (llm/mcp.py)."""
-    return self.try_get(name) is not None
-
-  def available_instance(self, name: str) -> bool:
-    """storage-addressed `available`: whether the registry entry stored under
-    `name` — plain or `kind+instance` — resolves in this store."""
-    return self.try_get_instance(name) is not None
-
-  def known_names(self) -> frozenset[str]:
-    """every secret name this store serves, resolvable or not."""
-    return self._readable
+  def get_instance(self, name: str) -> str:
+    parse_name(name)
+    resolved = self._resolution(name, requested=name)
+    if isinstance(resolved, _Unresolved):
+      raise SecretNotFound(resolved.name)
+    return resolved[0]
 
   def get_json(self, name: str) -> dict:
-    """kind-addressed `get` parsed as a json object. raises if the text isn't
-    valid json or isn't an object (e.g. a scalar token)."""
     return _parse_json_object(name, self.get(name))
 
   def get_instance_json(self, name: str) -> dict:
-    """storage-addressed `get_instance` parsed as a json object."""
     return _parse_json_object(name, self.get_instance(name))
 
+  def available(self, name: str) -> bool:
+    return self.try_get(name) is not None
 
-# every secret the project knows about, in the same shape as a generated
-# `credentials.json` so it is constructed the same way (via `Secret.from_dict`).
-_BUILTIN_REGISTRY_PATH = Path(__file__).with_name('registry.json')
+  def available_instance(self, name: str) -> bool:
+    return self.try_get_instance(name) is not None
+
+  def known_names(self) -> frozenset[str]:
+    return frozenset(self.registry)
+
+  def instance_names(self) -> frozenset[str]:
+    names = set(self._sources)
+    material_dir = self.store_dir / MATERIAL_DIR
+    if material_dir.is_dir():
+      for path in material_dir.glob(f'*{MATERIAL_SUFFIX}'):
+        names.add(path.name.removesuffix(MATERIAL_SUFFIX))
+    accepted: set[str] = set()
+    for name in names:
+      kind, _ = parse_name(name)
+      if kind in self.registry:
+        accepted.add(name)
+    return frozenset(accepted)
+
+  def winning_source(self, name: str) -> Source:
+    return self._winners[self.selected_name(name)]
+
+  def material_path(self, name: str) -> Path:
+    return self._material_path(self.selected_name(name))
+
+
+def _validate_selection(
+  selection: Mapping[str, Optional[str]], registry: Mapping[str, CredentialKind]
+) -> dict[str, Optional[str]]:
+  result: dict[str, Optional[str]] = {}
+  for kind, instance in selection.items():
+    _require_kind(kind)
+    if kind not in registry:
+      raise ValueError(f'instance selected for unknown credential kind {kind!r}')
+    if instance is not None:
+      if not isinstance(instance, str):
+        raise ValueError(f'credential instance for {kind!r} must be a string or null')
+      parse_name(f'{kind}+{instance}')
+    result[kind] = instance
+  return result
 
 
 def _contributed_registry_data() -> dict[str, dict]:
@@ -739,170 +634,31 @@ def _contributed_registry_data() -> dict[str, dict]:
   return data
 
 
-def _builtin_registry_data() -> dict:
-  """the built-in registry merged with installed credential contributions."""
+def default_registry() -> dict[str, CredentialKind]:
   data = json.loads(_BUILTIN_REGISTRY_PATH.read_text())
-  data.update(_contributed_registry_data())
-  return data
+  if not isinstance(data, dict):
+    raise ValueError(f'credential registry {_BUILTIN_REGISTRY_PATH} must be a json object')
+  for name, entry in _contributed_registry_data().items():
+    if name in data:
+      raise ValueError(f'credential registry contribution duplicates kind {name!r}')
+    data[name] = entry
+  return {name: CredentialKind.from_dict(name, entry) for name, entry in data.items()}
 
 
-def _registry_from_dict(data: dict) -> dict[str, Secret]:
-  return {name: Secret.from_dict(name, spec) for name, spec in data.items()}
-
-
-def _resolve_kinds(data: dict) -> dict:
-  """validate every name against the grammar, resolve each kind entry's
-  `instance` selector (`_select_default_instance`), and give each
-  `kind+instance` variant its kind entry's install-hook template (instantiated
-  per-entry by `Secret.from_dict`). the kind owns kind-level behavior, so a
-  variant carrying its own `install` or `instance` — or naming a kind the
-  registry lacks — is an error. only the built-in/host registries pass through
-  here: a generated registry is self-contained, its variant entries already
-  carrying their materialized hooks.
-  """
-  resolved: dict[str, dict] = {}
-  for name, entry in data.items():
-    kind, instance = parse_name(name)
-    if instance is None:
-      resolved[name] = _select_default_instance(name, entry, data) if 'instance' in entry else entry
-      continue
-    if 'install' in entry:
-      raise ValueError(f'variant {name!r} declares an install hook; the kind entry owns it')
-    if 'instance' in entry:
+def _reject_legacy_configuration() -> None:
+  for variable in (LEGACY_REGISTRY_ENV, LEGACY_CONFIGS_ENV):
+    if variable in os.environ:
       raise ValueError(
-        f'variant {name!r} declares an instance selector; only a kind entry selects '
-        'its default instance'
+        f'{variable} is retired; set BRO_STORE to the exclusive credential store directory'
       )
-    kind_entry = data.get(kind)
-    if kind_entry is None:
-      raise ValueError(f'variant {name!r} has no kind entry {kind!r} in the registry')
-    install = kind_entry.get('install')
-    resolved[name] = entry if install is None else {**entry, 'install': install}
-  return resolved
-
-
-def _select_default_instance(kind: str, entry: dict, data: dict) -> dict:
-  """resolve a kind entry's `instance` selector: `{"instance": "acme"}` makes
-  `kind+acme` the kind's default instance — the kind entry borrows that
-  variant's sources, keeping its own install hook."""
-  instance = entry['instance']
-  if not isinstance(instance, str):
-    raise ValueError(f'kind {kind!r}: instance selector must be a string, got {instance!r}')
-  if 'sources' in entry:
-    raise ValueError(f'kind {kind!r} declares both an instance selector and its own sources')
-  variant = f'{kind}+{instance}'
-  parse_name(variant)
-  variant_entry = data.get(variant)
-  if variant_entry is None:
-    raise ValueError(
-      f'kind {kind!r} selects instance {instance!r}, but {variant!r} is not in the registry'
-    )
-  selected: dict = {'sources': variant_entry['sources']}
-  install = entry.get('install')
-  if install is not None:
-    selected['install'] = install
-  return selected
-
-
-def default_registry() -> dict[str, Secret]:
-  """the framework registry merged with installed credential contributions."""
-  return _registry_from_dict(_resolve_kinds(_builtin_registry_data()))
-
-
-def host_registry() -> dict[str, Secret]:
-  """the built-in registry merged per-name with the host-local additions file —
-  entries that never enter the repo: variants of a checked-in kind, or the
-  host's sources for a kind whose checked-in entry declares none. an addition
-  that doesn't declare `install` inherits the built-in entry's hook, so a
-  sources-only override keeps the kind's checked-in wiring. the additions file
-  follows the local search path, like any secret file. kind resolution runs
-  after the merge, so a variant picks up its kind's hook even when an addition
-  overrides the kind, and after `select_instances`, whose selections replace the
-  sources of the kinds they name."""
-  data = _builtin_registry_data()
-  additions_path = _find_in_search_dirs(HOST_REGISTRY_FILE)
-  if additions_path is not None:
-    for name, entry in json.loads(additions_path.read_text()).items():
-      builtin = data.get(name)
-      if builtin is not None and 'install' in builtin and 'install' not in entry:
-        entry = {**entry, 'install': builtin['install']}
-      data[name] = entry
-  for kind, instance in _selected_instances.items():
-    data[kind] = _selected_entry(kind, instance, data)
-  return _registry_from_dict(_resolve_kinds(data))
-
-
-def _selected_entry(kind: str, instance: Optional[str], data: dict) -> dict:
-  """the kind's entry under a `select_instances` binding: an instance replaces
-  the kind's sources with a selector `_select_default_instance` then follows,
-  while None reads the entry's own sources — which a kind entry selecting an
-  instance of its own does not have."""
-  entry = data.get(kind)
-  if entry is None:
-    raise ValueError(f'instance selected for kind {kind!r}, which the registry does not carry')
-  without_selection = {key: value for key, value in entry.items() if key != 'instance'}
-  if instance is None:
-    if 'sources' not in without_selection:
+  for filename in (LEGACY_REGISTRY_FILE, LEGACY_CREDENTIALS_FILE):
+    path = Path(STORE_DIR) / filename
+    if path.exists():
       raise ValueError(
-        f'kind {kind!r} is selected as its own entry, but the registry gives it no sources '
-        'of its own — name an instance instead'
+        f'legacy credential file {path} is retired; migrate material to '
+        f'{Path(STORE_DIR) / MATERIAL_DIR}/<name>{MATERIAL_SUFFIX} and typed sources to '
+        f'{Path(STORE_DIR) / SOURCES_FILE}'
       )
-    return without_selection
-  without_selection.pop('sources', None)
-  return {**without_selection, 'instance': instance}
-
-
-# the process-scoped instance selection layered onto the host registry by
-# `select_instances`; empty until a caller binds one.
-_selected_instances: dict[str, Optional[str]] = {}
-
-
-def select_instances(selection: dict[str, Optional[str]]) -> None:
-  """bind this process's resolution to one instance per named kind: `{'brog':
-  'github'}` makes `brog+github` the kind's default here, as a registry
-  kind-entry `instance` selector does durably for the whole host, and a None
-  value names the kind's own entry, which the registry must then give sources of
-  its own.
-
-  the binding replaces any earlier one and drops the cached default store, so
-  every later read — a kind-addressed `get`, a capability probe, a scoped-store
-  build — sees the selected instances. it reaches only the host registry: a
-  generated registry (a session's scoped store) is self-contained and already
-  carries the instance its launch selected."""
-  global _selected_instances, _default_store
-  for kind, instance in selection.items():
-    if parse_name(kind)[1] is not None:
-      raise ValueError(f'instance selection is keyed by kind alone, got {kind!r}')
-    if instance is not None:
-      parse_name(f'{kind}+{instance}')
-  with _default_store_lock:
-    _selected_instances = dict(selection)
-    _default_store = None
-
-
-def load_registry(path: Path) -> dict[str, Secret]:
-  """the registry a generated `credentials.json` declares, for a caller reading
-  one it is not itself bound to — a launch holding a session's scoped store."""
-  return _registry_from_dict(json.loads(path.read_text()))
-
-
-def _load_registry() -> dict[str, Secret]:
-  # CREDENTIALS_REGISTRY points the process at an explicit registry file, above
-  # every other source of one — for a run that must resolve against a specific
-  # registry, such as an integration harness using a service-specific registry. a bad path raises rather than falling through: an
-  # explicit override that silently degraded to the built-in would resolve
-  # against the wrong secret set.
-  override = os.environ.get(REGISTRY_ENV)
-  if override is not None and override != '':
-    return load_registry(Path(override))
-  # a generated registry file in either search dir (`BRO_CONFIGS_DIR` for a
-  # deployed service, `~/.bro` for a scoped per-container store) overrides the
-  # host registry wholesale; absent everywhere → the host registry (built-in
-  # defaults + host-local additions).
-  path = _find_in_search_dirs(REGISTRY_FILE)
-  if path is not None:
-    return load_registry(path)
-  return host_registry()
 
 
 _default_store: Optional[Store] = None
@@ -910,40 +666,32 @@ _default_store_lock = threading.Lock()
 
 
 def default_store() -> Store:
-  """process-wide store over the registry; resolved values cache for the life of
-  the process. built lazily under a lock so concurrent callers share one store."""
   global _default_store
   if _default_store is None:
     with _default_store_lock:
       if _default_store is None:
-        _default_store = Store(_load_registry())
+        _reject_legacy_configuration()
+        _default_store = Store(default_registry(), STORE_DIR, {})
   return _default_store
 
 
 def get(name: str) -> str:
-  """resolve a kind to its raw text via the process-wide default store."""
   return default_store().get(name)
 
 
 def try_get(name: str) -> Optional[str]:
-  """resolve a kind to its raw text via the process-wide default store, or None
-  when no source yields a value — the non-raising sibling of `get`."""
   return default_store().try_get(name)
 
 
 def get_json(name: str) -> dict:
-  """resolve a kind and parse it as a json object via the process-wide default store."""
   return default_store().get_json(name)
 
 
 def available(name: str) -> bool:
-  """whether the kind `name` resolves in the process-wide default store, without
-  raising."""
   return default_store().available(name)
 
 
 def known_names() -> frozenset[str]:
-  """every secret name the process-wide default store's registry knows."""
   return default_store().known_names()
 
 
@@ -960,174 +708,98 @@ def _require_one_instance_per_kind(names: Iterable[str]) -> None:
       )
 
 
-def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) -> dict[str, bytes]:
-  """build a per-container scoped credential store in memory.
-
-  returns a map of relative file name to its bytes: one `{name}.cred` entry per
-  hydrated secret holding its resolved raw text (or, for a minting-sourced
-  secret, its minting config, so the session mints fresh tokens on read), plus a
-  generated `credentials.json` registry covering exactly those secrets and
-  pointing each at its `{name}.cred`. materialising this map as the container's
-  `~/.bro` then bounds the container to this set; any other secret resolves to a
-  clean `SecretNotFound`. The bytes never touch a host file — `ride` packs them
-  into a tar and `docker cp`s them straight into the container.
-
-  every secret resolves fully on the host first — launch-time validation stays
-  strict, and a minting chain mints once here, failing loudly before the session
-  exists. resolution — reference expansion included — runs against the registry
-  overlaid with the scope's own kind binding, so a kind-level `$cred` node
-  targeting a kind in scope picks up the launch-selected instance (the value the
-  session's own `.cred` for that kind carries), while one outside the scope
-  falls through to the registry's own entry. a cacheable resolve embeds the
-  expanded, self-contained value. an un-cacheable one — the winning source, or a
-  `$cred` reference chain, reaching a minting source — must not freeze a
-  short-lived value into the store, so the winning source materializes its raw
-  text with references intact and the session re-expands (and re-mints) per read
-  against the scoped registry. each such reference must be spelled at kind level
-  (the scoped namespace is kinds-only), and the kinds it names join the scope —
-  transitively, hydrated from the entry the expansion above read, so the session
-  resolves the instance the host validated. a kind pulled in this way
-  carries no install hook, so a shipped reference never wires a session's tools
-  to a credential the scope did not ask for.
-
-  a `kind+instance` name materializes under its kind name: the scoped registry
-  entry and its `.cred` file are named by the kind, hydrated from the variant's
-  sources, with the install hook rendered for the kind name. The scoped
-  namespace is therefore kinds-only by construction — readers, `available()`,
-  `known_names()` all see the kind, and never need to know which instance the
-  launch selected.
-
-  `names` is the required tier: hydration is strict — an unknown name (not in the
-  host registry) raises `ValueError`, and a declared name whose value can't be
-  resolved raises `SecretNotFound`, so a typo or a missing secret fails loudly
-  here, on the host, before the container exists.
-
-  `optional` is the best-effort tier: each name (minus those already in `names` —
-  required wins) is resolved if it can be, and silently skipped when unknown to
-  the registry or unresolvable. This is for secrets a component uses if present
-  but degrades without (e.g. the LLM key behind a query-focused fetch summary),
-  so an absent optional secret degrades the component instead of failing launch.
-
-  a session installs at most one instance of each kind: declaring two —
-  `github` and `github+alice`, in whichever tiers — raises `ValueError`. The
-  check runs over the declared union up front, so an unresolvable optional name
-  cannot flap the outcome.
-  """
-  registry = _load_registry()
-  selection = _scoped_selection(set(names), set(optional), registry)
-  store = Store({**registry, **{parse_name(name)[0]: secret for name, secret, _ in selection}})
-  files: dict[str, bytes] = {}
-  scoped: dict[str, dict] = {}
-  pending_references: list[tuple[str, str]] = []
-
-  def materialize(name: str, value: str, cacheable: bool, install: Optional[dict]) -> None:
-    # resolve generically on the host (doubling as launch-time validation), then
-    # let the winning source pick its scoped representation under a uniform
-    # `{kind}.cred` — Source.materialize_scoped owns the per-source semantics
-    kind, _ = parse_name(name)
-    file = f'{kind}.cred'
-    source = store.winning_source(name)
-    if not cacheable:
-      # an expansion that reached a minting source: materialize the winning
-      # source's raw text, references intact, so the session re-expands — and
-      # re-mints — per read; the targets are queued into the scope below
-      raw = source.fetch()
-      if raw is None:
-        raise ValueError(f'secret {name!r} disappeared during hydration')
-      value = raw.strip()
-      for reference in sorted(_referenced_names(value)):
-        _require_kind_level(name, reference)
-        pending_references.append((name, reference))
-    entry_source, content = source.materialize_scoped(file, value)
-    files[file] = content
-    entry: dict = {'sources': [entry_source]}
-    if install is not None:
-      entry['install'] = install
-    scoped[kind] = entry
-
-  for name, secret, required in selection:
-    resolved = store.resolve(name)
-    if resolved is None:
-      if required:  # strict: a declared name with no value fails the build
-        raise SecretNotFound(name)
-      log.debug('optional secret %r unresolvable; skipping', name)
-      continue
-    value, cacheable = resolved
-    materialize(name, value, cacheable, secret.install_for(parse_name(name)[0]))
-  # the whole selection is materialized before the first pull, so a referenced
-  # kind the scope declares itself keeps its declared hydration
-  while len(pending_references) > 0:
-    referrer, reference = pending_references.pop(0)
-    if reference in scoped:
-      continue
-    resolved = store.resolve(reference)
-    if resolved is None:  # the referrer's own resolve expanded it, so it has a value
-      raise SecretNotFound(reference)
-    log.info('hydrating %r into the scope: referenced by %r', reference, referrer)
-    value, cacheable = resolved
-    materialize(reference, value, cacheable, install=None)
-  files[REGISTRY_FILE] = json.dumps(scoped).encode()
-  return files
-
-
 def _scoped_selection(
-  required: set[str], optional: set[str], registry: dict[str, Secret]
-) -> list[tuple[str, Secret, bool]]:
-  """the (name, entry, required) rows a finalized scope selects from a registry,
-  validated for the kinds-only session namespace: at most one instance per kind
-  across both tiers, an unknown required name raises, an unknown optional name
-  is skipped."""
+  store: Store, required: set[str], optional: set[str]
+) -> list[tuple[str, bool]]:
   _require_one_instance_per_kind(required | optional)
-  selection: list[tuple[str, Secret, bool]] = []
+  selection: list[tuple[str, bool]] = []
   for name in sorted(required):
-    secret = registry.get(name)
-    if secret is None:
+    kind, _ = parse_name(name)
+    if kind not in store.registry:
       raise ValueError(f'unknown secret {name!r} declared in manifest; not in the registry')
-    selection.append((name, secret, True))
+    selection.append((name, True))
   for name in sorted(optional - required):
-    secret = registry.get(name)
-    if secret is None:
+    kind, _ = parse_name(name)
+    if kind not in store.registry:
       log.debug('optional secret %r not in the registry; skipping', name)
       continue
-    selection.append((name, secret, False))
+    selection.append((name, False))
   return selection
 
 
-def scoped_view_store(names: Iterable[str], *, optional: Iterable[str] = ()) -> Store:
-  """a lazy, kinds-only Store over a finalized scope: each selected name's
-  registry entry keyed by its kind, so a `kind+instance` selection reads under
-  the kind name — the namespace a session's materialized store serves — and a
-  read returns the value hydration would materialize from that entry.
-
-  reads are bounded to those kinds while resolution runs against the registry
-  overlaid with them, the registry `build_scoped_store` hydrates against: a
-  `$cred` node naming a kind in scope picks up the launch-selected instance, and
-  one reaching outside it expands through the registry's own entry rather than
-  finding nothing.
-
-  nothing is fetched or minted up front: each read resolves on demand through
-  the entry's own sources, and a name that cannot resolve surfaces as
-  `SecretNotFound` at that read rather than failing a launch. registry-level
-  strictness matches `build_scoped_store` (`_scoped_selection`). for host-side
-  code that reads a credential on a launch's behalf without hydrating the
-  session's store.
-  """
-  registry = _load_registry()
-  selection = _scoped_selection(set(names), set(optional), registry)
-  scoped = {parse_name(name)[0]: secret for name, secret, _ in selection}
-  return Store({**registry, **scoped}, readable=scoped)
-
-
 def _require_kind_level(name: str, reference: str) -> None:
-  """reject a reference-preserving materialization whose in-session expansion
-  could not resolve: a raw-shipped secret's `$cred` targets are hydrated under
-  their kind names, so an instance-spelled one names nothing the session has."""
   kind, instance = parse_name(reference)
   if instance is not None:
     raise ValueError(
       f'secret {name!r} ships reference-preserving text; reference {reference!r} '
       f'must be spelled at kind level ({kind!r}) — the scoped namespace is kinds-only'
     )
+
+
+def build_scoped_store(
+  store: Store, names: Iterable[str], *, optional: Iterable[str] = ()
+) -> tuple[dict[str, bytes], frozenset[str]]:
+  """Hydrate a kinds-only store and report the declared kinds that resolved."""
+  selection = _scoped_selection(store, set(names), set(optional))
+  files: dict[str, bytes] = {}
+  typed_sources: dict[str, dict] = {}
+  scoped: set[str] = set()
+  pending_references: list[tuple[str, str]] = []
+  declared_hydrated: set[str] = set()
+
+  def materialize(name: str, value: str, cacheable: bool) -> None:
+    kind, _ = parse_name(name)
+    source = store.winning_source(name)
+    material_path = store.material_path(name)
+    if not cacheable:
+      raw = source.fetch(material_path)
+      if raw is None:
+        raise ValueError(f'secret {name!r} disappeared during hydration')
+      value = raw.strip()
+      for reference in sorted(_referenced_names(value)):
+        _require_kind_level(name, reference)
+        pending_references.append((name, reference))
+    annotation, content = source.materialize_scoped(material_path, value)
+    files[f'{MATERIAL_DIR}/{kind}{MATERIAL_SUFFIX}'] = content
+    if annotation is not None:
+      typed_sources[kind] = annotation
+    scoped.add(kind)
+
+  for name, required in selection:
+    resolved = store.resolve(name)
+    if resolved is None:
+      if required:
+        raise SecretNotFound(store.selected_name(name))
+      log.debug('optional secret %r unresolvable; skipping', name)
+      continue
+    value, cacheable = resolved
+    materialize(name, value, cacheable)
+    declared_hydrated.add(parse_name(name)[0])
+
+  while len(pending_references) > 0:
+    referrer, reference = pending_references.pop(0)
+    if reference in scoped:
+      continue
+    resolved = store.resolve(reference)
+    if resolved is None:
+      raise SecretNotFound(store.selected_name(reference))
+    log.info('hydrating %r into the scope: referenced by %r', reference, referrer)
+    materialize(reference, *resolved)
+
+  files[SOURCES_FILE] = json.dumps(typed_sources).encode()
+  return files, frozenset(declared_hydrated)
+
+
+def scoped_view_store(store: Store, names: Iterable[str], *, optional: Iterable[str] = ()) -> Store:
+  selection = _scoped_selection(store, set(names), set(optional))
+  view_selection = dict(store.selection)
+  readable: set[str] = set()
+  for name, _ in selection:
+    kind, instance = parse_name(name)
+    readable.add(kind)
+    if instance is not None:
+      view_selection[kind] = instance
+  return Store(store.registry, store.store_dir, view_selection, _readable=readable)
 
 
 def apply_grant_revoke(
@@ -1137,20 +809,6 @@ def apply_grant_revoke(
   revoke: Iterable[str] = (),
   subject: str = 'set',
 ) -> set[str]:
-  """layer per-session grant/revoke overrides onto a computed name set (a scoped
-  credential set, a summon allow-list, ...).
-
-  returns `(computed | grant) - revoke`. every override must change the set:
-  granting a name already present, or revoking one absent, raises `ValueError`
-  and stops — a redundant grant/revoke is a mistake to surface, not silently
-  swallow (a no-op revoke especially: it would read as "tightened" while changing
-  nothing). granting or revoking the same name twice trips the same checks, and a
-  name in both lists is rejected outright. `subject` names the set in the error
-  messages so a caller's flag misuse reads in its own terms. unknown grant names
-  are not validated here — each caller owns its registry check (for credentials,
-  `build_scoped_store` rejects them loudly on the host). does not mutate the
-  inputs.
-  """
   result = set(computed)
   grant = list(grant)
   revoke = list(revoke)
@@ -1168,23 +826,18 @@ def apply_grant_revoke(
   return result
 
 
-# a hook's declared sections. `commands` is the one that defers: its wrapper
-# applies the declared environment per invocation, which is how a session reads a
-# short-lived minted secret fresh instead of one baked in at install.
 _INSTALL_SECTIONS = ('files', 'env', 'commands')
 _INSTALL_VALUE_KEYS = ('path', 'secret')
 
 
 def _validate_install(name: str, install: dict) -> None:
-  """check a hook's declared shape once rendered, which `Secret` does eagerly, so
-  a malformed one fails at registry load rather than at the launch applying it."""
   unknown = sorted(set(install) - set(_INSTALL_SECTIONS))
   if len(unknown) > 0:
     raise ValueError(
       f'secret {name!r}: install declares unknown section(s) {", ".join(unknown)}; '
       f'known: {", ".join(_INSTALL_SECTIONS)}'
     )
-  for section in ('files', 'env', 'commands'):
+  for section in _INSTALL_SECTIONS:
     if section in install and not isinstance(install[section], dict):
       raise ValueError(f'secret {name!r}: install {section} must be an object')
   for path, value in install.get('files', {}).items():
@@ -1197,13 +850,15 @@ def _validate_install(name: str, install: dict) -> None:
       raise ValueError(f'secret {name!r}: install shadows a malformed command {command!r}')
     if not isinstance(spec, dict) or set(spec) - {'env'} != set():
       raise ValueError(f'secret {name!r}: install command {command!r} declares only env')
+    if 'env' in spec and not isinstance(spec['env'], dict):
+      raise ValueError(f'secret {name!r}: install command {command!r} env must be an object')
     for value in spec.get('env', {}).values():
       _validate_install_value(name, value)
 
 
 def _validate_install_path(name: str, path: str) -> None:
-  """a hook names its files relative to the directory it is given, which is the
-  whole of what it may write."""
+  if not isinstance(path, str):
+    raise ValueError(f'secret {name!r}: install path must be a string')
   candidate = PurePosixPath(path)
   if candidate.is_absolute() or '..' in candidate.parts or len(candidate.parts) == 0:
     raise ValueError(
@@ -1211,7 +866,7 @@ def _validate_install_path(name: str, path: str) -> None:
     )
 
 
-def _validate_install_value(name: str, value) -> None:
+def _validate_install_value(name: str, value: object) -> None:
   if isinstance(value, str):
     return
   if not isinstance(value, dict) or len(value) != 1 or set(value) - set(_INSTALL_VALUE_KEYS):
@@ -1229,32 +884,21 @@ def _validate_install_value(name: str, value) -> None:
 
 
 def install_hooks(
-  registry: Mapping[str, Secret], directory: Path, env: Mapping[str, str]
+  registry: Mapping[str, CredentialKind],
+  kinds: Iterable[str],
+  store: Store,
+  directory: Path,
+  env: Mapping[str, str],
 ) -> dict[str, str]:
-  """apply `registry`'s install hooks and return the environment they declare.
-
-  a hook wires its secret into a tool that reads it from outside the resolver.
-  It declares three things and no code runs on its behalf, so a session running
-  as the operator, in the operator's own home, applies the same hooks a
-  container does:
-
-  - `files` — written under `directory` at 0600, named relative to it
-  - `env` — variables for the caller to apply to the session environment
-  - `commands` — a tool shadowed by a wrapper first on the session's PATH, which
-    applies the wrapper's own environment to each invocation
-
-  A value is text, `{"path": "<relative path>"}` for a path inside `directory`,
-  or `{"secret": "<name>"}` for a credential's value — resolved as late as its
-  position allows, which in a wrapper is per invocation, so a short-lived minted
-  secret is never baked in. `directory` is recreated, so a session never
-  inherits an earlier one's wiring, and two hooks contending for one file,
-  variable or command fail here rather than silently ordering.
-
-  Every secret of `registry` that declares a hook is applied — for a scoped
-  store, exactly the hydrated set, since `build_scoped_store` carries only
-  resolvable secrets.
-  """
-  hooks = {name: secret.install for name, secret in registry.items() if secret.install is not None}
+  hooks: dict[str, dict] = {}
+  for kind in sorted(set(kinds)):
+    _require_kind(kind)
+    entry = registry.get(kind)
+    if entry is None:
+      raise ValueError(f'install hook requested for unknown credential kind {kind!r}')
+    store.get(kind)
+    if entry.install is not None:
+      hooks[kind] = entry.install
   if directory.exists():
     shutil.rmtree(directory)
   directory.mkdir(parents=True)
@@ -1265,22 +909,23 @@ def install_hooks(
   exported: dict[str, str] = {}
   owners: dict[str, str] = {}
   binaries = directory / 'bin'
-  for name in sorted(hooks):
-    hook = hooks[name]
+  for name, hook in hooks.items():
     for path, value in hook.get('files', {}).items():
       _claim(owners, f'file {path}', name)
       file = directory / path
       file.parent.mkdir(parents=True, exist_ok=True)
-      file.write_text(_install_value(value, directory))
+      file.write_text(_install_value(value, directory, store))
       file.chmod(0o600)
     for variable, value in hook.get('env', {}).items():
       _claim(owners, f'variable {variable}', name)
-      exported[variable] = _install_value(value, directory)
+      exported[variable] = _install_value(value, directory, store)
     for command, spec in hook.get('commands', {}).items():
       _claim(owners, f'command {command}', name)
       binaries.mkdir(exist_ok=True)
       wrapper = binaries / command
-      wrapper.write_text(_command_wrapper(name, command, spec.get('env', {}), directory, env))
+      wrapper.write_text(
+        _command_wrapper(name, command, spec.get('env', {}), directory, env, store)
+      )
       wrapper.chmod(0o700)
   if binaries.is_dir():
     exported['PATH'] = os.pathsep.join([str(binaries), env.get('PATH', '')])
@@ -1293,21 +938,25 @@ def _claim(owners: dict[str, str], subject: str, name: str) -> None:
     raise ValueError(f'install hooks for {owner!r} and {name!r} both declare {subject}')
 
 
-def _install_value(value, directory: Path) -> str:
-  """a declared value as the session reads it: text as written, a path resolved
-  against the install directory, a secret resolved through the ambient store."""
+def _install_value(value: object, directory: Path, store: Store) -> str:
   if isinstance(value, str):
     return value
+  assert isinstance(value, dict)
   ((key, target),) = value.items()
-  return str(directory / target) if key == 'path' else default_store().get_instance(target)
+  assert isinstance(target, str)
+  if key == 'path':
+    return str(directory / target)
+  return store.get_instance(target) if parse_name(target)[1] is not None else store.get(target)
 
 
 def _command_wrapper(
-  name: str, command: str, variables: Mapping[str, object], directory: Path, env: Mapping[str, str]
+  name: str,
+  command: str,
+  variables: Mapping[str, object],
+  directory: Path,
+  env: Mapping[str, str],
+  store: Store,
 ) -> str:
-  """the shadowing wrapper's text: the command it shadows, run with the declared
-  variables. a `secret` value resolves per invocation, through the `credentials`
-  command the session carries."""
   target = shutil.which(command, path=env.get('PATH'))
   if target is None:
     raise RuntimeError(
@@ -1319,7 +968,7 @@ def _command_wrapper(
     if isinstance(value, dict) and 'secret' in value:
       assignments.append(f'{variable}="$(credentials get {value["secret"]})"')
     else:
-      assignments.append(f'{variable}={shlex.quote(_install_value(value, directory))}')
+      assignments.append(f'{variable}={shlex.quote(_install_value(value, directory, store))}')
   run = ' '.join([*assignments, 'exec', shlex.quote(target), '"$@"'])
   return f'#!/usr/bin/env bash\n{run}\n'
 
@@ -1327,13 +976,12 @@ def _command_wrapper(
 def _get(name: str, field: Optional[str], as_json: bool, instance: bool) -> Optional[int]:
   store = default_store()
   try:
-    # a bare get prints the raw text; --field / --json need the parsed object.
     if field is None and not as_json:
       print(store.get_instance(name) if instance else store.get(name))
       return None
     data = store.get_instance_json(name) if instance else store.get_json(name)
-  except (SecretNotFound, ValueError) as e:
-    print(str(e), file=sys.stderr)
+  except (SecretNotFound, ValueError) as error:
+    print(str(error), file=sys.stderr)
     return 1
   value: dict | str = data
   if field is not None:
@@ -1341,25 +989,29 @@ def _get(name: str, field: Optional[str], as_json: bool, instance: bool) -> Opti
       print(f'secret {name!r} has no field {field!r}', file=sys.stderr)
       return 1
     value = data[field]
-  if as_json:
-    print(json.dumps(value, indent=2))
-  else:
-    print(value if isinstance(value, str) else json.dumps(value))
+  print(
+    json.dumps(value, indent=2)
+    if as_json
+    else value
+    if isinstance(value, str)
+    else json.dumps(value)
+  )
   return None
 
 
 def _list_available(instance: bool) -> None:
   store = default_store()
-  for name in sorted(store.known_names()):
-    if instance:
-      if store.try_get_instance(name) is not None:
-        print(name)
-    elif parse_name(name)[1] is None and store.available(name):
+  if instance:
+    for name in sorted(store.instance_names()):
       print(name)
+    return
+  for name in sorted(store.known_names()):
+    print(f'{name}: {store.registry[name].description}')
 
 
-def _install_hooks(directory: str) -> None:
-  exported = install_hooks(_load_registry(), Path(directory), os.environ)
+def _install_hooks(directory: str, kinds: list[str]) -> None:
+  store = default_store()
+  exported = install_hooks(store.registry, kinds, store, Path(directory), os.environ)
   for name in sorted(exported):
     print(f'export {name}={shlex.quote(exported[name])}')
 
@@ -1370,37 +1022,26 @@ def main(argv: list[str]) -> Optional[int]:
   get_parser = subparser.add_parser('get', help='resolve a secret and print it')
   get_parser.add_argument(
     'name',
-    help='secret kind (e.g. anthropic, notion); with --instance, a storage name '
-    '(kind or kind+instance)',
+    help='secret kind; with --instance, a storage name (kind or kind+instance)',
   )
   get_parser.add_argument('--field', help='for a json secret, print only this field')
   get_parser.add_argument(
     '--json', dest='as_json', action='store_true', help='parse as json and pretty-print (indent=2)'
   )
   get_parser.add_argument(
-    '--instance',
-    '-i',
-    action='store_true',
-    help='address the registry by storage name instead of kind',
+    '--instance', '-i', action='store_true', help='address storage by exact name instead of kind'
   )
   get_parser.set_handler(_get)
-  list_parser = subparser.add_parser(
-    'list', help='list credential kinds that resolve in the default store'
-  )
+  list_parser = subparser.add_parser('list', help='list credential kinds and their descriptions')
   list_parser.add_argument(
-    '--instance',
-    '-i',
-    action='store_true',
-    help='list resolvable storage names (kind+instance entries included) instead of kinds',
+    '--instance', '-i', action='store_true', help='list names present in the store instead of kinds'
   )
   list_parser.set_handler(_list_available)
   hooks_parser = subparser.add_parser(
     'install-hooks',
-    help='apply the install hooks into a session directory and print the environment '
-    'they export, for a session launcher to eval',
+    help='apply named credential hooks and print the environment they export',
   )
-  hooks_parser.add_argument(
-    'directory', help='the session directory the hooks write their files into'
-  )
+  hooks_parser.add_argument('directory', help='directory the hooks may write into')
+  hooks_parser.add_argument('kinds', nargs='*', help='hydrated credential kinds whose hooks apply')
   hooks_parser.set_handler(_install_hooks)
   return parser.dispatch(argv)

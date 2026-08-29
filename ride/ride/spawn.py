@@ -169,6 +169,7 @@ def _child_launch(
     env=env,
     secrets=set(scoped.required),
     optional_secrets=set(scoped.optional),
+    credential_selection=scoped.selection,
     tty=False,
     forward_env=False,
     image=container_runtime.image,

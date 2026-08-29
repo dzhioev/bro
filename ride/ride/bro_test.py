@@ -17,12 +17,10 @@ from ride.workspace.store import ScopedSecrets
 
 
 def _materialize_store(_store, directory: Path) -> Path:
-  """the scoped store as a launch materializes it: the registry file its
-  install-hook pass reads back, holding no secret and so no hook."""
+  """The empty scoped store a host launch materializes."""
   directory.mkdir(parents=True, exist_ok=True)
-  registry = directory / 'credentials.json'
-  registry.write_text('{}')
-  return registry
+  (directory / 'creds.json').write_text('{}')
+  return directory
 
 
 def _spec(**overrides) -> SessionSpec:
@@ -63,7 +61,7 @@ def _scope(**overrides) -> ScopedLaunch:
   values = {
     'scoped': ScopedSecrets({'openai'}, {'trails'}),
     'may_summon': {'reviewer'},
-    'store': {'credentials.json': b'{}'},
+    'store': {'creds.json': b'{}'},
   }
   values.update(overrides)
   return ScopedLaunch(**values)

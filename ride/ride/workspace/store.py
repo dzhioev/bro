@@ -1,8 +1,8 @@
-"""scoped credential-store mechanics: the tiers a launch hydrates and how the
-resolved store reaches the session (a tar into the container's own layer, an
-on-disk dir a host session's CREDENTIALS_REGISTRY points at). Which names land
-in the tiers is the launch surface's policy; this module only carries and
-materializes it.
+"""Scoped credential-store tiers and session materialization.
+
+A container receives an in-memory tar in its own layer;
+a host session points `BRO_STORE` at a materialized directory.
+The launch surface owns which names enter each tier.
 """
 
 import io
@@ -10,8 +10,9 @@ import os
 import shutil
 import tarfile
 from collections.abc import Collection
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 from bro.base import credentials, log
 
@@ -33,6 +34,7 @@ class ScopedSecrets:
   required: set[str]
   optional: set[str]
   unbound_kinds: frozenset[str] = frozenset()
+  selection: dict[str, Optional[str]] = field(default_factory=dict)
 
 
 def _replacement_revokes(scoped_names: set[str], grants: list[str]) -> list[str]:
@@ -76,7 +78,12 @@ def finalize_scoped_secrets(
   required = (scoped.required | set(grant)) & final_names
   optional = final_names - required
   _refuse_unbound_kinds(final_names, scoped.unbound_kinds)
-  return ScopedSecrets(required=required, optional=optional, unbound_kinds=scoped.unbound_kinds)
+  return ScopedSecrets(
+    required=required,
+    optional=optional,
+    unbound_kinds=scoped.unbound_kinds,
+    selection=dict(scoped.selection),
+  )
 
 
 def _refuse_unbound_kinds(names: set[str], unbound: frozenset[str]) -> None:
@@ -102,12 +109,11 @@ def log_scoped_secrets(subject: str, required: Collection[str], optional: Collec
 
 
 def materialize_scoped_store(files: dict[str, bytes], directory: Path) -> Path:
-  """write a scoped credential store (`credentials.build_scoped_store`) to
-  `directory` and return its registry file — the value a host session's
-  CREDENTIALS_REGISTRY points at (the registry's directory joins the resolver's
-  search path). the directory is recreated from scratch so a secret dropped from
-  the scope (e.g. a lapsed `--grant`) does not linger from an earlier
-  launch."""
+  """Write a scoped credential store and return its exclusive directory.
+
+  The directory is recreated so a credential dropped from the scope cannot
+  linger from an earlier launch.
+  """
   log.verbose('materializing the scoped credential store at %s', directory)
   if directory.exists():
     shutil.rmtree(directory)
@@ -115,9 +121,10 @@ def materialize_scoped_store(files: dict[str, bytes], directory: Path) -> Path:
   directory.chmod(0o700)
   for filename, data in files.items():
     file = directory / filename
+    file.parent.mkdir(parents=True, exist_ok=True)
     file.write_bytes(data)
     file.chmod(0o600)
-  return directory / 'credentials.json'
+  return directory
 
 
 def _bro_tarball(files: dict[str, bytes]) -> bytes:
@@ -138,6 +145,11 @@ def _bro_tarball(files: dict[str, bytes]) -> bytes:
     root.mode = 0o700
     root.uid, root.gid = uid, gid
     tar.addfile(root)
+    credentials_directory = tarfile.TarInfo('.bro/creds')
+    credentials_directory.type = tarfile.DIRTYPE
+    credentials_directory.mode = 0o700
+    credentials_directory.uid, credentials_directory.gid = uid, gid
+    tar.addfile(credentials_directory)
     for filename in sorted(files):
       data = files[filename]
       info = tarfile.TarInfo(f'.bro/{filename}')

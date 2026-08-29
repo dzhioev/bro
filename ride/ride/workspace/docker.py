@@ -6,7 +6,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Collection, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -79,6 +79,7 @@ class Launch:
   image: str
   runtime_bundle_hash: str
   optional_secrets: Collection[str] = ()
+  credential_selection: Mapping[str, Optional[str]] = field(default_factory=dict)
   extra_mounts: Collection[str] = ()
   repo: Optional[Repository | Path] = None
 
@@ -341,7 +342,17 @@ def prepare_container(launch: Launch) -> str:
   tree = workspace_tree(launch.name)
   tree.mkdir(parents=True, exist_ok=True)
   log.verbose('hydrating the scoped credential store')
-  store = credentials.build_scoped_store(launch.secrets, optional=launch.optional_secrets)
+  source_store = credentials.Store(
+    credentials.default_registry(), credentials.STORE_DIR, launch.credential_selection
+  )
+  store, hydrated_kinds = credentials.build_scoped_store(
+    source_store, launch.secrets, optional=launch.optional_secrets
+  )
+  launch_env = {
+    **launch.env,
+    'BRO_STORE': '/home/ride/.bro',
+    'BRO_INSTALL_KINDS': ' '.join(sorted(hydrated_kinds)),
+  }
   argv = _docker_create_argv(
     launch.image,
     launch.runtime_bundle_hash,
@@ -350,7 +361,7 @@ def prepare_container(launch: Launch) -> str:
     tree,
     metadata.branch,
     launch.command,
-    extra_env=dict(launch.env),
+    extra_env=launch_env,
     forward_env=launch.forward_env,
     tty=launch.tty,
     extra_mounts=list(launch.extra_mounts),

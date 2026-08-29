@@ -161,6 +161,7 @@ class TestCall:
     assert result.startswith('exit_code: 0\n')
     assert 'lead:' in result
 
-  def test_arguments_reach_the_command(self):
+  def test_arguments_reach_the_command(self, monkeypatch, tmp_path):
+    monkeypatch.setenv('HOME', str(tmp_path))
     result = asyncio.run(_tool('bro show').call({'name': 'lead'}))
     assert result.startswith('exit_code: 0\n# lead')

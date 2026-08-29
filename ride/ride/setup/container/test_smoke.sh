@@ -22,7 +22,8 @@ mkdir -p \
   "$SMOKE_TMP/consumer-plain-bro"
 for store in "$SMOKE_TMP/bro" "$SMOKE_TMP/detached-bro" \
   "$SMOKE_TMP/consumer-uv-bro" "$SMOKE_TMP/consumer-plain-bro"; do
-  echo '{}' > "$store/credentials.json"
+  mkdir "$store/creds"
+  echo '{}' > "$store/creds.json"
 done
 
 echo "building runtime and project images" >&2
@@ -116,7 +117,7 @@ docker run --rm -i \
   "$TAG" bash -s >&2 <<'SMOKE'
     set -e
     # the install-hook pass ran: its session directory is there, with no hook to
-    # apply from the empty scoped registry the run mounts
+    # apply from the empty scoped store the run mounts
     test -d "$HOME/.bro-environment"
     test -d /workspace/.git
     cd /workspace

@@ -1,24 +1,46 @@
 {
-  "brog": {"sources": [{"file": "brog.json"}]},
-  "trails": {"sources": [{"file": "trails.json"}]},
-  "trails_tokens": {"sources": [{"file": "trails_tokens.json"}]},
-  "openai": {"sources": [{"file": "openai.json"}]},
-  "anthropic": {"sources": [{"file": "anthropic.json"}]},
-  "claude_code": {
-    "sources": [{"file": "claude_code_oauth_token"}],
-    "install": {"env": {"CLAUDE_CODE_OAUTH_TOKEN": {"secret": "{{insert #name}}"}}}
+  "brog": {
+    "description": "Task tracker backend configuration"
   },
-  "brave": {"sources": [{"file": "brave.json"}]},
-  "aws": {
-    "sources": [{"file": "aws_credentials"}],
+  "trails": {
+    "description": "Trail storage backend configuration"
+  },
+  "trails_tokens": {
+    "description": "Bearer tokens accepted by a trails server"
+  },
+  "openai": {
+    "description": "OpenAI API credentials"
+  },
+  "anthropic": {
+    "description": "Anthropic API credentials"
+  },
+  "claude_code": {
+    "description": "Claude Code OAuth token",
     "install": {
-      "files": {"aws/credentials": {"secret": "{{insert #name}}"}},
-      "env": {"AWS_SHARED_CREDENTIALS_FILE": {"path": "aws/credentials"}}
+      "env": {
+        "CLAUDE_CODE_OAUTH_TOKEN": {"secret": "{{insert #name}}"}
+      }
     }
   },
-  "infra": {"sources": [{"file": "infra.json"}]},
+  "brave": {
+    "description": "Brave Search API credentials"
+  },
+  "aws": {
+    "description": "AWS SDK and CLI credentials",
+    "install": {
+      "files": {
+        "aws/credentials": {"secret": "{{insert #name}}"}
+      },
+      "env": {
+        "AWS_SHARED_CREDENTIALS_FILE": {"path": "aws/credentials"}
+      }
+    }
+  },
+  "infra": {
+    "description": "Infrastructure deployment configuration"
+  },
   "github": {
-    "sources": [],
+    "description": "GitHub API, CLI, and Git credentials",
     "install": {
       "env": {
         "GIT_CONFIG_COUNT": "3",
@@ -32,7 +54,13 @@
         "GH_TOKEN": "",
         "GITHUB_TOKEN": ""
       },
-      "commands": {"gh": {"env": {"GH_TOKEN": {"secret": "{{insert #name}}"}}}}
+      "commands": {
+        "gh": {
+          "env": {
+            "GH_TOKEN": {"secret": "{{insert #name}}"}
+          }
+        }
+      }
     }
   }
 }
