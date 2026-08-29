@@ -229,11 +229,8 @@ class TestSummonLowering:
   def test_an_unbindable_project_kind_fails_the_spawn(
     self, lowering_harness, monkeypatch, tmp_path
   ):
-    # the summoner's attachment is one no project entry names, so the child is
-    # refused the kinds this host reads per project rather than handed whichever
-    # project the registry's own entry belongs to
     config = tmp_path / 'bro.json'
-    config.write_text(json.dumps({'projects': {'/elsewhere': {'instances': ['brog+github']}}}))
+    config.write_text(json.dumps({'projects': {'/elsewhere': {'creds': ['brog+github']}}}))
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     monkeypatch.setattr(ride.scope, 'scoped_secrets', _REAL_SCOPED_SECRETS)
     launch = ride.spawn.SummonLaunchSpec(

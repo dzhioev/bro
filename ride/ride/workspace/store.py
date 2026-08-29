@@ -24,10 +24,10 @@ class ScopedSecrets:
   required is hydrated strictly (a missing secret fails launch); optional is the
   best-effort tier (skipped when unresolvable).
 
-  unbound_kinds are the kinds this launch may not read at all: the host selects
-  an instance of each per project and the launch bound no project entry, so the
-  kind resolves to whichever project owns its registry entry. Enforced once the
-  launch's own overrides have had their say (`finalize_scoped_secrets`), since a
+  unbound_kinds are the kinds this launch may not read at all: a project layer
+  selects each kind, defaults does not, and the launch bound no project entry.
+  A kind-addressed read would otherwise fall through to unowned bare material.
+  The refusal is enforced after the launch's own overrides (`finalize_scoped_secrets`), since a
   granted instance names the project outright.
   """
 

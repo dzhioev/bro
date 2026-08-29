@@ -6,7 +6,10 @@ hooks.
 A store supplies material independently:
 `creds/<name>.cred` is the material for a kind or `kind+instance`, while
 `creds.json` optionally annotates a name with one typed source.
-`BRO_STORE` selects the process store and otherwise defaults to `~/.bro`.
+`BRO_STORE` selects a directed process store.
+Without it, the default `~/.bro` store lazily applies `~/.bro.json`'s defaults
+plus the tool layer for the basename recorded by `Parser.parse`.
+A directed store never consults the host config.
 
 Kind-addressed reads apply the store's explicit kind-to-instance selection.
 Storage-addressed reads use the name exactly as written.
@@ -35,7 +38,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar, Optional, Protocol
 
 from bro.base import configs, log, template
-from bro.base.args import Parser
+from bro.base.args import Parser, current_cli_name
 from bro.base.condition import StringVariable
 
 __cli_name__ = 'credentials'
@@ -671,7 +674,14 @@ def default_store() -> Store:
     with _default_store_lock:
       if _default_store is None:
         _reject_legacy_configuration()
-        _default_store = Store(default_registry(), STORE_DIR, {})
+        registry = default_registry()
+        selection: dict[str, Optional[str]] = {}
+        if 'BRO_STORE' not in os.environ:
+          from bro.base import host_config
+
+          configured = host_config.tool_selection(current_cli_name()).instances
+          selection = {kind: instance for kind, instance in configured.items() if kind in registry}
+        _default_store = Store(registry, STORE_DIR, selection)
   return _default_store
 
 

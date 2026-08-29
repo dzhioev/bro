@@ -7,7 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from bro.base import credentials
+from bro.base import credentials, host_config
+from bro.base.args import Parser
 
 
 def _registry(*names: str) -> dict[str, credentials.CredentialKind]:
@@ -433,6 +434,68 @@ class TestInstallHooks:
 
 
 class TestDefaultStore:
+  def _ambient_store(self, tmp_path: Path, monkeypatch) -> Path:
+    store = tmp_path / 'store'
+    monkeypatch.delenv('BRO_STORE', raising=False)
+    monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
+    monkeypatch.setattr(credentials, '_default_store', None)
+    monkeypatch.setattr(credentials, 'default_registry', lambda: _registry('openai'))
+    monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(tmp_path / 'bro.json'))
+    return store
+
+  def test_ambient_cli_store_merges_defaults_and_its_tool_layer(self, tmp_path: Path, monkeypatch):
+    store = self._ambient_store(tmp_path, monkeypatch)
+    _write_material(store, 'openai+default', 'default')
+    _write_material(store, 'openai+benchmark', 'benchmark')
+    Path(host_config.HOST_CONFIG_FILE).write_text(
+      json.dumps(
+        {
+          'defaults': {'creds': ['openai+default']},
+          'tools': {'benchmark-job': {'creds': ['openai+benchmark']}},
+        }
+      )
+    )
+    Parser().parse(['/usr/local/bin/benchmark-job'])
+
+    assert credentials.get('openai') == 'benchmark'
+
+  def test_ambient_library_read_uses_defaults_without_a_tool(self, tmp_path: Path, monkeypatch):
+    store = self._ambient_store(tmp_path, monkeypatch)
+    _write_material(store, 'openai+default', 'default')
+    Path(host_config.HOST_CONFIG_FILE).write_text(
+      json.dumps({'defaults': {'creds': ['openai+default']}})
+    )
+    monkeypatch.setattr(credentials, 'current_cli_name', lambda: None)
+
+    assert credentials.get('openai') == 'default'
+
+  def test_parser_does_not_read_a_malformed_host_config(self, tmp_path: Path, monkeypatch):
+    self._ambient_store(tmp_path, monkeypatch)
+    Path(host_config.HOST_CONFIG_FILE).write_text('{')
+
+    assert Parser().parse(['rewind']) == {}
+
+  def test_explicit_bro_store_never_reads_the_host_config(self, tmp_path: Path, monkeypatch):
+    store = self._ambient_store(tmp_path, monkeypatch)
+    _write_material(store, 'openai', 'directed')
+    Path(host_config.HOST_CONFIG_FILE).write_text('{')
+    monkeypatch.setenv('BRO_STORE', str(store))
+    Parser().parse(['rewind'])
+
+    assert credentials.get('openai') == 'directed'
+
+  def test_unknown_configured_kinds_are_ignored_by_this_installation(
+    self, tmp_path: Path, monkeypatch
+  ):
+    store = self._ambient_store(tmp_path, monkeypatch)
+    _write_material(store, 'openai+selected', 'selected')
+    Path(host_config.HOST_CONFIG_FILE).write_text(
+      json.dumps({'defaults': {'creds': ['consumer_only+host', 'openai+selected']}})
+    )
+    monkeypatch.setattr(credentials, 'current_cli_name', lambda: None)
+
+    assert credentials.get('openai') == 'selected'
+
   def test_bro_store_is_exclusive(self, tmp_path: Path, monkeypatch):
     first = tmp_path / 'first'
     second = tmp_path / 'second'

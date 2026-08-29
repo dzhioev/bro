@@ -9,6 +9,7 @@ from bro.base.args import (
   ArgumentTypeError,
   Parser,
   command_signature,
+  current_cli_name,
   list_parser,
   moment_parser,
 )
@@ -169,6 +170,11 @@ class TestParser:
     parser.add_argument('--foo')
     args = parser.parse(['script.py', '--foo', 'bar'])
     assert args == {'foo': 'bar'}
+
+  def test_parse_records_only_the_program_basename(self):
+    Parser().parse(['/opt/tools/rewind'])
+
+    assert current_cli_name() == 'rewind'
 
   def test_global_flags_removed_from_args(self):
     parser = Parser()

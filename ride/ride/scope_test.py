@@ -85,7 +85,7 @@ class TestScopedSecrets:
   def test_computing_a_scope_binds_the_projects_instances(self, tmp_path, monkeypatch):
     # the scope keeps naming kinds; the instance each reads is bound at the resolver
     config = tmp_path / 'bro.json'
-    config.write_text(json.dumps({'projects': {str(tmp_path): {'instances': ['brog+github']}}}))
+    config.write_text(json.dumps({'projects': {str(tmp_path): {'creds': ['brog+github']}}}))
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, attachment=str(tmp_path))
     assert scoped.selection == {'brog': 'github'}
@@ -96,7 +96,7 @@ class TestScopedSecrets:
   def test_a_url_attachment_binds_its_own_entry(self, tmp_path, monkeypatch):
     url = 'https://github.com/foo/api.git'
     config = tmp_path / 'bro.json'
-    config.write_text(json.dumps({'projects': {url: {'instances': ['brog+github']}}}))
+    config.write_text(json.dumps({'projects': {url: {'creds': ['brog+github']}}}))
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, attachment=url)
     assert scoped.selection == {'brog': 'github'}
@@ -107,7 +107,7 @@ class TestScopedSecrets:
   ):
     config = tmp_path / 'bro.json'
     config.write_text(
-      json.dumps({'projects': {str(tmp_path / 'other'): {'instances': ['brog+github']}}})
+      json.dumps({'projects': {str(tmp_path / 'other'): {'creds': ['brog+github']}}})
     )
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     scoped = ride.scope.scoped_secrets(
@@ -117,9 +117,26 @@ class TestScopedSecrets:
 
   def test_a_detached_scope_withholds_the_hosts_project_kinds(self, tmp_path, monkeypatch):
     config = tmp_path / 'bro.json'
-    config.write_text(json.dumps({'projects': {str(tmp_path): {'instances': ['brog+github']}}}))
+    config.write_text(json.dumps({'projects': {str(tmp_path): {'creds': ['brog+github']}}}))
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     assert ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE).unbound_kinds == frozenset({'brog'})
+
+  def test_defaults_bind_and_unpoison_a_detached_scope(self, tmp_path, monkeypatch):
+    config = tmp_path / 'bro.json'
+    config.write_text(
+      json.dumps(
+        {
+          'defaults': {'creds': ['brog+default']},
+          'projects': {str(tmp_path): {'creds': ['brog+project']}},
+        }
+      )
+    )
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+
+    scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE)
+
+    assert scoped.selection == {'brog': 'default'}
+    assert scoped.unbound_kinds == frozenset()
 
   def test_a_single_project_host_withholds_nothing(self):
     assert ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE).unbound_kinds == frozenset()
@@ -137,7 +154,7 @@ class TestSummonedCredentialScope:
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
 
   def test_the_roots_attachment_selects_the_childs_instances(self, tmp_path, monkeypatch):
-    self._host_config(tmp_path, monkeypatch, {str(tmp_path): {'instances': ['brog+github']}})
+    self._host_config(tmp_path, monkeypatch, {str(tmp_path): {'creds': ['brog+github']}})
     scoped = ride.scope.summoned_credential_scope(
       'bro-dev', CLAUDE_RECIPE, attachment=str(tmp_path), grant=[], revoke=[]
     )
@@ -147,11 +164,7 @@ class TestSummonedCredentialScope:
   def test_a_root_whose_attachment_names_no_entry_gets_no_other_projects_instance(
     self, tmp_path, monkeypatch
   ):
-    # what a summoned child of a detached or unlisted root must never do: fall
-    # through to the kind's registry entry, which is another project's tracker
-    self._host_config(
-      tmp_path, monkeypatch, {str(tmp_path / 'other'): {'instances': ['brog+github']}}
-    )
+    self._host_config(tmp_path, monkeypatch, {str(tmp_path / 'other'): {'creds': ['brog+github']}})
     for attachment in (None, str(tmp_path), 'https://github.com/foo/api.git'):
       with pytest.raises(ValueError, match='reads brog per project'):
         ride.scope.summoned_credential_scope(
@@ -159,9 +172,7 @@ class TestSummonedCredentialScope:
         )
 
   def test_a_granted_instance_names_the_project_outright(self, tmp_path, monkeypatch):
-    self._host_config(
-      tmp_path, monkeypatch, {str(tmp_path / 'other'): {'instances': ['brog+github']}}
-    )
+    self._host_config(tmp_path, monkeypatch, {str(tmp_path / 'other'): {'creds': ['brog+github']}})
     scoped = ride.scope.summoned_credential_scope(
       'bro-dev', CLAUDE_RECIPE, attachment=None, grant=['brog+github'], revoke=[]
     )

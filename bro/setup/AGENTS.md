@@ -107,11 +107,46 @@ Every string is a template (`bro/reference/template.md`) rendered with `#name` b
 
 ### Host config (`~/.bro.json`)
 
-A project's `instances` list maps each kind to one stored name for an attached checkout path or normalized git URL.
-The launch translates that list into a flat selection and passes it to every `Store` it constructs;
-there is no process-global binding.
-A detached launch or an attachment with no entry still refuses kinds selected by another project, and `--grant kind+instance` may name one instance explicitly.
-The `llm` table supplies host-wide recipe presets over project defaults.
+The optional host config selects stored credential instances per consumer:
+
+```json
+{
+  "defaults": {"creds": ["github+dev", "trails+write"]},
+  "projects": {
+    "/home/me/projects/bro": {
+      "creds": ["brog+github", "github+dev"],
+      "bros": {"bro-eyebro": {"creds": ["github+reviewer"]}}
+    }
+  },
+  "tools": {"rewind": {"creds": ["trails+analyst"]}},
+  "llm": {"sharp": "openai:sol:max"}
+}
+```
+
+Every selection list is named `creds`.
+An entry is `kind+instance`, or `kind+` to select the kind's bare `creds/<kind>.cred` material;
+one list may name a kind once.
+The retired `instances` field fails with the migration named.
+Validation is grammar-only, so shared dotfiles may carry kinds an installation does not register.
+
+`defaults.creds` applies host-wide.
+A matching `projects.<attachment>.creds` layer overrides it for a checkout path or normalized git URL,
+and `projects.<attachment>.bros.<bro>.creds` overrides that for one exact bro name.
+A host CLI instead applies `tools.<cli>.creds` over defaults, keyed by its console-script basename.
+Launch and tool layers are disjoint.
+Most-specific precedence is launch flag, project-bro, project, tool for a host CLI, defaults, then bare material.
+
+A detached launch or an attachment no project entry names refuses every kind selected by any project or project-bro layer unless defaults names that kind.
+Tool entries never cause a launch refusal.
+A launch can still override its computed selection with `--grant kind+instance`.
+
+Every framework CLI records its own basename while parsing arguments.
+On first credential access, an ambient resolver reads the host config and applies defaults plus that CLI's tool layer.
+Parsing a CLI that never accesses a credential does not read the host config.
+When `BRO_STORE` is set, the resolver does not consult the host config at all:
+a session or service store is already the product of a selection.
+
+The `llm` table remains the host-wide recipe presets layered over project defaults.
 `bro/base/host_config.py` owns and validates the schema.
 
 A JSON credential may reference another credential:
