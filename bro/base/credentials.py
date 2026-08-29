@@ -53,6 +53,7 @@ LEGACY_REGISTRY_ENV = 'CREDENTIALS_REGISTRY'
 LEGACY_CONFIGS_ENV = 'BRO_CONFIGS_DIR'
 LEGACY_REGISTRY_FILE = 'registry.json'
 LEGACY_CREDENTIALS_FILE = 'credentials.json'
+CREDENTIAL_MIGRATION_GUIDE = 'bro/setup/AGENTS.md, "One-time host migration"'
 
 _CREDENTIAL_SOURCE_GROUP = 'bro.credential_sources'
 _CREDENTIAL_REGISTRY_GROUP = 'bro.credentials'
@@ -652,7 +653,8 @@ def _reject_legacy_configuration() -> None:
   for variable in (LEGACY_REGISTRY_ENV, LEGACY_CONFIGS_ENV):
     if variable in os.environ:
       raise ValueError(
-        f'{variable} is retired; set BRO_STORE to the exclusive credential store directory'
+        f'{variable} is retired; set BRO_STORE to the exclusive credential store directory and '
+        f'follow {CREDENTIAL_MIGRATION_GUIDE}'
       )
   for filename in (LEGACY_REGISTRY_FILE, LEGACY_CREDENTIALS_FILE):
     path = Path(STORE_DIR) / filename
@@ -660,7 +662,7 @@ def _reject_legacy_configuration() -> None:
       raise ValueError(
         f'legacy credential file {path} is retired; migrate material to '
         f'{Path(STORE_DIR) / MATERIAL_DIR}/<name>{MATERIAL_SUFFIX} and typed sources to '
-        f'{Path(STORE_DIR) / SOURCES_FILE}'
+        f'{Path(STORE_DIR) / SOURCES_FILE}; follow {CREDENTIAL_MIGRATION_GUIDE}'
       )
 
 

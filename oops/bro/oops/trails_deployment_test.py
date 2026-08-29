@@ -21,23 +21,38 @@ def test_trails_deployment_files_are_present_and_executable():
     assert path.stat().st_mode & os.X_OK
 
 
-def test_trails_image_uses_the_shared_base_and_staged_framework_wheel():
+def test_trails_image_uses_the_shared_base_framework_wheel_and_store():
   dockerfile = (_SERVER / 'Dockerfile').read_text()
 
   assert 'FROM bro-server-base\n' in dockerfile
   assert 'COPY build/bro-wheel/*.whl' in dockerfile
   assert '"$1[trails-server]"' in dockerfile
-  assert 'COPY oops/trails/server/runtime_credentials.json' in dockerfile
+  assert 'ENV BRO_STORE=/app/.configs\n' in dockerfile
+  assert 'COPY oops/trails/server/creds.json ${BRO_STORE}/creds.json' in dockerfile
 
 
-def test_runtime_registry_resolves_store_and_tokens_from_files_then_ssm():
-  registry = json.loads((_SERVER / 'runtime_credentials.json').read_text())
+def test_deployed_store_resolves_store_and_tokens_from_ssm():
+  annotations = json.loads((_SERVER / 'creds.json').read_text())
 
-  assert set(registry) == {'trails', 'trails_tokens'}
-  for secret in registry.values():
-    file_source, ssm_source = secret['sources']
-    assert set(file_source) == {'file'}
-    assert ssm_source['type'] == 'ssm'
+  assert annotations == {
+    'trails': {'type': 'ssm', 'parameter': '/trails/store-config'},
+    'trails_tokens': {'type': 'ssm', 'parameter': '/trails/tokens'},
+  }
+
+
+def test_local_server_synthesizes_a_plain_store():
+  script = (_SERVER / 'run_local.sh').read_text()
+
+  assert '"$runtime_directory/creds/trails.cred"' in script
+  assert '"$runtime_directory/creds/trails_tokens.cred"' in script
+  assert 'export BRO_STORE="$runtime_directory"' in script
+
+
+def test_image_verification_replaces_the_deployed_store_with_plain_material():
+  script = (_SERVER / 'verify_image.sh').read_text()
+
+  assert 'smoke_copy "$smoke_directory/creds.json" /app/.configs/creds.json' in script
+  assert 'smoke_copy "$smoke_directory/creds" /app/.configs/creds' in script
 
 
 def test_scripts_use_shared_deployment_and_monitoring_assets():

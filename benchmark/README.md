@@ -88,8 +88,8 @@ Reading one back takes a reader resolving the same way
 — the local backend, at that data home:
 
 ```
-echo '{}' > /tmp/no-credentials.json
-CREDENTIALS_REGISTRY=/tmp/no-credentials.json XDG_DATA_HOME=<trial>/agent rewind show <trail-id>
+mkdir -p /tmp/empty-bro-store
+BRO_STORE=/tmp/empty-bro-store XDG_DATA_HOME=<trial>/agent rewind show <trail-id>
 ```
 
 On a host that configures no `trails` credential of its own, `XDG_DATA_HOME` alone is enough.

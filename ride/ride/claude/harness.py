@@ -111,10 +111,11 @@ class ClaudeHarness:
       )
     if credentials.try_get('claude_code') is not None:
       return None
+    material_path = credentials.default_store().material_path('claude_code')
     return (
       'claude_code secret not resolvable — a Claude session authenticates with the '
-      'setup-token; mint one with `claude setup-token` and store it in '
-      '~/.bro/claude_code_oauth_token'
+      f'setup-token; mint one with `claude setup-token` and store it at {material_path}; '
+      f'see {credentials.CREDENTIAL_MIGRATION_GUIDE}'
     )
 
   def inner_flags(self, spec: 'SessionSpec') -> tuple[str, ...]:

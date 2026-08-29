@@ -8,7 +8,7 @@ Switching a repository's tracker is a config change only.
 
 - The tool surface deliberately covers only the task operations the development workflow needs;
   tracker-specific capabilities stay behind the backend boundary.
-- The backend is selected by the `brog` secret (`~/.bro/brog.json`, schemas in `bro/setup/AGENTS.md`).
+- The backend is selected by the `brog` credential (schemas in `bro/setup/AGENTS.md`).
   The config is self-contained:
   every credential the active backend needs is embedded
   — literally or as `$cred` reference nodes the resolver expands before brog reads the config
