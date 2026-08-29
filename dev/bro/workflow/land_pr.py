@@ -11,7 +11,8 @@ included.
 Preconditions (each failure aborts with a message on stderr and exit 1):
 - the PR for the current branch exists and is OPEN
 - reviewDecision is APPROVED; `--no-review` waives a *missing* review, but
-  CHANGES_REQUESTED is always refused
+  CHANGES_REQUESTED is always refused, and so is REVIEW_REQUIRED — that one is
+  the base branch's own rule, which no flag here reaches
 - the body has no unchecked `- [ ]` boxes unless `--allow-unchecked`
 - the worktree is on the commit the PR carries, so the branch holds nothing the
   review never saw
@@ -76,6 +77,12 @@ def _precondition_error(
   decision = pr['reviewDecision']
   if decision == 'CHANGES_REQUESTED':
     return f'PR #{pr["number"]} has changes requested; resolve the review before landing'
+  if decision == 'REVIEW_REQUIRED':
+    return (
+      f'PR #{pr["number"]} has no approving review and its base branch requires one '
+      "(reviewDecision=REVIEW_REQUIRED); --no-review waives this command's check, not the "
+      'branch rule GitHub enforces at the merge'
+    )
   if decision != 'APPROVED' and not no_review:
     shown = decision if decision != '' else 'none'
     return (
@@ -262,7 +269,10 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument(
     '--no-review',
     action='store_true',
-    help='merge without an APPROVED review (explicit user waiver; changes-requested still refuses)',
+    help=(
+      'merge without an APPROVED review (explicit user waiver; a review the base branch '
+      'requires, or changes requested, still refuses)'
+    ),
   )
   parser.add_argument(
     '--allow-unchecked',
