@@ -12,7 +12,7 @@ from aws_cdk import (
 )
 from constructs import Construct
 
-from bro.oops.cdk.config import InfrastructureConfig
+from bro.oops.cdk.config import InfrastructureConfig, PlatformConfig
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,62 @@ class PlatformHandles:
   load_balancer: elbv2.IApplicationLoadBalancer
   https_listener: elbv2.IApplicationListener
 
+  @classmethod
+  def lookup(
+    cls,
+    scope: Construct,
+    config: PlatformConfig,
+    delegated_subdomain: str,
+  ) -> 'PlatformHandles':
+    stack_tags = {'aws:cloudformation:stack-name': config.stack_name}
+    vpc = ec2.Vpc.from_lookup(scope, 'PlatformVpc', tags=stack_tags)
+    cluster = ecs.Cluster.from_cluster_attributes(
+      scope,
+      'PlatformCluster',
+      cluster_name=config.cluster_name,
+      vpc=vpc,
+    )
+    hosted_zone = route53.HostedZone.from_lookup(
+      scope,
+      'PlatformHostedZone',
+      domain_name=delegated_subdomain,
+    )
+    load_balancer = elbv2.ApplicationLoadBalancer.from_lookup(
+      scope,
+      'PlatformLoadBalancer',
+      load_balancer_tags=stack_tags,
+    )
+    listener_lookup = elbv2.ApplicationListener.from_lookup(
+      scope,
+      'PlatformHTTPSListenerLookup',
+      listener_port=443,
+      load_balancer_tags=stack_tags,
+    )
+    security_groups = load_balancer.connections.security_groups
+    if len(security_groups) != 1:
+      raise ValueError(
+        f'platform load balancer must have one security group, found {len(security_groups)}'
+      )
+    listener_security_group = ec2.SecurityGroup.from_security_group_id(
+      scope,
+      'PlatformLoadBalancerSecurityGroup',
+      security_groups[0].security_group_id,
+      allow_all_outbound=False,
+    )
+    https_listener = elbv2.ApplicationListener.from_application_listener_attributes(
+      scope,
+      'PlatformHTTPSListener',
+      listener_arn=listener_lookup.listener_arn,
+      security_group=listener_security_group,
+    )
+    return cls(
+      vpc=vpc,
+      cluster=cluster,
+      hosted_zone=hosted_zone,
+      load_balancer=load_balancer,
+      https_listener=https_listener,
+    )
+
 
 class PlatformStack(Stack):
   def __init__(
@@ -44,7 +100,7 @@ class PlatformStack(Stack):
 
     self.vpc = ec2.Vpc(
       self,
-      config.vpc_construct_id,
+      'PlatformVpc',
       max_azs=2,
       nat_gateways=0,
       subnet_configuration=[
@@ -58,7 +114,7 @@ class PlatformStack(Stack):
 
     self.cluster = ecs.Cluster(
       self,
-      config.cluster_construct_id,
+      'PlatformCluster',
       vpc=self.vpc,
       cluster_name=config.cluster_name,
     )
@@ -87,7 +143,7 @@ class PlatformStack(Stack):
 
     self.load_balancer = elbv2.ApplicationLoadBalancer(
       self,
-      config.load_balancer_construct_id,
+      'PlatformAlb',
       vpc=self.vpc,
       internet_facing=True,
       idle_timeout=Duration.seconds(300),

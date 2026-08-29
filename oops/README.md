@@ -42,19 +42,17 @@ Its `trails-server` target resolves region, cluster, service, and URL from the `
 `bro.oops.cdk.resolve()` reads the `infra` credential and applies the package's consumer-neutral defaults.
 Deployment-specific overrides live under the credential's `oops` object;
 other top-level fields remain available to the consuming repository.
-The typed configuration carries the region, delegated subdomain, platform names and construct ids, ECR stack definitions, image-build source and names, and trails resource names.
-The trails security-group rule logical ids are configurable because CDK derives them from the platform construct path;
-existing stacks set their current ids while new deployments use neutral defaults.
+The typed configuration carries the region, delegated subdomain, platform stack and cluster names, ECR stack definitions, image-build source and names, and trails resource names.
 Unknown fields inside `oops` fail resolution so a misspelled live-resource name cannot silently select a default.
 
 `PlatformStack` creates the shared VPC, ECS cluster, ALB, HTTPS listener, wildcard certificate, and Route 53 lookup.
-Its account-specific construct ids are configuration because CloudFormation logical ids must remain stable when an existing stack changes CDK apps.
+One app deploys it;
+every app carrying a service on that platform finds it instead, so a service and its platform need not live in the same CDK app.
 Tests can pass `HostedZoneReference` to synthesize without an AWS context lookup.
 
 Service stacks take the platform's VPC, cluster, hosted zone, load balancer, and HTTPS listener as a `PlatformHandles` value.
-The app hands them `PlatformStack.handles`, so CloudFormation carries the platform's identifiers as stack exports;
-resolving them to literals instead rewrites immutable properties such as `VpcId`, `Cluster`, and `ListenerArn`, which CloudFormation treats as a change even when the value is unchanged and answers by replacing the service.
-A service assertion test injects its own `PlatformHandles` fixture.
+`PlatformHandles.lookup()` finds the VPC and ALB by their CloudFormation stack tag, the ECS cluster by its configured name, the hosted zone by domain, and the HTTPS listener by port.
+A service assertion test can inject `PlatformStack.handles` or a `PlatformHandles` fixture instead of resolving those lookups.
 
 `RepositoryStack` creates one configured ECR repository while preserving its configured construct id.
 `ImageBuildStack` creates the configured CodeBuild project, grants it pushes to every configured repository, and reads the checkout-relative buildspec and image-build script paths from the same credential.
@@ -66,7 +64,6 @@ The project names its connection through the source's `Auth` block rather than t
 
 `bro.oops.cdk.TrailsServerStack` owns the retained DynamoDB tables and S3 spillover bucket, the store-config parameter, the Fargate service, ALB rule, and DNS record.
 Its DynamoDB table, key, and index declarations come from `bro.trails.server.dynamo`.
-Assertion tests inject handles and never query AWS.
 
 The repository app is `deployment/app.py`, and `trails/server/deploy.sh` deploys its stacks in dependency order.
 `trails/server/bootstrap.sh` creates the runtime token parameter, `run_local.sh` serves a local store, `verify_image.sh` smoke-tests the image, and `verify.sh` monitors the ECS rollout before probing health.

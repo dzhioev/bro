@@ -13,7 +13,6 @@ print(json.dumps(asdict(resolve())))
 PY
 )"
   TRAILS_REGION="$(jq -er '.region' <<<"$config")"
-  TRAILS_PLATFORM_STACK="$(jq -er '.platform.stack_name' <<<"$config")"
   TRAILS_CLUSTER="$(jq -er '.platform.cluster_name' <<<"$config")"
   TRAILS_REPOSITORY_STACK="$(
     jq -er '.trails.repository as $name | .repositories[$name].stack_name' <<<"$config"

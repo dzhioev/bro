@@ -1,3 +1,5 @@
+import json
+
 import aws_cdk as cdk
 from aws_cdk import assertions
 
@@ -32,11 +34,13 @@ def _stacks(tmp_path):
   return app, platform, repository, image_build
 
 
-def test_platform_stack_preserves_its_construct_ids(tmp_path):
+def test_platform_stack_creates_the_shared_platform(tmp_path):
   _, stack, _, _ = _stacks(tmp_path)
   template = assertions.Template.from_stack(stack)
 
   assert stack.stack_name == 'BroPlatformStack'
+  # pins the logical ids of a deployed platform: renaming a construct here
+  # replaces the live VPC, cluster or load balancer on the next deploy
   assert set(template.to_json()['Resources']) == {
     'PlatformVpc423616FE',
     'PlatformVpcPublicSubnet1SubnetC0921B5D',
@@ -165,34 +169,26 @@ def test_image_build_stack_builds_as_an_existing_connection(tmp_path):
 def test_trails_stack_preserves_resources_and_schema(tmp_path):
   config = from_mapping({'delegated_subdomain': _DOMAIN})
   app = cdk.App(outdir=str(tmp_path / 'cdk.out'))
-  environment = cdk.Environment(account=_ACCOUNT, region=config.region)
-  platform = PlatformStack(
-    app,
-    config,
-    hosted_zone=HostedZoneReference(hosted_zone_id=_ZONE_ID, zone_name=_DOMAIN),
-    env=environment,
-  )
   stack = TrailsServerStack(
     app,
     config,
-    platform=platform.handles,
     image_digest=_DIGEST,
-    env=environment,
+    env=cdk.Environment(account=_ACCOUNT, region=config.region),
   )
   template = assertions.Template.from_stack(stack)
 
   assert stack.stack_name == 'BroTrailsServerStack'
   assert set(template.to_json()['Resources']) == {
+    'PlatformLoadBalancerSecurityGrouptoBroTrailsServerStackTrailsServiceSecurityGroup1A4A1C358004D5F2728C',
     'TaskExecutionRole250D2532',
     'TaskExecutionRoleDefaultPolicyA84DD1B0',
     'TaskRole30FC0FBB',
     'TaskRoleDefaultPolicy07FC53DE',
     'TrailsDNSRecordDF0E7F5D',
     'TrailsListenerRule6DB69EDC',
-    'TrailsLoadBalancerEgress',
-    'TrailsLoadBalancerIngress',
     'TrailsService6D10D106',
     'TrailsServiceSecurityGroup58DDDDEE',
+    'TrailsServiceSecurityGroupfromBroTrailsServerStackPlatformLoadBalancerSecurityGroupC26F5B8680041A4A149B',
     'TrailsSpilloverBucket3928E3BC',
     'TrailsStoreConfigE193DC52',
     'TrailsTargetGroup3CD82A7D',
@@ -228,40 +224,19 @@ def test_trails_stack_preserves_resources_and_schema(tmp_path):
   assert set(template.to_json()['Outputs']) == {'ServiceURL'}
 
 
-def test_repository_app_wires_the_trails_stack_to_the_platform_stack(tmp_path):
+def test_repository_app_carries_only_its_own_stacks(tmp_path):
   config = from_mapping({'delegated_subdomain': _DOMAIN})
   app = cdk.App(outdir=str(tmp_path / 'cdk.out'))
 
-  application, stacks = create_app(
-    config,
-    _ACCOUNT,
-    app=app,
-    hosted_zone=HostedZoneReference(hosted_zone_id=_ZONE_ID, zone_name=_DOMAIN),
-    image_digest=_DIGEST,
-  )
+  application, stacks = create_app(config, _ACCOUNT, app=app, image_digest=_DIGEST)
 
   assembly = application.synth()
 
   assert {artifact.stack_name for artifact in assembly.stacks} == {
-    'BroPlatformStack',
     'BroTrailsECRStack',
     'BroImageBuildStack',
     'BroTrailsServerStack',
   }
-  assert set(stacks.trails.dependencies) == {stacks.platform, stacks.repository}
-  cluster = assertions.Template.from_stack(stacks.trails).to_json()['Resources'][
-    'TrailsService6D10D106'
-  ]['Properties']['Cluster']
-  assert 'Fn::ImportValue' in cluster
-
-
-def test_all_stacks_synthesize_without_aws_access(tmp_path):
-  app, _, _, _ = _stacks(tmp_path)
-
-  assembly = app.synth()
-
-  assert {artifact.stack_name for artifact in assembly.stacks} == {
-    'BroImageBuildStack',
-    'BroPlatformStack',
-    'BroTrailsECRStack',
-  }
+  assert set(stacks.trails.dependencies) == {stacks.repository}
+  trails = json.dumps(assertions.Template.from_stack(stacks.trails).to_json())
+  assert 'Fn::ImportValue' not in trails

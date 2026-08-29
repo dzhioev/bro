@@ -44,9 +44,6 @@ def test_account_names_are_resolved_from_the_infra_namespace():
       'platform': {
         'stack_name': 'CustomPlatform',
         'cluster_name': 'custom-services',
-        'vpc_construct_id': 'CustomVpc',
-        'cluster_construct_id': 'CustomCluster',
-        'load_balancer_construct_id': 'CustomAlb',
       },
       'repositories': {
         'api': {
@@ -84,7 +81,6 @@ def test_account_names_are_resolved_from_the_infra_namespace():
   assert config.delegated_subdomain == 'apps.example.net'
   assert config.platform.stack_name == 'CustomPlatform'
   assert config.platform.cluster_name == 'custom-services'
-  assert config.platform.vpc_construct_id == 'CustomVpc'
   assert config.repositories['api'].repository_construct_id == 'APIRepository'
   assert config.repository_names == ('custom-api', 'custom-worker')
   assert config.image_build.source_owner == 'organization'
