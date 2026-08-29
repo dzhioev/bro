@@ -403,8 +403,8 @@ Build commit links from `git remote get-url origin` (strip trailing `.git`).
 ### 14. Launch the review watcher
 
 The watcher is one long-lived `poll-pr` process.
-It authenticates through the credential store (`--credential`, default `github`), re-resolved each cycle so the watch survives short-lived minted tokens;
-your own comments are filtered via `--self`, which defaults to the PR author:
+It authenticates through the credential store (`--credential`, default `github`), re-resolved each cycle so the watch survives short-lived minted tokens, and filters out the account that credential acts for
+— your own comments and reviews:
 
 ```bash
 poll-pr <owner>/<repo> <pr_number>
