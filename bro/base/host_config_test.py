@@ -17,132 +17,253 @@ def config_file(tmp_path, monkeypatch):
   return write
 
 
-class TestProjectInstances:
-  def test_absent_file_binds_no_entry(self, tmp_path, monkeypatch):
+class TestProjectSelection:
+  def test_absent_file_selects_nothing(self, tmp_path, monkeypatch):
     monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(tmp_path / 'nope.json'))
-    assert host_config.project_instances(str(tmp_path)) is None
 
-  def test_instances_read_as_kind_to_instance(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): {'instances': ['brog+github', 'github+ppp']}}})
-    assert host_config.project_instances(str(tmp_path)) == {'brog': 'github', 'github': 'ppp'}
+    assert host_config.project_selection(str(tmp_path)) == host_config.CredentialSelection({}, {})
 
-  def test_project_without_instances_selects_nothing(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): {}}})
-    assert host_config.project_instances(str(tmp_path)) == {}
+  def test_defaults_and_project_merge_with_attribution(self, config_file, tmp_path):
+    config_file(
+      {
+        'defaults': {'creds': ['github+dev', 'trails+write']},
+        'projects': {
+          str(tmp_path): {'creds': ['github+project', 'brog+']},
+        },
+      }
+    )
 
-  def test_trailing_plus_selects_the_kinds_own_entry(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): {'instances': ['brog+']}}})
-    assert host_config.project_instances(str(tmp_path)) == {'brog': None}
+    selected = host_config.project_selection(str(tmp_path))
 
-  def test_an_unnamed_attachment_binds_no_entry(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path / 'elsewhere'): {'instances': ['brog+github']}}})
-    assert host_config.project_instances(str(tmp_path)) is None
+    assert selected.instances == {'github': 'project', 'trails': 'write', 'brog': None}
+    assert selected.layers == {
+      'github': host_config.PROJECT_LAYER,
+      'trails': host_config.DEFAULTS_LAYER,
+      'brog': host_config.PROJECT_LAYER,
+    }
+    assert selected.unbound_kinds == frozenset()
+
+  def test_an_unnamed_attachment_gets_defaults_and_refuses_project_only_kinds(
+    self, config_file, tmp_path
+  ):
+    config_file(
+      {
+        'defaults': {'creds': ['github+dev']},
+        'projects': {
+          str(tmp_path / 'api'): {
+            'creds': ['github+api', 'brog+github'],
+            'bros': {'reviewer': {'creds': ['trails+review']}},
+          }
+        },
+        'tools': {'rewind': {'creds': ['openai+analysis']}},
+      }
+    )
+
+    selected = host_config.project_selection(str(tmp_path / 'elsewhere'))
+
+    assert selected.instances == {'github': 'dev'}
+    assert selected.unbound_kinds == frozenset({'brog', 'trails'})
+
+  def test_a_detached_launch_uses_the_same_unbound_rule(self, config_file, tmp_path):
+    config_file({'projects': {str(tmp_path): {'creds': ['brog+github']}}})
+
+    assert host_config.project_selection(None).unbound_kinds == frozenset({'brog'})
+
+  def test_an_empty_matching_project_is_bound(self, config_file, tmp_path):
+    config_file(
+      {
+        'projects': {
+          str(tmp_path): {},
+          str(tmp_path / 'elsewhere'): {'creds': ['brog+github']},
+        }
+      }
+    )
+
+    assert host_config.project_selection(str(tmp_path)).unbound_kinds == frozenset()
 
   def test_keys_expand_and_resolve_before_matching(self, config_file, tmp_path, monkeypatch):
     monkeypatch.setenv('HOME', str(tmp_path))
     (tmp_path / 'repo').mkdir()
     (tmp_path / 'link').symlink_to(tmp_path / 'repo')
-    config_file({'projects': {'~/repo': {'instances': ['brog+github']}}})
-    assert host_config.project_instances(str(tmp_path / 'link')) == {'brog': 'github'}
+    config_file({'projects': {'~/repo': {'creds': ['brog+github']}}})
+
+    assert host_config.project_selection(str(tmp_path / 'link')).instances == {'brog': 'github'}
 
   def test_a_url_key_matches_the_same_url_normalized(self, config_file):
-    config_file({'projects': {'HTTPS://GitHub.com/foo/api.git/': {'instances': ['brog+github']}}})
-    selection = host_config.project_instances('https://github.com/foo/api.git')
-    assert selection == {'brog': 'github'}
+    config_file({'projects': {'HTTPS://GitHub.com/foo/api.git/': {'creds': ['brog+github']}}})
+
+    selected = host_config.project_selection('https://github.com/foo/api.git')
+
+    assert selected.instances == {'brog': 'github'}
 
   def test_two_keys_naming_one_attachment_are_rejected(self, config_file):
     config_file(
       {
         'projects': {
-          'https://github.com/foo/api.git': {'instances': ['brog+github']},
-          'https://GitHub.com/foo/api.git/': {'instances': ['brog+flow']},
+          'https://github.com/foo/api.git': {'creds': ['brog+github']},
+          'https://GitHub.com/foo/api.git/': {'creds': ['brog+flow']},
         }
       }
     )
+
     with pytest.raises(ValueError, match='name the same attachment'):
-      host_config.project_instances('https://github.com/foo/api.git')
+      host_config.project_selection('https://github.com/foo/api.git')
 
-  def test_selection_without_a_plus_is_rejected(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): {'instances': ['brog']}}})
+
+class TestLaunchSelection:
+  def test_project_bro_overrides_project_and_defaults(self, config_file, tmp_path):
+    config_file(
+      {
+        'defaults': {'creds': ['github+default', 'trails+write']},
+        'projects': {
+          str(tmp_path): {
+            'creds': ['github+project', 'brog+github'],
+            'bros': {
+              'reviewer': {'creds': ['github+reviewer', 'trails+review']},
+            },
+          }
+        },
+      }
+    )
+
+    selected = host_config.launch_selection(str(tmp_path), 'reviewer')
+
+    assert selected.instances == {
+      'github': 'reviewer',
+      'trails': 'review',
+      'brog': 'github',
+    }
+    assert selected.layers == {
+      'github': host_config.PROJECT_BRO_LAYER,
+      'trails': host_config.PROJECT_BRO_LAYER,
+      'brog': host_config.PROJECT_LAYER,
+    }
+
+  def test_an_unlisted_bro_uses_project_and_defaults(self, config_file, tmp_path):
+    config_file(
+      {
+        'defaults': {'creds': ['trails+write']},
+        'projects': {str(tmp_path): {'creds': ['github+project']}},
+      }
+    )
+
+    selected = host_config.launch_selection(str(tmp_path), 'developer')
+
+    assert selected.instances == {'trails': 'write', 'github': 'project'}
+
+
+class TestToolSelection:
+  def test_tool_overrides_defaults_and_never_refuses_launch_kinds(self, config_file, tmp_path):
+    config_file(
+      {
+        'defaults': {'creds': ['trails+write', 'github+dev']},
+        'projects': {str(tmp_path): {'creds': ['brog+github']}},
+        'tools': {'rewind': {'creds': ['trails+analyst', 'openai+benchmark']}},
+      }
+    )
+
+    selected = host_config.tool_selection('rewind')
+
+    assert selected.instances == {
+      'trails': 'analyst',
+      'github': 'dev',
+      'openai': 'benchmark',
+    }
+    assert selected.layers == {
+      'trails': host_config.TOOL_LAYER,
+      'github': host_config.DEFAULTS_LAYER,
+      'openai': host_config.TOOL_LAYER,
+    }
+    assert selected.unbound_kinds == frozenset()
+
+  def test_unknown_tool_uses_defaults(self, config_file):
+    config_file({'defaults': {'creds': ['github+dev']}})
+
+    assert host_config.tool_selection('other').instances == {'github': 'dev'}
+
+
+class TestValidation:
+  def test_trailing_plus_selects_bare_material(self, config_file):
+    config_file({'defaults': {'creds': ['brog+']}})
+
+    assert host_config.tool_selection(None).instances == {'brog': None}
+
+  def test_unknown_kind_is_carried_without_registry_validation(self, config_file):
+    config_file({'defaults': {'creds': ['consumer_only+special']}})
+
+    assert host_config.tool_selection(None).instances == {'consumer_only': 'special'}
+
+  def test_instances_names_the_migration(self, config_file, tmp_path):
+    config_file({'projects': {str(tmp_path): {'instances': ['brog+github']}}})
+
+    with pytest.raises(ValueError, match="'instances' is retired; migrate the list to 'creds'"):
+      host_config.project_selection(str(tmp_path))
+
+  def test_selection_without_a_plus_is_rejected(self, config_file):
+    config_file({'defaults': {'creds': ['brog']}})
+
     with pytest.raises(ValueError, match="selection 'brog' names no instance"):
-      host_config.project_instances(str(tmp_path))
+      host_config.tool_selection(None)
 
-  def test_malformed_instance_is_rejected(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): {'instances': ['brog+GitHub']}}})
+  def test_malformed_instance_is_rejected(self, config_file):
+    config_file({'defaults': {'creds': ['brog+GitHub']}})
+
     with pytest.raises(ValueError, match='malformed secret name'):
-      host_config.project_instances(str(tmp_path))
+      host_config.tool_selection(None)
 
-  def test_two_selections_of_one_kind_are_rejected(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): {'instances': ['brog+github', 'brog+flow']}}})
+  def test_two_selections_of_one_kind_are_rejected(self, config_file):
+    config_file({'defaults': {'creds': ['brog+github', 'brog+flow']}})
+
     with pytest.raises(ValueError, match="selects kind 'brog' twice"):
-      host_config.project_instances(str(tmp_path))
+      host_config.tool_selection(None)
 
-  def test_bare_selection_list_is_rejected(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): ['brog+github']}})
-    with pytest.raises(ValueError, match='must hold a json object'):
-      host_config.project_instances(str(tmp_path))
+  @pytest.mark.parametrize(
+    'data, message',
+    [
+      ({'defaults': []}, 'defaults must hold a json object'),
+      ({'defaults': {'creds': 'brog+github'}}, 'creds must be a list'),
+      ({'projects': []}, 'projects must be a json object'),
+      ({'projects': {'/repo': {'bros': []}}}, 'bros must be a json object'),
+      ({'projects': {'/repo': {'bros': {'dev': []}}}}, 'must hold a json object'),
+      ({'tools': []}, 'tools must be a json object'),
+      ({'tools': {'rewind': []}}, 'must hold a json object'),
+      ({'credentials': {}}, 'unknown key'),
+    ],
+  )
+  def test_bad_shapes_are_rejected(self, config_file, data, message):
+    config_file(data)
 
-  def test_unknown_project_field_is_rejected(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): {'creds': ['brog+github']}}})
-    with pytest.raises(ValueError, match='unknown field\\(s\\): creds'):
-      host_config.project_instances(str(tmp_path))
+    with pytest.raises(ValueError, match=message):
+      host_config.tool_selection(None)
 
-  def test_non_list_instances_is_rejected(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): {'instances': 'brog+github'}}})
-    with pytest.raises(ValueError, match='instances must be a list'):
-      host_config.project_instances(str(tmp_path))
+  def test_every_section_is_validated_on_every_read(self, config_file):
+    config_file({'tools': {'broken': {'creds': ['github']}}})
 
-  def test_unknown_top_level_key_is_rejected(self, config_file, tmp_path):
-    config_file({'projects': {}, 'credentials': {}})
-    with pytest.raises(ValueError, match='unknown key\\(s\\).*credentials'):
-      host_config.project_instances(str(tmp_path))
-
-  def test_another_projects_typo_fails_this_read(self, config_file, tmp_path):
-    # the whole file is validated on every read, so a broken entry surfaces at
-    # the next launch from any project rather than at the next launch from its own
-    config_file({'projects': {str(tmp_path): {}, str(tmp_path / 'other'): {'instances': ['brog']}}})
     with pytest.raises(ValueError, match='names no instance'):
-      host_config.project_instances(str(tmp_path))
+      host_config.llm_presets()
 
   def test_non_object_file_is_rejected(self, tmp_path, monkeypatch):
     path = tmp_path / 'bro.json'
     path.write_text('[]')
     monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(path))
+
     with pytest.raises(ValueError, match='must hold a json object'):
-      host_config.project_instances(str(tmp_path))
-
-
-class TestProjectScopedKinds:
-  def test_absent_file_scopes_no_kind(self, tmp_path, monkeypatch):
-    monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(tmp_path / 'nope.json'))
-    assert host_config.project_scoped_kinds() == frozenset()
-
-  def test_every_kind_any_project_selects_is_scoped(self, config_file, tmp_path):
-    config_file(
-      {
-        'projects': {
-          str(tmp_path / 'api'): {'instances': ['brog+github', 'github+acme']},
-          str(tmp_path / 'site'): {'instances': ['brog+']},
-        }
-      }
-    )
-    assert host_config.project_scoped_kinds() == frozenset({'brog', 'github'})
+      host_config.tool_selection(None)
 
 
 class TestLLMPresets:
   def test_absent_file_declares_none(self, tmp_path, monkeypatch):
     monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(tmp_path / 'nope.json'))
+
     assert host_config.llm_presets() == {}
 
-  def test_presets_read_as_name_to_recipe(self, config_file):
+  def test_presets_remain_host_wide(self, config_file):
     config_file({'llm': {'sharp': 'openai:sol:max', 'cheap': ':terra'}})
+
     assert host_config.llm_presets() == {'sharp': 'openai:sol:max', 'cheap': ':terra'}
 
   def test_a_non_string_recipe_is_rejected(self, config_file):
     config_file({'llm': {'sharp': 7}})
+
     with pytest.raises(ValueError, match="preset 'sharp'"):
       host_config.llm_presets()
-
-  def test_a_projects_only_file_declares_none(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): {'instances': ['brog+']}}})
-    assert host_config.llm_presets() == {}

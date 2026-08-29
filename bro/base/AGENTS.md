@@ -14,7 +14,7 @@ run those with `--help` for flags.
   mutually-exclusive group declarations,
   `dispatch()` for subcommand handlers registered via `set_handler`,
   and `reconstruct()` (namespace → canonical argv).
-  `parse(argv)` is the entry every CLI calls
+  `parse(argv)` is the entry every CLI calls and records `Path(argv[0]).name` for lazy ambient credential selection
   — see the "CLI relationship" below.
   `command_signature(('bro', 'list'))` reads an installed command the other way round, returning an argparse-free `CommandSignature`
   — the command's summary and the arguments it declares, minus the repo globals
@@ -29,6 +29,8 @@ run those with `--help` for flags.
   plain material is `creds/<name>.cred`, and `creds.json` may annotate one typed source per name (`ssm` or a `bro.credential_sources` minting type).
   `get` / `get_json` / `try_get` / `available` address kinds through the explicit selection;
   the `get_instance` siblings address the stored name exactly.
+  `default_store()` binds an ambient store lazily from host-config defaults plus the CLI basename's tool layer,
+  and bypasses that config entirely when `BRO_STORE` directs the process.
   `$cred` references expand during resolution, with kind targets applying the same selection and instance targets reading storage directly.
   `known_names()` is the code registry's kinds, while the CLI's `--instance` list enumerates the store directory and typed annotations.
   `build_scoped_store(store, names, optional=…)` emits `creds/<kind>.cred` plus typed annotations in `creds.json`, and reports the declared kinds that resolved separately from transitive `$cred` pulls.
@@ -37,14 +39,15 @@ run those with `--help` for flags.
   `CREDENTIALS_REGISTRY`, `BRO_CONFIGS_DIR`, `registry.json`, and `credentials.json` are retired resolver inputs and fail loudly.
   Schemas live in `bro/setup/AGENTS.md`.
 - `configs.py` — the exclusive `BRO_STORE` directory (default `~/.bro`), the `~/.bro.json` host config beside it, and the installed bro distribution version shared by credential consumers and trail records.
-- `host_config.py` — the host's launch policy (`~/.bro.json`):
-  `project_instances(attachment)` reads the `kind+instance` selections recorded for a repository attachment (checkout path or git URL, normalized through `git_url.py`), None where no entry names it,
-  and `project_scoped_kinds()` names the kinds some entry selects for
-  — what a launch binding no entry may not read at all;
-  the caller names the attachment, since resolving the operated repo belongs to the launch layer;
-  `llm_presets()` reads the host-wide `--llm` preset names (`bro/launch/llm_flags.py` merges them over the operated project's own table).
+- `host_config.py` — the host's credential selection policy (`~/.bro.json`):
+  `project_selection(attachment)` merges `defaults` and the matching project's `creds`,
+  `launch_selection(attachment, bro)` adds that project's per-bro layer,
+  and `tool_selection(cli_name)` merges `defaults` with one host CLI's layer.
+  Every result carries kind → instance, kind → choosing layer, and the project-only kinds an unbound launch refuses;
+  config validation is grammar-only so kinds unknown to this installation survive shared dotfiles.
+  `llm_presets()` reads the unchanged host-wide `--llm` preset names (`bro/launch/llm_flags.py` merges them over the operated project's own table).
   The scheme and its precedence are `bro/setup/AGENTS.md`, "Host config";
-  `ride.scope.scoped_secrets` carries the result to each explicitly constructed credential store
+  `ride.scope.scoped_secrets` carries the project-level result to each explicitly constructed credential store
 - `git_url.py` — git remote URL grammar:
   `is_git_url`, `normalize_git_url` (the canonical spelling two spellings of one remote compare on), and `git_url_path`.
   Pure string handling, so callers that never invoke git

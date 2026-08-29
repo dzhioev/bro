@@ -14,6 +14,7 @@ import os
 import sys
 from collections.abc import Callable, Generator, Iterable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional, TypeVar, overload
 
 from bro.base import log
@@ -71,6 +72,14 @@ def _disable_ic() -> None:
 
 
 _N = TypeVar('_N')
+
+_current_cli_name: Optional[str] = None
+
+
+def current_cli_name() -> Optional[str]:
+  """The basename recorded by the latest `Parser.parse`, if one has run."""
+  return _current_cli_name
+
 
 # subparser handler stashed via set_handler, popped by dispatch
 _HANDLER_DEST = '_handler'
@@ -440,6 +449,9 @@ class Parser(argparse.ArgumentParser):
     return handler(**args)
 
   def parse(self, argv: list[str]) -> dict:
+    global _current_cli_name
+    if len(argv) > 0:
+      _current_cli_name = Path(argv[0]).name
     return vars(self.parse_args(argv[1:]))
 
 
