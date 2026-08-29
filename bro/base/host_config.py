@@ -66,7 +66,7 @@ _TOOLS_KEY = 'tools'
 _CREDS_KEY = 'creds'
 _BROS_KEY = 'bros'
 _LLM_KEY = 'llm'
-_LEGACY_INSTANCES_KEY = 'instances'
+_RETIRED_INSTANCES_KEY = 'instances'
 
 
 @dataclass(frozen=True)
@@ -237,10 +237,8 @@ def _selection_object(path: Path, subject: str, value: object) -> dict[str, Opti
 
 def _reject_unknown_fields(value: dict, allowed: set[str], where: str) -> None:
   unknown = sorted(set(value) - allowed)
-  if _LEGACY_INSTANCES_KEY in unknown:
-    raise ValueError(
-      f'{where}: {_LEGACY_INSTANCES_KEY!r} is retired; migrate the list to {_CREDS_KEY!r}'
-    )
+  if _RETIRED_INSTANCES_KEY in unknown:
+    raise ValueError(f'{where}: {_RETIRED_INSTANCES_KEY!r} is retired; use {_CREDS_KEY!r}')
   if len(unknown) > 0:
     raise ValueError(f'{where} has unknown field(s): {", ".join(unknown)}')
 

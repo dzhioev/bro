@@ -24,7 +24,7 @@ run those with `--help` for flags.
   and the parser is captured by intercepting the `parse` call the module's `main` ends in, so nothing the command does ever runs.
 - `credentials.py` — client-side secret resolver (`__cli_name__ = 'credentials'`).
   The code registry maps kinds to a required description and an optional install hook;
-  it is assembled from `bro/base/registry.json` and installed `bro.credentials` contributions, and rejects every source-bearing or otherwise unknown field with the store migration named.
+  it is assembled from `bro/base/registry.json` and installed `bro.credentials` contributions.
   `Store(registry, store_dir, selection)` reads one exclusive directory:
   plain material is `creds/<name>.cred`, and `creds.json` may annotate one typed source per name (`ssm` or a `bro.credential_sources` minting type).
   `get` / `get_json` / `try_get` / `available` address kinds through the explicit selection;
@@ -36,7 +36,6 @@ run those with `--help` for flags.
   `build_scoped_store(store, names, optional=…)` emits `creds/<kind>.cred` plus typed annotations in `creds.json`, and reports the declared kinds that resolved separately from transitive `$cred` pulls.
   `scoped_view_store` is the lazy, kinds-bounded sibling over the passed store.
   `install_hooks(registry, kinds, store, directory, env)` applies only the named kinds and resolves hook values through that store.
-  `CREDENTIALS_REGISTRY`, `BRO_CONFIGS_DIR`, `registry.json`, and `credentials.json` are retired resolver inputs and fail loudly.
   Schemas live in `bro/setup/AGENTS.md`.
 - `configs.py` — the exclusive `BRO_STORE` directory (default `~/.bro`), the `~/.bro.json` host config beside it, and the installed bro distribution version shared by credential consumers and trail records.
 - `host_config.py` — the host's credential selection policy (`~/.bro.json`):

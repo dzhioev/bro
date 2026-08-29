@@ -45,9 +45,8 @@ def apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) -
     if warn_when_missing:
       log.warning(
         'claude_code secret not resolvable; the session starts unauthenticated — mint a '
-        'token with `claude setup-token` and store it at %s; see %s',
+        'token with `claude setup-token` and store it at %s',
         credentials.default_store().material_path('claude_code'),
-        credentials.CREDENTIAL_MIGRATION_GUIDE,
       )
     return
   env['CLAUDE_CODE_OAUTH_TOKEN'] = token
