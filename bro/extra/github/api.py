@@ -1,4 +1,4 @@
-"""GitHub REST client: JSON verbs over stdlib urllib with a transient-retry policy."""
+"""GitHub API client: JSON verbs over stdlib urllib with a transient-retry policy."""
 
 import http.client
 import json
@@ -19,6 +19,7 @@ _MAX_ATTEMPTS = 5
 _BASE_BACKOFF = 1.0  # seconds; doubled per attempt
 _MAX_BACKOFF = 30.0  # ceiling for both exponential backoff and server-hinted waits
 _PASSING_CONCLUSIONS = frozenset({'success', 'neutral', 'skipped'})
+_GRAPHQL_URL = 'https://api.github.com/graphql'
 
 
 def check_state(status: Optional[str], conclusion: Optional[str]) -> str:
@@ -125,6 +126,21 @@ def _request(method: str, url: str, token: str, body: Optional[Any] = None) -> A
 
 def get(url: str, token: str) -> Any:
   return _request('GET', url, token)
+
+
+def viewer_login(token: str) -> str:
+  """the login of the account `token` acts for.
+
+  GraphQL rather than REST `/user`: that endpoint is user-to-server only and
+  answers 403 to an installation token, whose actor has no user behind it. The
+  login comes back spelled the way the REST pull-request, review, and comment
+  payloads spell it.
+  """
+  response = post(_GRAPHQL_URL, token, {'query': 'query { viewer { login } }'})
+  errors = response.get('errors')
+  if errors is not None:
+    raise ValueError(f"resolving the token's own login: {errors}")
+  return response['data']['viewer']['login']
 
 
 def post(url: str, token: str, body: Any) -> Any:
