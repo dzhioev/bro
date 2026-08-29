@@ -364,6 +364,17 @@ class TestGrep:
     with pytest.raises(TrailNotFound, match='trail not found'):
       _command_grep(_client(FakeClient()), self._grep_args('needle', trails=['missing']))
 
+  def test_an_unrenderable_trail_is_named_and_the_rest_of_the_sweep_still_reports(self, capsys):
+    client = FakeClient()
+    client.add_bro('T-broken', [{'step_id': 0, 'kind': 'user_input', 'body': 17, 'ts': None}])
+    client.add_claude('T-good', [_user('the needle is here')])
+
+    assert _command_grep(_client(client), self._grep_args('needle')) == 2
+
+    captured = capsys.readouterr()
+    assert 'T-good:' in captured.out
+    assert 'T-broken' in captured.err and 'user input' in captured.err
+
   def test_a_structured_error_body_is_searchable(self, capsys):
     client = FakeClient()
     client.add_bro(

@@ -353,7 +353,7 @@ class TestStructures:
     )
     adapter = RecordedAdapter(_client(fake))
 
-    with pytest.raises(ValueError, match='segment id'):
+    with pytest.raises(DisplayDataError, match='malformed recorded trail child: segment id'):
       adapter.conversation_records(fake.headers['child'])
     with pytest.raises(ValueError, match='trail end reason'):
       adapter.trail_list_row(_header('ended', end={'at': '2026-08-15T01:03:00Z'}))
