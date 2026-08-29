@@ -36,6 +36,11 @@ BRO_STEP_KINDS = frozenset(
   }
 )
 
+# the kinds whose body a reader is entitled to read as text: they project into a
+# message whose content carries no other shape, so a body that is not a string
+# leaves the trail unrenderable rather than merely odd
+BRO_TEXT_BODY_KINDS = frozenset({'system_prompt', 'user_input'})
+
 
 @dataclass(frozen=True)
 class ParsedRecord:
@@ -154,6 +159,9 @@ def _bro_parse(payload: Any) -> ParsedRecord:
   kind = payload.get('kind')
   if not isinstance(kind, str) or kind not in BRO_STEP_KINDS:
     raise ValueError(f'bro record kind must be one of {sorted(BRO_STEP_KINDS)}')
+  body = payload.get('body')
+  if kind in BRO_TEXT_BODY_KINDS and not isinstance(body, str):
+    raise ValueError(f'bro {kind} body must be a string')
   timestamp = payload.get('ts')
   if timestamp is not None and not isinstance(timestamp, str):
     raise ValueError('bro record ts must be a string')
@@ -172,7 +180,7 @@ def _bro_parse(payload: Any) -> ParsedRecord:
   attributes = {key: value for key, value in payload.items() if key not in omitted}
   return ParsedRecord(
     kind=kind,
-    body=payload.get('body'),
+    body=body,
     timestamp=timestamp,
     attributes=attributes,
     native=dict(payload),
