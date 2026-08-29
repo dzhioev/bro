@@ -1,153 +1,288 @@
-"""the host's launch policy (`~/.bro.json`).
+"""The host's credential selection policy (`~/.bro.json`).
 
-one host serves several projects, and a credential kind may have more than one
-instance stored for it; this file records which instance each project reads,
-beside the host's own `--llm` preset names:
+One host may serve several projects, bros, and command-line tools that read
+separate stored instances of one credential kind.
+Selections live outside repositories and merge from general to specific:
 
     {
+      "defaults": {"creds": ["github+dev", "trails+write"]},
       "projects": {
         "/home/foo/projects/api": {
-          "instances": ["brog+github", "github+acme"]
-        },
-        "/home/foo/projects/site": {
-          "instances": ["brog+"]
+          "creds": ["brog+github", "github+dev"],
+          "bros": {"bro-eyebro": {"creds": ["github+reviewer"]}}
         },
         "https://github.com/foo/api.git": {
-          "instances": ["brog+github", "github+acme"]
+          "creds": ["brog+github", "github+dev"]
         }
       },
+      "tools": {"rewind": {"creds": ["trails+analyst"]}},
       "llm": {"sharp": "openai:sol:max"}
     }
 
-a project key is the attachment a session names it by: the filesystem path of
-the operated repo's root (`~` and symlinks resolved before matching), or a git
-URL (normalized before matching), so a repository attached both ways carries an
-entry per identity. its value is that project's policy object, carrying
-`instances`: the `kind+instance` names the project reads, naming each kind at
-most once. the `+` is always written — `kind+` states that the project reads the
-kind's own registry entry, which the registry must then give sources of its own.
+Every `creds` entry is `kind+instance`, or `kind+` to select the kind's bare
+`creds/<kind>.cred` material.
+A list may name each kind once.
+The grammar is installation-independent, so selections for unknown kinds remain
+valid and are carried in the returned mappings.
 
-the file is optional: a host holding one instance per kind needs none. a host
-that does declare project entries reads the kinds they name **per project**, so
-a launch whose attachment no entry names cannot resolve those kinds at all
-(`project_scoped_kinds`) — the kind's own registry entry is one project's
-instance, and handing it to another project is a cross-project credential leak.
+A project key is the attachment a session names it by: the filesystem path of
+the operated repository's root (`~` and symlinks resolved before matching), or
+a normalized git URL.
+A repository attached both ways therefore carries an entry per identity.
+Launch selection precedence is project-bro, project, defaults, then bare store
+material; tool selection precedence is tool, defaults, then bare material.
+The returned layer map attributes every explicit selection.
 
-`llm` maps a preset name to the `--llm` value it stands for, host-wide rather
-than per project — it is the operator's own shorthand, which every project they
-launch from answers to.
+A detached launch or an attachment no project entry names refuses kinds selected
+by any project or project-bro layer unless defaults selects the kind.
+Tool selections never cause a launch refusal.
 
-reading is project-agnostic: the caller names the project.
+The file is optional.
+`llm` remains the host-wide table of `--llm` preset names.
 """
+
+from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from bro.base import configs, credentials
 from bro.base.git_url import is_git_url, normalize_git_url
 
-# module-level so tests can point it at a fixture path; read at call time.
+# Module-level so tests can point it at a fixture path; read at call time.
 HOST_CONFIG_FILE = configs.DEFAULT_HOST_CONFIG
 
+DEFAULTS_LAYER = 'defaults'
+PROJECT_LAYER = 'project'
+PROJECT_BRO_LAYER = 'project-bro'
+TOOL_LAYER = 'tool'
+
+_DEFAULTS_KEY = 'defaults'
 _PROJECTS_KEY = 'projects'
-_INSTANCES_KEY = 'instances'
+_TOOLS_KEY = 'tools'
+_CREDS_KEY = 'creds'
+_BROS_KEY = 'bros'
 _LLM_KEY = 'llm'
+_LEGACY_INSTANCES_KEY = 'instances'
 
 
-def _read() -> tuple[Path, dict]:
-  """the host config's contents, validated whole on every read so a typo in a
-  section the caller isn't asking about still surfaces at the next launch.
-  Empty when the file does not exist."""
+@dataclass(frozen=True)
+class CredentialSelection:
+  """A merged kind-to-instance selection and its host-config provenance."""
+
+  instances: dict[str, Optional[str]]
+  layers: dict[str, str]
+  unbound_kinds: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class _Project:
+  credentials: dict[str, Optional[str]]
+  bros: dict[str, dict[str, Optional[str]]]
+
+
+@dataclass(frozen=True)
+class _Config:
+  defaults: dict[str, Optional[str]]
+  projects: dict[str, _Project]
+  tools: dict[str, dict[str, Optional[str]]]
+  llm: dict[str, str]
+
+
+def _read() -> _Config:
   path = Path(HOST_CONFIG_FILE)
   if not path.is_file():
-    return path, {}
-  data = json.loads(path.read_text())
+    return _Config({}, {}, {}, {})
+  try:
+    data = json.loads(path.read_text())
+  except json.JSONDecodeError as error:
+    raise ValueError(f'{path} is not valid json') from error
   if not isinstance(data, dict):
     raise ValueError(f'{path} must hold a json object')
-  unknown = sorted(set(data) - {_PROJECTS_KEY, _LLM_KEY})
+  unknown = sorted(set(data) - {_DEFAULTS_KEY, _PROJECTS_KEY, _TOOLS_KEY, _LLM_KEY})
   if len(unknown) > 0:
     raise ValueError(f'unknown key(s) in {path}: {", ".join(unknown)}')
-  return path, data
+  defaults = _selection_object(path, _DEFAULTS_KEY, data.get(_DEFAULTS_KEY, {}))
+  projects = _projects(path, data.get(_PROJECTS_KEY, {}))
+  tools = _tools(path, data.get(_TOOLS_KEY, {}))
+  llm = _llm(path, data.get(_LLM_KEY, {}))
+  return _Config(defaults, projects, tools, llm)
 
 
 def llm_presets() -> dict[str, str]:
-  """the host's `--llm` preset names, each mapped to the value it stands for.
-  empty when the file declares none (or does not exist)."""
-  path, data = _read()
-  presets = data.get(_LLM_KEY, {})
-  if not isinstance(presets, dict):
-    raise ValueError(f'{path}: {_LLM_KEY} must be a json object')
-  for name, value in presets.items():
-    if not isinstance(value, str) or value == '':
-      raise ValueError(f'{path}: {_LLM_KEY} preset {name!r} must be a non-empty string')
-  return presets
+  """The host's `--llm` preset names, mapped to the values they stand for."""
+  config = _read()
+  return dict(config.llm)
 
 
-def project_instances(attachment: str) -> Optional[dict[str, Optional[str]]]:
-  """the instance selection the project attached as `attachment` reads on this
-  host: kind → the instance backing it, or None where the selection names the
-  kind's own entry. None when no entry names the attachment (or the file does
-  not exist), which is what `project_scoped_kinds` then withholds."""
-  return _selections().get(_attachment_key(attachment))
+def project_selection(attachment: Optional[str]) -> CredentialSelection:
+  """Merge defaults and the matching project, without a per-bro layer."""
+  config = _read()
+  project = _matching_project(config, attachment)
+  layers = [(DEFAULTS_LAYER, config.defaults)]
+  if project is not None:
+    layers.append((PROJECT_LAYER, project.credentials))
+  return _merged(layers, unbound_kinds=_unbound_kinds(config, project))
 
 
-def project_scoped_kinds() -> frozenset[str]:
-  """every credential kind some project entry selects an instance for — the
-  kinds this host reads per project rather than host-wide."""
-  return frozenset(kind for selection in _selections().values() for kind in selection)
+def launch_selection(attachment: Optional[str], bro: str) -> CredentialSelection:
+  """Merge defaults, a matching project, and that project's `bro` layer."""
+  if not isinstance(bro, str) or bro == '':
+    raise ValueError('bro name must be a non-empty string')
+  config = _read()
+  project = _matching_project(config, attachment)
+  layers = [(DEFAULTS_LAYER, config.defaults)]
+  if project is not None:
+    layers.append((PROJECT_LAYER, project.credentials))
+    bro_credentials = project.bros.get(bro)
+    if bro_credentials is not None:
+      layers.append((PROJECT_BRO_LAYER, bro_credentials))
+  return _merged(layers, unbound_kinds=_unbound_kinds(config, project))
 
 
-def _selections() -> dict[str, dict[str, Optional[str]]]:
-  path, data = _read()
-  projects = data.get(_PROJECTS_KEY, {})
-  if not isinstance(projects, dict):
-    raise ValueError(f'{path}: {_PROJECTS_KEY} must be a json object')
-  selections: dict[str, dict[str, Optional[str]]] = {}
-  for key, value in projects.items():
-    attachment = _attachment_key(key)
-    if attachment in selections:
-      raise ValueError(f'{path}: two project keys name the same attachment {attachment}')
-    selections[attachment] = _project_selection(path, key, value)
-  return selections
+def tool_selection(cli_name: Optional[str]) -> CredentialSelection:
+  """Merge defaults and the entry for `cli_name`; None selects defaults only."""
+  if cli_name is not None and (not isinstance(cli_name, str) or cli_name == ''):
+    raise ValueError('CLI name must be a non-empty string')
+  config = _read()
+  layers = [(DEFAULTS_LAYER, config.defaults)]
+  if cli_name is not None:
+    tool_credentials = config.tools.get(cli_name)
+    if tool_credentials is not None:
+      layers.append((TOOL_LAYER, tool_credentials))
+  return _merged(layers)
 
 
-def _attachment_key(attachment: str) -> str:
-  """a project key and an attachment reduced to the identity they match on."""
-  if is_git_url(attachment):
-    return normalize_git_url(attachment)
-  return str(Path(os.path.expanduser(attachment)).resolve())
+def _matching_project(config: _Config, attachment: Optional[str]) -> Optional[_Project]:
+  if attachment is None:
+    return None
+  return config.projects.get(_attachment_key(attachment))
 
 
-def _project_selection(path: Path, project: str, value: object) -> dict[str, Optional[str]]:
+def _unbound_kinds(config: _Config, project: Optional[_Project]) -> frozenset[str]:
+  if project is not None:
+    return frozenset()
+  project_kinds = {
+    kind
+    for candidate in config.projects.values()
+    for selection in (candidate.credentials, *candidate.bros.values())
+    for kind in selection
+  }
+  return frozenset(project_kinds - config.defaults.keys())
+
+
+def _merged(
+  layers: list[tuple[str, dict[str, Optional[str]]]],
+  *,
+  unbound_kinds: frozenset[str] = frozenset(),
+) -> CredentialSelection:
+  instances: dict[str, Optional[str]] = {}
+  sources: dict[str, str] = {}
+  for layer, selection in layers:
+    instances.update(selection)
+    sources.update(dict.fromkeys(selection, layer))
+  return CredentialSelection(instances, sources, unbound_kinds)
+
+
+def _projects(path: Path, value: object) -> dict[str, _Project]:
   if not isinstance(value, dict):
-    raise ValueError(f'{path}: project {project!r} must hold a json object')
-  unknown = sorted(set(value) - {_INSTANCES_KEY})
+    raise ValueError(f'{path}: {_PROJECTS_KEY} must be a json object')
+  projects: dict[str, _Project] = {}
+  for key, entry in value.items():
+    attachment = _attachment_key(key)
+    if attachment in projects:
+      raise ValueError(f'{path}: two project keys name the same attachment {attachment}')
+    projects[attachment] = _project(path, key, entry)
+  return projects
+
+
+def _project(path: Path, project: str, value: object) -> _Project:
+  where = f'{path}: project {project!r}'
+  if not isinstance(value, dict):
+    raise ValueError(f'{where} must hold a json object')
+  _reject_unknown_fields(value, {_CREDS_KEY, _BROS_KEY}, where)
+  selection = _selection_entries(where, value.get(_CREDS_KEY, []))
+  bros = value.get(_BROS_KEY, {})
+  if not isinstance(bros, dict):
+    raise ValueError(f'{where}: {_BROS_KEY} must be a json object')
+  parsed_bros: dict[str, dict[str, Optional[str]]] = {}
+  for bro, entry in bros.items():
+    if bro == '':
+      raise ValueError(f'{where}: bro name must not be empty')
+    parsed_bros[bro] = _selection_object(path, f'{where}: bro {bro!r}', entry)
+  return _Project(selection, parsed_bros)
+
+
+def _tools(path: Path, value: object) -> dict[str, dict[str, Optional[str]]]:
+  if not isinstance(value, dict):
+    raise ValueError(f'{path}: {_TOOLS_KEY} must be a json object')
+  tools: dict[str, dict[str, Optional[str]]] = {}
+  for name, entry in value.items():
+    if name == '':
+      raise ValueError(f'{path}: tool name must not be empty')
+    tools[name] = _selection_object(path, f'tool {name!r}', entry)
+  return tools
+
+
+def _selection_object(path: Path, subject: str, value: object) -> dict[str, Optional[str]]:
+  where = f'{path}: {subject}' if not subject.startswith(f'{path}:') else subject
+  if not isinstance(value, dict):
+    raise ValueError(f'{where} must hold a json object')
+  _reject_unknown_fields(value, {_CREDS_KEY}, where)
+  return _selection_entries(where, value.get(_CREDS_KEY, []))
+
+
+def _reject_unknown_fields(value: dict, allowed: set[str], where: str) -> None:
+  unknown = sorted(set(value) - allowed)
+  if _LEGACY_INSTANCES_KEY in unknown:
+    raise ValueError(
+      f'{where}: {_LEGACY_INSTANCES_KEY!r} is retired; migrate the list to {_CREDS_KEY!r}'
+    )
   if len(unknown) > 0:
-    raise ValueError(f'{path}: project {project!r} has unknown field(s): {", ".join(unknown)}')
-  entries = value.get(_INSTANCES_KEY, [])
+    raise ValueError(f'{where} has unknown field(s): {", ".join(unknown)}')
+
+
+def _selection_entries(where: str, entries: object) -> dict[str, Optional[str]]:
   if not isinstance(entries, list):
-    raise ValueError(f'{path}: project {project!r}: {_INSTANCES_KEY} must be a list')
+    raise ValueError(f'{where}: {_CREDS_KEY} must be a list')
   selection: dict[str, Optional[str]] = {}
   for entry in entries:
-    kind, instance = _parse_selection(path, project, entry)
+    kind, instance = _parse_selection(where, entry)
     if kind in selection:
-      raise ValueError(f'{path}: project {project!r} selects kind {kind!r} twice')
+      raise ValueError(f'{where} selects kind {kind!r} twice')
     selection[kind] = instance
   return selection
 
 
-def _parse_selection(path: Path, project: str, entry: object) -> tuple[str, Optional[str]]:
-  """one `kind+instance` (or `kind+`) selection, split and validated."""
-  where = f'{path}: project {project!r}'
+def _parse_selection(where: str, entry: object) -> tuple[str, Optional[str]]:
   if not isinstance(entry, str):
     raise ValueError(f'{where}: selection {entry!r} must be a string')
   kind, separator, instance = entry.partition('+')
   if separator == '':
     raise ValueError(
       f'{where}: selection {entry!r} names no instance; write '
-      f"'{entry}+<instance>', or '{entry}+' for the kind's own entry"
+      f"'{entry}+<instance>', or '{entry}+' for the kind's bare material"
     )
   credentials.parse_name(kind if instance == '' else entry)
   return kind, instance if instance != '' else None
+
+
+def _attachment_key(attachment: str) -> str:
+  """Reduce a project key and attachment to the identity they match on."""
+  if not isinstance(attachment, str) or attachment == '':
+    raise ValueError('project attachment must be a non-empty string')
+  if is_git_url(attachment):
+    return normalize_git_url(attachment)
+  return str(Path(os.path.expanduser(attachment)).resolve())
+
+
+def _llm(path: Path, value: object) -> dict[str, str]:
+  if not isinstance(value, dict):
+    raise ValueError(f'{path}: {_LLM_KEY} must be a json object')
+  for name, recipe in value.items():
+    if not isinstance(recipe, str) or recipe == '':
+      raise ValueError(f'{path}: {_LLM_KEY} preset {name!r} must be a non-empty string')
+  return dict(value)

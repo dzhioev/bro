@@ -1,6 +1,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
+from bro.base.host_config import CredentialSelection
 from bro.workspace.project import ProjectConfig
 from ride.scope_report import report_scope
 from ride.workspace.store import ScopedSecrets
@@ -21,7 +22,14 @@ def _run(
       'ride.scope_report.project_config',
       return_value=ProjectConfig(default_bro='bro-dev', image_repository='bro/bro-dev'),
     ),
-    patch('ride.scope_report.bind_project_credentials', return_value=selection),
+    patch(
+      'ride.scope_report.bind_project_credentials',
+      return_value=CredentialSelection(
+        selection,
+        dict.fromkeys(selection, 'project'),
+        scoped.unbound_kinds,
+      ),
+    ),
     patch('ride.scope_report.scoped_secrets', return_value=scoped) as scope,
     patch('ride.scope_report.credentials.available', available),
   ):
@@ -45,7 +53,6 @@ class TestReportScope:
     assert 'repository: /repo' in out
     assert 'bro:        bro-dev (claude-full)' in out
     assert 'brog+github (project)' in out
-    # a kind the project doesn't select reads whatever the host registry binds
     assert 'github' in out
     assert 'optional:' in out and 'openai' in out
 

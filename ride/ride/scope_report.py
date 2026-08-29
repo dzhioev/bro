@@ -29,19 +29,31 @@ def report_scope(
   recipe = get_harness(harness).scope_recipe(options)
   attachment = None if repo is None else repo.identity
   try:
-    selection = bind_project_credentials(attachment)
+    binding = bind_project_credentials(attachment)
     scoped = scoped_secrets(bro_name, recipe, attachment=attachment)
-    store = credentials.Store(
-      credentials.default_registry(), credentials.STORE_DIR, {} if selection is None else selection
-    )
+    registry = credentials.default_registry()
+    selection = {kind: instance for kind, instance in binding.instances.items() if kind in registry}
+    store = credentials.Store(registry, credentials.STORE_DIR, selection)
   except (LaunchScopeError, ValueError) as error:
     print(f'cannot compute the scope: {error}')
     return 1
   print(f'repository: {repo.identity if repo is not None else "(detached)"}')
   print(f'bro:        {bro_name} ({recipe.name})')
-  _print_tier('required', sorted(scoped.required), selection, scoped.unbound_kinds, store)
   _print_tier(
-    'optional', sorted(scoped.optional - scoped.required), selection, scoped.unbound_kinds, store
+    'required',
+    sorted(scoped.required),
+    binding.instances,
+    binding.layers,
+    scoped.unbound_kinds,
+    store,
+  )
+  _print_tier(
+    'optional',
+    sorted(scoped.optional - scoped.required),
+    binding.instances,
+    binding.layers,
+    scoped.unbound_kinds,
+    store,
   )
   return 0
 
@@ -49,7 +61,8 @@ def report_scope(
 def _print_tier(
   label: str,
   names: list[str],
-  selection: Optional[dict[str, Optional[str]]],
+  selection: dict[str, Optional[str]],
+  layers: dict[str, str],
   unbound: frozenset[str],
   store: credentials.Store,
 ) -> None:
@@ -61,11 +74,12 @@ def _print_tier(
       print(f'  {name:<14}{"per project, unbound":<24}REFUSED')
       continue
     state = 'ok' if store.available(name) else 'MISSING'
-    print(f'  {name:<14}{_reads(name, selection):<24}{state}')
+    print(f'  {name:<14}{_reads(name, selection, layers):<24}{state}')
 
 
-def _reads(kind: str, selection: Optional[dict[str, Optional[str]]]) -> str:
-  if selection is None or kind not in selection:
+def _reads(kind: str, selection: dict[str, Optional[str]], layers: dict[str, str]) -> str:
+  if kind not in selection:
     return ''
   instance = selection[kind]
-  return f'{kind}+{instance} (project)' if instance is not None else f'{kind} (project)'
+  selected_name = kind if instance is None else f'{kind}+{instance}'
+  return f'{selected_name} ({layers[kind]})'
