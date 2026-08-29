@@ -27,7 +27,7 @@ bro · claude recorders                     readers
                                  DynamoDB + S3
 ```
 
-- `store.py` owns `TrailsStore`, store-neutral errors (`TrailNotFound`, `AppendConflict`, `TransientUnavailable`), pagination helpers, recorded-trail rehydration, and credential dispatch.
+- `store.py` owns `TrailsStore`, store-neutral errors (`TrailNotFound`, `AppendConflict`, `TransientUnavailable`, `InvalidRequest`), pagination helpers, recorded-trail rehydration, and credential dispatch.
   `resolve_config(store)` is where a process's backend is decided
   — the `trails` credential where it resolves, `local` where it does not, so configuring the credential is what opts a deployment into the service or dynamo backends;
   `selects_local_storage` is the predicate the launch layer asks of a scope it is composing a container for.

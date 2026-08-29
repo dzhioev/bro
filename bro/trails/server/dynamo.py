@@ -20,7 +20,13 @@ from bro.trails.model import (
 from bro.trails.rows import AggregateState, inherited_native, minted_native, state_fields
 from bro.trails.server import dynamo_types
 from bro.trails.server.operations import Operations
-from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore, refuse_while_forked
+from bro.trails.store import (
+  AppendConflict,
+  TrailNotFound,
+  TrailsStore,
+  refuse_while_forked,
+  refusing_invalid_requests,
+)
 
 SPILLOVER_THRESHOLD_BYTES = dynamo_types.SPILLOVER_THRESHOLD_BYTES
 MAX_BODY_BYTES = dynamo_types.MAX_BODY_BYTES
@@ -173,9 +179,10 @@ class DynamoStore(TrailsStore):
 
   def blaze(self, request: BlazeRequest) -> dict:
     adapter = self._backend(request.harness)
-    adapter.validate_create(request.native)
-    if request.harness == 'bro' and request.bro is None:
-      raise ValueError('bro is required for the bro harness')
+    with refusing_invalid_requests('blaze request'):
+      adapter.validate_create(request.native)
+      if request.harness == 'bro' and request.bro is None:
+        raise ValueError('bro is required for the bro harness')
     decision = None
     forked_from = request.forked_from
     native = dict(request.native)
@@ -194,7 +201,8 @@ class DynamoStore(TrailsStore):
     trail_id = dynamo_types.new_id()
     started_at = _now_iso()
     launch_context = request.body.get('launch_context')
-    opened = adapter.open(request.body)
+    with refusing_invalid_requests('blaze body'):
+      opened = adapter.open(request.body)
     if len(opened.records) > dynamo_types.MAX_TRANSACTION_RECORDS:
       raise ValueError(
         f'a trail may open with at most {dynamo_types.MAX_TRANSACTION_RECORDS} records'

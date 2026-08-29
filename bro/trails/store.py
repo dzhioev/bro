@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Optional
@@ -31,6 +32,11 @@ class TransientUnavailable(Exception):
   pass
 
 
+class InvalidRequest(ValueError):
+  """The store refused what a writer sent: no backend will ever accept it, and
+  no retry changes that."""
+
+
 class UnsupportedOperation(Exception):
   """The hosted backend does not serve this operation."""
 
@@ -44,6 +50,16 @@ class TrailHasForks(Exception):
     super().__init__(f'trail {trail_id} has forks: {", ".join(forks)}')
     self.trail_id = trail_id
     self.forks = forks
+
+
+@contextmanager
+def refusing_invalid_requests(description: str) -> Iterator[None]:
+  try:
+    yield
+  except InvalidRequest:
+    raise
+  except (KeyError, TypeError, ValueError) as exception:
+    raise InvalidRequest(f'{description}: {exception}') from exception
 
 
 class TrailsStore(ABC):

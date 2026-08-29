@@ -14,7 +14,13 @@ from bro.trails.model import BlazeRequest, payload_sha256
 from bro.trails.network import NetworkStore
 from bro.trails.server.auth import TokenTable
 from bro.trails.server.server import create_app
-from bro.trails.store import AppendConflict, TrailHasForks, TrailNotFound, TrailsStore
+from bro.trails.store import (
+  AppendConflict,
+  InvalidRequest,
+  TrailHasForks,
+  TrailNotFound,
+  TrailsStore,
+)
 
 _TOKEN = 'contract-token'
 
@@ -263,6 +269,15 @@ class TestTrailsStoreContract:
     assert (retry['attached'], retry['extent'], retry['chunks']) == (True, 0, [[0, 0]])
     assert [step['body'] for step in trails_store.iter_steps(orphan['id'])] == [first, second]
     assert len(list(trails_store.iter_trails(harness='claude'))) == 1
+
+  def test_every_backend_refuses_a_body_no_reader_could_render(self, trails_store):
+    trail_id = trails_store.blaze(_bro_request())['id']
+
+    with pytest.raises(InvalidRequest, match='user_input body must be a string'):
+      trails_store.append_records(trail_id, 1, [{'kind': 'user_input', 'body': {'text': 'ping'}}])
+    trails_store.append_records(trail_id, 1, [{'kind': 'error', 'body': {'message': 'boom'}}])
+
+    assert trails_store.get_trail(trail_id)['extent'] == 2
 
   def test_large_bodies_are_inline(self, trails_store):
     trail_id = trails_store.blaze(_bro_request())['id']

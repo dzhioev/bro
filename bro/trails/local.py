@@ -30,6 +30,7 @@ from bro.trails.store import (
   delete_manifest,
   manifest_name,
   refuse_while_forked,
+  refusing_invalid_requests,
 )
 
 _DEFAULT_PAGE_SIZE = 100
@@ -157,9 +158,10 @@ class LocalStore(TrailsStore):
 
   def blaze(self, request: BlazeRequest) -> dict:
     adapter = self._adapter(request.harness)
-    adapter.validate_create(request.native)
-    if request.harness == 'bro' and request.bro is None:
-      raise ValueError('bro is required for the bro harness')
+    with refusing_invalid_requests('blaze request'):
+      adapter.validate_create(request.native)
+      if request.harness == 'bro' and request.bro is None:
+        raise ValueError('bro is required for the bro harness')
     decision = None
     forked_from = request.forked_from
     native = dict(request.native)
@@ -175,7 +177,8 @@ class LocalStore(TrailsStore):
       native.update(rows.inherited_native(adapter, lambda: self.get_trail(parent_id)))
     if decision is not None:
       native.update(rows.minted_native(native, decision.chunks))
-    records = adapter.open(request.body).records
+    with refusing_invalid_requests('blaze body'):
+      records = adapter.open(request.body).records
     trail_id = lulid()
     started_at = _now_iso()
     directory = self._trail_directory(trail_id)

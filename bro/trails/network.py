@@ -18,6 +18,7 @@ from bro.trails.model import (
 )
 from bro.trails.store import (
   AppendConflict,
+  InvalidRequest,
   PermissionDenied,
   TrailHasForks,
   TrailNotFound,
@@ -324,6 +325,8 @@ class NetworkStore(TrailsStore):
               raise PermissionDenied(str(exception)) from exception
             if response.status == 501:
               raise UnsupportedOperation(str(exception)) from exception
+            if response.status == 400:
+              raise InvalidRequest(str(exception)) from exception
             if is_retryable_status(response.status):
               raise TransientUnavailable(str(exception)) from exception
             raise exception
