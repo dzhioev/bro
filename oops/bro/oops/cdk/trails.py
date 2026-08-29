@@ -86,13 +86,20 @@ class TrailsServerStack(Stack):
     scope: Construct,
     infrastructure_config: InfrastructureConfig,
     *,
-    platform: PlatformHandles,
+    platform: Optional[PlatformHandles] = None,
     image_digest: Optional[str] = None,
     **kwargs,
   ) -> None:
     config = infrastructure_config.trails
     repository_config = infrastructure_config.trails_repository
     super().__init__(scope, config.stack_name, **kwargs)
+
+    if platform is None:
+      platform = PlatformHandles.lookup(
+        self,
+        infrastructure_config.platform,
+        infrastructure_config.delegated_subdomain,
+      )
 
     repository = ecr.Repository.from_repository_name(
       self,
@@ -234,31 +241,6 @@ class TrailsServerStack(Stack):
         ),
       ],
       target_groups=[target_group],
-    )
-
-    ingress_rules = [
-      construct
-      for construct in self.node.find_all()
-      if isinstance(construct, ec2.CfnSecurityGroupIngress)
-    ]
-    egress_rules = [
-      construct
-      for construct in self.node.find_all()
-      if isinstance(construct, ec2.CfnSecurityGroupEgress)
-    ]
-    if len(ingress_rules) != 1 or len(egress_rules) != 1:
-      raise ValueError(
-        'trails listener must create exactly one ingress and one egress security-group rule'
-      )
-    ingress_rules[0].override_logical_id(config.load_balancer_ingress_logical_id)
-    egress_rules[0].override_logical_id(config.load_balancer_egress_logical_id)
-    # a same-app platform orders the egress rule after these resources, while
-    # handles injected around one generate no such edges; pinning them keeps both
-    # assemblies' templates identical
-    egress_rules[0].node.add_dependency(
-      task_role,
-      task_role.node.find_child('DefaultPolicy'),
-      store_config,
     )
 
     route53.ARecord(

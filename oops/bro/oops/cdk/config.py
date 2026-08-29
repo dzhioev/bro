@@ -8,9 +8,6 @@ _DEFAULT_REGION = 'us-east-1'
 _DEFAULT_PLATFORM = {
   'stack_name': 'BroPlatformStack',
   'cluster_name': 'bro-services',
-  'vpc_construct_id': 'PlatformVpc',
-  'cluster_construct_id': 'PlatformCluster',
-  'load_balancer_construct_id': 'PlatformAlb',
 }
 _DEFAULT_REPOSITORIES = {
   'trails': {
@@ -34,8 +31,6 @@ _DEFAULT_TRAILS = {
   'repository': 'trails',
   'spillover_bucket_name': 'bro-trails-{account}',
   'service_name': 'trails-server',
-  'load_balancer_ingress_logical_id': 'TrailsLoadBalancerIngress',
-  'load_balancer_egress_logical_id': 'TrailsLoadBalancerEgress',
 }
 
 
@@ -43,9 +38,6 @@ _DEFAULT_TRAILS = {
 class PlatformConfig:
   stack_name: str
   cluster_name: str
-  vpc_construct_id: str
-  cluster_construct_id: str
-  load_balancer_construct_id: str
 
 
 @dataclass(frozen=True)
@@ -73,8 +65,6 @@ class TrailsConfig:
   repository: str
   spillover_bucket_name: str
   service_name: str
-  load_balancer_ingress_logical_id: str
-  load_balancer_egress_logical_id: str
 
 
 @dataclass(frozen=True)
@@ -139,11 +129,6 @@ def _platform_config(overrides: Mapping[str, Any]) -> PlatformConfig:
   return PlatformConfig(
     stack_name=_required_string(values, 'stack_name', 'infra.oops.platform'),
     cluster_name=_required_string(values, 'cluster_name', 'infra.oops.platform'),
-    vpc_construct_id=_required_string(values, 'vpc_construct_id', 'infra.oops.platform'),
-    cluster_construct_id=_required_string(values, 'cluster_construct_id', 'infra.oops.platform'),
-    load_balancer_construct_id=_required_string(
-      values, 'load_balancer_construct_id', 'infra.oops.platform'
-    ),
   )
 
 
@@ -202,12 +187,6 @@ def _trails_config(overrides: Mapping[str, Any]) -> TrailsConfig:
     repository=_required_string(values, 'repository', 'infra.oops.trails'),
     spillover_bucket_name=bucket_name,
     service_name=_required_string(values, 'service_name', 'infra.oops.trails'),
-    load_balancer_ingress_logical_id=_required_string(
-      values, 'load_balancer_ingress_logical_id', 'infra.oops.trails'
-    ),
-    load_balancer_egress_logical_id=_required_string(
-      values, 'load_balancer_egress_logical_id', 'infra.oops.trails'
-    ),
   )
 
 

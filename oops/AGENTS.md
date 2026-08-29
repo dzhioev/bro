@@ -11,11 +11,11 @@ The root repository owns formatting, lint, typing, packaging policy, and the tes
 - `bro/oops/mcp.py` — `infra` MCP operations over the repository's registered targets
 - `bros/devoops/` — the operations persona and its target-driven deploy spell
 - `bro/oops/cdk/config.py` — resolves the `infra` credential into typed deployment configuration and neutral defaults
-- `bro/oops/cdk/platform.py` — shared VPC, ECS cluster, ALB, certificate, and hosted-zone platform plus the handles service stacks consume
+- `bro/oops/cdk/platform.py` — shared VPC, ECS cluster, ALB, certificate, and hosted-zone platform plus the lookup handles service stacks consume
 - `bro/oops/cdk/ecr.py` — parameterized ECR repository stack
 - `bro/oops/cdk/image_build.py` — parameterized CodeBuild image-build stack
-- `bro/oops/cdk/trails.py` — retained trails storage and Fargate service stack
-- `bro/oops/cdk/app.py` — testable assembly for the platform, repository, image-build, and trails stacks
+- `bro/oops/cdk/trails.py` — retained trails storage and lookup-based Fargate service stack
+- `bro/oops/cdk/app.py` — testable assembly for the repository, image-build, and trails stacks
 - `bro/oops/infra/deploy_lib.sh` — sourceable image-build, ECR, CodeBuild, wheel-staging, and CDK helpers
 - `bro/oops/infra/monitor_ecs.sh` — ECS deployment-state monitor
 - `bro/oops/infra/buildspec.yml` — consumer-configured CodeBuild image-build pattern
