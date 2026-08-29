@@ -305,7 +305,6 @@ def _claude_assistant(message_id: str, text: str, *, uuid: str) -> str:
 
 
 def test_five_function_registry_and_declared_projection_contract():
-  assert 'end' not in MESSAGE_TYPES
   assert set(backends.BACKENDS) == {'bro', 'claude'}
   for adapter in backends.BACKENDS.values():
     assert {
@@ -375,7 +374,7 @@ def test_append_chunks_without_interleaving(components):
   assert dynamo.headers[trail_id]['extent'] == 52
 
 
-def test_bro_projection_derives_output_and_skips_decomposed_rows(components):
+def test_bro_projection_derives_messages_from_the_llm_call_output(components):
   store, _, _ = components
   trail_id = _blaze_bro(store)
   store.append_records(
@@ -391,8 +390,6 @@ def test_bro_projection_derives_output_and_skips_decomposed_rows(components):
           {'type': 'function_call', 'name': 'read', 'call_id': 'call-1', 'arguments': '{}'},
         ]
       ),
-      {'kind': 'reasoning', 'body': 'duplicate'},
-      {'kind': 'tool_call', 'body': None, 'call_id': 'call-1'},
     ],
   )
   page = store.get_messages(trail_id, after=None, limit=20, types=None)
@@ -407,12 +404,12 @@ def test_bro_projection_derives_output_and_skips_decomposed_rows(components):
 
   store.append_records(
     trail_id,
-    offset=4,
+    offset=2,
     records=[
       _bro_call([{'type': 'message', 'content': [{'type': 'output_text', 'text': 'done'}]}])
     ],
   )
-  messages = (store.get_messages(trail_id, after=3, limit=10, types=None))['messages']
+  messages = (store.get_messages(trail_id, after=1, limit=10, types=None))['messages']
   assistant = next(message for message in messages if message['type'] == 'assistant')
   assert assistant['terminal'] is True
 

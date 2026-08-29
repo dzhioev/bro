@@ -270,28 +270,6 @@ class TestReplayMessages:
       {'role': 'user', 'content': 'follow up'},
     ]
 
-  def test_skips_kinds_not_carried_in_input(self):
-    # reasoning / assistant / tool_call / end are produced by OpenAI as
-    # side-channel steps; the canonical input shapes (assistant message,
-    # function_call) live on the llm_call's response.output items. ensure
-    # replay does not double-emit them.
-    assistant_msg = _output_message('reply')
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-        _step('user_input', 'hi', step_id=1, turn_index=0),
-        _step('llm_call', _llm_call_body(assistant_msg), step_id=2, turn_index=1, response_id='r'),
-        _step('reasoning', 'thinking', step_id=3, turn_index=1),
-        _step('assistant', 'reply', step_id=4, turn_index=1, terminal=True),
-        _step('end', {'reason': 'terminal'}, step_id=5, turn_index=1),
-      ],
-    )
-    result = replay_messages(trail, 5)
-    # only one assistant payload, taken from llm_call.response.output
-    assert result.count(assistant_msg) == 1
-    assert all(isinstance(item, dict) for item in result)
-
 
 class TestReplayMessagesAcrossForkChain:
   def _forked_from(self) -> RecordedTrail:

@@ -124,8 +124,6 @@ def _replay_step_items(trail: RecordedTrail, up_to_step_id: int) -> list[dict]:
           'output': _encode_tool_output(step.body),
         }
       )
-    # the youngest trail's prompt is already at index 0; decomposed output
-    # records are represented by the canonical llm_call response.
     if step.step_id == up_to_step_id:
       return items
   raise ValueError(f'step_id {up_to_step_id!r} not found in trail {trail.header.id!r}')

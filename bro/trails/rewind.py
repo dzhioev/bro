@@ -90,7 +90,6 @@ def _follow_batches(
   *,
   iterator: Callable[[str, Optional[int]], Iterator[dict]],
   cursor: Callable[[dict], int],
-  terminal: Callable[[dict], bool],
   interval: float,
   after: Optional[int] = None,
   sleep: Callable[[float], None] = time.sleep,
@@ -99,12 +98,8 @@ def _follow_batches(
     try:
       rows = list(iterator(trail_id, after))
       if len(rows) > 0:
-        terminal_index = next((index for index, row in enumerate(rows) if terminal(row)), None)
-        emitted = rows if terminal_index is None else rows[: terminal_index + 1]
-        after = cursor(emitted[-1])
-        yield emitted
-        if terminal_index is not None:
-          return
+        after = cursor(rows[-1])
+        yield rows
       if client.get_trail(trail_id).get('end') is not None:
         drained = list(iterator(trail_id, after))
         if len(drained) > 0:
@@ -124,7 +119,6 @@ def _stream_follow(
   *,
   iterator: Callable[[str, Optional[int]], Iterator[dict]],
   cursor: Callable[[dict], int],
-  terminal: Callable[[dict], bool],
   adapt_batch: Callable[[list[dict]], Iterable[DisplayRecord]],
 ) -> int:
   renderer = StreamRenderer(sys.stdout)
@@ -138,7 +132,6 @@ def _stream_follow(
         args['trail_id'],
         iterator=iterator,
         cursor=cursor,
-        terminal=terminal,
         interval=args['interval'],
         after=after,
       ):
@@ -177,7 +170,6 @@ def _command_show(client: TrailsStore, args: dict[str, Any]) -> int:
       after,
       iterator=lambda selected_id, cursor: client.iter_messages(selected_id, after=cursor),
       cursor=lambda message: message['source']['step_id'],
-      terminal=lambda message: False,
       adapt_batch=lambda messages: adapter.message_records(trail_id, messages),
     )
   _emit_document(_retained_document(records, configuration), args, configuration)
@@ -204,7 +196,6 @@ def _command_steps(client: TrailsStore, args: dict[str, Any]) -> int:
       after,
       iterator=lambda selected_id, cursor: client.iter_steps(selected_id, after=cursor),
       cursor=lambda step: step['step_id'],
-      terminal=lambda step: step.get('kind') == 'end',
       adapt_batch=lambda batch: adapter.native_step_records(trail_id, batch),
     )
   _emit_document(_retained_document(records, configuration), args, configuration)
