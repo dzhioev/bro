@@ -247,12 +247,13 @@ _SUMMON_DESCRIPTION = (
   f"(effort is one of {', '.join(EFFORT_LEVELS)}; `::high` keeps the target's own "
   'provider and model, `:opus5` names a model; a recipe the harness cannot run fails the '
   'summon rather than switching the harness). its scope is shaped by '
-  'the optional `grant` / `revoke` lists — each entry a credential name, or `@bro` '
-  "for a summonable target of the child's own. a credential grant replaces the "
-  "child's selected same-kind name. you can only grant what you hold yourself (a "
-  'credential in your own scope, a bro in your own allow-list), and both directions '
-  "are strict, so naming something the child's scope already has (or, for "
-  'a revoke, lacks) fails the summon. the same bound covers `harness` / `llm`: a '
+  'the optional `grant` / `revoke` lists — grant entries are `kind`, `kind+instance`, '
+  "or `@bro` for a summonable target of the child's own; revoke entries are `kind` "
+  'or `@bro`. an instance grant replaces the child kind selection, and is allowed '
+  'only when your own scope resolves that instance. you can only grant what you hold '
+  'yourself (a credential kind in your own scope, a bro in your own allow-list), and '
+  "both directions are strict, so a no-op grant or a revoke of something the child's "
+  'scope lacks fails the summon. the same bound covers `harness` / `llm`: a '
   'driving loop needing a credential you do not hold (claude needs the Claude '
   'OAuth token) fails the summon, whatever the target itself declares. the '
   'optional `share` list names artifact refs (from `artifact mint`) to hand the '

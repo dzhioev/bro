@@ -2,7 +2,7 @@
 
 A container receives an in-memory tar in its own layer;
 a host session points `BRO_STORE` at a materialized directory.
-The launch surface owns which names enter each tier.
+The launch surface owns which kinds enter each tier.
 """
 
 import io
@@ -19,78 +19,92 @@ from bro.base import credentials, log
 
 @dataclass(frozen=True)
 class ScopedSecrets:
-  """a session launch's credential scope.
+  """a session launch's kinds-only credential scope and instance selection.
 
   required is hydrated strictly (a missing secret fails launch); optional is the
   best-effort tier (skipped when unresolvable).
 
   unbound_kinds are the kinds this launch may not read at all: a project layer
   selects each kind, defaults does not, and the launch bound no project entry.
-  A kind-addressed read would otherwise fall through to unowned bare material.
-  The refusal is enforced after the launch's own overrides (`finalize_scoped_secrets`), since a
-  granted instance names the project outright.
+  An instance grant binds the kind explicitly and satisfies that refusal.
   """
 
   required: set[str]
   optional: set[str]
-  unbound_kinds: frozenset[str] = frozenset()
   selection: dict[str, Optional[str]] = field(default_factory=dict)
+  unbound_kinds: frozenset[str] = frozenset()
+
+  def __post_init__(self) -> None:
+    for name in self.required | self.optional:
+      kind, instance = credentials.parse_name(name)
+      if instance is not None:
+        raise ValueError(
+          f'credential scope entry {name!r} names an instance; use kind {kind!r} '
+          'and put its instance in the selection'
+        )
 
 
-def _replacement_revokes(scoped_names: set[str], grants: list[str]) -> list[str]:
-  selected_by_kind: dict[str, str] = {}
-  for selected in scoped_names:
-    kind, _ = credentials.parse_name(selected)
-    if kind in selected_by_kind:
-      raise ValueError(f'credential kind {kind!r} has multiple selected names')
-    selected_by_kind[kind] = selected
-
-  granted_kinds: set[str] = set()
-  replacements: list[str] = []
-  for grant in grants:
-    kind, _ = credentials.parse_name(grant)
-    if kind in granted_kinds:
-      raise ValueError(f'credential kind {kind!r} is granted more than once')
-    granted_kinds.add(kind)
-    selected = selected_by_kind.get(kind)
-    if selected is not None and selected != grant:
-      replacements.append(selected)
-  return replacements
+def credential_revoke_kind(name: str) -> str:
+  kind, instance = credentials.parse_name(name)
+  if instance is not None:
+    raise ValueError(
+      f'cannot revoke credential instance {name!r}; revoke its kind instead (--revoke {kind})'
+    )
+  return kind
 
 
 def finalize_scoped_secrets(
   scoped: ScopedSecrets, *, grant: list[str], revoke: list[str]
 ) -> ScopedSecrets:
-  """layer strict per-session overrides across both credential tiers.
+  scoped_kinds = scoped.required | scoped.optional
+  grants: dict[str, Optional[str]] = {}
+  instance_grants: set[str] = set()
+  for name in grant:
+    kind, instance = credentials.parse_name(name)
+    if kind in grants:
+      raise ValueError(f'credential kind {kind!r} is granted more than once')
+    grants[kind] = instance
+    if instance is not None:
+      instance_grants.add(kind)
 
-  a grant replaces a selected credential of the same kind, or joins the required
-  tier when that kind is absent. a revoke removes the exact name from whichever
-  tier contains it. all remaining no-op overrides are errors.
-  """
-  scoped_names = scoped.required | scoped.optional
-  replacement_revokes = _replacement_revokes(scoped_names, grant)
-  final_names = credentials.apply_grant_revoke(
-    scoped_names,
-    grant=grant,
-    revoke=[*revoke, *replacement_revokes],
-    subject='scoped credential set',
-  )
-  required = (scoped.required | set(grant)) & final_names
-  optional = final_names - required
-  _refuse_unbound_kinds(final_names, scoped.unbound_kinds)
+  revoke_kinds = [credential_revoke_kind(name) for name in revoke]
+
+  both = sorted(grants.keys() & set(revoke_kinds))
+  if len(both) > 0:
+    raise ValueError(f'cannot grant and revoke the same credential kind: {", ".join(both)}')
+
+  selection = dict(scoped.selection)
+  required = set(scoped.required)
+  optional = set(scoped.optional)
+  for kind, instance in grants.items():
+    if instance is None:
+      if kind in scoped_kinds:
+        raise ValueError(f'cannot grant {kind!r}: already in the scoped credential set')
+    elif kind in required and selection.get(kind) == instance:
+      name = f'{kind}+{instance}'
+      raise ValueError(f'cannot grant {name!r}: already selected in the scoped credential set')
+    else:
+      selection[kind] = instance
+    required.add(kind)
+    optional.discard(kind)
+
+  for kind in revoke_kinds:
+    if kind not in required and kind not in optional:
+      raise ValueError(f'cannot revoke {kind!r}: not in the scoped credential set')
+    required.discard(kind)
+    optional.discard(kind)
+
+  _refuse_unbound_kinds(required | optional, scoped.unbound_kinds - instance_grants)
   return ScopedSecrets(
     required=required,
     optional=optional,
+    selection=selection,
     unbound_kinds=scoped.unbound_kinds,
-    selection=dict(scoped.selection),
   )
 
 
-def _refuse_unbound_kinds(names: set[str], unbound: frozenset[str]) -> None:
-  """refuse the scope's kind-addressed reads of a kind the launch may not bind
-  (`ScopedSecrets.unbound_kinds`). A `kind+instance` name passes: it names the
-  instance itself, so nothing is being read on a project's behalf."""
-  refused = sorted(name for name in names if name in unbound)
+def _refuse_unbound_kinds(kinds: set[str], unbound: frozenset[str]) -> None:
+  refused = sorted(kinds & unbound)
   if len(refused) > 0:
     raise ValueError(
       f'this host reads {", ".join(refused)} per project, and no project entry names this '

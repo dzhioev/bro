@@ -38,8 +38,26 @@ from ride.workspace.docker import (
 )
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import AttachmentMismatch, KindMismatch, SessionBusy, Workspace
-from ride.workspace.store import ScopedSecrets, log_scoped_secrets, materialize_scoped_store
+from ride.workspace.store import (
+  ScopedSecrets,
+  credential_revoke_kind,
+  log_scoped_secrets,
+  materialize_scoped_store,
+)
 from ride.workspace.worktrees import ensure_host_worktree, provision_host_worktree
+
+
+def _scope_override_key(value: str) -> str:
+  if value.startswith('@'):
+    return value
+  kind, _ = credentials.parse_name(value)
+  return kind
+
+
+def _scope_revoke_key(value: str) -> str:
+  if value.startswith('@'):
+    return value
+  return credential_revoke_kind(value)
 
 
 @dataclass(frozen=True)
@@ -120,16 +138,28 @@ class SessionSpec:
     )
 
   def with_scope_overrides(self, *, grant: list[str], revoke: list[str]) -> 'SessionSpec':
+    grant_keys = {_scope_override_key(name) for name in grant}
+    revoke_keys = {_scope_revoke_key(name) for name in revoke}
+    recorded_grant_keys = {_scope_override_key(name) for name in self.grant}
+    recorded_revoke_keys = {_scope_revoke_key(name) for name in self.revoke}
     for values, own, flag in ((grant, self.grant, 'grant'), (revoke, self.revoke, 'revoke')):
       restated = sorted(set(values) & set(own))
       if len(restated) > 0:
         raise ValueError(f'already in the recorded --{flag}: {", ".join(restated)}')
-    kept_grant = [name for name in self.grant if name not in revoke]
-    kept_revoke = [name for name in self.revoke if name not in grant]
+    kept_grant = [
+      name for name in self.grant if _scope_override_key(name) not in revoke_keys | grant_keys
+    ]
+    kept_revoke = [name for name in self.revoke if _scope_override_key(name) not in grant_keys]
     return replace(
       self,
-      grant=[*kept_grant, *(name for name in grant if name not in self.revoke)],
-      revoke=[*kept_revoke, *(name for name in revoke if name not in self.grant)],
+      grant=[
+        *kept_grant,
+        *(name for name in grant if _scope_override_key(name) not in recorded_revoke_keys),
+      ],
+      revoke=[
+        *kept_revoke,
+        *(name for name in revoke if _scope_override_key(name) not in recorded_grant_keys),
+      ],
     )
 
   def dump(self) -> dict:
@@ -369,7 +399,7 @@ def _host_session(
       command,
       runner_env,
       launch_scope.may_summon,
-      scoped.required | scoped.optional,
+      scoped,
       container_runtime,
       interactive=not spec.solo,
     )

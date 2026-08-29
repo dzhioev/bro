@@ -90,7 +90,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   the migration preflights every collision and live workspace, and a partial run remains resumable.
   Their flocks serialize fetch/cleanup, mirrors never prune, and `ride clean` removes one only when no workspace references its URL.
   Container trails and summon status use dedicated fixed absolute mounts.
-- A launch's credential instances follow its attachment identity on every surface that resolves them
+- A launch's credential instances follow its attachment identity and selected bro on every surface that resolves them
   — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Scoped credential hydration").
 - Both modes install the scoped store's credential hooks through the one applier, into a session directory that bounds what a hook may write,
   so a session's git and `gh` act as the identity it was scoped with and never reach the operator's own configuration.

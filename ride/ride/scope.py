@@ -60,9 +60,10 @@ BRO_RUN_RECIPE = ScopeRecipe(
 )
 
 
-def bind_project_credentials(attachment: Optional[str]) -> host_config.CredentialSelection:
-  """Return the defaults and project layers for a launch attachment."""
-  return host_config.project_selection(attachment)
+def bind_launch_credentials(
+  attachment: Optional[str], bro_name: str
+) -> host_config.CredentialSelection:
+  return host_config.launch_selection(attachment, bro_name)
 
 
 def scoped_secrets(
@@ -89,7 +90,7 @@ def scoped_secrets(
   """
   from bro.registry import create_bro
 
-  binding = bind_project_credentials(attachment)
+  binding = bind_launch_credentials(attachment, bro_name)
   required: set[str] = set()
   optional = set(recipe.optional_baseline)
   try:
@@ -105,8 +106,8 @@ def scoped_secrets(
   return ScopedSecrets(
     required=required,
     optional=optional,
-    unbound_kinds=binding.unbound_kinds,
     selection=dict(binding.instances),
+    unbound_kinds=binding.unbound_kinds,
   )
 
 

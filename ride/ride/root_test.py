@@ -7,6 +7,7 @@ import ride.spawn
 import ride.summon_control
 import ride.workspace.docker as workspace_docker
 import ride.workspace.spawn as workspace_spawn
+import ride.workspace.store as workspace_store
 from bro.workspace.paths import CONTAINER_SUMMON_ROOT, summon_dir, workspace_dir
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
@@ -165,6 +166,7 @@ class TestRunRootViaBroker:
       env={'RIDE_BASE_REF': 'deadbeef'},
       secrets=('github',),
       optional_secrets=('openai',),
+      credential_selection={'github': 'reviewer'},
       tty=True,
       forward_env=True,
       image='runtime-image',
@@ -176,6 +178,9 @@ class TestRunRootViaBroker:
     assert code == 3
     assert captured['workspace'] is workspace
     assert captured['may_summon'] == {'dev'}
+    assert captured['credential_scope'] == workspace_store.ScopedSecrets(
+      {'github'}, {'openai'}, {'github': 'reviewer'}
+    )
     assert captured['launch'] == workspace_spawn.DockerLaunchSpec(
       workspace_docker.Launch(
         name='ws',
@@ -187,6 +192,7 @@ class TestRunRootViaBroker:
         },
         secrets=('github',),
         optional_secrets=('openai',),
+        credential_selection={'github': 'reviewer'},
         tty=True,
         forward_env=True,
         image='runtime-image',

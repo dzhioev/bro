@@ -360,7 +360,7 @@ def run_root_via_broker(
   *,
   workspace: Workspace,
   may_summon: Collection[str] = (),
-  credential_scope: Collection[str] = (),
+  credential_scope: ScopedSecrets,
   container_runtime: ContainerRuntimeResolver,
 ) -> int:
   """run `launch` as the root peer of a broker on this host, supervise it on the
@@ -381,9 +381,9 @@ def run_root_via_broker(
   current-trail pointer written from the root's `started` lifecycle
   (`bro.monitor.trail_pointer`). `may_summon` names the bros the root session
   is authorized to summon — its effective outgoing allow-list (`ride/ride/summon_control.py`);
-  defaults to deny-all. `credential_scope` names the secrets the root session
-  was launched with, the bound on what its summons may grant a child; defaults
-  to grant-nothing. `container_runtime` is the root's lazy or already-resolved
+  defaults to deny-all. `credential_scope` carries the kinds the root session
+  was launched with and their selection, the bound on what its summons may grant
+  a child. `container_runtime` is the root's lazy or already-resolved
   image and bundle-volume identity, reused by every child. A summoned child follows
   its own bro's static seeds instead, resolved per request by the control. The summon handler is registered
   either way, so a denied summoner always gets a clean correlated error instead of
@@ -420,7 +420,11 @@ def run_root_via_broker(
   facade.on(SUMMON, control.handle)
   facade.on(MINT, artifact_control.mint)
   facade.on(GET, artifact_control.get)
-  kind_context = KindContext(workspace.tree, artifact_control, frozenset(credential_scope))
+  kind_context = KindContext(
+    workspace.tree,
+    artifact_control,
+    frozenset(credential_scope.required | credential_scope.optional),
+  )
   for kind, handler in extension_kinds(kind_context).items():
     facade.on(kind, handler)
   facade.add_delivery_observer(control.observe_delivery)

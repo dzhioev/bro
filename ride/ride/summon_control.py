@@ -38,11 +38,12 @@ a seed cycle (a → b → a) would otherwise recurse through real containers.
 
 A widening is per request, never implicit, and never an escalation: a requester's
 own scope is not inherited — only what its `grant` names reaches the child — and
-every granted name must already be in the requester's own scope, so no chain of
+every granted kind must already be in the requester's own scope, and an explicit
+instance must be the instance that scope selects for the kind, so no chain of
 summons reaches authority the session was not launched with. Both bounds are the
-requester's: `allow_list` for `@bro` values, and its credential scope for the
-rest — the root's threaded in at construction from what the launch hydrated, a
-summoned child's recomputed from its own spawn record (`_child_credentials`).
+requester's: `allow_list` for `@bro` values, and its credential scope plus
+selection for the rest — the root's threaded in at construction from the launch,
+a summoned child's recomputed from its own spawn record (`_child_credentials`).
 `harness` and `llm` widen without naming a credential — the driving loop they
 select brings its own — and answer to the same credential bound, applied to what
 they add on top of the target's own default scope (`_credential_refusal`).
@@ -95,6 +96,7 @@ from ride.harness import HARNESS_NAMES, get_harness
 from ride.peers import PeerIdentity, Peers, UnattributablePeer
 from ride.scope import split_scope_overrides, summoned_credential_scope
 from ride.workspace.model import Workspace
+from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message
@@ -171,7 +173,7 @@ def summon_allow_list(bro_name: str, *, grant: list[str], revoke: list[str]) -> 
   )
 
 
-def _summoned_credentials(
+def _summoned_scope(
   target: str,
   harness_name: Optional[str],
   llm: Optional[str],
@@ -179,13 +181,9 @@ def _summoned_credentials(
   attachment: Optional[str],
   grant: Sequence[str] = (),
   revoke: Sequence[str] = (),
-) -> set[str]:
-  """the credential names a summon of `target` under the request's `harness`,
-  `llm` and credential overrides hydrates, across both tiers — the same
-  computation the lowering runs (`ride/ride/spawn.py:_lower_summon`), over the
-  same defaults its session spec records."""
+) -> ScopedSecrets:
   harness = get_harness(harness_name if harness_name is not None else DEFAULT_HARNESS)
-  scoped = summoned_credential_scope(
+  return summoned_credential_scope(
     target,
     harness.scope_recipe(harness.default_options()),
     attachment=attachment,
@@ -193,7 +191,6 @@ def _summoned_credentials(
     revoke=list(revoke),
     llm_spec=harness.resolve_llm(llm, target),
   )
-  return scoped.required | scoped.optional
 
 
 def _prompt_head(prompt: str) -> str:
@@ -318,7 +315,7 @@ class _Requester:
   should pay for on the broker loop."""
 
   allow_list: set[str]
-  credentials: Callable[[], set[str]]
+  credentials: Callable[[], ScopedSecrets]
   summoner: dict[str, Any]
   summoned_by: Optional[dict[str, Any]]
   depth: int
@@ -347,18 +344,27 @@ def _credential_refusal(
   widening: set[str] = set()
   if harness_name is not None or llm is not None:
     try:
-      widening = _summoned_credentials(
-        target, harness_name, llm, attachment=attachment
-      ) - _summoned_credentials(target, None, None, attachment=attachment)
-    except ValueError as e:
-      return str(e)
+      requested_scope = _summoned_scope(target, harness_name, llm, attachment=attachment)
+      default_scope = _summoned_scope(target, None, None, attachment=attachment)
+      widening = (requested_scope.required | requested_scope.optional) - (
+        default_scope.required | default_scope.optional
+      )
+    except ValueError as error:
+      return str(error)
   if len(grant_credentials) == 0 and len(widening) == 0:
     return None
-  held = requester.credentials()
-  beyond = sorted(set(grant_credentials) - held)
+  held_scope = requester.credentials()
+  held_kinds = held_scope.required | held_scope.optional
+  beyond: list[str] = []
+  for grant in grant_credentials:
+    kind, instance = credentials.parse_name(grant)
+    if kind not in held_kinds or (
+      instance is not None and held_scope.selection.get(kind) != instance
+    ):
+      beyond.append(grant)
   if len(beyond) > 0:
-    return f'cannot grant credential(s) the summoner does not hold: {", ".join(beyond)}'
-  beyond = sorted(widening - held)
+    return f'cannot grant credential(s) the summoner does not hold: {", ".join(sorted(beyond))}'
+  beyond = sorted(widening - held_kinds)
   if len(beyond) > 0:
     requested = ' and '.join(
       f'{key} {value!r}'
@@ -387,7 +393,7 @@ class SummonControl:
     self,
     *,
     allow_list: Collection[str],
-    credential_scope: Collection[str] = (),
+    credential_scope: ScopedSecrets,
     workspace: Workspace,
     peers: Peers,
     artifacts: 'ArtifactStore',
@@ -395,8 +401,12 @@ class SummonControl:
     audit_file: Path,
   ):
     self._allow_list = set(allow_list)
-    # the root session's own two scopes bound what its summons may grant a child
-    self._credential_scope = set(credential_scope)
+    self._credential_scope = ScopedSecrets(
+      required=set(credential_scope.required),
+      optional=set(credential_scope.optional),
+      selection=dict(credential_scope.selection),
+      unbound_kinds=credential_scope.unbound_kinds,
+    )
     self._workspace = workspace
     self._peers = peers
     self._artifacts = artifacts
@@ -669,7 +679,7 @@ class SummonControl:
       identity=identity,
     )
 
-  def _child_credentials(self, record: _ActiveSummon) -> set[str]:
+  def _child_credentials(self, record: _ActiveSummon) -> ScopedSecrets:
     """the credential scope a summoned child runs with, recomputed from its own
     spawn record."""
     if record.manual:
@@ -682,7 +692,7 @@ class SummonControl:
     grant, _ = split_scope_overrides(record.grant)
     revoke, _ = split_scope_overrides(record.revoke)
     try:
-      return _summoned_credentials(
+      return _summoned_scope(
         record.target,
         record.harness,
         record.llm,

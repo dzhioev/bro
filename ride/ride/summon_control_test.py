@@ -109,9 +109,14 @@ def _control(
   tmp_path, allow_list, session='ws', credential_scope=()
 ) -> ride.summon_control.SummonControl:
   workspace = _workspace(tmp_path, session)
+  scoped = (
+    credential_scope
+    if isinstance(credential_scope, ScopedSecrets)
+    else ScopedSecrets(set(credential_scope), set())
+  )
   return ride.summon_control.SummonControl(
     allow_list=allow_list,
-    credential_scope=credential_scope,
+    credential_scope=scoped,
     workspace=workspace,
     peers=ride.peers.Peers(workspace),
     artifacts=ride.artifacts.ArtifactStore(workspace, root_in_container=True),
@@ -261,6 +266,30 @@ class TestSummonHandler:
     assert context.spawned == []
     [(_, payload)] = context.replies
     assert 'does not hold: aws' in payload['error']
+
+  def test_granting_an_unheld_instance_of_a_held_kind_is_denied(self, tmp_path):
+    scope = ScopedSecrets({'github'}, set(), {'github': 'dev'})
+    control = _control(tmp_path, {'bro-dev'}, credential_scope=scope)
+    context = FakeContext()
+    control.handle(
+      cast(Dispatcher, context),
+      ROOT,
+      _summon_message(target='bro-dev', grant=['github+reviewer']),
+    )
+    assert context.spawned == []
+    [(_, payload)] = context.replies
+    assert 'does not hold: github+reviewer' in payload['error']
+
+  def test_granting_the_resolved_instance_of_a_held_kind_is_allowed(self, tmp_path):
+    scope = ScopedSecrets({'github'}, set(), {'github': 'dev'})
+    control = _control(tmp_path, {'bro-dev'}, credential_scope=scope)
+    context = FakeContext()
+    control.handle(
+      cast(Dispatcher, context),
+      ROOT,
+      _summon_message(target='bro-dev', grant=['github+dev']),
+    )
+    assert [launch.target for launch, _, _ in context.spawned] == ['bro-dev']
 
   def test_share_rides_the_spawn_and_the_audit(self, tmp_path):
     control = _control(tmp_path, {'dev'})
