@@ -193,10 +193,10 @@ class TestValidation:
 
     assert host_config.tool_selection(None).instances == {'consumer_only': 'special'}
 
-  def test_instances_names_the_migration(self, config_file, tmp_path):
+  def test_retired_instances_field_names_its_replacement(self, config_file, tmp_path):
     config_file({'projects': {str(tmp_path): {'instances': ['brog+github']}}})
 
-    with pytest.raises(ValueError, match="'instances' is retired; migrate the list to 'creds'"):
+    with pytest.raises(ValueError, match="'instances' is retired; use 'creds'"):
       host_config.project_selection(str(tmp_path))
 
   def test_selection_without_a_plus_is_rejected(self, config_file):

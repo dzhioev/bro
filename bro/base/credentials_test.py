@@ -74,8 +74,8 @@ class TestRegistry:
     assert registry['github'].install is not None
 
   @pytest.mark.parametrize('field', ['sources', 'instance', 'filename'])
-  def test_retired_or_unknown_field_names_the_store_migration(self, field: str):
-    with pytest.raises(ValueError, match='move source configuration to creds.json'):
+  def test_retired_or_unknown_field_names_valid_storage_locations(self, field: str):
+    with pytest.raises(ValueError, match='source configuration belongs in creds.json'):
       credentials.CredentialKind.from_dict(
         'github', {'description': 'GitHub access', field: object()}
       )
@@ -507,22 +507,13 @@ class TestDefaultStore:
 
     assert credentials.get('openai') == 'first'
 
-  @pytest.mark.parametrize('variable', ['CREDENTIALS_REGISTRY', 'BRO_CONFIGS_DIR'])
-  def test_legacy_environment_fails_loudly(self, tmp_path: Path, monkeypatch, variable: str):
-    monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path))
-    monkeypatch.setattr(credentials, '_default_store', None)
-    monkeypatch.setenv(variable, 'legacy')
-
-    with pytest.raises(ValueError, match='retired; set BRO_STORE'):
-      credentials.default_store()
-
   @pytest.mark.parametrize('filename', ['registry.json', 'credentials.json'])
-  def test_legacy_file_fails_loudly(self, tmp_path: Path, monkeypatch, filename: str):
+  def test_retired_file_fails_loudly(self, tmp_path: Path, monkeypatch, filename: str):
     (tmp_path / filename).write_text('{}')
     monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path))
     monkeypatch.setattr(credentials, '_default_store', None)
 
-    with pytest.raises(ValueError, match='legacy credential file'):
+    with pytest.raises(ValueError, match='retired credential file'):
       credentials.default_store()
 
 

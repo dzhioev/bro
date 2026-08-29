@@ -48,14 +48,11 @@ class TestApplyClaudeAuth:
     assert env == {}
 
   def test_absent_warns_when_requested(self, config_path):
-    from bro.base import credentials
-
     with patch('ride.claude.claude_auth.log.warning') as warning:
       ride_claude_auth.apply_claude_auth({}, warn_when_missing=True)
     warning.assert_called_once()
     assert 'claude_code secret not resolvable' in warning.call_args.args[0]
-    assert warning.call_args.args[1] == config_path.parent / 'claude_code.cred'
-    assert warning.call_args.args[2] == credentials.CREDENTIAL_MIGRATION_GUIDE
+    assert warning.call_args.args[1:] == (config_path.parent / 'claude_code.cred',)
 
   def test_scrubs_outranking_auth_vars(self, config_path):
     # inherited api-key / bearer vars outrank CLAUDE_CODE_OAUTH_TOKEN in claude's

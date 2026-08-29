@@ -49,11 +49,8 @@ MATERIAL_DIR = 'creds'
 MATERIAL_SUFFIX = '.cred'
 MINTED_SUFFIX = '.minted'
 
-LEGACY_REGISTRY_ENV = 'CREDENTIALS_REGISTRY'
-LEGACY_CONFIGS_ENV = 'BRO_CONFIGS_DIR'
-LEGACY_REGISTRY_FILE = 'registry.json'
-LEGACY_CREDENTIALS_FILE = 'credentials.json'
-CREDENTIAL_MIGRATION_GUIDE = 'bro/setup/AGENTS.md, "One-time host migration"'
+RETIRED_REGISTRY_FILE = 'registry.json'
+RETIRED_CREDENTIALS_FILE = 'credentials.json'
 
 _CREDENTIAL_SOURCE_GROUP = 'bro.credential_sources'
 _CREDENTIAL_REGISTRY_GROUP = 'bro.credentials'
@@ -306,9 +303,9 @@ class CredentialKind:
     unknown = sorted(set(data) - {'description', 'install'})
     if len(unknown) > 0:
       raise ValueError(
-        f'credential registry entry {name!r} carries retired or unknown fields '
-        f'{unknown}; move source configuration to {SOURCES_FILE} and material to '
-        f'{MATERIAL_DIR}/<name>{MATERIAL_SUFFIX}'
+        f'credential registry entry {name!r} carries retired or unknown fields {unknown}; '
+        f'entries may contain only description and install, source configuration belongs in '
+        f'{SOURCES_FILE}, and material belongs in {MATERIAL_DIR}/<name>{MATERIAL_SUFFIX}'
       )
     if 'description' not in data:
       raise ValueError(f'credential registry entry {name!r} is missing required description')
@@ -649,20 +646,14 @@ def default_registry() -> dict[str, CredentialKind]:
   return {name: CredentialKind.from_dict(name, entry) for name, entry in data.items()}
 
 
-def _reject_legacy_configuration() -> None:
-  for variable in (LEGACY_REGISTRY_ENV, LEGACY_CONFIGS_ENV):
-    if variable in os.environ:
-      raise ValueError(
-        f'{variable} is retired; set BRO_STORE to the exclusive credential store directory and '
-        f'follow {CREDENTIAL_MIGRATION_GUIDE}'
-      )
-  for filename in (LEGACY_REGISTRY_FILE, LEGACY_CREDENTIALS_FILE):
+def _reject_retired_store_files() -> None:
+  for filename in (RETIRED_REGISTRY_FILE, RETIRED_CREDENTIALS_FILE):
     path = Path(STORE_DIR) / filename
     if path.exists():
       raise ValueError(
-        f'legacy credential file {path} is retired; migrate material to '
-        f'{Path(STORE_DIR) / MATERIAL_DIR}/<name>{MATERIAL_SUFFIX} and typed sources to '
-        f'{Path(STORE_DIR) / SOURCES_FILE}; follow {CREDENTIAL_MIGRATION_GUIDE}'
+        f'retired credential file {path}; credential material belongs at '
+        f'{Path(STORE_DIR) / MATERIAL_DIR}/<name>{MATERIAL_SUFFIX} and typed sources at '
+        f'{Path(STORE_DIR) / SOURCES_FILE}'
       )
 
 
@@ -675,7 +666,7 @@ def default_store() -> Store:
   if _default_store is None:
     with _default_store_lock:
       if _default_store is None:
-        _reject_legacy_configuration()
+        _reject_retired_store_files()
         registry = default_registry()
         selection: dict[str, Optional[str]] = {}
         if 'BRO_STORE' not in os.environ:
