@@ -1,8 +1,11 @@
 from dataclasses import dataclass
 from typing import Optional
 
+import jsii
 from aws_cdk import (
+  Aspects,
   Duration,
+  IAspect,
   Stack,
   aws_certificatemanager as acm,
   aws_ec2 as ec2,
@@ -10,9 +13,39 @@ from aws_cdk import (
   aws_elasticloadbalancingv2 as elbv2,
   aws_route53 as route53,
 )
-from constructs import Construct
+from constructs import Construct, IConstruct
 
 from bro.oops.cdk.config import InfrastructureConfig, PlatformConfig
+
+_LOAD_BALANCER_DISALLOW_ALL_EGRESS = [
+  {
+    'cidrIp': '255.255.255.255/32',
+    'description': 'Disallow all traffic',
+    'fromPort': 252,
+    'ipProtocol': 'icmp',
+    'toPort': 86,
+  }
+]
+
+
+@jsii.implements(IAspect)
+class _LoadBalancerSecurityGroupRulesAspect:
+  def __init__(self, security_group: ec2.CfnSecurityGroup) -> None:
+    self._security_group_node_address = security_group.node.addr
+
+  def visit(self, node: IConstruct) -> None:
+    if node.node.addr != self._security_group_node_address:
+      return
+    if not isinstance(node, ec2.CfnSecurityGroup):
+      raise TypeError('platform load balancer security group must synthesize a CfnSecurityGroup')
+
+    inline_egress = Stack.of(node).resolve(node.security_group_egress)
+    if inline_egress != _LOAD_BALANCER_DISALLOW_ALL_EGRESS:
+      raise ValueError(
+        "platform ALB security group may carry only CDK's disallow-all inline egress "
+        'placeholder; grant ALB-to-service permissions from each service stack as '
+        'standalone security group rules, never inline on the platform security group'
+      )
 
 
 @dataclass(frozen=True)
@@ -148,6 +181,15 @@ class PlatformStack(Stack):
       internet_facing=True,
       idle_timeout=Duration.seconds(300),
     )
+    security_groups = self.load_balancer.connections.security_groups
+    if len(security_groups) != 1:
+      raise ValueError(
+        f'platform load balancer must have one security group, found {len(security_groups)}'
+      )
+    security_group_resource = security_groups[0].node.default_child
+    if not isinstance(security_group_resource, ec2.CfnSecurityGroup):
+      raise TypeError('platform load balancer security group must synthesize a CfnSecurityGroup')
+    Aspects.of(self).add(_LoadBalancerSecurityGroupRulesAspect(security_group_resource))
 
     self.https_listener = self.load_balancer.add_listener(
       'HttpsListener',

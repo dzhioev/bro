@@ -176,6 +176,7 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'bro',
     'bro-dev',
     'constructs',
+    'jsii',
   }
   assert _project_dependencies(_ROOT / 'benchmark' / 'pyproject.toml') >= {'bro', 'bro-ride'}
   root = tomllib.loads((_ROOT / 'pyproject.toml').read_text())

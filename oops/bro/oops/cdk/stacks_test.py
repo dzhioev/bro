@@ -1,7 +1,8 @@
 import json
 
 import aws_cdk as cdk
-from aws_cdk import assertions
+import pytest
+from aws_cdk import assertions, aws_ec2 as ec2
 
 from bro.oops.cdk import (
   HostedZoneReference,
@@ -65,9 +66,55 @@ def test_platform_stack_creates_the_shared_platform(tmp_path):
     'AWS::CertificateManager::Certificate',
     {'DomainName': f'*.{_DOMAIN}', 'DomainValidationOptions': [{'DomainName': f'*.{_DOMAIN}'}]},
   )
+  load_balancer_security_group = template.to_json()['Resources'][
+    'PlatformAlbSecurityGroupDE8F554F'
+  ]['Properties']
+  assert load_balancer_security_group['SecurityGroupEgress'] == [
+    {
+      'CidrIp': '255.255.255.255/32',
+      'Description': 'Disallow all traffic',
+      'FromPort': 252,
+      'IpProtocol': 'icmp',
+      'ToPort': 86,
+    }
+  ]
+  assert load_balancer_security_group['SecurityGroupIngress'] == [
+    {
+      'CidrIp': '0.0.0.0/0',
+      'Description': 'Allow from anyone on port 443',
+      'FromPort': 443,
+      'IpProtocol': 'tcp',
+      'ToPort': 443,
+    },
+    {
+      'CidrIp': '0.0.0.0/0',
+      'Description': 'Allow from anyone on port 80',
+      'FromPort': 80,
+      'IpProtocol': 'tcp',
+      'ToPort': 80,
+    },
+  ]
   template.resource_count_is('AWS::ElasticLoadBalancingV2::Listener', 2)
   assert stack.handles.cluster is stack.cluster
   assert stack.handles.https_listener is stack.https_listener
+
+
+def test_platform_stack_rejects_inline_load_balancer_egress(tmp_path):
+  app, stack, _, _ = _stacks(tmp_path)
+  stack.load_balancer.connections.allow_to(
+    ec2.Peer.ipv4('10.0.0.0/8'),
+    ec2.Port.tcp(8000),
+    'Inline service egress',
+  )
+
+  with pytest.raises(
+    RuntimeError,
+    match=(
+      'grant ALB-to-service permissions from each service stack as standalone security group '
+      'rules, never inline on the platform security group'
+    ),
+  ):
+    app.synth()
 
 
 def test_repository_stack_preserves_repository_and_output_ids(tmp_path):
