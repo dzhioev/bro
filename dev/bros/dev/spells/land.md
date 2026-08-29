@@ -12,7 +12,7 @@ Also covers landing without a pull request
 — a repo that takes changes straight onto its target branch:
 the rebase-and-push one-liner, and the CI dispatch that stands in for the checks no PR is there to run.
 
-version: 4.3.0
+version: 5.0.0
 ---
 
 # land
@@ -51,6 +51,13 @@ Fold it now per that step and force-push, then wait for the approval the push co
 
 ## Step 2 — merge: run `land-pr`
 
+Where an eyebro reviewed this change, its verdict gates the merge before anything else does.
+That gate is this session's, not `land-pr`'s:
+only the session that summoned the reviewer knows it did, so [[run pr]] carries the verdict back as the summon's result and nothing on GitHub records the delegation.
+A reviewer that ran and did not approve blocks the merge whatever `reviewDecision` says
+— stop and ask where questions reach the user, `raise` when unattended.
+A reviewer that never ran at all (no grant, or a summon denied at launch) leaves the merge to the gate below.
+
 ```bash
 land-pr
 ```
@@ -58,7 +65,9 @@ land-pr
 One shot, in order:
 
 1. Resolves the PR for the current branch and enforces the preconditions
-   — fails with a message and a nonzero exit when the PR is not `OPEN`, not `APPROVED`, its body has unchecked `- [ ]` test-plan boxes, the worktree sits on something other than the reviewed head, or the repository disallows rebase merging.
+   — fails with a message and a nonzero exit when the PR is not `OPEN`, its base branch refuses the merge, its body has unchecked `- [ ]` boxes, the worktree sits off the reviewed head, or the repository disallows rebase merging.
+   The review half of that is GitHub's own verdict and nothing else:
+   changes requested and a review the base requires both refuse, and a base whose rules ask for no review reports none, which `land-pr` merges.
 2. Waits for the PR's status checks to conclude (up to `--wait-checks` seconds, default 480) and refuses to merge while any is pending or failed.
    A head no check reported on at all waits the same way and is refused the same way:
    what an empty rollup says is that nothing verified the commits about to land, which is a reason to hold, not a repo without CI.
@@ -75,15 +84,10 @@ One shot, in order:
    Its `base` field supplies `<base>` for the bookkeeping and report below.
 
 Waiver flags map to explicit user statements from this session
-— never pass them when [[run pr]]'s APPROVED event chained into this spell:
+— never pass them when [[run pr]]'s APPROVED event chained into this spell.
+No flag waives a review:
+where the base branch requires one, GitHub refuses the merge whatever this command was told.
 
-- `--no-review` — the user said to merge without waiting for approval.
-  A `CHANGES_REQUESTED` review is refused regardless;
-  that needs the review resolved, not a waiver.
-  So is a review the base branch itself requires (`reviewDecision=REVIEW_REQUIRED`):
-  the waiver reaches this command's own precondition, never the rule GitHub enforces at the merge.
-  Only an approving review clears that one, and only from an identity GitHub grants standing on the base
-  — an approval that leaves `reviewDecision` unmoved did not count.
 - `--allow-unchecked` — the user said to land despite unchecked test-plan boxes.
   Otherwise an unchecked box means nobody verified that item:
   surface the failure output (it lists the boxes) and wait.
@@ -94,9 +98,6 @@ Waiver flags map to explicit user statements from this session
   a red check is otherwise something to fix or re-run (`gh run rerun --failed <run-id>`), never something to route around.
   A repo with no CI is the one standing case where the waiver is the normal answer rather than an exception:
   there is no run to wait for, and the user says so once.
-
-A waived review does not imply waived checks:
-"land it without review" means skip the approval wait, and CI still has to go green.
 
 If `land-pr` exits nonzero, surface its stderr and stop
 — do not hand-roll the merge with raw `gh` commands, do not invent state.
@@ -151,7 +152,18 @@ The merge is a fast-forward push of the rebased branch.
 git fetch origin && git rebase origin/<base> && git push origin HEAD:<base>
 ```
 
-The gate the pull request was carrying does not go with it
+The review the pull request was carrying does not go with it.
+{{when #may_summon contains eyebro}}
+
+There is no PR for the eyebro to review afterwards, so its diff review is the whole review, and it runs before the push:
+[[ask]] it to review `HEAD` against `origin/<base>` per [[run pr]]'s pre-review step, and repeat the round
+— fix, re-ask
+— until it comes back clean.
+Its verdict gates the push the way it gates a merge:
+a reviewer that ran and did not come back clean stops the landing, and that is a question for the user or a `raise`, never something to push past.
+
+{{end}}
+The CI gate the pull request was carrying does not go with it either
 — it becomes yours to run.
 A repo's CI commonly triggers on pull requests and on pushes to its trunk, so a branch that opens no PR runs nothing of its own:
 dispatch the repo's CI against the branch (its own docs name the workflow and how it is dispatched) and wait for green before the push.
