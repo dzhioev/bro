@@ -628,6 +628,7 @@ def test_installed_distributions_publish_the_session_command_roster():
     'land-pr',
     'mcp-server',
     'poll-pr',
+    'pr-state',
     'rewind',
     'ride',
     'summon',

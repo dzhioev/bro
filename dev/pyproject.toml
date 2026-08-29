@@ -21,6 +21,7 @@ dependencies = [
 "bro.dev.sync-scripts" = "bro.dev._entrypoints:bro_dev_sync_scripts"
 "bro.dev.usage-report" = "bro.dev._entrypoints:bro_dev_usage_report"
 "bro.extra.github.poll-pr" = "bro.dev._entrypoints:bro_extra_github_poll_pr"
+"bro.extra.github.pr-state" = "bro.dev._entrypoints:bro_extra_github_pr_state"
 "bro.workflow.commit-footer" = "bro.dev._entrypoints:bro_workflow_commit_footer"
 "bro.workflow.fold-branch" = "bro.dev._entrypoints:bro_workflow_fold_branch"
 "bro.workflow.land-pr" = "bro.dev._entrypoints:bro_workflow_land_pr"
@@ -29,6 +30,7 @@ dependencies = [
 "fold-branch" = "bro.dev._entrypoints:bro_workflow_fold_branch"
 "land-pr" = "bro.dev._entrypoints:bro_workflow_land_pr"
 "poll-pr" = "bro.dev._entrypoints:bro_extra_github_poll_pr"
+"pr-state" = "bro.dev._entrypoints:bro_extra_github_pr_state"
 "sync-scripts" = "bro.dev._entrypoints:bro_dev_sync_scripts"
 "usage-report" = "bro.dev._entrypoints:bro_dev_usage_report"
 # bros
@@ -40,6 +42,7 @@ dependencies = [
 "fold-branch" = "bro.dev._entrypoints:bro_workflow_fold_branch"
 "land-pr" = "bro.dev._entrypoints:bro_workflow_land_pr"
 "poll-pr" = "bro.dev._entrypoints:bro_extra_github_poll_pr"
+"pr-state" = "bro.dev._entrypoints:bro_extra_github_pr_state"
 
 [project.entry-points.bro]
 analyst = "bros.analyst:Analyst"

@@ -33,6 +33,10 @@ def bro_extra_github_poll_pr():
   return _run('bro.extra.github.poll_pr')
 
 
+def bro_extra_github_pr_state():
+  return _run('bro.extra.github.pr_state')
+
+
 def bro_workflow_commit_footer():
   return _run('bro.workflow.commit_footer')
 

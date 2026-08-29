@@ -13,7 +13,7 @@ Run any script with `--help` for flags.
 
 The repository is a uv workspace whose root publishes the `bro` distribution from `bro/` and `bros/bro/`;
 `native/` publishes `bro-native` (the native engine and `bro` command),
-`dev/` publishes `bro-dev` (the `bro.dev` and `bro.workflow` packages, `poll-pr`, and the development personas),
+`dev/` publishes `bro-dev` (the `bro.dev` and `bro.workflow` packages, `poll-pr` and `pr-state`, and the development personas),
 `oops/` publishes `bro-oops` (consumer-neutral deployment and operations machinery),
 `ride/` publishes `bro-ride` (top-level `ride`, the managed-workspace runtime and both harness adapters),
 and `local/` is the `bro-local` member (`bro.local`)

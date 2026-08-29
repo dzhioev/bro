@@ -22,21 +22,26 @@ do not use `curl` against `api.github.com`.
 
 ## 1. Preconditions
 
-Resolve who you are and what the PR is:
+`pr-state` answers who you are and what the PR is, in one JSON object.
+A PR given as a URL spells `<owner>/<repo>` and `<n>`;
+a bare number belongs to the checkout you are in:
 
 ```bash
-gh api user --jq .login
-gh pr view <pr> --json number,url,state,isDraft,title,body,baseRefName,headRefName,author
+pr-state <owner>/<repo> <n>
 ```
 
-- Your login equals the author's:
+`viewer` is you.
+Compare logins only within `pr-state`'s output:
+`gh pr view --json` spells the same accounts differently, so a comparison across the two silently never matches.
+
+- `viewer` equals `pull_request.author`:
   stop — GitHub refuses self-approval, and a review conversation with yourself reviews nothing.
   Report it where questions reach the user;
   `raise` when unattended.
-- `state` is `MERGED` or `CLOSED`:
+- `pull_request.state` is `merged` or `closed`:
   nothing left to review;
   report and stop.
-- `isDraft` is true:
+- `pull_request.draft` is true:
   the author has not asked for review yet — confirm with the user before reviewing a draft.
 
 ## 2. Reconcile the existing review state
@@ -46,10 +51,10 @@ Always, before reviewing anything
 an earlier reviewer session that died, a human who started and handed off, or your own previous rounds.
 A fresh PR just reconciles to empty.
 
-```bash
-gh pr view <n> --json reviews
-gh api repos/<owner>/<repo>/pulls/<n>/comments   # every inline comment, all threads
-```
+The `reviews` and `comments` of the same `pr-state` output are that history:
+`comments` is every inline comment, each reply carrying its thread's root in `in_reply_to`.
+Threads whose `user` is `viewer` are your own earlier rounds;
+the rest are another party's.
 
 Classify every existing thread, whoever opened it:
 
@@ -72,7 +77,7 @@ report that and stop
    The checkout is for reading and running checks;
    the branch is the author's
    — never commit to it, never push it.
-2. Judge the PR's diff (`<baseRefName>...HEAD`) per [[review diff]]
+2. Judge the PR's diff (`<pull_request.base>...HEAD`) per [[review diff]]
    — its grounding in the repo's standards and its method and criteria (steps 2–3)
    — reviewing the commits as what the base branch will carry.
 3. This pass's findings plus the adopted open threads are the round's slate.
@@ -116,7 +121,7 @@ gh api repos/<owner>/<repo>/pulls/<n>/reviews --input /tmp/review.json
 The watcher is one long-lived `poll-pr` process, authenticated through the credential store and filtered to everyone but you:
 
 ```bash
-poll-pr <owner>/<repo> <n> --self <your-login>
+poll-pr <owner>/<repo> <n>
 ```
 
 Events fire for the review parties
@@ -186,7 +191,7 @@ the author's flow re-folds the branch into landing shape each round.
 
 1. Re-sync the checkout:
    `gh pr checkout <n>`;
-   if the rewritten branch confuses it, `git fetch origin <headRefName> && git reset --hard origin/<headRefName>` (safe here — the checkout never holds your own commits).
+   if the rewritten branch confuses it, `git fetch origin <pull_request.head> && git reset --hard origin/<pull_request.head>` (safe here — the checkout never holds your own commits).
 2. See what the round changed:
    `git range-diff <last-reviewed-sha>...<new-head>` when the branch was rewritten, an ordinary diff when it grew.
 3. Verify every open finding against the new code

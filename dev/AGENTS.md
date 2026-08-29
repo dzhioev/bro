@@ -32,8 +32,8 @@ build the wheel with `uv build --package bro-dev`.
   and the packaged git hooks.
   Its public import paths remain `bro.workflow.*`;
   its CLIs are `commit-footer`, `fold-branch`, and `land-pr`
-- `bro/extra/github/poll_pr.py` — the `poll-pr` review watcher.
-  The GitHub client and App-auth source it consumes remain in core at `bro.extra.github.api` and `.app`
+- `bro/extra/github/` — `poll_pr.py` (the `poll-pr` review watcher) and `pr_state.py` (the `pr-state` reviewer-side read of a PR's review state).
+  The GitHub client, App-auth source, and pull-request reads they consume remain in core at `bro.extra.github.api`, `.app`, and `.pulls`
 - `bro/prompts/dev/style.md` — the development style policy, tool-served by the Dev persona through `dev-style-source::read`
 - `bros/dev/` — generic developer with the file/shell/search toolset and the audit, credential-wiring, task, PR, and landing spells.
   Its optional `brog` feature mounts tracker tooling;
