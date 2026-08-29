@@ -26,6 +26,7 @@ def _review(login: str) -> dict[str, Any]:
     'id': 100,
     'user': {'login': login},
     'state': 'CHANGES_REQUESTED',
+    'commit_id': 'c0ffee1234567890',
     'body': 'one blocker',
     'submitted_at': '2026-08-29T10:00:00Z',
     'html_url': 'https://github.com/x/y/pull/7#pullrequestreview-100',
@@ -62,6 +63,7 @@ class TestPrState:
     assert state['viewer'] == 'reviewer[bot]'
     assert state['pull_request']['author'] == 'author[bot]'
     assert [r['user'] for r in state['reviews']] == ['reviewer[bot]']
+    assert [r['commit_id'] for r in state['reviews']] == ['c0ffee1234567890']
     assert [c['user'] for c in state['comments']] == ['reviewer[bot]', 'author[bot]']
 
   def test_a_merged_pull_request_reads_as_merged(self, monkeypatch):

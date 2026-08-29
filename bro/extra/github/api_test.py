@@ -19,8 +19,9 @@ def _http_error(code: int, headers: Optional[dict[str, str]] = None) -> urllib.e
 
 
 class _FakeResponse:
-  def __init__(self, payload: Any):
+  def __init__(self, payload: Any, headers: Optional[dict[str, str]] = None):
     self._payload = payload
+    self.headers = headers if headers is not None else {}
 
   def __enter__(self):
     return self
@@ -53,6 +54,8 @@ class _FakeUrlopen:
     step = self._steps[len(self.requests) - 1]
     if isinstance(step, BaseException):
       raise step
+    if isinstance(step, tuple):
+      return _FakeResponse(*step)
     return _FakeResponse(step)
 
 
@@ -198,3 +201,32 @@ class TestCheckState:
 
   def test_missing_fields_are_pending(self):
     assert api.check_state(None, None) == 'pending'
+
+
+class TestGetAll:
+  def test_follows_the_next_link_and_concatenates(self, monkeypatch):
+    pages = [
+      (
+        [{'id': 1}],
+        {
+          'Link': '<https://api.github.com/x?page=2>; rel="prev", '
+          '<https://api.github.com/x?page=2>; rel="next"'
+        },
+      ),
+      [{'id': 2}],
+    ]
+    fake = _FakeUrlopen(pages)
+    _install(monkeypatch, fake)
+    assert api.get_all('https://api.github.com/x', 't') == [{'id': 1}, {'id': 2}]
+    assert fake.requests[1].full_url == 'https://api.github.com/x?page=2'
+
+  def test_a_last_page_ends_the_walk(self, monkeypatch):
+    fake = _FakeUrlopen([([{'id': 1}], {'Link': '<https://api.github.com/x?page=1>; rel="prev"'})])
+    _install(monkeypatch, fake)
+    assert api.get_all('https://api.github.com/x', 't') == [{'id': 1}]
+    assert fake.call_count == 1
+
+  def test_a_response_that_is_no_collection_fails(self, monkeypatch):
+    _install(monkeypatch, _FakeUrlopen([{'id': 1}]))
+    with pytest.raises(ValueError):
+      api.get_all('https://api.github.com/x', 't')
