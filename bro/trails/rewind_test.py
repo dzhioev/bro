@@ -265,16 +265,6 @@ class TestSteps:
     output = capsys.readouterr().out
     assert '<4096 bytes spilled> https://example.test/body' in output
 
-  def test_historical_terminal_end_reason_renders_as_ok(self, capsys):
-    client = FakeClient()
-    client.add_bro(
-      'T1', [{'step_id': 0, 'kind': 'end', 'body': {'reason': 'terminal'}, 'ts': None}]
-    )
-    assert _command_steps(_client(client), _args('T1')) == 0
-    output = capsys.readouterr().out
-    assert '{reason: ok}' in output
-    assert 'terminal' not in output
-
 
 class TestListAndTree:
   def test_list_uses_structural_rows_for_status_owner_subject_and_fork(self, capsys):
@@ -438,29 +428,6 @@ class TestFollow:
     assert '← followed result' in output
     assert '\x1b[' not in output
 
-  def test_shared_loop_stops_at_a_native_end_step(self):
-    client = FakeClient()
-    client.add_bro(
-      'T1',
-      [
-        {'step_id': 0, 'kind': 'assistant'},
-        {'step_id': 1, 'kind': 'end'},
-        {'step_id': 2, 'kind': 'assistant'},
-      ],
-    )
-    batches = list(
-      _follow_batches(
-        _client(client),
-        'T1',
-        iterator=lambda trail_id, after: client.iter_steps(trail_id, after=after),
-        cursor=lambda step: step['step_id'],
-        terminal=lambda step: step.get('kind') == 'end',
-        interval=0,
-        sleep=lambda _: None,
-      )
-    )
-    assert [row['step_id'] for batch in batches for row in batch] == [0, 1]
-
   def test_header_completion_drains_a_message_stream(self):
     class DrainClient(FakeClient):
       def __init__(self):
@@ -481,7 +448,6 @@ class TestFollow:
         'T1',
         iterator=lambda trail_id, after: client.iter_messages(trail_id, after=after),
         cursor=lambda message: message['source']['step_id'],
-        terminal=lambda message: False,
         interval=0,
         sleep=lambda _: None,
       )

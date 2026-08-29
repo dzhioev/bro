@@ -137,8 +137,9 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
 - `/steps` returns the native stream and `/messages` its generalized projection.
   Large bodies remain inline over the wire.
 - `GET /v1/trails/{id}/context` returns `{"launch_context": null}` for an existing trail without context and 404 only when the trail is missing.
-- Bro projection derives reasoning, assistant text, tool calls, and terminal assistant status from `llm_call.response.output`;
-  rows of those decomposed kinds do not project separately.
+- Bro projection derives reasoning, assistant text, tool calls, and terminal assistant status from `llm_call.response.output`,
+  so `BRO_STEP_KINDS` admits no record kind of its own for them;
+  the decoding reads the OpenAI Responses API shape.
 - Header responses expose provider-raw usage by model.
   Provider normalization belongs to the provider-aware usage layer, not the harness adapter.
 - List queries accept exactly one selector

@@ -311,8 +311,6 @@ class RecordedAdapter:
       if kind is not None:
         kind = _require_string(kind, 'step kind', nonempty=True)
       body_value = step.get('body')
-      if kind == 'end' and isinstance(body_value, dict) and body_value.get('reason') == 'terminal':
-        body_value = {**body_value, 'reason': 'ok'}
       descriptor = spill_descriptor(body_value)
       body = (
         SpilledStepBody(

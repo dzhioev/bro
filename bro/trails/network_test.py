@@ -478,10 +478,10 @@ class TestStepFromRow:
         'trail_id': 'T1',
         'step_id': 1,
         'ts': '2026-06-07T00:00:00.000000Z',
-        'kind': 'tool_call',
+        'kind': 'tool_result',
         'body': None,
         'tool_name': 'add_task',
-        'arguments': {'name': 'x'},
+        'is_error': False,
         'call_id': 'c1',
         'turn_index': 1,
         'usage': {'output_tokens': 2},
@@ -489,12 +489,12 @@ class TestStepFromRow:
       }
     )
     assert isinstance(step, Step)
-    assert step.kind == 'tool_call'
+    assert step.kind == 'tool_result'
     assert step.body is None
     assert step.usage == {'output_tokens': 2}
     assert step.extras == {
       'tool_name': 'add_task',
-      'arguments': {'name': 'x'},
+      'is_error': False,
       'call_id': 'c1',
       'turn_index': 1,
     }
@@ -505,7 +505,7 @@ class TestStepFromRow:
         'trail_id': 'T1',
         'step_id': 1,
         'ts': '2026-06-07T00:00:00.000000Z',
-        'kind': 'end',
+        'kind': 'tool_result',
       }
     )
     assert step.body is None
