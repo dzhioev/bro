@@ -7,7 +7,7 @@ from bro.base import credentials
 from bro.workspace.project import project_config
 from ride.harness import get_harness
 from ride.repository import Repository, as_repository
-from ride.scope import LaunchScopeError, bind_project_credentials, scoped_secrets
+from ride.scope import LaunchScopeError, bind_launch_credentials, scoped_secrets
 
 
 def report_scope(
@@ -29,7 +29,7 @@ def report_scope(
   recipe = get_harness(harness).scope_recipe(options)
   attachment = None if repo is None else repo.identity
   try:
-    binding = bind_project_credentials(attachment)
+    binding = bind_launch_credentials(attachment, bro_name)
     scoped = scoped_secrets(bro_name, recipe, attachment=attachment)
     registry = credentials.default_registry()
     selection = {kind: instance for kind, instance in binding.instances.items() if kind in registry}

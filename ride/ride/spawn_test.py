@@ -662,7 +662,7 @@ class TestRunRootViaBroker:
       ride.spawn.run_root_via_broker(
         launch,
         workspace=workspace,
-        credential_scope={'harbor+benchmark'},
+        credential_scope=workspace_store.ScopedSecrets({'harbor'}, set()),
         container_runtime=_container_runtime(),
       )
       == 3
@@ -695,7 +695,7 @@ class TestRunRootViaBroker:
     [kind_context] = kind_contexts
     assert kind_context.workspace_tree == workspace.tree
     assert isinstance(kind_context.artifacts, ride.artifacts.ArtifactControl)
-    assert kind_context.credential_scope == frozenset({'harbor+benchmark'})
+    assert kind_context.credential_scope == frozenset({'harbor'})
     # the summon handler and the delivery tap belong to the same per-root control
     control = captured['handlers']['summon'].__self__
     assert isinstance(control, ride.summon_control.SummonControl)
@@ -720,6 +720,7 @@ class TestRunRootViaBroker:
     workspace = Workspace.create('ws', tmp_path, WorkspaceKind.CONTAINER)
     control = ride.summon_control.SummonControl(
       allow_list=set(),
+      credential_scope=workspace_store.ScopedSecrets(set(), set()),
       workspace=workspace,
       peers=ride.peers.Peers(workspace),
       artifacts=ride.artifacts.ArtifactStore(workspace, root_in_container=False),

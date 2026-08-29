@@ -12,6 +12,7 @@ def _run(
   *,
   selection,
   scoped,
+  layers=None,
   available=lambda name: True,
   bro=None,
   harness='claude',
@@ -23,10 +24,10 @@ def _run(
       return_value=ProjectConfig(default_bro='bro-dev', image_repository='bro/bro-dev'),
     ),
     patch(
-      'ride.scope_report.bind_project_credentials',
+      'ride.scope_report.bind_launch_credentials',
       return_value=CredentialSelection(
         selection,
-        dict.fromkeys(selection, 'project'),
+        dict.fromkeys(selection, 'project') if layers is None else layers,
         scoped.unbound_kinds,
       ),
     ),
@@ -46,14 +47,15 @@ class TestReportScope:
   def test_names_the_instance_each_selected_kind_reads(self, capsys):
     rc, out, _ = _run(
       capsys,
-      selection={'brog': 'github'},
+      selection={'brog': 'github', 'github': 'reviewer'},
+      layers={'brog': 'project', 'github': 'project-bro'},
       scoped=ScopedSecrets({'brog', 'github'}, {'openai'}),
     )
     assert rc == 0
     assert 'repository: /repo' in out
     assert 'bro:        bro-dev (claude-full)' in out
     assert 'brog+github (project)' in out
-    assert 'github' in out
+    assert 'github+reviewer (project-bro)' in out
     assert 'optional:' in out and 'openai' in out
 
   def test_marks_a_selection_that_does_not_resolve(self, capsys):
@@ -69,6 +71,15 @@ class TestReportScope:
   def test_reads_the_kinds_own_entry_selection(self, capsys):
     _, out, _ = _run(capsys, selection={'brog': None}, scoped=ScopedSecrets({'brog'}, set()))
     assert 'brog (project)' in out
+
+  def test_marks_an_unbound_project_kind_refused(self, capsys):
+    _, out, _ = _run(
+      capsys,
+      selection={},
+      scoped=ScopedSecrets({'brog'}, set(), unbound_kinds=frozenset({'brog'})),
+    )
+    assert 'per project, unbound' in out
+    assert 'REFUSED' in out
 
   def test_raw_scopes_the_raw_flavor_and_bro_overrides_the_default(self, capsys):
     _, out, scope = _run(

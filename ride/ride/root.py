@@ -10,7 +10,7 @@ from ride.workspace.docker import (
   prepare_container,
 )
 from ride.workspace.model import Workspace
-from ride.workspace.store import log_scoped_secrets
+from ride.workspace.store import ScopedSecrets, log_scoped_secrets
 
 
 def _run_root_via_broker(
@@ -50,7 +50,11 @@ def _run_root_via_broker(
     broker_launch,
     workspace=workspace,
     may_summon=may_summon,
-    credential_scope=set(launch.secrets) | set(launch.optional_secrets),
+    credential_scope=ScopedSecrets(
+      required=set(launch.secrets),
+      optional=set(launch.optional_secrets),
+      selection=dict(launch.credential_selection),
+    ),
     container_runtime=container_runtime,
   )
 
@@ -60,7 +64,7 @@ def run_host_process_via_broker(
   command: list[str],
   env: dict[str, str],
   may_summon: Collection[str],
-  credential_scope: Collection[str],
+  credential_scope: ScopedSecrets,
   container_runtime: ContainerRuntimeResolver,
   *,
   interactive: bool,

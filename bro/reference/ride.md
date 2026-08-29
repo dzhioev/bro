@@ -391,8 +391,8 @@ On launch:
    — on the workspace's recorded branch (based on `--into <ref>` when given, else on a path attachment's current `HEAD` or a URL mirror's freshly fetched `origin/HEAD`
    — see the shared launch flags under "Commands") plus `submodule.alternateLocation=superproject` so submodule updates reuse the superproject's modules, then initializes submodules;
 2. runs the worktree's `setup.sh` when present, otherwise logs that project provisioning was skipped;
-3. materializes the runtime bundle's host venv and declared session-command shims, then materializes the scoped store into the workspace's `credentials/` (see "Workspaces"), pointing `CREDENTIALS_REGISTRY` at it in the runner env,
-   applies that store's credential install hooks into the workspace's `environment/` and merges the environment they declare into the runner env
+3. materializes the runtime bundle's host venv and declared session-command shims, then materializes the scoped store into the workspace's `credentials/` (see "Workspaces") and points `BRO_STORE` at it in the runner env,
+   applies the declared hydrated kinds' credential install hooks into the workspace's `environment/` and merges the environment they declare into the runner env
    — the same hooks a container applies, which is what puts a host session's git and `gh` on its own `github` identity rather than the operator's (see "Scoped credential hydration")
    — and has the harness prepare the rest of that env (`prepare_host_env` — a claude session's private state dir + `CLAUDE_CONFIG_DIR` + session auth, see "Host claude-state isolation" below; a bro session's git identity + `RIDE_BRO`);
 4. spawns `<bundle>/host/venv/bin/ride` with PATH ordered as `<bundle>/host/bin` then the inherited non-launcher paths.
@@ -454,7 +454,7 @@ Layout:
 - a per-launch **scoped credential store** injected into `/home/ride/.bro`.
   Before the container starts, the host resolves only the secrets the session actually uses into an **in-memory** tar and `docker cp`s it into the created-but-unstarted container
   — there is no host-side store and no bind mount.
-  It carries one file per resolved secret (its raw text) plus a `credentials.json` registry covering exactly those, so the in-container resolver is bounded to the scoped set
+  It carries one convention-named file per resolved kind plus typed-source annotations in `creds.json`, while the code registry stays in the frozen runtime bundle, so the store directory bounds the in-container resolver to the scoped set
   — any other secret resolves to a clean `SecretNotFound`.
   Hydration is **strict** — a missing secret raises on the host before the container is created.
   Living in the container's own writable layer, the store dies with the container:
@@ -489,7 +489,7 @@ Inside the container, the entrypoint (running as root first):
 2. Does **not** seed `~/.claude/` from the host
    — `ride` provisions everything the container needs explicitly (constructed `~/.claude/.claude.json` and `~/.claude/settings.json`, synced credentials; see "Container credential isolation" below).
    Host machine state (caches, plugins, daemon/session state) deliberately stays on the host.
-3. Applies the scoped store's credential install hooks into `~/.bro-environment` and evals the environment they declare (see "Scoped credential hydration"), then, when attached, marks `/workspace` as a safe git directory.
+3. Applies the hooks for the launch's explicit `BRO_INSTALL_KINDS` into `~/.bro-environment` and evals the environment they declare (see "Scoped credential hydration"), then, when attached, marks `/workspace` as a safe git directory.
    The host's `~/.gitconfig` is no more seeded than `~/.claude` is:
    a session's git configuration is what its own hooks declare.
 4. When attached and on the first run, clones `/host-repo` into `/workspace` with `--shared`, retargets `origin` to the mounted repository's upstream URL (converting `git@github.com:` to `https://github.com/` so token auth works),
@@ -602,99 +602,63 @@ non-rotating `claude_code` token (so no session's refresh can blow away another'
 
 #### Scoped credential hydration
 
-Both session modes hydrate only the secrets the session's bro declares, scoping each session to a minimal credential set:
-`ride.root.run_in_container` injects the store into the container's `~/.bro`;
-a host launch materializes the same store into the workspace's `credentials/` and points `CREDENTIALS_REGISTRY` at its registry (the resolver searches the registry's own directory first), so `credentials`-based workflows
-— grant/revoke, a missing secret resolving to a clean `SecretNotFound`
-— behave identically in both modes.
-On host the scope is a convenience, not a boundary:
-the session runs as the user and can read the real `~/.bro` directly.
-Both modes install the store's hooks, so a session's git and `gh` speak for the `github` identity it was scoped with in either one.
+Both session modes hydrate only the credential kinds the selected bro and harness declare.
+The launch keeps the required and optional tiers kind-addressed and carries a separate kind-to-instance selection.
+The resulting store directory is the boundary:
+a host launch materializes it under the workspace's `credentials/` and sets `BRO_STORE` to that directory;
+a container launch injects it at `/home/ride/.bro` and explicitly sets `BRO_STORE=/home/ride/.bro`.
+An in-session resolver therefore never consults the host's ambient selection.
+Host scoping is still a convenience rather than a security boundary, because the session runs as the host user.
 
 - **The manifest.**
-  A bro's `needed_secrets()` (`bro/bro.py`) is the union of each declared MCP server spec's and data source's `needed_secrets` (pure metadata, no live server construction) and the bro's MRO-collected `extra_secrets`.
-  It is harness-aware — `needed_secrets(harness='claude')` counts only the components that hold on the claude harness, so a full mode never hydrates a secret of a component it doesn't mount.
-  It deliberately omits the LLM key
-  — that is added only by surfaces that run the bro as an LLM process.
-  `bro show <name>` lists it.
-  Components declare what they read
-  — for example, `WebSearch` requires `brave` and `openai.LLMSpec.needed_secrets()` returns `openai`;
-  `extra_secrets` is the escape hatch for environment needs no component expresses.
+  A bro's `needed_secrets()` (`bro/bro.py`) is the union of each selected MCP server spec's and data source's `needed_secrets` plus the bro's MRO-collected `extra_secrets`.
+  It deliberately omits the LLM key, which only surfaces running the bro as an LLM process add.
+  `optional_secrets()` supplies the best-effort tier, and every normal managed surface adds `trails` to it.
+  Components and manifests declare bare kinds only.
 - **Which instance.**
-  The manifest names kinds.
-  Computing a scope first binds the resolver to the instance selection the attachment reads (`bro/setup/AGENTS.md`, "Host config"), so a kind hydrates from whichever instance this project reads while the scope, and the session inside it,
-  keep speaking kinds.
-  A scope that binds no entry
-  — detached, or an attachment `~/.bro.json` does not name
-  — may not read any kind that file scopes per project, and fails naming it rather than hydrating another project's instance;
-  the same bound applies to the children such a session summons.
-  `ride scope` prints the attachment, hydrated kinds, selected instances, and refusals.
+  Scope selection merges the host's defaults, matching project, and matching `projects.<attachment>.bros.<bro>` layer in that order.
+  A project-bro layer overrides the project selection for that bro, including when the bro is a summon target.
+  A detached launch or an attachment with no matching project entry refuses project-selected kinds that defaults did not select, rather than falling through to bare material.
+  `ride scope` prints each declared kind's resolved instance, the layer that chose it, its availability, and `REFUSED` for this unbound case.
 - **Which bro.**
-  Scope keys on the selected bro's manifest.
-  `ride solo|along` computes it for the mode verb's bro positional, and summon lowering computes it for the child target.
-  A name the registry does not resolve fails the scope computation, so every launch surface refuses it before creating a workspace, an image, or a container.
-  Direct `bro run` / `bro chat` use ambient credentials and do not call this layer.
-- **Per-recipe sets (strict → request only what's used).**
-  Harness implementations own `ScopeRecipe` values and pass them to `ride/ride/scope.py:scoped_secrets(bro_name, recipe)`, one generic computation with one shared bro-run recipe:
-  - Claude full (`ride.claude`'s private full recipe — dive-in / plain `ride along` / `ride along`):
-    the persona's claude-harness manifest (`needed_secrets(harness='claude')` — exactly the components the session-local `persona:<name>` server mounts, plus `extra_secrets`;
-    a component gated to the bro harness contributes nothing) + the matching optional tier + `claude_code`.
-  - Claude raw (`ride.claude`'s private raw recipe — `claude --bare` serving the bro's own in-process MCP servers):
-    the bro's full `needed_secrets()` + `anthropic` (apiKeyHelper), plus the bro's `optional_secrets()` hydrated best-effort.
-  - bro harness (`BRO_RUN_RECIPE` — the bro as an LLM process in managed sessions and bro-harness summon children):
-    `needed_secrets()` + `llm_spec.needed_secrets()` + `optional_secrets()` (best-effort).
-    A summoned child is scoped through its requested harness's recipe, so a claude-harness child follows the claude-full row instead.
-  - every surface adds `trails` to its optional tier:
-    the credential selects a recording backend rather than enabling recording (`bro/trails/AGENTS.md`), so a launch that cannot resolve it still records and only a session recording through the service needs the value.
-  - `--grant` / `--revoke` (repeatable in both session modes; host scoping is a convenience, not a boundary) layer a per-session override across both tiers.
-    A plain grant joins the required set when its credential kind is absent;
-    when that kind is already selected, it replaces the selected name, so `--grant brog+github` switches from `brog` (or another `brog` instance) without a matching revoke.
-    A revoke removes the exact name from whichever tier contains it (`@bro` values adjust the summon allow-list instead — see the shared launch flags above).
-    Strict — granting the exact selected name, granting one kind twice, or revoking an absent name raises and stops.
-    The mode verbs and `summon` apply the same override grammar to the scope they create;
-    direct `bro run` / `bro chat` create none.
-    Add AWS access to a session with `--grant aws`;
-    withhold a best-effort secret such as `openai` with `--revoke openai`.
+  `ride solo|along` computes the scope for the mode verb's bro positional.
+  Summon lowering computes it for the child target, so the child's own project-bro layer applies.
+  A bro name the registry does not resolve fails before workspace or container creation.
+  Direct `bro run` and `bro chat` use ambient credentials and do not call this layer.
+- **Per-recipe sets.**
+  Harness implementations own `ScopeRecipe` values and pass them to the shared scope computation.
+  Claude full uses the persona's claude-harness manifest plus `claude_code`;
+  Claude raw uses the bro's full manifest plus `anthropic`;
+  the bro harness uses the full manifest plus the resolved LLM recipe's key.
+  Each surface includes the bro's matching optional tier.
+- **Launch overrides.**
+  `--grant KIND` adds an absent kind to the required tier under the computed selection.
+  `--grant KIND+INSTANCE` writes that explicit selection and adds or promotes the kind in the required tier, replacing any computed selection for the kind directly.
+  A requester may pass an instance-spelled grant to a summoned child only when its own scope resolves that kind to the same instance;
+  a bare kind grant remains bounded by the requester's possession of the kind.
+  `--revoke KIND` removes the kind from either tier.
+  An instance-spelled revoke fails and names the kind form, because the scope contains one entry per kind.
+  Overrides are strict:
+  no-op grants, two grants for one kind, conflicting grant/revoke pairs, and absent revokes fail the launch.
+  `@bro` values adjust the summon allow-list instead.
 - **Hydration.**
-  `credentials.build_scoped_store(names, optional=…)` returns an in-memory map
-  — one entry per resolved secret (its raw text) plus a scoped `credentials.json` (carrying each secret's `install` hook);
-  `ride` packs it into a tar and `docker cp`s it into the pre-start container's `~/.bro`, so no plaintext ever lands on a host file.
-  The required tier (`names`) is strict:
-  a name not in the host registry raises (a manifest typo), and a declared name with no value also raises (`SecretNotFound`)
-  — both fail loudly on the host, before the container is created.
-  The `optional` tier is best-effort:
-  each name (minus those already required) is materialised when resolvable and silently skipped otherwise, so an absent optional secret degrades a component instead of failing launch.
-  A secret whose `$cred` reference chain reaches a minting source (e.g. a brog config referencing the app-backed `github` kind) materialises with its references intact instead of a frozen expansion
-  — the session re-expands per read and mints its own
-  — and the kinds those references name are hydrated into the scope with it, transitively.
-  A kind pulled in that way is hydrated for the resolver alone, without the install hook a declared credential carries, and a reference spelled at instance level fails the launch (the scoped namespace is kinds-only).
-  A session installs at most one instance of each credential kind (`bro/setup/AGENTS.md` "Configuration" owns the `kind+instance` scheme):
-  declaring two — `github` and `github+alice`, in whichever tiers
-  — fails hydration up front.
-  A `kind+instance` name materializes under its kind name
-  — the scoped registry entry, its cred file, and its install hook (re-rendered for the kind name)
-  — so the scoped store's namespace is kinds-only:
-  readers, `credentials list`, and the `#creds` conditioning fact all address the kind, whichever instance the launch selected (the selection itself is the "Which instance" bullet above).
-- **`aws` is an ordinary secret.**
-  `aws` → `aws_credentials`, the host's AWS shared-credentials INI at `~/.bro/aws_credentials`.
-  Its install hook declares the value as a file in the session directory and `AWS_SHARED_CREDENTIALS_FILE` pointing at it.
-  Deliberately not the `~/.bro` resolver source:
-  `credentials get aws > ~/.bro/aws_credentials` would truncate it via `> samefile`.
-  No `~/.aws` mount, no `AWS_*` forwarding.
+  `credentials.build_scoped_store(store, required, optional=…)` returns an in-memory file map plus the declared kinds that resolved.
+  Required kinds fail on an unknown registry kind or absent material;
+  optional kinds are included only when they resolve.
+  Each selected instance materializes as `creds/<kind>.cred`, with typed-source annotations in `creds.json`, so the scoped namespace stays kind-addressed.
+  A reference-preserving `$cred` chain hydrates its referenced kinds transitively, but those transitive targets are not reported as declared hydrated kinds.
+  Instance-spelled references in reference-preserving material fail because the scoped namespace is kinds-only.
 - **Install hooks.**
-  A secret can declare an `install` hook in the registry
-  — the files, environment and shadowed commands its consumer needs (schema in `bro/setup/AGENTS.md`), with every string a template rendered with `#name` bound to the secret's own name at registry load,
-  so one kind-level hook serves every `kind+instance` variant.
-  Nothing a hook declares is code, and the only thing applying one writes is files under the directory it is given:
-  that bound is what makes one hook serve both modes, since a host session applies it as the operator, in the operator's own home.
-  `credentials install-hooks <dir>` applies every hook the registry declares (in a scoped session the registry is exactly the hydrated set) and prints the environment they declare
-  — the container entrypoint `eval`s it for a directory of its own layer, a host launch merges it into the runner env for the workspace's `environment/`.
-  The directory is recreated per launch, so a revoked credential's wiring never outlives its session, and two hooks contending for one file, variable or command fail the launch rather than silently ordering.
-- **The container side.**
-  `bro.base.credentials._load_registry()` searches `BRO_CONFIGS_DIR` when set and then `~/.bro` for `credentials.json`, so the scoped registry injected at `~/.bro` takes effect with the service-only variable unset.
-  Deployed service images that synthesize a config directory set the variable explicitly.
-  The `docker cp`'d files land owned by the tar's uid, so the entrypoint `chown -R`s `~/.bro` to `ride` after its uid remap
-  — keeping the 0600 secret files readable by the resolver and the install hooks on both Linux (ride remapped to the host uid) and Docker for Mac (remap skipped, ride keeps its image uid).
+  Hooks come from the frozen code registry and apply only for the declared hydrated-kind list returned by the build.
+  Host mode passes that list directly to `install_hooks` with the materialized session store.
+  Container mode sends it through `BRO_INSTALL_KINDS`, and the entrypoint runs `credentials install-hooks <directory> <kind>…` from the same frozen runtime bundle.
+  A listed kind missing from the scoped store fails;
+  a listed kind with no hook is a no-op.
+  Transitively hydrated `$cred` targets are deliberately absent from the list, so a shipped reference never wires tools for its target.
+  The hook directory is recreated per launch, and two hooks contending for one file, variable, or command fail instead of silently ordering.
+- **The container contract.**
+  The scoped store is `docker cp`'d into the created-but-unstarted container and lives only in its writable layer.
+  Its files land mode `0600`, and the entrypoint re-owns the store after remapping the `ride` user's UID/GID.
 
 ### The broker channel
 

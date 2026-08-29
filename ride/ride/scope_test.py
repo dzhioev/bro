@@ -82,13 +82,23 @@ class TestScopedSecrets:
     scoped = ride.scope.scoped_secrets('scope-search', BRO_RUN_RECIPE)
     assert 'openai' in scoped.optional
 
-  def test_computing_a_scope_binds_the_projects_instances(self, tmp_path, monkeypatch):
-    # the scope keeps naming kinds; the instance each reads is bound at the resolver
+  def test_computing_a_scope_binds_the_project_and_bro_instances(self, tmp_path, monkeypatch):
     config = tmp_path / 'bro.json'
-    config.write_text(json.dumps({'projects': {str(tmp_path): {'creds': ['brog+github']}}}))
+    config.write_text(
+      json.dumps(
+        {
+          'projects': {
+            str(tmp_path): {
+              'creds': ['brog+github'],
+              'bros': {'bro-dev': {'creds': ['github+reviewer']}},
+            }
+          }
+        }
+      )
+    )
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, attachment=str(tmp_path))
-    assert scoped.selection == {'brog': 'github'}
+    assert scoped.selection == {'brog': 'github', 'github': 'reviewer'}
     assert 'brog' in scoped.required
     assert 'brog+github' not in scoped.required
     assert scoped.unbound_kinds == frozenset()
@@ -153,13 +163,42 @@ class TestSummonedCredentialScope:
     config.write_text(json.dumps({'projects': projects}))
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
 
-  def test_the_roots_attachment_selects_the_childs_instances(self, tmp_path, monkeypatch):
-    self._host_config(tmp_path, monkeypatch, {str(tmp_path): {'creds': ['brog+github']}})
+  def test_the_roots_attachment_selects_the_childs_project_bro_instances(
+    self, tmp_path, monkeypatch
+  ):
+    self._host_config(
+      tmp_path,
+      monkeypatch,
+      {
+        str(tmp_path): {
+          'creds': ['brog+github', 'github+dev'],
+          'bros': {'bro-dev': {'creds': ['github+reviewer']}},
+        }
+      },
+    )
     scoped = ride.scope.summoned_credential_scope(
       'bro-dev', CLAUDE_RECIPE, attachment=str(tmp_path), grant=[], revoke=[]
     )
-    assert scoped.selection == {'brog': 'github'}
+    assert scoped.selection == {'brog': 'github', 'github': 'reviewer'}
     assert 'brog' in scoped.required
+
+  def test_a_child_target_uses_a_different_instance_than_its_parent(self, tmp_path, monkeypatch):
+    self._host_config(
+      tmp_path,
+      monkeypatch,
+      {
+        str(tmp_path): {
+          'creds': ['github+dev'],
+          'bros': {'bro-eyebro': {'creds': ['github+reviewer']}},
+        }
+      },
+    )
+    parent = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, attachment=str(tmp_path))
+    child = ride.scope.summoned_credential_scope(
+      'bro-eyebro', CLAUDE_RECIPE, attachment=str(tmp_path), grant=[], revoke=[]
+    )
+    assert parent.selection['github'] == 'dev'
+    assert child.selection['github'] == 'reviewer'
 
   def test_a_root_whose_attachment_names_no_entry_gets_no_other_projects_instance(
     self, tmp_path, monkeypatch
@@ -176,8 +215,8 @@ class TestSummonedCredentialScope:
     scoped = ride.scope.summoned_credential_scope(
       'bro-dev', CLAUDE_RECIPE, attachment=None, grant=['brog+github'], revoke=[]
     )
-    assert 'brog+github' in scoped.required
-    assert 'brog' not in scoped.required
+    assert 'brog' in scoped.required
+    assert scoped.selection['brog'] == 'github'
 
 
 class TestPreflightScopedLaunch:
@@ -218,10 +257,11 @@ class TestPreflightScopedLaunch:
       patch('ride.scope.credentials.build_scoped_store', return_value=({}, frozenset())),
     ):
       scoped, _, _ = self._preflight(
-        ride.scope.ScopedSecrets({'brog', 'github'}, set()),
+        ride.scope.ScopedSecrets({'brog', 'github'}, set(), {'brog': 'linear'}),
         grant=['brog+github'],
       )
-    assert scoped.required == {'brog+github', 'github'}
+    assert scoped.required == {'brog', 'github'}
+    assert scoped.selection['brog'] == 'github'
 
   def test_bad_credential_override_raises_launch_scope_error(self):
     with pytest.raises(ride.scope.LaunchScopeError, match='already in the scoped credential set'):
@@ -244,7 +284,9 @@ class TestPreflightScopedLaunch:
 
   def test_an_unbound_project_kind_raises_launch_scope_error(self):
     with pytest.raises(ride.scope.LaunchScopeError, match='reads brog per project'):
-      self._preflight(ride.scope.ScopedSecrets({'brog', 'github'}, set(), frozenset({'brog'})))
+      self._preflight(
+        ride.scope.ScopedSecrets({'brog', 'github'}, set(), unbound_kinds=frozenset({'brog'}))
+      )
 
   def test_naming_the_instance_satisfies_an_unbound_project_kind(self):
     with (
@@ -252,10 +294,11 @@ class TestPreflightScopedLaunch:
       patch('ride.scope.credentials.build_scoped_store', return_value=({}, frozenset())),
     ):
       scoped, _, _ = self._preflight(
-        ride.scope.ScopedSecrets({'brog'}, set(), frozenset({'brog'})),
+        ride.scope.ScopedSecrets({'brog'}, set(), unbound_kinds=frozenset({'brog'})),
         grant=['brog+github'],
       )
-    assert scoped.required == {'brog+github'}
+    assert scoped.required == {'brog'}
+    assert scoped.selection['brog'] == 'github'
 
   def test_unresolvable_secret_raises_launch_scope_error(self):
     from bro.base import credentials
@@ -282,7 +325,8 @@ class TestLaunchViewStore:
         revoke=[],
       )
     assert store == 'the-view'
-    assert view.call_args.args[1] == {'brog+github', 'github'}
+    assert view.call_args.args[0].selection['brog'] == 'github'
+    assert view.call_args.args[1] == {'brog', 'github'}
     assert view.call_args.kwargs == {'optional': {'openai'}}
 
   def test_bad_override_raises_launch_scope_error(self):
