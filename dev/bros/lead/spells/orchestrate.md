@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.0.0
+version: 2.1.0
 ---
 
 # orchestrate
@@ -287,15 +287,23 @@ the retry is a fresh summon on the same stage task.
 
 **Summon:** `into` the integration branch · `timeout` 28800 · `grant` `@<the bro that does rollouts>` when the work needs one to go live
 
-Once every stage task is done:
+Once every stage task is done, tell the user what the last step needs from them:
+where master is a protected base, the approving review that lands the integration PR is theirs to give, and nobody in the run can supply it.
+Then summon:
 
 > Integration phase of multi-phase work coordinated by another session.
 > This workspace is on the integration branch `<integration-branch>`.
 > Sync it against origin,
 > rebase it onto `origin/master` (force-push the INTEGRATION branch with `--force-with-lease` if the rebase rewrote it — never force-push master),
 > then open ONE pull request for all the stages together with [[run pr]] based on master and land it with [[land]].
-> Skip the review round:
-> every stage PR was reviewed already, so treat this as an explicit waiver of the approval precondition rather than waiting on a second review of the same code.
+> It goes through a full review round like any other PR:
+> the stage reviews do not stand in for the one that lands this on master.
+> Record the pull request on the task at `<root-task-url>` as soon as it is open (`brog::add_comment`, topic `integration pr`), so the page carries the one that took the stages to master.
+> Where master is protected, the approving review that clears the merge has to come from the user:
+> an agent's own approval does not satisfy the base's rule, so a land refused for want of a review is the expected state there rather than a blocker.
+> Keep the review watcher running through it
+> — restart it if the chain into [[land]] already stopped it
+> — and land when the user's approval arrives.
 > Keep the task at `<root-task-url>` open whatever happens
 > — the coordinating session closes it after verification.
 > If the merged work needs a rollout to take effect, hand it off per [[land]]'s own rules and report what came back.
@@ -305,6 +313,8 @@ Once every stage task is done:
 
 Outcome:
 the work on master as a single commit, rolled out if it needed one.
+A phase whose time runs out waiting for that approval leaves the pull request open:
+re-fire it on that PR, which [[run pr]] resumes through its `pr` argument, rather than opening a second one.
 When the phase reports a rollout it could not hand off
 — nobody in its allow-list to do it
 — relay the exact command to the user and confirm it ran before verifying.
