@@ -135,12 +135,13 @@ class TestLiveRecording:
     workspace = tmp_path / 'ws'
     projects = claude_dir / 'projects' / encode_project_path(workspace)
     projects.mkdir(parents=True)
-    # an empty registry leaves `trails` unresolvable, which selects local storage
-    registry = tmp_path / 'credentials.json'
-    registry.write_text('{}')
+    # an empty store leaves `trails` unresolvable, which selects local storage
+    credential_store = tmp_path / 'credentials'
+    credential_store.mkdir()
+    (credential_store / 'creds.json').write_text('{}')
     monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(claude_dir))
-    monkeypatch.setenv('CREDENTIALS_REGISTRY', str(registry))
+    monkeypatch.setenv('BRO_STORE', str(credential_store))
     monkeypatch.setenv('RIDE_COMMAND', 'ride along ws')
     segment = projects / 'seg-1.jsonl'
     segment.write_text('\n'.join(_TRANSCRIPT) + '\n')

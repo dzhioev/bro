@@ -10,10 +10,11 @@ import ride.claude.claude_auth as ride_claude_auth
 def config_path(monkeypatch, tmp_path):
   from bro.base import credentials
 
-  monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path))
-  monkeypatch.setattr(credentials, 'BRO_DIR', str(tmp_path))
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path))
   monkeypatch.setattr(credentials, '_default_store', None)
-  return tmp_path / 'anthropic.json'
+  material = tmp_path / credentials.MATERIAL_DIR
+  material.mkdir()
+  return material / 'anthropic.cred'
 
 
 class TestLoadAnthropicKey:
@@ -36,7 +37,7 @@ class TestLoadAnthropicKey:
 class TestApplyClaudeAuth:
   def test_present_exports_token(self, config_path):
     # the `claude_code` secret is a scalar token file; the store strips it.
-    (config_path.parent / 'claude_code_oauth_token').write_text('oauth-tok\n')
+    (config_path.parent / 'claude_code.cred').write_text('oauth-tok\n')
     env: dict[str, str] = {}
     ride_claude_auth.apply_claude_auth(env)
     assert env == {'CLAUDE_CODE_OAUTH_TOKEN': 'oauth-tok'}
@@ -55,7 +56,7 @@ class TestApplyClaudeAuth:
   def test_scrubs_outranking_auth_vars(self, config_path):
     # inherited api-key / bearer vars outrank CLAUDE_CODE_OAUTH_TOKEN in claude's
     # credential precedence, so they must not leak into the session
-    (config_path.parent / 'claude_code_oauth_token').write_text('oauth-tok')
+    (config_path.parent / 'claude_code.cred').write_text('oauth-tok')
     env = {
       'ANTHROPIC_API_KEY': 'sk-ant-stale',
       'ANTHROPIC_AUTH_TOKEN': 'stale-bearer',
@@ -67,7 +68,7 @@ class TestApplyClaudeAuth:
   def test_overwrites_inherited_stale_token(self, config_path):
     # a CLAUDE_CODE_OAUTH_TOKEN exported by the launching shell loses to the
     # freshly resolved secret
-    (config_path.parent / 'claude_code_oauth_token').write_text('oauth-tok')
+    (config_path.parent / 'claude_code.cred').write_text('oauth-tok')
     env = {'CLAUDE_CODE_OAUTH_TOKEN': 'stale-tok'}
     ride_claude_auth.apply_claude_auth(env)
     assert env == {'CLAUDE_CODE_OAUTH_TOKEN': 'oauth-tok'}

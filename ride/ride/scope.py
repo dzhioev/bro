@@ -61,13 +61,11 @@ BRO_RUN_RECIPE = ScopeRecipe(
 
 
 def bind_project_credentials(attachment: Optional[str]) -> Optional[dict[str, Optional[str]]]:
-  """bind credential resolution to the project the launch operates, named by its
-  repository attachment (a checkout path or a normalized git URL). None when the
-  launch binds no project entry: detached, or an attachment `~/.bro.json` does
-  not name."""
-  selection = None if attachment is None else host_config.project_instances(attachment)
-  credentials.select_instances(selection if selection is not None else {})
-  return selection
+  """Return the provisional selection for the launch's repository attachment.
+
+  None means a detached launch or an attachment `~/.bro.json` does not name.
+  """
+  return None if attachment is None else host_config.project_instances(attachment)
 
 
 def scoped_secrets(
@@ -87,10 +85,10 @@ def scoped_secrets(
   `--llm`), whose key the scope hydrates in place of the bro's own — a run
   against another provider needs that provider's key, not the declared one.
 
-  computing a scope also binds this process to the operated project's instance
-  selection (`bind_project_credentials`) — the scope names kinds, and the launch
-  hydrates whichever instance the project reads. Where that binds nothing, the
-  host's per-project kinds ride along as the scope's `unbound_kinds`.
+  The scope carries the operated project's instance selection to each explicit
+  store the launch constructs.
+  Where no project entry supplies a selection, the host's per-project kinds ride
+  along as `unbound_kinds`.
   """
   from bro.registry import create_bro
 
@@ -108,7 +106,12 @@ def scoped_secrets(
   if recipe.llm_key:
     required.update((llm_spec if llm_spec is not None else bro.llm_spec).needed_secrets())
   optional.update(bro.optional_secrets(harness=recipe.harness))
-  return ScopedSecrets(required=required, optional=optional, unbound_kinds=unbound)
+  return ScopedSecrets(
+    required=required,
+    optional=optional,
+    unbound_kinds=unbound,
+    selection={} if selection is None else dict(selection),
+  )
 
 
 def summoned_credential_scope(
@@ -152,13 +155,26 @@ def split_scope_overrides(values: list[str]) -> tuple[list[str], list[str]]:
   return credential_names, bro_names
 
 
+def credential_store(scoped: ScopedSecrets) -> credentials.Store:
+  """The ambient store under a launch's explicit selection."""
+  return credentials.Store(credentials.default_registry(), credentials.STORE_DIR, scoped.selection)
+
+
+class HydratedStore(dict[str, bytes]):
+  """Scoped-store files carrying the declared kinds that resolved."""
+
+  def __init__(self, files: dict[str, bytes], kinds: frozenset[str]):
+    super().__init__(files)
+    self.kinds = kinds
+
+
 def preflight_scoped_launch(
   scoped: ScopedSecrets,
   bro_name: str,
   *,
   grant: list[str],
   revoke: list[str],
-) -> tuple[ScopedSecrets, set[str], dict[str, bytes]]:
+) -> tuple[ScopedSecrets, set[str], HydratedStore]:
   """the scope preflight every launch surface runs before creating anything
   (worktree, container, workspace dir): split the unified grant/revoke overrides
   (`split_scope_overrides`), finalize the credential scope
@@ -178,8 +194,10 @@ def preflight_scoped_launch(
   with launch_scope_errors():
     scoped, grant_bros, revoke_bros = _finalize_credential_scope(scoped, grant, revoke)
     may_summon = summon_allow_list(bro_name, grant=grant_bros, revoke=revoke_bros)
-    store = credentials.build_scoped_store(scoped.required, optional=scoped.optional)
-  return scoped, may_summon, store
+    files, hydrated_kinds = credentials.build_scoped_store(
+      credential_store(scoped), scoped.required, optional=scoped.optional
+    )
+  return scoped, may_summon, HydratedStore(files, hydrated_kinds)
 
 
 def _finalize_credential_scope(
@@ -207,4 +225,6 @@ def launch_view_store(
   itself being a plain one."""
   with launch_scope_errors():
     finalized, _, _ = _finalize_credential_scope(scoped, grant, revoke)
-    return credentials.scoped_view_store(finalized.required, optional=finalized.optional)
+    return credentials.scoped_view_store(
+      credential_store(finalized), finalized.required, optional=finalized.optional
+    )

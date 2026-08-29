@@ -17,24 +17,24 @@ def test_the_package_carrying_the_version_is_owned_by_no_one_distribution():
   assert spec is not None and spec.origin is None, f'{package} is a regular package now'
 
 
-def test_bro_configs_dir_reads_the_environment(tmp_path):
-  value = str(tmp_path / 'service-configs')
+def test_bro_store_reads_the_environment(tmp_path):
+  value = str(tmp_path / 'store')
   result = subprocess.run(
-    [sys.executable, '-c', 'from bro.base import configs; print(configs.BRO_CONFIGS_DIR)'],
+    [sys.executable, '-c', 'from bro.base import configs; print(configs.STORE_DIR)'],
     check=True,
     capture_output=True,
     text=True,
-    env={**os.environ, 'BRO_CONFIGS_DIR': value},
+    env={**os.environ, 'BRO_STORE': value},
   )
   assert result.stdout.strip() == value
 
 
-def test_empty_bro_configs_dir_fails_fast():
+def test_empty_bro_store_fails_fast():
   result = subprocess.run(
     [sys.executable, '-c', 'from bro.base import configs'],
     capture_output=True,
     text=True,
-    env={**os.environ, 'BRO_CONFIGS_DIR': ''},
+    env={**os.environ, 'BRO_STORE': ''},
   )
   assert result.returncode != 0
-  assert 'BRO_CONFIGS_DIR must not be empty' in result.stderr
+  assert 'BRO_STORE must not be empty' in result.stderr

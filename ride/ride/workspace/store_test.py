@@ -70,21 +70,21 @@ class TestLogScopedSecrets:
 
 
 class TestMaterializeScopedStore:
-  def test_writes_store_with_restrictive_modes_and_returns_registry(self, tmp_path):
-    store = {'credentials.json': b'{}', 'github.cred': b'tok'}
-    registry = workspace_store.materialize_scoped_store(store, tmp_path / '.bro')
-    assert registry == tmp_path / '.bro' / 'credentials.json'
-    assert (tmp_path / '.bro' / 'github.cred').read_bytes() == b'tok'
-    assert (tmp_path / '.bro').stat().st_mode & 0o777 == 0o700
-    assert (tmp_path / '.bro' / 'github.cred').stat().st_mode & 0o777 == 0o600
+  def test_writes_store_with_restrictive_modes_and_returns_directory(self, tmp_path):
+    store = {'creds.json': b'{}', 'creds/github.cred': b'tok'}
+    directory = workspace_store.materialize_scoped_store(store, tmp_path / '.bro')
+    assert directory == tmp_path / '.bro'
+    assert (directory / 'creds/github.cred').read_bytes() == b'tok'
+    assert directory.stat().st_mode & 0o777 == 0o700
+    assert (directory / 'creds/github.cred').stat().st_mode & 0o777 == 0o600
 
   def test_recreates_the_directory_so_a_dropped_secret_does_not_linger(self, tmp_path):
     directory = tmp_path / '.bro'
     workspace_store.materialize_scoped_store(
-      {'credentials.json': b'{}', 'aws.cred': b'v'}, directory
+      {'creds.json': b'{}', 'creds/aws.cred': b'v'}, directory
     )
-    workspace_store.materialize_scoped_store({'credentials.json': b'{}'}, directory)
-    assert not (directory / 'aws.cred').exists()
+    workspace_store.materialize_scoped_store({'creds.json': b'{}'}, directory)
+    assert not (directory / 'creds/aws.cred').exists()
 
 
 class TestBroTarball:
@@ -97,24 +97,25 @@ class TestBroTarball:
 
   def test_prefixes_bro_and_round_trips_content(self):
     blob = workspace_store._bro_tarball(
-      {'notion.json': b'{"token": "t"}', 'credentials.json': b'{}'}
+      {'creds/notion.cred': b'{"token": "t"}', 'creds.json': b'{}'}
     )
     members = self._entries(blob)
-    assert set(members) == {'.bro', '.bro/notion.json', '.bro/credentials.json'}
+    assert set(members) == {'.bro', '.bro/creds', '.bro/creds/notion.cred', '.bro/creds.json'}
 
     import io
     import tarfile
 
     with tarfile.open(fileobj=io.BytesIO(blob), mode='r') as tar:
-      extracted = tar.extractfile('.bro/notion.json')
+      extracted = tar.extractfile('.bro/creds/notion.cred')
       assert extracted is not None
       assert extracted.read() == b'{"token": "t"}'
 
   def test_modes_and_owner(self):
-    members = self._entries(workspace_store._bro_tarball({'notion.json': b'x'}))
+    members = self._entries(workspace_store._bro_tarball({'creds/notion.cred': b'x'}))
     assert members['.bro'].isdir()
     assert members['.bro'].mode == 0o700
-    assert members['.bro/notion.json'].mode == 0o600
+    assert members['.bro/creds'].isdir()
+    assert members['.bro/creds/notion.cred'].mode == 0o600
     # owned by the host uid/gid — the same uid the entrypoint remaps ride to on Linux
-    assert members['.bro/notion.json'].uid == workspace_store.os.getuid()
-    assert members['.bro/notion.json'].gid == workspace_store.os.getgid()
+    assert members['.bro/creds/notion.cred'].uid == workspace_store.os.getuid()
+    assert members['.bro/creds/notion.cred'].gid == workspace_store.os.getgid()

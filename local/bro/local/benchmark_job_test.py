@@ -294,6 +294,6 @@ def test_the_local_distribution_contributes_the_harbor_credential_kind():
   [entry] = entries
   assert entry.value == 'bro.local.credentials:HARBOR'
   assert entry.load() == {
-    'sources': [{'file': 'harbor_api_key'}],
+    'description': 'Harbor API credentials',
     'install': {'env': {'HARBOR_API_KEY': {'secret': '{{insert #name}}'}}},
   }

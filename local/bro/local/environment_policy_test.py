@@ -148,8 +148,8 @@ def test_every_pytest_root_rebuilds_the_environment():
 
 
 def test_no_run_reaches_a_credential_store():
-  searched = [directory for directory in credentials._search_dirs() if Path(directory).is_dir()]
-  assert searched == [], (
-    f'credential search directories a suite reaches, so it resolves what their owner holds '
-    f'rather than what a test installed: {searched}'
+  store = Path(credentials.STORE_DIR)
+  assert not store.is_dir(), (
+    f'credential store a suite reaches, so it resolves what its owner holds rather than '
+    f'what a test installed: {store}'
   )
