@@ -93,6 +93,10 @@ class TestPreconditionError:
     error = land_pr._precondition_error(_pr(reviewDecision='CHANGES_REQUESTED'), True, False)
     assert error is not None and 'changes requested' in error
 
+  def test_a_review_the_base_requires_is_refused_even_with_no_review(self):
+    error = land_pr._precondition_error(_pr(reviewDecision='REVIEW_REQUIRED'), True, False)
+    assert error is not None and 'REVIEW_REQUIRED' in error
+
   def test_unchecked_boxes(self):
     pr = _pr(body='## Test plan\n- [ ] verify manually')
     error = land_pr._precondition_error(pr, False, False)

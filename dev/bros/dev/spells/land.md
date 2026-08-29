@@ -10,7 +10,7 @@ then records a `merged` comment on the task and closes it to done unless the use
 On APPROVED, [[run pr]] chains into this spell.
 Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this spell.
 
-version: 4.0.0
+version: 4.1.0
 ---
 
 # land
@@ -77,6 +77,10 @@ Waiver flags map to explicit user statements from this session
 - `--no-review` — the user said to merge without waiting for approval.
   A `CHANGES_REQUESTED` review is refused regardless;
   that needs the review resolved, not a waiver.
+  So is a review the base branch itself requires (`reviewDecision=REVIEW_REQUIRED`):
+  the waiver reaches this command's own precondition, never the rule GitHub enforces at the merge.
+  Only an approving review clears that one, and only from an identity GitHub grants standing on the base
+  — an approval that leaves `reviewDecision` unmoved did not count.
 - `--allow-unchecked` — the user said to land despite unchecked test-plan boxes.
   Otherwise an unchecked box means nobody verified that item:
   surface the failure output (it lists the boxes) and wait.
@@ -134,5 +138,7 @@ Then emit everything in a single response
 
 ## Safety rules
 
-- Never bypass GitHub merge requirements beyond the two explicit waiver flags, and only with the user's say-so from this session.
+- The waiver flags drop this command's own preconditions and nothing beyond them:
+  where the repository's rules block a merge, GitHub refuses it whatever was waived.
+  Each of them takes the user's say-so from this session.
 - Never `--admin` your way past branch protections.
