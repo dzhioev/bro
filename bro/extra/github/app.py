@@ -71,15 +71,15 @@ class Source(credentials.MintingSource):
 
   TYPE = 'github_app'
 
-  def __init__(self, file: str):
-    super().__init__(file)
+  def __init__(self):
+    super().__init__()
     self._unpublished: Optional[dict] = None
 
-  def fetch(self) -> Optional[str]:
-    config = self.config()
+  def fetch(self, material_path: Path) -> Optional[str]:
+    config = self.config(material_path)
     if config is None:
       return None
-    held = self._usable(self._published()) or self._usable(self._unpublished)
+    held = self._usable(self._published(material_path)) or self._usable(self._unpublished)
     if held is not None:
       return held.value
     minted = self.mint(config)
@@ -89,7 +89,7 @@ class Source(credentials.MintingSource):
       'minted_at': datetime.now(UTC).isoformat(),
     }
     self._unpublished = hold
-    self._publish(hold)
+    self._publish(material_path, hold)
     return minted.value
 
   def _usable(self, hold: Optional[dict]) -> Optional[credentials.Minted]:
@@ -103,20 +103,17 @@ class Source(credentials.MintingSource):
       return None
     return credentials.Minted(hold['token'], expires_at)
 
-  def _held_path(self) -> Path:
-    config_path = self._config_path()
-    if config_path is None:
-      raise ValueError(f'github_app config {self.file!r} disappeared while minting')
-    return config_path.with_name(f'{config_path.name}.minted')
+  def _held_path(self, material_path: Path) -> Path:
+    return material_path.with_name(f'{material_path.name}.minted')
 
-  def _published(self) -> Optional[dict]:
+  def _published(self, material_path: Path) -> Optional[dict]:
     """the hold this store carries, or None when the next read must mint one.
 
     a hold this version cannot read is a miss rather than an error: the file is
     derived state whose shape travels with the code, so an older one left by a
     previous version must re-mint instead of failing every read on the host.
     """
-    path = self._held_path()
+    path = self._held_path(material_path)
     if not path.is_file():
       return None
     try:
@@ -129,8 +126,8 @@ class Source(credentials.MintingSource):
       return None
     return hold
 
-  def _publish(self, hold: dict) -> None:
-    path = self._held_path()
+  def _publish(self, material_path: Path, hold: dict) -> None:
+    path = self._held_path(material_path)
     # published by rename so a concurrent reader sees one whole token or none;
     # two processes racing to mint cost one extra mint, not a torn file
     staged = path.with_name(f'{path.name}.{os.getpid()}')
@@ -149,14 +146,12 @@ class Source(credentials.MintingSource):
   def mint(self, config: dict) -> credentials.Minted:
     missing = sorted({'app_id', 'installation_id', 'private_key'} - set(config))
     if len(missing) > 0:
-      raise ValueError(
-        f'github_app config {self.file!r} is missing {", ".join(map(repr, missing))}'
-      )
+      raise ValueError(f'github_app config is missing {", ".join(map(repr, missing))}')
     for key in ('app_id', 'installation_id'):
       if not isinstance(config[key], (str, int)):
-        raise ValueError(f'github_app config {self.file!r}: {key!r} must be a string or number')
+        raise ValueError(f'github_app config: {key!r} must be a string or number')
     if not isinstance(config['private_key'], str):
-      raise ValueError(f"github_app config {self.file!r}: 'private_key' must be a string")
+      raise ValueError("github_app config: 'private_key' must be a string")
     minted = mint_installation_token(
       app_id=str(config['app_id']),
       installation_id=str(config['installation_id']),

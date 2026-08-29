@@ -10,10 +10,11 @@ from bro.datasources import web_search as web_search
 
 
 @pytest.fixture
-def brave_store(tmp_path: Path, monkeypatch) -> credentials.Store:
-  monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path))
-  (tmp_path / 'brave.json').write_text(json.dumps({'api_key': 'k'}))
-  return credentials.Store(credentials.default_registry())
+def brave_store(tmp_path: Path) -> credentials.Store:
+  material = tmp_path / credentials.MATERIAL_DIR / 'brave.cred'
+  material.parent.mkdir()
+  material.write_text(json.dumps({'api_key': 'k'}))
+  return credentials.Store(credentials.default_registry(), tmp_path, {})
 
 
 @pytest.mark.asyncio
@@ -117,9 +118,10 @@ async def test_fetch_content_raises_when_extraction_empty(brave_store):
       await web_search.WebSearch(store=brave_store)._fetch_content('https://example.com/empty')
 
 
-def test_api_key_loaded_lazily(tmp_path: Path, monkeypatch):
+def test_api_key_loaded_lazily(tmp_path: Path):
   # ctor should not read the credential — needed so `bro list` / `bro show` work
   # without the key present
-  monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path))
-  source = web_search.WebSearch(store=credentials.Store(credentials.default_registry()))
+  source = web_search.WebSearch(
+    store=credentials.Store(credentials.default_registry(), tmp_path, {})
+  )
   assert source._api_key is None

@@ -31,14 +31,17 @@ def report_scope(
   try:
     selection = bind_project_credentials(attachment)
     scoped = scoped_secrets(bro_name, recipe, attachment=attachment)
+    store = credentials.Store(
+      credentials.default_registry(), credentials.STORE_DIR, {} if selection is None else selection
+    )
   except (LaunchScopeError, ValueError) as error:
     print(f'cannot compute the scope: {error}')
     return 1
   print(f'repository: {repo.identity if repo is not None else "(detached)"}')
   print(f'bro:        {bro_name} ({recipe.name})')
-  _print_tier('required', sorted(scoped.required), selection, scoped.unbound_kinds)
+  _print_tier('required', sorted(scoped.required), selection, scoped.unbound_kinds, store)
   _print_tier(
-    'optional', sorted(scoped.optional - scoped.required), selection, scoped.unbound_kinds
+    'optional', sorted(scoped.optional - scoped.required), selection, scoped.unbound_kinds, store
   )
   return 0
 
@@ -48,6 +51,7 @@ def _print_tier(
   names: list[str],
   selection: Optional[dict[str, Optional[str]]],
   unbound: frozenset[str],
+  store: credentials.Store,
 ) -> None:
   if len(names) == 0:
     return
@@ -56,7 +60,7 @@ def _print_tier(
     if name in unbound:
       print(f'  {name:<14}{"per project, unbound":<24}REFUSED')
       continue
-    state = 'ok' if credentials.available(name) else 'MISSING'
+    state = 'ok' if store.available(name) else 'MISSING'
     print(f'  {name:<14}{_reads(name, selection):<24}{state}')
 
 

@@ -39,7 +39,8 @@ fi
 # container's own layer, so it dies with the container the way the scoped store
 # does. captured before the eval, so failing hooks abort the launch instead of
 # becoming a successful empty eval.
-session_environment="$(credentials install-hooks "$HOME/.bro-environment")"
+read -ra install_kinds <<< "${BRO_INSTALL_KINDS:-}"
+session_environment="$(credentials install-hooks "$HOME/.bro-environment" "${install_kinds[@]}")"
 eval "$session_environment"
 
 # Repository setup runs only for an explicitly attached launch.

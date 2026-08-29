@@ -62,7 +62,6 @@ def _pin_credential_gate_open(request, monkeypatch):
 @pytest.fixture(autouse=True)
 def _isolate_host_config(monkeypatch, tmp_path):
   monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(tmp_path / 'absent.json'))
-  monkeypatch.setattr('bro.base.credentials._selected_instances', {})
 
 
 @pytest.fixture(autouse=True)

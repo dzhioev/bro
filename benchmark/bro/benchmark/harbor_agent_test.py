@@ -49,15 +49,12 @@ def _completed(command, returncode: int) -> subprocess.CompletedProcess:
 
 @pytest.fixture
 def store(monkeypatch, tmp_path: Path) -> Path:
-  """a resolver bounded to a generated registry holding one instance of one kind."""
-  directory = tmp_path / 'configs'
-  directory.mkdir()
-  (directory / 'benchmark.json').write_text(KEY)
-  (directory / 'credentials.json').write_text(
-    json.dumps({INSTANCE: {'sources': [{'file': 'benchmark.json'}]}})
-  )
-  monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(directory))
-  monkeypatch.setattr(credentials, 'BRO_DIR', str(tmp_path / 'absent'))
+  """An exclusive store holding one instance of one kind."""
+  directory = tmp_path / 'store'
+  material = directory / credentials.MATERIAL_DIR / f'{INSTANCE}.cred'
+  material.parent.mkdir(parents=True)
+  material.write_text(KEY)
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(directory))
   monkeypatch.setattr(credentials, '_default_store', None)
   return directory
 
@@ -228,7 +225,7 @@ def test_the_run_environment_points_at_the_store_bundle_and_record_root(tmp_path
   environment = agent(tmp_path, bro='terminal').run_env()
 
   assert environment == {
-    'BRO_CONFIGS_DIR': str(STORE_DIR),
+    'BRO_STORE': str(STORE_DIR),
     'BRO_USAGE_FILE': '/logs/agent/usage.json',
     'SSL_CERT_FILE': str(BUNDLE.ca_bundle),
     'XDG_DATA_HOME': '/logs/agent',
@@ -237,22 +234,22 @@ def test_the_run_environment_points_at_the_store_bundle_and_record_root(tmp_path
 
 def test_the_store_carries_the_named_instance_under_its_kind(store):
   with scoped_store(INSTANCE) as directory:
-    registry = json.loads((directory / 'credentials.json').read_text())
-    assert set(registry) == {CREDENTIAL}
-    assert (directory / f'{CREDENTIAL}.cred').read_text() == KEY
+    sources = json.loads((directory / 'creds.json').read_text())
+    assert sources == {}
+    assert (directory / 'creds' / f'{CREDENTIAL}.cred').read_text() == KEY
 
 
 def test_the_store_is_private_while_it_exists_and_gone_after(store):
   with scoped_store(INSTANCE) as directory:
     assert directory.stat().st_mode & 0o777 == 0o700
-    assert (directory / f'{CREDENTIAL}.cred').stat().st_mode & 0o777 == 0o600
+    assert (directory / 'creds' / f'{CREDENTIAL}.cred').stat().st_mode & 0o777 == 0o600
     scratch = directory.parent
 
   assert not scratch.exists()
 
 
 def test_a_credential_the_host_cannot_resolve_fails_before_the_container(store):
-  with pytest.raises(ValueError, match='trails'):
+  with pytest.raises(credentials.SecretNotFound, match='trails'):
     with scoped_store('trails'):
       pass
 

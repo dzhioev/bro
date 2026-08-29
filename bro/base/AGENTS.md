@@ -23,40 +23,20 @@ run those with `--help` for flags.
   the console-script name resolves to its module through the two names `sync-scripts` publishes every CLI under,
   and the parser is captured by intercepting the `parse` call the module's `main` ends in, so nothing the command does ever runs.
 - `credentials.py` — client-side secret resolver (`__cli_name__ = 'credentials'`).
-  `get` / `get_json` / `try_get` / `available` resolve a kind-addressed secret against an ordered `Source` list, rejecting `kind+instance` names
-  — always the kind's default-instance entry, the only shape a generated scoped registry carries;
-  the storage-addressed `get_instance` / `get_instance_json` / `try_get_instance` / `available_instance` siblings read a registry entry by its stored name, plain (the kind's default instance) or `kind+instance`,
-  and the `get` / `list` CLI defaults to kind addressing with `--instance` switching (`known_names` lists the registry):
-  the stored types `local` (searching `BRO_CONFIGS_DIR` when set, then `~/.bro`)
-  and `ssm` (reading an AWS SSM parameter from the region the source names),
-  plus minting types discovered lazily by source `type` through `bro.credential_sources` (`github_app` → `bro/extra/github/app.py`)
-  — `MintingSource` subclasses deriving short-lived values from a minting config file, held on the source until near expiry;
-  the store leaves a minted secret, like any secret whose references reach one, uncached so every read observes a usable value;
-  a json secret's `{"$cred": ...}` reference nodes expand during the resolve (semantics in the module docstring), so consumers see the effective, self-contained value;
-  the default registry is the framework's built-in entries merged first with installed `bro.credentials` entry points and then per-name with a host-local `registry.json` found along the same search path (`host_registry`
-  — `kind+instance` variant entries and sources-only kind overrides inherit the kind's install-hook template;
-  scheme in `bro/setup/AGENTS.md`), a generated `credentials.json` overrides it wholesale, and `CREDENTIALS_REGISTRY=<file>` overrides both for one process,
-  its directory joining the local search path first (so a materialized scoped store resolves wherever it lands).
-  `select_instances` layers a process-scoped instance selection onto that host registry
-  — the same statement a kind entry's `instance` selector makes durably, for a caller holding one the registry cannot carry itself (a launch's operated project), with a None value naming the kind's own entry.
-  `build_scoped_store` emits an in-memory per-session store (`ride` copies it into a container, or materializes it into a host session's state dir;
-  at most one instance per kind, and a `kind+instance` variant materializes under its kind name
-  — entry, cred file, and re-rendered install hook
-  — so the scoped namespace is kinds-only;
-  each secret's winning source picks its scoped representation via `Source.materialize_scoped`
-  — stored text as a plain local file,
-  a minting source's config so the session mints fresh on read,
-  and stored text whose reference chain reaches a minting source raw with references intact, pulling each referenced kind into the scope with it,
-  so the session re-expands and re-mints per read);
-  `scoped_view_store` is its lazy sibling
-  — a kinds-only read-through `Store` over the same selection rules (shared `_scoped_selection`), each read resolving on demand through the selected entry's own sources,
-  its `$cred` nodes expanding against the whole registry the way hydration's do,
-  for host-side code that reads a credential under a scope's binding without hydrating a store.
-  `apply_grant_revoke` layers strict per-session grant/revoke overrides onto a computed name set (scoped credential sets, summon allow-lists),
-  and `install_hooks` applies a registry's wiring for secrets a tool reads from outside the resolver (git, the `gh` and aws CLIs)
-  — a hook declares files, environment and shadowed commands rather than code to run, so applying one writes nothing but files under the session directory it is given and returns the environment for the caller to apply.
+  The code registry maps kinds to a required description and an optional install hook;
+  it is assembled from `bro/base/registry.json` and installed `bro.credentials` contributions, and rejects every source-bearing or otherwise unknown field with the store migration named.
+  `Store(registry, store_dir, selection)` reads one exclusive directory:
+  plain material is `creds/<name>.cred`, and `creds.json` may annotate one typed source per name (`ssm` or a `bro.credential_sources` minting type).
+  `get` / `get_json` / `try_get` / `available` address kinds through the explicit selection;
+  the `get_instance` siblings address the stored name exactly.
+  `$cred` references expand during resolution, with kind targets applying the same selection and instance targets reading storage directly.
+  `known_names()` is the code registry's kinds, while the CLI's `--instance` list enumerates the store directory and typed annotations.
+  `build_scoped_store(store, names, optional=…)` emits `creds/<kind>.cred` plus typed annotations in `creds.json`, and reports the declared kinds that resolved separately from transitive `$cred` pulls.
+  `scoped_view_store` is the lazy, kinds-bounded sibling over the passed store.
+  `install_hooks(registry, kinds, store, directory, env)` applies only the named kinds and resolves hook values through that store.
+  `CREDENTIALS_REGISTRY`, `BRO_CONFIGS_DIR`, `registry.json`, and `credentials.json` are retired resolver inputs and fail loudly.
   Schemas live in `bro/setup/AGENTS.md`.
-- `configs.py` — the explicit `BRO_CONFIGS_DIR`, host-local `~/.bro`, the `~/.bro.json` host config beside it, and the installed bro distribution version shared by credential consumers and trail records.
+- `configs.py` — the exclusive `BRO_STORE` directory (default `~/.bro`), the `~/.bro.json` host config beside it, and the installed bro distribution version shared by credential consumers and trail records.
 - `host_config.py` — the host's launch policy (`~/.bro.json`):
   `project_instances(attachment)` reads the `kind+instance` selections recorded for a repository attachment (checkout path or git URL, normalized through `git_url.py`), None where no entry names it,
   and `project_scoped_kinds()` names the kinds some entry selects for
@@ -64,7 +44,7 @@ run those with `--help` for flags.
   the caller names the attachment, since resolving the operated repo belongs to the launch layer;
   `llm_presets()` reads the host-wide `--llm` preset names (`bro/launch/llm_flags.py` merges them over the operated project's own table).
   The scheme and its precedence are `bro/setup/AGENTS.md`, "Host config";
-  `ride.scope.bind_project_credentials` binds the result through `credentials.select_instances`
+  `ride.scope.scoped_secrets` carries the result to each explicitly constructed credential store
 - `git_url.py` — git remote URL grammar:
   `is_git_url`, `normalize_git_url` (the canonical spelling two spellings of one remote compare on), and `git_url_path`.
   Pure string handling, so callers that never invoke git
@@ -83,7 +63,7 @@ run those with `--help` for flags.
   a test asserting that something was reaped blocks on its EOF instead of polling a pid the kernel is free to recycle underneath it.
 - `suite_environment.py` — `rebuild_environment()`, which leaves a test process holding none of the session it started in:
   the framework's own environment namespaces cleared,
-  the credential resolver's local search roots pinned off every store,
+  the credential resolver's exclusive store pinned at an absent path,
   the zone pinned,
   the log level reset.
   It ships, so a pytest root outside this repository imports it the same way.
