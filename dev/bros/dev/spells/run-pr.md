@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 5.4.0
+version: 5.5.0
 ---
 
 # run-pr
@@ -108,7 +108,7 @@ the suite is the mandatory gate (step 9), run once on the final rebased tree
 
 {{iff #may_summon contains eyebro}}
 **Policy audit**:
-owned by the eyebro's independent review of the whole branch ("Pre-review by the eyebro", after step 6)
+owned by the eyebro's independent review of the whole branch ("Pre-review by the eyebro", after step 8)
 — nothing to audit per commit.
 {{else}}
 **Policy audit**:
@@ -193,28 +193,6 @@ Repeat steps 5–6 for each logical commit.
 To verify a new test catches a bug (revert-and-rerun), use `git stash push <path-to-fix-file>`
 — bare `git stash` would also hide the new test, masking the verification.
 
-{{when #may_summon contains eyebro}}
-
-### Pre-review by the eyebro
-
-The branch's style audit:
-one independent review of the whole change, paid once before the PR instead of per commit.
-
-With the branch committed, [[ask]] the eyebro for a style review and wait on the findings
-— the child bases on this workspace's HEAD and shares no context, so the relayed request names what to diff against:
-
-    [[review diff of HEAD against origin/<base>, in terms of the development style policy and the repository's own guides]]
-
-Handle the findings at pre-PR prices:
-fix what is right with further commits (steps 5–6), and let go of what you'd only debate
-— the eyebro reviews the PR next ("Hand the review to the eyebro"), where a finding it still holds returns as a thread.
-No identity constraint binds this step:
-a diff review approves nothing.
-If the ask is denied or fails, audit the branch yourself before moving on:
-call `dev-style-source::read` and audit `git diff origin/<base>..HEAD` against the returned policy, stating the verdict as visible output.
-
-{{end}}
-
 ### 7. Rebase onto the base branch
 
 ```bash
@@ -295,6 +273,33 @@ Whatever the session spends after the last fold
 — the approval wait, the landing turns
 — is credited to nothing;
 a branch that is final before review cannot account for the work that follows it.
+
+{{when #may_summon contains eyebro}}
+
+### Pre-review by the eyebro
+
+The branch's style audit:
+one independent review of the whole change, paid once before the PR instead of per commit.
+
+It runs after the fold because the branch now *is* what `<base>` will carry:
+the split, the messages, and the tree the reviewer reads are the ones that land.
+A review before the fold judges working commits the fold discards.
+
+[[ask]] the eyebro for a style review and wait on the findings
+— the child bases on this workspace's HEAD and shares no context, so the relayed request names what to diff against:
+
+    [[review diff of HEAD against origin/<base>, in terms of the development style policy and the repository's own guides]]
+
+Handle the findings at pre-PR prices:
+fix what is right with further commits (steps 5–6) and re-fold (step 8), the round every review on the open PR takes too (step 15);
+let go of what you'd only debate
+— the eyebro reviews the PR next ("Hand the review to the eyebro"), where a finding it still holds returns as a thread.
+No identity constraint binds this step:
+a diff review approves nothing.
+If the ask is denied or fails, audit the branch yourself before moving on:
+call `dev-style-source::read` and audit `git diff origin/<base>..HEAD` against the returned policy, stating the verdict as visible output.
+
+{{end}}
 
 ### 9. The mandatory gate: the full test suite
 
