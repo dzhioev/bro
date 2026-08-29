@@ -677,17 +677,33 @@ class TestReferences:
     with pytest.raises(ValueError, match=r'cycle: a -> a'):
       store.get('a')
 
-  def test_unresolvable_reference_raises(self, configs_dir: Path):
+  def test_unknown_reference_target_makes_referrer_absent(self, configs_dir: Path):
     store = self._store(configs_dir, {'config': {'token': {'$cred': 'nope'}}})
-    with pytest.raises(ValueError, match="'config' references 'nope', which does not resolve"):
-      store.get('config')
+    assert store.resolve('config') is None
+    assert store.try_get('config') is None
+    assert store.try_get_instance('config') is None
+    assert store.available('config') is False
+    assert store.available_instance('config') is False
 
-  def test_broken_reference_raises_even_via_try_get(self, configs_dir: Path):
-    # try_get is non-raising for *absent* secrets only; a present secret with a
-    # broken reference is corruption, not absence
+  def test_strict_reads_name_the_empty_reference(self, configs_dir: Path):
     store = self._store(configs_dir, {'config': {'token': {'$cred': 'nope'}}})
-    with pytest.raises(ValueError, match='does not resolve'):
-      store.try_get('config')
+    for read in (store.get, store.get_instance):
+      with pytest.raises(credentials.SecretNotFound) as exception:
+        read('config')
+      assert exception.value.name == 'nope'
+
+  def test_known_empty_reference_target_makes_referrer_absent(self, configs_dir: Path):
+    _write(configs_dir, 'config.secret', {'token': {'$cred': 'github'}})
+    store = credentials.Store(
+      {
+        'config': credentials.Secret('config', [credentials.LocalSource('config.secret')]),
+        'github': credentials.Secret('github', [credentials.LocalSource('absent.secret')]),
+      }
+    )
+    assert store.try_get('config') is None
+    with pytest.raises(credentials.SecretNotFound) as exception:
+      store.get('config')
+    assert exception.value.name == 'github'
 
   def test_field_of_scalar_secret_raises(self, configs_dir: Path):
     store = self._store(
@@ -1157,6 +1173,21 @@ class TestCLI:
 
     assert credentials.main(['credentials', 'list']) is None
     assert capsys.readouterr().out == 'claude_code\nopenai\n'
+
+  def test_list_skips_a_secret_with_an_empty_reference(self, configs_dir: Path, capsys):
+    _write(configs_dir, 'working.cred', 'value')
+    _write(configs_dir, 'dangling.cred', {'token': {'$cred': 'outside'}})
+    _write(
+      configs_dir,
+      credentials.REGISTRY_FILE,
+      {
+        'working': {'sources': [{'file': 'working.cred'}]},
+        'dangling': {'sources': [{'file': 'dangling.cred'}]},
+      },
+    )
+
+    assert credentials.main(['credentials', 'list']) is None
+    assert capsys.readouterr().out == 'working\n'
 
   def _write_variant(self, bro_dir: Path) -> None:
     """a resolvable host-local `openai+work` variant beside the plain `openai`."""
