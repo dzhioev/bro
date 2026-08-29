@@ -71,18 +71,19 @@ the target bro's own recipe on the bro harness,
 Claude Code's own on claude).
 
 The child's scope is a knob too:
-grants and revokes,
-each value a credential name or `@bro` for a summon target of the target's own.
+grants and revokes.
+A grant names a credential kind, a `kind+instance`, or `@bro` for a summon target of the target's own;
+a revoke names a credential kind or `@bro`.
 They start from the target's own declarations, not yours
 — nothing of your scope reaches the child unless you name it, and you can only name what you hold yourself:
 a credential in your own scope,
 a bro in your own allow-list.
 Grant only what the request actually needs and the user asked for:
 a credential the target's manifest lacks (`staging_api` for an integration run),
-a different instance of a selected credential kind,
+an instance your own scope resolves for that kind,
 or a bro the target has to reach onward (`@reviewer` so a developer child can hand off a review).
-A credential grant replaces the target's selected same-kind name.
-Both directions are strict, so naming the exact credential or bro the target already has (or, for a revoke, lacks) fails the summon rather than passing quietly.
+An instance grant replaces the target's selection for that kind.
+Both directions are strict, so a no-op grant or a revoke of a kind or bro the target lacks fails the summon rather than passing quietly.
 
 The harness and LLM knobs above answer to that same bound, since the driving loop they pick brings credentials of its own:
 what the pair adds on top of the target's default scope has to be in your scope too, so a session running under the bro harness cannot ask for a `claude` child unless its own launch hydrated the Claude OAuth token.

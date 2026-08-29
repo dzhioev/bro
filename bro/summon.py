@@ -147,9 +147,12 @@ HARNESS_HELP = (
   f"the harness the child runs under: '{DEFAULT_HARNESS}' (default — the target's own LLM "
   "process) or 'claude' (a one-shot managed Claude Code session)"
 )
-GRANT_HELP = "add a credential (NAME) or summonable bro (@BRO) to the child's scope (repeatable)"
+GRANT_HELP = (
+  "add a credential (KIND or KIND+INSTANCE) or summonable bro (@BRO) to the child's scope "
+  '(repeatable)'
+)
 REVOKE_HELP = (
-  "remove a credential (NAME) or summonable bro (@BRO) from the child's scope (repeatable)"
+  "remove a credential kind (KIND) or summonable bro (@BRO) from the child's scope (repeatable)"
 )
 SHARE_HELP = (
   'give the child read access to an artifact ref this session can itself read (repeatable)'
