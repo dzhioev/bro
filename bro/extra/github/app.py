@@ -5,7 +5,7 @@ private key proves the app identity, then that JWT mints an installation access
 token — a `ghs_…` bearer the rest of the GitHub tooling uses like any other
 token, acting as the app's bot identity with the installation's permissions.
 Installation tokens expire after one hour. `Source` is the credential-source
-front over the mint (the `github_app` registry type).
+front over the mint (the `github_app` store-annotation type).
 """
 
 import contextlib
@@ -41,7 +41,7 @@ def mint_installation_token(
   """mint an installation access token for one installation of the app;
   `private_key` is the app's PEM-encoded RSA key."""
   # pyjwt ships with the `github` extra, while this module loads for any
-  # credential registry that names the `github_app` source type
+  # credential store annotation that names the `github_app` source type
   import jwt
 
   now = int(time.time())
@@ -56,7 +56,7 @@ def mint_installation_token(
 
 
 class Source(credentials.MintingSource):
-  """credential source minting installation tokens (registry type `github_app`).
+  """credential source minting installation tokens (store type `github_app`).
   the minting config carries `app_id`, `installation_id`, and the app's PEM
   `private_key`; ids may be strings or numbers.
 

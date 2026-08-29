@@ -113,7 +113,7 @@ Unknown keys and malformed values fail at config load rather than being ignored.
 ## Trails storage
 
 Recording is mandatory, and storage is local unless configured otherwise:
-with no `~/.bro/trails.json`, a run writes to the global `trails` directory in the runtime state root (`bro/reference/ride.md`, "Runtime state").
+with no resolving `trails` credential, a run writes to the global `trails` directory in the runtime state root (`bro/reference/ride.md`, "Runtime state").
 Container launch composers bind-mount that host root at the fixed absolute `/var/ride/trails` path inside the container automatically.
 
 The hosted service is the opt-in, `{"backend": "service", "base_url": "https://trails.example", "token": "<bearer>"}`;

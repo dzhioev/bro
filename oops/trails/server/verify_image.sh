@@ -9,15 +9,16 @@ source "$(bro-oops-dir)/deploy_lib.sh"
 source "$(bro-shell-dir)/docker_smoke_test.sh" docker prepare_image_build
 
 smoke_directory=build/trails-smoke
-mkdir -p "$smoke_directory"
-printf '%s\n' '{"backend": "local"}' >"$smoke_directory/trails_store.json"
+mkdir -p "$smoke_directory/creds"
+printf '%s\n' '{}' >"$smoke_directory/creds.json"
+printf '%s\n' '{"backend": "local"}' >"$smoke_directory/creds/trails.cred"
 printf '%s\n' \
   '{"tokens": {"smoke": {"token": "test-token", "permissions": ["write"]}}}' \
-  >"$smoke_directory/trails_tokens.json"
+  >"$smoke_directory/creds/trails_tokens.cred"
 
 smoke_build oops/trails/server/Dockerfile
-smoke_copy "$smoke_directory/trails_store.json" /app/.configs/trails_store.json
-smoke_copy "$smoke_directory/trails_tokens.json" /app/.configs/trails_tokens.json
+smoke_copy "$smoke_directory/creds.json" /app/.configs/creds.json
+smoke_copy "$smoke_directory/creds" /app/.configs/creds
 smoke_start 8004
 
 smoke_await /health
