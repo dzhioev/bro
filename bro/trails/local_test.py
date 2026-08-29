@@ -202,6 +202,17 @@ def test_a_writer_may_not_send_the_folded_head(tmp_path):
     store.blaze(request)
 
 
+def test_a_text_kind_refuses_a_body_no_reader_could_render(tmp_path):
+  store = LocalStore(tmp_path)
+  trail_id = store.blaze(_bro_request())['id']
+
+  with pytest.raises(ValueError, match='user_input body must be a string'):
+    store.append_records(trail_id, 1, [{'kind': 'user_input', 'body': {'text': 'ping'}}])
+  store.append_records(trail_id, 1, [{'kind': 'error', 'body': {'message': 'boom'}}])
+
+  assert store.get_trail(trail_id)['extent'] == 2
+
+
 def test_the_lineage_index_answers_by_segment_and_by_record(tmp_path):
   store = LocalStore(tmp_path)
   raw = json.dumps({'type': 'user', 'uuid': 'uuid-1', 'message': {'content': 'hello'}})
