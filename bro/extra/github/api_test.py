@@ -158,6 +158,27 @@ class TestRetryDelay:
     assert api._retry_delay(error, 0) == api._MAX_BACKOFF
 
 
+class TestViewerLogin:
+  def test_returns_the_graphql_viewer(self, monkeypatch):
+    fake = _FakeUrlopen([{'data': {'viewer': {'login': 'someone[bot]'}}}])
+    _install(monkeypatch, fake)
+    assert api.viewer_login('t') == 'someone[bot]'
+
+  def test_asks_graphql_rather_than_the_user_endpoint(self, monkeypatch):
+    # pins the endpoint against GitHub's own contract: REST /user is
+    # user-to-server only, so a resolution routed there answers 403 for every
+    # installation token and no unit test would see it
+    fake = _FakeUrlopen([{'data': {'viewer': {'login': 'someone'}}}])
+    _install(monkeypatch, fake)
+    api.viewer_login('t')
+    assert fake.requests[0].full_url == 'https://api.github.com/graphql'
+
+  def test_a_graphql_error_raises(self, monkeypatch):
+    _install(monkeypatch, _FakeUrlopen([{'errors': [{'message': 'Bad credentials'}]}]))
+    with pytest.raises(ValueError, match='Bad credentials'):
+      api.viewer_login('t')
+
+
 class TestCheckState:
   def test_reads_both_api_spellings(self):
     assert api.check_state('completed', 'success') == 'passed'
