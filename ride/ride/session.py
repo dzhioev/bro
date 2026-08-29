@@ -148,6 +148,7 @@ class ScopedLaunch:
   scoped: ScopedSecrets
   may_summon: set[str]
   store: dict[str, bytes]
+  hydrated_kinds: frozenset[str] = frozenset()
 
 
 def record_resume_spec(workspace: Workspace, spec: SessionSpec) -> None:
@@ -276,6 +277,7 @@ def _container_session(
     env=env,
     secrets=scoped.required,
     optional_secrets=scoped.optional,
+    credential_selection=scoped.selection,
     tty=not spec.solo,
     forward_env=True,
     image=resolved_runtime.image,
@@ -333,11 +335,16 @@ def _host_session(
     runner_env['RIDE_REPO'] = str(workspace.repo)
   else:
     runner_env.pop('RIDE_REPO', None)
-  registry = materialize_scoped_store(launch_scope.store, workspace.path / 'credentials')
-  runner_env[credentials.REGISTRY_ENV] = str(registry)
+  store_directory = materialize_scoped_store(launch_scope.store, workspace.path / 'credentials')
+  runner_env['BRO_STORE'] = str(store_directory)
+  session_store = credentials.Store(credentials.default_registry(), store_directory, {})
   runner_env.update(
     credentials.install_hooks(
-      credentials.load_registry(registry), workspace.path / 'environment', runner_env
+      session_store.registry,
+      launch_scope.hydrated_kinds,
+      session_store,
+      workspace.path / 'environment',
+      runner_env,
     )
   )
   runner_env[SESSION_DIR_ENV] = str(workspace_session_dir(workspace.path))
@@ -496,7 +503,12 @@ def _start_session(
   except (AttachmentMismatch, KindMismatch, RuntimeError, ValueError) as error:
     log.error('%s', error)
     return 1
-  launch = ScopedLaunch(scoped=scoped, may_summon=may_summon, store=store)
+  launch = ScopedLaunch(
+    scoped=scoped,
+    may_summon=may_summon,
+    store=store,
+    hydrated_kinds=store.kinds,
+  )
   try:
     with workspace.hold_session_lock():
       record_resume_spec(workspace, spec)

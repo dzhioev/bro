@@ -113,7 +113,7 @@ def test_the_benchmark_distribution_contributes_the_retention_credential_kind():
 
   [entry] = entries
   assert entry.value == 'bro.benchmark.credentials:RETENTION'
-  assert entry.load() == {'sources': [{'file': 'benchmark_retention.json'}]}
+  assert entry.load() == {'description': 'Benchmark retention storage configuration'}
 
 
 def test_an_absent_retention_credential_skips_the_bucket(monkeypatch, tmp_path):

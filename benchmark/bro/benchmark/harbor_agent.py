@@ -175,7 +175,8 @@ def scoped_store(name: str) -> Generator[Path]:
   the upload reads it from a file, so it lives in a private directory for no
   longer than that.
   """
-  files = credentials.build_scoped_store([name])
+  source_store = credentials.Store(credentials.default_registry(), credentials.STORE_DIR, {})
+  files, _ = credentials.build_scoped_store(source_store, [name])
   with tempfile.TemporaryDirectory(prefix='bro-benchmark-store-') as scratch:
     directory = Path(scratch) / 'store'
     materialize_scoped_store(files, directory)
@@ -318,7 +319,7 @@ class BroAgent(BaseInstalledAgent):
 
   def run_env(self) -> dict[str, str]:
     return {
-      'BRO_CONFIGS_DIR': str(STORE_DIR),
+      'BRO_STORE': str(STORE_DIR),
       'BRO_USAGE_FILE': str(USAGE_FILE),
       # task images ship no CA store unless their own layers add one, and the
       # bundle carries certifi's

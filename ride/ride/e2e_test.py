@@ -372,8 +372,9 @@ def isolated_env() -> Iterator[IsolatedEnv]:
     # the health gate needs the stub a real session's scoped store would carry.
     # construction is offline — nothing contacts GitHub
     bro_dir = home / '.bro'
-    bro_dir.mkdir()
-    (bro_dir / 'brog.json').write_text(
+    credentials_dir = bro_dir / 'creds'
+    credentials_dir.mkdir(parents=True)
+    (credentials_dir / 'brog.cred').write_text(
       json.dumps(
         {
           'backend': 'github',

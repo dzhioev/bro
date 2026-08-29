@@ -329,8 +329,7 @@ class TestRun:
     from bro.trails.local import LocalStore
     from bro.trails.record.bro import Recorder
 
-    monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path))
-    monkeypatch.setattr(credentials, 'BRO_DIR', str(tmp_path))
+    monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path))
     monkeypatch.setattr(credentials, '_default_store', None)
     monkeypatch.setattr('bro.trails.store.paths.project_root', lambda: tmp_path)
     monkeypatch.delenv(native_runner._TRAILS_DISABLED_ENV, raising=False)

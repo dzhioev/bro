@@ -24,7 +24,7 @@ def _patch_view_store(monkeypatch, config):
   returns the (required, optional) name sets the view store was built over."""
   reads = []
 
-  def scoped_view_store(names, *, optional=()):
+  def scoped_view_store(store, names, *, optional=()):
     reads.append((set(names), set(optional)))
     return _Store(config)
 

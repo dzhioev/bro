@@ -84,8 +84,12 @@ Installed distributions contribute framework extensions through standard Python 
 Entry-point metadata is written when a distribution is installed, so adding or removing a declaration requires another `uv sync`;
 editing an already-declared target does not.
 Name-keyed groups load only the selected entry.
-Credential registry assembly loads every `bro.credentials` contributor, so those target modules must remain cheap to import;
-broker composition loads every `bro.broker_kinds` contributor, so the same applies there.
+Credential registry assembly loads every `bro.credentials` contributor, so those target modules must remain cheap to import.
+Each target is a dictionary with a required one-line `description` and an optional registry-format `install` hook;
+source paths, instances, and other fields are rejected.
+A `bro.credential_sources` target is a `MintingSource` subclass whose `TYPE` matches its entry-point name.
+Its inherited `from_dict` receives only that type's parameters from `creds.json` (the `type` discriminator and convention material path are owned by the store), and `mint(config)` derives a value from the JSON object in `creds/<name>.cred`.
+Broker composition loads every `bro.broker_kinds` contributor, so those target modules must remain cheap to import.
 Each `bro.session_commands` entry repeats the name and target of a console script from the same distribution;
 materialization rejects missing, mismatched, or duplicate declarations.
 

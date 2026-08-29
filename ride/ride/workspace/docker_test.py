@@ -323,7 +323,10 @@ class TestPrepareContainer:
     monkeypatch.setattr(
       workspace_docker.credentials,
       'build_scoped_store',
-      lambda secrets, optional=(): events.append(('store', secrets, optional)) or {'x': b'y'},
+      lambda store, secrets, optional=(): (
+        events.append(('store', secrets, optional))
+        or ({'creds/x.cred': b'y'}, frozenset({'github'}))
+      ),
     )
     monkeypatch.setattr(workspace_docker, '_bro_tarball', lambda store: b'TARBALL')
     monkeypatch.setattr(
@@ -364,7 +367,11 @@ class TestPrepareContainer:
       ['claude'],
     )
     assert argv_event[2] == {
-      'extra_env': {'MARKER': 'x'},
+      'extra_env': {
+        'MARKER': 'x',
+        'BRO_STORE': '/home/ride/.bro',
+        'BRO_INSTALL_KINDS': 'github',
+      },
       'forward_env': False,
       'tty': False,
       'extra_mounts': ['/host:/container'],
