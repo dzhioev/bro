@@ -434,6 +434,7 @@ dependencies = [
     { name = "bro" },
     { name = "bro-dev" },
     { name = "constructs" },
+    { name = "jsii" },
 ]
 
 [package.metadata]
@@ -443,6 +444,7 @@ requires-dist = [
     { name = "bro", editable = "." },
     { name = "bro-dev", editable = "dev" },
     { name = "constructs", specifier = "==10.6.0" },
+    { name = "jsii", specifier = "==1.140.0" },
 ]
 
 [[package]]
