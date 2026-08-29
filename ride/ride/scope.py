@@ -1,7 +1,7 @@
 """per-surface launch scoping of a bro run: which credentials each launch
 surface hydrates and which bros the session may summon, computed from the bro's
-own declarations (manifest, optional tier, `may_summon`) against the operated
-project's instance selection.
+own declarations (manifest, optional tier, `may_summon`) against the host's
+credential selection for the operated project.
 """
 
 import contextlib
@@ -60,12 +60,9 @@ BRO_RUN_RECIPE = ScopeRecipe(
 )
 
 
-def bind_project_credentials(attachment: Optional[str]) -> Optional[dict[str, Optional[str]]]:
-  """Return the provisional selection for the launch's repository attachment.
-
-  None means a detached launch or an attachment `~/.bro.json` does not name.
-  """
-  return None if attachment is None else host_config.project_instances(attachment)
+def bind_project_credentials(attachment: Optional[str]) -> host_config.CredentialSelection:
+  """Return the defaults and project layers for a launch attachment."""
+  return host_config.project_selection(attachment)
 
 
 def scoped_secrets(
@@ -85,15 +82,14 @@ def scoped_secrets(
   `--llm`), whose key the scope hydrates in place of the bro's own — a run
   against another provider needs that provider's key, not the declared one.
 
-  The scope carries the operated project's instance selection to each explicit
-  store the launch constructs.
-  Where no project entry supplies a selection, the host's per-project kinds ride
-  along as `unbound_kinds`.
+  The scope carries host defaults plus the operated project's instance selection
+  to each explicit store the launch constructs.
+  Where no project entry binds the attachment, project-only kinds absent from
+  defaults ride along as `unbound_kinds`.
   """
   from bro.registry import create_bro
 
-  selection = bind_project_credentials(attachment)
-  unbound = frozenset() if selection is not None else host_config.project_scoped_kinds()
+  binding = bind_project_credentials(attachment)
   required: set[str] = set()
   optional = set(recipe.optional_baseline)
   try:
@@ -109,8 +105,8 @@ def scoped_secrets(
   return ScopedSecrets(
     required=required,
     optional=optional,
-    unbound_kinds=unbound,
-    selection={} if selection is None else dict(selection),
+    unbound_kinds=binding.unbound_kinds,
+    selection=dict(binding.instances),
   )
 
 
@@ -157,7 +153,9 @@ def split_scope_overrides(values: list[str]) -> tuple[list[str], list[str]]:
 
 def credential_store(scoped: ScopedSecrets) -> credentials.Store:
   """The ambient store under a launch's explicit selection."""
-  return credentials.Store(credentials.default_registry(), credentials.STORE_DIR, scoped.selection)
+  registry = credentials.default_registry()
+  selection = {kind: instance for kind, instance in scoped.selection.items() if kind in registry}
+  return credentials.Store(registry, credentials.STORE_DIR, selection)
 
 
 class HydratedStore(dict[str, bytes]):
