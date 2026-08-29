@@ -19,8 +19,9 @@ Preconditions (each failure aborts with a message on stderr and exit 1):
 - the repository allows rebase merging
 - every status check has concluded and passed. Pending checks are waited out
   (`--wait-checks` seconds) and then refuse the merge, as a failed check does.
-  A PR with no checks passes. `--ignore-checks` drops the gate whole — no
-  wait, no refusal, whatever the checks say.
+  A head no check reported on at all is waited out and refused the same way.
+  `--ignore-checks` drops the gate whole — no wait, no refusal, whatever the
+  checks say or fail to say.
 
 On success prints a single JSON object to stdout:
 
@@ -133,13 +134,17 @@ def _split_checks(entries: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
 
 
 def _await_checks(number: int, entries: list[dict[str, Any]], wait_seconds: int) -> list[dict]:
-  """the rollup once every check concluded, or once the wait budget is spent."""
+  """the rollup once every check concluded, or once the wait budget is spent.
+
+  An empty rollup waits too: a run takes a moment to register against a freshly
+  pushed head."""
   deadline = time.monotonic() + wait_seconds
   while True:
     pending, _ = _split_checks(entries)
-    if len(pending) == 0 or time.monotonic() >= deadline:
+    if (len(entries) > 0 and len(pending) == 0) or time.monotonic() >= deadline:
       return entries
-    log.info(f'waiting for {len(pending)} pending check(s): {", ".join(pending)}')
+    waiting = ', '.join(pending) if len(pending) > 0 else 'no check has reported yet'
+    log.info(f'waiting for the checks to conclude: {waiting}')
     time.sleep(_CHECK_POLL_INTERVAL)
     entries = _pr_view(['statusCheckRollup'], number=number).get('statusCheckRollup') or []
 
@@ -153,10 +158,19 @@ def _checks_error(number: int, entries: list[dict[str, Any]]) -> Optional[str]:
       f'PR #{number} still has pending checks: {", ".join(pending)}; '
       're-run land-pr once they conclude'
     )
+  if len(entries) == 0:
+    return (
+      f'no status check reported on the head of PR #{number}, so nothing verified what '
+      'would land; dispatch the repository CI against that head, or pass --ignore-checks '
+      'when the repository has none'
+    )
   return None
 
 
 def _log_ignored_checks(entries: list[dict[str, Any]]) -> None:
+  if len(entries) == 0:
+    log.warning('--ignore-checks: merging a head no status check reported on')
+    return
   pending, failed = _split_checks(entries)
   ignored = [*failed, *pending]
   if len(ignored) > 0:
@@ -282,13 +296,16 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument(
     '--ignore-checks',
     action='store_true',
-    help='merge whatever the status checks say, pending or failed (explicit user waiver)',
+    help=(
+      'merge whatever the status checks say — pending, failed, or none reported at all '
+      '(explicit user waiver)'
+    ),
   )
   parser.add_argument(
     '--wait-checks',
     type=int,
     default=480,
     metavar='SECONDS',
-    help='how long to wait for pending checks to conclude before refusing (0 to refuse at once)',
+    help='how long to wait for the checks to conclude before refusing (0 to refuse at once)',
   )
   return land_pr(**parser.parse(argv))

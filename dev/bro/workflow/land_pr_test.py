@@ -12,6 +12,10 @@ import bro.workflow.land_pr as land_pr
 _HEAD_OID = 'c0ffee1234567890c0ffee1234567890c0ffee12'
 
 
+def _check(name: str = 'tests', status: str = 'COMPLETED', conclusion: str = 'SUCCESS') -> dict:
+  return {'__typename': 'CheckRun', 'name': name, 'status': status, 'conclusion': conclusion}
+
+
 def _pr(**overrides: Any) -> dict[str, Any]:
   pr: dict[str, Any] = {
     'number': 310,
@@ -24,14 +28,10 @@ def _pr(**overrides: Any) -> dict[str, Any]:
     'headRefOid': _HEAD_OID,
     'url': 'https://github.com/o/r/pull/310',
     'commits': [{'oid': 'aaa1111'}, {'oid': 'bbb2222'}],
-    'statusCheckRollup': [],
+    'statusCheckRollup': [_check()],
   }
   pr.update(overrides)
   return pr
-
-
-def _check(name: str = 'tests', status: str = 'COMPLETED', conclusion: str = 'SUCCESS') -> dict:
-  return {'__typename': 'CheckRun', 'name': name, 'status': status, 'conclusion': conclusion}
 
 
 def _status_context(context: str = 'ci/legacy', state: str = 'SUCCESS') -> dict[str, Any]:
@@ -203,7 +203,7 @@ def test_land_failed_branch_delete_degrades(capsys):
 
 
 class TestSplitChecks:
-  def test_no_checks_is_clean(self):
+  def test_an_empty_rollup_splits_to_nothing(self):
     assert land_pr._split_checks([]) == ([], [])
 
   def test_running_check_is_pending(self):
@@ -237,6 +237,10 @@ class TestChecksError:
   def test_clean_rollup(self):
     assert land_pr._checks_error(310, [_check()]) is None
 
+  def test_a_head_no_check_reported_on(self):
+    error = land_pr._checks_error(310, [])
+    assert error is not None and 'no status check reported' in error and '--ignore-checks' in error
+
   def test_failed_named(self):
     error = land_pr._checks_error(310, [_check(conclusion='FAILURE')])
     assert error is not None and 'failing checks: tests' in error
@@ -269,6 +273,14 @@ class TestAwaitChecks:
       assert land_pr._await_checks(310, pending, 60) == [_check()]
     sleep.assert_called_once_with(land_pr._CHECK_POLL_INTERVAL)
     view.assert_called_once_with(['statusCheckRollup'], number=310)
+
+  def test_waits_for_a_rollup_that_is_still_empty(self):
+    with (
+      patch.object(land_pr, '_pr_view', return_value={'statusCheckRollup': [_check()]}),
+      patch.object(land_pr.time, 'sleep') as sleep,
+    ):
+      assert land_pr._await_checks(310, [], 60) == [_check()]
+    sleep.assert_called_once_with(land_pr._CHECK_POLL_INTERVAL)
 
   def test_gives_up_when_the_budget_is_spent(self):
     pending = [_check(status='IN_PROGRESS', conclusion='')]
@@ -308,6 +320,21 @@ def test_ignore_checks_does_not_wait():
     assert _land(ignore_checks=True, wait_checks=480) is None
   assert len(merge_calls) == 1
   sleep.assert_not_called()
+
+
+def test_land_refuses_a_head_no_check_reported_on(capsys):
+  merge_calls: list[list[str]] = []
+  with patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, _pr(statusCheckRollup=[]))):
+    assert _land() == 1
+  assert merge_calls == []
+  assert capsys.readouterr().out == ''
+
+
+def test_ignore_checks_merges_a_head_no_check_reported_on(caplog):
+  with _landing(_pr(statusCheckRollup=[])) as (merge_calls, _spawned):
+    assert _land(ignore_checks=True) is None
+  assert len(merge_calls) == 1
+  assert 'no status check reported on' in caplog.text
 
 
 def test_land_merges_with_green_checks():
