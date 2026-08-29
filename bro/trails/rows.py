@@ -6,6 +6,7 @@ from typing import Any, Optional
 from bro.trails import backends
 from bro.trails.lineage import LineageHead
 from bro.trails.model import payload_sha256
+from bro.trails.store import refusing_invalid_requests
 
 
 class AggregateState:
@@ -132,8 +133,9 @@ def build_rows(
 ) -> list[dict]:
   result: list[dict] = []
   for step_id, payload in enumerate(payloads, start=offset):
-    parsed = adapter.parse(payload)
-    classification = adapter.classify(parsed)
+    with refusing_invalid_requests(f'record at offset {step_id}'):
+      parsed = adapter.parse(payload)
+      classification = adapter.classify(parsed)
     digest = payload_sha256(payload)
     contribution = state.apply(
       parsed, classification, seen_billing_keys, step_id=step_id, digest=digest
