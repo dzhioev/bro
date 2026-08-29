@@ -8,9 +8,11 @@ Checks that the branch still carries the commits [[run pr]] folded it into and r
 which merges the open PR for the current branch in one shot (precondition checks including green CI, a rebase merge that writes nothing to the branch, remote branch cleanup),
 then records a `merged` comment on the task and closes it to done unless the user explicitly said to keep it open.
 On APPROVED, [[run pr]] chains into this spell.
-Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this spell.
+Also covers landing without a pull request
+— a repo that takes changes straight onto its target branch:
+the rebase-and-push one-liner, and the CI dispatch that stands in for the checks no PR is there to run.
 
-version: 4.2.0
+version: 4.3.0
 ---
 
 # land
@@ -138,6 +140,27 @@ Then emit everything in a single response
 - The report, one line:
   PR URL, "merged into `<base>`" (as N commits when the result's `commits` is more than one), and task status
   — closed to done (after a successful deploy handoff when one was needed), left open per instruction, or left open on a failed or pending deploy (with the reason, or the pending summon command).
+
+## Landing without a pull request
+
+A repo that takes its changes straight onto the target branch never opens one, so nothing above applies:
+`land-pr` resolves a pull request, and there is none to resolve.
+The merge is a fast-forward push of the rebased branch.
+
+```bash
+git fetch origin && git rebase origin/<base> && git push origin HEAD:<base>
+```
+
+The gate the pull request was carrying does not go with it
+— it becomes yours to run.
+A repo's CI commonly triggers on pull requests and on pushes to its trunk, so a branch that opens no PR runs nothing of its own:
+dispatch the repo's CI against the branch (its own docs name the workflow and how it is dispatched) and wait for green before the push.
+
+Dispatch it on the ref that carries the merge result.
+The rebase moves the tree, so a run against the branch as it stood before it green-lit a tree the push no longer delivers:
+push the rebased branch to the remote as a branch of its own, dispatch against that ref, and push to `<base>` only once that run is green.
+
+Step 3's bookkeeping applies unchanged, with the pushed commits in place of the PR link the report and the `merged` comment would otherwise carry.
 
 ## Safety rules
 
