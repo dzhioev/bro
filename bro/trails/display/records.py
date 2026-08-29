@@ -162,7 +162,7 @@ class ToolResult(Record):
 @dataclass(frozen=True, kw_only=True)
 class Error(Record):
   kind: ClassVar[RecordKind] = RecordKind.ERROR
-  content: str
+  content: Any
 
 
 @dataclass(frozen=True, kw_only=True)
