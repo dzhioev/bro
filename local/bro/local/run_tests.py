@@ -236,6 +236,7 @@ PYTEST_FILES = [
   'bro/extra/github/api_test.py',
   'bro/extra/github/app_test.py',
   'dev/bro/extra/github/poll_pr_test.py',
+  'dev/bro/extra/github/pr_state_test.py',
   'dev/bro/workflow/co_author_test.py',
   'dev/bro/workflow/commit_footer_test.py',
   'dev/bro/workflow/fold_branch_test.py',
