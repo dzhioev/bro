@@ -2,9 +2,11 @@
 
 import http.client
 import json
+import re
 import time
 import urllib.error
 import urllib.request
+from email.message import Message
 from email.utils import parsedate_to_datetime
 from typing import Any, Optional
 
@@ -20,6 +22,7 @@ _BASE_BACKOFF = 1.0  # seconds; doubled per attempt
 _MAX_BACKOFF = 30.0  # ceiling for both exponential backoff and server-hinted waits
 _PASSING_CONCLUSIONS = frozenset({'success', 'neutral', 'skipped'})
 _GRAPHQL_URL = 'https://api.github.com/graphql'
+_NEXT_PAGE = re.compile(r'<([^>]+)>;\s*rel="next"')
 
 
 def check_state(status: Optional[str], conclusion: Optional[str]) -> str:
@@ -85,8 +88,14 @@ def _parse_retry_after(value: str) -> Optional[float]:
 
 
 def _request(method: str, url: str, token: str, body: Optional[Any] = None) -> Any:
+  return _request_with_headers(method, url, token, body)[0]
+
+
+def _request_with_headers(
+  method: str, url: str, token: str, body: Optional[Any] = None
+) -> tuple[Any, Message]:
   """one authenticated call, retried per the transient policy; parsed JSON response
-  (None when the response has no body, e.g. a 204).
+  (None when the response has no body, e.g. a 204) and the response headers.
 
   the retry policy applies to mutating verbs too — a retried write can rarely land
   twice (the write succeeded, the response was lost); accepted at this scale.
@@ -105,7 +114,8 @@ def _request(method: str, url: str, token: str, body: Optional[Any] = None) -> A
     try:
       with urllib.request.urlopen(prepared) as response:
         payload = response.read()
-      return json.loads(payload) if len(payload) > 0 else None
+        headers = response.headers
+      return (json.loads(payload) if len(payload) > 0 else None, headers)
     except (http.client.HTTPException, OSError) as error:
       if isinstance(error, urllib.error.URLError):
         if not is_transient(error):
@@ -126,6 +136,20 @@ def _request(method: str, url: str, token: str, body: Optional[Any] = None) -> A
 
 def get(url: str, token: str) -> Any:
   return _request('GET', url, token)
+
+
+def get_all(url: str, token: str) -> list[Any]:
+  """every page of a paginated collection, followed through the Link header."""
+  items: list[Any] = []
+  page_url: Optional[str] = url
+  while page_url is not None:
+    page, headers = _request_with_headers('GET', page_url, token)
+    if not isinstance(page, list):
+      raise ValueError(f'{page_url} answered with no collection to page through')
+    items.extend(page)
+    match = _NEXT_PAGE.search(headers.get('Link') or '')
+    page_url = None if match is None else match.group(1)
+  return items
 
 
 def viewer_login(token: str) -> str:

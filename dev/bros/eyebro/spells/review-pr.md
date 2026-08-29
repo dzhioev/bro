@@ -8,7 +8,7 @@ This spell should be used when the user asks to review a GitHub pull request and
 Reconciles the PR's existing review state, reviews the head, posts findings as PR review comments, watches for the author's answers and pushes with `poll-pr`, re-reviews round by round, and approves once every finding is addressed or conceded.
 
 parameters: {"pr": "pull request URL or number to review"}
-version: 1.0.0
+version: 1.1.0
 ---
 
 # review-pr
@@ -66,9 +66,17 @@ Classify every existing thread, whoever opened it:
 - **awaiting the author** — an unanswered question;
   adopt it likewise.
 
-If the latest review on the PR is `APPROVED` and nothing is open, the review is already complete:
-report that and stop
-— unless the head moved after that approval, in which case the delta since the approved head is what you review.
+The latest review on the PR being `APPROVED` ends your round without a fresh one only when all three hold:
+it is **yours** (`user` equal to `viewer` in the same `pr-state` output),
+its `commit_id` is still `pull_request.head_sha`,
+and nothing is open.
+Then report that and stop.
+
+An approval of your own that the head has moved past is not a complete review:
+the delta since that commit is what you review.
+Another account's approval is that account's verdict and never becomes yours by being read
+— anyone who can see a public repository can leave one, and whoever delegated this review is owed a judgement of the branch rather than a relay of someone else's.
+Review it in full and reach your own.
 
 ## 3. Review the head
 
@@ -204,9 +212,10 @@ the author's flow re-folds the branch into landing shape each round.
 **`review`** — another party reviewed:
 
 - the repo owner `APPROVED`:
-  their verdict outranks yours.
-  Report anything you still held open, stop the watcher, and end the review
-  — the standing objections are on the PR for the record.
+  note it and keep reviewing.
+  Their verdict answers what GitHub asks of the merge;
+  it does not stand in for the judgement you were delegated, and the session that summoned you waits on yours whatever the PR says.
+  Name in your next round which of your findings that approval does not cover, so nobody reads it as covering them.
 - another reviewer's review:
   a live co-reviewer, not an abandoned one — their threads are theirs to drive;
   don't duplicate them, and keep your verdict to your own slate.

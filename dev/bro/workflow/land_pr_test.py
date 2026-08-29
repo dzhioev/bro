@@ -47,7 +47,6 @@ def worktree_head():
 
 def _land(**overrides: Any) -> Optional[int]:
   arguments: dict[str, Any] = {
-    'no_review': False,
     'allow_unchecked': False,
     'ignore_checks': False,
     'wait_checks': 0,
@@ -76,35 +75,31 @@ class TestUncheckedBoxes:
 
 class TestPreconditionError:
   def test_open_approved_checked_passes(self):
-    assert land_pr._precondition_error(_pr(), False, False) is None
+    assert land_pr._precondition_error(_pr(), False) is None
 
   def test_not_open(self):
-    error = land_pr._precondition_error(_pr(state='MERGED'), False, False)
+    error = land_pr._precondition_error(_pr(state='MERGED'), False)
     assert error is not None and 'MERGED' in error
 
-  def test_not_approved(self):
-    error = land_pr._precondition_error(_pr(reviewDecision=''), False, False)
-    assert error is not None and '--no-review' in error
+  def test_a_base_asking_for_no_review_lands_unreviewed(self):
+    assert land_pr._precondition_error(_pr(reviewDecision=''), False) is None
 
-  def test_no_review_waives_a_missing_review(self):
-    assert land_pr._precondition_error(_pr(reviewDecision=''), True, False) is None
-
-  def test_changes_requested_is_refused_even_with_no_review(self):
-    error = land_pr._precondition_error(_pr(reviewDecision='CHANGES_REQUESTED'), True, False)
+  def test_changes_requested_is_refused(self):
+    error = land_pr._precondition_error(_pr(reviewDecision='CHANGES_REQUESTED'), False)
     assert error is not None and 'changes requested' in error
 
-  def test_a_review_the_base_requires_is_refused_even_with_no_review(self):
-    error = land_pr._precondition_error(_pr(reviewDecision='REVIEW_REQUIRED'), True, False)
+  def test_a_review_the_base_requires_is_refused(self):
+    error = land_pr._precondition_error(_pr(reviewDecision='REVIEW_REQUIRED'), False)
     assert error is not None and 'REVIEW_REQUIRED' in error
 
   def test_unchecked_boxes(self):
     pr = _pr(body='## Test plan\n- [ ] verify manually')
-    error = land_pr._precondition_error(pr, False, False)
+    error = land_pr._precondition_error(pr, False)
     assert error is not None and 'verify manually' in error
 
   def test_allow_unchecked_waives_boxes(self):
     pr = _pr(body='## Test plan\n- [ ] verify manually')
-    assert land_pr._precondition_error(pr, False, True) is None
+    assert land_pr._precondition_error(pr, True) is None
 
 
 class TestHeadError:
@@ -172,13 +167,19 @@ def test_land_happy_path(capsys):
   }
 
 
-def test_land_refuses_unapproved_without_merging(capsys):
+def test_land_refuses_a_review_the_base_requires(capsys):
   merge_calls: list[list[str]] = []
   fake = _fake_run(merge_calls, _pr(reviewDecision='REVIEW_REQUIRED'))
   with patch.object(land_pr, '_run', side_effect=fake):
     assert _land() == 1
   assert merge_calls == []
   assert capsys.readouterr().out == ''
+
+
+def test_land_merges_a_pr_on_a_base_that_requires_no_review():
+  with _landing(_pr(reviewDecision='')) as (merge_calls, _spawned):
+    assert _land() is None
+  assert len(merge_calls) == 1
 
 
 def test_land_refuses_a_worktree_off_the_reviewed_head(worktree_head, capsys):
@@ -344,9 +345,12 @@ def test_land_merges_with_green_checks():
   assert len(merge_calls) == 1
 
 
-def test_land_does_not_wait_for_checks_on_an_unapproved_pr():
+def test_land_does_not_wait_for_checks_on_a_pr_the_base_blocks():
   merge_calls: list[list[str]] = []
-  pr = _pr(reviewDecision='', statusCheckRollup=[_check(status='IN_PROGRESS', conclusion='')])
+  pr = _pr(
+    reviewDecision='REVIEW_REQUIRED',
+    statusCheckRollup=[_check(status='IN_PROGRESS', conclusion='')],
+  )
   with (
     patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, pr)),
     patch.object(land_pr.time, 'sleep') as sleep,

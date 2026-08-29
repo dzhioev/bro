@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 5.6.0
+version: 6.0.0
 ---
 
 # run-pr
@@ -80,6 +80,11 @@ Restore the state that session had, reconcile what happened while nobody watched
    handle each per step 15.
    If the latest owner review is APPROVED and nothing actionable is pending, chain straight into [[land]]
    — no watcher needed.
+   A reviewer's verdict does not survive the session that summoned it, and the PR is no substitute:
+   the request id `bro::summon_check` needs died with that session, and an approval sitting on the PR says a review approved, not that the reviewer you delegated to did
+   — on a public repository any account can leave one.
+   Summon a reviewer again and read the answer off that summon.
+   A child that finds the head already approved reconciles it as a completed review and returns saying so without posting again, which is both the verdict you need and the reason waiting on the watcher here would wait forever.
 5. **Resume watching**:
    continue at step 14.
 
@@ -291,13 +296,19 @@ A review before the fold judges working commits the fold discards.
     [[review diff of HEAD against origin/<base>, in terms of the development style policy and the repository's own guides]]
 
 Handle the findings at pre-PR prices:
-fix what is right with further commits (steps 5–6) and re-fold (step 8), the round every review on the open PR takes too (step 15);
-let go of what you'd only debate
-— the eyebro reviews the PR next ("Hand the review to the eyebro"), where a finding it still holds returns as a thread.
-No identity constraint binds this step:
-a diff review approves nothing.
-If the ask is denied or fails, audit the branch yourself before moving on:
-call `dev-style-source::read` and audit `git diff origin/<base>..HEAD` against the returned policy, stating the verdict as visible output.
+fix what is right with further commits (steps 5–6) and re-fold (step 8), the round every review on the open PR takes too (step 15).
+Then ask again, and keep going round until the review comes back with nothing
+— each round is a fresh child that re-reads the branch, since no channel carries a conversation across summons yet, so what it judges is always the tree as it now stands.
+
+A finding you believe is wrong ends the loop as surely as one you fix, and it does not end it by being ignored:
+concede it, or answer it in the next round's request so the child judges the branch knowing your reasoning.
+When neither settles it, that is the user's to break
+— ask where questions reach them, `raise` when unattended.
+Never take an unresolved round as clean.
+
+If the ask is denied or fails outright, no review happened and none is coming from here:
+audit the branch yourself before moving on
+— call `dev-style-source::read` and audit `git diff origin/<base>..HEAD` against the returned policy, stating the verdict as visible output.
 
 {{end}}
 
@@ -493,14 +504,24 @@ Don't wait for a review to arrive — hand it over:
    `bro::summon` targeting the eyebro your banner's `may_summon` names, with `detach: true`, a `timeout` sized in hours (a review conversation outlives the default; `14400` fits), and a self-contained prompt naming the PR
    — the child shares no context with this session:
    `[[review pr <pr-url>]]`.
-2. The review then flows through the PR:
-   the eyebro's reviews and comments fire as ordinary step-15 events, your replies and pushed fixes reach it the same way, and its approval chains into [[land]] like any other.
-   Don't wait on the summon result
-   — check the request id (`bro::summon_check`) only when the PR stays quiet past reason.
-3. A summon denied at launch, or a child that raises right away
+2. The conversation runs through the PR:
+   the eyebro's reviews and comments fire as ordinary step-15 events, and your replies and pushed fixes reach it the same way.
+   Its verdict does not.
+   **Keep the request id**: the child's own answer is what gates the merge, and `bro::summon_check` is the only channel that carries it.
+   Nothing on the PR records which account you handed the review to, so an approving review read off the PR says a review approved, not that the reviewer you delegated to did.
+   Don't block on it meanwhile
+   — the child runs as long as the review takes;
+   step 15's APPROVED handler is where you collect it.
+   It is not the only place, because the child can finish without posting anything new:
+   one that finds the head already approved reconciles that as a completed review and reports rather than approving twice, so no event fires and the handler never runs.
+   A PR that stays quiet past reason is therefore a reason to check the summon rather than to keep waiting
+   — `bro::summon_check` on the request id, and a completed answer is the verdict whether or not an event carried it.
+3. A summon denied at launch, or a child that raises before it reviews anything
    — typically because its GitHub identity is the PR author's own, which GitHub refuses to let approve
-   — stops nothing:
-   report the reason and continue under human review.
+   — means no reviewer ran:
+   report the reason and carry on under human review, with the merge left to whatever the base branch requires of it.
+   A child that ran and ended without approving is the opposite case and blocks the merge;
+   step 15 handles it.
 
 {{end}}
 
@@ -550,9 +571,20 @@ address every comment that has arrived, then pay one verification pass and one p
 
 **`review` with `state: "APPROVED"` and empty `comments`**:
 
-Unconditional approval — the PR is ready to merge.
-Chain into the merge, and batch it:
-stop the watcher ({{iff #harness = bro}}`dev::kill(job_id)`{{else}}`TaskStop`{{end}}) and [[land]] **in the same response**, then follow it (it reads the branch to decide what master should carry, then merges with a single `land-pr` command).
+With no eyebro summoned, this is the whole story:
+chain into the merge, and batch it
+— stop the watcher ({{iff #harness = bro}}`dev::kill(job_id)`{{else}}`TaskStop`{{end}}) and [[land]] **in the same response**, then follow it (it reads the branch to decide what master should carry, then merges with a single `land-pr` command).
+
+Where you did summon one, collect its verdict first:
+`bro::summon_check` on the request id, without waiting
+— the child exits moments after posting its approval, so a `pending` answer wants one more check rather than a blocking wait.
+An approving answer clears the merge:
+batch the watcher stop and [[land]] exactly as above.
+An answer that is not one
+— findings still standing, a `raise`, an error
+— does not, whatever the PR says:
+report it and stop where questions reach the user, `raise` when unattended.
+Never read the PR's own approval as the missing verdict.
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**:
 informational;

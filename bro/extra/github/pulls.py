@@ -20,17 +20,17 @@ def pull_request(owner: str, repo: str, pr: int, token: str) -> dict[str, Any]:
 
 def issue_comments(owner: str, repo: str, pr: int, token: str) -> list[dict[str, Any]]:
   url = f'https://api.github.com/repos/{owner}/{repo}/issues/{pr}/comments?per_page=100'
-  return api.get(url, token)
+  return api.get_all(url, token)
 
 
 def review_comments(owner: str, repo: str, pr: int, token: str) -> list[dict[str, Any]]:
   url = f'https://api.github.com/repos/{owner}/{repo}/pulls/{pr}/comments?per_page=100'
-  return api.get(url, token)
+  return api.get_all(url, token)
 
 
 def reviews(owner: str, repo: str, pr: int, token: str) -> list[dict[str, Any]]:
   url = f'https://api.github.com/repos/{owner}/{repo}/pulls/{pr}/reviews?per_page=100'
-  return api.get(url, token)
+  return api.get_all(url, token)
 
 
 def review_inline_comments(
@@ -40,4 +40,4 @@ def review_inline_comments(
     f'https://api.github.com/repos/{owner}/{repo}/pulls/{pr}/reviews/'
     f'{review_id}/comments?per_page=100'
   )
-  return api.get(url, token)
+  return api.get_all(url, token)

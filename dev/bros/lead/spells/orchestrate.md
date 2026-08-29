@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.1.0
+version: 2.2.0
 ---
 
 # orchestrate
@@ -238,8 +238,9 @@ the reviewer ends up holding the deepest understanding of the design, which is w
 > "land via [[run pr]] with its base argument set to `<integration-branch>`, so this PRs into the integration branch rather than master";
 > "when the PR merges, mark this task done — do not hold it for a rollout, the work rolls out once after integration";
 > and "if you change a design decision mid-build, append it to the root task's `## Design changelog` for the history and the later stages".
-> Then establish the integration branch:
-> `git fetch origin master && git reset --hard origin/master && git push -u origin $(git branch --show-current)`.
+> Then establish the integration branch, named after the root task rather than left as the workspace's own:
+> `git fetch origin master && git reset --hard origin/master && git checkout -b integration/<root-task-id>-<short-slug> && git push -u origin HEAD`.
+> The prefix is what lets a repository write branch rules over the branches stages merge into, so the name is part of the contract, not decoration.
 > Finally write `## Implementation plan` on the root task (`brog::append_description`):
 > the integration branch name and the ordered stages, each linking its stage task.
 > Do NOT implement code or open a PR,
@@ -258,7 +259,7 @@ Take material objections and open questions to the user before starting stage 1.
 
 ### 3 — stages
 
-**Summon:** `into` the integration branch · `timeout` 28800
+**Summon:** `into` the integration branch · `timeout` 28800 · `grant` `@<the reviewer>` when you hold one, so the stage's PR can clear a reviewed base
 
 The long timeout covers the PR review a phase ends on:
 it idles on human latency, and the summon default kills it mid-watch.
@@ -293,9 +294,14 @@ Then summon:
 
 > Integration phase of multi-phase work coordinated by another session.
 > This workspace is on the integration branch `<integration-branch>`.
-> Sync it against origin,
-> rebase it onto `origin/master` (force-push the INTEGRATION branch with `--force-with-lease` if the rebase rewrote it — never force-push master),
-> then open ONE pull request for all the stages together with [[run pr]] based on master and land it with [[land]].
+> Sync it against origin and rebase it onto `origin/master`.
+> Then take the rebased result onto a branch of its own before doing anything else:
+> `git checkout -b integration-pr/<the integration branch's own slug>`.
+> The pull request goes up from THAT branch;
+> the integration branch is never pushed again.
+> A repository that gates the branches stages merge into refuses every direct push to them, the rebase's included, so a phase that pushed the integration branch would be stuck with nothing to open a PR from
+> — and the two roles want separating anyway, since what stages merge into should not be the thing a merge to master rewrites.
+> Then open ONE pull request for all the stages together with [[run pr]] based on master and land it with [[land]].
 > It goes through a full review round like any other PR:
 > the stage reviews do not stand in for the one that lands this on master.
 > Record the pull request on the task at `<root-task-url>` as soon as it is open (`brog::add_comment`, topic `integration pr`), so the page carries the one that took the stages to master.

@@ -21,6 +21,7 @@ def _review(review: dict[str, Any]) -> dict[str, Any]:
     'id': review['id'],
     'user': review['user']['login'],
     'state': review['state'],
+    'commit_id': review['commit_id'],
     'body': review['body'],
     'submitted_at': review.get('submitted_at'),
     'url': review['html_url'],
