@@ -44,7 +44,7 @@ def report_scope(
     sorted(scoped.required),
     binding.instances,
     binding.layers,
-    scoped.unbound_kinds,
+    scoped.unbound.kinds,
     store,
   )
   _print_tier(
@@ -52,7 +52,7 @@ def report_scope(
     sorted(scoped.optional - scoped.required),
     binding.instances,
     binding.layers,
-    scoped.unbound_kinds,
+    scoped.unbound.kinds,
     store,
   )
   return 0

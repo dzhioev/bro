@@ -25,7 +25,7 @@ _TRAILS_BASELINE = frozenset({'trails'})
 class LaunchScopeError(Exception):
   """a launch failed its scope computation or preflight: a bro the installation
   does not declare, a malformed or no-op grant/revoke override, a credential kind
-  the host reads per project that this launch's attachment binds no entry for, an
+  the host reads per project that this launch binds no project entry for, an
   unknown summon target, or an unknown/unresolvable required secret."""
 
 
@@ -86,7 +86,7 @@ def scoped_secrets(
   The scope carries host defaults plus the operated project's instance selection
   to each explicit store the launch constructs.
   Where no project entry binds the attachment, project-only kinds absent from
-  defaults ride along as `unbound_kinds`.
+  defaults ride along as `unbound`.
   """
   from bro.registry import create_bro
 
@@ -107,7 +107,7 @@ def scoped_secrets(
     required=required,
     optional=optional,
     selection=dict(binding.instances),
-    unbound_kinds=binding.unbound_kinds,
+    unbound=binding.unbound,
   )
 
 

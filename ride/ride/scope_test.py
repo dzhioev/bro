@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 
 import ride.scope
+from bro.base.host_config import UnboundKinds
 from bro.datasources.web_search import WebSearch
 from bros.bro import Bro
 from ride.scope import BRO_RUN_RECIPE, ScopeRecipe
@@ -101,7 +102,7 @@ class TestScopedSecrets:
     assert scoped.selection == {'brog': 'github', 'github': 'reviewer'}
     assert 'brog' in scoped.required
     assert 'brog+github' not in scoped.required
-    assert scoped.unbound_kinds == frozenset()
+    assert scoped.unbound.kinds == frozenset()
 
   def test_a_url_attachment_binds_its_own_entry(self, tmp_path, monkeypatch):
     url = 'https://github.com/foo/api.git'
@@ -110,7 +111,7 @@ class TestScopedSecrets:
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, attachment=url)
     assert scoped.selection == {'brog': 'github'}
-    assert scoped.unbound_kinds == frozenset()
+    assert scoped.unbound.kinds == frozenset()
 
   def test_an_attachment_no_entry_names_withholds_the_hosts_project_kinds(
     self, tmp_path, monkeypatch
@@ -123,13 +124,13 @@ class TestScopedSecrets:
     scoped = ride.scope.scoped_secrets(
       'bro-dev', CLAUDE_RECIPE, attachment='https://github.com/foo/api.git'
     )
-    assert scoped.unbound_kinds == frozenset({'brog'})
+    assert scoped.unbound.kinds == frozenset({'brog'})
 
   def test_a_detached_scope_withholds_the_hosts_project_kinds(self, tmp_path, monkeypatch):
     config = tmp_path / 'bro.json'
     config.write_text(json.dumps({'projects': {str(tmp_path): {'creds': ['brog+github']}}}))
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-    assert ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE).unbound_kinds == frozenset({'brog'})
+    assert ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE).unbound.kinds == frozenset({'brog'})
 
   def test_defaults_bind_and_unpoison_a_detached_scope(self, tmp_path, monkeypatch):
     config = tmp_path / 'bro.json'
@@ -146,10 +147,10 @@ class TestScopedSecrets:
     scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE)
 
     assert scoped.selection == {'brog': 'default'}
-    assert scoped.unbound_kinds == frozenset()
+    assert scoped.unbound.kinds == frozenset()
 
   def test_a_single_project_host_withholds_nothing(self):
-    assert ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE).unbound_kinds == frozenset()
+    assert ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE).unbound.kinds == frozenset()
 
   @pytest.mark.parametrize('recipe', [CLAUDE_RECIPE, RAW_RECIPE, BRO_RUN_RECIPE])
   def test_unknown_bro_fails_the_scope(self, recipe):
@@ -285,7 +286,9 @@ class TestPreflightScopedLaunch:
   def test_an_unbound_project_kind_raises_launch_scope_error(self):
     with pytest.raises(ride.scope.LaunchScopeError, match='reads brog per project'):
       self._preflight(
-        ride.scope.ScopedSecrets({'brog', 'github'}, set(), unbound_kinds=frozenset({'brog'}))
+        ride.scope.ScopedSecrets(
+          {'brog', 'github'}, set(), unbound=UnboundKinds(frozenset({'brog'}))
+        )
       )
 
   def test_naming_the_instance_satisfies_an_unbound_project_kind(self):
@@ -294,7 +297,7 @@ class TestPreflightScopedLaunch:
       patch('ride.scope.credentials.build_scoped_store', return_value=({}, frozenset())),
     ):
       scoped, _, _ = self._preflight(
-        ride.scope.ScopedSecrets({'brog'}, set(), unbound_kinds=frozenset({'brog'})),
+        ride.scope.ScopedSecrets({'brog'}, set(), unbound=UnboundKinds(frozenset({'brog'}))),
         grant=['brog+github'],
       )
     assert scoped.required == {'brog'}

@@ -41,7 +41,7 @@ class TestProjectSelection:
       'trails': host_config.DEFAULTS_LAYER,
       'brog': host_config.PROJECT_LAYER,
     }
-    assert selected.unbound_kinds == frozenset()
+    assert selected.unbound.kinds == frozenset()
 
   def test_an_unnamed_attachment_gets_defaults_and_refuses_project_only_kinds(
     self, config_file, tmp_path
@@ -62,12 +62,16 @@ class TestProjectSelection:
     selected = host_config.project_selection(str(tmp_path / 'elsewhere'))
 
     assert selected.instances == {'github': 'dev'}
-    assert selected.unbound_kinds == frozenset({'brog', 'trails'})
+    assert selected.unbound == host_config.UnboundKinds(
+      frozenset({'brog', 'trails'}), str((tmp_path / 'elsewhere').resolve())
+    )
 
   def test_a_detached_launch_uses_the_same_unbound_rule(self, config_file, tmp_path):
     config_file({'projects': {str(tmp_path): {'creds': ['brog+github']}}})
 
-    assert host_config.project_selection(None).unbound_kinds == frozenset({'brog'})
+    assert host_config.project_selection(None).unbound == host_config.UnboundKinds(
+      frozenset({'brog'})
+    )
 
   def test_an_empty_matching_project_is_bound(self, config_file, tmp_path):
     config_file(
@@ -79,7 +83,7 @@ class TestProjectSelection:
       }
     )
 
-    assert host_config.project_selection(str(tmp_path)).unbound_kinds == frozenset()
+    assert host_config.project_selection(str(tmp_path)).unbound.kinds == frozenset()
 
   def test_keys_expand_and_resolve_before_matching(self, config_file, tmp_path, monkeypatch):
     monkeypatch.setenv('HOME', str(tmp_path))
@@ -174,7 +178,7 @@ class TestToolSelection:
       'github': host_config.DEFAULTS_LAYER,
       'openai': host_config.TOOL_LAYER,
     }
-    assert selected.unbound_kinds == frozenset()
+    assert selected.unbound.kinds == frozenset()
 
   def test_unknown_tool_uses_defaults(self, config_file):
     config_file({'defaults': {'creds': ['github+dev']}})
