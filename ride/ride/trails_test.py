@@ -2,8 +2,8 @@ from ride import trails
 from ride.workspace.store import ScopedSecrets
 
 
-def _scope(required, optional=('openai',)):
-  return ScopedSecrets(set(required), set(optional))
+def _scope(required, optional=('openai',), selection=None):
+  return ScopedSecrets(set(required), set(optional), selection or {})
 
 
 class _Store:
@@ -21,11 +21,11 @@ class _Store:
 
 def _patch_view_store(monkeypatch, config):
   """serve `config` as the scope's trails credential (None = no such credential);
-  returns the (required, optional) name sets the view store was built over."""
+  returns the required and optional kinds plus the selection the view was built over."""
   reads = []
 
   def scoped_view_store(store, names, *, optional=()):
-    reads.append((set(names), set(optional)))
+    reads.append((set(names), set(optional), dict(store.selection)))
     return _Store(config)
 
   monkeypatch.setattr(trails.credentials, 'scoped_view_store', scoped_view_store)
@@ -54,8 +54,10 @@ def test_a_local_credential_maps_the_host_root_for_a_selected_instance(monkeypat
   reads = _patch_view_store(monkeypatch, {'backend': 'local'})
   monkeypatch.setattr(trails, 'local_root', lambda: root)
 
-  mounts = trails.local_trails_mounts(_scope({'github'}, optional={'trails+eu'}))
+  mounts = trails.local_trails_mounts(
+    _scope({'github'}, optional={'trails'}, selection={'trails': 'eu'})
+  )
 
-  assert reads == [({'github'}, {'trails+eu'})]
+  assert reads == [({'github'}, {'trails'}, {'trails': 'eu'})]
   assert mounts == (f'{root.resolve()}:/var/ride/trails',)
   assert root.is_dir()

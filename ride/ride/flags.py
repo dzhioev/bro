@@ -60,14 +60,14 @@ def add_scope_flags(parser: Parser) -> None:
     action='append',
     default=None,
     metavar='NAME',
-    help='add a credential (NAME) or a summonable bro (@BRO) to the session scope; a credential grant replaces the selected same-kind name (repeatable); errors on an exact duplicate or unknown name',
+    help='add a credential (KIND or KIND+INSTANCE) or a summonable bro (@BRO) to the session scope; an instance grant replaces the kind selection (repeatable)',
   )
   parser.add_argument(
     '--revoke',
     action='append',
     default=None,
     metavar='NAME',
-    help='remove a credential (NAME) or a summonable bro (@BRO) from the session scope (repeatable); errors if not in the scope',
+    help='remove a credential kind (KIND) or a summonable bro (@BRO) from the session scope (repeatable); credential instances cannot be revoked directly',
   )
 
 

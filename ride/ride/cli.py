@@ -144,7 +144,9 @@ def build_parser() -> Parser:
   exec_command.add_argument('name', help='container workspace name')
   exec_command.add_argument('command', nargs=REMAINDER, help='command and arguments')
 
-  scope = subparsers.add_parser('scope', help='print a prospective session credential scope')
+  scope = subparsers.add_parser(
+    'scope', help='print a prospective session credential scope with instance-selection layers'
+  )
   scope.add_argument(
     '--repo', default=None, metavar='PATH|URL', help='attach an existing checkout path or git URL'
   )

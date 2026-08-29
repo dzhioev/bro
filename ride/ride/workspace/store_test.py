@@ -4,6 +4,10 @@ import ride.workspace.store as workspace_store
 
 
 class TestFinalizeScopedSecrets:
+  def test_scope_entries_must_be_kinds(self):
+    with pytest.raises(ValueError, match="use kind 'github'"):
+      workspace_store.ScopedSecrets({'github+reviewer'}, set())
+
   def test_grants_join_required_and_revokes_optional(self):
     scoped = workspace_store.ScopedSecrets({'github'}, {'openai'})
     result = workspace_store.finalize_scoped_secrets(
@@ -11,20 +15,22 @@ class TestFinalizeScopedSecrets:
     )
     assert result == workspace_store.ScopedSecrets({'github', 'gmail_creds'}, set())
 
-  def test_grant_replaces_the_selected_credential_of_the_same_kind(self):
-    scoped = workspace_store.ScopedSecrets({'brog', 'github'}, {'openai'})
+  def test_instance_grant_replaces_the_selection_without_changing_the_kind(self):
+    scoped = workspace_store.ScopedSecrets({'brog', 'github'}, {'openai'}, {'brog': 'linear'})
     result = workspace_store.finalize_scoped_secrets(scoped, grant=['brog+github'], revoke=[])
-    assert result == workspace_store.ScopedSecrets({'brog+github', 'github'}, {'openai'})
+    assert result == workspace_store.ScopedSecrets(
+      {'brog', 'github'}, {'openai'}, {'brog': 'github'}
+    )
 
-  def test_grant_can_replace_an_instance_with_the_bare_kind(self):
-    scoped = workspace_store.ScopedSecrets({'brog+github'}, set())
+  def test_bare_grant_adds_a_kind_under_the_computed_selection(self):
+    scoped = workspace_store.ScopedSecrets(set(), set(), {'brog': 'github'})
     result = workspace_store.finalize_scoped_secrets(scoped, grant=['brog'], revoke=[])
-    assert result.required == {'brog'}
+    assert result == workspace_store.ScopedSecrets({'brog'}, set(), {'brog': 'github'})
 
-  def test_replacing_an_optional_credential_promotes_the_grant_to_required(self):
+  def test_replacing_an_optional_credential_promotes_the_kind_to_required(self):
     scoped = workspace_store.ScopedSecrets(set(), {'openai'})
     result = workspace_store.finalize_scoped_secrets(scoped, grant=['openai+work'], revoke=[])
-    assert result == workspace_store.ScopedSecrets({'openai+work'}, set())
+    assert result == workspace_store.ScopedSecrets({'openai'}, set(), {'openai': 'work'})
 
   def test_granting_two_instances_of_one_kind_errors(self):
     scoped = workspace_store.ScopedSecrets(set(), set())
@@ -33,10 +39,15 @@ class TestFinalizeScopedSecrets:
         scoped, grant=['brog+github', 'brog+linear'], revoke=[]
       )
 
-  def test_explicit_revoke_of_the_replaced_name_is_redundant(self):
+  def test_grant_and_revoke_of_one_kind_conflict(self):
     scoped = workspace_store.ScopedSecrets({'brog'}, set())
-    with pytest.raises(ValueError, match="cannot revoke 'brog'"):
+    with pytest.raises(ValueError, match='grant and revoke the same credential kind'):
       workspace_store.finalize_scoped_secrets(scoped, grant=['brog+github'], revoke=['brog'])
+
+  def test_instance_spelled_revoke_names_the_kind_form(self):
+    scoped = workspace_store.ScopedSecrets({'brog'}, set(), {'brog': 'github'})
+    with pytest.raises(ValueError, match=r'revoke its kind instead \(--revoke brog\)'):
+      workspace_store.finalize_scoped_secrets(scoped, grant=[], revoke=['brog+github'])
 
   def test_revoke_removes_required(self):
     scoped = workspace_store.ScopedSecrets({'github'}, {'openai'})
@@ -47,6 +58,11 @@ class TestFinalizeScopedSecrets:
     scoped = workspace_store.ScopedSecrets(set(), {'openai'})
     with pytest.raises(ValueError, match='already in the scoped credential set'):
       workspace_store.finalize_scoped_secrets(scoped, grant=['openai'], revoke=[])
+
+  def test_exact_instance_grant_is_redundant_for_required_kind(self):
+    scoped = workspace_store.ScopedSecrets({'brog'}, set(), {'brog': 'github'})
+    with pytest.raises(ValueError, match='already selected in the scoped credential set'):
+      workspace_store.finalize_scoped_secrets(scoped, grant=['brog+github'], revoke=[])
 
   def test_revoke_absent_from_both_tiers_errors(self):
     scoped = workspace_store.ScopedSecrets({'github'}, {'openai'})

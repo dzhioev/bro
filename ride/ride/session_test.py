@@ -257,7 +257,8 @@ class TestGrantRevoke:
       rc = ride_session.start_session(_spec(drop=True, grant=['brog+github']))
     assert rc == 0
     launch = harness.run_in_container.call_args.args[0]
-    assert launch.secrets == {'brog+github', 'github'}
+    assert launch.secrets == {'brog', 'github'}
+    assert launch.credential_selection['brog'] == 'github'
 
   def test_start_session_can_revoke_an_optional_secret(self):
     with _ContainerHarness(optional_secrets={'openai'}) as harness:
@@ -724,6 +725,20 @@ class TestScopeOverrides:
     )
     assert (updated.grant, updated.revoke) == ([], [])
 
+  def test_revoke_kind_cancels_a_recorded_instance_grant(self):
+    updated = _spec(grant=['github+reviewer']).with_scope_overrides(grant=[], revoke=['github'])
+    assert (updated.grant, updated.revoke) == ([], [])
+
+  def test_a_new_instance_grant_replaces_the_recorded_same_kind_grant(self):
+    updated = _spec(grant=['github+reviewer']).with_scope_overrides(
+      grant=['github+developer'], revoke=[]
+    )
+    assert updated.grant == ['github+developer']
+
+  def test_instance_spelled_revoke_is_rejected_on_resume(self):
+    with pytest.raises(ValueError, match=r'revoke its kind instead \(--revoke github\)'):
+      _spec(grant=['github+reviewer']).with_scope_overrides(grant=[], revoke=['github+reviewer'])
+
   def test_restating_a_recorded_override_raises(self):
     with pytest.raises(ValueError, match='already in the recorded --grant: @bro-dev'):
       _spec(grant=['@bro-dev']).with_scope_overrides(grant=['@bro-dev'], revoke=[])
@@ -1031,7 +1046,7 @@ class TestHostSession:
         ['ride'],
         {},
         {'dev', 'bro'},
-        set(),
+        ScopedSecrets(set(), set()),
         ContainerRuntimeResolver.fixed(ContainerRuntime('runtime-image', 'bundle-hash')),
         interactive=False,
       )
