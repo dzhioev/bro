@@ -22,12 +22,12 @@ from bro.base.condition import (
   var,
 )
 from bro.base.offload import off_loop
-from bro.channel import BroChannel
 from bro.datasources.base import DataSource
 from bro.datasources.man import ManPage, manual
 from bro.llm.llm import EFFORT_LEVELS, NativeLLMSpec
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
+from bro.run_lifecycle import RunLifecycle, validate_answer
 
 DEFAULT_LLM_SPEC: NativeLLMSpec = llm_llms_openai.LLMSpec(reasoning_effort='medium')
 
@@ -150,7 +150,7 @@ async def _claude_raise(reason: str) -> str:
   def record_and_kill() -> None:
     log.warning('raise: %s', reason)
     try:
-      channel = BroChannel.from_env()
+      channel = RunLifecycle.from_env()
       if channel is not None:
         channel.completed(reason, 'raised')
         channel.close()
@@ -185,10 +185,12 @@ def _raise_tool(wire: mcp.Wire, variables: Variables) -> llm_mcp.Tool:
 
 
 def _answer(answer: str) -> str:
+  validate_answer(answer)
   raise AnswerDelivered(answer)
 
 
 async def _claude_answer(answer: str) -> str:
+  validate_answer(answer)
   # the claude twin of _claude_raise, for the clean end: no exception can end
   # the consuming claude session, so send the run's result over the broker channel,
   # then terminate the session. Unlike raise, an undeliverable answer must not
@@ -197,7 +199,7 @@ async def _claude_answer(answer: str) -> str:
   from bro.workspace.session import terminate_session
 
   def record_and_kill() -> None:
-    channel = BroChannel.from_env()
+    channel = RunLifecycle.from_env()
     if channel is None:
       raise RuntimeError(
         'no broker channel: the answer cannot reach the summoner; surface it to the user instead'

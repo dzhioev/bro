@@ -291,16 +291,13 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
 - `summon_status.py` — the session's live summon-status file:
   its typed records, the `RIDE_SUMMON_STATUS` env var pointing at it, and its atomic write.
   Stdlib-only and apart from `summon.py`, so the claude statusLine's repeated reads never pull the summon client in
-- `channel.py` — `BroChannel`, the bro-side broker consumer:
-  a thin adapter over `bro.broker.client.Client` answering the quest the launch named in `BROKER_QUEST`.
-  `Runner.run()` builds one via the `_make_channel()` hook (`BroChannel.from_env()` — `None` when `BROKER_CHANNEL` is unset or the broker package is unimportable; the broker imports are deferred to call time, so importing `bro` never requires broker)
-  and emits the started progress (`{trail_id}`) right after `start_trail` and the run's result after `end_trail`
-  — ok with the run's return value, or failed carrying the end reason (raised → `BroRaised.reason`, error → the exception string).
-  Fires for `Runner.run` (LLM-process children) plus the started of a *summoned* interactive conversation (`Runner.send`'s first turn);
-  an un-summoned `send()` emits nothing, and a claude-code `--raw` session never calls `run()`.
-  `close()` confirms delivery (`ClientTransport.close(confirm=True)`)
-  — the run's result is typically the process's last act before exit.
-  `conftest.py` clears the framework's namespaces so tests never emit into a live session channel.
+- `run_lifecycle.py` — `RunLifecycle`, the worker-process emitter over `bro.broker.client.Client`:
+  it answers the quest named in `BROKER_QUEST`, emits the run's set-once `trail` mark after recording opens, and sends the closing result.
+  `Runner.run()` builds one through `_make_channel()`;
+  a summoned interactive native run emits its trail on the first `send`, while an un-summoned conversation emits nothing.
+  The shared answer bound is enforced at the `answer` tool while the run can react;
+  terminal fallback output is truncated with a marker and its trail id.
+  `close()` confirms delivery through `ClientTransport.close(confirm=True)`.
 - `bros/bro/` — the core distribution's sole concrete persona, inside the shared PEP 420 `bros` namespace.
   It defines `Bro(BaseBro)`, the minimal bro registered as `bro`, with a minimal go-to system prompt and no MCP servers.
   Bros normally inherit from this `Bro`, so they pick up the shared defaults via the MRO walk;

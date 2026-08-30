@@ -29,9 +29,9 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   `ScopeRecipe`, `BRO_RUN_RECIPE`, attachment-bound credential selection, `scoped_secrets`, the strict launch preflight, scope override splitting, and summoned-child scope computation.
   In-process `bro run` / `bro chat` create no scope.
 - `ride/root.py` — neutral container and host-process root supervision behind the broker availability gate.
-- `ride/spawn.py` — broker-root composition, the root-lifecycle observer, native trail-pointer publication for the root and summoned children, summon lowering
+- `ride/spawn.py` — broker-root composition, summon lowering
   — each child composed through its requested harness's seam hooks, with its recorded resume spec
-  — per-root `SummonControl` wiring, and the bounded credential scope handed to contributed kinds.
+  — per-root journal subscribers for audit and stage-local status/token cleanup, and the bounded credential scope handed to contributed kinds.
   The channel listener's bind hosts are derived here:
   loopback, plus the docker bridge gateway when that is an address of this host.
 - `ride/kinds.py` — the `bro.broker_kinds` entry-point group:
@@ -42,8 +42,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   reflink-or-copy ingest into content-addressed objects, per-peer view directories behind the read-only `/var/ride/artifacts` mounts, the sharing rules with their uniform denial, the byte cap, and the JSONL audit beside the store.
   A broker job's run directory is staged in the store and collected through the same ingest, reaching the peer that requested the job and its summoners.
   The peer wire and CLI are the framework's `bro/artifact.py`.
-- `ride/summon_control.py` — summon host authorization, allow-list resolution, audit/status bookkeeping, and request lifecycle
-  — the manual variant included, registered as an expected external peer with its pending record.
+- `ride/summon_control.py` — summon host authorization and allow-list resolution, plus the journal projection that keeps the stage-local status file and manual-token cleanup live;
+  the manual variant registers as an expected external Worker with its pending record.
   The peer wire and self-contained CLI are the framework's `bro/summon.py`.
 - `ride/pending_summon.py` — pending manual summons:
   the protocol-stamped record a launch token resolves to, written by the control and one-shot-claimed by the `--summoned` launch, whose claim records the child's workspace name — the attribution source for the manual peer.
@@ -81,8 +81,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - Every outer root freezes the invoking installation into one locked runtime bundle for its full lifetime.
   Host workspaces run its absolute snapshot;
   containers mount its named runtime volume read-only, and summoned children reuse the root's image tag and bundle hash.
-- A bro resume reads the broker-published pointer from the workspace's `session/` dir and continues that trail under the recipe recorded in the session spec.
-  No pointer is synthesized when the broker or native trail recording is disabled.
+- A bro resume reads the session-published pointer from the workspace's `session/` dir and continues that trail under the recipe recorded in the session spec.
+  No pointer is published when trail recording is disabled.
 - Workspace state is global under `runtime_base()/workspaces/`, with each workspace's optional repository attachment recorded in metadata.
   Runtime bundles live under `runtime_base()/runtime/`;
   managed URL mirrors under `runtime_base()/repos/`.

@@ -83,18 +83,25 @@ async def test_from_env_connects_and_sends(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_progress_and_result_emit_against_a_quest():
-  # the answering side: a worker emits progress and the closing result against
-  # the quest id its launch carried
+async def test_mark_progress_and_result_emit_against_a_quest():
+  # the answering side emits every non-request envelope against the quest id
+  # its launch carried.
   async with running_server() as server:
     provisioned = await server.transport.provision()
     client = Client(await _transport(provisioned))
-    await asyncio.to_thread(client.progress, 'X', {'trail_id': 't1'})
+    await asyncio.to_thread(client.mark, 'X', 'trail', trail_id='t1')
+    await asyncio.to_thread(client.progress, 'X', {'step': 1})
     await asyncio.to_thread(client.result, 'X', {'outcome': 'ok', 'value': 'answer'})
 
-    _, started = await _next(server.sink.messages)
+    _, trail = await _next(server.sink.messages)
+    _, progress = await _next(server.sink.messages)
     _, done = await _next(server.sink.messages)
-    assert (started.type, started.quest, started.payload) == ('progress', 'X', {'trail_id': 't1'})
+    assert (trail.type, trail.quest, trail.payload) == (
+      'mark',
+      'X',
+      {'transition': 'trail', 'trail_id': 't1'},
+    )
+    assert progress.payload == {'step': 1}
     assert (done.type, done.quest) == ('result', 'X')
     assert done.payload == {'outcome': 'ok', 'value': 'answer'}
     client.close()
@@ -302,6 +309,30 @@ async def test_await_reply_progress_rearms_the_deadline():
 
     result = await asyncio.wait_for(await_task, TIMEOUT)
     assert result.type == 'result'
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_await_reply_can_leave_acceptance_out_of_the_rearm():
+  async with running_server() as server:
+    provisioned = await server.transport.provision()
+    client = Client(await _transport(provisioned))
+    sent = await asyncio.to_thread(client.send, 'summon', {})
+    await_task = asyncio.create_task(
+      asyncio.to_thread(
+        client.await_reply,
+        sent,
+        0.3,
+        timeout_after_interim=0.05,
+        rearm_on_interim=lambda message: message.payload.get('transition') == 'trail',
+      )
+    )
+
+    channel, request_message = await _next(server.sink.messages)
+    await server.transport.send(channel, brotocol.mark(request_message.id, 'accepted'))
+    await asyncio.sleep(0.1)
+    await server.transport.send(channel, brotocol.result(request_message.id, 'ok'))
+    assert (await asyncio.wait_for(await_task, TIMEOUT)).outcome == 'ok'
     client.close()
 
 

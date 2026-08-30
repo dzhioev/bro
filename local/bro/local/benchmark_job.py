@@ -4,8 +4,8 @@
 The `benchmark` kind lets a managed session start a benchmark run without
 holding any docker authority of its own: the session sends one coarse request
 over its broker channel, and the host — where the docker daemon lives — runs
-harbor as a broker job (`Dispatcher.job`), speaking for it: a started
-`progress{}`, then a result carrying the artifact ref of the job's whole run.
+harbor as a broker job (`Dispatcher.job`), speaking for it through accepted and
+started marks, then a result carrying the artifact ref of the job's whole run.
 The config and the bundle harbor resolves from the checkout its environment
 came from (`var/benchmark/bundle`) are the workspace tree's, named absolutely
 since the job runs outside the tree; the score is written into the run's own
@@ -156,7 +156,7 @@ def benchmark_kind(kind_context: KindContext) -> RequestHandler:
 
 def _deny(context: Dispatcher, peer: Peer, error: str) -> None:
   log.warning('benchmark: %s', error)
-  context.reply(peer, {'outcome': 'denied', 'error': error})
+  context.deny(peer, error)
 
 
 # --- the session side: the benchmark-job CLI ---------------------------------------
@@ -215,7 +215,11 @@ def _await_outcome(client: Client, request: Message, timeout: float) -> str:
     result = client.await_reply(
       request,
       timeout,
-      on_interim=lambda message: log.info('benchmark job launched'),
+      on_interim=lambda message: (
+        log.info('benchmark job launched')
+        if message.type == Tag.MARK and message.payload.get('transition') == 'started'
+        else None
+      ),
       timeout_after_interim=timeout,
     )
   except TimeoutError:

@@ -1111,7 +1111,7 @@ class TestMCPRaise:
     monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
     monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
     channel = MagicMock()
-    monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: channel)
+    monkeypatch.setattr('bro.bro.RunLifecycle.from_env', lambda: channel)
     kills: list[tuple[int, int]] = []
     monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
     tool = await self._mcp_raise_tool()
@@ -1124,7 +1124,7 @@ class TestMCPRaise:
   async def test_mcp_raise_kills_without_a_channel(self, monkeypatch, tmp_path):
     monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
     monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
-    monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: None)
+    monkeypatch.setattr('bro.bro.RunLifecycle.from_env', lambda: None)
     kills: list[tuple[int, int]] = []
     monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
     tool = await self._mcp_raise_tool()
@@ -1137,7 +1137,7 @@ class TestMCPRaise:
     monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
     channel = MagicMock()
     channel.completed.side_effect = ConnectionError('channel closed')
-    monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: channel)
+    monkeypatch.setattr('bro.bro.RunLifecycle.from_env', lambda: channel)
     kills: list[tuple[int, int]] = []
     monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
     tool = await self._mcp_raise_tool()
@@ -1207,9 +1207,15 @@ class TestAnswer:
     assert exception.value.answer == 'the verdict'
 
   @pytest.mark.asyncio
+  async def test_bare_answer_rejects_oversize_output_before_ending(self, monkeypatch, tmp_path):
+    tool = await self._tool('bare', monkeypatch, tmp_path)
+    with pytest.raises(ValueError, match='answer too large; mint an artifact'):
+      await tool.call({'answer': 'x' * ((64 << 10) + 1)})
+
+  @pytest.mark.asyncio
   async def test_mcp_answer_records_the_terminal_and_kills_the_runner(self, monkeypatch, tmp_path):
     channel = MagicMock()
-    monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: channel)
+    monkeypatch.setattr('bro.bro.RunLifecycle.from_env', lambda: channel)
     kills: list[tuple[int, int]] = []
     monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
     tool = await self._tool('mcp', monkeypatch, tmp_path)
@@ -1219,10 +1225,22 @@ class TestAnswer:
     assert kills == [(4242, signal.SIGTERM)]
 
   @pytest.mark.asyncio
+  async def test_mcp_answer_rejects_oversize_output_without_killing(self, monkeypatch, tmp_path):
+    channel = MagicMock()
+    monkeypatch.setattr('bro.bro.RunLifecycle.from_env', lambda: channel)
+    kills = []
+    monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
+    tool = await self._tool('mcp', monkeypatch, tmp_path)
+    with pytest.raises(ValueError, match='answer too large; mint an artifact'):
+      await tool.call({'answer': 'x' * ((64 << 10) + 1)})
+    assert kills == []
+    channel.completed.assert_not_called()
+
+  @pytest.mark.asyncio
   async def test_mcp_answer_without_a_channel_spares_the_session(self, monkeypatch, tmp_path):
     # unlike raise, an undeliverable answer must not kill the session — the
     # summoner would never hear it; the agent gets the error instead
-    monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: None)
+    monkeypatch.setattr('bro.bro.RunLifecycle.from_env', lambda: None)
     kills: list[tuple[int, int]] = []
     monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
     tool = await self._tool('mcp', monkeypatch, tmp_path)

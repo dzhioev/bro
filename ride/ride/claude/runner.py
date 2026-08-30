@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from bro.base import log
-from bro.channel import BroChannel
 from bro.monitor import (
   CLAUDE_CONFIG_DIR_ENV,
   SESSION_DIR_ENV,
@@ -25,6 +24,7 @@ from bro.monitor import (
   trail_pointer,
   workspace_session_dir,
 )
+from bro.run_lifecycle import RunLifecycle
 from bro.summon import SUMMONER_ENV, summoned
 from bro.workspace.git import git_out
 from bro.workspace.paths import in_container, workspace_dir
@@ -76,38 +76,37 @@ def _run_claude(argv: list[str], env: dict[str, str], transcripts: Path) -> int:
 _TRAIL_POLL_SECONDS = 1.0
 
 
-def _announce_started(announced: threading.Event) -> None:
-  """announce the started progress once, with the trail id the session recorder
+def _announce_trail(emitted: threading.Event) -> None:
+  """emit the trail mark once, with the trail id the session recorder
   published; no-op when it is not published yet or the session has no
   channel."""
   pointer = trail_pointer.path()
   trail_id = trail_pointer.read(pointer) if pointer is not None else None
-  if trail_id is None or announced.is_set():
+  if trail_id is None or emitted.is_set():
     return
-  channel = BroChannel.from_env()
+  channel = RunLifecycle.from_env()
   if channel is not None:
-    channel.started(trail_id)
+    channel.trail(trail_id)
     channel.close()
-  announced.set()
+  emitted.set()
 
 
 @contextlib.contextmanager
-def _started_watch() -> Generator[threading.Event]:
-  """watch for the session recorder's current-trail pointer for the block's
-  duration and announce `started` when it lands, yielding the announced event."""
-  announced = threading.Event()
+def _trail_watch() -> Generator[threading.Event]:
+  """Watch for the recorder's current-trail pointer and emit its trail mark."""
+  emitted = threading.Event()
   stop = threading.Event()
 
   def _watch() -> None:
     while not stop.wait(_TRAIL_POLL_SECONDS):
-      _announce_started(announced)
-      if announced.is_set():
+      _announce_trail(emitted)
+      if emitted.is_set():
         return
 
   thread = threading.Thread(target=_watch, daemon=True)
   thread.start()
   try:
-    yield announced
+    yield emitted
   finally:
     stop.set()
     thread.join()
@@ -116,24 +115,26 @@ def _started_watch() -> Generator[threading.Event]:
 def _run_claude_summoned(argv: list[str], env: dict[str, str]) -> int:
   """the `_run_claude` of a summoned solo child: claude runs in print mode with
   its stdout captured, and the runner emits the run lifecycle a bro-run child
-  gets from `BaseBro.run` — the started progress once the session recorder
+  gets from `BaseBro.run` — the trail mark once the session recorder
   publishes the current-trail pointer, and the quest's ok result carrying
   the printed reply after a clean exit. A non-zero exit or a stopped run emits
   no result: the broker synthesizes `result{failed}` with the exit code and
   output tail for the former, and a `raise`- or `answer`-ended session already
   sent its own. The captured reply is echoed to stdout either way, so the
   child's output tail still carries it."""
-  with _started_watch() as announced:
+  with _trail_watch() as emitted:
     run = run_printing(['claude', *argv], env)
   print(run.output, end='', flush=True)
   if run.code != 0 or run.stopped:
     return run.code
   # a run short enough to end inside the recorder's adoption cadence announces
   # here or not at all; the result must not wait on recording
-  _announce_started(announced)
-  channel = BroChannel.from_env()
+  _announce_trail(emitted)
+  channel = RunLifecycle.from_env()
   if channel is not None:
-    channel.completed(run.output.rstrip('\n'), 'ok')
+    pointer = trail_pointer.path()
+    trail_id = trail_pointer.read(pointer) if pointer is not None else None
+    channel.completed(run.output.rstrip('\n'), 'ok', trail_id=trail_id)
     channel.close()
   return run.code
 
@@ -142,11 +143,11 @@ def _run_claude_summoned_interactive(
   argv: list[str], env: dict[str, str], transcripts: Path
 ) -> int:
   """the `_run_claude` of a manual summon child: claude runs interactively as
-  usual, and the runner only announces the started progress. The result is the
+  usual, and the runner only emits the trail mark. The result is the
   `answer` service tool's own — a session that ends without it produced no
   answer, which the broker turns into the summoner's synthesized failure when
   the channel goes."""
-  with _started_watch():
+  with _trail_watch():
     return _run_claude(argv, env, transcripts)
 
 
