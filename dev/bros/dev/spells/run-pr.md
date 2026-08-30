@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 7.0.0
+version: 7.1.0
 ---
 
 # run-pr
@@ -73,18 +73,21 @@ Restore the state that session had, reconcile what happened while nobody watched
    — feedback left unhandled now would be silently skipped forever.
    Pull the full review state:
    ```bash
-   gh pr view <number> --json reviews,comments
+   gh pr view <number> --json reviews,comments,reviewDecision
    gh api repos/<owner>/<repo>/pulls/<number>/comments   # inline review comments
    ```
    Treat as actionable any repo-owner feedback per step 15's rules that has no later reply from the PR author and no later commit addressing it;
    handle each per step 15.
-   If the latest owner review is APPROVED and nothing actionable is pending, chain straight into [[land]]
+   If the latest owner review is APPROVED, nothing actionable is pending, and `reviewDecision` is `APPROVED` or `null`, chain straight into [[land]]
    — no watcher needed.
    A reviewer's verdict does not survive the session that summoned it, and the PR is no substitute:
    the request id `bro::summon_check` needs died with that session, and an approval sitting on the PR says a review approved, not that the reviewer you delegated to did
    — on a public repository any account can leave one.
    Summon a reviewer again and read the answer off that summon.
    A child that finds the head already approved reconciles it as a completed review and returns saying so without posting again, which is both the verdict you need and the reason waiting on the watcher here would wait forever.
+   Any other `reviewDecision` is step 15's base gate reached with no event to carry it, and step 15's answers apply:
+   a `REVIEW_REQUIRED` leaves the PR owed a review its base counts, and a `CHANGES_REQUESTED` leaves a standing review asking for work
+   — resume watching and settle it rather than landing.
 5. **Resume watching**:
    continue at step 14.
 
@@ -400,9 +403,14 @@ poll-pr <owner>/<repo> <pr_number>
   the PR author, the repo owner, or anyone with a review on the PR (self filtered out — a reviewing session hears the author this way).
   Standalone inline review comments (replies to existing review threads) fire here;
   inline comments attached to a fresh review are bundled into the `review` event instead.
-- `{"event": "review", "id": N, "user": "...", "state": "APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED", "body": "...", "url": "...", "comments": [{"id": N, "path": "...", "line": N, "body": "...", "url": "..."}]}`
+- `{"event": "review", "id": N, "user": "...", "state": "APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED", "review_decision": "APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED|null", "body": "...", "url": "...", "comments": [...]}`
   — new review.
-  `comments` is the array of inline comments attached to this review at the moment `poll-pr` saw it (typically all of them;
+  `state` is this reviewer's verdict;
+  `review_decision` is GitHub's over the whole PR, read as the review fired.
+  `REVIEW_REQUIRED` there means the base branch is still owed a review from an account its rules count
+  — an approval from one they don't leaves the decision standing
+  — and `null` means the base asks for no review at all.
+  `comments` holds one `{"id": N, "path": "...", "line": N, "body": "...", "url": "..."}` per inline comment attached to this review at the moment `poll-pr` saw it (typically all of them;
   rarely empty if the inline-comments endpoint lags the reviews endpoint — late arrivals then fire as standalone `comment` events on a later cycle).
 - `{"event": "watch_failed", "pr": N, "source": "baseline|pull-request|checks|reviews", "reason": "...", "failing_for": N}`
   — terminal:
@@ -532,20 +540,40 @@ address every comment that has arrived, then pay one verification pass and one p
 
 **`review` with `state: "APPROVED"` and empty `comments`**:
 
-With no eyebro summoned, this is the whole story:
-chain into the merge, and batch it
-— stop the watcher ({{iff #harness = bro}}`dev::kill(job_id)`{{else}}`TaskStop`{{end}}) and [[land]] **in the same response**, then follow it (it reads the branch to decide what master should carry, then merges with a single `land-pr` command).
+Two gates stand between this event and the merge.
+Read both before you touch the watcher:
+stopping it is what you would have to undo, and a fresh `poll-pr` baselines every existing event as seen.
 
-Where you did summon one, collect its verdict first:
+**The reviewer's verdict.**
+With no eyebro summoned this event is it.
+Where you did summon one, its own answer is the verdict:
 `bro::summon_check` on the request id, without waiting
 — the child exits moments after posting its approval, so a `pending` answer wants one more check rather than a blocking wait.
-An approving answer clears the merge:
-batch the watcher stop and [[land]] exactly as above.
-An answer that is not one
+An answer that is not an approval
 — findings still standing, a `raise`, an error
-— does not, whatever the PR says:
+— blocks the merge whatever the PR says:
 report it and stop where questions reach the user, `raise` when unattended.
 Never read the PR's own approval as the missing verdict.
+An approval you already collected covers the head it was given for, so a later review event on that same head calls for no second collection
+— `bro::summon_check` on a consumed request id answers `collected` and no longer carries the answer.
+
+**The base's gate**, in this event's `review_decision`.
+`APPROVED` or `null` clears it.
+`REVIEW_REQUIRED` does not, and nothing waives it:
+the review that just landed came from an account the base's rules give no standing to
+— an eyebro posting under an app identity is the usual one
+— so a review from an account they do count is still owed.
+`land-pr` refuses on this same field, so reaching for it here buys an error rather than an answer.
+**Leave the watcher running** and ask the user for that review, naming whose approval did not count and what else is clear (the reviewer's verdict, the checks);
+where the session has a task, log the same as a task comment, so the block survives the session that reported it.
+Their review arrives as another `review` event on the watch you kept, carrying `review_decision: "APPROVED"`, and lands through this branch
+— which is why an unattended run holds here rather than raising:
+nothing is broken, and the approval is still coming.
+`CHANGES_REQUESTED` is a standing review elsewhere on the PR asking for work:
+handle it as feedback above.
+
+With both gates clear, chain into the merge, and batch it
+— stop the watcher ({{iff #harness = bro}}`dev::kill(job_id)`{{else}}`TaskStop`{{end}}) and [[land]] **in the same response**, then follow it (it reads the branch to decide what master should carry, then merges with a single `land-pr` command).
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**:
 informational;

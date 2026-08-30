@@ -241,6 +241,7 @@ PYTEST_FILES = [
   'ride/ride/dive_in_test.py',
   'bro/extra/github/api_test.py',
   'bro/extra/github/app_test.py',
+  'bro/extra/github/pulls_test.py',
   'dev/bro/extra/github/poll_pr_test.py',
   'dev/bro/extra/github/pr_state_test.py',
   'dev/bro/workflow/co_author_test.py',

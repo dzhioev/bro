@@ -13,6 +13,7 @@ anyway.
 """
 
 import contextlib
+import functools
 import http.client
 import json
 import time
@@ -94,10 +95,17 @@ def emit_cycle(
   inline-comments endpoint lags the reviews endpoint by milliseconds, so an
   APPROVED review with an attached "ship after fix" comment would otherwise
   emit as a comment-less APPROVED on one cycle and the comment on the next.
+  every `review` event carries the PR's `review_decision` beside the reviewer's
+  own `state`.
   """
 
   def actionable(login: str) -> bool:
     return login != self_login and login in parties
+
+  @functools.cache
+  def decision() -> Optional[str]:
+    # lazy: a cycle emitting no review must not pay the extra request
+    return pulls.review_decision(owner, repo, pr, token)
 
   for r in pulls.reviews(owner, repo, pr, token):
     login = r.get('user', {}).get('login', '')
@@ -116,6 +124,7 @@ def emit_cycle(
           'id': r['id'],
           'user': login,
           'state': r.get('state', ''),
+          'review_decision': decision(),
           'body': r.get('body', ''),
           'url': r.get('html_url', ''),
           'comments': [_bundled_comment(c) for c in inline],
@@ -233,12 +242,18 @@ def _failure_reason(error: Exception) -> str:
   return f'{type(error).__name__}: {error}'
 
 
+# what a fetch raises when GitHub is the one failing. A local error belongs to
+# none of it and stays fatal, so a malformed payload surfaces where it is made
+# rather than as a source the watch reports on.
+_REMOTE_FAILURES = (http.client.HTTPException, OSError, api.GraphQLError)
+
+
 @contextlib.contextmanager
 def _watch_failure(source: str):
   """report a failed request inside the block as `WatchFailed` against `source`."""
   try:
     yield
-  except (http.client.HTTPException, OSError) as error:
+  except _REMOTE_FAILURES as error:
     raise WatchFailed(source, _failure_reason(error), 0.0)
 
 
@@ -265,7 +280,7 @@ class FailureTracker:
   def probe(self, source: str, fetch: Callable[..., T], *args: Any) -> Optional[T]:
     try:
       result = fetch(*args)
-    except (http.client.HTTPException, OSError) as error:
+    except _REMOTE_FAILURES as error:
       self._record(source, error)
       return None
     self._failing_since.pop(source, None)

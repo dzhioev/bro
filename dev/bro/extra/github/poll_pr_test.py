@@ -65,12 +65,15 @@ class _FakeAPI:
     reviews: Optional[list[dict[str, Any]]] = None,
     review_inline: Optional[dict[int, list[dict[str, Any]]]] = None,
     all_inline: Optional[list[dict[str, Any]]] = None,
+    review_decision: Optional[str] = 'APPROVED',
   ):
     self.issue_comments = issue_comments or []
     self.reviews = reviews or []
     self.review_inline = review_inline or {}
     self.all_inline = all_inline or []
+    self.review_decision = review_decision
     self.review_inline_calls: list[int] = []
+    self.review_decision_calls = 0
 
   def fetch_issue_comments(self, owner, repo, pr, token):
     return self.issue_comments
@@ -85,12 +88,17 @@ class _FakeAPI:
   def fetch_review_comments(self, owner, repo, pr, token):
     return self.all_inline
 
+  def fetch_review_decision(self, owner, repo, pr, token):
+    self.review_decision_calls += 1
+    return self.review_decision
+
 
 def _install(monkeypatch, api: _FakeAPI) -> None:
   monkeypatch.setattr(poll_pr.pulls, 'issue_comments', api.fetch_issue_comments)
   monkeypatch.setattr(poll_pr.pulls, 'reviews', api.fetch_reviews)
   monkeypatch.setattr(poll_pr.pulls, 'review_inline_comments', api.fetch_review_inline_comments)
   monkeypatch.setattr(poll_pr.pulls, 'review_comments', api.fetch_review_comments)
+  monkeypatch.setattr(poll_pr.pulls, 'review_decision', api.fetch_review_decision)
 
 
 def _run(api: _FakeAPI, **kwargs) -> list[dict[str, Any]]:
@@ -141,6 +149,33 @@ class TestEmitCycle:
     assert e['comments'][0]['id'] == 200
     assert e['comments'][0]['body'] == 'nit: rename foo'
     assert e['comments'][0]['line'] == 10
+
+  def test_review_carries_the_decision_the_base_reached(self, monkeypatch):
+    api = _FakeAPI(
+      reviews=[_review(100, 'alice', 'APPROVED')],
+      review_decision='REVIEW_REQUIRED',
+    )
+    _install(monkeypatch, api)
+    events = _run(api)
+    assert events[0]['state'] == 'APPROVED'
+    assert events[0]['review_decision'] == 'REVIEW_REQUIRED'
+
+  def test_one_decision_read_serves_every_review_in_a_cycle(self, monkeypatch):
+    api = _FakeAPI(reviews=[_review(100, 'alice', 'COMMENTED'), _review(101, 'alice', 'APPROVED')])
+    _install(monkeypatch, api)
+    events = _run(api)
+    assert [e['id'] for e in events] == [100, 101]
+    assert api.review_decision_calls == 1
+
+  def test_a_cycle_emitting_no_review_leaves_the_decision_unread(self, monkeypatch):
+    api = _FakeAPI(
+      reviews=[_review(100, 'self-bot', 'APPROVED')],
+      issue_comments=[_issue_comment(50, 'alice', 'top-level comment')],
+    )
+    _install(monkeypatch, api)
+    events = _run(api, self_login='self-bot')
+    assert [e['event'] for e in events] == ['comment']
+    assert api.review_decision_calls == 0
 
   def test_inline_comment_without_attached_review_fires_standalone(self, monkeypatch):
     # reply to an existing review thread, no new review wrapping it.
@@ -316,6 +351,7 @@ class TestSourceFailures:
     monkeypatch.setattr(poll_pr.pulls, 'review_comments', lambda *a: [])
     monkeypatch.setattr(poll_pr.pulls, 'reviews', lambda *a: [])
     monkeypatch.setattr(poll_pr.pulls, 'review_inline_comments', lambda *a: [])
+    monkeypatch.setattr(poll_pr.pulls, 'review_decision', lambda *a: 'APPROVED')
     monkeypatch.setattr(poll_pr.api, 'viewer_login', lambda *a: 'alice')
     monkeypatch.setattr(poll_pr.time, 'sleep', lambda _: None)
 
@@ -338,6 +374,27 @@ class TestSourceFailures:
     assert _poll() == 0
     events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
     assert [e['event'] for e in events] == ['review', 'merged']
+
+  def test_a_refused_graphql_read_ends_the_watch_through_its_source(self, monkeypatch, capsys):
+    self._baseline(monkeypatch)
+    self._clock(monkeypatch, step=10)
+    monkeypatch.setattr(poll_pr.pulls, 'pull_request', lambda *a: _open_pr())
+    monkeypatch.setattr(poll_pr, '_fetch_check_runs', lambda *a: [])
+    # empty at the startup baseline scan, so every cycle after it has a review
+    # to emit — and therefore a decision to read
+    baseline_scan = iter([[]])
+    monkeypatch.setattr(
+      poll_pr.pulls, 'reviews', lambda *a: next(baseline_scan, [_review(100, 'owner', 'APPROVED')])
+    )
+
+    def refused(*a):
+      raise poll_pr.api.GraphQLError('reading the review decision: [{"type": "FORBIDDEN"}]')
+
+    monkeypatch.setattr(poll_pr.pulls, 'review_decision', refused)
+    assert _poll(failure_grace=30) == 2
+    events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert [e['event'] for e in events] == ['watch_failed']
+    assert events[0]['source'] == 'reviews'
 
   def test_a_source_failing_past_the_grace_window_ends_the_watch(self, monkeypatch, capsys):
     self._baseline(monkeypatch)
