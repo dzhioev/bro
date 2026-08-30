@@ -1453,7 +1453,7 @@ from ride import pending_summon
 pending_summon.claim(record['token'], workspace='external-ws')
 client = connect(Endpoint(port=record['port'], token=record['channel_token']).address(LOCAL_HOST))
 quest = record['token']
-client.send(brotocol.progress(quest, {'trail_id': 't-manual'}))
+client.send(brotocol.mark(quest, 'trail', trail_id='t-manual'))
 client.send(brotocol.result(quest, 'ok', value='the pair verdict'))
 client.close(confirm=True)
 """
@@ -1522,10 +1522,10 @@ client.close(confirm=True)
     assert status['active'] == []
     assert status['last']['outcome'] == 'ok'
     assert status['last']['trail_id'] == 't-manual'
-    # the claimed workspace routed the trail pointer to the child's own
-    # (user-chosen) workspace
+    # lifecycle observation is host-side only; the external session owns its
+    # workspace trail pointer.
     pointer = trail_pointer_module.session_pointer(workspace_dir('external-ws'))
-    assert trail_pointer_module.read(pointer) == 't-manual'
+    assert trail_pointer_module.read(pointer) is None
 
 
 def _pending_record(tmp_path, **overrides) -> pending_summon.PendingSummon:

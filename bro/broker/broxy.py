@@ -4,7 +4,7 @@
 A session-lifetime daemon between a session's broker clients and its one host
 channel: it holds the single upstream connection to the host broker and listens
 on a loopback port of its own. `BROKER_CHANNEL` points at the local address, so
-every existing client (`broker` CLI, `Client.from_env`, `BroChannel`) works
+every existing client (`broker` CLI, `Client.from_env`, `RunLifecycle`) works
 through it unchanged. Upstream, the host sees exactly one long-lived connection
 per channel — the shape its supersede-on-accept semantics were built for — while
 the local side multiplexes the session's short-lived process swarm.

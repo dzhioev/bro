@@ -250,7 +250,7 @@ def test_chat_relays_a_delivered_answer_to_the_summoner(monkeypatch):
   monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
   monkeypatch.setattr('bro.launch.call.call_text', deliver)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
-  monkeypatch.setattr('bro.launch.call.BroChannel.from_env', staticmethod(lambda: channel))
+  monkeypatch.setattr('bro.launch.call.RunLifecycle.from_env', staticmethod(lambda: channel))
 
   assert _chat(['bro', 'record']) == 0
   channel.completed.assert_called_once_with('the verdict', 'ok')
@@ -264,7 +264,7 @@ def test_chat_fails_a_delivered_answer_without_a_channel(monkeypatch, capsys):
   monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
   monkeypatch.setattr('bro.launch.call.call_text', deliver)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
-  monkeypatch.setattr('bro.launch.call.BroChannel.from_env', staticmethod(lambda: None))
+  monkeypatch.setattr('bro.launch.call.RunLifecycle.from_env', staticmethod(lambda: None))
 
   assert _chat(['bro', 'record']) == 1
   assert 'cannot reach the summoner' in capsys.readouterr().err

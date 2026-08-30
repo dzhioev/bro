@@ -9,7 +9,6 @@ from typing import Any, Optional, Self
 
 from bro.base import log
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
-from bro.channel import BroChannel
 from bro.llm.observer import (
   NullObserver,
   Observer,
@@ -19,8 +18,10 @@ from bro.llm.observer import (
   TurnStartedEvent,
 )
 from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
+from bro.monitor import trail_pointer
 from bro.native import providers as native_providers
 from bro.native.llm import LLM
+from bro.run_lifecycle import RunLifecycle
 from bro.summon import summoned, summoned_by_from_env
 from bro.trails.record.bro import Recorder
 
@@ -138,6 +139,8 @@ class Runner:
       summoned_by=summoned_by,
     )
     self.trail_id = trail_id if len(trail_id) > 0 else None
+    if self.trail_id is not None:
+      trail_pointer.publish(self.trail_id)
     messages = [
       {'role': 'system', 'content': system_prompt},
       {'role': 'user', 'content': input},
@@ -214,8 +217,8 @@ class Runner:
         raise
       log.info('run started%s', f' (trail {trail_id})' if len(trail_id) > 0 else '')
       channel = self._make_channel()
-      if channel is not None:
-        channel.started(trail_id)
+      if channel is not None and len(trail_id) > 0:
+        channel.trail(trail_id)
       result: Optional[str] = None
       try:
         with self:
@@ -277,7 +280,8 @@ class Runner:
         # announces nothing (its channel is the enclosing session's, not its own)
         channel = self._make_channel()
         if channel is not None:
-          channel.started(trail_id)
+          if len(trail_id) > 0:
+            channel.trail(trail_id)
           channel.close()
     else:
       if observer is not None:
@@ -312,9 +316,9 @@ class Runner:
   def _make_tracker(self) -> Tracker:
     return _default_tracker_factory()
 
-  def _make_channel(self) -> Optional[BroChannel]:
+  def _make_channel(self) -> Optional[RunLifecycle]:
     # None (no BROKER_CHANNEL in the environment) keeps the lifecycle emission inert
-    return BroChannel.from_env()
+    return RunLifecycle.from_env()
 
   def _create_llm(self, *, hold: str) -> LLM:
     return native_providers.create(
