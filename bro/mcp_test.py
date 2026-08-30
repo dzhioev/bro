@@ -1,9 +1,28 @@
 import pytest
 
-from bro import mcp
+from bro import mcp, registry
 from bro.base.condition import ConditionError, when
 from bro.llm.mcp import InProcessMCPServer
 from bro.mcp import render_text, select
+from bros.bro import Bro
+
+
+class _Reviewer(Bro):
+  name = 'x-reviewer'
+  description = 'a reviewer'
+
+
+class _HouseReviewer(_Reviewer):
+  name = 'x-house-reviewer'
+  description = 'a reviewer of this house'
+
+
+@pytest.fixture
+def installed_reviewers(monkeypatch):
+  """`x-house-reviewer`, derived from `x-reviewer`, installed for the test."""
+  for cls in (_Reviewer, _HouseReviewer):
+    monkeypatch.setitem(registry._REGISTRY, cls.name, cls)
+  monkeypatch.setattr(mcp, '_persona_names', lambda: frozenset({'x-reviewer', 'x-house-reviewer'}))
 
 
 class TestRenderText:
@@ -79,6 +98,14 @@ class TestRenderText:
     # 'bro' is an installed persona (the core entry point), so testing it
     # against an empty list reads as absent rather than raising
     assert render_text(text, may_summon=[]) == ''
+
+  def test_may_summon_membership_is_is_a(self, installed_reviewers):
+    text = '{{when #may_summon contains x-reviewer}}delegate{{end}}'
+    assert render_text(text, may_summon=['x-house-reviewer']) == 'delegate'
+
+  def test_may_summon_does_not_read_a_grant_as_the_bros_deriving_from_it(self, installed_reviewers):
+    text = '{{when #may_summon contains x-house-reviewer}}delegate{{end}}'
+    assert render_text(text, may_summon=['x-reviewer']) == ''
 
   def test_may_summon_universe_admits_a_granted_but_uninstalled_target(self):
     text = '{{when #may_summon contains ghost-bro}}delegate{{end}}'

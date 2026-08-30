@@ -8,7 +8,7 @@ import bro.registry
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.mcp import MCPServer
 from bro.native.llm import LLM
-from bro.registry import _REGISTRY, create_bro, get_class, list_classes, register
+from bro.registry import _REGISTRY, create_bro, get_class, lineage, list_classes, register
 from bros.bro import Bro
 
 
@@ -54,6 +54,11 @@ class BetaBro(Bro):
 
   def _create_llm(self, *, hold: str):
     return MockLLM()
+
+
+class DerivedAlphaBro(AlphaBro):
+  name = 'derived-alpha'
+  description = 'a bro derived from alpha'
 
 
 class ExternalBro(Bro):
@@ -232,3 +237,21 @@ class TestDeclaredSpecs:
       lambda: (_entry_point('external', 'bro.registry_test:ExternalBro'),),
     )
     assert {cls.name for cls in list_classes()} == {'external'}
+
+
+class TestLineage:
+  def test_a_bro_answers_to_its_own_name(self):
+    register(AlphaBro)
+    assert lineage('alpha') == ('alpha',)
+
+  def test_a_derived_bro_answers_to_the_bros_it_derives_from(self):
+    register(AlphaBro)
+    register(DerivedAlphaBro)
+    assert lineage('derived-alpha') == ('derived-alpha', 'alpha')
+
+  def test_an_unregistered_base_is_not_answered_to(self):
+    register(DerivedAlphaBro)
+    assert lineage('derived-alpha') == ('derived-alpha',)
+
+  def test_an_unknown_name_answers_to_itself_alone(self):
+    assert lineage('ghost-bro') == ('ghost-bro',)

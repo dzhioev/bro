@@ -101,3 +101,22 @@ def list_classes() -> list[type[BaseBro]]:
     for name in declared_specs():
       _autoload_class(name)
   return list(_REGISTRY.values())
+
+
+def lineage(name: str) -> tuple[str, ...]:
+  """the bro names `name` answers to: its own first, then every registered bro
+  it derives from, base-ward.
+
+  A name no installed distribution declares answers to itself alone rather than
+  raising: this reports what a name answers to, it does not gate whether the
+  name resolves (`known_names`).
+  """
+  known = known_names()
+  if name not in known:
+    return (name,)
+  names: list[str] = []
+  for ancestor in get_class(name).__mro__:
+    declared = ancestor.__dict__.get('name')
+    if isinstance(declared, str) and declared in known and declared not in names:
+      names.append(declared)
+  return tuple(names)
