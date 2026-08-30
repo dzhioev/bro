@@ -185,6 +185,17 @@ def test_a_project_metadata_change_keeps_the_benchmark_stage(repository):
   assert run_tests.select('main').dropped == frozenset()
 
 
+def test_the_lint_stage_refuses_a_file_the_formatter_would_rewrite(monkeypatch, tmp_path):
+  # the file lints clean, so the format check is the only step that can refuse it
+  (tmp_path / 'drifted.py').write_text('VALUE = {  "a": 1 }\n')
+  monkeypatch.setattr(run_tests, 'DIR', tmp_path)
+
+  with pytest.raises(subprocess.CalledProcessError) as raised:
+    run_tests.lint_stage([])
+
+  assert raised.value.cmd == (sys.executable, '-m', 'ruff', 'format', '--check', '.')
+
+
 def test_a_dropped_stage_reads_skipped_in_the_verdict(monkeypatch, capsys):
   ran = []
   monkeypatch.setattr(

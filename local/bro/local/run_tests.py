@@ -352,6 +352,8 @@ def lint_stage(distributions: Sequence[Distribution] = DISTRIBUTIONS) -> None:
     run(*deptry_args, cwd=directory)
   print('ruff: lint check', file=sys.stderr)
   run(sys.executable, '-m', 'ruff', 'check', '.')
+  print('ruff: format check', file=sys.stderr)
+  run(sys.executable, '-m', 'ruff', 'format', '--check', '.')
 
 
 def types_stage() -> None:
