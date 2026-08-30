@@ -3,6 +3,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from bro.base.spawn import console_script
+
 _MONITOR = Path(__file__).parent / 'infra' / 'monitor_ecs.sh'
 
 _QUERY = (
@@ -53,9 +55,10 @@ echo "$((line + 1))" > {counter_file}
 """
   )
   aws.chmod(0o755)
+  scripts = Path(console_script('bro-shell-dir')).parent
   environment = {
     **os.environ,
-    'PATH': f'{executable_directory}:{os.environ["PATH"]}',
+    'PATH': os.pathsep.join((str(executable_directory), str(scripts), os.environ['PATH'])),
     'POLL_INTERVAL': '0',
   }
 
