@@ -4,15 +4,12 @@ import aws_cdk as cdk
 import pytest
 from aws_cdk import assertions, aws_ec2 as ec2
 
-from bro.oops.cdk import (
-  HostedZoneReference,
-  ImageBuildStack,
-  PlatformStack,
-  RepositoryStack,
-  TrailsServerStack,
-  create_app,
-  from_mapping,
-)
+from bro.oops.cdk.app import create_app
+from bro.oops.cdk.config import from_mapping
+from bro.oops.cdk.ecr import RepositoryStack
+from bro.oops.cdk.image_build import ImageBuildStack
+from bro.oops.cdk.platform import HostedZoneReference, PlatformStack
+from bro.oops.cdk.trails import TrailsServerStack
 
 _ACCOUNT = '111111111111'
 _DOMAIN = 'services.example.com'

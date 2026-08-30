@@ -39,7 +39,7 @@ Its `trails-server` target resolves region, cluster, service, and URL from the `
 
 ## CDK constructs
 
-`bro.oops.cdk.resolve()` reads the `infra` credential and applies the package's consumer-neutral defaults.
+`bro.oops.cdk.config.resolve()` reads the `infra` credential and applies the package's consumer-neutral defaults.
 Deployment-specific overrides live under the credential's `oops` object;
 other top-level fields remain available to the consuming repository.
 The typed configuration carries the region, delegated subdomain, platform stack and cluster names, ECR stack definitions, image-build source and names, and trails resource names.
@@ -62,7 +62,7 @@ The project names its connection through the source's `Auth` block rather than t
 
 ## Trails service
 
-`bro.oops.cdk.TrailsServerStack` owns the retained DynamoDB tables and S3 spillover bucket, the store-config parameter, the Fargate service, ALB rule, and DNS record.
+`bro.oops.cdk.trails.TrailsServerStack` owns the retained DynamoDB tables and S3 spillover bucket, the store-config parameter, the Fargate service, ALB rule, and DNS record.
 Its DynamoDB table, key, and index declarations come from `bro.trails.server.dynamo`.
 
 The repository app is `deployment/app.py`, and `trails/server/deploy.sh` deploys its stacks in dependency order.

@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
-from bro.oops.cdk import from_mapping, resolve
+from bro.oops.cdk.config import from_mapping, resolve
 
 
 def test_defaults_are_consumer_neutral():

@@ -158,7 +158,7 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   `ride/ride/claude/trail_recorder_test.py` drives the adapter-owned recorder over one.
   `network_test.py` owns transport/retry/error mapping;
   `server/dynamo_test.py` owns Dynamo mechanics over moto-emulated DynamoDB and S3.
-  `server/dynamo.py` owns the table, key, and index schema consumed by that fixture and by `bro.oops.cdk.TrailsServerStack`.
+  `server/dynamo.py` owns the table, key, and index schema consumed by that fixture and by `bro.oops.cdk.trails.TrailsServerStack`.
 
 ## Service auth
 
