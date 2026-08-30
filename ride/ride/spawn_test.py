@@ -55,9 +55,9 @@ class _Context:
   workers: dict = dataclass_field(default_factory=dict)
 
 
-def _peers_expecting(exchange: str) -> ride.peers.Peers:
+def _peers_expecting(quest: str) -> ride.peers.Peers:
   peers = ride.peers.Peers(Workspace.ensure(SESSION, None, WorkspaceKind.CONTAINER))
-  peers.note_summon(cast(Dispatcher, _Context()), 'ROOT', exchange)
+  peers.note_summon(cast(Dispatcher, _Context()), 'ROOT', quest)
   return peers
 
 
@@ -397,8 +397,8 @@ class TestSummonLowering:
       def __init__(self):
         self.spawned: list = []
 
-      async def spawn(self, launch, channel, exchange):
-        self.spawned.append((launch, channel, exchange))
+      async def spawn(self, launch, channel, quest):
+        self.spawned.append((launch, channel, quest))
         return MagicMock()
 
     docker = RecordingDocker()
@@ -414,7 +414,7 @@ class TestSummonLowering:
       may_summon=(),
     )
     await spawner.spawn(launch, channel, 'X-1')
-    [(lowered, lowered_channel, lowered_exchange)] = docker.spawned
+    [(lowered, lowered_channel, lowered_quest)] = docker.spawned
     assert isinstance(lowered, ride.spawn.DockerLaunchSpec)
     assert lowered.launch.command == [
       'ride', 'solo', '--in-place', '--workspace', 'broker-CH', '--harness', 'bro', '--repo', '/proj',
@@ -422,7 +422,7 @@ class TestSummonLowering:
     ]  # fmt: skip
     assert lowered.launch.name == 'broker-CH'
     assert lowered_channel is channel
-    assert lowered_exchange == 'X-1'
+    assert lowered_quest == 'X-1'
 
   @pytest.mark.asyncio
   async def test_lowering_failure_propagates_out_of_spawn(self, lowering_harness):
@@ -563,7 +563,7 @@ class TestChildTrailPublication:
     from bro.broker import brotocol
 
     observe = ride.spawn._note_child_started(_peers_expecting('req'))
-    observe('CH', 'root', brotocol.progress('req', {'trail_id': 't-9'}))
+    observe('CH', 'root', brotocol.mark('req', 'trail', trail_id='t-9'))
     pointer = trail_pointer.session_pointer(workspace_dir('broker-CH'))
     assert trail_pointer.read(pointer) == 't-9'
 
@@ -707,7 +707,7 @@ class TestRunRootViaBroker:
       audit_file=tmp_path / 'audit.jsonl',
     )
     observe = ride.spawn._root_lifecycle(control, workspace)
-    observe('root', None, brotocol.progress('X', {'trail_id': 't-1'}))
+    observe('root', None, brotocol.mark('X', 'trail', trail_id='t-1'))
     # the started progress doubles as the bro-run root's provenance source
     assert control._root_trail_id == 't-1'
     pointer = trail_pointer.session_pointer(workspace.path)

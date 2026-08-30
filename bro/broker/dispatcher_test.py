@@ -53,20 +53,20 @@ class FakeRuntime:
     self.spawn_error: Optional[BaseException] = None
     self._stopped = asyncio.Event()
 
-  async def spawn(self, launch: LaunchSpec, *, timeout: Optional[float], exchange: str) -> Peer:
-    self.spawns.append((launch, timeout, exchange))
+  async def spawn(self, launch: LaunchSpec, *, timeout: Optional[float], quest: str) -> Peer:
+    self.spawns.append((launch, timeout, quest))
     if self.spawn_error is not None:
       raise self.spawn_error
     return self.next_peers.pop(0)
 
   async def job(
-    self, command: CommandJob, *, directory: Path, timeout: Optional[float], exchange: str
+    self, command: CommandJob, *, directory: Path, timeout: Optional[float], quest: str
   ) -> Peer:
-    self.jobs.append((command, timeout, exchange))
+    self.jobs.append((command, timeout, quest))
     self.job_directories.append(directory)
     if self.spawn_error is not None:
       raise self.spawn_error
-    return job_peer(exchange)
+    return job_peer(quest)
 
   async def expect(self, *, timeout: Optional[float]) -> Provisioned:
     self.expects.append(timeout)
@@ -172,7 +172,7 @@ async def test_ping_replies_with_its_arguments_echoed():
   target, reply = runtime.sent[0]
   assert target == 'caller'
   assert reply.type == Tag.RESULT
-  assert reply.request == 'Q'
+  assert reply.quest == 'Q'
   assert reply.payload == {'outcome': 'ok', 'value': {'n': 7}}
 
 
@@ -183,59 +183,63 @@ async def test_unknown_kind_is_denied():
   [(target, denial)] = runtime.sent
   assert target == 'caller'
   assert denial.type == Tag.RESULT
-  assert denial.request == 'Q'
+  assert denial.quest == 'Q'
   assert denial.payload['outcome'] == 'denied'
   assert 'mystery' in denial.payload['error']
 
 
 @pytest.mark.asyncio
 async def test_request_id_collision_is_denied():
-  # ids are unique by entropy; one naming a live exchange is rejected, not coped with.
+  # ids are unique by entropy; one naming a live quest is rejected, not coped with.
   dispatcher, runtime = make_dispatcher()
-  await spawn_child(dispatcher, runtime)  # exchange R is live
+  await spawn_child(dispatcher, runtime)  # quest R is live
   dispatcher.on_message('other', _request('spawn-test', 'R'))
   target, denial = runtime.sent[-1]
   assert target == 'other'
-  assert (denial.type, denial.request, denial.payload['outcome']) == (Tag.RESULT, 'R', 'denied')
+  assert (denial.type, denial.quest, denial.payload['outcome']) == (Tag.RESULT, 'R', 'denied')
 
 
 @pytest.mark.asyncio
-async def test_spawn_opens_the_exchange_with_default_timeout_and_binds_the_worker():
+async def test_spawn_opens_the_quest_with_default_timeout_and_binds_the_worker():
   dispatcher, runtime = make_dispatcher()
   child = await spawn_child(dispatcher, runtime)
-  assert runtime.spawns == [(_LAUNCH, DEFAULT_TIMEOUT, 'R')]  # the exchange id rides the launch
-  assert dispatcher.exchanges['R'].requester == 'requester'
-  assert dispatcher.exchanges['R'].worker == child
+  assert runtime.spawns == [(_LAUNCH, DEFAULT_TIMEOUT, 'R')]  # the quest id rides the launch
+  assert dispatcher.quests['R'].requester == 'requester'
+  assert dispatcher.quests['R'].worker == child
   assert dispatcher.workers[child] == 'R'
 
 
 @pytest.mark.asyncio
 async def test_worker_messages_route_to_the_requester_unchanged():
-  # rule 1: the worker's own progress/result, correlated to its exchange, forward as-is.
   dispatcher, runtime = make_dispatcher()
   child = await spawn_child(dispatcher, runtime)
-  started = brotocol.progress('R', {'trail_id': 't'})
+  trail = brotocol.mark('R', 'trail', trail_id='t')
+  progress = brotocol.progress('R', {'note': 'working'})
   done = brotocol.result('R', 'ok', value='answer')
-  dispatcher.on_message(child, started)
+  dispatcher.on_message(child, trail)
+  dispatcher.on_message(child, progress)
   dispatcher.on_message(child, done)
-  assert runtime.sent[-2] == ('requester', started)
-  assert runtime.sent[-1] == ('requester', done)
-  assert 'R' not in dispatcher.exchanges  # the result closed the exchange
+  assert runtime.sent[-3:] == [
+    ('requester', trail),
+    ('requester', progress),
+    ('requester', done),
+  ]
+  assert 'R' not in dispatcher.quests
 
 
 @pytest.mark.asyncio
 async def test_correlated_message_from_a_non_worker_peer_is_refused():
-  # rule 1 requires the sender to *be* the worker: knowing an exchange id gains nothing.
+  # rule 1 requires the sender to *be* the worker: knowing a quest id gains nothing.
   dispatcher, runtime = make_dispatcher()
   await spawn_child(dispatcher, runtime)
   delivered = len(runtime.sent)
   dispatcher.on_message('impostor', brotocol.result('R', 'ok', value='forged'))
   assert len(runtime.sent) == delivered  # dropped, not delivered
-  assert 'R' in dispatcher.exchanges  # and the exchange stays open
+  assert 'R' in dispatcher.quests  # and the quest stays open
 
 
 @pytest.mark.asyncio
-async def test_messages_naming_a_closed_exchange_are_dropped():
+async def test_messages_naming_a_closed_quest_are_dropped():
   dispatcher, runtime = make_dispatcher()
   child = await spawn_child(dispatcher, runtime)
   dispatcher.on_message(child, brotocol.result('R', 'ok'))
@@ -249,7 +253,7 @@ async def test_result_then_exit_is_a_single_terminal():
   dispatcher, runtime = make_dispatcher()
   child = await spawn_child(dispatcher, runtime)
   dispatcher.on_message(child, brotocol.result('R', 'ok'))
-  dispatcher.on_exit(child, 0, '')  # exchange closed already -> no synthesized failed
+  dispatcher.on_exit(child, 0, '')  # quest closed already -> no synthesized failed
   assert all(m.payload.get('outcome') != 'failed' for _, m in runtime.sent)
   assert runtime.forgotten == [child]
   assert child not in dispatcher.workers  # cleaned up
@@ -263,7 +267,7 @@ async def test_exit_without_result_synthesizes_failed_exit():
   target, failed = runtime.sent[-1]
   assert target == 'requester'
   assert failed.type == Tag.RESULT
-  assert failed.request == 'R'
+  assert failed.quest == 'R'
   assert failed.payload == {
     'outcome': 'failed',
     'detail': {'reason': 'exit', 'exit_code': 3, 'output_tail': 'boom-traceback'},
@@ -278,15 +282,15 @@ async def test_timeout_synthesizes_failed_and_the_later_exit_dedupes():
   dispatcher.on_timeout(child)
   target, failed = runtime.sent[-1]
   assert target == 'requester'
-  assert (failed.type, failed.request) == (Tag.RESULT, 'R')
+  assert (failed.type, failed.quest) == (Tag.RESULT, 'R')
   assert failed.payload == {'outcome': 'failed', 'detail': {'reason': 'timeout'}}
-  dispatcher.on_exit(child, -9, '')  # the Runtime-killed peer's reap, exchange closed already
+  dispatcher.on_exit(child, -9, '')  # the Runtime-killed peer's reap, quest closed already
   assert sum(1 for _, m in runtime.sent if m.payload.get('outcome') == 'failed') == 1
   assert runtime.forgotten == [child]
 
 
 @pytest.mark.asyncio
-async def test_spawn_failure_synthesizes_failed_launch_and_closes_the_exchange():
+async def test_spawn_failure_synthesizes_failed_launch_and_closes_the_quest():
   # a launch that raises feeds back as result{failed, reason: 'launch'} instead of
   # leaving the requester to hang to its timeout.
   dispatcher, runtime = make_dispatcher()
@@ -297,13 +301,13 @@ async def test_spawn_failure_synthesizes_failed_launch_and_closes_the_exchange()
   assert len(runtime.sent) == 1
   target, failed = runtime.sent[0]
   assert target == 'requester'
-  assert (failed.type, failed.request) == (Tag.RESULT, 'R')
+  assert (failed.type, failed.quest) == (Tag.RESULT, 'R')
   assert failed.payload == {
     'outcome': 'failed',
     'error': 'image build exploded',
     'detail': {'reason': 'launch'},
   }
-  assert dispatcher.exchanges == {}  # closed; nothing to hold for the never-launched worker
+  assert dispatcher.quests == {}  # closed; nothing to hold for the never-launched worker
   assert dispatcher.workers == {}
 
 
@@ -323,15 +327,15 @@ async def start_job(
 
 
 @pytest.mark.asyncio
-async def test_job_opens_the_exchange_with_the_worker_bound_up_front():
-  # a job's peer id is derivable from the exchange id, so the worker binds before
+async def test_job_opens_the_quest_with_the_worker_bound_up_front():
+  # a job's peer id is derivable from the quest id, so the worker binds before
   # the launch resolves — no exit can slip between launch and bind.
   dispatcher, runtime = make_dispatcher()
   dispatcher.on('job-test', lambda context, peer, message: context.job(_JOB, peer))
   dispatcher.on_message('requester', _request('job-test', 'R'))
   worker = job_peer('R')
-  assert dispatcher.exchanges['R'].requester == 'requester'
-  assert dispatcher.exchanges['R'].worker == worker  # bound before the launch resolved
+  assert dispatcher.quests['R'].requester == 'requester'
+  assert dispatcher.quests['R'].worker == worker  # bound before the launch resolved
   assert dispatcher.workers[worker] == 'R'
   await _settle()
   assert runtime.jobs == [(_JOB, DEFAULT_TIMEOUT, 'R')]
@@ -355,25 +359,25 @@ async def test_job_launch_delivers_a_started_progress():
   worker = await start_job(dispatcher, runtime)
   [(target, started)] = runtime.sent
   assert target == 'requester'
-  assert (started.type, started.request, started.payload) == (Tag.PROGRESS, 'R', {})
+  assert (started.type, started.quest, started.payload) == (Tag.PROGRESS, 'R', {})
   assert [(source, target, m.type) for source, target, m in observed] == [
     (worker, 'requester', Tag.PROGRESS)
   ]
 
 
 @pytest.mark.asyncio
-async def test_job_clean_exit_closes_the_exchange_with_the_collected_run():
+async def test_job_clean_exit_closes_the_quest_with_the_collected_run():
   dispatcher, runtime = make_dispatcher()
   output = job_output(dispatcher)
   worker = await start_job(dispatcher, runtime)
   dispatcher.on_exit(worker, 0, '')
-  # the reap decides the outcome and forgets the exchange before the collection
+  # the reap decides the outcome and forgets the quest before the collection
   # it delivers from, so nothing else can answer it
-  assert 'R' not in dispatcher.exchanges
+  assert 'R' not in dispatcher.quests
   await _until(lambda: any(m.type == Tag.RESULT for _, m in runtime.sent))
   target, done = runtime.sent[-1]
   assert target == 'requester'
-  assert (done.type, done.request) == (Tag.RESULT, 'R')
+  assert (done.type, done.quest) == (Tag.RESULT, 'R')
   assert done.payload == {'outcome': 'ok', 'value': {'ref': _REF}}
   assert output.collected == [(output.opened[0], 'requester')]
   assert output.status() == {'reason': 'exit', 'exit_code': 0}
@@ -455,13 +459,13 @@ async def test_job_launch_failure_synthesizes_failed_launch_and_unbinds_the_work
   dispatcher.on_message('requester', _request('job-test', 'R'))
   await _settle()
   [(target, failed)] = runtime.sent  # no started progress precedes the failure
-  assert (target, failed.type, failed.request) == ('requester', Tag.RESULT, 'R')
+  assert (target, failed.type, failed.quest) == ('requester', Tag.RESULT, 'R')
   assert failed.payload == {
     'outcome': 'failed',
     'error': 'no such command',
     'detail': {'reason': 'launch'},
   }
-  assert dispatcher.exchanges == {}
+  assert dispatcher.quests == {}
   assert dispatcher.workers == {}
   assert not job_output(dispatcher).opened[0].exists()  # no process ran, nothing to collect
 
@@ -489,7 +493,7 @@ async def test_job_round_trips_over_a_real_runtime_and_transport():
   from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 
   class NoSpawner(Spawner):
-    async def spawn(self, launch, channel, exchange):
+    async def spawn(self, launch, channel, quest):
       raise AssertionError('no worker peers in this test')
 
   transport = TcpServerTransport([LOCAL_HOST])
@@ -548,25 +552,25 @@ async def expect_child(
 
 
 @pytest.mark.asyncio
-async def test_expect_opens_the_exchange_and_hands_the_channel_to_ready():
+async def test_expect_opens_the_quest_and_hands_the_channel_to_ready():
   dispatcher, runtime = make_dispatcher()
   child, provisioned = await expect_child(dispatcher, runtime)
   assert runtime.expects == [None]
   assert [p.channel for p in provisioned] == [child]
-  assert dispatcher.exchanges['R'].requester == 'requester'
-  assert dispatcher.exchanges['R'].worker == child
+  assert dispatcher.quests['R'].requester == 'requester'
+  assert dispatcher.quests['R'].worker == child
   assert dispatcher.workers[child] == 'R'
 
 
 @pytest.mark.asyncio
 async def test_expected_peer_messages_route_and_gone_after_the_result_is_clean():
   # an expected worker's progress/result route like a spawned one's; the trailing
-  # on_gone finds the exchange closed and only cleans up.
+  # on_gone finds the quest closed and only cleans up.
   dispatcher, runtime = make_dispatcher()
   child, _ = await expect_child(dispatcher, runtime)
   dispatcher.on_message(child, brotocol.progress('R', {'trail_id': 't'}))
   dispatcher.on_message(child, brotocol.result('R', 'ok'))
-  assert [(target, m.type, m.request) for target, m in runtime.sent] == [
+  assert [(target, m.type, m.quest) for target, m in runtime.sent] == [
     ('requester', Tag.PROGRESS, 'R'),
     ('requester', Tag.RESULT, 'R'),
   ]
@@ -582,7 +586,7 @@ async def test_gone_without_a_result_synthesizes_failed_disconnected():
   child, _ = await expect_child(dispatcher, runtime)
   dispatcher.on_gone(child)
   target, failed = runtime.sent[-1]
-  assert (target, failed.type, failed.request) == ('requester', Tag.RESULT, 'R')
+  assert (target, failed.type, failed.quest) == ('requester', Tag.RESULT, 'R')
   assert failed.payload == {'outcome': 'failed', 'detail': {'reason': 'disconnected'}}
   assert runtime.forgotten == [child]
 
@@ -600,18 +604,18 @@ async def test_expect_failure_synthesizes_failed_launch():
   await _settle()
   assert provisioned == []
   [(target, failed)] = runtime.sent
-  assert (target, failed.type, failed.request) == ('requester', Tag.RESULT, 'R')
+  assert (target, failed.type, failed.quest) == ('requester', Tag.RESULT, 'R')
   assert failed.payload == {
     'outcome': 'failed',
     'error': 'no socket dir',
     'detail': {'reason': 'launch'},
   }
-  assert dispatcher.exchanges == {}
+  assert dispatcher.quests == {}
 
 
 @pytest.mark.asyncio
 async def test_uncorrelatable_answers_are_refused():
-  # rule 3: progress/result naming no live exchange -> dropped, nothing delivered.
+  # rule 3: progress/result naming no live quest -> dropped, nothing delivered.
   dispatcher, runtime = make_dispatcher()
   dispatcher.on_message('stranger', brotocol.progress('nobody', {}))
   dispatcher.on_message('stranger', brotocol.result('nobody', 'ok'))
@@ -619,8 +623,8 @@ async def test_uncorrelatable_answers_are_refused():
 
 
 @pytest.mark.asyncio
-async def test_root_answers_its_host_anchored_exchange_without_peer_delivery(caplog):
-  # run() opens the session's own exchange for the root; its progress/result reach
+async def test_root_answers_its_host_anchored_quest_without_peer_delivery(caplog):
+  # run() opens the session's own quest for the root; its progress/result reach
   # only the observers (target None), close nothing peer-visible, and never arm
   # drop-gating against the channel's later traffic.
   dispatcher, runtime = make_dispatcher()
@@ -631,9 +635,9 @@ async def test_root_answers_its_host_anchored_exchange_without_peer_delivery(cap
   runtime.next_peers.append('root')
   run_task = asyncio.ensure_future(dispatcher.run(_LAUNCH))
   await _settle()
-  [(_, _, exchange)] = runtime.spawns
-  dispatcher.on_message('root', brotocol.progress(exchange, {'trail_id': 't'}))
-  dispatcher.on_message('root', brotocol.result(exchange, 'ok', value='done'))
+  [(_, _, quest)] = runtime.spawns
+  dispatcher.on_message('root', brotocol.progress(quest, {'trail_id': 't'}))
+  dispatcher.on_message('root', brotocol.result(quest, 'ok', value='done'))
   assert runtime.sent == []  # nobody to deliver to: the host is the requester
   assert [(source, target, m.type) for source, target, m in observed] == [
     ('root', None, Tag.PROGRESS),
@@ -666,7 +670,7 @@ async def test_delivery_tap_observes_rule_1_forwarding():
     (child, 'requester', Tag.PROGRESS),
     (child, 'requester', Tag.RESULT),
   ]
-  assert observed[0][2].request == 'R'
+  assert observed[0][2].quest == 'R'
 
 
 @pytest.mark.asyncio
@@ -713,14 +717,14 @@ async def test_run_spawns_root_uniformly_and_returns_its_exit_code():
   assert dispatcher.root is None  # unset until run() spawns it
   run_task = asyncio.ensure_future(dispatcher.run(_LAUNCH))
   await _settle()
-  [(launch, timeout, exchange)] = runtime.spawns
+  [(launch, timeout, quest)] = runtime.spawns
   assert (launch, timeout) == (_LAUNCH, None)  # the root carries no request-lifecycle timeout
   assert dispatcher.root == 'root'
-  assert dispatcher.exchanges[exchange].requester is None  # host-anchored
-  assert dispatcher.workers['root'] == exchange
+  assert dispatcher.quests[quest].requester is None  # host-anchored
+  assert dispatcher.workers['root'] == quest
   dispatcher.on_exit('root', 7, '')
   assert await asyncio.wait_for(run_task, 5) == 7
-  assert runtime.sent == []  # a host-anchored exchange closes silently on exit
+  assert runtime.sent == []  # a host-anchored quest closes silently on exit
   assert runtime._stopped.is_set()  # teardown ran
 
 

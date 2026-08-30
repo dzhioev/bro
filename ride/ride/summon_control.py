@@ -9,7 +9,7 @@ Two layers, both computed per broker root:
 - `SummonControl` — the root's summon state, wired up by `run_root_via_broker`:
   the `summon` kind handler (args validation, per-peer authorization, the
   immediate `result{denied}` plus a deny audit entry, the spawn of a
-  `SummonLaunchSpec` with the requesting peer as the exchange's requester —
+  `SummonLaunchSpec` with the requesting peer as the quest's requester —
   everything heavy runs off-loop in the spawner, see `ride/ride/spawn.py` — or,
   for a `manual` request, the expected-peer registration with its pending
   record, see `ride/ride/pending_summon.py`), the delivery-tap observer
@@ -518,7 +518,7 @@ class SummonControl:
       summoned_by = {**summoned_by, 'step_id': step_id}
       if args.get('index') is not None:
         summoned_by['index'] = args['index']
-    self._peers.note_summon(context, peer, message.exchange, manual=args.get('manual', False))
+    self._peers.note_summon(context, peer, message.quest_id, manual=args.get('manual', False))
     if args.get('manual', False):
       self._expect_manual(
         context,
@@ -552,7 +552,7 @@ class SummonControl:
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,
     )
     record = _ActiveSummon(
-      request_id=message.exchange,
+      request_id=message.quest_id,
       target=target,
       prompt_head=_prompt_head(prompt),
       started_at=time.time(),
@@ -565,7 +565,7 @@ class SummonControl:
       llm=llm,
       harness=harness_name,
     )
-    self._active[message.exchange] = record
+    self._active[message.quest_id] = record
     log.info(
       'summon: %s spawning %s (request %s): %s',
       self._workspace.name,
@@ -603,7 +603,8 @@ class SummonControl:
 
       pending_summon.write(
         pending_summon.PendingSummon(
-          token=message.exchange,
+          token=message.quest_id,
+          protocol_revision=brotocol.PROTOCOL_REVISION,
           port=provisioned.host_endpoint.port,
           channel_token=provisioned.host_endpoint.token,
           target=target,
@@ -619,9 +620,9 @@ class SummonControl:
       )
       # the requester's client blocks on this acknowledgment before handing the
       # token to the user, so it is sent only once the token is claimable
-      context.deliver(peer, brotocol.progress(message.exchange, {}))
+      context.deliver(peer, brotocol.progress(message.quest_id, {}))
       record = _ActiveSummon(
-        request_id=message.exchange,
+        request_id=message.quest_id,
         target=target,
         prompt_head=_prompt_head(prompt),
         started_at=time.time(),
@@ -634,7 +635,7 @@ class SummonControl:
         harness=None,
         manual=True,
       )
-      self._active[message.exchange] = record
+      self._active[message.quest_id] = record
       log.info(
         'summon: %s expecting a manual %s launch (token %s): %s',
         self._workspace.name,
@@ -664,8 +665,8 @@ class SummonControl:
         list_description="this session's summon allow-list",
         identity=identity,
       )
-    exchange = context.workers.get(peer)
-    record = self._active.get(exchange) if exchange is not None else None
+    quest = context.workers.get(peer)
+    record = self._active.get(quest) if quest is not None else None
     if record is None:
       raise UnattributablePeer('cannot attribute the requesting peer to a bro')
     return _Requester(
@@ -746,23 +747,19 @@ class SummonControl:
   def observe_delivery(
     self, source: Optional['Peer'], target: Optional['Peer'], message: 'Message'
   ) -> None:
-    del source, target  # a summon is identified by its exchange correlation alone
-    from bro.broker.brotocol import Tag
-
-    if message.request is None:
+    del source, target
+    if message.quest is None:
       return
-    record = self._active.get(message.request)
+    record = self._active.get(message.quest)
     if record is None:
       return
-    if message.type == Tag.PROGRESS:
-      trail_id = message.payload.get('trail_id')
-      if not isinstance(trail_id, str) or len(trail_id) == 0:
-        return  # the acceptance progress announces no start
+    trail_id = message.payload.get('trail_id')
+    if isinstance(trail_id, str) and len(trail_id) > 0:
       record.trail_id = trail_id
       log.info('summon: %s started (trail %s)', record.target, record.trail_id)
       self._write_status()
       return
-    if message.type == Tag.RESULT:
+    if 'outcome' in message.payload:
       self._finish(record, _outcome_tag(message.payload))
 
   def _finish(self, record: _ActiveSummon, outcome: str) -> None:

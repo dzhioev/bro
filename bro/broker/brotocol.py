@@ -1,18 +1,15 @@
-"""broker wire format — the three-type message and its JSON codec.
+"""broker wire format — the four-type message and its JSON codec.
 
-This module owns *encoding* only. A `Message` serializes to UTF-8 JSON with no
-delimiter (`to_bytes`) and parses back from those bytes (`from_bytes`). *Framing* —
-how messages are delimited on a byte stream — is the transport adapter's concern
-(the tcp adapter uses NDJSON, `json + '\\n'`).
+This module owns *encoding* only.
+A `Message` serializes to UTF-8 JSON with no delimiter (`to_bytes`) and parses back from those bytes (`from_bytes`).
+*Framing* — how messages are delimited on a byte stream — is the transport adapter's concern (the tcp adapter uses NDJSON, `json + '\\n'`).
 
-The envelope has three types and nothing else: a `request` opens an exchange
-(`id`, `payload: {kind, args}`), and `progress` / `result` answer one (`request`
-names the exchange; a result's payload carries `outcome` plus optional `value` /
-`error` / `detail`). The type set is closed — a new capability is a new kind,
-never a new type — and the codec enforces the whole shape, so a malformed
-envelope fails at the boundary rather than deep in routing. There is no version
-field: a version belongs to the channel, and the host provisions every channel
-and launches every peer, so both ends are the same release.
+The envelope has four types and nothing else:
+a `request` opens a quest (`id`, `payload: {kind, args}`), and `mark` / `progress` / `result` describe one (`quest` names it).
+A mark carries a lifecycle transition, progress carries kind-defined interim data, and a result carries `outcome` plus optional `value` / `error` / `detail`.
+The type set is closed — a new capability is a new kind, never a new type — and the codec enforces the whole shape, so a malformed envelope fails at the boundary rather than deep in routing.
+There is no version field:
+a version belongs to the channel, and the host provisions every channel and launches every peer, so both ends are the same release.
 """
 
 import json
@@ -21,13 +18,15 @@ from typing import Any, Optional
 
 from bro.base.lulid import lulid
 
-MAX_FRAME_BYTES = 1 << 20  # 1 MiB; result is model-bounded text, so generous but capped
+PROTOCOL_REVISION = 2
+MAX_FRAME_BYTES = 256 * 1024
 
-# a result's outcome: carried out / refused before any work began (deterministic,
-# so retrying is pointless) / work began and produced no answer (a retry may succeed)
 OUTCOMES = frozenset({'ok', 'denied', 'failed'})
+_MARK_TRANSITIONS = frozenset({'accepted', 'started', 'trail'})
 
-_ENVELOPE_KEYS = frozenset({'type', 'id', 'request', 'payload'})
+_REQUEST_ENVELOPE_KEYS = frozenset({'type', 'id', 'payload'})
+_CORRELATED_ENVELOPE_KEYS = frozenset({'type', 'quest', 'payload'})
+_ENVELOPE_KEYS = _REQUEST_ENVELOPE_KEYS | _CORRELATED_ENVELOPE_KEYS
 _RESULT_KEYS = frozenset({'outcome', 'value', 'error', 'detail'})
 
 
@@ -36,29 +35,29 @@ class ProtocolError(Exception):
 
 
 class Tag:
-  """the three message types; closed — a capability is a kind, not a type."""
+  """the four message types; closed — a capability is a kind, not a type."""
 
-  REQUEST = 'request'  # opens an exchange; payload {kind, args}
-  PROGRESS = 'progress'  # zero or more per exchange, informational, ordered
-  RESULT = 'result'  # payload {outcome, value?, error?, detail?}; exactly one closes the exchange
+  REQUEST = 'request'
+  MARK = 'mark'
+  PROGRESS = 'progress'
+  RESULT = 'result'
 
 
 @dataclass(frozen=True)
 class Message:
   type: str
   payload: dict[str, Any]
-  id: Optional[str] = None  # requests only: the exchange this request opens
-  request: Optional[str] = None  # progress and result only: the exchange this message belongs to
+  id: Optional[str] = None
+  quest: Optional[str] = None
 
   def __post_init__(self):
-    _validate(self.type, self.id, self.request, self.payload)
+    _validate(self.type, self.id, self.quest, self.payload)
 
   @property
-  def exchange(self) -> str:
-    """the exchange this message belongs to: the one a request opens (`id`), or
-    the one an answer names (`request`)."""
-    identifier = self.id if self.type == Tag.REQUEST else self.request
-    assert identifier is not None  # presence per type is validated at construction
+  def quest_id(self) -> str:
+    """the quest this message belongs to."""
+    identifier = self.id if self.type == Tag.REQUEST else self.quest
+    assert identifier is not None
     return identifier
 
   @property
@@ -86,36 +85,48 @@ class Message:
     if self.type == Tag.REQUEST:
       wire: dict[str, Any] = {'type': self.type, 'id': self.id, 'payload': self.payload}
     else:
-      wire = {'type': self.type, 'request': self.request, 'payload': self.payload}
+      wire = {'type': self.type, 'quest': self.quest, 'payload': self.payload}
     return json.dumps(wire, ensure_ascii=False).encode('utf-8')
 
   @classmethod
   def from_bytes(cls, raw: bytes) -> 'Message':
     try:
       parsed = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-      raise ProtocolError(f'malformed message JSON: {e}') from e
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+      raise ProtocolError(f'malformed message JSON: {error}') from error
     if not isinstance(parsed, dict):
       raise ProtocolError(f'message must be a JSON object, got {type(parsed).__name__}')
     unknown = sorted(set(parsed) - _ENVELOPE_KEYS)
     if len(unknown) > 0:
       raise ProtocolError(f'unknown message key(s): {", ".join(unknown)}')
-    type_ = _require(parsed, 'type', str)
+    message_type = _require(parsed, 'type', str)
+    if message_type == Tag.REQUEST:
+      _require_envelope_keys(parsed, _REQUEST_ENVELOPE_KEYS)
+    elif message_type in (Tag.MARK, Tag.PROGRESS, Tag.RESULT):
+      _require_envelope_keys(parsed, _CORRELATED_ENVELOPE_KEYS)
     payload = _require(parsed, 'payload', dict)
-    return cls(type=type_, payload=payload, id=parsed.get('id'), request=parsed.get('request'))
+    return cls(type=message_type, payload=payload, id=parsed.get('id'), quest=parsed.get('quest'))
 
 
 def request(kind: str, args: dict[str, Any]) -> Message:
-  """a fresh request opening an exchange, its id minted here (a lulid)."""
+  """a fresh request opening a quest, its id minted here (a lulid)."""
   return Message(type=Tag.REQUEST, payload={'kind': kind, 'args': args}, id=lulid())
 
 
-def progress(request_id: str, payload: dict[str, Any]) -> Message:
-  return Message(type=Tag.PROGRESS, payload=payload, request=request_id)
+def mark(quest_id: str, transition: str, **details: Any) -> Message:
+  return Message(
+    type=Tag.MARK,
+    payload={'transition': transition, **details},
+    quest=quest_id,
+  )
+
+
+def progress(quest_id: str, payload: dict[str, Any]) -> Message:
+  return Message(type=Tag.PROGRESS, payload=payload, quest=quest_id)
 
 
 def result(
-  request_id: str,
+  quest_id: str,
   outcome: str,
   *,
   value: Any = None,
@@ -129,17 +140,17 @@ def result(
     payload['error'] = error
   if detail is not None:
     payload['detail'] = detail
-  return Message(type=Tag.RESULT, payload=payload, request=request_id)
+  return Message(type=Tag.RESULT, payload=payload, quest=quest_id)
 
 
-def _validate(type_: Any, id_: Any, request_id: Any, payload: Any) -> None:
+def _validate(type_: Any, id_: Any, quest_id: Any, payload: Any) -> None:
   if not isinstance(payload, dict):
     raise ProtocolError(f"message 'payload' must be dict, got {type(payload).__name__}")
   if type_ == Tag.REQUEST:
     if not isinstance(id_, str) or len(id_) == 0:
       raise ProtocolError("a request needs a non-empty string 'id'")
-    if request_id is not None:
-      raise ProtocolError("a request carries no 'request' field")
+    if quest_id is not None:
+      raise ProtocolError("a request carries no 'quest' field")
     kind = payload.get('kind')
     if not isinstance(kind, str) or len(kind) == 0:
       raise ProtocolError("a request payload needs a non-empty string 'kind'")
@@ -149,18 +160,35 @@ def _validate(type_: Any, id_: Any, request_id: Any, payload: Any) -> None:
     if len(unknown) > 0:
       raise ProtocolError(f'unknown request payload key(s): {", ".join(unknown)}')
     return
-  if type_ not in (Tag.PROGRESS, Tag.RESULT):
+  if type_ not in (Tag.MARK, Tag.PROGRESS, Tag.RESULT):
     raise ProtocolError(f'unknown message type {type_!r}')
-  if not isinstance(request_id, str) or len(request_id) == 0:
-    raise ProtocolError(f"a {type_} needs a non-empty string 'request'")
+  if not isinstance(quest_id, str) or len(quest_id) == 0:
+    raise ProtocolError(f"a {type_} needs a non-empty string 'quest'")
   if id_ is not None:
     raise ProtocolError(f"a {type_} carries no 'id' field")
+  if type_ == Tag.MARK:
+    transition = payload.get('transition')
+    if not isinstance(transition, str) or transition not in _MARK_TRANSITIONS:
+      raise ProtocolError(
+        f"a mark payload needs 'transition' of {', '.join(sorted(_MARK_TRANSITIONS))}"
+      )
   if type_ == Tag.RESULT:
     if payload.get('outcome') not in OUTCOMES:
       raise ProtocolError(f"a result payload needs 'outcome' of {', '.join(sorted(OUTCOMES))}")
     unknown = sorted(set(payload) - _RESULT_KEYS)
     if len(unknown) > 0:
       raise ProtocolError(f'unknown result payload key(s): {", ".join(unknown)}')
+
+
+def _require_envelope_keys(data: dict, expected: frozenset[str]) -> None:
+  missing = sorted(expected - set(data))
+  if len(missing) > 0:
+    raise ProtocolError(f'message missing required key(s): {", ".join(missing)}')
+  forbidden = sorted(set(data) - expected)
+  if len(forbidden) > 0:
+    raise ProtocolError(
+      f'a {data["type"]} carries no {", ".join(repr(key) for key in forbidden)} field'
+    )
 
 
 def _require(data: dict, key: str, kind: type) -> Any:

@@ -99,14 +99,14 @@ class _SessionSpawner(Spawner):
     self.handle: _SessionHandle | None = None
 
   @override
-  async def spawn(self, launch: LaunchSpec, channel: Provisioned, exchange: str) -> ChildHandle:
+  async def spawn(self, launch: LaunchSpec, channel: Provisioned, quest: str) -> ChildHandle:
     assert isinstance(launch, _SessionCommand)
     process = await asyncio.create_subprocess_exec(
       *launch.argv,
       env={
         **os.environ,
         'BROKER_CHANNEL': channel.host_endpoint.address(LOCAL_HOST),
-        'BROKER_EXCHANGE': exchange,
+        'BROKER_QUEST': quest,
       },
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,

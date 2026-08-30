@@ -102,7 +102,7 @@ async def test_request_prints_the_correlated_reply(monkeypatch, capsys):
     assert await asyncio.wait_for(main_task, TIMEOUT) == 0
     printed = json.loads(capsys.readouterr().out)
     assert printed['type'] == 'result'
-    assert printed['request'] == request_message.id
+    assert printed['quest'] == request_message.id
     assert printed['payload'] == {'outcome': 'ok', 'value': {'pong': True}}
 
 

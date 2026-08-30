@@ -46,7 +46,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   — the manual variant included, registered as an expected external peer with its pending record.
   The peer wire and self-contained CLI are the framework's `bro/summon.py`.
 - `ride/pending_summon.py` — pending manual summons:
-  the record a launch token resolves to, written by the control and one-shot-claimed by the `--summoned` launch, whose claim records the child's workspace name — the attribution source for the manual peer.
+  the protocol-stamped record a launch token resolves to, written by the control and one-shot-claimed by the `--summoned` launch, whose claim records the child's workspace name — the attribution source for the manual peer.
 - `ride/trails.py` — local-trails mounts for launch descriptions whose computed scope records locally.
 - `ride/identity.py` — managed-session git identities:
   the bro a session commits as, and the launching human it credits, read from the attachment's own git configuration.

@@ -292,6 +292,15 @@ def _payload(
   return payload
 
 
+def _send_summon(client: 'Client', payload: dict[str, Any]) -> 'Message':
+  from bro.broker.brotocol import ProtocolError
+
+  try:
+    return client.send(SUMMON, payload)
+  except ProtocolError:
+    raise SummonError('prompt too large; share an artifact instead') from None
+
+
 @contextlib.contextmanager
 def _connection(client: Optional['Client']) -> Generator['Client']:
   """the channel client a call runs on: a caller-owned one passed through with
@@ -424,7 +433,7 @@ def summon_and_wait(
     harness=harness,
   )
   with _connection(client) as connection:
-    request = connection.send(SUMMON, payload)
+    request = _send_summon(connection, payload)
     return _await_answer(
       connection, request, timeout=timeout if timeout is not None else DEFAULT_TIMEOUT
     )
@@ -462,15 +471,11 @@ def summon_detached(
     harness=harness,
   )
   with _open_client() as client:
-    return client.send(SUMMON, payload).exchange
+    return _send_summon(client, payload).quest_id
 
 
 def _await_acceptance(client: 'Client', request: 'Message') -> None:
-  """block until the host acknowledges a manual summon with the acceptance
-  progress; a denial or failed registration raises `SummonError` with the
-  reason."""
-  from bro.broker.brotocol import Tag
-
+  """block until the host acknowledges a manual summon or answers with a result."""
   try:
     first = client.await_any(request, ACCEPT_TIMEOUT)
   except TimeoutError:
@@ -480,9 +485,9 @@ def _await_acceptance(client: 'Client', request: 'Message') -> None:
     ) from None
   except ConnectionError as e:
     raise SummonError(f'broker channel closed awaiting the manual summon acknowledgment: {e}') from None  # fmt: skip
-  if first.type == Tag.PROGRESS:
+  if 'outcome' not in first.payload:
     return
-  _interpret_result(first, None)  # denials and failed registrations raise here
+  _interpret_result(first, None)
   raise SummonError(f'unexpected manual summon acknowledgment: {first.payload}')
 
 
@@ -505,9 +510,9 @@ def summon_manual(
   acknowledges."""
   payload = _payload(target, prompt, into=into, grant=grant, revoke=revoke, manual=True, step_id=step_id, index=index)  # fmt: skip
   with _open_client() as client:
-    request = client.send(SUMMON, payload)
+    request = _send_summon(client, payload)
     _await_acceptance(client, request)
-    return request.exchange
+    return request.quest_id
 
 
 @dataclass(frozen=True)
@@ -677,15 +682,19 @@ def relay_summon(
     log.error('%s', e)
     return 1
   with client:
-    request = client.send(SUMMON, payload)
-    log.info('summon request %s', request.exchange)
+    try:
+      request = _send_summon(client, payload)
+    except SummonError as error:
+      log.error('%s', error)
+      return 1
+    log.info('summon request %s', request.quest_id)
     if manual:
       try:
         _await_acceptance(client, request)
       except SummonError as e:
         log.error('%s', e)
         return 1
-      log.info('have the user run: %s', manual_launch_command(request.exchange, target))
+      log.info('have the user run: %s', manual_launch_command(request.quest_id, target))
     effective = timeout if timeout is not None else DEFAULT_TIMEOUT
     return _relay(
       lambda: _await_answer(

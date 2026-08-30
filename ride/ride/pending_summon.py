@@ -5,8 +5,7 @@ channel awaiting an external child) and the user with a token (the request id).
 This module is the bridge between them: `SummonControl` writes one record per
 registered manual summon under `<runtime-root>/summon/pending/<token>.json`,
 and the user's `ride along --summoned <token>` launch reads it back — the
-channel to attach to, the authorized child shape (target, allow-list, scope
-overrides), the prompt, and the base-ref inheritance source.
+channel to attach to, the broker protocol revision, the authorized child shape (target, allow-list, scope overrides), the prompt, and the base-ref inheritance source.
 
 `claim` is one-shot: exactly one launch may attach to the channel (a second
 connection would supersede the first on it), so the unlink decides a
@@ -36,6 +35,7 @@ class PendingSummon:
   """one registered manual summon, keyed by its token (the request id)."""
 
   token: str
+  protocol_revision: int
   port: int  # the provisioned broker channel: the host's listening port
   channel_token: str  # and the token that attaches to this summon's channel on it
   target: str
@@ -73,7 +73,7 @@ def write(pending: PendingSummon) -> None:
 
 
 def peek(token: str) -> PendingSummon:
-  """read the token's record without claiming it. Raises `UnknownToken`."""
+  """read and validate the token's record without claiming it."""
   try:
     data = json.loads(_path(token).read_text())
   except FileNotFoundError:
@@ -81,6 +81,25 @@ def peek(token: str) -> PendingSummon:
       f'no pending manual summon for token {token!r}: never registered, '
       'already claimed, or its summon ended'
     ) from None
+  if not isinstance(data, dict):
+    raise ValueError(f'pending manual summon {token!r} is not a JSON object')
+  from bro.broker.brotocol import PROTOCOL_REVISION
+
+  if 'protocol_revision' not in data:
+    raise ValueError(
+      f'pending manual summon {token!r} has no broker protocol revision; '
+      're-mint the token from a session on this installation'
+    )
+  record_revision = data['protocol_revision']
+  if (
+    isinstance(record_revision, bool)
+    or not isinstance(record_revision, int)
+    or record_revision != PROTOCOL_REVISION
+  ):
+    raise ValueError(
+      f'pending manual summon {token!r} uses broker protocol revision {record_revision!r}, '
+      f'but this installation uses {PROTOCOL_REVISION}; re-mint the token from a matching release'
+    )
   loaded = PendingSummon(
     **{
       **data,
