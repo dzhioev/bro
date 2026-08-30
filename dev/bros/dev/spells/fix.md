@@ -13,7 +13,7 @@ The canonical entry point for task-driven development work;
 `dive-in` seeds this spell as its first user message.
 
 parameters: {"task?": "ref of the existing task to work on", "new?": "seed text for a new task to create first"}
-version: 4.3.0
+version: 4.4.0
 ---
 
 {{iff #features contains brog}}
@@ -144,6 +144,8 @@ Reach for the full suite early only when broad breakage is plausible
 
 When the work is ready to land, [[run pr]]
 — it owns commit hygiene, rebase, PR creation, and the review watcher, and chains into [[land]] on approval.
+Cast it in the response that closes step 6:
+the hand-off is this flow's terminal step, not a decision to put back to the user.
 
 For tasks that don't produce code (investigation, confirming existing behavior, external coordination):
 there is no pr step.
