@@ -32,7 +32,7 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
 - `run-tests` — the test gate, a sequence of named stages:
   `lint` (console-script drift, deptry, ruff),
   `types` (pyright),
-  `unit` (the pytest roster, run in parallel),
+  `unit` (the pytest roster, run in parallel, then a second run in one process for the modules `run_tests.py` holds out of the pool),
   `benchmark` (the benchmark project's own: it syncs `benchmark/.venv` and runs pyright and pytest inside it, since the workspace venv cannot import `bro.benchmark` at all),
   and the host-only `docker` (the container entrypoint's postconditions and the launch path from a cold image tag) and `broker_e2e` (the live broker-supervised container launch seam, `ride/ride/e2e_test.py`),
   both skipped when the gate itself runs inside a container.

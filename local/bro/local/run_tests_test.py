@@ -1,4 +1,5 @@
 import subprocess
+import sys
 
 import pytest
 import yaml
@@ -43,6 +44,14 @@ def test_the_workflow_matrix_names_every_gate_stage():
 
 
 @pytest.fixture
+def invocations(monkeypatch):
+  """the argument lists a stage hands to `run`, in place of running anything."""
+  calls: list[tuple[str, ...]] = []
+  monkeypatch.setattr(run_tests, 'run', lambda *args, **kwargs: calls.append(args))
+  return calls
+
+
+@pytest.fixture
 def repository(monkeypatch, tmp_path):
   """a checkout the whole --changed deduction runs over: a roster covering both
   halves of its rule, and a nested project only part of the tree reaches."""
@@ -61,6 +70,8 @@ def repository(monkeypatch, tmp_path):
   write('thing/elsewhere.py')
   write('thing/elsewhere_test.py', 'from thing import elsewhere\n')
   write('thing/policy_test.py', 'import json\n')
+  write('thing/heavy.py')
+  write('thing/heavy_test.py', 'from thing import heavy\n')
   write(f'{run_tests.BENCHMARK}/pyproject.toml', '[project]\nname = "probe-benchmark"\n')
   write(f'{run_tests.BENCHMARK}/bro/benchmark/job.py', 'from thing import store\n')
   for command in (
@@ -82,6 +93,7 @@ def repository(monkeypatch, tmp_path):
       'thing/policy_test.py',
     ],
   )
+  monkeypatch.setattr(run_tests, 'SINGLE_PROCESS_PYTEST_FILES', ['thing/heavy_test.py'])
   monkeypatch.setattr(
     run_tests,
     'DISTRIBUTIONS',
@@ -101,6 +113,31 @@ def test_a_change_selects_the_tests_that_reach_it(repository):
     'thing/api_test.py',
     'thing/policy_test.py',
   ]
+
+
+def test_the_single_process_roster_is_narrowed_the_same_way(repository):
+  (repository / 'thing/heavy.py').write_text('CHANGED = 1\n')
+
+  selection = run_tests.select('main')
+
+  assert selection.single_process_roster == ['thing/heavy_test.py']
+  assert selection.roster == ['thing/policy_test.py']
+
+
+def test_the_single_process_roster_runs_outside_the_worker_pool(invocations):
+  run_tests.unit_stage(['thing/store_test.py'], ['thing/heavy_test.py'])
+
+  assert invocations == [
+    (sys.executable, '-m', 'pytest', '-n', 'auto', 'thing/store_test.py'),
+    (sys.executable, '-m', 'pytest', 'thing/heavy_test.py'),
+  ]
+
+
+def test_an_empty_selection_runs_no_pytest_at_all(invocations):
+  # a bare `pytest` collects the whole tree, so an empty list is no argument list
+  run_tests.unit_stage([], [])
+
+  assert invocations == []
 
 
 def test_a_test_module_with_no_source_module_of_its_own_always_runs(repository):
@@ -161,7 +198,9 @@ def test_a_dropped_stage_reads_skipped_in_the_verdict(monkeypatch, capsys):
   monkeypatch.setattr(
     run_tests,
     'select',
-    lambda base: run_tests.Selection(roster=(), distributions=(), dropped=frozenset({'benchmark'})),
+    lambda base: run_tests.Selection(
+      roster=(), single_process_roster=(), distributions=(), dropped=frozenset({'benchmark'})
+    ),
   )
 
   assert run_tests.main(['run-tests', '--changed']) is None
