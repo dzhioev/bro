@@ -3,6 +3,7 @@ from typing import cast
 
 import pytest
 
+from bro.broker.brotocol import PROTOCOL_REVISION
 from bro.broker.dispatcher import Dispatcher
 from bro.workspace.paths import workspace_tree
 from ride import pending_summon
@@ -32,11 +33,12 @@ def peers(tmp_path):
   return Peers(Workspace.ensure('ws', tmp_path, WorkspaceKind.CONTAINER))
 
 
-def _claim(exchange: str, workspace: str) -> None:
+def _claim(quest: str, workspace: str) -> None:
   """leave the claimed record a manual child's launch writes."""
   pending_summon.write(
     pending_summon.PendingSummon(
-      token=exchange,
+      token=quest,
+      protocol_revision=PROTOCOL_REVISION,
       port=1,
       channel_token='tk',
       target='dev',
@@ -48,15 +50,15 @@ def _claim(exchange: str, workspace: str) -> None:
       summoner=None,
     )
   )
-  pending_summon.claim(exchange, workspace=workspace)
+  pending_summon.claim(quest, workspace=workspace)
 
 
-def _spawned(peers, context, peer, exchange, *, requester=ROOT) -> None:
+def _spawned(peers, context, peer, quest, *, requester=ROOT) -> None:
   """register a summon the way the control and spawner do: the record at
   authorization, the workspace at spawn, the worker bind at launch resolution."""
-  peers.note_summon(_dispatcher(context), requester, exchange)
-  peers.note_workspace(exchange, f'broker-{peer}')
-  context.workers[peer] = exchange
+  peers.note_summon(_dispatcher(context), requester, quest)
+  peers.note_workspace(quest, f'broker-{peer}')
+  context.workers[peer] = quest
 
 
 class TestIdentity:
@@ -130,7 +132,7 @@ class TestAncestors:
     assert peers.ancestors(_dispatcher(context), GRANDCHILD) == (f'broker-{CHILD}', 'ws')
 
   def test_the_chain_survives_a_dead_mid_chain_summoner(self, peers):
-    # records outlive peers: the parent's exchange closed and its worker entry
+    # records outlive peers: the parent's quest closed and its worker entry
     # is gone, but the grandchild's chain still names it
     context = _Context()
     _spawned(peers, context, CHILD, 'X-1')

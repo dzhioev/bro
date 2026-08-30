@@ -21,7 +21,7 @@ from typing import Any, Optional
 
 from bro.artifact import GET, MINT
 from bro.base import log
-from bro.broker.brotocol import Message, Tag
+from bro.broker.brotocol import Message
 from bro.broker.dispatcher import PING, Broker, ping_handler
 from bro.broker.runtime import Peer
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
@@ -270,10 +270,10 @@ class SummonSpawner(Spawner):
     self._peers = peers
     self._artifacts = artifacts
 
-  async def spawn(self, launch: LaunchSpec, channel: Provisioned, exchange: str) -> ChildHandle:
+  async def spawn(self, launch: LaunchSpec, channel: Provisioned, quest: str) -> ChildHandle:
     assert isinstance(launch, SummonLaunchSpec)
     workspace_name = _workspace_name(channel.channel)
-    self._peers.note_workspace(exchange, workspace_name)
+    self._peers.note_workspace(quest, workspace_name)
     lowered = await asyncio.to_thread(
       _lower_summon,
       launch,
@@ -281,37 +281,34 @@ class SummonSpawner(Spawner):
       self._container_runtime,
       self._artifacts,
     )
-    return await self._docker.spawn(lowered, channel, exchange)
+    return await self._docker.spawn(lowered, channel, quest)
 
 
 def _root_lifecycle(control: SummonControl, workspace: Workspace):
   """consume the root's own run lifecycle off the delivery tap. The root answers
-  the session's host-anchored exchange, whose deliveries reach only the
+  the session's host-anchored quest, whose deliveries reach only the
   observers, with no target peer — the filter that keeps every child delivery
-  out. A started progress publishes the root's trail (what its summon children
+  out. A trail announcement publishes the root's trail (what its summon children
   are attributed to); the run's result is logged, a raised run loudly."""
 
   def _observe(source: Optional[Peer], target: Optional[Peer], message: Message) -> None:
     del source
     if target is not None:
       return
-    if message.type == Tag.PROGRESS:
-      trail_id = message.payload.get('trail_id')
-      if trail_id is None:
-        return
+    trail_id = message.payload.get('trail_id')
+    if isinstance(trail_id, str) and len(trail_id) > 0:
       log.info('root run started (trail %s)', trail_id)
       control.note_root_trail(trail_id)
-      if isinstance(trail_id, str) and len(trail_id) > 0:
-        trail_pointer.write(trail_pointer.session_pointer(workspace.path), trail_id)
+      trail_pointer.write(trail_pointer.session_pointer(workspace.path), trail_id)
       return
-    if message.type == Tag.RESULT:
-      detail = message.payload.get('detail')
-      reason = detail.get('reason') if isinstance(detail, dict) else None
-      if reason == 'raised':
-        # a raised run's error is the abort reason — surface it
-        log.warning('root run raised: %s', message.payload.get('error'))
-        return
-      log.info('root run ended: %s', message.payload.get('outcome'))
+    if 'outcome' not in message.payload:
+      return
+    detail = message.payload.get('detail')
+    reason = detail.get('reason') if isinstance(detail, dict) else None
+    if reason == 'raised':
+      log.warning('root run raised: %s', message.payload.get('error'))
+      return
+    log.info('root run ended: %s', message.payload.get('outcome'))
 
   return _observe
 
@@ -323,15 +320,15 @@ def _note_child_started(peers: Peers):
   peer) is filtered out, so no pointer is fabricated for a workspace that
   doesn't exist. The name comes from the peer registry — a spawned child's
   channel-named workspace or a manual child's claimed one — with the worker's
-  channel-derived name covering a non-summon exchange."""
+  channel-derived name covering a non-summon quest."""
 
   def _observe(source: Optional[Peer], target: Optional[Peer], message: Message) -> None:
-    if message.type != Tag.PROGRESS or source is None or target is None:
+    if source is None or target is None:
       return
     trail_id = message.payload.get('trail_id')
     if not isinstance(trail_id, str) or len(trail_id) == 0:
       return
-    name = peers.workspace_for(message.request) if message.request is not None else None
+    name = peers.workspace_for(message.quest) if message.quest is not None else None
     if name is None:
       name = _workspace_name(source)
     trail_pointer.write(trail_pointer.session_pointer(workspace_dir(name)), trail_id)
@@ -371,7 +368,7 @@ def run_root_via_broker(
   (`ride.artifacts`, which also collects the run of any job a kind starts), plus
   whatever kinds installed distributions
   contribute (`ride.kinds`), and consumes the root's own run lifecycle — the
-  progress and result of the session's host-anchored exchange — into the host
+  progress and result of the session's host-anchored quest — into the host
   log. While an interactive root owns the terminal, host output goes to the
   workspace's host log instead of the shared TTY (see
   `ride.workspace.spawn._HostLogRedirect`); headless runs keep it on stderr.

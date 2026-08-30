@@ -16,7 +16,7 @@ Two invariants carry the design:
   (bounded) for the transport to flush the channel to EOF — reusing `on_disconnect` as
   the "channel drained" marker. A result the child wrote just before exiting is
   already in the host buffer, so the flush delivers it as an `on_message` first and the
-  Dispatcher closes the exchange on it; `on_exit` then has nothing to synthesize.
+  Dispatcher closes the quest on it; `on_exit` then has nothing to synthesize.
   No exit⋀EOF join.
 
 Birth is `on_connect` (socket accepted) — a peer is alive from when it attaches, not
@@ -53,11 +53,11 @@ from bro.broker.transport import ChannelID, Provisioned, ServerTransport
 Peer = ChannelID  # a peer is its channel
 
 
-def job_peer(exchange: str) -> Peer:
-  """the synthetic peer id a job is supervised under — derivable from the exchange
+def job_peer(quest: str) -> Peer:
+  """the synthetic peer id a job is supervised under — derivable from the quest
   id alone, so the Dispatcher binds the worker before the launch resolves. Real
   channel ids are lulids, so the prefix cannot collide."""
-  return f'job:{exchange}'
+  return f'job:{quest}'
 
 
 # how long to wait for the channel to flush to EOF after the process exits, before
@@ -97,17 +97,17 @@ class Runtime:
 
   # --- commands (called on the loop) --------------------------------------
 
-  async def spawn(self, launch: LaunchSpec, *, timeout: Optional[float], exchange: str) -> Peer:
-    """provision a channel, launch the peer, and supervise it; `exchange` passes
+  async def spawn(self, launch: LaunchSpec, *, timeout: Optional[float], quest: str) -> Peer:
+    """provision a channel, launch the peer, and supervise it; `quest` passes
     through to the spawner (the worker-launch contract: a peer gets its channel
-    and the id of the exchange it answers). A launch failure rolls back its own
+    and the id of the quest it answers). A launch failure rolls back its own
     registration and re-raises."""
     provisioned = await self._transport.provision()
     channel = provisioned.channel
     peer = _PeerState(channel=channel)
     self._peers[channel] = peer
     try:
-      peer.handle = await self._spawner.spawn(launch, provisioned, exchange)
+      peer.handle = await self._spawner.spawn(launch, provisioned, quest)
     except BaseException:
       del self._peers[channel]
       await self._transport.close(channel)
@@ -119,14 +119,14 @@ class Runtime:
     return channel
 
   async def job(
-    self, command: CommandJob, *, directory: Path, timeout: Optional[float], exchange: str
+    self, command: CommandJob, *, directory: Path, timeout: Optional[float], quest: str
   ) -> Peer:
-    """launch `command` as the exchange's job, collecting its run into
+    """launch `command` as the quest's job, collecting its run into
     `directory`, and supervise its process with no channel: the peer id is
-    synthetic (`job_peer(exchange)`), death is process exit, and the drain is
+    synthetic (`job_peer(quest)`), death is process exit, and the drain is
     skipped — there is nothing buffered to flush. A launch failure rolls back
     its own registration and re-raises."""
-    channel = job_peer(exchange)
+    channel = job_peer(quest)
     peer = _PeerState(channel=channel, job=True)
     self._peers[channel] = peer
     try:

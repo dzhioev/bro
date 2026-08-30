@@ -116,7 +116,7 @@ async def _check(harness: Harness, args: dict) -> tuple[Message, list[Message]]:
   try:
     check = client.send(CHECK_KIND, args)
     report = await asyncio.to_thread(client.await_reply, check, TIMEOUT)
-    assert report.request == check.id
+    assert report.quest == check.id
     copies: list[Message] = []
     while True:
       message = await asyncio.to_thread(client.receive, 0.05)
@@ -141,7 +141,7 @@ async def test_request_round_trips_through_the_broxy():
 
     reply = await asyncio.wait_for(request_task, TIMEOUT)
     assert reply.type == 'result'
-    assert reply.request == message.id
+    assert reply.quest == message.id
     assert reply.payload == {'outcome': 'ok', 'value': {'pong': 1}}
     client.close()
 
@@ -179,17 +179,18 @@ async def test_call_rides_interim_progress_through_the_broxy():
 
 
 @pytest.mark.asyncio
-async def test_acceptance_progress_is_interim_and_leaves_the_conversation_pending():
-  # an acceptance progress delivered and read must not spend the conversation: a
-  # manual summon's client detaches right after it, and the token stays checkable
+async def test_acceptance_mark_is_interim_and_leaves_the_conversation_pending():
+  # an acceptance delivered and read must not spend the conversation:
+  # a manual summon's client detaches right after it, and the token stays checkable
   async with running_broxy() as harness:
     client = await _local_client(harness)
     request = client.send('summon', {'manual': True})
     channel, seen = await _next(harness.sink.messages)
     assert seen.id == request.id
-    await harness.transport.send(channel, brotocol.progress(request.exchange, {}))
+    await harness.transport.send(channel, brotocol.mark(request.quest_id, 'accepted'))
     first = await asyncio.to_thread(client.await_any, request, TIMEOUT)
-    assert first.type == 'progress'
+    assert first.type == 'mark'
+    assert first.payload == {'transition': 'accepted'}
     client.close()
 
     report, copies = await _check(harness, {'id': request.id})
@@ -229,13 +230,13 @@ async def test_claim_replays_buffered_messages_in_order():
   async with running_broxy() as harness:
     request = await _detached_request(harness, 'summon')
     await harness.transport.send(
-      harness.channel, brotocol.progress(request.exchange, {'trail_id': 't1'})
+      harness.channel, brotocol.progress(request.quest_id, {'trail_id': 't1'})
     )
     await harness.transport.send(
-      harness.channel, brotocol.result(request.exchange, 'ok', value='r')
+      harness.channel, brotocol.result(request.quest_id, 'ok', value='r')
     )
     await _wait_until(
-      lambda: harness.broxy._routes[request.exchange].terminal_seq is not None,
+      lambda: harness.broxy._routes[request.quest_id].terminal_seq is not None,
       'the result never reached the mailbox',
     )
 
@@ -247,7 +248,7 @@ async def test_claim_replays_buffered_messages_in_order():
     assert [interim.payload for interim in interims] == [{'trail_id': 't1'}]
     assert result.type == 'result'
     assert result.payload == {'outcome': 'ok', 'value': 'r'}
-    assert result.request != request.id  # re-tagged to correlate to the claim
+    assert result.quest != request.id  # re-tagged to correlate to the claim
     claimer.close()
 
     # the replay read the conversation through its result: the collect path is
@@ -306,11 +307,11 @@ async def test_claim_re_awaits_a_pending_request():
       asyncio.to_thread(claimer.request, CLAIM_KIND, {'id': request.id}, TIMEOUT)
     )
     await _wait_until(
-      lambda: harness.broxy._routes[request.exchange].waiter is not None,
+      lambda: harness.broxy._routes[request.quest_id].waiter is not None,
       'the claim never took the route over',
     )
     await harness.transport.send(
-      harness.channel, brotocol.result(request.exchange, 'ok', value='late')
+      harness.channel, brotocol.result(request.quest_id, 'ok', value='late')
     )
     result = await asyncio.wait_for(claim_task, TIMEOUT)
     assert result.type == 'result'
@@ -335,7 +336,7 @@ async def test_claim_with_a_live_waiter_fails_fast():
 
     # the original waiter's route survived: the result still reaches it
     await harness.transport.send(
-      harness.channel, brotocol.result(request.exchange, 'ok', value='mine')
+      harness.channel, brotocol.result(request.quest_id, 'ok', value='mine')
     )
     result = await asyncio.to_thread(original.receive, TIMEOUT)
     assert result is not None
@@ -353,7 +354,7 @@ async def test_second_claim_while_first_is_live_fails_fast():
       asyncio.to_thread(first.request, CLAIM_KIND, {'id': request.id}, TIMEOUT)
     )
     await _wait_until(
-      lambda: harness.broxy._routes[request.exchange].waiter is not None,
+      lambda: harness.broxy._routes[request.quest_id].waiter is not None,
       'the first claim never took the route over',
     )
 
@@ -365,7 +366,7 @@ async def test_second_claim_while_first_is_live_fails_fast():
 
     # the first claim still collects
     await harness.transport.send(
-      harness.channel, brotocol.result(request.exchange, 'ok', value='first')
+      harness.channel, brotocol.result(request.quest_id, 'ok', value='first')
     )
     result = await asyncio.wait_for(first_task, TIMEOUT)
     assert result.payload == {'outcome': 'ok', 'value': 'first'}
@@ -393,10 +394,10 @@ async def test_check_pending_reports_state_and_buffered_trail_id():
     assert copies == []
 
     await harness.transport.send(
-      harness.channel, brotocol.progress(request.exchange, {'trail_id': 't1'})
+      harness.channel, brotocol.progress(request.quest_id, {'trail_id': 't1'})
     )
     await _wait_until(
-      lambda: len(harness.broxy._routes[request.exchange].messages) > 0,
+      lambda: len(harness.broxy._routes[request.quest_id].messages) > 0,
       'the started progress never reached the mailbox',
     )
     report, copies = await _check(harness, {'id': request.id})
@@ -409,13 +410,13 @@ async def test_check_replays_an_unread_result_without_consuming():
   async with running_broxy() as harness:
     request = await _detached_request(harness, 'summon')
     await harness.transport.send(
-      harness.channel, brotocol.progress(request.exchange, {'trail_id': 't1'})
+      harness.channel, brotocol.progress(request.quest_id, {'trail_id': 't1'})
     )
     await harness.transport.send(
-      harness.channel, brotocol.result(request.exchange, 'ok', value='r')
+      harness.channel, brotocol.result(request.quest_id, 'ok', value='r')
     )
     await _wait_until(
-      lambda: harness.broxy._routes[request.exchange].terminal_seq is not None,
+      lambda: harness.broxy._routes[request.quest_id].terminal_seq is not None,
       'the result never reached the mailbox',
     )
 
@@ -423,8 +424,8 @@ async def test_check_replays_an_unread_result_without_consuming():
     for _ in range(2):
       report, copies = await _check(harness, {'id': request.id})
       assert report.payload['value'] == {'state': 'ready', 'seq': 2, 'trail_id': 't1'}
-      # the copies keep the conversation's own exchange id — no re-tag
-      assert [(m.type, m.request, m.payload) for m in copies] == [
+      # the copies keep the conversation's own quest id — no re-tag
+      assert [(m.type, m.quest, m.payload) for m in copies] == [
         (Tag.PROGRESS, request.id, {'trail_id': 't1'}),
         (Tag.RESULT, request.id, {'outcome': 'ok', 'value': 'r'}),
       ]
@@ -473,14 +474,14 @@ async def test_mailbox_bound_evicts_the_oldest_buffered_request():
 
     filler = 'x' * 300
     await harness.transport.send(
-      harness.channel, brotocol.result(first.exchange, 'ok', value=filler)
+      harness.channel, brotocol.result(first.quest_id, 'ok', value=filler)
     )
     await _wait_until(
-      lambda: harness.broxy._routes[first.exchange].message_bytes > 0,
+      lambda: harness.broxy._routes[first.quest_id].message_bytes > 0,
       'the first result never reached the mailbox',
     )
     await harness.transport.send(
-      harness.channel, brotocol.result(second.exchange, 'ok', value=filler)
+      harness.channel, brotocol.result(second.quest_id, 'ok', value=filler)
     )
     await _wait_until(
       lambda: first.id not in harness.broxy._routes,
@@ -499,7 +500,7 @@ async def test_mailbox_bound_evicts_the_oldest_buffered_request():
 
 @pytest.mark.asyncio
 async def test_live_delivered_result_stays_readable_through_a_cursor():
-  # delivery no longer destroys the result: after a live request/reply exchange,
+  # delivery no longer destroys the result: after a live request/reply quest,
   # a plain check reports collected and a cursor read replays the conversation
   async with running_broxy() as harness:
     client = await _local_client(harness)
@@ -515,7 +516,7 @@ async def test_live_delivered_result_stays_readable_through_a_cursor():
     for _ in range(2):  # cursor reads are idempotent
       report, copies = await _check(harness, {'id': request.id, 'last_seen': 0})
       assert report.payload['value'] == {'state': 'collected', 'seq': 1}
-      assert [(m.type, m.request, m.payload) for m in copies] == [
+      assert [(m.type, m.quest, m.payload) for m in copies] == [
         (Tag.RESULT, request.id, {'outcome': 'ok', 'value': 'r'}),
       ]
 
@@ -525,13 +526,13 @@ async def test_cursor_read_marks_read_and_spends_the_collect():
   async with running_broxy() as harness:
     request = await _detached_request(harness, 'summon')
     await harness.transport.send(
-      harness.channel, brotocol.progress(request.exchange, {'trail_id': 't1'})
+      harness.channel, brotocol.progress(request.quest_id, {'trail_id': 't1'})
     )
     await harness.transport.send(
-      harness.channel, brotocol.result(request.exchange, 'ok', value='r')
+      harness.channel, brotocol.result(request.quest_id, 'ok', value='r')
     )
     await _wait_until(
-      lambda: harness.broxy._routes[request.exchange].terminal_seq is not None,
+      lambda: harness.broxy._routes[request.quest_id].terminal_seq is not None,
       'the result never reached the mailbox',
     )
 
@@ -555,10 +556,10 @@ async def test_cursor_read_of_a_pending_window_reports_pending():
   async with running_broxy() as harness:
     request = await _detached_request(harness, 'summon')
     await harness.transport.send(
-      harness.channel, brotocol.progress(request.exchange, {'trail_id': 't1'})
+      harness.channel, brotocol.progress(request.quest_id, {'trail_id': 't1'})
     )
     await _wait_until(
-      lambda: len(harness.broxy._routes[request.exchange].messages) > 0,
+      lambda: len(harness.broxy._routes[request.quest_id].messages) > 0,
       'the started progress never reached the mailbox',
     )
 
@@ -573,10 +574,10 @@ async def test_cursor_read_from_the_future_is_denied():
   async with running_broxy() as harness:
     request = await _detached_request(harness, 'summon')
     await harness.transport.send(
-      harness.channel, brotocol.progress(request.exchange, {'trail_id': 't1'})
+      harness.channel, brotocol.progress(request.quest_id, {'trail_id': 't1'})
     )
     await _wait_until(
-      lambda: len(harness.broxy._routes[request.exchange].messages) > 0,
+      lambda: len(harness.broxy._routes[request.quest_id].messages) > 0,
       'the started progress never reached the mailbox',
     )
 
@@ -606,13 +607,13 @@ async def test_check_reports_collected_after_a_claim():
   async with running_broxy() as harness:
     request = await _detached_request(harness, 'summon')
     await harness.transport.send(
-      harness.channel, brotocol.progress(request.exchange, {'trail_id': 't1'})
+      harness.channel, brotocol.progress(request.quest_id, {'trail_id': 't1'})
     )
     await harness.transport.send(
-      harness.channel, brotocol.result(request.exchange, 'ok', value='r')
+      harness.channel, brotocol.result(request.quest_id, 'ok', value='r')
     )
     await _wait_until(
-      lambda: harness.broxy._routes[request.exchange].terminal_seq is not None,
+      lambda: harness.broxy._routes[request.quest_id].terminal_seq is not None,
       'the result never reached the mailbox',
     )
 
@@ -635,7 +636,7 @@ async def test_mailbox_bound_prefers_evicting_a_collected_conversation():
     unread = await _detached_request(harness, 'summon')  # older, must survive
     collected = await _detached_request(harness, 'summon')
     await harness.transport.send(
-      harness.channel, brotocol.result(collected.exchange, 'ok', value='small')
+      harness.channel, brotocol.result(collected.quest_id, 'ok', value='small')
     )
     collector = await _local_client(harness)
     result = await asyncio.to_thread(collector.call, CLAIM_KIND, {'id': collected.id}, TIMEOUT)
@@ -644,7 +645,7 @@ async def test_mailbox_bound_prefers_evicting_a_collected_conversation():
 
     filler = 'x' * 300
     await harness.transport.send(
-      harness.channel, brotocol.result(unread.exchange, 'ok', value=filler)
+      harness.channel, brotocol.result(unread.quest_id, 'ok', value=filler)
     )
     await _wait_until(
       lambda: collected.id not in harness.broxy._routes,

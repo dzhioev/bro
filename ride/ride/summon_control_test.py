@@ -79,7 +79,7 @@ class FakeContext:
 
   def __init__(self):
     self.root = ROOT
-    self.workers: dict = {}  # worker peer -> the exchange it answers
+    self.workers: dict = {}  # worker peer -> the quest it answers
     self.replies: list = []  # (peer, payload)
     self.spawned: list = []  # (launch, peer, timeout)
     self.expected: list = []  # (peer, timeout)
@@ -462,7 +462,7 @@ class TestSummonHandler:
     control = _control(tmp_path, {'bro-dev'})
     context = FakeContext()
     request = _summon_child(control, context, CHILD, 'bro-dev')
-    control.observe_delivery(CHILD, ROOT, brotocol.progress(request.exchange, {'trail_id': 'T1'}))
+    control.observe_delivery(CHILD, ROOT, brotocol.progress(request.quest_id, {'trail_id': 'T1'}))
     child_request = _summon_message(target='dev')
     # cast: FakeContext stands in for the Dispatcher surface structurally
     control.handle(cast(Dispatcher, context), CHILD, child_request)
@@ -488,7 +488,7 @@ class TestSummonHandler:
     control = _control(tmp_path, {'bro-dev'})
     context = FakeContext()
     request = _summon_child(control, context, CHILD, 'bro-dev')
-    control.observe_delivery(CHILD, ROOT, brotocol.progress(request.exchange, {'trail_id': 'T1'}))
+    control.observe_delivery(CHILD, ROOT, brotocol.progress(request.quest_id, {'trail_id': 'T1'}))
     control.handle(
       cast(Dispatcher, context),
       CHILD,
@@ -504,7 +504,7 @@ class TestSummonHandler:
     context = FakeContext()
     request = _summon_child(control, context, CHILD, 'bro-dev')
     control.observe_delivery(
-      CHILD, ROOT, brotocol.progress(request.exchange, {'trail_id': 'T1', 'workspace': 'ws'})
+      CHILD, ROOT, brotocol.progress(request.quest_id, {'trail_id': 'T1', 'workspace': 'ws'})
     )
     control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='dev'))
     launch, _, _ = context.spawned[-1]
@@ -670,15 +670,15 @@ class TestSummonLedger:
 
   def test_started_records_the_trail_id(self, control, tmp_path):
     request = self._spawned(control)
-    started = brotocol.progress(request.exchange, {'trail_id': 'T1'})
+    started = brotocol.mark(request.quest_id, 'trail', trail_id='T1')
     control.observe_delivery(CHILD, ROOT, started)
     status = _status(tmp_path)
     assert status['active'][0]['trail_id'] == 'T1'
 
   def test_completed_moves_the_summon_to_last_outcome(self, control, tmp_path):
     request = self._spawned(control)
-    control.observe_delivery(CHILD, ROOT, brotocol.progress(request.exchange, {'trail_id': 'T1'}))
-    completed = brotocol.result(request.exchange, 'ok', value='done')
+    control.observe_delivery(CHILD, ROOT, brotocol.progress(request.quest_id, {'trail_id': 'T1'}))
+    completed = brotocol.result(request.quest_id, 'ok', value='done')
     control.observe_delivery(CHILD, ROOT, completed)
     status = _status(tmp_path)
     assert status['active'] == []
@@ -694,7 +694,7 @@ class TestSummonLedger:
 
   def test_failed_records_the_failure_reason(self, control, tmp_path):
     request = self._spawned(control)
-    failed = brotocol.result(request.exchange, 'failed', detail={'reason': 'launch'})
+    failed = brotocol.result(request.quest_id, 'failed', detail={'reason': 'launch'})
     # source=None: the launch failure synthesis — no child ever existed
     control.observe_delivery(None, ROOT, failed)
     status = _status(tmp_path)
@@ -709,7 +709,7 @@ class TestSummonLedger:
 
   def test_root_teardown_logs_and_audits_killed_children(self, control, tmp_path, caplog):
     request = self._spawned(control)
-    control.observe_delivery(CHILD, ROOT, brotocol.progress(request.exchange, {'trail_id': 'T1'}))
+    control.observe_delivery(CHILD, ROOT, brotocol.progress(request.quest_id, {'trail_id': 'T1'}))
     control.log_killed_in_flight()
     assert any(
       'root exit killed in-flight child dev' in record.getMessage() and 'T1' in record.getMessage()
@@ -737,8 +737,9 @@ class TestManualSummon:
     # the registration is acknowledged once the token is claimable
     [(accepted_peer, accepted)] = context.delivered
     assert accepted_peer == ROOT
-    assert (accepted.type, accepted.request) == ('progress', message.id)
-    pending = ride.pending_summon.peek(message.exchange)
+    assert (accepted.type, accepted.quest) == ('progress', message.id)
+    pending = ride.pending_summon.peek(message.quest_id)
+    assert pending.protocol_revision == brotocol.PROTOCOL_REVISION
     assert (pending.port, pending.channel_token) == (7321, 'tk')
     assert pending.target == 'dev'
     assert pending.prompt == 'deploy the thing'
@@ -787,8 +788,8 @@ class TestManualSummon:
     message = _summon_message(target='bro-dev', manual=True)
     control.handle(cast(Dispatcher, context), ROOT, message)
     context.workers[CHILD] = message.id
-    ride.pending_summon.claim(message.exchange, workspace='my-manual')
-    control.observe_delivery(CHILD, ROOT, brotocol.progress(message.exchange, {'trail_id': 'T1'}))
+    ride.pending_summon.claim(message.quest_id, workspace='my-manual')
+    control.observe_delivery(CHILD, ROOT, brotocol.progress(message.quest_id, {'trail_id': 'T1'}))
     control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='dev'))
     launch, peer, _ = context.spawned[-1]
     assert peer == CHILD
@@ -812,7 +813,7 @@ class TestManualSummon:
     message = _summon_message(target='bro-dev', manual=True)
     control.handle(cast(Dispatcher, context), ROOT, message)
     context.workers[CHILD] = message.id
-    ride.pending_summon.claim(message.exchange, workspace='my-manual')
+    ride.pending_summon.claim(message.quest_id, workspace='my-manual')
     control.handle(
       cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['github'])
     )
@@ -826,7 +827,7 @@ class TestManualSummon:
     message = _summon_message(target='bro-dev', manual=True)
     control.handle(cast(Dispatcher, context), ROOT, message)
     context.workers[CHILD] = message.id
-    ride.pending_summon.claim(message.exchange, workspace='my-manual')
+    ride.pending_summon.claim(message.quest_id, workspace='my-manual')
     control.handle(
       cast(Dispatcher, context), CHILD, _summon_message(target='dev', harness='claude')
     )
@@ -837,10 +838,10 @@ class TestManualSummon:
   def test_finish_discards_an_unclaimed_pending_record(self, control, tmp_path):
     _, message = self._register(control)
     control.observe_delivery(
-      CHILD, ROOT, brotocol.result(message.exchange, 'failed', detail={'reason': 'disconnected'})
+      CHILD, ROOT, brotocol.result(message.quest_id, 'failed', detail={'reason': 'disconnected'})
     )
     with pytest.raises(ride.pending_summon.UnknownToken):
-      ride.pending_summon.peek(message.exchange)
+      ride.pending_summon.peek(message.quest_id)
     assert _status(tmp_path)['last']['outcome'] == 'failed:disconnected'
 
   def test_root_teardown_detaches_a_manual_child(self, control, tmp_path, caplog):
@@ -853,4 +854,4 @@ class TestManualSummon:
     end_record = _audit(tmp_path)[-1]
     assert end_record['outcome'] == 'detached'
     with pytest.raises(ride.pending_summon.UnknownToken):
-      ride.pending_summon.peek(message.exchange)
+      ride.pending_summon.peek(message.quest_id)

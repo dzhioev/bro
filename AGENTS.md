@@ -292,7 +292,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   its typed records, the `RIDE_SUMMON_STATUS` env var pointing at it, and its atomic write.
   Stdlib-only and apart from `summon.py`, so the claude statusLine's repeated reads never pull the summon client in
 - `channel.py` — `BroChannel`, the bro-side broker consumer:
-  a thin adapter over `bro.broker.client.Client` answering the exchange the launch named in `BROKER_EXCHANGE`.
+  a thin adapter over `bro.broker.client.Client` answering the quest the launch named in `BROKER_QUEST`.
   `Runner.run()` builds one via the `_make_channel()` hook (`BroChannel.from_env()` — `None` when `BROKER_CHANNEL` is unset or the broker package is unimportable; the broker imports are deferred to call time, so importing `bro` never requires broker)
   and emits the started progress (`{trail_id}`) right after `start_trail` and the run's result after `end_trail`
   — ok with the run's return value, or failed carrying the end reason (raised → `BroRaised.reason`, error → the exception string).

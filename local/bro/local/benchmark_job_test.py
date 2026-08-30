@@ -175,7 +175,7 @@ class TestBenchmarkKind:
 
 
 def _result(request_id: str, payload: dict) -> Message:
-  return Message(type=Tag.RESULT, payload=payload, request=request_id)
+  return Message(type=Tag.RESULT, payload=payload, quest=request_id)
 
 
 class TestInterpretResult:
