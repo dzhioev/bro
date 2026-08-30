@@ -246,11 +246,11 @@ class _RecordingChannel:
   def __init__(self, events: list):
     self._events = events
 
-  def started(self, trail_id: str) -> None:
-    self._events.append(('started', trail_id))
+  def trail(self, trail_id: str) -> None:
+    self._events.append(('trail', trail_id))
 
-  def completed(self, result, end_reason) -> None:
-    self._events.append(('completed', result, end_reason))
+  def completed(self, result, end_reason, *, trail_id=None) -> None:
+    self._events.append(('completed', result, end_reason, trail_id))
 
   def close(self) -> None:
     self._events.append(('close',))
@@ -266,7 +266,7 @@ class TestRunClaudeSummoned:
       def from_env(cls):
         return _RecordingChannel(events)
 
-    monkeypatch.setattr(ride_runner, 'BroChannel', FakeChannel)
+    monkeypatch.setattr(ride_runner, 'RunLifecycle', FakeChannel)
     return events
 
   @pytest.fixture
@@ -282,9 +282,9 @@ class TestRunClaudeSummoned:
     env = _fake_claude(tmp_path, 'echo "THE REPLY"\n')
     assert ride_runner._run_claude_summoned([], env) == 0
     assert channel_events == [
-      ('started', 't-child'),
+      ('trail', 't-child'),
       ('close',),
-      ('completed', 'THE REPLY', 'ok'),
+      ('completed', 'THE REPLY', 'ok', 't-child'),
       ('close',),
     ]
     # the reply is echoed so the child's captured output tail carries it too
@@ -298,9 +298,9 @@ class TestRunClaudeSummoned:
     env = _fake_claude(tmp_path, 'sleep 0.4\necho LATE\n')
     assert ride_runner._run_claude_summoned([], env) == 0
     assert channel_events == [
-      ('started', 't-child'),
+      ('trail', 't-child'),
       ('close',),
-      ('completed', 'LATE', 'ok'),
+      ('completed', 'LATE', 'ok', 't-child'),
       ('close',),
     ]
 
@@ -309,7 +309,7 @@ class TestRunClaudeSummoned:
   ):
     env = _fake_claude(tmp_path, 'echo DONE\n')
     assert ride_runner._run_claude_summoned([], env) == 0
-    assert channel_events == [('completed', 'DONE', 'ok'), ('close',)]
+    assert channel_events == [('completed', 'DONE', 'ok', None), ('close',)]
 
   def test_failed_exit_emits_no_terminal_but_echoes(
     self, tmp_path, session_state, channel_events, capfd
@@ -357,7 +357,7 @@ class TestRunClaudeSummonedInteractive:
     assert ride_runner._run_claude_summoned_interactive([], {}, transcripts) == 0
     # the terminal belongs to the `answer` service tool; an exit without it
     # surfaces to the summoner as the channel-gone failure
-    assert channel_events == [('started', 't-manual'), ('close',)]
+    assert channel_events == [('trail', 't-manual'), ('close',)]
 
   @pytest.fixture
   def channel_events(self, monkeypatch) -> list:
@@ -368,7 +368,7 @@ class TestRunClaudeSummonedInteractive:
       def from_env(cls):
         return _RecordingChannel(events)
 
-    monkeypatch.setattr(ride_runner, 'BroChannel', FakeChannel)
+    monkeypatch.setattr(ride_runner, 'RunLifecycle', FakeChannel)
     return events
 
   @pytest.fixture

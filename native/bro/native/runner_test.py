@@ -10,7 +10,6 @@ from bro.bro import AnswerDelivered, BaseBro, BroRaised
 from bro.broker.brotocol import Message
 from bro.broker.client import CHANNEL_ENV, Client
 from bro.broker.transport import ClientTransport
-from bro.channel import BroChannel
 from bro.llm.mcp import InProcessMCPServer, MCPServer
 from bro.llm.observer import (
   NullObserver,
@@ -23,8 +22,10 @@ from bro.llm.observer import (
 )
 from bro.llm.tracker import NullTracker, Tracker
 from bro.mcp import MCPServerSpec
+from bro.monitor import trail_pointer
 from bro.native.llm import LLM
 from bro.native.runner import Runner, set_default_tracker_factory
+from bro.run_lifecycle import RunLifecycle
 
 
 class MockLLM(LLM):
@@ -722,17 +723,17 @@ class _RecordingTransport(ClientTransport):
 
 
 class _ChannelRunner(StubRunner):
-  def __init__(self, channel: Optional[BroChannel], llm: LLM):
+  def __init__(self, channel: Optional[RunLifecycle], llm: LLM):
     super().__init__(llm, name='channel-bro')
     self._channel = channel
 
-  def _make_channel(self) -> Optional[BroChannel]:
+  def _make_channel(self) -> Optional[RunLifecycle]:
     return self._channel
 
 
-def _make_channel() -> tuple[BroChannel, _RecordingTransport]:
+def _make_channel() -> tuple[RunLifecycle, _RecordingTransport]:
   transport = _RecordingTransport()
-  return BroChannel(Client(transport), 'X'), transport
+  return RunLifecycle(Client(transport), 'X'), transport
 
 
 class _TrailIDTracker(NullTracker):
@@ -759,8 +760,8 @@ class TestRunLifecycle:
     runner = _ChannelRunner(channel, _StubLLM(response='the result'))
     result = await runner.run('input', tracker=_TrailIDTracker(), surface='test')
     assert result == 'the result'
-    assert [m.type for m in transport.sent] == ['progress', 'result']
-    assert transport.sent[0].payload == {'trail_id': 'trail-42'}
+    assert [m.type for m in transport.sent] == ['mark', 'result']
+    assert transport.sent[0].payload == {'transition': 'trail', 'trail_id': 'trail-42'}
     assert transport.sent[1].payload == {'outcome': 'ok', 'value': 'the result'}
     assert transport.closed is True
 
@@ -770,8 +771,8 @@ class TestRunLifecycle:
     runner = _ChannelRunner(channel, _StubLLM(error=BroRaised('cannot fulfill')))
     with pytest.raises(BroRaised):
       await runner.run('input', surface='test')
-    assert [m.type for m in transport.sent] == ['progress', 'result']
-    assert transport.sent[1].payload == {
+    assert [m.type for m in transport.sent] == ['result']
+    assert transport.sent[0].payload == {
       'outcome': 'failed',
       'error': 'cannot fulfill',
       'detail': {'reason': 'raised'},
@@ -784,8 +785,8 @@ class TestRunLifecycle:
     runner = _ChannelRunner(channel, _StubLLM(error=RuntimeError('kaboom')))
     with pytest.raises(RuntimeError):
       await runner.run('input', surface='test')
-    assert [m.type for m in transport.sent] == ['progress', 'result']
-    assert transport.sent[1].payload == {
+    assert [m.type for m in transport.sent] == ['result']
+    assert transport.sent[0].payload == {
       'outcome': 'failed',
       'error': 'kaboom',
       'detail': {'reason': 'error'},
@@ -820,9 +821,16 @@ class TestRunLifecycle:
         super().send(message)
 
     transport = OrderTransport()
-    runner = _ChannelRunner(BroChannel(Client(transport), 'X'), _StubLLM())
+    runner = _ChannelRunner(RunLifecycle(Client(transport), 'X'), _StubLLM())
     await runner.run('input', tracker=OrderTracker(), surface='test')
-    assert events == ['start_trail', 'progress', 'end_trail', 'result']
+    assert events == ['start_trail', 'mark', 'end_trail', 'result']
+
+  @pytest.mark.asyncio
+  async def test_native_run_publishes_its_current_trail_pointer(self, monkeypatch, tmp_path):
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
+    runner = _ChannelRunner(None, _StubLLM())
+    await runner.run('input', tracker=_TrailIDTracker(), surface='test')
+    assert trail_pointer.read(tmp_path / trail_pointer.FILENAME) == 'trail-42'
 
   @pytest.mark.asyncio
   async def test_run_without_channel_emits_nothing(self, monkeypatch):
@@ -842,7 +850,7 @@ class TestRunLifecycle:
     runner = _ChannelRunner(channel, _StubLLM(error=AnswerDelivered('the answer')))
     result = await runner.run('input', tracker=_TrailIDTracker(), surface='test')
     assert result == 'the answer'
-    assert [m.type for m in transport.sent] == ['progress', 'result']
+    assert [m.type for m in transport.sent] == ['mark', 'result']
     assert transport.sent[1].payload == {'outcome': 'ok', 'value': 'the answer'}
 
   @pytest.mark.asyncio
@@ -851,12 +859,12 @@ class TestRunLifecycle:
     channel, transport = _make_channel()
     runner = _ChannelRunner(channel, _StubLLM(response='chat'))
     assert await runner.send('hi', tracker=_TrailIDTracker(), surface='test') == 'chat'
-    assert [m.type for m in transport.sent] == ['progress']
-    assert transport.sent[0].payload == {'trail_id': 'trail-42'}
+    assert [m.type for m in transport.sent] == ['mark']
+    assert transport.sent[0].payload == {'transition': 'trail', 'trail_id': 'trail-42'}
     assert transport.closed is True
     # only the conversation's first send announces
     assert await runner.send('more', surface='test') == 'chat'
-    assert [m.type for m in transport.sent] == ['progress']
+    assert [m.type for m in transport.sent] == ['mark']
 
   @pytest.mark.asyncio
   async def test_send_propagates_answer_delivered_to_the_surface(self):

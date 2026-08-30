@@ -398,7 +398,7 @@ async def test_check_pending_reports_state_and_buffered_trail_id():
     )
     await _wait_until(
       lambda: len(harness.broxy._routes[request.quest_id].messages) > 0,
-      'the started progress never reached the mailbox',
+      'the interim progress never reached the mailbox',
     )
     report, copies = await _check(harness, {'id': request.id})
     assert report.payload['value'] == {'state': 'pending', 'seq': 1, 'trail_id': 't1'}
@@ -560,7 +560,7 @@ async def test_cursor_read_of_a_pending_window_reports_pending():
     )
     await _wait_until(
       lambda: len(harness.broxy._routes[request.quest_id].messages) > 0,
-      'the started progress never reached the mailbox',
+      'the interim progress never reached the mailbox',
     )
 
     report, copies = await _check(harness, {'id': request.id, 'last_seen': 0})
@@ -578,7 +578,7 @@ async def test_cursor_read_from_the_future_is_denied():
     )
     await _wait_until(
       lambda: len(harness.broxy._routes[request.quest_id].messages) > 0,
-      'the started progress never reached the mailbox',
+      'the interim progress never reached the mailbox',
     )
 
     reader = await _local_client(harness)

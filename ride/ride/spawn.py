@@ -21,14 +21,11 @@ from typing import Any, Optional
 
 from bro.artifact import GET, MINT
 from bro.base import log
-from bro.broker.brotocol import Message
 from bro.broker.dispatcher import PING, Broker, ping_handler
-from bro.broker.runtime import Peer
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 from bro.kinds import KindContext
-from bro.monitor import trail_pointer
 from bro.summon import (
   DEFAULT_HARNESS,
   MAY_SUMMON_ENV,
@@ -38,7 +35,7 @@ from bro.summon import (
   encode_may_summon,
 )
 from bro.workspace.git import resolve_head, resolve_ref
-from bro.workspace.paths import summon_dir, workspace_dir, workspace_tree
+from bro.workspace.paths import summon_dir, workspace_tree
 from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts, view_mount
 from ride.flags import default_hold
 from ride.harness import ContainerExtras, get_harness
@@ -284,58 +281,6 @@ class SummonSpawner(Spawner):
     return await self._docker.spawn(lowered, channel, quest)
 
 
-def _root_lifecycle(control: SummonControl, workspace: Workspace):
-  """consume the root's own run lifecycle off the delivery tap. The root answers
-  the session's host-anchored quest, whose deliveries reach only the
-  observers, with no target peer — the filter that keeps every child delivery
-  out. A trail announcement publishes the root's trail (what its summon children
-  are attributed to); the run's result is logged, a raised run loudly."""
-
-  def _observe(source: Optional[Peer], target: Optional[Peer], message: Message) -> None:
-    del source
-    if target is not None:
-      return
-    trail_id = message.payload.get('trail_id')
-    if isinstance(trail_id, str) and len(trail_id) > 0:
-      log.info('root run started (trail %s)', trail_id)
-      control.note_root_trail(trail_id)
-      trail_pointer.write(trail_pointer.session_pointer(workspace.path), trail_id)
-      return
-    if 'outcome' not in message.payload:
-      return
-    detail = message.payload.get('detail')
-    reason = detail.get('reason') if isinstance(detail, dict) else None
-    if reason == 'raised':
-      log.warning('root run raised: %s', message.payload.get('error'))
-      return
-    log.info('root run ended: %s', message.payload.get('outcome'))
-
-  return _observe
-
-
-def _note_child_started(peers: Peers):
-  """publish each summoned child's started trail id as its workspace's session
-  trail pointer — what makes a failed child's surviving workspace resumable.
-  Sees only child deliveries: a host-anchored delivery (the root's, no target
-  peer) is filtered out, so no pointer is fabricated for a workspace that
-  doesn't exist. The name comes from the peer registry — a spawned child's
-  channel-named workspace or a manual child's claimed one — with the worker's
-  channel-derived name covering a non-summon quest."""
-
-  def _observe(source: Optional[Peer], target: Optional[Peer], message: Message) -> None:
-    if source is None or target is None:
-      return
-    trail_id = message.payload.get('trail_id')
-    if not isinstance(trail_id, str) or len(trail_id) == 0:
-      return
-    name = peers.workspace_for(message.quest) if message.quest is not None else None
-    if name is None:
-      name = _workspace_name(source)
-    trail_pointer.write(trail_pointer.session_pointer(workspace_dir(name)), trail_id)
-
-  return _observe
-
-
 def broker_bind_hosts() -> list[str]:
   """every address the session's channels must answer on: loopback for the peers
   this process launches beside itself, plus the docker bridge gateway when that
@@ -367,25 +312,21 @@ def run_root_via_broker(
   (`broker request ping '{}'`), the artifact kinds over the session store
   (`ride.artifacts`, which also collects the run of any job a kind starts), plus
   whatever kinds installed distributions
-  contribute (`ride.kinds`), and consumes the root's own run lifecycle — the
-  progress and result of the session's host-anchored quest — into the host
-  log. While an interactive root owns the terminal, host output goes to the
+  contribute (`ride.kinds`), and projects the journal into the summon audit and
+  stage-local status file. While an interactive root owns the terminal, host output goes to the
   workspace's host log instead of the shared TTY (see
   `ride.workspace.spawn._HostLogRedirect`); headless runs keep it on stderr.
 
   `workspace` is the workspace the root session runs in — its name is the root's
-  identity in the summon audit, and its records carry the broker-published
-  current-trail pointer written from the root's `started` lifecycle
-  (`bro.monitor.trail_pointer`). `may_summon` names the bros the root session
+  identity in the summon audit. `may_summon` names the bros the root session
   is authorized to summon — its effective outgoing allow-list (`ride/ride/summon_control.py`);
   defaults to deny-all. `credential_scope` carries the kinds the root session
   was launched with and their selection, the bound on what its summons may grant
   a child. `container_runtime` is the root's lazy or already-resolved
   image and bundle-volume identity, reused by every child. A summoned child follows
   its own bro's static seeds instead, resolved per request by the control. The summon handler is registered
-  either way, so a denied summoner always gets a clean correlated error instead of
-  a silent refuse; after the loop ends — cleanly or by an exception unwinding out
-  of it — children the root's exit killed mid-flight are logged loudly."""
+  either way, so a denied summoner gets a correlated error and an ordinary
+  journal denial event."""
   targets = sorted(set(may_summon))
   if len(targets) > 0:
     log.info('session may summon: %s', ', '.join(targets))
@@ -424,11 +365,7 @@ def run_root_via_broker(
   )
   for kind, handler in extension_kinds(kind_context).items():
     facade.on(kind, handler)
-  facade.add_delivery_observer(control.observe_delivery)
-  facade.add_delivery_observer(_note_child_started(peers))
-  facade.add_delivery_observer(_root_lifecycle(control, workspace))
-  try:
-    with contextlib.closing(artifacts):
-      return facade.run(launch)
-  finally:
-    control.log_killed_in_flight()
+  facade.subscribe(control.observe_journal)
+  facade.subscribe(control.audit_event)
+  with contextlib.closing(artifacts):
+    return facade.run(launch)

@@ -1,396 +1,99 @@
-# broker messaging substrate
+# Broker messaging substrate
 
-`broker` is the host↔peer messaging substrate for managed harnesses and bros
-— the wire protocol plus the transport that carries it.
-**Pure substrate:** it imports neither `ride` nor the bro class graph.
-Consumers (`ride` and `bro.summon`) depend on broker through its ports;
-broker depends on nothing of theirs.
-This file maps what exists in the tree.
+`bro.broker` is the consumer-neutral host↔peer messaging substrate.
+It owns the wire, transport, journal, Worker supervision, and dispatch logic;
+it imports neither `ride` nor the bro class graph.
 
-## The protocol
+## Protocol
 
-Four message types are closed and owned by the substrate;
-every capability is a *kind* inside a request, so adding one changes no envelope, routing, or correlation.
+`brotocol.py` owns four closed envelope types:
 
-- **request** — `{type, id, payload: {kind, args}}` opens a quest, the unit of work.
-  The sender mints the `id`, which becomes the quest id.
-- **mark** — `{type, quest, payload: {transition, …}}` carries one of the substrate-owned lifecycle transitions `accepted`, `started`, or `trail`.
-- **progress** — `{type, quest, payload}` carries zero or more ordered, kind-defined interim messages.
-- **result** — `{type, quest, payload: {outcome, value?, error?, detail?}}` closes the quest exactly once.
-  `outcome` is `ok` / `denied` (refused before any work began — deterministic) / `failed` (work began and produced no answer).
+- `request {id, payload: {kind, args}}` opens a quest.
+- `mark {quest, payload}` carries `accepted`, `started`, or `trail`.
+- `progress {quest, payload}` carries kind-defined interim data.
+- `result {quest, payload}` closes the quest exactly once.
 
-A quest is one-directional after its opening request, and the guarantee everything else serves is
-**every quest receives exactly one result**
-— a worker that dies without one gets `result{failed}` synthesized on its behalf.
-There is no version field (the host provisions every channel and launches every peer, so both ends are the same release)
-and no sender field:
-origin is attributed by the receiving endpoint, from the channel the message arrived on.
-A launched worker is handed its channel (`BROKER_CHANNEL`) and the id of the quest it answers (`BROKER_QUEST`), and correlates its own messages.
+Mark origin is structural:
+`accepted` is dispatcher-born, `started` is Worker-born, and `trail` is the only mark a worker process may send.
+`MAX_FRAME_BYTES` is the 256 KiB encoded-frame bound;
+the TCP adapter owns NDJSON framing and the attach handshake.
 
-## The encoding / framing seam
+## Layers
 
-The one structural rule to keep straight:
+- `transport.py` defines the async host and synchronous client ports, channel provisioning, and URI dispatch.
+- `transports/tcp.py` serves every host-minted channel on one listener.
+  The secret attach token authenticates and attributes a channel;
+  a new accepted attach supersedes its predecessor.
+- `spawn.py` defines the `Spawner` / `ChildHandle` launch port and the bounded output-tail buffer.
+- `job.py` launches mute host jobs in their own process group and owns the run-directory layout.
+- `runtime.py` is shape-free mechanism:
+  transport serving, per-channel connect/disconnect demultiplexing, send, provision/close, and process launch helpers.
+- `worker.py` owns supervision by shape.
+  `SpawnedWorker` drains the channel before deciding from process reap;
+  `JobWorker` collects the run directory through `JobOutput` and answers from reap;
+  `ExpectedWorker` treats attach as start and EOF as death because no host child handle exists.
+  The shared Worker base owns wait-task teardown and the two-phase deadline:
+  the fixed launch bound is replaced by the request timeout at `started`.
+- `journal.py` owns one mutable record per worker-backed quest, the ordered event ring, and permanent lineage.
+  Every projection subscribes to its one append funnel;
+  a raising subscriber is logged without breaking later subscribers.
+- `dispatcher.py` routes over journal records, binds one Worker per worker-backed quest, synthesizes failure from Worker death, and serves the reserved `query` / `events` read kinds.
+  Its handler vocabulary is `reply`, `deny`, `spawn`, `job`, and `expect`.
+- `client.py` is the synchronous peer handle for requests, marks, progress, results, and correlated waits.
+- `broxy.py` is still the stage-local session proxy with its retained mailbox and `claim` / `check` kinds.
+  A later stage replaces that retention with journal reads.
+- `cli.py` exposes the low-level broker request and receive surface.
 
-- **brotocol owns encoding** — `brotocol.py` turns a `Message` into UTF-8 JSON bytes with no delimiter (`to_bytes`) and parses them back (`from_bytes`).
-  No framing.
-- **the transport owns framing**
-  — how messages are delimited on a byte stream, and how a connection opens.
-  The tcp adapter uses NDJSON (`json + '\n'`) and a one-line attach handshake ahead of it.
+## Journal
 
-`MAX_FRAME_BYTES` is the protocol's frame bound in `brotocol.py`;
-`ProtocolError` is the wire-violation exception (malformed JSON, an envelope off the four-type shape, an unknown mark transition, or an oversize frame), raised by both the codec and the adapter.
+A `Record` stores quest id, kind, parent quest, requester, worker, bounded args, folded lifecycle, trail id, and the retained result.
+Worker-backed authorization calls `Journal.open`, which appends `accepted`;
+`Dispatcher.deny` creates a terminal denial record.
+Inline and read kinds answer without records.
 
-## Modules
+The event sequence is monotone for the broker root.
+Events carry their own quest, kind, parent, transition, timestamp, and transition payload.
+The retention ladder exempts live records:
+retained result payloads age out first, then terminal records, while lineage remains for the session lifetime.
+The event ring is independently bounded.
+The bounds live with the journal constants.
 
-- `brotocol.py` — `Message` (frozen; the codec validates the whole envelope shape at construction and parse), the `Tag` type names, the `request`/`mark`/`progress`/`result` builders, the `quest_id`/`kind`/`args`/`outcome` accessors, `ProtocolError`.
-- `transport.py` — the ports:
-  `ServerTransport` (async — its methods and the `Sink` callbacks run on the broker's event loop) / `ClientTransport` (synchronous
-  — a peer is its own process) ABCs, `Sink` (the async Protocol the Runtime implements:
-  `on_connect` at accept,
-  `on_message` per frame,
-  `on_disconnect` on a peer drop),
-  `Provisioned`,
-  the `Address` / `ChannelID` aliases,
-  and `connect(address)` (URI scheme → client adapter).
-  `ClientTransport.close(confirm=True)` blocks — deliberately unbounded
-  — for the receiver's close-back, confirming everything sent was consumed:
-  the guarantee a peer whose last send precedes its own exit needs (see the docstring; `BroChannel.close` opts in).
-  A plain `close()` also aborts a concurrent `receive` blocked from another thread
-  — the tcp adapter wakes the blocked reader through an internal self-pipe before closing (neither a bare fd close nor a shutdown wakes a parked select reliably on macOS)
-  — which is how a controller cancels an off-thread wait it abandoned (the bro summon tools ride on it).
-- `transports/tcp.py` — the one transport adapter:
-  an asyncio server on the host side and the synchronous socket client on the peer side,
-  plus `open_channel` for a peer that already has a loop of its own,
-  and the `read_attach_token` / `acknowledge_attach` halves of the handshake for a server that is not this one.
-  One listening port serves every channel, bound on each host the constructor names (so broker stays ride-free);
-  `Endpoint` (port + token) is the `Provisioned.host_endpoint` a spawner renders into an address for wherever its peer runs.
-- `spawn.py` — the spawn port:
-  `Spawner` / `ChildHandle` (ABCs; `spawn` / `wait` / `kill` async, `output_tail` sync) + the `LaunchSpec` marker + `RingBuffer`, the bounded byte buffer behind a handle's `output_tail` (ride's spawner adapters share it).
-  `spawn` receives the provisioned channel and the quest id together
-  — the worker-launch contract.
-- `job.py` — the job launch:
-  `CommandJob` (command plus an explicit env snapshot) run by `launch()` as a host process in its own process group
-  — a kill takes whatever children it spawned along (SIGTERM, then SIGKILL after a grace)
-  — plus the fixed layout of the *run directory* it is launched in, which is also its cwd:
-  `stdout` / `stderr` verbatim, the `status.json` `record_status` writes once the process is reaped, and `output/` for whatever the command wants the requester to receive.
-  The run directory is the whole of a job's answer, so nothing is buffered for an output tail.
-  The process speaks no protocol; the supervision that speaks for it is `Runtime.job` + `Dispatcher.job`.
-- `runtime.py` — the `Runtime`:
-  the mechanism layer that owns the asyncio loop and all mutable per-peer state (channel, `ChildHandle`, the `await handle.wait()` task, the `call_later` timer, the drain event) over the two ports.
-  Commands `spawn(launch, *, timeout, quest)` / `job(command, *, directory, timeout, quest)` / `expect(*, timeout)` / `send` / `kill` / `forget` / `serve` / `stop`;
-  emits raw, symmetric lifecycle up to a synchronous `Listener` (the `Dispatcher`):
-  `on_connect` / `on_message` / `on_exit` / `on_timeout` / `on_gone`.
-  No quests, correlation, or protocol
-  — a peer is its channel;
-  the root is a uniform peer.
-- `dispatcher.py` — the `Dispatcher` (logic layer) + the thin `Broker` facade + the built-in kind handlers.
-  The `Dispatcher` is the Runtime's `Listener`;
-  it owns the live quests (per quest: the requesting peer, the request id, at most one worker channel),
-  the worker index (`workers`),
-  the kind-handler registry (`on`),
-  and the delivery observers (`add_delivery_observer`).
-  `on_message` runs the three routing rules;
-  `on_exit`/`on_timeout`/`on_gone`/a raising `spawn` launch synthesize `result{failed}`;
-  `root` exposes the root peer's channel.
-  The handler primitives `deliver` / `reply` / `refuse` / `spawn` / `job` / `expect` / `invoke` are `Dispatcher` methods a handler drives via its `context`.
-  `JobOutput` is the port a job's answer rides: `open()` hands out a run directory, `collect()` turns the finished one into the result's `value`.
-  `Broker` injects the transport + spawner + `JobOutput` and exposes `on` / `add_delivery_observer` / `run(root) -> int` / `stop`;
-  `ping_handler` (the reserved `ping` kind) + `spawn_test_handler` are the built-ins.
-- `client.py` — the peer-side `Client` (synchronous, over `ClientTransport`):
-  `from_env()` resolves `BROKER_CHANNEL` via `connect()` and returns `None` when unset;
-  `send` / `request` / `call` / `await_reply` / `receive` / `close`, plus the answering side `progress` / `result` a worker emits against its quest.
-  `request` and `call` are correlate-on-receive
-  — they read until a message's `quest` names the sent request's id, setting uncorrelated arrivals aside for later `receive` calls;
-  `TimeoutError` on deadline, `ConnectionError` on channel EOF.
-  `request` returns the first correlated message;
-  `call` rides through marks and progress (surfaced to an `on_interim` callback) and returns the correlated result, the whole call under one deadline.
-  `send` returns the sent request (ids are minted client-side);
-  `await_reply` is `call`'s wait detached from its send
-  — with an opt-in `timeout_after_interim` that re-arms the deadline on each mark or progress message, bounding silence rather than the whole wait
-  — and `await_any` is `request`'s (the first correlated message as-is, what a manual summon's acceptance handshake reads), so a consumer can expose the request id before blocking;
-  what `summon`'s blocking/`--detach`/`wait` modes ride on.
-- `cli.py` — the `broker` console script:
-  `send` / `request` / `receive` subcommands over `Client`, taking a kind and its JSON args.
-  Inert (stderr note, exit 0) when `BROKER_CHANNEL` is unset;
-  message output on stdout is the wire JSON, one object per line;
-  `request`/`receive` exit 1 when no message arrives in `--timeout`.
-- `broxy.py` — the peer-side broker proxy (`broxy` console script):
-  a session-lifetime daemon holding the one upstream connection to the host broker and listening on a loopback port of its own that `BROKER_CHANNEL` points at,
-  so the local process swarm multiplexes over the single connection upstream supersede-on-accept expects.
-  Sticky per-request-id routing, a bounded in-order mailbox for waiter-gone messages, the local-only `claim` / `check` kinds
-  — peer machinery above the wire protocol, deliberately not part of it.
-  The module also carries the kind-neutral retention client:
-  `check(client, request_id, last_seen?)` reads one quest's retained state into a `CheckReport` (state, seq, trail id, the replayed window), raising `CheckDenied` on a refusal
-  — what `bro/summon.py`'s check and the `benchmark-job` CLI interpret their own way, exercised end to end by their suites.
-  `launch` owns the detached `serve` spawn, log redirection, `await` gate, and failed-launch cleanup;
-  invariants below.
+Args share one bounded-head implementation for memory and audit.
 
-## TCP adapter invariants
-
-- **Single loop, no locks.**
-  The server is asyncio-native:
-  the first `provision()` binds the one listener,
-  each accepted connection attaches and then runs a read task that NDJSON-deframes into the `Sink`,
-  and `send()` writes through that connection's `StreamWriter`.
-  Everything runs on the one event loop, so the shared per-channel state needs no lock and two coroutines can't interleave a partial frame.
-  A peer that stops reading is absorbed by its own writer's `drain()` backpressure, never by stalling routing to the others.
-  A host-side `close()` / `shutdown()` cancels the connection's read task so its EOF doesn't spuriously fire `on_disconnect` (that callback is reserved for peer-initiated drops).
-- **Channel authenticity.**
-  A connection opens with its channel's token alone on the first line and is attributed to the channel that token was minted for
-  — the anti-forgery primitive:
-  any local process can reach the port, so the token is the whole of what a connection proves.
-  There is no `from` field on the wire to forge.
-  The server answers `ok` before any message flows, so a refused attach raises at the client's constructor instead of swallowing everything the peer goes on to send;
-  a connection that never attaches, overruns the line limit, or names an unknown token is closed without an answer.
-- **Channel lifecycle.**
-  `provision()` mints the channel id and its token and returns the `Endpoint` a spawner renders;
-  `close()` retires the token, so the address stops resolving to anything;
-  `shutdown()` retires them all and closes the listener.
-  Every channel shares one ephemeral port, bound on each of the constructor's hosts (a port taken on a later host retries the whole set), so one port number reaches the broker from wherever a peer runs.
-
-## Runtime invariants
-
-- **Death = process exit, not socket EOF.**
-  A connection is transient (an fd can outlive the process, a socket can drop and reconnect while it lives), so EOF is a *channel* fact;
-  the reliable death signal is `await handle.wait()`.
-  A per-peer wait task emits `on_exit(peer, code, output)`.
-- **Expected peers invert the death rule.**
-  `expect(*, timeout)` provisions a channel for a peer someone else launches
-  — no `LaunchSpec`, no `ChildHandle`.
-  With no process to reap, its death signal is channel EOF after an attach (`on_gone`; sound because the attaching consumers hold one connection per run and never reconnect), and `kill` closes the channel host-side
-  — the external process is not the Runtime's to kill, it just loses its channel.
-  No drain step:
-  every frame the peer wrote was already delivered in order before EOF.
-- **Jobs invert the other half: a process with no channel.**
-  `job(command, *, directory, timeout, quest)` provisions nothing
-  — the peer id is synthetic (`job_peer(quest)`, collision-free against lulid channel ids), death is process exit as for a spawned peer, the drain is skipped, and `forget` has no channel to close.
-- **Drain-before-decide.**
-  On process exit, before emitting `on_exit`, the Runtime waits (bounded, `_DRAIN_TIMEOUT`) for the transport to flush the channel to EOF
-  — reusing `on_disconnect` as the "channel drained" marker
-  — so a result the child wrote just before exiting lands as `on_message` first and the Dispatcher closes the quest on it.
-  Skipped when the peer never attached.
-- **Birth = socket accepted** (`Sink.on_connect`), not the first message
-  — a peer is alive from when it attaches, and a `--raw` root may never send a frame.
-  The Runtime dedupes birth per peer.
-- **Timeout** fires a `call_later` timer → `kill` + `on_timeout` (already killed);
-  the later `on_exit` is the Dispatcher's to dedupe.
-  **Launch failure** rolls back its own registration (closes the provisioned channel).
-  **`forget`** drops the channel + timer + wait task;
-  **`stop`** hard-tears-down every peer (kill + cancel) then shuts the transport down.
+`query` returns caller-scoped, frame-bounded live-first pages with an opaque continuation cursor;
+it also supports a terminal wait by id.
+`events` returns caller-scoped ordered batches after a cursor and supports bounded long-polling.
+Both clamp waits to 600 seconds, are answered inline, and never record themselves.
+A caller sees its own quest and descendants according to permanent journal ancestry.
 
 ## Dispatcher invariants
 
-- **The three routing rules** (`on_message`):
-  (1) a mark/progress/result naming a live quest, arriving on that quest's own worker channel → the requester, as-is
-  — the sender must *be* the worker, so learning another quest's id gains a peer nothing;
-  (2) a request → the handler registered for its kind
-  — no handler, or an id colliding with a live quest (uniqueness rides on entropy, so a collision is rejected rather than coped with), means `result{denied}`;
-  (3) anything else → refused (dropped + logged, never delivered).
-- **Exactly one result per quest.**
-  A result delivery closes the quest and a closed quest is forgotten, so any later message naming it falls to rule 3;
-  synthesis consults the same table, so whichever of the worker's own result / exit / timeout is processed first wins
-  — closing the result-vs-exit and timeout-vs-result double-terminal races.
-  `failed` is the only outcome the host originates on a worker peer's behalf
-  — from `on_exit`-without-a-result (`reason: 'exit'`, with the exit code and output tail),
-  `on_timeout` (`reason: 'timeout'`, after the Runtime already killed the peer),
-  `on_gone`-without-one (`reason: 'disconnected'`, an expected peer's channel ended),
-  a `Dispatcher.spawn`/`expect` whose launch raised (`reason: 'launch'`, with the error string — no worker ever existed),
-  or a job whose run was clean but could not be collected (`reason: 'output'`).
-  The reason class rides `detail.reason`;
-  `error` carries the free-text diagnostic.
-- **A job's every message is host-originated — the third answer shape.**
-  `Dispatcher.job(command, requester, *, timeout)` runs a process that speaks no protocol, so the host speaks for it:
-  a started `progress{}` when the launch resolves, then one result built from the run directory the process filled.
-  A clean run closes with `result{ok, value}`, the value being whatever the `JobOutput` collected;
-  a failing exit or a timeout closes with `failed{exit}` / `failed{timeout}` carrying that value beside the reason, and the launch-failure synthesis is the worker one.
-  The job quest opens *with its worker bound* — the synthetic id is derivable up front, so no exit can slip between launch and bind.
-  A broker built with no `JobOutput` serves no jobs at all:
-  `job` raises rather than answering a shape nothing collected.
-- **A job answers from its reap, never before it.**
-  The Runtime's timeout kill is still in flight when `on_timeout` fires, so a timed-out job's run directory is not final:
-  the timeout is recorded on the quest and the reap delivers the one result.
-  That reap decides the outcome and closes the quest *before* awaiting the collection, which runs off the loop
-  — so a collection that outlives its own timer still cannot produce a second result.
-  A collection that raises fails the quest and leaves the run directory in place:
-  it is the only copy of what the job produced.
-- **Quests open at `spawn`/`expect`, workers bind at launch resolution.**
-  `Dispatcher.spawn` opens the quest for the in-flight request immediately (held against id collisions), threads the request id through `Runtime.spawn` to the spawner, and binds the worker channel when the launch resolves;
-  `Dispatcher.expect(requester, *, timeout, ready)` does the same for an external peer and hands the provisioned channel to `ready` so the handler can publish the endpoint to whatever launches it.
-  A handler that answers inline just `reply()`s — its quest never enters the table.
-- **One handler per kind.**
-  `on` refuses a kind that already has a handler — two contributions claiming one name are a wiring bug, not a precedence question.
-- **Delivery tap + root exposure.**
-  `add_delivery_observer` registers observers fired after each correlated delivery that bypasses handlers
-  — rule-1 forwarding and synthesized `failed`
-  — as `(source, target, delivered message)`, with `source=None` for a launch failure and `target=None` for a host-anchored delivery;
-  handler-driven `reply`, the dispatcher's own denials, and rule-3 refusals are not tapped.
-  `root` exposes the root peer's channel (`None` until `run()` spawns it).
-- **Uniform root on a host-anchored quest, lock-free.**
-  `run(root)` mints the session's own quest with this process as the requester, spawns the root as its worker (no request-lifecycle timeout), and returns its exit code on `on_exit`.
-  The root's started progress and closing result reach only the delivery observers;
-  a result closes the quest without gating the channel, which keeps serving the session, and a root that exits without one closes it silently
-  — the host reads the exit code itself.
-  The `Dispatcher` runs only inside Runtime callbacks on the one loop, so it holds no lock.
+The three routing rules are:
 
-## Broxy invariants
+1. a live quest accepts marks, progress, and a result only from its bound worker;
+2. a request invokes its one registered kind handler, unless its id already exists in lineage;
+3. every other message is dropped and logged.
 
-- **One loop, no locks.**
-  The upstream connection and the local server share the broxy's event loop (the tcp adapter's concurrency model), and both sides speak that adapter's NDJSON framing and attach handshake.
-  Its local listener is loopback-only and mints one token of its own:
-  every local connection attaches with the same one, so the token authenticates rather than identifies.
-  Local delivery is write-only
-  — no drain — so one stalled local reader can never stall routing for the others (frames per request are few and model-bounded);
-  upstream forwarding does drain, inside the sending connection's own read task, which is what turns a local half-close into the `close(confirm=True)` delivery confirmation.
-- **Sticky routes;
-  the result ends the live quest, not the conversation.**
-  Every outbound request id maps to its sending connection;
-  correlated inbound goes to exactly that connection.
-  Marks and progress keep the route;
-  the result detaches the waiter, and the conversation stays retained for cursor reads until evicted.
-  Route count is capped (`MAX_ROUTES`; eviction prefers detached-empty, then collected, then any detached route).
-- **Mailbox:
-  retained conversations, sequence-numbered, bounded.**
-  Every correlated inbound message is retained in arrival order under its request id with a 1-based sequence;
-  `read_up_to` tracks the highest sequence handed to a consumer (live delivery, claim replay, or cursor read).
-  Retention is what makes a result survive its own delivery
-  — a waiter that died mid-collect no longer destroys the last copy.
-  Over `MAILBOX_MAX_BYTES`, whole conversations drop
-  — collected first (result read), then oldest detached unread, never a live in-flight wait (the bound is exceeded rather than a wait broken);
-  a dropped conversation's claim/cursor read fails fast rather than replaying a gapped sequence.
-  The mailbox is in-memory and session-scoped by design
-  — a broxy crash loses it;
-  durability is deliberately out of scope.
-- **Claim = a local stand-in request;
-  the wait is a lock;
-  collect is one-shot.**
-  The `claim` kind (args `{id}`) is never forwarded upstream.
-  Unread messages are replayed
-  — and future ones delivered
-  — re-tagged to correlate to the claim itself, so `Client.call('claim', {'id': …})` behaves exactly like the original call did.
-  Unknown id (never sent, or evicted) → immediate `result{denied}`;
-  a collected conversation (result already read) → immediate `result{denied}` pointing at the cursor re-read;
-  a claim while the current waiter's connection is alive → immediate `result{denied}` too (the newcomer fails fast, the live waiter keeps its route).
-- **Check = the non-marking peek, or the cursor read;
-  correlation separates its report from the replay.**
-  The `check` kind (args `{id, last_seen?}`, local-only like claim) is always answered immediately and never supersedes a live waiter.
-  Replayed window copies keep the conversation's own quest id — no re-tag — and the check closes with its own `result{ok, value: {state, seq[, trail_id]}}`, so the reader tells the two streams apart by correlation id alone, never by payload shape.
-  `state` is `pending` (no result yet), `ready` (result retained, unread), or `collected` (result read).
-  Without `last_seen`:
-  an unread result replays the unread window before the report, marking nothing (a later check or claim still finds it).
-  With `last_seen: N`:
-  replays every retained message from sequence N+1 regardless of read status
-  — the recovery path for a lost delivery
-  — and marks the window read;
-  the window is contiguous and the report's `seq` is the new cursor;
-  `last_seen` beyond `read_up_to` is denied as "from the future" (it would acknowledge messages nobody has seen).
-  An unknown id and malformed args are denied.
-- **Fail loudly, no restart.**
-  `serve` exits 0 only on SIGTERM/SIGINT
-  — the launcher's own teardown, the one expected end of a broxy
-  — and 1 on anything else (an unreachable or lost upstream, a poisoned upstream frame), the listener dying with the process so the session's channel disappears cleanly.
-  `launch` starts it detached, redirects output to the requested log, reads back the ephemeral address `serve` publishes through `--address-file`, gates on readiness, and kills it when either gate fails;
-  callers decide whether a launch failure is fatal.
-  The upstream is the session's own host broker:
-  it never comes back within a session, so a lost upstream is unrecoverable, and any other failure is a code bug to surface
-  — a restart wrapper would only mask it, and the in-memory mailbox dies with the process either way.
+A process-sent mark is accepted only for a first, non-empty `trail`.
+A Worker-generated `started` mark folds into the journal before forwarding.
+A delivered or synthesized result folds `ended` and removes the record from the live index;
+the worker index remains until Worker death so a live session can keep requesting work after answering its parent quest.
+
+The host root is a normal `SpawnedWorker` on a host-anchored journal record.
+Root exit closes every live record as `killed`, or `detached` for expected workers, before Worker teardown.
+
+`deny` is for refused worker-backed work:
+it sends `result{denied}` and journals the denial in one call.
+Read and inline handlers return their own denied result through `reply`, avoiding recursive read records.
+Unknown kinds and lineage collisions are dispatcher wire denials and remain unjournaled.
 
 ## Tests
 
-`brotocol_test.py` (codec round-trips per type, the builders and accessors, transition validation, the frame cap, and envelope-shape rejection at construction and parse),
-`transports/tcp_test.py` (a real socket round-trip driving the asyncio server through a stub async `Sink`, the synchronous client run via `asyncio.to_thread` since its attach blocks on the ack the loop owes it:
-delivery,
-`on_connect` at accept,
-NDJSON framing,
-oversize rejection,
-two-channel authenticity over the one shared port,
-an unknown or oversize attach refused with no channel born and the listener surviving it,
-host-close retiring the token vs peer-disconnect,
-a client close completing before its own concurrent reader parks in `select` still reading as EOF,
-shutdown, and the address round-trip through `Endpoint` / `parse_address` / `redacted`),
-and `spawn_test.py` (the `RingBuffer` bound),
-and `job_test.py` (`CommandJob` over real processes:
-each stream in its own run file,
-the run directory as both the cwd and the `output/` the job fills,
-the explicit env snapshot,
-exit codes,
-`record_status`,
-and the group-wide kill — proven by a background child that never gets to write its marker),
-and `runtime_test.py` (the `Runtime` over the real asyncio transport + a non-Docker `python -c` spawner + a fake listener:
-clean result with drain ordering,
-the quest id handed through the spawn port,
-early-exit output tail,
-timeout-kill,
-send/kill/forget,
-exit-before-connect,
-launch-failure rollback,
-the job paths
-— exit with no channel provisioned, each stream in its run file,
-timeout-then-exit,
-forget without exit,
-launch-failure rollback —
-and the expected-peer paths
-— messages-then-`on_gone` on disconnect,
-gone without a result,
-kill closing the channel,
-timeout-then-gone),
-and `dispatcher_test.py` (the three rules + quest closure + `failed` synthesis against a fake `Runtime`:
-ping's echoed result,
-unknown-kind and id-collision denials,
-duplicate kind registration refused,
-quest opening with the quest id riding the spawn,
-rule-1 mark/progress/result forwarding with the worker-channel requirement (an impostor naming a live quest is refused),
-drop-after-close,
-result-then-exit collapsing to one result,
-`failed{exit}` / `failed{timeout}` synthesis with the later exit deduped,
-`failed{launch}` synthesis closing the quest,
-the job quest
-— worker bound up front and its run directory opened,
-started progress delivered and tapped,
-a clean reap closing with the collected `ok{value}` and dropping the run,
-a failing exit carrying that value into `failed{exit}`,
-a timeout answered from the reap as one result,
-a raising collection failing the quest and keeping the run,
-launch failure falling to the worker synthesis and dropping the run,
-and a broker with no `JobOutput` refusing to run a job —
-expect opening the quest with the channel handed to `ready`,
-expected-peer routing with a post-result `on_gone` cleaning up,
-`failed{disconnected}` synthesis,
-the host-anchored root quest (observer-only delivery, the channel un-gated by the root's result, silent closure on exit),
-the delivery tap — rule-1 + synthesized `failed` observed,
-`source=None` on launch failure,
-handler replies and denials untapped — root exposure,
-the `Broker.run` root-exit / `stop` path,
-and one real-loop job round-trip — a live-channel requester answered started-progress-then-collected-result over the real `Runtime` and transport),
-and `client_test.py` + `cli_test.py` (the `Client` and the `broker` CLI over a real `TcpServerTransport`↔`TcpClientTransport` round-trip:
-`from_env` set/unset,
-the worker-side `progress`/`result` emission,
-request correlation with uncorrelated arrivals set aside,
-`call` surfacing marks and progress and returning the correlated result under one whole-call deadline,
-`await_any` returning the first correlated message,
-`send` returning the client-minted request + `await_reply` reattaching to it,
-the `timeout_after_interim` re-arm (a result outliving the initial bound / silence caught at a tighter one),
-timeout / channel-close errors,
-the `close(confirm=True)` handshake returning only after the host consumed everything sent,
-the cross-thread close-abort of a blocked wait,
-the CLI's inert no-channel path,
-args validation,
-and stdout wire-JSON output),
-and `broxy_test.py` (a live `Broxy` between real local clients and a real upstream transport:
-round-trip and `from_env` through the proxy,
-interim-riding `call`,
-the acceptance mark leaving the conversation pending,
-sticky routing across concurrent connections,
-detach→retain→claim replay in order with re-tagged correlation,
-claim denials on unknown/collected ids and on live-waiter collisions (the wait-is-a-lock rule),
-claim re-await of a detached route,
-the check reports — unknown/malformed denied / pending with retained trail id + seq / ready replaying the unread window un-re-tagged before the report / collected after claim / live waiter undisturbed
-— the cursor reads (post-delivery replay idempotence, read-marking spending the collect, the pending report, from-the-future and malformed `last_seen` denials),
-mailbox byte-bound eviction (collected preferred, live waits exempt),
-malformed-local-frame isolation,
-clean-stop vs upstream-EOF exit codes,
-and the `launch`/`serve`/`await` CLI edges).
-All in `bro/local/run_tests.py`'s `PYTEST_FILES`.
-No Docker.
-`spawn.py`'s ports (marker + ABCs) are exercised by the adapters' own suites.
-The live docker seam is covered from the consuming side by `ride/ride/e2e_test.py`;
-the host process seam by `ride/ride/session_test.py`'s live ping round-trip.
+- `brotocol_test.py` covers envelope validation, builders, accessors, and the frame cap.
+- `transports/tcp_test.py` covers attach authenticity, supersession, framing, delivery, disconnect, and shutdown over real sockets.
+- `runtime_test.py` covers the shape-free transport and launch seam.
+- `worker_test.py` covers each supervision shape, start timing, timeout kill, collection, and death reports.
+- `journal_test.py` covers folding, subscribers, retention, lineage, bounds, event gaps, and ancestry scope.
+- `dispatcher_test.py` covers routing, origin checks, journaled denial, Worker synthesis, and the read kinds.
+- `job_test.py` and `spawn_test.py` cover the process and launch ports.
+- `client_test.py`, `cli_test.py`, and `broxy_test.py` cover the peer-facing and stage-local proxy surfaces.

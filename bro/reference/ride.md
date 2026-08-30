@@ -127,14 +127,11 @@ host sessions provision the workspace worktree and run the runtime snapshot's `r
 The bro harness owns no flags of its own;
 it rejects Claude's `--raw`.
 
-The broker publishes a native root's
-— and each summoned child's
-— `started` trail id beside the workspace's `resume.json`.
+Each session publishes its own current-trail pointer beside the workspace's `resume.json`:
+the native runner publishes when its trail opens, and the Claude recorder republishes as segments turn over.
 `ride resume` continues that exact trail at its latest consistent point under the recorded native recipe, producing a new trail with `forked_from`;
 it does not use the globally newest call or the bro class's current recipe.
-A session without a broker-published pointer
-— including a broker-disabled launch or `--no-trails`
-— cannot be resumed and fails with that reason.
+A session with trail recording disabled publishes no pointer and cannot be resumed.
 
 `bro run <bro> <input>` and `bro chat <bro> [what]` are in-process surfaces:
 they use ambient credentials and create no workspace or scope.
@@ -675,7 +672,7 @@ The modes differ only in the spawner (`ride/ride/workspace/spawn.py`, composed b
 
 The session's processes don't talk to that channel directly:
 a **broxy** (the peer-side broker proxy, `bro/broker/broxy.py`) sits in between, holding the one long-lived upstream connection and re-serving the channel on a loopback port of its own that `BROKER_CHANNEL` is rewritten to
-— so the session's short-lived clients (`broker` CLI calls, `BroChannel`, a backgrounded wait) multiplex over the single connection the host's supersede-on-accept semantics expect,
+— so the session's short-lived clients (`broker` CLI calls, `RunLifecycle`, a backgrounded wait) multiplex over the single connection the host's supersede-on-accept semantics expect,
 and a result whose waiter died stays claimable from the broxy's mailbox.
 A set `BROKER_CHANNEL` always names a broxy
 — there is no direct-channel topology.
@@ -702,9 +699,8 @@ A channel-less session's own summons fail immediately at the client, and a chann
 — its exit surfaces to the summoner as the synthesized `result{failed, reason: exit}` with the output tail, and the child's trail as the fallback record.
 
 The live broker registers the reserved `ping` kind, so a session can verify its channel with `broker request ping '{}'`;
-the root-lifecycle observer
-— the root answers the session's own host-anchored quest (its launch carries the quest id in `BROKER_QUEST` beside the channel),
-and this host process is the requester, so the root's started progress and closing result land in the host log (`root run started (trail …)` / `root run ended: …`);
+the journal projection logs the root's host-anchored quest
+— its launch carries the quest id in `BROKER_QUEST` beside the channel, and the host process is the requester;
 and the `summon` kind handler
 — the root launch carries the session's summon allow-list (`run_root_via_broker(may_summon=…)`, computed at launch by `ride/ride/summon_control.py`;
 see the shared launch flags above) and wires the per-root `SummonControl` enforcing per-peer summon authorization (see "Summoning another bro").
@@ -775,7 +771,7 @@ A claude-harness child is scoped through the claude-full recipe
 — `claude_code` required, no LLM key
 — and the seam's auth preflight runs in the lowering, so an unresolvable setup token fails the spawn with the preflight's remedy as the correlated launch failure.
 Its lifecycle comes from the in-place runner rather than `bro.native.runner.Runner.run`:
-the runner captures the print-mode reply, announces the started progress once the session recorder publishes the workspace's current-trail pointer, and sends the quest's ok result on a clean exit
+the runner captures the print-mode reply, announces the trail mark once the session recorder publishes the workspace's current-trail pointer, and sends the quest's ok result on a clean exit
 — a non-zero exit emits no result and surfaces as the synthesized `result{failed, reason: exit}` (the echoed reply lands in its output tail), while an unattended abort is the `raise` service tool's own `result{failed, reason: raised}`.
 The recorder stamps the child trail's `summoned_by` from the summoner attribution, and the child's recorded resume spec is a claude spec, so a kept workspace resumes into the claude conversation.
 
@@ -785,7 +781,7 @@ A `manual: true` summon (`summon --manual`, or the `summon` tool's `manual` para
 the host spawns nothing and instead registers an *expected external peer*
 — a provisioned broker channel awaiting a child someone else starts
 — and the request id doubles as the launch token.
-The registration is acknowledged with an acceptance progress once the token is claimable, and the manual client waits for it, so a denial fails at the summon itself
+The registration is acknowledged with an `accepted` mark once the token is claimable, and the manual client waits for it, so a denial fails at the summon itself
 — a token is only ever handed out for a summon the host is expecting.
 The summoner relays the token to the user, who launches the session at their own pace with `ride along --summoned <token> <target>`:
 an otherwise normal interactive session
@@ -807,8 +803,8 @@ The claim records the user-chosen workspace name beside it (`claimed/<token>.jso
 — the base-ref source for the child's own summons and the tree its artifact mints resolve against
 — so attribution comes from the launch machinery on the host, never from anything the child says on the wire (before the claim, a nested summon from the child is denied with a retry hint,
 and its credential grants are always denied as unattributable — its actual scope was computed by its own launch).
-The child announces the started progress (`{trail_id}`)
-— the claude in-place runner from its started-watch, the native chat surface on its first turn.
+The child announces the trail mark (`{trail_id}`)
+— the Claude in-place runner from its trail watch, the native chat surface on its first turn.
 The answer comes back through the `answer` service tool, mounted in every summoned session with a channel:
 the agent calls it once, when the user confirms the work is done, and the session ends with the quest's ok result delivered to the waiting summoner
 — a session the user quits without it produces no result, and the channel's EOF surfaces to the summoner as the synthesized `result{failed, reason: disconnected}` (channel EOF is an expected peer's death signal:
@@ -1086,7 +1082,7 @@ Wrappers and session daemons rely on a small set of env vars:
   The env name is owned by `bro.summon` and read back through its `summoned()` predicate;
   set by the summon lowering and by the `--summoned` launch,
   read by the claude in-place runner to emit the child's run lifecycle over the broker channel (a bro-run child emits from `bro.native.runner.Runner.run`,
-  a summoned interactive one its `started` from `Runner.send`'s first turn), by the service-server build to mount the `answer` tool,
+  a summoned interactive one its `trail` mark from `Runner.send`'s first turn), by the service-server build to mount the `answer` tool,
   and by `ride banner` and `bro.prompts.session_fragment` so the run can tell in-session that it owes a summoner an answer.
 - `RIDE_SUMMON_STATUS` — path of the session's live summon-status file (`<runtime-root>/summon/<name>.status.json` on the host, `/var/ride/summon/<name>.status.json` through the container's dedicated read-only bind).
   The env name and the file's records are owned by `bro.summon_status`;
@@ -1107,7 +1103,7 @@ Wrappers and session daemons rely on a small set of env vars:
   — or unset when the broxy cannot run (see "The broker channel").
   It carries a credential, so it belongs in no log:
   `bro.broker.transports.tcp.redacted` is the form that goes in one.
-  Read by `bro.broker.client.Client.from_env` — the `broker` CLI and bro's `BroChannel` ride it
+  Read by `bro.broker.client.Client.from_env` — the `broker` CLI and bro's `RunLifecycle` ride it
   — and everything on it is inert when unset (`BROKER_DISABLED`, a broxy that could not run, or a workspace provisioned before broker existed).
 - `BROKER_DISABLED` — launcher-side presence-checked kill-switch:
   the session gets no channel and no `BROKER_CHANNEL` (see "The broker channel").

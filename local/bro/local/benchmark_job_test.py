@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from bro.broker import brotocol
 from bro.broker.brotocol import Message, Tag
 from bro.broker.client import CHANNEL_ENV
 from bro.broker.dispatcher import Dispatcher
@@ -52,8 +53,8 @@ class FakeContext:
     self.replies: list[tuple[str, dict]] = []
     self.jobs: list[tuple[CommandJob, str, Optional[float]]] = []
 
-  def reply(self, peer, payload):
-    self.replies.append((peer, payload))
+  def deny(self, peer, error):
+    self.replies.append((peer, {'outcome': 'denied', 'error': error}))
 
   def job(self, command, requester, *, timeout=None):
     self.jobs.append((command, requester, timeout))
@@ -176,6 +177,24 @@ class TestBenchmarkKind:
 
 def _result(request_id: str, payload: dict) -> Message:
   return Message(type=Tag.RESULT, payload=payload, quest=request_id)
+
+
+def test_await_outcome_logs_launch_only_for_started(caplog):
+  request = Message(
+    type=Tag.REQUEST,
+    id='request',
+    payload={'kind': benchmark_job.BENCHMARK, 'args': {}},
+  )
+
+  class FakeClient:
+    def await_reply(self, sent, timeout, *, on_interim, timeout_after_interim):
+      on_interim(brotocol.mark(sent.quest_id, 'accepted'))
+      on_interim(brotocol.mark(sent.quest_id, 'started'))
+      on_interim(brotocol.mark(sent.quest_id, 'trail', trail_id='trail'))
+      return brotocol.result(sent.quest_id, 'ok', value={'ref': REF})
+
+  assert benchmark_job._await_outcome(cast(benchmark_job.Client, FakeClient()), request, 10) == REF
+  assert [record.message for record in caplog.records].count('benchmark job launched') == 1
 
 
 class TestInterpretResult:

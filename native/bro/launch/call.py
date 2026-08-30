@@ -13,7 +13,6 @@ from typing import Optional, TextIO
 import bro.base.args as base_args
 from bro.base import log
 from bro.bro import RAISE_EXIT_STATUS, AnswerDelivered, BroRaised
-from bro.channel import BroChannel
 from bro.launch.llm_flags import (
   EFFORT_HELP,
   FAST_HELP,
@@ -27,6 +26,7 @@ from bro.llm.observer import Observer
 from bro.llm.providers import LLMSelectionError
 from bro.mcp import HOLDS
 from bro.native.runner import Runner
+from bro.run_lifecycle import RunLifecycle
 from bro.trails.display import (
   DisplayRecord,
   DisplaySession,
@@ -294,7 +294,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
 def _relay_summoned_answer(answer: str) -> int:
   """send a summoned conversation's `answer`-tool result to the summoner as the
   run terminal — the chat surface's half of the bare `answer` flavor."""
-  channel = BroChannel.from_env()
+  channel = RunLifecycle.from_env()
   if channel is None:
     log.error('no broker channel; the answer cannot reach the summoner: %s', answer)
     return 1

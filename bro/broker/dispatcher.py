@@ -1,153 +1,71 @@
-"""Dispatcher — the logic layer: quests, the routing rules, kind handlers.
-
-The `Runtime` (mechanism) reports raw, symmetric lifecycle up to this `Dispatcher`
-(logic), which owns everything protocol: the live quests — per quest the
-requesting peer, the request id, and at most one worker channel — the kind-handler
-registry, the delivery observers, the three routing rules, and the synthesis of
-`result{failed}`. It runs only inside `Runtime` callbacks, all on the one event loop,
-so it is a plain synchronous object with no lock.
-
-Two invariants carry the design:
-
-- **Exactly one result per quest.** Delivering a result closes the quest and a
-  closed quest is forgotten, so any later message naming it falls to rule 3 and is
-  dropped. Synthesis consults the same table, so whichever of the worker's own result /
-  exit / timeout is processed first wins — closing the result-vs-exit and
-  timeout-vs-result double-terminal races.
-- **`failed` is the only outcome the host originates on a worker peer's behalf.** A
-  worker peer's `ok` is always its own; the host synthesizes `result{failed}` only when
-  the worker ends without one — an `on_exit` without it (`reason: 'exit'`), an
-  `on_timeout` (`reason: 'timeout'`, after the Runtime already killed the peer), an
-  `on_gone` without one (`reason: 'disconnected'`, an expected peer's channel ended),
-  or a `spawn` whose launch raised (`reason: 'launch'`, before any peer existed).
-  A *job* (`job()`) is the exception by definition: its process speaks no protocol, so
-  the host speaks every message on its behalf — a started `progress{}` at launch, and
-  a result built from the run directory the process filled: a clean run becomes
-  `result{ok}` carrying the collected value, anything else the `failed{exit}` /
-  `failed{timeout}` a mute worker produces, carrying that value too.
-
-The root is a uniform peer with one twist: `run(root)` opens the session's own
-quest for it, host-anchored — the requester is this process, not a peer — so the
-root announces its run lifecycle like any worker. A host-anchored delivery reaches the
-delivery observers with `target=None` and nobody else, and when the root exits without
-a result the quest closes silently: the host reads the exit code itself, and the
-exit ends the session.
-"""
+"""Journal-backed broker dispatch and built-in read kinds."""
 
 import asyncio
+import base64
+import binascii
 import contextlib
-import shutil
-from collections.abc import Callable, Generator
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Optional, Protocol
+import json
+from collections.abc import AsyncGenerator, Callable, Generator
+from typing import Any, Optional
 
 from bro.base import log
 from bro.base.lulid import lulid
 from bro.broker import brotocol
-from bro.broker.brotocol import Message, Tag
-from bro.broker.job import CommandJob, record_status
-from bro.broker.runtime import Peer, Runtime, job_peer
+from bro.broker.brotocol import MAX_FRAME_BYTES, Message, Tag
+from bro.broker.job import CommandJob
+from bro.broker.journal import MAX_WAIT_SECONDS, Journal, Record, Subscriber, listing_position
+from bro.broker.runtime import Peer, Runtime
 from bro.broker.spawn import LaunchSpec, Spawner
 from bro.broker.transport import Provisioned, ServerTransport
+from bro.broker.worker import (
+  DeathReport,
+  ExpectedWorker,
+  JobOutput,
+  JobWorker,
+  SpawnedWorker,
+  Worker,
+)
 
-# request-lifecycle bound for a spawned worker (LLM children run for minutes)
 DEFAULT_TIMEOUT = 600.0
-
-# the reserved kind: answers ok with its own arguments echoed back
 PING = 'ping'
+QUERY = 'query'
+EVENTS = 'events'
 
-# a handler receives the Dispatcher as its `context` and drives the routing primitives.
 RequestHandler = Callable[['Dispatcher', Peer, Message], None]
-
-# a delivery observer taps correlated deliveries as (source, target, delivered message);
-# source is None when no worker ever existed (a launch failure), and target is None on
-# a host-anchored quest (the root's — this process is the requester).
-DeliveryObserver = Callable[[Optional[Peer], Optional[Peer], Message], None]
-
-
-class RuntimeCommands(Protocol):
-  """the mechanism-layer commands the Dispatcher issues; the real `Runtime` satisfies it."""
-
-  async def spawn(self, launch: LaunchSpec, *, timeout: Optional[float], quest: str) -> Peer: ...
-  async def job(
-    self, command: CommandJob, *, directory: Path, timeout: Optional[float], quest: str
-  ) -> Peer: ...
-  async def expect(self, *, timeout: Optional[float]) -> Provisioned: ...
-  def send(self, peer: Peer, message: Message) -> None: ...
-  def kill(self, peer: Peer) -> None: ...
-  def forget(self, peer: Peer) -> None: ...
-  async def serve(self) -> None: ...
-  async def stop(self) -> None: ...
-
-
-class JobOutput(Protocol):
-  """where a job's run is collected, and what the quest answers with.
-
-  The Dispatcher opens a directory per job, the process fills it (the layout is
-  `bro/broker/job.py`'s), and `collect` turns the finished run into the result's
-  `value`."""
-
-  def open(self) -> Path:
-    """a fresh empty directory to collect one job's run into."""
-    ...
-
-  async def collect(self, directory: Path, context: 'Dispatcher', requester: Peer) -> dict:
-    """the value the job's result carries, built from its completed run
-    directory; heavy, so the implementation works off the loop. `requester` is
-    the peer awaiting the result — whom the collected output is attributed to.
-    Raising fails the quest and leaves the directory in place."""
-    ...
-
-
-@dataclass
-class JobRun:
-  """the run a job quest answers with: the directory its output is collected
-  from, and whether the host killed the process at its deadline."""
-
-  directory: Path
-  timed_out: bool = False
-
-
-@dataclass
-class Quest:
-  """one live quest: who awaits its result, and the worker channel answering it
-  (None while the launch is still resolving)."""
-
-  requester: Optional[Peer]  # None: host-anchored — this process is the requester
-  worker: Optional[Peer] = None
-  job: Optional[JobRun] = None  # answered by a job: its run (see on_exit)
-
-
-def _remove_run(directory: Path) -> None:
-  try:
-    shutil.rmtree(directory)
-  except OSError as e:
-    log.warning(f'broker dispatcher: could not remove the job run directory {directory}: {e}')
 
 
 class Dispatcher:
+  """Route requests and worker messages over journal-owned quest records."""
+
   def __init__(
-    self, *, default_timeout: float = DEFAULT_TIMEOUT, job_output: Optional[JobOutput] = None
+    self,
+    *,
+    default_timeout: float = DEFAULT_TIMEOUT,
+    job_output: Optional[JobOutput] = None,
+    journal: Optional[Journal] = None,
   ):
-    self._runtime: Optional[RuntimeCommands] = None
+    self._runtime: Optional[Runtime] = None
     self._default_timeout = default_timeout
     self._job_output = job_output
-    self.quests: dict[str, Quest] = {}  # live quests by request id
-    self.workers: dict[Peer, str] = {}  # worker channel -> the quest it answers
+    self.journal = journal if journal is not None else Journal()
+    self.live: dict[str, Record] = {}
+    self.workers: dict[Peer, str] = {}
+    self._worker_objects: set[Worker] = set()
     self._handlers: dict[str, RequestHandler] = {}
-    self._delivery_observers: list[DeliveryObserver] = []
-    self._active: Optional[Message] = None  # the request currently being handled (for reply/spawn)
+    self._active: Optional[Message] = None
     self._root: Optional[Peer] = None
+    self._root_worker: Optional[Worker] = None
     self._root_exit: Optional[asyncio.Future[int]] = None
+    self._read_tasks: set[asyncio.Task[None]] = set()
+    self._retirement_tasks: set[asyncio.Task[None]] = set()
 
-  def bind(self, runtime: RuntimeCommands) -> None:
-    """wire the Dispatcher to the Runtime it commands (the facade breaks the mutual cycle:
-    the Runtime needs this Dispatcher as its listener, this needs the Runtime for commands)."""
+  def bind(self, runtime: Runtime) -> None:
+    if self._runtime is not None:
+      raise RuntimeError('dispatcher already bound')
     self._runtime = runtime
 
   @property
-  def runtime(self) -> RuntimeCommands:
+  def runtime(self) -> Runtime:
     if self._runtime is None:
       raise RuntimeError('dispatcher used before bind()')
     return self._runtime
@@ -158,98 +76,55 @@ class Dispatcher:
       raise RuntimeError('this broker runs no jobs: it was built with no job output')
     return self._job_output
 
+  @property
+  def root(self) -> Optional[Peer]:
+    return self._root
+
   def on(self, kind: str, handler: RequestHandler) -> None:
-    """register the handler answering `kind`. A kind has exactly one handler —
-    a second registration is a wiring bug (two contributions claiming one name),
-    refused rather than letting registration order decide."""
     if kind in self._handlers:
       raise ValueError(f'kind {kind!r} already has a handler')
     self._handlers[kind] = handler
 
-  def add_delivery_observer(self, observer: DeliveryObserver) -> None:
-    """register a tap on the correlated deliveries that bypass handlers — rule-1
-    forwarding and synthesized `failed` — so a consumer sees worker lifecycle (trail
-    ids, outcomes) without sitting in the message path. Handler-driven `reply`, the
-    dispatcher's own denials, and rule-3 refusals are not deliveries it reports."""
-    self._delivery_observers.append(observer)
-
-  @property
-  def root(self) -> Optional[Peer]:
-    """the root peer's channel once `run()` has spawned it — the key for root-aware policy checks."""
-    return self._root
-
-  # --- routing primitives (used by the rules; a handler drives the same set) ----
-
   def deliver(self, peer: Peer, message: Message) -> None:
     self.runtime.send(peer, message)
 
-  def reply(self, peer: Peer, payload: dict) -> None:
-    """answer the in-flight request with its result; `payload` is the result payload
-    (`{outcome, value?, error?, detail?}`)."""
-    self.deliver(peer, Message(type=Tag.RESULT, payload=payload, quest=self._request_id()))
+  def reply(self, peer: Peer, payload: dict[str, Any]) -> None:
+    self.deliver(peer, brotocol.Message(type=Tag.RESULT, payload=payload, quest=self._request_id()))
 
-  def refuse(self, peer: Peer, message: Message) -> None:
-    """drop an unroutable mark, progress message, or result with a log line (rule 3)."""
-    log.warning(f'broker dispatcher: refused {message.type!r} from peer {peer} (no live quest)')
+  def deny(self, peer: Peer, error: str) -> None:
+    """Refuse worker-backed work and record the denial through the journal."""
+    message = self._active_message()
+    parent = self.workers.get(peer)
+    self.journal.deny(message.quest_id, message.kind, parent, peer, message.args, error)
+    log.warning('broker dispatcher: denied request %s: %s', message.quest_id, error)
+    self.deliver(peer, brotocol.result(message.quest_id, 'denied', error=error))
 
   def spawn(self, launch: LaunchSpec, requester: Peer, *, timeout: Optional[float] = None) -> None:
-    """spawn `launch` as the worker answering the in-flight request. The quest opens
-    here — held against id collisions from this point — and the worker channel binds
-    when the launch resolves, before the launched process can have connected and sent
-    a frame. A launch failure closes the quest with `result{failed, reason:
-    'launch'}` back to `requester` instead."""
-    request_id = self._request_id()
-    self.quests[request_id] = Quest(requester=requester)
-    effective_timeout = timeout if timeout is not None else self._default_timeout
-    task = asyncio.ensure_future(
-      self.runtime.spawn(launch, timeout=effective_timeout, quest=request_id)
+    record = self._open(requester)
+    worker = SpawnedWorker(
+      self.runtime,
+      self,
+      record.quest_id,
+      launch,
+      timeout=timeout if timeout is not None else self._default_timeout,
     )
-
-    def _launched(finished: asyncio.Task) -> None:
-      if finished.cancelled():
-        return
-      error = finished.exception()
-      if error is not None:
-        log.warning(f'broker dispatcher: spawn failed: {error!r}')
-        self._fail(request_id, None, error=str(error), detail={'reason': 'launch'})
-        return
-      self._bind_worker(finished.result(), request_id)
-
-    task.add_done_callback(_launched)
+    self._start_worker(worker)
+    self._deliver_record(record, brotocol.mark(record.quest_id, 'accepted'))
 
   def job(self, command: CommandJob, requester: Peer, *, timeout: Optional[float] = None) -> None:
-    """run `command` as the job answering the in-flight request — the third
-    answer shape: the process speaks no protocol, so the host observes it and
-    speaks on its behalf. The quest opens *and its worker binds* here — a
-    job's peer id is derivable up front, so no exit can slip in between — then a
-    started `progress{}` is delivered when the launch resolves, and the result
-    is built in `on_exit` from the run directory opened here. A launch failure
-    closes the quest with `result{failed, reason: 'launch'}` instead."""
-    request_id = self._request_id()
-    worker = job_peer(request_id)
-    directory = self.job_output.open()
-    self.quests[request_id] = Quest(requester=requester, worker=worker, job=JobRun(directory))
-    self.workers[worker] = request_id
-    effective_timeout = timeout if timeout is not None else self._default_timeout
-    task = asyncio.ensure_future(
-      self.runtime.job(command, directory=directory, timeout=effective_timeout, quest=request_id)
+    record = self._open(requester)
+    worker = JobWorker(
+      self.runtime,
+      self,
+      record.quest_id,
+      command,
+      self.job_output,
+      self,
+      requester,
+      timeout=timeout if timeout is not None else self._default_timeout,
     )
-
-    def _launched(finished: asyncio.Task) -> None:
-      if finished.cancelled():
-        return
-      error = finished.exception()
-      if error is not None:
-        log.warning(f'broker dispatcher: job launch failed: {error!r}')
-        _remove_run(directory)  # no process ran, so nothing was collected into it
-        self._fail(request_id, None, error=str(error), detail={'reason': 'launch'})
-        return
-      quest = self.quests.get(request_id)
-      if quest is None:
-        return  # the job already ended and its exit closed the quest
-      self._deliver_observed(worker, quest.requester, brotocol.progress(request_id, {}))
-
-    task.add_done_callback(_launched)
+    self._start_worker(worker)
+    self._deliver_record(record, brotocol.mark(record.quest_id, 'accepted'))
 
   def expect(
     self,
@@ -258,30 +133,11 @@ class Dispatcher:
     timeout: Optional[float],
     ready: Callable[[Provisioned], None],
   ) -> None:
-    """register an expected external worker for the in-flight request — `spawn` for a
-    peer someone else launches. Once the channel is provisioned and bound, `ready`
-    receives it (on the loop) so the handler can publish the endpoint to whatever
-    launches the peer; a provisioning failure closes the quest with `result{failed,
-    reason: 'launch'}`. `timeout` bounds the whole expectation; None leaves it
-    unbounded — an external peer's arrival is paced by its launcher, not by this
-    host."""
-    request_id = self._request_id()
-    self.quests[request_id] = Quest(requester=requester)
-    task = asyncio.ensure_future(self.runtime.expect(timeout=timeout))
-
-    def _provisioned(finished: asyncio.Task) -> None:
-      if finished.cancelled():
-        return
-      error = finished.exception()
-      if error is not None:
-        log.warning(f'broker dispatcher: expect failed: {error!r}')
-        self._fail(request_id, None, error=str(error), detail={'reason': 'launch'})
-        return
-      provisioned = finished.result()
-      self._bind_worker(provisioned.channel, request_id)
-      ready(provisioned)
-
-    task.add_done_callback(_provisioned)
+    if timeout is not None:
+      raise ValueError('expected workers have no deadline')
+    record = self._open(requester)
+    worker = ExpectedWorker(self.runtime, self, record.quest_id, ready)
+    self._start_worker(worker)
 
   @contextlib.contextmanager
   def _as_active(self, message: Message) -> Generator[None]:
@@ -293,223 +149,356 @@ class Dispatcher:
       self._active = previous
 
   def invoke(self, peer: Peer, message: Message) -> None:
-    """dispatch a request to its kind's handler (rule 2), exposing the request to
-    `reply` / `spawn` as the in-flight one for the duration of the call."""
-    handler = self._handlers[message.kind]
     with self._as_active(message):
-      handler(self, peer, message)
-
-  # --- Runtime listener (all on the loop) ---------------------------------
-
-  def on_connect(self, peer: Peer) -> None:
-    del peer  # quests are registered at spawn time, so birth needs no dispatcher action
+      self._handlers[message.kind](self, peer, message)
 
   def on_message(self, peer: Peer, message: Message) -> None:
     if message.type == Tag.REQUEST:
       self._on_request(peer, message)
     else:
-      self._on_answer(peer, message)
+      quest_id = self.workers.get(peer)
+      worker_quest = message.quest_id
+      if quest_id is None or worker_quest != quest_id:
+        self._refuse(peer, message, 'no matching worker quest')
+        return
+      record = self.live.get(worker_quest)
+      if record is None:
+        self._refuse(peer, message, 'no live quest')
+        return
+      self._on_worker_answer(record, peer, message, host_worker=False)
 
-  def on_exit(self, peer: Peer, code: int, output: str) -> None:
-    request_id = self.workers.get(peer)
-    if request_id is not None:
-      quest = self.quests.get(request_id)
-      if quest is not None and quest.job is not None:
-        self._end_job(request_id, quest, code)
-      else:
-        self._fail(
-          request_id, peer, detail={'reason': 'exit', 'exit_code': code, 'output_tail': output}
-        )
-    self._cleanup(peer)
-    if peer == self._root and self._root_exit is not None and not self._root_exit.done():
-      self._root_exit.set_result(code)
-
-  def on_timeout(self, peer: Peer) -> None:
-    request_id = self.workers.get(peer)
-    if request_id is None:
+  def on_worker_bound(self, worker: Worker, peer: Peer) -> None:
+    record = self.live.get(worker.quest)
+    if record is None:
       return
-    quest = self.quests.get(request_id)
-    if quest is not None and quest.job is not None:
-      # a job answers with its run directory, which the in-flight kill has not
-      # finished writing: the reap closes the quest, carrying this reason.
-      quest.job.timed_out = True
+    self.journal.bind(record, peer)
+    self.workers[peer] = worker.quest
+    if worker is self._root_worker:
+      self._root = peer
+
+  def on_worker_ready(self, worker: Worker) -> None:
+    record = self.live.get(worker.quest)
+    if record is not None:
+      self._deliver_record(record, brotocol.mark(record.quest_id, 'accepted'))
+
+  def on_worker_message(self, worker: Worker, message: Message, *, host_worker: bool) -> None:
+    peer = worker.peer
+    if peer is None:
+      raise RuntimeError(f'worker for quest {worker.quest} emitted before binding')
+    if message.type == Tag.REQUEST and not host_worker:
+      self._on_request(peer, message)
       return
-    # the Runtime already killed the peer; the following on_exit finds the quest
-    # closed and synthesizes nothing.
-    self._fail(request_id, peer, detail={'reason': 'timeout'})
-
-  def on_gone(self, peer: Peer) -> None:
-    # an expected worker's channel ended — its `on_exit`: every frame it wrote was
-    # already delivered, so a live quest got no result from it.
-    request_id = self.workers.get(peer)
-    if request_id is not None:
-      self._fail(request_id, peer, detail={'reason': 'disconnected'})
-    self._cleanup(peer)
-
-  # --- the three routing rules --------------------------------------------
-
-  def _on_request(self, peer: Peer, message: Message) -> None:
-    """rule 2: a request goes to the handler registered for its kind; no handler —
-    or an id colliding with a live quest (uniqueness rides on entropy, so a
-    collision is rejected rather than coped with) — means `result{denied}`."""
-    if message.quest_id in self.quests:
-      self._deny(peer, message.quest_id, f'request id {message.quest_id} already names a live quest')  # fmt: skip
+    record = self.live.get(worker.quest)
+    if record is None:
       return
-    if message.kind not in self._handlers:
-      self._deny(peer, message.quest_id, f'unknown kind {message.kind!r}')
-      return
-    self.invoke(peer, message)
+    self._on_worker_answer(record, peer, message, host_worker=host_worker)
 
-  def _on_answer(self, peer: Peer, message: Message) -> None:
-    """apply rule 1 to a mark, progress message, or result from a quest's own worker."""
-    quest = self.quests.get(message.quest_id)
-    if quest is None or quest.worker != peer:
-      self.refuse(peer, message)
-      return
-    self._deliver_observed(peer, quest.requester, message)
-    if message.type == Tag.RESULT:
-      self._close(message.quest_id)
-
-  # --- facade support -----------------------------------------------------
+  def on_worker_death(self, worker: Worker, report: DeathReport) -> None:
+    record = self.live.get(worker.quest)
+    if record is not None:
+      detail: dict[str, Any] = {'reason': report.reason}
+      if report.exit_code is not None:
+        detail['exit_code'] = report.exit_code
+      if report.output_tail is not None:
+        detail['output_tail'] = report.output_tail
+      message = brotocol.result(worker.quest, 'failed', error=report.error, detail=detail)
+      self._end(record, message)
+    if worker.peer is not None:
+      self.workers.pop(worker.peer, None)
+    self._retire(worker)
+    if worker is self._root_worker and self._root_exit is not None and not self._root_exit.done():
+      self._root_exit.set_result(report.exit_code if report.exit_code is not None else 1)
 
   async def run(self, root: LaunchSpec) -> int:
-    """serve, then spawn the root as the uniform worker of a freshly minted
-    host-anchored quest (no request-lifecycle timeout), await its exit, tear down
-    any outstanding children, and return the root's exit code."""
     self._root_exit = asyncio.get_running_loop().create_future()
-    serve_task = asyncio.ensure_future(self.runtime.serve())
-    await asyncio.sleep(0)  # let serve install the sink before the root connects
-    quest = lulid()
-    self.quests[quest] = Quest(requester=None)
-    self._root = await self.runtime.spawn(root, timeout=None, quest=quest)
-    self._bind_worker(self._root, quest)
-    try:
+    async with self._runtime_lifetime():
+      quest_id = lulid()
+      record = self.journal.open(quest_id, 'root', None, None, {})
+      self.live[quest_id] = record
+      root_worker = SpawnedWorker(
+        self.runtime,
+        self,
+        quest_id,
+        root,
+        timeout=None,
+        launch_timeout=None,
+      )
+      self._root_worker = root_worker
+      self._start_worker(root_worker)
       return await self._root_exit
+
+  @contextlib.asynccontextmanager
+  async def _runtime_lifetime(self) -> AsyncGenerator[None]:
+    serve_task = asyncio.create_task(self.runtime.serve())
+    await asyncio.sleep(0)
+    try:
+      yield
     finally:
-      await self.runtime.stop()
+      await self._teardown()
       serve_task.cancel()
       await asyncio.gather(serve_task, return_exceptions=True)
 
   def stop(self) -> None:
-    """unblock a running `run()` from the loop thread; its teardown does the actual stop."""
     if self._root_exit is not None and not self._root_exit.done():
       self._root_exit.set_result(0)
 
-  # --- internals ----------------------------------------------------------
+  def _on_request(self, peer: Peer, message: Message) -> None:
+    if self.journal.knows(message.quest_id):
+      self._wire_deny(peer, message.quest_id, f'request id {message.quest_id} already exists')
+      return
+    handler = self._handlers.get(message.kind)
+    if handler is None:
+      self._wire_deny(peer, message.quest_id, f'unknown kind {message.kind!r}')
+      return
+    self.invoke(peer, message)
+
+  def _on_worker_answer(
+    self, record: Record, peer: Peer, message: Message, *, host_worker: bool
+  ) -> None:
+    if message.type == Tag.MARK:
+      transition = message.payload['transition']
+      if transition == 'trail' and not host_worker:
+        trail_id = message.payload.get('trail_id')
+        if (
+          not isinstance(trail_id, str)
+          or len(trail_id) == 0
+          or not self.journal.trail(record, trail_id)
+        ):
+          self._refuse(peer, message, 'invalid or duplicate trail mark')
+          return
+      elif transition == 'started' and host_worker:
+        if not self.journal.started(record):
+          self._refuse(peer, message, 'duplicate started mark')
+          return
+      else:
+        self._refuse(peer, message, 'wrong mark origin')
+        return
+      self._deliver_record(record, message)
+      return
+    if message.type == Tag.PROGRESS:
+      self._deliver_record(record, message)
+      return
+    if message.type == Tag.RESULT:
+      self._end(record, message)
+      return
+    self._refuse(peer, message, 'unsupported worker message')
+
+  def _end(self, record: Record, message: Message) -> None:
+    worker = self._worker_for(record.quest_id)
+    if worker is not None:
+      worker.settle()
+    self._deliver_record(record, message)
+    self.journal.end(record, message.payload)
+    self.live.pop(record.quest_id, None)
+
+  def _deliver_record(self, record: Record, message: Message) -> None:
+    if record.requester is not None:
+      self.deliver(record.requester, message)
+
+  def _open(self, requester: Peer) -> Record:
+    message = self._active_message()
+    parent = self.workers.get(requester)
+    if parent is None:
+      raise RuntimeError(f'cannot open quest for unattributed peer {requester}')
+    record = self.journal.open(message.quest_id, message.kind, parent, requester, message.args)
+    self.live[record.quest_id] = record
+    return record
+
+  def _start_worker(self, worker: Worker) -> None:
+    self._worker_objects.add(worker)
+    worker.begin()
+
+  def _retire(self, worker: Worker) -> None:
+    self._worker_objects.discard(worker)
+    task = asyncio.create_task(worker.stop())
+    self._retirement_tasks.add(task)
+    task.add_done_callback(self._retirement_tasks.discard)
+    task.add_done_callback(self._report_task)
+
+  async def _teardown(self) -> None:
+    for record in list(self.live.values()):
+      worker = self._worker_for(record.quest_id)
+      detached = isinstance(worker, ExpectedWorker)
+      outcome = 'detached' if detached else 'killed'
+      payload = {'outcome': 'failed', 'detail': {'reason': outcome}}
+      self.journal.end(record, payload, outcome=outcome, reason=outcome)
+      self.live.pop(record.quest_id, None)
+    tasks = list(self._read_tasks)
+    for task in tasks:
+      task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    workers = list(self._worker_objects)
+    await asyncio.gather(*(worker.stop() for worker in workers), return_exceptions=True)
+    self._worker_objects.clear()
+    retirements = list(self._retirement_tasks)
+    await asyncio.gather(*retirements, return_exceptions=True)
+    self._retirement_tasks.clear()
+    self.workers.clear()
+    await self.runtime.stop()
+
+  def _worker_for(self, quest_id: str) -> Optional[Worker]:
+    return next((worker for worker in self._worker_objects if worker.quest == quest_id), None)
+
+  def _wire_deny(self, peer: Peer, quest_id: str, error: str) -> None:
+    log.warning('broker dispatcher: denied request %s: %s', quest_id, error)
+    self.deliver(peer, brotocol.result(quest_id, 'denied', error=error))
+
+  @staticmethod
+  def _refuse(peer: Peer, message: Message, reason: str) -> None:
+    log.warning('broker dispatcher: refused %r from peer %s (%s)', message.type, peer, reason)
 
   def _request_id(self) -> str:
+    return self._active_message().quest_id
+
+  def _active_message(self) -> Message:
     if self._active is None:
-      raise RuntimeError('reply()/spawn() called outside a request handler')
-    return self._active.quest_id
+      raise RuntimeError('handler primitive called outside a request handler')
+    return self._active
 
-  def _bind_worker(self, peer: Peer, request_id: str) -> None:
-    self.quests[request_id].worker = peer
-    self.workers[peer] = request_id
+  def _track_read(self, coroutine) -> None:
+    task = asyncio.create_task(coroutine)
+    self._read_tasks.add(task)
+    task.add_done_callback(self._read_tasks.discard)
+    task.add_done_callback(self._report_task)
 
-  def _deny(self, peer: Peer, request_id: str, error: str) -> None:
-    log.warning(f'broker dispatcher: denied request {request_id}: {error}')
-    self.deliver(peer, brotocol.result(request_id, 'denied', error=error))
-
-  def _deliver_observed(
-    self, source: Optional[Peer], target: Optional[Peer], message: Message
-  ) -> None:
-    """deliver + fire the delivery tap — the seam for the correlated deliveries
-    handlers never see (rule-1 forwarding and synthesized `failed`). A host-anchored
-    quest has no peer to deliver to: its messages reach only the observers."""
-    if target is not None:
-      self.deliver(target, message)
-    for observer in self._delivery_observers:
-      observer(source, target, message)
-
-  def _end_job(self, request_id: str, quest: Quest, code: int) -> None:
-    """close a job quest on its process's reap. The outcome is decided here —
-    the quest is forgotten before anything is awaited, so a later timeout or
-    exit finds nothing to answer — and the one result waits for the run directory
-    to be collected off the loop."""
-    assert quest.job is not None
-    run, source, requester = quest.job, quest.worker, quest.requester
-    clean = code == 0 and not run.timed_out
-    status: dict[str, Any] = {
-      'reason': 'timeout' if run.timed_out else 'exit',
-      'exit_code': code,
-    }
-    self._close(request_id)
-    if requester is None:
-      _remove_run(run.directory)
+  @staticmethod
+  def _report_task(task: asyncio.Task) -> None:
+    if task.cancelled():
       return
-    task = asyncio.ensure_future(self._collect_run(run.directory, status, requester))
+    error = task.exception()
+    if error is not None:
+      log.warning('broker dispatcher background task failed: %r', error)
 
-    def _collected(finished: asyncio.Task) -> None:
-      if finished.cancelled():
+  def query(self, peer: Peer, message: Message) -> None:
+    args = message.args
+    error = _validate_query(args)
+    if error is not None:
+      self.reply(peer, {'outcome': 'denied', 'error': error})
+      return
+    quest_id = args.get('id')
+    if quest_id is None:
+      try:
+        value = self._listing_value(peer, message.quest_id, args.get('cursor'))
+      except ValueError as error:
+        self.reply(peer, {'outcome': 'denied', 'error': str(error)})
         return
-      error = finished.exception()
-      if error is None:
-        value = finished.result()
-        result = (
-          brotocol.result(request_id, 'ok', value=value)
-          if clean
-          else brotocol.result(request_id, 'failed', detail={**status, **value})
-        )
-      else:
-        # the run is the only copy of what the job produced, so it outlives a
-        # collection that could not turn it into an answer
-        log.warning(f'broker dispatcher: job {request_id} collection failed: {error!r}; its run is kept at {run.directory}')  # fmt: skip
-        # a clean run that produced no answer fails on the collection alone
-        detail = {'reason': 'output'} if clean else status
-        result = brotocol.result(request_id, 'failed', error=str(error), detail=detail)
-      self._deliver_observed(source, requester, result)
+      self.reply(peer, {'outcome': 'ok', 'value': value})
+      return
+    view = self._query_view(peer, quest_id)
+    if view is None:
+      self.reply(peer, {'outcome': 'denied', 'error': f'unknown quest id {quest_id!r}'})
+      return
+    wait = min(float(args.get('wait', 0)), MAX_WAIT_SECONDS)
+    record = self.journal.records.get(quest_id)
+    if wait > 0 and record is not None and not record.terminal:
+      self._track_read(self._wait_query(peer, message.quest_id, quest_id, wait))
+      return
+    self.reply(peer, {'outcome': 'ok', 'value': {'quest': view}})
 
-    task.add_done_callback(_collected)
-
-  async def _collect_run(self, directory: Path, status: dict[str, Any], requester: Peer) -> dict:
-    """record how the run ended, hand it to the job output, and drop the
-    directory once it has been collected. The two steps this owns run off the
-    loop: a job's output is a tree of arbitrary size."""
-    await asyncio.to_thread(record_status, directory, status)
-    value = await self.job_output.collect(directory, self, requester)
-    await asyncio.to_thread(_remove_run, directory)
+  def _listing_value(self, peer: Peer, request_quest: str, cursor: Optional[str]) -> dict[str, Any]:
+    records = self.journal.visible_records(peer, self.workers)
+    if cursor is not None:
+      position = _decode_query_cursor(cursor)
+      records = [record for record in records if listing_position(record) > position]
+    selected: list[Record] = []
+    for record in records:
+      candidate_records = [*selected, record]
+      candidate: dict[str, Any] = {'quests': [entry.view() for entry in candidate_records]}
+      if len(candidate_records) < len(records):
+        candidate['cursor'] = _encode_query_cursor(record)
+      message = brotocol.result(request_quest, 'ok', value=candidate)
+      if len(message.to_bytes()) > MAX_FRAME_BYTES:
+        break
+      selected.append(record)
+    if len(selected) == 0 and len(records) > 0:
+      raise RuntimeError('one journal record exceeds the query response frame')
+    value: dict[str, Any] = {'quests': [record.view() for record in selected]}
+    if len(selected) < len(records):
+      value['cursor'] = _encode_query_cursor(selected[-1])
     return value
 
-  def _fail(
-    self,
-    request_id: str,
-    source: Optional[Peer],
-    *,
-    error: Optional[str] = None,
-    detail: dict,
+  async def _wait_query(
+    self, peer: Peer, request_quest: str, target_quest: str, wait: float
   ) -> None:
-    """close a live quest with a synthesized `result{failed}` to its requester. A
-    host-anchored quest closes silently: the root's death is its exit code, which
-    this process reads itself."""
-    quest = self.quests.get(request_id)
-    if quest is None:
+    deadline = asyncio.get_running_loop().time() + wait
+    while True:
+      record = self.journal.records.get(target_quest)
+      if record is None or record.terminal:
+        break
+      remaining = deadline - asyncio.get_running_loop().time()
+      if remaining <= 0:
+        break
+      changed = self.journal.change_event()
+      try:
+        await asyncio.wait_for(changed.wait(), remaining)
+      except TimeoutError:
+        break
+    view = self._query_view(peer, target_quest)
+    payload = (
+      {'outcome': 'ok', 'value': {'quest': view}}
+      if view is not None
+      else {'outcome': 'denied', 'error': f'unknown quest id {target_quest!r}'}
+    )
+    self.deliver(peer, brotocol.result(request_quest, **_result_arguments(payload)))
+
+  def events(self, peer: Peer, message: Message) -> None:
+    args = message.args
+    error = _validate_events(args)
+    if error is not None:
+      self.reply(peer, {'outcome': 'denied', 'error': error})
       return
-    self._close(request_id)
-    if quest.requester is None:
+    if 'after' not in args and 'wait' not in args:
+      self.reply(peer, {'outcome': 'ok', 'value': {'head': self.journal.head, 'events': []}})
       return
-    self._deliver_observed(
-      source, quest.requester, brotocol.result(request_id, 'failed', error=error, detail=detail)
+    after = int(args.get('after', self.journal.head))
+    try:
+      head, events = self.journal.events_after(after, peer, self.workers)
+    except ValueError as gap:
+      self.reply(peer, {'outcome': 'denied', 'error': str(gap)})
+      return
+    wait = min(float(args.get('wait', 0)), MAX_WAIT_SECONDS)
+    if len(events) == 0 and wait > 0:
+      self._track_read(self._wait_events(peer, message.quest_id, after, wait))
+      return
+    self.reply(peer, {'outcome': 'ok', 'value': {'head': head, 'events': events}})
+
+  async def _wait_events(self, peer: Peer, request_quest: str, after: int, wait: float) -> None:
+    deadline = asyncio.get_running_loop().time() + wait
+    while True:
+      try:
+        head, events = self.journal.events_after(after, peer, self.workers)
+      except ValueError as gap:
+        self.deliver(peer, brotocol.result(request_quest, 'denied', error=str(gap)))
+        return
+      if len(events) > 0:
+        break
+      remaining = deadline - asyncio.get_running_loop().time()
+      if remaining <= 0:
+        break
+      changed = self.journal.change_event()
+      try:
+        await asyncio.wait_for(changed.wait(), remaining)
+      except TimeoutError:
+        break
+    self.deliver(
+      peer,
+      brotocol.result(request_quest, 'ok', value={'head': head, 'events': events}),
     )
 
-  def _close(self, request_id: str) -> None:
-    quest = self.quests.pop(request_id, None)
-    if quest is not None and quest.worker is not None:
-      self.workers.pop(quest.worker, None)
-
-  def _cleanup(self, peer: Peer) -> None:
-    """drop the peer's quest (when one is still live) and the Runtime's bookkeeping."""
-    request_id = self.workers.pop(peer, None)
-    if request_id is not None:
-      self.quests.pop(request_id, None)
-    self.runtime.forget(peer)
+  def _query_view(self, peer: Peer, quest_id: str) -> Optional[dict[str, Any]]:
+    record = self.journal.records.get(quest_id)
+    if record is not None:
+      if not self.journal.visible(peer, record, self.workers):
+        return None
+      return record.view(include_result=True)
+    view = self.journal.evicted_view(quest_id)
+    if view is None:
+      return None
+    probe = Record(quest_id, view['kind'], view['parent'], None, {})
+    return view if self.journal.visible(peer, probe, self.workers) else None
 
 
 class Broker:
-  """the thin facade ride constructs: injects the ports, exposes `on` / `run` / `stop`.
-
-  Without a `job_output` the broker serves no jobs — a handler that calls `job`
-  raises rather than answering a shape nothing collected."""
-
   def __init__(
     self,
     transport: ServerTransport,
@@ -519,13 +508,19 @@ class Broker:
     job_output: Optional[JobOutput] = None,
   ):
     self._dispatcher = Dispatcher(default_timeout=default_timeout, job_output=job_output)
-    self._dispatcher.bind(Runtime(transport, spawner, self._dispatcher))
+    self._dispatcher.bind(Runtime(transport, spawner))
+    self._dispatcher.on(QUERY, query_handler)
+    self._dispatcher.on(EVENTS, events_handler)
+
+  @property
+  def journal(self) -> Journal:
+    return self._dispatcher.journal
+
+  def subscribe(self, subscriber: Subscriber) -> None:
+    self.journal.subscribe(subscriber)
 
   def on(self, kind: str, handler: RequestHandler) -> None:
     self._dispatcher.on(kind, handler)
-
-  def add_delivery_observer(self, observer: DeliveryObserver) -> None:
-    self._dispatcher.add_delivery_observer(observer)
 
   def run(self, root: LaunchSpec) -> int:
     return asyncio.run(self._dispatcher.run(root))
@@ -534,20 +529,86 @@ class Broker:
     self._dispatcher.stop()
 
 
-# --- built-in kind handlers -------------------------------------------------
-
-
 def ping_handler(context: Dispatcher, peer: Peer, message: Message) -> None:
-  """the reserved `ping` kind: answer ok with the request's own arguments echoed back."""
   context.reply(peer, {'outcome': 'ok', 'value': message.args})
 
 
-def spawn_test_handler(launch: LaunchSpec) -> RequestHandler:
-  """a spawn-test kind handler bound to an injected `LaunchSpec`: spawns it as the
-  worker of the requesting quest, whose progress and result then flow back to the
-  requester."""
+def query_handler(context: Dispatcher, peer: Peer, message: Message) -> None:
+  context.query(peer, message)
 
+
+def events_handler(context: Dispatcher, peer: Peer, message: Message) -> None:
+  context.events(peer, message)
+
+
+def spawn_test_handler(launch: LaunchSpec) -> RequestHandler:
   def handler(context: Dispatcher, peer: Peer, _message: Message) -> None:
     context.spawn(launch, peer)
 
   return handler
+
+
+def _encode_query_cursor(record: Record) -> str:
+  payload = json.dumps(list(listing_position(record)), separators=(',', ':')).encode()
+  return base64.urlsafe_b64encode(payload).decode().rstrip('=')
+
+
+def _decode_query_cursor(cursor: str) -> tuple[bool, int, str]:
+  try:
+    padding = '=' * (-len(cursor) % 4)
+    value = json.loads(base64.urlsafe_b64decode(cursor + padding))
+  except (binascii.Error, ValueError) as error:
+    raise ValueError('invalid query cursor') from error
+  if (
+    not isinstance(value, list)
+    or len(value) != 3
+    or not isinstance(value[0], bool)
+    or not isinstance(value[1], int)
+    or isinstance(value[1], bool)
+    or not isinstance(value[2], str)
+  ):
+    raise ValueError('invalid query cursor')
+  return value[0], value[1], value[2]
+
+
+def _validate_query(args: dict[str, Any]) -> Optional[str]:
+  unknown = sorted(set(args) - {'id', 'wait', 'cursor'})
+  if len(unknown) > 0:
+    return f'unknown query field(s): {", ".join(unknown)}'
+  quest_id = args.get('id')
+  if quest_id is not None and (not isinstance(quest_id, str) or len(quest_id) == 0):
+    return "query 'id' must be a non-empty string"
+  cursor = args.get('cursor')
+  if cursor is not None and (not isinstance(cursor, str) or len(cursor) == 0):
+    return "query 'cursor' must be a non-empty string"
+  wait = args.get('wait')
+  if wait is not None and (
+    not isinstance(wait, (int, float)) or isinstance(wait, bool) or wait < 0
+  ):
+    return "query 'wait' must be a non-negative number of seconds"
+  if wait is not None and quest_id is None:
+    return "query 'wait' requires 'id'"
+  if cursor is not None and (quest_id is not None or wait is not None):
+    return "query 'cursor' does not combine with 'id' or 'wait'"
+  return None
+
+
+def _validate_events(args: dict[str, Any]) -> Optional[str]:
+  unknown = sorted(set(args) - {'after', 'wait'})
+  if len(unknown) > 0:
+    return f'unknown events field(s): {", ".join(unknown)}'
+  after = args.get('after')
+  if after is not None and (not isinstance(after, int) or isinstance(after, bool) or after < 0):
+    return "events 'after' must be a non-negative integer"
+  wait = args.get('wait')
+  if wait is not None and (
+    not isinstance(wait, (int, float)) or isinstance(wait, bool) or wait < 0
+  ):
+    return "events 'wait' must be a non-negative number of seconds"
+  return None
+
+
+def _result_arguments(payload: dict[str, Any]) -> dict[str, Any]:
+  return {
+    key: value for key, value in payload.items() if key in {'outcome', 'value', 'error', 'detail'}
+  }

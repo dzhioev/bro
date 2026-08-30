@@ -86,8 +86,8 @@ channel = os.environ.get('BROKER_CHANNEL')
 assert channel, 'the launch carried no channel'
 assert parse_address(channel)[0] == '127.0.0.1', channel  # the broxy's, not the host's
 assert os.environ.get('BROKER_QUEST'), 'the launch did not carry the quest id'
-from bro.channel import BroChannel
-channel = BroChannel.from_env()
+from bro.run_lifecycle import RunLifecycle
+channel = RunLifecycle.from_env()
 assert channel is not None
 channel.close()
 
@@ -170,7 +170,11 @@ def main():
     })
     if message.type == 'result':
       break
-    if exit_after == 'started' and message.type == 'progress':
+    if (
+      exit_after == 'started'
+      and message.type == 'mark'
+      and message.payload.get('transition') == 'started'
+    ):
       break
 
 try:
@@ -184,10 +188,10 @@ sys.exit(1 if 'error' in report else 0)
 
 # scenario B clean child: emit the real lifecycle through the real consumer adapter
 _CHILD_CLEAN = """
-from bro.channel import BroChannel
-channel = BroChannel.from_env()
+from bro.run_lifecycle import RunLifecycle
+channel = RunLifecycle.from_env()
 assert channel is not None
-channel.started('e2e-trail')
+channel.trail('e2e-trail')
 channel.completed('child-ok', 'ok')
 channel.close()
 """
@@ -203,10 +207,10 @@ sys.exit(3)
 # scenario B teardown child: attach, report started, then outlive the root
 _CHILD_STARTED_THEN_HANG = """
 import time
-from bro.channel import BroChannel
-channel = BroChannel.from_env()
+from bro.run_lifecycle import RunLifecycle
+channel = RunLifecycle.from_env()
 assert channel is not None
-channel.started('e2e-trail')
+channel.trail('e2e-trail')
 time.sleep(600)
 """
 
@@ -217,8 +221,8 @@ from pathlib import Path
 
 assert os.environ.get('BROKER_CHANNEL') is None, os.environ.get('BROKER_CHANNEL')
 assert not Path('/run/broker.sock').exists()
-from bro.channel import BroChannel
-assert BroChannel.from_env() is None
+from bro.run_lifecycle import RunLifecycle
+assert RunLifecycle.from_env() is None
 inert = subprocess.run(['broker', 'send', 'ping', '{}'], capture_output=True, text=True)
 assert inert.returncode == 0, (inert.returncode, inert.stderr)
 assert 'request not sent' in inert.stderr, inert.stderr
@@ -780,10 +784,13 @@ class TestChildLifecycle:
     assert b_clean.code == 0
     request_id = b_clean.report['request_id']
     types = [m['type'] for m in b_clean.report['messages']]
-    assert types == ['progress', 'result'], b_clean.report['messages']
-    started, completed = b_clean.report['messages']
-    assert started['quest'] == request_id
-    assert started['payload'] == {'trail_id': 'e2e-trail'}
+    assert types == ['mark', 'mark', 'mark', 'result'], b_clean.report['messages']
+    accepted, started, trail, completed = b_clean.report['messages']
+    assert {message['quest'] for message in b_clean.report['messages']} == {request_id}
+    assert accepted['payload'] == {'transition': 'accepted'}
+    assert started['payload'] == {'transition': 'started'}
+    assert trail['quest'] == request_id
+    assert trail['payload'] == {'transition': 'trail', 'trail_id': 'e2e-trail'}
     assert completed['quest'] == request_id
     assert completed['payload'] == {'outcome': 'ok', 'value': 'child-ok'}
     assert b_clean.max_channels == 2
@@ -800,8 +807,10 @@ class TestChildLifecycle:
   def test_early_exit_child_synthesizes_failed(self, b_early_exit: BrokerRun) -> None:
     assert b_early_exit.code == 0
     types = [m['type'] for m in b_early_exit.report['messages']]
-    assert types == ['result'], b_early_exit.report['messages']
-    failed = b_early_exit.report['messages'][0]
+    assert types == ['mark', 'mark', 'result'], b_early_exit.report['messages']
+    accepted, started, failed = b_early_exit.report['messages']
+    assert accepted['payload'] == {'transition': 'accepted'}
+    assert started['payload'] == {'transition': 'started'}
     assert failed['quest'] == b_early_exit.report['request_id']
     assert failed['payload']['outcome'] == 'failed'
     detail = failed['payload']['detail']
@@ -816,12 +825,16 @@ class TestChildLifecycle:
   def test_wedged_child_times_out_at_default_timeout(self, b_timeout: BrokerRun) -> None:
     assert b_timeout.code == 0
     types = [m['type'] for m in b_timeout.report['messages']]
-    assert types == ['result'], b_timeout.report['messages']
-    failed = b_timeout.report['messages'][0]
+    assert types == ['mark', 'mark', 'result'], b_timeout.report['messages']
+    accepted, started, failed = b_timeout.report['messages']
+    assert accepted['payload'] == {'transition': 'accepted'}
+    assert started['payload'] == {'transition': 'started'}
     assert failed['quest'] == b_timeout.report['request_id']
-    assert failed['payload'] == {'outcome': 'failed', 'detail': {'reason': 'timeout'}}
-    # the timer starts once the child is spawned, strictly after the request went out,
-    # and fires at exactly default_timeout; the slack above covers the spawn overhead
+    assert failed['payload']['outcome'] == 'failed'
+    assert failed['payload']['detail']['reason'] == 'timeout'
+    assert failed['payload']['detail']['exit_code'] != 0
+    # the request timeout is armed at the Worker's started transition;
+    # the slack covers process launch and reap.
     assert 30 <= failed['elapsed'] <= 60, failed['elapsed']
     assert b_timeout.channels_after == frozenset()
     assert b_timeout.live_after == [], 'timed-out child container not killed'
@@ -829,7 +842,11 @@ class TestChildLifecycle:
   def test_children_torn_down_on_root_exit(self, b_teardown: BrokerRun) -> None:
     assert b_teardown.code == 0
     types = [m['type'] for m in b_teardown.report['messages']]
-    assert types == ['progress'], b_teardown.report['messages']
+    assert types == ['mark', 'mark'], b_teardown.report['messages']
+    assert [message['payload']['transition'] for message in b_teardown.report['messages']] == [
+      'accepted',
+      'started',
+    ]
     assert b_teardown.channels_after == frozenset()
     assert b_teardown.live_after == [], 'live child container survived the root exit'
 

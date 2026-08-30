@@ -4,7 +4,7 @@
 The peer side of the summon mechanism: a request of kind `summon` with args
 `{target, prompt, timeout?, into?, hold?, grant?, revoke?, share?, llm?, harness?}` on
 the session channel, answered by the host-side handler (`ride/ride/summon_control.py`)
-with a started progress (`{trail_id}`) and exactly one result. This module owns
+with lifecycle marks (`accepted`, `started`, and the run's `trail`) and exactly one result. This module owns
 the request's wire contract — the kind, the args keys, the 1800s default timeout
 — for all its consumers: the self-contained `summon` CLI, the bro service tools (`summon` /
 `summon_check`, over the library functions `summon_and_wait`, `summon_detached`,
@@ -28,7 +28,7 @@ top of the target's own default scope.
 instead provisions a channel for a child the user launches themselves — the
 request id doubles as the token the user's `ride along --summoned <token>`
 launch consumes (`manual_launch_command` renders the exact command to relay).
-The host acknowledges the registration with an acceptance progress once the
+The host acknowledges the registration with an `accepted` mark once the
 token is live, and the manual client waits for it (`ACCEPT_TIMEOUT`), so a
 denial fails at the summon — never later, after a dead token was already handed
 to the user. The child then attaches as a regular summon peer, so the
@@ -352,8 +352,10 @@ def _await_answer(
 ) -> str:
   """block for the request's result and interpret it; returns the answer or
   raises `SummonError` with the failure reason. The wait opens bounded at
-  `max(timeout, LAUNCH_TIMEOUT)` and re-arms to `timeout` on each progress
+  `max(timeout, LAUNCH_TIMEOUT)` and re-arms to `timeout` on the trail mark
   (see the module docstring)."""
+  from bro.broker.brotocol import Tag
+
   trail_id: Optional[str] = None
   started_seen = False
 
@@ -369,7 +371,13 @@ def _await_answer(
   launch_bound = max(timeout, LAUNCH_TIMEOUT)
   try:
     result = client.await_reply(
-      request, launch_bound, on_interim=_interim, timeout_after_interim=timeout
+      request,
+      launch_bound,
+      on_interim=_interim,
+      timeout_after_interim=timeout,
+      rearm_on_interim=lambda message: (
+        message.type == Tag.MARK and message.payload.get('transition') == 'trail'
+      ),
     )
   except TimeoutError:
     if started_seen:

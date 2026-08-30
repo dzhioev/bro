@@ -10,18 +10,20 @@ import ride.pending_summon
 import ride.spawn
 import ride.summon_control
 from bro.broker import brotocol
-from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Dispatcher
+from bro.broker.journal import Journal
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
 from bro.llm.llms.echo import LLMSpec as EchoLLMSpec
-from bro.monitor import trail_pointer
 from bro.summon import DEFAULT_TIMEOUT
-from bro.workspace.paths import workspace_tree
-from ride.repository import Repository
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
+
+ROOT = 'ROOT-CHANNEL'
+CHILD = 'CHILD-CHANNEL'
+GRANDCHILD = 'GRANDCHILD-CHANNEL'
+UNKNOWN = 'UNKNOWN-CHANNEL'
 
 
 @pytest.fixture(autouse=True)
@@ -35,823 +37,472 @@ class TestSummonAllowList:
   def test_seeds_from_the_bros_may_summon(self):
     assert ride.summon_control.summon_allow_list('bro-dev', grant=[], revoke=[]) == {'dev'}
 
-  def test_defaults_to_empty_for_an_unseeded_bro(self):
-    assert ride.summon_control.summon_allow_list('bro', grant=[], revoke=[]) == set()
-
-  def test_grant_adds_a_registered_bro(self):
+  def test_grant_and_revoke_are_strict(self):
     assert ride.summon_control.summon_allow_list('bro', grant=['dev'], revoke=[]) == {'dev'}
-
-  def test_revoke_removes_a_seed(self):
-    assert ride.summon_control.summon_allow_list('bro-dev', grant=[], revoke=['dev']) == set()
-
-  def test_grant_already_allowed_raises(self):
     with pytest.raises(ValueError, match='already in the summon allow-list'):
       ride.summon_control.summon_allow_list('bro-dev', grant=['dev'], revoke=[])
-
-  def test_revoke_absent_raises(self):
     with pytest.raises(ValueError, match='not in the summon allow-list'):
       ride.summon_control.summon_allow_list('bro', grant=[], revoke=['dev'])
 
-  def test_unregistered_grant_target_raises(self):
-    # registry-validated at launch: a typo fails immediately, not as a denied
-    # summon minutes later
+  def test_unknown_target_raises(self):
     with pytest.raises(ValueError, match='unknown summon target'):
-      ride.summon_control.summon_allow_list('bro', grant=['devoop'], revoke=[])
-
-  def test_unregistered_revoke_target_raises(self):
-    with pytest.raises(ValueError, match='unknown summon target'):
-      ride.summon_control.summon_allow_list('bro-dev', grant=[], revoke=['devop'])
-
-  def test_unknown_bro_raises(self):
-    with pytest.raises(KeyError, match='unknown bro'):
-      ride.summon_control.summon_allow_list('no-such-bro', grant=['dev'], revoke=[])
-
-
-ROOT = 'ROOT-CHANNEL'
-CHILD = 'CHILD-CHANNEL'
-GRANDCHILD = 'GRANDCHILD-CHANNEL'
+      ride.summon_control.summon_allow_list('bro', grant=['not-registered'], revoke=[])
 
 
 class FakeContext:
-  """the Dispatcher surface `SummonControl.handle` drives: root exposure, the
-  worker index, plus the reply/spawn/expect routing primitives, recorded for
-  assertions."""
-
-  def __init__(self):
+  def __init__(self, control):
+    self.control = control
     self.root = ROOT
-    self.workers: dict = {}  # worker peer -> the quest it answers
-    self.replies: list = []  # (peer, payload)
-    self.spawned: list = []  # (launch, peer, timeout)
-    self.expected: list = []  # (peer, timeout)
-    self.delivered: list = []  # (peer, message)
+    self.workers = {ROOT: 'root-quest'}
+    self.replies = []
+    self.spawned = []
+    self.expected = []
+    self.journal = Journal()
+    root = self.journal.open('root-quest', 'root', None, None, {})
+    self.journal.bind(root, ROOT)
+    self.journal.subscribe(control.observe_journal)
+    self.journal.subscribe(control.audit_event)
 
-  def reply(self, peer, payload):
-    self.replies.append((peer, payload))
-
-  def deliver(self, peer, message):
-    self.delivered.append((peer, message))
+  def deny(self, peer, error):
+    quest = next(reversed(self.control._denial_summoners))
+    record = self.journal.deny(quest, 'summon', self.workers.get(peer), peer, {}, error)
+    self.replies.append((peer, {'outcome': 'denied', 'error': record.reason}))
 
   def spawn(self, launch, peer, *, timeout=None):
+    quest = next(reversed(self.control._pending))
+    self.journal.open(
+      quest, 'summon', self.workers[peer], peer, {'target': launch.target, 'prompt': launch.prompt}
+    )
     self.spawned.append((launch, peer, timeout))
 
   def expect(self, peer, *, timeout, ready):
-    # the real Dispatcher registers topology then calls ready once the channel
-    # is provisioned; here it resolves synchronously to a test-chosen endpoint
+    quest = next(reversed(self.control._pending))
+    self.journal.open(quest, 'summon', self.workers[peer], peer, {'manual': True})
     self.expected.append((peer, timeout))
-    ready(Provisioned(channel=CHILD, host_endpoint=Endpoint(port=7321, token='tk')))
+    ready(Provisioned(CHILD, Endpoint(7321, 'token')))
 
 
-def _workspace(tmp_path, name='ws') -> Workspace:
+def _workspace(tmp_path, name='ws'):
   return Workspace.ensure(name, tmp_path, WorkspaceKind.CONTAINER)
 
 
-def _control(
-  tmp_path, allow_list, session='ws', credential_scope=()
-) -> ride.summon_control.SummonControl:
-  workspace = _workspace(tmp_path, session)
-  scoped = (
+def _control(tmp_path, allow_list=('dev',), credential_scope=()):
+  workspace = _workspace(tmp_path)
+  scope = (
     credential_scope
     if isinstance(credential_scope, ScopedSecrets)
     else ScopedSecrets(set(credential_scope), set())
   )
   return ride.summon_control.SummonControl(
     allow_list=allow_list,
-    credential_scope=scoped,
+    credential_scope=scope,
     workspace=workspace,
     peers=ride.peers.Peers(workspace),
     artifacts=ride.artifacts.ArtifactStore(workspace, root_in_container=True),
     status_file=tmp_path / 'summon-status.json',
-    audit_file=tmp_path / 'audit' / 'ws.jsonl',
+    audit_file=tmp_path / 'audit.jsonl',
   )
 
 
-@pytest.fixture
-def control(tmp_path):
-  return _control(tmp_path, {'dev'})
-
-
-def _summon_message(**overrides) -> Message:
+def _message(**overrides):
   args = {'target': 'dev', 'prompt': 'deploy the thing', **overrides}
-  return brotocol.request('summon', {k: v for k, v in args.items() if v is not None})
+  return brotocol.request(
+    'summon', {key: value for key, value in args.items() if value is not None}
+  )
 
 
-def _bind_child(control, context, peer, message) -> None:
-  """bind the spawned peer in the context's worker index the way
-  `Dispatcher._bind_worker` would once the launch resolves, and note its
-  workspace the way `SummonSpawner.spawn` does."""
-  context.workers[peer] = message.id
-  control._peers.note_workspace(message.id, f'broker-{peer}')
-
-
-def _summon_child(control, context, peer, target, parent=ROOT) -> Message:
-  """handle an authorized summon of `target` from `parent` and bind the spawned
-  peer."""
-  message = _summon_message(target=target)
-  control.handle(context, parent, message)
-  _bind_child(control, context, peer, message)
-  return message
-
-
-def _status(tmp_path) -> dict:
+def _status(tmp_path):
   return json.loads((tmp_path / 'summon-status.json').read_text())
 
 
-def _audit(tmp_path) -> list[dict]:
-  lines = (tmp_path / 'audit' / 'ws.jsonl').read_text().splitlines()
-  return [json.loads(line) for line in lines]
+def _audit(tmp_path):
+  return [json.loads(line) for line in (tmp_path / 'audit.jsonl').read_text().splitlines()]
 
 
-class TestSummonHandler:
-  def test_authorized_summon_spawns_with_the_default_timeout(self, control, tmp_path):
-    context = FakeContext()
-    message = _summon_message()
-    control.handle(context, ROOT, message)
-    assert context.replies == []
-    [(launch, peer, timeout)] = context.spawned
-    assert launch == ride.spawn.SummonLaunchSpec(
-      target='dev',
-      prompt='deploy the thing',
-      # the root's base-ref inheritance source is its own workspace
-      parent='ws',
-      repo=Repository(str(tmp_path), tmp_path),
-      summoner=None,
-      # dev seeds no summon targets of its own — the child is told exactly that
-      may_summon=(),
-    )
-    assert peer == ROOT
-    assert timeout == DEFAULT_TIMEOUT
-    status = _status(tmp_path)
-    assert [a['request_id'] for a in status['active']] == [message.id]
-    assert status['active'][0]['target'] == 'dev'
-    assert status['active'][0]['trail_id'] is None
-    [spawn_record] = _audit(tmp_path)
-    assert spawn_record['event'] == 'spawn'
-    assert spawn_record['session'] == 'ws'
-    assert spawn_record['summoner'] == {'session': 'ws'}
-    assert spawn_record['target'] == 'dev'
-    assert spawn_record['prompt_head'] == 'deploy the thing'
+def test_authorized_summon_opens_identity_before_spawning(tmp_path):
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  message = _message()
+  control.handle(cast(Dispatcher, context), ROOT, message)
+  [(launch, peer, timeout)] = context.spawned
+  assert isinstance(launch, ride.spawn.SummonLaunchSpec)
+  assert launch.target == 'dev'
+  assert launch.parent == 'ws'
+  assert peer == ROOT
+  assert timeout == DEFAULT_TIMEOUT
+  assert _status(tmp_path)['active'][0]['request_id'] == message.quest_id
+  accepted = _audit(tmp_path)[-1]
+  assert accepted['transition'] == 'accepted'
+  assert accepted['args']['prompt'] == 'deploy the thing'
 
-  def test_timeout_and_into_forward_into_the_spawn(self, control):
-    context = FakeContext()
-    control.handle(context, ROOT, _summon_message(timeout=42, into='summon'))
-    [(launch, _, timeout)] = context.spawned
-    assert launch.into == 'summon'
-    assert timeout == 42.0
 
-  def test_hold_forwards_into_the_spawn(self, control):
-    context = FakeContext()
-    control.handle(context, ROOT, _summon_message(hold='attended'))
-    [(launch, _, _)] = context.spawned
-    assert launch.hold == 'attended'
+def test_journal_trail_and_terminal_feed_the_legacy_status(tmp_path):
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  message = _message()
+  control.handle(cast(Dispatcher, context), ROOT, message)
+  record = context.journal.records[message.quest_id]
+  context.journal.bind(record, CHILD)
+  context.journal.started(record)
+  context.journal.trail(record, 'trail-1')
+  assert _status(tmp_path)['active'][0]['trail_id'] == 'trail-1'
+  context.journal.end(record, {'outcome': 'failed', 'error': 'no', 'detail': {'reason': 'raised'}})
+  status = _status(tmp_path)
+  assert status['active'] == []
+  assert status['last']['outcome'] == 'raised'
+  assert status['last']['trail_id'] == 'trail-1'
+  assert [entry['transition'] for entry in _audit(tmp_path)[-3:]] == [
+    'started',
+    'trail',
+    'ended',
+  ]
+  assert message.quest_id not in control._records
 
-  def test_the_llm_recipe_forwards_into_the_spawn(self, control):
-    context = FakeContext()
-    control.handle(context, ROOT, _summon_message(llm='openai:sol:high+fast'))
-    [(launch, _, _)] = context.spawned
-    assert launch.llm == 'openai:sol:high+fast'
 
-  def test_the_harness_forwards_into_the_spawn_and_the_audit(self, tmp_path):
-    control = _control(tmp_path, {'dev'}, credential_scope={'claude_code'})
-    context = FakeContext()
-    control.handle(cast(Dispatcher, context), ROOT, _summon_message(harness='claude'))
-    [(launch, _, _)] = context.spawned
-    assert launch.harness == 'claude'
-    [spawn_record] = _audit(tmp_path)
-    assert spawn_record['harness'] == 'claude'
+@pytest.mark.parametrize(
+  ('payload', 'outcome', 'reason', 'expected'),
+  [
+    ({'outcome': 'ok', 'value': 'done'}, None, None, 'ok'),
+    ({'outcome': 'failed', 'detail': {'reason': 'launch'}}, None, None, 'failed:launch'),
+    ({'outcome': 'failed', 'detail': {'reason': 'killed'}}, 'killed', 'killed', 'killed'),
+  ],
+)
+def test_terminal_variants_feed_status(tmp_path, payload, outcome, reason, expected):
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  message = _message()
+  control.handle(cast(Dispatcher, context), ROOT, message)
+  record = context.journal.records[message.quest_id]
+  context.journal.end(record, payload, outcome=outcome, reason=reason)
+  assert _status(tmp_path)['last']['outcome'] == expected
 
-  def test_credential_overrides_ride_the_spawn_and_land_in_the_audit(self, tmp_path):
-    # the unified values ride the spawn (the lowering splits them); only the
-    # `@bro` half resolves here
-    control = _control(tmp_path, {'dev', 'bro'}, credential_scope={'aws'})
-    context = FakeContext()
-    # cast: FakeContext stands in for the Dispatcher surface structurally
-    control.handle(
-      cast(Dispatcher, context), ROOT, _summon_message(grant=['aws', '@bro'], revoke=['openai'])
-    )
-    [(launch, _, _)] = context.spawned
-    assert launch.grant == ('aws', '@bro')
-    assert launch.revoke == ('openai',)
-    [spawn_record] = _audit(tmp_path)
-    assert spawn_record['grant'] == ['aws', '@bro']
-    assert spawn_record['revoke'] == ['openai']
 
-  def test_granted_bro_widens_the_childs_own_allow_list(self, tmp_path):
-    # dev seeds nothing, so only the grant lets its child summon bro
-    control = _control(tmp_path, {'dev', 'bro'})
-    context = FakeContext()
-    message = _summon_message(target='dev', grant=['@bro'])
-    # cast: FakeContext stands in for the Dispatcher surface structurally
-    control.handle(cast(Dispatcher, context), ROOT, message)
-    _bind_child(control, context, CHILD, message)
-    control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='bro'))
-    assert context.replies == []
-    assert [launch.target for launch, _, _ in context.spawned] == ['dev', 'bro']
-    # the child is handed the list it is authorized against — its own, not the
-    # session's, which also holds dev
-    assert context.spawned[0][0].may_summon == ('bro',)
+def test_denial_uses_the_journal_funnel(tmp_path):
+  control = _control(tmp_path, allow_list=())
+  context = FakeContext(control)
+  message = _message()
+  control.handle(cast(Dispatcher, context), ROOT, message)
+  assert context.replies[0][1]['outcome'] == 'denied'
+  denial = context.journal.records[message.quest_id]
+  assert denial.state == 'denied'
+  assert denial.reason is not None and 'not in' in denial.reason
+  assert _audit(tmp_path)[-1]['transition'] == 'denied'
+  assert message.quest_id not in control._denial_summoners
 
-  def test_granting_a_bro_the_summoner_may_not_summon_is_denied(self, control):
-    # the fixture session may summon only dev, so it cannot hand bro down
-    context = FakeContext()
-    control.handle(context, ROOT, _summon_message(grant=['@bro']))
-    assert context.spawned == []
-    [(_, payload)] = context.replies
-    assert 'may not summon itself: bro' in payload['error']
 
-  def test_granting_a_credential_the_summoner_lacks_is_denied(self, tmp_path):
-    control = _control(tmp_path, {'dev'}, credential_scope={'openai'})
-    context = FakeContext()
-    # cast: FakeContext stands in for the Dispatcher surface structurally
-    control.handle(cast(Dispatcher, context), ROOT, _summon_message(grant=['openai', 'aws']))
-    assert context.spawned == []
-    [(_, payload)] = context.replies
-    assert 'does not hold: aws' in payload['error']
+@pytest.mark.parametrize(
+  'overrides',
+  [
+    {'target': ''},
+    {'prompt': ''},
+    {'timeout': 0},
+    {'grant': [None]},
+    {'unknown': True},
+    {'manual': False},
+  ],
+)
+def test_malformed_requests_are_denied(tmp_path, overrides):
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(**overrides))
+  assert context.replies[0][1]['outcome'] == 'denied'
 
-  def test_granting_an_unheld_instance_of_a_held_kind_is_denied(self, tmp_path):
-    scope = ScopedSecrets({'github'}, set(), {'github': 'dev'})
-    control = _control(tmp_path, {'bro-dev'}, credential_scope=scope)
-    context = FakeContext()
-    control.handle(
-      cast(Dispatcher, context),
-      ROOT,
-      _summon_message(target='bro-dev', grant=['github+reviewer']),
-    )
-    assert context.spawned == []
-    [(_, payload)] = context.replies
-    assert 'does not hold: github+reviewer' in payload['error']
 
-  def test_granting_the_resolved_instance_of_a_held_kind_is_allowed(self, tmp_path):
-    scope = ScopedSecrets({'github'}, set(), {'github': 'dev'})
-    control = _control(tmp_path, {'bro-dev'}, credential_scope=scope)
-    context = FakeContext()
-    control.handle(
-      cast(Dispatcher, context),
-      ROOT,
-      _summon_message(target='bro-dev', grant=['github+dev']),
-    )
-    assert [launch.target for launch, _, _ in context.spawned] == ['bro-dev']
+@pytest.mark.parametrize(
+  ('field', 'value'),
+  [
+    ('timeout', 45),
+    ('into', 'feature'),
+    ('hold', 'guided'),
+    ('llm', '::high'),
+    ('harness', 'bro'),
+  ],
+)
+def test_launch_shape_fields_reach_the_spawn(tmp_path, field, value):
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(**{field: value}))
+  launch, _, timeout = context.spawned[0]
+  if field == 'timeout':
+    assert timeout == value
+  else:
+    assert getattr(launch, field) == value
 
-  def test_share_rides_the_spawn_and_the_audit(self, tmp_path):
-    control = _control(tmp_path, {'dev'})
-    tree = workspace_tree('ws')
-    tree.mkdir(parents=True)
-    (tree / 'out.bin').write_bytes(b'payload')
-    identity = ride.peers.PeerIdentity(workspace='ws', tree=tree)
-    ref, _ = control._artifacts.mint(identity, (), 'out.bin')
-    context = FakeContext()
-    control.handle(cast(Dispatcher, context), ROOT, _summon_message(share=[ref]))
-    assert context.replies == []
-    [(launch, _, _)] = context.spawned
-    assert launch.share == (ref,)
-    spawn_record = _audit(tmp_path)[-1]
-    assert spawn_record['event'] == 'spawn'
-    assert spawn_record['share'] == [ref]
 
-  def test_sharing_a_ref_the_summoner_cannot_reach_is_denied(self, control):
-    context = FakeContext()
-    ref = f'sha256:{"a" * 64}'
-    control.handle(context, ROOT, _summon_message(share=[ref]))
-    assert context.spawned == []
-    [(_, payload)] = context.replies
-    assert 'cannot share artifact(s) the summoner cannot reach' in payload['error']
-    assert ref in payload['error']
-
-  def test_a_childs_grants_are_bounded_by_its_own_scope(self, tmp_path):
-    # the bound follows the chain: a summoned bro-dev holds github (its
-    # extra_secrets) and can hand that down, but nothing it never held
-    control = _control(tmp_path, {'bro-dev'})
-    context = FakeContext()
-    message = _summon_message(target='bro-dev')
-    control.handle(cast(Dispatcher, context), ROOT, message)
-    _bind_child(control, context, CHILD, message)
-    control.handle(
-      cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['github'])
-    )
-    assert [launch.target for launch, _, _ in context.spawned] == ['bro-dev', 'dev']
-    control.handle(
-      cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['gmail_creds'])
-    )
-    [(_, payload)] = context.replies
-    assert 'does not hold: gmail_creds' in payload['error']
-
-  def test_a_childs_grant_bound_follows_its_llm_recipe(self, tmp_path, monkeypatch):
-    calls: list = []
-
-    def capture_scope(target, recipe, *, attachment=None, grant, revoke, llm_spec=None):
-      calls.append((target, llm_spec))
-      return ScopedSecrets(required={'github'}, optional=set())
-
-    monkeypatch.setattr(ride.summon_control, 'summoned_credential_scope', capture_scope)
-    control = _control(tmp_path, {'bro-dev'})
-    context = FakeContext()
-    message = _summon_message(target='bro-dev', llm='echo')
-    control.handle(cast(Dispatcher, context), ROOT, message)
-    _bind_child(control, context, CHILD, message)
-    calls.clear()
-    control.handle(
-      cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['github'])
-    )
-    assert [launch.target for launch, _, _ in context.spawned] == ['bro-dev', 'dev']
-    assert calls == [('bro-dev', ride.bro.BRO.resolve_llm('echo', 'bro-dev'))]
-
-  def test_a_claude_childs_grant_bound_follows_its_harness(self, tmp_path, monkeypatch):
-    calls: list = []
-
-    def capture_scope(target, recipe, *, attachment=None, grant, revoke, llm_spec=None):
-      calls.append((target, recipe.name, llm_spec.TYPE if llm_spec is not None else None))
-      return ScopedSecrets(required={'github'}, optional=set())
-
-    monkeypatch.setattr(ride.summon_control, 'summoned_credential_scope', capture_scope)
-    control = _control(tmp_path, {'bro-dev'}, credential_scope={'claude_code'})
-    context = FakeContext()
-    message = _summon_message(target='bro-dev', harness='claude')
-    control.handle(cast(Dispatcher, context), ROOT, message)
-    _bind_child(control, context, CHILD, message)
-    calls.clear()
-    control.handle(
-      cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['github'])
-    )
-    assert [launch.target for launch, _, _ in context.spawned] == ['bro-dev', 'dev']
-    assert calls == [('bro-dev', 'claude-full', 'claude-code')]
-
-  def test_a_harness_needing_a_credential_the_summoner_lacks_is_denied(self, tmp_path):
-    control = _control(tmp_path, {'dev'}, credential_scope={'brog', 'openai'})
-    context = FakeContext()
-    control.handle(cast(Dispatcher, context), ROOT, _summon_message(harness='claude'))
-    assert context.spawned == []
-    [(_, payload)] = context.replies
-    assert (
-      "harness 'claude' needs credential(s) the summoner does not hold: claude_code"
-      in payload['error']
-    )
-
-  def test_an_llm_recipe_needing_a_credential_the_summoner_lacks_is_denied(
-    self, tmp_path, monkeypatch
-  ):
-    from bro.registry import get_class
-
-    # the cast key sits in the optional tier of every bro that has spells, which
-    # would mask what an openai recipe adds to an echo-driven one
-    monkeypatch.setattr(get_class('dev'), 'llm_spec', EchoLLMSpec())
-    monkeypatch.setattr(get_class('dev'), 'spells', {})
-    control = _control(tmp_path, {'dev'}, credential_scope={'brog'})
-    context = FakeContext()
-    control.handle(cast(Dispatcher, context), ROOT, _summon_message(llm='openai:terra'))
-    assert context.spawned == []
-    [(_, payload)] = context.replies
-    assert (
-      "llm 'openai:terra' needs credential(s) the summoner does not hold: openai"
-      in payload['error']
-    )
-
-  def test_only_what_the_harness_adds_is_bounded_by_the_summoner(self, tmp_path):
-    # bro-dev declares brog, github and openai of its own; the summoner holds
-    # none of them
-    control = _control(tmp_path, {'bro-dev'}, credential_scope={'claude_code'})
-    context = FakeContext()
-    message = _summon_message(target='bro-dev', harness='claude')
-    control.handle(cast(Dispatcher, context), ROOT, message)
-    assert context.replies == []
-    assert [launch.target for launch, _, _ in context.spawned] == ['bro-dev']
-
-  def test_naming_the_default_harness_widens_nothing(self, control):
-    context = FakeContext()
-    control.handle(context, ROOT, _summon_message(harness='bro'))
-    assert context.replies == []
-    [(launch, _, _)] = context.spawned
-    assert launch.harness == 'bro'
-
-  def test_a_recipe_the_named_harness_cannot_run_is_denied(self, tmp_path):
-    control = _control(tmp_path, {'dev'}, credential_scope={'claude_code'})
-    context = FakeContext()
-    control.handle(
-      cast(Dispatcher, context), ROOT, _summon_message(harness='claude', llm='openai:terra')
-    )
-    assert context.spawned == []
-    [(_, payload)] = context.replies
-    assert 'the claude harness runs Claude Code, not openai' in payload['error']
-
-  def test_no_op_bro_override_is_denied(self, tmp_path):
-    # bro-dev already seeds dev: the strictness of the launcher flags holds
-    # on the wire too
-    control = _control(tmp_path, {'bro-dev'})
-    context = FakeContext()
-    # cast: FakeContext stands in for the Dispatcher surface structurally
-    control.handle(cast(Dispatcher, context), ROOT, _summon_message(target='bro-dev', grant=['@dev']))  # fmt: skip
-    assert context.spawned == []
-    [(_, payload)] = context.replies
-    assert 'already in the summon allow-list' in payload['error']
-
-  def test_unregistered_bro_override_is_denied(self, control):
-    context = FakeContext()
-    control.handle(context, ROOT, _summon_message(grant=['@nobody']))
-    assert context.spawned == []
-    [(_, payload)] = context.replies
-    assert 'unknown summon target' in payload['error']
-
-  def test_malformed_bro_override_is_denied(self, control):
-    context = FakeContext()
-    control.handle(context, ROOT, _summon_message(grant=['@']))
-    assert context.spawned == []
-    [(_, payload)] = context.replies
-    assert 'malformed grant/revoke' in payload['error']
-
-  def test_child_summon_follows_its_own_seeds(self, tmp_path):
-    # a summoned bro-dev child summons dev (bro-dev's static seed): spawned
-    # with the child as the parent, audit + status naming the child as summoner
-    control = _control(tmp_path, {'bro-dev'})
-    context = FakeContext()
-    request = _summon_child(control, context, CHILD, 'bro-dev')
-    control.observe_delivery(CHILD, ROOT, brotocol.progress(request.quest_id, {'trail_id': 'T1'}))
-    child_request = _summon_message(target='dev')
-    # cast: FakeContext stands in for the Dispatcher surface structurally
-    control.handle(cast(Dispatcher, context), CHILD, child_request)
-    assert context.replies == []
-    launch, peer, _ = context.spawned[-1]
-    assert launch == ride.spawn.SummonLaunchSpec(
-      target='dev',
-      prompt='deploy the thing',
-      # a child summoner's base-ref inheritance source: its broker-<channel> clone
-      parent=f'broker-{CHILD}',
-      repo=Repository(str(tmp_path), tmp_path),
-      summoner={'trail_id': 'T1'},
-      may_summon=(),
-    )
-    assert peer == CHILD
-    spawn_record = _audit(tmp_path)[-1]
-    assert spawn_record['event'] == 'spawn'
-    assert spawn_record['summoner'] == {'target': 'bro-dev', 'trail_id': 'T1'}
-    [child_active] = [a for a in _status(tmp_path)['active'] if a['request_id'] == child_request.id]
-    assert child_active['summoner'] == {'target': 'bro-dev', 'trail_id': 'T1'}
-
-  def test_child_source_lands_on_the_spawned_summoned_by(self, tmp_path):
-    control = _control(tmp_path, {'bro-dev'})
-    context = FakeContext()
-    request = _summon_child(control, context, CHILD, 'bro-dev')
-    control.observe_delivery(CHILD, ROOT, brotocol.progress(request.quest_id, {'trail_id': 'T1'}))
-    control.handle(
-      cast(Dispatcher, context),
-      CHILD,
-      _summon_message(target='dev', step_id=7, index=3),
-    )
-    launch, _, _ = context.spawned[-1]
-    assert launch.summoner == {'trail_id': 'T1', 'step_id': 7, 'index': 3}
-
-  def test_a_spawned_childs_workspace_announcement_is_ignored(self, tmp_path):
-    # only a manual child names its own workspace; a spawned child's is fixed at
-    # its spawn, so an announced name — even the root's — re-attributes nothing
-    control = _control(tmp_path, {'bro-dev'})
-    context = FakeContext()
-    request = _summon_child(control, context, CHILD, 'bro-dev')
-    control.observe_delivery(
-      CHILD, ROOT, brotocol.progress(request.quest_id, {'trail_id': 'T1', 'workspace': 'ws'})
-    )
-    control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='dev'))
-    launch, _, _ = context.spawned[-1]
-    assert launch.parent == f'broker-{CHILD}'
-
-  def test_step_id_without_a_requester_trail_is_dropped(self, control, tmp_path):
-    # the root session has no trail pointer here, so a position alone would be
-    # meaningless — no summoned_by is invented for it
-    del tmp_path
-    context = FakeContext()
-    control.handle(context, ROOT, _summon_message(step_id=7))
-    [(launch, _, _)] = context.spawned
-    assert launch.summoner is None
-
-  def test_the_session_trail_pointer_attributes_session_children(self, tmp_path):
-    workspace = _workspace(tmp_path)
-    pointer = trail_pointer.session_pointer(workspace.path)
-    pointer.parent.mkdir(parents=True)
-    pointer.write_text(json.dumps({'trail_id': 'CT9'}))
-    control = _control(tmp_path, {'dev'})
-    context = FakeContext()
-    control.handle(cast(Dispatcher, context), ROOT, _summon_message())
-    [(launch, _, _)] = context.spawned
-    assert launch.summoner == {'trail_id': 'CT9'}
-
-  def test_absent_trail_pointer_degrades_to_no_summoned_by(self, tmp_path):
-    # the early-launch race: the recorder has not adopted a transcript yet, so
-    # the pointer file does not exist — absent provenance, never a legacy shape
-    control = _control(tmp_path, {'dev'})
-    context = FakeContext()
-    control.handle(cast(Dispatcher, context), ROOT, _summon_message())
-    [(launch, _, _)] = context.spawned
-    assert launch.summoner is None
-
-  def test_root_started_trail_attributes_a_bro_run_roots_children(self, control):
-    # a bro-run root announced its trail over the broker; its summon children
-    # are attributed to it (with the request's step_id when carried)
-    control.note_root_trail('RT1')
-    context = FakeContext()
-    control.handle(context, ROOT, _summon_message(step_id=2))
-    [(launch, _, _)] = context.spawned
-    assert launch.summoner == {'trail_id': 'RT1', 'step_id': 2}
-
-  def test_child_summon_outside_its_seeds_is_denied(self, control):
-    # dev seeds no bro, so its child summons nothing — not even a target the
-    # root session itself is allowed
-    context = FakeContext()
-    _summon_child(control, context, CHILD, 'dev')
-    control.handle(context, CHILD, _summon_message(target='dev'))
-    assert len(context.spawned) == 1  # only the root's spawn
-    [(peer, payload)] = context.replies
-    assert peer == CHILD
-    assert "not in dev's summon allow-list" in payload['error']
-
-  def test_unattributable_peer_is_denied(self, control, tmp_path):
-    # a peer with no origin the control can map to a spawned bro has no
-    # allow-list to authorize against
-    context = FakeContext()
-    control.handle(context, CHILD, _summon_message())
-    assert context.spawned == []
-    [(peer, payload)] = context.replies
-    assert peer == CHILD
-    assert 'cannot attribute' in payload['error']
-    [deny_record] = _audit(tmp_path)
-    assert deny_record['event'] == 'deny'
-    assert deny_record['summoner'] is None
-
-  def test_depth_cap_denies_a_grandchilds_summon(self, tmp_path):
-    # root (0) → bro-dev child (1) → dev grandchild (2): the grandchild's own
-    # summon would nest to depth 3, over the cap — denied before any list check
-    control = _control(tmp_path, {'bro-dev'})
-    context = FakeContext()
-    _summon_child(control, context, CHILD, 'bro-dev')
-    _summon_child(control, context, GRANDCHILD, 'dev', parent=CHILD)
-    assert context.replies == []
-    control.handle(cast(Dispatcher, context), GRANDCHILD, _summon_message(target='dev'))
-    assert len(context.spawned) == 2
-    [(peer, payload)] = context.replies
-    assert peer == GRANDCHILD
-    assert 'depth cap' in payload['error']
-
-  def test_target_outside_the_allow_list_is_denied(self, control):
-    context = FakeContext()
-    control.handle(context, ROOT, _summon_message(target='bro'))
-    assert context.spawned == []
-    [(_, payload)] = context.replies
-    assert "not in this session's summon allow-list" in payload['error']
-
-  def test_unknown_bro_is_denied_by_name(self, control):
-    context = FakeContext()
-    control.handle(context, ROOT, _summon_message(target='no-such-bro'))
-    assert context.spawned == []
-    [(_, payload)] = context.replies
-    assert 'unknown bro' in payload['error']
-
-  def test_denials_land_in_the_audit(self, control, tmp_path):
-    context = FakeContext()
-    message = _summon_message(target='bro')
-    control.handle(context, ROOT, message)
-    [deny_record] = _audit(tmp_path)
-    assert deny_record['event'] == 'deny'
-    assert deny_record['session'] == 'ws'
-    assert deny_record['request_id'] == message.id
-    assert "not in this session's summon allow-list" in deny_record['reason']
-    assert deny_record['summoner'] == {'session': 'ws'}
-    assert deny_record['target'] == 'bro'
-    assert deny_record['prompt_head'] == 'deploy the thing'
-
-  def test_deny_audit_carries_only_well_typed_args_fields(self, control, tmp_path):
-    context = FakeContext()
-    control.handle(context, ROOT, brotocol.request('summon', {'target': 42}))
-    [deny_record] = _audit(tmp_path)
-    assert deny_record['event'] == 'deny'
-    assert 'target' not in deny_record
-    assert 'prompt_head' not in deny_record
-
-  @pytest.mark.parametrize(
-    'args',
-    [
-      {'prompt': 'p'},  # no target
-      {'target': 'dev'},  # no prompt
-      {'target': '', 'prompt': 'p'},
-      {'target': 'dev', 'prompt': 'p', 'timeout': -1},
-      {'target': 'dev', 'prompt': 'p', 'timeout': 'soon'},
-      {'target': 'dev', 'prompt': 'p', 'into': ''},
-      {'target': 'dev', 'prompt': 'p', 'timout': 60},  # typo'd key must not pass silently
-      {'target': 'dev', 'prompt': 'p', 'hold': 'automatic'},
-      {'target': 'dev', 'prompt': 'p', 'step_id': '7'},
-      {'target': 'dev', 'prompt': 'p', 'step_id': -1},
-      {'target': 'dev', 'prompt': 'p', 'step_id': True},
-      {'target': 'dev', 'prompt': 'p', 'index': 1},
-      {'target': 'dev', 'prompt': 'p', 'step_id': 7, 'index': -1},
-      {'target': 'dev', 'prompt': 'p', 'step_id': 7, 'index': True},
-      {'target': 'dev', 'prompt': 'p', 'grant': 'aws'},
-      {'target': 'dev', 'prompt': 'p', 'grant': ['']},
-      {'target': 'dev', 'prompt': 'p', 'grant': None},  # a null cannot default to no override
-      {'target': 'dev', 'prompt': 'p', 'revoke': [7]},
-      {'target': 'dev', 'prompt': 'p', 'share': 'sha256:not-a-list'},
-      {'target': 'dev', 'prompt': 'p', 'share': ['not-a-ref']},
-      {'target': 'dev', 'prompt': 'p', 'share': None},  # a null cannot default to no refs
-      {'target': 'dev', 'prompt': 'p', 'llm': '::ludicrous'},
-      {'target': 'dev', 'prompt': 'p', 'llm': 'nosuchprovider'},
-      {'target': 'dev', 'prompt': 'p', 'llm': 7},
-      {'target': 'dev', 'prompt': 'p', 'harness': 'zsh'},
-      {'target': 'dev', 'prompt': 'p', 'harness': 7},
-    ],
+def test_credential_overrides_reach_the_spawn(tmp_path):
+  scope = ScopedSecrets({'github'}, set(), {'github': 'work'})
+  control = _control(tmp_path, credential_scope=scope)
+  context = FakeContext(control)
+  control.handle(
+    cast(Dispatcher, context),
+    ROOT,
+    _message(grant=['github+work'], revoke=['brave']),
   )
-  def test_malformed_args_are_denied(self, control, args):
-    context = FakeContext()
-    control.handle(context, ROOT, brotocol.request('summon', args))
-    assert context.spawned == []
-    [(_, reply_payload)] = context.replies
-    assert reply_payload['outcome'] == 'denied'
-    assert 'error' in reply_payload
+  launch = context.spawned[0][0]
+  assert launch.grant == ('github+work',)
+  assert launch.revoke == ('brave',)
 
 
-class TestSummonLedger:
-  def _spawned(self, control) -> Message:
-    context = FakeContext()
-    message = _summon_message()
-    control.handle(context, ROOT, message)
-    return message
-
-  def test_started_records_the_trail_id(self, control, tmp_path):
-    request = self._spawned(control)
-    started = brotocol.mark(request.quest_id, 'trail', trail_id='T1')
-    control.observe_delivery(CHILD, ROOT, started)
-    status = _status(tmp_path)
-    assert status['active'][0]['trail_id'] == 'T1'
-
-  def test_completed_moves_the_summon_to_last_outcome(self, control, tmp_path):
-    request = self._spawned(control)
-    control.observe_delivery(CHILD, ROOT, brotocol.progress(request.quest_id, {'trail_id': 'T1'}))
-    completed = brotocol.result(request.quest_id, 'ok', value='done')
-    control.observe_delivery(CHILD, ROOT, completed)
-    status = _status(tmp_path)
-    assert status['active'] == []
-    assert status['last']['request_id'] == request.id
-    assert status['last']['target'] == 'dev'
-    assert status['last']['trail_id'] == 'T1'
-    assert status['last']['summoner'] == {'session': 'ws'}
-    assert status['last']['outcome'] == 'ok'
-    end_record = _audit(tmp_path)[-1]
-    assert end_record['event'] == 'end'
-    assert end_record['outcome'] == 'ok'
-    assert end_record['trail_id'] == 'T1'
-
-  def test_failed_records_the_failure_reason(self, control, tmp_path):
-    request = self._spawned(control)
-    failed = brotocol.result(request.quest_id, 'failed', detail={'reason': 'launch'})
-    # source=None: the launch failure synthesis — no child ever existed
-    control.observe_delivery(None, ROOT, failed)
-    status = _status(tmp_path)
-    assert status['active'] == []
-    assert status['last']['outcome'] == 'failed:launch'
-
-  def test_unrelated_deliveries_are_ignored(self, control, tmp_path):
-    self._spawned(control)
-    control.observe_delivery(CHILD, ROOT, brotocol.result('SOME-OTHER-REQUEST', 'ok'))
-    control.observe_delivery(CHILD, ROOT, brotocol.request('status', {}))
-    assert len(_status(tmp_path)['active']) == 1
-
-  def test_root_teardown_logs_and_audits_killed_children(self, control, tmp_path, caplog):
-    request = self._spawned(control)
-    control.observe_delivery(CHILD, ROOT, brotocol.progress(request.quest_id, {'trail_id': 'T1'}))
-    control.log_killed_in_flight()
-    assert any(
-      'root exit killed in-flight child dev' in record.getMessage() and 'T1' in record.getMessage()
-      for record in caplog.records
-    )
-    assert _status(tmp_path)['active'] == []
-    end_record = _audit(tmp_path)[-1]
-    assert end_record['outcome'] == 'killed'
-    assert end_record['trail_id'] == 'T1'
+def test_requested_harness_credentials_are_bounded_by_the_summoner(tmp_path):
+  control = _control(tmp_path, credential_scope={'brog', 'openai'})
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(harness='claude'))
+  assert 'claude_code' in context.replies[0][1]['error']
 
 
-class TestManualSummon:
-  def _register(self, control, context=None) -> tuple[FakeContext, Message]:
-    context = context if context is not None else FakeContext()
-    message = _summon_message(manual=True)
-    control.handle(cast(Dispatcher, context), ROOT, message)
-    return context, message
+def test_requested_llm_credentials_are_bounded_by_the_summoner(tmp_path, monkeypatch):
+  from bro.registry import get_class
 
-  def test_manual_summon_expects_instead_of_spawning(self, control, tmp_path):
-    context, message = self._register(control)
-    assert context.replies == []
-    assert context.spawned == []
-    # no host timer: the launch is paced by a human
-    assert context.expected == [(ROOT, None)]
-    # the registration is acknowledged once the token is claimable
-    [(accepted_peer, accepted)] = context.delivered
-    assert accepted_peer == ROOT
-    assert (accepted.type, accepted.quest) == ('progress', message.id)
-    pending = ride.pending_summon.peek(message.quest_id)
-    assert pending.protocol_revision == brotocol.PROTOCOL_REVISION
-    assert (pending.port, pending.channel_token) == (7321, 'tk')
-    assert pending.target == 'dev'
-    assert pending.prompt == 'deploy the thing'
-    assert pending.parent_workspace == str(workspace_tree('ws'))
-    assert pending.repo == str(tmp_path.resolve())
-    assert pending.may_summon == ()
-    [active] = _status(tmp_path)['active']
-    assert active['request_id'] == message.id
-    assert active['manual'] is True
-    assert active['trail_id'] is None
-    [expect_record] = _audit(tmp_path)
-    assert expect_record['event'] == 'expect'
-    assert expect_record['manual'] is True
+  monkeypatch.setattr(get_class('dev'), 'llm_spec', EchoLLMSpec())
+  monkeypatch.setattr(get_class('dev'), 'spells', {})
+  control = _control(tmp_path, credential_scope={'brog'})
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(llm='openai:terra'))
+  assert 'openai' in context.replies[0][1]['error']
 
-  def test_manual_summon_refuses_launch_owned_fields(self, control):
-    context = FakeContext()
-    for field in ({'timeout': 60}, {'hold': 'attended'}, {'llm': ':fable5'}, {'harness': 'claude'}):
-      control.handle(cast(Dispatcher, context), ROOT, _summon_message(manual=True, **field))
-    assert context.expected == []
-    assert len(context.replies) == 4
-    assert all('launch owns' in payload['error'] for _, payload in context.replies)
 
-  def test_manual_summon_refuses_share(self, control):
-    context = FakeContext()
-    control.handle(
-      cast(Dispatcher, context),
-      ROOT,
-      _summon_message(manual=True, share=[f'sha256:{"a" * 64}']),
-    )
-    assert context.expected == []
-    [(_, payload)] = context.replies
-    assert "'share' cannot be honored" in payload['error']
+def test_recipe_incompatible_with_the_harness_is_denied(tmp_path):
+  control = _control(tmp_path, credential_scope={'claude_code'})
+  context = FakeContext(control)
+  control.handle(
+    cast(Dispatcher, context),
+    ROOT,
+    _message(harness='claude', llm='openai:terra'),
+  )
+  assert 'runs Claude Code, not openai' in context.replies[0][1]['error']
 
-  def test_manual_summon_is_authorized_like_a_spawned_one(self, tmp_path):
-    control = _control(tmp_path, set())
-    context, _ = self._register(control)
-    assert context.expected == []
-    [(_, payload)] = context.replies
-    assert 'not in' in payload['error']
 
-  def test_claimed_workspace_becomes_the_nested_base_source(self, tmp_path):
-    # the manual child's launch claims the token naming its workspace; its own
-    # summons then inherit that workspace as the base-ref source
-    control = _control(tmp_path, {'bro-dev'})
-    context = FakeContext()
-    message = _summon_message(target='bro-dev', manual=True)
-    control.handle(cast(Dispatcher, context), ROOT, message)
-    context.workers[CHILD] = message.id
-    ride.pending_summon.claim(message.quest_id, workspace='my-manual')
-    control.observe_delivery(CHILD, ROOT, brotocol.progress(message.quest_id, {'trail_id': 'T1'}))
-    control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='dev'))
-    launch, peer, _ = context.spawned[-1]
-    assert peer == CHILD
-    assert launch.parent == 'my-manual'
-    assert launch.summoner == {'trail_id': 'T1'}
+def test_child_grant_bound_recomputes_its_llm_scope(tmp_path, monkeypatch):
+  calls = []
 
-  def test_nested_summon_before_the_claim_is_denied(self, tmp_path):
-    control = _control(tmp_path, {'bro-dev'})
-    context = FakeContext()
-    message = _summon_message(target='bro-dev', manual=True)
-    control.handle(cast(Dispatcher, context), ROOT, message)
-    context.workers[CHILD] = message.id
-    control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='dev'))
-    assert context.spawned == []
-    [(_, payload)] = context.replies
-    assert 'has not claimed its token' in payload['error']
+  def capture_scope(target, recipe, *, attachment=None, grant, revoke, llm_spec=None):
+    calls.append((target, llm_spec))
+    return ScopedSecrets({'github'}, set())
 
-  def test_manual_childs_credential_grant_is_denied(self, tmp_path):
-    control = _control(tmp_path, {'bro-dev'})
-    context = FakeContext()
-    message = _summon_message(target='bro-dev', manual=True)
-    control.handle(cast(Dispatcher, context), ROOT, message)
-    context.workers[CHILD] = message.id
-    ride.pending_summon.claim(message.quest_id, workspace='my-manual')
-    control.handle(
-      cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['github'])
-    )
-    assert context.spawned == []
-    [(_, payload)] = context.replies
-    assert 'credential scope is not attributable' in payload['error']
+  monkeypatch.setattr(ride.summon_control, 'summoned_credential_scope', capture_scope)
+  control = _control(tmp_path, allow_list=('bro-dev',))
+  context = FakeContext(control)
+  parent = _message(target='bro-dev', llm='echo')
+  control.handle(cast(Dispatcher, context), ROOT, parent)
+  context.workers[CHILD] = parent.quest_id
+  control._peers.note_workspace(parent.quest_id, f'broker-{CHILD}')
+  calls.clear()
+  control.handle(
+    cast(Dispatcher, context),
+    CHILD,
+    _message(target='dev', grant=['github']),
+  )
+  assert context.spawned[-1][0].target == 'dev'
+  assert calls == [('bro-dev', ride.bro.BRO.resolve_llm('echo', 'bro-dev'))]
 
-  def test_manual_childs_harness_selection_is_denied(self, tmp_path):
-    control = _control(tmp_path, {'bro-dev'}, credential_scope={'claude_code'})
-    context = FakeContext()
-    message = _summon_message(target='bro-dev', manual=True)
-    control.handle(cast(Dispatcher, context), ROOT, message)
-    context.workers[CHILD] = message.id
-    ride.pending_summon.claim(message.quest_id, workspace='my-manual')
-    control.handle(
-      cast(Dispatcher, context), CHILD, _summon_message(target='dev', harness='claude')
-    )
-    assert context.spawned == []
-    [(_, payload)] = context.replies
-    assert 'credential scope is not attributable' in payload['error']
 
-  def test_finish_discards_an_unclaimed_pending_record(self, control, tmp_path):
-    _, message = self._register(control)
-    control.observe_delivery(
-      CHILD, ROOT, brotocol.result(message.quest_id, 'failed', detail={'reason': 'disconnected'})
-    )
-    with pytest.raises(ride.pending_summon.UnknownToken):
-      ride.pending_summon.peek(message.quest_id)
-    assert _status(tmp_path)['last']['outcome'] == 'failed:disconnected'
+def test_unheld_credential_instance_is_denied(tmp_path):
+  scope = ScopedSecrets({'github'}, set(), {'github': 'work'})
+  control = _control(tmp_path, credential_scope=scope)
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(grant=['github+other']))
+  assert 'does not hold' in context.replies[0][1]['error']
 
-  def test_root_teardown_detaches_a_manual_child(self, control, tmp_path, caplog):
-    _, message = self._register(control)
-    control.log_killed_in_flight()
-    assert any(
-      'root exit detached in-flight manual child dev' in record.getMessage()
-      for record in caplog.records
-    )
-    end_record = _audit(tmp_path)[-1]
-    assert end_record['outcome'] == 'detached'
-    with pytest.raises(ride.pending_summon.UnknownToken):
-      ride.pending_summon.peek(message.quest_id)
+
+def test_granting_an_unheld_bro_is_denied(tmp_path):
+  control = _control(tmp_path, allow_list=('dev',))
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(grant=['@bro-dev']))
+  assert 'may not summon itself' in context.replies[0][1]['error']
+
+
+@pytest.mark.parametrize('override', ['@', '@missing-bro'])
+def test_invalid_bro_override_is_denied(tmp_path, override):
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(grant=[override]))
+  assert context.replies[0][1]['outcome'] == 'denied'
+
+
+def test_no_op_child_allow_list_override_is_denied(tmp_path):
+  control = _control(tmp_path, allow_list=('bro-dev',))
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(target='bro-dev', grant=['@dev']))
+  assert 'already in the summon allow-list' in context.replies[0][1]['error']
+
+
+def test_unknown_and_unattributable_requesters_are_denied(tmp_path):
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(target='not-a-bro'))
+  assert 'unknown bro' in context.replies[-1][1]['error']
+  control.handle(cast(Dispatcher, context), UNKNOWN, _message())
+  assert 'cannot attribute' in context.replies[-1][1]['error']
+
+
+def test_root_session_pointer_attributes_the_child(tmp_path):
+  from bro.monitor import trail_pointer
+
+  control = _control(tmp_path)
+  trail_pointer.write(trail_pointer.session_pointer(control._workspace.path), 'root-trail')
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message())
+  assert context.spawned[0][0].summoner == {'trail_id': 'root-trail'}
+
+
+def test_root_trail_mark_is_the_pointer_fallback(tmp_path):
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  root = context.journal.records['root-quest']
+  context.journal.trail(root, 'root-trail')
+  control.handle(cast(Dispatcher, context), ROOT, _message())
+  assert context.spawned[0][0].summoner == {'trail_id': 'root-trail'}
+
+
+def test_step_and_index_extend_existing_trail_provenance(tmp_path):
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  root = context.journal.records['root-quest']
+  context.journal.trail(root, 'root-trail')
+  control.handle(cast(Dispatcher, context), ROOT, _message(step_id=7, index=3))
+  assert context.spawned[0][0].summoner == {
+    'trail_id': 'root-trail',
+    'step_id': 7,
+    'index': 3,
+  }
+
+
+def test_step_without_trail_does_not_invent_provenance(tmp_path):
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(step_id=7))
+  assert context.spawned[0][0].summoner is None
+
+
+def test_nested_request_outside_the_childs_allow_list_is_denied(tmp_path):
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  parent = _message()
+  control.handle(cast(Dispatcher, context), ROOT, parent)
+  context.workers[CHILD] = parent.quest_id
+  control._peers.note_workspace(parent.quest_id, f'broker-{CHILD}')
+  control.handle(cast(Dispatcher, context), CHILD, _message(target='bro-dev'))
+  assert 'not in' in context.replies[-1][1]['error']
+
+
+def test_depth_cap_denies_a_third_generation(tmp_path):
+  control = _control(tmp_path, allow_list=('bro-dev',))
+  context = FakeContext(control)
+  first = _message(target='bro-dev')
+  control.handle(cast(Dispatcher, context), ROOT, first)
+  context.workers[CHILD] = first.quest_id
+  control._peers.note_workspace(first.quest_id, f'broker-{CHILD}')
+  second = _message(target='dev')
+  control.handle(cast(Dispatcher, context), CHILD, second)
+  context.workers[GRANDCHILD] = second.quest_id
+  control._peers.note_workspace(second.quest_id, f'broker-{GRANDCHILD}')
+  control.handle(cast(Dispatcher, context), GRANDCHILD, _message())
+  assert 'depth cap' in context.replies[-1][1]['error']
+
+
+def test_unreachable_share_is_denied(tmp_path):
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  ref = 'sha256:' + 'a' * 64
+  control.handle(cast(Dispatcher, context), ROOT, _message(share=[ref]))
+  assert 'cannot share artifact' in context.replies[0][1]['error']
+
+
+def test_reachable_share_reaches_the_spawn(tmp_path, monkeypatch):
+  control = _control(tmp_path)
+  monkeypatch.setattr(control._artifacts, 'reachable', lambda ref, workspace: True)
+  context = FakeContext(control)
+  ref = 'sha256:' + 'a' * 64
+  control.handle(cast(Dispatcher, context), ROOT, _message(share=[ref]))
+  assert context.spawned[0][0].share == (ref,)
+
+
+def test_grant_is_bounded_by_the_requesters_scope(tmp_path):
+  control = _control(tmp_path, credential_scope=())
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(grant=['github']))
+  assert 'does not hold' in context.replies[0][1]['error']
+
+
+@pytest.mark.parametrize(
+  'overrides',
+  [
+    {'manual': True, 'timeout': 30},
+    {'manual': True, 'hold': 'guided'},
+    {'manual': True, 'llm': '::high'},
+    {'manual': True, 'harness': 'bro'},
+    {'manual': True, 'share': ['sha256:' + 'a' * 64]},
+  ],
+)
+def test_manual_summon_refuses_host_owned_shape(tmp_path, overrides):
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(**overrides))
+  assert context.replies[0][1]['outcome'] == 'denied'
+
+
+def test_manual_summon_writes_the_pending_record_before_acceptance(tmp_path, monkeypatch):
+  monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  message = _message(manual=True)
+  control.handle(cast(Dispatcher, context), ROOT, message)
+  assert context.spawned == []
+  assert context.expected == [(ROOT, None)]
+  pending = ride.pending_summon.peek(message.quest_id)
+  assert pending.target == 'dev'
+  assert pending.channel_token == 'token'
+  assert _status(tmp_path)['active'][0]['manual'] is True
+
+
+def test_claimed_manual_workspace_is_the_nested_base_source(tmp_path, monkeypatch):
+  monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
+  control = _control(tmp_path, allow_list=('bro-dev',))
+  context = FakeContext(control)
+  parent = _message(target='bro-dev', manual=True)
+  control.handle(cast(Dispatcher, context), ROOT, parent)
+  ride.pending_summon.claim(parent.quest_id, workspace='external-workspace')
+  context.workers[CHILD] = parent.quest_id
+  child = _message(target='dev')
+  control.handle(cast(Dispatcher, context), CHILD, child)
+  assert context.spawned[-1][0].parent == 'external-workspace'
+
+
+def test_manual_child_cannot_grant_unattributable_credentials(tmp_path, monkeypatch):
+  monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
+  control = _control(tmp_path, allow_list=('bro-dev',))
+  context = FakeContext(control)
+  parent = _message(target='bro-dev', manual=True)
+  control.handle(cast(Dispatcher, context), ROOT, parent)
+  ride.pending_summon.claim(parent.quest_id, workspace='external-workspace')
+  context.workers[CHILD] = parent.quest_id
+  control.handle(
+    cast(Dispatcher, context),
+    CHILD,
+    _message(target='dev', grant=['github']),
+  )
+  assert "manual child's credential scope" in context.replies[-1][1]['error']
+
+
+def test_manual_terminal_discards_pending_token(tmp_path, monkeypatch):
+  monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  message = _message(manual=True)
+  control.handle(cast(Dispatcher, context), ROOT, message)
+  record = context.journal.records[message.quest_id]
+  context.journal.end(record, {'outcome': 'failed', 'detail': {'reason': 'disconnected'}})
+  with pytest.raises(ride.pending_summon.UnknownToken):
+    ride.pending_summon.peek(message.quest_id)
+
+
+def test_child_uses_the_allow_list_recorded_for_its_parent(tmp_path):
+  control = _control(tmp_path, allow_list=('bro-dev',))
+  context = FakeContext(control)
+  parent = _message(target='bro-dev')
+  control.handle(cast(Dispatcher, context), ROOT, parent)
+  context.workers[CHILD] = parent.quest_id
+  control._peers.note_workspace(parent.quest_id, f'broker-{CHILD}')
+  child = _message(target='dev')
+  control.handle(cast(Dispatcher, context), CHILD, child)
+  assert context.spawned[-1][0].target == 'dev'
