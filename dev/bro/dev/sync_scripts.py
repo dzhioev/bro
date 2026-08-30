@@ -244,7 +244,12 @@ def _render_entrypoints(entries: list[Entry]) -> str:
     'from bro.base.args import run_cli',
   ]
   for attribute in sorted(attributes):
-    lines += ['', '', f'def {attribute}():', f'  return run_cli({attributes[attribute]!r}, sys.argv)']
+    lines += [
+      '',
+      '',
+      f'def {attribute}():',
+      f'  return run_cli({attributes[attribute]!r}, sys.argv)',
+    ]
   return '\n'.join(lines) + '\n'
 
 
