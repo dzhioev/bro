@@ -64,19 +64,21 @@ def test_toolset_manifest_follows_the_project_registry():
   assert mount(mcp.toolset).server_specs[0].needed_secrets == registry.needed_secrets
 
 
-def test_deploy_dry_run_resolves_repository_relative_command(tmp_path):
-  target = DeployTarget(deploy=_command(tmp_path, 'deploy.sh'))
+def test_roster_reports_the_repository_relative_deploy_command(tmp_path):
+  # the deploy spell runs this command itself as a backgrounded shell job, so the
+  # roster is the only place it learns what to run.
+  target = DeployTarget(deploy=Command('oops/trails/server/deploy.sh', ('--flag',)))
 
-  result = json.loads(mcp.deploy(Context(_state(tmp_path, target)), 'service', dry_run=True))
+  roster = json.loads(mcp.list_targets(Context(_state(tmp_path, target))))
 
-  assert result == {'command': f'{tmp_path}/deploy.sh', 'dry_run': True}
+  assert roster['service']['deploy'] == 'oops/trails/server/deploy.sh --flag'
 
 
 def test_commands_cannot_escape_the_repository(tmp_path):
-  target = DeployTarget(deploy=Command('../deploy.sh'))
+  target = DeployTarget(deploy=_command(tmp_path, 'deploy.sh'), verify=Command('../verify.sh'))
 
   with pytest.raises(ValueError, match='escapes the repository'):
-    mcp.deploy(Context(_state(tmp_path, target)), 'service', dry_run=True)
+    mcp.verify(Context(_state(tmp_path, target)), 'service')
 
 
 def test_streaming_command_timeout_kills_the_process_group(tmp_path):

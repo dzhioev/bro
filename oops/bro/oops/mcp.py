@@ -28,7 +28,6 @@ from bro.workspace.paths import project_root
 _MAX_OUTPUT_LINES = 400
 _AWS_TIMEOUT = 60
 _PROBE_TIMEOUT = 20
-_DEPLOY_TIMEOUT = 2700
 _VERIFY_TIMEOUT = 900
 
 
@@ -321,23 +320,6 @@ def list_targets(context: Context[OperationsState]) -> str:
       'notes': target.notes,
     }
   return json.dumps(result, indent=2)
-
-
-@toolset.tool(
-  'run a repository-declared target deploy command. With dry_run=true, return the command '
-  'without executing it. Call verify afterwards when the target declares verification.'
-)
-def deploy(
-  context: Context[OperationsState],
-  target: str,
-  dry_run: bool,
-  timeout_seconds: int = _DEPLOY_TIMEOUT,
-) -> str:
-  selected = _target(context.state, target)
-  command = _command(context.state.root, selected.deploy)
-  if dry_run:
-    return json.dumps({'command': ' '.join(command), 'dry_run': True}, indent=2)
-  return json.dumps(_run_streaming(command, timeout_seconds, context.state.root), indent=2)
 
 
 @toolset.tool(
