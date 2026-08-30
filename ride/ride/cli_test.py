@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -5,6 +6,8 @@ from unittest.mock import patch
 import pytest
 
 import ride.cli as ride_cli
+from bro.broker.brotocol import PROTOCOL_REVISION
+from ride import pending_summon
 from ride.harness import get_harness
 from ride.inner import inner_command
 
@@ -269,10 +272,9 @@ class TestLifecycle:
 class TestSummonedLaunch:
   @pytest.fixture
   def pending(self, monkeypatch, tmp_path):
-    import ride.pending_summon as pending_summon
-
     record = pending_summon.PendingSummon(
       token='TOK-1',
+      protocol_revision=PROTOCOL_REVISION,
       port=7321,
       channel_token='tk',
       target='dev',
@@ -324,6 +326,20 @@ class TestSummonedLaunch:
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'along', '--summoned', 'TOK-9', 'dev'])
     assert 'no pending manual summon for token' in capsys.readouterr().err
+
+  def test_protocol_mismatch_is_refused_before_session_creation(self, pending, capsys):
+    path = pending_summon._path(pending.token)
+    data = json.loads(path.read_text())
+    data['protocol_revision'] += 1
+    path.write_text(json.dumps(data))
+
+    with (
+      patch('ride.cli.start_session') as start,
+      pytest.raises(SystemExit),
+    ):
+      ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', 'dev'])
+    assert start.call_count == 0
+    assert 'uses broker protocol revision' in capsys.readouterr().err
 
   def test_solo_has_no_summoned_flag(self, pending, capsys):
     with pytest.raises(SystemExit):

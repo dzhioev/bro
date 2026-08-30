@@ -1,7 +1,7 @@
-"""Dispatcher — the logic layer: exchanges, the routing rules, kind handlers.
+"""Dispatcher — the logic layer: quests, the routing rules, kind handlers.
 
 The `Runtime` (mechanism) reports raw, symmetric lifecycle up to this `Dispatcher`
-(logic), which owns everything protocol: the live exchanges — per exchange the
+(logic), which owns everything protocol: the live quests — per quest the
 requesting peer, the request id, and at most one worker channel — the kind-handler
 registry, the delivery observers, the three routing rules, and the synthesis of
 `result{failed}`. It runs only inside `Runtime` callbacks, all on the one event loop,
@@ -9,8 +9,8 @@ so it is a plain synchronous object with no lock.
 
 Two invariants carry the design:
 
-- **Exactly one result per exchange.** Delivering a result closes the exchange and a
-  closed exchange is forgotten, so any later message naming it falls to rule 3 and is
+- **Exactly one result per quest.** Delivering a result closes the quest and a
+  closed quest is forgotten, so any later message naming it falls to rule 3 and is
   dropped. Synthesis consults the same table, so whichever of the worker's own result /
   exit / timeout is processed first wins — closing the result-vs-exit and
   timeout-vs-result double-terminal races.
@@ -27,10 +27,10 @@ Two invariants carry the design:
   `failed{timeout}` a mute worker produces, carrying that value too.
 
 The root is a uniform peer with one twist: `run(root)` opens the session's own
-exchange for it, host-anchored — the requester is this process, not a peer — so the
+quest for it, host-anchored — the requester is this process, not a peer — so the
 root announces its run lifecycle like any worker. A host-anchored delivery reaches the
 delivery observers with `target=None` and nobody else, and when the root exits without
-a result the exchange closes silently: the host reads the exit code itself, and the
+a result the quest closes silently: the host reads the exit code itself, and the
 exit ends the session.
 """
 
@@ -62,16 +62,16 @@ RequestHandler = Callable[['Dispatcher', Peer, Message], None]
 
 # a delivery observer taps correlated deliveries as (source, target, delivered message);
 # source is None when no worker ever existed (a launch failure), and target is None on
-# a host-anchored exchange (the root's — this process is the requester).
+# a host-anchored quest (the root's — this process is the requester).
 DeliveryObserver = Callable[[Optional[Peer], Optional[Peer], Message], None]
 
 
 class RuntimeCommands(Protocol):
   """the mechanism-layer commands the Dispatcher issues; the real `Runtime` satisfies it."""
 
-  async def spawn(self, launch: LaunchSpec, *, timeout: Optional[float], exchange: str) -> Peer: ...
+  async def spawn(self, launch: LaunchSpec, *, timeout: Optional[float], quest: str) -> Peer: ...
   async def job(
-    self, command: CommandJob, *, directory: Path, timeout: Optional[float], exchange: str
+    self, command: CommandJob, *, directory: Path, timeout: Optional[float], quest: str
   ) -> Peer: ...
   async def expect(self, *, timeout: Optional[float]) -> Provisioned: ...
   def send(self, peer: Peer, message: Message) -> None: ...
@@ -82,7 +82,7 @@ class RuntimeCommands(Protocol):
 
 
 class JobOutput(Protocol):
-  """where a job's run is collected, and what the exchange answers with.
+  """where a job's run is collected, and what the quest answers with.
 
   The Dispatcher opens a directory per job, the process fills it (the layout is
   `bro/broker/job.py`'s), and `collect` turns the finished run into the result's
@@ -96,13 +96,13 @@ class JobOutput(Protocol):
     """the value the job's result carries, built from its completed run
     directory; heavy, so the implementation works off the loop. `requester` is
     the peer awaiting the result — whom the collected output is attributed to.
-    Raising fails the exchange and leaves the directory in place."""
+    Raising fails the quest and leaves the directory in place."""
     ...
 
 
 @dataclass
 class JobRun:
-  """the run a job exchange answers with: the directory its output is collected
+  """the run a job quest answers with: the directory its output is collected
   from, and whether the host killed the process at its deadline."""
 
   directory: Path
@@ -110,8 +110,8 @@ class JobRun:
 
 
 @dataclass
-class Exchange:
-  """one live exchange: who awaits its result, and the worker channel answering it
+class Quest:
+  """one live quest: who awaits its result, and the worker channel answering it
   (None while the launch is still resolving)."""
 
   requester: Optional[Peer]  # None: host-anchored — this process is the requester
@@ -133,8 +133,8 @@ class Dispatcher:
     self._runtime: Optional[RuntimeCommands] = None
     self._default_timeout = default_timeout
     self._job_output = job_output
-    self.exchanges: dict[str, Exchange] = {}  # live exchanges by request id
-    self.workers: dict[Peer, str] = {}  # worker channel -> the exchange it answers
+    self.quests: dict[str, Quest] = {}  # live quests by request id
+    self.workers: dict[Peer, str] = {}  # worker channel -> the quest it answers
     self._handlers: dict[str, RequestHandler] = {}
     self._delivery_observers: list[DeliveryObserver] = []
     self._active: Optional[Message] = None  # the request currently being handled (for reply/spawn)
@@ -186,23 +186,23 @@ class Dispatcher:
   def reply(self, peer: Peer, payload: dict) -> None:
     """answer the in-flight request with its result; `payload` is the result payload
     (`{outcome, value?, error?, detail?}`)."""
-    self.deliver(peer, Message(type=Tag.RESULT, payload=payload, request=self._request_id()))
+    self.deliver(peer, Message(type=Tag.RESULT, payload=payload, quest=self._request_id()))
 
   def refuse(self, peer: Peer, message: Message) -> None:
-    """drop an unroutable progress/result with a log line (rule 3)."""
-    log.warning(f'broker dispatcher: refused {message.type!r} from peer {peer} (no live exchange)')
+    """drop an unroutable mark, progress message, or result with a log line (rule 3)."""
+    log.warning(f'broker dispatcher: refused {message.type!r} from peer {peer} (no live quest)')
 
   def spawn(self, launch: LaunchSpec, requester: Peer, *, timeout: Optional[float] = None) -> None:
-    """spawn `launch` as the worker answering the in-flight request. The exchange opens
+    """spawn `launch` as the worker answering the in-flight request. The quest opens
     here — held against id collisions from this point — and the worker channel binds
     when the launch resolves, before the launched process can have connected and sent
-    a frame. A launch failure closes the exchange with `result{failed, reason:
+    a frame. A launch failure closes the quest with `result{failed, reason:
     'launch'}` back to `requester` instead."""
     request_id = self._request_id()
-    self.exchanges[request_id] = Exchange(requester=requester)
+    self.quests[request_id] = Quest(requester=requester)
     effective_timeout = timeout if timeout is not None else self._default_timeout
     task = asyncio.ensure_future(
-      self.runtime.spawn(launch, timeout=effective_timeout, exchange=request_id)
+      self.runtime.spawn(launch, timeout=effective_timeout, quest=request_id)
     )
 
     def _launched(finished: asyncio.Task) -> None:
@@ -220,19 +220,19 @@ class Dispatcher:
   def job(self, command: CommandJob, requester: Peer, *, timeout: Optional[float] = None) -> None:
     """run `command` as the job answering the in-flight request — the third
     answer shape: the process speaks no protocol, so the host observes it and
-    speaks on its behalf. The exchange opens *and its worker binds* here — a
+    speaks on its behalf. The quest opens *and its worker binds* here — a
     job's peer id is derivable up front, so no exit can slip in between — then a
     started `progress{}` is delivered when the launch resolves, and the result
     is built in `on_exit` from the run directory opened here. A launch failure
-    closes the exchange with `result{failed, reason: 'launch'}` instead."""
+    closes the quest with `result{failed, reason: 'launch'}` instead."""
     request_id = self._request_id()
     worker = job_peer(request_id)
     directory = self.job_output.open()
-    self.exchanges[request_id] = Exchange(requester=requester, worker=worker, job=JobRun(directory))
+    self.quests[request_id] = Quest(requester=requester, worker=worker, job=JobRun(directory))
     self.workers[worker] = request_id
     effective_timeout = timeout if timeout is not None else self._default_timeout
     task = asyncio.ensure_future(
-      self.runtime.job(command, directory=directory, timeout=effective_timeout, exchange=request_id)
+      self.runtime.job(command, directory=directory, timeout=effective_timeout, quest=request_id)
     )
 
     def _launched(finished: asyncio.Task) -> None:
@@ -244,10 +244,10 @@ class Dispatcher:
         _remove_run(directory)  # no process ran, so nothing was collected into it
         self._fail(request_id, None, error=str(error), detail={'reason': 'launch'})
         return
-      exchange = self.exchanges.get(request_id)
-      if exchange is None:
-        return  # the job already ended and its exit closed the exchange
-      self._deliver_observed(worker, exchange.requester, brotocol.progress(request_id, {}))
+      quest = self.quests.get(request_id)
+      if quest is None:
+        return  # the job already ended and its exit closed the quest
+      self._deliver_observed(worker, quest.requester, brotocol.progress(request_id, {}))
 
     task.add_done_callback(_launched)
 
@@ -261,12 +261,12 @@ class Dispatcher:
     """register an expected external worker for the in-flight request — `spawn` for a
     peer someone else launches. Once the channel is provisioned and bound, `ready`
     receives it (on the loop) so the handler can publish the endpoint to whatever
-    launches the peer; a provisioning failure closes the exchange with `result{failed,
+    launches the peer; a provisioning failure closes the quest with `result{failed,
     reason: 'launch'}`. `timeout` bounds the whole expectation; None leaves it
     unbounded — an external peer's arrival is paced by its launcher, not by this
     host."""
     request_id = self._request_id()
-    self.exchanges[request_id] = Exchange(requester=requester)
+    self.quests[request_id] = Quest(requester=requester)
     task = asyncio.ensure_future(self.runtime.expect(timeout=timeout))
 
     def _provisioned(finished: asyncio.Task) -> None:
@@ -302,7 +302,7 @@ class Dispatcher:
   # --- Runtime listener (all on the loop) ---------------------------------
 
   def on_connect(self, peer: Peer) -> None:
-    del peer  # exchanges are registered at spawn time, so birth needs no dispatcher action
+    del peer  # quests are registered at spawn time, so birth needs no dispatcher action
 
   def on_message(self, peer: Peer, message: Message) -> None:
     if message.type == Tag.REQUEST:
@@ -313,9 +313,9 @@ class Dispatcher:
   def on_exit(self, peer: Peer, code: int, output: str) -> None:
     request_id = self.workers.get(peer)
     if request_id is not None:
-      exchange = self.exchanges.get(request_id)
-      if exchange is not None and exchange.job is not None:
-        self._end_job(request_id, exchange, code)
+      quest = self.quests.get(request_id)
+      if quest is not None and quest.job is not None:
+        self._end_job(request_id, quest, code)
       else:
         self._fail(
           request_id, peer, detail={'reason': 'exit', 'exit_code': code, 'output_tail': output}
@@ -328,19 +328,19 @@ class Dispatcher:
     request_id = self.workers.get(peer)
     if request_id is None:
       return
-    exchange = self.exchanges.get(request_id)
-    if exchange is not None and exchange.job is not None:
+    quest = self.quests.get(request_id)
+    if quest is not None and quest.job is not None:
       # a job answers with its run directory, which the in-flight kill has not
-      # finished writing: the reap closes the exchange, carrying this reason.
-      exchange.job.timed_out = True
+      # finished writing: the reap closes the quest, carrying this reason.
+      quest.job.timed_out = True
       return
-    # the Runtime already killed the peer; the following on_exit finds the exchange
+    # the Runtime already killed the peer; the following on_exit finds the quest
     # closed and synthesizes nothing.
     self._fail(request_id, peer, detail={'reason': 'timeout'})
 
   def on_gone(self, peer: Peer) -> None:
     # an expected worker's channel ended — its `on_exit`: every frame it wrote was
-    # already delivered, so a live exchange got no result from it.
+    # already delivered, so a live quest got no result from it.
     request_id = self.workers.get(peer)
     if request_id is not None:
       self._fail(request_id, peer, detail={'reason': 'disconnected'})
@@ -350,42 +350,39 @@ class Dispatcher:
 
   def _on_request(self, peer: Peer, message: Message) -> None:
     """rule 2: a request goes to the handler registered for its kind; no handler —
-    or an id colliding with a live exchange (uniqueness rides on entropy, so a
+    or an id colliding with a live quest (uniqueness rides on entropy, so a
     collision is rejected rather than coped with) — means `result{denied}`."""
-    if message.exchange in self.exchanges:
-      self._deny(peer, message.exchange, f'request id {message.exchange} already names a live exchange')  # fmt: skip
+    if message.quest_id in self.quests:
+      self._deny(peer, message.quest_id, f'request id {message.quest_id} already names a live quest')  # fmt: skip
       return
     if message.kind not in self._handlers:
-      self._deny(peer, message.exchange, f'unknown kind {message.kind!r}')
+      self._deny(peer, message.quest_id, f'unknown kind {message.kind!r}')
       return
     self.invoke(peer, message)
 
   def _on_answer(self, peer: Peer, message: Message) -> None:
-    """rule 1: a progress/result naming a live exchange, arriving on that exchange's
-    own worker channel, is forwarded to the requester unchanged — the sender must *be*
-    the worker, so learning another exchange's id gains a peer nothing. Anything else
-    is rule 3: dropped and logged."""
-    exchange = self.exchanges.get(message.request) if message.request is not None else None
-    if exchange is None or exchange.worker != peer:
+    """apply rule 1 to a mark, progress message, or result from a quest's own worker."""
+    quest = self.quests.get(message.quest_id)
+    if quest is None or quest.worker != peer:
       self.refuse(peer, message)
       return
-    self._deliver_observed(peer, exchange.requester, message)
+    self._deliver_observed(peer, quest.requester, message)
     if message.type == Tag.RESULT:
-      self._close(message.exchange)
+      self._close(message.quest_id)
 
   # --- facade support -----------------------------------------------------
 
   async def run(self, root: LaunchSpec) -> int:
     """serve, then spawn the root as the uniform worker of a freshly minted
-    host-anchored exchange (no request-lifecycle timeout), await its exit, tear down
+    host-anchored quest (no request-lifecycle timeout), await its exit, tear down
     any outstanding children, and return the root's exit code."""
     self._root_exit = asyncio.get_running_loop().create_future()
     serve_task = asyncio.ensure_future(self.runtime.serve())
     await asyncio.sleep(0)  # let serve install the sink before the root connects
-    exchange = lulid()
-    self.exchanges[exchange] = Exchange(requester=None)
-    self._root = await self.runtime.spawn(root, timeout=None, exchange=exchange)
-    self._bind_worker(self._root, exchange)
+    quest = lulid()
+    self.quests[quest] = Quest(requester=None)
+    self._root = await self.runtime.spawn(root, timeout=None, quest=quest)
+    self._bind_worker(self._root, quest)
     try:
       return await self._root_exit
     finally:
@@ -403,10 +400,10 @@ class Dispatcher:
   def _request_id(self) -> str:
     if self._active is None:
       raise RuntimeError('reply()/spawn() called outside a request handler')
-    return self._active.exchange
+    return self._active.quest_id
 
   def _bind_worker(self, peer: Peer, request_id: str) -> None:
-    self.exchanges[request_id].worker = peer
+    self.quests[request_id].worker = peer
     self.workers[peer] = request_id
 
   def _deny(self, peer: Peer, request_id: str, error: str) -> None:
@@ -418,19 +415,19 @@ class Dispatcher:
   ) -> None:
     """deliver + fire the delivery tap — the seam for the correlated deliveries
     handlers never see (rule-1 forwarding and synthesized `failed`). A host-anchored
-    exchange has no peer to deliver to: its messages reach only the observers."""
+    quest has no peer to deliver to: its messages reach only the observers."""
     if target is not None:
       self.deliver(target, message)
     for observer in self._delivery_observers:
       observer(source, target, message)
 
-  def _end_job(self, request_id: str, exchange: Exchange, code: int) -> None:
-    """close a job exchange on its process's reap. The outcome is decided here —
-    the exchange is forgotten before anything is awaited, so a later timeout or
+  def _end_job(self, request_id: str, quest: Quest, code: int) -> None:
+    """close a job quest on its process's reap. The outcome is decided here —
+    the quest is forgotten before anything is awaited, so a later timeout or
     exit finds nothing to answer — and the one result waits for the run directory
     to be collected off the loop."""
-    assert exchange.job is not None
-    run, source, requester = exchange.job, exchange.worker, exchange.requester
+    assert quest.job is not None
+    run, source, requester = quest.job, quest.worker, quest.requester
     clean = code == 0 and not run.timed_out
     status: dict[str, Any] = {
       'reason': 'timeout' if run.timed_out else 'exit',
@@ -481,29 +478,29 @@ class Dispatcher:
     error: Optional[str] = None,
     detail: dict,
   ) -> None:
-    """close a live exchange with a synthesized `result{failed}` to its requester. A
-    host-anchored exchange closes silently: the root's death is its exit code, which
+    """close a live quest with a synthesized `result{failed}` to its requester. A
+    host-anchored quest closes silently: the root's death is its exit code, which
     this process reads itself."""
-    exchange = self.exchanges.get(request_id)
-    if exchange is None:
+    quest = self.quests.get(request_id)
+    if quest is None:
       return
     self._close(request_id)
-    if exchange.requester is None:
+    if quest.requester is None:
       return
     self._deliver_observed(
-      source, exchange.requester, brotocol.result(request_id, 'failed', error=error, detail=detail)
+      source, quest.requester, brotocol.result(request_id, 'failed', error=error, detail=detail)
     )
 
   def _close(self, request_id: str) -> None:
-    exchange = self.exchanges.pop(request_id, None)
-    if exchange is not None and exchange.worker is not None:
-      self.workers.pop(exchange.worker, None)
+    quest = self.quests.pop(request_id, None)
+    if quest is not None and quest.worker is not None:
+      self.workers.pop(quest.worker, None)
 
   def _cleanup(self, peer: Peer) -> None:
-    """drop the peer's exchange (when one is still live) and the Runtime's bookkeeping."""
+    """drop the peer's quest (when one is still live) and the Runtime's bookkeeping."""
     request_id = self.workers.pop(peer, None)
     if request_id is not None:
-      self.exchanges.pop(request_id, None)
+      self.quests.pop(request_id, None)
     self.runtime.forget(peer)
 
 
@@ -547,7 +544,7 @@ def ping_handler(context: Dispatcher, peer: Peer, message: Message) -> None:
 
 def spawn_test_handler(launch: LaunchSpec) -> RequestHandler:
   """a spawn-test kind handler bound to an injected `LaunchSpec`: spawns it as the
-  worker of the requesting exchange, whose progress and result then flow back to the
+  worker of the requesting quest, whose progress and result then flow back to the
   requester."""
 
   def handler(context: Dispatcher, peer: Peer, _message: Message) -> None:

@@ -4,7 +4,7 @@ from typing import Optional
 import pytest
 
 from bro.broker.brotocol import Message
-from bro.broker.client import CHANNEL_ENV, EXCHANGE_ENV, Client
+from bro.broker.client import CHANNEL_ENV, QUEST_ENV, Client
 from bro.broker.transport import ClientTransport
 from bro.channel import BroChannel
 
@@ -34,14 +34,14 @@ class TestBroChannel:
     monkeypatch.delenv(CHANNEL_ENV, raising=False)
     assert BroChannel.from_env() is None
 
-  def test_from_env_raises_when_the_exchange_is_missing(self, monkeypatch):
-    # a channel without the exchange id is a mis-provisioned launch: the run could
+  def test_from_env_raises_when_the_quest_is_missing(self, monkeypatch):
+    # a channel without the quest id is a mis-provisioned launch: the run could
     # not correlate its lifecycle, so it must fail loudly rather than emit garbage
     transport = FakeClientTransport()
     monkeypatch.setattr('bro.broker.client.connect', lambda address: transport)
     monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:9')
-    monkeypatch.delenv(EXCHANGE_ENV, raising=False)
-    with pytest.raises(ValueError, match=EXCHANGE_ENV):
+    monkeypatch.delenv(QUEST_ENV, raising=False)
+    with pytest.raises(ValueError, match=QUEST_ENV):
       BroChannel.from_env()
     assert transport.closed  # the channel it opened before noticing is released
 
@@ -55,13 +55,13 @@ class TestBroChannel:
     monkeypatch.setitem(sys.modules, 'bro.broker.client', None)
     assert BroChannel.from_env() is None
 
-  def test_started_emits_progress_on_the_exchange(self):
+  def test_started_emits_progress_on_the_quest(self):
     channel, transport = _make_channel()
     channel.started('trail-1')
     assert len(transport.sent) == 1
     message = transport.sent[0]
     assert message.type == 'progress'
-    assert message.request == 'X'
+    assert message.quest == 'X'
     assert message.payload == {'trail_id': 'trail-1'}
 
   def test_completed_ok_emits_the_ok_result(self):
@@ -70,7 +70,7 @@ class TestBroChannel:
     assert len(transport.sent) == 1
     message = transport.sent[0]
     assert message.type == 'result'
-    assert message.request == 'X'
+    assert message.quest == 'X'
     assert message.payload == {'outcome': 'ok', 'value': 'the answer'}
 
   def test_completed_raised_emits_failed_with_the_reason(self):

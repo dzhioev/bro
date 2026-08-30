@@ -64,7 +64,7 @@ class LocalSpawner(Spawner):
     self.channels: list[Provisioned] = []
     self.raise_on_spawn = False
 
-  async def spawn(self, launch: LaunchSpec, channel: Provisioned, exchange: str) -> ChildHandle:
+  async def spawn(self, launch: LaunchSpec, channel: Provisioned, quest: str) -> ChildHandle:
     assert isinstance(launch, LocalLaunchSpec)
     self.channels.append(channel)
     if self.raise_on_spawn:
@@ -76,7 +76,7 @@ class LocalSpawner(Spawner):
       env={
         **os.environ,
         'BROKER_CHANNEL': channel.host_endpoint.address(LOCAL_HOST),
-        'BROKER_EXCHANGE': exchange,
+        'BROKER_QUEST': quest,
       },
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,
@@ -152,9 +152,9 @@ import os
 from bro.broker.transport import connect
 from bro.broker import brotocol
 client = connect(os.environ['BROKER_CHANNEL'])
-exchange = os.environ['BROKER_EXCHANGE']
-client.send(brotocol.progress(exchange, {'trail_id': 't1'}))
-client.send(brotocol.result(exchange, 'ok', value='done'))
+quest = os.environ['BROKER_QUEST']
+client.send(brotocol.progress(quest, {'trail_id': 't1'}))
+client.send(brotocol.result(quest, 'ok', value='done'))
 client.close()
 """
 
@@ -163,7 +163,7 @@ import os, sys
 from bro.broker.transport import connect
 from bro.broker import brotocol
 client = connect(os.environ['BROKER_CHANNEL'])
-client.send(brotocol.progress(os.environ['BROKER_EXCHANGE'], {}))
+client.send(brotocol.progress(os.environ['BROKER_QUEST'], {}))
 sys.stderr.write('boom-traceback')
 sys.stderr.flush()
 client.close()
@@ -175,7 +175,7 @@ import os, time
 from bro.broker.transport import connect
 from bro.broker import brotocol
 client = connect(os.environ['BROKER_CHANNEL'])
-client.send(brotocol.progress(os.environ['BROKER_EXCHANGE'], {}))
+client.send(brotocol.progress(os.environ['BROKER_QUEST'], {}))
 time.sleep(3600)
 """
 
@@ -184,11 +184,11 @@ import os
 from bro.broker.transport import connect
 from bro.broker import brotocol
 client = connect(os.environ['BROKER_CHANNEL'])
-exchange = os.environ['BROKER_EXCHANGE']
-client.send(brotocol.progress(exchange, {}))
+quest = os.environ['BROKER_QUEST']
+client.send(brotocol.progress(quest, {}))
 request = client.receive(5.0)
 payload = request.payload if request is not None else None
-client.send(brotocol.result(exchange, 'ok', value=payload))
+client.send(brotocol.result(quest, 'ok', value=payload))
 client.close()
 """
 
@@ -203,7 +203,7 @@ async def test_connect_message_and_clean_exit_after_drain():
   # the canonical acceptance ordering: a completed the child writes just before exiting
   # is delivered as on_message *before* on_exit (drain-before-decide).
   async with runtime_harness() as env:
-    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_COMPLETE), timeout=None, exchange='x1')
+    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_COMPLETE), timeout=None, quest='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
     started = await next_event(env.listener)
@@ -217,7 +217,7 @@ async def test_connect_message_and_clean_exit_after_drain():
 @pytest.mark.asyncio
 async def test_early_exit_reports_code_and_output_tail():
   async with runtime_harness() as env:
-    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_FAIL), timeout=None, exchange='x1')
+    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_FAIL), timeout=None, quest='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
     assert (await next_event(env.listener))[0] == 'message'  # started
@@ -229,7 +229,7 @@ async def test_early_exit_reports_code_and_output_tail():
 @pytest.mark.asyncio
 async def test_timeout_kills_then_reports_timeout_and_exit():
   async with runtime_harness() as env:
-    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=3600.0, exchange='x1')
+    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=3600.0, quest='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
     assert (await next_event(env.listener))[0] == 'message'  # started
@@ -249,7 +249,7 @@ async def test_timeout_kills_then_reports_timeout_and_exit():
 @pytest.mark.asyncio
 async def test_send_delivers_message_to_peer():
   async with runtime_harness() as env:
-    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_ECHO), timeout=None, exchange='x1')
+    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_ECHO), timeout=None, quest='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
     assert (await next_event(env.listener))[0] == 'message'  # started
@@ -262,7 +262,7 @@ async def test_send_delivers_message_to_peer():
 @pytest.mark.asyncio
 async def test_kill_reaps_the_process():
   async with runtime_harness() as env:
-    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=None, exchange='x1')
+    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=None, quest='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
     assert (await next_event(env.listener))[0] == 'message'  # started
@@ -275,7 +275,7 @@ async def test_kill_reaps_the_process():
 @pytest.mark.asyncio
 async def test_forget_drops_channel_without_exit():
   async with runtime_harness() as env:
-    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=None, exchange='x1')
+    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=None, quest='x1')
 
     assert await next_event(env.listener) == ('connect', peer)
     assert (await next_event(env.listener))[0] == 'message'  # started
@@ -288,7 +288,7 @@ async def test_forget_drops_channel_without_exit():
 async def test_exit_before_connect_reports_without_birth():
   async with runtime_harness() as env:
     peer = await env.runtime.spawn(
-      LocalLaunchSpec(_CHILD_EXIT_BEFORE_CONNECT), timeout=None, exchange='x1'
+      LocalLaunchSpec(_CHILD_EXIT_BEFORE_CONNECT), timeout=None, quest='x1'
     )
 
     exited = await next_event(env.listener)  # no on_connect: the child never attached
@@ -370,7 +370,7 @@ def _job(code: str) -> CommandJob:
 async def test_job_reports_exit_with_no_channel(tmp_path):
   async with runtime_harness() as env:
     peer = await env.runtime.job(
-      _job('print("job-out")'), directory=tmp_path, timeout=None, exchange='x1'
+      _job('print("job-out")'), directory=tmp_path, timeout=None, quest='x1'
     )
 
     assert peer == job_peer('x1')
@@ -384,9 +384,7 @@ async def test_job_reports_exit_with_no_channel(tmp_path):
 async def test_job_failure_reports_its_code(tmp_path):
   async with runtime_harness() as env:
     code_snippet = 'import sys; sys.stderr.write("job-boom"); sys.exit(4)'
-    peer = await env.runtime.job(
-      _job(code_snippet), directory=tmp_path, timeout=None, exchange='x1'
-    )
+    peer = await env.runtime.job(_job(code_snippet), directory=tmp_path, timeout=None, quest='x1')
 
     kind, exited_peer, code, _ = await next_event(env.listener)
     assert (kind, exited_peer, code) == ('exit', peer, 4)
@@ -397,7 +395,7 @@ async def test_job_failure_reports_its_code(tmp_path):
 async def test_job_timeout_kills_then_reports_timeout_and_exit(tmp_path):
   async with runtime_harness() as env:
     peer = await env.runtime.job(
-      _job('import time; time.sleep(3600)'), directory=tmp_path, timeout=3600.0, exchange='x1'
+      _job('import time; time.sleep(3600)'), directory=tmp_path, timeout=3600.0, quest='x1'
     )
     # fire deterministically, as in the spawn timeout test
     timer = env.runtime._peers[peer].timer
@@ -415,7 +413,7 @@ async def test_job_timeout_kills_then_reports_timeout_and_exit(tmp_path):
 async def test_job_forget_drops_supervision_without_exit(tmp_path):
   async with runtime_harness() as env:
     peer = await env.runtime.job(
-      _job('import time; time.sleep(3600)'), directory=tmp_path, timeout=None, exchange='x1'
+      _job('import time; time.sleep(3600)'), directory=tmp_path, timeout=None, quest='x1'
     )
     handle = env.runtime._peers[peer].handle
     assert handle is not None
@@ -431,7 +429,7 @@ async def test_job_launch_failure_rolls_back_registration(tmp_path):
   async with runtime_harness() as env:
     missing = CommandJob(command=('/nonexistent-job-binary',), env={})
     with pytest.raises(FileNotFoundError):
-      await env.runtime.job(missing, directory=tmp_path, timeout=None, exchange='x1')
+      await env.runtime.job(missing, directory=tmp_path, timeout=None, quest='x1')
 
     assert env.runtime._peers == {}
     assert env.listener.events.empty()
@@ -442,7 +440,7 @@ async def test_launch_failure_rolls_back_registration():
   async with runtime_harness() as env:
     env.spawner.raise_on_spawn = True
     with pytest.raises(RuntimeError):
-      await env.runtime.spawn(LocalLaunchSpec(_CHILD_COMPLETE), timeout=None, exchange='x1')
+      await env.runtime.spawn(LocalLaunchSpec(_CHILD_COMPLETE), timeout=None, quest='x1')
 
     rolled_back = env.spawner.channels[-1].channel
     await until(

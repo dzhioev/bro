@@ -19,6 +19,7 @@ import ride.session as ride_session
 import ride.spawn
 import ride.summon_control
 from bro.base import credentials
+from bro.broker.brotocol import PROTOCOL_REVISION
 from bro.monitor import workspace_session_dir
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 from bro.workspace.paths import CONTAINER_SESSION_DIR
@@ -1451,9 +1452,9 @@ record = json.loads(records[0].read_text())
 from ride import pending_summon
 pending_summon.claim(record['token'], workspace='external-ws')
 client = connect(Endpoint(port=record['port'], token=record['channel_token']).address(LOCAL_HOST))
-exchange = record['token']
-client.send(brotocol.progress(exchange, {'trail_id': 't-manual'}))
-client.send(brotocol.result(exchange, 'ok', value='the pair verdict'))
+quest = record['token']
+client.send(brotocol.progress(quest, {'trail_id': 't-manual'}))
+client.send(brotocol.result(quest, 'ok', value='the pair verdict'))
 client.close(confirm=True)
 """
 
@@ -1531,6 +1532,7 @@ def _pending_record(tmp_path, **overrides) -> pending_summon.PendingSummon:
   record = pending_summon.PendingSummon(
     **{
       'token': 'TOK-1',
+      'protocol_revision': PROTOCOL_REVISION,
       'port': 7321,
       'channel_token': 'tk',
       'target': 'bro-dev',

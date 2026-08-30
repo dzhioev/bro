@@ -215,11 +215,11 @@ def _summoned_env(
   summoned: pending_summon.PendingSummon, spec: SessionSpec, address: str
 ) -> dict[str, str]:
   """the env that makes a launch the manual summon child the token names: the
-  summoner's channel, the exchange the child answers (its token), and the
+  summoner's channel, the quest the child answers (its token), and the
   summoned-child facts."""
   env = {
     'BROKER_CHANNEL': address,
-    'BROKER_EXCHANGE': summoned.token,
+    'BROKER_QUEST': summoned.token,
     SUMMONED_ENV: '1',
     MAY_SUMMON_ENV: encode_may_summon(summoned.may_summon),
     'RIDE_WORKSPACE': spec.name,

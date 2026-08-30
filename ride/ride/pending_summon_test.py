@@ -1,5 +1,8 @@
+import json
+
 import pytest
 
+from bro.broker.brotocol import PROTOCOL_REVISION
 from ride import pending_summon
 
 
@@ -7,6 +10,7 @@ def _record(**overrides) -> pending_summon.PendingSummon:
   return pending_summon.PendingSummon(
     **{
       'token': 'TOK-1',
+      'protocol_revision': PROTOCOL_REVISION,
       'port': 7321,
       'channel_token': 'tk',
       'target': 'dev',
@@ -71,3 +75,23 @@ def test_a_record_naming_another_token_is_refused(tmp_path):
   pending_summon._path('TOK-2').write_text(source.read_text())
   with pytest.raises(ValueError, match="names token 'TOK-1'"):
     pending_summon.peek('TOK-2')
+
+
+def test_a_record_without_a_protocol_revision_is_refused(tmp_path):
+  pending_summon.write(_record())
+  path = pending_summon._path('TOK-1')
+  data = json.loads(path.read_text())
+  del data['protocol_revision']
+  path.write_text(json.dumps(data))
+
+  with pytest.raises(ValueError, match='has no broker protocol revision'):
+    pending_summon.claim('TOK-1', workspace='my-manual')
+  assert path.exists()
+
+
+def test_a_record_from_another_protocol_revision_is_refused(tmp_path):
+  pending_summon.write(_record(protocol_revision=PROTOCOL_REVISION + 1))
+
+  with pytest.raises(ValueError, match='uses broker protocol revision'):
+    pending_summon.claim('TOK-1', workspace='my-manual')
+  assert pending_summon._path('TOK-1').exists()

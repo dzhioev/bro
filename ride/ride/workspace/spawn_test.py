@@ -61,7 +61,7 @@ class TestBrokerLaunch:
     assert adapted.env == {
       'RIDE_BRO': 'dev',
       'BROKER_CHANNEL': 'tcp://tk@host.docker.internal:7321',
-      'BROKER_EXCHANGE': 'X-1',
+      'BROKER_QUEST': 'X-1',
     }
     assert adapted.extra_mounts == ('/existing:/mount',)
     assert adapted.tty is False
@@ -428,7 +428,7 @@ class TestProcessSpawner:
     env = json.loads(out.read_text())
     assert env['MARKER'] == 'x'
     assert env['BROKER_CHANNEL'] == 'tcp://tk@127.0.0.1:7321'
-    assert env['BROKER_EXCHANGE'] == 'X-1'
+    assert env['BROKER_QUEST'] == 'X-1'
     # a spawn is a pure function of its LaunchSpec: nothing ambient leaks in
     assert 'RIDE_AMBIENT_CANARY' not in env
 
@@ -457,7 +457,7 @@ class TestCompositeSpawner:
     def __init__(self):
       self.spawned: list = []
 
-    async def spawn(self, launch, channel, exchange) -> workspace_spawn.ChildHandle:
+    async def spawn(self, launch, channel, quest) -> workspace_spawn.ChildHandle:
       self.spawned.append(launch)
       return MagicMock()
 

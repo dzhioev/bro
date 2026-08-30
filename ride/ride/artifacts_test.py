@@ -310,7 +310,7 @@ class TestArtifactControl:
     assert context.replies == []
     peer, result = await _delivered(context)
     assert peer == ROOT
-    assert result.request == message.id
+    assert result.quest == message.id
     assert result.payload['outcome'] == 'ok'
     value = result.payload['value']
     assert value['ref'] == digest_path(workspace_tree('ws') / 'out/a.bin')

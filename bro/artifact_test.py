@@ -109,7 +109,7 @@ class _FakeClient:
 
 
 def _serve(monkeypatch, payload: dict) -> _FakeClient:
-  client = _FakeClient(brotocol.Message(type=brotocol.Tag.RESULT, payload=payload, request='R'))
+  client = _FakeClient(brotocol.Message(type=brotocol.Tag.RESULT, payload=payload, quest='R'))
   monkeypatch.setattr(artifact, '_open_client', lambda: client)
   return client
 

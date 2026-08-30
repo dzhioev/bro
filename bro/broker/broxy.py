@@ -16,9 +16,9 @@ connection attaches with the same one, since they all share the one upstream
 channel.
 
 Sticky routing: outbound requests are deframed to learn which local connection
-opened which exchange; correlated inbound is routed to exactly that connection.
-A route survives progress; the result ends the live exchange (the waiter
-detaches), and the conversation stays retained for cursor reads until evicted.
+opened which quest; correlated inbound is routed to exactly that connection.
+Marks and progress keep a route live;
+the result ends the quest, detaches the waiter, and leaves the conversation retained for cursor reads until eviction.
 
 Mailbox: every correlated inbound message is retained in arrival order under its
 request id — the conversation — numbered by a 1-based sequence. Alongside it the
@@ -36,8 +36,7 @@ machinery above the wire protocol, not part of it:
 Claim: `claim{id}` collects or re-awaits a request's unread messages. The claim
 acts as a stand-in request: unread messages are replayed — and future ones
 delivered — re-tagged to correlate to the claim itself, so `Client.call('claim',
-{'id': ...})` rides the replayed progress and returns the result exactly like
-the original call did. An unknown id — never sent through this session, or
+{'id': ...})` rides the replayed interim messages and returns the result exactly like the original call did. An unknown id — never sent through this session, or
 evicted — and a collected conversation (result already read; re-read it with a
 cursor check) get an immediate `result{denied}` (fail fast, not hang). The wait
 is a lock: while the current waiter's connection is alive, a competing claim
@@ -47,7 +46,7 @@ is claimable.
 
 Check: the `check{id, last_seen?}` sibling — always answered immediately, never
 superseding a live waiter, never marked as the conversation's reader unless a
-cursor asks it to. Replayed copies keep the conversation's own exchange id, and
+cursor asks it to. Replayed copies keep the conversation's own quest id, and
 the check's own closing report is `result{ok, value: {state, seq[, trail_id]}}`
 — correlation alone separates the two, so the reader never inspects payloads to
 tell them apart. `state` is `pending` (no result yet), `ready` (result retained,
@@ -149,7 +148,7 @@ class _Route:
   the retained conversation."""
 
   # None once the sending (or last claiming) connection is gone, or the result
-  # was delivered — the live exchange is over; the conversation stays retained
+  # was delivered — the live quest is over; the conversation stays retained
   waiter: Optional[_Connection]
   reply_to: str  # correlation id stamped on delivery: the request id, or the latest claim's id
   messages: list[Message] = field(default_factory=list)  # the conversation; messages[i] has seq i+1
@@ -171,10 +170,9 @@ class _Route:
 
 
 def _trail_id(route: _Route) -> Optional[Any]:
-  """the trail id of the conversation's started-progress, read or not, when one
-  carries it."""
+  """the trail id announced anywhere in the retained conversation."""
   for message in route.messages:
-    if message.type == Tag.PROGRESS and message.payload.get('trail_id') is not None:
+    if message.payload.get('trail_id') is not None:
       return message.payload['trail_id']
   return None
 
@@ -265,13 +263,9 @@ class Broxy:
       self._route_inbound(message, frame)
 
   def _route_inbound(self, message: Message, frame: bytes) -> None:
-    if message.type == Tag.REQUEST:
-      # v1 hosts open no exchanges toward a peer
-      log.warning('broxy: dropping upstream request %s (%s)', message.id, message.kind)
-      return
-    route = self._routes.get(message.exchange)
+    route = self._routes.get(message.quest_id)
     if route is None:  # e.g. the route was evicted, or its mailbox entry dropped
-      log.warning('broxy: dropping upstream message for unknown request %s', message.request)
+      log.warning('broxy: dropping upstream message for unknown quest %s', message.quest_id)
       return
     terminal = message.type == Tag.RESULT
     waiter = route.waiter
@@ -287,12 +281,12 @@ class Broxy:
       self._deliver(waiter, message, route.reply_to)
       route.read_up_to = len(route.messages)
       if terminal:
-        route.waiter = None  # the live exchange is over; the conversation stays retained
+        route.waiter = None  # the live quest is over; the conversation stays retained
     self._enforce_mailbox_bound()
 
   def _deliver(self, connection: _Connection, message: Message, reply_to: str) -> None:
-    if message.request != reply_to:
-      message = replace(message, request=reply_to)
+    if message.quest_id != reply_to:
+      message = replace(message, quest=reply_to)
     connection.writer.write(message.to_bytes() + b'\n')
 
   # --- local → upstream ------------------------------------------------------
@@ -331,7 +325,7 @@ class Broxy:
           if message.kind == CHECK_KIND:
             self._handle_check(connection, message)
             continue
-          self._register_route(message.exchange, connection)
+          self._register_route(message.quest_id, connection)
         assert self._upstream_writer is not None
         self._upstream_writer.write(frame + b'\n')
         await self._upstream_writer.drain()
@@ -350,13 +344,13 @@ class Broxy:
   def _handle_claim(self, connection: _Connection, claim: Message) -> None:
     claimed_id = claim.args.get('id')
     if not isinstance(claimed_id, str):
-      self._deny(connection, claim.exchange, "claim args must carry a string 'id'")
+      self._deny(connection, claim.quest_id, "claim args must carry a string 'id'")
       return
     route = self._routes.get(claimed_id)
     if route is None:
       self._deny(
         connection,
-        claim.exchange,
+        claim.quest_id,
         f'unknown request id {claimed_id} (not sent through this session, or evicted)',
       )
       return
@@ -367,40 +361,40 @@ class Broxy:
     if waiter is not None and waiter is not connection:
       # the wait is a lock: a live waiter keeps its route, the newcomer fails fast
       # (a killed waiter's connection is gone, so reclaiming it still works)
-      self._deny(connection, claim.exchange, f'request {claimed_id} is already being awaited')
+      self._deny(connection, claim.quest_id, f'request {claimed_id} is already being awaited')
       return
     if route.collected:
       self._deny(
         connection,
-        claim.exchange,
+        claim.quest_id,
         f'request {claimed_id} was already collected; re-read it with a check carrying last_seen',
       )
       return
     route.waiter = connection
-    route.reply_to = claim.exchange
+    route.reply_to = claim.quest_id
     unread = route.messages[route.read_up_to :]
     route.read_up_to = len(route.messages)
     for message in unread:  # replay copies; the retained conversation stays
-      self._deliver(connection, message, claim.exchange)
+      self._deliver(connection, message, claim.quest_id)
     if route.terminal_seq is not None:
       route.waiter = None  # replayed through the result; the conversation stays retained
 
   def _handle_check(self, connection: _Connection, check: Message) -> None:
     checked_id = check.args.get('id')
     if not isinstance(checked_id, str):
-      self._deny(connection, check.exchange, "check args must carry a string 'id'")
+      self._deny(connection, check.quest_id, "check args must carry a string 'id'")
       return
     last_seen = check.args.get('last_seen')
     if last_seen is not None and (
       isinstance(last_seen, bool) or not isinstance(last_seen, int) or last_seen < 0
     ):
-      self._deny(connection, check.exchange, "check 'last_seen' must be a non-negative integer")
+      self._deny(connection, check.quest_id, "check 'last_seen' must be a non-negative integer")
       return
     route = self._routes.get(checked_id)
     if route is None:
       self._deny(
         connection,
-        check.exchange,
+        check.quest_id,
         f'unknown request id {checked_id} (not sent through this session, or evicted)',
       )
       return
@@ -409,10 +403,10 @@ class Broxy:
       return
     if route.terminal_seq is not None and route.terminal_seq > route.read_up_to:
       # an unread result: replay the unread window as copies on the conversation's
-      # own exchange id, marking nothing — the peek consumes nothing and a later
+      # own quest id, marking nothing — the peek consumes nothing and a later
       # check or claim still finds it
       self._replay(connection, route.messages[route.read_up_to :])
-    self._report(connection, check.exchange, route)
+    self._report(connection, check.quest_id, route)
 
   def _cursor_read(self, connection: _Connection, check: Message, route: _Route, last_seen: int) -> None:  # fmt: skip
     """replay the conversation from `last_seen + 1` regardless of read status and
@@ -422,22 +416,22 @@ class Broxy:
     if last_seen > route.read_up_to:
       self._deny(
         connection,
-        check.exchange,
+        check.quest_id,
         f'last_seen {last_seen} is from the future (read up to {route.read_up_to})',
       )
       return
     self._replay(connection, route.messages[last_seen:])
     route.read_up_to = len(route.messages)
-    self._report(connection, check.exchange, route)
+    self._report(connection, check.quest_id, route)
 
   def _replay(self, connection: _Connection, messages: list[Message]) -> None:
-    """deliver window copies verbatim, on their own exchange id — no re-tag."""
+    """deliver window copies verbatim, on their own quest id — no re-tag."""
     for message in messages:
       connection.writer.write(message.to_bytes() + b'\n')
 
   def _report(self, connection: _Connection, check_id: str, route: _Route) -> None:
     """close the check with its own result — the conversation's read state; the
-    window copies preceding it carry the conversation's exchange id, so correlation
+    window copies preceding it carry the conversation's quest id, so correlation
     alone separates the report from a replayed result."""
     value: dict = {'state': route.state, 'seq': len(route.messages)}
     trail_id = _trail_id(route)
@@ -521,8 +515,7 @@ class CheckDenied(Exception):
 @dataclass(frozen=True)
 class CheckReport:
   """one check reading: the conversation state, its highest retained sequence
-  (the new cursor after a cursor read), the trail id retained from a started
-  progress (None where none was announced), and the window copies replayed
+  (the new cursor after a cursor read), the retained trail id (None where none was announced), and the window copies replayed
   before the report (empty on a plain pending/collected peek)."""
 
   state: str  # 'pending' | 'ready' | 'collected'
@@ -538,9 +531,9 @@ def check(
   last_seen: Optional[int] = None,
   timeout: Optional[float] = None,
 ) -> CheckReport:
-  """read one exchange's retained state over `client` — the `check` kind: the
+  """read one quest's retained state over `client` — the `check` kind: the
   non-marking peek without `last_seen`, the cursor read with it. Replayed window
-  copies keep the exchange's own id while the report correlates to the check
+  copies keep the quest's own id while the report correlates to the check
   itself, so the loop separates the two streams by correlation alone. Raises
   `CheckDenied` on a refused check, TimeoutError when nothing answers within
   `timeout` (default `CHECK_TIMEOUT`), ConnectionError on channel EOF."""
@@ -563,10 +556,10 @@ def check(
           f'no check reply within {bound:.0f}s — the session broxy is not answering'
         )
       raise ConnectionError('broker channel closed awaiting the check reply')
-    if message.request == check_request.id:
+    if message.quest_id == check_request.id:
       report = message
       break
-    if message.request == request_id:
+    if message.quest_id == request_id:
       conversation.append(message)
   if report.payload.get('outcome') != 'ok':
     raise CheckDenied(str(report.payload.get('error', report.payload)))
