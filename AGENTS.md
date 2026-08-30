@@ -30,7 +30,7 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
 
 - `./format.sh` — format and autofix the whole repository
 - `run-tests` — the test gate, a sequence of named stages:
-  `lint` (console-script drift, deptry, ruff),
+  `lint` (console-script drift, deptry, ruff's lint and format checks),
   `types` (pyright),
   `unit` (the pytest roster, run in parallel, then a second run in one process for the modules `run_tests.py` holds out of the pool),
   `benchmark` (the benchmark project's own: it syncs `benchmark/.venv` and runs pyright and pytest inside it, since the workspace venv cannot import `bro.benchmark` at all),
@@ -41,7 +41,7 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   `--changed` narrows the gate to what a diff against `--base` (default `origin/master`) can reach through the repository's import graph (`bro.dev.affected_tests`):
   `unit` drops the test modules the change cannot reach
   — a roster module with no source module of its own holds a repository-wide invariant and runs whatever changed;
-  `lint` runs `sync-scripts` and deptry only for the distributions the change lands in, leaving `ruff` repo-wide;
+  `lint` runs `sync-scripts` and deptry only for the distributions the change lands in, leaving both ruff checks repo-wide;
   `benchmark` is skipped whole unless the change reaches something that project imports or edits any project's metadata;
   and `types` is never narrowed, since pyright loads the dependency closure whatever file list it is given, so a shorter list hides errors instead of skipping work.
   Each stage names the scope it ran, and a stage the narrowing drops reads `skipped` in the closing verdict rather than going missing from it.
