@@ -13,6 +13,10 @@ from bro.workspace.project import project_sections_at
 _TARGET_NAME = re.compile(r'[a-z0-9][a-z0-9-]*')
 _REGISTRY_KEY = 'target-registry'
 
+# A plan command exits with this status to report a change it judges unsafe to deploy; any
+# other non-zero status means the plan did not complete, so nothing was checked.
+PLAN_UNSAFE_EXIT_CODE = 3
+
 
 def _non_empty(value: str, field: str) -> None:
   if not isinstance(value, str) or value == '':
@@ -82,6 +86,7 @@ class HTTPProbe:
 @dataclass(frozen=True)
 class DeployTarget:
   deploy: Command
+  plan: Optional[Command] = None
   verify: Optional[Command] = None
   ecs: Optional[ECSService] = None
   probe: Optional[HTTPProbe] = None

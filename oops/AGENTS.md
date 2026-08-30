@@ -21,7 +21,7 @@ The root repository owns formatting, lint, typing, packaging policy, and the tes
 - `bro/oops/infra/buildspec.yml` — consumer-configured CodeBuild image-build pattern
 - `bro/oops/infra/server_base/` — local-only base image for Python services
 - `deployment/app.py` — this repository's CDK entry point
-- `trails/server/` — trails image, credential store annotations, deployment, bootstrap, local-run, and verification scripts
+- `trails/server/` — trails image, credential store annotations, deployment, plan, bootstrap, local-run, and verification scripts
 - `image_build.sh` — the trails target used by the shared CodeBuild buildspec
 - `deploy_targets.py` — this repository's trails-server operations declaration
 

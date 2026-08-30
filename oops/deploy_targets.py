@@ -8,6 +8,7 @@ def _targets() -> dict[str, DeployTarget]:
   return {
     'trails-server': DeployTarget(
       deploy=Command('oops/trails/server/deploy.sh'),
+      plan=Command('oops/trails/server/plan.sh'),
       verify=Command('oops/trails/server/verify.sh'),
       ecs=ECSService(
         region=config.region,

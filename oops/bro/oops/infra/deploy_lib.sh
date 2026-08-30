@@ -241,6 +241,11 @@ trigger_image_build() {
   [ "$status" = "SUCCEEDED" ]
 }
 
+# The CDK CLI's diff output is a text contract `cdk_diff` scans, so plan and deploy run one
+# pinned CLI rather than whatever `npx` resolves on the day. Keep it at or above the cloud
+# assembly schema of the `aws-cdk-lib` pin in `oops/pyproject.toml`.
+_CDK_CLI_PACKAGE='aws-cdk@2.1139.0'
+
 cdk_deploy() {
   if [ "$#" -lt 2 ]; then
     echo "usage: cdk_deploy <cdk-directory> <stack> [cdk-argument ...]" >&2
@@ -249,7 +254,72 @@ cdk_deploy() {
   local cdk_directory="$1"
   shift
   (
-    cd "$cdk_directory"
-    CDK_CLI_TELEMETRY_OPTOUT=1 npx --yes cdk deploy "$@" --require-approval never
+    cd "$cdk_directory" || exit 1
+    CDK_CLI_TELEMETRY_OPTOUT=1 npx --yes --package "$_CDK_CLI_PACKAGE" -- \
+      cdk deploy "$@" --require-approval never
   )
+}
+
+_plan_unsafe_status() {
+  python3 -c 'from bro.oops.targets import PLAN_UNSAFE_EXIT_CODE; print(PLAN_UNSAFE_EXIT_CODE)'
+}
+
+# `cdk diff` emits no machine-readable impact signal: the only one is the field the CLI
+# prints last on a column-0 resource line, after the type, construct path and logical id and
+# before an optional move annotation. A logical id named for an impact is rendered exactly
+# like one carrying it, and a `Fn::ForEach::` entry goes through a formatter that states no
+# impact at all, so the scan flags both rather than letting a verdict it cannot resolve
+# through. The CLI writes the whole diff to stderr unless CI is set.
+_CDK_IMPACT_SCANNER="$(
+  cat <<'PY'
+import re
+import sys
+
+impact = re.compile(r'^\[[-+~]\] .* (replace|destroy|orphan|may be replaced)( \(OR .*)?$')
+loop = re.compile(r'^\[[-~]\] Fn::ForEach::')
+flagged = []
+for line in sys.stdin:
+  sys.stdout.write(line)
+  stripped = line.rstrip('\n')
+  if impact.match(stripped) or loop.match(stripped):
+    flagged.append(stripped)
+if len(flagged) > 0:
+  print('error: the plan cannot certify these live resources survive the deploy:', file=sys.stderr)
+  for line in flagged:
+    print(line, file=sys.stderr)
+  sys.exit(int(sys.argv[1]))
+PY
+)"
+
+cdk_diff() {
+  if [ "$#" -lt 2 ]; then
+    echo "usage: cdk_diff <cdk-directory> <stack> [stack ...]" >&2
+    return 2
+  fi
+  local cdk_directory="$1" stack unsafe_status
+  local -a statuses
+  shift
+  for stack in "$@"; do
+    # an option reaches the CLI's own verdict: `--security-only` alone drops every resource
+    # line, leaving the scan to read a stack the deploy destroys as a clean plan
+    if [ "${stack#-}" != "$stack" ]; then
+      echo "error: cdk_diff takes stack names only, not ${stack}" >&2
+      return 2
+    fi
+  done
+  unsafe_status="$(_plan_unsafe_status)"
+  ! (
+    cd "$cdk_directory" || exit 1
+    CDK_CLI_TELEMETRY_OPTOUT=1 npx --yes --package "$_CDK_CLI_PACKAGE" -- \
+      cdk diff --no-color --method=change-set "$@" 2>&1
+  ) | python3 -u -c "$_CDK_IMPACT_SCANNER" "$unsafe_status"
+  statuses=("${PIPESTATUS[@]}")
+  if [ "${statuses[0]}" -eq 0 ]; then
+    return "${statuses[1]}"
+  fi
+  # a run that never produced a diff says nothing about safety, whatever it exited with
+  if [ "${statuses[0]}" -eq "$unsafe_status" ]; then
+    return 1
+  fi
+  return "${statuses[0]}"
 }

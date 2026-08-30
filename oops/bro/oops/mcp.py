@@ -14,6 +14,7 @@ from bro.base import log, spawn
 from bro.llm.mcp import Context
 from bro.mcp import Toolset
 from bro.oops.targets import (
+  PLAN_UNSAFE_EXIT_CODE,
   Command,
   DeployTarget,
   ECSService,
@@ -28,7 +29,7 @@ from bro.workspace.paths import project_root
 _MAX_OUTPUT_LINES = 400
 _AWS_TIMEOUT = 60
 _PROBE_TIMEOUT = 20
-_VERIFY_TIMEOUT = 900
+_COMMAND_TIMEOUT = 900
 
 
 @dataclass
@@ -72,6 +73,20 @@ def _ecs(name: str, target: DeployTarget) -> ECSService:
   if target.ecs is None:
     raise ValueError(f'{name!r} declares no ECS service')
   return target.ecs
+
+
+def _plan_command(name: str, target: DeployTarget) -> Command:
+  if target.plan is None:
+    raise ValueError(f'{name!r} declares no plan command')
+  return target.plan
+
+
+def _plan_outcome(exit_code: int) -> str:
+  if exit_code == 0:
+    return 'clean'
+  if exit_code == PLAN_UNSAFE_EXIT_CODE:
+    return 'unsafe'
+  return 'failed'
 
 
 def _probe_spec(name: str, target: DeployTarget) -> HTTPProbe:
@@ -301,6 +316,7 @@ def list_targets(context: Context[OperationsState]) -> str:
   for name, target in context.state.targets.items():
     result[name] = {
       'deploy': _command_summary(target.deploy),
+      'plan': None if target.plan is None else _command_summary(target.plan),
       'verify': None if target.verify is None else _command_summary(target.verify),
       'ecs': (
         None
@@ -323,13 +339,31 @@ def list_targets(context: Context[OperationsState]) -> str:
 
 
 @toolset.tool(
+  'run a target plan command, which reports what deploying it would change in the live '
+  'account. outcome=clean means nothing destructive, outcome=unsafe names live resources '
+  'the plan cannot certify survive the deploy, and outcome=failed means the plan did not '
+  'complete, so nothing was checked.'
+)
+def plan(
+  context: Context[OperationsState],
+  target: str,
+  timeout_seconds: int = _COMMAND_TIMEOUT,
+) -> str:
+  selected = _target(context.state, target)
+  command = _command(context.state.root, _plan_command(target, selected))
+  result = _run_streaming(command, timeout_seconds, context.state.root)
+  outcome = _plan_outcome(result['exit_code'])
+  return json.dumps({**result, 'outcome': outcome, 'ok': outcome == 'clean'}, indent=2)
+
+
+@toolset.tool(
   'run a target verification command, or wait for its ECS service and run its HTTP probe '
   'when no command is declared. Returns ok=true only when verification succeeds.'
 )
 def verify(
   context: Context[OperationsState],
   target: str,
-  timeout_seconds: int = _VERIFY_TIMEOUT,
+  timeout_seconds: int = _COMMAND_TIMEOUT,
 ) -> str:
   selected = _target(context.state, target)
   return json.dumps(_verify(context.state, target, selected, timeout_seconds), indent=2)
@@ -344,7 +378,7 @@ def restart(
   context: Context[OperationsState],
   target: str,
   dry_run: bool,
-  timeout_seconds: int = _VERIFY_TIMEOUT,
+  timeout_seconds: int = _COMMAND_TIMEOUT,
 ) -> str:
   selected = _target(context.state, target)
   ecs = _ecs(target, selected)

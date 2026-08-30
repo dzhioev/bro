@@ -24,18 +24,22 @@ In any other checkout it builds the exact bro revision resolved by the consumer'
 
 ## Operations
 
-The `devoops` persona mounts the `infra` toolset for deploy, verify, restart, ECS status, and HTTP probe operations.
+The `devoops` persona mounts the `infra` toolset for plan, verify, restart, ECS status, and HTTP probe operations.
 It adds brog task tools only when a `brog` credential resolves, so the same persona works with any contributed brog backend.
 Its credential manifest is the union of the active target registry, the optional brog component, and the selected harness tools.
 
 Each consuming repository points `[tool.bro.devoops].target-registry` at a `module:attribute` holding a `TargetRegistry`.
-The registry declares its credential requirements and lazily produces named `DeployTarget` values with repository-relative deploy and verification commands.
+The registry declares its credential requirements and lazily produces named `DeployTarget` values with repository-relative deploy, plan, and verification commands.
+A plan reports what deploying the target would change in the live account, and its exit status carries the verdict:
+a change it judges unsafe exits with `bro.oops.targets.PLAN_UNSAFE_EXIT_CODE`, and any other non-zero status means the plan never reached a verdict at all.
+The deploy spell runs it before every deploy and stops on either, so a target's plan command is where the veto over a destructive change lives.
+A target that declares none has no veto, and the spell stops for the same explicit authorization rather than deploying it unplanned.
 Targets may also declare ECS coordinates, changed-path prefixes, and an HTTP probe.
 Probe authentication is data on the probe:
 a fixed header value or an SSM parameter-backed header can be selected without target-specific tool code.
 
 This repository's registry is `oops.deploy_targets:registry`.
-Its `trails-server` target resolves region, cluster, service, and URL from the `infra` credential and runs `oops/trails/server/deploy.sh` and `oops/trails/server/verify.sh`.
+Its `trails-server` target resolves region, cluster, service, and URL from the `infra` credential and runs `oops/trails/server/deploy.sh`, `oops/trails/server/plan.sh`, and `oops/trails/server/verify.sh`.
 
 ## CDK constructs
 
@@ -67,6 +71,13 @@ Its DynamoDB table, key, and index declarations come from `bro.trails.server.dyn
 
 The repository app is `deployment/app.py`, and `trails/server/deploy.sh` deploys its stacks in dependency order.
 `trails/server/bootstrap.sh` creates the runtime token parameter, `run_local.sh` serves a local store, `verify_image.sh` smoke-tests the image, and `verify.sh` monitors the ECS rollout before probing health.
+`plan.sh` diffs the stack roster `deployment_config.sh` declares
+— the one `deploy.sh` rolls, in the two groups the image build sits between.
+`cdk_diff` reports an unsafe plan for a resource the deploy would replace, destroy or orphan,
+and for a resource loop the CLI renders without stating any impact.
+It asks for the verdict CloudFormation itself gives, so a plan creates and deletes a change set on each stack through the deploy role rather than only reading the account.
+The CLI's rendered text puts a logical id and an impact in the same field, so a resource named for one reads as carrying it and the scan errs toward reporting unsafe.
+It runs before the image build, and the service stack synthesizes its image digest from the repository's `latest` tag, so the diff carries structural change alone rather than the task-definition churn every image roll causes.
 The image uses the shared `bro-server-base`, and `image_build.sh` stages the framework wheel through `deploy_lib.sh` before pushing both commit and latest tags.
 
 ## Development

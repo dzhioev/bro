@@ -12,6 +12,7 @@ from bro.llm.mcp import Context
 from bro.mcp import mount
 from bro.oops import mcp
 from bro.oops.targets import (
+  PLAN_UNSAFE_EXIT_CODE,
   Command,
   DeployTarget,
   ECSService,
@@ -53,6 +54,8 @@ def test_repository_registry_declares_trails_server_from_infra_config(monkeypatc
 
   assert target.deploy == Command('oops/trails/server/deploy.sh')
   assert target.verify == Command('oops/trails/server/verify.sh')
+  assert target.plan is not None
+  assert mcp._command(_ROOT, target.plan)
   assert target.ecs == ECSService('example-region', 'example-cluster', 'example-service')
   assert target.probe == HTTPProbe('https://trails.services.example.com/health')
   assert deploy_targets.registry.needed_secrets == ('aws', 'github', 'infra')
@@ -64,14 +67,13 @@ def test_toolset_manifest_follows_the_project_registry():
   assert mount(mcp.toolset).server_specs[0].needed_secrets == registry.needed_secrets
 
 
-def test_roster_reports_the_repository_relative_deploy_command(tmp_path):
-  # the deploy spell runs this command itself as a backgrounded shell job, so the
-  # roster is the only place it learns what to run.
+def test_roster_reports_a_repository_relative_command_and_a_null_plan(tmp_path):
   target = DeployTarget(deploy=Command('oops/trails/server/deploy.sh', ('--flag',)))
 
   roster = json.loads(mcp.list_targets(Context(_state(tmp_path, target))))
 
   assert roster['service']['deploy'] == 'oops/trails/server/deploy.sh --flag'
+  assert roster['service']['plan'] is None
 
 
 def test_commands_cannot_escape_the_repository(tmp_path):
@@ -113,6 +115,51 @@ def test_verify_runs_the_declared_command(tmp_path, monkeypatch):
 
   assert result['ok'] is True
   assert calls == [([f'{tmp_path}/verify.sh'], tmp_path)]
+
+
+def test_plan_runs_the_declared_command(tmp_path, monkeypatch):
+  target = DeployTarget(deploy=_command(tmp_path, 'deploy.sh'), plan=_command(tmp_path, 'plan.sh'))
+  calls = []
+  monkeypatch.setattr(
+    mcp,
+    '_run_streaming',
+    lambda command, timeout_seconds, cwd: (
+      calls.append((command, cwd)) or {'command': 'plan', 'exit_code': 0, 'output': 'no changes'}
+    ),
+  )
+
+  result = json.loads(mcp.plan(Context(_state(tmp_path, target)), 'service'))
+
+  assert (result['outcome'], result['ok']) == ('clean', True)
+  assert calls == [([f'{tmp_path}/plan.sh'], tmp_path)]
+
+
+def test_plan_separates_an_unsafe_change_from_one_it_never_judged(tmp_path, monkeypatch):
+  target = DeployTarget(deploy=_command(tmp_path, 'deploy.sh'), plan=_command(tmp_path, 'plan.sh'))
+  exit_codes = iter((PLAN_UNSAFE_EXIT_CODE, 1))
+  monkeypatch.setattr(
+    mcp,
+    '_run_streaming',
+    lambda command, timeout_seconds, cwd: {
+      'command': 'plan',
+      'exit_code': next(exit_codes),
+      'output': '',
+    },
+  )
+  context = Context(_state(tmp_path, target))
+
+  unsafe = json.loads(mcp.plan(context, 'service'))
+  never_judged = json.loads(mcp.plan(context, 'service'))
+
+  assert (unsafe['outcome'], unsafe['ok']) == ('unsafe', False)
+  assert (never_judged['outcome'], never_judged['ok']) == ('failed', False)
+
+
+def test_plan_is_refused_for_a_target_that_declares_none(tmp_path):
+  target = DeployTarget(deploy=_command(tmp_path, 'deploy.sh'))
+
+  with pytest.raises(ValueError, match='declares no plan command'):
+    mcp.plan(Context(_state(tmp_path, target)), 'service')
 
 
 def test_restart_uses_the_target_ecs_coordinates(tmp_path, monkeypatch):
