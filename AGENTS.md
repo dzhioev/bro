@@ -364,6 +364,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
 - `registry.py` — process-wide registry of bro classes:
   `register(cls)`, `get_class(name)`, `create_bro(name, llm_spec=None)`, `list_classes()`, `known_names()` (every resolvable name, read without importing any bro module — what `ride/ride/summon_control.py` validates summon targets against).
   `create_bro` returns a fresh instance every call.
+  `lineage(name)` is the names a bro answers to — its own plus every registered bro on its MRO, which is what `#may_summon`'s is-a membership tests against.
   `declared_specs()` is the one name source:
   `name -> "module:ClassName"` read from every installed distribution's `bro` entry points, metadata only, importing nothing
   — two distributions claiming one name raise rather than letting import order decide.

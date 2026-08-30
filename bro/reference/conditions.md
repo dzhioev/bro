@@ -109,7 +109,12 @@ Two more facts sit outside the triple.
 The session-level text surfaces
 — prompt composition, spell bodies, ride's append prompt
 — supply it, so a spell can gate a delegation branch on a target being summonable:
-`{{when #may_summon contains eyebro}}`.
+`{{when #may_summon contains reviewer}}`.
+Membership is is-a rather than verbatim:
+a granted bro answers to every registered bro it derives from (`bro.registry.lineage`),
+so an `AcmeReviewer(Reviewer)` grant satisfies `contains reviewer`.
+Only the fact widens
+— the host authorizes a summon against the granted names themselves, so a text that resolves a role reads the concrete grant off the banner.
 The universe is the installed persona names plus the list itself, so a typo'd target fails every render while a granted-but-uninstalled one still tests.
 No ready-made placeholder is exported.
 

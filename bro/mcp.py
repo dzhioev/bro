@@ -73,12 +73,13 @@ def render_text(
   `#creds` (the closed universe; membership probes `credentials.available`
   lazily, so render in the process that consumes the text, where the store is
   the session's own), `may_summon` → `#may_summon` (the session's effective
-  summon allow-list — `bro.summon.effective_may_summon()`; the universe adds
-  the installed persona names, so a granted-but-uninstalled target still
-  tests), `hold` → `#hold` (hold text only — supplied by
-  `bro.prompts.hold_fragment`, no other call site). A fact left None defines no
-  variable, so a directive referencing it raises. `extra` merges a
-  caller-owned domain vocabulary next to the facts (same shape as
+  summon allow-list — `bro.summon.effective_may_summon()`; membership is is-a,
+  so a granted bro answers to the bros it derives from (`registry.lineage`) as
+  well as to its own name, and the universe adds the installed persona names,
+  so a granted-but-uninstalled target still tests), `hold` → `#hold` (hold text
+  only — supplied by `bro.prompts.hold_fragment`, no other call site). A fact
+  left None defines no variable, so a directive referencing it raises. `extra`
+  merges a caller-owned domain vocabulary next to the facts (same shape as
   `FunctionTool`'s `variables`); its names shadow same-named facts.
   `{{include <name>}}` targets resolve through the `prompts` loader. The
   directive reference is `reference/template.md`. Ordinary MCP-server tool
@@ -131,6 +132,22 @@ def _persona_names() -> frozenset[str]:
   return frozenset(registry.declared_specs())
 
 
+def _answers_to(granted: frozenset[str]) -> Callable[[str], bool]:
+  """`#may_summon`'s membership probe: a granted bro answers to the bros it
+  derives from as well as to its own name."""
+
+  def probe(name: str) -> bool:
+    if name in granted:
+      return True
+    # lazy: resolving a lineage imports the granted bro's module, which a text
+    # that never tests the fact must not pay for
+    from bro import registry
+
+    return any(name in registry.lineage(target) for target in granted)
+
+  return probe
+
+
 def surface_variables(
   *,
   harness: Optional[Harness] = None,
@@ -155,8 +172,10 @@ def surface_variables(
   if creds is not None:
     variables['creds'] = condition.SetVariable(credentials.available, universe=frozenset(creds))
   if may_summon is not None:
-    members = frozenset(may_summon)
-    variables['may_summon'] = condition.SetVariable(members, universe=members | _persona_names())
+    granted = frozenset(may_summon)
+    variables['may_summon'] = condition.SetVariable(
+      _answers_to(granted), universe=granted | _persona_names()
+    )
   if hold is not None:
     if hold not in _HOLDS:
       raise ValueError(f'unknown hold {hold!r}; known: {", ".join(HOLDS)}')

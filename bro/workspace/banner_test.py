@@ -2,7 +2,7 @@ import pytest
 
 import bro.workspace.banner as workspace_banner
 import bro.workspace.paths as workspace_paths
-from bro import summon
+from bro import registry, summon
 from bro.monitor import trail_pointer
 from bro.workspace.banner import SessionFacts
 
@@ -215,7 +215,18 @@ class TestRenderBanner:
     )
 
   def test_llm_lists_the_summon_targets(self):
-    assert 'may_summon: dev, reviewer' in _facts(may_summon=('dev', 'reviewer')).render_llm()
+    assert (
+      'may_summon: deployer, reviewer' in _facts(may_summon=('deployer', 'reviewer')).render_llm()
+    )
+
+  def test_llm_marks_the_names_an_entry_answers_to(self, monkeypatch):
+    monkeypatch.setattr(
+      registry,
+      'lineage',
+      lambda name: (name, 'reviewer', 'bro') if name == 'house-reviewer' else (name,),
+    )
+    out = _facts(may_summon=('house-reviewer', 'deployer')).render_llm()
+    assert 'may_summon: house-reviewer (reviewer, bro), deployer' in out
 
   def test_llm_spells_out_an_empty_allow_list(self):
     # distinguishable from the omitted line of a launch that published no list
@@ -233,8 +244,8 @@ class TestRenderBanner:
     assert 'trail_id: 01trail' in _facts(trail_id='01trail').render_llm()
 
   def test_visual_shows_the_summon_targets_and_trail(self):
-    out = _facts(may_summon=('dev',), trail_id='01trail').render_visual()
-    assert 'may summon:   \033[2mdev\033[0m' in out
+    out = _facts(may_summon=('deployer',), trail_id='01trail').render_visual()
+    assert 'may summon:   \033[2mdeployer\033[0m' in out
     assert 'trail:        \033[2m01trail\033[0m' in out
 
   def test_visual_shows_an_empty_allow_list(self):

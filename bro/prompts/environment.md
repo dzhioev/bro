@@ -37,6 +37,13 @@ Interpret them as follows:
    `may_summon: none` means this session may summon nobody,
    and the line's absence means the launcher published no list (an unmanaged environment).
    A listed target can still be denied for another reason, but an unlisted one always is.
+   An entry answers to the bros it derives from as well as to its own name,
+   and the line marks it with them:
+   an entry shown as `acme-reviewer (reviewer, bro)` is the `reviewer` a text asking for one means.
+   The summon still targets the listed name itself
+   — a name an entry merely answers to is denied unless it is listed in its own right.
+   Where several entries answer to one role they all qualify;
+   pick by their descriptions.
    The list is fixed at launch and nothing in-session widens it;
    widening means relaunching with `--grant @<bro>`, which is the user's call.
 

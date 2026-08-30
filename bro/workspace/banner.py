@@ -41,6 +41,19 @@ def _split_launch_prompt(command: str) -> tuple[str, Optional[str]]:
   return command, None
 
 
+def _render_summon_targets(names: tuple[str, ...]) -> str:
+  """the allow-list entries, each marked with the further names it answers to."""
+  # lazy: the registry import pulls the bro class graph, which importers of
+  # this module must not pay for up front
+  from bro.registry import lineage
+
+  marked: list[str] = []
+  for name in names:
+    inherited = lineage(name)[1:]
+    marked.append(f'{name} ({", ".join(inherited)})' if len(inherited) > 0 else name)
+  return ', '.join(marked)
+
+
 @dataclass(frozen=True)
 class SessionFacts:
   """the session facts `ride banner` renders, collected from env + /.dockerenv.
@@ -207,7 +220,7 @@ class SessionFacts:
       rows.append(('summoned:', '', f'{dim}yes — a summoner is waiting on the answer{reset}'))
 
     if self.may_summon is not None:
-      targets = ', '.join(self.may_summon) if len(self.may_summon) > 0 else '(none)'
+      targets = _render_summon_targets(self.may_summon) if len(self.may_summon) > 0 else '(none)'
       rows.append(('may summon:', '', f'{dim}{targets}{reset}'))
 
     if self.trail_id is not None:
@@ -260,7 +273,7 @@ class SessionFacts:
     if self.may_summon is not None:
       # spelled out when empty: "this session may summon nobody" is a different
       # answer from a launch surface that publishes no list at all
-      targets = ', '.join(self.may_summon) if len(self.may_summon) > 0 else 'none'
+      targets = _render_summon_targets(self.may_summon) if len(self.may_summon) > 0 else 'none'
       lines.append(f'may_summon: {targets}')
     trail = self.trail_id if self.trail_id is not None else 'none (not published)'
     lines.append(f'trail_id: {trail}')
