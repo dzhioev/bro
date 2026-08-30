@@ -27,6 +27,7 @@ run those with `--help` for flags.
   it is assembled from `bro/base/registry.json` and installed `bro.credentials` contributions.
   `Store(registry, store_dir, selection)` reads one exclusive directory:
   plain material is `creds/<name>.cred`, and `creds.json` may annotate one typed source per name (`ssm` or a `bro.credential_sources` minting type).
+  A stored name is `kind+instance` spelled `kind` when the instance is empty, and a store carrying the other spelling of that name fails at construction.
   `get` / `get_json` / `try_get` / `available` address kinds through the explicit selection;
   the `get_instance` siblings address the stored name exactly.
   `default_store()` binds an ambient store lazily from host-config defaults plus the CLI basename's tool layer,

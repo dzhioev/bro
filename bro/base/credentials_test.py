@@ -30,7 +30,7 @@ def _write_sources(store_dir: Path, data: object) -> None:
 def _store(
   store_dir: Path,
   *names: str,
-  selection: dict[str, str | None] | None = None,
+  selection: dict[str, str] | None = None,
 ) -> credentials.Store:
   return credentials.Store(_registry(*names), store_dir, selection or {})
 
@@ -117,17 +117,31 @@ class TestStore:
     assert store.get_instance('github') == 'bare'
     assert store.get_instance('github+reviewer') == 'selected'
 
-  def test_selected_bare_instance_is_explicit(self, tmp_path: Path):
-    _write_material(tmp_path, 'github', 'bare')
-    store = _store(tmp_path, 'github', selection={'github': None})
+  def test_the_empty_instance_is_selectable_like_any_other(self, tmp_path: Path):
+    _write_material(tmp_path, 'github', 'default')
+    _write_material(tmp_path, 'github+bot', 'bot')
+    store = _store(tmp_path, 'github', selection={'github': ''})
 
-    assert store.get('github') == 'bare'
+    assert store.get('github') == 'default'
+    assert store.get_instance('github+') == 'default'
+
+  def test_material_spelling_the_empty_instance_long_fails_at_construction(self, tmp_path: Path):
+    _write_material(tmp_path, 'github+', 'material')
+
+    with pytest.raises(ValueError, match="'github\\+', which spells the stored name 'github'"):
+      _store(tmp_path, 'github')
+
+  def test_annotation_spelling_the_empty_instance_long_fails_at_construction(self, tmp_path: Path):
+    _write_sources(tmp_path, {'github+': {'type': 'ssm', 'parameter': '/p'}})
+
+    with pytest.raises(ValueError, match='which spells the stored name'):
+      _store(tmp_path, 'github')
 
   def test_invalid_selection_fails_at_construction(self, tmp_path: Path):
     with pytest.raises(ValueError, match='unknown credential kind'):
       credentials.Store(_registry('github'), tmp_path, {'brog': 'github'})
     with pytest.raises(ValueError, match='storage instance'):
-      credentials.Store(_registry('github'), tmp_path, {'github+bot': None})
+      credentials.Store(_registry('github'), tmp_path, {'github+bot': 'x'})
 
   def test_missing_selected_instance_names_the_storage_name(self, tmp_path: Path):
     store = _store(tmp_path, 'github', selection={'github': 'reviewer'})

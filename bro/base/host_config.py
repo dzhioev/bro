@@ -19,8 +19,8 @@ Selections live outside repositories and merge from general to specific:
       "llm": {"sharp": "openai:sol:max"}
     }
 
-Every `creds` entry is `kind+instance`, or `kind+` to select the kind's bare
-`creds/<kind>.cred` material.
+Every `creds` entry is `kind+instance`, the instance left empty (`kind+`) to
+select the kind's empty instance.
 A list may name each kind once.
 The grammar is installation-independent, so selections for unknown kinds remain
 valid and are carried in the returned mappings.
@@ -31,7 +31,7 @@ a normalized git URL.
 A repository attached both ways therefore carries an entry per identity.
 Launch selection precedence is project-bro, project, then defaults; tool
 selection precedence is tool, then defaults.
-A kind no layer selects resolves to the store's default instance.
+A kind no layer selects reads its empty instance.
 The returned layer map attributes every explicit selection.
 
 The file is optional.
@@ -70,21 +70,21 @@ _RETIRED_INSTANCES_KEY = 'instances'
 class CredentialSelection:
   """A merged kind-to-instance selection and its host-config provenance."""
 
-  instances: dict[str, Optional[str]]
+  instances: dict[str, str]
   layers: dict[str, str]
 
 
 @dataclass(frozen=True)
 class _Project:
-  credentials: dict[str, Optional[str]]
-  bros: dict[str, dict[str, Optional[str]]]
+  credentials: dict[str, str]
+  bros: dict[str, dict[str, str]]
 
 
 @dataclass(frozen=True)
 class _Config:
-  defaults: dict[str, Optional[str]]
+  defaults: dict[str, str]
   projects: dict[str, _Project]
-  tools: dict[str, dict[str, Optional[str]]]
+  tools: dict[str, dict[str, str]]
   llm: dict[str, str]
 
 
@@ -158,10 +158,8 @@ def _matching_project(config: _Config, attachment: Optional[str]) -> Optional[_P
   return config.projects.get(_attachment_key(attachment))
 
 
-def _merged(
-  layers: list[tuple[str, dict[str, Optional[str]]]],
-) -> CredentialSelection:
-  instances: dict[str, Optional[str]] = {}
+def _merged(layers: list[tuple[str, dict[str, str]]]) -> CredentialSelection:
+  instances: dict[str, str] = {}
   sources: dict[str, str] = {}
   for layer, selection in layers:
     instances.update(selection)
@@ -190,7 +188,7 @@ def _project(path: Path, project: str, value: object) -> _Project:
   bros = value.get(_BROS_KEY, {})
   if not isinstance(bros, dict):
     raise ValueError(f'{where}: {_BROS_KEY} must be a json object')
-  parsed_bros: dict[str, dict[str, Optional[str]]] = {}
+  parsed_bros: dict[str, dict[str, str]] = {}
   for bro, entry in bros.items():
     if bro == '':
       raise ValueError(f'{where}: bro name must not be empty')
@@ -198,10 +196,10 @@ def _project(path: Path, project: str, value: object) -> _Project:
   return _Project(selection, parsed_bros)
 
 
-def _tools(path: Path, value: object) -> dict[str, dict[str, Optional[str]]]:
+def _tools(path: Path, value: object) -> dict[str, dict[str, str]]:
   if not isinstance(value, dict):
     raise ValueError(f'{path}: {_TOOLS_KEY} must be a json object')
-  tools: dict[str, dict[str, Optional[str]]] = {}
+  tools: dict[str, dict[str, str]] = {}
   for name, entry in value.items():
     if name == '':
       raise ValueError(f'{path}: tool name must not be empty')
@@ -209,7 +207,7 @@ def _tools(path: Path, value: object) -> dict[str, dict[str, Optional[str]]]:
   return tools
 
 
-def _selection_object(path: Path, subject: str, value: object) -> dict[str, Optional[str]]:
+def _selection_object(path: Path, subject: str, value: object) -> dict[str, str]:
   where = f'{path}: {subject}' if not subject.startswith(f'{path}:') else subject
   if not isinstance(value, dict):
     raise ValueError(f'{where} must hold a json object')
@@ -225,10 +223,10 @@ def _reject_unknown_fields(value: dict, allowed: set[str], where: str) -> None:
     raise ValueError(f'{where} has unknown field(s): {", ".join(unknown)}')
 
 
-def _selection_entries(where: str, entries: object) -> dict[str, Optional[str]]:
+def _selection_entries(where: str, entries: object) -> dict[str, str]:
   if not isinstance(entries, list):
     raise ValueError(f'{where}: {_CREDS_KEY} must be a list')
-  selection: dict[str, Optional[str]] = {}
+  selection: dict[str, str] = {}
   for entry in entries:
     kind, instance = _parse_selection(where, entry)
     if kind in selection:
@@ -237,17 +235,17 @@ def _selection_entries(where: str, entries: object) -> dict[str, Optional[str]]:
   return selection
 
 
-def _parse_selection(where: str, entry: object) -> tuple[str, Optional[str]]:
+def _parse_selection(where: str, entry: object) -> tuple[str, str]:
   if not isinstance(entry, str):
     raise ValueError(f'{where}: selection {entry!r} must be a string')
   kind, separator, instance = entry.partition('+')
   if separator == '':
     raise ValueError(
       f'{where}: selection {entry!r} names no instance; write '
-      f"'{entry}+<instance>', or '{entry}+' for the kind's bare material"
+      f"'{entry}+<instance>', or '{entry}+' for the kind's empty instance"
     )
-  credentials.parse_name(kind if instance == '' else entry)
-  return kind, instance if instance != '' else None
+  credentials.parse_name(entry)
+  return kind, instance
 
 
 def _attachment_key(attachment: str) -> str:

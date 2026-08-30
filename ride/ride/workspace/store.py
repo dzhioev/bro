@@ -27,7 +27,7 @@ class ScopedSecrets:
 
   required: set[str]
   optional: set[str]
-  selection: dict[str, Optional[str]] = field(default_factory=dict)
+  selection: dict[str, str] = field(default_factory=dict)
 
   def __post_init__(self) -> None:
     for name in self.required | self.optional:
@@ -72,8 +72,8 @@ def finalize_scoped_secrets(
     if instance is None:
       if kind in scoped_kinds:
         raise ValueError(f'cannot grant {kind!r}: already in the scoped credential set')
-    elif kind in required and selection.get(kind) == instance:
-      name = f'{kind}+{instance}'
+    elif kind in required and selection.get(kind, '') == instance:
+      name = credentials.storage_name(kind, instance)
       raise ValueError(f'cannot grant {name!r}: already selected in the scoped credential set')
     else:
       selection[kind] = instance

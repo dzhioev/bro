@@ -124,7 +124,7 @@ The optional host config selects stored credential instances per consumer:
 ```
 
 Every selection list is named `creds`.
-An entry is `kind+instance`, or `kind+` to select the kind's bare `creds/<kind>.cred` material;
+An entry is `kind+instance`, its instance left empty (`kind+`) to select the kind's empty instance;
 one list may name a kind once.
 The retired `instances` field is rejected with `creds` named as its replacement.
 Validation is grammar-only, so shared dotfiles may carry kinds an installation does not register.
@@ -134,7 +134,8 @@ A matching `projects.<attachment>.creds` layer overrides it for a checkout path 
 and `projects.<attachment>.bros.<bro>.creds` overrides that for one exact bro name.
 A host CLI instead applies `tools.<cli>.creds` over defaults, keyed by its console-script basename.
 Launch and tool layers are disjoint.
-Most-specific precedence is launch flag, project-bro, project, tool for a host CLI, defaults, then bare material.
+Most-specific precedence is launch flag, project-bro, project, tool for a host CLI, then defaults;
+a kind no layer selects reads its empty instance.
 
 A launch whose attachment no project entry names simply reads the layers that do apply, ending at the kind's own stored material.
 A launch can still override its computed selection with `--grant kind+instance`.

@@ -65,7 +65,7 @@ Use safe metadata already present in a configuration value
 
 For each needed kind, sort the host into one of three cases:
 
-- **one suitable instance** — leave the more-specific layer empty when defaults or bare material already selects it correctly.
+- **one suitable instance** — leave the more-specific layer empty when defaults or the kind's empty instance already selects it correctly.
 - **several instances** — show the user the non-secret distinctions and ask which this consumer should read.
 - **nothing behind the kind** — report it.
   Say what the registry description says the kind is for and what store name is expected.
@@ -75,8 +75,9 @@ For each needed kind, sort the host into one of three cases:
 ## 4. Choose the owning layer
 
 Read `bro/base/host_config.py`'s module docstring before editing the file.
-Its precedence is launch flag, project-bro, project, tool for a host CLI, defaults, then bare material.
-Every list is named `creds` and carries `kind+instance`, or `kind+` for bare material.
+Its precedence is launch flag, project-bro, project, tool for a host CLI, then defaults;
+a kind no layer selects reads its empty instance.
+Every list is named `creds` and carries `kind+instance`, the instance left empty (`kind+`) for the kind's own `creds/<kind>.cred`.
 
 Put a host-wide choice in `defaults.creds` only when unrelated projects should read it.
 Put a repository-wide choice in `projects.<attachment>.creds`.

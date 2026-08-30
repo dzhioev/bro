@@ -359,7 +359,7 @@ def _credential_refusal(
   for grant in grant_credentials:
     kind, instance = credentials.parse_name(grant)
     if kind not in held_kinds or (
-      instance is not None and held_scope.selection.get(kind) != instance
+      instance is not None and held_scope.selection.get(kind, '') != instance
     ):
       beyond.append(grant)
   if len(beyond) > 0:
