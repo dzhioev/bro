@@ -141,32 +141,54 @@ class TestLaunchSelection:
 
 
 class TestToolSelection:
-  def test_tool_overrides_defaults_and_never_refuses_launch_kinds(self, config_file, tmp_path):
+  def test_each_layer_overrides_the_one_above_it(self, config_file, tmp_path):
     config_file(
       {
-        'defaults': {'creds': ['trails+write', 'github+dev']},
+        'defaults': {'creds': ['trails+write', 'github+dev', 'aws+shared']},
+        'user': {
+          'creds': ['github+me', 'brog+linear'],
+          'tools': {'bro.trails.rewind': {'creds': ['trails+analyst', 'openai+benchmark']}},
+        },
         'projects': {str(tmp_path): {'creds': ['brog+github']}},
-        'tools': {'rewind': {'creds': ['trails+analyst', 'openai+benchmark']}},
       }
     )
 
-    selected = host_config.tool_selection('rewind')
+    selected = host_config.tool_selection('bro.trails.rewind')
 
     assert selected.instances == {
       'trails': 'analyst',
-      'github': 'dev',
+      'github': 'me',
+      'brog': 'linear',
+      'aws': 'shared',
       'openai': 'benchmark',
     }
     assert selected.layers == {
       'trails': host_config.TOOL_LAYER,
-      'github': host_config.DEFAULTS_LAYER,
+      'github': host_config.USER_LAYER,
+      'brog': host_config.USER_LAYER,
+      'aws': host_config.DEFAULTS_LAYER,
       'openai': host_config.TOOL_LAYER,
     }
 
-  def test_unknown_tool_uses_defaults(self, config_file):
-    config_file({'defaults': {'creds': ['github+dev']}})
+  def test_unknown_command_uses_the_layers_above_it(self, config_file):
+    config_file({'defaults': {'creds': ['github+dev']}, 'user': {'creds': ['brog+linear']}})
 
-    assert host_config.tool_selection('other').instances == {'github': 'dev'}
+    assert host_config.tool_selection('other').instances == {
+      'github': 'dev',
+      'brog': 'linear',
+    }
+
+  def test_a_tools_key_naming_the_invoked_alias_is_rejected(self, config_file):
+    config_file({'user': {'tools': {'rewind': {'creds': ['trails+analyst']}}}})
+
+    with pytest.raises(ValueError, match="names 'rewind', an alias of 'bro.trails.rewind'"):
+      host_config.tool_selection('bro.trails.rewind', invoked_as='rewind')
+
+  def test_a_retired_top_level_tools_section_names_its_home(self, config_file):
+    config_file({'tools': {'bro.trails.rewind': {'creds': ['trails+analyst']}}})
+
+    with pytest.raises(ValueError, match="top-level 'tools' is retired; nest it under 'user'"):
+      host_config.tool_selection(None)
 
 
 class TestValidation:
@@ -212,8 +234,9 @@ class TestValidation:
       ({'projects': []}, 'projects must be a json object'),
       ({'projects': {'/repo': {'bros': []}}}, 'bros must be a json object'),
       ({'projects': {'/repo': {'bros': {'dev': []}}}}, 'must hold a json object'),
-      ({'tools': []}, 'tools must be a json object'),
-      ({'tools': {'rewind': []}}, 'must hold a json object'),
+      ({'user': []}, 'user must hold a json object'),
+      ({'user': {'tools': []}}, 'tools must be a json object'),
+      ({'user': {'tools': {'bro.trails.rewind': []}}}, 'must hold a json object'),
       ({'credentials': {}}, 'unknown key'),
     ],
   )
@@ -224,7 +247,7 @@ class TestValidation:
       host_config.tool_selection(None)
 
   def test_every_section_is_validated_on_every_read(self, config_file):
-    config_file({'tools': {'broken': {'creds': ['github']}}})
+    config_file({'user': {'tools': {'broken.command': {'creds': ['github']}}}})
 
     with pytest.raises(ValueError, match='names no instance'):
       host_config.llm_presets()

@@ -30,7 +30,7 @@ run those with `--help` for flags.
   A stored name is `kind+instance` spelled `kind` when the instance is empty, and a store carrying the other spelling of that name fails at construction.
   `get` / `get_json` / `try_get` / `available` address kinds through the explicit selection;
   the `get_instance` siblings address the stored name exactly.
-  `default_store()` binds an ambient store lazily from host-config defaults plus the CLI basename's tool layer,
+  `default_store()` binds an ambient store lazily from the host config's `defaults`, `user`, and running command's layers,
   and bypasses that config entirely when `BRO_STORE` directs the process.
   `$cred` references expand during resolution, with kind targets applying the same selection and instance targets reading storage directly.
   `known_names()` is the code registry's kinds, while the CLI's `--instance` list enumerates the store directory and typed annotations.
@@ -42,7 +42,7 @@ run those with `--help` for flags.
 - `host_config.py` — the host's credential selection policy (`~/.bro.json`):
   `project_selection(attachment)` merges `defaults` and the matching project's `creds`,
   `launch_selection(attachment, bro)` adds that project's per-bro layer,
-  and `tool_selection(cli_name)` merges `defaults` with one host CLI's layer.
+  and `tool_selection(command)` merges `defaults`, `user`, and the `user.tools` entry for one command's canonical console-script name.
   Every result carries kind → instance and kind → choosing layer;
   config validation is grammar-only so kinds unknown to this installation survive shared dotfiles.
   `llm_presets()` reads the unchanged host-wide `--llm` preset names (`bro/launch/llm_flags.py` merges them over the operated project's own table).
@@ -118,4 +118,5 @@ run those with `--help` for flags.
 
 Every CLI in the repo is a bare `def main(argv)` whose body builds a `bro.base.args.Parser` and ends in `return fn(**parser.parse(argv))` or `return parser.dispatch(argv)`.
 The global-argv read happens once, in the owning package's committed `_entrypoints.py` shim, not in `main`
-— see the root `AGENTS.md` "Commands" section and the committed `_entrypoints.py` of any distribution.
+— see the committed `_entrypoints.py` of any distribution.
+Each shim hands its module name and that argv to `run_cli`, so the process knows which command it is (`canonical_cli_name`) without resolving the name it was invoked under.

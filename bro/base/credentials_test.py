@@ -457,7 +457,7 @@ class TestDefaultStore:
     monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(tmp_path / 'bro.json'))
     return store
 
-  def test_ambient_cli_store_merges_defaults_and_its_tool_layer(self, tmp_path: Path, monkeypatch):
+  def test_ambient_command_store_merges_the_layers_it_reads(self, tmp_path: Path, monkeypatch):
     store = self._ambient_store(tmp_path, monkeypatch)
     _write_material(store, 'openai+default', 'default')
     _write_material(store, 'openai+benchmark', 'benchmark')
@@ -465,11 +465,11 @@ class TestDefaultStore:
       json.dumps(
         {
           'defaults': {'creds': ['openai+default']},
-          'tools': {'benchmark-job': {'creds': ['openai+benchmark']}},
+          'user': {'tools': {'bro.local.benchmark-job': {'creds': ['openai+benchmark']}}},
         }
       )
     )
-    Parser().parse(['/usr/local/bin/benchmark-job'])
+    monkeypatch.setattr(credentials, 'canonical_cli_name', lambda: 'bro.local.benchmark-job')
 
     assert credentials.get('openai') == 'benchmark'
 
@@ -479,7 +479,7 @@ class TestDefaultStore:
     Path(host_config.HOST_CONFIG_FILE).write_text(
       json.dumps({'defaults': {'creds': ['openai+default']}})
     )
-    monkeypatch.setattr(credentials, 'current_cli_name', lambda: None)
+    monkeypatch.setattr(credentials, 'canonical_cli_name', lambda: None)
 
     assert credentials.get('openai') == 'default'
 
@@ -506,7 +506,7 @@ class TestDefaultStore:
     Path(host_config.HOST_CONFIG_FILE).write_text(
       json.dumps({'defaults': {'creds': ['consumer_only+host', 'openai+selected']}})
     )
-    monkeypatch.setattr(credentials, 'current_cli_name', lambda: None)
+    monkeypatch.setattr(credentials, 'canonical_cli_name', lambda: None)
 
     assert credentials.get('openai') == 'selected'
 

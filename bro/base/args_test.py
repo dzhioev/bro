@@ -8,10 +8,12 @@ from bro.base.args import (
   REMAINDER,
   ArgumentTypeError,
   Parser,
+  canonical_cli_name,
   command_signature,
   current_cli_name,
   list_parser,
   moment_parser,
+  run_cli,
 )
 
 
@@ -175,6 +177,17 @@ class TestParser:
     Parser().parse(['/opt/tools/rewind'])
 
     assert current_cli_name() == 'rewind'
+
+
+class TestRunCli:
+  def test_runs_the_named_module_under_its_canonical_name(self, tmp_path, monkeypatch):
+    (tmp_path / 'package').mkdir()
+    (tmp_path / 'package' / '__init__.py').write_text('')
+    (tmp_path / 'package' / 'time_util.py').write_text('def main(argv):\n  return argv\n')
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    assert run_cli('package.time_util', ['rewind', '--flag']) == ['rewind', '--flag']
+    assert canonical_cli_name() == 'package.time-util'
 
   def test_global_flags_removed_from_args(self):
     parser = Parser()
@@ -794,6 +807,12 @@ class TestCommandSignature:
     signature = command_signature(('bro', 'list'))
     assert signature.arguments == ()
     assert signature.description == 'list registered bros'
+
+  def test_reading_a_signature_leaves_the_running_command_recorded(self):
+    Parser().parse(['/opt/tools/rewind'])
+    command_signature(('bro', 'list'))
+
+    assert current_cli_name() == 'rewind'
 
   def test_positional_and_flag_are_described(self):
     arguments = {a.name: a for a in command_signature(('bro', 'show')).arguments}
