@@ -1,6 +1,6 @@
 import os
 from abc import ABC
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Optional, Protocol, Self
@@ -10,7 +10,17 @@ import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
 from bro import spells as spell_store, summon
 from bro.base import credentials, log
-from bro.base.condition import Condition, Entry, Iff, SetVariable, Variables, When, var
+from bro.base.condition import (
+  Condition,
+  Contains,
+  Entry,
+  Iff,
+  SetVariable,
+  Variable,
+  Variables,
+  When,
+  var,
+)
 from bro.base.offload import off_loop
 from bro.channel import BroChannel
 from bro.datasources.base import DataSource
@@ -689,6 +699,58 @@ _COMPONENT_DECLARATION_ATTRIBUTES = frozenset({'data_sources', 'tools'})
 _RETIRED_COMPONENT_DECLARATION_ATTRIBUTES = {'mcp_servers': 'tools'}
 
 
+def _validate_credential_gate(gate: Condition | bool, declaration: str) -> None:
+  if not isinstance(gate, Contains):
+    return
+  container = gate.container
+  if (
+    isinstance(container, Variable) and container.name == 'creds' and isinstance(gate.element, str)
+  ):
+    credentials.require_kind_declaration(gate.element, declaration)
+
+
+def _declared_components(entries: Iterable[Entry[Any]], declaration: str) -> list[tuple[Any, str]]:
+  components: list[tuple[Any, str]] = []
+  for index, entry in enumerate(entries):
+    entry_declaration = f'{declaration}[{index}]'
+    if isinstance(entry, When):
+      _validate_credential_gate(entry.condition, f'{entry_declaration} condition')
+      components.append((entry.item, entry_declaration))
+    elif isinstance(entry, Iff):
+      for branch_index, (gate, item) in enumerate(entry.branches):
+        branch_declaration = f'{entry_declaration} branch {branch_index}'
+        _validate_credential_gate(gate, f'{branch_declaration} condition')
+        components.append((item, branch_declaration))
+      if entry.otherwise is not None:
+        components.append((entry.otherwise[0], f'{entry_declaration} else branch'))
+    else:
+      components.append((entry, entry_declaration))
+  return components
+
+
+def _validate_component_credentials(entries: Iterable[Entry[Any]], declaration: str) -> None:
+  for component, component_declaration in _declared_components(entries, declaration):
+    if isinstance(component, mcp.ToolLayer):
+      for spec_index, spec in enumerate(component.server_specs):
+        manifest = f'{component_declaration} MCP server {spec_index}'
+        for name in spec.needed_secrets:
+          credentials.require_kind_declaration(name, f'{manifest}.needed_secrets')
+        for name in spec.optional_secrets:
+          credentials.require_kind_declaration(name, f'{manifest}.optional_secrets')
+    elif isinstance(component, DataSource):
+      manifest = f'{component_declaration} {type(component).__name__}'
+      for name in component.needed_secrets:
+        credentials.require_kind_declaration(name, f'{manifest}.needed_secrets')
+      for name in component.optional_secrets:
+        credentials.require_kind_declaration(name, f'{manifest}.optional_secrets')
+    elif isinstance(component, ManPage):
+      manifest = f'{component_declaration} {type(component.page).__name__}'
+      for name in component.page.needed_secrets:
+        credentials.require_kind_declaration(name, f'{manifest}.needed_secrets')
+      for name in component.page.optional_secrets:
+        credentials.require_kind_declaration(name, f'{manifest}.optional_secrets')
+
+
 def _component_destinations(value: object) -> set[str]:
   destinations: set[str] = set()
   entries = value if isinstance(value, list) else (value,)
@@ -791,15 +853,19 @@ class BaseBro(ABC):
     for cls in reversed(type(self).__mro__):
       raw_tools = cls.__dict__.get('tools')
       if raw_tools is not None:
+        _validate_component_credentials(raw_tools, f'{cls.__name__}.tools')
         tool_entries.extend(raw_tools)
       raw_sources = cls.__dict__.get('data_sources')
       if raw_sources is not None:
+        _validate_component_credentials(raw_sources, f'{cls.__name__}.data_sources')
         data_source_entries.extend(raw_sources)
       raw_prompt = cls.__dict__.get('system_prompt')
       if isinstance(raw_prompt, str) and len(raw_prompt) > 0:
         prompt_parts.append(raw_prompt)
       raw_extra = cls.__dict__.get('extra_secrets')
       if raw_extra is not None:
+        for name in raw_extra:
+          credentials.require_kind_declaration(name, f'{cls.__name__}.extra_secrets')
         extra_secret_names.extend(raw_extra)
       raw_summon = cls.__dict__.get('may_summon')
       if raw_summon is not None:
@@ -810,6 +876,7 @@ class BaseBro(ABC):
       raw_features = cls.__dict__.get('features')
       if raw_features is not None:
         for feature_name, gate in raw_features.items():
+          _validate_credential_gate(gate, f'{cls.__name__}.features[{feature_name!r}]')
           if feature_gates.get(feature_name) is False and gate is not False:
             raise ValueError(
               f'{cls.__name__} re-enables feature {feature_name!r} disabled by a base '
