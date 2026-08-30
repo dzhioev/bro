@@ -42,7 +42,7 @@ run those with `--help` for flags.
   `project_selection(attachment)` merges `defaults` and the matching project's `creds`,
   `launch_selection(attachment, bro)` adds that project's per-bro layer,
   and `tool_selection(cli_name)` merges `defaults` with one host CLI's layer.
-  Every result carries kind → instance, kind → choosing layer, and the project-only kinds an unbound launch refuses;
+  Every result carries kind → instance and kind → choosing layer;
   config validation is grammar-only so kinds unknown to this installation survive shared dotfiles.
   `llm_presets()` reads the unchanged host-wide `--llm` preset names (`bro/launch/llm_flags.py` merges them over the operated project's own table).
   The scheme and its precedence are `bro/setup/AGENTS.md`, "Host config";

@@ -27,9 +27,8 @@ from ride.workspace.model import Workspace
 
 PARENT = 'parent'
 SUMMONER = {'session': 'ws'}
-# the lowering harness stubs the scope computation and the human-identity read;
-# the tests that assert on the real ones restore these
-_REAL_SCOPED_SECRETS = ride.scope.scoped_secrets
+# the lowering harness stubs the human-identity read; the test that asserts on
+# the real one restores it
 _REAL_HUMAN_IDENTITY = ride.identity.human_git_identity_env
 
 
@@ -223,26 +222,6 @@ class TestSummonLowering:
       ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
     # every fallible resolution precedes the workspace record, so nothing to
     # reclaim is left behind
-    with pytest.raises(ValueError, match='broker-CH'):
-      Workspace.open('broker-CH')
-
-  def test_an_unbindable_project_kind_fails_the_spawn(
-    self, lowering_harness, monkeypatch, tmp_path
-  ):
-    config = tmp_path / 'bro.json'
-    config.write_text(json.dumps({'projects': {'/elsewhere': {'creds': ['brog+github']}}}))
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-    monkeypatch.setattr(ride.scope, 'scoped_secrets', _REAL_SCOPED_SECRETS)
-    launch = ride.spawn.SummonLaunchSpec(
-      target='bro-dev',
-      prompt='p',
-      parent=PARENT,
-      repo=Path('/proj'),
-      summoner=SUMMONER,
-      may_summon=(),
-    )
-    with pytest.raises(ValueError, match='reads brog per project'):
-      ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
     with pytest.raises(ValueError, match='broker-CH'):
       Workspace.open('broker-CH')
 

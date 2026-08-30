@@ -618,8 +618,8 @@ Host scoping is still a convenience rather than a security boundary, because the
 - **Which instance.**
   Scope selection merges the host's defaults, matching project, and matching `projects.<attachment>.bros.<bro>` layer in that order.
   A project-bro layer overrides the project selection for that bro, including when the bro is a summon target.
-  A detached launch or an attachment with no matching project entry refuses project-selected kinds that defaults did not select, rather than falling through to bare material.
-  `ride scope` prints each declared kind's resolved instance, the layer that chose it, its availability, and `REFUSED` for this unbound case.
+  A detached launch or an attachment with no matching project entry falls through the layers that do apply to the kind's own stored material.
+  `ride scope` prints each declared kind's resolved instance, the layer that chose it, and its availability.
 - **Which bro.**
   `ride solo|along` computes the scope for the mode verb's bro positional.
   Summon lowering computes it for the child target, so the child's own project-bro layer applies.
