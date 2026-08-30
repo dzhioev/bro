@@ -79,6 +79,16 @@ def parse_name(name: str) -> tuple[str, Optional[str]]:
   return match.group(1), match.group(2)
 
 
+def require_kind_declaration(name: str, declaration: str) -> None:
+  kind, instance = parse_name(name)
+  if instance is not None:
+    raise ValueError(
+      f'{declaration} declares credential {name!r}, which names an instance; '
+      f'declare the bare kind {kind!r} instead — instance selection belongs in '
+      '~/.bro.json or a --grant flag'
+    )
+
+
 def _require_kind(name: str) -> None:
   kind, instance = parse_name(name)
   if instance is not None:

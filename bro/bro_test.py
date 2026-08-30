@@ -792,6 +792,102 @@ class TestNeededSecrets:
     assert {'one', 'two'} <= set(Derived().needed_secrets())
 
 
+class TestCredentialDeclarations:
+  def test_extra_secrets_rejects_an_instance_name(self):
+    class InstanceBro(BaseBro):
+      name = 'instance-extra'
+      description = 'd'
+      extra_secrets = ('github+reviewer',)
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(ValueError, match=r'InstanceBro\.extra_secrets.*github\+reviewer') as error:
+      InstanceBro()
+    assert "declare the bare kind 'github'" in str(error.value)
+    assert '~/.bro.json or a --grant flag' in str(error.value)
+
+  def test_toolset_manifest_rejects_an_instance_name_even_when_gated_off(self):
+    class InstanceToolset(mcp.Toolset[None]):
+      secrets = ('github+reviewer',)
+
+    toolset = InstanceToolset('instance-tools')
+
+    class InstanceBro(BaseBro):
+      name = 'instance-toolset'
+      description = 'd'
+      tools: ClassVar = [when(False, mcp.mount(toolset))]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(
+      ValueError, match=r'InstanceBro\.tools\[0\].*needed_secrets.*github\+reviewer'
+    ):
+      InstanceBro()
+
+  @pytest.mark.parametrize('manifest_name', ['needed_secrets', 'optional_secrets'])
+  def test_mcp_server_manifest_rejects_an_instance_name(self, manifest_name):
+    manifest = {manifest_name: ('github+reviewer',)}
+    spec = MCPServerSpec(build=lambda: _make_server('probe'), **manifest)
+
+    class InstanceBro(BaseBro):
+      name = 'instance-server'
+      description = 'd'
+      tools: ClassVar = [_server_layer(spec)]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(ValueError, match=rf'{manifest_name}.*github\+reviewer'):
+      InstanceBro()
+
+  @pytest.mark.parametrize('manifest_name', ['needed_secrets', 'optional_secrets'])
+  def test_data_source_manifest_rejects_an_instance_name(self, manifest_name):
+    class InstanceSource(_SecretSource):
+      pass
+
+    setattr(InstanceSource, manifest_name, ('github+reviewer',))
+
+    class InstanceBro(BaseBro):
+      name = 'instance-source'
+      description = 'd'
+      data_sources: ClassVar = [InstanceSource()]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(
+      ValueError,
+      match=rf'InstanceBro\.data_sources\[0\] InstanceSource\.{manifest_name}.*github\+reviewer',
+    ):
+      InstanceBro()
+
+  def test_feature_gate_rejects_an_instance_name(self):
+    class InstanceBro(BaseBro):
+      name = 'instance-feature'
+      description = 'd'
+      features: ClassVar = {'review': mcp.creds.contains('github+reviewer')}
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(ValueError, match=r"InstanceBro\.features\['review'\].*github\+reviewer"):
+      InstanceBro()
+
+  def test_component_gate_rejects_an_instance_name(self):
+    class InstanceBro(BaseBro):
+      name = 'instance-component-gate'
+      description = 'd'
+      tools: ClassVar = [when(mcp.creds.contains('github+reviewer'), _make_layer('probe'))]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(ValueError, match=r'InstanceBro\.tools\[0\] condition.*github\+reviewer'):
+      InstanceBro()
+
+
 class TestMaySummon:
   def test_defaults_to_empty(self):
     class Plain(BaseBro):
