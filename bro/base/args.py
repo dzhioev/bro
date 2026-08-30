@@ -10,6 +10,7 @@ argparse, and every CLI in the repository builds a parser.
 
 import argparse
 import contextlib
+import importlib
 import os
 import sys
 from collections.abc import Callable, Generator, Iterable, Sequence
@@ -74,11 +75,30 @@ def _disable_ic() -> None:
 _N = TypeVar('_N')
 
 _current_cli_name: Optional[str] = None
+_canonical_cli_name: Optional[str] = None
 
 
 def current_cli_name() -> Optional[str]:
   """The basename recorded by the latest `Parser.parse`, if one has run."""
   return _current_cli_name
+
+
+def canonical_cli_name() -> Optional[str]:
+  """The canonical console-script name of the CLI this process runs, if it was
+  started through a console script."""
+  return _canonical_cli_name
+
+
+def canonical_script_name(module: str) -> str:
+  """The canonical console-script name a CLI module is published under."""
+  return module.replace('_', '-')
+
+
+def run_cli(module: str, argv: list[str]) -> Optional[int]:
+  """Run a CLI module's `main`, recording which command this process is."""
+  global _canonical_cli_name
+  _canonical_cli_name = canonical_script_name(module)
+  return importlib.import_module(module).main(argv)
 
 
 # subparser handler stashed via set_handler, popped by dispatch
@@ -495,7 +515,9 @@ class _ParserBuilt(BaseException):
 
 @contextlib.contextmanager
 def _parse_intercepted() -> Generator[None]:
+  global _current_cli_name
   original = Parser.parse
+  running = _current_cli_name
 
   def intercept(self: Parser, argv: list[str]) -> dict:
     del argv
@@ -506,6 +528,7 @@ def _parse_intercepted() -> Generator[None]:
     yield
   finally:
     Parser.parse = original  # type: ignore[method-assign]
+    _current_cli_name = running
 
 
 def _cli_module(program: str) -> str:

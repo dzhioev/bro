@@ -2,6 +2,8 @@ import subprocess
 import sys
 import tomllib
 
+import pytest
+
 from bro.dev import sync_scripts
 
 
@@ -21,7 +23,7 @@ def test_syncs_one_project_without_scanning_the_ones_nested_in_it(tmp_path):
   (tmp_path / 'package' / 'cli.py').write_text(
     "__cli_name__ = 'tool'\n\ndef main(argv):\n  return argv\n"
   )
-  (tmp_path / 'top.py').write_text('def main(argv):\n  return argv\n')
+  (tmp_path / 'package' / 'other.py').write_text('def main(argv):\n  return argv\n')
   (tmp_path / 'conftest.py').write_text('VALUE = 1\n')
   (tmp_path / '_entrypoints.py').write_text('stale\n')
   (tmp_path / 'member').mkdir()
@@ -48,12 +50,12 @@ members = ["member"]
   data = tomllib.loads((tmp_path / 'pyproject.toml').read_text())
   assert data['project']['scripts'] == {
     'package.cli': '_entrypoints:package_cli',
+    'package.other': '_entrypoints:package_other',
     'tool': '_entrypoints:package_cli',
-    'top': '_entrypoints:top',
   }
   bridge = (tmp_path / '_entrypoints.py').read_text()
-  assert "_run('package.cli')" in bridge
-  assert "_run('top')" in bridge
+  assert "run_cli('package.cli', sys.argv)" in bridge
+  assert "run_cli('package.other', sys.argv)" in bridge
   assert 'foreign' not in bridge
   assert 'unrelated' not in bridge
   assert sync_scripts.check(project) is True
@@ -62,7 +64,8 @@ members = ["member"]
 def test_a_git_ignored_directory_contributes_no_scripts(tmp_path):
   subprocess.run(['git', 'init', '-q'], cwd=tmp_path, check=True)
   (tmp_path / '.gitignore').write_text('.residue-*/\n')
-  (tmp_path / 'kept.py').write_text('def main(argv):\n  return argv\n')
+  (tmp_path / 'package').mkdir()
+  (tmp_path / 'package' / 'kept.py').write_text('def main(argv):\n  return argv\n')
   (tmp_path / '.residue-abc' / 'deep').mkdir(parents=True)
   (tmp_path / '.residue-abc' / 'deep' / 'leftover.py').write_text(
     'def main(argv):\n  return argv\n'
@@ -81,5 +84,20 @@ stale = "_entrypoints:stale"
   sync_scripts.sync_entrypoints(project)
 
   data = tomllib.loads((tmp_path / 'pyproject.toml').read_text())
-  assert data['project']['scripts'] == {'kept': '_entrypoints:kept'}
+  assert data['project']['scripts'] == {'package.kept': '_entrypoints:package_kept'}
   assert 'leftover' not in (tmp_path / '_entrypoints.py').read_text()
+
+
+def test_a_cli_at_the_project_root_is_refused(tmp_path):
+  (tmp_path / 'rewind.py').write_text('def main(argv):\n  return argv\n')
+  (tmp_path / 'pyproject.toml').write_text(
+    """[project]
+name = "example"
+version = "0.1.0"
+[project.scripts]
+stale = "_entrypoints:stale"
+"""
+  )
+
+  with pytest.raises(ValueError, match="canonical name 'rewind' into the bare-alias namespace"):
+    sync_scripts.sync_pyproject(sync_scripts._project(tmp_path))

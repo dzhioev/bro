@@ -5,7 +5,11 @@ separate stored instances of one credential kind.
 Selections live outside repositories and merge from general to specific:
 
     {
-      "defaults": {"creds": ["github+dev", "trails+write"]},
+      "defaults": {"creds": ["trails+write"]},
+      "user": {
+        "creds": ["github+dev"],
+        "tools": {"bro.trails.rewind": {"creds": ["trails+analyst"]}}
+      },
       "projects": {
         "/home/foo/projects/api": {
           "creds": ["brog+github", "github+dev"],
@@ -15,7 +19,6 @@ Selections live outside repositories and merge from general to specific:
           "creds": ["brog+github", "github+dev"]
         }
       },
-      "tools": {"rewind": {"creds": ["trails+analyst"]}},
       "llm": {"sharp": "openai:sol:max"}
     }
 
@@ -25,12 +28,17 @@ A list may name each kind once.
 The grammar is installation-independent, so selections for unknown kinds remain
 valid and are carried in the returned mappings.
 
+`defaults` is the root both branches extend: `user` for a command the operator
+runs outside any session, `projects` for a managed session.
 A project key is the attachment a session names it by: the filesystem path of
 the operated repository's root (`~` and symlinks resolved before matching), or
 a normalized git URL.
 A repository attached both ways therefore carries an entry per identity.
-Launch selection precedence is project-bro, project, then defaults; tool
-selection precedence is tool, then defaults.
+A `user.tools` key is one CLI's canonical console-script name — its import path
+with the underscores dashed — rather than the bare alias, which several
+distributions may each publish.
+Launch selection precedence is project-bro, project, then defaults; a command's
+is its `user.tools` entry, `user`, then defaults.
 A kind no layer selects reads its empty instance.
 The returned layer map attributes every explicit selection.
 
@@ -53,11 +61,13 @@ from bro.base.git_url import is_git_url, normalize_git_url
 HOST_CONFIG_FILE = configs.DEFAULT_HOST_CONFIG
 
 DEFAULTS_LAYER = 'defaults'
+USER_LAYER = 'user'
 PROJECT_LAYER = 'project'
 PROJECT_BRO_LAYER = 'project-bro'
 TOOL_LAYER = 'tool'
 
 _DEFAULTS_KEY = 'defaults'
+_USER_KEY = 'user'
 _PROJECTS_KEY = 'projects'
 _TOOLS_KEY = 'tools'
 _CREDS_KEY = 'creds'
@@ -81,31 +91,39 @@ class _Project:
 
 
 @dataclass(frozen=True)
+class _User:
+  credentials: dict[str, str]
+  tools: dict[str, dict[str, str]]
+
+
+@dataclass(frozen=True)
 class _Config:
   defaults: dict[str, str]
+  user: _User
   projects: dict[str, _Project]
-  tools: dict[str, dict[str, str]]
   llm: dict[str, str]
 
 
 def _read() -> _Config:
   path = Path(HOST_CONFIG_FILE)
   if not path.is_file():
-    return _Config({}, {}, {}, {})
+    return _Config({}, _User({}, {}), {}, {})
   try:
     data = json.loads(path.read_text())
   except json.JSONDecodeError as error:
     raise ValueError(f'{path} is not valid json') from error
   if not isinstance(data, dict):
     raise ValueError(f'{path} must hold a json object')
-  unknown = sorted(set(data) - {_DEFAULTS_KEY, _PROJECTS_KEY, _TOOLS_KEY, _LLM_KEY})
+  unknown = sorted(set(data) - {_DEFAULTS_KEY, _USER_KEY, _PROJECTS_KEY, _LLM_KEY})
+  if _TOOLS_KEY in unknown:
+    raise ValueError(f'{path}: top-level {_TOOLS_KEY!r} is retired; nest it under {_USER_KEY!r}')
   if len(unknown) > 0:
     raise ValueError(f'unknown key(s) in {path}: {", ".join(unknown)}')
   defaults = _selection_object(path, _DEFAULTS_KEY, data.get(_DEFAULTS_KEY, {}))
+  user = _user(path, data.get(_USER_KEY, {}))
   projects = _projects(path, data.get(_PROJECTS_KEY, {}))
-  tools = _tools(path, data.get(_TOOLS_KEY, {}))
   llm = _llm(path, data.get(_LLM_KEY, {}))
-  return _Config(defaults, projects, tools, llm)
+  return _Config(defaults, user, projects, llm)
 
 
 def llm_presets() -> dict[str, str]:
@@ -139,14 +157,26 @@ def launch_selection(attachment: Optional[str], bro: str) -> CredentialSelection
   return _merged(layers)
 
 
-def tool_selection(cli_name: Optional[str]) -> CredentialSelection:
-  """Merge defaults and the entry for `cli_name`; None selects defaults only."""
-  if cli_name is not None and (not isinstance(cli_name, str) or cli_name == ''):
-    raise ValueError('CLI name must be a non-empty string')
+def tool_selection(
+  command: Optional[str], *, invoked_as: Optional[str] = None
+) -> CredentialSelection:
+  """Merge defaults, the user layer, and the entry for `command`.
+
+  `command` is the canonical console-script name of the running CLI, None for a
+  process that is none. `invoked_as` is the name it was started under, and a
+  `user.tools` entry keyed by that alias instead of by `command` fails the read.
+  """
+  if command is not None and (not isinstance(command, str) or command == ''):
+    raise ValueError('command name must be a non-empty string')
   config = _read()
-  layers = [(DEFAULTS_LAYER, config.defaults)]
-  if cli_name is not None:
-    tool_credentials = config.tools.get(cli_name)
+  layers = [(DEFAULTS_LAYER, config.defaults), (USER_LAYER, config.user.credentials)]
+  if command is not None:
+    if invoked_as is not None and invoked_as != command and invoked_as in config.user.tools:
+      raise ValueError(
+        f'{HOST_CONFIG_FILE}: {_USER_KEY}.{_TOOLS_KEY} names {invoked_as!r}, an alias of '
+        f'{command!r}; key it by the canonical name'
+      )
+    tool_credentials = config.user.tools.get(command)
     if tool_credentials is not None:
       layers.append((TOOL_LAYER, tool_credentials))
   return _merged(layers)
@@ -196,15 +226,20 @@ def _project(path: Path, project: str, value: object) -> _Project:
   return _Project(selection, parsed_bros)
 
 
-def _tools(path: Path, value: object) -> dict[str, dict[str, str]]:
+def _user(path: Path, value: object) -> _User:
+  where = f'{path}: {_USER_KEY}'
   if not isinstance(value, dict):
-    raise ValueError(f'{path}: {_TOOLS_KEY} must be a json object')
-  tools: dict[str, dict[str, str]] = {}
-  for name, entry in value.items():
+    raise ValueError(f'{where} must hold a json object')
+  _reject_unknown_fields(value, {_CREDS_KEY, _TOOLS_KEY}, where)
+  tools = value.get(_TOOLS_KEY, {})
+  if not isinstance(tools, dict):
+    raise ValueError(f'{where}: {_TOOLS_KEY} must be a json object')
+  parsed_tools: dict[str, dict[str, str]] = {}
+  for name, entry in tools.items():
     if name == '':
-      raise ValueError(f'{path}: tool name must not be empty')
-    tools[name] = _selection_object(path, f'tool {name!r}', entry)
-  return tools
+      raise ValueError(f'{where}: command name must not be empty')
+    parsed_tools[name] = _selection_object(path, f'{where}: command {name!r}', entry)
+  return _User(_selection_entries(where, value.get(_CREDS_KEY, [])), parsed_tools)
 
 
 def _selection_object(path: Path, subject: str, value: object) -> dict[str, str]:

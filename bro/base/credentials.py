@@ -10,8 +10,8 @@ A stored name is `kind+instance`, spelled `kind` when the instance is empty;
 a kind-addressed read falls to that empty instance when no layer selects
 another.
 `BRO_STORE` selects a directed process store.
-Without it, the default `~/.bro` store lazily applies `~/.bro.json`'s defaults
-plus the tool layer for the basename recorded by `Parser.parse`.
+Without it, the default `~/.bro` store lazily applies `~/.bro.json`'s defaults,
+its user layer, and the entry for the command this process runs.
 A directed store never consults the host config.
 
 Kind-addressed reads apply the store's explicit kind-to-instance selection.
@@ -41,7 +41,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar, Optional, Protocol
 
 from bro.base import configs, log, template
-from bro.base.args import Parser, current_cli_name
+from bro.base.args import Parser, canonical_cli_name, current_cli_name
 from bro.base.condition import StringVariable
 
 __cli_name__ = 'credentials'
@@ -712,7 +712,9 @@ def default_store() -> Store:
         if 'BRO_STORE' not in os.environ:
           from bro.base import host_config
 
-          configured = host_config.tool_selection(current_cli_name()).instances
+          configured = host_config.tool_selection(
+            canonical_cli_name(), invoked_as=current_cli_name()
+          ).instances
           selection = {kind: instance for kind, instance in configured.items() if kind in registry}
         _default_store = Store(registry, STORE_DIR, selection)
   return _default_store

@@ -17,7 +17,7 @@ version: 2.0.0
 A host store may hold several instances of one credential kind:
 two GitHub identities,
 or a task tracker per backend.
-`~/.bro.json` selects among them through host-wide defaults, project and per-bro layers, and host-CLI layers.
+`~/.bro.json` selects among them through host-wide defaults, the user's own command layers, and project and per-bro layers.
 This spell decides the relevant mapping with the user and writes it.
 
 ## 1. Check you can reach the host config
@@ -45,8 +45,10 @@ Ask which form the user's sessions use
 — and record every identity in use.
 An attachment with no project entry receives defaults alone.
 
-For a host CLI, use its console-script basename exactly as invoked.
-Its `tools.<name>` layer is host-wide and does not affect managed launches.
+For a command the user runs themselves, name it by its canonical console-script name
+— its import path with the underscores dashed, such as `bro.trails.rewind`.
+The owning distribution's `[project.scripts]` lists it beside the bare alias the command is usually typed as (`rewind`), which is rejected as a key.
+Its `user.tools.<command>` layer never affects managed launches.
 
 ## 3. Learn what credentials are needed and stored
 
@@ -79,16 +81,16 @@ Its precedence is launch flag, project-bro, project, tool for a host CLI, then d
 a kind no layer selects reads its empty instance.
 Every list is named `creds` and carries `kind+instance`, the instance left empty (`kind+`) for the kind's own `creds/<kind>.cred`.
 
-Put a host-wide choice in `defaults.creds` only when unrelated projects should read it.
+Put a host-wide choice in `defaults.creds` only when both the user's own commands and unrelated projects should read it.
+Put what the user's own commands read in `user.creds`, and one command's own choice in `user.tools.<command>.creds`.
 Put a repository-wide choice in `projects.<attachment>.creds`.
 Put an identity specific to one bro in `projects.<attachment>.bros.<bro>.creds`.
-Put a host CLI's choice in `tools.<cli-name>.creds`.
 Kinds the consumer has no opinion about stay out of its layer.
 
 ## 5. Record the decision
 
 Merge only the chosen entries into `~/.bro.json`.
-Leave every unrelated default, project, bro, tool, and `llm` entry untouched.
+Leave every unrelated default, user, command, project, bro, and `llm` entry untouched.
 A project attached by path and URL carries one project entry per identity, with matching project and per-bro selections.
 Show the user the proposed change before writing it.
 
@@ -99,7 +101,7 @@ Each selected kind should name the intended instance and report `ok`.
 A `MISSING` kind points at material the store cannot resolve;
 fix it before finishing.
 
-For tool wiring, invoke the CLI through its real console-script name on the cheapest path that reads the credential.
+For command wiring, invoke the CLI through a real console script on the cheapest path that reads the credential.
 Do not set `BRO_STORE` for that check:
 an explicit store deliberately bypasses `~/.bro.json`.
 

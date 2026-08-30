@@ -118,7 +118,10 @@ The optional host config selects stored credential instances per consumer:
       "bros": {"bro-eyebro": {"creds": ["github+reviewer"]}}
     }
   },
-  "tools": {"rewind": {"creds": ["trails+analyst"]}},
+  "user": {
+    "creds": ["github+me"],
+    "tools": {"bro.trails.rewind": {"creds": ["trails+analyst"]}}
+  },
   "llm": {"sharp": "openai:sol:max"}
 }
 ```
@@ -129,19 +132,22 @@ one list may name a kind once.
 The retired `instances` field is rejected with `creds` named as its replacement.
 Validation is grammar-only, so shared dotfiles may carry kinds an installation does not register.
 
-`defaults.creds` applies host-wide.
-A matching `projects.<attachment>.creds` layer overrides it for a checkout path or normalized git URL,
-and `projects.<attachment>.bros.<bro>.creds` overrides that for one exact bro name.
-A host CLI instead applies `tools.<cli>.creds` over defaults, keyed by its console-script basename.
-Launch and tool layers are disjoint.
-Most-specific precedence is launch flag, project-bro, project, tool for a host CLI, then defaults;
+`defaults.creds` is the root both branches extend.
+`user.creds` covers every command the operator runs outside a session, and `user.tools.<command>.creds` narrows that to one of them;
+a session instead takes `projects.<attachment>.creds` for a checkout path or normalized git URL, and `projects.<attachment>.bros.<bro>.creds` for one exact bro name.
+The two branches are disjoint, so a `user` entry never reaches a session.
+Most-specific precedence is launch flag, project-bro, project, the command's own entry, `user`, then `defaults`;
 a kind no layer selects reads its empty instance.
+
+A `user.tools` key is the command's canonical console-script name — its import path with the underscores dashed (`bro.trails.rewind`), the name `sync-scripts` publishes every CLI under beside its bare alias.
+The alias is what any distribution may claim, so keying on it would let two commands answer to one entry;
+an entry keyed by the alias of the running command fails the read rather than sitting inert.
 
 A launch whose attachment no project entry names simply reads the layers that do apply, ending at the kind's own stored material.
 A launch can still override its computed selection with `--grant kind+instance`.
 
-Every framework CLI records its own basename while parsing arguments.
-On first credential access, an ambient resolver reads the host config and applies defaults plus that CLI's tool layer.
+Every console script names its module to `bro.base.args.run_cli`, which records the canonical name of the command the process is.
+On first credential access, an ambient resolver reads the host config and applies `defaults`, `user`, and that command's own layer.
 Parsing a CLI that never accesses a credential does not read the host config.
 When `BRO_STORE` is set, the resolver does not consult the host config at all:
 a session or service store is already the product of a selection.
