@@ -55,6 +55,11 @@ if old_deployment_id != "":
     sys.exit(0)
 elif any(deployment["rollout"] in {"IN_PROGRESS", "FAILED"} for deployment in deployments):
   sys.exit(0)
+elif len(deployments) == 1 and deployments[0]["rollout"] == "COMPLETED":
+  # nothing is rolling out and nothing is left over: the deploy this run was meant
+  # to watch already finished, so hand the settled service to the terminal check
+  # rather than waiting for a rollout that will never start again.
+  sys.exit(0)
 sys.exit(1)
 ' <<<"$1"
 }
