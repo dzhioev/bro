@@ -152,6 +152,24 @@ def get_all(url: str, token: str) -> list[Any]:
   return items
 
 
+class GraphQLError(Exception):
+  """a GraphQL query the server answered with `errors`.
+
+  GraphQL reports a refused or failed query in the body of a 200, so this is the
+  request failure no HTTP status carries.
+  """
+
+
+def graphql(query: str, token: str, description: str, **variables: Any) -> Any:
+  """the `data` of one GraphQL query; a response carrying `errors` raises
+  `GraphQLError`."""
+  response = post(_GRAPHQL_URL, token, {'query': query, 'variables': variables})
+  errors = response.get('errors')
+  if errors is not None:
+    raise GraphQLError(f'{description}: {errors}')
+  return response['data']
+
+
 def viewer_login(token: str) -> str:
   """the login of the account `token` acts for.
 
@@ -160,11 +178,8 @@ def viewer_login(token: str) -> str:
   login comes back spelled the way the REST pull-request, review, and comment
   payloads spell it.
   """
-  response = post(_GRAPHQL_URL, token, {'query': 'query { viewer { login } }'})
-  errors = response.get('errors')
-  if errors is not None:
-    raise ValueError(f"resolving the token's own login: {errors}")
-  return response['data']['viewer']['login']
+  data = graphql('query { viewer { login } }', token, "resolving the token's own login")
+  return data['viewer']['login']
 
 
 def post(url: str, token: str, body: Any) -> Any:

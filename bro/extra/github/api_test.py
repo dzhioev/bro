@@ -161,6 +161,19 @@ class TestRetryDelay:
     assert api._retry_delay(error, 0) == api._MAX_BACKOFF
 
 
+class TestGraphql:
+  def test_variables_travel_with_the_query(self, monkeypatch):
+    fake = _FakeUrlopen([{'data': {'x': 1}}])
+    _install(monkeypatch, fake)
+    assert api.graphql('query($n: Int!) { x }', 't', 'reading x', n=7) == {'x': 1}
+    assert json.loads(fake.requests[0].data)['variables'] == {'n': 7}
+
+  def test_the_description_names_what_failed(self, monkeypatch):
+    _install(monkeypatch, _FakeUrlopen([{'errors': [{'message': 'Not found'}]}]))
+    with pytest.raises(api.GraphQLError, match='reading x: .*Not found'):
+      api.graphql('query { x }', 't', 'reading x')
+
+
 class TestViewerLogin:
   def test_returns_the_graphql_viewer(self, monkeypatch):
     fake = _FakeUrlopen([{'data': {'viewer': {'login': 'someone[bot]'}}}])
@@ -178,7 +191,7 @@ class TestViewerLogin:
 
   def test_a_graphql_error_raises(self, monkeypatch):
     _install(monkeypatch, _FakeUrlopen([{'errors': [{'message': 'Bad credentials'}]}]))
-    with pytest.raises(ValueError, match='Bad credentials'):
+    with pytest.raises(api.GraphQLError, match='Bad credentials'):
       api.viewer_login('t')
 
 
