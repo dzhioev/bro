@@ -55,9 +55,7 @@ class TestProjectSelection:
       }
     )
 
-    assert host_config.project_selection(str(tmp_path / 'elsewhere')).instances == {
-      'github': 'dev'
-    }
+    assert host_config.project_selection(str(tmp_path / 'elsewhere')).instances == {'github': 'dev'}
 
   def test_a_detached_launch_gets_defaults_alone(self, config_file, tmp_path):
     config_file(

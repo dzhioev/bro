@@ -268,7 +268,6 @@ class TestPreflightScopedLaunch:
       with pytest.raises(ride.scope.LaunchScopeError, match='unknown summon target'):
         self._preflight(ride.scope.ScopedSecrets(set(), set()), grant=['@devoop'])
 
-
   def test_unresolvable_secret_raises_launch_scope_error(self):
     from bro.base import credentials
 
