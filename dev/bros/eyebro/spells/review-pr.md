@@ -8,7 +8,7 @@ This spell should be used when the user asks to review a GitHub pull request and
 Reconciles the PR's existing review state, reviews the head, posts findings as PR review comments, watches for the author's answers and pushes with `poll-pr`, re-reviews round by round, and approves once every finding is addressed or conceded.
 
 parameters: {"pr": "pull request URL or number to review"}
-version: 1.1.0
+version: 1.2.0
 ---
 
 # review-pr
@@ -82,7 +82,7 @@ Review it in full and reach your own.
 
 1. Check out the code:
    `gh pr checkout <n>`.
-   The checkout is for reading and running checks;
+   The checkout is for reading and for the narrow checks [[review diff]] step 3 bounds, never for running the PR's own gate;
    the branch is the author's
    — never commit to it, never push it.
 2. Judge the PR's diff (`<pull_request.base>...HEAD`) per [[review diff]]
