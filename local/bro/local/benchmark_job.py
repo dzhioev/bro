@@ -221,7 +221,7 @@ def _await_outcome(client: Client, request: Message, timeout: float) -> str:
   except TimeoutError:
     raise JobError(
       f'no result within {timeout:.0f}s — the job may still be running; '
-      f'reattach with `benchmark-job check {request.exchange}`'
+      f'reattach with `benchmark-job check {request.quest_id}`'
     ) from None
   except ConnectionError as e:
     raise JobError(f'broker channel closed awaiting the job result: {e}') from None
@@ -283,7 +283,7 @@ def run_job(config: str, timeout: Optional[float] = None, upload: str = 'none') 
   of its collected run. Raises `JobError` with the operator-facing reason."""
   with _open_client() as client:
     request = client.send(BENCHMARK, _job_args(config, timeout, upload))
-    log.info('benchmark job request %s', request.exchange)
+    log.info('benchmark job request %s', request.quest_id)
     return _await_outcome(client, request, timeout if timeout is not None else DEFAULT_TIMEOUT)
 
 
@@ -297,8 +297,8 @@ def _start(config: str, timeout: Optional[float], upload: str, detach: bool) -> 
     return 1
   with client:
     request = client.send(BENCHMARK, _job_args(config, timeout, upload))
-    log.info('benchmark job request %s', request.exchange)
-    print(request.exchange)
+    log.info('benchmark job request %s', request.quest_id)
+    print(request.quest_id)
     return 0
 
 

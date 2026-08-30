@@ -78,14 +78,14 @@ async def test_from_env_connects_and_sends(monkeypatch):
     assert channel == provisioned.channel
     assert message.type == 'request'
     assert message.payload == {'kind': 'ping', 'args': {'n': 1}}
-    assert message.request is None
+    assert message.quest is None
     client.close()
 
 
 @pytest.mark.asyncio
-async def test_progress_and_result_emit_against_an_exchange():
+async def test_progress_and_result_emit_against_a_quest():
   # the answering side: a worker emits progress and the closing result against
-  # the exchange id its launch carried
+  # the quest id its launch carried
   async with running_server() as server:
     provisioned = await server.transport.provision()
     client = Client(await _transport(provisioned))
@@ -94,8 +94,8 @@ async def test_progress_and_result_emit_against_an_exchange():
 
     _, started = await _next(server.sink.messages)
     _, done = await _next(server.sink.messages)
-    assert (started.type, started.request, started.payload) == ('progress', 'X', {'trail_id': 't1'})
-    assert (done.type, done.request) == ('result', 'X')
+    assert (started.type, started.quest, started.payload) == ('progress', 'X', {'trail_id': 't1'})
+    assert (done.type, done.quest) == ('result', 'X')
     assert done.payload == {'outcome': 'ok', 'value': 'answer'}
     client.close()
 
@@ -109,7 +109,7 @@ async def test_request_correlates_and_sets_unrelated_aside():
 
     channel, request_message = await _next(server.sink.messages)
     assert request_message.kind == 'ping'
-    unrelated = brotocol.progress('some-other-exchange', {'note': 'unrelated'})
+    unrelated = brotocol.progress('some-other-quest', {'note': 'unrelated'})
     await server.transport.send(channel, unrelated)
     await server.transport.send(
       channel, brotocol.result(request_message.id, 'ok', value={'pong': 1})
@@ -117,7 +117,7 @@ async def test_request_correlates_and_sets_unrelated_aside():
 
     reply = await asyncio.wait_for(request_task, TIMEOUT)
     assert reply.type == 'result'
-    assert reply.request == request_message.id
+    assert reply.quest == request_message.id
     assert reply.payload == {'outcome': 'ok', 'value': {'pong': 1}}
 
     # the unrelated message request() read past was set aside, not dropped
@@ -151,7 +151,7 @@ async def test_request_raises_on_channel_close():
 
 
 @pytest.mark.asyncio
-async def test_call_surfaces_progress_and_returns_the_result():
+async def test_call_surfaces_marks_and_progress_then_returns_the_result():
   async with running_server() as server:
     provisioned = await server.transport.provision()
     client = Client(await _transport(provisioned))
@@ -164,15 +164,19 @@ async def test_call_surfaces_progress_and_returns_the_result():
 
     channel, request_message = await _next(server.sink.messages)
     assert request_message.kind == 'summon'
-    await server.transport.send(channel, brotocol.progress(request_message.id, {'trail_id': 't1'}))
-    unrelated = brotocol.progress('some-other-exchange', {'note': 'unrelated'})
+    await server.transport.send(channel, brotocol.mark(request_message.id, 'accepted'))
+    await server.transport.send(channel, brotocol.progress(request_message.id, {'note': 'working'}))
+    unrelated = brotocol.progress('some-other-quest', {'note': 'unrelated'})
     await server.transport.send(channel, unrelated)
     await server.transport.send(channel, brotocol.result(request_message.id, 'ok', value='r'))
 
     result = await asyncio.wait_for(call_task, TIMEOUT)
     assert result.type == 'result'
     assert result.payload == {'outcome': 'ok', 'value': 'r'}
-    assert [interim.payload for interim in interims] == [{'trail_id': 't1'}]
+    assert [(interim.type, interim.payload) for interim in interims] == [
+      ('mark', {'transition': 'accepted'}),
+      ('progress', {'note': 'working'}),
+    ]
 
     # the uncorrelated message call() read past was set aside, not dropped
     set_aside = await asyncio.to_thread(client.receive, 0.2)
@@ -203,9 +207,9 @@ async def test_call_rides_every_progress_while_await_any_returns_the_first():
     sent = client.send('summon', {})
     any_task = asyncio.create_task(asyncio.to_thread(client.await_any, sent, TIMEOUT))
     channel, request_message = await _next(server.sink.messages)
-    await server.transport.send(channel, brotocol.progress(request_message.id, {}))
+    await server.transport.send(channel, brotocol.mark(request_message.id, 'accepted'))
     first = await asyncio.wait_for(any_task, TIMEOUT)
-    assert (first.type, first.request) == ('progress', sent.id)
+    assert (first.type, first.quest) == ('mark', sent.id)
     client.close()
 
 

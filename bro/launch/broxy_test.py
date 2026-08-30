@@ -76,7 +76,7 @@ async def test_session_broxy_serves_the_rewritten_channel():
       await server.transport.send(channel, brotocol.result(message.id, 'ok', value={'pong': {}}))
       reply = await asyncio.wait_for(request_task, TIMEOUT)
       assert reply.type == 'result'
-      assert reply.request == message.id
+      assert reply.quest == message.id
       client.close()
     finally:
       broxy.stop()

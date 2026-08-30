@@ -123,7 +123,7 @@ def test_manual_detached_summon_waits_for_acceptance_and_prints_the_command(
   sent: list[dict] = []
 
   def accepted(request_id):
-    return brotocol.progress(request_id, {})
+    return brotocol.mark(request_id, 'accepted')
 
   monkeypatch.setattr(summon, '_open_client', lambda: _ManualFakeClient(sent, accepted))
   assert summon.main(['summon', '--manual', '--detach', 'dev', 'work it out']) == 0
@@ -166,7 +166,7 @@ async def test_blocking_summon_relays_the_answer(monkeypatch, capsys, caplog):
     channel, request = await _next(server.sink.messages)
     assert request.kind == 'summon'
     assert request.args == {'target': 'dev', 'prompt': 'list the deploy targets'}
-    await server.transport.send(channel, brotocol.progress(request.id, {'trail_id': 'T1'}))
+    await server.transport.send(channel, brotocol.mark(request.id, 'trail', trail_id='T1'))
     await server.transport.send(channel, brotocol.result(request.id, 'ok', value='alpha, beta'))
 
     assert await asyncio.wait_for(main_task, TIMEOUT) == 0
@@ -175,6 +175,14 @@ async def test_blocking_summon_relays_the_answer(monkeypatch, capsys, caplog):
     logged = [record.getMessage() for record in caplog.records]
     assert any(request.id in line for line in logged)
     assert any('T1' in line for line in logged)
+
+
+@pytest.mark.asyncio
+async def test_oversize_prompt_names_artifact_recovery(monkeypatch, caplog):
+  async with running_server(monkeypatch):
+    prompt = 'x' * brotocol.MAX_FRAME_BYTES
+    assert await asyncio.to_thread(summon.main, ['summon', 'dev', prompt]) == 1
+  assert 'prompt too large; share an artifact instead' in caplog.text
 
 
 @pytest.mark.asyncio
@@ -339,7 +347,7 @@ async def test_check_relays_a_ready_answer(monkeypatch, capsys):
   async with running_server(monkeypatch) as server:
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1']))
 
-    # the broxy replays window copies on the summon's own exchange id, then
+    # the broxy replays window copies on the summon's own quest id, then
     # closes the check with its report; this stub host answers the same way
     channel, check = await _next(server.sink.messages)
     assert check.kind == 'check'
@@ -401,7 +409,7 @@ async def test_check_last_seen_forwards_the_cursor_and_relays(monkeypatch, capsy
       asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1', '--last-seen', '0'])
     )
 
-    # the broxy replays the whole conversation on the summon's own exchange id,
+    # the broxy replays the whole conversation on the summon's own quest id,
     # then closes the check with its report
     channel, check = await _next(server.sink.messages)
     assert check.kind == 'check'

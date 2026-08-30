@@ -25,14 +25,14 @@ the session — while the JSONL audit beside it (`<session>.jsonl`) survives,
 recording mints, gets, shares, and denials.
 
 `JobArtifacts` collects a broker job's run directory the same way: the run is
-staged under the store's `jobs/`, and the ref that closes the job's exchange
+staged under the store's `jobs/`, and the ref that closes the job's quest
 reaches the peer that requested the job and its summoners.
 
 `ArtifactControl` serves the `artifact.mint` / `artifact.get` kinds
 (contract: `bro/artifact.py`) and implements the contributed-kind resolver
 (`bro.kinds.ArtifactResolver`). Attribution and shape validation run on the
 broker loop; store I/O runs in a thread with the correlated result delivered
-from a done-callback. The exchange never enters the dispatcher's table, so
+from a done-callback. The quest never enters the dispatcher's table, so
 exactly-one-result is this module's duty: the callback folds a store refusal
 into `result{denied}` and any other exception into `result{failed}` instead
 of letting it vanish. A sharing denial is uniform — identical whether or not
@@ -472,7 +472,7 @@ class ArtifactControl:
       self._deny(context, peer, message, identity, error)
       return
     path = args['path']
-    self._answer_off_loop(context, peer, message.exchange, lambda: self._minted(identity, ancestors, path))  # fmt: skip
+    self._answer_off_loop(context, peer, message.quest_id, lambda: self._minted(identity, ancestors, path))  # fmt: skip
 
   def _minted(self, identity: PeerIdentity, ancestors: Sequence[str], path: str) -> dict[str, Any]:
     ref, size = self._store.mint(identity, ancestors, path)
@@ -491,7 +491,7 @@ class ArtifactControl:
       return
     ref = args['ref']
     self._answer_off_loop(
-      context, peer, message.exchange, lambda: {'path': self._store.materialize(identity, ref)}
+      context, peer, message.quest_id, lambda: {'path': self._store.materialize(identity, ref)}
     )
 
   def resolve(self, ref: str, context: 'Dispatcher', requester: 'Peer') -> Path:
@@ -504,7 +504,7 @@ class ArtifactControl:
     return self._store.resolve(ref, identity.workspace)
 
   def _answer_off_loop(
-    self, context: 'Dispatcher', peer: 'Peer', exchange: str, work: Callable[[], dict[str, Any]]
+    self, context: 'Dispatcher', peer: 'Peer', quest: str, work: Callable[[], dict[str, Any]]
   ) -> None:
     from bro.broker import brotocol
 
@@ -515,14 +515,14 @@ class ArtifactControl:
         return
       error = finished.exception()
       if error is None:
-        result = brotocol.result(exchange, 'ok', value=finished.result())
+        result = brotocol.result(quest, 'ok', value=finished.result())
       elif isinstance(error, ArtifactDenied):
         log.warning('artifact: %s', error)
-        self._store.audit('deny', {'request_id': exchange, 'reason': str(error)})
-        result = brotocol.result(exchange, 'denied', error=str(error))
+        self._store.audit('deny', {'request_id': quest, 'reason': str(error)})
+        result = brotocol.result(quest, 'denied', error=str(error))
       else:
-        log.warning('artifact request %s failed: %r', exchange, error)
-        result = brotocol.result(exchange, 'failed', error=str(error), detail={'reason': 'error'})
+        log.warning('artifact request %s failed: %r', quest, error)
+        result = brotocol.result(quest, 'failed', error=str(error), detail={'reason': 'error'})
       context.deliver(peer, result)
 
     task.add_done_callback(_answered)

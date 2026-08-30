@@ -703,7 +703,7 @@ A channel-less session's own summons fail immediately at the client, and a chann
 
 The live broker registers the reserved `ping` kind, so a session can verify its channel with `broker request ping '{}'`;
 the root-lifecycle observer
-— the root answers the session's own host-anchored exchange (its launch carries the exchange id in `BROKER_EXCHANGE` beside the channel),
+— the root answers the session's own host-anchored quest (its launch carries the quest id in `BROKER_QUEST` beside the channel),
 and this host process is the requester, so the root's started progress and closing result land in the host log (`root run started (trail …)` / `root run ended: …`);
 and the `summon` kind handler
 — the root launch carries the session's summon allow-list (`run_root_via_broker(may_summon=…)`, computed at launch by `ride/ride/summon_control.py`;
@@ -775,7 +775,7 @@ A claude-harness child is scoped through the claude-full recipe
 — `claude_code` required, no LLM key
 — and the seam's auth preflight runs in the lowering, so an unresolvable setup token fails the spawn with the preflight's remedy as the correlated launch failure.
 Its lifecycle comes from the in-place runner rather than `bro.native.runner.Runner.run`:
-the runner captures the print-mode reply, announces the started progress once the session recorder publishes the workspace's current-trail pointer, and sends the exchange's ok result on a clean exit
+the runner captures the print-mode reply, announces the started progress once the session recorder publishes the workspace's current-trail pointer, and sends the quest's ok result on a clean exit
 — a non-zero exit emits no result and surfaces as the synthesized `result{failed, reason: exit}` (the echoed reply lands in its output tail), while an unattended abort is the `raise` service tool's own `result{failed, reason: raised}`.
 The recorder stamps the child trail's `summoned_by` from the summoner attribution, and the child's recorded resume spec is a claude spec, so a kept workspace resumes into the claude conversation.
 
@@ -799,8 +799,10 @@ the child's resolved `may_summon`, and the request's credential grant/revoke see
 the human at the launch owns the session's shape, and there is no host-killable child for a timeout to bound, so a manual summon carries no timer at all.
 
 The bridge between the two halves is the pending record (`ride/ride/pending_summon.py`),
-written under `<runtime-root>/summon/pending/<token>.json` when the channel is provisioned and one-shot-claimed by the launch as its last fallible step before the session starts
-— a second launch on the same token fails loudly (two sessions must not share one channel), and a summon that ends unclaimed (root teardown, a failure) discards it, so a stale token fails the launch with the reason.
+written under `<runtime-root>/summon/pending/<token>.json` when the channel is provisioned and one-shot-claimed by the launch as its last fallible step before the session starts.
+The record carries the broker protocol revision;
+a missing or mismatched revision refuses the launch before a workspace is created, so a token must be re-minted from a matching installation.
+A second launch on the same token fails loudly (two sessions must not share one channel), and a summon that ends unclaimed (root teardown, a failure) discards it, so a stale token fails the launch with the reason.
 The claim records the user-chosen workspace name beside it (`claimed/<token>.json`), which is how the host attributes the manual peer
 — the base-ref source for the child's own summons and the tree its artifact mints resolve against
 — so attribution comes from the launch machinery on the host, never from anything the child says on the wire (before the claim, a nested summon from the child is denied with a retry hint,
@@ -808,7 +810,7 @@ and its credential grants are always denied as unattributable — its actual sco
 The child announces the started progress (`{trail_id}`)
 — the claude in-place runner from its started-watch, the native chat surface on its first turn.
 The answer comes back through the `answer` service tool, mounted in every summoned session with a channel:
-the agent calls it once, when the user confirms the work is done, and the session ends with the exchange's ok result delivered to the waiting summoner
+the agent calls it once, when the user confirms the work is done, and the session ends with the quest's ok result delivered to the waiting summoner
 — a session the user quits without it produces no result, and the channel's EOF surfaces to the summoner as the synthesized `result{failed, reason: disconnected}` (channel EOF is an expected peer's death signal:
 there is no process for the host to reap, and the session's broxy holds one upstream connection per run).
 Root exit *detaches* an in-flight manual child rather than killing it

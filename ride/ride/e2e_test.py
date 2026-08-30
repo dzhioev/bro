@@ -85,7 +85,7 @@ from bro.broker.transports.tcp import parse_address
 channel = os.environ.get('BROKER_CHANNEL')
 assert channel, 'the launch carried no channel'
 assert parse_address(channel)[0] == '127.0.0.1', channel  # the broxy's, not the host's
-assert os.environ.get('BROKER_EXCHANGE'), 'the launch did not carry the exchange id'
+assert os.environ.get('BROKER_QUEST'), 'the launch did not carry the quest id'
 from bro.channel import BroChannel
 channel = BroChannel.from_env()
 assert channel is not None
@@ -150,7 +150,7 @@ def main():
   assert reply is not None, 'no ping reply'
   report['ping_reply'] = {
     'type': reply.type,
-    'request': reply.request,
+    'quest': reply.quest,
     'payload': reply.payload,
   }
   request = brotocol.request('spawn', {})
@@ -164,7 +164,7 @@ def main():
       break
     report['messages'].append({
       'type': message.type,
-      'request': message.request,
+      'quest': message.quest,
       'payload': message.payload,
       'elapsed': time.monotonic() - start,
     })
@@ -769,7 +769,7 @@ class TestChildLifecycle:
     assert 'error' not in b_clean.report, b_clean.report.get('error')
     reply = b_clean.report['ping_reply']
     assert reply['type'] == 'result'
-    assert reply['request'] == b_clean.report['ping_id']
+    assert reply['quest'] == b_clean.report['ping_id']
     assert reply['payload'] == {'outcome': 'ok', 'value': {'n': 1, 'from': 'forged-peer-identity'}}
     # the dispatcher attributed the request to the socket's own channel, not the
     # forged payload claim — identity is pinned to the channel the message arrived on
@@ -782,9 +782,9 @@ class TestChildLifecycle:
     types = [m['type'] for m in b_clean.report['messages']]
     assert types == ['progress', 'result'], b_clean.report['messages']
     started, completed = b_clean.report['messages']
-    assert started['request'] == request_id
+    assert started['quest'] == request_id
     assert started['payload'] == {'trail_id': 'e2e-trail'}
-    assert completed['request'] == request_id
+    assert completed['quest'] == request_id
     assert completed['payload'] == {'outcome': 'ok', 'value': 'child-ok'}
     assert b_clean.max_channels == 2
     assert b_clean.max_live == 2
@@ -802,7 +802,7 @@ class TestChildLifecycle:
     types = [m['type'] for m in b_early_exit.report['messages']]
     assert types == ['result'], b_early_exit.report['messages']
     failed = b_early_exit.report['messages'][0]
-    assert failed['request'] == b_early_exit.report['request_id']
+    assert failed['quest'] == b_early_exit.report['request_id']
     assert failed['payload']['outcome'] == 'failed'
     detail = failed['payload']['detail']
     assert detail['reason'] == 'exit'
@@ -818,7 +818,7 @@ class TestChildLifecycle:
     types = [m['type'] for m in b_timeout.report['messages']]
     assert types == ['result'], b_timeout.report['messages']
     failed = b_timeout.report['messages'][0]
-    assert failed['request'] == b_timeout.report['request_id']
+    assert failed['quest'] == b_timeout.report['request_id']
     assert failed['payload'] == {'outcome': 'failed', 'detail': {'reason': 'timeout'}}
     # the timer starts once the child is spawned, strictly after the request went out,
     # and fires at exactly default_timeout; the slack above covers the spawn overhead

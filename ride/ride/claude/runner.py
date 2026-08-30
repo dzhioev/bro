@@ -117,7 +117,7 @@ def _run_claude_summoned(argv: list[str], env: dict[str, str]) -> int:
   """the `_run_claude` of a summoned solo child: claude runs in print mode with
   its stdout captured, and the runner emits the run lifecycle a bro-run child
   gets from `BaseBro.run` — the started progress once the session recorder
-  publishes the current-trail pointer, and the exchange's ok result carrying
+  publishes the current-trail pointer, and the quest's ok result carrying
   the printed reply after a clean exit. A non-zero exit or a stopped run emits
   no result: the broker synthesizes `result{failed}` with the exit code and
   output tail for the former, and a `raise`- or `answer`-ended session already
