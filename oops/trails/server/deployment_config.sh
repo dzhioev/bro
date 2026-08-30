@@ -24,5 +24,8 @@ PY
   TRAILS_IMAGE_BUILD_PROJECT="$(jq -er '.image_build.project_name' <<<"$config")"
   TRAILS_STACK="$(jq -er '.trails.stack_name' <<<"$config")"
   TRAILS_SERVICE="$(jq -er '.trails.service_name' <<<"$config")"
+  TRAILS_IMAGE_STACKS=("$TRAILS_REPOSITORY_STACK" "$TRAILS_IMAGE_BUILD_STACK")
+  TRAILS_SERVICE_STACKS=("$TRAILS_STACK")
+  TRAILS_STACKS=("${TRAILS_IMAGE_STACKS[@]}" "${TRAILS_SERVICE_STACKS[@]}")
   TRAILS_URL="https://trails.$(jq -er '.delegated_subdomain' <<<"$config")"
 }
