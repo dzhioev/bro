@@ -1,739 +1,479 @@
 import asyncio
-import json
-import tempfile
-import time
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional, cast
 
 import pytest
 
 from bro.broker import brotocol
 from bro.broker.brotocol import Message, Tag
 from bro.broker.dispatcher import (
-  DEFAULT_TIMEOUT,
+  EVENTS,
   PING,
+  QUERY,
   Dispatcher,
+  events_handler,
   ping_handler,
-  spawn_test_handler,
+  query_handler,
 )
-from bro.broker.job import STATUS_FILE, STDOUT_FILE, CommandJob
-from bro.broker.runtime import Peer, job_peer
+from bro.broker.job import CommandJob
+from bro.broker.runtime import Runtime
 from bro.broker.spawn import LaunchSpec
 from bro.broker.transport import Provisioned
-
-_LAUNCH = LaunchSpec()  # opaque marker; the fake Runtime never inspects it
-_JOB = CommandJob(command=('true',), env={})  # ditto
-_REF = 'sha256:' + '0' * 64
+from bro.broker.transports.tcp import Endpoint
 
 
-def _request(kind: str, request_id: str, args: Optional[dict] = None) -> Message:
-  return Message(
-    type=Tag.REQUEST, id=request_id, payload={'kind': kind, 'args': args if args is not None else {}}
-  )  # fmt: skip
+class FakeHandle:
+  def __init__(self):
+    self.exit = asyncio.get_running_loop().create_future()
+    self.killed = False
+
+  async def wait(self):
+    return await self.exit
+
+  async def kill(self):
+    self.killed = True
+    if not self.exit.done():
+      self.exit.set_result(-15)
+
+  def output_tail(self):
+    return 'output'
 
 
 class FakeRuntime:
-  """records the commands the Dispatcher issues and hands it test-chosen peer ids.
-
-  Structurally a `bro.broker.dispatcher.RuntimeCommands`; the Dispatcher drives it while the
-  test drives the Dispatcher's listener callbacks, so the rules are exercised with no loop,
-  socket, or subprocess.
-  """
-
   def __init__(self):
-    self.sent: list[tuple[Peer, Message]] = []
-    self.spawns: list[tuple[LaunchSpec, Optional[float], str]] = []
-    self.jobs: list[tuple[CommandJob, Optional[float], str]] = []
-    self.job_directories: list[Path] = []
-    self.expects: list[Optional[float]] = []
-    self.forgotten: list[Peer] = []
-    self.killed: list[Peer] = []
-    self.next_peers: list[Peer] = []  # spawn/expect returns these front-to-back
-    self.spawn_error: Optional[BaseException] = None
-    self._stopped = asyncio.Event()
+    self.sent = []
+    self.events = {}
+    self.handle = None
+    self.stopped = False
+    self.launch_messages = []
+    self.launch_error: Optional[Exception] = None
+    self.provision_error: Optional[Exception] = None
 
-  async def spawn(self, launch: LaunchSpec, *, timeout: Optional[float], quest: str) -> Peer:
-    self.spawns.append((launch, timeout, quest))
-    if self.spawn_error is not None:
-      raise self.spawn_error
-    return self.next_peers.pop(0)
+  async def provision(self, events):
+    if self.provision_error is not None:
+      raise self.provision_error
+    channel = f'worker-{len(self.events) + 1}'
+    self.events[channel] = events
+    return Provisioned(channel, Endpoint(1234, f'token-{channel}'))
 
-  async def job(
-    self, command: CommandJob, *, directory: Path, timeout: Optional[float], quest: str
-  ) -> Peer:
-    self.jobs.append((command, timeout, quest))
-    self.job_directories.append(directory)
-    if self.spawn_error is not None:
-      raise self.spawn_error
-    return job_peer(quest)
+  async def launch(self, launch, provisioned, quest):
+    if self.launch_error is not None:
+      raise self.launch_error
+    self.handle = FakeHandle()
+    for message in self.launch_messages:
+      self.events[provisioned.channel].on_message(message)
+    return self.handle
 
-  async def expect(self, *, timeout: Optional[float]) -> Provisioned:
-    self.expects.append(timeout)
-    if self.spawn_error is not None:
-      raise self.spawn_error
-    peer = self.next_peers.pop(0)
-    return Provisioned(channel=peer, host_endpoint=f'/broker/{peer}.sock')
+  async def launch_job(self, command, directory: Path):
+    self.handle = FakeHandle()
+    return self.handle
 
-  def send(self, peer: Peer, message: Message) -> None:
+  def send(self, peer, message):
     self.sent.append((peer, message))
 
-  def kill(self, peer: Peer) -> None:
-    self.killed.append(peer)
+  async def close(self, peer):
+    self.events.pop(peer, None)
 
-  def forget(self, peer: Peer) -> None:
-    self.forgotten.append(peer)
+  async def serve(self):
+    await asyncio.Future()
 
-  async def serve(self) -> None:
-    await self._stopped.wait()
-
-  async def stop(self) -> None:
-    self._stopped.set()
+  async def stop(self):
+    self.stopped = True
 
 
-class FakeJobOutput:
-  """a `bro.broker.dispatcher.JobOutput` over real temp directories: records what
-  it was handed and answers with a fixed value, or raises `collect_error`."""
-
-  def __init__(self):
-    self.opened: list[Path] = []
-    self.collected: list[tuple[Path, Peer]] = []
-    self.runs: list[dict[str, str]] = []  # each run's top-level files, as collect found them
-    self.collect_error: Optional[BaseException] = None
-
-  def open(self) -> Path:
-    directory = Path(tempfile.mkdtemp())
-    self.opened.append(directory)
-    return directory
-
-  async def collect(self, directory: Path, context: Dispatcher, requester: Peer) -> dict:
-    self.collected.append((directory, requester))
-    self.runs.append(
-      {entry.name: entry.read_text() for entry in sorted(directory.iterdir()) if entry.is_file()}
-    )
-    if self.collect_error is not None:
-      raise self.collect_error
-    return {'ref': _REF}
-
-  def status(self, index: int = 0) -> dict[str, Any]:
-    return json.loads(self.runs[index][STATUS_FILE])
-
-
-def make_dispatcher() -> tuple[Dispatcher, FakeRuntime]:
-  runtime = FakeRuntime()
-  dispatcher = Dispatcher(job_output=FakeJobOutput())
-  dispatcher.bind(runtime)
-  return dispatcher, runtime
-
-
-def job_output(dispatcher: Dispatcher) -> FakeJobOutput:
-  output = dispatcher.job_output
-  assert isinstance(output, FakeJobOutput)
-  return output
-
-
-async def _settle() -> None:
-  # let a scheduled Runtime.spawn task and its worker-binding done-callback run.
-  for _ in range(4):
+async def _settle():
+  for _ in range(20):
     await asyncio.sleep(0)
 
 
-async def _until(condition: Callable[[], bool]) -> None:
-  """wait for a job's collection, whose steps run off the loop, to land."""
-  deadline = time.monotonic() + 5.0
-  while not condition():
-    assert time.monotonic() < deadline, 'the awaited condition never held'
-    await asyncio.sleep(0.005)
+def _request(kind, args, quest):
+  return Message(type=Tag.REQUEST, id=quest, payload={'kind': kind, 'args': args})
 
 
-async def spawn_child(
-  dispatcher: Dispatcher,
-  runtime: FakeRuntime,
-  *,
-  requester: Peer = 'requester',
-  request_id: str = 'R',
-) -> Peer:
-  """drive a spawn request through rule 2 + the spawn-test handler; return the worker peer."""
-  child = 'child'
-  runtime.next_peers.append(child)
-  dispatcher.on('spawn-test', spawn_test_handler(_LAUNCH))
-  dispatcher.on_message(requester, _request('spawn-test', request_id))
-  await _settle()
-  return child
-
-
-@pytest.mark.asyncio
-async def test_ping_replies_with_its_arguments_echoed():
-  # rule 2: a request invokes its kind's handler, which replies with a result.
-  dispatcher, runtime = make_dispatcher()
-  dispatcher.on(PING, ping_handler)
-  dispatcher.on_message('caller', _request(PING, 'Q', {'n': 7}))
-  assert len(runtime.sent) == 1
-  target, reply = runtime.sent[0]
-  assert target == 'caller'
-  assert reply.type == Tag.RESULT
-  assert reply.quest == 'Q'
-  assert reply.payload == {'outcome': 'ok', 'value': {'n': 7}}
-
-
-@pytest.mark.asyncio
-async def test_unknown_kind_is_denied():
-  dispatcher, runtime = make_dispatcher()
-  dispatcher.on_message('caller', _request('mystery', 'Q'))
-  [(target, denial)] = runtime.sent
-  assert target == 'caller'
-  assert denial.type == Tag.RESULT
-  assert denial.quest == 'Q'
-  assert denial.payload['outcome'] == 'denied'
-  assert 'mystery' in denial.payload['error']
-
-
-@pytest.mark.asyncio
-async def test_request_id_collision_is_denied():
-  # ids are unique by entropy; one naming a live quest is rejected, not coped with.
-  dispatcher, runtime = make_dispatcher()
-  await spawn_child(dispatcher, runtime)  # quest R is live
-  dispatcher.on_message('other', _request('spawn-test', 'R'))
-  target, denial = runtime.sent[-1]
-  assert target == 'other'
-  assert (denial.type, denial.quest, denial.payload['outcome']) == (Tag.RESULT, 'R', 'denied')
-
-
-@pytest.mark.asyncio
-async def test_spawn_opens_the_quest_with_default_timeout_and_binds_the_worker():
-  dispatcher, runtime = make_dispatcher()
-  child = await spawn_child(dispatcher, runtime)
-  assert runtime.spawns == [(_LAUNCH, DEFAULT_TIMEOUT, 'R')]  # the quest id rides the launch
-  assert dispatcher.quests['R'].requester == 'requester'
-  assert dispatcher.quests['R'].worker == child
-  assert dispatcher.workers[child] == 'R'
-
-
-@pytest.mark.asyncio
-async def test_worker_messages_route_to_the_requester_unchanged():
-  dispatcher, runtime = make_dispatcher()
-  child = await spawn_child(dispatcher, runtime)
-  trail = brotocol.mark('R', 'trail', trail_id='t')
-  progress = brotocol.progress('R', {'note': 'working'})
-  done = brotocol.result('R', 'ok', value='answer')
-  dispatcher.on_message(child, trail)
-  dispatcher.on_message(child, progress)
-  dispatcher.on_message(child, done)
-  assert runtime.sent[-3:] == [
-    ('requester', trail),
-    ('requester', progress),
-    ('requester', done),
-  ]
-  assert 'R' not in dispatcher.quests
-
-
-@pytest.mark.asyncio
-async def test_correlated_message_from_a_non_worker_peer_is_refused():
-  # rule 1 requires the sender to *be* the worker: knowing a quest id gains nothing.
-  dispatcher, runtime = make_dispatcher()
-  await spawn_child(dispatcher, runtime)
-  delivered = len(runtime.sent)
-  dispatcher.on_message('impostor', brotocol.result('R', 'ok', value='forged'))
-  assert len(runtime.sent) == delivered  # dropped, not delivered
-  assert 'R' in dispatcher.quests  # and the quest stays open
-
-
-@pytest.mark.asyncio
-async def test_messages_naming_a_closed_quest_are_dropped():
-  dispatcher, runtime = make_dispatcher()
-  child = await spawn_child(dispatcher, runtime)
-  dispatcher.on_message(child, brotocol.result('R', 'ok'))
-  delivered = len(runtime.sent)
-  dispatcher.on_message(child, brotocol.progress('R', {}))  # after the result
-  assert len(runtime.sent) == delivered  # dropped, not routed
-
-
-@pytest.mark.asyncio
-async def test_result_then_exit_is_a_single_terminal():
-  dispatcher, runtime = make_dispatcher()
-  child = await spawn_child(dispatcher, runtime)
-  dispatcher.on_message(child, brotocol.result('R', 'ok'))
-  dispatcher.on_exit(child, 0, '')  # quest closed already -> no synthesized failed
-  assert all(m.payload.get('outcome') != 'failed' for _, m in runtime.sent)
-  assert runtime.forgotten == [child]
-  assert child not in dispatcher.workers  # cleaned up
-
-
-@pytest.mark.asyncio
-async def test_exit_without_result_synthesizes_failed_exit():
-  dispatcher, runtime = make_dispatcher()
-  child = await spawn_child(dispatcher, runtime)
-  dispatcher.on_exit(child, 3, 'boom-traceback')
-  target, failed = runtime.sent[-1]
-  assert target == 'requester'
-  assert failed.type == Tag.RESULT
-  assert failed.quest == 'R'
-  assert failed.payload == {
-    'outcome': 'failed',
-    'detail': {'reason': 'exit', 'exit_code': 3, 'output_tail': 'boom-traceback'},
-  }
-  assert runtime.forgotten == [child]
-
-
-@pytest.mark.asyncio
-async def test_timeout_synthesizes_failed_and_the_later_exit_dedupes():
-  dispatcher, runtime = make_dispatcher()
-  child = await spawn_child(dispatcher, runtime)
-  dispatcher.on_timeout(child)
-  target, failed = runtime.sent[-1]
-  assert target == 'requester'
-  assert (failed.type, failed.quest) == (Tag.RESULT, 'R')
-  assert failed.payload == {'outcome': 'failed', 'detail': {'reason': 'timeout'}}
-  dispatcher.on_exit(child, -9, '')  # the Runtime-killed peer's reap, quest closed already
-  assert sum(1 for _, m in runtime.sent if m.payload.get('outcome') == 'failed') == 1
-  assert runtime.forgotten == [child]
-
-
-@pytest.mark.asyncio
-async def test_spawn_failure_synthesizes_failed_launch_and_closes_the_quest():
-  # a launch that raises feeds back as result{failed, reason: 'launch'} instead of
-  # leaving the requester to hang to its timeout.
-  dispatcher, runtime = make_dispatcher()
-  runtime.spawn_error = RuntimeError('image build exploded')
-  dispatcher.on('spawn-test', spawn_test_handler(_LAUNCH))
-  dispatcher.on_message('requester', _request('spawn-test', 'R'))
-  await _settle()
-  assert len(runtime.sent) == 1
-  target, failed = runtime.sent[0]
-  assert target == 'requester'
-  assert (failed.type, failed.quest) == (Tag.RESULT, 'R')
-  assert failed.payload == {
-    'outcome': 'failed',
-    'error': 'image build exploded',
-    'detail': {'reason': 'launch'},
-  }
-  assert dispatcher.quests == {}  # closed; nothing to hold for the never-launched worker
-  assert dispatcher.workers == {}
-
-
-async def start_job(
-  dispatcher: Dispatcher,
-  runtime: FakeRuntime,
-  *,
-  requester: Peer = 'requester',
-  request_id: str = 'R',
-) -> Peer:
-  """drive a job request through rule 2 + an inline handler; return the job's
-  synthetic worker peer."""
-  dispatcher.on('job-test', lambda context, peer, message: context.job(_JOB, peer))
-  dispatcher.on_message(requester, _request('job-test', request_id))
-  await _settle()
-  return job_peer(request_id)
-
-
-@pytest.mark.asyncio
-async def test_job_opens_the_quest_with_the_worker_bound_up_front():
-  # a job's peer id is derivable from the quest id, so the worker binds before
-  # the launch resolves — no exit can slip between launch and bind.
-  dispatcher, runtime = make_dispatcher()
-  dispatcher.on('job-test', lambda context, peer, message: context.job(_JOB, peer))
-  dispatcher.on_message('requester', _request('job-test', 'R'))
-  worker = job_peer('R')
-  assert dispatcher.quests['R'].requester == 'requester'
-  assert dispatcher.quests['R'].worker == worker  # bound before the launch resolved
-  assert dispatcher.workers[worker] == 'R'
-  await _settle()
-  assert runtime.jobs == [(_JOB, DEFAULT_TIMEOUT, 'R')]
-  assert runtime.job_directories == job_output(dispatcher).opened  # the run it will answer with
-
-
-@pytest.mark.asyncio
-async def test_a_broker_with_no_job_output_runs_no_jobs():
+def _dispatcher(*, job_output=None):
   runtime = FakeRuntime()
-  dispatcher = Dispatcher()
-  dispatcher.bind(runtime)
-  dispatcher.on('job-test', lambda context, peer, message: context.job(_JOB, peer))
-  with pytest.raises(RuntimeError):
-    dispatcher.on_message('requester', _request('job-test', 'R'))
+  dispatcher = Dispatcher(job_output=job_output)
+  dispatcher.bind(cast(Runtime, runtime))
+  root = dispatcher.journal.open('root-quest', 'root', None, None, {})
+  dispatcher.journal.bind(root, 'requester')
+  dispatcher.workers['requester'] = 'root-quest'
+  return dispatcher, runtime
 
 
-@pytest.mark.asyncio
-async def test_job_launch_delivers_a_started_progress():
-  dispatcher, runtime = make_dispatcher()
-  observed = make_tap(dispatcher)
-  worker = await start_job(dispatcher, runtime)
-  [(target, started)] = runtime.sent
-  assert target == 'requester'
-  assert (started.type, started.quest, started.payload) == (Tag.PROGRESS, 'R', {})
-  assert [(source, target, m.type) for source, target, m in observed] == [
-    (worker, 'requester', Tag.PROGRESS)
-  ]
+def _maximum_frame_result_payload() -> dict:
+  value = 'x' * brotocol.MAX_FRAME_BYTES
+  message = Message(type=Tag.RESULT, payload={'outcome': 'ok', 'value': value}, quest='child')
+  overflow = len(message.to_bytes()) - brotocol.MAX_FRAME_BYTES
+  payload = {'outcome': 'ok', 'value': value[:-overflow]}
+  assert (
+    len(Message(type=Tag.RESULT, payload=payload, quest='child').to_bytes())
+    <= brotocol.MAX_FRAME_BYTES
+  )
+  return payload
 
 
-@pytest.mark.asyncio
-async def test_job_clean_exit_closes_the_quest_with_the_collected_run():
-  dispatcher, runtime = make_dispatcher()
-  output = job_output(dispatcher)
-  worker = await start_job(dispatcher, runtime)
-  dispatcher.on_exit(worker, 0, '')
-  # the reap decides the outcome and forgets the quest before the collection
-  # it delivers from, so nothing else can answer it
-  assert 'R' not in dispatcher.quests
-  await _until(lambda: any(m.type == Tag.RESULT for _, m in runtime.sent))
-  target, done = runtime.sent[-1]
-  assert target == 'requester'
-  assert (done.type, done.quest) == (Tag.RESULT, 'R')
-  assert done.payload == {'outcome': 'ok', 'value': {'ref': _REF}}
-  assert output.collected == [(output.opened[0], 'requester')]
-  assert output.status() == {'reason': 'exit', 'exit_code': 0}
-  assert runtime.forgotten == [worker]
-  await _until(lambda: not output.opened[0].exists())  # the store holds its own copy
-
-
-@pytest.mark.asyncio
-async def test_job_failing_exit_carries_the_run_into_failed_exit():
-  dispatcher, runtime = make_dispatcher()
-  worker = await start_job(dispatcher, runtime)
-  dispatcher.on_exit(worker, 3, '')
-  await _until(lambda: any(m.type == Tag.RESULT for _, m in runtime.sent))
-  target, failed = runtime.sent[-1]
-  assert target == 'requester'
-  assert failed.payload == {
-    'outcome': 'failed',
-    'detail': {'reason': 'exit', 'exit_code': 3, 'ref': _REF},
-  }
-
-
-@pytest.mark.asyncio
-async def test_job_timeout_answers_from_the_reap_with_one_result():
-  # the Runtime's kill is still in flight when on_timeout fires, so the run is
-  # not final: the reap carries the timeout reason into the single result.
-  dispatcher, runtime = make_dispatcher()
-  output = job_output(dispatcher)
-  worker = await start_job(dispatcher, runtime)
-  dispatcher.on_timeout(worker)
-  assert [m for _, m in runtime.sent if m.type == Tag.RESULT] == []
-  dispatcher.on_exit(worker, -15, '')
-  await _until(lambda: any(m.type == Tag.RESULT for _, m in runtime.sent))
-  terminals = [m for _, m in runtime.sent if m.type == Tag.RESULT]
-  assert len(terminals) == 1
-  assert terminals[0].payload == {
-    'outcome': 'failed',
-    'detail': {'reason': 'timeout', 'exit_code': -15, 'ref': _REF},
-  }
-  assert output.status() == {'reason': 'timeout', 'exit_code': -15}
-
-
-@pytest.mark.asyncio
-async def test_job_collection_failure_fails_a_clean_run_and_keeps_it():
-  dispatcher, runtime = make_dispatcher()
-  output = job_output(dispatcher)
-  output.collect_error = RuntimeError('store is full')
-  worker = await start_job(dispatcher, runtime)
-  dispatcher.on_exit(worker, 0, '')
-  await _until(lambda: any(m.type == Tag.RESULT for _, m in runtime.sent))
-  _, failed = runtime.sent[-1]
-  assert failed.payload == {
-    'outcome': 'failed',
-    'error': 'store is full',
-    'detail': {'reason': 'output'},
-  }
-  assert output.opened[0].exists()  # the run is the only copy of what the job produced
-
-
-@pytest.mark.asyncio
-async def test_job_collection_failure_leaves_a_failing_exit_its_own_reason():
-  dispatcher, runtime = make_dispatcher()
-  job_output(dispatcher).collect_error = RuntimeError('store is full')
-  worker = await start_job(dispatcher, runtime)
-  dispatcher.on_exit(worker, 3, '')
-  await _until(lambda: any(m.type == Tag.RESULT for _, m in runtime.sent))
-  _, failed = runtime.sent[-1]
-  assert failed.payload == {
-    'outcome': 'failed',
-    'error': 'store is full',
-    'detail': {'reason': 'exit', 'exit_code': 3},
-  }
-
-
-@pytest.mark.asyncio
-async def test_job_launch_failure_synthesizes_failed_launch_and_unbinds_the_worker():
-  dispatcher, runtime = make_dispatcher()
-  runtime.spawn_error = RuntimeError('no such command')
-  dispatcher.on('job-test', lambda context, peer, message: context.job(_JOB, peer))
-  dispatcher.on_message('requester', _request('job-test', 'R'))
-  await _settle()
-  [(target, failed)] = runtime.sent  # no started progress precedes the failure
-  assert (target, failed.type, failed.quest) == ('requester', Tag.RESULT, 'R')
-  assert failed.payload == {
-    'outcome': 'failed',
-    'error': 'no such command',
-    'detail': {'reason': 'launch'},
-  }
-  assert dispatcher.quests == {}
-  assert dispatcher.workers == {}
-  assert not job_output(dispatcher).opened[0].exists()  # no process ran, nothing to collect
-
-
-@pytest.mark.asyncio
-async def test_duplicate_kind_registration_is_refused():
-  dispatcher, _ = make_dispatcher()
+def test_ping_answers_inline_without_journaling_the_read():
+  dispatcher, runtime = _dispatcher()
   dispatcher.on(PING, ping_handler)
-  with pytest.raises(ValueError):
-    dispatcher.on(PING, ping_handler)
+  request = _request(PING, {'value': 3}, 'ping-request')
+  dispatcher.on_message('requester', request)
+  assert runtime.sent[-1][1].payload == {'outcome': 'ok', 'value': {'value': 3}}
+  assert not dispatcher.journal.knows('ping-request')
+
+
+def test_unknown_kind_and_lineage_collision_are_denied_without_records():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on_message('requester', _request('missing', {}, 'unknown'))
+  dispatcher.on(PING, ping_handler)
+  dispatcher.on_message('requester', _request(PING, {}, 'root-quest'))
+  assert [message.payload['outcome'] for _, message in runtime.sent] == ['denied', 'denied']
+  assert not dispatcher.journal.knows('unknown')
+
+
+def test_handler_deny_answers_and_journals_refused_work():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on('work', lambda context, peer, message: context.deny(peer, 'not allowed'))
+  dispatcher.on_message('requester', _request('work', {'target': 'x'}, 'denied'))
+  assert runtime.sent[-1][1].payload == {'outcome': 'denied', 'error': 'not allowed'}
+  assert dispatcher.journal.records['denied'].state == 'denied'
 
 
 @pytest.mark.asyncio
-async def test_job_round_trips_over_a_real_runtime_and_transport():
-  # the one integration pass over the real loop: a requester on a live channel
-  # sends the request, the job's process really runs, and the host's started
-  # progress precedes the derived result.
-  import os
-  import sys
+async def test_job_output_open_failure_closes_the_journal_record():
+  class RaisingOutput:
+    def open(self):
+      raise OSError('cannot open')
 
-  from bro.broker.client import Client
-  from bro.broker.runtime import Runtime
-  from bro.broker.spawn import Spawner
-  from bro.broker.transport import connect
-  from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
+    async def collect(self, directory, context, requester):
+      raise AssertionError('collect called after open failed')
 
-  class NoSpawner(Spawner):
-    async def spawn(self, launch, channel, quest):
-      raise AssertionError('no worker peers in this test')
-
-  transport = TcpServerTransport([LOCAL_HOST])
-  output = FakeJobOutput()
-  dispatcher = Dispatcher(job_output=output)
-  runtime = Runtime(transport, NoSpawner(), dispatcher)
-  dispatcher.bind(runtime)
-  serve_task = asyncio.create_task(runtime.serve())
-  await asyncio.sleep(0)  # let serve install the sink before the requester connects
-  job = CommandJob(
-    # outlive the launch callback so the started progress deterministically
-    # precedes the collected result
-    command=(sys.executable, '-c', 'import time; print("job-ran"); time.sleep(0.2)'),
-    env=dict(os.environ),
-  )
-  dispatcher.on('job-test', lambda context, peer, message: context.job(job, peer, timeout=30.0))
-  provisioned = await runtime.expect(timeout=None)
-
-  def _drive() -> tuple[list[Message], Message]:
-    interim: list[Message] = []
-    with Client(connect(provisioned.host_endpoint.address(LOCAL_HOST))) as client:
-      result = client.call('job-test', {}, 10.0, on_interim=interim.append)
-    return interim, result
-
-  try:
-    interim, result = await asyncio.to_thread(_drive)
-  finally:
-    await runtime.stop()
-    serve_task.cancel()
-    await asyncio.gather(serve_task, return_exceptions=True)
-  [started] = interim
-  assert (started.type, started.payload) == (Tag.PROGRESS, {})
-  assert result.payload == {'outcome': 'ok', 'value': {'ref': _REF}}
-  assert output.runs[0][STDOUT_FILE].strip() == 'job-ran'  # the run the ref stands for
-
-
-async def expect_child(
-  dispatcher: Dispatcher,
-  runtime: FakeRuntime,
-  *,
-  requester: Peer = 'requester',
-  request_id: str = 'R',
-) -> tuple[Peer, list[Provisioned]]:
-  """drive an expect request through rule 2 + an inline handler; return the external
-  peer and the provisioned channels the ready callback received."""
-  child = 'external'
-  runtime.next_peers.append(child)
-  provisioned: list[Provisioned] = []
+  dispatcher, runtime = _dispatcher(job_output=RaisingOutput())
   dispatcher.on(
-    'expect',
-    lambda context, peer, message: context.expect(peer, timeout=None, ready=provisioned.append),
+    'job',
+    lambda context, peer, message: context.job(CommandJob(('true',), {}), peer),
   )
-  dispatcher.on_message(requester, _request('expect', request_id))
+  dispatcher.on_message('requester', _request('job', {}, 'job'))
   await _settle()
-  return child, provisioned
+  record = dispatcher.journal.records['job']
+  assert record.state == 'ended'
+  assert record.reason == 'output'
+  assert runtime.sent[-1][1].payload['detail']['reason'] == 'output'
 
 
 @pytest.mark.asyncio
-async def test_expect_opens_the_quest_and_hands_the_channel_to_ready():
-  dispatcher, runtime = make_dispatcher()
-  child, provisioned = await expect_child(dispatcher, runtime)
-  assert runtime.expects == [None]
-  assert [p.channel for p in provisioned] == [child]
-  assert dispatcher.quests['R'].requester == 'requester'
-  assert dispatcher.quests['R'].worker == child
-  assert dispatcher.workers[child] == 'R'
+async def test_spawn_launch_failure_synthesizes_one_terminal():
+  dispatcher, runtime = _dispatcher()
+  runtime.launch_error = RuntimeError('launch broke')
+  dispatcher.on('work', lambda context, peer, message: context.spawn(LaunchSpec(), peer))
+  dispatcher.on_message('requester', _request('work', {}, 'work'))
+  await _settle()
+  results = [message for _, message in runtime.sent if message.type == 'result']
+  assert len(results) == 1
+  assert results[0].payload['detail']['reason'] == 'launch'
+  assert dispatcher.journal.records['work'].state == 'ended'
 
 
 @pytest.mark.asyncio
-async def test_expected_peer_messages_route_and_gone_after_the_result_is_clean():
-  # an expected worker's progress/result route like a spawned one's; the trailing
-  # on_gone finds the quest closed and only cleans up.
-  dispatcher, runtime = make_dispatcher()
-  child, _ = await expect_child(dispatcher, runtime)
-  dispatcher.on_message(child, brotocol.progress('R', {'trail_id': 't'}))
-  dispatcher.on_message(child, brotocol.result('R', 'ok'))
-  assert [(target, m.type, m.quest) for target, m in runtime.sent] == [
-    ('requester', Tag.PROGRESS, 'R'),
-    ('requester', Tag.RESULT, 'R'),
+async def test_expected_ready_failure_synthesizes_one_terminal():
+  dispatcher, runtime = _dispatcher()
+
+  def fail_ready(provisioned):
+    raise OSError('ready broke')
+
+  dispatcher.on(
+    'manual',
+    lambda context, peer, message: context.expect(peer, timeout=None, ready=fail_ready),
+  )
+  dispatcher.on_message('requester', _request('manual', {}, 'manual'))
+  await _settle()
+  results = [message for _, message in runtime.sent if message.type == 'result']
+  assert len(results) == 1
+  assert results[0].payload['detail']['reason'] == 'launch'
+  assert dispatcher.journal.records['manual'].state == 'ended'
+
+
+@pytest.mark.asyncio
+async def test_messages_sent_during_launch_follow_started_in_the_journal():
+  dispatcher, runtime = _dispatcher()
+  runtime.launch_messages = [
+    brotocol.mark('work', 'trail', trail_id='trail'),
+    brotocol.result('work', 'ok'),
   ]
-  dispatcher.on_gone(child)
-  assert sum(1 for _, m in runtime.sent if m.payload.get('outcome') == 'failed') == 0
-  assert runtime.forgotten == [child]
-  assert child not in dispatcher.workers
-
-
-@pytest.mark.asyncio
-async def test_gone_without_a_result_synthesizes_failed_disconnected():
-  dispatcher, runtime = make_dispatcher()
-  child, _ = await expect_child(dispatcher, runtime)
-  dispatcher.on_gone(child)
-  target, failed = runtime.sent[-1]
-  assert (target, failed.type, failed.quest) == ('requester', Tag.RESULT, 'R')
-  assert failed.payload == {'outcome': 'failed', 'detail': {'reason': 'disconnected'}}
-  assert runtime.forgotten == [child]
-
-
-@pytest.mark.asyncio
-async def test_expect_failure_synthesizes_failed_launch():
-  dispatcher, runtime = make_dispatcher()
-  runtime.spawn_error = RuntimeError('no socket dir')
-  provisioned: list[Provisioned] = []
-  dispatcher.on(
-    'expect',
-    lambda context, peer, message: context.expect(peer, timeout=None, ready=provisioned.append),
-  )
-  dispatcher.on_message('requester', _request('expect', 'R'))
+  dispatcher.on('work', lambda context, peer, message: context.spawn(LaunchSpec(), peer))
+  dispatcher.on_message('requester', _request('work', {}, 'work'))
   await _settle()
-  assert provisioned == []
-  [(target, failed)] = runtime.sent
-  assert (target, failed.type, failed.quest) == ('requester', Tag.RESULT, 'R')
-  assert failed.payload == {
-    'outcome': 'failed',
-    'error': 'no socket dir',
-    'detail': {'reason': 'launch'},
-  }
-  assert dispatcher.quests == {}
+  transitions = [
+    event['transition']
+    for event in dispatcher.journal.events_after(0, 'requester', dispatcher.workers)[1]
+    if event['quest'] == 'work'
+  ]
+  assert transitions == ['accepted', 'started', 'trail', 'ended']
+  assert runtime.handle is not None
+  runtime.handle.exit.set_result(0)
+  await _settle()
 
 
 @pytest.mark.asyncio
-async def test_uncorrelatable_answers_are_refused():
-  # rule 3: progress/result naming no live quest -> dropped, nothing delivered.
-  dispatcher, runtime = make_dispatcher()
-  dispatcher.on_message('stranger', brotocol.progress('nobody', {}))
-  dispatcher.on_message('stranger', brotocol.result('nobody', 'ok'))
+async def test_spawned_quest_marks_lifecycle_and_routes_only_its_worker():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on('work', lambda context, peer, message: context.spawn(LaunchSpec(), peer))
+  dispatcher.on_message('requester', _request('work', {'prompt': 'go'}, 'work'))
+  assert runtime.sent[-1][1].payload == {'transition': 'accepted'}
+  await _settle()
+  worker = dispatcher.journal.records['work'].worker
+  assert worker is not None
+  assert runtime.sent[-1][1].payload == {'transition': 'started'}
+  delivered = len(runtime.sent)
+  runtime.events[worker].on_message(brotocol.result('forged', 'ok'))
+  assert len(runtime.sent) == delivered
+  assert 'work' in dispatcher.live
+  dispatcher.on_message('impostor', brotocol.mark('work', 'trail', trail_id='wrong'))
+  dispatcher.on_message(worker, brotocol.mark('work', 'trail', trail_id='trail-1'))
+  dispatcher.on_message(worker, brotocol.result('work', 'ok', value='done'))
+  assert dispatcher.journal.records['work'].trail_id == 'trail-1'
+  assert dispatcher.journal.records['work'].result == {'outcome': 'ok', 'value': 'done'}
+  assert 'work' not in dispatcher.live
+  assert runtime.handle is not None
+  runtime.handle.exit.set_result(0)
+  await _settle()
+  assert [message.type for _, message in runtime.sent] == ['mark', 'mark', 'mark', 'result']
+
+
+@pytest.mark.asyncio
+async def test_result_disarms_the_deadline_while_the_worker_stays_routable():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on(
+    'work',
+    lambda context, peer, message: context.spawn(LaunchSpec(), peer, timeout=0.01),
+  )
+  dispatcher.on(PING, ping_handler)
+  dispatcher.on_message('requester', _request('work', {}, 'work'))
+  await _settle()
+  worker = dispatcher.journal.records['work'].worker
+  assert worker is not None
+  runtime.events[worker].on_message(brotocol.result('work', 'ok'))
+  await asyncio.sleep(0.03)
+  assert runtime.handle is not None
+  assert not runtime.handle.killed
+  runtime.events[worker].on_message(_request(PING, {'nested': True}, 'nested'))
+  assert runtime.sent[-1][1].payload['value'] == {'nested': True}
+  runtime.handle.exit.set_result(0)
+  await _settle()
+
+
+@pytest.mark.asyncio
+async def test_process_cannot_emit_dispatcher_or_worker_marks():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on('work', lambda context, peer, message: context.spawn(LaunchSpec(), peer))
+  dispatcher.on_message('requester', _request('work', {}, 'work'))
+  await _settle()
+  worker = dispatcher.journal.records['work'].worker
+  assert worker is not None
+  dispatcher.on_message(worker, brotocol.mark('work', 'accepted'))
+  dispatcher.on_message(worker, brotocol.mark('work', 'started'))
+  transitions = [
+    event['transition']
+    for event in dispatcher.journal.events_after(0, 'requester', dispatcher.workers)[1]
+    if event['quest'] == 'work'
+  ]
+  assert transitions == ['accepted', 'started']
+  assert runtime.handle is not None
+  runtime.handle.exit.set_result(0)
+  await _settle()
+
+
+@pytest.mark.asyncio
+async def test_expected_worker_defers_wire_acceptance_until_ready_and_starts_on_attach():
+  dispatcher, runtime = _dispatcher()
+  ready = []
+  dispatcher.on(
+    'manual',
+    lambda context, peer, message: context.expect(peer, timeout=None, ready=ready.append),
+  )
+  dispatcher.on_message('requester', _request('manual', {}, 'manual'))
   assert runtime.sent == []
-
-
-@pytest.mark.asyncio
-async def test_root_answers_its_host_anchored_quest_without_peer_delivery(caplog):
-  # run() opens the session's own quest for the root; its progress/result reach
-  # only the observers (target None), close nothing peer-visible, and never arm
-  # drop-gating against the channel's later traffic.
-  dispatcher, runtime = make_dispatcher()
-  observed: list[tuple[Optional[Peer], Optional[Peer], Message]] = []
-  dispatcher.add_delivery_observer(
-    lambda source, target, message: observed.append((source, target, message))
-  )
-  runtime.next_peers.append('root')
-  run_task = asyncio.ensure_future(dispatcher.run(_LAUNCH))
   await _settle()
-  [(_, _, quest)] = runtime.spawns
-  dispatcher.on_message('root', brotocol.progress(quest, {'trail_id': 't'}))
-  dispatcher.on_message('root', brotocol.result(quest, 'ok', value='done'))
-  assert runtime.sent == []  # nobody to deliver to: the host is the requester
-  assert [(source, target, m.type) for source, target, m in observed] == [
-    ('root', None, Tag.PROGRESS),
-    ('root', None, Tag.RESULT),
-  ]
-  assert not any('refused' in record.message for record in caplog.records)
-  dispatcher.on(PING, ping_handler)
-  dispatcher.on_message('root', _request(PING, 'Q'))
-  assert runtime.sent[-1][1].payload['outcome'] == 'ok'  # the channel keeps serving
-  dispatcher.stop()
-  await asyncio.wait_for(run_task, 5)
-
-
-def make_tap(dispatcher: Dispatcher) -> list[tuple[Optional[Peer], Optional[Peer], Message]]:
-  observed: list[tuple[Optional[Peer], Optional[Peer], Message]] = []
-  dispatcher.add_delivery_observer(
-    lambda source, target, message: observed.append((source, target, message))
-  )
-  return observed
-
-
-@pytest.mark.asyncio
-async def test_delivery_tap_observes_rule_1_forwarding():
-  dispatcher, runtime = make_dispatcher()
-  observed = make_tap(dispatcher)
-  child = await spawn_child(dispatcher, runtime)
-  dispatcher.on_message(child, brotocol.progress('R', {'trail_id': 't'}))
-  dispatcher.on_message(child, brotocol.result('R', 'ok', value='answer'))
-  assert [(source, target, message.type) for source, target, message in observed] == [
-    (child, 'requester', Tag.PROGRESS),
-    (child, 'requester', Tag.RESULT),
-  ]
-  assert observed[0][2].quest == 'R'
-
-
-@pytest.mark.asyncio
-async def test_delivery_tap_observes_synthesized_failed():
-  dispatcher, runtime = make_dispatcher()
-  observed = make_tap(dispatcher)
-  child = await spawn_child(dispatcher, runtime)
-  dispatcher.on_exit(child, 3, 'tail')
-  [(source, target, failed)] = observed
-  assert (source, target, failed.type) == (child, 'requester', Tag.RESULT)
-  assert failed.payload['detail']['reason'] == 'exit'
-
-
-@pytest.mark.asyncio
-async def test_delivery_tap_observes_launch_failure_with_no_source_peer():
-  dispatcher, runtime = make_dispatcher()
-  observed = make_tap(dispatcher)
-  runtime.spawn_error = RuntimeError('boom')
-  dispatcher.on('spawn-test', spawn_test_handler(_LAUNCH))
-  dispatcher.on_message('requester', _request('spawn-test', 'R'))
+  assert len(ready) == 1
+  assert runtime.sent[-1][1].payload == {'transition': 'accepted'}
+  worker = dispatcher.journal.records['manual'].worker
+  runtime.events[worker].on_connect()
+  assert runtime.sent[-1][1].payload == {'transition': 'started'}
+  runtime.events[worker].on_disconnect()
   await _settle()
-  [(source, target, failed)] = observed
-  assert source is None  # the worker never existed
-  assert (target, failed.type) == ('requester', Tag.RESULT)
-  assert failed.payload['detail']['reason'] == 'launch'
+  assert dispatcher.journal.records['manual'].reason == 'disconnected'
+
+
+def test_query_lists_and_reads_only_the_callers_subtree():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on(QUERY, query_handler)
+  child = dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {'target': 'dev'})
+  dispatcher.journal.end(child, {'outcome': 'ok', 'value': 'answer'})
+  dispatcher.on_message('requester', _request(QUERY, {}, 'list'))
+  listed = runtime.sent[-1][1].payload['value']['quests']
+  assert {record['id'] for record in listed} == {'root-quest', 'child'}
+  dispatcher.on_message('requester', _request(QUERY, {'id': 'child'}, 'query-one'))
+  assert runtime.sent[-1][1].payload['value']['quest']['result']['value'] == 'answer'
+  assert not dispatcher.journal.knows('list')
+  assert not dispatcher.journal.knows('query-one')
+
+
+def test_query_reports_a_retained_result_as_evicted_when_its_response_would_exceed_the_frame():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on(QUERY, query_handler)
+  child = dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {})
+  dispatcher.journal.end(child, _maximum_frame_result_payload())
+
+  dispatcher.on_message('requester', _request(QUERY, {'id': 'child'}, 'query-one'))
+
+  response = runtime.sent[-1][1]
+  assert len(response.to_bytes()) <= brotocol.MAX_FRAME_BYTES
+  view = response.payload['value']['quest']
+  assert 'result' not in view
+  assert view['result_evicted'] is True
+
+
+def test_query_pages_every_live_record_inside_the_frame_cap():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on(QUERY, query_handler)
+  for index in range(256):
+    dispatcher.journal.open(
+      f'child-{index}',
+      'summon',
+      'root-quest',
+      'requester',
+      {f'field-{field}': str(index) * 200 for field in range(20)},
+    )
+  cursor = None
+  seen = []
+  page = 0
+  while True:
+    args = {} if cursor is None else {'cursor': cursor}
+    dispatcher.on_message('requester', _request(QUERY, args, f'list-{page}'))
+    response = runtime.sent[-1][1]
+    assert len(response.to_bytes()) <= brotocol.MAX_FRAME_BYTES
+    value = response.payload['value']
+    seen.extend(record['id'] for record in value['quests'])
+    cursor = value.get('cursor')
+    if cursor is None:
+      break
+    page += 1
+  assert set(seen) == set(dispatcher.journal.records)
+  assert len(seen) == len(set(seen))
+
+
+def test_query_rejects_an_invalid_listing_cursor():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on(QUERY, query_handler)
+  dispatcher.on_message('requester', _request(QUERY, {'cursor': 'not-a-cursor'}, 'list'))
+  assert runtime.sent[-1][1].outcome == 'denied'
 
 
 @pytest.mark.asyncio
-async def test_delivery_tap_ignores_handler_replies_denials_and_refusals():
-  dispatcher, runtime = make_dispatcher()
-  observed = make_tap(dispatcher)
-  dispatcher.on(PING, ping_handler)
-  dispatcher.on_message('caller', _request(PING, 'Q'))  # rule 2 + reply()
-  dispatcher.on_message('caller', _request('mystery', 'M'))  # denied
-  dispatcher.on_message('stranger', brotocol.progress('nobody', {}))  # rule 3
-  assert observed == []
-  assert len(runtime.sent) == 2  # the ping reply and the denial were still delivered
-
-
-@pytest.mark.asyncio
-async def test_run_spawns_root_uniformly_and_returns_its_exit_code():
-  dispatcher, runtime = make_dispatcher()
-  runtime.next_peers.append('root')
-  assert dispatcher.root is None  # unset until run() spawns it
-  run_task = asyncio.ensure_future(dispatcher.run(_LAUNCH))
+async def test_query_wait_answers_the_terminal_state():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on(QUERY, query_handler)
+  child = dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {})
+  dispatcher.on_message('requester', _request(QUERY, {'id': 'child', 'wait': 1}, 'wait'))
+  assert runtime.sent == []
+  dispatcher.journal.end(child, {'outcome': 'ok', 'value': 'answer'})
   await _settle()
-  [(launch, timeout, quest)] = runtime.spawns
-  assert (launch, timeout) == (_LAUNCH, None)  # the root carries no request-lifecycle timeout
-  assert dispatcher.root == 'root'
-  assert dispatcher.quests[quest].requester is None  # host-anchored
-  assert dispatcher.workers['root'] == quest
-  dispatcher.on_exit('root', 7, '')
-  assert await asyncio.wait_for(run_task, 5) == 7
-  assert runtime.sent == []  # a host-anchored quest closes silently on exit
-  assert runtime._stopped.is_set()  # teardown ran
+  assert runtime.sent[-1][1].payload['value']['quest']['result']['value'] == 'answer'
 
 
 @pytest.mark.asyncio
-async def test_stop_unblocks_a_running_run():
-  dispatcher, runtime = make_dispatcher()
-  runtime.next_peers.append('root')
-  run_task = asyncio.ensure_future(dispatcher.run(_LAUNCH))
+async def test_query_wait_reports_an_oversize_retained_result_as_evicted():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on(QUERY, query_handler)
+  child = dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {})
+  dispatcher.on_message('requester', _request(QUERY, {'id': 'child', 'wait': 1}, 'wait'))
+
+  dispatcher.journal.end(child, _maximum_frame_result_payload())
   await _settle()
-  dispatcher.stop()
-  assert await asyncio.wait_for(run_task, 5) == 0
-  assert runtime._stopped.is_set()
+
+  response = runtime.sent[-1][1]
+  assert len(response.to_bytes()) <= brotocol.MAX_FRAME_BYTES
+  view = response.payload['value']['quest']
+  assert 'result' not in view
+  assert view['result_evicted'] is True
+
+
+def test_events_from_now_and_retained_history():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on(EVENTS, events_handler)
+  dispatcher.on_message('requester', _request(EVENTS, {}, 'now'))
+  assert runtime.sent[-1][1].payload['value'] == {
+    'head': dispatcher.journal.head,
+    'events': [],
+  }
+  dispatcher.on_message('requester', _request(EVENTS, {'after': 0}, 'history'))
+  history = runtime.sent[-1][1].payload['value']['events']
+  assert history[0]['quest'] == 'root-quest'
+
+
+def test_events_pages_every_visible_event_inside_the_frame_cap():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on(EVENTS, events_handler)
+  for index in range(130):
+    record = dispatcher.journal.open(
+      f'child-{index}',
+      'summon',
+      'root-quest',
+      'requester',
+      {},
+    )
+    dispatcher.journal.trail(record, 'x' * 2048)
+
+  cursor = 0
+  seen = []
+  page_sizes = []
+  while cursor < dispatcher.journal.head:
+    dispatcher.on_message('requester', _request(EVENTS, {'after': cursor}, f'events-{cursor}'))
+    response = runtime.sent[-1][1]
+    assert len(response.to_bytes()) <= brotocol.MAX_FRAME_BYTES
+    events = response.payload['value']['events']
+    seen.extend(event['seq'] for event in events)
+    page_sizes.append(len(events))
+    cursor = events[-1]['seq']
+
+  assert seen == list(range(2, dispatcher.journal.head + 1))
+  assert page_sizes[0] < 256
+
+
+@pytest.mark.asyncio
+async def test_events_wait_answers_when_a_visible_event_arrives():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on(EVENTS, events_handler)
+  head = dispatcher.journal.head
+  dispatcher.on_message('requester', _request(EVENTS, {'after': head, 'wait': 1}, 'wait-events'))
+  assert runtime.sent == []
+  for index in range(130):
+    record = dispatcher.journal.open(
+      f'child-{index}',
+      'summon',
+      'root-quest',
+      'requester',
+      {},
+    )
+    dispatcher.journal.trail(record, 'x' * 2048)
+  await _settle()
+
+  response = runtime.sent[-1][1]
+  assert len(response.to_bytes()) <= brotocol.MAX_FRAME_BYTES
+  events = response.payload['value']['events']
+  assert events[0]['quest'] == 'child-0'
+  assert len(events) < 256
+
+
+@pytest.mark.asyncio
+async def test_worker_death_synthesizes_one_failed_result():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on('work', lambda context, peer, message: context.spawn(LaunchSpec(), peer))
+  dispatcher.on_message('requester', _request('work', {}, 'work'))
+  await _settle()
+  assert runtime.handle is not None
+  runtime.handle.exit.set_result(7)
+  await _settle()
+  results = [message for _, message in runtime.sent if message.type == 'result']
+  assert len(results) == 1
+  assert results[0].payload['detail']['reason'] == 'exit'
+  assert dispatcher.journal.records['work'].outcome == 'failed'

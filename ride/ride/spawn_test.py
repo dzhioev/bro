@@ -1,4 +1,3 @@
-import json
 import subprocess
 from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
@@ -19,9 +18,8 @@ import ride.workspace.docker as workspace_docker
 import ride.workspace.store as workspace_store
 from bro.broker.dispatcher import Dispatcher
 from bro.broker.transports.tcp import LOCAL_HOST, Endpoint
-from bro.monitor import trail_pointer
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
-from bro.workspace.paths import summon_dir, workspace_dir, workspace_tree
+from bro.workspace.paths import summon_dir, workspace_tree
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 
@@ -558,36 +556,6 @@ class TestClaudeSummonLowering:
     ]  # fmt: skip
 
 
-class TestChildTrailPublication:
-  def test_started_delivery_publishes_the_childs_session_pointer(self, tmp_path):
-    from bro.broker import brotocol
-
-    observe = ride.spawn._note_child_started(_peers_expecting('req'))
-    observe('CH', 'root', brotocol.mark('req', 'trail', trail_id='t-9'))
-    pointer = trail_pointer.session_pointer(workspace_dir('broker-CH'))
-    assert trail_pointer.read(pointer) == 't-9'
-
-  def test_a_registered_childs_pointer_lands_under_its_recorded_workspace(self, tmp_path):
-    from bro.broker import brotocol
-
-    peers = _peers_expecting('req')
-    peers.note_workspace('req', 'my-manual')
-    observe = ride.spawn._note_child_started(peers)
-    observe('CH', 'root', brotocol.progress('req', {'trail_id': 't-9'}))
-    pointer = trail_pointer.session_pointer(workspace_dir('my-manual'))
-    assert trail_pointer.read(pointer) == 't-9'
-
-  def test_non_started_and_host_anchored_deliveries_publish_nothing(self, tmp_path):
-    from bro.broker import brotocol
-
-    observe = ride.spawn._note_child_started(_peers_expecting('r'))
-    observe('CH', 'root', brotocol.result('r', 'ok', value='t'))
-    observe(None, 'root', brotocol.progress('r', {'trail_id': 't'}))  # launch-failure synthesis
-    observe('CH', None, brotocol.progress('r', {'trail_id': 't'}))  # the root's own started
-    observe('CH', 'root', brotocol.progress('r', {}))
-    assert not trail_pointer.session_pointer(workspace_dir('broker-CH')).exists()
-
-
 class TestBrokerBindHosts:
   """the gateway branch that binds is what the `broker_e2e` stage exercises for
   real; these pin the two ways it falls back to loopback alone."""
@@ -616,7 +584,7 @@ class TestRunRootViaBroker:
       def on(self, message_type, handler):
         captured['handlers'][message_type] = handler
 
-      def add_delivery_observer(self, observer):
+      def subscribe(self, observer):
         captured['observers'].append(observer)
 
       def run(self, launch):
@@ -675,53 +643,13 @@ class TestRunRootViaBroker:
     assert kind_context.workspace_tree == workspace.tree
     assert isinstance(kind_context.artifacts, ride.artifacts.ArtifactControl)
     assert kind_context.credential_scope == frozenset({'harbor'})
-    # the summon handler and the delivery tap belong to the same per-root control
     control = captured['handlers']['summon'].__self__
     assert isinstance(control, ride.summon_control.SummonControl)
-    control_observer, child_trail_observer, _root_observer = captured['observers']
-    assert control_observer.__self__ is control
-    # the second tap publishes summoned children's started trails beside their
-    # workspace records, bound to this root's project
-    from bro.broker import brotocol
-
-    child_trail_observer('CH', 'root', brotocol.progress('req', {'trail_id': 't-7'}))
-    pointer = trail_pointer.session_pointer(workspace_dir('broker-CH'))
-    assert trail_pointer.read(pointer) == 't-7'
+    status_projection, audit_writer = captured['observers']
+    assert status_projection.__self__ is control
+    assert audit_writer.__self__ is control
     assert control._workspace is workspace
     state_directory = summon_dir()
     assert control._status_file == state_directory / 'ws.status.json'
     assert control._audit_file == state_directory / 'ws.jsonl'
     assert captured['launch'] is launch
-
-  def test_root_lifecycle_observer_logs_trail_and_outcome(self, caplog, tmp_path):
-    from bro.broker import brotocol
-
-    workspace = Workspace.create('ws', tmp_path, WorkspaceKind.CONTAINER)
-    control = ride.summon_control.SummonControl(
-      allow_list=set(),
-      credential_scope=workspace_store.ScopedSecrets(set(), set()),
-      workspace=workspace,
-      peers=ride.peers.Peers(workspace),
-      artifacts=ride.artifacts.ArtifactStore(workspace, root_in_container=False),
-      status_file=tmp_path / 'status.json',
-      audit_file=tmp_path / 'audit.jsonl',
-    )
-    observe = ride.spawn._root_lifecycle(control, workspace)
-    observe('root', None, brotocol.mark('X', 'trail', trail_id='t-1'))
-    # the started progress doubles as the bro-run root's provenance source
-    assert control._root_trail_id == 't-1'
-    pointer = trail_pointer.session_pointer(workspace.path)
-    assert json.loads(pointer.read_text()) == {'trail_id': 't-1'}
-    observe('root', None, brotocol.result('X', 'ok', value='fine'))
-    # a raised run surfaces its reason — the error is the failure cause
-    observe(
-      'root',
-      None,
-      brotocol.result('X', 'failed', error='no api key', detail={'reason': 'raised'}),
-    )
-    # a child delivery has a target peer and is not the root's to log
-    observe('CH', 'root', brotocol.progress('req', {'trail_id': 't-2'}))
-    assert any('root run started (trail t-1)' in record.message for record in caplog.records)
-    assert any('root run ended: ok' in record.message for record in caplog.records)
-    assert any('root run raised: no api key' in record.message for record in caplog.records)
-    assert not any('t-2' in record.message for record in caplog.records)

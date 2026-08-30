@@ -268,7 +268,7 @@ async def test_failed_terminal_carries_a_trails_hint(monkeypatch, capsys, caplog
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'dev', 'p']))
 
     channel, request = await _next(server.sink.messages)
-    await server.transport.send(channel, brotocol.progress(request.id, {'trail_id': 'T9'}))
+    await server.transport.send(channel, brotocol.mark(request.id, 'trail', trail_id='T9'))
     await server.transport.send(
       channel, brotocol.result(request.id, 'failed', detail={'reason': 'timeout'})
     )
@@ -531,15 +531,31 @@ def test_check_timeout_without_wait_errors(monkeypatch, capsys, caplog):
 
 
 @pytest.mark.asyncio
-async def test_wait_after_started_is_bounded_with_a_trails_hint(monkeypatch, capsys, caplog):
-  # started re-arms the wait to the effective timeout (down from the launch
-  # backstop), so a lost terminal becomes a clean failure with a trails hint
+async def test_accepted_and_started_do_not_shorten_the_launch_wait(monkeypatch, capsys):
+  async with running_server(monkeypatch) as server:
+    monkeypatch.setattr(summon, 'LAUNCH_TIMEOUT', 0.3)
+    main_task = asyncio.create_task(
+      asyncio.to_thread(summon.main, ['summon', '--timeout', '0.05', 'dev', 'p'])
+    )
+    channel, request = await _next(server.sink.messages)
+    await server.transport.send(channel, brotocol.mark(request.id, 'accepted'))
+    await server.transport.send(channel, brotocol.mark(request.id, 'started'))
+    await asyncio.sleep(0.1)
+    await server.transport.send(channel, brotocol.result(request.id, 'ok', value='answer'))
+    assert await asyncio.wait_for(main_task, TIMEOUT) == 0
+    assert capsys.readouterr().out.strip() == 'answer'
+
+
+@pytest.mark.asyncio
+async def test_wait_after_trail_is_bounded_with_a_trails_hint(monkeypatch, capsys, caplog):
+  # The worker's trail mark re-arms the request-silence bound;
+  # a lost terminal reports the trail the caller can inspect.
   async with running_server(monkeypatch) as server:
     argv = ['summon', '--timeout', '0.1', 'dev', 'p']
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
 
     channel, request = await _next(server.sink.messages)
-    await server.transport.send(channel, brotocol.progress(request.id, {'trail_id': 'T7'}))
+    await server.transport.send(channel, brotocol.mark(request.id, 'trail', trail_id='T7'))
 
     assert await asyncio.wait_for(main_task, TIMEOUT) == 1
     assert capsys.readouterr().out == ''

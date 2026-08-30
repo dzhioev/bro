@@ -16,8 +16,8 @@ that has not arisen.
 `send` returns the sent request (ids are minted client-side); `await_reply` is
 `call`'s wait detached from its send and `await_any` is `request`'s, so a
 consumer can expose the request id the moment it is on the wire and block — or
-reattach — separately. `progress` and `result` are the answering side: a worker
-peer emits them against the quest id its launch carried (`QUEST_ENV`).
+reattach — separately. `mark`, `progress`, and `result` are the answering side:
+a worker peer emits them against the quest id its launch carried (`QUEST_ENV`).
 """
 
 import os
@@ -56,8 +56,12 @@ class Client:
     self._transport.send(message)
     return message
 
+  def mark(self, quest_id: str, transition: str, **payload: Any) -> None:
+    """emit a lifecycle mark on ``quest_id`` from its worker peer."""
+    self._transport.send(brotocol.mark(quest_id, transition, **payload))
+
   def progress(self, quest_id: str, payload: dict[str, Any]) -> None:
-    """emit progress on `quest_id` from its worker peer."""
+    """emit progress on ``quest_id`` from its worker peer."""
     self._transport.send(brotocol.progress(quest_id, payload))
 
   def result(self, quest_id: str, payload: dict[str, Any]) -> None:
@@ -98,18 +102,21 @@ class Client:
     *,
     on_interim: Optional[Callable[[Message], None]] = None,
     timeout_after_interim: Optional[float] = None,
+    rearm_on_interim: Optional[Callable[[Message], bool]] = None,
   ) -> Message:
     """block for the result correlated to an already-sent `request` — the detached
     tail of `call`, for a caller that sent first (to expose the request id) and
     awaits separately. Semantics and errors are exactly `call`'s wait, except when
     `timeout_after_interim` is set:
-    each correlated mark or progress message then re-arms the deadline to that many seconds from its arrival, so the bound covers the silence since the last message rather than the whole wait."""
+    correlated interim messages re-arm the deadline to that many seconds from arrival.
+    `rearm_on_interim` narrows which interim messages trigger that re-arm."""
     deadline = time.monotonic() + timeout if timeout is not None else None
     while True:
       message = self._receive_correlated(request, deadline, timeout)
       if message.type == Tag.RESULT:
         return message
-      if timeout_after_interim is not None:
+      should_rearm = rearm_on_interim is None or rearm_on_interim(message)
+      if timeout_after_interim is not None and should_rearm:
         deadline = time.monotonic() + timeout_after_interim
         timeout = timeout_after_interim
       if on_interim is not None:

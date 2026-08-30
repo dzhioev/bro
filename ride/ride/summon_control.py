@@ -1,81 +1,17 @@
-"""summon, host side: authorization and per-root bookkeeping.
+"""Host authorization and journal projection for the ``summon`` kind.
 
-Two layers, both computed per broker root:
+``SummonControl.handle`` validates and authorizes each request against the
+requesting peer's recorded identity, then binds a spawned or expected Worker
+through the Dispatcher primitives. Deterministic refusals use ``Dispatcher.deny``
+so answer and journal record are one operation.
 
-- `summon_allow_list` — which bros a session may summon. Every surface that starts
-  a broker root (`ride solo|along` in both modes, the do-CLI container hop) computes the
-  session's effective outgoing allow-list here at launch and threads it to
-  `run_root_via_broker`.
-- `SummonControl` — the root's summon state, wired up by `run_root_via_broker`:
-  the `summon` kind handler (args validation, per-peer authorization, the
-  immediate `result{denied}` plus a deny audit entry, the spawn of a
-  `SummonLaunchSpec` with the requesting peer as the quest's requester —
-  everything heavy runs off-loop in the spawner, see `ride/ride/spawn.py` — or,
-  for a `manual` request, the expected-peer registration with its pending
-  record, see `ride/ride/pending_summon.py`), the delivery-tap observer
-  that tracks each child's trail id and outcome, and the visibility outputs
-  those feed: a host-side log line per event, an append-only JSONL audit file
-  (the out-of-band trace a session's own narrative cannot suppress; every entry
-  names the actual summoner), and the summon-status file the session's
-  statusLine renders (records and atomic write in `bro.summon_status`; each
-  launch surface points its session at one through `RIDE_SUMMON_STATUS`).
+The control subscribes to the broker journal for the identity records nested
+summons still need, the one-stage legacy status-file projection, root trail
+fallback, and manual-token cleanup. A second subscriber writes every journal
+event to the human-facing summon audit. Sessions own their own trail pointers;
+the host only observes trail marks.
 
-Authorization is per-peer. The root follows the launch-computed effective list
-above; a summoned child follows the list its own summon request resolved — its
-bro's static MRO-collected `may_summon` seeds under the request's `@bro`
-grant/revoke overrides — recorded at the authorized spawn. The control attributes
-the requesting peer to the bro it spawned for it — the workspace half of that
-attribution is the shared peer registry (`ride/ride/peers.py`), the summon half
-this control's own spawn records; nothing is read from the wire — and a
-peer it cannot attribute is denied. Provenance rides the same attribution:
-a spawned child's `summoned_by` names the requester's trail — the root's from the
-session's current-trail pointer (the claude recorder publishes it;
-`monitor/trail_pointer.py`) or from the root run's `started` event, a summoned
-child's from its spawn record — plus the requester's own `tool_call` step id when
-the request args carry one. Summons therefore chain transitively wherever
-the seeds chain, bounded by `_MAX_SUMMON_DEPTH` — seeds are declared per-bro, so
-a seed cycle (a → b → a) would otherwise recurse through real containers.
-
-A widening is per request, never implicit, and never an escalation: a requester's
-own scope is not inherited — only what its `grant` names reaches the child — and
-every granted kind must already be in the requester's own scope, and an explicit
-instance must be the instance that scope selects for the kind, so no chain of
-summons reaches authority the session was not launched with. Both bounds are the
-requester's: `allow_list` for `@bro` values, and its credential scope plus
-selection for the rest — the root's threaded in at construction from the launch,
-a summoned child's recomputed from its own spawn record (`_child_credentials`).
-`harness` and `llm` widen without naming a credential — the driving loop they
-select brings its own — and answer to the same credential bound, applied to what
-they add on top of the target's own default scope (`_credential_refusal`).
-
-The request's `grant`/`revoke` split by kind: `@bro` values resolve here, on the
-loop, so a malformed or no-op override is denied immediately, while the unified
-values ride the spawn, where the lowering (`ride/ride/spawn.py`) applies the
-credential half against the child's own computed scope — a bad override fails
-the launch — and records the whole lists in the child's session spec. `harness`
-and `llm` are child-facing: they select the child's driving loop and recipe,
-ride its recorded session spec and inner argv, and shape its computed scope.
-A summon's `share` names artifact refs handed down to the child, under the same
-bound applied here on the loop — the requester may only share what it can
-itself read (`ride/ride/artifacts.py`) — while the view linking rides the spawn
-lowering, where the child's workspace exists.
-
-The same per-request attribution also names the requester's workspace, threaded
-into the spawn as the child's base-ref inheritance source: a summoned child
-bases on its summoner's workspace HEAD unless the request's `into` overrides.
-The HEAD read itself is blocking git work and runs off-loop in the spawner
-(`ride/ride/spawn.py:_lower_summon`); the handler only names the workspace.
-
-Both state files live under `bro.workspace.paths.summon_dir`, keyed by the
-workspace name: `<name>.jsonl` (audit) and `<name>.status.json` (live status).
-They sit outside the workspace dir so the audit survives a drop. The host process writes both; a container session
-reads the status through the dedicated read-only `/var/ride/summon` bind, while a
-host session reads the host path.
-
-The wire contract (the `summon` kind, its args keys, the 1800s default timeout)
-is owned by the peer-side `bro.summon` module; this module enforces it host-side. Broker
-imports stay function-local: this module sits on the launch path before the
-`_broker_enabled` gate (see ride/ride/workspace/AGENTS.md, "Lazy broker import").
+Broker imports stay function-local where the pre-gate launch path requires it.
 """
 
 import json
@@ -101,6 +37,7 @@ from ride.workspace.store import ScopedSecrets
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message
   from bro.broker.dispatcher import Dispatcher
+  from bro.broker.journal import Event, Record
   from bro.broker.runtime import Peer
   from bro.broker.transport import Provisioned
   from ride.artifacts import ArtifactStore
@@ -195,20 +132,6 @@ def _summoned_scope(
 
 def _prompt_head(prompt: str) -> str:
   return ' '.join(prompt.split())[:_PROMPT_HEAD_CHARS]
-
-
-def _outcome_tag(payload: dict[str, Any]) -> str:
-  """a summon result's audit/status outcome tag: 'ok', the child run's own end
-  reason ('raised' / 'error'), or 'failed:<reason>' for a host-synthesized
-  failure."""
-  outcome = payload.get('outcome')
-  if outcome != 'failed':
-    return str(outcome)
-  detail = payload.get('detail')
-  reason = detail.get('reason') if isinstance(detail, dict) else None
-  if reason in ('raised', 'error'):
-    return str(reason)
-  return f'failed:{reason}' if reason is not None else 'failed'
 
 
 def _validate(args: dict[str, Any]) -> Optional[str]:
@@ -379,15 +302,7 @@ def _credential_refusal(
 
 
 class SummonControl:
-  """one broker root's summon authorization + bookkeeping (see module docstring).
-
-  `handle` registers as the broker's `summon` handler and `observe_delivery` as a
-  delivery observer; both run on the broker loop, so everything heavy belongs in
-  the spawner and what stays here is kept to the authorization decision itself.
-  `log_killed_in_flight` runs once the broker loop ends, even when it raises
-  — root teardown kills in-flight children without a terminal (a manual child is
-  only detached: the user's session lives on, its channel gone), and their loss
-  must be loud."""
+  """One broker root's summon authorization and journal projections."""
 
   def __init__(
     self,
@@ -412,12 +327,14 @@ class SummonControl:
     self._status_file = status_file
     self._audit_file = audit_file
     self._root_trail_id: Optional[str] = None
-    self._active: dict[str, _ActiveSummon] = {}  # request id -> in-flight child
+    self._pending: dict[str, _ActiveSummon] = {}
+    self._records: dict[str, _ActiveSummon] = {}
+    self._active: dict[str, _ActiveSummon] = {}
+    self._denial_summoners: dict[str, Optional[dict[str, Any]]] = {}
     self._last: Optional[summon_status.FinishedSummon] = None
 
   def note_root_trail(self, trail_id: Optional[str]) -> None:
-    """record the root peer's own trail id (from its `started` lifecycle event)
-    as the trail the root's summon children are attributed to."""
+    """Record the root's trail mark as summon-provenance fallback."""
     if trail_id is not None:
       self._root_trail_id = trail_id
 
@@ -520,6 +437,20 @@ class SummonControl:
         summoned_by['index'] = args['index']
     self._peers.note_summon(context, peer, message.quest_id, manual=args.get('manual', False))
     if args.get('manual', False):
+      self._pending[message.quest_id] = _ActiveSummon(
+        request_id=message.quest_id,
+        target=target,
+        prompt_head=_prompt_head(prompt),
+        started_at=time.time(),
+        summoner=requester.summoner,
+        depth=requester.depth + 1,
+        allow_list=child_allow_list,
+        grant=list(grant),
+        revoke=list(revoke),
+        llm=None,
+        harness=None,
+        manual=True,
+      )
       self._expect_manual(
         context,
         peer,
@@ -532,6 +463,21 @@ class SummonControl:
       )
       return
     timeout = args.get('timeout')
+    record = _ActiveSummon(
+      request_id=message.quest_id,
+      target=target,
+      prompt_head=_prompt_head(prompt),
+      started_at=time.time(),
+      summoner=requester.summoner,
+      depth=requester.depth + 1,
+      allow_list=child_allow_list,
+      grant=list(grant),
+      revoke=list(revoke),
+      share=list(share),
+      llm=llm,
+      harness=harness_name,
+    )
+    self._pending[message.quest_id] = record
     context.spawn(
       SummonLaunchSpec(
         target=target,
@@ -551,30 +497,6 @@ class SummonControl:
       peer,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,
     )
-    record = _ActiveSummon(
-      request_id=message.quest_id,
-      target=target,
-      prompt_head=_prompt_head(prompt),
-      started_at=time.time(),
-      summoner=requester.summoner,
-      depth=requester.depth + 1,
-      allow_list=child_allow_list,
-      grant=list(grant),
-      revoke=list(revoke),
-      share=list(share),
-      llm=llm,
-      harness=harness_name,
-    )
-    self._active[message.quest_id] = record
-    log.info(
-      'summon: %s spawning %s (request %s): %s',
-      self._workspace.name,
-      target,
-      message.id,
-      record.prompt_head,
-    )
-    self._audit('spawn', record)
-    self._write_status()
 
   def _expect_manual(
     self,
@@ -618,33 +540,6 @@ class SummonControl:
           into=args.get('into'),
         ),
       )
-      # the requester's client blocks on this acknowledgment before handing the
-      # token to the user, so it is sent only once the token is claimable
-      context.deliver(peer, brotocol.progress(message.quest_id, {}))
-      record = _ActiveSummon(
-        request_id=message.quest_id,
-        target=target,
-        prompt_head=_prompt_head(prompt),
-        started_at=time.time(),
-        summoner=requester.summoner,
-        depth=requester.depth + 1,
-        allow_list=child_allow_list,
-        grant=grant,
-        revoke=revoke,
-        llm=None,
-        harness=None,
-        manual=True,
-      )
-      self._active[message.quest_id] = record
-      log.info(
-        'summon: %s expecting a manual %s launch (token %s): %s',
-        self._workspace.name,
-        target,
-        message.id,
-        record.prompt_head,
-      )
-      self._audit('expect', record)
-      self._write_status()
 
     context.expect(peer, timeout=None, ready=_ready)
 
@@ -704,14 +599,8 @@ class SummonControl:
       raise UnattributablePeer(str(error)) from error
 
   def _root_summoned_by(self) -> Optional[dict[str, Any]]:
-    # the root's trail attribution source, per publication channel
-    # (monitor/trail_pointer.py): a claude session's recorder publishes its
-    # current trail at the workspace's session pointer — read per request,
-    # since the pointer moves as the session's segment turns over — while a
-    # bro-run root announces its trail in the `started` lifecycle event, noted
-    # via note_root_trail. absent both (the early-launch
-    # race before transcript adoption, or no recorder at all), provenance
-    # degrades to no pointer, never a legacy-shaped one.
+    # Read the session-owned pointer per request because Claude trail segments
+    # turn over; the journaled root trail mark is the native/fallback source.
     from bro.monitor.trail_pointer import read, session_pointer
 
     trail_id = read(session_pointer(self._workspace.path))
@@ -728,123 +617,90 @@ class SummonControl:
     error: str,
   ) -> None:
     log.warning('summon: %s: %s', self._workspace.name, error)
-    context.reply(peer, {'outcome': 'denied', 'error': error})
-    entry: dict[str, Any] = {
-      'request_id': message.id,
-      'reason': error,
-      'summoner': summoner,
-    }
-    target = message.args.get('target')
-    if isinstance(target, str):
-      entry['target'] = target
-    prompt = message.args.get('prompt')
-    if isinstance(prompt, str):
-      entry['prompt_head'] = _prompt_head(prompt)
-    self._append_audit('deny', entry)
+    self._denial_summoners[message.quest_id] = summoner
+    context.deny(peer, error)
 
-  # --- the delivery-tap observer (broker loop) -----------------------------------
-
-  def observe_delivery(
-    self, source: Optional['Peer'], target: Optional['Peer'], message: 'Message'
-  ) -> None:
-    del source, target
-    if message.quest is None:
+  def observe_journal(self, event: 'Event', journal_record: 'Record') -> None:
+    """Project journal events into the one-stage legacy status surface."""
+    if journal_record.kind == 'root':
+      if event.transition == 'trail':
+        self.note_root_trail(journal_record.trail_id)
+        log.info('root run trail %s', journal_record.trail_id)
+      elif event.transition == 'ended':
+        reason = event.payload.get('reason')
+        if reason == 'raised':
+          log.warning('root run raised: %s', journal_record.result)
+        else:
+          log.info('root run ended: %s', event.payload.get('outcome'))
       return
-    record = self._active.get(message.quest)
-    if record is None:
+    if journal_record.kind != 'summon':
       return
-    trail_id = message.payload.get('trail_id')
-    if isinstance(trail_id, str) and len(trail_id) > 0:
-      record.trail_id = trail_id
-      log.info('summon: %s started (trail %s)', record.target, record.trail_id)
+    if event.transition == 'accepted':
+      record = self._pending.pop(event.quest, None)
+      if record is None:
+        log.warning('summon: accepted quest %s has no authorized identity record', event.quest)
+        return
+      self._records[event.quest] = record
+      self._active[event.quest] = record
+      action = 'expecting a manual launch' if record.manual else 'spawning'
+      log.info(
+        'summon: %s %s %s (request %s)', self._workspace.name, action, record.target, event.quest
+      )
       self._write_status()
       return
-    if 'outcome' in message.payload:
-      self._finish(record, _outcome_tag(message.payload))
-
-  def _finish(self, record: _ActiveSummon, outcome: str) -> None:
-    del self._active[record.request_id]
+    record = self._records.get(event.quest)
+    if record is None:
+      return
+    if event.transition == 'trail':
+      record.trail_id = journal_record.trail_id
+      log.info('summon: %s trail %s', record.target, record.trail_id)
+      self._write_status()
+      return
+    if event.transition != 'ended':
+      return
+    self._active.pop(event.quest, None)
     if record.manual:
-      # a manual summon that ended before its token was claimed leaves a record
-      # no launch may consume any more
       pending_summon.discard(record.request_id)
+    outcome = str(event.payload.get('outcome'))
+    reason = event.payload.get('reason')
+    if outcome == 'failed' and reason in ('raised', 'error'):
+      outcome = str(reason)
+    elif outcome == 'failed' and reason is not None:
+      outcome = f'failed:{reason}'
     self._last = summon_status.FinishedSummon(
       request_id=record.request_id,
       target=record.target,
       trail_id=record.trail_id,
       summoner=record.summoner,
       outcome=outcome,
-      ended_at=time.time(),
+      ended_at=event.at.timestamp(),
     )
     log.info('summon: %s ended: %s (trail %s)', record.target, outcome, record.trail_id)
-    self._audit('end', record, outcome=outcome)
     self._write_status()
 
-  # --- teardown (after the broker loop returns) -----------------------------------
-
-  def log_killed_in_flight(self) -> None:
-    if len(self._active) == 0:
-      return  # nothing killed, and a summon-less session never writes state files
-    for record in list(self._active.values()):
-      if record.manual:
-        # the root's exit only closed the channel; a manual child is the user's
-        # own session and lives on, un-summoned
-        log.warning(
-          'summon: root exit detached in-flight manual child %s (token %s, trail %s)',
-          record.target,
-          record.request_id,
-          record.trail_id,
-        )
-        self._audit('end', record, outcome='detached')
-        pending_summon.discard(record.request_id)
-        continue
-      log.warning(
-        'summon: root exit killed in-flight child %s (request %s, trail %s)',
-        record.target,
-        record.request_id,
-        record.trail_id,
-      )
-      self._audit('end', record, outcome='killed')
-    self._active.clear()
-    self._write_status()
-
-  # --- the visibility outputs ------------------------------------------------------
-
-  def _audit(self, event: str, record: _ActiveSummon, *, outcome: Optional[str] = None) -> None:
+  def audit_event(self, event: 'Event', journal_record: 'Record') -> None:
+    """Append one human-facing JSONL row for every journal event."""
     entry: dict[str, Any] = {
-      'request_id': record.request_id,
-      'summoner': record.summoner,
-      'target': record.target,
-      'prompt_head': record.prompt_head,
-      'trail_id': record.trail_id,
-    }
-    if len(record.grant) > 0:
-      entry['grant'] = record.grant
-    if len(record.revoke) > 0:
-      entry['revoke'] = record.revoke
-    if len(record.share) > 0:
-      entry['share'] = record.share
-    if record.harness is not None:
-      entry['harness'] = record.harness
-    if record.manual:
-      entry['manual'] = True
-    if outcome is not None:
-      entry['outcome'] = outcome
-    self._append_audit(event, entry)
-
-  def _append_audit(self, event: str, entry: dict[str, Any]) -> None:
-    entry = {
-      'time': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
-      'event': event,
       'session': self._workspace.name,
-      **entry,
+      **event.view(),
+      'args': journal_record.args,
     }
+    record = self._records.get(event.quest) or self._pending.get(event.quest)
+    if record is not None:
+      entry['summoner'] = record.summoner
+      entry['target'] = record.target
+    elif event.quest in self._denial_summoners:
+      entry['summoner'] = self._denial_summoners[event.quest]
     try:
       self._audit_file.parent.mkdir(parents=True, exist_ok=True)
-      with self._audit_file.open('a') as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + '\n')
-    except OSError as e:
-      log.warning('could not append summon audit record to %s: %s', self._audit_file, e)
+      with self._audit_file.open('a') as audit:
+        audit.write(json.dumps(entry, ensure_ascii=False) + '\n')
+    except OSError as error:
+      log.warning('could not append summon audit record to %s: %s', self._audit_file, error)
+    if event.transition == 'ended':
+      self._records.pop(event.quest, None)
+    elif event.transition == 'denied':
+      self._denial_summoners.pop(event.quest, None)
 
   def _write_status(self) -> None:
     status = summon_status.SummonStatus(
