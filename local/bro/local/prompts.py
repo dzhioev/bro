@@ -12,12 +12,9 @@ drafts, experiments, provisional structure — and none of it is fixed in stone.
 There are no external consumers to protect, so backward compatibility is not a
 design constraint. When the right design means breaking an interface, moving a
 mechanism between distributions, or deleting a half-finished idea, propose
-exactly that and carry it out once the user confirms. Never trim a solution to
-avoid disturbing what is already there, and never offer "nothing existing
-changes" as a merit of a proposal — the merit is the structure left behind.
-
-Follow the repository's own docs for its formatter, test gate, and package build
-checks.
+exactly that. Never trim a solution to avoid disturbing what is already there,
+and never offer "nothing existing changes" as a merit of a proposal — the merit
+is the structure left behind.
 
 Text assets may carry `{{…}}` conditioning directives. Read the `template` man
 page when their exact grammar or rendering semantics matter.

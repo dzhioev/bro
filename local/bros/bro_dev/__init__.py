@@ -3,6 +3,13 @@ from bro.datasources.references import man
 from bro.local.prompts import FRAMEWORK_PROJECT
 from bros.dev import Dev
 
+AUTHORING = """\
+Once the user confirms a design, carry it out.
+
+Follow the repository's own docs for its formatter, test gate, and package build
+checks.
+"""
+
 
 class BroDev(Dev):
   name = 'bro-dev'
@@ -17,4 +24,4 @@ class BroDev(Dev):
     man('ride'),
     man('dive-in'),
   ]
-  system_prompt = FRAMEWORK_PROJECT
+  system_prompt = f'{FRAMEWORK_PROJECT}\n{AUTHORING}'
