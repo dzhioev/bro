@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 6.0.0
+version: 7.0.0
 ---
 
 # run-pr
@@ -111,11 +111,6 @@ No test run here:
 the gate is step 9, paid once on the tree that ships
 — a pass before the rebase is evidence the rebase discards.
 
-{{iff #may_summon contains eyebro}}
-**Policy audit**:
-owned by the eyebro's independent review of the whole branch ("Pre-review by the eyebro", after step 8)
-— nothing to audit per commit.
-{{else}}
 **Policy audit**:
 before each commit, call `dev-style-source::read` and audit that commit's `git diff` against the returned policy text.
 The tool read is part of the gate
@@ -130,7 +125,6 @@ An audit done only in your head is indistinguishable from one skipped, so an int
 a written verdict can't be dropped unnoticed.
 It's the cheapest place to catch a violation
 — the alternative is a review round-trip.
-{{end}}
 
 ### 3. Sync the repo docs
 
@@ -278,39 +272,6 @@ Whatever the session spends after the last fold
 — the approval wait, the landing turns
 — is credited to nothing;
 a branch that is final before review cannot account for the work that follows it.
-
-{{when #may_summon contains eyebro}}
-
-### Pre-review by the eyebro
-
-The branch's style audit:
-one independent review of the whole change, paid once before the PR instead of per commit.
-
-It runs after the fold because the branch now *is* what `<base>` will carry:
-the split, the messages, and the tree the reviewer reads are the ones that land.
-A review before the fold judges working commits the fold discards.
-
-[[ask]] the eyebro for a style review and wait on the findings
-— the child bases on this workspace's HEAD and shares no context, so the relayed request names what to diff against:
-
-    [[review diff of HEAD against origin/<base>, in terms of the development style policy and the repository's own guides]]
-
-Handle the findings at pre-PR prices:
-fix what is right with further commits (steps 5–6) and re-fold (step 8), the round every review on the open PR takes too (step 15).
-Then ask again, and keep going round until the review comes back with nothing
-— each round is a fresh child that re-reads the branch, since no channel carries a conversation across summons yet, so what it judges is always the tree as it now stands.
-
-A finding you believe is wrong ends the loop as surely as one you fix, and it does not end it by being ignored:
-concede it, or answer it in the next round's request so the child judges the branch knowing your reasoning.
-When neither settles it, that is the user's to break
-— ask where questions reach them, `raise` when unattended.
-Never take an unresolved round as clean.
-
-If the ask is denied or fails outright, no review happened and none is coming from here:
-audit the branch yourself before moving on
-— call `dev-style-source::read` and audit `git diff origin/<base>..HEAD` against the returned policy, stating the verdict as visible output.
-
-{{end}}
 
 ### 9. The pre-push gate
 

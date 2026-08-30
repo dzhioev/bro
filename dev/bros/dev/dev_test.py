@@ -80,10 +80,6 @@ def test_run_pr_hands_review_to_a_granted_eyebro(monkeypatch):
   bro = _TrackerDev()
   solo = bro.get_spell_body('run-pr', harness='claude', wire='mcp')
   assert 'Hand the review to the eyebro' not in solo
-  assert 'Pre-review by the eyebro' not in solo
-  assert 'State the verdict as visible output' in solo
   monkeypatch.setenv(MAY_SUMMON_ENV, 'eyebro')
   granted = bro.get_spell_body('run-pr', harness='claude', wire='mcp')
   assert 'Hand the review to the eyebro' in granted
-  assert 'Pre-review by the eyebro' in granted
-  assert 'State the verdict as visible output' not in granted

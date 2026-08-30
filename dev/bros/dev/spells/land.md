@@ -12,7 +12,7 @@ Also covers landing without a pull request
 — a repo that takes changes straight onto its target branch:
 the rebase-and-push one-liner, and the CI dispatch that stands in for the checks no PR is there to run.
 
-version: 5.0.0
+version: 5.1.0
 ---
 
 # land
@@ -158,12 +158,20 @@ git fetch origin && git rebase origin/<base>
 {{when #may_summon contains eyebro}}
 
 Then the review.
-There is no PR for the eyebro to review afterwards, so its diff review is the whole review:
-[[ask]] it to review `HEAD` against `origin/<base>` per [[run pr]]'s pre-review step, and repeat the round
+There is no PR for the eyebro to review afterwards, so its diff review is the whole review.
+[[ask]] it for one and wait on the findings
+— the child bases on this workspace's HEAD and shares no context, so the relayed request names what to diff against:
+
+    [[review diff of HEAD against origin/<base>, in terms of the development style policy and the repository's own guides]]
+
+Then repeat the round
 — fix, re-ask
-— until it comes back clean.
+— until it comes back clean;
+each round is a fresh child that re-reads the branch, so what it judges is always the tree as it now stands.
 Its verdict gates the push the way it gates a merge:
 a reviewer that ran and did not come back clean stops the landing, and that is a question for the user or a `raise`, never something to push past.
+A summon denied at launch is no review either, and nothing here supplies one in its place:
+report that none ran and leave the push to the user, `raise` when unattended.
 {{end}}
 
 Then the CI gate, which is yours to run here.
