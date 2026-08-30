@@ -35,7 +35,7 @@ class TestProjectSelection:
 
     selected = host_config.project_selection(str(tmp_path))
 
-    assert selected.instances == {'github': 'project', 'trails': 'write', 'brog': None}
+    assert selected.instances == {'github': 'project', 'trails': 'write', 'brog': ''}
     assert selected.layers == {
       'github': host_config.PROJECT_LAYER,
       'trails': host_config.DEFAULTS_LAYER,
@@ -170,10 +170,10 @@ class TestToolSelection:
 
 
 class TestValidation:
-  def test_trailing_plus_selects_bare_material(self, config_file):
+  def test_trailing_plus_selects_the_empty_instance(self, config_file):
     config_file({'defaults': {'creds': ['brog+']}})
 
-    assert host_config.tool_selection(None).instances == {'brog': None}
+    assert host_config.tool_selection(None).instances == {'brog': ''}
 
   def test_unknown_kind_is_carried_without_registry_validation(self, config_file):
     config_file({'defaults': {'creds': ['consumer_only+special']}})

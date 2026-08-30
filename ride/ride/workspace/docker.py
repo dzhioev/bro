@@ -79,7 +79,7 @@ class Launch:
   image: str
   runtime_bundle_hash: str
   optional_secrets: Collection[str] = ()
-  credential_selection: Mapping[str, Optional[str]] = field(default_factory=dict)
+  credential_selection: Mapping[str, str] = field(default_factory=dict)
   extra_mounts: Collection[str] = ()
   repo: Optional[Repository | Path] = None
 

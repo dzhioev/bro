@@ -61,6 +61,5 @@ def _print_tier(
 def _reads(kind: str, binding: host_config.CredentialSelection) -> str:
   if kind not in binding.instances:
     return ''
-  instance = binding.instances[kind]
-  selected_name = kind if instance is None else f'{kind}+{instance}'
-  return f'{selected_name} ({binding.layers[kind]})'
+  selected = credentials.storage_name(kind, binding.instances[kind])
+  return f'{selected} ({binding.layers[kind]})'

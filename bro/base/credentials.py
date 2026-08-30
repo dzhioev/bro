@@ -4,8 +4,11 @@
 The code registry declares credential kinds, descriptions, and optional install
 hooks.
 A store supplies material independently:
-`creds/<name>.cred` is the material for a kind or `kind+instance`, while
-`creds.json` optionally annotates a name with one typed source.
+`creds/<name>.cred` is the material for one stored name, while `creds.json`
+optionally annotates a name with one typed source.
+A stored name is `kind+instance`, spelled `kind` when the instance is empty;
+a kind-addressed read falls to that empty instance when no layer selects
+another.
 `BRO_STORE` selects a directed process store.
 Without it, the default `~/.bro` store lazily applies `~/.bro.json`'s defaults
 plus the tool layer for the basename recorded by `Parser.parse`.
@@ -69,14 +72,35 @@ def _entry_point(group: str, name: str) -> Optional[importlib.metadata.EntryPoin
   return matches[0] if len(matches) == 1 else None
 
 
-_NAME_GRAMMAR = re.compile(r'([a-z0-9_]+)(?:\+([a-z0-9_-]+))?')
+_NAME_GRAMMAR = re.compile(r'([a-z0-9_]+)(?:\+([a-z0-9_-]*))?')
 
 
 def parse_name(name: str) -> tuple[str, Optional[str]]:
+  """Split a name into its kind and instance.
+
+  The instance is None when the name addresses a kind rather than storage, and
+  the empty string when it names the kind's empty instance (`github+`).
+  """
   match = _NAME_GRAMMAR.fullmatch(name)
   if match is None:
     raise ValueError(f'malformed secret name {name!r}; expected kind or kind+instance')
   return match.group(1), match.group(2)
+
+
+def storage_name(kind: str, instance: str) -> str:
+  """The canonical stored spelling of one instance of `kind`."""
+  return kind if instance == '' else f'{kind}+{instance}'
+
+
+def _stored_spelling(name: str) -> str:
+  kind, instance = parse_name(name)
+  return storage_name(kind, instance or '')
+
+
+def _require_canonical_name(name: str, where: str) -> None:
+  canonical = _stored_spelling(name)
+  if canonical != name:
+    raise ValueError(f'{where} {name!r}, which spells the stored name {canonical!r}')
 
 
 def require_kind_declaration(name: str, declaration: str) -> None:
@@ -378,7 +402,7 @@ class Store:
     self,
     registry: Mapping[str, CredentialKind],
     store_dir: str | Path,
-    selection: Mapping[str, Optional[str]],
+    selection: Mapping[str, str],
     *,
     _readable: Optional[Iterable[str]] = None,
   ):
@@ -391,6 +415,7 @@ class Store:
       if len(unknown) > 0:
         raise ValueError(f'readable kinds outside the registry: {unknown}')
     self._sources = self._load_sources()
+    self._reject_noncanonical_material()
     self._cache: dict[str, str] = {}
     self._winners: dict[str, Source] = {}
     self._lock = threading.Lock()
@@ -407,6 +432,7 @@ class Store:
       raise ValueError(f'credential source file {path} must be a json object')
     sources: dict[str, Source] = {}
     for name, annotation in data.items():
+      _require_canonical_name(name, f'{path} annotates')
       kind, _ = parse_name(name)
       if not isinstance(annotation, dict):
         raise ValueError(f'credential source annotation {name!r} must be an object')
@@ -425,15 +451,19 @@ class Store:
       sources[name] = _source_from_dict(annotation)
     return sources
 
+  def _reject_noncanonical_material(self) -> None:
+    material_dir = self.store_dir / MATERIAL_DIR
+    if not material_dir.is_dir():
+      return
+    for path in sorted(material_dir.glob(f'*{MATERIAL_SUFFIX}')):
+      _require_canonical_name(path.name.removesuffix(MATERIAL_SUFFIX), f'{material_dir} holds')
+
   def _material_path(self, storage_name: str) -> Path:
     return self.store_dir / MATERIAL_DIR / f'{storage_name}{MATERIAL_SUFFIX}'
 
   def selected_name(self, name: str) -> str:
     kind, instance = parse_name(name)
-    if instance is not None:
-      return name
-    selected = self.selection.get(kind)
-    return kind if selected is None else f'{kind}+{selected}'
+    return storage_name(kind, self.selection.get(kind, '') if instance is None else instance)
 
   def _source(self, storage_name: str) -> Source:
     return self._sources.get(storage_name, LocalSource())
@@ -448,7 +478,8 @@ class Store:
     resolved = self._resolution(name, requested=name)
     return None if isinstance(resolved, _Unresolved) else resolved
 
-  def _resolution(self, storage_name: str, *, requested: str) -> _Resolution:
+  def _resolution(self, name: str, *, requested: str) -> _Resolution:
+    storage_name = _stored_spelling(name)
     kind, _ = parse_name(storage_name)
     if kind not in self.registry or (self._readable is not None and kind not in self._readable):
       return _Unresolved(requested)
@@ -616,17 +647,16 @@ class Store:
 
 
 def _validate_selection(
-  selection: Mapping[str, Optional[str]], registry: Mapping[str, CredentialKind]
-) -> dict[str, Optional[str]]:
-  result: dict[str, Optional[str]] = {}
+  selection: Mapping[str, str], registry: Mapping[str, CredentialKind]
+) -> dict[str, str]:
+  result: dict[str, str] = {}
   for kind, instance in selection.items():
     _require_kind(kind)
     if kind not in registry:
       raise ValueError(f'instance selected for unknown credential kind {kind!r}')
-    if instance is not None:
-      if not isinstance(instance, str):
-        raise ValueError(f'credential instance for {kind!r} must be a string or null')
-      parse_name(f'{kind}+{instance}')
+    if not isinstance(instance, str):
+      raise ValueError(f'credential instance for {kind!r} must be a string')
+    parse_name(f'{kind}+{instance}')
     result[kind] = instance
   return result
 
@@ -678,7 +708,7 @@ def default_store() -> Store:
       if _default_store is None:
         _reject_retired_store_files()
         registry = default_registry()
-        selection: dict[str, Optional[str]] = {}
+        selection: dict[str, str] = {}
         if 'BRO_STORE' not in os.environ:
           from bro.base import host_config
 

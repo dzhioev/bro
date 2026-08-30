@@ -645,7 +645,7 @@ Host scoping is still a convenience rather than a security boundary, because the
   `credentials.build_scoped_store(store, required, optional=…)` returns an in-memory file map plus the declared kinds that resolved.
   Required kinds fail on an unknown registry kind or absent material;
   optional kinds are included only when they resolve.
-  Each selected instance materializes as `creds/<kind>.cred`, with typed-source annotations in `creds.json`, so the scoped namespace stays kind-addressed.
+  Each selected instance materializes under the kind's empty instance, `creds/<kind>.cred`, with typed-source annotations in `creds.json`, so the scoped namespace stays kind-addressed.
   A reference-preserving `$cred` chain hydrates its referenced kinds transitively, but those transitive targets are not reported as declared hydrated kinds.
   Instance-spelled references in reference-preserving material fail because the scoped namespace is kinds-only.
 - **Install hooks.**

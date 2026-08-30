@@ -67,8 +67,8 @@ class TestReportScope:
     assert rc == 0
     assert 'MISSING' in out
 
-  def test_reads_the_kinds_own_entry_selection(self, capsys):
-    _, out, _ = _run(capsys, selection={'brog': None}, scoped=ScopedSecrets({'brog'}, set()))
+  def test_reads_the_kinds_empty_instance(self, capsys):
+    _, out, _ = _run(capsys, selection={'brog': ''}, scoped=ScopedSecrets({'brog'}, set()))
     assert 'brog (project)' in out
 
   def test_reports_a_kind_no_layer_selects(self, capsys):
