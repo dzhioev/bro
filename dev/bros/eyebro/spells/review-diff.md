@@ -9,7 +9,7 @@ The review is read-only and changes nothing.
 For driving a GitHub pull request to a verdict, [[review pr]] wraps this judging in the PR conversation loop.
 
 parameters: {"target?": "revision, branch, or revision range to review; default: the current branch against its merge base with the default branch"}
-version: 1.0.0
+version: 1.1.0
 ---
 
 # review-diff
@@ -76,8 +76,12 @@ Work through, per commit and for the change as a whole:
 
 Where a suspicion is mechanically checkable
 — would this test fail, does the type checker flag it, does the repo's linter object
-— run the check read-only in the workspace's checkout instead of asking the author or guessing.
+— run the narrowest check that settles it, read-only in the workspace's checkout, instead of asking the author or guessing.
 Say what you ran.
+Narrowest is the bound:
+the one test rather than the suite, the type checker or linter over what the diff touches rather than the repository's gate.
+Whether the change passes as a whole is the author's to establish and the CI's to confirm
+— running the gate yourself pays for it a second time and reports nothing the change's own checks do not.
 
 ## 4. Report
 
