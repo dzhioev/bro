@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.2.0
+version: 2.3.0
 ---
 
 # orchestrate
@@ -132,7 +132,10 @@ this spell only says how a phase differs from a one-shot ask.
   — the thinking was bought in the phases before them.
 - **Scope.** A bro starts from its own credentials, not yours.
   Grant only what a phase needs beyond them and only what you hold yourself:
-  a credential the phase must reach, or `@<bro>` when the phase has to hand work onward.
+  a credential the phase must reach, or `@<bro>` when the phase has to hand work onward.{{when #may_summon contains eyebro}}
+- **The eyebro.** Every phase that opens or lands a pull request gets it granted,
+  under the name your banner's `may_summon` gives rather than `eyebro` itself:
+  a child renders [[run pr]]'s and [[land]]'s reviewer steps only where its own allow-list carries one.{{end}}
 - **Self-contained prompts.** A bro shares no context with you:
   spell out the root task URL,
   what to produce,
@@ -162,7 +165,9 @@ ride along <bro> '<phase prompt>' <launch line> --harness <claude|bro>
 - No base ref:
   neither phase needs one
   — design only reads the codebase,
-  and review-and-plan resets the integration branch to `origin/master` itself.
+  and review-and-plan resets the integration branch to `origin/master` itself.{{when #may_summon contains eyebro}}
+- No eyebro either:
+  neither phase opens a pull request.{{end}}
 - **Nothing returns to you.** There is no answer channel, so whatever the phase has to report goes on the root task page
   — its prompt closes by recording a comment rather than answering.
 - Then stop and wait.
@@ -259,7 +264,7 @@ Take material objections and open questions to the user before starting stage 1.
 
 ### 3 — stages
 
-**Summon:** `into` the integration branch · `timeout` 28800 · `grant` `@<the reviewer>` when you hold one, so the stage's PR can clear a reviewed base
+**Summon:** `into` the integration branch · `timeout` 28800{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}}
 
 The long timeout covers the PR review a phase ends on:
 it idles on human latency, and the summon default kills it mid-watch.
@@ -286,7 +291,7 @@ the retry is a fresh summon on the same stage task.
 
 ### 4 — integrate
 
-**Summon:** `into` the integration branch · `timeout` 28800 · `grant` `@<the bro that does rollouts>` when the work needs one to go live
+**Summon:** `into` the integration branch · `timeout` 28800{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}} · `grant` `@<the bro that does rollouts>` when the work needs one to go live
 
 Once every stage task is done, tell the user what the last step needs from them:
 where master is a protected base, the approving review that lands the integration PR is theirs to give, and nobody in the run can supply it.
