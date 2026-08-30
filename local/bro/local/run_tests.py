@@ -160,7 +160,6 @@ PYTEST_FILES = [
   'bro/shell_test.py',
   'oops/bro/oops/assets_test.py',
   'oops/bro/oops/cdk/config_test.py',
-  'oops/bro/oops/cdk/stacks_test.py',
   'oops/bro/oops/trails_deployment_test.py',
   'oops/bro/oops/deploy_lib_test.py',
   'oops/bro/oops/distribution_test.py',
@@ -271,8 +270,12 @@ PYTEST_FILES = [
   'dev/bro/dev/install_test.py',
   'dev/bro/dev/shell_policy_test.py',
 ]
-# outside the roster above: they drive the host docker daemon, which the suite's
-# in-container leg has none of
+# collected by one process rather than by every worker in the pool: an xdist
+# worker collects the whole roster, not the share it runs, so a module importing
+# `aws_cdk` starts a jsii Node kernel in each of them
+SINGLE_PROCESS_PYTEST_FILES = ['oops/bro/oops/cdk/stacks_test.py']
+# outside both rosters above: they drive the host docker daemon, which the
+# suite's in-container leg has none of
 DOCKER_PYTEST_FILE = 'ride/ride/workspace/launch_smoke_test.py'
 BROKER_E2E_PYTEST_FILE = 'ride/ride/e2e_test.py'
 # run from the benchmark project's own environment, the only one that can import
@@ -356,14 +359,19 @@ def types_stage() -> None:
   run(sys.executable, '-m', 'pyright', extra_env=node_env())
 
 
-def unit_stage(roster: Sequence[str] = PYTEST_FILES) -> None:
-  scope = (
-    'whole roster'
-    if len(roster) == len(PYTEST_FILES)
-    else f'{len(roster)} of {len(PYTEST_FILES)} modules'
-  )
+def unit_stage(
+  roster: Sequence[str] = PYTEST_FILES,
+  single_process_roster: Sequence[str] = SINGLE_PROCESS_PYTEST_FILES,
+) -> None:
+  selected = len(roster) + len(single_process_roster)
+  total = len(PYTEST_FILES) + len(SINGLE_PROCESS_PYTEST_FILES)
+  scope = 'whole roster' if selected == total else f'{selected} of {total} modules'
   print(f'pytest: unit suite ({scope})', file=sys.stderr)
-  run(sys.executable, '-m', 'pytest', '-n', 'auto', *roster)
+  if len(roster) > 0:
+    run(sys.executable, '-m', 'pytest', '-n', 'auto', *roster)
+  if len(single_process_roster) > 0:
+    print('pytest: unit suite (single-process modules)', file=sys.stderr)
+    run(sys.executable, '-m', 'pytest', *single_process_roster)
 
 
 @dataclass(frozen=True)
@@ -371,6 +379,7 @@ class Selection:
   """the gate work a change can reach: what each narrowed stage runs, and what is dropped whole."""
 
   roster: Sequence[str]
+  single_process_roster: Sequence[str]
   distributions: Sequence[Distribution]
   dropped: frozenset[str]
 
@@ -409,13 +418,16 @@ def select(base: str) -> Selection:
     # can leave the lock committed beside it stale
     or any(path.endswith('pyproject.toml') for path in changed)
   )
-  return Selection(
-    roster=[
-      test
-      for test in PYTEST_FILES
-      if not (DIR / f'{test.removesuffix("_test.py")}.py').exists()
+
+  def reached(test: str) -> bool:
+    return (
+      not (DIR / f'{test.removesuffix("_test.py")}.py').exists()
       or module_name(source_roots, DIR / test) in hit
-    ],
+    )
+
+  return Selection(
+    roster=[test for test in PYTEST_FILES if reached(test)],
+    single_process_roster=[test for test in SINGLE_PROCESS_PYTEST_FILES if reached(test)],
     distributions=touched_distributions(changed),
     dropped=frozenset() if benchmark_reached else frozenset({'benchmark'}),
   )
@@ -500,7 +512,7 @@ def main(argv: list[str]) -> Optional[int]:
     selected = select(args['base'] or DEFAULT_BASE)
     narrowed: dict[str, Callable[[], None]] = {
       'lint': functools.partial(lint_stage, selected.distributions),
-      'unit': functools.partial(unit_stage, selected.roster),
+      'unit': functools.partial(unit_stage, selected.roster, selected.single_process_roster),
     }
     stages = [replace(stage, run=narrowed.get(stage.name, stage.run)) for stage in STAGES]
     dropped = selected.dropped
