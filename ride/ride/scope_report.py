@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Optional
 
-from bro.base import credentials
+from bro.base import credentials, host_config
 from bro.workspace.project import project_config
 from ride.harness import get_harness
 from ride.repository import Repository, as_repository
@@ -39,47 +39,28 @@ def report_scope(
     return 1
   print(f'repository: {repo.identity if repo is not None else "(detached)"}')
   print(f'bro:        {bro_name} ({recipe.name})')
-  _print_tier(
-    'required',
-    sorted(scoped.required),
-    binding.instances,
-    binding.layers,
-    scoped.unbound.kinds,
-    store,
-  )
-  _print_tier(
-    'optional',
-    sorted(scoped.optional - scoped.required),
-    binding.instances,
-    binding.layers,
-    scoped.unbound.kinds,
-    store,
-  )
+  _print_tier('required', sorted(scoped.required), binding, store)
+  _print_tier('optional', sorted(scoped.optional - scoped.required), binding, store)
   return 0
 
 
 def _print_tier(
   label: str,
   names: list[str],
-  selection: dict[str, Optional[str]],
-  layers: dict[str, str],
-  unbound: frozenset[str],
+  binding: host_config.CredentialSelection,
   store: credentials.Store,
 ) -> None:
   if len(names) == 0:
     return
   print(f'{label}:')
   for name in names:
-    if name in unbound:
-      print(f'  {name:<14}{"per project, unbound":<24}REFUSED')
-      continue
     state = 'ok' if store.available(name) else 'MISSING'
-    print(f'  {name:<14}{_reads(name, selection, layers):<24}{state}')
+    print(f'  {name:<14}{_reads(name, binding):<24}{state}')
 
 
-def _reads(kind: str, selection: dict[str, Optional[str]], layers: dict[str, str]) -> str:
-  if kind not in selection:
+def _reads(kind: str, binding: host_config.CredentialSelection) -> str:
+  if kind not in binding.instances:
     return ''
-  instance = selection[kind]
+  instance = binding.instances[kind]
   selected_name = kind if instance is None else f'{kind}+{instance}'
-  return f'{selected_name} ({layers[kind]})'
+  return f'{selected_name} ({binding.layers[kind]})'

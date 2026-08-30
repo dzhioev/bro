@@ -405,7 +405,6 @@ class SummonControl:
       required=set(credential_scope.required),
       optional=set(credential_scope.optional),
       selection=dict(credential_scope.selection),
-      unbound=credential_scope.unbound,
     )
     self._workspace = workspace
     self._peers = peers

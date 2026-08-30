@@ -24,9 +24,8 @@ _TRAILS_BASELINE = frozenset({'trails'})
 
 class LaunchScopeError(Exception):
   """a launch failed its scope computation or preflight: a bro the installation
-  does not declare, a malformed or no-op grant/revoke override, a credential kind
-  the host reads per project that this launch binds no project entry for, an
-  unknown summon target, or an unknown/unresolvable required secret."""
+  does not declare, a malformed or no-op grant/revoke override, an unknown summon
+  target, or an unknown/unresolvable required secret."""
 
 
 @contextlib.contextmanager
@@ -85,8 +84,6 @@ def scoped_secrets(
 
   The scope carries host defaults plus the operated project's instance selection
   to each explicit store the launch constructs.
-  Where no project entry binds the attachment, project-only kinds absent from
-  defaults ride along as `unbound`.
   """
   from bro.registry import create_bro
 
@@ -107,7 +104,6 @@ def scoped_secrets(
     required=required,
     optional=optional,
     selection=dict(binding.instances),
-    unbound=binding.unbound,
   )
 
 
@@ -124,7 +120,7 @@ def summoned_credential_scope(
   — the child harness's — plus the request's overrides. `grant`/`revoke` are the
   credential halves of the request's unified values (`split_scope_overrides`) —
   the `@bro` halves shape the summon allow-list instead. Raises `ValueError` on
-  a no-op override, or on a kind the launch may not read unbound."""
+  a no-op override."""
   return finalize_scoped_secrets(
     scoped_secrets(bro_name, recipe, attachment=attachment, llm_spec=llm_spec),
     grant=grant,

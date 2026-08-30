@@ -43,7 +43,7 @@ A session may use the checkout path or attach the git URL with `ride ... --repo 
 Ask which form the user's sessions use
 — `ride list` shows existing sessions
 — and record every identity in use.
-An attachment with no project entry receives defaults but refuses project-only kinds.
+An attachment with no project entry receives defaults alone.
 
 For a host CLI, use its console-script basename exactly as invoked.
 Its `tools.<name>` layer is host-wide and does not affect managed launches.
@@ -51,7 +51,7 @@ Its `tools.<name>` layer is host-wide and does not affect managed launches.
 ## 3. Learn what credentials are needed and stored
 
 For a managed launch, `bro show <bro>` lists the required and best-effort credential kinds.
-`ride scope --repo <root> --bro <bro>` shows what the attached launch currently resolves and refuses.
+`ride scope --repo <root> --bro <bro>` shows what the attached launch currently resolves.
 For a host CLI, inspect the command's credential reads in its module or documentation rather than guessing from neighbouring tools.
 
 `credentials list` prints the code registry's kinds and descriptions.
@@ -78,8 +78,7 @@ Read `bro/base/host_config.py`'s module docstring before editing the file.
 Its precedence is launch flag, project-bro, project, tool for a host CLI, defaults, then bare material.
 Every list is named `creds` and carries `kind+instance`, or `kind+` for bare material.
 
-Put a host-wide choice in `defaults.creds` only when unbound launches and unrelated projects should read it.
-This is also how a kind selected by any project is made available to unbound launches.
+Put a host-wide choice in `defaults.creds` only when unrelated projects should read it.
 Put a repository-wide choice in `projects.<attachment>.creds`.
 Put an identity specific to one bro in `projects.<attachment>.bros.<bro>.creds`.
 Put a host CLI's choice in `tools.<cli-name>.creds`.
@@ -96,9 +95,8 @@ Show the user the proposed change before writing it.
 
 For project wiring, re-run `ride scope --repo <attachment> --bro <bro>` for every attachment and bro you changed.
 Each selected kind should name the intended instance and report `ok`.
-A `MISSING` kind points at material the store cannot resolve.
-A `REFUSED` kind is project-only while this attachment binds no project entry and defaults does not name it.
-Fix either before finishing.
+A `MISSING` kind points at material the store cannot resolve;
+fix it before finishing.
 
 For tool wiring, invoke the CLI through its real console-script name on the cheapest path that reads the credential.
 Do not set `BRO_STORE` for that check:

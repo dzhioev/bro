@@ -136,8 +136,7 @@ A host CLI instead applies `tools.<cli>.creds` over defaults, keyed by its conso
 Launch and tool layers are disjoint.
 Most-specific precedence is launch flag, project-bro, project, tool for a host CLI, defaults, then bare material.
 
-A detached launch or an attachment no project entry names refuses every kind selected by any project or project-bro layer unless defaults names that kind.
-Tool entries never cause a launch refusal.
+A launch whose attachment no project entry names simply reads the layers that do apply, ending at the kind's own stored material.
 A launch can still override its computed selection with `--grant kind+instance`.
 
 Every framework CLI records its own basename while parsing arguments.

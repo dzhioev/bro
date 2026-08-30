@@ -29,13 +29,10 @@ A project key is the attachment a session names it by: the filesystem path of
 the operated repository's root (`~` and symlinks resolved before matching), or
 a normalized git URL.
 A repository attached both ways therefore carries an entry per identity.
-Launch selection precedence is project-bro, project, defaults, then bare store
-material; tool selection precedence is tool, defaults, then bare material.
+Launch selection precedence is project-bro, project, then defaults; tool
+selection precedence is tool, then defaults.
+A kind no layer selects resolves to the store's default instance.
 The returned layer map attributes every explicit selection.
-
-A detached launch or an attachment no project entry names refuses kinds selected
-by any project or project-bro layer unless defaults selects the kind.
-Tool selections never cause a launch refusal.
 
 The file is optional.
 `llm` remains the host-wide table of `--llm` preset names.
@@ -70,24 +67,11 @@ _RETIRED_INSTANCES_KEY = 'instances'
 
 
 @dataclass(frozen=True)
-class UnboundKinds:
-  """The kinds a selection refuses, with the attachment key that named no
-  project entry, or None when the launch named no attachment at all."""
-
-  kinds: frozenset[str] = frozenset()
-  attachment: Optional[str] = None
-
-
-NOTHING_UNBOUND = UnboundKinds()
-
-
-@dataclass(frozen=True)
 class CredentialSelection:
   """A merged kind-to-instance selection and its host-config provenance."""
 
   instances: dict[str, Optional[str]]
   layers: dict[str, str]
-  unbound: UnboundKinds = NOTHING_UNBOUND
 
 
 @dataclass(frozen=True)
@@ -137,7 +121,7 @@ def project_selection(attachment: Optional[str]) -> CredentialSelection:
   layers = [(DEFAULTS_LAYER, config.defaults)]
   if project is not None:
     layers.append((PROJECT_LAYER, project.credentials))
-  return _merged(layers, unbound=_unbound(config, project, attachment))
+  return _merged(layers)
 
 
 def launch_selection(attachment: Optional[str], bro: str) -> CredentialSelection:
@@ -152,7 +136,7 @@ def launch_selection(attachment: Optional[str], bro: str) -> CredentialSelection
     bro_credentials = project.bros.get(bro)
     if bro_credentials is not None:
       layers.append((PROJECT_BRO_LAYER, bro_credentials))
-  return _merged(layers, unbound=_unbound(config, project, attachment))
+  return _merged(layers)
 
 
 def tool_selection(cli_name: Optional[str]) -> CredentialSelection:
@@ -174,34 +158,15 @@ def _matching_project(config: _Config, attachment: Optional[str]) -> Optional[_P
   return config.projects.get(_attachment_key(attachment))
 
 
-def _unbound(
-  config: _Config, project: Optional[_Project], attachment: Optional[str]
-) -> UnboundKinds:
-  if project is not None:
-    return NOTHING_UNBOUND
-  project_kinds = {
-    kind
-    for candidate in config.projects.values()
-    for selection in (candidate.credentials, *candidate.bros.values())
-    for kind in selection
-  }
-  kinds = frozenset(project_kinds - config.defaults.keys())
-  if len(kinds) == 0:
-    return NOTHING_UNBOUND
-  return UnboundKinds(kinds, None if attachment is None else _attachment_key(attachment))
-
-
 def _merged(
   layers: list[tuple[str, dict[str, Optional[str]]]],
-  *,
-  unbound: UnboundKinds = NOTHING_UNBOUND,
 ) -> CredentialSelection:
   instances: dict[str, Optional[str]] = {}
   sources: dict[str, str] = {}
   for layer, selection in layers:
     instances.update(selection)
     sources.update(dict.fromkeys(selection, layer))
-  return CredentialSelection(instances, sources, unbound)
+  return CredentialSelection(instances, sources)
 
 
 def _projects(path: Path, value: object) -> dict[str, _Project]:

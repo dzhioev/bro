@@ -1,7 +1,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from bro.base.host_config import CredentialSelection, UnboundKinds
+from bro.base.host_config import CredentialSelection
 from bro.workspace.project import ProjectConfig
 from ride.scope_report import report_scope
 from ride.workspace.store import ScopedSecrets
@@ -28,7 +28,6 @@ def _run(
       return_value=CredentialSelection(
         selection,
         dict.fromkeys(selection, 'project') if layers is None else layers,
-        scoped.unbound,
       ),
     ),
     patch('ride.scope_report.scoped_secrets', return_value=scoped) as scope,
@@ -72,14 +71,10 @@ class TestReportScope:
     _, out, _ = _run(capsys, selection={'brog': None}, scoped=ScopedSecrets({'brog'}, set()))
     assert 'brog (project)' in out
 
-  def test_marks_an_unbound_project_kind_refused(self, capsys):
-    _, out, _ = _run(
-      capsys,
-      selection={},
-      scoped=ScopedSecrets({'brog'}, set(), unbound=UnboundKinds(frozenset({'brog'}))),
-    )
-    assert 'per project, unbound' in out
-    assert 'REFUSED' in out
+  def test_reports_a_kind_no_layer_selects(self, capsys):
+    _, out, _ = _run(capsys, selection={}, scoped=ScopedSecrets({'brog'}, set()))
+    assert 'brog' in out
+    assert 'REFUSED' not in out
 
   def test_raw_scopes_the_raw_flavor_and_bro_overrides_the_default(self, capsys):
     _, out, scope = _run(

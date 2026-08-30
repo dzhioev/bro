@@ -5,7 +5,6 @@ from unittest.mock import patch
 import pytest
 
 import ride.scope
-from bro.base.host_config import UnboundKinds
 from bro.datasources.web_search import WebSearch
 from bros.bro import Bro
 from ride.scope import BRO_RUN_RECIPE, ScopeRecipe
@@ -102,7 +101,6 @@ class TestScopedSecrets:
     assert scoped.selection == {'brog': 'github', 'github': 'reviewer'}
     assert 'brog' in scoped.required
     assert 'brog+github' not in scoped.required
-    assert scoped.unbound.kinds == frozenset()
 
   def test_a_url_attachment_binds_its_own_entry(self, tmp_path, monkeypatch):
     url = 'https://github.com/foo/api.git'
@@ -111,28 +109,18 @@ class TestScopedSecrets:
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, attachment=url)
     assert scoped.selection == {'brog': 'github'}
-    assert scoped.unbound.kinds == frozenset()
 
-  def test_an_attachment_no_entry_names_withholds_the_hosts_project_kinds(
-    self, tmp_path, monkeypatch
-  ):
-    config = tmp_path / 'bro.json'
-    config.write_text(
-      json.dumps({'projects': {str(tmp_path / 'other'): {'creds': ['brog+github']}}})
-    )
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-    scoped = ride.scope.scoped_secrets(
-      'bro-dev', CLAUDE_RECIPE, attachment='https://github.com/foo/api.git'
-    )
-    assert scoped.unbound.kinds == frozenset({'brog'})
-
-  def test_a_detached_scope_withholds_the_hosts_project_kinds(self, tmp_path, monkeypatch):
+  def test_a_detached_scope_ignores_another_projects_selection(self, tmp_path, monkeypatch):
     config = tmp_path / 'bro.json'
     config.write_text(json.dumps({'projects': {str(tmp_path): {'creds': ['brog+github']}}}))
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-    assert ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE).unbound.kinds == frozenset({'brog'})
 
-  def test_defaults_bind_and_unpoison_a_detached_scope(self, tmp_path, monkeypatch):
+    scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE)
+
+    assert 'brog' in scoped.required
+    assert scoped.selection == {}
+
+  def test_defaults_select_for_a_detached_scope(self, tmp_path, monkeypatch):
     config = tmp_path / 'bro.json'
     config.write_text(
       json.dumps(
@@ -147,10 +135,6 @@ class TestScopedSecrets:
     scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE)
 
     assert scoped.selection == {'brog': 'default'}
-    assert scoped.unbound.kinds == frozenset()
-
-  def test_a_single_project_host_withholds_nothing(self):
-    assert ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE).unbound.kinds == frozenset()
 
   @pytest.mark.parametrize('recipe', [CLAUDE_RECIPE, RAW_RECIPE, BRO_RUN_RECIPE])
   def test_unknown_bro_fails_the_scope(self, recipe):
@@ -206,12 +190,13 @@ class TestSummonedCredentialScope:
   ):
     self._host_config(tmp_path, monkeypatch, {str(tmp_path / 'other'): {'creds': ['brog+github']}})
     for attachment in (None, str(tmp_path), 'https://github.com/foo/api.git'):
-      with pytest.raises(ValueError, match='reads brog per project'):
-        ride.scope.summoned_credential_scope(
-          'bro-dev', CLAUDE_RECIPE, attachment=attachment, grant=[], revoke=[]
-        )
+      scoped = ride.scope.summoned_credential_scope(
+        'bro-dev', CLAUDE_RECIPE, attachment=attachment, grant=[], revoke=[]
+      )
+      assert 'brog' in scoped.required
+      assert scoped.selection == {}
 
-  def test_a_granted_instance_names_the_project_outright(self, tmp_path, monkeypatch):
+  def test_a_granted_instance_selects_it_for_the_child(self, tmp_path, monkeypatch):
     self._host_config(tmp_path, monkeypatch, {str(tmp_path / 'other'): {'creds': ['brog+github']}})
     scoped = ride.scope.summoned_credential_scope(
       'bro-dev', CLAUDE_RECIPE, attachment=None, grant=['brog+github'], revoke=[]
@@ -283,25 +268,6 @@ class TestPreflightScopedLaunch:
       with pytest.raises(ride.scope.LaunchScopeError, match='unknown summon target'):
         self._preflight(ride.scope.ScopedSecrets(set(), set()), grant=['@devoop'])
 
-  def test_an_unbound_project_kind_raises_launch_scope_error(self):
-    with pytest.raises(ride.scope.LaunchScopeError, match='reads brog per project'):
-      self._preflight(
-        ride.scope.ScopedSecrets(
-          {'brog', 'github'}, set(), unbound=UnboundKinds(frozenset({'brog'}))
-        )
-      )
-
-  def test_naming_the_instance_satisfies_an_unbound_project_kind(self):
-    with (
-      patch('ride.summon_control.summon_allow_list', return_value=set()),
-      patch('ride.scope.credentials.build_scoped_store', return_value=({}, frozenset())),
-    ):
-      scoped, _, _ = self._preflight(
-        ride.scope.ScopedSecrets({'brog'}, set(), unbound=UnboundKinds(frozenset({'brog'}))),
-        grant=['brog+github'],
-      )
-    assert scoped.required == {'brog'}
-    assert scoped.selection['brog'] == 'github'
 
   def test_unresolvable_secret_raises_launch_scope_error(self):
     from bro.base import credentials
