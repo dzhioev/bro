@@ -15,108 +15,50 @@ handshake. The local token authenticates rather than identifies: every local
 connection attaches with the same one, since they all share the one upstream
 channel.
 
-Sticky routing: outbound requests are deframed to learn which local connection
-opened which quest; correlated inbound is routed to exactly that connection.
-Marks and progress keep a route live;
-the result ends the quest, detaches the waiter, and leaves the conversation retained for cursor reads until eviction.
-
-Mailbox: every correlated inbound message is retained in arrival order under its
-request id — the conversation — numbered by a 1-based sequence. Alongside it the
-route tracks `read_up_to`, the highest sequence handed to a consumer (delivered
-live, replayed through a claim, or covered by a cursor read). Retention is what
-makes a result survive its own delivery: a waiter that died mid-collect, or a
-transport that abandoned the call, no longer destroys the last copy. Over the
-byte bound, whole conversations drop — collected ones first (result read), then
-detached unread ones, never a live in-flight wait; a dropped conversation's
-claim or cursor read then fails fast instead of replaying a gapped sequence.
-
-The proxy answers two kinds locally, never forwarding them upstream — peer
-machinery above the wire protocol, not part of it:
-
-Claim: `claim{id}` collects or re-awaits a request's unread messages. The claim
-acts as a stand-in request: unread messages are replayed — and future ones
-delivered — re-tagged to correlate to the claim itself, so `Client.call('claim',
-{'id': ...})` rides the replayed interim messages and returns the result exactly like the original call did. An unknown id — never sent through this session, or
-evicted — and a collected conversation (result already read; re-read it with a
-cursor check) get an immediate `result{denied}` (fail fast, not hang). The wait
-is a lock: while the current waiter's connection is alive, a competing claim
-gets an immediate `result{denied}` rather than stealing the route; only a
-detached route — the waiter exited, was killed, or had the result delivered —
-is claimable.
-
-Check: the `check{id, last_seen?}` sibling — always answered immediately, never
-superseding a live waiter, never marked as the conversation's reader unless a
-cursor asks it to. Replayed copies keep the conversation's own quest id, and
-the check's own closing report is `result{ok, value: {state, seq[, trail_id]}}`
-— correlation alone separates the two, so the reader never inspects payloads to
-tell them apart. `state` is `pending` (no result yet), `ready` (result retained,
-unread), or `collected` (result read); `seq` is the conversation's highest
-retained sequence. Without `last_seen` it is the non-marking peek: an unread
-result replays the unread window as copies before the report (nothing is marked
-read, so a later check or claim still finds it). With `last_seen: N` it is the
-cursor read: it replays every retained message from sequence N+1 regardless of
-read status — the recovery path for a result whose delivery was lost — and
-marks the window read; the window is contiguous from N+1 and the report's `seq`
-is the new cursor. `last_seen` must name an already-read sequence (0 = the
-start): reading from beyond `read_up_to` would acknowledge messages nobody has
-seen, so it is denied as "from the future". An unknown id and malformed args
-are denied too.
-
-Delivery to a local waiter is write-only, no drain: frames per request are few
-and model-bounded, and a drain there would let one stalled local reader stall
-routing for every other connection. Forwarding upstream does drain, inside the
-sending connection's own read task — so by the time a local half-close is
-answered, everything that connection sent has reached the host (the guarantee
-`ClientTransport.close(confirm=True)` rides on).
+Forwarding upstream drains inside the sending connection's own read task. By the
+time a local half-close is answered, everything that connection sent has reached
+the host — the guarantee `ClientTransport.close(confirm=True)` rides on.
 
 `serve` runs one proxy and fails loudly — no restart. The upstream is the
 session's own host broker: it never comes back within a session, so a lost
 upstream is unrecoverable, and any other failure is a code bug to surface, not
-ride through (the in-memory mailbox dies with the process either way —
-durability is deliberately out of scope). Exit 0 means SIGTERM/SIGINT — the
-launcher's own teardown, the one expected end; anything else exits 1, and the
-listener dies with the process, so the session's channel disappears cleanly.
-The local port is ephemeral, so `serve` publishes the address it bound through
-`--address-file`. `launch` owns daemon spawn, log redirection, the readiness
-gate, and failure cleanup; it prints the ready address and daemon pid for
-launch-policy callers. `await` remains the standalone readiness probe.
+ride through. Exit 0 means SIGTERM/SIGINT — the launcher's own teardown, the one
+expected end; anything else exits 1, and the listener dies with the process, so
+the session's channel disappears cleanly. The local port is ephemeral, so
+`serve` publishes the address it bound through `--address-file`. `launch` owns
+daemon spawn, log redirection, the readiness gate, and failure cleanup; it prints
+the ready address and daemon pid for launch-policy callers. `await` remains the
+standalone readiness probe.
 """
 
 import asyncio
+import contextlib
 import os
 import secrets
 import signal
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import bro.base.args as base_args
 from bro.base import log, spawn
-from bro.broker import brotocol
 from bro.broker.brotocol import MAX_FRAME_BYTES, Message, ProtocolError, Tag
-from bro.broker.client import CHANNEL_ENV, Client
+from bro.broker.client import CHANNEL_ENV
 from bro.broker.transport import Address, connect
 from bro.broker.transports import tcp
 from bro.broker.transports.tcp import LOCAL_HOST
 
 __cli_name__ = 'broxy'
 
-# the kinds the proxy answers locally; never forwarded upstream
-CLAIM_KIND = 'claim'
-CHECK_KIND = 'check'
-
 _LISTEN_BACKLOG = 16
 # readline needs headroom over the frame cap to see a max-size frame's delimiter
 _STREAM_LIMIT = MAX_FRAME_BYTES + 2
 _TOKEN_BYTES = 32
 
-MAILBOX_MAX_BYTES = 8 << 20  # retained conversation messages, totalled across requests
-MAX_ROUTES = 4096  # request ids remembered for correlation (every outbound request mints one)
-
+MAX_ROUTES = 4096
 DEFAULT_AWAIT_TIMEOUT = 10.0
 
 
@@ -125,9 +67,9 @@ async def _read_frame(reader: asyncio.StreamReader) -> Optional[bytes]:
   Raises ProtocolError on a frame over MAX_FRAME_BYTES."""
   try:
     line = await reader.readline()
-  except ValueError as e:  # the stream limit tripped mid-line
-    raise ProtocolError(f'inbound frame over {MAX_FRAME_BYTES} bytes') from e
-  if not line.endswith(b'\n'):  # empty or partial: EOF either way
+  except ValueError as error:
+    raise ProtocolError(f'inbound frame over {MAX_FRAME_BYTES} bytes') from error
+  if not line.endswith(b'\n'):
     return None
   frame = line[:-1]
   if len(frame) > MAX_FRAME_BYTES:
@@ -136,45 +78,10 @@ async def _read_frame(reader: asyncio.StreamReader) -> Optional[bytes]:
 
 
 class _Connection:
-  """one local client connection; deliveries are write-only (see module docstring)."""
+  """one local client connection; deliveries are write-only."""
 
   def __init__(self, writer: asyncio.StreamWriter):
     self.writer = writer
-
-
-@dataclass
-class _Route:
-  """correlation state for one outbound request id: the live waiter (if any) plus
-  the retained conversation."""
-
-  # None once the sending (or last claiming) connection is gone, or the result
-  # was delivered — the live quest is over; the conversation stays retained
-  waiter: Optional[_Connection]
-  reply_to: str  # correlation id stamped on delivery: the request id, or the latest claim's id
-  messages: list[Message] = field(default_factory=list)  # the conversation; messages[i] has seq i+1
-  message_bytes: int = 0
-  read_up_to: int = 0  # highest seq delivered live, replayed through a claim, or cursor-covered
-  terminal_seq: Optional[int] = None
-
-  @property
-  def collected(self) -> bool:
-    """the result was read: the collect path is spent, cursor reads still work."""
-    return self.terminal_seq is not None and self.read_up_to >= self.terminal_seq
-
-  @property
-  def state(self) -> str:
-    """the conversation's read state, as check reports it."""
-    if self.terminal_seq is None:
-      return 'pending'
-    return 'collected' if self.collected else 'ready'
-
-
-def _trail_id(route: _Route) -> Optional[Any]:
-  """the trail id announced anywhere in the retained conversation."""
-  for message in route.messages:
-    if message.payload.get('trail_id') is not None:
-      return message.payload['trail_id']
-  return None
 
 
 class Broxy:
@@ -183,17 +90,16 @@ class Broxy:
     upstream: Address,
     *,
     bind_host: str = LOCAL_HOST,
-    mailbox_bytes: int = MAILBOX_MAX_BYTES,
     max_routes: int = MAX_ROUTES,
   ):
-    tcp.parse_address(upstream)  # a malformed upstream is a launch error, not a run failure
+    tcp.parse_address(upstream)
+    if max_routes < 1:
+      raise ValueError('max_routes must be positive')
     self._upstream = upstream
     self._bind_host = bind_host
     self._token = secrets.token_urlsafe(_TOKEN_BYTES)
-    self._mailbox_bytes = mailbox_bytes
     self._max_routes = max_routes
-    self._routes: dict[str, _Route] = {}  # insertion order = mint order, oldest first
-    self._retained_total = 0
+    self._routes: dict[str, _Connection] = {}
     self._upstream_writer: Optional[asyncio.StreamWriter] = None
     self._local_tasks: set[asyncio.Task] = set()
     self._stopped = asyncio.Event()
@@ -203,13 +109,14 @@ class Broxy:
     self._stopped.set()
 
   async def run(self, ready: Optional[Callable[[Address], None]] = None) -> int:
-    """serve until stopped or the upstream is lost. `ready` receives the local
-    address once it is accepting — the port is ephemeral, so the launcher learns
-    it from here."""
+    """serve until stopped or the upstream is lost.
+
+    `ready` receives the local address once it is accepting.
+    """
     try:
       upstream_reader, upstream_writer = await tcp.open_channel(self._upstream, limit=_STREAM_LIMIT)
-    except (OSError, ConnectionError, TimeoutError) as e:
-      log.error('broxy: cannot connect upstream %s: %s', tcp.redacted(self._upstream), e)
+    except (OSError, ConnectionError, TimeoutError) as error:
+      log.error('broxy: cannot connect upstream %s: %s', tcp.redacted(self._upstream), error)
       return 1
     self._upstream_writer = upstream_writer
     server = await asyncio.start_server(
@@ -232,7 +139,7 @@ class Broxy:
     stopped_task = asyncio.create_task(self._stopped.wait())
     await asyncio.wait({upstream_task, stopped_task}, return_when=asyncio.FIRST_COMPLETED)
     upstream_lost = upstream_task.done()
-    server.close()  # stop accepting before tearing the handlers down
+    server.close()
     local_tasks = list(self._local_tasks)
     for task in (upstream_task, stopped_task, *local_tasks):
       task.cancel()
@@ -244,52 +151,34 @@ class Broxy:
       return 1
     return 0
 
-  # --- upstream → local ------------------------------------------------------
-
   async def _read_upstream(self, reader: asyncio.StreamReader) -> None:
     while True:
       try:
         frame = await _read_frame(reader)
-      except ProtocolError as e:
-        log.error('broxy: dropping upstream channel: %s', e)
+      except ProtocolError as error:
+        log.error('broxy: dropping upstream channel: %s', error)
         return
       if frame is None:
         return
       try:
         message = Message.from_bytes(frame)
-      except ProtocolError as e:
-        log.error('broxy: dropping upstream channel on malformed frame: %s', e)
+      except ProtocolError as error:
+        log.error('broxy: dropping upstream channel on malformed frame: %s', error)
         return
       self._route_inbound(message, frame)
 
   def _route_inbound(self, message: Message, frame: bytes) -> None:
-    route = self._routes.get(message.quest_id)
-    if route is None:  # e.g. the route was evicted, or its mailbox entry dropped
+    connection = self._routes.get(message.quest_id)
+    if connection is None:
       log.warning('broxy: dropping upstream message for unknown quest %s', message.quest_id)
       return
-    terminal = message.type == Tag.RESULT
-    waiter = route.waiter
-    if waiter is not None and waiter.writer.is_closing():
-      route.waiter = None
-      waiter = None
-    route.messages.append(message)
-    route.message_bytes += len(frame)
-    self._retained_total += len(frame)
-    if terminal:
-      route.terminal_seq = len(route.messages)
-    if waiter is not None:
-      self._deliver(waiter, message, route.reply_to)
-      route.read_up_to = len(route.messages)
-      if terminal:
-        route.waiter = None  # the live quest is over; the conversation stays retained
-    self._enforce_mailbox_bound()
-
-  def _deliver(self, connection: _Connection, message: Message, reply_to: str) -> None:
-    if message.quest_id != reply_to:
-      message = replace(message, quest=reply_to)
-    connection.writer.write(message.to_bytes() + b'\n')
-
-  # --- local → upstream ------------------------------------------------------
+    if connection.writer.is_closing():
+      self._remove_connection_routes(connection)
+      log.warning('broxy: dropping upstream message for disconnected quest %s', message.quest_id)
+      return
+    connection.writer.write(frame + b'\n')
+    if message.type == Tag.RESULT:
+      self._routes.pop(message.quest_id, None)
 
   async def _serve_local_connection(
     self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -300,281 +189,56 @@ class Broxy:
       return
     if not await tcp.acknowledge_attach(writer):
       return
-    connection = _Connection(writer)
-    task = asyncio.current_task()
-    assert task is not None
-    self._local_tasks.add(task)
-    try:
+    async with self._local_connection(writer) as connection:
       while True:
         try:
           frame = await _read_frame(reader)
-        except ProtocolError as e:
-          log.warning('broxy: dropping local connection: %s', e)
+        except ProtocolError as error:
+          log.warning('broxy: dropping local connection: %s', error)
           break
         if frame is None:
           break
         try:
           message = Message.from_bytes(frame)
-        except ProtocolError as e:
-          log.warning('broxy: dropping local connection on malformed frame: %s', e)
+        except ProtocolError as error:
+          log.warning('broxy: dropping local connection on malformed frame: %s', error)
           break
         if message.type == Tag.REQUEST:
-          if message.kind == CLAIM_KIND:
-            self._handle_claim(connection, message)
-            continue
-          if message.kind == CHECK_KIND:
-            self._handle_check(connection, message)
-            continue
           self._register_route(message.quest_id, connection)
         assert self._upstream_writer is not None
         self._upstream_writer.write(frame + b'\n')
         await self._upstream_writer.drain()
+
+  @contextlib.asynccontextmanager
+  async def _local_connection(self, writer: asyncio.StreamWriter) -> AsyncIterator[_Connection]:
+    connection = _Connection(writer)
+    task = asyncio.current_task()
+    assert task is not None
+    self._local_tasks.add(task)
+    try:
+      yield connection
     finally:
       self._local_tasks.discard(task)
-      # detach before closing back: when the peer's half-close handshake returns,
-      # later correlated messages are already guaranteed to buffer for a claim
-      for route in self._routes.values():
-        if route.waiter is connection:
-          route.waiter = None
+      self._remove_connection_routes(connection)
       writer.close()
 
-  def _deny(self, connection: _Connection, request_id: str, error: str) -> None:
-    self._deliver(connection, brotocol.result(request_id, 'denied', error=error), request_id)
-
-  def _handle_claim(self, connection: _Connection, claim: Message) -> None:
-    claimed_id = claim.args.get('id')
-    if not isinstance(claimed_id, str):
-      self._deny(connection, claim.quest_id, "claim args must carry a string 'id'")
-      return
-    route = self._routes.get(claimed_id)
-    if route is None:
-      self._deny(
-        connection,
-        claim.quest_id,
-        f'unknown request id {claimed_id} (not sent through this session, or evicted)',
-      )
-      return
-    waiter = route.waiter
-    if waiter is not None and waiter.writer.is_closing():
-      route.waiter = None
-      waiter = None
-    if waiter is not None and waiter is not connection:
-      # the wait is a lock: a live waiter keeps its route, the newcomer fails fast
-      # (a killed waiter's connection is gone, so reclaiming it still works)
-      self._deny(connection, claim.quest_id, f'request {claimed_id} is already being awaited')
-      return
-    if route.collected:
-      self._deny(
-        connection,
-        claim.quest_id,
-        f'request {claimed_id} was already collected; re-read it with a check carrying last_seen',
-      )
-      return
-    route.waiter = connection
-    route.reply_to = claim.quest_id
-    unread = route.messages[route.read_up_to :]
-    route.read_up_to = len(route.messages)
-    for message in unread:  # replay copies; the retained conversation stays
-      self._deliver(connection, message, claim.quest_id)
-    if route.terminal_seq is not None:
-      route.waiter = None  # replayed through the result; the conversation stays retained
-
-  def _handle_check(self, connection: _Connection, check: Message) -> None:
-    checked_id = check.args.get('id')
-    if not isinstance(checked_id, str):
-      self._deny(connection, check.quest_id, "check args must carry a string 'id'")
-      return
-    last_seen = check.args.get('last_seen')
-    if last_seen is not None and (
-      isinstance(last_seen, bool) or not isinstance(last_seen, int) or last_seen < 0
-    ):
-      self._deny(connection, check.quest_id, "check 'last_seen' must be a non-negative integer")
-      return
-    route = self._routes.get(checked_id)
-    if route is None:
-      self._deny(
-        connection,
-        check.quest_id,
-        f'unknown request id {checked_id} (not sent through this session, or evicted)',
-      )
-      return
-    if last_seen is not None:
-      self._cursor_read(connection, check, route, last_seen)
-      return
-    if route.terminal_seq is not None and route.terminal_seq > route.read_up_to:
-      # an unread result: replay the unread window as copies on the conversation's
-      # own quest id, marking nothing — the peek consumes nothing and a later
-      # check or claim still finds it
-      self._replay(connection, route.messages[route.read_up_to :])
-    self._report(connection, check.quest_id, route)
-
-  def _cursor_read(self, connection: _Connection, check: Message, route: _Route, last_seen: int) -> None:  # fmt: skip
-    """replay the conversation from `last_seen + 1` regardless of read status and
-    mark the window read; the window is contiguous, so the reader recovers each
-    sequence by counting from `last_seen`, and the closing report's `seq` is the
-    new cursor."""
-    if last_seen > route.read_up_to:
-      self._deny(
-        connection,
-        check.quest_id,
-        f'last_seen {last_seen} is from the future (read up to {route.read_up_to})',
-      )
-      return
-    self._replay(connection, route.messages[last_seen:])
-    route.read_up_to = len(route.messages)
-    self._report(connection, check.quest_id, route)
-
-  def _replay(self, connection: _Connection, messages: list[Message]) -> None:
-    """deliver window copies verbatim, on their own quest id — no re-tag."""
-    for message in messages:
-      connection.writer.write(message.to_bytes() + b'\n')
-
-  def _report(self, connection: _Connection, check_id: str, route: _Route) -> None:
-    """close the check with its own result — the conversation's read state; the
-    window copies preceding it carry the conversation's quest id, so correlation
-    alone separates the report from a replayed result."""
-    value: dict = {'state': route.state, 'seq': len(route.messages)}
-    trail_id = _trail_id(route)
-    if trail_id is not None:
-      value['trail_id'] = trail_id
-    self._deliver(connection, brotocol.result(check_id, 'ok', value=value), check_id)
-
-  # --- route table -----------------------------------------------------------
-
-  def _register_route(self, request_id: str, connection: _Connection) -> None:
-    self._drop_route(
-      request_id
-    )  # a client-reused id resets its route (ULIDs make this theoretical)
+  def _register_route(self, quest_id: str, connection: _Connection) -> None:
+    self._routes.pop(quest_id, None)
     if len(self._routes) >= self._max_routes:
-      self._evict_route()
-    self._routes[request_id] = _Route(waiter=connection, reply_to=request_id)
-
-  def _drop_route(self, request_id: str) -> None:
-    route = self._routes.pop(request_id, None)
-    if route is not None:
-      self._retained_total -= route.message_bytes
-
-  def _evict_route(self) -> None:
-    """make room: drop the oldest detached route — an empty one first, then a
-    collected conversation (its result was read), then any detached one."""
-    collected_fallback: Optional[str] = None
-    detached_fallback: Optional[str] = None
-    for request_id, route in self._routes.items():
-      if route.waiter is not None:
-        continue
-      if route.message_bytes == 0:
-        self._drop_route(request_id)
-        return
-      if route.collected:
-        if collected_fallback is None:
-          collected_fallback = request_id
-      elif detached_fallback is None:
-        detached_fallback = request_id
-    fallback = collected_fallback if collected_fallback is not None else detached_fallback
-    if fallback is not None:
-      log.warning('broxy: over %d routes, dropping request %s', self._max_routes, fallback)
-      self._drop_route(fallback)
-    # otherwise every route has a live waiter: exceed the cap rather than break one
-
-  def _enforce_mailbox_bound(self) -> None:
-    while self._retained_total > self._mailbox_bytes:
-      request_id = self._mailbox_eviction_candidate()
-      if request_id is None:
-        return  # everything retained belongs to live waits: exceed rather than break one
+      evicted_quest = next(iter(self._routes))
+      self._routes.pop(evicted_quest)
       log.warning(
-        'broxy: mailbox over %d bytes, dropping conversation %s', self._mailbox_bytes, request_id
+        'broxy: over %d routes, dropping route for quest %s', self._max_routes, evicted_quest
       )
-      self._drop_route(request_id)
+    self._routes[quest_id] = connection
 
-  def _mailbox_eviction_candidate(self) -> Optional[str]:
-    """the oldest collected conversation, else the oldest detached unread one; a
-    live in-flight wait is never a candidate."""
-    fallback: Optional[str] = None
-    for request_id, route in self._routes.items():
-      if route.message_bytes == 0:
-        continue
-      if route.collected:
-        return request_id
-      if fallback is None and route.waiter is None:
-        fallback = request_id
-    return fallback
-
-
-# --- the retention client — peer-side reads of the local kinds ------------------
-
-# a check is answered by the session broxy locally and immediately — this bound only
-# turns a wedged or unanswering broxy into a clean failure instead of a hang
-CHECK_TIMEOUT = 10.0
-
-
-class CheckDenied(Exception):
-  """a check the broxy refused: an unknown or evicted id, or a malformed or
-  from-the-future `last_seen`. The message is the broxy's reason."""
-
-
-@dataclass(frozen=True)
-class CheckReport:
-  """one check reading: the conversation state, its highest retained sequence
-  (the new cursor after a cursor read), the retained trail id (None where none was announced), and the window copies replayed
-  before the report (empty on a plain pending/collected peek)."""
-
-  state: str  # 'pending' | 'ready' | 'collected'
-  seq: Optional[int]
-  trail_id: Optional[str]
-  conversation: tuple[Message, ...]
-
-
-def check(
-  client: Client,
-  request_id: str,
-  *,
-  last_seen: Optional[int] = None,
-  timeout: Optional[float] = None,
-) -> CheckReport:
-  """read one quest's retained state over `client` — the `check` kind: the
-  non-marking peek without `last_seen`, the cursor read with it. Replayed window
-  copies keep the quest's own id while the report correlates to the check
-  itself, so the loop separates the two streams by correlation alone. Raises
-  `CheckDenied` on a refused check, TimeoutError when nothing answers within
-  `timeout` (default `CHECK_TIMEOUT`), ConnectionError on channel EOF."""
-  bound = timeout if timeout is not None else CHECK_TIMEOUT
-  args: dict[str, Any] = {'id': request_id}
-  if last_seen is not None:
-    args['last_seen'] = last_seen
-  check_request = client.send(CHECK_KIND, args)
-  conversation: list[Message] = []
-  deadline = time.monotonic() + bound
-  while True:
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-      raise TimeoutError(f'no check reply within {bound:.0f}s — the session broxy is not answering')
-    message = client.receive(remaining)
-    if message is None:
-      # the transport returns None for both timeout and EOF; the deadline says which
-      if time.monotonic() >= deadline:
-        raise TimeoutError(
-          f'no check reply within {bound:.0f}s — the session broxy is not answering'
-        )
-      raise ConnectionError('broker channel closed awaiting the check reply')
-    if message.quest_id == check_request.id:
-      report = message
-      break
-    if message.quest_id == request_id:
-      conversation.append(message)
-  if report.payload.get('outcome') != 'ok':
-    raise CheckDenied(str(report.payload.get('error', report.payload)))
-  value = report.payload.get('value')
-  if not isinstance(value, dict) or not isinstance(value.get('state'), str):
-    raise ProtocolError(f'malformed check report: {report.payload}')
-  return CheckReport(
-    state=value['state'],
-    seq=value.get('seq'),
-    trail_id=value.get('trail_id'),
-    conversation=tuple(conversation),
-  )
-
-
-# --- CLI ----------------------------------------------------------------------
+  def _remove_connection_routes(self, connection: _Connection) -> None:
+    for quest_id in [
+      quest_id
+      for quest_id, route_connection in self._routes.items()
+      if route_connection is connection
+    ]:
+      self._routes.pop(quest_id)
 
 
 def _serve(upstream: Optional[str], address_file: Optional[str]) -> int:
@@ -585,8 +249,8 @@ def _serve(upstream: Optional[str], address_file: Optional[str]) -> int:
     return 1
   try:
     broxy = Broxy(upstream)
-  except ValueError as e:
-    log.error('%s', e)
+  except ValueError as error:
+    log.error('%s', error)
     return 1
   return asyncio.run(_serve_until_signalled(broxy, address_file))
 
