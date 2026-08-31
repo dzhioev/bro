@@ -306,6 +306,7 @@ Detached launches read no project file:
 [tool.bro]
 default = "foo"                      # the bro utilities such as dive-in and scope default to
 harness = "claude"                   # optional ride default; claude when omitted
+summon-depth = 4                      # optional deepest summon generation
 image-repository = "custom-images"   # optional: docker repository for the repo's session-container
                                      # images, defaulting to bro/<default> (bro/foo here)
 build-context-command = "list-files"  # optional: stdout is the session image's context file list,
@@ -326,6 +327,8 @@ sharp = "openai:sol:max"             # a `--llm` preset name and the recipe it s
 `default` is required and names the **project default bro** used by utilities such as `dive-in` and attached `ride scope`;
 the mode verbs still require their bro positional.
 `harness` is optional (`claude` when omitted) and selects `ride`'s default driver.
+`summon-depth` is an optional positive integer with no imposed ceiling, setting the deepest summon generation with the root at depth 0 and a default of 2.
+The host's `~/.bro.json` value overrides it for the launch, and detached launches use only that host value or the default because they read no project file.
 `image-repository` and `build-context-command` are optional.
 A URL attachment evaluates a build-context command in a temporary extraction of the committed base tree and reads the named files back from that commit.
 `[tool.bro.llm]` names the repo's `--llm` presets, which the host's own `~/.bro.json` `llm` table overrides per name.
@@ -832,7 +835,8 @@ Only that delta is bounded
 — the target's declared credentials are what the allow-list entry already sanctions, and a summoner routinely holds none of them.
 Resolving the pair on the loop also settles the recipe:
 one the named harness cannot run is denied at the request rather than failing the spawn.
-A peer the control cannot attribute a bro to is denied, and a depth cap (the root sits at depth 0; a summon that would nest past depth 2 is denied) guards against seed cycles recursing through real containers.
+A peer the control cannot attribute a bro to is denied, and the launch-resolved depth cap guards against seed cycles recursing through real containers.
+The root sits at depth 0, and a request that would create a child past the configured `summon-depth` is denied.
 Denials reply immediately and land in the journal and audit as `denied` transitions (reason, quest id, summoner, and bounded request args).
 Each spawned child records `summoned_by` provenance from the requester's current trail plus the summoning bro's own `tool_call` step id when the request carries one.
 Requester attribution has one shape in the audit: `{workspace, bro, trail_id?}`.

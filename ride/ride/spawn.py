@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from bro.artifact import GET, MINT
-from bro.base import log
+from bro.base import configs, log
 from bro.broker.dispatcher import PING, Broker, ping_handler
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
@@ -88,6 +88,7 @@ class SummonLaunchSpec(LaunchSpec):
   summoner: Optional[dict[str, Any]]
   may_summon: tuple[str, ...]
   repo: Optional[Repository | Path] = None
+  summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
   into: Optional[str] = None
   hold: Optional[str] = None
   grant: tuple[str, ...] = ()
@@ -129,6 +130,7 @@ def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> Sessio
     subject=launch.prompt,
     arguments=[],
     harness_options=harness.default_options(),
+    summon_depth=launch.summon_depth,
   )
 
 
@@ -303,6 +305,7 @@ def run_root_via_broker(
   workspace: Workspace,
   bro: str,
   may_summon: Collection[str] = (),
+  summon_depth: int = configs.DEFAULT_SUMMON_DEPTH,
   credential_scope: ScopedSecrets,
   container_runtime: ContainerRuntimeResolver,
 ) -> int:
@@ -327,7 +330,9 @@ def run_root_via_broker(
   image and bundle-volume identity, reused by every child. A summoned child follows
   its own bro's static seeds instead, resolved per request by the control. The summon handler is registered
   either way, so a denied summoner gets a correlated error and an ordinary
-  journal denial event."""
+  journal denial event.
+  `summon_depth` is the deepest child generation that handler authorizes, with the
+  root itself at depth 0."""
   targets = sorted(set(may_summon))
   if len(targets) > 0:
     log.info('session may summon: %s', ', '.join(targets))
@@ -366,6 +371,7 @@ def run_root_via_broker(
     artifacts=artifacts,
     journal=facade.journal,
     audit_file=summon_dir() / f'{workspace.name}.jsonl',
+    depth_cap=summon_depth,
   )
   facade.on(PING, ping_handler)
   facade.on(SUMMON, control.handle)

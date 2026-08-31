@@ -57,10 +57,6 @@ _ARGS_KEYS = frozenset(
 # fields a manual summon refuses: the user's launch owns the session's shape, and
 # there is no host-killable child for a timeout to bound
 _LAUNCH_OWNED_KEYS = ('timeout', 'hold', 'llm', 'harness')
-# the deepest peer a summon may spawn: the root sits at depth 0, its children at
-# 1, grandchildren at 2; a request that would nest deeper is denied — the guard
-# against seed cycles recursing through real containers (see module docstring).
-_MAX_SUMMON_DEPTH = 2
 
 
 def summon_allow_list(bro_name: str, *, grant: list[str], revoke: list[str]) -> set[str]:
@@ -257,12 +253,16 @@ class SummonControl:
     artifacts: 'ArtifactStore',
     journal: 'Journal',
     audit_file: Path,
+    depth_cap: int,
   ):
     self._workspace = workspace
     self._facts = facts
     self._artifacts = artifacts
     self._journal = journal
     self._audit_file = audit_file
+    if not isinstance(depth_cap, int) or isinstance(depth_cap, bool) or depth_cap <= 0:
+      raise ValueError('summon depth cap must be a positive integer')
+    self._depth_cap = depth_cap
     self._audit_attribution: dict[str, dict[str, str]] = {}
 
   # --- the `summon` request handler (broker loop) -------------------------------
@@ -280,11 +280,11 @@ class SummonControl:
     if error is not None:
       self._deny(context, peer, error)
       return
-    if requester.depth + 1 > _MAX_SUMMON_DEPTH:
+    if requester.depth + 1 > self._depth_cap:
       self._deny(
         context,
         peer,
-        f'summon denied: summon depth cap ({_MAX_SUMMON_DEPTH}) reached',
+        f'summon denied: summon depth cap ({self._depth_cap}) reached',
       )
       return
     target = args['target']
@@ -385,6 +385,7 @@ class SummonControl:
         repo=self._workspace.repository,
         summoner=summoned_by,
         may_summon=tuple(sorted(child_allow_list)),
+        summon_depth=self._depth_cap,
         into=args.get('into'),
         hold=args.get('hold'),
         grant=tuple(grant),

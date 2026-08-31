@@ -1,4 +1,4 @@
-"""The host's credential selection policy (`~/.bro.json`).
+"""The host's launch policy (`~/.bro.json`).
 
 One host may serve several projects, bros, and command-line tools that read
 separate stored instances of one credential kind.
@@ -19,7 +19,8 @@ Selections live outside repositories and merge from general to specific:
           "creds": ["brog+github", "github+dev"]
         }
       },
-      "llm": {"sharp": "openai:sol:max"}
+      "llm": {"sharp": "openai:sol:max"},
+      "summon-depth": 4
     }
 
 Every `creds` entry is `kind+instance`, the instance left empty (`kind+`) to
@@ -44,6 +45,7 @@ The returned layer map attributes every explicit selection.
 
 The file is optional.
 `llm` remains the host-wide table of `--llm` preset names.
+`summon-depth` overrides the repository's summon depth for every launch.
 """
 
 from __future__ import annotations
@@ -73,6 +75,7 @@ _TOOLS_KEY = 'tools'
 _CREDS_KEY = 'creds'
 _BROS_KEY = 'bros'
 _LLM_KEY = 'llm'
+_SUMMON_DEPTH_KEY = 'summon-depth'
 _RETIRED_INSTANCES_KEY = 'instances'
 
 
@@ -102,19 +105,22 @@ class _Config:
   user: _User
   projects: dict[str, _Project]
   llm: dict[str, str]
+  summon_depth: Optional[int]
 
 
 def _read() -> _Config:
   path = Path(HOST_CONFIG_FILE)
   if not path.is_file():
-    return _Config({}, _User({}, {}), {}, {})
+    return _Config({}, _User({}, {}), {}, {}, None)
   try:
     data = json.loads(path.read_text())
   except json.JSONDecodeError as error:
     raise ValueError(f'{path} is not valid json') from error
   if not isinstance(data, dict):
     raise ValueError(f'{path} must hold a json object')
-  unknown = sorted(set(data) - {_DEFAULTS_KEY, _USER_KEY, _PROJECTS_KEY, _LLM_KEY})
+  unknown = sorted(
+    set(data) - {_DEFAULTS_KEY, _USER_KEY, _PROJECTS_KEY, _LLM_KEY, _SUMMON_DEPTH_KEY}
+  )
   if _TOOLS_KEY in unknown:
     raise ValueError(f'{path}: top-level {_TOOLS_KEY!r} is retired; nest it under {_USER_KEY!r}')
   if len(unknown) > 0:
@@ -123,13 +129,30 @@ def _read() -> _Config:
   user = _user(path, data.get(_USER_KEY, {}))
   projects = _projects(path, data.get(_PROJECTS_KEY, {}))
   llm = _llm(path, data.get(_LLM_KEY, {}))
-  return _Config(defaults, user, projects, llm)
+  summon_depth = (
+    _positive_integer(path, _SUMMON_DEPTH_KEY, data[_SUMMON_DEPTH_KEY])
+    if _SUMMON_DEPTH_KEY in data
+    else None
+  )
+  return _Config(defaults, user, projects, llm, summon_depth)
 
 
 def llm_presets() -> dict[str, str]:
   """The host's `--llm` preset names, mapped to the values they stand for."""
   config = _read()
   return dict(config.llm)
+
+
+def summon_depth(project_depth: Optional[int] = None) -> int:
+  """The host override, then the project value, then the framework default."""
+  config = _read()
+  if config.summon_depth is not None:
+    return config.summon_depth
+  if project_depth is None:
+    return configs.DEFAULT_SUMMON_DEPTH
+  if not isinstance(project_depth, int) or isinstance(project_depth, bool) or project_depth <= 0:
+    raise ValueError('project summon depth must be a positive integer')
+  return project_depth
 
 
 def project_selection(attachment: Optional[str]) -> CredentialSelection:
@@ -248,6 +271,12 @@ def _selection_object(path: Path, subject: str, value: object) -> dict[str, str]
     raise ValueError(f'{where} must hold a json object')
   _reject_unknown_fields(value, {_CREDS_KEY}, where)
   return _selection_entries(where, value.get(_CREDS_KEY, []))
+
+
+def _positive_integer(path: Path, name: str, value: object) -> int:
+  if type(value) is not int or value <= 0:
+    raise ValueError(f'{path}: {name} must be a positive integer')
+  return value
 
 
 def _reject_unknown_fields(value: dict, allowed: set[str], where: str) -> None:

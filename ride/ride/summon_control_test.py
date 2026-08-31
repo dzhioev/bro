@@ -9,6 +9,7 @@ import ride.peer_facts
 import ride.pending_summon
 import ride.spawn
 import ride.summon_control
+from bro.base import configs
 from bro.broker import brotocol
 from bro.broker.dispatcher import Dispatcher
 from bro.broker.journal import Journal
@@ -110,7 +111,12 @@ def _workspace(tmp_path, name='ws'):
   return Workspace.ensure(name, tmp_path, WorkspaceKind.CONTAINER)
 
 
-def _control(tmp_path, allow_list=('dev',), credential_scope=()):
+def _control(
+  tmp_path,
+  allow_list=('dev',),
+  credential_scope=(),
+  depth_cap=configs.DEFAULT_SUMMON_DEPTH,
+):
   workspace = _workspace(tmp_path)
   scope = (
     credential_scope
@@ -134,6 +140,7 @@ def _control(tmp_path, allow_list=('dev',), credential_scope=()):
     artifacts=ride.artifacts.ArtifactStore(workspace, root_in_container=True),
     journal=journal,
     audit_file=tmp_path / 'audit.jsonl',
+    depth_cap=depth_cap,
   )
   control.test_journal = journal
   journal.subscribe(facts.observe_journal)
@@ -455,6 +462,20 @@ def test_depth_cap_denies_a_third_generation(tmp_path):
   control._facts.note_workspace(second.quest_id, f'broker-{GRANDCHILD}')
   control.handle(cast(Dispatcher, context), GRANDCHILD, _message())
   assert 'depth cap' in context.replies[-1][1]['error']
+
+
+def test_configured_depth_cap_controls_nested_authorization(tmp_path):
+  control = _control(tmp_path, allow_list=('bro-dev',), depth_cap=1)
+  context = FakeContext(control)
+  first = _message(target='bro-dev')
+  control.handle(cast(Dispatcher, context), ROOT, first)
+  assert context.spawned[-1][0].summon_depth == 1
+  context.workers[CHILD] = first.quest_id
+  control._facts.note_workspace(first.quest_id, f'broker-{CHILD}')
+
+  control.handle(cast(Dispatcher, context), CHILD, _message())
+
+  assert 'depth cap (1) reached' in context.replies[-1][1]['error']
 
 
 def test_unreachable_share_is_denied(tmp_path):

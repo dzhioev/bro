@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
-from bro.base import credentials, log
+from bro.base import configs, credentials, log
 from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV
 from bro.launch.broxy import START_SESSION_BROXY_ENV
 from bro.llm.llm import LLMSpec
@@ -85,6 +85,11 @@ class SessionSpec:
   arguments: list[str]
   harness_options: dict
   repo: Optional[str] = None
+  summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
+
+  def __post_init__(self) -> None:
+    if type(self.summon_depth) is not int or self.summon_depth <= 0:
+      raise ValueError('summon depth must be a positive integer')
 
   @property
   def llm_spec(self) -> LLMSpec:
@@ -328,7 +333,12 @@ def _container_session(
     except pending_summon.UnknownToken as error:
       log.error('%s', error)
       return 1
-  return run_in_container(launch, workspace, may_summon=launch_scope.may_summon)
+  return run_in_container(
+    launch,
+    workspace,
+    may_summon=launch_scope.may_summon,
+    summon_depth=spec.summon_depth,
+  )
 
 
 def _host_session(
@@ -404,6 +414,7 @@ def _host_session(
       container_runtime,
       bro=spec.bro,
       interactive=not spec.solo,
+      summon_depth=spec.summon_depth,
     )
   else:
     runner_env.pop(START_SESSION_BROXY_ENV, None)

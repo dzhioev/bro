@@ -122,7 +122,8 @@ The optional host config selects stored credential instances per consumer:
     "creds": ["github+me"],
     "tools": {"bro.trails.rewind": {"creds": ["trails+analyst"]}}
   },
-  "llm": {"sharp": "openai:sol:max"}
+  "llm": {"sharp": "openai:sol:max"},
+  "summon-depth": 4
 }
 ```
 
@@ -153,6 +154,9 @@ When `BRO_STORE` is set, the resolver does not consult the host config at all:
 a session or service store is already the product of a selection.
 
 The `llm` table remains the host-wide recipe presets layered over project defaults.
+`summon-depth` is a host-wide positive integer overriding the attached repository's `[tool.bro] summon-depth` value.
+When both omit it, launches use the framework default;
+detached launches have no project value and therefore use the host value or that default.
 `bro/base/host_config.py` owns and validates the schema.
 
 A JSON credential may reference another credential:
