@@ -3,9 +3,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from bro.base import configs
 from bro.workspace.paths import find_project_root, project_root
 
-_LAUNCH_KEYS = frozenset({'default', 'harness', 'image-repository', 'build-context-command'})
+_LAUNCH_KEYS = frozenset(
+  {'default', 'harness', 'image-repository', 'build-context-command', 'summon-depth'}
+)
 
 
 def _default_image_repository(default_bro: str) -> str:
@@ -16,8 +19,8 @@ def _default_image_repository(default_bro: str) -> str:
 class ProjectConfig:
   """the operated repo's launch defaults: which bro a session runs as when
   `--bro` doesn't name one, the docker repository its session images build
-  under (`bro/<default bro>` unless overridden), and the optional
-  build-context-file-list command.
+  under (`bro/<default bro>` unless overridden), the summon depth, and the
+  optional build-context-file-list command.
 
   `sections` carries the `[tool.bro.<name>]` sub-tables verbatim. Their keys
   belong to whoever declares them, so they are read but never interpreted here.
@@ -27,6 +30,7 @@ class ProjectConfig:
   image_repository: str
   harness: str = 'claude'
   build_context_command: Optional[str] = None
+  summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
   sections: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
@@ -34,6 +38,12 @@ def _optional_string(table: dict, source: str, key: str) -> Optional[str]:
   value = table.get(key)
   if value is not None and (not isinstance(value, str) or value == ''):
     raise ValueError(f'[tool.bro] {key} in {source} must be a non-empty string')
+  return value
+
+
+def _positive_integer(value: object, source: str, key: str) -> int:
+  if type(value) is not int or value <= 0:
+    raise ValueError(f'[tool.bro] {key} in {source} must be a positive integer')
   return value
 
 
@@ -79,6 +89,9 @@ def project_config_from_text(content: str, source: str) -> ProjectConfig:
     image_repository=override if override is not None else _default_image_repository(default_bro),
     harness=harness,
     build_context_command=_optional_string(table, source, 'build-context-command'),
+    summon_depth=_positive_integer(
+      table.get('summon-depth', configs.DEFAULT_SUMMON_DEPTH), source, 'summon-depth'
+    ),
     sections=sections,
   )
 

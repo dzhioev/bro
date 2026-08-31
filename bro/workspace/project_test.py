@@ -1,6 +1,7 @@
 import pytest
 
 import bro.workspace.project as workspace_project
+from bro.base import configs
 from bro.workspace.project import ProjectConfig, project_config, project_sections
 
 
@@ -82,6 +83,21 @@ class TestProjectConfig:
       f'[tool.bro]\ndefault = "foo"\nbuild-context-command = {value}\n'
     )
     with pytest.raises(ValueError, match='build-context-command .* non-empty string'):
+      project_config()
+
+  def test_summon_depth_defaults_and_parses(self, project_dir):
+    (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\n')
+    assert project_config().summon_depth == configs.DEFAULT_SUMMON_DEPTH
+
+    (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\nsummon-depth = 5\n')
+    assert project_config().summon_depth == 5
+
+  @pytest.mark.parametrize('value', ['0', '-1', '2.5', 'true', '"3"'])
+  def test_summon_depth_must_be_a_positive_integer(self, project_dir, value):
+    (project_dir / 'pyproject.toml').write_text(
+      f'[tool.bro]\ndefault = "foo"\nsummon-depth = {value}\n'
+    )
+    with pytest.raises(ValueError, match='summon-depth .* positive integer'):
       project_config()
 
   def test_unknown_key_raises(self, project_dir):

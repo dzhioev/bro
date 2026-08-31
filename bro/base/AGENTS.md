@@ -38,14 +38,14 @@ run those with `--help` for flags.
   `scoped_view_store` is the lazy, kinds-bounded sibling over the passed store.
   `install_hooks(registry, kinds, store, directory, env)` applies only the named kinds and resolves hook values through that store.
   Schemas live in `bro/setup/AGENTS.md`.
-- `configs.py` — the exclusive `BRO_STORE` directory (default `~/.bro`), the `~/.bro.json` host config beside it, and the installed bro distribution version shared by credential consumers and trail records.
-- `host_config.py` — the host's credential selection policy (`~/.bro.json`):
+- `configs.py` — the exclusive `BRO_STORE` directory (default `~/.bro`), the `~/.bro.json` host config beside it, the default summon depth, and the installed bro distribution version shared by credential consumers and trail records.
+- `host_config.py` — the host's launch policy (`~/.bro.json`):
   `project_selection(attachment)` merges `defaults` and the matching project's `creds`,
   `launch_selection(attachment, bro)` adds that project's per-bro layer,
   and `tool_selection(command)` merges `defaults`, `user`, and the `user.tools` entry for one command's canonical console-script name.
   Every result carries kind → instance and kind → choosing layer;
   config validation is grammar-only so kinds unknown to this installation survive shared dotfiles.
-  `llm_presets()` reads the unchanged host-wide `--llm` preset names (`bro/launch/llm_flags.py` merges them over the operated project's own table).
+  `llm_presets()` reads the host-wide `--llm` preset names (`bro/launch/llm_flags.py` merges them over the operated project's own table), and `summon_depth(project_depth)` resolves the host override over the project value and framework default.
   The scheme and its precedence are `bro/setup/AGENTS.md`, "Host config";
   `ride.scope.scoped_secrets` carries the project-level result to each explicitly constructed credential store
 - `git_url.py` — git remote URL grammar:

@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 import ride.cli as ride_cli
+from bro.base import configs
 from bro.broker.brotocol import PROTOCOL_REVISION
 from ride import pending_summon
 from ride.harness import get_harness
@@ -17,7 +18,9 @@ def project(monkeypatch):
   monkeypatch.setattr(
     ride_cli,
     'project_config',
-    lambda _repo=None: SimpleNamespace(default_bro='bro-dev', harness='claude'),
+    lambda _repo=None: SimpleNamespace(
+      default_bro='bro-dev', harness='claude', summon_depth=configs.DEFAULT_SUMMON_DEPTH
+    ),
   )
   monkeypatch.setattr(ride_cli, 'fresh_workspace_name', lambda base: f'{base}-12345678')
 
@@ -104,6 +107,16 @@ class TestAttachment:
     assert spec.repo is None
     assert spec.harness == 'claude'
 
+  def test_detached_launch_resolves_depth_without_a_project(self):
+    with (
+      patch('ride.cli.host_config.summon_depth', return_value=6) as resolve_depth,
+      patch('ride.cli.start_session', return_value=0) as start,
+    ):
+      assert ride_cli.main(['ride', 'along', 'dev']) == 0
+
+    resolve_depth.assert_called_once_with(None)
+    assert start.call_args.args[0].summon_depth == 6
+
   def test_repo_resolves_any_directory_inside_the_checkout(self, monkeypatch):
     monkeypatch.setattr(ride_cli, 'project_root', lambda path: Path('/repo'))
     with patch('ride.cli.start_session', return_value=0) as start:
@@ -115,7 +128,12 @@ class TestAttachment:
     repository = SimpleNamespace(
       identity=url,
       is_url=True,
-      project_config=lambda: SimpleNamespace(default_bro='bro-dev', harness='claude', sections={}),
+      project_config=lambda: SimpleNamespace(
+        default_bro='bro-dev',
+        harness='claude',
+        summon_depth=configs.DEFAULT_SUMMON_DEPTH,
+        sections={},
+      ),
     )
     monkeypatch.setattr(ride_cli, '_resolve_repository_argument', lambda _value: repository)
     with patch('ride.cli.start_session', return_value=0) as start:
@@ -210,11 +228,29 @@ class TestAlong:
       '--hold', 'attended', 'dev',
     ]  # fmt: skip
 
+  def test_attached_launch_passes_project_depth_to_host_resolution(self, monkeypatch):
+    monkeypatch.setattr(
+      ride_cli,
+      'project_config',
+      lambda _repo: SimpleNamespace(default_bro='bro-dev', harness='claude', summon_depth=5),
+    )
+    monkeypatch.setattr(ride_cli, 'project_root', lambda _path: Path('/repo'))
+    with (
+      patch('ride.cli.host_config.summon_depth', return_value=7) as resolve_depth,
+      patch('ride.cli.start_session', return_value=0) as start,
+    ):
+      assert ride_cli.main(['ride', 'along', '--repo', '/repo', 'dev']) == 0
+
+    resolve_depth.assert_called_once_with(5)
+    assert start.call_args.args[0].summon_depth == 7
+
   def test_project_harness_default_is_used(self, monkeypatch):
     monkeypatch.setattr(
       ride_cli,
       'project_config',
-      lambda _repo: SimpleNamespace(default_bro='bro-dev', harness='bro'),
+      lambda _repo: SimpleNamespace(
+        default_bro='bro-dev', harness='bro', summon_depth=configs.DEFAULT_SUMMON_DEPTH
+      ),
     )
     monkeypatch.setattr(ride_cli, 'project_root', lambda _path: Path('/repo'))
     with patch('ride.cli.start_session', return_value=0) as start:

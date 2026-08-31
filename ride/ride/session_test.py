@@ -340,6 +340,13 @@ class TestSummonAllowList:
     )
     assert h.run_in_container.call_args.kwargs['may_summon'] == {'dev'}
 
+  def test_container_session_threads_the_summon_depth(self):
+    with _ContainerHarness() as harness:
+      code = ride_session.start_session(replace(_spec(drop=True), summon_depth=5))
+
+    assert code == 0
+    assert harness.run_in_container.call_args.kwargs['summon_depth'] == 5
+
   def test_container_session_keys_identity_on_the_bro(self):
     with _ContainerHarness() as h:
       rc = ride_session.start_session(_spec(drop=True, bro='dev'))
@@ -1003,6 +1010,7 @@ class TestHostSession:
       *,
       bro,
       interactive,
+      summon_depth,
     ):
       roots.append(
         {
@@ -1010,6 +1018,7 @@ class TestHostSession:
           'command': command,
           'env': env,
           'may_summon': may_summon,
+          'summon_depth': summon_depth,
           'credential_scope': credential_scope,
           'container_runtime': container_runtime,
           'bro': bro,
@@ -1019,7 +1028,10 @@ class TestHostSession:
       return 5
 
     monkeypatch.setattr(ride_session, 'run_host_process_via_broker', fake_root)
-    spec = _spec(host=True, hold='attended', llm='::xhigh', prompt='go', arguments=['--foo'])
+    spec = replace(
+      _spec(host=True, hold='attended', llm='::xhigh', prompt='go', arguments=['--foo']),
+      summon_depth=4,
+    )
     scope = _launch_scope(may_summon={'dev'})
     assert self._host_session(spec, workspace, scope) == 5
     assert roots[0]['workspace'] is workspace
@@ -1031,6 +1043,7 @@ class TestHostSession:
     assert str(worktree / '.venv' / 'bin') not in roots[0]['env']['PATH'].split(os.pathsep)
     # the host root gets the session's summon allow-list like container mode
     assert roots[0]['may_summon'] == {'dev'}
+    assert roots[0]['summon_depth'] == 4
     assert roots[0]['bro'] == 'bro-dev'
     assert roots[0]['interactive']
 
@@ -1038,9 +1051,10 @@ class TestHostSession:
     workspace, _, _ = self._prepare_launch(monkeypatch, tmp_path)
     captured: dict = {}
 
-    def fake_run_root(launch, **_kwargs):
+    def fake_run_root(launch, **kwargs):
       captured['launch'] = launch
       captured['env'] = launch.env
+      captured['summon_depth'] = kwargs['summon_depth']
       return 0
 
     monkeypatch.setattr(ride.spawn, 'run_root_via_broker', fake_run_root)
@@ -1054,10 +1068,12 @@ class TestHostSession:
         ContainerRuntimeResolver.fixed(ContainerRuntime('runtime-image', 'bundle-hash')),
         bro='bro-dev',
         interactive=False,
+        summon_depth=4,
       )
       == 0
     )
     assert captured['env'] == {bro.summon.MAY_SUMMON_ENV: 'bro,dev'}
+    assert captured['summon_depth'] == 4
     assert not captured['launch'].interactive
 
   def test_bad_summon_flag_fails_before_the_workspace_is_recorded(self, monkeypatch, tmp_path):

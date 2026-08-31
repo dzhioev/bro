@@ -494,7 +494,10 @@ class TestClaudeSummonLowering:
     from bro.llm.llms.claude_code import LLMSpec as ClaudeCodeSpec
 
     ride.spawn._lower_summon(
-      self._launch(llm=':fable5'), 'broker-CH', _container_runtime(), _artifacts()
+      self._launch(llm=':fable5', summon_depth=5),
+      'broker-CH',
+      _container_runtime(),
+      _artifacts(),
     )
     workspace = Workspace.open('broker-CH')
     spec = ride.session.load_resume_spec(workspace)
@@ -502,6 +505,7 @@ class TestClaudeSummonLowering:
     assert spec.harness == 'claude'
     assert spec.harness_options == {'raw': False}
     assert spec.resolved_llm == ClaudeCodeSpec(model='claude-fable-5').dump()
+    assert spec.summon_depth == 5
 
   def test_scope_follows_the_claude_recipe(self, claude_harness, monkeypatch):
     captured: list = []
@@ -606,6 +610,7 @@ class TestRunRootViaBroker:
         launch,
         workspace=workspace,
         bro='bro-dev',
+        summon_depth=4,
         credential_scope=workspace_store.ScopedSecrets({'harbor'}, set()),
         container_runtime=_container_runtime(),
       )
@@ -648,4 +653,5 @@ class TestRunRootViaBroker:
     assert audit_writer.__self__ is control
     assert control._workspace is workspace
     assert control._audit_file == summon_dir() / 'ws.jsonl'
+    assert control._depth_cap == 4
     assert captured['launch'] is launch

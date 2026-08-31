@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from bro.base import host_config
+from bro.base import configs, host_config
 
 
 @pytest.fixture
@@ -257,6 +257,26 @@ class TestValidation:
 
     with pytest.raises(ValueError, match='must hold a json object'):
       host_config.tool_selection(None)
+
+
+class TestSummonDepth:
+  def test_absent_value_uses_project_then_framework_default(self, config_file):
+    config_file({})
+
+    assert host_config.summon_depth(5) == 5
+    assert host_config.summon_depth() == configs.DEFAULT_SUMMON_DEPTH
+
+  def test_host_value_overrides_the_project(self, config_file):
+    config_file({'summon-depth': 7})
+
+    assert host_config.summon_depth(5) == 7
+
+  @pytest.mark.parametrize('value', [0, -1, 2.5, True, '3'])
+  def test_value_must_be_a_positive_integer(self, config_file, value):
+    config_file({'summon-depth': value})
+
+    with pytest.raises(ValueError, match='summon-depth must be a positive integer'):
+      host_config.summon_depth()
 
 
 class TestLLMPresets:
