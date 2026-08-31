@@ -112,6 +112,25 @@ def test_args_are_bounded_for_memory_and_audit():
   assert len(json.dumps(record.args).encode()) <= journal_module.ARGS_HEAD_BYTES + 64
 
 
+def test_trail_and_reason_text_are_bounded_in_records_and_events(monkeypatch):
+  monkeypatch.setattr(journal_module, 'MAX_JOURNAL_TEXT_BYTES', 10)
+  journal = Journal()
+  root = journal.open('root', 'root', None, None, {})
+  journal.bind(root, 'root-peer')
+  record = journal.open('child', 'summon', 'root', 'root-peer', {})
+  journal.trail(record, 't' * 20)
+  journal.end(record, {'outcome': 'failed', 'detail': {'reason': 'r' * 20}})
+
+  view = record.view()
+  assert len(view['trail_id'].encode()) <= journal_module.MAX_JOURNAL_TEXT_BYTES
+  assert view['trail_id_truncated'] is True
+  assert len(view['reason'].encode()) <= journal_module.MAX_JOURNAL_TEXT_BYTES
+  assert view['reason_truncated'] is True
+  _, events = journal.events_after(0, 'root-peer', {'root-peer': 'root'})
+  assert events[-2]['trail_id_truncated'] is True
+  assert events[-1]['reason_truncated'] is True
+
+
 def test_event_gap_is_denied_but_zero_accepts_retained_history(monkeypatch):
   monkeypatch.setattr(journal_module, 'MAX_EVENTS', 2)
   journal = Journal()

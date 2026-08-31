@@ -112,6 +112,15 @@ def _maximum_frame_result_payload() -> dict:
   return payload
 
 
+def _maximum_frame_request() -> Message:
+  target = 'x' * brotocol.MAX_FRAME_BYTES
+  message = _request('work', {'target': target}, 'request')
+  overflow = len(message.to_bytes()) - brotocol.MAX_FRAME_BYTES
+  fitted = _request('work', {'target': target[:-overflow]}, 'request')
+  assert len(fitted.to_bytes()) <= brotocol.MAX_FRAME_BYTES
+  return fitted
+
+
 def test_ping_answers_inline_without_journaling_the_read():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(PING, ping_handler)
@@ -136,6 +145,21 @@ def test_handler_deny_answers_and_journals_refused_work():
   dispatcher.on_message('requester', _request('work', {'target': 'x'}, 'denied'))
   assert runtime.sent[-1][1].payload == {'outcome': 'denied', 'error': 'not allowed'}
   assert dispatcher.journal.records['denied'].state == 'denied'
+
+
+def test_handler_deny_bounds_the_response_to_a_maximum_frame_request():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on(
+    'work',
+    lambda context, peer, message: context.deny(peer, f'unknown bro {message.args["target"]}'),
+  )
+
+  dispatcher.on_message('requester', _maximum_frame_request())
+
+  response = runtime.sent[-1][1]
+  assert len(response.to_bytes()) <= brotocol.MAX_FRAME_BYTES
+  assert response.outcome == 'denied'
+  assert response.payload['detail']['truncated'] is True
 
 
 @pytest.mark.asyncio
