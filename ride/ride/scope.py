@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 from bro.base import credentials, host_config
+from ride.repository import attachment_identities
 from ride.workspace.store import ScopedSecrets, finalize_scoped_secrets
 
 if TYPE_CHECKING:
@@ -62,7 +63,8 @@ BRO_RUN_RECIPE = ScopeRecipe(
 def bind_launch_credentials(
   attachment: Optional[str], bro_name: str
 ) -> host_config.CredentialSelection:
-  return host_config.launch_selection(attachment, bro_name)
+  identities = None if attachment is None else attachment_identities(attachment)
+  return host_config.launch_selection(identities, bro_name)
 
 
 def scoped_secrets(

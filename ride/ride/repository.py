@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
+from bro.base import host_config
 from bro.base.git_url import git_url_path, is_git_url, normalize_git_url
 from bro.workspace.git import git_run, rev_parse_commit
 from bro.workspace.paths import project_root, runtime_base
@@ -85,6 +86,28 @@ def _validate_relative_path(relative: str) -> None:
   path = PurePosixPath(relative)
   if path.is_absolute() or '..' in path.parts:
     raise ValueError(f'repository path must be relative: {relative!r}')
+
+
+def attachment_identities(attachment: str) -> host_config.Attachment:
+  """the host-config identities a launch against `attachment` matches.
+
+  a URL attachment names itself; a checkout names its path and its `origin`
+  remote. an `origin` naming a local path is left out — it identifies the
+  checkout this one was cloned from.
+  """
+  if is_git_url(attachment):
+    return host_config.Attachment(url=attachment)
+  return host_config.Attachment(path=attachment, url=_origin_url(Path(attachment)))
+
+
+def _origin_url(root: Path) -> Optional[str]:
+  # the identity has to be the URL git resolves origin to, so any
+  # `url.<base>.insteadOf` alias is expanded rather than matched raw.
+  if not root.is_dir():
+    return None
+  result = git_run('remote', 'get-url', 'origin', cwd=root)
+  origin = result.stdout.strip()
+  return origin if result.returncode == 0 and is_git_url(origin) else None
 
 
 def mirror_key(url: str) -> str:

@@ -38,12 +38,15 @@ Read the repository's `[tool.bro] default` bro from `pyproject.toml`.
 That bro is what an ordinary session launched here runs as.
 Include another exact bro name when the user is wiring a distinct identity for it, such as a reviewer.
 
-A project mapping keys on the attachment a session names the repository by.
-A session may use the checkout path or attach the git URL with `ride ... --repo <url>`.
-Ask which form the user's sessions use
-— `ride list` shows existing sessions
-— and record every identity in use.
-An attachment with no project entry receives defaults alone.
+A project mapping keys on an identity a session names the repository by:
+its checkout path, or its git URL.
+A session against a checkout matches on both
+— the path it was launched with, and the checkout's `origin` when that remote is a git URL
+— so a URL-keyed entry reaches a `ride ... --repo <path>` launch as well as a `ride ... --repo <url>` one.
+Read the checkout's `origin` with `git remote get-url origin` and key the entry by it, so the mapping still resolves on the user's other machines, where the checkout sits at a different path.
+Reserve a path key for a choice that belongs to this machine alone;
+it layers over the URL entry rather than replacing it.
+An identity with no project entry receives defaults alone.
 
 For a command the user runs themselves, name it by its canonical console-script name
 — its import path with the underscores dashed, such as `bro.trails.rewind`.
@@ -83,21 +86,23 @@ Every list is named `creds` and carries `kind+instance`, the instance left empty
 
 Put a host-wide choice in `defaults.creds` only when both the user's own commands and unrelated projects should read it.
 Put what the user's own commands read in `user.creds`, and one command's own choice in `user.tools.<command>.creds`.
-Put a repository-wide choice in `projects.<attachment>.creds`.
-Put an identity specific to one bro in `projects.<attachment>.bros.<bro>.creds`.
+Put a repository-wide choice in `projects.<identity>.creds`.
+Put an identity specific to one bro in `projects.<identity>.bros.<bro>.creds`.
 Kinds the consumer has no opinion about stay out of its layer.
 
 ## 5. Record the decision
 
 Merge only the chosen entries into `~/.bro.json`.
 Leave every unrelated default, user, command, project, bro, and `llm` entry untouched.
-A project attached by path and URL carries one project entry per identity, with matching project and per-bro selections.
+A repository already carrying a path entry that duplicates its URL entry keeps only what differs between them:
+the URL entry holds the shared selection, and the path entry the machine-local remainder.
 Show the user the proposed change before writing it.
 
 ## 6. Verify
 
-For project wiring, re-run `ride scope --repo <attachment> --bro <bro>` for every attachment and bro you changed.
-Each selected kind should name the intended instance and report `ok`.
+For project wiring, re-run `ride scope --repo <checkout> --bro <bro>` for every project and bro you changed, naming the checkout path even where you keyed the entry by URL
+— that is the launch shape the entry has to reach.
+Each selected kind should name the intended instance and report `ok`, and the layer it prints says which entry chose it.
 A `MISSING` kind points at material the store cannot resolve;
 fix it before finishing.
 

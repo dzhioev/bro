@@ -40,9 +40,12 @@ run those with `--help` for flags.
   Schemas live in `bro/setup/AGENTS.md`.
 - `configs.py` — the exclusive `BRO_STORE` directory (default `~/.bro`), the `~/.bro.json` host config beside it, the default summon depth, and the installed bro distribution version shared by credential consumers and trail records.
 - `host_config.py` — the host's launch policy (`~/.bro.json`):
-  `project_selection(attachment)` merges `defaults` and the matching project's `creds`,
-  `launch_selection(attachment, bro)` adds that project's per-bro layer,
+  `project_selection(attachment)` merges `defaults` and the projects an `Attachment`'s identities name,
+  `launch_selection(attachment, bro)` adds their per-bro layers,
   and `tool_selection(command)` merges `defaults`, `user`, and the `user.tools` entry for one command's canonical console-script name.
+  An `Attachment` carries a checkout path, a git URL, or both, and every entry either identity names applies
+  — which is what lets a `projects` key written as a repository URL follow the checkout across machines.
+  The caller supplies both identities, since this layer invokes no git.
   Every result carries kind → instance and kind → choosing layer;
   config validation is grammar-only so kinds unknown to this installation survive shared dotfiles.
   `llm_presets()` reads the host-wide `--llm` preset names (`bro/launch/llm_flags.py` merges them over the operated project's own table), and `summon_depth(project_depth)` resolves the host override over the project value and framework default.

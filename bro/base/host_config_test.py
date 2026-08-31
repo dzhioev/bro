@@ -21,7 +21,9 @@ class TestProjectSelection:
   def test_absent_file_selects_nothing(self, tmp_path, monkeypatch):
     monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(tmp_path / 'nope.json'))
 
-    assert host_config.project_selection(str(tmp_path)) == host_config.CredentialSelection({}, {})
+    assert host_config.project_selection(
+      host_config.Attachment(path=str(tmp_path))
+    ) == host_config.CredentialSelection({}, {})
 
   def test_defaults_and_project_merge_with_attribution(self, config_file, tmp_path):
     config_file(
@@ -33,13 +35,13 @@ class TestProjectSelection:
       }
     )
 
-    selected = host_config.project_selection(str(tmp_path))
+    selected = host_config.project_selection(host_config.Attachment(path=str(tmp_path)))
 
     assert selected.instances == {'github': 'project', 'trails': 'write', 'brog': ''}
     assert selected.layers == {
-      'github': host_config.PROJECT_LAYER,
+      'github': host_config.PROJECT_PATH_LAYER,
       'trails': host_config.DEFAULTS_LAYER,
-      'brog': host_config.PROJECT_LAYER,
+      'brog': host_config.PROJECT_PATH_LAYER,
     }
 
   def test_an_unnamed_attachment_gets_defaults_alone(self, config_file, tmp_path):
@@ -55,7 +57,9 @@ class TestProjectSelection:
       }
     )
 
-    assert host_config.project_selection(str(tmp_path / 'elsewhere')).instances == {'github': 'dev'}
+    assert host_config.project_selection(
+      host_config.Attachment(path=str(tmp_path / 'elsewhere'))
+    ).instances == {'github': 'dev'}
 
   def test_a_detached_launch_gets_defaults_alone(self, config_file, tmp_path):
     config_file(
@@ -73,16 +77,20 @@ class TestProjectSelection:
     (tmp_path / 'link').symlink_to(tmp_path / 'repo')
     config_file({'projects': {'~/repo': {'creds': ['brog+github']}}})
 
-    assert host_config.project_selection(str(tmp_path / 'link')).instances == {'brog': 'github'}
+    assert host_config.project_selection(
+      host_config.Attachment(path=str(tmp_path / 'link'))
+    ).instances == {'brog': 'github'}
 
   def test_a_url_key_matches_the_same_url_normalized(self, config_file):
     config_file({'projects': {'HTTPS://GitHub.com/foo/api.git/': {'creds': ['brog+github']}}})
 
-    selected = host_config.project_selection('https://github.com/foo/api.git')
+    selected = host_config.project_selection(
+      host_config.Attachment(url='https://github.com/foo/api.git')
+    )
 
     assert selected.instances == {'brog': 'github'}
 
-  def test_two_keys_naming_one_attachment_are_rejected(self, config_file):
+  def test_two_keys_naming_one_identity_are_rejected(self, config_file):
     config_file(
       {
         'projects': {
@@ -92,8 +100,83 @@ class TestProjectSelection:
       }
     )
 
-    with pytest.raises(ValueError, match='name the same attachment'):
-      host_config.project_selection('https://github.com/foo/api.git')
+    with pytest.raises(ValueError, match='name the same identity'):
+      host_config.project_selection(host_config.Attachment(url='https://github.com/foo/api.git'))
+
+
+class TestTwoIdentities:
+  URL = 'https://github.com/foo/api.git'
+
+  def _config(self, config_file, tmp_path, path_entry, url_entry):
+    config_file({'projects': {self.URL: url_entry, str(tmp_path): path_entry}})
+    return host_config.Attachment(path=str(tmp_path), url=self.URL)
+
+  def test_the_path_entry_layers_over_the_url_entry_per_kind(self, config_file, tmp_path):
+    attachment = self._config(
+      config_file,
+      tmp_path,
+      path_entry={'creds': ['github+work', 'aws+laptop']},
+      url_entry={'creds': ['brog+github', 'github+dev']},
+    )
+
+    selected = host_config.launch_selection(attachment, 'developer')
+
+    assert selected.instances == {'brog': 'github', 'github': 'work', 'aws': 'laptop'}
+    assert selected.layers == {
+      'brog': host_config.PROJECT_URL_LAYER,
+      'github': host_config.PROJECT_PATH_LAYER,
+      'aws': host_config.PROJECT_PATH_LAYER,
+    }
+
+  def test_a_bro_layer_outranks_both_project_layers(self, config_file, tmp_path):
+    attachment = self._config(
+      config_file,
+      tmp_path,
+      path_entry={'creds': ['github+work']},
+      url_entry={'bros': {'reviewer': {'creds': ['github+reviewer']}}},
+    )
+
+    selected = host_config.launch_selection(attachment, 'reviewer')
+
+    assert selected.instances == {'github': 'reviewer'}
+    assert selected.layers == {'github': host_config.PROJECT_URL_BRO_LAYER}
+
+  def test_the_path_bro_layer_wins_the_bro_rank(self, config_file, tmp_path):
+    attachment = self._config(
+      config_file,
+      tmp_path,
+      path_entry={'bros': {'reviewer': {'creds': ['github+laptop']}}},
+      url_entry={'bros': {'reviewer': {'creds': ['github+reviewer', 'trails+review']}}},
+    )
+
+    selected = host_config.launch_selection(attachment, 'reviewer')
+
+    assert selected.instances == {'github': 'laptop', 'trails': 'review'}
+    assert selected.layers == {
+      'github': host_config.PROJECT_PATH_BRO_LAYER,
+      'trails': host_config.PROJECT_URL_BRO_LAYER,
+    }
+
+  def test_a_path_naming_no_entry_still_reads_the_url_entry(self, config_file, tmp_path):
+    config_file({'projects': {self.URL: {'creds': ['brog+github']}}})
+    attachment = host_config.Attachment(path=str(tmp_path), url=self.URL)
+
+    assert host_config.launch_selection(attachment, 'developer').instances == {'brog': 'github'}
+
+
+class TestAttachment:
+  @pytest.mark.parametrize(
+    'fields, message',
+    [
+      ({}, 'names a checkout path, a git URL, or both'),
+      ({'path': 'https://github.com/foo/api.git'}, 'path must be a filesystem path'),
+      ({'path': ''}, 'path must be a filesystem path'),
+      ({'url': '/home/foo/api'}, 'url must be a git URL'),
+    ],
+  )
+  def test_a_malformed_attachment_is_rejected(self, fields, message):
+    with pytest.raises(ValueError, match=message):
+      host_config.Attachment(**fields)
 
 
 class TestLaunchSelection:
@@ -112,7 +195,7 @@ class TestLaunchSelection:
       }
     )
 
-    selected = host_config.launch_selection(str(tmp_path), 'reviewer')
+    selected = host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'reviewer')
 
     assert selected.instances == {
       'github': 'reviewer',
@@ -120,9 +203,9 @@ class TestLaunchSelection:
       'brog': 'github',
     }
     assert selected.layers == {
-      'github': host_config.PROJECT_BRO_LAYER,
-      'trails': host_config.PROJECT_BRO_LAYER,
-      'brog': host_config.PROJECT_LAYER,
+      'github': host_config.PROJECT_PATH_BRO_LAYER,
+      'trails': host_config.PROJECT_PATH_BRO_LAYER,
+      'brog': host_config.PROJECT_PATH_LAYER,
     }
 
   def test_an_unlisted_bro_uses_project_and_defaults(self, config_file, tmp_path):
@@ -133,7 +216,7 @@ class TestLaunchSelection:
       }
     )
 
-    selected = host_config.launch_selection(str(tmp_path), 'developer')
+    selected = host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'developer')
 
     assert selected.instances == {'trails': 'write', 'github': 'project'}
 
@@ -204,7 +287,7 @@ class TestValidation:
     config_file({'projects': {str(tmp_path): {'instances': ['brog+github']}}})
 
     with pytest.raises(ValueError, match="'instances' is retired; use 'creds'"):
-      host_config.project_selection(str(tmp_path))
+      host_config.project_selection(host_config.Attachment(path=str(tmp_path)))
 
   def test_selection_without_a_plus_is_rejected(self, config_file):
     config_file({'defaults': {'creds': ['brog']}})

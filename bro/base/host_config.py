@@ -11,13 +11,11 @@ Selections live outside repositories and merge from general to specific:
         "tools": {"bro.trails.rewind": {"creds": ["trails+analyst"]}}
       },
       "projects": {
-        "/home/foo/projects/api": {
+        "https://github.com/foo/api.git": {
           "creds": ["brog+github", "github+dev"],
           "bros": {"bro-eyebro": {"creds": ["github+reviewer"]}}
         },
-        "https://github.com/foo/api.git": {
-          "creds": ["brog+github", "github+dev"]
-        }
+        "/home/foo/projects/api": {"creds": ["aws+laptop"]}
       },
       "llm": {"sharp": "openai:sol:max"},
       "summon-depth": 4
@@ -31,15 +29,19 @@ valid and are carried in the returned mappings.
 
 `defaults` is the root both branches extend: `user` for a command the operator
 runs outside any session, `projects` for a managed session.
-A project key is the attachment a session names it by: the filesystem path of
-the operated repository's root (`~` and symlinks resolved before matching), or
-a normalized git URL.
-A repository attached both ways therefore carries an entry per identity.
+A project key is an identity a session names the repository by: the filesystem
+path of its root (`~` and symlinks resolved before matching), or a normalized
+git URL.
+A launch carries both where it has both — a checkout's path and the origin URL
+naming it portably — and every entry either one matches applies, so the URL
+entry holds what follows the repository across machines and the path entry
+names only what one machine changes.
 A `user.tools` key is one CLI's canonical console-script name — its import path
 with the underscores dashed — rather than the bare alias, which several
 distributions may each publish.
-Launch selection precedence is project-bro, project, then defaults; a command's
-is its `user.tools` entry, `user`, then defaults.
+Launch selection precedence runs defaults, the URL entry, the path entry, then
+each of their `bros` layers in that same order; a command's is its `user.tools`
+entry, `user`, then defaults.
 A kind no layer selects reads its empty instance.
 The returned layer map attributes every explicit selection.
 
@@ -64,8 +66,10 @@ HOST_CONFIG_FILE = configs.DEFAULT_HOST_CONFIG
 
 DEFAULTS_LAYER = 'defaults'
 USER_LAYER = 'user'
-PROJECT_LAYER = 'project'
-PROJECT_BRO_LAYER = 'project-bro'
+PROJECT_URL_LAYER = 'project-url'
+PROJECT_PATH_LAYER = 'project-path'
+PROJECT_URL_BRO_LAYER = 'project-url-bro'
+PROJECT_PATH_BRO_LAYER = 'project-path-bro'
 TOOL_LAYER = 'tool'
 
 _DEFAULTS_KEY = 'defaults'
@@ -80,6 +84,23 @@ _RETIRED_INSTANCES_KEY = 'instances'
 
 
 @dataclass(frozen=True)
+class Attachment:
+  """The identities a launch matches `projects` entries by: the operated
+  repository's checkout path, the git URL it is reachable at, or both."""
+
+  path: Optional[str] = None
+  url: Optional[str] = None
+
+  def __post_init__(self) -> None:
+    if self.path is None and self.url is None:
+      raise ValueError('an attachment names a checkout path, a git URL, or both')
+    if self.path is not None and (self.path == '' or is_git_url(self.path)):
+      raise ValueError(f'attachment path must be a filesystem path, not {self.path!r}')
+    if self.url is not None and not is_git_url(self.url):
+      raise ValueError(f'attachment url must be a git URL, not {self.url!r}')
+
+
+@dataclass(frozen=True)
 class CredentialSelection:
   """A merged kind-to-instance selection and its host-config provenance."""
 
@@ -91,6 +112,13 @@ class CredentialSelection:
 class _Project:
   credentials: dict[str, str]
   bros: dict[str, dict[str, str]]
+
+
+@dataclass(frozen=True)
+class _Match:
+  layer: str
+  bro_layer: str
+  project: _Project
 
 
 @dataclass(frozen=True)
@@ -155,28 +183,25 @@ def summon_depth(project_depth: Optional[int] = None) -> int:
   return project_depth
 
 
-def project_selection(attachment: Optional[str]) -> CredentialSelection:
-  """Merge defaults and the matching project, without a per-bro layer."""
+def project_selection(attachment: Optional[Attachment]) -> CredentialSelection:
+  """Merge defaults and the matching projects, without a per-bro layer."""
   config = _read()
-  project = _matching_project(config, attachment)
   layers = [(DEFAULTS_LAYER, config.defaults)]
-  if project is not None:
-    layers.append((PROJECT_LAYER, project.credentials))
+  layers.extend((match.layer, match.project.credentials) for match in _matches(config, attachment))
   return _merged(layers)
 
 
-def launch_selection(attachment: Optional[str], bro: str) -> CredentialSelection:
-  """Merge defaults, a matching project, and that project's `bro` layer."""
+def launch_selection(attachment: Optional[Attachment], bro: str) -> CredentialSelection:
+  """Merge defaults, the matching projects, and their `bro` layers."""
   if not isinstance(bro, str) or bro == '':
     raise ValueError('bro name must be a non-empty string')
   config = _read()
-  project = _matching_project(config, attachment)
+  matches = _matches(config, attachment)
   layers = [(DEFAULTS_LAYER, config.defaults)]
-  if project is not None:
-    layers.append((PROJECT_LAYER, project.credentials))
-    bro_credentials = project.bros.get(bro)
-    if bro_credentials is not None:
-      layers.append((PROJECT_BRO_LAYER, bro_credentials))
+  layers.extend((match.layer, match.project.credentials) for match in matches)
+  layers.extend(
+    (match.bro_layer, match.project.bros[bro]) for match in matches if bro in match.project.bros
+  )
   return _merged(layers)
 
 
@@ -205,10 +230,20 @@ def tool_selection(
   return _merged(layers)
 
 
-def _matching_project(config: _Config, attachment: Optional[str]) -> Optional[_Project]:
+def _matches(config: _Config, attachment: Optional[Attachment]) -> list[_Match]:
+  """The entries the attachment's identities name, least specific first."""
   if attachment is None:
-    return None
-  return config.projects.get(_attachment_key(attachment))
+    return []
+  identities = [
+    (attachment.url, PROJECT_URL_LAYER, PROJECT_URL_BRO_LAYER, normalize_git_url),
+    (attachment.path, PROJECT_PATH_LAYER, PROJECT_PATH_BRO_LAYER, _path_key),
+  ]
+  matches = []
+  for identity, layer, bro_layer, reduce_key in identities:
+    project = None if identity is None else config.projects.get(reduce_key(identity))
+    if project is not None:
+      matches.append(_Match(layer, bro_layer, project))
+  return matches
 
 
 def _merged(layers: list[tuple[str, dict[str, str]]]) -> CredentialSelection:
@@ -225,10 +260,10 @@ def _projects(path: Path, value: object) -> dict[str, _Project]:
     raise ValueError(f'{path}: {_PROJECTS_KEY} must be a json object')
   projects: dict[str, _Project] = {}
   for key, entry in value.items():
-    attachment = _attachment_key(key)
-    if attachment in projects:
-      raise ValueError(f'{path}: two project keys name the same attachment {attachment}')
-    projects[attachment] = _project(path, key, entry)
+    identity = _project_key(key)
+    if identity in projects:
+      raise ValueError(f'{path}: two project keys name the same identity {identity}')
+    projects[identity] = _project(path, key, entry)
   return projects
 
 
@@ -312,13 +347,15 @@ def _parse_selection(where: str, entry: object) -> tuple[str, str]:
   return kind, instance
 
 
-def _attachment_key(attachment: str) -> str:
-  """Reduce a project key and attachment to the identity they match on."""
-  if not isinstance(attachment, str) or attachment == '':
-    raise ValueError('project attachment must be a non-empty string')
-  if is_git_url(attachment):
-    return normalize_git_url(attachment)
-  return str(Path(os.path.expanduser(attachment)).resolve())
+def _project_key(key: str) -> str:
+  """Reduce a `projects` key to the identity an attachment matches it on."""
+  if not isinstance(key, str) or key == '':
+    raise ValueError('project key must be a non-empty string')
+  return normalize_git_url(key) if is_git_url(key) else _path_key(key)
+
+
+def _path_key(path: str) -> str:
+  return str(Path(os.path.expanduser(path)).resolve())
 
 
 def _llm(path: Path, value: object) -> dict[str, str]:

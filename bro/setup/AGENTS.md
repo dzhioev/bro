@@ -113,10 +113,11 @@ The optional host config selects stored credential instances per consumer:
 {
   "defaults": {"creds": ["github+dev", "trails+write"]},
   "projects": {
-    "/home/me/projects/bro": {
+    "https://github.com/me/bro": {
       "creds": ["brog+github", "github+dev"],
       "bros": {"bro-eyebro": {"creds": ["github+reviewer"]}}
-    }
+    },
+    "/home/me/projects/bro": {"creds": ["aws+laptop"]}
   },
   "user": {
     "creds": ["github+me"],
@@ -135,10 +136,18 @@ Validation is grammar-only, so shared dotfiles may carry kinds an installation d
 
 `defaults.creds` is the root both branches extend.
 `user.creds` covers every command the operator runs outside a session, and `user.tools.<command>.creds` narrows that to one of them;
-a session instead takes `projects.<attachment>.creds` for a checkout path or normalized git URL, and `projects.<attachment>.bros.<bro>.creds` for one exact bro name.
+a session instead takes `projects.<identity>.creds` for a checkout path or normalized git URL, and `projects.<identity>.bros.<bro>.creds` for one exact bro name.
 The two branches are disjoint, so a `user` entry never reaches a session.
 Most-specific precedence is launch flag, project-bro, project, the command's own entry, `user`, then `defaults`;
 a kind no layer selects reads its empty instance.
+
+A session against a checkout carries two identities:
+the checkout's path, and its `origin` remote when that remote is a git URL.
+Every entry either one names applies, the path entry layering over the URL entry at each of the two project ranks
+— so the URL entry holds what follows the repository from machine to machine, and the path entry names only the kinds one machine selects differently.
+A `projects` key is therefore portable across the dotfiles a host config is shared through, without a per-machine copy of the selection beside it.
+An `origin` naming a local path contributes no identity:
+it names the checkout this one was cloned from.
 
 A `user.tools` key is the command's canonical console-script name — its import path with the underscores dashed (`bro.trails.rewind`), the name `sync-scripts` publishes every CLI under beside its bare alias.
 The alias is what any distribution may claim, so keying on it would let two commands answer to one entry;

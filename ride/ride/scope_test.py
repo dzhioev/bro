@@ -1,4 +1,5 @@
 import json
+import subprocess
 from typing import ClassVar
 from unittest.mock import patch
 
@@ -109,6 +110,28 @@ class TestScopedSecrets:
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, attachment=url)
     assert scoped.selection == {'brog': 'github'}
+
+  def test_a_checkout_binds_the_entry_keyed_by_its_origin_url(self, tmp_path, monkeypatch):
+    url = 'https://github.com/foo/api.git'
+    checkout = tmp_path / 'api'
+    subprocess.run(['git', 'init', '-q', checkout], check=True)
+    subprocess.run(['git', '-C', checkout, 'remote', 'add', 'origin', url], check=True)
+    config = tmp_path / 'bro.json'
+    config.write_text(
+      json.dumps(
+        {
+          'projects': {
+            url: {'creds': ['brog+github'], 'bros': {'bro-dev': {'creds': ['github+reviewer']}}},
+            str(checkout): {'creds': ['aws+laptop']},
+          }
+        }
+      )
+    )
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+
+    scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, attachment=str(checkout))
+
+    assert scoped.selection == {'brog': 'github', 'github': 'reviewer', 'aws': 'laptop'}
 
   def test_a_detached_scope_ignores_another_projects_selection(self, tmp_path, monkeypatch):
     config = tmp_path / 'bro.json'
