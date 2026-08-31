@@ -6,27 +6,22 @@ through the Dispatcher primitives. Deterministic refusals use ``Dispatcher.deny`
 so answer and journal record are one operation.
 
 The control subscribes to the broker journal for the identity records nested
-summons still need, the one-stage legacy status-file projection, root trail
-fallback, and manual-token cleanup. A second subscriber writes every journal
-event to the human-facing summon audit. Sessions own their own trail pointers;
-the host only observes trail marks.
+summons still need, root trail fallback, and manual-token cleanup. A second
+subscriber writes every journal event to the human-facing summon audit.
+Sessions own their own trail pointers; the host only observes trail marks.
 
 Broker imports stay function-local where the pre-gate launch path requires it.
 """
 
 import json
-import time
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from bro import summon_status
 from bro.artifact import is_ref
 from bro.base import credentials, log
 from bro.summon import DEFAULT_HARNESS, DEFAULT_TIMEOUT
-from bro.summon_status import STATUS_ENV
-from bro.workspace.paths import CONTAINER_SUMMON_ROOT, summon_dir
 from ride import pending_summon
 from ride.harness import HARNESS_NAMES, get_harness
 from ride.peers import PeerIdentity, Peers, UnattributablePeer
@@ -42,13 +37,7 @@ if TYPE_CHECKING:
   from bro.broker.transport import Provisioned
   from ride.artifacts import ArtifactStore
 
-__all__ = [
-  'STATUS_ENV',
-  'SummonControl',
-  'container_status_path',
-  'summon_allow_list',
-  'summon_status_file',
-]
+__all__ = ['SummonControl', 'summon_allow_list']
 
 _PROMPT_HEAD_CHARS = 120
 _ARGS_KEYS = frozenset(
@@ -75,16 +64,6 @@ _LAUNCH_OWNED_KEYS = ('timeout', 'hold', 'llm', 'harness')
 # 1, grandchildren at 2; a request that would nest deeper is denied — the guard
 # against seed cycles recursing through real containers (see module docstring).
 _MAX_SUMMON_DEPTH = 2
-
-
-def summon_status_file(workspace_name: str) -> Path:
-  """the session's summon-status file, as the host process writes it."""
-  return summon_dir() / f'{workspace_name}.status.json'
-
-
-def container_status_path(workspace_name: str) -> str:
-  """the session's status file at its dedicated in-container mount."""
-  return str(CONTAINER_SUMMON_ROOT / f'{workspace_name}.status.json')
 
 
 def summon_allow_list(bro_name: str, *, grant: list[str], revoke: list[str]) -> set[str]:
@@ -207,8 +186,7 @@ class _ActiveSummon:
   request_id: str
   target: str
   prompt_head: str
-  started_at: float  # epoch seconds of the authorized spawn
-  summoner: dict[str, Any]  # audit/status attribution (see _Requester.summoner)
+  summoner: dict[str, Any]  # audit attribution (see _Requester.summoner)
   depth: int  # the spawned child's summon-nesting depth (the root sits at 0)
   allow_list: set[str]  # the spawned child's own effective summon allow-list
   grant: list[str]  # the request's scope overrides, audited as the summoner issued them
@@ -224,7 +202,7 @@ class _ActiveSummon:
 class _Requester:
   """the summon identity of a requesting peer, resolved per request.
 
-  `summoner` is the attribution the audit and status entries carry: the root is
+  `summoner` is the attribution the audit entries carry: the root is
   `{'session': <key>}`, a summoned child `{'target': <bro>, 'trail_id': …}`.
   `list_description` names the allow-list in denial messages — the two lists have
   different widening levers (relaunching the session vs the summon that spawned
@@ -312,7 +290,6 @@ class SummonControl:
     workspace: Workspace,
     peers: Peers,
     artifacts: 'ArtifactStore',
-    status_file: Path,
     audit_file: Path,
   ):
     self._allow_list = set(allow_list)
@@ -324,14 +301,11 @@ class SummonControl:
     self._workspace = workspace
     self._peers = peers
     self._artifacts = artifacts
-    self._status_file = status_file
     self._audit_file = audit_file
     self._root_trail_id: Optional[str] = None
     self._pending: dict[str, _ActiveSummon] = {}
     self._records: dict[str, _ActiveSummon] = {}
-    self._active: dict[str, _ActiveSummon] = {}
     self._denial_summoners: dict[str, Optional[dict[str, Any]]] = {}
-    self._last: Optional[summon_status.FinishedSummon] = None
 
   def note_root_trail(self, trail_id: Optional[str]) -> None:
     """Record the root's trail mark as summon-provenance fallback."""
@@ -441,7 +415,6 @@ class SummonControl:
         request_id=message.quest_id,
         target=target,
         prompt_head=_prompt_head(prompt),
-        started_at=time.time(),
         summoner=requester.summoner,
         depth=requester.depth + 1,
         allow_list=child_allow_list,
@@ -467,7 +440,6 @@ class SummonControl:
       request_id=message.quest_id,
       target=target,
       prompt_head=_prompt_head(prompt),
-      started_at=time.time(),
       summoner=requester.summoner,
       depth=requester.depth + 1,
       allow_list=child_allow_list,
@@ -561,7 +533,7 @@ class SummonControl:
         identity=identity,
       )
     quest = context.workers.get(peer)
-    record = self._active.get(quest) if quest is not None else None
+    record = self._records.get(quest) if quest is not None else None
     if record is None:
       raise UnattributablePeer('cannot attribute the requesting peer to a bro')
     return _Requester(
@@ -621,7 +593,7 @@ class SummonControl:
     context.deny(peer, error)
 
   def observe_journal(self, event: 'Event', journal_record: 'Record') -> None:
-    """Project journal events into the one-stage legacy status surface."""
+    """Maintain summon identity, trail fallback, logging, and manual-token cleanup."""
     if journal_record.kind == 'root':
       if event.transition == 'trail':
         self.note_root_trail(journal_record.trail_id)
@@ -641,12 +613,10 @@ class SummonControl:
         log.warning('summon: accepted quest %s has no authorized identity record', event.quest)
         return
       self._records[event.quest] = record
-      self._active[event.quest] = record
       action = 'expecting a manual launch' if record.manual else 'spawning'
       log.info(
         'summon: %s %s %s (request %s)', self._workspace.name, action, record.target, event.quest
       )
-      self._write_status()
       return
     record = self._records.get(event.quest)
     if record is None:
@@ -654,29 +624,16 @@ class SummonControl:
     if event.transition == 'trail':
       record.trail_id = journal_record.trail_id
       log.info('summon: %s trail %s', record.target, record.trail_id)
-      self._write_status()
       return
     if event.transition != 'ended':
       return
-    self._active.pop(event.quest, None)
     if record.manual:
       pending_summon.discard(record.request_id)
     outcome = str(event.payload.get('outcome'))
     reason = event.payload.get('reason')
-    if outcome == 'failed' and reason in ('raised', 'error'):
-      outcome = str(reason)
-    elif outcome == 'failed' and reason is not None:
-      outcome = f'failed:{reason}'
-    self._last = summon_status.FinishedSummon(
-      request_id=record.request_id,
-      target=record.target,
-      trail_id=record.trail_id,
-      summoner=record.summoner,
-      outcome=outcome,
-      ended_at=event.at.timestamp(),
-    )
+    if outcome == 'failed' and reason is not None:
+      outcome = f'{outcome}:{reason}'
     log.info('summon: %s ended: %s (trail %s)', record.target, outcome, record.trail_id)
-    self._write_status()
 
   def audit_event(self, event: 'Event', journal_record: 'Record') -> None:
     """Append one human-facing JSONL row for every journal event."""
@@ -701,23 +658,3 @@ class SummonControl:
       self._records.pop(event.quest, None)
     elif event.transition == 'denied':
       self._denial_summoners.pop(event.quest, None)
-
-  def _write_status(self) -> None:
-    status = summon_status.SummonStatus(
-      active=tuple(
-        summon_status.ActiveSummon(
-          request_id=record.request_id,
-          target=record.target,
-          trail_id=record.trail_id,
-          summoner=record.summoner,
-          started_at=record.started_at,
-          manual=record.manual,
-        )
-        for record in self._active.values()
-      ),
-      last=self._last,
-    )
-    try:
-      summon_status.write(self._status_file, status)
-    except OSError as e:
-      log.warning('could not write summon status file %s: %s', self._status_file, e)

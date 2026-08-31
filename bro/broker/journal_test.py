@@ -85,13 +85,13 @@ def test_scope_includes_only_the_callers_subtree():
   right = journal.open('right', 'summon', 'root', 'root-peer', {})
   journal.open('leaf', 'job', 'left', 'left-peer', {})
   workers = {'root-peer': 'root', 'left-peer': 'left'}
-  assert [view['id'] for view in journal.views('left-peer', workers)] == ['leaf', 'left']
+  assert [view['id'] for view in journal.views('left-peer', workers)] == ['leaf']
   assert {view['id'] for view in journal.views('root-peer', workers)} == {
-    'root',
     'left',
     'right',
     'leaf',
   }
+  assert not journal.visible('left-peer', left, workers)
   assert not journal.visible('left-peer', right, workers)
 
 

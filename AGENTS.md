@@ -206,23 +206,20 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   — the session environment facts of `ride banner --llm` rendered in-process (`bro.workspace.banner.render_banner`, with the bro's name and the run's trail id passed explicitly
   — an in-process run's environment carries the launcher's `RIDE_BRO`, or none, and its own trail is published by no session recorder), so every bro detects its environment without a shell;
   the playbook is `bro/prompts/environment.md`.
-  Both service builds also mount the summon tools when the process has a broker channel (`BROKER_CHANNEL` set), forwarding to `bro.summon`
-  — every wait run off-loop via `bro.base.offload.off_loop` so interactive surfaces stay responsive:
-  `summon` blocks and relays the target's answer or failure (`detach: true` returns the request id right after the send instead),
-  taking the same child-shaping knobs the launcher flags carry (`grant` / `revoke` / `llm` / `harness` beside `timeout` / `into` / `hold`),
-  and `summon_check` checks on a request id
-  — a non-marking peek by default (`{state: pending|completed|collected, …}`), a cursor read with `last_seen` (replays the conversation from that sequence
-  — the recovery path when a result was read by a wait whose reply never arrived), `wait: true` to block and collect.
-  The blocking modes own their per-call channel client on the loop and close it in `finally`, so a cancelled tool call (an MCP client that timed out or aborted) unblocks the worker thread instead of leaving a ghost waiter holding the broxy route
-  — the terminal then buffers for a later check.
+  Both service builds also mount `summon`, `summon_check`, and `summon_list` when the process has a broker channel (`BROKER_CHANNEL` set), forwarding to `bro.summon`
+  — every wait runs off-loop via `bro.base.offload.off_loop` so interactive surfaces stay responsive.
+  `summon` blocks and relays the target's answer or failure;
+  `detach: true` returns the quest id after the host's acceptance mark and fails immediately on a denial or pre-acceptance launch failure.
+  It takes the same child-shaping knobs the launcher flags carry (`grant` / `revoke` / `llm` / `harness` beside `timeout` / `into` / `hold`).
+  `summon_check` reads the retained journal record by id, returning pending or completed repeatably, and `wait: true` loops short `query {id, wait}` reads until terminal.
+  `summon_list` walks the journal's paginated caller-scoped listing and returns its summon records live-first.
+  The blocking modes own their per-call channel client on the loop and close it on cancellation, which unblocks the current short broker wait;
+  the host-retained terminal remains readable by id.
   Both descriptions carry a `{{when #wire = mcp}}` transport-caution block, rendered at service-server build
-  — service tools are harness features, the one tool surface whose rendering vocabulary gets the system `#wire` fact injected next to the `#tools` roster:
-  the MCP-served builds (`wire == 'mcp'`:
-  persona and `--raw` claude sessions, consumed over streamable HTTP with a client-side call budget (claude's `MCP_TOOL_TIMEOUT`, set by ride's runner)) render a caution steering long runs to `detach` + polling,
-  whose lost-request-id recovery forks on whether `summon_list` is mounted;
-  the in-process `bare` builds render the plain contract.
-  When the session also carries a summon-status file (`RIDE_SUMMON_STATUS` set), `summon_list` mounts alongside them, reporting the session's summons with their request ids (`summon.list_summons`)
-  — the rediscovery surface when a request id was lost with a dead client.
+  — service tools are harness features, the one tool surface whose rendering vocabulary gets the system `#wire` fact injected next to the `#tools` roster.
+  The MCP-served builds (`wire == 'mcp'`: persona and `--raw` claude sessions, consumed over streamable HTTP with a client-side call budget) steer long runs to detach plus repeatable polling;
+  their lost-id recovery wording retains the `{{iff #tools contains summon_list}}` roster fork.
+  The in-process `bare` builds render the plain contract.
 
   **Observing.**
   `bro.llm.observer.ObservedEvent` is the provider-neutral live seam:
@@ -282,15 +279,12 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   The same member owns `bro.run`, `bro.fork`, the native leaves in `bro.launch`, and `bro.trails.record.bro`;
   `native/AGENTS.md` maps it.
 - `shell.py` (`bro-shell-dir`) — validates the packaged shell helpers and prints their installed directory for shell consumers
-- `summon.py` (`summon`) — peer-side summon wire contract (the manual variant included) plus the blocking, detached, check, and list client surfaces;
+- `summon.py` (`summon`) — peer-side summon wire contract (the manual variant included) plus the blocking, detached, journal check/list, and event-watch client surfaces;
   host enforcement lives in `ride/ride/summon_control.py`
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint` / `artifact.get` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session command;
   the host store and enforcement live in `ride/ride/artifacts.py`
 - `kinds.py` — the contributed broker-kind contract:
   the `KindContext` a `bro.broker_kinds` factory receives, the artifact-resolver port and bounded credential scope it carries, and the workspace-relative path validation shared by kinds that take tree paths
-- `summon_status.py` — the session's live summon-status file:
-  its typed records, the `RIDE_SUMMON_STATUS` env var pointing at it, and its atomic write.
-  Stdlib-only and apart from `summon.py`, so the claude statusLine's repeated reads never pull the summon client in
 - `run_lifecycle.py` — `RunLifecycle`, the worker-process emitter over `bro.broker.client.Client`:
   it answers the quest named in `BROKER_QUEST`, emits the run's set-once `trail` mark after recording opens, and sends the closing result.
   `Runner.run()` builds one through `_make_channel()`;

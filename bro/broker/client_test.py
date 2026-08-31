@@ -390,3 +390,29 @@ async def test_receive_returns_none_on_timeout():
     client = Client(await _transport(provisioned))
     assert await asyncio.to_thread(client.receive, 0.2) is None
     client.close()
+
+
+@pytest.mark.asyncio
+async def test_await_reply_recovers_a_result_set_aside_during_a_journal_query():
+  async with running_server() as server:
+    provisioned = await server.transport.provision()
+    client = Client(await _transport(provisioned))
+    original = await asyncio.to_thread(client.send, 'summon', {})
+    original_id = original.id
+    assert original_id is not None
+    query_task = asyncio.create_task(
+      asyncio.to_thread(client.call, 'query', {'id': original_id}, TIMEOUT)
+    )
+
+    channel, _ = await _next(server.sink.messages)
+    _, query = await _next(server.sink.messages)
+    await server.transport.send(channel, brotocol.result(original_id, 'ok', value='answer'))
+    await server.transport.send(
+      channel,
+      brotocol.result(query.id or '', 'ok', value={'quest': {'id': original_id, 'state': 'ended'}}),
+    )
+    await query_task
+
+    result = await asyncio.to_thread(client.await_reply, original, TIMEOUT)
+    assert result.payload == {'outcome': 'ok', 'value': 'answer'}
+    client.close()

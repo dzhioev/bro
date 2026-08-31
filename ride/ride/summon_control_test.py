@@ -99,7 +99,6 @@ def _control(tmp_path, allow_list=('dev',), credential_scope=()):
     workspace=workspace,
     peers=ride.peers.Peers(workspace),
     artifacts=ride.artifacts.ArtifactStore(workspace, root_in_container=True),
-    status_file=tmp_path / 'summon-status.json',
     audit_file=tmp_path / 'audit.jsonl',
   )
 
@@ -109,10 +108,6 @@ def _message(**overrides):
   return brotocol.request(
     'summon', {key: value for key, value in args.items() if value is not None}
   )
-
-
-def _status(tmp_path):
-  return json.loads((tmp_path / 'summon-status.json').read_text())
 
 
 def _audit(tmp_path):
@@ -130,13 +125,14 @@ def test_authorized_summon_opens_identity_before_spawning(tmp_path):
   assert launch.parent == 'ws'
   assert peer == ROOT
   assert timeout == DEFAULT_TIMEOUT
-  assert _status(tmp_path)['active'][0]['request_id'] == message.quest_id
+  assert control._records[message.quest_id].target == 'dev'
+  assert not (tmp_path / 'summon-status.json').exists()
   accepted = _audit(tmp_path)[-1]
   assert accepted['transition'] == 'accepted'
   assert accepted['args']['prompt'] == 'deploy the thing'
 
 
-def test_journal_trail_and_terminal_feed_the_legacy_status(tmp_path):
+def test_journal_trail_and_terminal_update_identity_audit_and_cleanup(tmp_path):
   control = _control(tmp_path)
   context = FakeContext(control)
   message = _message()
@@ -145,36 +141,35 @@ def test_journal_trail_and_terminal_feed_the_legacy_status(tmp_path):
   context.journal.bind(record, CHILD)
   context.journal.started(record)
   context.journal.trail(record, 'trail-1')
-  assert _status(tmp_path)['active'][0]['trail_id'] == 'trail-1'
+  assert control._records[message.quest_id].trail_id == 'trail-1'
   context.journal.end(record, {'outcome': 'failed', 'error': 'no', 'detail': {'reason': 'raised'}})
-  status = _status(tmp_path)
-  assert status['active'] == []
-  assert status['last']['outcome'] == 'raised'
-  assert status['last']['trail_id'] == 'trail-1'
   assert [entry['transition'] for entry in _audit(tmp_path)[-3:]] == [
     'started',
     'trail',
     'ended',
   ]
   assert message.quest_id not in control._records
+  assert not (tmp_path / 'summon-status.json').exists()
 
 
 @pytest.mark.parametrize(
-  ('payload', 'outcome', 'reason', 'expected'),
+  ('payload', 'outcome', 'reason', 'expected_outcome'),
   [
     ({'outcome': 'ok', 'value': 'done'}, None, None, 'ok'),
-    ({'outcome': 'failed', 'detail': {'reason': 'launch'}}, None, None, 'failed:launch'),
+    ({'outcome': 'failed', 'detail': {'reason': 'launch'}}, None, None, 'failed'),
     ({'outcome': 'failed', 'detail': {'reason': 'killed'}}, 'killed', 'killed', 'killed'),
   ],
 )
-def test_terminal_variants_feed_status(tmp_path, payload, outcome, reason, expected):
+def test_terminal_variants_reach_the_audit(tmp_path, payload, outcome, reason, expected_outcome):
   control = _control(tmp_path)
   context = FakeContext(control)
   message = _message()
   control.handle(cast(Dispatcher, context), ROOT, message)
   record = context.journal.records[message.quest_id]
   context.journal.end(record, payload, outcome=outcome, reason=reason)
-  assert _status(tmp_path)['last']['outcome'] == expected
+  terminal = _audit(tmp_path)[-1]
+  assert terminal['transition'] == 'ended'
+  assert terminal['outcome'] == expected_outcome
 
 
 def test_denial_uses_the_journal_funnel(tmp_path):
@@ -452,7 +447,7 @@ def test_manual_summon_writes_the_pending_record_before_acceptance(tmp_path, mon
   pending = ride.pending_summon.peek(message.quest_id)
   assert pending.target == 'dev'
   assert pending.channel_token == 'token'
-  assert _status(tmp_path)['active'][0]['manual'] is True
+  assert control._records[message.quest_id].manual is True
 
 
 def test_claimed_manual_workspace_is_the_nested_base_source(tmp_path, monkeypatch):

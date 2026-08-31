@@ -12,7 +12,7 @@ A summon succeeds only when the target is in the summoner's allow-list
 — the session reads its own off the banner, fixed at launch
 — so a denial stays a normal outcome the spell relays.
 
-version: 1.12.0
+version: 1.13.0
 ---
 
 # Ask
@@ -109,8 +109,8 @@ The mechanism is the same either way:
   call `summon` with `target` and `prompt` (optional `timeout`, `into`, `hold`, `grant`, `revoke`, `llm`, `harness`).
   It blocks and returns the answer;
   failures come back as the tool error with the reason.
-  `detach: true` returns the request id right away instead;
-  `summon_check(request_id)` peeks non-blockingly (`{state: pending|completed, …}`) and `summon_check(request_id, wait: true)` blocks and collects.
+  `detach: true` returns the quest id after host acceptance and fails immediately on a denial;
+  `summon_check(request_id)` reads non-blockingly (`{state: pending|completed, …}`) and `summon_check(request_id, wait: true)` long-polls the same repeatable journal record.
 - **Neither** — this session can't summon;
   say so instead of improvising.
 
@@ -127,22 +127,24 @@ To peek mid-run, use `rewind show <trail-id>` with the trail id from the summon'
 prints the answer if the result is already in,
 says `still running` (exit 3) if not,
 and never disturbs the backgrounded wait.
-Alternatively `summon --detach` prints the request id and exits;
-collect later with `summon check --wait <request-id>`.
+Alternatively `summon --detach` waits for host acceptance, prints the quest id, and exits;
+wait for the retained result later with `summon check --wait <quest-id>`.
 
 Every summon prints its request id up front (stderr in blocking mode, stdout with `--detach`)
 — note it.
 Any summon is reclaimable by that id, foreground included:
-if a waiting process is killed mid-flight, the result is buffered,
-`summon check <id>` polls for it,
-and `summon check --wait <id>` collects it.
+if a waiting process is killed mid-flight, the host journal retains the quest,
+`summon check <id>` polls it,
+and `summon check --wait <id>` waits on the same non-destructive read.
+`summon watch` arms at the current journal head and prints ordered transitions after it, including denials;
+if retained events have a gap, it reports the loss and re-arms from the current head.
 
 Without Bash there is no true backgrounding, but the tools cover the long-run case:
 a blocking `summon` call fits anything conversational (tell the user it may take minutes);
 for a run that would outlast the surface's tool-call patience, `summon(…, detach: true)` returns the request id,
 and you check on it with `summon_check` between turns
-— non-consuming, so polling is safe
-— collecting with `wait: true` when it reports completed.
+— non-destructive, so polling is safe
+— or use `wait: true` to long-poll until it reports completed.
 
 ## Manual summon — an interactive child the user drives
 
@@ -216,17 +218,16 @@ If the user asked for a follow-up action on the answer, continue with it.
   or was killed at the timeout.
   The message carries the reason and a trails hint;
   `rewind show <trail-id>` has the full trace.
-- **Wait expired with no result**
-  — the result was lost or the child is still running;
-  the error says which trail to inspect.
-  A killed or detached wait is recoverable:
-  `summon check <request-id>` polls,
-  `summon check --wait <request-id>` collects the buffered result (the `summon_check` tool does the same for tool-only sessions).
+- **Interrupted wait / unavailable retained payload**
+  — a killed or detached wait remains recoverable by quest id:
+  `summon check <quest-id>` polls,
+  and `summon check --wait <quest-id>` waits for the host-retained result (the `summon_check` tool does the same for tool-only sessions).
+  If retention evicted the payload, the error points at the trail that still carries the run.
 
 ## Do not exit with a summon in flight
 
 When the session's root process exits, in-flight summoned children are killed (an in-flight manual child is only detached — the user's session lives on, but its answer can no longer arrive).
-Before ending the session (or letting it end), wait for pending summons or collect them with `summon check --wait`;
+Before ending the session (or letting it end), wait for pending summons with `summon check --wait`;
 if a result was lost this way it is still recoverable from the child's trail.
 
 ## Stopping one deliberately

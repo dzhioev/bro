@@ -46,7 +46,7 @@ from ride.peers import Peers
 from ride.repository import Repository, as_repository
 from ride.scope import split_scope_overrides, summoned_credential_scope
 from ride.session import SessionSpec, record_resume_spec
-from ride.summon_control import SummonControl, summon_status_file
+from ride.summon_control import SummonControl
 from ride.trails import local_trails_mounts
 from ride.workspace.docker import (
   ContainerRuntime,
@@ -313,7 +313,7 @@ def run_root_via_broker(
   (`ride.artifacts`, which also collects the run of any job a kind starts), plus
   whatever kinds installed distributions
   contribute (`ride.kinds`), and projects the journal into the summon audit and
-  stage-local status file. While an interactive root owns the terminal, host output goes to the
+  manual-token cleanup. While an interactive root owns the terminal, host output goes to the
   workspace's host log instead of the shared TTY (see
   `ride.workspace.spawn._HostLogRedirect`); headless runs keep it on stderr.
 
@@ -347,7 +347,6 @@ def run_root_via_broker(
     workspace=workspace,
     peers=peers,
     artifacts=artifacts,
-    status_file=summon_status_file(workspace.name),
     audit_file=summon_dir() / f'{workspace.name}.jsonl',
   )
   artifact_control = ArtifactControl(artifacts, peers)

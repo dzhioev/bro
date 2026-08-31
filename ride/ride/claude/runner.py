@@ -40,6 +40,7 @@ from ride.claude.session_context import (
   build_session_context,
   encode_session_context,
 )
+from ride.claude.statusline import start_statusline_projector
 from ride.repository import is_git_url
 
 if TYPE_CHECKING:
@@ -211,6 +212,13 @@ def run_in_place(spec: 'SessionSpec') -> int:
         log.error('%s', error)
         return 1
       teardown.callback(recorder.stop)
+    try:
+      statusline_projector = start_statusline_projector(os.environ)
+    except RuntimeError as error:
+      log.warning('%s', error)
+    else:
+      teardown.callback(statusline_projector.stop)
+
     # the recorder above got its copy; claude's subprocesses must not see the
     # summoner attribution, or a nested in-place run would stamp it on its own
     # trail (bro.summon.summoned_by_from_env owns the semantics)

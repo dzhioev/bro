@@ -554,8 +554,8 @@ An answer that is not an approval
 — blocks the merge whatever the PR says:
 report it and stop where questions reach the user, `raise` when unattended.
 Never read the PR's own approval as the missing verdict.
-An approval you already collected covers the head it was given for, so a later review event on that same head calls for no second collection
-— `bro::summon_check` on a consumed request id answers `collected` and no longer carries the answer.
+An approval you already read covers the head it was given for, so a later review event on that same head calls for no second read
+— `bro::summon_check` is repeatable and returns the host-retained approval again.
 
 **The base's gate**, in this event's `review_decision`.
 `APPROVED` or `null` clears it.
