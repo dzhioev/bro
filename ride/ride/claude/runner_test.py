@@ -43,6 +43,7 @@ class _Harness:
       patch('bro.launch.broxy._start_session_broxy', return_value=self.broxy),
       patch('ride.claude.runner.in_container', return_value=False),
       patch('ride.claude.runner.provision_host_claude_dir', return_value=self.claude_config_dir),
+      patch('ride.claude.runner.start_statusline_projector'),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -61,6 +62,7 @@ class _Harness:
     self.start_broxy = entered[7]
     self.in_container = entered[8]
     self.provision_claude_dir = entered[9]
+    self.start_statusline_projector = entered[10]
     return self
 
   def __exit__(self, *exception):
@@ -103,6 +105,22 @@ class TestRunInPlace:
       # spawned after the session context is set, so the daemon inherits it
       assert 'RIDE_SESSION_CONTEXT' in h.start_recorder.call_args.args[2]
       assert h.start_recorder.return_value.stop.call_count == 1
+
+  def test_statusline_projector_runs_for_the_session_and_stops_after(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as harness:
+      assert ride_runner.run_in_place(_spec()) == 0
+      assert harness.start_statusline_projector.call_count == 1
+      assert harness.start_statusline_projector.return_value.stop.call_count == 1
+
+  def test_statusline_projector_start_failure_leaves_the_session_running(
+    self, monkeypatch, tmp_path, caplog
+  ):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as harness:
+      harness.start_statusline_projector.side_effect = RuntimeError('projector failed')
+      assert ride_runner.run_in_place(_spec()) == 0
+    assert 'projector failed' in caplog.text
 
   def test_recorder_carries_the_launch_recipe(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)

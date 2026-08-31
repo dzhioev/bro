@@ -15,7 +15,7 @@ it imports neither `ride` nor the bro class graph.
 
 Mark origin is structural:
 `accepted` is dispatcher-born, `started` is Worker-born, and `trail` is the only mark a worker process may send.
-`MAX_FRAME_BYTES` is the 256 KiB encoded-frame bound;
+`MAX_FRAME_BYTES` is the encoded-frame bound;
 the TCP adapter owns NDJSON framing and the attach handshake.
 
 ## Layers
@@ -40,8 +40,9 @@ the TCP adapter owns NDJSON framing and the attach handshake.
 - `dispatcher.py` routes over journal records, binds one Worker per worker-backed quest, synthesizes failure from Worker death, and serves the reserved `query` / `events` read kinds.
   Its handler vocabulary is `reply`, `deny`, `spawn`, `job`, and `expect`.
 - `client.py` is the synchronous peer handle for requests, marks, progress, results, and correlated waits.
-- `broxy.py` is still the stage-local session proxy with its retained mailbox and `claim` / `check` kinds.
-  A later stage replaces that retention with journal reads.
+- `broxy.py` is still the stage-local session proxy with a retained mailbox and the legacy `claim` / `check` kinds.
+  Production readers use journal `query` / `events` instead;
+  the next broker stage removes the unconsumed retention machinery.
 - `cli.py` exposes the low-level broker request and receive surface.
 
 ## Journal
@@ -64,7 +65,8 @@ Args share one bounded-head implementation for memory and audit.
 it also supports a terminal wait by id and reports `result_evicted` when a retained result cannot fit its response frame.
 `events` returns caller-scoped, frame-bounded ordered batches after a cursor and supports bounded long-polling.
 Both clamp waits to 600 seconds, are answered inline, and never record themselves.
-A caller sees its own quest and descendants according to permanent journal ancestry.
+A caller sees the quests it requested and their descendants according to permanent journal ancestry;
+it never sees the parent-owned quest that its own worker answers.
 
 ## Dispatcher invariants
 

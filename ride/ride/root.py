@@ -24,23 +24,17 @@ def _run_root_via_broker(
   # short-circuit a launch before anything touches the broker package (see its
   # docstring).
   from bro.summon import MAY_SUMMON_ENV, encode_may_summon
-  from bro.workspace.paths import CONTAINER_SUMMON_ROOT
   from ride.artifacts import view_mount
   from ride.spawn import run_root_via_broker
-  from ride.summon_control import STATUS_ENV, container_status_path, summon_status_file
   from ride.workspace.spawn import DockerLaunchSpec
 
-  status_file = summon_status_file(workspace.name)
-  status_file.parent.mkdir(parents=True, exist_ok=True)
   env = dict(launch.env)
-  env[STATUS_ENV] = container_status_path(workspace.name)
   env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
-  status_mount = f'{status_file.parent}:{CONTAINER_SUMMON_ROOT}:ro'
   # the mount source — the root's view dir — is created when run_root_via_broker
   # constructs the session store, before the docker launch consumes this spec
   artifacts_mount = view_mount(workspace.name, workspace.name)
   broker_launch = DockerLaunchSpec(
-    replace(launch, env=env, extra_mounts=(*launch.extra_mounts, status_mount, artifacts_mount)),
+    replace(launch, env=env, extra_mounts=(*launch.extra_mounts, artifacts_mount)),
     capture_output=False,
   )
   container_runtime = ContainerRuntimeResolver.fixed(
@@ -72,11 +66,9 @@ def run_host_process_via_broker(
   """run a host-worktree process as the broker's supervised session root."""
   from bro.summon import MAY_SUMMON_ENV, encode_may_summon
   from ride.spawn import run_root_via_broker
-  from ride.summon_control import STATUS_ENV, summon_status_file
   from ride.workspace.spawn import ProcessLaunchSpec
 
   launch_env = dict(env)
-  launch_env[STATUS_ENV] = str(summon_status_file(workspace.name))
   launch_env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
   launch = ProcessLaunchSpec(
     command=command,

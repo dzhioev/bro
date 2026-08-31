@@ -8,7 +8,7 @@ import ride.summon_control
 import ride.workspace.docker as workspace_docker
 import ride.workspace.spawn as workspace_spawn
 import ride.workspace.store as workspace_store
-from bro.workspace.paths import CONTAINER_SUMMON_ROOT, summon_dir, workspace_dir
+from bro.workspace.paths import workspace_dir
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 
@@ -187,7 +187,6 @@ class TestRunRootViaBroker:
         command=['claude', '--verbose'],
         env={
           'RIDE_BASE_REF': 'deadbeef',
-          ride.summon_control.STATUS_ENV: str(CONTAINER_SUMMON_ROOT / 'ws.status.json'),
           bro.summon.MAY_SUMMON_ENV: 'dev',
         },
         secrets=('github',),
@@ -197,10 +196,7 @@ class TestRunRootViaBroker:
         forward_env=True,
         image='runtime-image',
         runtime_bundle_hash='bundle-hash',
-        extra_mounts=(
-          f'{summon_dir()}:{CONTAINER_SUMMON_ROOT}:ro',
-          ride.artifacts.view_mount('ws', 'ws'),
-        ),
+        extra_mounts=(ride.artifacts.view_mount('ws', 'ws'),),
         repo=project,
       ),
       capture_output=False,
