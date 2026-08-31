@@ -20,6 +20,7 @@ from bro.base.lulid import lulid
 
 PROTOCOL_REVISION = 2
 MAX_FRAME_BYTES = 256 * 1024
+MAX_IDENTIFIER_BYTES = 4096
 
 OUTCOMES = frozenset({'ok', 'denied', 'failed'})
 _MARK_TRANSITIONS = frozenset({'accepted', 'started', 'trail'})
@@ -143,17 +144,47 @@ def result(
   return Message(type=Tag.RESULT, payload=payload, quest=quest_id)
 
 
+def frame_safe_result(message: Message) -> Message:
+  if message.type != Tag.RESULT:
+    raise ProtocolError(f'cannot fit a {message.type} message as a result')
+  if len(message.to_bytes()) <= MAX_FRAME_BYTES:
+    return message
+  original_error = message.payload.get('error')
+  error = (
+    original_error
+    if isinstance(original_error, str)
+    else 'result payload exceeded the broker frame bound'
+  )
+  outcome = message.outcome if message.outcome != 'ok' else 'failed'
+  detail = {'truncated': True}
+  lower = 0
+  upper = len(error)
+  while lower < upper:
+    middle = (lower + upper + 1) // 2
+    candidate = result(message.quest_id, outcome, error=error[:middle], detail=detail)
+    if len(candidate.to_bytes()) <= MAX_FRAME_BYTES:
+      lower = middle
+    else:
+      upper = middle - 1
+  fitted = result(message.quest_id, outcome, error=error[:lower], detail=detail)
+  if len(fitted.to_bytes()) > MAX_FRAME_BYTES:
+    raise ProtocolError('a result identifier leaves no room for a bounded payload')
+  return fitted
+
+
 def _validate(type_: Any, id_: Any, quest_id: Any, payload: Any) -> None:
   if not isinstance(payload, dict):
     raise ProtocolError(f"message 'payload' must be dict, got {type(payload).__name__}")
   if type_ == Tag.REQUEST:
     if not isinstance(id_, str) or len(id_) == 0:
       raise ProtocolError("a request needs a non-empty string 'id'")
+    _validate_identifier_size('request id', id_)
     if quest_id is not None:
       raise ProtocolError("a request carries no 'quest' field")
     kind = payload.get('kind')
     if not isinstance(kind, str) or len(kind) == 0:
       raise ProtocolError("a request payload needs a non-empty string 'kind'")
+    _validate_identifier_size('request kind', kind)
     if not isinstance(payload.get('args'), dict):
       raise ProtocolError("a request payload needs dict 'args'")
     unknown = sorted(set(payload) - {'kind', 'args'})
@@ -164,6 +195,7 @@ def _validate(type_: Any, id_: Any, quest_id: Any, payload: Any) -> None:
     raise ProtocolError(f'unknown message type {type_!r}')
   if not isinstance(quest_id, str) or len(quest_id) == 0:
     raise ProtocolError(f"a {type_} needs a non-empty string 'quest'")
+  _validate_identifier_size(f'{type_} quest', quest_id)
   if id_ is not None:
     raise ProtocolError(f"a {type_} carries no 'id' field")
   if type_ == Tag.MARK:
@@ -172,12 +204,32 @@ def _validate(type_: Any, id_: Any, quest_id: Any, payload: Any) -> None:
       raise ProtocolError(
         f"a mark payload needs 'transition' of {', '.join(sorted(_MARK_TRANSITIONS))}"
       )
+    if transition == 'trail':
+      trail_id = payload.get('trail_id')
+      if not isinstance(trail_id, str) or len(trail_id) == 0:
+        raise ProtocolError("a trail mark needs a non-empty string 'trail_id'")
+      _validate_identifier_size('trail id', trail_id)
   if type_ == Tag.RESULT:
     if payload.get('outcome') not in OUTCOMES:
       raise ProtocolError(f"a result payload needs 'outcome' of {', '.join(sorted(OUTCOMES))}")
     unknown = sorted(set(payload) - _RESULT_KEYS)
     if len(unknown) > 0:
       raise ProtocolError(f'unknown result payload key(s): {", ".join(unknown)}')
+    error = payload.get('error')
+    if error is not None and not isinstance(error, str):
+      raise ProtocolError("a result payload's 'error' must be a string")
+    detail = payload.get('detail')
+    if detail is not None and not isinstance(detail, dict):
+      raise ProtocolError("a result payload's 'detail' must be an object")
+    reason = detail.get('reason') if isinstance(detail, dict) else None
+    if reason is not None and not isinstance(reason, str):
+      raise ProtocolError("a result detail's 'reason' must be a string")
+
+
+def _validate_identifier_size(name: str, value: str) -> None:
+  size = len(value.encode('utf-8'))
+  if size > MAX_IDENTIFIER_BYTES:
+    raise ProtocolError(f'{name} is {size} bytes, over {MAX_IDENTIFIER_BYTES}')
 
 
 def _require_envelope_keys(data: dict, expected: frozenset[str]) -> None:

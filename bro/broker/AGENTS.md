@@ -12,11 +12,13 @@ it imports neither `ride` nor the bro class graph.
 - `mark {quest, payload}` carries `accepted`, `started`, or `trail`.
 - `progress {quest, payload}` carries kind-defined interim data.
 - `result {quest, payload}` closes the quest exactly once.
+  Its optional error and detail reason are strings.
 
 Mark origin is structural:
 `accepted` is dispatcher-born, `started` is Worker-born, and `trail` is the only mark a worker process may send.
 `MAX_FRAME_BYTES` is the encoded-frame bound;
-the TCP adapter owns NDJSON framing and the attach handshake.
+`MAX_IDENTIFIER_BYTES` keeps quest, kind, and trail identifiers small enough for journal projections.
+The TCP adapter owns NDJSON framing and the attach handshake.
 
 ## Layers
 
@@ -39,6 +41,7 @@ the TCP adapter owns NDJSON framing and the attach handshake.
   a raising subscriber is logged without breaking later subscribers.
 - `dispatcher.py` routes over journal records, binds one Worker per worker-backed quest, synthesizes failure from Worker death, and serves the reserved `query` / `events` read kinds.
   Its handler vocabulary is `reply`, `deny`, `spawn`, `job`, and `expect`.
+  Delivery fits an oversized generated result into a correlated failure or denial with a truncation marker.
 - `client.py` is the synchronous peer handle for requests, marks, progress, results, and correlated waits.
   `BROKER_CHANNEL` is its client address;
   `BROKER_UPSTREAM` without a channel means the session proxy failed at launch and raises with the broxy log path.
@@ -64,6 +67,7 @@ The event ring is independently bounded.
 The bounds live with the journal constants.
 
 Args share one bounded-head implementation for memory and audit.
+Trail ids and terminal reasons use a bounded journal projection with an explicit truncation marker.
 
 `query` returns caller-scoped, frame-bounded live-first pages with an opaque continuation cursor;
 it also supports a terminal wait by id and reports `result_evicted` when a retained result cannot fit its response frame.

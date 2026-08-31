@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from bro.base import log
 from bro.base.time_util import Moment, utc_now
+from bro.broker.brotocol import MAX_IDENTIFIER_BYTES
 from bro.broker.runtime import Peer
 
 MAX_RECORDS = 256
@@ -16,6 +17,7 @@ MAX_RESULT_BYTES = 2 << 20
 MAX_EVENTS = 4096
 MAX_EVENT_BATCH = 256
 MAX_WAIT_SECONDS = 600.0
+MAX_JOURNAL_TEXT_BYTES = MAX_IDENTIFIER_BYTES
 ARGS_STRING_HEAD = 160
 ARGS_HEAD_BYTES = 2048
 
@@ -34,7 +36,9 @@ class Record:
   ended_at: Optional[Moment] = None
   outcome: Optional[str] = None
   reason: Optional[str] = None
+  reason_truncated: bool = False
   trail_id: Optional[str] = None
+  trail_id_truncated: bool = False
   result: Optional[dict[str, Any]] = None
   result_evicted: bool = False
   order: int = field(default=0, repr=False)
@@ -59,6 +63,9 @@ class Record:
       value = getattr(self, name)
       if value is not None:
         view[name] = value
+    for name in ('reason_truncated', 'trail_id_truncated'):
+      if getattr(self, name):
+        view[name] = True
     if include_result and self.result is not None:
       view['result'] = self.result
     if include_result and self.result_evicted:
@@ -161,6 +168,7 @@ class Journal:
       raise ValueError(f'quest id {quest_id!r} already exists')
     now = utc_now()
     result = {'outcome': 'denied', 'error': reason}
+    bounded_reason, reason_truncated = _bounded_journal_text(reason)
     record = Record(
       quest_id=quest_id,
       kind=kind,
@@ -170,14 +178,18 @@ class Journal:
       state='denied',
       ended_at=now,
       outcome='denied',
-      reason=reason,
+      reason=bounded_reason,
+      reason_truncated=reason_truncated,
       result=result,
       order=self._next_order(),
     )
     self._result_bytes += _payload_bytes(result)
     self.records[quest_id] = record
     self.lineage[quest_id] = Lineage(parent, kind)
-    self._append(record, 'denied', {'reason': reason}, at=now)
+    event_payload: dict[str, Any] = {'reason': bounded_reason}
+    if reason_truncated:
+      event_payload['reason_truncated'] = True
+    self._append(record, 'denied', event_payload, at=now)
     self._retain()
     return record
 
@@ -200,8 +212,11 @@ class Journal:
     self._require_live(record)
     if record.trail_id is not None:
       return False
-    record.trail_id = trail_id
-    self._append(record, 'trail', {'trail_id': trail_id})
+    record.trail_id, record.trail_id_truncated = _bounded_journal_text(trail_id)
+    event_payload: dict[str, Any] = {'trail_id': record.trail_id}
+    if record.trail_id_truncated:
+      event_payload['trail_id_truncated'] = True
+    self._append(record, 'trail', event_payload)
     return True
 
   def end(
@@ -213,18 +228,24 @@ class Journal:
     reason: Optional[str] = None,
   ) -> None:
     self._require_live(record)
+    detail = result.get('detail')
+    result_reason = detail.get('reason') if isinstance(detail, dict) else None
+    full_reason = reason if reason is not None else result_reason
+    if full_reason is not None and not isinstance(full_reason, str):
+      raise TypeError('result reason must be a string')
     record.state = 'ended'
     record.ended_at = utc_now()
     record.order = self._next_order()
     record.result = result
     record.outcome = outcome if outcome is not None else str(result.get('outcome'))
-    detail = result.get('detail')
-    result_reason = detail.get('reason') if isinstance(detail, dict) else None
-    record.reason = reason if reason is not None else result_reason
+    if full_reason is not None:
+      record.reason, record.reason_truncated = _bounded_journal_text(full_reason)
     self._result_bytes += _payload_bytes(result)
     event_payload: dict[str, Any] = {'outcome': record.outcome}
     if record.reason is not None:
       event_payload['reason'] = record.reason
+    if record.reason_truncated:
+      event_payload['reason_truncated'] = True
     self._append(record, 'ended', event_payload, at=record.ended_at)
     self._retain()
 
@@ -404,6 +425,13 @@ def _bounded_value(value: Any) -> Any:
   if value is None or isinstance(value, (bool, int, float)):
     return value
   raise TypeError(f'unsupported request arg value: {type(value).__name__}')
+
+
+def _bounded_journal_text(value: str) -> tuple[str, bool]:
+  encoded = value.encode('utf-8')
+  if len(encoded) <= MAX_JOURNAL_TEXT_BYTES:
+    return value, False
+  return encoded[:MAX_JOURNAL_TEXT_BYTES].decode('utf-8', errors='ignore'), True
 
 
 def _payload_bytes(payload: dict[str, Any]) -> int:

@@ -4,8 +4,11 @@ import pytest
 
 from bro.broker.brotocol import (
   MAX_FRAME_BYTES,
+  MAX_IDENTIFIER_BYTES,
   Message,
   ProtocolError,
+  Tag,
+  frame_safe_result,
   mark,
   progress,
   request,
@@ -33,6 +36,17 @@ def test_result_round_trip():
   back = Message.from_bytes(message.to_bytes())
   assert back == message
   assert back.payload == {'outcome': 'failed', 'value': 'v', 'error': 'boom', 'detail': {'reason': 'exit'}}  # fmt: skip
+
+
+def test_frame_safe_result_bounds_an_oversize_error_with_a_visible_marker():
+  message = result('quest-1', 'denied', error='x' * MAX_FRAME_BYTES)
+
+  fitted = frame_safe_result(message)
+
+  assert len(fitted.to_bytes()) <= MAX_FRAME_BYTES
+  assert fitted.outcome == 'denied'
+  assert fitted.payload['detail']['truncated'] is True
+  assert fitted.payload['error'] == message.payload['error'][: len(fitted.payload['error'])]
 
 
 def test_request_id_minted_and_unique():
@@ -81,6 +95,18 @@ def test_unknown_mark_transition_is_rejected():
     mark('quest-1', 'finished')
 
 
+def test_oversize_identifiers_are_rejected():
+  oversize = 'x' * (MAX_IDENTIFIER_BYTES + 1)
+  with pytest.raises(ProtocolError, match='request id'):
+    Message(type=Tag.REQUEST, id=oversize, payload={'kind': 'ping', 'args': {}})
+  with pytest.raises(ProtocolError, match='request kind'):
+    Message(type=Tag.REQUEST, id='request', payload={'kind': oversize, 'args': {}})
+  with pytest.raises(ProtocolError, match='progress quest'):
+    progress(oversize, {})
+  with pytest.raises(ProtocolError, match='trail id'):
+    mark('quest', 'trail', trail_id=oversize)
+
+
 def test_wire_frame_cap_is_256_kibibytes():
   assert MAX_FRAME_BYTES == 256 * 1024
 
@@ -106,11 +132,15 @@ def test_to_bytes_utf8_round_trip():
     {'type': 'mark', 'payload': {'transition': 'accepted'}},
     {'type': 'mark', 'payload': {}, 'quest': 'q'},
     {'type': 'mark', 'payload': {'transition': 'unknown'}, 'quest': 'q'},
+    {'type': 'mark', 'payload': {'transition': 'trail'}, 'quest': 'q'},
     {'type': 'progress', 'payload': {}},
     {'type': 'progress', 'payload': {}, 'quest': 'q', 'id': 'i'},
     {'type': 'result', 'payload': {}, 'quest': 'q'},
     {'type': 'result', 'payload': {'outcome': 'done'}, 'quest': 'q'},
     {'type': 'result', 'payload': {'outcome': 'ok', 'extra': 1}, 'quest': 'q'},
+    {'type': 'result', 'payload': {'outcome': 'failed', 'error': 7}, 'quest': 'q'},
+    {'type': 'result', 'payload': {'outcome': 'failed', 'detail': []}, 'quest': 'q'},
+    {'type': 'result', 'payload': {'outcome': 'failed', 'detail': {'reason': 7}}, 'quest': 'q'},
     {'type': 'result', 'payload': [], 'quest': 'q'},
   ],
 )

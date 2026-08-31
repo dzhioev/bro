@@ -11,7 +11,7 @@ from typing import Any, Optional
 from bro.base import log
 from bro.base.lulid import lulid
 from bro.broker import brotocol
-from bro.broker.brotocol import MAX_FRAME_BYTES, Message, Tag
+from bro.broker.brotocol import MAX_FRAME_BYTES, MAX_IDENTIFIER_BYTES, Message, Tag
 from bro.broker.job import CommandJob
 from bro.broker.journal import MAX_WAIT_SECONDS, Journal, Record, Subscriber, listing_position
 from bro.broker.runtime import Peer, Runtime
@@ -86,7 +86,8 @@ class Dispatcher:
     self._handlers[kind] = handler
 
   def deliver(self, peer: Peer, message: Message) -> None:
-    self.runtime.send(peer, message)
+    delivered = brotocol.frame_safe_result(message) if message.type == Tag.RESULT else message
+    self.runtime.send(peer, delivered)
 
   def reply(self, peer: Peer, payload: dict[str, Any]) -> None:
     self.deliver(peer, brotocol.Message(type=Tag.RESULT, payload=payload, quest=self._request_id()))
@@ -606,6 +607,8 @@ def _validate_query(args: dict[str, Any]) -> Optional[str]:
   quest_id = args.get('id')
   if quest_id is not None and (not isinstance(quest_id, str) or len(quest_id) == 0):
     return "query 'id' must be a non-empty string"
+  if isinstance(quest_id, str) and len(quest_id.encode('utf-8')) > MAX_IDENTIFIER_BYTES:
+    return "query 'id' exceeds the protocol identifier bound"
   cursor = args.get('cursor')
   if cursor is not None and (not isinstance(cursor, str) or len(cursor) == 0):
     return "query 'cursor' must be a non-empty string"
@@ -634,9 +637,3 @@ def _validate_events(args: dict[str, Any]) -> Optional[str]:
   ):
     return "events 'wait' must be a non-negative number of seconds"
   return None
-
-
-def _result_arguments(payload: dict[str, Any]) -> dict[str, Any]:
-  return {
-    key: value for key, value in payload.items() if key in {'outcome', 'value', 'error', 'detail'}
-  }
