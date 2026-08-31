@@ -40,9 +40,11 @@ the TCP adapter owns NDJSON framing and the attach handshake.
 - `dispatcher.py` routes over journal records, binds one Worker per worker-backed quest, synthesizes failure from Worker death, and serves the reserved `query` / `events` read kinds.
   Its handler vocabulary is `reply`, `deny`, `spawn`, `job`, and `expect`.
 - `client.py` is the synchronous peer handle for requests, marks, progress, results, and correlated waits.
-- `broxy.py` is still the stage-local session proxy with a retained mailbox and the legacy `claim` / `check` kinds.
-  Production readers use journal `query` / `events` instead;
-  the next broker stage removes the unconsumed retention machinery.
+- `broxy.py` is the stateless session multiplexer:
+  it holds one upstream channel, authenticates local clients with one shared token, and keeps sticky quest-to-connection routes only until local EOF or result delivery.
+  Local delivery never drains;
+  a reply whose waiter died is dropped because recovery reads the host journal.
+  `MAX_ROUTES` is a leak backstop, not retention.
 - `cli.py` exposes the low-level broker request and receive surface.
 
 ## Journal
@@ -98,4 +100,4 @@ Unknown kinds and lineage collisions are dispatcher wire denials and remain unjo
 - `journal_test.py` covers folding, subscribers, retention, lineage, bounds, event gaps, and ancestry scope.
 - `dispatcher_test.py` covers routing, origin checks, journaled denial, Worker synthesis, and the read kinds.
 - `job_test.py` and `spawn_test.py` cover the process and launch ports.
-- `client_test.py`, `cli_test.py`, and `broxy_test.py` cover the peer-facing and stage-local proxy surfaces.
+- `client_test.py`, `cli_test.py`, and `broxy_test.py` cover the peer-facing and stateless proxy surfaces.

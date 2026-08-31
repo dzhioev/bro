@@ -671,7 +671,8 @@ The modes differ only in the spawner (`ride/ride/workspace/spawn.py`, composed b
 The session's processes don't talk to that channel directly:
 a **broxy** (the peer-side broker proxy, `bro/broker/broxy.py`) sits in between, holding the one long-lived upstream connection and re-serving the channel on a loopback port of its own that `BROKER_CHANNEL` is rewritten to
 — so the session's short-lived clients (`broker` CLI calls, `RunLifecycle`, a backgrounded wait) multiplex over the single connection the host's supersede-on-accept semantics expect.
-Client recovery reads the host journal through `query`, so no production surface depends on the broxy's stage-local retained mailbox.
+Client recovery reads the host journal through `query`;
+the broxy retains no result state.
 A set `BROKER_CHANNEL` always names a broxy
 — there is no direct-channel topology.
 
