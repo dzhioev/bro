@@ -241,15 +241,27 @@ def test_terminal_variants_reach_the_audit(tmp_path, payload, outcome, reason, e
   assert terminal['outcome'] == expected_outcome
 
 
-def test_denial_uses_the_journal_funnel(tmp_path):
-  control = _control(tmp_path, allow_list=())
+@pytest.mark.parametrize(
+  ('allow_list', 'overrides'),
+  [
+    ((), {}),
+    (('dev',), {'target': ''}),
+  ],
+)
+def test_authorization_and_shape_denials_use_one_prefixed_journal_reason(
+  tmp_path, allow_list, overrides
+):
+  control = _control(tmp_path, allow_list=allow_list)
   context = FakeContext(control)
-  message = _message()
+  message = _message(**overrides)
   control.handle(cast(Dispatcher, context), ROOT, message)
-  assert context.replies[0][1]['outcome'] == 'denied'
+  reply = context.replies[0][1]
+  assert reply['outcome'] == 'denied'
+  assert reply['error'].startswith('summon denied: ')
+  assert reply['error'].count('summon denied: ') == 1
   denial = context.journal.records[message.quest_id]
   assert denial.state == 'denied'
-  assert denial.reason is not None and 'not in' in denial.reason
+  assert denial.reason == reply['error']
   assert _audit(tmp_path)[-1]['transition'] == 'denied'
   assert _audit(tmp_path)[-1]['summoner']['workspace'] == 'ws'
 

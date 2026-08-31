@@ -579,7 +579,7 @@ def _event_line(event: dict[str, Any]) -> str:
     reason = f':{event["reason"]}' if event.get('reason') is not None else ''
     return f'summon ended {event.get("outcome")}{reason} (request {request_id})'
   if transition == 'denied':
-    return f'summon denied: {event.get("reason")} (request {request_id})'
+    return f'{event.get("reason")} (request {request_id})'
   return f'summon {transition} (request {request_id})'
 
 
