@@ -32,7 +32,7 @@ from ride.claude.claude_argv import build_claude_launch
 from ride.claude.claude_auth import apply_claude_auth
 from ride.claude.claude_config import latest_jsonl, provision_host_claude_dir
 from ride.claude.harness import options
-from ride.claude.interrupt import run_interactive, run_printing
+from ride.claude.interrupt import InteractiveRun, run_interactive, run_printing
 from ride.claude.mcp import start_session_mcp_server
 from ride.claude.recorder import start_session_recorder
 from ride.claude.session_context import (
@@ -68,7 +68,7 @@ def _set_session_context(spec: 'SessionSpec', system_prompt: str, tree: Path) ->
   os.environ[RIDE_SESSION_CONTEXT_ENV] = encode_session_context(records)
 
 
-def _run_claude(argv: list[str], env: dict[str, str], transcripts: Path) -> int:
+def _run_claude(argv: list[str], env: dict[str, str], transcripts: Path) -> InteractiveRun:
   return run_interactive(['claude', *argv], env, transcripts)
 
 
@@ -113,21 +113,7 @@ def _trail_watch() -> Generator[threading.Event]:
     thread.join()
 
 
-def _run_claude_summoned(argv: list[str], env: dict[str, str]) -> int:
-  """the `_run_claude` of a summoned solo child: claude runs in print mode with
-  its stdout captured, and the runner emits the run lifecycle a bro-run child
-  gets from `BaseBro.run` — the trail mark once the session recorder
-  publishes the current-trail pointer, and the quest's ok result carrying
-  the printed reply after a clean exit. A non-zero exit or a stopped run emits
-  no result: the broker synthesizes `result{failed}` with the exit code and
-  output tail for the former, and a `raise`- or `answer`-ended session already
-  sent its own. The captured reply is echoed to stdout either way, so the
-  child's output tail still carries it."""
-  with _trail_watch() as emitted:
-    run = run_printing(['claude', *argv], env)
-  print(run.output, end='', flush=True)
-  if run.code != 0 or run.stopped:
-    return run.code
+def _complete_run(emitted: threading.Event, result: str | None) -> None:
   # a run short enough to end inside the recorder's adoption cadence announces
   # here or not at all; the result must not wait on recording
   _announce_trail(emitted)
@@ -135,8 +121,33 @@ def _run_claude_summoned(argv: list[str], env: dict[str, str]) -> int:
   if channel is not None:
     pointer = trail_pointer.path()
     trail_id = trail_pointer.read(pointer) if pointer is not None else None
-    channel.completed(run.output.rstrip('\n'), 'ok', trail_id=trail_id)
+    channel.completed(result, 'ok', trail_id=trail_id)
     channel.close()
+
+
+def _run_claude_root_solo(argv: list[str], env: dict[str, str], transcripts: Path) -> int:
+  """run a root's print-mode Claude and close its host-anchored quest on success."""
+  with _trail_watch() as emitted:
+    run = _run_claude(argv, env, transcripts)
+  if run.code == 0 and not run.stopped:
+    _complete_run(emitted, None)
+  return run.code
+
+
+def _run_claude_summoned(argv: list[str], env: dict[str, str]) -> int:
+  """run a summoned print-mode Claude and emit its broker lifecycle.
+
+  A clean exit answers with the printed reply. A non-zero exit or a stopped run
+  emits no result: the broker synthesizes `result{failed}` from reap for the
+  former, and a `raise`- or `answer`-ended session already sent its own. The
+  captured reply is echoed to stdout either way, so the output tail still
+  carries it."""
+  with _trail_watch() as emitted:
+    run = run_printing(['claude', *argv], env)
+  print(run.output, end='', flush=True)
+  if run.code != 0 or run.stopped:
+    return run.code
+  _complete_run(emitted, run.output.rstrip('\n'))
   return run.code
 
 
@@ -149,7 +160,7 @@ def _run_claude_summoned_interactive(
   answer, which the broker turns into the summoner's synthesized failure when
   the channel goes."""
   with _trail_watch():
-    return _run_claude(argv, env, transcripts)
+    return _run_claude(argv, env, transcripts).code
 
 
 def run_in_place(spec: 'SessionSpec') -> int:
@@ -244,11 +255,13 @@ def run_in_place(spec: 'SessionSpec') -> int:
       env['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK'] = '1'
     apply_claude_auth(env, warn_when_missing=not raw)
     log.info('launching claude')
-    if not summoned():
-      code = _run_claude(launch.argv, env, transcripts)
-    elif spec.solo:
+    if spec.solo and summoned():
       code = _run_claude_summoned(launch.argv, env)
-    else:
+    elif spec.solo:
+      code = _run_claude_root_solo(launch.argv, env, transcripts)
+    elif summoned():
       code = _run_claude_summoned_interactive(launch.argv, env, transcripts)
+    else:
+      code = _run_claude(launch.argv, env, transcripts).code
 
   return code
