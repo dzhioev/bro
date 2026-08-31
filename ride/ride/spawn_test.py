@@ -1,7 +1,5 @@
 import subprocess
-from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
-from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,14 +7,14 @@ import pytest
 import ride.artifacts
 import ride.bro
 import ride.identity
-import ride.peers
+import ride.peer_facts
 import ride.scope
 import ride.session
 import ride.spawn
 import ride.summon_control
 import ride.workspace.docker as workspace_docker
 import ride.workspace.store as workspace_store
-from bro.broker.dispatcher import Dispatcher
+from bro.broker.journal import Journal
 from bro.broker.transports.tcp import LOCAL_HOST, Endpoint
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 from bro.workspace.paths import summon_dir, workspace_tree
@@ -45,18 +43,15 @@ def _artifacts() -> ride.artifacts.ArtifactStore:
   )
 
 
-@dataclass
-class _Context:
-  """the two Dispatcher facts peer attribution reads."""
-
-  root: str = 'ROOT'
-  workers: dict = dataclass_field(default_factory=dict)
-
-
-def _peers_expecting(quest: str) -> ride.peers.Peers:
-  peers = ride.peers.Peers(Workspace.ensure(SESSION, None, WorkspaceKind.CONTAINER))
-  peers.note_summon(cast(Dispatcher, _Context()), 'ROOT', quest)
-  return peers
+def _facts_expecting(quest: str) -> ride.peer_facts.PeerFacts:
+  workspace = Workspace.ensure(SESSION, None, WorkspaceKind.CONTAINER)
+  facts = ride.peer_facts.PeerFacts(
+    ride.peer_facts.PeerFact('ws', 'bro-dev', frozenset()),
+    root_tree=workspace.tree,
+    root_path=workspace.path,
+  )
+  facts.add(quest, ride.peer_facts.PeerFact(None, 'dev', frozenset()))
+  return facts
 
 
 @pytest.fixture
@@ -400,8 +395,8 @@ class TestSummonLowering:
         return MagicMock()
 
     docker = RecordingDocker()
-    peers = _peers_expecting('X-1')
-    spawner = ride.spawn.SummonSpawner(docker, _container_runtime(), peers, _artifacts())
+    facts = _facts_expecting('X-1')
+    spawner = ride.spawn.SummonSpawner(docker, _container_runtime(), facts, _artifacts())
     channel = ride.spawn.Provisioned(channel='CH', host_endpoint=Endpoint(port=7321, token='tk'))
     launch = ride.spawn.SummonLaunchSpec(
       target='dev',
@@ -425,7 +420,7 @@ class TestSummonLowering:
   @pytest.mark.asyncio
   async def test_lowering_failure_propagates_out_of_spawn(self, lowering_harness):
     spawner = ride.spawn.SummonSpawner(
-      ride.spawn.DockerSpawner(), _container_runtime(), _peers_expecting('X-1'), _artifacts()
+      ride.spawn.DockerSpawner(), _container_runtime(), _facts_expecting('X-1'), _artifacts()
     )
     channel = ride.spawn.Provisioned(channel='CH', host_endpoint=Endpoint(port=7321, token='tk'))
     launch = ride.spawn.SummonLaunchSpec(
@@ -580,6 +575,7 @@ class TestRunRootViaBroker:
         captured['spawner'] = spawner
         captured['handlers'] = {}
         captured['observers'] = []
+        self.journal = Journal()
 
       def on(self, message_type, handler):
         captured['handlers'][message_type] = handler
@@ -609,6 +605,7 @@ class TestRunRootViaBroker:
       ride.spawn.run_root_via_broker(
         launch,
         workspace=workspace,
+        bro='bro-dev',
         credential_scope=workspace_store.ScopedSecrets({'harbor'}, set()),
         container_runtime=_container_runtime(),
       )
@@ -645,7 +642,8 @@ class TestRunRootViaBroker:
     assert kind_context.credential_scope == frozenset({'harbor'})
     control = captured['handlers']['summon'].__self__
     assert isinstance(control, ride.summon_control.SummonControl)
-    lifecycle_projection, audit_writer = captured['observers']
+    facts_projection, lifecycle_projection, audit_writer = captured['observers']
+    assert isinstance(facts_projection.__self__, ride.peer_facts.PeerFacts)
     assert lifecycle_projection.__self__ is control
     assert audit_writer.__self__ is control
     assert control._workspace is workspace

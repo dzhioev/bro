@@ -84,9 +84,8 @@ class Launch:
   repo: Optional[Repository | Path] = None
 
 
-# how a container reaches its session's broker channel: docker maps this name to
-# the gateway back to the launching host, and BROKER_CHANNEL carries the channel
-# address under it for the entrypoint's broxy
+# How a container reaches its session's broker upstream:
+# Docker maps this name to the gateway back to the launching host.
 CONTAINER_BROKER_HOST = 'host.docker.internal'
 
 

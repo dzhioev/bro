@@ -123,18 +123,21 @@ fi
 
 # Capture before eval so a failed command substitution aborts the launch rather
 # than becoming a successful empty eval.
-# One local broker proxy serves the in-container client swarm. A proxy launch
-# failure is expected to degrade the optional broker channel, not the session.
-if [ -n "${BROKER_CHANNEL:-}" ]; then
+# One local broker proxy serves the in-container client swarm.
+# BROKER_CHANNEL is published only after that proxy is listening;
+# leaving BROKER_UPSTREAM behind makes a launch failure explicit to clients.
+if [ -n "${BROKER_UPSTREAM:-}" ]; then
+  unset BROKER_CHANNEL
+  broxy_log="${RIDE_SESSION_DIR:-/tmp}/broxy.log"
   if broxy_launch="$(
-    broxy launch --upstream "$BROKER_CHANNEL" --log-file /tmp/broxy.log
+    broxy launch --upstream "$BROKER_UPSTREAM" --log-file "$broxy_log"
   )"; then
     IFS=$'\t' read -r BROKER_CHANNEL _ <<< "$broxy_launch"
     export BROKER_CHANNEL
+    unset BROKER_UPSTREAM
     log VERBOSE 'broker channel ready'  # the address carries its token
   else
-    log WARNING 'broxy launch failed (log: /tmp/broxy.log); the session gets no broker channel'
-    unset BROKER_CHANNEL
+    log WARNING "broxy launch failed (log: $broxy_log); broker clients will fail explicitly"
   fi
 fi
 

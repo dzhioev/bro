@@ -72,8 +72,8 @@ _RUNTIME_PYTHON = '/var/ride/runtime/venv/bin/python'
 
 # --- in-container probes (source for `python -c`; framework code comes from the runtime volume) ---
 
-# scenario A root: verify the live channel (BROKER_CHANNEL rewritten by the
-# entrypoint from the upstream host channel to its broxy's own loopback one),
+# Scenario A root: verify the live channel the entrypoint's broxy published
+# after consuming the host channel from BROKER_UPSTREAM,
 # hand mid-run control to the harness, then run the ping round-trip over the
 # exact live path — through the broxy — and an artifact mint/get proving the
 # read-only view mount serves stored bytes back
@@ -84,6 +84,7 @@ from pathlib import Path
 from bro.broker.transports.tcp import parse_address
 channel = os.environ.get('BROKER_CHANNEL')
 assert channel, 'the launch carried no channel'
+assert os.environ.get('BROKER_UPSTREAM') is None, 'the broxy did not consume its upstream'
 assert parse_address(channel)[0] == '127.0.0.1', channel  # the broxy's, not the host's
 assert os.environ.get('BROKER_QUEST'), 'the launch did not carry the quest id'
 from bro.run_lifecycle import RunLifecycle
@@ -220,6 +221,7 @@ import os, subprocess, sys
 from pathlib import Path
 
 assert os.environ.get('BROKER_CHANNEL') is None, os.environ.get('BROKER_CHANNEL')
+assert os.environ.get('BROKER_UPSTREAM') is None, os.environ.get('BROKER_UPSTREAM')
 assert not Path('/run/broker.sock').exists()
 from bro.run_lifecycle import RunLifecycle
 assert RunLifecycle.from_env() is None
@@ -301,6 +303,7 @@ session_dir.mkdir()
 launch = Launch(name=name,
                 command=json.loads(os.environ['RIDE_E2E_COMMAND']),
                 env={'CLAUDE_CONFIG_DIR': '/home/ride/.claude',
+                     'RIDE_BRO': 'bro-dev',
                      'RIDE_SESSION_DIR': '/var/ride/session'},
                 secrets=tuple(json.loads(os.environ.get('RIDE_E2E_SECRETS', '[]'))),
                 tty=True, forward_env=True,
@@ -512,7 +515,7 @@ class LiveRun:
   exit_code: int
   output: str
   container_id: Optional[str] = None
-  channel_address: Optional[str] = None  # BROKER_CHANNEL as the container was launched with it
+  upstream_address: Optional[str] = None  # BROKER_UPSTREAM as the container was launched with it
   serving_after: Optional[bool] = None  # whether that channel's port still accepts
   container_gone_after: bool = False
 
@@ -528,9 +531,8 @@ class LiveRun:
     return json.loads(raw)
 
 
-def _channel_env(container_id: str) -> Optional[str]:
-  """the BROKER_CHANNEL the container was created with, or None for a broker-less
-  launch."""
+def _upstream_env(container_id: str) -> Optional[str]:
+  """The BROKER_UPSTREAM the container was created with, or None for a broker-less launch."""
   inspect = subprocess.run(
     ['docker', 'inspect', '--format', '{{json .Config.Env}}', container_id],
     capture_output=True,
@@ -540,7 +542,7 @@ def _channel_env(container_id: str) -> Optional[str]:
     return None
   for entry in json.loads(inspect.stdout):
     key, _, value = entry.partition('=')
-    if key == 'BROKER_CHANNEL':
+    if key == 'BROKER_UPSTREAM':
       return value
   return None
 
@@ -587,12 +589,12 @@ def scenario_a(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   run = LiveRun(exit_code=-1, output='')
   run.container_id = find_container_id(env.tree(name))
   if run.container_id is not None:
-    run.channel_address = _channel_env(run.container_id)
+    run.upstream_address = _upstream_env(run.container_id)
   (env.tree(name) / '.e2e-continue').touch()
   run.exit_code = driver.wait(120)
   run.output = driver.output()
-  if run.channel_address is not None:
-    run.serving_after = _accepts(run.channel_address)
+  if run.upstream_address is not None:
+    run.serving_after = _accepts(run.upstream_address)
   run.container_gone_after = _container_gone(env, name, 15)
   return run
 
@@ -600,8 +602,8 @@ def scenario_a(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
 class TestBrokerEnabledLaunch:
   def test_channel_provisioned_under_the_container_facing_host(self, scenario_a: LiveRun) -> None:
     assert scenario_a.container_id is not None
-    assert scenario_a.channel_address is not None
-    host, port, token = parse_address(scenario_a.channel_address)
+    assert scenario_a.upstream_address is not None
+    host, port, token = parse_address(scenario_a.upstream_address)
     assert host == CONTAINER_BROKER_HOST
     assert port > 0 and len(token) > 0
 
@@ -936,13 +938,13 @@ def scenario_e_ctrl_c(isolated_env: IsolatedEnv, request: pytest.FixtureRequest)
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)
   container_id = find_container_id(env.tree(name))
-  address = None if container_id is None else _channel_env(container_id)
+  address = None if container_id is None else _upstream_env(container_id)
   driver.write(b'\x03')  # ^C on the session terminal, forwarded raw into the container tty
   run = LiveRun(
     exit_code=driver.wait(60),
     output=driver.output(),
     container_id=container_id,
-    channel_address=address,
+    upstream_address=address,
   )
   run.serving_after = None if address is None else _accepts(address)
   run.container_gone_after = _container_gone(env, name, 15)
@@ -957,13 +959,13 @@ def scenario_e_targeted(isolated_env: IsolatedEnv, request: pytest.FixtureReques
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)
   container_id = find_container_id(env.tree(name))
-  address = None if container_id is None else _channel_env(container_id)
+  address = None if container_id is None else _upstream_env(container_id)
   os.kill(driver.process.pid, signal.SIGINT)  # targeted at the launcher, not the terminal group
   run = LiveRun(
     exit_code=driver.wait(60),
     output=driver.output(),
     container_id=container_id,
-    channel_address=address,
+    upstream_address=address,
   )
   run.serving_after = None if address is None else _accepts(address)
   run.container_gone_after = _container_gone(env, name, 15)

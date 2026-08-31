@@ -43,6 +43,7 @@ def _run_root_via_broker(
   return run_root_via_broker(
     broker_launch,
     workspace=workspace,
+    bro=launch.env['RIDE_BRO'],
     may_summon=may_summon,
     credential_scope=ScopedSecrets(
       required=set(launch.secrets),
@@ -61,6 +62,7 @@ def run_host_process_via_broker(
   credential_scope: ScopedSecrets,
   container_runtime: ContainerRuntimeResolver,
   *,
+  bro: str,
   interactive: bool,
 ) -> int:
   """run a host-worktree process as the broker's supervised session root."""
@@ -79,6 +81,7 @@ def run_host_process_via_broker(
   return run_root_via_broker(
     launch,
     workspace=workspace,
+    bro=bro,
     may_summon=may_summon,
     credential_scope=credential_scope,
     container_runtime=container_runtime,
@@ -89,8 +92,8 @@ def run_summoned_in_container(
   launch: Launch, workspace: Workspace, *, claim: Callable[[], object]
 ) -> int:
   """run a manual summon child's container launch: no broker of its own — its
-  `BROKER_CHANNEL` already points at the summoner's provisioned channel in
-  `launch.env` — prepared first, the token claimed only once nothing fallible is
+  `BROKER_UPSTREAM` points at the summoner's provisioned channel for the entrypoint broxy
+  — prepared first, the token claimed only once nothing fallible is
   left before the attach, then attached interactively."""
   log_scoped_secrets(launch.name, launch.secrets, launch.optional_secrets)
   workspace.clear_session_end()

@@ -317,7 +317,6 @@ class Runner:
     return _default_tracker_factory()
 
   def _make_channel(self) -> Optional[RunLifecycle]:
-    # None (no BROKER_CHANNEL in the environment) keeps the lifecycle emission inert
     return RunLifecycle.from_env()
 
   def _create_llm(self, *, hold: str) -> LLM:

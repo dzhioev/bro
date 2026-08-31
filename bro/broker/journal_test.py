@@ -76,6 +76,17 @@ def test_live_records_are_exempt_from_the_record_cap(monkeypatch):
   assert set(journal.records) == {'one', 'two'}
 
 
+def test_ancestry_uses_the_permanent_lineage():
+  journal = Journal()
+  journal.open('root', 'root', None, None, {})
+  child = journal.open('child', 'summon', 'root', 'root-peer', {})
+  leaf = journal.open('leaf', 'summon', 'child', 'child-peer', {})
+  journal.end(child, {'outcome': 'ok'})
+  journal.end(leaf, {'outcome': 'ok'})
+  journal.records.pop('child')
+  assert journal.ancestry('leaf') == ('child', 'root')
+
+
 def test_scope_includes_only_the_callers_subtree():
   journal = Journal()
   root = journal.open('root', 'root', None, None, {})

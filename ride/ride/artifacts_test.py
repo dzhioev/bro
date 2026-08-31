@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass, field
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -10,12 +10,14 @@ import ride.artifacts
 from bro.artifact import GET, MINT, digest_path
 from bro.broker import brotocol
 from bro.broker.dispatcher import Dispatcher
+from bro.broker.journal import Journal
 from bro.kinds import ArtifactDenied
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir, workspace_tree
 from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts
-from ride.peers import PeerIdentity, Peers, UnattributablePeer
+from ride.peer_facts import PeerFact, PeerFacts, PeerIdentity, UnattributablePeer
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
+from ride.workspace.store import ScopedSecrets
 
 ROOT = 'ROOT-CHANNEL'
 CHILD = 'CHILD-CHANNEL'
@@ -240,19 +242,34 @@ class TestLifecycle:
 
 @dataclass
 class FakeContext:
-  """the Dispatcher surface the artifact handlers drive: root exposure, the
-  worker index, the synchronous denial reply, and the correlated delivery."""
-
-  root: str = ROOT
-  workers: dict = field(default_factory=dict)
-  replies: list = field(default_factory=list)  # (peer, payload)
-  delivered: list = field(default_factory=list)  # (peer, message)
+  journal: Journal
+  workers: dict
+  replies: list = field(default_factory=list)
+  delivered: list = field(default_factory=list)
 
   def reply(self, peer, payload):
     self.replies.append((peer, payload))
 
   def deliver(self, peer, message):
     self.delivered.append((peer, message))
+
+
+def _facts_context(workspace):
+  facts = PeerFacts(
+    PeerFact(
+      workspace=workspace.name,
+      bro='bro-dev',
+      allow_list=frozenset(),
+      credential_scope=ScopedSecrets(set(), set()),
+    ),
+    root_tree=workspace.tree,
+    root_path=workspace.path,
+  )
+  journal = Journal()
+  journal.subscribe(facts.observe_journal)
+  root = journal.open('root-quest', 'root', None, None, {})
+  journal.bind(root, ROOT)
+  return facts, FakeContext(journal, {ROOT: root.quest_id})
 
 
 async def _delivered(context: FakeContext) -> tuple[str, brotocol.Message]:
@@ -263,19 +280,33 @@ async def _delivered(context: FakeContext) -> tuple[str, brotocol.Message]:
   raise AssertionError('no result delivered')
 
 
+class _ArtifactControlHarness(ArtifactControl):
+  def __init__(self, store, facts, context):
+    super().__init__(store, facts)
+    self.test_context = context
+
+
+class _JobArtifactsHarness(JobArtifacts):
+  def __init__(self, store, facts, context):
+    super().__init__(store, facts)
+    self.test_context = context
+
+
 @pytest.fixture
 def control(workspace, store):
-  return ArtifactControl(store, Peers(workspace))
+  facts, context = _facts_context(workspace)
+  return _ArtifactControlHarness(store, facts, context)
 
 
-def _context(control) -> FakeContext:
-  return FakeContext()
+def _context(owner: Any) -> FakeContext:
+  return owner.test_context
 
 
 class TestJobArtifacts:
   @pytest.fixture
   def jobs(self, workspace, store):
-    return JobArtifacts(store, Peers(workspace))
+    facts, context = _facts_context(workspace)
+    return _JobArtifactsHarness(store, facts, context)
 
   def test_a_run_directory_lives_in_the_store(self, jobs):
     directory = jobs.open()
@@ -287,7 +318,7 @@ class TestJobArtifacts:
   async def test_collect_answers_the_ref_the_requester_reaches(self, jobs, store):
     directory = jobs.open()
     (directory / 'stdout').write_bytes(b'ran')
-    value = await jobs.collect(directory, cast(Dispatcher, FakeContext()), ROOT)
+    value = await jobs.collect(directory, cast(Dispatcher, _context(jobs)), ROOT)
     assert value == {'ref': digest_path(directory), 'size': 3}
     assert store.reachable(value['ref'], 'ws')
     assert [entry['event'] for entry in _audit()] == ['job']
@@ -297,14 +328,14 @@ class TestJobArtifacts:
     directory = jobs.open()
     (directory / 'stdout').write_bytes(b'ran')
     with pytest.raises(UnattributablePeer):
-      await jobs.collect(directory, cast(Dispatcher, FakeContext()), CHILD)
+      await jobs.collect(directory, cast(Dispatcher, _context(jobs)), CHILD)
 
 
 class TestArtifactControl:
   @pytest.mark.asyncio
   async def test_mint_answers_the_correlated_ok_result(self, control):
     _tree_file('out/a.bin', b'payload')
-    context = FakeContext()
+    context = _context(control)
     message = brotocol.request(MINT, {'path': 'out/a.bin'})
     control.mint(cast(Dispatcher, context), ROOT, message)
     assert context.replies == []
@@ -319,7 +350,7 @@ class TestArtifactControl:
   @pytest.mark.asyncio
   async def test_get_answers_the_view_path(self, control, store):
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
-    context = FakeContext()
+    context = _context(control)
     message = brotocol.request(GET, {'ref': ref})
     control.get(cast(Dispatcher, context), ROOT, message)
     _, result = await _delivered(context)
@@ -330,7 +361,7 @@ class TestArtifactControl:
 
   @pytest.mark.asyncio
   async def test_a_store_refusal_is_the_correlated_denial(self, control):
-    context = FakeContext()
+    context = _context(control)
     message = brotocol.request(MINT, {'path': 'absent.bin'})
     control.mint(cast(Dispatcher, context), ROOT, message)
     _, result = await _delivered(context)
@@ -340,14 +371,14 @@ class TestArtifactControl:
 
   @pytest.mark.asyncio
   async def test_an_unreachable_get_is_denied_uniformly(self, control):
-    context = FakeContext()
+    context = _context(control)
     control.get(cast(Dispatcher, context), ROOT, brotocol.request(GET, {'ref': UNKNOWN_REF}))
     _, result = await _delivered(context)
     assert result.payload['outcome'] == 'denied'
     assert result.payload['error'] == f'artifact {UNKNOWN_REF} is not shared with this peer'
 
   def test_malformed_args_are_denied_synchronously(self, control):
-    context = FakeContext()
+    context = _context(control)
     control.mint(cast(Dispatcher, context), ROOT, brotocol.request(MINT, {'path': ''}))
     control.mint(cast(Dispatcher, context), ROOT, brotocol.request(MINT, {'path': 'x', 'extra': 1}))  # fmt: skip
     control.get(cast(Dispatcher, context), ROOT, brotocol.request(GET, {'ref': 'nope'}))
@@ -358,7 +389,7 @@ class TestArtifactControl:
     assert [entry['event'] for entry in _audit()] == ['deny'] * 3
 
   def test_an_unattributable_peer_is_denied(self, control):
-    context = FakeContext()
+    context = _context(control)
     control.mint(cast(Dispatcher, context), CHILD, brotocol.request(MINT, {'path': 'x'}))
     [(peer, payload)] = context.replies
     assert peer == CHILD
@@ -366,10 +397,9 @@ class TestArtifactControl:
     assert 'cannot attribute' in payload['error']
 
   def test_resolve_serves_kind_handlers_with_the_same_denial(self, workspace, store):
-    peers = Peers(workspace)
-    control = ArtifactControl(store, peers)
+    facts, context = _facts_context(workspace)
+    control = ArtifactControl(store, facts)
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
-    context = FakeContext()
     resolved = control.resolve(ref, cast(Dispatcher, context), ROOT)
     assert resolved.read_bytes() == b'payload'
     with pytest.raises(ArtifactDenied, match='is not shared with this peer'):

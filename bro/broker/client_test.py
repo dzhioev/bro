@@ -6,7 +6,7 @@ import pytest
 
 from bro.broker import brotocol
 from bro.broker.brotocol import Message
-from bro.broker.client import CHANNEL_ENV, Client
+from bro.broker.client import CHANNEL_ENV, UPSTREAM_ENV, Client
 from bro.broker.transport import ChannelID
 from bro.broker.transports.tcp import LOCAL_HOST, TcpClientTransport, TcpServerTransport
 
@@ -60,9 +60,18 @@ async def _next(queue: asyncio.Queue):
   return await asyncio.wait_for(queue.get(), TIMEOUT)
 
 
-def test_from_env_returns_none_when_unset(monkeypatch):
+def test_from_env_returns_none_when_no_channel_is_intended(monkeypatch):
   monkeypatch.delenv(CHANNEL_ENV, raising=False)
+  monkeypatch.delenv(UPSTREAM_ENV, raising=False)
   assert Client.from_env() is None
+
+
+def test_from_env_reports_a_failed_session_proxy(monkeypatch, tmp_path):
+  monkeypatch.delenv(CHANNEL_ENV, raising=False)
+  monkeypatch.setenv(UPSTREAM_ENV, 'tcp://upstream@127.0.0.1:7')
+  monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
+  with pytest.raises(RuntimeError, match=rf'session proxy failed at launch.*{tmp_path}/broxy.log'):
+    Client.from_env()
 
 
 @pytest.mark.asyncio

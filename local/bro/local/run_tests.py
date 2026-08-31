@@ -189,7 +189,7 @@ PYTEST_FILES = [
   'ride/ride/trails_test.py',
   'ride/ride/kinds_test.py',
   'ride/ride/spawn_test.py',
-  'ride/ride/peers_test.py',
+  'ride/ride/peer_facts_test.py',
   'ride/ride/artifacts_test.py',
   'ride/ride/summon_control_test.py',
   'ride/ride/pending_summon_test.py',

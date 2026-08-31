@@ -1,6 +1,5 @@
 """live test of the host-mode `broxy launch` wrapper against a real
-provisioned upstream socket, plus the no-channel degrade paths that keep a
-launch alive without one."""
+provisioned upstream socket, plus the explicit proxy-failure path."""
 
 import asyncio
 import contextlib
@@ -89,8 +88,7 @@ def test_start_returns_none_when_the_upstream_is_unreachable(monkeypatch):
 
 
 def test_start_returns_none_without_the_console_script(tmp_path):
-  # a venv without broxy (a workspace based on a pre-broxy ref): the serve
-  # spawn itself fails, and the caller is left to unset BROKER_CHANNEL
+  # A venv without broxy cannot start the proxy.
   broxy = _start_session_broxy(_DEAD_UPSTREAM, {'PATH': str(tmp_path)})
   assert broxy is None
 
@@ -100,15 +98,31 @@ def test_session_broxy_rewrites_only_a_marked_host_root(monkeypatch):
   start = MagicMock(return_value=daemon)
   monkeypatch.setattr(ride_broxy, '_start_session_broxy', start)
   monkeypatch.setenv(ride_broxy.START_SESSION_BROXY_ENV, '1')
-  monkeypatch.setenv('BROKER_CHANNEL', 'tcp://root-token@127.0.0.1:7')
+  monkeypatch.setenv('BROKER_UPSTREAM', 'tcp://root-token@127.0.0.1:7')
 
   with ride_broxy.session_broxy():
     assert os.environ['BROKER_CHANNEL'] == daemon.address
+    assert 'BROKER_UPSTREAM' not in os.environ
     assert ride_broxy.START_SESSION_BROXY_ENV not in os.environ
 
   start.assert_called_once()
   daemon.stop.assert_called_once()
-  assert os.environ['BROKER_CHANNEL'] == 'tcp://root-token@127.0.0.1:7'
+  assert 'BROKER_CHANNEL' not in os.environ
+  assert os.environ['BROKER_UPSTREAM'] == 'tcp://root-token@127.0.0.1:7'
+
+
+def test_session_broxy_leaves_upstream_visible_when_launch_fails(monkeypatch, tmp_path):
+  monkeypatch.setattr(ride_broxy, '_start_session_broxy', MagicMock(return_value=None))
+  monkeypatch.setenv(ride_broxy.START_SESSION_BROXY_ENV, '1')
+  monkeypatch.setenv('BROKER_UPSTREAM', 'tcp://root-token@127.0.0.1:7')
+  monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
+
+  with ride_broxy.session_broxy():
+    assert 'BROKER_CHANNEL' not in os.environ
+    with pytest.raises(RuntimeError, match=r'session proxy failed at launch.*broxy\.log'):
+      Client.from_env()
+
+  assert os.environ['BROKER_UPSTREAM'] == 'tcp://root-token@127.0.0.1:7'
 
 
 def test_session_broxy_leaves_an_existing_session_channel_alone(monkeypatch):

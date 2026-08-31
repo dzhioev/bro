@@ -1,11 +1,11 @@
 import json
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
 import ride.artifacts
 import ride.bro
-import ride.peers
+import ride.peer_facts
 import ride.pending_summon
 import ride.spawn
 import ride.summon_control
@@ -16,6 +16,7 @@ from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
 from bro.llm.llms.echo import LLMSpec as EchoLLMSpec
 from bro.summon import DEFAULT_TIMEOUT
+from ride.peer_facts import PeerFact, PeerFacts
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
@@ -49,35 +50,58 @@ class TestSummonAllowList:
       ride.summon_control.summon_allow_list('bro', grant=['not-registered'], revoke=[])
 
 
+class _FakeSummonControl(ride.summon_control.SummonControl):
+  test_journal: Journal
+
+  def handle(self, context: Any, peer: Any, message: Any) -> None:
+    context.active = message
+    super().handle(context, peer, message)
+
+
 class FakeContext:
   def __init__(self, control):
     self.control = control
-    self.root = ROOT
     self.workers = {ROOT: 'root-quest'}
     self.replies = []
     self.spawned = []
     self.expected = []
-    self.journal = Journal()
+    self.active = None
+    self.journal = control.test_journal
     root = self.journal.open('root-quest', 'root', None, None, {})
     self.journal.bind(root, ROOT)
-    self.journal.subscribe(control.observe_journal)
-    self.journal.subscribe(control.audit_event)
 
   def deny(self, peer, error):
-    quest = next(reversed(self.control._denial_summoners))
-    record = self.journal.deny(quest, 'summon', self.workers.get(peer), peer, {}, error)
+    assert self.active is not None
+    record = self.journal.deny(
+      self.active.quest_id,
+      'summon',
+      self.workers.get(peer),
+      peer,
+      self.active.args,
+      error,
+    )
     self.replies.append((peer, {'outcome': 'denied', 'error': record.reason}))
 
   def spawn(self, launch, peer, *, timeout=None):
-    quest = next(reversed(self.control._pending))
+    assert self.active is not None
     self.journal.open(
-      quest, 'summon', self.workers[peer], peer, {'target': launch.target, 'prompt': launch.prompt}
+      self.active.quest_id,
+      'summon',
+      self.workers[peer],
+      peer,
+      self.active.args,
     )
     self.spawned.append((launch, peer, timeout))
 
   def expect(self, peer, *, timeout, ready):
-    quest = next(reversed(self.control._pending))
-    self.journal.open(quest, 'summon', self.workers[peer], peer, {'manual': True})
+    assert self.active is not None
+    self.journal.open(
+      self.active.quest_id,
+      'summon',
+      self.workers[peer],
+      peer,
+      self.active.args,
+    )
     self.expected.append((peer, timeout))
     ready(Provisioned(CHILD, Endpoint(7321, 'token')))
 
@@ -93,14 +117,29 @@ def _control(tmp_path, allow_list=('dev',), credential_scope=()):
     if isinstance(credential_scope, ScopedSecrets)
     else ScopedSecrets(set(credential_scope), set())
   )
-  return ride.summon_control.SummonControl(
-    allow_list=allow_list,
-    credential_scope=scope,
+  facts = PeerFacts(
+    PeerFact(
+      workspace=workspace.name,
+      bro='bro-dev',
+      allow_list=frozenset(allow_list),
+      credential_scope=scope,
+    ),
+    root_tree=workspace.tree,
+    root_path=workspace.path,
+  )
+  journal = Journal()
+  control = _FakeSummonControl(
     workspace=workspace,
-    peers=ride.peers.Peers(workspace),
+    facts=facts,
     artifacts=ride.artifacts.ArtifactStore(workspace, root_in_container=True),
+    journal=journal,
     audit_file=tmp_path / 'audit.jsonl',
   )
+  control.test_journal = journal
+  journal.subscribe(facts.observe_journal)
+  journal.subscribe(control.observe_journal)
+  journal.subscribe(control.audit_event)
+  return control
 
 
 def _message(**overrides):
@@ -125,11 +164,34 @@ def test_authorized_summon_opens_identity_before_spawning(tmp_path):
   assert launch.parent == 'ws'
   assert peer == ROOT
   assert timeout == DEFAULT_TIMEOUT
-  assert control._records[message.quest_id].target == 'dev'
+  assert control._facts.for_quest(message.quest_id).bro == 'dev'
   assert not (tmp_path / 'summon-status.json').exists()
   accepted = _audit(tmp_path)[-1]
   assert accepted['transition'] == 'accepted'
   assert accepted['args']['prompt'] == 'deploy the thing'
+  assert accepted['summoner'] == {'workspace': 'ws', 'bro': 'bro-dev'}
+
+
+def test_audit_attributes_every_worker_backed_kind_from_journal_parent(tmp_path):
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  record = context.journal.open('job-quest', 'benchmark', 'root-quest', ROOT, {'work': 'score'})
+  context.journal.started(record)
+  context.journal.end(record, {'outcome': 'ok'})
+  entries = _audit(tmp_path)[-3:]
+  assert [entry['transition'] for entry in entries] == ['accepted', 'started', 'ended']
+  assert all(entry['summoner'] == {'workspace': 'ws', 'bro': 'bro-dev'} for entry in entries)
+
+
+def test_large_summon_args_do_not_hide_the_target_from_the_audit(tmp_path, monkeypatch):
+  control = _control(tmp_path)
+  monkeypatch.setattr(control._artifacts, 'reachable', lambda ref, workspace: True)
+  context = FakeContext(control)
+  ref = 'sha256:' + 'a' * 64
+  control.handle(cast(Dispatcher, context), ROOT, _message(share=[ref] * 40))
+  accepted = _audit(tmp_path)[-1]
+  assert accepted['args']['truncated'] is True
+  assert accepted['target'] == 'dev'
 
 
 def test_journal_trail_and_terminal_update_identity_audit_and_cleanup(tmp_path):
@@ -141,14 +203,14 @@ def test_journal_trail_and_terminal_update_identity_audit_and_cleanup(tmp_path):
   context.journal.bind(record, CHILD)
   context.journal.started(record)
   context.journal.trail(record, 'trail-1')
-  assert control._records[message.quest_id].trail_id == 'trail-1'
+  assert control._facts.for_quest(message.quest_id).bro == 'dev'
   context.journal.end(record, {'outcome': 'failed', 'error': 'no', 'detail': {'reason': 'raised'}})
   assert [entry['transition'] for entry in _audit(tmp_path)[-3:]] == [
     'started',
     'trail',
     'ended',
   ]
-  assert message.quest_id not in control._records
+  assert control._facts.for_quest(message.quest_id).bro == 'dev'
   assert not (tmp_path / 'summon-status.json').exists()
 
 
@@ -182,7 +244,7 @@ def test_denial_uses_the_journal_funnel(tmp_path):
   assert denial.state == 'denied'
   assert denial.reason is not None and 'not in' in denial.reason
   assert _audit(tmp_path)[-1]['transition'] == 'denied'
-  assert message.quest_id not in control._denial_summoners
+  assert _audit(tmp_path)[-1]['summoner']['workspace'] == 'ws'
 
 
 @pytest.mark.parametrize(
@@ -280,7 +342,7 @@ def test_child_grant_bound_recomputes_its_llm_scope(tmp_path, monkeypatch):
   parent = _message(target='bro-dev', llm='echo')
   control.handle(cast(Dispatcher, context), ROOT, parent)
   context.workers[CHILD] = parent.quest_id
-  control._peers.note_workspace(parent.quest_id, f'broker-{CHILD}')
+  control._facts.note_workspace(parent.quest_id, f'broker-{CHILD}')
   calls.clear()
   control.handle(
     cast(Dispatcher, context),
@@ -375,7 +437,7 @@ def test_nested_request_outside_the_childs_allow_list_is_denied(tmp_path):
   parent = _message()
   control.handle(cast(Dispatcher, context), ROOT, parent)
   context.workers[CHILD] = parent.quest_id
-  control._peers.note_workspace(parent.quest_id, f'broker-{CHILD}')
+  control._facts.note_workspace(parent.quest_id, f'broker-{CHILD}')
   control.handle(cast(Dispatcher, context), CHILD, _message(target='bro-dev'))
   assert 'not in' in context.replies[-1][1]['error']
 
@@ -386,11 +448,11 @@ def test_depth_cap_denies_a_third_generation(tmp_path):
   first = _message(target='bro-dev')
   control.handle(cast(Dispatcher, context), ROOT, first)
   context.workers[CHILD] = first.quest_id
-  control._peers.note_workspace(first.quest_id, f'broker-{CHILD}')
+  control._facts.note_workspace(first.quest_id, f'broker-{CHILD}')
   second = _message(target='dev')
   control.handle(cast(Dispatcher, context), CHILD, second)
   context.workers[GRANDCHILD] = second.quest_id
-  control._peers.note_workspace(second.quest_id, f'broker-{GRANDCHILD}')
+  control._facts.note_workspace(second.quest_id, f'broker-{GRANDCHILD}')
   control.handle(cast(Dispatcher, context), GRANDCHILD, _message())
   assert 'depth cap' in context.replies[-1][1]['error']
 
@@ -447,7 +509,7 @@ def test_manual_summon_writes_the_pending_record_before_acceptance(tmp_path, mon
   pending = ride.pending_summon.peek(message.quest_id)
   assert pending.target == 'dev'
   assert pending.channel_token == 'token'
-  assert control._records[message.quest_id].manual is True
+  assert control._facts.for_quest(message.quest_id).manual is True
 
 
 def test_claimed_manual_workspace_is_the_nested_base_source(tmp_path, monkeypatch):
@@ -497,7 +559,7 @@ def test_child_uses_the_allow_list_recorded_for_its_parent(tmp_path):
   parent = _message(target='bro-dev')
   control.handle(cast(Dispatcher, context), ROOT, parent)
   context.workers[CHILD] = parent.quest_id
-  control._peers.note_workspace(parent.quest_id, f'broker-{CHILD}')
+  control._facts.note_workspace(parent.quest_id, f'broker-{CHILD}')
   child = _message(target='dev')
   control.handle(cast(Dispatcher, context), CHILD, child)
   assert context.spawned[-1][0].target == 'dev'
