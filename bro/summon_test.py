@@ -405,7 +405,7 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
             'kind': 'summon',
             'quest': 'S1',
             'transition': 'denied',
-            'reason': 'not allowed',
+            'reason': 'summon denied: not allowed',
           },
         ],
       },

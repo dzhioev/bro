@@ -274,27 +274,23 @@ class SummonControl:
     try:
       requester = self._requester(context, peer)
     except UnattributablePeer as reason:
-      self._deny(context, peer, f'summon denied: {reason}')
+      self._deny(context, peer, str(reason))
       return
     error = _validate(args)
     if error is not None:
       self._deny(context, peer, error)
       return
     if requester.depth + 1 > self._depth_cap:
-      self._deny(
-        context,
-        peer,
-        f'summon denied: summon depth cap ({self._depth_cap}) reached',
-      )
+      self._deny(context, peer, f'summon depth cap ({self._depth_cap}) reached')
       return
     target = args['target']
     if target not in requester.allow_list:
       from bro.registry import known_names
 
       if target not in known_names():
-        error = f'summon denied: unknown bro {target!r}'
+        error = f'unknown bro {target!r}'
       else:
-        error = f'summon denied: {target!r} is not in {requester.list_description}'
+        error = f'{target!r} is not in {requester.list_description}'
       self._deny(context, peer, error)
       return
     grant = args.get('grant', [])
@@ -306,15 +302,14 @@ class SummonControl:
       _, revoke_bros = split_scope_overrides(revoke)
       child_allow_list = summon_allow_list(target, grant=grant_bros, revoke=revoke_bros)
     except ValueError as error:
-      self._deny(context, peer, f'summon denied: {error}')
+      self._deny(context, peer, str(error))
       return
     beyond = sorted(set(grant_bros) - requester.allow_list)
     if len(beyond) > 0:
       self._deny(
         context,
         peer,
-        f'summon denied: cannot grant summon target(s) the summoner may not '
-        f'summon itself: {", ".join(beyond)}',
+        f'cannot grant summon target(s) the summoner may not summon itself: {", ".join(beyond)}',
       )
       return
     try:
@@ -329,7 +324,7 @@ class SummonControl:
     except UnattributablePeer as reason:
       refusal = str(reason)
     if refusal is not None:
-      self._deny(context, peer, f'summon denied: {refusal}')
+      self._deny(context, peer, refusal)
       return
     share = args.get('share', [])
     unreachable = sorted(
@@ -339,8 +334,7 @@ class SummonControl:
       self._deny(
         context,
         peer,
-        f'summon denied: cannot share artifact(s) the summoner cannot reach: '
-        f'{", ".join(unreachable)}',
+        f'cannot share artifact(s) the summoner cannot reach: {", ".join(unreachable)}',
       )
       return
     prompt = args['prompt']
@@ -472,7 +466,8 @@ class SummonControl:
     trail_id = attribution.get('trail_id')
     return {'trail_id': trail_id} if trail_id is not None else None
 
-  def _deny(self, context: 'Dispatcher', peer: 'Peer', error: str) -> None:
+  def _deny(self, context: 'Dispatcher', peer: 'Peer', reason: str) -> None:
+    error = f'summon denied: {reason}'
     log.warning('summon: %s: %s', self._workspace.name, error)
     context.deny(peer, error)
 
