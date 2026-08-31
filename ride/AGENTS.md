@@ -23,6 +23,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   recorded `SessionSpec` including the optional repository attachment, base resolution, auth/scope preflight, workspace kind and lock,
   resume records, keep/drop finish behavior, and the shared launch skeleton for attached or detached runs in both modes.
 - `ride/repository.py` — path/URL attachment resolution, normalized managed-mirror keys, flocked no-prune fetches, committed-tree reads, and mirror cleanup.
+  `attachment_identities` is the host-config identities an attachment matches project entries by, reading a checkout's `origin` for the URL one.
 - `ride/inner.py` — the inner session every harness runs under inside the prepared workspace:
   the argv the outer spawns to re-enter there, the session environment (git identities, `RIDE_BRO`, the hold and this runner's pid), the persona's declared workspace provisioning, the session broxy, and SIGTERM-forwarded agent spawning.
 - `ride/scope.py` — per-surface launch scoping:

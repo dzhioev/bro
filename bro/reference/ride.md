@@ -614,8 +614,12 @@ Host scoping is still a convenience rather than a security boundary, because the
   `optional_secrets()` supplies the best-effort tier, and every normal managed surface adds `trails` to it.
   Components and manifests declare bare kinds only.
 - **Which instance.**
-  Scope selection merges the host's defaults, matching project, and matching `projects.<attachment>.bros.<bro>` layer in that order.
+  Scope selection merges the host's defaults, matching project, and matching `projects.<identity>.bros.<bro>` layer in that order.
   A project-bro layer overrides the project selection for that bro, including when the bro is a summon target.
+  A path attachment matches on two identities
+  — the checkout path and its `origin` URL
+  — so a `projects` key written as the repository's URL reaches the everyday `--repo <path>` launch too;
+  within each of the two ranks the path entry layers over the URL entry.
   A detached launch or an attachment with no matching project entry falls through the layers that do apply to the kind's own stored material.
   `ride scope` prints each declared kind's resolved instance, the layer that chose it, and its availability.
 - **Which bro.**

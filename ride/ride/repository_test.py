@@ -4,7 +4,9 @@ from pathlib import Path
 import pytest
 
 from bro.base.git_url import normalize_git_url
+from bro.base.host_config import Attachment
 from ride.repository import (
+  attachment_identities,
   clean_managed_mirrors,
   mirror_key,
   open_repository,
@@ -42,6 +44,46 @@ class TestMirrorKey:
   def test_non_path_non_url_errors_crisply(self):
     with pytest.raises(ValueError, match='existing checkout path or a git URL'):
       resolve_repository('repository-name')
+
+
+class TestAttachmentIdentities:
+  def test_a_checkout_carries_its_path_and_its_origin_url(self, tmp_path):
+    checkout = tmp_path / 'work'
+    subprocess.run(['git', 'init', '-q', checkout], check=True)
+    _git(checkout, 'remote', 'add', 'origin', 'git@github.com:foo/api.git')
+
+    assert attachment_identities(str(checkout)) == Attachment(
+      path=str(checkout), url='git@github.com:foo/api.git'
+    )
+
+  def test_an_aliased_origin_carries_the_url_git_rewrites_it_to(self, tmp_path):
+    checkout = tmp_path / 'work'
+    subprocess.run(['git', 'init', '-q', checkout], check=True)
+    _git(checkout, 'remote', 'add', 'origin', 'gh:foo/api.git')
+    _git(checkout, 'config', 'url.git@github.com:.insteadOf', 'gh:')
+
+    assert attachment_identities(str(checkout)) == Attachment(
+      path=str(checkout), url='git@github.com:foo/api.git'
+    )
+
+  def test_a_local_origin_contributes_no_url(self, tmp_path):
+    work, upstream, _ = _upstream(tmp_path)
+    assert _git(work, 'remote', 'get-url', 'origin') == str(upstream)
+
+    assert attachment_identities(str(work)) == Attachment(path=str(work))
+
+  @pytest.mark.parametrize('state', ['originless', 'absent'])
+  def test_a_checkout_without_a_reachable_origin_carries_its_path_alone(self, tmp_path, state):
+    checkout = tmp_path / 'work'
+    if state == 'originless':
+      subprocess.run(['git', 'init', '-q', checkout], check=True)
+
+    assert attachment_identities(str(checkout)) == Attachment(path=str(checkout))
+
+  def test_a_url_attachment_names_itself(self):
+    assert attachment_identities('https://github.com/foo/api.git') == Attachment(
+      url='https://github.com/foo/api.git'
+    )
 
 
 class TestManagedMirror:

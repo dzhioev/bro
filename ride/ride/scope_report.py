@@ -39,23 +39,35 @@ def report_scope(
     return 1
   print(f'repository: {repo.identity if repo is not None else "(detached)"}')
   print(f'bro:        {bro_name} ({recipe.name})')
-  _print_tier('required', sorted(scoped.required), binding, store)
-  _print_tier('optional', sorted(scoped.optional - scoped.required), binding, store)
+  _print_tiers(
+    [
+      ('required', sorted(scoped.required)),
+      ('optional', sorted(scoped.optional - scoped.required)),
+    ],
+    binding,
+    store,
+  )
   return 0
 
 
-def _print_tier(
-  label: str,
-  names: list[str],
+def _print_tiers(
+  tiers: list[tuple[str, list[str]]],
   binding: host_config.CredentialSelection,
   store: credentials.Store,
 ) -> None:
+  """print each non-empty tier under one column layout measured over all of them."""
+  names = [name for _, tier in tiers for name in tier]
   if len(names) == 0:
     return
-  print(f'{label}:')
-  for name in names:
-    state = 'ok' if store.available(name) else 'MISSING'
-    print(f'  {name:<14}{_reads(name, binding):<24}{state}')
+  name_width = max(len(name) for name in names)
+  reads_width = max(len(_reads(name, binding)) for name in names)
+  for label, tier in tiers:
+    if len(tier) == 0:
+      continue
+    print(f'{label}:')
+    for name in tier:
+      state = 'ok' if store.available(name) else 'MISSING'
+      print(f'  {name:<{name_width}}  {_reads(name, binding):<{reads_width}}  {state}')
 
 
 def _reads(kind: str, binding: host_config.CredentialSelection) -> str:
