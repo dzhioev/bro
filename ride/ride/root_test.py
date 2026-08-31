@@ -150,9 +150,10 @@ class TestRunRootViaBroker:
   def test_builds_the_attached_launch_and_delegates(self, monkeypatch, tmp_path):
     captured: dict = {}
 
-    def fake_run_root(launch, *, workspace, may_summon, credential_scope, container_runtime):
+    def fake_run_root(launch, *, workspace, bro, may_summon, credential_scope, container_runtime):
       captured['launch'] = launch
       captured['workspace'] = workspace
+      captured['bro'] = bro
       captured['may_summon'] = may_summon
       captured['credential_scope'] = credential_scope
       return 3
@@ -163,7 +164,7 @@ class TestRunRootViaBroker:
     launch = workspace_docker.Launch(
       name='ws',
       command=['claude', '--verbose'],
-      env={'RIDE_BASE_REF': 'deadbeef'},
+      env={'RIDE_BASE_REF': 'deadbeef', 'RIDE_BRO': 'bro-dev'},
       secrets=('github',),
       optional_secrets=('openai',),
       credential_selection={'github': 'reviewer'},
@@ -177,6 +178,7 @@ class TestRunRootViaBroker:
     code = ride.root._run_root_via_broker(launch, workspace, may_summon={'dev'})
     assert code == 3
     assert captured['workspace'] is workspace
+    assert captured['bro'] == 'bro-dev'
     assert captured['may_summon'] == {'dev'}
     assert captured['credential_scope'] == workspace_store.ScopedSecrets(
       {'github'}, {'openai'}, {'github': 'reviewer'}
@@ -187,6 +189,7 @@ class TestRunRootViaBroker:
         command=['claude', '--verbose'],
         env={
           'RIDE_BASE_REF': 'deadbeef',
+          'RIDE_BRO': 'bro-dev',
           bro.summon.MAY_SUMMON_ENV: 'dev',
         },
         secrets=('github',),

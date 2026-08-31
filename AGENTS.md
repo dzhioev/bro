@@ -199,14 +199,14 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   Every other hold mounts no `raise`
   — the injected fragment tells the agent how to involve the human instead, down to guided's ask-clarifying-questions convention on the interactive paths (`Runner.send()` and the `bro chat` CLI).
   `answer` is `raise`'s twin for a *summoned* run's clean end
-  — mounted when the run is a summoned child (`RIDE_SUMMONED`) with a broker channel (mcp flavor additionally killable):
+  — mounted when the run is a summoned child (`RIDE_SUMMONED`) with broker intent (`BROKER_CHANNEL`, or `BROKER_UPSTREAM` left by a failed proxy launch; mcp flavor additionally killable):
   the bare flavor ends the run by raising `AnswerDelivered` (the runner or chat surface turns it into the run's ok result), the mcp flavor emits that result over the channel then terminates the session;
   unlike raise, an undeliverable answer errors back to the agent instead of killing the session.
   Both service builds always mount a `banner` tool
   — the session environment facts of `ride banner --llm` rendered in-process (`bro.workspace.banner.render_banner`, with the bro's name and the run's trail id passed explicitly
   — an in-process run's environment carries the launcher's `RIDE_BRO`, or none, and its own trail is published by no session recorder), so every bro detects its environment without a shell;
   the playbook is `bro/prompts/environment.md`.
-  Both service builds also mount `summon`, `summon_check`, and `summon_list` when the process has a broker channel (`BROKER_CHANNEL` set), forwarding to `bro.summon`
+  Both service builds also mount `summon`, `summon_check`, and `summon_list` when the process has broker intent (`BROKER_CHANNEL` or `BROKER_UPSTREAM` set), forwarding to `bro.summon`
   — every wait runs off-loop via `bro.base.offload.off_loop` so interactive surfaces stay responsive.
   `summon` blocks and relays the target's answer or failure;
   `detach: true` returns the quest id after the host's acceptance mark and fails immediately on a denial or pre-acceptance launch failure.

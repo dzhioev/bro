@@ -1001,6 +1001,7 @@ class TestHostSession:
       credential_scope,
       container_runtime,
       *,
+      bro,
       interactive,
     ):
       roots.append(
@@ -1011,6 +1012,7 @@ class TestHostSession:
           'may_summon': may_summon,
           'credential_scope': credential_scope,
           'container_runtime': container_runtime,
+          'bro': bro,
           'interactive': interactive,
         }
       )
@@ -1029,6 +1031,7 @@ class TestHostSession:
     assert str(worktree / '.venv' / 'bin') not in roots[0]['env']['PATH'].split(os.pathsep)
     # the host root gets the session's summon allow-list like container mode
     assert roots[0]['may_summon'] == {'dev'}
+    assert roots[0]['bro'] == 'bro-dev'
     assert roots[0]['interactive']
 
   def test_host_runner_env_carries_the_summon_facts(self, monkeypatch, tmp_path):
@@ -1049,6 +1052,7 @@ class TestHostSession:
         {'dev', 'bro'},
         ScopedSecrets(set(), set()),
         ContainerRuntimeResolver.fixed(ContainerRuntime('runtime-image', 'bundle-hash')),
+        bro='bro-dev',
         interactive=False,
       )
       == 0
@@ -1133,7 +1137,7 @@ class TestHostSession:
     )
     _, kwargs = runs[0]
     env = kwargs['env']
-    assert env['BROKER_CHANNEL'] == record.address()
+    assert env['BROKER_UPSTREAM'] == record.address()
     assert env['RIDE_SUMMONED'] == '1'
     assert env['RIDE_MAY_SUMMON'] == 'dev'
     assert env['RIDE_WORKSPACE'] == 'w'
@@ -1383,7 +1387,15 @@ class TestHostBrokerPingRoundTrip:
     workspace.tree.mkdir(parents=True)
     runtime_bundle = _runtime_bundle(root)
     ride_binary = runtime_bundle.host_venv / 'bin' / 'ride'
-    ride_binary.write_text('#!/bin/sh\nexec broker request ping "{}" --timeout 30\n')
+    # The stub stands in for an in-place runner but starts no client swarm,
+    # so it supplies the direct client channel itself instead of launching a broxy.
+    ride_binary.write_text(
+      '#!/bin/sh\n'
+      'BROKER_CHANNEL="$BROKER_UPSTREAM"\n'
+      'export BROKER_CHANNEL\n'
+      'unset BROKER_UPSTREAM\n'
+      'exec broker request ping "{}" --timeout 30\n'
+    )
 
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(ride_session, 'ensure_host_worktree', lambda *_a: True)
@@ -1477,7 +1489,8 @@ client.close(confirm=True)
     # stands in for the in-place runner: register the manual summon, let the
     # external child answer it, and block for the relayed answer
     ride_binary.write_text(
-      f'#!/bin/sh\n{shlex.quote(sys.executable)} {shlex.quote(str(answer_child))} '
+      '#!/bin/sh\nBROKER_CHANNEL="$BROKER_UPSTREAM"\nexport BROKER_CHANNEL\nunset BROKER_UPSTREAM\n'
+      f'{shlex.quote(sys.executable)} {shlex.quote(str(answer_child))} '
       f'{shlex.quote(str(pending_dir))} &\n'
       "exec summon --manual bro-dev 'pair on this'\n"
     )
@@ -1568,7 +1581,7 @@ class TestSummonedSession:
     assert h.run_in_container.call_count == 0  # no broker of its own
     assert head.call_args.args == (tmp_path, ride_session.Path(record.parent_workspace))
     launch = run.call_args.args[0]
-    assert launch.env['BROKER_CHANNEL'] == 'tcp://tk@host.docker.internal:7321'
+    assert launch.env['BROKER_UPSTREAM'] == 'tcp://tk@host.docker.internal:7321'
     assert launch.env['RIDE_SUMMONED'] == '1'
     assert launch.env['RIDE_MAY_SUMMON'] == 'dev'
     assert launch.env['RIDE_WORKSPACE'] == 'w'

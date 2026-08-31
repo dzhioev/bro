@@ -42,7 +42,7 @@ from ride.harness import ContainerExtras, get_harness
 from ride.identity import human_git_identity_env
 from ride.inner import inner_command
 from ride.kinds import extension_kinds
-from ride.peers import Peers
+from ride.peer_facts import PeerFact, PeerFacts
 from ride.repository import Repository, as_repository
 from ride.scope import split_scope_overrides, summoned_credential_scope
 from ride.session import SessionSpec, record_resume_spec
@@ -259,18 +259,18 @@ class SummonSpawner(Spawner):
     self,
     docker: DockerSpawner,
     container_runtime: ContainerRuntimeResolver,
-    peers: Peers,
+    facts: PeerFacts,
     artifacts: ArtifactStore,
   ):
     self._docker = docker
     self._container_runtime = container_runtime
-    self._peers = peers
+    self._facts = facts
     self._artifacts = artifacts
 
   async def spawn(self, launch: LaunchSpec, channel: Provisioned, quest: str) -> ChildHandle:
     assert isinstance(launch, SummonLaunchSpec)
     workspace_name = _workspace_name(channel.channel)
-    self._peers.note_workspace(quest, workspace_name)
+    self._facts.note_workspace(quest, workspace_name)
     lowered = await asyncio.to_thread(
       _lower_summon,
       launch,
@@ -301,6 +301,7 @@ def run_root_via_broker(
   launch: LaunchSpec,
   *,
   workspace: Workspace,
+  bro: str,
   may_summon: Collection[str] = (),
   credential_scope: ScopedSecrets,
   container_runtime: ContainerRuntimeResolver,
@@ -332,26 +333,39 @@ def run_root_via_broker(
     log.info('session may summon: %s', ', '.join(targets))
   host_log = workspace.host_log
   docker_spawner = DockerSpawner(host_log=host_log)
-  peers = Peers(workspace)
+  root_scope = ScopedSecrets(
+    required=set(credential_scope.required),
+    optional=set(credential_scope.optional),
+    selection=dict(credential_scope.selection),
+  )
+  facts = PeerFacts(
+    PeerFact(
+      workspace=workspace.name,
+      bro=bro,
+      allow_list=frozenset(may_summon),
+      credential_scope=root_scope,
+    ),
+    root_tree=workspace.tree,
+    root_path=workspace.path,
+  )
   artifacts = ArtifactStore(workspace, root_in_container=isinstance(launch, DockerLaunchSpec))
   spawner = CompositeSpawner(
     {
       DockerLaunchSpec: docker_spawner,
       ProcessLaunchSpec: ProcessSpawner(host_log=host_log),
-      SummonLaunchSpec: SummonSpawner(docker_spawner, container_runtime, peers, artifacts),
+      SummonLaunchSpec: SummonSpawner(docker_spawner, container_runtime, facts, artifacts),
     }
   )
-  control = SummonControl(
-    allow_list=may_summon,
-    credential_scope=credential_scope,
-    workspace=workspace,
-    peers=peers,
-    artifacts=artifacts,
-    audit_file=summon_dir() / f'{workspace.name}.jsonl',
-  )
-  artifact_control = ArtifactControl(artifacts, peers)
+  artifact_control = ArtifactControl(artifacts, facts)
   facade = Broker(
-    TcpServerTransport(broker_bind_hosts()), spawner, job_output=JobArtifacts(artifacts, peers)
+    TcpServerTransport(broker_bind_hosts()), spawner, job_output=JobArtifacts(artifacts, facts)
+  )
+  control = SummonControl(
+    workspace=workspace,
+    facts=facts,
+    artifacts=artifacts,
+    journal=facade.journal,
+    audit_file=summon_dir() / f'{workspace.name}.jsonl',
   )
   facade.on(PING, ping_handler)
   facade.on(SUMMON, control.handle)
@@ -364,6 +378,7 @@ def run_root_via_broker(
   )
   for kind, handler in extension_kinds(kind_context).items():
     facade.on(kind, handler)
+  facade.subscribe(facts.observe_journal)
   facade.subscribe(control.observe_journal)
   facade.subscribe(control.audit_event)
   with contextlib.closing(artifacts):

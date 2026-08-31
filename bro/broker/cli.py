@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """`broker` CLI — send broker requests and receive messages from inside a peer.
 
-The channel comes from `BROKER_CHANNEL` (`Client.from_env`); with it unset every
-subcommand is inert — a stderr note and exit 0 — so scripts embedded in a peer
-work unchanged where there is no broker. Message output on stdout is the wire
-JSON, one object per line.
+The client comes from `Client.from_env`.
+With both broker variables unset every subcommand is inert, so scripts embedded in a peer work unchanged where no broker was intended.
+A leftover `BROKER_UPSTREAM` reports that the session proxy failed at launch.
+Message output on stdout is the wire JSON, one object per line.
 """
 
 import json
