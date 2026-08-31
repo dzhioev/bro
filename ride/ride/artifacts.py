@@ -57,7 +57,7 @@ from bro.base import log
 from bro.base.lulid import lulid
 from bro.kinds import ArtifactDenied, tree_path
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, artifacts_dir, workspace_dir
-from ride.peers import PeerIdentity, Peers, UnattributablePeer
+from ride.peer_facts import PeerFacts, PeerIdentity, UnattributablePeer
 
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message
@@ -428,16 +428,16 @@ class JobArtifacts:
   collected in the store and answered with its ref, reaching the requesting
   peer and its summoners exactly as that peer's own mint would."""
 
-  def __init__(self, store: ArtifactStore, peers: Peers):
+  def __init__(self, store: ArtifactStore, facts: PeerFacts):
     self._store = store
-    self._peers = peers
+    self._facts = facts
 
   def open(self) -> Path:
     return self._store.job_run()
 
   async def collect(self, directory: Path, context: 'Dispatcher', requester: 'Peer') -> dict:
-    identity = self._peers.identity(context, requester)
-    ancestors = self._peers.ancestors(context, requester)
+    identity = self._facts.identity(context, requester)
+    ancestors = self._facts.ancestors(context, requester)
     ref, size = await asyncio.to_thread(
       self._store.adopt,
       directory,
@@ -455,15 +455,15 @@ class ArtifactControl:
   `artifact.mint` / `artifact.get` handlers; everything here runs on the
   broker loop, with store content work threaded."""
 
-  def __init__(self, store: ArtifactStore, peers: Peers):
+  def __init__(self, store: ArtifactStore, facts: PeerFacts):
     self._store = store
-    self._peers = peers
+    self._facts = facts
 
   def mint(self, context: 'Dispatcher', peer: 'Peer', message: 'Message') -> None:
     args = message.args
     try:
-      identity = self._peers.identity(context, peer)
-      ancestors = self._peers.ancestors(context, peer)
+      identity = self._facts.identity(context, peer)
+      ancestors = self._facts.ancestors(context, peer)
     except UnattributablePeer as reason:
       self._deny(context, peer, message, None, f'artifact mint denied: {reason}')
       return
@@ -481,7 +481,7 @@ class ArtifactControl:
   def get(self, context: 'Dispatcher', peer: 'Peer', message: 'Message') -> None:
     args = message.args
     try:
-      identity = self._peers.identity(context, peer)
+      identity = self._facts.identity(context, peer)
     except UnattributablePeer as reason:
       self._deny(context, peer, message, None, f'artifact get denied: {reason}')
       return
@@ -498,7 +498,7 @@ class ArtifactControl:
     """`bro.kinds.ArtifactResolver`: the host path of `ref` for a kind
     handler's requesting peer, with the denial as uniform as the wire one."""
     try:
-      identity = self._peers.identity(context, requester)
+      identity = self._facts.identity(context, requester)
     except UnattributablePeer:
       raise ArtifactDenied(_denial(ref)) from None
     return self._store.resolve(ref, identity.workspace)

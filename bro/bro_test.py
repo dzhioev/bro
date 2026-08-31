@@ -1344,6 +1344,12 @@ class TestSummonTool:
     assert {'summon', 'summon_check', 'summon_list'} <= set(interactive)
 
   @pytest.mark.asyncio
+  async def test_proxy_failure_state_keeps_the_broker_tools_present(self, monkeypatch):
+    monkeypatch.setenv('BROKER_UPSTREAM', 'tcp://token@127.0.0.1:9')
+    names = await _collect_tool_names([_service_server(EchoBro())])
+    assert {'summon', 'summon_check', 'summon_list'} <= set(names)
+
+  @pytest.mark.asyncio
   async def test_summon_list_returns_the_journal_records(self, monkeypatch):
     from bro import summon as summon_module
 

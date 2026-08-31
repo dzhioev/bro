@@ -239,6 +239,21 @@ class Journal:
       'state': 'evicted',
     }
 
+  def ancestry(self, quest_id: str) -> tuple[str, ...]:
+    """The quest's ancestors, nearest parent first."""
+    ancestors = []
+    lineage = self.lineage.get(quest_id)
+    if lineage is None:
+      raise ValueError(f'unknown quest id {quest_id!r}')
+    parent = lineage.parent
+    while parent is not None:
+      ancestors.append(parent)
+      lineage = self.lineage.get(parent)
+      if lineage is None:
+        raise RuntimeError(f'quest {quest_id!r} has unknown ancestor {parent!r}')
+      parent = lineage.parent
+    return tuple(ancestors)
+
   def visible(self, caller: Peer, record: Record, workers: dict[Peer, str]) -> bool:
     caller_quest = workers.get(caller)
     if caller_quest is None:
