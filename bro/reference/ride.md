@@ -226,7 +226,7 @@ A directory under the store that records no workspace is ignored by enumeration,
   session/            what the running session records about itself:
     current-trail.json            the trail the session records into ("Summoning another bro")
     session-recorder-health.json  the recording health signal ("Session recording")
-    claude/                       the claude harness's own session artifacts (recorder stderr)
+    claude/                       claude harness artifacts (recorder/projector logs and live statusLine projection)
   credentials/        the host-mode scoped credential store ("Scoped credential hydration")
   environment/        the files the host-mode session's install hooks write ("Scoped credential hydration")
   claude/             the claude harness's state dir ("Host claude-state isolation")
@@ -476,8 +476,6 @@ Layout:
 - `<runtime-root>/trails` (host) → `/var/ride/trails` rw when the scoped trails backend is local.
   In-container readers resolve that fixed absolute path;
   no state path is relative to `/workspace`.
-- `<runtime-root>/summon` (host) → `/var/ride/summon` ro for broker-supervised containers.
-  `RIDE_SUMMON_STATUS` points at the mounted status file directly, rather than reaching back through `/host-repo`.
 
 Inside the container, the entrypoint (running as root first):
 
@@ -672,8 +670,8 @@ The modes differ only in the spawner (`ride/ride/workspace/spawn.py`, composed b
 
 The session's processes don't talk to that channel directly:
 a **broxy** (the peer-side broker proxy, `bro/broker/broxy.py`) sits in between, holding the one long-lived upstream connection and re-serving the channel on a loopback port of its own that `BROKER_CHANNEL` is rewritten to
-— so the session's short-lived clients (`broker` CLI calls, `RunLifecycle`, a backgrounded wait) multiplex over the single connection the host's supersede-on-accept semantics expect,
-and a result whose waiter died stays claimable from the broxy's mailbox.
+— so the session's short-lived clients (`broker` CLI calls, `RunLifecycle`, a backgrounded wait) multiplex over the single connection the host's supersede-on-accept semantics expect.
+Client recovery reads the host journal through `query`, so no production surface depends on the broxy's stage-local retained mailbox.
 A set `BROKER_CHANNEL` always names a broxy
 — there is no direct-channel topology.
 
@@ -718,9 +716,9 @@ The flip is TTY-gated, so a headless run keeps everything on stderr;
 launch-time output (scoped-secrets lines, a first image build) and the post-exit finish print before and after the attached span, so they stay on the terminal.
 When anything was written during the span, one post-exit line points at it (`session host log: <path> (<n> lines this session)`);
 nothing is replayed to the terminal.
-The statusLine and the durable summon records under `<runtime-root>/summon/` are unaffected
+The projector-backed statusLine and the durable summon audit under `<runtime-root>/summon/` are unaffected
 — they remain the live surfaces.
-Unlike the summon records, the host log is diagnostics, not audit:
+Unlike the summon audit, the host log is diagnostics, not audit:
 workspace removal (`--drop`, `ride clean`) deletes it with the workspace.
 
 ### Summoning another bro
@@ -744,28 +742,26 @@ underneath it are two client surfaces over the same request:
   `--timeout <s>` / `--into <ref>` / `--hold <level>` / `--grant <name>` / `--revoke <name>` / `--share <ref>` / `--harness <name>` plus the LLM flags forwarded into the request (an omitted hold leaves the child's unattended default;
   `--share` hands the child read access to an artifact ref — see "Sharing artifacts between peers";
   grant/revoke and the LLM flags shape the child exactly as they shape a managed run — see the shared launch flags above — except that a summon may only widen the child's credential scope with what the summoning session itself holds,
-  whether it names the credential outright or reaches it through `--harness`/the LLM flags), `--detach` to return right after the send.
-  Any summon is reclaimable by the request id both modes print
-  — detached or a killed foreground wait:
-  `summon check <request-id>` peeks without blocking (the answer if an unread result is in, `still running` + exit 3 if not;
-  rides the broxy's non-marking `check`, so it disturbs neither the retained result nor a live waiter), and `summon check --wait <request-id>` blocks and collects via the broxy's claim
-  — a lock:
-  it fails fast while another waiter is alive, and errors once the result was collected.
-  The broxy retains delivered conversations, so a collected result stays readable:
-  `summon check <request-id> --last-seen N` replays the conversation from sequence N (0 = the start) regardless of read status
-  — the recovery path when the result was read by a wait whose reply never arrived.
-  `summon list` reports the session's summons as the host recorded them
-  — active ones and the last finished one, each with its request id
-  — the rediscovery surface when the id was lost with a dead client.
+  whether it names the credential outright or reaches it through `--harness`/the LLM flags).
+  `--detach` waits for the first correlated message:
+  host `accepted` prints the quest id, while a denial or pre-acceptance launch failure exits with its reason and prints no id.
+  Any summon is reclaimable by that quest id, detached or interrupted.
+  `summon check <id>` performs the non-destructive journal `query {id}`:
+  a live record reports `still running` and exits 3, while a terminal record relays its retained answer or failure.
+  `summon check --wait <id>` loops bounded `query {id, wait}` reads until terminal;
+  concurrent waiters and later reads see the same result.
+  `summon list` walks the caller-scoped paginated `query {}` listing and prints retained summon records live-first.
+  `summon watch` arms at the current `events {}` head, long-polls ordered events after its cursor, and prints every summon transition;
+  an event-retention gap prints a notice and re-arms from the current head.
   In a claude session, long summons run via the harness's background Bash;
   `rewind show <trail-id>` peeks mid-run.
   Contract details in `bro/summon.py`.
 - the bro service tools (`bro::summon` / `bro::summon_check` / `bro::summon_list`), for bro LLM processes and `--raw` sessions
-  — `summon` blocks for the answer (`detach: true` returns the request id instead) and takes the CLI's request fields as parameters (`timeout` / `into` / `hold` / `grant` / `revoke` / `share` / `llm` / `harness`);
-  `summon_check` peeks non-blockingly by default, cursor-reads with `last_seen`, and collects with `wait: true`, mirroring the CLI's `check` / `check --last-seen` / `check --wait`;
-  `summon_list` mirrors `summon list` (mounted when the session carries `RIDE_SUMMON_STATUS`).
-  A blocking tool call owns its channel client so a cancelled call aborts the wait instead of leaving a ghost waiter,
-  and the MCP-served builds carry a transport caution (the harness bounds a silent tool call at claude's `MCP_TOOL_TIMEOUT`, short of a long run — those go `detach` + poll; details in `AGENTS.md`).
+  — `summon` blocks for the answer (`detach: true` returns the accepted quest id instead) and takes the CLI's request fields as parameters (`timeout` / `into` / `hold` / `grant` / `revoke` / `share` / `llm` / `harness`);
+  `summon_check` returns pending or completed from the same repeatable query and loops short long-polls with `wait: true`;
+  `summon_list` mirrors the paginated CLI listing wherever the broker channel mounts the summon tools.
+  A blocking tool call owns its channel client so cancellation aborts the current short wait, while the host journal retains the result;
+  MCP-served builds carry a transport caution steering long work to detach plus polling.
 
 A claude-harness child is scoped through the claude-full recipe
 — `claude_code` required, no LLM key
@@ -831,17 +827,19 @@ Only that delta is bounded
 Resolving the pair on the loop also settles the recipe:
 one the named harness cannot run is denied at the request rather than failing the spawn.
 A peer the control cannot attribute a bro to is denied, and a depth cap (the root sits at depth 0; a summon that would nest past depth 2 is denied) guards against seed cycles recursing through real containers.
-Denials reply immediately and land in the audit as `deny` entries (reason, request id, summoner, target/prompt head).
+Denials reply immediately and land in the journal and audit as `denied` transitions (reason, quest id, summoner, and bounded request args).
 Each spawned child records `summoned_by` provenance:
 the requester's trail — a claude session root's from the current-trail pointer its recorder publishes (absent before transcript adoption: the child then records no pointer), a bro peer's from its lifecycle/spawn records
 — plus the summoning bro's own `tool_call` step id when the request carries one.
 The authorized spawn goes through the composite spawner with the requesting peer as parent
 — so host-mode roots spawn docker children too, and a grandchild's lifecycle routes to the child that summoned it;
 root exit still tears down the whole tree.
-Every event lands a host log line plus per-session state under `<runtime-root>/summon/`, keyed by the workspace name:
-`<name>.jsonl` (durable audit:
-each entry names its actual `summoner` — the root session, or the summoning child's target + trail id — plus target, prompt head, trail id, outcome) and `<name>.status.json` (live status, every entry carrying its `request_id` reattach handle;
-rendered into the statusLine and served by `summon list` — see `RIDE_SUMMON_STATUS` below).
+Every event lands a host log line and a durable audit row under `<runtime-root>/summon/<name>.jsonl`, keyed by the root workspace name.
+Each entry names its actual `summoner` — the root session, or the summoning child's target + trail id — plus target, bounded args, transition, trail id, and terminal outcome.
+Live readers never read that audit back:
+check, list, watch, and the session-local statusLine projector query the caller-scoped in-memory journal over their own broker channel, so the same surfaces work at any summon depth.
+The scope begins with quests the caller requested and includes their descendants;
+it excludes the parent-owned quest that the caller's own worker answers.
 Each authorized launch also carries the list it will be judged against into the run itself (`RIDE_MAY_SUMMON`:
 the session root's at launch, a summoned child's own resolved list at its spawn), so a peer reads what it may summon off its banner instead of discovering it by denial;
 enforcement stays entirely host-side.
@@ -931,13 +929,16 @@ only the flavor forks:
   Auth is the `anthropic` secret, read by `ride.claude.print_anthropic_key` and wired as `apiKeyHelper` in the merged `--settings`
   — a helper avoids the "Detected a custom API key" prompt that `ANTHROPIC_API_KEY` would trigger every session, and flag-level `--settings` (flagSettings, not project/local) means claude executes it without a workspace trust gate.
 
-The statusLine is ride's, not the operated project's:
-the merged settings run `<the runner's own interpreter> -m ride.claude.statusline` (detached attachment state + session-recording warning + live summon state, silent otherwise),
-on a `refreshInterval` clock as well as claude's event-driven renders, so the clock-relative summon state keeps ticking between session events.
-Both settings commands take that shape
-— the inner runner's own interpreter running a module
-— so neither leans on PATH resolution nor on a file mode the wheel format does not guarantee;
-and flagSettings outranking project settings means a consuming project neither declares a statusLine nor can break the session's with a stale one.
+The statusLine is ride's, not the operated project's.
+The runner starts one session-local projector process from its frozen runtime;
+it queries the journal, reads recording health, renders the clock-relative line at the statusLine refresh cadence, and atomically writes it under `session/claude/`.
+Claude's settings command only checks that projector's pid and cats the projection file, so each event-driven or interval render starts no Python process and performs no broker call.
+The projector holds a session-state lock and exits immediately when its parent-owned liveness pipe reaches EOF.
+A resumed runner waits for that lock before clearing the prior files and starting its writer, so abrupt host-parent death cannot leave two projectors racing one workspace.
+During a live parent, a runner-side monitor waits and reaps the projector, removing only files still owned by its pid;
+the pid guard covers that exit-to-cleanup window, so an unexpected child death renders blank rather than stale.
+The remaining settings commands use the inner runner's own interpreter, so neither leans on PATH resolution nor on a file mode the wheel format does not guarantee;
+flagSettings outranking project settings means a consuming project neither declares a statusLine nor can break the session's with a stale one.
 The corollary is that a bare `claude` launched outside ride gets claude's default bar.
 
 Claude's own attribution is off in every managed session
@@ -1084,9 +1085,6 @@ Wrappers and session daemons rely on a small set of env vars:
   read by the claude in-place runner to emit the child's run lifecycle over the broker channel (a bro-run child emits from `bro.native.runner.Runner.run`,
   a summoned interactive one its `trail` mark from `Runner.send`'s first turn), by the service-server build to mount the `answer` tool,
   and by `ride banner` and `bro.prompts.session_fragment` so the run can tell in-session that it owes a summoner an answer.
-- `RIDE_SUMMON_STATUS` — path of the session's live summon-status file (`<runtime-root>/summon/<name>.status.json` on the host, `/var/ride/summon/<name>.status.json` through the container's dedicated read-only bind).
-  The env name and the file's records are owned by `bro.summon_status`;
-  set by the launch surfaces, read by `ride.claude.statusline` to render active summons and the last outcome (see "Summoning another bro").
 - `RIDE_MAY_SUMMON` — the run's own effective summon allow-list, comma-separated and empty when it may summon nothing.
   The env name and its encoding are owned by `bro.summon`;
   set by the launch surfaces for a session root and by the summon lowering (or, for a manual child, the `--summoned` launch from the pending record) for a summoned child (its own resolved list, never its summoner's),

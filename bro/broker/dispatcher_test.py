@@ -298,11 +298,14 @@ def test_query_lists_and_reads_only_the_callers_subtree():
   dispatcher.journal.end(child, {'outcome': 'ok', 'value': 'answer'})
   dispatcher.on_message('requester', _request(QUERY, {}, 'list'))
   listed = runtime.sent[-1][1].payload['value']['quests']
-  assert {record['id'] for record in listed} == {'root-quest', 'child'}
+  assert {record['id'] for record in listed} == {'child'}
   dispatcher.on_message('requester', _request(QUERY, {'id': 'child'}, 'query-one'))
   assert runtime.sent[-1][1].payload['value']['quest']['result']['value'] == 'answer'
+  dispatcher.on_message('requester', _request(QUERY, {'id': 'root-quest'}, 'query-self'))
+  assert runtime.sent[-1][1].outcome == 'denied'
   assert not dispatcher.journal.knows('list')
   assert not dispatcher.journal.knows('query-one')
+  assert not dispatcher.journal.knows('query-self')
 
 
 def test_query_pages_every_live_record_inside_the_frame_cap():
@@ -330,7 +333,7 @@ def test_query_pages_every_live_record_inside_the_frame_cap():
     if cursor is None:
       break
     page += 1
-  assert set(seen) == set(dispatcher.journal.records)
+  assert set(seen) == set(dispatcher.journal.records) - {'root-quest'}
   assert len(seen) == len(set(seen))
 
 
@@ -361,9 +364,10 @@ def test_events_from_now_and_retained_history():
     'head': dispatcher.journal.head,
     'events': [],
   }
+  dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {})
   dispatcher.on_message('requester', _request(EVENTS, {'after': 0}, 'history'))
   history = runtime.sent[-1][1].payload['value']['events']
-  assert history[0]['quest'] == 'root-quest'
+  assert [event['quest'] for event in history] == ['child']
 
 
 @pytest.mark.asyncio

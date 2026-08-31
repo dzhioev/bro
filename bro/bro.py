@@ -233,13 +233,9 @@ def _answer_tool(wire: mcp.Wire, variables: Variables) -> llm_mcp.Tool:
   )
 
 
-# the {{when #wire = mcp}} blocks render only into the MCP-served builds
-# (persona and --raw claude sessions consume the toolset over streamable HTTP,
-# where the harness bounds a silent tool call at MCP_TOOL_TIMEOUT — short of a
-# real child's runtime, so the blocking modes are a trap there); the in-process
-# builds (wire 'bare') have no transport to die on and render the plain text.
-# the lost-request-id recovery path forks on `#tools`: `summon_list` mounts
-# only when the session tracks summon status.
+# The MCP-wire cautions steer long work away from a tool call whose client may
+# time out while the host-owned quest keeps running.
+# The recovery wording remains conditioned on the mounted service roster.
 _SUMMON_DESCRIPTION = (
   'summon another bro: it runs your prompt in its own isolated container with its '
   'own credentials and this call blocks — typically for minutes — until its answer '
@@ -270,60 +266,39 @@ _SUMMON_DESCRIPTION = (
   'OAuth token) fails the summon, whatever the target itself declares. the '
   'optional `share` list names artifact refs (from `artifact mint`) to hand the '
   'child read access to — only refs this session can itself read. '
-  'fails with the reason when the run raises, errors out, '
-  'or dies. `detach: true` returns the request id right after the send instead of '
-  'blocking — poll or collect it with `summon_check`. `manual: true` registers a '
-  'manual summon instead of spawning: the call returns as soon as the host '
-  'accepts (a denial fails it right there) with a token and a `ride` command — '
-  'relay both to the user, who launches the child session themselves, '
-  'interactively and at their own pace; the session then answers like any summon, '
-  'so poll the token with `summon_check` (a manual summon never blocks for the '
-  'answer, and it refuses `timeout`/`hold`/`llm`/`harness` — the user’s launch '
-  'owns those). use it when the child needs the user in the loop.'
-  '{{when #wire = mcp}} CAUTION: this tool is served over MCP, and the harness '
-  'times a silent tool call out after ten minutes while a child working a real '
-  'task typically runs longer — such a blocking summon dies client-side with a '
-  'transport timeout while the child keeps running, and the reply (with the '
-  'request id) is lost with the call. an ask that answers within the budget '
-  'can block; for a real task, pass `detach: true` and poll with summon_check. '
-  'if a blocking call did time out, do NOT re-summon — the child keeps running'
-  '{{iff #tools contains summon_list}}: recover the request id with summon_list '
-  'and reattach via summon_check (`last_seen: 0` re-reads a result that was '
-  'already delivered to the dead call){{else}}; this session tracks no summon '
-  'status, so a lost request id cannot be rediscovered — if you no longer have '
-  'it, surface the timeout instead of retrying{{end}}.{{end}}'
+  'fails with the reason when the run raises, errors out, or dies. `detach: true` '
+  'waits for host acceptance, then returns the quest id; a denial or launch failure '
+  'before acceptance fails this call. poll that id with repeatable `summon_check` reads. '
+  '`manual: true` registers a manual summon instead of spawning: acceptance returns '
+  'a token and `ride` command to relay to the user, who launches the child session; '
+  'manual refuses `timeout`/`hold`/`llm`/`harness` because the user’s launch owns them.'
+  '{{when #wire = mcp}} CAUTION: this tool is served over MCP, and the harness may '
+  'time a blocking call out while the quest keeps running. prefer `detach: true` for '
+  'long work, and do NOT re-summon after a timed-out blocking call'
+  '{{iff #tools contains summon_list}}: recover the quest id with summon_list and '
+  'read its retained result with summon_check{{else}}; if you lost the id, surface '
+  'the timeout instead of retrying{{end}}.{{end}}'
 )
 
 
 _SUMMON_CHECK_DESCRIPTION = (
-  'check on a detached or interrupted summon by its request id. by default a '
-  'non-blocking peek: returns `{state: completed, answer}` once an unread result '
-  'is in, `{state: pending, trail_id?, seq?}` while the child still runs — it '
-  'consumes nothing and disturbs no concurrent waiter, so polling is safe and '
-  'repeatable — and `{state: collected, seq?}` when the result was already read. '
-  'optional `last_seen` (a sequence number; 0 = the start) re-reads the '
-  'conversation from that point regardless of read status — the recovery path '
-  'when a result was read by a wait whose reply never reached you; the response '
-  '`seq` is your new cursor. `wait: true` blocks until the answer; the wait is a '
-  'lock, so it fails right away when another process is already waiting on the '
-  'id, and errors once the result was collected. optional `timeout` (seconds, '
-  'only with `wait`) bounds that wait. fails with the reason when the id is '
-  'unknown or when the summon failed.'
-  '{{when #wire = mcp}} CAUTION: this tool is served over MCP, and the harness '
-  'times a silent tool call out after ten minutes — a `wait: true` on a longer '
-  'run dies client-side the same way; prefer non-blocking polls, and recover '
-  'from a died wait with `last_seen: 0`.{{end}}'
+  'check a detached or interrupted summon by quest id through the host journal. '
+  'without `wait`, returns `{state: pending, trail_id?}` while live or '
+  '`{state: completed, answer}` when terminal. reads are non-destructive and '
+  'repeatable from any process, including after another waiter saw the result. '
+  '`wait: true` long-polls until terminal; optional `timeout` caps each poll, and '
+  'service polls stay short enough to react to a cancelled tool call. unknown ids, '
+  'evicted results, and failed summons raise with their reason.'
+  '{{when #wire = mcp}} CAUTION: a harness may time out a long `wait: true`; prefer '
+  'repeatable non-blocking polls for long runs.{{end}}'
 )
 
 
 _SUMMON_LIST_DESCRIPTION = (
-  "list this session's summons as the host recorded them: `active` entries "
-  '(request_id, target, trail_id, started_at) and `last` — the most recent '
-  'finished one (request_id, target, trail_id, outcome). use it to rediscover a '
-  'request id you lost — e.g. a blocking summon whose reply never reached you — '
-  'then reattach with summon_check.'
+  "list this session's caller-visible retained summon journal records, live first. "
+  'each record carries its quest id, args, lifecycle state, timestamps, trail, and '
+  'terminal outcome. use an id to recover an interrupted wait with summon_check.'
 )
-
 
 _BANNER_DESCRIPTION = (
   "return this session's environment facts as `key: value` lines: `kind` "
@@ -351,11 +326,8 @@ def _banner_tool(bro: 'BaseBro', live_run: Optional[LiveRun], variables: Variabl
 
 
 def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.Tool:
-  # a fresh channel client per call, opened on the loop and closed in `finally`
-  # so a cancelled tool call (the MCP client timed out or aborted) unblocks the
-  # off-loop wait: the broxy sees the waiter go, and the result buffers for a
-  # later summon_check instead of feeding an abandoned thread. the blocking wait
-  # runs off-loop so an interactive surface stays responsive under a long summon.
+  # A fresh channel client per blocking call is closed on cancellation, unblocking
+  # its short broker wait; the retained journal result remains readable later.
   # the run's tool position names the summon call's projected source, so the
   # child's `summoned_by` can carry the precise fork position.
   from bro import summon as summon_client
@@ -420,8 +392,7 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
         step_id=step_id,
         index=index,
       )
-    client = summon_client.open_client()
-    try:
+    with summon_client.open_client() as client:
       return await off_loop(
         summon_client.summon_and_wait,
         target,
@@ -437,9 +408,8 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
         step_id=step_id,
         index=index,
         client=client,
+        silence_timeout=summon_client.READ_WAIT_SECONDS,
       )
-    finally:
-      client.close()
 
   return llm_mcp.FunctionTool(
     _summon, name='summon', description=_SUMMON_DESCRIPTION, variables=variables
@@ -458,50 +428,36 @@ def _summon_list_tool(variables: Variables) -> llm_mcp.Tool:
 
 
 def _summon_check_tool(variables: Variables) -> llm_mcp.Tool:
-  # the wait path owns its client like _summon_tool, for the same cancellation
-  # abort; the plain peek is answered locally and immediately, so it keeps the
-  # per-call client inside the worker thread.
   from bro import summon as summon_client
 
   async def _summon_check(
     request_id: str,
     wait: bool = False,
     timeout: Optional[float] = None,
-    last_seen: Optional[int] = None,
   ) -> dict[str, Any]:
     if wait:
-      if last_seen is not None:
-        raise ValueError('last_seen is a cursor read; it does not combine with wait')
-      client = summon_client.open_client()
-      try:
+      with summon_client.open_client() as client:
+        wait_seconds = summon_client.READ_WAIT_SECONDS
+        if timeout is not None:
+          if timeout <= 0:
+            raise ValueError('timeout must be positive')
+          wait_seconds = min(timeout, wait_seconds)
         answer = await off_loop(
-          summon_client.collect_summon, request_id, timeout=timeout, client=client
+          summon_client.wait_summon,
+          request_id,
+          client=client,
+          wait_seconds=wait_seconds,
         )
-      finally:
-        client.close()
-      return {'state': 'completed', 'answer': answer}
+        return {'state': 'completed', 'answer': answer}
     if timeout is not None:
-      raise ValueError('timeout only bounds a wait; a plain check never blocks')
-    status = await off_loop(summon_client.check_summon, request_id, last_seen=last_seen)
+      raise ValueError('timeout only caps a wait; a plain check never blocks')
+    status = await off_loop(summon_client.check_summon, request_id)
     if status.pending:
       pending: dict[str, Any] = {'state': 'pending'}
       if status.trail_id is not None:
         pending['trail_id'] = status.trail_id
-      if status.seq is not None:
-        pending['seq'] = status.seq
       return pending
-    if status.answer is None:  # collected: the conversation ended, its result was read
-      collected: dict[str, Any] = {
-        'state': 'collected',
-        'hint': 'the result was already read; re-read the conversation with last_seen: 0',
-      }
-      if status.seq is not None:
-        collected['seq'] = status.seq
-      return collected
-    completed: dict[str, Any] = {'state': 'completed', 'answer': status.answer}
-    if status.seq is not None:
-      completed['seq'] = status.seq
-    return completed
+    return {'state': 'completed', 'answer': status.answer}
 
   return llm_mcp.FunctionTool(
     _summon_check, name='summon_check', description=_SUMMON_CHECK_DESCRIPTION, variables=variables
@@ -540,8 +496,7 @@ def _build_service_server(
   # include_raise=False); `answer` is the summoned run's delivery surface — it
   # needs the summoned mark and a channel to send the result on, plus a
   # killable session on the mcp wire (the bare flavor ends the run by
-  # exception); `summon`/`summon_check` need a broker channel and
-  # `summon_list` the session's summon-status file on top. the decided roster
+  # exception); all three summon read/write tools need a broker channel. the decided roster
   # then feeds the tools' rendering vocabulary: service tools are harness
   # features, the one tool surface that conditions on system facts, so `#wire`
   # is injected next to the `#tools` roster.
@@ -552,12 +507,6 @@ def _build_service_server(
   has_answer = (
     has_broker and summoned() and (wire == 'bare' or os.environ.get('RIDE_RUNNER_PID') is not None)
   )
-  has_summon_list = False
-  if has_broker:
-    from bro import summon_status
-
-    has_summon_list = summon_status.status_path() is not None
-
   mounted = ['banner']
   if has_cast:
     mounted.append('cast')
@@ -568,9 +517,7 @@ def _build_service_server(
   if has_answer:
     mounted.append('answer')
   if has_broker:
-    mounted.extend(['summon', 'summon_check'])
-  if has_summon_list:
-    mounted.append('summon_list')
+    mounted.extend(['summon', 'summon_check', 'summon_list'])
   variables: Variables = {
     **mcp.surface_variables(wire=wire),
     'tools': SetVariable(frozenset(mounted), universe=frozenset(_SERVICE_TOOL_NAMES)),
@@ -588,8 +535,7 @@ def _build_service_server(
   if has_broker:
     tools.append(_summon_tool(variables, live_run))
     tools.append(_summon_check_tool(variables))
-    if has_summon_list:
-      tools.append(_summon_list_tool(variables))
+    tools.append(_summon_list_tool(variables))
   assert [tool.name for tool in tools] == mounted
   server = llm_mcp.InProcessMCPServer('bro', tools)
   server.tool_universe = _SERVICE_TOOL_NAMES

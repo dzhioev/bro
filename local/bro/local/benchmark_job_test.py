@@ -253,7 +253,7 @@ async def running_server(monkeypatch):
   provisioned = await transport.provision()
   monkeypatch.setenv(CHANNEL_ENV, provisioned.host_endpoint.address(LOCAL_HOST))
   try:
-    yield sink
+    yield transport, sink
   finally:
     await transport.shutdown()
     await asyncio.wait_for(serve_task, TIMEOUT)
@@ -261,12 +261,14 @@ async def running_server(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_start_detach_sends_the_request_and_prints_its_id(monkeypatch, capsys):
-  async with running_server(monkeypatch) as sink:
+  async with running_server(monkeypatch) as (transport, sink):
     argv = ['benchmark-job', 'start', '-c', CONFIG, '--timeout', '60', '--detach']
-    assert await asyncio.to_thread(benchmark_job.main, argv) == 0
-    _, message = await asyncio.wait_for(sink.messages.get(), TIMEOUT)
+    task = asyncio.create_task(asyncio.to_thread(benchmark_job.main, argv))
+    channel, message = await asyncio.wait_for(sink.messages.get(), TIMEOUT)
     assert message.kind == benchmark_job.BENCHMARK
     assert message.args == {'config': CONFIG, 'upload': 'none', 'timeout': 60.0}
+    await transport.send(channel, brotocol.mark(message.id, 'accepted'))
+    assert await task == 0
     assert capsys.readouterr().out.strip() == message.id
 
 
@@ -277,11 +279,10 @@ def test_start_without_a_channel_fails(monkeypatch, capsys, caplog):
   assert any(CHANNEL_ENV in record.getMessage() for record in caplog.records)
 
 
-def test_check_last_seen_with_wait_errors(monkeypatch, capsys, caplog):
-  monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:1')
-  assert benchmark_job.main(['benchmark-job', 'check', 'R-1', '--wait', '--last-seen', '0']) == 1
-  assert capsys.readouterr().out == ''
-  assert any('--wait' in record.getMessage() for record in caplog.records)
+def test_check_help_has_no_conversation_cursor(capsys):
+  with pytest.raises(SystemExit):
+    benchmark_job.main(['benchmark-job', 'check', '--help'])
+  assert '--last-seen' not in capsys.readouterr().out
 
 
 def test_check_timeout_without_wait_errors(monkeypatch, caplog):
@@ -316,3 +317,75 @@ def test_the_local_distribution_contributes_the_harbor_credential_kind():
     'description': 'Harbor API credentials',
     'install': {'env': {'HARBOR_API_KEY': {'secret': '{{insert #name}}'}}},
   }
+
+
+@pytest.mark.asyncio
+async def test_detached_denial_fails_before_printing_an_id(monkeypatch, capsys, caplog):
+  async with running_server(monkeypatch) as (transport, sink):
+    argv = ['benchmark-job', 'start', '-c', CONFIG, '--detach']
+    task = asyncio.create_task(asyncio.to_thread(benchmark_job.main, argv))
+    channel, request = await asyncio.wait_for(sink.messages.get(), TIMEOUT)
+    await transport.send(
+      channel,
+      brotocol.result(request.id, 'denied', error='benchmark denied'),
+    )
+    assert await task == 1
+    assert capsys.readouterr().out == ''
+    assert 'benchmark denied' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_check_reads_pending_and_terminal_journal_records(monkeypatch, capsys, caplog):
+  def missing_artifact(_ref):
+    raise benchmark_job.ArtifactError('not mounted in this test')
+
+  monkeypatch.setattr(benchmark_job, 'get_artifact', missing_artifact)
+  async with running_server(monkeypatch) as (transport, sink):
+    pending = asyncio.create_task(
+      asyncio.to_thread(benchmark_job.main, ['benchmark-job', 'check', 'JOB-1'])
+    )
+    channel, query = await asyncio.wait_for(sink.messages.get(), TIMEOUT)
+    assert query.kind == 'query'
+    assert query.args == {'id': 'JOB-1'}
+    await transport.send(
+      channel,
+      brotocol.result(
+        query.id,
+        'ok',
+        value={
+          'quest': {
+            'id': 'JOB-1',
+            'kind': 'benchmark',
+            'parent': 'ROOT',
+            'args': {'config': CONFIG},
+            'state': 'started',
+          }
+        },
+      ),
+    )
+    assert await pending == benchmark_job.PENDING_EXIT_CODE
+    assert 'still running' in caplog.text
+
+    completed = asyncio.create_task(
+      asyncio.to_thread(benchmark_job.main, ['benchmark-job', 'check', 'JOB-1'])
+    )
+    channel, query = await asyncio.wait_for(sink.messages.get(), TIMEOUT)
+    await transport.send(
+      channel,
+      brotocol.result(
+        query.id,
+        'ok',
+        value={
+          'quest': {
+            'id': 'JOB-1',
+            'kind': 'benchmark',
+            'parent': 'ROOT',
+            'args': {'config': CONFIG},
+            'state': 'ended',
+            'result': {'outcome': 'ok', 'value': {'ref': 'sha256:' + 'a' * 64}},
+          }
+        },
+      ),
+    )
+    assert await completed == 0
+    assert ('sha256:' + 'a' * 64) in capsys.readouterr().out

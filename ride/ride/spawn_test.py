@@ -645,11 +645,9 @@ class TestRunRootViaBroker:
     assert kind_context.credential_scope == frozenset({'harbor'})
     control = captured['handlers']['summon'].__self__
     assert isinstance(control, ride.summon_control.SummonControl)
-    status_projection, audit_writer = captured['observers']
-    assert status_projection.__self__ is control
+    lifecycle_projection, audit_writer = captured['observers']
+    assert lifecycle_projection.__self__ is control
     assert audit_writer.__self__ is control
     assert control._workspace is workspace
-    state_directory = summon_dir()
-    assert control._status_file == state_directory / 'ws.status.json'
-    assert control._audit_file == state_directory / 'ws.jsonl'
+    assert control._audit_file == summon_dir() / 'ws.jsonl'
     assert captured['launch'] is launch

@@ -27,20 +27,25 @@ raw is not a harness value.
 - `session_context.py` — typed launch-context records exported through `RIDE_SESSION_CONTEXT`.
 - `system_prompt.py` — shared prompt and persona assembly.
   Prompt assets are loaded from the `bro` distribution, not relative to this package.
-- `statusline.py`, `print_anthropic_key.py`, and `watch_guard.py`
+- `statusline.py` — the session-local projector process:
+  it renders recording and summon state into an atomic file while its pid file is live, exits when its runner parent disappears, and holds a session-state lock that serializes resume;
+  a runner-side monitor reaps it and clears only the live files that pid still owns, while Claude's refresh command only checks the pid and cats the projection.
+- `print_anthropic_key.py` and `watch_guard.py`
   — leaf modules invoked by Claude settings through the runner interpreter (`python -m ride.claude.<module>`).
 
 ## Invariants
 
 - `ride.claude.__init__` imports nothing.
-  The status line runs on a repeated render clock and must retain a small import closure.
+  The repeated statusLine command stays shell-only;
+  Python rendering runs once per session in the projector process.
 - Imports point directly at leaf modules, never through the package hub.
 - Broker imports remain behind the framework's broker gate;
   a disabled or unavailable broker must degrade before importing its implementation.
 - Full mode scopes the bro through `harness='claude'` and requires `claude_code`.
   Raw mode scopes through `harness='bro'` and requires `anthropic`.
-- Settings commands use the runner's interpreter and the `ride.claude` module paths.
+- Settings commands that run Python use the runner's interpreter and `ride.claude` module paths;
+  the statusLine command only reads its session-local projection.
 - Machinery the runner spawns
-  — the session MCP server, the recorder daemon
+  — the session MCP server, recorder daemon, and statusLine projector
   — is named by its path in the runtime the runner runs from (`bro.base.spawn.console_script`), never by bare name:
   the session PATH carries the pinned session commands, and machinery is not among them.

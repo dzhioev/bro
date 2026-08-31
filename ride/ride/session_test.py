@@ -1053,8 +1053,7 @@ class TestHostSession:
       )
       == 0
     )
-    assert captured['env'][bro.summon.MAY_SUMMON_ENV] == 'bro,dev'
-    assert captured['env'][ride.summon_control.STATUS_ENV].endswith('w.status.json')
+    assert captured['env'] == {bro.summon.MAY_SUMMON_ENV: 'bro,dev'}
     assert not captured['launch'].interactive
 
   def test_bad_summon_flag_fails_before_the_workspace_is_recorded(self, monkeypatch, tmp_path):
@@ -1515,13 +1514,19 @@ client.close(confirm=True)
     )
     # the blocking summon relayed the external child's answer
     assert 'the pair verdict' in capfd.readouterr().out
-    # the summon ended: both token records are discarded and the ledger carries ok
+    # the summon ended: both token records are discarded and the journal audit carries it
     assert list(pending_dir.glob('*.json')) == []
     assert list((summon_dir() / 'claimed').glob('*.json')) == []
-    status = json.loads((summon_dir() / 'w.status.json').read_text())
-    assert status['active'] == []
-    assert status['last']['outcome'] == 'ok'
-    assert status['last']['trail_id'] == 't-manual'
+    audit = [json.loads(line) for line in (summon_dir() / 'w.jsonl').read_text().splitlines()]
+    summon_events = [entry for entry in audit if entry['kind'] == 'summon']
+    assert [entry['transition'] for entry in summon_events] == [
+      'accepted',
+      'started',
+      'trail',
+      'ended',
+    ]
+    assert summon_events[-2]['trail_id'] == 't-manual'
+    assert summon_events[-1]['outcome'] == 'ok'
     # lifecycle observation is host-side only; the external session owns its
     # workspace trail pointer.
     pointer = trail_pointer_module.session_pointer(workspace_dir('external-ws'))
