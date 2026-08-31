@@ -5,17 +5,15 @@ requesting peer's recorded identity, then binds a spawned or expected Worker
 through the Dispatcher primitives. Deterministic refusals use ``Dispatcher.deny``
 so answer and journal record are one operation.
 
-The control subscribes to the broker journal for the identity records nested
-summons still need, root trail fallback, and manual-token cleanup. A second
-subscriber writes every journal event to the human-facing summon audit.
-Sessions own their own trail pointers; the host only observes trail marks.
+The quest-keyed peer-facts table resolves every requester and its journal ancestry.
+The control's journal subscribers write the human-facing audit, log lifecycle changes, and clean up manual tokens.
 
 Broker imports stay function-local where the pre-gate launch path requires it.
 """
 
 import json
-from collections.abc import Callable, Collection, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -24,7 +22,7 @@ from bro.base import credentials, log
 from bro.summon import DEFAULT_HARNESS, DEFAULT_TIMEOUT
 from ride import pending_summon
 from ride.harness import HARNESS_NAMES, get_harness
-from ride.peers import PeerIdentity, Peers, UnattributablePeer
+from ride.peer_facts import PeerFact, PeerFacts, PeerIdentity, UnattributablePeer
 from ride.scope import split_scope_overrides, summoned_credential_scope
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
@@ -32,14 +30,13 @@ from ride.workspace.store import ScopedSecrets
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message
   from bro.broker.dispatcher import Dispatcher
-  from bro.broker.journal import Event, Record
+  from bro.broker.journal import Event, Journal, Record
   from bro.broker.runtime import Peer
   from bro.broker.transport import Provisioned
   from ride.artifacts import ArtifactStore
 
 __all__ = ['SummonControl', 'summon_allow_list']
 
-_PROMPT_HEAD_CHARS = 120
 _ARGS_KEYS = frozenset(
   {
     'target',
@@ -107,10 +104,6 @@ def _summoned_scope(
     revoke=list(revoke),
     llm_spec=harness.resolve_llm(llm, target),
   )
-
-
-def _prompt_head(prompt: str) -> str:
-  return ' '.join(prompt.split())[:_PROMPT_HEAD_CHARS]
 
 
 def _validate(args: dict[str, Any]) -> Optional[str]:
@@ -181,47 +174,21 @@ def _validate(args: dict[str, Any]) -> Optional[str]:
   return None
 
 
-@dataclass
-class _ActiveSummon:
-  request_id: str
-  target: str
-  prompt_head: str
-  summoner: dict[str, Any]  # audit attribution (see _Requester.summoner)
-  depth: int  # the spawned child's summon-nesting depth (the root sits at 0)
-  allow_list: set[str]  # the spawned child's own effective summon allow-list
-  grant: list[str]  # the request's scope overrides, audited as the summoner issued them
-  revoke: list[str]
-  llm: Optional[str]
-  harness: Optional[str]
-  share: list[str] = field(default_factory=list)  # artifact refs handed down, audited
-  manual: bool = False  # a user-launched child attached over an expected channel
-  trail_id: Optional[str] = None
-
-
 @dataclass(frozen=True)
 class _Requester:
-  """the summon identity of a requesting peer, resolved per request.
-
-  `summoner` is the attribution the audit entries carry: the root is
-  `{'session': <key>}`, a summoned child `{'target': <bro>, 'trail_id': …}`.
-  `list_description` names the allow-list in denial messages — the two lists have
-  different widening levers (relaunching the session vs the summon that spawned
-  the peer, or seeding its bro), and the denial reason should point at the right
-  one. `identity` is the peer's workspace attribution (`ride/ride/peers.py`) —
-  the name bounds what it may share, the tree is the base-ref inheritance source
-  for the children it summons.
-  `credentials` reads the peer's own credential scope, the bound on what it may
-  grant; it is a thunk because computing a summoned peer's scope is real work
-  (bro import + registry read) that only a request carrying a credential grant
-  should pay for on the broker loop."""
-
-  allow_list: set[str]
+  fact: PeerFact
   credentials: Callable[[], ScopedSecrets]
-  summoner: dict[str, Any]
-  summoned_by: Optional[dict[str, Any]]
+  attribution: dict[str, str]
   depth: int
-  list_description: str
   identity: PeerIdentity
+
+  @property
+  def allow_list(self) -> set[str]:
+    return set(self.fact.allow_list)
+
+  @property
+  def list_description(self) -> str:
+    return f"{self.fact.bro}'s summon allow-list"
 
 
 def _credential_refusal(
@@ -285,32 +252,18 @@ class SummonControl:
   def __init__(
     self,
     *,
-    allow_list: Collection[str],
-    credential_scope: ScopedSecrets,
     workspace: Workspace,
-    peers: Peers,
+    facts: PeerFacts,
     artifacts: 'ArtifactStore',
+    journal: 'Journal',
     audit_file: Path,
   ):
-    self._allow_list = set(allow_list)
-    self._credential_scope = ScopedSecrets(
-      required=set(credential_scope.required),
-      optional=set(credential_scope.optional),
-      selection=dict(credential_scope.selection),
-    )
     self._workspace = workspace
-    self._peers = peers
+    self._facts = facts
     self._artifacts = artifacts
+    self._journal = journal
     self._audit_file = audit_file
-    self._root_trail_id: Optional[str] = None
-    self._pending: dict[str, _ActiveSummon] = {}
-    self._records: dict[str, _ActiveSummon] = {}
-    self._denial_summoners: dict[str, Optional[dict[str, Any]]] = {}
-
-  def note_root_trail(self, trail_id: Optional[str]) -> None:
-    """Record the root's trail mark as summon-provenance fallback."""
-    if trail_id is not None:
-      self._root_trail_id = trail_id
+    self._audit_attribution: dict[str, dict[str, str]] = {}
 
   # --- the `summon` request handler (broker loop) -------------------------------
 
@@ -321,18 +274,16 @@ class SummonControl:
     try:
       requester = self._requester(context, peer)
     except UnattributablePeer as reason:
-      self._deny(context, peer, message, None, f'summon denied: {reason}')
+      self._deny(context, peer, f'summon denied: {reason}')
       return
     error = _validate(args)
     if error is not None:
-      self._deny(context, peer, message, requester.summoner, error)
+      self._deny(context, peer, error)
       return
     if requester.depth + 1 > _MAX_SUMMON_DEPTH:
       self._deny(
         context,
         peer,
-        message,
-        requester.summoner,
         f'summon denied: summon depth cap ({_MAX_SUMMON_DEPTH}) reached',
       )
       return
@@ -344,7 +295,7 @@ class SummonControl:
         error = f'summon denied: unknown bro {target!r}'
       else:
         error = f'summon denied: {target!r} is not in {requester.list_description}'
-      self._deny(context, peer, message, requester.summoner, error)
+      self._deny(context, peer, error)
       return
     grant = args.get('grant', [])
     revoke = args.get('revoke', [])
@@ -354,19 +305,14 @@ class SummonControl:
       grant_credentials, grant_bros = split_scope_overrides(grant)
       _, revoke_bros = split_scope_overrides(revoke)
       child_allow_list = summon_allow_list(target, grant=grant_bros, revoke=revoke_bros)
-    except ValueError as e:
-      self._deny(context, peer, message, requester.summoner, f'summon denied: {e}')
+    except ValueError as error:
+      self._deny(context, peer, f'summon denied: {error}')
       return
-    # a summoner can only hand down what it holds itself: grants are bounded by the
-    # requesting peer's own two scopes, so no chain of summons reaches authority the
-    # session was not launched with
     beyond = sorted(set(grant_bros) - requester.allow_list)
     if len(beyond) > 0:
       self._deny(
         context,
         peer,
-        message,
-        requester.summoner,
         f'summon denied: cannot grant summon target(s) the summoner may not '
         f'summon itself: {", ".join(beyond)}',
       )
@@ -383,11 +329,8 @@ class SummonControl:
     except UnattributablePeer as reason:
       refusal = str(reason)
     if refusal is not None:
-      self._deny(context, peer, message, requester.summoner, f'summon denied: {refusal}')
+      self._deny(context, peer, f'summon denied: {refusal}')
       return
-    # a summoner can only hand down refs it may read itself; the denial is as
-    # uniform as the read path's — naming a ref that does not exist and naming
-    # one outside the requester's reach are indistinguishable
     share = args.get('share', [])
     unreachable = sorted(
       ref for ref in share if not self._artifacts.reachable(ref, requester.identity.workspace)
@@ -396,34 +339,32 @@ class SummonControl:
       self._deny(
         context,
         peer,
-        message,
-        requester.summoner,
         f'summon denied: cannot share artifact(s) the summoner cannot reach: '
         f'{", ".join(unreachable)}',
       )
       return
     prompt = args['prompt']
-    summoned_by = requester.summoned_by
+    summoned_by = self._summoned_by(requester.attribution)
     step_id = args.get('step_id')
     if summoned_by is not None and step_id is not None:
       summoned_by = {**summoned_by, 'step_id': step_id}
       if args.get('index') is not None:
         summoned_by['index'] = args['index']
-    self._peers.note_summon(context, peer, message.quest_id, manual=args.get('manual', False))
-    if args.get('manual', False):
-      self._pending[message.quest_id] = _ActiveSummon(
-        request_id=message.quest_id,
-        target=target,
-        prompt_head=_prompt_head(prompt),
-        summoner=requester.summoner,
-        depth=requester.depth + 1,
-        allow_list=child_allow_list,
-        grant=list(grant),
-        revoke=list(revoke),
-        llm=None,
-        harness=None,
-        manual=True,
-      )
+    manual = args.get('manual', False)
+    self._facts.add(
+      message.quest_id,
+      PeerFact(
+        workspace=None,
+        bro=target,
+        allow_list=frozenset(child_allow_list),
+        grant=tuple(grant),
+        revoke=tuple(revoke),
+        llm=llm,
+        harness=harness_name,
+        manual=manual,
+      ),
+    )
+    if manual:
       self._expect_manual(
         context,
         peer,
@@ -436,20 +377,6 @@ class SummonControl:
       )
       return
     timeout = args.get('timeout')
-    record = _ActiveSummon(
-      request_id=message.quest_id,
-      target=target,
-      prompt_head=_prompt_head(prompt),
-      summoner=requester.summoner,
-      depth=requester.depth + 1,
-      allow_list=child_allow_list,
-      grant=list(grant),
-      revoke=list(revoke),
-      share=list(share),
-      llm=llm,
-      harness=harness_name,
-    )
-    self._pending[message.quest_id] = record
     context.spawn(
       SummonLaunchSpec(
         target=target,
@@ -482,17 +409,9 @@ class SummonControl:
     grant: list[str],
     revoke: list[str],
   ) -> None:
-    """register the authorized manual summon as an expected external child:
-    provision its channel, write the pending record the token (the request id)
-    resolves to, and wait for the user's launch — unbounded by any host timer,
-    since the launch is paced by a human and there is no child to kill."""
     args = message.args
-    target = args['target']
-    prompt = args['prompt']
 
     def _ready(provisioned: 'Provisioned') -> None:
-      # function-local like SummonLaunchSpec in handle (ride/AGENTS.md, "Lazy
-      # broker import")
       from bro.broker import brotocol
 
       pending_summon.write(
@@ -501,8 +420,8 @@ class SummonControl:
           protocol_revision=brotocol.PROTOCOL_REVISION,
           port=provisioned.host_endpoint.port,
           channel_token=provisioned.host_endpoint.token,
-          target=target,
-          prompt=prompt,
+          target=args['target'],
+          prompt=args['prompt'],
           parent_workspace=str(requester.identity.tree),
           may_summon=tuple(sorted(child_allow_list)),
           grant=tuple(grant),
@@ -515,54 +434,31 @@ class SummonControl:
 
     context.expect(peer, timeout=None, ready=_ready)
 
-  def _requester(self, context: 'Dispatcher', peer: 'Peer') -> '_Requester':
-    """resolve the requesting peer's summon identity: the root follows the
-    session's launch-computed effective allow-list; a summoned child follows the
-    list its own summon resolved, attributed through the shared peer registry
-    (`ride/ride/peers.py`) plus this control's spawn records. Raises
-    `UnattributablePeer` for a peer that cannot be attributed a bro."""
-    identity = self._peers.identity(context, peer)
-    if peer == context.root:
-      return _Requester(
-        allow_list=self._allow_list,
-        credentials=lambda: self._credential_scope,
-        summoner={'session': self._workspace.name},
-        summoned_by=self._root_summoned_by(),
-        depth=0,
-        list_description="this session's summon allow-list",
-        identity=identity,
-      )
-    quest = context.workers.get(peer)
-    record = self._records.get(quest) if quest is not None else None
-    if record is None:
-      raise UnattributablePeer('cannot attribute the requesting peer to a bro')
+  def _requester(self, context: 'Dispatcher', peer: 'Peer') -> _Requester:
+    quest, fact = self._facts.resolve(context, peer)
     return _Requester(
-      allow_list=set(record.allow_list),
-      credentials=lambda: self._child_credentials(record),
-      summoner={'target': record.target, 'trail_id': record.trail_id},
-      summoned_by={'trail_id': record.trail_id} if record.trail_id is not None else None,
-      depth=record.depth,
-      list_description=f"{record.target}'s summon allow-list",
-      identity=identity,
+      fact=fact,
+      credentials=lambda: self._credentials(fact),
+      attribution=self._facts.attribution_for_quest(context.journal, quest),
+      depth=self._facts.depth(context, peer),
+      identity=self._facts.identity(context, peer),
     )
 
-  def _child_credentials(self, record: _ActiveSummon) -> ScopedSecrets:
-    """the credential scope a summoned child runs with, recomputed from its own
-    spawn record."""
-    if record.manual:
-      # a manual child's actual scope was computed by its own launch, from flags
-      # this control never sees — there is no record to recompute it from
+  def _credentials(self, fact: PeerFact) -> ScopedSecrets:
+    if fact.credential_scope is not None:
+      return fact.credential_scope
+    if fact.manual:
       raise UnattributablePeer(
         "a manual child's credential scope is not attributable; grant the "
         'credential at its own launch instead'
       )
-    grant, _ = split_scope_overrides(record.grant)
-    revoke, _ = split_scope_overrides(record.revoke)
+    grant, _ = split_scope_overrides(list(fact.grant))
+    revoke, _ = split_scope_overrides(list(fact.revoke))
     try:
       return _summoned_scope(
-        record.target,
-        record.harness,
-        record.llm,
+        fact.bro,
+        fact.harness,
+        fact.llm,
         attachment=self._workspace.metadata.repo,
         grant=grant,
         revoke=revoke,
@@ -570,33 +466,19 @@ class SummonControl:
     except ValueError as error:
       raise UnattributablePeer(str(error)) from error
 
-  def _root_summoned_by(self) -> Optional[dict[str, Any]]:
-    # Read the session-owned pointer per request because Claude trail segments
-    # turn over; the journaled root trail mark is the native/fallback source.
-    from bro.monitor.trail_pointer import read, session_pointer
-
-    trail_id = read(session_pointer(self._workspace.path))
-    if trail_id is None:
-      trail_id = self._root_trail_id
+  @staticmethod
+  def _summoned_by(attribution: dict[str, str]) -> Optional[dict[str, Any]]:
+    trail_id = attribution.get('trail_id')
     return {'trail_id': trail_id} if trail_id is not None else None
 
-  def _deny(
-    self,
-    context: 'Dispatcher',
-    peer: 'Peer',
-    message: 'Message',
-    summoner: Optional[dict[str, Any]],
-    error: str,
-  ) -> None:
+  def _deny(self, context: 'Dispatcher', peer: 'Peer', error: str) -> None:
     log.warning('summon: %s: %s', self._workspace.name, error)
-    self._denial_summoners[message.quest_id] = summoner
     context.deny(peer, error)
 
   def observe_journal(self, event: 'Event', journal_record: 'Record') -> None:
-    """Maintain summon identity, trail fallback, logging, and manual-token cleanup."""
+    """Log lifecycle changes and clean up terminal manual-summon tokens."""
     if journal_record.kind == 'root':
       if event.transition == 'trail':
-        self.note_root_trail(journal_record.trail_id)
         log.info('root run trail %s', journal_record.trail_id)
       elif event.transition == 'ended':
         reason = event.payload.get('reason')
@@ -607,33 +489,32 @@ class SummonControl:
       return
     if journal_record.kind != 'summon':
       return
+    try:
+      fact = self._facts.for_quest(event.quest)
+    except UnattributablePeer:
+      return
     if event.transition == 'accepted':
-      record = self._pending.pop(event.quest, None)
-      if record is None:
-        log.warning('summon: accepted quest %s has no authorized identity record', event.quest)
-        return
-      self._records[event.quest] = record
-      action = 'expecting a manual launch' if record.manual else 'spawning'
+      action = 'expecting a manual launch' if fact.manual else 'spawning'
       log.info(
-        'summon: %s %s %s (request %s)', self._workspace.name, action, record.target, event.quest
+        'summon: %s %s %s (request %s)',
+        self._workspace.name,
+        action,
+        fact.bro,
+        event.quest,
       )
       return
-    record = self._records.get(event.quest)
-    if record is None:
-      return
     if event.transition == 'trail':
-      record.trail_id = journal_record.trail_id
-      log.info('summon: %s trail %s', record.target, record.trail_id)
+      log.info('summon: %s trail %s', fact.bro, journal_record.trail_id)
       return
     if event.transition != 'ended':
       return
-    if record.manual:
-      pending_summon.discard(record.request_id)
+    if fact.manual:
+      pending_summon.discard(event.quest)
     outcome = str(event.payload.get('outcome'))
     reason = event.payload.get('reason')
     if outcome == 'failed' and reason is not None:
       outcome = f'{outcome}:{reason}'
-    log.info('summon: %s ended: %s (trail %s)', record.target, outcome, record.trail_id)
+    log.info('summon: %s ended: %s (trail %s)', fact.bro, outcome, journal_record.trail_id)
 
   def audit_event(self, event: 'Event', journal_record: 'Record') -> None:
     """Append one human-facing JSONL row for every journal event."""
@@ -642,19 +523,24 @@ class SummonControl:
       **event.view(),
       'args': journal_record.args,
     }
-    record = self._records.get(event.quest) or self._pending.get(event.quest)
-    if record is not None:
-      entry['summoner'] = record.summoner
-      entry['target'] = record.target
-    elif event.quest in self._denial_summoners:
-      entry['summoner'] = self._denial_summoners[event.quest]
+    if journal_record.parent is not None:
+      attribution = self._audit_attribution.get(event.quest)
+      if attribution is None:
+        attribution = self._facts.attribution_for_quest(self._journal, journal_record.parent)
+        self._audit_attribution[event.quest] = attribution
+      entry['summoner'] = attribution
+    if journal_record.kind == 'summon':
+      try:
+        entry['target'] = self._facts.for_quest(event.quest).bro
+      except UnattributablePeer:
+        target = journal_record.args.get('target')
+        if isinstance(target, str):
+          entry['target'] = target
     try:
       self._audit_file.parent.mkdir(parents=True, exist_ok=True)
       with self._audit_file.open('a') as audit:
         audit.write(json.dumps(entry, ensure_ascii=False) + '\n')
     except OSError as error:
       log.warning('could not append summon audit record to %s: %s', self._audit_file, error)
-    if event.transition == 'ended':
-      self._records.pop(event.quest, None)
-    elif event.transition == 'denied':
-      self._denial_summoners.pop(event.quest, None)
+    if event.transition in ('ended', 'denied'):
+      self._audit_attribution.pop(event.quest, None)

@@ -494,16 +494,18 @@ def _build_service_server(
   # `skill` bridges only harnesses without a native loader; `raise` only makes
   # sense non-interactively (a caller to abort to — interactive callers pass
   # include_raise=False); `answer` is the summoned run's delivery surface — it
-  # needs the summoned mark and a channel to send the result on, plus a
-  # killable session on the mcp wire (the bare flavor ends the run by
-  # exception); all three summon read/write tools need a broker channel. the decided roster
+  # needs the summoned mark and broker intent, plus a killable session on the
+  # mcp wire (the bare flavor ends the run by exception); all three summon
+  # read/write tools need the same intent. The decided roster
   # then feeds the tools' rendering vocabulary: service tools are harness
   # features, the one tool surface that conditions on system facts, so `#wire`
   # is injected next to the `#tools` roster.
   from bro.summon import summoned
 
   has_cast = len(bro.spells) > 0 and spell_store.cast_available()
-  has_broker = os.environ.get('BROKER_CHANNEL') is not None
+  has_broker = any(
+    os.environ.get(name) is not None for name in ('BROKER_CHANNEL', 'BROKER_UPSTREAM')
+  )
   has_answer = (
     has_broker and summoned() and (wire == 'bare' or os.environ.get('RIDE_RUNNER_PID') is not None)
   )

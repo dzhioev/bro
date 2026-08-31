@@ -40,6 +40,8 @@ the TCP adapter owns NDJSON framing and the attach handshake.
 - `dispatcher.py` routes over journal records, binds one Worker per worker-backed quest, synthesizes failure from Worker death, and serves the reserved `query` / `events` read kinds.
   Its handler vocabulary is `reply`, `deny`, `spawn`, `job`, and `expect`.
 - `client.py` is the synchronous peer handle for requests, marks, progress, results, and correlated waits.
+  `BROKER_CHANNEL` is its client address;
+  `BROKER_UPSTREAM` without a channel means the session proxy failed at launch and raises with the broxy log path.
 - `broxy.py` is the stateless session multiplexer:
   it holds one upstream channel, authenticates local clients with one shared token, and keeps sticky quest-to-connection routes only until local EOF or result delivery.
   Local delivery never drains;

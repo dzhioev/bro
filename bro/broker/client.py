@@ -1,9 +1,9 @@
 """peer-side handle over one channel back to the host broker.
 
 Synchronous throughout — a peer is its own process with no event loop; only the
-host-side broker is async. `from_env()` resolves the channel from `BROKER_CHANNEL`
-and returns `None` when it is unset, so consumers (the `broker` CLI, the bro hook)
-are inert where there is no channel.
+host-side broker is async. `from_env()` resolves the client address from
+`BROKER_CHANNEL`, returns `None` when neither broker variable is set, and reports
+a failed session proxy when only `BROKER_UPSTREAM` remains.
 
 `request` and `call` are correlate-on-receive:
 they send a request, then read inbound messages until one names the quest opened by the request.
@@ -30,8 +30,8 @@ from typing import Any, Optional
 from bro.broker import brotocol
 from bro.broker.brotocol import Message, Tag
 from bro.broker.transport import ClientTransport, connect
+from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV, broxy_log_path
 
-CHANNEL_ENV = 'BROKER_CHANNEL'
 # the quest a launched peer answers, set beside CHANNEL_ENV by whatever
 # launches it (the host's spawner adapters, a manual summon's launch surface)
 QUEST_ENV = 'BROKER_QUEST'
@@ -45,9 +45,13 @@ class Client:
   @classmethod
   def from_env(cls) -> Optional['Client']:
     address = os.environ.get(CHANNEL_ENV)
-    if address is None:
+    if address is not None:
+      return cls(connect(address))
+    if os.environ.get(UPSTREAM_ENV) is None:
       return None
-    return cls(connect(address))
+    raise RuntimeError(
+      f'session proxy failed at launch; see the broxy log at {broxy_log_path(os.environ)}'
+    )
 
   def send(self, kind: str, args: dict[str, Any]) -> Message:
     """send a fresh request and return it — the id is minted client-side, so the

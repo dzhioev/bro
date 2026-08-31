@@ -12,7 +12,7 @@ connection would supersede the first on it), so the unlink decides a
 race — read as much as you like (`peek`) while preflighting, claim last, right
 before the session starts. The claim leaves a second record behind, under
 `claimed/<token>.json`: the workspace name the claiming launch runs the child
-in, which is how the broker attributes the manual peer (`ride/ride/peers.py`).
+in, which is how the peer-facts table fills the manual peer's workspace.
 The host discards both records when the summon ends (a denial, root teardown),
 so a stale token fails the launch loudly.
 """

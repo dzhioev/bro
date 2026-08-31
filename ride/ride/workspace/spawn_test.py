@@ -60,7 +60,7 @@ class TestBrokerLaunch:
     adapted = workspace_spawn._broker_launch(launch, channel, 'X-1')
     assert adapted.env == {
       'RIDE_BRO': 'dev',
-      'BROKER_CHANNEL': 'tcp://tk@host.docker.internal:7321',
+      'BROKER_UPSTREAM': 'tcp://tk@host.docker.internal:7321',
       'BROKER_QUEST': 'X-1',
     }
     assert adapted.extra_mounts == ('/existing:/mount',)
@@ -427,7 +427,7 @@ class TestProcessSpawner:
     assert await handle.wait() == 0
     env = json.loads(out.read_text())
     assert env['MARKER'] == 'x'
-    assert env['BROKER_CHANNEL'] == 'tcp://tk@127.0.0.1:7321'
+    assert env['BROKER_UPSTREAM'] == 'tcp://tk@127.0.0.1:7321'
     assert env['BROKER_QUEST'] == 'X-1'
     # a spawn is a pure function of its LaunchSpec: nothing ambient leaks in
     assert 'RIDE_AMBIENT_CANARY' not in env
@@ -569,7 +569,7 @@ class TestDockerSpawnerModes:
       assert isinstance(handle, workspace_spawn._AttachedRoot)
       assert handle.output_tail() == ''
       prepared = spawn_harness['prepared'][0]
-      assert prepared.env['BROKER_CHANNEL'] == 'tcp://tk@host.docker.internal:7321'
+      assert prepared.env['BROKER_UPSTREAM'] == 'tcp://tk@host.docker.internal:7321'
       assert spawn_harness['starts'] == [
         ['docker', 'start', '-a', '-i', '--detach-keys=ctrl-z', 'cid123']
       ]

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import credentials, log
+from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV
 from bro.launch.broxy import START_SESSION_BROXY_ENV
 from bro.llm.llm import LLMSpec
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_session_dir
@@ -218,7 +219,7 @@ def _summoned_env(
   summoner's channel, the quest the child answers (its token), and the
   summoned-child facts."""
   env = {
-    'BROKER_CHANNEL': address,
+    UPSTREAM_ENV: address,
     'BROKER_QUEST': summoned.token,
     SUMMONED_ENV: '1',
     MAY_SUMMON_ENV: encode_may_summon(summoned.may_summon),
@@ -401,11 +402,13 @@ def _host_session(
       launch_scope.may_summon,
       scoped,
       container_runtime,
+      bro=spec.bro,
       interactive=not spec.solo,
     )
   else:
     runner_env.pop(START_SESSION_BROXY_ENV, None)
-    runner_env.pop('BROKER_CHANNEL', None)
+    runner_env.pop(CHANNEL_ENV, None)
+    runner_env.pop(UPSTREAM_ENV, None)
     code = subprocess.run(command, cwd=str(worktree), env=runner_env).returncode
   workspace.record_session_end(code)
   return code

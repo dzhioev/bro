@@ -658,7 +658,7 @@ Host scoping is still a convenience rather than a security boundary, because the
 ### The broker channel
 
 Every session runs as the root peer of a **broker** (see `bro/broker/AGENTS.md`):
-the outer provisions a channel on the session's one listening port, points `BROKER_CHANNEL` at `tcp://<token>@<host>:<port>`, and supervises the session from the broker's event loop until it exits.
+the outer provisions a channel on the session's one listening port, points `BROKER_UPSTREAM` at `tcp://<token>@<host>:<port>`, and supervises the session from the broker's event loop until it exits.
 The token is the channel's whole credential
 — a port is reachable by every local process, so a connection is attributed to the channel whose token it opens with.
 The listener binds loopback plus, when the docker daemon runs on this host, the bridge gateway a container reaches back through (`ride/ride/spawn.py:broker_bind_hosts`);
@@ -668,13 +668,13 @@ The modes differ only in the spawner (`ride/ride/workspace/spawn.py`, composed b
 - container — the attached container launch (`ride/ride/root.py:_run_root_via_broker` + `DockerSpawner`), the address naming `host.docker.internal`, which every launch maps to the host gateway with `--add-host`;
 - host — the runner as a plain subprocess (`ride/ride/root.py:run_host_process_via_broker` + `ProcessSpawner`), the address naming loopback.
 
-The session's processes don't talk to that channel directly:
-a **broxy** (the peer-side broker proxy, `bro/broker/broxy.py`) sits in between, holding the one long-lived upstream connection and re-serving the channel on a loopback port of its own that `BROKER_CHANNEL` is rewritten to
-— so the session's short-lived clients (`broker` CLI calls, `RunLifecycle`, a backgrounded wait) multiplex over the single connection the host's supersede-on-accept semantics expect.
+The session's processes don't talk to that upstream directly:
+a **broxy** (the peer-side broker proxy, `bro/broker/broxy.py`) consumes `BROKER_UPSTREAM`, holds its one long-lived connection, and publishes its own loopback address as `BROKER_CHANNEL`.
+The session's short-lived clients (`broker` CLI calls, `RunLifecycle`, a backgrounded wait) therefore multiplex over the single connection the host's supersede-on-accept semantics expect.
 Client recovery reads the host journal through `query`;
 the broxy retains no result state.
-A set `BROKER_CHANNEL` always names a broxy
-— there is no direct-channel topology.
+`BROKER_CHANNEL` has one meaning everywhere:
+it is the address clients connect to, whether a broxy supplied it or a launcher explicitly chose a direct no-proxy topology.
 
 The lifecycle is one shared `broxy launch` sequence:
 it starts `serve` detached with output redirected to the requested log, reads back the ephemeral address `serve` publishes, gates on readiness, kills a failed serve, and prints the local address plus pid.
@@ -683,18 +683,17 @@ the upstream is the session's own host broker, which never comes back within a s
 — loudly, as a code bug to surface (`bro/broker/AGENTS.md` owns the policy).
 Two call sites supply their mode-specific paths and keep launch policy at the edge:
 
-- container — the entrypoint, for every broker-supervised container uniformly (claude sessions, bro-launcher hops, spawned children), from the pinned runtime:
-  log `/tmp/broxy.log`;
-- host — the session's inner process (`bro/launch/broxy.py:session_broxy`, requested by the outer launch through `BRO_START_SESSION_BROXY`):
-  log in a session tempdir, retaining the returned pid to stop the daemon on session exit.
+- container — the entrypoint, for every broker-supervised container uniformly (claude sessions, bro-launcher hops, spawned children), from the pinned runtime;
+- host — the session's inner process (`bro/launch/broxy.py:session_broxy`, requested by the outer launch through `BRO_START_SESSION_BROXY`), retaining the returned pid to stop the daemon on session exit.
 
+Both write `broxy.log` in the workspace's session directory.
 When `broxy launch` cannot run
 — missing from the session runtime or not ready within the gate
-— the call site warns and unsets `BROKER_CHANNEL`:
-the session gets no channel at all, the same shape as `BROKER_DISABLED`;
-the launch itself still proceeds
-— like `_broker_enabled`, the gate must never break a launch.
-A channel-less session's own summons fail immediately at the client, and a channel-less *summoned child* cannot report its result
+— the call site leaves `BROKER_UPSTREAM` set and `BROKER_CHANNEL` unset.
+The session launch still proceeds, but every attempted broker client raises `session proxy failed at launch` with that log path instead of silently behaving like a broker-less session.
+With both variables unset, no channel was intended:
+the substrate CLI stays inert, while summon and artifact surfaces report that no broker channel exists.
+A proxy-less *summoned child* cannot report its result
 — its exit surfaces to the summoner as the synthesized `result{failed, reason: exit}` with the output tail, and the child's trail as the fallback record.
 
 The live broker registers the reserved `ping` kind, so a session can verify its channel with `broker request ping '{}'`;
@@ -783,8 +782,9 @@ The registration is acknowledged with an `accepted` mark once the token is claim
 The summoner relays the token to the user, who launches the session at their own pace with `ride along --summoned <token> <target>`:
 an otherwise normal interactive session
 — container or `--host`, either harness, the user's own `--llm`/`--hold`/`--workspace`
-— except it starts no broker of its own;
-its `BROKER_CHANNEL` points at the summoner's provisioned channel, so it attaches as a regular summon peer, its own nested summons routing through the summoner's control with per-peer authorization.
+— except it starts no broker of its own.
+Its launcher puts the summoner's provisioned channel in `BROKER_UPSTREAM`, and the session broxy publishes the local `BROKER_CHANNEL` its processes use to attach as a regular summon peer.
+Its own nested summons therefore route through the summoner's control with per-peer authorization.
 The request fixes what the summoner authorized
 — the target bro, the prompt (delivered as the session's first message), the root session's repository attachment, the base (the request's `into` ref, or the summoner's workspace HEAD read at launch, like a spawned child's at its spawn),
 the child's resolved `may_summon`, and the request's credential grant/revoke seeds (the launch's own `--grant`/`--revoke` layer on top; `@bro` overrides are refused, since the control enforces the list it resolved at request time)
@@ -811,16 +811,21 @@ Root exit *detaches* an in-flight manual child rather than killing it
 The summoner's side is the ordinary detach flow:
 the token works with `summon check` / `summon list` / `summon watch`, showing `pending` until the user launches.
 
-Host side, the root's `SummonControl` (`ride/ride/summon_control.py`) validates each request and authorizes it against the requesting peer's own allow-list:
-the session root follows the launch-computed effective list, and a summoned child follows the list its own summon request resolved
-— its bro's static `may_summon` seeds under that request's `@bro` grant/revoke, resolved on the broker loop so a malformed or no-op override is denied outright.
-The host attributes each peer to the bro it spawned for it, so summons chain transitively wherever the seeds chain, and widening is always explicit and bounded by the summoner:
+Host side, `PeerFacts` (`ride/ride/peer_facts.py`) holds one row keyed by the quest a peer answers:
+workspace, bro, effective allow-list, credential-scope inputs (`grant`, `revoke`, `llm`, `harness`), and whether the child is manual.
+The journal's host-anchored quest seeds the root row;
+an authorized summon adds its child row before spawning, with the channel-named workspace filled at spawn or the claimed workspace filled for a manual child.
+Every requester resolves through one join
+— peer to answered quest through the dispatcher's worker binding, then quest to facts row
+— and depth is the journal ancestry length.
+`SummonControl` (`ride/ride/summon_control.py`) validates and authorizes each request against that row's allow-list.
+A child's list is its bro's static `may_summon` seeds under its request's `@bro` grant/revoke, resolved on the broker loop so a malformed or no-op override is denied outright.
+Summons chain transitively wherever the seeds chain, and widening is always explicit and bounded by the summoner:
 its own list never passes through
 — only what its request names
 — and it may only name bros it is itself allowed to summon, so authority only narrows down a chain.
-The credential half of the same flags is bounded the same way, against the summoner's own scoped set (the root's is what its launch hydrated, a summoned peer's is recomputed from its spawn record),
-and applied in the summon lowering against the child's computed scope, where a bad override fails the launch instead;
-both halves are recorded in the audit as the summoner issued them.
+The credential half of the same flags is bounded against the scope computed from the same row (the root row carries its launch-hydrated scope;
+a summoned peer's is recomputed from its recorded scope inputs) and applied in the summon lowering against the child's computed scope, where a bad override fails the launch instead.
 `harness` and `llm` answer to that same credential bound without naming a credential, since the driving loop they select contributes credentials of its own:
 what the request's pair adds on top of the target's default scope must be in the summoner's set too, so a bro-harness session cannot summon a claude child unless its own launch hydrated `claude_code`.
 Only that delta is bounded
@@ -829,14 +834,14 @@ Resolving the pair on the loop also settles the recipe:
 one the named harness cannot run is denied at the request rather than failing the spawn.
 A peer the control cannot attribute a bro to is denied, and a depth cap (the root sits at depth 0; a summon that would nest past depth 2 is denied) guards against seed cycles recursing through real containers.
 Denials reply immediately and land in the journal and audit as `denied` transitions (reason, quest id, summoner, and bounded request args).
-Each spawned child records `summoned_by` provenance:
-the requester's trail — a claude session root's from the current-trail pointer its recorder publishes (absent before transcript adoption: the child then records no pointer), a bro peer's from its lifecycle/spawn records
-— plus the summoning bro's own `tool_call` step id when the request carries one.
+Each spawned child records `summoned_by` provenance from the requester's current trail plus the summoning bro's own `tool_call` step id when the request carries one.
+Requester attribution has one shape in the audit: `{workspace, bro, trail_id?}`.
+The trail is read from that workspace's session pointer for every request because Claude segments move it, with the answered quest's journal `trail` mark as fallback.
 The authorized spawn goes through the composite spawner with the requesting peer as parent
 — so host-mode roots spawn docker children too, and a grandchild's lifecycle routes to the child that summoned it;
 root exit still tears down the whole tree.
 Every event lands a host log line and a durable audit row under `<runtime-root>/summon/<name>.jsonl`, keyed by the root workspace name.
-Each entry names its actual `summoner` — the root session, or the summoning child's target + trail id — plus target, bounded args, transition, trail id, and terminal outcome.
+Each entry names its actual `summoner` as `{workspace, bro, trail_id?}`, plus target, bounded args, transition, trail id, and terminal outcome.
 Live readers never read that audit back:
 check, list, watch, and the session-local statusLine projector query the caller-scoped in-memory journal over their own broker channel, so the same surfaces work at any summon depth.
 The scope begins with quests the caller requested and includes their descendants;
@@ -1095,17 +1100,19 @@ Wrappers and session daemons rely on a small set of env vars:
 - `RIDE_IN_CONTAINER=1` — set by the Dockerfile, marking a session running in an image this runtime built.
   Read by `bro/workspace/paths.py:trails_dir`, which then resolves to the container's fixed trails mount instead of a host runtime root.
   The nested-launch refusal deliberately reads the container probe instead (see "In-container launches").
-- `BROKER_CHANNEL` — the address of the session's broker channel, `tcp://<token>@<host>:<port>`;
-  when set, it always names a broxy.
-  Set at launch to the upstream channel that only the session's broxy talks to (`host.docker.internal` in a container, loopback on host),
-  then rewritten by the broxy launcher to the broxy's own loopback address before anything else inherits it
-  — or unset when the broxy cannot run (see "The broker channel").
+- `BROKER_UPSTREAM` — the host broker address supplied by a launcher, `tcp://<token>@<host>:<port>`.
+  Only the session broxy consumes it (`host.docker.internal` in a container, loopback on host), removing it once the local proxy is ready.
+  If proxy launch fails, it remains set while `BROKER_CHANNEL` stays unset, which makes `Client.from_env` raise with the session's `broxy.log` path.
+- `BROKER_CHANNEL` — the address broker clients connect to, with the same URI shape.
+  The broxy publishes its loopback address here after readiness;
+  a launcher that intentionally runs no broxy may publish a direct channel instead.
+  It is never used as upstream launch input or rewritten from one referent to another.
   It carries a credential, so it belongs in no log:
   `bro.broker.transports.tcp.redacted` is the form that goes in one.
-  Read by `bro.broker.client.Client.from_env` — the `broker` CLI and bro's `RunLifecycle` ride it
-  — and everything on it is inert when unset (`BROKER_DISABLED`, a broxy that could not run, or a workspace provisioned before broker existed).
+  Read by `bro.broker.client.Client.from_env` — the `broker` CLI and bro's `RunLifecycle` ride it.
+  Both broker variables unset means no channel was intended.
 - `BROKER_DISABLED` — launcher-side presence-checked kill-switch:
-  the session gets no channel and no `BROKER_CHANNEL` (see "The broker channel").
+  the session gets neither broker variable (see "The broker channel").
   Checked before any broker import (`ride/ride/workspace/containers.py:broker_enabled`).
 - Plus the standard `GIT_AUTHOR_*` / `GIT_COMMITTER_*`
   — explicitly forwarded into the container via `_DOCKER_FORWARD_ENV`.
