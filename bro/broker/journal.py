@@ -243,7 +243,7 @@ class Journal:
     caller_quest = workers.get(caller)
     if caller_quest is None:
       return False
-    current: Optional[str] = record.quest_id
+    current = record.parent
     while current is not None:
       if current == caller_quest:
         return True

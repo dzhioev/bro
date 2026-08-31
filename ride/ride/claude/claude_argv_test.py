@@ -10,6 +10,7 @@ import ride.claude.claude_argv as ride_claude_argv
 from bro.llm.llms import claude_code
 from ride.claude.assembly import bro_servers, persona_servers
 from ride.claude.mcp import MCPEndpoint
+from ride.claude.statusline import statusline_command
 from ride.session_test import _spec as _session_spec
 
 _ENDPOINT = MCPEndpoint(port=1234, token='tok')
@@ -124,7 +125,7 @@ class TestRideSessionLaunch:
   def test_status_line_lands_in_settings(self):
     status_line = _settings(_ride_session_launch(_spec(), claude_args=[]).argv)['statusLine']
     assert status_line['type'] == 'command'
-    assert status_line['command'] == f'{shlex.quote(sys.executable)} -m ride.claude.statusline'
+    assert status_line['command'] == statusline_command()
 
   def test_effort_injected(self):
     argv = _ride_session_launch(_spec(llm='::xhigh'), claude_args=[]).argv
@@ -231,7 +232,7 @@ class TestRawLaunch:
 
   def test_status_line_lands_in_settings(self):
     status_line = _settings(self._launch().argv)['statusLine']
-    assert status_line['command'] == f'{shlex.quote(sys.executable)} -m ride.claude.statusline'
+    assert status_line['command'] == statusline_command()
 
   def test_system_prompt_is_bros_claude_flavor(self):
     from bro.registry import create_bro

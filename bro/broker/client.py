@@ -131,6 +131,12 @@ class Client:
     self, request: Message, deadline: Optional[float], timeout: Optional[float]
   ) -> Message:
     """read until a message correlates to `request`, setting uncorrelated arrivals aside."""
+    buffered = next(
+      (message for message in self._set_aside if message.quest_id == request.id), None
+    )
+    if buffered is not None:
+      self._set_aside.remove(buffered)
+      return buffered
     while True:
       remaining = None
       if deadline is not None:
@@ -145,8 +151,6 @@ class Client:
         raise ConnectionError(f'broker channel closed awaiting reply to {request.kind!r} request')
       if message.quest_id == request.id:
         return message
-      # a message set aside here can never correlate to a future request (its id
-      # does not exist yet), so this loop never has to scan the set-aside queue
       self._set_aside.append(message)
 
   def receive(self, timeout: Optional[float]) -> Optional[Message]:

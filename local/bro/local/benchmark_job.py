@@ -18,11 +18,10 @@ root (the same spelling inside a container session and on the host), `timeout`
 the seconds before the host kills the run, and `upload` its Harbor Hub visibility
 or `none`. Only the session root may start
 jobs; everything else is denied. The `benchmark-job` CLI is the session-side
-client: `start` sends the request (`--detach` prints the request id and exits —
-the natural mode for a multi-hour run), and `check` reattaches by request id
-over the broxy's retention — a non-marking peek by default, `--wait` to block
-and collect, `--last-seen` for the cursor re-read of an already-collected
-result. Either way it prints the run's ref and, for an uploaded run, its Harbor
+client: `start` sends the request (`--detach` prints the quest id after host
+acceptance — the natural mode for a multi-hour run), and `check` reads the
+journal by quest id, once by default or in a repeatable long-poll loop with
+`--wait`. Either way it prints the run's ref and, for an uploaded run, its Harbor
 Hub link; `artifact get` turns the ref into a readable path.
 """
 
@@ -41,6 +40,7 @@ from bro.broker.dispatcher import Dispatcher, RequestHandler
 from bro.broker.job import OUTPUT_DIRECTORY, CommandJob
 from bro.broker.runtime import Peer
 from bro.kinds import KindContext, tree_path
+from bro.summon import ACCEPT_TIMEOUT, READ_WAIT_SECONDS
 
 __cli_name__ = 'benchmark-job'
 
@@ -302,49 +302,89 @@ def _start(config: str, timeout: Optional[float], upload: str, detach: bool) -> 
   with client:
     request = client.send(BENCHMARK, _job_args(config, timeout, upload))
     log.info('benchmark job request %s', request.quest_id)
+    try:
+      first = client.await_any(request, ACCEPT_TIMEOUT)
+    except (TimeoutError, ConnectionError) as error:
+      log.error('benchmark job acceptance failed: %s', error)
+      return 1
+    if first.type == Tag.RESULT:
+      return _relay(lambda: _interpret_result(first))
+    if first.type != Tag.MARK or first.payload.get('transition') != 'accepted':
+      log.error('unexpected first benchmark job reply: %s', first.payload)
+      return 1
     print(request.quest_id)
     return 0
 
 
-def _collect(request_id: str, timeout: Optional[float]) -> str:
-  from bro.broker.broxy import CLAIM_KIND
+def _query_job(client: Client, request_id: str, *, wait_seconds: float = 0) -> dict[str, Any]:
+  args: dict[str, Any] = {'id': request_id}
+  if wait_seconds > 0:
+    args['wait'] = wait_seconds
+  try:
+    result = client.call(
+      'query',
+      args,
+      max(ACCEPT_TIMEOUT, wait_seconds + ACCEPT_TIMEOUT),
+    )
+  except (TimeoutError, ConnectionError) as error:
+    raise JobError(f'benchmark journal query failed: {error}') from None
+  payload = result.payload
+  if payload.get('outcome') != 'ok':
+    raise JobError(str(payload.get('error', payload)))
+  value = payload.get('value')
+  quest = value.get('quest') if isinstance(value, dict) else None
+  if not isinstance(quest, dict):
+    raise JobError(f'query for {request_id!r} returned no quest record')
+  if quest.get('kind') != BENCHMARK:
+    raise JobError(f'quest {request_id!r} is not a benchmark job')
+  return quest
 
+
+def _queried_ref(quest: dict[str, Any]) -> Optional[str]:
+  state = quest.get('state')
+  if state in ('accepted', 'started'):
+    return None
+  request_id = quest.get('id')
+  if state == 'evicted' or quest.get('result_evicted') is True:
+    raise JobError(f'benchmark job {request_id!r} result is no longer retained')
+  if state not in ('ended', 'denied'):
+    raise JobError(f'benchmark job {request_id!r} has unknown state {state!r}')
+  payload = quest.get('result')
+  if not isinstance(payload, dict):
+    raise JobError(f'benchmark job {request_id!r} has no retained result')
+  return _interpret_result(Message(type=Tag.RESULT, quest=str(request_id), payload=payload))
+
+
+def _wait_for_job(request_id: str, timeout: Optional[float]) -> str:
+  if timeout is not None and timeout <= 0:
+    raise JobError('benchmark query wait must be positive')
+  wait_seconds = min(
+    timeout if timeout is not None else READ_WAIT_SECONDS,
+    READ_WAIT_SECONDS,
+  )
   with _open_client() as client:
-    claim = client.send(CLAIM_KIND, {'id': request_id})
-    return _await_outcome(client, claim, timeout if timeout is not None else DEFAULT_TIMEOUT)
+    while True:
+      ref = _queried_ref(_query_job(client, request_id, wait_seconds=wait_seconds))
+      if ref is not None:
+        return ref
 
 
-def _check(request_id: str, wait: bool, timeout: Optional[float], last_seen: Optional[int]) -> int:
-  from bro.broker.broxy import CheckDenied, check
-
-  if wait and last_seen is not None:
-    log.error('--last-seen is a cursor read; it does not combine with --wait')
-    return 1
+def _check(request_id: str, wait: bool, timeout: Optional[float]) -> int:
   if timeout is not None and not wait:
-    log.error('--timeout only bounds a --wait; a plain check never blocks')
+    log.error('--timeout only sets the long-poll interval for --wait')
     return 1
   if wait:
-    return _relay(lambda: _collect(request_id, timeout))
+    return _relay(lambda: _wait_for_job(request_id, timeout))
   try:
     with _open_client() as client:
-      report = check(client, request_id, last_seen=last_seen)
-  except (JobError, CheckDenied, TimeoutError, ConnectionError) as e:
-    log.error('%s', e)
+      ref = _queried_ref(_query_job(client, request_id))
+  except JobError as error:
+    log.error('%s', error)
     return 1
-  result = next((m for m in report.conversation if m.type == Tag.RESULT), None)
-  if result is None:
-    if report.state == 'pending':
-      log.info('benchmark job still running')
-      return PENDING_EXIT_CODE
-    through = f' (read through seq {report.seq})' if report.seq is not None else ''
-    log.info(
-      'benchmark job result was already read%s; re-read the conversation with '
-      '`benchmark-job check %s --last-seen 0`',
-      through,
-      request_id,
-    )
-    return 1
-  return _relay(lambda: _interpret_result(result))
+  if ref is None:
+    log.info('benchmark job still running')
+    return PENDING_EXIT_CODE
+  return _relay(lambda: ref)
 
 
 def main(argv: list[str]) -> Optional[int]:
@@ -353,28 +393,20 @@ def main(argv: list[str]) -> Optional[int]:
       prog='benchmark-job check',
       description="check on a benchmark job by its request id: print its run's "
       f'artifact ref if the result is in, otherwise report `still running` and exit '
-      f'{PENDING_EXIT_CODE} without blocking; --wait blocks and collects instead',
+      f'{PENDING_EXIT_CODE} without blocking; --wait long-polls the same journal record',
     )
     parser.add_argument('request_id', help='request id printed by benchmark-job start')
     parser.add_argument(
       '--wait',
       action='store_true',
-      help='block until the result arrives and consume it; errors right away when '
-      'another process is already waiting on the id (a plain check leaves the '
-      'result in place and disturbs no concurrent waiter)',
+      help='block until the retained terminal result arrives; concurrent and later '
+      'reads are safe because journal queries are non-destructive',
     )
     parser.add_argument(
       '--timeout',
       type=float,
       metavar='SECONDS',
-      help='with --wait: seconds the job was given (bounds the wait; default: the job default)',
-    )
-    parser.add_argument(
-      '--last-seen',
-      type=int,
-      help='cursor read: replay the conversation from this sequence (0 = the '
-      'start) regardless of read status — recovers a result that was already '
-      'read by a dead wait; not combinable with --wait',
+      help=f'with --wait: maximum seconds per journal long-poll (default: {READ_WAIT_SECONDS:.0f})',
     )
     return _check(**parser.parse(argv[1:]))
   if len(argv) > 1 and argv[1] == 'start':
@@ -403,7 +435,7 @@ def main(argv: list[str]) -> Optional[int]:
     parser.add_argument(
       '--detach',
       action='store_true',
-      help='print the request id and exit after sending; collect it with benchmark-job check',
+      help='print the accepted quest id and exit; read its result with benchmark-job check',
     )
     return _start(**parser.parse(argv[1:]))
   log.error('usage: benchmark-job start|check …; each verb takes --help')

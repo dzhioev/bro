@@ -128,23 +128,13 @@ async def test_composed_prompts_leak_no_directives(name):
     assert _DIRECTIVE_RE.search(prompt) is None
 
 
-class TestSummonRecoveryFork:
-  # the summon description's lost-request-id recovery path must match the
-  # mount: `summon_list` exists only when the session tracks summon status
-  def _summon_description(self, bro: BaseBro) -> str:
+class TestSummonRecovery:
+  def test_channel_mounts_query_backed_list_and_renders_recovery(self, monkeypatch):
+    monkeypatch.setenv('BROKER_CHANNEL', '/tmp/test-broker.sock')
+    bro = create_bro('bro')
     server = next(server for server in _servers(bro, wire='mcp') if server.namespace == 'bro')
     by_name = {tool.name: tool for tool in __import__('asyncio').run(server.list_tools())}
-    assert 'summon_list' in (server.tool_universe or ())
-    return by_name['summon'].description, 'summon_list' in by_name  # type: ignore[return-value]
 
-  def test_recovery_names_summon_list_only_when_mounted(self, monkeypatch):
-    monkeypatch.setenv('BROKER_CHANNEL', '/tmp/test-broker.sock')
-    monkeypatch.delenv('RIDE_SUMMON_STATUS', raising=False)
-    description, mounted = self._summon_description(create_bro('bro'))
-    assert not mounted
-    assert 'summon_list' not in description
-
-    monkeypatch.setenv('RIDE_SUMMON_STATUS', '/tmp/test-summon-status.json')
-    description, mounted = self._summon_description(create_bro('bro'))
-    assert mounted
-    assert 'recover the request id with summon_list' in description
+    assert {'summon', 'summon_check', 'summon_list'} <= set(by_name)
+    assert 'recover the quest id with summon_list' in by_name['summon'].description
+    assert 'last_seen' not in by_name['summon_check'].description

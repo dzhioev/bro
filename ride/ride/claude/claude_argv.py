@@ -21,6 +21,7 @@ from bro.base import credentials
 from ride.claude.assembly import bro_servers, persona_servers
 from ride.claude.harness import llm_spec, options
 from ride.claude.mcp import MCPEndpoint, http_mcp_config
+from ride.claude.statusline import REFRESH_SECONDS, statusline_command
 from ride.claude.system_prompt import session_append_prompt
 
 if TYPE_CHECKING:
@@ -69,10 +70,6 @@ class ClaudeLaunch:
   system_prompt: str
 
 
-# claude's statusLine refresh floor; a smaller value is silently dropped, leaving
-# only its event-driven renders
-_STATUSLINE_REFRESH_SECONDS = 1
-
 # claude's built-in attribution, all off — an empty string is its "omit" value
 # for the commit trailer and the pull-request line.
 _ATTRIBUTION = {'commit': '', 'pr': '', 'sessionUrl': False}
@@ -120,8 +117,8 @@ def build_claude_launch(
     'fastMode': llm.fast_mode,
     'statusLine': {
       'type': 'command',
-      'command': _settings_command('ride.claude.statusline'),
-      'refreshInterval': _STATUSLINE_REFRESH_SECONDS,
+      'command': statusline_command(),
+      'refreshInterval': REFRESH_SECONDS,
     },
     'attribution': _ATTRIBUTION,
   }
