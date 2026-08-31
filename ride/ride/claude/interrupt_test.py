@@ -94,8 +94,23 @@ class TestRunInteractive:
       f'[ "$key" = 03 ] && echo interrupted > {seen_key}\n' + _IDLE,
     )
     with _session_terminal():
-      assert interrupt.run_interactive(argv, os.environ, tmp_path / 'projects') == 9
+      run = interrupt.run_interactive(argv, os.environ, tmp_path / 'projects')
+    assert (run.code, run.stopped) == (9, True)
     assert seen_key.read_text() == 'interrupted\n'
+
+  def test_a_zero_exit_stop_remains_distinguishable(self, tmp_path, monkeypatch):
+    monkeypatch.setattr(interrupt, '_FLUSH_SETTLE_SECONDS', 0.05)
+    argv = _fake_claude(
+      tmp_path,
+      'stty raw -echo\n'
+      "trap 'exit 0' INT\n"
+      'sleep 0.2\n'
+      'kill -TERM $PPID\n'
+      'dd bs=1 count=1 >/dev/null 2>&1\n' + _IDLE,
+    )
+    with _session_terminal():
+      run = interrupt.run_interactive(argv, os.environ, tmp_path / 'projects')
+    assert (run.code, run.stopped) == (0, True)
 
   def test_keystrokes_and_output_cross_the_proxy(self, tmp_path):
     argv = _fake_claude(
@@ -115,8 +130,9 @@ class TestRunInteractive:
 
       driver = threading.Thread(target=_drive)
       driver.start()
-      assert interrupt.run_interactive(argv, os.environ, tmp_path / 'projects') == 0
+      run = interrupt.run_interactive(argv, os.environ, tmp_path / 'projects')
       driver.join()
+    assert (run.code, run.stopped) == (0, False)
     assert len(echoed) == 1
 
   def test_the_pty_is_sized_like_the_session_terminal(self, tmp_path):
@@ -124,7 +140,8 @@ class TestRunInteractive:
     argv = _fake_claude(tmp_path, f'stty size > {size}\n')
     with _session_terminal() as terminal:
       fcntl.ioctl(terminal, termios.TIOCSWINSZ, struct.pack('HHHH', 31, 101, 0, 0))
-      assert interrupt.run_interactive(argv, os.environ, tmp_path / 'projects') == 0
+      run = interrupt.run_interactive(argv, os.environ, tmp_path / 'projects')
+    assert (run.code, run.stopped) == (0, False)
     assert size.read_text().split() == ['31', '101']
 
 

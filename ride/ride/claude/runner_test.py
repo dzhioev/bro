@@ -37,7 +37,10 @@ class _Harness:
         'ride.claude.runner.build_claude_launch',
         return_value=ClaudeLaunch(argv=['built'], system_prompt='sp'),
       ),
-      patch('ride.claude.runner._run_claude', return_value=0),
+      patch(
+        'ride.claude.runner._run_claude',
+        return_value=ride_runner.InteractiveRun(0, stopped=False),
+      ),
       patch('ride.claude.runner.start_session_recorder'),
       patch('ride.claude.runner.apply_claude_auth'),
       patch('bro.launch.broxy._start_session_broxy', return_value=self.broxy),
@@ -198,7 +201,7 @@ class TestRunInPlace:
   def test_claude_exit_code_propagates(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      h.run_claude.return_value = 42
+      h.run_claude.return_value = ride_runner.InteractiveRun(42, stopped=False)
       assert ride_runner.run_in_place(_spec()) == 42
 
   def test_ride_session_applies_auth_with_warning(self, monkeypatch, tmp_path):
@@ -272,6 +275,54 @@ class _RecordingChannel:
 
   def close(self) -> None:
     self._events.append(('close',))
+
+
+class TestRunClaudeRootSolo:
+  def test_clean_exit_reports_success_without_replacing_the_streamed_reply(
+    self, monkeypatch, tmp_path
+  ):
+    events = []
+
+    class FakeChannel:
+      @classmethod
+      def from_env(cls):
+        return _RecordingChannel(events)
+
+    session = tmp_path / 'session'
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(session))
+    trail_pointer.write(session / trail_pointer.FILENAME, 't-root')
+    monkeypatch.setattr(ride_runner, 'RunLifecycle', FakeChannel)
+    run_claude = MagicMock(return_value=ride_runner.InteractiveRun(0, stopped=False))
+    monkeypatch.setattr(ride_runner, '_run_claude', run_claude)
+    transcripts = tmp_path / 'projects'
+
+    assert ride_runner._run_claude_root_solo(['built'], {'ENV': 'yes'}, transcripts) == 0
+    assert run_claude.call_args.args == (['built'], {'ENV': 'yes'}, transcripts)
+    assert events == [
+      ('trail', 't-root'),
+      ('close',),
+      ('completed', None, 'ok', 't-root'),
+      ('close',),
+    ]
+
+  def test_zero_exit_stop_emits_no_terminal(self, monkeypatch, tmp_path):
+    events = []
+
+    class FakeChannel:
+      @classmethod
+      def from_env(cls):
+        events.append('opened')
+        return _RecordingChannel(events)
+
+    monkeypatch.setattr(ride_runner, 'RunLifecycle', FakeChannel)
+    monkeypatch.setattr(
+      ride_runner,
+      '_run_claude',
+      MagicMock(return_value=ride_runner.InteractiveRun(0, stopped=True)),
+    )
+
+    assert ride_runner._run_claude_root_solo([], {}, tmp_path / 'projects') == 0
+    assert events == []
 
 
 class TestRunClaudeSummoned:
@@ -366,9 +417,9 @@ class TestRunClaudeSummonedInteractive:
     monkeypatch.setattr(ride_runner, '_TRAIL_POLL_SECONDS', 0.05)
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-manual')
 
-    def _linger(*_arguments) -> int:
+    def _linger(*_arguments) -> ride_runner.InteractiveRun:
       time.sleep(0.4)
-      return 0
+      return ride_runner.InteractiveRun(0, stopped=False)
 
     monkeypatch.setattr(ride_runner, 'run_interactive', _linger)
     transcripts = tmp_path / 'projects'
@@ -396,16 +447,26 @@ class TestRunClaudeSummonedInteractive:
     return session
 
 
-class TestSummonedSession:
+class TestSoloSession:
+  def test_a_root_routes_to_the_lifecycle_runner(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as harness:
+      with patch('ride.claude.runner._run_claude_root_solo', return_value=5) as solo:
+        assert ride_runner.run_in_place(_spec(solo=True)) == 5
+      solo.assert_called_once()
+      harness.run_claude.assert_not_called()
+
   def test_a_summoned_child_routes_to_the_lifecycle_runner(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      h.env['RIDE_SUMMONED'] = '1'
-      with patch('ride.claude.runner._run_claude_summoned', return_value=5) as summoned:
+    with _Harness(tmp_path) as harness:
+      harness.env['RIDE_SUMMONED'] = '1'
+      with patch('ride.claude.runner._run_claude_summoned', return_value=5) as solo:
         assert ride_runner.run_in_place(_spec(solo=True)) == 5
-      summoned.assert_called_once()
-      h.run_claude.assert_not_called()
+      solo.assert_called_once()
+      harness.run_claude.assert_not_called()
 
+
+class TestSummonedSession:
   def test_a_summoned_along_session_routes_to_the_interactive_runner(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:

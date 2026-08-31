@@ -258,8 +258,9 @@ async def test_spawned_quest_marks_lifecycle_and_routes_only_its_worker():
   assert dispatcher.journal.records['work'].result == {'outcome': 'ok', 'value': 'done'}
   assert 'work' not in dispatcher.live
   assert runtime.handle is not None
-  runtime.handle.exit.set_result(0)
+  runtime.handle.exit.set_result(7)
   await _settle()
+  assert dispatcher.journal.records['work'].outcome == 'ok'
   assert [message.type for _, message in runtime.sent] == ['mark', 'mark', 'mark', 'result']
 
 

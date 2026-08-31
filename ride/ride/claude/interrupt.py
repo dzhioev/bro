@@ -59,6 +59,14 @@ _EXIT_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
+class InteractiveRun:
+  """a finished interactive claude run and whether an external stop ended it."""
+
+  code: int
+  stopped: bool
+
+
+@dataclass(frozen=True)
 class PrintedRun:
   """a finished print-mode claude run: its exit code, the reply it printed, and
   whether a stop request rather than the agent's own completion ended it."""
@@ -76,12 +84,14 @@ def run_printing(argv: list[str], env: Mapping[str, str]) -> PrintedRun:
   return PrintedRun(process.returncode, output, stopped.is_set())
 
 
-def run_interactive(argv: list[str], env: Mapping[str, str], transcripts: Path) -> int:
-  """run claude's TUI on a pty proxying the session's terminal and return its
-  exit code. `transcripts` is the projects dir the interrupted turn lands in."""
+def run_interactive(argv: list[str], env: Mapping[str, str], transcripts: Path) -> InteractiveRun:
+  """run claude's TUI on a pty proxying the session's terminal.
+
+  `transcripts` is the projects dir the interrupted turn lands in."""
   with _terminal_run(argv, env) as run:
-    with stopped_on_sigterm(lambda: _interrupt_interactive(run, transcripts)):
-      return run.process.wait()
+    with stopped_on_sigterm(lambda: _interrupt_interactive(run, transcripts)) as stopped:
+      code = run.process.wait()
+  return InteractiveRun(code, stopped.is_set())
 
 
 def _interrupt_printing(process: subprocess.Popen) -> None:
