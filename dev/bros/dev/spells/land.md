@@ -12,7 +12,7 @@ Also covers landing without a pull request
 — a repo that takes changes straight onto its target branch:
 the rebase-and-push one-liner, and the CI dispatch that stands in for the checks no PR is there to run.
 
-version: 5.1.0
+version: 5.2.0
 ---
 
 # land
@@ -49,14 +49,14 @@ If they still read as working commits
 — the branch never went through [[run pr]]'s fold step, and merging would put that noise on `<base>`.
 Fold it now per that step and force-push, then wait for the approval the push costs where the repo requires the last push to be approved.
 
-## Step 2 — merge: run `land-pr`
+## Step 2 — merge: run `land-pr`{{when #may_summon contains eyebro}}
 
 Where an eyebro reviewed this change, its verdict gates the merge before anything else does.
 That gate is this session's, not `land-pr`'s:
 only the session that summoned the reviewer knows it did, so [[run pr]] carries the verdict back as the summon's result and nothing on GitHub records the delegation.
 A reviewer that ran and did not approve blocks the merge whatever `reviewDecision` says
 — stop and ask where questions reach the user, `raise` when unattended.
-A reviewer that never ran at all (no grant, or a summon denied at launch) leaves the merge to the gate below.
+A reviewer that never ran at all (no grant, or a summon denied at launch) leaves the merge to the gate below.{{end}}
 
 ```bash
 land-pr

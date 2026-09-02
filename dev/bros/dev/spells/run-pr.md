@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 7.1.0
+version: 7.2.0
 ---
 
 # run-pr
@@ -79,12 +79,12 @@ Restore the state that session had, reconcile what happened while nobody watched
    Treat as actionable any repo-owner feedback per step 15's rules that has no later reply from the PR author and no later commit addressing it;
    handle each per step 15.
    If the latest owner review is APPROVED, nothing actionable is pending, and `reviewDecision` is `APPROVED` or `null`, chain straight into [[land]]
-   — no watcher needed.
+   — no watcher needed.{{when #may_summon contains eyebro}}
    A reviewer's verdict does not survive the session that summoned it, and the PR is no substitute:
    the request id `bro::summon_check` needs died with that session, and an approval sitting on the PR says a review approved, not that the reviewer you delegated to did
    — on a public repository any account can leave one.
    Summon a reviewer again and read the answer off that summon.
-   A child that finds the head already approved reconciles it as a completed review and returns saying so without posting again, which is both the verdict you need and the reason waiting on the watcher here would wait forever.
+   A child that finds the head already approved reconciles it as a completed review and returns saying so without posting again, which is both the verdict you need and the reason waiting on the watcher here would wait forever.{{end}}
    Any other `reviewDecision` is step 15's base gate reached with no event to carry it, and step 15's answers apply:
    a `REVIEW_REQUIRED` leaves the PR owed a review its base counts, and a `CHANGES_REQUESTED` leaves a standing review asking for work
    — resume watching and settle it rather than landing.
@@ -544,7 +544,7 @@ Two gates stand between this event and the merge.
 Read both before you touch the watcher:
 stopping it is what you would have to undo, and a fresh `poll-pr` baselines every existing event as seen.
 
-**The reviewer's verdict.**
+**The reviewer's verdict.**{{iff #may_summon contains eyebro}}
 With no eyebro summoned this event is it.
 Where you did summon one, its own answer is the verdict:
 `bro::summon_check` on the request id, without waiting
@@ -555,13 +555,14 @@ An answer that is not an approval
 report it and stop where questions reach the user, `raise` when unattended.
 Never read the PR's own approval as the missing verdict.
 An approval you already read covers the head it was given for, so a later review event on that same head calls for no second read
-— `bro::summon_check` is repeatable and returns the host-retained approval again.
+— `bro::summon_check` is repeatable and returns the host-retained approval again.{{else}}
+This event is it.{{end}}
 
 **The base's gate**, in this event's `review_decision`.
 `APPROVED` or `null` clears it.
 `REVIEW_REQUIRED` does not, and nothing waives it:
-the review that just landed came from an account the base's rules give no standing to
-— an eyebro posting under an app identity is the usual one
+the review that just landed came from an account the base's rules give no standing to{{when #may_summon contains eyebro}}
+— an eyebro posting under an app identity is the usual one{{end}}
 — so a review from an account they do count is still owed.
 `land-pr` refuses on this same field, so reaching for it here buys an error rather than an answer.
 **Leave the watcher running** and ask the user for that review, naming whose approval did not count and what else is clear (the reviewer's verdict, the checks);

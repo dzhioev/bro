@@ -76,10 +76,10 @@ def test_development_spells_render_for_every_surface():
             )
 
 
-def test_run_pr_hands_review_to_a_granted_eyebro(monkeypatch):
+def test_review_delegation_renders_only_for_a_granted_eyebro(monkeypatch):
   bro = _TrackerDev()
-  solo = bro.get_spell_body('run-pr', harness='claude', wire='mcp')
-  assert 'Hand the review to the eyebro' not in solo
+  assert 'summon' not in bro.get_spell_body('run-pr', harness='claude', wire='mcp').lower()
+  assert 'eyebro' not in bro.get_spell_body('land', harness='claude', wire='mcp')
   monkeypatch.setenv(MAY_SUMMON_ENV, 'eyebro')
-  granted = bro.get_spell_body('run-pr', harness='claude', wire='mcp')
-  assert 'Hand the review to the eyebro' in granted
+  assert 'eyebro' in bro.get_spell_body('run-pr', harness='claude', wire='mcp')
+  assert 'eyebro' in bro.get_spell_body('land', harness='claude', wire='mcp')
