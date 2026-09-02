@@ -11,13 +11,17 @@ from typing import ClassVar, Optional, Self
 
 import bro.llm.llm as llm_llm
 
-DEFAULT_MODEL = 'claude-opus-5'
+DEFAULT_MODEL = 'fable'
 
-# `--model` short names for this provider's models.
+# `--model` short names for this provider's models. `fable` is not a model id
+# but Claude Code's own family alias, which it resolves to whichever model it
+# currently defaults that family to — so it stands for itself.
 MODELS: dict[str, str] = {
   'opus5': 'claude-opus-5',
   'sonnet5': 'claude-sonnet-5',
+  'fable': 'fable',
   'fable5': 'claude-fable-5',
+  'fable51': 'claude-fable-5-1',
   'haiku45': 'claude-haiku-4-5-20251001',
 }
 
