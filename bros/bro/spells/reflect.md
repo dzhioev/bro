@@ -10,7 +10,7 @@ traces each systemic finding to the durable surface that owns it
 — a spell, the bro's toolset, the bro's system prompt or shared prompt text, a doc
 — and drafts concrete edit proposals.
 After presenting the findings it suggests a delivery per proposal:
-file it as a task that lands through its own session, or fix it in place when the change is small.
+fix it in place, or file it as a task when the surface is out of reach or the fix is substantial.
 
 parameters: {"incident?": "the situation or incident to reflect on instead of the whole current session"}
 version: 1.0.2
@@ -24,9 +24,9 @@ Reflection mines what happened for lessons, traces each lesson to the surface th
 the bro's toolset,
 its system prompt,
 a doc — and drafts the edits as proposals.
-Each accepted proposal is either filed as a task
-— landing through that task's own session
-— or, when the change is small, fixed in place.
+Each accepted proposal is either fixed in place
+— landing through this session's own pull request
+— or filed as a task that lands through a session of its own.
 
 ## Scope the material
 
@@ -119,8 +119,9 @@ why it would recur,
 the target surface,
 the drafted edit.
 Then suggest a delivery per proposal:
-file it as a task, or fix it in place when the change is small
-— a task-routed edit gets its own review and session, so prefer the task for anything bigger.
+fix it in place when this session can edit the surface and land the edit through [[run pr]]
+— the PR review is the review, so text edits and small code fixes need no task;
+file it as a task when the surface is beyond this session's reach, the fix is substantial design or code work, or the user wants it deferred.
 
 To file:
 with task tools mounted, create one task per accepted proposal carrying the drafted edit in its body, plus the provenance a fixing session needs to revisit the material when it can be identified
@@ -128,4 +129,4 @@ with task tools mounted, create one task per accepted proposal carrying the draf
 the session facts the `banner` tool reports (session name, shell command).
 Without task tools, hand the user the proposal text to file wherever their tracker lives.
 To fix in place the session must be able to edit the surface
-— apply the drafted edit and verify it like any other change.
+— apply the drafted edit and verify it like any other change, and land it per [[run pr]].
