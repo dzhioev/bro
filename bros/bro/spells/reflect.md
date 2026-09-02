@@ -127,6 +127,10 @@ To file:
 with task tools mounted, create one task per accepted proposal carrying the drafted edit in its body, plus the provenance a fixing session needs to revisit the material when it can be identified
 — the trail id of the reflected run,
 the session facts the `banner` tool reports (session name, shell command).
+The task goes to the tracker of the repository owning the surface:
+the mounted task tools reach the current project's tracker only,
+so a proposal against another repository's surface files through that repository's own tracker (`gh issue create --repo <owner>/<name>`),
+or falls back to handing the user the text.
 Without task tools, hand the user the proposal text to file wherever their tracker lives.
 To fix in place the session must be able to edit the surface
 — apply the drafted edit and verify it like any other change, and land it per [[run pr]].
