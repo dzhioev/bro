@@ -12,8 +12,8 @@ traces each systemic finding to the durable surface that owns it
 After presenting the findings it suggests a delivery per proposal:
 fix it in place, or file it as a task when the surface is out of reach or the fix is substantial.
 
-parameters: {"incident?": "the situation or incident to reflect on instead of the whole current session"}
-version: 1.0.2
+parameters: {"material?": "the situation or run to reflect on instead of the whole current session"}
+version: 2.0.0
 ---
 
 # Reflect
@@ -31,9 +31,11 @@ Each accepted proposal is either fixed in place
 ## Scope the material
 
 The default material is the whole current session, first user message to now.
-An `incident` argument (in the appended `# Arguments` section) shifts the focus to that situation instead
+A `material` argument (in the appended `# Arguments` section) replaces it with that situation
 — gather what this session already knows about it and ask the user for the parts it doesn't.
-When the incident lives in another bro's recorded run and this session can shell out, `rewind show <trail-id>` replays its trace.
+When it lives in another bro's recorded run and this session can shell out, `rewind show <trail-id>` replays its trace.
+A run named by description rather than id ("the last assistant session") is located with `rewind list` and its filters (`--bro`, `--since`);
+when more than one plausibly matches, confirm the pick before mining.
 
 ## Find the friction
 
