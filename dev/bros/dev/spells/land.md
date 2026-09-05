@@ -69,8 +69,11 @@ One shot, in order:
    The review half of that is GitHub's own verdict and nothing else:
    changes requested and a review the base requires both refuse, and a base whose rules ask for no review reports none, which `land-pr` merges.
 2. Waits for the PR's status checks to conclude (up to `--wait-checks` seconds, default 480) and refuses to merge while any is pending or failed.
-   A head no check reported on at all waits the same way and is refused the same way:
-   what an empty rollup says is that nothing verified the commits about to land, which is a reason to hold, not a repo without CI.
+   A head no check reported on at all is read off GitHub's merge state:
+   where GitHub expects no check of it
+   — the shape of a repository without CI
+   — the head merges at once, with a warning on stderr to relay;
+   where GitHub holds the merge for a check that never reported, the head waits and is refused like a pending one.
    **Give the command room to wait**
    — run it with a tool timeout above the wait budget, not the default.
    A timeout expiry is not a verdict:
@@ -92,12 +95,12 @@ where the base branch requires one, GitHub refuses the merge whatever this comma
   Otherwise an unchecked box means nobody verified that item:
   surface the failure output (it lists the boxes) and wait.
 - `--ignore-checks` — the user said to merge whatever CI says.
-  It covers every state the gate refuses — pending, failed, and nothing reported at all — and `land-pr` names on stderr what it merged past
+  It covers every state the gate refuses — pending, failed, and a head GitHub holds for a check that never reported — and `land-pr` names on stderr what it merged past
   — relay that to the user.
   Reach for it only on the user's explicit say-so about *this* PR's checks;
   a red check is otherwise something to fix or re-run (`gh run rerun --failed <run-id>`), never something to route around.
-  A repo with no CI is the one standing case where the waiver is the normal answer rather than an exception:
-  there is no run to wait for, and the user says so once.
+  A repo with no CI needs no waiver:
+  step 2 merges its heads on GitHub's word that nothing is expected of them.
 
 If `land-pr` exits nonzero, surface its stderr and stop
 — do not hand-roll the merge with raw `gh` commands, do not invent state.

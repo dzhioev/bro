@@ -290,6 +290,14 @@ The whole gate is the pull request's:
 its CI runs every stage on the head you push, a runner per stage and stages the workspace often cannot run at all, and the merge is blocked until that run is green.
 The exception is a repo whose CI does not cover pull requests
 — there nothing else will ever run the gate, so run it whole here.
+Whether it does is one question to GitHub, not a judgment call:
+
+```bash
+gh api 'repos/{owner}/{repo}/actions/runs?event=pull_request&per_page=1' --jq .total_count
+```
+
+Zero means no workflow has ever run on a pull request here:
+treat the gate as yours to run whole.
 
 A red gate blocks the PR.
 Do not interpret or triage failures

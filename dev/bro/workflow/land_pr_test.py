@@ -29,6 +29,7 @@ def _pr(**overrides: Any) -> dict[str, Any]:
     'url': 'https://github.com/o/r/pull/310',
     'commits': [{'oid': 'aaa1111'}, {'oid': 'bbb2222'}],
     'statusCheckRollup': [_check()],
+    'mergeStateStatus': 'CLEAN',
   }
   pr.update(overrides)
   return pr
@@ -236,18 +237,23 @@ class TestSplitChecks:
 
 class TestChecksError:
   def test_clean_rollup(self):
-    assert land_pr._checks_error(310, [_check()]) is None
+    assert land_pr._checks_error(310, _pr()) is None
 
-  def test_a_head_no_check_reported_on(self):
-    error = land_pr._checks_error(310, [])
-    assert error is not None and 'no status check reported' in error and '--ignore-checks' in error
+  def test_a_head_github_expects_no_check_on(self):
+    assert land_pr._checks_error(310, _pr(statusCheckRollup=[])) is None
+
+  def test_a_head_github_holds_for_a_check_that_never_reported(self):
+    pr = _pr(statusCheckRollup=[], mergeStateStatus='BLOCKED')
+    error = land_pr._checks_error(310, pr)
+    assert error is not None and 'no status check reported' in error and 'BLOCKED' in error
 
   def test_failed_named(self):
-    error = land_pr._checks_error(310, [_check(conclusion='FAILURE')])
+    error = land_pr._checks_error(310, _pr(statusCheckRollup=[_check(conclusion='FAILURE')]))
     assert error is not None and 'failing checks: tests' in error
 
   def test_pending_named(self):
-    error = land_pr._checks_error(310, [_check(status='IN_PROGRESS', conclusion='')])
+    pr = _pr(statusCheckRollup=[_check(status='IN_PROGRESS', conclusion='')])
+    error = land_pr._checks_error(310, pr)
     assert error is not None and 'pending checks: tests' in error
 
   def test_failure_wins_over_pending(self):
@@ -255,38 +261,59 @@ class TestChecksError:
       _check(name='a', status='IN_PROGRESS', conclusion=''),
       _check(name='b', conclusion='FAILURE'),
     ]
-    error = land_pr._checks_error(310, entries)
+    error = land_pr._checks_error(310, _pr(statusCheckRollup=entries))
     assert error is not None and 'failing checks: b' in error
+
+
+def _checks(entries: list[dict[str, Any]], merge_state: str = 'CLEAN') -> dict[str, Any]:
+  return {'statusCheckRollup': entries, 'mergeStateStatus': merge_state}
 
 
 class TestAwaitChecks:
   def test_returns_at_once_when_nothing_is_pending(self):
+    pr = _pr()
     with patch.object(land_pr.time, 'sleep') as sleep:
-      assert land_pr._await_checks(310, [_check()], 60) == [_check()]
+      assert land_pr._await_checks(310, pr, 60) is pr
+    sleep.assert_not_called()
+
+  def test_returns_at_once_when_github_expects_no_check(self):
+    pr = _pr(statusCheckRollup=[])
+    with patch.object(land_pr.time, 'sleep') as sleep:
+      assert land_pr._await_checks(310, pr, 60) is pr
     sleep.assert_not_called()
 
   def test_polls_until_the_check_concludes(self):
-    pending = [_check(status='IN_PROGRESS', conclusion='')]
+    pr = _pr(statusCheckRollup=[_check(status='IN_PROGRESS', conclusion='')])
     with (
-      patch.object(land_pr, '_pr_view', return_value={'statusCheckRollup': [_check()]}) as view,
+      patch.object(land_pr, '_pr_view', return_value=_checks([_check()])) as view,
       patch.object(land_pr.time, 'sleep') as sleep,
     ):
-      assert land_pr._await_checks(310, pending, 60) == [_check()]
+      assert land_pr._await_checks(310, pr, 60) == _checks([_check()])
     sleep.assert_called_once_with(land_pr._CHECK_POLL_INTERVAL)
-    view.assert_called_once_with(['statusCheckRollup'], number=310)
+    view.assert_called_once_with(land_pr._CHECK_FIELDS, number=310)
 
-  def test_waits_for_a_rollup_that_is_still_empty(self):
+  def test_waits_for_a_check_github_holds_the_merge_for(self):
+    pr = _pr(statusCheckRollup=[], mergeStateStatus='BLOCKED')
     with (
-      patch.object(land_pr, '_pr_view', return_value={'statusCheckRollup': [_check()]}),
+      patch.object(land_pr, '_pr_view', return_value=_checks([_check()])),
       patch.object(land_pr.time, 'sleep') as sleep,
     ):
-      assert land_pr._await_checks(310, [], 60) == [_check()]
+      assert land_pr._await_checks(310, pr, 60) == _checks([_check()])
+    sleep.assert_called_once_with(land_pr._CHECK_POLL_INTERVAL)
+
+  def test_waits_for_a_merge_state_github_is_still_computing(self):
+    pr = _pr(statusCheckRollup=[], mergeStateStatus='UNKNOWN')
+    with (
+      patch.object(land_pr, '_pr_view', return_value=_checks([])),
+      patch.object(land_pr.time, 'sleep') as sleep,
+    ):
+      assert land_pr._await_checks(310, pr, 60) == _checks([])
     sleep.assert_called_once_with(land_pr._CHECK_POLL_INTERVAL)
 
   def test_gives_up_when_the_budget_is_spent(self):
-    pending = [_check(status='IN_PROGRESS', conclusion='')]
+    pr = _pr(statusCheckRollup=[_check(status='IN_PROGRESS', conclusion='')])
     with patch.object(land_pr.time, 'sleep') as sleep:
-      assert land_pr._await_checks(310, pending, 0) == pending
+      assert land_pr._await_checks(310, pr, 0) is pr
     sleep.assert_not_called()
 
 
@@ -323,16 +350,29 @@ def test_ignore_checks_does_not_wait():
   sleep.assert_not_called()
 
 
-def test_land_refuses_a_head_no_check_reported_on(capsys):
+def test_land_refuses_a_head_github_holds_for_a_check_that_never_reported(capsys):
   merge_calls: list[list[str]] = []
-  with patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, _pr(statusCheckRollup=[]))):
+  pr = _pr(statusCheckRollup=[], mergeStateStatus='BLOCKED')
+  with patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, pr)):
     assert _land() == 1
   assert merge_calls == []
   assert capsys.readouterr().out == ''
 
 
+def test_land_merges_a_head_github_expects_no_check_on(caplog):
+  with (
+    _landing(_pr(statusCheckRollup=[])) as (merge_calls, _spawned),
+    patch.object(land_pr.time, 'sleep') as sleep,
+  ):
+    assert _land(wait_checks=480) is None
+  assert len(merge_calls) == 1
+  sleep.assert_not_called()
+  assert 'no status check reported on' in caplog.text
+
+
 def test_ignore_checks_merges_a_head_no_check_reported_on(caplog):
-  with _landing(_pr(statusCheckRollup=[])) as (merge_calls, _spawned):
+  pr = _pr(statusCheckRollup=[], mergeStateStatus='BLOCKED')
+  with _landing(pr) as (merge_calls, _spawned):
     assert _land(ignore_checks=True) is None
   assert len(merge_calls) == 1
   assert 'no status check reported on' in caplog.text

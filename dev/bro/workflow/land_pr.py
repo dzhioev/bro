@@ -21,9 +21,12 @@ Preconditions (each failure aborts with a message on stderr and exit 1):
 - the repository allows rebase merging
 - every status check has concluded and passed. Pending checks are waited out
   (`--wait-checks` seconds) and then refuse the merge, as a failed check does.
-  A head no check reported on at all is waited out and refused the same way.
-  `--ignore-checks` drops the gate whole — no wait, no refusal, whatever the
-  checks say or fail to say.
+  A head no check reported on at all is read off GitHub's merge state: CLEAN
+  means nothing required is left to report — the shape of a repository without
+  CI — and the head merges at once with a warning on stderr; any other state
+  is waited out and refused like a pending check (a required check that never
+  ran reads BLOCKED). `--ignore-checks` drops the gate whole — no wait, no
+  refusal, whatever the checks say or fail to say.
 
 On success prints a single JSON object to stdout:
 
@@ -45,6 +48,10 @@ from bro.workspace.git import git_out
 __cli_name__ = 'land-pr'
 
 _CHECK_POLL_INTERVAL = 15.0
+_CHECK_FIELDS = ['statusCheckRollup', 'mergeStateStatus']
+# GitHub's merge states of a head whose commit status passes with nothing
+# required left to report
+_NOTHING_EXPECTED = ('CLEAN', 'HAS_HOOKS')
 
 
 class LandError(Exception):
@@ -127,23 +134,40 @@ def _split_checks(entries: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
   return pending, failed
 
 
-def _await_checks(number: int, entries: list[dict[str, Any]], wait_seconds: int) -> list[dict]:
-  """the rollup once every check concluded, or once the wait budget is spent.
+def _rollup(pr: dict[str, Any]) -> list[dict[str, Any]]:
+  return pr.get('statusCheckRollup') or []
 
-  An empty rollup waits too: a run takes a moment to register against a freshly
-  pushed head."""
+
+def _checks_settled(pr: dict[str, Any]) -> bool:
+  """every check on the head concluded, or none reported and GitHub expects none."""
+  entries = _rollup(pr)
+  if len(entries) == 0:
+    return pr['mergeStateStatus'] in _NOTHING_EXPECTED
+  pending, _ = _split_checks(entries)
+  return len(pending) == 0
+
+
+def _await_checks(number: int, pr: dict[str, Any], wait_seconds: int) -> dict[str, Any]:
+  """the PR's check fields once the checks settled, or once the wait budget is spent.
+
+  A run takes a moment to register against a freshly pushed head, and so does
+  the merge state GitHub computes for it."""
   deadline = time.monotonic() + wait_seconds
-  while True:
-    pending, _ = _split_checks(entries)
-    if (len(entries) > 0 and len(pending) == 0) or time.monotonic() >= deadline:
-      return entries
-    waiting = ', '.join(pending) if len(pending) > 0 else 'no check has reported yet'
+  while not _checks_settled(pr) and time.monotonic() < deadline:
+    pending, _ = _split_checks(_rollup(pr))
+    waiting = (
+      ', '.join(pending)
+      if len(pending) > 0
+      else f'no check has reported yet (merge state {pr["mergeStateStatus"]})'
+    )
     log.info(f'waiting for the checks to conclude: {waiting}')
     time.sleep(_CHECK_POLL_INTERVAL)
-    entries = _pr_view(['statusCheckRollup'], number=number).get('statusCheckRollup') or []
+    pr = _pr_view(_CHECK_FIELDS, number=number)
+  return pr
 
 
-def _checks_error(number: int, entries: list[dict[str, Any]]) -> Optional[str]:
+def _checks_error(number: int, pr: dict[str, Any]) -> Optional[str]:
+  entries = _rollup(pr)
   pending, failed = _split_checks(entries)
   if len(failed) > 0:
     return f'PR #{number} has failing checks: {", ".join(failed)}; fix them or re-run them'
@@ -152,11 +176,11 @@ def _checks_error(number: int, entries: list[dict[str, Any]]) -> Optional[str]:
       f'PR #{number} still has pending checks: {", ".join(pending)}; '
       're-run land-pr once they conclude'
     )
-  if len(entries) == 0:
+  if len(entries) == 0 and pr['mergeStateStatus'] not in _NOTHING_EXPECTED:
     return (
-      f'no status check reported on the head of PR #{number}, so nothing verified what '
-      'would land; dispatch the repository CI against that head, or pass --ignore-checks '
-      'when the repository has none'
+      f'no status check reported on the head of PR #{number} while GitHub reports its '
+      f'merge state as {pr["mergeStateStatus"]}, not CLEAN, so the head is not one GitHub '
+      'expects no check on; dispatch the repository CI against that head'
     )
   return None
 
@@ -196,7 +220,7 @@ _PR_FIELDS = [
   'headRefOid',
   'url',
   'commits',
-  'statusCheckRollup',
+  *_CHECK_FIELDS,
 ]
 
 
@@ -230,16 +254,17 @@ def _land(
   error = _precondition_error(pr, allow_unchecked) or _head_error(pr)
   if error is not None:
     raise LandError(error)
-  rollup = pr.get('statusCheckRollup') or []
   if ignore_checks:
-    _log_ignored_checks(rollup)
+    _log_ignored_checks(_rollup(pr))
   else:
     # after the cheap preconditions: a PR that cannot merge anyway must not
     # cost the check wait
-    rollup = _await_checks(pr['number'], rollup, wait_checks)
-    error = _checks_error(pr['number'], rollup)
+    checks = _await_checks(pr['number'], pr, wait_checks)
+    error = _checks_error(pr['number'], checks)
     if error is not None:
       raise LandError(error)
+    if len(_rollup(checks)) == 0:
+      log.warning('merging a head no status check reported on: GitHub expects none of it')
   _merge(pr)
   merged = _pr_view(['state', 'mergeCommit', 'mergedAt'], number=pr['number'])
   if merged['state'] != 'MERGED':
