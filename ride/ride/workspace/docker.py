@@ -16,6 +16,7 @@ from ride.repository import Repository, as_repository
 from ride.runtime_bundle import RuntimeBundle
 from ride.workspace import build_context
 from ride.workspace.build_context import CONTAINER_DIR
+from ride.workspace.clones import ensure_container_clone
 from ride.workspace.metadata import read_metadata
 from ride.workspace.store import _bro_tarball
 
@@ -82,6 +83,7 @@ class Launch:
   credential_selection: Mapping[str, str] = field(default_factory=dict)
   extra_mounts: Collection[str] = ()
   repo: Optional[Repository | Path] = None
+  base_ref: Optional[str] = None
 
 
 # How a container reaches its session's broker upstream:
@@ -339,7 +341,14 @@ def prepare_container(launch: Launch) -> str:
       f'{metadata.repo or "none"}'
     )
   tree = workspace_tree(launch.name)
-  tree.mkdir(parents=True, exist_ok=True)
+  if repository is None:
+    if launch.base_ref is not None:
+      raise ValueError('detached container launch has a base ref')
+    tree.mkdir(parents=True, exist_ok=True)
+  else:
+    if metadata.branch is None:
+      raise ValueError('attached container workspace has no recorded branch')
+    ensure_container_clone(repository, tree, metadata.branch, launch.base_ref)
   log.verbose('hydrating the scoped credential store')
   source_store = credentials.Store(
     credentials.default_registry(), credentials.STORE_DIR, launch.credential_selection
@@ -358,7 +367,6 @@ def prepare_container(launch: Launch) -> str:
     launch.name,
     launch.repo,
     tree,
-    metadata.branch,
     launch.command,
     extra_env=launch_env,
     forward_env=launch.forward_env,
@@ -374,7 +382,6 @@ def _docker_create_argv(
   name: str,
   repo: Optional[Repository | Path],
   tree: Path,
-  branch: Optional[str],
   command: list[str],
   *,
   extra_env: Optional[Mapping[str, str]] = None,
@@ -411,16 +418,7 @@ def _docker_create_argv(
     f'{CONTAINER_BROKER_HOST}:host-gateway',
   ]
   if repository is not None:
-    if branch is None:
-      raise ValueError('attached container workspace has no recorded branch')
-    argv += [
-      '-v',
-      f'{repository.git_dir}:/host-repo:ro',
-      '-e',
-      f'RIDE_REPO={repository.identity}',
-      '-e',
-      f'RIDE_BRANCH={branch}',
-    ]
+    argv += ['-e', f'RIDE_REPO={repository.identity}']
   # Summoned children pass a complete explicit snapshot and disable ambient
   # forwarding so the parent's task and identity facts cannot leak into them.
   if forward_env:

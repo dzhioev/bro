@@ -321,6 +321,11 @@ class TestPrepareContainer:
     workspace = Workspace.create('ws', project, WorkspaceKind.CONTAINER)
     events: list = []
     monkeypatch.setattr(
+      workspace_docker,
+      'ensure_container_clone',
+      lambda *args: events.append(('clone', args)),
+    )
+    monkeypatch.setattr(
       workspace_docker.credentials,
       'build_scoped_store',
       lambda store, secrets, optional=(): (
@@ -351,11 +356,15 @@ class TestPrepareContainer:
       optional_secrets=('openai',),
       extra_mounts=('/host:/container',),
       repo=project,
+      base_ref='base-sha',
     )
     assert workspace_docker.prepare_container(launch) == 'cid'
-    assert workspace.tree.is_dir()
-    assert events[0] == ('store', ('github',), ('openai',))
-    argv_event = events[1]
+    assert events[0] == (
+      'clone',
+      (Repository(str(project), project), workspace.tree, 'worktree-ws', 'base-sha'),
+    )
+    assert events[1] == ('store', ('github',), ('openai',))
+    argv_event = events[2]
     assert argv_event[0] == 'argv'
     assert argv_event[1] == (
       'runtime-image',
@@ -363,7 +372,6 @@ class TestPrepareContainer:
       'ws',
       project,
       workspace.tree,
-      'worktree-ws',
       ['claude'],
     )
     assert argv_event[2] == {
@@ -376,7 +384,7 @@ class TestPrepareContainer:
       'tty': False,
       'extra_mounts': ['/host:/container'],
     }
-    assert events[2] == ('create', ['docker', 'create'], b'TARBALL', 'ws')
+    assert events[3] == ('create', ['docker', 'create'], b'TARBALL', 'ws')
 
 
 class TestDockerCreateArgv:
@@ -391,7 +399,6 @@ class TestDockerCreateArgv:
         'ws',
         tmp_path / 'proj',
         tmp_path / 'tree',
-        'worktree-ws',
         ['claude'],
         **kwargs,
       )
@@ -417,7 +424,6 @@ class TestDockerCreateArgv:
       'ws',
       None,
       tmp_path / 'tree',
-      None,
       ['claude'],
       forward_env=False,
     )
@@ -425,7 +431,7 @@ class TestDockerCreateArgv:
     assert not any(value.startswith('RIDE_REPO=') for value in argv)
     assert not any(value.startswith('RIDE_BRANCH=') for value in argv)
 
-  def test_url_attachment_mounts_the_mirror_and_exports_the_url(self, tmp_path):
+  def test_url_attachment_exports_the_url_without_mounting_the_mirror(self, tmp_path):
     repository = Repository(
       'https://example.test/owner/repository.git', tmp_path / 'mirror.git', 'abc'
     )
@@ -435,11 +441,10 @@ class TestDockerCreateArgv:
       'ws',
       repository,
       tmp_path / 'tree',
-      'worktree-ws',
       ['claude'],
       forward_env=False,
     )
-    assert f'{repository.git_dir}:/host-repo:ro' in argv
+    assert not any(str(repository.git_dir) in value for value in argv)
     assert f'RIDE_REPO={repository.identity}' in argv
 
   def test_no_docker_socket_mount(self, build_argv):
@@ -447,9 +452,10 @@ class TestDockerCreateArgv:
     # credential boundary — so no session container gets it
     assert not any('docker.sock' in a for a in build_argv())
 
-  def test_base_ref_passed_as_env(self, build_argv):
-    argv = build_argv(extra_env={'RIDE_BASE_REF': 'deadbeef'})
-    assert 'RIDE_BASE_REF=deadbeef' in argv
+  def test_attached_launch_exports_no_clone_control_environment(self, build_argv):
+    argv = build_argv()
+    assert not any(value.startswith('RIDE_BRANCH=') for value in argv)
+    assert not any(value.startswith('RIDE_BASE_REF=') for value in argv)
 
   def test_no_bro_mount(self, build_argv):
     # the scoped store is injected via `docker cp`, never bind-mounted

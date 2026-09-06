@@ -165,8 +165,8 @@ class TestContainerSession:
     assert launch.env == {
       'RIDE_BRO': 'dev',
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
-      'RIDE_BASE_REF': 'abc123',
     }
+    assert launch.base_ref == 'abc123'
     assert not launch.tty
     assert captured['workspace'] is workspace
     assert captured['may_summon'] == {'reviewer'}

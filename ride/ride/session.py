@@ -296,8 +296,6 @@ def _container_session(
     SESSION_DIR_ENV: str(CONTAINER_SESSION_DIR),
     **human_env,
   }
-  if base_ref is not None:
-    env['RIDE_BASE_REF'] = base_ref
   extras = harness.container_extras(spec, workspace, scoped)
   env.update(extras.env)
   if spec.no_trails:
@@ -324,6 +322,7 @@ def _container_session(
       f'{session_state}:{CONTAINER_SESSION_DIR}',
     ),
     repo=workspace.repository,
+    base_ref=base_ref,
   )
   if summoned is not None:
     try:

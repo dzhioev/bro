@@ -157,8 +157,6 @@ def _child_launch(
   env['RIDE_BRO'] = spec.bro
   env['RIDE_COMMAND'] = ' '.join(spec.to_command_argv())
   env[SUMMONED_ENV] = '1'
-  if base_ref is not None:
-    env['RIDE_BASE_REF'] = base_ref
   env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
   if summoner is not None:
     env[SUMMONER_ENV] = json.dumps(summoner, ensure_ascii=False, separators=(',', ':'))
@@ -175,6 +173,7 @@ def _child_launch(
     runtime_bundle_hash=container_runtime.bundle_hash,
     extra_mounts=(*extras.mounts, *local_trails_mounts(scoped), artifacts_mount),
     repo=repository,
+    base_ref=base_ref,
   )
 
 

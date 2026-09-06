@@ -59,7 +59,6 @@ ENV PATH=/var/ride/runtime/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin
 
 # The entrypoint needs these before a workspace exists or the runtime volume is mounted.
 COPY .bro-container/prelude.sh .bro-container/log.sh .bro-container/strict.sh /usr/local/lib/bro-shell/
-COPY .bro-container/git.sh /usr/local/lib/bro-shell/container-git.sh
 COPY .bro-container/entrypoint.sh /usr/local/bin/ride-entrypoint
 RUN chmod +x /usr/local/bin/ride-entrypoint
 ENTRYPOINT ["/usr/local/bin/ride-entrypoint"]

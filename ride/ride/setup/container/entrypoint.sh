@@ -1,7 +1,6 @@
 #!/usr/bin/env -S bash -e
 
 source /usr/local/lib/bro-shell/prelude.sh
-source /usr/local/lib/bro-shell/container-git.sh
 
 # root phase: align container user with host uid/gid, then re-exec as ride
 if [ "$(id -u)" = "0" ] && [ -z "${RIDE_ENTRYPOINT_REEXEC:-}" ]; then
@@ -49,40 +48,6 @@ if [ -n "${RIDE_REPO:-}" ]; then
 # mount as root-owned even though ride can read/write it (see uid-remap skip in
 # the root phase); without this, git refuses with "dubious ownership"
 git config --global --add safe.directory /workspace
-
-# first-run clone: /workspace starts empty; host repo is bind-mounted at /host-repo
-# read-only. clone --shared reuses /host-repo/.git/objects via alternates so there's
-# no disk duplication. origin is retargeted to the host's upstream (so `git push`
-# goes to GitHub, matching host-mode worktrees), and we add `host` as a local
-# remote for fetching commits that haven't been pushed upstream yet.
-if [ ! -d /workspace/.git ]; then
-  log INFO 'cloning host repo into /workspace'
-  quiet=(-q)
-  if log_enabled VERBOSE; then quiet=(); fi
-  git config --global --add safe.directory /host-repo
-  cd /
-  git -c protocol.file.allow=always clone --shared "${quiet[@]}" /host-repo /workspace >&2
-  cd /workspace
-  host_origin="$(git -C /host-repo config --get remote.origin.url)"
-  host_origin="$(container_git_url "$host_origin")"
-  git remote set-url origin "$host_origin"
-  git remote add host /host-repo
-  # refresh the mounted repository's origin-tracking refs: a checkout may carry
-  # local-only commits while a managed mirror carries the launch's fresh fetch.
-  # ref-only — objects are already shared via alternates, no token needed.
-  git fetch "${quiet[@]}" host '+refs/remotes/origin/*:refs/remotes/origin/*' >&2
-  # branch RIDE_BRANCH (the workspace's recorded branch) from RIDE_BASE_REF — a sha
-  # the host resolved for an explicit base (--into <ref>) or a summoned child's
-  # inherited summoner HEAD. the HEAD fallback (the clone's checkout, i.e. the
-  # host checkout's current commit) is the default: a workspace bases on what its
-  # launcher has checked out. -B resets if a stale branch of that name came
-  # through with the clone. either base's objects are shared from /host-repo via
-  # the clone's alternates (the host resolution transfers foreign objects into
-  # the host repo first), so no extra fetch is needed.
-  git checkout "${quiet[@]}" -B "$RIDE_BRANCH" "${RIDE_BASE_REF:-HEAD}" >&2
-  # initialize from host-local clones because the container has no ssh keys
-  initialize_container_submodules /workspace /host-repo
-fi
 fi
 
 # pre-create the /workspace transcript directory (trust is granted in the

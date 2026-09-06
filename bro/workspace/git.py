@@ -82,17 +82,7 @@ def resolve_head(root: Path, repository: Path) -> Optional[str]:
   transferred."""
   if not (repository / '.git').exists():
     return None
-  # the overlay lets git read a clone whose alternates file names a path valid
-  # only in its own mount namespace (a container clone's /host-repo). It is also
-  # why the transfer is a push run at the repository, not a fetch run at root:
-  # the history walk packs on the repository side, and git's local transport
-  # strips repo-specific env from the remote half of a fetch, so only the pushing
-  # process — our direct child — can carry the overlay to the walk.
-  object_directory = root / 'objects' if (root / 'HEAD').is_file() else root / '.git' / 'objects'
-  env = {
-    **no_prompt_env(),
-    'GIT_ALTERNATE_OBJECT_DIRECTORIES': str(object_directory),
-  }
+  env = no_prompt_env()
   head = git_run('rev-parse', 'HEAD', cwd=repository, env=env)
   if head.returncode != 0:
     return None

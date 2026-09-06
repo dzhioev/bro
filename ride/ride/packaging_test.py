@@ -10,7 +10,6 @@ _SHIPPED_SETUP_FILES = {
   'ride/setup/container/project.Dockerfile',
   'ride/setup/container/claude-code-version',
   'ride/setup/container/entrypoint.sh',
-  'ride/setup/container/git.sh',
 }
 _NOT_SHIPPED = {
   'ride/setup/container/bump-claude-code.sh',

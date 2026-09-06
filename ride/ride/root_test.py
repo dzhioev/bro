@@ -174,7 +174,7 @@ class TestRunRootViaBroker:
     launch = workspace_docker.Launch(
       name='ws',
       command=['claude', '--verbose'],
-      env={'RIDE_BASE_REF': 'deadbeef', 'RIDE_BRO': 'bro-dev'},
+      env={'RIDE_BRO': 'bro-dev'},
       secrets=('github',),
       optional_secrets=('openai',),
       credential_selection={'github': 'reviewer'},
@@ -183,6 +183,7 @@ class TestRunRootViaBroker:
       image='runtime-image',
       runtime_bundle_hash='bundle-hash',
       repo=project,
+      base_ref='deadbeef',
     )
     workspace = Workspace.create('ws', project, WorkspaceKind.CONTAINER)
     code = ride.root._run_root_via_broker(launch, workspace, may_summon={'dev'}, summon_depth=4)
@@ -199,7 +200,6 @@ class TestRunRootViaBroker:
         name='ws',
         command=['claude', '--verbose'],
         env={
-          'RIDE_BASE_REF': 'deadbeef',
           'RIDE_BRO': 'bro-dev',
           bro.summon.MAY_SUMMON_ENV: 'dev',
         },
@@ -212,6 +212,7 @@ class TestRunRootViaBroker:
         runtime_bundle_hash='bundle-hash',
         extra_mounts=(ride.artifacts.view_mount('ws', 'ws'),),
         repo=project,
+        base_ref='deadbeef',
       ),
       capture_output=False,
     )

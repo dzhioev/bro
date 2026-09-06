@@ -399,7 +399,7 @@ class TestDetachedSession:
     assert workspace.metadata.branch is None
     launch = harness.run_in_container.call_args.args[0]
     assert '--repo' not in launch.command
-    assert 'RIDE_BASE_REF' not in launch.env
+    assert launch.base_ref is None
 
   def test_into_is_refused_without_an_attachment(self, caplog):
     spec = replace(_spec(into='feature'), repo=None)
@@ -534,14 +534,12 @@ class TestContainerCommand:
     launch = h.run_in_container.call_args.args[0]
     assert launch.env['RIDE_BRO'] == 'bro-dev'
 
-  def test_default_base_is_left_to_the_entrypoint_head_fallback(self):
-    # no RIDE_BASE_REF by default: the clone bases on HEAD — the host checkout as
-    # cloned — with no network touched on the way
+  def test_path_attachment_defaults_to_the_source_head(self):
     with _ContainerHarness() as h:
       rc = ride_session.start_session(_spec(drop=True))
     assert rc == 0
     launch = h.run_in_container.call_args.args[0]
-    assert 'RIDE_BASE_REF' not in launch.env
+    assert launch.base_ref is None
 
   def test_url_attachment_uses_fresh_origin_head_as_the_default_base(self, tmp_path):
     mirror = tmp_path / 'mirror'
@@ -556,18 +554,18 @@ class TestContainerCommand:
         rc = ride_session.start_session(spec, repository)
     assert rc == 0
     launch = harness.run_in_container.call_args.args[0]
-    assert launch.env['RIDE_BASE_REF'] == 'urlsha'
+    assert launch.base_ref == 'urlsha'
     assert launch.repo == repository
     assert Workspace.open('w').metadata.repo == repository.identity
 
-  def test_into_threads_the_resolved_base_into_the_container_env(self):
+  def test_into_threads_the_resolved_base_into_the_container_launch(self):
     with _ContainerHarness() as h:
       with patch('ride.session.resolve_ref', return_value='intosha') as resolve:
         rc = ride_session.start_session(_spec(drop=True, into='feature'))
     assert rc == 0
     assert resolve.call_args[0][1] == 'feature'
     launch = h.run_in_container.call_args.args[0]
-    assert launch.env['RIDE_BASE_REF'] == 'intosha'
+    assert launch.base_ref == 'intosha'
 
   def test_unresolvable_into_fails_launch(self):
     with _ContainerHarness() as h:
@@ -1602,7 +1600,7 @@ class TestSummonedSession:
     assert launch.env['RIDE_MAY_SUMMON'] == 'dev'
     assert launch.env['RIDE_WORKSPACE'] == 'w'
     assert json.loads(launch.env['RIDE_SUMMONER']) == {'trail_id': 'T1'}
-    assert launch.env['RIDE_BASE_REF'] == 'parentsha'
+    assert launch.base_ref == 'parentsha'
     assert launch.tty
     # the threaded claim consumes the token
     run.call_args.kwargs['claim']()
@@ -1620,7 +1618,7 @@ class TestSummonedSession:
       rc = ride_session.start_session(_spec(), summoned=record)
     assert rc == 0
     assert ref.call_args.args == (tmp_path, 'release')
-    assert run.call_args.args[0].env['RIDE_BASE_REF'] == 'intosha'
+    assert run.call_args.args[0].base_ref == 'intosha'
 
   def test_container_summoned_requires_the_broker_channel(self, tmp_path, caplog):
     record = _pending_record(tmp_path)

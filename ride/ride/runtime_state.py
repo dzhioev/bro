@@ -496,15 +496,6 @@ def _repair_pending_worktrees(base: Path) -> None:
     _atomic_json(pending_file, {'repairs': remaining})
 
 
-def _prepare_container_alternates(workspace: _WorkspaceMigration) -> None:
-  repo = workspace.metadata.get('repo')
-  if not isinstance(repo, str) or not is_git_url(repo):
-    return
-  alternates = workspace.source / 'tree' / '.git' / 'objects' / 'info' / 'alternates'
-  if alternates.is_file():
-    _atomic_bytes(alternates, b'/host-repo/objects\n')
-
-
 def _apply_plan(base: Path, plan: _MigrationPlan) -> None:
   repairs = _worktree_repairs(plan)
   if len(repairs) > 0:
@@ -513,7 +504,6 @@ def _apply_plan(base: Path, plan: _MigrationPlan) -> None:
     _atomic_json(workspace.source / 'meta.json', workspace.metadata)
     if workspace.resume is not None:
       _atomic_json(workspace.source / 'resume.json', workspace.resume)
-    _prepare_container_alternates(workspace)
     workspace.destination.parent.mkdir(parents=True, exist_ok=True)
     workspace.source.rename(workspace.destination)
   _repair_pending_worktrees(base)
