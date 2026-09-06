@@ -105,7 +105,6 @@ class TestSummonLowering:
           'deploy the thing',
         ],  # fmt: skip
         env={
-          'RIDE_BASE_REF': 'PARENT-SHA',
           'RIDE_BRO': 'dev',
           'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness bro dev deploy the thing',
           'RIDE_MAY_SUMMON': '',
@@ -120,6 +119,7 @@ class TestSummonLowering:
         runtime_bundle_hash='bundle-hash',
         extra_mounts=(ride.artifacts.view_mount(SESSION, 'broker-CH'),),
         repo=Path('/proj'),
+        base_ref='PARENT-SHA',
       ),
     )
 
@@ -330,16 +330,17 @@ class TestSummonLowering:
       may_summon=(),
       into='summon',
     )
-    assert ride.spawn._lower_summon(
+    lowered = ride.spawn._lower_summon(
       launch, 'broker-CH', _container_runtime(), _artifacts()
-    ).launch.env == {
-      'RIDE_BASE_REF': 'REF-SHA',
+    ).launch
+    assert lowered.env == {
       'RIDE_BRO': 'dev',
       'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness bro --into summon dev p',
       'RIDE_MAY_SUMMON': '',
       'RIDE_SUMMONED': '1',
       'RIDE_SUMMONER': '{"session":"ws"}',
     }
+    assert lowered.base_ref == 'REF-SHA'
 
   def test_unresolvable_into_fails_the_spawn(self, lowering_harness):
     launch = ride.spawn.SummonLaunchSpec(
@@ -368,7 +369,7 @@ class TestSummonLowering:
       may_summon=(),
     )
     lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
-    assert 'RIDE_BASE_REF' not in lowered.launch.env
+    assert lowered.launch.base_ref is None
     assert '--repo' not in lowered.launch.command
     assert Workspace.open('broker-CH').repo is None
 
@@ -476,13 +477,13 @@ class TestClaudeSummonLowering:
     ]  # fmt: skip
     assert lowered.launch.env == {
       'CLAUDE_CONFIG_DIR': '/home/ride/.claude',
-      'RIDE_BASE_REF': 'PARENT-SHA',
       'RIDE_BRO': 'dev',
       'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness claude dev deploy the thing',
       'RIDE_MAY_SUMMON': '',
       'RIDE_SUMMONED': '1',
       'RIDE_SUMMONER': '{"session":"ws"}',
     }
+    assert lowered.launch.base_ref == 'PARENT-SHA'
     assert lowered.launch.extra_mounts == (
       '/host/claude:/home/ride/.claude',
       ride.artifacts.view_mount(SESSION, 'broker-CH'),

@@ -28,6 +28,7 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
 - `metadata.py` — workspace kind and persisted metadata
 - `model.py` — workspace factories, locking, inspection, clean-exit records, and teardown for worktree and container kinds
 - `worktrees.py` — host worktree creation and provisioning through the operated repository's `setup.sh`
+- `clones.py` — host-side container clone creation, upstream retargeting, base checkout, and submodule initialization
 - `containers.py` — container execution and attachment plus the broker availability gate
 - `spawn.py` — Docker and host-process broker spawner adapters, bounded child output, terminal ownership, and host-log redirection
 - `store.py` — scoped credential tiers, override finalization, host materialization, and container tar packing

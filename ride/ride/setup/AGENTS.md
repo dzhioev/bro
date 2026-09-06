@@ -13,7 +13,7 @@ The shell prelude remains in the framework's `bro/setup/` directory and is resol
   entrypoint,
   and shell helpers.
 - `container/project.Dockerfile` — the optional project dependency bake layered on the runtime image.
-- `container/entrypoint.sh` and `git.sh` — session setup and repository clone/submodule handling.
+- `container/entrypoint.sh` — in-container credential, project, and broker session setup.
 
 The runtime image contains no Python distribution from the ride installation.
 A frozen runtime bundle is materialized into a named volume and mounted read-only at `/var/ride/runtime`;

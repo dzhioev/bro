@@ -24,7 +24,6 @@ MANIFEST_PREFIX = f'{INJECTED_PREFIX}/manifests'
 RUNTIME_FILES = {
   DOCKERFILE_PATH: CONTAINER_DIR / 'Dockerfile',
   f'{INJECTED_PREFIX}/entrypoint.sh': CONTAINER_DIR / 'entrypoint.sh',
-  f'{INJECTED_PREFIX}/git.sh': CONTAINER_DIR / 'git.sh',
   **{f'{INJECTED_PREFIX}/{name}': SHELL_DIR / name for name in SHELL_HELPERS},
 }
 PROJECT_FILES = {DOCKERFILE_PATH: CONTAINER_DIR / 'project.Dockerfile'}

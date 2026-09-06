@@ -162,21 +162,8 @@ class TestResolveHead:
     local_sha = _commit(workspace, 'local')
     assert git_helpers.rev_parse_commit(root, local_sha) is None
     assert git_helpers.resolve_head(root, workspace) == local_sha
-    # the commit's objects are now in root's store (a child clone reads them via
-    # /host-repo alternates), with no private ref left behind
-    assert git_helpers.rev_parse_commit(root, local_sha) == local_sha
-    assert _private_refs(root) == ''
-
-  def test_resolves_a_clone_whose_alternates_point_elsewhere(self, tmp_path):
-    # a container clone's alternates file names /host-repo — a path valid only in
-    # its own mount namespace. the alternates env overlay must carry both the
-    # HEAD read and the object transfer regardless.
-    root, workspace = self._root_and_clone(tmp_path)
-    local_sha = _commit(workspace, 'local')
-    alternates = workspace / '.git' / 'objects' / 'info' / 'alternates'
-    assert alternates.is_file()
-    alternates.write_text('/host-repo/.git/objects\n')
-    assert git_helpers.resolve_head(root, workspace) == local_sha
+    # the commit's objects are now in root's store for a child clone to copy,
+    # with no private ref left behind
     assert git_helpers.rev_parse_commit(root, local_sha) == local_sha
     assert _private_refs(root) == ''
 

@@ -98,6 +98,26 @@ git clone --quiet "$PROJECT" "$HOST_REPO"
 git -C "$HOST_REPO" remote set-url origin "$(git -C "$PROJECT" remote get-url origin)"
 git -C "$HOST_REPO" update-ref refs/remotes/origin/master HEAD
 
+python - \
+  "$HOST_REPO" "$SMOKE_TMP/workspace" worktree-smoke-test \
+  "$CONSUMER_UV_REPO" "$SMOKE_TMP/consumer-uv-workspace" worktree-consumer-uv-smoke \
+  "$CONSUMER_PLAIN_REPO" "$SMOKE_TMP/consumer-plain-workspace" worktree-consumer-plain-smoke <<'PY'
+import sys
+from pathlib import Path
+from ride.repository import Repository
+from ride.workspace.clones import ensure_container_clone
+
+for index in range(1, len(sys.argv), 3):
+  source = Path(sys.argv[index])
+  ensure_container_clone(
+    Repository(str(source), source),
+    Path(sys.argv[index + 1]),
+    sys.argv[index + 2],
+  )
+PY
+EXPECTED_HEAD="$(git -C "$HOST_REPO" rev-parse HEAD)"
+EXPECTED_ORIGIN_MASTER="$(git -C "$HOST_REPO" rev-parse refs/remotes/origin/master)"
+
 echo '{"projects":{"/workspace":{"smoke_seed":true}}}' > "$SMOKE_TMP/claude/.claude.json"
 echo '{"host_marker":"untouched"}' > "$SMOKE_TMP/host_claude.json"
 HOST_CLAUDE_SHA="$(sha256sum "$SMOKE_TMP/host_claude.json" | cut -d' ' -f1)"
@@ -105,7 +125,6 @@ HOST_CLAUDE_SHA="$(sha256sum "$SMOKE_TMP/host_claude.json" | cut -d' ' -f1)"
 echo "running entrypoint" >&2
 docker run --rm -i \
   -v "$SMOKE_TMP/workspace:/workspace" \
-  -v "$HOST_REPO:/host-repo:ro" \
   -v "$SMOKE_TMP/claude:/home/ride/.claude" \
   -v "$SMOKE_TMP/bro:/home/ride/.bro" \
   -v "ride-runtime-$BUNDLE_HASH:/var/ride/runtime:ro" \
@@ -113,7 +132,8 @@ docker run --rm -i \
   -e "CLAUDE_CONFIG_DIR=/home/ride/.claude" \
   -e "RIDE_WORKSPACE=smoke-test" \
   -e "RIDE_REPO=$HOST_REPO" \
-  -e "RIDE_BRANCH=worktree-smoke-test" \
+  -e "EXPECTED_HEAD=$EXPECTED_HEAD" \
+  -e "EXPECTED_ORIGIN_MASTER=$EXPECTED_ORIGIN_MASTER" \
   "$TAG" bash -s >&2 <<'SMOKE'
     set -e
     # the install-hook pass ran: its session directory is there, with no hook to
@@ -121,8 +141,8 @@ docker run --rm -i \
     test -d "$HOME/.bro-environment"
     test -d /workspace/.git
     cd /workspace
-    test "$(git rev-parse HEAD)" = "$(git -C /host-repo rev-parse HEAD)"
-    test "$(git rev-parse refs/remotes/origin/master)" = "$(git -C /host-repo rev-parse refs/remotes/origin/master)"
+    test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+    test "$(git rev-parse refs/remotes/origin/master)" = "$EXPECTED_ORIGIN_MASTER"
 
     aws --version
     test -d /opt/uv-cache
@@ -158,7 +178,6 @@ test "$(sha256sum "$SMOKE_TMP/host_claude.json" | cut -d' ' -f1)" = "$HOST_CLAUD
 echo "running consumer fixture without bro in its lock" >&2
 docker run --rm \
   -v "$SMOKE_TMP/consumer-uv-workspace:/workspace" \
-  -v "$CONSUMER_UV_REPO:/host-repo:ro" \
   -v "$SMOKE_TMP/consumer-uv-claude:/home/ride/.claude" \
   -v "$SMOKE_TMP/consumer-uv-bro:/home/ride/.bro" \
   -v "ride-runtime-$BUNDLE_HASH:/var/ride/runtime:ro" \
@@ -166,7 +185,6 @@ docker run --rm \
   -e "CLAUDE_CONFIG_DIR=/home/ride/.claude" \
   -e "RIDE_WORKSPACE=consumer-uv-smoke" \
   -e "RIDE_REPO=$CONSUMER_UV_REPO" \
-  -e "RIDE_BRANCH=worktree-consumer-uv-smoke" \
   "$CONSUMER_UV_TAG" bash -ec '
     test "$(command -v ride)" = /var/ride/runtime/bin/ride
     test "$(readlink /workspace/.venv)" = /opt/project-venv
@@ -184,7 +202,6 @@ assert project_image_tag(sys.argv[1], Path(sys.argv[2])) is None
 PY
 docker run --rm \
   -v "$SMOKE_TMP/consumer-plain-workspace:/workspace" \
-  -v "$CONSUMER_PLAIN_REPO:/host-repo:ro" \
   -v "$SMOKE_TMP/consumer-plain-claude:/home/ride/.claude" \
   -v "$SMOKE_TMP/consumer-plain-bro:/home/ride/.bro" \
   -v "ride-runtime-$BUNDLE_HASH:/var/ride/runtime:ro" \
@@ -192,7 +209,6 @@ docker run --rm \
   -e "CLAUDE_CONFIG_DIR=/home/ride/.claude" \
   -e "RIDE_WORKSPACE=consumer-plain-smoke" \
   -e "RIDE_REPO=$CONSUMER_PLAIN_REPO" \
-  -e "RIDE_BRANCH=worktree-consumer-plain-smoke" \
   "$RUNTIME_TAG" bash -ec '
     test "$(command -v ride)" = /var/ride/runtime/bin/ride
     test ! -e /workspace/.venv
@@ -214,7 +230,6 @@ rm "$SMOKE_TMP/workspace/setup.sh" "$SMOKE_TMP/workspace/.venv"
 ln -s /opt/ride-venv "$SMOKE_TMP/workspace/.venv"
 docker run --rm \
   -v "$SMOKE_TMP/workspace:/workspace" \
-  -v "$HOST_REPO:/host-repo:ro" \
   -v "$SMOKE_TMP/claude:/home/ride/.claude" \
   -v "$SMOKE_TMP/bro:/home/ride/.bro" \
   -v "ride-runtime-$BUNDLE_HASH:/var/ride/runtime:ro" \
@@ -222,7 +237,8 @@ docker run --rm \
   -e "CLAUDE_CONFIG_DIR=/home/ride/.claude" \
   -e "RIDE_WORKSPACE=smoke-test" \
   -e "RIDE_REPO=$HOST_REPO" \
-  -e "RIDE_BRANCH=worktree-smoke-test" \
+  -e "EXPECTED_HEAD=$EXPECTED_HEAD" \
+  -e "EXPECTED_ORIGIN_MASTER=$EXPECTED_ORIGIN_MASTER" \
   "$TAG" bash -c 'test "$(readlink /workspace/.venv)" = /opt/project-venv' >&2
 
 echo "smoke test passed" >&2

@@ -115,12 +115,7 @@ def _start_and_observe(container_id: str, workspace: Path) -> tuple[bool, str]:
 
 @pytest.fixture(scope='module')
 def isolated() -> Iterator[Isolated]:
-  """a standalone clone of the checkout.
-
-  the launch mounts the clone at /host-repo and roots its workspace dir under it.
-  a clone rather than the checkout itself because the entrypoint clones that mount
-  with `--shared`, which a linked worktree cannot serve.
-  """
+  """a standalone attachment clone inside the daemon's shared filesystem."""
   with host_docker.scratch_root('launch-smoke') as root:
     checkout = host_docker.checkout()
     project = root / 'project'
@@ -134,7 +129,7 @@ def isolated() -> Iterator[Isolated]:
     subprocess.run(
       ['git', '-C', str(project), 'remote', 'set-url', 'origin', origin.stdout.strip()], check=True
     )
-    # a clone mirrors the source's local branches only, so seed the ref the entrypoint refreshes
+    # a clone mirrors the source's local branches only, so seed a ref clone preparation refreshes
     subprocess.run(
       ['git', '-C', str(project), 'update-ref', 'refs/remotes/origin/master', 'HEAD'], check=True
     )
@@ -191,5 +186,8 @@ def test_the_prepared_container_reaches_running_state(launched: Launched) -> Non
   assert launched.running is True, launched.output
 
 
-def test_the_workspace_mount_carries_the_clone(launched: Launched) -> None:
+def test_the_workspace_mount_carries_an_independent_clone(launched: Launched) -> None:
   assert (launched.workspace / '.git').is_dir(), launched.output
+  assert not (launched.workspace / '.git' / 'objects' / 'info' / 'alternates').exists(), (
+    launched.output
+  )

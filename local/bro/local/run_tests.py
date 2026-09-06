@@ -251,7 +251,7 @@ PYTEST_FILES = [
   'dev/bro/workflow/land_pr_test.py',
   'bro/runtime/mcp_server_test.py',
   'bro/prompts/prompts_test.py',
-  'ride/ride/setup/container/git_test.py',
+  'ride/ride/workspace/clones_test.py',
   'bro/setup/docker_smoke_test_test.py',
   'bro/llm/usage_test.py',
   'local/bro/local/benchmark_job_test.py',

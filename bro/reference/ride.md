@@ -165,7 +165,9 @@ A legacy root is keyed on one checkout and every workspace under it is attached 
 — from a worktree workspace's git metadata, confirmed against the root's own key
 — and records it for the root's container workspaces too, whose clone `origin` names the upstream URL rather than the checkout they were launched against.
 A root naming no recoverable checkout falls back to the URL its container clones carry, and the migration reports which workspaces that moved off a path-keyed host-config entry.
-Migrated worktrees also have their registration repaired at the new path, and URL-backed clones are adjusted to the managed mirror's object layout.
+Migrated worktrees also have their registration repaired at the new path.
+A migrated container clone that still uses alternates is not rewritten;
+its next launch refuses it and names `ride clean --force <name>` so the workspace can be recreated as an independent clone.
 A workspace whose tree was never materialized has no repository evidence and migrates as detached.
 A non-empty tree whose attachment cannot be recovered aborts the migration rather than recording a guess or leaving an unusable workspace hidden in the old root.
 
@@ -204,9 +206,9 @@ the machinery a session spawns for itself
 A URL attachment is normalized and mapped to `<runtime-root>/repos/<slug>-<digest>/`.
 The directory is a bare repository with `origin` set to the attachment URL and `gc.auto=0`.
 Every launch naming the URL takes the mirror's flock, fetches without pruning, refreshes `origin/HEAD`, and resolves that commit as the default base.
-Workspaces share its objects, so neither fetch nor cleanup may prune them;
+A container workspace copies or hardlinks the mirror's objects into its own independent clone on first launch.
 `ride clean` removes the whole mirror only after no workspace metadata references its URL.
-The launcher's ambient git authentication performs mirror fetches, while the scoped in-session credential hook handles later operations from the workspace clone.
+The launcher's ambient git authentication performs mirror fetches and first-launch submodule initialization, while the scoped in-session credential hook handles later operations from the workspace clone.
 
 ## Workspaces
 
@@ -260,7 +262,7 @@ The one deliberate exception to all of this is the summon audit, under `<runtime
   reusing a name with a different attachment is refused.
 - **`branch`** — the attached tree's branch, present if and only if `repo` is present.
   Host mode branches the worktree on it;
-  container mode passes it to the entrypoint as `RIDE_BRANCH`.
+  container mode checks it out when preparing the clone on the host.
 - **`throwaway`** — the workspace is disposable:
   its supervisor removes it once its session exits cleanly.
   Set for the workspaces summoned children run in.
@@ -440,15 +442,16 @@ The dir is provisioned with exactly the container's session state
 
 `/workspace` is always the workspace's writable `tree/` bind.
 It starts and stays empty for a detached launch.
-With an attachment, the entrypoint creates a **fresh clone**, not a worktree:
+With an attachment, the host creates a **plain local clone** before container creation, not a worktree:
 the gitfile-based worktree layout does not survive the container boundary, and a clone keeps git state isolated.
+A local clone hardlinks objects when the attachment and runtime root share a filesystem and copies them otherwise;
+it carries no alternates dependency on the attachment.
+The attachment itself is not mounted into the container.
 Layout:
 
 - `<runtime-root>/workspaces/<name>/tree/` (host) → `/workspace` rw.
-  Empty on first run;
-  the entrypoint clones into it.
-- the checkout root or managed bare mirror (host) → `/host-repo` ro only when attached.
-  The clone uses `--shared`, so the container reuses the mounted repository's objects via alternates instead of duplicating them.
+  Empty while detached;
+  an attached workspace contains the host-prepared clone.
 - `ride-runtime-<bundle-hash>` → `/var/ride/runtime` ro.
   Its `bin/` is first on PATH and its `venv/` carries the root's frozen Python installation.
 - a per-launch **scoped credential store** injected into `/home/ride/.bro`.
@@ -480,6 +483,17 @@ Layout:
   In-container readers resolve that fixed absolute path;
   no state path is relative to `/workspace`.
 
+On an attached workspace's first launch, `prepare_container` clones from the checkout or managed mirror into a temporary sibling and publishes the completed clone atomically.
+It retargets `origin` to the attachment's upstream URL, converting `git@github.com:` to `https://github.com/`, and ref-refreshes the attachment's `refs/remotes/origin/*` without adding another remote.
+It creates the recorded workspace branch from the resolved base:
+a URL attachment's fresh `origin/HEAD`, an explicit `--into`, or a summon's inherited base;
+a path attachment defaults to its current `HEAD`.
+Initialized checkout submodules are cloned from their matching host paths and retargeted to their upstreams;
+a managed bare mirror initializes them from their committed URLs, while an uninitialized checkout submodule is skipped.
+No prepared clone or submodule carries an alternates file.
+Later launches preserve the clone exactly as the session left it.
+A workspace created by an older runtime whose clone still has an alternates file is refused with the `ride clean --force <name>` command that recreates it.
+
 Inside the container, the entrypoint (running as root first):
 
 1. Aligns the `ride` user's UID/GID with whoever owns `/workspace` on the host,
@@ -490,26 +504,19 @@ Inside the container, the entrypoint (running as root first):
 3. Applies the hooks for the launch's explicit `BRO_INSTALL_KINDS` into `~/.bro-environment` and evals the environment they declare (see "Scoped credential hydration"), then, when attached, marks `/workspace` as a safe git directory.
    The host's `~/.gitconfig` is no more seeded than `~/.claude` is:
    a session's git configuration is what its own hooks declare.
-4. When attached and on the first run, clones `/host-repo` into `/workspace` with `--shared`, retargets `origin` to the mounted repository's upstream URL (converting `git@github.com:` to `https://github.com/` so token auth works),
-   and adds `host` as a local remote.
-   Branches `RIDE_BRANCH` from `RIDE_BASE_REF` when set
-   — an explicit `--into`, a URL attachment's fresh `origin/HEAD`, or a summon's inherited base
-   — else from `HEAD`, the path attachment's current commit.
-   The mounted repository's `refs/remotes/origin/*` are ref-refreshed for later clean/rebase checks.
-5. When attached, initialises submodules from the matching host-local paths in `/host-repo` (since `.gitmodules` uses SSH URLs the container can't auth to), skipping any submodule the host hasn't initialised.
-6. When attached and the optional project image carries `/opt/project-venv`, links it at `/workspace/.venv` and exports `RIDE_VENV_MANIFEST=/opt/project-venv-manifest`.
+4. When attached and the optional project image carries `/opt/project-venv`, links it at `/workspace/.venv` and exports `RIDE_VENV_MANIFEST=/opt/project-venv-manifest`.
    A dangling symlink left by an older image is replaced;
    a real existing workspace environment is preserved.
    The repository's `setup.sh` owns manifest reuse and resync from there.
-7. When attached, runs `setup.sh` when present, or logs that project provisioning was skipped.
+5. When attached, runs `setup.sh` when present, or logs that project provisioning was skipped.
    The workspace venv is not activated:
    PATH remains the pinned runtime shim farm plus system paths.
-8. Installs credential hooks, starts the optional broxy from the pinned runtime, and execs the container command.
+6. Starts the optional broxy from the pinned runtime and execs the container command.
    The entrypoint itself is harness- and flavor-blind.
 
 Every container-starting surface computes one broker-free `ride.workspace.docker.Launch`:
-the workspace name, optional resolved repository attachment, command, explicit env snapshot, required/optional credential tiers, TTY and ambient-forwarding policy, extra mounts, resolved image tag, and runtime bundle hash.
-`prepare_container` consumes that immutable description for workspace mkdir → scoped-store build → `docker create` + store copy;
+the workspace name, optional resolved repository attachment and base ref, command, explicit env snapshot, required/optional credential tiers, TTY and ambient-forwarding policy, extra mounts, resolved image tag, and runtime bundle hash.
+`prepare_container` consumes that immutable description for clone preparation → scoped-store build → `docker create` + store copy;
 it does not re-resolve images or bundles.
 Summoned children inherit the root's identifiers.
 A host root defers their image/volume resolution until its first summon.
@@ -737,7 +744,7 @@ see "Manual summon" below) with its own scoped credential set (nothing inherited
 the request's `llm` recipe resolves within the named harness and never switches it)
 — with the root session's attachment:
 an attached child bases on the summoner's workspace `HEAD` read at summon time (uncommitted changes never transfer;
-a container summoner's local-only commits are fetched into the host repo first so the child's clone can reach them) unless the request's `into` ref overrides, while a detached root spawns detached children and rejects `into`,
+a container summoner's local-only commits are transferred into the attachment first so the child's host-side clone can copy them) unless the request's `into` ref overrides, while a detached root spawns detached children and rejects `into`,
 and the answer comes back synchronously.
 A nested bro summon stamps the child trail's `summoned_by.trail_id`;
 a root session summon omits provenance until the session recorder publishes its current trail id.
@@ -1040,9 +1047,6 @@ Wrappers and session daemons rely on a small set of env vars:
 - `RIDE_REPO` — the root session's resolved checkout path or normalized git URL, absent when detached.
   Set explicitly from the session spec;
   banner and summon lowering read this launch state rather than deriving a repository from cwd.
-- `RIDE_BRANCH` — an attached workspace's recorded branch (see "Workspaces").
-  Container mode only, passed by `prepare_container`;
-  absent when detached.
 - `RIDE_HOST_WORKSPACE` — host-side absolute path to the workspace tree (`<runtime-root>/workspaces/<name>/tree`), set explicitly in both modes.
   In a container it names the host path bound at `/workspace`.
 - `RIDE_COMMAND` — the user-visible invocation this session launched under, reconstructed via `SessionSpec.to_command_argv` for telemetry and the banner:
@@ -1087,12 +1091,6 @@ Wrappers and session daemons rely on a small set of env vars:
   `rewind` renders it as a `SESSION CONTEXT` preamble.
   It captures what the model was told but the transcript omits
   — Claude Code's base harness prompt stays in-process and is not included.
-- `RIDE_BASE_REF` — the sha a URL attachment's fresh `origin/HEAD`, an explicit `--into <ref>`, or a summoned child's inherited summoner `HEAD` resolved to (a manual child's at its `--summoned` launch).
-  Container mode only.
-  The entrypoint checks it out as the new clone's `RIDE_BRANCH`;
-  the sha's objects are reachable through the clone's `/host-repo` alternates.
-  It is unset only for a path attachment's default, where the entrypoint's `HEAD` fallback uses the checkout's current commit.
-  Host mode applies the same base inline via `git worktree add … <ref>`.
 - `RIDE_SUMMONED` — marks a run as a summoned child.
   The env name is owned by `bro.summon` and read back through its `summoned()` predicate;
   set by the summon lowering and by the `--summoned` launch,

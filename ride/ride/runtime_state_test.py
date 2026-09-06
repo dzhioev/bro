@@ -49,9 +49,6 @@ def test_clean_migration_merges_stores_and_backfills_clone_attachment(monkeypatc
   tree.mkdir()
   _git('init', '--quiet', cwd=tree)
   _git('remote', 'add', 'origin', 'HTTPS://Example.Test/owner/repo.git/', cwd=tree)
-  alternates = tree / '.git' / 'objects' / 'info' / 'alternates'
-  alternates.parent.mkdir(parents=True, exist_ok=True)
-  alternates.write_text('/host-repo/.git/objects\n')
   (root / 'trails' / 'trails' / 'trail-id').mkdir(parents=True)
   (root / 'trails' / 'trails' / 'trail-id' / 'header.json').write_text('{}')
   (root / 'summon').mkdir()
@@ -73,9 +70,6 @@ def test_clean_migration_merges_stores_and_backfills_clone_attachment(monkeypatc
   }
   assert json.loads((migrated / 'resume.json').read_text())['repo'] == (
     'https://example.test/owner/repo.git'
-  )
-  assert (migrated / 'tree' / '.git' / 'objects' / 'info' / 'alternates').read_text() == (
-    '/host-repo/objects\n'
   )
   assert (base / 'trails' / 'trails' / 'trail-id' / 'header.json').is_file()
   assert (base / 'summon' / 'session.jsonl').is_file()
