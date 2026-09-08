@@ -1,140 +1,446 @@
 # bro
 
 > [!WARNING]
-> **Early development
-> — not recommended for production use.**
->
-> The framework is at an early stage:
-> much of it is work in progress, more is still to be designed, and `master` regularly carries breaking changes that require migrations.
-> Interfaces move without deprecation cycles or compatibility shims.
->
-> It is provided as-is, without warranty or support of any kind, and no responsibility is taken for any outcome of running it.
-> Use it at your own risk.
+> **Early development.**
+> Interfaces move without deprecation cycles and `master` carries breaking changes.
+> Provided as-is, without warranty or support;
+> use it at your own risk.
 
-Harness your bros:
-`bro` is a meta-harness for declarative agent personas.
-A persona — system prompt, tools, data sources, credentials, scripts
-— is declared once and runs unchanged on every supported harness:
-a Claude Code session, or the framework's own native agent loop.
-Around that core:
-MCP tool serving, credential scoping, recorded runs, task-driven development workflows, and `ride`
-— a unified harness runtime for isolated host or container workspaces.
-Consumer projects install the distribution, register their extensions through entry points, and choose their defaults in `[tool.bro]`.
-[`DESIGN.md`](DESIGN.md) covers the conceptual model.
+**Declare an agent once.
+Run it on any harness[^harness] and any LLM[^llm].
+Know exactly what it can reach.**
 
-**Launch commands:** `ride solo` / `ask` and `ride along` / `call` create managed isolated workspaces.
-`bro run` and `bro chat` run in the calling process with ambient credentials;
-they do not isolate or hydrate a scoped store.
+A bro is an agent persona declared in one place
+— what it knows, which tools it holds, which secrets it may read, whom it may delegate to
+— with nothing about it wired anywhere else.
+The same declaration runs as a Claude Code session or under bro's own agent loop, one-shot or interactive, on whichever model you name at launch.
+Wherever it runs, it runs inside a boundary that holds exactly what the declaration says:
+a fresh container, a clone, the credentials it needs and no other, the bros it may summon and no other.
+The rest of this page shows all of that on one made-up bro.
 
-The repository is a [uv](https://docs.astral.sh/uv/) workspace:
-the root publishes `bro`, [`native/`](native/README.md) publishes the native engine, [`ride/`](ride/README.md) publishes the managed-workspace runtime and both harness adapters,
-[`dev/`](dev/README.md) publishes development tooling, and [`oops/`](oops/README.md) publishes deployment and operations machinery for consumer repositories.
+## Getting started
 
-## Prerequisites
+The way in is [`BOOTSTRAP.md`](BOOTSTRAP.md), an executable checklist for an agent rather than a page for you.
+On a macOS or Ubuntu host with Git, Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), Docker, and Claude Code, open an agent session in the repository you want to adopt bro in and point it at the file;
+any harness that can read and edit the repository will do.
+With Claude Code:
 
-Development requires Python 3.12 or newer, Git, and [uv](https://docs.astral.sh/uv/).
-`ride` sessions using the Claude harness also require Claude Code;
-container workspaces require Docker, GitHub workflows require `gh`, and benchmark runs additionally require Docker's `compose` CLI plugin, which installs separately from the engine.
-`bro/setup/setup_env.sh` is an opinionated macOS/Ubuntu reference installer for these host tools, not part of repository provisioning.
+```console
+cd ~/acme
+claude 'fetch https://raw.githubusercontent.com/dzhioev/bro/master/BOOTSTRAP.md and follow its instructions'
+```
 
-## Installation
+The session pins the framework into the project from this repository at one commit, declares a first developer bro, wires the host's credentials, and commits the setup;
+then it proves the setup with one isolated run and hands you a `dive-in` to continue from, showing every write before it makes it.
 
-The base `bro` distribution provides the declaration and inspection APIs, MCP abstraction, credential handling, shared workspace/session primitives, prompts, and framework services.
-Install the distribution for the engine you run:
+To work on the framework itself, clone this repository and run `./setup.sh`.
 
-- `bro-native` — the native LLM loop, the `bro` command (`list`, `show`, `run`, and `chat`), provider clients, and terminal UIs
-- `bro-ride` — the managed-workspace runtime, both harness adapters, `ask` / `call` aliases, and `dive-in`
-- `bro-oops` — deployment and operations helpers for repositories that deploy bro services
-- `bro[http]` — aiohttp-based clients and services
-- `bro[llm]` — OpenAI LLM access without the agent UI dependencies
-- `bro[runtime]` — the MCP serving front, over stdio or HTTP
-- `bro[trails-server]` — the aiohttp trails proxy and optional DynamoDB/S3 backend
-- `bro[aws]` — the `ssm` credential source
-- `bro[github]` — GitHub App authentication
+## Meet triage, an example
 
-A repository operated by `ride` may provide a root `setup.sh` to provision its own environment;
-an absent script is logged and skipped.
-Session machinery always comes from the invoking installation's frozen runtime bundle
-— a host snapshot or a read-only container volume
-— so the project environment need not provide `ride` or `bro`.
-The ride installation itself must provide every persona, extension, and engine a session uses, including `bro-native` for `--harness bro`.
-Managed-session PATH contains pinned session commands plus system tools;
-repository commands use `uv run` or `.venv/bin/`.
-A consuming development repository normally installs `bro-dev` in its dev dependency group and calls `bro.dev.install` during setup to install the commit-footer hooks and `git golc` alias.
-When the container entrypoint links the optional project dependency bake into the tree it exports `RIDE_VENV_MANIFEST`, whose staged manifests let setup reuse the environment until the tree's copies diverge.
+Everything from here on is one invented example:
+`acme`, a project that does not exist, and `triage`, the bro it ships to work its issue queue.
+`triage` reads a report against the code, labels the issue or closes it as a duplicate, files a task for a confirmed bug, and hands the bug on.
+It holds no shell and patches nothing.
+Here is all of it:
 
-> [!NOTE]
-> **Upgrade from checkout-keyed runtime state:** the first outer `ride`, `ask`, or `call` command migrates existing project-keyed workspaces, trails, summon audit, and broker state into the global runtime root.
-> See [`bro/reference/ride.md`](bro/reference/ride.md#runtime-state) for the migration contract.
+```python
+# bros/triage/__init__.py
+import bro.brog.mcp as brog_mcp
+from acme import issues
+from bro.base.condition import when
+from bro.bro import feature
+from bro.datasources.references import man
+from bro.datasources.web_search import WebSearch
+from bro.harness import claude
+from bro.llm.llms import openai
+from bro.mcp import creds, harness, mount, sh
+from bros.bro import Bro
+from bros.dev import mcp as dev_mcp
 
-## Extension entry points
+SYSTEM_PROMPT = """\
+You triage the issues of this repository: read a report against the code,
+label it or close it as a duplicate, and hand a confirmed bug on. You hold
+no shell and patch nothing. Read issues through the `issues::` tools; search
+the web when a report names a library you do not know.
+{{when #features contains brog}}
+A confirmed bug gets a task (`brog::create_task`) before it is handed on.
+{{end}}{{when #may_summon contains analyst}}
+Before you label a report, [[ask analyst whether a recorded run already worked on it]],
+and read the run it names.
+{{end}}{{when #may_summon contains fixer}}
+Hand a confirmed bug to `fixer` with [[ask]]: one self-contained prompt with the
+issue number, what you read, and the task.
+{{end}}"""
 
-Installed distributions contribute framework extensions through standard Python entry-point groups:
 
-- `bro` — personas, keyed by persona name
-- `bro.credential_sources` — credential minting source classes, keyed by source type
-- `bro.credentials` — credential registry fragments
-- `bro.brog.backends` — task-tracker backends, keyed by backend name
-- `bro.toolsets` — standalone MCP `Toolset` objects, keyed by namespace
-- `bro.mcp.targets` — assembled MCP target resolvers, keyed by target prefix
-- `bro.session_commands` — console scripts exposed on managed-session PATH
-- `bro.broker_kinds` — broker request kinds served by every managed session's host, keyed by kind name;
-  each entry targets a factory `(workspace_tree) -> handler`
+class Triage(Bro):
+  name = 'triage'
+  description = 'reads and labels incoming issues, hands confirmed bugs on'
+  llm_spec = openai.LLMSpec(model='gpt-5.6-sol', reasoning_effort='high')
+  features = {'brog': creds.contains('brog')}
+  may_summon = ('analyst',)
+  tools = [
+    mount(issues.toolset),
+    when(feature('brog'), mount(brog_mcp.toolset, 'create_task', 'add_comment')),
+    when(harness == 'bro', mount(dev_mcp.toolset, 'read_file', 'grep')),
+    claude.block(*claude.SHELL, *claude.DELEGATION),
+    sh('bro show', 'name'),
+    sh('rewind show', 'trail_id', 'output_limit'),
+  ]
+  data_sources = [WebSearch(), man('environment')]
+  system_prompt = SYSTEM_PROMPT
+```
 
-Entry-point metadata is written when a distribution is installed, so adding or removing a declaration requires another `uv sync`;
-editing an already-declared target does not.
-Name-keyed groups load only the selected entry.
-Credential registry assembly loads every `bro.credentials` contributor, so those target modules must remain cheap to import.
-Each target is a dictionary with a required one-line `description` and an optional registry-format `install` hook;
-source paths, instances, and other fields are rejected.
-A `bro.credential_sources` target is a `MintingSource` subclass whose `TYPE` matches its entry-point name.
-Its inherited `from_dict` receives only that type's parameters from `creds.json` (the `type` discriminator and convention material path are owned by the store), and `mint(config)` derives a value from the JSON object in `creds/<name>.cred`.
-Broker composition loads every `bro.broker_kinds` contributor, so those target modules must remain cheap to import.
-Each `bro.session_commands` entry repeats the name and target of a console script from the same distribution;
-materialization rejects missing, mismatched, or duplicate declarations.
+## Run it anywhere
 
-## Project configuration
+`dive-in` is the everyday launcher:
+run from inside a checkout, it starts an isolated session against that checkout with the project's default bro, and the launch flags pass through to `ride` underneath.
 
-Every repository attached with `--repo` declares its launch defaults;
-detached sessions read no project configuration:
+Triage tonight's queue as a Claude Code session in a container:
+
+```console
+dive-in 'triage the queue'
+```
+
+The same bro under bro's own loop, on an OpenAI model at high effort:
+
+```console
+dive-in --harness bro --llm openai:sol:high 'triage the queue'
+```
+
+Back on Claude Code, pinned to one model at maximum effort:
+
+```console
+dive-in --llm :fable5:max 'triage the queue'
+```
+
+Bare Claude, holding only the declared tools and none of Claude's own:
+
+```console
+dive-in --raw 'triage the queue'
+```
+
+Another bro of the project, on a host worktree with permission prompts kept:
+
+```console
+dive-in --bro reviewer --host 'review PR #131'
+```
+
+One reply on stdout, for a script:
+
+```console
+ask --repo ~/acme triage 'is #128 a duplicate of #97?'
+```
+
+And no boundary at all, in the calling process, when you just want to poke at it:
+
+```console
+bro run triage 'is #128 a duplicate of #97?'
+```
+
+## Hand the bug on
+
+On its own authority `triage` may consult the analyst and nobody else;
+the helpers that change code are granted at launch.
+Lend it both for this session:
+
+```console
+dive-in --grant @fixer --grant @reviewer 'triage the queue'
+```
+
+The prompt's delegation paragraph is in now, and a confirmed bug is handed on in plain words, by the session or by you:
+
+```
+[[ask fixer to fix #128; the task has what I read]]
+```
+
+The fixer runs in a fresh container of its own, on the same commit, with its own scoped credentials and nothing inherited, and its answer comes back into the conversation.
+When it reports a pull request:
+
+```
+[[ask reviewer to review PR #131]]
+```
+
+The phrase is the same under bro's own loop and in a Claude session, and a bro's own prompt uses it the way you do.
+
+## What the declaration says
+
+Read the class line by line and nothing is left to configure elsewhere:
+
+- `mount(issues.toolset)` mounts the project's own toolset, and `mount(brog_mcp.toolset, 'create_task', 'add_comment')` two tools of another, the subset validated at import.
+- `when(feature('brog'), …)` makes the tracker appear wherever a tracker credential resolves, and the prompt's `{{when #features contains brog}}` paragraph appears with it.
+- `when(harness == 'bro', …)` gives the bro file reading only where the harness brings no file tools of its own.
+- `claude.block(*claude.SHELL, *claude.DELEGATION)` withholds Claude's shell and subagents:
+  triage holds no shell, and delegation goes through summons, inside the boundary.
+- `sh('bro show', 'name')` and `sh('rewind show', 'trail_id', 'output_limit')` are the two commands it may run, each served as a tool:
+  the card of a bro it is about to hand work to, and the run the analyst names.
+  How a command becomes a tool is below.
+- `data_sources` are read-only connectors whose summaries land in the prompt: web search and the reference manual.
+- `llm_spec` is the model it runs on by default;
+  any launch may name another.
+- `may_summon = ('analyst',)` is whom it may summon on its own authority:
+  the built-in analyst, which answers from the recorded runs.
+  Every other delegate is a launch grant, and a `{{when #may_summon contains …}}` paragraph shows only in a session that may.
+- `bros/triage/spells/triage.md`, beside the class, is its procedure, served as the `spell::triage` tool.
+
+**A command is a tool.**
+`sh('rewind show', 'trail_id', 'output_limit')` reads the arguments `rewind show` declares
+— from its parser, not its help text
+— and serves it as `sh::rewind_show` with the two named parameters, the rest withheld.
+This is what the model sees:
+
+```json
+{
+  "trail_id": {"type": "string", "description": "trail id (or a legacy claude session id)"},
+  "output_limit": {"type": "integer", "description": "max rendered output lines (default with an offset: 100)"}
+}
+```
+
+A call `sh::rewind_show(trail_id='01m1z954qq-q9frvz3q-scmg8x5h', output_limit=200)` runs one fixed argv, with no shell in between:
+
+```console
+rewind show --output-limit=200 -- 01m1z954qq-q9frvz3q-scmg8x5h
+```
+
+The program and its subcommands come from the declaration, never from the model, and a value that looks like an option still reaches the command as a value.
+Any console script built on the framework's argument parser qualifies, a project's own included.
+
+For a command outside the framework there is no parser to read, so a toolset tool runs the fixed argv itself, as `close_duplicate` above does.
+These are the parameters of `issues::close_duplicate` as the model sees them:
+
+```json
+{
+  "number": {"title": "Number", "type": "integer"},
+  "duplicate_of": {"title": "Duplicate Of", "type": "integer"}
+}
+```
+
+A call `issues::close_duplicate(number=128, duplicate_of=97)` runs:
+
+```console
+gh issue close 128 --comment 'duplicate of #97'
+```
+
+Inside the session `gh` is authenticated by the `github` credential's install hook, so the tool carries no token of its own.
+
+**Credentials are never listed.**
+The toolset says it reads `github`, `WebSearch` says `brave`, the tracker says `brog`;
+the bro's manifest is the union, and `bro show` prints it beside the tools:
+
+```console
+$ bro show triage
+…
+## MCP tools
+
+- `issues` — 3 tools
+  - `list_issues` — list open issues carrying a label, newest first
+  - `label_issue` — add a label to an issue
+  - `close_duplicate` — close an issue as a duplicate of another
+- `brog` — 2 tools
+  …
+- `dev` — 2 tools
+  …
+- `sh` — 2 tools
+  - `bro_show` — print an info card for a bro
+  - `rewind_show` — render one generalized conversation (the default command)
+
+## Features
+
+- **brog** — gated on `#creds contains brog`; on in this environment
+
+## Secrets
+
+- `brave`
+- `brog`
+- `github`
+- `openai` — optional (used if present)
+- `openai` — LLM key
+- _session baselines (`trails`; `anthropic` for `--raw`) added per-surface_
+…
+```
+
+The toolset is an ordinary module, one `Toolset` per namespace:
+
+```python
+# acme/issues.py
+import subprocess
+
+from bro.mcp import Toolset
+
+
+class _Toolset(Toolset[None]):
+  secrets = ('github',)
+
+
+toolset = _Toolset('issues')
+
+
+@toolset.tool('list open issues carrying a label, newest first')
+def list_issues(label: str, limit: int = 20) -> str:
+  ...
+
+
+@toolset.tool('add a label to an issue')
+def label_issue(number: int, label: str) -> str:
+  ...
+
+
+@toolset.tool('close an issue as a duplicate of another')
+def close_duplicate(number: int, duplicate_of: int) -> str:
+  argv = ['gh', 'issue', 'close', str(number), '--comment', f'duplicate of #{duplicate_of}']
+  return subprocess.run(argv, check=True, capture_output=True, text=True).stdout
+```
+
+Every tool has one canonical name, `namespace::tool`
+— `issues::list_issues`, `brog::create_task`, `spell::triage`
+— and that is the name prompts and spells use;
+each harness spells its own wire form (`issues__list_issues`, `mcp__issues__list_issues`), and the model is told the rule once.
+
+The two helpers derive from built-in personas and declare only what they add;
+the whole of `dev` and `eyebro`
+— tools, spells, prompt, provisioning
+— comes along the class hierarchy:
+
+```python
+# bros/fixer/__init__.py
+from bro.llm.llms import openai
+from bros.dev import Dev
+
+
+class Fixer(Dev):
+  name = 'fixer'
+  description = 'fixes a confirmed bug and opens the pull request'
+  llm_spec = openai.LLMSpec(model='gpt-5.6-sol', reasoning_effort='high')
+  features = {'brog': True}
+  extra_secrets = ('github',)
+  system_prompt = 'Work from the task you were handed, and open the pull request with [[run pr]].'
+
+
+# bros/reviewer/__init__.py
+from bros.eyebro import Eyebro
+
+
+class Reviewer(Eyebro):
+  name = 'reviewer'
+  description = 'reviews a pull request against the repository standards'
+  extra_secrets = ('github',)
+```
+
+Registration is three entry points and a default:
 
 ```toml
+# pyproject.toml
+[project.entry-points.bro]
+triage = "bros.triage:Triage"
+fixer = "bros.fixer:Fixer"
+reviewer = "bros.reviewer:Reviewer"
+
 [tool.bro]
-default = "dev"
-harness = "claude"                        # optional ride default; claude when omitted
-image-repository = "bro/example"          # optional; defaults to bro/<default>
-build-context-command = "git ls-files"    # optional session-image context file list
+default = "triage"
 ```
 
-`default` is required.
-`harness` accepts `claude` or `bro`.
-Unknown keys and malformed values fail at config load rather than being ignored.
+The persona is the same on every harness:
+its prompt, its spells, its credentials, its allow-list.
+What differs is what the harness brings of its own, and the declaration decides what to do with it.
+A Claude session comes with Claude's tools and skills, so the declaration withholds the ones it does not want and adds its namespaces as MCP servers beside the rest;
+bro's own loop and a bare session serve exactly the declared roster.
+The model is a launch decision as much as a declaration:
+`--llm provider:model:effort[+fast]`, any part left empty to keep the declared one, or a preset the project names.
 
-## Trails storage
+## A boundary you can read
 
-Recording is mandatory, and storage is local unless configured otherwise:
-with no resolving `trails` credential, a run writes to the global `trails` directory in the runtime state root (`bro/reference/ride.md`, "Runtime state").
-Container launch composers bind-mount that host root at the fixed absolute `/var/ride/trails` path inside the container automatically.
+Before a session exists, its reach is on paper.
+The card above lists the tools and the secrets;
+the scope names which stored instance backs each secret for this checkout and this bro, and whether it resolves:
 
-The hosted service is the opt-in, `{"backend": "service", "base_url": "https://trails.example", "token": "<bearer>"}`;
-an existing config with `base_url` and `token` but no `backend` continues to select the service, and `{"backend": "local"}` states the default explicitly.
-`trails-server` resolves its hosted store from the same credential vocabulary, selecting either local storage or the DynamoDB/S3 shape documented in [`bro/setup/AGENTS.md`](bro/setup/AGENTS.md)
-— but it requires the credential rather than defaulting, since a server states the backend it serves;
-only its bearer-auth settings remain command-line/environment flags.
-
-## Development
-
-```bash
-./setup.sh
-source .venv/bin/activate
-./format.sh
-run-tests
+```console
+ride scope --repo ~/acme --bro triage
 ```
 
-`./setup.sh` syncs the editable workspace and installs the repository hooks;
-the formatter and the test gate cover every workspace member, plus [`benchmark/`](benchmark/README.md), which ships from this repository beside the workspace rather than inside it and carries an environment of its own.
-Build the workspace wheels with `uv build --package bro`, `uv build --package bro-native`, `uv build --package bro-dev`, `uv build --package bro-oops`, and `uv build --package bro-ride`.
+Which instance that is stays out of the repository, in the host's `~/.bro.json`:
+
+```json
+{
+  "defaults": {"creds": ["github+me"]},
+  "projects": {
+    "https://github.com/acme/acme": {
+      "creds": ["brog+github", "github+bot"],
+      "bros": {"reviewer": {"creds": ["github+reviewer"]}}
+    }
+  }
+}
+```
+
+Inside the container, the session finds:
+
+- `/workspace`, a clone on a fresh branch based on the commit the launch names, never your working tree;
+- the framework it was launched from, frozen and read-only, so the project need not install it;
+- a credential store holding exactly the declared kinds, resolved on the host into memory and copied into the container's writable layer.
+  A missing required kind fails on the host before the container exists;
+  an undeclared kind resolves to `SecretNotFound`;
+  the store dies with the container;
+- its own `~/.claude` and git configuration, constructed by the launch.
+  No host `~/.claude.json`, credentials file, `~/.gitconfig`, or Docker socket.
+
+Lend it one more credential for one launch:
+
+```console
+dive-in --grant aws 'why did the deploy fail?'
+```
+
+Delegation is bounded the same way.
+A child may summon only whom its parent could and hold only what its parent lends it;
+the host authorizes every request and journals it, and the child's trail records who summoned it.
+
+Afterwards, every run on every harness is a recorded trail:
+
+```console
+rewind show <trail-id>
+```
+
+Two boundaries are not drawn:
+the container's network is unrestricted, and `--host` runs as the host user, with scoped credentials as a convenience rather than a security boundary.
+
+## Also in the box
+
+- **Spells.**
+  A procedure is a markdown file beside the persona, mounted as a tool and callable by phrase:
+  `[[triage #128]]` in any prompt names `spell::triage`, and its body renders per harness.
+  Claude's own skills keep working next to them.
+- **Holds.**
+  A session is told how firmly a human holds it, from `unattended` to `guided`, and behaves accordingly;
+  an unattended run can `raise` instead of guessing.
+- **Trails.**
+  `rewind` reads any run back, a conversation forks and continues, and `ride resume` picks a workspace up where it stopped.
+- **Tasks.**
+  `dive-in -t 77` opens a session on a tracker task, and the built-in `dev` persona carries the task → PR → land workflow as spells.
+- **Personas.**
+  `dev`, `eyebro`, `lead`, `terminal`, `analyst`, and `devoops` ship ready to derive from.
+- **Artifacts.**
+  Peers pass files by content-addressed reference, and reach follows the launch tree.
+- **One conditioning model.**
+  `when(harness == 'bro', …)` in code and `{{when #harness = bro}}` in text evaluate the same facts and fail fast on a typo.
+
+## Status
+
+Two harnesses and one native provider today, footnoted above;
+installs pin a commit of this repository, with a package index still to come;
+the native loop's third-party skill loader exists with nothing loaded yet.
+
+## Read more
+
+- [`DESIGN.md`](DESIGN.md) — the conceptual model
+- [`AGENTS.md`](AGENTS.md) — the framework map, and how to add a bro, a data source, a toolset
+- [`bro/reference/ride.md`](bro/reference/ride.md) — the runtime: workspaces, credentials, summons, recording
+- [`bro/reference/conditions.md`](bro/reference/conditions.md) and [`bro/reference/template.md`](bro/reference/template.md) — conditioning in code and in text
+- [`bro/setup/AGENTS.md`](bro/setup/AGENTS.md) — the credential store and the host config
 
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+[^harness]: Today a bro runs under Claude Code or under bro's own loop.
+The harness seam is one class, and more harnesses are coming.
+
+[^llm]: Today bro's own loop runs OpenAI models, and a Claude Code session runs Anthropic's.
+A provider is a recipe module plus a client, and more are coming.
