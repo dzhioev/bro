@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from bro.artifact import is_ref
 from bro.base import credentials, log
-from bro.summon import DEFAULT_HARNESS, DEFAULT_TIMEOUT
+from bro.summon import DEFAULT_TIMEOUT
 from ride import pending_summon
 from ride.harness import HARNESS_NAMES, get_harness
 from ride.peer_facts import PeerFact, PeerFacts, PeerIdentity, UnattributablePeer
@@ -84,14 +84,14 @@ def summon_allow_list(bro_name: str, *, grant: list[str], revoke: list[str]) -> 
 
 def _summoned_scope(
   target: str,
-  harness_name: Optional[str],
+  harness_name: str,
   llm: Optional[str],
   *,
   attachment: Optional[str],
   grant: Sequence[str] = (),
   revoke: Sequence[str] = (),
 ) -> ScopedSecrets:
-  harness = get_harness(harness_name if harness_name is not None else DEFAULT_HARNESS)
+  harness = get_harness(harness_name)
   return summoned_credential_scope(
     target,
     harness.scope_recipe(harness.default_options()),
@@ -195,21 +195,28 @@ def _credential_refusal(
   grant_credentials: list[str],
   harness_name: Optional[str],
   llm: Optional[str],
+  summon_harness: str,
 ) -> Optional[str]:
   """why the request's credential widening is refused, or None when it stays
   inside the requester's own scope. Two widenings, one bound: what `grant`
   names outright, and what the requested `harness`/`llm` add on top of the
-  target's own default scope, the driving loop they select contributing
-  credentials of its own. Only that delta is bounded — the target's declared
-  credentials are what its allow-list entry sanctions. A child scope that cannot
-  be computed at all is a refusal of its own, carrying the reason.
+  target's own default scope under `summon_harness`, the driving loop they
+  select contributing credentials of its own. Only that delta is bounded — the
+  target's declared credentials are what its allow-list entry sanctions. A child
+  scope that cannot be computed at all is a refusal of its own, carrying the
+  reason.
 
   Raises `UnattributablePeer` when the requester's own scope cannot be read."""
   widening: set[str] = set()
   if harness_name is not None or llm is not None:
     try:
-      requested_scope = _summoned_scope(target, harness_name, llm, attachment=attachment)
-      default_scope = _summoned_scope(target, None, None, attachment=attachment)
+      requested_scope = _summoned_scope(
+        target,
+        harness_name if harness_name is not None else summon_harness,
+        llm,
+        attachment=attachment,
+      )
+      default_scope = _summoned_scope(target, summon_harness, None, attachment=attachment)
       widening = (requested_scope.required | requested_scope.optional) - (
         default_scope.required | default_scope.optional
       )
@@ -254,6 +261,7 @@ class SummonControl:
     journal: 'Journal',
     audit_file: Path,
     depth_cap: int,
+    summon_harness: str,
   ):
     self._workspace = workspace
     self._facts = facts
@@ -263,6 +271,9 @@ class SummonControl:
     if not isinstance(depth_cap, int) or isinstance(depth_cap, bool) or depth_cap <= 0:
       raise ValueError('summon depth cap must be a positive integer')
     self._depth_cap = depth_cap
+    if summon_harness not in HARNESS_NAMES:
+      raise ValueError(f'summon harness must be one of {", ".join(HARNESS_NAMES)}')
+    self._summon_harness = summon_harness
     self._audit_attribution: dict[str, dict[str, str]] = {}
 
   # --- the `summon` request handler (broker loop) -------------------------------
@@ -320,6 +331,7 @@ class SummonControl:
         grant_credentials=grant_credentials,
         harness_name=harness_name,
         llm=llm,
+        summon_harness=self._summon_harness,
       )
     except UnattributablePeer as reason:
       refusal = str(reason)
@@ -379,14 +391,15 @@ class SummonControl:
         repo=self._workspace.repository,
         summoner=summoned_by,
         may_summon=tuple(sorted(child_allow_list)),
+        harness=harness_name if harness_name is not None else self._summon_harness,
         summon_depth=self._depth_cap,
+        summon_harness=self._summon_harness,
         into=args.get('into'),
         hold=args.get('hold'),
         grant=tuple(grant),
         revoke=tuple(revoke),
         share=tuple(share),
         llm=llm,
-        harness=harness_name,
       ),
       peer,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,
@@ -452,7 +465,7 @@ class SummonControl:
     try:
       return _summoned_scope(
         fact.bro,
-        fact.harness,
+        fact.harness if fact.harness is not None else self._summon_harness,
         fact.llm,
         attachment=self._workspace.metadata.repo,
         grant=grant,

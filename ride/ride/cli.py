@@ -5,7 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
-from bro.base import host_config, log
+from bro.base import configs, host_config, log
 from bro.base.args import REMAINDER, SUPPRESS, Parser
 from bro.launch.llm_flags import canonicalize, drop_piece_flags, selection_from_args
 from bro.llm.providers import LLMSelectionError
@@ -239,6 +239,7 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     harness = get_harness(harness_name)
     canonicalize(args, selection_from_args(args, project=config))
     summon_depth = host_config.summon_depth(None if config is None else config.summon_depth)
+    summon_harness = config.summon_harness if config is not None else configs.DEFAULT_SUMMON_HARNESS
     drop_piece_flags(args)
   except (LLMSelectionError, ValueError) as error:
     parser.error(str(error))
@@ -275,6 +276,7 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     resume=resume,
     harness_options=harness_options,
     summon_depth=summon_depth,
+    summon_harness=summon_harness,
     **args,
   )
   if in_place:

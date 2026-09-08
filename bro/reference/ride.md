@@ -308,6 +308,8 @@ Detached launches read no project file:
 [tool.bro]
 default = "foo"                      # the bro utilities such as dive-in and scope default to
 harness = "claude"                   # optional ride default; claude when omitted
+summon-harness = "bro"               # optional: the harness a summon naming none runs its
+                                     # child under; bro when omitted
 summon-depth = 4                      # optional deepest summon generation
 image-repository = "custom-images"   # optional: docker repository for the repo's session-container
                                      # images, defaulting to bro/<default> (bro/foo here)
@@ -329,6 +331,8 @@ sharp = "openai:sol:max"             # a `--llm` preset name and the recipe it s
 `default` is required and names the **project default bro** used by utilities such as `dive-in` and attached `ride scope`;
 the mode verbs still require their bro positional.
 `harness` is optional (`claude` when omitted) and selects `ride`'s default driver.
+`summon-harness` is optional (`bro` when omitted) and selects the harness a summon that names none runs its child under;
+a detached launch reads no project file, so its summons use that default.
 `summon-depth` is an optional positive integer with no imposed ceiling, setting the deepest summon generation with the root at depth 0 and a default of 2.
 The host's `~/.bro.json` value overrides it for the launch, and detached launches use only that host value or the default because they read no project file.
 `image-repository` and `build-context-command` are optional.
@@ -739,9 +743,10 @@ workspace removal (`--drop`, `ride clean`) deletes it with the workspace.
 
 A session can summon another bro over its channel:
 the target runs as a one-shot, non-TTY docker child (unless the summon is *manual* — the user launches an interactive child themselves;
-see "Manual summon" below) with its own scoped credential set (nothing inherited from the summoner, plus whatever the request's own `grant`/`revoke` names), under the harness the request names
-— both run `ride solo … --in-place`, the default `bro` harness spawning the target's own LLM process there and `harness: claude` a one-shot managed Claude Code session of the target persona (full mode;
-the request's `llm` recipe resolves within the named harness and never switches it)
+see "Manual summon" below) with its own scoped credential set (nothing inherited from the summoner, plus whatever the request's own `grant`/`revoke` names),
+under the harness the request names, or the launch's `[tool.bro] summon-harness` when it names none
+— both run `ride solo … --in-place`, `bro` spawning the target's own LLM process there and `claude` a one-shot managed Claude Code session of the target persona (full mode;
+the request's `llm` recipe resolves within the child's harness and never switches it)
 — with the root session's attachment:
 an attached child bases on the summoner's workspace `HEAD` read at summon time (uncommitted changes never transfer;
 a container summoner's local-only commits are transferred into the attachment first so the child's host-side clone can copy them) unless the request's `into` ref overrides, while a detached root spawns detached children and rejects `into`,
@@ -841,7 +846,8 @@ its own list never passes through
 The credential half of the same flags is bounded against the scope computed from the same row (the root row carries its launch-hydrated scope;
 a summoned peer's is recomputed from its recorded scope inputs) and applied in the summon lowering against the child's computed scope, where a bad override fails the launch instead.
 `harness` and `llm` answer to that same credential bound without naming a credential, since the driving loop they select contributes credentials of its own:
-what the request's pair adds on top of the target's default scope must be in the summoner's set too, so a bro-harness session cannot summon a claude child unless its own launch hydrated `claude_code`.
+what the request's pair adds on top of the target's default scope under the launch's summon harness must be in the summoner's set too,
+so where summons run natively a bro-harness session cannot ask for a claude child unless its own launch hydrated `claude_code`.
 Only that delta is bounded
 — the target's declared credentials are what the allow-list entry already sanctions, and a summoner routinely holds none of them.
 Resolving the pair on the loop also settles the recipe:
@@ -869,7 +875,7 @@ a result lost that way stays recoverable from the child's trail, and the child's
 — removed only after a clean exit
 — survives on disk for inspection and recovery.
 Each authorized spawn records the child's run as its `broker-<channel>` workspace's resume record
-— the same solo session spec a `ride solo --harness bro` launch would record
+— the same solo session spec a `ride solo` launch under the child's harness would record
 — so `ride list` shows the child under its prompt and a surviving workspace resumes like any kept solo workspace:
 `ride resume broker-<channel>` opens an interactive `bro chat` continuing the child's trail (see "Bro harness").
 

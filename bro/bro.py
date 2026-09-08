@@ -248,8 +248,9 @@ _SUMMON_DESCRIPTION = (
   "`into` bases the child on a git ref instead of your workspace's "
   'current HEAD (uncommitted changes never transfer); optional `hold` sets the '
   "child's user-involvement level (default unattended). the child's run is shaped "
-  "by the optional `harness` — the driving loop it runs under: `bro` (default — the target's "
-  'own LLM process) or `claude` (a one-shot managed Claude Code session) — and the optional '
+  "by the optional `harness` — the driving loop it runs under: `bro` (the target's own LLM "
+  "process) or `claude` (a one-shot managed Claude Code session), the project's summon "
+  'harness when omitted — and the optional '
   '`llm` — the LLM recipe it runs within that harness, written `provider:model:effort` '
   'with an optional `+fast` suffix and any field left empty '
   f"(effort is one of {', '.join(EFFORT_LEVELS)}; `::high` keeps the target's own "

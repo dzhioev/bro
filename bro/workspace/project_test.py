@@ -67,6 +67,24 @@ class TestProjectConfig:
     with pytest.raises(ValueError, match=r'\[tool.bro\] harness'):
       project_config()
 
+  def test_summon_harness_defaults_to_the_native_loop(self, project_dir):
+    (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\n')
+    assert project_config().summon_harness == configs.DEFAULT_SUMMON_HARNESS
+
+  def test_summon_harness_parses(self, project_dir):
+    (project_dir / 'pyproject.toml').write_text(
+      '[tool.bro]\ndefault = "foo"\nsummon-harness = "claude"\n'
+    )
+    assert project_config().summon_harness == 'claude'
+
+  @pytest.mark.parametrize('value', ['"other"', '5', '""'])
+  def test_summon_harness_must_be_supported(self, project_dir, value):
+    (project_dir / 'pyproject.toml').write_text(
+      f'[tool.bro]\ndefault = "foo"\nsummon-harness = {value}\n'
+    )
+    with pytest.raises(ValueError, match=r'\[tool.bro\] summon-harness'):
+      project_config()
+
   def test_build_context_command_defaults_to_none(self, project_dir):
     (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\n')
     assert project_config().build_context_command is None

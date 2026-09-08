@@ -22,7 +22,7 @@ from bro.workspace.paths import (
 )
 from ride import pending_summon
 from ride.flags import default_hold
-from ride.harness import Harness, get_harness
+from ride.harness import HARNESS_NAMES, Harness, get_harness
 from ride.identity import human_git_identity_env
 from ride.inner import inner_command
 from ride.repository import Repository, hold_repository, is_git_url, open_repository
@@ -86,10 +86,13 @@ class SessionSpec:
   harness_options: dict
   repo: Optional[str] = None
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
+  summon_harness: str = configs.DEFAULT_SUMMON_HARNESS
 
   def __post_init__(self) -> None:
     if type(self.summon_depth) is not int or self.summon_depth <= 0:
       raise ValueError('summon depth must be a positive integer')
+    if self.summon_harness not in HARNESS_NAMES:
+      raise ValueError(f'summon harness must be one of {", ".join(HARNESS_NAMES)}')
 
   @property
   def llm_spec(self) -> LLMSpec:
@@ -337,6 +340,7 @@ def _container_session(
     workspace,
     may_summon=launch_scope.may_summon,
     summon_depth=spec.summon_depth,
+    summon_harness=spec.summon_harness,
   )
 
 
@@ -414,6 +418,7 @@ def _host_session(
       bro=spec.bro,
       interactive=not spec.solo,
       summon_depth=spec.summon_depth,
+      summon_harness=spec.summon_harness,
     )
   else:
     runner_env.pop(START_SESSION_BROXY_ENV, None)

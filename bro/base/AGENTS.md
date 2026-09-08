@@ -38,7 +38,7 @@ run those with `--help` for flags.
   `scoped_view_store` is the lazy, kinds-bounded sibling over the passed store.
   `install_hooks(registry, kinds, store, directory, env)` applies only the named kinds and resolves hook values through that store.
   Schemas live in `bro/setup/AGENTS.md`.
-- `configs.py` — the exclusive `BRO_STORE` directory (default `~/.bro`), the `~/.bro.json` host config beside it, the default summon depth, and the installed bro distribution version shared by credential consumers and trail records.
+- `configs.py` — the exclusive `BRO_STORE` directory (default `~/.bro`), the `~/.bro.json` host config beside it, the default summon depth and harness, and the installed bro distribution version shared by credential consumers and trail records.
 - `host_config.py` — the host's launch policy (`~/.bro.json`):
   `project_selection(attachment)` merges `defaults` and the projects an `Attachment`'s identities name,
   `launch_selection(attachment, bro)` adds their per-bro layers,

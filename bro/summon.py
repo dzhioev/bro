@@ -50,8 +50,6 @@ SUMMONED_ENV = 'RIDE_SUMMONED'
 # carries a run's own effective summon allow-list into it, written by the surface
 # that launches the run: a session root's at launch, a summoned child's at its spawn
 MAY_SUMMON_ENV = 'RIDE_MAY_SUMMON'
-# the harness a request naming none runs its child under
-DEFAULT_HARNESS = 'bro'
 # request-lifecycle bound for a summoned child — sized so the flagship deploy
 # workload survives the default; the substrate's generic 600s default is untouched
 DEFAULT_TIMEOUT = 1800.0
@@ -69,8 +67,9 @@ MANUAL_HELP = (
   'a user-launched `ride along --summoned <token>` session answers'
 )
 HARNESS_HELP = (
-  f"the harness the child runs under: '{DEFAULT_HARNESS}' (default — the target's own LLM "
-  "process) or 'claude' (a one-shot managed Claude Code session)"
+  "the harness the child runs under: 'bro' (the target's own LLM process) or 'claude' "
+  "(a one-shot managed Claude Code session); omitted runs it under the project's "
+  '`[tool.bro] summon-harness`'
 )
 GRANT_HELP = (
   "add a credential (KIND or KIND+INSTANCE) or summonable bro (@BRO) to the child's scope "
