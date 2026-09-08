@@ -39,8 +39,10 @@ They are settled defaults rather than questions for implementation:
    Because `[tool.bro] harness` is project-wide, an existing intentional `harness = "bro"` must be changed to `claude` with approval or the bootstrap is unsupported; the exact no-flag smoke has no per-bro escape hatch.
 5. A fresh repository may become a minimal Python 3.12 distribution whose only shipped code is its bro declaration.
    A sidecar narrows the installation that `ride` freezes, but it does not suppress the automatic project-image bake triggered by an attached repository's root `uv.lock`.
-   An existing uv repository is supported only when its root lock and every discovered workspace member can complete this Linux bake command:
-   `uv sync --frozen --all-packages --all-groups --all-extras`.
+   An existing uv repository is supported only when both project-image phases succeed under the runtime image's Linux, Python, network, and no-launcher-credential conditions.
+   The first phase copies only the root lock plus root/workspace manifests and runs `uv sync --frozen --all-packages --all-groups --all-extras --no-install-workspace`.
+   The second mounts the complete tracked build context and runs the same sync with workspace installation enabled.
+   A non-workspace local path dependency can pass a full-tree sync but fail the manifest-only phase, so one host command is not sufficient evidence.
    Otherwise the prompt stops and names the missing framework bake-selection seam instead of claiming the sidecar solves it.
 6. Framework source declarations track public `dzhioev/bro` `master`, while the committed `uv.lock` pins the revision actually installed.
    Bootstrap performs an approved upgrade/relock of `bro`, `bro-dev`, and `bro-ride`, asserts that all three resolve to one Git commit, and binds every source/manual/template read to that commit.
@@ -130,15 +132,18 @@ The session reports a short checkpoint after each section and stops on an unmet 
 - Determine whether the root is an installable PEP 621 project, a uv workspace, a non-Python repository, or a project owned by another packaging system.
 - Determine which distribution and package-discovery rule would actually ship the bro module.
 - Inspect the environment and lock for private, local-only, platform-specific, or otherwise unreproducible distributions, because `ride` freezes every installed distribution rather than only `bro`'s dependency closure.
-- When the repository has a root `uv.lock`, inspect every uv workspace member and all groups and extras for Linux/container resolvability.
-  `ride` always bakes that complete root lock for an attached container, independently of which venv supplied the `ride` executable.
+- When the repository has a root `uv.lock`, inspect every uv workspace member, dependency group, extra, source override, and local path dependency for both Linux project-image phases.
+- Model phase one with only `uv.lock`, the root `pyproject.toml`, and discovered workspace-member manifests present, plus `--no-install-workspace`.
+  A non-workspace path source, private fetch, or platform-only dependency that needs omitted source is incompatible even when a full checkout sync passes.
+- Model phase two with the complete tracked image build context and workspace installation enabled.
+  `ride` performs both phases independently of which venv supplied the executable.
 - Search installed and declared bro entry points plus existing `[tool.bro]` tables for conflicts before adding anything.
 - Detect a partial prior bootstrap and compare its dependency roles, source pins, entry point, module, lock, and environment rather than appending a second copy.
 
 **Ask:**
 
 - In an existing uv-managed Python project, confirm that adding the declaration to its distribution or to an installed workspace member is acceptable.
-- Use the integrated shape only when the project's packaging, complete activated environment, and any automatic root-lock project bake can be reproduced by the Linux runtime materializer.
+- Use the integrated shape only when the project's packaging, complete activated environment, and both manifest-only plus full-tree root-lock bake phases can be reproduced by the Linux runtime materializer.
 - Propose the isolated `bro_project/` sidecar when the repository uses another package manager, has ambiguous package discovery, or has no root `uv.lock` and the application environment itself is too broad.
 - Explain that a sidecar cannot rescue an unsafe root uv lock because the attached repository independently triggers the full project bake.
   If that bake is not viable, stop before editing and identify a future `[tool.bro]` project-bake selection or suppression seam as prerequisite framework work.
@@ -216,7 +221,7 @@ It leaves `bros/` without an `__init__.py`, because it is a shared PEP 420 names
 - Commit `bro_project/uv.lock`, while ignoring only `bro_project/.venv/`, build output, and normal Python cache files.
 
 This fallback keeps an unrelated build backend and application lock untouched and gives bare `ride` an installation containing only the framework stack and consumer entry-point distribution.
-It narrows the runtime bundle only; a root `uv.lock` still drives the attached repository's separate all-members, all-groups, all-extras project bake and must already pass the compatibility gate above.
+It narrows the runtime bundle only; a root `uv.lock` still drives the attached repository's separate manifest-only and full-tree all-members, all-groups, all-extras project-image phases and must already pass both compatibility gates above.
 Inside an existing uv workspace, keep this narrow shape outside the workspace's member patterns, adding an explicit workspace exclusion when needed, and invoke every uv operation with `--project bro_project`.
 If the user instead chooses a real workspace member, follow the integrated-member path and use the workspace lock and environment.
 
@@ -582,16 +587,18 @@ The unborn-branch failure, missing remote, first commit, image build, credential
 1. Claude reads the existing instructions, status, remotes, packaging, lock, setup path, and package discovery before proposing a diff.
 2. It leaves an unrelated modified file untouched and creates a setup branch if that repository's policy requires one.
 3. It classifies compatible, partial, and conflicting prior bro setup before editing, and a rerun never creates a second dependency, entry point, credential instance, or initial task.
-4. In a reproducible uv-managed PEP 621 project it merges dependencies, sources, the entry point, and `[tool.bro]` into the owning distribution or an installed workspace member and updates package discovery deliberately.
-   In a Poetry, Node-only, table-only, private-dependency, or platform-specific application environment it uses `bro_project/` and leaves the application backend and lock alone.
-5. It reruns the established sync after entry-point metadata changes and builds the affected distribution, catching a module that worked only from the source tree.
-6. The wire pass inventories existing credential instances, reuses suitable ones, shows the exact host-config merge keyed by the actual origin spelling, and verifies every selected layer with `ride scope` without printing values.
-7. It stages only bootstrap paths and commits them.
+4. For a root uv lock, it separately validates the manifest-only `--no-install-workspace` layer and the complete tracked-tree installation layer under the runtime image conditions.
+   A non-workspace path source is tested as an omitted-source risk rather than inferred safe from a successful checkout sync.
+5. In a reproducible uv-managed PEP 621 project it merges dependencies, sources, the entry point, and `[tool.bro]` into the owning distribution or an installed workspace member and updates package discovery deliberately.
+   In a Poetry, Node-only, or table-only repository without a conflicting root uv bake, it can use `bro_project/` and leave the application backend and lock alone.
+6. It reruns the established sync after entry-point metadata changes and builds the affected distribution, catching a module that worked only from the source tree.
+7. The wire pass inventories existing credential instances, reuses suitable ones, shows the exact host-config merge keyed by the actual origin spelling, and verifies every selected layer with `ride scope` without printing values.
+8. It stages only bootstrap paths and commits them.
    The exact solo check uses local `HEAD`, while the final dive-in command carries `--into <sha>` until the setup commit reaches the remote default branch.
-8. Brog creation and task prefetch use the configured repository, not whichever GitHub identity or task backend is globally default.
+9. Brog creation and task prefetch use the configured repository, not whichever GitHub identity or task backend is globally default.
    Before creating it, the session accepts and verifies a user-supplied prior URL or exhaustively enumerates all-status GitHub issues for the durable body marker.
    It creates only after proving zero matches, stops on ambiguity or truncation, and treats a terminal match as an already completed handoff.
-9. If the repository's existing project default remains intentional, final handoff names `--bro <developer-name>`; otherwise omission verifies the new default.
+10. If the repository's existing project default remains intentional, final handoff names `--bro <developer-name>`; otherwise omission verifies the new default.
 
 This walk leaves existing application dependencies, dirty work, package-manager policy, host defaults, existing bro defaults, and task history intact.
 
@@ -603,7 +610,8 @@ A later implementation session can verify the prompt from this managed container
 - fetch every absolute source link and check that its named heading or file exists;
 - create a throwaway fresh Git repository from the prompt's minimal `uv_build` shape, sync it against the public Git sources, build it, and prove `create_bro('my-dev')` resolves through installed entry-point metadata;
 - create a throwaway existing non-Python repository with unrelated dirty work, add the sidecar shape, and prove sync, build, registry resolution, and status preservation;
-- create a root uv-lock fixture and prove that `ride.workspace.build_context.manifest_paths` still selects the full project bake when `ride` comes from a sidecar, then check that the prompt rejects an incompatible bake rather than claiming isolation;
+- create a root uv-lock fixture with a non-workspace local path dependency whose full-tree sync passes but whose manifest-only `--no-install-workspace` phase fails;
+  prove that a sidecar still selects this project bake, exercise both Dockerfile phases or an equivalent narrow image check, and verify the prompt rejects the incompatible repository rather than claiming isolation;
 - seed a retained framework lock, run the documented approved relock, assert `bro`, `bro-dev`, and `bro-ride` resolve to one SHA, and verify every authoritative URL uses it;
 - unset inherited `BRO_STORE` and point `HOME` and `XDG_DATA_HOME` at throwaway directories;
   create fake non-production credential material and an origin-keyed host selection including the real `.git` suffix;
@@ -648,8 +656,9 @@ The prompt itself tells the user to report the host outcome, in line with the ta
   Idempotent task reconciliation therefore uses the selected GitHub API read path, all statuses, a durable body marker, and fail-safe no-write behavior.
 - Freezing a large existing application environment can include private or platform-specific distributions.
   A sidecar narrows that runtime bundle, but it cannot suppress an attached root uv lock's separate project-image bake.
-- The project bake installs every root workspace member, group, and extra under Linux.
-  A root uv lock that cannot complete that exact sync makes the repository unsupported until a framework project-bake selection or suppression seam exists.
+- The project bake has a manifest-only dependency layer before its full tracked-tree installation layer.
+  Both install every root workspace member, group, and extra under Linux, and the first uses `--no-install-workspace` with no non-workspace source tree present.
+  A root uv lock that cannot complete either phase makes the repository unsupported until a framework project-bake selection or suppression seam exists.
 - A private VCS dependency may be reachable on the host but not from either container materializer, which intentionally has no launcher credentials.
 - Windows is not claimed as supported by this bootstrap because the repository documents only macOS and Ubuntu setup and the runtime uses Unix host primitives.
 - A Claude Code session opened against another project may not have a safe writable boundary for the chosen target; the prompt restarts from the target root before editing.
@@ -681,7 +690,8 @@ The prompt itself tells the user to report the host outcome, in line with the ta
 - **Using one-time `--grant` flags as setup:** they bypass persistent project selection and would make the acceptance command prove less than the definition of done.
 - **Creating the initial GitHub issue with `gh issue create`:** it would not prove that the configured brog and dive-in prefetch path work.
 - **Using `dive-in --new` without brog:** the trackerless `fix` spell deliberately cannot create a task; bare dive-in is the correct text-only fallback.
-- **Treating the sidecar as a project-bake switch:** it changes the invoking installation, not the attached repository's root-lock bake; unsupported locks fail explicitly instead of relying on file renames or uncommitted manifest edits.
+- **Treating the sidecar as a project-bake switch:** it changes the invoking installation, not either attached root-lock image layer; unsupported locks fail explicitly instead of relying on file renames or uncommitted manifest edits.
+- **Testing only a full-tree uv sync:** the real image first resolves from root/workspace manifests with `--no-install-workspace`, so both phases belong to the support gate.
 - **Reading templates from current `master` after retaining an older lock:** every authoritative read is bound to the one SHA the three installed distributions share.
 - **Using capped open-task listing as proof of absence:** initial-task reconciliation enumerates all GitHub issue statuses and refuses a write when the read is incomplete or ambiguous.
 - **Accepting `ride ... --host` instead of the exact check:** it avoids the required default container path and cannot validate Docker setup.
@@ -707,7 +717,8 @@ Add root `BOOTSTRAP.md` as the attended Claude Code prompt described by the desi
 
 1. Write the prompt as a check/ask/act workflow with explicit checkpoints, restart boundaries, idempotent partial-setup handling, and user confirmation before repository, home-directory, or outward writes.
 2. Cover fresh integrated packages, safe integration into an existing uv project or workspace member, and the independent `bro_project/` sidecar where it actually narrows the invoking installation.
-   Gate every root uv lock on the runtime's all-members, all-groups, all-extras Linux project bake, and stop unsupported repositories instead of presenting the sidecar as a bake switch.
+   Gate every root uv lock on both real Linux image phases: manifest-only resolution with `--no-install-workspace`, then full tracked-tree workspace installation.
+   Stop unsupported repositories instead of presenting the sidecar or a successful full-tree host sync as proof that the bake works.
 3. Carry the verified registry, project config, credential, GitHub brog, committed-base, roster-task, and `dive-in` contracts into the prompt without exposing PPP.
    Cover the full-Claude project-wide harness, opt-in LLM preset, exact-origin identity, and exact smoke-command shape explicitly.
    Relock `bro`, `bro-dev`, and `bro-ride` to one reviewed SHA and bind all source reads to it.
@@ -716,7 +727,8 @@ Add root `BOOTSTRAP.md` as the attended Claude Code prompt described by the desi
 5. Make roster-task handoff rerunnable through a durable body marker, exhaustive all-status GitHub issue enumeration, brog validation and creation, terminal-task handling, and fail-safe no-write behavior on ambiguity or incomplete reads.
 6. Run the repository formatter and full test gate, and check every SHA-bound source link.
    Build and inspect fresh plus sidecar fixture wheels, prove registry resolution, exercise fake scoped credentials with inherited `BRO_STORE` removed, and inspect trackerless `dive-in --dry-run`.
-   Verify retained-lock convergence and prove that a sidecar does not suppress a root-lock project bake.
+   Verify retained-lock convergence and prove that a sidecar does not suppress either root-lock image phase.
+   Include a non-workspace path-source fixture whose full-tree sync passes while manifest-only resolution fails.
    Confirm that the exact solo shape takes the documented in-container refusal in the implementation environment.
 7. Land the stage through `[[run pr]]` with base `integration/487-bootstrap-prompt`.
 
