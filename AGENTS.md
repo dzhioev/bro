@@ -66,7 +66,7 @@ the `bro-dev` and `bro-eyebro` personas under `bros/`, sharing `bro/local/prompt
 the `benchmark` broker kind with its `benchmark-job` session command (`bro/local/benchmark_job.py`
 — a session starts this checkout's host-side score/convert/upload pipeline through the broker),
 and the tests that hold this repository as a whole to a policy
-— whatever is meaningful only inside this checkout), and `README.md` (consumer-facing install and extension contract).
+— whatever is meaningful only inside this checkout), and `README.md` (the front page: the framework's features and limits, shown on one example crew, linking into the references).
 The development style policy is `dev/bro/prompts/dev/style.md`, tool-served to dev sessions as `dev-style-source::read`;
 shell scripts follow `dev/bro/dev/shell_policy.py` (prelude sourcing, shebang), enforced repository-wide by `local/bro/local/shell_policy_test.py`;
 markdown prose follows the semantic line breaks of `dev/bro/dev/markdown_policy.py`, enforced repository-wide by `local/bro/local/markdown_policy_test.py` and checked over a reflow by `check-markdown`.
