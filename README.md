@@ -429,7 +429,6 @@ the native loop's third-party skill loader exists with nothing loaded yet.
 
 ## Read more
 
-- [`DESIGN.md`](DESIGN.md) — the conceptual model
 - [`AGENTS.md`](AGENTS.md) — the framework map, and how to add a bro, a data source, a toolset
 - [`bro/reference/ride.md`](bro/reference/ride.md) — the runtime: workspaces, credentials, summons, recording
 - [`bro/reference/conditions.md`](bro/reference/conditions.md) and [`bro/reference/template.md`](bro/reference/template.md) — conditioning in code and in text
