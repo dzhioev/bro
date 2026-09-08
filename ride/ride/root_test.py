@@ -157,6 +157,7 @@ class TestRunRootViaBroker:
       bro,
       may_summon,
       summon_depth,
+      summon_harness,
       credential_scope,
       container_runtime,
     ):
@@ -165,6 +166,7 @@ class TestRunRootViaBroker:
       captured['bro'] = bro
       captured['may_summon'] = may_summon
       captured['summon_depth'] = summon_depth
+      captured['summon_harness'] = summon_harness
       captured['credential_scope'] = credential_scope
       return 3
 
@@ -186,12 +188,15 @@ class TestRunRootViaBroker:
       base_ref='deadbeef',
     )
     workspace = Workspace.create('ws', project, WorkspaceKind.CONTAINER)
-    code = ride.root._run_root_via_broker(launch, workspace, may_summon={'dev'}, summon_depth=4)
+    code = ride.root._run_root_via_broker(
+      launch, workspace, may_summon={'dev'}, summon_depth=4, summon_harness='claude'
+    )
     assert code == 3
     assert captured['workspace'] is workspace
     assert captured['bro'] == 'bro-dev'
     assert captured['may_summon'] == {'dev'}
     assert captured['summon_depth'] == 4
+    assert captured['summon_harness'] == 'claude'
     assert captured['credential_scope'] == workspace_store.ScopedSecrets(
       {'github'}, {'openai'}, {'github': 'reviewer'}
     )

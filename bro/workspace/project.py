@@ -7,7 +7,14 @@ from bro.base import configs
 from bro.workspace.paths import find_project_root, project_root
 
 _LAUNCH_KEYS = frozenset(
-  {'default', 'harness', 'image-repository', 'build-context-command', 'summon-depth'}
+  {
+    'default',
+    'harness',
+    'summon-harness',
+    'image-repository',
+    'build-context-command',
+    'summon-depth',
+  }
 )
 
 
@@ -19,8 +26,9 @@ def _default_image_repository(default_bro: str) -> str:
 class ProjectConfig:
   """the operated repo's launch defaults: which bro a session runs as when
   `--bro` doesn't name one, the docker repository its session images build
-  under (`bro/<default bro>` unless overridden), the summon depth, and the
-  optional build-context-file-list command.
+  under (`bro/<default bro>` unless overridden), the harness an attached launch
+  and a summon naming none run under, the summon depth, and the optional
+  build-context-file-list command.
 
   `sections` carries the `[tool.bro.<name>]` sub-tables verbatim. Their keys
   belong to whoever declares them, so they are read but never interpreted here.
@@ -29,6 +37,7 @@ class ProjectConfig:
   default_bro: str
   image_repository: str
   harness: str = 'claude'
+  summon_harness: str = configs.DEFAULT_SUMMON_HARNESS
   build_context_command: Optional[str] = None
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
   sections: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -38,6 +47,13 @@ def _optional_string(table: dict, source: str, key: str) -> Optional[str]:
   value = table.get(key)
   if value is not None and (not isinstance(value, str) or value == ''):
     raise ValueError(f'[tool.bro] {key} in {source} must be a non-empty string')
+  return value
+
+
+def _harness(table: dict, source: str, key: str, default: str) -> str:
+  value = _optional_string(table, source, key) or default
+  if value not in ('claude', 'bro'):
+    raise ValueError(f'[tool.bro] {key} in {source} must be `claude` or `bro`')
   return value
 
 
@@ -81,13 +97,11 @@ def project_config_from_text(content: str, source: str) -> ProjectConfig:
   if not isinstance(default_bro, str):
     raise ValueError(f'[tool.bro] default in {source} must be a string')
   override: Optional[str] = table.get('image-repository')
-  harness = _optional_string(table, source, 'harness') or 'claude'
-  if harness not in ('claude', 'bro'):
-    raise ValueError(f'[tool.bro] harness in {source} must be `claude` or `bro`')
   return ProjectConfig(
     default_bro=default_bro,
     image_repository=override if override is not None else _default_image_repository(default_bro),
-    harness=harness,
+    harness=_harness(table, source, 'harness', 'claude'),
+    summon_harness=_harness(table, source, 'summon-harness', configs.DEFAULT_SUMMON_HARNESS),
     build_context_command=_optional_string(table, source, 'build-context-command'),
     summon_depth=_positive_integer(
       table.get('summon-depth', configs.DEFAULT_SUMMON_DEPTH), source, 'summon-depth'

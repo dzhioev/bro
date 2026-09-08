@@ -84,6 +84,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
+      harness='bro',
     )
     lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert lowered == ride.spawn.DockerLaunchSpec(
@@ -131,6 +132,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
+      harness='bro',
     )
     with caplog.at_level('INFO'):
       ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
@@ -144,6 +146,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
+      harness='bro',
       hold='attended',
     )
     lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
@@ -157,6 +160,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
+      harness='bro',
       llm='openai:sol:high+fast',
     )
     lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
@@ -179,6 +183,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
+      harness='bro',
       llm='echo',
     )
     ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
@@ -194,6 +199,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
+      harness='bro',
       grant=('gmail_creds', '@reviewer'),
       revoke=('openai',),
     )
@@ -209,6 +215,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
+      harness='bro',
       grant=('aws',),
     )
     with pytest.raises(ValueError, match='already in the scoped credential set'):
@@ -226,6 +233,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
+      harness='bro',
       hold='guided',
       llm='openai:sol:high',
       grant=('gmail_creds', '@reviewer'),
@@ -278,6 +286,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
+      harness='bro',
     )
     lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert lowered.launch.extra_mounts == (
@@ -294,6 +303,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=('bro', 'reviewer'),
+      harness='bro',
     )
     lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert lowered.launch.env['RIDE_MAY_SUMMON'] == 'bro,reviewer'
@@ -315,6 +325,7 @@ class TestSummonLowering:
       repo=repository,
       summoner=SUMMONER,
       may_summon=(),
+      harness='bro',
     )
     lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert lowered.launch.env[HUMAN_NAME_ENV] == 'Ada Lovelace'
@@ -328,6 +339,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
+      harness='bro',
       into='summon',
     )
     lowered = ride.spawn._lower_summon(
@@ -350,6 +362,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
+      harness='bro',
       into='nope',
     )
     with pytest.raises(ValueError, match='nope'):
@@ -367,6 +380,7 @@ class TestSummonLowering:
       parent='empty',
       summoner=SUMMONER,
       may_summon=(),
+      harness='bro',
     )
     lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert lowered.launch.base_ref is None
@@ -381,6 +395,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
+      harness='bro',
     )
     with pytest.raises(ValueError, match="summoner's HEAD"):
       ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
@@ -406,6 +421,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
+      harness='bro',
     )
     await spawner.spawn(launch, channel, 'X-1')
     [(lowered, lowered_channel, lowered_quest)] = docker.spawned
@@ -431,6 +447,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
+      harness='bro',
       into='nope',
     )
     # the raise crosses to_thread back onto the loop: Dispatcher.spawn turns it
@@ -495,7 +512,7 @@ class TestClaudeSummonLowering:
     from bro.llm.llms.claude_code import LLMSpec as ClaudeCodeSpec
 
     ride.spawn._lower_summon(
-      self._launch(llm=':fable5', summon_depth=5),
+      self._launch(llm=':fable5', summon_depth=5, summon_harness='claude'),
       'broker-CH',
       _container_runtime(),
       _artifacts(),
@@ -507,6 +524,7 @@ class TestClaudeSummonLowering:
     assert spec.harness_options == {'raw': False}
     assert spec.resolved_llm == ClaudeCodeSpec(model='claude-fable-5').dump()
     assert spec.summon_depth == 5
+    assert spec.summon_harness == 'claude'
 
   def test_scope_follows_the_claude_recipe(self, claude_harness, monkeypatch):
     captured: list = []

@@ -64,7 +64,7 @@ when the request turns on a specific commit,
 branch or tag, pass it here rather than naming it in the prompt),
 the child's hold — its user-involvement level (default unattended; the child runs isolated with no human channel, so raise it only when the user explicitly wants otherwise)
 — the child's harness
-— `claude` runs the target as a one-shot managed Claude Code session (default `bro`: the target's own LLM process)
+— `claude` runs the target as a one-shot managed Claude Code session, `bro` as the target's own LLM process (default: the project's `summon-harness`)
 — and the child's LLM recipe
 — `provider:model:effort` with an optional `+fast` suffix and any field left empty, resolved within the child's harness, so `::high` keeps the base provider and model (default:
 the target bro's own recipe on the bro harness,
@@ -86,7 +86,7 @@ An instance grant replaces the target's selection for that kind.
 Both directions are strict, so a no-op grant or a revoke of a kind or bro the target lacks fails the summon rather than passing quietly.
 
 The harness and LLM knobs above answer to that same bound, since the driving loop they pick brings credentials of its own:
-what the pair adds on top of the target's default scope has to be in your scope too, so a session running under the bro harness cannot ask for a `claude` child unless its own launch hydrated the Claude OAuth token.
+what the pair adds on top of the target's default scope has to be in your scope too, so where summons run natively a session running under the bro harness cannot ask for a `claude` child unless its own launch hydrated the Claude OAuth token.
 Relay that denial like any other
 — the fix is on the user's launch line, not in the request.
 

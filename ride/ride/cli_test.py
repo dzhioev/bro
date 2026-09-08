@@ -19,7 +19,10 @@ def project(monkeypatch):
     ride_cli,
     'project_config',
     lambda _repo=None: SimpleNamespace(
-      default_bro='bro-dev', harness='claude', summon_depth=configs.DEFAULT_SUMMON_DEPTH
+      default_bro='bro-dev',
+      harness='claude',
+      summon_harness=configs.DEFAULT_SUMMON_HARNESS,
+      summon_depth=configs.DEFAULT_SUMMON_DEPTH,
     ),
   )
   monkeypatch.setattr(ride_cli, 'fresh_workspace_name', lambda base: f'{base}-12345678')
@@ -117,6 +120,11 @@ class TestAttachment:
     resolve_depth.assert_called_once_with(None)
     assert start.call_args.args[0].summon_depth == 6
 
+  def test_detached_launch_summons_under_the_default_harness(self):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'along', 'dev']) == 0
+    assert start.call_args.args[0].summon_harness == configs.DEFAULT_SUMMON_HARNESS
+
   def test_repo_resolves_any_directory_inside_the_checkout(self, monkeypatch):
     monkeypatch.setattr(ride_cli, 'project_root', lambda path: Path('/repo'))
     with patch('ride.cli.start_session', return_value=0) as start:
@@ -131,6 +139,7 @@ class TestAttachment:
       project_config=lambda: SimpleNamespace(
         default_bro='bro-dev',
         harness='claude',
+        summon_harness=configs.DEFAULT_SUMMON_HARNESS,
         summon_depth=configs.DEFAULT_SUMMON_DEPTH,
         sections={},
       ),
@@ -232,7 +241,12 @@ class TestAlong:
     monkeypatch.setattr(
       ride_cli,
       'project_config',
-      lambda _repo: SimpleNamespace(default_bro='bro-dev', harness='claude', summon_depth=5),
+      lambda _repo: SimpleNamespace(
+        default_bro='bro-dev',
+        harness='claude',
+        summon_harness=configs.DEFAULT_SUMMON_HARNESS,
+        summon_depth=5,
+      ),
     )
     monkeypatch.setattr(ride_cli, 'project_root', lambda _path: Path('/repo'))
     with (
@@ -249,13 +263,32 @@ class TestAlong:
       ride_cli,
       'project_config',
       lambda _repo: SimpleNamespace(
-        default_bro='bro-dev', harness='bro', summon_depth=configs.DEFAULT_SUMMON_DEPTH
+        default_bro='bro-dev',
+        harness='bro',
+        summon_harness=configs.DEFAULT_SUMMON_HARNESS,
+        summon_depth=configs.DEFAULT_SUMMON_DEPTH,
       ),
     )
     monkeypatch.setattr(ride_cli, 'project_root', lambda _path: Path('/repo'))
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'along', '--repo', '/repo', 'dev']) == 0
     assert start.call_args.args[0].harness == 'bro'
+
+  def test_project_summon_harness_reaches_the_spec(self, monkeypatch):
+    monkeypatch.setattr(
+      ride_cli,
+      'project_config',
+      lambda _repo: SimpleNamespace(
+        default_bro='bro-dev',
+        harness='claude',
+        summon_harness='claude',
+        summon_depth=configs.DEFAULT_SUMMON_DEPTH,
+      ),
+    )
+    monkeypatch.setattr(ride_cli, 'project_root', lambda _path: Path('/repo'))
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'along', '--repo', '/repo', 'dev']) == 0
+    assert start.call_args.args[0].summon_harness == 'claude'
 
 
 class TestLifecycle:

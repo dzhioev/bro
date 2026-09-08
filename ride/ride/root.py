@@ -20,6 +20,7 @@ def _run_root_via_broker(
   *,
   may_summon: Collection[str],
   summon_depth: int,
+  summon_harness: str,
 ) -> int:
   """run the container launch as the broker's supervised root peer."""
   # imported here, not at module level: broker_enabled() must be able to
@@ -48,6 +49,7 @@ def _run_root_via_broker(
     bro=launch.env['RIDE_BRO'],
     may_summon=may_summon,
     summon_depth=summon_depth,
+    summon_harness=summon_harness,
     credential_scope=ScopedSecrets(
       required=set(launch.secrets),
       optional=set(launch.optional_secrets),
@@ -68,6 +70,7 @@ def run_host_process_via_broker(
   bro: str,
   interactive: bool,
   summon_depth: int,
+  summon_harness: str,
 ) -> int:
   """run a host-worktree process as the broker's supervised session root."""
   from bro.summon import MAY_SUMMON_ENV, encode_may_summon
@@ -88,6 +91,7 @@ def run_host_process_via_broker(
     bro=bro,
     may_summon=may_summon,
     summon_depth=summon_depth,
+    summon_harness=summon_harness,
     credential_scope=credential_scope,
     container_runtime=container_runtime,
   )
@@ -115,19 +119,27 @@ def run_in_container(
   *,
   may_summon: Collection[str] = (),
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH,
+  summon_harness: str = configs.DEFAULT_SUMMON_HARNESS,
 ) -> int:
   """run a prepared launch in `workspace`, directly or as the root peer of a
   bro.broker. The launch description is supervision-neutral. The broker path
   wraps it only after the lazy import gate; the fallback uses the same container
   prepare and attaches with plain `docker start`.
-  `may_summon` and `summon_depth` configure the broker root's outgoing authorization.
+  `may_summon`, `summon_depth`, and `summon_harness` configure the broker root's
+  outgoing authorization.
   """
   # the container starts with origin/master only as fresh as the host's last fetch.
   # ancestry-changing workflows fetch again before acting; the remaining reader is informational.
   log_scoped_secrets(launch.name, launch.secrets, launch.optional_secrets)
   workspace.clear_session_end()
   if broker_enabled():
-    code = _run_root_via_broker(launch, workspace, may_summon=may_summon, summon_depth=summon_depth)
+    code = _run_root_via_broker(
+      launch,
+      workspace,
+      may_summon=may_summon,
+      summon_depth=summon_depth,
+      summon_harness=summon_harness,
+    )
   else:
     container_id = prepare_container(launch)
     if launch.tty:

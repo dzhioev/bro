@@ -116,6 +116,7 @@ def _control(
   allow_list=('dev',),
   credential_scope=(),
   depth_cap=configs.DEFAULT_SUMMON_DEPTH,
+  summon_harness=configs.DEFAULT_SUMMON_HARNESS,
 ):
   workspace = _workspace(tmp_path)
   scope = (
@@ -141,6 +142,7 @@ def _control(
     journal=journal,
     audit_file=tmp_path / 'audit.jsonl',
     depth_cap=depth_cap,
+    summon_harness=summon_harness,
   )
   control.test_journal = journal
   journal.subscribe(facts.observe_journal)
@@ -324,6 +326,37 @@ def test_requested_harness_credentials_are_bounded_by_the_summoner(tmp_path):
   context = FakeContext(control)
   control.handle(cast(Dispatcher, context), ROOT, _message(harness='claude'))
   assert 'claude_code' in context.replies[0][1]['error']
+
+
+def test_an_unnamed_harness_is_the_configured_summon_harness(tmp_path):
+  control = _control(tmp_path, summon_harness='claude')
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message())
+  launch = context.spawned[0][0]
+  assert launch.harness == 'claude'
+  assert launch.summon_harness == 'claude'
+
+
+def test_naming_the_configured_summon_harness_widens_nothing(tmp_path):
+  control = _control(tmp_path, summon_harness='claude')
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(harness='claude'))
+  assert context.spawned[0][0].harness == 'claude'
+
+
+def test_the_native_loop_under_a_claude_summon_harness_needs_its_llm_key(tmp_path, monkeypatch):
+  from bro.registry import get_class
+
+  monkeypatch.setattr(get_class('dev'), 'spells', {})
+  control = _control(tmp_path, credential_scope={'claude_code'}, summon_harness='claude')
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(harness='bro'))
+  assert 'openai' in context.replies[0][1]['error']
+
+
+def test_an_unsupported_summon_harness_is_refused(tmp_path):
+  with pytest.raises(ValueError, match='summon harness'):
+    _control(tmp_path, summon_harness='other')
 
 
 def test_requested_llm_credentials_are_bounded_by_the_summoner(tmp_path, monkeypatch):

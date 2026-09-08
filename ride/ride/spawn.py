@@ -26,14 +26,7 @@ from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 from bro.kinds import KindContext
-from bro.summon import (
-  DEFAULT_HARNESS,
-  MAY_SUMMON_ENV,
-  SUMMON,
-  SUMMONED_ENV,
-  SUMMONER_ENV,
-  encode_may_summon,
-)
+from bro.summon import MAY_SUMMON_ENV, SUMMON, SUMMONED_ENV, SUMMONER_ENV, encode_may_summon
 from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.paths import summon_dir, workspace_tree
 from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts, view_mount
@@ -79,7 +72,8 @@ class SummonLaunchSpec(LaunchSpec):
   the child's scope and the whole lists its recorded session spec, while the
   control already resolved the `@bro` halves into `may_summon`, the child's own
   effective allow-list — never the summoner's, which the child is not authorized
-  against. `share` names artifact refs the control already checked against the
+  against — and a request naming no `harness` into the control's summon harness.
+  `share` names artifact refs the control already checked against the
   summoner's own reach; the lowering links them into the child's view."""
 
   target: str
@@ -87,15 +81,16 @@ class SummonLaunchSpec(LaunchSpec):
   parent: str
   summoner: Optional[dict[str, Any]]
   may_summon: tuple[str, ...]
+  harness: str
   repo: Optional[Repository | Path] = None
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
+  summon_harness: str = configs.DEFAULT_SUMMON_HARNESS
   into: Optional[str] = None
   hold: Optional[str] = None
   grant: tuple[str, ...] = ()
   revoke: tuple[str, ...] = ()
   share: tuple[str, ...] = ()
   llm: Optional[str] = None
-  harness: Optional[str] = None
 
 
 def _workspace_name(channel: str) -> str:
@@ -108,7 +103,7 @@ def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> Sessio
   `timeout` maps to no spec field (it is the spawner's wait timer, not part of
   the run). Recorded as the workspace's resume record and the source of the
   child's inner argv, so what `ride resume` relaunches is what ran."""
-  harness = get_harness(launch.harness if launch.harness is not None else DEFAULT_HARNESS)
+  harness = get_harness(launch.harness)
   return SessionSpec(
     name=workspace_name,
     repo=None if launch.repo is None else as_repository(launch.repo).identity,
@@ -131,6 +126,7 @@ def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> Sessio
     arguments=[],
     harness_options=harness.default_options(),
     summon_depth=launch.summon_depth,
+    summon_harness=launch.summon_harness,
   )
 
 
@@ -305,6 +301,7 @@ def run_root_via_broker(
   bro: str,
   may_summon: Collection[str] = (),
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH,
+  summon_harness: str = configs.DEFAULT_SUMMON_HARNESS,
   credential_scope: ScopedSecrets,
   container_runtime: ContainerRuntimeResolver,
 ) -> int:
@@ -331,7 +328,8 @@ def run_root_via_broker(
   either way, so a denied summoner gets a correlated error and an ordinary
   journal denial event.
   `summon_depth` is the deepest child generation that handler authorizes, with the
-  root itself at depth 0."""
+  root itself at depth 0, and `summon_harness` the harness it runs a child under
+  when the request names none."""
   targets = sorted(set(may_summon))
   if len(targets) > 0:
     log.info('session may summon: %s', ', '.join(targets))
@@ -371,6 +369,7 @@ def run_root_via_broker(
     journal=facade.journal,
     audit_file=summon_dir() / f'{workspace.name}.jsonl',
     depth_cap=summon_depth,
+    summon_harness=summon_harness,
   )
   facade.on(PING, ping_handler)
   facade.on(SUMMON, control.handle)
