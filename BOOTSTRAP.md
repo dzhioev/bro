@@ -5,7 +5,7 @@ This prompt may run under any harness that can inspect and edit the target on it
 Treat this file as an executable checklist, not as background documentation.
 Work through the numbered sections in order and do not perform the user's choices on their behalf.
 
-The supported outcome is a macOS or Ubuntu host checkout whose activated project-local uv environment can run this exact command successfully:
+The supported outcome is a macOS or Ubuntu host checkout whose activated project-local uv environment can run this exact command successfully, followed by the same command under the other harness when section 3 wired that harness's key:
 
 ```console
 ride solo my-dev "sup?" --repo .
@@ -13,9 +13,9 @@ ride solo my-dev "sup?" --repo .
 
 `my-dev` is the suggested public name.
 If the user chooses another name, substitute only that name in the acceptance command.
-The bootstrapped repository supports the full Claude Code harness only, regardless of which harness executes this prompt.
-Do not install `bro-native` or recommend `--harness bro`;
-that flag selects bro's native harness, which is outside this bootstrap.
+The bootstrapped repository installs both harnesses, Claude Code in full mode and bro's native loop, whichever harness executes this prompt.
+Which harness a launch or a summon runs under when nothing names one is the user's configuration choice in section 3;
+either harness stays reachable per launch through `--harness` and per summon through the request's `harness` field.
 Never recommend `--raw`.
 Do not use Anthropic API-key authentication or replace the exact acceptance command with host mode.
 
@@ -124,17 +124,20 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+  "bro-native",
   "bro-ride",
 ]
 
 [tool.uv.sources]
 bro = { git = "https://github.com/dzhioev/bro", branch = "master" }
 bro-dev = { git = "https://github.com/dzhioev/bro", subdirectory = "dev", branch = "master" }
+bro-native = { git = "https://github.com/dzhioev/bro", subdirectory = "native", branch = "master" }
 bro-ride = { git = "https://github.com/dzhioev/bro", subdirectory = "ride", branch = "master" }
 ```
 
 Preserve an existing project's narrower setup selection instead of forcing all groups and extras on its ordinary setup command.
-The operator group must still install `bro-ride`.
+The operator group must still install `bro-ride` and `bro-native`:
+`ride` spawns the native loop as the `bro` command of the environment it froze, so a native launch or summon fails in a workspace whose environment lacks `bro-native`.
 `bro-dev` remains a runtime dependency because the consumer class imports `bros.dev.Dev`.
 
 For a fresh integrated root, use normalized project metadata, version `0.1.0`, the confirmed description, `requires-python = ">=3.12"`, and this packaging shape after substituting the chosen identifiers:
@@ -161,7 +164,7 @@ For a sidecar:
 
 1. Keep `[tool.bro]` in the repository-root `pyproject.toml`, creating a table-only root file if necessary.
 2. Create `bro_project/pyproject.toml` as a complete Python 3.12 uv-build project named `<project-slug>-bros`.
-3. Give it the same framework runtime dependencies and Git sources, with `bro-ride` in its `dev` group.
+3. Give it the same framework runtime dependencies and Git sources, with `bro-native` and `bro-ride` in its `dev` group.
 4. Register `my-dev = "<project_slug>_bros.my_dev:MyDev"`.
 5. Set `module-root = "src"` and `module-name = ["<project_slug>_bros"]`.
 6. Create `bro_project/src/<project_slug>_bros/__init__.py` and `my_dev.py`.
@@ -178,11 +181,11 @@ Show the proposed dependency and source changes, then obtain approval before cha
 Run the selected-project equivalent of:
 
 ```console
-uv lock --upgrade-package bro --upgrade-package bro-dev --upgrade-package bro-ride
+uv lock --upgrade-package bro --upgrade-package bro-dev --upgrade-package bro-native --upgrade-package bro-ride
 ```
 
 Parse the resulting `uv.lock` rather than trusting command output.
-Require `bro`, `bro-dev`, and `bro-ride` to resolve from `https://github.com/dzhioev/bro` at one identical 40-character commit SHA.
+Require `bro`, `bro-dev`, `bro-native`, and `bro-ride` to resolve from `https://github.com/dzhioev/bro` at one identical 40-character commit SHA.
 Reject a retained older revision, mixed revisions, missing Git source, or branch movement during the operation.
 Call that exact value `BRO_SHA` for the remainder of this bootstrap.
 
@@ -198,9 +201,10 @@ Fetch and read these paths before using their contracts:
 - `bro/workspace/project.py`;
 - `bro/llm/llms/claude_code.py`;
 - `bro/llm/llms/openai.py`;
-- `bro/reference/ride.md`, especially **Per-project defaults** and **Scoped credential hydration**;
+- `bro/reference/ride.md`, especially **Harness selection**, **Per-project defaults**, **Summoning another bro**, and **Scoped credential hydration**;
 - `bro/reference/dive_in.md`;
 - `ride/ride/dive_in.py`;
+- `ride/ride/bro.py`;
 - `bro/setup/AGENTS.md`;
 - `bro/base/host_config.py`;
 - `bro/brog/system.py`;
@@ -221,14 +225,14 @@ This is a support gate, not the final image proof; section 4 builds the actual p
 Run both gates against the root even when `ride` comes from `bro_project/.venv`, and do not substitute a sidecar-only sync.
 Ask before local Docker image writes, show the image tag and temporary paths, remove the temporary trees afterward, and fail closed on either phase.
 
-**Checkpoint 2:** report the selected packaging shape, owning distribution, exact `BRO_SHA`, all three locked source records, source paths read at that SHA, root-lock status, both image-phase results, and any preserved project setup conventions.
+**Checkpoint 2:** report the selected packaging shape, owning distribution, exact `BRO_SHA`, all four locked source records, source paths read at that SHA, root-lock status, both image-phase results, and any preserved project setup conventions.
 
-## 3. Write project launch settings
+## 3. Choose the harness configuration and write project launch settings
 
 ### Check
 
 1. Read the repository-root `[tool.bro]` table and the pinned closed scalar schema.
-2. Inspect any existing project default, harness, image repository, sub-tables, and host `~/.bro.json` LLM preset names without reading secrets.
+2. Inspect any existing project default, `harness`, `summon-harness`, image repository, sub-tables, and host `~/.bro.json` LLM preset names without reading secrets.
 3. Determine a lowercase Docker-compatible image repository unique among this host's consumer repositories.
 
 ### Ask
@@ -236,26 +240,40 @@ Ask before local Docker image writes, show the image tag and temporary paths, re
 1. On first adoption, propose the selected developer as `[tool.bro] default`.
 2. If an already bro-enabled repository intentionally uses another default, ask whether to preserve it.
    A preserved default requires `--bro <developer-name>` on default-dependent `ride scope` and `dive-in` commands.
-3. If `harness = "bro"` is intentional, ask whether every project-default launch may change to `claude`.
-   If not, stop because the required no-flag smoke has no per-bro harness escape hatch.
-4. Ask whether the pinned Claude Code model and effort defaults are acceptable.
+3. Explain the two harness keys from the pinned per-project defaults:
+   `harness` drives every attached launch that names no `--harness`, which is `dive-in`, `ride along`, and `ride solo` alike, and `summon-harness` drives every summon whose request names no harness.
+   Claude Code runs on the `claude_code` setup token, which section 5 always wires;
+   the native loop runs the developer's `llm_spec` recipe on its provider key, the `openai` credential.
+4. Ask whether the user has an OpenAI API key and wants section 5 to wire it.
+   Without one, both keys are `claude`, the native loop stays installed but unusable, and the user changes the keys once a key is wired later;
+   skip the next question.
+5. Present these configurations and ask which one to write:
+   - recommended: `harness = "claude"` and `summon-harness = "bro"`, so interactive and one-shot launches run under Claude Code and summons under the native loop, which is how the framework repository runs itself;
+   - Claude Code everywhere: both keys `claude`;
+   - native everywhere: both keys `bro`, not recommended because the interactive native harness is early, working but well behind Claude Code's own session;
+   - the remaining pair, `harness = "bro"` with `summon-harness = "claude"`, when the user wants it.
+6. If an already bro-enabled repository carries intentional `harness` or `summon-harness` values, present them as its current configuration and ask whether to preserve or replace them.
+7. Ask whether the pinned Claude Code model and effort defaults are acceptable.
    Explain that a non-default recipe is an opt-in named preset, not an automatic project scalar.
 
 ### Act
 
-Merge the approved values into the repository-root table:
+Merge the approved values into the repository-root table, writing both harness keys explicitly:
 
 ```toml
 [tool.bro]
 default = "my-dev"
 harness = "claude"
+summon-harness = "bro"
 image-repository = "bro/<project-unique-docker-slug>"
 ```
 
-Substitute the chosen public name consistently.
+Substitute the chosen public name and the chosen harness pair consistently.
 Preserve an intentional existing default when approved.
 Leave `summon-depth`, `build-context-command`, and unrelated sub-tables absent unless a discovered project requirement needs them.
 Unknown root scalars are errors.
+`--harness` on a `ride` or `dive-in` command and `harness` on a summon request override the keys for one launch;
+do not add them to ordinary commands.
 
 If the user rejects the framework's current Claude defaults, choose a project-specific key that does not collide with host `~/.bro.json` and write:
 
@@ -269,7 +287,7 @@ The current neutral effort vocabulary is read from the pinned source rather than
 Add `--llm <project-slug>-developer` to ordinary `ride` and `dive-in` commands only.
 Do not add it to the exact acceptance command, which must continue to test the framework default.
 
-**Checkpoint 3:** report the effective default, Claude harness, unique image repository, whether commands need `--bro`, and the optional named preset and its explicit-use rule.
+**Checkpoint 3:** report the effective default, the harness pair and the configuration it is, whether an OpenAI key will be wired, unique image repository, whether commands need `--bro`, and the optional named preset and its explicit-use rule.
 
 ## 4. Define and package the developer bro
 
@@ -293,8 +311,9 @@ Read the pinned generic and framework-project developer declarations before writ
 1. Confirm the short system-prompt addition that names the project and its durable constraints.
 2. Confirm whether the developer will use GitHub for pushes and pull requests.
 3. Confirm whether GitHub brog will be configured.
-4. Explain that `llm_spec` is the bro-native recipe inherited by non-Claude surfaces, while the configured full Claude runtime ignores it.
+4. Explain that `llm_spec` is the recipe the native loop runs the developer on, every launch and summon under the `bro` harness, while a Claude Code session ignores it.
    Ask whether to use the pinned framework developer's current OpenAI model and high reasoning effort or another valid pinned native recipe.
+   Declare it even when no OpenAI key is wired yet, so the native loop needs only the key.
 
 ### Act
 
@@ -397,8 +416,8 @@ A repository with no root lock must return no project-image tag; do not manufact
 1. For each needed kind, present existing instances by non-secret identity and ask which one this project should use.
 2. Ask whether to reuse a compatible instance or create a project-specific one.
 3. Ask separately before creating material under `~/.bro`, changing `~/.bro/creds.json`, or atomically changing `~/.bro.json`.
-4. Ask whether the optional OpenAI helper credential is wanted.
-   Explain that direct spell tools still work without it, while free-form spell dispatch and other optional helpers do not.
+4. Wire the `openai` credential when section 3 selected it.
+   Besides running the native loop, it backs free-form spell dispatch and other optional helpers in Claude Code sessions, which direct spell tools work without.
 5. Confirm the expected GitHub user login or App bot login for the selected instance.
    For an App, also confirm its installation account and that the target repository belongs to the installation.
 
@@ -410,11 +429,11 @@ Never read the result back into this conversation.
 Compatible existing material is reused.
 A partial or conflicting file is shown by metadata and resolved explicitly, never overwritten silently.
 
-Full Claude always requires a scalar setup token.
+Claude Code always requires a scalar setup token.
 Have the user run `claude setup-token` in the separate terminal and redirect its secret output directly to `~/.bro/creds/claude_code.cred`, or to a selected `claude_code+<instance>.cred`.
 Verify only existence, nonzero size, mode, and later scope resolution.
 
-For optional OpenAI, store a JSON object shaped as `{"api_key":"..."}` in `openai.cred` or the selected named material.
+For a selected OpenAI key, store a JSON object shaped as `{"api_key":"..."}` in `openai.cred` or the selected named material.
 Use hidden terminal input and stdin-based JSON encoding so the value reaches neither command history nor a process argument.
 
 For GitHub development:
@@ -481,8 +500,9 @@ ride scope --repo . --bro <developer-name>
 
 Both executables must belong to the selected repository or sidecar environment, not a global tool, stale framework checkout, or another consumer.
 If the developer became the default, also run `ride scope --repo .`.
+When an OpenAI key was wired, also run the scope report with `--harness` naming the harness the project `harness` does not select, so both harnesses' scopes are checked.
 Every required row must report `ok`, the intended instance, and the intended selection layer.
-Only accepted optional `openai` and `trails` rows may be missing.
+Only a declined `openai` row and the `trails` row may be missing.
 
 **Checkpoint 5:** report material names and modes without values, the path and optional portable URL identities, host-config selection layers, and required plus optional scope rows.
 Also report command provenance and the expected GitHub identity that the post-commit managed preflight must verify.
@@ -552,9 +572,12 @@ ride solo my-dev "sup?" --repo .
 ```
 
 Substitute only the selected public name when it differs.
-Do not add `--host`, `--grant`, `--no-trails`, `--harness`, or `--llm`.
-Success means exit status zero and a coherent Claude reply.
+Do not add `--host`, `--grant`, `--no-trails`, or `--llm`, and add `--harness` only on the second run below.
+Success means exit status zero and a coherent reply from the harness the project `harness` selects.
 The first run may build runtime and project images, so inspect active output before calling ordinary build latency a hang.
+
+When an OpenAI key was wired, run the same command again with `--harness` naming the harness the project `harness` does not select, so both installed harnesses are proven;
+without one, report the native harness as installed but unproven.
 
 Diagnose failures from the earliest failing layer:
 
@@ -563,17 +586,19 @@ Diagnose failures from the earliest failing layer:
 3. A `[tool.bro]` error requires fixing the closed schema, not inventing fallback keys.
 4. A required `MISSING` scope row requires repairing material or host selection, not masking it with `--grant`.
 5. A Claude auth error requires repairing the scalar `claude_code` setup token.
-6. A repository or ref error requires a valid committed `HEAD`.
-7. A Docker error requires repairing the daemon.
+6. A native run refusing for a missing `bro` command requires `bro-native` in the synced environment and a rebuilt project image;
+   an OpenAI auth error requires repairing the `openai` material.
+7. A repository or ref error requires a valid committed `HEAD`.
+8. A Docker error requires repairing the daemon.
    A host-mode pass is diagnostic evidence only.
-8. An in-container refusal requires restarting this bootstrap on the host.
-9. A failed session is retained for inspection.
-   Use `ride list` and the named workspace before considering `ride clean`, and never delete a dirty workspace reflexively.
+9. An in-container refusal requires restarting this bootstrap on the host.
+10. A failed session is retained for inspection.
+    Use `ride list` and the named workspace before considering `ride clean`, and never delete a dirty workspace reflexively.
 
 Report the failed command, upstream cause, and correction before retrying.
 Never declare a partial or host-only workaround complete.
 
-**Checkpoint 7:** report the literal acceptance command, exit status, coherent-reply summary, runtime/project image result, and retained workspace name if diagnosis was needed.
+**Checkpoint 7:** report each acceptance command run with its exit status and coherent-reply summary, the runtime/project image result, whether the other harness was proven or left unproven, and the retained workspace name if diagnosis was needed.
 
 ## 8. Reconcile or create the initial roster-design task
 
@@ -684,7 +709,7 @@ dive-in '<approved roster-design prompt>'
 Use a quoted heredoc or equivalent safe multiline form in the actual command.
 Apply the same `--bro`, `--llm`, and `--into` modifiers when required.
 
-Finish with a concise inventory of repository files changed, active developer and harness, framework SHA, and credential instance names plus selection layers without values.
+Finish with a concise inventory of repository files changed, active developer and harness configuration, framework SHA, and credential instance names plus selection layers without values.
 Also report brog state, setup commit and reachability, successful acceptance command, roster task state, and the exact next command.
 Ask the user to report the host result to the framework maintainers because real authentication, Docker launch, GitHub write authority, and attended `dive-in` behavior can be accepted only on their host.
 

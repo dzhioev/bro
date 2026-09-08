@@ -30,8 +30,8 @@ cd ~/acme
 claude 'fetch https://raw.githubusercontent.com/dzhioev/bro/master/BOOTSTRAP.md and follow its instructions'
 ```
 
-The session pins the framework into the project from this repository at one commit, declares a first developer bro, wires the host's credentials, and commits the setup;
-then it proves the setup with one isolated run and hands you a `dive-in` to continue from, showing every write before it makes it.
+The session pins the framework into the project from this repository at one commit, declares a first developer bro, lets you choose which harness runs launches and summons by default, wires the host's credentials, and commits the setup;
+then it proves the setup with an isolated run under each harness whose credential is wired and hands you a `dive-in` to continue from, showing every write before it makes it.
 
 To work on the framework itself, clone this repository and run `./setup.sh`.
 
