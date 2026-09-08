@@ -97,6 +97,18 @@ def encode_may_summon(targets: Collection[str]) -> str:
   return ','.join(sorted(set(targets)))
 
 
+def summoned_child_env(
+  may_summon: Collection[str], summoner: Optional[dict[str, Any]]
+) -> dict[str, str]:
+  """the env that makes a run a summoned child, written by the surface that
+  launches it: the mark, the child's own effective allow-list, and its
+  summoner's attribution when there is one."""
+  env = {SUMMONED_ENV: '1', MAY_SUMMON_ENV: encode_may_summon(may_summon)}
+  if summoner is not None:
+    env[SUMMONER_ENV] = json.dumps(summoner, ensure_ascii=False, separators=(',', ':'))
+  return env
+
+
 def summoned() -> bool:
   """whether this run is a summoned child — a summoner is blocked on the result
   it owes back through the `answer` tool."""
@@ -239,7 +251,7 @@ def _connection(client: Optional['Client']) -> Generator['Client']:
 def _trails_hint(trail_id: Optional[str]) -> str:
   if trail_id is not None:
     return f'inspect the run with `rewind show {trail_id}`'
-  return 'look for the run with `rewind list`'
+  return 'the run has announced no trail'
 
 
 def _interpret_payload(payload: dict[str, Any], trail_id: Optional[str]) -> str:

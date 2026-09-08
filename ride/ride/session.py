@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
@@ -13,7 +14,7 @@ from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV
 from bro.launch.broxy import START_SESSION_BROXY_ENV
 from bro.llm.llm import LLMSpec
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_session_dir
-from bro.summon import MAY_SUMMON_ENV, SUMMONED_ENV, SUMMONER_ENV, encode_may_summon
+from bro.summon import summoned_child_env
 from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.paths import (
   CONTAINER_SESSION_DIR,
@@ -33,6 +34,7 @@ from ride.trails import local_trails_mounts
 from ride.workspace.containers import broker_enabled
 from ride.workspace.docker import (
   CONTAINER_BROKER_HOST,
+  ContainerRuntime,
   ContainerRuntimeResolver,
   Launch,
   find_container_id,
@@ -226,16 +228,67 @@ def _summoned_env(
   """the env that makes a launch the manual summon child the token names: the
   summoner's channel, the quest the child answers (its token), and the
   summoned-child facts."""
-  env = {
+  return {
     UPSTREAM_ENV: address,
     'BROKER_QUEST': summoned.token,
-    SUMMONED_ENV: '1',
-    MAY_SUMMON_ENV: encode_may_summon(summoned.may_summon),
     'RIDE_WORKSPACE': spec.name,
+    **summoned_child_env(summoned.may_summon, summoned.summoner),
   }
-  if summoned.summoner is not None:
-    env[SUMMONER_ENV] = json.dumps(summoned.summoner, ensure_ascii=False, separators=(',', ':'))
-  return env
+
+
+def container_launch(
+  harness: Harness,
+  spec: SessionSpec,
+  workspace: Workspace,
+  scoped: ScopedSecrets,
+  container_runtime: ContainerRuntime,
+  *,
+  repo: Optional[Repository | Path],
+  base_ref: Optional[str],
+  human_env: Mapping[str, str],
+  forward_env: bool,
+  env: Mapping[str, str],
+  mounts: Collection[str],
+) -> Launch:
+  """one managed session's container launch, whichever surface spawns it: the
+  neutral session env and mounts around the harness's extras, with the
+  surface's own `env` and `mounts` on top."""
+  session_state = workspace_session_dir(workspace.path)
+  # created before the container launch so the bind mount finds it and does not
+  # materialize it root-owned
+  session_state.mkdir(parents=True, exist_ok=True)
+  extras = harness.container_extras(spec, workspace, scoped)
+  launch_env: dict[str, str] = {
+    'RIDE_BRO': spec.bro,
+    SESSION_DIR_ENV: str(CONTAINER_SESSION_DIR),
+    **human_env,
+    **extras.env,
+  }
+  if spec.no_trails:
+    # a run that records nothing binds no trails root
+    launch_env['TRAILS_DISABLED'] = '1'
+  launch_env.update(env)
+  trails_mounts = () if spec.no_trails else local_trails_mounts(scoped)
+  return Launch(
+    name=spec.name,
+    command=inner_command(spec, harness_flags=harness.inner_flags(spec)),
+    env=launch_env,
+    secrets=scoped.required,
+    optional_secrets=scoped.optional,
+    credential_selection=scoped.selection,
+    tty=not spec.solo,
+    forward_env=forward_env,
+    image=container_runtime.image,
+    runtime_bundle_hash=container_runtime.bundle_hash,
+    extra_mounts=(
+      *extras.mounts,
+      *trails_mounts,
+      f'{session_state}:{CONTAINER_SESSION_DIR}',
+      *mounts,
+    ),
+    repo=repo,
+    base_ref=base_ref,
+  )
 
 
 def _launch_session(
@@ -257,9 +310,6 @@ def _launch_session(
       spec.name,
     )
     return 1
-  # created before the container launch so the bind mount finds it and does not
-  # materialize it root-owned
-  workspace_session_dir(workspace.path).mkdir(parents=True, exist_ok=True)
   if not spec.resume:
     trail_pointer.clear(trail_pointer.session_pointer(workspace.path))
   elif not harness.session_exists(workspace):
@@ -292,40 +342,20 @@ def _container_session(
   container_runtime: ContainerRuntimeResolver,
   summoned: Optional[pending_summon.PendingSummon],
 ) -> int:
-  scoped = launch_scope.scoped
-  session_state = workspace_session_dir(workspace.path)
-  env: dict[str, str] = {
-    'RIDE_BRO': spec.bro,
-    SESSION_DIR_ENV: str(CONTAINER_SESSION_DIR),
-    **human_env,
-  }
-  extras = harness.container_extras(spec, workspace, scoped)
-  env.update(extras.env)
-  if spec.no_trails:
-    # a run that records nothing binds no trails root
-    env['TRAILS_DISABLED'] = '1'
-  trails_mounts = () if spec.no_trails else local_trails_mounts(scoped)
-  if summoned is not None:
-    env.update(_summoned_env(summoned, spec, summoned.address(CONTAINER_BROKER_HOST)))
-  resolved_runtime = container_runtime.resolve()
-  launch = Launch(
-    name=spec.name,
-    command=inner_command(spec, harness_flags=harness.inner_flags(spec)),
-    env=env,
-    secrets=scoped.required,
-    optional_secrets=scoped.optional,
-    credential_selection=scoped.selection,
-    tty=not spec.solo,
-    forward_env=True,
-    image=resolved_runtime.image,
-    runtime_bundle_hash=resolved_runtime.bundle_hash,
-    extra_mounts=(
-      *extras.mounts,
-      *trails_mounts,
-      f'{session_state}:{CONTAINER_SESSION_DIR}',
-    ),
+  launch = container_launch(
+    harness,
+    spec,
+    workspace,
+    launch_scope.scoped,
+    container_runtime.resolve(),
     repo=workspace.repository,
     base_ref=base_ref,
+    human_env=human_env,
+    forward_env=True,
+    env={}
+    if summoned is None
+    else _summoned_env(summoned, spec, summoned.address(CONTAINER_BROKER_HOST)),
+    mounts=(),
   )
   if summoned is not None:
     try:

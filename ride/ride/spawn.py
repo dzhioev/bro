@@ -12,7 +12,6 @@ broker, then supervises the root until exit.
 
 import asyncio
 import contextlib
-import json
 import socket
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -26,27 +25,20 @@ from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 from bro.kinds import KindContext
-from bro.summon import MAY_SUMMON_ENV, SUMMON, SUMMONED_ENV, SUMMONER_ENV, encode_may_summon
+from bro.summon import SUMMON, summoned_child_env
 from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.paths import summon_dir, workspace_tree
 from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts, view_mount
 from ride.flags import default_hold
-from ride.harness import ContainerExtras, get_harness
+from ride.harness import get_harness
 from ride.identity import human_git_identity_env
-from ride.inner import inner_command
 from ride.kinds import extension_kinds
 from ride.peer_facts import PeerFact, PeerFacts
 from ride.repository import Repository, as_repository
 from ride.scope import split_scope_overrides, summoned_credential_scope
-from ride.session import SessionSpec, record_resume_spec
+from ride.session import SessionSpec, container_launch, record_resume_spec
 from ride.summon_control import SummonControl
-from ride.trails import local_trails_mounts
-from ride.workspace.docker import (
-  ContainerRuntime,
-  ContainerRuntimeResolver,
-  Launch,
-  bridge_gateway,
-)
+from ride.workspace.docker import ContainerRuntimeResolver, bridge_gateway
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 from ride.workspace.spawn import (
@@ -130,49 +122,6 @@ def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> Sessio
   )
 
 
-def _child_launch(
-  spec: SessionSpec,
-  command: list[str],
-  extras: ContainerExtras,
-  *,
-  scoped: ScopedSecrets,
-  repository: Optional[Repository | Path],
-  human_env: dict[str, str],
-  base_ref: Optional[str],
-  summoner: Optional[dict[str, Any]],
-  may_summon: tuple[str, ...],
-  artifacts_mount: str,
-  container_runtime: ContainerRuntime,
-) -> Launch:
-  """a summoned child's container launch around its harness-composed inner
-  command and extras: the child facts (`RIDE_SUMMONED`, its own reconstructed
-  `RIDE_COMMAND`, base ref, provenance, allow-list, the human it works for) over
-  an explicit env — nothing forwarded from the spawning process — with no TTY."""
-  env = dict(extras.env)
-  env.update(human_env)
-  env['RIDE_BRO'] = spec.bro
-  env['RIDE_COMMAND'] = ' '.join(spec.to_command_argv())
-  env[SUMMONED_ENV] = '1'
-  env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
-  if summoner is not None:
-    env[SUMMONER_ENV] = json.dumps(summoner, ensure_ascii=False, separators=(',', ':'))
-  return Launch(
-    name=spec.name,
-    command=list(command),
-    env=env,
-    secrets=set(scoped.required),
-    optional_secrets=set(scoped.optional),
-    credential_selection=scoped.selection,
-    tty=False,
-    forward_env=False,
-    image=container_runtime.image,
-    runtime_bundle_hash=container_runtime.bundle_hash,
-    extra_mounts=(*extras.mounts, *local_trails_mounts(scoped), artifacts_mount),
-    repo=repository,
-    base_ref=base_ref,
-  )
-
-
 def _lower_summon(
   launch: SummonLaunchSpec,
   workspace_name: str,
@@ -181,16 +130,18 @@ def _lower_summon(
 ) -> DockerLaunchSpec:
   """the blocking half of a summon spawn: compose the child's docker launch —
   the target's own scope, nothing inherited from the summoner, plus whatever the
-  request's own grant/revoke names — around the inner command and container
-  extras of the child's session spec, both supplied by its harness. The base is
-  the summoner's workspace HEAD, read live here (`resolve_head` — which also
-  transfers the commit's objects into the host repo when they live only in the
-  summoner's own store), unless the request's `into` names a ref (resolved with
-  the same fetch-if-unresolvable rule as `ride --into`, but an unresolvable ref
-  fails the spawn rather than falling back). The child's workspace is recorded
-  throwaway, so its supervisor removes it once the child exits cleanly. The
-  child's artifact view is created (and the request's `share` refs linked into
-  it) here, where the workspace name exists, before the mount that serves it.
+  request's own grant/revoke names — as the container launch of the child's
+  session spec, with the child facts (its own reconstructed `RIDE_COMMAND`, the
+  summoned mark, allow-list, and provenance) over an explicit env that forwards
+  nothing from the spawning process. The base is the summoner's workspace HEAD,
+  read live here (`resolve_head` — which also transfers the commit's objects
+  into the host repo when they live only in the summoner's own store), unless
+  the request's `into` names a ref (resolved with the same
+  fetch-if-unresolvable rule as `ride --into`, but an unresolvable ref fails the
+  spawn rather than falling back). The child's workspace is recorded throwaway,
+  so its supervisor removes it once the child exits cleanly. The child's
+  artifact view is created (and the request's `share` refs linked into it)
+  here, where the workspace name exists, before the mount that serves it.
   Raises on any unresolvable input — the spawner surfaces that as the
   correlated `failed{reason: 'launch'}`; every fallible resolution precedes the
   workspace record, so a failed spawn creates none."""
@@ -228,18 +179,21 @@ def _lower_summon(
   record_resume_spec(workspace, spec)
   artifacts.view(workspace_name)
   artifacts.share(launch.share, to=workspace_name, by=launch.parent)
-  run = _child_launch(
+  run = container_launch(
+    harness,
     spec,
-    inner_command(spec, harness_flags=harness.inner_flags(spec)),
-    harness.container_extras(spec, workspace, scoped),
-    scoped=scoped,
-    repository=launch.repo,
-    human_env=human_git_identity_env(repo),
+    workspace,
+    scoped,
+    resolved_runtime,
+    repo=launch.repo,
     base_ref=base_ref,
-    summoner=launch.summoner,
-    may_summon=launch.may_summon,
-    artifacts_mount=view_mount(artifacts.session, workspace_name),
-    container_runtime=resolved_runtime,
+    human_env=human_git_identity_env(repo),
+    forward_env=False,
+    env={
+      'RIDE_COMMAND': ' '.join(spec.to_command_argv()),
+      **summoned_child_env(launch.may_summon, launch.summoner),
+    },
+    mounts=(view_mount(artifacts.session, workspace_name),),
   )
   log_scoped_secrets(f'summoned {launch.target}', run.secrets, run.optional_secrets)
   return DockerLaunchSpec(run)

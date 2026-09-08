@@ -1086,7 +1086,9 @@ Wrappers and session daemons rely on a small set of env vars:
   — without a runner to signal there is nothing to terminate.
 - `RIDE_SESSION_DIR` — the session's own state directory (see "Workspaces"):
   the workspace's `session/` by absolute path in host mode, `/var/ride/session` through the container bind.
-  Set by `start_session` for both harnesses and both modes, and re-derived by the claude in-place runner so it stands alone.
+  Set by every managed launch for both harnesses
+  — `ride`'s own in both modes, and a summon's child spawn
+  — and re-derived by the claude in-place runner so it stands alone.
   Read by `bro/monitor` — a process without it is in no managed session and so has no trail pointer to publish and no recording health to report.
 - `RIDE_TASK_ID` — set by `dive-in` when it has resolved a task (the canonical brog task id);
   read by the `spell::run-pr` spell to add a `Task: <url>` line to commit messages.

@@ -21,7 +21,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   prefetch, task-derived workspace naming, `RIDE_TASK_ID`, fresh-origin base selection, hold defaults, and forwarding to `ride along` with the project-default bro.
 - `ride/session.py` — harness-neutral session lifecycle:
   recorded `SessionSpec` including the optional repository attachment, base resolution, auth/scope preflight, workspace kind and lock,
-  resume records, keep/drop finish behavior, and the shared launch skeleton for attached or detached runs in both modes.
+  resume records, keep/drop finish behavior, the shared launch skeleton for attached or detached runs in both modes,
+  and the container launch description every container session shares, `ride`'s own and a spawned summon child alike.
 - `ride/repository.py` — path/URL attachment resolution, normalized managed-mirror keys, flocked no-prune fetches, committed-tree reads, and mirror cleanup.
   `attachment_identities` is the host-config identities an attachment matches project entries by, reading a checkout's `origin` for the URL one.
 - `ride/inner.py` — the inner session every harness runs under inside the prepared workspace:

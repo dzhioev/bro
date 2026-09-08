@@ -6,6 +6,7 @@ import pytest
 
 import ride.artifacts
 import ride.bro
+import ride.harness
 import ride.identity
 import ride.peer_facts
 import ride.scope
@@ -16,8 +17,9 @@ import ride.workspace.docker as workspace_docker
 import ride.workspace.store as workspace_store
 from bro.broker.journal import Journal
 from bro.broker.transports.tcp import LOCAL_HOST, Endpoint
+from bro.monitor import SESSION_DIR_ENV, workspace_session_dir
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
-from bro.workspace.paths import summon_dir, workspace_tree
+from bro.workspace.paths import CONTAINER_SESSION_DIR, summon_dir, workspace_dir, workspace_tree
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 
@@ -35,6 +37,10 @@ def _container_runtime() -> workspace_docker.ContainerRuntimeResolver:
 
 
 SESSION = 'session-ws'
+
+
+def _session_state_mount(workspace_name: str) -> str:
+  return f'{workspace_session_dir(workspace_dir(workspace_name))}:{CONTAINER_SESSION_DIR}'
 
 
 def _artifacts() -> ride.artifacts.ArtifactStore:
@@ -63,7 +69,7 @@ def lowering_harness(monkeypatch, tmp_path):
       required={'aws', 'trails'}, optional={'openai'}
     ),
   )
-  monkeypatch.setattr(ride.spawn, 'local_trails_mounts', lambda scoped: ())
+  monkeypatch.setattr(ride.session, 'local_trails_mounts', lambda scoped: ())
   monkeypatch.setattr(ride.spawn, 'human_git_identity_env', lambda repository: {})
   monkeypatch.setattr(
     ride.spawn,
@@ -109,6 +115,7 @@ class TestSummonLowering:
           'RIDE_BRO': 'dev',
           'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness bro dev deploy the thing',
           'RIDE_MAY_SUMMON': '',
+          'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
           'RIDE_SUMMONED': '1',
           'RIDE_SUMMONER': '{"session":"ws"}',
         },
@@ -118,7 +125,10 @@ class TestSummonLowering:
         forward_env=False,
         image='runtime-image',
         runtime_bundle_hash='bundle-hash',
-        extra_mounts=(ride.artifacts.view_mount(SESSION, 'broker-CH'),),
+        extra_mounts=(
+          _session_state_mount('broker-CH'),
+          ride.artifacts.view_mount(SESSION, 'broker-CH'),
+        ),
         repo=Path('/proj'),
         base_ref='PARENT-SHA',
       ),
@@ -270,12 +280,12 @@ class TestSummonLowering:
 
   def test_launch_mounts_carry_harness_extras_and_local_trails(self, lowering_harness, monkeypatch):
     monkeypatch.setattr(
-      ride.spawn, 'local_trails_mounts', lambda scoped: ('/host/trails:/var/ride/trails',)
+      ride.session, 'local_trails_mounts', lambda scoped: ('/host/trails:/var/ride/trails',)
     )
     monkeypatch.setattr(
       ride.bro.BRO,
       'container_extras',
-      lambda spec, workspace, scoped: ride.spawn.ContainerExtras(
+      lambda spec, workspace, scoped: ride.harness.ContainerExtras(
         env={}, mounts=('/host/state:/state',)
       ),
     )
@@ -292,8 +302,24 @@ class TestSummonLowering:
     assert lowered.launch.extra_mounts == (
       '/host/state:/state',
       '/host/trails:/var/ride/trails',
+      _session_state_mount('broker-CH'),
       ride.artifacts.view_mount(SESSION, 'broker-CH'),
     )
+
+  def test_the_child_keeps_session_state_like_any_container_session(self, lowering_harness):
+    launch = ride.spawn.SummonLaunchSpec(
+      target='dev',
+      prompt='p',
+      parent=PARENT,
+      repo=Path('/proj'),
+      summoner=SUMMONER,
+      may_summon=(),
+      harness='bro',
+    )
+    lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
+    assert workspace_session_dir(workspace_dir('broker-CH')).is_dir()
+    assert lowered.launch.env[SESSION_DIR_ENV] == str(CONTAINER_SESSION_DIR)
+    assert _session_state_mount('broker-CH') in lowered.launch.extra_mounts
 
   def test_the_childs_own_allow_list_rides_its_environment(self, lowering_harness):
     launch = ride.spawn.SummonLaunchSpec(
@@ -349,6 +375,7 @@ class TestSummonLowering:
       'RIDE_BRO': 'dev',
       'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness bro --into summon dev p',
       'RIDE_MAY_SUMMON': '',
+      'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
       'RIDE_SUMMONED': '1',
       'RIDE_SUMMONER': '{"session":"ws"}',
     }
@@ -465,7 +492,7 @@ class TestClaudeSummonLowering:
     monkeypatch.setattr(
       CLAUDE,
       'container_extras',
-      lambda spec, workspace, scoped: ride.spawn.ContainerExtras(
+      lambda spec, workspace, scoped: ride.harness.ContainerExtras(
         env={'CLAUDE_CONFIG_DIR': '/home/ride/.claude'},
         mounts=('/host/claude:/home/ride/.claude',),
       ),
@@ -497,12 +524,14 @@ class TestClaudeSummonLowering:
       'RIDE_BRO': 'dev',
       'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness claude dev deploy the thing',
       'RIDE_MAY_SUMMON': '',
+      'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
       'RIDE_SUMMONED': '1',
       'RIDE_SUMMONER': '{"session":"ws"}',
     }
     assert lowered.launch.base_ref == 'PARENT-SHA'
     assert lowered.launch.extra_mounts == (
       '/host/claude:/home/ride/.claude',
+      _session_state_mount('broker-CH'),
       ride.artifacts.view_mount(SESSION, 'broker-CH'),
     )
     assert lowered.launch.tty is False

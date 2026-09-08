@@ -216,8 +216,8 @@ If the user asked for a follow-up action on the answer, continue with it.
   — the child never started,
   died,
   or was killed at the timeout.
-  The message carries the reason and a trails hint;
-  `rewind show <trail-id>` has the full trace.
+  The message carries the reason and, once the child announced a trail, the `rewind show <trail-id>` that has the full trace;
+  a child that died before recording says so, and the reason is all there is.
 - **Interrupted wait / unavailable retained payload**
   — a killed or detached wait remains recoverable by quest id:
   `summon check <quest-id>` polls,

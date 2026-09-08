@@ -456,3 +456,40 @@ def test_errors_without_a_channel(monkeypatch, caplog):
   assert summon.main(['summon', 'check', 'SOME-ID']) == 1
   assert summon.main(['summon', 'list']) == 1
   assert CHANNEL_ENV in caplog.text
+
+
+def test_summoned_child_env_is_what_the_child_reads_back(monkeypatch):
+  for key, value in summon.summoned_child_env({'reviewer', 'dev'}, {'trail_id': 'T1'}).items():
+    monkeypatch.setenv(key, value)
+  assert summon.summoned()
+  assert summon.may_summon() == ('dev', 'reviewer')
+  assert summon.summoned_by_from_env() == {'trail_id': 'T1'}
+
+
+def test_summoned_child_env_without_a_summoner_carries_no_provenance(monkeypatch):
+  env = summon.summoned_child_env((), None)
+  assert summon.SUMMONER_ENV not in env
+  for key, value in env.items():
+    monkeypatch.setenv(key, value)
+  assert summon.may_summon() == ()
+  assert summon.summoned_by_from_env() is None
+
+
+def test_a_failure_before_any_trail_does_not_point_at_trails():
+  payload = {
+    'outcome': 'failed',
+    'error': None,
+    'detail': {'reason': 'exit', 'exit_code': 1, 'output_tail': 'recorder: no state dir\n'},
+  }
+  with pytest.raises(summon.SummonError) as raised:
+    summon._interpret_payload(payload, None)
+  message = str(raised.value)
+  assert message.startswith('summon failed (exit); recorder: no state dir; ')
+  assert 'announced no trail' in message
+  assert 'rewind' not in message
+
+
+def test_a_failure_with_a_trail_points_at_it():
+  payload = {'outcome': 'failed', 'error': None, 'detail': {'reason': 'exit', 'exit_code': 1}}
+  with pytest.raises(summon.SummonError, match='summon failed \\(exit\\); .*rewind show T1'):
+    summon._interpret_payload(payload, 'T1')
