@@ -36,10 +36,15 @@ They are settled defaults rather than questions for implementation:
    A repository-independent `uv tool` installation is rejected.
 4. Consumer sessions use the full Claude Code harness only.
    The prompt neither installs `bro-native` nor recommends `--harness bro`, `--raw`, or Anthropic API-key auth.
+   Because `[tool.bro] harness` is project-wide, an existing intentional `harness = "bro"` must be changed to `claude` with approval or the bootstrap is unsupported; the exact no-flag smoke has no per-bro escape hatch.
 5. A fresh repository may become a minimal Python 3.12 distribution whose only shipped code is its bro declaration.
-   An existing repository uses its own installable distribution only when both its packaging and its resulting runtime bundle are safe; otherwise it gets a small `bro_project/` uv sidecar.
-6. Framework sources track public `dzhioev/bro` `master`, while the committed `uv.lock` pins the revision actually installed.
-   Upgrades are explicit despite the framework's breaking-change policy.
+   A sidecar narrows the installation that `ride` freezes, but it does not suppress the automatic project-image bake triggered by an attached repository's root `uv.lock`.
+   An existing uv repository is supported only when its root lock and every discovered workspace member can complete this Linux bake command:
+   `uv sync --frozen --all-packages --all-groups --all-extras`.
+   Otherwise the prompt stops and names the missing framework bake-selection seam instead of claiming the sidecar solves it.
+6. Framework source declarations track public `dzhioev/bro` `master`, while the committed `uv.lock` pins the revision actually installed.
+   Bootstrap performs an approved upgrade/relock of `bro`, `bro-dev`, and `bro-ride`, asserts that all three resolve to one Git commit, and binds every source/manual/template read to that commit.
+   It never combines current-`master` instructions with an older retained lock.
 7. The no-flag Claude recipe is the framework's current Claude Code default.
    The closed `[tool.bro]` launch schema has no automatic per-project LLM-default key, so a non-default Claude recipe is a named `[tool.bro.llm]` preset passed explicitly at launch.
 8. The developer class declares the current framework-project developer's bro-native OpenAI recipe, presently `gpt-5.6-sol` at high effort.
@@ -66,7 +71,8 @@ Design review adds assumptions 11–15 to settle previously unspecified consumer
 
 ### Authoritative links in the prompt
 
-The prompt uses absolute GitHub links so it still works when consumed from `raw.githubusercontent.com`.
+The prompt names absolute GitHub paths so it still works when consumed from `raw.githubusercontent.com`.
+At execution it resolves and locks one framework Git SHA, substitutes that SHA into every `github.com/.../blob/<sha>/...` or `raw.githubusercontent.com/.../<sha>/...` read, and reports it in the checkpoint.
 It tells Claude Code to read the relevant parts before editing rather than reproducing them:
 
 - `README.md` for prerequisites, distributions, extension entry points, and project configuration;
@@ -124,16 +130,22 @@ The session reports a short checkpoint after each section and stops on an unmet 
 - Determine whether the root is an installable PEP 621 project, a uv workspace, a non-Python repository, or a project owned by another packaging system.
 - Determine which distribution and package-discovery rule would actually ship the bro module.
 - Inspect the environment and lock for private, local-only, platform-specific, or otherwise unreproducible distributions, because `ride` freezes every installed distribution rather than only `bro`'s dependency closure.
+- When the repository has a root `uv.lock`, inspect every uv workspace member and all groups and extras for Linux/container resolvability.
+  `ride` always bakes that complete root lock for an attached container, independently of which venv supplied the `ride` executable.
 - Search installed and declared bro entry points plus existing `[tool.bro]` tables for conflicts before adding anything.
 - Detect a partial prior bootstrap and compare its dependency roles, source pins, entry point, module, lock, and environment rather than appending a second copy.
 
 **Ask:**
 
 - In an existing uv-managed Python project, confirm that adding the declaration to its distribution or to an installed workspace member is acceptable.
-- Use the integrated shape only when the project's packaging and complete activated environment can be reproduced by the runtime materializer.
-- Otherwise propose the isolated `bro_project/` sidecar, including when the repository uses another package manager, carries a large or private application environment, or has ambiguous package discovery.
-- In an existing uv workspace, choose deliberately between an installed member that shares the workspace environment and an independent sidecar excluded from member discovery and always addressed with `--project bro_project`.
-  Use the independent sidecar when the shared environment is the reproducibility problem; do not let workspace globs absorb it accidentally.
+- Use the integrated shape only when the project's packaging, complete activated environment, and any automatic root-lock project bake can be reproduced by the Linux runtime materializer.
+- Propose the isolated `bro_project/` sidecar when the repository uses another package manager, has ambiguous package discovery, or has no root `uv.lock` and the application environment itself is too broad.
+- Explain that a sidecar cannot rescue an unsafe root uv lock because the attached repository independently triggers the full project bake.
+  If that bake is not viable, stop before editing and identify a future `[tool.bro]` project-bake selection or suppression seam as prerequisite framework work.
+- In an existing uv workspace whose complete bake is viable, choose deliberately between an installed member and an independent sidecar.
+  The installed member shares the workspace environment.
+  The independent sidecar stays excluded from member discovery and every uv command addresses it with `--project bro_project`.
+  Do not let workspace globs absorb it accidentally.
 
 **Act, integrated root or installed uv workspace member:**
 
@@ -159,6 +171,16 @@ bro-ride = { git = "https://github.com/dzhioev/bro", subdirectory = "ride", bran
 
 For a fresh root, also set a normalized distribution name, version `0.1.0`, a one-line description, and `requires-python = ">=3.12"` under `[project]`.
 For an existing project, preserve its project metadata, dependency order, source conventions, group names, and established sync command.
+
+After adding or reconciling the sources, show the pending upgrade and obtain approval before running the equivalent of:
+
+```console
+uv lock --upgrade-package bro --upgrade-package bro-dev --upgrade-package bro-ride
+```
+
+Use the selected project or workspace form of the command.
+Read the resulting `uv.lock`, require `bro`, `bro-dev`, and `bro-ride` to carry the same `dzhioev/bro` commit, and use that SHA for all subsequent framework source reads and checkpoint output.
+A retained older lock, mixed revisions, or a branch movement during setup causes a re-read and revalidation rather than silent continuation.
 
 `bro-dev` is a runtime dependency because the consumer's class imports `bros.dev.Dev`.
 `bro-ride` is an operator/development dependency that provides `ride` and `dive-in` to the host environment.
@@ -194,6 +216,7 @@ It leaves `bros/` without an `__init__.py`, because it is a shared PEP 420 names
 - Commit `bro_project/uv.lock`, while ignoring only `bro_project/.venv/`, build output, and normal Python cache files.
 
 This fallback keeps an unrelated build backend and application lock untouched and gives bare `ride` an installation containing only the framework stack and consumer entry-point distribution.
+It narrows the runtime bundle only; a root `uv.lock` still drives the attached repository's separate all-members, all-groups, all-extras project bake and must already pass the compatibility gate above.
 Inside an existing uv workspace, keep this narrow shape outside the workspace's member patterns, adding an explicit workspace exclusion when needed, and invoke every uv operation with `--project bro_project`.
 If the user instead chooses a real workspace member, follow the integrated-member path and use the workspace lock and environment.
 
@@ -215,6 +238,8 @@ harness = "claude"
 image-repository = "bro/<project-unique-docker-slug>"
 ```
 
+Before merging, inspect any existing project-wide `harness` value.
+An intentional `bro` value presents a forced choice: approve changing every default launch to `claude`, or stop because the required no-flag smoke cannot select full Claude per bro.
 `default` is what `dive-in` and attached `ride scope` use when `--bro` is omitted.
 Mode verbs still take the bro positional, which is why the acceptance command names it.
 Every `my-dev` value in these snippets is replaced consistently when the user chooses another public name.
@@ -333,7 +358,12 @@ Keep `~/.bro` and `~/.bro/creds` mode 0700, every material file mode 0600, and h
 - Reuse a suitable stored `github+<instance>` when one exists.
 - Otherwise, after `gh auth status` succeeds, capture `gh auth token` directly into `~/.bro/creds/github+<instance>.cred` without sending it through chat.
 - If the user chooses a GitHub App instead, store its JSON config in that material path and merge `"github+<instance>": {"type": "github_app"}` into `~/.bro/creds.json`.
-- Confirm that the identity can read and write repository contents, issues, and pull requests as required by the chosen workflow.
+- Record the expected non-secret identity when the user chooses the instance.
+- After scoped launch is available, probe that selected instance inside the managed session.
+  Use `gh api user` for a user token or `gh api installation` for an App token.
+  Then inspect `repos/owner/name` for `has_issues` and repository permission metadata.
+- Compare the reported user login or App slug and installation account with the expected identity before any write.
+- Treat permission metadata as preflight rather than proof: the brog issue creation proves issue-write authority, while the first contents push and pull request remain the eventual write tests for those capabilities.
 
 **Strongly recommended GitHub brog:**
 
@@ -354,7 +384,7 @@ An explicit repository catches a wrong remote; omitting it is valid only when `o
 **Selection:**
 
 - Run `credentials list` and `credentials list --instance` to inspect kinds and stored names without resolving or printing values.
-- Prefer the exact resolved output of `git remote get-url origin` as the project identity because URL matching normalizes case and trailing slashes but does not erase a `.git` suffix or equate SSH and HTTPS spellings.
+- Prefer the exact resolved output of `git remote get-url origin` as the project identity because URL matching lowercases only the scheme and hostname and trims trailing slashes; it preserves path case, `.git`, userinfo, and transport spelling.
 - If that remote embeds credentials, replace it with an approved credential-free SSH or HTTPS URL before recording the identity; never copy userinfo into `~/.bro.json` or a report.
 - Use the canonical checkout path only before a remote exists or for a machine-specific override; once a remote is created, move portable choices to its exact URL key.
 - Show the proposed `~/.bro.json` merge before writing it, preserve every unrelated section, and write only named-instance selections the project needs.
@@ -466,17 +496,26 @@ Record dependencies and an implementation order, and return links to all created
 ## Done
 
 The user has approved the conceptual roster and each accepted bro has a ready, scoped implementation task.
+
+<!-- bro-bootstrap-roster:v1 -->
 ```
 
-When brog is configured, the bootstrap session first asks the user whether a prior run already returned this task's URL.
-Absent one, it asks the working developer bro to list up to 100 open tasks, reuse a unique exact title-and-goal match, or otherwise create exactly one through its brog tools and return the canonical id and URL:
+When brog is configured, the bootstrap session first asks whether a prior run already returned this task's canonical URL.
+If supplied, the managed developer validates that ref through brog, including terminal status and the durable `bro-bootstrap-roster:v1` body marker.
+Without a ref, the selected GitHub identity performs a read-only, paginated all-status issue enumeration through `gh api`, filters out pull requests, and validates candidates through brog.
+Exactly one matching marker is reused.
+Zero matches permits creation only after enumeration completed without truncation; ambiguous or incomplete enumeration stops without a write and returns the evidence for the attended bootstrap session to resolve.
+A terminal match means the roster handoff already completed: report its URL and status, do not recreate it, and do not offer a `dive-in` command for that closed task unless the user deliberately reopens it outside bootstrap.
+
+After the selected GitHub identity and repository permission preflight passes, the bootstrap session asks the working developer bro to reconcile or create the task and return its canonical id, URL, and status:
 
 ```console
-ride solo <developer-name> '<reuse the exact existing task or create exactly this one through brog; do not start it; return its id and URL>' --repo .
+ride solo <developer-name> '<reconcile the marked task or create exactly one through brog; do not start it; return its id, URL, and status>' --repo .
 ```
 
-The actual command uses a heredoc or equivalent safe quoting for the full title and body, requires an exact title-and-goal match before reuse, and explicitly authorizes at most that one issue creation.
-If this fails, diagnose brog and rerun; do not bypass the backend with `gh issue create`, because task-prefetch through the selected brog is part of the handoff contract.
+The actual command uses a heredoc or equivalent safe quoting for the full title and body and explicitly authorizes at most one issue creation.
+It carries `--llm <project-slug>-developer` when a named Claude preset was selected; unlike the acceptance smoke, this is an ordinary launch.
+If this fails, diagnose brog and rerun; do not bypass the backend with `gh issue create`, because creation through the selected brog and later task-prefetch are part of the handoff contract.
 
 When brog is not configured, print the title and body verbatim for the user and do not call `dive-in --new`.
 The trackerless rendering of Dev's `fix` spell deliberately stops, so `--new` cannot create the task.
@@ -533,7 +572,7 @@ Before workspace launch it prefetches the task through that selected brog, sets 
    The session creates the `$cred`-based brog config and atomically merges project selections under the exact credential-free `origin` URL.
 6. `ride scope` shows `claude_code`, `github`, and `brog` as required and correctly selected, with OpenAI optional and trails local.
 7. The exact solo check runs against committed `HEAD` in a real container and replies successfully.
-8. A second authorized solo run creates the roster-design issue through brog and returns its URL.
+8. A second authorized solo run verifies the selected GitHub identity and repository permissions, reconciles the durable roster marker, creates the issue through brog only when absent, and returns its URL and status.
 9. The session gives `dive-in --task <url>`, with the selected preset if any.
 
 The unborn-branch failure, missing remote, first commit, image build, credential scope, initial issue write, and final prefetch all have an explicit place in the flow.
@@ -550,7 +589,8 @@ The unborn-branch failure, missing remote, first commit, image build, credential
 7. It stages only bootstrap paths and commits them.
    The exact solo check uses local `HEAD`, while the final dive-in command carries `--into <sha>` until the setup commit reaches the remote default branch.
 8. Brog creation and task prefetch use the configured repository, not whichever GitHub identity or task backend is globally default.
-   Before creating it, the session accepts a user-supplied prior URL or searches up to 100 open tasks in the selected brog for a unique exact title-and-goal match, preventing an ordinary successful rerun from creating it twice.
+   Before creating it, the session accepts and verifies a user-supplied prior URL or exhaustively enumerates all-status GitHub issues for the durable body marker.
+   It creates only after proving zero matches, stops on ambiguity or truncation, and treats a terminal match as an already completed handoff.
 9. If the repository's existing project default remains intentional, final handoff names `--bro <developer-name>`; otherwise omission verifies the new default.
 
 This walk leaves existing application dependencies, dirty work, package-manager policy, host defaults, existing bro defaults, and task history intact.
@@ -563,6 +603,8 @@ A later implementation session can verify the prompt from this managed container
 - fetch every absolute source link and check that its named heading or file exists;
 - create a throwaway fresh Git repository from the prompt's minimal `uv_build` shape, sync it against the public Git sources, build it, and prove `create_bro('my-dev')` resolves through installed entry-point metadata;
 - create a throwaway existing non-Python repository with unrelated dirty work, add the sidecar shape, and prove sync, build, registry resolution, and status preservation;
+- create a root uv-lock fixture and prove that `ride.workspace.build_context.manifest_paths` still selects the full project bake when `ride` comes from a sidecar, then check that the prompt rejects an incompatible bake rather than claiming isolation;
+- seed a retained framework lock, run the documented approved relock, assert `bro`, `bro-dev`, and `bro-ride` resolve to one SHA, and verify every authoritative URL uses it;
 - unset inherited `BRO_STORE` and point `HOME` and `XDG_DATA_HOME` at throwaway directories;
   create fake non-production credential material and an origin-keyed host selection including the real `.git` suffix;
   verify `ride scope --repo . --bro my-dev` reports the expected required, optional, and instance layers;
@@ -599,10 +641,16 @@ The prompt itself tells the user to report the host outcome, in line with the ta
 - Optional OpenAI can incur separate cost even though Claude is the primary harness.
   The user opts in with that distinction stated.
 - The framework tracks a moving branch and has no compatibility promise.
-  Committing the lock makes the chosen revision reviewable and upgrades deliberate.
+  An approved relock pins all three installed distributions to one SHA, and every authoritative read uses that SHA so current docs cannot silently configure older code.
+- `[tool.bro] harness` is global rather than per bro.
+  An existing native default must move to Claude with approval or the exact no-flag acceptance shape is unsupported.
+- Brog's list surface has a hard 100-item cap and no pagination.
+  Idempotent task reconciliation therefore uses the selected GitHub API read path, all statuses, a durable body marker, and fail-safe no-write behavior.
 - Freezing a large existing application environment can include private or platform-specific distributions.
-  The sidecar is the escape hatch when the main environment is unsuitable for a reproducible host-to-container runtime bundle.
-- A private VCS dependency may be reachable on the host but not from the runtime-image materializer, which intentionally has no launcher credentials.
+  A sidecar narrows that runtime bundle, but it cannot suppress an attached root uv lock's separate project-image bake.
+- The project bake installs every root workspace member, group, and extra under Linux.
+  A root uv lock that cannot complete that exact sync makes the repository unsupported until a framework project-bake selection or suppression seam exists.
+- A private VCS dependency may be reachable on the host but not from either container materializer, which intentionally has no launcher credentials.
 - Windows is not claimed as supported by this bootstrap because the repository documents only macOS and Ubuntu setup and the runtime uses Unix host primitives.
 - A Claude Code session opened against another project may not have a safe writable boundary for the chosen target; the prompt restarts from the target root before editing.
 - A partial or repeated bootstrap can otherwise duplicate an entry point, overwrite an intentional default, or create the roster task twice; every section begins with state reconciliation.
@@ -633,6 +681,9 @@ The prompt itself tells the user to report the host outcome, in line with the ta
 - **Using one-time `--grant` flags as setup:** they bypass persistent project selection and would make the acceptance command prove less than the definition of done.
 - **Creating the initial GitHub issue with `gh issue create`:** it would not prove that the configured brog and dive-in prefetch path work.
 - **Using `dive-in --new` without brog:** the trackerless `fix` spell deliberately cannot create a task; bare dive-in is the correct text-only fallback.
+- **Treating the sidecar as a project-bake switch:** it changes the invoking installation, not the attached repository's root-lock bake; unsupported locks fail explicitly instead of relying on file renames or uncommitted manifest edits.
+- **Reading templates from current `master` after retaining an older lock:** every authoritative read is bound to the one SHA the three installed distributions share.
+- **Using capped open-task listing as proof of absence:** initial-task reconciliation enumerates all GitHub issue statuses and refuses a write when the read is incomplete or ambiguous.
 - **Accepting `ride ... --host` instead of the exact check:** it avoids the required default container path and cannot validate Docker setup.
 - **Adding a separate checked-in template file:** the prompt already has to synthesize project-specific packaging and text, and the live framework declarations are better templates than a second frozen copy.
 
@@ -655,19 +706,26 @@ Add root `BOOTSTRAP.md` as the attended Claude Code prompt described by the desi
 **Details:**
 
 1. Write the prompt as a check/ask/act workflow with explicit checkpoints, restart boundaries, idempotent partial-setup handling, and user confirmation before repository, home-directory, or outward writes.
-2. Cover fresh integrated packages, safe integration into an existing uv project or workspace member, and the independent `bro_project/` sidecar for unrelated or unreproducible application environments.
-3. Carry the verified registry, `[tool.bro]`, LLM-preset, credential-store, exact-origin identity, GitHub brog, committed-base, exact smoke-command shape, roster-task, and `dive-in` contracts into the prompt without exposing PPP.
+2. Cover fresh integrated packages, safe integration into an existing uv project or workspace member, and the independent `bro_project/` sidecar where it actually narrows the invoking installation.
+   Gate every root uv lock on the runtime's all-members, all-groups, all-extras Linux project bake, and stop unsupported repositories instead of presenting the sidecar as a bake switch.
+3. Carry the verified registry, project config, credential, GitHub brog, committed-base, roster-task, and `dive-in` contracts into the prompt without exposing PPP.
+   Cover the full-Claude project-wide harness, opt-in LLM preset, exact-origin identity, and exact smoke-command shape explicitly.
+   Relock `bro`, `bro-dev`, and `bro-ride` to one reviewed SHA and bind all source reads to it.
 4. Keep secrets out of chat, output, shell history, process arguments, and the repository; make the prompt use metadata-only checks and the wire procedure.
-5. Run the repository formatter and full test gate, and check every absolute source link.
+   Probe the selected managed-session GitHub identity and repository permissions before the initial issue write.
+5. Make roster-task handoff rerunnable through a durable body marker, exhaustive all-status GitHub issue enumeration, brog validation and creation, terminal-task handling, and fail-safe no-write behavior on ambiguity or incomplete reads.
+6. Run the repository formatter and full test gate, and check every SHA-bound source link.
    Build and inspect fresh plus sidecar fixture wheels, prove registry resolution, exercise fake scoped credentials with inherited `BRO_STORE` removed, and inspect trackerless `dive-in --dry-run`.
+   Verify retained-lock convergence and prove that a sidecar does not suppress a root-lock project bake.
    Confirm that the exact solo shape takes the documented in-container refusal in the implementation environment.
-6. Land the stage through `[[run pr]]` with base `integration/487-bootstrap-prompt`.
+7. Land the stage through `[[run pr]]` with base `integration/487-bootstrap-prompt`.
 
 A single stage is intentional.
 The deliverable is one tightly coupled prompt file, and separating its prose from the fixtures that validate the same commands would create a stage boundary with no independently useful result.
 
 ### Prerequisites and rollout boundary
 
-No framework code or scaffolding command is a prerequisite.
+No framework code or scaffolding command is a prerequisite for repositories whose project-image bake passes the documented compatibility gate.
+A repository with an incompatible root uv lock remains unsupported until separate framework work adds a project-bake selection or suppression seam; this stage must report that boundary rather than implement the seam.
 Implementation needs network access to the public framework Git sources and the repository's normal uv test environment.
 Real Claude setup-token auth, host Docker launch, the user's credential store, GitHub issue creation, and interactive `dive-in` remain the one post-integration user rollout described by the root task rather than another implementation stage.
