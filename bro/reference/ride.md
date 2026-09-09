@@ -627,6 +627,10 @@ Host scoping is still a convenience rather than a security boundary, because the
 - **Which instance.**
   Scope selection merges the host's defaults, matching project, and matching `projects.<identity>.bros.<bro>` layer in that order.
   A project-bro layer overrides the project selection for that bro, including when the bro is a summon target.
+  A project-bro `grant` adds kinds the bro does not declare to the required tier, under the instance it names or the one the other layers select, for the bro's own launches and its summoned runs alike
+  — computed on the child's side, so a summoner need not hold the kind.
+  A project-bro `creds` selection of a kind the launch reads on neither tier fails the launch and names `grant`;
+  the recording kind counts as read under `--no-trails` too.
   A path attachment matches on two identities
   — the checkout path and its `origin` URL
   — so a `projects` key written as the repository's URL reaches the everyday `--repo <path>` launch too;

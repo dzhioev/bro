@@ -23,7 +23,7 @@ from bro.summon import DEFAULT_TIMEOUT
 from ride import pending_summon
 from ride.harness import HARNESS_NAMES, get_harness
 from ride.peer_facts import PeerFact, PeerFacts, PeerIdentity, UnattributablePeer
-from ride.scope import split_scope_overrides, summoned_credential_scope
+from ride.scope import LaunchScopeError, split_scope_overrides, summoned_credential_scope
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
@@ -91,6 +91,9 @@ def _summoned_scope(
   grant: Sequence[str] = (),
   revoke: Sequence[str] = (),
 ) -> ScopedSecrets:
+  """the scope `target` would run with under `harness_name`, computed to
+  authorize against rather than to hydrate — the lowering checks the host
+  selection of the scope that launches."""
   harness = get_harness(harness_name)
   return summoned_credential_scope(
     target,
@@ -99,6 +102,7 @@ def _summoned_scope(
     grant=list(grant),
     revoke=list(revoke),
     llm_spec=harness.resolve_llm(llm, target),
+    check_selection=False,
   )
 
 
@@ -220,7 +224,7 @@ def _credential_refusal(
       widening = (requested_scope.required | requested_scope.optional) - (
         default_scope.required | default_scope.optional
       )
-    except ValueError as error:
+    except (ValueError, LaunchScopeError) as error:
       return str(error)
   if len(grant_credentials) == 0 and len(widening) == 0:
     return None
@@ -471,7 +475,7 @@ class SummonControl:
         grant=grant,
         revoke=revoke,
       )
-    except ValueError as error:
+    except (ValueError, LaunchScopeError) as error:
       raise UnattributablePeer(str(error)) from error
 
   @staticmethod

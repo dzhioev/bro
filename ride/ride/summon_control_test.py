@@ -1,5 +1,5 @@
 import json
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import pytest
 
@@ -7,16 +7,21 @@ import ride.artifacts
 import ride.bro
 import ride.peer_facts
 import ride.pending_summon
+import ride.scope
 import ride.spawn
 import ride.summon_control
 from bro.base import configs
+from bro.base.condition import when
 from bro.broker import brotocol
 from bro.broker.dispatcher import Dispatcher
 from bro.broker.journal import Journal
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
+from bro.datasources.base import DataSource
 from bro.llm.llms.echo import LLMSpec as EchoLLMSpec
+from bro.mcp import harness
 from bro.summon import DEFAULT_TIMEOUT
+from bros.bro import Bro
 from ride.peer_facts import PeerFact, PeerFacts
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
@@ -381,10 +386,61 @@ def test_recipe_incompatible_with_the_harness_is_denied(tmp_path):
   assert 'runs Claude Code, not openai' in context.replies[0][1]['error']
 
 
+def test_a_selection_read_under_the_requested_harness_alone_is_not_refused(
+  tmp_path, monkeypatch, register_test_bros
+):
+  class CatalogSource(DataSource):
+    name = 'catalog'
+    summary = 'catalog lookups'
+    needed_secrets = ('catalog',)
+
+    def as_mcp_server(self):
+      raise NotImplementedError
+
+  class GatedBro(Bro):
+    name = 'gated-catalog'
+    description = 'reads the catalog as an LLM process only'
+    llm_spec = EchoLLMSpec()
+    data_sources: ClassVar = [when(harness == 'bro', CatalogSource())]
+
+  register_test_bros(GatedBro)
+  config = tmp_path / 'bro.json'
+  config.write_text(
+    json.dumps(
+      {'projects': {str(tmp_path): {'bros': {'gated-catalog': {'creds': ['catalog+work']}}}}}
+    )
+  )
+  monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+  control = _control(
+    tmp_path,
+    allow_list=('gated-catalog',),
+    credential_scope={'claude_code', 'catalog'},
+    summon_harness='claude',
+  )
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(target='gated-catalog', harness='bro'))
+  assert context.replies == []
+  [(launch, _, _)] = context.spawned
+  assert launch.target == 'gated-catalog'
+
+
+def test_a_child_scope_the_host_config_rejects_is_denied(tmp_path, monkeypatch):
+  def rejecting_scope(*args, **kwargs):
+    raise ride.scope.LaunchScopeError('bros.dev selects github+reviewer (project-path-bro)')
+
+  monkeypatch.setattr(ride.summon_control, 'summoned_credential_scope', rejecting_scope)
+  control = _control(tmp_path, credential_scope={'claude_code'})
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(harness='claude'))
+  assert 'bros.dev selects github+reviewer' in context.replies[0][1]['error']
+
+
 def test_child_grant_bound_recomputes_its_llm_scope(tmp_path, monkeypatch):
   calls = []
 
-  def capture_scope(target, recipe, *, attachment=None, grant, revoke, llm_spec=None):
+  def capture_scope(
+    target, recipe, *, attachment=None, grant, revoke, llm_spec=None, check_selection=True
+  ):
     calls.append((target, llm_spec))
     return ScopedSecrets({'github'}, set())
 

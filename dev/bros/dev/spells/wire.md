@@ -82,12 +82,14 @@ For each needed kind, sort the host into one of three cases:
 Read `bro/base/host_config.py`'s module docstring before editing the file.
 Its precedence is launch flag, project-bro, project, tool for a host CLI, then defaults;
 a kind no layer selects reads its empty instance.
-Every list is named `creds` and carries `kind+instance`, the instance left empty (`kind+`) for the kind's own `creds/<kind>.cred`.
+Every selection list is named `creds` and carries `kind+instance`, the instance left empty (`kind+`) for the kind's own `creds/<kind>.cred`.
 
 Put a host-wide choice in `defaults.creds` only when both the user's own commands and unrelated projects should read it.
 Put what the user's own commands read in `user.creds`, and one command's own choice in `user.tools.<command>.creds`.
 Put a repository-wide choice in `projects.<identity>.creds`.
 Put an identity specific to one bro in `projects.<identity>.bros.<bro>.creds`.
+Put a kind a bro reads on this project without declaring it in `projects.<identity>.bros.<bro>.grant`;
+a bro's `creds` selects only among the kinds it reads.
 Kinds the consumer has no opinion about stay out of its layer.
 
 ## 5. Record the decision

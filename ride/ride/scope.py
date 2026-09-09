@@ -25,8 +25,9 @@ _TRAILS_BASELINE = frozenset({'trails'})
 
 class LaunchScopeError(Exception):
   """a launch failed its scope computation or preflight: a bro the installation
-  does not declare, a malformed or no-op grant/revoke override, an unknown summon
-  target, or an unknown/unresolvable required secret."""
+  does not declare, a malformed host config or a per-bro selection of a kind the
+  launch does not read, a malformed or no-op grant/revoke override, an unknown
+  summon target, or an unknown/unresolvable required secret."""
 
 
 @contextlib.contextmanager
@@ -73,6 +74,7 @@ def scoped_secrets(
   *,
   attachment: Optional[str] = None,
   llm_spec: Optional['LLMSpec'] = None,
+  check_selection: bool = True,
 ) -> ScopedSecrets:
   """the credential scope of a launch running as `bro_name` under `recipe`.
 
@@ -85,11 +87,16 @@ def scoped_secrets(
   against another provider needs that provider's key, not the declared one.
 
   The scope carries host defaults plus the operated project's instance selection
-  to each explicit store the launch constructs.
+  to each explicit store the launch constructs. The project's per-bro `grant`
+  kinds join the required tier under that selection, and a per-bro `creds`
+  selection of a kind the launch does not read fails it — unless
+  `check_selection` is off, for a scope computed to reason about rather than to
+  hydrate.
   """
   from bro.registry import create_bro
 
-  binding = bind_launch_credentials(attachment, bro_name)
+  with launch_scope_errors():
+    binding = bind_launch_credentials(attachment, bro_name)
   required: set[str] = set()
   optional = set(recipe.optional_baseline)
   try:
@@ -102,11 +109,32 @@ def scoped_secrets(
   if recipe.llm_key:
     required.update((llm_spec if llm_spec is not None else bro.llm_spec).needed_secrets())
   optional.update(bro.optional_secrets(harness=recipe.harness))
+  required.update(binding.grants)
+  optional.difference_update(binding.grants)
+  if check_selection:
+    # the recording kind counts as read under `--no-trails`, which empties the recipe's baseline
+    _require_bro_layer_selections_read(binding, bro_name, required | optional | _TRAILS_BASELINE)
   return ScopedSecrets(
     required=required,
     optional=optional,
     selection=dict(binding.instances),
   )
+
+
+def _require_bro_layer_selections_read(
+  binding: host_config.CredentialSelection, bro_name: str, readable: set[str]
+) -> None:
+  unread = [
+    f'{credentials.storage_name(kind, binding.instances[kind])} ({layer})'
+    for kind, layer in sorted(binding.layers.items())
+    if layer in host_config.BRO_LAYERS and kind not in readable
+  ]
+  if len(unread) > 0:
+    raise LaunchScopeError(
+      f'{host_config.HOST_CONFIG_FILE}: bros.{bro_name} selects {", ".join(unread)}, which '
+      'this launch does not read; move the entry from "creds" to "grant" to add the kind to '
+      'its scope'
+    )
 
 
 def summoned_credential_scope(
@@ -117,14 +145,21 @@ def summoned_credential_scope(
   grant: list[str],
   revoke: list[str],
   llm_spec: Optional['LLMSpec'] = None,
+  check_selection: bool = True,
 ) -> ScopedSecrets:
   """the credential scope a summoned bro runs with: its own scope under `recipe`
   — the child harness's — plus the request's overrides. `grant`/`revoke` are the
   credential halves of the request's unified values (`split_scope_overrides`) —
-  the `@bro` halves shape the summon allow-list instead. Raises `ValueError` on
-  a no-op override."""
+  the `@bro` halves shape the summon allow-list instead. `check_selection` is
+  `scoped_secrets`'s. Raises `ValueError` on a no-op override."""
   return finalize_scoped_secrets(
-    scoped_secrets(bro_name, recipe, attachment=attachment, llm_spec=llm_spec),
+    scoped_secrets(
+      bro_name,
+      recipe,
+      attachment=attachment,
+      llm_spec=llm_spec,
+      check_selection=check_selection,
+    ),
     grant=grant,
     revoke=revoke,
   )

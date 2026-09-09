@@ -65,8 +65,8 @@ def lowering_harness(monkeypatch, tmp_path):
   monkeypatch.setattr(
     ride.scope,
     'scoped_secrets',
-    lambda name, surface, attachment=None, llm_spec=None: workspace_store.ScopedSecrets(
-      required={'aws', 'trails'}, optional={'openai'}
+    lambda name, surface, attachment=None, llm_spec=None, check_selection=True: (
+      workspace_store.ScopedSecrets(required={'aws', 'trails'}, optional={'openai'})
     ),
   )
   monkeypatch.setattr(ride.session, 'local_trails_mounts', lambda scoped: ())
@@ -181,7 +181,7 @@ class TestSummonLowering:
   def test_the_llm_recipe_selects_the_childs_hydrated_llm_key(self, lowering_harness, monkeypatch):
     captured: list = []
 
-    def capture_scope(name, recipe, attachment=None, llm_spec=None):
+    def capture_scope(name, recipe, attachment=None, llm_spec=None, check_selection=True):
       captured.append(llm_spec)
       return workspace_store.ScopedSecrets(required=set(), optional=set())
 
@@ -558,7 +558,7 @@ class TestClaudeSummonLowering:
   def test_scope_follows_the_claude_recipe(self, claude_harness, monkeypatch):
     captured: list = []
 
-    def capture_scope(name, recipe, attachment=None, llm_spec=None):
+    def capture_scope(name, recipe, attachment=None, llm_spec=None, check_selection=True):
       captured.append(recipe.name)
       return workspace_store.ScopedSecrets(required=set(), optional=set())
 

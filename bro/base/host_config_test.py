@@ -157,6 +157,20 @@ class TestTwoIdentities:
       'trails': host_config.PROJECT_URL_BRO_LAYER,
     }
 
+  def test_grants_merge_across_the_bro_layers(self, config_file, tmp_path):
+    attachment = self._config(
+      config_file,
+      tmp_path,
+      path_entry={'bros': {'reviewer': {'creds': ['github+laptop']}}},
+      url_entry={'bros': {'reviewer': {'grant': ['github+reviewer', 'aws']}}},
+    )
+
+    selected = host_config.launch_selection(attachment, 'reviewer')
+
+    assert selected.instances == {'github': 'laptop'}
+    assert selected.layers == {'github': host_config.PROJECT_PATH_BRO_LAYER}
+    assert selected.grants == {'github', 'aws'}
+
   def test_a_path_naming_no_entry_still_reads_the_url_entry(self, config_file, tmp_path):
     config_file({'projects': {self.URL: {'creds': ['brog+github']}}})
     attachment = host_config.Attachment(path=str(tmp_path), url=self.URL)
@@ -219,6 +233,51 @@ class TestLaunchSelection:
     selected = host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'developer')
 
     assert selected.instances == {'trails': 'write', 'github': 'project'}
+
+  def test_a_bro_grant_selects_its_instance_and_grants_the_kind(self, config_file, tmp_path):
+    config_file(
+      {
+        'projects': {
+          str(tmp_path): {
+            'creds': ['github+project'],
+            'bros': {'reviewer': {'grant': ['github+reviewer']}},
+          }
+        }
+      }
+    )
+
+    selected = host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'reviewer')
+
+    assert selected.instances == {'github': 'reviewer'}
+    assert selected.layers == {'github': host_config.PROJECT_PATH_BRO_LAYER}
+    assert selected.grants == {'github'}
+
+  def test_a_bare_grant_reads_the_instance_the_other_layers_select(self, config_file, tmp_path):
+    config_file(
+      {
+        'projects': {
+          str(tmp_path): {
+            'creds': ['github+project'],
+            'bros': {'reviewer': {'grant': ['github']}},
+          }
+        }
+      }
+    )
+
+    selected = host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'reviewer')
+
+    assert selected.instances == {'github': 'project'}
+    assert selected.layers == {'github': host_config.PROJECT_PATH_LAYER}
+    assert selected.grants == {'github'}
+
+  def test_another_bros_grant_does_not_reach_the_launch(self, config_file, tmp_path):
+    config_file(
+      {'projects': {str(tmp_path): {'bros': {'reviewer': {'grant': ['github+reviewer']}}}}}
+    )
+    attachment = host_config.Attachment(path=str(tmp_path))
+
+    assert host_config.launch_selection(attachment, 'developer').grants == frozenset()
+    assert host_config.project_selection(attachment).grants == frozenset()
 
 
 class TestToolSelection:
@@ -307,6 +366,26 @@ class TestValidation:
     with pytest.raises(ValueError, match="selects kind 'brog' twice"):
       host_config.tool_selection(None)
 
+  def test_two_grants_of_one_kind_are_rejected(self, config_file):
+    config_file({'projects': {'/repo': {'bros': {'dev': {'grant': ['github+a', 'github']}}}}})
+
+    with pytest.raises(ValueError, match="bro 'dev' grants kind 'github' twice"):
+      host_config.tool_selection(None)
+
+  def test_a_kind_both_selected_and_granted_by_one_bro_is_rejected(self, config_file):
+    config_file(
+      {'projects': {'/repo': {'bros': {'dev': {'creds': ['github+a'], 'grant': ['github+b']}}}}}
+    )
+
+    with pytest.raises(ValueError, match="names kind 'github' in both creds and grant"):
+      host_config.tool_selection(None)
+
+  def test_a_grant_naming_a_summon_target_is_rejected(self, config_file):
+    config_file({'projects': {'/repo': {'bros': {'dev': {'grant': ['@reviewer']}}}}})
+
+    with pytest.raises(ValueError, match="malformed secret name '@reviewer'"):
+      host_config.tool_selection(None)
+
   @pytest.mark.parametrize(
     'data, message',
     [
@@ -315,6 +394,10 @@ class TestValidation:
       ({'projects': []}, 'projects must be a json object'),
       ({'projects': {'/repo': {'bros': []}}}, 'bros must be a json object'),
       ({'projects': {'/repo': {'bros': {'dev': []}}}}, 'must hold a json object'),
+      ({'projects': {'/repo': {'bros': {'dev': {'grant': 'github'}}}}}, 'grant must be a list'),
+      ({'projects': {'/repo': {'bros': {'dev': {'grant': [7]}}}}}, 'grant 7 must be a string'),
+      ({'projects': {'/repo': {'grant': ['github']}}}, 'unknown field'),
+      ({'user': {'tools': {'bro.trails.rewind': {'grant': ['github']}}}}, 'unknown field'),
       ({'user': []}, 'user must hold a json object'),
       ({'user': {'tools': []}}, 'tools must be a json object'),
       ({'user': {'tools': {'bro.trails.rewind': []}}}, 'must hold a json object'),

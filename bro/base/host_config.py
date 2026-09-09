@@ -13,7 +13,9 @@ Selections live outside repositories and merge from general to specific:
       "projects": {
         "https://github.com/foo/api.git": {
           "creds": ["brog+github", "github+dev"],
-          "bros": {"bro-eyebro": {"creds": ["github+reviewer"]}}
+          "bros": {
+            "eyebro": {"creds": ["trails+review"], "grant": ["github+reviewer"]}
+          }
         },
         "/home/foo/projects/api": {"creds": ["aws+laptop"]}
       },
@@ -24,6 +26,10 @@ Selections live outside repositories and merge from general to specific:
 Every `creds` entry is `kind+instance`, the instance left empty (`kind+`) to
 select the kind's empty instance.
 A list may name each kind once.
+A `bros` entry may also `grant`: kinds the bro reads on this project beyond the
+ones it declares, each `kind+instance` to select the instance as `creds` does,
+or a bare `kind` to read the instance the other layers select.
+An entry names a kind in `creds` or in `grant`, not both.
 The grammar is installation-independent, so selections for unknown kinds remain
 valid and are carried in the returned mappings.
 
@@ -43,7 +49,8 @@ Launch selection precedence runs defaults, the URL entry, the path entry, then
 each of their `bros` layers in that same order; a command's is its `user.tools`
 entry, `user`, then defaults.
 A kind no layer selects reads its empty instance.
-The returned layer map attributes every explicit selection.
+The returned layer map attributes every explicit selection, and the returned
+grant set carries the kinds the matching `bros` entries grant.
 
 The file is optional.
 `llm` remains the host-wide table of `--llm` preset names.
@@ -71,12 +78,14 @@ PROJECT_PATH_LAYER = 'project-path'
 PROJECT_URL_BRO_LAYER = 'project-url-bro'
 PROJECT_PATH_BRO_LAYER = 'project-path-bro'
 TOOL_LAYER = 'tool'
+BRO_LAYERS = frozenset({PROJECT_URL_BRO_LAYER, PROJECT_PATH_BRO_LAYER})
 
 _DEFAULTS_KEY = 'defaults'
 _USER_KEY = 'user'
 _PROJECTS_KEY = 'projects'
 _TOOLS_KEY = 'tools'
 _CREDS_KEY = 'creds'
+_GRANT_KEY = 'grant'
 _BROS_KEY = 'bros'
 _LLM_KEY = 'llm'
 _SUMMON_DEPTH_KEY = 'summon-depth'
@@ -102,16 +111,27 @@ class Attachment:
 
 @dataclass(frozen=True)
 class CredentialSelection:
-  """A merged kind-to-instance selection and its host-config provenance."""
+  """A merged kind-to-instance selection, its host-config provenance, and the
+  kinds the matching `bros` entries grant."""
 
   instances: dict[str, str]
   layers: dict[str, str]
+  grants: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class _BroEntry:
+  """A `bros` entry: its selections, and the kinds it grants — a bare one
+  carrying no selection of its own."""
+
+  selection: dict[str, str]
+  grants: frozenset[str]
 
 
 @dataclass(frozen=True)
 class _Project:
   credentials: dict[str, str]
-  bros: dict[str, dict[str, str]]
+  bros: dict[str, _BroEntry]
 
 
 @dataclass(frozen=True)
@@ -199,10 +219,11 @@ def launch_selection(attachment: Optional[Attachment], bro: str) -> CredentialSe
   matches = _matches(config, attachment)
   layers = [(DEFAULTS_LAYER, config.defaults)]
   layers.extend((match.layer, match.project.credentials) for match in matches)
-  layers.extend(
+  bro_entries = [
     (match.bro_layer, match.project.bros[bro]) for match in matches if bro in match.project.bros
-  )
-  return _merged(layers)
+  ]
+  layers.extend((layer, entry.selection) for layer, entry in bro_entries)
+  return _merged(layers, frozenset().union(*(entry.grants for _, entry in bro_entries)))
 
 
 def tool_selection(
@@ -246,13 +267,15 @@ def _matches(config: _Config, attachment: Optional[Attachment]) -> list[_Match]:
   return matches
 
 
-def _merged(layers: list[tuple[str, dict[str, str]]]) -> CredentialSelection:
+def _merged(
+  layers: list[tuple[str, dict[str, str]]], grants: frozenset[str] = frozenset()
+) -> CredentialSelection:
   instances: dict[str, str] = {}
   sources: dict[str, str] = {}
   for layer, selection in layers:
     instances.update(selection)
     sources.update(dict.fromkeys(selection, layer))
-  return CredentialSelection(instances, sources)
+  return CredentialSelection(instances, sources, grants)
 
 
 def _projects(path: Path, value: object) -> dict[str, _Project]:
@@ -276,12 +299,35 @@ def _project(path: Path, project: str, value: object) -> _Project:
   bros = value.get(_BROS_KEY, {})
   if not isinstance(bros, dict):
     raise ValueError(f'{where}: {_BROS_KEY} must be a json object')
-  parsed_bros: dict[str, dict[str, str]] = {}
+  parsed_bros: dict[str, _BroEntry] = {}
   for bro, entry in bros.items():
     if bro == '':
       raise ValueError(f'{where}: bro name must not be empty')
-    parsed_bros[bro] = _selection_object(path, f'{where}: bro {bro!r}', entry)
+    parsed_bros[bro] = _bro_entry(f'{where}: bro {bro!r}', entry)
   return _Project(selection, parsed_bros)
+
+
+def _bro_entry(where: str, value: object) -> _BroEntry:
+  if not isinstance(value, dict):
+    raise ValueError(f'{where} must hold a json object')
+  _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY}, where)
+  selection = _selection_entries(where, value.get(_CREDS_KEY, []))
+  grants = value.get(_GRANT_KEY, [])
+  if not isinstance(grants, list):
+    raise ValueError(f'{where}: {_GRANT_KEY} must be a list')
+  granted: set[str] = set()
+  for entry in grants:
+    if not isinstance(entry, str):
+      raise ValueError(f'{where}: grant {entry!r} must be a string')
+    kind, instance = credentials.parse_name(entry)
+    if kind in granted:
+      raise ValueError(f'{where} grants kind {kind!r} twice')
+    if kind in selection:
+      raise ValueError(f'{where} names kind {kind!r} in both {_CREDS_KEY} and {_GRANT_KEY}')
+    granted.add(kind)
+    if instance is not None:
+      selection[kind] = instance
+  return _BroEntry(selection, frozenset(granted))
 
 
 def _user(path: Path, value: object) -> _User:
