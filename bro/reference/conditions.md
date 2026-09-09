@@ -141,6 +141,10 @@ The declaration adds a `#features` variable (`BaseBro.vocabulary()`, passed as t
 — `tools` / `data_sources` selection, prompt composition, spell bodies, ride's append prompt.
 Components gate with `when(feature('brog'), …)` (`from bro.bro import feature`) and text with `{{iff #features contains brog}}`,
 so one declaration switches every consuming site together, and a gated component enters the credential manifest only where its gates resolve.
+The credential a `creds.contains(<kind>)` gate probes is tiered with the feature:
+in `optional_secrets()` while the feature is gated, in `needed_secrets()` once a derived class pins the feature on, and in neither once disabled.
+A credential a bro uses when present is therefore declared as a feature, and text and components switch on `#features`;
+a bare `#creds` test is the raw fact, for text that must follow the store rather than a declared capability.
 
 The `#features` universe is the declared feature names
 — environment-independent, so a typo'd name fails every render.
