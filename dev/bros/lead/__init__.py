@@ -62,4 +62,5 @@ class Lead(Bro):
     man('dive-in'),
     man('ride'),
   ]
+  spells = ('orchestrate.md',)
   system_prompt = SYSTEM_PROMPT

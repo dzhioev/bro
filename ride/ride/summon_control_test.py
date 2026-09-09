@@ -56,6 +56,14 @@ class TestSummonAllowList:
       ride.summon_control.summon_allow_list('bro', grant=['not-registered'], revoke=[])
 
 
+def _without_spells(monkeypatch, cls) -> None:
+  # the cast key sits in the optional tier of every bro that has spells, which
+  # would mask what an openai recipe adds to the scope
+  for base in cls.__mro__:
+    if 'spells' in vars(base):
+      monkeypatch.setattr(base, 'spells', ())
+
+
 class _FakeSummonControl(ride.summon_control.SummonControl):
   test_journal: Journal
 
@@ -352,7 +360,7 @@ def test_naming_the_configured_summon_harness_widens_nothing(tmp_path):
 def test_the_native_loop_under_a_claude_summon_harness_needs_its_llm_key(tmp_path, monkeypatch):
   from bro.registry import get_class
 
-  monkeypatch.setattr(get_class('dev'), 'spells', {})
+  _without_spells(monkeypatch, get_class('dev'))
   control = _control(tmp_path, credential_scope={'claude_code'}, summon_harness='claude')
   context = FakeContext(control)
   control.handle(cast(Dispatcher, context), ROOT, _message(harness='bro'))
@@ -368,7 +376,7 @@ def test_requested_llm_credentials_are_bounded_by_the_summoner(tmp_path, monkeyp
   from bro.registry import get_class
 
   monkeypatch.setattr(get_class('dev'), 'llm_spec', EchoLLMSpec())
-  monkeypatch.setattr(get_class('dev'), 'spells', {})
+  _without_spells(monkeypatch, get_class('dev'))
   control = _control(tmp_path, credential_scope={'brog'})
   context = FakeContext(control)
   control.handle(cast(Dispatcher, context), ROOT, _message(llm='openai:terra'))

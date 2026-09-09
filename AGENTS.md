@@ -89,7 +89,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   The class is the persona *declaration* and its composition;
   the engine that runs one is `native/runner.py`.
 
-  Subclasses set `name`, `description`, and class-level `system_prompt = "..."` plus optionally `data_sources = [...]`, `tools = [...]`, and `provisioning = (...)`.
+  Subclasses set `name`, `description`, and class-level `system_prompt = "..."` plus optionally `data_sources = [...]`, `tools = [...]`, `spells = (...)`, and `provisioning = (...)`.
   Every `tools` item is one frozen `bro.mcp.ToolLayer`:
   `mount(toolset, *tool_names)` adds a toolset's full or selected roster,
   `sh('<command>', *argument_names)` generates one from an installed CLI command (`bro/llm/cli_tool.py`),
@@ -153,7 +153,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   — roster and grammar in `bro/llm/AGENTS.md` (`providers.py`), the per-surface flags in `bro/launch/AGENTS.md` ("Naming the LLM").
 
   **Spells and skills.**
-  The bro-native procedure store lives under `<bro_pkg>/spells/*.md` and composes by MRO with derived overrides.
+  A bro's `spells` declaration names its procedure files under `<bro_pkg>/spells/`, and the roster composes by MRO with derived overrides.
   A spell's flat frontmatter may declare a one-line JSON parameter map (`parameters: {"task": "task ref", "notes?": "optional context"}`);
   the `?` suffix marks an optional string parameter.
   `bro/spells.py` validates the store and builds the reserved `spell` MCP namespace on every surface with spells;
@@ -454,19 +454,21 @@ add tool sources as class attributes too:
   — each is a `Callable[[Path], None]` applied to the workspace root by whatever starts the session (`ride/ride/inner.py` for a managed one, on either harness).
   MRO-walked and concatenated like `extra_secrets`.
   Every session start runs them, resumes included, so each step is idempotent.
-- Drop markdown files into `bros/<name>/spells/*.md` (flat frontmatter with `name`, `description`, an optional one-line JSON `parameters`, and an optional informational `version` bumped when the spell changes;
-  markdown body after the closing `---`) to declare spells.
+- `spells = ('fix.md', 'run-pr.md')` declares spells:
+  each entry is a markdown file's path relative to `bros/<name>/spells/` (flat frontmatter with `name`, `description`, an optional one-line JSON `parameters`, and an optional informational `version` bumped when the spell changes;
+  markdown body after the closing `---`).
   A frontmatter value is either inline after the key or, where a bare `key:` is followed by a blank line, the block of lines under it up to the next blank line or the closing fence
   — folded into one paragraph on single spaces, so a long description breaks semantically in the file (one clause per line, for reviewable diffs) and still reaches the tool as one paragraph.
-  Filename stem is canonical and validated against `name:`;
-  spell and parameter names must fit the wire charset, parameter name `offset` is reserved, and malformed declarations fail at load.
+  The filename stem is the spell's name, canonical and validated against `name:`;
+  spell and parameter names must fit the wire charset, parameter name `offset` is reserved, and malformed declarations fail at load;
+  an entry naming no file, one escaping the directory, or two entries sharing a stem fails the bro's construction.
   Spell names are imperative verb phrases (`fix`, `land`, `run-pr`, `orchestrate`), kebab-cased when multi-word.
   Prose that refers to *running* one
   — in a spell, a prompt, or a doc
   — marks it `[[…]]`, hyphens as spaces and the phrasing fitted to the sentence (`hand off to [[run pr]]`, `blocks [[land]] later`);
   canonical `spell::<name>` stays for the mechanism and for component inventories.
   Spells follow the same MRO walk as `system_prompt` and `tools`:
-  each ancestor contributes, derived classes override parents on name collision, and anything under `bros/bro/spells/` is inherited by every bro.
+  each ancestor's declaration contributes, derived classes override parents on name collision, and the concrete `Bro`'s spells reach every bro deriving from it.
   The full description is the tool description;
   keep it useful for tool selection rather than optimizing its first sentence.
 

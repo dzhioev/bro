@@ -49,4 +49,5 @@ class Dev(Bro):
     when(feature('brog'), mount(brog_mcp.toolset)),
   ]
   data_sources = [references.dev_style]
+  spells = ('audit.md', 'fix.md', 'land.md', 'run-pr.md', 'wire.md')
   system_prompt = SYSTEM_PROMPT

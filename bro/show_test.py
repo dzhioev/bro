@@ -9,6 +9,7 @@ from bro.datasources.searchable import Hit, SearchableDataSource
 from bro.llm.mcp import FunctionTool, InProcessMCPServer
 from bro.mcp import MCPServerSpec, ToolLayer, creds, describe
 from bro.show import format_card
+from bro.spells_test_helper import spell_package
 
 
 def _layer(server_class: type[InProcessMCPServer]) -> ToolLayer:
@@ -249,16 +250,16 @@ class TestFormatCard:
     assert card.endswith('\n')
 
   @pytest.mark.asyncio
-  async def test_spells_section_renders_canonical_roster_and_optional_secret(self, tmp_path):
-    spell_path = tmp_path / 'do-work.md'
-    spell_path.write_text('---\ndescription: develop the named task\n---\n\nbody')
-
-    class _SpelledBro(_MinimalBro):
-      @property
-      def spells(self):
-        return {'do-work': spell_path}
-
-    card = await format_card(_SpelledBro())
+  async def test_spells_section_renders_canonical_roster_and_optional_secret(
+    self, tmp_path, monkeypatch
+  ):
+    package = spell_package(
+      monkeypatch,
+      tmp_path,
+      '_show_spells',
+      {'do-work': '---\ndescription: develop the named task\n---\n\nbody'},
+    )
+    card = await format_card(package.bro_class(_MinimalBro)())
     assert '## Spells' in card
     assert '- **spell::do-work** — develop the named task' in card
     assert '- `openai` — optional (used if present)' in card
@@ -269,17 +270,15 @@ class TestFormatCard:
     assert '## Spells' not in card
 
   @pytest.mark.asyncio
-  async def test_spells_long_description_truncated(self, tmp_path):
+  async def test_spells_long_description_truncated(self, tmp_path, monkeypatch):
     long_description = 'x' * 300
-    spell_path = tmp_path / 'foo.md'
-    spell_path.write_text(f'---\ndescription: {long_description}\n---\n\nbody')
-
-    class _LongSpellBro(_MinimalBro):
-      @property
-      def spells(self):
-        return {'foo': spell_path}
-
-    card = await format_card(_LongSpellBro())
+    package = spell_package(
+      monkeypatch,
+      tmp_path,
+      '_show_long_spell',
+      {'foo': f'---\ndescription: {long_description}\n---\n\nbody'},
+    )
+    card = await format_card(package.bro_class(_MinimalBro)())
     assert '…' in card
     assert long_description not in card
 

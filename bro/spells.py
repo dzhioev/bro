@@ -1,5 +1,7 @@
 import json
 import re
+import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Self
@@ -10,7 +12,7 @@ import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
 from bro.base import credentials
 from bro.base.text_window import window
-from bro.procedures import collect_markdown, parse_frontmatter
+from bro.procedures import parse_frontmatter
 
 if TYPE_CHECKING:
   from bro.bro import BaseBro
@@ -61,8 +63,32 @@ class _Interpretation(BaseModel):
     return self
 
 
-def collect_spells(classes: list[type]) -> dict[str, Path]:
-  return collect_markdown(classes, 'spells')
+def declared_spells(cls: type, entries: Iterable[str]) -> dict[str, Path]:
+  """the spell files one class's `spells` declaration names, by spell name:
+  each entry is a markdown file's path relative to the `spells/` directory
+  beside the declaring module, and the file's stem is the spell's name."""
+  module = sys.modules.get(cls.__module__)
+  module_file = getattr(module, '__file__', None) if module is not None else None
+  if module_file is None:
+    raise ValueError(
+      f'{cls.__name__}.spells: module {cls.__module__!r} has no file to resolve spell paths against'
+    )
+  directory = Path(module_file).resolve().parent / 'spells'
+  found: dict[str, Path] = {}
+  for entry in entries:
+    relative = Path(entry)
+    if relative.is_absolute() or '..' in relative.parts:
+      raise ValueError(f'{cls.__name__}.spells: {entry!r} must be a path inside {directory}')
+    if relative.suffix != '.md':
+      raise ValueError(f'{cls.__name__}.spells: {entry!r} is not a markdown file')
+    path = directory / relative
+    if not path.is_file():
+      raise ValueError(f'{cls.__name__}.spells: {entry!r} names no file under {directory}')
+    name = relative.stem
+    if name in found:
+      raise ValueError(f'{cls.__name__}.spells: {entry!r} repeats spell {name!r}')
+    found[name] = path
+  return found
 
 
 def _validate_name(kind: str, name: str, path: Path) -> None:
@@ -365,7 +391,7 @@ class CastTool(llm_mcp.Tool):
 
 
 def _load_bro_spells(bro: 'BaseBro') -> list[Spell]:
-  return [load_spell(name, path) for name, path in bro.spells.items()]
+  return [load_spell(name, path) for name, path in bro.spell_paths.items()]
 
 
 def build_cast_tool(bro: 'BaseBro', *, harness: mcp.Harness, wire: mcp.Wire) -> llm_mcp.Tool:

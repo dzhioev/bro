@@ -47,15 +47,15 @@ def test_tracker_dev_inherits_shared_and_dev_spells():
   bro = _TrackerDev()
   # one spell per contributing package proves the MRO merge: reflect ships with
   # the shared bros/bro layer, fix with bros/dev
-  assert 'reflect' in bro.spells
-  assert 'fix' in bro.spells
+  assert 'reflect' in bro.spell_paths
+  assert 'fix' in bro.spell_paths
   assert '## Spells' in bro.system_prompt
   assert '## Available skills' not in bro.system_prompt
 
 
 def test_development_spells_render_for_every_surface():
   feature_names = frozenset({'brog'})
-  for path in _TrackerDev().spells.values():
+  for path in _TrackerDev().spell_paths.values():
     spell = load_spell(path.stem, path)
     for harness in get_args(mcp.Harness):
       for wire in get_args(mcp.Wire):

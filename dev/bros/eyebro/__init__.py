@@ -49,4 +49,5 @@ class Eyebro(Bro):
   # the dev toolset duplicates the claude harness's built-in file/shell tools
   tools = [when(harness == 'bro', mount(mcp.toolset))]
   data_sources = [references.dev_style]
+  spells = ('review-diff.md', 'review-pr.md')
   system_prompt = SYSTEM_PROMPT

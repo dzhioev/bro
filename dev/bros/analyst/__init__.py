@@ -53,4 +53,5 @@ class Analyst(Bro):
   provisioning = (provision_hooks,)
   # the dev toolset duplicates the claude harness's built-in file/shell tools
   tools = [when(harness == 'bro', mount(mcp.toolset))]
+  spells = ('report-usage.md',)
   system_prompt = SYSTEM_PROMPT
