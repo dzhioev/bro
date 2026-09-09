@@ -34,4 +34,5 @@ class Devoops(Bro):
     when(feature('brog'), mount(brog_mcp.toolset)),
     when(harness == 'bro', mount(dev_mcp.toolset, 'bash')),
   ]
+  spells = ('deploy.md',)
   system_prompt = SYSTEM_PROMPT

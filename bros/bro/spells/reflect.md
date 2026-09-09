@@ -82,7 +82,7 @@ For each systemic finding, name the one surface whose edit prevents the recurren
   is missing,
   or is mis-ordered in a spell that ran,
   or a workflow that recurs often enough to deserve a spell that doesn't exist yet;
-  spells live in the owning bro package's `spells/*.md`
+  a spell is a file under the owning bro package's `spells/` and an entry in the class's `spells` declaration
 - **the bro's toolset** — a missing, mis-scoped, or misdescribed tool:
   the `tools` / `data_sources` declarations on the bro's class, or the tool's description and behavior in the pack that owns it
 - **the bro's system prompt**

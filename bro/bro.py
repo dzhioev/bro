@@ -1,8 +1,9 @@
 import os
 from abc import ABC
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, ClassVar, Optional, Protocol, Self
 
 import bro.llm.llms.openai as llm_llms_openai
@@ -503,7 +504,7 @@ def _build_service_server(
   # is injected next to the `#tools` roster.
   from bro.summon import summoned
 
-  has_cast = len(bro.spells) > 0 and spell_store.cast_available()
+  has_cast = len(bro.spell_paths) > 0 and spell_store.cast_available()
   has_broker = any(
     os.environ.get(name) is not None for name in ('BROKER_CHANNEL', 'BROKER_UPSTREAM')
   )
@@ -770,6 +771,11 @@ class BaseBro(ABC):
   # step is idempotent and leaves state the workspace already carries alone.
   # MRO-walked and concatenated like `extra_secrets`.
   provisioning: tuple[ProvisionStep, ...] = ()
+  # the bro's spells: markdown files named relative to the `spells/` directory
+  # beside the declaring module, each served as `spell::<file stem>`.
+  # MRO-walked like `tools`, a derived class's file replacing a parent's of
+  # the same name.
+  spells: tuple[str, ...] = ()
   # subclasses declare their own `system_prompt = "..."` as a class attribute;
   # `__init__` walks the MRO from base to derived and concatenates each class's
   # own contribution. so a `ReviewDev(Dev)` subclass declares only what it adds —
@@ -808,6 +814,7 @@ class BaseBro(ABC):
     extra_secret_names: list[str] = []
     may_summon_names: list[str] = []
     provision_steps: list[ProvisionStep] = []
+    spell_paths: dict[str, Path] = {}
     feature_gates: dict[str, Condition | bool] = {}
     feature_credentials: dict[str, str] = {}
     for cls in reversed(type(self).__mro__):
@@ -833,6 +840,9 @@ class BaseBro(ABC):
       raw_provisioning = cls.__dict__.get('provisioning')
       if raw_provisioning is not None:
         provision_steps.extend(raw_provisioning)
+      raw_spells = cls.__dict__.get('spells')
+      if raw_spells is not None:
+        spell_paths.update(spell_store.declared_spells(cls, raw_spells))
       raw_features = cls.__dict__.get('features')
       if raw_features is not None:
         for feature_name, gate in raw_features.items():
@@ -849,6 +859,7 @@ class BaseBro(ABC):
     self._extra_secrets: tuple[str, ...] = tuple(extra_secret_names)
     self._may_summon: tuple[str, ...] = tuple(may_summon_names)
     self._provisioning: tuple[ProvisionStep, ...] = tuple(provision_steps)
+    self._spells: dict[str, Path] = spell_paths
     self._features: dict[str, Condition | bool] = feature_gates
     self._feature_credentials: dict[str, str] = feature_credentials
     # the membership probe is lazy, so the vocabulary built here stays current
@@ -952,13 +963,14 @@ class BaseBro(ABC):
       step(workspace)
 
   @property
-  def spells(self) -> dict[str, Path]:
-    return spell_store.collect_spells(list(reversed(type(self).__mro__)))
+  def spell_paths(self) -> Mapping[str, Path]:
+    """the bro's spell files by spell name, read-only."""
+    return MappingProxyType(self._spells)
 
   def get_spell_body(self, name: str, *, harness: mcp.Harness, wire: mcp.Wire) -> str:
-    path = self.spells.get(name)
+    path = self._spells.get(name)
     if path is None:
-      available = ', '.join(sorted(self.spells)) if len(self.spells) > 0 else '(none)'
+      available = ', '.join(sorted(self._spells)) if len(self._spells) > 0 else '(none)'
       raise KeyError(f'no spell named {name!r}; available: {available}')
     spell = spell_store.load_spell(name, path)
     return mcp.render_text(
@@ -972,7 +984,7 @@ class BaseBro(ABC):
 
   def spell_descriptions(self) -> list[tuple[str, str]]:
     return [
-      (name, spell_store.load_spell(name, path).description) for name, path in self.spells.items()
+      (name, spell_store.load_spell(name, path).description) for name, path in self._spells.items()
     ]
 
   def spell_instructions(self) -> str:
@@ -1060,7 +1072,7 @@ class BaseBro(ABC):
     for ds in sources:
       names.update(_component_optional_secrets(ds))
     names.update(self._feature_secrets(pinned=False))
-    if len(self.spells) > 0:
+    if len(self._spells) > 0:
       names.add(spell_store.CAST_SECRET)
     return tuple(sorted(names - set(self.needed_secrets(harness))))
 
@@ -1091,7 +1103,7 @@ class BaseBro(ABC):
   ) -> list[llm_mcp.MCPServer]:
     if any(server.namespace == spell_store.NAMESPACE for server in servers):
       raise ValueError(f'namespace {spell_store.NAMESPACE!r} is reserved for bro framework tools')
-    if len(self.spells) == 0:
+    if len(self._spells) == 0:
       return servers
     return [*servers, spell_store.build_spell_server(self, harness=harness, wire=wire)]
 

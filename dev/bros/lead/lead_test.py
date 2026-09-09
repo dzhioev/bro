@@ -8,7 +8,7 @@ from bros.lead import Lead
 
 
 def test_coordination_spells_render_for_every_surface():
-  for path in Lead().spells.values():
+  for path in Lead().spell_paths.values():
     spell = load_spell(path.stem, path)
     for harness in get_args(mcp.Harness):
       for wire in get_args(mcp.Wire):

@@ -9,15 +9,15 @@ from bros.eyebro import Eyebro
 
 def test_reviewer_carries_review_spells_but_no_author_procedures():
   bro = Eyebro()
-  assert 'review-diff' in bro.spells
-  assert 'review-pr' in bro.spells
+  assert 'review-diff' in bro.spell_paths
+  assert 'review-pr' in bro.spell_paths
   # reflect ships with the shared bros/bro layer, proving the MRO merge
-  assert 'reflect' in bro.spells
+  assert 'reflect' in bro.spell_paths
   # a reviewer must not carry the author-side procedures; Eyebro derives from
   # Bro rather than Dev precisely to keep them out
-  assert 'fix' not in bro.spells
-  assert 'run-pr' not in bro.spells
-  assert 'land' not in bro.spells
+  assert 'fix' not in bro.spell_paths
+  assert 'run-pr' not in bro.spell_paths
+  assert 'land' not in bro.spell_paths
 
 
 def test_claude_surface_selects_the_reference_tools():
@@ -39,7 +39,7 @@ def test_github_is_the_reviewers_best_effort_credential():
 
 def test_review_spells_render_for_every_surface():
   feature_names = frozenset({'github'})
-  for path in Eyebro().spells.values():
+  for path in Eyebro().spell_paths.values():
     spell = load_spell(path.stem, path)
     for harness in get_args(mcp.Harness):
       for wire in get_args(mcp.Wire):

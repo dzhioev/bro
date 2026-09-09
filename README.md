@@ -88,6 +88,7 @@ class Triage(Bro):
     sh('rewind show', 'trail_id', 'output_limit'),
   ]
   data_sources = [WebSearch(), man('environment')]
+  spells = ('triage.md',)
   system_prompt = SYSTEM_PROMPT
 ```
 
@@ -181,7 +182,7 @@ Read the class line by line and nothing is left to configure elsewhere:
 - `may_summon = ('analyst',)` is whom it may summon on its own authority:
   the built-in analyst, which answers from the recorded runs.
   Every other delegate is a launch grant, and a `{{when #may_summon contains …}}` paragraph shows only in a session that may.
-- `bros/triage/spells/triage.md`, beside the class, is its procedure, served as the `spell::triage` tool.
+- `spells = ('triage.md',)` names its procedure, `bros/triage/spells/triage.md` beside the class, served as the `spell::triage` tool.
 
 **A command is a tool.**
 `sh('rewind show', 'trail_id', 'output_limit')` reads the arguments `rewind show` declares

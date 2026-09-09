@@ -1026,7 +1026,7 @@ In container mode the server runs inside the container, so the scoped credential
 
 ### Bro spells and skills
 
-A bro's spells (`bros/<bro>/spells/*.md`, MRO-merged with derived overrides) are canonical `spell::<name>` tools in both session flavors;
+A bro's spells (the files its `spells` declaration names under `bros/<bro>/spells/`, MRO-merged with derived overrides) are canonical `spell::<name>` tools in both session flavors;
 `bro::cast` joins the service server when OpenAI resolves, and the Spells contract routes `[[…]]` markers to it rather than to the spells' own tools:
 
 - a **full mode** gets the Spells contract through its append prompt and keeps Claude's native third-party skill discovery.

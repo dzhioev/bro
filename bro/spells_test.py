@@ -2,7 +2,7 @@ import json
 import sys
 import types
 from pathlib import Path
-from typing import Optional, get_args
+from typing import Optional, cast, get_args
 
 import pytest
 
@@ -15,6 +15,7 @@ from bro.llm.mcp import InProcessMCPServer, ToolRegistry
 from bro.mcp import MCPServerSpec, creds
 from bro.prompts import get_prompt
 from bro.spells import CAST_SECRET, NAMESPACE, load_spell
+from bro.spells_test_helper import SpellPackage, spell_package
 
 
 def _spell(
@@ -35,37 +36,11 @@ def _cast_secret_unavailable(monkeypatch):
 
 
 @pytest.fixture
-def fake_packages(tmp_path):
-  added: list[str] = []
+def fake_packages(tmp_path, monkeypatch):
+  def make(name: str, spells: Optional[dict[str, str]] = None) -> SpellPackage:
+    return spell_package(monkeypatch, tmp_path, name, spells)
 
-  def make(name: str, spells: Optional[dict[str, str]] = None) -> str:
-    package_dir = tmp_path / name
-    package_dir.mkdir()
-    init_path = package_dir / '__init__.py'
-    init_path.write_text('')
-    if spells is not None:
-      spells_dir = package_dir / 'spells'
-      spells_dir.mkdir()
-      for spell_name, content in spells.items():
-        (spells_dir / f'{spell_name}.md').write_text(content)
-    module = types.ModuleType(name)
-    module.__file__ = str(init_path)
-    sys.modules[name] = module
-    added.append(name)
-    return name
-
-  yield make
-
-  for name in added:
-    sys.modules.pop(name, None)
-
-
-def _bro_class(package: str, parent: type[BaseBro] = BaseBro) -> type[BaseBro]:
-  return type(
-    f'BroFor{package}',
-    (parent,),
-    {'__module__': package, 'name': package.removeprefix('_'), 'description': 'test bro'},
-  )
+  return make
 
 
 class _NoRun:
@@ -98,8 +73,8 @@ def _service_server(
   )
 
 
-class TestSpellStore:
-  def test_collects_spells_and_derived_overrides_parent(self, fake_packages):
+class TestSpellDeclaration:
+  def test_declarations_merge_along_the_mro_and_derived_overrides_parent(self, fake_packages):
     parent_package = fake_packages(
       '_spell_parent',
       {'shared': _spell(body='parent'), 'parent-only': _spell(body='parent only')},
@@ -108,19 +83,70 @@ class TestSpellStore:
       '_spell_child',
       {'shared': _spell(body='child'), 'child-only': _spell(body='child only')},
     )
-    parent = _bro_class(parent_package)
-    child = _bro_class(child_package, parent)
+    parent = parent_package.bro_class()
+    child = child_package.bro_class(parent)
 
-    spells = child().spells
+    spells = child().spell_paths
     assert set(spells) == {'shared', 'parent-only', 'child-only'}
     assert spells['shared'].read_text().endswith('child')
 
+  def test_the_resolved_roster_is_read_only(self, fake_packages):
+    package = fake_packages('_spell_read_only', {'do-work': _spell()})
+    bro = package.bro_class()()
+    with pytest.raises(TypeError):
+      cast(dict[str, Path], bro.spell_paths)['stray'] = Path('stray.md')
+    assert list(bro.spell_paths) == ['do-work']
+
+  def test_only_declared_files_are_spells(self, fake_packages):
+    package = fake_packages('_spell_declared', {'named': _spell(), 'stray': _spell()})
+    assert list(package.bro_class(spells=('named.md',))().spell_paths) == ['named']
+
+  def test_a_nested_path_names_the_spell_by_its_stem(self, fake_packages):
+    package = fake_packages('_spell_nested', {'review/pr': _spell(body='nested')})
+    assert package.bro_class()().get_spell_body('pr', harness='bro', wire='bare') == 'nested'
+
+  @pytest.mark.parametrize(
+    ('entry', 'match'),
+    [
+      ('missing.md', 'names no file'),
+      ('/absolute.md', 'inside'),
+      ('../outside.md', 'inside'),
+      ('known.txt', 'not a markdown file'),
+    ],
+  )
+  def test_an_invalid_entry_fails_construction(self, fake_packages, entry, match):
+    package = fake_packages(f'_spell_entry_{len(sys.modules)}', {'known': _spell()})
+    with pytest.raises(ValueError, match=match):
+      package.bro_class(spells=(entry,))()
+
+  def test_one_declaration_cannot_repeat_a_spell_name(self, fake_packages):
+    package = fake_packages('_spell_repeat', {'a/fix': _spell(), 'b/fix': _spell()})
+    with pytest.raises(ValueError, match="repeats spell 'fix'"):
+      package.bro_class()()
+
+  def test_a_module_without_a_file_cannot_declare_spells(self, monkeypatch):
+    monkeypatch.setitem(sys.modules, '_spell_fileless', types.ModuleType('_spell_fileless'))
+    fileless = type(
+      'Fileless',
+      (BaseBro,),
+      {
+        '__module__': '_spell_fileless',
+        'name': 'fileless',
+        'description': 'test bro',
+        'spells': ('x.md',),
+      },
+    )
+    with pytest.raises(ValueError, match='no file'):
+      fileless()
+
+
+class TestSpellStore:
   def test_body_and_descriptions_strip_flat_frontmatter(self, fake_packages):
     package = fake_packages(
       '_spell_body',
       {'do-work': _spell('First sentence. Full detail follows.', '# Procedure\n\nwork')},
     )
-    bro = _bro_class(package)()
+    bro = package.bro_class()()
 
     assert bro.spell_descriptions() == [('do-work', 'First sentence. Full detail follows.')]
     assert bro.get_spell_body('do-work', harness='bro', wire='bare') == '# Procedure\n\nwork'
@@ -128,7 +154,7 @@ class TestSpellStore:
   def test_unknown_spell_names_available_spells(self, fake_packages):
     package = fake_packages('_spell_unknown', {'known': _spell()})
     with pytest.raises(KeyError, match='available: known'):
-      _bro_class(package)().get_spell_body('missing', harness='bro', wire='bare')
+      package.bro_class()().get_spell_body('missing', harness='bro', wire='bare')
 
   def test_checked_in_spells_render_for_every_surface(self):
     spell_files = sorted((Path(spell_store.__file__).parent.parent / 'bros').glob('*/spells/*.md'))
@@ -154,7 +180,7 @@ class TestSpellStore:
       '_spell_features',
       {'gated': _spell(body='{{iff #features contains x}}on-branch{{else}}off-branch{{end}}')},
     )
-    cls = _bro_class(package)
+    cls = package.bro_class()
     cls.features = {'x': creds.contains('xkey')}
     monkeypatch.setattr(spell_store.credentials, 'known_names', lambda: frozenset({'xkey'}))
     bro = cls()
@@ -189,7 +215,7 @@ class TestSpellValidation:
   def test_invalid_spells_fail_at_bro_load(self, fake_packages, name, content, match):
     package = fake_packages(f'_invalid_{len(sys.modules)}', {name: content})
     with pytest.raises(ValueError, match=match):
-      _bro_class(package)()
+      package.bro_class()()
 
   @pytest.mark.parametrize('name', ['at', 'cast', 'skill', 'spell'])
   def test_service_and_namespace_names_are_valid_spell_stems(self, tmp_path, name):
@@ -211,7 +237,7 @@ class TestSpellServer:
   @pytest.mark.asyncio
   async def test_mounts_on_native_and_both_claude_surfaces(self, fake_packages):
     package = fake_packages('_spell_mount', {'do-work': _spell()})
-    bro = _bro_class(package)()
+    bro = package.bro_class()()
 
     assert NAMESPACE in {server.namespace for server in _servers(bro, 'bare')}
     assert NAMESPACE in {server.namespace for server in _servers(bro, 'mcp')}
@@ -221,7 +247,7 @@ class TestSpellServer:
 
   def test_empty_store_mounts_no_spell_server(self, fake_packages):
     package = fake_packages('_spell_empty')
-    bro = _bro_class(package)()
+    bro = package.bro_class()()
     assert NAMESPACE not in {server.namespace for server in _servers(bro, 'bare')}
     assert NAMESPACE not in {server.namespace for server in _servers(bro, 'mcp')}
     assert NAMESPACE not in {server.namespace for server in _persona_servers(bro)}
@@ -244,7 +270,7 @@ class TestSpellServer:
 
   @pytest.mark.asyncio
   async def test_skill_loader_is_a_framework_service_tool(self, fake_packages):
-    bro = _bro_class(fake_packages('_skill_loader_service'))()
+    bro = fake_packages('_skill_loader_service').bro_class()()
     assert not hasattr(bro, 'skills')
     assert not hasattr(bro, 'get_skill_body')
     assert not hasattr(bro, 'skill_descriptions')
@@ -254,7 +280,7 @@ class TestSpellServer:
   @pytest.mark.asyncio
   async def test_skill_loader_is_empty_and_excluded_from_claude_persona(self, fake_packages):
     package = fake_packages('_skill_loader_empty')
-    bro = _bro_class(package)()
+    bro = package.bro_class()()
     native_tools = await _service_server(bro).list_tools()
     claude_bro_tools = await _service_server(bro, wire='mcp').list_tools()
     persona_tool_names = {
@@ -280,7 +306,7 @@ class TestSpellServer:
       '_spell_schema',
       {'do-work': _spell(parameters={'task': 'task ref', 'notes?': 'extra context'})},
     )
-    tool = (await _spell_server(_bro_class(package)()).list_tools())[0]
+    tool = (await _spell_server(package.bro_class()()).list_tools())[0]
 
     assert tool.description == 'run the procedure'
     assert tool.parameters['required'] == ['task']
@@ -301,7 +327,7 @@ class TestSpellServer:
       '_spell_render',
       {'do-work': _spell(body=body, parameters={'task': 'task ref', 'notes?': 'context'})},
     )
-    bro = _bro_class(package)()
+    bro = package.bro_class()()
     bare_tool = (await _spell_server(bro).list_tools())[0]
     mcp_tool = (await _spell_server(bro, wire='mcp').list_tools())[0]
     persona_server = next(
@@ -318,7 +344,7 @@ class TestSpellServer:
   @pytest.mark.asyncio
   async def test_no_arguments_section_when_none_are_declared_or_passed(self, fake_packages):
     package = fake_packages('_spell_no_args', {'do-work': _spell(body='body')})
-    tool = (await _spell_server(_bro_class(package)()).list_tools())[0]
+    tool = (await _spell_server(package.bro_class()()).list_tools())[0]
     assert await tool.call({}) == 'body'
 
   @pytest.mark.asyncio
@@ -327,7 +353,7 @@ class TestSpellServer:
       '_spell_call_validation',
       {'do-work': _spell(parameters={'task': 'task ref', 'notes?': 'context'})},
     )
-    tool = (await _spell_server(_bro_class(package)()).list_tools())[0]
+    tool = (await _spell_server(package.bro_class()()).list_tools())[0]
 
     with pytest.raises(ValueError, match='missing required'):
       await tool.call({})
@@ -342,7 +368,7 @@ class TestSpellServer:
   async def test_pages_plain_output_with_generous_window(self, fake_packages):
     body = '\n'.join(f'line {index}' for index in range(1005))
     package = fake_packages('_spell_window', {'do-work': _spell(body=body)})
-    tool = (await _spell_server(_bro_class(package)()).list_tools())[0]
+    tool = (await _spell_server(package.bro_class()()).list_tools())[0]
 
     result = await tool.call({'offset': 1000})
     assert isinstance(result, str)
@@ -364,7 +390,7 @@ class TestCast:
     self, fake_packages, monkeypatch
   ):
     package = fake_packages('_cast_mount', {'do-work': _spell()})
-    bro_class = _bro_class(package)
+    bro_class = package.bro_class()
 
     unavailable_spells = {tool.name for tool in await _spell_server(bro_class()).list_tools()}
     unavailable_services = {tool.name for tool in await _service_server(bro_class()).list_tools()}
@@ -420,7 +446,7 @@ class TestCast:
       )
 
     monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
-    result = await (await self._tool(_bro_class(package)())).call({'command': 'work on T-1'})
+    result = await (await self._tool(package.bro_class()())).call({'command': 'work on T-1'})
 
     assert result == (
       'spell: spell::do-work\n\nprocedure body\n\n# Arguments\n\ntask: T-1\nnotes: keep the merge'
@@ -459,7 +485,7 @@ class TestCast:
       )
 
     monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
-    bro = _bro_class(package)()
+    bro = package.bro_class()()
 
     bare_result = await (await self._tool(bro)).call({'command': 'do the work'})
     mcp_result = await (await self._tool(bro, wire='mcp')).call({'command': 'do the work'})
@@ -479,7 +505,7 @@ class TestCast:
       )
 
     monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
-    result = await (await self._tool(_bro_class(package)())).call({'command': 'unknown action'})
+    result = await (await self._tool(package.bro_class()())).call({'command': 'unknown action'})
     assert result == {'error': 'the command matches no spell'}
 
   @pytest.mark.asyncio
@@ -529,7 +555,7 @@ class TestCast:
 
     monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
     with pytest.raises(ValueError, match=match):
-      await (await self._tool(_bro_class(package)())).call({'command': 'do something'})
+      await (await self._tool(package.bro_class()())).call({'command': 'do something'})
 
   @pytest.mark.asyncio
   async def test_rejects_empty_expected_error(self, fake_packages, monkeypatch):
@@ -543,14 +569,14 @@ class TestCast:
 
     monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
     with pytest.raises(ValueError, match='empty error'):
-      await (await self._tool(_bro_class(package)())).call({'command': 'do something'})
+      await (await self._tool(package.bro_class()())).call({'command': 'do something'})
 
 
 class TestSpellsPrompt:
   def test_direct_contract_is_present_without_cast(self, fake_packages):
     description = 'Full first sentence. Detail that belongs only on the tool.'
     package = fake_packages('_spell_prompt_direct', {'do-work': _spell(description)})
-    bro = _bro_class(package)()
+    bro = package.bro_class()()
 
     spells_section = bro.system_prompt.split('## Spells', 1)[1].split('## Skills', 1)[0]
     assert '`/<name>`' not in spells_section
@@ -561,7 +587,7 @@ class TestSpellsPrompt:
   def test_dispatch_contract_is_present_when_secret_resolves(self, fake_packages, monkeypatch):
     package = fake_packages('_spell_prompt_dispatch', {'do-work': _spell()})
     monkeypatch.setattr(spell_store.credentials, 'available', lambda name: name == CAST_SECRET)
-    bro = _bro_class(package)()
+    bro = package.bro_class()()
 
     for prompt in (bro.system_prompt, bro.claude_system_prompt):
       assert '## Spells' in prompt
@@ -570,19 +596,19 @@ class TestSpellsPrompt:
 
   def test_section_is_absent_without_spells(self, fake_packages):
     package = fake_packages('_spell_prompt_empty')
-    assert '## Spells' not in _bro_class(package)().system_prompt
+    assert '## Spells' not in package.bro_class()().system_prompt
 
 
 class TestSpellOptionalSecret:
   def test_nonempty_roster_declares_cast_secret_for_each_harness(self, fake_packages):
     package = fake_packages('_spell_optional_secret', {'do-work': _spell()})
-    bro = _bro_class(package)()
+    bro = package.bro_class()()
     assert bro.optional_secrets(harness='bro') == (CAST_SECRET,)
     assert bro.optional_secrets(harness='claude') == (CAST_SECRET,)
 
   def test_empty_roster_does_not_declare_cast_secret(self, fake_packages):
     package = fake_packages('_spell_no_optional_secret')
-    assert CAST_SECRET not in _bro_class(package)().optional_secrets()
+    assert CAST_SECRET not in package.bro_class()().optional_secrets()
 
 
 class TestSpellToolNames:
