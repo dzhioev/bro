@@ -156,6 +156,7 @@ class TestFormatCard:
       def __init__(self):
         super().__init__(system_prompt='')
 
+    monkeypatch.setattr('bro.base.credentials.known_names', lambda: frozenset({'trackerkey'}))
     monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'trackerkey')
     card = await format_card(_FeatureBro())
     assert '## Features' in card

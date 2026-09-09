@@ -144,11 +144,10 @@ so one declaration switches every consuming site together, and a gated component
 
 The `#features` universe is the declared feature names
 — environment-independent, so a typo'd name fails every render.
-A gate condition evaluates against its own single-variable vocabulary
-— `creds`, probing `bro.base.credentials.available` lazily with no closed universe
-— deliberately not the surface's `#creds` fact:
-that fact's closed universe is the store's registry, which in a scoped container omits never-hydrated names, so a probe there would raise a universe violation, while the gate vocabulary's open universe makes the same probe read as feature-off.
-Any other variable reference in a gate raises.
+A gate condition evaluates against the surfaces' `creds` fact alone (`bro.mcp.surface_variables(creds=…)`), read when the feature is probed,
+so a typo'd kind in a gate fails the way one in a `when` entry or a directive does.
+A feature holds for the environment rather than for a harness or a wire,
+so any other variable reference in a gate raises.
 The condition model has no conjunction, so a feature needing several secrets has no gate spelling until an `and` combinator exists.
 
 ## Server-domain vocabularies
