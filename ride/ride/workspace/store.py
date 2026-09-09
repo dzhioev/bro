@@ -48,16 +48,23 @@ def credential_revoke_kind(name: str) -> str:
   return kind
 
 
-def finalize_scoped_secrets(
-  scoped: ScopedSecrets, *, grant: list[str], revoke: list[str]
-) -> ScopedSecrets:
-  scoped_kinds = scoped.required | scoped.optional
+def grant_instances(grant: list[str]) -> dict[str, Optional[str]]:
+  """kind → the instance a grant spells, None for a bare kind grant; a kind
+  granted more than once raises."""
   grants: dict[str, Optional[str]] = {}
   for name in grant:
     kind, instance = credentials.parse_name(name)
     if kind in grants:
       raise ValueError(f'credential kind {kind!r} is granted more than once')
     grants[kind] = instance
+  return grants
+
+
+def finalize_scoped_secrets(
+  scoped: ScopedSecrets, *, grant: list[str], revoke: list[str]
+) -> ScopedSecrets:
+  scoped_kinds = scoped.required | scoped.optional
+  grants = grant_instances(grant)
 
   revoke_kinds = [credential_revoke_kind(name) for name in revoke]
 

@@ -26,11 +26,11 @@ from bro.workspace.paths import CONTAINER_SESSION_DIR
 from ride import pending_summon
 from ride.repository import Repository
 from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError
-from ride.scope import ScopedSecrets
+from ride.scope import ScopedSecrets, split_scope_overrides
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
-from ride.workspace.store import materialize_scoped_store
+from ride.workspace.store import finalize_scoped_secrets, materialize_scoped_store
 
 
 @pytest.fixture(autouse=True)
@@ -163,6 +163,22 @@ def configured_project(monkeypatch, tmp_path):
   monkeypatch.setattr(ride_session, 'in_container', lambda: False)
 
 
+def _fake_scoped_secrets(secrets: set[str], optional_secrets: set[str]):
+  """a stand-in for `scoped_secrets` over a fixed bro scope, applying the
+  launch's credential overrides the way the real one does."""
+
+  def scoped(*_args, grant=(), revoke=(), **_kwargs):
+    grant_credentials, _ = split_scope_overrides(list(grant))
+    revoke_credentials, _ = split_scope_overrides(list(revoke))
+    return finalize_scoped_secrets(
+      ScopedSecrets(set(secrets), set(optional_secrets)),
+      grant=grant_credentials,
+      revoke=revoke_credentials,
+    )
+
+  return scoped
+
+
 class _ContainerHarness:
   """patches for driving start_session through the container path without docker,
   bro imports, or git side effects."""
@@ -180,7 +196,7 @@ class _ContainerHarness:
       patch('ride.session.run_in_container', return_value=0),
       patch(
         'ride.session.scoped_secrets',
-        return_value=ScopedSecrets(set(self.secrets), set(self.optional_secrets)),
+        side_effect=_fake_scoped_secrets(self.secrets, self.optional_secrets),
       ),
       patch('ride.claude.harness.credentials.try_get', return_value='tok'),
       patch('ride.scope.credentials.build_scoped_store', return_value=({}, frozenset())),
@@ -1340,9 +1356,7 @@ class TestHostSession:
     self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: False)
     monkeypatch.setattr(
-      ride_session,
-      'scoped_secrets',
-      lambda *_a, **_k: ScopedSecrets({'github', 'notion'}, {'openai'}),
+      ride_session, 'scoped_secrets', _fake_scoped_secrets({'github', 'notion'}, {'openai'})
     )
     hydrated: dict = {}
 

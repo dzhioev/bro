@@ -35,7 +35,7 @@ from ride.identity import human_git_identity_env
 from ride.kinds import extension_kinds
 from ride.peer_facts import PeerFact, PeerFacts
 from ride.repository import Repository, as_repository
-from ride.scope import split_scope_overrides, summoned_credential_scope
+from ride.scope import scoped_secrets
 from ride.session import SessionSpec, container_launch, record_resume_spec
 from ride.summon_control import SummonControl
 from ride.workspace.docker import ContainerRuntimeResolver, bridge_gateway
@@ -164,14 +164,12 @@ def _lower_summon(
   auth_error = harness.preflight_auth(spec)
   if auth_error is not None:
     raise ValueError(auth_error)
-  grant_credentials, _ = split_scope_overrides(spec.grant)
-  revoke_credentials, _ = split_scope_overrides(spec.revoke)
-  scoped = summoned_credential_scope(
+  scoped = scoped_secrets(
     launch.target,
     harness.scope_recipe(spec.harness_options),
     attachment=None if repo is None else repo.identity,
-    grant=grant_credentials,
-    revoke=revoke_credentials,
+    grant=spec.grant,
+    revoke=spec.revoke,
     llm_spec=spec.llm_spec,
   )
   resolved_runtime = container_runtime.resolve()

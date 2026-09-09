@@ -1,6 +1,7 @@
 import importlib.metadata
 import json
 import sys
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -509,6 +510,37 @@ class TestDefaultStore:
     monkeypatch.setattr(credentials, 'canonical_cli_name', lambda: None)
 
     assert credentials.get('openai') == 'selected'
+
+  def test_a_block_scoped_store_is_local_to_its_thread(self, tmp_path: Path, monkeypatch):
+    self._ambient_store(tmp_path, monkeypatch)
+    ambient = credentials.default_store()
+    first_store = _store(tmp_path / 'first', 'openai')
+    second_store = _store(tmp_path / 'second', 'openai')
+    first_entered = threading.Event()
+    second_entered = threading.Event()
+    seen: dict[str, credentials.Store] = {}
+
+    def first():
+      with credentials.as_default_store(first_store):
+        first_entered.set()
+        second_entered.wait(5)
+        seen['first'] = credentials.default_store()
+
+    def second():
+      first_entered.wait(5)
+      with credentials.as_default_store(second_store):
+        second_entered.set()
+        seen['second'] = credentials.default_store()
+      seen['second after'] = credentials.default_store()
+
+    threads = [threading.Thread(target=first), threading.Thread(target=second)]
+    for thread in threads:
+      thread.start()
+    for thread in threads:
+      thread.join(10)
+
+    assert seen == {'first': first_store, 'second': second_store, 'second after': ambient}
+    assert credentials.default_store() is ambient
 
   def test_bro_store_is_exclusive(self, tmp_path: Path, monkeypatch):
     first = tmp_path / 'first'
