@@ -620,7 +620,7 @@ An in-session resolver therefore never consults the host's ambient selection.
 Host scoping is still a convenience rather than a security boundary, because the session runs as the host user.
 
 - **The manifest.**
-  A bro's `needed_secrets()` (`bro/bro.py`) is the union of each selected MCP server spec's and data source's `needed_secrets` plus the bro's MRO-collected `extra_secrets`.
+  A bro's `needed_secrets()` (`bro/bro.py`) is the union of each selected MCP server spec's and data source's `needed_secrets`, the bro's MRO-collected `extra_secrets`, and the credentials of its pinned-on features.
   It deliberately omits the LLM key, which only surfaces running the bro as an LLM process add.
   `optional_secrets()` supplies the best-effort tier, and every normal managed surface adds `trails` to it.
   Components and manifests declare bare kinds only.

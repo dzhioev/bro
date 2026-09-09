@@ -645,6 +645,40 @@ class TestFeatures:
     assert child._mcp_specs == []
     assert 'FEATURE TEXT' not in child.system_prompt
 
+  def test_gate_credential_is_tiered_with_the_feature(self, monkeypatch):
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
+    gated = self._bro_class()()
+    assert 'xkey' in gated.optional_secrets()
+    assert 'xkey' not in gated.needed_secrets()
+
+    class Pinned(self._bro_class()):
+      name = 'feature-child'
+      features: ClassVar = {'x': True}
+
+    pinned = Pinned()
+    assert 'xkey' in pinned.needed_secrets()
+    assert 'xkey' not in pinned.optional_secrets()
+
+    class Disabled(self._bro_class()):
+      name = 'feature-child'
+      features: ClassVar = {'x': False}
+
+    disabled = Disabled()
+    assert 'xkey' not in disabled.needed_secrets()
+    assert 'xkey' not in disabled.optional_secrets()
+
+  def test_regating_a_feature_replaces_its_credential(self, monkeypatch):
+    monkeypatch.setattr('bro.base.credentials.known_names', lambda: frozenset({'xkey', 'ykey'}))
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
+
+    class Regated(self._bro_class()):
+      name = 'feature-child'
+      features: ClassVar = {'x': mcp.creds.contains('ykey')}
+
+    regated = Regated()
+    assert 'ykey' in regated.optional_secrets()
+    assert 'xkey' not in regated.optional_secrets()
+
   def test_reenabling_a_disabled_feature_fails_construction(self):
     class Disabled(self._bro_class()):
       name = 'feature-child'

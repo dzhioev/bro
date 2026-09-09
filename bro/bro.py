@@ -646,14 +646,23 @@ _COMPONENT_DECLARATION_ATTRIBUTES = frozenset({'data_sources', 'tools'})
 _RETIRED_COMPONENT_DECLARATION_ATTRIBUTES = {'mcp_servers': 'tools'}
 
 
-def _validate_credential_gate(gate: Condition | bool, declaration: str) -> None:
+def _gate_credential(gate: Condition | bool) -> Optional[str]:
+  """the credential kind a `creds.contains(<kind>)` gate probes; None for any
+  other gate."""
   if not isinstance(gate, Contains):
-    return
+    return None
   container = gate.container
   if (
     isinstance(container, Variable) and container.name == 'creds' and isinstance(gate.element, str)
   ):
-    credentials.require_kind_declaration(gate.element, declaration)
+    return gate.element
+  return None
+
+
+def _validate_credential_gate(gate: Condition | bool, declaration: str) -> None:
+  kind = _gate_credential(gate)
+  if kind is not None:
+    credentials.require_kind_declaration(kind, declaration)
 
 
 def _declared_components(entries: Iterable[Entry[Any]], declaration: str) -> list[tuple[Any, str]]:
@@ -736,9 +745,12 @@ class BaseBro(ABC):
   # consuming site together: components gate via `when(feature('<name>'), …)`,
   # static text via `{{iff #features contains <name>}}` — so a gated component
   # enters the manifest, mounts, and renders its text only where its gates
-  # resolve. MRO-walked like `tools`, with derived classes overriding
-  # parents per name — `{'<name>': True}` pins an inherited feature on, turning
-  # its components into hard requirements. False is terminal: redeclaring a
+  # resolve. the credential a `creds.contains(<kind>)` gate probes is the
+  # feature's own, tiered with it: in `optional_secrets()` while gated, in
+  # `needed_secrets()` once pinned on. MRO-walked like `tools`, with derived
+  # classes overriding parents per name — `{'<name>': True}` pins an inherited
+  # feature on, turning its components and that credential into hard
+  # requirements. False is terminal: redeclaring a
   # feature a base class disabled fails construction, so an opt-out binds the
   # whole sub-hierarchy.
   features: ClassVar[dict[str, Condition | bool]] = {}
@@ -797,6 +809,7 @@ class BaseBro(ABC):
     may_summon_names: list[str] = []
     provision_steps: list[ProvisionStep] = []
     feature_gates: dict[str, Condition | bool] = {}
+    feature_credentials: dict[str, str] = {}
     for cls in reversed(type(self).__mro__):
       raw_tools = cls.__dict__.get('tools')
       if raw_tools is not None:
@@ -830,10 +843,14 @@ class BaseBro(ABC):
               'class; a False gate is terminal for the sub-hierarchy'
             )
           feature_gates[feature_name] = gate
+          kind = _gate_credential(gate)
+          if kind is not None:
+            feature_credentials[feature_name] = kind
     self._extra_secrets: tuple[str, ...] = tuple(extra_secret_names)
     self._may_summon: tuple[str, ...] = tuple(may_summon_names)
     self._provisioning: tuple[ProvisionStep, ...] = tuple(provision_steps)
     self._features: dict[str, Condition | bool] = feature_gates
+    self._feature_credentials: dict[str, str] = feature_credentials
     # the membership probe is lazy, so the vocabulary built here stays current
     # with the store — only selection (below) bakes feature truth in.
     self._feature_vocabulary: Variables = _feature_variables(feature_gates)
@@ -1001,14 +1018,22 @@ class BaseBro(ABC):
     )
     return specs, sources
 
+  def _feature_secrets(self, *, pinned: bool) -> set[str]:
+    return {
+      kind
+      for name, kind in self._feature_credentials.items()
+      if self._features[name] is not False and (self._features[name] is True) == pinned
+    }
+
   def needed_secrets(self, harness: mcp.Harness = 'bro') -> tuple[str, ...]:
     # the bro's component credential manifest for a consuming harness: the union
     # of each declared MCP server's + data source's `needed_secrets`, over only
     # the components that hold on `harness` — a surface never hydrates a secret
     # of a component it doesn't mount — plus the bro's MRO-collected
-    # `extra_secrets`. NOT the LLM key — that is added only by surfaces that run
-    # the bro as an LLM process (`bro run` / `bro chat`); a claude-code session themed as
-    # the bro uses its own auth, not the bro's spec. the host hydrates the
+    # `extra_secrets` and the credentials of its pinned-on features. NOT the LLM
+    # key — that is added only by surfaces that run the bro as an LLM process
+    # (`bro run` / `bro chat`); a claude-code session themed as the bro uses its
+    # own auth, not the bro's spec. the host hydrates the
     # per-surface set into a scoped store; a secret used but not declared
     # surfaces as SecretNotFound — an under-declaration to fix.
     specs, sources = self._components_for(harness)
@@ -1018,21 +1043,23 @@ class BaseBro(ABC):
     for ds in sources:
       names.update(_component_needed_secrets(ds))
     names.update(self._extra_secrets)
+    names.update(self._feature_secrets(pinned=True))
     return tuple(sorted(names))
 
   def optional_secrets(self, harness: mcp.Harness = 'bro') -> tuple[str, ...]:
     # the bro's best-effort credential tier: the union of each declared MCP
     # server's + data source's `optional_secrets` over the same per-harness
-    # component set as `needed_secrets`, plus the cast key when this bro has
-    # spells. minus anything already required — a hard requirement is never
-    # downgraded. absent optional secrets degrade the capability instead of
-    # failing the launch.
+    # component set as `needed_secrets`, plus the credentials of its gated
+    # features and the cast key when this bro has spells. minus anything
+    # already required — a hard requirement is never downgraded. absent
+    # optional secrets degrade the capability instead of failing the launch.
     specs, sources = self._components_for(harness)
     names: set[str] = set()
     for spec in specs:
       names.update(_component_optional_secrets(spec))
     for ds in sources:
       names.update(_component_optional_secrets(ds))
+    names.update(self._feature_secrets(pinned=False))
     if len(self.spells) > 0:
       names.add(spell_store.CAST_SECRET)
     return tuple(sorted(names - set(self.needed_secrets(harness))))

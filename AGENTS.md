@@ -117,6 +117,8 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   a `Condition` over the environment's resolvable credentials (`creds.contains('brog')`) or a plain bool constant (`True` pins it on; `False` disables it terminally — a descendant re-enabling a disabled feature fails construction).
   The declaration feeds a `#features` vocabulary (`BaseBro.vocabulary()`) into every surface the bro renders or assembles, so `when(feature('brog'), mount(brog_mcp.toolset))` entries and `{{iff #features contains brog}}` text switch together,
   and a gated component joins `needed_secrets()` only where its gates resolve.
+  The credential a gate probes is the feature's own, tiered with it:
+  in `optional_secrets()` while the feature is gated, in `needed_secrets()` once a descendant pins the feature on.
   `bro-dev`'s Dev persona is the built-in example:
   the tracker toolset, task-workflow spell branches, and tracker prompt fragment all ride it.
   Semantics:
@@ -234,7 +236,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
 
   **Credential manifest.**
   `bro.needed_secrets()` is the bro's component credential manifest
-  — the union of each declared MCP server spec's and data source's `needed_secrets` plus the bro's MRO-collected `extra_secrets`.
+  — the union of each declared MCP server spec's and data source's `needed_secrets`, the bro's MRO-collected `extra_secrets`, and the credentials of its pinned-on features.
   It is harness-aware:
   `needed_secrets(harness='claude')` counts only components whose conditions hold on that harness, matching what `ride.claude.assembly.persona_servers()` mounts.
   It deliberately excludes the LLM key (`llm_spec.needed_secrets()`):
@@ -248,7 +250,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
 
   **Optional credential tier.**
   `bro.optional_secrets()` is the best-effort sibling of the manifest
-  — the union of each declared component's `optional_secrets`, plus OpenAI when the bro has spells, minus `needed_secrets()` so a hard requirement is never downgraded.
+  — the union of each declared component's `optional_secrets`, the credentials of the bro's gated features, and OpenAI when the bro has spells, minus `needed_secrets()` so a hard requirement is never downgraded.
   It is for credentials a capability uses when present but degrades without, such as the LLM key behind a `SearchableDataSource`'s query-focused summary or spell casting.
   The host hydrates it via `build_scoped_store(optional=...)`;
   resolvable names are materialized and absent optional names are skipped.
@@ -440,7 +442,7 @@ add tool sources as class attributes too:
   — feature name → the gate deciding whether it's on:
   a `Condition` over the environment's resolvable credentials (`from bro.mcp import creds`), or a plain bool (`True` pins it on, `False` disables it; MRO-merged, derived wins per name, and `False` is terminal — descendants cannot re-enable).
   Gate components with `when(feature('brog'), …)` (`from bro.bro import feature`) and text with `{{iff #features contains brog}}`;
-  a gated component's secrets enter the manifest only where its gates resolve.
+  a gated component's secrets enter the manifest only where its gates resolve, and the gate's own credential is tiered with the feature.
   See `bro/reference/conditions.md` "Bro features".
 - `may_summon = ('reviewer',)` declares which bros this bro may summon
   — its static outgoing allow-list, adjusted per launch by `--grant @bro` and `--revoke @bro`.
