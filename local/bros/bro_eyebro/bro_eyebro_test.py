@@ -10,6 +10,10 @@ def test_bro_eyebro_is_registered_as_a_persona():
   assert [entry.load() for entry in entries] == [BroEyebro]
 
 
+def test_bro_eyebro_requires_a_github_identity():
+  assert 'github' in BroEyebro().needed_secrets(harness='claude')
+
+
 def test_bro_eyebro_carries_the_framework_context_without_the_author_block():
   prompt = BroEyebro().system_prompt
   assert FRAMEWORK_PROJECT.strip() in prompt
