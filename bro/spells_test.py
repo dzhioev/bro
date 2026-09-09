@@ -156,6 +156,7 @@ class TestSpellStore:
     )
     cls = _bro_class(package)
     cls.features = {'x': creds.contains('xkey')}
+    monkeypatch.setattr(spell_store.credentials, 'known_names', lambda: frozenset({'xkey'}))
     bro = cls()
 
     # the probe is live: one instance renders both states as availability moves

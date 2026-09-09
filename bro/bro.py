@@ -553,15 +553,11 @@ def feature(name: str) -> Condition:
 
 
 def _feature_variables(features: dict[str, Condition | bool]) -> Variables:
-  # a Condition gate evaluates against its own vocabulary — `creds` probing
-  # `available` lazily with no closed universe, deliberately not the `#creds`
-  # fact; see `reference/conditions.md` "Bro features" for why a scoped store
-  # breaks the latter. a bool gate is a declaration-time constant, as in `when`.
-  gate_variables: Variables = {'creds': SetVariable(lambda name: credentials.available(name))}
-
   def enabled(name: str) -> bool:
     gate = features[name]
-    return gate if isinstance(gate, bool) else gate.evaluate(gate_variables)
+    if isinstance(gate, bool):
+      return gate
+    return gate.evaluate(mcp.surface_variables(creds=credentials.known_names()))
 
   return {'features': SetVariable(enabled, universe=frozenset(features))}
 

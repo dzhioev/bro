@@ -157,9 +157,8 @@ def surface_variables(
   hold: Optional[str] = None,
 ) -> dict[str, condition.StringVariable | condition.SetVariable | bool]:
   """the harness facts as a `Variables` mapping — what `render_text` / `select`
-  evaluate against. Public for the one tool surface allowed to condition on
-  system facts: the bro service-tool build injects these (plus its roster
-  vocabulary) into its tools' rendering variables."""
+  evaluate against, for a caller that evaluates a condition against them
+  directly or merges them into a vocabulary of its own."""
   variables: dict[str, condition.StringVariable | condition.SetVariable | bool] = {}
   if harness is not None:
     if harness not in _HARNESSES:

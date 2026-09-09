@@ -591,6 +591,10 @@ class TestConditionalComponents:
 
 
 class TestFeatures:
+  @pytest.fixture(autouse=True)
+  def _register_xkey(self, monkeypatch):
+    monkeypatch.setattr('bro.base.credentials.known_names', lambda: frozenset({'xkey'}))
+
   def _bro_class(self):
     class FeatureBro(BaseBro):
       name = 'feature-bro'
@@ -614,13 +618,10 @@ class TestFeatures:
     assert 'FEATURE TEXT' not in off.system_prompt
     assert off.needed_secrets() == ()
 
-  def test_gate_probes_an_unregistered_name_as_off(self, monkeypatch):
-    # the gate vocabulary's creds set has no closed universe: a name the store's
-    # registry doesn't know (e.g. never hydrated into a scoped container) reads
-    # as feature-off instead of raising a universe violation
-    monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
-    bro = self._bro_class()()
-    assert bro._mcp_specs == []
+  def test_gate_on_an_unregistered_kind_fails_the_probe(self, monkeypatch):
+    monkeypatch.setattr('bro.base.credentials.known_names', lambda: frozenset())
+    with pytest.raises(ConditionError, match="'xkey' outside the set universe in '#creds contains"):
+      self._bro_class()()
 
   def test_derived_pins_parent_feature_on(self, monkeypatch):
     monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
