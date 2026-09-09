@@ -25,6 +25,8 @@ References are expanded before values reach consumers.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import importlib.metadata
 import json
 import os
@@ -34,7 +36,7 @@ import shutil
 import sys
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
@@ -396,7 +398,8 @@ def _referenced_names(text: str) -> set[str]:
 
 
 class Store:
-  """Resolve one code registry against one exclusive directory and selection."""
+  """Resolve one code registry against one exclusive directory and selection;
+  a kind outside `readable`, when given, resolves as absent."""
 
   def __init__(
     self,
@@ -404,12 +407,12 @@ class Store:
     store_dir: str | Path,
     selection: Mapping[str, str],
     *,
-    _readable: Optional[Iterable[str]] = None,
+    readable: Optional[Iterable[str]] = None,
   ):
     self.registry = dict(registry)
     self.store_dir = Path(store_dir)
     self.selection = _validate_selection(selection, self.registry)
-    self._readable = None if _readable is None else frozenset(_readable)
+    self._readable = None if readable is None else frozenset(readable)
     if self._readable is not None:
       unknown = sorted(self._readable - self.registry.keys())
       if len(unknown) > 0:
@@ -699,9 +702,15 @@ def _reject_retired_store_files() -> None:
 
 _default_store: Optional[Store] = None
 _default_store_lock = threading.Lock()
+_store_override: contextvars.ContextVar[Optional[Store]] = contextvars.ContextVar(
+  'store_override', default=None
+)
 
 
 def default_store() -> Store:
+  override = _store_override.get()
+  if override is not None:
+    return override
   global _default_store
   if _default_store is None:
     with _default_store_lock:
@@ -718,6 +727,18 @@ def default_store() -> Store:
           selection = {kind: instance for kind, instance in configured.items() if kind in registry}
         _default_store = Store(registry, STORE_DIR, selection)
   return _default_store
+
+
+@contextlib.contextmanager
+def as_default_store(store: Store) -> Iterator[None]:
+  """resolve through `store` as the default for the block, in the calling
+  thread or task alone — for a read made on another launch's behalf, under
+  that launch's selection rather than this process's own."""
+  token = _store_override.set(store)
+  try:
+    yield
+  finally:
+    _store_override.reset(token)
 
 
 def get(name: str) -> str:
@@ -844,7 +865,7 @@ def scoped_view_store(store: Store, names: Iterable[str], *, optional: Iterable[
     readable.add(kind)
     if instance is not None:
       view_selection[kind] = instance
-  return Store(store.registry, store.store_dir, view_selection, _readable=readable)
+  return Store(store.registry, store.store_dir, view_selection, readable=readable)
 
 
 def apply_grant_revoke(

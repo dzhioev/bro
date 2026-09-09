@@ -23,7 +23,7 @@ from bro.summon import DEFAULT_TIMEOUT
 from ride import pending_summon
 from ride.harness import HARNESS_NAMES, get_harness
 from ride.peer_facts import PeerFact, PeerFacts, PeerIdentity, UnattributablePeer
-from ride.scope import LaunchScopeError, split_scope_overrides, summoned_credential_scope
+from ride.scope import LaunchScopeError, scoped_secrets, split_scope_overrides
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
@@ -95,7 +95,7 @@ def _summoned_scope(
   authorize against rather than to hydrate — the lowering checks the host
   selection of the scope that launches."""
   harness = get_harness(harness_name)
-  return summoned_credential_scope(
+  return scoped_secrets(
     target,
     harness.scope_recipe(harness.default_options()),
     attachment=attachment,

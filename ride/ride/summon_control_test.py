@@ -428,7 +428,7 @@ def test_a_child_scope_the_host_config_rejects_is_denied(tmp_path, monkeypatch):
   def rejecting_scope(*args, **kwargs):
     raise ride.scope.LaunchScopeError('bros.dev selects github+reviewer (project-path-bro)')
 
-  monkeypatch.setattr(ride.summon_control, 'summoned_credential_scope', rejecting_scope)
+  monkeypatch.setattr(ride.summon_control, 'scoped_secrets', rejecting_scope)
   control = _control(tmp_path, credential_scope={'claude_code'})
   context = FakeContext(control)
   control.handle(cast(Dispatcher, context), ROOT, _message(harness='claude'))
@@ -444,7 +444,7 @@ def test_child_grant_bound_recomputes_its_llm_scope(tmp_path, monkeypatch):
     calls.append((target, llm_spec))
     return ScopedSecrets({'github'}, set())
 
-  monkeypatch.setattr(ride.summon_control, 'summoned_credential_scope', capture_scope)
+  monkeypatch.setattr(ride.summon_control, 'scoped_secrets', capture_scope)
   control = _control(tmp_path, allow_list=('bro-dev',))
   context = FakeContext(control)
   parent = _message(target='bro-dev', llm='echo')

@@ -62,13 +62,18 @@ def _facts_expecting(quest: str) -> ride.peer_facts.PeerFacts:
 
 @pytest.fixture
 def lowering_harness(monkeypatch, tmp_path):
-  monkeypatch.setattr(
-    ride.scope,
-    'scoped_secrets',
-    lambda name, surface, attachment=None, llm_spec=None, check_selection=True: (
-      workspace_store.ScopedSecrets(required={'aws', 'trails'}, optional={'openai'})
-    ),
-  )
+  def fake_scoped_secrets(
+    name, surface, attachment=None, llm_spec=None, grant=(), revoke=(), check_selection=True
+  ):
+    grant_credentials, _ = ride.scope.split_scope_overrides(list(grant))
+    revoke_credentials, _ = ride.scope.split_scope_overrides(list(revoke))
+    return workspace_store.finalize_scoped_secrets(
+      workspace_store.ScopedSecrets(required={'aws', 'trails'}, optional={'openai'}),
+      grant=grant_credentials,
+      revoke=revoke_credentials,
+    )
+
+  monkeypatch.setattr(ride.spawn, 'scoped_secrets', fake_scoped_secrets)
   monkeypatch.setattr(ride.session, 'local_trails_mounts', lambda scoped: ())
   monkeypatch.setattr(ride.spawn, 'human_git_identity_env', lambda repository: {})
   monkeypatch.setattr(
@@ -181,11 +186,13 @@ class TestSummonLowering:
   def test_the_llm_recipe_selects_the_childs_hydrated_llm_key(self, lowering_harness, monkeypatch):
     captured: list = []
 
-    def capture_scope(name, recipe, attachment=None, llm_spec=None, check_selection=True):
+    def capture_scope(
+      name, recipe, attachment=None, llm_spec=None, grant=(), revoke=(), check_selection=True
+    ):
       captured.append(llm_spec)
       return workspace_store.ScopedSecrets(required=set(), optional=set())
 
-    monkeypatch.setattr(ride.scope, 'scoped_secrets', capture_scope)
+    monkeypatch.setattr(ride.spawn, 'scoped_secrets', capture_scope)
     launch = ride.spawn.SummonLaunchSpec(
       target='dev',
       prompt='p',
@@ -558,11 +565,13 @@ class TestClaudeSummonLowering:
   def test_scope_follows_the_claude_recipe(self, claude_harness, monkeypatch):
     captured: list = []
 
-    def capture_scope(name, recipe, attachment=None, llm_spec=None, check_selection=True):
+    def capture_scope(
+      name, recipe, attachment=None, llm_spec=None, grant=(), revoke=(), check_selection=True
+    ):
       captured.append(recipe.name)
       return workspace_store.ScopedSecrets(required=set(), optional=set())
 
-    monkeypatch.setattr(ride.scope, 'scoped_secrets', capture_scope)
+    monkeypatch.setattr(ride.spawn, 'scoped_secrets', capture_scope)
     ride.spawn._lower_summon(self._launch(), 'broker-CH', _container_runtime(), _artifacts())
     assert captured == ['claude-full']
 

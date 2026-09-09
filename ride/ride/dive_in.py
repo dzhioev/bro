@@ -91,10 +91,12 @@ def _task_system(
   with launch_scope_errors():
     store = launch_view_store(
       scoped_secrets(
-        bro_name, get_harness(harness).scope_recipe(harness_options), attachment=str(repo)
-      ),
-      grant=grant,
-      revoke=revoke,
+        bro_name,
+        get_harness(harness).scope_recipe(harness_options),
+        attachment=str(repo),
+        grant=grant,
+        revoke=revoke,
+      )
     )
 
     def brog_config() -> dict:

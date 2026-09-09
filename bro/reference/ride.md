@@ -631,6 +631,7 @@ Host scoping is still a convenience rather than a security boundary, because the
   — computed on the child's side, so a summoner need not hold the kind.
   A project-bro `creds` selection of a kind the launch reads on neither tier fails the launch and names `grant`;
   the recording kind counts as read under `--no-trails` too.
+  The bro's declarations are evaluated under that selection, the launch's instance grants included, so a feature gate resolves on the host exactly when it resolves in the session.
   A path attachment matches on two identities
   — the checkout path and its `origin` URL
   — so a `projects` key written as the repository's URL reaches the everyday `--repo <path>` launch too;

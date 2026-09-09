@@ -25,13 +25,14 @@ run those with `--help` for flags.
 - `credentials.py` — client-side secret resolver (`__cli_name__ = 'credentials'`).
   The code registry maps kinds to a required description and an optional install hook;
   it is assembled from `bro/base/registry.json` and installed `bro.credentials` contributions.
-  `Store(registry, store_dir, selection)` reads one exclusive directory:
+  `Store(registry, store_dir, selection, readable=…)` reads one exclusive directory, a `readable` set withholding every other kind:
   plain material is `creds/<name>.cred`, and `creds.json` may annotate one typed source per name (`ssm` or a `bro.credential_sources` minting type).
   A stored name is `kind+instance` spelled `kind` when the instance is empty, and a store carrying the other spelling of that name fails at construction.
   `get` / `get_json` / `try_get` / `available` address kinds through the explicit selection;
   the `get_instance` siblings address the stored name exactly.
   `default_store()` binds an ambient store lazily from the host config's `defaults`, `user`, and running command's layers,
-  and bypasses that config entirely when `BRO_STORE` directs the process.
+  and bypasses that config entirely when `BRO_STORE` directs the process;
+  `as_default_store(store)` resolves through a given store for the block, in the calling thread or task alone.
   `$cred` references expand during resolution, with kind targets applying the same selection and instance targets reading storage directly.
   `known_names()` is the code registry's kinds, while the CLI's `--instance` list enumerates the store directory and typed annotations.
   `build_scoped_store(store, names, optional=…)` emits `creds/<kind>.cred` plus typed annotations in `creds.json`, and reports the declared kinds that resolved separately from transitive `$cred` pulls.

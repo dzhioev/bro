@@ -321,14 +321,14 @@ class TestTaskSystem:
       dive_in, 'project_config', lambda _repo: SimpleNamespace(default_bro='bro-dev')
     )
 
-    def fake_scoped_secrets(bro_name, surface, *, attachment):
-      calls['scoped'] = (bro_name, surface)
+    def fake_scoped_secrets(bro_name, surface, *, attachment, grant, revoke):
+      calls['scoped'] = (bro_name, surface, grant, revoke)
       return 'base-scope'
 
     monkeypatch.setattr(dive_in, 'scoped_secrets', fake_scoped_secrets)
 
-    def fake_view(scoped, *, grant, revoke):
-      calls['view'] = (scoped, grant, revoke)
+    def fake_view(scoped):
+      calls['view'] = scoped
       return FakeStore()
 
     monkeypatch.setattr(dive_in, 'launch_view_store', fake_view)
@@ -342,8 +342,8 @@ class TestTaskSystem:
     system = dive_in._task_system(
       Path('/repo'), ['brog+github'], [], None, 'claude', {'raw': False}
     )
-    assert calls['scoped'] == ('bro-dev', CLAUDE.scope_recipe({'raw': False}))
-    assert calls['view'] == ('base-scope', ['brog+github'], [])
+    assert calls['scoped'] == ('bro-dev', CLAUDE.scope_recipe({'raw': False}), ['brog+github'], [])
+    assert calls['view'] == 'base-scope'
     assert calls['read'] == 'brog'
     assert isinstance(system, brog_github.System)
 
@@ -353,7 +353,7 @@ class TestTaskSystem:
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
     dive_in._task_system(Path('/repo'), [], [], 'dev', 'claude', {'raw': True})
-    assert calls['scoped'] == ('dev', CLAUDE.scope_recipe({'raw': True}))
+    assert calls['scoped'] == ('dev', CLAUDE.scope_recipe({'raw': True}), [], [])
 
   def test_bro_harness_scopes_the_native_recipe(self, monkeypatch):
     from ride.scope import BRO_RUN_RECIPE
@@ -361,7 +361,7 @@ class TestTaskSystem:
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
     dive_in._task_system(Path('/repo'), [], [], None, 'bro', {})
-    assert calls['scoped'] == ('bro-dev', BRO_RUN_RECIPE)
+    assert calls['scoped'] == ('bro-dev', BRO_RUN_RECIPE, [], [])
 
   def test_a_malformed_config_names_the_launch(self, monkeypatch):
     from ride.scope import LaunchScopeError

@@ -7,7 +7,12 @@ from unittest.mock import patch
 import pytest
 
 import ride.scope
+from bro.base import credentials
+from bro.base.condition import when
+from bro.bro import feature
 from bro.datasources.web_search import WebSearch
+from bro.llm.mcp import InProcessMCPServer
+from bro.mcp import MCPServerSpec, ToolLayer, creds
 from bros.bro import Bro
 from ride.scope import BRO_RUN_RECIPE, ScopeRecipe
 
@@ -32,9 +37,25 @@ class SearchBro(Bro):
   extra_secrets = ('catalog',)
 
 
+class _PayloadServer(InProcessMCPServer):
+  needed_secrets = ('payload',)
+
+  def __init__(self):
+    super().__init__('payload-srv', [])
+
+
+class GatedBro(Bro):
+  name = 'scope-gated'
+  description = 'feature-gated bro for launch scope tests'
+  features: ClassVar = {'x': creds.contains('gate')}
+  tools: ClassVar = [
+    when(feature('x'), ToolLayer(server_specs=(MCPServerSpec.of(_PayloadServer),)))
+  ]
+
+
 @pytest.fixture(autouse=True)
 def registered_scope_bros(register_test_bros):
-  register_test_bros(SearchBro)
+  register_test_bros(SearchBro, GatedBro)
 
 
 class TestScopedSecrets:
@@ -223,7 +244,7 @@ class TestHostConfigBroLayer:
     self._host_config(tmp_path, monkeypatch, {'grant': ['github+reviewer']})
 
     with pytest.raises(ValueError, match='already selected'):
-      ride.scope.summoned_credential_scope(
+      ride.scope.scoped_secrets(
         'scope-search',
         CLAUDE_RECIPE,
         attachment=str(tmp_path),
@@ -243,7 +264,7 @@ class TestHostConfigBroLayer:
   def test_an_unchecked_scope_carries_the_unread_selection(self, tmp_path, monkeypatch):
     self._host_config(tmp_path, monkeypatch, {'creds': ['github+reviewer']})
 
-    scoped = ride.scope.summoned_credential_scope(
+    scoped = ride.scope.scoped_secrets(
       'scope-search',
       CLAUDE_RECIPE,
       attachment=str(tmp_path),
@@ -287,7 +308,7 @@ class TestHostConfigBroLayer:
       self._scope(tmp_path)
 
 
-class TestSummonedCredentialScope:
+class TestScopeOverrides:
   def _host_config(self, tmp_path, monkeypatch, projects):
     config = tmp_path / 'bro.json'
     config.write_text(json.dumps({'projects': projects}))
@@ -306,7 +327,7 @@ class TestSummonedCredentialScope:
         }
       },
     )
-    scoped = ride.scope.summoned_credential_scope(
+    scoped = ride.scope.scoped_secrets(
       'bro-dev', CLAUDE_RECIPE, attachment=str(tmp_path), grant=[], revoke=[]
     )
     assert scoped.selection == {'brog': 'github', 'github': 'reviewer'}
@@ -324,7 +345,7 @@ class TestSummonedCredentialScope:
       },
     )
     parent = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, attachment=str(tmp_path))
-    child = ride.scope.summoned_credential_scope(
+    child = ride.scope.scoped_secrets(
       'bro-eyebro', CLAUDE_RECIPE, attachment=str(tmp_path), grant=[], revoke=[]
     )
     assert parent.selection['github'] == 'dev'
@@ -335,7 +356,7 @@ class TestSummonedCredentialScope:
   ):
     self._host_config(tmp_path, monkeypatch, {str(tmp_path / 'other'): {'creds': ['brog+github']}})
     for attachment in (None, str(tmp_path), 'https://github.com/foo/api.git'):
-      scoped = ride.scope.summoned_credential_scope(
+      scoped = ride.scope.scoped_secrets(
         'bro-dev', CLAUDE_RECIPE, attachment=attachment, grant=[], revoke=[]
       )
       assert 'brog' in scoped.required
@@ -343,11 +364,74 @@ class TestSummonedCredentialScope:
 
   def test_a_granted_instance_selects_it_for_the_child(self, tmp_path, monkeypatch):
     self._host_config(tmp_path, monkeypatch, {str(tmp_path / 'other'): {'creds': ['brog+github']}})
-    scoped = ride.scope.summoned_credential_scope(
+    scoped = ride.scope.scoped_secrets(
       'bro-dev', CLAUDE_RECIPE, attachment=None, grant=['brog+github'], revoke=[]
     )
     assert 'brog' in scoped.required
     assert scoped.selection['brog'] == 'github'
+
+  def test_a_bare_grant_of_a_scoped_kind_is_a_no_op_failure(self):
+    with pytest.raises(ValueError, match='already in the scoped credential set'):
+      ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, grant=['github'])
+
+  def test_the_bro_halves_of_the_overrides_do_not_reach_the_scope(self):
+    scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, grant=['@dev'], revoke=['@bro'])
+    assert '@dev' not in scoped.required
+    assert 'github' in scoped.required
+
+
+class TestScopeEvaluatesUnderTheLaunchSelection:
+  # the gate credential is stored under one instance only, so it resolves for a
+  # launch exactly when a layer or a grant selects that instance
+  def _host(self, tmp_path, monkeypatch, *, bros):
+    store = tmp_path / 'store'
+    material = store / credentials.MATERIAL_DIR / f'gate+reviewer{credentials.MATERIAL_SUFFIX}'
+    material.parent.mkdir(parents=True)
+    material.write_text('secret')
+    monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
+    monkeypatch.setattr(
+      credentials,
+      'default_registry',
+      lambda: {
+        name: credentials.CredentialKind(name, f'{name} credential') for name in ('gate', 'payload')
+      },
+    )
+    config = tmp_path / 'bro.json'
+    config.write_text(json.dumps({'projects': {str(tmp_path): {'bros': bros}}}))
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+
+  def test_a_gate_the_bros_layer_resolves_selects_its_component(self, tmp_path, monkeypatch):
+    self._host(tmp_path, monkeypatch, bros={'scope-gated': {'creds': ['gate+reviewer']}})
+    scoped = ride.scope.scoped_secrets('scope-gated', CLAUDE_RECIPE, attachment=str(tmp_path))
+    assert 'payload' in scoped.required
+    assert 'gate' in scoped.optional
+
+  def test_a_gate_no_layer_resolves_leaves_its_component_out(self, tmp_path, monkeypatch):
+    self._host(tmp_path, monkeypatch, bros={})
+    scoped = ride.scope.scoped_secrets('scope-gated', CLAUDE_RECIPE, attachment=str(tmp_path))
+    assert 'payload' not in scoped.required
+    assert 'gate' in scoped.optional
+
+  def test_an_instance_grant_selects_the_gated_component(self, tmp_path, monkeypatch):
+    self._host(tmp_path, monkeypatch, bros={})
+    scoped = ride.scope.scoped_secrets(
+      'scope-gated', CLAUDE_RECIPE, attachment=str(tmp_path), grant=['gate+reviewer']
+    )
+    assert {'gate', 'payload'} <= scoped.required
+    assert scoped.selection['gate'] == 'reviewer'
+
+  def test_a_revoked_gate_leaves_its_component_out(self, tmp_path, monkeypatch):
+    self._host(tmp_path, monkeypatch, bros={'scope-gated': {'creds': ['gate+reviewer']}})
+    scoped = ride.scope.scoped_secrets(
+      'scope-gated', CLAUDE_RECIPE, attachment=str(tmp_path), revoke=['gate']
+    )
+    assert 'payload' not in scoped.required
+    assert 'gate' not in scoped.required | scoped.optional
+
+  def test_the_process_store_is_restored_after_the_computation(self, tmp_path, monkeypatch):
+    self._host(tmp_path, monkeypatch, bros={'scope-gated': {'creds': ['gate+reviewer']}})
+    ride.scope.scoped_secrets('scope-gated', CLAUDE_RECIPE, attachment=str(tmp_path))
+    assert not credentials.available('gate')
 
 
 class TestPreflightScopedLaunch:
@@ -358,9 +442,9 @@ class TestPreflightScopedLaunch:
     kwargs.update(overrides)
     return ride.scope.preflight_scoped_launch(scoped, 'bro-dev', **kwargs)
 
-  def test_returns_finalized_scope_allow_list_and_store(self):
-    # one unified grant list: plain names finalize the credential scope, @names
-    # feed the summon allow-list
+  def test_returns_the_allow_list_and_the_store(self):
+    # one unified grant list: the @names feed the summon allow-list, the plain
+    # names already shaped the scope and are not reapplied
     with (
       patch('ride.summon_control.summon_allow_list', return_value={'dev'}) as allow_list,
       patch(
@@ -368,35 +452,17 @@ class TestPreflightScopedLaunch:
         return_value=({'creds/x.cred': b'v'}, frozenset({'x'})),
       ) as build,
     ):
-      scoped, may_summon, store = self._preflight(
-        ride.scope.ScopedSecrets({'github'}, {'openai'}),
+      may_summon, store = self._preflight(
+        ride.scope.ScopedSecrets({'github', 'gmail_creds'}, {'openai'}),
         grant=['gmail_creds', '@dev'],
         revoke=['@bro'],
       )
-    assert scoped == ride.scope.ScopedSecrets({'github', 'gmail_creds'}, {'openai'})
     assert may_summon == {'dev'}
     assert store == {'creds/x.cred': b'v'}
     assert store.kinds == frozenset({'x'})
     assert allow_list.call_args == (('bro-dev',), {'grant': ['dev'], 'revoke': ['bro']})
-    # the store is hydrated from the finalized tiers, not the incoming ones
     assert build.call_args.args[1] == {'github', 'gmail_creds'}
     assert build.call_args.kwargs == {'optional': {'openai'}}
-
-  def test_grant_replaces_a_selected_same_kind_credential(self):
-    with (
-      patch('ride.summon_control.summon_allow_list', return_value=set()),
-      patch('ride.scope.credentials.build_scoped_store', return_value=({}, frozenset())),
-    ):
-      scoped, _, _ = self._preflight(
-        ride.scope.ScopedSecrets({'brog', 'github'}, set(), {'brog': 'linear'}),
-        grant=['brog+github'],
-      )
-    assert scoped.required == {'brog', 'github'}
-    assert scoped.selection['brog'] == 'github'
-
-  def test_bad_credential_override_raises_launch_scope_error(self):
-    with pytest.raises(ride.scope.LaunchScopeError, match='already in the scoped credential set'):
-      self._preflight(ride.scope.ScopedSecrets({'github'}, set()), grant=['github'])
 
   def test_bare_bro_mark_raises_launch_scope_error(self):
     with pytest.raises(ride.scope.LaunchScopeError, match="malformed grant/revoke '@'"):
@@ -428,22 +494,12 @@ class TestPreflightScopedLaunch:
 
 
 class TestLaunchViewStore:
-  def test_finalized_overrides_bind_the_view(self):
-    # the same unified values the preflight takes: plain names finalize the
-    # credential tiers, @names are the summon side and don't reach the view
+  def test_binds_the_view_to_the_scope(self):
     with patch('ride.scope.credentials.scoped_view_store', return_value='the-view') as view:
       store = ride.scope.launch_view_store(
-        ride.scope.ScopedSecrets({'brog', 'github'}, {'openai'}),
-        grant=['brog+github', '@dev'],
-        revoke=[],
+        ride.scope.ScopedSecrets({'brog', 'github'}, {'openai'}, {'brog': 'github'})
       )
     assert store == 'the-view'
     assert view.call_args.args[0].selection['brog'] == 'github'
     assert view.call_args.args[1] == {'brog', 'github'}
     assert view.call_args.kwargs == {'optional': {'openai'}}
-
-  def test_bad_override_raises_launch_scope_error(self):
-    with pytest.raises(ride.scope.LaunchScopeError, match='already in the scoped credential set'):
-      ride.scope.launch_view_store(
-        ride.scope.ScopedSecrets({'github'}, set()), grant=['github'], revoke=[]
-      )

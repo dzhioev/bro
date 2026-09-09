@@ -29,7 +29,12 @@ from ride.inner import inner_command
 from ride.repository import Repository, hold_repository, is_git_url, open_repository
 from ride.root import run_host_process_via_broker, run_in_container, run_summoned_in_container
 from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError, resolve_runtime_bundle
-from ride.scope import LaunchScopeError, preflight_scoped_launch, scoped_secrets
+from ride.scope import (
+  LaunchScopeError,
+  launch_scope_errors,
+  preflight_scoped_launch,
+  scoped_secrets,
+)
 from ride.trails import local_trails_mounts
 from ride.workspace.containers import broker_enabled
 from ride.workspace.docker import (
@@ -534,11 +539,17 @@ def _start_session(
   if spec.no_trails:
     recipe = dataclasses.replace(recipe, optional_baseline=frozenset())
   try:
-    scoped, may_summon, store = preflight_scoped_launch(
-      scoped_secrets(spec.bro, recipe, attachment=spec.repo, llm_spec=spec.llm_spec),
-      spec.bro,
-      grant=spec.grant,
-      revoke=spec.revoke,
+    with launch_scope_errors():
+      scoped = scoped_secrets(
+        spec.bro,
+        recipe,
+        attachment=spec.repo,
+        llm_spec=spec.llm_spec,
+        grant=spec.grant,
+        revoke=spec.revoke,
+      )
+    may_summon, store = preflight_scoped_launch(
+      scoped, spec.bro, grant=spec.grant, revoke=spec.revoke
     )
   except LaunchScopeError as error:
     log.error('%s', error)
