@@ -49,6 +49,21 @@ def test_denial_is_terminal_and_remains_in_lineage():
   assert journal.knows('x')
 
 
+def test_events_carry_the_records_args():
+  journal = Journal()
+  root = journal.open('root', 'root', None, None, {})
+  journal.bind(root, 'root-peer')
+  child = journal.open('child', 'summon', 'root', 'root-peer', {'target': 'dev', 'prompt': 'work'})
+  journal.end(child, {'outcome': 'ok'})
+  denied = journal.deny('other', 'summon', 'root', 'root-peer', {'target': 'nope'}, 'not allowed')
+  _, events = journal.events_after(0, 'root-peer', {'root-peer': 'root'})
+  assert [(event['transition'], event['args']) for event in events] == [
+    ('accepted', child.args),
+    ('ended', child.args),
+    ('denied', denied.args),
+  ]
+
+
 def test_retention_evicts_payload_then_record_but_keeps_lineage(monkeypatch):
   monkeypatch.setattr(journal_module, 'MAX_RESULT_BYTES', 20)
   monkeypatch.setattr(journal_module, 'MAX_RECORDS', 1)
@@ -104,6 +119,28 @@ def test_scope_includes_only_the_callers_subtree():
   }
   assert not journal.visible('left-peer', left, workers)
   assert not journal.visible('left-peer', right, workers)
+
+
+def test_bounded_args_keep_scalar_fields_when_containers_overflow():
+  bounded = journal_module.bounded_args(
+    {'target': 'dev', 'timeout': 14400, 'share': ['sha256:' + 'a' * 64] * 40}
+  )
+  assert bounded['target'] == 'dev'
+  assert bounded['timeout'] == 14400
+  assert bounded['truncated'] is True
+  assert 'share' not in bounded
+  encoded = json.dumps(bounded, ensure_ascii=False, separators=(',', ':')).encode()
+  assert len(encoded) <= journal_module.ARGS_HEAD_BYTES
+
+
+def test_bounded_args_drop_the_largest_scalars_first():
+  bounded = journal_module.bounded_args({'target': 'dev', 'step_id': 10**3000, 'index': 2})
+  assert bounded['target'] == 'dev'
+  assert bounded['index'] == 2
+  assert 'step_id' not in bounded
+  assert bounded['truncated'] is True
+  encoded = json.dumps(bounded, ensure_ascii=False, separators=(',', ':')).encode()
+  assert len(encoded) <= journal_module.ARGS_HEAD_BYTES
 
 
 def test_args_are_bounded_for_memory_and_audit():

@@ -136,7 +136,8 @@ Any summon is reclaimable by that id, foreground included:
 if a waiting process is killed mid-flight, the host journal retains the quest,
 `summon check <id>` polls it,
 and `summon check --wait <id>` waits on the same non-destructive read.
-`summon watch` arms at the current journal head and prints ordered transitions after it, including denials;
+`summon watch` arms at the current journal head and prints ordered transitions after it
+— your summons' and their descendants', denials included;
 if retained events have a gap, it reports the loss and re-arms from the current head.
 
 Without Bash there is no true backgrounding, but the tools cover the long-run case:

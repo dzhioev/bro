@@ -9,7 +9,7 @@ import pytest
 from bro import summon
 from bro.broker import brotocol
 from bro.broker.brotocol import Message
-from bro.broker.client import CHANNEL_ENV
+from bro.broker.client import CHANNEL_ENV, QUEST_ENV
 from bro.broker.transport import ChannelID
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 
@@ -383,6 +383,7 @@ async def test_list_reads_every_page_and_keeps_only_summons(monkeypatch, capsys)
 @pytest.mark.asyncio
 async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypatch):
   async with running_server(monkeypatch) as server:
+    monkeypatch.setenv(QUEST_ENV, 'ROOT')
     watch = summon.watch_summons(wait_seconds=0.05)
     first_line = asyncio.create_task(asyncio.to_thread(next, watch))
     channel, arm = await _next(server)
@@ -399,18 +400,27 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
       value={
         'head': 12,
         'events': [
-          {'seq': 11, 'kind': 'benchmark', 'quest': 'B1', 'transition': 'started'},
+          {
+            'seq': 11,
+            'kind': 'benchmark',
+            'quest': 'B1',
+            'parent': 'ROOT',
+            'args': {},
+            'transition': 'started',
+          },
           {
             'seq': 12,
             'kind': 'summon',
             'quest': 'S1',
+            'parent': 'ROOT',
+            'args': {'target': 'reviewer'},
             'transition': 'denied',
             'reason': 'summon denied: not allowed',
           },
         ],
       },
     )
-    assert await first_line == 'summon denied: not allowed (request S1)'
+    assert await first_line == 'summon denied: not allowed (request S1 to reviewer)'
 
     second_line = asyncio.create_task(asyncio.to_thread(next, watch))
     channel, poll = await _next(server)
@@ -426,7 +436,9 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
           {
             'seq': 13,
             'kind': 'summon',
-            'quest': 'S1',
+            'quest': 'S2',
+            'parent': 'C1',
+            'args': {'target': 'dev'},
             'transition': 'ended',
             'outcome': 'failed',
             'reason': 'timeout',
@@ -434,8 +446,83 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
         ],
       },
     )
-    assert await second_line == 'summon ended failed:timeout (request S1)'
+    assert await second_line == (
+      'summon ended failed:timeout (request S2 to dev, summoned by request C1)'
+    )
+
+    third_line = asyncio.create_task(asyncio.to_thread(next, watch))
+    channel, poll = await _next(server)
+    assert poll.args == {'after': 13, 'wait': 0.05}
+    await _reply(
+      server,
+      channel,
+      poll,
+      outcome='ok',
+      value={
+        'head': 14,
+        'events': [
+          {
+            'seq': 14,
+            'kind': 'summon',
+            'quest': 'S3',
+            'parent': 'ROOT',
+            'args': {'target': 'x\ny'},
+            'transition': 'denied',
+            'reason': "unknown bro 'x\\ny'",
+          }
+        ],
+      },
+    )
+    assert await third_line == "unknown bro 'x\\ny' (request S3 to x\\ny)"
     watch.close()
+
+
+def test_the_watch_line_can_carry_any_registered_name_whole():
+  from bro.broker.journal import ARGS_STRING_HEAD
+  from bro.registry import MAX_NAME_LENGTH
+
+  assert MAX_NAME_LENGTH <= ARGS_STRING_HEAD
+
+
+@pytest.mark.asyncio
+async def test_watch_refuses_an_accepted_summon_event_without_a_target(monkeypatch):
+  async with running_server(monkeypatch) as server:
+    monkeypatch.setenv(QUEST_ENV, 'ROOT')
+    watch = summon.watch_summons(wait_seconds=0.05)
+    first_line = asyncio.create_task(asyncio.to_thread(next, watch))
+    channel, arm = await _next(server)
+    await _reply(server, channel, arm, outcome='ok', value={'head': 0, 'events': []})
+    channel, poll = await _next(server)
+    await _reply(
+      server,
+      channel,
+      poll,
+      outcome='ok',
+      value={
+        'head': 1,
+        'events': [
+          {
+            'seq': 1,
+            'kind': 'summon',
+            'quest': 'S1',
+            'parent': 'ROOT',
+            'args': {'head': '{"target":"dev","share":[', 'truncated': True},
+            'transition': 'accepted',
+          }
+        ],
+      },
+    )
+    with pytest.raises(summon.SummonError, match='without a target'):
+      await first_line
+
+
+@pytest.mark.asyncio
+async def test_watch_refuses_to_start_without_the_quest_this_session_answers(monkeypatch):
+  async with running_server(monkeypatch):
+    monkeypatch.delenv(QUEST_ENV, raising=False)
+    watch = summon.watch_summons(wait_seconds=0.05)
+    with pytest.raises(summon.SummonError, match=QUEST_ENV):
+      await asyncio.to_thread(next, watch)
 
 
 def test_may_summon_round_trips_the_launch_published_list(monkeypatch):

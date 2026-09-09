@@ -534,7 +534,6 @@ class SummonControl:
     entry: dict[str, Any] = {
       'session': self._workspace.name,
       **event.view(),
-      'args': journal_record.args,
     }
     if journal_record.parent is not None:
       attribution = self._audit_attribution.get(event.quest)

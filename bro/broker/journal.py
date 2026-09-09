@@ -80,6 +80,7 @@ class Event:
   quest: str
   kind: str
   parent: Optional[str]
+  args: dict[str, Any]
   transition: str
   payload: dict[str, Any]
 
@@ -90,6 +91,7 @@ class Event:
       'quest': self.quest,
       'kind': self.kind,
       'parent': self.parent,
+      'args': self.args,
       'transition': self.transition,
       **self.payload,
     }
@@ -335,6 +337,7 @@ class Journal:
       record.quest_id,
       record.kind,
       record.parent,
+      record.args,
       transition,
       payload,
     )
@@ -404,8 +407,18 @@ def bounded_args(args: dict[str, Any]) -> dict[str, Any]:
   if _payload_bytes(value) <= ARGS_HEAD_BYTES:
     return value
   encoded = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+  scalars = {key: inner for key, inner in value.items() if not isinstance(inner, (dict, list))}
+  # a kept entry costs its own encoding plus the comma that joins it
+  cost = {key: _payload_bytes({key: inner}) - 1 for key, inner in scalars.items()}
+  position = {key: index for index, key in enumerate(scalars)}
+  total = _payload_bytes({'head': '', 'truncated': True}) + sum(cost.values())
+  for key in sorted(scalars, key=lambda key: (cost[key], position[key]), reverse=True):
+    if total <= ARGS_HEAD_BYTES:
+      break
+    total -= cost[key]
+    del scalars[key]
   head = encoded[:ARGS_HEAD_BYTES]
-  bounded = {'head': head, 'truncated': True}
+  bounded = {**scalars, 'head': head, 'truncated': True}
   while _payload_bytes(bounded) > ARGS_HEAD_BYTES:
     overflow = _payload_bytes(bounded) - ARGS_HEAD_BYTES
     head = head[: max(0, len(head) - overflow)]

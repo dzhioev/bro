@@ -60,13 +60,14 @@ Worker-backed authorization calls `Journal.open`, which appends `accepted`;
 Inline and read kinds answer without records.
 
 The event sequence is monotone for the broker root.
-Events carry their own quest, kind, parent, transition, timestamp, and transition payload.
+Events carry their own quest, kind, parent, args, transition, timestamp, and transition payload.
 The retention ladder exempts live records:
 retained result payloads age out first, then terminal records, while lineage remains for the session lifetime.
 The event ring is independently bounded.
 The bounds live with the journal constants.
 
-Args share one bounded-head implementation for memory and audit.
+Args share one bounded-head implementation for memory and audit:
+a dict over budget keeps its top-level scalar fields, dropping the largest while they overflow the budget on their own, and collapses the rest into a JSON head marked `truncated`.
 Trail ids and terminal reasons use a bounded journal projection with an explicit truncation marker.
 
 `query` returns caller-scoped, frame-bounded live-first pages with an opaque continuation cursor;

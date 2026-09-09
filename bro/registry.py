@@ -31,6 +31,7 @@ def declared_specs() -> dict[str, str]:
   """
   specs: dict[str, str] = {}
   for entry_point in _entry_points():
+    _validate_name(f'entry point {entry_point.value}', entry_point.name)
     if entry_point.name in specs:
       raise ValueError(
         f'duplicate bro {entry_point.name!r}: {specs[entry_point.name]} vs {entry_point.value}'
@@ -39,10 +40,19 @@ def declared_specs() -> dict[str, str]:
   return specs
 
 
+MAX_NAME_LENGTH = 64
+
+
+def _validate_name(owner: str, name: str) -> None:
+  if len(name) == 0 or len(name) > MAX_NAME_LENGTH:
+    raise ValueError(f'{owner} name {name!r} must be 1 to {MAX_NAME_LENGTH} characters')
+
+
 def register(bro_cls: type[BaseBro]) -> None:
   name = getattr(bro_cls, 'name', None)
   if not isinstance(name, str):
     raise ValueError(f'{bro_cls.__name__} must declare a `name` class attribute')
+  _validate_name(bro_cls.__name__, name)
   if name in _REGISTRY:
     raise ValueError(f'duplicate bro name: {name!r}')
   _REGISTRY[name] = bro_cls
