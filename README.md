@@ -323,7 +323,7 @@ from bros.eyebro import Eyebro
 class Reviewer(Eyebro):
   name = 'reviewer'
   description = 'reviews a pull request against the repository standards'
-  extra_secrets = ('github',)
+  features = {'github': True}
 ```
 
 Registration is three entry points and a default:

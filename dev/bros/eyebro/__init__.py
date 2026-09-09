@@ -1,6 +1,6 @@
 from bro.base.condition import when
 from bro.dev import references
-from bro.mcp import harness, mount
+from bro.mcp import creds, harness, mount
 from bros.bro import Bro
 from bros.dev import mcp
 
@@ -45,6 +45,7 @@ Caution:
 class Eyebro(Bro):
   name = 'eyebro'
   description = 'code reviewer that holds changes to the standards their repository declares'
+  features = {'github': creds.contains('github')}
   # the dev toolset duplicates the claude harness's built-in file/shell tools
   tools = [when(harness == 'bro', mount(mcp.toolset))]
   data_sources = [references.dev_style]

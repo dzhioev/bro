@@ -8,9 +8,10 @@ This spell should be used when the user asks to review a GitHub pull request and
 Reconciles the PR's existing review state, reviews the head, posts findings as PR review comments, watches for the author's answers and pushes with `poll-pr`, re-reviews round by round, and approves once every finding is addressed or conceded.
 
 parameters: {"pr": "pull request URL or number to review"}
-version: 1.2.0
+version: 1.3.0
 ---
 
+{{iff #features contains github}}
 # review-pr
 
 Drive a GitHub pull request through review to a verdict:
@@ -252,3 +253,27 @@ the PR, the rounds, what was found, and how each point settled.
   never stage them.
 - Never approve to end a long loop:
   an unfinished review ends with the truth on the PR, not with a courtesy verdict.
+
+{{else}}
+# review-pr
+
+This run has no GitHub identity:
+no `github` credential is in its scope, so nothing here can read the pull request, post a review, or watch for the author's answers.
+Judging a checkout still works ([[review diff]]);
+driving a pull request to a verdict does not.
+
+The identity comes from whatever launched the run, never from inside it:
+
+- a managed session or a summon reads the project's entry in the host's `~/.bro.json`:
+  `projects.<identity>.bros.<bro>.creds` with `github+<instance>`, `<bro>` being the name your banner's `bro` line gives, so every launch of this bro resolves one;
+- a summon also takes it on the request:
+  grant `github+<instance>`, an instance the summoner's own scope resolves;
+- a direct `bro run` or `bro chat` uses the host's own store:
+  an instance selected under `user.creds` (or `user.tools.<command>.creds`) or `defaults.creds` in `~/.bro.json`, or the kind's empty instance when nothing selects one.
+
+Whichever account it is, it must differ from the PR author's, which GitHub refuses to let approve.
+
+Report what is missing and how to supply it where questions reach the user;
+`raise` with the same when unattended.
+The spell cannot run here.
+{{end}}

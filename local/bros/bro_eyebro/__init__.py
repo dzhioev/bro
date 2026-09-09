@@ -8,7 +8,7 @@ class BroEyebro(Eyebro):
   name = 'bro-eyebro'
   description = 'bro framework code review: standards, guides, and quality'
   llm_spec = llm_llms_openai.LLMSpec(model='gpt-5.6-sol', reasoning_effort='xhigh')
-  extra_secrets = ('github',)
+  features = {'github': True}
   data_sources = [
     man('environment'),
     man('template'),
