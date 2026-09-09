@@ -115,7 +115,10 @@ The optional host config selects stored credential instances per consumer:
   "projects": {
     "https://github.com/me/bro": {
       "creds": ["brog+github", "github+dev"],
-      "bros": {"bro-eyebro": {"creds": ["github+reviewer"]}}
+      "bros": {
+        "bro-eyebro": {"creds": ["github+reviewer"]},
+        "eyebro": {"grant": ["github+reviewer"]}
+      }
     },
     "/home/me/projects/bro": {"creds": ["aws+laptop"]}
   },
@@ -131,6 +134,11 @@ The optional host config selects stored credential instances per consumer:
 Every selection list is named `creds`.
 An entry is `kind+instance`, its instance left empty (`kind+`) to select the kind's empty instance;
 one list may name a kind once.
+A `bros` entry may also carry `grant`, in the credential half of the `--grant` grammar:
+`kind+instance` selects the instance as `creds` does and a bare `kind` reads what the other layers select, and either way the kind joins the bro's required tier on this project.
+A bro's `creds` selects only among the kinds its launch reads;
+a selection of any other kind fails the launch and names `grant`, since it would otherwise sit inert.
+An entry names a kind in `creds` or in `grant`, not both.
 The retired `instances` field is rejected with `creds` named as its replacement.
 Validation is grammar-only, so shared dotfiles may carry kinds an installation does not register.
 

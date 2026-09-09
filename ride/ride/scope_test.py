@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import subprocess
 from typing import ClassVar
@@ -163,6 +164,127 @@ class TestScopedSecrets:
   def test_unknown_bro_fails_the_scope(self, recipe):
     with pytest.raises(ride.scope.LaunchScopeError, match="unknown bro 'nonexistent-bro'"):
       ride.scope.scoped_secrets('nonexistent-bro', recipe)
+
+
+class TestHostConfigBroLayer:
+  # scope-search (above) declares no github and reads openai best-effort
+  def _host_config(self, tmp_path, monkeypatch, entry):
+    config = tmp_path / 'bro.json'
+    config.write_text(
+      json.dumps(
+        {
+          'projects': {
+            str(tmp_path): {'creds': ['github+project'], 'bros': {'scope-search': entry}}
+          }
+        }
+      )
+    )
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+
+  def _scope(self, tmp_path, recipe=CLAUDE_RECIPE):
+    return ride.scope.scoped_secrets('scope-search', recipe, attachment=str(tmp_path))
+
+  def test_a_grant_adds_an_undeclared_kind_to_the_required_tier_under_its_instance(
+    self, tmp_path, monkeypatch
+  ):
+    self._host_config(tmp_path, monkeypatch, {'grant': ['github+reviewer']})
+
+    scoped = self._scope(tmp_path)
+
+    assert 'github' in scoped.required
+    assert scoped.selection['github'] == 'reviewer'
+
+  def test_a_bare_grant_reads_the_projects_instance(self, tmp_path, monkeypatch):
+    self._host_config(tmp_path, monkeypatch, {'grant': ['github']})
+
+    scoped = self._scope(tmp_path)
+
+    assert 'github' in scoped.required
+    assert scoped.selection['github'] == 'project'
+
+  def test_a_grant_promotes_an_optional_kind(self, tmp_path, monkeypatch):
+    self._host_config(tmp_path, monkeypatch, {'grant': ['openai+work']})
+
+    scoped = self._scope(tmp_path)
+
+    assert 'openai' in scoped.required
+    assert 'openai' not in scoped.optional
+    assert scoped.selection['openai'] == 'work'
+
+  def test_a_grant_of_a_declared_kind_selects_its_instance(self, tmp_path, monkeypatch):
+    self._host_config(tmp_path, monkeypatch, {'grant': ['catalog+shared']})
+
+    scoped = self._scope(tmp_path)
+
+    assert 'catalog' in scoped.required
+    assert scoped.selection['catalog'] == 'shared'
+
+  def test_a_flag_grant_of_a_granted_kind_stays_a_no_op(self, tmp_path, monkeypatch):
+    self._host_config(tmp_path, monkeypatch, {'grant': ['github+reviewer']})
+
+    with pytest.raises(ValueError, match='already selected'):
+      ride.scope.summoned_credential_scope(
+        'scope-search',
+        CLAUDE_RECIPE,
+        attachment=str(tmp_path),
+        grant=['github+reviewer'],
+        revoke=[],
+      )
+
+  def test_a_selection_of_an_unread_kind_fails_naming_grant(self, tmp_path, monkeypatch):
+    self._host_config(tmp_path, monkeypatch, {'creds': ['github+reviewer']})
+
+    with pytest.raises(
+      ride.scope.LaunchScopeError,
+      match=r'bros\.scope-search selects github\+reviewer \(project-path-bro\).*"grant"',
+    ):
+      self._scope(tmp_path)
+
+  def test_an_unchecked_scope_carries_the_unread_selection(self, tmp_path, monkeypatch):
+    self._host_config(tmp_path, monkeypatch, {'creds': ['github+reviewer']})
+
+    scoped = ride.scope.summoned_credential_scope(
+      'scope-search',
+      CLAUDE_RECIPE,
+      attachment=str(tmp_path),
+      grant=[],
+      revoke=[],
+      check_selection=False,
+    )
+
+    assert 'github' not in scoped.required | scoped.optional
+    assert scoped.selection['github'] == 'reviewer'
+
+  def test_a_selection_of_an_optional_kind_is_read(self, tmp_path, monkeypatch):
+    self._host_config(tmp_path, monkeypatch, {'creds': ['openai+work']})
+
+    scoped = self._scope(tmp_path)
+
+    assert 'openai' in scoped.optional
+    assert scoped.selection['openai'] == 'work'
+
+  def test_a_trails_selection_survives_a_dropped_baseline(self, tmp_path, monkeypatch):
+    self._host_config(tmp_path, monkeypatch, {'creds': ['trails+review']})
+
+    scoped = self._scope(
+      tmp_path, dataclasses.replace(CLAUDE_RECIPE, optional_baseline=frozenset())
+    )
+
+    assert 'trails' not in scoped.optional
+    assert scoped.selection['trails'] == 'review'
+
+  def test_a_project_selection_of_an_unread_kind_is_carried(self, tmp_path, monkeypatch):
+    self._host_config(tmp_path, monkeypatch, {})
+
+    assert self._scope(tmp_path).selection == {'github': 'project'}
+
+  def test_a_malformed_host_config_fails_the_scope(self, tmp_path, monkeypatch):
+    config = tmp_path / 'bro.json'
+    config.write_text('{"projects": []}')
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+
+    with pytest.raises(ride.scope.LaunchScopeError, match='projects must be a json object'):
+      self._scope(tmp_path)
 
 
 class TestSummonedCredentialScope:
