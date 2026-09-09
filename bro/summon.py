@@ -581,26 +581,56 @@ def list_summons() -> dict[str, Any]:
   return {'quests': quests}
 
 
-def _event_line(event: dict[str, Any]) -> str:
-  request_id = event.get('quest')
+def _single_line(text: str) -> str:
+  return ''.join(
+    character if character.isprintable() else repr(character)[1:-1] for character in text
+  )
+
+
+def _request_clause(event: dict[str, Any], own_quest: str) -> str:
+  args = event.get('args')
+  parent = event.get('parent')
+  if not isinstance(args, dict) or not isinstance(parent, str):
+    raise SummonError('events read returned a malformed summon record')
+  clause = f'request {event.get("quest")}'
+  target = args.get('target')
+  if isinstance(target, str):
+    clause += f' to {target}'
+  elif event.get('transition') != 'denied':
+    raise SummonError('events read returned an accepted summon without a target')
+  if parent != own_quest:
+    clause += f', summoned by request {parent}'
+  return clause
+
+
+def _event_line(event: dict[str, Any], own_quest: str) -> str:
   transition = event.get('transition')
   if transition == 'trail':
-    return f'summon trail {event.get("trail_id")} (request {request_id})'
-  if transition == 'ended':
+    head = f'summon trail {event.get("trail_id")}'
+  elif transition == 'ended':
     reason = f':{event["reason"]}' if event.get('reason') is not None else ''
-    return f'summon ended {event.get("outcome")}{reason} (request {request_id})'
-  if transition == 'denied':
-    return f'{event.get("reason")} (request {request_id})'
-  return f'summon {transition} (request {request_id})'
+    head = f'summon ended {event.get("outcome")}{reason}'
+  elif transition == 'denied':
+    head = str(event.get('reason'))
+  else:
+    head = f'summon {transition}'
+  return _single_line(f'{head} ({_request_clause(event, own_quest)})')
 
 
 def watch_summons(wait_seconds: float = READ_WAIT_SECONDS) -> Generator[str]:
   """Yield ordered summon journal transitions from the moment the watch is armed."""
   if wait_seconds <= 0:
     raise SummonError('events wait must be positive')
+  from bro.broker.client import QUEST_ENV
   from bro.broker.dispatcher import EVENTS
 
   with _open_client() as client:
+    own_quest = os.environ.get(QUEST_ENV)
+    if own_quest is None:
+      raise SummonError(
+        f'broker channel present but {QUEST_ENV} unset; '
+        'the launch did not name the quest this session answers'
+      )
     baseline = _read_value(client, EVENTS, {}, timeout=ACCEPT_TIMEOUT)
     head = baseline.get('head')
     if not isinstance(head, int) or isinstance(head, bool):
@@ -622,7 +652,7 @@ def watch_summons(wait_seconds: float = READ_WAIT_SECONDS) -> Generator[str]:
         if not isinstance(head, int) or isinstance(head, bool):
           raise SummonError('events re-arm returned a malformed head') from error
         cursor = head
-        yield f'summon watch gap: {error}; re-armed at {head}'
+        yield _single_line(f'summon watch gap: {error}; re-armed at {head}')
         continue
       events = value.get('events')
       if not isinstance(events, list) or not all(isinstance(event, dict) for event in events):
@@ -633,7 +663,7 @@ def watch_summons(wait_seconds: float = READ_WAIT_SECONDS) -> Generator[str]:
           raise SummonError('events read returned a malformed sequence')
         cursor = max(cursor, sequence)
         if event.get('kind') == SUMMON:
-          yield _event_line(event)
+          yield _event_line(event, own_quest)
 
 
 def relay_summon(
@@ -762,7 +792,8 @@ def main(argv: list[str]) -> Optional[int]:
   if len(argv) > 1 and argv[1] == 'watch':
     parser = base_args.Parser(
       prog='summon watch',
-      description="stream this session's ordered summon journal transitions. "
+      description="stream the ordered transitions of every summon in this session's subtree "
+      '— its own and the ones its summoned bros make in turn. '
       'Runs until killed; what is already in flight when it starts is the baseline',
     )
     return _watch(**parser.parse(argv[1:]))

@@ -114,6 +114,14 @@ class TestRegister:
     with pytest.raises(ValueError, match='duplicate bro name'):
       register(AlphaBro)
 
+  def test_register_rejects_a_name_over_the_length_bound(self):
+    class LongNameBro(Bro):
+      name = 'x' * (bro.registry.MAX_NAME_LENGTH + 1)
+
+    with pytest.raises(ValueError, match='characters'):
+      register(LongNameBro)
+    assert LongNameBro.name not in _REGISTRY
+
   def test_create_unknown_raises(self):
     with pytest.raises(KeyError, match='unknown bro'):
       create_bro('nonexistent')
@@ -211,6 +219,17 @@ class TestDeclaredSpecs:
       ),
     )
     with pytest.raises(ValueError, match='duplicate bro'):
+      bro.registry.known_names()
+
+  def test_a_declared_name_over_the_length_bound_raises_before_import(self, monkeypatch):
+    monkeypatch.setattr(
+      bro.registry,
+      '_entry_points',
+      lambda: (
+        _entry_point('x' * (bro.registry.MAX_NAME_LENGTH + 1), 'bro.registry_test:ExternalBro'),
+      ),
+    )
+    with pytest.raises(ValueError, match='characters'):
       bro.registry.known_names()
 
   def test_known_names_are_the_declared_names(self, monkeypatch):

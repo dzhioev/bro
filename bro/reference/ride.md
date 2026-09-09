@@ -774,7 +774,8 @@ underneath it are two client surfaces over the same request:
   `summon check --wait <id>` loops bounded `query {id, wait}` reads until terminal;
   concurrent waiters and later reads see the same result.
   `summon list` walks the caller-scoped paginated `query {}` listing and prints retained summon records live-first.
-  `summon watch` arms at the current `events {}` head, long-polls ordered events after its cursor, and prints every summon transition;
+  `summon watch` arms at the current `events {}` head, long-polls ordered events after its cursor, and prints every summon transition in the caller's scope,
+  naming the target and, for a summon a descendant made, the request it was summoned under;
   an event-retention gap prints a notice and re-arms from the current head.
   In a claude session, long summons run via the harness's background Bash;
   `rewind show <trail-id>` peeks mid-run.
