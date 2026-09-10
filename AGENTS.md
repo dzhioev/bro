@@ -74,6 +74,12 @@ Every member builds through uv's own backend, which ships each declared module r
 That module derives the distributions from the root's `members`, so a project shipped from outside the workspace is named to it explicitly;
 `local/` holds the name, next to the gate's other checkout-specific facts
 — the modules a wheel must carry among them.
+A commit subject names its area, then states the change in the imperative, lowercase and without a trailing period: `trails: score the retirement soak by coverage`.
+The area is the subsystem the change lands in
+— a distribution or package directory (`ride:`, `trails:`, `bro/launch:` for a subpackage), the console script or spell it changes (`dive-in:`, `run-pr:`), `docs:` for a documentation-only change, `repo:` for a repository-wide one.
+A body, in prose, carries what the subject cannot: the why, and the shape of the fix where it is not obvious from the diff.
+A `Task:` line linking the task closes the message when the work has one;
+what follows it is the hooks' own.
 Agent commits carry the token-accounting footer automatically
 — the installed `commit-msg` hook appends it whenever the environment carries an agent usage source, and human commits stay footerless (`bro.workflow.commit_footer`);
 an interactive session's commits carry a `Co-Authored-By` trailer for the human it works for beneath it (`bro.workflow.co_author`).
