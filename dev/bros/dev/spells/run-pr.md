@@ -98,8 +98,6 @@ Restore the state that session had, reconcile what happened while nobody watched
 Run in parallel:
 - `git status` — no `-uall` flag (memory issue on large repos).
 - `git diff` — staged and unstaged together.
-- `git log --oneline -10`
-  — to match the repo's commit-message style.
 
 If `git status` is clean and there are no untracked files to add, stop
 — nothing to land.
@@ -152,8 +150,8 @@ If the split isn't obvious, ask the user.
 
 ### 5. Draft each commit message
 
-Match the repo's conventions
-— the recent log (step 1) is the reference, and the repo's docs may spell them out.
+Follow the commit conventions the repo's docs state;
+only where they state none, survey `git log --oneline -10` and match the recent history.
 Then:
 
 - **Task metadata**:
