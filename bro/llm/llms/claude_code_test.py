@@ -81,6 +81,20 @@ class TestPricing:
     with pytest.raises(ValueError, match='does not equal'):
       claude_code.price('claude-opus-5', usage, None)
 
+  def test_a_serialized_price_snapshot_can_be_reconstructed(self):
+    current = claude_code.PRICE_TABLE
+    model = current.models['claude-opus-5']
+    snapshot = claude_code.price_table_from_content(
+      current.source,
+      current.as_of.isoformat(),
+      {'claude-opus-5': model.content()},
+    )
+    usage = {'input_tokens': 1, 'output_tokens': 1}
+
+    assert claude_code.price('claude-opus-5', usage, None, snapshot) == claude_code.price(
+      'claude-opus-5', usage, None, current
+    )
+
   def test_table_metadata_carries_a_stable_content_digest(self):
     assert (
       claude_code.PRICE_TABLE.source == 'https://platform.claude.com/docs/en/about-claude/pricing'

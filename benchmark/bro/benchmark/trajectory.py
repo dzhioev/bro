@@ -2,6 +2,7 @@
 
 import json
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -20,10 +21,9 @@ from harbor.models.trajectories import (
   Trajectory,
 )
 
-from bro.benchmark.harbor_agent import reported_agent_name, reported_agent_version
+from bro.benchmark.harbor_agent import reported_agent_name
 from bro.llm import providers
 from bro.llm.usage import from_vendor_counts
-from bro.trails.cost import UnpricedCallError
 from bro.trails.local import LocalStore
 
 # harbor runs a trial's bro with the trial's `agent/` directory as its data
@@ -80,11 +80,13 @@ def _metrics(
   model: str,
   raw: Any,
   service_tier: str | None,
+  price_tables: Mapping[str, Any],
 ) -> tuple[Metrics, Decimal | None]:
   if not isinstance(raw, dict):
     raise ValueError('llm_call usage must be an object')
   counts = from_vendor_counts(raw)
-  cost = providers.price(provider, model, raw, service_tier)
+  table = price_tables.get(provider)
+  cost = None if table is None else providers.price(provider, model, raw, service_tier, table)
   return (
     Metrics(
       prompt_tokens=counts['input'] + counts['cache_write'] + counts['cache_read'],
@@ -132,6 +134,7 @@ def _agent_step(
   provider: str,
   messages: list[dict[str, Any]],
   tool_results: dict[str, dict[str, Any]],
+  price_tables: Mapping[str, Any],
 ) -> tuple[Step, dict[tuple[int, int], str], dict[str, ObservationResult], Decimal | None]:
   llm_calls = [message for message in messages if message.get('type') == 'llm_call']
   if len(llm_calls) != 1:
@@ -193,7 +196,7 @@ def _agent_step(
   service_tier = llm_call.get('service_tier')
   if service_tier is not None and not isinstance(service_tier, str):
     raise ValueError('llm_call service_tier must be a string or null')
-  metrics, cost = _metrics(provider, model, llm_call.get('usage'), service_tier)
+  metrics, cost = _metrics(provider, model, llm_call.get('usage'), service_tier, price_tables)
   step = Step(
     step_id=step_id,
     timestamp=timestamp,
@@ -210,7 +213,9 @@ def _agent_step(
   return step, calls_by_source, results_by_call, cost
 
 
-def _convert_steps(provider: str, messages: list[dict[str, Any]]) -> _ConvertedSteps:
+def _convert_steps(
+  provider: str, messages: list[dict[str, Any]], price_tables: Mapping[str, Any]
+) -> _ConvertedSteps:
   groups: dict[int, list[dict[str, Any]]] = defaultdict(list)
   tool_results: dict[str, dict[str, Any]] = {}
   for message in messages:
@@ -231,7 +236,7 @@ def _convert_steps(provider: str, messages: list[dict[str, Any]]) -> _ConvertedS
     group = groups[raw_step_id]
     if any(message.get('type') == 'llm_call' for message in group):
       step, group_calls, group_results, cost = _agent_step(
-        len(steps) + 1, provider, group, tool_results
+        len(steps) + 1, provider, group, tool_results, price_tables
       )
       overlapping_calls = set(calls_by_source) & set(group_calls)
       if len(overlapping_calls) > 0:
@@ -266,17 +271,25 @@ def _llm(header: dict[str, Any]) -> tuple[str, str]:
   )
 
 
-def _summoner(header: dict[str, Any]) -> tuple[str, int, int] | None:
+def _summoner(header: dict[str, Any]) -> tuple[str, tuple[int, int] | None] | None:
   pointer = header.get('summoned_by')
   if pointer is None:
     return None
   if not isinstance(pointer, dict):
     raise ValueError('trail header summoned_by must be an object')
   trail_id = _required_string(pointer.get('trail_id'), 'trail header summoned_by.trail_id')
+  raw_step_id = pointer.get('step_id')
+  raw_index = pointer.get('index')
+  if raw_step_id is None:
+    if raw_index is not None:
+      raise ValueError('trail header summoned_by.index requires step_id')
+    return trail_id, None
   return (
     trail_id,
-    _nonnegative_integer(pointer.get('step_id'), 'trail header summoned_by.step_id'),
-    _nonnegative_integer(pointer.get('index'), 'trail header summoned_by.index'),
+    (
+      _nonnegative_integer(raw_step_id, 'trail header summoned_by.step_id'),
+      _nonnegative_integer(raw_index, 'trail header summoned_by.index'),
+    ),
   )
 
 
@@ -286,6 +299,7 @@ def _build_trajectory(
   messages: dict[str, list[dict[str, Any]]],
   children: dict[str, list[str]],
   agent_version: str,
+  price_tables: Mapping[str, Any],
   visiting: set[str],
   visited: set[str],
 ) -> _BuiltTrajectory:
@@ -294,28 +308,39 @@ def _build_trajectory(
   visiting.add(trail_id)
   header = headers[trail_id]
   provider, model = _llm(header)
-  converted = _convert_steps(provider, messages[trail_id])
+  converted = _convert_steps(provider, messages[trail_id], price_tables)
   total_cost = converted.cost_usd
   subagents: list[Trajectory] = []
   for child_id in children.get(trail_id, []):
     pointer = _summoner(headers[child_id])
     assert pointer is not None
-    _, source_step_id, source_index = pointer
-    call_id = converted.calls_by_source.get((source_step_id, source_index))
-    if call_id is None:
-      raise ValueError(
-        f'summoned trail {child_id} points to missing tool call {trail_id}:{source_step_id}:{source_index}'
-      )
-    result = converted.results_by_call.get(call_id)
-    if result is None:
-      raise ValueError(f'summoned trail {child_id} has no tool result for call {call_id}')
+    _, source = pointer
+    result: ObservationResult | None = None
+    if source is not None:
+      call_id = converted.calls_by_source.get(source)
+      if call_id is None:
+        raise ValueError(
+          f'summoned trail {child_id} points to missing tool call '
+          f'{trail_id}:{source[0]}:{source[1]}'
+        )
+      result = converted.results_by_call.get(call_id)
+      if result is None:
+        raise ValueError(f'summoned trail {child_id} has no tool result for call {call_id}')
     child = _build_trajectory(
-      child_id, headers, messages, children, agent_version, visiting, visited
+      child_id,
+      headers,
+      messages,
+      children,
+      agent_version,
+      price_tables,
+      visiting,
+      visited,
     )
-    result.subagent_trajectory_ref = [
-      *(result.subagent_trajectory_ref or []),
-      SubagentTrajectoryRef(trajectory_id=child_id, session_id=child_id),
-    ]
+    if result is not None:
+      result.subagent_trajectory_ref = [
+        *(result.subagent_trajectory_ref or []),
+        SubagentTrajectoryRef(trajectory_id=child_id, session_id=child_id),
+      ]
     if child.cost_usd is None:
       total_cost = None
     elif total_cost is not None:
@@ -340,7 +365,9 @@ def _build_trajectory(
   return _BuiltTrajectory(trajectory, total_cost)
 
 
-def trajectory_from_store(store: LocalStore) -> Trajectory:
+def trajectory_from_store(
+  store: LocalStore, *, agent_version: str, price_tables: Mapping[str, Any]
+) -> Trajectory:
   headers = {
     _required_string(header.get('id'), 'trail header id'): header for header in store.iter_trails()
   }
@@ -355,7 +382,7 @@ def trajectory_from_store(store: LocalStore) -> Trajectory:
     pointer = _summoner(header)
     if pointer is None:
       continue
-    parent_id, _, _ = pointer
+    parent_id, _ = pointer
     if parent_id not in headers:
       raise ValueError(f'summoned trail {trail_id} names missing parent {parent_id}')
     children[parent_id].append(trail_id)
@@ -369,7 +396,8 @@ def trajectory_from_store(store: LocalStore) -> Trajectory:
     headers,
     projected,
     children,
-    reported_agent_version(),
+    agent_version,
+    price_tables,
     set(),
     visited,
   )
@@ -381,53 +409,16 @@ def trajectory_from_store(store: LocalStore) -> Trajectory:
   )
 
 
-def trajectory_cost_usd(trajectory: Trajectory) -> Decimal:
-  """Strictly reprice every recorded LLM call in one ATIF trajectory tree."""
-  total = Decimal(0)
-  for step in trajectory.steps:
-    if step.llm_call_count is None:
-      continue
-    if step.llm_call_count != 1:
-      raise ValueError(
-        f'trajectory step {step.step_id} must represent exactly one LLM call for costing'
-      )
-    if step.metrics is None or not isinstance(step.metrics.extra, dict):
-      raise ValueError(f'trajectory step {step.step_id} has no recorded pricing input')
-    raw_pricing = step.metrics.extra.get('pricing')
-    if not isinstance(raw_pricing, dict):
-      raise ValueError(f'trajectory step {step.step_id} has no recorded pricing input')
-    provider = _required_string(raw_pricing.get('provider'), 'pricing provider')
-    model = _required_string(raw_pricing.get('model'), 'pricing model')
-    usage = raw_pricing.get('usage')
-    if not isinstance(usage, dict):
-      raise ValueError('pricing usage must be an object')
-    service_tier = raw_pricing.get('service_tier')
-    if service_tier is not None and not isinstance(service_tier, str):
-      raise ValueError('pricing service_tier must be a string or null')
-    cost = providers.price(provider, model, usage, service_tier)
-    if cost is None:
-      raise UnpricedCallError(provider, model, service_tier)
-    total += cost
-  for child in trajectory.subagent_trajectories or []:
-    total += trajectory_cost_usd(child)
-  return total
-
-
-def job_trajectory_cost_usd(job_directory: Path) -> Decimal:
-  """Strictly report the total cost of every converted trial in a job."""
-  total = Decimal(0)
-  for path in sorted(job_directory.glob(f'*/agent/{TRAJECTORY_FILENAME}')):
-    trajectory = Trajectory.model_validate_json(path.read_text())
-    total += trajectory_cost_usd(trajectory)
-  return total
-
-
-def convert_trial_trajectory(agent_directory: Path) -> Path:
+def convert_trial_trajectory(
+  agent_directory: Path, *, agent_version: str, price_tables: Mapping[str, Any]
+) -> Path:
   store_root = agent_directory / TRAILS_DIRECTORY
   if not (store_root / 'trails').is_dir():
     raise ValueError(f'trial agent directory holds no trails store: {agent_directory}')
   with LocalStore(store_root) as store:
-    trajectory = trajectory_from_store(cast(LocalStore, store))
+    trajectory = trajectory_from_store(
+      cast(LocalStore, store), agent_version=agent_version, price_tables=price_tables
+    )
   destination = agent_directory / TRAJECTORY_FILENAME
   destination.write_text(trajectory.model_dump_json(indent=2, exclude_none=True) + '\n')
   return destination
@@ -443,7 +434,9 @@ def _recorded_a_trail(store_root: Path) -> bool:
     return next(store.iter_trails(max_items=1), None) is not None
 
 
-def convert_job_trajectories(job_directory: Path) -> list[Path]:
+def convert_job_trajectories(
+  job_directory: Path, *, agent_version: str, price_tables: Mapping[str, Any]
+) -> list[Path]:
   result_path = job_directory / 'result.json'
   if not result_path.is_file():
     raise ValueError(f'job directory holds no result.json: {job_directory}')
@@ -458,5 +451,9 @@ def convert_job_trajectories(job_directory: Path) -> list[Path]:
     agent_directory = trial_directory / 'agent'
     if not _recorded_a_trail(agent_directory / TRAILS_DIRECTORY):
       continue
-    destinations.append(convert_trial_trajectory(agent_directory))
+    destinations.append(
+      convert_trial_trajectory(
+        agent_directory, agent_version=agent_version, price_tables=price_tables
+      )
+    )
   return destinations
