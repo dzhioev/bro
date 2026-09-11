@@ -84,25 +84,6 @@ BRO_STORE=/tmp/empty-bro-store XDG_DATA_HOME=<trial>/agent rewind show <trail-id
 
 On a host that configures no `trails` credential of its own, `XDG_DATA_HOME` alone is enough.
 
-Compare one of the run's agents with the content-pinned native Claude Code leaderboard reference:
-
-```
-uv run --project benchmark bro.benchmark.compare jobs/<job-name> --agent bro:terminal
-```
-
-The report prints every task in the run with both agents' mean reward and trial count and their signed delta,
-and marks differences larger than `--divergence` or tasks missing from the reference.
-Reference tasks outside the run are omitted,
-so a wave report stays scoped to that wave.
-It closes with task coverage, matching trial totals, task-mean rollups, and divergence counts.
-Use `--reference <submission-json-path-or-url>` to select another Terminal-Bench 2.1 leaderboard submission.
-The first fetch reads its `source_jobs` from the submission,
-filters the Hub rows by the submission's exact agent, version, model, dataset, and materialized trial IDs,
-and honors its disqualifications as reward zero.
-Harbor currently requires `harbor auth login` or `HARBOR_API_KEY` to read those public rows.
-Later reports use the exact cached submission and Hub rows from `references/` beside a local job,
-unless `--refresh-reference` is set.
-
 Managed sessions carry no docker socket;
 from inside one, start the job through the session broker instead:
 
@@ -149,6 +130,51 @@ The format 3 marker records:
 
 The files under each trial remain Harbor's raw output, including its local trail store at `<trial>/agent/ride/trails/`.
 Trajectories are produced only by publication and are not part of a raw run.
+
+## Querying retained runs
+
+`benchmark query` loads DuckDB's `httpfs` and `aws` extensions and reads every complete format 3 marker directly from S3:
+
+```
+uv run --project benchmark benchmark query 'SELECT * FROM runs ORDER BY started_at DESC'
+uv run --project benchmark benchmark query --file report.sql
+uv run --project benchmark benchmark query
+```
+
+The last form opens an interactive DuckDB SQL shell over the same views.
+The extensions are fetched on first use, so that first query needs network access.
+A managed session needs both `aws` and `benchmark_retention` granted at launch, the same as retention.
+
+The `runs` view has one row per retained marker with its job times and retries, config, bundle source commit and revision, dataset, score and roster digests, total cost, and manifest key.
+The `trials` view expands each marker's trial rows and joins those run dimensions to their agent dimensions, rewards, error, times, trail identity, token counts, and cost.
+Its `store_prefix` is the trial's retained local-store prefix.
+
+This query compares two source commits per task and scores an errored trial as zero:
+
+```sql
+WITH scores AS (
+  SELECT
+    task,
+    avg(coalesce(reward, 0)) FILTER (WHERE source_commit = '<baseline-commit>')
+      AS baseline_mean,
+    avg(coalesce(reward, 0)) FILTER (WHERE source_commit = '<candidate-commit>')
+      AS candidate_mean
+  FROM trials
+  WHERE source_commit IN ('<baseline-commit>', '<candidate-commit>')
+  GROUP BY task
+)
+SELECT task, baseline_mean, candidate_mean, candidate_mean - baseline_mean AS delta
+FROM scores
+ORDER BY task;
+```
+
+To inspect one retained trail, first select its `store_prefix` and `root_trail_id`, then sync that prefix into the local-store layout and point `rewind` at its data home:
+
+```
+aws s3 sync s3://<retention-bucket>/<store-prefix> /tmp/benchmark-trial/agent/ride/trails
+mkdir -p /tmp/empty-bro-store
+BRO_STORE=/tmp/empty-bro-store XDG_DATA_HOME=/tmp/benchmark-trial/agent rewind show <root-trail-id>
+```
 
 ## Publishing a retained run
 
