@@ -43,6 +43,7 @@ REFERENCE_SOURCES: Mapping[str, str] = {
   )
 }
 _DIGEST_PATTERN = re.compile(r'sha256:[0-9a-f]{64}')
+_LEGACY_RETENTION_FORMAT = 2
 
 
 class ComparisonError(RuntimeError):
@@ -306,9 +307,15 @@ def _s3_run(
   if not manifest_keys:
     raise ComparisonError(f'{location} contains no complete retained runs')
   manifests = [
-    (key, _read_json_object(_s3_bytes(client, bucket, key), f's3://{bucket}/{key}'))
+    (key, manifest)
     for key in manifest_keys
+    if (manifest := _read_json_object(_s3_bytes(client, bucket, key), f's3://{bucket}/{key}')).get(
+      'format'
+    )
+    == _LEGACY_RETENTION_FORMAT
   ]
+  if len(manifests) == 0:
+    raise ComparisonError(f'{location} contains no legacy retained runs')
   selected = _selected_manifests(manifests, score_config_sha256, roster_sha256)
   trials: list[TrialReward] = []
   for manifest_key, manifest in selected:

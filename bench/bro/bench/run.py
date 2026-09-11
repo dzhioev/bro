@@ -60,7 +60,7 @@ def build_bundle(tree: Path) -> None:
   rather than whatever an older build left in the tree."""
   log.info('building the bundle the trials run from')
   subprocess.run(
-    ['uv', 'run', '--project', str(tree / 'benchmark'), 'benchmark-bundle'], cwd=tree, check=True
+    ['uv', 'run', '--project', str(tree / 'benchmark'), 'benchmark', 'bundle'], cwd=tree, check=True
   )
 
 
