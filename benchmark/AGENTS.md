@@ -47,8 +47,8 @@ BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_
 
 ## Components
 
-- `bro/benchmark/cli.py` (`benchmark`) — owns every post-run verb;
-  it currently dispatches `bundle`, `retain`, `publish`, and `query`, with trail import joining later
+- `bro/benchmark/cli.py` (`benchmark`) — owns every post-run verb:
+  `bundle`, `retain`, `publish`, `query`, and `import-trails`
 - `bro/benchmark/bundle.py` (`benchmark bundle`) — builds the relocatable directory a foreign container runs `bro` from:
   a pinned standalone CPython, the dependencies `WHEEL_PACKAGES` resolves to against the workspace lock, those distributions themselves entering as built wheels, and a shim setting `PYTHONPATH` over them.
   Its manifest records those inputs and gives the bundle a content-derived identity.
@@ -77,11 +77,14 @@ BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_
 - `bro/benchmark/job.py` (`bro.benchmark.job`) — runs Harbor against a known concrete job directory and copies the built bundle's manifest into that raw result
 - `bro/benchmark/retention.py` (`benchmark retain`) — resolves one raw job from an artifact ref or local path.
   It derives format 3 trial rows from Harbor records and local trail stores.
-  It copies the snapshotted files under the flat date/job key with conditional checksummed puts and the manifest last
+  It copies the snapshotted files under the flat date/job key with conditional checksummed puts and the manifest last.
+  It also owns the reads of a retained run the later verbs share:
+  the prefix shape, the manifest, its file list, and the verified download
 - `bro/benchmark/publication.py` (`benchmark publish`) — verifies and downloads a retained run into scratch.
   It derives Harbor trajectories and result costs from the manifest's captured rates.
   It uploads with the scoped Harbor credential and appends an immutable publication record
 - `bro/benchmark/query.py` (`benchmark query`) — loads DuckDB's S3 extensions and credential-chain secret,
   then defines typed `runs` and `trials` views over the format 3 retention markers for inline, file, or interactive SQL
+- `bro/benchmark/import_trails.py` (`benchmark import-trails`) — downloads each trial's retained trail store from the manifest's file list and imports it whole, parents first, into the configured trails store
 - `bro/benchmark/terminal_bench_2_1.yaml` — the pinned harbor job config, and with the bundle the
   whole of what a score depends on

@@ -109,7 +109,7 @@ def test_a_tampered_retained_file_is_refused_before_upload(monkeypatch, tmp_path
     lambda *args: pytest.fail('tampered input must not reach Harbor'),
   )
 
-  with pytest.raises(publication.PublicationError, match='size differs'):
+  with pytest.raises(retention.RetentionError, match='size differs'):
     publication.publish_run(retained.prefix, 'public')
 
 
@@ -138,4 +138,4 @@ def test_an_upload_failure_writes_no_publication_record(monkeypatch, tmp_path):
 )
 def test_a_run_prefix_has_one_strict_shape(prefix):
   with pytest.raises(ValueError, match='run prefix'):
-    publication._run_prefix(prefix)
+    retention.run_prefix(prefix)

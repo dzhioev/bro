@@ -192,6 +192,21 @@ The raw retained files and `retention.json` never change.
 After a successful upload, an immutable `publications/<published-at>.json` beside the manifest records the visibility, Hub URL, and publication time.
 The command prints that Hub URL and the S3 URL of the publication record.
 
+## Importing a run's trails
+
+`benchmark import-trails` copies every trail the run's trials recorded into the trails registry, so they read from the configured store like any other trail:
+
+```
+uv run --project benchmark benchmark import-trails runs/<date>/<job-id>
+```
+
+A managed session running it needs `aws`, `benchmark_retention`, and `trails` with the administer permission granted at launch.
+Each trial's store is downloaded and verified against the manifest, then imported whole, parents first, under the trail ids the run recorded;
+a trial that recorded no trail is skipped.
+The import restarts safely:
+a trail the registry already holds identically answers as success, and a different trail under the same id is refused.
+The command prints each trial with the trail ids it imported.
+
 Following a run as it happens means reading the log where
 it is being written:
 `docker exec <task-container> tail -f /logs/agent/bro.log`.
