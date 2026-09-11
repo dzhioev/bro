@@ -21,8 +21,9 @@ from harbor.models.trajectories import (
 )
 
 from bro.benchmark.harbor_agent import reported_agent_name, reported_agent_version
-from bro.benchmark.pricing import call_cost_usd, optional_call_cost_usd
-from bro.llm.usage import Counts, from_vendor_counts
+from bro.llm import providers
+from bro.llm.usage import from_vendor_counts
+from bro.trails.cost import UnpricedCallError
 from bro.trails.local import LocalStore
 
 # harbor runs a trial's bro with the trial's `agent/` directory as its data
@@ -74,18 +75,31 @@ def _content(value: Any) -> str | None:
   return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
-def _metrics(model: str, raw: Any) -> tuple[Metrics, Decimal | None]:
+def _metrics(
+  provider: str,
+  model: str,
+  raw: Any,
+  service_tier: str | None,
+) -> tuple[Metrics, Decimal | None]:
   if not isinstance(raw, dict):
     raise ValueError('llm_call usage must be an object')
   counts = from_vendor_counts(raw)
-  cost = optional_call_cost_usd(model, counts)
+  cost = providers.price(provider, model, raw, service_tier)
   return (
     Metrics(
       prompt_tokens=counts['input'] + counts['cache_write'] + counts['cache_read'],
       completion_tokens=counts['output'],
       cached_tokens=counts['cache_read'],
       cost_usd=None if cost is None else float(cost),
-      extra={'usage': counts},
+      extra={
+        'usage': counts,
+        'pricing': {
+          'provider': provider,
+          'model': model,
+          'usage': raw,
+          'service_tier': service_tier,
+        },
+      },
     ),
     cost,
   )
@@ -115,7 +129,7 @@ def _standalone_step(step_id: int, message: dict[str, Any]) -> Step:
 
 def _agent_step(
   step_id: int,
-  model: str,
+  provider: str,
   messages: list[dict[str, Any]],
   tool_results: dict[str, dict[str, Any]],
 ) -> tuple[Step, dict[tuple[int, int], str], dict[str, ObservationResult], Decimal | None]:
@@ -175,7 +189,11 @@ def _agent_step(
   timestamp = llm_call.get('ts')
   if timestamp is not None and not isinstance(timestamp, str):
     raise ValueError('llm_call ts must be a string or null')
-  metrics, cost = _metrics(model, llm_call.get('usage'))
+  model = _required_string(llm_call.get('model'), 'llm_call model')
+  service_tier = llm_call.get('service_tier')
+  if service_tier is not None and not isinstance(service_tier, str):
+    raise ValueError('llm_call service_tier must be a string or null')
+  metrics, cost = _metrics(provider, model, llm_call.get('usage'), service_tier)
   step = Step(
     step_id=step_id,
     timestamp=timestamp,
@@ -192,7 +210,7 @@ def _agent_step(
   return step, calls_by_source, results_by_call, cost
 
 
-def _convert_steps(model: str, messages: list[dict[str, Any]]) -> _ConvertedSteps:
+def _convert_steps(provider: str, messages: list[dict[str, Any]]) -> _ConvertedSteps:
   groups: dict[int, list[dict[str, Any]]] = defaultdict(list)
   tool_results: dict[str, dict[str, Any]] = {}
   for message in messages:
@@ -213,7 +231,7 @@ def _convert_steps(model: str, messages: list[dict[str, Any]]) -> _ConvertedStep
     group = groups[raw_step_id]
     if any(message.get('type') == 'llm_call' for message in group):
       step, group_calls, group_results, cost = _agent_step(
-        len(steps) + 1, model, group, tool_results
+        len(steps) + 1, provider, group, tool_results
       )
       overlapping_calls = set(calls_by_source) & set(group_calls)
       if len(overlapping_calls) > 0:
@@ -235,14 +253,17 @@ def _convert_steps(model: str, messages: list[dict[str, Any]]) -> _ConvertedStep
   return _ConvertedSteps(steps, calls_by_source, results_by_call, total_cost)
 
 
-def _model_name(header: dict[str, Any]) -> str:
+def _llm(header: dict[str, Any]) -> tuple[str, str]:
   native = header.get('native')
   if not isinstance(native, dict):
     raise ValueError('trail header native must be an object')
   llm = native.get('llm')
   if not isinstance(llm, dict):
     raise ValueError('trail header native.llm must be an object')
-  return _required_string(llm.get('model'), 'trail header native.llm.model')
+  return (
+    _required_string(llm.get('type'), 'trail header native.llm.type'),
+    _required_string(llm.get('model'), 'trail header native.llm.model'),
+  )
 
 
 def _summoner(header: dict[str, Any]) -> tuple[str, int, int] | None:
@@ -272,8 +293,8 @@ def _build_trajectory(
     raise ValueError(f'summoned trail cycle reaches {trail_id}')
   visiting.add(trail_id)
   header = headers[trail_id]
-  model = _model_name(header)
-  converted = _convert_steps(model, messages[trail_id])
+  provider, model = _llm(header)
+  converted = _convert_steps(provider, messages[trail_id])
   total_cost = converted.cost_usd
   subagents: list[Trajectory] = []
   for child_id in children.get(trail_id, []):
@@ -362,7 +383,6 @@ def trajectory_from_store(store: LocalStore) -> Trajectory:
 
 def trajectory_cost_usd(trajectory: Trajectory) -> Decimal:
   """Strictly reprice every recorded LLM call in one ATIF trajectory tree."""
-  model = _required_string(trajectory.agent.model_name, 'trajectory agent.model_name')
   total = Decimal(0)
   for step in trajectory.steps:
     if step.llm_call_count is None:
@@ -372,11 +392,22 @@ def trajectory_cost_usd(trajectory: Trajectory) -> Decimal:
         f'trajectory step {step.step_id} must represent exactly one LLM call for costing'
       )
     if step.metrics is None or not isinstance(step.metrics.extra, dict):
-      raise ValueError(f'trajectory step {step.step_id} has no recorded billed-class usage')
-    usage = step.metrics.extra.get('usage')
+      raise ValueError(f'trajectory step {step.step_id} has no recorded pricing input')
+    raw_pricing = step.metrics.extra.get('pricing')
+    if not isinstance(raw_pricing, dict):
+      raise ValueError(f'trajectory step {step.step_id} has no recorded pricing input')
+    provider = _required_string(raw_pricing.get('provider'), 'pricing provider')
+    model = _required_string(raw_pricing.get('model'), 'pricing model')
+    usage = raw_pricing.get('usage')
     if not isinstance(usage, dict):
-      raise ValueError(f'trajectory step {step.step_id} has no recorded billed-class usage')
-    total += call_cost_usd(model, cast(Counts, usage))
+      raise ValueError('pricing usage must be an object')
+    service_tier = raw_pricing.get('service_tier')
+    if service_tier is not None and not isinstance(service_tier, str):
+      raise ValueError('pricing service_tier must be a string or null')
+    cost = providers.price(provider, model, usage, service_tier)
+    if cost is None:
+      raise UnpricedCallError(provider, model, service_tier)
+    total += cost
   for child in trajectory.subagent_trajectories or []:
     total += trajectory_cost_usd(child)
   return total

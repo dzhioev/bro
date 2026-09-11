@@ -1,5 +1,10 @@
+import dataclasses
+import re
 import subprocess
 import sys
+import warnings
+from datetime import date
+from decimal import Decimal
 from typing import get_args
 
 import pytest
@@ -8,6 +13,7 @@ import bro.llm.llm as llm_module
 import bro.llm.llms.openai as openai_llm
 from bro.base.source_root import SOURCE_ROOT
 from bro.llm.llms.openai import LLMSpec
+from bro.llm.pricing import StalePriceTableWarning
 
 
 class TestLLMSpec:
@@ -154,3 +160,86 @@ class TestLLMSpec:
       [sys.executable, '-c', script], capture_output=True, text=True, cwd=SOURCE_ROOT.parent
     )
     assert result.returncode == 0, f'stderr: {result.stderr}'
+
+
+class TestPricing:
+  def test_published_standard_and_priority_rates_price_raw_usage(self):
+    usage = {
+      'input_tokens': 10,
+      'input_tokens_details': {'cached_tokens': 3, 'cache_write_tokens': 2},
+      'output_tokens': 4,
+    }
+
+    assert openai_llm.price('gpt-5.6-terra', usage, 'default') == Decimal('0.0000636')
+    assert openai_llm.price('gpt-5.6-terra', usage, 'priority') == Decimal('0.0001272')
+
+  def test_published_long_context_rates_start_above_272k(self):
+    assert openai_llm.price(
+      'gpt-5.6-terra', {'input_tokens': 272_000, 'output_tokens': 0}, None
+    ) == Decimal('0.544')
+    assert openai_llm.price(
+      'gpt-5.6-terra', {'input_tokens': 272_001, 'output_tokens': 0}, None
+    ) == Decimal('1.088004')
+
+  def test_an_unknown_model_or_unpriced_tier_is_not_treated_as_free(self):
+    usage = {'input_tokens': 1, 'output_tokens': 1}
+    assert openai_llm.price('unknown', usage, None) is None
+    assert openai_llm.price('gpt-5.6-terra', usage, 'flex') is None
+
+  @pytest.mark.parametrize(
+    'usage',
+    [
+      {'input_tokens': -1, 'output_tokens': 0},
+      {'input_tokens': True, 'output_tokens': 0},
+      {'input_tokens': 1, 'output_tokens': 1.5},
+      {
+        'input_tokens': 1,
+        'input_tokens_details': {'cached_tokens': 2},
+        'output_tokens': 0,
+      },
+    ],
+  )
+  def test_malformed_usage_is_rejected(self, usage):
+    with pytest.raises(ValueError):
+      openai_llm.price('gpt-5.6-terra', usage, None)
+
+  def test_a_caller_can_supply_a_price_table(self):
+    current_model = openai_llm.PRICE_TABLE.models['gpt-5.6-terra']
+    current_standard = current_model.service_tiers['standard']
+    custom_standard = dataclasses.replace(
+      current_standard,
+      short=dataclasses.replace(
+        current_standard.short,
+        input=Decimal('100.00'),
+      ),
+    )
+    custom_model = dataclasses.replace(
+      current_model,
+      service_tiers={**current_model.service_tiers, 'standard': custom_standard},
+    )
+    custom_table = dataclasses.replace(
+      openai_llm.PRICE_TABLE,
+      models={'gpt-5.6-terra': custom_model},
+    )
+
+    assert openai_llm.price(
+      'gpt-5.6-terra', {'input_tokens': 1, 'output_tokens': 0}, None, custom_table
+    ) == Decimal('0.0001')
+
+  def test_table_metadata_carries_a_stable_content_digest(self):
+    assert openai_llm.PRICE_TABLE.source == 'https://developers.openai.com/api/docs/pricing'
+    assert isinstance(openai_llm.PRICE_TABLE.as_of, date)
+    assert openai_llm.PRICE_TABLE.as_of <= date.today()
+    assert openai_llm.PRICE_TABLE_SHA256 == openai_llm.PRICE_TABLE.sha256
+    assert re.fullmatch(r'[0-9a-f]{64}', openai_llm.PRICE_TABLE_SHA256)
+
+  def test_a_stale_table_warns_only_once_for_its_provider_and_date(self):
+    stale = dataclasses.replace(openai_llm.PRICE_TABLE, as_of=date(2020, 1, 2))
+    usage = {'input_tokens': 1, 'output_tokens': 0}
+
+    with pytest.warns(StalePriceTableWarning, match='openai.*2020-01-02'):
+      openai_llm.price('gpt-5.6-terra', usage, None, stale)
+    with warnings.catch_warnings(record=True) as caught:
+      warnings.simplefilter('always')
+      openai_llm.price('gpt-5.6-terra', usage, None, stale)
+    assert caught == []
