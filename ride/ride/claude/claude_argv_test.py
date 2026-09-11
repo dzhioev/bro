@@ -113,6 +113,30 @@ class TestRideSessionLaunch:
       'summon watch',
     ]
 
+  def test_a_summoning_session_gets_the_summon_watch_over_a_blocked_shell(self, monkeypatch):
+    from bro.bro import BaseBro
+    from bro.harness import claude
+    from bro.summon import MAY_SUMMON_ENV, encode_may_summon
+
+    class BlockingBro(BaseBro):
+      name = 'blocking'
+      description = 'd'
+      tools: ClassVar = [claude.block(*claude.SHELL)]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: BlockingBro())
+    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    argv = _ride_session_launch(_spec(bro='blocking'), claude_args=[]).argv
+    disallowed = argv[argv.index('--disallowed-tools') + 1].split(',')
+    assert 'Bash' in disallowed
+    assert 'Monitor' not in disallowed
+    (entry,) = _settings(argv)['hooks']['PreToolUse']
+    assert entry['matcher'] == 'Monitor'
+    (hook,) = entry['hooks']
+    assert shlex.split(hook['command'])[-1] == claude.SUMMON_WATCH
+
   def test_no_narrowing_declares_no_hooks(self):
     assert 'hooks' not in _settings(_ride_session_launch(_spec(), claude_args=[]).argv)
 

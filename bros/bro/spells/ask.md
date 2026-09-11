@@ -12,7 +12,7 @@ A summon succeeds only when the target is in the summoner's allow-list
 — the session reads its own off the banner, fixed at launch
 — so a denial stays a normal outcome the spell relays.
 
-version: 1.13.0
+version: 1.14.0
 ---
 
 # Ask
@@ -97,7 +97,7 @@ Size the timeout in hours (e.g. 28800), not minutes.
 ## Pick the client
 
 Prefer Bash where the session has it:
-its background run ends in a harness completion notification that wakes you, while a detached tool summon has no wake-up at all and leaves the session dark until someone prompts it.
+its background run ends in a harness completion notification that wakes you, while a detached tool summon ends {{iff #harness = claude}}on the summon watch alone{{else}}with no wake-up at all, leaving the session dark until someone prompts it{{end}}.
 The mechanism is the same either way:
 
 - **Bash available** (a managed Claude session):

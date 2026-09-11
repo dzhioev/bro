@@ -50,18 +50,23 @@ def session_fragment(
   creds: Optional['Iterable[str]'] = None,
 ) -> str:
   """the per-session prompt text a launch surface appends after the composed
-  prompt: the summoned-delivery contract when this run owes a summoner an
-  answer, then the hold fragment last, where instruction recency is strongest.
+  prompt: the summoner's watch when this run may summon, the summoned-delivery
+  contract when it owes a summoner an answer, then the hold fragment last,
+  where instruction recency is strongest.
   """
   from bro import mcp, summon
 
-  fragment = hold_fragment(hold, harness=harness, wire=wire, creds=creds)
-  if not summon.summoned():
-    return fragment
-  contract = mcp.render_text(
-    get_prompt('summoned.md'), harness=harness, wire=wire, creds=creds
-  ).strip()
-  return f'{contract}\n\n{fragment}'
+  contracts = []
+  if len(summon.effective_may_summon()) > 0:
+    contracts.append('summoner.md')
+  if summon.summoned():
+    contracts.append('summoned.md')
+  parts = [
+    mcp.render_text(get_prompt(name), harness=harness, wire=wire, creds=creds).strip()
+    for name in contracts
+  ]
+  parts.append(hold_fragment(hold, harness=harness, wire=wire, creds=creds))
+  return '\n\n'.join(part for part in parts if len(part) > 0)
 
 
 def hold_fragment(

@@ -25,6 +25,7 @@ from bro.base.condition import (
 from bro.base.offload import off_loop
 from bro.datasources.base import DataSource
 from bro.datasources.man import ManPage, manual
+from bro.harness import claude
 from bro.llm.llm import EFFORT_LEVELS, NativeLLMSpec
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
@@ -586,7 +587,9 @@ class _ToolSelection:
   narrowed_tool_commands: dict[str, tuple[str, ...]]
 
 
-def _fold_tool_layers(layers: list[mcp.ToolLayer], harness: mcp.Harness) -> _ToolSelection:
+def _fold_tool_layers(
+  layers: list[mcp.ToolLayer], harness: mcp.Harness, *, may_summon: tuple[str, ...]
+) -> _ToolSelection:
   server_specs: list[mcp.MCPServerSpec] = []
   blocked_names: list[str] = []
   narrowed: dict[str, list[str]] = {}
@@ -618,6 +621,8 @@ def _fold_tool_layers(layers: list[mcp.ToolLayer], harness: mcp.Harness) -> _Too
         'nothing where the bro does not withhold it'
       )
     del blocked[name]
+  if harness == 'claude' and len(may_summon) > 0:
+    claude.admit_summon_watch(blocked, narrowed)
   return _ToolSelection(
     server_specs=server_specs,
     blocked_tool_names=tuple(blocked),
@@ -876,7 +881,9 @@ class BaseBro(ABC):
     selected_tools = mcp.select(
       tool_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
     )
-    self._mcp_specs = _fold_tool_layers(selected_tools, 'bro').server_specs
+    self._mcp_specs = _fold_tool_layers(
+      selected_tools, 'bro', may_summon=summon.effective_may_summon()
+    ).server_specs
     self._data_sources: list[DataSource] = _fold_man_pages(
       mcp.select(
         data_source_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
@@ -999,7 +1006,7 @@ class BaseBro(ABC):
       creds=credentials.known_names(),
       extra=self._feature_vocabulary,
     )
-    return _fold_tool_layers(selected, harness)
+    return _fold_tool_layers(selected, harness, may_summon=summon.effective_may_summon())
 
   def blocked_tool_names(self, harness: mcp.Harness) -> tuple[str, ...]:
     """harness-native tool names blocked by this bro's selected layers."""

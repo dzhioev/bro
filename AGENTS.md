@@ -358,6 +358,8 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   `claude.py` holds Claude Code's tool names in capability groups (`FILES`, `SHELL`, `DELEGATION`) plus `claude.block(*names)` and `claude.watch(*commands)`
   — the `block(...)` layer and an `allow_commands(...)` + `serve(...)` pair, already conditioned on the claude harness;
   the second narrows `Monitor` to the commands a persona declares and hands back the task control over what those watches start, so it holds the harness's push channel without its shell.
+  `summon watch` needs no declaring:
+  for a run that may summon, the fold admits it through `Monitor` over any block or narrowing of that tool (`claude.admit_summon_watch`), since the session fragment tells such a run to keep it armed.
   A persona names another product's tool surface when it withholds or narrows one, so the names live here rather than in each persona that forgoes them
 - `registry.py` — process-wide registry of bro classes:
   `register(cls)`, `get_class(name)`, `create_bro(name, llm_spec=None)`, `list_classes()`, `known_names()` (every resolvable name, read without importing any bro module — what `ride/ride/summon_control.py` validates summon targets against).
@@ -423,7 +425,7 @@ add tool sources as class attributes too:
 - `tools = [when(harness == 'claude', block('Read', 'Write'))]` removes harness-native tools.
   One block may group several related names;
   it must be gated away from `harness == 'bro'`, whose native and raw-Claude surfaces expose only the declared tools, or construction raises.
-  `tools = [when(harness == 'claude', allow_commands('Monitor', 'summon watch'))]` hands one of those tools back narrowed to the commands it names, and `serve('TaskStop')` hands one back whole where there is no command line to narrow on;
+  `tools = [when(harness == 'claude', allow_commands('Monitor', 'journalctl -f'))]` hands one of those tools back narrowed to the commands it names, and `serve('TaskStop')` hands one back whole where there is no command line to narrow on;
   either way the tool must be blocked too, since handing back bounds nothing a bro does not otherwise withhold.
   Import `block`, `allow_commands`, `serve`, `harness`, and `mount` from `bro.mcp`.
 - Roster-based servers export a `bro.mcp.Toolset` conventionally named `toolset`
