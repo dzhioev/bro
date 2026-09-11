@@ -65,6 +65,30 @@ def test_scripts_use_shared_deployment_and_monitoring_assets():
   assert '"$(bro-oops-dir)/monitor_ecs.sh"' in (_SERVER / 'verify.sh').read_text()
 
 
+def test_deployment_config_resolves_the_infra_credential(tmp_path):
+  store = tmp_path / 'store'
+  (store / 'creds').mkdir(parents=True)
+  (store / 'creds.json').write_text('{}\n')
+  (store / 'creds' / 'infra.cred').write_text(
+    json.dumps({'delegated_subdomain': 'services.example.com'}) + '\n'
+  )
+  result = subprocess.run(
+    [
+      'bash',
+      '-c',
+      'source "$1"; load_trails_deployment_config; printf "%s\\n" "$TRAILS_URL"',
+      'bash',
+      str(_SERVER / 'deployment_config.sh'),
+    ],
+    capture_output=True,
+    text=True,
+    env={**os.environ, 'BRO_STORE': str(store)},
+  )
+
+  assert result.returncode == 0, result.stderr
+  assert result.stdout == 'https://trails.services.example.com\n'
+
+
 def _run_trails_scripts(tmp_path: Path, *names: str) -> list[list[str]]:
   """drive the named server scripts against a stubbed config and deployment library,
   returning every recorded `cdk_deploy` and `cdk_diff` call as its split argument line."""

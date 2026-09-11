@@ -70,6 +70,7 @@ The project names its connection through the source's `Auth` block rather than t
 Its DynamoDB table, key, and index declarations come from `bro.trails.server.dynamo`.
 
 The repository app is `deployment/app.py`, and `trails/server/deploy.sh` deploys its stacks in dependency order.
+A managed session running the trails rollout scripts needs `infra` granted at launch.
 `trails/server/bootstrap.sh` creates the runtime token parameter, `run_local.sh` serves a local store, `verify_image.sh` smoke-tests the image, and `verify.sh` monitors the ECS rollout before probing health.
 `plan.sh` diffs the stack roster `deployment_config.sh` declares
 — the one `deploy.sh` rolls, in the two groups the image build sits between.
