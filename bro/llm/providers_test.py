@@ -148,5 +148,8 @@ class TestPricing:
       'default',
     ) == Decimal('0.000014')
 
+  def test_price_tables_reach_the_provider_declaration(self):
+    assert providers.price_table('openai') is openai_llm.PRICE_TABLE
+
   def test_echo_has_no_billable_calls(self):
     assert providers.price('echo', 'echo', {}, None) is None

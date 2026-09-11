@@ -14,14 +14,13 @@ uv sync --directory benchmark --all-groups
 
 ## The bundle
 
-A benchmark task runs in a foreign image that must not be modified, and several carry no Python at
-all, so the agent brings its own.
-`benchmark-bundle` builds a relocatable directory holding a pinned
-standalone CPython, the framework distributions a bro runs from — `bro`, `bro-native` and `bro-dev`
+A benchmark task runs in a foreign image that must not be modified,
+and several carry no Python at all, so the agent brings its own.
+`benchmark bundle` builds a relocatable directory holding a pinned standalone CPython, the framework distributions a bro runs from — `bro`, `bro-native` and `bro-dev`
 — resolved from the framework's lock, and a `bro` shim over them:
 
 ```
-uv run --project benchmark benchmark-bundle
+uv run --project benchmark benchmark bundle
 ```
 
 It lands in `var/benchmark/bundle` unless `--output` says otherwise.
@@ -46,7 +45,7 @@ this repository needs — install it before the first run.
 Build the bundle once, then start Harbor:
 
 ```
-uv run --project benchmark benchmark-bundle
+uv run --project benchmark benchmark bundle
 uv run --project benchmark bro.benchmark.job -c benchmark/bro/benchmark/terminal_bench_2_1.yaml
 ```
 
@@ -104,17 +103,6 @@ Harbor currently requires `harbor auth login` or `HARBOR_API_KEY` to read those 
 Later reports use the exact cached submission and Hub rows from `references/` beside a local job,
 unless `--refresh-reference` is set.
 
-A retention bucket is also a run input:
-
-```
-uv run --project benchmark bro.benchmark.compare s3://<bucket> --agent bro:terminal \
-  --score-config-sha256 sha256:<digest> --roster-sha256 sha256:<digest>
-```
-
-The command lists complete runs by their `runs/**/retention.json` markers and aggregates all runs in the selected cohort.
-The digest flags can be omitted when the bucket contains only one cohort.
-Reference records for this form are cached under the bucket's `references/` prefix.
-
 Managed sessions carry no docker socket;
 from inside one, start the job through the session broker instead:
 
@@ -127,7 +115,40 @@ The host runs `bro.benchmark.job` with its own Docker access through the `benchm
 `start` and `check` print the artifact ref of the raw run;
 `artifact get <ref>` makes it readable, with the whole `<jobs_dir>` under `output/` beside `stdout`, `stderr`, and `status.json`.
 `benchmark-run` builds and starts the same raw run, then prints `results <path>  artifact <ref>` before its short report.
-The artifact store dies with the session, so pass its ref to the separate retention workflow before the session ends when the run must become durable.
+The artifact store dies with the session, so retain its ref before the session ends when the run must become durable.
+
+## Retaining a run
+
+`benchmark retain` takes either the artifact ref printed by `benchmark-run` or a local Harbor job directory:
+
+```
+uv run --project benchmark benchmark retain sha256:<artifact-digest>
+uv run --project benchmark benchmark retain jobs/<job-name>
+```
+
+A managed session running it needs both `aws` and `benchmark_retention` granted at launch.
+The retention credential is a JSON object with `bucket` and `region` fields;
+the AWS credential supplies the S3 identity.
+
+Retention snapshots the source once and copies every raw job file without changing the artifact or local directory.
+The immutable key is `runs/<started-at UTC date>/<Harbor job UUID>/`.
+Every object put is conditional on absence and carries its SHA-256 checksum.
+A restart skips an already-written object only when its stored checksum matches, while any collision is refused.
+`retention.json` is written last as the completion marker, and an existing marker refuses a second retain of that job.
+
+The format 3 marker records:
+
+- `job`: `id`, `started_at`, `finished_at`, and Harbor's `n_retries`
+- `config`, `score_config_sha256`, and `roster_sha256`: the resolved job config and its score and roster identities
+- `dataset`: the one `name` and `ref` shared by the trials
+- `bundle`: `source_commit` and the content-derived `framework_revision`
+- `pricing`: each provider table's `as_of`, `source`, `sha256`, and vendor-vocabulary `rates` for the models it priced
+- `total_cost_usd`: null when any trial could not be priced
+- `trials`: one row per trial directory with `trial`, `task`, `harness`, `bro`, `model`, `llm`, `rewards`, `reward`, `error`, `started_at`, `finished_at`, `root_trail_id`, `llm_calls`, `tokens`, and `cost_usd`
+- `files`: the copied files as ordered `path`, `sha256`, and `size` rows
+
+The files under each trial remain Harbor's raw output, including its local trail store at `<trial>/agent/ride/trails/`.
+Trajectories are produced only by the later publication workflow and are not part of a raw run.
 
 Following a run as it happens means reading the log where
 it is being written:

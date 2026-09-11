@@ -277,6 +277,28 @@ def test_retained_runs_in_one_cohort_are_aggregated_and_share_an_s3_reference_ca
   assert s3.puts == [('references/reference-id.json', b'cached\n')]
 
 
+def test_format_three_runs_are_left_to_the_query_surface(monkeypatch):
+  first = _trial_result('23456781-2345-6781-2345-678123456781', 'task-a', 1)
+  objects = _retained_objects('runs/2026-08-24/legacy', first)
+  current = _retained_objects('runs/2026-08-25/current', first)
+  manifest_key = 'runs/2026-08-25/current/retention.json'
+  manifest = json.loads(current[manifest_key])
+  manifest['format'] = 3
+  manifest['files'] = []
+  current[manifest_key] = json.dumps(manifest).encode()
+  objects.update(current)
+  s3 = FakeS3(objects)
+  monkeypatch.setattr(
+    compare.boto3,
+    'Session',
+    lambda region_name: SimpleNamespace(client=lambda service: s3),
+  )
+
+  run = compare.load_run('s3://benchmark-runs')
+
+  assert run.run_count == 1
+
+
 def test_retention_bucket_requires_an_unambiguous_cohort(monkeypatch):
   first = _trial_result('23456781-2345-6781-2345-678123456781', 'task-a', 1)
   objects = _retained_objects('runs/2026-08-24/first', first)

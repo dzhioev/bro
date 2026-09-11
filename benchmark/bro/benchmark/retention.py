@@ -1,27 +1,32 @@
-"""Retain finished benchmark job directories in S3."""
+"""Retain immutable benchmark job directories in S3."""
 
+import base64
 import hashlib
 import json
-import re
 from dataclasses import dataclass
 from datetime import UTC
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Optional
 
 import boto3
-from boto3.exceptions import Boto3Error
 from botocore.exceptions import BotoCoreError, ClientError
 from harbor.models.job.result import JobResult
+from harbor.models.trial.config import TrialConfig
 from harbor.models.trial.result import TrialResult
 
-from bro.base import credentials, log
-from bro.benchmark.harbor_agent import benchmark_bundle
-from bro.benchmark.trajectory import job_trajectory_cost_usd
+from bro import artifact
+from bro.base import credentials
+from bro.benchmark.bundle import Bundle
+from bro.llm import providers, usage
+from bro.trails.cost import trail_cost
+from bro.trails.local import LocalStore
 
 RETENTION_CREDENTIAL = 'benchmark_retention'
 MANIFEST_FILENAME = 'retention.json'
-MANIFEST_FORMAT = 2
+MANIFEST_FORMAT = 3
 PREFIX_ROOT = 'runs'
+TRAILS_DIRECTORY = Path('agent') / 'ride' / 'trails'
 _DIGEST_PREFIX = 'sha256:'
 
 
@@ -45,8 +50,22 @@ class RetainedRun:
     return f's3://{self.bucket}/{self.prefix}/'
 
 
+@dataclass(frozen=True)
+class InventoryFile:
+  path: Path
+  relative_path: str
+  sha256: str
+  checksum: str
+  size: int
+
+  def manifest_row(self) -> dict[str, object]:
+    return {'path': self.relative_path, 'sha256': self.sha256, 'size': self.size}
+
+
 def _canonical_bytes(value: object) -> bytes:
-  return json.dumps(value, ensure_ascii=False, separators=(',', ':'), sort_keys=True).encode()
+  return json.dumps(
+    value, ensure_ascii=False, separators=(',', ':'), sort_keys=True, allow_nan=False
+  ).encode()
 
 
 def _sha256(value: object) -> str:
@@ -79,60 +98,39 @@ def _config_from_text(text: str) -> RetentionConfig:
   return RetentionConfig(bucket=value['bucket'], region=value['region'])
 
 
-def configured_retention() -> Optional[RetentionConfig]:
-  value = credentials.try_get(RETENTION_CREDENTIAL)
-  return None if value is None else _config_from_text(value)
+def configured_retention() -> RetentionConfig:
+  return _config_from_text(credentials.get(RETENTION_CREDENTIAL))
 
 
-def _file_digest(path: Path) -> str:
+def _file_digest(path: Path) -> tuple[str, str]:
   digest = hashlib.sha256()
   with path.open('rb') as file:
     while chunk := file.read(1024 * 1024):
       digest.update(chunk)
-  return _DIGEST_PREFIX + digest.hexdigest()
+  raw = digest.digest()
+  return _DIGEST_PREFIX + digest.hexdigest(), base64.b64encode(raw).decode()
 
 
-def _inventory(job_directory: Path) -> dict[str, dict[str, object]]:
-  files: dict[str, dict[str, object]] = {}
+def _inventory(job_directory: Path) -> list[InventoryFile]:
+  files: list[InventoryFile] = []
   for path in sorted(job_directory.rglob('*')):
-    relative = path.relative_to(job_directory).as_posix()
-    if relative == MANIFEST_FILENAME:
-      continue
+    relative_path = path.relative_to(job_directory).as_posix()
+    if relative_path == MANIFEST_FILENAME:
+      raise ValueError(f'benchmark job contains reserved marker {path}')
     if path.is_symlink() or not (path.is_dir() or path.is_file()):
       raise ValueError(f'benchmark job contains an unsupported file at {path}')
     if path.is_file():
-      files[relative] = {'sha256': _file_digest(path), 'size': path.stat().st_size}
+      sha256, checksum = _file_digest(path)
+      files.append(
+        InventoryFile(
+          path=path,
+          relative_path=relative_path,
+          sha256=sha256,
+          checksum=checksum,
+          size=path.stat().st_size,
+        )
+      )
   return files
-
-
-def _reported_revision(job_directory: Path) -> str:
-  result_paths = sorted(job_directory.glob('*/result.json'))
-  revisions = {
-    TrialResult.model_validate_json(path.read_text()).agent_info.version for path in result_paths
-  }
-  if len(revisions) != 1:
-    raise ValueError(
-      f'{len(result_paths)} benchmark trials report {len(revisions)} framework revisions, '
-      'expected exactly one'
-    )
-  [revision] = revisions
-  if not re.fullmatch(r'sha256:[0-9a-f]{64}', revision):
-    raise ValueError(f'benchmark result reports malformed framework revision {revision!r}')
-  return revision
-
-
-def _hub_url(job_directory: Path) -> Optional[str]:
-  path = job_directory / 'upload.json'
-  if not path.exists():
-    return None
-  record = _read_json_object(path)
-  if set(record) != {'visibility', 'url'}:
-    raise ValueError(f'invalid benchmark upload record at {path}: unexpected fields')
-  if record['visibility'] not in {'private', 'public'}:
-    raise ValueError(f'invalid benchmark upload record at {path}: malformed visibility')
-  if not isinstance(record['url'], str) or record['url'] == '':
-    raise ValueError(f'invalid benchmark upload record at {path}: malformed URL')
-  return record['url']
 
 
 def _score_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -142,98 +140,376 @@ def _score_config(config: dict[str, Any]) -> dict[str, Any]:
   return score_config
 
 
-def _run_prefix(
-  job: JobResult,
-  config_digest: str,
-  roster_digest: str,
-  source_commit: str,
-  framework_revision: str,
-) -> str:
-  started_at = job.started_at
-  if started_at.tzinfo is not None:
-    started_at = started_at.astimezone(UTC)
-    timestamp = started_at.strftime('%Y%m%dT%H%M%S.%fZ')
-  else:
-    timestamp = started_at.strftime('%Y%m%dT%H%M%S.%f')
-  return '/'.join(
-    (
-      PREFIX_ROOT,
-      started_at.strftime('%Y-%m-%d'),
-      timestamp,
-      f'config-{config_digest.removeprefix(_DIGEST_PREFIX)}',
-      f'roster-{roster_digest.removeprefix(_DIGEST_PREFIX)}',
-      f'commit-{source_commit}',
-      f'revision-{framework_revision.removeprefix(_DIGEST_PREFIX)}',
-      f'job-{job.id}',
+def _required_string(value: Any, field: str) -> str:
+  if not isinstance(value, str) or value == '':
+    raise ValueError(f'{field} must be a non-empty string')
+  return value
+
+
+def _agent_dimensions(config_path: Path) -> tuple[str, str, str]:
+  config = TrialConfig.model_validate(_read_json_object(config_path))
+  if config.agent is None:
+    raise ValueError(f'benchmark trial config at {config_path} has no agent')
+  kwargs = config.agent.kwargs
+  bro = _required_string(kwargs.get('bro'), f'benchmark trial config at {config_path} agent bro')
+  harness = _required_string(
+    kwargs.get('harness', 'bro'), f'benchmark trial config at {config_path} agent harness'
+  )
+  model = _required_string(
+    config.agent.model_name, f'benchmark trial config at {config_path} agent model_name'
+  )
+  return harness, bro, model
+
+
+def _root_header(store: LocalStore) -> dict[str, Any]:
+  headers = list(store.iter_trails())
+  roots = [header for header in headers if header.get('summoned_by') is None]
+  if len(roots) != 1:
+    raise ValueError(f'trails store at {store.root} must hold exactly one root, found {len(roots)}')
+  return roots[0]
+
+
+def _header_llm(header: dict[str, Any]) -> dict[str, Any]:
+  native = header.get('native')
+  if not isinstance(native, dict):
+    raise ValueError('trail header native must be an object')
+  llm = native.get('llm')
+  if not isinstance(llm, dict):
+    raise ValueError('trail header native.llm must be an object')
+  return llm
+
+
+def _message_call(message: dict[str, Any]) -> tuple[str, dict[str, Any], Optional[str]]:
+  model = _required_string(message.get('model'), 'llm_call model')
+  raw_usage = message.get('usage')
+  if not isinstance(raw_usage, dict):
+    raise ValueError('llm_call usage must be an object')
+  service_tier = message.get('service_tier')
+  if service_tier is not None and not isinstance(service_tier, str):
+    raise ValueError('llm_call service_tier must be a string or null')
+  return model, raw_usage, service_tier
+
+
+def _pricing_record(provider: str, models: set[str]) -> dict[str, object]:
+  table = providers.price_table(provider)
+  try:
+    rates = {model: table.models[model].content() for model in sorted(models)}
+    return {
+      'as_of': table.as_of.isoformat(),
+      'source': table.source,
+      'sha256': table.sha256,
+      'rates': rates,
+    }
+  except (AttributeError, KeyError) as error:
+    raise ValueError(
+      f'provider {provider!r} has no serializable rates for {sorted(models)}'
+    ) from error
+
+
+def _trail_summary(
+  store_root: Path, expected_harness: str, expected_bro: str
+) -> tuple[
+  Optional[str],
+  Optional[dict[str, Any]],
+  int,
+  Optional[dict[str, int]],
+  Optional[float],
+  dict[str, set[str]],
+]:
+  if not (store_root / 'trails').is_dir():
+    return None, None, 0, None, None, {}
+  store = LocalStore(store_root)
+  with store:
+    first = next(store.iter_trails(max_items=1), None)
+    if first is None:
+      return None, None, 0, None, None, {}
+    root = _root_header(store)
+    if root.get('harness') != expected_harness:
+      raise ValueError(
+        f'trail {root.get("id")} reports harness {root.get("harness")!r}, '
+        f'expected {expected_harness!r}'
+      )
+    if root.get('bro') != expected_bro:
+      raise ValueError(
+        f'trail {root.get("id")} reports bro {root.get("bro")!r}, expected {expected_bro!r}'
+      )
+
+    llm_calls = 0
+    tokens = usage.zero()
+    cost: Optional[Decimal] = Decimal(0)
+    priced_models: dict[str, set[str]] = {}
+    for header in store.iter_trails():
+      trail_id = _required_string(header.get('id'), 'trail header id')
+      provider = _required_string(
+        _header_llm(header).get('type'), f'trail {trail_id} native.llm.type'
+      )
+      current_cost = trail_cost(store, trail_id)
+      if current_cost is None:
+        cost = None
+      elif cost is not None:
+        cost += current_cost
+      for message in store.iter_messages(trail_id, types={'llm_call'}):
+        model, raw_usage, service_tier = _message_call(message)
+        llm_calls += 1
+        tokens = usage.add(tokens, usage.from_vendor_counts(raw_usage))
+        if providers.price(provider, model, raw_usage, service_tier) is not None:
+          priced_models.setdefault(provider, set()).add(model)
+
+    root_id = _required_string(root.get('id'), 'root trail id')
+    return (
+      root_id,
+      _header_llm(root),
+      llm_calls,
+      tokens,
+      None if cost is None else float(cost),
+      priced_models,
     )
+
+
+def _trial_error(result: TrialResult) -> Optional[str]:
+  error = result.exception_info
+  if error is None:
+    return None
+  return f'{error.exception_type}: {error.exception_message}'
+
+
+def _trial_row(
+  trial_directory: Path, framework_revision: str
+) -> tuple[dict[str, object], dict[str, set[str]]]:
+  result_path = trial_directory / 'result.json'
+  try:
+    result = TrialResult.model_validate_json(result_path.read_text())
+  except (OSError, ValueError) as error:
+    raise ValueError(f'invalid benchmark trial result at {result_path}: {error}') from error
+  harness, bro, model = _agent_dimensions(trial_directory / 'config.json')
+  agent_directory = trial_directory / 'agent'
+  reached_install = result.agent_setup is not None or (
+    agent_directory.is_dir() and next(agent_directory.rglob('*'), None) is not None
+  )
+  if reached_install and result.agent_info.version != framework_revision:
+    raise ValueError(
+      f'benchmark trial {trial_directory.name} reports bundle {result.agent_info.version!r}, '
+      f'expected {framework_revision!r}'
+    )
+
+  root_trail_id, llm, llm_calls, tokens, cost_usd, priced_models = _trail_summary(
+    trial_directory / TRAILS_DIRECTORY, harness, bro
+  )
+  error = _trial_error(result)
+  if error is None:
+    if result.verifier_result is None or result.verifier_result.rewards is None:
+      raise ValueError(f'benchmark trial {trial_directory.name} has neither rewards nor an error')
+    rewards: Optional[dict[str, float | int]] = result.verifier_result.rewards
+    if 'reward' not in rewards:
+      raise ValueError(f'benchmark trial {trial_directory.name} has no primary reward')
+    reward: Optional[float | int] = rewards['reward']
+  else:
+    rewards = None
+    reward = None
+
+  return (
+    {
+      'trial': trial_directory.name,
+      'task': result.task_name,
+      'harness': harness,
+      'bro': bro,
+      'model': model,
+      'llm': llm,
+      'rewards': rewards,
+      'reward': reward,
+      'error': error,
+      'started_at': None if result.started_at is None else result.started_at.isoformat(),
+      'finished_at': None if result.finished_at is None else result.finished_at.isoformat(),
+      'root_trail_id': root_trail_id,
+      'llm_calls': llm_calls,
+      'tokens': tokens,
+      'cost_usd': cost_usd,
+    },
+    priced_models,
   )
 
 
-def _manifest(job_directory: Path) -> tuple[dict[str, object], str]:
-  job = JobResult.model_validate_json((job_directory / 'result.json').read_text())
+def _dataset(config: dict[str, Any], results: list[TrialResult]) -> dict[str, str]:
+  if any(result.source is None for result in results):
+    raise ValueError('benchmark trials must report their dataset source')
+  sources = {result.source for result in results if result.source is not None}
+  if len(sources) != 1:
+    raise ValueError(f'benchmark job spans {len(sources)} dataset sources: {sorted(sources)}')
+  [source] = sources
+  datasets = config.get('datasets')
+  if not isinstance(datasets, list):
+    raise ValueError('benchmark config has no dataset roster')
+  matches = [
+    dataset for dataset in datasets if isinstance(dataset, dict) and dataset.get('name') == source
+  ]
+  if len(matches) != 1:
+    raise ValueError(f'benchmark dataset source {source!r} matches {len(matches)} config entries')
+  match = matches[0]
+  return {
+    'name': _required_string(match.get('name'), 'benchmark dataset name'),
+    'ref': _required_string(match.get('ref'), 'benchmark dataset ref'),
+  }
+
+
+def _manifest(job_directory: Path, inventory: list[InventoryFile]) -> tuple[dict[str, object], str]:
+  result_path = job_directory / 'result.json'
+  try:
+    job = JobResult.model_validate_json(result_path.read_text())
+  except (OSError, ValueError) as error:
+    raise ValueError(f'invalid benchmark job result at {result_path}: {error}') from error
   if job.finished_at is None:
     raise ValueError(f'benchmark result at {job_directory} is not finished')
   config = _read_json_object(job_directory / 'config.json')
   roster = config.get('agents')
   if not isinstance(roster, list) or len(roster) == 0:
     raise ValueError(f'benchmark config at {job_directory} has no agent roster')
-  bundle = benchmark_bundle()
-  framework_revision = _reported_revision(job_directory)
-  if framework_revision != bundle.identity:
-    raise ValueError(
-      f'benchmark result reports {framework_revision}, but the host bundle is {bundle.identity}'
-    )
-  score_config_digest = _sha256(_score_config(config))
-  roster_digest = _sha256(roster)
-  prefix = _run_prefix(
-    job,
-    score_config_digest,
-    roster_digest,
-    bundle.source_commit,
-    framework_revision,
-  )
+
+  bundle = Bundle(job_directory)
+  framework_revision = bundle.identity
+  source_commit = bundle.source_commit
+  trial_directories = [
+    path
+    for path in sorted(job_directory.iterdir())
+    if path.is_dir() and (path / 'result.json').is_file()
+  ]
+  if len(trial_directories) == 0:
+    raise ValueError(f'benchmark job at {job_directory} holds no trial results')
+  trial_results = [
+    TrialResult.model_validate_json((trial_directory / 'result.json').read_text())
+    for trial_directory in trial_directories
+  ]
+  dataset = _dataset(config, trial_results)
+
+  trials: list[dict[str, object]] = []
+  priced_models: dict[str, set[str]] = {}
+  for trial_directory in trial_directories:
+    row, trial_priced_models = _trial_row(trial_directory, framework_revision)
+    trials.append(row)
+    for provider, models in trial_priced_models.items():
+      priced_models.setdefault(provider, set()).update(models)
+  total_cost_usd: Optional[float] = 0.0
+  for trial in trials:
+    cost_usd = trial['cost_usd']
+    if cost_usd is None:
+      total_cost_usd = None
+      break
+    if not isinstance(cost_usd, (int, float)) or isinstance(cost_usd, bool):
+      raise TypeError(f'trial cost must be numeric or null, got {cost_usd!r}')
+    total_cost_usd += float(cost_usd)
+  if job.started_at.tzinfo is None:
+    raise ValueError('benchmark job started_at must carry a timezone')
+  started_at = job.started_at.astimezone(UTC)
+  prefix = f'{PREFIX_ROOT}/{started_at.strftime("%Y-%m-%d")}/{job.id}'
   manifest: dict[str, object] = {
     'format': MANIFEST_FORMAT,
     'job': {
       'id': str(job.id),
       'started_at': job.started_at.isoformat(),
       'finished_at': job.finished_at.isoformat(),
+      'n_retries': job.stats.n_retries,
     },
-    'job_config': config,
-    'score_config_sha256': score_config_digest,
-    'roster_sha256': roster_digest,
+    'config': config,
+    'score_config_sha256': _sha256(_score_config(config)),
+    'roster_sha256': _sha256(roster),
+    'dataset': dataset,
     'bundle': {
-      'source_commit': bundle.source_commit,
+      'source_commit': source_commit,
       'framework_revision': framework_revision,
     },
-    'total_cost_usd': float(job_trajectory_cost_usd(job_directory)),
-    'files': _inventory(job_directory),
+    'pricing': {
+      provider: _pricing_record(provider, models)
+      for provider, models in sorted(priced_models.items())
+    },
+    'total_cost_usd': total_cost_usd,
+    'trials': trials,
+    'files': [file.manifest_row() for file in inventory],
   }
-  hub_url = _hub_url(job_directory)
-  if hub_url is not None:
-    manifest['hub_url'] = hub_url
   return manifest, prefix
 
 
-def retain_job(job_directory: Path) -> Optional[RetainedRun]:
+def _existing_checksum(client: Any, bucket: str, key: str) -> Optional[str]:
+  response = client.head_object(Bucket=bucket, Key=key, ChecksumMode='ENABLED')
+  checksum = response.get('ChecksumSHA256')
+  return checksum if isinstance(checksum, str) else None
+
+
+def _put_file(client: Any, config: RetentionConfig, prefix: str, file: InventoryFile) -> None:
+  key = f'{prefix}/{file.relative_path}'
+  try:
+    with file.path.open('rb') as body:
+      client.put_object(
+        Bucket=config.bucket,
+        Key=key,
+        Body=body,
+        ChecksumAlgorithm='SHA256',
+        ChecksumSHA256=file.checksum,
+        IfNoneMatch='*',
+      )
+  except ClientError as error:
+    code = str(error.response.get('Error', {}).get('Code'))
+    if code not in {'PreconditionFailed', '412'}:
+      raise
+    if _existing_checksum(client, config.bucket, key) == file.checksum:
+      return
+    raise RetentionError(
+      f'retention key already holds different content: s3://{config.bucket}/{key}'
+    ) from error
+
+
+def _put_manifest(
+  client: Any, config: RetentionConfig, prefix: str, manifest: dict[str, object]
+) -> None:
+  key = f'{prefix}/{MANIFEST_FILENAME}'
+  content = _canonical_bytes(manifest) + b'\n'
+  checksum = base64.b64encode(hashlib.sha256(content).digest()).decode()
+  try:
+    client.put_object(
+      Bucket=config.bucket,
+      Key=key,
+      Body=content,
+      ChecksumAlgorithm='SHA256',
+      ChecksumSHA256=checksum,
+      IfNoneMatch='*',
+    )
+  except ClientError as error:
+    code = str(error.response.get('Error', {}).get('Code'))
+    if code in {'PreconditionFailed', '412'}:
+      raise RetentionError(
+        f'benchmark run is already retained at s3://{config.bucket}/{prefix}/'
+      ) from error
+    raise
+
+
+def retain_job(job_directory: Path) -> RetainedRun:
   config = configured_retention()
-  if config is None:
-    log.info('benchmark retention skipped: no %s credential', RETENTION_CREDENTIAL)
-    return None
-  manifest, prefix = _manifest(job_directory)
-  manifest_path = job_directory / MANIFEST_FILENAME
-  manifest_path.write_bytes(_canonical_bytes(manifest) + b'\n')
-  files = [
-    path for path in sorted(job_directory.rglob('*')) if path.is_file() and path != manifest_path
-  ]
+  inventory = _inventory(job_directory)
+  manifest, prefix = _manifest(job_directory, inventory)
   try:
     client = boto3.Session(region_name=config.region).client('s3')
-    for path in files:
-      key = f'{prefix}/{path.relative_to(job_directory).as_posix()}'
-      client.upload_file(str(path), config.bucket, key)
-    client.upload_file(str(manifest_path), config.bucket, f'{prefix}/{MANIFEST_FILENAME}')
-  except (Boto3Error, BotoCoreError, ClientError) as error:
+    for file in inventory:
+      _put_file(client, config, prefix, file)
+    _put_manifest(client, config, prefix, manifest)
+  except RetentionError:
+    raise
+  except (OSError, BotoCoreError, ClientError) as error:
     raise RetentionError(
       f'failed to retain benchmark run in s3://{config.bucket}/{prefix}: {error}'
     ) from error
   return RetainedRun(config.bucket, prefix)
+
+
+def resolve_job(value: str) -> Path:
+  path = Path(artifact.get_artifact(value)) if artifact.is_ref(value) else Path(value)
+  if artifact.is_ref(value):
+    output = path / 'output'
+    jobs = (
+      [entry for entry in sorted(output.iterdir()) if entry.is_dir()] if output.is_dir() else []
+    )
+    if len(jobs) != 1:
+      raise ValueError(
+        f'benchmark artifact {value} holds {len(jobs)} jobs under output, expected one'
+      )
+    path = jobs[0]
+  if not path.is_dir() or not (path / 'result.json').is_file():
+    raise ValueError(f'no Harbor job directory at {path}')
+  return path

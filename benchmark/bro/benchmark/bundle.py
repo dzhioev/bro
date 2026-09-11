@@ -27,8 +27,6 @@ from bro.base import log, spawn
 from bro.base.args import Parser
 from bro.base.source_root import SOURCE_ROOT
 
-__cli_name__ = 'benchmark-bundle'
-
 CPYTHON_VERSION = '3.12.14'
 # core, the engine that runs a bro, and the distribution every persona but the
 # minimal `bro` one ships from — a bundle without it registers no other bro
@@ -189,7 +187,9 @@ def built(root: Path) -> Bundle:
   missing = bundle.missing()
   if len(missing) > 0:
     absent = ', '.join(str(part) for part in missing)
-    raise FileNotFoundError(f'no bundle at {root} ({absent} absent); build it with {__cli_name__}')
+    raise FileNotFoundError(
+      f'no bundle at {root} ({absent} absent); build it with benchmark bundle'
+    )
   _ = bundle.identity
   return bundle
 
@@ -363,14 +363,8 @@ def build(workspace: Path, root: Path) -> Bundle:
   return built(root)
 
 
-def main(argv: list[str]) -> Optional[int]:
-  parser = Parser(description='build the relocatable bro bundle')
-  parser.add_argument(
-    '--output', help='directory to build into (default: <checkout>/var/benchmark/bundle)'
-  )
-  args = parser.parse(argv)
+def command(output: Optional[str]) -> Optional[int]:
   workspace = workspace_root()
-  output = args['output']
   root = default_root(workspace) if output is None else Path(output).resolve()
   try:
     bundle = build(workspace, root)
@@ -379,6 +373,23 @@ def main(argv: list[str]) -> Optional[int]:
     return 1
   print(bundle.root)
   return None
+
+
+def _configure_arguments(parser: Parser) -> None:
+  parser.add_argument(
+    '--output', help='directory to build into (default: <checkout>/var/benchmark/bundle)'
+  )
+
+
+def configure_parser(parser: Parser) -> None:
+  _configure_arguments(parser)
+  parser.set_handler(command)
+
+
+def main(argv: list[str]) -> Optional[int]:
+  parser = Parser(description='build the relocatable bro bundle')
+  _configure_arguments(parser)
+  return command(**parser.parse(argv))
 
 
 if __name__ == '__main__':

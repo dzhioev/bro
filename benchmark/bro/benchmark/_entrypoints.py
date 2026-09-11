@@ -10,6 +10,10 @@ def bro_benchmark_bundle():
   return run_cli('bro.benchmark.bundle', sys.argv)
 
 
+def bro_benchmark_cli():
+  return run_cli('bro.benchmark.cli', sys.argv)
+
+
 def bro_benchmark_compare():
   return run_cli('bro.benchmark.compare', sys.argv)
 
