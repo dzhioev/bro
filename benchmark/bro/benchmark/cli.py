@@ -2,12 +2,13 @@
 """`benchmark` — post-run benchmark workflows."""
 
 import sys
+from pathlib import Path
 from typing import Optional
 
 import bro.base.args as base_args
 from bro import artifact
 from bro.base import credentials, log
-from bro.benchmark import bundle, publication, retention
+from bro.benchmark import bundle, publication, query, retention
 
 __cli_name__ = 'benchmark'
 
@@ -45,6 +46,15 @@ def _publish(source: str, public: bool) -> int:
   return 0
 
 
+def _query(sql: Optional[str], sql_file: Optional[Path]) -> int:
+  try:
+    query.command(sql, sql_file)
+  except (credentials.SecretNotFound, OSError, ValueError, query.duckdb.Error) as error:
+    log.error('benchmark query failed: %s', error)
+    return 1
+  return 0
+
+
 def main(argv: list[str]) -> Optional[int]:
   parser = base_args.Parser(description='build and preserve benchmark runs')
   subparsers = parser.add_subparsers(dest='command')
@@ -68,6 +78,14 @@ def main(argv: list[str]) -> Optional[int]:
     '--private', action='store_false', dest='public', help='keep the Hub job private'
   )
   publish_parser.set_handler(_publish)
+
+  query_parser = subparsers.add_parser(
+    'query', help='query retained benchmark manifests with DuckDB'
+  )
+  source = query_parser.add_mutually_exclusive_group()
+  source.add_argument('sql', nargs='?', help='inline SQL statement')
+  source.add_argument('--file', dest='sql_file', type=Path, help='SQL file to run')
+  query_parser.set_handler(_query)
 
   return parser.dispatch(argv)
 
