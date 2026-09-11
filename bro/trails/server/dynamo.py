@@ -8,12 +8,14 @@ from typing import Any, Literal, Optional
 
 import boto3
 
-from bro.trails import backends, formats, model, rows
+from bro.trails import backends, formats, importing, model, rows
 from bro.trails.lineage import LineageDecision
 from bro.trails.model import (
   UNREPORTED_END_INFERENCE,
   BlazeRequest,
   canonical_json_bytes,
+  is_sha256,
+  named_tool_digests,
   payload_sha256,
   validate_end,
 )
@@ -22,6 +24,7 @@ from bro.trails.server import dynamo_types
 from bro.trails.server.operations import Operations
 from bro.trails.store import (
   AppendConflict,
+  ToolNotFound,
   TrailNotFound,
   TrailsStore,
   refuse_while_forked,
@@ -88,6 +91,8 @@ SEGMENT_INDEX = TRAILS_TABLE.indexes[2].name
 FORKED_FROM_INDEX = TRAILS_TABLE.indexes[3].name
 ALL_INDEX = TRAILS_TABLE.indexes[4].name
 UUID_INDEX = STEPS_TABLE.indexes[0].name
+# what the table's keys and indexes read: derived at the write, never served
+_STORAGE_ATTRIBUTES = frozenset({GSI_PK_ATTRIBUTE, 'forked_from_id', 'segment', 'context_s3'})
 UNREPORTED_AFTER_SECONDS = 3600
 SWEEP_WINDOW_DAYS = 30
 # the store's fan-out waits on network round trips rather than on the CPU, so
@@ -162,7 +167,7 @@ class DynamoStore(TrailsStore):
 
   def _store_row_body(self, row: dict) -> dict:
     stored = dict(row)
-    body = stored.pop('body')
+    body = stored.pop('body', None)
     body_payload = dynamo_types.body_bytes(body)
     if len(body_payload) > dynamo_types.MAX_BODY_BYTES:
       raise BodyTooLarge(f'body size {len(body_payload)} exceeds {dynamo_types.MAX_BODY_BYTES}')
@@ -212,10 +217,11 @@ class DynamoStore(TrailsStore):
       raise ValueError(
         f'a trail may open with at most {dynamo_types.MAX_TRANSACTION_RECORDS} records'
       )
-    if launch_context is not None:
-      self._store_context(trail_id, launch_context)
+    context_key = dynamo_types.context_key(trail_id) if launch_context is not None else None
+    if context_key is not None:
+      self._store_context(context_key, launch_context)
 
-    item: dict[str, Any] = {
+    header: dict[str, Any] = {
       'id': trail_id,
       'format': model.TRAIL_FORMAT,
       'harness': request.harness,
@@ -227,7 +233,6 @@ class DynamoStore(TrailsStore):
       'surface': request.surface,
       'turn_count': 0,
       'native': native,
-      GSI_PK_ATTRIBUTE: GSI_PK_VALUE,
     }
     optional = {
       'bro': request.bro,
@@ -236,15 +241,10 @@ class DynamoStore(TrailsStore):
       'summoned_by': request.summoned_by,
       'subject': request.subject,
       'location': request.location,
-      'context_s3': dynamo_types.context_key(trail_id) if launch_context is not None else None,
     }
-    item.update({key: value for key, value in optional.items() if value is not None})
-    if forked_from is not None:
-      item['forked_from_id'] = forked_from['trail_id']
-    segment = native.get('segment')
-    if segment is not None:
-      item['segment'] = segment
-    item['extent'] = 0
+    header.update({key: value for key, value in optional.items() if value is not None})
+    header['extent'] = 0
+    item = _header_item(header, context_key=context_key)
     state = AggregateState(item, adapter)
     seen_billing_keys: set[str] = set()
     prepared = self._prepare_rows(
@@ -266,16 +266,7 @@ class DynamoStore(TrailsStore):
             'ConditionExpression': 'attribute_not_exists(id)',
           }
         },
-        *[
-          {
-            'Put': {
-              'TableName': self._steps_table,
-              'Item': _ddb_item(row),
-              'ConditionExpression': 'attribute_not_exists(trail_id)',
-            }
-          }
-          for row in prepared
-        ],
+        *_row_puts(self._steps_table, prepared),
       ],
     )
     return backends.blaze_result(trail_id, started_at, len(prepared), decision)
@@ -314,10 +305,10 @@ class DynamoStore(TrailsStore):
       return {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
     return backends.blaze_result(trail_id, header['started_at'], extent, decision)
 
-  def _store_context(self, trail_id: str, context: Any) -> None:
+  def _store_context(self, key: str, context: Any) -> None:
     self._s3.put_object(
       Bucket=self._bucket,
-      Key=dynamo_types.context_key(trail_id),
+      Key=key,
       Body=json.dumps(context, ensure_ascii=False).encode('utf-8'),
       ContentType='application/json',
     )
@@ -369,20 +360,9 @@ class DynamoStore(TrailsStore):
         state=state,
         new_extent=new_extent,
       )
-      transaction_items = [
-        {
-          'Put': {
-            'TableName': self._steps_table,
-            'Item': _ddb_item(row),
-            'ConditionExpression': 'attribute_not_exists(trail_id)',
-          }
-        }
-        for row in prepared
-      ]
-      transaction_items.append({'Update': update})
       try:
         self._dynamo.transact_write_items(
-          TransactItems=transaction_items,
+          TransactItems=[*_row_puts(self._steps_table, prepared), {'Update': update}],
         )
       except self._dynamo.exceptions.TransactionCanceledException as exception:
         refreshed = self._required_header(trail_id)
@@ -408,21 +388,28 @@ class DynamoStore(TrailsStore):
     return {'extent': offset + committed, 'appended': committed}
 
   def _batch_matches(self, trail_id: str, offset: int, records: list[Any]) -> bool:
+    stored = self._stored_digest_rows(trail_id, offset, len(records))
+    expected = [payload_sha256(record) for record in records]
+    return len(stored) == len(records) and all(
+      row.get('payload_sha256') == sha256 for row, sha256 in zip(stored, expected, strict=True)
+    )
+
+  def _stored_digest_rows(self, trail_id: str, offset: int, count: int) -> list[dict]:
+    """The ordinal and digest of each row stored at [offset, offset + count)."""
+    if count == 0:
+      return []
     response = self._dynamo.query(
       TableName=self._steps_table,
       KeyConditionExpression='trail_id = :trail_id AND step_id BETWEEN :start AND :end',
       ExpressionAttributeValues={
         ':trail_id': _ddb(trail_id),
         ':start': _ddb(offset),
-        ':end': _ddb(offset + len(records) - 1),
+        ':end': _ddb(offset + count - 1),
       },
+      ProjectionExpression='step_id, payload_sha256',
       ConsistentRead=True,
     )
-    rows = [row for item in response.get('Items', []) if (row := _from_ddb_item(item)) is not None]
-    expected = [payload_sha256(record) for record in records]
-    return len(rows) == len(records) and all(
-      row.get('payload_sha256') == sha256 for row, sha256 in zip(rows, expected, strict=True)
-    )
+    return [row for item in response.get('Items', []) if (row := _from_ddb_item(item)) is not None]
 
   def _store_tools(self, tools: dict[str, Any]) -> None:
     if not isinstance(tools, dict):
@@ -468,24 +455,28 @@ class DynamoStore(TrailsStore):
       ':alive': _ddb(_now_iso()),
       ':turn_count': _ddb(state.turn_count),
       ':native': _ddb(state.native),
-      ':last_billed': _ddb(state.last_billed_message_id),
     }
     assignments = [
       '#extent = :extent',
       '#last_alive_at = :alive',
       '#turn_count = :turn_count',
       '#native = :native',
-      '#last_billed = :last_billed',
     ]
+    if state.last_billed_message_id is not None:
+      values[':last_billed'] = _ddb(state.last_billed_message_id)
+      assignments.append('#last_billed = :last_billed')
     if state.subject is not None:
       names['#subject'] = 'subject'
       values[':subject'] = _ddb(state.subject)
       assignments.append('#subject = if_not_exists(#subject, :subject)')
+    update = 'SET ' + ', '.join(assignments)
+    if state.last_billed_message_id is None:
+      update += ' REMOVE #last_billed'
     return {
       'TableName': self._trails_table,
       'Key': _ddb_item({'id': trail_id}),
       'ConditionExpression': f'#extent = :expected_extent AND {format_condition}',
-      'UpdateExpression': 'SET ' + ', '.join(assignments),
+      'UpdateExpression': update,
       'ExpressionAttributeNames': names,
       'ExpressionAttributeValues': values,
     }
@@ -589,18 +580,21 @@ class DynamoStore(TrailsStore):
     return self._project_header(self._required_header(trail_id))
 
   def _required_header(self, trail_id: str) -> dict:
+    item = self._optional_header(trail_id)
+    if item is None:
+      raise TrailNotFound(trail_id)
+    return item
+
+  def _optional_header(self, trail_id: str) -> Optional[dict]:
     response = self._dynamo.get_item(
       TableName=self._trails_table,
       Key=_ddb_item({'id': trail_id}),
       ConsistentRead=True,
     )
-    item = _from_ddb_item(response.get('Item'))
-    if item is None:
-      raise TrailNotFound(trail_id)
-    return item
+    return _from_ddb_item(response.get('Item'))
 
   def _project_header(self, item: dict) -> dict:
-    item = formats.upgrade_header(item)
+    item = formats.upgrade_header(_without_storage_attributes(item))
     raw_usage = item.get('native', {}).get('usage', {})
     if not isinstance(raw_usage, dict):
       raise ValueError('native.usage must be an object')
@@ -892,6 +886,126 @@ class DynamoStore(TrailsStore):
     refuse_while_forked(self, trail_id)
     return self._operations.delete_trail(header)
 
+  def get_tool(self, sha256: str) -> Any:
+    if not is_sha256(sha256):
+      raise ValueError(f'invalid tool digest: {sha256!r}')
+    try:
+      stored = self._s3.get_object(Bucket=self._bucket, Key=dynamo_types.tool_blob_key(sha256))
+    except self._s3.exceptions.NoSuchKey as exception:
+      raise ToolNotFound(sha256) from exception
+    self._stored_tool_hashes.add(sha256)
+    return json.loads(stored['Body'].read())
+
+  def _require_tools(self, digests: set[str]) -> None:
+    for digest in sorted(digests - self._stored_tool_hashes):
+      try:
+        self._s3.head_object(Bucket=self._bucket, Key=dynamo_types.tool_blob_key(digest))
+      except self._s3.exceptions.ClientError as exception:
+        if exception.response.get('Error', {}).get('Code') not in {'404', 'NotFound', 'NoSuchKey'}:
+          raise
+        raise ValueError(f'tool blob {digest} is neither carried nor stored') from exception
+      self._stored_tool_hashes.add(digest)
+
+  def begin_import(self, header: dict, *, launch_context: Optional[Any] = None) -> dict:
+    with refusing_invalid_requests('imported header'):
+      adapter = self._backend(header['harness'])
+      imported = importing.imported_header(header, adapter)
+    trail_id = imported['id']
+    importing.require_parents(imported, lambda parent: self._optional_header(parent) is not None)
+    existing = self._optional_header(trail_id)
+    if existing is None:
+      # the context goes under a key of this call's own, so the header that
+      # wins the id points at the context put beside it and at no other call's
+      context_key = None
+      if launch_context is not None:
+        context_key = dynamo_types.context_key(trail_id, dynamo_types.new_id())
+        self._store_context(context_key, launch_context)
+      try:
+        self._dynamo.put_item(
+          TableName=self._trails_table,
+          Item=_ddb_item(_header_item(imported, context_key=context_key)),
+          ConditionExpression='attribute_not_exists(id)',
+        )
+      except self._dynamo.exceptions.ConditionalCheckFailedException:
+        if context_key is not None:
+          self._s3.delete_object(Bucket=self._bucket, Key=context_key)
+        existing = self._required_header(trail_id)
+      else:
+        return {'trail_id': trail_id, 'extent': 0, 'created': True}
+    importing.verify_same_import(
+      trail_id,
+      adapter,
+      _without_storage_attributes(existing),
+      imported,
+      self.get_launch_context(trail_id),
+      launch_context,
+    )
+    return {'trail_id': trail_id, 'extent': self._header_extent(existing), 'created': False}
+
+  def import_rows(
+    self,
+    trail_id: str,
+    offset: int,
+    rows: list[dict],
+    *,
+    tools: Optional[dict[str, Any]] = None,
+  ) -> dict:
+    if offset < 0:
+      raise ValueError('offset must be non-negative')
+    header = self._required_header(trail_id)
+    adapter = self._backend(header['harness'])
+    importing.validate_rows(trail_id, offset, rows, adapter)
+    pending = importing.import_state(header)
+    actual = self._header_extent(header)
+    if offset > actual:
+      raise AppendConflict(offset, actual)
+    present = min(actual - offset, len(rows))
+    if present > 0:
+      stored = self._stored_digest_rows(trail_id, offset, present)
+      importing.verify_same_rows(trail_id, stored, rows[:present])
+    remainder = rows[present:]
+    importing.verify_room(trail_id, pending, actual, len(remainder))
+    self._store_tools(tools if tools is not None else {})
+    self._require_tools(named_tool_digests(rows))
+    if len(remainder) == 0:
+      return {'extent': actual, 'appended': 0, 'duplicate': True}
+    expected_format = formats.stored_format(header, description=f'trail {trail_id} header')
+    committed = 0
+    while committed < len(remainder):
+      chunk = remainder[committed : committed + dynamo_types.MAX_TRANSACTION_RECORDS]
+      chunk_offset = actual + committed
+      prepared = [self._store_row_body(row) for row in chunk]
+      format_condition, names, values = _stored_format_condition(expected_format)
+      names['#extent'] = 'extent'
+      values[':expected_extent'] = _ddb(chunk_offset)
+      values[':extent'] = _ddb(chunk_offset + len(prepared))
+      update = {
+        'TableName': self._trails_table,
+        'Key': _ddb_item({'id': trail_id}),
+        'ConditionExpression': f'#extent = :expected_extent AND {format_condition}',
+        'UpdateExpression': 'SET #extent = :extent',
+        'ExpressionAttributeNames': names,
+        'ExpressionAttributeValues': values,
+      }
+      try:
+        self._dynamo.transact_write_items(
+          TransactItems=[*_row_puts(self._steps_table, prepared), {'Update': update}],
+        )
+      except self._dynamo.exceptions.TransactionCanceledException as exception:
+        refreshed = self._required_header(trail_id)
+        raise AppendConflict(chunk_offset, self._header_extent(refreshed)) from exception
+      committed += len(prepared)
+    return {'extent': actual + committed, 'appended': committed}
+
+  def seal_import(self, trail_id: str) -> dict:
+    header = self._required_header(trail_id)
+    pending = importing.import_state(header)
+    extent = self._header_extent(header)
+    if pending is None:
+      return {'trail_id': trail_id, 'extent': extent, 'duplicate': True}
+    importing.verify_complete(trail_id, pending, extent)
+    return self._operations.seal(header, pending['end'])
+
   def close(self) -> None:
     self._executor.shutdown()
 
@@ -985,6 +1099,37 @@ def build_dynamo_store(config: dict[str, Any]) -> DynamoStore:
     uuid_index=config['uuid_index'],
     bucket=config['bucket'],
   )
+
+
+def _header_item(header: dict, *, context_key: Optional[str]) -> dict:
+  """The header item, with the attributes the table's keys and indexes read."""
+  item = {**header, GSI_PK_ATTRIBUTE: GSI_PK_VALUE}
+  forked_from = header.get('forked_from')
+  if forked_from is not None:
+    item['forked_from_id'] = forked_from['trail_id']
+  segment = header.get('native', {}).get('segment')
+  if segment is not None:
+    item['segment'] = segment
+  if context_key is not None:
+    item['context_s3'] = context_key
+  return item
+
+
+def _without_storage_attributes(item: dict) -> dict:
+  return {key: value for key, value in item.items() if key not in _STORAGE_ATTRIBUTES}
+
+
+def _row_puts(table: str, prepared: list[dict]) -> list[dict]:
+  return [
+    {
+      'Put': {
+        'TableName': table,
+        'Item': _ddb_item(row),
+        'ConditionExpression': 'attribute_not_exists(trail_id)',
+      }
+    }
+    for row in prepared
+  ]
 
 
 def _stored_format_condition(source_format: int) -> tuple[str, dict[str, str], dict]:

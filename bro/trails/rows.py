@@ -1,6 +1,7 @@
 """Shared aggregate folding, row construction, and message projection."""
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from bro.trails import backends, formats, model
@@ -119,6 +120,38 @@ def state_fields(state: AggregateState, extent: int) -> dict:
   if state.subject is not None:
     fields['subject'] = state.subject
   return fields
+
+
+def row_digest(row: dict) -> str:
+  digest = row.get('payload_sha256')
+  if not isinstance(digest, str):
+    raise ValueError(f'step {row.get("trail_id")}/{row.get("step_id")} carries no payload digest')
+  return digest
+
+
+@dataclass(frozen=True)
+class ReplayedRow:
+  record: backends.ParsedRecord
+  classification: backends.Classification
+  usage: Optional[dict]
+
+
+def replay(
+  header: dict, rows: list[dict], adapter: backends.Adapter
+) -> tuple[AggregateState, list[ReplayedRow]]:
+  """Fold a trail's whole row stream from its minted state, each row parsed
+  afresh at its position in the stream and folded under its stored digest."""
+  state = AggregateState.replaying(header, adapter)
+  seen_billing_keys: set[str] = set()
+  replayed: list[ReplayedRow] = []
+  for step_id, row in enumerate(rows):
+    parsed = adapter.parse(row)
+    classification = adapter.classify(parsed)
+    contribution = state.apply(
+      parsed, classification, seen_billing_keys, step_id=step_id, digest=row_digest(row)
+    )
+    replayed.append(ReplayedRow(parsed, classification, contribution))
+  return state, replayed
 
 
 def build_rows(

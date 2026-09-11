@@ -10,6 +10,7 @@ import pytest
 from moto import mock_aws
 
 from bro.trails import backends, formats, model
+from bro.trails.local import LocalStore
 from bro.trails.model import (
   MESSAGE_TYPES,
   UNREPORTED_END_INFERENCE,
@@ -18,7 +19,13 @@ from bro.trails.model import (
   tools_sha256,
 )
 from bro.trails.server import dynamo as dynamo_store, dynamo_types
-from bro.trails.store import AppendConflict, TrailHasForks, TrailNotFound
+from bro.trails.store import (
+  AppendConflict,
+  ToolNotFound,
+  TrailCollision,
+  TrailHasForks,
+  TrailNotFound,
+)
 
 # moto validates the region against the real partition, so the fixture names one
 _REGION = 'eu-west-1'
@@ -952,6 +959,133 @@ def test_delete_manifests_the_trail_and_takes_only_what_it_owns(components):
   assert dynamo_types.tool_blob_key(sha256) in s3.objects
   with pytest.raises(TrailNotFound):
     store.delete_trail(trail_id)
+
+
+def _recorded_source(root) -> tuple[LocalStore, str, dict, list[dict], str]:
+  """A local trail whose rows name a tool blob and carry a body Dynamo spills."""
+  source = LocalStore(root)
+  trail_id = source.blaze(
+    BlazeRequest.from_wire(
+      {
+        'harness': 'bro',
+        'version': '2',
+        'bro': 'dev',
+        'interactive': False,
+        'surface': 'ask',
+        'native': {'llm': {'type': 'openai', 'model': 'gpt-5'}},
+        'body': {
+          'records': [{'kind': 'system_prompt', 'body': 'prompt'}],
+          'launch_context': {'cwd': '/workspace'},
+        },
+      }
+    )
+  )['id']
+  tool_body = [{'type': 'function', 'name': 'read'}]
+  sha256 = tools_sha256(tool_body)
+  large = 'x' * (dynamo_store.SPILLOVER_THRESHOLD_BYTES + 1)
+  source.append_records(
+    trail_id,
+    1,
+    [{'kind': 'tool_result', 'body': large, 'tools_sha256': sha256}],
+    tools={sha256: tool_body},
+  )
+  source.end_trail(trail_id, 'ok')
+  header = source.get_trail(trail_id)
+  rows = list(source.iter_steps(trail_id))
+  return source, trail_id, header, rows, sha256
+
+
+def test_import_stores_rows_verbatim_and_serves_the_trail_as_recorded(components, tmp_path):
+  store, dynamo, s3 = components
+  source, trail_id, header, rows, sha256 = _recorded_source(tmp_path)
+  tools = {sha256: source.get_tool(sha256)}
+
+  result = store.import_trail(header, rows, launch_context={'cwd': '/workspace'}, tools=tools)
+  again = store.import_trail(header, rows, launch_context={'cwd': '/workspace'}, tools=tools)
+
+  assert result == {'trail_id': trail_id, 'extent': 2}
+  assert again == {'trail_id': trail_id, 'extent': 2, 'duplicate': True}
+  item = dynamo.headers[trail_id]
+  assert item[dynamo_store.GSI_PK_ATTRIBUTE] == 'trail'
+  assert item['context_s3'].startswith(f'trails/{trail_id}/context')
+  assert item['context_s3'] in s3.objects
+  served = store.get_trail(trail_id)
+  assert served == header
+  assert 'importing' not in item
+  assert not {dynamo_store.GSI_PK_ATTRIBUTE, 'context_s3'} & set(served)
+  assert store.get_launch_context(trail_id) == {'cwd': '/workspace'}
+  assert dynamo.steps[trail_id, 1]['body_s3'] in s3.objects
+  assert store.get_steps(trail_id)['steps'] == rows
+  assert store.get_tool(sha256) == tools[sha256]
+  assert [trail['id'] for trail in store.list_trails(bro='dev')['trails']] == [trail_id]
+
+
+def dynamo_headers(store: dynamo_store.DynamoStore) -> _Items:
+  return _Items(store._dynamo, _TRAILS_TABLE, ('id',))
+
+
+def test_import_requires_the_tool_blobs_the_bucket_holds(components, tmp_path):
+  store, _, s3 = components
+  source, trail_id, header, rows, sha256 = _recorded_source(tmp_path)
+  store.begin_import(header, launch_context={'cwd': '/workspace'})
+
+  with pytest.raises(ValueError, match='neither carried nor stored'):
+    store.import_rows(trail_id, 0, rows)
+  with pytest.raises(ToolNotFound):
+    store.get_tool(sha256)
+  other = _blaze_bro(store)
+  store.append_records(other, offset=1, records=[], tools={sha256: source.get_tool(sha256)})
+  store.import_rows(trail_id, 0, rows)
+  store.seal_import(trail_id)
+
+  assert dynamo_types.tool_blob_key(sha256) in s3.objects
+  assert store.get_trail(trail_id)['extent'] == 2
+  assert 'last_billed_message_id' not in dynamo_headers(store)[other]
+
+
+def test_a_begin_that_loses_the_id_leaves_the_winner_its_own_context(
+  components, tmp_path, monkeypatch
+):
+  store, _, s3 = components
+  _, trail_id, header, _, _ = _recorded_source(tmp_path)
+  optional_header = store._optional_header
+  looked = []
+
+  def raced(looked_up: str):
+    # the first look finds no header, and a rival lands one before the put
+    if len(looked) == 0:
+      looked.append(looked_up)
+      store.begin_import(header, launch_context={'cwd': '/winner'})
+      return None
+    return optional_header(looked_up)
+
+  monkeypatch.setattr(store, '_optional_header', raced)
+
+  with pytest.raises(TrailCollision, match='launch context differs'):
+    store.begin_import(header, launch_context={'cwd': '/loser'})
+
+  assert store.get_launch_context(trail_id) == {'cwd': '/winner'}
+  assert len([key for key in s3.objects if key.startswith(f'trails/{trail_id}/context')]) == 1
+
+
+def test_import_matches_a_live_trail_by_identity_and_refuses_another(components):
+  store, dynamo, _ = components
+  trail_id = _blaze_bro(store)
+  store.append_records(trail_id, offset=1, records=[_bro_call([])])
+  header = store.get_trail(trail_id)
+  rows = store.get_steps(trail_id)['steps']
+
+  same = store.begin_import(header)
+  with pytest.raises(TrailCollision, match='header differs'):
+    store.begin_import({**header, 'hold': 'guided'})
+  with pytest.raises(TrailCollision, match='row 1 differs'):
+    store.import_rows(trail_id, 1, [{**rows[1], 'payload_sha256': '0' * 64}])
+  sealed = store.seal_import(trail_id)
+
+  assert same == {'trail_id': trail_id, 'extent': 2, 'created': False}
+  assert sealed == {'trail_id': trail_id, 'extent': 2, 'duplicate': True}
+  assert dynamo.headers[trail_id]['native']['usage'] == header['native']['usage']
+  assert store.get_trail(trail_id) == header
 
 
 def test_delete_refuses_a_trail_a_fork_still_points_at(components):
