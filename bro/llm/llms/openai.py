@@ -4,10 +4,15 @@
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Literal, Optional, Self, cast, get_args
+from datetime import date
+from decimal import Decimal
+from types import MappingProxyType
+from typing import Any, ClassVar, Literal, Optional, Self, cast, get_args
 
 import bro.llm.llm as llm_llm
+from bro.llm import pricing
 
 ServiceTier = Literal['auto', 'default', 'flex', 'priority']
 _VALID_SERVICE_TIERS: frozenset[str] = frozenset(get_args(ServiceTier))
@@ -37,6 +42,173 @@ FAILURE_SIGNATURES: tuple[llm_llm.FailureSignature, ...] = (
   llm_llm.FailureSignature(r'insufficient_quota', 'usage-limit'),
   llm_llm.FailureSignature(r'openai\.APIStatusError', 'unknown-api'),
 )
+
+_ONE_MILLION = Decimal(1_000_000)
+_LONG_CONTEXT_THRESHOLD = 272_000
+
+
+@dataclass(frozen=True)
+class TokenRates:
+  """USD per million Responses API tokens, in OpenAI's billing classes."""
+
+  input: Decimal
+  cached_input: Decimal
+  cache_write: Decimal
+  output: Decimal
+
+  def content(self) -> dict[str, str]:
+    return pricing.decimal_strings(
+      {
+        'input': self.input,
+        'cached_input': self.cached_input,
+        'cache_write': self.cache_write,
+        'output': self.output,
+      }
+    )
+
+
+@dataclass(frozen=True)
+class ContextRates:
+  short: TokenRates
+  long: TokenRates
+
+  def content(self) -> dict[str, dict[str, str]]:
+    return {'short': self.short.content(), 'long': self.long.content()}
+
+
+@dataclass(frozen=True)
+class ModelRates:
+  long_context_threshold: int
+  service_tiers: Mapping[str, ContextRates]
+
+  def content(self) -> dict[str, Any]:
+    return {
+      'long_context_threshold': self.long_context_threshold,
+      'service_tiers': {
+        service_tier: rates.content() for service_tier, rates in self.service_tiers.items()
+      },
+    }
+
+
+@dataclass(frozen=True)
+class PriceTable:
+  source: str
+  as_of: date
+  models: Mapping[str, ModelRates]
+
+  @property
+  def sha256(self) -> str:
+    return pricing.content_sha256(
+      {
+        'source': self.source,
+        'as_of': self.as_of.isoformat(),
+        'models': {model: rates.content() for model, rates in self.models.items()},
+      }
+    )
+
+
+# Rates are copied from the vendor page and updated by hand in a PR together
+# with this date. Pricing never fetches vendor data at run time.
+PRICE_TABLE = PriceTable(
+  source='https://developers.openai.com/api/docs/pricing',
+  as_of=date(2026, 9, 11),
+  models=MappingProxyType(
+    {
+      'gpt-5.6-terra': ModelRates(
+        long_context_threshold=_LONG_CONTEXT_THRESHOLD,
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(
+              short=TokenRates(
+                input=Decimal('2.00'),
+                cached_input=Decimal('0.20'),
+                cache_write=Decimal('2.50'),
+                output=Decimal('12.00'),
+              ),
+              long=TokenRates(
+                input=Decimal('4.00'),
+                cached_input=Decimal('0.40'),
+                cache_write=Decimal('5.00'),
+                output=Decimal('18.00'),
+              ),
+            ),
+            'priority': ContextRates(
+              short=TokenRates(
+                input=Decimal('4.00'),
+                cached_input=Decimal('0.40'),
+                cache_write=Decimal('5.00'),
+                output=Decimal('24.00'),
+              ),
+              long=TokenRates(
+                input=Decimal('8.00'),
+                cached_input=Decimal('0.80'),
+                cache_write=Decimal('10.00'),
+                output=Decimal('36.00'),
+              ),
+            ),
+          }
+        ),
+      )
+    }
+  ),
+)
+PRICE_TABLE_SHA256 = PRICE_TABLE.sha256
+
+
+def _count(value: Any, field: str) -> int:
+  if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+    raise ValueError(f'{field} must be a non-negative int')
+  return value
+
+
+def _service_tier_name(service_tier: Optional[str]) -> Optional[str]:
+  if service_tier in {None, 'auto', 'default'}:
+    return 'standard'
+  if service_tier in {'fast', 'priority'}:
+    return 'priority'
+  return None
+
+
+def price(
+  model: str,
+  usage: Mapping[str, Any],
+  service_tier: Optional[str],
+  table: Optional[PriceTable] = None,
+) -> Optional[Decimal]:
+  """Price one Responses API call from its raw usage and effective tier."""
+  selected = PRICE_TABLE if table is None else table
+  model_rates = selected.models.get(model)
+  tier = _service_tier_name(service_tier)
+  if model_rates is None or tier is None:
+    return None
+  context_rates = model_rates.service_tiers.get(tier)
+  if context_rates is None:
+    return None
+  pricing.warn_if_stale('openai', selected.as_of)
+
+  input_tokens = _count(usage.get('input_tokens'), 'input_tokens')
+  output_tokens = _count(usage.get('output_tokens'), 'output_tokens')
+  raw_details = usage.get('input_tokens_details', {})
+  if not isinstance(raw_details, Mapping):
+    raise ValueError('input_tokens_details must be an object')
+  cached_tokens = _count(raw_details.get('cached_tokens', 0), 'input_tokens_details.cached_tokens')
+  cache_write_tokens = _count(
+    raw_details.get('cache_write_tokens', 0), 'input_tokens_details.cache_write_tokens'
+  )
+  fresh_tokens = input_tokens - cached_tokens - cache_write_tokens
+  if fresh_tokens < 0:
+    raise ValueError('cached and cache-write tokens exceed input_tokens')
+
+  rates = (
+    context_rates.long if input_tokens > model_rates.long_context_threshold else context_rates.short
+  )
+  return (
+    Decimal(fresh_tokens) * rates.input
+    + Decimal(cached_tokens) * rates.cached_input
+    + Decimal(cache_write_tokens) * rates.cache_write
+    + Decimal(output_tokens) * rates.output
+  ) / _ONE_MILLION
+
 
 # neutral effort level (`LLMSpec.with_effort`) → Responses API reasoning_effort.
 _EFFORT_TO_REASONING_EFFORT: dict[str, ReasoningEffort] = {
