@@ -76,7 +76,7 @@ def test_layout_hangs_off_the_root(tmp_path):
 
 
 def test_built_names_the_build_command_for_an_absent_bundle(tmp_path):
-  with pytest.raises(FileNotFoundError, match='benchmark-bundle'):
+  with pytest.raises(FileNotFoundError, match='benchmark bundle'):
     built(tmp_path / 'absent')
 
 

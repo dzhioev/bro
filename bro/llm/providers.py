@@ -84,6 +84,11 @@ def price(
   return _provider_module(provider).price(model, usage, service_tier, table)
 
 
+def price_table(provider: str) -> Any:
+  """The provider's current price table, including its provenance and rates."""
+  return _provider_module(provider).PRICE_TABLE
+
+
 def resolve_model(provider: str, model: str) -> str:
   """the full model id `model` names within `provider`.
 

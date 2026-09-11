@@ -26,12 +26,15 @@ The bro-native engine and provider clients live in `bro.native`.
   and a `dump` / `from_dict` round-trip keyed by a `TYPE` discriminator.
   `NativeLLMSpec` is the marker for recipes the bro-native engine can run;
   a provider whose harness drives its own loop (`claude_code`) remains a bare `LLMSpec`.
-- `providers.py` — the provider roster:
-  `_PROVIDER_MODULES` (name → the module declaring its `LLMSpec` / `DEFAULT_MODEL` / `MODELS` short-name table / `FAILURE_SIGNATURES`, imported per name), model resolution (short name, then full id, then verbatim
-  — the table is a convenience, not a whitelist), `provider_of_model`,
-  `failure_signatures` (how a provider's client failures read in a run's error output, classified into `llm.py`'s neutral `FAILURE_CATEGORIES` — what a consumer's retry policy maps onto its own taxonomy),
-  `price` (one call from the provider's raw usage record and effective service tier), and `LLMSelection`:
-  the `provider:model:effort` grammar with its `+fast` suffix.
+- `providers.py` — the provider roster.
+  `_PROVIDER_MODULES` maps a name to the module declaring its `LLMSpec`, `DEFAULT_MODEL`, `MODELS` short-name table, and `FAILURE_SIGNATURES`, imported per name.
+  Model resolution tries the short name, then full id, then verbatim;
+  the table is a convenience, not a whitelist.
+  `provider_of_model` finds the owning provider.
+  `failure_signatures` exposes how a provider's client failures read in a run's error output, classified into `llm.py`'s neutral `FAILURE_CATEGORIES`.
+  `price` prices one call from the provider's raw usage record and effective service tier.
+  `price_table` exposes the current provider-owned table and its provenance.
+  `LLMSelection` owns the `provider:model:effort` grammar with its `+fast` suffix.
   `LLMSelectionError` is the operator-facing failure.
   The flags themselves are `bro/launch/llm_flags.py`.
 - `mu.py` — typed call/content convenience over the OpenAI Responses API.
