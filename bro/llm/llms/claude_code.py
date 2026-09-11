@@ -76,6 +76,54 @@ class PriceTable:
     )
 
 
+def _content_mapping(value: Any, field: str) -> Mapping[str, Any]:
+  if not isinstance(value, Mapping):
+    raise ValueError(f'{field} must be an object')
+  return value
+
+
+def _content_decimal(value: Any, field: str) -> Decimal:
+  if not isinstance(value, str):
+    raise ValueError(f'{field} must be a decimal string')
+  try:
+    decimal = Decimal(value)
+  except ArithmeticError as error:
+    raise ValueError(f'{field} must be a non-negative finite decimal string') from error
+  if not decimal.is_finite() or decimal < 0:
+    raise ValueError(f'{field} must be a non-negative finite decimal string')
+  return decimal
+
+
+def price_table_from_content(source: str, as_of: str, models: Mapping[str, Any]) -> PriceTable:
+  """Reconstruct an immutable table from this provider's serialized vocabulary."""
+  if source == '' or source.strip() != source:
+    raise ValueError('price table source must be a non-empty trimmed string')
+  try:
+    effective_date = date.fromisoformat(as_of)
+  except ValueError as error:
+    raise ValueError('price table as_of must be an ISO date') from error
+  expected = {'input', 'cache_write_5m', 'cache_write_1h', 'cache_read', 'output'}
+  parsed_models: dict[str, TokenRates] = {}
+  for model, raw_rates in models.items():
+    if not isinstance(model, str) or model == '':
+      raise ValueError('price table model names must be non-empty strings')
+    rates = _content_mapping(raw_rates, f'price table model {model}')
+    if set(rates) != expected:
+      raise ValueError(f'price table model {model} must contain exactly {sorted(expected)}')
+    parsed_models[model] = TokenRates(
+      input=_content_decimal(rates['input'], f'price table model {model}.input'),
+      cache_write_5m=_content_decimal(
+        rates['cache_write_5m'], f'price table model {model}.cache_write_5m'
+      ),
+      cache_write_1h=_content_decimal(
+        rates['cache_write_1h'], f'price table model {model}.cache_write_1h'
+      ),
+      cache_read=_content_decimal(rates['cache_read'], f'price table model {model}.cache_read'),
+      output=_content_decimal(rates['output'], f'price table model {model}.output'),
+    )
+  return PriceTable(source, effective_date, MappingProxyType(parsed_models))
+
+
 # Rates are copied from the vendor page and updated by hand in a PR together
 # with this date. Pricing never fetches vendor data at run time.
 PRICE_TABLE = PriceTable(

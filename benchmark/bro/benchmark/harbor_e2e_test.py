@@ -25,6 +25,7 @@ from bro.benchmark.e2e_test_helper import (
   one_task_config,
 )
 from bro.benchmark.trajectory import convert_job_trajectories
+from bro.llm import providers
 
 HARBOR = Path(sys.executable).with_name('harbor')
 
@@ -33,7 +34,7 @@ pytestmark = LIVE_TRIAL
 
 def test_a_real_task_is_driven_and_graded(tmp_path):
   workspace = workspace_root()
-  build(workspace, default_root(workspace))
+  bundle = build(workspace, default_root(workspace))
   jobs = tmp_path / 'jobs'
 
   subprocess.run(
@@ -52,4 +53,11 @@ def test_a_real_task_is_driven_and_graded(tmp_path):
   )
 
   job = assert_graded_run(jobs)
-  assert_valid_trajectories(convert_job_trajectories(job), job)
+  assert_valid_trajectories(
+    convert_job_trajectories(
+      job,
+      agent_version=bundle.identity,
+      price_tables={'openai': providers.price_table('openai')},
+    ),
+    job,
+  )
