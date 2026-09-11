@@ -9,6 +9,8 @@ UNREPORTED_END_INFERENCE = 'unreported'
 LOOPBACK_HOSTS = frozenset({'127.0.0.1', 'localhost', '::1'})
 VALID_END_REASONS = frozenset({'ok', 'raised', 'error'})
 VALID_HOLDS = frozenset({'guided', 'attended', 'detached', 'unattended'})
+INITIAL_TRAIL_FORMAT = 1
+TRAIL_FORMAT = INITIAL_TRAIL_FORMAT
 
 MESSAGE_TYPES = frozenset(
   {
@@ -242,6 +244,7 @@ class Trail:
   forked_from: Optional[ForkedFrom]
   summoned_by: Optional[dict[str, Any]] = None
   hold: Optional[str] = None
+  format: int = TRAIL_FORMAT
 
   @property
   def llm_spec(self) -> dict:
@@ -259,6 +262,7 @@ class Step:
   body: Any
   extras: dict[str, Any]
   usage: Optional[dict] = None
+  format: int = TRAIL_FORMAT
 
 
 @dataclass(frozen=True)

@@ -5,6 +5,7 @@ from typing import Any, Optional, cast
 import pytest
 from aiohttp import web
 
+from bro.trails import model
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest, reported_forks, reported_missing_trail
 from bro.trails.server.auth import (
@@ -330,6 +331,23 @@ async def test_an_unrouted_path_is_not_a_missing_trail(client):
 
 
 @pytest.mark.asyncio
+async def test_migrate_is_an_admin_operation(aiohttp_client, store):
+  trail_id = store.blaze(BlazeRequest(**_blaze_payload()))['id']
+  full = await aiohttp_client(create_app(store, FULL_ACCESS))
+  writer = await aiohttp_client(create_app(store, _tokens('write')))
+
+  unprivileged = await writer.post(f'/v1/admin/trails/{trail_id}/migrate', headers=_auth())
+  migrated = await full.post(f'/v1/admin/trails/{trail_id}/migrate', headers=_auth())
+
+  assert unprivileged.status == 403
+  assert await migrated.json() == {
+    'trail_id': trail_id,
+    'format': model.TRAIL_FORMAT,
+    'migrated_rows': 0,
+  }
+
+
+@pytest.mark.asyncio
 async def test_delete_is_administered_and_reports_a_refusal_as_a_conflict(aiohttp_client, store):
   parent = store.blaze(BlazeRequest(**_blaze_payload()))['id']
   child = store.blaze(
@@ -376,6 +394,7 @@ def test_admin_routes_serve_a_dynamo_backed_store():
     }
 
   assert app['admin'] is store
+  assert '/v1/admin/trails/{trail_id}/migrate' in paths
   assert '/v1/admin/trails/check' in paths
   assert '/v1/admin/trails/{trail_id}/recompute' in paths
   assert '/v1/admin/trails/{trail_id}/relink' in paths

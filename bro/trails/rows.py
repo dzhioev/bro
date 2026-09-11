@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from typing import Any, Optional
 
-from bro.trails import backends
+from bro.trails import backends, formats, model
 from bro.trails.lineage import LineageHead
 from bro.trails.model import payload_sha256
 from bro.trails.store import refusing_invalid_requests
@@ -142,6 +142,7 @@ def build_rows(
     )
     row: dict[str, Any] = {
       'trail_id': trail_id,
+      'format': model.TRAIL_FORMAT,
       'step_id': step_id,
       'ts': parsed.timestamp if parsed.timestamp is not None else default_timestamp,
       'kind': parsed.kind,
@@ -158,7 +159,9 @@ def build_rows(
 def project_messages(
   adapter: backends.Adapter, records: list[dict], types: Optional[set[str]] = None
 ) -> list[dict]:
-  messages = [message for record in records for message in adapter.project(record)]
+  messages = [
+    message for record in records for message in adapter.project(formats.upgrade_row(record))
+  ]
   undeclared = {message['type'] for message in messages} - adapter.emitted_message_types
   if len(undeclared) > 0:
     raise RuntimeError(f'adapter emitted undeclared message types: {sorted(undeclared)}')

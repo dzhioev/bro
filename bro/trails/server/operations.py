@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable
 from typing import Any, Optional
 
+from bro.trails import formats
 from bro.trails.rows import AggregateState
 from bro.trails.server import dynamo_types
 from bro.trails.store import delete_manifest
@@ -19,6 +20,7 @@ _ROW_STORAGE_FIELDS = frozenset(
     'body_encoding',
     'usage',
     'payload_sha256',
+    'format',
   }
 )
 _ddb = dynamo_types.ddb
@@ -93,15 +95,16 @@ class Operations:
 
   def _check_trail(self, trail_id: str) -> dict:
     header = self._required_header(trail_id)
+    served_header = formats.upgrade_header(header)
     rows = self._all_rows(trail_id)
-    computed = self._compute(header, rows)
+    computed = self._compute(served_header, rows)
     differences: list[dict] = []
     for field in ('extent', 'turn_count', 'last_billed_message_id'):
-      stored = header.get(field)
+      stored = served_header.get(field)
       expected = computed.get(field)
       if stored != expected:
         differences.append({'field': field, 'stored': stored, 'expected': expected})
-    stored_native = header.get('native', {})
+    stored_native = served_header.get('native', {})
     for field, expected in computed['native'].items():
       stored = stored_native.get(field)
       if field in {'usage', 'step_counts_by_kind'}:
@@ -114,6 +117,7 @@ class Operations:
     return {'trail_id': trail_id, 'ok': len(differences) == 0, 'differences': differences}
 
   def _compute(self, header: dict, rows: list[dict]) -> dict:
+    header = formats.upgrade_header(header)
     adapter = self._backend(header['harness'])
     state = AggregateState.replaying(header, adapter)
     seen_billing_keys: set[str] = set()
@@ -142,12 +146,12 @@ class Operations:
       expected_rows.append(
         {'kind': parsed.kind, 'attributes': parsed.attributes, 'usage': contribution}
       )
-      if row.get('kind') != parsed.kind:
+      if resolved.get('kind') != parsed.kind:
         row_differences.append(
           {'step_id': row.get('step_id'), 'field': 'kind', 'expected': parsed.kind}
         )
       stored_attributes = {
-        key: value for key, value in row.items() if key not in _ROW_STORAGE_FIELDS
+        key: value for key, value in resolved.items() if key not in _ROW_STORAGE_FIELDS
       }
       for key in sorted(set(stored_attributes) | set(parsed.attributes)):
         if stored_attributes.get(key) != parsed.attributes.get(key):
@@ -159,7 +163,7 @@ class Operations:
               'expected': parsed.attributes.get(key),
             }
           )
-      stored_usage = row.get('usage')
+      stored_usage = resolved.get('usage')
       if stored_usage != contribution:
         row_differences.append(
           {

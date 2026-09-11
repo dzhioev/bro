@@ -9,6 +9,7 @@ import urllib.request
 from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
+from bro.trails import formats
 from bro.trails.model import (
   LOOPBACK_HOSTS,
   BlazeRequest,
@@ -113,13 +114,15 @@ class NetworkStore(TrailsStore):
       query['cursor'] = cursor
     if limit is not None:
       query['limit'] = str(limit)
-    return self._get('/v1/trails', query)
+    page = self._get('/v1/trails', query)
+    page['trails'] = [formats.upgrade_header(header) for header in page['trails']]
+    return page
 
   def get_trail(self, trail_id: str) -> dict:
-    return self._get(f'/v1/trails/{trail_id}', {})
+    return formats.upgrade_header(self._get(f'/v1/trails/{trail_id}', {}))
 
   def get_step(self, trail_id: str, step_id: int) -> dict:
-    return self._get(f'/v1/trails/{trail_id}/steps/{step_id}', {})
+    return formats.upgrade_row(self._get(f'/v1/trails/{trail_id}/steps/{step_id}', {}))
 
   def get_steps(
     self,
@@ -133,7 +136,9 @@ class NetworkStore(TrailsStore):
       query['after'] = str(after)
     if limit is not None:
       query['limit'] = str(limit)
-    return self._get(f'/v1/trails/{trail_id}/steps', query)
+    page = self._get(f'/v1/trails/{trail_id}/steps', query)
+    page['steps'] = [formats.upgrade_row(row) for row in page['steps']]
+    return page
 
   def get_messages(
     self,
@@ -183,6 +188,9 @@ class NetworkStore(TrailsStore):
       payload,
       retry_delays=_HARD_RETRY_DELAYS_SECONDS,
     )
+
+  def migrate_trail(self, trail_id: str) -> dict:
+    return self._send('POST', f'/v1/admin/trails/{trail_id}/migrate', {})
 
   def recompute(self, trail_id: str) -> dict:
     return self._send('POST', f'/v1/admin/trails/{trail_id}/recompute', {})
