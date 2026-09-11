@@ -158,10 +158,14 @@ def _record_trail(trial_directory: Path) -> str:
   return recording.trail_id
 
 
-def _write_job(job_directory: Path, *, error_trial: bool = False) -> tuple[dict, str, str]:
+def _write_job(
+  job_directory: Path, *, error_trial: bool = False, naive_job_timestamps: bool = False
+) -> tuple[dict, str, str]:
   job_directory.mkdir(parents=True)
   framework_revision = _bundle_manifest(job_directory)
   started_at = datetime(2026, 8, 24, 20, 36, 50, 123456, tzinfo=UTC)
+  if naive_job_timestamps:
+    started_at = started_at.replace(tzinfo=None)
   result = {
     'id': str(JOB_ID),
     'started_at': started_at.isoformat(),
@@ -303,6 +307,20 @@ def test_every_source_file_and_a_last_manifest_land_under_the_flat_key(monkeypat
     {'path': name, 'sha256': row['sha256'], 'size': row['size']}
     for name, row in zip(source_names, manifest['files'], strict=True)
   ]
+
+
+def test_naive_harbor_job_timestamps_are_read_as_utc(monkeypatch, tmp_path):
+  job_directory = tmp_path / 'job'
+  _write_job(job_directory, naive_job_timestamps=True)
+  s3 = FakeS3()
+  _configure(monkeypatch, s3)
+
+  retained = retention.retain_job(job_directory)
+
+  assert retained.prefix == f'runs/2026-08-24/{JOB_ID}'
+  manifest = _retained_manifest(s3, retained)
+  assert manifest['job']['started_at'] == '2026-08-24T20:36:50.123456+00:00'
+  assert manifest['job']['finished_at'] == '2026-08-24T20:36:50.123456+00:00'
 
 
 def test_a_trial_that_failed_before_install_keeps_an_error_row(monkeypatch, tmp_path):

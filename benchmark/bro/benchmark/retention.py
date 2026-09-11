@@ -405,16 +405,20 @@ def _manifest(job_directory: Path, inventory: list[InventoryFile]) -> tuple[dict
     if not isinstance(cost_usd, (int, float)) or isinstance(cost_usd, bool):
       raise TypeError(f'trial cost must be numeric or null, got {cost_usd!r}')
     total_cost_usd += float(cost_usd)
-  if job.started_at.tzinfo is None:
-    raise ValueError('benchmark job started_at must carry a timezone')
-  started_at = job.started_at.astimezone(UTC)
-  prefix = f'{PREFIX_ROOT}/{started_at.strftime("%Y-%m-%d")}/{job.id}'
+  started_at = (
+    job.started_at.replace(tzinfo=UTC) if job.started_at.tzinfo is None else job.started_at
+  )
+  finished_at = (
+    job.finished_at.replace(tzinfo=UTC) if job.finished_at.tzinfo is None else job.finished_at
+  )
+  prefix_date = started_at.astimezone(UTC)
+  prefix = f'{PREFIX_ROOT}/{prefix_date.strftime("%Y-%m-%d")}/{job.id}'
   manifest: dict[str, object] = {
     'format': MANIFEST_FORMAT,
     'job': {
       'id': str(job.id),
-      'started_at': job.started_at.isoformat(),
-      'finished_at': job.finished_at.isoformat(),
+      'started_at': started_at.isoformat(),
+      'finished_at': finished_at.isoformat(),
       'n_retries': job.stats.n_retries,
     },
     'config': config,
