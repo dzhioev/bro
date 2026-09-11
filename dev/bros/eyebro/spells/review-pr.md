@@ -8,7 +8,7 @@ This spell should be used when the user asks to review a GitHub pull request and
 Reconciles the PR's existing review state, reviews the head, posts findings as PR review comments, watches for the author's answers and pushes with `poll-pr`, re-reviews round by round, and approves once every finding is addressed or conceded.
 
 parameters: {"pr": "pull request URL or number to review"}
-version: 1.3.0
+version: 1.4.0
 ---
 
 {{iff #features contains github}}
@@ -117,7 +117,7 @@ gh api repos/<owner>/<repo>/pulls/<n>/reviews --input /tmp/review.json
 
 - Any blocking finding → `REQUEST_CHANGES`.
   Only questions and minor suggestions → `COMMENT`.
-  An empty slate → approve (step 7).
+  An empty slate → approve (step 7), with nothing to watch for.
 - Inline comments only land on lines the diff touches;
   a finding elsewhere goes into the review body with its `file:line` spelled out.
 - An adopted thread gets a reply in place rather than a duplicate comment:
@@ -165,8 +165,8 @@ Run it as a background job and read it iteratively
    reconcile first (step 2 — a restarted watch baselines everything as seen), then start a new job.
 3. Stop the watcher with `dev::kill(job_id)` when the review ends.
 
-**The watch loop is the rest of the run.**
-Your terminal answer comes only after the verdict is delivered or the PR reaches a terminal state;
+**The watch loop is the rest of the run, until the verdict.**
+Approval (step 7) or a terminal PR event ends it, and nothing before does:
 keep calling `dev::watch` however quiet the PR stays
 — the idling is the run working as designed, not a stall to wrap up.
 {{eliff #harness = claude}}
@@ -240,10 +240,11 @@ Every finding on the slate settled — fixed in code, answered convincingly, or 
 gh pr review <n> --approve --body '<one paragraph: what the change does, what the review covered, anything minor left as noted>'
 ```
 
-The verdict is yours;
-the merge is the author's flow.
-Report the outcome:
-the PR, the rounds, what was found, and how each point settled.
+The approval is the verdict, and the verdict ends the run:
+stop the watcher where one is running, then report the outcome
+— the PR, the rounds, what was found, and how each point settled
+— and stop.
+The merge is the author's flow, not yours to watch.
 
 ## Safety rules
 
