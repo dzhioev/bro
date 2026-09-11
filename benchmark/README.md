@@ -43,25 +43,16 @@ that will not run.
 Harbor drives every task container through the `docker compose` CLI plugin, which nothing else in
 this repository needs — install it before the first run.
 
-Build the bundle once, then start the job through the post-run pipeline:
+Build the bundle once, then start Harbor:
 
 ```
 uv run --project benchmark benchmark-bundle
 uv run --project benchmark bro.benchmark.job -c benchmark/bro/benchmark/terminal_bench_2_1.yaml
 ```
 
-`bro.benchmark.job` runs Harbor, converts every recorded trial trail to `agent/trajectory.json`, and then runs the configured post-run operations against the finished concrete job directory.
-It does not upload to the Harbor Hub by default.
-Pass `--upload private` or `--upload public` to run the idempotent `harbor upload` sweep after conversion;
-the command prints the Harbor Hub job link and records it in the job's `upload.json`.
-A host operator authenticates with `HARBOR_API_KEY` or `harbor auth login` as Harbor normally does.
-
-When the host resolves a `benchmark_retention` credential, every run is then copied to its S3 bucket regardless of the Hub setting.
-The credential is a JSON object with the exact fields `bucket` and `region`;
-AWS authentication comes from boto3's ambient credential chain.
-Retention adds `retention.json`, whose config, bundle identity and source commit, source-priced run cost, optional Hub link, and file hashes make the run independently inspectable.
-It uploads that manifest last, so its presence marks a complete retained run.
-A host without the credential skips retention and still runs the benchmark.
+`bro.benchmark.job` runs Harbor and nothing after it.
+The completed job directory is Harbor's raw output plus one `bundle.json` copied from the bundle the trials ran, so later workflows can derive the source commit and framework revision without consulting the workspace.
+Conversion, publication, and durable retention are separate operations rather than part of this command.
 
 The job config is the whole reproducibility contract
 — dataset digest, the bros under test, the model, concurrency, attempt depth, and the retry policy
@@ -128,24 +119,15 @@ Managed sessions carry no docker socket;
 from inside one, start the job through the session broker instead:
 
 ```
-benchmark-job start -c benchmark/bro/benchmark/terminal_bench_2_1.yaml --upload private --detach
+benchmark-job start -c benchmark/bro/benchmark/terminal_bench_2_1.yaml --detach
 benchmark-job check <request-id>
 ```
 
-`benchmark-run` accepts the same `--upload none|private|public` choice.
-`none` is the default on both session commands.
-For an unattended upload, store the Harbor API key as the `harbor` credential kind and launch the session with `--grant harbor`;
-the broker hydrates that bounded credential into the host job's `HARBOR_API_KEY`.
-
-The host runs `bro.benchmark.job` with its own docker access
-(the `benchmark` broker kind, `local/bro/local/benchmark_job.py`),
-pointed at the workspace's own config and at the job's own directory rather than the checkout's
-`jobs/`.
-`start` and `check` print the artifact ref of the finished run and the Hub link when it was uploaded;
-`artifact get <ref>` makes it readable, with the whole `<jobs_dir>` under `output/` beside the run's
-`stdout`, `stderr`, and `status.json`.
-The artifact store dies with the session;
-a configured retention bucket is the durable copy, while a host without one must copy out anything that should outlive the session.
+The host runs `bro.benchmark.job` with its own Docker access through the `benchmark` broker kind from `bro-bench`, pointed at the workspace's config and at the command job's output directory.
+`start` and `check` print the artifact ref of the raw run;
+`artifact get <ref>` makes it readable, with the whole `<jobs_dir>` under `output/` beside `stdout`, `stderr`, and `status.json`.
+`benchmark-run` builds and starts the same raw run, then prints `results <path>  artifact <ref>` before its short report.
+The artifact store dies with the session, so pass its ref to the separate retention workflow before the session ends when the run must become durable.
 
 Following a run as it happens means reading the log where
 it is being written:

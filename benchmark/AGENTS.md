@@ -5,19 +5,18 @@ The distribution is
 `bro-benchmark` and its package is `bro.benchmark`, a portion of the framework's `bro` namespace;
 nothing in the framework imports it.
 What the project is and how to drive it is `README.md`.
+The launcher-side `bro-bench` member is mapped by `../bench/AGENTS.md`.
 
 ## Development
 
 This is not a uv workspace member:
 `harbor` reaches `openai < 3` through litellm while `bro-native`
 pins `openai == 3`, so no single lock satisfies both.
-The directory therefore locks and syncs on its
-own — `uv sync --directory benchmark --all-groups` builds `.venv` from the `uv.lock` committed beside
-this file — and depends on core and ride through editable path sources.
-The ride dependency supplies
-scoped-store materialization without pulling the native engine's other `openai` major;
-the two must
-never meet in one interpreter.
+The directory therefore locks and syncs on its own:
+`uv sync --directory benchmark --all-groups` builds `.venv` from the `uv.lock` committed beside this file.
+It depends through editable path sources on core, ride, and `bro-bench`, whose launcher-side credential and command registrations are shared with the root environment.
+The ride dependency supplies scoped-store materialization without pulling the native engine's other `openai` major;
+the two must never meet in one interpreter.
 The relocatable bundle builds and installs `bro` plus `bro-native`
 from the root workspace instead of adding the engine to this project's environment.
 
@@ -75,11 +74,9 @@ BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_
   Harbor's ATIF v1.7 models at `agent/trajectory.json`, including normalized counts for reporting and provider-priced step/final metrics from each call's raw usage;
   `convert_job_trajectories()` is the post-run job-directory sweep,
   and `job_trajectory_cost_usd()` is the strict report-time repricing surface
-- `bro/benchmark/job.py` (`bro.benchmark.job`) — runs Harbor against a known concrete job directory,
-  then owns the ordered host-side post-run pipeline:
-  trajectory conversion, an optional private or public Harbor Hub upload, then durable retention when configured
-- `bro/benchmark/retention.py` — copies every file in a finished run to the configured S3 bucket,
-  with the strict run-cost report, a content inventory, and the score-producing config and bundle identity in a manifest uploaded last
+- `bro/benchmark/job.py` (`bro.benchmark.job`) — runs Harbor against a known concrete job directory and copies the built bundle's manifest into that raw result
+- `bro/benchmark/retention.py` — copies a finished run to the configured S3 bucket with a manifest uploaded last;
+  no run command invokes it implicitly
 - `bro/benchmark/compare.py` (`bro.benchmark.compare`) — aggregates one local job or one complete retained-run cohort into per-task reward means,
   resolves a public leaderboard submission and its exact filtered Hub trials through a beside-the-runs cache, and marks task-level deltas against that reference
 - `bro/benchmark/terminal_bench_2_1.yaml` — the pinned harbor job config, and with the bundle the

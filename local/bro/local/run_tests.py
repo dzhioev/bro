@@ -46,6 +46,7 @@ DISTRIBUTIONS = [
       'conftest\\.py$',
       'bro/base/yesno\\.py$',
       'bro/setup/',
+      '^bench/',
       '^dev/',
       '^local/',
       '^native/',
@@ -58,6 +59,11 @@ DISTRIBUTIONS = [
     # the root ships both packages; `bros` is a namespace another member also
     # contributes to, so nothing infers it from the directory alone
     deptry_known_first_party=('bro', 'bros'),
+  ),
+  Distribution(
+    directory='bench',
+    deptry_exclude=(TEST_MODULE_PATTERN,),
+    deptry_known_first_party=('bro',),
   ),
   Distribution(
     directory='dev',
@@ -255,8 +261,9 @@ PYTEST_FILES = [
   'ride/ride/workspace/clones_test.py',
   'bro/setup/docker_smoke_test_test.py',
   'bro/llm/usage_test.py',
-  'local/bro/local/benchmark_job_test.py',
-  'local/bro/local/benchmark_run_test.py',
+  'bench/bro/bench/credentials_test.py',
+  'bench/bro/bench/job_test.py',
+  'bench/bro/bench/run_test.py',
   'local/bro/local/run_tests_test.py',
   'local/bro/local/shell_policy_test.py',
   'local/bro/local/markdown_policy_test.py',

@@ -11,6 +11,7 @@ resolution-markers = [
 [manifest]
 members = [
     "bro",
+    "bro-bench",
     "bro-dev",
     "bro-local",
     "bro-native",
@@ -366,6 +367,21 @@ dev = [
 ]
 
 [[package]]
+name = "bro-bench"
+version = "0.1.0"
+source = { editable = "bench" }
+dependencies = [
+    { name = "bro" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bro", editable = "." },
+    { name = "pyyaml", specifier = "==6.0.3" },
+]
+
+[[package]]
 name = "bro-dev"
 version = "0.1.0"
 source = { editable = "dev" }
@@ -387,14 +403,12 @@ source = { editable = "local" }
 dependencies = [
     { name = "bro" },
     { name = "bro-dev" },
-    { name = "pyyaml" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "bro", editable = "." },
     { name = "bro-dev", editable = "dev" },
-    { name = "pyyaml", specifier = "==6.0.3" },
 ]
 
 [[package]]

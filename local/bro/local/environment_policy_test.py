@@ -32,7 +32,7 @@ from bro.base.suite_environment import (
 )
 
 _ROOT = Path(__file__).resolve().parents[3]
-_SOURCES = ('benchmark', 'bro', 'bros', 'dev', 'local', 'native', 'ride')
+_SOURCES = ('bench', 'benchmark', 'bro', 'bros', 'dev', 'local', 'native', 'ride')
 
 _REBUILD = rebuild_environment.__name__
 _REBUILD_MODULE = rebuild_environment.__module__

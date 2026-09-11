@@ -1,4 +1,3 @@
-import importlib.metadata
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -114,14 +113,6 @@ def _configure(monkeypatch, s3: FakeS3) -> None:
     'Session',
     lambda region_name: SimpleNamespace(client=lambda service: s3),
   )
-
-
-def test_the_benchmark_distribution_contributes_the_retention_credential_kind():
-  entries = importlib.metadata.entry_points(group='bro.credentials', name='benchmark_retention')
-
-  [entry] = entries
-  assert entry.value == 'bro.benchmark.credentials:RETENTION'
-  assert entry.load() == {'description': 'Benchmark retention storage configuration'}
 
 
 def test_an_absent_retention_credential_skips_the_bucket(monkeypatch, tmp_path):

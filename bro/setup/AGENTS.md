@@ -16,8 +16,9 @@ The framework repository is a uv workspace whose root publishes `bro`;
 `native/` publishes `bro-native`,
 `dev/` publishes `bro-dev`,
 `ride/` publishes `bro-ride`,
-and `local/` publishes this checkout's `bro-local` persona and scripts.
-`uv sync --all-packages --all-groups --all-extras` creates the root `.venv`, installs all five editably, and registers each distribution's committed console-script bridge.
+`bench/` publishes the benchmark launch integration as `bro-bench`,
+and `local/` publishes this checkout's `bro-local` personas and policy scripts.
+`uv sync --all-packages --all-groups --all-extras` creates the root `.venv`, installs all six editably, and registers each distribution's committed console-script bridge.
 The root owns the tool configuration and development gate for every member.
 
 Prerequisites are documented in `README.md`.

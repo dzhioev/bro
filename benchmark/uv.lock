@@ -255,6 +255,21 @@ dev = [
 ]
 
 [[package]]
+name = "bro-bench"
+version = "0.1.0"
+source = { editable = "../bench" }
+dependencies = [
+    { name = "bro" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bro", editable = "../" },
+    { name = "pyyaml", specifier = "==6.0.3" },
+]
+
+[[package]]
 name = "bro-benchmark"
 version = "0.1.0"
 source = { editable = "." }
@@ -262,13 +277,13 @@ dependencies = [
     { name = "boto3" },
     { name = "botocore" },
     { name = "bro" },
+    { name = "bro-bench" },
     { name = "bro-ride" },
     { name = "harbor" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "bro-local" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -279,48 +294,16 @@ requires-dist = [
     { name = "boto3", specifier = "==1.43.40" },
     { name = "botocore", specifier = "==1.43.79" },
     { name = "bro", editable = "../" },
+    { name = "bro-bench", editable = "../bench" },
     { name = "bro-ride", editable = "../ride" },
     { name = "harbor", specifier = "==0.21.0" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "bro-local", editable = "../local" },
     { name = "pyright", specifier = "==1.1.411" },
     { name = "pytest", specifier = "==9.1.1" },
     { name = "pytest-asyncio", specifier = "==1.4.0" },
-]
-
-[[package]]
-name = "bro-dev"
-version = "0.1.0"
-source = { editable = "../dev" }
-dependencies = [
-    { name = "bro" },
-    { name = "markdown-it-py" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "bro", editable = "../" },
-    { name = "markdown-it-py" },
-]
-
-[[package]]
-name = "bro-local"
-version = "0.1.0"
-source = { editable = "../local" }
-dependencies = [
-    { name = "bro" },
-    { name = "bro-dev" },
-    { name = "pyyaml" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "bro", editable = "../" },
-    { name = "bro-dev", editable = "../dev" },
-    { name = "pyyaml", specifier = "==6.0.3" },
 ]
 
 [[package]]
