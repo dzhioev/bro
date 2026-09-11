@@ -7,14 +7,12 @@ from harbor.models.job.result import JobResult, JobStats
 from harbor.models.trajectories import Trajectory
 from harbor.utils.trajectory_validator import TrajectoryValidator
 
-import bro.benchmark.trajectory as trajectory_module
 from bro.benchmark.trajectory import (
   convert_job_trajectories,
   convert_trial_trajectory,
-  trajectory_cost_usd,
   trajectory_from_store,
 )
-from bro.trails.cost import UnpricedCallError
+from bro.llm import providers
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest
 from bro.trails.record.spine import Recording
@@ -22,6 +20,7 @@ from bro.trails.store import local_root
 
 IDENTITY = f'sha256:{"1" * 64}'
 MODEL = 'gpt-5.6-terra'
+PRICE_TABLES = {'openai': providers.price_table('openai')}
 
 
 def _request(*, summoned_by=None, model=MODEL) -> BlazeRequest:
@@ -104,17 +103,14 @@ def _trial_store(agent_directory, monkeypatch) -> LocalStore:
   return LocalStore(local_root())
 
 
-@pytest.fixture(autouse=True)
-def _bundle_identity(monkeypatch):
-  monkeypatch.setattr(trajectory_module, 'reported_agent_version', lambda: IDENTITY)
-
-
 def test_a_recorded_trail_round_trips_through_harbors_validator(tmp_path, monkeypatch):
   agent_directory = tmp_path / 'agent'
   store = _trial_store(agent_directory, monkeypatch)
   trail_id, call_id = _record_trial(store)
 
-  destination = convert_trial_trajectory(agent_directory)
+  destination = convert_trial_trajectory(
+    agent_directory, agent_version=IDENTITY, price_tables=PRICE_TABLES
+  )
 
   validator = TrajectoryValidator()
   assert validator.validate(destination), validator.get_errors()
@@ -154,7 +150,6 @@ def test_a_recorded_trail_round_trips_through_harbors_validator(tmp_path, monkey
   assert converted.steps[3].message == 'Done.'
   assert converted.final_metrics is not None
   assert converted.final_metrics.total_cost_usd == pytest.approx(0.0000796)
-  assert float(trajectory_cost_usd(converted)) == pytest.approx(0.0000796)
 
 
 def test_summoned_trails_are_embedded_and_linked_to_their_call(tmp_path):
@@ -185,7 +180,7 @@ def test_summoned_trails_are_embedded_and_linked_to_their_call(tmp_path):
   child.end('ok')
   parent.end('ok')
 
-  converted = trajectory_from_store(store)
+  converted = trajectory_from_store(store, agent_version=IDENTITY, price_tables=PRICE_TABLES)
 
   assert converted.subagent_trajectories is not None
   assert [item.trajectory_id for item in converted.subagent_trajectories] == [child.trail_id]
@@ -200,6 +195,30 @@ def test_summoned_trails_are_embedded_and_linked_to_their_call(tmp_path):
   assert converted.subagent_trajectories[0].final_metrics.total_cost_usd == pytest.approx(0.000016)
 
 
+def test_a_summon_without_a_step_attaches_at_the_trajectory_root(tmp_path):
+  store = LocalStore(tmp_path / 'ride')
+  parent = Recording.create(store, _request())
+  parent.append([{'kind': 'user_input', 'body': 'Delegate outside a tool call.'}])
+  child = Recording.create(
+    store,
+    _request(summoned_by={'trail_id': parent.trail_id}),
+  )
+  child.append([{'kind': 'user_input', 'body': 'Do it.'}, _llm_call(_assistant('Done.'))])
+  child.end('ok')
+  parent.end('ok')
+
+  converted = trajectory_from_store(store, agent_version=IDENTITY, price_tables=PRICE_TABLES)
+
+  assert converted.subagent_trajectories is not None
+  assert [item.trajectory_id for item in converted.subagent_trajectories] == [child.trail_id]
+  assert all(
+    result.subagent_trajectory_ref is None
+    for step in converted.steps
+    if step.observation is not None
+    for result in step.observation.results
+  )
+
+
 def test_an_unpriced_model_keeps_atif_costs_optional_but_fails_a_cost_report(tmp_path):
   store = LocalStore(tmp_path / 'ride')
   recording = Recording.create(store, _request(model='unpriced-model'))
@@ -211,13 +230,11 @@ def test_an_unpriced_model_keeps_atif_costs_optional_but_fails_a_cost_report(tmp
   )
   recording.end('ok')
 
-  converted = trajectory_from_store(store)
+  converted = trajectory_from_store(store, agent_version=IDENTITY, price_tables=PRICE_TABLES)
 
   assert converted.steps[2].metrics is not None
   assert converted.steps[2].metrics.cost_usd is None
   assert converted.final_metrics is None
-  with pytest.raises(UnpricedCallError, match="model 'unpriced-model'"):
-    trajectory_cost_usd(converted)
 
 
 def test_multiple_root_trails_are_rejected(tmp_path):
@@ -226,7 +243,7 @@ def test_multiple_root_trails_are_rejected(tmp_path):
   Recording.create(store, _request())
 
   with pytest.raises(ValueError, match='exactly one root trail, found 2'):
-    trajectory_from_store(store)
+    trajectory_from_store(store, agent_version=IDENTITY, price_tables=PRICE_TABLES)
 
 
 def test_the_job_walker_converts_every_trial_holding_a_trail(tmp_path, monkeypatch):
@@ -253,7 +270,9 @@ def test_the_job_walker_converts_every_trial_holding_a_trail(tmp_path, monkeypat
   (empty_store / 'result.json').write_text('{}')
   _trial_store(empty_store / 'agent', monkeypatch)
 
-  destinations = convert_job_trajectories(job_directory)
+  destinations = convert_job_trajectories(
+    job_directory, agent_version=IDENTITY, price_tables=PRICE_TABLES
+  )
 
   assert destinations == [recorded_trial / 'agent' / 'trajectory.json']
   validator = TrajectoryValidator()

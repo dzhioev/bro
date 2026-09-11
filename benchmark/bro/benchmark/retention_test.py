@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
@@ -49,6 +50,14 @@ class FakeS3:
   def head_object(self, **kwargs):
     assert kwargs['ChecksumMode'] == 'ENABLED'
     return {'ChecksumSHA256': self.objects[(kwargs['Bucket'], kwargs['Key'])][1]}
+
+  def get_object(self, **kwargs):
+    content, _ = self.objects[(kwargs['Bucket'], kwargs['Key'])]
+    return {'Body': BytesIO(content)}
+
+  def download_file(self, bucket, key, filename):
+    content, _ = self.objects[(bucket, key)]
+    Path(filename).write_bytes(content)
 
 
 def _bundle_manifest(job_directory: Path) -> str:

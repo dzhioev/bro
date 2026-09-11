@@ -226,6 +226,20 @@ class TestPricing:
       'gpt-5.6-terra', {'input_tokens': 1, 'output_tokens': 0}, None, custom_table
     ) == Decimal('0.0001')
 
+  def test_a_serialized_price_snapshot_can_be_reconstructed(self):
+    current = openai_llm.PRICE_TABLE
+    model = current.models['gpt-5.6-terra']
+    snapshot = openai_llm.price_table_from_content(
+      current.source,
+      current.as_of.isoformat(),
+      {'gpt-5.6-terra': model.content()},
+    )
+    usage = {'input_tokens': 1, 'output_tokens': 1}
+
+    assert openai_llm.price('gpt-5.6-terra', usage, None, snapshot) == openai_llm.price(
+      'gpt-5.6-terra', usage, None, current
+    )
+
   def test_table_metadata_carries_a_stable_content_digest(self):
     assert openai_llm.PRICE_TABLE.source == 'https://developers.openai.com/api/docs/pricing'
     assert isinstance(openai_llm.PRICE_TABLE.as_of, date)
