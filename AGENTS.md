@@ -15,8 +15,9 @@ The repository is a uv workspace whose root publishes the `bro` distribution fro
 `dev/` publishes `bro-dev` (the `bro.dev` and `bro.workflow` packages, `poll-pr` and `pr-state`, and the development personas),
 `oops/` publishes `bro-oops` (consumer-neutral deployment and operations machinery),
 `ride/` publishes `bro-ride` (top-level `ride`, the managed-workspace runtime and both harness adapters),
+`bench/` publishes `bro-bench` (the launcher-side benchmark credentials, broker kind, and session commands),
 and `local/` is the `bro-local` member (`bro.local`)
-— this checkout's own persona and scripts, kept out of every published wheel by riding the root's `dev` dependency group.
+— this checkout's own personas and policy scripts, kept out of every published wheel by riding the root's `dev` dependency group.
 All published members depend on `bro`;
 core imports none of them, and `bro-ride` spawns rather than imports `bro-native`.
 `benchmark/` ships from here too but is deliberately **not** a member:
@@ -53,17 +54,16 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   The opt-in is repository-wide rather than theirs alone:
   every pytest root gates its own token spenders on it
 - `sync-scripts --project <directory>` — regenerate a distribution's `[project.scripts]` and committed `_entrypoints.py`, then `uv sync --all-packages --all-groups --all-extras`
-- `uv build --package bro`, `uv build --package bro-native`, `uv build --package bro-dev`, `uv build --package bro-oops`, and `uv build --package bro-ride`
+- `uv build --package bro`, `uv build --package bro-bench`, `uv build --package bro-native`, `uv build --package bro-dev`, `uv build --package bro-oops`, and `uv build --package bro-ride`
   — build the workspace wheels;
   `benchmark/`'s is `uv build --directory benchmark`, since it is no member to name with `--package`
 
 The repository root carries `pyproject.toml` (core distribution metadata, the workspace table, and the tool config every member runs under), `conftest.py` (test isolation:
 the suite's environment is rebuilt rather than patched by `bro/base/suite_environment.py`, clearing the framework's own namespaces plus installed credential-hook variables and pinning the credential resolver's exclusive store at an absent path,
 so a run launched from inside a managed session inherits none of it and resolves only what a test installed itself
-— the rebuild lives in core so every pytest root applies it, `benchmark/`'s own conftest included, and `local/bro/local/environment_policy_test.py` enforces each part repository-wide), `local/` (the `bro-local` member:
+— the rebuild lives in core so every pytest root applies it, `benchmark/`'s own conftest included, and `local/bro/local/environment_policy_test.py` enforces each part repository-wide), `bench/` (the `bro-bench` member:
+the benchmark credentials, the `benchmark` broker kind, and its `benchmark-job` and `benchmark-run` session commands), `local/` (the `bro-local` member:
 the `bro-dev` and `bro-eyebro` personas under `bros/`, sharing `bro/local/prompts.py`'s framework-project context, `bro/local/run_tests.py`'s explicit test roster behind the `run-tests` console script,
-the `benchmark` broker kind with its `benchmark-job` session command (`bro/local/benchmark_job.py`
-— a session starts this checkout's host-side score/convert/upload pipeline through the broker),
 and the tests that hold this repository as a whole to a policy
 — whatever is meaningful only inside this checkout), and `README.md` (the front page: the framework's features and limits, shown on one example crew, linking into the references).
 The development style policy is `dev/bro/prompts/dev/style.md`, tool-served to dev sessions as `dev-style-source::read`;

@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from bro.local.benchmark_job import JobError
-from bro.local.benchmark_run import main, narrowed, report
+from bro.bench.job import JobError
+from bro.bench.run import main, narrowed, report
 
 CONFIG = {
   'datasets': [{'name': 'terminal-bench/terminal-bench-2-1', 'ref': '6'}],
@@ -128,35 +128,35 @@ class TestReport:
 
 
 def test_an_absent_config_fails_before_anything_runs(tmp_path, monkeypatch, caplog):
-  monkeypatch.setattr('bro.local.benchmark_run.project_root', lambda: tmp_path)
+  monkeypatch.setattr('bro.bench.run.project_root', lambda: tmp_path)
 
   assert main(['benchmark-run', '-c', 'benchmark/nothing.yaml']) == 1
   assert any('no job config' in record.getMessage() for record in caplog.records)
   assert not (tmp_path / 'var').exists()
 
 
-def test_upload_visibility_reaches_the_host_job_and_its_link_is_reported(
-  tmp_path, monkeypatch, capsys
-):
+def test_a_run_reports_the_raw_artifact_beside_its_results(tmp_path, monkeypatch, capsys):
   config = tmp_path / 'job.yaml'
   config.write_text(json.dumps(CONFIG))
   artifact = tmp_path / 'artifact'
-  upload = artifact / 'output' / 'job' / 'upload.json'
-  upload.parent.mkdir(parents=True)
-  upload.write_text(
-    json.dumps({'visibility': 'public', 'url': 'https://hub.harborframework.com/jobs/1'})
-  )
+  artifact.mkdir()
   captured = {}
+  ref = 'sha256:' + 'a' * 64
 
-  def run_job(config, timeout, visibility):
-    captured.update(config=config, timeout=timeout, visibility=visibility)
-    return 'sha256:' + 'a' * 64
+  def run_job(config, timeout):
+    captured.update(config=config, timeout=timeout)
+    return ref
 
-  monkeypatch.setattr('bro.local.benchmark_run.project_root', lambda: tmp_path)
-  monkeypatch.setattr('bro.local.benchmark_run.run_job', run_job)
-  monkeypatch.setattr('bro.local.benchmark_run.get_artifact', lambda ref: str(artifact))
-  monkeypatch.setattr('bro.local.benchmark_run.report', lambda jobs: [])
+  monkeypatch.setattr('bro.bench.run.project_root', lambda: tmp_path)
+  monkeypatch.setattr('bro.bench.run.run_job', run_job)
+  monkeypatch.setattr('bro.bench.run.get_artifact', lambda artifact_ref: str(artifact))
+  monkeypatch.setattr('bro.bench.run.report', lambda jobs: [])
 
-  assert main(['benchmark-run', '-c', 'job.yaml', '--upload', 'public', '--keep-bundle']) == 0
-  assert captured['visibility'] == 'public'
-  assert 'upload  https://hub.harborframework.com/jobs/1' in capsys.readouterr().out
+  assert main(['benchmark-run', '-c', 'job.yaml', '--keep-bundle']) == 0
+  assert captured == {
+    'config': next((tmp_path / 'var/benchmark/runs').glob('*.json'))
+    .relative_to(tmp_path)
+    .as_posix(),
+    'timeout': None,
+  }
+  assert f'results {artifact / "output"}  artifact {ref}' in capsys.readouterr().out
