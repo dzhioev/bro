@@ -13,7 +13,9 @@ from bro.trails import formats
 from bro.trails.model import (
   LOOPBACK_HOSTS,
   BlazeRequest,
+  reported_collision,
   reported_forks,
+  reported_missing_tool,
   reported_missing_trail,
   spill_descriptor,
 )
@@ -21,6 +23,8 @@ from bro.trails.store import (
   AppendConflict,
   InvalidRequest,
   PermissionDenied,
+  ToolNotFound,
+  TrailCollision,
   TrailHasForks,
   TrailNotFound,
   TrailsStore,
@@ -246,6 +250,49 @@ class NetworkStore(TrailsStore):
         raise TrailHasForks(trail_id, forks) from exception
       raise
 
+  def get_tool(self, sha256: str) -> Any:
+    return self._get(f'/v1/tools/{sha256}', {})['tool']
+
+  def begin_import(self, header: dict, *, launch_context: Optional[Any] = None) -> dict:
+    trail_id = header.get('id')
+    if not isinstance(trail_id, str) or len(trail_id) == 0:
+      raise ValueError('imported header id must be a non-empty string')
+    payload: dict[str, Any] = {'header': header}
+    if launch_context is not None:
+      payload['launch_context'] = launch_context
+    return self._send(
+      'POST',
+      f'/v1/admin/trails/{trail_id}/import',
+      payload,
+      retry_delays=_HARD_RETRY_DELAYS_SECONDS,
+    )
+
+  def import_rows(
+    self,
+    trail_id: str,
+    offset: int,
+    rows: list[dict],
+    *,
+    tools: Optional[dict[str, Any]] = None,
+  ) -> dict:
+    payload: dict[str, Any] = {'offset': offset, 'rows': rows}
+    if tools is not None:
+      payload['tools'] = tools
+    return self._send(
+      'POST',
+      f'/v1/admin/trails/{trail_id}/import/rows',
+      payload,
+      retry_delays=_HARD_RETRY_DELAYS_SECONDS,
+    )
+
+  def seal_import(self, trail_id: str) -> dict:
+    return self._send(
+      'POST',
+      f'/v1/admin/trails/{trail_id}/import/seal',
+      {},
+      retry_delays=_HARD_RETRY_DELAYS_SECONDS,
+    )
+
   def close(self) -> None:
     with self._lock:
       self._drop_connection()
@@ -326,9 +373,16 @@ class NetworkStore(TrailsStore):
               missing_trail = reported_missing_trail(raw)
               if missing_trail is not None:
                 raise TrailNotFound(missing_trail) from exception
-            extents = _append_conflict_extents(raw)
-            if response.status == 409 and extents is not None:
-              raise AppendConflict(*extents) from exception
+              missing_tool = reported_missing_tool(raw)
+              if missing_tool is not None:
+                raise ToolNotFound(missing_tool) from exception
+            if response.status == 409:
+              extents = _append_conflict_extents(raw)
+              if extents is not None:
+                raise AppendConflict(*extents) from exception
+              collided = reported_collision(raw)
+              if collided is not None:
+                raise TrailCollision(collided, str(exception)) from exception
             if response.status in (401, 403):
               raise PermissionDenied(str(exception)) from exception
             if response.status == 501:
@@ -343,6 +397,8 @@ class NetworkStore(TrailsStore):
           return json.loads(raw)
         except (
           TrailNotFound,
+          ToolNotFound,
+          TrailCollision,
           AppendConflict,
           PermissionDenied,
           UnsupportedOperation,

@@ -12,13 +12,15 @@ from aiohttp import web
 
 from bro.trails import formats, model
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest, payload_sha256
+from bro.trails.model import BlazeRequest, payload_sha256, tools_sha256
 from bro.trails.network import NetworkStore
 from bro.trails.server.auth import TokenTable
 from bro.trails.server.server import create_app
 from bro.trails.store import (
   AppendConflict,
   InvalidRequest,
+  ToolNotFound,
+  TrailCollision,
   TrailHasForks,
   TrailNotFound,
   TrailsStore,
@@ -448,3 +450,200 @@ class TestTrailsStoreContract:
       trails_store.get_step('missing', 0)
     with pytest.raises(TrailNotFound):
       trails_store.get_steps('missing')
+
+
+_TOOLS = [{'type': 'function', 'name': 'read'}]
+_TOOLS_DIGEST = tools_sha256(_TOOLS)
+
+
+def _recorded(store: TrailsStore, trail_id: str) -> tuple[dict, list[dict], object]:
+  """What an export reads through the contract: the served header, the served
+  rows with their bodies resolved, and the launch context."""
+  header = store.get_trail(trail_id)
+  rows = [
+    {**row, 'body': store.resolve_body(row.get('body'))} for row in store.iter_steps(trail_id)
+  ]
+  return header, rows, store.get_launch_context(trail_id)
+
+
+def _record_source(root: Path, **overrides) -> tuple[LocalStore, str]:
+  source = LocalStore(root)
+  trail_id = source.blaze(_bro_request(subject='recorded', **overrides))['id']
+  source.append_records(
+    trail_id,
+    1,
+    [
+      {'kind': 'user_input', 'body': 'hello'},
+      {'kind': 'tool_result', 'body': 'result', 'call_id': 'call-1', 'tools_sha256': _TOOLS_DIGEST},
+    ],
+    tools={_TOOLS_DIGEST: _TOOLS},
+  )
+  source.end_trail(trail_id, 'ok')
+  return source, trail_id
+
+
+class TestImportContract:
+  def test_reads_a_tool_blob_by_digest(self, trails_store):
+    trail_id = trails_store.blaze(_bro_request())['id']
+    trails_store.append_records(
+      trail_id,
+      1,
+      [{'kind': 'tool_result', 'body': 'result', 'tools_sha256': _TOOLS_DIGEST}],
+      tools={_TOOLS_DIGEST: _TOOLS},
+    )
+
+    assert trails_store.get_tool(_TOOLS_DIGEST) == _TOOLS
+    with pytest.raises(ToolNotFound) as missing:
+      trails_store.get_tool('0' * 64)
+    assert missing.value.sha256 == '0' * 64
+
+  def test_an_imported_trail_is_served_as_it_was_recorded(self, trails_store, tmp_path):
+    source, trail_id = _record_source(tmp_path / 'source')
+    header, rows, context = _recorded(source, trail_id)
+
+    result = trails_store.import_trail(
+      header, rows, launch_context=context, tools={_TOOLS_DIGEST: _TOOLS}
+    )
+
+    assert result == {'trail_id': trail_id, 'extent': 3}
+    assert trails_store.get_trail(trail_id) == header
+    assert list(trails_store.iter_steps(trail_id)) == rows
+    assert trails_store.get_tool(_TOOLS_DIGEST) == _TOOLS
+    assert [message['type'] for message in trails_store.iter_messages(trail_id)] == [
+      'system_prompt',
+      'user_input',
+      'tool_result',
+    ]
+
+  def test_an_import_restarts_over_what_the_store_already_holds(self, trails_store, tmp_path):
+    source, trail_id = _record_source(tmp_path / 'source')
+    header, rows, _ = _recorded(source, trail_id)
+    trails_store.begin_import(header)
+    trails_store.import_rows(trail_id, 0, rows[:2], tools={_TOOLS_DIGEST: _TOOLS})
+
+    resumed = trails_store.begin_import(header)
+    rechunked = trails_store.import_rows(trail_id, 0, rows)
+    repeated = trails_store.import_rows(trail_id, 1, rows[1:])
+    with pytest.raises(AppendConflict):
+      trails_store.import_rows(trail_id, 5, [{**rows[0], 'step_id': 5}])
+    sealed = trails_store.seal_import(trail_id)
+    whole_again = trails_store.import_trail(header, rows)
+
+    assert resumed == {'trail_id': trail_id, 'extent': 2, 'created': False}
+    assert rechunked == {'extent': 3, 'appended': 1}
+    assert repeated == {'extent': 3, 'appended': 0, 'duplicate': True}
+    assert sealed == {'trail_id': trail_id, 'extent': 3}
+    assert whole_again == {'trail_id': trail_id, 'extent': 3, 'duplicate': True}
+    assert trails_store.get_trail(trail_id) == header
+
+  def test_a_sealed_trail_answers_only_the_import_it_was_recorded_as(self, trails_store, tmp_path):
+    source, trail_id = _record_source(tmp_path / 'source')
+    header, rows, _ = _recorded(source, trail_id)
+    trails_store.import_trail(header, rows, tools={_TOOLS_DIGEST: _TOOLS})
+    other = LocalStore(tmp_path / 'other')
+    other_id = other.blaze(_bro_request())['id']
+    other_header, other_rows, _ = _recorded(other, other_id)
+    trails_store.begin_import(other_header)
+
+    with pytest.raises(TrailCollision, match='3 rows stored, 1 recorded'):
+      trails_store.import_trail({**header, 'extent': 1}, rows[:1])
+    with pytest.raises(ValueError, match='header records 3 rows, 1 given'):
+      trails_store.import_trail(header, rows[:1])
+    with pytest.raises(TrailCollision, match='end differs'):
+      trails_store.begin_import({**header, 'end': None})
+    with pytest.raises(TrailCollision, match='rows past its sealed extent 3'):
+      trails_store.import_rows(trail_id, 3, [{**rows[2], 'step_id': 3}])
+    with pytest.raises(TrailCollision, match='another import of it is under way'):
+      trails_store.begin_import({**other_header, 'extent': 5})
+    with pytest.raises(ValueError, match='holds 0 of the 1 rows recorded'):
+      trails_store.seal_import(other_id)
+    with pytest.raises(ValueError, match='recorded with 1 rows, 2 sent'):
+      trails_store.import_rows(other_id, 0, [other_rows[0], {**other_rows[0], 'step_id': 1}])
+
+    assert trails_store.get_trail(trail_id) == header
+    assert trails_store.get_trail(other_id)['importing'] == {'extent': 1, 'end': None}
+
+  def test_a_different_trail_under_the_same_id_is_a_collision(self, trails_store, tmp_path):
+    source, trail_id = _record_source(tmp_path / 'source')
+    header, rows, _ = _recorded(source, trail_id)
+    trails_store.import_trail(header, rows, tools={_TOOLS_DIGEST: _TOOLS})
+    changed = {**rows[1], 'body': 'changed', 'payload_sha256': payload_sha256('changed')}
+
+    with pytest.raises(TrailCollision, match='header differs'):
+      trails_store.begin_import({**header, 'bro': 'other'})
+    with pytest.raises(TrailCollision, match='row 1 differs'):
+      trails_store.import_rows(trail_id, 0, [rows[0], changed, rows[2]])
+    with pytest.raises(TrailCollision, match='launch context differs'):
+      trails_store.begin_import(header, launch_context={'cwd': '/elsewhere'})
+
+  def test_an_import_requires_parents_and_tool_blobs(self, trails_store, tmp_path):
+    source = LocalStore(tmp_path / 'source')
+    parent = source.blaze(_bro_request())['id']
+    _, child = _record_source(tmp_path / 'source', forked_from={'trail_id': parent, 'step_id': 0})
+    parent_header, parent_rows, _ = _recorded(source, parent)
+    child_header, child_rows, _ = _recorded(source, child)
+
+    with pytest.raises(ValueError, match=f'forked from {parent}, which must be imported first'):
+      trails_store.begin_import(child_header)
+    trails_store.import_trail(parent_header, parent_rows)
+    trails_store.begin_import(child_header)
+    with pytest.raises(ValueError, match='neither carried nor stored'):
+      trails_store.import_rows(child, 0, child_rows)
+    trails_store.import_rows(child, 0, child_rows, tools={_TOOLS_DIGEST: _TOOLS})
+    trails_store.seal_import(child)
+    with pytest.raises(ValueError, match='invalid trail id'):
+      trails_store.begin_import(
+        {**parent_header, 'id': 'other', 'forked_from': {'trail_id': 'tools', 'step_id': 0}}
+      )
+
+    assert trails_store.get_trail(child)['forked_from'] == {'trail_id': parent, 'step_id': 0}
+    assert [trail['id'] for trail in trails_store.list_trails(forked_from=parent)['trails']] == [
+      child
+    ]
+
+  def test_an_import_refuses_rows_the_adapter_refuses(self, trails_store, tmp_path):
+    source, trail_id = _record_source(tmp_path / 'source')
+    header, rows, _ = _recorded(source, trail_id)
+    trails_store.begin_import(header)
+
+    with pytest.raises(InvalidRequest, match='user_input body must be a string'):
+      trails_store.import_rows(trail_id, 0, [rows[0], {**rows[1], 'body': {'text': 'ping'}}])
+    with pytest.raises(InvalidRequest, match='row carries step 2'):
+      trails_store.import_rows(trail_id, 0, [rows[0], rows[2]])
+
+    assert trails_store.get_trail(trail_id)['extent'] == 0
+
+  def test_an_import_keeps_the_recorded_formats_and_refuses_a_newer_one(
+    self, trails_store, tmp_path
+  ):
+    source, trail_id = _record_source(tmp_path / 'source')
+    _remove_stored_formats(source, trail_id)
+    header = source.stored_header(trail_id)
+    rows = source.stored_rows(trail_id)
+
+    trails_store.import_trail(header, rows, tools={_TOOLS_DIGEST: _TOOLS})
+
+    header_path, rows_path = _stored_paths(trails_store, trail_id)
+    assert 'format' not in json.loads(header_path.read_text())
+    assert 'format' not in json.loads(rows_path.read_text().splitlines()[2])
+    assert trails_store.get_trail(trail_id)['format'] == model.TRAIL_FORMAT
+    assert trails_store.get_trail(trail_id)['extent'] == 3
+    with pytest.raises(ValueError, match=f'trail format {model.TRAIL_FORMAT + 1}'):
+      trails_store.begin_import({**header, 'id': 'newer', 'format': model.TRAIL_FORMAT + 1})
+
+  def test_an_import_keeps_the_minted_lineage_cuts(self, trails_store, tmp_path):
+    source = LocalStore(tmp_path / 'source')
+    first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
+    second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
+    minted = source.blaze(
+      _claude_request(context={'cwd': '/workspace'}, lineage=_lineage(first, second))
+    )
+    source.append_records(minted['id'], 0, [first, second])
+    header, rows, context = _recorded(source, minted['id'])
+
+    trails_store.import_trail(header, rows, launch_context=context)
+
+    imported = trails_store.get_trail(minted['id'])
+    assert imported['native']['lineage_head']['cuts'] == minted['chunks']
+    assert imported == header
+    assert trails_store.get_launch_context(minted['id']) == {'cwd': '/workspace'}

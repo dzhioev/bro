@@ -137,7 +137,42 @@ def validate_end(reason: Any, detail: Any) -> tuple[str, Optional[str]]:
   return reason, detail
 
 
+def validate_recorded_end(end: Any) -> None:
+  """the `end` a stored header carries: null while the trail is open, the
+  writer's verdict, or the inferred `unreported` mark."""
+  if end is None:
+    return
+  if not isinstance(end, dict) or not isinstance(end.get('at'), str):
+    raise ValueError('end must be null or an object carrying at')
+  if end.get('inference') is not None:
+    if set(end) != {'at', 'inference'} or end['inference'] != UNREPORTED_END_INFERENCE:
+      raise ValueError(
+        f'an inferred end carries only at and inference {UNREPORTED_END_INFERENCE!r}'
+      )
+    return
+  if not set(end) <= {'at', 'reason', 'detail'}:
+    raise ValueError('end carries unknown fields')
+  validate_end(end.get('reason'), end.get('detail'))
+
+
 _MISSING_TRAIL_FIELD = 'missing_trail'
+_MISSING_TOOL_FIELD = 'missing_tool'
+_FORKS_FIELD = 'forks'
+_COLLISION_FIELD = 'collision'
+
+
+def _reported_body(raw: bytes) -> Optional[dict]:
+  try:
+    body = json.loads(raw)
+  except (json.JSONDecodeError, UnicodeDecodeError):
+    return None
+  return body if isinstance(body, dict) else None
+
+
+def _reported_text(raw: bytes, field: str) -> Optional[str]:
+  body = _reported_body(raw)
+  value = None if body is None else body.get(field)
+  return value if isinstance(value, str) else None
 
 
 def trail_not_found_body(trail_id: str) -> dict[str, Any]:
@@ -150,17 +185,19 @@ def trail_not_found_body(trail_id: str) -> dict[str, Any]:
 def reported_missing_trail(raw: bytes) -> Optional[str]:
   """the trail id a 404 response body reports missing, or None when the body
   reports anything else."""
-  try:
-    body = json.loads(raw)
-  except (json.JSONDecodeError, UnicodeDecodeError):
-    return None
-  if not isinstance(body, dict):
-    return None
-  trail_id = body.get(_MISSING_TRAIL_FIELD)
-  return trail_id if isinstance(trail_id, str) else None
+  return _reported_text(raw, _MISSING_TRAIL_FIELD)
 
 
-_FORKS_FIELD = 'forks'
+def tool_not_found_body(sha256: str) -> dict[str, Any]:
+  """the body a trails server answers a request for a missing tool blob with;
+  `missing_tool` separates it from every other 404 the way `missing_trail` does."""
+  return {'error': f'tool blob not found: {sha256}', _MISSING_TOOL_FIELD: sha256}
+
+
+def reported_missing_tool(raw: bytes) -> Optional[str]:
+  """the tool digest a 404 response body reports missing, or None when the body
+  reports anything else."""
+  return _reported_text(raw, _MISSING_TOOL_FIELD)
 
 
 def trail_has_forks_body(message: str, forks: list[str]) -> dict[str, Any]:
@@ -172,16 +209,23 @@ def trail_has_forks_body(message: str, forks: list[str]) -> dict[str, Any]:
 def reported_forks(raw: bytes) -> Optional[list[str]]:
   """the forks a 409 response body blames the refusal on, or None for a 409 from
   any other conditional write."""
-  try:
-    body = json.loads(raw)
-  except (json.JSONDecodeError, UnicodeDecodeError):
-    return None
-  if not isinstance(body, dict):
-    return None
-  forks = body.get(_FORKS_FIELD)
+  body = _reported_body(raw)
+  forks = None if body is None else body.get(_FORKS_FIELD)
   if not isinstance(forks, list) or not all(isinstance(fork, str) for fork in forks):
     return None
   return forks
+
+
+def trail_collision_body(message: str, trail_id: str) -> dict[str, Any]:
+  """the body a trails server refuses an import with when `trail_id` already
+  holds a different trail."""
+  return {'error': message, _COLLISION_FIELD: trail_id}
+
+
+def reported_collision(raw: bytes) -> Optional[str]:
+  """the trail id a 409 response body reports as already holding a different
+  trail, or None for a 409 from any other conditional write."""
+  return _reported_text(raw, _COLLISION_FIELD)
 
 
 def _validate_pointer(value: Any, field: str, *, step_optional: bool) -> None:
@@ -297,6 +341,25 @@ def tools_sha256(tools: Any) -> str:
 def payload_sha256(payload: Any) -> str:
   """the digest a stored row carries as `payload_sha256`."""
   return hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
+
+
+def is_sha256(value: Any) -> bool:
+  return isinstance(value, str) and len(value) == 64 and all(c in '0123456789abcdef' for c in value)
+
+
+def named_tool_digests(rows: list[dict]) -> set[str]:
+  """the tool blobs the rows reference through `tools_sha256`."""
+  digests: set[str] = set()
+  for row in rows:
+    digest = row.get('tools_sha256')
+    if digest is None:
+      continue
+    if not is_sha256(digest):
+      raise ValueError(
+        f'row {row.get("trail_id")}/{row.get("step_id")} names an invalid tools_sha256'
+      )
+    digests.add(digest)
+  return digests
 
 
 def spill_descriptor(value: Any) -> Optional[SpillDescriptor]:

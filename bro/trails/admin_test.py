@@ -71,5 +71,23 @@ def test_a_credential_without_the_admin_permission_stops_the_run(store, monkeypa
 
   monkeypatch.setattr(store, 'delete_trail', refuse)
 
-  with pytest.raises(SystemExit, match='administers nothing'):
+  with pytest.raises(SystemExit, match='is refused'):
     main(['trails', 'delete', trail_id])
+
+
+def test_export_then_import_moves_a_trail_between_stores(store, capsys, tmp_path, monkeypatch):
+  trail_id = _blaze(store)
+  layout = tmp_path / 'layout'
+
+  exported = main(['trails', 'export', '-o', str(layout), trail_id])
+
+  assert exported == 0
+  assert capsys.readouterr().out == f'{trail_id}: 1 steps\n'
+  destination = LocalStore(tmp_path / 'destination')
+  monkeypatch.setattr('bro.trails.admin.default_store', lambda: destination)
+
+  imported = main(['trails', 'import', str(layout)])
+
+  assert imported == 0
+  assert capsys.readouterr().out == f'{trail_id}: 1 steps\n'
+  assert destination.get_trail(trail_id) == store.get_trail(trail_id)
