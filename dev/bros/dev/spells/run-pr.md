@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 7.2.0
+version: 7.3.0
 ---
 
 # run-pr
@@ -489,12 +489,14 @@ Don't wait for a review to arrive — hand it over:
    step 15's APPROVED handler is where you collect it.
    It is not the only place, because the child can finish without posting anything new:
    one that finds the head already approved reconciles that as a completed review and reports rather than approving twice, so no event fires and the handler never runs.
-   A PR that stays quiet past reason is therefore a reason to check the summon rather than to keep waiting
-   — `bro::summon_check` on the request id, and a completed answer is the verdict whether or not an event carried it.
+   {{iff #harness = claude}}The summon watch's `summon ended` line is what carries that end
+   — `bro::summon_check` on the request id then, and a completed answer is the verdict whether or not a PR event carried it.{{else}}A PR that stays quiet past reason is therefore a reason to check the summon rather than to keep waiting
+   — `bro::summon_check` on the request id, and a completed answer is the verdict whether or not an event carried it.{{end}}
 3. A summon denied at launch, or a child that raises before it reviews anything
    — typically because its GitHub identity is the PR author's own, which GitHub refuses to let approve
    — means no reviewer ran:
-   report the reason and carry on under human review, with the merge left to whatever the base branch requires of it.
+   {{when #harness = claude}}the second arrives as `summon ended failed:raised` on the summon watch, its reason on `bro::summon_check`;
+   {{end}}report the reason and carry on under human review, with the merge left to whatever the base branch requires of it.
    A child that ran and ended without approving is the opposite case and blocks the merge;
    step 15 handles it.
 
