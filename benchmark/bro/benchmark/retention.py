@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC
 from decimal import Decimal
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Optional
 
 import boto3
@@ -48,6 +48,15 @@ class RetainedRun:
   @property
   def url(self) -> str:
     return f's3://{self.bucket}/{self.prefix}/'
+
+
+@dataclass(frozen=True)
+class RetainedFile:
+  """One row of a manifest's `files`, its path relative to the run prefix."""
+
+  path: Path
+  sha256: str
+  size: int
 
 
 @dataclass(frozen=True)
@@ -496,6 +505,95 @@ def retain_job(job_directory: Path) -> RetainedRun:
       f'failed to retain benchmark run in s3://{config.bucket}/{prefix}: {error}'
     ) from error
   return RetainedRun(config.bucket, prefix)
+
+
+def run_prefix(value: str) -> str:
+  """The `runs/<YYYY-MM-DD>/<job-id>` prefix a retained run is named by."""
+  prefix = value.removesuffix('/')
+  path = PurePosixPath(prefix)
+  if path.is_absolute() or path.parts[:1] != (PREFIX_ROOT,) or len(path.parts) != 3:
+    raise ValueError('run prefix must have the form runs/<YYYY-MM-DD>/<job-id>')
+  if any(part in {'', '.', '..'} for part in path.parts):
+    raise ValueError('run prefix must not contain empty or relative path components')
+  return path.as_posix()
+
+
+def read_manifest(client: Any, config: RetentionConfig, prefix: str) -> dict[str, Any]:
+  """The retention marker of the run at `prefix`; another format is refused."""
+  key = f'{prefix}/{MANIFEST_FILENAME}'
+  try:
+    response = client.get_object(Bucket=config.bucket, Key=key)
+    with response['Body'] as body:
+      content = body.read()
+  except (KeyError, OSError, BotoCoreError, ClientError) as error:
+    raise RetentionError(f'failed to read s3://{config.bucket}/{key}: {error}') from error
+  try:
+    value = json.loads(content)
+  except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
+    raise ValueError(
+      f'invalid retention manifest at s3://{config.bucket}/{key}: {error}'
+    ) from error
+  if not isinstance(value, dict):
+    raise ValueError('retention manifest must be an object')
+  if value.get('format') != MANIFEST_FORMAT:
+    raise ValueError(
+      f'retention manifest must have format {MANIFEST_FORMAT}, got {value.get("format")!r}'
+    )
+  return value
+
+
+def _relative_path(value: Any) -> Path:
+  raw = _required_string(value, 'retention file path')
+  path = PurePosixPath(raw)
+  if path.is_absolute() or any(part in {'', '.', '..'} for part in path.parts):
+    raise ValueError(f'retention file path is not relative: {raw!r}')
+  return Path(*path.parts)
+
+
+def manifest_files(manifest: dict[str, Any]) -> list[RetainedFile]:
+  """The files a manifest lists, each named once."""
+  rows = manifest.get('files')
+  if not isinstance(rows, list):
+    raise ValueError('retention manifest files must be an array')
+  files: list[RetainedFile] = []
+  seen: set[Path] = set()
+  for row in rows:
+    if not isinstance(row, dict) or set(row) != {'path', 'sha256', 'size'}:
+      raise ValueError('retention file must contain exactly path, sha256, and size')
+    path = _relative_path(row['path'])
+    if path in seen:
+      raise ValueError(f'retention manifest repeats file {path.as_posix()}')
+    seen.add(path)
+    size = row['size']
+    if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+      raise ValueError(f'{path} size must be a non-negative integer')
+    files.append(
+      RetainedFile(path=path, sha256=_required_string(row['sha256'], f'{path} sha256'), size=size)
+    )
+  return files
+
+
+def download_files(
+  client: Any,
+  config: RetentionConfig,
+  prefix: str,
+  files: list[RetainedFile],
+  destination: Path,
+) -> None:
+  """Download `files` of the run at `prefix` under `destination`, each verified
+  against the size and digest the manifest recorded."""
+  for file in files:
+    path = destination / file.path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    key = f'{prefix}/{file.path.as_posix()}'
+    try:
+      client.download_file(config.bucket, key, str(path))
+    except (OSError, BotoCoreError, ClientError) as error:
+      raise RetentionError(f'failed to download s3://{config.bucket}/{key}: {error}') from error
+    if path.stat().st_size != file.size:
+      raise RetentionError(f'downloaded file size differs from retention manifest: {key}')
+    if _file_digest(path)[0] != file.sha256:
+      raise RetentionError(f'downloaded file digest differs from retention manifest: {key}')
 
 
 def resolve_job(value: str) -> Path:
