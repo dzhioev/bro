@@ -6,10 +6,15 @@ builds no client, and a session surface reads the fields off it.
 """
 
 import dataclasses
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Optional, Self
+from datetime import date
+from decimal import Decimal
+from types import MappingProxyType
+from typing import Any, ClassVar, Optional, Self
 
 import bro.llm.llm as llm_llm
+from bro.llm import pricing
 
 DEFAULT_MODEL = 'fable'
 
@@ -28,6 +33,152 @@ MODELS: dict[str, str] = {
 # the harness drives its own loop and surfaces failures as session output, not
 # as exception spellings a caller's error scan could classify
 FAILURE_SIGNATURES: tuple[llm_llm.FailureSignature, ...] = ()
+
+_ONE_MILLION = Decimal(1_000_000)
+
+
+@dataclass(frozen=True)
+class TokenRates:
+  """USD per million Anthropic tokens, in transcript usage classes."""
+
+  input: Decimal
+  cache_write_5m: Decimal
+  cache_write_1h: Decimal
+  cache_read: Decimal
+  output: Decimal
+
+  def content(self) -> dict[str, str]:
+    return pricing.decimal_strings(
+      {
+        'input': self.input,
+        'cache_write_5m': self.cache_write_5m,
+        'cache_write_1h': self.cache_write_1h,
+        'cache_read': self.cache_read,
+        'output': self.output,
+      }
+    )
+
+
+@dataclass(frozen=True)
+class PriceTable:
+  source: str
+  as_of: date
+  models: Mapping[str, TokenRates]
+
+  @property
+  def sha256(self) -> str:
+    return pricing.content_sha256(
+      {
+        'source': self.source,
+        'as_of': self.as_of.isoformat(),
+        'models': {model: rates.content() for model, rates in self.models.items()},
+      }
+    )
+
+
+# Rates are copied from the vendor page and updated by hand in a PR together
+# with this date. Pricing never fetches vendor data at run time.
+PRICE_TABLE = PriceTable(
+  source='https://platform.claude.com/docs/en/about-claude/pricing',
+  as_of=date(2026, 9, 11),
+  models=MappingProxyType(
+    {
+      'claude-opus-5': TokenRates(
+        input=Decimal('5.00'),
+        cache_write_5m=Decimal('6.25'),
+        cache_write_1h=Decimal('10.00'),
+        cache_read=Decimal('0.50'),
+        output=Decimal('25.00'),
+      ),
+      'claude-sonnet-5': TokenRates(
+        input=Decimal('2.00'),
+        cache_write_5m=Decimal('2.50'),
+        cache_write_1h=Decimal('4.00'),
+        cache_read=Decimal('0.20'),
+        output=Decimal('10.00'),
+      ),
+      'claude-fable-5': TokenRates(
+        input=Decimal('10.00'),
+        cache_write_5m=Decimal('12.50'),
+        cache_write_1h=Decimal('20.00'),
+        cache_read=Decimal('1.00'),
+        output=Decimal('50.00'),
+      ),
+      'claude-fable-5-1': TokenRates(
+        input=Decimal('10.00'),
+        cache_write_5m=Decimal('12.50'),
+        cache_write_1h=Decimal('20.00'),
+        cache_read=Decimal('0.25'),
+        output=Decimal('50.00'),
+      ),
+      'claude-haiku-4-5-20251001': TokenRates(
+        input=Decimal('1.00'),
+        cache_write_5m=Decimal('1.25'),
+        cache_write_1h=Decimal('2.00'),
+        cache_read=Decimal('0.10'),
+        output=Decimal('5.00'),
+      ),
+    }
+  ),
+)
+PRICE_TABLE_SHA256 = PRICE_TABLE.sha256
+
+
+def _count(value: Any, field: str) -> int:
+  if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+    raise ValueError(f'{field} must be a non-negative int')
+  return value
+
+
+def price(
+  model: str,
+  usage: Mapping[str, Any],
+  service_tier: Optional[str],
+  table: Optional[PriceTable] = None,
+) -> Optional[Decimal]:
+  """Price one Anthropic transcript call from its raw usage record."""
+  if service_tier is not None:
+    raise ValueError('claude-code usage has no service tier')
+  selected = PRICE_TABLE if table is None else table
+  rates = selected.models.get(model)
+  if rates is None:
+    return None
+  pricing.warn_if_stale('claude-code', selected.as_of)
+
+  input_tokens = _count(usage.get('input_tokens'), 'input_tokens')
+  cache_creation_tokens = _count(
+    usage.get('cache_creation_input_tokens', 0), 'cache_creation_input_tokens'
+  )
+  cache_read_tokens = _count(usage.get('cache_read_input_tokens', 0), 'cache_read_input_tokens')
+  output_tokens = _count(usage.get('output_tokens'), 'output_tokens')
+  raw_creation = usage.get('cache_creation')
+  if raw_creation is None:
+    if cache_creation_tokens != 0:
+      raise ValueError('cache_creation is required when cache_creation_input_tokens is nonzero')
+    cache_write_5m_tokens = 0
+    cache_write_1h_tokens = 0
+  else:
+    if not isinstance(raw_creation, Mapping):
+      raise ValueError('cache_creation must be an object')
+    cache_write_5m_tokens = _count(
+      raw_creation.get('ephemeral_5m_input_tokens', 0),
+      'cache_creation.ephemeral_5m_input_tokens',
+    )
+    cache_write_1h_tokens = _count(
+      raw_creation.get('ephemeral_1h_input_tokens', 0),
+      'cache_creation.ephemeral_1h_input_tokens',
+    )
+    if cache_write_5m_tokens + cache_write_1h_tokens != cache_creation_tokens:
+      raise ValueError('cache_creation breakdown does not equal cache_creation_input_tokens')
+
+  return (
+    Decimal(input_tokens) * rates.input
+    + Decimal(cache_write_5m_tokens) * rates.cache_write_5m
+    + Decimal(cache_write_1h_tokens) * rates.cache_write_1h
+    + Decimal(cache_read_tokens) * rates.cache_read
+    + Decimal(output_tokens) * rates.output
+  ) / _ONE_MILLION
+
 
 DEFAULT_EFFORT = 'xhigh'
 

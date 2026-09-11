@@ -139,6 +139,7 @@ PYTEST_FILES = [
   'native/bro/native/distribution_test.py',
   'bro/trails/network_test.py',
   'bro/trails/contract_test.py',
+  'bro/trails/cost_test.py',
   'bro/trails/model_test.py',
   'bro/trails/store_test.py',
   'bro/trails/local_test.py',
@@ -290,7 +291,6 @@ BENCHMARK_PYTEST_FILES = [
   'bro/benchmark/harbor_agent_test.py',
   'bro/benchmark/harbor_environment_test.py',
   'bro/benchmark/job_test.py',
-  'bro/benchmark/pricing_test.py',
   'bro/benchmark/retention_test.py',
   'bro/benchmark/trajectory_test.py',
 ]

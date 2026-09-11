@@ -12,7 +12,7 @@ from botocore.exceptions import EndpointConnectionError, NoCredentialsError
 from harbor.models.trajectories import Agent, Metrics, Step, Trajectory
 
 from bro.benchmark import retention
-from bro.benchmark.pricing import UnpricedModelError
+from bro.trails.cost import UnpricedCallError
 
 JOB_ID = UUID('12345678-1234-5678-1234-567812345678')
 FRAMEWORK_REVISION = 'sha256:' + 'a' * 64
@@ -77,7 +77,15 @@ def _write_job(job_directory: Path, *, uploaded: bool = True) -> dict:
         metrics=Metrics(
           prompt_tokens=2,
           completion_tokens=1,
-          extra={'usage': {'input': 2, 'cache_write': 0, 'cache_read': 0, 'output': 1}},
+          extra={
+            'usage': {'input': 2, 'cache_write': 0, 'cache_read': 0, 'output': 1},
+            'pricing': {
+              'provider': 'openai',
+              'model': 'gpt-5.6-terra',
+              'usage': {'input_tokens': 2, 'output_tokens': 1},
+              'service_tier': None,
+            },
+          },
         ),
       )
     ],
@@ -223,11 +231,11 @@ def test_the_run_cost_report_rejects_an_unpriced_model(monkeypatch, tmp_path):
   _write_job(job_directory)
   trajectory_path = job_directory / 'trial-one' / 'agent' / 'trajectory.json'
   trajectory = json.loads(trajectory_path.read_text())
-  trajectory['agent']['model_name'] = 'unpriced-model'
+  trajectory['steps'][0]['metrics']['extra']['pricing']['model'] = 'unpriced-model'
   trajectory_path.write_text(json.dumps(trajectory))
   _configure(monkeypatch, FakeS3())
 
-  with pytest.raises(UnpricedModelError, match="no benchmark price for model 'unpriced-model'"):
+  with pytest.raises(UnpricedCallError, match="model 'unpriced-model'"):
     retention._manifest(job_directory)
 
 

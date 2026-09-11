@@ -12,9 +12,11 @@ tuple, plus its row in `_PROVIDER_MODULES`.
 
 import dataclasses
 import importlib
+from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 from types import ModuleType
-from typing import Optional
+from typing import Any, Optional
 
 from bro.base import log
 from bro.llm.llm import EFFORT_LEVELS, FailureSignature, LLMSpec
@@ -69,6 +71,17 @@ def failure_signatures(provider: str) -> tuple[FailureSignature, ...]:
   """the provider's declared failure signatures — how its client's failures
   read in a run's error output, each classified into `FAILURE_CATEGORIES`."""
   return _provider_module(provider).FAILURE_SIGNATURES
+
+
+def price(
+  provider: str,
+  model: str,
+  usage: Mapping[str, Any],
+  service_tier: Optional[str],
+  table: Any = None,
+) -> Optional[Decimal]:
+  """Price one call in its provider's raw usage vocabulary."""
+  return _provider_module(provider).price(model, usage, service_tier, table)
 
 
 def resolve_model(provider: str, model: str) -> str:

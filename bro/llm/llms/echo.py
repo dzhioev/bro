@@ -1,7 +1,11 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import ClassVar
+from decimal import Decimal
+from types import MappingProxyType
+from typing import Any, ClassVar, Optional
 
 import bro.llm.llm as llm_llm
+from bro.llm import pricing
 
 DEFAULT_MODEL = 'echo'
 
@@ -10,6 +14,19 @@ MODELS: dict[str, str] = {}
 
 # and no API to fail against
 FAILURE_SIGNATURES: tuple[llm_llm.FailureSignature, ...] = ()
+
+PRICE_TABLE: Mapping[str, Any] = MappingProxyType({})
+PRICE_TABLE_SHA256 = pricing.content_sha256({})
+
+
+def price(
+  model: str,
+  usage: Mapping[str, Any],
+  service_tier: Optional[str],
+  table: Optional[Mapping[str, Any]] = None,
+) -> Optional[Decimal]:
+  """Echo makes no billable provider call."""
+  return None
 
 
 @dataclass(frozen=True)

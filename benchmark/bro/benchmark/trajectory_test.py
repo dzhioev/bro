@@ -8,13 +8,13 @@ from harbor.models.trajectories import Trajectory
 from harbor.utils.trajectory_validator import TrajectoryValidator
 
 import bro.benchmark.trajectory as trajectory_module
-from bro.benchmark.pricing import UnpricedModelError
 from bro.benchmark.trajectory import (
   convert_job_trajectories,
   convert_trial_trajectory,
   trajectory_cost_usd,
   trajectory_from_store,
 )
+from bro.trails.cost import UnpricedCallError
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest
 from bro.trails.record.spine import Recording
@@ -37,14 +37,14 @@ def _request(*, summoned_by=None, model=MODEL) -> BlazeRequest:
   )
 
 
-def _llm_call(*output: dict, usage: dict | None = None) -> dict:
+def _llm_call(*output: dict, usage: dict | None = None, model: str = MODEL) -> dict:
   return {
     'kind': 'llm_call',
     'body': {
-      'request': {'model': MODEL, 'input': []},
+      'request': {'model': model, 'input': []},
       'response': {
         'id': str(uuid4()),
-        'model': MODEL,
+        'model': model,
         'output': list(output),
         'usage': usage or {'input_tokens': 2, 'output_tokens': 1},
       },
@@ -138,7 +138,17 @@ def test_a_recorded_trail_round_trips_through_harbors_validator(tmp_path, monkey
   assert tool_step.metrics.completion_tokens == 4
   assert tool_step.metrics.cost_usd == pytest.approx(0.0000636)
   assert tool_step.metrics.extra == {
-    'usage': {'input': 5, 'cache_write': 2, 'cache_read': 3, 'output': 4}
+    'usage': {'input': 5, 'cache_write': 2, 'cache_read': 3, 'output': 4},
+    'pricing': {
+      'provider': 'openai',
+      'model': MODEL,
+      'usage': {
+        'input_tokens': 10,
+        'input_tokens_details': {'cached_tokens': 3, 'cache_write_tokens': 2},
+        'output_tokens': 4,
+      },
+      'service_tier': None,
+    },
   }
   assert converted.steps[3].reasoning_content == 'I read it.'
   assert converted.steps[3].message == 'Done.'
@@ -193,7 +203,12 @@ def test_summoned_trails_are_embedded_and_linked_to_their_call(tmp_path):
 def test_an_unpriced_model_keeps_atif_costs_optional_but_fails_a_cost_report(tmp_path):
   store = LocalStore(tmp_path / 'ride')
   recording = Recording.create(store, _request(model='unpriced-model'))
-  recording.append([{'kind': 'user_input', 'body': 'Do it.'}, _llm_call(_assistant('Done.'))])
+  recording.append(
+    [
+      {'kind': 'user_input', 'body': 'Do it.'},
+      _llm_call(_assistant('Done.'), model='unpriced-model'),
+    ]
+  )
   recording.end('ok')
 
   converted = trajectory_from_store(store)
@@ -201,7 +216,7 @@ def test_an_unpriced_model_keeps_atif_costs_optional_but_fails_a_cost_report(tmp
   assert converted.steps[2].metrics is not None
   assert converted.steps[2].metrics.cost_usd is None
   assert converted.final_metrics is None
-  with pytest.raises(UnpricedModelError, match="no benchmark price for model 'unpriced-model'"):
+  with pytest.raises(UnpricedCallError, match="model 'unpriced-model'"):
     trajectory_cost_usd(converted)
 
 
