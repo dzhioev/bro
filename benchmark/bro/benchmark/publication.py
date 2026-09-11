@@ -29,7 +29,6 @@ HARBOR_CREDENTIAL = 'harbor'
 PUBLICATIONS_DIRECTORY = 'publications'
 _HARBOR_API_KEY_ENV = 'HARBOR_API_KEY'
 _HARBOR_URL = re.compile(r'^View at (https://\S+)$', re.MULTILINE)
-_DIGEST_PREFIX = 'sha256:'
 
 Visibility = Literal['private', 'public']
 
@@ -70,88 +69,6 @@ def _optional_cost(value: Any, field: str) -> float | None:
   if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
     raise ValueError(f'{field} must be a non-negative number or null')
   return float(value)
-
-
-def _run_prefix(value: str) -> str:
-  prefix = value.removesuffix('/')
-  path = PurePosixPath(prefix)
-  if path.is_absolute() or path.parts[:1] != (retention.PREFIX_ROOT,) or len(path.parts) != 3:
-    raise ValueError('run prefix must have the form runs/<YYYY-MM-DD>/<job-id>')
-  if any(part in {'', '.', '..'} for part in path.parts):
-    raise ValueError('run prefix must not contain empty or relative path components')
-  return path.as_posix()
-
-
-def _manifest(client: Any, config: retention.RetentionConfig, prefix: str) -> dict[str, Any]:
-  key = f'{prefix}/{retention.MANIFEST_FILENAME}'
-  try:
-    response = client.get_object(Bucket=config.bucket, Key=key)
-    with response['Body'] as body:
-      content = body.read()
-  except (KeyError, OSError, BotoCoreError, ClientError) as error:
-    raise PublicationError(f'failed to read s3://{config.bucket}/{key}: {error}') from error
-  try:
-    value = json.loads(content)
-  except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
-    raise ValueError(
-      f'invalid retention manifest at s3://{config.bucket}/{key}: {error}'
-    ) from error
-  manifest = _object(value, 'retention manifest')
-  if manifest.get('format') != retention.MANIFEST_FORMAT:
-    raise ValueError(
-      f'retention manifest must have format {retention.MANIFEST_FORMAT}, '
-      f'got {manifest.get("format")!r}'
-    )
-  return manifest
-
-
-def _safe_relative_path(value: Any) -> Path:
-  raw = _required_string(value, 'retention file path')
-  path = PurePosixPath(raw)
-  if path.is_absolute() or any(part in {'', '.', '..'} for part in path.parts):
-    raise ValueError(f'retention file path is not relative: {raw!r}')
-  return Path(*path.parts)
-
-
-def _file_sha256(path: Path) -> str:
-  digest = hashlib.sha256()
-  with path.open('rb') as file:
-    while chunk := file.read(1024 * 1024):
-      digest.update(chunk)
-  return _DIGEST_PREFIX + digest.hexdigest()
-
-
-def _download_run(
-  client: Any,
-  config: retention.RetentionConfig,
-  prefix: str,
-  manifest: dict[str, Any],
-  destination: Path,
-) -> None:
-  seen: set[Path] = set()
-  for raw_file in _array(manifest.get('files'), 'retention manifest files'):
-    file = _object(raw_file, 'retention file')
-    if set(file) != {'path', 'sha256', 'size'}:
-      raise ValueError('retention file must contain exactly path, sha256, and size')
-    relative_path = _safe_relative_path(file['path'])
-    if relative_path in seen:
-      raise ValueError(f'retention manifest repeats file {relative_path.as_posix()}')
-    seen.add(relative_path)
-    expected_digest = _required_string(file['sha256'], f'{relative_path} sha256')
-    expected_size = file['size']
-    if not isinstance(expected_size, int) or isinstance(expected_size, bool) or expected_size < 0:
-      raise ValueError(f'{relative_path} size must be a non-negative integer')
-    path = destination / relative_path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    key = f'{prefix}/{relative_path.as_posix()}'
-    try:
-      client.download_file(config.bucket, key, str(path))
-    except (OSError, BotoCoreError, ClientError) as error:
-      raise PublicationError(f'failed to download s3://{config.bucket}/{key}: {error}') from error
-    if path.stat().st_size != expected_size:
-      raise PublicationError(f'downloaded file size differs from retention manifest: {key}')
-    if _file_sha256(path) != expected_digest:
-      raise PublicationError(f'downloaded file digest differs from retention manifest: {key}')
 
 
 def _price_tables(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -300,7 +217,7 @@ def _put_publication(
 
 
 def publish_run(run_prefix: str, visibility: Visibility) -> Publication:
-  prefix = _run_prefix(run_prefix)
+  prefix = retention.run_prefix(run_prefix)
   config = retention.configured_retention()
   api_key = credentials.get(HARBOR_CREDENTIAL)
   if api_key == '':
@@ -309,7 +226,7 @@ def publish_run(run_prefix: str, visibility: Visibility) -> Publication:
     client = boto3.Session(region_name=config.region).client('s3')
   except (BotoCoreError, ClientError) as error:
     raise PublicationError(f'failed to connect to retention storage: {error}') from error
-  manifest = _manifest(client, config, prefix)
+  manifest = retention.read_manifest(client, config, prefix)
   job = _object(manifest.get('job'), 'retention manifest job')
   if _required_string(job.get('id'), 'retention manifest job id') != PurePosixPath(prefix).name:
     raise ValueError('run prefix job id differs from the retention manifest')
@@ -317,7 +234,9 @@ def publish_run(run_prefix: str, visibility: Visibility) -> Publication:
   with tempfile.TemporaryDirectory(prefix='benchmark-publish-') as temporary:
     job_directory = Path(temporary) / PurePosixPath(prefix).name
     job_directory.mkdir()
-    _download_run(client, config, prefix, manifest, job_directory)
+    retention.download_files(
+      client, config, prefix, retention.manifest_files(manifest), job_directory
+    )
     _derive_published_job(job_directory, manifest, tables)
     url = _upload(job_directory, visibility, api_key)
   return _put_publication(client, config, prefix, visibility, url)

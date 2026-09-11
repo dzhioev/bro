@@ -1,8 +1,9 @@
+import contextlib
 from pathlib import Path
 
 import pytest
 
-from bro.benchmark import cli, publication, retention
+from bro.benchmark import cli, import_trails, publication, retention
 
 
 def test_bundle_is_a_subcommand(monkeypatch):
@@ -87,3 +88,19 @@ def test_query_accepts_inline_sql_or_a_file_and_defaults_to_the_shell(monkeypatc
 def test_query_refuses_both_inline_sql_and_a_file():
   with pytest.raises(SystemExit):
     cli.main(['benchmark', 'query', 'SELECT * FROM runs', '--file', 'report.sql'])
+
+
+def test_import_trails_runs_through_the_configured_store(monkeypatch, capsys):
+  registry = object()
+  captured = {}
+
+  def import_run(source, store):
+    captured.update(source=source, store=store)
+    return [import_trails.ImportedTrial('trial-one', ['trail-1', 'trail-2'])]
+
+  monkeypatch.setattr(cli, 'configured_store', lambda: contextlib.nullcontext(registry))
+  monkeypatch.setattr(cli.import_trails, 'import_run', import_run)
+
+  assert cli.main(['benchmark', 'import-trails', 'runs/2026-08-24/job-id']) == 0
+  assert captured == {'source': 'runs/2026-08-24/job-id', 'store': registry}
+  assert capsys.readouterr().out == 'trial-one: trail-1 trail-2\n'
