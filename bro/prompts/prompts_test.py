@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from bro.prompts import PromptLoader, get_prompt, get_prompt_path, hold_fragment, session_fragment
-from bro.summon import SUMMONED_ENV
+from bro.summon import MAY_SUMMON_ENV, SUMMONED_ENV, encode_may_summon
 
 
 class TestContainment:
@@ -82,9 +82,31 @@ class TestHoldFragment:
 class TestSessionFragment:
   def test_an_unsummoned_run_gets_the_hold_fragment_alone(self, monkeypatch):
     monkeypatch.delenv(SUMMONED_ENV, raising=False)
+    monkeypatch.delenv(MAY_SUMMON_ENV, raising=False)
     assert session_fragment('attended', harness='claude', wire='mcp') == hold_fragment(
       'attended', harness='claude', wire='mcp'
     )
+
+  def test_a_summoning_run_keeps_the_summon_watch_armed_on_the_claude_harness(self, monkeypatch):
+    monkeypatch.delenv(SUMMONED_ENV, raising=False)
+    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    fragment = session_fragment('attended', harness='claude', wire='mcp')
+    assert fragment.startswith('# Summoning session')
+    assert '{{' not in fragment
+    assert fragment.endswith(hold_fragment('attended', harness='claude', wire='mcp'))
+
+  def test_the_summon_watch_has_no_native_counterpart(self, monkeypatch):
+    monkeypatch.delenv(SUMMONED_ENV, raising=False)
+    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    assert session_fragment('attended', harness='bro', wire='bare') == hold_fragment(
+      'attended', harness='bro', wire='bare'
+    )
+
+  def test_a_summoning_summoned_run_carries_both_contracts_in_order(self, monkeypatch):
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    fragment = session_fragment('attended', harness='claude', wire='mcp')
+    assert fragment.index('# Summoning session') < fragment.index('# Summoned session')
 
   def test_a_summoned_run_carries_the_delivery_contract_at_every_hold(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')

@@ -31,6 +31,9 @@ SHELL = ('Bash', 'BashOutput', 'KillShell', 'Monitor', *_TASK_CONTROL)
 # spawner has shipped under both `Task` and `Agent`; naming both costs nothing
 # and a denylist that misses the live name grants the capability back
 DELEGATION = ('Task', 'Agent', 'Workflow')
+# the stream of the session's own summon transitions — the one command a
+# session that may summon is told to keep `Monitor` on (bro/prompts/summoner.md)
+SUMMON_WATCH = 'summon watch'
 
 
 def block(*tool_names: str) -> When[ToolLayer]:
@@ -55,3 +58,23 @@ def watch(*commands: str) -> When[ToolLayer]:
   and the only tasks the session has are the watches it was admitted to start.
   """
   return when(harness == HARNESS, _allow_commands('Monitor', *commands) | _serve(*_TASK_CONTROL))
+
+
+def admit_summon_watch(blocked: dict[str, None], narrowed: dict[str, list[str]]) -> None:
+  """keep `SUMMON_WATCH` reachable through `Monitor` over whatever a persona withheld.
+
+  A block of `Monitor` hands it back narrowed to that one command, a narrowing
+  of `Monitor` gains it, and the task control over what the watch starts comes
+  back with it, as `watch` serves it. Applied to the folded selection, after
+  the persona's own layers, so a persona that never withheld `Monitor` is left
+  as it is.
+  """
+  if 'Monitor' in blocked:
+    del blocked['Monitor']
+    narrowed['Monitor'] = []
+  if 'Monitor' not in narrowed:
+    return
+  if SUMMON_WATCH not in narrowed['Monitor']:
+    narrowed['Monitor'].append(SUMMON_WATCH)
+  for name in _TASK_CONTROL:
+    blocked.pop(name, None)

@@ -18,9 +18,11 @@ from bro.bro import BaseBro, BroRaised, feature
 from bro.datasources.file import FileSource
 from bro.datasources.man import ManPage, ManSource
 from bro.datasources.searchable import Hit, SearchableDataSource
+from bro.harness import claude
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer
 from bro.llm.tracker import ToolStepSource
 from bro.mcp import MCPServerSpec, describe
+from bro.summon import MAY_SUMMON_ENV, encode_may_summon
 
 
 class EchoBro(BaseBro):
@@ -531,6 +533,59 @@ class TestToolLayers:
 
     with pytest.raises(ValueError, match='TaskStop is served whole but never blocked'):
       InvalidBro().blocked_tool_names('claude')
+
+  def test_a_summoning_run_reaches_the_summon_watch_over_a_block_of_monitor(self, monkeypatch):
+    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    bro = _ShellBlockingBro()
+    assert bro.narrowed_tool_commands('claude') == {'Monitor': (claude.SUMMON_WATCH,)}
+    blocked = set(bro.blocked_tool_names('claude'))
+    assert 'Bash' in blocked
+    assert blocked.isdisjoint({'Monitor', *claude._TASK_CONTROL})
+
+  def test_a_summoning_run_gains_the_summon_watch_on_a_narrowed_monitor(self, monkeypatch):
+    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+
+    class WatchingBro(BaseBro):
+      name = 'watching-and-summoning'
+      description = 'd'
+      tools: ClassVar = [claude.block(*claude.SHELL), claude.watch('watch it')]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    assert WatchingBro().narrowed_tool_commands('claude') == {
+      'Monitor': ('watch it', claude.SUMMON_WATCH)
+    }
+
+  def test_a_run_that_may_summon_nobody_keeps_its_block_of_monitor(self, monkeypatch):
+    monkeypatch.delenv(MAY_SUMMON_ENV, raising=False)
+    bro = _ShellBlockingBro()
+    assert 'Monitor' in bro.blocked_tool_names('claude')
+    assert bro.narrowed_tool_commands('claude') == {}
+
+  def test_an_unwithheld_monitor_is_left_as_it_is(self, monkeypatch):
+    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+
+    class OpenBro(BaseBro):
+      name = 'open-monitor'
+      description = 'd'
+      tools: ClassVar = [claude.block('Bash')]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    bro = OpenBro()
+    assert bro.blocked_tool_names('claude') == ('Bash',)
+    assert bro.narrowed_tool_commands('claude') == {}
+
+
+class _ShellBlockingBro(BaseBro):
+  name = 'blocking-shell'
+  description = 'd'
+  tools: ClassVar = [claude.block(*claude.SHELL)]
+
+  def __init__(self):
+    super().__init__(system_prompt='')
 
 
 class TestConditionalComponents:

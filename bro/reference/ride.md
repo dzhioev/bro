@@ -1114,7 +1114,7 @@ Wrappers and session daemons rely on a small set of env vars:
 - `RIDE_MAY_SUMMON` — the run's own effective summon allow-list, comma-separated and empty when it may summon nothing.
   The env name and its encoding are owned by `bro.summon`;
   set by the launch surfaces for a session root and by the summon lowering (or, for a manual child, the `--summoned` launch from the pending record) for a summoned child (its own resolved list, never its summoner's),
-  read by `ride banner` to render the fact.
+  read by `ride banner` to render the fact, by `bro.prompts.session_fragment` to give a run that may summon the summoner's watch, and by the tool fold to keep that watch's command reachable through `Monitor` for such a run.
   Read-only in the session:
   the host authorizes against its own copy, so only a relaunch (or the summon that spawns a child) changes what it may summon.
 - `RIDE_IN_CONTAINER=1` — set by the Dockerfile, marking a session running in an image this runtime built.

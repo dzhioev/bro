@@ -5,7 +5,7 @@ Five loading conventions:
 auto-inject into every bro + `ride solo|along` session (`shared/`);
 serve as a reference doc
 — injected into `ride solo|along` sessions or mounted as a `FileSource` tool (`*.md`);
-inject the session fragments at launch (`hold.md` composing `holds/`, plus `summoned.md`);
+inject the session fragments at launch (`hold.md` composing `holds/`, plus `summoner.md` and `summoned.md`);
 splice into an opting-in text via `{{include}}` (`fragments/`);
 load explicitly by name (top-level `*.prompt` / `*.prompt.template`).
 
@@ -75,8 +75,15 @@ Current reference docs:
 
 `bro.prompts.session_fragment(hold, …facts)` renders the text a launch surface appends after the composed prompt, and every injection site calls it
 (`ride/ride/claude/system_prompt.py:session_append_prompt`, `ride/ride/claude/claude_argv.py` for `--raw`, `bro/bro.py:BaseBro.system_prompt_for`).
-It is the summoned-delivery contract when the run is one another session is waiting on, then the hold fragment
+It is the summoner's watch when the run may summon, the summoned-delivery contract when the run is one another session is waiting on, then the hold fragment
 — last, where instruction recency is strongest.
+
+### Summoner contract
+
+`summoner.md` (top level) has a session that may summon keep the summon watch armed, so every summon's start and end reaches it as a harness notification.
+It renders only for a run whose effective allow-list (`bro.summon.effective_may_summon()`) is non-empty, and its body forks on the harness:
+the Claude harness holds the watch on a persistent `Monitor`, which the tool fold keeps reachable for exactly that command over any persona's block on the same fact (`bro/harness/claude.py:admit_summon_watch`), while the bro harness renders nothing
+— a native run is never idle, so no notification could reach it.
 
 ### Summoned contract
 
