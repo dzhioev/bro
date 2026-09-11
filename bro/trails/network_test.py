@@ -12,6 +12,8 @@ from bro.trails.model import (
   RecordedTrail,
   Step,
   Trail,
+  tool_not_found_body,
+  trail_collision_body,
   trail_not_found_body,
 )
 from bro.trails.network import (
@@ -20,6 +22,8 @@ from bro.trails.network import (
 )
 from bro.trails.store import (
   AppendConflict,
+  ToolNotFound,
+  TrailCollision,
   TrailNotFound,
   TransientUnavailable,
   UnsupportedOperation,
@@ -370,6 +374,56 @@ class TestWrites:
       '/v1/admin/trails/T1/relink',
       '/v1/admin/trails/check',
     ]
+
+  def test_import_primitives_use_the_admin_seam_and_retry_a_blip(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((201, b'{"trail_id": "T1", "extent": 0, "created": true}'))
+    fake.queue(ConnectionResetError('blip'))
+    fake.queue((200, b'{"extent": 2, "appended": 2}'))
+    fake.queue((200, b'{"trail_id": "T1", "extent": 2}'))
+    fake.queue((200, b'{"tool": [{"name": "read"}]}'))
+    client = _client()
+    header = {'id': 'T1', 'harness': 'bro', 'end': {'at': 'now', 'reason': 'ok'}}
+    rows = [{'trail_id': 'T1', 'step_id': 0}, {'trail_id': 'T1', 'step_id': 1}]
+
+    begun = client.begin_import(header, launch_context={'cwd': '/workspace'})
+    appended = client.import_rows('T1', 0, rows, tools={'0' * 64: []})
+    sealed = client.seal_import('T1')
+    tool = client.get_tool('0' * 64)
+
+    assert begun == {'trail_id': 'T1', 'extent': 0, 'created': True}
+    assert appended == {'extent': 2, 'appended': 2}
+    assert sealed == {'trail_id': 'T1', 'extent': 2}
+    assert tool == [{'name': 'read'}]
+    assert [(request[0], request[1]) for request in fake.requests] == [
+      ('POST', '/v1/admin/trails/T1/import'),
+      ('POST', '/v1/admin/trails/T1/import/rows'),
+      ('POST', '/v1/admin/trails/T1/import/rows'),
+      ('POST', '/v1/admin/trails/T1/import/seal'),
+      ('GET', '/v1/tools/' + '0' * 64),
+    ]
+    sent = [json.loads(body) for _, _, body, _ in fake.requests[:4] if body is not None]
+    assert sent[0] == {'header': header, 'launch_context': {'cwd': '/workspace'}}
+    assert sent[2] == {'offset': 0, 'rows': rows, 'tools': {'0' * 64: []}}
+    assert sent[3] == {}
+
+  def test_a_missing_tool_and_a_collision_map_to_store_errors(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((404, json.dumps(tool_not_found_body('0' * 64)).encode()))
+    fake.queue((409, json.dumps(trail_collision_body('trail T1 differs', 'T1')).encode()))
+    fake.queue((404, b'{"error": "not found"}'))
+    client = _client()
+
+    with pytest.raises(ToolNotFound) as missing:
+      client.get_tool('0' * 64)
+    with pytest.raises(TrailCollision) as collided:
+      client.begin_import({'id': 'T1'})
+    with pytest.raises(HTTPStatusError) as unrouted:
+      client.begin_import({'id': 'T1'})
+
+    assert missing.value.sha256 == '0' * 64
+    assert (collided.value.trail_id, 'trail T1 differs' in str(collided.value)) == ('T1', True)
+    assert unrouted.value.status == 404
 
   def test_set_subject_patches_the_header(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)

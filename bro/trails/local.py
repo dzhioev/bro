@@ -2,6 +2,7 @@
 
 import base64
 import contextlib
+import errno
 import fcntl
 import hashlib
 import json
@@ -14,17 +15,20 @@ from pathlib import Path
 from typing import Any, Optional
 
 from bro.base.lulid import lulid
-from bro.trails import backends, formats, model, rows
+from bro.trails import backends, formats, importing, model, rows
 from bro.trails.lineage import LineageDecision
 from bro.trails.model import (
   UNREPORTED_END_INFERENCE,
   BlazeRequest,
   canonical_json_bytes,
+  is_sha256,
+  named_tool_digests,
   payload_sha256,
   validate_end,
 )
 from bro.trails.store import (
   AppendConflict,
+  ToolNotFound,
   TrailNotFound,
   TrailsStore,
   delete_manifest,
@@ -42,6 +46,7 @@ class LocalStore(TrailsStore):
     self.root = root.expanduser().resolve()
     self.trails_directory = self.root / 'trails'
     self.manifests_directory = self.root / 'manifests'
+    self.staging_directory = self.root / 'staging'
     self.trails_directory.mkdir(parents=True, exist_ok=True)
 
   def list_trails(
@@ -62,9 +67,7 @@ class LocalStore(TrailsStore):
       raise ValueError('limit must be between 1 and 100')
     after = _decode_cursor(cursor) if cursor is not None else None
     headers: list[dict] = []
-    for directory in self.trails_directory.iterdir():
-      if not directory.is_dir() or not (directory / 'header.json').is_file():
-        continue
+    for directory in self._trail_directories():
       header = self.get_trail(directory.name)
       if harness is not None and header.get('harness') != harness:
         continue
@@ -100,8 +103,7 @@ class LocalStore(TrailsStore):
       return []
     return [
       header
-      for directory in sorted(self.trails_directory.iterdir())
-      if directory.is_dir() and (directory / 'header.json').is_file()
+      for directory in sorted(self._trail_directories())
       if (header := self.get_trail(directory.name)).get('native', {}).get('segment') in segments
     ]
 
@@ -154,10 +156,31 @@ class LocalStore(TrailsStore):
   def get_launch_context(self, trail_id: str) -> Optional[Any]:
     with self._locked(trail_id, shared=True):
       formats.upgrade_header(self._read_header(trail_id))
-      path = self._trail_directory(trail_id) / 'context.json'
-      if not path.is_file():
-        return None
-      return json.loads(path.read_text())
+      return self._read_launch_context(trail_id)
+
+  def get_tool(self, sha256: str) -> Any:
+    try:
+      return json.loads(self._tool_path(sha256).read_bytes())
+    except FileNotFoundError as exception:
+      raise ToolNotFound(sha256) from exception
+
+  def stored_trail_ids(self) -> list[str]:
+    """The ids of every trail the root holds."""
+    return sorted(directory.name for directory in self._trail_directories())
+
+  def stored_header(self, trail_id: str) -> dict:
+    """The header as stored, in the format it was written in."""
+    with self._locked(trail_id, shared=True):
+      return self._read_header(trail_id)
+
+  def stored_rows(self, trail_id: str) -> list[dict]:
+    """The rows as stored, each in the format it was written in."""
+    with self._locked(trail_id, shared=True):
+      return self._read_stored_rows(trail_id)
+
+  def stored_launch_context(self, trail_id: str) -> Optional[Any]:
+    with self._locked(trail_id, shared=True):
+      return self._read_launch_context(trail_id)
 
   def blaze(self, request: BlazeRequest) -> dict:
     adapter = self._adapter(request.harness)
@@ -359,6 +382,94 @@ class LocalStore(TrailsStore):
       shutil.rmtree(directory)
     return {'trail_id': trail_id, 'extent': len(steps), 'manifest': str(manifest)}
 
+  def begin_import(self, header: dict, *, launch_context: Optional[Any] = None) -> dict:
+    with refusing_invalid_requests('imported header'):
+      adapter = self._adapter(header['harness'])
+      imported = importing.imported_header(header, adapter)
+    trail_id = imported['id']
+    directory = self._trail_directory(trail_id)
+    importing.require_parents(imported, self._holds_trail)
+    # the trail is written whole under staging and renamed into place, so a
+    # reader never sees a half-written one and the rename decides which of two
+    # begins won the id
+    self.staging_directory.mkdir(exist_ok=True)
+    staging = self.staging_directory / f'{trail_id}.{lulid()}'
+    with _creating_directory(staging):
+      _atomic_bytes(staging / 'steps.jsonl', b'')
+      if launch_context is not None:
+        _atomic_json(staging / 'context.json', launch_context)
+      _atomic_json(staging / 'header.json', imported)
+      (staging / '.lock').touch()
+      try:
+        os.rename(staging, directory)
+      except OSError as exception:
+        if exception.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
+          raise
+      else:
+        return {'trail_id': trail_id, 'extent': 0, 'created': True}
+    shutil.rmtree(staging)
+    with self._locked(trail_id, shared=True):
+      existing = self._read_header(trail_id)
+      existing_context = self._read_launch_context(trail_id)
+      stored = len(self._read_row_lines(trail_id))
+    importing.verify_same_import(
+      trail_id, adapter, existing, imported, existing_context, launch_context
+    )
+    return {'trail_id': trail_id, 'extent': stored, 'created': False}
+
+  def import_rows(
+    self,
+    trail_id: str,
+    offset: int,
+    rows: list[dict],
+    *,
+    tools: Optional[dict[str, Any]] = None,
+  ) -> dict:
+    if offset < 0:
+      raise ValueError('offset must be non-negative')
+    with self._locked(trail_id, shared=False):
+      header = self._read_header(trail_id)
+      adapter = self._adapter(header['harness'])
+      importing.validate_rows(trail_id, offset, rows, adapter)
+      pending = importing.import_state(header)
+      # the row file is what an import has written; the header's extent
+      # follows it, a crash between the two leaving it behind
+      stored = self._read_stored_rows(trail_id)
+      actual = len(stored)
+      if offset > actual:
+        raise AppendConflict(offset, actual)
+      present = min(actual - offset, len(rows))
+      importing.verify_same_rows(trail_id, stored[offset : offset + present], rows[:present])
+      remainder = rows[present:]
+      importing.verify_room(trail_id, pending, actual, len(remainder))
+      self._store_tools({} if tools is None else tools)
+      self._require_tools(named_tool_digests(rows))
+      if len(remainder) > 0:
+        self._write_rows(trail_id, remainder, append=True)
+      extent = actual + len(remainder)
+      if _extent(header) != extent:
+        header['extent'] = extent
+        _atomic_json(self._trail_directory(trail_id) / 'header.json', header)
+      if len(remainder) == 0:
+        return {'extent': extent, 'appended': 0, 'duplicate': True}
+      return {'extent': extent, 'appended': len(remainder)}
+
+  def seal_import(self, trail_id: str) -> dict:
+    with self._locked(trail_id, shared=False):
+      header = self._read_header(trail_id)
+      pending = importing.import_state(header)
+      stored = self._read_rows(trail_id)
+      if pending is None:
+        return {'trail_id': trail_id, 'extent': len(stored), 'duplicate': True}
+      importing.verify_complete(trail_id, pending, len(stored))
+      adapter = self._adapter(header['harness'])
+      fields = importing.sealed_fields(header, stored, adapter, pending['end'])
+      for key in ('importing', 'last_billed_message_id'):
+        header.pop(key, None)
+      header.update(fields)
+      _atomic_json(self._trail_directory(trail_id) / 'header.json', header)
+    return {'trail_id': trail_id, 'extent': len(stored)}
+
   def close(self) -> None:
     pass
 
@@ -370,9 +481,40 @@ class LocalStore(TrailsStore):
       raise ValueError(f'unsupported harness: {harness}') from exception
 
   def _trail_directory(self, trail_id: str) -> Path:
-    if len(trail_id) == 0 or trail_id in {'.', '..'} or '/' in trail_id or os.sep in trail_id:
+    if (
+      len(trail_id) == 0
+      or trail_id in {'.', '..', 'tools'}
+      or '/' in trail_id
+      or os.sep in trail_id
+    ):
       raise ValueError(f'invalid trail id: {trail_id!r}')
     return self.trails_directory / trail_id
+
+  def _holds_trail(self, trail_id: str) -> bool:
+    return (self._trail_directory(trail_id) / 'header.json').is_file()
+
+  def _trail_directories(self) -> list[Path]:
+    return [
+      directory
+      for directory in self.trails_directory.iterdir()
+      if directory.is_dir() and (directory / 'header.json').is_file()
+    ]
+
+  def _tool_path(self, sha256: str) -> Path:
+    if not is_sha256(sha256):
+      raise ValueError(f'invalid tool digest: {sha256!r}')
+    return self.trails_directory / 'tools' / f'{sha256}.json'
+
+  def _read_launch_context(self, trail_id: str) -> Optional[Any]:
+    path = self._trail_directory(trail_id) / 'context.json'
+    if not path.is_file():
+      return None
+    return json.loads(path.read_text())
+
+  def _require_tools(self, digests: set[str]) -> None:
+    for digest in sorted(digests):
+      if not self._tool_path(digest).is_file():
+        raise ValueError(f'tool blob {digest} is neither carried nor stored')
 
   @contextlib.contextmanager
   def _locked(self, trail_id: str, *, shared: bool) -> Iterator[None]:
@@ -435,13 +577,11 @@ class LocalStore(TrailsStore):
   def _store_tools(self, tools: dict[str, Any]) -> None:
     if not isinstance(tools, dict):
       raise ValueError('tools must be an object keyed by sha256')
-    directory = self.trails_directory / 'tools'
-    directory.mkdir(exist_ok=True)
     for sha256, body in tools.items():
       payload = canonical_json_bytes(body)
-      if not isinstance(sha256, str) or len(sha256) != 64 or _sha256(payload) != sha256:
+      if not is_sha256(sha256) or _sha256(payload) != sha256:
         raise ValueError(f'tool blob hash mismatch: {sha256}')
-      path = directory / f'{sha256}.json'
+      path = self._tool_path(sha256)
       if not path.exists():
         _atomic_bytes(path, payload)
 

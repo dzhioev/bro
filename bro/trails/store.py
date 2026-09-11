@@ -9,17 +9,45 @@ from typing import Any, Optional
 
 from bro.base import credentials
 from bro.trails import formats
-from bro.trails.model import BlazeRequest, ForkedFrom, RecordedTrail, Step, Trail
+from bro.trails.model import (
+  BlazeRequest,
+  ForkedFrom,
+  RecordedTrail,
+  Step,
+  Trail,
+  canonical_json_bytes,
+  named_tool_digests,
+)
 from bro.workspace import paths
 
 DEFAULT_LIST_PAGE_SIZE = 100
 DEFAULT_STEPS_PAGE_SIZE = 200
+IMPORT_CHUNK_ROWS = 100
+IMPORT_CHUNK_BYTES = 8 * 1024 * 1024
 
 
 class TrailNotFound(Exception):
   def __init__(self, trail_id: str):
     super().__init__(f'trail not found: {trail_id}')
     self.trail_id = trail_id
+
+
+class ToolNotFound(Exception):
+  def __init__(self, sha256: str):
+    super().__init__(f'tool blob not found: {sha256}')
+    self.sha256 = sha256
+
+
+class TrailCollision(Exception):
+  """The id an import names already holds a different trail."""
+
+  def __init__(self, trail_id: str, message: str):
+    super().__init__(message)
+    self.trail_id = trail_id
+
+
+def collision(trail_id: str, difference: str) -> TrailCollision:
+  return TrailCollision(trail_id, f'trail {trail_id} already holds a different trail: {difference}')
 
 
 class AppendConflict(Exception):
@@ -197,6 +225,68 @@ class TrailsStore(ABC):
     """Remove a trail and everything only it holds, after recording a manifest of
     what went; returns `{trail_id, extent, manifest}`."""
 
+  @abstractmethod
+  def get_tool(self, sha256: str) -> Any:
+    """The tool blob stored under its content digest; `ToolNotFound` when the
+    store holds none."""
+
+  @abstractmethod
+  def begin_import(self, header: dict, *, launch_context: Optional[Any] = None) -> dict:
+    """Create the trail a recorded `header` describes, unsealed and marked with
+    the extent and `end` it was recorded with, its rows to follow through
+    `import_rows`; returns `{trail_id, extent, created}`. The parents the header
+    points at must already be stored. An existing trail answers as itself when
+    it is the same import under way, or a sealed trail with the same header,
+    launch context, extent and end; any other is a `TrailCollision`."""
+
+  @abstractmethod
+  def import_rows(
+    self,
+    trail_id: str,
+    offset: int,
+    rows: list[dict],
+    *,
+    tools: Optional[dict[str, Any]] = None,
+  ) -> dict:
+    """Store recorded rows verbatim from ordinal `offset`, along with the tool
+    blobs in `tools`; every blob the rows name must be carried or already
+    stored. Rows already present are verified by digest and skipped, a chunk
+    starting past the extent is an `AppendConflict`, and a sealed trail takes
+    no new row; returns `{extent, appended}`."""
+
+  @abstractmethod
+  def seal_import(self, trail_id: str) -> dict:
+    """Finish the import `begin_import` marked: refuse unless every recorded
+    row is stored, refold the header's aggregate from them, record the `end`
+    and drop the mark; returns `{trail_id, extent}`, a no-op on a sealed
+    trail."""
+
+  def import_trail(
+    self,
+    header: dict,
+    rows: list[dict],
+    *,
+    launch_context: Optional[Any] = None,
+    tools: Optional[dict[str, Any]] = None,
+  ) -> dict:
+    """Import one recorded trail whole: begin, every row in chunks, seal. The
+    rows must be every one the header records, so a sealed trail answering as
+    itself was compared against all of them; blobs in `tools` travel with the
+    first chunk naming them."""
+    if header.get('extent') != len(rows):
+      raise ValueError(f'header records {header.get("extent")!r} rows, {len(rows)} given')
+    trail_id = self.begin_import(header, launch_context=launch_context)['trail_id']
+    available = {} if tools is None else tools
+    for offset, chunk in import_chunks(rows):
+      carried = {
+        digest: available[digest]
+        for digest in sorted(named_tool_digests(chunk))
+        if digest in available
+      }
+      self.import_rows(trail_id, offset, chunk, tools=carried)
+      available = {digest: blob for digest, blob in available.items() if digest not in carried}
+    return self.seal_import(trail_id)
+
   def resolve_body(self, body: Any) -> Any:
     return body
 
@@ -213,6 +303,27 @@ class TrailsStore(ABC):
     traceback: Optional[TracebackType],
   ) -> None:
     self.close()
+
+
+def import_chunks(rows: list[dict]) -> Iterator[tuple[int, list[dict]]]:
+  """`rows` cut into the chunks an import sends, each with its starting ordinal;
+  a chunk closes at either bound, and a row over the byte budget travels alone."""
+  chunk: list[dict] = []
+  chunk_bytes = 0
+  offset = 0
+  for row in rows:
+    size = len(canonical_json_bytes(row))
+    if len(chunk) > 0 and (
+      len(chunk) >= IMPORT_CHUNK_ROWS or chunk_bytes + size > IMPORT_CHUNK_BYTES
+    ):
+      yield offset, chunk
+      offset += len(chunk)
+      chunk = []
+      chunk_bytes = 0
+    chunk.append(row)
+    chunk_bytes += size
+  if len(chunk) > 0:
+    yield offset, chunk
 
 
 def local_root() -> Path:

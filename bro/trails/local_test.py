@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from bro.trails import backends
+from bro.trails import backends, local
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest, canonical_json_bytes, payload_sha256
 from bro.trails.record.bro import Recorder
-from bro.trails.store import AppendConflict, TrailNotFound, fetch_recorded_trail
+from bro.trails.store import AppendConflict, TrailCollision, TrailNotFound, fetch_recorded_trail
 
 
 def _bro_request(*, bro: str = 'dev', forked_from: dict | None = None) -> BlazeRequest:
@@ -345,3 +345,59 @@ def test_delete_leaves_shared_tool_blobs_alone(tmp_path):
   store.delete_trail(trail_id)
 
   assert (tmp_path / 'trails' / 'tools' / f'{sha256}.json').is_file()
+
+
+def test_an_import_chunk_interrupted_before_its_header_converges_on_retry(tmp_path, monkeypatch):
+  source = LocalStore(tmp_path / 'source')
+  trail_id = source.blaze(_bro_request())['id']
+  source.append_records(trail_id, 1, [{'kind': 'user_input', 'body': 'hello'}])
+  header = source.get_trail(trail_id)
+  rows = list(source.iter_steps(trail_id))
+  destination = LocalStore(tmp_path / 'destination')
+  destination.begin_import(header)
+  atomic_json = local._atomic_json
+
+  def crash_before_the_header(path: Path, value) -> None:
+    if path.name == 'header.json':
+      raise OSError('crashed before the header')
+    atomic_json(path, value)
+
+  monkeypatch.setattr(local, '_atomic_json', crash_before_the_header)
+  with pytest.raises(OSError, match='crashed before the header'):
+    destination.import_rows(trail_id, 0, rows)
+  monkeypatch.setattr(local, '_atomic_json', atomic_json)
+  assert destination.stored_header(trail_id)['extent'] == 0
+  assert len(destination.stored_rows(trail_id)) == 2
+
+  resumed = destination.begin_import(header)
+  retried = destination.import_rows(trail_id, 0, rows)
+  sealed = destination.seal_import(trail_id)
+
+  assert resumed == {'trail_id': trail_id, 'extent': 2, 'created': False}
+  assert retried == {'extent': 2, 'appended': 0, 'duplicate': True}
+  assert sealed == {'trail_id': trail_id, 'extent': 2}
+  assert destination.get_trail(trail_id) == header
+  assert [step['body'] for step in destination.iter_steps(trail_id)] == ['prompt', 'hello']
+
+
+def test_a_begin_that_loses_the_id_observes_the_winner(tmp_path, monkeypatch):
+  source = LocalStore(tmp_path / 'source')
+  trail_id = source.blaze(_bro_request())['id']
+  header = source.get_trail(trail_id)
+  destination = LocalStore(tmp_path / 'destination')
+  rename = local.os.rename
+  raced = []
+
+  def rival_lands_first(staged, target):
+    if len(raced) == 0:
+      raced.append(target)
+      destination.begin_import(header, launch_context={'cwd': '/winner'})
+    rename(staged, target)
+
+  monkeypatch.setattr(local.os, 'rename', rival_lands_first)
+
+  with pytest.raises(TrailCollision, match='launch context differs'):
+    destination.begin_import(header, launch_context={'cwd': '/loser'})
+
+  assert destination.get_launch_context(trail_id) == {'cwd': '/winner'}
+  assert list(destination.staging_directory.iterdir()) == []
