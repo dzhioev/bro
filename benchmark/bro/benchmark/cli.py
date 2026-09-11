@@ -8,7 +8,8 @@ from typing import Optional
 import bro.base.args as base_args
 from bro import artifact
 from bro.base import credentials, log
-from bro.benchmark import bundle, publication, query, retention
+from bro.benchmark import bundle, import_trails, publication, query, retention
+from bro.trails.store import configured_store
 
 __cli_name__ = 'benchmark'
 
@@ -38,11 +39,24 @@ def _publish(source: str, public: bool) -> int:
     OSError,
     ValueError,
     publication.PublicationError,
+    retention.RetentionError,
   ) as error:
     log.error('benchmark publish failed: %s', error)
     return 1
   print(published.url)
   print(published.record_url)
+  return 0
+
+
+def _import_trails(source: str) -> int:
+  try:
+    with configured_store() as registry:
+      imported = import_trails.import_run(source, registry)
+  except import_trails.FAILURES as error:
+    log.error('benchmark import-trails failed: %s', error)
+    return 1
+  for trial in imported:
+    print(f'{trial.trial}: {" ".join(trial.trail_ids)}')
   return 0
 
 
@@ -86,6 +100,12 @@ def main(argv: list[str]) -> Optional[int]:
   source.add_argument('sql', nargs='?', help='inline SQL statement')
   source.add_argument('--file', dest='sql_file', type=Path, help='SQL file to run')
   query_parser.set_handler(_query)
+
+  import_parser = subparsers.add_parser(
+    'import-trails', help="import one retained run's trail stores into the trails registry"
+  )
+  import_parser.add_argument('source', help='retained run prefix')
+  import_parser.set_handler(_import_trails)
 
   return parser.dispatch(argv)
 
