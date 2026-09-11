@@ -466,6 +466,61 @@ def test_migrate_on_append_conditionally_rewrites_older_rows(components, monkeyp
   assert header_update['ExpressionAttributeNames']['#stored_format'] == 'format'
 
 
+def test_header_migration_rederives_storage_attributes_from_the_upgraded_header(
+  components, monkeypatch
+):
+  store, dynamo, s3 = components
+  old_parent = _blaze_bro(store)
+  new_parent = _blaze_bro(store)
+  trail_id = _blaze_bro(
+    store,
+    forked_from={'trail_id': old_parent, 'step_id': 0},
+    native={
+      'llm': {'type': 'openai', 'model': 'gpt-5'},
+      'segment': 'old-segment',
+    },
+    body={
+      'records': [{'kind': 'system_prompt', 'body': 'prompt', 'turn_index': 0}],
+      'launch_context': {'cwd': '/workspace'},
+    },
+  )
+  with dynamo.editing_header(trail_id) as header:
+    header.pop('format')
+  context_key = dynamo.headers[trail_id]['context_s3']
+
+  def upgrade_header(header: dict) -> dict:
+    logical = {
+      key: value
+      for key, value in header.items()
+      if key not in {dynamo_store.GSI_PK_ATTRIBUTE, 'forked_from_id', 'segment', 'context_s3'}
+    }
+    return {
+      **logical,
+      'forked_from': {'trail_id': new_parent, 'step_id': 0},
+      'native': {**logical['native'], 'segment': 'new-segment'},
+    }
+
+  monkeypatch.setitem(
+    formats.UPGRADES,
+    1,
+    formats.FormatUpgrade(header=upgrade_header, row=lambda row: row),
+  )
+  monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+
+  store.migrate_trail(trail_id)
+
+  migrated = dynamo.headers[trail_id]
+  assert migrated[dynamo_store.GSI_PK_ATTRIBUTE] == dynamo_store.GSI_PK_VALUE
+  assert migrated['forked_from_id'] == new_parent
+  assert migrated['segment'] == 'new-segment'
+  assert migrated['context_s3'] == context_key
+  assert context_key in s3.objects
+  assert store.get_launch_context(trail_id) == {'cwd': '/workspace'}
+  assert [trail['id'] for trail in store.list_trails(forked_from=new_parent)['trails']] == [
+    trail_id
+  ]
+
+
 def test_migration_refuses_a_body_changing_upgrade_before_rewriting(components, monkeypatch):
   store, dynamo, s3 = components
   trail_id = _blaze_bro(store)
@@ -995,6 +1050,40 @@ def _recorded_source(root) -> tuple[LocalStore, str, dict, list[dict], str]:
   return source, trail_id, header, rows, sha256
 
 
+def test_import_derives_storage_attributes_from_an_upgraded_recorded_header(
+  components, tmp_path, monkeypatch
+):
+  store, dynamo, _ = components
+  parent = _blaze_bro(store)
+  _, trail_id, header, _, _ = _recorded_source(tmp_path)
+  header['forked_from'] = {'parent': parent, 'ordinal': 0}
+  header['native']['recorded_segment'] = 'segment'
+
+  def upgrade_header(upgrading: dict) -> dict:
+    native = dict(upgrading['native'])
+    native['segment'] = native.pop('recorded_segment')
+    pointer = upgrading['forked_from']
+    return {
+      **upgrading,
+      'native': native,
+      'forked_from': {'trail_id': pointer['parent'], 'step_id': pointer['ordinal']},
+    }
+
+  monkeypatch.setitem(
+    formats.UPGRADES,
+    1,
+    formats.FormatUpgrade(header=upgrade_header, row=lambda row: row),
+  )
+  monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+
+  store.begin_import(header)
+
+  stored = dynamo.headers[trail_id]
+  assert stored['forked_from'] == {'parent': parent, 'ordinal': 0}
+  assert stored['forked_from_id'] == parent
+  assert stored['segment'] == 'segment'
+
+
 def test_import_stores_rows_verbatim_and_serves_the_trail_as_recorded(components, tmp_path):
   store, dynamo, s3 = components
   source, trail_id, header, rows, sha256 = _recorded_source(tmp_path)
@@ -1041,6 +1130,22 @@ def test_import_requires_the_tool_blobs_the_bucket_holds(components, tmp_path):
   assert dynamo_types.tool_blob_key(sha256) in s3.objects
   assert store.get_trail(trail_id)['extent'] == 2
   assert 'last_billed_message_id' not in dynamo_headers(store)[other]
+
+
+def test_import_refuses_a_corrupt_stored_tool_blob(components, tmp_path):
+  store, _, s3 = components
+  source, trail_id, header, rows, sha256 = _recorded_source(tmp_path)
+  store.begin_import(header)
+  store._s3.put_object(
+    Bucket=_BUCKET,
+    Key=dynamo_types.tool_blob_key(sha256),
+    Body=b'{}',
+  )
+
+  with pytest.raises(ValueError, match=f'tool blob hash mismatch: {sha256}'):
+    store.import_rows(trail_id, 0, rows)
+  with pytest.raises(ValueError, match=f'tool blob hash mismatch: {sha256}'):
+    store.import_rows(trail_id, 0, rows, tools={sha256: source.get_tool(sha256)})
 
 
 def test_a_begin_that_loses_the_id_leaves_the_winner_its_own_context(
