@@ -16,6 +16,8 @@ from bro.base import credentials, log
 from bro.trails.model import (
   MESSAGE_TYPES,
   BlazeRequest,
+  tool_not_found_body,
+  trail_collision_body,
   trail_has_forks_body,
   trail_not_found_body,
   validate_end,
@@ -31,6 +33,8 @@ from bro.trails.server.auth import (
 from bro.trails.server.dynamo import BodyTooLarge, DynamoStore
 from bro.trails.store import (
   AppendConflict,
+  ToolNotFound,
+  TrailCollision,
   TrailHasForks,
   TrailNotFound,
   TrailsStore,
@@ -321,6 +325,102 @@ async def _handle_get_messages(request: web.Request) -> web.Response:
   return web.json_response(result)
 
 
+@requires(Permission.READ)
+async def _handle_get_tool(request: web.Request) -> web.Response:
+  sha256 = request.match_info['sha256']
+  store: TrailsStore = request.app['store']
+  try:
+    tool = await _dispatch(store.get_tool, sha256)
+  except ToolNotFound:
+    return web.json_response(tool_not_found_body(sha256), status=404)
+  except ValueError as exception:
+    return _error(str(exception), 400)
+  return web.json_response({'tool': tool})
+
+
+def _collision(exception: TrailCollision) -> web.Response:
+  return web.json_response(trail_collision_body(str(exception), exception.trail_id), status=409)
+
+
+@requires(Permission.ADMIN)
+async def _handle_begin_import(request: web.Request) -> web.Response:
+  trail_id = request.match_info['trail_id']
+  payload = await _read_json(request)
+  if not isinstance(payload, dict):
+    return _error('invalid json', 400)
+  unknown = set(payload) - {'header', 'launch_context'}
+  if len(unknown) > 0:
+    return _error(f'unknown fields: {sorted(unknown)}', 400)
+  header = payload.get('header')
+  if not isinstance(header, dict):
+    return _error('header must be an object', 400)
+  if header.get('id') != trail_id:
+    return _error('header id must name the trail of the path', 400)
+  store: TrailsStore = request.app['store']
+  try:
+    result = await _dispatch(
+      store.begin_import, header, launch_context=payload.get('launch_context')
+    )
+  except TrailCollision as exception:
+    return _collision(exception)
+  except ValueError as exception:
+    return _error(str(exception), 400)
+  return web.json_response(result, status=201 if result['created'] else 200)
+
+
+@requires(Permission.ADMIN)
+async def _handle_import_rows(request: web.Request) -> web.Response:
+  trail_id = request.match_info['trail_id']
+  payload = await _read_json(request)
+  if not isinstance(payload, dict):
+    return _error('invalid json', 400)
+  unknown = set(payload) - {'offset', 'rows', 'tools'}
+  if len(unknown) > 0:
+    return _error(f'unknown fields: {sorted(unknown)}', 400)
+  offset = payload.get('offset')
+  if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+    return _error('offset must be a non-negative int', 400)
+  rows = payload.get('rows')
+  if not isinstance(rows, list):
+    return _error('rows must be a list', 400)
+  tools = payload.get('tools', {})
+  if not isinstance(tools, dict):
+    return _error('tools must be an object', 400)
+  store: TrailsStore = request.app['store']
+  try:
+    result = await _dispatch(store.import_rows, trail_id, offset, rows, tools=tools)
+  except BodyTooLarge as exception:
+    return _error(str(exception), 413)
+  except TrailNotFound:
+    return _trail_not_found(trail_id)
+  except AppendConflict as exception:
+    return web.json_response(
+      {'error': str(exception), 'expected': exception.expected, 'extent': exception.actual},
+      status=409,
+    )
+  except TrailCollision as exception:
+    return _collision(exception)
+  except ValueError as exception:
+    return _error(str(exception), 400)
+  return web.json_response(result)
+
+
+@requires(Permission.ADMIN)
+async def _handle_seal_import(request: web.Request) -> web.Response:
+  trail_id = request.match_info['trail_id']
+  payload = await _read_json(request)
+  if payload is not None and payload != {}:
+    return _error('body must be empty', 400)
+  store: TrailsStore = request.app['store']
+  try:
+    result = await _dispatch(store.seal_import, trail_id)
+  except TrailNotFound:
+    return _trail_not_found(trail_id)
+  except ValueError as exception:
+    return _error(str(exception), 400)
+  return web.json_response(result)
+
+
 @requires(Permission.ADMIN)
 async def _handle_migrate_trail(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
@@ -507,7 +607,11 @@ def create_app(
   app.router.add_get('/v1/trails/{trail_id}/context', _handle_get_context)
   app.router.add_post('/v1/trails/{trail_id}/end', _handle_end_trail)
   app.router.add_post('/v1/trails/{trail_id}/keepalive', _handle_keepalive)
+  app.router.add_get('/v1/tools/{sha256}', _handle_get_tool)
   app['admin'] = admin
+  app.router.add_post('/v1/admin/trails/{trail_id}/import', _handle_begin_import)
+  app.router.add_post('/v1/admin/trails/{trail_id}/import/rows', _handle_import_rows)
+  app.router.add_post('/v1/admin/trails/{trail_id}/import/seal', _handle_seal_import)
   app.router.add_post('/v1/admin/trails/{trail_id}/migrate', _handle_migrate_trail)
   app.router.add_delete('/v1/admin/trails/{trail_id}', _handle_delete_trail)
   app.router.add_post('/v1/admin/trails/check', _handle_check)

@@ -4,8 +4,7 @@ import json
 from collections.abc import Callable
 from typing import Any, Optional
 
-from bro.trails import formats
-from bro.trails.rows import AggregateState
+from bro.trails import formats, importing, rows
 from bro.trails.server import dynamo_types
 from bro.trails.store import delete_manifest
 
@@ -28,11 +27,10 @@ _ddb_item = dynamo_types.ddb_item
 _from_ddb_item = dynamo_types.from_ddb_item
 
 
-def _row_digest(row: dict) -> str:
-  digest = row.get('payload_sha256')
-  if not isinstance(digest, str):
-    raise ValueError(f'step {row.get("trail_id")}/{row.get("step_id")} carries no payload digest')
-  return digest
+def _absent_billing_id(fields: dict) -> tuple[str, ...]:
+  """The attribute to drop when the fold has no billing id: absent on every
+  backend rather than null on this one."""
+  return () if 'last_billed_message_id' in fields else ('last_billed_message_id',)
 
 
 class Operations:
@@ -59,26 +57,44 @@ class Operations:
 
   def recompute(self, trail_id: str) -> dict:
     header = self._required_header(trail_id)
-    rows = self._all_rows(trail_id)
-    computed = self._compute(header, rows)
-    for row, expected in zip(rows, computed['rows'], strict=True):
+    stored = self._all_rows(trail_id)
+    computed = self._compute(header, stored)
+    for row, expected in zip(stored, computed['rows'], strict=True):
       updated = {key: value for key, value in row.items() if key in _ROW_STORAGE_FIELDS}
       updated.pop('usage', None)
-      updated['kind'] = expected['kind']
-      updated.update(expected['attributes'])
-      if expected['usage'] is not None:
-        updated['usage'] = expected['usage']
+      updated['kind'] = expected.record.kind
+      updated.update(expected.record.attributes)
+      if expected.usage is not None:
+        updated['usage'] = expected.usage
       self._dynamo.put_item(
         TableName=self._steps_table,
         Item=_ddb_item(updated),
       )
-    self._write_recomputed_header(header, computed)
+    fields = computed['fields']
+    self._write_fold(trail_id, fields, remove=_absent_billing_id(fields))
     return {
       'trail_id': trail_id,
-      'extent': computed['extent'],
-      'turn_count': computed['turn_count'],
-      'usage': computed['native']['usage'],
+      'extent': fields['extent'],
+      'turn_count': fields['turn_count'],
+      'usage': fields['native']['usage'],
     }
+
+  def seal(self, header: dict, end: Optional[dict]) -> dict:
+    """Refold the header from every stored row and record `end`."""
+    trail_id = header['id']
+    adapter = self._backend(header['harness'])
+    resolved = [self._resolve_row_body(header['harness'], row) for row in self._all_rows(trail_id)]
+    fields = importing.sealed_fields(header, resolved, adapter, end)
+    try:
+      self._write_fold(
+        trail_id,
+        fields,
+        remove=('importing', *_absent_billing_id(fields)),
+        expected_extent=len(resolved),
+      )
+    except self._dynamo.exceptions.ConditionalCheckFailedException as exception:
+      raise ValueError(f'trail {trail_id} advanced while sealing') from exception
+    return {'trail_id': trail_id, 'extent': len(resolved)}
 
   def check(self, trail_id: Optional[str] = None) -> dict:
     if trail_id is not None:
@@ -96,35 +112,39 @@ class Operations:
   def _check_trail(self, trail_id: str) -> dict:
     header = self._required_header(trail_id)
     served_header = formats.upgrade_header(header)
-    rows = self._all_rows(trail_id)
-    computed = self._compute(served_header, rows)
+    stored = self._all_rows(trail_id)
+    computed = self._compute(served_header, stored)
+    fields = computed['fields']
     differences: list[dict] = []
     for field in ('extent', 'turn_count', 'last_billed_message_id'):
-      stored = served_header.get(field)
-      expected = computed.get(field)
-      if stored != expected:
-        differences.append({'field': field, 'stored': stored, 'expected': expected})
+      stored_value = served_header.get(field)
+      expected = fields.get(field)
+      if stored_value != expected:
+        differences.append({'field': field, 'stored': stored_value, 'expected': expected})
     stored_native = served_header.get('native', {})
-    for field, expected in computed['native'].items():
-      stored = stored_native.get(field)
+    for field, expected in fields['native'].items():
+      stored_value = stored_native.get(field)
       if field in {'usage', 'step_counts_by_kind'}:
-        stored = stored if stored is not None else {}
+        stored_value = stored_value if stored_value is not None else {}
         expected = expected if expected is not None else {}
-      if stored != expected:
-        differences.append({'field': f'native.{field}', 'stored': stored, 'expected': expected})
+      if stored_value != expected:
+        differences.append(
+          {'field': f'native.{field}', 'stored': stored_value, 'expected': expected}
+        )
     differences.extend(computed['row_differences'])
     differences.extend(computed['billing_differences'])
     return {'trail_id': trail_id, 'ok': len(differences) == 0, 'differences': differences}
 
-  def _compute(self, header: dict, rows: list[dict]) -> dict:
+  def _compute(self, header: dict, stored: list[dict]) -> dict:
     header = formats.upgrade_header(header)
     adapter = self._backend(header['harness'])
-    state = AggregateState.replaying(header, adapter)
-    seen_billing_keys: set[str] = set()
-    expected_rows: list[dict] = []
+    resolved = [self._resolve_row_body(header['harness'], row) for row in stored]
+    state, replayed = rows.replay(header, resolved, adapter)
     row_differences: list[dict] = []
     billing_counts: dict[str, int] = {}
-    for expected_step_id, row in enumerate(rows):
+    for expected_step_id, (row, resolved_row, expected) in enumerate(
+      zip(stored, resolved, replayed, strict=True)
+    ):
       if row.get('step_id') != expected_step_id:
         row_differences.append(
           {
@@ -133,25 +153,13 @@ class Operations:
             'expected': expected_step_id,
           }
         )
-      resolved = self._resolve_row_body(header['harness'], row)
-      parsed = adapter.parse(resolved)
-      classification = adapter.classify(parsed)
-      contribution = state.apply(
-        parsed,
-        classification,
-        seen_billing_keys,
-        step_id=expected_step_id,
-        digest=_row_digest(row),
-      )
-      expected_rows.append(
-        {'kind': parsed.kind, 'attributes': parsed.attributes, 'usage': contribution}
-      )
-      if resolved.get('kind') != parsed.kind:
+      parsed = expected.record
+      if resolved_row.get('kind') != parsed.kind:
         row_differences.append(
           {'step_id': row.get('step_id'), 'field': 'kind', 'expected': parsed.kind}
         )
       stored_attributes = {
-        key: value for key, value in resolved.items() if key not in _ROW_STORAGE_FIELDS
+        key: value for key, value in resolved_row.items() if key not in _ROW_STORAGE_FIELDS
       }
       for key in sorted(set(stored_attributes) | set(parsed.attributes)):
         if stored_attributes.get(key) != parsed.attributes.get(key):
@@ -163,16 +171,17 @@ class Operations:
               'expected': parsed.attributes.get(key),
             }
           )
-      stored_usage = resolved.get('usage')
-      if stored_usage != contribution:
+      stored_usage = resolved_row.get('usage')
+      if stored_usage != expected.usage:
         row_differences.append(
           {
             'step_id': row.get('step_id'),
             'field': 'usage',
             'stored': stored_usage,
-            'expected': contribution,
+            'expected': expected.usage,
           }
         )
+      classification = expected.classification
       if classification.usage is not None and classification.billing_key is not None:
         key = classification.billing_key
         billing_counts.setdefault(key, 0)
@@ -183,45 +192,54 @@ class Operations:
       for key, count in billing_counts.items()
       if count != 1
     ]
+    fields = rows.state_fields(state, len(stored))
     return {
-      'extent': len(rows),
-      'turn_count': state.turn_count,
-      'last_billed_message_id': state.last_billed_message_id,
-      'native': state.native,
-      'subject': state.subject,
-      'rows': expected_rows,
+      'fields': fields,
+      'rows': replayed,
       'row_differences': row_differences,
       'billing_differences': billing_differences,
     }
 
-  def _write_recomputed_header(self, header: dict, computed: dict) -> None:
-    names = {
-      '#extent': 'extent',
-      '#turn_count': 'turn_count',
-      '#native': 'native',
-      '#last_billed': 'last_billed_message_id',
-    }
-    values = {
-      ':extent': _ddb(computed['extent']),
-      ':turn_count': _ddb(computed['turn_count']),
-      ':native': _ddb(computed['native']),
-      ':last_billed': _ddb(computed['last_billed_message_id']),
-    }
-    assignments = [
-      '#extent = :extent',
-      '#turn_count = :turn_count',
-      '#native = :native',
-      '#last_billed = :last_billed',
-    ]
-    if computed['subject'] is not None:
-      names['#subject'] = 'subject'
-      values[':subject'] = _ddb(computed['subject'])
-      assignments.append('#subject = if_not_exists(#subject, :subject)')
+  def _write_fold(
+    self,
+    trail_id: str,
+    fields: dict,
+    *,
+    remove: tuple[str, ...] = (),
+    expected_extent: Optional[int] = None,
+  ) -> None:
+    """Write the fold-owned header fields and drop the attributes in `remove`;
+    a subject only where none is stored."""
+    names: dict[str, str] = {}
+    values: dict[str, Any] = {}
+    assignments: list[str] = []
+    for index, (key, value) in enumerate(fields.items()):
+      name = f'#field{index}'
+      placeholder = f':field{index}'
+      names[name] = key
+      values[placeholder] = _ddb(value)
+      if key == 'subject':
+        assignments.append(f'{name} = if_not_exists({name}, {placeholder})')
+      else:
+        assignments.append(f'{name} = {placeholder}')
+    removals: list[str] = []
+    for index, key in enumerate(remove):
+      name = f'#remove{index}'
+      names[name] = key
+      removals.append(name)
+    update = 'SET ' + ', '.join(assignments)
+    if len(removals) > 0:
+      update += ' REMOVE ' + ', '.join(removals)
+    condition = 'attribute_exists(id)'
+    if expected_extent is not None:
+      names['#extent'] = 'extent'
+      values[':expected_extent'] = _ddb(expected_extent)
+      condition += ' AND #extent = :expected_extent'
     self._dynamo.update_item(
       TableName=self._trails_table,
-      Key=_ddb_item({'id': header['id']}),
-      ConditionExpression='attribute_exists(id)',
-      UpdateExpression='SET ' + ', '.join(assignments),
+      Key=_ddb_item({'id': trail_id}),
+      ConditionExpression=condition,
+      UpdateExpression=update,
       ExpressionAttributeNames=names,
       ExpressionAttributeValues=values,
     )
@@ -232,20 +250,20 @@ class Operations:
     header = self._required_header(trail_id)
     if header.get('forked_from') is not None:
       raise ValueError('trail already has forked_from')
-    rows = self._all_rows(trail_id)
-    if delete_count > len(rows):
+    stored = self._all_rows(trail_id)
+    if delete_count > len(stored):
       raise ValueError('delete_count exceeds the trail extent')
     timestamp = dynamo_types.now_iso()
     manifest_key = dynamo_types.relink_manifest_key(trail_id, timestamp)
-    deleted = [self._resolve_row_body(header['harness'], row) for row in rows[:delete_count]]
+    deleted = [self._resolve_row_body(header['harness'], row) for row in stored[:delete_count]]
     manifest = {
       'operation': 'relink',
       'at': timestamp,
       'trail_id': trail_id,
       'forked_from': forked_from,
       'delete_count': delete_count,
-      'old_extent': len(rows),
-      'new_extent': len(rows) - delete_count,
+      'old_extent': len(stored),
+      'new_extent': len(stored) - delete_count,
       'deleted_rows': deleted,
     }
     self._s3.put_object(
@@ -255,14 +273,14 @@ class Operations:
       ContentType='application/json',
     )
 
-    remaining = rows[delete_count:]
+    remaining = stored[delete_count:]
     for step_id, row in enumerate(remaining):
       rewritten = {**row, 'step_id': step_id}
       self._dynamo.put_item(
         TableName=self._steps_table,
         Item=_ddb_item(rewritten),
       )
-    for step_id in range(len(remaining), len(rows)):
+    for step_id in range(len(remaining), len(stored)):
       self._dynamo.delete_item(
         TableName=self._steps_table,
         Key=_ddb_item({'trail_id': trail_id, 'step_id': step_id}),
@@ -297,7 +315,7 @@ class Operations:
     order — the header goes last so an interrupted delete leaves a trail the same
     call finishes off rather than rows nothing points at."""
     trail_id = header['id']
-    rows = self._all_rows(trail_id)
+    stored = self._all_rows(trail_id)
     timestamp = dynamo_types.now_iso()
     manifest_key = dynamo_types.delete_manifest_key(trail_id, timestamp)
     self._s3.put_object(
@@ -308,20 +326,20 @@ class Operations:
           trail_id=trail_id,
           at=timestamp,
           header=header,
-          steps=[self._resolve_row_body(header['harness'], row) for row in rows],
+          steps=[self._resolve_row_body(header['harness'], row) for row in stored],
         ),
         ensure_ascii=False,
       ).encode('utf-8'),
       ContentType='application/json',
     )
-    for row in rows:
+    for row in stored:
       self._dynamo.delete_item(
         TableName=self._steps_table,
         Key=_ddb_item({'trail_id': trail_id, 'step_id': row['step_id']}),
       )
     # tool blobs are content-addressed and shared across trails, so they are not
     # this trail's to remove
-    objects = [row['body_s3'] for row in rows if row.get('body_s3') is not None]
+    objects = [row['body_s3'] for row in stored if row.get('body_s3') is not None]
     context = header.get('context_s3') or header.get('native', {}).get('context_s3')
     if context is not None:
       objects.append(context)
@@ -331,10 +349,10 @@ class Operations:
       TableName=self._trails_table,
       Key=_ddb_item({'id': trail_id}),
     )
-    return {'trail_id': trail_id, 'extent': len(rows), 'manifest': manifest_key}
+    return {'trail_id': trail_id, 'extent': len(stored), 'manifest': manifest_key}
 
   def _all_rows(self, trail_id: str) -> list[dict]:
-    rows: list[dict] = []
+    stored: list[dict] = []
     exclusive_start_key: Optional[dict] = None
     while True:
       kwargs: dict[str, Any] = {
@@ -345,12 +363,12 @@ class Operations:
       if exclusive_start_key is not None:
         kwargs['ExclusiveStartKey'] = exclusive_start_key
       response = self._dynamo.query(**kwargs)
-      rows.extend(
+      stored.extend(
         row for item in response.get('Items', []) if (row := _from_ddb_item(item)) is not None
       )
       exclusive_start_key = response.get('LastEvaluatedKey')
       if exclusive_start_key is None:
-        return rows
+        return stored
 
   def _scan_items(self, table: str) -> list[dict]:
     items: list[dict] = []

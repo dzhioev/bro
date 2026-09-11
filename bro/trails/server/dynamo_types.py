@@ -92,8 +92,9 @@ def tool_blob_key(sha256: str) -> str:
   return f'trails/tools/{sha256}.json'
 
 
-def context_key(trail_id: str) -> str:
-  return f'trails/{trail_id}/context.json'
+def context_key(trail_id: str, stamp: Optional[str] = None) -> str:
+  name = 'context' if stamp is None else f'context-{stamp}'
+  return f'trails/{trail_id}/{name}.json'
 
 
 def relink_manifest_key(trail_id: str, timestamp: str) -> str:

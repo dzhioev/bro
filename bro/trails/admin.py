@@ -3,9 +3,11 @@
 
 import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Optional
 
 import bro.base.args as base_args
+from bro.trails import transfer
 from bro.trails.store import (
   PermissionDenied,
   TrailHasForks,
@@ -15,6 +17,18 @@ from bro.trails.store import (
 )
 
 __cli_name__ = 'trails'
+
+
+def _command_export(client: TrailsStore, args: dict[str, Any]) -> int:
+  for imported in transfer.export_trails(client, args['trail_ids'], Path(args['output'])):
+    print(f'{imported["trail_id"]}: {imported["extent"]} steps')
+  return 0
+
+
+def _command_import(client: TrailsStore, args: dict[str, Any]) -> int:
+  for imported in transfer.import_layout(Path(args['directory']), client):
+    print(f'{imported["trail_id"]}: {imported["extent"]} steps')
+  return 0
 
 
 def _command_migrate(client: TrailsStore, args: dict[str, Any]) -> int:
@@ -54,6 +68,21 @@ def main(argv: list[str]) -> Optional[int]:
   parser = base_args.Parser(description='administer a recorded trail registry')
   subparsers = parser.add_subparsers(dest='command')
 
+  export_parser = subparsers.add_parser(
+    'export', help='write trails and their ancestry into a local store layout'
+  )
+  export_parser.add_argument(
+    '-o', '--output', required=True, help='directory to write the store layout into'
+  )
+  export_parser.add_argument('trail_ids', nargs='+', help='trail ids to export')
+  export_parser.set_handler(lambda **args: _dispatch(_command_export, args))
+
+  import_parser = subparsers.add_parser(
+    'import', help='import every trail a local store layout holds'
+  )
+  import_parser.add_argument('directory', help='store layout to import')
+  import_parser.set_handler(lambda **args: _dispatch(_command_import, args))
+
   migrate_parser = subparsers.add_parser(
     'migrate', help='rewrite trails into the current schema format'
   )
@@ -74,4 +103,4 @@ def _dispatch(command: Callable[[TrailsStore, dict[str, Any]], int], args: dict[
     try:
       return command(client, args)
     except PermissionDenied as exception:
-      raise SystemExit(f'the trails credential administers nothing: {exception}') from exception
+      raise SystemExit(f'the trails credential is refused: {exception}') from exception

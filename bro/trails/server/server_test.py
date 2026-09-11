@@ -7,7 +7,14 @@ from aiohttp import web
 
 from bro.trails import model
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest, reported_forks, reported_missing_trail
+from bro.trails.model import (
+  BlazeRequest,
+  reported_collision,
+  reported_forks,
+  reported_missing_tool,
+  reported_missing_trail,
+  tools_sha256,
+)
 from bro.trails.server.auth import (
   TOKENS_SECRET,
   Permission,
@@ -328,6 +335,75 @@ async def test_an_unrouted_path_is_not_a_missing_trail(client):
   response = await (await client).get('/v1/trails/T1/nowhere', headers=_auth())
   assert response.status == 404
   assert reported_missing_trail(await response.read()) is None
+
+
+@pytest.mark.asyncio
+async def test_a_tool_blob_is_read_by_digest_and_a_missing_one_is_named(client, store):
+  trail_id = store.blaze(BlazeRequest(**_blaze_payload()))['id']
+  tools = [{'type': 'function', 'name': 'read'}]
+  digest = tools_sha256(tools)
+  store.append_records(trail_id, 1, [], tools={digest: tools})
+  reader = await client
+
+  found = await reader.get(f'/v1/tools/{digest}', headers=_auth())
+  missing = await reader.get(f'/v1/tools/{"0" * 64}', headers=_auth())
+  malformed = await reader.get('/v1/tools/nope', headers=_auth())
+
+  assert (found.status, await found.json()) == (200, {'tool': tools})
+  assert missing.status == 404
+  assert reported_missing_tool(await missing.read()) == '0' * 64
+  assert malformed.status == 400
+
+
+@pytest.mark.asyncio
+async def test_import_is_administered_and_a_collision_names_the_trail(aiohttp_client, store):
+  trail_id = store.blaze(BlazeRequest(**_blaze_payload()))['id']
+  header = store.get_trail(trail_id)
+  rows = store.get_steps(trail_id)['steps']
+  writer = await aiohttp_client(create_app(store, _tokens('read', 'write')))
+  admin = await aiohttp_client(create_app(store, FULL_ACCESS))
+
+  refused = await writer.post(
+    f'/v1/admin/trails/{trail_id}/import', json={'header': header}, headers=_auth()
+  )
+  same = await admin.post(
+    f'/v1/admin/trails/{trail_id}/import', json={'header': header}, headers=_auth()
+  )
+  other = await admin.post(
+    f'/v1/admin/trails/{trail_id}/import',
+    json={'header': {**header, 'bro': 'other'}},
+    headers=_auth(),
+  )
+  elsewhere = await admin.post(
+    '/v1/admin/trails/elsewhere/import', json={'header': header}, headers=_auth()
+  )
+  repeated = await admin.post(
+    f'/v1/admin/trails/{trail_id}/import/rows',
+    json={'offset': 0, 'rows': rows},
+    headers=_auth(),
+  )
+  sealed = await admin.post(f'/v1/admin/trails/{trail_id}/import/seal', headers=_auth())
+  unsealed = await admin.post(
+    f'/v1/admin/trails/{trail_id}/import/seal', json={'end': None}, headers=_auth()
+  )
+
+  assert refused.status == 403
+  assert (same.status, await same.json()) == (
+    200,
+    {'trail_id': trail_id, 'extent': 1, 'created': False},
+  )
+  assert other.status == 409
+  assert reported_collision(await other.read()) == trail_id
+  assert elsewhere.status == 400
+  assert (repeated.status, await repeated.json()) == (
+    200,
+    {'extent': 1, 'appended': 0, 'duplicate': True},
+  )
+  assert (sealed.status, await sealed.json()) == (
+    200,
+    {'trail_id': trail_id, 'extent': 1, 'duplicate': True},
+  )
+  assert unsealed.status == 400
 
 
 @pytest.mark.asyncio
