@@ -8,6 +8,7 @@ from types import TracebackType
 from typing import Any, Optional
 
 from bro.base import credentials
+from bro.trails import formats
 from bro.trails.model import BlazeRequest, ForkedFrom, RecordedTrail, Step, Trail
 from bro.workspace import paths
 
@@ -189,6 +190,9 @@ class TrailsStore(ABC):
   def keepalive(self, trail_id: str) -> None: ...
 
   @abstractmethod
+  def migrate_trail(self, trail_id: str) -> dict: ...
+
+  @abstractmethod
   def delete_trail(self, trail_id: str) -> dict:
     """Remove a trail and everything only it holds, after recording a manifest of
     what went; returns `{trail_id, extent, manifest}`."""
@@ -275,11 +279,12 @@ def configured_store() -> TrailsStore:
 
 
 _STEP_CANONICAL_FIELDS = frozenset(
-  {'trail_id', 'step_id', 'ts', 'kind', 'body', 'usage', 'payload_sha256'}
+  {'trail_id', 'step_id', 'ts', 'kind', 'body', 'usage', 'payload_sha256', 'format'}
 )
 
 
 def trail_from_header(data: dict) -> Trail:
+  data = formats.upgrade_header(data)
   forked_from_data = data.get('forked_from')
   forked_from = ForkedFrom(**forked_from_data) if forked_from_data is not None else None
   return Trail(
@@ -294,10 +299,12 @@ def trail_from_header(data: dict) -> Trail:
     forked_from=forked_from,
     summoned_by=data.get('summoned_by'),
     hold=data.get('hold'),
+    format=data['format'],
   )
 
 
 def step_from_row(data: dict) -> Step:
+  data = formats.upgrade_row(data)
   extras = {key: value for key, value in data.items() if key not in _STEP_CANONICAL_FIELDS}
   return Step(
     trail_id=data['trail_id'],
@@ -307,6 +314,7 @@ def step_from_row(data: dict) -> Step:
     body=data.get('body'),
     extras=extras,
     usage=data.get('usage'),
+    format=data['format'],
   )
 
 

@@ -1,5 +1,6 @@
 import pytest
 
+from bro.trails import model
 from bro.trails.admin import main
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest
@@ -26,6 +27,15 @@ def store(tmp_path, monkeypatch):
   local = LocalStore(tmp_path)
   monkeypatch.setattr('bro.trails.admin.default_store', lambda: local)
   return local
+
+
+def test_migrate_reports_the_current_format(store, capsys):
+  trail_id = _blaze(store)
+
+  code = main(['trails', 'migrate', trail_id])
+
+  assert code == 0
+  assert capsys.readouterr().out == (f'{trail_id}: format {model.TRAIL_FORMAT}, 0 rows migrated\n')
 
 
 def test_delete_takes_a_whole_lineage_whatever_order_it_is_named_in(store, capsys):

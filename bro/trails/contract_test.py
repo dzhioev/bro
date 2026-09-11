@@ -5,10 +5,12 @@ import threading
 from collections.abc import Iterator
 from concurrent.futures import Future
 from contextlib import ExitStack, contextmanager
+from pathlib import Path
 
 import pytest
 from aiohttp import web
 
+from bro.trails import formats, model
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest, payload_sha256
 from bro.trails.network import NetworkStore
@@ -23,6 +25,7 @@ from bro.trails.store import (
 )
 
 _TOKEN = 'contract-token'
+_CONTRACT_LOCAL_STORES: dict[int, LocalStore] = {}
 
 
 def _token_table(*permissions: str) -> TokenTable:
@@ -127,11 +130,141 @@ def trails_store(request, tmp_path):
       return
     base_url = stack.enter_context(_loopback_server(local))
     network = NetworkStore(base_url, _TOKEN, timeout=30)
+    _CONTRACT_LOCAL_STORES[id(network)] = local
+    stack.callback(_CONTRACT_LOCAL_STORES.pop, id(network))
     stack.enter_context(network)
     yield network
 
 
+def _stored_paths(store: TrailsStore, trail_id: str) -> tuple[Path, Path]:
+  local = store if isinstance(store, LocalStore) else _CONTRACT_LOCAL_STORES[id(store)]
+  directory = local.trails_directory / trail_id
+  return directory / 'header.json', directory / 'steps.jsonl'
+
+
+def _remove_stored_formats(store: TrailsStore, trail_id: str) -> None:
+  header_path, rows_path = _stored_paths(store, trail_id)
+  header = json.loads(header_path.read_text())
+  header.pop('format')
+  header_path.write_text(json.dumps(header))
+  rows = [json.loads(line) for line in rows_path.read_text().splitlines()]
+  for row in rows:
+    row.pop('format')
+  rows_path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+
+
+def _install_synthetic_format(monkeypatch) -> None:
+  monkeypatch.setitem(
+    formats.UPGRADES,
+    1,
+    formats.FormatUpgrade(
+      header=lambda header: {**header, 'synthetic_header': True},
+      row=lambda row: {**row, 'call_id': 'upgraded'},
+    ),
+  )
+  monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+
+
 class TestTrailsStoreContract:
+  def test_writes_the_current_format_on_the_header_and_every_row(self, trails_store):
+    trail_id = trails_store.blaze(_bro_request())['id']
+    trails_store.append_records(trail_id, 1, [{'kind': 'user_input', 'body': 'hello'}])
+
+    header_path, rows_path = _stored_paths(trails_store, trail_id)
+    header = json.loads(header_path.read_text())
+    stored_rows = [json.loads(line) for line in rows_path.read_text().splitlines()]
+
+    assert header['format'] == model.TRAIL_FORMAT
+    assert [row['format'] for row in stored_rows] == [model.TRAIL_FORMAT, model.TRAIL_FORMAT]
+
+  def test_upgrades_a_formatless_layout_in_memory_for_every_read_path(
+    self, trails_store, monkeypatch
+  ):
+    trail_id = trails_store.blaze(_bro_request())['id']
+    _remove_stored_formats(trails_store, trail_id)
+    _install_synthetic_format(monkeypatch)
+
+    header = trails_store.get_trail(trail_id)
+    row = trails_store.get_step(trail_id, 0)
+    messages = trails_store.get_messages(trail_id)
+
+    assert (header['format'], header['synthetic_header']) == (2, True)
+    assert (row['format'], row['call_id']) == (2, 'upgraded')
+    assert messages['messages'][0]['call_id'] == 'upgraded'
+    header_path, rows_path = _stored_paths(trails_store, trail_id)
+    assert 'format' not in json.loads(header_path.read_text())
+    assert 'format' not in json.loads(rows_path.read_text().splitlines()[0])
+
+  def test_refuses_a_format_newer_than_the_reader_names(self, trails_store):
+    trail_id = trails_store.blaze(_bro_request())['id']
+    header_path, rows_path = _stored_paths(trails_store, trail_id)
+    header = json.loads(header_path.read_text())
+    header['format'] = model.TRAIL_FORMAT + 1
+    header_path.write_text(json.dumps(header))
+
+    with pytest.raises(ValueError, match='trail header uses trail format 2'):
+      trails_store.get_trail(trail_id)
+
+    header['format'] = model.TRAIL_FORMAT
+    header_path.write_text(json.dumps(header))
+    [row] = [json.loads(line) for line in rows_path.read_text().splitlines()]
+    row['format'] = model.TRAIL_FORMAT + 1
+    rows_path.write_text(json.dumps(row) + '\n')
+    with pytest.raises(ValueError, match=f'trail row {trail_id}/0'):
+      trails_store.get_step(trail_id, 0)
+
+  def test_append_migrates_an_older_layout_before_writing(self, trails_store, monkeypatch):
+    trail_id = trails_store.blaze(_bro_request())['id']
+    _remove_stored_formats(trails_store, trail_id)
+    _install_synthetic_format(monkeypatch)
+
+    trails_store.append_records(trail_id, 1, [{'kind': 'user_input', 'body': 'hello'}])
+
+    header_path, rows_path = _stored_paths(trails_store, trail_id)
+    header = json.loads(header_path.read_text())
+    stored_rows = [json.loads(line) for line in rows_path.read_text().splitlines()]
+    assert (header['format'], header['synthetic_header']) == (2, True)
+    assert [(row['format'], row['body'], row.get('call_id')) for row in stored_rows] == [
+      (2, 'prompt', 'upgraded'),
+      (2, 'hello', None),
+    ]
+
+  def test_migration_refuses_a_row_upgrade_that_changes_the_recorded_body(
+    self, trails_store, monkeypatch
+  ):
+    trail_id = trails_store.blaze(_bro_request())['id']
+    _remove_stored_formats(trails_store, trail_id)
+    monkeypatch.setitem(
+      formats.UPGRADES,
+      1,
+      formats.FormatUpgrade(
+        header=lambda header: header,
+        row=lambda row: {**row, 'body': 'changed'},
+      ),
+    )
+    monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+
+    with pytest.raises(ValueError, match='format upgrade changed its immutable body'):
+      trails_store.migrate_trail(trail_id)
+
+    header_path, rows_path = _stored_paths(trails_store, trail_id)
+    assert 'format' not in json.loads(header_path.read_text())
+    assert json.loads(rows_path.read_text().splitlines()[0])['body'] == 'prompt'
+
+  def test_attach_migrates_an_older_layout_before_reopening(self, trails_store, monkeypatch):
+    first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
+    second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
+    trail_id = trails_store.blaze(_claude_request(first))['id']
+    _remove_stored_formats(trails_store, trail_id)
+    _install_synthetic_format(monkeypatch)
+
+    attached = trails_store.blaze(_claude_request(lineage=_lineage(first, second)))
+
+    assert attached['id'] == trail_id
+    header_path, rows_path = _stored_paths(trails_store, trail_id)
+    assert json.loads(header_path.read_text())['format'] == 2
+    assert json.loads(rows_path.read_text().splitlines()[0])['format'] == 2
+
   def test_write_read_and_end_lifecycle(self, trails_store):
     created = trails_store.blaze(_bro_request(subject='initial'))
     trail_id = created['id']
