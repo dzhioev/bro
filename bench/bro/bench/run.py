@@ -25,7 +25,7 @@ from bro.base import log
 from bro.base.lulid import lulid
 from bro.bench.job import JobError, run_job
 from bro.broker.job import OUTPUT_DIRECTORY
-from bro.workspace.paths import project_root
+from bro.workspace.git import git_out
 
 __cli_name__ = 'benchmark-run'
 
@@ -127,6 +127,10 @@ def _resolved(ref: str) -> Optional[Path]:
     return None
 
 
+def _checkout_root() -> Path:
+  return Path(git_out('rev-parse', '--show-toplevel')).resolve()
+
+
 def _run(
   task: list[str],
   config: str,
@@ -135,7 +139,7 @@ def _run(
   timeout: Optional[float],
   keep_bundle: bool,
 ) -> int:
-  tree = project_root()
+  tree = _checkout_root()
   source = tree / config
   if not source.is_file():
     log.error('no job config at %s', source)

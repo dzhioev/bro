@@ -1,7 +1,9 @@
 import json
+import subprocess
 
 import pytest
 
+from bro.bench import run
 from bro.bench.job import JobError
 from bro.bench.run import main, narrowed, report
 
@@ -127,8 +129,28 @@ class TestReport:
       report(tmp_path)
 
 
+def test_the_checkout_root_stays_in_a_linked_worktree(tmp_path, monkeypatch):
+  repository = tmp_path / 'repository'
+  worktree = tmp_path / 'worktree'
+  subprocess.run(['git', 'init', '-q', str(repository)], check=True)
+  subprocess.run(
+    ['git', '-C', str(repository), 'config', 'user.email', 'test@example.com'], check=True
+  )
+  subprocess.run(['git', '-C', str(repository), 'config', 'user.name', 'Test'], check=True)
+  (repository / 'tracked').write_text('content\n')
+  subprocess.run(['git', '-C', str(repository), 'add', 'tracked'], check=True)
+  subprocess.run(['git', '-C', str(repository), 'commit', '-qm', 'initial'], check=True)
+  subprocess.run(
+    ['git', '-C', str(repository), 'worktree', 'add', '-q', '-b', 'linked', str(worktree)],
+    check=True,
+  )
+  monkeypatch.chdir(worktree)
+
+  assert run._checkout_root() == worktree.resolve()
+
+
 def test_an_absent_config_fails_before_anything_runs(tmp_path, monkeypatch, caplog):
-  monkeypatch.setattr('bro.bench.run.project_root', lambda: tmp_path)
+  monkeypatch.setattr('bro.bench.run._checkout_root', lambda: tmp_path)
 
   assert main(['benchmark-run', '-c', 'benchmark/nothing.yaml']) == 1
   assert any('no job config' in record.getMessage() for record in caplog.records)
@@ -147,7 +169,7 @@ def test_a_run_reports_the_raw_artifact_beside_its_results(tmp_path, monkeypatch
     captured.update(config=config, timeout=timeout)
     return ref
 
-  monkeypatch.setattr('bro.bench.run.project_root', lambda: tmp_path)
+  monkeypatch.setattr('bro.bench.run._checkout_root', lambda: tmp_path)
   monkeypatch.setattr('bro.bench.run.run_job', run_job)
   monkeypatch.setattr('bro.bench.run.get_artifact', lambda artifact_ref: str(artifact))
   monkeypatch.setattr('bro.bench.run.report', lambda jobs: [])
