@@ -14,9 +14,5 @@ def bro_benchmark_cli():
   return run_cli('bro.benchmark.cli', sys.argv)
 
 
-def bro_benchmark_compare():
-  return run_cli('bro.benchmark.compare', sys.argv)
-
-
 def bro_benchmark_job():
   return run_cli('bro.benchmark.job', sys.argv)

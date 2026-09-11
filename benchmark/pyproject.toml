@@ -14,6 +14,7 @@ dependencies = [
   "bro",
   "bro-bench",
   "bro-ride",
+  "duckdb==1.5.5",
   "harbor==0.21.0",
 ]
 
@@ -27,11 +28,9 @@ dev = [
 [project.scripts]
 # bro
 "benchmark" = "bro.benchmark._entrypoints:bro_benchmark_cli"
-"benchmark-compare" = "bro.benchmark._entrypoints:bro_benchmark_compare"
 "benchmark-harbor-job" = "bro.benchmark._entrypoints:bro_benchmark_job"
 "bro.benchmark.bundle" = "bro.benchmark._entrypoints:bro_benchmark_bundle"
 "bro.benchmark.cli" = "bro.benchmark._entrypoints:bro_benchmark_cli"
-"bro.benchmark.compare" = "bro.benchmark._entrypoints:bro_benchmark_compare"
 "bro.benchmark.job" = "bro.benchmark._entrypoints:bro_benchmark_job"
 
 [tool.uv.sources]
