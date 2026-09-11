@@ -160,9 +160,12 @@ class LocalStore(TrailsStore):
 
   def get_tool(self, sha256: str) -> Any:
     try:
-      return json.loads(self._tool_path(sha256).read_bytes())
+      payload = self._tool_path(sha256).read_bytes()
     except FileNotFoundError as exception:
       raise ToolNotFound(sha256) from exception
+    if _sha256(payload) != sha256:
+      raise ValueError(f'tool blob hash mismatch: {sha256}')
+    return json.loads(payload)
 
   def stored_trail_ids(self) -> list[str]:
     """The ids of every trail the root holds."""
@@ -389,9 +392,8 @@ class LocalStore(TrailsStore):
     trail_id = imported['id']
     directory = self._trail_directory(trail_id)
     importing.require_parents(imported, self._holds_trail)
-    # the trail is written whole under staging and renamed into place, so a
-    # reader never sees a half-written one and the rename decides which of two
-    # begins won the id
+    # the initial trail is completed under staging before it becomes visible,
+    # and the rename decides which of two begins won the id
     self.staging_directory.mkdir(exist_ok=True)
     staging = self.staging_directory / f'{trail_id}.{lulid()}'
     with _creating_directory(staging):
@@ -513,8 +515,11 @@ class LocalStore(TrailsStore):
 
   def _require_tools(self, digests: set[str]) -> None:
     for digest in sorted(digests):
-      if not self._tool_path(digest).is_file():
+      path = self._tool_path(digest)
+      if not path.is_file():
         raise ValueError(f'tool blob {digest} is neither carried nor stored')
+      if _sha256(path.read_bytes()) != digest:
+        raise ValueError(f'tool blob hash mismatch: {digest}')
 
   @contextlib.contextmanager
   def _locked(self, trail_id: str, *, shared: bool) -> Iterator[None]:
@@ -582,7 +587,10 @@ class LocalStore(TrailsStore):
       if not is_sha256(sha256) or _sha256(payload) != sha256:
         raise ValueError(f'tool blob hash mismatch: {sha256}')
       path = self._tool_path(sha256)
-      if not path.exists():
+      if path.exists():
+        if _sha256(path.read_bytes()) != sha256:
+          raise ValueError(f'tool blob hash mismatch: {sha256}')
+      else:
         _atomic_bytes(path, payload)
 
   @staticmethod

@@ -21,40 +21,45 @@ def imported_header(header: dict, adapter: backends.Adapter) -> dict:
   recorded but the read projections, the fold-owned fields and `end`, with the
   server-derived native fold cleared down to the minted lineage cuts, and the
   recorded extent and end held in the import mark. The format stays the
-  recorded one; the upgrade only checks this reader knows it."""
-  formats.upgrade_header(header)
-  trail_id = header.get('id')
+  recorded one; semantic validation reads the upgraded representation."""
+  upgraded = formats.upgrade_header(header)
+  trail_id = upgraded.get('id')
   if not isinstance(trail_id, str) or len(trail_id) == 0:
     raise ValueError('id must be a non-empty string')
   for field in ('started_at', 'last_alive_at'):
-    if not isinstance(header.get(field), str):
+    if not isinstance(upgraded.get(field), str):
       raise ValueError(f'{field} must be a string')
-  extent = header.get('extent')
+  extent = upgraded.get('extent')
   if not isinstance(extent, int) or isinstance(extent, bool) or extent < 0:
     raise ValueError('extent must be a non-negative int')
-  end = header.get('end')
+  end = upgraded.get('end')
   model.validate_recorded_end(end)
-  native = {
+  recorded_native = {
     key: value
     for key, value in header['native'].items()
     if key not in backends.SERVER_DERIVED_NATIVE_FIELDS
   }
+  upgraded_native = {
+    key: value
+    for key, value in upgraded['native'].items()
+    if key not in backends.SERVER_DERIVED_NATIVE_FIELDS
+  }
   BlazeRequest(
-    harness=header['harness'],
-    version=header['version'],
-    interactive=header['interactive'],
-    surface=header['surface'],
+    harness=upgraded['harness'],
+    version=upgraded['version'],
+    interactive=upgraded['interactive'],
+    surface=upgraded['surface'],
     body={},
-    native=native,
-    bro=header.get('bro'),
-    hold=header.get('hold'),
-    forked_from=header.get('forked_from'),
-    summoned_by=header.get('summoned_by'),
-    subject=header.get('subject'),
-    location=header.get('location'),
+    native=upgraded_native,
+    bro=upgraded.get('bro'),
+    hold=upgraded.get('hold'),
+    forked_from=upgraded.get('forked_from'),
+    summoned_by=upgraded.get('summoned_by'),
+    subject=upgraded.get('subject'),
+    location=upgraded.get('location'),
   )
-  adapter.validate_create(native)
-  native.update(rows.replayed_native(adapter, header))
+  adapter.validate_create(upgraded_native)
+  recorded_native.update(rows.replayed_native(adapter, upgraded))
   imported = {
     key: value
     for key, value in header.items()
@@ -64,7 +69,7 @@ def imported_header(header: dict, adapter: backends.Adapter) -> dict:
   }
   imported.update(
     {
-      'native': native,
+      'native': recorded_native,
       'end': None,
       'extent': 0,
       'turn_count': 0,
@@ -97,8 +102,9 @@ def import_state(header: dict) -> Optional[dict]:
 
 def require_parents(header: dict, stored: Callable[[str], bool]) -> None:
   """Raise unless every trail the header points at is stored."""
+  semantic_header = formats.upgrade_header(header)
   for field, relation in _PARENT_POINTERS:
-    pointer = header.get(field)
+    pointer = semantic_header.get(field)
     if pointer is None:
       continue
     parent = pointer['trail_id']
@@ -197,6 +203,19 @@ def sealed_fields(
       raise ValueError(f'trail {trail_id} rows are not contiguous at step {step_id}')
   state, _ = rows.replay(formats.upgrade_header(header), stored, adapter)
   fields = rows.state_fields(state, len(stored))
+  recorded_native = {
+    key: value
+    for key, value in header['native'].items()
+    if key not in backends.SERVER_DERIVED_NATIVE_FIELDS
+  }
+  recorded_native.update(
+    {
+      key: value
+      for key, value in state.native.items()
+      if key in backends.SERVER_DERIVED_NATIVE_FIELDS
+    }
+  )
+  fields['native'] = recorded_native
   if header.get('subject') is not None:
     fields.pop('subject', None)
   fields['end'] = end

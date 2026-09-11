@@ -1,5 +1,6 @@
 """Trail schema format validation and in-memory upgrades."""
 
+import copy
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -38,13 +39,14 @@ def upgrade_row(row: dict[str, Any]) -> dict[str, Any]:
   trail_id = row.get('trail_id')
   step_id = row.get('step_id')
   description = f'trail row {trail_id}/{step_id}'
+  body_present = 'body' in row
+  body = copy.deepcopy(row.get('body'))
   upgraded = _upgrade(
     row,
     description=description,
     transform=lambda step: step.row,
   )
-  missing = object()
-  if upgraded.get('body', missing) != row.get('body', missing):
+  if ('body' in upgraded) != body_present or upgraded.get('body') != body:
     raise ValueError(f'{description} format upgrade changed its immutable body')
   return upgraded
 
@@ -61,7 +63,7 @@ def _upgrade(
     raise UnsupportedTrailFormat(
       f'{description} uses trail format {current}; this reader supports through format {target}'
     )
-  upgraded = dict(record)
+  upgraded = copy.deepcopy(record)
   while current < target:
     try:
       step = UPGRADES[current]

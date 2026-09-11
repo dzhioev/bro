@@ -4,6 +4,7 @@ imported into any."""
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
+from bro.trails import formats, importing
 from bro.trails.local import LocalStore
 from bro.trails.model import named_tool_digests
 from bro.trails.store import ToolNotFound, TrailsStore
@@ -73,9 +74,10 @@ class LayoutSource:
 
 def parent_ids(header: dict) -> list[str]:
   """The trails the header points at, through its fork and summon pointers."""
+  semantic_header = formats.upgrade_header(header)
   parents: list[str] = []
   for field in _PARENT_POINTERS:
-    pointer = header.get(field)
+    pointer = semantic_header.get(field)
     if pointer is None:
       continue
     if not isinstance(pointer, dict) or not isinstance(pointer.get('trail_id'), str):
@@ -128,6 +130,8 @@ def copy_trail(source: TrailSource, header: dict, destination: TrailsStore) -> d
   """Import one trail into `destination` from what `source` holds of it,
   carrying the tool blobs its rows name where the source has them."""
   trail_id = header['id']
+  if importing.import_state(header) is not None:
+    raise ValueError(f'trail {trail_id} has an import under way')
   rows = source.rows(trail_id)
   tools = {}
   for digest in sorted(named_tool_digests(rows)):

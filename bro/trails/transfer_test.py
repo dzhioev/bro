@@ -81,6 +81,21 @@ def test_export_fails_on_an_ancestor_the_store_does_not_hold(tmp_path):
   assert missing.value.trail_id == 'elsewhere'
 
 
+def test_transfer_refuses_a_source_with_an_incomplete_import(tmp_path):
+  recorded = LocalStore(tmp_path / 'recorded')
+  trail_id = _blaze(recorded)
+  recorded.append_records(trail_id, 1, [{'kind': 'user_input', 'body': 'hello'}])
+  partial = LocalStore(tmp_path / 'partial')
+  header, rows = _served(recorded, trail_id)
+  partial.begin_import(header)
+  partial.import_rows(trail_id, 0, rows[:1])
+
+  with pytest.raises(ValueError, match=f'trail {trail_id} has an import under way'):
+    transfer.import_layout(partial.root, LocalStore(tmp_path / 'imported'))
+  with pytest.raises(ValueError, match=f'trail {trail_id} has an import under way'):
+    transfer.export_trails(partial, [trail_id], tmp_path / 'exported')
+
+
 def test_import_layout_carries_each_record_in_the_format_it_was_written_in(tmp_path, monkeypatch):
   source = LocalStore(tmp_path / 'source')
   trail_id = _blaze(source)
@@ -122,6 +137,31 @@ def test_import_layout_carries_each_record_in_the_format_it_was_written_in(tmp_p
 def test_import_layout_requires_the_layout(tmp_path):
   with pytest.raises(ValueError, match='no trails store layout'):
     transfer.import_layout(tmp_path / 'absent', LocalStore(tmp_path / 'destination'))
+
+
+def test_parents_first_uses_upgraded_parent_pointers(monkeypatch):
+  headers = [
+    {'id': 'child', 'forked_from': {'parent': 'parent', 'ordinal': 0}},
+    {'id': 'parent'},
+  ]
+
+  def upgrade_header(header: dict) -> dict:
+    pointer = header.get('forked_from')
+    if pointer is None:
+      return header
+    return {
+      **header,
+      'forked_from': {'trail_id': pointer['parent'], 'step_id': pointer['ordinal']},
+    }
+
+  monkeypatch.setitem(
+    formats.UPGRADES,
+    1,
+    formats.FormatUpgrade(header=upgrade_header, row=lambda row: row),
+  )
+  monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+
+  assert [header['id'] for header in transfer.parents_first(headers)] == ['parent', 'child']
 
 
 def test_parents_first_follows_both_pointers_and_refuses_a_cycle():

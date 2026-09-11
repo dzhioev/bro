@@ -65,7 +65,7 @@ bro · claude recorders                     readers
   Reopening an older trail upgrades and atomically replaces its row stream under the same flock before stamping the header and writing.
   A stale open header gets `end.inference = unreported` when read.
   `stored_trail_ids`, `stored_header`, `stored_rows`, and `stored_launch_context` read the layout as written, formats untouched, for a copy that must not upgrade what it carries.
-  An import builds its trail whole under `<root>/staging/` and renames it into place, so no reader meets a half-written one and two begins of the same id settle on the rename.
+  An import builds its initial trail atomically under `<root>/staging/` and renames it into place with an import mark, so two begins of the same id settle on the rename and transfers refuse the live partial state.
 - The local root is the global `bro.workspace.paths.trails_dir` under the runtime state root.
   `ride.trails` contributes its dedicated mount to the `Launch` composed by the Claude and bro harness launch surfaces, binding the host root at the fixed in-container `/var/ride/trails` path.
 - `TRAILS_DISABLED` (presence-checked) turns a process's recording off, since a backend now resolves for every run.
@@ -83,7 +83,8 @@ bro · claude recorders                     readers
 - `server/dynamo.py` owns `DynamoStore(TrailsStore)`:
   conditional append transactions, indexes, S3 body spill/resolution, UUID reads, and its store-owned thread pool for the spilled-row fan-out.
   Its migrate-on-write rewrites rows conditionally on their stored formats before conditionally advancing the header, so concurrent current-format rows are left alone and an interrupted migration resumes.
-  The attributes its keys and indexes read (`gsi_pk`, `forked_from_id`, `segment`, `context_s3`) are derived from the header at the write and left out of served headers.
+  The attributes its keys and indexes read (`gsi_pk`, `forked_from_id`, `segment`, `context_s3`) are derived from the header at the write and left out of served headers;
+  a header migration keeps them outside the format transform, then rederives them from the upgraded logical header while preserving its context object.
   `server/dynamo_types.py` owns Dynamo conversion and row constants.
   `server/operations.py` remains the recompute/check engine and owns the manifested destructive operations, relinking and deletion.
 - Stored rows are served rows.
@@ -111,11 +112,11 @@ bro · claude recorders                     readers
   the unsealed header a recorded one becomes
   — every field as recorded, the read projections and the fold-owned fields dropped, the server-derived native fold cleared down to the minted lineage cuts, the format label kept —
   the identity two recorded headers are matched on and the mark an import leaves on its header until the seal,
-  the parent and tool-blob requirements,
+  the parent requirements interpreted through the header's in-memory upgrade and digest verification of every stored or carried tool blob,
   the digest match of rows re-sent over ones already stored,
   and the fields a seal writes from a replay of every row.
   Rows are stored as recorded, each keeping its format, so an imported trail reads through the in-memory upgrades and migrates the next time a writer reopens it.
-- `transfer.py` moves trails between stores as directories in the local store layout:
+- `transfer.py` moves trails whose imports are complete between stores as directories in the local store layout and refuses a source trail whose import is incomplete:
   `export_trails` writes the named trails and every ancestor reachable through `forked_from` and `summoned_by`, parents first, into a `LocalStore` at the output root through the import path, blobs included;
   `import_layout` reads a layout as stored and imports every trail it holds into any store, parents first.
 - `rows.py` owns aggregate folding, row construction, and message projection.

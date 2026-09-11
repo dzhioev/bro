@@ -231,6 +231,24 @@ class TestTrailsStoreContract:
       (2, 'hello', None),
     ]
 
+  def test_row_upgrade_refuses_an_in_place_nested_body_change(self, monkeypatch):
+    row = {'trail_id': 'trail', 'step_id': 0, 'body': {'text': 'original'}}
+
+    def change_body(upgrading: dict) -> dict:
+      upgrading['body']['text'] = 'changed'
+      return upgrading
+
+    monkeypatch.setitem(
+      formats.UPGRADES,
+      1,
+      formats.FormatUpgrade(header=lambda header: header, row=change_body),
+    )
+    monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+
+    with pytest.raises(ValueError, match='format upgrade changed its immutable body'):
+      formats.upgrade_row(row)
+    assert row['body'] == {'text': 'original'}
+
   def test_migration_refuses_a_row_upgrade_that_changes_the_recorded_body(
     self, trails_store, monkeypatch
   ):
@@ -601,6 +619,24 @@ class TestImportContract:
       child
     ]
 
+  def test_an_import_refuses_a_corrupt_stored_tool_blob(self, trails_store, tmp_path):
+    source, trail_id = _record_source(tmp_path / 'source')
+    header, rows, _ = _recorded(source, trail_id)
+    trails_store.begin_import(header)
+    local = (
+      trails_store
+      if isinstance(trails_store, LocalStore)
+      else _CONTRACT_LOCAL_STORES[id(trails_store)]
+    )
+    tool_path = local.trails_directory / 'tools' / f'{_TOOLS_DIGEST}.json'
+    tool_path.parent.mkdir(exist_ok=True)
+    tool_path.write_bytes(b'{}')
+
+    with pytest.raises(ValueError, match=f'tool blob hash mismatch: {_TOOLS_DIGEST}'):
+      trails_store.import_rows(trail_id, 0, rows)
+    with pytest.raises(ValueError, match=f'tool blob hash mismatch: {_TOOLS_DIGEST}'):
+      trails_store.import_rows(trail_id, 0, rows, tools={_TOOLS_DIGEST: _TOOLS})
+
   def test_an_import_refuses_rows_the_adapter_refuses(self, trails_store, tmp_path):
     source, trail_id = _record_source(tmp_path / 'source')
     header, rows, _ = _recorded(source, trail_id)
@@ -612,6 +648,77 @@ class TestImportContract:
       trails_store.import_rows(trail_id, 0, [rows[0], rows[2]])
 
     assert trails_store.get_trail(trail_id)['extent'] == 0
+
+  def test_an_import_validates_an_older_header_in_its_upgraded_shape(
+    self, trails_store, tmp_path, monkeypatch
+  ):
+    source, trail_id = _record_source(tmp_path / 'source')
+    _remove_stored_formats(source, trail_id)
+    header_path, _ = _stored_paths(source, trail_id)
+    header = json.loads(header_path.read_text())
+    expected_native = header['native']
+    header['native'] = {'recipe': expected_native['llm']}
+    header_path.write_text(json.dumps(header))
+    recorded_header = source.stored_header(trail_id)
+    recorded_rows = source.stored_rows(trail_id)
+
+    def upgrade_header(upgrading: dict) -> dict:
+      native = dict(upgrading['native'])
+      native['llm'] = native.pop('recipe')
+      return {**upgrading, 'native': native}
+
+    monkeypatch.setitem(
+      formats.UPGRADES,
+      1,
+      formats.FormatUpgrade(header=upgrade_header, row=lambda row: row),
+    )
+    monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+
+    trails_store.import_trail(
+      recorded_header,
+      recorded_rows,
+      tools={_TOOLS_DIGEST: _TOOLS},
+    )
+
+    imported_header_path, _ = _stored_paths(trails_store, trail_id)
+    assert 'format' not in json.loads(imported_header_path.read_text())
+    assert trails_store.get_trail(trail_id)['native'] == expected_native
+
+  def test_an_import_requires_the_parent_named_by_an_upgraded_pointer(
+    self, trails_store, tmp_path, monkeypatch
+  ):
+    source, parent = _record_source(tmp_path / 'source')
+    _, child = _record_source(
+      tmp_path / 'source',
+      forked_from={'trail_id': parent, 'step_id': 0},
+    )
+    parent_header, parent_rows, _ = _recorded(source, parent)
+    child_header, child_rows, _ = _recorded(source, child)
+    child_header['forked_from'] = {'parent': parent, 'ordinal': 0}
+
+    def upgrade_header(header: dict) -> dict:
+      pointer = header.get('forked_from')
+      if pointer is None:
+        return header
+      return {
+        **header,
+        'forked_from': {'trail_id': pointer['parent'], 'step_id': pointer['ordinal']},
+      }
+
+    monkeypatch.setitem(
+      formats.UPGRADES,
+      1,
+      formats.FormatUpgrade(header=upgrade_header, row=lambda row: row),
+    )
+    monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+    trails_store.import_trail(parent_header, parent_rows, tools={_TOOLS_DIGEST: _TOOLS})
+
+    trails_store.import_trail(child_header, child_rows, tools={_TOOLS_DIGEST: _TOOLS})
+
+    assert trails_store.get_trail(child)['forked_from'] == {
+      'trail_id': parent,
+      'step_id': 0,
+    }
 
   def test_an_import_keeps_the_recorded_formats_and_refuses_a_newer_one(
     self, trails_store, tmp_path

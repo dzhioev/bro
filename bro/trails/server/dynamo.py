@@ -122,7 +122,6 @@ class DynamoStore(TrailsStore):
     self._bucket = bucket
     self._uuid_index = uuid_index
     self._backends = dict(backends.BACKENDS)
-    self._stored_tool_hashes: set[str] = set()
     self._executor = ThreadPoolExecutor(
       max_workers=_FAN_OUT_WORKERS, thread_name_prefix='trails-dynamo'
     )
@@ -420,15 +419,15 @@ class DynamoStore(TrailsStore):
       payload = canonical_json_bytes(body)
       if dynamo_types.sha256_hex(payload) != sha256:
         raise ValueError(f'tool blob hash mismatch: {sha256}')
-      if sha256 in self._stored_tool_hashes:
-        continue
-      self._s3.put_object(
-        Bucket=self._bucket,
-        Key=dynamo_types.tool_blob_key(sha256),
-        Body=payload,
-        ContentType='application/json',
-      )
-      self._stored_tool_hashes.add(sha256)
+      try:
+        self._tool_payload(sha256)
+      except ToolNotFound:
+        self._s3.put_object(
+          Bucket=self._bucket,
+          Key=dynamo_types.tool_blob_key(sha256),
+          Body=payload,
+          ContentType='application/json',
+        )
 
   def _append_header_update(
     self,
@@ -769,15 +768,16 @@ class DynamoStore(TrailsStore):
     while True:
       header = self._required_header(trail_id)
       source_format = formats.stored_format(header, description=f'trail {trail_id} header')
-      upgraded_header = formats.upgrade_header(header)
+      upgraded_header = formats.upgrade_header(_without_storage_attributes(header))
+      upgraded_item = _header_item(upgraded_header, context_key=header.get('context_s3'))
       if source_format == model.TRAIL_FORMAT:
         return {
           'trail_id': trail_id,
           'format': model.TRAIL_FORMAT,
           'migrated_rows': migrated_rows,
         }
-      migrated_rows += self._migrate_rows(header)
-      if self._stamp_migrated_header(header, upgraded_header, source_format):
+      migrated_rows += self._migrate_rows(upgraded_header)
+      if self._stamp_migrated_header(header, upgraded_item, source_format):
         return {
           'trail_id': trail_id,
           'format': model.TRAIL_FORMAT,
@@ -889,22 +889,26 @@ class DynamoStore(TrailsStore):
   def get_tool(self, sha256: str) -> Any:
     if not is_sha256(sha256):
       raise ValueError(f'invalid tool digest: {sha256!r}')
+    return json.loads(self._tool_payload(sha256))
+
+  def _tool_payload(self, sha256: str) -> bytes:
     try:
       stored = self._s3.get_object(Bucket=self._bucket, Key=dynamo_types.tool_blob_key(sha256))
-    except self._s3.exceptions.NoSuchKey as exception:
+    except self._s3.exceptions.ClientError as exception:
+      if exception.response.get('Error', {}).get('Code') not in {'404', 'NotFound', 'NoSuchKey'}:
+        raise
       raise ToolNotFound(sha256) from exception
-    self._stored_tool_hashes.add(sha256)
-    return json.loads(stored['Body'].read())
+    payload = stored['Body'].read()
+    if dynamo_types.sha256_hex(payload) != sha256:
+      raise ValueError(f'tool blob hash mismatch: {sha256}')
+    return payload
 
   def _require_tools(self, digests: set[str]) -> None:
-    for digest in sorted(digests - self._stored_tool_hashes):
+    for digest in sorted(digests):
       try:
-        self._s3.head_object(Bucket=self._bucket, Key=dynamo_types.tool_blob_key(digest))
-      except self._s3.exceptions.ClientError as exception:
-        if exception.response.get('Error', {}).get('Code') not in {'404', 'NotFound', 'NoSuchKey'}:
-          raise
+        self._tool_payload(digest)
+      except ToolNotFound as exception:
         raise ValueError(f'tool blob {digest} is neither carried nor stored') from exception
-      self._stored_tool_hashes.add(digest)
 
   def begin_import(self, header: dict, *, launch_context: Optional[Any] = None) -> dict:
     with refusing_invalid_requests('imported header'):
@@ -923,7 +927,13 @@ class DynamoStore(TrailsStore):
       try:
         self._dynamo.put_item(
           TableName=self._trails_table,
-          Item=_ddb_item(_header_item(imported, context_key=context_key)),
+          Item=_ddb_item(
+            _header_item(
+              imported,
+              context_key=context_key,
+              attribute_source=formats.upgrade_header(imported),
+            )
+          ),
           ConditionExpression='attribute_not_exists(id)',
         )
       except self._dynamo.exceptions.ConditionalCheckFailedException:
@@ -1101,13 +1111,19 @@ def build_dynamo_store(config: dict[str, Any]) -> DynamoStore:
   )
 
 
-def _header_item(header: dict, *, context_key: Optional[str]) -> dict:
+def _header_item(
+  header: dict,
+  *,
+  context_key: Optional[str],
+  attribute_source: Optional[dict] = None,
+) -> dict:
   """The header item, with the attributes the table's keys and indexes read."""
   item = {**header, GSI_PK_ATTRIBUTE: GSI_PK_VALUE}
-  forked_from = header.get('forked_from')
+  source = header if attribute_source is None else attribute_source
+  forked_from = source.get('forked_from')
   if forked_from is not None:
     item['forked_from_id'] = forked_from['trail_id']
-  segment = header.get('native', {}).get('segment')
+  segment = source.get('native', {}).get('segment')
   if segment is not None:
     item['segment'] = segment
   if context_key is not None:
