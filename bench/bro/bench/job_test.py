@@ -1,13 +1,11 @@
 import asyncio
 import contextlib
-import importlib.metadata
-import json
 from pathlib import Path
 from typing import Optional, cast
-from unittest.mock import Mock
 
 import pytest
 
+from bro.bench import job
 from bro.broker import brotocol
 from bro.broker.brotocol import Message, Tag
 from bro.broker.client import CHANNEL_ENV
@@ -16,7 +14,6 @@ from bro.broker.job import OUTPUT_DIRECTORY, CommandJob
 from bro.broker.transport import ChannelID
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 from bro.kinds import ArtifactResolver, KindContext
-from bro.local import benchmark_job
 
 TIMEOUT = 5.0
 CONFIG = 'benchmark/bro/benchmark/job.yaml'
@@ -25,7 +22,7 @@ REF = 'sha256:' + 'a' * 64
 
 
 def _kind(tree: Path, credential_scope=frozenset()):
-  return benchmark_job.benchmark_kind(
+  return job.benchmark_kind(
     KindContext(
       workspace_tree=tree,
       artifacts=cast(ArtifactResolver, object()),
@@ -64,7 +61,7 @@ def _request(args: dict) -> Message:
   return Message(
     type=Tag.REQUEST,
     id='R',
-    payload={'kind': 'benchmark', 'args': {'upload': 'none', **args}},
+    payload={'kind': 'benchmark', 'args': args},
   )
 
 
@@ -99,8 +96,6 @@ class TestBenchmarkKind:
       str((tree / CONFIG).resolve()),
       '--jobs-dir',
       OUTPUT_DIRECTORY,
-      '--upload',
-      'none',
     )
     assert command.env['BENCH_SENTINEL'] == 'yes'  # the host environment rides the job
     assert 'HARBOR_API_KEY' not in command.env
@@ -108,7 +103,7 @@ class TestBenchmarkKind:
     assert host_environment == tree.parent / 'benchmark-venv'
     assert not host_environment.is_relative_to(tree)
     assert 'VIRTUAL_ENV' not in command.env
-    assert (requester, timeout) == (ROOT, benchmark_job.DEFAULT_TIMEOUT)
+    assert (requester, timeout) == (ROOT, job.DEFAULT_TIMEOUT)
 
   def test_request_timeout_bounds_the_job(self, tree):
     context = FakeContext()
@@ -116,26 +111,6 @@ class TestBenchmarkKind:
     handle(cast(Dispatcher, context), ROOT, _request({'config': CONFIG, 'timeout': 60}))
     [(_, _, timeout)] = context.jobs
     assert timeout == 60.0
-
-  def test_upload_without_a_granted_harbor_credential_is_denied(self, tree):
-    error = _denial(tree, {'config': CONFIG, 'upload': 'private'})
-    assert "secret 'harbor' not found" in error
-
-  def test_upload_hydrates_the_scoped_harbor_key_into_the_host_job(self, tree, monkeypatch):
-    store = Mock()
-    store.get_instance.return_value = 'sk-harbor-scoped'
-    monkeypatch.setattr(benchmark_job.credentials, 'default_store', lambda: store)
-    context = FakeContext()
-
-    _kind(tree, frozenset({'harbor+benchmark'}))(
-      cast(Dispatcher, context),
-      ROOT,
-      _request({'config': CONFIG, 'upload': 'public'}),
-    )
-
-    [(command, _, _)] = context.jobs
-    assert command.env['HARBOR_API_KEY'] == 'sk-harbor-scoped'
-    store.get_instance.assert_called_once_with('harbor+benchmark')
 
   def test_non_root_peer_is_denied(self, tree):
     error = _denial(tree, {'config': CONFIG}, peer='child-peer')
@@ -154,8 +129,8 @@ class TestBenchmarkKind:
   def test_bad_timeout_is_denied(self, tree):
     assert 'positive number' in _denial(tree, {'config': CONFIG, 'timeout': 0})
 
-  def test_bad_upload_visibility_is_denied(self, tree):
-    assert "'upload' must be one of" in _denial(tree, {'config': CONFIG, 'upload': 'open'})
+  def test_upload_is_an_unknown_field(self, tree):
+    assert 'unknown benchmark field' in _denial(tree, {'config': CONFIG, 'upload': 'private'})
 
   def test_absolute_config_is_denied(self, tree):
     assert 'relative to the workspace root' in _denial(tree, {'config': str(tree / CONFIG)})
@@ -183,7 +158,7 @@ def test_await_outcome_logs_launch_only_for_started(caplog):
   request = Message(
     type=Tag.REQUEST,
     id='request',
-    payload={'kind': benchmark_job.BENCHMARK, 'args': {}},
+    payload={'kind': job.BENCHMARK, 'args': {}},
   )
 
   class FakeClient:
@@ -193,36 +168,36 @@ def test_await_outcome_logs_launch_only_for_started(caplog):
       on_interim(brotocol.mark(sent.quest_id, 'trail', trail_id='trail'))
       return brotocol.result(sent.quest_id, 'ok', value={'ref': REF})
 
-  assert benchmark_job._await_outcome(cast(benchmark_job.Client, FakeClient()), request, 10) == REF
+  assert job._await_outcome(cast(job.Client, FakeClient()), request, 10) == REF
   assert [record.message for record in caplog.records].count('benchmark job launched') == 1
 
 
 class TestInterpretResult:
   def test_ok_returns_the_run_ref(self):
     message = _result('R', {'outcome': 'ok', 'value': {'ref': REF}})
-    assert benchmark_job._interpret_result(message) == REF
+    assert job._interpret_result(message) == REF
 
   def test_ok_without_a_run_raises(self):
     message = _result('R', {'outcome': 'ok', 'value': {}})
-    with pytest.raises(benchmark_job.JobError, match='no run'):
-      benchmark_job._interpret_result(message)
+    with pytest.raises(job.JobError, match='no run'):
+      job._interpret_result(message)
 
   def test_denied_raises_with_the_reason(self):
     message = _result('R', {'outcome': 'denied', 'error': 'not the root'})
-    with pytest.raises(benchmark_job.JobError, match='not the root'):
-      benchmark_job._interpret_result(message)
+    with pytest.raises(job.JobError, match='not the root'):
+      job._interpret_result(message)
 
   def test_failed_exit_names_the_code_and_the_run(self):
     message = _result(
       'R', {'outcome': 'failed', 'detail': {'reason': 'exit', 'exit_code': 3, 'ref': REF}}
     )
-    with pytest.raises(benchmark_job.JobError, match=f'exit code 3.*{REF}'):
-      benchmark_job._interpret_result(message)
+    with pytest.raises(job.JobError, match=f'exit code 3.*{REF}'):
+      job._interpret_result(message)
 
   def test_failed_timeout_names_the_reason(self):
     message = _result('R', {'outcome': 'failed', 'detail': {'reason': 'timeout'}})
-    with pytest.raises(benchmark_job.JobError, match='timeout'):
-      benchmark_job._interpret_result(message)
+    with pytest.raises(job.JobError, match='timeout'):
+      job._interpret_result(message)
 
 
 # --- the CLI over a live channel ---------------------------------------------------
@@ -263,10 +238,10 @@ async def running_server(monkeypatch):
 async def test_start_detach_sends_the_request_and_prints_its_id(monkeypatch, capsys):
   async with running_server(monkeypatch) as (transport, sink):
     argv = ['benchmark-job', 'start', '-c', CONFIG, '--timeout', '60', '--detach']
-    task = asyncio.create_task(asyncio.to_thread(benchmark_job.main, argv))
+    task = asyncio.create_task(asyncio.to_thread(job.main, argv))
     channel, message = await asyncio.wait_for(sink.messages.get(), TIMEOUT)
-    assert message.kind == benchmark_job.BENCHMARK
-    assert message.args == {'config': CONFIG, 'upload': 'none', 'timeout': 60.0}
+    assert message.kind == job.BENCHMARK
+    assert message.args == {'config': CONFIG, 'timeout': 60.0}
     await transport.send(channel, brotocol.mark(message.id, 'accepted'))
     assert await task == 0
     assert capsys.readouterr().out.strip() == message.id
@@ -274,56 +249,33 @@ async def test_start_detach_sends_the_request_and_prints_its_id(monkeypatch, cap
 
 def test_start_without_a_channel_fails(monkeypatch, capsys, caplog):
   monkeypatch.delenv(CHANNEL_ENV, raising=False)
-  assert benchmark_job.main(['benchmark-job', 'start', '-c', CONFIG]) == 1
+  assert job.main(['benchmark-job', 'start', '-c', CONFIG]) == 1
   assert capsys.readouterr().out == ''
   assert any(CHANNEL_ENV in record.getMessage() for record in caplog.records)
 
 
 def test_check_help_has_no_conversation_cursor(capsys):
   with pytest.raises(SystemExit):
-    benchmark_job.main(['benchmark-job', 'check', '--help'])
+    job.main(['benchmark-job', 'check', '--help'])
   assert '--last-seen' not in capsys.readouterr().out
 
 
 def test_check_timeout_without_wait_errors(monkeypatch, caplog):
   monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:1')
-  assert benchmark_job.main(['benchmark-job', 'check', 'R-1', '--timeout', '5']) == 1
+  assert job.main(['benchmark-job', 'check', 'R-1', '--timeout', '5']) == 1
   assert any('--timeout' in record.getMessage() for record in caplog.records)
 
 
 def test_unknown_verb_is_a_usage_error(caplog):
-  assert benchmark_job.main(['benchmark-job']) == 2
+  assert job.main(['benchmark-job']) == 2
   assert any('usage' in record.getMessage() for record in caplog.records)
-
-
-def test_uploaded_job_url_reads_the_pipeline_record(tmp_path):
-  record = tmp_path / OUTPUT_DIRECTORY / 'job' / benchmark_job.UPLOAD_RECORD
-  record.parent.mkdir(parents=True)
-  record.write_text(json.dumps({'visibility': 'public', 'url': 'https://hub.example/jobs/1'}))
-
-  assert benchmark_job.uploaded_job_url(tmp_path) == 'https://hub.example/jobs/1'
-
-
-def test_no_upload_record_means_the_run_was_not_published(tmp_path):
-  assert benchmark_job.uploaded_job_url(tmp_path) is None
-
-
-def test_the_local_distribution_contributes_the_harbor_credential_kind():
-  entries = importlib.metadata.entry_points(group='bro.credentials', name='harbor')
-
-  [entry] = entries
-  assert entry.value == 'bro.local.credentials:HARBOR'
-  assert entry.load() == {
-    'description': 'Harbor API credentials',
-    'install': {'env': {'HARBOR_API_KEY': {'secret': '{{insert #name}}'}}},
-  }
 
 
 @pytest.mark.asyncio
 async def test_detached_denial_fails_before_printing_an_id(monkeypatch, capsys, caplog):
   async with running_server(monkeypatch) as (transport, sink):
     argv = ['benchmark-job', 'start', '-c', CONFIG, '--detach']
-    task = asyncio.create_task(asyncio.to_thread(benchmark_job.main, argv))
+    task = asyncio.create_task(asyncio.to_thread(job.main, argv))
     channel, request = await asyncio.wait_for(sink.messages.get(), TIMEOUT)
     await transport.send(
       channel,
@@ -336,14 +288,8 @@ async def test_detached_denial_fails_before_printing_an_id(monkeypatch, capsys, 
 
 @pytest.mark.asyncio
 async def test_check_reads_pending_and_terminal_journal_records(monkeypatch, capsys, caplog):
-  def missing_artifact(_ref):
-    raise benchmark_job.ArtifactError('not mounted in this test')
-
-  monkeypatch.setattr(benchmark_job, 'get_artifact', missing_artifact)
   async with running_server(monkeypatch) as (transport, sink):
-    pending = asyncio.create_task(
-      asyncio.to_thread(benchmark_job.main, ['benchmark-job', 'check', 'JOB-1'])
-    )
+    pending = asyncio.create_task(asyncio.to_thread(job.main, ['benchmark-job', 'check', 'JOB-1']))
     channel, query = await asyncio.wait_for(sink.messages.get(), TIMEOUT)
     assert query.kind == 'query'
     assert query.args == {'id': 'JOB-1'}
@@ -363,11 +309,11 @@ async def test_check_reads_pending_and_terminal_journal_records(monkeypatch, cap
         },
       ),
     )
-    assert await pending == benchmark_job.PENDING_EXIT_CODE
+    assert await pending == job.PENDING_EXIT_CODE
     assert 'still running' in caplog.text
 
     completed = asyncio.create_task(
-      asyncio.to_thread(benchmark_job.main, ['benchmark-job', 'check', 'JOB-1'])
+      asyncio.to_thread(job.main, ['benchmark-job', 'check', 'JOB-1'])
     )
     channel, query = await asyncio.wait_for(sink.messages.get(), TIMEOUT)
     await transport.send(

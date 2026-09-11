@@ -1,0 +1,49 @@
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "bro-bench"
+version = "0.1.0"
+description = "launcher-side commands and registrations for bro benchmarks"
+requires-python = ">=3.12"
+dependencies = [
+  "bro",
+  "pyyaml==6.0.3",
+]
+
+[project.scripts]
+# bro
+"benchmark-job" = "bro.bench._entrypoints:bro_bench_job"
+"benchmark-run" = "bro.bench._entrypoints:bro_bench_run"
+"bro.bench.job" = "bro.bench._entrypoints:bro_bench_job"
+"bro.bench.run" = "bro.bench._entrypoints:bro_bench_run"
+
+[project.entry-points."bro.broker_kinds"]
+benchmark = "bro.bench.job:benchmark_kind"
+
+[project.entry-points."bro.credentials"]
+harbor = "bro.bench.credentials:HARBOR"
+benchmark_retention = "bro.bench.credentials:RETENTION"
+
+[project.entry-points."bro.session_commands"]
+"benchmark-job" = "bro.bench._entrypoints:bro_bench_job"
+"benchmark-run" = "bro.bench._entrypoints:bro_bench_run"
+
+[tool.uv.sources]
+bro = { workspace = true }
+
+[tool.deptry.package_module_name_map]
+bro = ["bro", "bros"]
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = ["bro.bench"]
+namespace = true
+wheel-exclude = [
+  "**/*_test.py",
+  "**/*_test_helper.py",
+  "**/conftest.py",
+  "**/AGENTS.md",
+  "**/*.egg-info",
+]
