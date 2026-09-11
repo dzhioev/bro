@@ -1,74 +1,18 @@
 #!/usr/bin/env python
-"""Run a Harbor job and finish its host-side post-run pipeline."""
+"""Run Harbor and leave its completed job directory as the raw run."""
 
-import json
 import subprocess
-from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 from typing import Optional
-
-from harbor.constants import HARBOR_VIEWER_JOBS_URL
-from harbor.models.job.result import JobResult
 
 import bro.base.args as base_args
 from bro.base import log
 from bro.base.lulid import lulid
-from bro.benchmark.retention import RetainedRun, RetentionError, retain_job
-from bro.benchmark.trajectory import convert_job_trajectories
+from bro.benchmark.harbor_agent import benchmark_bundle
 
 __cli_name__ = 'benchmark-harbor-job'
 
-UPLOAD_RECORD = 'upload.json'
-
-
-class UploadVisibility(StrEnum):
-  NONE = 'none'
-  PRIVATE = 'private'
-  PUBLIC = 'public'
-
-
-@dataclass(frozen=True)
-class UploadResult:
-  visibility: UploadVisibility
-  url: str
-
-
-@dataclass(frozen=True)
-class PostRunResult:
-  job_directory: Path
-  trajectory_paths: tuple[Path, ...]
-  upload: Optional[UploadResult]
-  retained: Optional[RetainedRun]
-
-
-def _upload_job(job_directory: Path, visibility: UploadVisibility) -> Optional[UploadResult]:
-  if visibility == UploadVisibility.NONE:
-    return None
-  subprocess.run(
-    ['harbor', 'upload', str(job_directory), f'--{visibility.value}'],
-    check=True,
-  )
-  job = JobResult.model_validate_json((job_directory / 'result.json').read_text())
-  upload = UploadResult(
-    visibility=visibility,
-    url=f'{HARBOR_VIEWER_JOBS_URL}/{job.id}',
-  )
-  (job_directory / UPLOAD_RECORD).write_text(
-    json.dumps({'visibility': upload.visibility, 'url': upload.url}, indent=2) + '\n'
-  )
-  return upload
-
-
-def finish_job(
-  job_directory: Path, visibility: UploadVisibility = UploadVisibility.NONE
-) -> PostRunResult:
-  """Run every ordered post-run operation against one finished Harbor job."""
-  trajectory_paths = tuple(convert_job_trajectories(job_directory))
-  log.info('converted %d trial trajectories', len(trajectory_paths))
-  upload = _upload_job(job_directory, visibility)
-  retained = retain_job(job_directory)
-  return PostRunResult(job_directory, trajectory_paths, upload, retained)
+BUNDLE_MANIFEST = 'bundle.json'
 
 
 def _job_directory(jobs_directory: Path, job_name: str) -> Path:
@@ -80,16 +24,16 @@ def _job_directory(jobs_directory: Path, job_name: str) -> Path:
 def run_job(
   config: Path,
   jobs_directory: Path,
-  visibility: UploadVisibility = UploadVisibility.NONE,
   job_name: Optional[str] = None,
   attempts: Optional[int] = None,
-) -> PostRunResult:
-  """Run Harbor, then finish the concrete job directory it produced."""
+) -> Path:
+  """Run Harbor, then add the trial bundle's provenance to its job directory."""
   if attempts is not None and attempts < 1:
     raise ValueError(f'attempt depth must be at least one attempt: {attempts}')
   resolved_jobs_directory = jobs_directory.resolve()
   selected_job_name = job_name if job_name is not None else lulid()
   job_directory = _job_directory(resolved_jobs_directory, selected_job_name)
+  bundle_manifest = benchmark_bundle().manifest.read_bytes()
   command = [
     'harbor',
     'job',
@@ -104,14 +48,15 @@ def run_job(
   if attempts is not None:
     command += ['--n-attempts', str(attempts)]
   subprocess.run(command, check=True)
-  return finish_job(job_directory, visibility)
+  with (job_directory / BUNDLE_MANIFEST).open('xb') as manifest_file:
+    manifest_file.write(bundle_manifest)
+  return job_directory
 
 
 def main(argv: list[str]) -> Optional[int]:
   parser = base_args.Parser(
     prog='bro.benchmark.job',
-    description='run a Harbor job, convert its finished trails to ATIF, optionally upload it '
-    'to the Harbor Hub, and retain it when bucket storage is configured',
+    description='run Harbor and add the trial bundle manifest to its raw job directory',
   )
   parser.add_argument('-c', '--config', type=Path, required=True, help='Harbor job config')
   parser.add_argument(
@@ -128,27 +73,15 @@ def main(argv: list[str]) -> Optional[int]:
     type=int,
     help="override the config's attempt depth for this run",
   )
-  parser.add_argument(
-    '--upload',
-    choices=tuple(UploadVisibility),
-    default=UploadVisibility.NONE,
-    type=UploadVisibility,
-    help='Harbor Hub visibility, or none to skip upload (default: none)',
-  )
   args = parser.parse(argv)
   try:
-    result = run_job(
+    run_job(
       config=args['config'],
       jobs_directory=args['jobs_dir'],
-      visibility=args['upload'],
       job_name=args['job_name'],
       attempts=args['n_attempts'],
     )
-  except (OSError, RetentionError, subprocess.CalledProcessError, ValueError) as error:
-    log.error('benchmark job pipeline failed: %s', error)
+  except (OSError, subprocess.CalledProcessError, ValueError) as error:
+    log.error('benchmark job failed: %s', error)
     return 1
-  if result.upload is not None:
-    print(f'uploaded {result.upload.url}')
-  if result.retained is not None:
-    print(f'retained {result.retained.url}')
-  return 0
+  return None

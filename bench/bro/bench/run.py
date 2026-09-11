@@ -3,7 +3,7 @@
 
 The whole operator loop around one job: narrow the pinned config to the tasks
 under test, rebuild the bundle the trials run the framework from, block until
-the job ends, and turn its run into a short report and a path.
+the job ends, and turn its run into a short report, path, and artifact ref.
 
 Nothing is cleaned up behind it: the narrowed config stays in the workspace and
 the run stays in the session's artifact store, so what the trials wrote is there
@@ -23,13 +23,8 @@ import bro.base.args as base_args
 from bro.artifact import ArtifactError, get_artifact
 from bro.base import log
 from bro.base.lulid import lulid
+from bro.bench.job import JobError, run_job
 from bro.broker.job import OUTPUT_DIRECTORY
-from bro.local.benchmark_job import (
-  UPLOAD_VISIBILITIES,
-  JobError,
-  run_job,
-  uploaded_job_url,
-)
 from bro.workspace.paths import project_root
 
 __cli_name__ = 'benchmark-run'
@@ -138,7 +133,6 @@ def _run(
   bro: list[str],
   attempts: Optional[int],
   timeout: Optional[float],
-  upload: str,
   keep_bundle: bool,
 ) -> int:
   tree = project_root()
@@ -160,22 +154,19 @@ def _run(
   if not keep_bundle:
     build_bundle(tree)
   try:
-    ref = run_job(str(narrowed_config.relative_to(tree)), timeout, upload)
+    ref = run_job(str(narrowed_config.relative_to(tree)), timeout)
   except JobError as error:
     log.error('%s', error)
     run = _resolved(error.ref) if error.ref is not None else None
     if run is not None:
-      print(f'results {run / OUTPUT_DIRECTORY}')
+      print(f'results {run / OUTPUT_DIRECTORY}  artifact {error.ref}')
     return 1
 
   run = Path(get_artifact(ref))
   # printed before the report is rendered, so a run this cannot summarize is
   # still a run the operator can open
-  print(f'results {run / OUTPUT_DIRECTORY}')
+  print(f'results {run / OUTPUT_DIRECTORY}  artifact {ref}')
   print(f'config  {narrowed_config}')
-  url = uploaded_job_url(run)
-  if url is not None:
-    print(f'upload  {url}')
   for line in report(run / OUTPUT_DIRECTORY):
     print(line)
   return 0
@@ -207,12 +198,6 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument('--attempts', type=int, metavar='N', help="override the config's n_attempts")
   parser.add_argument(
     '--timeout', type=float, metavar='SECONDS', help='seconds before the host kills the job'
-  )
-  parser.add_argument(
-    '--upload',
-    choices=UPLOAD_VISIBILITIES,
-    default='none',
-    help='Harbor Hub visibility, or none to skip upload (default: none)',
   )
   parser.add_argument(
     '--keep-bundle',

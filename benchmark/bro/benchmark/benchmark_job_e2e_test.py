@@ -27,14 +27,10 @@ from pathlib import Path
 from typing import cast, override
 
 from bro.artifact import GET
+from bro.bench.job import BENCHMARK, benchmark_kind
 from bro.benchmark.bundle import build, default_root, workspace_root
-from bro.benchmark.e2e_test_helper import (
-  LIVE_TRIAL,
-  assert_graded_run,
-  assert_valid_trajectories,
-  one_task_config,
-)
-from bro.benchmark.trajectory import TRAJECTORY_FILENAME
+from bro.benchmark.e2e_test_helper import LIVE_TRIAL, assert_graded_run, one_task_config
+from bro.benchmark.job import BUNDLE_MANIFEST
 from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Broker, Dispatcher
 from bro.broker.job import OUTPUT_DIRECTORY
@@ -43,7 +39,6 @@ from bro.broker.spawn import ChildHandle, LaunchSpec, RingBuffer, Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 from bro.kinds import ArtifactResolver, KindContext
-from bro.local.benchmark_job import BENCHMARK, benchmark_kind
 
 pytestmark = LIVE_TRIAL
 
@@ -163,7 +158,7 @@ def _config_in_the_tree(tree: Path) -> Generator[str]:
 
 def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
   tree = workspace_root()
-  build(tree, default_root(tree))
+  bundle = build(tree, default_root(tree))
   runs = _RunDirectories(tmp_path / 'runs')
   spawner = _SessionSpawner()
   broker = Broker(TcpServerTransport([LOCAL_HOST]), spawner, job_output=runs)
@@ -189,6 +184,4 @@ def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
   assert exit_code == 0, spawner.output()
   [run] = runs.runs
   job = assert_graded_run(run / OUTPUT_DIRECTORY)
-  # the pipeline's own output, read rather than re-derived: converting here
-  # would pass over a pipeline that never converted
-  assert_valid_trajectories(job.glob(f'*/agent/{TRAJECTORY_FILENAME}'), job)
+  assert (job / BUNDLE_MANIFEST).read_bytes() == bundle.manifest.read_bytes()

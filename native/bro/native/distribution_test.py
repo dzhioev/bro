@@ -12,6 +12,7 @@ import pytest
 _ROOT = Path(__file__).resolve().parents[3]
 _PROJECTS = {
   'bro': _ROOT,
+  'bro-bench': _ROOT / 'bench',
   'bro-benchmark': _ROOT / 'benchmark',
   'bro-dev': _ROOT / 'dev',
   'bro-native': _ROOT / 'native',
@@ -178,7 +179,12 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'constructs',
     'jsii',
   }
-  assert _project_dependencies(_ROOT / 'benchmark' / 'pyproject.toml') >= {'bro', 'bro-ride'}
+  assert _project_dependencies(_ROOT / 'bench' / 'pyproject.toml') == {'bro', 'pyyaml'}
+  assert _project_dependencies(_ROOT / 'benchmark' / 'pyproject.toml') >= {
+    'bro',
+    'bro-bench',
+    'bro-ride',
+  }
   root = tomllib.loads((_ROOT / 'pyproject.toml').read_text())
   assert {'agent', 'ride'}.isdisjoint(root['project'].get('optional-dependencies', {}))
 

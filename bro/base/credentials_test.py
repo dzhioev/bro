@@ -466,11 +466,11 @@ class TestDefaultStore:
       json.dumps(
         {
           'defaults': {'creds': ['openai+default']},
-          'user': {'tools': {'bro.local.benchmark-job': {'creds': ['openai+benchmark']}}},
+          'user': {'tools': {'bro.bench.job': {'creds': ['openai+benchmark']}}},
         }
       )
     )
-    monkeypatch.setattr(credentials, 'canonical_cli_name', lambda: 'bro.local.benchmark-job')
+    monkeypatch.setattr(credentials, 'canonical_cli_name', lambda: 'bro.bench.job')
 
     assert credentials.get('openai') == 'benchmark'
 
