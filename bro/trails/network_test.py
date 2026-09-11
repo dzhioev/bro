@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from bro.trails.model import (
+  INITIAL_TRAIL_FORMAT,
   BlazeRequest,
   ForkedFrom,
   RecordedTrail,
@@ -99,7 +100,7 @@ class TestConstructor:
     fake.queue((200, b'{"id": "T1"}'))
 
     store = NetworkStore('http://127.0.0.1:8004', 'tok')
-    assert store.get_trail('T1') == {'id': 'T1'}
+    assert store.get_trail('T1') == {'id': 'T1', 'format': INITIAL_TRAIL_FORMAT}
 
 
 class TestGetTrail:
@@ -108,7 +109,7 @@ class TestGetTrail:
     fake.queue((200, b'{"trail_id": "T1", "bro": "dev"}'))
     c = _client()
     result = c.get_trail('T1')
-    assert result == {'trail_id': 'T1', 'bro': 'dev'}
+    assert result == {'trail_id': 'T1', 'bro': 'dev', 'format': INITIAL_TRAIL_FORMAT}
     method, path, body, headers = fake.requests[0]
     assert (method, path) == ('GET', '/v1/trails/T1')
     assert headers['Authorization'] == 'Bearer tok'
@@ -242,7 +243,7 @@ class TestRetryBehavior:
     fake.queue((200, b'{"id": "T1"}'))
     c = _client()
     result = c.get_trail('T1')
-    assert result == {'id': 'T1'}
+    assert result == {'id': 'T1', 'format': INITIAL_TRAIL_FORMAT}
     assert fake.closes >= 1
 
   def test_second_failure_propagates(self, monkeypatch):
@@ -258,7 +259,7 @@ class TestRetryBehavior:
     fake.queue((503, b'unavailable'))
     fake.queue((200, b'{"id": "T1"}'))
     c = _client()
-    assert c.get_trail('T1') == {'id': 'T1'}
+    assert c.get_trail('T1') == {'id': 'T1', 'format': INITIAL_TRAIL_FORMAT}
 
   def test_persistent_retryable_status_propagates(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
@@ -351,16 +352,19 @@ class TestWrites:
 
   def test_admin_operations_use_the_server_seam(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
+    fake.queue((200, b'{"format": 1, "migrated_rows": 0}'))
     fake.queue((200, b'{"extent": 2}'))
     fake.queue((200, b'{"ok": true}'))
     fake.queue((200, b'{"extent": 1}'))
     fake.queue((200, b'\n\n{"ok": false}'))
     client = _client()
+    assert client.migrate_trail('T1') == {'format': INITIAL_TRAIL_FORMAT, 'migrated_rows': 0}
     assert client.recompute('T1') == {'extent': 2}
     assert client.check('T1') == {'ok': True}
     assert client.relink('T1', {'trail_id': 'parent', 'step_id': 4}, 1) == {'extent': 1}
     assert client.check() == {'ok': False}
     assert [request[1] for request in fake.requests] == [
+      '/v1/admin/trails/T1/migrate',
       '/v1/admin/trails/T1/recompute',
       '/v1/admin/trails/check',
       '/v1/admin/trails/T1/relink',

@@ -60,6 +60,7 @@ bro · claude recorders                     readers
   a lost race answers `backends.ATTACH_CONTENDED` and the caller resolves again.
 - `local.py` stores each trail under `<root>/trails/<id>/` as `header.json`, `steps.jsonl`, and optional `context.json`, with tool blobs under `<root>/trails/tools/<sha256>.json` and delete manifests under `<root>/manifests/delete/`.
   Appends are ordinal and `flock`-serialized, headers are atomically replaced, bodies remain inline, and listing preserves the selector/cursor contract.
+  Reopening an older trail upgrades and atomically replaces its row stream under the same flock before stamping the header and writing.
   A stale open header gets `end.inference = unreported` when read.
 - The local root is the global `bro.workspace.paths.trails_dir` under the runtime state root.
   `ride.trails` contributes its dedicated mount to the `Launch` composed by the Claude and bro harness launch surfaces, binding the host root at the fixed in-container `/var/ride/trails` path.
@@ -77,6 +78,7 @@ bro · claude recorders                     readers
   The unreported-trail sweep starts only for a `DynamoStore`.
 - `server/dynamo.py` owns `DynamoStore(TrailsStore)`:
   conditional append transactions, indexes, S3 body spill/resolution, UUID reads, and its store-owned thread pool for the spilled-row fan-out.
+  Its migrate-on-write rewrites rows conditionally on their stored formats before conditionally advancing the header, so concurrent current-format rows are left alone and an interrupted migration resumes.
   `server/dynamo_types.py` owns Dynamo conversion and row constants.
   `server/operations.py` remains the recompute/check engine and owns the manifested destructive operations, relinking and deletion.
 - Stored rows are served rows.
@@ -97,6 +99,9 @@ bro · claude recorders                     readers
   The recorded adapter validates `/messages`, adapts headers/context/native steps/navigation rows, and collects exact fork-bounded segments.
   It is a view layer only;
   none of its records enter trail storage or server contracts.
+- `formats.py` owns schema-format validation and the ordered header/row upgrade table.
+  Missing stored formats mean the first schema, reads upgrade in memory, and a newer format is refused with the unsupported record named.
+  A row upgrade may reshape metadata but cannot change its harness body, whose backend storage remains stable through migration.
 - `rows.py` owns aggregate folding, row construction, and message projection.
   `backends.SERVER_DERIVED_NATIVE_FIELDS` names what the fold owns:
   `validate_create` refuses those fields from a writer, and `AggregateState.replaying` clears them for the recompute/check re-fold.
@@ -120,7 +125,7 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
 
 ## Surfaces
 
-- `model.py` owns `BlazeRequest`, shared validation constants, trail/step/lineage records, and body helpers.
+- `model.py` owns `TRAIL_FORMAT`, `BlazeRequest`, shared validation constants, trail/step/lineage records, and body helpers.
   `BlazeRequest.from_wire()` / `to_wire()` is the one blaze-envelope validator;
   harness-native validation and body opening remain in each store.
   A step id is an ordinal in rows and lineage pointers.
@@ -155,7 +160,8 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
 - `rewind.py` (`rewind`) is the reader CLI for every harness, working through `TrailsStore`:
   it owns argument parsing, queries, follow polling, regex matching, and grep context, while every `show`, `steps`, `list`, `tree`, and `grep` record renders through the matching display preset.
   The text views accept `--output-offset` / `--output-limit` for bounded windows.
-- `admin.py` (`trails`) is the operator CLI beside it, carrying `delete`.
+- `admin.py` (`trails`) is the operator CLI beside it, carrying `migrate` and `delete`.
+  Migration reaches every backend through the store contract and the administer-permission route.
 - `contract_test.py` runs the same contract suite against `LocalStore` and `NetworkStore` over a real loopback aiohttp server backed by `LocalStore`;
   `claude_lineage_test.py` drives the resolver over a real store.
   `ride/ride/claude/trail_recorder_test.py` drives the adapter-owned recorder over one.

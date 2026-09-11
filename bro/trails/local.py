@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from bro.base.lulid import lulid
-from bro.trails import backends, rows
+from bro.trails import backends, formats, model, rows
 from bro.trails.lineage import LineageDecision
 from bro.trails.model import (
   UNREPORTED_END_INFERENCE,
@@ -92,7 +92,7 @@ class LocalStore(TrailsStore):
   def get_trail(self, trail_id: str) -> dict:
     with self._locked(trail_id, shared=True):
       header = self._read_header(trail_id)
-    return self._project_header(header)
+    return self._project_header(formats.upgrade_header(header))
 
   def find_segment_trails(self, segments: set[str]) -> list[dict]:
     """The headers of the trails recording one of `segments`."""
@@ -115,7 +115,7 @@ class LocalStore(TrailsStore):
     if step_id < 0:
       raise TrailNotFound(f'{trail_id}/{step_id}')
     with self._locked(trail_id, shared=True):
-      self._read_header(trail_id)
+      formats.upgrade_header(self._read_header(trail_id))
       rows = self._read_rows(trail_id, step_id, step_id + 1)
     if len(rows) == 0:
       raise TrailNotFound(f'{trail_id}/{step_id}')
@@ -128,10 +128,13 @@ class LocalStore(TrailsStore):
     if page_size < 1 or page_size > 500:
       raise ValueError('limit must be between 1 and 500')
     with self._locked(trail_id, shared=True):
-      self._read_header(trail_id)
+      formats.upgrade_header(self._read_header(trail_id))
       lines = self._read_row_lines(trail_id)
     start = 0 if after is None else max(0, after + 1)
-    page = _parse_rows(trail_id, lines[start : start + page_size], start)
+    page = [
+      formats.upgrade_row(row)
+      for row in _parse_rows(trail_id, lines[start : start + page_size], start)
+    ]
     next_cursor = page[-1]['step_id'] if len(lines) > start + page_size else None
     return {'steps': page, 'next': next_cursor}
 
@@ -150,7 +153,7 @@ class LocalStore(TrailsStore):
 
   def get_launch_context(self, trail_id: str) -> Optional[Any]:
     with self._locked(trail_id, shared=True):
-      self._read_header(trail_id)
+      formats.upgrade_header(self._read_header(trail_id))
       path = self._trail_directory(trail_id) / 'context.json'
       if not path.is_file():
         return None
@@ -185,6 +188,7 @@ class LocalStore(TrailsStore):
     with _creating_directory(directory):
       header: dict[str, Any] = {
         'id': trail_id,
+        'format': model.TRAIL_FORMAT,
         'harness': request.harness,
         'version': request.version,
         'started_at': started_at,
@@ -229,6 +233,7 @@ class LocalStore(TrailsStore):
     extent = decision.attach_to['extent']
     with self._locked(trail_id, shared=False):
       header = self._read_header(trail_id)
+      self._migrate_locked(trail_id, header)
       if _extent(header) != extent:
         return {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
       header.update(backends.attached_header(header, request))
@@ -248,6 +253,7 @@ class LocalStore(TrailsStore):
       raise ValueError('offset must be non-negative')
     with self._locked(trail_id, shared=False):
       header = self._read_header(trail_id)
+      self._migrate_locked(trail_id, header)
       actual = _extent(header)
       expected_end = offset + len(records)
       if actual != offset:
@@ -281,7 +287,7 @@ class LocalStore(TrailsStore):
       header = self._read_header(trail_id)
       header['subject'] = subject
       _atomic_json(self._trail_directory(trail_id) / 'header.json', header)
-    return self._project_header(header)
+    return self._project_header(formats.upgrade_header(header))
 
   def end_trail(
     self,
@@ -305,6 +311,34 @@ class LocalStore(TrailsStore):
       header = self._read_header(trail_id)
       header['last_alive_at'] = _now_iso()
       _atomic_json(self._trail_directory(trail_id) / 'header.json', header)
+
+  def migrate_trail(self, trail_id: str) -> dict:
+    with self._locked(trail_id, shared=False):
+      header = self._read_header(trail_id)
+      migrated_rows = self._migrate_locked(trail_id, header)
+    return {
+      'trail_id': trail_id,
+      'format': model.TRAIL_FORMAT,
+      'migrated_rows': migrated_rows,
+    }
+
+  def _migrate_locked(self, trail_id: str, header: dict) -> int:
+    source_format = formats.stored_format(header, description=f'trail {trail_id} header')
+    upgraded_header = formats.upgrade_header(header)
+    if source_format == model.TRAIL_FORMAT:
+      return 0
+    stored_rows = self._read_stored_rows(trail_id)
+    migrated_rows = sum(
+      formats.stored_format(row, description=f'trail row {trail_id}/{row.get("step_id")}')
+      != model.TRAIL_FORMAT
+      for row in stored_rows
+    )
+    upgraded_rows = [formats.upgrade_row(row) for row in stored_rows]
+    self._write_rows(trail_id, upgraded_rows, append=False)
+    header.clear()
+    header.update(upgraded_header)
+    _atomic_json(self._trail_directory(trail_id) / 'header.json', header)
+    return migrated_rows
 
   def delete_trail(self, trail_id: str) -> dict:
     directory = self._trail_directory(trail_id)
@@ -374,9 +408,14 @@ class LocalStore(TrailsStore):
     except FileNotFoundError as exception:
       raise TrailNotFound(trail_id) from exception
 
-  def _read_rows(self, trail_id: str, start: int = 0, end: Optional[int] = None) -> list[dict]:
+  def _read_stored_rows(
+    self, trail_id: str, start: int = 0, end: Optional[int] = None
+  ) -> list[dict]:
     lines = self._read_row_lines(trail_id)
     return _parse_rows(trail_id, lines[start:end], start)
+
+  def _read_rows(self, trail_id: str, start: int = 0, end: Optional[int] = None) -> list[dict]:
+    return [formats.upgrade_row(row) for row in self._read_stored_rows(trail_id, start, end)]
 
   def _write_rows(self, trail_id: str, prepared: list[dict], *, append: bool) -> None:
     path = self._trail_directory(trail_id) / 'steps.jsonl'
@@ -385,6 +424,9 @@ class LocalStore(TrailsStore):
       json.dumps(row, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode() + b'\n'
       for row in prepared
     )
+    if not append:
+      _atomic_bytes(path, encoded)
+      return
     with path.open(mode) as stream:
       stream.write(encoded)
       stream.flush()

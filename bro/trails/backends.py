@@ -172,6 +172,7 @@ def _bro_parse(payload: Any) -> ParsedRecord:
     'raw',
     'record',
     'payload_sha256',
+    'format',
   }
   attributes = {key: value for key, value in payload.items() if key not in omitted}
   return ParsedRecord(

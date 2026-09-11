@@ -17,6 +17,13 @@ from bro.trails.store import (
 __cli_name__ = 'trails'
 
 
+def _command_migrate(client: TrailsStore, args: dict[str, Any]) -> int:
+  for trail_id in args['trail_ids']:
+    result = client.migrate_trail(trail_id)
+    print(f'{trail_id}: format {result["format"]}, {result["migrated_rows"]} rows migrated')
+  return 0
+
+
 def _command_delete(client: TrailsStore, args: dict[str, Any]) -> int:
   """Exit 0 when every named trail went, 1 when any of them stayed.
 
@@ -46,6 +53,12 @@ def _command_delete(client: TrailsStore, args: dict[str, Any]) -> int:
 def main(argv: list[str]) -> Optional[int]:
   parser = base_args.Parser(description='administer a recorded trail registry')
   subparsers = parser.add_subparsers(dest='command')
+
+  migrate_parser = subparsers.add_parser(
+    'migrate', help='rewrite trails into the current schema format'
+  )
+  migrate_parser.add_argument('trail_ids', nargs='+', help='trail ids to migrate')
+  migrate_parser.set_handler(lambda **args: _dispatch(_command_migrate, args))
 
   delete_parser = subparsers.add_parser(
     'delete', help='remove trails, writing a manifest of what goes'

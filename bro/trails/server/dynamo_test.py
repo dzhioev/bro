@@ -9,7 +9,7 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from bro.trails import backends
+from bro.trails import backends, formats, model
 from bro.trails.model import (
   MESSAGE_TYPES,
   UNREPORTED_END_INFERENCE,
@@ -381,6 +381,141 @@ def test_append_chunks_without_interleaving(components):
   assert dynamo.headers[trail_id]['extent'] == 52
 
 
+def test_append_rejects_a_header_format_change_after_its_read(components, monkeypatch):
+  store, dynamo, _ = components
+  trail_id = _blaze_bro(store)
+  append_header_update = store._append_header_update
+
+  def race_format_change(*args, **kwargs):
+    update = append_header_update(*args, **kwargs)
+    with dynamo.editing_header(trail_id) as header:
+      header['format'] = model.TRAIL_FORMAT + 1
+    return update
+
+  monkeypatch.setattr(store, '_append_header_update', race_format_change)
+
+  with pytest.raises(formats.UnsupportedTrailFormat, match='format 2'):
+    store.append_records(trail_id, 1, [{'kind': 'user_input', 'body': 'hello'}])
+
+  assert dynamo.headers[trail_id]['extent'] == 1
+  assert (trail_id, 1) not in dynamo.steps
+
+
+def test_migrate_on_append_conditionally_rewrites_older_rows(components, monkeypatch):
+  store, dynamo, _ = components
+  trail_id = _blaze_bro(store)
+  with dynamo.editing_header(trail_id) as header:
+    header.pop('format')
+  with dynamo.editing_step(trail_id, 0) as step:
+    step.pop('format')
+  conditional_puts = []
+  conditional_updates = []
+  dynamo._dynamo.meta.events.register(
+    'provide-client-params.dynamodb.PutItem',
+    lambda params, **_: conditional_puts.append(params),
+  )
+  dynamo._dynamo.meta.events.register(
+    'provide-client-params.dynamodb.UpdateItem',
+    lambda params, **_: conditional_updates.append(params),
+  )
+  monkeypatch.setitem(
+    formats.UPGRADES,
+    1,
+    formats.FormatUpgrade(
+      header=lambda header: {
+        **header,
+        'synthetic_header': True,
+        'synthetic_nullable': None,
+      },
+      row=lambda row: {**row, 'turn_index': 1},
+    ),
+  )
+  monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+
+  assert store.check(trail_id)['ok'] is True
+  assert 'format' not in dynamo.steps[trail_id, 0]
+  store.append_records(trail_id, 1, [{'kind': 'user_input', 'body': 'hello'}])
+
+  assert (dynamo.headers[trail_id]['format'], dynamo.headers[trail_id]['synthetic_header']) == (
+    2,
+    True,
+  )
+  assert 'synthetic_nullable' in dynamo.headers[trail_id]
+  assert dynamo.headers[trail_id]['synthetic_nullable'] is None
+  assert (
+    dynamo.steps[trail_id, 0]['format'],
+    dynamo.steps[trail_id, 0]['body'],
+    dynamo.steps[trail_id, 0]['turn_index'],
+  ) == (2, 'prompt', 1)
+  assert dynamo.steps[trail_id, 1]['format'] == 2
+  [migration_put] = [put for put in conditional_puts if 'ConditionExpression' in put]
+  assert migration_put['ConditionExpression'] == (
+    '(attribute_not_exists(#stored_format) OR #stored_format = :source_format)'
+  )
+  assert migration_put['ExpressionAttributeNames'] == {'#stored_format': 'format'}
+  [header_update] = conditional_updates
+  assert migration_put['ConditionExpression'] in header_update['ConditionExpression']
+  assert '#extent = :expected_extent' in header_update['ConditionExpression']
+  assert header_update['ExpressionAttributeNames']['#stored_format'] == 'format'
+
+
+def test_migration_refuses_a_body_changing_upgrade_before_rewriting(components, monkeypatch):
+  store, dynamo, s3 = components
+  trail_id = _blaze_bro(store)
+  large = 'x' * (dynamo_store.SPILLOVER_THRESHOLD_BYTES + 1)
+  store.append_records(trail_id, 1, [{'kind': 'tool_result', 'body': large}])
+  previous_key = dynamo.steps[trail_id, 1]['body_s3']
+  with dynamo.editing_header(trail_id) as header:
+    header.pop('format')
+  for step_id in (0, 1):
+    with dynamo.editing_step(trail_id, step_id) as step:
+      step.pop('format')
+  monkeypatch.setitem(
+    formats.UPGRADES,
+    1,
+    formats.FormatUpgrade(
+      header=lambda header: header,
+      row=lambda row: {**row, 'body': 'small'} if row['step_id'] == 1 else row,
+    ),
+  )
+  monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+
+  with pytest.raises(ValueError, match='format upgrade changed its immutable body'):
+    store.migrate_trail(trail_id)
+
+  assert previous_key in s3.objects
+  assert 'format' not in dynamo.headers[trail_id]
+  assert 'format' not in dynamo.steps[trail_id, 1]
+  assert dynamo.steps[trail_id, 1]['body_s3'] == previous_key
+
+
+def test_recompute_migrates_before_repairing_rows(components, monkeypatch):
+  store, dynamo, _ = components
+  trail_id = _blaze_bro(store)
+  with dynamo.editing_header(trail_id) as header:
+    header.pop('format')
+  with dynamo.editing_step(trail_id, 0) as step:
+    step.pop('format')
+  monkeypatch.setitem(
+    formats.UPGRADES,
+    1,
+    formats.FormatUpgrade(
+      header=lambda header: header,
+      row=lambda row: {**row, 'turn_index': 1},
+    ),
+  )
+  monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+
+  store.recompute(trail_id)
+
+  assert dynamo.headers[trail_id]['format'] == 2
+  assert (dynamo.steps[trail_id, 0]['format'], dynamo.steps[trail_id, 0]['turn_index']) == (
+    2,
+    1,
+  )
+  assert store.check(trail_id)['ok'] is True
+
+
 def test_bro_projection_derives_messages_from_the_llm_call_output(components):
   store, _, _ = components
   trail_id = _blaze_bro(store)
@@ -657,6 +792,44 @@ def test_attaching_reopens_the_trail_conditional_on_the_extent_it_verified(compo
 
   assert contended == {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
   assert dynamo.headers[trail_id]['version'] == '3'
+
+
+def test_attach_rejects_a_header_format_change_after_its_read(components, monkeypatch):
+  store, dynamo, _ = components
+  trail_id = _blaze_claude(store)
+  recorded = _claude_assistant('message-1', 'first', uuid='uuid-1')
+  resumed = _claude_assistant('message-2', 'second', uuid='uuid-2')
+  store.append_records(trail_id, offset=0, records=[recorded])
+  lineage = {
+    'segment': 'segment',
+    'lines': [
+      ['uuid-1', payload_sha256(recorded)],
+      ['uuid-2', payload_sha256(resumed)],
+    ],
+  }
+  update_item = store._dynamo.update_item
+  raced = False
+
+  def race_format_change(**kwargs):
+    nonlocal raced
+    if kwargs.get('ConditionExpression', '').startswith('#extent = :extent') and not raced:
+      raced = True
+      update_item(
+        TableName=_TRAILS_TABLE,
+        Key=dynamo_types.ddb_item({'id': trail_id}),
+        UpdateExpression='SET #format = :format',
+        ExpressionAttributeNames={'#format': 'format'},
+        ExpressionAttributeValues={':format': dynamo_types.ddb(model.TRAIL_FORMAT + 1)},
+      )
+    return update_item(**kwargs)
+
+  monkeypatch.setattr(store._dynamo, 'update_item', race_format_change)
+
+  attached = store.blaze(BlazeRequest.from_wire(_claude_payload(lineage=lineage, version='3')))
+
+  assert attached == {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
+  assert dynamo.headers[trail_id]['version'] == '2'
+  assert dynamo.headers[trail_id]['format'] == model.TRAIL_FORMAT + 1
 
 
 def test_check_detects_corruption_and_recompute_repairs_rows_and_header(components):
