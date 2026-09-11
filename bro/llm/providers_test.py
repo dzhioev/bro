@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import pytest
 
 from bro.llm import providers
@@ -135,3 +137,16 @@ class TestFailureSignatures:
   def test_a_signature_off_the_category_vocabulary_is_refused(self):
     with pytest.raises(ValueError, match='unknown failure category'):
       FailureSignature(pattern='x', category='sprint')
+
+
+class TestPricing:
+  def test_pricing_dispatches_to_the_named_provider(self):
+    assert providers.price(
+      'openai',
+      'gpt-5.6-terra',
+      {'input_tokens': 1, 'output_tokens': 1},
+      'default',
+    ) == Decimal('0.000014')
+
+  def test_echo_has_no_billable_calls(self):
+    assert providers.price('echo', 'echo', {}, None) is None

@@ -30,7 +30,7 @@ The bro-native engine and provider clients live in `bro.native`.
   `_PROVIDER_MODULES` (name → the module declaring its `LLMSpec` / `DEFAULT_MODEL` / `MODELS` short-name table / `FAILURE_SIGNATURES`, imported per name), model resolution (short name, then full id, then verbatim
   — the table is a convenience, not a whitelist), `provider_of_model`,
   `failure_signatures` (how a provider's client failures read in a run's error output, classified into `llm.py`'s neutral `FAILURE_CATEGORIES` — what a consumer's retry policy maps onto its own taxonomy),
-  and `LLMSelection`:
+  `price` (one call from the provider's raw usage record and effective service tier), and `LLMSelection`:
   the `provider:model:effort` grammar with its `+fast` suffix.
   `LLMSelectionError` is the operator-facing failure.
   The flags themselves are `bro/launch/llm_flags.py`.
@@ -59,20 +59,21 @@ The bro-native engine and provider clients live in `bro.native`.
   `vendor_of(slug)` answers who billed a model, while `providers.py` answers which launch recipe runs it.
 - `tracker.py` — the dependency-free `Tracker` ABC, durable sibling of `Observer`, plus `NullTracker`.
   Trail records and harness recorders are owned by `bro/trails/`.
-- `llms/` — provider recipes:
-  - `openai.py` — the OpenAI `NativeLLMSpec`:
-    model, reasoning effort, service tier, and compact threshold;
-    `needed_secrets` → `openai`, `.fast()` → priority tier, and every shared effort level maps through.
+- `pricing.py` — canonical table digests and the once-per-process warning for a table read more than 30 days after its as-of date.
+- `llms/` — provider recipes and provider-owned pricing:
+  - `openai.py` — the OpenAI `NativeLLMSpec` plus standard and priority Responses pricing over raw token details and context bands;
+    the recipe carries model, reasoning effort, service tier, and compact threshold, with `needed_secrets` → `openai`, `.fast()` → priority tier, and every shared effort level mapped through.
     The live Responses client is `bro.native.llms.openai`.
-  - `claude_code.py` — the model and knobs a Claude Code session runs under, as a recipe with no in-process client.
-    Session surfaces read `model` / `effort` / `fast_mode` and lower them onto Claude's own flags.
+  - `claude_code.py` — the model and knobs a Claude Code session runs under, as a recipe with no in-process client, plus Anthropic list pricing over transcript cache-write TTLs;
+    session surfaces read `model` / `effort` / `fast_mode` and lower them onto Claude's own flags.
   - `echo.py` — the dependency-free native recipe used by tests and the native LLM diagnostic CLI;
-    its client is `bro.native.llms.echo`.
+    its empty table prices no call, and its client is `bro.native.llms.echo`.
 
 ## Conventions
 
-- A new provider recipe lives in `llms/`, exports `LLMSpec` with `DEFAULT_MODEL` and a `MODELS` short-name table, and takes one row in `providers._PROVIDER_MODULES`.
+- A new provider recipe lives in `llms/`, exports `LLMSpec` with `DEFAULT_MODEL`, a `MODELS` short-name table, `PRICE_TABLE`, `PRICE_TABLE_SHA256`, and `price`, and takes one row in `providers._PROVIDER_MODULES`.
   Its `TYPE` is the roster name.
+  Price tables use the provider's raw billing vocabulary.
   Short names stay unique across providers.
 - A recipe run by bro-native subclasses `NativeLLMSpec` and has a matching client module in `bro.native.llms`, registered in `bro.native.providers`.
   Recipe modules never construct clients.

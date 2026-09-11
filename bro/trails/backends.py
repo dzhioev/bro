@@ -225,7 +225,13 @@ def _bro_llm_call_messages(record: dict) -> list[dict]:
   if not isinstance(usage, dict):
     raw_usage = response.get('usage')
     usage = raw_usage if isinstance(raw_usage, dict) else {}
-  events = [_event(record, 'llm_call', model=str(response.get('model', 'unknown')), usage=usage)]
+  call_fields: dict[str, Any] = {
+    'model': str(response.get('model', 'unknown')),
+    'usage': usage,
+  }
+  if 'service_tier' in response:
+    call_fields['service_tier'] = response['service_tier']
+  events = [_event(record, 'llm_call', **call_fields)]
   output = response.get('output')
   if not isinstance(output, list):
     return events

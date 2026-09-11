@@ -71,9 +71,8 @@ BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_
   it keeps a trial's logs, artifacts and reward inside the task container for harbor
   to copy out, so a job runs wherever the docker daemon is reachable and leaves nothing on the
   docker host
-- `bro/benchmark/pricing.py` — the source-dated model price table and exact per-call calculator over `bro.llm.usage`'s four billed classes
 - `bro/benchmark/trajectory.py` — converts the projected local trail in each finished trial into
-  Harbor's ATIF v1.7 models at `agent/trajectory.json`, including billed-class counts and priced step/final metrics;
+  Harbor's ATIF v1.7 models at `agent/trajectory.json`, including normalized counts for reporting and provider-priced step/final metrics from each call's raw usage;
   `convert_job_trajectories()` is the post-run job-directory sweep,
   and `job_trajectory_cost_usd()` is the strict report-time repricing surface
 - `bro/benchmark/job.py` (`bro.benchmark.job`) — runs Harbor against a known concrete job directory,

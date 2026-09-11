@@ -137,7 +137,7 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
 - `/steps` returns the native stream and `/messages` its generalized projection.
   Large bodies remain inline over the wire.
 - `GET /v1/trails/{id}/context` returns `{"launch_context": null}` for an existing trail without context and 404 only when the trail is missing.
-- Bro projection derives reasoning, assistant text, tool calls, and terminal assistant status from `llm_call.response.output`,
+- Bro projection derives reasoning, assistant text, tool calls, and terminal assistant status from `llm_call.response.output`, and copies the response's service tier onto the projected call when present,
   so `BRO_STEP_KINDS` admits no record kind of its own for them;
   the decoding reads the OpenAI Responses API shape.
 - Header responses expose provider-raw usage by model.
@@ -149,6 +149,9 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   Tool blobs are content-addressed and shared across trails, so no single trail's delete removes one.
   A trail some fork still points at is refused with the children named:
   a fork's chain walk resolves every ancestor, so a `forked_from` is never left pointing at nothing.
+- `cost.py` prices the projected `llm_call` messages of one trail through the provider named by `native.llm.type`.
+  `trail_cost` returns `None` instead of a partial total when any call is unpriced, while `strict_trail_cost` raises naming it;
+  neither function follows lineage or summon edges.
 - `rewind.py` (`rewind`) is the reader CLI for every harness, working through `TrailsStore`:
   it owns argument parsing, queries, follow polling, regex matching, and grep context, while every `show`, `steps`, `list`, `tree`, and `grep` record renders through the matching display preset.
   The text views accept `--output-offset` / `--output-limit` for bounded windows.

@@ -273,7 +273,13 @@ def test_build_dynamo_store_requires_every_backend_field():
     dynamo_store.build_dynamo_store({'backend': 'dynamo'})
 
 
-def _bro_call(output: list[dict], *, model: str = 'gpt-5', input_tokens: int = 10) -> dict:
+def _bro_call(
+  output: list[dict],
+  *,
+  model: str = 'gpt-5',
+  input_tokens: int = 10,
+  service_tier: Optional[str] = None,
+) -> dict:
   return {
     'kind': 'llm_call',
     'body': {
@@ -282,6 +288,7 @@ def _bro_call(output: list[dict], *, model: str = 'gpt-5', input_tokens: int = 1
         'model': model,
         'usage': {'input_tokens': input_tokens, 'output_tokens': 3},
         'output': output,
+        **({} if service_tier is None else {'service_tier': service_tier}),
       },
     },
     'response_id': 'response-1',
@@ -388,7 +395,8 @@ def test_bro_projection_derives_messages_from_the_llm_call_output(components):
             'summary': [{'type': 'summary_text', 'text': 'think'}],
           },
           {'type': 'function_call', 'name': 'read', 'call_id': 'call-1', 'arguments': '{}'},
-        ]
+        ],
+        service_tier='priority',
       ),
     ],
   )
@@ -399,6 +407,7 @@ def test_bro_projection_derives_messages_from_the_llm_call_output(components):
     'reasoning',
     'tool_call',
   ]
+  assert page['messages'][1]['service_tier'] == 'priority'
   assert page['messages'][2]['source'] == {'step_id': 1, 'index': 1}
   assert page['messages'][3]['source'] == {'step_id': 1, 'index': 2}
 
