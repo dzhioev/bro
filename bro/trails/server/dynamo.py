@@ -8,7 +8,7 @@ from typing import Any, Literal, Optional
 
 import boto3
 
-from bro.trails import backends, rows
+from bro.trails import backends, formats, model, rows
 from bro.trails.lineage import LineageDecision
 from bro.trails.model import (
   UNREPORTED_END_INFERENCE,
@@ -158,24 +158,27 @@ class DynamoStore(TrailsStore):
       state=state,
       seen_billing_keys=seen_billing_keys,
     )
-    for row in prepared:
-      body = row.pop('body')
-      body_payload = dynamo_types.body_bytes(body)
-      if len(body_payload) > dynamo_types.MAX_BODY_BYTES:
-        raise BodyTooLarge(f'body size {len(body_payload)} exceeds {dynamo_types.MAX_BODY_BYTES}')
-      if len(body_payload) < dynamo_types.SPILLOVER_THRESHOLD_BYTES:
-        row['body'] = body
-        continue
-      key = dynamo_types.spillover_key(trail_id, row['step_id'], body_payload)
-      self._s3.put_object(
-        Bucket=self._bucket,
-        Key=key,
-        Body=body_payload,
-        ContentType='application/json',
-      )
-      row['body_s3'] = key
-      row['body_encoding'] = 'text' if isinstance(body, str) else 'json'
-    return prepared
+    return [self._store_row_body(row) for row in prepared]
+
+  def _store_row_body(self, row: dict) -> dict:
+    stored = dict(row)
+    body = stored.pop('body')
+    body_payload = dynamo_types.body_bytes(body)
+    if len(body_payload) > dynamo_types.MAX_BODY_BYTES:
+      raise BodyTooLarge(f'body size {len(body_payload)} exceeds {dynamo_types.MAX_BODY_BYTES}')
+    if len(body_payload) < dynamo_types.SPILLOVER_THRESHOLD_BYTES:
+      stored['body'] = body
+      return stored
+    key = dynamo_types.spillover_key(stored['trail_id'], stored['step_id'], body_payload)
+    self._s3.put_object(
+      Bucket=self._bucket,
+      Key=key,
+      Body=body_payload,
+      ContentType='application/json',
+    )
+    stored['body_s3'] = key
+    stored['body_encoding'] = 'text' if isinstance(body, str) else 'json'
+    return stored
 
   def blaze(self, request: BlazeRequest) -> dict:
     adapter = self._backend(request.harness)
@@ -195,7 +198,9 @@ class DynamoStore(TrailsStore):
       forked_from = decision.forked_from
     if forked_from is not None:
       parent_id = forked_from['trail_id']
-      native.update(inherited_native(adapter, lambda: self._required_header(parent_id)))
+      native.update(
+        inherited_native(adapter, lambda: formats.upgrade_header(self._required_header(parent_id)))
+      )
     if decision is not None:
       native.update(minted_native(native, decision.chunks))
     trail_id = dynamo_types.new_id()
@@ -212,6 +217,7 @@ class DynamoStore(TrailsStore):
 
     item: dict[str, Any] = {
       'id': trail_id,
+      'format': model.TRAIL_FORMAT,
       'harness': request.harness,
       'version': request.version,
       'started_at': started_at,
@@ -280,18 +286,26 @@ class DynamoStore(TrailsStore):
     assert decision.attach_to is not None
     trail_id = decision.attach_to['trail_id']
     extent = decision.attach_to['extent']
+    self.migrate_trail(trail_id)
     header = self._required_header(trail_id)
     fields = {**backends.attached_header(header, request), 'last_alive_at': _now_iso()}
-    names = {'#extent': 'extent', **{f'#{field}': field for field in fields}}
+    expected_format = formats.stored_format(header, description=f'trail {trail_id} header')
+    format_condition, format_names, format_values = _stored_format_condition(expected_format)
+    names = {
+      '#extent': 'extent',
+      **format_names,
+      **{f'#{field}': field for field in fields},
+    }
     values = {
       ':extent': _ddb(extent),
+      **format_values,
       **{f':{field}': _ddb(value) for field, value in fields.items()},
     }
     try:
       self._dynamo.update_item(
         TableName=self._trails_table,
         Key=_ddb_item({'id': trail_id}),
-        ConditionExpression='#extent = :extent',
+        ConditionExpression=f'#extent = :extent AND {format_condition}',
         UpdateExpression='SET ' + ', '.join(f'#{field} = :{field}' for field in fields),
         ExpressionAttributeNames=names,
         ExpressionAttributeValues=values,
@@ -318,6 +332,7 @@ class DynamoStore(TrailsStore):
   ) -> dict:
     if offset < 0:
       raise ValueError('offset must be non-negative')
+    self.migrate_trail(trail_id)
     header = self._required_header(trail_id)
     actual = self._header_extent(header)
     expected_end = offset + len(records)
@@ -329,6 +344,7 @@ class DynamoStore(TrailsStore):
     if len(records) == 0:
       return {'extent': actual, 'appended': 0}
 
+    expected_format = formats.stored_format(header, description=f'trail {trail_id} header')
     adapter = self._backend(header['harness'])
     state = AggregateState(header, adapter)
     seen_billing_keys: set[str] = set()
@@ -349,6 +365,7 @@ class DynamoStore(TrailsStore):
       update = self._append_header_update(
         trail_id,
         expected_extent=chunk_offset,
+        expected_format=expected_format,
         state=state,
         new_extent=new_extent,
       )
@@ -369,6 +386,12 @@ class DynamoStore(TrailsStore):
         )
       except self._dynamo.exceptions.TransactionCanceledException as exception:
         refreshed = self._required_header(trail_id)
+        formats.upgrade_header(refreshed)
+        refreshed_format = formats.stored_format(refreshed, description=f'trail {trail_id} header')
+        if refreshed_format != expected_format:
+          raise RuntimeError(
+            f'trail format changed from {expected_format} to {refreshed_format} while appending'
+          ) from exception
         refreshed_extent = self._header_extent(refreshed)
         if (
           committed == 0
@@ -425,11 +448,14 @@ class DynamoStore(TrailsStore):
     trail_id: str,
     *,
     expected_extent: int,
+    expected_format: int,
     state: AggregateState,
     new_extent: int,
   ) -> dict:
+    format_condition, format_names, format_values = _stored_format_condition(expected_format)
     names = {
       '#extent': 'extent',
+      **format_names,
       '#last_alive_at': 'last_alive_at',
       '#turn_count': 'turn_count',
       '#native': 'native',
@@ -437,6 +463,7 @@ class DynamoStore(TrailsStore):
     }
     values = {
       ':expected_extent': _ddb(expected_extent),
+      **format_values,
       ':extent': _ddb(new_extent),
       ':alive': _ddb(_now_iso()),
       ':turn_count': _ddb(state.turn_count),
@@ -457,7 +484,7 @@ class DynamoStore(TrailsStore):
     return {
       'TableName': self._trails_table,
       'Key': _ddb_item({'id': trail_id}),
-      'ConditionExpression': '#extent = :expected_extent',
+      'ConditionExpression': f'#extent = :expected_extent AND {format_condition}',
       'UpdateExpression': 'SET ' + ', '.join(assignments),
       'ExpressionAttributeNames': names,
       'ExpressionAttributeValues': values,
@@ -573,13 +600,14 @@ class DynamoStore(TrailsStore):
     return item
 
   def _project_header(self, item: dict) -> dict:
+    item = formats.upgrade_header(item)
     raw_usage = item.get('native', {}).get('usage', {})
     if not isinstance(raw_usage, dict):
       raise ValueError('native.usage must be an object')
     return {**item, 'usage': raw_usage, 'models': sorted(raw_usage)}
 
   def get_launch_context(self, trail_id: str) -> Optional[Any]:
-    header = self._required_header(trail_id)
+    header = formats.upgrade_header(self._required_header(trail_id))
     key = header.get('context_s3')
     if key is None:
       key = header.get('native', {}).get('context_s3')
@@ -648,7 +676,7 @@ class DynamoStore(TrailsStore):
         return False
 
   def get_step(self, trail_id: str, step_id: int) -> dict:
-    header = self._required_header(trail_id)
+    header = formats.upgrade_header(self._required_header(trail_id))
     if step_id < 0:
       raise TrailNotFound(f'{trail_id}/{step_id}')
     response = self._dynamo.get_item(
@@ -671,7 +699,7 @@ class DynamoStore(TrailsStore):
     page_size = 100 if limit is None else limit
     if page_size < 1 or page_size > 500:
       raise ValueError('limit must be between 1 and 500')
-    header = self._required_header(trail_id)
+    header = formats.upgrade_header(self._required_header(trail_id))
     return self._query_rows(header, after=after, limit=page_size)
 
   def get_messages(
@@ -685,7 +713,7 @@ class DynamoStore(TrailsStore):
     page_size = 100 if limit is None else limit
     if page_size < 1 or page_size > 500:
       raise ValueError('limit must be between 1 and 500')
-    header = self._required_header(trail_id)
+    header = formats.upgrade_header(self._required_header(trail_id))
     adapter = self._backend(header['harness'])
     page = self._query_rows(header, after=after, limit=page_size)
     messages = rows.project_messages(adapter, page['steps'], types)
@@ -719,7 +747,8 @@ class DynamoStore(TrailsStore):
     return {'steps': list(rows), 'next': next_cursor}
 
   def _resolve_row_body(self, harness: str, row: dict) -> dict:
-    return self._resolve_body(dict(row), parse_json=harness != 'claude')
+    resolved = self._resolve_body(dict(row), parse_json=harness != 'claude')
+    return formats.upgrade_row(resolved)
 
   def _resolve_body(self, item: dict, *, parse_json: bool = True) -> dict:
     key = item.pop('body_s3', None)
@@ -741,13 +770,121 @@ class DynamoStore(TrailsStore):
       raise ValueError(f'unsupported body encoding: {encoding}')
     return item
 
+  def migrate_trail(self, trail_id: str) -> dict:
+    migrated_rows = 0
+    while True:
+      header = self._required_header(trail_id)
+      source_format = formats.stored_format(header, description=f'trail {trail_id} header')
+      upgraded_header = formats.upgrade_header(header)
+      if source_format == model.TRAIL_FORMAT:
+        return {
+          'trail_id': trail_id,
+          'format': model.TRAIL_FORMAT,
+          'migrated_rows': migrated_rows,
+        }
+      migrated_rows += self._migrate_rows(header)
+      if self._stamp_migrated_header(header, upgraded_header, source_format):
+        return {
+          'trail_id': trail_id,
+          'format': model.TRAIL_FORMAT,
+          'migrated_rows': migrated_rows,
+        }
+
+  def _migrate_rows(self, header: dict) -> int:
+    trail_id = header['id']
+    migrated = 0
+    exclusive_start_key: Optional[dict] = None
+    while True:
+      query: dict[str, Any] = {
+        'TableName': self._steps_table,
+        'KeyConditionExpression': 'trail_id = :trail_id',
+        'ExpressionAttributeValues': {':trail_id': _ddb(trail_id)},
+        'ConsistentRead': True,
+      }
+      if exclusive_start_key is not None:
+        query['ExclusiveStartKey'] = exclusive_start_key
+      response = self._dynamo.query(**query)
+      for raw in response.get('Items', []):
+        stored = _from_ddb_item(raw)
+        if stored is None:
+          continue
+        source_format = formats.stored_format(
+          stored, description=f'trail row {trail_id}/{stored.get("step_id")}'
+        )
+        if source_format == model.TRAIL_FORMAT:
+          continue
+        resolved = self._resolve_body(dict(stored), parse_json=header['harness'] != 'claude')
+        upgraded = formats.upgrade_row(resolved)
+        rewritten = dict(stored)
+        for key in set(resolved) - set(upgraded):
+          if key != 'body':
+            rewritten.pop(key, None)
+        rewritten.update({key: value for key, value in upgraded.items() if key != 'body'})
+        condition, names, values = _stored_format_condition(source_format)
+        try:
+          self._dynamo.put_item(
+            TableName=self._steps_table,
+            Item=_ddb_item(rewritten),
+            ConditionExpression=condition,
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+          )
+        except self._dynamo.exceptions.ConditionalCheckFailedException:
+          continue
+        migrated += 1
+      exclusive_start_key = response.get('LastEvaluatedKey')
+      if exclusive_start_key is None:
+        return migrated
+
+  def _stamp_migrated_header(self, stored: dict, upgraded: dict, source_format: int) -> bool:
+    changed = {
+      key: value
+      for key, value in upgraded.items()
+      if key != 'format' and (key not in stored or stored[key] != value)
+    }
+    removed = [key for key in stored if key not in upgraded and key != 'format']
+    format_condition, names, values = _stored_format_condition(source_format)
+    names['#target_format'] = 'format'
+    names['#extent'] = 'extent'
+    values[':target_format'] = _ddb(model.TRAIL_FORMAT)
+    values[':expected_extent'] = _ddb(self._header_extent(stored))
+    assignments = ['#target_format = :target_format']
+    for index, (key, value) in enumerate(changed.items()):
+      name = f'#changed_{index}'
+      replacement = f':changed_{index}'
+      names[name] = key
+      values[replacement] = _ddb(value)
+      assignments.append(f'{name} = {replacement}')
+    removals = []
+    for index, key in enumerate(removed):
+      name = f'#removed_{index}'
+      names[name] = key
+      removals.append(name)
+    update = 'SET ' + ', '.join(assignments)
+    if len(removals) > 0:
+      update += ' REMOVE ' + ', '.join(removals)
+    try:
+      self._dynamo.update_item(
+        TableName=self._trails_table,
+        Key=_ddb_item({'id': stored['id']}),
+        ConditionExpression=f'{format_condition} AND #extent = :expected_extent',
+        UpdateExpression=update,
+        ExpressionAttributeNames=names,
+        ExpressionAttributeValues=values,
+      )
+    except self._dynamo.exceptions.ConditionalCheckFailedException:
+      return False
+    return True
+
   def recompute(self, trail_id: str) -> dict:
+    self.migrate_trail(trail_id)
     return self._operations.recompute(trail_id)
 
   def check(self, trail_id: Optional[str] = None) -> dict:
     return self._operations.check(trail_id)
 
   def relink(self, trail_id: str, forked_from: dict, delete_count: int) -> dict:
+    self.migrate_trail(trail_id)
     return self._operations.relink(trail_id, forked_from, delete_count)
 
   def delete_trail(self, trail_id: str) -> dict:
@@ -848,6 +985,18 @@ def build_dynamo_store(config: dict[str, Any]) -> DynamoStore:
     uuid_index=config['uuid_index'],
     bucket=config['bucket'],
   )
+
+
+def _stored_format_condition(source_format: int) -> tuple[str, dict[str, str], dict]:
+  names = {'#stored_format': 'format'}
+  values = {':source_format': _ddb(source_format)}
+  if source_format == model.INITIAL_TRAIL_FORMAT:
+    return (
+      '(attribute_not_exists(#stored_format) OR #stored_format = :source_format)',
+      names,
+      values,
+    )
+  return '#stored_format = :source_format', names, values
 
 
 def _format_iso(moment: datetime) -> str:

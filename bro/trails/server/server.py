@@ -249,6 +249,8 @@ async def _handle_get_trail(request: web.Request) -> web.Response:
     trail = await _dispatch(store.get_trail, trail_id)
   except TrailNotFound:
     return _trail_not_found(trail_id)
+  except ValueError as exception:
+    return _error(str(exception), 400)
   return web.json_response(trail)
 
 
@@ -260,6 +262,8 @@ async def _handle_get_context(request: web.Request) -> web.Response:
     context = await _dispatch(store.get_launch_context, trail_id)
   except TrailNotFound:
     return _trail_not_found(trail_id)
+  except ValueError as exception:
+    return _error(str(exception), 400)
   return web.json_response({'launch_context': context})
 
 
@@ -310,6 +314,19 @@ async def _handle_get_messages(request: web.Request) -> web.Response:
       limit=limit,
       types=requested_types if len(requested_types) > 0 else None,
     )
+  except TrailNotFound:
+    return _trail_not_found(trail_id)
+  except ValueError as exception:
+    return _error(str(exception), 400)
+  return web.json_response(result)
+
+
+@requires(Permission.ADMIN)
+async def _handle_migrate_trail(request: web.Request) -> web.Response:
+  trail_id = request.match_info['trail_id']
+  store: TrailsStore = request.app['store']
+  try:
+    result = await _dispatch(store.migrate_trail, trail_id)
   except TrailNotFound:
     return _trail_not_found(trail_id)
   except ValueError as exception:
@@ -412,16 +429,19 @@ async def _handle_list_trails(request: web.Request) -> web.Response:
   if sum(value is not None for value in (harness, bro, forked_from)) > 1:
     return _error('only one of harness/bro/forked_from may be set', 400)
   store: TrailsStore = request.app['store']
-  result = await _dispatch(
-    store.list_trails,
-    harness=harness,
-    bro=bro,
-    forked_from=forked_from,
-    since=request.query.get('since'),
-    until=request.query.get('until'),
-    cursor=request.query.get('cursor'),
-    limit=_parse_limit(request.query.get('limit'), default=20, ceiling=100),
-  )
+  try:
+    result = await _dispatch(
+      store.list_trails,
+      harness=harness,
+      bro=bro,
+      forked_from=forked_from,
+      since=request.query.get('since'),
+      until=request.query.get('until'),
+      cursor=request.query.get('cursor'),
+      limit=_parse_limit(request.query.get('limit'), default=20, ceiling=100),
+    )
+  except ValueError as exception:
+    return _error(str(exception), 400)
   return web.json_response(result)
 
 
@@ -488,6 +508,7 @@ def create_app(
   app.router.add_post('/v1/trails/{trail_id}/end', _handle_end_trail)
   app.router.add_post('/v1/trails/{trail_id}/keepalive', _handle_keepalive)
   app['admin'] = admin
+  app.router.add_post('/v1/admin/trails/{trail_id}/migrate', _handle_migrate_trail)
   app.router.add_delete('/v1/admin/trails/{trail_id}', _handle_delete_trail)
   app.router.add_post('/v1/admin/trails/check', _handle_check)
   app.router.add_post('/v1/admin/trails/{trail_id}/recompute', _handle_recompute)
