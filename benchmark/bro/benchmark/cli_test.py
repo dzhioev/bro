@@ -67,3 +67,23 @@ def test_publish_requires_visibility_and_prints_the_hub_and_record_urls(monkeypa
 def test_publish_refuses_an_implicit_visibility():
   with pytest.raises(SystemExit):
     cli.main(['benchmark', 'publish', 'runs/2026-08-24/job-id'])
+
+
+def test_query_accepts_inline_sql_or_a_file_and_defaults_to_the_shell(monkeypatch):
+  calls = []
+  monkeypatch.setattr(cli.query, 'command', lambda sql, sql_file: calls.append((sql, sql_file)))
+
+  assert cli.main(['benchmark', 'query', 'SELECT count(*) FROM runs']) == 0
+  assert cli.main(['benchmark', 'query', '--file', 'report.sql']) == 0
+  assert cli.main(['benchmark', 'query']) == 0
+
+  assert calls == [
+    ('SELECT count(*) FROM runs', None),
+    (None, Path('report.sql')),
+    (None, None),
+  ]
+
+
+def test_query_refuses_both_inline_sql_and_a_file():
+  with pytest.raises(SystemExit):
+    cli.main(['benchmark', 'query', 'SELECT * FROM runs', '--file', 'report.sql'])

@@ -48,7 +48,7 @@ BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_
 ## Components
 
 - `bro/benchmark/cli.py` (`benchmark`) — owns every post-run verb;
-  it currently dispatches `bundle`, `retain`, and `publish`, with query and trail import joining later
+  it currently dispatches `bundle`, `retain`, `publish`, and `query`, with trail import joining later
 - `bro/benchmark/bundle.py` (`benchmark bundle`) — builds the relocatable directory a foreign container runs `bro` from:
   a pinned standalone CPython, the dependencies `WHEEL_PACKAGES` resolves to against the workspace lock, those distributions themselves entering as built wheels, and a shim setting `PYTHONPATH` over them.
   Its manifest records those inputs and gives the bundle a content-derived identity.
@@ -81,8 +81,7 @@ BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_
 - `bro/benchmark/publication.py` (`benchmark publish`) — verifies and downloads a retained run into scratch.
   It derives Harbor trajectories and result costs from the manifest's captured rates.
   It uploads with the scoped Harbor credential and appends an immutable publication record
-- `bro/benchmark/compare.py` (`bro.benchmark.compare`) — aggregates one local job or a legacy format 2 retained-run cohort into per-task reward means,
-  resolves a public leaderboard submission and its exact filtered Hub trials through a beside-the-runs cache, and marks task-level deltas against that reference;
-  format 3 runs belong to `benchmark query`, which replaces this module in a later stage
+- `bro/benchmark/query.py` (`benchmark query`) — loads DuckDB's S3 extensions and credential-chain secret,
+  then defines typed `runs` and `trials` views over the format 3 retention markers for inline, file, or interactive SQL
 - `bro/benchmark/terminal_bench_2_1.yaml` — the pinned harbor job config, and with the bundle the
   whole of what a score depends on
