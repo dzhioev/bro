@@ -89,6 +89,16 @@ def price_table(provider: str) -> Any:
   return _provider_module(provider).PRICE_TABLE
 
 
+def price_table_from_content(
+  provider: str, source: str, as_of: str, models: Mapping[str, Any]
+) -> Any:
+  """Reconstruct one provider's price table from persisted vendor-vocabulary rates."""
+  factory = getattr(_provider_module(provider), 'price_table_from_content', None)
+  if not callable(factory):
+    raise ValueError(f'provider {provider!r} has no persisted price-table vocabulary')
+  return factory(source, as_of, models)
+
+
 def resolve_model(provider: str, model: str) -> str:
   """the full model id `model` names within `provider`.
 

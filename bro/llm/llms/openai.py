@@ -107,6 +107,80 @@ class PriceTable:
     )
 
 
+def _content_mapping(value: Any, field: str) -> Mapping[str, Any]:
+  if not isinstance(value, Mapping):
+    raise ValueError(f'{field} must be an object')
+  return value
+
+
+def _content_decimal(value: Any, field: str) -> Decimal:
+  if not isinstance(value, str):
+    raise ValueError(f'{field} must be a decimal string')
+  try:
+    decimal = Decimal(value)
+  except ArithmeticError as error:
+    raise ValueError(f'{field} must be a non-negative finite decimal string') from error
+  if not decimal.is_finite() or decimal < 0:
+    raise ValueError(f'{field} must be a non-negative finite decimal string')
+  return decimal
+
+
+def _content_token_rates(value: Any, field: str) -> TokenRates:
+  content = _content_mapping(value, field)
+  expected = {'input', 'cached_input', 'cache_write', 'output'}
+  if set(content) != expected:
+    raise ValueError(f'{field} must contain exactly {sorted(expected)}')
+  return TokenRates(
+    input=_content_decimal(content['input'], f'{field}.input'),
+    cached_input=_content_decimal(content['cached_input'], f'{field}.cached_input'),
+    cache_write=_content_decimal(content['cache_write'], f'{field}.cache_write'),
+    output=_content_decimal(content['output'], f'{field}.output'),
+  )
+
+
+def price_table_from_content(source: str, as_of: str, models: Mapping[str, Any]) -> PriceTable:
+  """Reconstruct an immutable table from this provider's serialized vocabulary."""
+  if source == '' or source.strip() != source:
+    raise ValueError('price table source must be a non-empty trimmed string')
+  try:
+    effective_date = date.fromisoformat(as_of)
+  except ValueError as error:
+    raise ValueError('price table as_of must be an ISO date') from error
+  parsed_models: dict[str, ModelRates] = {}
+  for model, raw_model in models.items():
+    if not isinstance(model, str) or model == '':
+      raise ValueError('price table model names must be non-empty strings')
+    model_content = _content_mapping(raw_model, f'price table model {model}')
+    expected = {'long_context_threshold', 'service_tiers'}
+    if set(model_content) != expected:
+      raise ValueError(f'price table model {model} must contain exactly {sorted(expected)}')
+    threshold = model_content['long_context_threshold']
+    if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold < 0:
+      raise ValueError(f'price table model {model} long_context_threshold must be non-negative')
+    raw_tiers = _content_mapping(
+      model_content['service_tiers'], f'price table model {model} service_tiers'
+    )
+    parsed_tiers: dict[str, ContextRates] = {}
+    for tier, raw_context in raw_tiers.items():
+      if not isinstance(tier, str) or tier == '':
+        raise ValueError('price table service tier names must be non-empty strings')
+      context = _content_mapping(raw_context, f'price table model {model} service tier {tier}')
+      if set(context) != {'short', 'long'}:
+        raise ValueError(
+          f'price table model {model} service tier {tier} must contain short and long'
+        )
+      parsed_tiers[tier] = ContextRates(
+        short=_content_token_rates(
+          context['short'], f'price table model {model} service tier {tier}.short'
+        ),
+        long=_content_token_rates(
+          context['long'], f'price table model {model} service tier {tier}.long'
+        ),
+      )
+    parsed_models[model] = ModelRates(threshold, MappingProxyType(parsed_tiers))
+  return PriceTable(source, effective_date, MappingProxyType(parsed_models))
+
+
 # Rates are copied from the vendor page and updated by hand in a PR together
 # with this date. Pricing never fetches vendor data at run time.
 PRICE_TABLE = PriceTable(

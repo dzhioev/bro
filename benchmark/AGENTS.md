@@ -48,7 +48,7 @@ BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_
 ## Components
 
 - `bro/benchmark/cli.py` (`benchmark`) — owns every post-run verb;
-  it currently dispatches `bundle` and `retain`, with publication, query, and trail import joining later
+  it currently dispatches `bundle`, `retain`, and `publish`, with query and trail import joining later
 - `bro/benchmark/bundle.py` (`benchmark bundle`) — builds the relocatable directory a foreign container runs `bro` from:
   a pinned standalone CPython, the dependencies `WHEEL_PACKAGES` resolves to against the workspace lock, those distributions themselves entering as built wheels, and a shim setting `PYTHONPATH` over them.
   Its manifest records those inputs and gives the bundle a content-derived identity.
@@ -73,13 +73,14 @@ BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_
   to copy out, so a job runs wherever the docker daemon is reachable and leaves nothing on the
   docker host
 - `bro/benchmark/trajectory.py` — converts the projected local trail in each finished trial into
-  Harbor's ATIF v1.7 models at `agent/trajectory.json`, including normalized counts for reporting and provider-priced step/final metrics from each call's raw usage;
-  `convert_job_trajectories()` is the post-run job-directory sweep,
-  and `job_trajectory_cost_usd()` is the strict report-time repricing surface
+  Harbor's ATIF v1.7 models at `agent/trajectory.json`, including normalized counts for reporting and step/final metrics priced through caller-supplied provider tables
 - `bro/benchmark/job.py` (`bro.benchmark.job`) — runs Harbor against a known concrete job directory and copies the built bundle's manifest into that raw result
 - `bro/benchmark/retention.py` (`benchmark retain`) — resolves one raw job from an artifact ref or local path.
   It derives format 3 trial rows from Harbor records and local trail stores.
   It copies the snapshotted files under the flat date/job key with conditional checksummed puts and the manifest last
+- `bro/benchmark/publication.py` (`benchmark publish`) — verifies and downloads a retained run into scratch.
+  It derives Harbor trajectories and result costs from the manifest's captured rates.
+  It uploads with the scoped Harbor credential and appends an immutable publication record
 - `bro/benchmark/compare.py` (`bro.benchmark.compare`) — aggregates one local job or a legacy format 2 retained-run cohort into per-task reward means,
   resolves a public leaderboard submission and its exact filtered Hub trials through a beside-the-runs cache, and marks task-level deltas against that reference;
   format 3 runs belong to `benchmark query`, which replaces this module in a later stage

@@ -148,7 +148,23 @@ The format 3 marker records:
 - `files`: the copied files as ordered `path`, `sha256`, and `size` rows
 
 The files under each trial remain Harbor's raw output, including its local trail store at `<trial>/agent/ride/trails/`.
-Trajectories are produced only by the later publication workflow and are not part of a raw run.
+Trajectories are produced only by publication and are not part of a raw run.
+
+## Publishing a retained run
+
+Inspect the retained run after retention and before publication, then choose its Hub visibility explicitly:
+
+```
+uv run --project benchmark benchmark publish runs/<date>/<job-id> --private
+uv run --project benchmark benchmark publish runs/<date>/<job-id> --public
+```
+
+A managed session running it needs `aws`, `benchmark_retention`, and `harbor` granted at launch.
+Publication downloads and verifies the raw run in temporary scratch, converts each recorded trail into an ATIF trajectory, and fills the per-trial and job costs from the immutable manifest's captured rates.
+It passes the scoped Harbor key only to `harbor upload`.
+The raw retained files and `retention.json` never change.
+After a successful upload, an immutable `publications/<published-at>.json` beside the manifest records the visibility, Hub URL, and publication time.
+The command prints that Hub URL and the S3 URL of the publication record.
 
 Following a run as it happens means reading the log where
 it is being written:
