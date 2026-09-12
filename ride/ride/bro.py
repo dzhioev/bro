@@ -8,8 +8,8 @@ from bro.launch.llm_flags import resolve_native
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
+from ride.do_ride import SessionRun, run_agent
 from ride.harness import ContainerExtras
-from ride.inner import run_agent
 from ride.scope import BRO_RUN_RECIPE, ScopeRecipe
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
   from ride.session import SessionSpec
 
 
-def _inner_arguments(spec: 'SessionSpec', resume_trail: Optional[str]) -> list[str]:
+def _session_arguments(spec: 'SessionSpec | SessionRun', resume_trail: Optional[str]) -> list[str]:
   arguments: list[str] = []
   if spec.prompt is not None:
     arguments.append(spec.prompt)
@@ -90,11 +90,11 @@ class BroHarness:
     spec = load_resume_spec(workspace)
     return None if spec is None else spec.subject
 
-  def inner_flags(self, spec: 'SessionSpec') -> tuple[str, ...]:
+  def session_flags(self, spec: 'SessionSpec') -> tuple[str, ...]:
     del spec
     return ()
 
-  def run_in_place(self, spec: 'SessionSpec') -> int:
+  def run_session(self, spec: 'SessionSpec | SessionRun') -> int:
     if shutil.which('bro') is None:
       log.error(
         'the bro harness requires the bro-native distribution; install bro-native in this workspace'
@@ -108,7 +108,7 @@ class BroHarness:
         log.error('no bro harness trail recorded for workspace %s', spec.name)
         return 1
     verb = 'run' if spec.solo else 'chat'
-    argv = ['bro', verb, spec.bro, *_inner_arguments(spec, resume_trail), *spec.arguments]
+    argv = ['bro', verb, spec.bro, *_session_arguments(spec, resume_trail), *spec.arguments]
     return run_agent(argv)
 
   def container_extras(

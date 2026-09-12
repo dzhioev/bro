@@ -2,7 +2,7 @@
 
 `SummonSpawner` resolves the requested base ref off-loop, records the child's
 session spec as its channel-named workspace's resume record, derives the child's
-inner argv and container extras from that spec through the harness seam, wraps
+`do-ride` argv and container extras from that spec through the harness seam, wraps
 them into the child's headless docker launch, and marks the workspace throwaway
 (removed after a clean exit).
 
@@ -94,7 +94,7 @@ def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> Sessio
   session of the target bro under the request's fields — only the request's
   `timeout` maps to no spec field (it is the spawner's wait timer, not part of
   the run). Recorded as the workspace's resume record and the source of the
-  child's inner argv, so what `ride resume` relaunches is what ran."""
+  child's `do-ride` argv, so what `ride resume` relaunches is what ran."""
   harness = get_harness(launch.harness)
   return SessionSpec(
     name=workspace_name,

@@ -9,6 +9,7 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
 - **Harness-neutral.**
   Workspace modules know no Claude or native-harness policy.
   Launch surfaces supply commands, environment, mounts, and credential tiers as plain launch data.
+  Workspace creation and `setup.sh` finish before the launcher starts `do-ride`, which owns the per-session setup.
 - **Core contracts point downward.**
   Runtime paths, project configuration, and git helpers remain in `bro.workspace`;
   this package imports those contracts, `bro.base`, and the broker interfaces.

@@ -20,7 +20,7 @@ and claude's generated title into the header. Quiet ticks keep the trail alive
 for the server's lost-sweep. The current trail id is published to the session's
 trail pointer (`monitor/trail_pointer.py`) for summon provenance.
 
-The daemon is started by the in-place session runner (`ride/ride/claude/recorder.py`) next to
+The daemon is started by the Claude session runner (`ride/ride/claude/recorder.py`) next to
 claude for every session flavor and finalizes on SIGTERM — one last append,
 then `end` with `ok`, or `raised` plus the reason when the transcript's
 terminal record stream carries a bro `raise` service-tool call.

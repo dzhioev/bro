@@ -30,38 +30,12 @@ fi
 
 # --- running as ride from here ---
 
-# ~/.claude is not seeded from the host: ride constructs the .claude.json and
-# settings.json inside it and syncs credentials; host machine state stays on the
-# host.
-
-# the credential install hooks write their wiring into a directory of the
-# container's own layer, so it dies with the container the way the scoped store
-# does. captured before the eval, so failing hooks abort the launch instead of
-# becoming a successful empty eval.
-read -ra install_kinds <<< "${BRO_INSTALL_KINDS:-}"
-session_environment="$(credentials install-hooks "$HOME/.bro-environment" "${install_kinds[@]}")"
-eval "$session_environment"
-
 # Repository setup runs only for an explicitly attached launch.
 if [ -n "${RIDE_REPO:-}" ]; then
 # mark /workspace safe for git. on Docker for Mac, virtiofs reports the bind
 # mount as root-owned even though ride can read/write it (see uid-remap skip in
 # the root phase); without this, git refuses with "dubious ownership"
 git config --global --add safe.directory /workspace
-fi
-
-# pre-create the /workspace transcript directory (trust is granted in the
-# constructed ~/.claude.json, not here)
-mkdir -p "$HOME/.claude/projects/-workspace"
-
-# seed the pre-installed plugins baked into the image (pyright-lsp). ~/.claude is
-# bind-mounted from a fresh per-session dir, so the build-time install staged at
-# /opt is copied in on first run. settings.json enables the plugin (ride/ride/claude/claude_config.py); this
-# provides the matching install records so claude doesn't prompt to install it on
-# .py files.
-if [ -d /opt/claude-plugins-seed ] && [ ! -f "$HOME/.claude/plugins/installed_plugins.json" ]; then
-  mkdir -p "$HOME/.claude/plugins"
-  cp -r /opt/claude-plugins-seed/. "$HOME/.claude/plugins/"
 fi
 
 # Link and provision the operated repository only when one is attached.
@@ -84,26 +58,6 @@ if [ -f /workspace/setup.sh ]; then
 else
   log INFO 'setup.sh not found; skipping project provisioning'
 fi
-fi
-
-# Capture before eval so a failed command substitution aborts the launch rather
-# than becoming a successful empty eval.
-# One local broker proxy serves the in-container client swarm.
-# BROKER_CHANNEL is published only after that proxy is listening;
-# leaving BROKER_UPSTREAM behind makes a launch failure explicit to clients.
-if [ -n "${BROKER_UPSTREAM:-}" ]; then
-  unset BROKER_CHANNEL
-  broxy_log="${RIDE_SESSION_DIR:-/tmp}/broxy.log"
-  if broxy_launch="$(
-    broxy launch --upstream "$BROKER_UPSTREAM" --log-file "$broxy_log"
-  )"; then
-    IFS=$'\t' read -r BROKER_CHANNEL _ <<< "$broxy_launch"
-    export BROKER_CHANNEL
-    unset BROKER_UPSTREAM
-    log VERBOSE 'broker channel ready'  # the address carries its token
-  else
-    log WARNING "broxy launch failed (log: $broxy_log); broker clients will fail explicitly"
-  fi
 fi
 
 exec "$@"

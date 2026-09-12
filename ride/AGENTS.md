@@ -14,7 +14,6 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/cli.py` — the `ride` dispatcher.
   `solo` is the one-shot mode verb, `along` the interactive mode verb;
   `resume`, `list`, `clean`, `exec`, `check-clean`, `scope`, and `banner` are lifecycle verbs.
-  It also owns the suppressed mode-verb inner-runner tokens.
 - `ride/ask.py`, `ride/call.py` — pure option-preserving aliases of `ride solo` and `ride along`.
   Their scripts live in this distribution and add no implied fast mode or other flags.
 - `ride/dive_in.py` — task utility wrapper:
@@ -25,8 +24,9 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   and the container launch description every container session shares, `ride`'s own and a spawned summon child alike.
 - `ride/repository.py` — path/URL attachment resolution, normalized managed-mirror keys, flocked no-prune fetches, committed-tree reads, and mirror cleanup.
   `attachment_identities` is the host-config identities an attachment matches project entries by, reading a checkout's `origin` for the URL one.
-- `ride/inner.py` — the inner session every harness runs under inside the prepared workspace:
-  the argv the outer spawns to re-enter there, the session environment (git identities, `RIDE_BRO`, the hold and this runner's pid), the persona's declared workspace provisioning, the session broxy, and SIGTERM-forwarded agent spawning.
+- `ride/do_ride.py` — the `do-ride` session executable every launcher runs inside a prepared workspace:
+  its own parser and argv builder, the session environment and pid/start-time record, credential hooks, missing Claude state and plugin seed, persona provisioning, the session broxy, and SIGTERM-forwarded agent spawning.
+- `ride/errors.py` — the runtime-path and migration error wrapper shared by the distribution's public scripts.
 - `ride/scope.py` — per-surface launch scoping:
   `ScopeRecipe`, `BRO_RUN_RECIPE`, attachment-bound credential selection, `scoped_secrets`, the strict launch preflight, scope override splitting, and summoned-child scope computation.
   In-process `bro run` / `bro chat` create no scope.
@@ -53,9 +53,9 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/identity.py` — managed-session git identities:
   the bro a session commits as, and the launching human it credits, read from the attachment's own git configuration.
 - `ride/harness.py`
-  — the `Harness` protocol (flag registration and option packing, scope, auth, session reads, and the launch hooks: inner argv flags, the in-place run, container extras, host runner env), the harness roster, and the lazy harness resolver.
+  — the `Harness` protocol (flag registration and option packing, scope, auth, session reads, and the launch hooks: `do-ride` argv flags, the session run, container extras, host runner env), the harness roster, and the lazy harness resolver.
 - `ride/bro.py` — native harness implementation:
-  native recipe resolution, the in-place runner spawning `bro run|chat …` with exact-recipe continuation, and the launch hooks.
+  native recipe resolution, the session runner spawning `bro run|chat …` with exact-recipe continuation, and the launch hooks.
 - `ride/flags.py` — common session, scope, and LLM flag registration, harness flag registration with the generic requires-`--harness` refusal and option packing, and the default an omitted `--hold` resolves to.
 - `ride/runtime_bundle.py` — installation freeze, content-addressed bundle persistence and locking, shared host/container materialization, session-command shims, runtime-volume lifecycle, and bundle GC.
 - `ride/runtime_state.py` — one-shot migration of historical checkout-keyed stores into the flat global root, including collision/liveness preflight and per-root workspace attachment recovery.
@@ -73,9 +73,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - The runtime layer names no Claude detail in its serialized harness options.
   `SessionSpec.harness_options` belongs to the selected implementation and is validated there.
 - The neutral layer owns both launch bodies;
-  the harness seam supplies scope recipes, auth, LLM resolution, the inner command, session-state reads, and the per-harness launch extras.
-  The in-place runner is the Claude harness's alone
-  — bro workspaces run `bro run|chat`.
+  the harness seam supplies scope recipes, auth, LLM resolution, the `do-ride` command, session-state reads, and the per-harness launch extras.
+  `do-ride` owns every session's common setup before calling the selected harness runner.
   A managed native container or host worktree is always launched by `ride`;
   a summon child is spawned by `summon`
   — except a manual one, which the user launches with `ride along --summoned <token>` against the summoner's provisioned channel.
@@ -94,7 +93,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   Container trails use a dedicated fixed absolute mount.
 - A launch's credential instances follow its attachment identity and selected bro on every surface that resolves them
   — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Scoped credential hydration").
-- Both modes install the scoped store's credential hooks through the one applier, into a session directory that bounds what a hook may write,
+- Both modes pass `BRO_STORE` and `BRO_INSTALL_KINDS` to `do-ride`, which installs the hooks through one applier into the named session environment directory,
   so a session's git and `gh` act as the identity it was scoped with and never reach the operator's own configuration.
 - Mode verbs are detached unless `--repo` explicitly attaches a resolved checkout or git URL.
   Detached trees are plain directories, skip repository and persona provisioning, and are clean only while empty.
@@ -104,7 +103,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   an unpinned `solo` workspace is dropped after a clean exit unless `--keep` is explicit.
 - A solo resume becomes an along session and takes along's host-sensitive default hold;
   the unattended solo hold describes a run with no human channel.
-- Every reconstructed session argv restates the resolved `--hold`.
-  The inner argv cannot carry `--host`, so a re-parse cannot be trusted to re-derive a hold that was resolved against it.
+- Every reconstructed session argv and `do-ride` command restates the resolved `--hold`.
+  The session executable has no placement flag from which to re-derive it.
 - `ride` refuses nested launches while process-host mode is unavailable, on the container probe rather than on any marker the environment carries.
 - Every console script this distribution ships wraps its `main` in `ride.cli.reports_runtime_errors`, so unusable runtime locations and blocked state migrations fail as CLI errors.

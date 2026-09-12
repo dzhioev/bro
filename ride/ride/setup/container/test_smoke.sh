@@ -136,9 +136,6 @@ docker run --rm -i \
   -e "EXPECTED_ORIGIN_MASTER=$EXPECTED_ORIGIN_MASTER" \
   "$TAG" bash -s >&2 <<'SMOKE'
     set -e
-    # the install-hook pass ran: its session directory is there, with no hook to
-    # apply from the empty scoped store the run mounts
-    test -d "$HOME/.bro-environment"
     test -d /workspace/.git
     cd /workspace
     test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"

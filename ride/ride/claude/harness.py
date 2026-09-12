@@ -21,6 +21,7 @@ from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
   from bro.base.args import Parser
+  from ride.do_ride import SessionRun
   from ride.session import SessionSpec
 
 
@@ -54,11 +55,11 @@ class ClaudeOptions:
     return cls(raw=data['raw'])
 
 
-def options(spec: 'SessionSpec') -> ClaudeOptions:
+def options(spec: 'SessionSpec | SessionRun') -> ClaudeOptions:
   return ClaudeOptions.load(spec.harness_options)
 
 
-def llm_spec(spec: 'SessionSpec') -> LLMSpec:
+def llm_spec(spec: 'SessionSpec | SessionRun') -> LLMSpec:
   resolved = spec.llm_spec
   if not isinstance(resolved, LLMSpec):
     raise TypeError(f'claude harness resolved an incompatible recipe: {type(resolved).__name__}')
@@ -117,13 +118,13 @@ class ClaudeHarness:
       f'setup-token; mint one with `claude setup-token` and store it at {material_path}'
     )
 
-  def inner_flags(self, spec: 'SessionSpec') -> tuple[str, ...]:
+  def session_flags(self, spec: 'SessionSpec') -> tuple[str, ...]:
     return ('--raw',) if options(spec).raw else ()
 
-  def run_in_place(self, spec: 'SessionSpec') -> int:
-    from ride.claude.runner import run_in_place
+  def run_session(self, spec: 'SessionRun') -> int:
+    from ride.claude.runner import run_session
 
-    return run_in_place(spec)
+    return run_session(spec)
 
   def command_options(self, spec: 'SessionSpec') -> list[str]:
     return ['--raw'] if options(spec).raw else []

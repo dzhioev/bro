@@ -1,11 +1,9 @@
-"""the in-place Claude session runner (`ride solo|along --in-place`).
+"""The Claude harness runner under `do-ride`.
 
-The inner layer of the launch stack: it assumes its cwd is a prepared workspace
-tree (host worktree or container clone) under the session runtime environment,
-and owns everything that runs next to claude — resume resolution, the claude argv, the
-session-local MCP server, launch declarations, and the session recorder daemon. The outer `ride solo|along` (mode-specific by nature: worktree
-ensure / container machinery) validates policy once and spawns this runner in
-the workspace, so it re-runs no policy gates.
+It assumes its cwd is a prepared workspace tree under the session runtime environment.
+It owns everything that runs next to Claude:
+resume resolution, argv, the session-local MCP server, launch declarations, and the recorder daemon.
+The outer `ride solo|along` validates policy once, so this runner repeats no policy gates.
 """
 
 import contextlib
@@ -17,20 +15,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from bro.base import log
-from bro.monitor import (
-  CLAUDE_CONFIG_DIR_ENV,
-  SESSION_DIR_ENV,
-  claude_projects_dir,
-  trail_pointer,
-  workspace_session_dir,
-)
+from bro.monitor import claude_projects_dir, trail_pointer
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import SUMMONER_ENV, summoned
 from bro.workspace.git import git_out
-from bro.workspace.paths import in_container, workspace_dir
 from ride.claude.claude_argv import build_claude_launch
 from ride.claude.claude_auth import apply_claude_auth
-from ride.claude.claude_config import latest_jsonl, provision_host_claude_dir
+from ride.claude.claude_config import latest_jsonl
 from ride.claude.harness import options
 from ride.claude.interrupt import InteractiveRun, run_interactive, run_printing
 from ride.claude.mcp import start_session_mcp_server
@@ -41,13 +32,13 @@ from ride.claude.session_context import (
   encode_session_context,
 )
 from ride.claude.statusline import start_statusline_projector
-from ride.repository import is_git_url
 
 if TYPE_CHECKING:
+  from ride.do_ride import SessionRun
   from ride.session import SessionSpec
 
 
-def _set_session_context(spec: 'SessionSpec', system_prompt: str, tree: Path) -> None:
+def _set_session_context(spec: 'SessionSpec | SessionRun', system_prompt: str, tree: Path) -> None:
   """capture the session's launch context into RIDE_SESSION_CONTEXT for the
   session recorder daemon (set in os.environ, which the daemon's spawn
   snapshots). the git base is the tree's HEAD — for a fresh workspace the
@@ -163,27 +154,8 @@ def _run_claude_summoned_interactive(
     return _run_claude(argv, env, transcripts).code
 
 
-def run_in_place(spec: 'SessionSpec') -> int:
+def run_session(spec: 'SessionSpec | SessionRun') -> int:
   tree = Path.cwd()
-
-  if not in_container():
-    # a host session runs claude against the workspace's own claude state, the
-    # container-equivalent isolation (reference/ride.md, "Host claude-state
-    # isolation"). provisioning is idempotent because both launch layers apply it.
-    # Set before anything derives paths or spawns children:
-    # the resume resolution below, the hooks, and claude itself all read it.
-    workspace_path = workspace_dir(spec.name)
-    if spec.repo is None:
-      project = tree
-    elif not is_git_url(spec.repo):
-      project = Path(spec.repo)
-    else:
-      common = Path(git_out('rev-parse', '--git-common-dir', cwd=str(tree)))
-      common = common if common.is_absolute() else (tree / common).resolve()
-      project = common.parent if common.name == '.git' else common
-    claude_dir = provision_host_claude_dir(workspace_path, tree, project)
-    os.environ[CLAUDE_CONFIG_DIR_ENV] = str(claude_dir)
-    os.environ[SESSION_DIR_ENV] = str(workspace_session_dir(workspace_path))
 
   transcripts = claude_projects_dir(tree)
   claude_args = list(spec.arguments)
@@ -231,7 +203,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
       teardown.callback(statusline_projector.stop)
 
     # the recorder above got its copy; claude's subprocesses must not see the
-    # summoner attribution, or a nested in-place run would stamp it on its own
+    # summoner attribution, or a nested session would stamp it on its own
     # trail (bro.summon.summoned_by_from_env owns the semantics)
     os.environ.pop(SUMMONER_ENV, None)
 

@@ -21,6 +21,7 @@ dependencies = [
 "ask" = "ride._entrypoints:ride_ask"
 "call" = "ride._entrypoints:ride_call"
 "dive-in" = "ride._entrypoints:ride_dive_in"
+"do-ride" = "ride._entrypoints:ride_do_ride"
 "ride" = "ride._entrypoints:ride_cli"
 "ride.ask" = "ride._entrypoints:ride_ask"
 "ride.call" = "ride._entrypoints:ride_call"
@@ -30,8 +31,10 @@ dependencies = [
 "ride.claude.watch-guard" = "ride._entrypoints:ride_claude_watch_guard"
 "ride.cli" = "ride._entrypoints:ride_cli"
 "ride.dive-in" = "ride._entrypoints:ride_dive_in"
+"ride.do-ride" = "ride._entrypoints:ride_do_ride"
 
 [project.entry-points."bro.session_commands"]
+"do-ride" = "ride._entrypoints:ride_do_ride"
 "ride" = "ride._entrypoints:ride_cli"
 
 [project.entry-points."bro.mcp.targets"]
