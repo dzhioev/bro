@@ -1,7 +1,7 @@
-"""artifact sharing, host side: the session store and the two request kinds.
+"""Artifact sharing on the launcher: the ride store and its request kinds.
 
-`ArtifactStore` is the session-scoped content-addressed store under
-`<runtime-root>/artifacts/<session>/`. Ingest stages a private copy of the
+`ArtifactStore` is the ride-scoped content-addressed store under
+`<runtime-root>/artifacts/<ride>/`. Ingest stages a private copy of the
 peer-named tree path — a reflink where the filesystem clones, a plain copy
 otherwise, never a hardlink, so nothing a producer writes afterwards reaches
 stored bytes — normalizes modes to the manifest's vocabulary (0o755/0o644 per
@@ -10,18 +10,18 @@ and commits it to `objects/<ref>`, deduplicating by digest and refusing a mint
 past the byte cap rather than evicting. Committed content is immutable by
 construction, so the read path re-verifies nothing.
 
-Each container peer has a view directory `shared/<workspace>/` holding one
+Each boxed peer has a view directory `shared/<workspace>/` holding one
 hardlink (or hardlinked tree) per ref it may reach — the source of its
 read-only `/var/ride/artifacts` bind mount, so a ref linked while the peer
 runs appears without a remount. A mint links the minter and its summoners up
 to the root; a summon's `share` list is linked into the child's view during
-spawn lowering (`ride/ride/spawn.py`). The host-mode root has no mount
+spawn lowering (`ride/ride/spawn.py`). The unboxed root has no mount
 namespace: its `get` falls back to a private copy under the workspace's own
 `artifacts/` directory. A manually launched child has no host-built launch
 and therefore no view; its `get` is denied with the reason.
 
 The store is wiped at construction and removed at `close()` — it dies with
-the session — while the JSONL audit beside it (`<session>.jsonl`) survives,
+the ride — while the JSONL audit beside it (`<ride>.jsonl`) survives,
 recording mints, gets, shares, and denials.
 
 `JobArtifacts` collects a broker job's run directory the same way: the run is
@@ -66,7 +66,7 @@ if TYPE_CHECKING:
   from ride.workspace.model import Workspace
 
 # refusal bound on the store's committed bytes — a runaway-ingest guard, not a
-# quota (the store dies with the session)
+# quota (the store dies with the ride)
 MAX_STORE_BYTES = 32 << 30
 # the Linux ioctl that clones a file's extents; any refusal (another OS, a
 # filesystem that cannot clone, a cross-device pair) falls back to a plain copy
@@ -76,24 +76,24 @@ _MINT_KEYS = frozenset({'path'})
 _GET_KEYS = frozenset({'ref'})
 
 
-def store_dir(session: str) -> Path:
-  """the session's artifact store directory."""
-  return artifacts_dir() / session
+def store_dir(ride: str) -> Path:
+  """The ride's artifact store directory."""
+  return artifacts_dir() / ride
 
 
-def audit_file(session: str) -> Path:
-  """the session's artifact audit, beside the store it outlives."""
-  return artifacts_dir() / f'{session}.jsonl'
+def audit_file(ride: str) -> Path:
+  """The ride's artifact audit, beside the store it outlives."""
+  return artifacts_dir() / f'{ride}.jsonl'
 
 
-def view_dir(session: str, peer_workspace: str) -> Path:
-  """a peer's view directory inside the session store."""
-  return store_dir(session) / 'shared' / peer_workspace
+def view_dir(ride: str, peer_workspace: str) -> Path:
+  """a peer's view directory inside the ride store."""
+  return store_dir(ride) / 'shared' / peer_workspace
 
 
-def view_mount(session: str, peer_workspace: str) -> str:
+def view_mount(ride: str, peer_workspace: str) -> str:
   """a peer's read-only view bind mount, as a docker mount spec."""
-  return f'{view_dir(session, peer_workspace)}:{CONTAINER_ARTIFACTS_ROOT}:ro'
+  return f'{view_dir(ride, peer_workspace)}:{CONTAINER_ARTIFACTS_ROOT}:ro'
 
 
 def _denial(ref: str) -> str:
@@ -163,21 +163,21 @@ def _content_size(source: Path) -> int:
 
 
 class ArtifactStore:
-  """one session's content-addressed store (see the module docstring). The
+  """One ride's content-addressed store (see the module docstring). The
   metadata lock guards the reach map and the byte account; content operations
   run outside it, so a mint hashing for seconds never blocks a loop-side
   check."""
 
-  def __init__(self, workspace: 'Workspace', *, root_in_container: bool):
-    self.session = workspace.name
-    self._root_in_container = root_in_container
+  def __init__(self, workspace: 'Workspace', *, root_boxed: bool):
+    self.ride = workspace.name
+    self._root_boxed = root_boxed
     self._lock = threading.Lock()
     self._audit_lock = threading.Lock()
     self._reach: dict[str, set[str]] = {}  # ref -> workspace names that may read it
     self._bytes = 0
     root = store_dir(workspace.name)
     if root.exists():
-      shutil.rmtree(root)  # a leftover from a crashed session; the store is session-scoped
+      shutil.rmtree(root)  # a leftover from a crashed session; the store is ride-scoped
     self._objects = root / 'objects'
     self._staging = root / 'staging'
     self._views = root / 'shared'
@@ -185,15 +185,15 @@ class ArtifactStore:
     for directory in (self._objects, self._staging, self._views, self._jobs):
       directory.mkdir(parents=True)
     self._audit_file = audit_file(workspace.name)
-    if root_in_container:
+    if root_boxed:
       self.view(workspace.name)
 
   def close(self) -> None:
-    """remove the store — the session is over; the audit stays."""
+    """Remove the store when the ride ends; keep its audit."""
     try:
-      shutil.rmtree(store_dir(self.session))
+      shutil.rmtree(store_dir(self.ride))
     except OSError as e:
-      log.warning('could not remove the artifact store %s: %s', store_dir(self.session), e)
+      log.warning('could not remove the artifact store %s: %s', store_dir(self.ride), e)
 
   def view(self, peer_workspace: str) -> Path:
     """the peer's view directory, created on first use — the source of its
@@ -310,7 +310,7 @@ class ArtifactStore:
     nothing writes after commit."""
     view = self._views / peer_workspace
     if not view.is_dir():
-      return  # no view: the host-mode root, or a manually launched child
+      return  # no view: the unboxed root, or a manually launched child
     entry = view / ref
     if entry.exists():
       return
@@ -358,23 +358,23 @@ class ArtifactStore:
 
   def materialize(self, identity: PeerIdentity, ref: str) -> str:
     """the path `ref` appears at for the requesting peer — its view mount for
-    a container peer, a private copy under the workspace directory for the
-    host-mode root. Raises `ArtifactDenied` on any refusal; the copy is heavy,
+    a boxed peer, a private copy under the workspace directory for the
+    unboxed root. Raises `ArtifactDenied` on any refusal; the copy is heavy,
     called off-loop."""
     if not self.reachable(ref, identity.workspace):
       raise ArtifactDenied(_denial(ref))
     if identity.manual:
       raise ArtifactDenied('no artifact view is mounted for a manually launched session')
-    if identity.workspace == self.session and not self._root_in_container:
-      path = str(self._host_copy(ref))
+    if identity.workspace == self.ride and not self._root_boxed:
+      path = str(self._unboxed_copy(ref))
     else:
       self._link_into_view(identity.workspace, ref)
       path = str(CONTAINER_ARTIFACTS_ROOT / ref)
     self.audit('get', {'peer': identity.workspace, 'ref': ref})
     return path
 
-  def _host_copy(self, ref: str) -> Path:
-    destination_directory = workspace_dir(self.session) / 'artifacts'
+  def _unboxed_copy(self, ref: str) -> Path:
+    destination_directory = workspace_dir(self.ride) / 'artifacts'
     destination = destination_directory / ref
     if destination.exists():
       return destination
@@ -389,11 +389,11 @@ class ArtifactStore:
     return destination
 
   def audit(self, event: str, entry: dict[str, Any]) -> None:
-    """append one entry to the session's artifact audit."""
+    """append one entry to the ride's artifact audit."""
     entry = {
       'time': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
       'event': event,
-      'session': self.session,
+      'ride': self.ride,
       **entry,
     }
     try:

@@ -18,7 +18,7 @@ from typing import Optional
 
 from bro.base import log
 from bro.monitor import CLAUDE_CONFIG_DIR_ENV, encode_project_path, workspace_claude_dir
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
 _CONTAINER_CLAUDE_DIR = '/home/ride/.claude'
@@ -37,7 +37,7 @@ def latest_jsonl(projects_dir: Path) -> Optional[Path]:
 def workspace_projects_dir(workspace: Workspace) -> Path:
   """the host-side claude projects dir of a workspace's sessions."""
   session_dir = workspace_claude_dir(workspace.path)
-  if workspace.kind is WorkspaceKind.CONTAINER:
+  if workspace.isolation is Isolation.BOXED:
     return session_dir / 'projects' / '-workspace'
   return session_dir / 'projects' / encode_project_path(workspace.tree)
 
@@ -127,10 +127,9 @@ def _seed_claude_json(
   built from the explicit session config plus the host's account-identity
   fields — no host machine state copied. `install_method` names the claude
   install the session runs (`global` for the image's npm install); None carries
-  the host's own value, for a session running the host claude. each
-  `trusted_paths` entry pre-accepts the trust dialog — a host session needs the
-  main repo root alongside the worktree, since claude resolves a linked
-  worktree's trust against the repository root. missing identity is fatal.
+  the launcher's own value, for an unboxed session running its Claude install.
+  Each `trusted_paths` entry pre-accepts the trust dialog.
+  Missing identity is fatal.
   subsequent sessions keep whatever the session last wrote.
   """
   seed = claude_dir / '.claude.json'
@@ -213,17 +212,12 @@ def container_claude_state(workspace: Path) -> tuple[list[str], dict[str, str]]:
   return mounts, env
 
 
-def provision_host_claude_dir(workspace: Path, worktree: Path, project: Path) -> Path:
-  """provision a host session's private claude state dir and return it — the
-  value the launch points CLAUDE_CONFIG_DIR at. `project` is the main repo root
-  the worktree links to."""
-  trusted_paths = [str(worktree)]
-  if str(project) != str(worktree):
-    trusted_paths.append(str(project))
+def provision_unboxed_claude_dir(workspace: Path, tree: Path) -> Path:
+  """Provision an unboxed session's private Claude state directory."""
   claude_dir = _provision_session_claude_dir(
     workspace,
     install_method=None,
-    trusted_paths=trusted_paths,
+    trusted_paths=[str(tree)],
     preaccept_bypass_dialog=False,
   )
   return claude_dir

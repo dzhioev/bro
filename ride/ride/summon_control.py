@@ -532,7 +532,7 @@ class SummonControl:
   def audit_event(self, event: 'Event', journal_record: 'Record') -> None:
     """Append one human-facing JSONL row for every journal event."""
     entry: dict[str, Any] = {
-      'session': self._workspace.name,
+      'ride': self._workspace.name,
       **event.view(),
     }
     if journal_record.parent is not None:

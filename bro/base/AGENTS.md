@@ -78,7 +78,7 @@ run those with `--help` for flags.
   `host_credential_store()` lifts the credential pin for a block, for a test that has to ask what the host holds.
 - `offload.py` — `off_loop(function, …)`, awaiting a blocking call in a daemon thread.
   The `asyncio.to_thread` alternative wherever a call may still be running when the process wants to exit:
-  the default executor's threads are joined at interpreter shutdown, so one abandoned call there delays the exit by its full remaining runtime.
+  the default executor's threads are joined at interpreter shutdown, so one idle call there delays the exit by its full remaining runtime.
   A cancelled `off_loop` await abandons the thread instead, leaving whatever it holds to the caller.
 - `log.py` — module-level `logging` to stderr (`debug` / `verbose` / `info` / `warning` / `error` / `exception`), tagging each record with the caller's module as `scope`.
   VERBOSE is a custom level between DEBUG and INFO:
@@ -86,7 +86,7 @@ run those with `--help` for flags.
   stage detail logs VERBOSE.
   The threshold defaults to INFO, is set per invocation with `--log <level>` (`--verbose` is shorthand for `--log verbose`), and propagates to child processes:
   `set_level` exports `BRO_LOG_LEVEL`, which both `log.py` (at import) and `bro/setup/log.sh` (the shell-script counterpart, same line shape) read.
-  A launch CLI's verbosity therefore reaches worktree provisioning, containers, and the `do-ride` session executable;
+  A launch CLI's verbosity therefore reaches workspace provisioning, containers, and the `do-ride` session executable;
   an explicit `--log` overrides the inherited value.
 - `lulid.py` — `lulid()`, the repo's id mint:
   a ULID restyled lowercase and dash-grouped 10-8-8 (`01kwphn3q5-w1fdwep2-apw9ag3b`).

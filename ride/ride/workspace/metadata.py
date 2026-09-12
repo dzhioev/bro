@@ -1,4 +1,4 @@
-"""a workspace's recorded identity and optional repository attachment."""
+"""A workspace's recorded identity, isolation, and optional repository attachment."""
 
 import json
 from dataclasses import dataclass
@@ -8,31 +8,39 @@ from typing import Optional
 
 from bro.workspace.paths import is_workspace_name, workspace_dir
 
-_METADATA_FILE = 'meta.json'
+_METADATA_FILE = 'workspace.json'
+BRANCH_ENV = 'RIDE_BRANCH'
 
 
-class WorkspaceKind(StrEnum):
-  WORKTREE = 'worktree'
-  CONTAINER = 'container'
+class Isolation(StrEnum):
+  BOXED = 'boxed'
+  UNBOXED = 'unboxed'
 
 
 def workspace_branch(name: str) -> str:
-  return f'worktree-{name}'
+  return f'workspace-{name}'
 
 
 @dataclass(frozen=True)
 class WorkspaceMetadata:
-  kind: WorkspaceKind
+  isolation: Isolation
   repo: Optional[str]
   branch: Optional[str]
   throwaway: bool = False
+  tree: Optional[str] = None
 
   def __post_init__(self) -> None:
     if (self.repo is None) != (self.branch is None):
       raise ValueError('workspace repo and branch must either both be present or both be absent')
+    if self.tree is not None:
+      raise ValueError('external workspace trees are not supported yet')
 
   def dump(self) -> dict:
-    data: dict = {'kind': self.kind.value, 'throwaway': self.throwaway}
+    data: dict = {
+      'isolation': self.isolation.value,
+      'throwaway': self.throwaway,
+      'tree': self.tree,
+    }
     if self.repo is not None:
       data['repo'] = self.repo
       data['branch'] = self.branch
@@ -40,23 +48,27 @@ class WorkspaceMetadata:
 
   @classmethod
   def load(cls, data: dict) -> 'WorkspaceMetadata':
-    required = {'kind', 'throwaway'}
+    required = {'isolation', 'throwaway', 'tree'}
     optional = {'repo', 'branch'}
     if not required <= data.keys() or not data.keys() <= required | optional:
       raise ValueError(f'unexpected fields: {sorted(data.keys() ^ required)}')
     repo = data.get('repo')
     branch = data.get('branch')
+    tree = data['tree']
     if repo is not None and (not isinstance(repo, str) or repo == ''):
       raise ValueError('workspace repo must be a non-empty string when present')
     if branch is not None and (not isinstance(branch, str) or branch == ''):
       raise ValueError('workspace branch must be a non-empty string when present')
+    if tree is not None:
+      raise ValueError('workspace tree must be null until external trees are supported')
     if not isinstance(data['throwaway'], bool):
       raise ValueError('workspace throwaway must be a bool')
     return cls(
-      kind=WorkspaceKind(data['kind']),
+      isolation=Isolation(data['isolation']),
       repo=repo,
       branch=branch,
       throwaway=data['throwaway'],
+      tree=tree,
     )
 
 

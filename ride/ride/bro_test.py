@@ -11,7 +11,7 @@ from bro.workspace.paths import CONTAINER_SESSION_DIR
 from ride.runtime_bundle import RuntimeBundle
 from ride.session import ScopedLaunch, SessionSpec
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
@@ -28,7 +28,7 @@ def _spec(**overrides) -> SessionSpec:
     'name': 'w',
     'harness': 'bro',
     'workspace_pinned': True,
-    'host': False,
+    'isolation': Isolation.BOXED,
     'drop': False,
     'hold': 'attended',
     'grant': [],
@@ -84,7 +84,7 @@ class TestNativeArgv:
     return spawned[0]
 
   def _session_dir(self, monkeypatch, tmp_path) -> Path:
-    workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
+    workspace = Workspace.create('w', tmp_path, Isolation.BOXED)
     session = workspace_session_dir(workspace.path)
     monkeypatch.setenv(SESSION_DIR_ENV, str(session))
     return session
@@ -132,7 +132,7 @@ class TestNativeArgv:
 
 class TestContainerSession:
   def test_composes_the_bro_run_launch(self, monkeypatch, tmp_path):
-    workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
+    workspace = Workspace.create('w', tmp_path, Isolation.BOXED)
     captured: dict = {}
     monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: None)
 
@@ -151,7 +151,7 @@ class TestContainerSession:
         'abc123',
         _scope(),
         human_env={},
-        container=True,
+        boxed=True,
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=_container_runtime(),
       )
@@ -164,6 +164,8 @@ class TestContainerSession:
     ]  # fmt: skip
     assert launch.env == {
       'RIDE_BRO': 'dev',
+      'RIDE_ISOLATION': 'boxed',
+      'RIDE_BRANCH': 'workspace-w',
       ride_session.INSTALL_DIRECTORY_ENV: ride_session.CONTAINER_INSTALL_DIRECTORY,
       ride_session.RESOLVED_LLM_ENV: ride_session.encode_resolved_llm(spec.resolved_llm),
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
@@ -174,7 +176,7 @@ class TestContainerSession:
     assert captured['may_summon'] == {'reviewer'}
 
   def test_no_trails_disables_recording_in_the_container_env(self, monkeypatch, tmp_path):
-    workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
+    workspace = Workspace.create('w', tmp_path, Isolation.BOXED)
     captured: dict = {}
     monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: None)
     monkeypatch.setattr(
@@ -190,7 +192,7 @@ class TestContainerSession:
         None,
         _scope(),
         human_env={},
-        container=True,
+        boxed=True,
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=_container_runtime(),
       )
@@ -203,7 +205,7 @@ class TestContainerSession:
     )
 
   def test_resume_refuses_without_a_broker_published_pointer(self, caplog, tmp_path):
-    workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
+    workspace = Workspace.create('w', tmp_path, Isolation.BOXED)
     assert (
       ride_session._launch_session(
         _spec(resume=True, prompt=None),
@@ -211,7 +213,7 @@ class TestContainerSession:
         None,
         _scope(),
         human_env={},
-        container=True,
+        boxed=True,
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=_container_runtime(),
       )
@@ -220,7 +222,7 @@ class TestContainerSession:
     assert 'no trail pointer was published' in caplog.text
 
   def test_fresh_session_clears_a_stale_pointer(self, monkeypatch, tmp_path):
-    workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
+    workspace = Workspace.create('w', tmp_path, Isolation.BOXED)
     pointer = trail_pointer.session_pointer(workspace.path)
     trail_pointer.write(pointer, 'stale')
     monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: None)
@@ -232,7 +234,7 @@ class TestContainerSession:
         None,
         _scope(),
         human_env={},
-        container=True,
+        boxed=True,
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=_container_runtime(),
       )
@@ -241,7 +243,7 @@ class TestContainerSession:
     assert not pointer.exists()
 
   def test_a_refused_second_launch_leaves_the_active_pointer_alone(self, monkeypatch, tmp_path):
-    workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
+    workspace = Workspace.create('w', tmp_path, Isolation.BOXED)
     pointer = trail_pointer.session_pointer(workspace.path)
     trail_pointer.write(pointer, 'live')
     monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: 'active')
@@ -252,7 +254,7 @@ class TestContainerSession:
         None,
         _scope(),
         human_env={},
-        container=True,
+        boxed=True,
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=_container_runtime(),
       )
@@ -261,9 +263,9 @@ class TestContainerSession:
     assert trail_pointer.read(pointer) == 'live'
 
 
-class TestHostSession:
+class TestUnboxedSession:
   def _workspace(self, tmp_path: Path) -> tuple[Workspace, RuntimeBundle]:
-    workspace = Workspace.create('w', tmp_path, WorkspaceKind.WORKTREE)
+    workspace = Workspace.create('w', tmp_path, Isolation.UNBOXED)
     root = tmp_path / 'runtime-bundle'
     (root / 'host' / 'venv' / 'bin').mkdir(parents=True)
     (root / 'host' / 'bin').mkdir()
@@ -273,8 +275,8 @@ class TestHostSession:
 
   def _prepare(self, monkeypatch, tmp_path):
     monkeypatch.setattr(ride_session.os, 'chdir', lambda _path: None)
-    monkeypatch.setattr(ride_session, 'ensure_host_worktree', lambda *_args: True)
-    monkeypatch.setattr(ride_session, 'provision_host_worktree', lambda *_args: True)
+    monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_args: True)
+    monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_args: True)
     monkeypatch.setattr(ride_session, 'materialize_scoped_store', _materialize_store)
 
   def test_provisions_and_supervises_the_snapshot_runner(self, monkeypatch, tmp_path):
@@ -283,16 +285,16 @@ class TestHostSession:
     self._prepare(monkeypatch, tmp_path)
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: True)
     root = MagicMock(return_value=3)
-    monkeypatch.setattr(ride_session, 'run_host_process_via_broker', root)
+    monkeypatch.setattr(ride_session, 'run_unboxed_process_via_broker', root)
 
     assert (
       ride_session._launch_session(
-        _spec(host=True, repo=str(tmp_path)),
+        _spec(isolation=Isolation.UNBOXED, repo=str(tmp_path)),
         workspace,
         None,
         _scope(),
         human_env={},
-        container=False,
+        boxed=False,
         runtime_bundle=runtime_bundle,
         container_runtime=_container_runtime(),
       )
@@ -317,12 +319,12 @@ class TestHostSession:
 
     assert (
       ride_session._launch_session(
-        _spec(host=True, repo=str(tmp_path)),
+        _spec(isolation=Isolation.UNBOXED, repo=str(tmp_path)),
         workspace,
         None,
         _scope(),
         human_env={},
-        container=False,
+        boxed=False,
         runtime_bundle=runtime_bundle,
         container_runtime=_container_runtime(),
       )

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Optional, Protocol
 
 from bro.llm.llm import LLMSpec
 from ride.scope import ScopeRecipe
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
@@ -28,7 +29,7 @@ class Harness(Protocol):
 
   def add_flags(self, parser: 'Parser') -> tuple[str, ...]: ...
 
-  def parse_options(self, args: dict, *, solo: bool, host: bool) -> dict: ...
+  def parse_options(self, args: dict, *, solo: bool, isolation: Isolation) -> dict: ...
 
   def default_options(self) -> dict: ...
 
@@ -54,8 +55,8 @@ class Harness(Protocol):
     self, spec: 'SessionSpec', workspace: Workspace, scoped: ScopedSecrets
   ) -> ContainerExtras: ...
 
-  def prepare_host_env(
-    self, spec: 'SessionSpec', workspace: Workspace, worktree: Path, env: dict[str, str]
+  def prepare_unboxed_env(
+    self, spec: 'SessionSpec', workspace: Workspace, tree: Path, env: dict[str, str]
   ) -> None: ...
 
 

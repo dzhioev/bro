@@ -8,7 +8,7 @@ a pushed ref is what the retry recovers from.
    — it restores the branch to your committed work.
 2. Push the branch as-is:
    `git push -u origin HEAD`.
-   The worktree branch is already uniquely named for this session, so it lands a recoverable ref;
+   The workspace branch is already uniquely named for this session, so it lands a recoverable ref;
    if that push is rejected, push a fresh `rescue/<name>` branch instead (`<name>` is the session `name` from `bro::banner`).
 3. Name the pushed ref in the `raise` reason
    — it is the failure record a retry reads first.

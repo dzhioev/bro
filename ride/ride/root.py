@@ -34,7 +34,7 @@ def _run_root_via_broker(
   env = dict(launch.env)
   env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
   # the mount source — the root's view dir — is created when run_root_via_broker
-  # constructs the session store, before the docker launch consumes this spec
+  # constructs the ride store, before the docker launch consumes this spec
   artifacts_mount = view_mount(workspace.name, workspace.name)
   broker_launch = DockerLaunchSpec(
     replace(launch, env=env, extra_mounts=(*launch.extra_mounts, artifacts_mount)),
@@ -59,7 +59,7 @@ def _run_root_via_broker(
   )
 
 
-def run_host_process_via_broker(
+def run_unboxed_process_via_broker(
   workspace: Workspace,
   command: list[str],
   env: dict[str, str],
@@ -72,7 +72,7 @@ def run_host_process_via_broker(
   summon_depth: int,
   summon_harness: str,
 ) -> int:
-  """run a host-worktree process as the broker's supervised session root."""
+  """run an unboxed process as the broker's supervised session root."""
   from bro.summon import MAY_SUMMON_ENV, encode_may_summon
   from ride.spawn import run_root_via_broker
   from ride.workspace.spawn import ProcessLaunchSpec

@@ -1,14 +1,23 @@
 from bro.base.args import Parser
 from ride.harness import HARNESS_NAMES, get_harness
+from ride.workspace.metadata import Isolation
 
 
-def default_hold(*, solo: bool, host: bool) -> str:
-  """the hold an omitted --hold resolves to."""
-  return 'unattended' if solo else 'guided' if host else 'attended'
+def default_hold(*, solo: bool, isolation: Isolation) -> str:
+  """The hold an omitted --hold resolves to."""
+  return 'unattended' if solo else 'guided' if isolation is Isolation.UNBOXED else 'attended'
+
+
+def isolation_from_args(args: dict) -> Isolation:
+  boxed = args.pop('boxed')
+  unboxed = args.pop('unboxed')
+  if boxed and unboxed:
+    raise ValueError('--boxed and --unboxed are mutually exclusive')
+  return Isolation.UNBOXED if unboxed else Isolation.BOXED
 
 
 def add_harness_flags(parser: Parser) -> None:
-  """register `--harness` and every harness's own flags."""
+  """Register `--harness` and every harness's own flags."""
   parser.add_argument(
     '--harness',
     choices=HARNESS_NAMES,
@@ -20,7 +29,7 @@ def add_harness_flags(parser: Parser) -> None:
 
 
 def _harness_flag_defaults() -> dict[str, dict]:
-  """per harness, the flag dests it registers with their parser defaults."""
+  """Per harness, the flag dests it registers with their parser defaults."""
   defaults: dict[str, dict] = {}
   for name in HARNESS_NAMES:
     scratch = Parser(add_help=False)
@@ -31,10 +40,9 @@ def _harness_flag_defaults() -> dict[str, dict]:
 
 
 def pop_harness_options(
-  parser: Parser, args: dict, harness_name: str, *, solo: bool, host: bool
+  parser: Parser, args: dict, harness_name: str, *, solo: bool, isolation: Isolation
 ) -> dict:
-  """pop every harness's flag values out of `args` and pack the selected
-  harness's options, erroring on a non-selected harness's non-default value."""
+  """Pop every harness's flag values out of `args` and pack the selected one."""
   if harness_name not in HARNESS_NAMES:
     parser.error(f'unknown harness: {harness_name}')
   packed: dict = {}
@@ -42,7 +50,7 @@ def pop_harness_options(
     values = {dest: args.pop(dest) for dest in flag_defaults}
     if name == harness_name:
       try:
-        packed = get_harness(name).parse_options(values, solo=solo, host=host)
+        packed = get_harness(name).parse_options(values, solo=solo, isolation=isolation)
       except ValueError as error:
         parser.error(str(error))
       continue
@@ -53,8 +61,7 @@ def pop_harness_options(
 
 
 def add_scope_flags(parser: Parser) -> None:
-  """register the launch-scope overrides: the credential and summon-target
-  adjustments layered onto a session's computed scope."""
+  """Register launch-scope credential and summon-target adjustments."""
   parser.add_argument(
     '--grant',
     action='append',
@@ -72,27 +79,29 @@ def add_scope_flags(parser: Parser) -> None:
 
 
 def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
-  """register the session flags shared by `ride along` and the mode aliases and dive-in."""
-  parser.add_argument(
-    '--host',
+  """Register the session flags shared by mode aliases and dive-in."""
+  isolation = parser.add_mutually_exclusive_group()
+  isolation.add_argument(
+    '--boxed',
     action='store_true',
-    help='run on the host in a same-machine git worktree instead of the default isolated docker container',
+    help='run in a dedicated container (the default)',
   )
-  # imported here, not at module level: llm pulls asyncio (~150ms) and this
-  # module sits on every runtime CLI import
+  isolation.add_argument(
+    '--unboxed',
+    action='store_true',
+    help="run the workspace tree directly on the launcher's filesystem",
+  )
   from bro.launch.llm_flags import add_llm_flags
   from bro.mcp import HOLDS
 
-  # default None: the launch surface resolves an omitted flag via default_hold,
-  # and reconstruction then always carries the resolved value
   parser.add_argument(
     '--hold',
     default=None,
     choices=HOLDS,
     help='how firmly the human holds the session: unattended = no human channel, detached = launched and left, '
     'attended = human watching while the work runs autonomously, guided = human drives each step. '
-    'every level but guided skips permission prompts (unsandboxed when combined with --host). '
-    'defaults: unattended for ride solo; attended for ride along and dive-in, guided with --host',
+    'every level but guided skips permission prompts (unsandboxed when combined with --unboxed). '
+    'defaults: unattended for ride solo; attended for boxed ride along and dive-in, guided when unboxed',
   )
   add_llm_flags(
     parser,
@@ -128,11 +137,7 @@ def add_forwarded_flags(parser: Parser) -> None:
 
 
 def extract_forwarded_argv(args: dict) -> list[str]:
-  """pop forwarded-flag values from `args` and return them as canonical argv tokens.
-
-  mutates `args`: removes every key registered by `add_forwarded_flags`. The returned
-  list is suitable to splice directly into a `ride solo|along` invocation.
-  """
+  """Pop forwarded-flag values from `args` and return canonical argv tokens."""
   parser = Parser(add_help=False)
   add_forwarded_flags(parser)
   forwarded = {

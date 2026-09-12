@@ -32,6 +32,7 @@ from ride.claude.session_context import (
   encode_session_context,
 )
 from ride.claude.statusline import start_statusline_projector
+from ride.workspace.metadata import BRANCH_ENV
 
 if TYPE_CHECKING:
   from ride.do_ride import SessionRun
@@ -47,9 +48,12 @@ def _set_session_context(spec: 'SessionSpec | SessionRun', system_prompt: str, t
     base_sha = git_out('rev-parse', 'HEAD', cwd=str(tree))
   except subprocess.CalledProcessError:
     base_sha = None
+  branch = os.environ.get(BRANCH_ENV)
+  if spec.repo is not None and branch is None:
+    raise RuntimeError(f'attached session has no recorded branch in {BRANCH_ENV}')
   records = build_session_context(
     system_prompt=system_prompt,
-    branch=f'worktree-{spec.name}' if spec.repo is not None else None,
+    branch=branch,
     base_sha=base_sha,
     base_ref=spec.into,
     bro=spec.bro,
