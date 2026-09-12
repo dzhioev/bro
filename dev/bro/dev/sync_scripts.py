@@ -10,7 +10,6 @@ bare name that any distribution may publish.
 """
 
 import ast
-import logging
 import os
 import re
 import sys
@@ -19,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from bro.base import log
 from bro.base.args import Parser, canonical_script_name
 from bro.workspace.git import git_run
 from bro.workspace.paths import find_project_root
@@ -264,13 +264,13 @@ def _rendered_artifacts(project: Project) -> tuple[str, str]:
 def sync_pyproject(project: Project) -> None:
   rendered, _ = _rendered_artifacts(project)
   project.pyproject.write_text(rendered)
-  logging.info('updated %s', project.pyproject)
+  log.info('updated %s', project.pyproject)
 
 
 def sync_entrypoints(project: Project) -> None:
   _, rendered = _rendered_artifacts(project)
   project.bridge_path.write_text(rendered)
-  logging.info('updated %s', project.bridge_path)
+  log.info('updated %s', project.bridge_path)
 
 
 def check(project: Project) -> bool:

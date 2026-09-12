@@ -1,6 +1,5 @@
 import http.client
 import json
-import logging
 import threading
 import time
 from typing import Any, Optional
@@ -301,13 +300,12 @@ class TestRecorderEndTrail:
     tracker.end_trail('raised')
     assert len(fake.requests) == 2
 
-  def test_logs_and_clears_state_on_persistent_failure(self, monkeypatch, caplog):
+  def test_logs_and_clears_state_on_persistent_failure(self, monkeypatch, capsys):
     tracker, fake = self._ready(monkeypatch)
     for _ in range(4):
       fake.queue(ConnectionError('still down'))
-    with caplog.at_level(logging.WARNING):
-      tracker.end_trail('ok')
-    assert any('end_trail failed' in record.message for record in caplog.records)
+    tracker.end_trail('ok')
+    assert ' WARNING[bro.trails.record.bro] trails end_trail failed' in capsys.readouterr().err
     assert tracker._recording is None
 
 
@@ -366,17 +364,16 @@ class TestRecorderKeepalive:
     thread.join(2.0)
     assert not thread.is_alive()
 
-  def test_keepalive_failure_does_not_stop_recording(self, monkeypatch, caplog):
+  def test_keepalive_failure_does_not_stop_recording(self, monkeypatch, capsys):
     tracker, fake = self._start(monkeypatch, interval=0.02)
     fake.queue((500, b'oops'))
     fake.queue((500, b'oops'))
     deadline = time.monotonic() + 5.0
-    with caplog.at_level(logging.WARNING):
-      while len(self._keepalive_requests(fake)) < 2 and time.monotonic() < deadline:
-        threading.Event().wait(0.01)
-      monkeypatch.setattr(trails_record_spine, 'KEEPALIVE_INTERVAL_SECONDS', 3600.0)
-      threading.Event().wait(0.2)
-    assert any('keepalive failed' in record.message for record in caplog.records)
+    while len(self._keepalive_requests(fake)) < 2 and time.monotonic() < deadline:
+      threading.Event().wait(0.01)
+    monkeypatch.setattr(trails_record_spine, 'KEEPALIVE_INTERVAL_SECONDS', 3600.0)
+    threading.Event().wait(0.2)
+    assert ' WARNING[bro.trails.record.bro] trails keepalive failed' in capsys.readouterr().err
     for item in (_append_response(2), _append_response(2), (204, b'')):
       fake.queue(item)
     tracker.step('user_input', 'x', turn_index=0)

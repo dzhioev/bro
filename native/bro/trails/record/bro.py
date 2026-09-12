@@ -1,11 +1,10 @@
 """Bro harness recorder over the shared trails write spine."""
 
-import logging
 import threading
 from dataclasses import asdict
 from typing import Any, Optional
 
-from bro.base import configs
+from bro.base import configs, log
 from bro.llm.tracker import EndReason, StepKind, Tracker
 from bro.trails.model import BlazeRequest, ForkedFrom, tools_sha256
 from bro.trails.record import spine
@@ -89,7 +88,7 @@ class Recorder(Tracker):
     try:
       recording.end(reason, detail)
     except Exception as exception:
-      logging.warning('trails end_trail failed for trail %s: %s', recording.trail_id, exception)
+      log.warning('trails end_trail failed for trail %s: %s', recording.trail_id, exception)
     with self._lock:
       self._recording = None
     self._store.close()
@@ -123,4 +122,4 @@ class Recorder(Tracker):
       try:
         recording.keepalive_if_idle()
       except Exception as exception:
-        logging.warning('trails keepalive failed for trail %s: %s', recording.trail_id, exception)
+        log.warning('trails keepalive failed for trail %s: %s', recording.trail_id, exception)
