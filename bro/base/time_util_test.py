@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 import datetime as dt
+import pickle
+
+import pytest
 
 from bro.base.time_util import (
   FUTURE,
@@ -8,15 +11,27 @@ from bro.base.time_util import (
   Duration,
   Moment,
   format_time,
-  is_naive,
   parse_date,
   parse_datetime,
   parse_moment,
+  timezone,
   utc_now,
 )
 
 
 class TestMoment:
+  def test_constructor_assigns_utc_by_default(self):
+    moment = Moment(2024, 1, 15, 10, 30)
+    assert moment.tzinfo == UTC
+
+  def test_constructor_rejects_timezone_without_offset(self):
+    class MissingOffsetTimezone(dt.tzinfo):
+      def utcoffset(self, moment: dt.datetime | None) -> None:
+        return None
+
+    with pytest.raises(ValueError, match='requires a timezone with a UTC offset'):
+      Moment(2024, 1, 15, tzinfo=MissingOffsetTimezone())
+
   def test_from_datetime(self):
     d = dt.datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
     m = Moment.from_datetime(d)
@@ -27,10 +42,28 @@ class TestMoment:
     assert m.hour == 10
     assert m.minute == 30
 
+  def test_from_datetime_assigns_utc_to_naive_value(self):
+    moment = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 30))
+    assert moment.tzinfo == UTC
+
+  def test_fromisoformat_assigns_utc_to_naive_value(self):
+    moment = Moment.fromisoformat('2024-01-15T10:30:00')
+    assert moment.tzinfo == UTC
+
   def test_now(self):
-    m = Moment.now(tz=UTC)
-    assert isinstance(m, Moment)
-    assert m.tzinfo is not None
+    moment = Moment.now()
+    assert isinstance(moment, Moment)
+    assert moment.tzinfo == UTC
+
+  def test_fromtimestamp_defaults_to_utc(self):
+    moment = Moment.fromtimestamp(0)
+    assert moment == Moment(1970, 1, 1)
+
+  def test_fromtimestamp_preserves_fold(self):
+    timestamp = dt.datetime(2024, 11, 3, 6, 30, tzinfo=UTC).timestamp()
+    moment = Moment.fromtimestamp(timestamp, timezone('America/New_York'))
+    assert moment.fold == 1
+    assert moment.timestamp() == timestamp
 
   def test_parse(self):
     m = Moment.parse('2024-01-15', '%Y-%m-%d')
@@ -38,6 +71,16 @@ class TestMoment:
     assert m.year == 2024
     assert m.month == 1
     assert m.day == 15
+    assert m.tzinfo == UTC
+
+  def test_replace_cannot_remove_timezone(self):
+    moment = Moment(2024, 1, 15, tzinfo=UTC).replace(tzinfo=None)
+    assert moment.tzinfo == UTC
+
+  def test_pickle_round_trip_preserves_timezone(self):
+    restored = pickle.loads(pickle.dumps(Moment(2024, 1, 15, tzinfo=UTC)))
+    assert restored == Moment(2024, 1, 15, tzinfo=UTC)
+    assert restored.tzinfo == UTC
 
   def test_repr(self):
     m = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC))
@@ -132,15 +175,17 @@ class TestParseFunctions:
     m = parse_moment('now')
     assert isinstance(m, Moment)
 
-  def test_parse_moment_date(self):
+  def test_parse_moment_date_as_utc(self):
     m = parse_moment('2024-01-15')
-    assert isinstance(m, Moment)
-    assert m.year == 2024
+    assert m == Moment(2024, 1, 15, tzinfo=UTC)
 
-  def test_parse_moment_datetime(self):
+  def test_parse_moment_naive_datetime_as_utc(self):
     m = parse_moment('2024-01-15T10:30:00')
-    assert isinstance(m, Moment)
-    assert m.hour == 10
+    assert m == Moment(2024, 1, 15, 10, 30, tzinfo=UTC)
+
+  def test_parse_moment_datetime_preserves_offset(self):
+    m = parse_moment('2024-01-15T10:30:00+03:00')
+    assert m.isoformat() == '2024-01-15T10:30:00+03:00'
 
 
 class TestUtilityFunctions:
@@ -158,14 +203,6 @@ class TestUtilityFunctions:
     m = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC))
     result = format_time(m, show_tz_info=True)
     assert 'UTC' in result
-
-  def test_is_naive_false(self):
-    m = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC))
-    assert not is_naive(m)
-
-  def test_is_naive_true(self):
-    m = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 30, 0))
-    assert is_naive(m)
 
 
 class TestConstants:
