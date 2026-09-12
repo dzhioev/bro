@@ -228,7 +228,7 @@ A directory under the store that records no workspace is ignored by enumeration,
   session/            what the running session records about itself:
     current-trail.json            the trail the session records into ("Summoning another bro")
     session-recorder-health.json  the recording health signal ("Session recording")
-    claude/                       claude harness artifacts (recorder/projector logs and live statusLine projection)
+    claude/                       claude harness artifacts (recorder/projector logs, live statusLine projection, and the persistent Claude temp root)
   credentials/        the host-mode scoped credential store ("Scoped credential hydration")
   environment/        the files the host-mode session's install hooks write ("Scoped credential hydration")
   claude/             the claude harness's state dir ("Host claude-state isolation")

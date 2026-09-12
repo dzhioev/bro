@@ -10,7 +10,7 @@ import pytest
 import ride.claude.runner as ride_runner
 from bro.launch.broxy import START_SESSION_BROXY_ENV
 from bro.llm.llms import claude_code
-from bro.monitor import trail_pointer
+from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_session_dir
 from bro.summon import SUMMONED_ENV
 from bro.workspace.paths import workspace_dir
 from ride.claude.claude_argv import ClaudeLaunch
@@ -25,6 +25,7 @@ class _Harness:
   def __init__(self, tmp_path: Path):
     self.projects_dir = tmp_path / 'projects'
     self.claude_config_dir = tmp_path / 'claude-config'
+    self.session_dir = tmp_path / 'session'
     self.server = MagicMock()
     self.server.endpoint = MCPEndpoint(port=1234, token='tok')
     self.broxy = MagicMock()
@@ -59,6 +60,7 @@ class _Harness:
     self.env.pop(SUMMONED_ENV, None)
     self.env.pop(START_SESSION_BROXY_ENV, None)
     self.env.pop('CLAUDE_CONFIG_DIR', None)
+    self.env[SESSION_DIR_ENV] = str(self.session_dir)
     self.start_server = entered[2]
     self.build = entered[3]
     self.run_claude = entered[4]
@@ -93,6 +95,26 @@ class TestRunInPlace:
       (h.projects_dir / 'newer.jsonl').write_text('{}')
       assert ride_runner.run_in_place(_spec(resume=True, arguments=['--foo'])) == 0
       assert h.build.call_args.kwargs['claude_args'] == ['--resume', 'newer', '--foo']
+
+  def test_resume_reuses_the_workspace_claude_temp_root(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      h.projects_dir.mkdir()
+      (h.projects_dir / 'session-id.jsonl').write_text('{}')
+      assert ride_runner.run_in_place(_spec()) == 0
+      temp_dir = Path(h.run_claude.call_args.args[1]['CLAUDE_CODE_TMPDIR'])
+      assert temp_dir.stat().st_mode & 0o777 == 0o700
+      scratchpad = temp_dir / 'session-id' / 'scratchpad'
+      scratchpad.mkdir(parents=True)
+      working_file = scratchpad / 'working.json'
+      working_file.write_text('{}')
+
+      assert ride_runner.run_in_place(_spec(resume=True)) == 0
+      resumed_temp_dir = Path(h.run_claude.call_args.args[1]['CLAUDE_CODE_TMPDIR'])
+      assert (
+        resumed_temp_dir == temp_dir == workspace_session_dir(workspace_dir('w')) / 'claude' / 'tmp'
+      )
+      assert working_file.read_text() == '{}'
 
   def test_claude_is_run_against_the_sessions_transcripts(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)

@@ -21,6 +21,7 @@ from bro.monitor import (
   CLAUDE_CONFIG_DIR_ENV,
   SESSION_DIR_ENV,
   claude_projects_dir,
+  harness_session_dir,
   trail_pointer,
   workspace_session_dir,
 )
@@ -70,6 +71,15 @@ def _set_session_context(spec: 'SessionSpec', system_prompt: str, tree: Path) ->
 
 def _run_claude(argv: list[str], env: dict[str, str], transcripts: Path) -> InteractiveRun:
   return run_interactive(['claude', *argv], env, transcripts)
+
+
+def _claude_temp_dir() -> Path:
+  session_state = harness_session_dir('claude')
+  if session_state is None:
+    raise RuntimeError(f'{SESSION_DIR_ENV} is unset')
+  temp_dir = session_state / 'tmp'
+  temp_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+  return temp_dir
 
 
 # the recorder adopts the transcript and publishes the pointer within its own
@@ -245,6 +255,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
     log.verbose('session MCP server healthy')
 
     env = {**os.environ}
+    env['CLAUDE_CODE_TMPDIR'] = str(_claude_temp_dir())
     # claude's MCP tool-call timeout (ms): the ~1-minute default kills
     # legitimately slow tools (vision audits, renders)
     env['MCP_TOOL_TIMEOUT'] = str(10 * 60 * 1000)
