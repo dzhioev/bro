@@ -274,11 +274,71 @@ def test_cdk_diff_reads_the_impact_field_rather_than_the_whole_line():
   assert result.stderr == ''
 
 
+def test_parallel_cdk_deploys_use_independent_output_directories(tmp_path):
+  working_directory = shlex.quote(str(tmp_path))
+  result = _run_bash(
+    f"""
+    mkfifo {working_directory}/status {working_directory}/release
+    exec 3<> {working_directory}/status
+    exec 4<> {working_directory}/release
+    npx() {{
+      local argument output_directory='cdk.out' state='ready'
+      while [ "$#" -gt 0 ]; do
+        argument="$1"
+        shift
+        if [ "$argument" = '--output' ]; then
+          output_directory="$1"
+          shift
+        fi
+      done
+      mkdir -p "$output_directory"
+      mkdir "$output_directory/active" 2>/dev/null || state='collision'
+      printf '%s\n' "$state" >&3
+      read -r argument <&4
+      if [ "$state" = 'collision' ]; then
+        return 70
+      fi
+      rmdir "$output_directory/active"
+    }}
+    cdk_deploy {working_directory} target-a StackA &
+    first=$!
+    cdk_deploy {working_directory} target-b StackB &
+    second=$!
+    read -r first_state <&3
+    read -r second_state <&3
+    printf 'release\nrelease\n' >&4
+    wait "$first"
+    wait "$second"
+    printf '%s\n%s\n' "$first_state" "$second_state"
+    """
+  )
+
+  assert result.returncode == 0, result.stderr
+  assert result.stdout.splitlines() == ['ready', 'ready']
+  assert (tmp_path / 'cdk.out' / 'target-a').is_dir()
+  assert (tmp_path / 'cdk.out' / 'target-b').is_dir()
+
+
+def test_cdk_deploy_preserves_single_target_arguments():
+  result = _run_bash(
+    """
+    npx() { printf 'npx %s\n' "$*"; }
+    cdk_deploy . target-a StackA --hotswap
+    """
+  )
+
+  assert result.returncode == 0, result.stderr
+  assert (
+    '-- cdk deploy StackA --hotswap --require-approval never --output cdk.out/target-a'
+    in result.stdout
+  )
+
+
 def test_plan_and_deploy_run_one_pinned_cdk_cli():
   result = _run_bash(
     """
     npx() { printf 'npx %s\\n' "$*"; }
-    cdk_deploy . StackA
+    cdk_deploy . target-a StackA
     cdk_diff . StackA
     """
   )

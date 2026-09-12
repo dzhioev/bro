@@ -128,13 +128,14 @@ def _run_trails_scripts(tmp_path: Path, *names: str) -> list[list[str]]:
 def test_the_plan_covers_every_stack_the_deploy_rolls(tmp_path):
   calls = _run_trails_scripts(tmp_path, 'deploy.sh', 'plan.sh')
 
-  stacks = {
-    operation: {stack for name, _, *stacks in calls if name == operation for stack in stacks}
-    for operation in ('deploy', 'diff')
-  }
+  deploy_calls = [arguments for operation, _, *arguments in calls if operation == 'deploy']
+  diff_calls = [arguments for operation, _, *arguments in calls if operation == 'diff']
+  deployed_stacks = {stack for _, *stacks in deploy_calls for stack in stacks}
+  diffed_stacks = {stack for stacks in diff_calls for stack in stacks}
 
-  assert stacks['deploy'] == {'RepositoryStack', 'ImageBuildStack', 'ServiceStack'}
-  assert stacks['diff'] == stacks['deploy']
+  assert {target for target, *_ in deploy_calls} == {'trails-server'}
+  assert deployed_stacks == {'RepositoryStack', 'ImageBuildStack', 'ServiceStack'}
+  assert diffed_stacks == deployed_stacks
   assert {Path(directory).resolve() for _, directory, *_ in calls} == {_PROJECT / 'deployment'}
 
 
