@@ -504,7 +504,7 @@ class _Driver:
       except ProcessLookupError:
         pass
       self.process.wait(10)
-    self._reader.join(5)
+    self._reader.join()
     os.close(self._master)
 
 

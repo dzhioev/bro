@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from pathlib import Path
 from typing import cast
 
@@ -135,6 +136,25 @@ async def test_spawned_worker_drains_the_channel_before_reporting_exit(tmp_path)
   runtime.events.on_disconnect()
   await _settle()
   assert listener.deaths[0].reason == 'exit'
+
+
+@pytest.mark.asyncio
+async def test_spawned_worker_warns_when_channel_drain_expires(tmp_path, monkeypatch, caplog):
+  monkeypatch.setattr('bro.broker.worker._DRAIN_TIMEOUT', 0)
+  runtime = FakeRuntime(tmp_path)
+  listener = Listener()
+  worker = SpawnedWorker(cast(Runtime, runtime), listener, 'quest', LaunchSpec(), timeout=10)
+  worker.begin()
+  await _settle()
+  assert runtime.events is not None
+  runtime.events.on_connect()
+
+  with caplog.at_level(logging.WARNING):
+    runtime.handle.exit.set_result(0)
+    await _settle()
+
+  assert listener.deaths[0].reason == 'exit'
+  assert 'reporting exit without a complete drain' in caplog.text
 
 
 @pytest.mark.asyncio

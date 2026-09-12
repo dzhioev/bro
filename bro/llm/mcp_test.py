@@ -515,16 +515,18 @@ class TestSyncToolExecution:
   async def test_sync_tool_runs_off_the_loop(self):
     # the release only ever comes from the event loop, so a tool that ran inline
     # would deadlock here instead of returning — which is the property under test.
+    entered = threading.Event()
     release = threading.Event()
     thread_ids: list[int] = []
 
     def blocker() -> str:
       thread_ids.append(threading.get_ident())
-      release.wait(5)
+      entered.set()
+      release.wait()
       return 'done'
 
     call = asyncio.create_task(FunctionTool(blocker, description='blocks').call({}))
-    await asyncio.sleep(0.05)
+    assert await asyncio.to_thread(entered.wait, 5)
     assert not call.done()
     release.set()
 
