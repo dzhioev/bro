@@ -99,17 +99,17 @@ git -C "$HOST_REPO" remote set-url origin "$(git -C "$PROJECT" remote get-url or
 git -C "$HOST_REPO" update-ref refs/remotes/origin/master HEAD
 
 python - \
-  "$HOST_REPO" "$SMOKE_TMP/workspace" worktree-smoke-test \
-  "$CONSUMER_UV_REPO" "$SMOKE_TMP/consumer-uv-workspace" worktree-consumer-uv-smoke \
-  "$CONSUMER_PLAIN_REPO" "$SMOKE_TMP/consumer-plain-workspace" worktree-consumer-plain-smoke <<'PY'
+  "$HOST_REPO" "$SMOKE_TMP/workspace" workspace-smoke-test \
+  "$CONSUMER_UV_REPO" "$SMOKE_TMP/consumer-uv-workspace" workspace-consumer-uv-smoke \
+  "$CONSUMER_PLAIN_REPO" "$SMOKE_TMP/consumer-plain-workspace" workspace-consumer-plain-smoke <<'PY'
 import sys
 from pathlib import Path
 from ride.repository import Repository
-from ride.workspace.clones import ensure_container_clone
+from ride.workspace.clones import ensure_clone
 
 for index in range(1, len(sys.argv), 3):
   source = Path(sys.argv[index])
-  ensure_container_clone(
+  ensure_clone(
     Repository(str(source), source),
     Path(sys.argv[index + 1]),
     sys.argv[index + 2],

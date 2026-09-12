@@ -1,7 +1,7 @@
 """Scoped credential-store tiers and session materialization.
 
 A container receives an in-memory tar in its own layer;
-a host session points `BRO_STORE` at a materialized directory.
+an unboxed session points `BRO_STORE` at a materialized directory.
 The launch surface owns which kinds enter each tier.
 """
 

@@ -11,6 +11,7 @@ from bro.monitor import trail_pointer
 from ride.do_ride import SessionRun, run_agent
 from ride.harness import ContainerExtras
 from ride.scope import BRO_RUN_RECIPE, ScopeRecipe
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
@@ -50,8 +51,8 @@ class BroHarness:
     del parser
     return ()
 
-  def parse_options(self, args: dict, *, solo: bool, host: bool) -> dict:
-    del args, solo, host
+  def parse_options(self, args: dict, *, solo: bool, isolation: Isolation) -> dict:
+    del args, solo, isolation
     return {}
 
   def default_options(self) -> dict:
@@ -117,10 +118,10 @@ class BroHarness:
     del spec, workspace, scoped
     return ContainerExtras(env={}, mounts=())
 
-  def prepare_host_env(
-    self, spec: 'SessionSpec', workspace: Workspace, worktree: Path, env: dict[str, str]
+  def prepare_unboxed_env(
+    self, spec: 'SessionSpec', workspace: Workspace, tree: Path, env: dict[str, str]
   ) -> None:
-    del spec, workspace, worktree, env
+    del spec, workspace, tree, env
 
 
 BRO = BroHarness()

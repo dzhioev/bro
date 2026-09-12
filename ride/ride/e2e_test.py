@@ -259,7 +259,7 @@ sys.exit(5)
 # scenarios F/G: a wrapper the entrypoint execs in place of the session command.
 # it drops a fake `claude` onto PATH — the session runner resolves it instead of
 # the image's real one — then execs the runner itself ("$@", the same
-# `do-ride solo|along …` invocation `_container_session` sends). the fake records
+# `do-ride solo|along …` invocation `_boxed_session` sends). the fake records
 # its argv/env to the report file, proving the argv was built in-container by the
 # frozen runtime; under RIDE_E2E_LINGER it waits for the interrupt keypress on its
 # own terminal (exit 7) so the harness can assert `docker stop` reaches claude
@@ -300,12 +300,13 @@ _DRIVER = """
 import json, os, sys
 from ride.root import run_in_container
 from ride.workspace.docker import Launch
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import BRANCH_ENV, Isolation
 from ride.workspace.model import Workspace
-from bro.workspace.paths import project_root
+from bro.workspace.paths import ISOLATION_ENV, project_root
 
 name = os.environ['RIDE_E2E_NAME']
-workspace = Workspace.ensure(name, project_root(), WorkspaceKind.CONTAINER)
+workspace = Workspace.ensure(name, project_root(), Isolation.BOXED)
+assert workspace.metadata.branch is not None
 claude_dir = workspace.path / 'claude'
 session_dir = workspace.path / 'session'
 claude_dir.mkdir()
@@ -314,6 +315,8 @@ launch = Launch(name=name,
                 command=json.loads(os.environ['RIDE_E2E_COMMAND']),
                 env={'CLAUDE_CONFIG_DIR': '/home/ride/.claude',
                      'RIDE_BRO': 'bro-dev',
+                     ISOLATION_ENV: workspace.isolation.value,
+                     BRANCH_ENV: workspace.metadata.branch,
                      'RIDE_SESSION_DIR': '/var/ride/session'},
                 secrets=tuple(json.loads(os.environ.get('RIDE_E2E_SECRETS', '[]'))),
                 tty=True, forward_env=True,

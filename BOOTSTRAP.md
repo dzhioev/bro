@@ -17,7 +17,7 @@ The bootstrapped repository installs both harnesses, Claude Code in full mode an
 Which harness a launch or a summon runs under when nothing names one is the user's configuration choice in section 3;
 either harness stays reachable per launch through `--harness` and per summon through the request's `harness` field.
 Never recommend `--raw`.
-Do not use Anthropic API-key authentication or replace the exact acceptance command with host mode.
+Do not use Anthropic API-key authentication or replace the exact acceptance command with unboxed isolation.
 
 ## Operating contract
 
@@ -526,7 +526,7 @@ Also report command provenance and the expected GitHub identity that the post-co
 
 Stage only explicit bootstrap paths.
 Create the focused commit.
-A commit is mandatory because an attached container workspace clones `HEAD`; uncommitted checkout changes do not transfer even if an editable host install appears to work.
+A commit is mandatory because an attached boxed workspace clones `HEAD`; uncommitted checkout changes do not transfer even if an editable host install appears to work.
 A fresh repository therefore needs an initial commit.
 Leave unrelated modifications unstaged and uncommitted.
 
@@ -572,7 +572,7 @@ ride solo my-dev "sup?" --repo .
 ```
 
 Substitute only the selected public name when it differs.
-Do not add `--host`, `--grant`, `--no-trails`, or `--llm`, and add `--harness` only on the second run below.
+Do not add `--unboxed`, `--grant`, `--no-trails`, or `--llm`, and add `--harness` only on the second run below.
 Success means exit status zero and a coherent reply from the harness the project `harness` selects.
 The first run may build runtime and project images, so inspect active output before calling ordinary build latency a hang.
 
@@ -590,10 +590,9 @@ Diagnose failures from the earliest failing layer:
    an OpenAI auth error requires repairing the `openai` material.
 7. A repository or ref error requires a valid committed `HEAD`.
 8. A Docker error requires repairing the daemon.
-   A host-mode pass is diagnostic evidence only.
-9. An in-container refusal requires restarting this bootstrap on the host.
-10. A failed session is retained for inspection.
-    Use `ride list` and the named workspace before considering `ride clean`, and never delete a dirty workspace reflexively.
+   An unboxed pass is diagnostic evidence only.
+9. A failed session is retained for inspection.
+   Use `ride list` and the named workspace before considering `ride clean`, and never delete a dirty workspace reflexively.
 
 Report the failed command, upstream cause, and correction before retrying.
 Never declare a partial or host-only workaround complete.

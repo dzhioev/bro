@@ -15,7 +15,12 @@ from bro.workspace.git import fetch_ref
 from bro.workspace.paths import fresh_workspace_name, project_root
 from bro.workspace.project import project_config
 from ride.cli import reports_runtime_errors
-from ride.flags import add_forwarded_flags, extract_forwarded_argv, pop_harness_options
+from ride.flags import (
+  add_forwarded_flags,
+  extract_forwarded_argv,
+  isolation_from_args,
+  pop_harness_options,
+)
 from ride.harness import get_harness
 from ride.scope import LaunchScopeError, launch_scope_errors, launch_view_store, scoped_secrets
 
@@ -220,8 +225,10 @@ def main(argv: list[str]) -> Optional[int]:
   # the prefetch binds to the same scope the session launches with, so the
   # scope-shaping flags are read here as well as forwarded
   harness_name = args['harness'] or project_config(repo).harness
+  harness_arguments = dict(args)
+  isolation = isolation_from_args(harness_arguments)
   harness_options = pop_harness_options(
-    parser, dict(args), harness_name, solo=False, host=args['host']
+    parser, harness_arguments, harness_name, solo=False, isolation=isolation
   )
   scope_args = {key: args[key] for key in ('grant', 'revoke', 'bro')}
   args['bro'] = None

@@ -4,6 +4,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
@@ -11,18 +12,65 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import credentials, log
-from bro.workspace.paths import workspace_tree
+from bro.workspace.paths import runtime_base, workspace_tree
 from ride.repository import Repository, as_repository
 from ride.runtime_bundle import RuntimeBundle
 from ride.workspace import build_context
 from ride.workspace.build_context import CONTAINER_DIR
-from ride.workspace.clones import ensure_container_clone
+from ride.workspace.clones import ensure_clone
 from ride.workspace.metadata import read_metadata
 from ride.workspace.store import _bro_tarball
 
 _RUNTIME_IMAGE_REPOSITORY = 'bro/ride-runtime'
 _RUNTIME_MOUNT = '/var/ride/runtime'
 _SMOKE_TEST_TAG = 'bro/framework:smoke-test'
+_PREFLIGHT_MOUNT = '/var/ride/daemon-preflight'
+
+
+def _daemon_name() -> str:
+  result = subprocess.run(['docker', 'context', 'show'], capture_output=True, text=True)
+  return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else 'default'
+
+
+def _preflight_daemon(runtime_image: str) -> None:
+  """Verify that the selected daemon sees the launcher's runtime root."""
+  root = runtime_base()
+  root.mkdir(parents=True, exist_ok=True)
+  with tempfile.TemporaryDirectory(prefix='.daemon-preflight-', dir=root) as directory:
+    nonce = os.urandom(24).hex()
+    path = Path(directory) / 'nonce'
+    path.write_text(nonce)
+    inside = f'{_PREFLIGHT_MOUNT}/{Path(directory).name}/nonce'
+    result = subprocess.run(
+      [
+        'docker',
+        'run',
+        '--rm',
+        '--entrypoint',
+        'cat',
+        '-v',
+        f'{root}:{_PREFLIGHT_MOUNT}:ro',
+        runtime_image,
+        inside,
+      ],
+      capture_output=True,
+      text=True,
+    )
+    if result.returncode != 0 or result.stdout != nonce:
+      detail = result.stderr.strip() or 'the mounted nonce was not visible'
+      raise RuntimeError(
+        f'Docker daemon {_daemon_name()!r} cannot bind-mount the ride runtime root {root}: {detail}'
+      )
+
+
+def _assert_bind_source(source: Path) -> None:
+  root = runtime_base().resolve()
+  try:
+    source.resolve().relative_to(root)
+  except ValueError as error:
+    raise ValueError(
+      f'container bind source lies outside the ride runtime root {root}: {source}'
+    ) from error
 
 
 @dataclass(frozen=True)
@@ -43,6 +91,7 @@ class ContainerRuntimeResolver:
     self._bundle = bundle
     self._repo = None if repo is None else as_repository(repo)
     self._resolved = resolved
+    self._preflighted = resolved is not None
     self._lock = threading.Lock()
 
   @classmethod
@@ -59,6 +108,9 @@ class ContainerRuntimeResolver:
         raise RuntimeError('container runtime resolver has neither a bundle nor a resolved runtime')
       runtime_image = runtime_image_tag(self._bundle.python_version)
       _ensure_runtime_image(runtime_image, self._bundle.python_version)
+      if not self._preflighted:
+        _preflight_daemon(runtime_image)
+        self._preflighted = True
       image = (
         runtime_image if self._repo is None else _ensure_project_image(runtime_image, self._repo)
       )
@@ -331,7 +383,7 @@ def _create_container(argv: list[str], store_tarball: bytes, name: str) -> str:
 
 def prepare_container(launch: Launch) -> str:
   """create the unstarted container described entirely by `launch`."""
-  log.info('creating container workspace %s', launch.name)
+  log.info('creating boxed workspace %s', launch.name)
   metadata = read_metadata(launch.name)
   repository = None if launch.repo is None else as_repository(launch.repo)
   launched_repo = None if repository is None else repository.identity
@@ -347,8 +399,8 @@ def prepare_container(launch: Launch) -> str:
     tree.mkdir(parents=True, exist_ok=True)
   else:
     if metadata.branch is None:
-      raise ValueError('attached container workspace has no recorded branch')
-    ensure_container_clone(repository, tree, metadata.branch, launch.base_ref)
+      raise ValueError('attached boxed workspace has no recorded branch')
+    ensure_clone(repository, tree, metadata.branch, launch.base_ref)
   log.verbose('hydrating the scoped credential store')
   source_store = credentials.Store(
     credentials.default_registry(), credentials.STORE_DIR, launch.credential_selection
@@ -389,8 +441,11 @@ def _docker_create_argv(
   tty: bool = True,
   extra_mounts: Optional[list[str]] = None,
 ) -> list[str]:
-  """the create half of create/copy/start, before the scoped-store injection window."""
+  """The create half of create/copy/start, before scoped-store injection."""
   repository = None if repo is None else as_repository(repo)
+  _assert_bind_source(tree)
+  for mount in extra_mounts or []:
+    _assert_bind_source(Path(mount.split(':', 1)[0]))
   argv = ['docker', 'create']
   if tty:
     argv.append('-it')

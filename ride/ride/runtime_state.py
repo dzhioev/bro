@@ -17,7 +17,7 @@ from bro.base import log
 from bro.base.git_url import is_git_url, normalize_git_url
 from bro.workspace.paths import find_project_root, runtime_base
 from ride.workspace.docker import running_mounts
-from ride.workspace.metadata import WorkspaceKind, WorkspaceMetadata
+from ride.workspace.metadata import Isolation, WorkspaceMetadata
 
 _PROJECT_KEY = re.compile(r'^.+-[0-9a-f]{8}$')
 _PROJECT_KEY_BYTES = 4
@@ -25,7 +25,6 @@ _UNSAFE_IN_KEY = re.compile(r'[^A-Za-z0-9._-]')
 _WORKSPACES = 'workspaces'
 _MIGRATION_LOCK = '.state-migration.lock'
 _PENDING_WORKTREES = '.state-migration-worktrees.json'
-_OLD_METADATA_FIELDS = {'kind', 'branch', 'throwaway'}
 
 
 class RuntimeStateMigrationError(RuntimeError):
@@ -151,8 +150,8 @@ def _root_checkout(root: Path, workspaces: tuple[Path, ...]) -> Optional[str]:
 
   Every workspace under one is attached to it: the key derives from the checkout
   path, and these roots predate both detached sessions and URL attachments. Only
-  a worktree workspace still names the path — its tree is a linked worktree of
-  the checkout, while a container workspace's is a clone whose `origin` the
+  a legacy unboxed workspace still names the path — its tree is a linked worktree
+  of the checkout, while a legacy boxed workspace's is a clone whose `origin` the
   entrypoint retargeted to the upstream URL. `_project_key` confirms a candidate
   is the checkout this root is keyed on."""
   for workspace in workspaces:
@@ -166,7 +165,7 @@ def _root_checkout(root: Path, workspaces: tuple[Path, ...]) -> Optional[str]:
 
 
 def _workspace_attachment(
-  path: Path, kind: WorkspaceKind, checkout: Optional[str]
+  path: Path, isolation: Isolation, checkout: Optional[str]
 ) -> tuple[Optional[str], bool]:
   """the attachment to record for a legacy workspace, and whether it fell back to
   the URL its clone's `origin` names (`_WorkspaceMigration.url_recovered`)."""
@@ -175,7 +174,7 @@ def _workspace_attachment(
     return None, False
   if checkout is not None:
     return checkout, False
-  if kind is WorkspaceKind.WORKTREE:
+  if isolation is Isolation.UNBOXED:
     attachment = _worktree_attachment(tree)
   else:
     attachment = _container_attachment(tree)
@@ -186,52 +185,111 @@ def _workspace_attachment(
   return attachment, attachment is not None and is_git_url(attachment)
 
 
+def _isolation_from_kind(value: Any, path: Path) -> Isolation:
+  translated = {'container': Isolation.BOXED, 'worktree': Isolation.UNBOXED}
+  try:
+    return translated[value]
+  except (KeyError, TypeError) as error:
+    raise RuntimeStateMigrationError(f'invalid legacy workspace kind: {path}') from error
+
+
+def _migrate_resume(
+  resume: dict[str, Any],
+  path: Path,
+  attachment: Optional[str],
+  isolation: Isolation,
+) -> dict[str, Any]:
+  if 'repo' in resume and resume['repo'] != attachment:
+    raise RuntimeStateMigrationError(
+      f'workspace attachment disagrees between {path.parent / "meta.json"} and {path}'
+    )
+  if 'host' in resume:
+    if not isinstance(resume['host'], bool):
+      raise RuntimeStateMigrationError(f'legacy resume host must be a bool: {path}')
+    resume_isolation = Isolation.UNBOXED if resume['host'] else Isolation.BOXED
+    if resume_isolation is not isolation:
+      raise RuntimeStateMigrationError(
+        f'workspace isolation disagrees between {path.parent / "meta.json"} and {path}'
+      )
+    migrated = {key: value for key, value in resume.items() if key != 'host'}
+    migrated.update(
+      repo=attachment,
+      isolation=isolation.value,
+      tree=None,
+      runtime_bundle=None,
+    )
+    return migrated
+  if (
+    resume.get('isolation') == isolation.value
+    and resume.get('tree') is None
+    and resume.get('runtime_bundle') is None
+  ):
+    return resume
+  raise RuntimeStateMigrationError(f'invalid workspace resume record during migration: {path}')
+
+
 def _workspace_migration(
-  source: Path, destination: Path, checkout: Optional[str]
+  source: Path,
+  destination: Path,
+  checkout: Optional[str],
+  *,
+  recover_attachment: bool = True,
 ) -> _WorkspaceMigration:
   metadata_path = source / 'meta.json'
-  metadata = _read_object(metadata_path)
-  if metadata.keys() == _OLD_METADATA_FIELDS:
+  workspace_path = source / 'workspace.json'
+  if workspace_path.is_file():
     try:
-      kind = WorkspaceKind(metadata['kind'])
-    except (KeyError, ValueError) as error:
-      raise RuntimeStateMigrationError(
-        f'invalid legacy workspace metadata: {metadata_path}'
-      ) from error
-    if not isinstance(metadata['branch'], str) or len(metadata['branch']) == 0:
+      current = WorkspaceMetadata.load(_read_object(workspace_path))
+    except (TypeError, ValueError) as error:
+      raise RuntimeStateMigrationError(f'invalid workspace record: {workspace_path}') from error
+    resume_path = source / 'resume.json'
+    resume = _read_object(resume_path) if resume_path.is_file() else None
+    if resume is not None:
+      resume = _migrate_resume(resume, resume_path, current.repo, current.isolation)
+    return _WorkspaceMigration(source, destination, current.dump(), resume, False)
+  metadata = _read_object(metadata_path)
+  allowed = {'kind', 'throwaway', 'repo', 'branch'}
+  if not {'kind', 'throwaway'} <= metadata.keys() or not metadata.keys() <= allowed:
+    raise RuntimeStateMigrationError(f'invalid legacy workspace metadata: {metadata_path}')
+  isolation = _isolation_from_kind(metadata['kind'], metadata_path)
+  if not isinstance(metadata['throwaway'], bool):
+    raise RuntimeStateMigrationError(f'legacy workspace throwaway must be a bool: {metadata_path}')
+  recorded_repo = metadata.get('repo')
+  recorded_branch = metadata.get('branch')
+  if not recover_attachment and (recorded_repo is None) != (recorded_branch is None):
+    raise RuntimeStateMigrationError(
+      f'legacy workspace repo and branch must both be present or absent: {metadata_path}'
+    )
+  if recorded_repo is not None:
+    if not isinstance(recorded_repo, str) or recorded_repo == '':
+      raise RuntimeStateMigrationError(f'invalid workspace repository: {metadata_path}')
+    attachment = recorded_repo
+    url_recovered = False
+  elif recover_attachment:
+    attachment, url_recovered = _workspace_attachment(source, isolation, checkout)
+  else:
+    attachment = None
+    url_recovered = False
+  if attachment is None:
+    branch = None
+  else:
+    branch = recorded_branch
+    if not isinstance(branch, str) or branch == '':
       raise RuntimeStateMigrationError(
         f'legacy workspace branch must be a non-empty string: {metadata_path}'
       )
-    if not isinstance(metadata['throwaway'], bool):
-      raise RuntimeStateMigrationError(
-        f'legacy workspace throwaway must be a bool: {metadata_path}'
-      )
-    attachment, url_recovered = _workspace_attachment(source, kind, checkout)
-    migrated = WorkspaceMetadata(
-      kind=kind,
-      repo=attachment,
-      branch=metadata['branch'] if attachment is not None else None,
-      throwaway=metadata['throwaway'],
-    ).dump()
-  else:
-    try:
-      current = WorkspaceMetadata.load(metadata)
-    except (TypeError, ValueError) as error:
-      raise RuntimeStateMigrationError(
-        f'invalid workspace metadata during migration: {metadata_path}'
-      ) from error
-    attachment = current.repo
-    url_recovered = False
-    migrated = current.dump()
+  migrated = WorkspaceMetadata(
+    isolation=isolation,
+    repo=attachment,
+    branch=branch,
+    throwaway=metadata['throwaway'],
+    tree=None,
+  ).dump()
 
   resume_path = source / 'resume.json'
   resume = _read_object(resume_path) if resume_path.is_file() else None
   if resume is not None:
-    if 'repo' in resume and resume['repo'] != attachment:
-      raise RuntimeStateMigrationError(
-        f'workspace attachment disagrees between {metadata_path} and {resume_path}'
-      )
-    resume = {**resume, 'repo': attachment}
+    resume = _migrate_resume(resume, resume_path, attachment, isolation)
   return _WorkspaceMigration(source, destination, migrated, resume, url_recovered)
 
 
@@ -272,9 +330,7 @@ def _running_mounts() -> set[str]:
   try:
     return running_mounts()
   except (OSError, RuntimeError) as error:
-    raise RuntimeStateMigrationError(
-      f'cannot verify legacy container workspaces: {error}'
-    ) from error
+    raise RuntimeStateMigrationError(f'cannot verify legacy boxed workspaces: {error}') from error
 
 
 def _path_exists(path: Path) -> bool:
@@ -383,7 +439,6 @@ def _build_plan(
   workspaces: list[_WorkspaceMigration] = []
   detached: list[str] = []
   urls_recovered: list[str] = []
-  container_trees: dict[str, Path] = {}
 
   for root, sources in workspace_sources.items():
     checkout = _root_checkout(root, sources)
@@ -401,17 +456,6 @@ def _build_plan(
         detached.append(source.name)
       if migration.url_recovered:
         urls_recovered.append(source.name)
-      tree = source / 'tree'
-      if migration.metadata['kind'] == WorkspaceKind.CONTAINER.value and tree.is_dir():
-        container_trees[source.name] = tree
-
-  if len(container_trees) > 0:
-    mounts = _running_mounts()
-    for name, tree in container_trees.items():
-      if str(tree) in mounts:
-        raise RuntimeStateMigrationError(
-          f'legacy workspace {name!r} is live (container running): {tree}'
-        )
 
   planned_files: dict[Path, Path] = {}
   for root in roots:
@@ -446,7 +490,7 @@ def _pending_worktrees_file(base: Path) -> Path:
 def _worktree_repairs(plan: _MigrationPlan) -> list[dict[str, str]]:
   repairs = []
   for workspace in plan.workspaces:
-    if workspace.metadata['kind'] != WorkspaceKind.WORKTREE.value:
+    if workspace.metadata['isolation'] != Isolation.UNBOXED.value:
       continue
     repo = workspace.metadata.get('repo')
     if not isinstance(repo, str) or not (workspace.source / 'tree').is_dir():
@@ -501,9 +545,10 @@ def _apply_plan(base: Path, plan: _MigrationPlan) -> None:
   if len(repairs) > 0:
     _atomic_json(_pending_worktrees_file(base), {'repairs': repairs})
   for workspace in plan.workspaces:
-    _atomic_json(workspace.source / 'meta.json', workspace.metadata)
     if workspace.resume is not None:
       _atomic_json(workspace.source / 'resume.json', workspace.resume)
+    _atomic_json(workspace.source / 'workspace.json', workspace.metadata)
+    (workspace.source / 'meta.json').unlink(missing_ok=True)
     workspace.destination.parent.mkdir(parents=True, exist_ok=True)
     workspace.source.rename(workspace.destination)
   _repair_pending_worktrees(base)
@@ -517,37 +562,91 @@ def _apply_plan(base: Path, plan: _MigrationPlan) -> None:
     root.rmdir()
 
 
-def migrate_legacy_runtime_state() -> None:
-  """move every historical project-key root into the flat global runtime root."""
+def _flat_workspace_sources(base: Path) -> tuple[Path, ...]:
+  store = base / _WORKSPACES
+  if not store.is_dir():
+    return ()
+  return tuple(
+    path for path in sorted(store.iterdir()) if path.is_dir() and (path / 'meta.json').is_file()
+  )
+
+
+def _preflight_workspace_liveness(migrations: tuple[_WorkspaceMigration, ...]) -> None:
+  boxed = {
+    workspace.source.name: workspace.source / 'tree'
+    for workspace in migrations
+    if workspace.metadata['isolation'] == Isolation.BOXED.value
+    and (workspace.source / 'tree').is_dir()
+  }
+  if len(boxed) == 0:
+    return
+  mounts = _running_mounts()
+  for name, tree in boxed.items():
+    if str(tree) in mounts:
+      raise RuntimeStateMigrationError(
+        f'legacy workspace {name!r} is live (container running): {tree}'
+      )
+
+
+def _flat_workspace_migrations(sources: tuple[Path, ...]) -> tuple[_WorkspaceMigration, ...]:
+  return tuple(
+    _workspace_migration(source, source, None, recover_attachment=False) for source in sources
+  )
+
+
+def _apply_flat_workspace_migrations(migrations: tuple[_WorkspaceMigration, ...]) -> None:
+  for workspace in migrations:
+    if workspace.resume is not None:
+      _atomic_json(workspace.source / 'resume.json', workspace.resume)
+    _atomic_json(workspace.source / 'workspace.json', workspace.metadata)
+    (workspace.source / 'meta.json').unlink()
+
+
+def migrate_runtime_state() -> None:
+  """Migrate historical stores and workspace records to the current strict shapes."""
   base = runtime_base()
   roots = _legacy_roots(base)
-  if len(roots) == 0 and not _pending_worktrees_file(base).is_file():
+  flat = _flat_workspace_sources(base)
+  pending = _pending_worktrees_file(base).is_file()
+  if len(roots) == 0 and len(flat) == 0 and not pending:
     return
+  plan: Optional[_MigrationPlan] = None
+  flat_migrations: tuple[_WorkspaceMigration, ...] = ()
   with _migration_lock(base):
     _repair_pending_worktrees(base)
     roots = _legacy_roots(base)
-    if len(roots) == 0:
-      return
     workspace_sources = _legacy_workspaces(roots)
-    with _hold_workspace_locks(tuple(chain.from_iterable(workspace_sources.values()))):
-      plan = _build_plan(base, roots, workspace_sources)
-      _apply_plan(base, plan)
-  log.info(
-    'migrated legacy runtime state from %d project root(s): %d workspace(s)',
-    len(plan.roots),
-    len(plan.workspaces),
-  )
-  for root in plan.roots:
-    log.info('migrated %s into %s', root, base)
-  if len(plan.detached_workspaces) > 0:
-    log.warning(
-      'migrated workspace(s) without a recoverable repository attachment as detached: %s',
-      ', '.join(plan.detached_workspaces),
+    flat_sources = _flat_workspace_sources(base)
+    sources = (*chain.from_iterable(workspace_sources.values()), *flat_sources)
+    with _hold_workspace_locks(sources):
+      if len(roots) > 0:
+        plan = _build_plan(base, roots, workspace_sources)
+      flat_migrations = _flat_workspace_migrations(flat_sources)
+      migrations = (*(() if plan is None else plan.workspaces), *flat_migrations)
+      _preflight_workspace_liveness(migrations)
+      if plan is not None:
+        _apply_plan(base, plan)
+      _apply_flat_workspace_migrations(flat_migrations)
+  migrated_records = len(flat_migrations)
+  if plan is not None:
+    log.info(
+      'migrated legacy runtime state from %d project root(s): %d workspace(s)',
+      len(plan.roots),
+      len(plan.workspaces),
     )
-  if len(plan.urls_recovered) > 0:
-    log.warning(
-      'migrated workspace(s) attached by upstream URL because their legacy root named no '
-      'recoverable checkout, so a host config entry keyed on that checkout no longer '
-      'reaches them: %s',
-      ', '.join(plan.urls_recovered),
-    )
+    for root in plan.roots:
+      log.info('migrated %s into %s', root, base)
+    if len(plan.detached_workspaces) > 0:
+      log.warning(
+        'migrated workspace(s) without a recoverable repository attachment as detached: %s',
+        ', '.join(plan.detached_workspaces),
+      )
+    if len(plan.urls_recovered) > 0:
+      log.warning(
+        'migrated workspace(s) attached by upstream URL because their legacy root named no '
+        'recoverable checkout, so a host config entry keyed on that checkout no longer '
+        'reaches them: %s',
+        ', '.join(plan.urls_recovered),
+      )
+  if migrated_records > 0:
+    log.info('migrated %d workspace record(s) to workspace.json', migrated_records)

@@ -135,12 +135,17 @@ def _prepare_clone(
   _detach_alternates(tree)
 
 
-def ensure_container_clone(
+def ensure_clone(
   repository: Repository, tree: Path, branch: str, base_ref: Optional[str] = None
 ) -> None:
-  """create a container workspace's host-side clone on its first launch."""
+  """Create an attached workspace's independent clone on its first launch."""
   git_directory = tree / '.git'
-  if git_directory.exists():
+  if git_directory.is_file():
+    raise RuntimeError(
+      f'workspace {tree.parent.name!r} uses a legacy git worktree; '
+      f'recreate it with `ride clean --force {tree.parent.name}`'
+    )
+  if git_directory.is_dir():
     if (git_directory / 'objects' / 'info' / 'alternates').is_file():
       raise RuntimeError(
         f'workspace {tree.parent.name!r} uses a legacy shared clone; '
@@ -148,9 +153,9 @@ def ensure_container_clone(
       )
     return
   if tree.exists() and any(tree.iterdir()):
-    raise RuntimeError(f'container workspace tree is not empty and has no git clone: {tree}')
+    raise RuntimeError(f'workspace tree is not empty and has no git clone: {tree}')
   tree.parent.mkdir(parents=True, exist_ok=True)
-  log.info('creating container clone %s', tree)
+  log.info('creating clone %s', tree)
   with tempfile.TemporaryDirectory(prefix=f'.{tree.name}-', dir=tree.parent) as directory:
     prepared = Path(directory) / 'clone'
     _prepare_clone(repository, prepared, branch, base_ref)

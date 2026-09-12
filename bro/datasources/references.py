@@ -15,7 +15,7 @@ environment = FileSource(
   'environment',
   summary=(
     'session-banner playbook: how to interpret the `bro::banner` session '
-    'facts (`kind` / `name` / workspace paths). Read at session start.'
+    'facts (`isolation` / `name` / workspace paths). Read at session start.'
   ),
   path=prompts.get_prompt_path('environment.md'),
 )
@@ -48,7 +48,7 @@ ride = FileSource(
   'ride',
   summary=(
     'the managed-workspace runtime: harness selection and seam, solo/along modes, lifecycle '
-    'verbs, workspace policy, credential scoping, container/host launch, and session state.'
+    'verbs, workspace policy, credential scoping, boxed/unboxed launch, and session state.'
   ),
   path=reference.DIRECTORY / 'ride.md',
 )
@@ -57,7 +57,7 @@ dive_in = FileSource(
   'dive-in',
   summary=(
     'the task → ready-to-go session wrapper: its modes, workspace naming, the '
-    'spell command it seeds as the first message, and `--host`.'
+    'spell command it seeds as the first message, and `--unboxed`.'
   ),
   path=reference.DIRECTORY / 'dive_in.md',
 )

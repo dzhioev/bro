@@ -46,14 +46,15 @@ If origin is unreachable it warns and leaves `--into` absent, so `ride along` fa
 An explicit `--into REF` wins and skips the fetch.
 
 An omitted hold is forwarded unset and takes `ride along`'s default:
-`attended` in a container,
-`guided` under `--host`.
-Host sessions have no container boundary, so the guided default retains permission prompts.
+`attended` when boxed,
+`guided` under `--unboxed`.
+Unboxed sessions have no container boundary, so the guided default retains permission prompts.
 
 ## Bro and launch flags
 
 `dive-in` resolves the project's default bro itself when `--bro` is omitted, because `ride along` requires the bro positional.
-It forwards `--host`,
+It forwards `--boxed`,
+`--unboxed`,
 `--hold`,
 `--grant`,
 `--revoke`,
@@ -72,5 +73,3 @@ A missing backend or invalid scope override fails before a workspace is launched
 - `RIDE_TASK_ID` is set to the canonical task id after a task is resolved.
   The PR workflow reads it when recording task attribution.
 - `BRO_SHELL_COMMAND` preserves the user-facing `dive-in` invocation for the visual banner rather than exposing the generated `ride along` command.
-
-The `RIDE_*` names remain intentionally unchanged until the dedicated runtime-state naming stage.

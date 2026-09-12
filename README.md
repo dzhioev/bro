@@ -121,10 +121,10 @@ Bare Claude, holding only the declared tools and none of Claude's own:
 dive-in --raw 'triage the queue'
 ```
 
-Another bro of the project, on a host worktree with permission prompts kept:
+Another bro of the project, in an unboxed clone with permission prompts kept:
 
 ```console
-dive-in --bro reviewer --host 'review PR #131'
+dive-in --bro reviewer --unboxed 'review PR #131'
 ```
 
 One reply on stdout, for a script:
@@ -400,7 +400,7 @@ rewind show <trail-id>
 ```
 
 Two boundaries are not drawn:
-the container's network is unrestricted, and `--host` runs as the host user, with scoped credentials as a convenience rather than a security boundary.
+the container's network is unrestricted, and `--unboxed` runs as the launching user, with scoped credentials as a convenience rather than a security boundary.
 
 ## Also in the box
 

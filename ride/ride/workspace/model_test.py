@@ -7,13 +7,13 @@ import pytest
 from bro.workspace.paths import workspaces_dir
 from ride.repository import Repository
 from ride.workspace import model
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import (
   AttachmentMismatch,
-  ContainerWorkspace,
-  KindMismatch,
+  BoxedWorkspace,
+  IsolationMismatch,
+  UnboxedWorkspace,
   Workspace,
-  WorktreeWorkspace,
 )
 
 
@@ -25,11 +25,11 @@ class _FakeProc:
 
 
 def _worktree(name: str, project) -> Workspace:
-  return Workspace.create(name, project, WorkspaceKind.WORKTREE)
+  return Workspace.create(name, project, Isolation.UNBOXED)
 
 
 def _container(name: str, project) -> Workspace:
-  return Workspace.create(name, project, WorkspaceKind.CONTAINER)
+  return Workspace.create(name, project, Isolation.BOXED)
 
 
 class TestCleanupImage:
@@ -132,7 +132,7 @@ class TestRemoveContainerDir:
       model._remove_container_dir(survivor, image='example/session:x')
 
 
-class TestContainerWorkspaceRemove:
+class TestBoxedWorkspaceRemove:
   def test_removes_the_whole_workspace_dir_with_the_cleanup_image(self, monkeypatch, tmp_path):
     monkeypatch.setattr(model, '_cleanup_image', lambda _repo: 'example/session:img')
     removed = {}
@@ -147,7 +147,7 @@ class TestContainerWorkspaceRemove:
     assert removed == {'path': workspace.path, 'image': 'example/session:img'}
 
 
-class TestWorktreeWorkspaceRemove:
+class TestUnboxedWorkspaceRemove:
   def test_removes_worktree_branch_and_the_workspace_dir(self, monkeypatch, tmp_path):
     calls = []
 
@@ -158,12 +158,13 @@ class TestWorktreeWorkspaceRemove:
     monkeypatch.setattr(model, 'git_run', fake_git_run)
     workspace = _worktree('ws', tmp_path)
     workspace.tree.mkdir(parents=True)
+    (workspace.tree / '.git').write_text('gitdir: /repo/.git/worktrees/ws')
     workspace.record_session_end(0)
     workspace.host_log.write_text('mid-session line\n')
     workspace.remove()
     assert calls == [
       ('worktree', 'remove', '--force', str(workspace.tree)),
-      ('branch', '-D', 'worktree-ws'),
+      ('branch', '-D', 'workspace-ws'),
     ]
     assert not workspace.path.exists()
 
@@ -177,13 +178,14 @@ class TestWorktreeWorkspaceRemove:
     monkeypatch.setattr(model, 'git_run', fake_git_run)
     workspace = _worktree('ws', tmp_path)
     workspace.remove()
-    assert calls == [('branch', '-D', 'worktree-ws')]
+    assert calls == []
     assert not workspace.path.exists()
 
   def test_a_failed_worktree_removal_raises(self, monkeypatch, tmp_path):
     monkeypatch.setattr(model, 'git_run', lambda *a, **k: _FakeProc(returncode=1, stderr='busy'))
     workspace = _worktree('ws', tmp_path)
     workspace.tree.mkdir(parents=True)
+    (workspace.tree / '.git').write_text('gitdir: /repo/.git/worktrees/ws')
     with pytest.raises(RuntimeError, match='git worktree remove failed: busy'):
       workspace.remove()
     assert workspace.path.exists()
@@ -284,13 +286,17 @@ class TestSessionLock:
 
 class TestDetachedWorkspace:
   def test_metadata_omits_repo_and_branch(self):
-    workspace = Workspace.create('detached', None, WorkspaceKind.CONTAINER)
-    assert workspace.metadata.dump() == {'kind': 'container', 'throwaway': False}
+    workspace = Workspace.create('detached', None, Isolation.BOXED)
+    assert workspace.metadata.dump() == {
+      'isolation': 'boxed',
+      'throwaway': False,
+      'tree': None,
+    }
     assert workspace.repo is None
     assert workspace.metadata.branch is None
 
   def test_clean_means_the_tree_is_empty(self):
-    workspace = Workspace.create('detached', None, WorkspaceKind.WORKTREE)
+    workspace = Workspace.create('detached', None, Isolation.UNBOXED)
     assert workspace.is_clean() == (True, [])
     workspace.tree.mkdir()
     (workspace.tree / 'result').write_text('x')
@@ -298,22 +304,20 @@ class TestDetachedWorkspace:
 
   def test_url_attachment_is_recorded_as_the_url(self, tmp_path):
     repository = Repository('https://example.test/owner/repo.git', tmp_path / 'mirror', 'abc')
-    workspace = Workspace.create('remote', repository, WorkspaceKind.CONTAINER)
+    workspace = Workspace.create('remote', repository, Isolation.BOXED)
     assert workspace.repo == repository.identity
     assert workspace.metadata.dump()['repo'] == repository.identity
-    assert (
-      Workspace.ensure('remote', repository, WorkspaceKind.CONTAINER).repo == repository.identity
-    )
+    assert Workspace.ensure('remote', repository, Isolation.BOXED).repo == repository.identity
 
   def test_existing_workspace_refuses_a_different_attachment(self, tmp_path):
-    Workspace.create('ws', tmp_path, WorkspaceKind.CONTAINER)
+    Workspace.create('ws', tmp_path, Isolation.BOXED)
     with pytest.raises(AttachmentMismatch, match='not no repository'):
-      Workspace.ensure('ws', None, WorkspaceKind.CONTAINER)
+      Workspace.ensure('ws', None, Isolation.BOXED)
 
   def test_missing_attachment_requires_force_to_remove(self, monkeypatch, tmp_path):
     repo = tmp_path / 'repo'
     repo.mkdir()
-    workspace = Workspace.create('ws', repo, WorkspaceKind.CONTAINER)
+    workspace = Workspace.create('ws', repo, Isolation.BOXED)
     repo.rmdir()
     monkeypatch.setattr(model, '_cleanup_image', lambda _repo: None)
     with pytest.raises(RuntimeError, match='no longer exists.*--force'):
@@ -326,39 +330,39 @@ class TestKindsAndEnumeration:
   def test_open_reads_the_recorded_kind(self, tmp_path):
     _worktree('h', tmp_path)
     _container('c', tmp_path)
-    assert isinstance(Workspace.open('h'), WorktreeWorkspace)
-    assert isinstance(Workspace.open('c'), ContainerWorkspace)
+    assert isinstance(Workspace.open('h'), UnboxedWorkspace)
+    assert isinstance(Workspace.open('c'), BoxedWorkspace)
 
   def test_open_raises_for_an_unknown_name(self, tmp_path):
     with pytest.raises(ValueError, match='^workspace not found: gone$'):
       Workspace.open('gone')
 
   def test_create_records_kind_branch_and_throwaway(self, tmp_path):
-    workspace = Workspace.create('ws', tmp_path, WorkspaceKind.CONTAINER, throwaway=True)
+    workspace = Workspace.create('ws', tmp_path, Isolation.BOXED, throwaway=True)
     reopened = Workspace.open('ws')
     assert reopened.metadata == workspace.metadata
-    assert reopened.metadata.kind is WorkspaceKind.CONTAINER
-    assert reopened.metadata.branch == 'worktree-ws'
+    assert reopened.metadata.isolation is Isolation.BOXED
+    assert reopened.metadata.branch == 'workspace-ws'
     assert reopened.metadata.throwaway is True
 
   def test_ensure_returns_the_existing_workspace_of_the_same_kind(self, tmp_path):
     created = _container('ws', tmp_path)
-    assert Workspace.ensure('ws', tmp_path, WorkspaceKind.CONTAINER).path == created.path
+    assert Workspace.ensure('ws', tmp_path, Isolation.BOXED).path == created.path
 
   def test_ensure_refuses_the_other_kind(self, tmp_path):
     _container('ws', tmp_path)
-    with pytest.raises(KindMismatch, match='is a container workspace, not worktree'):
-      Workspace.ensure('ws', tmp_path, WorkspaceKind.WORKTREE)
+    with pytest.raises(IsolationMismatch, match='is boxed, not unboxed'):
+      Workspace.ensure('ws', tmp_path, Isolation.UNBOXED)
 
   def test_all_enumerates_one_namespace(self, tmp_path):
     _worktree('h1', tmp_path)
     _worktree('h2', tmp_path)
     _container('c1', tmp_path)
-    listed = {workspace.name: workspace.kind for workspace in Workspace.all()}
+    listed = {workspace.name: workspace.isolation for workspace in Workspace.all()}
     assert listed == {
-      'h1': WorkspaceKind.WORKTREE,
-      'h2': WorkspaceKind.WORKTREE,
-      'c1': WorkspaceKind.CONTAINER,
+      'h1': Isolation.UNBOXED,
+      'h2': Isolation.UNBOXED,
+      'c1': Isolation.BOXED,
     }
 
   def test_all_ignores_a_directory_that_records_no_workspace(self, tmp_path):

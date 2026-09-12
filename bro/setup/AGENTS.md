@@ -26,11 +26,11 @@ Prerequisites are documented in `README.md`.
 
 ### Worktrees
 
-A host worktree's `setup.sh` may create its `.venv`.
-Container workspaces receive an optional project dependency bake at `/opt/project-venv`;
+An unboxed clone's `setup.sh` may create its `.venv`.
+Boxed workspaces receive an optional project dependency bake at `/opt/project-venv`;
 setup syncs it once the workspace manifests move away from the staged baseline.
 Neither environment enters the session PATH.
-Never run `uv sync` against the main checkout from inside another worktree:
+Never run `uv sync` against the main checkout from inside another clone:
 editable installs record absolute source paths.
 
 ## Files
@@ -90,7 +90,7 @@ The `credentials get <kind>` CLI applies the store's explicit selection, while `
 `credentials list --instance` enumerates convention material and typed annotations without resolving them.
 
 An entry's optional `install` hook declares how the secret reaches a tool that reads it from outside the resolver
-— declared state, never code to run, so the same hook serves a container and a host session running as the operator.
+— declared state, never code to run, so the same hook serves a boxed session and an unboxed session running as the launching user.
 Three sections:
 `files`, written under the session's install directory at 0600 and named relative to it;
 `env`, the variables the launch applies to the session environment;

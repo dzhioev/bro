@@ -15,7 +15,7 @@ from bro.kinds import ArtifactDenied
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir, workspace_tree
 from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts
 from ride.peer_facts import PeerFact, PeerFacts, PeerIdentity, UnattributablePeer
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
@@ -26,14 +26,14 @@ UNKNOWN_REF = f'sha256:{"a" * 64}'
 
 @pytest.fixture
 def workspace(tmp_path):
-  workspace = Workspace.ensure('ws', tmp_path, WorkspaceKind.CONTAINER)
+  workspace = Workspace.ensure('ws', tmp_path, Isolation.BOXED)
   workspace_tree('ws').mkdir(parents=True)
   return workspace
 
 
 @pytest.fixture
 def store(workspace):
-  return ArtifactStore(workspace, root_in_container=True)
+  return ArtifactStore(workspace, root_boxed=True)
 
 
 def _root_identity() -> PeerIdentity:
@@ -62,6 +62,8 @@ class TestMint:
     assert (ride.artifacts.view_dir('ws', 'ws') / ref).read_bytes() == b'payload'
     [entry] = _audit()
     assert entry['event'] == 'mint'
+    assert entry['ride'] == 'ws'
+    assert 'session' not in entry
     assert entry['peer'] == 'ws'
     assert entry['path'] == relative
     assert entry['ref'] == ref
@@ -202,7 +204,7 @@ class TestMaterialize:
     assert store.materialize(child, ref) == str(CONTAINER_ARTIFACTS_ROOT / ref)
 
   def test_the_host_mode_root_gets_a_private_copy(self, workspace):
-    store = ArtifactStore(workspace, root_in_container=False)
+    store = ArtifactStore(workspace, root_boxed=False)
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
     path = store.materialize(_root_identity(), ref)
     assert path == str(workspace_dir('ws') / 'artifacts' / ref)
@@ -228,7 +230,7 @@ class TestMaterialize:
 class TestLifecycle:
   def test_construction_wipes_a_leftover_store(self, workspace, store):
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
-    fresh = ArtifactStore(workspace, root_in_container=True)
+    fresh = ArtifactStore(workspace, root_boxed=True)
     assert not (ride.artifacts.store_dir('ws') / 'objects' / ref).exists()
     with pytest.raises(ArtifactDenied):
       fresh.resolve(ref, 'ws')

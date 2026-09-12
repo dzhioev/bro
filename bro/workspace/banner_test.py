@@ -1,7 +1,6 @@
 import pytest
 
 import bro.workspace.banner as workspace_banner
-import bro.workspace.paths as workspace_paths
 from bro import registry, summon
 from bro.monitor import trail_pointer
 from bro.workspace.banner import SessionFacts
@@ -34,6 +33,7 @@ class TestSessionFacts:
     # (trail pointer, recording health) see a session that publishes nothing
     for v in (
       'RIDE_WORKSPACE',
+      'RIDE_ISOLATION',
       'RIDE_BRO',
       'RIDE_COMMAND',
       'BRO_SHELL_COMMAND',
@@ -43,17 +43,16 @@ class TestSessionFacts:
     ):
       monkeypatch.delenv(v, raising=False)
     monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
-    monkeypatch.setattr(workspace_paths, 'in_container', lambda: False)
 
   def test_container_session(self, monkeypatch):
-    monkeypatch.setattr(workspace_paths, 'in_container', lambda: True)
+    monkeypatch.setenv('RIDE_ISOLATION', 'boxed')
     monkeypatch.setenv('RIDE_WORKSPACE', 'my-task')
     monkeypatch.setenv('RIDE_BRO', 'dev')
     monkeypatch.setenv('RIDE_HOST_WORKSPACE', '/var/ride/0123456789abcdef/workspaces/my-task/tree')
     monkeypatch.setenv('BRO_SHELL_COMMAND', 'dive-in -t abc')
     monkeypatch.setenv('RIDE_COMMAND', 'ride along --hold attended my-task')
     facts = SessionFacts.collect()
-    assert facts.in_container is True
+    assert facts.isolation == 'boxed'
     assert facts.name == 'my-task'
     assert facts.bro == 'dev'
     assert facts.host_workspace == '/var/ride/0123456789abcdef/workspaces/my-task/tree'
@@ -64,14 +63,14 @@ class TestSessionFacts:
     assert facts.prompt is None
 
   def test_unmanaged_container_has_no_workspace(self, monkeypatch):
-    monkeypatch.setattr(workspace_paths, 'in_container', lambda: True)
+    monkeypatch.setenv('RIDE_ISOLATION', 'boxed')
     facts = SessionFacts.collect()
-    assert facts.in_container is True
+    assert facts.isolation == 'boxed'
     assert facts.name is None
     assert facts.container_workspace is None
     assert facts.exec_command is None
     assert 'workspace_container_path' not in facts.render_llm()
-    assert '(unmanaged container)' in facts.render_visual()
+    assert '(boxed session without a workspace)' in facts.render_visual()
 
   def test_extracts_prompt_from_dive_in_new(self, monkeypatch):
     monkeypatch.setenv('BRO_SHELL_COMMAND', 'dive-in --hold attended --new I want X')
@@ -82,11 +81,12 @@ class TestSessionFacts:
   def test_host_worktree_reads_paths_from_the_session_environment(self, monkeypatch, tmp_path):
     worktree = tmp_path / 'tree'
     monkeypatch.setenv('RIDE_WORKSPACE', 'feature')
+    monkeypatch.setenv('RIDE_ISOLATION', 'unboxed')
     monkeypatch.setenv('RIDE_HOST_WORKSPACE', str(worktree))
     monkeypatch.setenv('RIDE_REPO', str(tmp_path / 'project'))
     monkeypatch.setenv('RIDE_COMMAND', 'ride along feature')
     facts = SessionFacts.collect()
-    assert facts.in_container is False
+    assert facts.isolation == 'unboxed'
     assert facts.name == 'feature'
     assert facts.repo == str(tmp_path / 'project')
     assert facts.bro is None
@@ -108,7 +108,7 @@ class TestSessionFacts:
 
   def test_no_session_context(self):
     facts = SessionFacts.collect()
-    assert facts.in_container is False
+    assert facts.isolation is None
     assert facts.name is None
     assert facts.bro is None
     assert facts.host_workspace is None
@@ -154,7 +154,7 @@ class TestSessionFacts:
 
 def _facts(**overrides) -> SessionFacts:
   base = {
-    'in_container': True,
+    'isolation': 'boxed',
     'name': 'task',
     'bro': None,
     'host_workspace': '/h/ws',
@@ -181,7 +181,7 @@ class TestRenderBanner:
     ).render_llm()
     assert '\033[' not in out  # no ANSI
     assert '██' not in out  # no logo
-    assert 'kind: container' in out
+    assert 'isolation: boxed' in out
     assert 'name: task' in out
     assert 'bro: dev' in out
     assert 'workspace_host_path: /h/ws' in out
@@ -204,14 +204,15 @@ class TestRenderBanner:
 
   def test_llm_omits_none_fields(self):
     out = _facts(
-      in_container=False,
+      isolation='unboxed',
       name=None,
       host_workspace=None,
       container_workspace=None,
       exec_command=None,
     ).render_llm()
     assert (
-      out == 'kind: worktree\nrepo: none (detached)\nsummoned: no\ntrail_id: none (not published)'
+      out
+      == 'isolation: unboxed\nrepo: none (detached)\nsummoned: no\ntrail_id: none (not published)'
     )
 
   def test_llm_lists_the_summon_targets(self):
@@ -284,7 +285,7 @@ class TestRenderBanner:
 
   def test_visual_session_line_on_a_worktree(self):
     out = _facts(
-      in_container=False,
+      isolation='unboxed',
       name='feature',
       host_workspace='/var/ride/fedcba9876543210/workspaces/feature/tree',
       container_workspace=None,
@@ -300,7 +301,7 @@ class TestRenderBanner:
 
   def test_visual_paints_host_path_red_for_worktree(self):
     out = _facts(
-      in_container=False,
+      isolation='unboxed',
       name='feature',
       host_workspace='/var/ride/fedcba9876543210/workspaces/feature/tree',
       container_workspace=None,
@@ -314,7 +315,7 @@ class TestRenderBanner:
 
   def test_visual_handles_missing_host_path_in_worktree(self):
     out = _facts(
-      in_container=False,
+      isolation='unboxed',
       name=None,
       host_workspace=None,
       container_workspace=None,
@@ -349,7 +350,7 @@ class TestRenderBanner:
     out = _facts(recording_problem='FAILING — see session-recorder.log').render_llm()
     # first line so it survives Claude's collapsed tool-output preview
     assert out.splitlines()[0] == 'session_recording: FAILING — see session-recorder.log'
-    assert 'kind: container' in out
+    assert 'isolation: boxed' in out
 
   def test_llm_omits_the_recording_problem_when_healthy(self):
     out = _facts().render_llm()

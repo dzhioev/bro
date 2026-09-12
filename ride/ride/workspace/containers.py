@@ -8,7 +8,7 @@ from ride.workspace.docker import (
   find_container_id,
   suspend_until_continued,
 )
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
 
@@ -19,9 +19,11 @@ def exec_in_workspace(name: str, command: list[str]) -> int:
   except ValueError as e:
     log.error('%s', e)
     return 1
-  if workspace.kind is not WorkspaceKind.CONTAINER:
+  if workspace.isolation is not Isolation.BOXED:
     log.error(
-      'workspace %r is a %s workspace; there is no container to exec into', name, workspace.kind
+      'workspace %r is a %s workspace; there is no container to exec into',
+      name,
+      workspace.isolation,
     )
     return 1
   container_id = find_container_id(workspace.tree)

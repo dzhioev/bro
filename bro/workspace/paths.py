@@ -10,6 +10,7 @@ CONTAINER_TRAILS_ROOT = Path('/var/ride/trails')
 CONTAINER_ARTIFACTS_ROOT = Path('/var/ride/artifacts')
 CONTAINER_SESSION_DIR = Path('/var/ride/session')
 _DATA_HOME_ENV = 'XDG_DATA_HOME'
+ISOLATION_ENV = 'RIDE_ISOLATION'
 # a name is one path component, and also becomes a git branch and a docker
 # container name; this is the narrowest of the three
 _WORKSPACE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]*')

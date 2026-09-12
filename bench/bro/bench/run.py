@@ -6,7 +6,7 @@ under test, rebuild the bundle the trials run the framework from, block until
 the job ends, and turn its run into a short report, path, and artifact ref.
 
 Nothing is cleaned up behind it: the narrowed config stays in the workspace and
-the run stays in the session's artifact store, so what the trials wrote is there
+the run stays in the ride's artifact store, so what the trials wrote is there
 to read afterwards.
 """
 
@@ -179,9 +179,9 @@ def _run(
 def main(argv: list[str]) -> Optional[int]:
   parser = base_args.Parser(
     prog=__cli_name__,
-    description='score a set of benchmark tasks from a managed session: the host '
+    description='score a set of benchmark tasks from a managed ride: the host '
     'runs harbor with its own docker access, and the finished run stays in the '
-    'session artifact store to be read afterwards',
+    "ride's artifact store to be read afterwards",
   )
   parser.add_argument(
     'task', nargs='*', help='task-name globs to run (default: every task the dataset holds)'

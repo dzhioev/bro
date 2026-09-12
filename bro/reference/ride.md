@@ -1,7 +1,8 @@
 # ride
 
 `ride` is the managed-workspace runtime.
-It combines a harness implementation with a bro personality, prepares either an isolated container or a host worktree, hydrates the launch scope, supervises the root session and its summons, and records enough state to resume the workspace later.
+It combines a harness implementation with a bro personality and prepares a boxed or unboxed workspace around an independent clone.
+It hydrates the launch scope, supervises the root session and its summons, and records enough state to resume the workspace later.
 
 The runtime is published by the `bro-ride` distribution and depends on the `bro` framework.
 The framework never imports `ride`:
@@ -24,16 +25,16 @@ Both retain the session record needed by `ride resume` when the workspace is kep
 
 A launch without `-w / --workspace` receives a fresh name and removes that workspace after a clean exit.
 `--keep` retains it, and a failed run always keeps it for inspection.
-`-w NAME` creates or reuses that exact workspace after checking its kind and always retains it.
+`-w NAME` creates or reuses that exact workspace after checking its isolation and always retains it.
 
 ### `ride along <bro> [prompt]`
 
 Starts an interactive session.
 The default harness is Claude Code, the default hold is `attended`, and the workspace is kept after exit.
-`--host` runs the workspace on the host and changes the omitted hold to `guided`, because a non-guided host session skips permission prompts without the container boundary.
+`--unboxed` runs the workspace tree directly on the launcher's filesystem and changes the omitted hold to `guided`, because a non-guided unboxed session skips permission prompts without a container boundary.
 
 A launch without `-w / --workspace` receives a fresh name.
-`-w NAME` creates or reuses that exact workspace after checking its kind;
+`-w NAME` creates or reuses that exact workspace after checking its isolation;
 a pinned workspace cannot be combined with `--drop`.
 For an automatically named workspace, `--drop` removes it only after a clean exit and keeps a failed session for inspection.
 
@@ -54,7 +55,7 @@ ride solo dev 'inspect the launch path' -- --debug mcp
 ride along dev 'continue the inspection' -- --debug mcp
 ```
 
-Shared launch flags are `--repo`, `--host`, `--hold`, `--grant`, `--revoke`, `--into`, `--no-trails`, and the LLM selection set (`--provider`, `--model`, `--effort`, `--fast`, `--llm`).
+Shared launch flags are `--repo`, `--boxed`, `--unboxed`, `--hold`, `--grant`, `--revoke`, `--into`, `--no-trails`, and the LLM selection set (`--provider`, `--model`, `--effort`, `--fast`, `--llm`).
 `--grant` and `--revoke` use the framework's unified grammar:
 credential names shape the scoped store and `@bro` names shape the summon allow-list.
 `--no-trails` disables trail recording for the session, whichever harness runs:
@@ -63,11 +64,13 @@ the launch drops the `trails` scope baseline, sets `TRAILS_DISABLED` for the run
 ### Lifecycle verbs
 
 - `ride resume <workspace>` relaunches the recorded session recipe, with optional `--grant` / `--revoke` adjustments.
-  Resuming a solo run opens an interactive conversation in the same workspace and re-resolves the hold to `along`'s default (`attended`, or `guided` with `--host`).
+  Resuming a solo run opens an interactive conversation in the same workspace and re-resolves the hold to `along`'s default (`attended`, or `guided` with `--unboxed`).
 - `ride list` lists every workspace, its attachment, and its activity state.
+  Live badges are `[o]` boxed and `.o.` unboxed;
+  idle badges are `[-]` boxed and `.-.` unboxed.
 - `ride clean` removes inactive clean workspaces, managed URL mirrors no workspace references, and unlocked runtime bundles;
   `--force` permits dirty workspaces and removal when an attached repository no longer exists, while `--dry-run` reports only.
-- `ride exec <workspace> [command ...]` enters a running container workspace.
+- `ride exec <workspace> [command ...]` enters a running boxed workspace.
 - `ride check-clean <workspace>` reports whether removal is safe.
 - `ride scope [--repo PATH|URL] [--bro BRO] [--harness HARNESS] [--raw]` prints the prospective credential tiers and selected credential instances.
   Detached scope requires `--bro`;
@@ -88,15 +91,15 @@ A recipe whose provider the harness cannot run errors with `--harness` as the re
 
 `ride.harness.Harness` is the runtime boundary.
 The neutral layer (`ride/ride/session.py`) owns both launch bodies
-— the container `Launch` composition and the provisioned host-worktree run
+— the container `Launch` composition and the provisioned unboxed run
 — and a harness implementation supplies what differs:
 
 - its flag registration (`add_flags` reports the dests it registered, so the neutral layer refuses a non-selected harness's flag generically) and the validation and packing of those flags into its serialized options (`parse_options`);
 - the `ScopeRecipe` its packed options select, the auth preflight, and LLM resolution;
-- the `do-ride` command run inside the prepared workspace, consumed by both modes;
+- the `do-ride` command run inside the prepared workspace, consumed by both isolations;
 - the harness-owned flags a reconstructed argv restates;
 - session existence with its resume-refusal wording, the subject read, and the session trail-pointer path;
-- the container extras (env, mounts) and the host runner-env preparation.
+- the boxed extras (env, mounts) and the unboxed runner-env preparation.
 
 `scope_recipe` takes the packed options rather than a full session, so surfaces with no session
 — `ride scope`, dive-in's task prefetch
@@ -110,19 +113,19 @@ raw is a Claude mode, not a harness value.
 
 Claude full mode retains Claude Code's built-ins, skills, and base prompt while adding the selected bro's persona, spells, filtered MCP namespaces, and blocked-tool declarations.
 `--raw` runs `claude --bare` under the bro's own composed prompt and MCP surface.
-Raw remains container-only and requires the `anthropic` secret;
+Raw remains boxed-only and requires the `anthropic` secret;
 full mode requires the `claude_code` setup token.
 
 The outer runs the separate `do-ride solo|along` session executable.
-Host mode takes it from the frozen host snapshot;
-container mode takes it from the same bundle materialized at `/var/ride/runtime`.
+Unboxed isolation takes it from the frozen host snapshot;
+boxed isolation takes it from the same bundle materialized at `/var/ride/runtime`.
 
 ## Bro harness
 
 The bro harness drives the selected bro's native LLM loop:
 its runner spawns `bro run|chat …` in the workspace and waits, forwarding SIGTERM to it.
-Container sessions run the same `do-ride` command summoned children get;
-host sessions provision the workspace worktree and run the runtime snapshot's `do-ride` under the same broker-root supervision and scoped credential store.
+Boxed sessions run the same `do-ride` command summoned children get;
+unboxed sessions provision the workspace clone and run the runtime snapshot's `do-ride` under the same broker-root supervision and scoped credential store.
 
 The bro harness owns no flags of its own;
 it rejects Claude's `--raw`.
@@ -140,11 +143,14 @@ an omitted trail id selects the bro's newest recorded call.
 `ask` and `call` are aliases of `ride solo` and `ride along`, with no implied flags;
 `summon` is the self-contained peer client.
 
-## In-container launches
+## Boxed launches and Docker daemons
 
-Until process-host mode is available, `ride` refuses to start from inside a container.
-Detection is the `bro/workspace/paths.py:in_container()` probe rather than an environment marker, so an unmanaged container and a session predating the runtime's own marker are refused alike.
-Use `summon` for an isolated sibling child, or `bro run|chat` for a process using the current container and ambient credential scope.
+`ride` can launch from a physical host or from inside another container.
+Before the first boxed root or child in a ride, it starts a throwaway runtime-image container and reads a nonce through a bind of the runtime root.
+A daemon that cannot see the launcher's filesystem fails this preflight with its endpoint and the runtime-root path.
+The nonce covers every boxed bind because each bind source must resolve under the runtime root;
+a launch refuses an outside source rather than sending an unverifiable path to the daemon.
+An unboxed launch needs no Docker daemon and works wherever `ride` itself runs.
 
 ## Runtime state
 
@@ -155,15 +161,20 @@ A launch creates it with mode 0700 on first use.
 Its top-level stores are `workspaces/`, `runtime/`, `repos/`, `trails/`, `summon/`, and `broker/`;
 workspace metadata records which repository, if any, each workspace is attached to.
 
-The first outer `ride`, `ask`, or `call` command after upgrading migrates the former checkout-keyed `<runtime-root>/<project-key>/` roots into these global stores and reports the roots and workspace count it moved.
-Migration takes a global lock and preflights every source before moving anything:
-a workspace or store-key collision names both paths and refuses the migration, as does a held workspace lock, a running container, a duplicate trail id, or a summon request id found in more than one audit file.
+The first outer `ride`, `ask`, or `call` command after upgrading migrates both historical checkout-keyed roots and every existing workspace record.
+Migration takes one global lock and preflights every workspace for a held lock or a running box before changing records.
+Each `meta.json` becomes `workspace.json`, translating `container` to `boxed` and `worktree` to `unboxed`.
+Each `resume.json` translates `host` to `isolation` and receives empty `tree` and `runtime_bundle` fields.
+The runtime reads only the new strict shapes after this one-time conversion.
+
+The older checkout-root migration still preflights every source before moving anything:
+a workspace or store-key collision names both paths and refuses the migration, as does a duplicate trail id or a summon request id found in more than one audit file.
 An interrupted migration is completed by the next command;
 emptied project-key roots are removed.
 
 A legacy root is keyed on one checkout and every workspace under it is attached to that checkout, so the migration recovers the path once per root
-— from a worktree workspace's git metadata, confirmed against the root's own key
-— and records it for the root's container workspaces too, whose clone `origin` names the upstream URL rather than the checkout they were launched against.
+— from an unboxed workspace's git metadata, confirmed against the root's own key
+— and records it for the root's boxed workspaces too, whose clone `origin` names the upstream URL rather than the checkout they were launched against.
 A root naming no recoverable checkout falls back to the URL its container clones carry, and the migration reports which workspaces that moved off a path-keyed host-config entry.
 Migrated worktrees also have their registration repaired at the new path.
 A migrated container clone that still uses alternates is not rewritten;
@@ -189,12 +200,12 @@ A distribution that cannot be pinned reproducibly
 The root holds the bundle's shared flock until its session and summoned children exit;
 `ride clean` removes only bundles whose lock is available.
 
-Host mode materializes the bundle once as `host/venv`, checks its dependency closure, and builds `host/bin` as symlinks to console scripts declared through `bro.session_commands`.
-Container mode uses the same materializer inside the runtime image to populate `ride-runtime-<hash>`, mounted read-only at `/var/ride/runtime`;
+Unboxed isolation materializes the bundle once as `host/venv`, checks its dependency closure, and builds `host/bin` as symlinks to console scripts declared through `bro.session_commands`.
+Boxed isolation uses the same materializer inside the runtime image to populate `ride-runtime-<hash>`, mounted read-only at `/var/ride/runtime`;
 the volume holds `venv/` and the matching `bin/` shim farm.
 Materialization is where every pin is fetched, so a version-control or remote-archive pin has to be reachable from the materializing environment
-— in container mode that is the runtime image's own git and network, without the launcher's credentials.
-The session PATH starts with the runtime shims and then the system paths in both modes, with the launcher's active venv removed on the host.
+— in boxed isolation that is the runtime image's own git and network, without the launcher's credentials.
+The session PATH starts with the runtime shims and then the system paths in both isolations, with the launcher's active venv removed on the launcher.
 Repository commands are explicit through `uv run` or `.venv/bin/`.
 The shims serve the session;
 the machinery a session spawns for itself
@@ -206,7 +217,7 @@ the machinery a session spawns for itself
 A URL attachment is normalized and mapped to `<runtime-root>/repos/<slug>-<digest>/`.
 The directory is a bare repository with `origin` set to the attachment URL and `gc.auto=0`.
 Every launch naming the URL takes the mirror's flock, fetches without pruning, refreshes `origin/HEAD`, and resolves that commit as the default base.
-A container workspace copies or hardlinks the mirror's objects into its own independent clone on first launch.
+Every attached workspace copies or hardlinks the mirror's objects into its own independent clone on first launch.
 `ride clean` removes the whole mirror only after no workspace metadata references its URL.
 The launcher's ambient git authentication performs mirror fetches and first-launch submodule initialization, while the scoped in-session credential hook handles later operations from the workspace clone.
 
@@ -219,8 +230,8 @@ A directory under the store that records no workspace is ignored by enumeration,
 
 ```
 <runtime-root>/workspaces/<name>/
-  meta.json           what the workspace is (below)
-  tree/               empty when detached; otherwise a worktree or container clone
+  workspace.json      what the workspace is (below)
+  tree/                empty when detached; otherwise an independent clone
   lock                the session lock ("One session per workspace")
   exit                how the last session ended (above)
   resume.json         the spec `ride resume` relaunches ("Lifecycle verbs")
@@ -229,45 +240,47 @@ A directory under the store that records no workspace is ignored by enumeration,
     current-trail.json            the trail the session records into ("Summoning another bro")
     session-recorder-health.json  the recording health signal ("Session recording")
     claude/                       claude harness artifacts (recorder/projector logs and live statusLine projection)
-  credentials/        the host-mode scoped credential store ("Scoped credential hydration")
-  environment/        the files the host-mode session's install hooks write ("Scoped credential hydration")
-  claude/             the claude harness's state dir ("Host claude-state isolation")
+  credentials/        the unboxed scoped credential store ("Scoped credential hydration")
+  environment/        the files the unboxed session's install hooks write ("Scoped credential hydration")
+  claude/             the claude harness's state dir ("Unboxed Claude-state isolation")
 ```
 
 The tree sits in its own subdirectory rather than being the workspace directory itself:
 a container bind-mounts it as `/workspace`, and the records must stay outside that mount.
 Whichever harness ran it, everything a session leaves behind is one of these records, so removing the workspace directory is what reclaims it.
 Of the last three, `session/` is the unconditional one
-— every session of either harness records into it, and it is the only record the session reaches from *inside* itself, host mode by absolute path and container mode through a bind at `/var/ride/session`, either way named by `RIDE_SESSION_DIR`.
+— every session of either harness records into it.
+It is the only record the session reaches from *inside* itself:
+unboxed isolation uses its absolute path, and boxed isolation uses a bind at `/var/ride/session`, either way named by `RIDE_SESSION_DIR`.
 That reach is what it exists for:
 the trail pointer and the recording health signal are published by the session and read back host-side, so both ends need one path.
 Signals every harness shares sit at its root, a harness's own artifacts under `<harness>/`
 — where the claude recorder's stderr goes.
-`credentials/` and `environment/` are written by a host launch of either harness, a container's equivalents living in its own layer instead;
-and `claude/` belongs to the claude harness in both modes.
+`credentials/` and `environment/` are written by an unboxed launch of either harness, while a box keeps their equivalents in its own layer;
+and `claude/` belongs to the claude harness in both isolations.
 The one deliberate exception to all of this is the summon audit, under `<runtime-root>/summon/`, because it must survive a workspace drop.
 
-`meta.json` is written once at creation and read by every later launch, so nothing downstream re-derives it:
+`workspace.json` is written once at creation and read by every later launch, so nothing downstream re-derives it:
 
 ```json
-{"kind": "container", "repo": "/home/me/project", "branch": "worktree-my-task", "throwaway": false}
+{"isolation": "boxed", "repo": "/home/me/project", "branch": "workspace-my-task", "throwaway": false, "tree": null}
 ```
 
-- **`kind`** — where sessions run:
-  `container` (the default) or `worktree` (`--host`).
-  Fixed at creation;
-  a launch naming an existing workspace must request the same kind.
+- **`isolation`** — `boxed` (the default) or `unboxed` (`--unboxed`).
+  It is fixed at creation;
+  a launch naming an existing workspace must request the same isolation.
 - **`repo`** — the resolved checkout path or normalized git URL for an attached workspace.
-  Absent when detached;
+  It is absent when detached;
   reusing a name with a different attachment is refused.
-- **`branch`** — the attached tree's branch, present if and only if `repo` is present.
-  Host mode branches the worktree on it;
-  container mode checks it out when preparing the clone on the host.
-- **`throwaway`** — the workspace is disposable:
-  its supervisor removes it once its session exits cleanly.
-  Set for the workspaces summoned children run in.
+- **`branch`** — the attached clone's branch, present if and only if `repo` is present.
+  A new workspace uses `workspace-<name>`;
+  migrated records retain their existing branch.
+- **`throwaway`** — the workspace is disposable.
+  Its supervisor removes it once its session exits cleanly.
+  It is set for the workspaces summoned children run in.
+- **`tree`** — reserved for an externally supplied tree and currently `null`.
 
-A detached record is `{"kind": "container", "throwaway": false}`.
+A detached record is `{"isolation": "boxed", "throwaway": false, "tree": null}`.
 Its tree is clean exactly when it is empty;
 an attached workspace retains the recorded-session-end clean rule.
 Removing an attached workspace whose recorded checkout or managed mirror no longer exists requires `ride clean --force`.
@@ -275,7 +288,7 @@ Removing an attached workspace whose recorded checkout or managed mirror no long
 ## The launch stack
 
 Every managed session launches through the same stack, whichever harness drives it.
-`--host` changes only the outer machinery;
+`--unboxed` changes only the outer machinery;
 `--raw` changes only the claude argv flavor (and the scope recipe the outer computes through the seam):
 
 - **the neutral outer** (`ride/ride/session.py:start_session`)
@@ -284,8 +297,8 @@ Every managed session launches through the same stack, whichever harness drives 
   It touches the selected harness only through the seam (see "Harness seam").
   See "The outer layer".
 - **the session executable** (`do-ride solo|along` → `ride/ride/do_ride.py`), spawned by the outer in the prepared workspace.
-  Host mode invokes the frozen snapshot's absolute `do-ride`;
-  container mode resolves the same pinned command from `/var/ride/runtime/bin`.
+  Unboxed isolation invokes the frozen snapshot's absolute `do-ride`;
+  boxed isolation resolves the same pinned command from `/var/ride/runtime/bin`.
   One code path for every flag combination and both harnesses carries the session environment and persona provisioning, then hands off to the harness's runner
   — claude's `ride/ride/claude/runner.py`, or the bro harness's spawn of the native LLM process.
   See "The session executable".
@@ -295,7 +308,7 @@ Every managed session launches through the same stack, whichever harness drives 
   See "The claude argv".
 
 A neutral session-shaping flag lands once in the outer and reaches both execution modes and every harness;
-a claude-shaping one lands once in the runner or the argv builder and applies to both modes and both flavors by construction.
+a claude-shaping one lands once in the runner or the argv builder and applies to both isolations and both flavors by construction.
 
 ## Per-project defaults (`[tool.bro]`)
 
@@ -345,7 +358,7 @@ A missing pyproject, table, or default
 Which credential instance backs a kind stays out of the repo:
 the attachment — checkout path or normalized URL
 — keys the host's project selection in `~/.bro.json` (`bro/setup/AGENTS.md`, "Host config"), and `--grant`/`--revoke` overrides it per launch.
-A repository may provide `setup.sh` to provision its worktree environment;
+A repository may provide `setup.sh` to provision its workspace clone;
 the launch logs and skips that step when it is absent.
 The project environment need not install `bro-ride`, because session machinery comes from the runtime bundle.
 Personas remain registered through the `bro` entry-point group (`AGENTS.md`, "Register the new bro")
@@ -355,11 +368,11 @@ it refuses a cwd outside git, resolves that checkout, and passes it to `ride alo
 
 ## The outer layer
 
-Container mode is the default;
-`--host` selects a same-machine git worktree instead.
-Whatever the mode and harness, the outer:
+Boxed isolation is the default, and `--boxed` spells it explicitly.
+`--unboxed` runs the same clone directly on the launcher's filesystem.
+Whatever the isolation and harness, the outer:
 
-- validates policy once — a harness flag's constraints are an argv check in its `parse_options` (claude's `--raw` × `--host` gate lives there), and the harness's auth precondition (`preflight_auth`:
+- validates policy once — a harness flag's constraints are an argv check in its `parse_options` (claude's `--raw` × `--unboxed` gate lives there), and the harness's auth precondition (`preflight_auth`:
   the `anthropic` key under `--raw`, the `claude_code` setup-token for a full mode;
   the bro harness preflights nothing — its LLM key rides the scoped store) is a launch preflight, so `ride resume` is gated like the launch that created the session.
   Neither runs in `do-ride`, whose parser has no outer machinery flags and therefore no placement policy to revalidate;
@@ -367,14 +380,14 @@ Whatever the mode and harness, the outer:
 - runs every precondition that can reject the launch
   — the harness's auth preflight and the credential/summon scope preflight
   — before the workspace is recorded, so a refused launch creates no workspace (a URL resolution may already have refreshed its reusable mirror);
-- resolves the workspace, creating it with the selected kind and attachment when absent and refusing either mismatch (see "Workspaces");
-- takes the workspace's session lock, before either mode prepares anything and for the session's whole duration (see "One session per workspace"), and records the spec `ride resume` would relaunch with;
+- resolves the workspace, creating it with the selected isolation and attachment when absent and refusing either mismatch (see "Workspaces");
+- takes the workspace's session lock, before either isolation prepares anything and for the session's whole duration (see "One session per workspace"), and records the spec `ride resume` would relaunch with;
 - on a resume, fails fast when the workspace has no session to continue
   — the harness's cheap existence check with its own refusal wording (`session_exists` / `missing_session_error`:
   a claude transcript under the workspace's state dir, a bro trail pointer), run before the tree is materialized for a mistyped name (the claude runner resolves the actual session id later, from its cwd);
-- prepares the workspace (the two mode sections below), then spawns `do-ride` with only the session shape;
-  both modes run the frozen bundle, through the host snapshot or container volume;
-- owns the post-exit UX, identical in both modes
+- prepares the workspace (the two isolation sections below), then spawns `do-ride` with only the session shape;
+  both isolations run the frozen bundle, through the host materialization or container volume;
+- owns the post-exit UX, identical in both isolations
   — the resume hint, `--drop` removal (honored only on a clean exit; see the flag).
 
 #### One session per workspace
@@ -383,72 +396,40 @@ A second concurrent session on one workspace would mutate the same files and sha
 — taken atomically against a racing launcher, released even when the holder dies without unwinding, and covering the whole launch rather than a window inside it.
 A refused launch names the holding pid.
 `ride list` and `ride clean` read the same lock as their liveness signal;
-a container workspace additionally counts a running container bound to its mount, which is what a launcher killed outright leaves behind.
+a boxed workspace additionally counts a running container bound to its mount, which is what a launcher killed outright leaves behind.
 The lock releases with the session, so re-entry and `ride resume` afterwards are unaffected.
 
-### Host mode (`ride along --host -w <name> <bro>`)
+### Unboxed isolation (`ride along --unboxed -w <name> <bro>`)
 
-With an attachment, `ride` owns the worktree lifecycle directly:
-it prepares the worktree, then spawns the frozen runtime snapshot's `do-ride solo|along` with that worktree as cwd
-— for a claude session it runs plain `claude` (not `claude -w`, so no Claude Code worktree/provisioning hooks are involved), for a bro session the native `bro run|chat …`.
-On launch:
+An unboxed workspace runs its tree directly on the launcher's filesystem.
+With an attachment, the first launch creates the same independent clone a boxed workspace uses and checks out the workspace's recorded branch at the resolved base.
+Later launches preserve that clone exactly as the session left it.
+A legacy `.git` gitfile identifies a pre-migration linked worktree and refuses launch with `ride clean --force <name>`.
 
-1. creates the worktree if new
-   — on the workspace's recorded branch (based on `--into <ref>` when given, else on a path attachment's current `HEAD` or a URL mirror's freshly fetched `origin/HEAD`
-   — see the shared launch flags under "Commands") plus `submodule.alternateLocation=superproject` so submodule updates reuse the superproject's modules, then initializes submodules;
-2. runs the worktree's `setup.sh` when present, otherwise logs that project provisioning was skipped;
-3. materializes the runtime bundle's host venv and declared session-command shims, then materializes the scoped store into the workspace's `credentials/` (see "Workspaces") and points `BRO_STORE` at it in the runner env;
-4. has the harness prepare launch-time state, then spawns `<bundle>/host/venv/bin/do-ride` with PATH ordered as `<bundle>/host/bin` then the inherited non-launcher paths.
-   `prepare_host_env` supplies a Claude session's private state dir, `CLAUDE_CONFIG_DIR`, and session auth;
-   the bro harness adds nothing.
-   `do-ride` applies the declared hydrated kinds' credential hooks into the environment directory and exports their wiring before either harness starts.
-   That ordering matches container mode and ensures `setup.sh` has already run before hooks in both modes.
-   `VIRTUAL_ENV` and the launcher's active-venv PATH entry are removed;
-   the worktree venv is not activated.
+After clone preparation, `ride` runs the tree's `setup.sh` when present, materializes the runtime bundle's host half, and starts its absolute `do-ride` with the tree as cwd.
+The scoped store lives under the workspace's `credentials/`, and `BRO_STORE` points at it.
+The harness's `prepare_unboxed_env` hook supplies launch-time state;
+`do-ride` installs credential hooks before starting the selected harness.
+The launch removes the invoking environment's active-venv marker and PATH entry, so the workspace's own `.venv` is never activated implicitly.
 
-A detached host launch creates a plain empty `tree/` directory instead of a git worktree, skips repository setup and persona workspace provisioning, and runs the same pinned `do-ride` command there.
+A detached unboxed launch creates a plain empty `tree/`, skips repository and persona provisioning, and runs the same pinned `do-ride` there.
+The auth and scoped-credential preflights happen before a workspace or clone is created.
+On a clean dropped exit, the workspace directory is removed directly.
+`ride clean` retains a legacy worktree-specific release path so migrated trees can still be removed from their original repository registration.
 
-The harness's auth preflight and the scoped-credential hydration run earlier, in the outer layer, so neither the workspace nor the worktree exists when they fail.
+#### Unboxed Claude-state isolation
 
-On exit:
-`--drop` removes the workspace (`git worktree remove --force` + `git branch -D` of its recorded branch, then the directory), but only when the session exited cleanly (exit 0);
-otherwise the worktree is kept
-— `ride clean` reclaims cleanly-finished ones later.
+An unboxed Claude session points `CLAUDE_CONFIG_DIR` at the workspace's `claude/` directory.
+The directory carries only the constructed session settings, the launcher's account identity, the setup-token auth, the workspace tree's trust entry, and the session plugin seed.
+The launcher's settings, hooks, permissions, custom agents, and OAuth credentials file do not enter it.
+The bypass-permissions acceptance stays interactive because an unboxed session has no container boundary.
 
-Layout on disk:
-
-- `<runtime-root>/workspaces/<name>/tree/` — the worktree (regular working tree with a `.git` gitfile that points at `<project>/.git/worktrees/<name>/`).
-- `<runtime-root>/workspaces/<name>/tree/.venv` — the project environment when the repository's optional `setup.sh` creates one;
-  session machinery does not depend on it.
-- `<runtime-root>/workspaces/<name>/claude/projects/<encoded-worktree-path>/` — Claude Code's per-project state for the session, including the session JSONL files, inside the workspace's claude state dir (below).
-  The encoded path is the worktree path with `/` and `.` replaced by `-`.
-
-#### Host claude-state isolation
-
-A host session runs claude with `CLAUDE_CONFIG_DIR` pointing at the workspace's `claude/` dir
-— the same variable container mode sets, there naming the dir bind-mounted at `/home/ride/.claude`
-— so the host's own `~/.claude.json` and `~/.claude/.credentials.json` never enter the session.
-Without this, claude can prefer the host's rotating OAuth file (or the claude.ai account state riding along in `~/.claude.json`) over the session's setup-token and greet every session with "Please run /login · API Error: 401" once that grant rots.
-`ride/ride/claude/claude_config.py:provision_host_claude_dir` provisions the dir before a normal host launch;
-`do-ride` provides the same fallback when no launcher supplied one, then seeds the host installation's plugins behind the shared install-record guard.
-
-The dir is provisioned with exactly the container's session state
-— nothing else from the host `~/.claude` (settings, hooks, permissions, user CLAUDE.md, custom agents) enters the session:
-
-- `.claude.json` — seeded once from the same explicit config as the container's (onboarding done, marketplace auto-install marked done, host account identity), with trust entries for the worktree path *and* the main repo root
-  — claude resolves a linked worktree's trust against the repository root, so the worktree entry alone still prompts
-  — and `installMethod` carried from the host's own config (the session runs the host claude, not the image's npm install).
-- `settings.json` — the same constructed config container mode writes (one `_provision_session_claude_dir` serves both modes, rewriting it each launch), minus the container-only bypass-permissions pre-accept
-  — on a host worktree the `--dangerously-skip-permissions` acceptance dialog stays interactive.
-- `plugins/` — first-run copy by `do-ride` from the host claude install's plugins dir, the host twin of its `/opt/claude-plugins-seed` copy in a container (same guard file), so the settings' pyright-lsp enable has its matching install records.
-- unlike container mode there is no OAuth file at all to fall back on, which is why a missing `claude_code` secret fails the full mode launch up front instead of degrading to the host's rotating credentials.
-
-### Container mode (`ride along -w <name> <bro>` — the default)
+### Boxed isolation (`ride along --boxed -w <name> <bro>` — the default)
 
 `/workspace` is always the workspace's writable `tree/` bind.
 It starts and stays empty for a detached launch.
-With an attachment, the host creates a **plain local clone** before container creation, not a worktree:
-the gitfile-based worktree layout does not survive the container boundary, and a clone keeps git state isolated.
+With an attachment, the launcher creates a **plain local clone** before container creation.
+The same clone machinery serves both isolations and leaves no dependency on the attached checkout's git directory.
 A local clone hardlinks objects when the attachment and runtime root share a filesystem and copies them otherwise;
 it carries no alternates dependency on the attachment.
 The attachment itself is not mounted into the container.
@@ -464,7 +445,7 @@ Layout:
   — there is no host-side store and no bind mount.
   It carries one convention-named file per resolved kind plus typed-source annotations in `creds.json`, while the code registry stays in the frozen runtime bundle, so the store directory bounds the in-container resolver to the scoped set
   — any other secret resolves to a clean `SecretNotFound`.
-  Hydration is **strict** — a missing secret raises on the host before the container is created.
+  Hydration is **strict** — a missing secret raises on the launcher before the container is created.
   Living in the container's own writable layer, the store dies with the container:
   `--rm` removes it on normal exit, and an orphaned container (a killed `ride`) is reclaimed by `ride clean`'s container GC
   — secret cleanup piggybacks on the container lifecycle, so no host directory ever holds plaintext and no exit-sweep or signal handlers are needed.
@@ -480,7 +461,7 @@ Layout:
   `aws` → the shared-credentials file it points the CLI at.
   No per-secret logic lives in the entrypoint.
 - the host's `/var/run/docker.sock` is **never** mounted:
-  its API is root on the host with no per-caller authorization, so a socket grant would step past every scoped boundary above.
+  its API is root on the launcher with no per-caller authorization, so a socket grant would step past every scoped boundary above.
   Work that needs a daemon
   — building and pushing the operated project's images, say
   — goes through the project's CI instead.
@@ -501,7 +482,7 @@ A workspace created by an older runtime whose clone still has an alternates file
 
 Inside the container, the entrypoint (running as root first):
 
-1. Aligns the `ride` user's UID/GID with whoever owns `/workspace` on the host,
+1. Aligns the `ride` user's UID/GID with whoever owns `/workspace` on the launcher,
    then re-execs as `ride` (skipped on Docker for Mac when the bind mount reports root-owned via virtiofs — remapping to UID 0 would make claude refuse `--dangerously-skip-permissions`).
 2. When attached, marks `/workspace` as a safe git directory.
    The host's `~/.gitconfig` is not seeded:
@@ -521,7 +502,7 @@ the workspace name, optional resolved repository attachment and base ref, comman
 `prepare_container` consumes that immutable description for clone preparation → scoped-store build → `docker create` + store copy;
 it does not re-resolve images or bundles.
 Summoned children inherit the root's identifiers.
-A host root defers their image/volume resolution until its first summon.
+An unboxed root defers their image and volume resolution until its first boxed summon.
 
 Container images are split:
 
@@ -541,7 +522,7 @@ plain `docker image rm` leaves any image still referenced by a container.
 
 Network is not restricted by design.
 
-When a container session exits, the workspace directory stays on disk for the next session, unless `--drop` was passed and the session exited cleanly (in which case `<runtime-root>/workspaces/<name>` — the tree and every record with it — is removed).
+When a boxed session exits, the workspace directory stays on disk for the next session, unless `--drop` was passed and the session exited cleanly (in which case `<runtime-root>/workspaces/<name>` — the tree and every record with it — is removed).
 
 #### Ctrl+Z: suspend and resume
 
@@ -552,12 +533,12 @@ the byte never enters the container, and pressing Ctrl+Z detaches the host-side 
 
 ride tells a detach from a container exit by the container's running state
 — the client exits 0 either way.
-On detach it freezes the whole container (`docker pause`, the cgroup freezer) and stops its own process group, so the launching shell reports the job stopped exactly like a host-mode Ctrl+Z;
+On detach it freezes the whole container (`docker pause`, the cgroup freezer) and stops its own process group, so the launching shell reports the job stopped exactly like an unboxed Ctrl+Z;
 `fg` resumes ride, which thaws the container and re-attaches.
 The entire session — claude, the MCP server, the session daemons
 — is frozen while suspended.
 Both attach paths behave this way (the broker-supervised root and the broker-less fallback);
-host mode needs none of it
+unboxed isolation needs none of it
 — a real shell with job control sits above the session there, so plain job-control suspend already works.
 With no job-control shell above ride itself (an orphaned process group), the kernel discards the self-stop and Ctrl+Z degrades to a brief pause + re-attach instead of a wedge.
 
@@ -573,17 +554,17 @@ Instead, the launch provisions a container-private `.claude.json` in the workspa
   — it's baked into the image) plus the host's account-identity fields (`oauthAccount`, `userID`) so the session starts logged in.
   Host machine state (project paths, trust history, usage counters, feature caches) is **not** copied.
   Missing identity is fatal
-  — `ride` aborts asking you to log in on the host first.
+  — `ride` aborts asking you to log in on the launcher first.
   Subsequent sessions keep whatever the container last wrote.
-  Stops per-project mutations (mcpServers, allowedTools, hasTrustDialogAccepted) from being usable to escalate into the next host session.
+  Stops per-project mutations (mcpServers, allowedTools, hasTrustDialogAccepted) from being usable to escalate into the next unboxed session.
 - **Session auth (`CLAUDE_CODE_OAUTH_TOKEN`)** — Full-mode sessions authenticate with this env var, which the **required** `claude_code` secret (a `claude setup-token` long-lived token) exports via its registry install hook.
   Claude Code reads it above any credentials file, and one stable bearer is shared by every session
   — so no OAuth credentials file is mounted or synced, and none of the cross-session refresh-token rotation that forced the periodic `/login`.
-  Being required, a missing token fails loudly on the host at scoped-store hydration, before the container starts (not as a turn-1 401 inside it).
+  Being required, a missing token fails loudly on the launcher at scoped-store hydration, before the container starts (not as a turn-1 401 inside it).
   `--raw`/bro-run containers run `claude --bare` against the `anthropic` api key and request the token only on the full-mode path.
-  Host-mode sessions get the same var injected into the claude subprocess env directly (`ride.claude.claude_auth.apply_claude_auth`, applied idempotently by both the outer host launch and the `do-ride` session executable next to claude),
+  Unboxed sessions get the same var injected into the claude subprocess env directly (`ride.claude.claude_auth.apply_claude_auth`, applied idempotently by both the outer unboxed launch and the `do-ride` session executable next to claude),
   and the token is equally required there:
-  the launch aborts up front when the secret doesn't resolve, since the session's private config dir carries no OAuth file to fall back on (see "Host claude-state isolation").
+  the launch aborts up front when the secret doesn't resolve, since the session's private config dir carries no OAuth file to fall back on (see "Unboxed Claude-state isolation").
   The same transform scrubs inherited `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` from the session env:
   both outrank `CLAUDE_CODE_OAUTH_TOKEN` in claude's credential precedence, so a value leaking in from the launching shell would silently hijack the session's auth.
   Full sessions also carry `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK`, since claude resolves fast-mode availability from the credentials file they don't have
@@ -593,29 +574,29 @@ Instead, the launch provisions a container-private `.claude.json` in the workspa
   a `cleanupPeriodDays` pin keeping transcripts forever (they back the session recording), an `autoMemoryEnabled: false` opt-out of claude's default-on auto-memory,
   an `env` block turning claude's auto-updater off (`DISABLE_AUTOUPDATER`, so no session replaces the claude install it runs — the image's here, the user's own on host),
   and `skipDangerousModePermissionPrompt: true`
-  — the workspace is an isolated clone, so the `--dangerously-skip-permissions` acceptance dialog is pre-answered (container sessions only; a host worktree keeps the dialog).
+  — the workspace is an isolated clone, so the `--dangerously-skip-permissions` acceptance dialog is pre-answered (boxed sessions only; an unboxed clone keeps the dialog).
   The plugin is *installed* at image-build time (`ride/ride/setup/container/Dockerfile`) and staged at `/opt/claude-plugins-seed`, which `do-ride` copies into the bind-mounted `~/.claude/plugins` on first run
   — enabling alone isn't enough, claude would otherwise prompt the "LSP Plugin Recommendation" on `.py` files.
   Host permissions, hooks, plugins, and model/effort pins do not leak in, and the session's own LLM flags plus the merged `--settings` (see "The claude argv") own session config.
 - `<runtime-root>/workspaces/<name>/claude/` (host) → `/home/ride/.claude` (container).
   Per-workspace overlay of everything else.
   It is mounted from the host rather than living in the container because the container is `--rm`'d at exit while the workspace outlives it:
-  the transcripts are what `ride resume` continues and what `ride list` reads a subject from, and summon control reads the trail pointer beside them on the host while the session runs.
+  the transcripts are what `ride resume` continues and what `ride list` reads a subject from, and summon control reads the trail pointer beside them on the launcher while the session runs.
 - `claude/projects/-workspace/` — where Claude Code stores the session JSONL for `/workspace`.
   The encoded path `-workspace` is fixed (just `/` replaced with `-`).
 
-This means each container session has its own private `~/.claude.json` (so MCP server allow-lists are per-workspace) and its own session log directory, while authenticating with the shared,
+This means each boxed session has its own private `~/.claude.json` (so MCP server allow-lists are per-workspace) and its own session log directory, while authenticating with the shared,
 non-rotating `claude_code` token (so no session's refresh can blow away another's).
 
 #### Scoped credential hydration
 
-Both session modes hydrate only the credential kinds the selected bro and harness declare.
+Both workspace isolations hydrate only the credential kinds the selected bro and harness declare.
 The launch keeps the required and optional tiers kind-addressed and carries a separate kind-to-instance selection.
 The resulting store directory is the boundary:
-a host launch materializes it under the workspace's `credentials/` and sets `BRO_STORE` to that directory;
-a container launch injects it at `/home/ride/.bro` and explicitly sets `BRO_STORE=/home/ride/.bro`.
+an unboxed launch materializes it under the workspace's `credentials/` and sets `BRO_STORE` to that directory;
+a boxed launch injects it at `/home/ride/.bro` and explicitly sets `BRO_STORE=/home/ride/.bro`.
 An in-session resolver therefore never consults the host's ambient selection.
-Host scoping is still a convenience rather than a security boundary, because the session runs as the host user.
+Unboxed scoping is still a convenience rather than a security boundary, because the session runs as the host user.
 
 - **The manifest.**
   A bro's `needed_secrets()` (`bro/bro.py`) is the union of each selected MCP server spec's and data source's `needed_secrets`, the bro's MRO-collected `extra_secrets`, and the credentials of its pinned-on features.
@@ -629,7 +610,7 @@ Host scoping is still a convenience rather than a security boundary, because the
   — computed on the child's side, so a summoner need not hold the kind.
   A project-bro `creds` selection of a kind the launch reads on neither tier fails the launch and names `grant`;
   the recording kind counts as read under `--no-trails` too.
-  The bro's declarations are evaluated under that selection, the launch's instance grants included, so a feature gate resolves on the host exactly when it resolves in the session.
+  The bro's declarations are evaluated under that selection, the launch's instance grants included, so a feature gate resolves on the launcher exactly when it resolves in the session.
   A path attachment matches on two identities
   — the checkout path and its `origin` URL
   — so a `projects` key written as the repository's URL reaches the everyday `--repo <path>` launch too;
@@ -666,8 +647,8 @@ Host scoping is still a convenience rather than a security boundary, because the
   Instance-spelled references in reference-preserving material fail because the scoped namespace is kinds-only.
 - **Install hooks.**
   Hooks come from the frozen code registry and apply only for the declared hydrated-kind list returned by the build.
-  Both launch modes pass that list through `BRO_INSTALL_KINDS` beside `BRO_STORE`.
-  `do-ride` applies it from the same frozen runtime bundle into `BRO_INSTALL_DIR` when one is supplied, otherwise into the mode's session environment directory, and exports the returned wiring before the harness starts.
+  Both launch isolations pass that list through `BRO_INSTALL_KINDS` beside `BRO_STORE`.
+  `do-ride` applies it from the same frozen runtime bundle into `BRO_INSTALL_DIR` when one is supplied, otherwise into the isolation's session environment directory, and exports the returned wiring before the harness starts.
   A listed kind missing from the scoped store fails;
   a listed kind with no hook is a no-op.
   Transitively hydrated `$cred` targets are deliberately absent from the list, so a shipped reference never wires tools for its target.
@@ -684,14 +665,14 @@ The token is the channel's whole credential
 — a port is reachable by every local process, so a connection is attributed to the channel whose token it opens with.
 The listener binds loopback plus, when the docker daemon runs on this host, the bridge gateway a container reaches back through (`ride/ride/spawn.py:broker_bind_hosts`);
 a daemon in a VM names a gateway that is no address here, so only loopback binds and the VM's own `host.docker.internal` proxy carries the container to it.
-The modes differ only in the spawner (`ride/ride/workspace/spawn.py`, composed by `ride/ride/spawn.py:run_root_via_broker`) and in the host name the address carries:
+The isolations differ only in the spawner (`ride/ride/workspace/spawn.py`, composed by `ride/ride/spawn.py:run_root_via_broker`) and in the host name the address carries:
 
-- container — the attached container launch (`ride/ride/root.py:_run_root_via_broker` + `DockerSpawner`), the address naming `host.docker.internal`, which every launch maps to the host gateway with `--add-host`;
-- host — the runner as a plain subprocess (`ride/ride/root.py:run_host_process_via_broker` + `ProcessSpawner`), the address naming loopback.
+- boxed — the container launch (`ride/ride/root.py:_run_root_via_broker` + `DockerSpawner`), with an address naming `host.docker.internal`, which every launch maps to the host gateway with `--add-host`;
+- unboxed — the plain-process launch (`ride/ride/root.py:run_unboxed_process_via_broker` + `ProcessSpawner`), with an address naming loopback.
 
 The session's processes don't talk to that upstream directly:
 a **broxy** (the peer-side broker proxy, `bro/broker/broxy.py`) consumes `BROKER_UPSTREAM`, holds its one long-lived connection, and publishes its own loopback address as `BROKER_CHANNEL`.
-The session's short-lived clients (`broker` CLI calls, `RunLifecycle`, a backgrounded wait) therefore multiplex over the single connection the host's supersede-on-accept semantics expect.
+The session's short-lived clients (`broker` CLI calls, `RunLifecycle`, a backgrounded wait) therefore multiplex over the single connection the launcher's supersede-on-accept semantics expect.
 Client recovery reads the host journal through `query`;
 the broxy retains no result state.
 `BROKER_CHANNEL` has one meaning everywhere:
@@ -702,7 +683,7 @@ it starts `serve` detached with output redirected to the requested log, reads ba
 There is no restart supervision:
 the upstream is the session's own host broker, which never comes back within a session, so a broxy that dies takes the session's channel with it
 — loudly, as a code bug to surface (`bro/broker/AGENTS.md` owns the policy).
-`do-ride` owns that sequence in both modes through `bro/launch/broxy.py:session_broxy` whenever `BROKER_UPSTREAM` is set and `BROKER_CHANNEL` is not.
+`do-ride` owns that sequence in both isolations through `bro/launch/broxy.py:session_broxy` whenever `BROKER_UPSTREAM` is set and `BROKER_CHANNEL` is not.
 It retains the returned pid to stop the daemon on session exit and writes `broxy.log` in the session directory.
 When `broxy launch` cannot run
 — missing from the session runtime or not ready within the gate
@@ -722,7 +703,7 @@ see the shared launch flags above) and wires the per-root `SummonControl` enforc
 Because the channel sits on the critical path of every launch, a broker defect would too
 — `BROKER_DISABLED` (presence-checked, parallel to `TRAILS_DISABLED`) is the kill-switch that skips broker provisioning/dispatch entirely (no channel, so no launcher starts a broxy),
 and a venv that can't import broker degrades the same way with a warning;
-both fall back to the direct launch (`docker start -a -i` in container mode, a plain runner spawn on host).
+both fall back to the direct launch (`docker start -a -i` in boxed isolation, a plain unboxed runner spawn).
 The post-exit finish (resume hint, `--drop`) runs after `Broker.run()` returns, so it is identical on both paths.
 
 While an interactive root owns the terminal
@@ -797,10 +778,10 @@ the host spawns nothing and instead registers an *expected external peer*
 — a provisioned broker channel awaiting a child someone else starts
 — and the request id doubles as the launch token.
 The registration is acknowledged with an `accepted` mark once the token is claimable, and the manual client waits for it, so a denial fails at the summon itself
-— a token is only ever handed out for a summon the host is expecting.
+— a token is only ever handed out for a summon the launcher is expecting.
 The summoner relays the token to the user, who launches the session at their own pace with `ride along --summoned <token> <target>`:
 an otherwise normal interactive session
-— container or `--host`, either harness, the user's own `--llm`/`--hold`/`--workspace`
+— boxed or unboxed, either harness, the user's own `--llm`/`--hold`/`--workspace`
 — except it starts no broker of its own.
 Its launcher puts the summoner's provisioned channel in `BROKER_UPSTREAM`, and the session broxy publishes the local `BROKER_CHANNEL` its processes use to attach as a regular summon peer.
 Its own nested summons therefore route through the summoner's control with per-peer authorization.
@@ -817,7 +798,7 @@ a missing or mismatched revision refuses the launch before a workspace is create
 A second launch on the same token fails loudly (two sessions must not share one channel), and a summon that ends unclaimed (root teardown, a failure) discards it, so a stale token fails the launch with the reason.
 The claim records the user-chosen workspace name beside it (`claimed/<token>.json`), which is how the host attributes the manual peer
 — the base-ref source for the child's own summons and the tree its artifact mints resolve against
-— so attribution comes from the launch machinery on the host, never from anything the child says on the wire (before the claim, a nested summon from the child is denied with a retry hint,
+— so attribution comes from the launch machinery on the launcher, never from anything the child says on the wire (before the claim, a nested summon from the child is denied with a retry hint,
 and its credential grants are always denied as unattributable — its actual scope was computed by its own launch).
 The child announces the trail mark (`{trail_id}`)
 — the Claude runner from its trail watch, the native chat surface on its first turn.
@@ -859,9 +840,10 @@ Each spawned child records `summoned_by` provenance from the requester's current
 Requester attribution has one shape in the audit: `{workspace, bro, trail_id?}`.
 The trail is read from that workspace's session pointer for every request because Claude segments move it, with the answered quest's journal `trail` mark as fallback.
 The authorized spawn goes through the composite spawner with the requesting peer as parent
-— so host-mode roots spawn docker children too, and a grandchild's lifecycle routes to the child that summoned it;
+— so unboxed roots spawn docker children too, and a grandchild's lifecycle routes to the child that summoned it;
 root exit still tears down the whole tree.
-Every event lands a host log line and a durable audit row under `<runtime-root>/summon/<name>.jsonl`, keyed by the root workspace name.
+Every event lands a host log line and a durable audit row under `<runtime-root>/summon/<name>.jsonl`.
+Each row keys the ride under `ride`, using the root workspace name.
 Each entry names its actual `summoner` as `{workspace, bro, trail_id?}`, plus target, bounded args, transition, trail id, and terminal outcome.
 Live readers never read that audit back:
 check, list, watch, and the session-local statusLine projector query the caller-scoped in-memory journal over their own broker channel, so the same surfaces work at any summon depth.
@@ -881,37 +863,38 @@ Each authorized spawn records the child's run as its `broker-<channel>` workspac
 
 ### Sharing artifacts between peers
 
-Peers pass files by content-addressed reference through a session store the host owns (`ride/ride/artifacts.py`; the wire contract, ref grammar, and CLI are `bro/artifact.py`):
+Peers pass files by content-addressed reference through the ride's store the launcher owns (`ride/ride/artifacts.py`; the wire contract, ref grammar, and CLI are `bro/artifact.py`):
 
 - `artifact mint <path>` ingests a file or directory named relative to the minting peer's workspace root
   — a private reflink-or-copy, so nothing the producer writes afterwards changes stored bytes
   — and prints its ref:
   `sha256:` plus the content digest for a file (so `sha256sum` checks it) or the digest of a canonical typed-entry manifest for a directory (`artifact digest <path>` computes either locally, which is how a ref is verified end to end).
   Re-minting unchanged content answers the same ref without storing anything new;
-  a mint past the session's byte cap is refused rather than evicted.
+  a mint past the ride's byte cap is refused rather than evicted.
 - `artifact get <ref>` makes a ref visible to the requesting peer and prints the path it appears at.
-  A container peer reads it under `/var/ride/artifacts`
+  A boxed peer reads it under `/var/ride/artifacts`
   — a per-peer view directory bind-mounted read-only, so a ref shared while the peer runs appears without a remount and writes fail with `EROFS`
-  — while a host-mode root, having no mount namespace, gets a private copy under the workspace's own `artifacts/` directory.
+  — while an unboxed root, having no mount namespace, gets a private copy under the workspace's own `artifacts/` directory.
   Either way the path is not for editing in place;
   a peer that wants an editable copy makes one.
 - Reach follows the launch tree, and nothing a peer says widens it:
-  a mint is readable by the minting peer and its summoners up to the session root, and a summon request's `share` list (`summon --share <ref>`, the service tool's `share` field) hands refs the summoner itself can read down to the child it spawns.
+  a mint is readable by the minting peer and its summoners up to the ride root, and a summon request's `share` list (`summon --share <ref>`, the service tool's `share` field) hands refs the summoner itself can read down to the child it spawns.
   There is no other path
   — knowing a ref is not access, and a denial is uniform whether or not the ref exists.
   A manual summon refuses `share` and a manual child's `get` is denied
-  — the host builds no launch for it, so no view is mounted
+  — the launcher builds no launch for it, so no view is mounted
   — while its mints flow upward normally, attributed to the workspace its own `--summoned` launch claimed the token with.
-- The store is session-scoped and dies with the session
-  — a resumed session starts empty, so a stale ref fails at its own `artifact get`
-  — while mints, gets, shares, and denials outlive it in a JSONL audit under `<runtime-root>/artifacts/<session>.jsonl`, beside the summon audit.
+- The store is ride-scoped and dies with the ride
+  — a resumed root starts a new ride with an empty store, so a stale ref fails at its own `artifact get`
+  — while mints, gets, shares, and denials outlive it in a JSONL audit under `<runtime-root>/artifacts/<ride>.jsonl`, beside the summon audit.
+  Each audit row keys the ride under `ride`.
 
 Kind handlers resolve refs through the same store (`bro.kinds.KindContext.artifacts`), under the same sharing check.
 
 ### The launcher↔session contract
 
 The launcher and `do-ride` come from the same frozen installation, so workspace age cannot skew their contract and the operated repository need not install either command.
-`ride clean` sweeps abandoned workspaces, unreferenced managed mirrors, and unlocked runtime bundles;
+`ride clean` sweeps idle workspaces, unreferenced managed mirrors, and unlocked runtime bundles;
 removing a bundle also removes its unused runtime volume, while Docker keeps an in-use volume alive.
 
 ## The session executable
@@ -919,11 +902,11 @@ removing a bundle also removes its unused runtime volume, while Docker keeps an 
 `do-ride solo|along --workspace NAME --harness H [--resume] [--repo R] --hold HOLD [--llm L] <harness flags> <bro> [prompt] [-- args]` (`ride/ride/do_ride.py`) runs one session in a prepared workspace.
 It has its own parser:
 there is no `--in-place`, no outer machinery flags or combination refusals, and `--resume` is an ordinary session flag.
-Host mode runs it from the snapshot venv and container mode from the mounted runtime volume;
+Unboxed isolation runs it from the snapshot venv and boxed isolation from the mounted runtime volume;
 both expose only pinned session shims plus system paths.
 The distribution declares `do-ride` as both a console script and a session command, so every runtime bundle carries it beside `ride`.
 
-`do-ride` exports the bro git identity, `RIDE_WORKSPACE`, `RIDE_REPO`, `RIDE_BRO`, and the `BRO_HOLD` / `RIDE_RUNNER_PID` pair (see "Forwarded env vars").
+`do-ride` receives `RIDE_ISOLATION` and the recorded `RIDE_BRANCH`, then exports the bro git identity, `RIDE_WORKSPACE`, `RIDE_REPO`, `RIDE_BRO`, and the `BRO_HOLD` / `RIDE_RUNNER_PID` pair (see "Forwarded env vars").
 It applies the persona's declared workspace provisioning when attached (`BaseBro.provision_workspace`), installs the scoped credential hooks, prepares missing Claude state and the installation's plugin seed, and owns the optional session broxy.
 Each step is idempotent, so a launcher may pre-provision state before invoking it.
 While the harness runs, `runner.pid` under `RIDE_SESSION_DIR` records the executable's pid and operating-system start-time identity as JSON;
@@ -1015,7 +998,7 @@ and the argv builder prepends a `[launch note: …]` line to the flavor's seeded
 The runner also polls the server's `/health` until ready *before* launching claude, so the configured bro and tool graph's potentially heavy imports is paid off claude's critical path instead of inside that startup block and its connect timeout;
 the runner's own argv build overlaps the server's import, so much of the wait is already paid when the gate is reached.
 
-In container mode the server runs inside the container, so the scoped credential store carries the served tools' own secrets (for a full mode, the persona's claude-harness manifest)
+In boxed isolation the server runs inside the container, so the scoped credential store carries the served tools' own secrets (for a full mode, the persona's claude-harness manifest)
 — no deployed-server token is involved.
 
 ### Bro spells and skills
@@ -1050,17 +1033,24 @@ Wrappers and session daemons rely on a small set of env vars:
 - `RIDE_WORKSPACE` — workspace name.
   Set by each launcher and overwritten from `do-ride --workspace`, so no ambient parent value survives.
   `ride banner` reads it to render the session header.
+- `RIDE_ISOLATION` — the workspace's recorded `boxed` or `unboxed` isolation.
+  Every launcher sets it explicitly for the session and its children.
+  `ride banner` derives the container path and Docker shell command from it rather than probing `/.dockerenv`.
+  `do-ride` uses the same fact for isolation-specific setup, so an unboxed ride launched inside a foreign container remains unboxed.
 - `RIDE_REPO` — the root session's resolved checkout path or normalized git URL, absent when detached.
   Set by each launcher and overwritten from `do-ride --repo`;
   banner and summon lowering read this launch state rather than deriving a repository from cwd.
-- `RIDE_HOST_WORKSPACE` — host-side absolute path to the workspace tree (`<runtime-root>/workspaces/<name>/tree`), set explicitly in both modes.
+- `RIDE_BRANCH` — the attached workspace's recorded branch, absent when detached.
+  The launcher reads it from `workspace.json` and passes it to `do-ride`.
+  The Claude session context records this value rather than deriving a branch from the workspace name.
+- `RIDE_HOST_WORKSPACE` — launcher-side absolute path to the workspace tree (`<runtime-root>/workspaces/<name>/tree`), set explicitly in both isolations.
   In a container it names the host path bound at `/workspace`.
 - `RIDE_COMMAND` — the user-visible invocation this session launched under, reconstructed via `SessionSpec.to_command_argv` for telemetry and the banner:
   the `ride solo|along …` command with its flags, or `ride resume <ref>` for a resume.
   Set by `start_session`, and by the summon lowering into a summoned child's env from its recorded spec.
   Defaulted into `BRO_SHELL_COMMAND` if that is not already set.
 - `RIDE_BRO` — names the bro the session runs as (the selected bro).
-  Set explicitly in the container env at every container launch site
+  Set explicitly in the container env at every boxed launch site
   — a `ride along` container carries its session bro, a bro-harness container or summon child the launched bro (`ride/ride/spawn.py`)
   — and exported by the session executable layer;
   deliberately not in `_DOCKER_FORWARD_ENV`, so a calling session's ambient value never leaks into a container that runs a different bro.
@@ -1068,8 +1058,8 @@ Wrappers and session daemons rely on a small set of env vars:
   — the banner's ASCII Bro logo + bro-name header, the statusLine
   — never an input:
   the session's bro identity travels in the spec's own flags.
-- `BRO_HUMAN_NAME` / `BRO_HUMAN_EMAIL` — the human the session works for, as the attached repository's `user.name` / `user.email` name them on the host (`ride/ride/identity.py`).
-  Resolved once per launch, set in both modes, and set by the summon lowering for a child
+- `BRO_HUMAN_NAME` / `BRO_HUMAN_EMAIL` — the human the session works for, as the attached repository's `user.name` / `user.email` name them on the launcher (`ride/ride/identity.py`).
+  Resolved once per launch, set in both isolations, and set by the summon lowering for a child
   — whose repository is its summoner's, so the two credit the same human.
   Absent for a detached launch, which has no commits to credit, and for an attachment declaring no identity
   — which the launch warns about.
@@ -1086,16 +1076,16 @@ Wrappers and session daemons rely on a small set of env vars:
   Its presence co-gates the tool's mount
   — without a runner to signal there is nothing to terminate.
 - `RIDE_SESSION_DIR` — the session's own state directory (see "Workspaces"):
-  the workspace's `session/` by absolute path in host mode, `/var/ride/session` through the container bind.
+  the workspace's `session/` by absolute path in unboxed isolation, `/var/ride/session` through the container bind.
   Set by every managed launch for both harnesses
-  — `ride`'s own in both modes, and a summon's child spawn.
+  — `ride`'s own in both isolations, and a summon's child spawn.
   `do-ride` requires it before starting the harness.
   Read by `bro/monitor` — a process without it is in no managed session and so has no trail pointer to publish and no recording health to report.
 - `RIDE_TASK_ID` — set by `dive-in` when it has resolved a task (the canonical brog task id);
   read by the `spell::run-pr` spell to add a `Task: <url>` line to commit messages.
 - `RIDE_SESSION_CONTEXT` — the session's launch context as a JSON list of typed records.
   It includes the system prompt, git state, MCP servers, and the project's root instructions document.
-  The Claude runner builds it through `ride/ride/claude/session_context.py` next to Claude in both modes.
+  The Claude runner builds it through `ride/ride/claude/session_context.py` next to Claude in both isolations.
   The session recorder uploads it as the trail's launch-context attachment;
   `rewind` renders it as a `SESSION CONTEXT` preamble.
   It captures what the model was told but the transcript omits
@@ -1111,16 +1101,16 @@ Wrappers and session daemons rely on a small set of env vars:
   set by the launch surfaces for a session root and by the summon lowering (or, for a manual child, the `--summoned` launch from the pending record) for a summoned child (its own resolved list, never its summoner's),
   read by `ride banner` to render the fact, by `bro.prompts.session_fragment` to give a run that may summon the summoner's watch, and by the tool fold to keep that watch's command reachable through `Monitor` for such a run.
   Read-only in the session:
-  the host authorizes against its own copy, so only a relaunch (or the summon that spawns a child) changes what it may summon.
-- `RIDE_IN_CONTAINER=1` — set by the Dockerfile, marking a session running in an image this runtime built.
-  Read by `bro/workspace/paths.py:trails_dir`, which then resolves to the container's fixed trails mount instead of a host runtime root.
-  The nested-launch refusal deliberately reads the container probe instead (see "In-container launches").
+  the launcher authorizes against its own copy, so only a relaunch (or the summon that spawns a child) changes what it may summon.
+- `RIDE_IN_CONTAINER=1` — set by the Dockerfile, marking a process running in an image this runtime built.
+  `bro/workspace/paths.py:trails_dir` uses it only to resolve the image's fixed trails mount.
+  Session placement comes from `RIDE_ISOLATION` instead.
 - `BRO_STORE` — the exclusive scoped credential-store directory delivered by the launcher.
 - `BRO_INSTALL_KINDS` — the space-separated declared kinds hydrated into that store, including an empty value when none resolved.
   `do-ride` requires these two variables together and installs only those kinds' hooks.
 - `BRO_INSTALL_DIR` — the session's directory for credential-hook output.
   Each launcher sets its own value, overriding ambient session state;
-  a direct `do-ride` invocation derives the current mode's session environment directory and exports it.
+  a direct `do-ride` invocation derives the current isolation's session environment directory and exports it.
 - `RIDE_RESOLVED_LLM` — the JSON encoding of the exact LLM recipe the launcher validated, scoped, and recorded.
   `do-ride` uses it instead of resolving an omitted or partial `--llm` against defaults that may have changed before a resume.
 - `BROKER_UPSTREAM` — the host broker address supplied by a launcher, `tcp://<token>@<host>:<port>`.
@@ -1140,7 +1130,7 @@ Wrappers and session daemons rely on a small set of env vars:
 - Plus the standard `GIT_AUTHOR_*` / `GIT_COMMITTER_*`
   — explicitly forwarded into the container via `_DOCKER_FORWARD_ENV`.
   (github and AWS reach a session as the scoped `github` / `aws` secrets via their install hooks, not as forwarded env;
-  an ambient host `GITHUB_TOKEN` is deliberately not forwarded into a container, and blanked by the `github` hook where a host session inherits one.)
+  an ambient host `GITHUB_TOKEN` is deliberately not forwarded into a container, and blanked by the `github` hook where an unboxed session inherits one.)
 
 ## Session recording
 
@@ -1170,5 +1160,5 @@ the runner ends the launch, since a session that believes it is recording and is
 A session whose transcript ends in a `raise` service-tool call gets its trail ended as `raised` with the reason as `end.detail` (a later real user message — a resume moving past the abort — clears it),
 keeping an unattended session's abort queryable without parsing the jsonl.
 
-Worktree creation and provisioning are likewise owned by `ride` directly (host mode — see "Host mode" above);
+Clone creation and provisioning are owned by `ride` directly (unboxed isolation — see "Unboxed isolation" above);
 no Claude Code hooks are wired for either.
