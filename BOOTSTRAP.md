@@ -341,7 +341,7 @@ class MyDev(Dev):
     model='<model from the pinned source>', reasoning_effort='high'
   )
   features = {'brog': True}
-  extra_secrets = ('github',)
+  extra_secrets = 'github'
   data_sources = [
     man('environment'),
     man('template'),
@@ -357,7 +357,7 @@ Apply these rules:
 - Set `features = {'brog': True}` only when this repository's brog is chosen and successfully configured.
 - While a newly chosen brog still awaits section 5, leave the value `False` and record the one pending repository edit rather than claiming it works.
 - Keep it `False` when brog is declined, so ambient credentials cannot silently enable task workflows.
-- Include `extra_secrets = ('github',)` for a GitHub development workflow or GitHub brog.
+- Include `extra_secrets = 'github'` for a GitHub development workflow or GitHub brog.
   GitHub brog's managed identity probe and exhaustive issue scan use `gh`, whose scoped install hook runs only when `github` is a declared kind rather than a transitive `$cred` reference.
 - Do not redeclare Dev's tools, style source, spells, or hook provisioning.
 - Do not declare `may_summon` before the roster-design task identifies a real collaborator.

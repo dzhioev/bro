@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, Optional, get_args
 
 from bro.base import condition, credentials, template
 from bro.base.condition import var
+from bro.base.string_set import StringSetDeclaration, normalize_string_set
 
 if TYPE_CHECKING:
   from bro.llm.mcp import InProcessMCPServer, MCPServer, Tool
@@ -206,8 +207,12 @@ class MCPServerSpec:
     """
     return MCPServerSpec(
       build=functools.partial(server_cls, *args, **kwargs),
-      needed_secrets=tuple(server_cls.needed_secrets),
-      optional_secrets=tuple(server_cls.optional_secrets),
+      needed_secrets=normalize_string_set(
+        server_cls.needed_secrets, f'{server_cls.__name__}.needed_secrets'
+      ),
+      optional_secrets=normalize_string_set(
+        server_cls.optional_secrets, f'{server_cls.__name__}.optional_secrets'
+      ),
     )
 
 
@@ -352,7 +357,13 @@ class Toolset[T]:
 
   # credentials the toolset's tools read through the store when the set is
   # independent of the tool subset; the `get_secrets` default returns it.
-  secrets: ClassVar[tuple[str, ...]] = ()
+  secrets: ClassVar[StringSetDeclaration] = ()
+
+  def __init_subclass__(cls, **kwargs: Any) -> None:
+    super().__init_subclass__(**kwargs)
+    value = vars(cls).get('secrets')
+    if value is not None:
+      cls.secrets = normalize_string_set(value, f'{cls.__name__}.secrets')
 
   def __init__(
     self,
@@ -387,9 +398,14 @@ class Toolset[T]:
   def tool_names(self) -> tuple[str, ...]:
     return tuple(self._by_name)
 
-  def get_secrets(self, tool_names: Sequence[str]) -> tuple[str, ...]:
+  def get_secrets(self, tool_names: Sequence[str]) -> StringSetDeclaration:
     """credentials needed by a server scoped to `tool_names`; default: the class var."""
     return self.secrets
+
+  def _secret_names(self, tool_names: Sequence[str]) -> tuple[str, ...]:
+    return normalize_string_set(
+      self.get_secrets(tool_names), f'{type(self).__name__}.get_secrets()'
+    )
 
   def _resolve(self, tool_names: tuple[str, ...]) -> tuple[str, ...]:
     """the full roster for no names; otherwise the given names, validated."""
@@ -419,11 +435,9 @@ class Toolset[T]:
       for function in self._by_name.values()
     ]
 
-  def build(self, *tool_names: str) -> InProcessMCPServer:
-    """the live server: per-server state built once, shared by every call through it."""
+  def _build(self, names: tuple[str, ...], secret_names: tuple[str, ...]) -> InProcessMCPServer:
     from bro.llm.mcp import FunctionTool, InProcessMCPServer
 
-    names = self._resolve(tool_names)
     state = self._state_factory()
     variables = self._variables(names)
     close = None if self._close_state is None else functools.partial(self._close_state, state)
@@ -435,13 +449,19 @@ class Toolset[T]:
     # instance attributes over the writable class-attr defaults: the live
     # server stays self-describing — its scoped credential needs and the
     # definition roster it was built from.
-    server.needed_secrets = self.get_secrets(names)
+    server.needed_secrets = secret_names
     server.tool_universe = tuple(self._by_name)
     return server
 
+  def build(self, *tool_names: str) -> InProcessMCPServer:
+    """the live server: per-server state built once, shared by every call through it."""
+    names = self._resolve(tool_names)
+    return self._build(names, self._secret_names(names))
+
   def _manifest(self, *tool_names: str) -> MCPServerSpec:
     names = self._resolve(tool_names)
+    secret_names = self._secret_names(names)
     return MCPServerSpec(
-      build=lambda: self.build(*names),
-      needed_secrets=self.get_secrets(names),
+      build=lambda: self._build(names, secret_names),
+      needed_secrets=secret_names,
     )

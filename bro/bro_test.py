@@ -840,7 +840,7 @@ class _SecretServer(InProcessMCPServer):
 class _SecretSource(SearchableDataSource):
   name = 'secret-src'
   summary = 'src with a secret'
-  needed_secrets = ('gamma',)
+  needed_secrets = 'gamma'
 
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
     return []
@@ -850,6 +850,34 @@ class _SecretSource(SearchableDataSource):
 
 
 class TestNeededSecrets:
+  def test_one_shot_declarations_are_reused_across_instances(self):
+    class OneShotBro(BaseBro):
+      name = 'one-shot'
+      description = 'd'
+      extra_secrets = iter(('github', 'openai'))  # noqa: RUF012 — one-shot declaration
+      may_summon = iter(('reviewer', 'analyst'))  # noqa: RUF012 — one-shot declaration
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    first = OneShotBro()
+    second = OneShotBro()
+    assert first.needed_secrets() == ('github', 'openai')
+    assert second.needed_secrets() == ('github', 'openai')
+    assert first._may_summon == ('reviewer', 'analyst')
+    assert second._may_summon == ('reviewer', 'analyst')
+
+  def test_bare_extra_secret_is_one_name(self):
+    class BareSecretBro(BaseBro):
+      name = 'bare-secret'
+      description = 'd'
+      extra_secrets = 'github'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    assert BareSecretBro().needed_secrets() == ('github',)
+
   def test_unions_mcp_datasources_and_extra(self):
     class ManifestBro(BaseBro):
       name = 'manifest'
@@ -883,6 +911,19 @@ class TestNeededSecrets:
 
 
 class TestCredentialDeclarations:
+  @pytest.mark.parametrize('secrets', [7, ('github', 7)])
+  def test_extra_secrets_rejects_invalid_values(self, secrets):
+    class InvalidExtraSecrets(BaseBro):
+      name = 'invalid-extra'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    InvalidExtraSecrets.extra_secrets = secrets
+    with pytest.raises(TypeError, match='InvalidExtraSecrets.extra_secrets'):
+      InvalidExtraSecrets()
+
   def test_extra_secrets_rejects_an_instance_name(self):
     class InstanceBro(BaseBro):
       name = 'instance-extra'
@@ -933,6 +974,25 @@ class TestCredentialDeclarations:
       InstanceBro()
 
   @pytest.mark.parametrize('manifest_name', ['needed_secrets', 'optional_secrets'])
+  @pytest.mark.parametrize('secrets', [7, ('github', 7)])
+  def test_data_source_manifest_rejects_invalid_values(self, manifest_name, secrets):
+    class InvalidSource(_SecretSource):
+      pass
+
+    setattr(InvalidSource, manifest_name, secrets)
+
+    class InvalidBro(BaseBro):
+      name = 'invalid-source'
+      description = 'd'
+      data_sources: ClassVar = [InvalidSource()]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(TypeError, match=rf'InvalidSource.{manifest_name}'):
+      InvalidBro()
+
+  @pytest.mark.parametrize('manifest_name', ['needed_secrets', 'optional_secrets'])
   def test_data_source_manifest_rejects_an_instance_name(self, manifest_name):
     class InstanceSource(_SecretSource):
       pass
@@ -979,6 +1039,30 @@ class TestCredentialDeclarations:
 
 
 class TestMaySummon:
+  @pytest.mark.parametrize('targets', [7, ('reviewer', 7)])
+  def test_rejects_invalid_values(self, targets):
+    class InvalidTargets(BaseBro):
+      name = 'invalid-targets'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    InvalidTargets.may_summon = targets
+    with pytest.raises(TypeError, match='InvalidTargets.may_summon'):
+      InvalidTargets()
+
+  def test_bare_name_is_one_target(self):
+    class BareTarget(BaseBro):
+      name = 'bare-target'
+      description = 'd'
+      may_summon = 'reviewer'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    assert BareTarget()._may_summon == ('reviewer',)
+
   def test_defaults_to_empty(self):
     class Plain(BaseBro):
       name = 'plain'
@@ -1028,7 +1112,7 @@ class _OptionalServer(InProcessMCPServer):
 class _OptionalSource(SearchableDataSource):
   name = 'optional-src'
   summary = 'src with an optional secret'
-  optional_secrets = ('psi',)
+  optional_secrets = 'psi'
 
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
     return []

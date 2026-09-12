@@ -10,7 +10,7 @@ _MAX_EXTRACT_CHARS = 60_000
 
 class WebSearch(SearchableDataSource):
   name = 'web-search'
-  needed_secrets = ('brave',)
+  needed_secrets = 'brave'
   summary = (
     'Web search — open-ended search across the public web (Brave Search index). '
     'Use for finding canonical URLs, ids, or pages when a structured source has no '

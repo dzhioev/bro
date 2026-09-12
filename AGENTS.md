@@ -442,7 +442,7 @@ add tool sources as class attributes too:
   ruff's RUF012 is ignored for `bros/*/__init__.py`.
 - `llm_spec = openai.LLMSpec(...)` (or any other bro-native provider's `LLMSpec`) overrides the LLM recipe.
   Per-instance overrides go through `YourBro.create(spec)`.
-- `extra_secrets = ('github',)` declares credentials no component expresses (a bro's environment needs).
+- `extra_secrets = 'github'` declares credentials no component expresses (a bro's environment needs).
   MRO-walked and unioned like `tools`;
   folded into `bro.needed_secrets()`, which the host hydrates into the scoped container store.
   Most secrets come from the declared MCP servers / data sources / `llm_spec` and need no entry here
@@ -453,7 +453,7 @@ add tool sources as class attributes too:
   Gate components with `when(feature('brog'), …)` (`from bro.bro import feature`) and text with `{{iff #features contains brog}}`;
   a gated component's secrets enter the manifest only where its gates resolve, and the gate's own credential is tiered with the feature.
   See `bro/reference/conditions.md` "Bro features".
-- `may_summon = ('reviewer',)` declares which bros this bro may summon
+- `may_summon = 'reviewer'` declares which bros this bro may summon
   — its static outgoing allow-list, adjusted per launch by `--grant @bro` and `--revoke @bro`.
   A summoned child may name only bros its summoner could summon, so widening is explicit and bounded by the host's depth cap.
   The declaration is MRO-walked and unioned like `extra_secrets`;
@@ -504,5 +504,5 @@ with the key absent a non-null `query` raises (no raw-text fallback).
 For other shapes (e.g. a singleton fact like `current_time.py`), subclass `DataSource` directly and override `as_mcp_server()` to expose whatever tools fit.
 When an upstream HTTP/network failure makes the source temporarily unusable, raise `bro.datasources.base.SourceUnavailable(source, reason)` rather than letting raw transport exceptions escape
 — the agent loop turns it into a tool result the model can route around.
-If the source reads a credential through the store, declare it with `needed_secrets = ('catalog',)` (or `optional_secrets` for one it degrades without) so the host hydrates it into any bro that uses the source (see "Credential manifest").
+If the source reads a credential through the store, declare it with `needed_secrets = 'catalog'` (or `optional_secrets` for one it degrades without) so the host hydrates it into any bro that uses the source (see "Credential manifest").
 Bind to a Bro by declaring `data_sources = [YourSource()]` on its class.

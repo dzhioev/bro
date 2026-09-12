@@ -16,7 +16,7 @@ class BroDev(Dev):
   description = 'bro framework development: task → implement → verify → land'
   llm_spec = llm_llms_openai.LLMSpec(model='gpt-5.6-sol', reasoning_effort='high')
   features = {'brog': True}
-  extra_secrets = ('github',)
+  extra_secrets = 'github'
   data_sources = [
     man('environment'),
     man('template'),

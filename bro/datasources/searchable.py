@@ -6,6 +6,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from bro.base import credentials, template
+from bro.base.string_set import normalize_string_set
 from bro.datasources.base import DataSource
 from bro.llm.mcp import InProcessMCPServer, MCPServer, Tool
 
@@ -28,9 +29,9 @@ class Hit:
 
 
 class SearchableDataSource(DataSource):
-  optional_secrets = (SUMMARY_SECRET,)
+  optional_secrets = SUMMARY_SECRET
   # `summary` — the query-focused fetch mode, live iff the LLM key resolves
-  feature_names = ('summary',)
+  feature_names = 'summary'
 
   def has_feature(self, name: str) -> bool:
     if name == 'summary':
@@ -81,8 +82,12 @@ class SearchableDataSource(DataSource):
     server = InProcessMCPServer(self.namespace, [_SearchTool(self), _FetchTool(self)])
     # stamp the source's secrets onto the vanilla server (writable class-attr
     # defaults, no property clash) so the live server stays self-describing.
-    server.needed_secrets = self.needed_secrets
-    server.optional_secrets = self.optional_secrets
+    server.needed_secrets = normalize_string_set(
+      self.needed_secrets, f'{type(self).__name__}.needed_secrets'
+    )
+    server.optional_secrets = normalize_string_set(
+      self.optional_secrets, f'{type(self).__name__}.optional_secrets'
+    )
     return server
 
 

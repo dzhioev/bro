@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 import pytest
 
 from bro import mcp, registry
@@ -202,6 +204,77 @@ class TestToolLayer:
     assert isinstance(selected, mcp.ToolLayer)
     assert len(full.server_specs) == 1
     assert len(selected.server_specs) == 1
+
+
+class TestStringSetDeclarations:
+  def test_toolset_normalizes_a_bare_secret_name(self):
+    class BareSecretToolset(mcp.Toolset[None]):
+      secrets = 'github'
+
+    toolset = BareSecretToolset('bare-secret')
+    assert mcp.mount(toolset).server_specs[0].needed_secrets == ('github',)
+    assert toolset.build().needed_secrets == ('github',)
+
+  def test_toolset_normalizes_an_iterable_of_secret_names(self):
+    class IterableSecretToolset(mcp.Toolset[None]):
+      secrets: ClassVar = ['github', 'openai']
+
+    toolset = IterableSecretToolset('iterable-secrets')
+    assert mcp.mount(toolset).server_specs[0].needed_secrets == ('github', 'openai')
+
+  def test_toolset_manifest_reuses_one_shot_secrets_when_built(self):
+    class OneShotSecretToolset(mcp.Toolset[None]):
+      def __init__(self):
+        super().__init__('one-shot-secrets')
+        self.secret_names = iter(('github', 'openai'))
+
+      def get_secrets(self, tool_names):
+        return self.secret_names
+
+    manifest = mcp.mount(OneShotSecretToolset()).server_specs[0]
+    assert manifest.needed_secrets == ('github', 'openai')
+    assert manifest.build().needed_secrets == ('github', 'openai')
+
+  @pytest.mark.parametrize('secrets', [7, ('github', 7)])
+  def test_toolset_rejects_invalid_secret_values(self, secrets):
+    class InvalidSecretToolset(mcp.Toolset[None]):
+      pass
+
+    InvalidSecretToolset.secrets = secrets
+    with pytest.raises(TypeError, match='InvalidSecretToolset.get_secrets'):
+      mcp.mount(InvalidSecretToolset('invalid-secrets'))
+
+  def test_direct_server_normalizes_bare_secret_names(self):
+    class BareSecretServer(InProcessMCPServer):
+      needed_secrets = 'github'
+      optional_secrets = 'openai'
+
+      def __init__(self):
+        super().__init__('bare-secret', [])
+
+    manifest = mcp.MCPServerSpec.of(BareSecretServer)
+    assert manifest.needed_secrets == ('github',)
+    assert manifest.optional_secrets == ('openai',)
+
+  def test_direct_server_canonicalizes_one_shot_secret_declarations(self):
+    class OneShotSecretServer(InProcessMCPServer):
+      needed_secrets = iter(('github', 'openai'))  # noqa: RUF012 — one-shot declaration
+
+      def __init__(self):
+        super().__init__('one-shot-secret', [])
+
+    assert mcp.MCPServerSpec.of(OneShotSecretServer).needed_secrets == ('github', 'openai')
+    assert mcp.MCPServerSpec.of(OneShotSecretServer).needed_secrets == ('github', 'openai')
+
+  @pytest.mark.parametrize('secrets', [7, ('github', 7)])
+  def test_direct_server_rejects_invalid_secret_values(self, secrets):
+    class InvalidSecretServer(InProcessMCPServer):
+      def __init__(self):
+        super().__init__('invalid-secret', [])
+
+    InvalidSecretServer.needed_secrets = secrets
+    with pytest.raises(TypeError, match='InvalidSecretServer.needed_secrets'):
+      mcp.MCPServerSpec.of(InvalidSecretServer)
 
 
 class TestToolsetRendering:

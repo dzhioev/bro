@@ -8,6 +8,7 @@ from typing import Any, Optional, get_origin
 from bro import mcp
 from bro.base import condition, template
 from bro.base.offload import off_loop
+from bro.base.string_set import StringSetDeclaration, normalize_string_set
 
 _PRIMITIVE_SHAPE = {
   'string': 'str',
@@ -193,12 +194,12 @@ class MCPServer(ABC):
   # `bro.needed_secrets()` so the host can hydrate a scoped credential set per
   # bro. override with the secret names a subclass actually reads; the empty
   # default means "no credentials".
-  needed_secrets: tuple[str, ...] = ()
+  needed_secrets: StringSetDeclaration = ()
   # credentials this server's tools use *if present* but degrade without (e.g. the
   # LLM key behind a query-focused summary). unioned into `bro.optional_secrets()`,
   # which the host hydrates best-effort (`build_scoped_store(optional=...)`) — an
   # absent one is skipped, not a launch failure. mirrors `needed_secrets`.
-  optional_secrets: tuple[str, ...] = ()
+  optional_secrets: StringSetDeclaration = ()
   # the flat namespace this server's tools live in (`tasks`, `dev`, `bro`,
   # `<name>-source`). the assembling layer reads it to keep two sources'
   # identically-named tools (e.g. `search`) distinct — `ToolRegistry` forms
@@ -210,6 +211,17 @@ class MCPServer(ABC):
   # closed `#tools` universe its descriptions rendered against. None: the
   # server serves its whole definition.
   tool_universe: Optional[tuple[str, ...]] = None
+
+  def __init_subclass__(cls, **kwargs: Any) -> None:
+    super().__init_subclass__(**kwargs)
+    for attribute_name in ('needed_secrets', 'optional_secrets'):
+      value = vars(cls).get(attribute_name)
+      if value is not None:
+        setattr(
+          cls,
+          attribute_name,
+          normalize_string_set(value, f'{cls.__name__}.{attribute_name}'),
+        )
 
   @abstractmethod
   async def list_tools(self) -> list[Tool]: ...

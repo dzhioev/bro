@@ -78,7 +78,7 @@ class Triage(Bro):
   description = 'reads and labels incoming issues, hands confirmed bugs on'
   llm_spec = openai.LLMSpec(model='gpt-5.6-sol', reasoning_effort='high')
   features = {'brog': creds.contains('brog')}
-  may_summon = ('analyst',)
+  may_summon = 'analyst'
   tools = [
     mount(issues.toolset),
     when(feature('brog'), mount(brog_mcp.toolset, 'create_task', 'add_comment')),
@@ -179,7 +179,7 @@ Read the class line by line and nothing is left to configure elsewhere:
 - `data_sources` are read-only connectors whose summaries land in the prompt: web search and the reference manual.
 - `llm_spec` is the model it runs on by default;
   any launch may name another.
-- `may_summon = ('analyst',)` is whom it may summon on its own authority:
+- `may_summon = 'analyst'` is whom it may summon on its own authority:
   the built-in analyst, which answers from the recorded runs.
   Every other delegate is a launch grant, and a `{{when #may_summon contains …}}` paragraph shows only in a session that may.
 - `spells = ('triage.md',)` names its procedure, `bros/triage/spells/triage.md` beside the class, served as the `spell::triage` tool.
@@ -270,7 +270,7 @@ from bro.mcp import Toolset
 
 
 class _Toolset(Toolset[None]):
-  secrets = ('github',)
+  secrets = 'github'
 
 
 toolset = _Toolset('issues')
@@ -313,7 +313,7 @@ class Fixer(Dev):
   description = 'fixes a confirmed bug and opens the pull request'
   llm_spec = openai.LLMSpec(model='gpt-5.6-sol', reasoning_effort='high')
   features = {'brog': True}
-  extra_secrets = ('github',)
+  extra_secrets = 'github'
   system_prompt = 'Work from the task you were handed, and open the pull request with [[run pr]].'
 
 

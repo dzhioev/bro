@@ -97,6 +97,7 @@ run those with `--help` for flags.
   case-insensitive, whitespace-tolerant name → value lookup (strip + casefold, exact match only).
   For matching a free-form name an LLM or human emits against a known set;
   collisions and misses raise with the available names listed.
+- `string_set.py` — the shared declaration shape for string sets and its fail-fast normalization from a bare string or iterable into a tuple.
 - `condition.py` — first-class conditions over typed variables:
   `==` / `contains` on `var(...)` references build an immutable predicate at declaration time,
   `evaluate` decides it fail-fast against the facts,

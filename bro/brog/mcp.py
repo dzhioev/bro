@@ -13,7 +13,7 @@ from bro.mcp import Toolset
 class _Toolset(Toolset[System]):
   # the brog config is self-contained (the active backend's credentials are embedded),
   # so the manifest is static — no tool-subset derivation
-  secrets = ('brog',)
+  secrets = 'brog'
 
 
 toolset = _Toolset('brog', state=default_system)

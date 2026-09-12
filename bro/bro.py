@@ -24,6 +24,7 @@ from bro.base.condition import (
   var,
 )
 from bro.base.offload import off_loop
+from bro.base.string_set import StringSetDeclaration, normalize_string_set
 from bro.datasources.base import DataSource
 from bro.datasources.man import ManPage, manual
 from bro.harness import claude
@@ -562,17 +563,25 @@ def _feature_variables(features: dict[str, Condition | bool]) -> Variables:
   return {'features': SetVariable(enabled, universe=frozenset(features))}
 
 
+def _component_secret_names(
+  component: mcp.MCPServerSpec | DataSource, attribute_name: str
+) -> tuple[str, ...]:
+  value = getattr(component, attribute_name)
+  declaration = f'{type(component).__name__}.{attribute_name}'
+  return normalize_string_set(value, declaration)
+
+
 def _component_needed_secrets(component: mcp.MCPServerSpec | DataSource) -> set[str]:
   # a component declares its credentials as plain metadata (a spec field, or a
   # DataSource class attribute), so reading the manifest never builds a live
   # server. no real component extends a non-empty base's declaration, so an MRO
   # union would be identical.
-  return set(component.needed_secrets)
+  return set(_component_secret_names(component, 'needed_secrets'))
 
 
 def _component_optional_secrets(component: mcp.MCPServerSpec | DataSource) -> set[str]:
   # mirror of `_component_needed_secrets` for the best-effort tier (`optional_secrets`).
-  return set(component.optional_secrets)
+  return set(_component_secret_names(component, 'optional_secrets'))
 
 
 @dataclass(frozen=True)
@@ -693,21 +702,21 @@ def _validate_component_credentials(entries: Iterable[Entry[Any]], declaration: 
     if isinstance(component, mcp.ToolLayer):
       for spec_index, spec in enumerate(component.server_specs):
         manifest = f'{component_declaration} MCP server {spec_index}'
-        for name in spec.needed_secrets:
+        for name in _component_secret_names(spec, 'needed_secrets'):
           credentials.require_kind_declaration(name, f'{manifest}.needed_secrets')
-        for name in spec.optional_secrets:
+        for name in _component_secret_names(spec, 'optional_secrets'):
           credentials.require_kind_declaration(name, f'{manifest}.optional_secrets')
     elif isinstance(component, DataSource):
       manifest = f'{component_declaration} {type(component).__name__}'
-      for name in component.needed_secrets:
+      for name in _component_secret_names(component, 'needed_secrets'):
         credentials.require_kind_declaration(name, f'{manifest}.needed_secrets')
-      for name in component.optional_secrets:
+      for name in _component_secret_names(component, 'optional_secrets'):
         credentials.require_kind_declaration(name, f'{manifest}.optional_secrets')
     elif isinstance(component, ManPage):
       manifest = f'{component_declaration} {type(component.page).__name__}'
-      for name in component.page.needed_secrets:
+      for name in _component_secret_names(component.page, 'needed_secrets'):
         credentials.require_kind_declaration(name, f'{manifest}.needed_secrets')
-      for name in component.page.optional_secrets:
+      for name in _component_secret_names(component.page, 'optional_secrets'):
         credentials.require_kind_declaration(name, f'{manifest}.optional_secrets')
 
 
@@ -762,13 +771,13 @@ class BaseBro(ABC):
   # needs. MRO-walked and unioned like `tools`, so a subclass declares only
   # what it adds. folded into
   # `needed_secrets()`.
-  extra_secrets: tuple[str, ...] = ()
+  extra_secrets: StringSetDeclaration = ()
   # bros this bro may summon — its static outgoing allow-list. root sessions get
   # it adjusted per session by `--grant @bro`/`--revoke @bro`; a summoned child
   # follows the bare seeds, so summons chain transitively through seeded bros
   # under the host's depth cap (see ride/ride/summon_control.py). MRO-walked and
   # unioned like `extra_secrets`.
-  may_summon: tuple[str, ...] = ()
+  may_summon: StringSetDeclaration = ()
   # session-start steps for the session's workspace, applied to its root at
   # session start. every start of a session runs them, resumes included, so a
   # step is idempotent and leaves state the workspace already carries alone.
@@ -794,6 +803,14 @@ class BaseBro(ABC):
 
   def __init_subclass__(cls, **kwargs: Any) -> None:
     super().__init_subclass__(**kwargs)
+    for attribute_name in ('extra_secrets', 'may_summon'):
+      value = vars(cls).get(attribute_name)
+      if value is not None:
+        setattr(
+          cls,
+          attribute_name,
+          normalize_string_set(value, f'{cls.__name__}.{attribute_name}'),
+        )
     for attribute_name, value in vars(cls).items():
       if attribute_name in _COMPONENT_DECLARATION_ATTRIBUTES:
         continue
@@ -834,12 +851,13 @@ class BaseBro(ABC):
         prompt_parts.append(raw_prompt)
       raw_extra = cls.__dict__.get('extra_secrets')
       if raw_extra is not None:
-        for name in raw_extra:
+        extra_names = normalize_string_set(raw_extra, f'{cls.__name__}.extra_secrets')
+        for name in extra_names:
           credentials.require_kind_declaration(name, f'{cls.__name__}.extra_secrets')
-        extra_secret_names.extend(raw_extra)
+        extra_secret_names.extend(extra_names)
       raw_summon = cls.__dict__.get('may_summon')
       if raw_summon is not None:
-        may_summon_names.extend(raw_summon)
+        may_summon_names.extend(normalize_string_set(raw_summon, f'{cls.__name__}.may_summon'))
       raw_provisioning = cls.__dict__.get('provisioning')
       if raw_provisioning is not None:
         provision_steps.extend(raw_provisioning)
