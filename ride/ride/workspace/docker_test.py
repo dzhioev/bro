@@ -446,7 +446,7 @@ class TestDockerCreateArgv:
 
   def test_uses_docker_create_run_equivalent(self, build_argv):
     # `docker create -it --rm` is the unstarted half of `docker run -it --rm`;
-    # run_in_container pairs it with `docker start -a -i`.
+    # root supervision pairs it with `docker start -a -i`.
     assert build_argv()[:4] == ['docker', 'create', '-it', '--rm']
 
   def test_runtime_bundle_volume_is_read_only_at_the_fixed_path(self, build_argv):

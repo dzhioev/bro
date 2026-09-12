@@ -5,6 +5,7 @@ import signal
 import sys
 import textwrap
 import threading
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -450,6 +451,195 @@ class TestProcessSpawner:
     handle = await workspace_spawn.ProcessSpawner().spawn(launch, provisioned, 'X-1')
     assert isinstance(handle, workspace_spawn._HeadlessProcess)
     assert await handle.wait() == 0
+
+
+class TestProcessChildWorkspaceCleanup:
+  def _launch(self, tmp_path, code: str) -> workspace_spawn.ProcessLaunchSpec:
+    project = tmp_path / 'project'
+    project.mkdir()
+    workspace = Workspace.create(
+      'broker-CH',
+      project,
+      Isolation.UNBOXED,
+      throwaway=True,
+    )
+    workspace.tree.mkdir(parents=True)
+    private_store = tmp_path / 'private-store'
+    private_store.mkdir()
+    return workspace_spawn.ProcessLaunchSpec(
+      command=[sys.executable, '-c', code],
+      cwd=str(workspace.tree),
+      env={},
+      interactive=False,
+      capture_output=True,
+      workspace=workspace.name,
+      cleanup_directory=str(private_store),
+    )
+
+  async def _spawn(self, launch):
+    channel = workspace_spawn.Provisioned(
+      channel='CH',
+      host_endpoint=Endpoint(port=7321, token='tk'),
+    )
+    return await workspace_spawn.ProcessSpawner().spawn(launch, channel, 'X-1')
+
+  @pytest.mark.asyncio
+  async def test_clean_exit_removes_workspace_and_store(self, tmp_path):
+    launch = self._launch(tmp_path, 'pass')
+    assert launch.cleanup_directory is not None
+
+    handle = await self._spawn(launch)
+
+    assert await handle.wait() == 0
+    assert not Path(launch.cleanup_directory).exists()
+    with pytest.raises(ValueError, match='broker-CH'):
+      Workspace.open('broker-CH')
+
+  @pytest.mark.asyncio
+  async def test_pre_spawn_failure_removes_store(self, tmp_path):
+    private_store = tmp_path / 'private-store'
+    private_store.mkdir()
+    launch = workspace_spawn.ProcessLaunchSpec(
+      command=['missing-command'],
+      cwd=str(tmp_path),
+      env={},
+      interactive=False,
+      capture_output=True,
+      workspace='missing-workspace',
+      cleanup_directory=str(private_store),
+    )
+
+    with pytest.raises(ValueError, match='missing-workspace'):
+      await self._spawn(launch)
+
+    assert not private_store.exists()
+
+  @pytest.mark.asyncio
+  async def test_pre_spawn_cleanup_failure_is_raised(self, monkeypatch, tmp_path):
+    private_store = tmp_path / 'private-store'
+    private_store.mkdir()
+    launch = workspace_spawn.ProcessLaunchSpec(
+      command=['missing-command'],
+      cwd=str(tmp_path),
+      env={},
+      interactive=False,
+      capture_output=True,
+      workspace='missing-workspace',
+      cleanup_directory=str(private_store),
+    )
+
+    def fail_cleanup(path):
+      del path
+      raise OSError('cleanup refused')
+
+    monkeypatch.setattr(workspace_spawn.shutil, 'rmtree', fail_cleanup)
+
+    with pytest.raises(OSError, match='cleanup refused'):
+      await self._spawn(launch)
+
+    assert private_store.is_dir()
+
+  @pytest.mark.asyncio
+  async def test_post_exit_cleanup_failure_is_raised(self, monkeypatch, tmp_path):
+    launch = self._launch(tmp_path, 'pass')
+    assert launch.cleanup_directory is not None
+    private_store = Path(launch.cleanup_directory)
+    real_rmtree = workspace_spawn.shutil.rmtree
+
+    def fail_private_store(path, *args, **kwargs):
+      if Path(path) == private_store:
+        raise OSError('cleanup refused')
+      return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(workspace_spawn.shutil, 'rmtree', fail_private_store)
+    handle = await self._spawn(launch)
+
+    with pytest.raises(OSError, match='cleanup refused'):
+      await handle.wait()
+
+    assert private_store.is_dir()
+    assert Workspace.open('broker-CH').isolation is Isolation.UNBOXED
+
+  @pytest.mark.asyncio
+  async def test_failure_keeps_workspace_removes_store_and_captures_output(self, tmp_path):
+    launch = self._launch(
+      tmp_path,
+      'import sys; print("failure detail"); raise SystemExit(3)',
+    )
+
+    handle = await self._spawn(launch)
+
+    assert await handle.wait() == 3
+    assert 'failure detail' in handle.output_tail()
+    assert Workspace.open('broker-CH').isolation is Isolation.UNBOXED
+    assert _exit_record(tmp_path) == '3'
+    assert launch.cleanup_directory is not None
+    assert not Path(launch.cleanup_directory).exists()
+
+  @pytest.mark.asyncio
+  async def test_kill_graces_the_leader_then_forces_the_process_group(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_spawn, '_PROCESS_TERM_GRACE', 0.1)
+    child_ready = tmp_path / 'child-ready'
+    child_stopped = tmp_path / 'child-stopped'
+    parent_ready = tmp_path / 'parent-ready'
+    parent_stopped = tmp_path / 'parent-stopped'
+    child_code = f"""
+import signal
+import time
+from pathlib import Path
+
+def stop(*_args):
+  Path({str(child_stopped)!r}).touch()
+  raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, stop)
+Path({str(child_ready)!r}).touch()
+time.sleep(30)
+"""
+    parent_code = f"""
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+def stop(*_args):
+  Path({str(parent_stopped)!r}).touch()
+  raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, stop)
+subprocess.Popen([sys.executable, '-c', {child_code!r}])
+while not Path({str(child_ready)!r}).exists():
+  time.sleep(0.01)
+Path({str(parent_ready)!r}).touch()
+time.sleep(30)
+"""
+    launch = self._launch(tmp_path, parent_code)
+    handle = await self._spawn(launch)
+    assert isinstance(handle, workspace_spawn._ProcessChild)
+    async with asyncio.timeout(5):
+      while not parent_ready.exists():
+        await asyncio.sleep(0.01)
+
+    await handle.kill()
+
+    assert parent_stopped.is_file()
+    assert not child_stopped.exists()
+    assert await handle.wait() == 0
+    assert _exit_record(tmp_path) == 'killed'
+
+  @pytest.mark.asyncio
+  async def test_kill_keeps_workspace_and_removes_store(self, tmp_path):
+    launch = self._launch(tmp_path, 'import time; time.sleep(30)')
+    handle = await self._spawn(launch)
+
+    await handle.kill()
+
+    assert await handle.wait() != 0
+    assert Workspace.open('broker-CH').isolation is Isolation.UNBOXED
+    assert _exit_record(tmp_path) == 'killed'
+    assert launch.cleanup_directory is not None
+    assert not Path(launch.cleanup_directory).exists()
 
 
 class TestCompositeSpawner:
