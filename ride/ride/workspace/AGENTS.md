@@ -9,7 +9,7 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
 - **Harness-neutral.**
   Workspace modules know no Claude or native-harness policy.
   Launch surfaces supply commands, environment, mounts, and credential tiers as plain launch data.
-  Workspace creation and `setup.sh` finish before the launcher starts `do-ride`, which owns the per-session setup.
+  `ride.session.started_party_launch` prepares either isolation before supervision starts `do-ride`, which owns the per-session setup.
 - **Isolation is recorded.**
   `workspace.json` fixes boxed or unboxed isolation at creation.
   Every attached tree is an independent clone;
@@ -35,8 +35,8 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
 - `worktrees.py` — the surviving unboxed `setup.sh` runner
 - `clones.py` — clone creation for every attached tree, upstream retargeting, base checkout, and submodule initialization
 - `containers.py` — boxed execution and attachment plus the broker availability gate
-- `spawn.py` — boxed and unboxed-process broker spawner adapters, bounded child output, terminal ownership, and launcher-log redirection
-- `store.py` — scoped credential tiers, override finalization, host materialization, and container tar packing
+- `spawn.py` — boxed and unboxed-process broker spawner adapters, bounded child output, process-group kills, throwaway-workspace and private-credential teardown, terminal ownership, and launcher-log redirection
+- `store.py` — scoped credential tiers, override finalization, directory materialization, and container tar packing
 - `launch_smoke_test.py` — host-only cold-image launch check, run by the gate's Docker stage
 - `host_docker_test_helper.py` — the checkout to build from, a throwaway root the daemon can bind-mount, the host's daemon endpoint, and the host-only skips
   — what a test driving the real docker daemon needs from the host it runs on
