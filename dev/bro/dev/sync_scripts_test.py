@@ -17,7 +17,7 @@ def test_imports_without_git_metadata(tmp_path):
   assert result.returncode == 0, f'stderr: {result.stderr}'
 
 
-def test_syncs_one_project_without_scanning_the_ones_nested_in_it(tmp_path):
+def test_syncs_one_project_without_scanning_the_ones_nested_in_it(tmp_path, capsys):
   (tmp_path / 'package').mkdir()
   (tmp_path / 'package' / '__init__.py').write_text('')
   (tmp_path / 'package' / 'cli.py').write_text(
@@ -47,6 +47,9 @@ members = ["member"]
   sync_scripts.sync_pyproject(project)
   sync_scripts.sync_entrypoints(project)
 
+  stderr = capsys.readouterr().err
+  assert f' INFO[bro.dev.sync_scripts] updated {tmp_path / "pyproject.toml"}\n' in stderr
+  assert f' INFO[bro.dev.sync_scripts] updated {tmp_path / "_entrypoints.py"}\n' in stderr
   data = tomllib.loads((tmp_path / 'pyproject.toml').read_text())
   assert data['project']['scripts'] == {
     'package.cli': '_entrypoints:package_cli',
