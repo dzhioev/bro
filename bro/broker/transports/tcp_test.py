@@ -237,14 +237,14 @@ async def test_close_completing_before_the_reader_parks_reads_as_eof(monkeypatch
     def select_once_close_has_run(*args):
       if not reader_reached_select.is_set():
         reader_reached_select.set()
-        close_returned.wait(TIMEOUT)
+        close_returned.wait()
       return real_select(*args)
 
     monkeypatch.setattr(
       'bro.broker.transports.tcp.select', SimpleNamespace(select=select_once_close_has_run)
     )
     receive_task = asyncio.create_task(asyncio.to_thread(client.receive, TIMEOUT))
-    await asyncio.to_thread(reader_reached_select.wait, TIMEOUT)
+    assert await asyncio.to_thread(reader_reached_select.wait, TIMEOUT)
     await asyncio.to_thread(client.close)
     close_returned.set()
 

@@ -226,7 +226,12 @@ class SpawnedWorker(Worker):
       try:
         await asyncio.wait_for(self._disconnected.wait(), _DRAIN_TIMEOUT)
       except TimeoutError:
-        pass
+        log.warning(
+          'broker worker %s channel did not disconnect within %.0fs after process exit; '
+          'reporting exit without a complete drain',
+          self.quest,
+          _DRAIN_TIMEOUT,
+        )
     reason = 'timeout' if self._timed_out else 'exit'
     self._finish(
       DeathReport(

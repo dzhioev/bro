@@ -523,11 +523,11 @@ class TestDefaultStore:
     def first():
       with credentials.as_default_store(first_store):
         first_entered.set()
-        second_entered.wait(5)
+        second_entered.wait()
         seen['first'] = credentials.default_store()
 
     def second():
-      first_entered.wait(5)
+      first_entered.wait()
       with credentials.as_default_store(second_store):
         second_entered.set()
         seen['second'] = credentials.default_store()
@@ -537,7 +537,7 @@ class TestDefaultStore:
     for thread in threads:
       thread.start()
     for thread in threads:
-      thread.join(10)
+      thread.join()
 
     assert seen == {'first': first_store, 'second': second_store, 'second after': ambient}
     assert credentials.default_store() is ambient

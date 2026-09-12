@@ -1615,7 +1615,7 @@ class TestSummonTool:
       silence_timeout=None,
     ):
       entered.set()
-      release.wait(timeout=5)
+      release.wait()
       raise summon_module.SummonError('broker channel closed awaiting the summon result')
 
     def fake_close(confirm: bool = False) -> None:
@@ -1628,7 +1628,7 @@ class TestSummonTool:
     monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
     tool = await _find_tool(EchoBro(), 'summon')
     task = asyncio.create_task(tool.call({'target': 'dev', 'prompt': 'deploy'}))
-    await asyncio.to_thread(entered.wait, 5)
+    assert await asyncio.to_thread(entered.wait, 5)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
       await task

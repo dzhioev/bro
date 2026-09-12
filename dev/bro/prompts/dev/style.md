@@ -96,6 +96,13 @@
   Reserve graceful handling for genuinely expected conditions (optional input, known-transient errors);
   recovering from an impossible case only hides the bug and moves the failure far from its cause.
 
+- Never use a tuned timeout as a substitute for synchronization.
+  When correctness depends on an event, block on its actual completion signal
+  — a handshake, EOF, event, or exit code — and leave runaway bounds to the supervising layer.
+  A wait whose expiry silently continues as though the event happened is a race whose outcome depends on machine load.
+  A timeout is appropriate when expiry fails loudly or degrades with a warning:
+  readiness gates that warn, test deadlines that fail the test, and CLI deadlines that exit non-zero are bounds, not correctness fallbacks.
+
 - Teardown goes through a context manager, not an inline `try:`/`finally:`.
   When cleanup must pair with setup
   — close what was opened, restore what was patched, cancel what was started
