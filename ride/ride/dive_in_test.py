@@ -59,8 +59,8 @@ class TestLaunchCommand:
     'kwargs',
     [
       {},
-      {'forwarded': ['--host']},
-      {'forwarded': ['--host', '--hold', 'guided']},
+      {'forwarded': ['--unboxed']},
+      {'forwarded': ['--unboxed', '--hold', 'guided']},
       {'command': 'do a thing', 'new': True},
     ],
   )
@@ -77,18 +77,17 @@ class TestLaunchCommand:
     assert len(args['workspace']) > 0
     assert harness_arguments == []  # nothing leaked into the forwarded REMAINDER
 
-  @pytest.mark.parametrize('host', [[], ['--host']])
-  def test_an_omitted_hold_is_left_for_ride_along_to_resolve(self, host, fake_proj, capsys):
-    # --host is forwarded, so ride derives the same host-sensitive default
-    rc = dive_in.main(['dive-in', '-n', *host])
+  @pytest.mark.parametrize('isolation', [[], ['--unboxed']])
+  def test_an_omitted_hold_is_left_for_ride_along_to_resolve(self, isolation, fake_proj, capsys):
+    rc = dive_in.main(['dive-in', '-n', *isolation])
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
     args, harness_arguments = _parse_emitted(tokens)
     assert args['hold'] is None
-    assert args['host'] == (len(host) > 0)
+    assert args['unboxed'] == (len(isolation) > 0)
 
   def test_an_explicit_hold_is_forwarded(self, fake_proj, capsys):
-    rc = dive_in.main(['dive-in', '-n', '--host', '--hold', 'attended'])
+    rc = dive_in.main(['dive-in', '-n', '--unboxed', '--hold', 'attended'])
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
     args, harness_arguments = _parse_emitted(tokens)

@@ -110,7 +110,7 @@ def environment(tmp_path: Path, monkeypatch):
   monkeypatch.delenv('RIDE_HOST', raising=False)
   monkeypatch.delenv('RIDE_HOST_WORKSPACE', raising=False)
   monkeypatch.delenv('RIDE_SUMMONER', raising=False)
-  # the suite itself may run inside a container; pin the probe to host mode
+  # the suite itself may run inside a container; pin the probe to the unboxed process
   monkeypatch.setattr('ride.claude.trail_recorder._in_container', lambda: False)
   return projects
 

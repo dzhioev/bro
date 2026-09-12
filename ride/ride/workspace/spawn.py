@@ -40,7 +40,7 @@ from ride.workspace.docker import (
   prepare_container,
   suspend_until_continued,
 )
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
 DEFAULT_RING_BYTES = 1 << 16  # 64 KiB — a full traceback + context, bounded
@@ -351,7 +351,7 @@ def _prepare_docker_spawn(
   launch: DockerLaunchSpec, channel: Provisioned, quest: str
 ) -> tuple[str, Optional[Workspace]]:
   docker_launch = _broker_launch(launch.launch, channel, quest)
-  workspace = Workspace.ensure(docker_launch.name, docker_launch.repo, WorkspaceKind.CONTAINER)
+  workspace = Workspace.ensure(docker_launch.name, docker_launch.repo, Isolation.BOXED)
   container_id = prepare_container(docker_launch)
   if not workspace.metadata.throwaway:
     return container_id, None
@@ -406,7 +406,7 @@ class CompositeSpawner(Spawner):
 
   the broker holds one spawner for the root and every spawned child alike, so a
   single-mode spawner would confine children to the root's launch mode; the
-  composite lets a host-mode root (`ProcessLaunchSpec`) spawn docker children."""
+  composite lets an unboxed root (`ProcessLaunchSpec`) spawn docker children."""
 
   def __init__(self, spawners: dict[type[LaunchSpec], Spawner]):
     self._spawners = spawners

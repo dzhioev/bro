@@ -1,4 +1,4 @@
-"""live test of the host-mode `broxy launch` wrapper against a real
+"""live test of the session `broxy launch` wrapper against a real
 provisioned upstream socket, plus the explicit proxy-failure path."""
 
 import asyncio

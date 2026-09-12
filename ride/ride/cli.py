@@ -19,14 +19,16 @@ from ride.flags import (
   add_scope_flags,
   add_session_flags,
   default_hold,
+  isolation_from_args,
   pop_harness_options,
 )
 from ride.harness import get_harness
 from ride.listing import list_workspaces
 from ride.repository import Repository, is_git_url, resolve_repository
-from ride.runtime_state import migrate_legacy_runtime_state
+from ride.runtime_state import migrate_runtime_state
 from ride.session import SessionSpec, resume_session, start_session
 from ride.workspace.containers import exec_in_workspace
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
 __cli_name__ = 'ride'
@@ -95,7 +97,7 @@ def build_parser() -> Parser:
   add_scope_flags(resume)
   resume.add_argument('name', help='workspace to resume, as `ride list` shows it')
 
-  subparsers.add_parser('list', help='list workspaces ([.]=worktree, [o]=container, [x]=abandoned)')
+  subparsers.add_parser('list', help='list workspaces ([o]/[-]=boxed, .o./.-.=unboxed; live/idle)')
 
   clean = subparsers.add_parser(
     'clean', help='remove stale workspaces, unreferenced mirrors, and unlocked runtime bundles'
@@ -114,9 +116,9 @@ def build_parser() -> Parser:
   check_clean.add_argument('name', help='workspace to check')
 
   exec_command = subparsers.add_parser(
-    'exec', help='exec a command in a running container workspace (default: interactive bash)'
+    'exec', help='exec a command in a running boxed workspace (default: interactive bash)'
   )
-  exec_command.add_argument('name', help='container workspace name')
+  exec_command.add_argument('name', help='boxed workspace name')
   exec_command.add_argument('command', nargs=REMAINDER, help='command and arguments')
 
   scope = subparsers.add_parser(
@@ -184,8 +186,9 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
       parser.error('--drop cannot be combined with --workspace; pinned workspaces are always kept')
   if args['into'] is not None and repo is None and summoned_token is None:
     parser.error('--into requires --repo')
+  isolation = isolation_from_args(args)
   if args['hold'] is None:
-    args['hold'] = default_hold(solo=solo, host=args['host'])
+    args['hold'] = default_hold(solo=solo, isolation=isolation)
   config = (
     None
     if repository is None
@@ -209,7 +212,7 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     prompt = summoned.prompt
     args['grant'] = [*summoned.grant, *args['grant']]
     args['revoke'] = [*summoned.revoke, *args['revoke']]
-  harness_options = pop_harness_options(parser, args, harness_name, solo=solo, host=args['host'])
+  harness_options = pop_harness_options(parser, args, harness_name, solo=solo, isolation=isolation)
   try:
     # not every harness's llm resolution consults the registry, so the launch
     # checks the name itself
@@ -223,6 +226,7 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     repo=repo,
     harness=harness_name,
     workspace_pinned=workspace is not None,
+    isolation=isolation,
     drop=drop,
     bro=bro,
     prompt=prompt,
@@ -280,7 +284,7 @@ def alias_main(argv: list[str], *, solo: bool) -> int:
   )
   _configure_mode_parser(parser, solo=solo)
   args, harness_arguments = _parse_mode(parser, argv)
-  migrate_legacy_runtime_state()
+  migrate_runtime_state()
   return _start_mode(parser, args, harness_arguments, solo=solo)
 
 
@@ -289,7 +293,7 @@ def main(argv: list[str]) -> Optional[int]:
   parser = build_parser()
   args, harness_arguments = _parse(parser, argv)
   command = args.pop('cmd')
-  migrate_legacy_runtime_state()
+  migrate_runtime_state()
   if command not in ('solo', 'along') and len(harness_arguments) > 0:
     parser.error('`--` harness arguments are accepted only by `ride solo` and `ride along`')
   if command in ('solo', 'along'):
@@ -330,7 +334,7 @@ def main(argv: list[str]) -> Optional[int]:
       if repository is not None
       else 'claude'
     )
-    options = pop_harness_options(parser, args, harness_name, solo=False, host=False)
+    options = pop_harness_options(parser, args, harness_name, solo=False, isolation=Isolation.BOXED)
     return report_scope(repo=repository, bro=args['bro'], harness=harness_name, options=options)
   assert command == 'banner'
   return banner(llm=args['llm'])

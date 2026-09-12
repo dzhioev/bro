@@ -9,7 +9,7 @@ import ride.workspace.docker as workspace_docker
 import ride.workspace.spawn as workspace_spawn
 import ride.workspace.store as workspace_store
 from bro.workspace.paths import workspace_dir
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
 
@@ -18,7 +18,7 @@ def _exit_record(tmp_path) -> str:
 
 
 def _workspace(tmp_path) -> Workspace:
-  return Workspace.ensure('ws', tmp_path / 'project', WorkspaceKind.CONTAINER)
+  return Workspace.ensure('ws', tmp_path / 'project', Isolation.BOXED)
 
 
 class _FakeProc:
@@ -142,7 +142,7 @@ class TestRunInContainerBrokerRoute:
     [root] = roots
     assert root['launch'] is launch
     assert root['workspace'].name == 'ws'
-    assert root['workspace'].kind is WorkspaceKind.CONTAINER
+    assert root['workspace'].isolation is Isolation.BOXED
     assert root['may_summon'] == {'dev'}
 
 
@@ -187,7 +187,7 @@ class TestRunRootViaBroker:
       repo=project,
       base_ref='deadbeef',
     )
-    workspace = Workspace.create('ws', project, WorkspaceKind.CONTAINER)
+    workspace = Workspace.create('ws', project, Isolation.BOXED)
     code = ride.root._run_root_via_broker(
       launch, workspace, may_summon={'dev'}, summon_depth=4, summon_harness='claude'
     )

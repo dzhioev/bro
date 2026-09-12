@@ -5,7 +5,7 @@ import pytest
 
 import ride.claude.claude_config as ride_claude_config
 import ride.workspace.docker as workspace_docker
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
 
@@ -93,21 +93,15 @@ class TestProvisionHostClaudeDir:
     return home
 
   def _provision(self, home):
-    project = home / 'project'
     workspace = home / 'state' / 'workspaces' / 'ws'
-    worktree = workspace / 'tree'
-    return ride_claude_config.provision_host_claude_dir(workspace, worktree, project), worktree
+    tree = workspace / 'tree'
+    return ride_claude_config.provision_unboxed_claude_dir(workspace, tree), tree
 
   def test_returns_the_session_claude_dir_with_seeded_json(self, home):
     claude_dir, worktree = self._provision(home)
     assert claude_dir == home / 'state' / 'workspaces' / 'ws' / 'claude'
     data = json.loads((claude_dir / '.claude.json').read_text())
-    # the main repo root is trusted alongside the worktree: claude resolves a
-    # linked worktree's trust against the repository root
-    assert data['projects'] == {
-      str(worktree): {'hasTrustDialogAccepted': True},
-      str(home / 'project'): {'hasTrustDialogAccepted': True},
-    }
+    assert data['projects'] == {str(worktree): {'hasTrustDialogAccepted': True}}
     assert data['installMethod'] == 'native'
 
   def test_writes_the_session_settings_leaving_host_state_out(self, home):
@@ -121,8 +115,8 @@ class TestProvisionHostClaudeDir:
     assert not (claude_dir / 'CLAUDE.md').exists()
 
   def test_settings_do_not_preaccept_the_bypass_permissions_dialog(self, home):
-    # only container sessions pre-accept it; on a host worktree
-    # --dangerously-skip-permissions can touch the host, so the dialog stays
+    # only boxed sessions pre-accept it; an unboxed session can touch the
+    # launcher's filesystem, so the dialog stays
     claude_dir, _ = self._provision(home)
     settings = json.loads((claude_dir / 'settings.json').read_text())
     assert 'skipDangerousModePermissionPrompt' not in settings
@@ -174,7 +168,7 @@ class TestContainerClaudeState:
     }
 
   def test_settings_preaccept_the_bypass_permissions_dialog(self, monkeypatch, tmp_path):
-    # the container workspace is an isolated clone, so --dangerously-skip-permissions
+    # the boxed workspace is an isolated clone, so --dangerously-skip-permissions
     # needs no interactive acknowledgement (container sessions only — the host
     # provision keeps the dialog, see TestProvisionHostClaudeDir)
     monkeypatch.setattr(ride_claude_config.Path, 'home', lambda: tmp_path)
@@ -218,11 +212,11 @@ class TestWorkspaceProjectsDir:
     return workspace.path / 'claude' / 'projects' / encoded
 
   def test_container_workspace_uses_the_fixed_encoding(self, tmp_path):
-    container = Workspace.create('ws', tmp_path / 'project', WorkspaceKind.CONTAINER)
+    container = Workspace.create('ws', tmp_path / 'project', Isolation.BOXED)
     expected = self._projects(container, '-workspace')
     assert ride_claude_config.workspace_projects_dir(container) == expected
 
   def test_worktree_workspace_encodes_its_tree_path(self, tmp_path):
-    worktree = Workspace.create('ws', tmp_path / 'project', WorkspaceKind.WORKTREE)
+    worktree = Workspace.create('ws', tmp_path / 'project', Isolation.UNBOXED)
     encoded = str(worktree.tree).replace('/', '-').replace('.', '-')
     assert ride_claude_config.workspace_projects_dir(worktree) == self._projects(worktree, encoded)

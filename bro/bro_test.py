@@ -1384,12 +1384,12 @@ class TestBannerTool:
       captured['llm'] = llm
       captured['bro'] = bro
       captured['trail_id'] = trail_id
-      return 'kind: container'
+      return 'isolation: boxed'
 
     monkeypatch.setattr(workspace_banner, 'render_banner', fake_render_banner)
     run = StubRun()
     tool = await _find_tool(EchoBro(), 'banner', run=run)
-    assert await tool.call({}) == 'kind: container'
+    assert await tool.call({}) == 'isolation: boxed'
     assert captured == {'llm': True, 'bro': 'echo', 'trail_id': None}
     # the run's trail opens after the tool is built, so it is read per call
     run.trail_id = '01trail'

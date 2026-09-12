@@ -23,7 +23,7 @@ from bro.mcp import harness
 from bro.summon import DEFAULT_TIMEOUT
 from bros.bro import Bro
 from ride.peer_facts import PeerFact, PeerFacts
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
@@ -121,7 +121,7 @@ class FakeContext:
 
 
 def _workspace(tmp_path, name='ws'):
-  return Workspace.ensure(name, tmp_path, WorkspaceKind.CONTAINER)
+  return Workspace.ensure(name, tmp_path, Isolation.BOXED)
 
 
 def _control(
@@ -151,7 +151,7 @@ def _control(
   control = _FakeSummonControl(
     workspace=workspace,
     facts=facts,
-    artifacts=ride.artifacts.ArtifactStore(workspace, root_in_container=True),
+    artifacts=ride.artifacts.ArtifactStore(workspace, root_boxed=True),
     journal=journal,
     audit_file=tmp_path / 'audit.jsonl',
     depth_cap=depth_cap,
@@ -190,6 +190,8 @@ def test_authorized_summon_opens_identity_before_spawning(tmp_path):
   assert not (tmp_path / 'summon-status.json').exists()
   accepted = _audit(tmp_path)[-1]
   assert accepted['transition'] == 'accepted'
+  assert accepted['ride'] == 'ws'
+  assert 'session' not in accepted
   assert accepted['args']['prompt'] == 'deploy the thing'
   assert accepted['summoner'] == {'workspace': 'ws', 'bro': 'bro-dev'}
 

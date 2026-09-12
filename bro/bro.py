@@ -304,11 +304,11 @@ _SUMMON_LIST_DESCRIPTION = (
 )
 
 _BANNER_DESCRIPTION = (
-  "return this session's environment facts as `key: value` lines: `kind` "
-  '(docker container vs host worktree), workspace name and paths, the bro '
-  'persona, the launch command, the bros it may delegate to (`may_summon`), and '
-  'the trail it is recorded into (`trail_id`). call it once at session start to '
-  'detect your environment.'
+  "return this session's environment facts as `key: value` lines: `isolation` "
+  '(`boxed` or `unboxed`), workspace name and paths, the bro persona, the launch '
+  'command, the bros it may delegate to (`may_summon`), and the trail it is '
+  'recorded into (`trail_id`). call it once at session start to detect your '
+  'environment.'
 )
 
 

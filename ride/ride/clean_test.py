@@ -2,13 +2,13 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import ride.clean as clean
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 
 
 def _workspace(name: str, repo: str, *, is_clean: bool):
   workspace = MagicMock()
   workspace.name = name
-  workspace.kind = WorkspaceKind.CONTAINER
+  workspace.isolation = Isolation.BOXED
   workspace.metadata = SimpleNamespace(repo=repo)
   workspace.is_active.return_value = False
   workspace.is_clean.return_value = (is_clean, [] if is_clean else ['dirty'])

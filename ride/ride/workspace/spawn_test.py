@@ -13,12 +13,12 @@ import ride.workspace.docker as workspace_docker
 import ride.workspace.spawn as workspace_spawn
 from bro.broker.transports.tcp import Endpoint
 from bro.workspace.paths import workspace_dir
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
 
 def _throwaway(name: str, project) -> Workspace:
-  return Workspace.create(name, project, WorkspaceKind.CONTAINER, throwaway=True)
+  return Workspace.create(name, project, Isolation.BOXED, throwaway=True)
 
 
 def _exit_record(tmp_path) -> str:

@@ -272,7 +272,7 @@ def test_chat_fails_a_delivered_answer_without_a_channel(monkeypatch, capsys):
 
 @pytest.mark.parametrize(
   'flag',
-  ['--summon', '--grant', '--revoke', '--into', '--no-trails', '--host'],
+  ['--summon', '--grant', '--revoke', '--into', '--no-trails', '--boxed', '--unboxed'],
 )
 def test_runtime_flags_are_not_accepted(flag):
   with pytest.raises(SystemExit):

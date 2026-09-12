@@ -1,10 +1,11 @@
 import signal
+from pathlib import Path
 
 import pytest
 
 import ride.workspace.docker as workspace_docker
 from ride.repository import Repository
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
 
@@ -217,7 +218,41 @@ class TestImageTag:
     assert workspace_docker.project_image_tag(runtime, tmp_path) is None
 
 
+class TestDaemonPreflight:
+  def test_reads_a_nonce_through_the_daemon_mount(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_docker, 'runtime_base', lambda: tmp_path)
+    calls = []
+
+    def run(argv, **kwargs):
+      calls.append(argv)
+      source = Path(argv[argv.index('-v') + 1].split(':', 1)[0])
+      relative = Path(argv[-1]).relative_to(workspace_docker._PREFLIGHT_MOUNT)
+      return _FakeProc(stdout=(source / relative).read_text())
+
+    monkeypatch.setattr(workspace_docker.subprocess, 'run', run)
+    workspace_docker._preflight_daemon('runtime-image')
+
+    assert calls[0][:6] == ['docker', 'run', '--rm', '--entrypoint', 'cat', '-v']
+
+  def test_failure_names_the_daemon_and_runtime_root(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_docker, 'runtime_base', lambda: tmp_path)
+
+    def run(argv, **kwargs):
+      if argv == ['docker', 'context', 'show']:
+        return _FakeProc(stdout='remote-daemon\n')
+      return _FakeProc(returncode=1, stderr='mount denied')
+
+    monkeypatch.setattr(workspace_docker.subprocess, 'run', run)
+
+    with pytest.raises(RuntimeError, match=r'remote-daemon.*mount denied'):
+      workspace_docker._preflight_daemon('runtime-image')
+
+
 class TestContainerRuntimeResolver:
+  @pytest.fixture(autouse=True)
+  def preflight(self, monkeypatch):
+    monkeypatch.setattr(workspace_docker, '_preflight_daemon', lambda image: None)
+
   def test_resolves_image_and_volume_once(self, monkeypatch, tmp_path):
     from ride.runtime_bundle import RuntimeBundle
 
@@ -318,11 +353,11 @@ class TestPruneSupersededImages:
 class TestPrepareContainer:
   def test_runs_the_shared_prepare_sequence_from_the_launch(self, monkeypatch, tmp_path):
     project = tmp_path / 'project'
-    workspace = Workspace.create('ws', project, WorkspaceKind.CONTAINER)
+    workspace = Workspace.create('ws', project, Isolation.BOXED)
     events: list = []
     monkeypatch.setattr(
       workspace_docker,
-      'ensure_container_clone',
+      'ensure_clone',
       lambda *args: events.append(('clone', args)),
     )
     monkeypatch.setattr(
@@ -361,7 +396,7 @@ class TestPrepareContainer:
     assert workspace_docker.prepare_container(launch) == 'cid'
     assert events[0] == (
       'clone',
-      (Repository(str(project), project), workspace.tree, 'worktree-ws', 'base-sha'),
+      (Repository(str(project), project), workspace.tree, 'workspace-ws', 'base-sha'),
     )
     assert events[1] == ('store', ('github',), ('openai',))
     argv_event = events[2]
@@ -388,6 +423,10 @@ class TestPrepareContainer:
 
 
 class TestDockerCreateArgv:
+  @pytest.fixture(autouse=True)
+  def runtime_root(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_docker, 'runtime_base', lambda: tmp_path)
+
   @pytest.fixture
   def build_argv(self, monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_docker.Path, 'home', lambda: tmp_path)
@@ -514,10 +553,15 @@ class TestDockerCreateArgv:
     assert '-it' not in argv
     assert argv[:2] == ['docker', 'create']
 
-  def test_extra_mounts_added_as_volumes(self, build_argv):
-    argv = build_argv(extra_mounts=['/h/s.sock:/run/broker.sock'])
-    assert '/h/s.sock:/run/broker.sock' in argv
-    assert argv[argv.index('/h/s.sock:/run/broker.sock') - 1] == '-v'
+  def test_extra_mounts_added_as_volumes(self, build_argv, tmp_path):
+    mount = f'{tmp_path}/s.sock:/run/broker.sock'
+    argv = build_argv(extra_mounts=[mount])
+    assert mount in argv
+    assert argv[argv.index(mount) - 1] == '-v'
+
+  def test_a_bind_source_outside_the_runtime_root_is_refused(self, build_argv):
+    with pytest.raises(ValueError, match='outside the ride runtime root'):
+      build_argv(extra_mounts=['/outside/s.sock:/run/broker.sock'])
 
   def test_no_extra_mounts_by_default(self, build_argv):
     # the every-session path stays unchanged: still -it, no stray broker mount.

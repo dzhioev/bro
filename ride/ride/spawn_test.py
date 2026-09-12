@@ -21,7 +21,7 @@ from bro.broker.transports.tcp import LOCAL_HOST, Endpoint
 from bro.monitor import SESSION_DIR_ENV, workspace_session_dir
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 from bro.workspace.paths import CONTAINER_SESSION_DIR, summon_dir, workspace_dir, workspace_tree
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
 PARENT = 'parent'
@@ -41,11 +41,15 @@ SESSION = 'session-ws'
 
 
 def _do_ride_environment(workspace_name: str) -> dict[str, str]:
-  spec = ride.session.load_resume_spec(Workspace.open(workspace_name))
+  workspace = Workspace.open(workspace_name)
+  spec = ride.session.load_resume_spec(workspace)
   assert spec is not None
+  assert workspace.metadata.branch is not None
   return {
     ride.do_ride.INSTALL_DIRECTORY_ENV: ride.do_ride.CONTAINER_INSTALL_DIRECTORY,
     ride.do_ride.RESOLVED_LLM_ENV: ride.do_ride.encode_resolved_llm(spec.resolved_llm),
+    'RIDE_ISOLATION': 'boxed',
+    'RIDE_BRANCH': workspace.metadata.branch,
   }
 
 
@@ -55,12 +59,12 @@ def _session_state_mount(workspace_name: str) -> str:
 
 def _artifacts() -> ride.artifacts.ArtifactStore:
   return ride.artifacts.ArtifactStore(
-    Workspace.ensure(SESSION, None, WorkspaceKind.CONTAINER), root_in_container=False
+    Workspace.ensure(SESSION, None, Isolation.BOXED), root_boxed=False
   )
 
 
 def _facts_expecting(quest: str) -> ride.peer_facts.PeerFacts:
-  workspace = Workspace.ensure(SESSION, None, WorkspaceKind.CONTAINER)
+  workspace = Workspace.ensure(SESSION, None, Isolation.BOXED)
   facts = ride.peer_facts.PeerFacts(
     ride.peer_facts.PeerFact('ws', 'bro-dev', frozenset()),
     root_tree=workspace.tree,
@@ -275,7 +279,7 @@ class TestSummonLowering:
         name='broker-CH',
         harness='bro',
         workspace_pinned=False,
-        host=False,
+        isolation=Isolation.BOXED,
         drop=True,
         no_trails=False,
         hold='guided',
@@ -323,7 +327,7 @@ class TestSummonLowering:
       ride.artifacts.view_mount(SESSION, 'broker-CH'),
     )
 
-  def test_the_child_keeps_session_state_like_any_container_session(self, lowering_harness):
+  def test_the_child_keeps_session_state_like_any_boxed_session(self, lowering_harness):
     launch = ride.spawn.SummonLaunchSpec(
       target='dev',
       prompt='p',
@@ -673,7 +677,7 @@ class TestRunRootViaBroker:
 
     monkeypatch.setattr(ride.spawn, 'extension_kinds', fake_extension_kinds)
     launch = ride.spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
-    workspace = Workspace.create('ws', tmp_path / 'proj', WorkspaceKind.CONTAINER)
+    workspace = Workspace.create('ws', tmp_path / 'proj', Isolation.BOXED)
     assert (
       ride.spawn.run_root_via_broker(
         launch,

@@ -96,7 +96,7 @@ The host runs `bro.benchmark.job` with its own Docker access through the `benchm
 `start` and `check` print the artifact ref of the raw run;
 `artifact get <ref>` makes it readable, with the whole `<jobs_dir>` under `output/` beside `stdout`, `stderr`, and `status.json`.
 `benchmark-run` builds and starts the same raw run, then prints `results <path>  artifact <ref>` before its short report.
-The artifact store dies with the session, so retain its ref before the session ends when the run must become durable.
+The artifact store dies with the ride, so retain its ref before the ride ends when the run must become durable.
 
 ## Retaining a run
 

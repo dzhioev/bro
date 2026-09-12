@@ -14,7 +14,7 @@ from bro.workspace.paths import workspace_dir, workspace_tree, workspaces_dir
 from ride.repository import Repository, as_repository, is_git_url, open_repository
 from ride.workspace.docker import project_image_tag, runtime_image_tag
 from ride.workspace.metadata import (
-  WorkspaceKind,
+  Isolation,
   WorkspaceMetadata,
   is_workspace,
   read_metadata,
@@ -29,8 +29,8 @@ class SessionBusy(RuntimeError):
   """a workspace's session lock is held by a live session."""
 
 
-class KindMismatch(ValueError):
-  """a launch asked for a kind the named workspace was not created as."""
+class IsolationMismatch(ValueError):
+  """A launch asked for an isolation the named workspace was not created with."""
 
 
 class AttachmentMismatch(ValueError):
@@ -78,7 +78,7 @@ def _cleanup_image(repository: Optional[Repository]) -> Optional[str]:
 
 
 def _remove_container_dir(path: Path, image: Optional[str]) -> None:
-  """remove a container workspace's directory, including files the host user
+  """remove a boxed workspace's directory, including files the host user
   can't unlink.
 
   container processes can leave files owned by uids that don't match the host
@@ -129,14 +129,14 @@ class Workspace(ABC):
   """a managed workspace: one directory (`path`) holding its writable `tree`,
   optional repository attachment, and every record kept about it.
 
-  The subclasses are the kinds, which differ only in how the tree is
-  materialized and released; launch stays with the surfaces (worktrees.py /
-  containers.py) and only consumes a Workspace for the post-run finish. Session
+  The subclasses are the isolations, which differ only in how the tree is
+  released; launch stays with the surfaces and consumes a Workspace for the
+  post-run finish. Session
   state a launch surface attaches to a workspace is that surface's own — its
   readers and teardown compose around `remove()` there.
   """
 
-  kind: ClassVar[WorkspaceKind]
+  isolation: ClassVar[Isolation]
 
   def __init__(self, name: str, metadata: WorkspaceMetadata):
     self.name = name
@@ -228,7 +228,7 @@ class Workspace(ABC):
 
   def is_active(self, mounts: set[str]) -> bool:
     """whether a session currently owns this workspace. `mounts` is the running
-    containers' mount set, which only a container workspace reads."""
+    containers' mount set, which only a boxed workspace reads."""
     try:
       handle = os.fdopen(os.open(self.lockfile, os.O_RDONLY), 'r')
     except FileNotFoundError:
@@ -282,42 +282,42 @@ class Workspace(ABC):
   @classmethod
   def open(cls, name: str) -> 'Workspace':
     metadata = read_metadata(name)
-    return _KINDS[metadata.kind](name, metadata)
+    return _ISOLATIONS[metadata.isolation](name, metadata)
 
   @classmethod
   def create(
     cls,
     name: str,
     repo: Optional[Repository | Path],
-    kind: WorkspaceKind,
+    isolation: Isolation,
     *,
     throwaway: bool = False,
   ) -> 'Workspace':
     repository = None if repo is None else as_repository(repo)
     metadata = WorkspaceMetadata(
-      kind=kind,
+      isolation=isolation,
       repo=None if repository is None else repository.identity,
       branch=None if repository is None else workspace_branch(name),
       throwaway=throwaway,
     )
     write_metadata(name, metadata)
-    return _KINDS[kind](name, metadata)
+    return _ISOLATIONS[isolation](name, metadata)
 
   @classmethod
   def ensure(
     cls,
     name: str,
     repo: Optional[Repository | Path],
-    kind: WorkspaceKind,
+    isolation: Isolation,
     *,
     throwaway: bool = False,
   ) -> 'Workspace':
     if not is_workspace(name):
-      return cls.create(name, repo, kind, throwaway=throwaway)
+      return cls.create(name, repo, isolation, throwaway=throwaway)
     workspace = cls.open(name)
-    if workspace.kind is not kind:
-      raise KindMismatch(
-        f'workspace {name!r} is a {workspace.kind} workspace, not {kind}; '
+    if workspace.isolation is not isolation:
+      raise IsolationMismatch(
+        f'workspace {name!r} is {workspace.isolation}, not {isolation}; '
         f'pick another name or remove it with `ride clean --force {name}`'
       )
     expected_repo = None if repo is None else as_repository(repo).identity
@@ -340,14 +340,16 @@ class Workspace(ABC):
     ]
 
 
-class WorktreeWorkspace(Workspace):
-  """a workspace whose tree is a git worktree of the project, run on the host."""
+class UnboxedWorkspace(Workspace):
+  """A workspace whose tree runs directly on the launcher's filesystem."""
 
-  kind = WorkspaceKind.WORKTREE
+  isolation = Isolation.UNBOXED
 
   def _release_tree(self, *, force: bool) -> None:
-    if self.repo is None:
+    if not (self.tree / '.git').is_file():
       return
+    if self.repo is None:
+      raise RuntimeError(f'legacy worktree {self.tree} has no repository attachment')
     try:
       repository = self.repository
     except (RuntimeError, ValueError):
@@ -355,10 +357,9 @@ class WorktreeWorkspace(Workspace):
         return
       raise RuntimeError(f'{_MISSING_ATTACHMENT} {self.repo}; use --force to remove') from None
     assert repository is not None
-    if self.tree.is_dir():
-      removed = git_run('worktree', 'remove', '--force', str(self.tree), cwd=repository.git_dir)
-      if removed.returncode != 0:
-        raise RuntimeError(f'{self.tree}: git worktree remove failed: {removed.stderr.strip()}')
+    removed = git_run('worktree', 'remove', '--force', str(self.tree), cwd=repository.git_dir)
+    if removed.returncode != 0:
+      raise RuntimeError(f'{self.tree}: git worktree remove failed: {removed.stderr.strip()}')
     assert self.metadata.branch is not None
     deleted = git_run('branch', '-D', self.metadata.branch, cwd=repository.git_dir)
     if deleted.returncode != 0:
@@ -368,10 +369,10 @@ class WorktreeWorkspace(Workspace):
     shutil.rmtree(self.path)
 
 
-class ContainerWorkspace(Workspace):
+class BoxedWorkspace(Workspace):
   """a workspace whose tree is bind-mounted into a container as `/workspace`."""
 
-  kind = WorkspaceKind.CONTAINER
+  isolation = Isolation.BOXED
 
   def is_active(self, mounts: set[str]) -> bool:
     # the running container counts on its own: a launcher killed outright releases
@@ -389,7 +390,7 @@ class ContainerWorkspace(Workspace):
     _remove_container_dir(self.path, _cleanup_image(repository))
 
 
-_KINDS: dict[WorkspaceKind, type[Workspace]] = {
-  WorkspaceKind.WORKTREE: WorktreeWorkspace,
-  WorkspaceKind.CONTAINER: ContainerWorkspace,
+_ISOLATIONS: dict[Isolation, type[Workspace]] = {
+  Isolation.UNBOXED: UnboxedWorkspace,
+  Isolation.BOXED: BoxedWorkspace,
 }

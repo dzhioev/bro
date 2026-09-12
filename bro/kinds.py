@@ -1,12 +1,12 @@
 """the contract a contributed broker kind is built against.
 
-An installed distribution serves a request kind on every managed session's
+An installed distribution serves a request kind on every managed ride's
 host broker through the `bro.broker_kinds` entry-point group; each entry
 targets a factory `(context: KindContext) -> RequestHandler` (loading:
 `ride/ride/kinds.py`). The contract lives core-side so a contributing
-distribution needs no ride import: the context carries the session's workspace
-tree, artifact resolver, and bounded credential scope, and `tree_path` is the validation for any path
-a peer names relative to that tree.
+distribution needs no ride import: the context carries the requesting peer's
+workspace tree, artifact resolver, and bounded credential scope, and `tree_path`
+is the validation for any path a peer names relative to that tree.
 """
 
 from dataclasses import dataclass
@@ -25,7 +25,7 @@ class ArtifactDenied(Exception):
 
 
 class ArtifactResolver(Protocol):
-  """host-side artifact resolution for kind handlers (the session store,
+  """host-side artifact resolution for kind handlers (the ride store,
   `ride/ride/artifacts.py`, implements it)."""
 
   def resolve(self, ref: str, context: 'Dispatcher', requester: 'Peer') -> Path:

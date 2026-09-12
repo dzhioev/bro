@@ -22,7 +22,7 @@ import ride.workspace.host_docker_test_helper as host_docker
 from ride.repository import Repository
 from ride.runtime_bundle import resolve_runtime_bundle
 from ride.workspace.docker import Launch
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
 pytestmark = host_docker.HOST_DAEMON_ONLY
@@ -164,7 +164,7 @@ def launched(isolated: Isolated) -> Iterator[Launched]:
           runtime_bundle_hash=runtime.bundle_hash,
           repo=isolated.project,
         )
-        recorded = Workspace.create(_WORKSPACE_NAME, isolated.project, WorkspaceKind.CONTAINER)
+        recorded = Workspace.create(_WORKSPACE_NAME, isolated.project, Isolation.BOXED)
         container_id = workspace_docker.prepare_container(launch)
         running, output = _start_and_observe(container_id, recorded.tree)
         yield Launched(
