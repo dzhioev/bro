@@ -4,11 +4,14 @@ import shlex
 import subprocess
 from pathlib import Path
 
+import yaml
+
 from bro.base.spawn import console_script
 from bro.oops.targets import PLAN_UNSAFE_EXIT_CODE
 from bro.shell import shell_dir
 
-_DEPLOY_LIBRARY = Path(__file__).parent / 'infra' / 'deploy_lib.sh'
+_INFRA_DIRECTORY = Path(__file__).parent / 'infra'
+_DEPLOY_LIBRARY = _INFRA_DIRECTORY / 'deploy_lib.sh'
 _COMMIT = '0123456789abcdef0123456789abcdef01234567'
 _LOCKED_COMMIT = 'fedcba9876543210fedcba9876543210fedcba98'
 
@@ -22,6 +25,11 @@ def _run_bash(body: str) -> subprocess.CompletedProcess[str]:
     text=True,
     env={**os.environ, 'PATH': os.pathsep.join((str(scripts), os.environ['PATH']))},
   )
+
+
+def test_codebuild_runs_buildspec_commands_with_bash():
+  buildspec = yaml.safe_load((_INFRA_DIRECTORY / 'buildspec.yml').read_text())
+  assert buildspec['env']['shell'] == 'bash'
 
 
 def test_ecr_uri_uses_caller_supplied_repository_and_region():
