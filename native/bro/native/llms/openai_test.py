@@ -1,5 +1,8 @@
 import asyncio
 import os
+import threading
+from contextlib import closing
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional, cast
 from unittest.mock import MagicMock, call
@@ -19,6 +22,8 @@ from bro.llm.observer import (
 )
 from bro.llm.tracker import Tracker
 from bro.native.llms.openai import OpenAI, parse_response
+from bro.trails.local import LocalStore
+from bro.trails.record.bro import Recorder
 
 # the registry advertises namespaced wire names, so a tool whose local name is
 # `ping` in this namespace surfaces to the LLM as `svc__ping`. the emit helpers
@@ -287,7 +292,52 @@ class TestToolResultTrackerEmission:
     assert extras['call_id'] == 'call_1'
 
 
+class _LoopBlockingStore(LocalStore):
+  def __init__(self, root: Path):
+    super().__init__(root)
+    self.append_started = threading.Event()
+    self.loop_responsive = threading.Event()
+    self.loop_was_responsive: Optional[bool] = None
+
+  def append_records(
+    self,
+    trail_id: str,
+    offset: int,
+    records: list[Any],
+    *,
+    tools: Optional[dict[str, Any]] = None,
+  ) -> dict:
+    if self.loop_was_responsive is None:
+      self.append_started.set()
+      self.loop_was_responsive = self.loop_responsive.wait(timeout=1.0)
+    return super().append_records(trail_id, offset, records, tools=tools)
+
+
 class TestSendTrackerEmission:
+  @pytest.mark.asyncio
+  async def test_slow_store_does_not_block_the_event_loop(self, tmp_path):
+    store = _LoopBlockingStore(tmp_path)
+    with closing(Recorder(store)) as tracker:
+      tracker.start_trail(
+        bro='dev',
+        llm_spec={'type': 'openai', 'model': 'gpt-5'},
+        system_prompt='test',
+        forked_from=None,
+        interactive=False,
+        surface='test',
+      )
+      gpt, _, captured = _make_openai_with_tracker()
+      gpt.tracker = tracker
+      _install_responses(gpt, [_fake_response(output=[_message_item('done')])], captured)
+
+      turn = asyncio.create_task(gpt.send([{'role': 'user', 'content': 'go'}]))
+      while not store.append_started.is_set():
+        await asyncio.sleep(0)
+      store.loop_responsive.set()
+      assert await turn == 'done'
+
+    assert store.loop_was_responsive is True
+
   @pytest.mark.asyncio
   async def test_user_input_emitted_at_turn_zero_skipping_system(self):
     gpt, tracker, captured = _make_openai_with_tracker()
