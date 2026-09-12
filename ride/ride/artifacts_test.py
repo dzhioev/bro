@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -197,11 +198,23 @@ class TestMaterialize:
     assert _audit()[-1]['peer'] == 'ws'
     assert _audit()[-1]['ref'] == ref
 
-  def test_a_shared_child_gets_its_view_path(self, store):
+  def test_a_shared_boxed_child_gets_its_view_path(self, store, tmp_path):
+    Workspace.create('broker-CH', tmp_path, Isolation.BOXED, throwaway=True)
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
     store.share([ref], to='broker-CH', by='ws')
     child = PeerIdentity(workspace='broker-CH', tree=workspace_tree('broker-CH'))
     assert store.materialize(child, ref) == str(CONTAINER_ARTIFACTS_ROOT / ref)
+
+  def test_a_shared_unboxed_child_gets_a_private_workspace_copy(self, store, tmp_path):
+    workspace = Workspace.create('broker-CH', tmp_path, Isolation.UNBOXED, throwaway=True)
+    ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
+    store.share([ref], to=workspace.name, by='ws')
+    child = PeerIdentity(workspace=workspace.name, tree=workspace.tree)
+
+    path = Path(store.materialize(child, ref))
+
+    assert path == workspace.path / 'artifacts' / ref
+    assert path.read_bytes() == b'payload'
 
   def test_the_host_mode_root_gets_a_private_copy(self, workspace):
     store = ArtifactStore(workspace, root_boxed=False)

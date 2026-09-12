@@ -2,7 +2,6 @@ import contextlib
 import dataclasses
 import json
 import os
-import subprocess
 import sys
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, replace
@@ -32,7 +31,7 @@ from ride.flags import default_hold
 from ride.harness import HARNESS_NAMES, Harness, get_harness
 from ride.identity import human_git_identity_env
 from ride.repository import Repository, hold_repository, is_git_url, open_repository
-from ride.root import run_in_container, run_summoned_in_container, run_unboxed_process_via_broker
+from ride.root import ProcessLaunch, run_manual_started_party, run_started_party
 from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError, resolve_runtime_bundle
 from ride.scope import (
   LaunchScopeError,
@@ -55,7 +54,6 @@ from ride.workspace.model import AttachmentMismatch, IsolationMismatch, SessionB
 from ride.workspace.store import (
   ScopedSecrets,
   credential_revoke_kind,
-  log_scoped_secrets,
   materialize_scoped_store,
 )
 from ride.workspace.worktrees import provision_workspace
@@ -310,104 +308,48 @@ def container_launch(
   )
 
 
-def _launch_session(
+def started_party_launch(
   spec: SessionSpec,
   workspace: Workspace,
+  repository: Optional[Repository],
   base_ref: Optional[str],
   launch_scope: ScopedLaunch,
   *,
-  human_env: dict[str, str],
-  boxed: bool,
+  human_env: Mapping[str, str],
   runtime_bundle: RuntimeBundle,
   container_runtime: ContainerRuntimeResolver,
-  summoned: Optional[pending_summon.PendingSummon] = None,
-) -> int:
+  forward_env: bool,
+  env: Mapping[str, str],
+  mounts: Collection[str] = (),
+  credential_directory: Path,
+  install_directory: Path,
+) -> Launch | ProcessLaunch:
+  """Prepare one started party and describe its first session for supervision."""
   harness = get_harness(spec.harness)
-  if boxed and find_container_id(workspace.tree) is not None:
-    log.error(
-      'session already active in the container for workspace %r; refusing to start a second',
-      spec.name,
-    )
-    return 1
-  if not spec.resume:
-    trail_pointer.clear(trail_pointer.session_pointer(workspace.path))
-  elif not harness.session_exists(workspace):
-    log.error('%s', harness.missing_session_error(workspace))
-    return 1
-  if boxed:
-    return _boxed_session(
-      harness, spec, workspace, base_ref, launch_scope, human_env, container_runtime, summoned
-    )
-  return _unboxed_session(
-    harness,
-    spec,
-    workspace,
-    base_ref,
-    launch_scope,
-    human_env,
-    runtime_bundle,
-    container_runtime,
-    summoned,
-  )
-
-
-def _boxed_session(
-  harness: Harness,
-  spec: SessionSpec,
-  workspace: Workspace,
-  base_ref: Optional[str],
-  launch_scope: ScopedLaunch,
-  human_env: dict[str, str],
-  container_runtime: ContainerRuntimeResolver,
-  summoned: Optional[pending_summon.PendingSummon],
-) -> int:
-  launch = container_launch(
-    harness,
-    spec,
-    workspace,
-    launch_scope.scoped,
-    container_runtime.resolve(),
-    repo=workspace.repository,
-    base_ref=base_ref,
-    human_env=human_env,
-    forward_env=True,
-    env={}
-    if summoned is None
-    else _summoned_env(summoned, spec, summoned.address(CONTAINER_BROKER_HOST)),
-    mounts=(),
-  )
-  if summoned is not None:
-    try:
-      return run_summoned_in_container(
-        launch, workspace, claim=lambda: pending_summon.claim(summoned.token, workspace=spec.name)
+  if workspace.isolation is Isolation.BOXED:
+    if find_container_id(workspace.tree) is not None:
+      raise RuntimeError(
+        f'session already active in the container for workspace {spec.name!r}; '
+        'refusing to start a second'
       )
-    except pending_summon.UnknownToken as error:
-      log.error('%s', error)
-      return 1
-  return run_in_container(
-    launch,
-    workspace,
-    may_summon=launch_scope.may_summon,
-    summon_depth=spec.summon_depth,
-    summon_harness=spec.summon_harness,
-  )
+    return container_launch(
+      harness,
+      spec,
+      workspace,
+      launch_scope.scoped,
+      container_runtime.resolve(),
+      repo=workspace.repo if isinstance(workspace.repo, Path) else repository,
+      base_ref=base_ref,
+      human_env=human_env,
+      forward_env=forward_env,
+      env=env,
+      mounts=mounts,
+    )
 
-
-def _unboxed_session(
-  harness: Harness,
-  spec: SessionSpec,
-  workspace: Workspace,
-  base_ref: Optional[str],
-  launch_scope: ScopedLaunch,
-  human_env: dict[str, str],
-  runtime_bundle: RuntimeBundle,
-  container_runtime: ContainerRuntimeResolver,
-  summoned: Optional[pending_summon.PendingSummon] = None,
-) -> int:
+  if len(mounts) > 0:
+    raise ValueError('an unboxed started party cannot carry container mounts')
+  runtime_bundle.materialize_host()
   tree = workspace.tree
-  scoped = launch_scope.scoped
-  log_scoped_secrets(spec.name, scoped.required, scoped.optional)
-  repository = workspace.repository
   if repository is None:
     tree.mkdir(parents=True, exist_ok=True)
   else:
@@ -416,11 +358,16 @@ def _unboxed_session(
       raise ValueError('attached unboxed workspace has no recorded branch')
     ensure_clone(repository, tree, branch, base_ref)
     if not provision_workspace(tree):
-      return 1
+      raise RuntimeError(f'failed to provision workspace {tree}')
 
   session_command = do_ride_command(spec, harness_flags=harness.session_flags(spec))
   command = [str(runtime_bundle.host_venv / 'bin' / session_command[0]), *session_command[1:]]
   runner_env = runtime_bundle.host_session_env()
+  if not forward_env:
+    runner_env.pop(CHANNEL_ENV, None)
+    runner_env.pop(UPSTREAM_ENV, None)
+  runner_env.update(env)
+  runner_env['RIDE_BRO'] = spec.bro
   runner_env[ISOLATION_ENV] = Isolation.UNBOXED.value
   runner_env['RIDE_HOST_WORKSPACE'] = str(tree)
   runner_env.update(human_env)
@@ -432,46 +379,89 @@ def _unboxed_session(
   else:
     runner_env.pop('RIDE_REPO', None)
     runner_env.pop(BRANCH_ENV, None)
-  store_directory = materialize_scoped_store(launch_scope.store, workspace.path / 'credentials')
+  store_directory = materialize_scoped_store(launch_scope.store, credential_directory)
   runner_env['BRO_STORE'] = str(store_directory)
   runner_env['BRO_INSTALL_KINDS'] = ' '.join(sorted(launch_scope.hydrated_kinds))
-  runner_env[INSTALL_DIRECTORY_ENV] = str(workspace.path / 'environment')
+  runner_env[INSTALL_DIRECTORY_ENV] = str(install_directory)
   runner_env[RESOLVED_LLM_ENV] = encode_resolved_llm(spec.resolved_llm)
   runner_env[SESSION_DIR_ENV] = str(workspace_session_dir(workspace.path))
   if spec.no_trails:
     runner_env['TRAILS_DISABLED'] = '1'
   harness.prepare_unboxed_env(spec, workspace, tree, runner_env)
-  workspace.clear_session_end()
+  return ProcessLaunch(
+    command=command,
+    cwd=str(tree),
+    env=runner_env,
+    interactive=not spec.solo,
+  )
+
+
+def _launch_session(
+  spec: SessionSpec,
+  workspace: Workspace,
+  base_ref: Optional[str],
+  launch_scope: ScopedLaunch,
+  *,
+  human_env: dict[str, str],
+  runtime_bundle: RuntimeBundle,
+  container_runtime: ContainerRuntimeResolver,
+  summoned: Optional[pending_summon.PendingSummon] = None,
+) -> int:
+  harness = get_harness(spec.harness)
+  if workspace.isolation is Isolation.BOXED and find_container_id(workspace.tree) is not None:
+    log.error(
+      'session already active in the container for workspace %r; refusing to start a second',
+      spec.name,
+    )
+    return 1
+  if not spec.resume:
+    trail_pointer.clear(trail_pointer.session_pointer(workspace.path))
+  elif not harness.session_exists(workspace):
+    log.error('%s', harness.missing_session_error(workspace))
+    return 1
+  summoned_env: Mapping[str, str] = {}
   if summoned is not None:
-    # no broker of its own: the session broxy connects to the summoner's channel,
-    # and the token is claimed only once nothing fallible is left before the run
-    runner_env.pop(CHANNEL_ENV, None)
-    runner_env.update(_summoned_env(summoned, spec, summoned.address()))
+    host = CONTAINER_BROKER_HOST if workspace.isolation is Isolation.BOXED else None
+    summoned_env = _summoned_env(summoned, spec, summoned.address(host))
+  try:
+    launch = started_party_launch(
+      spec,
+      workspace,
+      workspace.repository,
+      base_ref,
+      launch_scope,
+      human_env=human_env,
+      runtime_bundle=runtime_bundle,
+      container_runtime=container_runtime,
+      forward_env=summoned is None,
+      env=summoned_env,
+      credential_directory=workspace.path / 'credentials',
+      install_directory=workspace.path / 'environment',
+    )
+  except (RuntimeError, ValueError) as error:
+    log.error('%s', error)
+    return 1
+  if summoned is not None:
     try:
-      pending_summon.claim(summoned.token, workspace=spec.name)
+      return run_manual_started_party(
+        launch,
+        workspace,
+        credential_scope=launch_scope.scoped,
+        claim=lambda: pending_summon.claim(summoned.token, workspace=spec.name),
+      )
     except pending_summon.UnknownToken as error:
       log.error('%s', error)
       return 1
-    code = subprocess.run(command, cwd=str(tree), env=runner_env).returncode
-  elif broker_enabled():
-    code = run_unboxed_process_via_broker(
-      workspace,
-      command,
-      runner_env,
-      launch_scope.may_summon,
-      scoped,
-      container_runtime,
-      bro=spec.bro,
-      interactive=not spec.solo,
-      summon_depth=spec.summon_depth,
-      summon_harness=spec.summon_harness,
-    )
-  else:
-    runner_env.pop(CHANNEL_ENV, None)
-    runner_env.pop(UPSTREAM_ENV, None)
-    code = subprocess.run(command, cwd=str(tree), env=runner_env).returncode
-  workspace.record_session_end(code)
-  return code
+  return run_started_party(
+    launch,
+    workspace,
+    may_summon=launch_scope.may_summon,
+    summon_depth=spec.summon_depth,
+    summon_harness=spec.summon_harness,
+    credential_scope=launch_scope.scoped,
+    container_runtime=container_runtime,
+    runtime_bundle=runtime_bundle,
+  )
 
 
 def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
@@ -509,7 +499,6 @@ def _start_session(
   summoned: Optional[pending_summon.PendingSummon] = None,
 ) -> int:
   harness = get_harness(spec.harness)
-  boxed = spec.isolation is Isolation.BOXED
   os.environ['RIDE_COMMAND'] = ' '.join(spec.to_command_argv())
   os.environ['RIDE_WORKSPACE'] = spec.name
   os.environ[ISOLATION_ENV] = spec.isolation.value
@@ -612,7 +601,6 @@ def _start_session(
         base_ref,
         launch,
         human_env=human_env,
-        boxed=boxed,
         runtime_bundle=runtime_bundle,
         container_runtime=container_runtime,
         summoned=summoned,

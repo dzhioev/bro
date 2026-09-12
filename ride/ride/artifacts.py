@@ -15,8 +15,8 @@ hardlink (or hardlinked tree) per ref it may reach — the source of its
 read-only `/var/ride/artifacts` bind mount, so a ref linked while the peer
 runs appears without a remount. A mint links the minter and its summoners up
 to the root; a summon's `share` list is linked into the child's view during
-spawn lowering (`ride/ride/spawn.py`). The unboxed root has no mount
-namespace: its `get` falls back to a private copy under the workspace's own
+spawn lowering (`ride/ride/spawn.py`). An unboxed peer has no mount
+namespace: its `get` falls back to a private copy under that workspace's own
 `artifacts/` directory. A manually launched child has no host-built launch
 and therefore no view; its `get` is denied with the reason.
 
@@ -58,12 +58,13 @@ from bro.base.lulid import lulid
 from bro.kinds import ArtifactDenied, tree_path
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, artifacts_dir, workspace_dir
 from ride.peer_facts import PeerFacts, PeerIdentity, UnattributablePeer
+from ride.workspace.metadata import Isolation
+from ride.workspace.model import Workspace
 
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message
   from bro.broker.dispatcher import Dispatcher
   from bro.broker.runtime import Peer
-  from ride.workspace.model import Workspace
 
 # refusal bound on the store's committed bytes — a runaway-ingest guard, not a
 # quota (the store dies with the ride)
@@ -365,16 +366,21 @@ class ArtifactStore:
       raise ArtifactDenied(_denial(ref))
     if identity.manual:
       raise ArtifactDenied('no artifact view is mounted for a manually launched session')
-    if identity.workspace == self.ride and not self._root_boxed:
-      path = str(self._unboxed_copy(ref))
+    unboxed = (
+      not self._root_boxed
+      if identity.workspace == self.ride
+      else Workspace.open(identity.workspace).isolation is Isolation.UNBOXED
+    )
+    if unboxed:
+      path = str(self._unboxed_copy(ref, identity.workspace))
     else:
       self._link_into_view(identity.workspace, ref)
       path = str(CONTAINER_ARTIFACTS_ROOT / ref)
     self.audit('get', {'peer': identity.workspace, 'ref': ref})
     return path
 
-  def _unboxed_copy(self, ref: str) -> Path:
-    destination_directory = workspace_dir(self.ride) / 'artifacts'
+  def _unboxed_copy(self, ref: str, workspace: str) -> Path:
+    destination_directory = workspace_dir(workspace) / 'artifacts'
     destination = destination_directory / ref
     if destination.exists():
       return destination

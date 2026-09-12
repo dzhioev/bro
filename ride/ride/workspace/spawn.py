@@ -10,19 +10,24 @@ failed or killed child's stays on disk for inspection. The neutral launch owns
 the complete docker inputs, including the explicit env snapshot and whether
 ambient forwarding is allowed.
 
-`ProcessSpawner` runs a host-session root with inherited stdio, adds the
-provisioned channel's loopback address and the quest id directly to its
-explicit environment, and applies the interactive signal and host-log handling only to
-interactive launches.
+`ProcessSpawner` adds the provisioned channel's loopback address and quest id
+to the launch's explicit environment.
+An interactive root inherits stdio and gets signal and host-log handling;
+a headless child owns a process group, captures bounded merged output, requires
+private-credential cleanup, and removes its throwaway workspace only after a
+clean exit.
 
 `CompositeSpawner` dispatches on the concrete `LaunchSpec` type, so a broker
 root of either mode can spawn children of any registered kind.
 """
 
 import asyncio
+import contextlib
 import os
+import shutil
 import signal
 import sys
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
@@ -46,6 +51,8 @@ from ride.workspace.model import Workspace
 DEFAULT_RING_BYTES = 1 << 16  # 64 KiB — a full traceback + context, bounded
 
 _DRAIN_CHUNK = 65536
+# room for do-ride's Claude path to flush a transcript and finish its own exit grace
+_PROCESS_TERM_GRACE = 30.0
 
 
 @dataclass(frozen=True)
@@ -59,18 +66,24 @@ class DockerLaunchSpec(LaunchSpec):
 
 @dataclass(frozen=True)
 class ProcessLaunchSpec(LaunchSpec):
-  """the concrete launch description `ProcessSpawner` reads: a host subprocess
-  run in `cwd` with inherited stdio.
-
-  `env` is the child's full environment — an explicit snapshot, never a live
-  `os.environ` read (the same purity rule as `DockerLaunchSpec.env`); the spawner
-  sets `BROKER_UPSTREAM` and `BROKER_QUEST` on top.
-  """
+  """A process launch with an explicit full environment snapshot and supervision policy."""
 
   command: list[str]
   cwd: str
   env: dict[str, str]
   interactive: bool = True
+  capture_output: bool = False
+  ring_bytes: int = DEFAULT_RING_BYTES
+  workspace: Optional[str] = None
+  cleanup_directory: Optional[str] = None
+
+  def __post_init__(self) -> None:
+    if self.interactive and self.capture_output:
+      raise ValueError('an interactive process launch cannot capture its inherited streams')
+    if not self.capture_output and (
+      self.workspace is not None or self.cleanup_directory is not None
+    ):
+      raise ValueError('process child cleanup requires captured headless supervision')
 
 
 def _broker_launch(launch: DockerLaunch, channel: Provisioned, quest: str) -> DockerLaunch:
@@ -328,6 +341,86 @@ class _HeadlessProcess(ChildHandle):
     return ''
 
 
+class _ProcessChild(ChildHandle):
+  """A process-group child with private-credential and workspace teardown."""
+
+  def __init__(
+    self,
+    process: asyncio.subprocess.Process,
+    ring_bytes: int,
+    workspace: Optional[Workspace],
+    cleanup_directory: Optional[Path],
+  ):
+    self._process = process
+    self._ring = RingBuffer(ring_bytes)
+    self._drain = asyncio.create_task(self._drain_output())
+    self._workspace = workspace
+    self._cleanup_directory = cleanup_directory
+
+  async def _drain_output(self) -> None:
+    assert self._process.stdout is not None
+    while True:
+      chunk = await self._process.stdout.read(_DRAIN_CHUNK)
+      if len(chunk) == 0:
+        return
+      self._ring.write(chunk)
+
+  def _detach_resources(self) -> tuple[Optional[Workspace], Optional[Path]]:
+    workspace, self._workspace = self._workspace, None
+    directory, self._cleanup_directory = self._cleanup_directory, None
+    return workspace, directory
+
+  async def _remove_directory(self, directory: Path) -> None:
+    await asyncio.to_thread(shutil.rmtree, directory)
+
+  def _signal_process(self, signum: int) -> None:
+    with contextlib.suppress(ProcessLookupError):
+      self._process.send_signal(signum)
+
+  def _signal_group(self, signum: int) -> None:
+    with contextlib.suppress(ProcessLookupError):
+      os.killpg(self._process.pid, signum)
+
+  async def _settle(self, code: Optional[int]) -> None:
+    workspace, directory = self._detach_resources()
+    if directory is not None:
+      await self._remove_directory(directory)
+    if workspace is None:
+      return
+    if code == 0:
+      try:
+        await asyncio.to_thread(workspace.remove)
+      except (RuntimeError, OSError) as error:
+        log.warning('could not remove broker child workspace %s: %s', workspace.name, error)
+      return
+    workspace.record_session_end(code)
+    if code is None:
+      log.info('child killed; keeping workspace %s', workspace.name)
+    else:
+      log.info('child exited with code %d; keeping workspace %s', code, workspace.name)
+
+  async def wait(self) -> int:
+    code = await self._process.wait()
+    await self._drain
+    await self._settle(code)
+    return code
+
+  async def kill(self) -> None:
+    self._signal_process(signal.SIGTERM)
+    try:
+      async with asyncio.timeout(_PROCESS_TERM_GRACE):
+        await self._process.wait()
+        await asyncio.shield(self._drain)
+    except TimeoutError:
+      self._signal_group(signal.SIGKILL)
+      await self._process.wait()
+      await self._drain
+    await self._settle(None)
+
+  def output_tail(self) -> str:
+    return self._ring.tail().decode('utf-8', errors='replace')
+
+
 class _HeadlessRoot(ChildHandle):
   """handle for a non-TTY container root with inherited, separate streams."""
 
@@ -385,6 +478,25 @@ class DockerSpawner(Spawner):
     return _DockerChild(container_id, process, launch.ring_bytes, workspace)
 
 
+class _CleanupLease:
+  def __init__(self, directory: Optional[Path]):
+    self.directory = directory
+    self.transferred = False
+
+  def transfer(self) -> None:
+    self.transferred = True
+
+
+@contextlib.asynccontextmanager
+async def _cleanup_on_failure(directory: Optional[Path]) -> AsyncIterator[_CleanupLease]:
+  lease = _CleanupLease(directory)
+  try:
+    yield lease
+  finally:
+    if directory is not None and not lease.transferred:
+      await asyncio.to_thread(shutil.rmtree, directory)
+
+
 class ProcessSpawner(Spawner):
   def __init__(self, host_log: Optional[Path] = None):
     self._host_log = host_log
@@ -395,10 +507,34 @@ class ProcessSpawner(Spawner):
     env.pop(CHANNEL_ENV, None)
     env[UPSTREAM_ENV] = channel.host_endpoint.address(LOCAL_HOST)
     env['BROKER_QUEST'] = quest
-    process = await asyncio.create_subprocess_exec(*launch.command, cwd=launch.cwd, env=env)
-    if launch.interactive:
-      return _AttachedProcess(process, self._host_log)
-    return _HeadlessProcess(process)
+    cleanup_directory = None if launch.cleanup_directory is None else Path(launch.cleanup_directory)
+    async with _cleanup_on_failure(cleanup_directory) as cleanup:
+      workspace = None if launch.workspace is None else Workspace.open(launch.workspace)
+      if workspace is not None:
+        if workspace.isolation is not Isolation.UNBOXED or not workspace.metadata.throwaway:
+          raise ValueError(
+            f'process child workspace {workspace.name!r} is not throwaway and unboxed'
+          )
+        workspace.clear_session_end()
+      process = await asyncio.create_subprocess_exec(
+        *launch.command,
+        cwd=launch.cwd,
+        env=env,
+        stdout=asyncio.subprocess.PIPE if launch.capture_output else None,
+        stderr=asyncio.subprocess.STDOUT if launch.capture_output else None,
+        start_new_session=launch.capture_output,
+      )
+      if launch.interactive:
+        return _AttachedProcess(process, self._host_log)
+      if launch.capture_output:
+        cleanup.transfer()
+        return _ProcessChild(
+          process,
+          launch.ring_bytes,
+          workspace,
+          cleanup_directory,
+        )
+      return _HeadlessProcess(process)
 
 
 class CompositeSpawner(Spawner):
