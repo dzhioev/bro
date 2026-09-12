@@ -30,6 +30,7 @@ Copying the directory somewhere is the whole installation, and
 the shim inside it is the framework's `bro` command:
 
 ```
+docker exec <container> mkdir --parents /installed-agent
 docker cp var/benchmark/bundle <container>:/installed-agent/bro
 docker exec <container> /installed-agent/bro/bro show terminal
 ```
