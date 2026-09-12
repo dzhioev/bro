@@ -18,6 +18,7 @@ from bro.base import log
 _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 _TRANSIENT_AUTH_STATUSES = frozenset({401, 403})
 _MAX_ATTEMPTS = 5
+_REQUEST_TIMEOUT_SECONDS = 30.0
 _BASE_BACKOFF = 1.0  # seconds; doubled per attempt
 _MAX_BACKOFF = 30.0  # ceiling for both exponential backoff and server-hinted waits
 _PASSING_CONCLUSIONS = frozenset({'success', 'neutral', 'skipped'})
@@ -112,7 +113,7 @@ def _request_with_headers(
   prepared = urllib.request.Request(url, data=data, headers=headers, method=method)
   for attempt in range(_MAX_ATTEMPTS):
     try:
-      with urllib.request.urlopen(prepared) as response:
+      with urllib.request.urlopen(prepared, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
         payload = response.read()
         headers = response.headers
       return (json.loads(payload) if len(payload) > 0 else None, headers)
