@@ -5,7 +5,7 @@ channel awaiting an external child) and the user with a token (the request id).
 This module is the bridge between them: `SummonControl` writes one record per
 registered manual summon under `<runtime-root>/summon/pending/<token>.json`,
 and the user's `ride along --summoned <token>` launch reads it back — the
-channel to attach to, the broker protocol revision, the authorized child shape (target, allow-list, scope overrides), the prompt, and the base-ref inheritance source.
+channel to attach to, the broker protocol revision, the authorized child shape (target, allow-list, permits, scope overrides), the prompt, and the base-ref inheritance source.
 
 `claim` is one-shot: exactly one launch may attach to the channel (a second
 connection would supersede the first on it), so the unlink decides a
@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from bro.base.scope import PARTY_PERMITS
 from bro.workspace.paths import is_workspace_name, summon_dir
 
 
@@ -42,6 +43,7 @@ class PendingSummon:
   prompt: str
   parent_workspace: str  # the summoner's tree — the default base-ref source
   may_summon: tuple[str, ...]  # the child's own resolved allow-list
+  permits: tuple[str, ...]  # the child's own resolved party authority
   grant: tuple[str, ...]  # the request's scope overrides, applied at launch
   revoke: tuple[str, ...]
   summoner: Optional[dict[str, Any]]  # the child's summoned_by provenance
@@ -100,10 +102,16 @@ def peek(token: str) -> PendingSummon:
       f'pending manual summon {token!r} uses broker protocol revision {record_revision!r}, '
       f'but this installation uses {PROTOCOL_REVISION}; re-mint the token from a matching release'
     )
+  permit_values = data.get('permits')
+  if not isinstance(permit_values, list) or not all(
+    isinstance(value, str) and value in PARTY_PERMITS for value in permit_values
+  ):
+    raise ValueError(f'pending manual summon {token!r} carries invalid permits')
   loaded = PendingSummon(
     **{
       **data,
       'may_summon': tuple(data['may_summon']),
+      'permits': tuple(data['permits']),
       'grant': tuple(data['grant']),
       'revoke': tuple(data['revoke']),
     }

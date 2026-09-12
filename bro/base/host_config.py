@@ -26,12 +26,12 @@ Selections live outside repositories and merge from general to specific:
 Every `creds` entry is `kind+instance`, the instance left empty (`kind+`) to
 select the kind's empty instance.
 A list may name each kind once.
-A `bros` entry may also `grant`: kinds the bro reads on this project beyond the
-ones it declares, each `kind+instance` to select the instance as `creds` does,
-or a bare `kind` to read the instance the other layers select.
-An entry names a kind in `creds` or in `grant`, not both.
-The grammar is installation-independent, so selections for unknown kinds remain
-valid and are carried in the returned mappings.
+`defaults`, project entries, and `bros` entries may carry unified `grant` and
+`revoke` lists: credential names, `@bro` targets, and `:permit` leaves.
+An instance-spelled credential grant selects the instance as `creds` does.
+An entry names a credential kind in `creds` or in `grant`, not both.
+The grammar is installation-independent, so unknown credential and bro names
+remain valid until a launch resolves them against its installation.
 
 `defaults` is the root both branches extend: `user` for a command the operator
 runs outside any session, `projects` for a managed session.
@@ -45,12 +45,12 @@ names only what one machine changes.
 A `user.tools` key is one CLI's canonical console-script name — its import path
 with the underscores dashed — rather than the bare alias, which several
 distributions may each publish.
-Launch selection precedence runs defaults, the URL entry, the path entry, then
-each of their `bros` layers in that same order; a command's is its `user.tools`
-entry, `user`, then defaults.
+Launch selection and scope precedence runs defaults, the URL entry, the path entry,
+then each of their `bros` layers in that same order;
+a command's credential selection is its `user.tools` entry, `user`, then defaults.
 A kind no layer selects reads its empty instance.
 The returned layer map attributes every explicit selection, and the returned
-grant set carries the kinds the matching `bros` entries grant.
+grant set carries the credential kinds left granted by the matching scope layers.
 
 The file is optional.
 `llm` remains the host-wide table of `--llm` preset names.
@@ -61,12 +61,14 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from bro.base import configs, credentials
 from bro.base.git_url import is_git_url, normalize_git_url
+from bro.base.scope import ScopeLayer, split_scope_overrides, validate_scope_layer
 
 # Module-level so tests can point it at a fixture path; read at call time.
 HOST_CONFIG_FILE = configs.DEFAULT_HOST_CONFIG
@@ -86,6 +88,7 @@ _PROJECTS_KEY = 'projects'
 _TOOLS_KEY = 'tools'
 _CREDS_KEY = 'creds'
 _GRANT_KEY = 'grant'
+_REVOKE_KEY = 'revoke'
 _BROS_KEY = 'bros'
 _LLM_KEY = 'llm'
 _SUMMON_DEPTH_KEY = 'summon-depth'
@@ -111,27 +114,24 @@ class Attachment:
 
 @dataclass(frozen=True)
 class CredentialSelection:
-  """A merged kind-to-instance selection, its host-config provenance, and the
-  kinds the matching `bros` entries grant."""
+  """A merged selection, its provenance, and its ordered scope layers."""
 
   instances: dict[str, str]
   layers: dict[str, str]
   grants: frozenset[str] = frozenset()
+  scope_layers: tuple[ScopeLayer, ...] = ()
 
 
 @dataclass(frozen=True)
-class _BroEntry:
-  """A `bros` entry: its selections, and the kinds it grants — a bare one
-  carrying no selection of its own."""
-
+class _ScopeEntry:
   selection: dict[str, str]
-  grants: frozenset[str]
+  scope: ScopeLayer
 
 
 @dataclass(frozen=True)
 class _Project:
-  credentials: dict[str, str]
-  bros: dict[str, _BroEntry]
+  entry: _ScopeEntry
+  bros: dict[str, _ScopeEntry]
 
 
 @dataclass(frozen=True)
@@ -149,7 +149,7 @@ class _User:
 
 @dataclass(frozen=True)
 class _Config:
-  defaults: dict[str, str]
+  defaults: _ScopeEntry
   user: _User
   projects: dict[str, _Project]
   llm: dict[str, str]
@@ -159,7 +159,7 @@ class _Config:
 def _read() -> _Config:
   path = Path(HOST_CONFIG_FILE)
   if not path.is_file():
-    return _Config({}, _User({}, {}), {}, {}, None)
+    return _Config(_ScopeEntry({}, ScopeLayer()), _User({}, {}), {}, {}, None)
   try:
     data = json.loads(path.read_text())
   except json.JSONDecodeError as error:
@@ -173,7 +173,7 @@ def _read() -> _Config:
     raise ValueError(f'{path}: top-level {_TOOLS_KEY!r} is retired; nest it under {_USER_KEY!r}')
   if len(unknown) > 0:
     raise ValueError(f'unknown key(s) in {path}: {", ".join(unknown)}')
-  defaults = _selection_object(path, _DEFAULTS_KEY, data.get(_DEFAULTS_KEY, {}))
+  defaults = _scope_entry(f'{path}: {_DEFAULTS_KEY}', data.get(_DEFAULTS_KEY, {}))
   user = _user(path, data.get(_USER_KEY, {}))
   projects = _projects(path, data.get(_PROJECTS_KEY, {}))
   llm = _llm(path, data.get(_LLM_KEY, {}))
@@ -206,9 +206,9 @@ def summon_depth(project_depth: Optional[int] = None) -> int:
 def project_selection(attachment: Optional[Attachment]) -> CredentialSelection:
   """Merge defaults and the matching projects, without a per-bro layer."""
   config = _read()
-  layers = [(DEFAULTS_LAYER, config.defaults)]
-  layers.extend((match.layer, match.project.credentials) for match in _matches(config, attachment))
-  return _merged(layers)
+  entries = [(DEFAULTS_LAYER, config.defaults)]
+  entries.extend((match.layer, match.project.entry) for match in _matches(config, attachment))
+  return _merged(entries)
 
 
 def launch_selection(attachment: Optional[Attachment], bro: str) -> CredentialSelection:
@@ -217,13 +217,12 @@ def launch_selection(attachment: Optional[Attachment], bro: str) -> CredentialSe
     raise ValueError('bro name must be a non-empty string')
   config = _read()
   matches = _matches(config, attachment)
-  layers = [(DEFAULTS_LAYER, config.defaults)]
-  layers.extend((match.layer, match.project.credentials) for match in matches)
-  bro_entries = [
+  entries = [(DEFAULTS_LAYER, config.defaults)]
+  entries.extend((match.layer, match.project.entry) for match in matches)
+  entries.extend(
     (match.bro_layer, match.project.bros[bro]) for match in matches if bro in match.project.bros
-  ]
-  layers.extend((layer, entry.selection) for layer, entry in bro_entries)
-  return _merged(layers, frozenset().union(*(entry.grants for _, entry in bro_entries)))
+  )
+  return _merged(entries)
 
 
 def tool_selection(
@@ -238,7 +237,7 @@ def tool_selection(
   if command is not None and (not isinstance(command, str) or command == ''):
     raise ValueError('command name must be a non-empty string')
   config = _read()
-  layers = [(DEFAULTS_LAYER, config.defaults), (USER_LAYER, config.user.credentials)]
+  layers = [(DEFAULTS_LAYER, config.defaults.selection), (USER_LAYER, config.user.credentials)]
   if command is not None:
     if invoked_as is not None and invoked_as != command and invoked_as in config.user.tools:
       raise ValueError(
@@ -268,14 +267,32 @@ def _matches(config: _Config, attachment: Optional[Attachment]) -> list[_Match]:
 
 
 def _merged(
-  layers: list[tuple[str, dict[str, str]]], grants: frozenset[str] = frozenset()
+  layers: Sequence[tuple[str, dict[str, str] | _ScopeEntry]],
 ) -> CredentialSelection:
   instances: dict[str, str] = {}
   sources: dict[str, str] = {}
-  for layer, selection in layers:
+  scope_layers: list[ScopeLayer] = []
+  granted_credentials: set[str] = set()
+  for layer, entry in layers:
+    selection = entry.selection if isinstance(entry, _ScopeEntry) else entry
     instances.update(selection)
     sources.update(dict.fromkeys(selection, layer))
-  return CredentialSelection(instances, sources, grants)
+    if not isinstance(entry, _ScopeEntry):
+      continue
+    if entry.scope != ScopeLayer():
+      scope_layers.append(entry.scope)
+    grant_credentials, _, _ = split_scope_overrides(entry.scope.grant)
+    revoke_credentials, _, _ = split_scope_overrides(entry.scope.revoke)
+    granted_credentials.update(credentials.parse_name(value)[0] for value in grant_credentials)
+    granted_credentials.difference_update(
+      credentials.parse_name(value)[0] for value in revoke_credentials
+    )
+  return CredentialSelection(
+    instances,
+    sources,
+    frozenset(granted_credentials),
+    tuple(scope_layers),
+  )
 
 
 def _projects(path: Path, value: object) -> dict[str, _Project]:
@@ -294,40 +311,52 @@ def _project(path: Path, project: str, value: object) -> _Project:
   where = f'{path}: project {project!r}'
   if not isinstance(value, dict):
     raise ValueError(f'{where} must hold a json object')
-  _reject_unknown_fields(value, {_CREDS_KEY, _BROS_KEY}, where)
-  selection = _selection_entries(where, value.get(_CREDS_KEY, []))
+  _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY, _REVOKE_KEY, _BROS_KEY}, where)
+  project_entry = _scope_entry(
+    where, {key: entry for key, entry in value.items() if key != _BROS_KEY}
+  )
   bros = value.get(_BROS_KEY, {})
   if not isinstance(bros, dict):
     raise ValueError(f'{where}: {_BROS_KEY} must be a json object')
-  parsed_bros: dict[str, _BroEntry] = {}
-  for bro, entry in bros.items():
+  parsed_bros: dict[str, _ScopeEntry] = {}
+  for bro, bro_entry in bros.items():
     if bro == '':
       raise ValueError(f'{where}: bro name must not be empty')
-    parsed_bros[bro] = _bro_entry(f'{where}: bro {bro!r}', entry)
-  return _Project(selection, parsed_bros)
+    parsed_bros[bro] = _scope_entry(f'{where}: bro {bro!r}', bro_entry)
+  return _Project(project_entry, parsed_bros)
 
 
-def _bro_entry(where: str, value: object) -> _BroEntry:
+def _scope_entry(where: str, value: object) -> _ScopeEntry:
   if not isinstance(value, dict):
     raise ValueError(f'{where} must hold a json object')
-  _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY}, where)
+  _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY, _REVOKE_KEY}, where)
   selection = _selection_entries(where, value.get(_CREDS_KEY, []))
-  grants = value.get(_GRANT_KEY, [])
-  if not isinstance(grants, list):
-    raise ValueError(f'{where}: {_GRANT_KEY} must be a list')
-  granted: set[str] = set()
-  for entry in grants:
-    if not isinstance(entry, str):
-      raise ValueError(f'{where}: grant {entry!r} must be a string')
-    kind, instance = credentials.parse_name(entry)
-    if kind in granted:
-      raise ValueError(f'{where} grants kind {kind!r} twice')
+  grant = _scope_values(where, value.get(_GRANT_KEY, []), _GRANT_KEY)
+  revoke = _scope_values(where, value.get(_REVOKE_KEY, []), _REVOKE_KEY)
+  scope = ScopeLayer(grant, revoke)
+  try:
+    validate_scope_layer(scope, allow_credential_instances=True)
+  except ValueError as error:
+    raise ValueError(f'{where}: {error}') from error
+  grant_credentials, _, _ = split_scope_overrides(grant)
+  for granted in grant_credentials:
+    kind, instance = credentials.parse_name(granted)
     if kind in selection:
       raise ValueError(f'{where} names kind {kind!r} in both {_CREDS_KEY} and {_GRANT_KEY}')
-    granted.add(kind)
     if instance is not None:
       selection[kind] = instance
-  return _BroEntry(selection, frozenset(granted))
+  return _ScopeEntry(selection, scope)
+
+
+def _scope_values(where: str, values: object, key: str) -> tuple[str, ...]:
+  if not isinstance(values, list):
+    raise ValueError(f'{where}: {key} must be a list')
+  for value in values:
+    if not isinstance(value, str):
+      raise ValueError(f'{where}: {key} {value!r} must be a string')
+    if value == '':
+      raise ValueError(f'{where}: {key} must not contain an empty string')
+  return tuple(values)
 
 
 def _user(path: Path, value: object) -> _User:

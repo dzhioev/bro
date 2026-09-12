@@ -17,6 +17,7 @@ def _record(**overrides) -> pending_summon.PendingSummon:
       'prompt': 'pair on this',
       'parent_workspace': '/workspaces/parent/tree',
       'may_summon': ('bro',),
+      'permits': ('party.start.boxed',),
       'grant': ('aws',),
       'revoke': (),
       'summoner': {'trail_id': 'T1'},
@@ -75,6 +76,17 @@ def test_a_record_naming_another_token_is_refused(tmp_path):
   pending_summon._path('TOK-2').write_text(source.read_text())
   with pytest.raises(ValueError, match="names token 'TOK-1'"):
     pending_summon.peek('TOK-2')
+
+
+def test_a_record_with_invalid_permits_is_refused(tmp_path):
+  pending_summon.write(_record())
+  path = pending_summon._path('TOK-1')
+  data = json.loads(path.read_text())
+  data['permits'] = ['party.start']
+  path.write_text(json.dumps(data))
+
+  with pytest.raises(ValueError, match='invalid permits'):
+    pending_summon.peek('TOK-1')
 
 
 def test_a_record_without_a_protocol_revision_is_refused(tmp_path):

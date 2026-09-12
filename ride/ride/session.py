@@ -8,7 +8,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
-from bro.base import configs, credentials, log
+from bro.base import configs, log
+from bro.base.scope import scope_override_key, scope_revoke_key
 from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV
 from bro.llm.llm import LLMSpec
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_session_dir
@@ -51,25 +52,8 @@ from ride.workspace.docker import (
 )
 from ride.workspace.metadata import BRANCH_ENV, Isolation
 from ride.workspace.model import AttachmentMismatch, IsolationMismatch, SessionBusy, Workspace
-from ride.workspace.store import (
-  ScopedSecrets,
-  credential_revoke_kind,
-  materialize_scoped_store,
-)
+from ride.workspace.store import ScopedSecrets, materialize_scoped_store
 from ride.workspace.worktrees import provision_workspace
-
-
-def _scope_override_key(value: str) -> str:
-  if value.startswith('@'):
-    return value
-  kind, _ = credentials.parse_name(value)
-  return kind
-
-
-def _scope_revoke_key(value: str) -> str:
-  if value.startswith('@'):
-    return value
-  return credential_revoke_kind(value)
 
 
 @dataclass(frozen=True)
@@ -160,27 +144,27 @@ class SessionSpec:
     )
 
   def with_scope_overrides(self, *, grant: list[str], revoke: list[str]) -> 'SessionSpec':
-    grant_keys = {_scope_override_key(name) for name in grant}
-    revoke_keys = {_scope_revoke_key(name) for name in revoke}
-    recorded_grant_keys = {_scope_override_key(name) for name in self.grant}
-    recorded_revoke_keys = {_scope_revoke_key(name) for name in self.revoke}
+    grant_keys = {scope_override_key(name) for name in grant}
+    revoke_keys = {scope_revoke_key(name) for name in revoke}
+    recorded_grant_keys = {scope_override_key(name) for name in self.grant}
+    recorded_revoke_keys = {scope_revoke_key(name) for name in self.revoke}
     for values, own, flag in ((grant, self.grant, 'grant'), (revoke, self.revoke, 'revoke')):
       restated = sorted(set(values) & set(own))
       if len(restated) > 0:
         raise ValueError(f'already in the recorded --{flag}: {", ".join(restated)}')
     kept_grant = [
-      name for name in self.grant if _scope_override_key(name) not in revoke_keys | grant_keys
+      name for name in self.grant if scope_override_key(name) not in revoke_keys | grant_keys
     ]
-    kept_revoke = [name for name in self.revoke if _scope_override_key(name) not in grant_keys]
+    kept_revoke = [name for name in self.revoke if scope_override_key(name) not in grant_keys]
     return replace(
       self,
       grant=[
         *kept_grant,
-        *(name for name in grant if _scope_override_key(name) not in recorded_revoke_keys),
+        *(name for name in grant if scope_override_key(name) not in recorded_revoke_keys),
       ],
       revoke=[
         *kept_revoke,
-        *(name for name in revoke if _scope_override_key(name) not in recorded_grant_keys),
+        *(name for name in revoke if scope_override_key(name) not in recorded_grant_keys),
       ],
     )
 
@@ -200,6 +184,7 @@ class SessionSpec:
 class ScopedLaunch:
   scoped: ScopedSecrets
   may_summon: set[str]
+  permits: set[str]
   store: dict[str, bytes]
   hydrated_kinds: frozenset[str] = frozenset()
 
@@ -244,7 +229,7 @@ def _summoned_env(
     UPSTREAM_ENV: address,
     'BROKER_QUEST': summoned.token,
     'RIDE_WORKSPACE': spec.name,
-    **summoned_child_env(summoned.may_summon, summoned.summoner),
+    **summoned_child_env(summoned.may_summon, summoned.permits, summoned.summoner),
   }
 
 
@@ -456,6 +441,7 @@ def _launch_session(
     launch,
     workspace,
     may_summon=launch_scope.may_summon,
+    permits=launch_scope.permits,
     summon_depth=spec.summon_depth,
     summon_harness=spec.summon_harness,
     credential_scope=launch_scope.scoped,
@@ -538,12 +524,18 @@ def _start_session(
         spec.bro,
         recipe,
         attachment=spec.repo,
+        attachment_repository=repository,
         llm_spec=spec.llm_spec,
         grant=spec.grant,
         revoke=spec.revoke,
       )
-    may_summon, store = preflight_scoped_launch(
-      scoped, spec.bro, grant=spec.grant, revoke=spec.revoke
+    may_summon, permits, store = preflight_scoped_launch(
+      scoped,
+      spec.bro,
+      attachment=spec.repo,
+      attachment_repository=repository,
+      grant=spec.grant,
+      revoke=spec.revoke,
     )
   except LaunchScopeError as error:
     log.error('%s', error)
@@ -589,6 +581,7 @@ def _start_session(
   launch = ScopedLaunch(
     scoped=scoped,
     may_summon=may_summon,
+    permits=permits,
     store=store,
     hydrated_kinds=store.kinds,
   )

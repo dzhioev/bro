@@ -106,7 +106,7 @@ def test_bare_summon_forwards_with_its_own_shell_command(monkeypatch):
   monkeypatch.setattr(
     summon,
     'relay_summon',
-    lambda target, prompt, *, timeout, into, hold, grant, revoke, share, llm, harness, manual: (
+    lambda target, prompt, *, timeout, into, hold, grant, revoke, share, llm, harness, party, isolation, manual: (
       calls.append((target, prompt, timeout, into)) or 0
     ),
   )
@@ -123,9 +123,11 @@ def test_manual_summon_refuses_launch_owned_flags(monkeypatch, caplog):
     ['--hold', 'attended'],
     ['--harness', 'claude'],
     ['--llm', ':fable5'],
+    ['--start'],
+    ['--unboxed'],
   ):
     assert summon.main(['summon', '--manual', *flags, 'dev', 'work']) == 1
-  assert sum('launch owns' in record.getMessage() for record in caplog.records) == 4
+  assert sum('launch owns' in record.getMessage() for record in caplog.records) == 6
 
 
 @pytest.mark.asyncio
@@ -141,6 +143,26 @@ async def test_detached_summon_waits_for_acceptance(monkeypatch, capsys):
 
     assert await task == 0
     assert capsys.readouterr().out == f'{request.id}\n'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+  ('flag', 'field', 'value'),
+  [
+    ('--start', 'party', 'start'),
+    ('--boxed', 'isolation', 'boxed'),
+    ('--unboxed', 'isolation', 'unboxed'),
+  ],
+)
+async def test_placement_flags_reach_the_request(monkeypatch, flag, field, value):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(summon.main, ['summon', '--detach', flag, 'dev', 'work'])
+    )
+    channel, request = await _next(server)
+    assert request.args[field] == value
+    await server.transport.send(channel, brotocol.mark(_id(request), 'accepted'))
+    assert await task == 0
 
 
 @pytest.mark.asyncio
@@ -537,6 +559,13 @@ def test_may_summon_distinguishes_empty_and_unpublished(monkeypatch):
   assert summon.may_summon() is None
 
 
+def test_invalid_published_permit_fails(monkeypatch):
+  monkeypatch.setenv(summon.PERMITS_ENV, 'party.start')
+
+  with pytest.raises(ValueError, match='unknown permit'):
+    summon.permits()
+
+
 def test_errors_without_a_channel(monkeypatch, caplog):
   monkeypatch.delenv(CHANNEL_ENV, raising=False)
   assert summon.main(['summon', 'dev', 'work']) == 1
@@ -546,15 +575,18 @@ def test_errors_without_a_channel(monkeypatch, caplog):
 
 
 def test_summoned_child_env_is_what_the_child_reads_back(monkeypatch):
-  for key, value in summon.summoned_child_env({'reviewer', 'dev'}, {'trail_id': 'T1'}).items():
+  for key, value in summon.summoned_child_env(
+    {'reviewer', 'dev'}, {'party.join'}, {'trail_id': 'T1'}
+  ).items():
     monkeypatch.setenv(key, value)
   assert summon.summoned()
   assert summon.may_summon() == ('dev', 'reviewer')
+  assert summon.permits() == ('party.join',)
   assert summon.summoned_by_from_env() == {'trail_id': 'T1'}
 
 
 def test_summoned_child_env_without_a_summoner_carries_no_provenance(monkeypatch):
-  env = summon.summoned_child_env((), None)
+  env = summon.summoned_child_env((), (), None)
   assert summon.SUMMONER_ENV not in env
   for key, value in env.items():
     monkeypatch.setenv(key, value)

@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import bro.base.args as base_args
 from bro.base import log
+from bro.base.scope import PARTY_PERMITS, permit_choices
 from bro.launch.llm_flags import (
   EFFORT_HELP,
   FAST_HELP,
@@ -50,6 +51,7 @@ SUMMONED_ENV = 'RIDE_SUMMONED'
 # carries a run's own effective summon allow-list into it, written by the surface
 # that launches the run: a session root's at launch, a summoned child's at its spawn
 MAY_SUMMON_ENV = 'RIDE_MAY_SUMMON'
+PERMITS_ENV = 'RIDE_PERMITS'
 # request-lifecycle bound for a summoned child — sized so the flagship deploy
 # workload survives the default; the substrate's generic 600s default is untouched
 DEFAULT_TIMEOUT = 1800.0
@@ -72,11 +74,12 @@ HARNESS_HELP = (
   '`[tool.bro] summon-harness`'
 )
 GRANT_HELP = (
-  "add a credential (KIND or KIND+INSTANCE) or summonable bro (@BRO) to the child's scope "
-  '(repeatable)'
+  'add a credential (KIND or KIND+INSTANCE), summonable bro (@BRO), or party permit '
+  f"({permit_choices()}) to the child's scope (repeatable)"
 )
 REVOKE_HELP = (
-  "remove a credential kind (KIND) or summonable bro (@BRO) from the child's scope (repeatable)"
+  "remove a credential kind (KIND), summonable bro (@BRO), or party permit from the child's "
+  'scope (repeatable)'
 )
 SHARE_HELP = (
   'give the child read access to an artifact ref this session can itself read (repeatable)'
@@ -97,13 +100,28 @@ def encode_may_summon(targets: Collection[str]) -> str:
   return ','.join(sorted(set(targets)))
 
 
+def encode_permits(permits: Collection[str]) -> str:
+  """An effective permit set as the `PERMITS_ENV` value."""
+  values = set(permits)
+  unknown = sorted(values - PARTY_PERMITS)
+  if unknown:
+    raise ValueError(f'unknown permit(s): {", ".join(unknown)}')
+  return ','.join(sorted(values))
+
+
 def summoned_child_env(
-  may_summon: Collection[str], summoner: Optional[dict[str, Any]]
+  may_summon: Collection[str],
+  permits: Collection[str],
+  summoner: Optional[dict[str, Any]],
 ) -> dict[str, str]:
   """the env that makes a run a summoned child, written by the surface that
   launches it: the mark, the child's own effective allow-list, and its
   summoner's attribution when there is one."""
-  env = {SUMMONED_ENV: '1', MAY_SUMMON_ENV: encode_may_summon(may_summon)}
+  env = {
+    SUMMONED_ENV: '1',
+    MAY_SUMMON_ENV: encode_may_summon(may_summon),
+    PERMITS_ENV: encode_permits(permits),
+  }
   if summoner is not None:
     env[SUMMONER_ENV] = json.dumps(summoner, ensure_ascii=False, separators=(',', ':'))
   return env
@@ -124,6 +142,18 @@ def may_summon() -> Optional[tuple[str, ...]]:
   if raw is None:
     return None
   return tuple(name for name in raw.split(',') if len(name) > 0)
+
+
+def permits() -> Optional[tuple[str, ...]]:
+  """The party permits fixed by this run's launcher."""
+  raw = os.environ.get(PERMITS_ENV)
+  if raw is None:
+    return None
+  values = tuple(name for name in raw.split(',') if name)
+  unknown = sorted(set(values) - PARTY_PERMITS)
+  if unknown:
+    raise ValueError(f'{PERMITS_ENV} carries unknown permit(s): {", ".join(unknown)}')
+  return values
 
 
 def effective_may_summon() -> tuple[str, ...]:
@@ -200,6 +230,8 @@ def _payload(
   share: Optional[list[str]] = None,
   llm: Optional[str] = None,
   harness: Optional[str] = None,
+  party: Optional[str] = None,
+  isolation: Optional[str] = None,
   manual: bool = False,
 ) -> dict[str, Any]:
   payload: dict[str, Any] = {'target': target, 'prompt': prompt}
@@ -223,6 +255,10 @@ def _payload(
     payload['llm'] = llm
   if harness is not None:
     payload['harness'] = harness
+  if party is not None:
+    payload['party'] = party
+  if isolation is not None:
+    payload['isolation'] = isolation
   if manual:
     payload['manual'] = True
   return payload
@@ -402,6 +438,8 @@ def summon_and_wait(
   share: Optional[list[str]] = None,
   llm: Optional[str] = None,
   harness: Optional[str] = None,
+  party: Optional[str] = None,
+  isolation: Optional[str] = None,
   step_id: Optional[int] = None,
   index: Optional[int] = None,
   client: Optional['Client'] = None,
@@ -421,6 +459,8 @@ def summon_and_wait(
     share=share,
     llm=llm,
     harness=harness,
+    party=party,
+    isolation=isolation,
   )
   with _connection(client) as connection:
     request = _send_summon(connection, payload)
@@ -461,6 +501,8 @@ def summon_detached(
   share: Optional[list[str]] = None,
   llm: Optional[str] = None,
   harness: Optional[str] = None,
+  party: Optional[str] = None,
+  isolation: Optional[str] = None,
   step_id: Optional[int] = None,
   index: Optional[int] = None,
 ) -> str:
@@ -478,6 +520,8 @@ def summon_detached(
     share=share,
     llm=llm,
     harness=harness,
+    party=party,
+    isolation=isolation,
   )
   with _open_client() as client:
     request = _send_summon(client, payload)
@@ -678,6 +722,8 @@ def relay_summon(
   share: Optional[list[str]] = None,
   llm: Optional[str] = None,
   harness: Optional[str] = None,
+  party: Optional[str] = None,
+  isolation: Optional[str] = None,
   manual: bool = False,
 ) -> int:
   """send one summon and relay its outcome as a CLI would: the request id and
@@ -697,6 +743,8 @@ def relay_summon(
     share=share,
     llm=llm,
     harness=harness,
+    party=party,
+    isolation=isolation,
     manual=manual,
   )
   try:
@@ -837,6 +885,28 @@ def main(argv: list[str]) -> Optional[int]:
     metavar='SECONDS',
     help=f'seconds before the host kills the child (default: {DEFAULT_TIMEOUT:.0f})',
   )
+  placement = parser.add_mutually_exclusive_group()
+  placement.add_argument(
+    '--start',
+    dest='party',
+    action='store_const',
+    const='start',
+    help='start a party, choosing the first permitted isolation',
+  )
+  placement.add_argument(
+    '--boxed',
+    dest='isolation',
+    action='store_const',
+    const='boxed',
+    help='start a boxed party (requires :party.start.boxed)',
+  )
+  placement.add_argument(
+    '--unboxed',
+    dest='isolation',
+    action='store_const',
+    const='unboxed',
+    help='start an unboxed party (requires :party.start.unboxed)',
+  )
   parser.add_argument('--manual', action='store_true', help=MANUAL_HELP)
   parser.add_argument('--detach', action='store_true', help=DETACH_HELP)
   args = parser.parse(argv)
@@ -851,13 +921,15 @@ def main(argv: list[str]) -> Optional[int]:
       '--hold': args['hold'],
       '--harness': args['harness'],
       '--llm': args['llm'],
+      '--start': args['party'],
+      '--boxed/--unboxed': args['isolation'],
     }
     passed = sorted(flag for flag, value in launch_owned.items() if value is not None)
     if len(passed) > 0:
       log.error("a manual summon's launch owns %s; drop the flag(s)", ', '.join(passed))
       return 1
     if args['share'] is not None:
-      log.error("a manual summon's container is not launched by the host; drop --share")
+      log.error("a manual summon's workspace is not launched by summon control; drop --share")
       return 1
   os.environ.setdefault('BRO_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=['summon'])))
   if args['detach']:
@@ -883,6 +955,8 @@ def main(argv: list[str]) -> Optional[int]:
           share=args['share'],
           llm=args['llm'],
           harness=args['harness'],
+          party=args['party'],
+          isolation=args['isolation'],
         )
     except SummonError as error:
       log.error('%s', error)
@@ -900,5 +974,7 @@ def main(argv: list[str]) -> Optional[int]:
     share=args['share'],
     llm=args['llm'],
     harness=args['harness'],
+    party=args['party'],
+    isolation=args['isolation'],
     manual=args['manual'],
   )

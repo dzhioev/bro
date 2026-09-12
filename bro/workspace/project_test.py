@@ -118,6 +118,34 @@ class TestProjectConfig:
     with pytest.raises(ValueError, match='summon-depth .* positive integer'):
       project_config()
 
+  def test_scope_grant_and_revoke_parse(self, project_dir):
+    (project_dir / 'pyproject.toml').write_text(
+      '[tool.bro]\n'
+      'default = "foo"\n'
+      'grant = ["github", "@reviewer", ":party.join"]\n'
+      'revoke = ["openai", ":party.start.boxed"]\n'
+    )
+
+    config = project_config()
+
+    assert config.grant == ('github', '@reviewer', ':party.join')
+    assert config.revoke == ('openai', ':party.start.boxed')
+
+  def test_project_grant_refuses_a_host_specific_credential_instance(self, project_dir):
+    (project_dir / 'pyproject.toml').write_text(
+      '[tool.bro]\ndefault = "foo"\ngrant = ["github+reviewer"]\n'
+    )
+
+    with pytest.raises(ValueError, match='host-specific'):
+      project_config()
+
+  @pytest.mark.parametrize('value', ['":party"', '":party.start"', '":unknown"'])
+  def test_project_scope_requires_a_permit_leaf(self, project_dir, value):
+    (project_dir / 'pyproject.toml').write_text(f'[tool.bro]\ndefault = "foo"\ngrant = [{value}]\n')
+
+    with pytest.raises(ValueError, match='expected one of'):
+      project_config()
+
   def test_unknown_key_raises(self, project_dir):
     (project_dir / 'pyproject.toml').write_text('[tool.bro]\nimage = "x"\n')
     with pytest.raises(ValueError, match=r'unknown \[tool.bro\] key'):

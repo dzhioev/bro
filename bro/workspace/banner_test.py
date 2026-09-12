@@ -236,6 +236,12 @@ class TestRenderBanner:
   def test_llm_omits_may_summon_when_no_list_was_published(self):
     assert 'may_summon' not in _facts(may_summon=None).render_llm()
 
+  def test_llm_lists_the_party_permits(self):
+    assert (
+      'permits: :party.join, :party.start.unboxed'
+      in _facts(permits=('party.join', 'party.start.unboxed')).render_llm()
+    )
+
   def test_llm_states_the_summoned_fact_either_way(self):
     # an agent asking whether it owes a summoner an answer needs a stated `no`
     assert 'summoned: yes' in _facts(summoned=True).render_llm()
