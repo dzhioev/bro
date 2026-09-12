@@ -44,6 +44,15 @@ class TestSummonAllowList:
   def test_seeds_from_the_bros_may_summon(self):
     assert ride.summon_control.summon_allow_list('bro-dev', grant=[], revoke=[]) == {'dev'}
 
+  def test_configuration_layers_are_idempotent(self):
+    layers = (
+      ride.scope.ScopeLayer(grant=('@dev',)),
+      ride.scope.ScopeLayer(grant=('@dev',)),
+      ride.scope.ScopeLayer(revoke=('@dev',)),
+    )
+
+    assert ride.summon_control.summon_allow_list('bro', layers=layers, grant=[], revoke=[]) == set()
+
   def test_grant_and_revoke_are_strict(self):
     assert ride.summon_control.summon_allow_list('bro', grant=['dev'], revoke=[]) == {'dev'}
     with pytest.raises(ValueError, match='already in the summon allow-list'):
@@ -128,6 +137,7 @@ def _control(
   tmp_path,
   allow_list=('dev',),
   credential_scope=(),
+  permits=('party.start.boxed',),
   depth_cap=configs.DEFAULT_SUMMON_DEPTH,
   summon_harness=configs.DEFAULT_SUMMON_HARNESS,
 ):
@@ -142,6 +152,7 @@ def _control(
       workspace=workspace.name,
       bro='bro-dev',
       allow_list=frozenset(allow_list),
+      permits=frozenset(permits),
       credential_scope=scope,
     ),
     root_tree=workspace.tree,
@@ -292,6 +303,8 @@ def test_authorization_and_shape_denials_use_one_prefixed_journal_reason(
     {'grant': [None]},
     {'unknown': True},
     {'manual': False},
+    {'party': 'join'},
+    {'isolation': 'shared'},
   ],
 )
 def test_malformed_requests_are_denied(tmp_path, overrides):
@@ -320,6 +333,90 @@ def test_launch_shape_fields_reach_the_spawn(tmp_path, field, value):
     assert timeout == value
   else:
     assert getattr(launch, field) == value
+
+
+@pytest.mark.parametrize(
+  'field',
+  [
+    {'party': 'start'},
+    {'isolation': 'boxed'},
+  ],
+)
+def test_manual_request_refuses_placement_fields(tmp_path, field):
+  control = _control(tmp_path)
+  context = FakeContext(control)
+
+  control.handle(cast(Dispatcher, context), ROOT, _message(manual=True, **field))
+
+  assert "manual summon's launch owns" in context.replies[0][1]['error']
+
+
+def test_unmarked_request_prefers_boxed_then_falls_back_to_unboxed(tmp_path):
+  boxed = _control(tmp_path, permits=('party.start.boxed', 'party.start.unboxed'))
+  boxed_context = FakeContext(boxed)
+  boxed.handle(cast(Dispatcher, boxed_context), ROOT, _message())
+  assert boxed_context.spawned[0][0].isolation is Isolation.BOXED
+
+  unboxed = _control(tmp_path, permits=('party.start.unboxed',))
+  unboxed_context = FakeContext(unboxed)
+  unboxed.handle(cast(Dispatcher, unboxed_context), ROOT, _message())
+  assert unboxed_context.spawned[0][0].isolation is Isolation.UNBOXED
+
+
+def test_explicit_isolation_is_checked_against_the_requesters_permits(tmp_path):
+  control = _control(tmp_path, permits=('party.start.boxed',))
+  context = FakeContext(control)
+
+  control.handle(cast(Dispatcher, context), ROOT, _message(isolation='unboxed'))
+
+  assert ':party.start.unboxed' in context.replies[0][1]['error']
+  assert 'party.start.boxed' in context.replies[0][1]['error']
+
+
+def test_request_without_a_start_permit_is_denied_instead_of_joining(tmp_path):
+  control = _control(tmp_path, permits=('party.join',))
+  context = FakeContext(control)
+
+  control.handle(cast(Dispatcher, context), ROOT, _message())
+
+  assert 'unmarked summon needs a party start permit' in context.replies[0][1]['error']
+
+
+def test_request_may_grant_only_a_permit_the_requester_holds(tmp_path):
+  denied = _control(tmp_path, permits=('party.start.boxed',))
+  denied_context = FakeContext(denied)
+  denied.handle(
+    cast(Dispatcher, denied_context),
+    ROOT,
+    _message(grant=[':party.start.unboxed']),
+  )
+  assert 'summoner does not hold' in denied_context.replies[0][1]['error']
+
+  allowed = _control(tmp_path, permits=('party.start.boxed', 'party.start.unboxed'))
+  allowed_context = FakeContext(allowed)
+  message = _message(grant=[':party.start.unboxed'])
+  allowed.handle(cast(Dispatcher, allowed_context), ROOT, message)
+  assert allowed_context.spawned[0][0].permits == (
+    'party.start.boxed',
+    'party.start.unboxed',
+  )
+  assert allowed._facts.for_quest(message.quest_id).permits == frozenset(
+    {'party.start.boxed', 'party.start.unboxed'}
+  )
+
+
+def test_manual_request_needs_either_start_permit_and_records_child_permits(tmp_path):
+  denied = _control(tmp_path, permits=('party.join',))
+  denied_context = FakeContext(denied)
+  denied.handle(cast(Dispatcher, denied_context), ROOT, _message(manual=True))
+  assert 'manual summon needs a party start permit' in denied_context.replies[0][1]['error']
+
+  allowed = _control(tmp_path, permits=('party.start.boxed',))
+  allowed_context = FakeContext(allowed)
+  message = _message(manual=True)
+  allowed.handle(cast(Dispatcher, allowed_context), ROOT, message)
+  pending = ride.pending_summon.peek(message.quest_id)
+  assert pending.permits == ('party.start.boxed',)
 
 
 def test_credential_overrides_reach_the_spawn(tmp_path):

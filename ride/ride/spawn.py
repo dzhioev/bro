@@ -21,6 +21,7 @@ from typing import Any, Optional
 
 from bro.artifact import GET, MINT
 from bro.base import configs, log
+from bro.base.scope import DEFAULT_PERMITS
 from bro.broker.dispatcher import PING, Broker, ping_handler
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
@@ -77,6 +78,7 @@ class SummonLaunchSpec(LaunchSpec):
   summoner: Optional[dict[str, Any]]
   may_summon: tuple[str, ...]
   harness: str
+  permits: tuple[str, ...] = tuple(DEFAULT_PERMITS)
   repo: Optional[Repository | Path] = None
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
   summon_harness: str = configs.DEFAULT_SUMMON_HARNESS
@@ -159,19 +161,23 @@ def _lower_summon(
     launch.target,
     harness.scope_recipe(spec.harness_options),
     attachment=None if repo is None else repo.identity,
+    attachment_repository=repo,
     grant=spec.grant,
     revoke=spec.revoke,
     llm_spec=spec.llm_spec,
   )
-  _, store = preflight_scoped_launch(
+  _, _, store = preflight_scoped_launch(
     scoped,
     spec.bro,
+    attachment=spec.repo,
+    attachment_repository=repo,
     grant=spec.grant,
     revoke=spec.revoke,
   )
   launch_scope = ScopedLaunch(
     scoped=scoped,
     may_summon=set(launch.may_summon),
+    permits=set(launch.permits),
     store=store,
     hydrated_kinds=store.kinds,
   )
@@ -204,7 +210,7 @@ def _lower_summon(
       forward_env=False,
       env={
         'RIDE_COMMAND': ' '.join(spec.to_command_argv()),
-        **summoned_child_env(launch.may_summon, launch.summoner),
+        **summoned_child_env(launch.may_summon, launch.permits, launch.summoner),
       },
       mounts=mounts,
       credential_directory=(
@@ -292,6 +298,7 @@ def run_root_via_broker(
   workspace: Workspace,
   bro: str,
   may_summon: Collection[str] = (),
+  permits: Collection[str] = DEFAULT_PERMITS,
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH,
   summon_harness: str = configs.DEFAULT_SUMMON_HARNESS,
   credential_scope: ScopedSecrets,
@@ -342,6 +349,7 @@ def run_root_via_broker(
       workspace=workspace.name,
       bro=bro,
       allow_list=frozenset(may_summon),
+      permits=frozenset(permits),
       credential_scope=root_scope,
     ),
     root_tree=workspace.tree,

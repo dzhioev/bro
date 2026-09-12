@@ -61,7 +61,7 @@ def grant_instances(grant: list[str]) -> dict[str, Optional[str]]:
 
 
 def finalize_scoped_secrets(
-  scoped: ScopedSecrets, *, grant: list[str], revoke: list[str]
+  scoped: ScopedSecrets, *, grant: list[str], revoke: list[str], strict: bool = True
 ) -> ScopedSecrets:
   scoped_kinds = scoped.required | scoped.optional
   grants = grant_instances(grant)
@@ -77,9 +77,9 @@ def finalize_scoped_secrets(
   optional = set(scoped.optional)
   for kind, instance in grants.items():
     if instance is None:
-      if kind in scoped_kinds:
+      if strict and kind in scoped_kinds:
         raise ValueError(f'cannot grant {kind!r}: already in the scoped credential set')
-    elif kind in required and selection.get(kind, '') == instance:
+    elif strict and kind in required and selection.get(kind, '') == instance:
       name = credentials.storage_name(kind, instance)
       raise ValueError(f'cannot grant {name!r}: already selected in the scoped credential set')
     else:
@@ -88,7 +88,7 @@ def finalize_scoped_secrets(
     optional.discard(kind)
 
   for kind in revoke_kinds:
-    if kind not in required and kind not in optional:
+    if strict and kind not in required and kind not in optional:
       raise ValueError(f'cannot revoke {kind!r}: not in the scoped credential set')
     required.discard(kind)
     optional.discard(kind)

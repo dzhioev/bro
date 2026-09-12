@@ -115,6 +115,7 @@ def _launch_scope(**overrides) -> ride_session.ScopedLaunch:
   base = {
     'scoped': ScopedSecrets({'github'}, set()),
     'may_summon': set(),
+    'permits': {'party.start.boxed'},
     'store': _scoped_store(),
   }
   base.update(overrides)
@@ -163,8 +164,8 @@ def _fake_scoped_secrets(secrets: set[str], optional_secrets: set[str]):
   launch's credential overrides the way the real one does."""
 
   def scoped(*_args, grant=(), revoke=(), **_kwargs):
-    grant_credentials, _ = split_scope_overrides(list(grant))
-    revoke_credentials, _ = split_scope_overrides(list(revoke))
+    grant_credentials, _, _ = split_scope_overrides(grant)
+    revoke_credentials, _, _ = split_scope_overrides(revoke)
     return finalize_scoped_secrets(
       ScopedSecrets(set(secrets), set(optional_secrets)),
       grant=grant_credentials,
@@ -332,9 +333,21 @@ class TestSummonAllowList:
     assert rc == 0
     assert h.summon_allow_list.call_args == (
       ('bro-dev',),
-      {'grant': ['dev'], 'revoke': []},
+      {'layers': (), 'grant': ['dev'], 'revoke': []},
     )
     assert h.run_started_party.call_args.kwargs['may_summon'] == {'dev'}
+
+  def test_boxed_session_threads_permits_into_the_session_and_broker(self):
+    with _ContainerHarness() as harness:
+      code = ride_session.start_session(
+        _spec(
+          drop=True,
+          grant=[':party.start.unboxed'],
+          revoke=[':party.start.boxed'],
+        )
+      )
+    assert code == 0
+    assert harness.run_started_party.call_args.kwargs['permits'] == {'party.start.unboxed'}
 
   def test_boxed_session_threads_the_summon_depth(self):
     with _ContainerHarness() as harness:
@@ -1298,6 +1311,7 @@ def _pending_record(tmp_path, **overrides) -> pending_summon.PendingSummon:
       'prompt': 'pair on this',
       'parent_workspace': str(tmp_path / 'parent-tree'),
       'may_summon': ('dev',),
+      'permits': ('party.start.boxed',),
       'grant': (),
       'revoke': (),
       'summoner': {'trail_id': 'T1'},
