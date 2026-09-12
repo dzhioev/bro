@@ -78,8 +78,9 @@ Restore the state that session had, reconcile what happened while nobody watched
    ```
    Treat as actionable any repo-owner feedback per step 15's rules that has no later reply from the PR author and no later commit addressing it;
    handle each per step 15.
-   If the latest owner review is APPROVED, nothing actionable is pending, and `reviewDecision` is `APPROVED` or `null`, chain straight into [[land]]
-   — no watcher needed.{{when #may_summon contains eyebro}}
+   If the latest owner review is APPROVED, nothing actionable is pending, and `reviewDecision` is `APPROVED` or `null`, retain that cleared review state against the current head and continue to the watcher.
+   Its first green edge clears the checks gate before landing;
+   watcher silence does not.{{when #may_summon contains eyebro}}
    A reviewer's verdict does not survive the session that summoned it, and the PR is no substitute:
    the request id `bro::summon_check` needs died with that session, and an approval sitting on the PR says a review approved, not that the reviewer you delegated to did
    — on a public repository any account can leave one.
@@ -399,9 +400,11 @@ poll-pr <owner>/<repo> <pr_number>
   Fires once per conflicted episode
   — it re-arms only after the PR turns mergeable again.
 - `{"event": "checks", "pr": N, "failing": [{"name": "...", "conclusion": "...", "url": "..."}]}`
-  — a status check on the PR's head commit concluded as a failure.
-  Fires once per red episode
-  — it re-arms only after nothing is failing again (a re-run that goes green, or a new push).
+  — the PR head's check result changed.
+  A non-empty `failing` array fires once per red episode;
+  an empty array fires once when a non-empty set of check runs has all concluded without failure.
+  The green edge re-arms on a new head or a newly pending or failed run.
+  Watcher silence is not evidence that checks are green.
 - `{"event": "pushed", "pr": N, "head": "..."}`
   — the PR's head moved to a new commit.
 - `{"event": "comment", "id": N, "user": "...", "body": "...", "path": "...", "url": "..."}`
@@ -548,8 +551,8 @@ address every comment that has arrived, then pay one verification pass and one p
 
 **`review` with `state: "APPROVED"` and empty `comments`**:
 
-Two gates stand between this event and the merge.
-Read both before you touch the watcher:
+Three gates stand between this event and the merge.
+Read all three before you touch the watcher:
 stopping it is what you would have to undo, and a fresh `poll-pr` baselines every existing event as seen.
 
 **The reviewer's verdict.**{{iff #may_summon contains eyebro}}
@@ -581,15 +584,23 @@ nothing is broken, and the approval is still coming.
 `CHANGES_REQUESTED` is a standing review elsewhere on the PR asking for work:
 handle it as feedback above.
 
-With both gates clear, chain into the merge, and batch it
+**The head checks.**
+Only a `checks` event with an empty `failing` array on the current head clears this gate.
+Retain all cleared gates against that head SHA;
+a push invalidates the reviewer, base, and check results together, while a non-empty `failing` array clears the check result.
+Watcher silence is not evidence that checks finished.
+If this gate is not clear, leave the watcher running, retain the cleared review gates for this head, and wait for its green event.
+
+With all three gates clear, chain into the merge, and batch it
 — stop the watcher ({{iff #harness = bro}}`dev::kill(job_id)`{{else}}`TaskStop`{{end}}) and [[land]] **in the same response**, then follow it (it reads the branch to decide what master should carry, then merges with a single `land-pr` command).
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**:
 informational;
 the actionable feedback (if any) is in this event's `comments` array or arrives via accompanying `comment` events.
 
-**`checks` event**:
-CI went red on what you pushed.
+**`checks` event with a non-empty `failing` array**:
+CI went red on what you pushed;
+clear any green state retained for the current head.
 Fetch the failing run's log (`gh run view --log-failed <run-id>`, the id is the tail of the event's `url`) and diagnose it as your own breakage
 — a failure the local gate missed is the interesting kind (environment-dependent, ordering-dependent, or a file you forgot to stage).
 Fix it exactly like review feedback:
@@ -598,8 +609,14 @@ Report the failure and your fix to the user;
 never wait for it to disappear on a re-run you didn't trigger, and never land around it
 — `land-pr` refuses a failed check anyway.
 
+**`checks` event with an empty `failing` array**:
+retain that the current head is green.
+If an APPROVED review already cleared the reviewer and base gates for this same head, resume that handler and chain into the merge;
+otherwise keep watching for review events.
+
 **`pushed` event**:
-usually your own push of review fixes echoing back — nothing to do.
+clear every gate retained for the previous head, including the reviewer verdict and base decision.
+This is usually your own push of review fixes echoing back — nothing else to do.
 One you didn't cause means someone else pushed to the PR branch (typically the user amending it directly):
 `git fetch origin` and reset your local branch onto the pushed head before your next commit
 — continuing from the stale head would discard their commits on your next force-with-lease push.
