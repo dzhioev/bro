@@ -37,6 +37,7 @@ _SCRIPTS = [
 _NOT_SHIPPED = [
   '*/AGENTS.md',
   'bro/setup/setup_env.sh',
+  'bro/setup/bump-uv.sh',
   'bro/setup/versions.sh',
   'bro/setup/ubuntu/*',
 ]

@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1
 # check=skip=InvalidDefaultArgInFrom
+ARG UV_VERSION
 ARG PYTHON_VERSION
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv-dist
 FROM python:${PYTHON_VERSION}-slim
 
 RUN apt-get update \
@@ -18,7 +20,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends nodejs gh \
  && rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=uv-dist /uv /usr/local/bin/uv
 
 COPY .bro-container/prelude.sh .bro-container/log.sh .bro-container/strict.sh \
      .bro-container/install_awscli.sh /tmp/bro-shell/

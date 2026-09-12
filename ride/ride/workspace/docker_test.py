@@ -211,10 +211,36 @@ class TestImageTag:
   def test_python_minor_changes_the_runtime_tag(self, project):
     assert workspace_docker.runtime_image_tag('3.12') != workspace_docker.runtime_image_tag('3.13')
 
+  def test_the_uv_pin_changes_the_runtime_tag(self, project, monkeypatch, tmp_path):
+    before = workspace_docker.runtime_image_tag('3.12')
+    edited = tmp_path / 'uv-version'
+    edited.write_text('next-version\n')
+    monkeypatch.setattr(workspace_docker.build_context, 'UV_VERSION_FILE', edited)
+    assert workspace_docker.runtime_image_tag('3.12') != before
+
   def test_a_repository_without_uv_manifests_uses_the_runtime_image(self, tmp_path):
     (tmp_path / 'pyproject.toml').write_text('[tool.bro]\ndefault = "bro"\n')
     runtime = workspace_docker.runtime_image_tag('3.12')
     assert workspace_docker.project_image_tag(runtime, tmp_path) is None
+
+
+def test_runtime_build_passes_the_packaged_uv_pin(monkeypatch):
+  calls = []
+  monkeypatch.setattr(
+    workspace_docker.subprocess,
+    'run',
+    lambda arguments, **keywords: calls.append((arguments, keywords)) or _FakeProc(),
+  )
+  monkeypatch.setattr(workspace_docker.build_context, 'assemble_runtime', lambda: b'context')
+
+  workspace_docker.build_runtime_image('runtime:test', '3.12')
+
+  arguments, keywords = calls[0]
+  version = workspace_docker.build_context.UV_VERSION_FILE.read_text().strip()
+  position = arguments.index(f'UV_VERSION={version}')
+  assert arguments[position - 1] == '--build-arg'
+  assert keywords['input'] == b'context'
+  assert keywords['check'] is True
 
 
 class TestContainerRuntimeResolver:

@@ -203,8 +203,12 @@ def runtime_image_tag(python_version: Optional[str] = None) -> str:
   version = python_version or f'{sys.version_info.major}.{sys.version_info.minor}'
   inputs = [(name, path) for name, path in sorted(build_context.RUNTIME_FILES.items())]
   inputs.append(('project.Dockerfile', CONTAINER_DIR / 'project.Dockerfile'))
-  claude_pin = CONTAINER_DIR / 'claude-code-version'
-  inputs.append(('claude-code-version', claude_pin))
+  inputs.extend(
+    (
+      ('claude-code-version', CONTAINER_DIR / 'claude-code-version'),
+      ('uv-version', build_context.UV_VERSION_FILE),
+    )
+  )
   return f'{_RUNTIME_IMAGE_REPOSITORY}:{_hash_files(inputs, seed=version)}'
 
 
@@ -248,8 +252,13 @@ def _prune_superseded_images(current: str) -> None:
 
 def build_runtime_image(tag: str, python_version: str) -> None:
   claude_version = (CONTAINER_DIR / 'claude-code-version').read_text().strip()
+  uv_version = build_context.UV_VERSION_FILE.read_text().strip()
   log.info(
-    'building runtime image %s (python %s, claude-code %s)', tag, python_version, claude_version
+    'building runtime image %s (python %s, claude-code %s, uv %s)',
+    tag,
+    python_version,
+    claude_version,
+    uv_version,
   )
   subprocess.run(
     [
@@ -263,6 +272,8 @@ def build_runtime_image(tag: str, python_version: str) -> None:
       f'PYTHON_VERSION={python_version}',
       '--build-arg',
       f'CLAUDE_CODE_VERSION={claude_version}',
+      '--build-arg',
+      f'UV_VERSION={uv_version}',
       '-',
     ],
     input=build_context.assemble_runtime(),
