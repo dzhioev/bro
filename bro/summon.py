@@ -20,7 +20,9 @@ broker implementation on pre-gate launch paths.
 
 import contextlib
 import json
+import math
 import os
+import time
 from collections.abc import Callable, Collection, Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
@@ -177,6 +179,10 @@ class SummonError(Exception):
   or its result never arrived. The message is the operator-facing reason."""
 
 
+class _BrokerReadTimeout(SummonError):
+  pass
+
+
 def _open_client() -> 'Client':
   from bro.broker.client import CHANNEL_ENV, Client
 
@@ -286,7 +292,7 @@ def _read_value(
   try:
     result = client.call(kind, args, timeout)
   except TimeoutError:
-    raise SummonError(f'no reply to broker {kind!r} read within {timeout:.0f}s') from None
+    raise _BrokerReadTimeout(f'no reply to broker {kind!r} read within {timeout:.0f}s') from None
   except ConnectionError as error:
     raise SummonError(f'broker channel closed during {kind!r} read: {error}') from None
   payload = result.payload
@@ -298,7 +304,13 @@ def _read_value(
   return value
 
 
-def _query_quest(client: 'Client', request_id: str, *, wait_seconds: float = 0) -> dict[str, Any]:
+def _query_quest(
+  client: 'Client',
+  request_id: str,
+  *,
+  wait_seconds: float = 0,
+  read_timeout: Optional[float] = None,
+) -> dict[str, Any]:
   from bro.broker.dispatcher import QUERY
 
   args: dict[str, Any] = {'id': request_id}
@@ -308,7 +320,9 @@ def _query_quest(client: 'Client', request_id: str, *, wait_seconds: float = 0) 
     client,
     QUERY,
     args,
-    timeout=max(ACCEPT_TIMEOUT, wait_seconds + ACCEPT_TIMEOUT),
+    timeout=(
+      max(ACCEPT_TIMEOUT, wait_seconds + ACCEPT_TIMEOUT) if read_timeout is None else read_timeout
+    ),
   )
   quest = value.get('quest')
   if not isinstance(quest, dict):
@@ -521,10 +535,7 @@ class SummonStatus:
   trail_id: Optional[str] = None
 
 
-def check_summon(request_id: str) -> SummonStatus:
-  """Read one summon quest without consuming its retained result."""
-  with _open_client() as client:
-    quest = _query_quest(client, request_id)
+def _summon_status(quest: dict[str, Any]) -> SummonStatus:
   answer = _summon_answer(quest)
   trail_id = quest.get('trail_id')
   return SummonStatus(
@@ -534,29 +545,56 @@ def check_summon(request_id: str) -> SummonStatus:
   )
 
 
+def check_summon(request_id: str) -> SummonStatus:
+  """Read one summon quest without consuming its retained result."""
+  with _open_client() as client:
+    quest = _query_quest(client, request_id)
+  return _summon_status(quest)
+
+
 def wait_summon(
   request_id: str,
   *,
   timeout: Optional[float] = None,
   client: Optional['Client'] = None,
   wait_seconds: Optional[float] = None,
-) -> str:
-  """Long-poll a summon quest until its retained terminal result is available."""
-  if timeout is not None and timeout <= 0:
-    raise SummonError('query wait must be positive')
-  interval = (
-    wait_seconds
-    if wait_seconds is not None
-    else min(timeout if timeout is not None else READ_WAIT_SECONDS, READ_WAIT_SECONDS)
-  )
+) -> SummonStatus:
+  """Long-poll a summon quest until terminal or the optional deadline passes."""
+  if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
+    raise SummonError('timeout must be a finite positive number')
+  interval = wait_seconds if wait_seconds is not None else READ_WAIT_SECONDS
   if interval <= 0:
     raise SummonError('query wait must be positive')
+  deadline = None if timeout is None else time.monotonic() + timeout
   with _connection(client) as connection:
+    status: Optional[SummonStatus] = None
+    if deadline is not None:
+      status = _summon_status(
+        _query_quest(connection, request_id, read_timeout=deadline - time.monotonic())
+      )
+      if not status.pending:
+        return status
     while True:
-      quest = _query_quest(connection, request_id, wait_seconds=interval)
-      answer = _summon_answer(quest)
-      if answer is not None:
-        return answer
+      remaining = None if deadline is None else deadline - time.monotonic()
+      if remaining is not None and remaining <= 0:
+        assert status is not None
+        return status
+      poll_seconds = interval if remaining is None else min(interval, remaining)
+      try:
+        quest = _query_quest(
+          connection,
+          request_id,
+          wait_seconds=poll_seconds,
+          read_timeout=remaining,
+        )
+      except _BrokerReadTimeout:
+        if deadline is None or time.monotonic() < deadline:
+          raise
+        assert status is not None
+        return status
+      status = _summon_status(quest)
+      if not status.pending:
+        return status
 
 
 def list_summons() -> dict[str, Any]:
@@ -764,12 +802,10 @@ def _watch() -> int:
 
 def _check(request_id: str, wait: bool, timeout: Optional[float]) -> int:
   if timeout is not None and not wait:
-    log.error('--timeout only sets the long-poll interval for --wait')
+    log.error('--timeout only bounds a wait; a plain check never blocks')
     return 1
-  if wait:
-    return _relay(lambda: wait_summon(request_id, timeout=timeout))
   try:
-    status = check_summon(request_id)
+    status = wait_summon(request_id, timeout=timeout) if wait else check_summon(request_id)
   except SummonError as error:
     log.error('%s', error)
     return 1
@@ -808,13 +844,14 @@ def main(argv: list[str]) -> Optional[int]:
     parser.add_argument(
       '--wait',
       action='store_true',
-      help='block until the retained terminal result arrives; concurrent waits and '
-      'later checks are safe because journal reads are non-destructive',
+      help='block until the retained terminal result arrives or --timeout passes; '
+      'concurrent waits and later checks are safe because journal reads are non-destructive',
     )
     parser.add_argument(
       '--timeout',
       type=float,
-      help=f'with --wait: maximum seconds per journal long-poll (default: {READ_WAIT_SECONDS:.0f})',
+      help='with --wait: maximum seconds to wait before exiting pending; '
+      'omitted waits until terminal',
     )
     return _check(**parser.parse(argv[1:]))
   parser = base_args.Parser(

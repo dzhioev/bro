@@ -772,7 +772,7 @@ underneath it are two client surfaces over the same request:
   Any summon is reclaimable by that quest id, detached or interrupted.
   `summon check <id>` performs the non-destructive journal `query {id}`:
   a live record reports `still running` and exits 3, while a terminal record relays its retained answer or failure.
-  `summon check --wait <id>` loops bounded `query {id, wait}` reads until terminal;
+  `summon check --wait <id>` loops bounded `query {id, wait}` reads until terminal or its optional timeout, when it reports `still running` and exits 3;
   concurrent waiters and later reads see the same result.
   `summon list` walks the caller-scoped paginated `query {}` listing and prints retained summon records live-first.
   `summon watch` arms at the current `events {}` head, long-polls ordered events after its cursor, and prints every summon transition in the caller's scope,
@@ -783,7 +783,7 @@ underneath it are two client surfaces over the same request:
   Contract details in `bro/summon.py`.
 - the bro service tools (`bro::summon` / `bro::summon_check` / `bro::summon_list`), for bro LLM processes and `--raw` sessions
   — `summon` blocks for the answer (`detach: true` returns the accepted quest id instead) and takes the CLI's request fields as parameters (`timeout` / `into` / `hold` / `grant` / `revoke` / `share` / `llm` / `harness`);
-  `summon_check` returns pending or completed from the same repeatable query and loops short long-polls with `wait: true`;
+  `summon_check` returns pending or completed from the same repeatable query and loops short long-polls with `wait: true` until terminal or its optional timeout;
   `summon_list` mirrors the paginated CLI listing wherever the broker channel mounts the summon tools.
   A blocking tool call owns its channel client so cancellation aborts the current short wait, while the host journal retains the result;
   MCP-served builds carry a transport caution steering long work to detach plus polling.

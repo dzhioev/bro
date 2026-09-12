@@ -218,7 +218,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   `summon` blocks and relays the target's answer or failure;
   `detach: true` returns the quest id after the host's acceptance mark and fails immediately on a denial or pre-acceptance launch failure.
   It takes the same child-shaping knobs the launcher flags carry (`grant` / `revoke` / `llm` / `harness` beside `timeout` / `into` / `hold`).
-  `summon_check` reads the retained journal record by id, returning pending or completed repeatably, and `wait: true` loops short `query {id, wait}` reads until terminal.
+  `summon_check` reads the retained journal record by id, returning pending or completed repeatably, and `wait: true` loops short `query {id, wait}` reads until terminal or its optional deadline.
   `summon_list` walks the journal's paginated caller-scoped listing and returns its summon records live-first.
   The blocking modes own their per-call channel client on the loop and close it on cancellation, which unblocks the current short broker wait;
   the host-retained terminal remains readable by id.

@@ -3,6 +3,7 @@ import contextlib
 import json
 import os
 from dataclasses import dataclass
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -289,14 +290,93 @@ async def test_check_returns_the_retained_answer_repeatably(monkeypatch, capsys)
     assert capsys.readouterr().out == 'retained answer\nretained answer\n'
 
 
+def test_wait_deadline_returns_pending_without_starting_another_poll(monkeypatch):
+  ticks = iter((10.0, 10.0, 15.0))
+  polls: list[tuple[float, float | None]] = []
+
+  monkeypatch.setattr(summon.time, 'monotonic', lambda: next(ticks))
+
+  def query(client, request_id, *, wait_seconds=0, read_timeout=None):
+    del client
+    polls.append((wait_seconds, read_timeout))
+    return _quest(request_id, 'started', trail_id='T9')
+
+  monkeypatch.setattr(summon, '_query_quest', query)
+  status = summon.wait_summon('REQ-1', timeout=5, client=MagicMock())
+
+  assert status == summon.SummonStatus(pending=True, trail_id='T9')
+  assert polls == [(0, 5)]
+
+
+def test_wait_deadline_bounds_a_stalled_broker_read(monkeypatch):
+  ticks = iter((10.0, 10.0))
+  client = MagicMock()
+  client.call.side_effect = TimeoutError
+
+  monkeypatch.setattr(summon.time, 'monotonic', lambda: next(ticks))
+
+  with pytest.raises(summon.SummonError, match="no reply to broker 'query' read within 5s"):
+    summon.wait_summon('REQ-1', timeout=5, client=client)
+
+  client.call.assert_called_once_with('query', {'id': 'REQ-1'}, 5)
+
+
+@pytest.mark.asyncio
+async def test_check_wait_deadline_returns_pending_when_the_final_read_times_out(
+  monkeypatch, caplog
+):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(
+        summon.main,
+        ['summon', 'check', '--wait', '--timeout', '0.2', 'REQ-1'],
+      )
+    )
+    channel, initial = await _next(server)
+    assert initial.args == {'id': 'REQ-1'}
+    await _reply(
+      server,
+      channel,
+      initial,
+      outcome='ok',
+      value={'quest': _quest('REQ-1', 'started', trail_id='T9')},
+    )
+
+    _, final = await _next(server)
+    assert final.args['id'] == 'REQ-1'
+    assert 0 < final.args['wait'] <= 0.2
+
+    assert await task == summon.PENDING_EXIT_CODE
+    assert 'still running' in caplog.text
+    assert 'T9' in caplog.text
+
+
+@pytest.mark.parametrize('timeout', [float('nan'), float('inf')])
+def test_wait_rejects_non_finite_deadlines(timeout):
+  with pytest.raises(summon.SummonError, match='finite positive'):
+    summon.wait_summon('REQ-1', timeout=timeout, client=MagicMock())
+
+
+def test_check_wait_exits_pending_when_its_deadline_passes(monkeypatch, caplog):
+  monkeypatch.setattr(
+    summon,
+    'wait_summon',
+    lambda request_id, *, timeout=None: summon.SummonStatus(pending=True, trail_id='T9'),
+  )
+
+  assert summon._check('REQ-1', wait=True, timeout=5) == summon.PENDING_EXIT_CODE
+  assert 'still running' in caplog.text
+  assert 'T9' in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_check_wait_loops_query_until_terminal(monkeypatch, capsys):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(
-      asyncio.to_thread(summon.main, ['summon', 'check', '--wait', '--timeout', '0.05', 'REQ-1'])
+      asyncio.to_thread(summon.main, ['summon', 'check', '--wait', '--timeout', '1', 'REQ-1'])
     )
     channel, query = await _next(server)
-    assert query.args == {'id': 'REQ-1', 'wait': 0.05}
+    assert query.args == {'id': 'REQ-1'}
     await _reply(
       server,
       channel,
@@ -305,6 +385,8 @@ async def test_check_wait_loops_query_until_terminal(monkeypatch, capsys):
       value={'quest': _quest('REQ-1', 'started')},
     )
     channel, query = await _next(server)
+    assert query.args['id'] == 'REQ-1'
+    assert 0 < query.args['wait'] <= 1
     await _reply(
       server,
       channel,
