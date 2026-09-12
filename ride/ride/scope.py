@@ -2,7 +2,8 @@
 surface hydrates and which bros the session may summon, computed from the bro's
 own declarations (manifest, optional tier, `may_summon`) evaluated under the
 host's credential selection for the operated project and the launch's own
-overrides.
+overrides; `bind_launch_llm` settles the launch's LLM recipe over the same host
+entries.
 """
 
 import contextlib
@@ -11,6 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 from bro.base import credentials, host_config
+from bro.launch.llm_flags import with_host_defaults
 from ride.repository import attachment_identities
 from ride.workspace.store import (
   ScopedSecrets,
@@ -22,6 +24,7 @@ from ride.workspace.store import (
 if TYPE_CHECKING:
   from bro.llm.llm import LLMSpec
   from bro.mcp import Harness
+  from ride.harness import Harness as Driver
 
 # the recording credential every surface hydrates best-effort, regardless of bro:
 # it selects a backend (`bro.trails.store.resolve_config`) rather than enabling
@@ -72,6 +75,32 @@ def bind_launch_credentials(
 ) -> host_config.CredentialSelection:
   identities = None if attachment is None else attachment_identities(attachment)
   return host_config.launch_selection(identities, bro_name)
+
+
+def bind_launch_llm(attachment: Optional[str], bro_name: str, llm: Optional[str]) -> Optional[str]:
+  """the canonical `--llm` value a launch as `bro_name` runs under: `llm` — its
+  own canonical selection, or None — with the host's per-bro defaults for the
+  attachment beneath it (`with_host_defaults`); None when nothing names a slot.
+  What the launch records and forwards, so the recipe is settled once, on the
+  host, wherever the session runs."""
+  from bro.llm.providers import LLMSelection, parse
+
+  identities = None if attachment is None else attachment_identities(attachment)
+  selection = LLMSelection() if llm is None else parse(llm)
+  selection = with_host_defaults(selection, identities, bro_name)
+  return None if selection.is_empty() else selection.format()
+
+
+def launch_llm_spec(
+  driver: 'Driver', attachment: Optional[str], bro_name: str, llm: Optional[str]
+) -> 'LLMSpec':
+  """the recipe a launch as `bro_name` under `driver` runs: `llm` settled over
+  the host's per-bro default (`bind_launch_llm`) and resolved within the driver.
+  Raises `LaunchScopeError` for a bro the installation does not declare."""
+  try:
+    return driver.resolve_llm(bind_launch_llm(attachment, bro_name, llm), bro_name)
+  except KeyError as error:
+    raise LaunchScopeError(f'unknown bro {bro_name!r}') from error
 
 
 def selection_store(

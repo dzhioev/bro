@@ -111,6 +111,54 @@ class TestPresets:
       llm_flags.selection_from_args(_args(['--llm', 'broken']))
 
 
+class TestHostDefaults:
+  URL = 'https://github.com/foo/api.git'
+
+  @pytest.fixture(autouse=True)
+  def _host_file(self, monkeypatch, tmp_path):
+    self.host_file = tmp_path / 'bro.json'
+    monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(self.host_file))
+    self.path = str(tmp_path)
+    self.attachment = host_config.Attachment(path=self.path, url=self.URL)
+
+  def _write(self, projects: dict) -> None:
+    self.host_file.write_text(json.dumps({'projects': projects}))
+
+  def test_the_entry_fills_what_the_flags_leave_unnamed(self):
+    self._write({self.path: {'bros': {'eyebro': {'llm': 'openai:sol:xhigh'}}}})
+
+    assert llm_flags.with_host_defaults(
+      LLMSelection(effort='low'), self.attachment, 'eyebro'
+    ) == LLMSelection('openai', 'sol', 'low')
+
+  def test_the_path_entry_fills_before_the_url_entry(self):
+    self._write(
+      {
+        self.URL: {'bros': {'eyebro': {'llm': 'openai:sol:xhigh'}}},
+        self.path: {'bros': {'eyebro': {'llm': '::low+fast'}}},
+      }
+    )
+
+    assert llm_flags.with_host_defaults(LLMSelection(), self.attachment, 'eyebro') == LLMSelection(
+      'openai', 'sol', 'low', True
+    )
+
+  def test_no_entry_leaves_the_selection(self):
+    self._write({self.path: {'bros': {'other': {'llm': 'openai:sol:xhigh'}}}})
+
+    assert llm_flags.with_host_defaults(
+      LLMSelection(model='fable5'), self.attachment, 'eyebro'
+    ) == LLMSelection(model='fable5')
+
+  def test_a_malformed_entry_names_itself_and_its_layer(self):
+    self._write({self.path: {'bros': {'eyebro': {'llm': '::ludicrous'}}}})
+
+    with pytest.raises(
+      LLMSelectionError, match="bros.eyebro.llm '::ludicrous' \\(project-path-bro\\)"
+    ):
+      llm_flags.with_host_defaults(LLMSelection(), self.attachment, 'eyebro')
+
+
 class TestSurfaceGuards:
   def test_a_native_launcher_refuses_a_self_driving_harness(self):
     with pytest.raises(LLMSelectionError, match='ride solo\\|along --harness claude --raw'):

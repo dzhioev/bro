@@ -394,6 +394,37 @@ def test_recipe_incompatible_with_the_harness_is_denied(tmp_path):
   assert 'runs Claude Code, not openai' in context.replies[0][1]['error']
 
 
+def test_the_hosts_per_bro_recipe_is_the_targets_standing_scope(tmp_path, monkeypatch):
+  from bro.registry import get_class
+
+  monkeypatch.setattr(get_class('dev'), 'llm_spec', EchoLLMSpec())
+  _without_spells(monkeypatch, get_class('dev'))
+  config = tmp_path / 'bro.json'
+  config.write_text(
+    json.dumps({'projects': {str(tmp_path): {'bros': {'dev': {'llm': 'openai:sol'}}}}})
+  )
+  monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+  control = _control(tmp_path, credential_scope={'brog'})
+  context = FakeContext(control)
+  # the key the host entry needs is the target's own to hold, not a widening the
+  # summoner must cover; the request forwards what it named
+  control.handle(cast(Dispatcher, context), ROOT, _message(llm='::low'))
+  assert context.replies == []
+  assert context.spawned[0][0].llm == '::low'
+
+
+def test_a_host_recipe_the_requested_harness_cannot_run_is_denied(tmp_path, monkeypatch):
+  config = tmp_path / 'bro.json'
+  config.write_text(
+    json.dumps({'projects': {str(tmp_path): {'bros': {'dev': {'llm': 'openai:sol'}}}}})
+  )
+  monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+  control = _control(tmp_path, credential_scope={'claude_code'})
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message(harness='claude'))
+  assert 'runs Claude Code, not openai' in context.replies[0][1]['error']
+
+
 def test_a_selection_read_under_the_requested_harness_alone_is_not_refused(
   tmp_path, monkeypatch, register_test_bros
 ):

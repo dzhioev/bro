@@ -346,7 +346,7 @@ What differs is what the harness brings of its own, and the declaration decides 
 A Claude session comes with Claude's tools and skills, so the declaration withholds the ones it does not want and adds its namespaces as MCP servers beside the rest;
 bro's own loop and a bare session serve exactly the declared roster.
 The model is a launch decision as much as a declaration:
-`--llm provider:model:effort[+fast]`, any part left empty to keep the declared one, or a preset the project names.
+`--llm provider:model:effort[+fast]`, any part left empty to keep the host's per-bro default for the checkout and then the declared one, or a preset the project names.
 
 ## A boundary you can read
 

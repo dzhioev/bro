@@ -31,6 +31,7 @@ from ride.harness import get_harness
 from ride.listing import list_workspaces
 from ride.repository import Repository, is_git_url, resolve_repository
 from ride.runtime_state import RuntimeStateMigrationError, migrate_legacy_runtime_state
+from ride.scope import bind_launch_llm
 from ride.session import SessionSpec, resume_session, start_session
 from ride.workspace.containers import exec_in_workspace
 from ride.workspace.model import Workspace
@@ -256,6 +257,9 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     # not every harness's llm resolution consults the registry, so the launch
     # checks the name itself
     get_class(bro)
+    if not in_place:
+      # the inner run carries the recipe the outer launch settled
+      args['llm'] = bind_launch_llm(repo, bro, args['llm'])
     resolved_llm = harness.resolve_llm(args['llm'], bro)
   except (KeyError, LLMSelectionError, ValueError) as error:
     parser.error(str(error))

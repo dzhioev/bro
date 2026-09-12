@@ -338,6 +338,8 @@ The host's `~/.bro.json` value overrides it for the launch, and detached launche
 `image-repository` and `build-context-command` are optional.
 A URL attachment evaluates a build-context command in a temporary extraction of the committed base tree and reads the named files back from that commit.
 `[tool.bro.llm]` names the repo's `--llm` presets, which the host's own `~/.bro.json` `llm` table overrides per name.
+A bro's default recipe on a project is likewise the host's to set:
+a `projects.<identity>.bros.<bro>.llm` entry fills what the launch flags leave unnamed, for ride launches and summons alike (`bro/setup/AGENTS.md`, "Host config").
 `[tool.bro.analyst] reports` is what an analyst session resolves its output directory from.
 A missing pyproject, table, or default
 — or an unknown key
@@ -751,7 +753,7 @@ the target runs as a one-shot, non-TTY docker child (unless the summon is *manua
 see "Manual summon" below) with its own scoped credential set (nothing inherited from the summoner, plus whatever the request's own `grant`/`revoke` names),
 under the harness the request names, or the launch's `[tool.bro] summon-harness` when it names none
 — both run `ride solo … --in-place`, `bro` spawning the target's own LLM process there and `claude` a one-shot managed Claude Code session of the target persona (full mode;
-the request's `llm` recipe resolves within the child's harness and never switches it)
+the request's `llm` recipe, settled over the host's per-bro entry like a launch's own, resolves within the child's harness and never switches it)
 — with the root session's attachment:
 an attached child bases on the summoner's workspace `HEAD` read at summon time (uncommitted changes never transfer;
 a container summoner's local-only commits are transferred into the attachment first so the child's host-side clone can copy them) unless the request's `into` ref overrides, while a detached root spawns detached children and rejects `into`,
@@ -857,7 +859,9 @@ its own list never passes through
 The credential half of the same flags is bounded against the scope computed from the same row (the root row carries its launch-hydrated scope;
 a summoned peer's is recomputed from its recorded scope inputs) and applied in the summon lowering against the child's computed scope, where a bad override fails the launch instead.
 `harness` and `llm` answer to that same credential bound without naming a credential, since the driving loop they select contributes credentials of its own:
-what the request's pair adds on top of the target's default scope under the launch's summon harness must be in the summoner's set too,
+what the request's pair adds on top of the target's default scope under the launch's summon harness
+— its recipe there being the host's per-bro entry where one applies
+— must be in the summoner's set too,
 so where summons run natively a bro-harness session cannot ask for a claude child unless its own launch hydrated `claude_code`.
 Only that delta is bounded
 — the target's declared credentials are what the allow-list entry already sanctions, and a summoner routinely holds none of them.

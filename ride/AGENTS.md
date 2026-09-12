@@ -28,7 +28,9 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/inner.py` — the inner session every harness runs under inside the prepared workspace:
   the argv the outer spawns to re-enter there, the session environment (git identities, `RIDE_BRO`, the hold and this runner's pid), the persona's declared workspace provisioning, the session broxy, and SIGTERM-forwarded agent spawning.
 - `ride/scope.py` — per-surface launch scoping:
-  `ScopeRecipe`, `BRO_RUN_RECIPE`, attachment-bound credential selection, `scoped_secrets`, the strict launch preflight, scope override splitting, and summoned-child scope computation.
+  `ScopeRecipe`, `BRO_RUN_RECIPE`, attachment-bound credential selection, `scoped_secrets`, the strict launch preflight, scope override splitting, and summoned-child scope computation,
+  plus `bind_launch_llm`, the launch's LLM selection settled over the host's per-bro entry for the attachment and returned as the canonical `--llm` the session records and forwards,
+  and `launch_llm_spec`, that value resolved within the driving harness for the surfaces that need only the recipe.
   In-process `bro run` / `bro chat` create no scope.
 - `ride/root.py` — neutral container and host-process root supervision behind the broker availability gate.
 - `ride/spawn.py` — broker-root composition, summon lowering
@@ -93,7 +95,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   Their flocks serialize fetch/cleanup, mirrors never prune, and `ride clean` removes one only when no workspace references its URL.
   Container trails use a dedicated fixed absolute mount.
 - A launch's credential instances follow its attachment identity and selected bro on every surface that resolves them
-  — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Scoped credential hydration").
+  — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Scoped credential hydration")
+  — and so does its default LLM recipe, settled on the host once and carried inward as the canonical `--llm`.
 - Both modes install the scoped store's credential hooks through the one applier, into a session directory that bounds what a hook may write,
   so a session's git and `gh` act as the identity it was scoped with and never reach the operator's own configuration.
 - Mode verbs are detached unless `--repo` explicitly attaches a resolved checkout or git URL.

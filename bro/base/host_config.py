@@ -14,7 +14,11 @@ Selections live outside repositories and merge from general to specific:
         "https://github.com/foo/api.git": {
           "creds": ["brog+github", "github+dev"],
           "bros": {
-            "eyebro": {"creds": ["trails+review"], "grant": ["github+reviewer"]}
+            "eyebro": {
+              "creds": ["trails+review"],
+              "grant": ["github+reviewer"],
+              "llm": "openai:sol:xhigh"
+            }
           }
         },
         "/home/foo/projects/api": {"creds": ["aws+laptop"]}
@@ -30,8 +34,11 @@ A `bros` entry may also `grant`: kinds the bro reads on this project beyond the
 ones it declares, each `kind+instance` to select the instance as `creds` does,
 or a bare `kind` to read the instance the other layers select.
 An entry names a kind in `creds` or in `grant`, not both.
+A `bros` entry may also carry `llm`: the recipe the bro runs by default on this
+project, in the `--llm` grammar, beneath the launch's own flags.
 The grammar is installation-independent, so selections for unknown kinds remain
-valid and are carried in the returned mappings.
+valid and are carried in the returned mappings, and a recipe is carried as
+written for the launch to parse.
 
 `defaults` is the root both branches extend: `user` for a command the operator
 runs outside any session, `projects` for a managed session.
@@ -51,6 +58,8 @@ entry, `user`, then defaults.
 A kind no layer selects reads its empty instance.
 The returned layer map attributes every explicit selection, and the returned
 grant set carries the kinds the matching `bros` entries grant.
+`launch_llm` returns the recipes the matching `bros` entries name in that same
+order, each with its layer.
 
 The file is optional.
 `llm` remains the host-wide table of `--llm` preset names.
@@ -120,12 +129,21 @@ class CredentialSelection:
 
 
 @dataclass(frozen=True)
+class LLMDefault:
+  """The recipe one `bros` entry names, and the layer naming it."""
+
+  layer: str
+  recipe: str
+
+
+@dataclass(frozen=True)
 class _BroEntry:
-  """A `bros` entry: its selections, and the kinds it grants — a bare one
-  carrying no selection of its own."""
+  """A `bros` entry: its selections, the kinds it grants — a bare one carrying
+  no selection of its own — and the recipe it names."""
 
   selection: dict[str, str]
   grants: frozenset[str]
+  llm: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -213,8 +231,7 @@ def project_selection(attachment: Optional[Attachment]) -> CredentialSelection:
 
 def launch_selection(attachment: Optional[Attachment], bro: str) -> CredentialSelection:
   """Merge defaults, the matching projects, and their `bro` layers."""
-  if not isinstance(bro, str) or bro == '':
-    raise ValueError('bro name must be a non-empty string')
+  _require_bro_name(bro)
   config = _read()
   matches = _matches(config, attachment)
   layers = [(DEFAULTS_LAYER, config.defaults)]
@@ -224,6 +241,24 @@ def launch_selection(attachment: Optional[Attachment], bro: str) -> CredentialSe
   ]
   layers.extend((layer, entry.selection) for layer, entry in bro_entries)
   return _merged(layers, frozenset().union(*(entry.grants for _, entry in bro_entries)))
+
+
+def launch_llm(attachment: Optional[Attachment], bro: str) -> tuple[LLMDefault, ...]:
+  """The recipes the matching `bros` entries name for `bro`, least specific
+  first, each carried as written."""
+  _require_bro_name(bro)
+  config = _read()
+  defaults: list[LLMDefault] = []
+  for match in _matches(config, attachment):
+    entry = match.project.bros.get(bro)
+    if entry is not None and entry.llm is not None:
+      defaults.append(LLMDefault(match.bro_layer, entry.llm))
+  return tuple(defaults)
+
+
+def _require_bro_name(bro: str) -> None:
+  if not isinstance(bro, str) or bro == '':
+    raise ValueError('bro name must be a non-empty string')
 
 
 def tool_selection(
@@ -310,8 +345,13 @@ def _project(path: Path, project: str, value: object) -> _Project:
 def _bro_entry(where: str, value: object) -> _BroEntry:
   if not isinstance(value, dict):
     raise ValueError(f'{where} must hold a json object')
-  _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY}, where)
+  _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY, _LLM_KEY}, where)
   selection = _selection_entries(where, value.get(_CREDS_KEY, []))
+  llm = None
+  if _LLM_KEY in value:
+    llm = value[_LLM_KEY]
+    if not isinstance(llm, str) or llm == '':
+      raise ValueError(f'{where}: {_LLM_KEY} must be a non-empty string')
   grants = value.get(_GRANT_KEY, [])
   if not isinstance(grants, list):
     raise ValueError(f'{where}: {_GRANT_KEY} must be a list')
@@ -327,7 +367,7 @@ def _bro_entry(where: str, value: object) -> _BroEntry:
     granted.add(kind)
     if instance is not None:
       selection[kind] = instance
-  return _BroEntry(selection, frozenset(granted))
+  return _BroEntry(selection, frozenset(granted), llm)
 
 
 def _user(path: Path, value: object) -> _User:
