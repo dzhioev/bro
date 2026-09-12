@@ -27,7 +27,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   its own parser and argv builder, the session environment and pid/start-time record, credential hooks, missing Claude state and plugin seed, persona provisioning, the session broxy, and SIGTERM-forwarded agent spawning.
 - `ride/errors.py` — the runtime-path and migration error wrapper shared by the distribution's public scripts.
 - `ride/scope.py` — per-surface launch scoping:
-  `ScopeRecipe`, `BRO_RUN_RECIPE`, attachment-bound credential selection, `scoped_secrets`, the strict launch preflight, scope override splitting, and summoned-child scope computation.
+  `ScopeRecipe`, `BRO_RUN_RECIPE`, attachment-bound credential selection, the project/host grant layers, three-way scope override splitting, permit computation, and the strict launch preflight.
   In-process `bro run` / `bro chat` create no scope.
 - `ride/root.py` — supervision of either neutral started-party launch for roots and manually launched children, behind the broker availability gate.
 - `ride/spawn.py` — broker-root composition, summon lowering
@@ -43,7 +43,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   reflink-or-copy ingest into content-addressed objects, per-peer view directories behind the read-only `/var/ride/artifacts` mounts, the sharing rules with their uniform denial, the byte cap, and the JSONL audit beside the store.
   A broker job's run directory is staged in the store and collected through the same ingest, reaching the peer that requested the job and its summoners.
   The peer wire and CLI are the framework's `bro/artifact.py`.
-- `ride/summon_control.py` — summon host authorization and allow-list resolution, plus journal projections for audit, lifecycle logging, and manual-token cleanup;
+- `ride/summon_control.py` — summon host authorization, child authority resolution, and party-start placement, plus journal projections for audit, lifecycle logging, and manual-token cleanup;
   the manual variant registers as an expected external Worker with its pending record.
   The peer wire and self-contained CLI are the framework's `bro/summon.py`.
 - `ride/pending_summon.py` — pending manual summons:
@@ -112,4 +112,6 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   The session executable has no placement flag from which to re-derive it.
 - Every launcher exports `RIDE_ISOLATION` from the workspace record;
   session placement and the banner never infer it from the surrounding process.
+- The framework seed permits boxed party starts.
+  Project and host configuration layers apply idempotently before strict launch/request overrides, and every launch exports the effective set through `RIDE_PERMITS` while summon control enforces its own peer-facts copy.
 - Every console script this distribution ships wraps its `main` in `ride.cli.reports_runtime_errors`, so unusable runtime locations and blocked state migrations fail as CLI errors.

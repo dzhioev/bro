@@ -340,6 +340,7 @@ class TestSummonedLaunch:
       prompt='work this out with the user',
       parent_workspace=str(tmp_path / 'parent'),
       may_summon=('bro',),
+      permits=('party.start.boxed',),
       grant=('aws',),
       revoke=('openai',),
       summoner={'trail_id': 'T1'},
@@ -375,6 +376,11 @@ class TestSummonedLaunch:
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--grant', '@bro', 'dev'])
     assert 'drop the @bro override(s): bro' in capsys.readouterr().err
+
+  def test_summoned_refuses_permit_overrides(self, pending, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--grant', ':party.join', 'dev'])
+    assert 'permits were fixed by the summon request' in capsys.readouterr().err
 
   def test_summoned_validates_the_bro_against_the_record(self, pending, capsys):
     with pytest.raises(SystemExit):

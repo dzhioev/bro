@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from bro.base import configs
+from bro.base.scope import ScopeLayer, validate_scope_layer
 from bro.workspace.paths import find_project_root, project_root
 
 _LAUNCH_KEYS = frozenset(
@@ -14,6 +15,8 @@ _LAUNCH_KEYS = frozenset(
     'image-repository',
     'build-context-command',
     'summon-depth',
+    'grant',
+    'revoke',
   }
 )
 
@@ -27,8 +30,8 @@ class ProjectConfig:
   """the operated repo's launch defaults: which bro a session runs as when
   `--bro` doesn't name one, the docker repository its session images build
   under (`bro/<default bro>` unless overridden), the harness an attached launch
-  and a summon naming none run under, the summon depth, and the optional
-  build-context-file-list command.
+  and a summon naming none run under, the summon depth, the project's scope layer,
+  and the optional build-context-file-list command.
 
   `sections` carries the `[tool.bro.<name>]` sub-tables verbatim. Their keys
   belong to whoever declares them, so they are read but never interpreted here.
@@ -40,6 +43,8 @@ class ProjectConfig:
   summon_harness: str = configs.DEFAULT_SUMMON_HARNESS
   build_context_command: Optional[str] = None
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
+  grant: tuple[str, ...] = ()
+  revoke: tuple[str, ...] = ()
   sections: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
@@ -61,6 +66,15 @@ def _positive_integer(value: object, source: str, key: str) -> int:
   if type(value) is not int or value <= 0:
     raise ValueError(f'[tool.bro] {key} in {source} must be a positive integer')
   return value
+
+
+def _scope_values(table: dict, source: str, key: str) -> tuple[str, ...]:
+  values = table.get(key, [])
+  if not isinstance(values, list):
+    raise ValueError(f'[tool.bro] {key} in {source} must be a list')
+  if not all(isinstance(value, str) and value != '' for value in values):
+    raise ValueError(f'[tool.bro] {key} in {source} must contain non-empty strings')
+  return tuple(values)
 
 
 def _bro_table(content: str) -> dict:
@@ -97,6 +111,12 @@ def project_config_from_text(content: str, source: str) -> ProjectConfig:
   if not isinstance(default_bro, str):
     raise ValueError(f'[tool.bro] default in {source} must be a string')
   override: Optional[str] = table.get('image-repository')
+  grant = _scope_values(table, source, 'grant')
+  revoke = _scope_values(table, source, 'revoke')
+  try:
+    validate_scope_layer(ScopeLayer(grant, revoke), allow_credential_instances=False)
+  except ValueError as error:
+    raise ValueError(f'[tool.bro] in {source}: {error}') from error
   return ProjectConfig(
     default_bro=default_bro,
     image_repository=override if override is not None else _default_image_repository(default_bro),
@@ -106,6 +126,8 @@ def project_config_from_text(content: str, source: str) -> ProjectConfig:
     summon_depth=_positive_integer(
       table.get('summon-depth', configs.DEFAULT_SUMMON_DEPTH), source, 'summon-depth'
     ),
+    grant=grant,
+    revoke=revoke,
     sections=sections,
   )
 

@@ -61,6 +61,7 @@ def _scope(**overrides) -> ScopedLaunch:
   values = {
     'scoped': ScopedSecrets({'openai'}, {'trails'}),
     'may_summon': {'reviewer'},
+    'permits': {'party.start.boxed'},
     'store': {'creds.json': b'{}'},
   }
   values.update(overrides)

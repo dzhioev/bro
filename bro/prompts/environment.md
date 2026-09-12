@@ -5,7 +5,7 @@ Do not produce any visible output
 — silently incorporate this context into your planning.
 
 Call the `bro::banner` tool once.
-It returns the structured session facts as `key: value` lines (`isolation`, `repo`, `name`, `bro`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `ride_command`, `summoned`, `may_summon`, `trail_id`).
+It returns the structured session facts as `key: value` lines (`isolation`, `repo`, `name`, `bro`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `ride_command`, `summoned`, `may_summon`, `permits`, `trail_id`).
 Interpret them as follows:
 
 1. `isolation: boxed` means the workspace runs in its own container.
@@ -50,11 +50,19 @@ Interpret them as follows:
    The list is fixed at launch and nothing in-session widens it;
    widening means relaunching with `--grant @<bro>`, which is the user's call.
 
-6. `trail_id` is the trail this session is recorded into.
+6. `permits` lists the party actions this session may request.
+   The leaves are shown with their grant markers (`:party.start.boxed`, `:party.start.unboxed`, `:party.join`):
+   `permits: none` means no party action is authorized, and an absent line means the launcher published no set.
+   An unmarked summon starts boxed when that leaf is present, otherwise unboxed when its leaf is present;
+   it is refused when neither start leaf is present and is never turned into a join.
+   Grant a child only permits this session itself holds.
+   The set is fixed at launch, so changing it means relaunching with `--grant` / `--revoke` or shaping a child request.
+
+7. `trail_id` is the trail this session is recorded into.
    It can roll mid-session
    — never cache it, read it off the banner when you need it.
 
-7. If a `session_recording:` line appears (always first in the output), session recording is broken
+8. If a `session_recording:` line appears (always first in the output), session recording is broken
    — the transcript isn't reaching trails and this session could be lost on `--drop`.
    `FAILING` is a recorder that is erroring;
    `STOPPED` is one that is no longer running at all, so nothing will resume on its own.

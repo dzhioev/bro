@@ -1,4 +1,5 @@
 from bro.base.args import Parser
+from bro.base.scope import permit_choices
 from ride.harness import HARNESS_NAMES, get_harness
 from ride.workspace.metadata import Isolation
 
@@ -61,20 +62,20 @@ def pop_harness_options(
 
 
 def add_scope_flags(parser: Parser) -> None:
-  """Register launch-scope credential and summon-target adjustments."""
+  """Register launch-scope credential, summon-target, and permit adjustments."""
   parser.add_argument(
     '--grant',
     action='append',
     default=None,
     metavar='NAME',
-    help='add a credential (KIND or KIND+INSTANCE) or a summonable bro (@BRO) to the session scope; an instance grant replaces the kind selection (repeatable)',
+    help=f'add a credential (KIND or KIND+INSTANCE), a summonable bro (@BRO), or a party permit ({permit_choices()}) to the session scope; an instance grant replaces the kind selection (repeatable)',
   )
   parser.add_argument(
     '--revoke',
     action='append',
     default=None,
     metavar='NAME',
-    help='remove a credential kind (KIND) or a summonable bro (@BRO) from the session scope (repeatable); credential instances cannot be revoked directly',
+    help='remove a credential kind (KIND), a summonable bro (@BRO), or a party permit from the session scope (repeatable); credential instances cannot be revoked directly',
   )
 
 
