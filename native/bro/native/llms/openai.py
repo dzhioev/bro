@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Optional
 
 import bro.llm.usage as usage
 from bro.base import credentials, log
+from bro.base.offload import off_loop
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.llms.openai import (
   DEFAULT_MODEL as _DEFAULT_MODEL,
@@ -22,7 +23,7 @@ from bro.llm.observer import (
   ToolResultEvent,
 )
 from bro.llm.openai_content import image_file_to_content, text_to_content
-from bro.llm.tracker import ToolStepSource, Tracker
+from bro.llm.tracker import StepKind, ToolStepSource, Tracker
 from bro.native.llm import LLM
 
 if TYPE_CHECKING:
@@ -208,6 +209,9 @@ class OpenAI(LLM):
     self._openai_tools = tools_to_openai_format(tools)
     return self._openai_tools
 
+  async def _track_step(self, kind: StepKind, body: object, **extras: object) -> Optional[int]:
+    return await off_loop(self.tracker.step, kind, body, **extras)
+
   def _emit_response_steps(
     self,
     response: Response,
@@ -258,7 +262,9 @@ class OpenAI(LLM):
           output = await self.tools.call(item.name, kwargs)
       except asyncio.CancelledError:
         results.extend(
-          self._interrupted_outputs(calls[position:], turn_index=turn_index, call_index=call_index)
+          await self._interrupted_outputs(
+            calls[position:], turn_index=turn_index, call_index=call_index
+          )
         )
         self._pending_input = results
         raise
@@ -272,7 +278,7 @@ class OpenAI(LLM):
       self.observer.on_event(ToolResultEvent(item.call_id, item.name, output, is_error=is_error))
       # tracker body keeps the raw tool output (dict or str) — the JSON encoding
       # we do below for the API is a wire-format concern only.
-      self.tracker.step(
+      await self._track_step(
         'tool_result',
         output,
         turn_index=turn_index,
@@ -286,7 +292,7 @@ class OpenAI(LLM):
       results.append({'type': 'function_call_output', 'call_id': item.call_id, 'output': output})
     return results
 
-  def _interrupted_outputs(
+  async def _interrupted_outputs(
     self, calls: list[ResponseFunctionToolCall], *, turn_index: int, call_index: int
   ) -> list[ResponseInputItemParam]:
     # every call the interruption left unanswered still needs a result: the API
@@ -297,7 +303,7 @@ class OpenAI(LLM):
       self.observer.on_event(
         ToolResultEvent(item.call_id, item.name, INTERRUPTED_TOOL_OUTPUT, is_error=True)
       )
-      self.tracker.step(
+      await self._track_step(
         'tool_result',
         INTERRUPTED_TOOL_OUTPUT,
         turn_index=turn_index,
@@ -349,7 +355,7 @@ class OpenAI(LLM):
       'context_management': [{'type': 'compaction', 'compact_threshold': self._compact_threshold}]
     }
 
-  def _record_llm_call(
+  async def _record_llm_call(
     self,
     request: dict,
     response: Response,
@@ -358,7 +364,7 @@ class OpenAI(LLM):
     call_index: int,
   ) -> Optional[int]:
     body = {'request': request, 'response': response.model_dump(mode='json')}
-    return self.tracker.step(
+    return await self._track_step(
       'llm_call',
       body,
       turn_index=turn_index,
@@ -441,7 +447,7 @@ class OpenAI(LLM):
       self._pending_input = input_items
       raise
     self._last_response_id = response.id
-    llm_call_step_id = self._record_llm_call(
+    llm_call_step_id = await self._record_llm_call(
       request_kwargs,
       response,
       turn_index=self._turn_index,
@@ -472,7 +478,7 @@ class OpenAI(LLM):
     for message in user_messages:
       if self._has_user_input:
         self._turn_index += 1
-      self.tracker.step('user_input', _extract_text(message), turn_index=self._turn_index)
+      await self._track_step('user_input', _extract_text(message), turn_index=self._turn_index)
       self._has_user_input = True
 
     response = await self._exchange(api_input, openai_tools, request_timeout=request_timeout)
