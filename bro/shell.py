@@ -8,6 +8,7 @@ __cli_name__ = 'bro-shell-dir'
 SHELL_DIR = Path(__file__).resolve().parent / 'setup'
 _REQUIRED_FILES = (
   'prelude.sh',
+  'install_awscli.sh',
   'log.sh',
   'strict.sh',
   'docker_smoke_test.sh',

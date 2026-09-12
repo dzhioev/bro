@@ -15,7 +15,7 @@ from ride.repository import Repository, as_repository
 SETUP_DIR = Path(__file__).resolve().parent.parent / 'setup'
 CONTAINER_DIR = SETUP_DIR / 'container'
 SHELL_DIR = shell_dir()
-SHELL_HELPERS = ('prelude.sh', 'log.sh', 'strict.sh')
+SHELL_HELPERS = ('prelude.sh', 'log.sh', 'strict.sh', 'install_awscli.sh')
 
 INJECTED_PREFIX = '.bro-container'
 DOCKERFILE_PATH = f'{INJECTED_PREFIX}/Dockerfile'

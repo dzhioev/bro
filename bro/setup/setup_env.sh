@@ -1,7 +1,7 @@
 #!/usr/bin/env -S bash -e
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/prelude.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/prelude.sh"
 
-SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 # a container's environment comes baked into its image
 if [ -f /.dockerenv ]; then
@@ -35,7 +35,8 @@ fi
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/bro"
 STAMP="$STATE_DIR/setup-env-$PROFILE.stamp"
 INPUTS_HASH="$(
-  cat "$SCRIPT_DIR/setup_env.sh" "$SCRIPT_DIR/versions.sh" "$SCRIPT_DIR"/ubuntu/*.sh \
+  cat "$SCRIPT_DIR/setup_env.sh" "$SCRIPT_DIR/install_awscli.sh" "$SCRIPT_DIR/versions.sh" \
+    "$SCRIPT_DIR"/ubuntu/*.sh \
     | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
 )"
 if [ "$FORCE" != "1" ] && [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$INPUTS_HASH" ]; then
@@ -302,19 +303,6 @@ install_tkinter() {
   brew install python-tk
 }
 
-install_awscli() {
-  if command -v aws &> /dev/null; then
-    echo "AWS CLI is already installed"
-    return
-  fi
-
-  if [ "$PLATFORM" = "macOS" ]; then
-    check_brew
-    echo "Installing AWS CLI..."
-    brew install awscli
-  fi
-}
-
 install_uv() {
   if command -v uv &> /dev/null; then
     echo "uv is already installed: $(uv --version)"
@@ -344,7 +332,7 @@ if [ "$PROFILE" = "full" ]; then
   install_stow
   install_tmux
   install_tkinter
-  install_awscli
+  "$SCRIPT_DIR/install_awscli.sh"
 fi
 
 mkdir -p "$STATE_DIR"
