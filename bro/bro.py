@@ -1,3 +1,4 @@
+import math
 import os
 from abc import ABC
 from collections.abc import Callable, Iterable, Mapping
@@ -289,11 +290,11 @@ _SUMMON_CHECK_DESCRIPTION = (
   'without `wait`, returns `{state: pending, trail_id?}` while live or '
   '`{state: completed, answer}` when terminal. reads are non-destructive and '
   'repeatable from any process, including after another waiter saw the result. '
-  '`wait: true` long-polls until terminal; optional `timeout` caps each poll, and '
-  'service polls stay short enough to react to a cancelled tool call. unknown ids, '
-  'evicted results, and failed summons raise with their reason.'
-  '{{when #wire = mcp}} CAUTION: a harness may time out a long `wait: true`; prefer '
-  'repeatable non-blocking polls for long runs.{{end}}'
+  '`wait: true` long-polls until terminal or until `timeout` seconds pass, then '
+  'returns `{state: pending, trail_id?}` so the wait can be repeated. service polls '
+  'stay short enough to react to a cancelled tool call. unknown ids, evicted results, '
+  'and failed summons raise with their reason.'
+  "{{when #wire = mcp}} CAUTION: size `timeout` below the harness's idle cap.{{end}}"
 )
 
 
@@ -439,22 +440,19 @@ def _summon_check_tool(variables: Variables) -> llm_mcp.Tool:
     timeout: Optional[float] = None,
   ) -> dict[str, Any]:
     if wait:
+      if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
+        raise ValueError('timeout must be a finite positive number')
       with summon_client.open_client() as client:
-        wait_seconds = summon_client.READ_WAIT_SECONDS
-        if timeout is not None:
-          if timeout <= 0:
-            raise ValueError('timeout must be positive')
-          wait_seconds = min(timeout, wait_seconds)
-        answer = await off_loop(
+        status = await off_loop(
           summon_client.wait_summon,
           request_id,
+          timeout=timeout,
           client=client,
-          wait_seconds=wait_seconds,
         )
-        return {'state': 'completed', 'answer': answer}
-    if timeout is not None:
-      raise ValueError('timeout only caps a wait; a plain check never blocks')
-    status = await off_loop(summon_client.check_summon, request_id)
+    else:
+      if timeout is not None:
+        raise ValueError('timeout only bounds a wait; a plain check never blocks')
+      status = await off_loop(summon_client.check_summon, request_id)
     if status.pending:
       pending: dict[str, Any] = {'state': 'pending'}
       if status.trail_id is not None:

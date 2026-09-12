@@ -1661,21 +1661,37 @@ class TestSummonTool:
     client = _FakeSummonClient()
 
     def fake_wait_summon(request_id, *, timeout=None, client=None, wait_seconds=None):
-      calls.append({'request_id': request_id, 'wait_seconds': wait_seconds, 'client': client})
-      return 'collected'
+      calls.append({'request_id': request_id, 'timeout': timeout, 'client': client})
+      return summon_module.SummonStatus(pending=False, answer='collected')
 
     monkeypatch.setattr(summon_module, 'open_client', lambda: client)
     monkeypatch.setattr(summon_module, 'wait_summon', fake_wait_summon)
     tool = await _find_tool(EchoBro(), 'summon_check')
     result = await tool.call({'request_id': 'REQ-1', 'wait': True, 'timeout': 60})
     assert result == {'state': 'completed', 'answer': 'collected'}
-    assert calls == [
-      {
-        'request_id': 'REQ-1',
-        'wait_seconds': summon_module.READ_WAIT_SECONDS,
-        'client': client,
-      }
-    ]
+    assert calls == [{'request_id': 'REQ-1', 'timeout': 60, 'client': client}]
+    assert client.closed
+
+  @pytest.mark.asyncio
+  async def test_check_wait_returns_pending_at_its_deadline(self, monkeypatch):
+    from bro import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    client = _FakeSummonClient()
+
+    def fake_wait_summon(request_id, *, timeout=None, client=None):
+      assert request_id == 'REQ-1'
+      assert timeout == 60
+      return summon_module.SummonStatus(pending=True, trail_id='T1')
+
+    monkeypatch.setattr(summon_module, 'open_client', lambda: client)
+    monkeypatch.setattr(summon_module, 'wait_summon', fake_wait_summon)
+    tool = await _find_tool(EchoBro(), 'summon_check')
+
+    assert await tool.call({'request_id': 'REQ-1', 'wait': True, 'timeout': 60}) == {
+      'state': 'pending',
+      'trail_id': 'T1',
+    }
     assert client.closed
 
   @pytest.mark.asyncio
@@ -1684,6 +1700,14 @@ class TestSummonTool:
     tool = await _find_tool(EchoBro(), 'summon_check')
     with pytest.raises(ValueError, match='wait'):
       await tool.call({'request_id': 'REQ-1', 'timeout': 60})
+
+  @pytest.mark.asyncio
+  @pytest.mark.parametrize('timeout', [float('nan'), float('inf')])
+  async def test_check_wait_rejects_non_finite_deadlines(self, monkeypatch, timeout):
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    tool = await _find_tool(EchoBro(), 'summon_check')
+    with pytest.raises(ValueError, match='finite positive'):
+      await tool.call({'request_id': 'REQ-1', 'wait': True, 'timeout': timeout})
 
   @pytest.mark.asyncio
   async def test_summon_failure_propagates_as_the_tool_error(self, monkeypatch):
