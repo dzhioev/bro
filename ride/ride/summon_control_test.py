@@ -1,5 +1,6 @@
 import json
 from typing import Any, ClassVar, cast
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -23,6 +24,7 @@ from bro.mcp import harness
 from bro.summon import DEFAULT_TIMEOUT
 from bros.bro import Bro
 from ride.peer_facts import PeerFact, PeerFacts
+from ride.runtime_bundle import RuntimeBundle
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
@@ -159,6 +161,8 @@ def _control(
     root_path=workspace.path,
   )
   journal = Journal()
+  runtime_bundle = MagicMock(spec=RuntimeBundle)
+  runtime_bundle.reference = 'a' * 64
   control = _FakeSummonControl(
     workspace=workspace,
     facts=facts,
@@ -167,12 +171,18 @@ def _control(
     audit_file=tmp_path / 'audit.jsonl',
     depth_cap=depth_cap,
     summon_harness=summon_harness,
+    runtime_bundle=runtime_bundle,
   )
   control.test_journal = journal
   journal.subscribe(facts.observe_journal)
   journal.subscribe(control.observe_journal)
   journal.subscribe(control.audit_event)
   return control
+
+
+def _record_worker_workspace(control, quest: str, name: str) -> None:
+  Workspace.ensure(name, None, Isolation.BOXED)
+  control._facts.note_workspace(quest, name)
 
 
 def _message(**overrides):
@@ -557,7 +567,7 @@ def test_child_grant_bound_recomputes_its_llm_scope(tmp_path, monkeypatch):
   parent = _message(target='bro-dev', llm='echo')
   control.handle(cast(Dispatcher, context), ROOT, parent)
   context.workers[CHILD] = parent.quest_id
-  control._facts.note_workspace(parent.quest_id, f'broker-{CHILD}')
+  _record_worker_workspace(control, parent.quest_id, f'broker-{CHILD}')
   calls.clear()
   control.handle(
     cast(Dispatcher, context),
@@ -652,7 +662,7 @@ def test_nested_request_outside_the_childs_allow_list_is_denied(tmp_path):
   parent = _message()
   control.handle(cast(Dispatcher, context), ROOT, parent)
   context.workers[CHILD] = parent.quest_id
-  control._facts.note_workspace(parent.quest_id, f'broker-{CHILD}')
+  _record_worker_workspace(control, parent.quest_id, f'broker-{CHILD}')
   control.handle(cast(Dispatcher, context), CHILD, _message(target='bro-dev'))
   assert 'not in' in context.replies[-1][1]['error']
 
@@ -663,11 +673,11 @@ def test_depth_cap_denies_a_third_generation(tmp_path):
   first = _message(target='bro-dev')
   control.handle(cast(Dispatcher, context), ROOT, first)
   context.workers[CHILD] = first.quest_id
-  control._facts.note_workspace(first.quest_id, f'broker-{CHILD}')
+  _record_worker_workspace(control, first.quest_id, f'broker-{CHILD}')
   second = _message(target='dev')
   control.handle(cast(Dispatcher, context), CHILD, second)
   context.workers[GRANDCHILD] = second.quest_id
-  control._facts.note_workspace(second.quest_id, f'broker-{GRANDCHILD}')
+  _record_worker_workspace(control, second.quest_id, f'broker-{GRANDCHILD}')
   control.handle(cast(Dispatcher, context), GRANDCHILD, _message())
   assert 'depth cap' in context.replies[-1][1]['error']
 
@@ -679,7 +689,7 @@ def test_configured_depth_cap_controls_nested_authorization(tmp_path):
   control.handle(cast(Dispatcher, context), ROOT, first)
   assert context.spawned[-1][0].summon_depth == 1
   context.workers[CHILD] = first.quest_id
-  control._facts.note_workspace(first.quest_id, f'broker-{CHILD}')
+  _record_worker_workspace(control, first.quest_id, f'broker-{CHILD}')
 
   control.handle(cast(Dispatcher, context), CHILD, _message())
 
@@ -738,6 +748,7 @@ def test_manual_summon_writes_the_pending_record_before_acceptance(tmp_path, mon
   pending = ride.pending_summon.peek(message.quest_id)
   assert pending.target == 'dev'
   assert pending.channel_token == 'token'
+  assert pending.runtime == 'a' * 64
   assert control._facts.for_quest(message.quest_id).manual is True
 
 
@@ -747,6 +758,9 @@ def test_claimed_manual_workspace_is_the_nested_base_source(tmp_path, monkeypatc
   context = FakeContext(control)
   parent = _message(target='bro-dev', manual=True)
   control.handle(cast(Dispatcher, context), ROOT, parent)
+  external_tree = tmp_path / 'external-tree'
+  external_tree.mkdir()
+  Workspace.ensure('external-workspace', None, Isolation.UNBOXED, tree=external_tree)
   ride.pending_summon.claim(parent.quest_id, workspace='external-workspace')
   context.workers[CHILD] = parent.quest_id
   child = _message(target='dev')
@@ -760,6 +774,9 @@ def test_manual_child_cannot_grant_unattributable_credentials(tmp_path, monkeypa
   context = FakeContext(control)
   parent = _message(target='bro-dev', manual=True)
   control.handle(cast(Dispatcher, context), ROOT, parent)
+  external_tree = tmp_path / 'external-tree'
+  external_tree.mkdir()
+  Workspace.ensure('external-workspace', None, Isolation.UNBOXED, tree=external_tree)
   ride.pending_summon.claim(parent.quest_id, workspace='external-workspace')
   context.workers[CHILD] = parent.quest_id
   control.handle(
@@ -788,7 +805,7 @@ def test_child_uses_the_allow_list_recorded_for_its_parent(tmp_path):
   parent = _message(target='bro-dev')
   control.handle(cast(Dispatcher, context), ROOT, parent)
   context.workers[CHILD] = parent.quest_id
-  control._facts.note_workspace(parent.quest_id, f'broker-{CHILD}')
+  _record_worker_workspace(control, parent.quest_id, f'broker-{CHILD}')
   child = _message(target='dev')
   control.handle(cast(Dispatcher, context), CHILD, child)
   assert context.spawned[-1][0].target == 'dev'

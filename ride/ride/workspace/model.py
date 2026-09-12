@@ -10,7 +10,7 @@ from typing import ClassVar, Optional
 
 from bro.base import log
 from bro.workspace.git import git_run
-from bro.workspace.paths import workspace_dir, workspace_tree, workspaces_dir
+from bro.workspace.paths import runtime_base, workspace_dir, workspace_tree, workspaces_dir
 from ride.repository import Repository, as_repository, is_git_url, open_repository
 from ride.workspace.docker import project_image_tag, runtime_image_tag
 from ride.workspace.metadata import (
@@ -23,6 +23,29 @@ from ride.workspace.metadata import (
 )
 
 _MISSING_ATTACHMENT = 'attached repository no longer exists:'
+
+
+@contextlib.contextmanager
+def _hold_workspace_namespace() -> Generator[None]:
+  root = workspaces_dir()
+  root.mkdir(parents=True, exist_ok=True)
+  with (root / '.lock').open('a+') as handle:
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    yield
+
+
+def _resolve_external_tree(tree: Optional[Path], isolation: Isolation) -> Optional[Path]:
+  if tree is None:
+    return None
+  resolved = tree.expanduser().resolve()
+  if isolation is not Isolation.UNBOXED:
+    raise ValueError('--tree requires --unboxed')
+  if not resolved.is_dir():
+    raise ValueError(f'external workspace tree is not an existing directory: {resolved}')
+  root = runtime_base().resolve()
+  if resolved == root or resolved.is_relative_to(root):
+    raise ValueError(f'external workspace tree must be outside the runtime root {root}: {resolved}')
+  return resolved
 
 
 class SessionBusy(RuntimeError):
@@ -158,7 +181,7 @@ class Workspace(ABC):
 
   @property
   def tree(self) -> Path:
-    return workspace_tree(self.name)
+    return workspace_tree(self.name) if self.metadata.tree is None else Path(self.metadata.tree)
 
   @property
   def lockfile(self) -> Path:
@@ -254,18 +277,7 @@ class Workspace(ABC):
     host, a wedged launch) leaves none and the workspace is kept."""
     self._session_end_file.unlink(missing_ok=True)
 
-  def is_clean(self) -> tuple[bool, list[str]]:
-    """whether the workspace is safe to remove: its attachment still resolves and
-    its last session finished successfully. the recorded session end is the
-    deciding factor for an attached workspace whose repository is still there —
-    anything else (a failure, a kill, no record) keeps the workspace for
-    inspection and recovery. returns (safe, reasons)."""
-    if self.repo is None:
-      if not self.tree.is_dir() or not any(self.tree.iterdir()):
-        return True, []
-      return False, ['detached workspace tree is not empty']
-    if self._attachment_missing():
-      return False, [f'{_MISSING_ATTACHMENT} {self.repo}']
+  def _recorded_exit_clean(self) -> tuple[bool, list[str]]:
     try:
       end = self._session_end_file.read_text().strip()
     except FileNotFoundError:
@@ -276,6 +288,21 @@ class Workspace(ABC):
       return False, ['last session was killed']
     return False, [f'last session exited with code {end}']
 
+  def is_clean(self) -> tuple[bool, list[str]]:
+    """whether the workspace is safe to remove: its attachment still resolves and
+    its last session finished successfully. the recorded session end is the
+    deciding factor for an attached or external-tree workspace — anything else
+    keeps the workspace for inspection and recovery. returns (safe, reasons)."""
+    if self.metadata.tree is not None:
+      return self._recorded_exit_clean()
+    if self.repo is None:
+      if not self.tree.is_dir() or not any(self.tree.iterdir()):
+        return True, []
+      return False, ['detached workspace tree is not empty']
+    if self._attachment_missing():
+      return False, [f'{_MISSING_ATTACHMENT} {self.repo}']
+    return self._recorded_exit_clean()
+
   def last_active(self) -> Optional[float]:
     return _last_active(self.tree)
 
@@ -285,6 +312,37 @@ class Workspace(ABC):
     return _ISOLATIONS[metadata.isolation](name, metadata)
 
   @classmethod
+  def _create(
+    cls,
+    name: str,
+    repo: Optional[Repository | Path],
+    isolation: Isolation,
+    *,
+    throwaway: bool,
+    tree: Optional[Path],
+  ) -> 'Workspace':
+    resolved_tree = _resolve_external_tree(tree, isolation)
+    if resolved_tree is not None and repo is not None:
+      raise ValueError('--tree cannot be combined with --repo')
+    if resolved_tree is not None:
+      for workspace in cls.all():
+        if workspace.name != name and workspace.metadata.tree == str(resolved_tree):
+          raise ValueError(
+            f'external workspace tree {resolved_tree} is already recorded by workspace '
+            f'{workspace.name!r}'
+          )
+    repository = None if repo is None else as_repository(repo)
+    metadata = WorkspaceMetadata(
+      isolation=isolation,
+      repo=None if repository is None else repository.identity,
+      branch=None if repository is None else workspace_branch(name),
+      throwaway=throwaway,
+      tree=None if resolved_tree is None else str(resolved_tree),
+    )
+    write_metadata(name, metadata)
+    return _ISOLATIONS[isolation](name, metadata)
+
+  @classmethod
   def create(
     cls,
     name: str,
@@ -292,16 +350,10 @@ class Workspace(ABC):
     isolation: Isolation,
     *,
     throwaway: bool = False,
+    tree: Optional[Path] = None,
   ) -> 'Workspace':
-    repository = None if repo is None else as_repository(repo)
-    metadata = WorkspaceMetadata(
-      isolation=isolation,
-      repo=None if repository is None else repository.identity,
-      branch=None if repository is None else workspace_branch(name),
-      throwaway=throwaway,
-    )
-    write_metadata(name, metadata)
-    return _ISOLATIONS[isolation](name, metadata)
+    with _hold_workspace_namespace():
+      return cls._create(name, repo, isolation, throwaway=throwaway, tree=tree)
 
   @classmethod
   def ensure(
@@ -311,22 +363,40 @@ class Workspace(ABC):
     isolation: Isolation,
     *,
     throwaway: bool = False,
+    tree: Optional[Path] = None,
   ) -> 'Workspace':
-    if not is_workspace(name):
-      return cls.create(name, repo, isolation, throwaway=throwaway)
-    workspace = cls.open(name)
-    if workspace.isolation is not isolation:
-      raise IsolationMismatch(
-        f'workspace {name!r} is {workspace.isolation}, not {isolation}; '
-        f'pick another name or remove it with `ride clean --force {name}`'
-      )
-    expected_repo = None if repo is None else as_repository(repo).identity
-    if workspace.metadata.repo != expected_repo:
-      raise AttachmentMismatch(
-        f'workspace {name!r} is attached to {workspace.repo or "no repository"}, '
-        f'not {expected_repo or "no repository"}'
-      )
-    return workspace
+    resolved_tree = _resolve_external_tree(tree, isolation)
+    if resolved_tree is not None and repo is not None:
+      raise ValueError('--tree cannot be combined with --repo')
+    with _hold_workspace_namespace():
+      if not is_workspace(name):
+        return cls._create(
+          name,
+          repo,
+          isolation,
+          throwaway=throwaway,
+          tree=resolved_tree,
+        )
+      workspace = cls.open(name)
+      if workspace.isolation is not isolation:
+        raise IsolationMismatch(
+          f'workspace {name!r} is {workspace.isolation}, not {isolation}; '
+          f'pick another name or remove it with `ride clean --force {name}`'
+        )
+      expected_repo = None if repo is None else as_repository(repo).identity
+      if workspace.metadata.repo != expected_repo:
+        raise AttachmentMismatch(
+          f'workspace {name!r} is attached to {workspace.repo or "no repository"}, '
+          f'not {expected_repo or "no repository"}'
+        )
+      if workspace.metadata.tree != (None if resolved_tree is None else str(resolved_tree)):
+        recorded = workspace.metadata.tree or 'its managed tree'
+        requested = str(resolved_tree) if resolved_tree is not None else 'a managed tree'
+        raise ValueError(
+          f'workspace {name!r} records {recorded}, not {requested}; '
+          f'pick another name or remove it with `ride clean --force {name}`'
+        )
+      return workspace
 
   @classmethod
   def all(cls) -> list['Workspace']:
@@ -346,7 +416,7 @@ class UnboxedWorkspace(Workspace):
   isolation = Isolation.UNBOXED
 
   def _release_tree(self, *, force: bool) -> None:
-    if not (self.tree / '.git').is_file():
+    if self.metadata.tree is not None or not (self.tree / '.git').is_file():
       return
     if self.repo is None:
       raise RuntimeError(f'legacy worktree {self.tree} has no repository attachment')

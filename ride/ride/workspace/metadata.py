@@ -33,7 +33,12 @@ class WorkspaceMetadata:
     if (self.repo is None) != (self.branch is None):
       raise ValueError('workspace repo and branch must either both be present or both be absent')
     if self.tree is not None:
-      raise ValueError('external workspace trees are not supported yet')
+      if self.isolation is not Isolation.UNBOXED:
+        raise ValueError('an external workspace tree requires unboxed isolation')
+      if self.repo is not None:
+        raise ValueError('an external workspace tree requires a detached workspace')
+      if not Path(self.tree).is_absolute():
+        raise ValueError('workspace tree must be an absolute path')
 
   def dump(self) -> dict:
     data: dict = {
@@ -59,8 +64,8 @@ class WorkspaceMetadata:
       raise ValueError('workspace repo must be a non-empty string when present')
     if branch is not None and (not isinstance(branch, str) or branch == ''):
       raise ValueError('workspace branch must be a non-empty string when present')
-    if tree is not None:
-      raise ValueError('workspace tree must be null until external trees are supported')
+    if tree is not None and (not isinstance(tree, str) or tree == ''):
+      raise ValueError('workspace tree must be a non-empty string when present')
     if not isinstance(data['throwaway'], bool):
       raise ValueError('workspace throwaway must be a bool')
     return cls(

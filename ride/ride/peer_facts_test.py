@@ -73,6 +73,7 @@ def test_root_row_is_seeded_by_the_host_anchored_quest(facts):
 def test_spawned_peer_resolves_through_worker_binding(facts):
   table, context, _ = facts
   _spawned(table, context, CHILD, 'child-quest', 'root-quest')
+  Workspace.ensure(f'broker-{CHILD}', None, Isolation.BOXED)
   assert table.identity(context, CHILD) == PeerIdentity(
     f'broker-{CHILD}', workspace_tree(f'broker-{CHILD}')
   )
@@ -88,14 +89,17 @@ def test_unknown_and_job_peers_are_unattributable(facts):
     table.identity(context, 'job:X')
 
 
-def test_manual_workspace_is_filled_from_its_claim(facts, monkeypatch):
+def test_manual_workspace_is_filled_from_its_claim(facts, monkeypatch, tmp_path):
   table, context, _ = facts
   _spawned(table, context, CHILD, 'child-quest', 'root-quest', manual=True)
   with pytest.raises(UnattributablePeer, match='has not claimed'):
     table.identity(context, CHILD)
   monkeypatch.setattr(pending_summon, 'claimed_workspace', lambda quest: 'manual-workspace')
+  external_tree = tmp_path / 'manual-tree'
+  external_tree.mkdir()
+  Workspace.ensure('manual-workspace', None, Isolation.UNBOXED, tree=external_tree)
   assert table.identity(context, CHILD) == PeerIdentity(
-    'manual-workspace', workspace_tree('manual-workspace'), manual=True
+    'manual-workspace', external_tree, manual=True
   )
   assert table.for_quest('child-quest').workspace == 'manual-workspace'
 

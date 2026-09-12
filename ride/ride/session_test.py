@@ -3,6 +3,7 @@ import json
 import os
 import shlex
 import shutil
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -12,12 +13,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import ride.claude.harness as claude_harness
+import ride.runtime_bundle as runtime_bundle_module
 import ride.scope
 import ride.session as ride_session
 import ride.spawn
 import ride.summon_control
 from bro.base import credentials
-from bro.broker.brotocol import PROTOCOL_REVISION
 from bro.monitor import workspace_session_dir
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 from bro.workspace.paths import CONTAINER_SESSION_DIR
@@ -127,7 +128,7 @@ def _workspace(tmp_path, kind: Isolation = Isolation.BOXED) -> Workspace:
 
 
 def _runtime_bundle(tmp_path) -> RuntimeBundle:
-  root = tmp_path / 'runtime-bundle'
+  root = tmp_path / ('a' * 64)
   (root / 'host' / 'venv' / 'bin').mkdir(parents=True, exist_ok=True)
   (root / 'host' / 'bin').mkdir(exist_ok=True)
   (root / 'host' / '.complete').touch()
@@ -239,6 +240,11 @@ class TestRuntimeBundle:
     assert ride_session.start_session(_spec(name='fresh')) == 1
     assert 'unclassifiable installation' in caplog.text
     assert not (tmp_path / 'var' / 'ride' / 'workspaces' / 'fresh').exists()
+
+  def test_recorded_runtime_is_read_without_loading_the_session_spec(self, tmp_path):
+    workspace = _workspace(tmp_path, Isolation.UNBOXED)
+    workspace.resume_file.write_text(json.dumps({'runtime_bundle': '/runtime', 'future': 'shape'}))
+    assert ride_session.recorded_runtime_reference('w') == '/runtime'
 
 
 class TestGrantRevoke:
@@ -1062,6 +1068,94 @@ class TestUnboxedSession:
     assert 'BROKER_UPSTREAM' not in launch.env
     assert launch.env['MARKER'] == 'child'
 
+  def test_external_tree_runs_from_a_given_runtime(self, monkeypatch, tmp_path):
+    tree = tmp_path / 'task'
+    tree.mkdir()
+    workspace = Workspace.ensure('external', None, Isolation.UNBOXED, tree=tree)
+    monkeypatch.setattr(ride_session, 'materialize_scoped_store', _materialize_store)
+    monkeypatch.setattr(claude_harness, 'apply_claude_auth', lambda env, **_kwargs: None)
+    monkeypatch.setattr(
+      claude_harness,
+      'provision_unboxed_claude_dir',
+      lambda workspace, tree: tmp_path / 'claude-config',
+    )
+    runtime_root = tmp_path / 'given-runtime'
+    runtime_bin = runtime_root / 'venv' / 'bin'
+    runtime_bin.mkdir(parents=True)
+    shim_directory = runtime_root / 'bin'
+    shim_directory.mkdir()
+    (runtime_bin / 'python').symlink_to(sys.executable)
+    session_commands = ['ride', 'do-ride']
+    monkeypatch.setattr(
+      runtime_bundle_module, '_session_commands', lambda _python: session_commands
+    )
+    for command in session_commands:
+      executable = runtime_bin / command
+      if command == 'do-ride':
+        executable.write_text('#!/bin/sh\npwd > trial-cwd\n')
+        executable.chmod(0o755)
+      else:
+        source = shutil.which(command)
+        assert source is not None
+        executable.symlink_to(source)
+      (shim_directory / command).symlink_to(executable)
+    runtime_bundle = RuntimeBundle(runtime_root, '3.12', materialized=True)
+    spec = replace(
+      _spec(isolation=Isolation.UNBOXED, solo=True),
+      name='external',
+      repo=None,
+      tree=str(tree),
+      runtime_bundle=str(runtime_root),
+    )
+
+    launch = ride_session.started_party_launch(
+      spec,
+      workspace,
+      None,
+      None,
+      _launch_scope(),
+      human_env={},
+      runtime_bundle=runtime_bundle,
+      container_runtime=ContainerRuntimeResolver(runtime_bundle, None),
+      forward_env=True,
+      env={},
+      credential_directory=tmp_path / 'private' / 'store',
+      install_directory=tmp_path / 'private' / 'environment',
+    )
+
+    assert isinstance(launch, ride_session.ProcessLaunch)
+    assert subprocess.run(launch.command, cwd=launch.cwd, env=launch.env).returncode == 0
+    assert tree.joinpath('trial-cwd').read_text().strip() == str(tree)
+
+  def test_unboxed_root_secrets_exist_only_for_the_session(self, monkeypatch, tmp_path):
+    workspace = self._workspace(monkeypatch, tmp_path)
+    seen = []
+
+    def run(launch, _workspace, **_kwargs):
+      store = Path(launch.env['BRO_STORE'])
+      install = Path(launch.env['BRO_INSTALL_DIR'])
+      assert store.is_dir()
+      assert install.parent == store.parent
+      seen.extend((store, install.parent))
+      return 0
+
+    monkeypatch.setattr(ride_session, 'run_started_party', run)
+    assert (
+      ride_session._launch_session(
+        _spec(isolation=Isolation.UNBOXED),
+        workspace,
+        None,
+        _launch_scope(),
+        human_env={},
+        runtime_bundle=_runtime_bundle(tmp_path),
+        container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
+      )
+      == 0
+    )
+    assert all(not path.exists() for path in seen)
+    assert not (workspace.path / 'credentials').exists()
+    assert not (workspace.path / 'environment').exists()
+
   def test_launch_session_supervises_the_built_process(self, monkeypatch, tmp_path):
     workspace = self._workspace(monkeypatch, tmp_path)
     captured: dict = {}
@@ -1304,7 +1398,7 @@ def _pending_record(tmp_path, **overrides) -> pending_summon.PendingSummon:
   record = pending_summon.PendingSummon(
     **{
       'token': 'TOK-1',
-      'protocol_revision': PROTOCOL_REVISION,
+      'runtime': '/runtime',
       'port': 7321,
       'channel_token': 'tk',
       'target': 'bro-dev',

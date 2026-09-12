@@ -3,7 +3,8 @@ import dataclasses
 import json
 import os
 import sys
-from collections.abc import Collection, Mapping
+import tempfile
+from collections.abc import Collection, Generator, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
@@ -13,12 +14,13 @@ from bro.base.scope import scope_override_key, scope_revoke_key
 from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV
 from bro.llm.llm import LLMSpec
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_session_dir
-from bro.summon import summoned_child_env
+from bro.summon import RUNTIME_ENV, summoned_child_env
 from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.paths import (
   CONTAINER_SESSION_DIR,
   ISOLATION_ENV,
   ensure_runtime_root,
+  workspace_dir,
 )
 from ride import pending_summon
 from ride.do_ride import (
@@ -33,7 +35,12 @@ from ride.harness import HARNESS_NAMES, Harness, get_harness
 from ride.identity import human_git_identity_env
 from ride.repository import Repository, hold_repository, is_git_url, open_repository
 from ride.root import ProcessLaunch, run_manual_started_party, run_started_party
-from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError, resolve_runtime_bundle
+from ride.runtime_bundle import (
+  RuntimeBundle,
+  RuntimeBundleError,
+  reexec_from_runtime,
+  resolve_runtime_bundle,
+)
 from ride.scope import (
   LaunchScopeError,
   launch_scope_errors,
@@ -88,8 +95,15 @@ class SessionSpec:
   def __post_init__(self) -> None:
     if not isinstance(self.isolation, Isolation):
       raise TypeError('session isolation must be boxed or unboxed')
-    if self.tree is not None or self.runtime_bundle is not None:
-      raise ValueError('external trees and runtime bundles are not supported yet')
+    if self.tree is not None:
+      if self.repo is not None:
+        raise ValueError('an external tree requires a detached session')
+      if self.isolation is not Isolation.UNBOXED:
+        raise ValueError('an external tree requires unboxed isolation')
+      if not Path(self.tree).is_absolute():
+        raise ValueError('external tree path must be absolute')
+    if self.runtime_bundle is not None and self.runtime_bundle == '':
+      raise ValueError('runtime bundle reference must not be empty')
     if type(self.summon_depth) is not int or self.summon_depth <= 0:
       raise ValueError('summon depth must be a positive integer')
     if self.summon_harness not in HARNESS_NAMES:
@@ -111,6 +125,10 @@ class SessionSpec:
     parts = ['ride', verb, *(flag for flag, enabled in flags.items() if enabled)]
     if self.repo is not None:
       parts.extend(['--repo', self.repo])
+    if self.tree is not None:
+      parts.extend(['--tree', self.tree])
+    if self.runtime_bundle is not None and Path(self.runtime_bundle).is_absolute():
+      parts.extend(['--runtime-bundle', self.runtime_bundle])
     parts.extend(['--hold', self.hold])
     if self.llm is not None:
       parts.extend(['--llm', self.llm])
@@ -205,6 +223,20 @@ def load_resume_spec(workspace: Workspace) -> Optional[SessionSpec]:
   except (TypeError, ValueError) as error:
     log.warning('ignoring unreadable resume spec for %s: %s', workspace.name, error)
     return None
+
+
+def recorded_runtime_reference(name: str) -> Optional[str]:
+  """Read the runtime bootstrap field without loading the session record."""
+  try:
+    data = json.loads((workspace_dir(name) / 'resume.json').read_text())
+  except (FileNotFoundError, json.JSONDecodeError):
+    return None
+  if not isinstance(data, dict) or data.get('runtime_bundle') is None:
+    return None
+  reference = data['runtime_bundle']
+  if not isinstance(reference, str) or reference == '':
+    raise ValueError(f'recorded runtime bundle reference is invalid for {name}')
+  return reference
 
 
 def harness_for_workspace(workspace: Workspace) -> Harness:
@@ -327,7 +359,7 @@ def started_party_launch(
       base_ref=base_ref,
       human_env=human_env,
       forward_env=forward_env,
-      env=env,
+      env={RUNTIME_ENV: str(runtime_bundle.host_root), **env},
       mounts=mounts,
     )
 
@@ -336,7 +368,10 @@ def started_party_launch(
   runtime_bundle.materialize_host()
   tree = workspace.tree
   if repository is None:
-    tree.mkdir(parents=True, exist_ok=True)
+    if workspace.metadata.tree is None:
+      tree.mkdir(parents=True, exist_ok=True)
+    elif not tree.is_dir():
+      raise RuntimeError(f'external workspace tree is gone: {tree}')
   else:
     branch = workspace.metadata.branch
     if branch is None:
@@ -353,6 +388,7 @@ def started_party_launch(
     runner_env.pop(UPSTREAM_ENV, None)
   runner_env.update(env)
   runner_env['RIDE_BRO'] = spec.bro
+  runner_env[RUNTIME_ENV] = str(runtime_bundle.host_root)
   runner_env[ISOLATION_ENV] = Isolation.UNBOXED.value
   runner_env['RIDE_HOST_WORKSPACE'] = str(tree)
   runner_env.update(human_env)
@@ -379,6 +415,16 @@ def started_party_launch(
     env=runner_env,
     interactive=not spec.solo,
   )
+
+
+@contextlib.contextmanager
+def _session_secret_directories(workspace: Workspace) -> Generator[tuple[Path, Path]]:
+  if workspace.isolation is Isolation.BOXED:
+    yield workspace.path / 'credentials', workspace.path / 'environment'
+    return
+  with tempfile.TemporaryDirectory(prefix=f'ride-{workspace.name}-secrets-') as directory:
+    root = Path(directory)
+    yield root / 'store', root / 'environment'
 
 
 def _launch_session(
@@ -408,46 +454,47 @@ def _launch_session(
   if summoned is not None:
     host = CONTAINER_BROKER_HOST if workspace.isolation is Isolation.BOXED else None
     summoned_env = _summoned_env(summoned, spec, summoned.address(host))
-  try:
-    launch = started_party_launch(
-      spec,
-      workspace,
-      workspace.repository,
-      base_ref,
-      launch_scope,
-      human_env=human_env,
-      runtime_bundle=runtime_bundle,
-      container_runtime=container_runtime,
-      forward_env=summoned is None,
-      env=summoned_env,
-      credential_directory=workspace.path / 'credentials',
-      install_directory=workspace.path / 'environment',
-    )
-  except (RuntimeError, ValueError) as error:
-    log.error('%s', error)
-    return 1
-  if summoned is not None:
+  with _session_secret_directories(workspace) as (credential_directory, install_directory):
     try:
-      return run_manual_started_party(
-        launch,
+      launch = started_party_launch(
+        spec,
         workspace,
-        credential_scope=launch_scope.scoped,
-        claim=lambda: pending_summon.claim(summoned.token, workspace=spec.name),
+        workspace.repository,
+        base_ref,
+        launch_scope,
+        human_env=human_env,
+        runtime_bundle=runtime_bundle,
+        container_runtime=container_runtime,
+        forward_env=summoned is None,
+        env=summoned_env,
+        credential_directory=credential_directory,
+        install_directory=install_directory,
       )
-    except pending_summon.UnknownToken as error:
+    except (RuntimeError, ValueError) as error:
       log.error('%s', error)
       return 1
-  return run_started_party(
-    launch,
-    workspace,
-    may_summon=launch_scope.may_summon,
-    permits=launch_scope.permits,
-    summon_depth=spec.summon_depth,
-    summon_harness=spec.summon_harness,
-    credential_scope=launch_scope.scoped,
-    container_runtime=container_runtime,
-    runtime_bundle=runtime_bundle,
-  )
+    if summoned is not None:
+      try:
+        return run_manual_started_party(
+          launch,
+          workspace,
+          credential_scope=launch_scope.scoped,
+          claim=lambda: pending_summon.claim(summoned.token, workspace=spec.name),
+        )
+      except pending_summon.UnknownToken as error:
+        log.error('%s', error)
+        return 1
+    return run_started_party(
+      launch,
+      workspace,
+      may_summon=launch_scope.may_summon,
+      permits=launch_scope.permits,
+      summon_depth=spec.summon_depth,
+      summon_harness=spec.summon_harness,
+      credential_scope=launch_scope.scoped,
+      container_runtime=container_runtime,
+      runtime_bundle=runtime_bundle,
+    )
 
 
 def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
@@ -471,7 +518,14 @@ def start_session(
   summoned: Optional[pending_summon.PendingSummon] = None,
 ) -> int:
   try:
-    with resolve_runtime_bundle() as runtime_bundle:
+    if spec.runtime_bundle is not None:
+      reexec_from_runtime(spec.runtime_bundle, spec.to_command_argv())
+    runtime_context = (
+      resolve_runtime_bundle()
+      if spec.runtime_bundle is None
+      else resolve_runtime_bundle(spec.runtime_bundle)
+    )
+    with runtime_context as runtime_bundle:
       return _start_session(spec, runtime_bundle, repository, summoned)
   except RuntimeBundleError as error:
     log.error('%s', error)
@@ -543,6 +597,12 @@ def _start_session(
 
   if spec.isolation is Isolation.UNBOXED:
     runtime_bundle.materialize_host()
+  else:
+    try:
+      runtime_bundle.require_frozen_manifest()
+    except RuntimeBundleError as error:
+      log.error('%s', error)
+      return 1
   repository_context = (
     contextlib.nullcontext(None) if spec.repo is None else hold_repository(spec.repo)
   )
@@ -574,7 +634,12 @@ def _start_session(
             return 1
       container_runtime = ContainerRuntimeResolver(runtime_bundle, repository)
       human_env = human_git_identity_env(repository)
-      workspace = Workspace.ensure(spec.name, repository, spec.isolation)
+      workspace = Workspace.ensure(
+        spec.name,
+        repository,
+        spec.isolation,
+        tree=None if spec.tree is None else Path(spec.tree),
+      )
   except (AttachmentMismatch, IsolationMismatch, RuntimeError, ValueError) as error:
     log.error('%s', error)
     return 1

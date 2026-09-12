@@ -29,7 +29,7 @@ from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 from bro.kinds import KindContext
 from bro.summon import SUMMON, summoned_child_env
 from bro.workspace.git import resolve_head, resolve_ref
-from bro.workspace.paths import summon_dir, workspace_tree
+from bro.workspace.paths import summon_dir
 from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts, view_mount
 from ride.flags import default_hold
 from ride.harness import get_harness
@@ -58,8 +58,8 @@ from ride.workspace.store import ScopedSecrets, log_scoped_secrets
 @dataclass(frozen=True)
 class SummonLaunchSpec(LaunchSpec):
   """an authorized summon as a launch description, cheap to build on the broker
-  loop: the request fields plus the summoner's workspace name (attributed by the
-  control at request time — the source the child's default base is read from).
+  loop: the request fields plus the summoner's workspace name and tree, attributed
+  by the control at request time.
   `SummonSpawner` lowers it to a `DockerLaunchSpec` off-loop — the target-bro
   import, scoped-set computation, and base-ref resolution are all blocking work
   the broker loop should not carry.
@@ -75,6 +75,7 @@ class SummonLaunchSpec(LaunchSpec):
   target: str
   prompt: str
   parent: str
+  parent_tree: Path
   summoner: Optional[dict[str, Any]]
   may_summon: tuple[str, ...]
   harness: str
@@ -95,7 +96,11 @@ def _workspace_name(channel: str) -> str:
   return f'broker-{channel}'
 
 
-def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> SessionSpec:
+def _child_session_spec(
+  launch: SummonLaunchSpec,
+  workspace_name: str,
+  runtime_reference: Optional[str],
+) -> SessionSpec:
   """the summoned child's run as a `SessionSpec`: an unpinned solo session
   of the target bro in the requested isolation — only the request's
   `timeout` maps to no spec field (it is the spawner's wait timer, not part of
@@ -127,6 +132,7 @@ def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> Sessio
     harness_options=harness.default_options(),
     summon_depth=launch.summon_depth,
     summon_harness=launch.summon_harness,
+    runtime_bundle=runtime_reference,
   )
 
 
@@ -148,11 +154,10 @@ def _lower_summon(
   elif repo is None:
     base_ref = None
   else:
-    parent_tree = workspace_tree(launch.parent)
-    base_ref = resolve_head(repo.git_dir, parent_tree)
+    base_ref = resolve_head(repo.git_dir, launch.parent_tree)
     if base_ref is None:
-      raise ValueError(f"cannot read the summoner's HEAD at {parent_tree}")
-  spec = _child_session_spec(launch, workspace_name)
+      raise ValueError(f"cannot read the summoner's HEAD at {launch.parent_tree}")
+  spec = _child_session_spec(launch, workspace_name, runtime_bundle.recorded_reference)
   harness = get_harness(spec.harness)
   auth_error = harness.preflight_auth(spec)
   if auth_error is not None:
@@ -382,6 +387,7 @@ def run_root_via_broker(
     audit_file=summon_dir() / f'{workspace.name}.jsonl',
     depth_cap=summon_depth,
     summon_harness=summon_harness,
+    runtime_bundle=runtime_bundle,
   )
   facade.on(PING, ping_handler)
   facade.on(SUMMON, control.handle)

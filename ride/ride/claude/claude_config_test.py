@@ -63,9 +63,12 @@ class TestSeedClaudeJSON:
     seed = self._seed(_seed_dir(tmp_path), _host_file(tmp_path), install_method=None)
     assert 'installMethod' not in json.loads(seed.read_text())
 
-  def test_missing_host_file_is_fatal(self, tmp_path):
-    with pytest.raises(SystemExit):
-      self._seed(_seed_dir(tmp_path), tmp_path / 'absent.json')
+  def test_missing_host_file_seeds_without_account_identity(self, tmp_path):
+    seed = self._seed(_seed_dir(tmp_path), tmp_path / 'absent.json')
+    data = json.loads(seed.read_text())
+    assert data['projects']['/workspace']['hasTrustDialogAccepted'] is True
+    assert 'oauthAccount' not in data
+    assert 'userID' not in data
 
   def test_missing_identity_key_is_fatal(self, tmp_path):
     host = tmp_path / 'host.json'
