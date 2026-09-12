@@ -44,6 +44,7 @@ async def running_server(monkeypatch):
   await asyncio.sleep(0)
   provisioned = await transport.provision()
   monkeypatch.setenv(CHANNEL_ENV, provisioned.host_endpoint.address(LOCAL_HOST))
+  monkeypatch.setenv(summon.RUNTIME_ENV, '/runtime')
   try:
     yield Harness(transport=transport, sink=sink)
   finally:
@@ -199,6 +200,10 @@ async def test_manual_detached_summon_returns_launch_token_after_acceptance(
 
     assert await task == 0
     assert capsys.readouterr().out == f'{request.id}\n'
+    assert (
+      summon.manual_launch_command(_id(request), 'dev')
+      == f'/runtime/venv/bin/ride along --summoned {_id(request)} dev'
+    )
     assert summon.manual_launch_command(_id(request), 'dev') in caplog.text
 
 

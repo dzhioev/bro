@@ -2,7 +2,6 @@ import json
 
 import pytest
 
-from bro.broker.brotocol import PROTOCOL_REVISION
 from ride import pending_summon
 
 
@@ -10,7 +9,7 @@ def _record(**overrides) -> pending_summon.PendingSummon:
   return pending_summon.PendingSummon(
     **{
       'token': 'TOK-1',
-      'protocol_revision': PROTOCOL_REVISION,
+      'runtime': '/runtime',
       'port': 7321,
       'channel_token': 'tk',
       'target': 'dev',
@@ -89,21 +88,23 @@ def test_a_record_with_invalid_permits_is_refused(tmp_path):
     pending_summon.peek('TOK-1')
 
 
-def test_a_record_without_a_protocol_revision_is_refused(tmp_path):
+def test_a_record_without_a_runtime_is_refused_before_claim(tmp_path):
   pending_summon.write(_record())
   path = pending_summon._path('TOK-1')
   data = json.loads(path.read_text())
-  del data['protocol_revision']
+  del data['runtime']
   path.write_text(json.dumps(data))
 
-  with pytest.raises(ValueError, match='has no broker protocol revision'):
+  with pytest.raises(ValueError, match='carries no usable runtime'):
     pending_summon.claim('TOK-1', workspace='my-manual')
   assert path.exists()
 
 
-def test_a_record_from_another_protocol_revision_is_refused(tmp_path):
-  pending_summon.write(_record(protocol_revision=PROTOCOL_REVISION + 1))
+def test_runtime_reference_reads_the_bootstrap_field_without_loading_the_record(tmp_path):
+  pending_summon.write(_record())
+  path = pending_summon._path('TOK-1')
+  data = json.loads(path.read_text())
+  data['future_field'] = {'new': 'shape'}
+  path.write_text(json.dumps(data))
 
-  with pytest.raises(ValueError, match='uses broker protocol revision'):
-    pending_summon.claim('TOK-1', workspace='my-manual')
-  assert pending_summon._path('TOK-1').exists()
+  assert pending_summon.runtime_reference('TOK-1') == '/runtime'

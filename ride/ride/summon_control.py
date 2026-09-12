@@ -47,6 +47,7 @@ if TYPE_CHECKING:
   from bro.broker.runtime import Peer
   from bro.broker.transport import Provisioned
   from ride.artifacts import ArtifactStore
+  from ride.runtime_bundle import RuntimeBundle
 
 __all__ = ['SummonControl', 'summon_allow_list']
 
@@ -326,6 +327,7 @@ class SummonControl:
     audit_file: Path,
     depth_cap: int,
     summon_harness: str,
+    runtime_bundle: 'RuntimeBundle',
   ):
     self._workspace = workspace
     self._facts = facts
@@ -338,6 +340,7 @@ class SummonControl:
     if summon_harness not in HARNESS_NAMES:
       raise ValueError(f'summon harness must be one of {", ".join(HARNESS_NAMES)}')
     self._summon_harness = summon_harness
+    self._runtime_bundle = runtime_bundle
     self._audit_attribution: dict[str, dict[str, str]] = {}
 
   # --- the `summon` request handler (broker loop) -------------------------------
@@ -483,6 +486,7 @@ class SummonControl:
         target=target,
         prompt=prompt,
         parent=requester.identity.workspace,
+        parent_tree=requester.identity.tree,
         repo=self._workspace.repository,
         summoner=summoned_by,
         may_summon=tuple(sorted(child_allow_list)),
@@ -518,12 +522,11 @@ class SummonControl:
     args = message.args
 
     def _ready(provisioned: 'Provisioned') -> None:
-      from bro.broker import brotocol
-
+      self._runtime_bundle.materialize_host()
       pending_summon.write(
         pending_summon.PendingSummon(
           token=message.quest_id,
-          protocol_revision=brotocol.PROTOCOL_REVISION,
+          runtime=self._runtime_bundle.reference,
           port=provisioned.host_endpoint.port,
           channel_token=provisioned.host_endpoint.token,
           target=args['target'],

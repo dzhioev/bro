@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import sys
 from dataclasses import replace
@@ -64,6 +65,7 @@ def _do_ride_environment(workspace_name: str) -> dict[str, str]:
     ride.do_ride.RESOLVED_LLM_ENV: ride.do_ride.encode_resolved_llm(spec.resolved_llm),
     'RIDE_ISOLATION': 'boxed',
     'RIDE_BRANCH': workspace.metadata.branch,
+    'RIDE_RUNTIME': '/runtime',
   }
 
 
@@ -77,10 +79,13 @@ def _lower_boxed(
   container_runtime: workspace_docker.ContainerRuntimeResolver,
   artifacts: ride.artifacts.ArtifactStore,
 ) -> ride.spawn.DockerLaunchSpec:
+  runtime_bundle = MagicMock(spec=RuntimeBundle)
+  runtime_bundle.host_root = Path('/runtime')
+  runtime_bundle.recorded_reference = None
   lowered = ride.spawn._lower_summon(
     launch,
     workspace_name,
-    MagicMock(spec=RuntimeBundle),
+    runtime_bundle,
     container_runtime,
     artifacts,
   )
@@ -153,6 +158,7 @@ class TestSummonLowering:
       target='dev',
       prompt='deploy the thing',
       parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
@@ -206,6 +212,7 @@ class TestSummonLowering:
       target='dev',
       prompt='p',
       parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
@@ -220,6 +227,7 @@ class TestSummonLowering:
       target='dev',
       prompt='deploy the thing',
       parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
@@ -234,6 +242,7 @@ class TestSummonLowering:
       target='dev',
       prompt='deploy the thing',
       parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
@@ -266,6 +275,7 @@ class TestSummonLowering:
       target='dev',
       prompt='p',
       parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
@@ -282,6 +292,7 @@ class TestSummonLowering:
       target='dev',
       prompt='p',
       parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
@@ -298,6 +309,7 @@ class TestSummonLowering:
       target='dev',
       prompt='p',
       parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
@@ -316,6 +328,7 @@ class TestSummonLowering:
       target='dev',
       prompt='deploy the thing',
       parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
@@ -354,6 +367,36 @@ class TestSummonLowering:
       ).resume_variant()
     )
 
+  def test_child_resume_record_carries_a_given_runtime(self, lowering_harness):
+    launch = ride.spawn.SummonLaunchSpec(
+      target='dev',
+      prompt='p',
+      parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
+      summoner=SUMMONER,
+      may_summon=(),
+      harness='bro',
+      isolation=Isolation.UNBOXED,
+    )
+    runtime_bundle = MagicMock(spec=RuntimeBundle)
+    runtime_bundle.recorded_reference = '/given-runtime'
+    runtime_bundle.host_root = Path('/given-runtime')
+    runtime_bundle.host_venv = Path('/given-runtime/venv')
+    runtime_bundle.host_session_env.return_value = {}
+    lowered = ride.spawn._lower_summon(
+      launch,
+      'broker-CH',
+      runtime_bundle,
+      _container_runtime(),
+      _artifacts(),
+    )
+    assert isinstance(lowered, ride.spawn.ProcessLaunchSpec)
+    spec = ride.session.load_resume_spec(Workspace.open('broker-CH'))
+    assert spec is not None
+    assert spec.runtime_bundle == '/given-runtime'
+    assert lowered.cleanup_directory is not None
+    shutil.rmtree(lowered.cleanup_directory)
+
   def test_launch_mounts_carry_harness_extras_and_local_trails(self, lowering_harness, monkeypatch):
     monkeypatch.setattr(
       ride.session, 'local_trails_mounts', lambda scoped: ('/host/trails:/var/ride/trails',)
@@ -369,6 +412,7 @@ class TestSummonLowering:
       target='dev',
       prompt='p',
       parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
@@ -387,6 +431,7 @@ class TestSummonLowering:
       target='dev',
       prompt='p',
       parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
@@ -402,6 +447,7 @@ class TestSummonLowering:
       target='dev',
       prompt='p',
       parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=('bro', 'reviewer'),
@@ -424,6 +470,7 @@ class TestSummonLowering:
       target='dev',
       prompt='p',
       parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
       repo=repository,
       summoner=SUMMONER,
       may_summon=(),
@@ -438,6 +485,7 @@ class TestSummonLowering:
       target='dev',
       prompt='p',
       parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
@@ -462,6 +510,7 @@ class TestSummonLowering:
       target='dev',
       prompt='p',
       parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
@@ -481,6 +530,7 @@ class TestSummonLowering:
       target='dev',
       prompt='p',
       parent='empty',
+      parent_tree=workspace_tree('empty'),
       summoner=SUMMONER,
       may_summon=(),
       harness='bro',
@@ -498,6 +548,7 @@ class TestSummonLowering:
       target='dev',
       prompt='p',
       parent='detached-root',
+      parent_tree=workspace_tree('detached-root'),
       summoner=SUMMONER,
       may_summon=(),
       harness='bro',
@@ -559,6 +610,7 @@ raise SystemExit(3)
       target='dev',
       prompt='p',
       parent='detached-root',
+      parent_tree=workspace_tree('detached-root'),
       summoner=SUMMONER,
       may_summon=(),
       harness='bro',
@@ -590,6 +642,7 @@ raise SystemExit(3)
       target='dev',
       prompt='p',
       parent='gone',
+      parent_tree=workspace_tree('gone'),
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
@@ -610,10 +663,13 @@ raise SystemExit(3)
 
     docker = RecordingDocker()
     facts = _facts_expecting('X-1')
+    runtime_bundle = MagicMock(spec=RuntimeBundle)
+    runtime_bundle.recorded_reference = None
+    runtime_bundle.host_root = Path('/runtime')
     spawner = ride.spawn.SummonSpawner(
       docker,
       ride.spawn.ProcessSpawner(),
-      MagicMock(),
+      runtime_bundle,
       _container_runtime(),
       facts,
       _artifacts(),
@@ -623,6 +679,7 @@ raise SystemExit(3)
       target='dev',
       prompt='p',
       parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
@@ -654,6 +711,7 @@ raise SystemExit(3)
       target='dev',
       prompt='p',
       parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
       may_summon=(),
@@ -686,6 +744,7 @@ class TestClaudeSummonLowering:
       'target': 'dev',
       'prompt': 'deploy the thing',
       'parent': PARENT,
+      'parent_tree': workspace_tree(PARENT),
       'repo': Path('/proj'),
       'summoner': SUMMONER,
       'may_summon': (),

@@ -21,6 +21,7 @@ broker implementation on pre-gate launch paths.
 import contextlib
 import json
 import os
+import shlex
 from collections.abc import Callable, Collection, Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
@@ -52,6 +53,7 @@ SUMMONED_ENV = 'RIDE_SUMMONED'
 # that launches the run: a session root's at launch, a summoned child's at its spawn
 MAY_SUMMON_ENV = 'RIDE_MAY_SUMMON'
 PERMITS_ENV = 'RIDE_PERMITS'
+RUNTIME_ENV = 'RIDE_RUNTIME'
 # request-lifecycle bound for a summoned child — sized so the flagship deploy
 # workload survives the default; the substrate's generic 600s default is untouched
 DEFAULT_TIMEOUT = 1800.0
@@ -91,7 +93,11 @@ DETACH_HELP = 'print the request id and exit after sending; collect it with summ
 def manual_launch_command(request_id: str, target: str) -> str:
   """the ride command that launches a manual summon's child session — what the
   summoner relays to the user along with the token (the request id)."""
-  return f'ride along --summoned {request_id} {target}'
+  runtime = os.environ.get(RUNTIME_ENV)
+  if runtime is None:
+    raise RuntimeError(f'{RUNTIME_ENV} is missing from the managed session environment')
+  executable = shlex.quote(f'{runtime}/venv/bin/ride')
+  return f'{executable} along --summoned {request_id} {target}'
 
 
 def encode_may_summon(targets: Collection[str]) -> str:

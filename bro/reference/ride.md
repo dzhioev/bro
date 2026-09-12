@@ -202,7 +202,15 @@ The root holds the bundle's shared flock until its session and summoned children
 `ride clean` removes only bundles whose lock is available.
 
 Unboxed isolation materializes the bundle once as `host/venv`, checks its dependency closure, and builds `host/bin` as symlinks to console scripts declared through `bro.session_commands`.
-Boxed isolation uses the same materializer inside the runtime image to populate `ride-runtime-<hash>`, mounted read-only at `/var/ride/runtime`;
+`--runtime-bundle PATH` instead takes an existing materialized layout at `PATH/venv` and `PATH/bin`.
+The latter must be the exact shim farm for the former's full `bro.session_commands` roster;
+a missing executable, missing or extra shim, or shim targeting another command fails before launch.
+The launcher re-executes from `PATH/venv/bin/ride` before runtime-state migration,
+records the path for root and started-child resume, and uses its absolute `do-ride`,
+so every process in the ride runs that runtime even when the first command came from another installation.
+A given runtime has no frozen manifest from which to build a container volume;
+a boxed root or boxed party start fails naming that constraint.
+Boxed isolation from a frozen runtime uses the same materializer inside the runtime image to populate `ride-runtime-<hash>`, mounted read-only at `/var/ride/runtime`;
 the volume holds `venv/` and the matching `bin/` shim farm.
 Materialization is where every pin is fetched, so a version-control or remote-archive pin has to be reachable from the materializing environment
 — in boxed isolation that is the runtime image's own git and network, without the launcher's credentials.
@@ -241,8 +249,6 @@ A directory under the store that records no workspace is ignored by enumeration,
     current-trail.json            the trail the session records into ("Summoning another bro")
     session-recorder-health.json  the recording health signal ("Session recording")
     claude/                       claude harness artifacts (recorder/projector logs and live statusLine projection)
-  credentials/        the unboxed scoped credential store ("Scoped credential hydration")
-  environment/        the files the unboxed session's install hooks write ("Scoped credential hydration")
   claude/             the claude harness's state dir ("Unboxed Claude-state isolation")
 ```
 
@@ -257,8 +263,8 @@ That reach is what it exists for:
 the trail pointer and the recording health signal are published by the session and read back host-side, so both ends need one path.
 Signals every harness shares sit at its root, a harness's own artifacts under `<harness>/`
 — where the claude recorder's stderr goes.
-`credentials/` and `environment/` hold an unboxed root's store and install-hook output, while a box keeps their equivalents in its own layer.
-A spawned child puts both under one temporary root outside its workspace so retained failure records hold no secret.
+Every unboxed session puts its scoped store and install-hook output under one private temporary root removed when the session ends, so retained or collected records hold no secret.
+A box keeps their equivalents in its own layer.
 `claude/` belongs to the claude harness in both isolations.
 The one deliberate exception to all of this is the summon audit, under `<runtime-root>/summon/`, because it must survive a workspace drop.
 
@@ -280,11 +286,14 @@ The one deliberate exception to all of this is the summon audit, under `<runtime
 - **`throwaway`** — the workspace is disposable.
   Its supervisor removes it once its session exits cleanly.
   It is set for the workspaces summoned children run in.
-- **`tree`** — reserved for an externally supplied tree and currently `null`.
+- **`tree`** — the absolute external tree named by `--tree`, otherwise `null`.
+  An external tree belongs only to a detached unboxed workspace, must exist outside the runtime root, and may be recorded by one workspace at a time.
+  Resume fails if it disappears;
+  workspace removal deletes only the records and never this directory.
 
 A detached record is `{"isolation": "boxed", "throwaway": false, "tree": null}`.
-Its tree is clean exactly when it is empty;
-an attached workspace retains the recorded-session-end clean rule.
+A managed detached tree is clean exactly when it is empty;
+an attached or external-tree workspace uses the recorded-session-end clean rule.
 Removing an attached workspace whose recorded checkout or managed mirror no longer exists requires `ride clean --force`.
 
 ## The launch stack
@@ -383,11 +392,12 @@ Whatever the isolation and harness, the outer:
   the `anthropic` key under `--raw`, the `claude_code` setup-token for a full mode;
   the bro harness preflights nothing — its LLM key rides the scoped store) is a launch preflight, so `ride resume` is gated like the launch that created the session.
   Neither runs in `do-ride`, whose parser has no outer machinery flags and therefore no placement policy to revalidate;
-- resolves and flock-holds one runtime bundle for the root's full lifetime, then sets `RIDE_COMMAND` (including the resolved `--repo` when attached) and resolves `--into` against that attachment to a sha;
+- resolves and flock-holds one frozen runtime bundle for the root's full lifetime, or validates the materialized layout named by `--runtime-bundle` after re-executing its `ride`;
+  then sets `RIDE_COMMAND` (including the resolved `--repo` when attached) and resolves `--into` against that attachment to a sha;
 - runs every precondition that can reject the launch
   — the harness's auth preflight and the credential/summon scope preflight
   — before the workspace is recorded, so a refused launch creates no workspace (a URL resolution may already have refreshed its reusable mirror);
-- resolves the workspace, creating it with the selected isolation and attachment when absent and refusing either mismatch (see "Workspaces");
+- resolves the workspace, creating it with the selected isolation, attachment, and optional external tree when absent and refusing a mismatch or a tree another workspace records (see "Workspaces");
 - takes the workspace's session lock, before either isolation prepares anything and for the session's whole duration (see "One session per workspace"), and records the spec `ride resume` would relaunch with;
 - on a resume, fails fast when the workspace has no session to continue
   — the harness's cheap existence check with its own refusal wording (`session_exists` / `missing_session_error`:
@@ -415,22 +425,23 @@ Later launches preserve that clone exactly as the session left it.
 A legacy `.git` gitfile identifies a pre-migration linked worktree and refuses launch with `ride clean --force <name>`.
 
 After clone preparation, `ride` runs the tree's `setup.sh` when present, materializes the runtime bundle's host half, and starts its absolute `do-ride` with the tree as cwd.
-A root's scoped store lives under the workspace's `credentials/`.
-A spawned child's store and install-hook output live under one private temporary root that its process handle removes after any exit or kill, so a retained failed-child workspace contains no credential material.
-`BRO_STORE` and `BRO_INSTALL_DIR` point at the applicable directories.
+Every unboxed session's store and install-hook output live under one private temporary root that its supervisor removes after exit, so a retained workspace contains no credential material.
+`BRO_STORE` and `BRO_INSTALL_DIR` point at those directories.
 The harness's `prepare_unboxed_env` hook supplies launch-time state;
 `do-ride` installs credential hooks before starting the selected harness.
 The launch removes the invoking environment's active-venv marker and PATH entry, so the workspace's own `.venv` is never activated implicitly.
 
-A detached unboxed launch creates a plain empty `tree/`, skips repository and persona provisioning, and runs the same pinned `do-ride` there.
+A detached unboxed launch normally creates a plain empty `tree/`, skips repository and persona provisioning, and runs the same pinned `do-ride` there.
+With `--tree PATH`, it runs instead in that existing directory while keeping every record under the runtime root.
 The auth and scoped-credential preflights happen before a workspace or clone is created.
-On a clean dropped exit, the workspace directory is removed directly.
+On a clean dropped exit, the workspace records are removed directly;
+an external tree is never removed.
 `ride clean` retains a legacy worktree-specific release path so migrated trees can still be removed from their original repository registration.
 
 #### Unboxed Claude-state isolation
 
 An unboxed Claude session points `CLAUDE_CONFIG_DIR` at the workspace's `claude/` directory.
-The directory carries only the constructed session settings, the launcher's account identity, the setup-token auth, the workspace tree's trust entry, and the session plugin seed.
+The directory carries only the constructed session settings, the setup-token auth, the workspace tree's trust entry, the session plugin seed, and the launcher's account identity when its host state provides one.
 The launcher's settings, hooks, permissions, custom agents, and OAuth credentials file do not enter it.
 The bypass-permissions acceptance stays interactive because an unboxed session has no container boundary.
 
@@ -605,8 +616,8 @@ non-rotating `claude_code` token (so no session's refresh can blow away another'
 Both workspace isolations hydrate only the credential kinds the selected bro and harness declare.
 The launch keeps the required and optional tiers kind-addressed and carries a separate kind-to-instance selection.
 The resulting store directory is the boundary:
-an unboxed root materializes it under the workspace's `credentials/`, while an unboxed spawned child uses a private temporary root owned by its process handle;
-each points `BRO_STORE` at its own store, and the child's install-hook output stays under the same temporary root.
+every unboxed session materializes it under a private temporary root owned by its supervisor;
+each points `BRO_STORE` at its own store, and its install-hook output stays under the same temporary root.
 A boxed launch injects it at `/home/ride/.bro` and explicitly sets `BRO_STORE=/home/ride/.bro`.
 An in-session resolver therefore never consults the host's ambient selection.
 Unboxed scoping is still a convenience rather than a security boundary, because the session runs as the host user.
@@ -811,7 +822,7 @@ The host spawns nothing and instead registers an *expected external peer*
 — and the request id doubles as the launch token.
 The registration is acknowledged with an `accepted` mark once the token is claimable, and the manual client waits for it, so a denial fails at the summon itself
 — a token is only ever handed out for a summon the launcher is expecting.
-The summoner relays the token to the user, who launches the session at their own pace with `ride along --summoned <token> <target>`:
+The summoner relays the token to the user as `<runtime>/venv/bin/ride along --summoned <token> <target>`, using the ride's own host runtime:
 an otherwise normal interactive session
 — boxed or unboxed, either harness, the user's own `--llm`/`--hold`/`--workspace`
 — except it starts no broker of its own.
@@ -826,8 +837,9 @@ the human at the launch owns the session's shape, and there is no host-killable 
 
 The bridge between the two halves is the pending record (`ride/ride/pending_summon.py`),
 written under `<runtime-root>/summon/pending/<token>.json` when the channel is provisioned and one-shot-claimed by the launch as its last fallible step before the session starts.
-The record carries the broker protocol revision;
-a missing or mismatched revision refuses the launch before a workspace is created, so a token must be re-minted from a matching installation.
+The record carries the ride runtime as its frozen bundle hash or given path, and token minting materializes its host half.
+A `ride along --summoned` entered through another installation reads that field first and re-executes from the owning runtime before it loads the rest of the record.
+The protocol revision check is unnecessary because the launcher and pending-record reader therefore run the minting ride's code.
 A second launch on the same token fails loudly (two sessions must not share one channel), and a summon that ends unclaimed (root teardown, a failure) discards it, so a stale token fails the launch with the reason.
 The claim records the user-chosen workspace name beside it (`claimed/<token>.json`), which is how the host attributes the manual peer
 — the base-ref source for the child's own summons and the tree its artifact mints resolve against
@@ -928,7 +940,7 @@ Kind handlers resolve refs through the same store (`bro.kinds.KindContext.artifa
 
 ### The launcher↔session contract
 
-The launcher and `do-ride` come from the same frozen installation, so workspace age cannot skew their contract and the operated repository need not install either command.
+The launcher and `do-ride` come from the same frozen or explicitly given runtime, so workspace age and the installation that first received a manual token cannot skew their contract, and the operated repository need not install either command.
 `ride clean` sweeps idle workspaces, unreferenced managed mirrors, and unlocked runtime bundles;
 removing a bundle also removes its unused runtime volume, while Docker keeps an in-use volume alive.
 
@@ -1078,8 +1090,11 @@ Wrappers and session daemons rely on a small set of env vars:
 - `RIDE_BRANCH` — the attached workspace's recorded branch, absent when detached.
   The launcher reads it from `workspace.json` and passes it to `do-ride`.
   The Claude session context records this value rather than deriving a branch from the workspace name.
-- `RIDE_HOST_WORKSPACE` — launcher-side absolute path to the workspace tree (`<runtime-root>/workspaces/<name>/tree`), set explicitly in both isolations.
-  In a container it names the host path bound at `/workspace`.
+- `RIDE_HOST_WORKSPACE` — launcher-side absolute path to the workspace tree, set explicitly in both isolations.
+  It is normally `<runtime-root>/workspaces/<name>/tree`, or the recorded external path for `--tree`;
+  in a container it names the host path bound at `/workspace`.
+- `RIDE_RUNTIME` — launcher-side absolute path to the ride's materialized host runtime.
+  Manual-summon surfaces use its `venv/bin/ride` so the child starts from the same runtime.
 - `RIDE_COMMAND` — the user-visible invocation this session launched under, reconstructed via `SessionSpec.to_command_argv` for telemetry and the banner:
   the `ride solo|along …` command with its flags, or `ride resume <ref>` for a resume.
   Set by `start_session`, and by the summon lowering into a summoned child's env from its recorded spec.
