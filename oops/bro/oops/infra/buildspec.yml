@@ -1,5 +1,8 @@
 version: 0.2
 
+env:
+  shell: bash
+
 # A build environment carries no credential store, so the image-build script
 # takes its target, repository and region from the environment.
 phases:
