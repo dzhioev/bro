@@ -18,6 +18,8 @@ so a stale token fails the launch loudly.
 """
 
 import json
+import os
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -66,10 +68,21 @@ def _claimed_path(token: str) -> Path:
   return summon_dir() / 'claimed' / f'{token}.json'
 
 
-def write(pending: PendingSummon) -> None:
-  path = _path(pending.token)
+def _atomic_write(path: Path, value: str) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_text(json.dumps(asdict(pending), ensure_ascii=False, indent=2))
+  descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f'.{path.name}.')
+  temporary = Path(temporary_name)
+  try:
+    with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+      stream.write(value)
+    os.replace(temporary, path)
+  except BaseException:
+    temporary.unlink(missing_ok=True)
+    raise
+
+
+def write(pending: PendingSummon) -> None:
+  _atomic_write(_path(pending.token), json.dumps(asdict(pending), ensure_ascii=False, indent=2))
 
 
 def peek(token: str) -> PendingSummon:
@@ -125,9 +138,10 @@ def claim(token: str, *, workspace: str) -> PendingSummon:
     raise UnknownToken(
       f'pending manual summon {token!r} was just claimed by another launch'
     ) from None
-  claimed = _claimed_path(token)
-  claimed.parent.mkdir(parents=True, exist_ok=True)
-  claimed.write_text(json.dumps({'token': token, 'workspace': workspace}, ensure_ascii=False))
+  _atomic_write(
+    _claimed_path(token),
+    json.dumps({'token': token, 'workspace': workspace}, ensure_ascii=False),
+  )
   return pending
 
 
