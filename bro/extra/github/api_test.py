@@ -44,13 +44,15 @@ class _FakeUrlopen:
   def __init__(self, steps: list[Any]):
     self._steps = steps
     self.requests: list[Any] = []
+    self.timeouts: list[float] = []
 
   @property
   def call_count(self) -> int:
     return len(self.requests)
 
-  def __call__(self, request, *args, **kwargs):
+  def __call__(self, request, *, timeout: float):
     self.requests.append(request)
+    self.timeouts.append(timeout)
     step = self._steps[len(self.requests) - 1]
     if isinstance(step, BaseException):
       raise step
@@ -75,6 +77,8 @@ class TestVerbs:
     assert request.get_header('Authorization') == 'Bearer t'
     assert request.get_header('Accept') == 'application/vnd.github+json'
     assert request.get_header('X-github-api-version') == '2022-11-28'
+    assert fake.timeouts == [api._REQUEST_TIMEOUT_SECONDS]
+    assert fake.timeouts[0] > 0
 
   def test_post_sends_json_body(self, monkeypatch):
     fake = _FakeUrlopen([{'id': 1}])
@@ -123,6 +127,12 @@ class TestRetry:
 
   def test_retries_remote_disconnected(self, monkeypatch):
     fake = _FakeUrlopen([http.client.RemoteDisconnected('server closed connection'), {'ok': True}])
+    _install(monkeypatch, fake)
+    assert api.get('https://api.github.com/x', 't') == {'ok': True}
+    assert fake.call_count == 2
+
+  def test_retries_timeout(self, monkeypatch):
+    fake = _FakeUrlopen([TimeoutError('timed out'), {'ok': True}])
     _install(monkeypatch, fake)
     assert api.get('https://api.github.com/x', 't') == {'ok': True}
     assert fake.call_count == 2
