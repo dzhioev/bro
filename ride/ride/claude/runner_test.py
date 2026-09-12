@@ -1,4 +1,6 @@
 import os
+import signal
+import subprocess
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -388,16 +390,24 @@ class TestRunClaudeSummoned:
     assert channel_events == []
     assert capfd.readouterr().out == 'PARTIAL\n'
 
-  def test_a_stopped_run_suppresses_the_terminal(self, tmp_path, session_state, channel_events):
+  def test_a_stopped_run_suppresses_the_terminal(
+    self, tmp_path, session_state, channel_events, monkeypatch
+  ):
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-child')
-    # exit 5 on TERM: the stop must reach claude as the interrupt, not as the
-    # kill the stop falls back to when the interrupt goes unanswered
+    received_signals = []
+    original_send_signal = subprocess.Popen.send_signal
+
+    def record_signal(process, signal_number):
+      received_signals.append(signal_number)
+      original_send_signal(process, signal_number)
+
+    monkeypatch.setattr(subprocess.Popen, 'send_signal', record_signal)
     env = _fake_claude(
       tmp_path,
-      'trap "exit 0" INT\ntrap "exit 5" TERM\nsleep 0.2\nkill -TERM $PPID\n'
-      'while true; do sleep 0.05; done\n',
+      'trap "exit 0" INT TERM\nsleep 0.2\nkill -TERM $PPID\nwhile true; do sleep 0.05; done\n',
     )
-    assert ride_runner._run_claude_summoned([], env) == 0
+    ride_runner._run_claude_summoned([], env)
+    assert received_signals[:1] == [signal.SIGINT]
     assert not [event for event in channel_events if event[0] == 'completed']
 
   def test_without_a_channel_the_run_still_completes(
