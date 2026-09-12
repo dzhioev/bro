@@ -125,7 +125,7 @@ The optional host config selects stored credential instances and layers session 
       "grant": ["@reviewer"],
       "bros": {
         "bro-eyebro": {"creds": ["github+reviewer"], "revoke": [":party.join"]},
-        "eyebro": {"grant": ["github+reviewer"]}
+        "eyebro": {"grant": ["github+reviewer"], "llm": "openai:sol:xhigh"}
       }
     },
     "/home/me/projects/bro": {
@@ -153,8 +153,13 @@ The permit leaves are `:party.start.boxed`, `:party.start.unboxed`, and `:party.
 A bro's `creds` selects only among the kinds its launch reads;
 a selection of any other kind fails the launch and names `grant`, since it would otherwise sit inert.
 An entry names a credential kind in `creds` or in `grant`, not both.
+A `bros` entry may also carry `llm`, the recipe the bro runs by default on this project, in the `--llm` grammar.
+It fills what the launch leaves unnamed:
+a launch naming a provider or a model keeps its own pair, an effort or `+fast` it does not name is read from the entry, the path entry fills before the URL entry, and whatever no layer names keeps the bro's declared recipe.
+The settled recipe is what the session records and forwards, so a summon of the bro in the project and `ride scope` read the same entry, while `bro run` and `bro chat` attach to no project and read none.
+A recipe the selected harness cannot run fails the launch as an explicit `--llm` would, and a malformed one fails the launch that reads it, naming the entry.
 The retired `instances` field is rejected with `creds` named as its replacement.
-Validation is grammar-only for credential and bro names, so shared dotfiles may carry names an installation does not register.
+Validation is grammar-only for credential and bro names, so shared dotfiles may carry names an installation does not register, and a recipe is carried as written for the launch to parse.
 
 `defaults.creds` is the root both branches extend.
 `user.creds` covers every command the operator runs outside a session, and `user.tools.<command>.creds` narrows that to one of them;

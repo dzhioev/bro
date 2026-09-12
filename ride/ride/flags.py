@@ -107,7 +107,8 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
   add_llm_flags(
     parser,
     effort_help='thinking effort level (forwarded to claude --effort)',
-    fast_help='enable fast mode for the session (disabled by default regardless of host settings)',
+    fast_help="enable fast mode for the session; otherwise off unless the host's per-bro recipe "
+    "names +fast, whatever Claude's own fast-mode setting says",
   )
   add_scope_flags(parser)
   parser.add_argument(

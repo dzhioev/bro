@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -7,6 +8,7 @@ from bro.base.host_config import (
   PROJECT_URL_LAYER,
   CredentialSelection,
 )
+from bro.llm.llms.echo import LLMSpec as EchoLLMSpec
 from bro.workspace.project import ProjectConfig
 from ride.scope_report import report_scope
 from ride.workspace.store import ScopedSecrets
@@ -108,6 +110,29 @@ class TestReportScope:
     )
     assert 'bro:        dev (claude-raw)' in out
     assert scope.call_args.args[0] == 'dev'
+
+  def test_the_scope_follows_the_hosts_per_bro_recipe(self, capsys, monkeypatch, tmp_path):
+    config = tmp_path / 'bro.json'
+    config.write_text(json.dumps({'projects': {'/repo': {'bros': {'bro-dev': {'llm': 'echo'}}}}}))
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+
+    _, _, scope = _run(
+      capsys, selection={}, scoped=ScopedSecrets(set(), set()), harness='bro', options={}
+    )
+
+    assert scope.call_args.kwargs['llm_spec'] == EchoLLMSpec()
+
+  def test_an_unknown_bro_is_reported_under_the_bro_harness(self, capsys):
+    rc, out, _ = _run(
+      capsys,
+      selection={},
+      scoped=ScopedSecrets(set(), set()),
+      bro='no-such-bro',
+      harness='bro',
+      options={},
+    )
+    assert rc == 1
+    assert "cannot compute the scope: unknown bro 'no-such-bro'" in out
 
   def test_bro_harness_uses_the_native_scope_recipe(self, capsys):
     _, out, scope = _run(

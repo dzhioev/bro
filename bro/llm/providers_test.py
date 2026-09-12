@@ -77,6 +77,31 @@ class TestParsing:
       providers.parse(value)
 
 
+class TestOver:
+  def test_an_unnamed_slot_reads_the_base(self):
+    flags = providers.LLMSelection(effort='low')
+    base = providers.LLMSelection('openai', 'sol', 'xhigh')
+    assert flags.over(base) == providers.LLMSelection('openai', 'sol', 'low')
+
+  def test_a_provider_named_alone_keeps_its_default_model(self):
+    flags = providers.LLMSelection(provider='openai')
+    base = providers.LLMSelection(model='fable5', effort='high')
+    assert flags.over(base) == providers.LLMSelection(provider='openai', effort='high')
+
+  def test_a_model_named_alone_keeps_its_own_provider(self):
+    flags = providers.LLMSelection(model='fable5')
+    base = providers.LLMSelection('openai', 'sol', 'xhigh')
+    assert flags.over(base) == providers.LLMSelection(model='fable5', effort='xhigh')
+
+  def test_fast_holds_from_either_side(self):
+    assert providers.LLMSelection(fast=True).over(providers.LLMSelection()).fast
+    assert providers.LLMSelection().over(providers.LLMSelection(fast=True)).fast
+
+  def test_an_empty_selection_is_the_base(self):
+    base = providers.LLMSelection('openai', 'sol', 'xhigh', True)
+    assert providers.LLMSelection().over(base) == base
+
+
 class TestResolve:
   def test_an_empty_selection_leaves_the_base(self):
     base = openai_llm.LLMSpec(model='gpt-5.6-sol', reasoning_effort='high')

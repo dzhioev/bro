@@ -30,8 +30,11 @@ A list may name each kind once.
 `revoke` lists: credential names, `@bro` targets, and `:permit` leaves.
 An instance-spelled credential grant selects the instance as `creds` does.
 An entry names a credential kind in `creds` or in `grant`, not both.
+A `bros` entry may also carry `llm`: the recipe the bro runs by default on this
+project, in the `--llm` grammar, beneath the launch's own flags.
 The grammar is installation-independent, so unknown credential and bro names
-remain valid until a launch resolves them against its installation.
+remain valid until a launch resolves them against its installation, and a
+recipe is carried as written for the launch to parse.
 
 `defaults` is the root both branches extend: `user` for a command the operator
 runs outside any session, `projects` for a managed session.
@@ -51,6 +54,8 @@ a command's credential selection is its `user.tools` entry, `user`, then default
 A kind no layer selects reads its empty instance.
 The returned layer map attributes every explicit selection, and the returned
 grant set carries the credential kinds left granted by the matching scope layers.
+`launch_llm` returns the recipes the matching `bros` entries name in that same
+order, each with its layer.
 
 The file is optional.
 `llm` remains the host-wide table of `--llm` preset names.
@@ -123,15 +128,30 @@ class CredentialSelection:
 
 
 @dataclass(frozen=True)
+class LLMDefault:
+  """The recipe one `bros` entry names, and the layer naming it."""
+
+  layer: str
+  recipe: str
+
+
+@dataclass(frozen=True)
 class _ScopeEntry:
   selection: dict[str, str]
   scope: ScopeLayer
 
 
 @dataclass(frozen=True)
+class _BroEntry(_ScopeEntry):
+  """A `bros` entry: a scope entry plus the recipe it names."""
+
+  llm: Optional[str]
+
+
+@dataclass(frozen=True)
 class _Project:
   entry: _ScopeEntry
-  bros: dict[str, _ScopeEntry]
+  bros: dict[str, _BroEntry]
 
 
 @dataclass(frozen=True)
@@ -213,8 +233,7 @@ def project_selection(attachment: Optional[Attachment]) -> CredentialSelection:
 
 def launch_selection(attachment: Optional[Attachment], bro: str) -> CredentialSelection:
   """Merge defaults, the matching projects, and their `bro` layers."""
-  if not isinstance(bro, str) or bro == '':
-    raise ValueError('bro name must be a non-empty string')
+  _require_bro_name(bro)
   config = _read()
   matches = _matches(config, attachment)
   entries = [(DEFAULTS_LAYER, config.defaults)]
@@ -223,6 +242,24 @@ def launch_selection(attachment: Optional[Attachment], bro: str) -> CredentialSe
     (match.bro_layer, match.project.bros[bro]) for match in matches if bro in match.project.bros
   )
   return _merged(entries)
+
+
+def launch_llm(attachment: Optional[Attachment], bro: str) -> tuple[LLMDefault, ...]:
+  """The recipes the matching `bros` entries name for `bro`, least specific
+  first, each carried as written."""
+  _require_bro_name(bro)
+  config = _read()
+  defaults: list[LLMDefault] = []
+  for match in _matches(config, attachment):
+    entry = match.project.bros.get(bro)
+    if entry is not None and entry.llm is not None:
+      defaults.append(LLMDefault(match.bro_layer, entry.llm))
+  return tuple(defaults)
+
+
+def _require_bro_name(bro: str) -> None:
+  if not isinstance(bro, str) or bro == '':
+    raise ValueError('bro name must be a non-empty string')
 
 
 def tool_selection(
@@ -318,11 +355,11 @@ def _project(path: Path, project: str, value: object) -> _Project:
   bros = value.get(_BROS_KEY, {})
   if not isinstance(bros, dict):
     raise ValueError(f'{where}: {_BROS_KEY} must be a json object')
-  parsed_bros: dict[str, _ScopeEntry] = {}
+  parsed_bros: dict[str, _BroEntry] = {}
   for bro, bro_entry in bros.items():
     if bro == '':
       raise ValueError(f'{where}: bro name must not be empty')
-    parsed_bros[bro] = _scope_entry(f'{where}: bro {bro!r}', bro_entry)
+    parsed_bros[bro] = _bro_entry(f'{where}: bro {bro!r}', bro_entry)
   return _Project(project_entry, parsed_bros)
 
 
@@ -346,6 +383,18 @@ def _scope_entry(where: str, value: object) -> _ScopeEntry:
     if instance is not None:
       selection[kind] = instance
   return _ScopeEntry(selection, scope)
+
+
+def _bro_entry(where: str, value: object) -> _BroEntry:
+  if not isinstance(value, dict):
+    raise ValueError(f'{where} must hold a json object')
+  llm = None
+  if _LLM_KEY in value:
+    llm = value[_LLM_KEY]
+    if not isinstance(llm, str) or llm == '':
+      raise ValueError(f'{where}: {_LLM_KEY} must be a non-empty string')
+  entry = _scope_entry(where, {key: field for key, field in value.items() if key != _LLM_KEY})
+  return _BroEntry(entry.selection, entry.scope, llm)
 
 
 def _scope_values(where: str, values: object, key: str) -> tuple[str, ...]:

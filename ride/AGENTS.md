@@ -27,7 +27,9 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   its own parser and argv builder, the session environment and pid/start-time record, credential hooks, missing Claude state and plugin seed, persona provisioning, the session broxy, and SIGTERM-forwarded agent spawning.
 - `ride/errors.py` — the runtime-path and migration error wrapper shared by the distribution's public scripts.
 - `ride/scope.py` — per-surface launch scoping:
-  `ScopeRecipe`, `BRO_RUN_RECIPE`, attachment-bound credential selection, the project/host grant layers, three-way scope override splitting, permit computation, and the strict launch preflight.
+  `ScopeRecipe`, `BRO_RUN_RECIPE`, attachment-bound credential selection, the project/host grant layers, three-way scope override splitting, permit computation, and the strict launch preflight,
+  plus `bind_launch_llm`, the launch's LLM selection settled over the host's per-bro entry for the attachment and returned as the canonical `--llm` the session records and forwards,
+  and `launch_llm_spec`, that value resolved within the driving harness for the surfaces that need only the recipe.
   In-process `bro run` / `bro chat` create no scope.
 - `ride/root.py` — supervision of either neutral started-party launch for roots and manually launched children, behind the broker availability gate.
 - `ride/spawn.py` — broker-root composition and summon lowering:
@@ -100,7 +102,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - A ride preflights its Docker daemon once before its first boxed launch, by reading a nonce through a bind of the runtime root.
   Every boxed bind source must resolve under that root.
 - A launch's credential instances follow its attachment identity and selected bro on every surface that resolves them
-  — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Scoped credential hydration").
+  — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Scoped credential hydration")
+  — and so does its default LLM recipe, settled on the host once and carried inward as the canonical `--llm`.
 - Both isolations pass `BRO_STORE` and `BRO_INSTALL_KINDS` to `do-ride`, which installs the hooks through one applier into the named session environment directory,
   so a session's git and `gh` act as the identity it was scoped with and never reach the operator's own configuration.
   An unboxed process gets a closed environment snapshot with its workspace as `PWD`;

@@ -34,7 +34,8 @@ The bro-native engine and provider clients live in `bro.native`.
   `failure_signatures` exposes how a provider's client failures read in a run's error output, classified into `llm.py`'s neutral `FAILURE_CATEGORIES`.
   `price` prices one call from the provider's raw usage record and effective service tier.
   `price_table` exposes the current provider-owned table and its provenance.
-  `LLMSelection` owns the `provider:model:effort` grammar with its `+fast` suffix.
+  `LLMSelection` owns the `provider:model:effort` grammar with its `+fast` suffix, and `over` lays one selection over another
+  — a launch's flags over a configured default.
   `LLMSelectionError` is the operator-facing failure.
   The flags themselves are `bro/launch/llm_flags.py`.
 - `mu.py` — typed call/content convenience over the OpenAI Responses API.

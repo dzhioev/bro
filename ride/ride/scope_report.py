@@ -7,7 +7,12 @@ from bro.base import credentials, host_config
 from bro.workspace.project import project_config
 from ride.harness import get_harness
 from ride.repository import Repository, as_repository
-from ride.scope import LaunchScopeError, bind_launch_credentials, scoped_secrets
+from ride.scope import (
+  LaunchScopeError,
+  bind_launch_credentials,
+  launch_llm_spec,
+  scoped_secrets,
+)
 
 
 def report_scope(
@@ -26,11 +31,13 @@ def report_scope(
     bro_name = config.default_bro
   else:
     bro_name = bro
-  recipe = get_harness(harness).scope_recipe(options)
+  driver = get_harness(harness)
+  recipe = driver.scope_recipe(options)
   attachment = None if repo is None else repo.identity
   try:
     binding = bind_launch_credentials(attachment, bro_name)
-    scoped = scoped_secrets(bro_name, recipe, attachment=attachment)
+    llm_spec = launch_llm_spec(driver, attachment, bro_name, None)
+    scoped = scoped_secrets(bro_name, recipe, attachment=attachment, llm_spec=llm_spec)
     registry = credentials.default_registry()
     selection = {kind: instance for kind, instance in binding.instances.items() if kind in registry}
     store = credentials.Store(registry, credentials.STORE_DIR, selection)
