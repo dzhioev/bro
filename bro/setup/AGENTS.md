@@ -108,20 +108,28 @@ Every string is a template (`bro/reference/template.md`) rendered with `#name` b
 
 ### Host config (`~/.bro.json`)
 
-The optional host config selects stored credential instances per consumer:
+The optional host config selects stored credential instances and layers session scope policy per consumer:
 
 ```json
 {
-  "defaults": {"creds": ["github+dev", "trails+write"]},
+  "defaults": {
+    "creds": ["github+dev", "trails+write"],
+    "grant": [":party.join"]
+  },
   "projects": {
     "https://github.com/me/bro": {
       "creds": ["brog+github", "github+dev"],
+      "grant": ["@reviewer"],
       "bros": {
-        "bro-eyebro": {"creds": ["github+reviewer"]},
+        "bro-eyebro": {"creds": ["github+reviewer"], "revoke": [":party.join"]},
         "eyebro": {"grant": ["github+reviewer"]}
       }
     },
-    "/home/me/projects/bro": {"creds": ["aws+laptop"]}
+    "/home/me/projects/bro": {
+      "creds": ["aws+laptop"],
+      "grant": [":party.start.unboxed"],
+      "revoke": [":party.start.boxed"]
+    }
   },
   "user": {
     "creds": ["github+me"],
@@ -135,20 +143,24 @@ The optional host config selects stored credential instances per consumer:
 Every selection list is named `creds`.
 An entry is `kind+instance`, its instance left empty (`kind+`) to select the kind's empty instance;
 one list may name a kind once.
-A `bros` entry may also carry `grant`, in the credential half of the `--grant` grammar:
-`kind+instance` selects the instance as `creds` does and a bare `kind` reads what the other layers select, and either way the kind joins the bro's required tier on this project.
+`defaults`, each project entry, and each `bros.<bro>` entry may also carry `grant` and `revoke` in the full launch-scope grammar:
+a credential kind changes the required tier, an instance-spelled grant also selects that instance, `@bro` changes the summon allow-list, and a `:permit` leaf changes party authority.
+The permit leaves are `:party.start.boxed`, `:party.start.unboxed`, and `:party.join`;
+`:party` and `:party.start` are refused rather than expanded.
 A bro's `creds` selects only among the kinds its launch reads;
 a selection of any other kind fails the launch and names `grant`, since it would otherwise sit inert.
-An entry names a kind in `creds` or in `grant`, not both.
+An entry names a credential kind in `creds` or in `grant`, not both.
 The retired `instances` field is rejected with `creds` named as its replacement.
-Validation is grammar-only, so shared dotfiles may carry kinds an installation does not register.
+Validation is grammar-only for credential and bro names, so shared dotfiles may carry names an installation does not register.
 
 `defaults.creds` is the root both branches extend.
 `user.creds` covers every command the operator runs outside a session, and `user.tools.<command>.creds` narrows that to one of them;
-a session instead takes `projects.<identity>.creds` for a checkout path or normalized git URL, and `projects.<identity>.bros.<bro>.creds` for one exact bro name.
-The two branches are disjoint, so a `user` entry never reaches a session.
-Most-specific precedence is launch flag, project-bro, project, the command's own entry, `user`, then `defaults`;
-a kind no layer selects reads its empty instance.
+a session instead takes the matching project URL, project path, URL-bro, and path-bro layers in that order.
+The project layers' `grant` and `revoke` lists follow the same order after the repository's own `[tool.bro]` layer.
+Configuration layers are idempotent, so a more-specific layer may restate a grant or revoke;
+the launch flags remain strict and reject a no-op.
+The user and session branches are disjoint, so a `user` entry never reaches a session.
+A kind no layer selects reads its empty instance.
 
 A session against a checkout carries two identities:
 the checkout's path, and its `origin` remote when that remote is a git URL.

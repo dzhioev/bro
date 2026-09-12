@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, ClassVar, Optional, Protocol, Self
+from typing import Any, ClassVar, Literal, Optional, Protocol, Self
 
 import bro.llm.llms.openai as llm_llms_openai
 import bro.llm.mcp as llm_mcp
@@ -23,6 +23,7 @@ from bro.base.condition import (
   var,
 )
 from bro.base.offload import off_loop
+from bro.base.scope import permit_choices
 from bro.datasources.base import DataSource
 from bro.datasources.man import ManPage, manual
 from bro.harness import claude
@@ -239,8 +240,8 @@ def _answer_tool(wire: mcp.Wire, variables: Variables) -> llm_mcp.Tool:
 # time out while the host-owned quest keeps running.
 # The recovery wording remains conditioned on the mounted service roster.
 _SUMMON_DESCRIPTION = (
-  'summon another bro: it runs your prompt in its own isolated container with its '
-  'own credentials and this call blocks — typically for minutes — until its answer '
+  'summon another bro: it runs your prompt in a started party with its own workspace '
+  'and credentials, and this call blocks — typically for minutes — until its answer '
   'comes back. pass `target` (a bro name; you have your own summon allow-list, and '
   'a target outside it — or a summon nested past the depth cap — fails immediately '
   'with the reason) and `prompt` (the full request, self-contained — the target '
@@ -258,23 +259,26 @@ _SUMMON_DESCRIPTION = (
   f"(effort is one of {', '.join(EFFORT_LEVELS)}; `::high` keeps the target's own "
   'provider and model, `:opus5` names a model; a recipe the harness cannot run fails the '
   'summon rather than switching the harness). its scope is shaped by '
-  'the optional `grant` / `revoke` lists — grant entries are `kind`, `kind+instance`, '
-  "or `@bro` for a summonable target of the child's own; revoke entries are `kind` "
-  'or `@bro`. an instance grant replaces the child kind selection, and is allowed '
+  'the optional `grant` / `revoke` lists — entries are credential kinds, instance grants, '
+  f'`@bro` targets, or party permits ({permit_choices()}). an instance grant replaces '
+  'the child kind selection, and is allowed '
   'only when your own scope resolves that instance. you can only grant what you hold '
-  'yourself (a credential kind in your own scope, a bro in your own allow-list), and '
+  'yourself (a credential kind, a bro in your allow-list, or a permit), and '
   "both directions are strict, so a no-op grant or a revoke of something the child's "
   'scope lacks fails the summon. the same bound covers `harness` / `llm`: a '
   'driving loop needing a credential you do not hold (claude needs the Claude '
   'OAuth token) fails the summon, whatever the target itself declares. the '
   'optional `share` list names artifact refs (from `artifact mint`) to hand the '
   'child read access to — only refs this session can itself read. '
+  'the optional `party` (`start`) and `isolation` (`boxed` or `unboxed`) fields place '
+  'the child; an unmarked request starts boxed when permitted, otherwise unboxed. '
   'fails with the reason when the run raises, errors out, or dies. `detach: true` '
   'waits for host acceptance, then returns the quest id; a denial or launch failure '
   'before acceptance fails this call. poll that id with repeatable `summon_check` reads. '
   '`manual: true` registers a manual summon instead of spawning: acceptance returns '
   'a token and `ride` command to relay to the user, who launches the child session; '
-  'manual refuses `timeout`/`hold`/`llm`/`harness` because the user’s launch owns them.'
+  'manual refuses `timeout`/`hold`/`llm`/`harness`/`party`/`isolation` because the user’s '
+  'launch owns them, and requires either party-start permit.'
   '{{when #wire = mcp}} CAUTION: this tool is served over MCP, and the harness may '
   'time a blocking call out while the quest keeps running. prefer `detach: true` for '
   'long work, and do NOT re-summon after a timed-out blocking call'
@@ -306,7 +310,7 @@ _SUMMON_LIST_DESCRIPTION = (
 _BANNER_DESCRIPTION = (
   "return this session's environment facts as `key: value` lines: `isolation` "
   '(`boxed` or `unboxed`), workspace name and paths, the bro persona, the launch '
-  'command, the bros it may delegate to (`may_summon`), and the trail it is '
+  'command, the bros it may delegate to (`may_summon`), its party permits, and the trail it is '
   'recorded into (`trail_id`). call it once at session start to detect your '
   'environment.'
 )
@@ -347,19 +351,28 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
     share: Optional[list[str]] = None,
     llm: Optional[str] = None,
     harness: Optional[str] = None,
+    party: Optional[Literal['start']] = None,
+    isolation: Optional[Literal['boxed', 'unboxed']] = None,
     manual: bool = False,
   ) -> str:
     source = None if live_run is None else live_run.current_tool_step_id
     step_id = source['step_id'] if source is not None else None
     index = source['index'] if source is not None else None
     if manual:
-      launch_owned = {'timeout': timeout, 'hold': hold, 'llm': llm, 'harness': harness}
+      launch_owned = {
+        'timeout': timeout,
+        'hold': hold,
+        'llm': llm,
+        'harness': harness,
+        'party': party,
+        'isolation': isolation,
+      }
       passed = sorted(name for name, value in launch_owned.items() if value is not None)
       if len(passed) > 0:
         raise ValueError(f"a manual summon's launch owns {', '.join(passed)}; drop the field(s)")
       if share is not None:
         raise ValueError(
-          "a manual summon's container is not launched by the host, so 'share' cannot be honored"
+          "a manual summon's workspace is not launched by summon control, so 'share' cannot be honored"
         )
       # a manual child is launched and paced by a human, so the manual path only
       # waits for the host's acceptance — a blocking wait for the answer would
@@ -392,6 +405,8 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
         share=share,
         llm=llm,
         harness=harness,
+        party=party,
+        isolation=isolation,
         step_id=step_id,
         index=index,
       )
@@ -408,6 +423,8 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
         share=share,
         llm=llm,
         harness=harness,
+        party=party,
+        isolation=isolation,
         step_id=step_id,
         index=index,
         client=client,

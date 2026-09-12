@@ -12,13 +12,13 @@ A summon succeeds only when the target is in the summoner's allow-list
 — the session reads its own off the banner, fixed at launch
 — so a denial stays a normal outcome the spell relays.
 
-version: 1.14.0
+version: 1.15.0
 ---
 
 # Ask
 
 Relay a request to another bro via **summon**:
-the target runs your prompt as a one-shot in its own isolated container with its own credentials, and the answer comes back synchronously.
+the target runs your prompt as a one-shot in its own started party with its own workspace and credentials, and the answer comes back synchronously.
 You only formulate the request,
 fire the client,
 and relay the result
@@ -69,15 +69,21 @@ the child's hold — its user-involvement level (default unattended; the child r
 — `provider:model:effort` with an optional `+fast` suffix and any field left empty, resolved within the child's harness, so `::high` keeps the base provider and model (default:
 the target bro's own recipe on the bro harness,
 Claude Code's own on claude).
+Placement is a knob when the user asks for it:
+`start` opens a workspace of the child's own, with `boxed` or `unboxed` isolation.
+An unmarked request starts boxed when permitted, then unboxed when that is the available start permit;
+it never changes into a join.
 
 The child's scope is a knob too:
 grants and revokes.
-A grant names a credential kind, a `kind+instance`, or `@bro` for a summon target of the target's own;
-a revoke names a credential kind or `@bro`.
+A grant names a credential kind, a `kind+instance`, `@bro` for a summon target of the target's own, or a party permit;
+a revoke names a credential kind, `@bro`, or a permit.
+The permits are `:party.start.boxed`, `:party.start.unboxed`, and `:party.join`, always as leaves.
 They start from the target's own declarations, not yours
 — nothing of your scope reaches the child unless you name it, and you can only name what you hold yourself:
 a credential in your own scope,
-a bro in your own allow-list.
+a bro in your own allow-list,
+or a permit in your own set.
 Grant only what the request actually needs and the user asked for:
 a credential the target's manifest lacks (`staging_api` for an integration run),
 an instance your own scope resolves for that kind,
@@ -101,12 +107,12 @@ its background run ends in a harness completion notification that wakes you, whi
 The mechanism is the same either way:
 
 - **Bash available** (a managed Claude session):
-  `summon <target> '<prompt>'` (`--timeout <s>`, `--into <ref>`, `--hold <level>`, `--grant <name>`, `--revoke <name>`, `--llm <recipe>`, `--harness <name>`).
+  `summon <target> '<prompt>'` (`--start` / `--boxed` / `--unboxed`, `--timeout <s>`, `--into <ref>`, `--hold <level>`, `--grant <name>`, `--revoke <name>`, `--llm <recipe>`, `--harness <name>`).
   It prints the request id and the started trail id to stderr,
   then blocks until the answer lands on stdout;
   non-zero exit + stderr on failure.
 - **No Bash, the `summon` tools present** (`bro::summon` / `bro::summon_check` — the `--raw` claude session case):
-  call `summon` with `target` and `prompt` (optional `timeout`, `into`, `hold`, `grant`, `revoke`, `llm`, `harness`).
+  call `summon` with `target` and `prompt` (optional `party`, `isolation`, `timeout`, `into`, `hold`, `grant`, `revoke`, `llm`, `harness`).
   It blocks and returns the answer;
   failures come back as the tool error with the reason.
   `detach: true` returns the quest id after host acceptance and fails immediately on a denial;
@@ -116,7 +122,7 @@ The mechanism is the same either way:
 
 ## Foreground vs background
 
-A summon typically runs **minutes** (container launch + a full LLM run of the target).
+A summon typically runs **minutes** (workspace launch + a full LLM run of the target).
 
 With Bash, run anything that isn't trivially quick in the background (claude's foreground Bash cap is ~10 min — shorter than the 1800s summon default, so a foreground wait can be killed mid-run while the child keeps going):
 use the harness's background run (`run_in_background`),
@@ -169,7 +175,8 @@ and the user launches the session themselves.
   `--timeout`,
   `--hold`,
   `--llm`,
-  `--harness` are refused — the user's launch owns those.
+  `--harness`, and the placement flags (`--start` / `--boxed` / `--unboxed`) are refused — the user's launch owns those.
+  The requester still needs either party-start permit because the human launch starts a party.
 - **Tool client**:
   `summon` with `manual: true`
   — returns the token and the launch command once the host accepts;
@@ -209,7 +216,8 @@ If the user asked for a follow-up action on the answer, continue with it.
   the fix is relaunching `ride solo|along` (or `ask` / `call` / `dive-in`) with `--grant @<target>`
   — tell the user that;
   nothing in-session can widen it.
-  A summoned bro starts from its own static `may_summon` seeds, so its onward denials are fixed at the summon that spawned it (grant `@<name>` there) or by seeding the bro in code.
+  A summoned bro starts from its own static seeds under the project and host configuration layers, then the summon request's grant/revoke layer.
+  Its onward denials are fixed at the summon that spawned it, so change the request or the applicable configuration rather than retrying it unchanged.
 - **Raised / error** — the target ran but couldn't fulfill the request;
   the reason is the failure text.
   Relay it — rephrasing the prompt or picking another target is a user decision.
@@ -233,13 +241,13 @@ if a result was lost this way it is still recoverable from the child's trail.
 
 ## Stopping one deliberately
 
-The protocol has no cancel:
-stopping a summon means stopping the child's container.
-A child that ran for a while has usually left state outside itself
-— a pushed branch,
-an open PR,
-a review watcher now dead,
-task comments.
-Reconcile that state *after* the stop, not before:
-a PR can appear in the seconds before the container dies.
+The protocol has no per-child cancel command.
+The supported stop is ending the ride's root session, whose supervisor terminates every in-flight child;
+a manual child is detached instead because its user owns that launch.
+Launcher-side operators can stop a boxed child's container directly;
+an unboxed child is the supervised `do-ride` process group and has no separate session-side stop surface.
+A child that ran for a while has usually left durable state behind
+— a trail, a retained failed workspace, a pushed branch, an open PR, a review watcher now dead, or task comments.
+Reconcile that state *after* the process stops, not before:
+a PR can appear during shutdown.
 Record on the task what was left unattended.

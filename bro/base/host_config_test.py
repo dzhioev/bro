@@ -280,6 +280,61 @@ class TestLaunchSelection:
     assert host_config.project_selection(attachment).grants == frozenset()
 
 
+class TestScopeLayers:
+  def test_defaults_project_and_bro_layers_stay_in_precedence_order(self, config_file, tmp_path):
+    config_file(
+      {
+        'defaults': {'grant': [':party.join', '@reviewer']},
+        'projects': {
+          str(tmp_path): {
+            'revoke': [':party.join'],
+            'bros': {
+              'dev': {
+                'grant': ['github+work', ':party.start.unboxed'],
+                'revoke': ['@reviewer'],
+              }
+            },
+          }
+        },
+      }
+    )
+
+    selected = host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'dev')
+
+    assert selected.instances == {'github': 'work'}
+    assert selected.scope_layers == (
+      host_config.ScopeLayer(grant=(':party.join', '@reviewer')),
+      host_config.ScopeLayer(revoke=(':party.join',)),
+      host_config.ScopeLayer(
+        grant=('github+work', ':party.start.unboxed'),
+        revoke=('@reviewer',),
+      ),
+    )
+
+  def test_project_level_grants_reach_every_bro_but_bro_layers_are_exact(
+    self, config_file, tmp_path
+  ):
+    config_file(
+      {
+        'projects': {
+          str(tmp_path): {
+            'grant': [':party.join'],
+            'bros': {'dev': {'revoke': [':party.start.boxed']}},
+          }
+        }
+      }
+    )
+    attachment = host_config.Attachment(path=str(tmp_path))
+
+    assert host_config.launch_selection(attachment, 'reviewer').scope_layers == (
+      host_config.ScopeLayer(grant=(':party.join',)),
+    )
+    assert host_config.launch_selection(attachment, 'dev').scope_layers == (
+      host_config.ScopeLayer(grant=(':party.join',)),
+      host_config.ScopeLayer(revoke=(':party.start.boxed',)),
+    )
+
+
 class TestToolSelection:
   def test_each_layer_overrides_the_one_above_it(self, config_file, tmp_path):
     config_file(
@@ -369,7 +424,7 @@ class TestValidation:
   def test_two_grants_of_one_kind_are_rejected(self, config_file):
     config_file({'projects': {'/repo': {'bros': {'dev': {'grant': ['github+a', 'github']}}}}})
 
-    with pytest.raises(ValueError, match="bro 'dev' grants kind 'github' twice"):
+    with pytest.raises(ValueError, match='scope name is granted more than once'):
       host_config.tool_selection(None)
 
   def test_a_kind_both_selected_and_granted_by_one_bro_is_rejected(self, config_file):
@@ -380,11 +435,12 @@ class TestValidation:
     with pytest.raises(ValueError, match="names kind 'github' in both creds and grant"):
       host_config.tool_selection(None)
 
-  def test_a_grant_naming_a_summon_target_is_rejected(self, config_file):
+  def test_a_grant_may_name_a_summon_target(self, config_file):
     config_file({'projects': {'/repo': {'bros': {'dev': {'grant': ['@reviewer']}}}}})
 
-    with pytest.raises(ValueError, match="malformed secret name '@reviewer'"):
-      host_config.tool_selection(None)
+    selected = host_config.launch_selection(host_config.Attachment(path='/repo'), 'dev')
+
+    assert selected.scope_layers == (host_config.ScopeLayer(grant=('@reviewer',)),)
 
   @pytest.mark.parametrize(
     'data, message',
@@ -396,7 +452,6 @@ class TestValidation:
       ({'projects': {'/repo': {'bros': {'dev': []}}}}, 'must hold a json object'),
       ({'projects': {'/repo': {'bros': {'dev': {'grant': 'github'}}}}}, 'grant must be a list'),
       ({'projects': {'/repo': {'bros': {'dev': {'grant': [7]}}}}}, 'grant 7 must be a string'),
-      ({'projects': {'/repo': {'grant': ['github']}}}, 'unknown field'),
       ({'user': {'tools': {'bro.trails.rewind': {'grant': ['github']}}}}, 'unknown field'),
       ({'user': []}, 'user must hold a json object'),
       ({'user': {'tools': []}}, 'tools must be a json object'),

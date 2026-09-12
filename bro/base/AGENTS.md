@@ -40,15 +40,16 @@ run those with `--help` for flags.
   `install_hooks(registry, kinds, store, directory, env)` applies only the named kinds and resolves hook values through that store.
   Schemas live in `bro/setup/AGENTS.md`.
 - `configs.py` — the exclusive `BRO_STORE` directory (default `~/.bro`), the `~/.bro.json` host config beside it, the default summon depth and harness, and the installed bro distribution version shared by credential consumers and trail records.
+- `scope.py` — the unified credential / `@bro` / `:permit` grant grammar, party permit leaves, configuration layers, and namespace-aware override keys.
 - `host_config.py` — the host's launch policy (`~/.bro.json`):
   `project_selection(attachment)` merges `defaults` and the projects an `Attachment`'s identities name,
-  `launch_selection(attachment, bro)` adds their per-bro layers, selections and `grant` kinds alike,
+  `launch_selection(attachment, bro)` adds their per-bro selections and ordered scope layers,
   and `tool_selection(command)` merges `defaults`, `user`, and the `user.tools` entry for one command's canonical console-script name.
   An `Attachment` carries a checkout path, a git URL, or both, and every entry either identity names applies
   — which is what lets a `projects` key written as a repository URL follow the checkout across machines.
   The caller supplies both identities, since this layer invokes no git.
-  Every result carries kind → instance and kind → choosing layer;
-  config validation is grammar-only so kinds unknown to this installation survive shared dotfiles.
+  Every result carries kind → instance, kind → choosing layer, and the matching idempotent grant/revoke layers;
+  config validation is grammar-only for credential and bro names so unknown names survive shared dotfiles.
   `llm_presets()` reads the host-wide `--llm` preset names (`bro/launch/llm_flags.py` merges them over the operated project's own table), and `summon_depth(project_depth)` resolves the host override over the project value and framework default.
   The scheme and its precedence are `bro/setup/AGENTS.md`, "Host config";
   `ride.scope.scoped_secrets` carries the project-level result to each explicitly constructed credential store

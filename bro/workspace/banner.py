@@ -79,6 +79,7 @@ class SessionFacts:
     - may_summon — the bros the session may summon, as its launch fixed them;
       empty when it may summon none, None when it was launched by a surface that
       publishes no list
+    - permits — the party actions the session may request, under the same publication rule
     - summoned — whether another session summoned this one and waits on its result
     - trail_id — the trail the session is being recorded into; None when nothing
       publishes one (recording off, or not started yet)
@@ -98,6 +99,7 @@ class SessionFacts:
   summoned: bool
   trail_id: Optional[str]
   repo: Optional[str] = None
+  permits: Optional[tuple[str, ...]] = None
 
   @classmethod
   def collect(
@@ -149,6 +151,7 @@ class SessionFacts:
       prompt=prompt,
       recording_problem=health.problem(),
       may_summon=summon.may_summon(),
+      permits=summon.permits(),
       summoned=summon.summoned(),
       trail_id=trail_id,
     )
@@ -231,6 +234,10 @@ class SessionFacts:
       targets = _render_summon_targets(self.may_summon) if len(self.may_summon) > 0 else '(none)'
       rows.append(('may summon:', '', f'{dim}{targets}{reset}'))
 
+    if self.permits is not None:
+      permits = ', '.join(f':{permit}' for permit in self.permits) or '(none)'
+      rows.append(('permits:', '', f'{dim}{permits}{reset}'))
+
     if self.trail_id is not None:
       rows.append(('trail:', '', f'{dim}{self.trail_id}{reset}'))
 
@@ -284,6 +291,9 @@ class SessionFacts:
       # answer from a launch surface that publishes no list at all
       targets = _render_summon_targets(self.may_summon) if len(self.may_summon) > 0 else 'none'
       lines.append(f'may_summon: {targets}')
+    if self.permits is not None:
+      permits = ', '.join(f':{permit}' for permit in self.permits) or 'none'
+      lines.append(f'permits: {permits}')
     trail = self.trail_id if self.trail_id is not None else 'none (not published)'
     lines.append(f'trail_id: {trail}')
     return '\n'.join(lines)

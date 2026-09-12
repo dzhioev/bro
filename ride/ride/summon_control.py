@@ -1,7 +1,7 @@
 """Host authorization and journal projection for the ``summon`` kind.
 
 ``SummonControl.handle`` validates and authorizes each request against the
-requesting peer's recorded identity, then binds a spawned or expected Worker
+requesting peer's recorded identity and party permits, then binds a spawned or expected Worker
 through the Dispatcher primitives. Deterministic refusals use ``Dispatcher.deny``
 so answer and journal record are one operation.
 
@@ -19,11 +19,23 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from bro.artifact import is_ref
 from bro.base import credentials, log
+from bro.base.scope import (
+  PARTY_START_BOXED,
+  PARTY_START_UNBOXED,
+  ScopeLayer,
+  apply_idempotent,
+)
 from bro.summon import DEFAULT_TIMEOUT
 from ride import pending_summon
 from ride.harness import HARNESS_NAMES, get_harness
 from ride.peer_facts import PeerFact, PeerFacts, PeerIdentity, UnattributablePeer
-from ride.scope import LaunchScopeError, scoped_secrets, split_scope_overrides
+from ride.scope import (
+  LaunchScopeError,
+  configured_scope_layers,
+  effective_permits,
+  scoped_secrets,
+  split_scope_overrides,
+)
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
@@ -53,14 +65,22 @@ _ARGS_KEYS = frozenset(
     'llm',
     'harness',
     'manual',
+    'party',
+    'isolation',
   }
 )
 # fields a manual summon refuses: the user's launch owns the session's shape, and
 # there is no host-killable child for a timeout to bound
-_LAUNCH_OWNED_KEYS = ('timeout', 'hold', 'llm', 'harness')
+_LAUNCH_OWNED_KEYS = ('timeout', 'hold', 'llm', 'harness', 'party', 'isolation')
 
 
-def summon_allow_list(bro_name: str, *, grant: list[str], revoke: list[str]) -> set[str]:
+def summon_allow_list(
+  bro_name: str,
+  *,
+  grant: list[str],
+  revoke: list[str],
+  layers: Sequence[ScopeLayer] = (),
+) -> set[str]:
   """the effective summon allow-list of a session running as `bro_name`:
   `(may_summon ∪ grant) − revoke`.
 
@@ -74,12 +94,19 @@ def summon_allow_list(bro_name: str, *, grant: list[str], revoke: list[str]) -> 
   # graph, which the pre-gate launch path must not pay for up front
   from bro.registry import create_bro, known_names
 
-  seeds = create_bro(bro_name)._may_summon
-  unknown = sorted((set(seeds) | set(grant) | set(revoke)) - known_names())
+  allow_list = set(create_bro(bro_name)._may_summon)
+  configured_names: set[str] = set()
+  for layer in layers:
+    layer_grant = split_scope_overrides(layer.grant)[1]
+    layer_revoke = split_scope_overrides(layer.revoke)[1]
+    configured_names.update(layer_grant)
+    configured_names.update(layer_revoke)
+    allow_list = apply_idempotent(allow_list, grant=layer_grant, revoke=layer_revoke)
+  unknown = sorted((allow_list | configured_names | set(grant) | set(revoke)) - known_names())
   if len(unknown) > 0:
     raise ValueError(f'unknown summon target(s): {", ".join(unknown)}; not in the bro registry')
   return credentials.apply_grant_revoke(
-    seeds, grant=grant, revoke=revoke, subject='summon allow-list'
+    allow_list, grant=grant, revoke=revoke, subject='summon allow-list'
   )
 
 
@@ -164,6 +191,12 @@ def _validate(args: dict[str, Any]) -> Optional[str]:
   harness = args.get('harness')
   if harness is not None and harness not in HARNESS_NAMES:
     return f"summon 'harness' must be one of {', '.join(HARNESS_NAMES)}"
+  party = args.get('party')
+  if party is not None and party != 'start':
+    return "summon 'party' must be 'start'"
+  isolation = args.get('isolation')
+  if isolation is not None and isolation not in {value.value for value in Isolation}:
+    return "summon 'isolation' must be 'boxed' or 'unboxed'"
   if 'manual' in args:
     if args['manual'] is not True:
       return "summon 'manual' must be true when present"
@@ -171,7 +204,7 @@ def _validate(args: dict[str, Any]) -> Optional[str]:
     if len(refused) > 0:
       return f"a manual summon's launch owns {', '.join(refused)}; drop the field(s)"
     if 'share' in args:
-      return "a manual summon's container is not launched by the host, so 'share' cannot be honored"
+      return "a manual summon's workspace is not launched by summon control, so 'share' cannot be honored"
   return None
 
 
@@ -188,8 +221,34 @@ class _Requester:
     return set(self.fact.allow_list)
 
   @property
+  def permits(self) -> set[str]:
+    return set(self.fact.permits)
+
+  @property
   def list_description(self) -> str:
     return f"{self.fact.bro}'s summon allow-list"
+
+
+def _placement(
+  permits: set[str], *, isolation: Optional[str], manual: bool
+) -> tuple[Optional[Isolation], Optional[str]]:
+  start_permits = {PARTY_START_BOXED, PARTY_START_UNBOXED}
+  held = ', '.join(f':{permit}' for permit in sorted(permits)) or '(none)'
+  if manual:
+    if permits.isdisjoint(start_permits):
+      return None, f'a manual summon needs a party start permit; permits held: {held}'
+    return None, None
+  if isolation is None:
+    if PARTY_START_BOXED in permits:
+      return Isolation.BOXED, None
+    if PARTY_START_UNBOXED in permits:
+      return Isolation.UNBOXED, None
+    return None, f'an unmarked summon needs a party start permit; permits held: {held}'
+  resolved = Isolation(isolation)
+  required = PARTY_START_BOXED if resolved is Isolation.BOXED else PARTY_START_UNBOXED
+  if required not in permits:
+    return None, f'starting a {isolation} party needs :{required}; permits held: {held}'
+  return resolved, None
 
 
 def _credential_refusal(
@@ -309,15 +368,36 @@ class SummonControl:
         error = f'{target!r} is not in {requester.list_description}'
       self._deny(context, peer, error)
       return
+    manual = args.get('manual', False)
+    isolation, refusal = _placement(
+      requester.permits,
+      isolation=args.get('isolation'),
+      manual=manual,
+    )
+    if refusal is not None:
+      self._deny(context, peer, refusal)
+      return
     grant = args.get('grant', [])
     revoke = args.get('revoke', [])
     harness_name = args.get('harness')
     llm = args.get('llm')
     try:
-      grant_credentials, grant_bros = split_scope_overrides(grant)
-      _, revoke_bros = split_scope_overrides(revoke)
-      child_allow_list = summon_allow_list(target, grant=grant_bros, revoke=revoke_bros)
-    except ValueError as error:
+      grant_credentials, grant_bros, grant_permits = split_scope_overrides(grant)
+      _, revoke_bros, _ = split_scope_overrides(revoke)
+      configured_layers = configured_scope_layers(self._workspace.metadata.repo, target)
+      child_allow_list = summon_allow_list(
+        target,
+        layers=configured_layers,
+        grant=grant_bros,
+        revoke=revoke_bros,
+      )
+      child_permits = effective_permits(
+        configured_layers,
+        grant=grant,
+        revoke=revoke,
+        strict=True,
+      )
+    except (RuntimeError, ValueError) as error:
       self._deny(context, peer, str(error))
       return
     beyond = sorted(set(grant_bros) - requester.allow_list)
@@ -326,6 +406,15 @@ class SummonControl:
         context,
         peer,
         f'cannot grant summon target(s) the summoner may not summon itself: {", ".join(beyond)}',
+      )
+      return
+    unheld_permits = sorted(set(grant_permits) - requester.permits)
+    if len(unheld_permits) > 0:
+      self._deny(
+        context,
+        peer,
+        'cannot grant permit(s) the summoner does not hold: '
+        + ', '.join(f':{permit}' for permit in unheld_permits),
       )
       return
     try:
@@ -361,13 +450,13 @@ class SummonControl:
       summoned_by = {**summoned_by, 'step_id': step_id}
       if args.get('index') is not None:
         summoned_by['index'] = args['index']
-    manual = args.get('manual', False)
     self._facts.add(
       message.quest_id,
       PeerFact(
         workspace=None,
         bro=target,
         allow_list=frozenset(child_allow_list),
+        permits=frozenset(child_permits),
         grant=tuple(grant),
         revoke=tuple(revoke),
         llm=llm,
@@ -383,6 +472,7 @@ class SummonControl:
         requester,
         summoned_by=summoned_by,
         child_allow_list=child_allow_list,
+        child_permits=child_permits,
         grant=list(grant),
         revoke=list(revoke),
       )
@@ -396,6 +486,7 @@ class SummonControl:
         repo=self._workspace.repository,
         summoner=summoned_by,
         may_summon=tuple(sorted(child_allow_list)),
+        permits=tuple(sorted(child_permits)),
         harness=harness_name if harness_name is not None else self._summon_harness,
         summon_depth=self._depth_cap,
         summon_harness=self._summon_harness,
@@ -405,7 +496,7 @@ class SummonControl:
         revoke=tuple(revoke),
         share=tuple(share),
         llm=llm,
-        isolation=Isolation.BOXED,
+        isolation=isolation if isolation is not None else Isolation.BOXED,
       ),
       peer,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,
@@ -420,6 +511,7 @@ class SummonControl:
     *,
     summoned_by: Optional[dict[str, Any]],
     child_allow_list: set[str],
+    child_permits: set[str],
     grant: list[str],
     revoke: list[str],
   ) -> None:
@@ -438,6 +530,7 @@ class SummonControl:
           prompt=args['prompt'],
           parent_workspace=str(requester.identity.tree),
           may_summon=tuple(sorted(child_allow_list)),
+          permits=tuple(sorted(child_permits)),
           grant=tuple(grant),
           revoke=tuple(revoke),
           summoner=summoned_by,
@@ -466,8 +559,8 @@ class SummonControl:
         "a manual child's credential scope is not attributable; grant the "
         'credential at its own launch instead'
       )
-    grant, _ = split_scope_overrides(list(fact.grant))
-    revoke, _ = split_scope_overrides(list(fact.revoke))
+    grant, _, _ = split_scope_overrides(fact.grant)
+    revoke, _, _ = split_scope_overrides(fact.revoke)
     try:
       return _summoned_scope(
         fact.bro,

@@ -108,10 +108,17 @@ def _facts_expecting(quest: str) -> ride.peer_facts.PeerFacts:
 @pytest.fixture
 def lowering_harness(monkeypatch, tmp_path):
   def fake_scoped_secrets(
-    name, surface, attachment=None, llm_spec=None, grant=(), revoke=(), check_selection=True
+    name,
+    surface,
+    attachment=None,
+    attachment_repository=None,
+    llm_spec=None,
+    grant=(),
+    revoke=(),
+    check_selection=True,
   ):
-    grant_credentials, _ = ride.scope.split_scope_overrides(list(grant))
-    revoke_credentials, _ = ride.scope.split_scope_overrides(list(revoke))
+    grant_credentials, _, _ = ride.scope.split_scope_overrides(grant)
+    revoke_credentials, _, _ = ride.scope.split_scope_overrides(revoke)
     return workspace_store.finalize_scoped_secrets(
       workspace_store.ScopedSecrets(required={'aws', 'trails'}, optional={'openai'}),
       grant=grant_credentials,
@@ -124,6 +131,7 @@ def lowering_harness(monkeypatch, tmp_path):
     'preflight_scoped_launch',
     lambda scoped, *_args, **_kwargs: (
       set(),
+      {'party.start.boxed'},
       ride.scope.HydratedStore({}, frozenset(scoped.required | scoped.optional)),
     ),
   )
@@ -173,6 +181,7 @@ class TestSummonLowering:
           'RIDE_BRO': 'dev',
           'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness bro dev deploy the thing',
           'RIDE_MAY_SUMMON': '',
+          'RIDE_PERMITS': 'party.start.boxed',
           'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
           'RIDE_SUMMONED': '1',
           'RIDE_SUMMONER': '{"session":"ws"}',
@@ -240,7 +249,14 @@ class TestSummonLowering:
     captured: list = []
 
     def capture_scope(
-      name, recipe, attachment=None, llm_spec=None, grant=(), revoke=(), check_selection=True
+      name,
+      recipe,
+      attachment=None,
+      attachment_repository=None,
+      llm_spec=None,
+      grant=(),
+      revoke=(),
+      check_selection=True,
     ):
       captured.append(llm_spec)
       return workspace_store.ScopedSecrets(required=set(), optional=set())
@@ -434,6 +450,7 @@ class TestSummonLowering:
       'RIDE_BRO': 'dev',
       'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness bro --into summon dev p',
       'RIDE_MAY_SUMMON': '',
+      'RIDE_PERMITS': 'party.start.boxed',
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
       'RIDE_SUMMONED': '1',
       'RIDE_SUMMONER': '{"session":"ws"}',
@@ -689,6 +706,7 @@ class TestClaudeSummonLowering:
       'RIDE_BRO': 'dev',
       'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness claude dev deploy the thing',
       'RIDE_MAY_SUMMON': '',
+      'RIDE_PERMITS': 'party.start.boxed',
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
       'RIDE_SUMMONED': '1',
       'RIDE_SUMMONER': '{"session":"ws"}',
@@ -724,7 +742,14 @@ class TestClaudeSummonLowering:
     captured: list = []
 
     def capture_scope(
-      name, recipe, attachment=None, llm_spec=None, grant=(), revoke=(), check_selection=True
+      name,
+      recipe,
+      attachment=None,
+      attachment_repository=None,
+      llm_spec=None,
+      grant=(),
+      revoke=(),
+      check_selection=True,
     ):
       captured.append(recipe.name)
       return workspace_store.ScopedSecrets(required=set(), optional=set())

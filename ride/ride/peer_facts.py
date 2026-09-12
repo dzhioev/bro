@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from bro.base.scope import DEFAULT_PERMITS
 from bro.monitor.trail_pointer import read, session_pointer
 from bro.workspace.paths import workspace_dir, workspace_tree
 from ride import pending_summon
@@ -28,6 +29,7 @@ class PeerFact:
   workspace: Optional[str]
   bro: str
   allow_list: frozenset[str]
+  permits: frozenset[str] = DEFAULT_PERMITS
   grant: tuple[str, ...] = ()
   revoke: tuple[str, ...] = ()
   llm: Optional[str] = None

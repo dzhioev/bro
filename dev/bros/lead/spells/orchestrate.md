@@ -8,13 +8,13 @@ This session becomes the coordinator:
 it opens a root task as the single source of truth,
 then walks the work through design, review and planning, per-stage implementation, integration, and verification,
 running each phase in a session of its own
-— the design and planning phases as interactive sessions it hands to the user to launch, the rest as summoned bros in isolated containers
+— the design and planning phases as interactive sessions it hands to the user to launch, the rest as summoned bros in started parties
 — and recording each outcome on the root task before starting the next.
 It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.3.0
+version: 2.3.1
 ---
 
 # orchestrate

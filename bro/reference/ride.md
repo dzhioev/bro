@@ -57,7 +57,9 @@ ride along dev 'continue the inspection' -- --debug mcp
 
 Shared launch flags are `--repo`, `--boxed`, `--unboxed`, `--hold`, `--grant`, `--revoke`, `--into`, `--no-trails`, and the LLM selection set (`--provider`, `--model`, `--effort`, `--fast`, `--llm`).
 `--grant` and `--revoke` use the framework's unified grammar:
-credential names shape the scoped store and `@bro` names shape the summon allow-list.
+credential names shape the scoped store, `@bro` names shape the summon allow-list, and `:permit` leaves shape party authority.
+The permit leaves are `:party.start.boxed`, `:party.start.unboxed`, and `:party.join`;
+the framework seed is boxed starts alone, and the intermediate names `:party` and `:party.start` are invalid.
 `--no-trails` disables trail recording for the session, whichever harness runs:
 the launch drops the `trails` scope baseline, sets `TRAILS_DISABLED` for the run, and a claude session starts no recorder daemon.
 
@@ -324,6 +326,8 @@ harness = "claude"                   # optional ride default; claude when omitte
 summon-harness = "bro"               # optional: the harness a summon naming none runs its
                                      # child under; bro when omitted
 summon-depth = 4                      # optional deepest summon generation
+grant = ["github", "@reviewer", ":party.join"]
+revoke = [":party.start.boxed"]
 image-repository = "custom-images"   # optional: docker repository for the repo's session-container
                                      # images, defaulting to bro/<default> (bro/foo here)
 build-context-command = "list-files"  # optional: stdout is the session image's context file list,
@@ -348,6 +352,9 @@ the mode verbs still require their bro positional.
 a detached launch reads no project file, so its summons use that default.
 `summon-depth` is an optional positive integer with no imposed ceiling, setting the deepest summon generation with the root at depth 0 and a default of 2.
 The host's `~/.bro.json` value overrides it for the launch, and detached launches use only that host value or the default because they read no project file.
+`grant` and `revoke` are optional lists in the full unified grammar.
+A project may grant bare credential kinds, `@bro` targets, and `:permit` leaves;
+it may not name a credential instance, because the repository does not choose host material.
 `image-repository` and `build-context-command` are optional.
 A URL attachment evaluates a build-context command in a temporary extraction of the committed base tree and reads the named files back from that commit.
 `[tool.bro.llm]` names the repo's `--llm` presets, which the host's own `~/.bro.json` `llm` table overrides per name.
@@ -610,10 +617,14 @@ Unboxed scoping is still a convenience rather than a security boundary, because 
   `optional_secrets()` supplies the best-effort tier, and every normal managed surface adds `trails` to it.
   Components and manifests declare bare kinds only.
 - **Which instance.**
-  Scope selection merges the host's defaults, matching project, and matching `projects.<identity>.bros.<bro>` layer in that order.
-  A project-bro layer overrides the project selection for that bro, including when the bro is a summon target.
-  A project-bro `grant` adds kinds the bro does not declare to the required tier, under the instance it names or the one the other layers select, for the bro's own launches and its summoned runs alike
-  — computed on the child's side, so a summoner need not hold the kind.
+  Scope starts with the repository's `[tool.bro]` grant/revoke layer, then applies the host config's `defaults`, matching project URL, project path, URL-bro, and path-bro layers.
+  A bro layer overrides the project selection for that bro, including when the bro is a summon target.
+  Any host scope layer may grant a kind the bro does not declare into the required tier, under the instance it names or the one the selection layers choose, for root and summoned runs alike.
+  The project layer may grant only the bare kind.
+  Configuration grants and revokes are idempotent across layers;
+  the launch flags apply last and stay strict.
+  A child's configured credential scope is its own, so a summoner need not hold kinds supplied by its declarations or configuration;
+  only a request's explicit credential grants are bounded by the summoner.
   A project-bro `creds` selection of a kind the launch reads on neither tier fails the launch and names `grant`;
   the recording kind counts as read under `--no-trails` too.
   The bro's declarations are evaluated under that selection, the launch's instance grants included, so a feature gate resolves on the launcher exactly when it resolves in the session.
@@ -643,7 +654,8 @@ Unboxed scoping is still a convenience rather than a security boundary, because 
   An instance-spelled revoke fails and names the kind form, because the scope contains one entry per kind.
   Overrides are strict:
   no-op grants, two grants for one kind, conflicting grant/revoke pairs, and absent revokes fail the launch.
-  `@bro` values adjust the summon allow-list instead.
+  `@bro` values adjust the summon allow-list, and `:permit` leaves adjust party authority instead.
+  `ride resume --grant/--revoke` changes the recorded overrides under the same strict rules.
 - **Hydration.**
   `credentials.build_scoped_store(store, required, optional=…)` returns an in-memory file map plus the declared kinds that resolved.
   Required kinds fail on an unknown registry kind or absent material;
@@ -727,14 +739,20 @@ workspace removal (`--drop`, `ride clean`) deletes it with the workspace.
 
 ### Summoning another bro
 
-A session can summon another bro over its channel:
-the target starts a one-shot, non-TTY party (unless the summon is *manual* — the user launches an interactive child themselves;
-see "Manual summon" below) with its own scoped credential set (nothing inherited from the summoner, plus whatever the request's own `grant`/`revoke` names).
+A session can summon another bro over its channel.
+The target starts a one-shot, non-TTY party unless the summon is *manual*, where the user launches an interactive child themselves;
+see "Manual summon" below.
+The child's credential set, summon allow-list, and permits come from its own seeds and project/host layers under the request's `grant`/`revoke` layer, never by inheriting the requester's sets.
+An explicit request grant is bounded by the corresponding credential, target, or permit the requester holds.
 It runs under the harness the request names, or the launch's `[tool.bro] summon-harness` when it names none.
 Both harnesses run `do-ride solo …`:
 `bro` spawns the target's own LLM process there, while `claude` starts a one-shot managed Claude Code session of the target persona in full mode.
-The summon control currently requests boxed isolation until the placement fields and permits are wired;
-the lowering already accepts either isolation and emits `DockerLaunchSpec` or `ProcessLaunchSpec` through the same started-party launcher roots use.
+The request's `party` field accepts `start` in this stage, and its optional `isolation` is `boxed` or `unboxed`.
+The CLI spells those choices as `--start`, `--boxed`, and `--unboxed`.
+An unmarked request starts boxed when the requester holds `:party.start.boxed`, otherwise unboxed when it holds `:party.start.unboxed`, and otherwise fails naming the permits held;
+it is never converted into a join.
+An explicitly boxed or unboxed request requires the matching start permit.
+The lowering emits `DockerLaunchSpec` or `ProcessLaunchSpec` through the same started-party launcher roots use.
 An unboxed child starts in its own process group;
 kill sends SIGTERM only to `do-ride` so its harness-specific shutdown can unwind and flush state, then sends SIGKILL to the group if the process tree or inherited output pipe survives that grace period.
 The request's `llm` recipe resolves within the child's harness and never switches it;
@@ -749,10 +767,12 @@ underneath it are two client surfaces over the same request:
 
 - `summon <target> <prompt>`, for Bash-capable sessions
   — blocking by default (request id + started trail id on stderr, answer on stdout, non-zero exit with the reason on failure),
-  `--timeout <s>` / `--into <ref>` / `--hold <level>` / `--grant <name>` / `--revoke <name>` / `--share <ref>` / `--harness <name>` plus the LLM flags forwarded into the request (an omitted hold leaves the child's unattended default;
-  `--share` hands the child read access to an artifact ref — see "Sharing artifacts between peers";
-  grant/revoke and the LLM flags shape the child exactly as they shape a managed run — see the shared launch flags above — except that a summon may only widen the child's credential scope with what the summoning session itself holds,
-  whether it names the credential outright or reaches it through `--harness`/the LLM flags).
+  `--start` / `--boxed` / `--unboxed` select placement.
+  The forwarded fields are `--timeout <s>` / `--into <ref>` / `--hold <level>` / `--grant <name>` / `--revoke <name>` / `--share <ref>` / `--harness <name>` plus the LLM flags;
+  an omitted hold leaves the child's unattended default.
+  `--share` hands the child read access to an artifact ref — see "Sharing artifacts between peers".
+  Grant/revoke and the LLM flags shape the child exactly as they shape a managed run — see the shared launch flags above — except that a summon may only widen the child's credential scope with what the summoning session itself holds,
+  whether it names the credential outright or reaches it through `--harness`/the LLM flags.
   `--detach` waits for the first correlated message:
   host `accepted` prints the quest id, while a denial or pre-acceptance launch failure exits with its reason and prints no id.
   Any summon is reclaimable by that quest id, detached or interrupted.
@@ -768,7 +788,7 @@ underneath it are two client surfaces over the same request:
   `rewind show <trail-id>` peeks mid-run.
   Contract details in `bro/summon.py`.
 - the bro service tools (`bro::summon` / `bro::summon_check` / `bro::summon_list`), for bro LLM processes and `--raw` sessions
-  — `summon` blocks for the answer (`detach: true` returns the accepted quest id instead) and takes the CLI's request fields as parameters (`timeout` / `into` / `hold` / `grant` / `revoke` / `share` / `llm` / `harness`);
+  — `summon` blocks for the answer (`detach: true` returns the accepted quest id instead) and takes the CLI's request fields as parameters (`party` / `isolation` / `timeout` / `into` / `hold` / `grant` / `revoke` / `share` / `llm` / `harness`);
   `summon_check` returns pending or completed from the same repeatable query and loops short long-polls with `wait: true`;
   `summon_list` mirrors the paginated CLI listing wherever the broker channel mounts the summon tools.
   A blocking tool call owns its channel client so cancellation aborts the current short wait, while the host journal retains the result;
@@ -784,8 +804,9 @@ The recorder stamps the child trail's `summoned_by` from the summoner attributio
 
 ### Manual summon — an interactive child the user launches
 
-A `manual: true` summon (`summon --manual`, or the `summon` tool's `manual` parameter, which never blocks for the answer) inverts the launch:
-the host spawns nothing and instead registers an *expected external peer*
+A `manual: true` summon (`summon --manual`, or the `summon` tool's `manual` parameter, which never blocks for the answer) inverts the launch.
+The requester needs either party-start permit, but the request refuses `party` and `isolation` because the user's launch owns the actual placement.
+The host spawns nothing and instead registers an *expected external peer*
 — a provisioned broker channel awaiting a child someone else starts
 — and the request id doubles as the launch token.
 The registration is acknowledged with an `accepted` mark once the token is claimable, and the manual client waits for it, so a denial fails at the summon itself
@@ -798,8 +819,9 @@ Its launcher puts the summoner's provisioned channel in `BROKER_UPSTREAM`, and t
 Its own nested summons therefore route through the summoner's control with per-peer authorization.
 The request fixes what the summoner authorized
 — the target bro, the prompt (delivered as the session's first message), the root session's repository attachment, the base (the request's `into` ref, or the summoner's workspace HEAD read at launch, like a spawned child's at its spawn),
-the child's resolved `may_summon`, and the request's credential grant/revoke seeds (the launch's own `--grant`/`--revoke` layer on top; `@bro` overrides are refused, since the control enforces the list it resolved at request time)
-— while launch-owned request fields (`timeout`/`hold`/`llm`/`harness`) are refused at the request:
+the child's resolved `may_summon` and permits, and the request's credential grant/revoke seeds.
+The launch's own credential `--grant`/`--revoke` layer may adjust its material, but `@bro` and `:permit` overrides are refused because the control enforces the sets it resolved at request time.
+Launch-owned request fields (`timeout`/`hold`/`llm`/`harness`/`party`/`isolation`) are refused at the request:
 the human at the launch owns the session's shape, and there is no host-killable child for a timeout to bound, so a manual summon carries no timer at all.
 
 The bridge between the two halves is the pending record (`ride/ride/pending_summon.py`),
@@ -823,14 +845,16 @@ The summoner's side is the ordinary detach flow:
 the token works with `summon check` / `summon list` / `summon watch`, showing `pending` until the user launches.
 
 Host side, `PeerFacts` (`ride/ride/peer_facts.py`) holds one row keyed by the quest a peer answers:
-workspace, bro, effective allow-list, credential-scope inputs (`grant`, `revoke`, `llm`, `harness`), and whether the child is manual.
+workspace, bro, effective allow-list and permits, credential-scope inputs (`grant`, `revoke`, `llm`, `harness`), and whether the child is manual.
 The journal's host-anchored quest seeds the root row;
 an authorized summon adds its child row before spawning, with the channel-named workspace filled at spawn or the claimed workspace filled for a manual child.
 Every requester resolves through one join
 — peer to answered quest through the dispatcher's worker binding, then quest to facts row
 — and depth is the journal ancestry length.
 `SummonControl` (`ride/ride/summon_control.py`) validates and authorizes each request against that row's allow-list.
-A child's list is its bro's static `may_summon` seeds under its request's `@bro` grant/revoke, resolved on the broker loop so a malformed or no-op override is denied outright.
+A child's allow-list and permit set are its static seeds under the project and host configuration layers, then its request's matching grant/revoke values.
+The configured layers are idempotent;
+a malformed or no-op request override is denied outright.
 Summons chain transitively wherever the seeds chain, and widening is always explicit and bounded by the summoner:
 its own list never passes through
 — only what its request names
@@ -860,8 +884,8 @@ Live readers never read that audit back:
 check, list, watch, and the session-local statusLine projector query the caller-scoped in-memory journal over their own broker channel, so the same surfaces work at any summon depth.
 The scope begins with quests the caller requested and includes their descendants;
 it excludes the parent-owned quest that the caller's own worker answers.
-Each authorized launch also carries the list it will be judged against into the run itself (`RIDE_MAY_SUMMON`:
-the session root's at launch, a summoned child's own resolved list at its spawn), so a peer reads what it may summon off its banner instead of discovering it by denial;
+Each authorized launch also carries the allow-list and permits it will be judged against into the run itself (`RIDE_MAY_SUMMON` and `RIDE_PERMITS`:
+the session root's at launch, a summoned child's own resolved sets at its spawn), so a peer reads its authority off the banner instead of discovering it by denial;
 enforcement stays entirely host-side.
 Root exit kills in-flight children with a loud log naming what was killed;
 a result lost that way stays recoverable from the child's trail.
@@ -1113,6 +1137,8 @@ Wrappers and session daemons rely on a small set of env vars:
   read by `ride banner` to render the fact, by `bro.prompts.session_fragment` to give a run that may summon the summoner's watch, and by the tool fold to keep that watch's command reachable through `Monitor` for such a run.
   Read-only in the session:
   the launcher authorizes against its own copy, so only a relaunch (or the summon that spawns a child) changes what it may summon.
+- `RIDE_PERMITS` — the run's own effective party permits under the same encoding, publication, and host-side enforcement rule.
+  `ride banner` renders each with its `:` grammar marker.
 - `RIDE_IN_CONTAINER=1` — set by the Dockerfile, marking a process running in an image this runtime built.
   `bro/workspace/paths.py:trails_dir` uses it only to resolve the image's fixed trails mount.
   Session placement comes from `RIDE_ISOLATION` instead.

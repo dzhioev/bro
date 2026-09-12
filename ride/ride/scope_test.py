@@ -1,7 +1,7 @@
 import dataclasses
 import json
 import subprocess
-from typing import ClassVar
+from typing import Any, ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -105,6 +105,16 @@ class TestScopedSecrets:
     scoped = ride.scope.scoped_secrets('scope-search', BRO_RUN_RECIPE)
     assert 'openai' in scoped.optional
 
+  def test_project_scope_layer_changes_the_required_credential_tier(self, tmp_path):
+    (tmp_path / 'pyproject.toml').write_text(
+      '[tool.bro]\ndefault = "scope-search"\ngrant = ["github"]\nrevoke = ["brave"]\n'
+    )
+
+    scoped = ride.scope.scoped_secrets('scope-search', CLAUDE_RECIPE, attachment=str(tmp_path))
+
+    assert 'github' in scoped.required
+    assert 'brave' not in scoped.required | scoped.optional
+
   def test_computing_a_scope_binds_the_project_and_bro_instances(self, tmp_path, monkeypatch):
     config = tmp_path / 'bro.json'
     config.write_text(
@@ -130,7 +140,9 @@ class TestScopedSecrets:
     config = tmp_path / 'bro.json'
     config.write_text(json.dumps({'projects': {url: {'creds': ['brog+github']}}}))
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-    scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, attachment=url)
+    with patch('ride.scope.open_repository') as opened:
+      opened.return_value.read_file.return_value = None
+      scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, attachment=url)
     assert scoped.selection == {'brog': 'github'}
 
   def test_a_checkout_binds_the_entry_keyed_by_its_origin_url(self, tmp_path, monkeypatch):
@@ -308,6 +320,18 @@ class TestHostConfigBroLayer:
       self._scope(tmp_path)
 
 
+class TestUnifiedScopeGrammar:
+  def test_split_has_credentials_bros_and_permits(self):
+    assert ride.scope.split_scope_overrides(
+      ['github+work', '@reviewer', ':party.start.unboxed']
+    ) == (['github+work'], ['reviewer'], ['party.start.unboxed'])
+
+  @pytest.mark.parametrize('value', [':party', ':party.start', ':other'])
+  def test_permits_are_leaf_only(self, value):
+    with pytest.raises(ValueError, match='expected one of'):
+      ride.scope.split_scope_overrides([value])
+
+
 class TestScopeOverrides:
   def _host_config(self, tmp_path, monkeypatch, projects):
     config = tmp_path / 'bro.json'
@@ -333,6 +357,25 @@ class TestScopeOverrides:
     assert scoped.selection == {'brog': 'github', 'github': 'reviewer'}
     assert 'brog' in scoped.required
 
+  def test_more_specific_creds_selection_outweighs_an_earlier_instance_grant(
+    self, tmp_path, monkeypatch
+  ):
+    config = tmp_path / 'bro.json'
+    config.write_text(
+      json.dumps(
+        {
+          'defaults': {'grant': ['github+default']},
+          'projects': {str(tmp_path): {'creds': ['github+project']}},
+        }
+      )
+    )
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+
+    scoped = ride.scope.scoped_secrets('scope-search', CLAUDE_RECIPE, attachment=str(tmp_path))
+
+    assert scoped.selection['github'] == 'project'
+    assert 'github' in scoped.required
+
   def test_a_child_target_uses_a_different_instance_than_its_parent(self, tmp_path, monkeypatch):
     self._host_config(
       tmp_path,
@@ -355,12 +398,23 @@ class TestScopeOverrides:
     self, tmp_path, monkeypatch
   ):
     self._host_config(tmp_path, monkeypatch, {str(tmp_path / 'other'): {'creds': ['brog+github']}})
-    for attachment in (None, str(tmp_path), 'https://github.com/foo/api.git'):
+    for attachment in (None, str(tmp_path)):
       scoped = ride.scope.scoped_secrets(
         'bro-dev', CLAUDE_RECIPE, attachment=attachment, grant=[], revoke=[]
       )
       assert 'brog' in scoped.required
       assert scoped.selection == {}
+    with patch('ride.scope.open_repository') as opened:
+      opened.return_value.read_file.return_value = None
+      scoped = ride.scope.scoped_secrets(
+        'bro-dev',
+        CLAUDE_RECIPE,
+        attachment='https://github.com/foo/api.git',
+        grant=[],
+        revoke=[],
+      )
+    assert 'brog' in scoped.required
+    assert scoped.selection == {}
 
   def test_a_granted_instance_selects_it_for_the_child(self, tmp_path, monkeypatch):
     self._host_config(tmp_path, monkeypatch, {str(tmp_path / 'other'): {'creds': ['brog+github']}})
@@ -438,7 +492,7 @@ class TestPreflightScopedLaunch:
   # summon_allow_list is patched to keep the bro-registry import out; the
   # override semantics of each step have their own tests
   def _preflight(self, scoped, **overrides):
-    kwargs = {'grant': [], 'revoke': []}
+    kwargs: dict[str, Any] = {'grant': [], 'revoke': []}
     kwargs.update(overrides)
     return ride.scope.preflight_scoped_launch(scoped, 'bro-dev', **kwargs)
 
@@ -452,15 +506,19 @@ class TestPreflightScopedLaunch:
         return_value=({'creds/x.cred': b'v'}, frozenset({'x'})),
       ) as build,
     ):
-      may_summon, store = self._preflight(
+      may_summon, permits, store = self._preflight(
         ride.scope.ScopedSecrets({'github', 'gmail_creds'}, {'openai'}),
         grant=['gmail_creds', '@dev'],
         revoke=['@bro'],
       )
     assert may_summon == {'dev'}
+    assert permits == {'party.start.boxed'}
     assert store == {'creds/x.cred': b'v'}
     assert store.kinds == frozenset({'x'})
-    assert allow_list.call_args == (('bro-dev',), {'grant': ['dev'], 'revoke': ['bro']})
+    assert allow_list.call_args == (
+      ('bro-dev',),
+      {'layers': (), 'grant': ['dev'], 'revoke': ['bro']},
+    )
     assert build.call_args.args[1] == {'github', 'gmail_creds'}
     assert build.call_args.kwargs == {'optional': {'openai'}}
 
@@ -491,6 +549,46 @@ class TestPreflightScopedLaunch:
     ):
       with pytest.raises(ride.scope.LaunchScopeError, match="secret 'github' not found"):
         self._preflight(ride.scope.ScopedSecrets({'github'}, set()))
+
+
+class TestPermitLayers:
+  def test_project_host_and_launch_layers_apply_in_order(self, tmp_path, monkeypatch):
+    (tmp_path / 'pyproject.toml').write_text(
+      '[tool.bro]\ndefault = "bro-dev"\ngrant = [":party.join"]\nrevoke = [":party.start.boxed"]\n'
+    )
+    config = tmp_path / 'bro.json'
+    config.write_text(
+      json.dumps(
+        {
+          'defaults': {'grant': [':party.start.boxed']},
+          'projects': {str(tmp_path): {'bros': {'bro-dev': {'grant': [':party.start.unboxed']}}}},
+        }
+      )
+    )
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+
+    with (
+      patch('ride.summon_control.summon_allow_list', return_value=set()),
+      patch('ride.scope.credentials.build_scoped_store', return_value=({}, frozenset())),
+    ):
+      _, permits, _ = ride.scope.preflight_scoped_launch(
+        ride.scope.ScopedSecrets(set(), set()),
+        'bro-dev',
+        attachment=str(tmp_path),
+        grant=[],
+        revoke=[':party.start.boxed'],
+      )
+
+    assert permits == {'party.join', 'party.start.unboxed'}
+
+  def test_launch_permit_overrides_are_strict(self):
+    with pytest.raises(ride.scope.LaunchScopeError, match='already in the permit set'):
+      ride.scope.preflight_scoped_launch(
+        ride.scope.ScopedSecrets(set(), set()),
+        'bro-dev',
+        grant=[':party.start.boxed'],
+        revoke=[],
+      )
 
 
 class TestLaunchViewStore:

@@ -1,8 +1,6 @@
 """per-surface launch scoping of a bro run: which credentials each launch
-surface hydrates and which bros the session may summon, computed from the bro's
-own declarations (manifest, optional tier, `may_summon`) evaluated under the
-host's credential selection for the operated project and the launch's own
-overrides.
+surface hydrates, which bros the session may summon, and which party actions it
+may request, computed from static seeds under project, host, and launch layers.
 """
 
 import contextlib
@@ -11,7 +9,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 from bro.base import credentials, host_config
-from ride.repository import attachment_identities
+from bro.base.scope import (
+  DEFAULT_PERMITS,
+  ScopeLayer,
+  apply_idempotent,
+  split_scope_overrides,
+)
+from ride.repository import Repository, attachment_identities, open_repository
 from ride.workspace.store import (
   ScopedSecrets,
   credential_revoke_kind,
@@ -74,6 +78,46 @@ def bind_launch_credentials(
   return host_config.launch_selection(identities, bro_name)
 
 
+def configured_scope_layers(
+  attachment: Optional[str],
+  bro_name: str,
+  binding: Optional[host_config.CredentialSelection] = None,
+  attachment_repository: Optional[Repository] = None,
+) -> tuple[ScopeLayer, ...]:
+  """The project's layer followed by the matching host-config layers."""
+  project_layers: tuple[ScopeLayer, ...] = ()
+  if attachment is not None:
+    repository = attachment_repository or open_repository(attachment)
+    if repository.read_file('pyproject.toml') is not None:
+      config = repository.project_config()
+      project_layers = (ScopeLayer(config.grant, config.revoke),)
+  selected = binding if binding is not None else bind_launch_credentials(attachment, bro_name)
+  return (*project_layers, *selected.scope_layers)
+
+
+def _namespace_values(layer: ScopeLayer, index: int) -> tuple[list[str], list[str]]:
+  grant = split_scope_overrides(layer.grant)[index]
+  revoke = split_scope_overrides(layer.revoke)[index]
+  return grant, revoke
+
+
+def effective_permits(
+  layers: Sequence[ScopeLayer], *, grant: Sequence[str], revoke: Sequence[str], strict: bool
+) -> set[str]:
+  """Apply configured and request permit layers to the framework seed."""
+  permits = set(DEFAULT_PERMITS)
+  for layer in layers:
+    layer_grant, layer_revoke = _namespace_values(layer, 2)
+    permits = apply_idempotent(permits, grant=layer_grant, revoke=layer_revoke)
+  grant_permits = split_scope_overrides(grant)[2]
+  revoke_permits = split_scope_overrides(revoke)[2]
+  if strict:
+    return credentials.apply_grant_revoke(
+      permits, grant=grant_permits, revoke=revoke_permits, subject='permit set'
+    )
+  return apply_idempotent(permits, grant=grant_permits, revoke=revoke_permits)
+
+
 def selection_store(
   selection: Mapping[str, str], *, revoked: Collection[str] = ()
 ) -> credentials.Store:
@@ -93,6 +137,7 @@ def scoped_secrets(
   recipe: ScopeRecipe,
   *,
   attachment: Optional[str] = None,
+  attachment_repository: Optional[Repository] = None,
   llm_spec: Optional['LLMSpec'] = None,
   grant: Sequence[str] = (),
   revoke: Sequence[str] = (),
@@ -109,8 +154,8 @@ def scoped_secrets(
   against another provider needs that provider's key, not the declared one.
 
   `grant` / `revoke` are the launch's unified override values
-  (`split_scope_overrides`): the credential halves shape the scope here, the
-  `@bro` halves shape the summon allow-list elsewhere. The bro's declarations
+  (`split_scope_overrides`): credential values shape the scope here, while
+  `@bro` and `:permit` values shape the other authority sets. The bro's declarations
   are evaluated under the selection the launch ends with — the host's defaults,
   the operated project's and this bro's layers, and the request's instance
   grants. The project's per-bro `grant` kinds join the required tier under that
@@ -120,15 +165,27 @@ def scoped_secrets(
   """
   from bro.registry import create_bro
 
-  grant_credentials, _ = split_scope_overrides(list(grant))
-  revoke_credentials, _ = split_scope_overrides(list(revoke))
+  grant_credentials, _, _ = split_scope_overrides(grant)
+  revoke_credentials, _, _ = split_scope_overrides(revoke)
   with launch_scope_errors():
     binding = bind_launch_credentials(attachment, bro_name)
+    configured_layers = configured_scope_layers(
+      attachment,
+      bro_name,
+      binding,
+      attachment_repository,
+    )
   selection = dict(binding.instances)
   for kind, instance in grant_instances(grant_credentials).items():
     if instance is not None:
       selection[kind] = instance
-  revoked = {credential_revoke_kind(name) for name in revoke_credentials}
+  revoked: set[str] = set()
+  for layer in configured_layers:
+    layer_grant, layer_revoke = _namespace_values(layer, 0)
+    revoked.difference_update(credentials.parse_name(name)[0] for name in layer_grant)
+    revoked.update(credential_revoke_kind(name) for name in layer_revoke)
+  revoked.difference_update(credentials.parse_name(name)[0] for name in grant_credentials)
+  revoked.update(credential_revoke_kind(name) for name in revoke_credentials)
   required: set[str] = set()
   optional = set(recipe.optional_baseline)
   with credentials.as_default_store(selection_store(selection, revoked=revoked)):
@@ -142,13 +199,28 @@ def scoped_secrets(
     if recipe.llm_key:
       required.update((llm_spec if llm_spec is not None else bro.llm_spec).needed_secrets())
     optional.update(bro.optional_secrets(harness=recipe.harness))
-  required.update(binding.grants)
-  optional.difference_update(binding.grants)
+  configured_scope = ScopedSecrets(
+    required=required,
+    optional=optional,
+    selection=dict(binding.instances),
+  )
+  for layer in configured_layers:
+    layer_grant, layer_revoke = _namespace_values(layer, 0)
+    configured_scope = finalize_scoped_secrets(
+      configured_scope,
+      grant=[credentials.parse_name(name)[0] for name in layer_grant],
+      revoke=layer_revoke,
+      strict=False,
+    )
   if check_selection:
     # the recording kind counts as read under `--no-trails`, which empties the recipe's baseline
-    _require_bro_layer_selections_read(binding, bro_name, required | optional | _TRAILS_BASELINE)
+    _require_bro_layer_selections_read(
+      binding,
+      bro_name,
+      configured_scope.required | configured_scope.optional | _TRAILS_BASELINE,
+    )
   return finalize_scoped_secrets(
-    ScopedSecrets(required=required, optional=optional, selection=dict(binding.instances)),
+    configured_scope,
     grant=grant_credentials,
     revoke=revoke_credentials,
   )
@@ -170,26 +242,6 @@ def _require_bro_layer_selections_read(
     )
 
 
-# the unified --grant/--revoke value syntax: a leading `@` marks a bro summon
-# target (`@reviewer`), any other value is a credential name.
-_BRO_MARK = '@'
-
-
-def split_scope_overrides(values: list[str]) -> tuple[list[str], list[str]]:
-  """split unified grant/revoke values into (credential names, bro names)."""
-  credential_names: list[str] = []
-  bro_names: list[str] = []
-  for value in values:
-    if value.startswith(_BRO_MARK):
-      name = value.removeprefix(_BRO_MARK)
-      if name == '':
-        raise ValueError(f'malformed grant/revoke {value!r}: expected {_BRO_MARK}<bro-name>')
-      bro_names.append(name)
-    else:
-      credential_names.append(value)
-  return credential_names, bro_names
-
-
 def credential_store(scoped: ScopedSecrets) -> credentials.Store:
   """The ambient store under a launch's explicit selection."""
   return selection_store(scoped.selection)
@@ -207,9 +259,11 @@ def preflight_scoped_launch(
   scoped: ScopedSecrets,
   bro_name: str,
   *,
+  attachment: Optional[str] = None,
+  attachment_repository: Optional[Repository] = None,
   grant: list[str],
   revoke: list[str],
-) -> tuple[set[str], HydratedStore]:
+) -> tuple[set[str], set[str], HydratedStore]:
   """the scope preflight every launch surface runs before creating anything
   (worktree, container, workspace dir): compute the summon allow-list of a launch
   running as `bro_name` (`summon_control.summon_allow_list`) from the `@bro`
@@ -218,7 +272,7 @@ def preflight_scoped_launch(
   (`credentials.build_scoped_store`) — any failure raised as a single
   `LaunchScopeError` for the caller to render on its own error surface.
 
-  returns (allow-list, store). the container launch path rebuilds the store at
+  returns (allow-list, permits, store). the container launch path rebuilds the store at
   create, so container callers drop it — the build is the preflight itself; a
   unboxed session materializes the returned one.
   """
@@ -227,13 +281,27 @@ def preflight_scoped_launch(
   from ride.summon_control import summon_allow_list
 
   with launch_scope_errors():
-    _, grant_bros = split_scope_overrides(grant)
-    _, revoke_bros = split_scope_overrides(revoke)
-    may_summon = summon_allow_list(bro_name, grant=grant_bros, revoke=revoke_bros)
+    configured_layers = configured_scope_layers(
+      attachment,
+      bro_name,
+      attachment_repository=attachment_repository,
+    )
+    may_summon = summon_allow_list(
+      bro_name,
+      layers=configured_layers,
+      grant=split_scope_overrides(grant)[1],
+      revoke=split_scope_overrides(revoke)[1],
+    )
+    permits = effective_permits(
+      configured_layers,
+      grant=grant,
+      revoke=revoke,
+      strict=True,
+    )
     files, hydrated_kinds = credentials.build_scoped_store(
       credential_store(scoped), scoped.required, optional=scoped.optional
     )
-  return may_summon, HydratedStore(files, hydrated_kinds)
+  return may_summon, permits, HydratedStore(files, hydrated_kinds)
 
 
 def launch_view_store(scoped: ScopedSecrets) -> credentials.Store:
