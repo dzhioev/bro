@@ -747,7 +747,7 @@ workspace removal (`--drop`, `ride clean`) deletes it with the workspace.
 ### Summoning another bro
 
 A session can summon another bro over its channel:
-the target runs as a one-shot, non-TTY docker child (unless the summon is *manual* — the user launches an interactive child themselves;
+the target runs as a one-shot, non-TTY docker child (unless the summon is *manual* — the user launches the child themselves, either interactively or one-shot;
 see "Manual summon" below) with its own scoped credential set (nothing inherited from the summoner, plus whatever the request's own `grant`/`revoke` names),
 under the harness the request names, or the launch's `[tool.bro] summon-harness` when it names none
 — both run `ride solo … --in-place`, `bro` spawning the target's own LLM process there and `claude` a one-shot managed Claude Code session of the target persona (full mode;
@@ -796,7 +796,7 @@ the runner captures the print-mode reply, announces the trail mark once the sess
 — a non-zero exit emits no result and surfaces as the synthesized `result{failed, reason: exit}` (the echoed reply lands in its output tail), while an unattended abort is the `raise` service tool's own `result{failed, reason: raised}`.
 The recorder stamps the child trail's `summoned_by` from the summoner attribution, and the child's recorded resume spec is a claude spec, so a kept workspace resumes into the claude conversation.
 
-### Manual summon — an interactive child the user launches
+### Manual summon — a child the user launches
 
 A `manual: true` summon (`summon --manual`, or the `summon` tool's `manual` parameter, which never blocks for the answer) inverts the launch:
 the host spawns nothing and instead registers an *expected external peer*
@@ -804,11 +804,14 @@ the host spawns nothing and instead registers an *expected external peer*
 — and the request id doubles as the launch token.
 The registration is acknowledged with an `accepted` mark once the token is claimable, and the manual client waits for it, so a denial fails at the summon itself
 — a token is only ever handed out for a summon the host is expecting.
-The summoner relays the token to the user, who launches the session at their own pace with `ride along --summoned <token> <target>`:
-an otherwise normal interactive session
+The summoner relays `ride along --summoned <token> <target>` as the default launch command for an interactive session.
+For a request needing no conversation, the user can instead launch `ride solo --summoned <token> <target>` and leave the one-shot run unattended.
+Both are otherwise normal launches
 — container or `--host`, either harness, the user's own `--llm`/`--hold`/`--workspace`
-— except it starts no broker of its own.
-Its launcher puts the summoner's provisioned channel in `BROKER_UPSTREAM`, and the session broxy publishes the local `BROKER_CHANNEL` its processes use to attach as a regular summon peer.
+— except they start no broker of their own.
+The omitted hold follows the selected mode's default:
+`along` is attended (guided on the host), while `solo` is unattended.
+The launcher puts the summoner's provisioned channel in `BROKER_UPSTREAM`, and the session broxy publishes the local `BROKER_CHANNEL` its processes use to attach as a regular summon peer.
 Its own nested summons therefore route through the summoner's control with per-peer authorization.
 The request fixes what the summoner authorized
 — the target bro, the prompt (delivered as the session's first message), the root session's repository attachment, the base (the request's `into` ref, or the summoner's workspace HEAD read at launch, like a spawned child's at its spawn),
@@ -827,9 +830,11 @@ The claim records the user-chosen workspace name beside it (`claimed/<token>.jso
 and its credential grants are always denied as unattributable — its actual scope was computed by its own launch).
 The child announces the trail mark (`{trail_id}`)
 — the Claude in-place runner from its trail watch, the native chat surface on its first turn.
-The answer comes back through the `answer` service tool, mounted in every summoned session with a channel:
-the agent calls it once, when the user confirms the work is done, and the session ends with the quest's ok result delivered to the waiting summoner
-— a session the user quits without it produces no result, and the channel's EOF surfaces to the summoner as the synthesized `result{failed, reason: disconnected}` (channel EOF is an expected peer's death signal:
+The `answer` service tool is mounted in every summoned session with a channel.
+An interactive child calls it once when the user confirms the work is done, and the session ends with the quest's ok result delivered to the waiting summoner.
+A one-shot child follows the same lifecycle as a spawned child:
+a clean exit delivers its printed reply, while `answer` remains available when the run needs to end by delivering explicitly.
+An interactive session the user quits without answering produces no result, and the channel's EOF surfaces to the summoner as the synthesized `result{failed, reason: disconnected}` (channel EOF is an expected peer's death signal:
 there is no process for the host to reap, and the session's broxy holds one upstream connection per run).
 Root exit *detaches* an in-flight manual child rather than killing it
 — the user's session lives on, un-summoned, its channel gone.

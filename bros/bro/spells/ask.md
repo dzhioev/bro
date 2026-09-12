@@ -4,7 +4,7 @@ description:
 
 This spell should be used when the user asks to relay a question or job to another bro
 — "[[ask researcher to compare the storage options]]", "ask the reviewer whether the change is safe", "have deployer roll out the API", "summon developer"
-— including asking for an interactive child the user will drive themselves ("summon a dev session for me", a manual summon).
+— including asking for a child the user will launch themselves ("summon a dev session for me", a manual summon).
 Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials),
 picks whichever summon client the session has, decides foreground vs background,
 and relays the answer with the failure modes handled.
@@ -12,7 +12,7 @@ A summon succeeds only when the target is in the summoner's allow-list
 — the session reads its own off the banner, fixed at launch
 — so a denial stays a normal outcome the spell relays.
 
-version: 1.14.0
+version: 1.15.0
 ---
 
 # Ask
@@ -147,9 +147,10 @@ and you check on it with `summon_check` between turns
 — non-destructive, so polling is safe
 — or use `wait: true` to long-poll until it reports completed.
 
-## Manual summon — an interactive child the user drives
+## Manual summon — a child the user launches
 
-When the request needs the user *in* the child session
+When the host cannot spawn the requested child,
+or the request needs the user *in* the child session
 — "summon a dev session for me to drive",
 "open an interactive reviewer I can talk to",
 or a job that plainly needs human judgment mid-run
@@ -175,16 +176,17 @@ and the user launches the session themselves.
   — returns the token and the launch command once the host accepts;
   a denial fails the call immediately.
 
-Relay the token to the user as the ready-to-paste command
+Relay the token to the user as the ready-to-paste interactive command
 — `ride along --summoned <token> <target>`
-— and note they may add their own launch flags (`--host`, `--llm`, `--hold`, `--workspace`, a claude/bro harness).
+— and note they may instead run `ride solo --summoned <token> <target>` for a one-shot request with no conversation.
+They may add their own launch flags (`--host`, `--llm`, `--hold`, `--workspace`, a claude/bro harness).
 The prompt you passed becomes the session's first message;
 the child bases on this workspace's HEAD *at the moment they launch* (or the `--into` ref you gave).
 
 Then wait like any detached summon:
 `summon check <token>` polls (pending until the user launches and the child announces itself),
 `summon watch` streams the start/end events where mounted,
-and the answer arrives when the child session delivers it via its `answer` tool.
+and the answer arrives through the child's `answer` tool or as the printed reply from a clean one-shot run.
 There is no timer on a manual summon
 — pace the polling to human time, and keep working meanwhile.
 A child session the user quits without delivering surfaces as a failure;

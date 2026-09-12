@@ -103,12 +103,15 @@ def run_summoned_in_container(
   """run a manual summon child's container launch: no broker of its own — its
   `BROKER_UPSTREAM` points at the summoner's provisioned channel for the entrypoint broxy
   — prepared first, the token claimed only once nothing fallible is
-  left before the attach, then attached interactively."""
+  left before the attach, then attached according to the launch's TTY mode."""
   log_scoped_secrets(launch.name, launch.secrets, launch.optional_secrets)
   workspace.clear_session_end()
   container_id = prepare_container(launch)
   claim()
-  code = attach_interactive(container_id)
+  if launch.tty:
+    code = attach_interactive(container_id)
+  else:
+    code = subprocess.run(['docker', 'start', '-a', container_id]).returncode
   workspace.record_session_end(code)
   return code
 

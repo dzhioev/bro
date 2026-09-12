@@ -48,7 +48,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   the manual variant registers as an expected external Worker with its pending record.
   The peer wire and self-contained CLI are the framework's `bro/summon.py`.
 - `ride/pending_summon.py` — pending manual summons:
-  the protocol-stamped record a launch token resolves to, written by the control and one-shot-claimed by the `--summoned` launch, whose claim records the child's workspace name — the attribution source for the manual peer.
+  the protocol-stamped record a launch token resolves to, written by the control and one-shot-claimed by an interactive or solo `--summoned` launch, whose claim records the child's workspace name — the attribution source for the manual peer.
 - `ride/trails.py` — local-trails mounts for launch descriptions whose computed scope records locally.
 - `ride/identity.py` — managed-session git identities:
   the bro a session commits as, and the launching human it credits, read from the attachment's own git configuration.
@@ -78,7 +78,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   — bro workspaces run `bro run|chat`.
   A managed native container or host worktree is always launched by `ride`;
   a summon child is spawned by `summon`
-  — except a manual one, which the user launches with `ride along --summoned <token>` against the summoner's provisioned channel.
+  — except a manual one, which the user launches with `ride along --summoned <token>` or the one-shot `ride solo --summoned <token>` against the summoner's provisioned channel.
 - Every harness keeps its session state among the workspace's own records, so reclaiming a workspace is `Workspace.remove()` for all of them and no harness supplies a teardown of its own.
 - Every outer root freezes the invoking installation into one locked runtime bundle for its full lifetime.
   Host workspaces run its absolute snapshot;

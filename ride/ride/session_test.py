@@ -1190,6 +1190,39 @@ class TestHostSession:
     with pytest.raises(pending_summon.UnknownToken):
       pending_summon.peek(record.token)
 
+  def test_summoned_solo_host_run_uses_the_one_shot_inner_mode(self, monkeypatch, tmp_path):
+    workspace, _, worktree = self._prepare_launch(monkeypatch, tmp_path)
+    record = _pending_record(tmp_path)
+    runs: list = []
+
+    def fake_run(argv, **kwargs):
+      runs.append((argv, kwargs))
+      from types import SimpleNamespace
+
+      return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(ride_session.subprocess, 'run', fake_run)
+    spec = _spec(host=True, solo=True, prompt='finish this')
+    assert (
+      ride_session._launch_session(
+        spec,
+        workspace,
+        None,
+        _launch_scope(),
+        human_env={},
+        container=False,
+        runtime_bundle=_runtime_bundle(workspace.repo or workspace.path),
+        container_runtime=ContainerRuntimeResolver.fixed(
+          ContainerRuntime('runtime-image', 'bundle-hash')
+        ),
+        summoned=record,
+      )
+      == 0
+    )
+    argv, kwargs = runs[0]
+    assert argv[1] == 'solo'
+    assert kwargs['cwd'] == str(worktree)
+
   def test_summoned_host_run_fails_cleanly_on_a_spent_token(self, monkeypatch, tmp_path, caplog):
     workspace, _, _ = self._prepare_launch(monkeypatch, tmp_path)
     record = _pending_record(tmp_path)

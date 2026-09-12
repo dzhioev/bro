@@ -99,6 +99,7 @@ def test_help_names_check_list_and_no_cursor_option(capsys):
   output = capsys.readouterr().out
   assert 'summon check' in output
   assert 'summon list' in output
+  assert 'ride solo --summoned <token>' in ' '.join(output.split())
 
 
 def test_bare_summon_forwards_with_its_own_shell_command(monkeypatch):

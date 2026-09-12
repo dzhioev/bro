@@ -66,7 +66,8 @@ PENDING_EXIT_CODE = 3
 HOLD_HELP = "the child's user-involvement level; omitted lets the child use its unattended default"
 MANUAL_HELP = (
   'register a manual summon instead of spawning: the request id becomes the token '
-  'a user-launched `ride along --summoned <token>` session answers'
+  'a user-launched `ride along --summoned <token>` session answers; '
+  '`ride solo --summoned <token>` runs the request one-shot'
 )
 HARNESS_HELP = (
   "the harness the child runs under: 'bro' (the target's own LLM process) or 'claude' "

@@ -89,19 +89,16 @@ def _configure_mode_parser(parser: Parser, *, solo: bool) -> None:
       action='store_true',
       help='remove an automatically named workspace after a clean exit',
     )
-    parser.add_argument(
-      '--summoned',
-      default=None,
-      metavar='TOKEN',
-      help='attach this session as the manual summon child TOKEN names: the pending '
-      'record fixes the bro, the initial prompt, and the base, and the answer goes '
-      'back to the waiting summoner',
-    )
+  parser.add_argument(
+    '--summoned',
+    default=None,
+    metavar='TOKEN',
+    help='attach this session as the manual summon child TOKEN names: the pending '
+    'record fixes the bro, the initial prompt, and the base, and the answer goes '
+    'back to the waiting summoner; use along by default or solo for a one-shot run',
+  )
   parser.add_argument('bro', help='bro personality to run the harness as')
-  if solo:
-    parser.add_argument('prompt', help='prompt to answer')
-  else:
-    parser.add_argument('prompt', nargs='?', default=None, help='initial prompt')
+  parser.add_argument('prompt', nargs='?', default=None, help='initial prompt')
 
 
 def build_parser() -> Parser:
@@ -252,6 +249,8 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     prompt = summoned.prompt
     args['grant'] = [*summoned.grant, *args['grant']]
     args['revoke'] = [*summoned.revoke, *args['revoke']]
+  elif solo and prompt is None:
+    parser.error('ride solo requires a prompt unless --summoned supplies it')
   harness_options = pop_harness_options(parser, args, harness_name, solo=solo, host=args['host'])
   try:
     # not every harness's llm resolution consults the registry, so the launch

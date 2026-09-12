@@ -4,8 +4,10 @@ A manual summon leaves the host with an expectation (a provisioned broker
 channel awaiting an external child) and the user with a token (the request id).
 This module is the bridge between them: `SummonControl` writes one record per
 registered manual summon under `<runtime-root>/summon/pending/<token>.json`,
-and the user's `ride along --summoned <token>` launch reads it back — the
-channel to attach to, the broker protocol revision, the authorized child shape (target, allow-list, scope overrides), the prompt, and the base-ref inheritance source.
+and the user's `ride along --summoned <token>` or `ride solo --summoned <token>`
+launch reads it back — the channel to attach to, the broker protocol revision,
+the authorized child shape (target, allow-list, scope overrides), the prompt,
+and the base-ref inheritance source.
 
 `claim` is one-shot: exactly one launch may attach to the channel (a second
 connection would supersede the first on it), so the unlink decides a
