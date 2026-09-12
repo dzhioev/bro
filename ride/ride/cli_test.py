@@ -410,7 +410,20 @@ class TestSummonedLaunch:
     assert start.call_count == 0
     assert 'uses broker protocol revision' in capsys.readouterr().err
 
-  def test_solo_has_no_summoned_flag(self, pending, capsys):
+  def test_summoned_solo_takes_its_prompt_from_the_record(self, pending):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'solo', '--summoned', 'TOK-1', 'dev']) == 0
+    spec = start.call_args.args[0]
+    assert spec.solo
+    assert spec.prompt == 'work this out with the user'
+    assert start.call_args.kwargs['summoned'] == pending
+
+  def test_summoned_solo_refuses_a_positional_prompt(self, pending, capsys):
     with pytest.raises(SystemExit):
-      ride_cli.main(['ride', 'solo', '--summoned', 'TOK-1', 'dev', 'p'])
-    capsys.readouterr()
+      ride_cli.main(['ride', 'solo', '--summoned', 'TOK-1', 'dev', 'my own prompt'])
+    assert 'takes its initial prompt from the summon request' in capsys.readouterr().err
+
+  def test_solo_without_a_summon_requires_a_prompt(self, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'solo', 'dev'])
+    assert 'requires a prompt unless --summoned supplies it' in capsys.readouterr().err

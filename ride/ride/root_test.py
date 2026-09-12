@@ -1,5 +1,7 @@
 import sys
 
+import pytest
+
 import bro.summon
 import ride.artifacts
 import ride.root
@@ -59,6 +61,43 @@ class TestRunInContainerInjection:
       == 0
     )
     assert events == ['prepare', 'claim', 'attach:cid123']
+
+  def test_manual_solo_child_starts_without_a_tty(self, monkeypatch, tmp_path):
+    events: list[str] = []
+    monkeypatch.setattr(
+      ride.root,
+      'prepare_container',
+      lambda launch: events.append('prepare') or 'cid123',
+    )
+    monkeypatch.setattr(
+      ride.root,
+      'attach_interactive',
+      lambda container_id: pytest.fail(f'headless launch attached interactively: {container_id}'),
+    )
+
+    def fake_run(argv, *args, **kwargs):
+      events.append(f'run:{argv!r}')
+      return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(ride.root.subprocess, 'run', fake_run)
+    launch = workspace_docker.Launch(
+      name='ws',
+      command=['bro', 'run'],
+      env={},
+      secrets=(),
+      tty=False,
+      forward_env=False,
+      image='runtime-image',
+      runtime_bundle_hash='bundle-hash',
+    )
+
+    assert (
+      ride.root.run_summoned_in_container(
+        launch, _workspace(tmp_path), claim=lambda: events.append('claim')
+      )
+      == 0
+    )
+    assert events == ['prepare', 'claim', "run:['docker', 'start', '-a', 'cid123']"]
 
   def test_prepare_then_start_sequence(self, monkeypatch, tmp_path):
     monkeypatch.setenv('BROKER_DISABLED', '1')
