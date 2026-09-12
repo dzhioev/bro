@@ -33,6 +33,28 @@ def test_peek_round_trips_the_record(tmp_path):
   assert pending_summon.peek('TOK-1') == record
 
 
+def test_write_publishes_a_complete_record_atomically(monkeypatch, tmp_path):
+  destination = pending_summon._path('TOK-1')
+  real_replace = pending_summon.os.replace
+  publication_observed = False
+
+  def observe_replace(source, target):
+    nonlocal publication_observed
+    publication_observed = True
+    assert source.parent == destination.parent
+    assert target == destination
+    assert not destination.exists()
+    assert json.loads(source.read_text())['token'] == 'TOK-1'
+    real_replace(source, target)
+
+  monkeypatch.setattr(pending_summon.os, 'replace', observe_replace)
+  pending_summon.write(_record())
+
+  assert publication_observed
+  assert pending_summon.peek('TOK-1') == _record()
+  assert list(destination.parent.iterdir()) == [destination]
+
+
 def test_claim_consumes_and_a_second_claim_fails(tmp_path):
   pending_summon.write(_record())
   assert pending_summon.claim('TOK-1', workspace='my-manual') == _record()
@@ -45,6 +67,29 @@ def test_claim_records_the_launch_workspace(tmp_path):
   assert pending_summon.claimed_workspace('TOK-1') is None
   pending_summon.claim('TOK-1', workspace='my-manual')
   assert pending_summon.claimed_workspace('TOK-1') == 'my-manual'
+
+
+def test_claim_publishes_a_complete_record_atomically(monkeypatch, tmp_path):
+  pending_summon.write(_record())
+  destination = pending_summon._claimed_path('TOK-1')
+  real_replace = pending_summon.os.replace
+  publication_observed = False
+
+  def observe_replace(source, target):
+    nonlocal publication_observed
+    publication_observed = True
+    assert source.parent == destination.parent
+    assert target == destination
+    assert not destination.exists()
+    assert json.loads(source.read_text()) == {'token': 'TOK-1', 'workspace': 'my-manual'}
+    real_replace(source, target)
+
+  monkeypatch.setattr(pending_summon.os, 'replace', observe_replace)
+  pending_summon.claim('TOK-1', workspace='my-manual')
+
+  assert publication_observed
+  assert pending_summon.claimed_workspace('TOK-1') == 'my-manual'
+  assert list(destination.parent.iterdir()) == [destination]
 
 
 def test_an_unusable_claimed_workspace_name_is_refused(tmp_path):
