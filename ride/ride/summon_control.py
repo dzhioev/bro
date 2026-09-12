@@ -24,6 +24,7 @@ from ride import pending_summon
 from ride.harness import HARNESS_NAMES, get_harness
 from ride.peer_facts import PeerFact, PeerFacts, PeerIdentity, UnattributablePeer
 from ride.scope import LaunchScopeError, scoped_secrets, split_scope_overrides
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
@@ -404,6 +405,7 @@ class SummonControl:
         revoke=tuple(revoke),
         share=tuple(share),
         llm=llm,
+        isolation=Isolation.BOXED,
       ),
       peer,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,

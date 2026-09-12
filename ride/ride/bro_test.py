@@ -142,7 +142,7 @@ class TestContainerSession:
       captured.update(kwargs)
       return 7
 
-    monkeypatch.setattr(ride_session, 'run_in_container', run)
+    monkeypatch.setattr(ride_session, 'run_started_party', run)
     spec = _spec(solo=True, hold='unattended')
     assert (
       ride_session._launch_session(
@@ -151,7 +151,6 @@ class TestContainerSession:
         'abc123',
         _scope(),
         human_env={},
-        boxed=True,
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=_container_runtime(),
       )
@@ -181,7 +180,7 @@ class TestContainerSession:
     monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: None)
     monkeypatch.setattr(
       ride_session,
-      'run_in_container',
+      'run_started_party',
       lambda launch, *_a, **_k: captured.update(launch=launch) or 0,
     )
     spec = _spec(no_trails=True)
@@ -192,7 +191,6 @@ class TestContainerSession:
         None,
         _scope(),
         human_env={},
-        boxed=True,
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=_container_runtime(),
       )
@@ -213,7 +211,6 @@ class TestContainerSession:
         None,
         _scope(),
         human_env={},
-        boxed=True,
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=_container_runtime(),
       )
@@ -226,7 +223,7 @@ class TestContainerSession:
     pointer = trail_pointer.session_pointer(workspace.path)
     trail_pointer.write(pointer, 'stale')
     monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: None)
-    monkeypatch.setattr(ride_session, 'run_in_container', lambda *_a, **_k: 0)
+    monkeypatch.setattr(ride_session, 'run_started_party', lambda *_a, **_k: 0)
     assert (
       ride_session._launch_session(
         _spec(),
@@ -234,7 +231,6 @@ class TestContainerSession:
         None,
         _scope(),
         human_env={},
-        boxed=True,
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=_container_runtime(),
       )
@@ -254,7 +250,6 @@ class TestContainerSession:
         None,
         _scope(),
         human_env={},
-        boxed=True,
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=_container_runtime(),
       )
@@ -264,70 +259,46 @@ class TestContainerSession:
 
 
 class TestUnboxedSession:
-  def _workspace(self, tmp_path: Path) -> tuple[Workspace, RuntimeBundle]:
+  def test_builder_prepares_the_native_snapshot_runner(self, monkeypatch, tmp_path):
     workspace = Workspace.create('w', tmp_path, Isolation.UNBOXED)
     root = tmp_path / 'runtime-bundle'
     (root / 'host' / 'venv' / 'bin').mkdir(parents=True)
     (root / 'host' / 'bin').mkdir()
     (root / 'host' / '.complete').touch()
     (root / 'host' / 'venv' / 'bin' / 'do-ride').touch()
-    return workspace, RuntimeBundle(root, '3.12')
-
-  def _prepare(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(ride_session.os, 'chdir', lambda _path: None)
+    runtime_bundle = RuntimeBundle(root, '3.12')
     monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_args: True)
     monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_args: True)
     monkeypatch.setattr(ride_session, 'materialize_scoped_store', _materialize_store)
 
-  def test_provisions_and_supervises_the_snapshot_runner(self, monkeypatch, tmp_path):
-    workspace, runtime_bundle = self._workspace(tmp_path)
-    session_binary = runtime_bundle.host_venv / 'bin' / 'do-ride'
-    self._prepare(monkeypatch, tmp_path)
-    monkeypatch.setattr(ride_session, 'broker_enabled', lambda: True)
-    root = MagicMock(return_value=3)
-    monkeypatch.setattr(ride_session, 'run_unboxed_process_via_broker', root)
-
-    assert (
-      ride_session._launch_session(
-        _spec(isolation=Isolation.UNBOXED, repo=str(tmp_path)),
-        workspace,
-        None,
-        _scope(),
-        human_env={},
-        boxed=False,
-        runtime_bundle=runtime_bundle,
-        container_runtime=_container_runtime(),
-      )
-      == 3
+    launch = ride_session.started_party_launch(
+      _spec(isolation=Isolation.UNBOXED, repo=str(tmp_path)),
+      workspace,
+      workspace.repository,
+      None,
+      _scope(),
+      human_env={},
+      runtime_bundle=runtime_bundle,
+      container_runtime=_container_runtime(),
+      forward_env=True,
+      env={},
+      credential_directory=workspace.path / 'credentials',
+      install_directory=workspace.path / 'environment',
     )
-    command = root.call_args.args[1]
-    env = root.call_args.args[2]
-    assert command == [
-      str(session_binary), 'along', '--workspace', 'w', '--harness', 'bro',
-      '--repo', str(tmp_path), '--hold', 'attended', 'dev', 'start here',
-    ]  # fmt: skip
-    assert env['BRO_INSTALL_KINDS'] == ''
-    assert workspace.is_clean() == (False, ['last session exited with code 3'])
 
-  def test_brokerless_host_run_unsets_an_ambient_channel(self, monkeypatch, tmp_path):
-    workspace, runtime_bundle = self._workspace(tmp_path)
-    self._prepare(monkeypatch, tmp_path)
-    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://ambient-token@127.0.0.1:9')
-    monkeypatch.setattr(ride_session, 'broker_enabled', lambda: False)
-    run = MagicMock(return_value=MagicMock(returncode=0))
-    monkeypatch.setattr(ride_session.subprocess, 'run', run)
-
-    assert (
-      ride_session._launch_session(
-        _spec(isolation=Isolation.UNBOXED, repo=str(tmp_path)),
-        workspace,
-        None,
-        _scope(),
-        human_env={},
-        boxed=False,
-        runtime_bundle=runtime_bundle,
-        container_runtime=_container_runtime(),
-      )
-      == 0
-    )
-    assert 'BROKER_CHANNEL' not in run.call_args.kwargs['env']
+    assert isinstance(launch, ride_session.ProcessLaunch)
+    assert launch.command == [
+      str(runtime_bundle.host_venv / 'bin' / 'do-ride'),
+      'along',
+      '--workspace',
+      'w',
+      '--harness',
+      'bro',
+      '--repo',
+      str(tmp_path),
+      '--hold',
+      'attended',
+      'dev',
+      'start here',
+    ]
+    assert launch.env['BRO_INSTALL_KINDS'] == ''

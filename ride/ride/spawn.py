@@ -1,10 +1,9 @@
-"""summon lowering and the broker-root composition over the workspace spawners.
+"""Summon lowering and broker-root composition over workspace spawners.
 
-`SummonSpawner` resolves the requested base ref off-loop, records the child's
-session spec as its channel-named workspace's resume record, derives the child's
-`do-ride` argv and container extras from that spec through the harness seam, wraps
-them into the child's headless docker launch, and marks the workspace throwaway
-(removed after a clean exit).
+`SummonSpawner` resolves the requested base ref off-loop and prepares the child
+through the same isolation-parameterized started-party launcher a root uses.
+It records the channel-named workspace as throwaway and delegates the resulting
+Docker or process launch to the matching spawner.
 
 `run_root_via_broker` composes both launch modes and summon lowering under one
 broker, then supervises the root until exit.
@@ -12,7 +11,9 @@ broker, then supervises the root until exit.
 
 import asyncio
 import contextlib
+import shutil
 import socket
+import tempfile
 from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,8 +36,10 @@ from ride.identity import human_git_identity_env
 from ride.kinds import extension_kinds
 from ride.peer_facts import PeerFact, PeerFacts
 from ride.repository import Repository, as_repository
-from ride.scope import scoped_secrets
-from ride.session import SessionSpec, container_launch, record_resume_spec
+from ride.root import ProcessLaunch
+from ride.runtime_bundle import RuntimeBundle
+from ride.scope import preflight_scoped_launch, scoped_secrets
+from ride.session import ScopedLaunch, SessionSpec, record_resume_spec, started_party_launch
 from ride.summon_control import SummonControl
 from ride.workspace.docker import ContainerRuntimeResolver, bridge_gateway
 from ride.workspace.metadata import Isolation
@@ -83,6 +86,7 @@ class SummonLaunchSpec(LaunchSpec):
   revoke: tuple[str, ...] = ()
   share: tuple[str, ...] = ()
   llm: Optional[str] = None
+  isolation: Isolation = Isolation.BOXED
 
 
 def _workspace_name(channel: str) -> str:
@@ -90,8 +94,8 @@ def _workspace_name(channel: str) -> str:
 
 
 def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> SessionSpec:
-  """the summoned child's run as a `SessionSpec`: an unpinned solo boxed
-  session of the target bro under the request's fields — only the request's
+  """the summoned child's run as a `SessionSpec`: an unpinned solo session
+  of the target bro in the requested isolation — only the request's
   `timeout` maps to no spec field (it is the spawner's wait timer, not part of
   the run). Recorded as the workspace's resume record and the source of the
   child's `do-ride` argv, so what `ride resume` relaunches is what ran."""
@@ -101,7 +105,7 @@ def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> Sessio
     repo=None if launch.repo is None else as_repository(launch.repo).identity,
     harness=harness.name,
     workspace_pinned=False,
-    isolation=Isolation.BOXED,
+    isolation=launch.isolation,
     drop=True,
     no_trails=False,
     hold=launch.hold
@@ -127,26 +131,11 @@ def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> Sessio
 def _lower_summon(
   launch: SummonLaunchSpec,
   workspace_name: str,
+  runtime_bundle: RuntimeBundle,
   container_runtime: ContainerRuntimeResolver,
   artifacts: ArtifactStore,
-) -> DockerLaunchSpec:
-  """the blocking half of a summon spawn: compose the child's docker launch —
-  the target's own scope, nothing inherited from the summoner, plus whatever the
-  request's own grant/revoke names — as the container launch of the child's
-  session spec, with the child facts (its own reconstructed `RIDE_COMMAND`, the
-  summoned mark, allow-list, and provenance) over an explicit env that forwards
-  nothing from the spawning process. The base is the summoner's workspace HEAD,
-  read live here (`resolve_head` — which also transfers the commit's objects
-  into the host repo when they live only in the summoner's own store), unless
-  the request's `into` names a ref (resolved with the same
-  fetch-if-unresolvable rule as `ride --into`, but an unresolvable ref fails the
-  spawn rather than falling back). The child's workspace is recorded throwaway,
-  so its supervisor removes it once the child exits cleanly. The child's
-  artifact view is created (and the request's `share` refs linked into it)
-  here, where the workspace name exists, before the mount that serves it.
-  Raises on any unresolvable input — the spawner surfaces that as the
-  correlated `failed{reason: 'launch'}`; every fallible resolution precedes the
-  workspace record, so a failed spawn creates none."""
+) -> DockerLaunchSpec | ProcessLaunchSpec:
+  """Prepare a summoned started party in its requested isolation."""
   repo = None if launch.repo is None else as_repository(launch.repo)
   if launch.into is not None:
     if repo is None:
@@ -174,46 +163,92 @@ def _lower_summon(
     revoke=spec.revoke,
     llm_spec=spec.llm_spec,
   )
-  resolved_runtime = container_runtime.resolve()
-  workspace = Workspace.ensure(workspace_name, repo, Isolation.BOXED, throwaway=True)
-  record_resume_spec(workspace, spec)
-  artifacts.view(workspace_name)
-  artifacts.share(launch.share, to=workspace_name, by=launch.parent)
-  run = container_launch(
-    harness,
-    spec,
-    workspace,
+  _, store = preflight_scoped_launch(
     scoped,
-    resolved_runtime,
-    repo=launch.repo,
-    base_ref=base_ref,
-    human_env=human_git_identity_env(repo),
-    forward_env=False,
-    env={
-      'RIDE_COMMAND': ' '.join(spec.to_command_argv()),
-      **summoned_child_env(launch.may_summon, launch.summoner),
-    },
-    mounts=(view_mount(artifacts.ride, workspace_name),),
+    spec.bro,
+    grant=spec.grant,
+    revoke=spec.revoke,
   )
-  log_scoped_secrets(f'summoned {launch.target}', run.secrets, run.optional_secrets)
-  return DockerLaunchSpec(run)
+  launch_scope = ScopedLaunch(
+    scoped=scoped,
+    may_summon=set(launch.may_summon),
+    store=store,
+    hydrated_kinds=store.kinds,
+  )
+  if launch.isolation is Isolation.BOXED:
+    container_runtime.resolve()
+  else:
+    runtime_bundle.materialize_host()
+  workspace = Workspace.ensure(workspace_name, repo, launch.isolation, throwaway=True)
+  record_resume_spec(workspace, spec)
+  mounts: tuple[str, ...] = ()
+  temporary_store: Optional[Path] = None
+  if launch.isolation is Isolation.BOXED:
+    artifacts.view(workspace_name)
+    mounts = (view_mount(artifacts.ride, workspace_name),)
+  else:
+    temporary_store = Path(tempfile.mkdtemp(prefix=f'ride-{workspace_name}-store-'))
+  artifacts.share(launch.share, to=workspace_name, by=launch.parent)
+  with contextlib.ExitStack() as cleanup:
+    if temporary_store is not None:
+      cleanup.callback(shutil.rmtree, temporary_store)
+    prepared = started_party_launch(
+      spec,
+      workspace,
+      repo,
+      base_ref,
+      launch_scope,
+      human_env=human_git_identity_env(repo),
+      runtime_bundle=runtime_bundle,
+      container_runtime=container_runtime,
+      forward_env=False,
+      env={
+        'RIDE_COMMAND': ' '.join(spec.to_command_argv()),
+        **summoned_child_env(launch.may_summon, launch.summoner),
+      },
+      mounts=mounts,
+      credential_directory=(
+        workspace.path / 'credentials' if temporary_store is None else temporary_store / 'store'
+      ),
+      install_directory=(
+        workspace.path / 'environment'
+        if temporary_store is None
+        else temporary_store / 'environment'
+      ),
+    )
+    log_scoped_secrets(f'summoned {launch.target}', scoped.required, scoped.optional)
+    if not isinstance(prepared, ProcessLaunch):
+      return DockerLaunchSpec(prepared)
+    if temporary_store is None:
+      raise ValueError('an unboxed summon has no private credential store')
+    lowered = ProcessLaunchSpec(
+      command=prepared.command,
+      cwd=prepared.cwd,
+      env=prepared.env,
+      interactive=False,
+      capture_output=True,
+      workspace=workspace.name,
+      cleanup_directory=str(temporary_store),
+    )
+    cleanup.pop_all()
+    return lowered
 
 
 class SummonSpawner(Spawner):
-  """lower a `SummonLaunchSpec` to its docker launch off-loop, then delegate to
-  the docker path (which runs its own blocking prepare off-loop too). The
-  child's workspace name is noted into the peer registry first, on the loop —
-  the child cannot connect before its launch resolves, so attribution never
-  finds it unnamed."""
+  """Lower a summon to the requested started-party isolation off-loop."""
 
   def __init__(
     self,
     docker: DockerSpawner,
+    process: ProcessSpawner,
+    runtime_bundle: RuntimeBundle,
     container_runtime: ContainerRuntimeResolver,
     facts: PeerFacts,
     artifacts: ArtifactStore,
   ):
     self._docker = docker
+    self._process = process
+    self._runtime_bundle = runtime_bundle
     self._container_runtime = container_runtime
     self._facts = facts
     self._artifacts = artifacts
@@ -226,10 +261,13 @@ class SummonSpawner(Spawner):
       _lower_summon,
       launch,
       workspace_name,
+      self._runtime_bundle,
       self._container_runtime,
       self._artifacts,
     )
-    return await self._docker.spawn(lowered, channel, quest)
+    if isinstance(lowered, DockerLaunchSpec):
+      return await self._docker.spawn(lowered, channel, quest)
+    return await self._process.spawn(lowered, channel, quest)
 
 
 def broker_bind_hosts() -> list[str]:
@@ -258,10 +296,12 @@ def run_root_via_broker(
   summon_harness: str = configs.DEFAULT_SUMMON_HARNESS,
   credential_scope: ScopedSecrets,
   container_runtime: ContainerRuntimeResolver,
+  runtime_bundle: RuntimeBundle,
 ) -> int:
   """run `launch` as the root peer of a broker on this host, supervise it on the
-  broker loop until it exits, and return its exit code. The spawner is the composite over both workspace isolations plus the summon
-  lowering, so any root — an unboxed process or boxed container — can spawn docker children.
+  broker loop until it exits, and return its exit code. The spawner composes both
+  workspace isolations plus summon lowering, so either root can start either kind
+  of child.
   The broker answers the reserved ping kind, so a session can verify its channel
   (`broker request ping '{}'`), the artifact kinds over the ride store
   (`ride.artifacts`, which also collects the run of any job a kind starts), plus
@@ -277,7 +317,9 @@ def run_root_via_broker(
   defaults to deny-all. `credential_scope` carries the kinds the root session
   was launched with and their selection, the bound on what its summons may grant
   a child. `container_runtime` is the root's lazy or already-resolved
-  image and bundle-volume identity, reused by every child. A summoned child follows
+  image and bundle-volume identity for boxed children;
+  `runtime_bundle` is the matching host materialization for unboxed children.
+  A summoned child follows
   its own bro's static seeds instead, resolved per request by the control. The summon handler is registered
   either way, so a denied summoner gets a correlated error and an ordinary
   journal denial event.
@@ -289,6 +331,7 @@ def run_root_via_broker(
     log.info('session may summon: %s', ', '.join(targets))
   host_log = workspace.host_log
   docker_spawner = DockerSpawner(host_log=host_log)
+  process_spawner = ProcessSpawner(host_log=host_log)
   root_scope = ScopedSecrets(
     required=set(credential_scope.required),
     optional=set(credential_scope.optional),
@@ -308,8 +351,15 @@ def run_root_via_broker(
   spawner = CompositeSpawner(
     {
       DockerLaunchSpec: docker_spawner,
-      ProcessLaunchSpec: ProcessSpawner(host_log=host_log),
-      SummonLaunchSpec: SummonSpawner(docker_spawner, container_runtime, facts, artifacts),
+      ProcessLaunchSpec: process_spawner,
+      SummonLaunchSpec: SummonSpawner(
+        docker_spawner,
+        process_spawner,
+        runtime_bundle,
+        container_runtime,
+        facts,
+        artifacts,
+      ),
     }
   )
   artifact_control = ArtifactControl(artifacts, facts)

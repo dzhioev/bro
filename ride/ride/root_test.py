@@ -1,35 +1,101 @@
-import sys
+from pathlib import Path
+from unittest.mock import MagicMock
 
 import bro.summon
 import ride.artifacts
 import ride.root
 import ride.spawn
-import ride.summon_control
 import ride.workspace.docker as workspace_docker
 import ride.workspace.spawn as workspace_spawn
-import ride.workspace.store as workspace_store
 from bro.workspace.paths import workspace_dir
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
+from ride.workspace.store import ScopedSecrets
 
 
-def _exit_record(tmp_path) -> str:
-  return (workspace_dir('ws') / 'exit').read_text()
+def _workspace(tmp_path: Path, isolation: Isolation = Isolation.BOXED) -> Workspace:
+  return Workspace.ensure('ws', tmp_path / 'project', isolation)
 
 
-def _workspace(tmp_path) -> Workspace:
-  return Workspace.ensure('ws', tmp_path / 'project', Isolation.BOXED)
+def _scope() -> ScopedSecrets:
+  return ScopedSecrets({'github'}, {'openai'}, {'github': 'reviewer'})
 
 
-class _FakeProc:
-  def __init__(self, returncode=0, stdout='', stderr: str | bytes = ''):
-    self.returncode = returncode
-    self.stdout = stdout
-    self.stderr = stderr
+def _docker_launch() -> workspace_docker.Launch:
+  return workspace_docker.Launch(
+    name='ws',
+    command=['do-ride'],
+    env={'RIDE_BRO': 'bro-dev'},
+    secrets=('github',),
+    optional_secrets=('openai',),
+    credential_selection={'github': 'reviewer'},
+    tty=True,
+    forward_env=True,
+    image='runtime-image',
+    runtime_bundle_hash='bundle-hash',
+  )
 
 
-class TestRunInContainerInjection:
-  def test_manual_child_claims_after_prepare_and_before_attach(self, monkeypatch, tmp_path):
+class TestDirectStartedParty:
+  def test_boxed_prepare_then_attach_and_record(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(ride.root, 'broker_enabled', lambda: False)
+    events: list[str] = []
+    monkeypatch.setattr(
+      ride.root,
+      'prepare_container',
+      lambda launch: events.append('prepare') or 'cid123',
+    )
+    monkeypatch.setattr(
+      ride.root,
+      'attach_interactive',
+      lambda container_id: events.append(f'attach:{container_id}') or 7,
+    )
+    workspace = _workspace(tmp_path)
+
+    code = ride.root.run_started_party(
+      _docker_launch(),
+      workspace,
+      credential_scope=_scope(),
+      container_runtime=MagicMock(),
+      runtime_bundle=MagicMock(),
+    )
+
+    assert code == 7
+    assert events == ['prepare', 'attach:cid123']
+    assert (workspace_dir('ws') / 'exit').read_text() == '7'
+
+  def test_process_run_clears_ambient_broker_facts(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(ride.root, 'broker_enabled', lambda: False)
+    run = MagicMock(return_value=MagicMock(returncode=0))
+    monkeypatch.setattr(ride.root.subprocess, 'run', run)
+    workspace = _workspace(tmp_path, Isolation.UNBOXED)
+    launch = ride.root.ProcessLaunch(
+      command=['do-ride'],
+      cwd=str(workspace.tree),
+      env={
+        'RIDE_BRO': 'bro-dev',
+        'BROKER_CHANNEL': 'ambient-channel',
+        'BROKER_UPSTREAM': 'ambient-upstream',
+      },
+      interactive=False,
+    )
+
+    assert (
+      ride.root.run_started_party(
+        launch,
+        workspace,
+        credential_scope=_scope(),
+        container_runtime=MagicMock(),
+        runtime_bundle=MagicMock(),
+      )
+      == 0
+    )
+    assert 'BROKER_CHANNEL' not in run.call_args.kwargs['env']
+    assert 'BROKER_UPSTREAM' not in run.call_args.kwargs['env']
+
+
+class TestManualStartedParty:
+  def test_claims_a_boxed_party_after_prepare_and_before_attach(self, monkeypatch, tmp_path):
     events: list[str] = []
     monkeypatch.setattr(
       ride.root,
@@ -41,183 +107,78 @@ class TestRunInContainerInjection:
       'attach_interactive',
       lambda container_id: events.append(f'attach:{container_id}') or 0,
     )
-    launch = workspace_docker.Launch(
-      name='ws',
-      command=['claude'],
-      env={},
-      secrets=(),
-      tty=True,
-      forward_env=False,
-      image='runtime-image',
-      runtime_bundle_hash='bundle-hash',
-    )
 
     assert (
-      ride.root.run_summoned_in_container(
-        launch, _workspace(tmp_path), claim=lambda: events.append('claim')
+      ride.root.run_manual_started_party(
+        _docker_launch(),
+        _workspace(tmp_path),
+        credential_scope=_scope(),
+        claim=lambda: events.append('claim'),
       )
       == 0
     )
     assert events == ['prepare', 'claim', 'attach:cid123']
 
-  def test_prepare_then_start_sequence(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('BROKER_DISABLED', '1')
-    prepared: list = []
-    monkeypatch.setattr(
-      ride.root,
-      'prepare_container',
-      lambda launch: prepared.append(launch) or 'cid123',
-    )
-    calls: list[list[str]] = []
 
-    def fake_run(argv, *args, **kwargs):
-      calls.append(argv)
-      return _FakeProc(returncode=7)
-
-    monkeypatch.setattr(ride.root.subprocess, 'run', fake_run)
-    launch = workspace_docker.Launch(
-      name='ws',
-      command=['claude'],
-      env={},
-      secrets=(),
-      tty=True,
-      forward_env=True,
-      image='runtime-image',
-      runtime_bundle_hash='bundle-hash',
-    )
-    assert ride.root.run_in_container(launch, _workspace(tmp_path)) == 7
-    assert prepared == [launch]
-    assert calls == [['docker', 'start', '-a', '-i', '--detach-keys=ctrl-z', 'cid123']]
-    # the run's end is recorded on the workspace for `ride clean`
-    assert _exit_record(tmp_path) == '7'
-
-  def test_non_tty_launch_attaches_without_detach_keys(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('BROKER_DISABLED', '1')
-    monkeypatch.setattr(ride.root, 'prepare_container', lambda launch: 'cid123')
-    calls: list[list[str]] = []
-
-    def fake_run(argv, *args, **kwargs):
-      calls.append(argv)
-      return _FakeProc(returncode=0)
-
-    monkeypatch.setattr(ride.root.subprocess, 'run', fake_run)
-    launch = workspace_docker.Launch(
-      name='ws',
-      command=['bro', 'run'],
-      env={},
-      secrets=(),
-      tty=False,
-      forward_env=False,
-      image='runtime-image',
-      runtime_bundle_hash='bundle-hash',
-    )
-    assert ride.root.run_in_container(launch, _workspace(tmp_path)) == 0
-    # no pty, so no Ctrl+Z to intercept — and a zero exit must not probe the container
-    assert calls == [['docker', 'start', '-a', 'cid123']]
-
-
-class TestRunInContainerBrokerRoute:
-  def test_run_in_container_routes_through_broker(self, monkeypatch, tmp_path):
-    monkeypatch.delenv('BROKER_DISABLED', raising=False)
-    monkeypatch.setattr(sys, 'platform', 'linux')
-    roots: list = []
-
-    def fake_root(launch, workspace, **kwargs):
-      roots.append({'launch': launch, 'workspace': workspace, **kwargs})
-      return 5
-
-    monkeypatch.setattr(ride.root, '_run_root_via_broker', fake_root)
-    launch = workspace_docker.Launch(
-      name='ws',
-      command=['claude'],
-      env={},
-      secrets=(),
-      tty=True,
-      forward_env=True,
-      image='runtime-image',
-      runtime_bundle_hash='bundle-hash',
-    )
-    code = ride.root.run_in_container(launch, _workspace(tmp_path), may_summon={'dev'})
-    assert code == 5
-    [root] = roots
-    assert root['launch'] is launch
-    assert root['workspace'].name == 'ws'
-    assert root['workspace'].isolation is Isolation.BOXED
-    assert root['may_summon'] == {'dev'}
-
-
-class TestRunRootViaBroker:
-  def test_builds_the_attached_launch_and_delegates(self, monkeypatch, tmp_path):
+class TestBrokerStartedParty:
+  def test_wraps_a_boxed_root_with_its_authority_and_artifact_view(self, monkeypatch, tmp_path):
     captured: dict = {}
 
-    def fake_run_root(
-      launch,
-      *,
-      workspace,
-      bro,
-      may_summon,
-      summon_depth,
-      summon_harness,
-      credential_scope,
-      container_runtime,
-    ):
+    def fake_run_root(launch, **kwargs):
       captured['launch'] = launch
-      captured['workspace'] = workspace
-      captured['bro'] = bro
-      captured['may_summon'] = may_summon
-      captured['summon_depth'] = summon_depth
-      captured['summon_harness'] = summon_harness
-      captured['credential_scope'] = credential_scope
+      captured.update(kwargs)
       return 3
 
     monkeypatch.setattr(ride.spawn, 'run_root_via_broker', fake_run_root)
-    project = tmp_path / 'project'
-    project.mkdir()
-    launch = workspace_docker.Launch(
-      name='ws',
-      command=['claude', '--verbose'],
-      env={'RIDE_BRO': 'bro-dev'},
-      secrets=('github',),
-      optional_secrets=('openai',),
-      credential_selection={'github': 'reviewer'},
-      tty=True,
-      forward_env=True,
-      image='runtime-image',
-      runtime_bundle_hash='bundle-hash',
-      repo=project,
-      base_ref='deadbeef',
+    workspace = _workspace(tmp_path)
+
+    assert (
+      ride.root._run_via_broker(
+        _docker_launch(),
+        workspace,
+        may_summon={'dev'},
+        summon_depth=4,
+        summon_harness='claude',
+        credential_scope=_scope(),
+        container_runtime=MagicMock(),
+        runtime_bundle=MagicMock(),
+      )
+      == 3
     )
-    workspace = Workspace.create('ws', project, Isolation.BOXED)
-    code = ride.root._run_root_via_broker(
-      launch, workspace, may_summon={'dev'}, summon_depth=4, summon_harness='claude'
-    )
-    assert code == 3
+    wrapped = captured['launch']
+    assert isinstance(wrapped, workspace_spawn.DockerLaunchSpec)
+    assert wrapped.launch.env[bro.summon.MAY_SUMMON_ENV] == 'dev'
+    assert wrapped.launch.extra_mounts == (ride.artifacts.view_mount('ws', 'ws'),)
     assert captured['workspace'] is workspace
-    assert captured['bro'] == 'bro-dev'
-    assert captured['may_summon'] == {'dev'}
-    assert captured['summon_depth'] == 4
-    assert captured['summon_harness'] == 'claude'
-    assert captured['credential_scope'] == workspace_store.ScopedSecrets(
-      {'github'}, {'openai'}, {'github': 'reviewer'}
+    assert captured['credential_scope'] == _scope()
+
+  def test_wraps_an_unboxed_root_as_a_process_spec(self, monkeypatch, tmp_path):
+    captured: dict = {}
+    monkeypatch.setattr(
+      ride.spawn,
+      'run_root_via_broker',
+      lambda launch, **kwargs: captured.update(launch=launch, **kwargs) or 0,
     )
-    assert captured['launch'] == workspace_spawn.DockerLaunchSpec(
-      workspace_docker.Launch(
-        name='ws',
-        command=['claude', '--verbose'],
-        env={
-          'RIDE_BRO': 'bro-dev',
-          bro.summon.MAY_SUMMON_ENV: 'dev',
-        },
-        secrets=('github',),
-        optional_secrets=('openai',),
-        credential_selection={'github': 'reviewer'},
-        tty=True,
-        forward_env=True,
-        image='runtime-image',
-        runtime_bundle_hash='bundle-hash',
-        extra_mounts=(ride.artifacts.view_mount('ws', 'ws'),),
-        repo=project,
-        base_ref='deadbeef',
-      ),
-      capture_output=False,
+    workspace = _workspace(tmp_path, Isolation.UNBOXED)
+    launch = ride.root.ProcessLaunch(
+      command=['do-ride'],
+      cwd=str(workspace.tree),
+      env={'RIDE_BRO': 'bro-dev'},
+      interactive=True,
     )
+
+    assert (
+      ride.root._run_via_broker(
+        launch,
+        workspace,
+        may_summon=(),
+        summon_depth=2,
+        summon_harness='bro',
+        credential_scope=_scope(),
+        container_runtime=MagicMock(),
+        runtime_bundle=MagicMock(),
+      )
+      == 0
+    )
+    assert isinstance(captured['launch'], workspace_spawn.ProcessLaunchSpec)
+    assert captured['launch'].interactive

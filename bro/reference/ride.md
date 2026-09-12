@@ -90,9 +90,8 @@ A recipe whose provider the harness cannot run errors with `--harness` as the re
 ### Harness seam
 
 `ride.harness.Harness` is the runtime boundary.
-The neutral layer (`ride/ride/session.py`) owns both launch bodies
-— the container `Launch` composition and the provisioned unboxed run
-— and a harness implementation supplies what differs:
+The neutral layer (`ride/ride/session.py`) owns one started-party launcher parameterized by workspace isolation.
+It prepares either a container `Launch` or an explicit process launch, and a harness implementation supplies what differs:
 
 - its flag registration (`add_flags` reports the dests it registered, so the neutral layer refuses a non-selected harness's flag generically) and the validation and packing of those flags into its serialized options (`parse_options`);
 - the `ScopeRecipe` its packed options select, the auth preflight, and LLM resolution;
@@ -256,8 +255,9 @@ That reach is what it exists for:
 the trail pointer and the recording health signal are published by the session and read back host-side, so both ends need one path.
 Signals every harness shares sit at its root, a harness's own artifacts under `<harness>/`
 — where the claude recorder's stderr goes.
-`credentials/` and `environment/` are written by an unboxed launch of either harness, while a box keeps their equivalents in its own layer;
-and `claude/` belongs to the claude harness in both isolations.
+`credentials/` and `environment/` hold an unboxed root's store and install-hook output, while a box keeps their equivalents in its own layer.
+A spawned child puts both under one temporary root outside its workspace so retained failure records hold no secret.
+`claude/` belongs to the claude harness in both isolations.
 The one deliberate exception to all of this is the summon audit, under `<runtime-root>/summon/`, because it must survive a workspace drop.
 
 `workspace.json` is written once at creation and read by every later launch, so nothing downstream re-derives it:
@@ -291,10 +291,10 @@ Every managed session launches through the same stack, whichever harness drives 
 `--unboxed` changes only the outer machinery;
 `--raw` changes only the claude argv flavor (and the scope recipe the outer computes through the seam):
 
-- **the neutral outer** (`ride/ride/session.py:start_session`)
-  — mode-specific by nature:
-  policy validation, workspace preparation, session supervision, post-exit UX.
-  It touches the selected harness only through the seam (see "Harness seam").
+- **the neutral outer** (`ride/ride/session.py:start_session` and `started_party_launch`)
+  — policy validation, one isolation-parameterized workspace preparation path, session supervision, and post-exit UX.
+  Roots and spawned children use the same started-party launcher;
+  it touches the selected harness only through the seam (see "Harness seam").
   See "The outer layer".
 - **the session executable** (`do-ride solo|along` → `ride/ride/do_ride.py`), spawned by the outer in the prepared workspace.
   Unboxed isolation invokes the frozen snapshot's absolute `do-ride`;
@@ -385,8 +385,9 @@ Whatever the isolation and harness, the outer:
 - on a resume, fails fast when the workspace has no session to continue
   — the harness's cheap existence check with its own refusal wording (`session_exists` / `missing_session_error`:
   a claude transcript under the workspace's state dir, a bro trail pointer), run before the tree is materialized for a mistyped name (the claude runner resolves the actual session id later, from its cwd);
-- prepares the workspace (the two isolation sections below), then spawns `do-ride` with only the session shape;
-  both isolations run the frozen bundle, through the host materialization or container volume;
+- calls the shared started-party launcher to prepare the workspace (the two isolation sections below) and the `do-ride` command with only the session shape;
+  the launcher emits a container description for boxed isolation or a complete process-environment snapshot for unboxed isolation,
+  and both run the frozen bundle through the host materialization or container volume;
 - owns the post-exit UX, identical in both isolations
   — the resume hint, `--drop` removal (honored only on a clean exit; see the flag).
 
@@ -407,7 +408,9 @@ Later launches preserve that clone exactly as the session left it.
 A legacy `.git` gitfile identifies a pre-migration linked worktree and refuses launch with `ride clean --force <name>`.
 
 After clone preparation, `ride` runs the tree's `setup.sh` when present, materializes the runtime bundle's host half, and starts its absolute `do-ride` with the tree as cwd.
-The scoped store lives under the workspace's `credentials/`, and `BRO_STORE` points at it.
+A root's scoped store lives under the workspace's `credentials/`.
+A spawned child's store and install-hook output live under one private temporary root that its process handle removes after any exit or kill, so a retained failed-child workspace contains no credential material.
+`BRO_STORE` and `BRO_INSTALL_DIR` point at the applicable directories.
 The harness's `prepare_unboxed_env` hook supplies launch-time state;
 `do-ride` installs credential hooks before starting the selected harness.
 The launch removes the invoking environment's active-venv marker and PATH entry, so the workspace's own `.venv` is never activated implicitly.
@@ -497,12 +500,14 @@ Inside the container, the entrypoint (running as root first):
 5. Execs `do-ride`.
    Credential hooks, the plugin seed, and the optional session broxy are per-session work owned by that executable rather than this per-workspace entrypoint.
 
-Every container-starting surface computes one broker-free `ride.workspace.docker.Launch`:
-the workspace name, optional resolved repository attachment and base ref, command, explicit env snapshot, required/optional credential tiers, TTY and ambient-forwarding policy, extra mounts, resolved image tag, and runtime bundle hash.
+Every root and spawned child goes through `ride.session.started_party_launch` with a `SessionSpec`, workspace, hydrated scope, runtime bundle, and requested isolation.
+The boxed result is one broker-free `ride.workspace.docker.Launch` carrying the full launch:
+the workspace name, optional resolved repository attachment and base ref, command, explicit env snapshot, credential tiers, TTY and ambient-forwarding policy, extra mounts, resolved image tag, and runtime bundle hash.
 `prepare_container` consumes that immutable description for clone preparation → scoped-store build → `docker create` + store copy;
 it does not re-resolve images or bundles.
-Summoned children inherit the root's identifiers.
-An unboxed root defers their image and volume resolution until its first boxed summon.
+The unboxed result is a `ProcessLaunch` carrying the absolute snapshot command, cwd, and complete environment;
+broker supervision adapts it to `ProcessLaunchSpec` without reading ambient process state.
+An unboxed root defers image and volume resolution until its first boxed summon.
 
 Container images are split:
 
@@ -593,8 +598,9 @@ non-rotating `claude_code` token (so no session's refresh can blow away another'
 Both workspace isolations hydrate only the credential kinds the selected bro and harness declare.
 The launch keeps the required and optional tiers kind-addressed and carries a separate kind-to-instance selection.
 The resulting store directory is the boundary:
-an unboxed launch materializes it under the workspace's `credentials/` and sets `BRO_STORE` to that directory;
-a boxed launch injects it at `/home/ride/.bro` and explicitly sets `BRO_STORE=/home/ride/.bro`.
+an unboxed root materializes it under the workspace's `credentials/`, while an unboxed spawned child uses a private temporary root owned by its process handle;
+each points `BRO_STORE` at its own store, and the child's install-hook output stays under the same temporary root.
+A boxed launch injects it at `/home/ride/.bro` and explicitly sets `BRO_STORE=/home/ride/.bro`.
 An in-session resolver therefore never consults the host's ambient selection.
 Unboxed scoping is still a convenience rather than a security boundary, because the session runs as the host user.
 
@@ -665,10 +671,10 @@ The token is the channel's whole credential
 — a port is reachable by every local process, so a connection is attributed to the channel whose token it opens with.
 The listener binds loopback plus, when the docker daemon runs on this host, the bridge gateway a container reaches back through (`ride/ride/spawn.py:broker_bind_hosts`);
 a daemon in a VM names a gateway that is no address here, so only loopback binds and the VM's own `host.docker.internal` proxy carries the container to it.
-The isolations differ only in the spawner (`ride/ride/workspace/spawn.py`, composed by `ride/ride/spawn.py:run_root_via_broker`) and in the host name the address carries:
+The shared root supervisor adapts the started-party launch to the isolation's spawner (`ride/ride/workspace/spawn.py`, composed by `ride/ride/spawn.py:run_root_via_broker`) and address host:
 
-- boxed — the container launch (`ride/ride/root.py:_run_root_via_broker` + `DockerSpawner`), with an address naming `host.docker.internal`, which every launch maps to the host gateway with `--add-host`;
-- unboxed — the plain-process launch (`ride/ride/root.py:run_unboxed_process_via_broker` + `ProcessSpawner`), with an address naming loopback.
+- boxed — `DockerLaunchSpec` through `DockerSpawner`, with an address naming `host.docker.internal`, which every launch maps to the host gateway with `--add-host`;
+- unboxed — `ProcessLaunchSpec` through `ProcessSpawner`, with an address naming loopback.
 
 The session's processes don't talk to that upstream directly:
 a **broxy** (the peer-side broker proxy, `bro/broker/broxy.py`) consumes `BROKER_UPSTREAM`, holds its one long-lived connection, and publishes its own loopback address as `BROKER_CHANNEL`.
@@ -722,10 +728,15 @@ workspace removal (`--drop`, `ride clean`) deletes it with the workspace.
 ### Summoning another bro
 
 A session can summon another bro over its channel:
-the target runs as a one-shot, non-TTY docker child (unless the summon is *manual* — the user launches an interactive child themselves;
-see "Manual summon" below) with its own scoped credential set (nothing inherited from the summoner, plus whatever the request's own `grant`/`revoke` names),
-under the harness the request names, or the launch's `[tool.bro] summon-harness` when it names none
-— both run `do-ride solo …`, `bro` spawning the target's own LLM process there and `claude` a one-shot managed Claude Code session of the target persona in full mode.
+the target starts a one-shot, non-TTY party (unless the summon is *manual* — the user launches an interactive child themselves;
+see "Manual summon" below) with its own scoped credential set (nothing inherited from the summoner, plus whatever the request's own `grant`/`revoke` names).
+It runs under the harness the request names, or the launch's `[tool.bro] summon-harness` when it names none.
+Both harnesses run `do-ride solo …`:
+`bro` spawns the target's own LLM process there, while `claude` starts a one-shot managed Claude Code session of the target persona in full mode.
+The summon control currently requests boxed isolation until the placement fields and permits are wired;
+the lowering already accepts either isolation and emits `DockerLaunchSpec` or `ProcessLaunchSpec` through the same started-party launcher roots use.
+An unboxed child starts in its own process group;
+kill sends SIGTERM only to `do-ride` so its harness-specific shutdown can unwind and flush state, then sends SIGKILL to the group if the process tree or inherited output pipe survives that grace period.
 The request's `llm` recipe resolves within the child's harness and never switches it;
 the child runs with the root session's attachment:
 an attached child bases on the summoner's workspace `HEAD` read at summon time (uncommitted changes never transfer;
@@ -839,9 +850,9 @@ Denials reply immediately and land in the journal and audit as `denied` transiti
 Each spawned child records `summoned_by` provenance from the requester's current trail plus the summoning bro's own `tool_call` step id when the request carries one.
 Requester attribution has one shape in the audit: `{workspace, bro, trail_id?}`.
 The trail is read from that workspace's session pointer for every request because Claude segments move it, with the answered quest's journal `trail` mark as fallback.
-The authorized spawn goes through the composite spawner with the requesting peer as parent
-— so unboxed roots spawn docker children too, and a grandchild's lifecycle routes to the child that summoned it;
-root exit still tears down the whole tree.
+The authorized spawn goes through the composite spawner with the requesting peer as parent.
+`SummonSpawner` lowers the request off-loop through the common started-party launcher, then dispatches its concrete Docker or process description;
+a grandchild's lifecycle routes to the child that summoned it, and root exit still tears down the whole tree.
 Every event lands a host log line and a durable audit row under `<runtime-root>/summon/<name>.jsonl`.
 Each row keys the ride under `ride`, using the root workspace name.
 Each entry names its actual `summoner` as `{workspace, bro, trail_id?}`, plus target, bounded args, transition, trail id, and terminal outcome.
@@ -853,9 +864,9 @@ Each authorized launch also carries the list it will be judged against into the 
 the session root's at launch, a summoned child's own resolved list at its spawn), so a peer reads what it may summon off its banner instead of discovering it by denial;
 enforcement stays entirely host-side.
 Root exit kills in-flight children with a loud log naming what was killed;
-a result lost that way stays recoverable from the child's trail, and the child's throwaway workspace
-— removed only after a clean exit
-— survives on disk for inspection and recovery.
+a result lost that way stays recoverable from the child's trail.
+A child supervisor removes its throwaway workspace only after a clean exit and retains it after failure or kill for inspection and recovery;
+the unboxed process handle always removes the private credential state separately, and a failed removal fails teardown rather than reporting the child complete.
 Each authorized spawn records the child's run as its `broker-<channel>` workspace's resume record
 — the same solo session spec a `ride solo` launch under the child's harness would record
 — so `ride list` shows the child under its prompt and a surviving workspace resumes like any kept solo workspace:

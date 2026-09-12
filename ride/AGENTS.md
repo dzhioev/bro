@@ -20,8 +20,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   prefetch, task-derived workspace naming, `RIDE_TASK_ID`, fresh-origin base selection, hold defaults, and forwarding to `ride along` with the project-default bro.
 - `ride/session.py` — harness-neutral session lifecycle:
   recorded `SessionSpec` including isolation and the optional repository attachment, base resolution, auth/scope preflight, and the workspace lock,
-  resume records, keep/drop finish behavior, the shared launch skeleton for attached or detached runs in both isolations,
-  and the boxed launch description every boxed session shares, `ride`'s own and a spawned summon child alike.
+  resume records, keep/drop finish behavior, and the one started-party launcher that prepares attached or detached workspaces in either isolation for roots and spawned children.
 - `ride/repository.py` — path/URL attachment resolution, normalized managed-mirror keys, flocked no-prune fetches, committed-tree reads, and mirror cleanup.
   `attachment_identities` is the host-config identities an attachment matches project entries by, reading a checkout's `origin` for the URL one.
 - `ride/do_ride.py` — the `do-ride` session executable every launcher runs inside a prepared workspace:
@@ -30,7 +29,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/scope.py` — per-surface launch scoping:
   `ScopeRecipe`, `BRO_RUN_RECIPE`, attachment-bound credential selection, `scoped_secrets`, the strict launch preflight, scope override splitting, and summoned-child scope computation.
   In-process `bro run` / `bro chat` create no scope.
-- `ride/root.py` — neutral boxed and unboxed-process root supervision behind the broker availability gate.
+- `ride/root.py` — supervision of either neutral started-party launch for roots and manually launched children, behind the broker availability gate.
 - `ride/spawn.py` — broker-root composition, summon lowering
   — each child composed through its requested harness's seam hooks, with its recorded resume spec
   — per-root journal subscribers for audit and manual-token cleanup, and the bounded credential scope handed to contributed kinds.
@@ -72,7 +71,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 
 - The runtime layer names no Claude detail in its serialized harness options.
   `SessionSpec.harness_options` belongs to the selected implementation and is validated there.
-- The neutral layer owns both launch bodies;
+- The neutral layer owns one started-party launcher parameterized by isolation;
   the harness seam supplies scope recipes, auth, LLM resolution, the `do-ride` command, session-state reads, and the per-harness launch extras.
   `do-ride` owns every session's common setup before calling the selected harness runner.
   A managed boxed or unboxed workspace is always launched by `ride`;
@@ -99,6 +98,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Scoped credential hydration").
 - Both isolations pass `BRO_STORE` and `BRO_INSTALL_KINDS` to `do-ride`, which installs the hooks through one applier into the named session environment directory,
   so a session's git and `gh` act as the identity it was scoped with and never reach the operator's own configuration.
+  An unboxed spawned child's store and install-hook output share a private temporary root removed by its supervision handle;
+  retained workspace records therefore carry no child credential material.
 - Mode verbs are detached unless `--repo` explicitly attaches a resolved checkout or git URL.
   Detached trees are plain directories, skip repository and persona provisioning, and are clean only while empty.
   A URL attachment's user-facing identity stays the normalized URL while its git operations use the managed mirror.
