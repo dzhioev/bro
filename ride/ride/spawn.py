@@ -35,7 +35,7 @@ from ride.identity import human_git_identity_env
 from ride.kinds import extension_kinds
 from ride.peer_facts import PeerFact, PeerFacts
 from ride.repository import Repository, as_repository
-from ride.scope import scoped_secrets
+from ride.scope import bind_launch_llm, scoped_secrets
 from ride.session import SessionSpec, container_launch, record_resume_spec
 from ride.summon_control import SummonControl
 from ride.workspace.docker import ContainerRuntimeResolver, bridge_gateway
@@ -91,14 +91,17 @@ def _workspace_name(channel: str) -> str:
 
 def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> SessionSpec:
   """the summoned child's run as a `SessionSpec`: an unpinned solo container
-  session of the target bro under the request's fields — only the request's
+  session of the target bro under the request's fields — its `llm` settled over
+  the host's per-bro default like a launch's own — where only the request's
   `timeout` maps to no spec field (it is the spawner's wait timer, not part of
   the run). Recorded as the workspace's resume record and the source of the
   child's inner argv, so what `ride resume` relaunches is what ran."""
   harness = get_harness(launch.harness)
+  repo = None if launch.repo is None else as_repository(launch.repo).identity
+  llm = bind_launch_llm(repo, launch.target, launch.llm)
   return SessionSpec(
     name=workspace_name,
-    repo=None if launch.repo is None else as_repository(launch.repo).identity,
+    repo=repo,
     harness=harness.name,
     workspace_pinned=False,
     host=False,
@@ -107,8 +110,8 @@ def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> Sessio
     hold=launch.hold if launch.hold is not None else default_hold(solo=True, host=False),
     grant=list(launch.grant),
     revoke=list(launch.revoke),
-    llm=launch.llm,
-    resolved_llm=harness.resolve_llm(launch.llm, launch.target).dump(),
+    llm=llm,
+    resolved_llm=harness.resolve_llm(llm, launch.target).dump(),
     solo=True,
     resume=False,
     into=launch.into,

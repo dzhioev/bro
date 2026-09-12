@@ -49,7 +49,9 @@ run those with `--help` for flags.
   The caller supplies both identities, since this layer invokes no git.
   Every result carries kind → instance and kind → choosing layer;
   config validation is grammar-only so kinds unknown to this installation survive shared dotfiles.
-  `llm_presets()` reads the host-wide `--llm` preset names (`bro/launch/llm_flags.py` merges them over the operated project's own table), and `summon_depth(project_depth)` resolves the host override over the project value and framework default.
+  `llm_presets()` reads the host-wide `--llm` preset names (`bro/launch/llm_flags.py` merges them over the operated project's own table),
+  `launch_llm(attachment, bro)` the recipes the matching `bros` entries name for one bro, carried as written for that same module to lay a launch's flags over,
+  and `summon_depth(project_depth)` resolves the host override over the project value and framework default.
   The scheme and its precedence are `bro/setup/AGENTS.md`, "Host config";
   `ride.scope.scoped_secrets` carries the project-level result to each explicitly constructed credential store
 - `git_url.py` — git remote URL grammar:

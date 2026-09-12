@@ -280,6 +280,65 @@ class TestLaunchSelection:
     assert host_config.project_selection(attachment).grants == frozenset()
 
 
+class TestLaunchLLM:
+  URL = 'https://github.com/foo/api.git'
+
+  def test_a_bro_entry_names_its_recipe_with_its_layer(self, config_file, tmp_path):
+    config_file({'projects': {str(tmp_path): {'bros': {'eyebro': {'llm': 'openai:sol:xhigh'}}}}})
+
+    assert host_config.launch_llm(host_config.Attachment(path=str(tmp_path)), 'eyebro') == (
+      host_config.LLMDefault(host_config.PROJECT_PATH_BRO_LAYER, 'openai:sol:xhigh'),
+    )
+
+  def test_the_url_entry_comes_before_the_path_entry(self, config_file, tmp_path):
+    config_file(
+      {
+        'projects': {
+          self.URL: {'bros': {'eyebro': {'llm': 'openai:sol:xhigh'}}},
+          str(tmp_path): {'bros': {'eyebro': {'grant': ['aws'], 'llm': '::low'}}},
+        }
+      }
+    )
+
+    assert host_config.launch_llm(
+      host_config.Attachment(path=str(tmp_path), url=self.URL), 'eyebro'
+    ) == (
+      host_config.LLMDefault(host_config.PROJECT_URL_BRO_LAYER, 'openai:sol:xhigh'),
+      host_config.LLMDefault(host_config.PROJECT_PATH_BRO_LAYER, '::low'),
+    )
+
+  def test_an_entry_naming_no_recipe_contributes_none(self, config_file, tmp_path):
+    config_file(
+      {
+        'projects': {
+          self.URL: {'bros': {'eyebro': {'llm': 'openai:sol:xhigh'}}},
+          str(tmp_path): {'bros': {'eyebro': {'creds': ['github+work']}}},
+        }
+      }
+    )
+
+    assert host_config.launch_llm(
+      host_config.Attachment(path=str(tmp_path), url=self.URL), 'eyebro'
+    ) == (host_config.LLMDefault(host_config.PROJECT_URL_BRO_LAYER, 'openai:sol:xhigh'),)
+
+  def test_another_bros_recipe_does_not_reach_the_launch(self, config_file, tmp_path):
+    config_file({'projects': {str(tmp_path): {'bros': {'eyebro': {'llm': 'openai:sol:xhigh'}}}}})
+
+    assert host_config.launch_llm(host_config.Attachment(path=str(tmp_path)), 'developer') == ()
+
+  def test_a_detached_launch_reads_no_entry(self, config_file, tmp_path):
+    config_file({'projects': {str(tmp_path): {'bros': {'eyebro': {'llm': 'openai:sol:xhigh'}}}}})
+
+    assert host_config.launch_llm(None, 'eyebro') == ()
+
+  def test_a_recipe_is_carried_as_written(self, config_file, tmp_path):
+    config_file({'projects': {str(tmp_path): {'bros': {'eyebro': {'llm': 'not a recipe'}}}}})
+
+    assert host_config.launch_llm(host_config.Attachment(path=str(tmp_path)), 'eyebro') == (
+      host_config.LLMDefault(host_config.PROJECT_PATH_BRO_LAYER, 'not a recipe'),
+    )
+
+
 class TestToolSelection:
   def test_each_layer_overrides_the_one_above_it(self, config_file, tmp_path):
     config_file(
@@ -397,6 +456,10 @@ class TestValidation:
       ({'projects': {'/repo': {'bros': {'dev': {'grant': 'github'}}}}}, 'grant must be a list'),
       ({'projects': {'/repo': {'bros': {'dev': {'grant': [7]}}}}}, 'grant 7 must be a string'),
       ({'projects': {'/repo': {'grant': ['github']}}}, 'unknown field'),
+      ({'projects': {'/repo': {'llm': 'openai:sol'}}}, 'unknown field'),
+      ({'projects': {'/repo': {'bros': {'dev': {'llm': 7}}}}}, 'llm must be a non-empty string'),
+      ({'projects': {'/repo': {'bros': {'dev': {'llm': ''}}}}}, 'llm must be a non-empty string'),
+      ({'projects': {'/repo': {'bros': {'dev': {'llm': None}}}}}, 'llm must be a non-empty string'),
       ({'user': {'tools': {'bro.trails.rewind': {'grant': ['github']}}}}, 'unknown field'),
       ({'user': []}, 'user must hold a json object'),
       ({'user': {'tools': []}}, 'tools must be a json object'),

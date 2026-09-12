@@ -1,5 +1,5 @@
-"""the LLM-selection flags every launch surface registers, and the preset store
-behind `--llm`.
+"""the LLM-selection flags every launch surface registers, the preset store
+behind `--llm`, and the host's per-bro defaults beneath the flags.
 
 `--provider` / `--model` / `--effort` / `--fast` name the pieces of a recipe;
 `--llm` names the whole thing at once and excludes them. A surface registers the
@@ -124,6 +124,27 @@ def selection_from_args(args: dict, *, project: object = _CURRENT_PROJECT) -> 'L
     return parse(expanded)
   except LLMSelectionError as error:
     raise LLMSelectionError(f'--llm preset {value!r} ({expanded}): {error}') from error
+
+
+def with_host_defaults(
+  selection: 'LLMSelection', attachment: Optional[host_config.Attachment], bro_name: str
+) -> 'LLMSelection':
+  """`selection` with the host's per-bro defaults beneath it: the `bros` entries
+  the attachment names for `bro_name` fill what the flags leave unnamed
+  (`LLMSelection.over`), the more specific entry first. An entry the grammar
+  rejects names itself in the error."""
+  from bro.llm.providers import LLMSelectionError, parse
+
+  for default in reversed(host_config.launch_llm(attachment, bro_name)):
+    try:
+      parsed = parse(default.recipe)
+    except LLMSelectionError as error:
+      raise LLMSelectionError(
+        f'{host_config.HOST_CONFIG_FILE}: bros.{bro_name}.llm {default.recipe!r} '
+        f'({default.layer}): {error}'
+      ) from error
+    selection = selection.over(parsed)
+  return selection
 
 
 def resolve_native(base: 'NativeLLMSpec', selection: 'LLMSelection') -> 'NativeLLMSpec':

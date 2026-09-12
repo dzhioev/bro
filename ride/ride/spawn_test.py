@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -205,6 +206,34 @@ class TestSummonLowering:
     )
     ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert captured == [ride.bro.BRO.resolve_llm('echo', 'dev')]
+
+  def test_the_hosts_per_bro_recipe_settles_the_childs_llm(
+    self, lowering_harness, monkeypatch, tmp_path
+  ):
+    config = tmp_path / 'bro.json'
+    config.write_text(
+      json.dumps({'projects': {'/proj': {'bros': {'dev': {'llm': 'openai:sol:xhigh'}}}}})
+    )
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+    launch = ride.spawn.SummonLaunchSpec(
+      target='dev',
+      prompt='p',
+      parent=PARENT,
+      repo=Path('/proj'),
+      summoner=SUMMONER,
+      may_summon=(),
+      harness='bro',
+      llm='::low',
+    )
+    lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
+    command = lowered.launch.command
+    assert command[command.index('--llm') + 1] == 'openai:sol:low'
+    spec = ride.session.load_resume_spec(
+      Workspace.ensure('broker-CH', Path('/proj'), WorkspaceKind.CONTAINER)
+    )
+    assert spec is not None
+    assert spec.llm == 'openai:sol:low'
+    assert spec.resolved_llm == ride.bro.BRO.resolve_llm('openai:sol:low', 'dev').dump()
 
   def test_credential_overrides_adjust_the_childs_scope(self, lowering_harness):
     # only the credential halves reach the scope; the `@bro` half was already

@@ -157,6 +157,47 @@ class TestAttachment:
     assert '--into requires --repo' in capsys.readouterr().err
 
 
+class TestHostLLMDefault:
+  @pytest.fixture(autouse=True)
+  def _checkout(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(ride_cli, 'project_root', lambda path: Path('/repo'))
+    self.config = tmp_path / 'bro.json'
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(self.config))
+
+  def _entry(self, llm: str) -> None:
+    self.config.write_text(json.dumps({'projects': {'/repo': {'bros': {'dev': {'llm': llm}}}}}))
+
+  def test_the_launch_records_the_recipe_settled_over_the_hosts_entry(self):
+    self._entry('openai:sol:xhigh')
+    with patch('ride.cli.start_session', return_value=0) as start:
+      argv = ['ride', 'along', '--repo', '/repo', '--harness', 'bro', '--effort', 'low', 'dev']
+      assert ride_cli.main(argv) == 0
+    spec = start.call_args.args[0]
+    assert spec.llm == 'openai:sol:low'
+    assert spec.resolved_llm == get_harness('bro').resolve_llm('openai:sol:low', 'dev').dump()
+    command = _inner_command(spec)
+    assert command[command.index('--llm') + 1] == 'openai:sol:low'
+
+  def test_a_recipe_the_harness_cannot_run_fails_the_launch(self, capsys):
+    self._entry('openai:sol')
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'along', '--repo', '/repo', 'dev'])
+    assert '--harness bro' in capsys.readouterr().err
+
+  def test_a_malformed_entry_names_itself(self, capsys):
+    self._entry('::ludicrous')
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'along', '--repo', '/repo', 'dev'])
+    assert "bros.dev.llm '::ludicrous' (project-path-bro)" in capsys.readouterr().err
+
+  def test_the_inner_run_reads_no_host_entry(self):
+    self._entry('openai:sol:xhigh')
+    with patch('ride.inner.run_in_place', return_value=0) as run:
+      argv = ['ride', 'solo', '--in-place', '--workspace', 'session', '--repo', '/repo']
+      assert ride_cli.main([*argv, '--harness', 'bro', 'dev', 'prompt']) == 0
+    assert run.call_args.args[1].llm is None
+
+
 class TestAlong:
   def test_builds_an_attended_claude_session(self):
     with patch('ride.cli.start_session', return_value=0) as start:

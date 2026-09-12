@@ -174,6 +174,23 @@ class LLMSelection:
       return provider_of_model(self.model)
     return None
 
+  def over(self, base: 'LLMSelection') -> 'LLMSelection':
+    """this selection with `base` filling what it leaves unnamed — a launch's
+    flags over a configured default.
+
+    Provider and model are one slot: a selection naming either keeps its own
+    pair, since a model belongs to its provider and a provider named alone
+    selects its default model. Effort fills on its own, and fast holds where
+    either names it.
+    """
+    names_recipe = self.provider is not None or self.model is not None
+    return LLMSelection(
+      provider=self.provider if names_recipe else base.provider,
+      model=self.model if names_recipe else base.model,
+      effort=self.effort if self.effort is not None else base.effort,
+      fast=self.fast or base.fast,
+    )
+
   def format(self) -> str:
     """this selection as a canonical `--llm` value, which `parse` reads back.
 

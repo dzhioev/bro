@@ -11,13 +11,20 @@ import bro.brog.model as brog_model
 import bro.brog.system as brog_system
 from bro.base import log
 from bro.base.args import Parser
+from bro.launch.llm_flags import selection_from_args
 from bro.workspace.git import fetch_ref
 from bro.workspace.paths import fresh_workspace_name, project_root
 from bro.workspace.project import project_config
 from ride.cli import reports_runtime_errors
 from ride.flags import add_forwarded_flags, extract_forwarded_argv, pop_harness_options
 from ride.harness import get_harness
-from ride.scope import LaunchScopeError, launch_scope_errors, launch_view_store, scoped_secrets
+from ride.scope import (
+  LaunchScopeError,
+  launch_llm_spec,
+  launch_scope_errors,
+  launch_view_store,
+  scoped_secrets,
+)
 
 __cli_name__ = 'dive-in'
 
@@ -79,21 +86,24 @@ def _task_system(
   bro: Optional[str],
   harness: str,
   harness_options: dict,
+  llm: Optional[str],
 ) -> brog_system.System:
   """the brog backend for the task prefetch, reading `brog` through the launch's
-  own credential binding (`launch_view_store`) — so `--grant`/`--revoke` select
-  the same brog config the session's store hydrates. every read carries the
-  launch's error surface (`launch_scope_errors`), the deferred ones included: the
-  backend re-reads the config per operation, past this call."""
+  own credential binding (`launch_view_store`) — so `--grant`/`--revoke` and the
+  LLM selection shape the same scope the session's store hydrates. every read
+  carries the launch's error surface (`launch_scope_errors`), the deferred ones
+  included: the backend re-reads the config per operation, past this call."""
   project = project_config(repo)
   bro_name = bro if bro is not None else project.default_bro
+  driver = get_harness(harness)
 
   with launch_scope_errors():
     store = launch_view_store(
       scoped_secrets(
         bro_name,
-        get_harness(harness).scope_recipe(harness_options),
+        driver.scope_recipe(harness_options),
         attachment=str(repo),
+        llm_spec=launch_llm_spec(driver, str(repo), bro_name, llm),
         grant=grant,
         revoke=revoke,
       )
@@ -117,6 +127,7 @@ def dive_in(
   bro: Optional[str] = None,
   harness: str = 'claude',
   harness_options: Optional[dict] = None,
+  llm: Optional[str] = None,
   repo: Optional[Path] = None,
 ) -> int:
   """launch the session. session shaping — the bro (prompt, spells, MCP
@@ -142,6 +153,7 @@ def dive_in(
         bro,
         harness,
         harness_options if harness_options is not None else {},
+        llm,
       )
       brog_task, task_block = _prefetch_task(system, task_ref)
     except LaunchScopeError as error:
@@ -219,11 +231,17 @@ def main(argv: list[str]) -> Optional[int]:
       args['into'] = base_ref
   # the prefetch binds to the same scope the session launches with, so the
   # scope-shaping flags are read here as well as forwarded
-  harness_name = args['harness'] or project_config(repo).harness
+  config = project_config(repo)
+  harness_name = args['harness'] or config.harness
   harness_options = pop_harness_options(
     parser, dict(args), harness_name, solo=False, host=args['host']
   )
+  try:
+    selection = selection_from_args(args, project=config)
+  except ValueError as error:
+    parser.error(str(error))
   scope_args = {key: args[key] for key in ('grant', 'revoke', 'bro')}
+  scope_args['llm'] = None if selection.is_empty() else selection.format()
   args['bro'] = None
   forwarded = extract_forwarded_argv(args)
   return dive_in(

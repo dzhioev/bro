@@ -187,6 +187,76 @@ class TestScopedSecrets:
       ride.scope.scoped_secrets('nonexistent-bro', recipe)
 
 
+class TestBindLaunchLLM:
+  def _config(self, tmp_path, monkeypatch, bros: dict) -> None:
+    config = tmp_path / 'bro.json'
+    config.write_text(json.dumps({'projects': {str(tmp_path): {'bros': bros}}}))
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+
+  def test_the_launch_settles_its_flags_over_the_bros_entry(self, tmp_path, monkeypatch):
+    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': 'openai:sol:xhigh'}})
+
+    assert ride.scope.bind_launch_llm(str(tmp_path), 'bro-dev', '::low') == 'openai:sol:low'
+
+  def test_a_launch_naming_nothing_runs_the_entry(self, tmp_path, monkeypatch):
+    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': 'openai:sol:xhigh'}})
+
+    assert ride.scope.bind_launch_llm(str(tmp_path), 'bro-dev', None) == 'openai:sol:xhigh'
+
+  def test_nothing_named_anywhere_is_none(self, tmp_path, monkeypatch):
+    self._config(tmp_path, monkeypatch, {'other': {'llm': 'openai:sol:xhigh'}})
+
+    assert ride.scope.bind_launch_llm(str(tmp_path), 'bro-dev', None) is None
+    assert ride.scope.bind_launch_llm(None, 'bro-dev', None) is None
+
+  def test_a_detached_launch_keeps_its_own_value(self, tmp_path, monkeypatch):
+    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': 'openai:sol:xhigh'}})
+
+    assert ride.scope.bind_launch_llm(None, 'bro-dev', '::low') == '::low'
+
+
+class TestLaunchLLMSpec:
+  def test_a_selection_only_the_settled_recipe_reads_is_read(self, tmp_path, monkeypatch):
+    from bro.llm.llms.echo import LLMSpec as EchoLLMSpec
+    from bro.registry import get_class
+    from ride.bro import BRO
+
+    monkeypatch.setattr(get_class('bro-dev'), 'llm_spec', EchoLLMSpec())
+    # spells put the cast key in the optional tier, which would read the
+    # selection on its own
+    for base in get_class('bro-dev').__mro__:
+      if 'spells' in vars(base):
+        monkeypatch.setattr(base, 'spells', ())
+    config = tmp_path / 'bro.json'
+    config.write_text(
+      json.dumps(
+        {
+          'projects': {
+            str(tmp_path): {'bros': {'bro-dev': {'creds': ['openai+work'], 'llm': 'openai:sol'}}}
+          }
+        }
+      )
+    )
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+    attachment = str(tmp_path)
+
+    llm_spec = ride.scope.launch_llm_spec(BRO, attachment, 'bro-dev', None)
+    scoped = ride.scope.scoped_secrets(
+      'bro-dev', BRO_RUN_RECIPE, attachment=attachment, llm_spec=llm_spec
+    )
+
+    assert 'openai' in scoped.required
+    assert scoped.selection['openai'] == 'work'
+    with pytest.raises(ride.scope.LaunchScopeError, match='move the entry from "creds" to "grant"'):
+      ride.scope.scoped_secrets('bro-dev', BRO_RUN_RECIPE, attachment=attachment)
+
+  def test_an_unknown_bro_fails_the_launch(self):
+    from ride.bro import BRO
+
+    with pytest.raises(ride.scope.LaunchScopeError, match="unknown bro 'no-such-bro'"):
+      ride.scope.launch_llm_spec(BRO, None, 'no-such-bro', None)
+
+
 class TestHostConfigBroLayer:
   # scope-search (above) declares no github and reads openai best-effort
   def _host_config(self, tmp_path, monkeypatch, entry):
