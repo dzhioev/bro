@@ -247,16 +247,16 @@ trigger_image_build() {
 _CDK_CLI_PACKAGE='aws-cdk@2.1139.0'
 
 cdk_deploy() {
-  if [ "$#" -lt 2 ]; then
-    echo "usage: cdk_deploy <cdk-directory> <stack> [cdk-argument ...]" >&2
+  if [ "$#" -lt 3 ]; then
+    echo "usage: cdk_deploy <cdk-directory> <deploy-target> <stack> [cdk-argument ...]" >&2
     return 2
   fi
-  local cdk_directory="$1"
-  shift
+  local cdk_directory="$1" deploy_target="$2"
+  shift 2
   (
     cd "$cdk_directory" || exit 1
     CDK_CLI_TELEMETRY_OPTOUT=1 npx --yes --package "$_CDK_CLI_PACKAGE" -- \
-      cdk deploy "$@" --require-approval never
+      cdk deploy "$@" --require-approval never --output "cdk.out/${deploy_target}"
   )
 }
 
