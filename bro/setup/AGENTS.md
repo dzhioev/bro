@@ -40,6 +40,7 @@ editable installs record absolute source paths.
 - `versions.sh` and `ubuntu/` — pinned host-tool versions and Ubuntu installers used only by `setup_env.sh`
 - `prelude.sh` — shell-script prelude every executable framework script sources;
   consumers resolve the packaged directory with `bro-shell-dir`
+- `install_awscli.sh` — packaged macOS/Linux AWS CLI installer
 - `log.sh` — leveled shell logging thresholded by `BRO_LOG_LEVEL`
 - `strict.sh` — fail-fast shell guards, including command-not-found inside test positions
 - `docker_smoke_test.sh` — packaged sourceable helper for service image smoke-test scripts

@@ -261,6 +261,7 @@ PYTEST_FILES = [
   'bro/prompts/prompts_test.py',
   'ride/ride/workspace/clones_test.py',
   'bro/setup/docker_smoke_test_test.py',
+  'bro/setup/install_awscli_test.py',
   'bro/llm/usage_test.py',
   'bench/bro/bench/credentials_test.py',
   'bench/bro/bench/job_test.py',

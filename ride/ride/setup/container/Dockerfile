@@ -20,10 +20,10 @@ RUN apt-get update \
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscli.zip \
- && unzip -q /tmp/awscli.zip -d /tmp \
- && /tmp/aws/install \
- && rm -rf /tmp/awscli.zip /tmp/aws
+COPY .bro-container/prelude.sh .bro-container/log.sh .bro-container/strict.sh \
+     .bro-container/install_awscli.sh /tmp/bro-shell/
+RUN bash -e /tmp/bro-shell/install_awscli.sh \
+ && rm -rf /tmp/bro-shell
 
 ARG CLAUDE_CODE_VERSION
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
