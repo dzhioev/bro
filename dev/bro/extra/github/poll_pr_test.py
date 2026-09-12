@@ -502,20 +502,55 @@ class TestCheckTracker:
     failed = [_check_run('tests', 'completed', 'failure')]
     passed = [_check_run('tests', 'completed', 'success')]
 
-    assert tracker.update(running) == []
-    fired = tracker.update(failed)
-    assert [run['name'] for run in fired] == ['tests']
-    assert tracker.update(failed) == []  # still red: no repeat
-    assert tracker.update(passed) == []  # re-run went green: re-arms
-    assert len(tracker.update(failed)) == 1
+    assert tracker.update('head', running) is None
+    fired = tracker.update('head', failed)
+    assert fired is not None
+    assert [run['name'] for run in fired.failed_runs] == ['tests']
+    assert tracker.update('head', failed) is None
+    green = tracker.update('head', passed)
+    assert green is not None
+    assert green.failed_runs == []
+    fired_again = tracker.update('head', failed)
+    assert fired_again is not None
+    assert len(fired_again.failed_runs) == 1
+    green_again = tracker.update('head', passed)
+    assert green_again is not None
+    assert green_again.failed_runs == []
 
-  def test_neutral_and_skipped_are_not_failures(self):
+  def test_fires_green_once_and_rearms_on_a_pending_run(self):
+    tracker = poll_pr.CheckTracker()
+    passed = [_check_run('tests', 'completed', 'success')]
+
+    first_green = tracker.update('head', passed)
+    assert first_green is not None
+    assert first_green.failed_runs == []
+    assert tracker.update('head', passed) is None
+    assert tracker.update('head', [_check_run('tests', 'queued')]) is None
+    second_green = tracker.update('head', passed)
+    assert second_green is not None
+    assert second_green.failed_runs == []
+
+  def test_a_new_head_rearms_green_without_a_pending_observation(self):
+    tracker = poll_pr.CheckTracker()
+    passed = [_check_run('tests', 'completed', 'success')]
+
+    first_green = tracker.update('first', passed)
+    assert first_green is not None
+    assert first_green.failed_runs == []
+    assert tracker.update('first', passed) is None
+    second_green = tracker.update('second', passed)
+    assert second_green is not None
+    assert second_green.failed_runs == []
+
+  def test_neutral_and_skipped_are_green(self):
     tracker = poll_pr.CheckTracker()
     runs = [_check_run('a', 'completed', 'neutral'), _check_run('b', 'completed', 'skipped')]
-    assert tracker.update(runs) == []
+    transition = tracker.update('head', runs)
+    assert transition is not None
+    assert transition.failed_runs == []
 
-  def test_no_checks_is_not_a_failure(self):
-    assert poll_pr.CheckTracker().update([]) == []
+  def test_no_checks_is_not_green(self):
+    assert poll_pr.CheckTracker().update('head', []) is None
 
 
 class TestCheckEvents:
@@ -549,6 +584,26 @@ class TestCheckEvents:
     assert checks[0]['failing'] == [
       {'name': 'tests', 'conclusion': 'failure', 'url': 'https://github.com/x/y/runs/tests'}
     ]
+
+  def test_all_checks_green_emits_one_event(self, monkeypatch, capsys):
+    self._baseline(monkeypatch)
+    monkeypatch.setattr(
+      poll_pr.pulls,
+      'pull_request',
+      _Stepper([_open_pr(), _open_pr(), _open_pr(), {'merged': True}]),
+    )
+    monkeypatch.setattr(
+      poll_pr,
+      '_fetch_check_runs',
+      _Stepper(
+        [[_check_run('tests', 'in_progress')], [_check_run('tests', 'completed', 'success')]]
+      ),
+    )
+    assert _poll() == 0
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    checks = [event for event in events if event['event'] == 'checks']
+    assert checks == [{'event': 'checks', 'pr': 1, 'failing': []}]
 
   def test_a_pr_without_a_head_sha_skips_the_check_fetch(self, monkeypatch):
     self._baseline(monkeypatch)

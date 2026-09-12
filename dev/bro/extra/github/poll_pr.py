@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""poll a GitHub PR for merge status, merge conflicts, failing checks, pushes,
+"""poll a GitHub PR for merge status, merge conflicts, check results, pushes,
 new comments, and new reviews.
 
 Comment and review events fire for the parties to the PR's review — the PR
@@ -19,6 +19,7 @@ import json
 import time
 import urllib.error
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Optional, TypeVar
 
 from bro.base import credentials, log
@@ -185,28 +186,48 @@ class HeadTracker:
     return sha if moved else None
 
 
+@dataclass(frozen=True)
+class CheckTransition:
+  failed_runs: list[dict[str, Any]]
+
+
 class CheckTracker:
-  """edge-triggered failing-check detection: `update` returns the failed runs
-  once when the head commit's checks turn red, stays quiet while they stay red,
-  and re-arms once nothing is failing — a re-run or a new push that goes green.
-  Runs still in progress are no information; only concluded failures fire."""
+  """edge-triggered check detection over each head commit.
+
+  `update` returns a transition with failed runs when checks turn red, a
+  transition without failed runs when every run has concluded without failure,
+  and None while there is no new edge. A new head re-arms both edges; a pending
+  or failed run also re-arms the green edge. An empty check suite is not green.
+  """
 
   def __init__(self):
+    self._sha: Optional[str] = None
     self._failing = False
+    self._green_armed = True
 
-  def update(self, check_runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    failed = [
-      run
-      for run in check_runs
-      if api.check_state(run.get('status'), run.get('conclusion')) == 'failed'
-    ]
-    if len(failed) == 0:
+  def update(self, sha: str, check_runs: list[dict[str, Any]]) -> Optional[CheckTransition]:
+    if sha != self._sha:
+      self._sha = sha
       self._failing = False
-      return []
-    if self._failing:
-      return []
-    self._failing = True
-    return failed
+      self._green_armed = True
+
+    states = [api.check_state(run.get('status'), run.get('conclusion')) for run in check_runs]
+    if 'pending' in states:
+      self._green_armed = True
+
+    failed = [run for run, state in zip(check_runs, states, strict=True) if state == 'failed']
+    if len(failed) > 0:
+      self._green_armed = True
+      if self._failing:
+        return None
+      self._failing = True
+      return CheckTransition(failed)
+
+    self._failing = False
+    if len(check_runs) == 0 or 'pending' in states or not self._green_armed:
+      return None
+    self._green_armed = False
+    return CheckTransition([])
 
 
 def _checks_event(pr: int, failed: list[dict[str, Any]]) -> dict[str, Any]:
@@ -365,9 +386,9 @@ def poll_pr(
             'checks', _fetch_check_runs, owner, repo, head_sha, cycle_token
           )
           if check_runs is not None:
-            failed = checks.update(check_runs)
-            if len(failed) > 0:
-              _emit(_checks_event(pr, failed))
+            transition = checks.update(head_sha, check_runs)
+            if transition is not None:
+              _emit(_checks_event(pr, transition.failed_runs))
 
       sources.probe(
         'reviews',
@@ -405,8 +426,8 @@ def _token_provider(credential: str) -> Callable[[], str]:
 
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(
-    description='poll a GitHub PR for merge status, merge conflicts, failing checks, '
-    'pushes, new comments, and new reviews'
+    description='poll a GitHub PR for merge status, merge conflicts, check results, pushes, '
+    'new comments, and new reviews'
   )
   parser.add_argument(
     'repo',

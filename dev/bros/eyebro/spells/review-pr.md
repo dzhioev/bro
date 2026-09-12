@@ -144,7 +144,9 @@ Events fire for the review parties
   — a new review, its inline comments bundled under `comments`.
 - `{"event": "pushed", "pr": N, "head": "…"}`
   — the PR's head moved to a new commit.
-- `{"event": "checks", "pr": N, "failing": […]}` — a status check on the head concluded as a failure.
+- `{"event": "checks", "pr": N, "failing": […]}`
+  — the head's checks reached a red or green edge;
+  a non-empty `failing` array reports failures, while an empty one reports that every run concluded without failure.
 - `{"event": "conflicts", "pr": N}` — the PR became unmergeable into its base.
 - `{"event": "merged", "pr": N}` / `{"event": "closed", "pr": N}` — the PR is terminal.
 - `{"event": "watch_failed", "pr": N, "source": "…", "reason": "…"}`
