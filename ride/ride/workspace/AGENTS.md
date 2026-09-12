@@ -12,7 +12,8 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
   `ride.session.started_party_launch` prepares either isolation before supervision starts `do-ride`, which owns the per-session setup.
 - **Isolation is recorded.**
   `workspace.json` fixes boxed or unboxed isolation at creation.
-  Every attached tree is an independent clone;
+  Every attached tree is an independent clone.
+  A detached unboxed workspace may record an externally owned tree;
   only legacy cleanup knows how to release a linked worktree.
 - **Core contracts point downward.**
   Runtime paths, project configuration, and git helpers remain in `bro.workspace`;
@@ -30,8 +31,8 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
   path attachments read the working tree, URL attachments the resolved commit
 - `docker.py` — runtime/project image hashing and builds, plus lazy per-ride container-runtime resolution with the daemon mount preflight;
   broker-free launch descriptions, root-bounded bind validation, container creation, scoped-store copy, attach suspension, Docker inspection, and the bridge gateway a container reaches its launcher through
-- `metadata.py` — strict `workspace.json` records and boxed/unboxed isolation
-- `model.py` — workspace factories, locking, inspection, clean-exit records, and isolation-specific teardown
+- `metadata.py` — strict `workspace.json` records, boxed/unboxed isolation, and optional external-tree identity
+- `model.py` — workspace factories, namespace/session locking, external-tree ownership, inspection, clean-exit records, and isolation-specific teardown
 - `worktrees.py` — the surviving unboxed `setup.sh` runner
 - `clones.py` — clone creation for every attached tree, upstream retargeting, base checkout, and submodule initialization
 - `containers.py` — boxed execution and attachment plus the broker availability gate

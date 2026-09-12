@@ -25,8 +25,9 @@ from ride.flags import (
 from ride.harness import get_harness
 from ride.listing import list_workspaces
 from ride.repository import Repository, is_git_url, resolve_repository
+from ride.runtime_bundle import reexec_from_runtime
 from ride.runtime_state import migrate_runtime_state
-from ride.session import SessionSpec, resume_session, start_session
+from ride.session import SessionSpec, recorded_runtime_reference, resume_session, start_session
 from ride.workspace.containers import exec_in_workspace
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
@@ -40,6 +41,18 @@ def _add_mode_flags(parser: Parser) -> None:
     default=None,
     metavar='PATH|URL',
     help='attach an existing checkout path or git URL (default: detached)',
+  )
+  parser.add_argument(
+    '--tree',
+    default=None,
+    metavar='PATH',
+    help='run a detached unboxed session in an existing directory without owning it',
+  )
+  parser.add_argument(
+    '--runtime-bundle',
+    default=None,
+    metavar='PATH',
+    help='run from a materialized runtime at PATH (PATH/venv and PATH/bin)',
   )
   parser.add_argument(
     '-w',
@@ -156,10 +169,39 @@ def _parse(parser: Parser, argv: list[str]) -> tuple[dict, list[str]]:
   return _parse_mode(parser, argv)
 
 
-def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, solo: bool) -> int:
+def _bootstrap_mode_runtime(parser: Parser, args: dict, launch_argv: list[str]) -> None:
+  token = args.get('summoned')
+  runtime = args.get('runtime_bundle')
+  if token is not None:
+    if runtime is not None:
+      parser.error('--summoned takes its runtime from the summon token; drop --runtime-bundle')
+    try:
+      runtime = pending_summon.runtime_reference(token)
+    except (pending_summon.UnknownToken, ValueError) as error:
+      parser.error(str(error))
+  elif runtime is not None:
+    runtime = str(Path(runtime).expanduser().resolve())
+  if runtime is None:
+    return
+  try:
+    reexec_from_runtime(runtime, launch_argv)
+  except RuntimeError as error:
+    parser.error(str(error))
+  args['runtime_bundle'] = runtime
+
+
+def _start_mode(
+  parser: Parser,
+  args: dict,
+  harness_arguments: list[str],
+  *,
+  solo: bool,
+) -> int:
   workspace = args.pop('workspace')
   summoned_token = args.pop('summoned', None)
   repo_argument = args.pop('repo')
+  tree_argument = args.pop('tree')
+  runtime_argument = args.pop('runtime_bundle')
   summoned = None if summoned_token is None else _peek_summoned(parser, summoned_token)
   if summoned is not None:
     if repo_argument is not None:
@@ -187,6 +229,13 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
   if args['into'] is not None and repo is None and summoned_token is None:
     parser.error('--into requires --repo')
   isolation = isolation_from_args(args)
+  tree = None if tree_argument is None else str(Path(tree_argument).expanduser().resolve())
+  if tree is not None:
+    if repo is not None:
+      parser.error('--tree cannot be combined with --repo')
+    if isolation is not Isolation.UNBOXED:
+      parser.error('--tree requires --unboxed')
+  runtime_bundle = runtime_argument
   if args['hold'] is None:
     args['hold'] = default_hold(solo=solo, isolation=isolation)
   config = (
@@ -238,6 +287,8 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     harness_options=harness_options,
     summon_depth=summon_depth,
     summon_harness=summon_harness,
+    tree=tree,
+    runtime_bundle=runtime_bundle,
     **args,
   )
   return start_session(spec, repository, summoned=summoned)
@@ -289,6 +340,8 @@ def alias_main(argv: list[str], *, solo: bool) -> int:
   )
   _configure_mode_parser(parser, solo=solo)
   args, harness_arguments = _parse_mode(parser, argv)
+  launch_argv = ['ride', 'solo' if solo else 'along', *argv[1:]]
+  _bootstrap_mode_runtime(parser, args, launch_argv)
   migrate_runtime_state()
   return _start_mode(parser, args, harness_arguments, solo=solo)
 
@@ -298,6 +351,15 @@ def main(argv: list[str]) -> Optional[int]:
   parser = build_parser()
   args, harness_arguments = _parse(parser, argv)
   command = args.pop('cmd')
+  if command in ('solo', 'along'):
+    _bootstrap_mode_runtime(parser, args, argv)
+  elif command == 'resume':
+    try:
+      runtime = recorded_runtime_reference(args['name'])
+      if runtime is not None:
+        reexec_from_runtime(runtime, argv)
+    except (ValueError, RuntimeError) as error:
+      parser.error(str(error))
   migrate_runtime_state()
   if command not in ('solo', 'along') and len(harness_arguments) > 0:
     parser.error('`--` harness arguments are accepted only by `ride solo` and `ride along`')

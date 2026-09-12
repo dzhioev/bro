@@ -5,7 +5,7 @@ channel awaiting an external child) and the user with a token (the request id).
 This module is the bridge between them: `SummonControl` writes one record per
 registered manual summon under `<runtime-root>/summon/pending/<token>.json`,
 and the user's `ride along --summoned <token>` launch reads it back — the
-channel to attach to, the broker protocol revision, the authorized child shape (target, allow-list, permits, scope overrides), the prompt, and the base-ref inheritance source.
+channel to attach to, the ride runtime, the authorized child shape (target, allow-list, permits, scope overrides), the prompt, and the base-ref inheritance source.
 
 `claim` is one-shot: exactly one launch may attach to the channel (a second
 connection would supersede the first on it), so the unlink decides a
@@ -36,7 +36,7 @@ class PendingSummon:
   """one registered manual summon, keyed by its token (the request id)."""
 
   token: str
-  protocol_revision: int
+  runtime: str  # the ride's frozen hash or given materialized-runtime path
   port: int  # the provisioned broker channel: the host's listening port
   channel_token: str  # and the token that attaches to this summon's channel on it
   target: str
@@ -74,8 +74,7 @@ def write(pending: PendingSummon) -> None:
   path.write_text(json.dumps(asdict(pending), ensure_ascii=False, indent=2))
 
 
-def peek(token: str) -> PendingSummon:
-  """read and validate the token's record without claiming it."""
+def _read_data(token: str) -> dict[str, Any]:
   try:
     data = json.loads(_path(token).read_text())
   except FileNotFoundError:
@@ -85,23 +84,33 @@ def peek(token: str) -> PendingSummon:
     ) from None
   if not isinstance(data, dict):
     raise ValueError(f'pending manual summon {token!r} is not a JSON object')
-  from bro.broker.brotocol import PROTOCOL_REVISION
+  return data
 
-  if 'protocol_revision' not in data:
+
+def _runtime_value(data: dict[str, Any], token: str) -> str:
+  runtime = data.get('runtime')
+  if not isinstance(runtime, str) or runtime == '':
+    raise ValueError(f'pending manual summon {token!r} carries no usable runtime')
+  from ride.runtime_bundle import RuntimeBundleError, runtime_root_from_reference
+
+  try:
+    runtime_root_from_reference(runtime)
+  except RuntimeBundleError as error:
     raise ValueError(
-      f'pending manual summon {token!r} has no broker protocol revision; '
-      're-mint the token from a session on this installation'
-    )
-  record_revision = data['protocol_revision']
-  if (
-    isinstance(record_revision, bool)
-    or not isinstance(record_revision, int)
-    or record_revision != PROTOCOL_REVISION
-  ):
-    raise ValueError(
-      f'pending manual summon {token!r} uses broker protocol revision {record_revision!r}, '
-      f'but this installation uses {PROTOCOL_REVISION}; re-mint the token from a matching release'
-    )
+      f'pending manual summon {token!r} carries no usable runtime: {error}'
+    ) from error
+  return runtime
+
+
+def runtime_reference(token: str) -> str:
+  """Read only the runtime needed to enter the token's owning installation."""
+  return _runtime_value(_read_data(token), token)
+
+
+def peek(token: str) -> PendingSummon:
+  """read and validate the token's record without claiming it."""
+  data = _read_data(token)
+  _runtime_value(data, token)
   permit_values = data.get('permits')
   if not isinstance(permit_values, list) or not all(
     isinstance(value, str) and value in PARTY_PERMITS for value in permit_values

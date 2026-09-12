@@ -7,7 +7,7 @@ import pytest
 
 import ride.cli as ride_cli
 from bro.base import configs
-from bro.broker.brotocol import PROTOCOL_REVISION
+from bro.workspace.paths import workspace_dir
 from ride import pending_summon
 from ride.do_ride import command as do_ride_command
 from ride.harness import get_harness
@@ -27,6 +27,7 @@ def project(monkeypatch):
     ),
   )
   monkeypatch.setattr(ride_cli, 'fresh_workspace_name', lambda base: f'{base}-12345678')
+  monkeypatch.setattr(ride_cli, 'reexec_from_runtime', lambda _runtime, _argv: None)
 
 
 def _session_command(spec) -> list[str]:
@@ -152,6 +153,32 @@ class TestAttachment:
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'along', '--into', 'feature', 'dev'])
     assert '--into requires --repo' in capsys.readouterr().err
+
+  def test_external_tree_is_recorded_as_an_absolute_path(self, tmp_path):
+    tree = tmp_path / 'task'
+    tree.mkdir()
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'solo', '--unboxed', '--tree', str(tree), 'dev', 'work']) == 0
+    assert start.call_args.args[0].tree == str(tree.resolve())
+
+  @pytest.mark.parametrize('flags', [[], ['--boxed'], ['--unboxed', '--repo', '.']])
+  def test_external_tree_requires_a_detached_unboxed_launch(self, tmp_path, flags, capsys):
+    tree = tmp_path / 'task'
+    tree.mkdir()
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'solo', *flags, '--tree', str(tree), 'dev', 'work'])
+    assert '--tree' in capsys.readouterr().err
+
+  def test_given_runtime_is_recorded_as_an_absolute_path(self, tmp_path):
+    runtime = tmp_path / 'runtime'
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert (
+        ride_cli.main(
+          ['ride', 'solo', '--unboxed', '--runtime-bundle', str(runtime), 'dev', 'work']
+        )
+        == 0
+      )
+    assert start.call_args.args[0].runtime_bundle == str(runtime.resolve())
 
 
 class TestAlong:
@@ -296,6 +323,42 @@ class TestLifecycle:
       assert ride_cli.main(['ride', 'list']) == 0
     migrate.assert_called_once_with()
 
+  def test_given_runtime_reexec_precedes_migration(self, monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+      ride_cli,
+      'reexec_from_runtime',
+      lambda _runtime, _argv: calls.append('reexec'),
+    )
+    monkeypatch.setattr(ride_cli, 'migrate_runtime_state', lambda: calls.append('migrate'))
+    monkeypatch.setattr(
+      ride_cli, 'start_session', lambda *_args, **_kwargs: calls.append('start') or 0
+    )
+    assert (
+      ride_cli.main(['ride', 'solo', '--unboxed', '--runtime-bundle', str(tmp_path), 'dev', 'work'])
+      == 0
+    )
+    assert calls == ['reexec', 'migrate', 'start']
+
+  def test_resume_runtime_reexec_precedes_migration(self, monkeypatch):
+    record = workspace_dir('recorded') / 'resume.json'
+    record.parent.mkdir(parents=True)
+    record.write_text(json.dumps({'runtime_bundle': '/runtime'}))
+    calls = []
+    monkeypatch.setattr(
+      ride_cli,
+      'reexec_from_runtime',
+      lambda _runtime, _argv: calls.append('reexec'),
+    )
+    monkeypatch.setattr(ride_cli, 'migrate_runtime_state', lambda: calls.append('migrate'))
+    monkeypatch.setattr(
+      ride_cli,
+      'resume_session',
+      lambda *_args, **_kwargs: calls.append('resume') or 0,
+    )
+    assert ride_cli.main(['ride', 'resume', 'recorded']) == 0
+    assert calls == ['reexec', 'migrate', 'resume']
+
   def test_mode_parser_has_no_in_place_entry(self, capsys):
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'solo', '--in-place', 'dev', 'prompt'])
@@ -333,7 +396,7 @@ class TestSummonedLaunch:
   def pending(self, monkeypatch, tmp_path):
     record = pending_summon.PendingSummon(
       token='TOK-1',
-      protocol_revision=PROTOCOL_REVISION,
+      runtime='/runtime',
       port=7321,
       channel_token='tk',
       target='dev',
@@ -355,6 +418,7 @@ class TestSummonedLaunch:
     assert spec.prompt == 'work this out with the user'
     assert spec.grant == ['aws']
     assert spec.revoke == ['openai']
+    assert spec.runtime_bundle == '/runtime'
     assert start.call_args.kwargs['summoned'] == pending
 
   def test_user_credential_overrides_layer_on_the_records(self, pending):
@@ -392,19 +456,21 @@ class TestSummonedLaunch:
       ride_cli.main(['ride', 'along', '--summoned', 'TOK-9', 'dev'])
     assert 'no pending manual summon for token' in capsys.readouterr().err
 
-  def test_protocol_mismatch_is_refused_before_session_creation(self, pending, capsys):
+  def test_runtime_is_read_and_reexeced_before_the_full_record(self, pending, monkeypatch):
     path = pending_summon._path(pending.token)
     data = json.loads(path.read_text())
-    data['protocol_revision'] += 1
+    data['future_field'] = {'new': 'shape'}
     path.write_text(json.dumps(data))
+    calls = []
 
-    with (
-      patch('ride.cli.start_session') as start,
-      pytest.raises(SystemExit),
-    ):
-      ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', 'dev'])
-    assert start.call_count == 0
-    assert 'uses broker protocol revision' in capsys.readouterr().err
+    def reexec(runtime, argv):
+      calls.append((runtime, argv))
+      raise RuntimeError('reexec stopped')
+
+    monkeypatch.setattr(ride_cli, 'reexec_from_runtime', reexec)
+    with pytest.raises(SystemExit):
+      ride_cli.main(['old-ride', 'along', '--summoned', 'TOK-1', 'dev'])
+    assert calls == [('/runtime', ['old-ride', 'along', '--summoned', 'TOK-1', 'dev'])]
 
   def test_solo_has_no_summoned_flag(self, pending, capsys):
     with pytest.raises(SystemExit):

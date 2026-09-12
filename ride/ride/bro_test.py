@@ -166,6 +166,7 @@ class TestContainerSession:
       'RIDE_BRO': 'dev',
       'RIDE_ISOLATION': 'boxed',
       'RIDE_BRANCH': 'workspace-w',
+      ride_session.RUNTIME_ENV: str(_runtime_bundle(tmp_path).host_root),
       ride_session.INSTALL_DIRECTORY_ENV: ride_session.CONTAINER_INSTALL_DIRECTORY,
       ride_session.RESOLVED_LLM_ENV: ride_session.encode_resolved_llm(spec.resolved_llm),
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),

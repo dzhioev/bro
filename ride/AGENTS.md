@@ -47,7 +47,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   the manual variant registers as an expected external Worker with its pending record.
   The peer wire and self-contained CLI are the framework's `bro/summon.py`.
 - `ride/pending_summon.py` — pending manual summons:
-  the protocol-stamped record a launch token resolves to, written by the control and one-shot-claimed by the `--summoned` launch, whose claim records the child's workspace name — the attribution source for the manual peer.
+  the runtime-carrying record a launch token resolves to, written by the control and one-shot-claimed by the `--summoned` launch, whose claim records the child's workspace name — the attribution source for the manual peer.
 - `ride/trails.py` — local-trails mounts for launch descriptions whose computed scope records locally.
 - `ride/identity.py` — managed-session git identities:
   the bro a session commits as, and the launching human it credits, read from the attachment's own git configuration.
@@ -56,7 +56,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/bro.py` — native harness implementation:
   native recipe resolution, the session runner spawning `bro run|chat …` with exact-recipe continuation, and the launch hooks.
 - `ride/flags.py` — common session, scope, and LLM flag registration, harness flag registration with the generic requires-`--harness` refusal and option packing, and the default an omitted `--hold` resolves to.
-- `ride/runtime_bundle.py` — installation freeze, content-addressed bundle persistence and locking, shared host/container materialization, session-command shims, runtime-volume lifecycle, and bundle GC.
+- `ride/runtime_bundle.py` — installation freeze, content-addressed bundle persistence and locking, supplied-runtime validation/re-exec, shared host/container materialization, session-command shims, runtime-volume lifecycle, and bundle GC.
 - `ride/runtime_state.py` — one-shot migration of historical checkout-keyed stores and pre-isolation workspace records, including collision/liveness preflight and per-root workspace attachment recovery.
 - `ride/listing.py`, `ride/clean.py`, `ride/scope_report.py` — lifecycle implementations.
 - `ride/e2e_test.py` — live Docker launch coverage, outside the default test roster.
@@ -78,9 +78,11 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   a summon child is spawned by `summon`
   — except a manual one, which the user launches with `ride along --summoned <token>` against the summoner's provisioned channel.
 - Every harness keeps its session state among the workspace's own records, so reclaiming a workspace is `Workspace.remove()` for all of them and no harness supplies a teardown of its own.
-- Every outer root freezes the invoking installation into one locked runtime bundle for its full lifetime.
+- Every outer root runs one runtime bundle for its full lifetime:
+  either a locked freeze of the invoking installation, or the materialized `venv/` + `bin/` layout named by `--runtime-bundle` after re-executing its `ride`.
   Unboxed workspaces run its absolute host materialization;
-  boxed workspaces mount its named runtime volume read-only, and summoned children reuse the root's image tag and bundle hash.
+  boxed workspaces require a frozen manifest, mount its named runtime volume read-only, and reuse the root's image tag and bundle hash for started children.
+  A manual token carries the frozen hash or given path, and its launch command names that runtime's own `ride`.
 - A bro resume reads the session-published pointer from the workspace's `session/` dir and continues that trail under the recipe recorded in the session spec.
   No pointer is published when trail recording is disabled.
 - Workspace state is global under `runtime_base()/workspaces/`, with each workspace's optional repository attachment recorded in metadata.
@@ -91,6 +93,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   Their flocks serialize fetch/cleanup, mirrors never prune, and `ride clean` removes one only when no workspace references its URL.
   Container trails use a dedicated fixed absolute mount.
 - Every attached workspace tree is an independent clone on its recorded branch.
+  A detached unboxed workspace may instead record one existing external tree outside the runtime root;
+  one workspace records that path at a time, resume requires it to remain present, and workspace removal never removes it.
   A legacy linked worktree is launch-refused but remains removable through `ride clean`.
 - A ride preflights its Docker daemon once before its first boxed launch, by reading a nonce through a bind of the runtime root.
   Every boxed bind source must resolve under that root.
@@ -98,10 +102,11 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Scoped credential hydration").
 - Both isolations pass `BRO_STORE` and `BRO_INSTALL_KINDS` to `do-ride`, which installs the hooks through one applier into the named session environment directory,
   so a session's git and `gh` act as the identity it was scoped with and never reach the operator's own configuration.
-  An unboxed spawned child's store and install-hook output share a private temporary root removed by its supervision handle;
-  retained workspace records therefore carry no child credential material.
+  Every unboxed session's store and install-hook output share a private temporary root removed by its supervisor;
+  retained workspace records therefore carry no credential material.
 - Mode verbs are detached unless `--repo` explicitly attaches a resolved checkout or git URL.
-  Detached trees are plain directories, skip repository and persona provisioning, and are clean only while empty.
+  Managed detached trees are plain directories, skip repository and persona provisioning, and are clean only while empty;
+  an external `--tree` is clean when its last session ended cleanly.
   A URL attachment's user-facing identity stays the normalized URL while its git operations use the managed mirror.
 - A pinned mode-verb workspace is never auto-dropped.
   An unpinned `along` workspace is kept unless `--drop` is explicit;

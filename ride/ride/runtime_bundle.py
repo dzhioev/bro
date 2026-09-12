@@ -42,24 +42,49 @@ class _LocalDistribution:
 class RuntimeBundle:
   root: Path
   python_version: str
+  materialized: bool = False
+
+  def __post_init__(self) -> None:
+    if not self.root.is_absolute():
+      raise RuntimeBundleError(f'runtime bundle path must be absolute: {self.root}')
+    if self.materialized:
+      _validate_materialized_runtime(self.root)
+
+  @property
+  def host_root(self) -> Path:
+    return self.root if self.materialized else self.root / 'host'
 
   @property
   def host_venv(self) -> Path:
-    return self.root / 'host' / 'venv'
+    return self.host_root / 'venv'
 
   @property
   def host_bin(self) -> Path:
-    return self.root / 'host' / 'bin'
+    return self.host_root / 'bin'
 
   @property
   def hash(self) -> str:
+    if self.materialized:
+      raise RuntimeBundleError(
+        f'runtime bundle {self.root} has no frozen manifest; boxed isolation is unavailable'
+      )
     return self.root.name
+
+  @property
+  def reference(self) -> str:
+    return str(self.root) if self.materialized else self.hash
+
+  @property
+  def recorded_reference(self) -> str | None:
+    return str(self.root) if self.materialized else None
 
   @property
   def container_volume(self) -> str:
     return f'ride-runtime-{self.hash}'
 
   def materialize_host(self) -> None:
+    if self.materialized:
+      return
     lock_path = self.root / '.materialize.lock'
     with _locked_file(lock_path, fcntl.LOCK_EX):
       host = self.root / 'host'
@@ -71,6 +96,9 @@ class RuntimeBundle:
       host.mkdir()
       _materialize(self.root, host, sys.executable)
       complete.touch()
+
+  def require_frozen_manifest(self) -> None:
+    _ = self.hash
 
   def materialize_container(self, image: str) -> None:
     with _locked_file(self.root / '.materialize.lock', fcntl.LOCK_EX):
@@ -120,6 +148,62 @@ class RuntimeBundle:
     env['PATH'] = os.pathsep.join(_unique_paths([str(self.host_bin), *path_entries]))
     env.pop('PYTHONHOME', None)
     return env
+
+
+def _validate_materialized_runtime(root: Path) -> None:
+  venv_bin = root / 'venv' / 'bin'
+  shim_directory = root / 'bin'
+  for directory in (venv_bin, shim_directory):
+    if not directory.is_dir():
+      raise RuntimeBundleError(f'materialized runtime is missing directory {directory}')
+  python = venv_bin / 'python'
+  if not python.is_file() or not os.access(python, os.X_OK):
+    raise RuntimeBundleError(f'materialized runtime is missing executable {python}')
+  commands = _session_commands(python)
+  declared = set(commands)
+  shim_names = {path.name for path in shim_directory.iterdir()}
+  if shim_names != declared:
+    missing = sorted(declared - shim_names)
+    extra = sorted(shim_names - declared)
+    details = []
+    if missing:
+      details.append(f'missing {", ".join(missing)}')
+    if extra:
+      details.append(f'undeclared {", ".join(extra)}')
+    raise RuntimeBundleError(
+      f'materialized runtime shim farm {shim_directory} does not match its session commands: '
+      + '; '.join(details)
+    )
+  for command in commands:
+    executable = venv_bin / command
+    shim = shim_directory / command
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+      raise RuntimeBundleError(f'materialized runtime is missing executable {executable}')
+    if not shim.is_symlink() or shim.resolve() != executable.resolve():
+      raise RuntimeBundleError(f'materialized runtime shim {shim} does not lead to {executable}')
+
+
+def runtime_root_from_reference(reference: str) -> Path:
+  if _HASH_PATTERN.fullmatch(reference) is not None:
+    return runtime_base() / 'runtime' / reference / 'host'
+  path = Path(reference).expanduser()
+  if not path.is_absolute():
+    raise RuntimeBundleError(f'runtime bundle path must be absolute: {reference}')
+  return path.resolve()
+
+
+def reexec_from_runtime(reference: str, argv: list[str]) -> None:
+  root = runtime_root_from_reference(reference)
+  _validate_materialized_runtime(root)
+  runtime_venv = (root / 'venv').resolve()
+  try:
+    running_from_runtime = Path(sys.prefix).resolve() == runtime_venv
+  except OSError:
+    running_from_runtime = False
+  if running_from_runtime:
+    return
+  executable = root / 'venv' / 'bin' / 'ride'
+  os.execv(str(executable), [str(executable), *argv[1:]])
 
 
 def _unique_paths(paths: Iterable[str]) -> list[str]:
@@ -633,24 +717,45 @@ def _materialize(
 
 
 @contextlib.contextmanager
-def resolve_runtime_bundle() -> Generator[RuntimeBundle]:
-  handle = None
-  try:
-    python, pins, local = _classify_installation()
-    base = runtime_base()
-    runtime = base / 'runtime'
-    runtime.mkdir(parents=True, exist_ok=True)
+def resolve_runtime_bundle(reference: str | None = None) -> Generator[RuntimeBundle]:
+  if reference is not None and _HASH_PATTERN.fullmatch(reference) is None:
+    root = runtime_root_from_reference(reference)
+    yield RuntimeBundle(
+      root, f'{sys.version_info.major}.{sys.version_info.minor}', materialized=True
+    )
+    return
+
+  if reference is not None:
+    root = runtime_base() / 'runtime' / reference
+    with contextlib.ExitStack() as lifetime:
+      with _locked_file(root.parent / '.lock', fcntl.LOCK_SH):
+        try:
+          manifest = json.loads((root / 'bundle.json').read_text())
+        except (FileNotFoundError, json.JSONDecodeError) as error:
+          raise RuntimeBundleError(
+            f'cannot load frozen runtime bundle {reference}: {error}'
+          ) from error
+        python = manifest.get('python')
+        if not isinstance(python, str) or python == '':
+          raise RuntimeBundleError(f'frozen runtime bundle {reference} has no Python version')
+        handle = lifetime.enter_context((root / '.lock').open('a+'))
+        fcntl.flock(handle, fcntl.LOCK_SH)
+      yield RuntimeBundle(root, python)
+    return
+
+  python, pins, local = _classify_installation()
+  base = runtime_base()
+  runtime = base / 'runtime'
+  runtime.mkdir(parents=True, exist_ok=True)
+  with contextlib.ExitStack() as lifetime:
     with tempfile.TemporaryDirectory(prefix='ride-runtime-wheels-') as temporary:
       wheels = _build_wheels(local, Path(temporary))
       manifest = _manifest(python, pins, wheels)
       with _locked_file(runtime / '.lock', fcntl.LOCK_SH):
         root = _persist_bundle(base, manifest, wheels)
-        handle = (root / '.lock').open('a+')
+        handle = lifetime.enter_context((root / '.lock').open('a+'))
         fcntl.flock(handle, fcntl.LOCK_SH)
     yield RuntimeBundle(root, python)
-  finally:
-    if handle is not None:
-      handle.close()
 
 
 def _remove_container_volume(bundle_hash: str, *, dry_run: bool) -> bool:
