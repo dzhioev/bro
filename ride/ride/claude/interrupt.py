@@ -33,7 +33,7 @@ from pathlib import Path
 
 from bro.base import log
 from ride.claude.claude_config import latest_jsonl
-from ride.inner import stopped_on_sigterm
+from ride.do_ride import stopped_on_sigterm
 
 # the bytes a terminal delivers for Ctrl-C and Ctrl-D
 _INTERRUPT_KEY = b'\x03'

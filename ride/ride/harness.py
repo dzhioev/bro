@@ -9,6 +9,7 @@ from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
   from bro.base.args import Parser
+  from ride.do_ride import SessionRun
   from ride.session import SessionSpec
 
 
@@ -45,9 +46,9 @@ class Harness(Protocol):
 
   def read_subject(self, workspace: Workspace) -> str | None: ...
 
-  def inner_flags(self, spec: 'SessionSpec') -> tuple[str, ...]: ...
+  def session_flags(self, spec: 'SessionSpec') -> tuple[str, ...]: ...
 
-  def run_in_place(self, spec: 'SessionSpec') -> int: ...
+  def run_session(self, spec: 'SessionRun') -> int: ...
 
   def container_extras(
     self, spec: 'SessionSpec', workspace: Workspace, scoped: ScopedSecrets

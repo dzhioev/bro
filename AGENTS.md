@@ -190,10 +190,10 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   — the agent calls it to abort with a reason when the request cannot be fulfilled (missing credentials, no appropriate tool, contradictory constraints, unclear/uninterpretable input);
   the call raises `BroRaised(reason)` out of `Runner.run()`.
   The Claude adapter builds (`ride.claude.assembly.bro_servers` / `persona_servers`) mount `raise` too when the session is unattended and killable (`BRO_HOLD=unattended` + `RIDE_RUNNER_PID` in the environment
-  — ride's in-place runner exports them), in the tool's mcp-wire flavor:
+  — `do-ride` exports them), in the tool's mcp-wire flavor:
   no exception can abort the consuming claude session,
   so the call emits the run's `result{failed, reason: raised}` over the broker channel where one exists,
-  then terminates the session via `bro.workspace.session.terminate_session` (SIGTERM to the in-place runner,
+  then terminates the session via `bro.workspace.session.terminate_session` (SIGTERM to `do-ride`,
   which ends claude the way a user's own interrupt would,
   so the closing turn reaches the transcript before it goes
   — `ride/ride/claude/interrupt.py`

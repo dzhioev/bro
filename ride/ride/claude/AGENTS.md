@@ -7,13 +7,13 @@ raw is not a harness value.
 ## Modules
 
 - `harness.py`
-  — `ClaudeHarness`, private full/raw `ScopeRecipe` values, typed `ClaudeOptions`, auth preflight, Claude LLM resolution, the `ride solo|along --in-place` inner command, the workspace session reads, and the launch hooks the neutral skeleton consumes:
-  Claude state mounts and env for a container, the private state dir and auth for a host runner env.
+  — `ClaudeHarness`, private full/raw `ScopeRecipe` values, typed `ClaudeOptions`, auth preflight, Claude LLM resolution, the workspace session reads, and the launch hooks the neutral skeleton consumes:
+  `do-ride` flags and runner, Claude state mounts and env for a container, the private state dir and auth for a host runner env.
 - `assembly.py` — the two Claude compositions over core `BaseBro.assemble`:
   raw sessions select the bro harness over MCP wire, full sessions select the Claude harness over MCP wire.
   It contributes their `bro:` / `persona:` resolvers through `bro.mcp.targets`.
-- `runner.py` — the Claude session's own in-place run, under `ride/inner.py`'s neutral one:
-  private host state, resume-id lookup, hold and kill wiring, session MCP server, launch context, recorder, readiness gate, and Claude process lifetime.
+- `runner.py` — the Claude harness run under `ride/do_ride.py`:
+  resume-id lookup, hold and kill wiring, session MCP server, launch context, recorder, readiness gate, and Claude process lifetime.
 - `interrupt.py` — how a Claude process is ended so its in-flight turn reaches the transcript:
   SIGINT for print mode, and for a TUI the interrupt keypress on a runner-owned pty that proxies the session's terminal.
 - `claude_argv.py`

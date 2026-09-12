@@ -74,13 +74,13 @@ def local_trails(monkeypatch):
 
 
 class TestNativeArgv:
-  """the argv the bro harness's in-place runner spawns."""
+  """The argv the bro harness runner spawns."""
 
   def _argv(self, spec, monkeypatch) -> list[str]:
     spawned: list[list[str]] = []
     monkeypatch.setattr(bro_harness.shutil, 'which', lambda command: f'/venv/bin/{command}')
     monkeypatch.setattr(bro_harness, 'run_agent', lambda argv: spawned.append(argv) or 0)
-    assert bro_harness.BRO.run_in_place(spec) == 0
+    assert bro_harness.BRO.run_session(spec) == 0
     return spawned[0]
 
   def _session_dir(self, monkeypatch, tmp_path) -> Path:
@@ -117,7 +117,7 @@ class TestNativeArgv:
   def test_resume_without_a_published_pointer_fails(self, monkeypatch, tmp_path, caplog):
     self._session_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(bro_harness.shutil, 'which', lambda command: f'/venv/bin/{command}')
-    assert bro_harness.BRO.run_in_place(_spec(resume=True)) == 1
+    assert bro_harness.BRO.run_session(_spec(resume=True)) == 1
     assert 'no bro harness trail recorded' in caplog.text
 
   def test_missing_native_distribution_fails_before_spawn(self, monkeypatch, caplog):
@@ -125,7 +125,7 @@ class TestNativeArgv:
     monkeypatch.setattr(bro_harness.shutil, 'which', lambda _command: None)
     monkeypatch.setattr(bro_harness, 'run_agent', run_agent)
 
-    assert bro_harness.BRO.run_in_place(_spec()) == 1
+    assert bro_harness.BRO.run_session(_spec()) == 1
     assert 'install bro-native' in caplog.text
     run_agent.assert_not_called()
 
@@ -159,11 +159,13 @@ class TestContainerSession:
     )
     launch = captured['launch']
     assert launch.command == [
-      'ride', 'solo', '--in-place', '--workspace', 'w', '--harness', 'bro',
+      'do-ride', 'solo', '--workspace', 'w', '--harness', 'bro',
       '--hold', 'unattended', 'dev', 'start here',
     ]  # fmt: skip
     assert launch.env == {
       'RIDE_BRO': 'dev',
+      ride_session.INSTALL_DIRECTORY_ENV: ride_session.CONTAINER_INSTALL_DIRECTORY,
+      ride_session.RESOLVED_LLM_ENV: ride_session.encode_resolved_llm(spec.resolved_llm),
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
     }
     assert launch.base_ref == 'abc123'
@@ -266,7 +268,7 @@ class TestHostSession:
     (root / 'host' / 'venv' / 'bin').mkdir(parents=True)
     (root / 'host' / 'bin').mkdir()
     (root / 'host' / '.complete').touch()
-    (root / 'host' / 'venv' / 'bin' / 'ride').touch()
+    (root / 'host' / 'venv' / 'bin' / 'do-ride').touch()
     return workspace, RuntimeBundle(root, '3.12')
 
   def _prepare(self, monkeypatch, tmp_path):
@@ -277,7 +279,7 @@ class TestHostSession:
 
   def test_provisions_and_supervises_the_snapshot_runner(self, monkeypatch, tmp_path):
     workspace, runtime_bundle = self._workspace(tmp_path)
-    ride_binary = runtime_bundle.host_venv / 'bin' / 'ride'
+    session_binary = runtime_bundle.host_venv / 'bin' / 'do-ride'
     self._prepare(monkeypatch, tmp_path)
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: True)
     root = MagicMock(return_value=3)
@@ -299,10 +301,10 @@ class TestHostSession:
     command = root.call_args.args[1]
     env = root.call_args.args[2]
     assert command == [
-      str(ride_binary), 'along', '--in-place', '--workspace', 'w', '--harness', 'bro',
+      str(session_binary), 'along', '--workspace', 'w', '--harness', 'bro',
       '--repo', str(tmp_path), '--hold', 'attended', 'dev', 'start here',
     ]  # fmt: skip
-    assert env[ride_session.START_SESSION_BROXY_ENV] == '1'
+    assert env['BRO_INSTALL_KINDS'] == ''
     assert workspace.is_clean() == (False, ['last session exited with code 3'])
 
   def test_brokerless_host_run_unsets_an_ambient_channel(self, monkeypatch, tmp_path):
@@ -327,4 +329,3 @@ class TestHostSession:
       == 0
     )
     assert 'BROKER_CHANNEL' not in run.call_args.kwargs['env']
-    assert ride_session.START_SESSION_BROXY_ENV not in run.call_args.kwargs['env']
