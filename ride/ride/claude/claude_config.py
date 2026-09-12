@@ -129,24 +129,24 @@ def _seed_claude_json(
   install the session runs (`global` for the image's npm install); None carries
   the launcher's own value, for an unboxed session running its Claude install.
   Each `trusted_paths` entry pre-accepts the trust dialog.
-  Missing identity is fatal.
-  subsequent sessions keep whatever the session last wrote.
+  When the launcher has no host file, the explicit session base is sufficient;
+  a present host file must carry complete identity.
+  Subsequent sessions keep whatever the session last wrote.
   """
   seed = claude_dir / '.claude.json'
   if not seed.exists():
-    if not host_file.is_file():
-      raise SystemExit(f'missing {host_file} — log in with claude on the host first')
-    host = json.loads(host_file.read_text())
+    host = json.loads(host_file.read_text()) if host_file.is_file() else None
     data = dict(_SESSION_CLAUDE_JSON)
-    if install_method is None:
+    if install_method is None and host is not None:
       install_method = host.get('installMethod')
     if install_method is not None:
       data['installMethod'] = install_method
     data['projects'] = {path: {'hasTrustDialogAccepted': True} for path in trusted_paths}
-    for key in _CLAUDE_JSON_IDENTITY_KEYS:
-      if key not in host:
-        raise SystemExit(f'{host_file} has no {key!r} — log in with claude on the host first')
-      data[key] = host[key]
+    if host is not None:
+      for key in _CLAUDE_JSON_IDENTITY_KEYS:
+        if key not in host:
+          raise SystemExit(f'{host_file} has no {key!r} — log in with claude on the host first')
+        data[key] = host[key]
     seed.write_text(json.dumps(data))
     seed.chmod(0o600)
 

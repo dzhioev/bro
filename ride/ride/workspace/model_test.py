@@ -284,6 +284,59 @@ class TestSessionLock:
     assert workspace.is_active(set()) is False
 
 
+class TestExternalTreeWorkspace:
+  def test_records_and_returns_the_existing_tree(self, tmp_path):
+    tree = tmp_path / 'task'
+    tree.mkdir()
+    workspace = Workspace.create('external', None, Isolation.UNBOXED, tree=tree)
+    assert workspace.metadata.tree == str(tree.resolve())
+    assert workspace.tree == tree.resolve()
+
+  def test_requires_an_existing_directory_outside_the_runtime_root(self, tmp_path):
+    missing = tmp_path / 'missing'
+    with pytest.raises(ValueError, match='not an existing directory'):
+      Workspace.create('missing', None, Isolation.UNBOXED, tree=missing)
+    inside = workspaces_dir().parent / 'task'
+    inside.mkdir(parents=True)
+    with pytest.raises(ValueError, match='outside the runtime root'):
+      Workspace.create('inside', None, Isolation.UNBOXED, tree=inside)
+
+  def test_requires_detached_unboxed_isolation(self, tmp_path):
+    tree = tmp_path / 'task'
+    tree.mkdir()
+    with pytest.raises(ValueError, match='requires --unboxed'):
+      Workspace.create('boxed', None, Isolation.BOXED, tree=tree)
+    with pytest.raises(ValueError, match='cannot be combined with --repo'):
+      Workspace.create('attached', tmp_path, Isolation.UNBOXED, tree=tree)
+
+  def test_one_workspace_at_a_time_records_a_tree(self, tmp_path):
+    tree = tmp_path / 'task'
+    tree.mkdir()
+    Workspace.create('first', None, Isolation.UNBOXED, tree=tree)
+    with pytest.raises(ValueError, match="already recorded by workspace 'first'"):
+      Workspace.create('second', None, Isolation.UNBOXED, tree=tree)
+
+  def test_resume_shape_refuses_a_missing_tree(self, tmp_path):
+    tree = tmp_path / 'task'
+    tree.mkdir()
+    Workspace.create('external', None, Isolation.UNBOXED, tree=tree)
+    tree.rmdir()
+    with pytest.raises(ValueError, match='not an existing directory'):
+      Workspace.ensure('external', None, Isolation.UNBOXED, tree=tree)
+
+  def test_clean_uses_the_last_session_exit_and_removal_keeps_the_tree(self, tmp_path):
+    tree = tmp_path / 'task'
+    tree.mkdir()
+    (tree / 'result').write_text('kept')
+    workspace = Workspace.create('external', None, Isolation.UNBOXED, tree=tree)
+    assert workspace.is_clean() == (False, ['no recorded session end'])
+    workspace.record_session_end(0)
+    assert workspace.is_clean() == (True, [])
+    workspace.remove(force=True)
+    assert tree.joinpath('result').read_text() == 'kept'
+    assert not workspace.path.exists()
+
+
 class TestDetachedWorkspace:
   def test_metadata_omits_repo_and_branch(self):
     workspace = Workspace.create('detached', None, Isolation.BOXED)

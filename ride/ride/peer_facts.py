@@ -6,8 +6,9 @@ from typing import TYPE_CHECKING, Optional
 
 from bro.base.scope import DEFAULT_PERMITS
 from bro.monitor.trail_pointer import read, session_pointer
-from bro.workspace.paths import workspace_dir, workspace_tree
+from bro.workspace.paths import workspace_dir
 from ride import pending_summon
+from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
@@ -87,7 +88,7 @@ class PeerFacts:
   def identity(self, context: 'Dispatcher', peer: 'Peer') -> PeerIdentity:
     quest, fact = self.resolve(context, peer)
     workspace = self._workspace(quest, fact)
-    tree = self._root_tree if quest == self._root_quest else workspace_tree(workspace)
+    tree = self._root_tree if quest == self._root_quest else Workspace.open(workspace).tree
     return PeerIdentity(workspace, tree, fact.manual)
 
   def depth(self, context: 'Dispatcher', peer: 'Peer') -> int:

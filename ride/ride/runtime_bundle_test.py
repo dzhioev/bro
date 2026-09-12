@@ -16,6 +16,25 @@ import ride.runtime_bundle as runtime_bundle
 
 _discover_distributions = importlib.metadata.distributions
 
+
+_GIVEN_COMMANDS = ['ride', 'do-ride', 'summon']
+
+
+def _materialized_runtime(root: Path) -> Path:
+  venv_bin = root / 'venv' / 'bin'
+  venv_bin.mkdir(parents=True)
+  shim_directory = root / 'bin'
+  shim_directory.mkdir()
+  (venv_bin / 'python').symlink_to(sys.executable)
+  for command in _GIVEN_COMMANDS:
+    source = shutil.which(command)
+    assert source is not None
+    executable = venv_bin / command
+    executable.symlink_to(source)
+    (shim_directory / command).symlink_to(executable)
+  return root
+
+
 _PROBE_PYPROJECT = """\
 [project]
 name = "demo"
@@ -564,6 +583,18 @@ def test_resolver_holds_the_bundle_lock(monkeypatch, tmp_path):
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
+def test_hash_resolver_holds_the_existing_bundle_lock(monkeypatch, tmp_path):
+  monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
+  manifest = runtime_bundle._manifest('3.12', [], [])
+  root = runtime_bundle._persist_bundle(tmp_path, manifest, [])
+
+  with runtime_bundle.resolve_runtime_bundle(root.name) as bundle:
+    assert bundle.root == root
+    with (root / '.lock').open('a+') as handle:
+      with pytest.raises(BlockingIOError):
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
 def test_clean_removes_unlocked_bundles_and_keeps_locked_ones(monkeypatch, tmp_path):
   monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
   monkeypatch.setattr(runtime_bundle, '_remove_container_volume', lambda *_a, **_k: True)
@@ -636,3 +667,64 @@ def test_installed_distributions_publish_the_session_command_roster():
     'trails-server',
     'usage',
   ]
+
+
+def test_given_runtime_is_taken_as_an_already_materialized_layout(tmp_path, monkeypatch):
+  root = _materialized_runtime(tmp_path / 'given')
+  monkeypatch.setattr(runtime_bundle, '_session_commands', lambda _python: _GIVEN_COMMANDS)
+  monkeypatch.setattr(
+    runtime_bundle,
+    '_classify_installation',
+    lambda: pytest.fail('a given runtime must not freeze the invoking installation'),
+  )
+  with runtime_bundle.resolve_runtime_bundle(str(root)) as bundle:
+    assert bundle.host_venv == root / 'venv'
+    assert bundle.host_bin == root / 'bin'
+    assert bundle.reference == str(root)
+    bundle.materialize_host()
+    with pytest.raises(runtime_bundle.RuntimeBundleError, match='no frozen manifest'):
+      bundle.require_frozen_manifest()
+
+
+def test_given_runtime_refuses_an_incomplete_session_command_shim_farm(tmp_path, monkeypatch):
+  root = _materialized_runtime(tmp_path / 'given')
+  monkeypatch.setattr(runtime_bundle, '_session_commands', lambda _python: _GIVEN_COMMANDS)
+  (root / 'bin' / 'summon').unlink()
+  with pytest.raises(
+    runtime_bundle.RuntimeBundleError, match='does not match its session commands'
+  ):
+    with runtime_bundle.resolve_runtime_bundle(str(root)):
+      pass
+
+
+def test_given_runtime_requires_the_materialized_layout(tmp_path):
+  root = tmp_path / 'given'
+  root.mkdir()
+  with pytest.raises(runtime_bundle.RuntimeBundleError, match='missing directory'):
+    with runtime_bundle.resolve_runtime_bundle(str(root)):
+      pass
+
+
+def test_runtime_reexec_uses_the_given_runtime_ride(tmp_path, monkeypatch):
+  root = _materialized_runtime(tmp_path / 'given')
+  monkeypatch.setattr(runtime_bundle, '_session_commands', lambda _python: _GIVEN_COMMANDS)
+  monkeypatch.setattr(runtime_bundle.sys, 'prefix', '/another/venv')
+  calls = []
+  monkeypatch.setattr(
+    runtime_bundle.os, 'execv', lambda executable, argv: calls.append((executable, argv))
+  )
+  runtime_bundle.reexec_from_runtime(str(root), ['ride', 'solo', 'dev', 'work'])
+  executable = str(root / 'venv' / 'bin' / 'ride')
+  assert calls == [(executable, [executable, 'solo', 'dev', 'work'])]
+
+
+def test_runtime_reexec_is_a_noop_inside_the_named_runtime(tmp_path, monkeypatch):
+  root = _materialized_runtime(tmp_path / 'given')
+  monkeypatch.setattr(runtime_bundle, '_session_commands', lambda _python: _GIVEN_COMMANDS)
+  monkeypatch.setattr(runtime_bundle.sys, 'prefix', str(root / 'venv'))
+  monkeypatch.setattr(
+    runtime_bundle.os,
+    'execv',
+    lambda *_args: pytest.fail('the runtime must not re-exec itself again'),
+  )
+  runtime_bundle.reexec_from_runtime(str(root), ['ride', 'list'])
