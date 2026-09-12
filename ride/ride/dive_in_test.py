@@ -79,7 +79,7 @@ class TestLaunchCommand:
 
   @pytest.mark.parametrize('host', [[], ['--host']])
   def test_an_omitted_hold_is_left_for_ride_along_to_resolve(self, host, fake_proj, capsys):
-    # --host is forwarded, so the inner parse derives the same host-sensitive default
+    # --host is forwarded, so ride derives the same host-sensitive default
     rc = dive_in.main(['dive-in', '-n', *host])
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())

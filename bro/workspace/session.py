@@ -1,6 +1,6 @@
 """in-session control of a managed session.
 
-A managed session is supervised by an in-place runner that exports
+A managed session is supervised by `do-ride`, which exports
 `RIDE_RUNNER_PID` (its own pid) next to the harness process; session-owned
 processes end the session by signaling that pid, leaving in the session's state
 dir the status the session is to report.
@@ -18,7 +18,7 @@ FILENAME = 'exit-status'
 
 def terminate_session(status: int) -> None:
   """end the running session from a session-owned process, `status` becoming the
-  session's own exit status: SIGTERM the in-place runner (RIDE_RUNNER_PID),
+  session's own exit status: SIGTERM `do-ride` (`RIDE_RUNNER_PID`),
   which ends the harness process it supervises and survives to run its
   teardown. raises outside a managed session."""
   session = session_dir()

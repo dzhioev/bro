@@ -1,25 +1,19 @@
 #!/usr/bin/env python
-import functools
 import sys
-from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
-from bro.base import configs, host_config, log
-from bro.base.args import REMAINDER, SUPPRESS, Parser
+from bro.base import configs, host_config
+from bro.base.args import REMAINDER, Parser
 from bro.launch.llm_flags import canonicalize, drop_piece_flags, selection_from_args
 from bro.llm.providers import LLMSelectionError
 from bro.registry import get_class
 from bro.workspace.banner import banner
-from bro.workspace.paths import (
-  RuntimeLocationError,
-  WorkspaceNameError,
-  fresh_workspace_name,
-  project_root,
-)
+from bro.workspace.paths import fresh_workspace_name, project_root
 from bro.workspace.project import project_config
 from ride import pending_summon
 from ride.clean import clean_workspaces
+from ride.errors import reports_runtime_errors
 from ride.flags import (
   add_harness_flags,
   add_scope_flags,
@@ -30,29 +24,12 @@ from ride.flags import (
 from ride.harness import get_harness
 from ride.listing import list_workspaces
 from ride.repository import Repository, is_git_url, resolve_repository
-from ride.runtime_state import RuntimeStateMigrationError, migrate_legacy_runtime_state
+from ride.runtime_state import migrate_legacy_runtime_state
 from ride.session import SessionSpec, resume_session, start_session
 from ride.workspace.containers import exec_in_workspace
 from ride.workspace.model import Workspace
 
 __cli_name__ = 'ride'
-
-_Main = Callable[[list[str]], Optional[int]]
-
-
-def reports_runtime_errors(main: _Main) -> _Main:
-  """render runtime location, workspace name, and state migration failures as
-  CLI errors."""
-
-  @functools.wraps(main)
-  def wrapper(argv: list[str]) -> Optional[int]:
-    try:
-      return main(argv)
-    except (RuntimeLocationError, WorkspaceNameError, RuntimeStateMigrationError) as error:
-      log.error('%s', error)
-      return 1
-
-  return wrapper
 
 
 def _add_mode_flags(parser: Parser) -> None:
@@ -71,8 +48,6 @@ def _add_mode_flags(parser: Parser) -> None:
   )
   add_harness_flags(parser)
   add_session_flags(parser, include_bro=False)
-  parser.add_argument('--in-place', action='store_true', env=False, help=SUPPRESS)
-  parser.add_argument('--resume', action='store_true', env=False, help=SUPPRESS)
 
 
 def _configure_mode_parser(parser: Parser, *, solo: bool) -> None:
@@ -181,8 +156,6 @@ def _parse(parser: Parser, argv: list[str]) -> tuple[dict, list[str]]:
 
 def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, solo: bool) -> int:
   workspace = args.pop('workspace')
-  in_place = args.pop('in_place')
-  resume = args.pop('resume')
   summoned_token = args.pop('summoned', None)
   repo_argument = args.pop('repo')
   summoned = None if summoned_token is None else _peek_summoned(parser, summoned_token)
@@ -191,8 +164,8 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
       parser.error('--summoned inherits its repository attachment; drop --repo')
     repo_argument = summoned.repo
   repository: Optional[Repository] = None
-  if in_place or repo_argument is None:
-    repo = repo_argument
+  if repo_argument is None:
+    repo = None
   else:
     try:
       repository = _resolve_repository_argument(repo_argument)
@@ -209,22 +182,6 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     keep = False
     if workspace is not None and drop:
       parser.error('--drop cannot be combined with --workspace; pinned workspaces are always kept')
-  if resume and not in_place:
-    parser.error('resuming is `ride resume <workspace>`; --resume is an inner-argv token')
-  if in_place:
-    machinery = {
-      '--host': args['host'],
-      '--drop': drop,
-      '--keep': keep,
-      '--grant': args['grant'] is not None,
-      '--revoke': args['revoke'] is not None,
-      '--into': args['into'] is not None,
-    }
-    offending = [flag for flag, present in machinery.items() if present]
-    if len(offending) > 0:
-      parser.error(f'--in-place cannot be combined with {", ".join(offending)}')
-    if workspace is None:
-      parser.error('--in-place requires --workspace')
   if args['into'] is not None and repo is None and summoned_token is None:
     parser.error('--into requires --repo')
   if args['hold'] is None:
@@ -248,7 +205,7 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
   bro = args.pop('bro')
   prompt = args.pop('prompt')
   if summoned is not None:
-    _validate_summoned(parser, summoned, bro=bro, prompt=prompt, in_place=in_place, args=args)
+    _validate_summoned(parser, summoned, bro=bro, prompt=prompt, args=args)
     prompt = summoned.prompt
     args['grant'] = [*summoned.grant, *args['grant']]
     args['revoke'] = [*summoned.revoke, *args['revoke']]
@@ -273,16 +230,12 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     arguments=harness_arguments,
     resolved_llm=resolved_llm.dump(),
     solo=solo,
-    resume=resume,
+    resume=False,
     harness_options=harness_options,
     summon_depth=summon_depth,
     summon_harness=summon_harness,
     **args,
   )
-  if in_place:
-    from ride.inner import run_in_place
-
-    return run_in_place(harness, spec)
   return start_session(spec, repository, summoned=summoned)
 
 
@@ -299,14 +252,11 @@ def _validate_summoned(
   *,
   bro: str,
   prompt: Optional[str],
-  in_place: bool,
   args: dict,
 ) -> None:
   """validate a manual child launch against the request's fixed shape."""
   from ride.scope import split_scope_overrides
 
-  if in_place:
-    parser.error('--summoned is an outer launch flag; the inner run inherits it via the env')
   if prompt is not None:
     parser.error('--summoned takes its initial prompt from the summon request; drop the prompt')
   if args['into'] is not None:
@@ -330,8 +280,7 @@ def alias_main(argv: list[str], *, solo: bool) -> int:
   )
   _configure_mode_parser(parser, solo=solo)
   args, harness_arguments = _parse_mode(parser, argv)
-  if not args['in_place']:
-    migrate_legacy_runtime_state()
+  migrate_legacy_runtime_state()
   return _start_mode(parser, args, harness_arguments, solo=solo)
 
 
@@ -340,8 +289,7 @@ def main(argv: list[str]) -> Optional[int]:
   parser = build_parser()
   args, harness_arguments = _parse(parser, argv)
   command = args.pop('cmd')
-  if command not in ('solo', 'along') or not args['in_place']:
-    migrate_legacy_runtime_state()
+  migrate_legacy_runtime_state()
   if command not in ('solo', 'along') and len(harness_arguments) > 0:
     parser.error('`--` harness arguments are accepted only by `ride solo` and `ride along`')
   if command in ('solo', 'along'):

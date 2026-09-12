@@ -22,6 +22,7 @@ from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
 
 _CONTAINER_CLAUDE_DIR = '/home/ride/.claude'
+_CONTAINER_PLUGIN_SEED = Path('/opt/claude-plugins-seed')
 
 
 def latest_jsonl(projects_dir: Path) -> Optional[Path]:
@@ -151,18 +152,14 @@ def _seed_claude_json(
     seed.chmod(0o600)
 
 
-def _seed_host_plugins(claude_dir: Path) -> None:
-  """first-run copy of the host claude install's plugins into the session dir —
-  the host twin of the container entrypoint's /opt/claude-plugins-seed copy
-  (same guard file), so the pyright-lsp enable in the session settings has its
-  matching install records. a host with no plugins dir is left alone: claude
-  then offers the plugin install itself."""
+def seed_session_plugins(claude_dir: Path, *, container: bool) -> None:
+  """Seed a session's plugin records once from its installation."""
   if (claude_dir / 'plugins' / 'installed_plugins.json').is_file():
     return
-  host_plugins = Path.home() / '.claude' / 'plugins'
-  if not host_plugins.is_dir():
+  source = _CONTAINER_PLUGIN_SEED if container else Path.home() / '.claude' / 'plugins'
+  if not source.is_dir():
     return
-  shutil.copytree(host_plugins, claude_dir / 'plugins', dirs_exist_ok=True)
+  shutil.copytree(source, claude_dir / 'plugins', dirs_exist_ok=True)
 
 
 def _provision_session_claude_dir(
@@ -229,5 +226,4 @@ def provision_host_claude_dir(workspace: Path, worktree: Path, project: Path) ->
     trusted_paths=trusted_paths,
     preaccept_bypass_dialog=False,
   )
-  _seed_host_plugins(claude_dir)
   return claude_dir

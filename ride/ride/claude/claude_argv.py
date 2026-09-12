@@ -7,7 +7,7 @@ MCP namespaces. Everything else — model, the merged `--settings` (fastMode +
 statusLine + attribution, plus the apiKeyHelper under `--raw`), `--effort`, the
 forwarded claude args, and prompt seeding is handled once, identically wherever
 the session runs. Model, effort and fast mode come off the session's claude-code
-`LLMSpec` (`SessionSpec.llm_spec`).
+`LLMSpec` (`SessionRun.llm_spec`).
 """
 
 import json
@@ -25,6 +25,7 @@ from ride.claude.statusline import REFRESH_SECONDS, statusline_command
 from ride.claude.system_prompt import session_append_prompt
 
 if TYPE_CHECKING:
+  from ride.do_ride import SessionRun
   from ride.session import SessionSpec
 
 
@@ -86,7 +87,7 @@ _FIRST_TURN_LAUNCH_NOTE = (
 
 
 def build_claude_launch(
-  spec: 'SessionSpec',
+  spec: 'SessionSpec | SessionRun',
   *,
   claude_args: list[str],
   endpoint: MCPEndpoint,

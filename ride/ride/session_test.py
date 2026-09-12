@@ -30,7 +30,7 @@ from ride.scope import ScopedSecrets, split_scope_overrides
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
-from ride.workspace.store import finalize_scoped_secrets, materialize_scoped_store
+from ride.workspace.store import finalize_scoped_secrets
 
 
 @pytest.fixture(autouse=True)
@@ -435,7 +435,7 @@ class TestDetachedSession:
     spec = replace(_spec(host=True), repo=None)
     workspace = Workspace.create('detached-host', None, WorkspaceKind.WORKTREE)
     harness = MagicMock()
-    harness.inner_flags.return_value = []
+    harness.session_flags.return_value = []
     with (
       patch('ride.session.get_harness', return_value=harness),
       patch('ride.session.ensure_host_worktree') as ensure_worktree,
@@ -462,14 +462,14 @@ class TestDetachedSession:
 
 class TestContainerCommand:
   def test_command_is_the_in_place_invocation(self):
-    # the docker command is the same in-place runner host mode spawns; the
+    # the docker command is the same do-ride executable host mode spawns; the
     # argv/MCP/spell-delivery work happens inside the container, next to claude
     with _ContainerHarness() as h:
       rc = ride_session.start_session(_spec(drop=True, bro='dev', llm='::xhigh+fast', prompt='go'))
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
     assert command == [
-      'ride', 'along', '--in-place', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
+      'do-ride', 'along', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
       '--hold', 'attended', '--llm', '::xhigh+fast', 'dev', 'go',
     ]  # fmt: skip
 
@@ -479,9 +479,8 @@ class TestContainerCommand:
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
     assert command == [
-      'ride',
+      'do-ride',
       'along',
-      '--in-place',
       '--workspace',
       'w',
       '--harness',
@@ -521,9 +520,8 @@ class TestContainerCommand:
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
     assert command == [
-      'ride',
+      'do-ride',
       'along',
-      '--in-place',
       '--workspace',
       'w',
       '--harness',
@@ -546,7 +544,7 @@ class TestContainerCommand:
     launch = harness.run_in_container.call_args.args[0]
     assert not launch.tty
     assert launch.command == [
-      'ride', 'solo', '--in-place', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
+      'do-ride', 'solo', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
       '--hold', 'unattended', 'bro-dev', 'go',
     ]  # fmt: skip
 
@@ -616,9 +614,8 @@ class TestContainerCommand:
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
     assert command == [
-      'ride',
+      'do-ride',
       'along',
-      '--in-place',
       '--workspace',
       'w',
       '--harness',
@@ -989,7 +986,7 @@ class TestHostSession:
 
   def _prepare_launch(self, monkeypatch, tmp_path):
     workspace, worktree = self._fake_workspace(monkeypatch, tmp_path, has_session=False)
-    ride_binary = _runtime_bundle(tmp_path).host_venv / 'bin' / 'ride'
+    session_binary = _runtime_bundle(tmp_path).host_venv / 'bin' / 'do-ride'
     monkeypatch.setattr(workspace_project, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(ride_session, 'ensure_host_worktree', lambda *_a: True)
@@ -1013,10 +1010,10 @@ class TestHostSession:
     )
     monkeypatch.setattr(ride_session, 'materialize_scoped_store', _materialize_store)
     monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
-    return workspace, ride_binary, worktree
+    return workspace, session_binary, worktree
 
   def test_broker_supervises_the_snapshot_in_place_runner(self, monkeypatch, tmp_path):
-    workspace, ride_binary, worktree = self._prepare_launch(monkeypatch, tmp_path)
+    workspace, session_binary, worktree = self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: True)
     monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: {'dev'})
     roots: list = []
@@ -1060,7 +1057,7 @@ class TestHostSession:
     assert self._host_session(spec, workspace, scope) == 5
     assert roots[0]['workspace'] is workspace
     assert roots[0]['command'] == [
-      str(ride_binary), 'along', '--in-place', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
+      str(session_binary), 'along', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
       '--hold', 'attended', '--llm', '::xhigh', 'bro-dev', 'go', '--', '--foo',
     ]  # fmt: skip
     assert 'VIRTUAL_ENV' not in roots[0]['env']
@@ -1120,7 +1117,7 @@ class TestHostSession:
     assert not (tmp_path / 'var' / 'ride' / 'workspaces' / 'fresh').exists()
 
   def test_direct_spawn_when_broker_disabled(self, monkeypatch, tmp_path):
-    workspace, ride_binary, worktree = self._prepare_launch(monkeypatch, tmp_path)
+    workspace, session_binary, worktree = self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: False)
     runs: list = []
 
@@ -1135,7 +1132,7 @@ class TestHostSession:
     assert self._host_session(spec, workspace, _launch_scope()) == 0
     argv, kwargs = runs[0]
     assert argv == [
-      str(ride_binary), 'along', '--in-place', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
+      str(session_binary), 'along', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
       '--hold', 'attended', '--llm', '::xhigh', 'bro-dev', 'go', '--', '--foo',
     ]  # fmt: skip
     assert kwargs['cwd'] == str(worktree)
@@ -1162,6 +1159,7 @@ class TestHostSession:
       return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(ride_session.subprocess, 'run', fake_run)
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://parent-token@127.0.0.1:1')
     spec = _spec(host=True, prompt='pair on this')
     assert (
       ride_session._launch_session(
@@ -1182,10 +1180,10 @@ class TestHostSession:
     _, kwargs = runs[0]
     env = kwargs['env']
     assert env['BROKER_UPSTREAM'] == record.address()
+    assert 'BROKER_CHANNEL' not in env
     assert env['RIDE_SUMMONED'] == '1'
     assert env['RIDE_MAY_SUMMON'] == 'dev'
     assert env['RIDE_WORKSPACE'] == 'w'
-    assert env[ride_session.START_SESSION_BROXY_ENV] == '1'
     assert kwargs['cwd'] == str(worktree)
     with pytest.raises(pending_summon.UnknownToken):
       pending_summon.peek(record.token)
@@ -1218,8 +1216,8 @@ class TestHostSession:
     assert 'no pending manual summon' in caplog.text
 
   def test_runner_env_gets_the_claude_auth_transform(self, monkeypatch, tmp_path):
-    # the outer applies auth to the runner env before the snapshot inner starts
-    workspace, ride_binary, worktree = self._prepare_launch(monkeypatch, tmp_path)
+    # the outer applies auth to the runner env before the snapshot's do-ride starts
+    workspace, session_binary, worktree = self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: False)
 
     def fake_apply(env, **_kwargs):
@@ -1239,7 +1237,7 @@ class TestHostSession:
     assert runs[0][1]['env']['CLAUDE_CODE_OAUTH_TOKEN'] == 'applied'
 
   def test_runner_env_points_at_the_private_claude_config_dir(self, monkeypatch, tmp_path):
-    # the outer provisions the per-session state before the snapshot inner starts
+    # the outer provisions the per-session state before the snapshot's do-ride starts
     workspace, _, _ = self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: False)
     runs: list = []
@@ -1264,14 +1262,6 @@ class TestHostSession:
     assert root.call_args.args[2][HUMAN_NAME_ENV] == 'Ada Lovelace'
     assert root.call_args.args[2][HUMAN_EMAIL_ENV] == 'ada@example.com'
 
-  def test_host_runner_env_signals_the_session_broxy(self, monkeypatch, tmp_path):
-    workspace, _, _ = self._prepare_launch(monkeypatch, tmp_path)
-    monkeypatch.setattr(ride_session, 'broker_enabled', lambda: True)
-    root = MagicMock(return_value=0)
-    monkeypatch.setattr(ride_session, 'run_host_process_via_broker', root)
-    assert self._host_session(_spec(host=True), workspace, _launch_scope()) == 0
-    assert root.call_args.args[2][ride_session.START_SESSION_BROXY_ENV] == '1'
-
   def test_brokerless_spawn_unsets_an_ambient_channel(self, monkeypatch, tmp_path):
     from types import SimpleNamespace
 
@@ -1287,7 +1277,6 @@ class TestHostSession:
     monkeypatch.setattr(ride_session.subprocess, 'run', fake_run)
     assert self._host_session(_spec(host=True), workspace, _launch_scope()) == 0
     assert 'BROKER_CHANNEL' not in runs[0][1]['env']
-    assert ride_session.START_SESSION_BROXY_ENV not in runs[0][1]['env']
 
   def test_missing_claude_code_fails_a_ride_session_launch_before_the_workspace(
     self, monkeypatch, tmp_path
@@ -1324,31 +1313,31 @@ class TestHostSession:
     scope = _launch_scope(store={'creds/x.cred': b'v'})
     assert self._host_session(_spec(host=True), workspace, scope) == 0
     store_directory = workspace.path / 'credentials'
-    assert runs[0][1]['env']['BRO_STORE'] == str(store_directory)
+    environment = runs[0][1]['env']
+    assert environment['BRO_STORE'] == str(store_directory)
+    assert json.loads(environment[ride_session.RESOLVED_LLM_ENV]) == _spec().resolved_llm
     assert materialized['store'] == {'creds/x.cred': b'v'}
     assert materialized['directory'] == store_directory
 
-  def test_runner_env_carries_the_installed_credential_wiring(self, monkeypatch, tmp_path):
+  def test_runner_env_defers_credential_hooks_to_do_ride(self, monkeypatch, tmp_path):
     workspace, _, _ = self._prepare_launch(monkeypatch, tmp_path)
+    monkeypatch.setenv(ride_session.INSTALL_DIRECTORY_ENV, '/parent/environment')
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: True)
-    monkeypatch.setattr(ride_session, 'materialize_scoped_store', materialize_scoped_store)
     root = MagicMock(return_value=0)
     monkeypatch.setattr(ride_session, 'run_host_process_via_broker', root)
-    hook = {'files': {'file': 'wired'}, 'env': {'WIRED': 'yes'}}
-    registry = {'x': credentials.CredentialKind('x', 'test credential', install=hook)}
-    monkeypatch.setattr(credentials, 'default_registry', lambda: registry)
-    store = {'creds.json': b'{}', 'creds/x.cred': b'v'}
 
     assert (
       self._host_session(
         _spec(host=True),
         workspace,
-        _launch_scope(store=store, hydrated_kinds=frozenset({'x'})),
+        _launch_scope(hydrated_kinds=frozenset({'github', 'trails'})),
       )
       == 0
     )
-    assert root.call_args.args[2]['WIRED'] == 'yes'
-    assert (workspace.path / 'environment' / 'file').read_text() == 'wired'
+    environment = root.call_args.args[2]
+    assert environment['BRO_INSTALL_KINDS'] == 'github trails'
+    assert environment[ride_session.INSTALL_DIRECTORY_ENV] == str(workspace.path / 'environment')
+    assert not (workspace.path / 'environment').exists()
 
   def test_grant_and_revoke_shape_and_log_the_hydrated_scope(self, monkeypatch, tmp_path, caplog):
     from types import SimpleNamespace
@@ -1428,16 +1417,17 @@ class TestHostBrokerPingRoundTrip:
     workspace = Workspace.create('w', root, WorkspaceKind.WORKTREE)
     workspace.tree.mkdir(parents=True)
     runtime_bundle = _runtime_bundle(root)
-    ride_binary = runtime_bundle.host_venv / 'bin' / 'ride'
-    # The stub stands in for an in-place runner but starts no client swarm,
+    session_binary = runtime_bundle.host_venv / 'bin' / 'do-ride'
+    # The stub stands in for do-ride but starts no client swarm,
     # so it supplies the direct client channel itself instead of launching a broxy.
-    ride_binary.write_text(
+    session_binary.write_text(
       '#!/bin/sh\n'
       'BROKER_CHANNEL="$BROKER_UPSTREAM"\n'
       'export BROKER_CHANNEL\n'
       'unset BROKER_UPSTREAM\n'
       'exec broker request ping "{}" --timeout 30\n'
     )
+    session_binary.chmod(0o755)
 
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(ride_session, 'ensure_host_worktree', lambda *_a: True)
@@ -1527,16 +1517,16 @@ client.close(confirm=True)
     answer_child.write_text(self._ANSWER_CHILD)
     pending_dir = summon_dir() / 'pending'
     runtime_bundle = _runtime_bundle(root)
-    ride_binary = runtime_bundle.host_venv / 'bin' / 'ride'
-    # stands in for the in-place runner: register the manual summon, let the
+    session_binary = runtime_bundle.host_venv / 'bin' / 'do-ride'
+    # stands in for do-ride: register the manual summon, let the
     # external child answer it, and block for the relayed answer
-    ride_binary.write_text(
+    session_binary.write_text(
       '#!/bin/sh\nBROKER_CHANNEL="$BROKER_UPSTREAM"\nexport BROKER_CHANNEL\nunset BROKER_UPSTREAM\n'
       f'{shlex.quote(sys.executable)} {shlex.quote(str(answer_child))} '
       f'{shlex.quote(str(pending_dir))} &\n'
       "exec summon --manual bro-dev 'pair on this'\n"
     )
-    ride_binary.chmod(0o755)
+    session_binary.chmod(0o755)
 
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(ride_session, 'ensure_host_worktree', lambda *_a: True)

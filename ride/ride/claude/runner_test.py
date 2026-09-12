@@ -6,18 +6,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import ride.claude.runner as ride_runner
-from bro.launch.broxy import START_SESSION_BROXY_ENV
 from bro.llm.llms import claude_code
 from bro.monitor import trail_pointer
 from bro.summon import SUMMONED_ENV
-from bro.workspace.paths import workspace_dir
 from ride.claude.claude_argv import ClaudeLaunch
 from ride.claude.mcp import MCPEndpoint
 from ride.session_test import _spec
 
 
 class _Harness:
-  """patches for driving run_in_place without spawning claude, servers, or
+  """patches for driving run_session without spawning claude, servers, or
   touching ~/.claude; cwd must already be the fake workspace (monkeypatch.chdir)."""
 
   def __init__(self, tmp_path: Path):
@@ -25,8 +23,6 @@ class _Harness:
     self.claude_config_dir = tmp_path / 'claude-config'
     self.server = MagicMock()
     self.server.endpoint = MCPEndpoint(port=1234, token='tok')
-    self.broxy = MagicMock()
-    self.broxy.address = 'tcp://broxy-token@127.0.0.1:8'
 
   def __enter__(self):
     self._patches = [
@@ -43,9 +39,6 @@ class _Harness:
       ),
       patch('ride.claude.runner.start_session_recorder'),
       patch('ride.claude.runner.apply_claude_auth'),
-      patch('bro.launch.broxy._start_session_broxy', return_value=self.broxy),
-      patch('ride.claude.runner.in_container', return_value=False),
-      patch('ride.claude.runner.provision_host_claude_dir', return_value=self.claude_config_dir),
       patch('ride.claude.runner.start_statusline_projector'),
     ]
     entered = [p.__enter__() for p in self._patches]
@@ -55,17 +48,13 @@ class _Harness:
     self.env.pop('RIDE_RUNNER_PID', None)
     self.env.pop('BROKER_CHANNEL', None)
     self.env.pop(SUMMONED_ENV, None)
-    self.env.pop(START_SESSION_BROXY_ENV, None)
-    self.env.pop('CLAUDE_CONFIG_DIR', None)
+    self.env['CLAUDE_CONFIG_DIR'] = str(self.claude_config_dir)
     self.start_server = entered[2]
     self.build = entered[3]
     self.run_claude = entered[4]
     self.start_recorder = entered[5]
     self.apply_auth = entered[6]
-    self.start_broxy = entered[7]
-    self.in_container = entered[8]
-    self.provision_claude_dir = entered[9]
-    self.start_statusline_projector = entered[10]
+    self.start_statusline_projector = entered[7]
     return self
 
   def __exit__(self, *exception):
@@ -74,11 +63,11 @@ class _Harness:
     return False
 
 
-class TestRunInPlace:
+class TestSessionRun:
   def test_resume_without_session_errors(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert ride_runner.run_in_place(_spec(resume=True)) == 1
+      assert ride_runner.run_session(_spec(resume=True)) == 1
       assert h.run_claude.call_count == 0
 
   def test_resume_prepends_latest_session_id(self, monkeypatch, tmp_path):
@@ -89,19 +78,19 @@ class TestRunInPlace:
       old.write_text('{}')
       os.utime(old, (1, 1))
       (h.projects_dir / 'newer.jsonl').write_text('{}')
-      assert ride_runner.run_in_place(_spec(resume=True, arguments=['--foo'])) == 0
+      assert ride_runner.run_session(_spec(resume=True, arguments=['--foo'])) == 0
       assert h.build.call_args.kwargs['claude_args'] == ['--resume', 'newer', '--foo']
 
   def test_claude_is_run_against_the_sessions_transcripts(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert ride_runner.run_in_place(_spec()) == 0
+      assert ride_runner.run_session(_spec()) == 0
       assert h.run_claude.call_args.args[2] == h.projects_dir
 
   def test_recorder_runs_for_the_session_and_stops_after(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert ride_runner.run_in_place(_spec()) == 0
+      assert ride_runner.run_session(_spec()) == 0
       assert h.start_recorder.call_args.args[0] == 'w'
       # the launch recipe lands on the trail header as native.llm
       assert h.start_recorder.call_args.kwargs['llm'] == claude_code.LLMSpec().dump()
@@ -112,7 +101,7 @@ class TestRunInPlace:
   def test_statusline_projector_runs_for_the_session_and_stops_after(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as harness:
-      assert ride_runner.run_in_place(_spec()) == 0
+      assert ride_runner.run_session(_spec()) == 0
       assert harness.start_statusline_projector.call_count == 1
       assert harness.start_statusline_projector.return_value.stop.call_count == 1
 
@@ -122,13 +111,13 @@ class TestRunInPlace:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as harness:
       harness.start_statusline_projector.side_effect = RuntimeError('projector failed')
-      assert ride_runner.run_in_place(_spec()) == 0
+      assert ride_runner.run_session(_spec()) == 0
     assert 'projector failed' in caplog.text
 
   def test_recorder_carries_the_launch_recipe(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert ride_runner.run_in_place(_spec(llm=':fable5:high')) == 0
+      assert ride_runner.run_session(_spec(llm=':fable5:high')) == 0
       assert h.start_recorder.call_args.kwargs['llm'] == {
         'type': 'claude-code',
         'model': 'claude-fable-5',
@@ -140,21 +129,21 @@ class TestRunInPlace:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.start_recorder.side_effect = RuntimeError('cannot start the session recorder: nope')
-      assert ride_runner.run_in_place(_spec()) == 1
+      assert ride_runner.run_session(_spec()) == 1
       assert h.run_claude.call_count == 0
 
   def test_no_recorder_when_trails_are_disabled(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.env['TRAILS_DISABLED'] = '1'
-      assert ride_runner.run_in_place(_spec()) == 0
+      assert ride_runner.run_session(_spec()) == 0
       assert h.start_recorder.call_count == 0
       assert h.run_claude.call_count == 1
 
   def test_raw_session_serves_health_gates_and_syncs(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert ride_runner.run_in_place(_spec(bro='dev', raw=True)) == 0
+      assert ride_runner.run_session(_spec(bro='dev', raw=True)) == 0
       assert h.start_server.call_args[0][0] == 'bro:dev'
       assert h.server.wait_healthy.call_count == 1
       assert h.server.stop.call_count == 1
@@ -164,7 +153,7 @@ class TestRunInPlace:
   def test_ride_session_serves_the_persona_and_health_gates(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert ride_runner.run_in_place(_spec(bro='dev')) == 0
+      assert ride_runner.run_session(_spec(bro='dev')) == 0
       assert h.start_server.call_args[0][0] == 'persona:dev'
       assert h.server.wait_healthy.call_count == 1
       assert h.server.stop.call_count == 1
@@ -174,40 +163,40 @@ class TestRunInPlace:
   def test_ride_session_uses_the_project_default_bro(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert ride_runner.run_in_place(_spec()) == 0
+      assert ride_runner.run_session(_spec()) == 0
       assert h.start_server.call_args[0][0] == 'persona:bro-dev'
 
   def test_server_start_failure_returns_1(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.start_server.side_effect = RuntimeError('did not bind')
-      assert ride_runner.run_in_place(_spec()) == 1
+      assert ride_runner.run_session(_spec()) == 1
       assert h.run_claude.call_count == 0
 
   def test_health_gate_failure_stops_server_and_returns_1(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.server.wait_healthy.side_effect = RuntimeError('not healthy')
-      assert ride_runner.run_in_place(_spec(bro='dev', raw=True)) == 1
+      assert ride_runner.run_session(_spec(bro='dev', raw=True)) == 1
       assert h.run_claude.call_count == 0
       assert h.server.stop.call_count == 1
 
   def test_session_context_set_next_to_claude(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert ride_runner.run_in_place(_spec()) == 0
+      assert ride_runner.run_session(_spec()) == 0
       assert 'RIDE_SESSION_CONTEXT' in h.env
 
   def test_claude_exit_code_propagates(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.run_claude.return_value = ride_runner.InteractiveRun(42, stopped=False)
-      assert ride_runner.run_in_place(_spec()) == 42
+      assert ride_runner.run_session(_spec()) == 42
 
   def test_ride_session_applies_auth_with_warning(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert ride_runner.run_in_place(_spec()) == 0
+      assert ride_runner.run_session(_spec()) == 0
       assert h.apply_auth.call_args.kwargs == {'warn_when_missing': True}
       # the transformed env is the one claude is spawned with
       assert h.apply_auth.call_args.args[0] is h.run_claude.call_args.args[1]
@@ -215,43 +204,27 @@ class TestRunInPlace:
   def test_raw_session_applies_auth_without_warning(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert ride_runner.run_in_place(_spec(bro='dev', raw=True)) == 0
+      assert ride_runner.run_session(_spec(bro='dev', raw=True)) == 0
       assert h.apply_auth.call_args.kwargs == {'warn_when_missing': False}
 
   def test_extends_claudes_mcp_tool_call_timeout(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert ride_runner.run_in_place(_spec()) == 0
+      assert ride_runner.run_session(_spec()) == 0
       assert h.run_claude.call_args.args[1]['MCP_TOOL_TIMEOUT'] == '600000'
 
   def test_full_session_skips_claudes_fast_mode_org_check(self, monkeypatch, tmp_path):
     # pins the name claude itself reads
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert ride_runner.run_in_place(_spec()) == 0
+      assert ride_runner.run_session(_spec()) == 0
       assert h.run_claude.call_args.args[1]['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK'] == '1'
 
   def test_raw_session_keeps_claudes_fast_mode_org_check(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert ride_runner.run_in_place(_spec(bro='dev', raw=True)) == 0
+      assert ride_runner.run_session(_spec(bro='dev', raw=True)) == 0
       assert 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK' not in h.run_claude.call_args.args[1]
-
-  def test_host_session_provisions_and_exports_the_claude_config_dir(self, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      assert ride_runner.run_in_place(_spec()) == 0
-      h.provision_claude_dir.assert_called_once_with(workspace_dir('w'), tmp_path, tmp_path)
-      env = h.run_claude.call_args.args[1]
-      assert env['CLAUDE_CONFIG_DIR'] == str(h.claude_config_dir)
-
-  def test_container_session_keeps_the_default_claude_config(self, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      h.in_container.return_value = True
-      assert ride_runner.run_in_place(_spec()) == 0
-      h.provision_claude_dir.assert_not_called()
-      assert 'CLAUDE_CONFIG_DIR' not in h.run_claude.call_args.args[1]
 
 
 def _fake_claude(tmp_path: Path, script: str) -> dict[str, str]:
@@ -452,7 +425,7 @@ class TestSoloSession:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as harness:
       with patch('ride.claude.runner._run_claude_root_solo', return_value=5) as solo:
-        assert ride_runner.run_in_place(_spec(solo=True)) == 5
+        assert ride_runner.run_session(_spec(solo=True)) == 5
       solo.assert_called_once()
       harness.run_claude.assert_not_called()
 
@@ -461,7 +434,7 @@ class TestSoloSession:
     with _Harness(tmp_path) as harness:
       harness.env['RIDE_SUMMONED'] = '1'
       with patch('ride.claude.runner._run_claude_summoned', return_value=5) as solo:
-        assert ride_runner.run_in_place(_spec(solo=True)) == 5
+        assert ride_runner.run_session(_spec(solo=True)) == 5
       solo.assert_called_once()
       harness.run_claude.assert_not_called()
 
@@ -474,7 +447,7 @@ class TestSummonedSession:
       with patch(
         'ride.claude.runner._run_claude_summoned_interactive', return_value=7
       ) as interactive:
-        assert ride_runner.run_in_place(_spec()) == 7
+        assert ride_runner.run_session(_spec()) == 7
       assert interactive.call_args.args[2] == h.projects_dir
       h.run_claude.assert_not_called()
 
@@ -482,7 +455,7 @@ class TestSummonedSession:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.env['RIDE_SUMMONER'] = '{"trail_id":"t-parent"}'
-      assert ride_runner.run_in_place(_spec()) == 0
+      assert ride_runner.run_session(_spec()) == 0
       # the recorder daemon starts before the drop, so its snapshot carries it
       assert h.start_recorder.called
       assert 'RIDE_SUMMONER' not in os.environ

@@ -101,7 +101,7 @@ def run_summoned_in_container(
   launch: Launch, workspace: Workspace, *, claim: Callable[[], object]
 ) -> int:
   """run a manual summon child's container launch: no broker of its own — its
-  `BROKER_UPSTREAM` points at the summoner's provisioned channel for the entrypoint broxy
+  `BROKER_UPSTREAM` points at the summoner's provisioned channel for the session broxy
   — prepared first, the token claimed only once nothing fallible is
   left before the attach, then attached interactively."""
   log_scoped_secrets(launch.name, launch.secrets, launch.optional_secrets)

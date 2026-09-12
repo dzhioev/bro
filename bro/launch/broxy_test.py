@@ -93,17 +93,15 @@ def test_start_returns_none_without_the_console_script(tmp_path):
   assert broxy is None
 
 
-def test_session_broxy_rewrites_only_a_marked_host_root(monkeypatch):
+def test_session_broxy_rewrites_an_unconsumed_upstream(monkeypatch):
   daemon = MagicMock(address='tcp://local-token@127.0.0.1:8')
   start = MagicMock(return_value=daemon)
   monkeypatch.setattr(ride_broxy, '_start_session_broxy', start)
-  monkeypatch.setenv(ride_broxy.START_SESSION_BROXY_ENV, '1')
   monkeypatch.setenv('BROKER_UPSTREAM', 'tcp://root-token@127.0.0.1:7')
 
   with ride_broxy.session_broxy():
     assert os.environ['BROKER_CHANNEL'] == daemon.address
     assert 'BROKER_UPSTREAM' not in os.environ
-    assert ride_broxy.START_SESSION_BROXY_ENV not in os.environ
 
   start.assert_called_once()
   daemon.stop.assert_called_once()
@@ -113,7 +111,6 @@ def test_session_broxy_rewrites_only_a_marked_host_root(monkeypatch):
 
 def test_session_broxy_leaves_upstream_visible_when_launch_fails(monkeypatch, tmp_path):
   monkeypatch.setattr(ride_broxy, '_start_session_broxy', MagicMock(return_value=None))
-  monkeypatch.setenv(ride_broxy.START_SESSION_BROXY_ENV, '1')
   monkeypatch.setenv('BROKER_UPSTREAM', 'tcp://root-token@127.0.0.1:7')
   monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
 
@@ -128,7 +125,7 @@ def test_session_broxy_leaves_upstream_visible_when_launch_fails(monkeypatch, tm
 def test_session_broxy_leaves_an_existing_session_channel_alone(monkeypatch):
   start = MagicMock()
   monkeypatch.setattr(ride_broxy, '_start_session_broxy', start)
-  monkeypatch.delenv(ride_broxy.START_SESSION_BROXY_ENV, raising=False)
+  monkeypatch.setenv('BROKER_UPSTREAM', 'tcp://root-token@127.0.0.1:7')
   monkeypatch.setenv('BROKER_CHANNEL', 'tcp://existing-token@127.0.0.1:6')
 
   with ride_broxy.session_broxy():

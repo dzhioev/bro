@@ -11,7 +11,6 @@ from typing import Optional
 
 from bro.base import configs, credentials, log
 from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV
-from bro.launch.broxy import START_SESSION_BROXY_ENV
 from bro.llm.llm import LLMSpec
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_session_dir
 from bro.summon import summoned_child_env
@@ -22,10 +21,16 @@ from bro.workspace.paths import (
   in_container,
 )
 from ride import pending_summon
+from ride.do_ride import (
+  CONTAINER_INSTALL_DIRECTORY,
+  INSTALL_DIRECTORY_ENV,
+  RESOLVED_LLM_ENV,
+  command as do_ride_command,
+  encode_resolved_llm,
+)
 from ride.flags import default_hold
 from ride.harness import HARNESS_NAMES, Harness, get_harness
 from ride.identity import human_git_identity_env
-from ride.inner import inner_command
 from ride.repository import Repository, hold_repository, is_git_url, open_repository
 from ride.root import run_host_process_via_broker, run_in_container, run_summoned_in_container
 from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError, resolve_runtime_bundle
@@ -265,6 +270,8 @@ def container_launch(
   extras = harness.container_extras(spec, workspace, scoped)
   launch_env: dict[str, str] = {
     'RIDE_BRO': spec.bro,
+    RESOLVED_LLM_ENV: encode_resolved_llm(spec.resolved_llm),
+    INSTALL_DIRECTORY_ENV: CONTAINER_INSTALL_DIRECTORY,
     SESSION_DIR_ENV: str(CONTAINER_SESSION_DIR),
     **human_env,
     **extras.env,
@@ -276,7 +283,7 @@ def container_launch(
   trails_mounts = () if spec.no_trails else local_trails_mounts(scoped)
   return Launch(
     name=spec.name,
-    command=inner_command(spec, harness_flags=harness.inner_flags(spec)),
+    command=do_ride_command(spec, harness_flags=harness.session_flags(spec)),
     env=launch_env,
     secrets=scoped.required,
     optional_secrets=scoped.optional,
@@ -405,8 +412,8 @@ def _host_session(
     if not provision_host_worktree(worktree):
       return 1
 
-  inner = inner_command(spec, harness_flags=harness.inner_flags(spec))
-  command = [str(runtime_bundle.host_venv / 'bin' / inner[0]), *inner[1:]]
+  session_command = do_ride_command(spec, harness_flags=harness.session_flags(spec))
+  command = [str(runtime_bundle.host_venv / 'bin' / session_command[0]), *session_command[1:]]
   runner_env = runtime_bundle.host_session_env()
   runner_env['RIDE_HOST_WORKSPACE'] = str(worktree)
   runner_env.update(human_env)
@@ -416,18 +423,10 @@ def _host_session(
     runner_env.pop('RIDE_REPO', None)
   store_directory = materialize_scoped_store(launch_scope.store, workspace.path / 'credentials')
   runner_env['BRO_STORE'] = str(store_directory)
-  session_store = credentials.Store(credentials.default_registry(), store_directory, {})
-  runner_env.update(
-    credentials.install_hooks(
-      session_store.registry,
-      launch_scope.hydrated_kinds,
-      session_store,
-      workspace.path / 'environment',
-      runner_env,
-    )
-  )
+  runner_env['BRO_INSTALL_KINDS'] = ' '.join(sorted(launch_scope.hydrated_kinds))
+  runner_env[INSTALL_DIRECTORY_ENV] = str(workspace.path / 'environment')
+  runner_env[RESOLVED_LLM_ENV] = encode_resolved_llm(spec.resolved_llm)
   runner_env[SESSION_DIR_ENV] = str(workspace_session_dir(workspace.path))
-  runner_env[START_SESSION_BROXY_ENV] = '1'
   if spec.no_trails:
     runner_env['TRAILS_DISABLED'] = '1'
   harness.prepare_host_env(spec, workspace, worktree, runner_env)
@@ -435,6 +434,7 @@ def _host_session(
   if summoned is not None:
     # no broker of its own: the session broxy connects to the summoner's channel,
     # and the token is claimed only once nothing fallible is left before the run
+    runner_env.pop(CHANNEL_ENV, None)
     runner_env.update(_summoned_env(summoned, spec, summoned.address()))
     try:
       pending_summon.claim(summoned.token, workspace=spec.name)
@@ -456,7 +456,6 @@ def _host_session(
       summon_harness=spec.summon_harness,
     )
   else:
-    runner_env.pop(START_SESSION_BROXY_ENV, None)
     runner_env.pop(CHANNEL_ENV, None)
     runner_env.pop(UPSTREAM_ENV, None)
     code = subprocess.run(command, cwd=str(worktree), env=runner_env).returncode

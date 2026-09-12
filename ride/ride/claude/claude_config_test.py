@@ -139,16 +139,18 @@ class TestProvisionHostClaudeDir:
     (host_plugins / 'marketplaces').mkdir(parents=True)
     (host_plugins / 'installed_plugins.json').write_text('{"pyright-lsp": {}}')
     claude_dir, _ = self._provision(home)
+    ride_claude_config.seed_session_plugins(claude_dir, container=False)
     seeded = claude_dir / 'plugins' / 'installed_plugins.json'
     assert json.loads(seeded.read_text()) == {'pyright-lsp': {}}
     assert not seeded.is_symlink()
     # first-run only: session-local plugin state is kept on later provisions
     seeded.write_text('{"session": "state"}')
-    self._provision(home)
+    ride_claude_config.seed_session_plugins(claude_dir, container=False)
     assert json.loads(seeded.read_text()) == {'session': 'state'}
 
   def test_no_host_plugins_is_fine(self, home):
     claude_dir, _ = self._provision(home)
+    ride_claude_config.seed_session_plugins(claude_dir, container=False)
     assert not (claude_dir / 'plugins').exists()
 
   def test_idempotent(self, home):
@@ -196,10 +198,19 @@ class TestPluginSeedContract:
     assert f'claude plugin install {plugin}' in dockerfile
     assert self._SEED_DIR in dockerfile
 
-  def test_entrypoint_copies_the_stage(self):
-    entrypoint = (workspace_docker.CONTAINER_DIR / 'entrypoint.sh').read_text()
-    assert self._SEED_DIR in entrypoint
-    assert '.claude/plugins' in entrypoint
+  def test_session_seed_copies_the_container_stage_once(self, monkeypatch, tmp_path):
+    source = tmp_path / 'seed'
+    source.mkdir()
+    (source / 'installed_plugins.json').write_text('{"pyright-lsp": {}}')
+    destination = tmp_path / 'claude'
+    monkeypatch.setattr(ride_claude_config, '_CONTAINER_PLUGIN_SEED', source)
+
+    ride_claude_config.seed_session_plugins(destination, container=True)
+    installed = destination / 'plugins' / 'installed_plugins.json'
+    assert json.loads(installed.read_text()) == {'pyright-lsp': {}}
+    installed.write_text('{"session": {}}')
+    ride_claude_config.seed_session_plugins(destination, container=True)
+    assert json.loads(installed.read_text()) == {'session': {}}
 
 
 class TestWorkspaceProjectsDir:

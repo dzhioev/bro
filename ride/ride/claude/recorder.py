@@ -1,4 +1,4 @@
-"""the session recorder daemon the in-place runner starts next to claude.
+"""the session recorder daemon the Claude runner starts next to Claude.
 
 Every session flavor gets continuous transcript recording to trails from one
 mechanism: the runner spawns the recorder before launching claude and stops it

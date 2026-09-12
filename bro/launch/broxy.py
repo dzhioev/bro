@@ -19,7 +19,6 @@ from bro.base import log, spawn
 from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV, broxy_log_path
 
 _LAUNCH_TIMEOUT = 10.0
-START_SESSION_BROXY_ENV = 'BRO_START_SESSION_BROXY'
 
 
 @dataclass
@@ -84,10 +83,9 @@ def _start_session_broxy(upstream: str, env: Mapping[str, str]) -> Optional[_Ses
 
 @contextlib.contextmanager
 def session_broxy() -> Generator[None]:
-  """Give a marked host session its local client channel."""
-  requested = os.environ.pop(START_SESSION_BROXY_ENV, None)
+  """Give a session with an unconsumed upstream its local client channel."""
   upstream = os.environ.get(UPSTREAM_ENV)
-  if requested is None or upstream is None:
+  if upstream is None or os.environ.get(CHANNEL_ENV) is not None:
     yield
     return
 
