@@ -18,7 +18,7 @@ from bro.launch.hold import HOLD_VARIABLE
 from bro.llm.llm import LLMSpec
 from bro.monitor import CLAUDE_CONFIG_DIR_ENV, SESSION_DIR_ENV, session_dir
 from bro.registry import create_bro
-from bro.workspace.paths import in_container, workspace_dir
+from bro.workspace.paths import ISOLATION_ENV, workspace_dir
 from bro.workspace.session import clear_requested_exit_status, requested_exit_status
 from ride.errors import reports_runtime_errors
 from ride.identity import bro_git_identity_env
@@ -33,6 +33,13 @@ INSTALL_DIRECTORY_ENV = 'BRO_INSTALL_DIR'
 RESOLVED_LLM_ENV = 'RIDE_RESOLVED_LLM'
 CONTAINER_INSTALL_DIRECTORY = '/home/ride/.bro-environment'
 PROCESS_FILENAME = 'runner.pid'
+
+
+def _boxed() -> bool:
+  isolation = os.environ.get(ISOLATION_ENV)
+  if isolation not in ('boxed', 'unboxed'):
+    raise RuntimeError(f'{ISOLATION_ENV} must be set to boxed or unboxed')
+  return isolation == 'boxed'
 
 
 @dataclass(frozen=True)
@@ -142,6 +149,7 @@ def _resolved_llm(harness: 'Harness', llm: Optional[str], bro: str) -> dict:
 def _session_run(args: dict, arguments: list[str]) -> tuple['Harness', SessionRun]:
   from ride.flags import pop_harness_options
   from ride.harness import get_harness
+  from ride.workspace.metadata import Isolation
 
   mode = args.pop('mode')
   harness_name = args.pop('harness')
@@ -152,7 +160,7 @@ def _session_run(args: dict, arguments: list[str]) -> tuple['Harness', SessionRu
     args,
     harness_name,
     solo=mode == 'solo',
-    host=False,
+    isolation=Isolation.BOXED,
   )
   name = args.pop('workspace')
   bro = args.pop('bro')
@@ -222,7 +230,7 @@ def _install_credential_hooks() -> None:
   if directory_value is None:
     directory = (
       Path(CONTAINER_INSTALL_DIRECTORY)
-      if in_container()
+      if _boxed()
       else workspace_dir(os.environ['RIDE_WORKSPACE']) / 'environment'
     )
     os.environ[INSTALL_DIRECTORY_ENV] = str(directory)
@@ -243,30 +251,20 @@ def _install_credential_hooks() -> None:
 def _prepare_claude_state(run: SessionRun) -> None:
   if run.harness != 'claude':
     return
-  from bro.workspace.git import git_out
-  from ride.claude.claude_config import provision_host_claude_dir, seed_session_plugins
-  from ride.repository import is_git_url
+  from ride.claude.claude_config import provision_unboxed_claude_dir, seed_session_plugins
 
+  boxed = _boxed()
   config_value = os.environ.get(CLAUDE_CONFIG_DIR_ENV)
   if config_value is None:
-    if in_container():
+    if boxed:
       config_directory = Path.home() / '.claude'
       config_directory.mkdir(parents=True, exist_ok=True)
     else:
-      tree = Path.cwd()
-      if run.repo is None:
-        project = tree
-      elif not is_git_url(run.repo):
-        project = Path(run.repo)
-      else:
-        common = Path(git_out('rev-parse', '--git-common-dir', cwd=str(tree)))
-        common = common if common.is_absolute() else (tree / common).resolve()
-        project = common.parent if common.name == '.git' else common
-      config_directory = provision_host_claude_dir(workspace_dir(run.name), tree, project)
+      config_directory = provision_unboxed_claude_dir(workspace_dir(run.name), Path.cwd())
     os.environ[CLAUDE_CONFIG_DIR_ENV] = str(config_directory)
   else:
     config_directory = Path(config_value)
-  seed_session_plugins(config_directory, container=in_container())
+  seed_session_plugins(config_directory, container=boxed)
 
 
 @contextlib.contextmanager

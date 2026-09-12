@@ -7,7 +7,7 @@ from bro.broker.journal import Journal
 from bro.workspace.paths import workspace_tree
 from ride import pending_summon
 from ride.peer_facts import PeerFact, PeerFacts, PeerIdentity, UnattributablePeer
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
@@ -25,7 +25,7 @@ class _Context:
 @pytest.fixture
 def facts(tmp_path, monkeypatch):
   monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
-  workspace = Workspace.ensure('ws', tmp_path / 'repo', WorkspaceKind.CONTAINER)
+  workspace = Workspace.ensure('ws', tmp_path / 'repo', Isolation.BOXED)
   table = PeerFacts(
     PeerFact(
       workspace='ws',

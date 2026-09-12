@@ -4,7 +4,7 @@ from typing import Optional
 
 from bro import summon
 from bro.monitor import health, trail_pointer
-from bro.workspace import paths
+from bro.workspace.paths import ISOLATION_ENV
 
 # six-line block-letter "B R O" rendered with box-drawing characters;
 # shown on top of the `ride banner` output when the session carries a bro (RIDE_BRO).
@@ -56,14 +56,14 @@ def _render_summon_targets(names: tuple[str, ...]) -> str:
 
 @dataclass(frozen=True)
 class SessionFacts:
-  """the session facts `ride banner` renders, collected from env + /.dockerenv.
+  """the session facts `ride banner` renders, collected from the session environment.
 
   The fields are the documentation — what each renderer may show:
-    - in_container — /.dockerenv presence
+    - isolation — boxed or unboxed (RIDE_ISOLATION), or None outside a ride
     - name — workspace name (RIDE_WORKSPACE)
     - repo — resolved repository attachment (RIDE_REPO), or None when detached
     - bro — the bro the session runs as (RIDE_BRO)
-    - host_workspace — host-side path to the workspace dir
+    - host_workspace — launcher-side path to the workspace tree
     - container_workspace — '/workspace' in a managed container session, else None
     - exec_command — `ride exec <name>` for container sessions
     - ride_command — the canonical `ride solo|along …` invocation (RIDE_COMMAND)
@@ -84,7 +84,7 @@ class SessionFacts:
       publishes one (recording off, or not started yet)
   """
 
-  in_container: bool
+  isolation: Optional[str]
   name: Optional[str]
   bro: Optional[str]
   host_workspace: Optional[str]
@@ -105,22 +105,27 @@ class SessionFacts:
   ) -> 'SessionFacts':
     """collect session facts from env + session-local state for `ride banner`.
 
-    read-only; never raises. bro_override forces the `bro` fact regardless of
+    Read-only; an invalid published isolation fails rather than being guessed.
+    bro_override forces the `bro` fact regardless of
     `RIDE_BRO` — for in-process callers that know the bro they run: an in-process
     run (e.g. `bro run <bro>`) reads the launching environment, whose
     `RIDE_BRO` is the launcher's own persona or absent. trail_id_override likewise
     carries an in-process run's own trail, which no session recorder publishes.
     """
-    in_container = paths.in_container()
+    isolation = os.environ.get(ISOLATION_ENV) or None
+    if isolation not in (None, 'boxed', 'unboxed'):
+      raise ValueError(f'invalid {ISOLATION_ENV}: {isolation!r}')
     name = os.environ.get('RIDE_WORKSPACE') or None
     repo = os.environ.get('RIDE_REPO') or None
     bro = bro_override if bro_override is not None else (os.environ.get('RIDE_BRO') or None)
     ride_command = os.environ.get('RIDE_COMMAND') or None
     shell_command = os.environ.get('BRO_SHELL_COMMAND') or ride_command
     host_workspace: Optional[str] = os.environ.get('RIDE_HOST_WORKSPACE') or None
-    container_workspace: Optional[str] = '/workspace' if in_container and name is not None else None
+    container_workspace: Optional[str] = (
+      '/workspace' if isolation == 'boxed' and name is not None else None
+    )
 
-    exec_command = f'ride exec {name}' if in_container and name is not None else None
+    exec_command = f'ride exec {name}' if isolation == 'boxed' and name is not None else None
 
     prompt: Optional[str] = None
     if shell_command is not None:
@@ -132,7 +137,7 @@ class SessionFacts:
       trail_id = trail_pointer.read(pointer) if pointer is not None else None
 
     return cls(
-      in_container=in_container,
+      isolation=isolation,
       name=name,
       repo=repo,
       bro=bro,
@@ -193,22 +198,25 @@ class SessionFacts:
     if self.ride_command is not None and self.ride_command != self.shell_command:
       rows.append(('ride command:', '', f'{dim}{self.ride_command}{reset}'))
 
-    if self.in_container:
+    if self.isolation == 'boxed':
       # /workspace inside, host bind-mount path below — both are useful and
       # packing them onto one line crowded the eye
       if self.container_workspace is not None:
         rows.append(('workspace:', '', self.container_workspace))
       else:
-        rows.append(('workspace:', '', f'{dim}(unmanaged container){reset}'))
+        rows.append(('workspace:', '', f'{dim}(boxed session without a workspace){reset}'))
       if self.host_workspace is not None:
         rows.append(('host path:', '', f'{dim}{self.host_workspace}{reset}'))
-    elif self.host_workspace is not None:
-      # host-mode worktree path printed in red as a "this is your actual repo
-      # on disk — careless edits leak out of the session" reminder
+    elif self.isolation == 'unboxed' and self.host_workspace is not None:
+      # an unboxed tree has no container boundary, so keep its launcher path prominent
       rows.append(('workspace:', '', f'{red}{self.host_workspace}{reset}'))
     else:
       rows.append(
-        ('workspace:', '', f'{dim}(unknown — no RIDE_WORKSPACE / not a registered worktree){reset}')
+        (
+          'workspace:',
+          '',
+          f'{dim}(unknown — no RIDE_WORKSPACE / not a registered workspace){reset}',
+        )
       )
 
     if self.exec_command is not None:
@@ -251,7 +259,8 @@ class SessionFacts:
       # first line so it lands in Claude's collapsed tool-output preview without
       # needing expansion; the agent should relay it to the user
       lines.append(f'session_recording: {self.recording_problem}')
-    lines.append(f'kind: {"container" if self.in_container else "worktree"}')
+    isolation = self.isolation if self.isolation is not None else 'none (not a ride session)'
+    lines.append(f'isolation: {isolation}')
     lines.append(f'repo: {self.repo if self.repo is not None else "none (detached)"}')
     pairs: list[tuple[str, str]] = [
       ('name', 'name'),

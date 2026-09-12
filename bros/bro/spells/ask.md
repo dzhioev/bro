@@ -179,7 +179,7 @@ and the user launches the session themselves.
 Relay the token to the user as the ready-to-paste interactive command
 — `ride along --summoned <token> <target>`
 — and note they may instead run `ride solo --summoned <token> <target>` for a one-shot request with no conversation.
-They may add their own launch flags (`--host`, `--llm`, `--hold`, `--workspace`, a claude/bro harness).
+They may add their own launch flags (`--unboxed`, `--llm`, `--hold`, `--workspace`, a claude/bro harness).
 The prompt you passed becomes the session's first message;
 the child bases on this workspace's HEAD *at the moment they launch* (or the `--into` ref you gave).
 

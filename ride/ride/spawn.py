@@ -39,7 +39,7 @@ from ride.scope import scoped_secrets
 from ride.session import SessionSpec, container_launch, record_resume_spec
 from ride.summon_control import SummonControl
 from ride.workspace.docker import ContainerRuntimeResolver, bridge_gateway
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.spawn import (
   CompositeSpawner,
@@ -90,7 +90,7 @@ def _workspace_name(channel: str) -> str:
 
 
 def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> SessionSpec:
-  """the summoned child's run as a `SessionSpec`: an unpinned solo container
+  """the summoned child's run as a `SessionSpec`: an unpinned solo boxed
   session of the target bro under the request's fields — only the request's
   `timeout` maps to no spec field (it is the spawner's wait timer, not part of
   the run). Recorded as the workspace's resume record and the source of the
@@ -101,10 +101,12 @@ def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> Sessio
     repo=None if launch.repo is None else as_repository(launch.repo).identity,
     harness=harness.name,
     workspace_pinned=False,
-    host=False,
+    isolation=Isolation.BOXED,
     drop=True,
     no_trails=False,
-    hold=launch.hold if launch.hold is not None else default_hold(solo=True, host=False),
+    hold=launch.hold
+    if launch.hold is not None
+    else default_hold(solo=True, isolation=Isolation.BOXED),
     grant=list(launch.grant),
     revoke=list(launch.revoke),
     llm=launch.llm,
@@ -173,7 +175,7 @@ def _lower_summon(
     llm_spec=spec.llm_spec,
   )
   resolved_runtime = container_runtime.resolve()
-  workspace = Workspace.ensure(workspace_name, repo, WorkspaceKind.CONTAINER, throwaway=True)
+  workspace = Workspace.ensure(workspace_name, repo, Isolation.BOXED, throwaway=True)
   record_resume_spec(workspace, spec)
   artifacts.view(workspace_name)
   artifacts.share(launch.share, to=workspace_name, by=launch.parent)
@@ -191,7 +193,7 @@ def _lower_summon(
       'RIDE_COMMAND': ' '.join(spec.to_command_argv()),
       **summoned_child_env(launch.may_summon, launch.summoner),
     },
-    mounts=(view_mount(artifacts.session, workspace_name),),
+    mounts=(view_mount(artifacts.ride, workspace_name),),
   )
   log_scoped_secrets(f'summoned {launch.target}', run.secrets, run.optional_secrets)
   return DockerLaunchSpec(run)
@@ -258,10 +260,10 @@ def run_root_via_broker(
   container_runtime: ContainerRuntimeResolver,
 ) -> int:
   """run `launch` as the root peer of a broker on this host, supervise it on the
-  broker loop until it exits, and return its exit code. The spawner is the composite over both ride launch modes plus the summon
-  lowering, so any root — host process or container — can spawn docker children.
+  broker loop until it exits, and return its exit code. The spawner is the composite over both workspace isolations plus the summon
+  lowering, so any root — an unboxed process or boxed container — can spawn docker children.
   The broker answers the reserved ping kind, so a session can verify its channel
-  (`broker request ping '{}'`), the artifact kinds over the session store
+  (`broker request ping '{}'`), the artifact kinds over the ride store
   (`ride.artifacts`, which also collects the run of any job a kind starts), plus
   whatever kinds installed distributions
   contribute (`ride.kinds`), and projects the journal into the summon audit and
@@ -269,8 +271,8 @@ def run_root_via_broker(
   workspace's host log instead of the shared TTY (see
   `ride.workspace.spawn._HostLogRedirect`); headless runs keep it on stderr.
 
-  `workspace` is the workspace the root session runs in — its name is the root's
-  identity in the summon audit. `may_summon` names the bros the root session
+  `workspace` is the workspace the root session runs in — its name identifies the
+  ride in the summon audit. `may_summon` names the bros the root session
   is authorized to summon — its effective outgoing allow-list (`ride/ride/summon_control.py`);
   defaults to deny-all. `credential_scope` carries the kinds the root session
   was launched with and their selection, the bound on what its summons may grant
@@ -302,7 +304,7 @@ def run_root_via_broker(
     root_tree=workspace.tree,
     root_path=workspace.path,
   )
-  artifacts = ArtifactStore(workspace, root_in_container=isinstance(launch, DockerLaunchSpec))
+  artifacts = ArtifactStore(workspace, root_boxed=isinstance(launch, DockerLaunchSpec))
   spawner = CompositeSpawner(
     {
       DockerLaunchSpec: docker_spawner,

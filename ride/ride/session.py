@@ -17,8 +17,8 @@ from bro.summon import summoned_child_env
 from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.paths import (
   CONTAINER_SESSION_DIR,
+  ISOLATION_ENV,
   ensure_runtime_root,
-  in_container,
 )
 from ride import pending_summon
 from ride.do_ride import (
@@ -32,7 +32,7 @@ from ride.flags import default_hold
 from ride.harness import HARNESS_NAMES, Harness, get_harness
 from ride.identity import human_git_identity_env
 from ride.repository import Repository, hold_repository, is_git_url, open_repository
-from ride.root import run_host_process_via_broker, run_in_container, run_summoned_in_container
+from ride.root import run_in_container, run_summoned_in_container, run_unboxed_process_via_broker
 from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError, resolve_runtime_bundle
 from ride.scope import (
   LaunchScopeError,
@@ -41,6 +41,7 @@ from ride.scope import (
   scoped_secrets,
 )
 from ride.trails import local_trails_mounts
+from ride.workspace.clones import ensure_clone
 from ride.workspace.containers import broker_enabled
 from ride.workspace.docker import (
   CONTAINER_BROKER_HOST,
@@ -49,15 +50,15 @@ from ride.workspace.docker import (
   Launch,
   find_container_id,
 )
-from ride.workspace.metadata import WorkspaceKind
-from ride.workspace.model import AttachmentMismatch, KindMismatch, SessionBusy, Workspace
+from ride.workspace.metadata import BRANCH_ENV, Isolation
+from ride.workspace.model import AttachmentMismatch, IsolationMismatch, SessionBusy, Workspace
 from ride.workspace.store import (
   ScopedSecrets,
   credential_revoke_kind,
   log_scoped_secrets,
   materialize_scoped_store,
 )
-from ride.workspace.worktrees import ensure_host_worktree, provision_host_worktree
+from ride.workspace.worktrees import provision_workspace
 
 
 def _scope_override_key(value: str) -> str:
@@ -80,7 +81,7 @@ class SessionSpec:
   name: str
   harness: str
   workspace_pinned: bool
-  host: bool
+  isolation: Isolation
   drop: bool
   no_trails: bool
   hold: str
@@ -99,8 +100,14 @@ class SessionSpec:
   repo: Optional[str] = None
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
   summon_harness: str = configs.DEFAULT_SUMMON_HARNESS
+  tree: Optional[str] = None
+  runtime_bundle: Optional[str] = None
 
   def __post_init__(self) -> None:
+    if not isinstance(self.isolation, Isolation):
+      raise TypeError('session isolation must be boxed or unboxed')
+    if self.tree is not None or self.runtime_bundle is not None:
+      raise ValueError('external trees and runtime bundles are not supported yet')
     if type(self.summon_depth) is not int or self.summon_depth <= 0:
       raise ValueError('summon depth must be a positive integer')
     if self.summon_harness not in HARNESS_NAMES:
@@ -110,14 +117,10 @@ class SessionSpec:
   def llm_spec(self) -> LLMSpec:
     return LLMSpec.from_dict(self.resolved_llm)
 
-  @property
-  def kind(self) -> WorkspaceKind:
-    return WorkspaceKind.WORKTREE if self.host else WorkspaceKind.CONTAINER
-
   def to_command_argv(self) -> list[str]:
     if self.resume:
       return ['ride', 'resume', self.name]
-    flags = {'--host': self.host, '--no-trails': self.no_trails}
+    flags = {'--unboxed': self.isolation is Isolation.UNBOXED, '--no-trails': self.no_trails}
     if not self.solo:
       flags['--drop'] = self.drop
     elif not self.workspace_pinned:
@@ -150,7 +153,7 @@ class SessionSpec:
     return replace(
       self,
       drop=False,
-      hold=default_hold(solo=False, host=self.host) if self.solo else self.hold,
+      hold=default_hold(solo=False, isolation=self.isolation) if self.solo else self.hold,
       solo=False,
       resume=True,
       into=None,
@@ -191,7 +194,8 @@ class SessionSpec:
     fields = {field.name for field in dataclasses.fields(cls)}
     if data.keys() != fields:
       raise ValueError(f'unexpected fields: {sorted(data.keys() ^ fields)}')
-    return cls(**data)
+    values = {**data, 'isolation': Isolation(data['isolation'])}
+    return cls(**values)
 
 
 @dataclass(frozen=True)
@@ -270,12 +274,15 @@ def container_launch(
   extras = harness.container_extras(spec, workspace, scoped)
   launch_env: dict[str, str] = {
     'RIDE_BRO': spec.bro,
+    ISOLATION_ENV: Isolation.BOXED.value,
     RESOLVED_LLM_ENV: encode_resolved_llm(spec.resolved_llm),
     INSTALL_DIRECTORY_ENV: CONTAINER_INSTALL_DIRECTORY,
     SESSION_DIR_ENV: str(CONTAINER_SESSION_DIR),
     **human_env,
     **extras.env,
   }
+  if workspace.metadata.branch is not None:
+    launch_env[BRANCH_ENV] = workspace.metadata.branch
   if spec.no_trails:
     # a run that records nothing binds no trails root
     launch_env['TRAILS_DISABLED'] = '1'
@@ -310,13 +317,13 @@ def _launch_session(
   launch_scope: ScopedLaunch,
   *,
   human_env: dict[str, str],
-  container: bool,
+  boxed: bool,
   runtime_bundle: RuntimeBundle,
   container_runtime: ContainerRuntimeResolver,
   summoned: Optional[pending_summon.PendingSummon] = None,
 ) -> int:
   harness = get_harness(spec.harness)
-  if container and find_container_id(workspace.tree) is not None:
+  if boxed and find_container_id(workspace.tree) is not None:
     log.error(
       'session already active in the container for workspace %r; refusing to start a second',
       spec.name,
@@ -327,11 +334,11 @@ def _launch_session(
   elif not harness.session_exists(workspace):
     log.error('%s', harness.missing_session_error(workspace))
     return 1
-  if container:
-    return _container_session(
+  if boxed:
+    return _boxed_session(
       harness, spec, workspace, base_ref, launch_scope, human_env, container_runtime, summoned
     )
-  return _host_session(
+  return _unboxed_session(
     harness,
     spec,
     workspace,
@@ -344,7 +351,7 @@ def _launch_session(
   )
 
 
-def _container_session(
+def _boxed_session(
   harness: Harness,
   spec: SessionSpec,
   workspace: Workspace,
@@ -386,7 +393,7 @@ def _container_session(
   )
 
 
-def _host_session(
+def _unboxed_session(
   harness: Harness,
   spec: SessionSpec,
   workspace: Workspace,
@@ -397,30 +404,34 @@ def _host_session(
   container_runtime: ContainerRuntimeResolver,
   summoned: Optional[pending_summon.PendingSummon] = None,
 ) -> int:
-  worktree = workspace.tree
+  tree = workspace.tree
   scoped = launch_scope.scoped
   log_scoped_secrets(spec.name, scoped.required, scoped.optional)
   repository = workspace.repository
   if repository is None:
-    worktree.mkdir(parents=True, exist_ok=True)
+    tree.mkdir(parents=True, exist_ok=True)
   else:
     branch = workspace.metadata.branch
     if branch is None:
-      raise ValueError('attached host workspace has no recorded branch')
-    if not ensure_host_worktree(repository.git_dir, worktree, branch, base_ref):
-      return 1
-    if not provision_host_worktree(worktree):
+      raise ValueError('attached unboxed workspace has no recorded branch')
+    ensure_clone(repository, tree, branch, base_ref)
+    if not provision_workspace(tree):
       return 1
 
   session_command = do_ride_command(spec, harness_flags=harness.session_flags(spec))
   command = [str(runtime_bundle.host_venv / 'bin' / session_command[0]), *session_command[1:]]
   runner_env = runtime_bundle.host_session_env()
-  runner_env['RIDE_HOST_WORKSPACE'] = str(worktree)
+  runner_env[ISOLATION_ENV] = Isolation.UNBOXED.value
+  runner_env['RIDE_HOST_WORKSPACE'] = str(tree)
   runner_env.update(human_env)
   if workspace.repo is not None:
     runner_env['RIDE_REPO'] = str(workspace.repo)
+    if workspace.metadata.branch is None:
+      raise ValueError('attached unboxed workspace has no recorded branch')
+    runner_env[BRANCH_ENV] = workspace.metadata.branch
   else:
     runner_env.pop('RIDE_REPO', None)
+    runner_env.pop(BRANCH_ENV, None)
   store_directory = materialize_scoped_store(launch_scope.store, workspace.path / 'credentials')
   runner_env['BRO_STORE'] = str(store_directory)
   runner_env['BRO_INSTALL_KINDS'] = ' '.join(sorted(launch_scope.hydrated_kinds))
@@ -429,7 +440,7 @@ def _host_session(
   runner_env[SESSION_DIR_ENV] = str(workspace_session_dir(workspace.path))
   if spec.no_trails:
     runner_env['TRAILS_DISABLED'] = '1'
-  harness.prepare_host_env(spec, workspace, worktree, runner_env)
+  harness.prepare_unboxed_env(spec, workspace, tree, runner_env)
   workspace.clear_session_end()
   if summoned is not None:
     # no broker of its own: the session broxy connects to the summoner's channel,
@@ -441,9 +452,9 @@ def _host_session(
     except pending_summon.UnknownToken as error:
       log.error('%s', error)
       return 1
-    code = subprocess.run(command, cwd=str(worktree), env=runner_env).returncode
+    code = subprocess.run(command, cwd=str(tree), env=runner_env).returncode
   elif broker_enabled():
-    code = run_host_process_via_broker(
+    code = run_unboxed_process_via_broker(
       workspace,
       command,
       runner_env,
@@ -458,7 +469,7 @@ def _host_session(
   else:
     runner_env.pop(CHANNEL_ENV, None)
     runner_env.pop(UPSTREAM_ENV, None)
-    code = subprocess.run(command, cwd=str(worktree), env=runner_env).returncode
+    code = subprocess.run(command, cwd=str(tree), env=runner_env).returncode
   workspace.record_session_end(code)
   return code
 
@@ -483,12 +494,6 @@ def start_session(
   repository: Optional[Repository] = None,
   summoned: Optional[pending_summon.PendingSummon] = None,
 ) -> int:
-  if in_container():
-    log.error(
-      'ride cannot start inside a container yet; use `summon` for an isolated sibling '
-      'or `bro run|chat` for this container and credential scope'
-    )
-    return 1
   try:
     with resolve_runtime_bundle() as runtime_bundle:
       return _start_session(spec, runtime_bundle, repository, summoned)
@@ -504,9 +509,10 @@ def _start_session(
   summoned: Optional[pending_summon.PendingSummon] = None,
 ) -> int:
   harness = get_harness(spec.harness)
-  container = not spec.host
+  boxed = spec.isolation is Isolation.BOXED
   os.environ['RIDE_COMMAND'] = ' '.join(spec.to_command_argv())
   os.environ['RIDE_WORKSPACE'] = spec.name
+  os.environ[ISOLATION_ENV] = spec.isolation.value
   if spec.repo is None:
     os.environ.pop('RIDE_REPO', None)
   else:
@@ -554,7 +560,7 @@ def _start_session(
     log.error('%s', error)
     return 1
 
-  if spec.host:
+  if spec.isolation is Isolation.UNBOXED:
     runtime_bundle.materialize_host()
   repository_context = (
     contextlib.nullcontext(None) if spec.repo is None else hold_repository(spec.repo)
@@ -587,8 +593,8 @@ def _start_session(
             return 1
       container_runtime = ContainerRuntimeResolver(runtime_bundle, repository)
       human_env = human_git_identity_env(repository)
-      workspace = Workspace.ensure(spec.name, repository, spec.kind)
-  except (AttachmentMismatch, KindMismatch, RuntimeError, ValueError) as error:
+      workspace = Workspace.ensure(spec.name, repository, spec.isolation)
+  except (AttachmentMismatch, IsolationMismatch, RuntimeError, ValueError) as error:
     log.error('%s', error)
     return 1
   launch = ScopedLaunch(
@@ -606,7 +612,7 @@ def _start_session(
         base_ref,
         launch,
         human_env=human_env,
-        container=container,
+        boxed=boxed,
         runtime_bundle=runtime_bundle,
         container_runtime=container_runtime,
         summoned=summoned,

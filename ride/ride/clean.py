@@ -4,7 +4,7 @@ from bro.base import log
 from ride.repository import clean_managed_mirrors
 from ride.runtime_bundle import clean_runtime_bundles
 from ride.workspace.docker import running_mounts
-from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
 
@@ -21,9 +21,9 @@ def clean_workspaces(
       return 1
     workspaces = [workspace for workspace in workspaces if workspace.name in selected]
 
-  workspaces.sort(key=lambda workspace: (workspace.kind, workspace.name))
+  workspaces.sort(key=lambda workspace: (workspace.isolation, workspace.name))
 
-  has_containers = any(workspace.kind is WorkspaceKind.CONTAINER for workspace in workspaces)
+  has_containers = any(workspace.isolation is Isolation.BOXED for workspace in workspaces)
   try:
     mounts = running_mounts() if has_containers else set()
   except (OSError, RuntimeError) as error:

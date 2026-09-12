@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from ride.repository import Repository
-from ride.workspace.clones import ensure_container_clone
+from ride.workspace.clones import ensure_clone
 
 
 def _git(*arguments: str, cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -65,7 +65,7 @@ def test_clone_has_its_own_objects_upstream_and_workspace_branch(tmp_path):
   _git('update-ref', 'refs/remotes/origin/fresh', head, cwd=source)
   tree = tmp_path / 'workspace' / 'tree'
 
-  ensure_container_clone(_repository(source), tree, 'worktree-session')
+  ensure_clone(_repository(source), tree, 'worktree-session')
 
   assert _git('symbolic-ref', '--short', 'HEAD', cwd=tree).stdout.strip() == 'worktree-session'
   assert _git('rev-parse', 'HEAD', cwd=tree).stdout.strip() == head
@@ -86,9 +86,9 @@ def test_explicit_base_is_checked_out_only_when_the_clone_is_created(tmp_path):
   _commit(source, 'later')
   tree = tmp_path / 'workspace' / 'tree'
 
-  ensure_container_clone(_repository(source), tree, 'worktree-session', base)
+  ensure_clone(_repository(source), tree, 'worktree-session', base)
   (tree / 'local').write_text('preserve')
-  ensure_container_clone(
+  ensure_clone(
     _repository(source),
     tree,
     'worktree-session',
@@ -105,12 +105,22 @@ def test_clone_from_an_alternates_source_is_dissociated(tmp_path):
   _git('clone', '--quiet', '--shared', str(upstream), str(source), cwd=tmp_path)
   tree = tmp_path / 'workspace' / 'tree'
 
-  ensure_container_clone(_repository(source), tree, 'worktree-session')
+  ensure_clone(_repository(source), tree, 'worktree-session')
 
   assert not _alternates(tree).exists()
   shutil.rmtree(upstream)
   shutil.rmtree(source)
   assert _git('fsck', '--full', cwd=tree).returncode == 0
+
+
+def test_legacy_worktree_is_refused(tmp_path):
+  source = _source_repository(tmp_path)
+  tree = tmp_path / 'legacy' / 'tree'
+  tree.mkdir(parents=True)
+  (tree / '.git').write_text('gitdir: /source/.git/worktrees/legacy')
+
+  with pytest.raises(RuntimeError, match=r'legacy git worktree.*ride clean --force legacy'):
+    ensure_clone(_repository(source), tree, 'workspace-legacy')
 
 
 def test_legacy_shared_clone_is_refused(tmp_path):
@@ -119,7 +129,7 @@ def test_legacy_shared_clone_is_refused(tmp_path):
   _git('clone', '--quiet', '--shared', str(source), str(tree), cwd=tmp_path)
 
   with pytest.raises(RuntimeError, match=r'ride clean --force legacy'):
-    ensure_container_clone(_repository(source), tree, 'worktree-legacy')
+    ensure_clone(_repository(source), tree, 'worktree-legacy')
 
 
 def test_failed_preparation_leaves_no_partial_clone(tmp_path):
@@ -129,7 +139,7 @@ def test_failed_preparation_leaves_no_partial_clone(tmp_path):
   tree.mkdir(parents=True)
 
   with pytest.raises(RuntimeError, match='remote get-url origin'):
-    ensure_container_clone(_repository(source), tree, 'worktree-session')
+    ensure_clone(_repository(source), tree, 'worktree-session')
 
   assert tree.is_dir()
   assert list(tree.iterdir()) == []
@@ -162,7 +172,7 @@ def test_initialized_checkout_submodule_is_cloned_locally_and_retargeted(tmp_pat
   _git('-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', cwd=source)
   tree = tmp_path / 'workspace' / 'tree'
 
-  ensure_container_clone(_repository(source), tree, 'worktree-session')
+  ensure_clone(_repository(source), tree, 'worktree-session')
 
   component = tree / 'component'
   assert (component / 'component').read_text() == 'component'
@@ -179,7 +189,7 @@ def test_uninitialized_checkout_submodule_is_skipped(tmp_path):
   _git('clone', '--quiet', str(upstream), str(source), cwd=tmp_path)
   tree = tmp_path / 'workspace' / 'tree'
 
-  ensure_container_clone(_repository(source), tree, 'worktree-session')
+  ensure_clone(_repository(source), tree, 'worktree-session')
 
   assert not (tree / 'component' / 'component').exists()
 
@@ -190,9 +200,7 @@ def test_bare_mirror_submodule_uses_the_committed_url(tmp_path):
   _git('clone', '--quiet', '--bare', str(upstream), str(mirror), cwd=tmp_path)
   tree = tmp_path / 'workspace' / 'tree'
 
-  ensure_container_clone(
-    Repository('https://example.test/repository.git', mirror), tree, 'worktree-session'
-  )
+  ensure_clone(Repository('https://example.test/repository.git', mirror), tree, 'worktree-session')
 
   component = tree / 'component'
   assert (component / 'component').read_text() == 'component'
@@ -229,9 +237,7 @@ def test_bare_mirror_resolves_a_relative_submodule_url_against_origin(tmp_path):
   _git('symbolic-ref', 'HEAD', 'refs/remotes/origin/master', cwd=mirror)
   tree = tmp_path / 'workspace' / 'tree'
 
-  ensure_container_clone(
-    Repository('https://example.test/repository.git', mirror), tree, 'worktree-session'
-  )
+  ensure_clone(Repository('https://example.test/repository.git', mirror), tree, 'worktree-session')
 
   component = tree / 'component'
   assert (component / 'component').read_text() == 'component'

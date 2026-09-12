@@ -1,18 +1,18 @@
 #!/usr/bin/env python
 """artifact — pass files between broker peers by content-addressed reference.
 
-The peer side of artifact sharing: two request kinds on the session channel,
-answered by the host-side store (`ride/ride/artifacts.py`). This module owns
+The peer side of artifact sharing: two request kinds on the peer's channel,
+answered by the ride's host-side store (`ride/ride/artifacts.py`). This module owns
 the wire contract — the kinds, their args keys, and the ref grammar — for the
 library client and the `artifact` CLI/session command.
 
 - `artifact.mint` with args `{path}` — `path` names a file or directory
   relative to the requesting peer's workspace root. The host ingests a private
-  copy into the session store and answers `ok{ref, size}`.
+  copy into the ride store and answers `ok{ref, size}`.
 - `artifact.get` with args `{ref}` — the host makes the ref visible to the
   requesting peer and answers `ok{path}` with the path it appears at: the
-  read-only view mount for a container peer, a copy under the session's
-  workspace directory for a host-mode one. The path is not the peer's to
+  read-only view mount for a boxed peer, a copy under the peer's workspace
+  directory for an unboxed one. The path is not the peer's to
   write; a peer that wants an editable copy makes one itself.
 
 A ref is `sha256:` plus 64 hex digits. For a file it is the plain content
@@ -25,7 +25,7 @@ symlink, refused when that target escapes the directory; the manifest digested
 as compact sorted-key JSON.
 
 A minted ref is readable by the minting peer and its summoners up to the
-session root; a summon request's `share` list hands refs down to the child it
+ride root; a summon request's `share` list hands refs down to the child it
 spawns. Nothing else reaches a ref — knowing one is not access.
 
 The CLI blocks for the host's answer: `artifact mint <path>` prints the ref,
@@ -241,7 +241,7 @@ def main(argv: list[str]) -> Optional[int]:
   if len(argv) > 1 and argv[1] == 'mint':
     parser = base_args.Parser(
       prog='artifact mint',
-      description='mint a workspace file or directory into the session artifact '
+      description="mint a workspace file or directory into the ride's artifact "
       'store and print its content-addressed ref; the ref is readable by this '
       'peer and its summoners, and a summon request can share it down',
     )
@@ -251,8 +251,8 @@ def main(argv: list[str]) -> Optional[int]:
   if len(argv) > 1 and argv[1] == 'get':
     parser = base_args.Parser(
       prog='artifact get',
-      description='make an artifact ref visible to this session and print the '
-      'read-only path it appears at; copy from there for an editable version',
+      description='make an artifact ref visible to this peer and print the read-only '
+      'path it appears at; copy from there for an editable version',
     )
     parser.add_argument('ref', help='artifact ref (sha256:<64 hex digits>)')
     parser.add_argument('--timeout', type=float, metavar='SECONDS', help=_TIMEOUT_HELP)

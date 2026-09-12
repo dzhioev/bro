@@ -1,11 +1,11 @@
-"""live check of the same graded trial started the way a managed session starts it.
+"""live check of the same graded trial started the way a managed ride starts it.
 
 What this adds to the direct harbor run is the whole `benchmark` kind seam — its
 checks, the command it builds, the run directory the job fills, and the result
 the CLI turns back into an exit status.
 
 The broker is the real one over its real transport, driving the real CLI as its
-root peer. Only the artifact store a session collects into and reads back is
+root peer. Only the artifact store a ride collects into and reads back is
 stood in for: a job's answer is the run directory either way, and
 `ride/ride/artifacts.py` owns the collection that turns one into a ref.
 
@@ -114,7 +114,7 @@ class _SessionSpawner(Spawner):
 
 
 class _RunDirectories:
-  """the `JobOutput` the session's artifact store stands in for here: it keeps
+  """the `JobOutput` the ride's artifact store stands in for here: it keeps
   each run where the test can read it, and answers with the directory itself as
   the ref the CLI prints.
 

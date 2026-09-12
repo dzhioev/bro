@@ -220,7 +220,7 @@ def preflight_scoped_launch(
 
   returns (allow-list, store). the container launch path rebuilds the store at
   create, so container callers drop it — the build is the preflight itself; a
-  host session materializes the returned one.
+  unboxed session materializes the returned one.
   """
   # imported here, not at module level, parallel to every launch-surface import of
   # summon_control: the module sits on the pre-gate launch path

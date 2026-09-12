@@ -11,6 +11,7 @@ from bro.broker.brotocol import PROTOCOL_REVISION
 from ride import pending_summon
 from ride.do_ride import command as do_ride_command
 from ride.harness import get_harness
+from ride.workspace.metadata import Isolation
 
 
 @pytest.fixture(autouse=True)
@@ -55,10 +56,17 @@ class TestSolo:
       'claude',
     ]
 
-  def test_host_keeps_the_unattended_default(self):
+  def test_unboxed_keeps_the_unattended_default(self):
     with patch('ride.cli.start_session', return_value=0) as start:
-      ride_cli.main(['ride', 'solo', '--host', 'dev', 'do it'])
+      ride_cli.main(['ride', 'solo', '--unboxed', 'dev', 'do it'])
     assert start.call_args.args[0].hold == 'unattended'
+    assert start.call_args.args[0].isolation is Isolation.UNBOXED
+
+  def test_boxed_is_the_default_and_has_an_explicit_spelling(self):
+    for flags in ([], ['--boxed']):
+      with patch('ride.cli.start_session', return_value=0) as start:
+        ride_cli.main(['ride', 'solo', *flags, 'dev', 'do it'])
+      assert start.call_args.args[0].isolation is Isolation.BOXED
 
   def test_keep_retains_an_automatic_workspace(self):
     with patch('ride.cli.start_session', return_value=0) as start:
@@ -167,9 +175,9 @@ class TestAlong:
       'claude',
     ]
 
-  def test_host_defaults_to_guided(self):
+  def test_unboxed_defaults_to_guided(self):
     with patch('ride.cli.start_session', return_value=0) as start:
-      ride_cli.main(['ride', 'along', '--host', 'dev'])
+      ride_cli.main(['ride', 'along', '--unboxed', 'dev'])
     assert start.call_args.args[0].hold == 'guided'
 
   def test_workspace_pins_an_existing_name(self):
@@ -199,10 +207,10 @@ class TestAlong:
       '--hold', 'attended', 'dev', '--', '--fork',
     ]  # fmt: skip
 
-  def test_raw_host_combination_errors(self, capsys):
+  def test_raw_unboxed_combination_errors(self, capsys):
     with pytest.raises(SystemExit):
-      ride_cli.main(['ride', 'along', '--host', '--raw', 'dev'])
-    assert '--raw cannot be combined with --host' in capsys.readouterr().err
+      ride_cli.main(['ride', 'along', '--unboxed', '--raw', 'dev'])
+    assert '--raw cannot be combined with --unboxed' in capsys.readouterr().err
 
   def test_incompatible_provider_names_the_harness_remedy(self, capsys):
     with pytest.raises(SystemExit):
@@ -282,7 +290,7 @@ class TestAlong:
 class TestLifecycle:
   def test_outer_command_migrates_legacy_runtime_state_first(self):
     with (
-      patch('ride.cli.migrate_legacy_runtime_state') as migrate,
+      patch('ride.cli.migrate_runtime_state') as migrate,
       patch('ride.cli.list_workspaces', return_value=0),
     ):
       assert ride_cli.main(['ride', 'list']) == 0

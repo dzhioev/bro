@@ -10,12 +10,13 @@ from ride.claude.claude_auth import apply_claude_auth, load_anthropic_key
 from ride.claude.claude_config import (
   container_claude_state,
   latest_jsonl,
-  provision_host_claude_dir,
+  provision_unboxed_claude_dir,
   read_subject,
   workspace_projects_dir,
 )
 from ride.harness import ContainerExtras
 from ride.scope import ScopeRecipe
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
@@ -77,10 +78,10 @@ class ClaudeHarness:
     )
     return ('raw',)
 
-  def parse_options(self, args: dict, *, solo: bool, host: bool) -> dict:
+  def parse_options(self, args: dict, *, solo: bool, isolation: Isolation) -> dict:
     del solo
-    if args['raw'] and host:
-      raise ValueError('--raw cannot be combined with --host')
+    if args['raw'] and isolation is Isolation.UNBOXED:
+      raise ValueError('--raw cannot be combined with --unboxed')
     return ClaudeOptions(raw=args['raw']).dump()
 
   def default_options(self) -> dict:
@@ -145,13 +146,11 @@ class ClaudeHarness:
     claude_mounts, claude_env = container_claude_state(workspace.path)
     return ContainerExtras(env=claude_env, mounts=tuple(claude_mounts))
 
-  def prepare_host_env(
-    self, spec: 'SessionSpec', workspace: Workspace, worktree: Path, env: dict[str, str]
+  def prepare_unboxed_env(
+    self, spec: 'SessionSpec', workspace: Workspace, tree: Path, env: dict[str, str]
   ) -> None:
     del spec
-    repository = workspace.repository
-    project = worktree if repository is None else repository.git_dir
-    claude_dir = provision_host_claude_dir(workspace.path, worktree, project)
+    claude_dir = provision_unboxed_claude_dir(workspace.path, tree)
     env[CLAUDE_CONFIG_DIR_ENV] = str(claude_dir)
     apply_claude_auth(env)
 

@@ -8,7 +8,7 @@ import pytest
 
 from bro.workspace.paths import runtime_base
 from ride import runtime_state
-from ride.runtime_state import RuntimeStateMigrationError, migrate_legacy_runtime_state
+from ride.runtime_state import RuntimeStateMigrationError, migrate_runtime_state
 
 
 def _legacy_root(base: Path, name: str = 'project-1234abcd') -> Path:
@@ -23,7 +23,42 @@ def _workspace(root: Path, name: str, *, kind: str = 'container') -> Path:
   (workspace / 'meta.json').write_text(
     json.dumps({'kind': kind, 'branch': f'worktree-{name}', 'throwaway': False})
   )
-  (workspace / 'resume.json').write_text(json.dumps({'name': name, 'resume': True}))
+  (workspace / 'resume.json').write_text(
+    json.dumps(
+      {
+        'name': name,
+        'harness': 'bro',
+        'workspace_pinned': True,
+        'host': kind == 'worktree',
+        'drop': False,
+        'no_trails': False,
+        'hold': 'attended',
+        'grant': [],
+        'revoke': [],
+        'llm': None,
+        'resolved_llm': {},
+        'solo': False,
+        'resume': True,
+        'into': None,
+        'bro': 'bro-dev',
+        'prompt': None,
+        'subject': None,
+        'arguments': [],
+        'harness_options': {},
+        'summon_depth': 4,
+        'summon_harness': 'bro',
+      }
+    )
+  )
+  return workspace
+
+
+def _detached_workspace(root: Path, name: str, *, kind: str = 'container') -> Path:
+  workspace = _workspace(root, name, kind=kind)
+  metadata_path = workspace / 'meta.json'
+  metadata = json.loads(metadata_path.read_text())
+  metadata.pop('branch')
+  metadata_path.write_text(json.dumps(metadata))
   return workspace
 
 
@@ -58,13 +93,14 @@ def test_clean_migration_merges_stores_and_backfills_clone_attachment(monkeypatc
   monkeypatch.setattr(runtime_state, '_running_mounts', lambda: set())
 
   with caplog.at_level('INFO'):
-    migrate_legacy_runtime_state()
+    migrate_runtime_state()
 
   assert not root.exists()
   migrated = base / 'workspaces' / 'session'
-  assert json.loads((migrated / 'meta.json').read_text()) == {
-    'kind': 'container',
+  assert json.loads((migrated / 'workspace.json').read_text()) == {
+    'isolation': 'boxed',
     'throwaway': False,
+    'tree': None,
     'repo': 'https://example.test/owner/repo.git',
     'branch': 'worktree-session',
   }
@@ -102,11 +138,11 @@ def test_a_container_workspace_keeps_the_roots_own_checkout_attachment(monkeypat
   _git('remote', 'add', 'origin', 'https://example.test/owner/repo.git', cwd=tree)
   monkeypatch.setattr(runtime_state, '_running_mounts', lambda: set())
 
-  migrate_legacy_runtime_state()
+  migrate_runtime_state()
 
   for name in ('worktree-session', 'container-session'):
     migrated = base / 'workspaces' / name
-    assert json.loads((migrated / 'meta.json').read_text())['repo'] == str(repository)
+    assert json.loads((migrated / 'workspace.json').read_text())['repo'] == str(repository)
     assert json.loads((migrated / 'resume.json').read_text())['repo'] == str(repository)
 
 
@@ -119,10 +155,10 @@ def test_worktree_attachment_and_registration_follow_the_moved_workspace():
     'worktree', 'add', '--quiet', '-b', 'worktree-session', str(workspace / 'tree'), cwd=repository
   )
 
-  migrate_legacy_runtime_state()
+  migrate_runtime_state()
 
   migrated = base / 'workspaces' / 'session'
-  metadata = json.loads((migrated / 'meta.json').read_text())
+  metadata = json.loads((migrated / 'workspace.json').read_text())
   assert metadata['repo'] == str(repository)
   assert json.loads((migrated / 'resume.json').read_text())['repo'] == str(repository)
   worktree_listing = subprocess.run(
@@ -150,7 +186,10 @@ def test_partial_rerun_repairs_a_worktree_moved_before_cleanup():
     'branch': 'worktree-session',
   }
   (source / 'meta.json').write_text(json.dumps(metadata))
-  (source / 'resume.json').write_text(json.dumps({'name': 'session', 'repo': str(repository)}))
+  resume_path = source / 'resume.json'
+  resume = json.loads(resume_path.read_text())
+  resume['repo'] = str(repository)
+  resume_path.write_text(json.dumps(resume))
   pending = base / 'runtime' / runtime_state._PENDING_WORKTREES
   pending.parent.mkdir(parents=True)
   pending.write_text(
@@ -165,7 +204,7 @@ def test_partial_rerun_repairs_a_worktree_moved_before_cleanup():
   destination.parent.mkdir(parents=True)
   source.rename(destination)
 
-  migrate_legacy_runtime_state()
+  migrate_runtime_state()
 
   assert not root.exists()
   assert not pending.exists()
@@ -188,7 +227,7 @@ def test_workspace_name_collision_refuses_the_whole_migration(monkeypatch):
   monkeypatch.setattr(runtime_state, '_running_mounts', lambda: set())
 
   with pytest.raises(RuntimeStateMigrationError) as raised:
-    migrate_legacy_runtime_state()
+    migrate_runtime_state()
 
   message = str(raised.value)
   assert str(first_workspace) in message
@@ -211,7 +250,7 @@ def test_collision_in_another_store_does_not_move_preflighted_workspaces(monkeyp
   monkeypatch.setattr(runtime_state, '_running_mounts', lambda: set())
 
   with pytest.raises(RuntimeStateMigrationError) as raised:
-    migrate_legacy_runtime_state()
+    migrate_runtime_state()
 
   assert str(source) in str(raised.value)
   assert str(destination) in str(raised.value)
@@ -229,9 +268,30 @@ def test_live_locked_workspace_aborts_migration(monkeypatch):
   with contextlib.closing(lock):
     fcntl.flock(lock, fcntl.LOCK_EX)
     with pytest.raises(RuntimeStateMigrationError, match="'active' is live"):
-      migrate_legacy_runtime_state()
+      migrate_runtime_state()
 
   assert workspace.exists()
+
+
+def test_live_flat_workspace_aborts_before_legacy_roots_are_migrated(monkeypatch):
+  base = runtime_base()
+  root = _legacy_root(base)
+  legacy_workspace = _workspace(root, 'legacy', kind='worktree')
+  flat_workspace = _detached_workspace(base, 'active', kind='worktree')
+  lock = (flat_workspace / 'lock').open('w')
+  monkeypatch.setattr(runtime_state, '_running_mounts', lambda: set())
+
+  with contextlib.closing(lock):
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    with pytest.raises(RuntimeStateMigrationError, match="'active' is live"):
+      migrate_runtime_state()
+
+  assert root.is_dir()
+  assert (legacy_workspace / 'meta.json').is_file()
+  assert not (legacy_workspace / 'workspace.json').exists()
+  assert not (base / 'workspaces' / 'legacy').exists()
+  assert (flat_workspace / 'meta.json').is_file()
+  assert not (flat_workspace / 'workspace.json').exists()
 
 
 def test_running_container_aborts_migration(monkeypatch):
@@ -243,7 +303,7 @@ def test_running_container_aborts_migration(monkeypatch):
   monkeypatch.setattr(runtime_state, '_running_mounts', lambda: {str(tree)})
 
   with pytest.raises(RuntimeStateMigrationError, match='container running'):
-    migrate_legacy_runtime_state()
+    migrate_runtime_state()
 
   assert workspace.exists()
 
@@ -254,7 +314,6 @@ def test_partial_rerun_finishes_remaining_state(monkeypatch):
   workspace = _workspace(root, 'session', kind='worktree')
   metadata = {'kind': 'worktree', 'throwaway': False}
   (workspace / 'meta.json').write_text(json.dumps(metadata))
-  (workspace / 'resume.json').write_text(json.dumps({'name': 'session', 'repo': None}))
   destination_trails = base / 'trails' / 'trails'
   destination_trails.mkdir(parents=True)
   (destination_trails / 'already-moved').mkdir()
@@ -262,12 +321,16 @@ def test_partial_rerun_finishes_remaining_state(monkeypatch):
   (root / 'trails' / 'trails' / 'remaining' / 'header.json').write_text('{}')
   monkeypatch.setattr(runtime_state, '_running_mounts', lambda: set())
 
-  migrate_legacy_runtime_state()
+  migrate_runtime_state()
 
   assert not root.exists()
   assert (destination_trails / 'already-moved').is_dir()
   assert (destination_trails / 'remaining' / 'header.json').is_file()
-  assert json.loads((base / 'workspaces' / 'session' / 'meta.json').read_text()) == metadata
+  assert json.loads((base / 'workspaces' / 'session' / 'workspace.json').read_text()) == {
+    'isolation': 'unboxed',
+    'throwaway': False,
+    'tree': None,
+  }
 
 
 def test_duplicate_trail_ids_refuse_migration_even_when_the_directories_are_empty():
@@ -280,7 +343,7 @@ def test_duplicate_trail_ids_refuse_migration_even_when_the_directories_are_empt
   second_trail.mkdir(parents=True)
 
   with pytest.raises(RuntimeStateMigrationError) as raised:
-    migrate_legacy_runtime_state()
+    migrate_runtime_state()
 
   assert str(first_trail) in str(raised.value)
   assert str(second_trail) in str(raised.value)
@@ -299,7 +362,7 @@ def test_duplicate_request_ids_across_audit_files_refuse_migration():
   second_audit.write_text(entry)
 
   with pytest.raises(RuntimeStateMigrationError) as raised:
-    migrate_legacy_runtime_state()
+    migrate_runtime_state()
 
   assert str(first_audit) in str(raised.value)
   assert str(second_audit) in str(raised.value)
@@ -314,17 +377,69 @@ def test_identical_tool_blobs_from_multiple_roots_are_deduplicated():
     tools.mkdir(parents=True)
     (tools / 'abc.json').write_text('{"name":"tool"}')
 
-  migrate_legacy_runtime_state()
+  migrate_runtime_state()
 
   assert not first.exists()
   assert not second.exists()
   assert (base / 'trails' / 'trails' / 'tools' / 'abc.json').read_text() == '{"name":"tool"}'
 
 
+def test_flat_workspace_migration_refuses_a_branch_without_a_repository():
+  base = runtime_base()
+  workspace = _workspace(base, 'flat', kind='worktree')
+
+  with pytest.raises(RuntimeStateMigrationError, match='repo and branch must both be present'):
+    migrate_runtime_state()
+
+  assert (workspace / 'meta.json').is_file()
+  assert not (workspace / 'workspace.json').exists()
+
+
+def test_flat_workspace_records_are_migrated_once(monkeypatch):
+  base = runtime_base()
+  workspace = _detached_workspace(base, 'flat', kind='worktree')
+  tree = workspace / 'tree'
+  tree.mkdir()
+  (tree / 'result').write_text('keep detached content')
+  monkeypatch.setattr(runtime_state, '_running_mounts', lambda: set())
+
+  migrate_runtime_state()
+
+  assert not (workspace / 'meta.json').exists()
+  assert json.loads((workspace / 'workspace.json').read_text()) == {
+    'isolation': 'unboxed',
+    'throwaway': False,
+    'tree': None,
+  }
+  resume = json.loads((workspace / 'resume.json').read_text())
+  assert resume['isolation'] == 'unboxed'
+  assert resume['tree'] is None
+  assert resume['runtime_bundle'] is None
+  assert 'host' not in resume
+
+  recorded = (workspace / 'workspace.json').read_bytes()
+  migrate_runtime_state()
+  assert (workspace / 'workspace.json').read_bytes() == recorded
+
+
+def test_flat_workspace_migration_refuses_a_live_boxed_workspace(monkeypatch):
+  base = runtime_base()
+  workspace = _detached_workspace(base, 'active')
+  tree = workspace / 'tree'
+  tree.mkdir()
+  monkeypatch.setattr(runtime_state, '_running_mounts', lambda: {str(tree)})
+
+  with pytest.raises(RuntimeStateMigrationError, match='container running'):
+    migrate_runtime_state()
+
+  assert (workspace / 'meta.json').is_file()
+  assert not (workspace / 'workspace.json').exists()
+
+
 def test_noop_does_not_create_migration_state():
   base = runtime_base()
   (base / 'workspaces').mkdir(parents=True)
 
-  migrate_legacy_runtime_state()
+  migrate_runtime_state()
 
   assert not (base / 'runtime').exists()

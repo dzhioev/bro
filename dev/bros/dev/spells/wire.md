@@ -22,19 +22,16 @@ This spell decides the relevant mapping with the user and writes it.
 
 ## 1. Check you can reach the host config
 
-`~/.bro.json` is the host's file.
+`~/.bro.json` belongs to the environment that launches `ride`.
 Call `bro::banner`.
-A session reporting `kind: container` cannot see it, so stop there and tell the user to re-run on the host
-— in a `--host` session,
-or from their own terminal.
-`kind: worktree` is on the host and can continue.
+A session reporting `isolation: boxed` cannot see it, so stop there and tell the user to re-run with `--unboxed` or from the launcher's terminal.
+An unboxed session can continue against the launcher's file.
 
 ## 2. Identify the consumer
 
 Determine whether the user is wiring a managed launch or a host CLI.
-For a managed launch, run `git rev-parse --git-common-dir` and take its parent as the project root.
-Every linked worktree maps to its main checkout through the common directory.
-Read the repository's `[tool.bro] default` bro from `pyproject.toml`.
+For a managed launch, take the repository attachment from the banner's `repo` fact.
+Read that repository's `[tool.bro] default` bro from `pyproject.toml`.
 That bro is what an ordinary session launched here runs as.
 Include another exact bro name when the user is wiring a distinct identity for it, such as a reviewer.
 

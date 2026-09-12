@@ -51,8 +51,9 @@ class _Harness:
     self.env.pop('RIDE_RUNNER_PID', None)
     self.env.pop('BROKER_CHANNEL', None)
     self.env.pop(SUMMONED_ENV, None)
-    self.env.pop('CLAUDE_CONFIG_DIR', None)
+    self.env['CLAUDE_CONFIG_DIR'] = str(self.claude_config_dir)
     self.env[SESSION_DIR_ENV] = str(self.session_dir)
+    self.env['RIDE_BRANCH'] = 'workspace-w'
     self.start_server = entered[2]
     self.build = entered[3]
     self.run_claude = entered[4]

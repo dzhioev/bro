@@ -535,7 +535,7 @@ def test_session_command_declaration_must_match_the_distributions_console_script
     runtime_bundle._session_commands(Path(sys.executable))
 
 
-def test_host_session_environment_scrubs_launcher_activation(monkeypatch, tmp_path):
+def test_unboxed_session_environment_scrubs_launcher_activation(monkeypatch, tmp_path):
   root = tmp_path / 'bundle'
   bundle = runtime_bundle.RuntimeBundle(root, '3.12')
   launcher = tmp_path / 'launcher'

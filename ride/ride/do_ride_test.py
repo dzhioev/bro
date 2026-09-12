@@ -9,11 +9,12 @@ import bro.workspace.session as workspace_session
 import ride.do_ride as do_ride
 from ride.harness import get_harness
 from ride.session_test import _spec
+from ride.workspace.metadata import Isolation
 
 
 @pytest.fixture(autouse=True)
 def isolated_environ():
-  with patch.dict(os.environ, {}, clear=False):
+  with patch.dict(os.environ, {'RIDE_ISOLATION': 'boxed'}, clear=False):
     yield
 
 
@@ -31,7 +32,7 @@ def _parsed_run(argv: list[str]) -> do_ride.SessionRun:
 class TestCommand:
   def test_carries_only_the_session_shape(self):
     spec = _spec(
-      host=True,
+      isolation=Isolation.UNBOXED,
       hold='attended',
       drop=True,
       llm='::xhigh+fast',
@@ -101,7 +102,7 @@ class TestParser:
     assert spec.name == 'w'
     assert not spec.solo
 
-  @pytest.mark.parametrize('flag', ['--in-place', '--host', '--drop', '--grant'])
+  @pytest.mark.parametrize('flag', ['--in-place', '--unboxed', '--drop', '--grant'])
   def test_has_no_outer_machinery_flags(self, flag, capsys):
     with pytest.raises(SystemExit):
       do_ride.main(
@@ -227,7 +228,7 @@ class TestCredentialHooks:
     monkeypatch.setenv('RIDE_WORKSPACE', 'w')
     monkeypatch.setenv('BRO_STORE', str(tmp_path / 'store'))
     monkeypatch.setenv('BRO_INSTALL_KINDS', 'github')
-    monkeypatch.setattr(do_ride, 'in_container', lambda: False)
+    monkeypatch.setenv('RIDE_ISOLATION', 'unboxed')
     monkeypatch.setattr(do_ride, 'workspace_dir', lambda _name: tmp_path / 'workspace')
     monkeypatch.setattr(do_ride.credentials, 'default_store', lambda: store)
     with patch(
@@ -252,9 +253,9 @@ class TestClaudeState:
   ):
     config = tmp_path / 'claude'
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
-    monkeypatch.setattr(do_ride, 'in_container', lambda: True)
+    monkeypatch.setenv('RIDE_ISOLATION', 'boxed')
     with (
-      patch('ride.claude.claude_config.provision_host_claude_dir') as provision,
+      patch('ride.claude.claude_config.provision_unboxed_claude_dir') as provision,
       patch('ride.claude.claude_config.seed_session_plugins') as seed,
     ):
       do_ride._prepare_claude_state(MagicMock(harness='claude'))

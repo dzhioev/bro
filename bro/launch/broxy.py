@@ -1,4 +1,4 @@
-"""host-mode session broxy launch through the `broxy launch` console command.
+"""session broxy launch through the `broxy launch` console command.
 
 The broker package stays a lazy dependency: this module invokes the console script
 instead of importing the broxy implementation. `session_broxy` consumes
