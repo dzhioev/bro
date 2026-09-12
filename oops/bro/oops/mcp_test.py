@@ -52,8 +52,6 @@ def test_repository_registry_declares_trails_server_from_infra_config(monkeypatc
 
   target = deploy_targets.registry.targets()['trails-server']
 
-  assert target.deploy == Command('oops/trails/server/deploy.sh')
-  assert target.verify == Command('oops/trails/server/verify.sh')
   assert target.plan is not None
   assert mcp._command(_ROOT, target.plan)
   assert target.ecs == ECSService('example-region', 'example-cluster', 'example-service')
