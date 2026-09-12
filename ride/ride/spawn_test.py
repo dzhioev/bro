@@ -6,6 +6,7 @@ import pytest
 
 import ride.artifacts
 import ride.bro
+import ride.do_ride
 import ride.harness
 import ride.identity
 import ride.peer_facts
@@ -37,6 +38,15 @@ def _container_runtime() -> workspace_docker.ContainerRuntimeResolver:
 
 
 SESSION = 'session-ws'
+
+
+def _do_ride_environment(workspace_name: str) -> dict[str, str]:
+  spec = ride.session.load_resume_spec(Workspace.open(workspace_name))
+  assert spec is not None
+  return {
+    ride.do_ride.INSTALL_DIRECTORY_ENV: ride.do_ride.CONTAINER_INSTALL_DIRECTORY,
+    ride.do_ride.RESOLVED_LLM_ENV: ride.do_ride.encode_resolved_llm(spec.resolved_llm),
+  }
 
 
 def _session_state_mount(workspace_name: str) -> str:
@@ -102,9 +112,8 @@ class TestSummonLowering:
       workspace_docker.Launch(
         name='broker-CH',
         command=[
-          'ride',
+          'do-ride',
           'solo',
-          '--in-place',
           '--workspace',
           'broker-CH',
           '--harness',
@@ -117,6 +126,7 @@ class TestSummonLowering:
           'deploy the thing',
         ],  # fmt: skip
         env={
+          **_do_ride_environment('broker-CH'),
           'RIDE_BRO': 'dev',
           'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness bro dev deploy the thing',
           'RIDE_MAY_SUMMON': '',
@@ -153,7 +163,7 @@ class TestSummonLowering:
       ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert 'scoped secrets for summoned dev: aws, trails' in caplog.text
 
-  def test_hold_rides_the_childs_inner_argv(self, lowering_harness):
+  def test_hold_rides_the_childs_do_ride_argv(self, lowering_harness):
     launch = ride.spawn.SummonLaunchSpec(
       target='dev',
       prompt='deploy the thing',
@@ -167,7 +177,7 @@ class TestSummonLowering:
     lowered = ride.spawn._lower_summon(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert lowered.launch.command[-4:] == ['--hold', 'attended', 'dev', 'deploy the thing']
 
-  def test_the_llm_recipe_rides_the_childs_inner_argv(self, lowering_harness):
+  def test_the_llm_recipe_rides_the_childs_do_ride_argv(self, lowering_harness):
     launch = ride.spawn.SummonLaunchSpec(
       target='dev',
       prompt='deploy the thing',
@@ -379,6 +389,7 @@ class TestSummonLowering:
       launch, 'broker-CH', _container_runtime(), _artifacts()
     ).launch
     assert lowered.env == {
+      **_do_ride_environment('broker-CH'),
       'RIDE_BRO': 'dev',
       'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness bro --into summon dev p',
       'RIDE_MAY_SUMMON': '',
@@ -461,7 +472,7 @@ class TestSummonLowering:
     [(lowered, lowered_channel, lowered_quest)] = docker.spawned
     assert isinstance(lowered, ride.spawn.DockerLaunchSpec)
     assert lowered.launch.command == [
-      'ride', 'solo', '--in-place', '--workspace', 'broker-CH', '--harness', 'bro', '--repo', '/proj',
+      'do-ride', 'solo', '--workspace', 'broker-CH', '--harness', 'bro', '--repo', '/proj',
       '--hold', 'unattended', 'dev', 'p',
     ]  # fmt: skip
     assert lowered.launch.name == 'broker-CH'
@@ -523,11 +534,12 @@ class TestClaudeSummonLowering:
       self._launch(), 'broker-CH', _container_runtime(), _artifacts()
     )
     assert lowered.launch.command == [
-      'ride', 'solo', '--in-place', '--workspace', 'broker-CH', '--harness', 'claude', '--repo', '/proj',
+      'do-ride', 'solo', '--workspace', 'broker-CH', '--harness', 'claude', '--repo', '/proj',
       '--hold', 'unattended', 'dev', 'deploy the thing',
     ]  # fmt: skip
     assert lowered.launch.env == {
       'CLAUDE_CONFIG_DIR': '/home/ride/.claude',
+      **_do_ride_environment('broker-CH'),
       'RIDE_BRO': 'dev',
       'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness claude dev deploy the thing',
       'RIDE_MAY_SUMMON': '',
@@ -596,7 +608,7 @@ class TestClaudeSummonLowering:
     with pytest.raises(ValueError, match='broker-CH'):
       Workspace.open('broker-CH')
 
-  def test_a_claude_recipe_rides_the_inner_argv(self, claude_harness):
+  def test_a_claude_recipe_rides_the_do_ride_argv(self, claude_harness):
     lowered = ride.spawn._lower_summon(
       self._launch(llm=':fable5:high'), 'broker-CH', _container_runtime(), _artifacts()
     )
@@ -607,8 +619,8 @@ class TestClaudeSummonLowering:
     explicit = ride.spawn._lower_summon(
       self._launch(harness='bro'), 'broker-CH', _container_runtime(), _artifacts()
     )
-    assert explicit.launch.command[:7] == [
-      'ride', 'solo', '--in-place', '--workspace', 'broker-CH', '--harness', 'bro',
+    assert explicit.launch.command[:6] == [
+      'do-ride', 'solo', '--workspace', 'broker-CH', '--harness', 'bro',
     ]  # fmt: skip
 
 

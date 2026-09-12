@@ -205,7 +205,7 @@ PYTEST_FILES = [
   'ride/ride/claude/claude_config_test.py',
   'ride/ride/alias_test.py',
   'ride/ride/cli_test.py',
-  'ride/ride/inner_test.py',
+  'ride/ride/do_ride_test.py',
   'ride/ride/flags_test.py',
   'ride/ride/scope_report_test.py',
   'ride/ride/claude/assembly_test.py',

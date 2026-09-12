@@ -7,12 +7,12 @@ so it is skipped inside a container), run as the gate's `broker_e2e` stage:
   run-tests --only broker_e2e   # or directly: pytest ride/ride/e2e_test.py [-k <scenario>]
 
 The matrix: A — broker-enabled default launch (channel provisioning, the
-entrypoint-owned broxy on the channel, ping round-trip through it, an artifact
+session broxy on the channel, ping round-trip through it, an artifact
 mint/get through the read-only view mount); B — child
 lifecycle over the real ports (spawn
 routing, early exit, timeout, teardown, channel-pinned identity); C — the
 `BROKER_DISABLED` kill-switch; D — degrade when broker is unimportable in the
-launcher; E — SIGINT handling through the attached root; F — the in-place
+launcher; E — SIGINT handling through the attached root; F — `do-ride` as the
 session runner as the container command (exit-code propagation, in-container
 argv build: merged --settings, MCP namespaces, RIDE_SESSION_CONTEXT);
 G — the stop interrupt, so `docker stop` lands in claude as a keypress.
@@ -70,10 +70,20 @@ _NAME_PREFIX = 'ride-e2e-'
 _RUNTIME_PYTHON = '/var/ride/runtime/venv/bin/python'
 
 
+def _session_broxy_probe(source: str) -> list[str]:
+  wrapper = (
+    'import sys\n'
+    'from bro.launch.broxy import session_broxy\n'
+    'with session_broxy():\n'
+    "  exec(compile(sys.argv[1], '<e2e-probe>', 'exec'))\n"
+  )
+  return [_RUNTIME_PYTHON, '-c', wrapper, source]
+
+
 # --- in-container probes (source for `python -c`; framework code comes from the runtime volume) ---
 
-# Scenario A root: verify the live channel the entrypoint's broxy published
-# after consuming the host channel from BROKER_UPSTREAM,
+# Scenario A root: verify the live channel the session broxy published after
+# consuming the host channel from BROKER_UPSTREAM,
 # hand mid-run control to the harness, then run the ping round-trip over the
 # exact live path — through the broxy — and an artifact mint/get proving the
 # read-only view mount serves stored bytes back
@@ -247,14 +257,14 @@ sys.exit(5)
 """
 
 # scenarios F/G: a wrapper the entrypoint execs in place of the session command.
-# it drops a fake `claude` onto PATH — the in-place runner resolves it instead of
+# it drops a fake `claude` onto PATH — the session runner resolves it instead of
 # the image's real one — then execs the runner itself ("$@", the same
-# `ride solo|along --in-place …` invocation `_container_session` sends). the fake records
+# `do-ride solo|along …` invocation `_container_session` sends). the fake records
 # its argv/env to the report file, proving the argv was built in-container by the
 # frozen runtime; under RIDE_E2E_LINGER it waits for the interrupt keypress on its
 # own terminal (exit 7) so the harness can assert `docker stop` reaches claude
 # through tini → runner → the runner-owned pty.
-_INPLACE_WRAPPER = """
+_DO_RIDE_WRAPPER = """
 mkdir -p /tmp/e2e-bin
 cat > /tmp/e2e-bin/claude <<'FAKE'
 #!/usr/bin/env python3
@@ -583,7 +593,7 @@ def _container_gone(env: IsolatedEnv, name: str, timeout: float) -> bool:
 def scenario_a(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> LiveRun:
   env = isolated_env
   name = f'{_NAME_PREFIX}a-root'
-  driver = _Driver(env, name, [_RUNTIME_PYTHON, '-c', _PROBE_A], extra_env={})
+  driver = _Driver(env, name, _session_broxy_probe(_PROBE_A), extra_env={})
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)
   run = LiveRun(exit_code=-1, output='')
@@ -658,7 +668,7 @@ def _run_broker_scenario(
   root = DockerLaunchSpec(
     workspace_docker.Launch(
       name=name,
-      command=[_RUNTIME_PYTHON, '-c', _PROBE_B_ROOT],
+      command=_session_broxy_probe(_PROBE_B_ROOT),
       env={'RIDE_E2E_DEADLINE': str(probe_deadline), 'RIDE_E2E_EXIT_AFTER': exit_after},
       secrets=(),
       tty=False,
@@ -730,7 +740,7 @@ def b_clean(isolated_env: IsolatedEnv) -> BrokerRun:
   return _run_broker_scenario(
     isolated_env,
     'clean',
-    [_RUNTIME_PYTHON, '-c', _CHILD_CLEAN],
+    _session_broxy_probe(_CHILD_CLEAN),
     default_timeout=600,
     probe_deadline=120,
   )
@@ -763,7 +773,7 @@ def b_teardown(isolated_env: IsolatedEnv) -> BrokerRun:
   return _run_broker_scenario(
     isolated_env,
     'teardown',
-    [_RUNTIME_PYTHON, '-c', _CHILD_STARTED_THEN_HANG],
+    _session_broxy_probe(_CHILD_STARTED_THEN_HANG),
     default_timeout=600,
     probe_deadline=120,
     exit_after='started',
@@ -994,11 +1004,11 @@ class TestSigintHandling:
     )
 
 
-# --- F: the in-place session runner as the container command ------------------
+# --- F: do-ride as the container command --------------------------------------
 
 
-def _inplace_command(*inner: str) -> list[str]:
-  return ['bash', '-ec', _INPLACE_WRAPPER, 'ride-e2e-wrapper', *inner]
+def _do_ride_command(*inner: str) -> list[str]:
+  return ['bash', '-ec', _DO_RIDE_WRAPPER, 'ride-e2e-wrapper', *inner]
 
 
 def _report(env: IsolatedEnv, name: str) -> dict:
@@ -1016,10 +1026,9 @@ def scenario_f(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   driver = _Driver(
     env,
     name,
-    _inplace_command(
-      'ride',
+    _do_ride_command(
+      'do-ride',
       'solo',
-      '--in-place',
       '--workspace',
       name,
       '--harness',
@@ -1028,7 +1037,8 @@ def scenario_f(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
       str(env.project),
       '--hold',
       'unattended',
-      '--fast',
+      '--llm',
+      '::+fast',
       'bro-dev',
       'e2e',
     ),
@@ -1040,7 +1050,7 @@ def scenario_f(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   return run
 
 
-class TestInPlaceContainerCommand:
+class TestDoRideContainerCommand:
   def test_claude_exit_code_propagates_to_the_launcher(self, scenario_f: LiveRun) -> None:
     # fake claude exits 12: runner → entrypoint → container → docker start → launcher
     assert scenario_f.reported_exit == '12', scenario_f.output
@@ -1072,12 +1082,11 @@ def scenario_g(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   driver = _Driver(
     env,
     name,
-    _inplace_command(
+    _do_ride_command(
       'env',
       'RIDE_E2E_LINGER=1',
-      'ride',
+      'do-ride',
       'solo',
-      '--in-place',
       '--workspace',
       name,
       '--harness',

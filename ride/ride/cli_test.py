@@ -9,8 +9,8 @@ import ride.cli as ride_cli
 from bro.base import configs
 from bro.broker.brotocol import PROTOCOL_REVISION
 from ride import pending_summon
+from ride.do_ride import command as do_ride_command
 from ride.harness import get_harness
-from ride.inner import inner_command
 
 
 @pytest.fixture(autouse=True)
@@ -28,9 +28,9 @@ def project(monkeypatch):
   monkeypatch.setattr(ride_cli, 'fresh_workspace_name', lambda base: f'{base}-12345678')
 
 
-def _inner_command(spec) -> list[str]:
+def _session_command(spec) -> list[str]:
   harness = get_harness(spec.harness)
-  return inner_command(spec, harness_flags=harness.inner_flags(spec))
+  return do_ride_command(spec, harness_flags=harness.session_flags(spec))
 
 
 class TestSolo:
@@ -46,10 +46,9 @@ class TestSolo:
     assert spec.solo
     assert spec.drop
     assert not spec.workspace_pinned
-    assert _inner_command(spec)[:7] == [
-      'ride',
+    assert _session_command(spec)[:6] == [
+      'do-ride',
       'solo',
-      '--in-place',
       '--workspace',
       'ride-dev-12345678',
       '--harness',
@@ -84,22 +83,12 @@ class TestSolo:
       ride_cli.main(['ride', 'solo', 'dev', 'hello', '--', '--debug', 'mcp'])
     assert start.call_args.args[0].arguments == ['--debug', 'mcp']
 
-  def test_no_trails_is_a_neutral_flag_the_bro_harness_env_carries(self):
+  def test_no_trails_stays_an_outer_launch_setting(self):
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'solo', '--harness', 'bro', '--no-trails', 'dev', 'hello']) == 0
     spec = start.call_args.args[0]
     assert spec.no_trails
-    assert _inner_command(spec) == [
-      'ride', 'solo', '--in-place', '--workspace', 'ride-dev-12345678', '--harness', 'bro',
-      '--no-trails', '--hold', 'unattended', 'dev', 'hello',
-    ]  # fmt: skip
-
-  def test_no_trails_is_restated_in_the_claude_inner_argv(self):
-    with patch('ride.cli.start_session', return_value=0) as start:
-      assert ride_cli.main(['ride', 'solo', '--no-trails', 'dev', 'hello']) == 0
-    spec = start.call_args.args[0]
-    assert spec.no_trails
-    assert '--no-trails' in _inner_command(spec)
+    assert '--no-trails' not in _session_command(spec)
 
 
 class TestAttachment:
@@ -169,10 +158,9 @@ class TestAlong:
     assert spec.hold == 'attended'
     assert not spec.drop
     assert not spec.workspace_pinned
-    assert _inner_command(spec)[:7] == [
-      'ride',
+    assert _session_command(spec)[:6] == [
+      'do-ride',
       'along',
-      '--in-place',
       '--workspace',
       'ride-dev-12345678',
       '--harness',
@@ -206,8 +194,8 @@ class TestAlong:
       assert ride_cli.main(['ride', 'along', '--harness', 'bro', 'dev', '--', '--fork']) == 0
     spec = start.call_args.args[0]
     assert spec.arguments == ['--fork']
-    assert _inner_command(spec) == [
-      'ride', 'along', '--in-place', '--workspace', 'ride-dev-12345678', '--harness', 'bro',
+    assert _session_command(spec) == [
+      'do-ride', 'along', '--workspace', 'ride-dev-12345678', '--harness', 'bro',
       '--hold', 'attended', 'dev', '--', '--fork',
     ]  # fmt: skip
 
@@ -232,8 +220,8 @@ class TestAlong:
       assert ride_cli.main(['ride', 'along', '--harness', 'bro', 'dev']) == 0
     spec = start.call_args.args[0]
     assert spec.harness == 'bro'
-    assert _inner_command(spec) == [
-      'ride', 'along', '--in-place', '--workspace', 'ride-dev-12345678', '--harness', 'bro',
+    assert _session_command(spec) == [
+      'do-ride', 'along', '--workspace', 'ride-dev-12345678', '--harness', 'bro',
       '--hold', 'attended', 'dev',
     ]  # fmt: skip
 
@@ -300,16 +288,10 @@ class TestLifecycle:
       assert ride_cli.main(['ride', 'list']) == 0
     migrate.assert_called_once_with()
 
-  def test_inner_mode_does_not_run_host_state_migration(self):
-    with (
-      patch('ride.cli.migrate_legacy_runtime_state') as migrate,
-      patch('ride.inner.run_in_place', return_value=0),
-    ):
-      assert (
-        ride_cli.main(['ride', 'solo', '--in-place', '--workspace', 'session', 'dev', 'prompt'])
-        == 0
-      )
-    migrate.assert_not_called()
+  def test_mode_parser_has_no_in_place_entry(self, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'solo', '--in-place', 'dev', 'prompt'])
+    assert 'unrecognized arguments' in capsys.readouterr().err
 
   def test_resume_dispatches_scope_overrides(self):
     with patch('ride.cli.resume_session', return_value=0) as resume:

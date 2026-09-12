@@ -48,7 +48,7 @@ def staged_repo(tmp_path, monkeypatch):
   _git(tmp_path, 'commit', '-qm', 'add the project readme')
   (tmp_path / 'notes.txt').write_text('a staged change for the probe\n')
   _git(tmp_path, 'add', 'notes.txt')
-  # what ride's inner session layer applies before a real run starts
+  # what do-ride applies before a real run starts
   _ProbeDev().provision_workspace(tmp_path)
   monkeypatch.chdir(tmp_path)
   return tmp_path
