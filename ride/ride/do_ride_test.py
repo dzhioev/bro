@@ -66,6 +66,16 @@ class TestCommand:
     assert run.resolved_llm == recorded
     resolve.assert_not_called()
 
+  def test_the_launchers_host_entry_does_not_reach_the_run(self, monkeypatch, tmp_path):
+    config = tmp_path / 'bro.json'
+    config.write_text(
+      json.dumps({'projects': {'/repo': {'bros': {'dev': {'llm': 'openai:sol:xhigh'}}}}})
+    )
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+    argv = ['do-ride', 'solo', '--workspace', 'w', '--harness', 'bro', '--repo', '/repo']
+    run = _parsed_run([*argv, '--hold', 'unattended', '--llm', '::low', 'dev', 'prompt'])
+    assert run.resolved_llm == get_harness('bro').resolve_llm('::low', 'dev').dump()
+
   def test_the_bro_harness_uses_the_same_executable(self):
     spec = dataclasses.replace(
       _spec(solo=True, bro='dev', prompt='go'), harness='bro', harness_options={}

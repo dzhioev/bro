@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import socket
@@ -274,6 +275,33 @@ class TestSummonLowering:
     assert lowered.launch.command[-6:] == [
       '--hold', 'unattended', '--llm', 'openai:sol:high+fast', 'dev', 'deploy the thing',
     ]  # fmt: skip
+
+  def test_the_hosts_per_bro_recipe_settles_the_childs_llm(
+    self, lowering_harness, monkeypatch, tmp_path
+  ):
+    config = tmp_path / 'bro.json'
+    config.write_text(
+      json.dumps({'projects': {'/proj': {'bros': {'dev': {'llm': 'openai:sol:xhigh'}}}}})
+    )
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+    launch = ride.spawn.SummonLaunchSpec(
+      target='dev',
+      prompt='p',
+      parent=PARENT,
+      parent_tree=workspace_tree(PARENT),
+      repo=Path('/proj'),
+      summoner=SUMMONER,
+      may_summon=(),
+      harness='bro',
+      llm='::low',
+    )
+    lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
+    command = lowered.launch.command
+    assert command[command.index('--llm') + 1] == 'openai:sol:low'
+    spec = ride.session.load_resume_spec(Workspace.open('broker-CH'))
+    assert spec is not None
+    assert spec.llm == 'openai:sol:low'
+    assert spec.resolved_llm == ride.bro.BRO.resolve_llm('openai:sol:low', 'dev').dump()
 
   def test_the_llm_recipe_selects_the_childs_hydrated_llm_key(self, lowering_harness, monkeypatch):
     captured: list = []

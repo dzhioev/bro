@@ -41,7 +41,7 @@ from ride.peer_facts import PeerFact, PeerFacts
 from ride.repository import Repository, as_repository
 from ride.root import ProcessLaunch
 from ride.runtime_bundle import RuntimeBundle
-from ride.scope import preflight_scoped_launch, scoped_secrets
+from ride.scope import bind_launch_llm, preflight_scoped_launch, scoped_secrets
 from ride.session import (
   ScopedLaunch,
   SessionSpec,
@@ -124,7 +124,8 @@ def _child_session_spec(
   *,
   isolation: Optional[Isolation] = None,
 ) -> SessionSpec:
-  """The summoned child's run as an unpinned solo `SessionSpec`.
+  """The summoned child's run as an unpinned solo `SessionSpec`, its `llm`
+  settled over the host's per-bro default like a launch's own.
 
   A started party records its resume variant;
   a joined member uses the spec only to build its `do-ride` argv and environment."""
@@ -132,9 +133,11 @@ def _child_session_spec(
   resolved_isolation = launch.isolation if isolation is None else isolation
   if resolved_isolation is None:
     raise ValueError('summoned session isolation is unresolved')
+  repo = None if launch.repo is None else as_repository(launch.repo).identity
+  llm = bind_launch_llm(repo, launch.target, launch.llm)
   return SessionSpec(
     name=workspace_name,
-    repo=None if launch.repo is None else as_repository(launch.repo).identity,
+    repo=repo,
     harness=harness.name,
     workspace_pinned=False,
     isolation=resolved_isolation,
@@ -145,8 +148,8 @@ def _child_session_spec(
     else default_hold(solo=True, isolation=resolved_isolation),
     grant=list(launch.grant),
     revoke=list(launch.revoke),
-    llm=launch.llm,
-    resolved_llm=harness.resolve_llm(launch.llm, launch.target).dump(),
+    llm=llm,
+    resolved_llm=harness.resolve_llm(llm, launch.target).dump(),
     solo=True,
     resume=False,
     into=launch.into,

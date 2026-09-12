@@ -50,6 +50,9 @@ They add no implied `--fast` or other defaults.
 
 Every native run and every managed mode registers one flag set from `llm_flags.py`.
 `--llm` takes `provider:model:effort` with an optional `+fast` suffix and any field left empty (`:fable5`, `::high`, `openai:sol:max+fast`), or a preset from the project's `[tool.bro.llm]` table / host `~/.bro.json`.
+A managed launch first lays its selection over the host's per-bro default for the attachment
+— `with_host_defaults`, where a `projects.<identity>.bros.<bro>.llm` entry fills what the flags leave unnamed (`LLMSelection.over`)
+— so the value it canonicalizes is the settled recipe and the inner run reads no host config.
 A surface canonicalizes the selection once before forwarding or recording it.
 
 `resolve_native` puts the selection over the bro's declared `llm_spec`;

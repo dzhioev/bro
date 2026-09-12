@@ -34,6 +34,7 @@ from ride.scope import (
   LaunchScopeError,
   configured_scope_layers,
   effective_permits,
+  launch_llm_spec,
   scoped_secrets,
   split_scope_overrides,
 )
@@ -121,8 +122,9 @@ def _summoned_scope(
   grant: Sequence[str] = (),
   revoke: Sequence[str] = (),
 ) -> ScopedSecrets:
-  """the scope `target` would run with under `harness_name`, computed to
-  authorize against rather than to hydrate — the lowering checks the host
+  """the scope `target` would run with under `harness_name` and the request's
+  `llm` settled over the host's per-bro default like a launch's own, computed
+  to authorize against rather than to hydrate — the lowering checks the host
   selection of the scope that launches."""
   harness = get_harness(harness_name)
   return scoped_secrets(
@@ -131,7 +133,7 @@ def _summoned_scope(
     attachment=attachment,
     grant=list(grant),
     revoke=list(revoke),
-    llm_spec=harness.resolve_llm(llm, target),
+    llm_spec=launch_llm_spec(harness, attachment, target, llm),
     check_selection=False,
   )
 

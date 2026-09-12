@@ -379,6 +379,8 @@ it may not name a credential instance, because the repository does not choose ho
 `image-repository` and `build-context-command` are optional.
 A URL attachment evaluates a build-context command in a temporary extraction of the committed base tree and reads the named files back from that commit.
 `[tool.bro.llm]` names the repo's `--llm` presets, which the host's own `~/.bro.json` `llm` table overrides per name.
+A bro's default recipe on a project is likewise the host's to set:
+a `projects.<identity>.bros.<bro>.llm` entry fills what the launch flags leave unnamed, for ride launches and summons alike (`bro/setup/AGENTS.md`, "Host config").
 `[tool.bro.analyst] reports` is what an analyst session resolves its output directory from.
 A missing pyproject, table, or default
 — or an unknown key
@@ -793,7 +795,7 @@ the handle treats that record — or the client’s exit — as the started hand
 An unboxed child starts in its own process group;
 kill sends SIGTERM only to `do-ride` so its harness-specific shutdown can unwind and flush state, then sends SIGKILL to the group if the process tree or inherited output pipe survives that grace period.
 A boxed member’s kill follows the same TERM → grace → KILL shape through `docker exec`, signaling only while the container’s `/proc` still shows the recorded start time, so a late kill finds no target and never a reused pid.
-The request’s `llm` recipe resolves within the child’s harness and never switches it;
+The request’s `llm` recipe, settled over the host’s per-bro entry like a launch’s own, resolves within the child’s harness and never switches it;
 the child runs with the root session’s attachment.
 A started child in an attached ride bases on the summoner’s workspace `HEAD` read at summon time (uncommitted changes never transfer;
 a container summoner’s local-only commits are transferred into the attachment first so the child’s host-side clone can copy them) unless the request’s `into` ref overrides, while a detached root starts detached children and rejects `into`.
