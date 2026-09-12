@@ -38,6 +38,8 @@ editable installs record absolute source paths.
 - `setup_env.sh` — reference host-prerequisite installer for macOS and Ubuntu;
   invoked by nothing
 - `versions.sh` and `ubuntu/` — pinned host-tool versions and Ubuntu installers used only by `setup_env.sh`
+- `uv-version` — packaged uv pin shared by host provisioning and image builds;
+  `bump-uv.sh` updates it from PyPI and remains checkout-only
 - `prelude.sh` — shell-script prelude every executable framework script sources;
   consumers resolve the packaged directory with `bro-shell-dir`
 - `install_awscli.sh` — packaged macOS/Linux AWS CLI installer

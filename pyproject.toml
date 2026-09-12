@@ -145,6 +145,7 @@ wheel-exclude = [
   # ships unless it is named here
   "**/*.egg-info",
   "bro/setup/setup_env.sh",
+  "bro/setup/bump-uv.sh",
   "bro/setup/versions.sh",
   "bro/setup/ubuntu",
 ]

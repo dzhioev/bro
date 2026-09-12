@@ -6,6 +6,7 @@ from pathlib import Path
 
 from bro.base.spawn import console_script
 from bro.oops.targets import PLAN_UNSAFE_EXIT_CODE
+from bro.shell import shell_dir
 
 _DEPLOY_LIBRARY = Path(__file__).parent / 'infra' / 'deploy_lib.sh'
 _COMMIT = '0123456789abcdef0123456789abcdef01234567'
@@ -90,6 +91,31 @@ def test_trigger_image_build_starts_the_caller_supplied_project():
   assert result.returncode == 0
   assert f'started build project-a:build-id (target target-a, commit {_COMMIT})\n' in result.stdout
   assert result.stdout.endswith('build project-a:build-id: SUCCEEDED\n')
+
+
+def test_ensure_server_base_passes_the_packaged_uv_pin(tmp_path):
+  dockerfile = tmp_path / 'Dockerfile'
+  dockerfile.write_text('FROM bro-server-base\n')
+  arguments = tmp_path / 'arguments'
+  result = _run_bash(
+    f"""
+    docker() {{ printf '%s\n' "$@" > {shlex.quote(str(arguments))}; }}
+    ensure_server_base {shlex.quote(str(dockerfile))}
+    """
+  )
+  assert result.returncode == 0, result.stderr
+  version = (shell_dir() / 'uv-version').read_text().strip()
+  assert arguments.read_text().splitlines() == [
+    'buildx',
+    'build',
+    '--provenance=false',
+    '--load',
+    '-t',
+    'bro-server-base',
+    '--build-arg',
+    f'UV_VERSION={version}',
+    str(_DEPLOY_LIBRARY.parent / 'server_base'),
+  ]
 
 
 def test_stage_bro_wheel_builds_the_framework_working_tree(tmp_path):

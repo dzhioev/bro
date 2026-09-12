@@ -1,5 +1,6 @@
 #!/usr/bin/env -S bash -e
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/prelude.sh"
+set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
@@ -35,8 +36,8 @@ fi
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/bro"
 STAMP="$STATE_DIR/setup-env-$PROFILE.stamp"
 INPUTS_HASH="$(
-  cat "$SCRIPT_DIR/setup_env.sh" "$SCRIPT_DIR/install_awscli.sh" "$SCRIPT_DIR/versions.sh" \
-    "$SCRIPT_DIR"/ubuntu/*.sh \
+  cat "$SCRIPT_DIR/setup_env.sh" "$SCRIPT_DIR/install_awscli.sh" "$SCRIPT_DIR/uv-version" \
+    "$SCRIPT_DIR/versions.sh" "$SCRIPT_DIR"/ubuntu/*.sh \
     | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
 )"
 if [ "$FORCE" != "1" ] && [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$INPUTS_HASH" ]; then
@@ -98,6 +99,7 @@ fi
 echo "Setting up dev environment on ${PLATFORM} ($PROFILE profile)"
 
 source "$SCRIPT_DIR/versions.sh"
+UV_VERSION="$(cat "$SCRIPT_DIR/uv-version")"
 
 check_brew() {
   if ! command -v brew &> /dev/null; then
@@ -304,24 +306,24 @@ install_tkinter() {
 }
 
 install_uv() {
+  local installed_version
   if command -v uv &> /dev/null; then
-    echo "uv is already installed: $(uv --version)"
-    return
+    installed_version="$(uv --version | awk '{print $2}')"
+    if [ "$installed_version" = "$UV_VERSION" ]; then
+      echo "uv is already installed: $(uv --version)"
+      return
+    fi
+    echo "Updating uv from $installed_version to $UV_VERSION..."
+  else
+    echo "Installing uv $UV_VERSION..."
   fi
 
-  echo "Installing uv..."
-  if [ "$PLATFORM" = "macOS" ]; then
-    check_brew
-    brew install uv
-  else
-    # Ubuntu: install via pipx for an isolated, easily-uninstallable install
-    # (uv is published as a PyPI wheel; pipx puts it in a managed venv)
-    if ! command -v pipx &> /dev/null; then
-      sudo apt-get update
-      sudo apt-get install -y pipx
-      pipx ensurepath
-    fi
-    pipx install uv
+  curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
+  export PATH="${XDG_BIN_HOME:-$HOME/.local/bin}:$PATH"
+  installed_version="$(uv --version | awk '{print $2}')"
+  if [ "$installed_version" != "$UV_VERSION" ]; then
+    echo "uv $UV_VERSION was installed, but PATH selects $installed_version" >&2
+    return 1
   fi
 }
 
