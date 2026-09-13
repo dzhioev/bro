@@ -2,6 +2,7 @@ import os
 import subprocess
 
 from bro.base import log
+from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV
 from ride.workspace.docker import (
   DETACH_FLAG,
   container_running,
@@ -30,7 +31,9 @@ def exec_in_workspace(name: str, command: list[str]) -> int:
   if container_id is None:
     log.error('no running container for workspace %r', name)
     return 1
-  docker_command = ['bash'] if len(command) == 0 else command
+  requested_command = ['bash'] if len(command) == 0 else command
+  # Docker exec starts from container configuration, where the upstream is launch input.
+  docker_command = ['env', '-u', CHANNEL_ENV, '-u', UPSTREAM_ENV, *requested_command]
   # run as ride, not the image's default root: docker exec ignores the entrypoint's
   # gosu drop, so without -u every exec'd command runs as root and writes
   # root-owned files into the bind-mounted /workspace that the host user can't
