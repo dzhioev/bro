@@ -214,6 +214,9 @@ def test_authorized_summon_opens_identity_before_spawning(tmp_path):
   assert accepted['ride'] == 'ws'
   assert 'session' not in accepted
   assert accepted['args']['prompt'] == 'deploy the thing'
+  assert accepted['placement'] == {'party': 'start', 'isolation': 'boxed'}
+  assert 'party' not in accepted['args']
+  assert 'isolation' not in accepted['args']
   assert accepted['summoner'] == {'workspace': 'ws', 'bro': 'bro-dev'}
 
 
@@ -268,11 +271,16 @@ def test_journal_trail_and_terminal_update_identity_audit_and_cleanup(tmp_path):
   context.journal.trail(record, 'trail-1')
   assert control._facts.for_quest(message.quest_id).bro == 'dev'
   context.journal.end(record, {'outcome': 'failed', 'error': 'no', 'detail': {'reason': 'raised'}})
-  assert [entry['transition'] for entry in _audit(tmp_path)[-3:]] == [
+  audit = _audit(tmp_path)
+  assert [entry['transition'] for entry in audit[-3:]] == [
     'started',
     'trail',
     'ended',
   ]
+  summon_entries = [entry for entry in audit if entry['kind'] == 'summon']
+  assert all(
+    entry['placement'] == {'party': 'start', 'isolation': 'boxed'} for entry in summon_entries
+  )
   assert control._facts.for_quest(message.quest_id).bro == 'dev'
   assert not (tmp_path / 'summon-status.json').exists()
 
@@ -387,11 +395,13 @@ def test_unmarked_request_prefers_boxed_then_falls_back_to_unboxed(tmp_path):
   boxed_context = FakeContext(boxed)
   boxed.handle(cast(Dispatcher, boxed_context), ROOT, _message())
   assert boxed_context.spawned[0][0].isolation is Isolation.BOXED
+  assert _audit(tmp_path)[-1]['placement'] == {'party': 'start', 'isolation': 'boxed'}
 
   unboxed = _control(tmp_path, permits=('party.start.unboxed',))
   unboxed_context = FakeContext(unboxed)
   unboxed.handle(cast(Dispatcher, unboxed_context), ROOT, _message())
   assert unboxed_context.spawned[0][0].isolation is Isolation.UNBOXED
+  assert _audit(tmp_path)[-1]['placement'] == {'party': 'start', 'isolation': 'unboxed'}
 
 
 def test_join_needs_its_permit_and_inherits_the_requesters_party(tmp_path):
@@ -407,6 +417,7 @@ def test_join_needs_its_permit_and_inherits_the_requesters_party(tmp_path):
   assert launch.party == 'join'
   assert launch.isolation is None
   assert launch.parent == 'ws'
+  assert _audit(tmp_path)[-1]['placement'] == {'party': 'join', 'isolation': 'boxed'}
 
 
 def test_explicit_isolation_is_checked_against_the_requesters_permits(tmp_path):
@@ -463,6 +474,7 @@ def test_manual_request_needs_either_start_permit_and_records_child_permits(tmp_
   allowed.handle(cast(Dispatcher, allowed_context), ROOT, message)
   pending = ride.pending_summon.peek(message.quest_id)
   assert pending.permits == ('party.start.boxed',)
+  assert _audit(tmp_path)[-1]['placement'] == {'party': 'start', 'isolation': None}
 
 
 def test_credential_overrides_reach_the_spawn(tmp_path):

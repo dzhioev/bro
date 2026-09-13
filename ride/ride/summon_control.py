@@ -353,6 +353,7 @@ class SummonControl:
     self._summon_harness = summon_harness
     self._runtime_bundle = runtime_bundle
     self._audit_attribution: dict[str, dict[str, str]] = {}
+    self._audit_placements: dict[str, tuple[Literal['start', 'join'], Optional[Isolation]]] = {}
 
   # --- the `summon` request handler (broker loop) -------------------------------
 
@@ -459,6 +460,10 @@ class SummonControl:
       )
       return
     prompt = args['prompt']
+    audit_isolation = (
+      Workspace.open(requester.identity.workspace).isolation if party == 'join' else isolation
+    )
+    self._audit_placements[message.quest_id] = (party, audit_isolation)
     summoned_by = self._summoned_by(requester.attribution)
     step_id = args.get('step_id')
     if summoned_by is not None and step_id is not None:
@@ -653,6 +658,13 @@ class SummonControl:
         self._audit_attribution[event.quest] = attribution
       entry['summoner'] = attribution
     if journal_record.kind == 'summon':
+      placement = self._audit_placements.get(event.quest)
+      if placement is not None:
+        party, isolation = placement
+        entry['placement'] = {
+          'party': party,
+          'isolation': None if isolation is None else isolation.value,
+        }
       try:
         entry['target'] = self._facts.for_quest(event.quest).bro
       except UnattributablePeer:
@@ -667,3 +679,4 @@ class SummonControl:
       log.warning('could not append summon audit record to %s: %s', self._audit_file, error)
     if event.transition in ('ended', 'denied'):
       self._audit_attribution.pop(event.quest, None)
+      self._audit_placements.pop(event.quest, None)
