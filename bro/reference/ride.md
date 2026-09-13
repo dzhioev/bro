@@ -253,6 +253,7 @@ A directory under the store that records no workspace is ignored by enumeration,
   party/<member>/     records for a session that joined this workspace's party:
     session/          the member's session records, with the same shape as above
     claude/           the member's private Claude state
+    trails/           a local-recording boxed member's trails, staged here then adopted into the ride's host store on exit
 ```
 
 The tree sits in its own subdirectory rather than being the workspace directory itself:
@@ -270,6 +271,11 @@ Every unboxed session puts its scoped store and install-hook output under one pr
 A box keeps their equivalents in its own layer.
 `claude/` belongs to the claude harness in both isolations.
 A joined member keeps the same record shape under `party/<member>/` while sharing the workspace tree.
+A boxed workspace bind-mounts the whole `party/` root at `/var/ride/party` when its container is created, so a member's dirs, created later at join time, are reachable inside without a mount of their own;
+an unboxed member reaches them by absolute host path.
+A boxed member whose own scope records to the local trails backend stages its trails under `party/<member>/trails` rather than the first session's `/var/ride/trails` bind, which its scope may not have (`RIDE_TRAILS_ROOT` names it);
+its supervisor adopts them into the ride's own local trails store when the member settles, so the trail survives its records and is discoverable there like any other.
+An unboxed member records straight to the ride's local trails store like any host session.
 Its records are removed after a clean exit and kept after failure or kill;
 the member is not resumable, so its trail is the recovery record.
 The one deliberate exception to all of this is the summon audit, under `<runtime-root>/summon/`, because it must survive a workspace drop.
@@ -492,6 +498,8 @@ Layout:
   Work that needs a daemon
   — building and pushing the operated project's images, say
   — goes through the project's CI instead.
+- `<runtime-root>/workspaces/<name>/party/` (host) → `/var/ride/party` rw.
+  The root under which joined members' records are created later ("Workspaces"), mounted whole at creation so a join needs no mount of its own.
 - `<runtime-root>/trails` (host) → `/var/ride/trails` rw when the scoped trails backend is local.
   In-container readers resolve that fixed absolute path;
   no state path is relative to `/workspace`.
@@ -772,10 +780,17 @@ it is never converted into a join.
 An explicitly boxed or unboxed start requires the matching start permit.
 A join is always explicit, requires `:party.join`, inherits the summoner’s party isolation, and refuses `isolation`, `into`, and `manual`.
 The started-party lowering emits `DockerLaunchSpec` or `ProcessLaunchSpec` through the common launcher roots use.
-An unboxed join emits a member `ProcessLaunchSpec` in the summoner’s existing tree with an explicit environment snapshot and loopback broker upstream;
-a join into a boxed party is refused until the container execution lowering is available.
+An unboxed join emits a member `ProcessLaunchSpec` in the summoner’s existing tree with an explicit environment snapshot and loopback broker upstream.
+A boxed join emits a member `ExecLaunchSpec`:
+a `docker exec -i -u ride -w /workspace` client into the party’s running container, running `env -i` with an explicit baseline (`HOME`, `PATH`, `TERM`, `LANG`) plus the member env
+— an exec otherwise inherits the container’s config env, the party’s first session’s entire launch environment
+— with `BROKER_UPSTREAM` under `host.docker.internal` and the member’s records reached through the party mount (`RIDE_SESSION_DIR=/var/ride/party/<member>/session`, `CLAUDE_CONFIG_DIR=/var/ride/party/<member>/claude`).
+The member’s scoped store is `docker cp`’d into the running container at a per-member path under `/home/ride/.bro-party/` and re-owned the way the entrypoint re-owns the root’s.
+The exec client’s death does not end the process inside, so the exec’d command records the member’s pid and start time under its session dir before it execs `do-ride`;
+the handle treats that record — or the client’s exit — as the started handshake, and `do-ride` removes the record at exit.
 An unboxed child starts in its own process group;
 kill sends SIGTERM only to `do-ride` so its harness-specific shutdown can unwind and flush state, then sends SIGKILL to the group if the process tree or inherited output pipe survives that grace period.
+A boxed member’s kill follows the same TERM → grace → KILL shape through `docker exec`, signaling only while the container’s `/proc` still shows the recorded start time, so a late kill finds no target and never a reused pid.
 The request’s `llm` recipe resolves within the child’s harness and never switches it;
 the child runs with the root session’s attachment.
 A started child in an attached ride bases on the summoner’s workspace `HEAD` read at summon time (uncommitted changes never transfer;
@@ -901,7 +916,7 @@ The trail is read from that session’s pointer for every request because Claude
 — the workspace’s `session/` for its first member, or `party/<member>/session/` for a joined one
 — with the answered quest’s journal `trail` mark as fallback.
 The authorized spawn goes through the composite spawner with the requesting peer as parent.
-`SummonSpawner` lowers the request off-loop through the started-party launcher or joined-member process builder, then dispatches its concrete Docker or process description;
+`SummonSpawner` lowers the request off-loop through the started-party launcher or joined-member builder, then dispatches its concrete Docker, process, or member-exec description;
 a grandchild’s lifecycle routes to the child that summoned it, and root exit still tears down the whole tree.
 Every event lands a host log line and a durable audit row under `<runtime-root>/summon/<name>.jsonl`.
 Each row keys the ride under `ride`, using the root workspace name.
@@ -918,7 +933,10 @@ a result lost that way stays recoverable from the child's trail.
 A started-child supervisor removes its throwaway workspace only after a clean exit and retains it after failure or kill for inspection and recovery.
 A joined-member supervisor removes `party/<member>/` only after a clean exit and retains it after failure or kill;
 the member has no workspace or resume record, so its trail is its recovery surface.
-The unboxed process handle always removes the private credential state separately, and a failed removal fails teardown rather than reporting the child complete.
+A party ends with its first session:
+that session’s teardown kills any members still running, loudly, whichever spawner runs them.
+The unboxed process handle always removes the private credential state separately, and a failed removal fails teardown rather than reporting the child complete;
+a boxed member’s store lives in the party container’s own layer and dies with it.
 Each authorized start records the child’s run as its `broker-<channel>` workspace’s resume record
 — the same solo session spec a `ride solo` launch under the child’s harness would record
 — so `ride list` shows the child under its prompt and a surviving workspace resumes like any kept solo workspace:
@@ -1165,6 +1183,9 @@ Wrappers and session daemons rely on a small set of env vars:
   and by `ride banner` and `bro.prompts.session_fragment` so the run can tell in-session that it owes a summoner an answer.
 - `RIDE_PARTY_MEMBER` — the channel-derived member name when a session joined an existing party.
   Its presence makes the banner and session prompt state that the tree is shared, and makes `do-ride` skip persona workspace provisioning.
+- `RIDE_TRAILS_ROOT` — overrides the local trails backend's root (`bro.workspace.paths.trails_dir`).
+  Set only for a boxed party member, to its own `party/<member>/trails` under the party mount, since the ride-wide `/var/ride/trails` bind belongs to the first session and its scope may not have one;
+  the member's supervisor adopts those trails into the ride's own store when it settles, and the unboxed launch strips any inherited value so a host session resolves its own root.
 - `RIDE_MAY_SUMMON` — the run's own effective summon allow-list, comma-separated and empty when it may summon nothing.
   The env name and its encoding are owned by `bro.summon`;
   set by the launch surfaces for a session root and by the summon lowering (or, for a manual child, the `--summoned` launch from the pending record) for a summoned child (its own resolved list, never its summoner's),

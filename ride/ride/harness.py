@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Optional, Protocol
 
 from bro.llm.llm import LLMSpec
@@ -57,6 +57,10 @@ class Harness(Protocol):
 
   def prepare_unboxed_env(
     self, spec: 'SessionSpec', records: Path, tree: Path, env: dict[str, str]
+  ) -> None: ...
+
+  def prepare_boxed_member_env(
+    self, spec: 'SessionSpec', records: Path, member_root: PurePath, env: dict[str, str]
   ) -> None: ...
 
 

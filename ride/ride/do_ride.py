@@ -16,7 +16,7 @@ from bro.base.args import Parser
 from bro.launch.broxy import session_broxy
 from bro.launch.hold import HOLD_VARIABLE
 from bro.llm.llm import LLMSpec
-from bro.monitor import CLAUDE_CONFIG_DIR_ENV, SESSION_DIR_ENV, session_dir
+from bro.monitor import CLAUDE_CONFIG_DIR_ENV, PROCESS_FILENAME, SESSION_DIR_ENV, session_dir
 from bro.registry import create_bro
 from bro.summon import party_member
 from bro.workspace.paths import ISOLATION_ENV, workspace_dir
@@ -33,7 +33,6 @@ __cli_name__ = 'do-ride'
 INSTALL_DIRECTORY_ENV = 'BRO_INSTALL_DIR'
 RESOLVED_LLM_ENV = 'RIDE_RESOLVED_LLM'
 CONTAINER_INSTALL_DIRECTORY = '/home/ride/.bro-environment'
-PROCESS_FILENAME = 'runner.pid'
 
 
 def _boxed() -> bool:

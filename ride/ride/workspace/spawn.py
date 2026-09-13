@@ -17,12 +17,20 @@ a headless child owns a process group, captures bounded merged output, requires
 private-credential cleanup, and removes its throwaway workspace or joined-member
 records only after a clean exit.
 
+`ExecSpawner` runs a joined member inside its boxed party's running container
+behind a `docker exec` client. The client's death does not end the process
+inside, so spawn completes only once the member's process record (written ahead
+of the session command) or the client's exit is seen, and a kill signals
+through the container after checking the recorded start time against its
+`/proc` — a late kill finds no target and never a reused pid.
+
 `CompositeSpawner` dispatches on the concrete `LaunchSpec` type, so a broker
 root of either mode can spawn children of any registered kind.
 """
 
 import asyncio
 import contextlib
+import json
 import os
 import shutil
 import signal
@@ -37,12 +45,16 @@ from bro.broker.spawn import ChildHandle, LaunchSpec, RingBuffer, Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST
 from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV
+from bro.monitor import PROCESS_FILENAME, workspace_session_dir
 from ride.workspace.docker import (
   CONTAINER_BROKER_HOST,
   DETACH_FLAG,
   Launch as DockerLaunch,
+  MemberExec,
   container_running,
+  member_kill_argv,
   prepare_container,
+  prepare_member_exec,
   suspend_until_continued,
 )
 from ride.workspace.metadata import Isolation
@@ -95,6 +107,16 @@ class ProcessLaunchSpec(LaunchSpec):
       raise ValueError('party workspace and member records must be set together')
 
 
+@dataclass(frozen=True)
+class ExecLaunchSpec(LaunchSpec):
+  """broker adapter around a supervision-neutral member exec."""
+
+  launch: MemberExec
+  party_workspace: str
+  records_directory: str
+  ring_bytes: int = DEFAULT_RING_BYTES
+
+
 def _broker_launch(launch: DockerLaunch, channel: Provisioned, quest: str) -> DockerLaunch:
   """Add the provisioned broker upstream and the peer's quest id to a neutral container launch."""
   env = dict(launch.env)
@@ -125,12 +147,16 @@ class _DockerChild(ChildHandle):
     process: asyncio.subprocess.Process,
     ring_bytes: int,
     workspace: Optional[Workspace],
+    party_name: str,
+    party_members: 'PartyMembers',
   ):
     self._container_id = container_id
     self._process = process
     self._ring = RingBuffer(ring_bytes)
     self._drain = asyncio.create_task(self._drain_output())
     self._workspace = workspace  # a derived throwaway workspace, removed on a clean exit
+    self._party_name = party_name
+    self._party_members = party_members
 
   async def _drain_output(self) -> None:
     assert self._process.stdout is not None  # carries stderr too (merged at spawn)
@@ -159,6 +185,7 @@ class _DockerChild(ChildHandle):
   async def wait(self) -> int:
     code = await self._process.wait()
     await self._drain  # let the final output land in the ring before tail() is read
+    await self._party_members.end(self._party_name)
     workspace = self._detach_workspace()
     if workspace is not None:
       if code == 0:
@@ -170,6 +197,7 @@ class _DockerChild(ChildHandle):
 
   async def kill(self) -> None:
     await _force_remove(self._container_id)
+    await self._party_members.end(self._party_name)
     workspace = self._detach_workspace()
     if workspace is not None:
       workspace.record_session_end(None)
@@ -350,6 +378,58 @@ class _HeadlessProcess(ChildHandle):
     return ''
 
 
+def _adopt_member_trails(records: Path) -> bool:
+  """import a boxed member's local trails into the ride's own host store before
+  its records settle, and remove the member's copy; returns whether the records
+  are safe to drop. A boxed member records its local trails under
+  `<records>/trails` (the party mount, since the first session's `/var/ride/trails`
+  bind belongs to that session and its scope may lack one), so without this a
+  local-recording member's trail would vanish with its records rather than
+  surviving and being discoverable like any other. A member that did not record
+  locally leaves no such layout and needs no adoption; an unboxed member records
+  straight to the host store and never reaches here."""
+  from bro.trails.local import LocalStore
+  from bro.trails.store import local_root
+  from bro.trails.transfer import import_layout
+
+  member_root = records / 'trails'
+  if not (member_root / 'trails').is_dir():
+    return True
+  try:
+    # the member's trail is summoned by its summoner's, which lives in the ride's
+    # backend, not necessarily this local store
+    import_layout(member_root, LocalStore(local_root(), external_parents_ok=True))
+  except (OSError, ValueError, RuntimeError) as error:
+    log.warning('could not adopt party member trails from %s: %s', member_root, error)
+    return False
+  shutil.rmtree(member_root)
+  return True
+
+
+async def _settle_member(
+  party_members: 'PartyMembers',
+  member: ChildHandle,
+  party_workspace: Optional[str],
+  records: Optional[Path],
+  code: Optional[int],
+) -> None:
+  """release a joined member's party registration and settle its records:
+  removed after a clean exit, kept for inspection otherwise."""
+  if party_workspace is not None:
+    party_members.remove(party_workspace, member)
+  if records is None:
+    return
+  adopted = await asyncio.to_thread(_adopt_member_trails, records)
+  if code == 0 and adopted:
+    await asyncio.to_thread(shutil.rmtree, records)
+  elif code == 0:
+    log.warning('keeping records %s: its local trail could not be adopted', records)
+  elif code is None:
+    log.info('party member killed; keeping records %s', records)
+  else:
+    log.info('party member exited with code %d; keeping records %s', code, records)
+
+
 class _ProcessChild(ChildHandle):
   """A process-group child with private and persistent-record teardown."""
 
@@ -361,7 +441,7 @@ class _ProcessChild(ChildHandle):
     party_workspace: Optional[str],
     records_directory: Optional[Path],
     cleanup_directory: Optional[Path],
-    party_members: '_PartyMembers',
+    party_members: 'PartyMembers',
   ):
     self._process = process
     self._ring = RingBuffer(ring_bytes)
@@ -404,17 +484,9 @@ class _ProcessChild(ChildHandle):
       await self._party_members.end(self._workspace.name)
     party_workspace, self._party_workspace = self._party_workspace, None
     workspace, records, directory = self._detach_resources()
-    if party_workspace is not None:
-      self._party_members.remove(party_workspace, self)
     if directory is not None:
       await self._remove_directory(directory)
-    if records is not None:
-      if code == 0:
-        await self._remove_directory(records)
-      elif code is None:
-        log.info('party member killed; keeping records %s', records)
-      else:
-        log.info('party member exited with code %d; keeping records %s', code, records)
+    await _settle_member(self._party_members, self, party_workspace, records, code)
     if workspace is None:
       return
     if code == 0:
@@ -457,18 +529,22 @@ class _ProcessChild(ChildHandle):
     return self._ring.tail().decode('utf-8', errors='replace')
 
 
-class _PartyMembers:
+class PartyMembers:
+  """the live joined members of each party, keyed by its workspace name — one
+  registry shared by every spawner of a broker root, so a party's end reaches
+  its members whichever spawner runs them."""
+
   def __init__(self):
-    self._members: dict[str, dict[_ProcessChild, str]] = {}
+    self._members: dict[str, dict[ChildHandle, str]] = {}
     self._ended: set[str] = set()
 
-  def add(self, workspace: str, records: Path, member: _ProcessChild) -> bool:
+  def add(self, workspace: str, records: Path, member: ChildHandle) -> bool:
     if workspace in self._ended:
       return False
     self._members.setdefault(workspace, {})[member] = records.name
     return True
 
-  def remove(self, workspace: str, member: _ProcessChild) -> None:
+  def remove(self, workspace: str, member: ChildHandle) -> None:
     members = self._members.get(workspace)
     if members is None:
       return
@@ -490,6 +566,150 @@ class _PartyMembers:
     errors = [result for result in results if isinstance(result, Exception)]
     if len(errors) > 0:
       raise ExceptionGroup(f'could not stop every member of party {workspace}', errors)
+
+
+class _ExecChild(ChildHandle):
+  """A boxed party member behind its `docker exec` client."""
+
+  def __init__(
+    self,
+    container_id: str,
+    process: asyncio.subprocess.Process,
+    ring_bytes: int,
+    record_path: Path,
+    party_workspace: str,
+    records_directory: Path,
+    party_members: PartyMembers,
+  ):
+    self._container_id = container_id
+    self._process = process
+    self._ring = RingBuffer(ring_bytes)
+    self._drain = asyncio.create_task(self._drain_output())
+    self._record_path = record_path
+    self._party_workspace: Optional[str] = party_workspace
+    self._records_directory: Optional[Path] = records_directory
+    self._party_members = party_members
+    self._settlement: Optional[asyncio.Task[None]] = None
+    self._killed = False
+
+  async def _drain_output(self) -> None:
+    assert self._process.stdout is not None
+    while True:
+      chunk = await self._process.stdout.read(_DRAIN_CHUNK)
+      if len(chunk) == 0:
+        return
+      self._ring.write(chunk)
+
+  async def wait_started(self) -> None:
+    """block until the member's process record or the client's exit is seen —
+    the handshake a kill's in-container signal needs (the record is host-visible
+    through the party bind)."""
+    while not self._record_path.exists() and self._process.returncode is None:
+      await asyncio.sleep(0.05)
+
+  def _member_process(self) -> Optional[tuple[int, str]]:
+    """the recorded (pid, start ticks) of the process inside the container, or
+    None once the member removed its record at exit."""
+    try:
+      text = self._record_path.read_text()
+    except OSError:
+      return None
+    try:
+      record = json.loads(text)
+      pid, start_time = record['pid'], record['start_time']
+    except (ValueError, KeyError, TypeError):
+      pid, start_time = None, None
+    prefix = 'linux-ticks:'
+    if not isinstance(pid, int) or not isinstance(start_time, str):
+      log.warning('unreadable member process record %s', self._record_path)
+      return None
+    if not start_time.startswith(prefix):
+      log.warning('member process record %s carries no linux ticks', self._record_path)
+      return None
+    return pid, start_time.removeprefix(prefix)
+
+  async def _signal_member(self, signal_name: str) -> None:
+    member = self._member_process()
+    if member is None:
+      return
+    pid, start_ticks = member
+    process = await asyncio.create_subprocess_exec(
+      *member_kill_argv(self._container_id, pid, start_ticks, signal_name),
+      stdout=asyncio.subprocess.DEVNULL,
+      stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await process.communicate()
+    if process.returncode != 0:  # the party's container is gone, and the member with it
+      log.verbose(
+        'member %s signal exec failed: %s', signal_name, stderr.decode(errors='replace').strip()
+      )
+
+  async def _settle_once(self, code: Optional[int]) -> None:
+    party_workspace, self._party_workspace = self._party_workspace, None
+    records, self._records_directory = self._records_directory, None
+    await _settle_member(self._party_members, self, party_workspace, records, code)
+
+  async def _settle(self, code: Optional[int]) -> None:
+    if self._settlement is None:
+      self._settlement = asyncio.create_task(self._settle_once(code))
+    await asyncio.shield(self._settlement)
+
+  async def wait(self) -> int:
+    code = await self._process.wait()
+    await self._drain
+    await self._settle(None if self._killed else code)
+    return code
+
+  async def kill(self) -> None:
+    self._killed = True
+    await self._signal_member('TERM')
+    try:
+      async with asyncio.timeout(_PROCESS_TERM_GRACE):
+        await self._process.wait()
+        await asyncio.shield(self._drain)
+    except TimeoutError:
+      await self._signal_member('KILL')
+      await self._process.wait()
+      await self._drain
+    await self._settle(None)
+
+  def output_tail(self) -> str:
+    return self._ring.tail().decode('utf-8', errors='replace')
+
+
+class ExecSpawner(Spawner):
+  def __init__(self, party_members: Optional[PartyMembers] = None):
+    self._party_members = party_members if party_members is not None else PartyMembers()
+
+  async def spawn(self, launch: LaunchSpec, channel: Provisioned, quest: str) -> ChildHandle:
+    assert isinstance(launch, ExecLaunchSpec)
+    env = dict(launch.launch.env)
+    env.pop(CHANNEL_ENV, None)
+    env[UPSTREAM_ENV] = channel.host_endpoint.address(CONTAINER_BROKER_HOST)
+    env['BROKER_QUEST'] = quest
+    member_exec = replace(launch.launch, env=env)
+    argv = await asyncio.to_thread(prepare_member_exec, member_exec)
+    process = await asyncio.create_subprocess_exec(
+      *argv,
+      stdin=asyncio.subprocess.DEVNULL,
+      stdout=asyncio.subprocess.PIPE,
+      stderr=asyncio.subprocess.STDOUT,
+    )
+    records = Path(launch.records_directory)
+    child = _ExecChild(
+      member_exec.container,
+      process,
+      launch.ring_bytes,
+      workspace_session_dir(records) / PROCESS_FILENAME,
+      launch.party_workspace,
+      records,
+      self._party_members,
+    )
+    await child.wait_started()
+    if not self._party_members.add(launch.party_workspace, records, child):
+      await child.kill()
+      raise ValueError(f'party {launch.party_workspace!r} ended before the member started')
+    return child
 
 
 class _HeadlessRoot(ChildHandle):
@@ -524,8 +744,9 @@ def _prepare_docker_spawn(
 
 
 class DockerSpawner(Spawner):
-  def __init__(self, host_log: Optional[Path] = None):
+  def __init__(self, host_log: Optional[Path] = None, party_members: Optional[PartyMembers] = None):
     self._host_log = host_log
+    self._party_members = party_members if party_members is not None else PartyMembers()
 
   async def spawn(self, launch: LaunchSpec, channel: Provisioned, quest: str) -> ChildHandle:
     assert isinstance(launch, DockerLaunchSpec)
@@ -546,7 +767,14 @@ class DockerSpawner(Spawner):
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,
     )
-    return _DockerChild(container_id, process, launch.ring_bytes, workspace)
+    return _DockerChild(
+      container_id,
+      process,
+      launch.ring_bytes,
+      workspace,
+      launch.launch.name,
+      self._party_members,
+    )
 
 
 class _CleanupLease:
@@ -569,9 +797,9 @@ async def _cleanup_on_failure(directory: Optional[Path]) -> AsyncIterator[_Clean
 
 
 class ProcessSpawner(Spawner):
-  def __init__(self, host_log: Optional[Path] = None):
+  def __init__(self, host_log: Optional[Path] = None, party_members: Optional[PartyMembers] = None):
     self._host_log = host_log
-    self._party_members = _PartyMembers()
+    self._party_members = party_members if party_members is not None else PartyMembers()
 
   async def spawn(self, launch: LaunchSpec, channel: Provisioned, quest: str) -> ChildHandle:
     assert isinstance(launch, ProcessLaunchSpec)

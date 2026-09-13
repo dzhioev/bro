@@ -6,8 +6,8 @@ import pytest
 import ride.bro as bro_harness
 import ride.session as ride_session
 from bro.llm.llms.openai import LLMSpec
-from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_session_dir
-from bro.workspace.paths import CONTAINER_SESSION_DIR
+from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_party_dir, workspace_session_dir
+from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR
 from ride.runtime_bundle import RuntimeBundle
 from ride.session import ScopedLaunch, SessionSpec
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
@@ -202,6 +202,7 @@ class TestContainerSession:
     # the session state dir is not trails data — it stays mounted
     assert captured['launch'].extra_mounts == (
       f'{workspace_session_dir(workspace.path)}:{CONTAINER_SESSION_DIR}',
+      f'{workspace_party_dir(workspace.path)}:{CONTAINER_PARTY_DIR}',
     )
 
   def test_resume_refuses_without_a_broker_published_pointer(self, caplog, tmp_path):

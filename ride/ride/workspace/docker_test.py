@@ -1,5 +1,9 @@
+import json
+import os
 import signal
-from pathlib import Path
+import subprocess
+import sys
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -368,7 +372,7 @@ class TestPrepareContainer:
         or ({'creds/x.cred': b'y'}, frozenset({'github'}))
       ),
     )
-    monkeypatch.setattr(workspace_docker, '_bro_tarball', lambda store: b'TARBALL')
+    monkeypatch.setattr(workspace_docker, 'store_tarball', lambda store, root: b'TARBALL')
     monkeypatch.setattr(
       workspace_docker,
       '_docker_create_argv',
@@ -420,6 +424,135 @@ class TestPrepareContainer:
       'extra_mounts': ['/host:/container'],
     }
     assert events[3] == ('create', ['docker', 'create'], b'TARBALL', 'ws')
+
+
+class TestMemberExec:
+  def _launch(self) -> workspace_docker.MemberExec:
+    return workspace_docker.MemberExec(
+      container='cid-party',
+      member='m1',
+      command=['do-ride', 'solo'],
+      env={'B': '2', 'A': '1'},
+      secrets={'github'},
+      optional_secrets={'openai'},
+      credential_selection={'github': 'dev'},
+    )
+
+  def test_member_exec_argv_scrubs_with_an_explicit_snapshot(self):
+    argv = workspace_docker.member_exec_argv(self._launch(), {'B': '2', 'A': '1'})
+    assert argv[:8] == ['docker', 'exec', '-i', '-u', 'ride', '-w', '/workspace', 'cid-party']
+    assert argv[8:12] == ['env', '-i', 'A=1', 'B=2']
+    assert argv[12:14] == ['sh', '-c']
+    assert argv[14] == workspace_docker._MEMBER_WRAPPER
+    assert argv[15:] == ['ride-member', 'do-ride', 'solo']
+
+  def test_prepare_member_exec_delivers_and_reowns_the_store(self, monkeypatch):
+    store = {'creds/github.cred': b'material'}
+    monkeypatch.setattr(
+      workspace_docker.credentials,
+      'build_scoped_store',
+      lambda source, secrets, optional=(): (store, frozenset({'github'})),
+    )
+    calls: list = []
+
+    def run(argv, **kwargs):
+      calls.append((argv, kwargs))
+      return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(workspace_docker.subprocess, 'run', run)
+    argv = workspace_docker.prepare_member_exec(self._launch())
+    (cp_argv, cp_kwargs), (chown_argv, _) = calls
+    assert cp_argv == ['docker', 'cp', '-', 'cid-party:/home/ride']
+    assert cp_kwargs['input'] == workspace_docker.store_tarball(
+      store, PurePosixPath('.bro-party/m1/store')
+    )
+    assert chown_argv == [
+      'docker', 'exec', '-u', 'root', 'cid-party',
+      'chown', '-R', 'ride:ride', '/home/ride/.bro-party',
+    ]  # fmt: skip
+    pairs = argv[argv.index('-i', argv.index('env')) + 1 : argv.index('sh')]
+    assert 'BRO_STORE=/home/ride/.bro-party/m1/store' in pairs
+    assert 'BRO_INSTALL_KINDS=github' in pairs
+
+  def test_prepare_member_exec_fails_on_a_cp_failure(self, monkeypatch):
+    monkeypatch.setattr(
+      workspace_docker.credentials,
+      'build_scoped_store',
+      lambda source, secrets, optional=(): ({}, frozenset()),
+    )
+    monkeypatch.setattr(
+      workspace_docker.subprocess,
+      'run',
+      lambda argv, **kwargs: _FakeProc(returncode=1, stderr=b'no such container'),
+    )
+    with pytest.raises(RuntimeError, match='docker cp'):
+      workspace_docker.prepare_member_exec(self._launch())
+
+  def test_member_wrapper_records_the_process_before_the_session_command(self, tmp_path):
+    session_dir = tmp_path / 'session'
+    session_dir.mkdir()
+    report_path = tmp_path / 'report.json'
+    report_code = (
+      'import json, os, pathlib; '
+      'pathlib.Path('
+      f'{str(report_path)!r}'
+      ").write_text(json.dumps({'pid': os.getpid(), "
+      "'stat': pathlib.Path(f'/proc/{os.getpid()}/stat').read_text()}))"
+    )
+    result = subprocess.run(
+      [
+        'sh',
+        '-c',
+        workspace_docker._MEMBER_WRAPPER,
+        'ride-member',
+        sys.executable,
+        '-c',
+        report_code,
+      ],
+      env={'RIDE_SESSION_DIR': str(session_dir), 'PATH': os.environ['PATH']},
+      capture_output=True,
+      text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    report = json.loads(report_path.read_text())
+    ticks = report['stat'].rsplit(')', 1)[1].split()[19]
+    # pins the record content do-ride's exit-time ownership check compares
+    # against (ride/ride/do_ride.py::_process_record): identical bytes for the
+    # same pid, so do-ride still removes the file at exit
+    expected = json.dumps({'pid': report['pid'], 'start_time': f'linux-ticks:{ticks}'})
+    assert (session_dir / 'runner.pid').read_text() == expected
+
+  def _lingering_process(self) -> subprocess.Popen:
+    return subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+
+  def _start_ticks(self, pid: int) -> str:
+    return Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19]
+
+  def _run_kill_script(self, pid: int, ticks: str, signal_name: str) -> None:
+    subprocess.run(
+      ['sh', '-c', workspace_docker._MEMBER_KILL, 'sh', str(pid), ticks, signal_name],
+      check=True,
+    )
+
+  def test_member_kill_signals_only_a_matching_start_time(self):
+    process = self._lingering_process()
+    try:
+      self._run_kill_script(process.pid, '0', 'TERM')
+      assert process.poll() is None  # a mismatched start time is never a target
+      self._run_kill_script(process.pid, self._start_ticks(process.pid), 'TERM')
+      assert process.wait(timeout=10) == -signal.SIGTERM
+    finally:
+      process.kill()
+      process.wait()
+
+  def test_member_kill_falls_back_from_the_group_to_the_process(self):
+    process = self._lingering_process()  # no group leader: the fallback path
+    try:
+      self._run_kill_script(process.pid, self._start_ticks(process.pid), 'KILL')
+      assert process.wait(timeout=10) == -signal.SIGKILL
+    finally:
+      process.kill()
+      process.wait()
 
 
 class TestDockerCreateArgv:

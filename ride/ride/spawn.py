@@ -2,8 +2,9 @@
 
 `SummonSpawner` lowers each request off-loop.
 A start uses the isolation-parameterized launcher a root uses and records a throwaway workspace;
-a join uses the summoner’s existing unboxed tree and channel-named member records.
-The concrete Docker or process launch then goes to the matching spawner.
+a join uses the summoner’s existing tree and channel-named member records —
+a process beside an unboxed party, an exec into a boxed party's container.
+The concrete Docker, process, or exec launch then goes to the matching spawner.
 
 `run_root_via_broker` composes both launch modes and summon lowering under one
 broker, then supervises the root until exit.
@@ -44,6 +45,7 @@ from ride.scope import preflight_scoped_launch, scoped_secrets
 from ride.session import (
   ScopedLaunch,
   SessionSpec,
+  boxed_member_launch,
   prepared_unboxed_session_launch,
   record_resume_spec,
   started_party_launch,
@@ -56,6 +58,9 @@ from ride.workspace.spawn import (
   CompositeSpawner,
   DockerLaunchSpec,
   DockerSpawner,
+  ExecLaunchSpec,
+  ExecSpawner,
+  PartyMembers,
   ProcessLaunchSpec,
   ProcessSpawner,
 )
@@ -299,11 +304,10 @@ def _lower_join(
   member: str,
   runtime_bundle: RuntimeBundle,
   artifacts: ArtifactStore,
-) -> ProcessLaunchSpec:
-  """Prepare a member process inside its summoner's unboxed party."""
+) -> ProcessLaunchSpec | ExecLaunchSpec:
+  """Prepare a member beside its summoner: a process in an unboxed party's
+  tree, an exec into a boxed party's running container."""
   workspace = Workspace.open(launch.parent)
-  if workspace.isolation is not Isolation.UNBOXED:
-    raise ValueError('joining a boxed party is not supported by this stage')
   repository = None if launch.repo is None else as_repository(launch.repo)
   spec = _child_session_spec(
     launch,
@@ -314,8 +318,33 @@ def _lower_join(
   launch_scope, scoped = _child_launch_scope(launch, spec, repository)
   records = party_member_dir(workspace.path, member)
   records.mkdir(parents=True)
-  temporary_store = Path(tempfile.mkdtemp(prefix=f'ride-{member}-store-'))
   ride_command = _joined_ride_command(launch)
+  member_env = {
+    'BRO_SHELL_COMMAND': ride_command,
+    'RIDE_COMMAND': ride_command,
+    PARTY_MEMBER_ENV: member,
+    **summoned_child_env(launch.may_summon, launch.permits, launch.summoner),
+  }
+
+  if workspace.isolation is Isolation.BOXED:
+    prepared_exec = boxed_member_launch(
+      spec,
+      workspace,
+      member,
+      scoped,
+      human_env=human_git_identity_env(repository),
+      runtime_bundle=runtime_bundle,
+      env=member_env,
+    )
+    artifacts.share(launch.share, to=workspace.name, by=launch.parent)
+    log_scoped_secrets(f'summoned {launch.target}', scoped.required, scoped.optional)
+    return ExecLaunchSpec(
+      launch=prepared_exec,
+      party_workspace=workspace.name,
+      records_directory=str(records),
+    )
+
+  temporary_store = Path(tempfile.mkdtemp(prefix=f'ride-{member}-store-'))
   with contextlib.ExitStack() as cleanup:
     cleanup.callback(shutil.rmtree, temporary_store)
     artifacts.share(launch.share, to=workspace.name, by=launch.parent)
@@ -326,12 +355,7 @@ def _lower_join(
       human_env=human_git_identity_env(repository),
       runtime_bundle=runtime_bundle,
       forward_env=False,
-      env={
-        'BRO_SHELL_COMMAND': ride_command,
-        'RIDE_COMMAND': ride_command,
-        PARTY_MEMBER_ENV: member,
-        **summoned_child_env(launch.may_summon, launch.permits, launch.summoner),
-      },
+      env=member_env,
       credential_directory=temporary_store / 'store',
       install_directory=temporary_store / 'environment',
       records_directory=records,
@@ -358,6 +382,7 @@ class SummonSpawner(Spawner):
     self,
     docker: DockerSpawner,
     process: ProcessSpawner,
+    exec_spawner: ExecSpawner,
     runtime_bundle: RuntimeBundle,
     container_runtime: ContainerRuntimeResolver,
     facts: PeerFacts,
@@ -365,6 +390,7 @@ class SummonSpawner(Spawner):
   ):
     self._docker = docker
     self._process = process
+    self._exec = exec_spawner
     self._runtime_bundle = runtime_bundle
     self._container_runtime = container_runtime
     self._facts = facts
@@ -394,6 +420,8 @@ class SummonSpawner(Spawner):
       )
     if isinstance(lowered, DockerLaunchSpec):
       return await self._docker.spawn(lowered, channel, quest)
+    if isinstance(lowered, ExecLaunchSpec):
+      return await self._exec.spawn(lowered, channel, quest)
     return await self._process.spawn(lowered, channel, quest)
 
 
@@ -458,8 +486,10 @@ def run_root_via_broker(
   if len(targets) > 0:
     log.info('session may summon: %s', ', '.join(targets))
   host_log = workspace.host_log
-  docker_spawner = DockerSpawner(host_log=host_log)
-  process_spawner = ProcessSpawner(host_log=host_log)
+  party_members = PartyMembers()
+  docker_spawner = DockerSpawner(host_log=host_log, party_members=party_members)
+  process_spawner = ProcessSpawner(host_log=host_log, party_members=party_members)
+  exec_spawner = ExecSpawner(party_members)
   root_scope = ScopedSecrets(
     required=set(credential_scope.required),
     optional=set(credential_scope.optional),
@@ -481,9 +511,11 @@ def run_root_via_broker(
     {
       DockerLaunchSpec: docker_spawner,
       ProcessLaunchSpec: process_spawner,
+      ExecLaunchSpec: exec_spawner,
       SummonLaunchSpec: SummonSpawner(
         docker_spawner,
         process_spawner,
+        exec_spawner,
         runtime_bundle,
         container_runtime,
         facts,
