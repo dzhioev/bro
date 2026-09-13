@@ -290,7 +290,10 @@ PYTEST_FILES = [
 SINGLE_PROCESS_PYTEST_FILES = ['oops/bro/oops/cdk/stacks_test.py']
 # outside both rosters above: they drive the host docker daemon, which the
 # suite's in-container leg has none of
-DOCKER_PYTEST_FILE = 'ride/ride/workspace/launch_smoke_test.py'
+DOCKER_PYTEST_FILES = [
+  'ride/ride/workspace/launch_smoke_test.py',
+  'ride/ride/runtime_bundle_smoke_test.py',
+]
 BROKER_E2E_PYTEST_FILE = 'ride/ride/e2e_test.py'
 # run from the benchmark project's own environment, the only one that can import
 # it. The e2e modules stay out of every stage: two of them spend real tokens
@@ -469,8 +472,8 @@ def benchmark_stage() -> None:
 def docker_stage() -> None:
   print('smoke: container entrypoint', file=sys.stderr)
   run(str(DIR / 'ride' / 'ride' / 'setup' / 'container' / 'test_smoke.sh'))
-  print('smoke: container launch path', file=sys.stderr)
-  run(sys.executable, '-m', 'pytest', DOCKER_PYTEST_FILE)
+  print('smoke: host docker daemon', file=sys.stderr)
+  run(sys.executable, '-m', 'pytest', *DOCKER_PYTEST_FILES)
 
 
 def broker_e2e_stage() -> None:

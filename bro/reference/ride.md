@@ -200,7 +200,9 @@ A distribution that cannot be pinned reproducibly
 — a vanished local source, a version-control installation with no resolved commit
 — fails the launch naming what to reinstall it from, instead of silently escaping the snapshot.
 The root holds the bundle's shared flock until its session and summoned children exit;
-`ride clean` removes only bundles whose lock is available.
+`ride clean` removes only bundles whose lock is available, each with its runtime volume,
+and sweeps up what a hard-killed ride can leave on the daemon:
+labeled materializer containers whose bundle is gone or reclaimable, and runtime volumes no bundle directory names.
 
 Unboxed isolation materializes the bundle once as `host/venv`, checks its dependency closure, and builds `host/bin` as symlinks to console scripts declared through `bro.session_commands`.
 `--runtime-bundle PATH` instead takes an existing materialized layout at `PATH/venv` and `PATH/bin`.
@@ -213,6 +215,9 @@ A given runtime has no frozen manifest from which to build a container volume;
 a boxed root or boxed party start fails naming that constraint.
 Boxed isolation from a frozen runtime uses the same materializer inside the runtime image to populate `ride-runtime-<hash>`, mounted read-only at `/var/ride/runtime`;
 the volume holds `venv/` and the matching `bin/` shim farm.
+The materializer container's lifetime is tethered to the launching ride
+— its main command exits when the ride's death closes its stdin, and `--rm` then has the daemon remove it
+— so a killed launch cannot strand a container pinning the volume.
 Materialization is where every pin is fetched, so a version-control or remote-archive pin has to be reachable from the materializing environment
 — in boxed isolation that is the runtime image's own git and network, without the launcher's credentials.
 The session PATH starts with the runtime shims and then the system paths in both isolations, with the launcher's active venv removed on the launcher.
