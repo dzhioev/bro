@@ -8,7 +8,7 @@ This spell should be used when the user asks to review a GitHub pull request and
 Reconciles the PR's existing review state, reviews the head, posts findings as PR review comments, watches for the author's answers and pushes with `poll-pr`, re-reviews round by round, and approves once every finding is addressed or conceded.
 
 parameters: {"pr": "pull request URL or number to review"}
-version: 1.4.0
+version: 1.5.0
 ---
 
 {{iff #features contains github}}
@@ -79,6 +79,19 @@ Another account's approval is that account's verdict and never becomes yours by 
 — anyone who can see a public repository can leave one, and whoever delegated this review is owed a judgement of the branch rather than a relay of someone else's.
 Review it in full and reach your own.
 
+A body naming pull requests whose review approved commits this one carries
+— an integration PR assembling reviewed stages
+— points at earlier rounds of this review held elsewhere.
+Read each with `pr-state`:
+an approval there is yours on the terms above, when its `user` is `viewer`, and covers the commit it was given for;
+another account's carries nothing here either.
+What yours still cover is settled by a range-diff of the branch those commits landed on, which the body names, against this PR's head
+— fetched refs on both sides, since nothing is checked out yet and a local base may be stale:
+`git fetch origin <landed> <pull_request.base> refs/pull/<n>/head && git range-diff $(git merge-base origin/<pull_request.base> origin/<landed>)..origin/<landed> origin/<pull_request.base>..<pull_request.head_sha>`.
+A commit shown unchanged is reviewed, and one shown altered
+— a conflict resolution, a context shift
+— has that delta to judge, the way the delta past your own moved approval is.
+
 ## 3. Review the head
 
 1. Check out the code:
@@ -89,6 +102,15 @@ Review it in full and reach your own.
 2. Judge the PR's diff (`<pull_request.base>...HEAD`) per [[review diff]]
    — its grounding in the repo's standards and its method and criteria (steps 2–3)
    — reviewing the commits as what the base branch will carry.
+   Commits step 2 reconciled as reviewed elsewhere are judged on their range-diff deltas and on the integration, which no stage review could see:
+   - the seams
+     — a mechanism one stage built and a later one consumes, a callback a stage hands to machinery outside the diff
+     — judged against the invariant the other side states;
+   - the invariants the task's design states for the whole, probed against the integrated behaviour with a read-only check in the checkout wherever one can run it, rather than read for;
+   - the design changelog's claims, a deferral's named coverage doing what it says;
+   - the docs as one, with no stage's intermediate vocabulary left standing;
+   - what a later stage made dead;
+   - a finding that recurred across the stage reviews' threads, which points at a root cause no stage saw.
 3. This pass's findings plus the adopted open threads are the round's slate.
    Note the head SHA the slate judges — later rounds diff against it.
 
