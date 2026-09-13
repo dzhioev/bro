@@ -159,9 +159,22 @@ class TestParser:
 
 
 class TestRunSession:
-  def _run(self, monkeypatch, tmp_path, *, repo=True, harness_code=0, harness_effect=None):
+  def _run(
+    self,
+    monkeypatch,
+    tmp_path,
+    *,
+    repo=True,
+    party_member=False,
+    harness_code=0,
+    harness_effect=None,
+  ):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
+    if party_member:
+      monkeypatch.setenv('RIDE_PARTY_MEMBER', 'broker-CH')
+    else:
+      monkeypatch.delenv('RIDE_PARTY_MEMBER', raising=False)
     monkeypatch.setattr(do_ride, 'bro_git_identity_env', lambda name: {'GIT_AUTHOR_NAME': name})
     declaration = MagicMock()
     monkeypatch.setattr(do_ride, 'create_bro', lambda _name: declaration)
@@ -204,6 +217,10 @@ class TestRunSession:
     os.environ['RIDE_REPO'] = '/ambient'
     _, _, declaration = self._run(monkeypatch, tmp_path, repo=False)
     assert 'RIDE_REPO' not in os.environ
+    declaration.provision_workspace.assert_not_called()
+
+  def test_party_member_skips_persona_provisioning(self, monkeypatch, tmp_path):
+    _, _, declaration = self._run(monkeypatch, tmp_path, party_member=True)
     declaration.provision_workspace.assert_not_called()
 
   def test_process_record_exists_during_the_run_and_is_removed_after(self, monkeypatch, tmp_path):

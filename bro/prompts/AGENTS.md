@@ -5,7 +5,7 @@ Five loading conventions:
 auto-inject into every bro + `ride solo|along` session (`shared/`);
 serve as a reference doc
 — injected into `ride solo|along` sessions or mounted as a `FileSource` tool (`*.md`);
-inject the session fragments at launch (`hold.md` composing `holds/`, plus `summoner.md` and `summoned.md`);
+inject the session fragments at launch (`hold.md` composing `holds/`, plus `member.md`, `summoner.md`, and `summoned.md`);
 splice into an opting-in text via `{{include}}` (`fragments/`);
 load explicitly by name (top-level `*.prompt` / `*.prompt.template`).
 
@@ -75,8 +75,13 @@ Current reference docs:
 
 `bro.prompts.session_fragment(hold, …facts)` renders the text a launch surface appends after the composed prompt, and every injection site calls it
 (`ride/ride/claude/system_prompt.py:session_append_prompt`, `ride/ride/claude/claude_argv.py` for `--raw`, `bro/bro.py:BaseBro.system_prompt_for`).
-It is the summoner's watch when the run may summon, the summoned-delivery contract when the run is one another session is waiting on, then the hold fragment
+It is the joined-party warning when the run is a member, the summoner’s watch when the run may summon, the summoned-delivery contract when the run is one another session is waiting on, then the hold fragment
 — last, where instruction recency is strongest.
+
+### Party-member contract
+
+`member.md` states that a joined session shares its summoner’s tree and works beside it.
+It renders when `bro.summon.party_member()` reads `RIDE_PARTY_MEMBER` from the launch environment.
 
 ### Summoner contract
 

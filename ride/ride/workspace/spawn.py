@@ -14,8 +14,8 @@ ambient forwarding is allowed.
 to the launch's explicit environment.
 An interactive root inherits stdio and gets signal and host-log handling;
 a headless child owns a process group, captures bounded merged output, requires
-private-credential cleanup, and removes its throwaway workspace only after a
-clean exit.
+private-credential cleanup, and removes its throwaway workspace or joined-member
+records only after a clean exit.
 
 `CompositeSpawner` dispatches on the concrete `LaunchSpec` type, so a broker
 root of either mode can spawn children of any registered kind.
@@ -75,15 +75,24 @@ class ProcessLaunchSpec(LaunchSpec):
   capture_output: bool = False
   ring_bytes: int = DEFAULT_RING_BYTES
   workspace: Optional[str] = None
+  party_workspace: Optional[str] = None
+  records_directory: Optional[str] = None
   cleanup_directory: Optional[str] = None
 
   def __post_init__(self) -> None:
     if self.interactive and self.capture_output:
       raise ValueError('an interactive process launch cannot capture its inherited streams')
     if not self.capture_output and (
-      self.workspace is not None or self.cleanup_directory is not None
+      self.workspace is not None
+      or self.party_workspace is not None
+      or self.records_directory is not None
+      or self.cleanup_directory is not None
     ):
       raise ValueError('process child cleanup requires captured headless supervision')
+    if self.workspace is not None and self.records_directory is not None:
+      raise ValueError('a process child cannot own a workspace and party-member records')
+    if (self.party_workspace is None) != (self.records_directory is None):
+      raise ValueError('party workspace and member records must be set together')
 
 
 def _broker_launch(launch: DockerLaunch, channel: Provisioned, quest: str) -> DockerLaunch:
@@ -342,20 +351,28 @@ class _HeadlessProcess(ChildHandle):
 
 
 class _ProcessChild(ChildHandle):
-  """A process-group child with private-credential and workspace teardown."""
+  """A process-group child with private and persistent-record teardown."""
 
   def __init__(
     self,
     process: asyncio.subprocess.Process,
     ring_bytes: int,
     workspace: Optional[Workspace],
+    party_workspace: Optional[str],
+    records_directory: Optional[Path],
     cleanup_directory: Optional[Path],
+    party_members: '_PartyMembers',
   ):
     self._process = process
     self._ring = RingBuffer(ring_bytes)
     self._drain = asyncio.create_task(self._drain_output())
     self._workspace = workspace
+    self._party_workspace = party_workspace
+    self._records_directory = records_directory
     self._cleanup_directory = cleanup_directory
+    self._party_members = party_members
+    self._settlement: Optional[asyncio.Task[None]] = None
+    self._killed = False
 
   async def _drain_output(self) -> None:
     assert self._process.stdout is not None
@@ -365,10 +382,11 @@ class _ProcessChild(ChildHandle):
         return
       self._ring.write(chunk)
 
-  def _detach_resources(self) -> tuple[Optional[Workspace], Optional[Path]]:
+  def _detach_resources(self) -> tuple[Optional[Workspace], Optional[Path], Optional[Path]]:
     workspace, self._workspace = self._workspace, None
+    records, self._records_directory = self._records_directory, None
     directory, self._cleanup_directory = self._cleanup_directory, None
-    return workspace, directory
+    return workspace, records, directory
 
   async def _remove_directory(self, directory: Path) -> None:
     await asyncio.to_thread(shutil.rmtree, directory)
@@ -381,10 +399,22 @@ class _ProcessChild(ChildHandle):
     with contextlib.suppress(ProcessLookupError):
       os.killpg(self._process.pid, signum)
 
-  async def _settle(self, code: Optional[int]) -> None:
-    workspace, directory = self._detach_resources()
+  async def _settle_once(self, code: Optional[int]) -> None:
+    if self._workspace is not None:
+      await self._party_members.end(self._workspace.name)
+    party_workspace, self._party_workspace = self._party_workspace, None
+    workspace, records, directory = self._detach_resources()
+    if party_workspace is not None:
+      self._party_members.remove(party_workspace, self)
     if directory is not None:
       await self._remove_directory(directory)
+    if records is not None:
+      if code == 0:
+        await self._remove_directory(records)
+      elif code is None:
+        log.info('party member killed; keeping records %s', records)
+      else:
+        log.info('party member exited with code %d; keeping records %s', code, records)
     if workspace is None:
       return
     if code == 0:
@@ -399,13 +429,19 @@ class _ProcessChild(ChildHandle):
     else:
       log.info('child exited with code %d; keeping workspace %s', code, workspace.name)
 
+  async def _settle(self, code: Optional[int]) -> None:
+    if self._settlement is None:
+      self._settlement = asyncio.create_task(self._settle_once(code))
+    await asyncio.shield(self._settlement)
+
   async def wait(self) -> int:
     code = await self._process.wait()
     await self._drain
-    await self._settle(code)
+    await self._settle(None if self._killed else code)
     return code
 
   async def kill(self) -> None:
+    self._killed = True
     self._signal_process(signal.SIGTERM)
     try:
       async with asyncio.timeout(_PROCESS_TERM_GRACE):
@@ -419,6 +455,41 @@ class _ProcessChild(ChildHandle):
 
   def output_tail(self) -> str:
     return self._ring.tail().decode('utf-8', errors='replace')
+
+
+class _PartyMembers:
+  def __init__(self):
+    self._members: dict[str, dict[_ProcessChild, str]] = {}
+    self._ended: set[str] = set()
+
+  def add(self, workspace: str, records: Path, member: _ProcessChild) -> bool:
+    if workspace in self._ended:
+      return False
+    self._members.setdefault(workspace, {})[member] = records.name
+    return True
+
+  def remove(self, workspace: str, member: _ProcessChild) -> None:
+    members = self._members.get(workspace)
+    if members is None:
+      return
+    members.pop(member, None)
+    if len(members) == 0:
+      self._members.pop(workspace)
+
+  async def end(self, workspace: str) -> None:
+    if workspace in self._ended:
+      return
+    self._ended.add(workspace)
+    members = self._members.pop(workspace, {})
+    for name in members.values():
+      log.warning('party %s ended; killing joined member %s', workspace, name)
+    results = await asyncio.gather(
+      *(member.kill() for member in members),
+      return_exceptions=True,
+    )
+    errors = [result for result in results if isinstance(result, Exception)]
+    if len(errors) > 0:
+      raise ExceptionGroup(f'could not stop every member of party {workspace}', errors)
 
 
 class _HeadlessRoot(ChildHandle):
@@ -500,6 +571,7 @@ async def _cleanup_on_failure(directory: Optional[Path]) -> AsyncIterator[_Clean
 class ProcessSpawner(Spawner):
   def __init__(self, host_log: Optional[Path] = None):
     self._host_log = host_log
+    self._party_members = _PartyMembers()
 
   async def spawn(self, launch: LaunchSpec, channel: Provisioned, quest: str) -> ChildHandle:
     assert isinstance(launch, ProcessLaunchSpec)
@@ -508,6 +580,7 @@ class ProcessSpawner(Spawner):
     env[UPSTREAM_ENV] = channel.host_endpoint.address(LOCAL_HOST)
     env['BROKER_QUEST'] = quest
     cleanup_directory = None if launch.cleanup_directory is None else Path(launch.cleanup_directory)
+    records_directory = None if launch.records_directory is None else Path(launch.records_directory)
     async with _cleanup_on_failure(cleanup_directory) as cleanup:
       workspace = None if launch.workspace is None else Workspace.open(launch.workspace)
       if workspace is not None:
@@ -528,12 +601,21 @@ class ProcessSpawner(Spawner):
         return _AttachedProcess(process, self._host_log)
       if launch.capture_output:
         cleanup.transfer()
-        return _ProcessChild(
+        child = _ProcessChild(
           process,
           launch.ring_bytes,
           workspace,
+          launch.party_workspace,
+          records_directory,
           cleanup_directory,
+          self._party_members,
         )
+        if launch.party_workspace is not None:
+          assert records_directory is not None
+          if not self._party_members.add(launch.party_workspace, records_directory, child):
+            await child.kill()
+            raise ValueError(f'party {launch.party_workspace!r} ended before the member started')
+        return child
       return _HeadlessProcess(process)
 
 

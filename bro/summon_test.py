@@ -125,10 +125,11 @@ def test_manual_summon_refuses_launch_owned_flags(monkeypatch, caplog):
     ['--harness', 'claude'],
     ['--llm', ':fable5'],
     ['--start'],
+    ['--join'],
     ['--unboxed'],
   ):
     assert summon.main(['summon', '--manual', *flags, 'dev', 'work']) == 1
-  assert sum('launch owns' in record.getMessage() for record in caplog.records) == 6
+  assert sum('launch owns' in record.getMessage() for record in caplog.records) == 7
 
 
 @pytest.mark.asyncio
@@ -151,6 +152,7 @@ async def test_detached_summon_waits_for_acceptance(monkeypatch, capsys):
   ('flag', 'field', 'value'),
   [
     ('--start', 'party', 'start'),
+    ('--join', 'party', 'join'),
     ('--boxed', 'isolation', 'boxed'),
     ('--unboxed', 'isolation', 'unboxed'),
   ],
@@ -164,6 +166,15 @@ async def test_placement_flags_reach_the_request(monkeypatch, flag, field, value
     assert request.args[field] == value
     await server.transport.send(channel, brotocol.mark(_id(request), 'accepted'))
     assert await task == 0
+
+
+def test_join_refuses_into_before_opening_a_channel(monkeypatch, caplog):
+  monkeypatch.delenv(CHANNEL_ENV, raising=False)
+
+  assert summon.main(['summon', '--join', '--into', 'feature', 'dev', 'work']) == 1
+
+  assert 'shares the summoner' in caplog.text
+  assert CHANNEL_ENV not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -588,6 +599,12 @@ def test_summoned_child_env_is_what_the_child_reads_back(monkeypatch):
   assert summon.may_summon() == ('dev', 'reviewer')
   assert summon.permits() == ('party.join',)
   assert summon.summoned_by_from_env() == {'trail_id': 'T1'}
+
+
+def test_party_member_reads_the_joined_session_mark(monkeypatch):
+  assert summon.party_member() is None
+  monkeypatch.setenv(summon.PARTY_MEMBER_ENV, 'broker-CH')
+  assert summon.party_member() == 'broker-CH'
 
 
 def test_summoned_child_env_without_a_summoner_carries_no_provenance(monkeypatch):

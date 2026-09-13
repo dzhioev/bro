@@ -1,7 +1,7 @@
 """Host authorization and journal projection for the ``summon`` kind.
 
 ``SummonControl.handle`` validates and authorizes each request against the
-requesting peer's recorded identity and party permits, then binds a spawned or expected Worker
+requesting peer's recorded identity, placement, and party permits, then binds a spawned or expected Worker
 through the Dispatcher primitives. Deterministic refusals use ``Dispatcher.deny``
 so answer and journal record are one operation.
 
@@ -15,11 +15,12 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from bro.artifact import is_ref
 from bro.base import credentials, log
 from bro.base.scope import (
+  PARTY_JOIN,
   PARTY_START_BOXED,
   PARTY_START_UNBOXED,
   ScopeLayer,
@@ -193,11 +194,15 @@ def _validate(args: dict[str, Any]) -> Optional[str]:
   if harness is not None and harness not in HARNESS_NAMES:
     return f"summon 'harness' must be one of {', '.join(HARNESS_NAMES)}"
   party = args.get('party')
-  if party is not None and party != 'start':
-    return "summon 'party' must be 'start'"
+  if party is not None and party not in ('start', 'join'):
+    return "summon 'party' must be 'start' or 'join'"
   isolation = args.get('isolation')
   if isolation is not None and isolation not in {value.value for value in Isolation}:
     return "summon 'isolation' must be 'boxed' or 'unboxed'"
+  if party == 'join':
+    refused = [key for key in ('isolation', 'into', 'manual') if key in args]
+    if len(refused) > 0:
+      return f"a party join shares the summoner's tree; drop {', '.join(refused)}"
   if 'manual' in args:
     if args['manual'] is not True:
       return "summon 'manual' must be true when present"
@@ -231,25 +236,29 @@ class _Requester:
 
 
 def _placement(
-  permits: set[str], *, isolation: Optional[str], manual: bool
-) -> tuple[Optional[Isolation], Optional[str]]:
+  permits: set[str], *, party: Optional[str], isolation: Optional[str], manual: bool
+) -> tuple[Literal['start', 'join'], Optional[Isolation], Optional[str]]:
   start_permits = {PARTY_START_BOXED, PARTY_START_UNBOXED}
   held = ', '.join(f':{permit}' for permit in sorted(permits)) or '(none)'
   if manual:
     if permits.isdisjoint(start_permits):
-      return None, f'a manual summon needs a party start permit; permits held: {held}'
-    return None, None
+      return 'start', None, f'a manual summon needs a party start permit; permits held: {held}'
+    return 'start', None, None
+  if party == 'join':
+    if PARTY_JOIN not in permits:
+      return 'join', None, f'joining a party needs :{PARTY_JOIN}; permits held: {held}'
+    return 'join', None, None
   if isolation is None:
     if PARTY_START_BOXED in permits:
-      return Isolation.BOXED, None
+      return 'start', Isolation.BOXED, None
     if PARTY_START_UNBOXED in permits:
-      return Isolation.UNBOXED, None
-    return None, f'an unmarked summon needs a party start permit; permits held: {held}'
+      return 'start', Isolation.UNBOXED, None
+    return 'start', None, f'an unmarked summon needs a party start permit; permits held: {held}'
   resolved = Isolation(isolation)
   required = PARTY_START_BOXED if resolved is Isolation.BOXED else PARTY_START_UNBOXED
   if required not in permits:
-    return None, f'starting a {isolation} party needs :{required}; permits held: {held}'
-  return resolved, None
+    return 'start', None, f'starting a {isolation} party needs :{required}; permits held: {held}'
+  return 'start', resolved, None
 
 
 def _credential_refusal(
@@ -372,8 +381,9 @@ class SummonControl:
       self._deny(context, peer, error)
       return
     manual = args.get('manual', False)
-    isolation, refusal = _placement(
+    party, isolation, refusal = _placement(
       requester.permits,
+      party=args.get('party'),
       isolation=args.get('isolation'),
       manual=manual,
     )
@@ -500,7 +510,8 @@ class SummonControl:
         revoke=tuple(revoke),
         share=tuple(share),
         llm=llm,
-        isolation=isolation if isolation is not None else Isolation.BOXED,
+        party=party,
+        isolation=isolation,
       ),
       peer,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,

@@ -40,6 +40,9 @@ class TestSessionFacts:
       'RIDE_HOST_WORKSPACE',
       'RIDE_REPO',
       summon.MAY_SUMMON_ENV,
+      summon.PARTY_MEMBER_ENV,
+      summon.PERMITS_ENV,
+      summon.SUMMONED_ENV,
     ):
       monkeypatch.delenv(v, raising=False)
     monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
@@ -131,6 +134,10 @@ class TestSessionFacts:
   def test_summoned_reads_the_child_mark(self, monkeypatch):
     monkeypatch.setenv(summon.SUMMONED_ENV, '1')
     assert SessionFacts.collect().summoned is True
+
+  def test_party_member_reads_the_joined_session_mark(self, monkeypatch):
+    monkeypatch.setenv(summon.PARTY_MEMBER_ENV, 'broker-CH')
+    assert SessionFacts.collect().party_member == 'broker-CH'
 
   def test_trail_id_reads_the_session_pointer(self):
     trail_pointer.publish('01trail')
@@ -241,6 +248,12 @@ class TestRenderBanner:
       'permits: :party.join, :party.start.unboxed'
       in _facts(permits=('party.join', 'party.start.unboxed')).render_llm()
     )
+
+  def test_llm_and_visual_state_joined_party_membership(self):
+    facts = _facts(party_member='broker-CH')
+    assert 'party: joined as broker-CH (shared tree)' in facts.render_llm()
+    assert 'party:' in facts.render_visual()
+    assert 'joined as broker-CH' in facts.render_visual()
 
   def test_llm_states_the_summoned_fact_either_way(self):
     # an agent asking whether it owes a summoner an answer needs a stated `no`

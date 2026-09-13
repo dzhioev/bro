@@ -53,6 +53,7 @@ SUMMONED_ENV = 'RIDE_SUMMONED'
 # that launches the run: a session root's at launch, a summoned child's at its spawn
 MAY_SUMMON_ENV = 'RIDE_MAY_SUMMON'
 PERMITS_ENV = 'RIDE_PERMITS'
+PARTY_MEMBER_ENV = 'RIDE_PARTY_MEMBER'
 RUNTIME_ENV = 'RIDE_RUNTIME'
 # request-lifecycle bound for a summoned child — sized so the flagship deploy
 # workload survives the default; the substrate's generic 600s default is untouched
@@ -167,6 +168,11 @@ def effective_may_summon() -> tuple[str, ...]:
   list, with an unpublished one collapsed to empty — a run whose launcher
   published no list should plan no delegation."""
   return may_summon() or ()
+
+
+def party_member() -> Optional[str]:
+  """The member name when this session joined an existing party."""
+  return os.environ.get(PARTY_MEMBER_ENV) or None
 
 
 def summoned_by_from_env() -> Optional[dict[str, Any]]:
@@ -900,6 +906,13 @@ def main(argv: list[str]) -> Optional[int]:
     help='start a party, choosing the first permitted isolation',
   )
   placement.add_argument(
+    '--join',
+    dest='party',
+    action='store_const',
+    const='join',
+    help='join the summoner’s party (requires :party.join)',
+  )
+  placement.add_argument(
     '--boxed',
     dest='isolation',
     action='store_const',
@@ -921,13 +934,16 @@ def main(argv: list[str]) -> Optional[int]:
   except LLMSelectionError as error:
     log.error('%s', error)
     return 1
+  if args['party'] == 'join' and args['into'] is not None:
+    log.error('--join shares the summoner’s tree; drop --into')
+    return 1
   if args['manual']:
     launch_owned = {
       '--timeout': args['timeout'],
       '--hold': args['hold'],
       '--harness': args['harness'],
       '--llm': args['llm'],
-      '--start': args['party'],
+      '--start/--join': args['party'],
       '--boxed/--unboxed': args['isolation'],
     }
     passed = sorted(flag for flag, value in launch_owned.items() if value is not None)

@@ -5,20 +5,20 @@ description:
 This spell should be used when the user asks to relay a question or job to another bro
 — "[[ask researcher to compare the storage options]]", "ask the reviewer whether the change is safe", "have deployer roll out the API", "summon developer"
 — including asking for an interactive child the user will drive themselves ("summon a dev session for me", a manual summon).
-Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials),
+Turns the phrasing into a summon (a scoped one-shot run that starts a party or joins the summoner’s),
 picks whichever summon client the session has, decides foreground vs background,
 and relays the answer with the failure modes handled.
 A summon succeeds only when the target is in the summoner's allow-list
 — the session reads its own off the banner, fixed at launch
 — so a denial stays a normal outcome the spell relays.
 
-version: 1.15.0
+version: 1.16.0
 ---
 
 # Ask
 
 Relay a request to another bro via **summon**:
-the target runs your prompt as a one-shot in its own started party with its own workspace and credentials, and the answer comes back synchronously.
+the target runs your prompt as a scoped one-shot in a started party of its own or as a member of this session’s party, and the answer comes back synchronously.
 You only formulate the request,
 fire the client,
 and relay the result
@@ -40,10 +40,9 @@ From the user's wording extract:
   `bro show <name>` prints its description, its tools with their descriptions, its secrets and its spells
   — what it already knows how to do, in its own terms.
 - **prompt** — the request, rewritten to be fully self-contained.
-  The target shares no context with this session:
-  no conversation history,
-  no working tree,
-  no environment.
+  The target shares no conversation history or environment with this session.
+  A started party also shares no working tree;
+  a joined member deliberately shares this session’s tree.
   Spell out concrete names,
   refs,
   and expectations ("list the deploy targets and their kinds", not "list them").
@@ -70,7 +69,10 @@ the child's hold — its user-involvement level (default unattended; the child r
 the target bro's own recipe on the bro harness,
 Claude Code's own on claude).
 Placement is a knob when the user asks for it:
-`start` opens a workspace of the child's own, with `boxed` or `unboxed` isolation.
+`start` opens a workspace of the child’s own, with `boxed` or `unboxed` isolation;
+`join` runs the child beside this session in the same workspace and isolation.
+A join shares the working tree, so use it only when concurrent work in that tree is intended;
+it refuses `into`, an isolation choice, and `manual`.
 An unmarked request starts boxed when permitted, then unboxed when that is the available start permit;
 it never changes into a join.
 
@@ -107,12 +109,12 @@ its background run ends in a harness completion notification that wakes you, whi
 The mechanism is the same either way:
 
 - **Bash available** (a managed Claude session):
-  `summon <target> '<prompt>'` (`--start` / `--boxed` / `--unboxed`, `--timeout <s>`, `--into <ref>`, `--hold <level>`, `--grant <name>`, `--revoke <name>`, `--llm <recipe>`, `--harness <name>`).
+  `summon <target> '<prompt>'` (`--start` / `--join` / `--boxed` / `--unboxed`, `--timeout <s>`, `--into <ref>`, `--hold <level>`, `--grant <name>`, `--revoke <name>`, `--llm <recipe>`, `--harness <name>`).
   It prints the request id and the started trail id to stderr,
   then blocks until the answer lands on stdout;
   non-zero exit + stderr on failure.
 - **No Bash, the `summon` tools present** (`bro::summon` / `bro::summon_check` — the `--raw` claude session case):
-  call `summon` with `target` and `prompt` (optional `party`, `isolation`, `timeout`, `into`, `hold`, `grant`, `revoke`, `llm`, `harness`).
+  call `summon` with `target` and `prompt` (optional `party: start|join`, `isolation`, `timeout`, `into`, `hold`, `grant`, `revoke`, `llm`, `harness`).
   It blocks and returns the answer;
   failures come back as the tool error with the reason.
   `detach: true` returns the quest id after host acceptance and fails immediately on a denial;
@@ -175,7 +177,7 @@ and the user launches the session themselves.
   `--timeout`,
   `--hold`,
   `--llm`,
-  `--harness`, and the placement flags (`--start` / `--boxed` / `--unboxed`) are refused — the user's launch owns those.
+  `--harness`, and the placement flags (`--start` / `--join` / `--boxed` / `--unboxed`) are refused — the user’s launch owns those.
   The requester still needs either party-start permit because the human launch starts a party.
 - **Tool client**:
   `summon` with `manual: true`
@@ -245,7 +247,7 @@ The protocol has no per-child cancel command.
 The supported stop is ending the ride's root session, whose supervisor terminates every in-flight child;
 a manual child is detached instead because its user owns that launch.
 Launcher-side operators can stop a boxed child's container directly;
-an unboxed child is the supervised `do-ride` process group and has no separate session-side stop surface.
+an unboxed child, whether it starts or joins a party, is the supervised `do-ride` process group and has no separate session-side stop surface.
 A child that ran for a while has usually left durable state behind
 — a trail, a retained failed workspace, a pushed branch, an open PR, a review watcher now dead, or task comments.
 Reconcile that state *after* the process stops, not before:

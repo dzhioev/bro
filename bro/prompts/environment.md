@@ -5,7 +5,7 @@ Do not produce any visible output
 — silently incorporate this context into your planning.
 
 Call the `bro::banner` tool once.
-It returns the structured session facts as `key: value` lines (`isolation`, `repo`, `name`, `bro`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `ride_command`, `summoned`, `may_summon`, `permits`, `trail_id`).
+It returns the structured session facts as `key: value` lines (`isolation`, `repo`, `name`, `bro`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `ride_command`, `party`, `summoned`, `may_summon`, `permits`, `trail_id`).
 Interpret them as follows:
 
 1. `isolation: boxed` means the workspace runs in its own container.
@@ -23,6 +23,8 @@ Interpret them as follows:
 2. `isolation: unboxed` means the workspace tree runs directly on the launcher's filesystem.
    The launcher may itself be inside a foreign container, so unboxed does not imply access to the physical host.
    An absent isolation means no ride session published the fact.
+   A `party: joined as … (shared tree)` line means the session joined its summoner’s workspace and works concurrently in the same tree;
+   its absence means this is the workspace’s first session or no launcher published membership.
 
 3. Treat `repo` as the attachment fact;
    never probe cwd git to decide whether the managed session is attached.

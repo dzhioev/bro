@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from bro.prompts import PromptLoader, get_prompt, get_prompt_path, hold_fragment, session_fragment
-from bro.summon import MAY_SUMMON_ENV, SUMMONED_ENV, encode_may_summon
+from bro.summon import MAY_SUMMON_ENV, PARTY_MEMBER_ENV, SUMMONED_ENV, encode_may_summon
 
 
 class TestContainment:
@@ -83,9 +83,16 @@ class TestSessionFragment:
   def test_an_unsummoned_run_gets_the_hold_fragment_alone(self, monkeypatch):
     monkeypatch.delenv(SUMMONED_ENV, raising=False)
     monkeypatch.delenv(MAY_SUMMON_ENV, raising=False)
+    monkeypatch.delenv(PARTY_MEMBER_ENV, raising=False)
     assert session_fragment('attended', harness='claude', wire='mcp') == hold_fragment(
       'attended', harness='claude', wire='mcp'
     )
+
+  def test_a_party_member_is_told_the_tree_is_shared(self, monkeypatch):
+    monkeypatch.setenv(PARTY_MEMBER_ENV, 'broker-CH')
+    fragment = session_fragment('unattended', harness='bro', wire='bare')
+    assert fragment.startswith('# Party member')
+    assert 'shares the summoner’s working tree' in fragment
 
   def test_a_summoning_run_keeps_the_summon_watch_armed_on_the_claude_harness(self, monkeypatch):
     monkeypatch.delenv(SUMMONED_ENV, raising=False)

@@ -18,6 +18,7 @@ from bro.launch.hold import HOLD_VARIABLE
 from bro.llm.llm import LLMSpec
 from bro.monitor import CLAUDE_CONFIG_DIR_ENV, SESSION_DIR_ENV, session_dir
 from bro.registry import create_bro
+from bro.summon import party_member
 from bro.workspace.paths import ISOLATION_ENV, workspace_dir
 from bro.workspace.session import clear_requested_exit_status, requested_exit_status
 from ride.errors import reports_runtime_errors
@@ -304,7 +305,7 @@ def run_session(harness: 'Harness', run: SessionRun) -> int:
   os.environ['RIDE_BRO'] = run.bro
   os.environ[HOLD_VARIABLE] = run.hold
   os.environ['RIDE_RUNNER_PID'] = str(os.getpid())
-  if run.repo is not None:
+  if run.repo is not None and party_member() is None:
     create_bro(run.bro).provision_workspace(Path.cwd())
   clear_requested_exit_status()
   _install_credential_hooks()
