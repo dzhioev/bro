@@ -16,8 +16,9 @@ The caller resolves those values from its infrastructure config before invoking 
 `monitor_ecs.sh` follows the same boundary by taking region, cluster, and service as arguments.
 
 The packaged `buildspec.yml` is a CodeBuild pattern for consumer repositories.
-The project supplies `TARGET` and a checkout-relative `IMAGE_BUILD_SCRIPT` environment variable;
+The project supplies a checkout-relative `IMAGE_BUILD_SCRIPT` environment variable;
 the script can source `deploy_lib.sh` through `bro-oops-dir` after `uv sync` installs the member.
+`trigger_image_build` passes each build its `TARGET`, image repository and region, and the uv pin to install, so a consumer's copy of the buildspec reads nothing from the framework checkout.
 
 Framework-wheel staging builds the current working tree when run from the bro framework checkout.
 In any other checkout it builds the exact bro revision resolved by the consumer's `uv.lock`.
