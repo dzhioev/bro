@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 7.3.0
+version: 7.4.0
 ---
 
 # run-pr
@@ -341,6 +341,9 @@ Build the PR title and body:
   review context, not commit text
   — the landed commits carry the change's own story.
   A `Task:` line linking the task URL (if a task id is known), a `## Test plan` checklist of what you verified with each box ticked, and whatever else the reviewer needs that the commits do not carry.
+  A branch carrying commits another pull request's review already approved
+  — an integration branch of reviewed stages
+  — names each such PR and the branch their commits landed on, so the reviewer reconciles those approvals rather than re-reads what they cover.
   Don't list a step this session cannot run
   — the repo's own CI gate runs on the PR, and an unticked box blocks [[land]] later with nobody able to clear it.
 
