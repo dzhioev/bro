@@ -8,10 +8,11 @@ import tempfile
 import threading
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from bro.base import credentials, log
+from bro.monitor import PROCESS_FILENAME
 from bro.workspace.paths import runtime_base, workspace_tree
 from ride.repository import Repository, as_repository
 from ride.runtime_bundle import RuntimeBundle
@@ -19,7 +20,7 @@ from ride.workspace import build_context
 from ride.workspace.build_context import CONTAINER_DIR
 from ride.workspace.clones import ensure_clone
 from ride.workspace.metadata import read_metadata
-from ride.workspace.store import _bro_tarball
+from ride.workspace.store import store_tarball
 
 _RUNTIME_IMAGE_REPOSITORY = 'bro/ride-runtime'
 _RUNTIME_MOUNT = '/var/ride/runtime'
@@ -425,7 +426,148 @@ def prepare_container(launch: Launch) -> str:
     tty=launch.tty,
     extra_mounts=list(launch.extra_mounts),
   )
-  return _create_container(argv, _bro_tarball(store), launch.name)
+  return _create_container(argv, store_tarball(store, PurePosixPath('.bro')), launch.name)
+
+
+# where a joined member's scoped store and hook files live inside the party's
+# container — the container-layer sibling of the root session's /home/ride/.bro,
+# one subdirectory per member
+CONTAINER_MEMBER_ROOT = PurePosixPath('/home/ride/.bro-party')
+
+# what an `env -i` member exec starts from: the runtime image's own PATH
+# (ride/setup/container/Dockerfile) plus the fixed session home and a headless
+# terminal baseline
+MEMBER_BASELINE_ENV = {
+  'HOME': '/home/ride',
+  'PATH': '/var/ride/runtime/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin',
+  'TERM': 'dumb',
+  'LANG': 'C.UTF-8',
+}
+
+# runs ahead of the member's session command inside the party's container: the
+# `docker exec` client's death does not end the process inside, so the member
+# records its pid and start time first thing, before do-ride's own slower path
+# to the same record — a kill can then find its target from the moment the
+# process exists. The content matches do-ride's byte for byte, so do-ride's
+# exit-time ownership check still removes the file.
+_MEMBER_WRAPPER = f"""set -e
+start=$(sed 's/.*) //' "/proc/$$/stat" | cut -d ' ' -f 20)
+printf '{{"pid": %d, "start_time": "linux-ticks:%s"}}' "$$" "$start" > "$RIDE_SESSION_DIR/{PROCESS_FILENAME}.tmp"
+mv "$RIDE_SESSION_DIR/{PROCESS_FILENAME}.tmp" "$RIDE_SESSION_DIR/{PROCESS_FILENAME}"
+exec "$@"
+"""
+
+# signals a member only while /proc still shows the recorded start time, so a
+# reused pid is never a target. KILL falls back from the member's process group
+# to the process alone when the member leads no group.
+_MEMBER_KILL = """actual=$(sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -d ' ' -f 20)
+[ "$actual" = "$2" ] || exit 0
+if [ "$3" = KILL ]; then kill -s KILL -- "-$1" 2>/dev/null || kill -s KILL "$1"; else kill -s "$3" "$1"; fi
+"""
+
+
+def member_store_dir(member: str) -> PurePosixPath:
+  return CONTAINER_MEMBER_ROOT / member / 'store'
+
+
+def member_install_dir(member: str) -> PurePosixPath:
+  return CONTAINER_MEMBER_ROOT / member / 'environment'
+
+
+@dataclass(frozen=True)
+class MemberExec:
+  """complete description of a party member exec'd into its boxed party's
+  running container, before supervision is chosen."""
+
+  container: str
+  member: str
+  command: list[str]
+  env: Mapping[str, str]
+  secrets: Collection[str]
+  optional_secrets: Collection[str] = ()
+  credential_selection: Mapping[str, str] = field(default_factory=dict)
+
+
+def member_exec_argv(launch: MemberExec, env: Mapping[str, str]) -> list[str]:
+  """the `docker exec` client argv for one member: `env -i` with the explicit
+  snapshot, because an exec otherwise inherits the container's config env — the
+  party's first session's entire launch environment."""
+  pairs = [f'{key}={value}' for key, value in sorted(env.items())]
+  return [
+    'docker',
+    'exec',
+    '-i',
+    '-u',
+    'ride',
+    '-w',
+    '/workspace',
+    launch.container,
+    'env',
+    '-i',
+    *pairs,
+    'sh',
+    '-c',
+    _MEMBER_WRAPPER,
+    'ride-member',
+    *launch.command,
+  ]
+
+
+def member_kill_argv(container: str, pid: int, start_ticks: str, signal_name: str) -> list[str]:
+  return [
+    'docker',
+    'exec',
+    container,
+    'sh',
+    '-c',
+    _MEMBER_KILL,
+    'sh',
+    str(pid),
+    start_ticks,
+    signal_name,
+  ]
+
+
+def prepare_member_exec(launch: MemberExec) -> list[str]:
+  """deliver the member's scoped store into the running container and return the
+  exec argv: hydrate the store, `docker cp` it to the member's own layer path,
+  and re-own it as the entrypoint re-owns the root's (a no-op on Linux, where
+  `ride` is already remapped to the host uid; required on Docker for Mac)."""
+  log.verbose('hydrating the scoped credential store for member %s', launch.member)
+  source_store = credentials.Store(
+    credentials.default_registry(), credentials.STORE_DIR, launch.credential_selection
+  )
+  store, hydrated_kinds = credentials.build_scoped_store(
+    source_store, launch.secrets, optional=launch.optional_secrets
+  )
+  store_root = member_store_dir(launch.member).relative_to(CONTAINER_MEMBER_ROOT.parent)
+  tarball = store_tarball(store, store_root)
+  cp = subprocess.run(
+    ['docker', 'cp', '-', f'{launch.container}:{CONTAINER_MEMBER_ROOT.parent}'],
+    input=tarball,
+    capture_output=True,
+  )
+  if cp.returncode != 0:
+    raise RuntimeError(
+      f'docker cp of the scoped store for member {launch.member} failed: '
+      f'{cp.stderr.decode().strip()}'
+    )
+  chown = subprocess.run(
+    ['docker', 'exec', '-u', 'root', launch.container]
+    + ['chown', '-R', 'ride:ride', str(CONTAINER_MEMBER_ROOT)],
+    capture_output=True,
+    text=True,
+  )
+  if chown.returncode != 0:
+    raise RuntimeError(
+      f'cannot re-own the scoped store for member {launch.member}: {chown.stderr.strip()}'
+    )
+  env = {
+    **launch.env,
+    'BRO_STORE': str(member_store_dir(launch.member)),
+    'BRO_INSTALL_KINDS': ' '.join(sorted(hydrated_kinds)),
+  }
+  return member_exec_argv(launch, env)
 
 
 def _docker_create_argv(

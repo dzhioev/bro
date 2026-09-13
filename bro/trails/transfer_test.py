@@ -81,6 +81,27 @@ def test_export_fails_on_an_ancestor_the_store_does_not_hold(tmp_path):
   assert missing.value.trail_id == 'elsewhere'
 
 
+def test_import_layout_refuses_an_external_parent_by_default(tmp_path):
+  source = LocalStore(tmp_path / 'source')
+  child = _blaze(source, summoned_by={'trail_id': 'elsewhere', 'step_id': 0})
+
+  with pytest.raises(ValueError, match=f'trail {child} is summoned by elsewhere'):
+    transfer.import_layout(tmp_path / 'source', LocalStore(tmp_path / 'destination'))
+
+
+def test_import_layout_into_an_external_parents_store_keeps_the_pointer(tmp_path):
+  # a summoned child adopted into a store its summoner did not record to keeps
+  # its cross-backend summon pointer
+  source = LocalStore(tmp_path / 'source')
+  child = _blaze(source, summoned_by={'trail_id': 'elsewhere', 'step_id': 0})
+  destination = LocalStore(tmp_path / 'destination', external_parents_ok=True)
+
+  imported = transfer.import_layout(tmp_path / 'source', destination)
+
+  assert [result['trail_id'] for result in imported] == [child]
+  assert destination.get_trail(child)['summoned_by']['trail_id'] == 'elsewhere'
+
+
 def test_transfer_refuses_a_source_with_an_incomplete_import(tmp_path):
   recorded = LocalStore(tmp_path / 'recorded')
   trail_id = _blaze(recorded)

@@ -42,11 +42,15 @@ _UNREPORTED_AFTER = timedelta(hours=1)
 
 
 class LocalStore(TrailsStore):
-  def __init__(self, root: Path):
+  def __init__(self, root: Path, *, external_parents_ok: bool = False):
     self.root = root.expanduser().resolve()
     self.trails_directory = self.root / 'trails'
     self.manifests_directory = self.root / 'manifests'
     self.staging_directory = self.root / 'staging'
+    # accept a fork/summon pointer whose parent is absent because it was recorded
+    # to another backend — what a summoned session's trail adopted into a store
+    # its summoner did not record to carries; live recording never checks parents
+    self._external_parents_ok = external_parents_ok
     self.trails_directory.mkdir(parents=True, exist_ok=True)
 
   def list_trails(
@@ -391,7 +395,9 @@ class LocalStore(TrailsStore):
       imported = importing.imported_header(header, adapter)
     trail_id = imported['id']
     directory = self._trail_directory(trail_id)
-    importing.require_parents(imported, self._holds_trail)
+    importing.require_parents(
+      imported, self._holds_trail, external_parents_ok=self._external_parents_ok
+    )
     # the initial trail is completed under staging before it becomes visible,
     # and the rename decides which of two begins won the id
     self.staging_directory.mkdir(exist_ok=True)

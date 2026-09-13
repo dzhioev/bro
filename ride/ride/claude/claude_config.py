@@ -13,7 +13,7 @@ is reference/ride.md, "Host claude-state isolation".
 import json
 import shutil
 from collections.abc import Sequence
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Optional
 
 from bro.base import log
@@ -210,6 +210,23 @@ def container_claude_state(workspace: Path) -> tuple[list[str], dict[str, str]]:
     'DISABLE_INSTALLATION_CHECKS': '1',
   }
   return mounts, env
+
+
+def container_member_claude_state(records: Path, member_root: PurePath) -> dict[str, str]:
+  """provision a boxed party member's claude state host-side and return the env
+  naming it under `member_root`, the records' path inside the container. No
+  mount of its own: the party mount already carries the member's records
+  inside."""
+  claude_dir = _provision_session_claude_dir(
+    records,
+    install_method='global',
+    trusted_paths=['/workspace'],
+    preaccept_bypass_dialog=True,
+  )
+  return {
+    CLAUDE_CONFIG_DIR_ENV: str(member_root / claude_dir.name),
+    'DISABLE_INSTALLATION_CHECKS': '1',
+  }
 
 
 def provision_unboxed_claude_dir(workspace: Path, tree: Path) -> Path:

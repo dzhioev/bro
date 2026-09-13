@@ -2,6 +2,7 @@ import contextlib
 import dataclasses
 import json
 import os
+import socket
 import sys
 import tempfile
 from collections.abc import Collection, Generator, Mapping
@@ -13,12 +14,20 @@ from bro.base import configs, log
 from bro.base.scope import scope_override_key, scope_revoke_key
 from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV
 from bro.llm.llm import LLMSpec
-from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_session_dir
+from bro.monitor import (
+  SESSION_DIR_ENV,
+  party_member_dir,
+  trail_pointer,
+  workspace_party_dir,
+  workspace_session_dir,
+)
 from bro.summon import PARTY_MEMBER_ENV, RUNTIME_ENV, summoned_child_env
 from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.paths import (
+  CONTAINER_PARTY_DIR,
   CONTAINER_SESSION_DIR,
   ISOLATION_ENV,
+  TRAILS_ROOT_ENV,
   ensure_runtime_root,
   workspace_dir,
 )
@@ -52,10 +61,13 @@ from ride.workspace.clones import ensure_clone
 from ride.workspace.containers import broker_enabled
 from ride.workspace.docker import (
   CONTAINER_BROKER_HOST,
+  MEMBER_BASELINE_ENV,
   ContainerRuntime,
   ContainerRuntimeResolver,
   Launch,
+  MemberExec,
   find_container_id,
+  member_install_dir,
 )
 from ride.workspace.metadata import BRANCH_ENV, Isolation
 from ride.workspace.model import AttachmentMismatch, IsolationMismatch, SessionBusy, Workspace
@@ -283,9 +295,11 @@ def container_launch(
   neutral session env and mounts around the harness's extras, with the
   surface's own `env` and `mounts` on top."""
   session_state = workspace_session_dir(workspace.path)
-  # created before the container launch so the bind mount finds it and does not
-  # materialize it root-owned
+  party_dir = workspace_party_dir(workspace.path)
+  # created before the container launch so the bind mounts find them and do not
+  # materialize them root-owned
   session_state.mkdir(parents=True, exist_ok=True)
+  party_dir.mkdir(parents=True, exist_ok=True)
   extras = harness.container_extras(spec, workspace, scoped)
   launch_env: dict[str, str] = {
     'RIDE_BRO': spec.bro,
@@ -318,10 +332,72 @@ def container_launch(
       *extras.mounts,
       *trails_mounts,
       f'{session_state}:{CONTAINER_SESSION_DIR}',
+      f'{party_dir}:{CONTAINER_PARTY_DIR}',
       *mounts,
     ),
     repo=repo,
     base_ref=base_ref,
+  )
+
+
+def boxed_member_launch(
+  spec: SessionSpec,
+  workspace: Workspace,
+  member: str,
+  scoped: ScopedSecrets,
+  *,
+  human_env: Mapping[str, str],
+  runtime_bundle: RuntimeBundle,
+  env: Mapping[str, str],
+) -> MemberExec:
+  """one joined session exec'd into its boxed party's running container: the
+  member-scoped session env around the harness's member extras, with the
+  surface's own `env` on top."""
+  harness = get_harness(spec.harness)
+  container_id = find_container_id(workspace.tree)
+  if container_id is None:
+    raise RuntimeError(f'party {workspace.name!r} has no running container to join')
+  records = party_member_dir(workspace.path, member)
+  member_root = CONTAINER_PARTY_DIR / member
+  # created host-side before the exec so the record dirs exist under the party
+  # mount when the member's wrapper writes its process record and its recorder
+  # opens the local trails store
+  workspace_session_dir(records).mkdir(parents=True, exist_ok=True)
+  (records / 'trails').mkdir(parents=True, exist_ok=True)
+  launch_env: dict[str, str] = {
+    **MEMBER_BASELINE_ENV,
+    'RIDE_BRO': spec.bro,
+    'RIDE_WORKSPACE': workspace.name,
+    'RIDE_HOST_WORKSPACE': str(workspace.tree),
+    'RIDE_HOST': socket.gethostname(),
+    'RIDE_IN_CONTAINER': '1',
+    ISOLATION_ENV: Isolation.BOXED.value,
+    RESOLVED_LLM_ENV: encode_resolved_llm(spec.resolved_llm),
+    INSTALL_DIRECTORY_ENV: str(member_install_dir(member)),
+    SESSION_DIR_ENV: str(workspace_session_dir(member_root)),
+    # a local-trails member records under its own party records rather than the
+    # first session's /var/ride/trails bind, which its scope may not have
+    TRAILS_ROOT_ENV: str(member_root / 'trails'),
+    RUNTIME_ENV: str(runtime_bundle.host_root),
+    **human_env,
+  }
+  if workspace.repo is not None:
+    launch_env['RIDE_REPO'] = str(workspace.repo)
+    if workspace.metadata.branch is None:
+      raise ValueError('attached boxed workspace has no recorded branch')
+    launch_env[BRANCH_ENV] = workspace.metadata.branch
+  if spec.no_trails:
+    launch_env['TRAILS_DISABLED'] = '1'
+  harness.prepare_boxed_member_env(spec, records, member_root, launch_env)
+  launch_env.update(env)
+  return MemberExec(
+    container=container_id,
+    member=member,
+    command=do_ride_command(spec, harness_flags=harness.session_flags(spec)),
+    env=launch_env,
+    secrets=scoped.required,
+    optional_secrets=scoped.optional,
+    credential_selection=scoped.selection,
   )
 
 
@@ -346,6 +422,9 @@ def prepared_unboxed_session_launch(
   command = [str(runtime_bundle.host_venv / 'bin' / session_command[0]), *session_command[1:]]
   runner_env = runtime_bundle.host_session_env()
   runner_env.pop(PARTY_MEMBER_ENV, None)
+  # an unboxed session resolves its own host trails root, never a container one
+  # an ancestor's environment might carry
+  runner_env.pop(TRAILS_ROOT_ENV, None)
   if not forward_env:
     runner_env.pop(CHANNEL_ENV, None)
     runner_env.pop(UPSTREAM_ENV, None)

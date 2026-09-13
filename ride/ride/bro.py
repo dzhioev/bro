@@ -1,6 +1,6 @@
 import json
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Optional
 
 from bro.base import log
@@ -122,6 +122,11 @@ class BroHarness:
     self, spec: 'SessionSpec', records: Path, tree: Path, env: dict[str, str]
   ) -> None:
     del spec, records, tree, env
+
+  def prepare_boxed_member_env(
+    self, spec: 'SessionSpec', records: Path, member_root: PurePath, env: dict[str, str]
+  ) -> None:
+    del spec, records, member_root, env
 
 
 BRO = BroHarness()

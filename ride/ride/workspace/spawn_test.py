@@ -13,8 +13,9 @@ import pytest
 import ride.workspace.docker as workspace_docker
 import ride.workspace.spawn as workspace_spawn
 from bro.broker.transports.tcp import Endpoint
-from bro.monitor import party_member_dir
+from bro.monitor import PROCESS_FILENAME, party_member_dir, workspace_session_dir
 from bro.workspace.paths import workspace_dir
+from ride.workspace.docker import CONTAINER_BROKER_HOST, MemberExec
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
@@ -281,7 +282,9 @@ class TestDockerChildCapture:
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,
     )
-    return workspace_spawn._DockerChild('cid', process, ring_bytes, workspace=None)
+    return workspace_spawn._DockerChild(
+      'cid', process, ring_bytes, None, 'broker-CH', workspace_spawn.PartyMembers()
+    )
 
   @pytest.mark.asyncio
   async def test_tail_combines_stdout_and_stderr(self):
@@ -315,7 +318,12 @@ class TestDockerChildWorkspaceCleanup:
       stderr=asyncio.subprocess.STDOUT,
     )
     return workspace_spawn._DockerChild(
-      'cid', process, workspace_spawn.DEFAULT_RING_BYTES, child_workspace
+      'cid',
+      process,
+      workspace_spawn.DEFAULT_RING_BYTES,
+      child_workspace,
+      child_workspace.name,
+      workspace_spawn.PartyMembers(),
     )
 
   @pytest.mark.asyncio
@@ -643,6 +651,89 @@ time.sleep(30)
     assert not Path(launch.cleanup_directory).exists()
 
 
+class TestMemberTrailAdoption:
+  def _record_member_trail(self, records: Path) -> str:
+    from bro.trails.local import LocalStore
+    from bro.trails.model import BlazeRequest
+
+    store = LocalStore(records / 'trails')
+    # a joined member's trail is summoned by its summoner's, which — for a
+    # service-backed or --no-trails first session — lives in another backend, not
+    # this local store; adoption must carry that external pointer
+    trail_id = store.blaze(
+      BlazeRequest(
+        harness='bro',
+        bro='dev',
+        version='test',
+        interactive=False,
+        surface='ask',
+        native={'llm': {'type': 'echo', 'model': 'echo'}},
+        summoned_by={'trail_id': 'service-parent', 'step_id': 0},
+        body={'records': [{'kind': 'system_prompt', 'body': 'prompt'}]},
+      )
+    )['id']
+    store.end_trail(trail_id, 'ok')
+    return trail_id
+
+  def _host_store(self, monkeypatch, tmp_path):
+    from bro.trails.local import LocalStore
+    from bro.trails.store import local_root
+
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    monkeypatch.delenv('RIDE_IN_CONTAINER', raising=False)
+    monkeypatch.delenv('RIDE_TRAILS_ROOT', raising=False)
+    return LocalStore(local_root())
+
+  @pytest.mark.asyncio
+  async def test_clean_exit_adopts_the_member_trail_and_removes_its_records(
+    self, monkeypatch, tmp_path
+  ):
+    host = self._host_store(monkeypatch, tmp_path)
+    records = tmp_path / 'workspace' / 'party' / 'broker-CH'
+    records.mkdir(parents=True)
+    trail_id = self._record_member_trail(records)
+    party_members = workspace_spawn.PartyMembers()
+
+    await workspace_spawn._settle_member(party_members, MagicMock(), 'party-workspace', records, 0)
+
+    # the member's own copy is gone with its records, but the trail survived into
+    # the ride's host store, discoverable there like any other, its external
+    # summon provenance preserved
+    assert not records.exists()
+    adopted = host.get_trail(trail_id)
+    assert adopted['id'] == trail_id
+    assert adopted['summoned_by']['trail_id'] == 'service-parent'
+
+  @pytest.mark.asyncio
+  async def test_failed_exit_keeps_records_but_still_adopts_the_trail(self, monkeypatch, tmp_path):
+    host = self._host_store(monkeypatch, tmp_path)
+    records = tmp_path / 'workspace' / 'party' / 'broker-CH'
+    records.mkdir(parents=True)
+    trail_id = self._record_member_trail(records)
+
+    await workspace_spawn._settle_member(
+      workspace_spawn.PartyMembers(), MagicMock(), 'party-workspace', records, 3
+    )
+
+    assert records.is_dir()  # kept for inspection on failure
+    assert not (records / 'trails').exists()  # the trail moved to the host store
+    assert host.get_trail(trail_id)['id'] == trail_id
+
+  @pytest.mark.asyncio
+  async def test_a_member_that_did_not_record_locally_needs_no_adoption(
+    self, monkeypatch, tmp_path
+  ):
+    self._host_store(monkeypatch, tmp_path)
+    records = tmp_path / 'workspace' / 'party' / 'broker-CH'
+    (records / 'session').mkdir(parents=True)
+
+    await workspace_spawn._settle_member(
+      workspace_spawn.PartyMembers(), MagicMock(), 'party-workspace', records, 0
+    )
+
+    assert not records.exists()
+
+
 class TestProcessChildPartyRecords:
   def _launch(self, tmp_path, code: str) -> workspace_spawn.ProcessLaunchSpec:
     records = tmp_path / 'workspace' / 'party' / 'broker-CH'
@@ -876,6 +967,168 @@ time.sleep(30)
     assert Path(launch.records_directory).is_dir()
     assert launch.cleanup_directory is not None
     assert not Path(launch.cleanup_directory).exists()
+
+
+def _member_stub_code(record: Path) -> str:
+  """a stand-in for the exec'd member: writes the process record the in-container
+  wrapper would, exits 0 on TERM, and lingers."""
+  return f"""
+import json, os, signal, sys, time
+from pathlib import Path
+
+fields = Path(f'/proc/{{os.getpid()}}/stat').read_text().rsplit(')', 1)[1].split()
+record = {{'pid': os.getpid(), 'start_time': f'linux-ticks:{{fields[19]}}'}}
+Path({str(record)!r}).write_text(json.dumps(record))
+signal.signal(signal.SIGTERM, lambda *_args: sys.exit(0))
+time.sleep(30)
+"""
+
+
+class TestExecMember:
+  def _records(self, tmp_path) -> Path:
+    records = tmp_path / 'workspace' / 'party' / 'broker-M'
+    workspace_session_dir(records).mkdir(parents=True)
+    return records
+
+  def _launch(self, records: Path) -> workspace_spawn.ExecLaunchSpec:
+    return workspace_spawn.ExecLaunchSpec(
+      launch=MemberExec(
+        container='cid-party',
+        member='broker-M',
+        command=['do-ride', 'solo'],
+        env={'RIDE_BRO': 'dev'},
+        secrets=set(),
+      ),
+      party_workspace='party-ws',
+      records_directory=str(records),
+    )
+
+  def _fake_prepare(self, monkeypatch, code: str) -> dict:
+    captured: dict = {}
+
+    def prepare(member_exec: MemberExec) -> list[str]:
+      captured['launch'] = member_exec
+      return [sys.executable, '-c', code]
+
+    monkeypatch.setattr(workspace_spawn, 'prepare_member_exec', prepare)
+    return captured
+
+  def _fake_kill(self, monkeypatch) -> list:
+    calls: list = []
+
+    def kill_argv(container: str, pid: int, ticks: str, signal_name: str) -> list[str]:
+      calls.append((container, pid, ticks, signal_name))
+      return ['kill', '-s', signal_name, str(pid)]
+
+    monkeypatch.setattr(workspace_spawn, 'member_kill_argv', kill_argv)
+    return calls
+
+  async def _spawn(
+    self, launch: workspace_spawn.ExecLaunchSpec, spawner: workspace_spawn.ExecSpawner
+  ) -> workspace_spawn._ExecChild:
+    channel = workspace_spawn.Provisioned(
+      channel='CH', host_endpoint=Endpoint(port=7321, token='tk')
+    )
+    child = await spawner.spawn(launch, channel, 'X-1')
+    assert isinstance(child, workspace_spawn._ExecChild)
+    return child
+
+  @pytest.mark.asyncio
+  async def test_spawn_env_carries_the_channel_under_the_container_host(
+    self, monkeypatch, tmp_path
+  ):
+    records = self._records(tmp_path)
+    captured = self._fake_prepare(monkeypatch, 'pass')
+    child = await self._spawn(self._launch(records), workspace_spawn.ExecSpawner())
+    assert await child.wait() == 0
+    channel = workspace_spawn.Provisioned(
+      channel='CH', host_endpoint=Endpoint(port=7321, token='tk')
+    )
+    assert captured['launch'].env == {
+      'RIDE_BRO': 'dev',
+      'BROKER_UPSTREAM': channel.host_endpoint.address(CONTAINER_BROKER_HOST),
+      'BROKER_QUEST': 'X-1',
+    }
+    assert not records.exists()  # a clean exit removes the member records
+
+  @pytest.mark.asyncio
+  async def test_spawn_completes_once_the_member_record_is_seen(self, monkeypatch, tmp_path):
+    records = self._records(tmp_path)
+    record_path = workspace_session_dir(records) / PROCESS_FILENAME
+    self._fake_prepare(monkeypatch, _member_stub_code(record_path))
+    kills = self._fake_kill(monkeypatch)
+    child = await self._spawn(self._launch(records), workspace_spawn.ExecSpawner())
+    # the handshake completed inside spawn: the record is there, the client lives
+    assert record_path.is_file()
+    assert child._process.returncode is None
+
+    await child.kill()
+
+    record = json.loads(record_path.read_text())
+    ticks = record['start_time'].removeprefix('linux-ticks:')
+    assert kills == [('cid-party', record['pid'], ticks, 'TERM')]
+    assert await child.wait() == 0
+    assert records.is_dir()  # a killed member's records are kept
+
+  @pytest.mark.asyncio
+  async def test_kill_finds_no_target_once_the_record_is_gone(self, monkeypatch, tmp_path):
+    records = self._records(tmp_path)
+    self._fake_prepare(monkeypatch, 'pass')  # exits without leaving a record
+    kills = self._fake_kill(monkeypatch)
+    child = await self._spawn(self._launch(records), workspace_spawn.ExecSpawner())
+    await child.kill()
+    assert kills == []
+
+  @pytest.mark.asyncio
+  async def test_spawn_into_an_ended_party_is_refused(self, monkeypatch, tmp_path):
+    records = self._records(tmp_path)
+    self._fake_prepare(monkeypatch, 'pass')
+    party_members = workspace_spawn.PartyMembers()
+    await party_members.end('party-ws')
+    with pytest.raises(ValueError, match='ended before the member started'):
+      await self._spawn(self._launch(records), workspace_spawn.ExecSpawner(party_members))
+
+  @pytest.mark.asyncio
+  async def test_boxed_party_exit_kills_its_exec_members(self, monkeypatch, tmp_path, caplog):
+    records = self._records(tmp_path)
+    record_path = workspace_session_dir(records) / PROCESS_FILENAME
+    self._fake_prepare(monkeypatch, _member_stub_code(record_path))
+    self._fake_kill(monkeypatch)
+    party_members = workspace_spawn.PartyMembers()
+    launch = workspace_spawn.ExecLaunchSpec(
+      launch=MemberExec(
+        container='cid-party',
+        member='broker-M',
+        command=['do-ride', 'solo'],
+        env={},
+        secrets=set(),
+      ),
+      party_workspace='broker-owner',
+      records_directory=str(records),
+    )
+    member = await self._spawn(launch, workspace_spawn.ExecSpawner(party_members))
+    owner_process = await asyncio.create_subprocess_exec(
+      sys.executable,
+      '-c',
+      'pass',
+      stdout=asyncio.subprocess.PIPE,
+      stderr=asyncio.subprocess.STDOUT,
+    )
+    owner = workspace_spawn._DockerChild(
+      'cid-owner',
+      owner_process,
+      workspace_spawn.DEFAULT_RING_BYTES,
+      None,
+      'broker-owner',
+      party_members,
+    )
+
+    with caplog.at_level('WARNING'):
+      assert await owner.wait() == 0
+
+    assert 'killing joined member broker-M' in caplog.text
+    assert await member.wait() == 0
+    assert records.is_dir()
 
 
 class TestCompositeSpawner:
