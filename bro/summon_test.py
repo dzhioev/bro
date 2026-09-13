@@ -684,6 +684,19 @@ def test_summoned_child_env_is_what_the_child_reads_back(monkeypatch):
   assert summon.summoned_by_from_env() == {'trail_id': 'T1'}
 
 
+@pytest.mark.parametrize(
+  'value',
+  [
+    '{"unknown":"value"}',
+    '{"trail_id":"T1","unknown":true}',
+  ],
+)
+def test_summoner_provenance_refuses_an_unknown_shape(monkeypatch, value):
+  monkeypatch.setenv(summon.SUMMONER_ENV, value)
+  with pytest.raises(ValueError, match='invalid summoned_by shape'):
+    summon.summoned_by_from_env()
+
+
 def test_party_member_reads_the_joined_session_mark(monkeypatch):
   assert summon.party_member() is None
   monkeypatch.setenv(summon.PARTY_MEMBER_ENV, 'broker-CH')

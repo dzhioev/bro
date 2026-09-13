@@ -25,7 +25,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   `attachment_identities` is the host-config identities an attachment matches project entries by, reading a checkout's `origin` for the URL one.
 - `ride/do_ride.py` — the `do-ride` session executable every launcher runs inside a prepared workspace:
   its own parser and argv builder, the session environment and pid/start-time record, credential hooks, missing Claude state and plugin seed, persona provisioning, the session broxy, and SIGTERM-forwarded agent spawning.
-- `ride/errors.py` — the runtime-path and migration error wrapper shared by the distribution's public scripts.
+- `ride/errors.py` — the runtime-path and workspace-record error wrapper shared by the distribution's public scripts.
 - `ride/scope.py` — per-surface launch scoping:
   `ScopeRecipe`, `BRO_RUN_RECIPE`, attachment-bound credential selection, the project/host grant layers, three-way scope override splitting, permit computation, and the strict launch preflight,
   plus `bind_launch_llm`, the launch's LLM selection settled over the host's per-bro entry for the attachment and returned as the canonical `--llm` the session records and forwards,
@@ -60,7 +60,6 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   native recipe resolution, the session runner spawning `bro run|chat …` with exact-recipe continuation, and the launch hooks.
 - `ride/flags.py` — common session, scope, and LLM flag registration, harness flag registration with the generic requires-`--harness` refusal and option packing, and the default an omitted `--hold` resolves to.
 - `ride/runtime_bundle.py` — installation freeze, content-addressed bundle persistence and locking, supplied-runtime validation/re-exec, shared host/container materialization, session-command shims, runtime-volume lifecycle, and bundle GC.
-- `ride/runtime_state.py` — one-shot migration of historical checkout-keyed stores and pre-isolation workspace records, including collision/liveness preflight and per-root workspace attachment recovery.
 - `ride/listing.py`, `ride/clean.py`, `ride/scope_report.py` — lifecycle implementations.
 - `ride/e2e_test.py` — live Docker launch coverage, outside the default test roster.
 - `ride/workspace/` — managed workspace creation, provisioning, container execution, credential hydration, broker spawners, and teardown;
@@ -91,14 +90,11 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - Workspace state is global under `runtime_base()/workspaces/`, with each workspace's optional repository attachment recorded in metadata.
   Runtime bundles live under `runtime_base()/runtime/`;
   managed URL mirrors under `runtime_base()/repos/`.
-  Historical checkout-keyed roots and pre-isolation workspace records migrate under a global lock before an outer command proceeds;
-  the migration preflights every collision and live workspace, and a partial run remains resumable.
   Their flocks serialize fetch/cleanup, mirrors never prune, and `ride clean` removes one only when no workspace references its URL.
   Container trails use a dedicated fixed absolute mount.
 - Every attached workspace tree is an independent clone on its recorded branch.
   A detached unboxed workspace may instead record one existing external tree outside the runtime root;
   one workspace records that path at a time, resume requires it to remain present, and workspace removal never removes it.
-  A legacy linked worktree is launch-refused but remains removable through `ride clean`.
 - A ride preflights its Docker daemon once before its first boxed launch, by reading a nonce through a bind of the runtime root.
   Every boxed bind source must resolve under that root.
 - A launch's credential instances follow its attachment identity and selected bro on every surface that resolves them
@@ -130,4 +126,4 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   The party ends with its first session, so that session's teardown kills any members still running, whichever spawner runs them.
 - The framework seed permits boxed party starts.
   Project and host configuration layers apply idempotently before strict launch/request overrides, and every launch exports the effective set through `RIDE_PERMITS` while summon control enforces its own peer-facts copy.
-- Every console script this distribution ships wraps its `main` in `ride.cli.reports_runtime_errors`, so unusable runtime locations and blocked state migrations fail as CLI errors.
+- Every console script this distribution ships wraps its `main` in `ride.cli.reports_runtime_errors`, so unusable runtime locations and workspace records fail as CLI errors.

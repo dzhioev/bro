@@ -192,7 +192,6 @@ PYTEST_FILES = [
   'ride/ride/clean_test.py',
   'ride/ride/repository_test.py',
   'ride/ride/runtime_bundle_test.py',
-  'ride/ride/runtime_state_test.py',
   'ride/ride/scope_test.py',
   'ride/ride/trails_test.py',
   'ride/ride/kinds_test.py',

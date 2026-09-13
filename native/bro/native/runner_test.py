@@ -243,16 +243,10 @@ class TestRun:
     await StubRunner().run('again', tracker=RecordingTracker(), surface='test')
     monkeypatch.setenv('RIDE_SUMMONER', '{"trail_id":"T-universal","step_id":7,"index":2}')
     await StubRunner().run('universal pointer', tracker=RecordingTracker(), surface='test')
-    monkeypatch.setenv('RIDE_SUMMONER', '{"target":"bro","trail_id":"T-legacy"}')
-    await StubRunner().run('legacy direct', tracker=RecordingTracker(), surface='test')
-    monkeypatch.setenv('RIDE_SUMMONER', '{"session":"c:legacy-root"}')
-    await StubRunner().run('legacy session', tracker=RecordingTracker(), surface='test')
     assert captured == [
       {'trail_id': 'T-parent'},
       None,
       {'trail_id': 'T-universal', 'step_id': 7, 'index': 2},
-      {'trail_id': 'T-legacy'},
-      None,
     ]
 
   @pytest.mark.asyncio

@@ -48,8 +48,8 @@ def _tree_file(name: str, content: bytes) -> str:
   return name
 
 
-def _audit(session: str = 'ws') -> list[dict]:
-  lines = ride.artifacts.audit_file(session).read_text().splitlines()
+def _audit(ride_name: str = 'ws') -> list[dict]:
+  lines = ride.artifacts.audit_file(ride_name).read_text().splitlines()
   return [json.loads(line) for line in lines]
 
 
@@ -64,7 +64,6 @@ class TestMint:
     [entry] = _audit()
     assert entry['event'] == 'mint'
     assert entry['ride'] == 'ws'
-    assert 'session' not in entry
     assert entry['peer'] == 'ws'
     assert entry['path'] == relative
     assert entry['ref'] == ref

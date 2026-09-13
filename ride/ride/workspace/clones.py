@@ -140,17 +140,7 @@ def ensure_clone(
 ) -> None:
   """Create an attached workspace's independent clone on its first launch."""
   git_directory = tree / '.git'
-  if git_directory.is_file():
-    raise RuntimeError(
-      f'workspace {tree.parent.name!r} uses a legacy git worktree; '
-      f'recreate it with `ride clean --force {tree.parent.name}`'
-    )
   if git_directory.is_dir():
-    if (git_directory / 'objects' / 'info' / 'alternates').is_file():
-      raise RuntimeError(
-        f'workspace {tree.parent.name!r} uses a legacy shared clone; '
-        f'recreate it with `ride clean --force {tree.parent.name}`'
-      )
     return
   if tree.exists() and any(tree.iterdir()):
     raise RuntimeError(f'workspace tree is not empty and has no git clone: {tree}')

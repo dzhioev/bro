@@ -235,15 +235,6 @@ class TestAdoption:
     [header] = _trails(store)
     assert header['summoned_by'] == {'trail_id': 't-parent', 'step_id': 3}
 
-  def test_a_root_session_attribution_stamps_nothing(self, environment, store, monkeypatch):
-    monkeypatch.setenv('RIDE_SUMMONER', '{"session": "parent-ws"}')
-    _write_segment(environment, 'seg-1', [_user('hello', 'u1'), _assistant('hi', 'a1')])
-
-    _recorder(environment, store).tick()
-
-    [header] = _trails(store)
-    assert header.get('summoned_by') is None
-
   def test_a_stale_pointer_is_cleared_at_start(self, environment, store):
     trail_pointer.publish('STALE')
 

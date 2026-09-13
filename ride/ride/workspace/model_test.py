@@ -148,47 +148,13 @@ class TestBoxedWorkspaceRemove:
 
 
 class TestUnboxedWorkspaceRemove:
-  def test_removes_worktree_branch_and_the_workspace_dir(self, monkeypatch, tmp_path):
-    calls = []
-
-    def fake_git_run(*args, **kwargs):
-      calls.append(args)
-      return _FakeProc()
-
-    monkeypatch.setattr(model, 'git_run', fake_git_run)
+  def test_removes_the_workspace_directory(self, tmp_path):
     workspace = _worktree('ws', tmp_path)
     workspace.tree.mkdir(parents=True)
-    (workspace.tree / '.git').write_text('gitdir: /repo/.git/worktrees/ws')
+    (workspace.tree / 'result').write_text('done')
     workspace.record_session_end(0)
-    workspace.host_log.write_text('mid-session line\n')
     workspace.remove()
-    assert calls == [
-      ('worktree', 'remove', '--force', str(workspace.tree)),
-      ('branch', '-D', 'workspace-ws'),
-    ]
     assert not workspace.path.exists()
-
-  def test_a_never_materialized_tree_skips_the_git_removal(self, monkeypatch, tmp_path):
-    calls = []
-
-    def fake_git_run(*args, **kwargs):
-      calls.append(args)
-      return _FakeProc()
-
-    monkeypatch.setattr(model, 'git_run', fake_git_run)
-    workspace = _worktree('ws', tmp_path)
-    workspace.remove()
-    assert calls == []
-    assert not workspace.path.exists()
-
-  def test_a_failed_worktree_removal_raises(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(model, 'git_run', lambda *a, **k: _FakeProc(returncode=1, stderr='busy'))
-    workspace = _worktree('ws', tmp_path)
-    workspace.tree.mkdir(parents=True)
-    (workspace.tree / '.git').write_text('gitdir: /repo/.git/worktrees/ws')
-    with pytest.raises(RuntimeError, match='git worktree remove failed: busy'):
-      workspace.remove()
-    assert workspace.path.exists()
 
 
 class TestSessionEndRecord:
@@ -282,6 +248,26 @@ class TestSessionLock:
     workspace = _container('feat', tmp_path)
     assert workspace.is_active({str(workspace.tree)}) is True
     assert workspace.is_active(set()) is False
+
+  def test_removal_claim_refuses_a_held_session_lock(self, tmp_path):
+    workspace = _worktree('feat', tmp_path)
+    with workspace.hold_session_lock():
+      with pytest.raises(model.WorkspaceActive):
+        with model.hold_workspace_removal(workspace.path, set()):
+          pass
+
+  def test_removal_claim_blocks_a_concurrent_session_start(self, tmp_path):
+    workspace = _worktree('feat', tmp_path)
+    with model.hold_workspace_removal(workspace.path, set()):
+      with pytest.raises(model.SessionBusy):
+        with workspace.hold_session_lock():
+          pass
+
+  def test_removal_claim_refuses_a_running_container_mount(self, tmp_path):
+    workspace = _container('feat', tmp_path)
+    with pytest.raises(model.WorkspaceActive):
+      with model.hold_workspace_removal(workspace.path, {str(workspace.tree)}):
+        pass
 
 
 class TestExternalTreeWorkspace:
@@ -389,6 +375,28 @@ class TestKindsAndEnumeration:
   def test_open_raises_for_an_unknown_name(self, tmp_path):
     with pytest.raises(ValueError, match='^workspace not found: gone$'):
       Workspace.open('gone')
+
+  def test_open_refuses_a_record_outside_the_current_shape(self):
+    workspace = workspaces_dir() / 'old'
+    workspace.mkdir(parents=True)
+    (workspace / 'workspace.json').write_text('{"unexpected":true}')
+
+    with pytest.raises(
+      ValueError,
+      match=r"workspace 'old' has an unrecognised record.*ride clean --force old",
+    ):
+      Workspace.open('old')
+
+  def test_ensure_refuses_a_nonempty_directory_without_a_current_record(self):
+    workspace = workspaces_dir() / 'old'
+    workspace.mkdir(parents=True)
+    (workspace / 'unknown').write_text('{}')
+
+    with pytest.raises(
+      ValueError,
+      match=r"workspace 'old' has an unrecognised record.*ride clean --force old",
+    ):
+      Workspace.ensure('old', None, Isolation.BOXED)
 
   def test_create_records_kind_branch_and_throwaway(self, tmp_path):
     workspace = Workspace.create('ws', tmp_path, Isolation.BOXED, throwaway=True)

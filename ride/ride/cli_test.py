@@ -349,50 +349,6 @@ class TestAlong:
 
 
 class TestLifecycle:
-  def test_outer_command_migrates_legacy_runtime_state_first(self):
-    with (
-      patch('ride.cli.migrate_runtime_state') as migrate,
-      patch('ride.cli.list_workspaces', return_value=0),
-    ):
-      assert ride_cli.main(['ride', 'list']) == 0
-    migrate.assert_called_once_with()
-
-  def test_given_runtime_reexec_precedes_migration(self, monkeypatch, tmp_path):
-    calls = []
-    monkeypatch.setattr(
-      ride_cli,
-      'reexec_from_runtime',
-      lambda _runtime, _argv: calls.append('reexec'),
-    )
-    monkeypatch.setattr(ride_cli, 'migrate_runtime_state', lambda: calls.append('migrate'))
-    monkeypatch.setattr(
-      ride_cli, 'start_session', lambda *_args, **_kwargs: calls.append('start') or 0
-    )
-    assert (
-      ride_cli.main(['ride', 'solo', '--unboxed', '--runtime-bundle', str(tmp_path), 'dev', 'work'])
-      == 0
-    )
-    assert calls == ['reexec', 'migrate', 'start']
-
-  def test_resume_runtime_reexec_precedes_migration(self, monkeypatch):
-    record = workspace_dir('recorded') / 'resume.json'
-    record.parent.mkdir(parents=True)
-    record.write_text(json.dumps({'runtime_bundle': '/runtime'}))
-    calls = []
-    monkeypatch.setattr(
-      ride_cli,
-      'reexec_from_runtime',
-      lambda _runtime, _argv: calls.append('reexec'),
-    )
-    monkeypatch.setattr(ride_cli, 'migrate_runtime_state', lambda: calls.append('migrate'))
-    monkeypatch.setattr(
-      ride_cli,
-      'resume_session',
-      lambda *_args, **_kwargs: calls.append('resume') or 0,
-    )
-    assert ride_cli.main(['ride', 'resume', 'recorded']) == 0
-    assert calls == ['reexec', 'migrate', 'resume']
-
   def test_mode_parser_has_no_in_place_entry(self, capsys):
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'solo', '--in-place', 'dev', 'prompt'])
@@ -423,6 +379,25 @@ class TestLifecycle:
     monkeypatch.setenv('XDG_DATA_HOME', 'share')
     assert ride_cli.main(['ride', 'list']) == 1
     assert 'XDG_DATA_HOME must be an absolute path' in caplog.text
+
+  @pytest.mark.parametrize('contents', [b'{}', b'\xff'])
+  def test_an_unrecognized_workspace_record_is_a_cli_error(self, caplog, contents):
+    workspace = workspace_dir('old')
+    workspace.mkdir(parents=True)
+    (workspace / 'workspace.json').write_bytes(contents)
+
+    assert ride_cli.main(['ride', 'list']) == 1
+    assert "workspace 'old' has an unrecognised record" in caplog.text
+    assert 'ride clean --force old' in caplog.text
+
+  def test_named_noncurrent_workspace_requires_force_clean(self, caplog):
+    workspace = workspace_dir('old')
+    workspace.mkdir(parents=True)
+    (workspace / 'unknown').write_text('state')
+
+    assert ride_cli.main(['ride', 'clean', 'old']) == 1
+    assert "workspace 'old' has an unrecognised record" in caplog.text
+    assert 'ride clean --force old' in caplog.text
 
 
 class TestSummonedLaunch:
