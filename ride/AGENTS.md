@@ -103,6 +103,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Scoped credential hydration").
 - Both isolations pass `BRO_STORE` and `BRO_INSTALL_KINDS` to `do-ride`, which installs the hooks through one applier into the named session environment directory,
   so a session's git and `gh` act as the identity it was scoped with and never reach the operator's own configuration.
+  An unboxed process gets a closed environment snapshot with its workspace as `PWD`;
+  only the launch surface's admitted terminal, task, command, identity, and logging inputs cross from the ambient environment.
   Every unboxed session's store and install-hook output share a private temporary root removed by its supervisor;
   retained workspace records therefore carry no credential material.
 - Mode verbs are detached unless `--repo` explicitly attaches a resolved checkout or git URL.

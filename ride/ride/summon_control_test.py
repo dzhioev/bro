@@ -782,6 +782,7 @@ def test_manual_summon_writes_the_pending_record_before_acceptance(tmp_path, mon
   assert context.spawned == []
   assert context.expected == [(ROOT, None)]
   pending = ride.pending_summon.peek(message.quest_id)
+  cast(MagicMock, control._runtime_bundle.materialize_host).assert_called_once_with()
   assert pending.target == 'dev'
   assert pending.channel_token == 'token'
   assert pending.runtime == 'a' * 64
