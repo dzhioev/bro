@@ -1,6 +1,7 @@
 import errno
 import fcntl
 import importlib.metadata
+import io
 import json
 import os
 import shutil
@@ -494,23 +495,40 @@ def test_materializer_installs_exact_snapshot_checks_closure_and_builds_shims(
   assert (host / 'bin' / 'summon').resolve() == host / 'venv' / 'bin' / 'summon'
 
 
+class _FakeMaterializerProcess:
+  def __init__(self, command, **_kwargs):
+    Path(command[command.index('--cidfile') + 1]).write_text('container-id\n')
+    self.stdout = io.StringIO('ready\n')
+    self.returncode = 0
+
+  def __enter__(self):
+    return self
+
+  def __exit__(self, *_exception):
+    return None
+
+
 def test_container_materialization_populates_a_named_volume_once(monkeypatch, tmp_path, caplog):
   root = tmp_path / ('a' * 64)
   (root / 'wheels').mkdir(parents=True)
   bundle = runtime_bundle.RuntimeBundle(root, '3.12')
   calls: list[list[str]] = []
+  launches: list[list[str]] = []
   materialized: list[tuple] = []
 
   def run(command, *args, **kwargs):
     del args, kwargs
     calls.append(command)
-    if command[:2] == ['docker', 'create']:
-      return subprocess.CompletedProcess(command, 0, 'container-id\n', '')
     if command[:5] == ['docker', 'exec', 'container-id', 'test', '-f']:
       return subprocess.CompletedProcess(command, 0 if len(materialized) > 0 else 1, '', '')
     return subprocess.CompletedProcess(command, 0, '', '')
 
+  def launch(command, **kwargs):
+    launches.append(command)
+    return _FakeMaterializerProcess(command, **kwargs)
+
   monkeypatch.setattr(runtime_bundle.subprocess, 'run', run)
+  monkeypatch.setattr(runtime_bundle.subprocess, 'Popen', launch)
   monkeypatch.setattr(
     runtime_bundle,
     '_materialize',
@@ -524,7 +542,10 @@ def test_container_materialization_populates_a_named_volume_once(monkeypatch, tm
   assert len(materialized) == 1
   assert caplog.text.count(f'materializing runtime bundle {bundle.hash[:12]}') == 1
   assert calls[0][:3] == ['docker', 'volume', 'create']
-  create = next(command for command in calls if command[:2] == ['docker', 'create'])
+  assert len(launches) == 2
+  create = launches[0]
+  assert create[:4] == ['docker', 'run', '--rm', '--interactive']
+  assert f'ride-materializer={bundle.hash}' in create
   assert f'{bundle.container_volume}:/var/ride/runtime' in create
   assert f'{root}:/bundle:ro' in create
   assert materialized[0][0] == (Path('/bundle'), Path('/var/ride/runtime'), '/usr/local/bin/python')
@@ -612,9 +633,18 @@ def test_hash_resolver_holds_the_existing_bundle_lock(monkeypatch, tmp_path):
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
+def _without_docker(monkeypatch):
+  monkeypatch.setattr(
+    runtime_bundle.subprocess,
+    'run',
+    lambda command, **_kwargs: subprocess.CompletedProcess(command, 1, '', 'no daemon'),
+  )
+
+
 def test_clean_removes_unlocked_bundles_and_keeps_locked_ones(monkeypatch, tmp_path):
   monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
   monkeypatch.setattr(runtime_bundle, '_remove_container_volume', lambda *_a, **_k: True)
+  _without_docker(monkeypatch)
   runtime = tmp_path / 'runtime'
   unlocked = runtime / ('a' * 64)
   locked = runtime / ('b' * 64)
@@ -632,6 +662,7 @@ def test_clean_removes_unlocked_bundles_and_keeps_locked_ones(monkeypatch, tmp_p
 def test_clean_keeps_a_bundle_when_its_runtime_volume_is_in_use(monkeypatch, tmp_path):
   monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
   monkeypatch.setattr(runtime_bundle, '_remove_container_volume', lambda *_a, **_k: False)
+  _without_docker(monkeypatch)
   root = tmp_path / 'runtime' / ('a' * 64)
   root.mkdir(parents=True)
 
@@ -653,10 +684,66 @@ def test_clean_removes_the_matching_runtime_volume_before_the_bundle(monkeypatch
   monkeypatch.setattr(runtime_bundle.subprocess, 'run', run)
 
   assert runtime_bundle.clean_runtime_bundles() == (1, 0)
-  assert commands == [
+  volume_commands = [command for command in commands if command[:2] == ['docker', 'volume']]
+  assert volume_commands[:2] == [
     ['docker', 'volume', 'inspect', f'ride-runtime-{bundle_hash}'],
     ['docker', 'volume', 'rm', f'ride-runtime-{bundle_hash}'],
   ]
+  assert not root.exists()
+
+
+def test_clean_removes_leaked_materializers_and_orphaned_volumes(monkeypatch, tmp_path):
+  monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
+  kept_hash = 'a' * 64
+  gone_hash = 'b' * 64
+  orphan_hash = 'c' * 64
+  root = tmp_path / 'runtime' / kept_hash
+  root.mkdir(parents=True)
+  commands = []
+
+  def run(command, **_kwargs):
+    commands.append(command)
+    if command[:2] == ['docker', 'ps']:
+      output = f'held-leak {kept_hash}\nfree-leak {gone_hash}\nunlabeled \n'
+      return subprocess.CompletedProcess(command, 0, output, '')
+    if command[:3] == ['docker', 'volume', 'ls']:
+      output = f'ride-runtime-{kept_hash}\nride-runtime-{orphan_hash}\nunrelated\n'
+      return subprocess.CompletedProcess(command, 0, output, '')
+    return subprocess.CompletedProcess(command, 0, '', '')
+
+  monkeypatch.setattr(runtime_bundle.subprocess, 'run', run)
+
+  with (root / '.lock').open('a+') as handle:
+    fcntl.flock(handle, fcntl.LOCK_SH)
+    assert runtime_bundle.clean_runtime_bundles() == (0, 1)
+
+  removals = [command for command in commands if command[:3] == ['docker', 'rm', '-f']]
+  assert removals == [['docker', 'rm', '-f', 'free-leak']]
+  volume_removals = [command for command in commands if command[:3] == ['docker', 'volume', 'rm']]
+  assert volume_removals == [['docker', 'volume', 'rm', f'ride-runtime-{orphan_hash}']]
+
+
+def test_clean_removes_a_cleaned_bundles_leaked_materializer_before_its_volume(
+  monkeypatch, tmp_path
+):
+  monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
+  bundle_hash = 'a' * 64
+  root = tmp_path / 'runtime' / bundle_hash
+  root.mkdir(parents=True)
+  commands = []
+
+  def run(command, **_kwargs):
+    commands.append(command)
+    if command[:2] == ['docker', 'ps']:
+      return subprocess.CompletedProcess(command, 0, f'leak {bundle_hash}\n', '')
+    return subprocess.CompletedProcess(command, 0, '', '')
+
+  monkeypatch.setattr(runtime_bundle.subprocess, 'run', run)
+
+  assert runtime_bundle.clean_runtime_bundles() == (1, 0)
+  container_removal = commands.index(['docker', 'rm', '-f', 'leak'])
+  volume_removal = commands.index(['docker', 'volume', 'rm', f'ride-runtime-{bundle_hash}'])
+  assert container_removal < volume_removal
   assert not root.exists()
 
 

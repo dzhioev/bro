@@ -24,6 +24,8 @@ from bro.workspace.paths import runtime_base
 
 _SESSION_COMMAND_GROUP = 'bro.session_commands'
 _HASH_PATTERN = re.compile(r'[0-9a-f]{64}')
+_MATERIALIZER_LABEL = 'ride-materializer'
+_RUNTIME_VOLUME_PREFIX = 'ride-runtime-'
 # the zip epoch, the earliest an entry can carry
 _WHEEL_ENTRY_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
@@ -106,7 +108,7 @@ class RuntimeBundle:
 
   @property
   def container_volume(self) -> str:
-    return f'ride-runtime-{self.hash}'
+    return f'{_RUNTIME_VOLUME_PREFIX}{self.hash}'
 
   def materialize_host(self) -> None:
     if self.materialized:
@@ -444,29 +446,46 @@ def _container_run(
 
 @contextlib.contextmanager
 def _materializer_container(bundle: RuntimeBundle, image: str) -> Generator[str]:
-  result = _run(
-    [
+  # the container exits on stdin EOF — forced by this process's death — and `--rm`
+  # then has the daemon remove it, so a hard-killed ride cannot strand it.
+  with tempfile.TemporaryDirectory(prefix='ride-materializer-') as scratch:
+    cidfile = Path(scratch) / 'container-id'
+    command = [
       'docker',
-      'create',
+      'run',
+      '--rm',
+      '--interactive',
+      '--cidfile',
+      str(cidfile),
+      '--label',
+      f'{_MATERIALIZER_LABEL}={bundle.hash}',
       '--entrypoint',
-      'sleep',
+      'sh',
       '-v',
       f'{bundle.container_volume}:/var/ride/runtime',
       '-v',
       f'{bundle.root}:/bundle:ro',
       image,
-      'infinity',
-    ],
-    description='cannot create container runtime materializer',
-  )
-  container_id = result.stdout.strip()
-  try:
-    _run(
-      ['docker', 'start', container_id], description='cannot start container runtime materializer'
-    )
-    yield container_id
-  finally:
-    subprocess.run(['docker', 'rm', '-f', container_id], capture_output=True)
+      '-c',
+      'echo ready && exec cat',
+    ]
+    try:
+      process = subprocess.Popen(
+        command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+      )
+    except OSError as error:
+      raise RuntimeBundleError(f'cannot start container runtime materializer: {error}') from error
+    with process:
+      try:
+        assert process.stdout is not None
+        if process.stdout.readline().rstrip() != 'ready':
+          _, stderr = process.communicate()
+          detail = stderr.strip() or f'exit code {process.returncode}'
+          raise RuntimeBundleError(f'cannot start container runtime materializer: {detail}')
+        yield cidfile.read_text().strip()
+      finally:
+        if cidfile.is_file():
+          subprocess.run(['docker', 'rm', '-f', cidfile.read_text().strip()], capture_output=True)
 
 
 def _wheel_record(path: Path, suffix: str) -> Message:
@@ -806,6 +825,71 @@ def _remove_container_volume(bundle_hash: str, *, dry_run: bool) -> bool:
   return removed.returncode == 0
 
 
+def _docker_lines(command: list[str]) -> list[str] | None:
+  """stdout lines of a docker query, or None when docker cannot answer."""
+  try:
+    result = subprocess.run(command, capture_output=True, text=True)
+  except FileNotFoundError:
+    return None
+  if result.returncode != 0:
+    log.verbose('docker query failed: %s', result.stderr.strip())
+    return None
+  return result.stdout.splitlines()
+
+
+def _materializer_containers() -> dict[str, list[str]]:
+  """materializer container ids by the bundle hash their label carries."""
+  lines = _docker_lines(
+    [
+      'docker',
+      'ps',
+      '--all',
+      '--filter',
+      f'label={_MATERIALIZER_LABEL}',
+      '--format',
+      f'{{{{.ID}}}} {{{{.Label "{_MATERIALIZER_LABEL}"}}}}',
+    ]
+  )
+  containers: dict[str, list[str]] = {}
+  for line in lines or []:
+    container_id, _, bundle_hash = line.partition(' ')
+    if _HASH_PATTERN.fullmatch(bundle_hash) is not None:
+      containers.setdefault(bundle_hash, []).append(container_id)
+  return containers
+
+
+def _remove_materializer_containers(containers: list[str], *, dry_run: bool) -> None:
+  for container in containers:
+    if dry_run:
+      log.info('would remove leaked materializer container %s', container)
+      continue
+    removed = subprocess.run(['docker', 'rm', '-f', container], capture_output=True, text=True)
+    if removed.returncode == 0:
+      log.info('removed leaked materializer container %s', container)
+    else:
+      log.info('skip leaked materializer container %s: %s', container, removed.stderr.strip())
+
+
+def _remove_orphaned_volumes(bundle_hashes: set[str], *, dry_run: bool) -> None:
+  """remove runtime volumes whose bundle directory no longer exists."""
+  for name in _docker_lines(['docker', 'volume', 'ls', '--format', '{{.Name}}']) or []:
+    volume_hash = name.removeprefix(_RUNTIME_VOLUME_PREFIX)
+    if (
+      name == volume_hash
+      or _HASH_PATTERN.fullmatch(volume_hash) is None
+      or volume_hash in bundle_hashes
+    ):
+      continue
+    if dry_run:
+      log.info('would remove orphaned runtime volume %s', name)
+      continue
+    removed = subprocess.run(['docker', 'volume', 'rm', name], capture_output=True, text=True)
+    if removed.returncode == 0:
+      log.info('removed orphaned runtime volume %s', name)
+    else:
+      log.info('skip orphaned runtime volume %s: %s', name, removed.stderr.strip())
+
+
 def clean_runtime_bundles(*, dry_run: bool = False) -> tuple[int, int]:
   runtime = runtime_base() / 'runtime'
   if not runtime.is_dir():
@@ -813,6 +897,8 @@ def clean_runtime_bundles(*, dry_run: bool = False) -> tuple[int, int]:
   removed = 0
   skipped = 0
   with _locked_file(runtime / '.lock', fcntl.LOCK_EX):
+    leaked = _materializer_containers()
+    present: set[str] = set()
     for root in sorted(runtime.iterdir()):
       if not root.is_dir():
         continue
@@ -822,16 +908,24 @@ def clean_runtime_bundles(*, dry_run: bool = False) -> tuple[int, int]:
         continue
       if _HASH_PATTERN.fullmatch(root.name) is None:
         continue
+      present.add(root.name)
       with (root / '.lock').open('a+') as handle:
         try:
           fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
           skipped += 1
           continue
+        _remove_materializer_containers(leaked.pop(root.name, []), dry_run=dry_run)
         if not _remove_container_volume(root.name, dry_run=dry_run):
           skipped += 1
           continue
         if not dry_run:
           shutil.rmtree(root)
         removed += 1
+    for bundle_hash, containers in leaked.items():
+      # a hash still present was lock-held above: its containers may be a live
+      # materialization's, so only bundle-less leftovers are removed here
+      if bundle_hash not in present:
+        _remove_materializer_containers(containers, dry_run=dry_run)
+    _remove_orphaned_volumes(present, dry_run=dry_run)
   return removed, skipped
