@@ -73,6 +73,7 @@ the launch drops the `trails` scope baseline, sets `TRAILS_DISABLED` for the run
 - `ride clean` removes inactive clean workspaces, managed URL mirrors no workspace references, and unlocked runtime bundles;
   `--force` permits dirty workspaces and removal when an attached repository no longer exists, while `--dry-run` reports only.
 - `ride exec <workspace> [command ...]` enters a running boxed workspace.
+  The exec process is outside the running session's process tree and has no broker channel of its own.
 - `ride check-clean <workspace>` reports whether removal is safe.
 - `ride scope [--repo PATH|URL] [--bro BRO] [--harness HARNESS] [--raw]` prints the prospective credential tiers and selected credential instances.
   Detached scope requires `--bro`;

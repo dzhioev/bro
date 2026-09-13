@@ -1,6 +1,8 @@
 import sys
+from types import SimpleNamespace
 
 import ride.workspace.containers as workspace_containers
+from ride.workspace.metadata import Isolation
 
 
 class _FakeProc:
@@ -8,6 +10,37 @@ class _FakeProc:
     self.returncode = returncode
     self.stdout = stdout
     self.stderr = stderr
+
+
+class TestExecInWorkspace:
+  def test_shell_has_no_session_broker_environment(self, monkeypatch):
+    workspace = SimpleNamespace(isolation=Isolation.BOXED, tree=object())
+    monkeypatch.setattr(workspace_containers.Workspace, 'open', lambda _name: workspace)
+    monkeypatch.setattr(workspace_containers, 'find_container_id', lambda _tree: 'cid123')
+    calls = []
+    monkeypatch.setattr(
+      workspace_containers.subprocess,
+      'run',
+      lambda argv: calls.append(argv) or _FakeProc(),
+    )
+
+    assert workspace_containers.exec_in_workspace('running', []) == 0
+    assert calls == [
+      [
+        'docker',
+        'exec',
+        '-it',
+        '-u',
+        'ride',
+        'cid123',
+        'env',
+        '-u',
+        'BROKER_CHANNEL',
+        '-u',
+        'BROKER_UPSTREAM',
+        'bash',
+      ]
+    ]
 
 
 class TestAttachInteractive:
