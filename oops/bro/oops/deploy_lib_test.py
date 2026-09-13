@@ -32,6 +32,34 @@ def test_codebuild_runs_buildspec_commands_with_bash():
   assert buildspec['env']['shell'] == 'bash'
 
 
+def test_buildspec_builds_a_consumer_checkout(tmp_path):
+  buildspec = yaml.safe_load((_INFRA_DIRECTORY / 'buildspec.yml').read_text())
+  invocations = tmp_path / 'invocations'
+  pin = '0.0.1'
+  mocks = f"""
+    curl() {{ echo "curl $*" >> {shlex.quote(str(invocations))}; }}
+    uv() {{
+      echo "uv $*" >> {shlex.quote(str(invocations))}
+      if [ "$1" = --version ]; then
+        echo "uv {pin}"
+      fi
+    }}
+    """
+  commands = '\n'.join(buildspec['phases']['build']['commands'])
+  result = subprocess.run(
+    ['bash', '-e', '-c', f'{mocks}\n{commands}'],
+    check=False,
+    capture_output=True,
+    text=True,
+    cwd=tmp_path,
+    env={**os.environ, 'TARGET': 'target-a', 'IMAGE_BUILD_SCRIPT': 'build.sh', 'UV_VERSION': pin},
+  )
+  assert result.returncode == 0, result.stderr
+  lines = invocations.read_text().splitlines()
+  assert f'curl -LsSf https://astral.sh/uv/{pin}/install.sh' in lines
+  assert lines[-1] == 'uv run build.sh target-a'
+
+
 def test_ecr_uri_uses_caller_supplied_repository_and_region():
   result = _run_bash(
     """
@@ -68,8 +96,8 @@ def test_trigger_image_build_reuses_the_commit_tag():
   )
 
 
-def test_trigger_image_build_starts_the_caller_supplied_project():
-  result = _run_bash(
+def _run_trigger_image_build(on_start_build: str) -> subprocess.CompletedProcess[str]:
+  return _run_bash(
     f"""
     git() {{
       case "$1 $2" in
@@ -84,7 +112,7 @@ def test_trigger_image_build_starts_the_caller_supplied_project():
       if [[ " $* " == *" ecr list-images "* ]]; then
         echo None
       elif [[ " $* " == *" codebuild start-build "* ]]; then
-        [[ " $* " == *" --project-name project-a "* ]] || return 90
+        {on_start_build}
         echo project-a:build-id
       elif [[ " $* " == *" codebuild batch-get-builds "* ]]; then
         echo "SUCCEEDED None"
@@ -96,9 +124,21 @@ def test_trigger_image_build_starts_the_caller_supplied_project():
     trigger_image_build target-a repository-a project-a region-1
     """
   )
+
+
+def test_trigger_image_build_starts_the_caller_supplied_project():
+  result = _run_trigger_image_build('[[ " $* " == *" --project-name project-a "* ]] || return 90')
   assert result.returncode == 0
   assert f'started build project-a:build-id (target target-a, commit {_COMMIT})\n' in result.stdout
   assert result.stdout.endswith('build project-a:build-id: SUCCEEDED\n')
+
+
+def test_trigger_image_build_passes_the_packaged_uv_pin(tmp_path):
+  arguments = tmp_path / 'arguments'
+  result = _run_trigger_image_build(f'printf \'%s\\n\' "$@" > {shlex.quote(str(arguments))}')
+  assert result.returncode == 0, result.stderr
+  version = (shell_dir() / 'uv-version').read_text().strip()
+  assert f'name=UV_VERSION,value={version},type=PLAINTEXT' in arguments.read_text().splitlines()
 
 
 def test_ensure_server_base_passes_the_packaged_uv_pin(tmp_path):

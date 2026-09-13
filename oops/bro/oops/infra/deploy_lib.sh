@@ -205,6 +205,7 @@ trigger_image_build() {
       "name=TARGET,value=${target},type=PLAINTEXT" \
       "name=IMAGE_REPOSITORY,value=${repository},type=PLAINTEXT" \
       "name=IMAGE_REGION,value=${region},type=PLAINTEXT" \
+      "name=UV_VERSION,value=${_UV_VERSION},type=PLAINTEXT" \
     --query build.id --output text)"
   echo "started build ${build_id} (target ${target}, commit ${commit})"
 
