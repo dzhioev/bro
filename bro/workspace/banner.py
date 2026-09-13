@@ -80,6 +80,7 @@ class SessionFacts:
       empty when it may summon none, None when it was launched by a surface that
       publishes no list
     - permits — the party actions the session may request, under the same publication rule
+    - party_member — the member name when this session joined an existing party
     - summoned — whether another session summoned this one and waits on its result
     - trail_id — the trail the session is being recorded into; None when nothing
       publishes one (recording off, or not started yet)
@@ -100,6 +101,7 @@ class SessionFacts:
   trail_id: Optional[str]
   repo: Optional[str] = None
   permits: Optional[tuple[str, ...]] = None
+  party_member: Optional[str] = None
 
   @classmethod
   def collect(
@@ -152,6 +154,7 @@ class SessionFacts:
       recording_problem=health.problem(),
       may_summon=summon.may_summon(),
       permits=summon.permits(),
+      party_member=summon.party_member(),
       summoned=summon.summoned(),
       trail_id=trail_id,
     )
@@ -227,6 +230,9 @@ class SessionFacts:
       # container — the label tracks the destination, not the host that launches it
       rows.append(('docker shell:', '', f'{dim}{self.exec_command}{reset}'))
 
+    if self.party_member is not None:
+      rows.append(('party:', '', f'{dim}joined as {self.party_member} — the tree is shared{reset}'))
+
     if self.summoned:
       rows.append(('summoned:', '', f'{dim}yes — a summoner is waiting on the answer{reset}'))
 
@@ -286,6 +292,8 @@ class SessionFacts:
     # asking whether it owes a summoner an answer must not have to read a `no`
     # out of a missing line
     lines.append(f'summoned: {"yes" if self.summoned else "no"}')
+    if self.party_member is not None:
+      lines.append(f'party: joined as {self.party_member} (shared tree)')
     if self.may_summon is not None:
       # spelled out when empty: "this session may summon nobody" is a different
       # answer from a launch surface that publishes no list at all

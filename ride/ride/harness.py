@@ -56,7 +56,7 @@ class Harness(Protocol):
   ) -> ContainerExtras: ...
 
   def prepare_unboxed_env(
-    self, spec: 'SessionSpec', workspace: Workspace, tree: Path, env: dict[str, str]
+    self, spec: 'SessionSpec', records: Path, tree: Path, env: dict[str, str]
   ) -> None: ...
 
 

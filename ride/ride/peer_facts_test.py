@@ -4,6 +4,7 @@ import pytest
 
 from bro.broker.dispatcher import Dispatcher
 from bro.broker.journal import Journal
+from bro.monitor import party_member_dir
 from bro.workspace.paths import workspace_tree
 from ride import pending_summon
 from ride.peer_facts import PeerFact, PeerFacts, PeerIdentity, UnattributablePeer
@@ -78,6 +79,29 @@ def test_spawned_peer_resolves_through_worker_binding(facts):
     f'broker-{CHILD}', workspace_tree(f'broker-{CHILD}')
   )
   assert table.depth(context, CHILD) == 1
+
+
+def test_joined_peer_uses_the_party_tree_and_its_own_trail_pointer(facts):
+  from bro.monitor import trail_pointer
+
+  table, context, workspace = facts
+  table.add(
+    'child-quest',
+    PeerFact('ws', 'dev', frozenset(), member='broker-CH'),
+  )
+  record = context.journal.open('child-quest', 'summon', 'root-quest', ROOT, {'target': 'dev'})
+  context.journal.bind(record, CHILD)
+  context.workers[CHILD] = 'child-quest'
+  records = party_member_dir(workspace.path, 'broker-CH')
+  trail_pointer.write(trail_pointer.session_pointer(records), 'member-trail')
+
+  assert table.identity(context, CHILD) == PeerIdentity('ws', workspace.tree, member='broker-CH')
+  assert table.attribution(context, CHILD) == {
+    'workspace': 'ws',
+    'bro': 'dev',
+    'member': 'broker-CH',
+    'trail_id': 'member-trail',
+  }
 
 
 def test_unknown_and_job_peers_are_unattributable(facts):

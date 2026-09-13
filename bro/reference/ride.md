@@ -250,6 +250,9 @@ A directory under the store that records no workspace is ignored by enumeration,
     session-recorder-health.json  the recording health signal ("Session recording")
     claude/                       claude harness artifacts (recorder/projector logs and live statusLine projection)
   claude/             the claude harness's state dir ("Unboxed Claude-state isolation")
+  party/<member>/     records for a session that joined this workspace's party:
+    session/          the member's session records, with the same shape as above
+    claude/           the member's private Claude state
 ```
 
 The tree sits in its own subdirectory rather than being the workspace directory itself:
@@ -266,6 +269,9 @@ Signals every harness shares sit at its root, a harness's own artifacts under `<
 Every unboxed session puts its scoped store and install-hook output under one private temporary root removed when the session ends, so retained or collected records hold no secret.
 A box keeps their equivalents in its own layer.
 `claude/` belongs to the claude harness in both isolations.
+A joined member keeps the same record shape under `party/<member>/` while sharing the workspace tree.
+Its records are removed after a clean exit and kept after failure or kill;
+the member is not resumable, so its trail is the recovery record.
 The one deliberate exception to all of this is the summon audit, under `<runtime-root>/summon/`, because it must survive a workspace drop.
 
 `workspace.json` is written once at creation and read by every later launch, so nothing downstream re-derives it:
@@ -751,26 +757,31 @@ workspace removal (`--drop`, `ride clean`) deletes it with the workspace.
 ### Summoning another bro
 
 A session can summon another bro over its channel.
-The target starts a one-shot, non-TTY party unless the summon is *manual*, where the user launches an interactive child themselves;
+The target runs as a one-shot, non-TTY session that either starts a party of its own or joins the summoner’s party.
+A *manual* summon instead has the user launch an interactive child themselves;
 see "Manual summon" below.
 The child's credential set, summon allow-list, and permits come from its own seeds and project/host layers under the request's `grant`/`revoke` layer, never by inheriting the requester's sets.
 An explicit request grant is bounded by the corresponding credential, target, or permit the requester holds.
 It runs under the harness the request names, or the launch's `[tool.bro] summon-harness` when it names none.
 Both harnesses run `do-ride solo …`:
 `bro` spawns the target's own LLM process there, while `claude` starts a one-shot managed Claude Code session of the target persona in full mode.
-The request's `party` field accepts `start` in this stage, and its optional `isolation` is `boxed` or `unboxed`.
-The CLI spells those choices as `--start`, `--boxed`, and `--unboxed`.
+The request’s `party` field accepts `start` or `join`, and a start’s optional `isolation` is `boxed` or `unboxed`.
+The CLI spells those choices as `--start`, `--join`, `--boxed`, and `--unboxed`.
 An unmarked request starts boxed when the requester holds `:party.start.boxed`, otherwise unboxed when it holds `:party.start.unboxed`, and otherwise fails naming the permits held;
 it is never converted into a join.
-An explicitly boxed or unboxed request requires the matching start permit.
-The lowering emits `DockerLaunchSpec` or `ProcessLaunchSpec` through the same started-party launcher roots use.
+An explicitly boxed or unboxed start requires the matching start permit.
+A join is always explicit, requires `:party.join`, inherits the summoner’s party isolation, and refuses `isolation`, `into`, and `manual`.
+The started-party lowering emits `DockerLaunchSpec` or `ProcessLaunchSpec` through the common launcher roots use.
+An unboxed join emits a member `ProcessLaunchSpec` in the summoner’s existing tree with an explicit environment snapshot and loopback broker upstream;
+a join into a boxed party is refused until the container execution lowering is available.
 An unboxed child starts in its own process group;
 kill sends SIGTERM only to `do-ride` so its harness-specific shutdown can unwind and flush state, then sends SIGKILL to the group if the process tree or inherited output pipe survives that grace period.
-The request's `llm` recipe resolves within the child's harness and never switches it;
-the child runs with the root session's attachment:
-an attached child bases on the summoner's workspace `HEAD` read at summon time (uncommitted changes never transfer;
-a container summoner's local-only commits are transferred into the attachment first so the child's host-side clone can copy them) unless the request's `into` ref overrides, while a detached root spawns detached children and rejects `into`,
-and the answer comes back synchronously.
+The request’s `llm` recipe resolves within the child’s harness and never switches it;
+the child runs with the root session’s attachment.
+A started child in an attached ride bases on the summoner’s workspace `HEAD` read at summon time (uncommitted changes never transfer;
+a container summoner’s local-only commits are transferred into the attachment first so the child’s host-side clone can copy them) unless the request’s `into` ref overrides, while a detached root starts detached children and rejects `into`.
+A joined child uses the party’s existing tree directly, including its current uncommitted state, and runs no workspace setup or persona provisioning of its own.
+The answer comes back synchronously.
 A nested bro summon stamps the child trail's `summoned_by.trail_id`;
 a root session summon omits provenance until the session recorder publishes its current trail id.
 The UX is the shared `spell::ask` spell (`bros/bro/spells/ask.md`, inherited by every bro);
@@ -778,7 +789,7 @@ underneath it are two client surfaces over the same request:
 
 - `summon <target> <prompt>`, for Bash-capable sessions
   — blocking by default (request id + started trail id on stderr, answer on stdout, non-zero exit with the reason on failure),
-  `--start` / `--boxed` / `--unboxed` select placement.
+  `--start` / `--join` / `--boxed` / `--unboxed` select placement.
   The forwarded fields are `--timeout <s>` / `--into <ref>` / `--hold <level>` / `--grant <name>` / `--revoke <name>` / `--share <ref>` / `--harness <name>` plus the LLM flags;
   an omitted hold leaves the child's unattended default.
   `--share` hands the child read access to an artifact ref — see "Sharing artifacts between peers".
@@ -799,7 +810,8 @@ underneath it are two client surfaces over the same request:
   `rewind show <trail-id>` peeks mid-run.
   Contract details in `bro/summon.py`.
 - the bro service tools (`bro::summon` / `bro::summon_check` / `bro::summon_list`), for bro LLM processes and `--raw` sessions
-  — `summon` blocks for the answer (`detach: true` returns the accepted quest id instead) and takes the CLI's request fields as parameters (`party` / `isolation` / `timeout` / `into` / `hold` / `grant` / `revoke` / `share` / `llm` / `harness`);
+  — `summon` blocks for the answer (`detach: true` returns the accepted quest id instead) and takes the CLI’s request fields as parameters:
+  `party: start|join` / `isolation` / `timeout` / `into` / `hold` / `grant` / `revoke` / `share` / `llm` / `harness`;
   `summon_check` returns pending or completed from the same repeatable query and loops short long-polls with `wait: true`;
   `summon_list` mirrors the paginated CLI listing wherever the broker channel mounts the summon tools.
   A blocking tool call owns its channel client so cancellation aborts the current short wait, while the host journal retains the result;
@@ -857,9 +869,9 @@ The summoner's side is the ordinary detach flow:
 the token works with `summon check` / `summon list` / `summon watch`, showing `pending` until the user launches.
 
 Host side, `PeerFacts` (`ride/ride/peer_facts.py`) holds one row keyed by the quest a peer answers:
-workspace, bro, effective allow-list and permits, credential-scope inputs (`grant`, `revoke`, `llm`, `harness`), and whether the child is manual.
+workspace, optional joined-member name, bro, effective allow-list and permits, credential-scope inputs (`grant`, `revoke`, `llm`, `harness`), and whether the child is manual.
 The journal's host-anchored quest seeds the root row;
-an authorized summon adds its child row before spawning, with the channel-named workspace filled at spawn or the claimed workspace filled for a manual child.
+an authorized summon adds its child row before spawning, with a started child’s channel-named workspace, a joined child’s inherited workspace plus channel-named member, or the claimed workspace for a manual child filled at spawn.
 Every requester resolves through one join
 — peer to answered quest through the dispatcher's worker binding, then quest to facts row
 — and depth is the journal ancestry length.
@@ -884,14 +896,16 @@ A peer the control cannot attribute a bro to is denied, and the launch-resolved 
 The root sits at depth 0, and a request that would create a child past the configured `summon-depth` is denied.
 Denials reply immediately and land in the journal and audit as `denied` transitions (reason, quest id, summoner, and bounded request args).
 Each spawned child records `summoned_by` provenance from the requester's current trail plus the summoning bro's own `tool_call` step id when the request carries one.
-Requester attribution has one shape in the audit: `{workspace, bro, trail_id?}`.
-The trail is read from that workspace's session pointer for every request because Claude segments move it, with the answered quest's journal `trail` mark as fallback.
+Requester attribution has one shape in the audit: `{workspace, member?, bro, trail_id?}`.
+The trail is read from that session’s pointer for every request because Claude segments move it
+— the workspace’s `session/` for its first member, or `party/<member>/session/` for a joined one
+— with the answered quest’s journal `trail` mark as fallback.
 The authorized spawn goes through the composite spawner with the requesting peer as parent.
-`SummonSpawner` lowers the request off-loop through the common started-party launcher, then dispatches its concrete Docker or process description;
-a grandchild's lifecycle routes to the child that summoned it, and root exit still tears down the whole tree.
+`SummonSpawner` lowers the request off-loop through the started-party launcher or joined-member process builder, then dispatches its concrete Docker or process description;
+a grandchild’s lifecycle routes to the child that summoned it, and root exit still tears down the whole tree.
 Every event lands a host log line and a durable audit row under `<runtime-root>/summon/<name>.jsonl`.
 Each row keys the ride under `ride`, using the root workspace name.
-Each entry names its actual `summoner` as `{workspace, bro, trail_id?}`, plus target, bounded args, transition, trail id, and terminal outcome.
+Each entry names its actual `summoner` as `{workspace, member?, bro, trail_id?}`, plus target, bounded args, transition, trail id, and terminal outcome.
 Live readers never read that audit back:
 check, list, watch, and the session-local statusLine projector query the caller-scoped in-memory journal over their own broker channel, so the same surfaces work at any summon depth.
 The scope begins with quests the caller requested and includes their descendants;
@@ -901,12 +915,14 @@ the session root's at launch, a summoned child's own resolved sets at its spawn)
 enforcement stays entirely host-side.
 Root exit kills in-flight children with a loud log naming what was killed;
 a result lost that way stays recoverable from the child's trail.
-A child supervisor removes its throwaway workspace only after a clean exit and retains it after failure or kill for inspection and recovery;
-the unboxed process handle always removes the private credential state separately, and a failed removal fails teardown rather than reporting the child complete.
-Each authorized spawn records the child's run as its `broker-<channel>` workspace's resume record
-— the same solo session spec a `ride solo` launch under the child's harness would record
+A started-child supervisor removes its throwaway workspace only after a clean exit and retains it after failure or kill for inspection and recovery.
+A joined-member supervisor removes `party/<member>/` only after a clean exit and retains it after failure or kill;
+the member has no workspace or resume record, so its trail is its recovery surface.
+The unboxed process handle always removes the private credential state separately, and a failed removal fails teardown rather than reporting the child complete.
+Each authorized start records the child’s run as its `broker-<channel>` workspace’s resume record
+— the same solo session spec a `ride solo` launch under the child’s harness would record
 — so `ride list` shows the child under its prompt and a surviving workspace resumes like any kept solo workspace:
-`ride resume broker-<channel>` opens an interactive `bro chat` continuing the child's trail (see "Bro harness").
+`ride resume broker-<channel>` opens an interactive `bro chat` continuing the child’s trail (see "Bro harness").
 
 ### Sharing artifacts between peers
 
@@ -921,7 +937,7 @@ Peers pass files by content-addressed reference through the ride's store the lau
 - `artifact get <ref>` makes a ref visible to the requesting peer and prints the path it appears at.
   A boxed peer reads it under `/var/ride/artifacts`
   — a per-peer view directory bind-mounted read-only, so a ref shared while the peer runs appears without a remount and writes fail with `EROFS`
-  — while an unboxed root, having no mount namespace, gets a private copy under the workspace's own `artifacts/` directory.
+  — while an unboxed party, having no mount namespace, gets a private copy under the workspace’s own `artifacts/` directory, shared by its members.
   Either way the path is not for editing in place;
   a peer that wants an editable copy makes one.
 - Reach follows the launch tree, and nothing a peer says widens it:
@@ -1095,10 +1111,10 @@ Wrappers and session daemons rely on a small set of env vars:
   in a container it names the host path bound at `/workspace`.
 - `RIDE_RUNTIME` — launcher-side absolute path to the ride's materialized host runtime.
   Manual-summon surfaces use its `venv/bin/ride` so the child starts from the same runtime.
-- `RIDE_COMMAND` — the user-visible invocation this session launched under, reconstructed via `SessionSpec.to_command_argv` for telemetry and the banner:
-  the `ride solo|along …` command with its flags, or `ride resume <ref>` for a resume.
-  Set by `start_session`, and by the summon lowering into a summoned child's env from its recorded spec.
-  Defaulted into `BRO_SHELL_COMMAND` if that is not already set.
+- `RIDE_COMMAND` — the user-visible invocation this session launched under for telemetry and the banner:
+  the reconstructed `ride solo|along …` command with its flags, `ride resume <ref>` for a resume, or the `summon --join …` request that started a joined member.
+  Set by `start_session` and by the summon lowering.
+  A joined member also sets the same value as `BRO_SHELL_COMMAND`, so it never inherits the party starter’s outer command.
 - `RIDE_BRO` — names the bro the session runs as (the selected bro).
   Set explicitly in the container env at every boxed launch site
   — a `ride along` container carries its session bro, a bro-harness container or summon child the launched bro (`ride/ride/spawn.py`)
@@ -1125,10 +1141,11 @@ Wrappers and session daemons rely on a small set of env vars:
   — reporting the status the tool left in the session state dir rather than whatever the harness process exited with.
   Its presence co-gates the tool's mount
   — without a runner to signal there is nothing to terminate.
-- `RIDE_SESSION_DIR` — the session's own state directory (see "Workspaces"):
-  the workspace's `session/` by absolute path in unboxed isolation, `/var/ride/session` through the container bind.
+- `RIDE_SESSION_DIR` — the session’s own state directory (see "Workspaces"):
+  the workspace’s `session/` for its first member, or `party/<member>/session/` for a joined member;
+  unboxed isolation uses the absolute path, while boxed isolation reaches it through a container bind.
   Set by every managed launch for both harnesses
-  — `ride`'s own in both isolations, and a summon's child spawn.
+  — `ride`’s own in both isolations, and a summon’s child spawn.
   `do-ride` requires it before starting the harness.
   Read by `bro/monitor` — a process without it is in no managed session and so has no trail pointer to publish and no recording health to report.
 - `RIDE_TASK_ID` — set by `dive-in` when it has resolved a task (the canonical brog task id);
@@ -1146,6 +1163,8 @@ Wrappers and session daemons rely on a small set of env vars:
   read by the Claude runner to emit the child's run lifecycle over the broker channel (a bro-run child emits from `bro.native.runner.Runner.run`,
   a summoned interactive one its `trail` mark from `Runner.send`'s first turn), by the service-server build to mount the `answer` tool,
   and by `ride banner` and `bro.prompts.session_fragment` so the run can tell in-session that it owes a summoner an answer.
+- `RIDE_PARTY_MEMBER` — the channel-derived member name when a session joined an existing party.
+  Its presence makes the banner and session prompt state that the tree is shared, and makes `do-ride` skip persona workspace provisioning.
 - `RIDE_MAY_SUMMON` — the run's own effective summon allow-list, comma-separated and empty when it may summon nothing.
   The env name and its encoding are owned by `bro.summon`;
   set by the launch surfaces for a session root and by the summon lowering (or, for a manual child, the `--summoned` launch from the pending record) for a summoned child (its own resolved list, never its summoner's),

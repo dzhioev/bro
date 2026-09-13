@@ -14,7 +14,7 @@ from bro.base.scope import scope_override_key, scope_revoke_key
 from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV
 from bro.llm.llm import LLMSpec
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_session_dir
-from bro.summon import RUNTIME_ENV, summoned_child_env
+from bro.summon import PARTY_MEMBER_ENV, RUNTIME_ENV, summoned_child_env
 from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.paths import (
   CONTAINER_SESSION_DIR,
@@ -325,6 +325,63 @@ def container_launch(
   )
 
 
+def prepared_unboxed_session_launch(
+  spec: SessionSpec,
+  workspace: Workspace,
+  launch_scope: ScopedLaunch,
+  *,
+  human_env: Mapping[str, str],
+  runtime_bundle: RuntimeBundle,
+  forward_env: bool,
+  env: Mapping[str, str],
+  credential_directory: Path,
+  install_directory: Path,
+  records_directory: Path,
+) -> ProcessLaunch:
+  """Describe a session process in an already-prepared unboxed workspace tree."""
+  harness = get_harness(spec.harness)
+  runtime_bundle.materialize_host()
+  tree = workspace.tree
+  session_command = do_ride_command(spec, harness_flags=harness.session_flags(spec))
+  command = [str(runtime_bundle.host_venv / 'bin' / session_command[0]), *session_command[1:]]
+  runner_env = runtime_bundle.host_session_env()
+  runner_env.pop(PARTY_MEMBER_ENV, None)
+  if not forward_env:
+    runner_env.pop(CHANNEL_ENV, None)
+    runner_env.pop(UPSTREAM_ENV, None)
+  runner_env.update(env)
+  runner_env['RIDE_BRO'] = spec.bro
+  runner_env[RUNTIME_ENV] = str(runtime_bundle.host_root)
+  runner_env[ISOLATION_ENV] = Isolation.UNBOXED.value
+  runner_env['RIDE_HOST_WORKSPACE'] = str(tree)
+  runner_env.update(human_env)
+  if workspace.repo is not None:
+    runner_env['RIDE_REPO'] = str(workspace.repo)
+    if workspace.metadata.branch is None:
+      raise ValueError('attached unboxed workspace has no recorded branch')
+    runner_env[BRANCH_ENV] = workspace.metadata.branch
+  else:
+    runner_env.pop('RIDE_REPO', None)
+    runner_env.pop(BRANCH_ENV, None)
+  store_directory = materialize_scoped_store(launch_scope.store, credential_directory)
+  runner_env['BRO_STORE'] = str(store_directory)
+  runner_env['BRO_INSTALL_KINDS'] = ' '.join(sorted(launch_scope.hydrated_kinds))
+  runner_env[INSTALL_DIRECTORY_ENV] = str(install_directory)
+  runner_env[RESOLVED_LLM_ENV] = encode_resolved_llm(spec.resolved_llm)
+  runner_env[SESSION_DIR_ENV] = str(workspace_session_dir(records_directory))
+  if spec.no_trails:
+    runner_env['TRAILS_DISABLED'] = '1'
+  else:
+    runner_env.pop('TRAILS_DISABLED', None)
+  harness.prepare_unboxed_env(spec, records_directory, tree, runner_env)
+  return ProcessLaunch(
+    command=command,
+    cwd=str(tree),
+    env=runner_env,
+    interactive=not spec.solo,
+  )
+
+
 def started_party_launch(
   spec: SessionSpec,
   workspace: Workspace,
@@ -365,7 +422,6 @@ def started_party_launch(
 
   if len(mounts) > 0:
     raise ValueError('an unboxed started party cannot carry container mounts')
-  runtime_bundle.materialize_host()
   tree = workspace.tree
   if repository is None:
     if workspace.metadata.tree is None:
@@ -380,40 +436,17 @@ def started_party_launch(
     if not provision_workspace(tree):
       raise RuntimeError(f'failed to provision workspace {tree}')
 
-  session_command = do_ride_command(spec, harness_flags=harness.session_flags(spec))
-  command = [str(runtime_bundle.host_venv / 'bin' / session_command[0]), *session_command[1:]]
-  runner_env = runtime_bundle.host_session_env()
-  if not forward_env:
-    runner_env.pop(CHANNEL_ENV, None)
-    runner_env.pop(UPSTREAM_ENV, None)
-  runner_env.update(env)
-  runner_env['RIDE_BRO'] = spec.bro
-  runner_env[RUNTIME_ENV] = str(runtime_bundle.host_root)
-  runner_env[ISOLATION_ENV] = Isolation.UNBOXED.value
-  runner_env['RIDE_HOST_WORKSPACE'] = str(tree)
-  runner_env.update(human_env)
-  if workspace.repo is not None:
-    runner_env['RIDE_REPO'] = str(workspace.repo)
-    if workspace.metadata.branch is None:
-      raise ValueError('attached unboxed workspace has no recorded branch')
-    runner_env[BRANCH_ENV] = workspace.metadata.branch
-  else:
-    runner_env.pop('RIDE_REPO', None)
-    runner_env.pop(BRANCH_ENV, None)
-  store_directory = materialize_scoped_store(launch_scope.store, credential_directory)
-  runner_env['BRO_STORE'] = str(store_directory)
-  runner_env['BRO_INSTALL_KINDS'] = ' '.join(sorted(launch_scope.hydrated_kinds))
-  runner_env[INSTALL_DIRECTORY_ENV] = str(install_directory)
-  runner_env[RESOLVED_LLM_ENV] = encode_resolved_llm(spec.resolved_llm)
-  runner_env[SESSION_DIR_ENV] = str(workspace_session_dir(workspace.path))
-  if spec.no_trails:
-    runner_env['TRAILS_DISABLED'] = '1'
-  harness.prepare_unboxed_env(spec, workspace, tree, runner_env)
-  return ProcessLaunch(
-    command=command,
-    cwd=str(tree),
-    env=runner_env,
-    interactive=not spec.solo,
+  return prepared_unboxed_session_launch(
+    spec,
+    workspace,
+    launch_scope,
+    human_env=human_env,
+    runtime_bundle=runtime_bundle,
+    forward_env=forward_env,
+    env=env,
+    credential_directory=credential_directory,
+    install_directory=install_directory,
+    records_directory=workspace.path,
   )
 
 

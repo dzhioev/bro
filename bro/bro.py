@@ -240,8 +240,8 @@ def _answer_tool(wire: mcp.Wire, variables: Variables) -> llm_mcp.Tool:
 # time out while the host-owned quest keeps running.
 # The recovery wording remains conditioned on the mounted service roster.
 _SUMMON_DESCRIPTION = (
-  'summon another bro: it runs your prompt in a started party with its own workspace '
-  'and credentials, and this call blocks — typically for minutes — until its answer '
+  'summon another bro: it runs your prompt in a new party or joins your party, '
+  'and this call blocks — typically for minutes — until its answer '
   'comes back. pass `target` (a bro name; you have your own summon allow-list, and '
   'a target outside it — or a summon nested past the depth cap — fails immediately '
   'with the reason) and `prompt` (the full request, self-contained — the target '
@@ -270,8 +270,9 @@ _SUMMON_DESCRIPTION = (
   'OAuth token) fails the summon, whatever the target itself declares. the '
   'optional `share` list names artifact refs (from `artifact mint`) to hand the '
   'child read access to — only refs this session can itself read. '
-  'the optional `party` (`start`) and `isolation` (`boxed` or `unboxed`) fields place '
-  'the child; an unmarked request starts boxed when permitted, otherwise unboxed. '
+  'the optional `party` (`start` or `join`) and `isolation` (`boxed` or `unboxed`) fields '
+  'place the child; an unmarked request starts boxed when permitted, otherwise unboxed. '
+  'a join shares your tree and refuses `isolation`, `into`, and `manual`. '
   'fails with the reason when the run raises, errors out, or dies. `detach: true` '
   'waits for host acceptance, then returns the quest id; a denial or launch failure '
   'before acceptance fails this call. poll that id with repeatable `summon_check` reads. '
@@ -310,8 +311,8 @@ _SUMMON_LIST_DESCRIPTION = (
 _BANNER_DESCRIPTION = (
   "return this session's environment facts as `key: value` lines: `isolation` "
   '(`boxed` or `unboxed`), workspace name and paths, the bro persona, the launch '
-  'command, the bros it may delegate to (`may_summon`), its party permits, and the trail it is '
-  'recorded into (`trail_id`). call it once at session start to detect your '
+  'command, joined-party membership, the bros it may delegate to (`may_summon`), its party '
+  'permits, and the trail it is recorded into (`trail_id`). call it once at session start to detect your '
   'environment.'
 )
 
@@ -351,7 +352,7 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
     share: Optional[list[str]] = None,
     llm: Optional[str] = None,
     harness: Optional[str] = None,
-    party: Optional[Literal['start']] = None,
+    party: Optional[Literal['start', 'join']] = None,
     isolation: Optional[Literal['boxed', 'unboxed']] = None,
     manual: bool = False,
   ) -> str:

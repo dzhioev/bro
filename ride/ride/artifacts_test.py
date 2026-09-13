@@ -228,6 +228,16 @@ class TestMaterialize:
     assert store.materialize(_root_identity(), ref) == path
     assert (workspace_dir('ws') / 'artifacts' / ref).read_bytes() == b'edited'
 
+  def test_an_unboxed_joined_member_uses_the_partys_workspace_view(self, workspace):
+    store = ArtifactStore(workspace, root_boxed=False)
+    ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
+    member = PeerIdentity(workspace='ws', tree=workspace.tree, member='broker-CH')
+
+    path = Path(store.materialize(member, ref))
+
+    assert path == workspace.path / 'artifacts' / ref
+    assert path.read_bytes() == b'payload'
+
   def test_a_manual_child_is_denied_with_the_reason(self, store):
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
     store.share([ref], to='my-manual', by='ws')
