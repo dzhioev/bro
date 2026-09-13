@@ -1045,6 +1045,7 @@ class TestUnboxedSession:
     monkeypatch.setenv('RIDE_BRANCH', 'workspace-parent')
     monkeypatch.setenv('BROKER_CHANNEL', 'ambient-channel')
     monkeypatch.setenv('BROKER_UPSTREAM', 'ambient-upstream')
+    monkeypatch.setenv('RIDE_PARTY_MEMBER', 'broker-parent')
 
     launch = ride_session.started_party_launch(
       replace(_spec(isolation=Isolation.UNBOXED), repo=None),
@@ -1066,6 +1067,7 @@ class TestUnboxedSession:
     assert 'RIDE_BRANCH' not in launch.env
     assert 'BROKER_CHANNEL' not in launch.env
     assert 'BROKER_UPSTREAM' not in launch.env
+    assert 'RIDE_PARTY_MEMBER' not in launch.env
     assert launch.env['MARKER'] == 'child'
 
   def test_external_tree_runs_from_a_given_runtime(self, monkeypatch, tmp_path):

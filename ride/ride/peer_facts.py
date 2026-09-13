@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from bro.base.scope import DEFAULT_PERMITS
+from bro.monitor import party_member_dir
 from bro.monitor.trail_pointer import read, session_pointer
 from bro.workspace.paths import workspace_dir
 from ride import pending_summon
@@ -30,6 +31,7 @@ class PeerFact:
   workspace: Optional[str]
   bro: str
   allow_list: frozenset[str]
+  member: Optional[str] = None
   permits: frozenset[str] = DEFAULT_PERMITS
   grant: tuple[str, ...] = ()
   revoke: tuple[str, ...] = ()
@@ -43,6 +45,7 @@ class PeerFact:
 class PeerIdentity:
   workspace: str
   tree: Path
+  member: Optional[str] = None
   manual: bool = False
 
 
@@ -71,7 +74,14 @@ class PeerFacts:
     self._facts[quest] = fact
 
   def note_workspace(self, quest: str, workspace: str) -> None:
-    self.for_quest(quest).workspace = workspace
+    fact = self.for_quest(quest)
+    fact.workspace = workspace
+    fact.member = None
+
+  def note_member(self, quest: str, workspace: str, member: str) -> None:
+    fact = self.for_quest(quest)
+    fact.workspace = workspace
+    fact.member = member
 
   def for_quest(self, quest: str) -> PeerFact:
     fact = self._facts.get(quest)
@@ -89,7 +99,7 @@ class PeerFacts:
     quest, fact = self.resolve(context, peer)
     workspace = self._workspace(quest, fact)
     tree = self._root_tree if quest == self._root_quest else Workspace.open(workspace).tree
-    return PeerIdentity(workspace, tree, fact.manual)
+    return PeerIdentity(workspace, tree, member=fact.member, manual=fact.manual)
 
   def depth(self, context: 'Dispatcher', peer: 'Peer') -> int:
     quest, _ = self.resolve(context, peer)
@@ -111,8 +121,13 @@ class PeerFacts:
     fact = self.for_quest(quest)
     workspace = self._workspace(quest, fact)
     attribution = {'workspace': workspace, 'bro': fact.bro}
+    if fact.member is not None:
+      attribution['member'] = fact.member
     workspace_path = self._root_path if quest == self._root_quest else workspace_dir(workspace)
-    trail_id = read(session_pointer(workspace_path))
+    records_path = (
+      workspace_path if fact.member is None else party_member_dir(workspace_path, fact.member)
+    )
+    trail_id = read(session_pointer(records_path))
     if trail_id is None:
       record = journal.records.get(quest)
       trail_id = record.trail_id if record is not None else None

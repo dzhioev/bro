@@ -119,9 +119,9 @@ class BroHarness:
     return ContainerExtras(env={}, mounts=())
 
   def prepare_unboxed_env(
-    self, spec: 'SessionSpec', workspace: Workspace, tree: Path, env: dict[str, str]
+    self, spec: 'SessionSpec', records: Path, tree: Path, env: dict[str, str]
   ) -> None:
-    del spec, workspace, tree, env
+    del spec, records, tree, env
 
 
 BRO = BroHarness()
