@@ -1,5 +1,6 @@
 import os
 import shutil
+import socket
 import subprocess
 import sys
 from dataclasses import replace
@@ -22,9 +23,20 @@ import ride.workspace.docker as workspace_docker
 import ride.workspace.store as workspace_store
 from bro.broker.journal import Journal
 from bro.broker.transports.tcp import LOCAL_HOST, Endpoint
-from bro.monitor import SESSION_DIR_ENV, party_member_dir, workspace_session_dir
+from bro.monitor import (
+  SESSION_DIR_ENV,
+  party_member_dir,
+  workspace_party_dir,
+  workspace_session_dir,
+)
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
-from bro.workspace.paths import CONTAINER_SESSION_DIR, summon_dir, workspace_dir, workspace_tree
+from bro.workspace.paths import (
+  CONTAINER_PARTY_DIR,
+  CONTAINER_SESSION_DIR,
+  summon_dir,
+  workspace_dir,
+  workspace_tree,
+)
 from ride.runtime_bundle import RuntimeBundle
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
@@ -75,6 +87,10 @@ def _do_ride_environment(workspace_name: str) -> dict[str, str]:
 
 def _session_state_mount(workspace_name: str) -> str:
   return f'{workspace_session_dir(workspace_dir(workspace_name))}:{CONTAINER_SESSION_DIR}'
+
+
+def _party_mount(workspace_name: str) -> str:
+  return f'{workspace_party_dir(workspace_dir(workspace_name))}:{CONTAINER_PARTY_DIR}'
 
 
 def _lower_boxed(
@@ -204,6 +220,7 @@ class TestSummonLowering:
         runtime_bundle_hash='bundle-hash',
         extra_mounts=(
           _session_state_mount('broker-CH'),
+          _party_mount('broker-CH'),
           ride.artifacts.view_mount(SESSION, 'broker-CH'),
         ),
         repo=Path('/proj'),
@@ -427,6 +444,7 @@ class TestSummonLowering:
       '/host/state:/state',
       '/host/trails:/var/ride/trails',
       _session_state_mount('broker-CH'),
+      _party_mount('broker-CH'),
       ride.artifacts.view_mount(SESSION, 'broker-CH'),
     )
 
@@ -570,6 +588,7 @@ class TestSummonLowering:
       artifacts,
     )
 
+    assert isinstance(lowered, ride.spawn.ProcessLaunchSpec)
     records = party_member_dir(workspace.path, 'broker-CH')
     assert lowered.cwd == str(workspace.tree)
     assert lowered.workspace is None
@@ -585,6 +604,105 @@ class TestSummonLowering:
     assert lowered.env['RIDE_SUMMONED'] == '1'
     assert lowered.cleanup_directory is not None
     shutil.rmtree(lowered.cleanup_directory)
+    shutil.rmtree(records)
+
+  def _boxed_join(self, monkeypatch, tmp_path) -> ride.spawn.ExecLaunchSpec:
+    workspace = Workspace.ensure(PARENT, None, Isolation.BOXED)
+    monkeypatch.setattr(ride.session, 'find_container_id', lambda tree: 'cid-party')
+    launch = ride.spawn.SummonLaunchSpec(
+      target='dev',
+      prompt='work beside me',
+      parent=PARENT,
+      parent_tree=workspace.tree,
+      summoner=SUMMONER,
+      may_summon=('reviewer',),
+      permits=('party.join',),
+      harness='bro',
+      party='join',
+      isolation=None,
+    )
+    runtime_bundle = MagicMock(spec=RuntimeBundle)
+    runtime_bundle.host_root = Path('/runtime')
+    runtime_bundle.recorded_reference = None
+    lowered = ride.spawn._lower_join(launch, 'broker-CH', runtime_bundle, _artifacts())
+    assert isinstance(lowered, ride.spawn.ExecLaunchSpec)
+    return lowered
+
+  def test_boxed_join_lowers_to_a_member_exec(self, lowering_harness, monkeypatch, tmp_path):
+    lowered = self._boxed_join(monkeypatch, tmp_path)
+    workspace = Workspace.open(PARENT)
+    records = party_member_dir(workspace.path, 'broker-CH')
+    assert lowered.party_workspace == PARENT
+    assert lowered.records_directory == str(records)
+    assert workspace_session_dir(records).is_dir()
+    member = lowered.launch
+    assert member.container == 'cid-party'
+    assert member.member == 'broker-CH'
+    assert member.command == [
+      'do-ride', 'solo', '--workspace', PARENT, '--harness', 'bro',
+      '--hold', 'unattended', 'dev', 'work beside me',
+    ]  # fmt: skip
+    assert member.secrets == {'aws', 'trails'}
+    assert member.optional_secrets == {'openai'}
+    ride_command = 'summon --join --harness bro dev work beside me'
+    resolved = ride.harness.get_harness('bro').resolve_llm(None, 'dev')
+    assert member.env == {
+      **workspace_docker.MEMBER_BASELINE_ENV,
+      'RIDE_BRO': 'dev',
+      'RIDE_WORKSPACE': PARENT,
+      'RIDE_HOST_WORKSPACE': str(workspace.tree),
+      'RIDE_HOST': socket.gethostname(),
+      'RIDE_IN_CONTAINER': '1',
+      'RIDE_ISOLATION': 'boxed',
+      ride.do_ride.RESOLVED_LLM_ENV: ride.do_ride.encode_resolved_llm(resolved.dump()),
+      ride.do_ride.INSTALL_DIRECTORY_ENV: '/home/ride/.bro-party/broker-CH/environment',
+      SESSION_DIR_ENV: '/var/ride/party/broker-CH/session',
+      'RIDE_TRAILS_ROOT': '/var/ride/party/broker-CH/trails',
+      'RIDE_RUNTIME': '/runtime',
+      'BRO_SHELL_COMMAND': ride_command,
+      'RIDE_COMMAND': ride_command,
+      'RIDE_PARTY_MEMBER': 'broker-CH',
+      'RIDE_SUMMONED': '1',
+      'RIDE_MAY_SUMMON': 'reviewer',
+      'RIDE_PERMITS': 'party.join',
+      'RIDE_SUMMONER': '{"session":"ws"}',
+    }
+    assert 'BRO_STORE' not in member.env  # delivered into the container at spawn
+    shutil.rmtree(records)
+
+  def test_boxed_join_requires_a_running_container(self, lowering_harness, monkeypatch, tmp_path):
+    workspace = Workspace.ensure(PARENT, None, Isolation.BOXED)
+    monkeypatch.setattr(ride.session, 'find_container_id', lambda tree: None)
+    launch = ride.spawn.SummonLaunchSpec(
+      target='dev',
+      prompt='p',
+      parent=PARENT,
+      parent_tree=workspace.tree,
+      summoner=SUMMONER,
+      may_summon=(),
+      harness='bro',
+      party='join',
+      isolation=None,
+    )
+    runtime_bundle = MagicMock(spec=RuntimeBundle)
+    runtime_bundle.host_root = Path('/runtime')
+    runtime_bundle.recorded_reference = None
+    with pytest.raises(RuntimeError, match='no running container'):
+      ride.spawn._lower_join(launch, 'broker-CH', runtime_bundle, _artifacts())
+
+  def test_boxed_member_records_under_its_own_party_records(
+    self, lowering_harness, monkeypatch, tmp_path
+  ):
+    # a local-trails member joining a service-backed or --no-trails first session
+    # cannot use that session's /var/ride/trails bind, which is absent for its
+    # scope; it records under the party mount its own records live in, which the
+    # container always carries, and it records mandatorily (never --no-trails)
+    lowered = self._boxed_join(monkeypatch, tmp_path)
+    workspace = Workspace.open(PARENT)
+    records = party_member_dir(workspace.path, 'broker-CH')
+    assert lowered.launch.env['RIDE_TRAILS_ROOT'] == '/var/ride/party/broker-CH/trails'
+    assert (records / 'trails').is_dir()
+    assert '--no-trails' not in lowered.launch.command  # the member records mandatorily
     shutil.rmtree(records)
 
   @pytest.mark.asyncio
@@ -716,6 +834,7 @@ raise SystemExit(3)
     spawner = ride.spawn.SummonSpawner(
       docker,
       ride.spawn.ProcessSpawner(),
+      ride.spawn.ExecSpawner(),
       runtime_bundle,
       _container_runtime(),
       facts,
@@ -748,6 +867,7 @@ raise SystemExit(3)
     spawner = ride.spawn.SummonSpawner(
       ride.spawn.DockerSpawner(),
       ride.spawn.ProcessSpawner(),
+      ride.spawn.ExecSpawner(),
       MagicMock(),
       _container_runtime(),
       _facts_expecting('X-1'),
@@ -935,11 +1055,42 @@ class TestClaudeSummonLowering:
       _runtime_bundle(tmp_path),
       _artifacts(),
     )
+    assert isinstance(lowered, ride.spawn.ProcessLaunchSpec)
     records = party_member_dir(workspace.path, 'broker-CH')
     assert seen == [(records, workspace.tree)]
     assert lowered.env[CLAUDE_CONFIG_DIR_ENV] == str(records / 'claude')
     assert lowered.cleanup_directory is not None
     shutil.rmtree(lowered.cleanup_directory)
+    shutil.rmtree(records)
+
+  def test_boxed_join_provisions_claude_state_under_the_member_records(
+    self, claude_harness, monkeypatch, tmp_path
+  ):
+    import json
+
+    from bro.monitor import CLAUDE_CONFIG_DIR_ENV
+
+    workspace = Workspace.ensure(PARENT, None, Isolation.BOXED)
+    monkeypatch.setattr(ride.session, 'find_container_id', lambda tree: 'cid-party')
+    runtime_bundle = MagicMock(spec=RuntimeBundle)
+    runtime_bundle.host_root = Path('/runtime')
+    runtime_bundle.recorded_reference = None
+
+    lowered = ride.spawn._lower_join(
+      self._launch(repo=None, parent_tree=workspace.tree, party='join', isolation=None),
+      'broker-CH',
+      runtime_bundle,
+      _artifacts(),
+    )
+
+    assert isinstance(lowered, ride.spawn.ExecLaunchSpec)
+    records = party_member_dir(workspace.path, 'broker-CH')
+    assert lowered.launch.env[CLAUDE_CONFIG_DIR_ENV] == '/var/ride/party/broker-CH/claude'
+    assert lowered.launch.env['DISABLE_INSTALLATION_CHECKS'] == '1'
+    settings = json.loads((records / 'claude' / 'settings.json').read_text())
+    assert settings['skipDangerousModePermissionPrompt'] is True
+    seeded = json.loads((records / 'claude' / '.claude.json').read_text())
+    assert seeded['projects'] == {'/workspace': {'hasTrustDialogAccepted': True}}
     shutil.rmtree(records)
 
   def test_lowers_to_a_ride_solo_claude_launch(self, claude_harness):
@@ -963,6 +1114,7 @@ class TestClaudeSummonLowering:
     assert lowered.launch.extra_mounts == (
       '/host/claude:/home/ride/.claude',
       _session_state_mount('broker-CH'),
+      _party_mount('broker-CH'),
       ride.artifacts.view_mount(SESSION, 'broker-CH'),
     )
     assert lowered.launch.tty is False

@@ -153,6 +153,8 @@ def export_trails(store: TrailsStore, trail_ids: list[str], root: Path) -> list[
 
 def import_layout(root: Path, store: TrailsStore) -> list[dict]:
   """Import every trail the layout at `root` holds into `store`, parents
-  first; returns each import's result."""
+  first; returns each import's result. A destination that accepts external
+  fork/summon parents (a `LocalStore(external_parents_ok=True)`) takes a trail
+  whose parent was recorded to another backend."""
   source = LayoutSource(root)
   return [copy_trail(source, header, store) for header in parents_first(source.headers())]

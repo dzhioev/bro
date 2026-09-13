@@ -9,8 +9,13 @@ from bro.workspace.git import git_run
 CONTAINER_TRAILS_ROOT = Path('/var/ride/trails')
 CONTAINER_ARTIFACTS_ROOT = Path('/var/ride/artifacts')
 CONTAINER_SESSION_DIR = Path('/var/ride/session')
+CONTAINER_PARTY_DIR = Path('/var/ride/party')
 _DATA_HOME_ENV = 'XDG_DATA_HOME'
 ISOLATION_ENV = 'RIDE_ISOLATION'
+# overrides the local trails backend's root; a boxed party member points it at
+# its own records under the party mount, since the ride-wide /var/ride/trails
+# bind is the first session's and may be absent for its scope
+TRAILS_ROOT_ENV = 'RIDE_TRAILS_ROOT'
 # a name is one path component, and also becomes a git branch and a docker
 # container name; this is the narrowest of the three
 _WORKSPACE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]*')
@@ -108,6 +113,9 @@ def fresh_workspace_name(base: str) -> str:
 
 
 def trails_dir() -> Path:
+  override = os.environ.get(TRAILS_ROOT_ENV)
+  if override is not None:
+    return Path(override)
   if os.environ.get('RIDE_IN_CONTAINER') is not None:
     return CONTAINER_TRAILS_ROOT
   return runtime_base() / 'trails'
