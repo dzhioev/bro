@@ -30,13 +30,15 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
 - `build_context.py` — normalized, separate runtime and project-image contexts;
   path attachments read the working tree, URL attachments the resolved commit
 - `docker.py` — runtime/project image hashing and builds, plus lazy per-ride container-runtime resolution with the daemon mount preflight;
-  broker-free launch descriptions, root-bounded bind validation, container creation, scoped-store copy, attach suspension, Docker inspection, and the bridge gateway a container reaches its launcher through
+  broker-free launch descriptions, root-bounded bind validation, container creation, scoped-store copy, member-exec preparation and checked in-container kills,
+  attach suspension, Docker inspection, and the bridge gateway a container reaches its launcher through
 - `metadata.py` — strict `workspace.json` records, boxed/unboxed isolation, and optional external-tree identity
 - `model.py` — workspace factories, namespace/session locking, external-tree ownership, inspection, clean-exit records, and isolation-specific teardown
 - `worktrees.py` — the surviving unboxed `setup.sh` runner
 - `clones.py` — clone creation for every attached tree, upstream retargeting, base checkout, and submodule initialization
 - `containers.py` — boxed execution and attachment plus the broker availability gate
-- `spawn.py` — boxed and unboxed-process broker spawner adapters, bounded child output, process-group kills, throwaway-workspace or joined-member record teardown, private-credential teardown, terminal ownership, and launcher-log redirection
+- `spawn.py` — boxed, unboxed-process, and member-exec broker spawner adapters, bounded child output, process-group and record-checked exec kills,
+  the shared party-member registry, throwaway-workspace or joined-member record teardown, a boxed member's local-trail adoption into the ride's host store, private-credential teardown, terminal ownership, and launcher-log redirection
 - `store.py` — scoped credential tiers, override finalization, directory materialization, and container tar packing
 - `launch_smoke_test.py` — host-only cold-image launch check, run by the gate's Docker stage
 - `host_docker_test_helper.py` — the checkout to build from, a throwaway root the daemon can bind-mount, the host's daemon endpoint, and the host-only skips

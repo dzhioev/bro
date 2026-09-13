@@ -19,9 +19,9 @@ import ride.session as ride_session
 import ride.spawn
 import ride.summon_control
 from bro.base import credentials
-from bro.monitor import workspace_session_dir
+from bro.monitor import workspace_party_dir, workspace_session_dir
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
-from bro.workspace.paths import CONTAINER_SESSION_DIR
+from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR
 from ride import pending_summon
 from ride.repository import Repository
 from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError
@@ -515,6 +515,7 @@ class TestContainerCommand:
       '/host/claude:/home/ride/.claude',
       '/host/trails:/var/ride/trails',
       f'{workspace_session_dir(workspace.path)}:{CONTAINER_SESSION_DIR}',
+      f'{workspace_party_dir(workspace.path)}:{CONTAINER_PARTY_DIR}',
     )
 
   def test_raw_carried_in_the_container_command(self):
@@ -1452,9 +1453,7 @@ class TestSummonedSession:
       patch('ride.session.broker_enabled', return_value=True),
       patch('ride.session.resolve_head', return_value='parentsha'),
     ):
-      code = ride_session.start_session(
-        _spec(solo=True, prompt='finish this'), summoned=record
-      )
+      code = ride_session.start_session(_spec(solo=True, prompt='finish this'), summoned=record)
 
     assert code == 0
     launch = run.call_args.args[0]
@@ -1477,7 +1476,7 @@ class TestSummonedSession:
       code = ride_session.start_session(_spec(), summoned=record)
 
     assert code == 1
-    assert 'unknown or spent summon token' in caplog.text
+    assert 'already claimed' in caplog.text
 
   def test_summon_into_overrides_the_parent_head(self, tmp_path):
     record = _pending_record(tmp_path, into='release')

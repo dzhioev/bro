@@ -100,8 +100,17 @@ def import_state(header: dict) -> Optional[dict]:
   return state
 
 
-def require_parents(header: dict, stored: Callable[[str], bool]) -> None:
-  """Raise unless every trail the header points at is stored."""
+def require_parents(
+  header: dict, stored: Callable[[str], bool], *, external_parents_ok: bool = False
+) -> None:
+  """Raise unless every trail the header points at is stored.
+
+  `external_parents_ok` accepts a fork/summon pointer whose parent is absent
+  because it was recorded to another backend — the shape a summoned child
+  adopted into a store its summoner did not record to carries; live recording
+  never checks parents, so such a pointer is already a store-consistent state."""
+  if external_parents_ok:
+    return
   semantic_header = formats.upgrade_header(header)
   for field, relation in _PARENT_POINTERS:
     pointer = semantic_header.get(field)

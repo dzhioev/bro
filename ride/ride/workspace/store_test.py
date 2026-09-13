@@ -1,3 +1,5 @@
+from pathlib import PurePosixPath
+
 import pytest
 
 import ride.workspace.store as workspace_store
@@ -103,7 +105,7 @@ class TestMaterializeScopedStore:
     assert not (directory / 'creds/aws.cred').exists()
 
 
-class TestBroTarball:
+class TestStoreTarball:
   def _entries(self, blob: bytes) -> dict:
     import io
     import tarfile
@@ -111,9 +113,9 @@ class TestBroTarball:
     with tarfile.open(fileobj=io.BytesIO(blob), mode='r') as tar:
       return {m.name: m for m in tar.getmembers()}
 
-  def test_prefixes_bro_and_round_trips_content(self):
-    blob = workspace_store._bro_tarball(
-      {'creds/notion.cred': b'{"token": "t"}', 'creds.json': b'{}'}
+  def test_prefixes_root_and_round_trips_content(self):
+    blob = workspace_store.store_tarball(
+      {'creds/notion.cred': b'{"token": "t"}', 'creds.json': b'{}'}, PurePosixPath('.bro')
     )
     members = self._entries(blob)
     assert set(members) == {'.bro', '.bro/creds', '.bro/creds/notion.cred', '.bro/creds.json'}
@@ -126,8 +128,28 @@ class TestBroTarball:
       assert extracted is not None
       assert extracted.read() == b'{"token": "t"}'
 
+  def test_nested_root_carries_its_ancestor_directories(self):
+    members = self._entries(
+      workspace_store.store_tarball({'creds/x.cred': b'v'}, PurePosixPath('.bro-party/m1/store'))
+    )
+    directories = {name for name, member in members.items() if member.isdir()}
+    assert directories == {
+      '.bro-party',
+      '.bro-party/m1',
+      '.bro-party/m1/store',
+      '.bro-party/m1/store/creds',
+    }
+    assert set(members) - directories == {'.bro-party/m1/store/creds/x.cred'}
+    assert all(members[name].mode == 0o700 for name in directories)
+
+  def test_absolute_root_is_refused(self):
+    with pytest.raises(ValueError, match='relative'):
+      workspace_store.store_tarball({}, PurePosixPath('/home/ride/.bro'))
+
   def test_modes_and_owner(self):
-    members = self._entries(workspace_store._bro_tarball({'creds/notion.cred': b'x'}))
+    members = self._entries(
+      workspace_store.store_tarball({'creds/notion.cred': b'x'}, PurePosixPath('.bro'))
+    )
     assert members['.bro'].isdir()
     assert members['.bro'].mode == 0o700
     assert members['.bro/creds'].isdir()

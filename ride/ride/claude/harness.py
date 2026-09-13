@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Optional
 
 from bro.base import credentials
@@ -9,6 +9,7 @@ from bro.monitor import CLAUDE_CONFIG_DIR_ENV
 from ride.claude.claude_auth import apply_claude_auth, load_anthropic_key
 from ride.claude.claude_config import (
   container_claude_state,
+  container_member_claude_state,
   latest_jsonl,
   provision_unboxed_claude_dir,
   read_subject,
@@ -153,6 +154,12 @@ class ClaudeHarness:
     claude_dir = provision_unboxed_claude_dir(records, tree)
     env[CLAUDE_CONFIG_DIR_ENV] = str(claude_dir)
     apply_claude_auth(env)
+
+  def prepare_boxed_member_env(
+    self, spec: 'SessionSpec', records: Path, member_root: PurePath, env: dict[str, str]
+  ) -> None:
+    del spec
+    env.update(container_member_claude_state(records, member_root))
 
 
 CLAUDE = ClaudeHarness()

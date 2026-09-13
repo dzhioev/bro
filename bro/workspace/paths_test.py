@@ -1,3 +1,4 @@
+import pathlib
 import stat
 import subprocess
 
@@ -85,6 +86,14 @@ def test_runtime_paths_share_the_flat_root():
 def test_container_trails_use_the_absolute_mount(monkeypatch):
   monkeypatch.setenv('RIDE_IN_CONTAINER', '1')
   assert workspace_paths.trails_dir() == workspace_paths.CONTAINER_TRAILS_ROOT
+
+
+def test_an_explicit_trails_root_overrides_the_container_mount(monkeypatch):
+  # a boxed party member records under its own party records rather than the
+  # first session's /var/ride/trails bind
+  monkeypatch.setenv('RIDE_IN_CONTAINER', '1')
+  monkeypatch.setenv(workspace_paths.TRAILS_ROOT_ENV, '/var/ride/party/broker-M/trails')
+  assert workspace_paths.trails_dir() == pathlib.Path('/var/ride/party/broker-M/trails')
 
 
 def test_the_runtime_root_is_created_private_on_first_use(monkeypatch, tmp_path):
