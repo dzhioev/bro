@@ -524,8 +524,8 @@ address every comment that has arrived, then pay one verification pass and one p
 2. Make the requested code changes locally.
 3. Re-run the pre-commit gates (step 2).
 4. Commit (a **new** commit, not `--amend`) with the same conventions as step 5–6.
-5. Verify with the narrowest evidence the repo offers
-   — a change-scoped gate selection, or the affected test files.
+5. Verify with the selection step 9 used
+   — a change-scoped gate selection where the repo offers one, otherwise the affected test files.
    **Not the full suite:**
    the push in step 7 puts the branch back through the PR's own CI, which runs the whole gate, and the merge is blocked on it
    — a full local pass here duplicates a run that is about to happen anyway and that nothing can land without.
