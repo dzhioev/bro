@@ -12,6 +12,20 @@ _METADATA_FILE = 'workspace.json'
 BRANCH_ENV = 'RIDE_BRANCH'
 
 
+class WorkspaceNotFound(ValueError):
+  pass
+
+
+class UnrecognizedWorkspaceRecord(ValueError):
+  pass
+
+
+def unrecognized_workspace_record(name: str) -> UnrecognizedWorkspaceRecord:
+  return UnrecognizedWorkspaceRecord(
+    f'workspace {name!r} has an unrecognised record; remove it with `ride clean --force {name}`'
+  )
+
+
 class Isolation(StrEnum):
   BOXED = 'boxed'
   UNBOXED = 'unboxed'
@@ -90,8 +104,16 @@ def read_metadata(name: str) -> WorkspaceMetadata:
   try:
     data = json.loads(file.read_text())
   except FileNotFoundError as exception:
-    raise ValueError(f'workspace not found: {name}') from exception
-  return WorkspaceMetadata.load(data)
+    workspace = workspace_dir(name)
+    if workspace.is_dir() and any(workspace.iterdir()):
+      raise unrecognized_workspace_record(name) from exception
+    raise WorkspaceNotFound(f'workspace not found: {name}') from exception
+  except (OSError, UnicodeError, json.JSONDecodeError) as exception:
+    raise unrecognized_workspace_record(name) from exception
+  try:
+    return WorkspaceMetadata.load(data)
+  except (TypeError, ValueError) as exception:
+    raise unrecognized_workspace_record(name) from exception
 
 
 def write_metadata(name: str, metadata: WorkspaceMetadata) -> None:

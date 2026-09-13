@@ -212,7 +212,6 @@ def test_authorized_summon_opens_identity_before_spawning(tmp_path):
   accepted = _audit(tmp_path)[-1]
   assert accepted['transition'] == 'accepted'
   assert accepted['ride'] == 'ws'
-  assert 'session' not in accepted
   assert accepted['args']['prompt'] == 'deploy the thing'
   assert accepted['placement'] == {'party': 'start', 'isolation': 'boxed'}
   assert 'party' not in accepted['args']

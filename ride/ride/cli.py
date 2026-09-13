@@ -26,7 +26,6 @@ from ride.harness import get_harness
 from ride.listing import list_workspaces
 from ride.repository import Repository, is_git_url, resolve_repository
 from ride.runtime_bundle import reexec_from_runtime
-from ride.runtime_state import migrate_runtime_state
 from ride.scope import bind_launch_llm
 from ride.session import SessionSpec, recorded_runtime_reference, resume_session, start_session
 from ride.workspace.containers import exec_in_workspace
@@ -343,7 +342,6 @@ def alias_main(argv: list[str], *, solo: bool) -> int:
   args, harness_arguments = _parse_mode(parser, argv)
   launch_argv = ['ride', 'solo' if solo else 'along', *argv[1:]]
   _bootstrap_mode_runtime(parser, args, launch_argv)
-  migrate_runtime_state()
   return _start_mode(parser, args, harness_arguments, solo=solo)
 
 
@@ -361,7 +359,6 @@ def main(argv: list[str]) -> Optional[int]:
         reexec_from_runtime(runtime, argv)
     except (ValueError, RuntimeError) as error:
       parser.error(str(error))
-  migrate_runtime_state()
   if command not in ('solo', 'along') and len(harness_arguments) > 0:
     parser.error('`--` harness arguments are accepted only by `ride solo` and `ride along`')
   if command in ('solo', 'along'):

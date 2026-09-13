@@ -163,26 +163,9 @@ A launch creates it with mode 0700 on first use.
 Its top-level stores are `workspaces/`, `runtime/`, `repos/`, `trails/`, `summon/`, and `broker/`;
 workspace metadata records which repository, if any, each workspace is attached to.
 
-The first outer `ride`, `ask`, or `call` command after upgrading migrates both historical checkout-keyed roots and every existing workspace record.
-Migration takes one global lock and preflights every workspace for a held lock or a running box before changing records.
-Each `meta.json` becomes `workspace.json`, translating `container` to `boxed` and `worktree` to `unboxed`.
-Each `resume.json` translates `host` to `isolation` and receives empty `tree` and `runtime_bundle` fields.
-The runtime reads only the new strict shapes after this one-time conversion.
-
-The older checkout-root migration still preflights every source before moving anything:
-a workspace or store-key collision names both paths and refuses the migration, as does a duplicate trail id or a summon request id found in more than one audit file.
-An interrupted migration is completed by the next command;
-emptied project-key roots are removed.
-
-A legacy root is keyed on one checkout and every workspace under it is attached to that checkout, so the migration recovers the path once per root
-— from an unboxed workspace's git metadata, confirmed against the root's own key
-— and records it for the root's boxed workspaces too, whose clone `origin` names the upstream URL rather than the checkout they were launched against.
-A root naming no recoverable checkout falls back to the URL its container clones carry, and the migration reports which workspaces that moved off a path-keyed host-config entry.
-Migrated worktrees also have their registration repaired at the new path.
-A migrated container clone that still uses alternates is not rewritten;
-its next launch refuses it and names `ride clean --force <name>` so the workspace can be recreated as an independent clone.
-A workspace whose tree was never materialized has no repository evidence and migrates as detached.
-A non-empty tree whose attachment cannot be recovered aborts the migration rather than recording a guess or leaving an unusable workspace hidden in the old root.
+Workspace metadata is read only in its current strict shape.
+A command naming a non-empty workspace directory without a current record, or one whose `workspace.json` does not match that shape, refuses the workspace by name and points to `ride clean --force <name>`.
+That explicit force-clean path removes the directory without interpreting its metadata, after the same session-lock and running-container checks used for a current workspace.
 
 ### Runtime bundles
 
@@ -206,7 +189,7 @@ Unboxed isolation materializes the bundle once as `host/venv`, checks its depend
 `--runtime-bundle PATH` instead takes an existing materialized layout at `PATH/venv` and `PATH/bin`.
 The latter must be the exact shim farm for the former's full `bro.session_commands` roster;
 a missing executable, missing or extra shim, or shim targeting another command fails before launch.
-The launcher re-executes from `PATH/venv/bin/ride` before runtime-state migration,
+The launcher re-executes from `PATH/venv/bin/ride` before reading workspace state,
 records the path for root and started-child resume, and uses its absolute `do-ride`,
 so every process in the ride runs that runtime even when the first command came from another installation.
 A given runtime has no frozen manifest from which to build a container volume;
@@ -294,8 +277,7 @@ The one deliberate exception to all of this is the summon audit, under `<runtime
   It is absent when detached;
   reusing a name with a different attachment is refused.
 - **`branch`** — the attached clone's branch, present if and only if `repo` is present.
-  A new workspace uses `workspace-<name>`;
-  migrated records retain their existing branch.
+  A new workspace uses `workspace-<name>`.
 - **`throwaway`** — the workspace is disposable.
   Its supervisor removes it once its session exits cleanly.
   It is set for the workspaces summoned children run in.
@@ -439,8 +421,6 @@ The lock releases with the session, so re-entry and `ride resume` afterwards are
 An unboxed workspace runs its tree directly on the launcher's filesystem.
 With an attachment, the first launch creates the same independent clone a boxed workspace uses and checks out the workspace's recorded branch at the resolved base.
 Later launches preserve that clone exactly as the session left it.
-A legacy `.git` gitfile identifies a pre-migration linked worktree and refuses launch with `ride clean --force <name>`.
-
 After clone preparation, `ride` runs the tree's `setup.sh` when present, materializes the runtime bundle's host half, and starts its absolute `do-ride` with the tree as cwd.
 Every unboxed session's store and install-hook output live under one private temporary root that its supervisor removes after exit, so a retained workspace contains no credential material.
 `BRO_STORE` and `BRO_INSTALL_DIR` point at those directories.
@@ -453,8 +433,6 @@ With `--tree PATH`, it runs instead in that existing directory while keeping eve
 The auth and scoped-credential preflights happen before a workspace or clone is created.
 On a clean dropped exit, the workspace records are removed directly;
 an external tree is never removed.
-`ride clean` retains a legacy worktree-specific release path so migrated trees can still be removed from their original repository registration.
-
 #### Unboxed Claude-state isolation
 
 An unboxed Claude session points `CLAUDE_CONFIG_DIR` at the workspace's `claude/` directory.
@@ -518,7 +496,6 @@ Initialized checkout submodules are cloned from their matching host paths and re
 a managed bare mirror initializes them from their committed URLs, while an uninitialized checkout submodule is skipped.
 No prepared clone or submodule carries an alternates file.
 Later launches preserve the clone exactly as the session left it.
-A workspace created by an older runtime whose clone still has an alternates file is refused with the `ride clean --force <name>` command that recreates it.
 
 Inside the container, the entrypoint (running as root first):
 

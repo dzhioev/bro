@@ -13,8 +13,7 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
 - **Isolation is recorded.**
   `workspace.json` fixes boxed or unboxed isolation at creation.
   Every attached tree is an independent clone.
-  A detached unboxed workspace may record an externally owned tree;
-  only legacy cleanup knows how to release a linked worktree.
+  A detached unboxed workspace may record an externally owned tree.
 - **Core contracts point downward.**
   Runtime paths, project configuration, and git helpers remain in `bro.workspace`;
   this package imports those contracts, `bro.base`, and the broker interfaces.

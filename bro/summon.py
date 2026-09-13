@@ -192,10 +192,6 @@ def summoned_by_from_env() -> Optional[dict[str, Any]]:
   if not isinstance(summoned_by, dict):
     raise ValueError(f'{SUMMONER_ENV} must be a JSON object')
   keys = set(summoned_by)
-  if keys == {'session'} and isinstance(summoned_by['session'], str):
-    return None
-  if keys == {'target', 'trail_id'} and all(isinstance(summoned_by[key], str) for key in keys):
-    return {'trail_id': summoned_by['trail_id']}
   if not {'trail_id'}.issubset(keys) or not keys.issubset({'trail_id', 'step_id', 'index'}):
     raise ValueError(f'{SUMMONER_ENV} has an invalid summoned_by shape')
   trail_id = summoned_by['trail_id']

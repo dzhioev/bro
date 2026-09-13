@@ -8,8 +8,6 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import ClassVar, Optional
 
-from bro.base import log
-from bro.workspace.git import git_run
 from bro.workspace.paths import runtime_base, workspace_dir, workspace_tree, workspaces_dir
 from ride.repository import Repository, as_repository, is_git_url, open_repository
 from ride.workspace.docker import project_image_tag, runtime_image_tag
@@ -18,6 +16,7 @@ from ride.workspace.metadata import (
   WorkspaceMetadata,
   is_workspace,
   read_metadata,
+  unrecognized_workspace_record,
   workspace_branch,
   write_metadata,
 )
@@ -50,6 +49,10 @@ def _resolve_external_tree(tree: Optional[Path], isolation: Isolation) -> Option
 
 class SessionBusy(RuntimeError):
   """a workspace's session lock is held by a live session."""
+
+
+class WorkspaceActive(RuntimeError):
+  pass
 
 
 class IsolationMismatch(ValueError):
@@ -146,6 +149,42 @@ def _remove_container_dir(path: Path, image: Optional[str]) -> None:
     raise RuntimeError(f'{path}: docker rm failed: {result.stderr.strip()}')
   if path.exists():
     raise RuntimeError(f'{path}: still present after docker rm')
+
+
+def workspace_path_is_active(path: Path, mounts: set[str]) -> bool:
+  """Whether a workspace path is held by a session or running container."""
+  if str(path / 'tree') in mounts:
+    return True
+  try:
+    handle = os.fdopen(os.open(path / 'lock', os.O_RDONLY), 'r')
+  except FileNotFoundError:
+    return False
+  with contextlib.closing(handle):
+    try:
+      fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+      return True
+    fcntl.flock(handle, fcntl.LOCK_UN)
+  return False
+
+
+@contextlib.contextmanager
+def hold_workspace_removal(path: Path, mounts: set[str]) -> Generator[None]:
+  """Claim a workspace against session starts until the removal finishes."""
+  if str(path / 'tree') in mounts:
+    raise WorkspaceActive(path.name)
+  handle = os.fdopen(os.open(path / 'lock', os.O_RDWR | os.O_CREAT, 0o644), 'r+')
+  with contextlib.closing(handle):
+    try:
+      fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exception:
+      raise WorkspaceActive(path.name) from exception
+    yield
+
+
+def remove_workspace_path(path: Path) -> None:
+  """Remove a workspace whose metadata cannot select an isolation subclass."""
+  _remove_container_dir(path, _cleanup_image(None))
 
 
 class Workspace(ABC):
@@ -250,19 +289,8 @@ class Workspace(ABC):
       yield
 
   def is_active(self, mounts: set[str]) -> bool:
-    """whether a session currently owns this workspace. `mounts` is the running
-    containers' mount set, which only a boxed workspace reads."""
-    try:
-      handle = os.fdopen(os.open(self.lockfile, os.O_RDONLY), 'r')
-    except FileNotFoundError:
-      return False
-    with contextlib.closing(handle):
-      try:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-      except BlockingIOError:
-        return True
-      fcntl.flock(handle, fcntl.LOCK_UN)
-    return False
+    """Whether a session currently owns this workspace."""
+    return workspace_path_is_active(self.path, mounts)
 
   def record_session_end(self, code: Optional[int]) -> None:
     """record how this workspace's session ended: the exit code, or None for a
@@ -331,6 +359,9 @@ class Workspace(ABC):
             f'external workspace tree {resolved_tree} is already recorded by workspace '
             f'{workspace.name!r}'
           )
+    path = workspace_dir(name)
+    if path.is_dir() and any(path.iterdir()):
+      raise unrecognized_workspace_record(name)
     repository = None if repo is None else as_repository(repo)
     metadata = WorkspaceMetadata(
       isolation=isolation,
@@ -416,24 +447,7 @@ class UnboxedWorkspace(Workspace):
   isolation = Isolation.UNBOXED
 
   def _release_tree(self, *, force: bool) -> None:
-    if self.metadata.tree is not None or not (self.tree / '.git').is_file():
-      return
-    if self.repo is None:
-      raise RuntimeError(f'legacy worktree {self.tree} has no repository attachment')
-    try:
-      repository = self.repository
-    except (RuntimeError, ValueError):
-      if force:
-        return
-      raise RuntimeError(f'{_MISSING_ATTACHMENT} {self.repo}; use --force to remove') from None
-    assert repository is not None
-    removed = git_run('worktree', 'remove', '--force', str(self.tree), cwd=repository.git_dir)
-    if removed.returncode != 0:
-      raise RuntimeError(f'{self.tree}: git worktree remove failed: {removed.stderr.strip()}')
-    assert self.metadata.branch is not None
-    deleted = git_run('branch', '-D', self.metadata.branch, cwd=repository.git_dir)
-    if deleted.returncode != 0:
-      log.warning('could not delete branch %s: %s', self.metadata.branch, deleted.stderr.strip())
+    del force
 
   def _remove_dir(self) -> None:
     shutil.rmtree(self.path)
@@ -443,11 +457,6 @@ class BoxedWorkspace(Workspace):
   """a workspace whose tree is bind-mounted into a container as `/workspace`."""
 
   isolation = Isolation.BOXED
-
-  def is_active(self, mounts: set[str]) -> bool:
-    # the running container counts on its own: a launcher killed outright releases
-    # the lock while leaving its container bound to the workspace mount.
-    return str(self.tree) in mounts or super().is_active(mounts)
 
   def _release_tree(self, *, force: bool) -> None:
     del force

@@ -113,25 +113,6 @@ def test_clone_from_an_alternates_source_is_dissociated(tmp_path):
   assert _git('fsck', '--full', cwd=tree).returncode == 0
 
 
-def test_legacy_worktree_is_refused(tmp_path):
-  source = _source_repository(tmp_path)
-  tree = tmp_path / 'legacy' / 'tree'
-  tree.mkdir(parents=True)
-  (tree / '.git').write_text('gitdir: /source/.git/worktrees/legacy')
-
-  with pytest.raises(RuntimeError, match=r'legacy git worktree.*ride clean --force legacy'):
-    ensure_clone(_repository(source), tree, 'workspace-legacy')
-
-
-def test_legacy_shared_clone_is_refused(tmp_path):
-  source = _source_repository(tmp_path)
-  tree = tmp_path / 'legacy' / 'tree'
-  _git('clone', '--quiet', '--shared', str(source), str(tree), cwd=tmp_path)
-
-  with pytest.raises(RuntimeError, match=r'ride clean --force legacy'):
-    ensure_clone(_repository(source), tree, 'worktree-legacy')
-
-
 def test_failed_preparation_leaves_no_partial_clone(tmp_path):
   source = _source_repository(tmp_path)
   _git('remote', 'remove', 'origin', cwd=source)

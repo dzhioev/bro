@@ -43,7 +43,7 @@ from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
 PARENT = 'parent'
-SUMMONER = {'session': 'ws'}
+SUMMONER = {'trail_id': 'T-parent'}
 # the lowering harness stubs the human-identity read; the test that asserts on
 # the real one restores it
 _REAL_HUMAN_IDENTITY = ride.identity.human_git_identity_env
@@ -211,7 +211,7 @@ class TestSummonLowering:
           'RIDE_PERMITS': 'party.start.boxed',
           'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
           'RIDE_SUMMONED': '1',
-          'RIDE_SUMMONER': '{"session":"ws"}',
+          'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
         },
         secrets={'aws', 'trails'},
         optional_secrets={'openai'},
@@ -551,7 +551,7 @@ class TestSummonLowering:
       'RIDE_PERMITS': 'party.start.boxed',
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
       'RIDE_SUMMONED': '1',
-      'RIDE_SUMMONER': '{"session":"ws"}',
+      'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
     }
     assert lowered.base_ref == 'REF-SHA'
 
@@ -693,7 +693,7 @@ class TestSummonLowering:
       'RIDE_SUMMONED': '1',
       'RIDE_MAY_SUMMON': 'reviewer',
       'RIDE_PERMITS': 'party.join',
-      'RIDE_SUMMONER': '{"session":"ws"}',
+      'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
     }
     assert 'BRO_STORE' not in member.env  # delivered into the container at spawn
     shutil.rmtree(records)
@@ -1136,7 +1136,7 @@ class TestClaudeSummonLowering:
       'RIDE_PERMITS': 'party.start.boxed',
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
       'RIDE_SUMMONED': '1',
-      'RIDE_SUMMONER': '{"session":"ws"}',
+      'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
     }
     assert lowered.launch.base_ref == 'PARENT-SHA'
     assert lowered.launch.extra_mounts == (
