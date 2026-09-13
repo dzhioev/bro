@@ -12,7 +12,7 @@ from typing import Optional
 
 from bro.base import configs, log
 from bro.base.scope import scope_override_key, scope_revoke_key
-from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV
+from bro.launch.broker_environment import UPSTREAM_ENV
 from bro.llm.llm import LLMSpec
 from bro.monitor import (
   SESSION_DIR_ENV,
@@ -21,7 +21,7 @@ from bro.monitor import (
   workspace_party_dir,
   workspace_session_dir,
 )
-from bro.summon import PARTY_MEMBER_ENV, RUNTIME_ENV, summoned_child_env
+from bro.summon import RUNTIME_ENV, summoned_child_env
 from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.paths import (
   CONTAINER_PARTY_DIR,
@@ -420,14 +420,7 @@ def prepared_unboxed_session_launch(
   tree = workspace.tree
   session_command = do_ride_command(spec, harness_flags=harness.session_flags(spec))
   command = [str(runtime_bundle.host_venv / 'bin' / session_command[0]), *session_command[1:]]
-  runner_env = runtime_bundle.host_session_env()
-  runner_env.pop(PARTY_MEMBER_ENV, None)
-  # an unboxed session resolves its own host trails root, never a container one
-  # an ancestor's environment might carry
-  runner_env.pop(TRAILS_ROOT_ENV, None)
-  if not forward_env:
-    runner_env.pop(CHANNEL_ENV, None)
-    runner_env.pop(UPSTREAM_ENV, None)
+  runner_env = runtime_bundle.host_session_env(tree, forward_env=forward_env)
   runner_env.update(env)
   runner_env['RIDE_BRO'] = spec.bro
   runner_env[RUNTIME_ENV] = str(runtime_bundle.host_root)

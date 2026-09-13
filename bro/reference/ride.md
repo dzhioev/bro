@@ -415,8 +415,9 @@ Whatever the isolation and harness, the outer:
   — the harness's cheap existence check with its own refusal wording (`session_exists` / `missing_session_error`:
   a claude transcript under the workspace's state dir, a bro trail pointer), run before the tree is materialized for a mistyped name (the claude runner resolves the actual session id later, from its cwd);
 - calls the shared started-party launcher to prepare the workspace (the two isolation sections below) and the `do-ride` command with only the session shape;
-  the launcher emits a container description for boxed isolation or a complete process-environment snapshot for unboxed isolation,
-  and both run the frozen bundle through the host materialization or container volume;
+  the launcher emits a container description for boxed isolation or a closed process-environment snapshot for unboxed isolation,
+  whose `PWD` names the session tree and whose only ambient inputs are the baseline and root-forwarding rosters in `ride.runtime_bundle`;
+  both run the frozen bundle through the host materialization or container volume;
 - owns the post-exit UX, identical in both isolations
   — the resume hint, `--drop` removal (honored only on a clean exit; see the flag).
 
@@ -425,6 +426,7 @@ Whatever the isolation and harness, the outer:
 A second concurrent session on one workspace would mutate the same files and share the gitignored token-accounting state, so a launch holds an exclusive `flock` on the workspace's `lock` file
 — taken atomically against a racing launcher, released even when the holder dies without unwinding, and covering the whole launch rather than a window inside it.
 A refused launch names the holding pid.
+The broker transfers the same lock into a started unboxed child's process handle until that child settles.
 `ride list` and `ride clean` read the same lock as their liveness signal;
 a boxed workspace additionally counts a running container bound to its mount, which is what a launcher killed outright leaves behind.
 The lock releases with the session, so re-entry and `ride resume` afterwards are unaffected.
@@ -867,7 +869,7 @@ the human at the launch owns the session's shape, and there is no host-killable 
 
 The bridge between the two halves is the pending record (`ride/ride/pending_summon.py`),
 written under `<runtime-root>/summon/pending/<token>.json` when the channel is provisioned and one-shot-claimed by the launch as its last fallible step before the session starts.
-The record carries the ride runtime as its frozen bundle hash or given path, and token minting materializes its host half.
+The record carries the ride runtime as its frozen bundle hash or given path, and token minting materializes its host half off the broker loop before writing the pending record and emitting acceptance.
 A `ride along --summoned` entered through another installation reads that field first and re-executes from the owning runtime before it loads the rest of the record.
 The protocol revision check is unnecessary because the launcher and pending-record reader therefore run the minting ride's code.
 A second launch on the same token fails loudly (two sessions must not share one channel), and a summon that ends unclaimed (root teardown, a failure) discards it, so a stale token fails the launch with the reason.
@@ -1142,7 +1144,7 @@ Wrappers and session daemons rely on a small set of env vars:
   Set explicitly in the container env at every boxed launch site
   — a `ride along` container carries its session bro, a bro-harness container or summon child the launched bro (`ride/ride/spawn.py`)
   — and exported by the session executable layer;
-  deliberately not in `_DOCKER_FORWARD_ENV`, so a calling session's ambient value never leaks into a container that runs a different bro.
+  deliberately not in `SESSION_FORWARD_ENV`, so a calling session's ambient value never leaks into a child that runs a different bro.
   Purely a theming output
   — the banner's ASCII Bro logo + bro-name header, the statusLine
   — never an input:
@@ -1225,9 +1227,9 @@ Wrappers and session daemons rely on a small set of env vars:
   the session gets neither broker variable (see "The broker channel").
   Checked before any broker import (`ride/ride/workspace/containers.py:broker_enabled`).
 - Plus the standard `GIT_AUTHOR_*` / `GIT_COMMITTER_*`
-  — explicitly forwarded into the container via `_DOCKER_FORWARD_ENV`.
-  (github and AWS reach a session as the scoped `github` / `aws` secrets via their install hooks, not as forwarded env;
-  an ambient host `GITHUB_TOKEN` is deliberately not forwarded into a container, and blanked by the `github` hook where an unboxed session inherits one.)
+  — explicitly forwarded into a root session via `SESSION_FORWARD_ENV`.
+  GitHub and AWS reach a session as the scoped `github` / `aws` secrets via their install hooks, not as forwarded env;
+  an ambient host `GITHUB_TOKEN` is deliberately not admitted into either isolation.
 
 ## Session recording
 

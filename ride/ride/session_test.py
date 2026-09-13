@@ -988,6 +988,13 @@ class TestUnboxedSession:
   def test_started_party_builder_prepares_the_process_snapshot(self, monkeypatch, tmp_path):
     workspace = self._workspace(monkeypatch, tmp_path)
     runtime_bundle = _runtime_bundle(tmp_path)
+    monkeypatch.setenv('RIDE_SUMMONED', '1')
+    monkeypatch.setenv('RIDE_IN_CONTAINER', '1')
+    monkeypatch.setenv('RIDE_TRAILS_ROOT', '/parent/trails')
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', '/parent/claude')
+    monkeypatch.setenv('PWD', '/parent/tree')
+    monkeypatch.setenv('RIDE_TASK_ID', 'task-1')
+    monkeypatch.setenv('BRO_SHELL_COMMAND', 'dive-in')
     human = {HUMAN_NAME_ENV: 'Ada Lovelace', HUMAN_EMAIL_ENV: 'ada@example.com'}
     spec = _spec(
       isolation=Isolation.UNBOXED,
@@ -1036,6 +1043,12 @@ class TestUnboxedSession:
     assert launch.env['BRO_INSTALL_KINDS'] == 'github trails'
     assert launch.env[HUMAN_NAME_ENV] == 'Ada Lovelace'
     assert launch.env['CLAUDE_CONFIG_DIR'] == str(tmp_path / 'claude-config')
+    assert launch.env['PWD'] == str(workspace.tree)
+    assert launch.env['RIDE_TASK_ID'] == 'task-1'
+    assert launch.env['BRO_SHELL_COMMAND'] == 'dive-in'
+    assert 'RIDE_SUMMONED' not in launch.env
+    assert 'RIDE_IN_CONTAINER' not in launch.env
+    assert 'RIDE_TRAILS_ROOT' not in launch.env
     assert 'VIRTUAL_ENV' not in launch.env
 
   def test_detached_builder_clears_ambient_attachment_and_channel_facts(
@@ -1047,6 +1060,12 @@ class TestUnboxedSession:
     monkeypatch.setenv('BROKER_CHANNEL', 'ambient-channel')
     monkeypatch.setenv('BROKER_UPSTREAM', 'ambient-upstream')
     monkeypatch.setenv('RIDE_PARTY_MEMBER', 'broker-parent')
+    monkeypatch.setenv('RIDE_SUMMONED', '1')
+    monkeypatch.setenv('RIDE_TASK_ID', 'task-1')
+    monkeypatch.setenv('BRO_SHELL_COMMAND', 'parent-command')
+    monkeypatch.setenv('RIDE_IN_CONTAINER', '1')
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', '/parent/claude')
+    monkeypatch.setenv('PWD', '/parent/tree')
 
     launch = ride_session.started_party_launch(
       replace(_spec(isolation=Isolation.UNBOXED), repo=None),
@@ -1069,6 +1088,12 @@ class TestUnboxedSession:
     assert 'BROKER_CHANNEL' not in launch.env
     assert 'BROKER_UPSTREAM' not in launch.env
     assert 'RIDE_PARTY_MEMBER' not in launch.env
+    assert 'RIDE_SUMMONED' not in launch.env
+    assert 'RIDE_TASK_ID' not in launch.env
+    assert 'BRO_SHELL_COMMAND' not in launch.env
+    assert 'RIDE_IN_CONTAINER' not in launch.env
+    assert launch.env['CLAUDE_CONFIG_DIR'] == str(tmp_path / 'claude-config')
+    assert launch.env['PWD'] == str(workspace.tree)
     assert launch.env['MARKER'] == 'child'
 
   def test_external_tree_runs_from_a_given_runtime(self, monkeypatch, tmp_path):

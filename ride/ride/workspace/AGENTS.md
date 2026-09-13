@@ -37,8 +37,9 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
 - `worktrees.py` — the surviving unboxed `setup.sh` runner
 - `clones.py` — clone creation for every attached tree, upstream retargeting, base checkout, and submodule initialization
 - `containers.py` — boxed execution and attachment plus the broker availability gate
-- `spawn.py` — boxed, unboxed-process, and member-exec broker spawner adapters, bounded child output, process-group and record-checked exec kills,
-  the shared party-member registry, throwaway-workspace or joined-member record teardown, a boxed member's local-trail adoption into the ride's host store, private-credential teardown, terminal ownership, and launcher-log redirection
+- `spawn.py` — boxed, unboxed-process, and member-exec broker spawner adapters, bounded child output, process-group and record-checked exec kills, and the shared party-member registry.
+  It owns a started unboxed child's lifetime workspace lock and throwaway-workspace or joined-member record teardown.
+  It also owns a boxed member's local-trail adoption into the ride's host store, private-credential teardown, terminal ownership, and launcher-log redirection.
 - `store.py` — scoped credential tiers, override finalization, directory materialization, and container tar packing
 - `launch_smoke_test.py` — host-only cold-image launch check, run by the gate's Docker stage
 - `host_docker_test_helper.py` — the checkout to build from, a throwaway root the daemon can bind-mount, the host's daemon endpoint, and the host-only skips

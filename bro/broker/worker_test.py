@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 from pathlib import Path
 from typing import cast
 
@@ -215,6 +216,33 @@ async def test_expected_worker_defers_ready_then_marks_started_on_attach(tmp_pat
   runtime.events.on_disconnect()
   await _settle()
   assert listener.deaths[0].reason == 'disconnected'
+
+
+@pytest.mark.asyncio
+async def test_expected_worker_prepares_off_loop_before_ready(tmp_path):
+  runtime = FakeRuntime(tmp_path)
+  listener = Listener()
+  preparing = threading.Event()
+  release = threading.Event()
+
+  def ready(provisioned):
+    del provisioned
+    preparing.set()
+    assert release.wait(5)
+
+  worker = ExpectedWorker(cast(Runtime, runtime), listener, 'quest', ready)
+  worker.begin()
+  async with asyncio.timeout(5):
+    while not preparing.is_set():
+      await asyncio.sleep(0.01)
+  assert listener.ready == []
+  await asyncio.sleep(0)
+  release.set()
+  async with asyncio.timeout(5):
+    while listener.ready == []:
+      await asyncio.sleep(0.01)
+  assert listener.ready == ['quest']
+  await worker.stop()
 
 
 @pytest.mark.asyncio

@@ -269,7 +269,7 @@ class ExpectedWorker(Worker):
     try:
       provisioned = await self.runtime.provision(self)
       self._bind(provisioned.channel)
-      self._ready(provisioned)
+      await asyncio.to_thread(self._ready, provisioned)
       self.listener.on_worker_ready(self)
     except asyncio.CancelledError:
       raise

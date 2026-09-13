@@ -15,7 +15,7 @@ from bro.base import credentials, log
 from bro.monitor import PROCESS_FILENAME
 from bro.workspace.paths import runtime_base, workspace_tree
 from ride.repository import Repository, as_repository
-from ride.runtime_bundle import RuntimeBundle
+from ride.runtime_bundle import SESSION_FORWARD_ENV, RuntimeBundle
 from ride.workspace import build_context
 from ride.workspace.build_context import CONTAINER_DIR
 from ride.workspace.clones import ensure_clone
@@ -162,23 +162,6 @@ def bridge_gateway() -> Optional[str]:
     log.verbose('no docker bridge gateway (%s)', result.stderr.strip())
     return None
   return result.stdout.strip() or None
-
-
-_DOCKER_FORWARD_ENV = (
-  'RIDE_COMMAND',
-  'RIDE_TASK_ID',
-  'GIT_AUTHOR_NAME',
-  'GIT_AUTHOR_EMAIL',
-  'GIT_COMMITTER_NAME',
-  'GIT_COMMITTER_EMAIL',
-  'BRO_LOG_LEVEL',
-  'BRO_SHELL_COMMAND',
-  'TERM',
-  'TERM_PROGRAM',
-  'TERM_PROGRAM_VERSION',
-  'COLORTERM',
-  'VTE_VERSION',
-)
 
 
 def running_mounts() -> set[str]:
@@ -630,7 +613,7 @@ def _docker_create_argv(
   # Summoned children pass a complete explicit snapshot and disable ambient
   # forwarding so the parent's task and identity facts cannot leak into them.
   if forward_env:
-    for variable in _DOCKER_FORWARD_ENV:
+    for variable in SESSION_FORWARD_ENV:
       if os.environ.get(variable) is not None:
         argv += ['-e', variable]
   if extra_mounts is not None:

@@ -19,7 +19,8 @@ G — the stop interrupt, so `docker stop` lands in claude as a keypress;
 H — joining a boxed party (a member `docker exec`'d into the party's running
 container: the store `docker cp`'d in, the `env -i` snapshot, the pid handshake
 read back through the party mount, the member lifecycle routed to the first
-session, and the first session's exit tearing a live member down).
+session, and the first session's exit tearing a live member down);
+I — the full boxed → join → unboxed → join → boxed chain through summon control.
 
 Isolation: every launch runs under a throwaway HOME, data home and project root,
 so no scenario touches the user's own claude or runtime state. The
@@ -44,7 +45,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
@@ -74,14 +75,18 @@ _NAME_PREFIX = 'ride-e2e-'
 _RUNTIME_PYTHON = '/var/ride/runtime/venv/bin/python'
 
 
-def _session_broxy_probe(source: str) -> list[str]:
+def _broxy_probe(python: str, source: str) -> list[str]:
   wrapper = (
     'import sys\n'
     'from bro.launch.broxy import session_broxy\n'
     'with session_broxy():\n'
     "  exec(compile(sys.argv[1], '<e2e-probe>', 'exec'))\n"
   )
-  return [_RUNTIME_PYTHON, '-c', wrapper, source]
+  return [python, '-c', wrapper, source]
+
+
+def _session_broxy_probe(source: str) -> list[str]:
+  return _broxy_probe(_RUNTIME_PYTHON, source)
 
 
 # --- in-container probes (source for `python -c`; framework code comes from the runtime volume) ---
@@ -1427,3 +1432,164 @@ class TestBoxedPartyJoin:
     assert boxed_join_teardown.live_after == [], 'the party container survived its first session'
     # a killed member keeps its records for inspection
     assert boxed_join_teardown.member_records_exist
+
+
+# --- I: the full cross-isolation summon route --------------------------------
+
+
+def _cross_isolation_member(prompt: str) -> str:
+  return f"""
+import time
+from bro.run_lifecycle import RunLifecycle
+from bro.summon import summon_and_wait
+
+prompt = {prompt!r}
+channel = RunLifecycle.from_env()
+assert channel is not None
+channel.trail('trail-' + prompt)
+if prompt == 'boxed-member':
+  answer = summon_and_wait(
+    'bro',
+    'unboxed-owner',
+    isolation='unboxed',
+    grant=['@bro', ':party.join'],
+    llm='echo',
+    harness='bro',
+    timeout=120,
+  )
+elif prompt == 'unboxed-owner':
+  answer = summon_and_wait(
+    'bro',
+    'unboxed-member',
+    party='join',
+    grant=['@bro'],
+    llm='echo',
+    harness='bro',
+    timeout=120,
+  )
+elif prompt == 'unboxed-member':
+  answer = summon_and_wait(
+    'bro',
+    'boxed-final',
+    isolation='boxed',
+    llm='echo',
+    harness='bro',
+    timeout=120,
+  )
+else:
+  answer = 'boxed-final'
+if prompt != 'boxed-final':
+  time.sleep(1)
+channel.completed(prompt + '>' + answer if prompt != 'boxed-final' else answer, 'ok')
+channel.close()
+"""
+
+
+def test_cross_isolation_summon_chain_uses_both_join_lowerings(
+  isolated_env: IsolatedEnv, monkeypatch
+) -> None:
+  import ride.spawn as ride_spawn
+  from ride.root import ProcessLaunch
+  from ride.runtime_bundle import RuntimeBundle
+  from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
+  from ride.workspace.metadata import Isolation
+  from ride.workspace.model import Workspace
+  from ride.workspace.store import ScopedSecrets
+
+  env = isolated_env
+  name = f'{_NAME_PREFIX}i-chain-party'
+  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  party_directory = workspace.path / 'party'
+  party_directory.mkdir(parents=True, exist_ok=True)
+  runtime_bundle = RuntimeBundle(
+    env.runtime_root / 'runtime' / env.runtime_bundle_hash,
+    f'{sys.version_info.major}.{sys.version_info.minor}',
+  )
+  container_runtime = ContainerRuntimeResolver.fixed(
+    ContainerRuntime(env.image, env.runtime_bundle_hash), workspace.repository
+  )
+  original_started_party_launch = ride_spawn.started_party_launch
+  original_boxed_member_launch = ride_spawn.boxed_member_launch
+  original_prepared_unboxed_launch = ride_spawn.prepared_unboxed_session_launch
+
+  def prepared_unboxed_launch(*arguments, **keywords):
+    spec = arguments[0]
+    if spec.prompt is None:
+      raise ValueError('cross-isolation member has no prompt')
+    launch = original_prepared_unboxed_launch(*arguments, **keywords)
+    python = str(runtime_bundle.host_venv / 'bin' / 'python')
+    return replace(launch, command=_broxy_probe(python, _cross_isolation_member(spec.prompt)))
+
+  def started_party_launch(*arguments, **keywords):
+    spec = arguments[0]
+    if spec.prompt is None:
+      raise ValueError('cross-isolation child has no prompt')
+    launch = original_started_party_launch(*arguments, **keywords)
+    source = _cross_isolation_member(spec.prompt)
+    python = (
+      str(runtime_bundle.host_venv / 'bin' / 'python')
+      if isinstance(launch, ProcessLaunch)
+      else _RUNTIME_PYTHON
+    )
+    return replace(launch, command=_broxy_probe(python, source))
+
+  def boxed_member_launch(*arguments, **keywords):
+    spec = arguments[0]
+    if spec.prompt is None:
+      raise ValueError('cross-isolation member has no prompt')
+    launch = original_boxed_member_launch(*arguments, **keywords)
+    return replace(launch, command=_session_broxy_probe(_cross_isolation_member(spec.prompt)))
+
+  monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
+  monkeypatch.setattr(ride_spawn, 'boxed_member_launch', boxed_member_launch)
+  monkeypatch.setattr(ride_spawn, 'prepared_unboxed_session_launch', prepared_unboxed_launch)
+  monkeypatch.setenv('HOME', str(env.home))
+  report = workspace.tree / '.cross-isolation-report'
+  root_source = """
+import time
+from pathlib import Path
+from bro.summon import summon_and_wait
+
+answer = summon_and_wait(
+  'bro',
+  'boxed-member',
+  party='join',
+  grant=['@bro', ':party.start.unboxed', ':party.join'],
+  llm='echo',
+  harness='bro',
+  timeout=120,
+)
+Path('/workspace/.cross-isolation-report').write_text(answer)
+time.sleep(2)
+"""
+  launch = DockerLaunchSpec(
+    workspace_docker.Launch(
+      name=name,
+      command=_session_broxy_probe(root_source),
+      env={'RIDE_BRO': 'bro-dev'},
+      secrets=(),
+      tty=False,
+      forward_env=False,
+      image=env.image,
+      runtime_bundle_hash=env.runtime_bundle_hash,
+      extra_mounts=(f'{party_directory}:/var/ride/party',),
+      repo=env.project,
+    )
+  )
+
+  code = ride_spawn.run_root_via_broker(
+    launch,
+    workspace=workspace,
+    bro='bro-dev',
+    may_summon={'bro'},
+    permits={'party.start.boxed', 'party.start.unboxed', 'party.join'},
+    summon_depth=5,
+    credential_scope=ScopedSecrets(set(), set()),
+    container_runtime=container_runtime,
+    runtime_bundle=runtime_bundle,
+  )
+
+  assert code == 0
+  assert report.read_text() == 'boxed-member>unboxed-owner>unboxed-member>boxed-final'
+  assert env.live_containers() == []
+  assert not party_directory.exists() or list(party_directory.iterdir()) == []

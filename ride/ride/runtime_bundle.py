@@ -28,6 +28,32 @@ _HASH_PATTERN = re.compile(r'[0-9a-f]{64}')
 _WHEEL_ENTRY_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
 
+SESSION_BASE_ENV = (
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'TMPDIR',
+  'LANG',
+  'LANGUAGE',
+)
+SESSION_FORWARD_ENV = (
+  'RIDE_COMMAND',
+  'RIDE_TASK_ID',
+  'GIT_AUTHOR_NAME',
+  'GIT_AUTHOR_EMAIL',
+  'GIT_COMMITTER_NAME',
+  'GIT_COMMITTER_EMAIL',
+  'BRO_LOG_LEVEL',
+  'BRO_SHELL_COMMAND',
+  'TERM',
+  'TERM_PROGRAM',
+  'TERM_PROGRAM_VERSION',
+  'COLORTERM',
+  'VTE_VERSION',
+)
+
+
 class RuntimeBundleError(RuntimeError):
   """the ride installation cannot be frozen or materialized as a runtime bundle."""
 
@@ -138,15 +164,20 @@ class RuntimeBundle:
           description='cannot mark container runtime complete',
         )
 
-  def host_session_env(self) -> dict[str, str]:
-    env = dict(os.environ)
-    launcher_venv = env.pop('VIRTUAL_ENV', None)
-    path_entries = env.get('PATH', '').split(os.pathsep)
+  def host_session_env(self, cwd: Path, *, forward_env: bool) -> dict[str, str]:
+    """Build an unboxed session's closed host environment snapshot."""
+    ambient = dict(os.environ)
+    admitted = [*SESSION_BASE_ENV, *(key for key in ambient if key.startswith('LC_'))]
+    if forward_env:
+      admitted.extend(SESSION_FORWARD_ENV)
+    env = {key: ambient[key] for key in admitted if key in ambient}
+    launcher_venv = ambient.get('VIRTUAL_ENV')
+    path_entries = ambient.get('PATH', '').split(os.pathsep)
     if launcher_venv is not None:
       launcher_bin = os.path.normpath(str(Path(launcher_venv) / 'bin'))
       path_entries = [entry for entry in path_entries if os.path.normpath(entry) != launcher_bin]
     env['PATH'] = os.pathsep.join(_unique_paths([str(self.host_bin), *path_entries]))
-    env.pop('PYTHONHOME', None)
+    env['PWD'] = str(cwd)
     return env
 
 

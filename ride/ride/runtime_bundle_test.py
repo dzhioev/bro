@@ -554,23 +554,40 @@ def test_session_command_declaration_must_match_the_distributions_console_script
     runtime_bundle._session_commands(Path(sys.executable))
 
 
-def test_unboxed_session_environment_scrubs_launcher_activation(monkeypatch, tmp_path):
+def test_unboxed_session_environment_is_a_closed_snapshot(monkeypatch, tmp_path):
   root = tmp_path / 'bundle'
   bundle = runtime_bundle.RuntimeBundle(root, '3.12')
   launcher = tmp_path / 'launcher'
-  monkeypatch.setenv('VIRTUAL_ENV', str(launcher))
-  monkeypatch.setenv('PATH', os.pathsep.join([str(launcher / 'bin'), '/usr/local/bin', '/usr/bin']))
-  monkeypatch.setenv('PYTHONHOME', '/python')
+  tree = tmp_path / 'tree'
+  monkeypatch.setattr(
+    runtime_bundle.os,
+    'environ',
+    {
+      'VIRTUAL_ENV': str(launcher),
+      'PATH': os.pathsep.join([str(launcher / 'bin'), '/usr/local/bin', '/usr/bin']),
+      'HOME': '/home/operator',
+      'LANG': 'en_US.UTF-8',
+      'LC_TIME': 'C',
+      'RIDE_TASK_ID': 'task-1',
+      'RIDE_SUMMONED': '1',
+      'CLAUDE_CONFIG_DIR': '/parent/claude',
+      'PYTHONHOME': '/python',
+    },
+  )
 
-  env = bundle.host_session_env()
+  env = bundle.host_session_env(tree, forward_env=True)
 
-  assert 'VIRTUAL_ENV' not in env
-  assert env['PATH'].split(os.pathsep) == [
-    str(bundle.host_bin),
-    '/usr/local/bin',
-    '/usr/bin',
-  ]
-  assert 'PYTHONHOME' not in env
+  assert env == {
+    'HOME': '/home/operator',
+    'LANG': 'en_US.UTF-8',
+    'LC_TIME': 'C',
+    'RIDE_TASK_ID': 'task-1',
+    'PATH': os.pathsep.join([str(bundle.host_bin), '/usr/local/bin', '/usr/bin']),
+    'PWD': str(tree),
+  }
+  child_env = bundle.host_session_env(tree, forward_env=False)
+  assert 'RIDE_TASK_ID' not in child_env
+  assert child_env['PWD'] == str(tree)
 
 
 def test_resolver_holds_the_bundle_lock(monkeypatch, tmp_path):

@@ -33,7 +33,8 @@ The TCP adapter owns NDJSON framing and the attach handshake.
 - `worker.py` owns supervision by shape.
   `SpawnedWorker` drains the channel before deciding from process reap;
   `JobWorker` collects the run directory through `JobOutput` and answers from reap;
-  `ExpectedWorker` treats attach as start and EOF as death because no host child handle exists.
+  `ExpectedWorker` treats attach as start and EOF as death because no host child handle exists;
+  its pre-acceptance preparation runs off-loop before the ready mark.
   The shared Worker base owns wait-task teardown and the two-phase deadline:
   the fixed launch bound is replaced by the request timeout at `started`.
 - `journal.py` owns one mutable record per worker-backed quest, the ordered event ring, and permanent lineage.

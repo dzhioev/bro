@@ -505,6 +505,20 @@ class TestProcessChildWorkspaceCleanup:
       Workspace.open('broker-CH')
 
   @pytest.mark.asyncio
+  async def test_live_child_holds_the_workspace_session_lock(self, tmp_path):
+    launch = self._launch(tmp_path, 'import time; time.sleep(30)')
+    handle = await self._spawn(launch)
+    workspace = Workspace.open('broker-CH')
+
+    assert workspace.is_active(set())
+    with pytest.raises(RuntimeError, match='session already active'):
+      with workspace.hold_session_lock():
+        pass
+
+    await handle.kill()
+    assert not Workspace.open('broker-CH').is_active(set())
+
+  @pytest.mark.asyncio
   async def test_pre_spawn_failure_removes_store(self, tmp_path):
     private_store = tmp_path / 'private-store'
     private_store.mkdir()
