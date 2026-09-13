@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.3.1
+version: 2.4.0
 ---
 
 # orchestrate
@@ -243,6 +243,8 @@ the reviewer ends up holding the deepest understanding of the design, which is w
 > "land via [[run pr]] with its base argument set to `<integration-branch>`, so this PRs into the integration branch rather than master";
 > "when the PR merges, mark this task done — do not hold it for a rollout, the work rolls out once after integration";
 > and "if you change a design decision mid-build, append it to the root task's `## Design changelog` for the history and the later stages".
+> Every end-to-end route the design names is owed automated coverage by the last stage that completes it, and that stage's task names the routes it owes;
+> the verification phase confirms the shipped result against the real system and is never where a route runs for the first time.
 > Then establish the integration branch, named after the root task rather than left as the workspace's own:
 > `git fetch origin master && git reset --hard origin/master && git checkout -b integration/<root-task-id>-<short-slug> && git push -u origin HEAD`.
 > The prefix is what lets a repository write branch rules over the branches stages merge into, so the name is part of the contract, not decoration.
@@ -307,8 +309,9 @@ Then summon:
 > A repository that gates the branches stages merge into refuses every direct push to them, the rebase's included, so a phase that pushed the integration branch would be stuck with nothing to open a PR from
 > — and the two roles want separating anyway, since what stages merge into should not be the thing a merge to master rewrites.
 > Then open ONE pull request for all the stages together with [[run pr]] based on master and land it with [[land]].
-> It goes through a full review round like any other PR:
-> the stage reviews do not stand in for the one that lands this on master.
+> Its body names the stage pull requests and the integration branch their commits landed on
+> — the task's comments carry them
+> — so the reviewer reconciles those approvals instead of re-reading the stages.
 > Record the pull request on the task at `<root-task-url>` as soon as it is open (`brog::add_comment`, topic `integration pr`), so the page carries the one that took the stages to master.
 > Where master is protected, the approving review that clears the merge has to come from the user:
 > an agent's own approval does not satisfy the base's rule, so a land refused for want of a review is the expected state there rather than a blocker.
