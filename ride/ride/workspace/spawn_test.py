@@ -13,6 +13,7 @@ import pytest
 import ride.workspace.docker as workspace_docker
 import ride.workspace.spawn as workspace_spawn
 from bro.broker.transports.tcp import Endpoint
+from bro.monitor import party_member_dir
 from bro.workspace.paths import workspace_dir
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
@@ -638,6 +639,241 @@ time.sleep(30)
     assert await handle.wait() != 0
     assert Workspace.open('broker-CH').isolation is Isolation.UNBOXED
     assert _exit_record(tmp_path) == 'killed'
+    assert launch.cleanup_directory is not None
+    assert not Path(launch.cleanup_directory).exists()
+
+
+class TestProcessChildPartyRecords:
+  def _launch(self, tmp_path, code: str) -> workspace_spawn.ProcessLaunchSpec:
+    records = tmp_path / 'workspace' / 'party' / 'broker-CH'
+    records.mkdir(parents=True)
+    private_store = tmp_path / 'private-store'
+    private_store.mkdir()
+    return workspace_spawn.ProcessLaunchSpec(
+      command=[sys.executable, '-c', code],
+      cwd=str(tmp_path),
+      env={},
+      interactive=False,
+      capture_output=True,
+      party_workspace='party-workspace',
+      records_directory=str(records),
+      cleanup_directory=str(private_store),
+    )
+
+  async def _spawn(self, launch):
+    channel = workspace_spawn.Provisioned(
+      channel='CH', host_endpoint=Endpoint(port=7321, token='tk')
+    )
+    return await workspace_spawn.ProcessSpawner().spawn(launch, channel, 'X-1')
+
+  @pytest.mark.asyncio
+  async def test_started_party_exit_kills_members_before_removing_its_workspace(
+    self, tmp_path, caplog
+  ):
+    project = tmp_path / 'project'
+    project.mkdir()
+    workspace = Workspace.create('broker-owner', project, Isolation.UNBOXED, throwaway=True)
+    workspace.tree.mkdir(parents=True)
+    owner_store = tmp_path / 'owner-store'
+    owner_store.mkdir()
+    member_store = tmp_path / 'member-store'
+    member_store.mkdir()
+    records = party_member_dir(workspace.path, 'broker-member')
+    records.mkdir(parents=True)
+    spawner = workspace_spawn.ProcessSpawner()
+    channel = workspace_spawn.Provisioned(
+      channel='CH', host_endpoint=Endpoint(port=7321, token='tk')
+    )
+    owner = await spawner.spawn(
+      workspace_spawn.ProcessLaunchSpec(
+        command=[sys.executable, '-c', 'pass'],
+        cwd=str(workspace.tree),
+        env={},
+        interactive=False,
+        capture_output=True,
+        workspace=workspace.name,
+        cleanup_directory=str(owner_store),
+      ),
+      channel,
+      'owner-quest',
+    )
+    member = await spawner.spawn(
+      workspace_spawn.ProcessLaunchSpec(
+        command=[sys.executable, '-c', 'import time; time.sleep(30)'],
+        cwd=str(workspace.tree),
+        env={},
+        interactive=False,
+        capture_output=True,
+        party_workspace=workspace.name,
+        records_directory=str(records),
+        cleanup_directory=str(member_store),
+      ),
+      channel,
+      'member-quest',
+    )
+
+    with caplog.at_level('WARNING'):
+      assert await owner.wait() == 0
+
+    assert await member.wait() != 0
+    assert 'killing joined member broker-member' in caplog.text
+    with pytest.raises(ValueError, match='broker-owner'):
+      Workspace.open(workspace.name)
+
+  @pytest.mark.asyncio
+  async def test_concurrent_owner_kill_and_wait_finish_member_teardown_once(self, tmp_path):
+    project = tmp_path / 'concurrent-project'
+    project.mkdir()
+    workspace = Workspace.create('broker-concurrent', project, Isolation.UNBOXED, throwaway=True)
+    workspace.tree.mkdir(parents=True)
+    owner_store = tmp_path / 'concurrent-owner-store'
+    owner_store.mkdir()
+    member_store = tmp_path / 'concurrent-member-store'
+    member_store.mkdir()
+    records = party_member_dir(workspace.path, 'broker-member')
+    records.mkdir(parents=True)
+    ready = tmp_path / 'member-ready'
+    observed = tmp_path / 'workspace-observed'
+    member_code = f"""
+import signal
+import time
+from pathlib import Path
+
+def stop(*_args):
+  time.sleep(0.2)
+  if Path({str(workspace.path)!r}).is_dir():
+    Path({str(observed)!r}).touch()
+  raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, stop)
+Path({str(ready)!r}).touch()
+time.sleep(30)
+"""
+    spawner = workspace_spawn.ProcessSpawner()
+    channel = workspace_spawn.Provisioned(
+      channel='CH', host_endpoint=Endpoint(port=7321, token='tk')
+    )
+    owner = await spawner.spawn(
+      workspace_spawn.ProcessLaunchSpec(
+        command=[sys.executable, '-c', 'import time; time.sleep(30)'],
+        cwd=str(workspace.tree),
+        env={},
+        interactive=False,
+        capture_output=True,
+        workspace=workspace.name,
+        cleanup_directory=str(owner_store),
+      ),
+      channel,
+      'owner-quest',
+    )
+    member = await spawner.spawn(
+      workspace_spawn.ProcessLaunchSpec(
+        command=[sys.executable, '-c', member_code],
+        cwd=str(workspace.tree),
+        env={},
+        interactive=False,
+        capture_output=True,
+        party_workspace=workspace.name,
+        records_directory=str(records),
+        cleanup_directory=str(member_store),
+      ),
+      channel,
+      'member-quest',
+    )
+    async with asyncio.timeout(5):
+      while not ready.exists():
+        await asyncio.sleep(0.01)
+
+    await asyncio.gather(owner.kill(), owner.wait())
+
+    assert await member.wait() == 0
+    assert observed.is_file()
+    assert Workspace.open(workspace.name).path == workspace.path
+
+  @pytest.mark.asyncio
+  async def test_member_teardown_failure_preserves_the_owner_workspace(self, monkeypatch, tmp_path):
+    project = tmp_path / 'failed-teardown-project'
+    project.mkdir()
+    workspace = Workspace.create(
+      'broker-failed-teardown', project, Isolation.UNBOXED, throwaway=True
+    )
+    workspace.tree.mkdir(parents=True)
+    owner_store = tmp_path / 'failed-teardown-owner-store'
+    owner_store.mkdir()
+    member_store = tmp_path / 'failed-teardown-member-store'
+    member_store.mkdir()
+    records = party_member_dir(workspace.path, 'broker-member')
+    records.mkdir(parents=True)
+    spawner = workspace_spawn.ProcessSpawner()
+    channel = workspace_spawn.Provisioned(
+      channel='CH', host_endpoint=Endpoint(port=7321, token='tk')
+    )
+    owner = await spawner.spawn(
+      workspace_spawn.ProcessLaunchSpec(
+        command=[sys.executable, '-c', 'pass'],
+        cwd=str(workspace.tree),
+        env={},
+        interactive=False,
+        capture_output=True,
+        workspace=workspace.name,
+        cleanup_directory=str(owner_store),
+      ),
+      channel,
+      'owner-quest',
+    )
+    member = await spawner.spawn(
+      workspace_spawn.ProcessLaunchSpec(
+        command=[sys.executable, '-c', 'import time; time.sleep(30)'],
+        cwd=str(workspace.tree),
+        env={},
+        interactive=False,
+        capture_output=True,
+        party_workspace=workspace.name,
+        records_directory=str(records),
+        cleanup_directory=str(member_store),
+      ),
+      channel,
+      'member-quest',
+    )
+
+    async def fail_cleanup(directory):
+      del directory
+      raise OSError('cleanup refused')
+
+    monkeypatch.setattr(member, '_remove_directory', fail_cleanup)
+    with pytest.raises(ExceptionGroup, match='could not stop every member'):
+      await owner.wait()
+
+    assert Workspace.open(workspace.name).path == workspace.path
+    assert owner_store.is_dir()
+
+  @pytest.mark.asyncio
+  async def test_clean_exit_removes_member_records_and_private_store(self, tmp_path):
+    launch = self._launch(tmp_path, 'pass')
+    handle = await self._spawn(launch)
+    assert await handle.wait() == 0
+    assert launch.records_directory is not None
+    assert not Path(launch.records_directory).exists()
+    assert launch.cleanup_directory is not None
+    assert not Path(launch.cleanup_directory).exists()
+
+  @pytest.mark.asyncio
+  async def test_failure_keeps_member_records_and_removes_private_store(self, tmp_path):
+    launch = self._launch(tmp_path, 'raise SystemExit(3)')
+    handle = await self._spawn(launch)
+    assert await handle.wait() == 3
+    assert launch.records_directory is not None
+    assert Path(launch.records_directory).is_dir()
+    assert launch.cleanup_directory is not None
+    assert not Path(launch.cleanup_directory).exists()
+
+  @pytest.mark.asyncio
+  async def test_kill_keeps_member_records_and_removes_private_store(self, tmp_path):
+    launch = self._launch(tmp_path, 'import time; time.sleep(30)')
+    handle = await self._spawn(launch)
+    await handle.kill()
+    assert launch.records_directory is not None
+    assert Path(launch.records_directory).is_dir()
     assert launch.cleanup_directory is not None
     assert not Path(launch.cleanup_directory).exists()
 

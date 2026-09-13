@@ -228,6 +228,24 @@ def test_audit_attributes_every_worker_backed_kind_from_journal_parent(tmp_path)
   assert all(entry['summoner'] == {'workspace': 'ws', 'bro': 'bro-dev'} for entry in entries)
 
 
+def test_joined_summoner_audit_names_its_party_member(tmp_path):
+  control = _control(tmp_path, permits=('party.join',))
+  context = FakeContext(control)
+  joined = _message(party='join')
+  control.handle(cast(Dispatcher, context), ROOT, joined)
+  control._facts.note_member(joined.quest_id, 'ws', 'broker-CH')
+  context.workers[CHILD] = joined.quest_id
+  context.journal.bind(context.journal.records[joined.quest_id], CHILD)
+
+  control.handle(cast(Dispatcher, context), CHILD, _message(target=''))
+
+  assert _audit(tmp_path)[-1]['summoner'] == {
+    'workspace': 'ws',
+    'member': 'broker-CH',
+    'bro': 'dev',
+  }
+
+
 def test_large_summon_args_do_not_hide_the_target_from_the_audit(tmp_path, monkeypatch):
   control = _control(tmp_path)
   monkeypatch.setattr(control._artifacts, 'reachable', lambda ref, workspace: True)
@@ -313,7 +331,10 @@ def test_authorization_and_shape_denials_use_one_prefixed_journal_reason(
     {'grant': [None]},
     {'unknown': True},
     {'manual': False},
-    {'party': 'join'},
+    {'party': 'merge'},
+    {'party': 'join', 'isolation': 'unboxed'},
+    {'party': 'join', 'into': 'feature'},
+    {'party': 'join', 'manual': True},
     {'isolation': 'shared'},
   ],
 )
@@ -371,6 +392,21 @@ def test_unmarked_request_prefers_boxed_then_falls_back_to_unboxed(tmp_path):
   unboxed_context = FakeContext(unboxed)
   unboxed.handle(cast(Dispatcher, unboxed_context), ROOT, _message())
   assert unboxed_context.spawned[0][0].isolation is Isolation.UNBOXED
+
+
+def test_join_needs_its_permit_and_inherits_the_requesters_party(tmp_path):
+  denied = _control(tmp_path, permits=('party.start.boxed',))
+  denied_context = FakeContext(denied)
+  denied.handle(cast(Dispatcher, denied_context), ROOT, _message(party='join'))
+  assert ':party.join' in denied_context.replies[0][1]['error']
+
+  allowed = _control(tmp_path, permits=('party.join',))
+  allowed_context = FakeContext(allowed)
+  allowed.handle(cast(Dispatcher, allowed_context), ROOT, _message(party='join'))
+  launch = allowed_context.spawned[0][0]
+  assert launch.party == 'join'
+  assert launch.isolation is None
+  assert launch.parent == 'ws'
 
 
 def test_explicit_isolation_is_checked_against_the_requesters_permits(tmp_path):

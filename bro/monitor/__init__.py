@@ -28,6 +28,11 @@ def workspace_session_dir(workspace: Path) -> Path:
   return workspace / 'session'
 
 
+def party_member_dir(workspace: Path, member: str) -> Path:
+  """The records root of one session that joined the workspace's party."""
+  return workspace / 'party' / member
+
+
 def in_claude_session() -> bool:
   """whether this process runs inside a claude session, the only kind claude
   keeps config and transcripts for."""

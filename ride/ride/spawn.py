@@ -1,9 +1,9 @@
 """Summon lowering and broker-root composition over workspace spawners.
 
-`SummonSpawner` resolves the requested base ref off-loop and prepares the child
-through the same isolation-parameterized started-party launcher a root uses.
-It records the channel-named workspace as throwaway and delegates the resulting
-Docker or process launch to the matching spawner.
+`SummonSpawner` lowers each request off-loop.
+A start uses the isolation-parameterized launcher a root uses and records a throwaway workspace;
+a join uses the summoner’s existing unboxed tree and channel-named member records.
+The concrete Docker or process launch then goes to the matching spawner.
 
 `run_root_via_broker` composes both launch modes and summon lowering under one
 broker, then supervises the root until exit.
@@ -17,7 +17,7 @@ import tempfile
 from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from bro.artifact import GET, MINT
 from bro.base import configs, log
@@ -27,7 +27,8 @@ from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 from bro.kinds import KindContext
-from bro.summon import SUMMON, summoned_child_env
+from bro.monitor import party_member_dir
+from bro.summon import PARTY_MEMBER_ENV, SUMMON, summoned_child_env
 from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.paths import summon_dir
 from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts, view_mount
@@ -40,7 +41,13 @@ from ride.repository import Repository, as_repository
 from ride.root import ProcessLaunch
 from ride.runtime_bundle import RuntimeBundle
 from ride.scope import preflight_scoped_launch, scoped_secrets
-from ride.session import ScopedLaunch, SessionSpec, record_resume_spec, started_party_launch
+from ride.session import (
+  ScopedLaunch,
+  SessionSpec,
+  prepared_unboxed_session_launch,
+  record_resume_spec,
+  started_party_launch,
+)
 from ride.summon_control import SummonControl
 from ride.workspace.docker import ContainerRuntimeResolver, bridge_gateway
 from ride.workspace.metadata import Isolation
@@ -60,8 +67,8 @@ class SummonLaunchSpec(LaunchSpec):
   """an authorized summon as a launch description, cheap to build on the broker
   loop: the request fields plus the summoner's workspace name and tree, attributed
   by the control at request time.
-  `SummonSpawner` lowers it to a `DockerLaunchSpec` off-loop — the target-bro
-  import, scoped-set computation, and base-ref resolution are all blocking work
+  `SummonSpawner` lowers it to a concrete launch off-loop — the target-bro
+  import, scoped-set computation, and any base-ref resolution are blocking work
   the broker loop should not carry.
 
   `grant`/`revoke` are the request's unified values: the credential halves feed
@@ -89,7 +96,16 @@ class SummonLaunchSpec(LaunchSpec):
   revoke: tuple[str, ...] = ()
   share: tuple[str, ...] = ()
   llm: Optional[str] = None
-  isolation: Isolation = Isolation.BOXED
+  party: Literal['start', 'join'] = 'start'
+  isolation: Optional[Isolation] = Isolation.BOXED
+
+  def __post_init__(self) -> None:
+    if self.party not in ('start', 'join'):
+      raise ValueError("summon party must be 'start' or 'join'")
+    if self.party == 'start' and self.isolation is None:
+      raise ValueError('a party start needs an isolation')
+    if self.party == 'join' and self.isolation is not None:
+      raise ValueError('a party join inherits its isolation')
 
 
 def _workspace_name(channel: str) -> str:
@@ -100,24 +116,28 @@ def _child_session_spec(
   launch: SummonLaunchSpec,
   workspace_name: str,
   runtime_reference: Optional[str],
+  *,
+  isolation: Optional[Isolation] = None,
 ) -> SessionSpec:
-  """the summoned child's run as a `SessionSpec`: an unpinned solo session
-  of the target bro in the requested isolation — only the request's
-  `timeout` maps to no spec field (it is the spawner's wait timer, not part of
-  the run). Recorded as the workspace's resume record and the source of the
-  child's `do-ride` argv, so what `ride resume` relaunches is what ran."""
+  """The summoned child's run as an unpinned solo `SessionSpec`.
+
+  A started party records its resume variant;
+  a joined member uses the spec only to build its `do-ride` argv and environment."""
   harness = get_harness(launch.harness)
+  resolved_isolation = launch.isolation if isolation is None else isolation
+  if resolved_isolation is None:
+    raise ValueError('summoned session isolation is unresolved')
   return SessionSpec(
     name=workspace_name,
     repo=None if launch.repo is None else as_repository(launch.repo).identity,
     harness=harness.name,
     workspace_pinned=False,
-    isolation=launch.isolation,
+    isolation=resolved_isolation,
     drop=True,
     no_trails=False,
     hold=launch.hold
     if launch.hold is not None
-    else default_hold(solo=True, isolation=Isolation.BOXED),
+    else default_hold(solo=True, isolation=resolved_isolation),
     grant=list(launch.grant),
     revoke=list(launch.revoke),
     llm=launch.llm,
@@ -136,6 +156,44 @@ def _child_session_spec(
   )
 
 
+def _child_launch_scope(
+  launch: SummonLaunchSpec,
+  spec: SessionSpec,
+  repository: Optional[Repository],
+) -> tuple[ScopedLaunch, ScopedSecrets]:
+  harness = get_harness(spec.harness)
+  auth_error = harness.preflight_auth(spec)
+  if auth_error is not None:
+    raise ValueError(auth_error)
+  scoped = scoped_secrets(
+    launch.target,
+    harness.scope_recipe(spec.harness_options),
+    attachment=None if repository is None else repository.identity,
+    attachment_repository=repository,
+    grant=spec.grant,
+    revoke=spec.revoke,
+    llm_spec=spec.llm_spec,
+  )
+  _, _, store = preflight_scoped_launch(
+    scoped,
+    spec.bro,
+    attachment=spec.repo,
+    attachment_repository=repository,
+    grant=spec.grant,
+    revoke=spec.revoke,
+  )
+  return (
+    ScopedLaunch(
+      scoped=scoped,
+      may_summon=set(launch.may_summon),
+      permits=set(launch.permits),
+      store=store,
+      hydrated_kinds=store.kinds,
+    ),
+    scoped,
+  )
+
+
 def _lower_summon(
   launch: SummonLaunchSpec,
   workspace_name: str,
@@ -144,6 +202,8 @@ def _lower_summon(
   artifacts: ArtifactStore,
 ) -> DockerLaunchSpec | ProcessLaunchSpec:
   """Prepare a summoned started party in its requested isolation."""
+  if launch.party != 'start' or launch.isolation is None:
+    raise ValueError('started-party lowering needs a start request with an isolation')
   repo = None if launch.repo is None else as_repository(launch.repo)
   if launch.into is not None:
     if repo is None:
@@ -158,34 +218,7 @@ def _lower_summon(
     if base_ref is None:
       raise ValueError(f"cannot read the summoner's HEAD at {launch.parent_tree}")
   spec = _child_session_spec(launch, workspace_name, runtime_bundle.recorded_reference)
-  harness = get_harness(spec.harness)
-  auth_error = harness.preflight_auth(spec)
-  if auth_error is not None:
-    raise ValueError(auth_error)
-  scoped = scoped_secrets(
-    launch.target,
-    harness.scope_recipe(spec.harness_options),
-    attachment=None if repo is None else repo.identity,
-    attachment_repository=repo,
-    grant=spec.grant,
-    revoke=spec.revoke,
-    llm_spec=spec.llm_spec,
-  )
-  _, _, store = preflight_scoped_launch(
-    scoped,
-    spec.bro,
-    attachment=spec.repo,
-    attachment_repository=repo,
-    grant=spec.grant,
-    revoke=spec.revoke,
-  )
-  launch_scope = ScopedLaunch(
-    scoped=scoped,
-    may_summon=set(launch.may_summon),
-    permits=set(launch.permits),
-    store=store,
-    hydrated_kinds=store.kinds,
-  )
+  launch_scope, scoped = _child_launch_scope(launch, spec, repo)
   if launch.isolation is Isolation.BOXED:
     container_runtime.resolve()
   else:
@@ -199,10 +232,10 @@ def _lower_summon(
     mounts = (view_mount(artifacts.ride, workspace_name),)
   else:
     temporary_store = Path(tempfile.mkdtemp(prefix=f'ride-{workspace_name}-store-'))
-  artifacts.share(launch.share, to=workspace_name, by=launch.parent)
   with contextlib.ExitStack() as cleanup:
     if temporary_store is not None:
       cleanup.callback(shutil.rmtree, temporary_store)
+    artifacts.share(launch.share, to=workspace_name, by=launch.parent)
     prepared = started_party_launch(
       spec,
       workspace,
@@ -245,8 +278,81 @@ def _lower_summon(
     return lowered
 
 
+def _joined_ride_command(launch: SummonLaunchSpec) -> str:
+  parts = ['summon', '--join']
+  if launch.hold is not None:
+    parts.extend(['--hold', launch.hold])
+  for value in launch.grant:
+    parts.extend(['--grant', value])
+  for value in launch.revoke:
+    parts.extend(['--revoke', value])
+  for value in launch.share:
+    parts.extend(['--share', value])
+  if launch.llm is not None:
+    parts.extend(['--llm', launch.llm])
+  parts.extend(['--harness', launch.harness, launch.target, launch.prompt])
+  return ' '.join(parts)
+
+
+def _lower_join(
+  launch: SummonLaunchSpec,
+  member: str,
+  runtime_bundle: RuntimeBundle,
+  artifacts: ArtifactStore,
+) -> ProcessLaunchSpec:
+  """Prepare a member process inside its summoner's unboxed party."""
+  workspace = Workspace.open(launch.parent)
+  if workspace.isolation is not Isolation.UNBOXED:
+    raise ValueError('joining a boxed party is not supported by this stage')
+  repository = None if launch.repo is None else as_repository(launch.repo)
+  spec = _child_session_spec(
+    launch,
+    workspace.name,
+    runtime_bundle.recorded_reference,
+    isolation=workspace.isolation,
+  )
+  launch_scope, scoped = _child_launch_scope(launch, spec, repository)
+  records = party_member_dir(workspace.path, member)
+  records.mkdir(parents=True)
+  temporary_store = Path(tempfile.mkdtemp(prefix=f'ride-{member}-store-'))
+  ride_command = _joined_ride_command(launch)
+  with contextlib.ExitStack() as cleanup:
+    cleanup.callback(shutil.rmtree, temporary_store)
+    artifacts.share(launch.share, to=workspace.name, by=launch.parent)
+    prepared = prepared_unboxed_session_launch(
+      spec,
+      workspace,
+      launch_scope,
+      human_env=human_git_identity_env(repository),
+      runtime_bundle=runtime_bundle,
+      forward_env=False,
+      env={
+        'BRO_SHELL_COMMAND': ride_command,
+        'RIDE_COMMAND': ride_command,
+        PARTY_MEMBER_ENV: member,
+        **summoned_child_env(launch.may_summon, launch.permits, launch.summoner),
+      },
+      credential_directory=temporary_store / 'store',
+      install_directory=temporary_store / 'environment',
+      records_directory=records,
+    )
+    log_scoped_secrets(f'summoned {launch.target}', scoped.required, scoped.optional)
+    lowered = ProcessLaunchSpec(
+      command=prepared.command,
+      cwd=prepared.cwd,
+      env=prepared.env,
+      interactive=False,
+      capture_output=True,
+      party_workspace=workspace.name,
+      records_directory=str(records),
+      cleanup_directory=str(temporary_store),
+    )
+    cleanup.pop_all()
+    return lowered
+
+
 class SummonSpawner(Spawner):
-  """Lower a summon to the requested started-party isolation off-loop."""
+  """Lower a party start or join off-loop and dispatch its concrete launch."""
 
   def __init__(
     self,
@@ -266,16 +372,26 @@ class SummonSpawner(Spawner):
 
   async def spawn(self, launch: LaunchSpec, channel: Provisioned, quest: str) -> ChildHandle:
     assert isinstance(launch, SummonLaunchSpec)
-    workspace_name = _workspace_name(channel.channel)
-    self._facts.note_workspace(quest, workspace_name)
-    lowered = await asyncio.to_thread(
-      _lower_summon,
-      launch,
-      workspace_name,
-      self._runtime_bundle,
-      self._container_runtime,
-      self._artifacts,
-    )
+    child_name = _workspace_name(channel.channel)
+    if launch.party == 'join':
+      self._facts.note_member(quest, launch.parent, child_name)
+      lowered = await asyncio.to_thread(
+        _lower_join,
+        launch,
+        child_name,
+        self._runtime_bundle,
+        self._artifacts,
+      )
+    else:
+      self._facts.note_workspace(quest, child_name)
+      lowered = await asyncio.to_thread(
+        _lower_summon,
+        launch,
+        child_name,
+        self._runtime_bundle,
+        self._container_runtime,
+        self._artifacts,
+      )
     if isinstance(lowered, DockerLaunchSpec):
       return await self._docker.spawn(lowered, channel, quest)
     return await self._process.spawn(lowered, channel, quest)

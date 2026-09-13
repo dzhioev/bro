@@ -57,6 +57,8 @@ def session_fragment(
   from bro import mcp, summon
 
   contracts = []
+  if summon.party_member() is not None:
+    contracts.append('member.md')
   if len(summon.effective_may_summon()) > 0:
     contracts.append('summoner.md')
   if summon.summoned():

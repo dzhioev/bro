@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import sys
@@ -21,7 +22,7 @@ import ride.workspace.docker as workspace_docker
 import ride.workspace.store as workspace_store
 from bro.broker.journal import Journal
 from bro.broker.transports.tcp import LOCAL_HOST, Endpoint
-from bro.monitor import SESSION_DIR_ENV, workspace_session_dir
+from bro.monitor import SESSION_DIR_ENV, party_member_dir, workspace_session_dir
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 from bro.workspace.paths import CONTAINER_SESSION_DIR, summon_dir, workspace_dir, workspace_tree
 from ride.runtime_bundle import RuntimeBundle
@@ -49,6 +50,9 @@ def _runtime_bundle(tmp_path: Path) -> RuntimeBundle:
   command = root / 'host' / 'venv' / 'bin' / 'do-ride'
   command.write_text('#!/bin/sh\necho unboxed-child-output\n')
   command.chmod(0o755)
+  broxy = shutil.which('broxy')
+  assert broxy is not None
+  shutil.copy2(broxy, root / 'host' / 'bin' / 'broxy')
   return RuntimeBundle(root, '3.12')
 
 
@@ -540,6 +544,49 @@ class TestSummonLowering:
     assert '--repo' not in lowered.launch.command
     assert Workspace.open('broker-CH').repo is None
 
+  def test_unboxed_join_runs_in_the_party_tree_with_member_records(
+    self, lowering_harness, tmp_path
+  ):
+    workspace = Workspace.ensure(PARENT, None, Isolation.UNBOXED)
+    workspace.tree.mkdir(parents=True)
+    launch = ride.spawn.SummonLaunchSpec(
+      target='dev',
+      prompt='work beside me',
+      parent=PARENT,
+      parent_tree=workspace.tree,
+      summoner=SUMMONER,
+      may_summon=('reviewer',),
+      permits=('party.join',),
+      harness='bro',
+      party='join',
+      isolation=None,
+    )
+    artifacts = _artifacts()
+
+    lowered = ride.spawn._lower_join(
+      launch,
+      'broker-CH',
+      _runtime_bundle(tmp_path),
+      artifacts,
+    )
+
+    records = party_member_dir(workspace.path, 'broker-CH')
+    assert lowered.cwd == str(workspace.tree)
+    assert lowered.workspace is None
+    assert lowered.party_workspace == workspace.name
+    assert lowered.records_directory == str(records)
+    assert records.is_dir()
+    assert lowered.env[SESSION_DIR_ENV] == str(records / 'session')
+    assert lowered.env['RIDE_PARTY_MEMBER'] == 'broker-CH'
+    assert lowered.env['RIDE_COMMAND'].startswith('summon --join')
+    assert lowered.env['BRO_SHELL_COMMAND'] == lowered.env['RIDE_COMMAND']
+    assert lowered.env['RIDE_MAY_SUMMON'] == 'reviewer'
+    assert lowered.env['RIDE_PERMITS'] == 'party.join'
+    assert lowered.env['RIDE_SUMMONED'] == '1'
+    assert lowered.cleanup_directory is not None
+    shutil.rmtree(lowered.cleanup_directory)
+    shutil.rmtree(records)
+
   @pytest.mark.asyncio
   async def test_unboxed_started_child_keeps_failed_workspace_without_credentials(
     self, lowering_harness, tmp_path
@@ -724,6 +771,112 @@ raise SystemExit(3)
       await spawner.spawn(launch, channel, 'X-1')
 
 
+def test_unboxed_root_can_chain_joins_and_end_a_started_childs_party_without_a_daemon(
+  lowering_harness, tmp_path
+):
+  workspace = Workspace.ensure('party-root', None, Isolation.UNBOXED)
+  workspace.tree.mkdir(parents=True)
+  report = tmp_path / 'answer.txt'
+  runtime_bundle = _runtime_bundle(tmp_path)
+  member_executable = runtime_bundle.host_venv / 'bin' / 'do-ride'
+  member_source = f"""#!{sys.executable}
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+
+from bro.launch.broxy import session_broxy
+from bro.run_lifecycle import RunLifecycle
+from bro.summon import summon_and_wait, summon_detached
+
+prompt = sys.argv[-1]
+if prompt in ('first', 'second'):
+  assert Path.cwd() == Path({str(workspace.tree)!r})
+  assert os.environ['RIDE_PARTY_MEMBER'].startswith('broker-')
+elif prompt == 'owner':
+  assert Path.cwd() != Path({str(workspace.tree)!r})
+  assert 'RIDE_PARTY_MEMBER' not in os.environ
+else:
+  assert Path.cwd() != Path({str(workspace.tree)!r})
+  assert os.environ['RIDE_PARTY_MEMBER'].startswith('broker-')
+with session_broxy():
+  lifecycle = RunLifecycle.from_env()
+  assert lifecycle is not None
+  lifecycle.trail('trail-' + prompt)
+  if prompt == 'first':
+    answer = summon_and_wait('dev', 'second', party='join', timeout=20)
+    lifecycle.completed('first:' + answer, 'ok')
+  elif prompt == 'second':
+    lifecycle.completed('second', 'ok')
+  elif prompt == 'owner':
+    summon_detached('dev', 'linger', party='join', timeout=20)
+    marker = Path('linger-started')
+    deadline = time.monotonic() + 10
+    while not marker.exists():
+      assert time.monotonic() < deadline
+      time.sleep(0.05)
+    lifecycle.completed('owner', 'ok')
+  else:
+    signal.signal(signal.SIGTERM, lambda *_args: sys.exit(0))
+    Path('linger-started').touch()
+    time.sleep(30)
+  lifecycle.close()
+"""
+  member_executable.write_text(member_source)
+  member_executable.chmod(0o755)
+  root_source = f"""
+import time
+from pathlib import Path
+from bro.launch.broxy import session_broxy
+from bro.summon import summon_and_wait
+
+with session_broxy():
+  answer = summon_and_wait(
+    'dev',
+    'first',
+    party='join',
+    grant=['@dev', ':party.join'],
+    timeout=20,
+  )
+  owner = summon_and_wait(
+    'dev',
+    'owner',
+    isolation='unboxed',
+    grant=['@dev', ':party.join'],
+    timeout=20,
+  )
+  Path({str(report)!r}).write_text(answer + '|' + owner)
+  time.sleep(1)
+"""
+  launch = ride.spawn.ProcessLaunchSpec(
+    command=[sys.executable, '-c', root_source],
+    cwd=str(workspace.tree),
+    env=dict(os.environ),
+    interactive=False,
+  )
+
+  code = ride.spawn.run_root_via_broker(
+    launch,
+    workspace=workspace,
+    bro='bro-dev',
+    may_summon={'dev'},
+    permits={'party.join', 'party.start.unboxed'},
+    credential_scope=workspace_store.ScopedSecrets(set(), set()),
+    container_runtime=_container_runtime(),
+    runtime_bundle=runtime_bundle,
+  )
+
+  assert code == 0
+  assert report.read_text() == 'first:second|owner'
+  party = workspace.path / 'party'
+  assert not party.exists() or list(party.iterdir()) == []
+  workspaces = [
+    path.name for path in workspace.path.parent.iterdir() if (path / 'workspace.json').is_file()
+  ]
+  assert workspaces == ['party-root']
+
+
 class TestClaudeSummonLowering:
   @pytest.fixture
   def claude_harness(self, lowering_harness, monkeypatch):
@@ -752,6 +905,42 @@ class TestClaudeSummonLowering:
       **overrides,
     }
     return ride.spawn.SummonLaunchSpec(**fields)
+
+  def test_unboxed_join_provisions_claude_state_under_the_member_records(
+    self, claude_harness, monkeypatch, tmp_path
+  ):
+    from bro.monitor import CLAUDE_CONFIG_DIR_ENV
+    from ride.claude.harness import CLAUDE
+
+    workspace = Workspace.ensure(PARENT, None, Isolation.UNBOXED)
+    workspace.tree.mkdir(parents=True)
+    seen: list[tuple[Path, Path]] = []
+
+    def prepare(spec, records, tree, env):
+      del spec
+      seen.append((records, tree))
+      claude = records / 'claude'
+      claude.mkdir()
+      env[CLAUDE_CONFIG_DIR_ENV] = str(claude)
+
+    monkeypatch.setattr(CLAUDE, 'prepare_unboxed_env', prepare)
+    lowered = ride.spawn._lower_join(
+      self._launch(
+        repo=None,
+        parent_tree=workspace.tree,
+        party='join',
+        isolation=None,
+      ),
+      'broker-CH',
+      _runtime_bundle(tmp_path),
+      _artifacts(),
+    )
+    records = party_member_dir(workspace.path, 'broker-CH')
+    assert seen == [(records, workspace.tree)]
+    assert lowered.env[CLAUDE_CONFIG_DIR_ENV] == str(records / 'claude')
+    assert lowered.cleanup_directory is not None
+    shutil.rmtree(lowered.cleanup_directory)
+    shutil.rmtree(records)
 
   def test_lowers_to_a_ride_solo_claude_launch(self, claude_harness):
     lowered = _lower_boxed(self._launch(), 'broker-CH', _container_runtime(), _artifacts())

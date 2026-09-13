@@ -147,10 +147,10 @@ class ClaudeHarness:
     return ContainerExtras(env=claude_env, mounts=tuple(claude_mounts))
 
   def prepare_unboxed_env(
-    self, spec: 'SessionSpec', workspace: Workspace, tree: Path, env: dict[str, str]
+    self, spec: 'SessionSpec', records: Path, tree: Path, env: dict[str, str]
   ) -> None:
     del spec
-    claude_dir = provision_unboxed_claude_dir(workspace.path, tree)
+    claude_dir = provision_unboxed_claude_dir(records, tree)
     env[CLAUDE_CONFIG_DIR_ENV] = str(claude_dir)
     apply_claude_auth(env)
 
