@@ -15,7 +15,11 @@ routing, early exit, timeout, teardown, channel-pinned identity); C — the
 launcher; E — SIGINT handling through the attached root; F — `do-ride` as the
 session runner as the container command (exit-code propagation, in-container
 argv build: merged --settings, MCP namespaces, RIDE_SESSION_CONTEXT);
-G — the stop interrupt, so `docker stop` lands in claude as a keypress.
+G — the stop interrupt, so `docker stop` lands in claude as a keypress;
+H — joining a boxed party (a member `docker exec`'d into the party's running
+container: the store `docker cp`'d in, the `env -i` snapshot, the pid handshake
+read back through the party mount, the member lifecycle routed to the first
+session, and the first session's exit tearing a live member down).
 
 Isolation: every launch runs under a throwaway HOME, data home and project root,
 so no scenario touches the user's own claude or runtime state. The
@@ -1138,3 +1142,288 @@ class TestDockerStopReachesClaude:
 
   def test_container_torn_down(self, scenario_g: LiveRun) -> None:
     assert scenario_g.container_gone_after
+
+
+# --- H: joining a boxed party over the live daemon ----------------------------
+
+# The party's first session: consume the channel, hand mid-run control to the
+# harness, then send a spawn request and record the member's lifecycle marks as
+# received. EXIT_AFTER decides whether it waits for the member's result (a clean
+# join) or exits once the member is up (so the party end tears a live member
+# down). On the clean path it then holds the party alive until released, so the
+# member's own clean settle — not the party teardown — decides its records.
+_PROBE_PARTY_ROOT = """
+import json, os, sys, time
+from pathlib import Path
+
+from bro.broker import brotocol
+from bro.broker.transport import connect
+
+report = {'messages': []}
+
+def _wait_for(path, timeout=60):
+  deadline = time.monotonic() + timeout
+  while not Path(path).exists():
+    if time.monotonic() > deadline:
+      sys.exit(7)
+    time.sleep(0.2)
+
+def main():
+  exit_after = os.environ['RIDE_E2E_EXIT_AFTER']
+  transport = connect(os.environ['BROKER_CHANNEL'])
+  request = brotocol.request('spawn', {})
+  transport.send(request)
+  report['request_id'] = request.id
+  end = time.monotonic() + 90
+  while time.monotonic() < end:
+    message = transport.receive(end - time.monotonic())
+    if message is None:
+      break
+    report['messages'].append({'type': message.type, 'payload': message.payload})
+    if message.type == 'result':
+      break
+    if (
+      exit_after == 'started'
+      and message.type == 'mark'
+      and message.payload.get('transition') == 'started'
+    ):
+      break
+  # keep the party (this session) alive past a clean member's result so the
+  # member's own exit and settle run before teardown; the teardown case exits
+  # here with the member still live, on purpose
+  if exit_after == 'ok':
+    Path('/workspace/.member-reported').touch()
+    _wait_for('/workspace/.party-release')
+
+# ready before continue before the spawn, so the joined member sees the shared
+# tree the party's first session already touched
+Path('/workspace/.e2e-ready').touch()
+_wait_for('/workspace/.e2e-continue')
+try:
+  main()
+finally:
+  Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
+"""
+
+# the joined member, exec'd into the party's running container: prove it runs
+# inside that container beside the first session (the shared /workspace tree and
+# the party mount), that its process record landed under the party mount (the
+# started handshake reads it host-side), then emit the real lifecycle.
+_MEMBER_CLEAN = """
+import os, sys
+from pathlib import Path
+
+assert os.environ.get('BROKER_UPSTREAM') is None, 'the broxy did not consume its upstream'
+assert Path('/workspace/.e2e-ready').is_file(), 'the member does not share the party tree'
+session = Path(os.environ['RIDE_SESSION_DIR'])
+assert session == Path('/var/ride/party/ride-e2e-member/session'), session
+assert (session / 'runner.pid').is_file(), 'the exec wrapper wrote no process record'
+assert os.environ['BRO_STORE'] == '/home/ride/.bro-party/ride-e2e-member/store', os.environ['BRO_STORE']
+
+from bro.run_lifecycle import RunLifecycle
+channel = RunLifecycle.from_env()
+assert channel is not None
+channel.trail('member-trail')
+channel.completed('member-ok', 'ok')
+channel.close()
+"""
+
+# the member that reports started then outlives the party's first session
+_MEMBER_HANG = """
+import time
+from bro.run_lifecycle import RunLifecycle
+channel = RunLifecycle.from_env()
+assert channel is not None
+channel.trail('member-trail')
+time.sleep(600)
+"""
+
+_MEMBER_NAME = 'ride-e2e-member'
+
+
+@dataclass
+class BoxedJoinRun:
+  code: int
+  report: dict
+  member_records_exist: bool
+  member_ran_in_party: bool
+  channels_after: frozenset[str]
+  live_after: list[str]
+
+
+def _run_boxed_join_scenario(
+  env: IsolatedEnv,
+  case: str,
+  member_probe: str,
+  *,
+  exit_after: str,
+  budget: float = 200,
+) -> BoxedJoinRun:
+  from bro.monitor import party_member_dir, workspace_session_dir
+  from ride.workspace.docker import MEMBER_BASELINE_ENV, MemberExec
+  from ride.workspace.metadata import Isolation
+  from ride.workspace.model import Workspace
+  from ride.workspace.spawn import (
+    CompositeSpawner,
+    ExecLaunchSpec,
+    ExecSpawner,
+    PartyMembers,
+  )
+
+  name = f'{_NAME_PREFIX}h-{case}-party'
+  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  party_dir = workspace.path / 'party'
+  party_dir.mkdir(parents=True, exist_ok=True)
+  records = party_member_dir(workspace.path, _MEMBER_NAME)
+  workspace_session_dir(records).mkdir(parents=True, exist_ok=True)
+
+  root = DockerLaunchSpec(
+    workspace_docker.Launch(
+      name=name,
+      command=_session_broxy_probe(_PROBE_PARTY_ROOT),
+      env={'RIDE_E2E_EXIT_AFTER': exit_after},
+      secrets=(),
+      tty=False,
+      forward_env=False,
+      image=env.image,
+      runtime_bundle_hash=env.runtime_bundle_hash,
+      repo=env.project,
+      extra_mounts=(f'{party_dir}:/var/ride/party',),
+    )
+  )
+
+  ran_in_party: dict[str, bool] = {}
+
+  def spawn_member(context: Dispatcher, peer: Peer, _message: Message) -> None:
+    container_id = find_container_id(env.tree(name))
+    assert container_id is not None, 'the party container is not running at spawn time'
+    ran_in_party['id'] = True
+    member = ExecLaunchSpec(
+      launch=MemberExec(
+        container=container_id,
+        member=_MEMBER_NAME,
+        command=_session_broxy_probe(member_probe),
+        env={
+          **MEMBER_BASELINE_ENV,
+          'RIDE_IN_CONTAINER': '1',
+          'RIDE_SESSION_DIR': f'/var/ride/party/{_MEMBER_NAME}/session',
+        },
+        secrets=(),
+      ),
+      party_workspace=name,
+      records_directory=str(records),
+    )
+    context.spawn(member, peer)
+
+  party_members = PartyMembers()
+  transport = TcpServerTransport(broker_bind_hosts())
+  spawner = CompositeSpawner(
+    {
+      DockerLaunchSpec: DockerSpawner(party_members=party_members),
+      ExecLaunchSpec: ExecSpawner(party_members),
+    }
+  )
+  facade = Broker(transport, spawner, default_timeout=600)
+  facade.on('ping', ping_handler)
+  facade.on('spawn', spawn_member)
+
+  result: dict[str, int] = {}
+  with pytest.MonkeyPatch.context() as monkeypatch:
+    monkeypatch.setenv('HOME', str(env.home))
+    thread = threading.Thread(target=lambda: result.update(code=facade.run(root)))
+    thread.start()
+    ready = env.tree(name) / '.e2e-ready'
+    _wait_until(
+      lambda: ready.exists() or not thread.is_alive(),
+      budget,
+      f'{name} party ready file',
+      None,
+    )
+    if not ready.exists():
+      _remove_stray_containers(env)
+      thread.join(30)
+      pytest.fail(f'party for case {case!r} exited before it came up')
+    (env.tree(name) / '.e2e-continue').touch()
+    if exit_after == 'ok':
+      # the party holds after the member reports; wait for the member's own clean
+      # settle to remove its records (not the party teardown), then release it
+      _wait_until(
+        lambda: (env.tree(name) / '.member-reported').exists() or not thread.is_alive(),
+        budget,
+        f'{name} member reported',
+        None,
+      )
+      _wait_until(
+        lambda: not records.is_dir() or not thread.is_alive(),
+        60,
+        f'{name} member clean settle removing its records',
+        None,
+      )
+      (env.tree(name) / '.party-release').touch()
+    deadline = time.monotonic() + budget
+    while thread.is_alive() and time.monotonic() < deadline:
+      time.sleep(0.25)
+    if thread.is_alive():
+      _remove_stray_containers(env)
+      thread.join(30)
+    if thread.is_alive():
+      pytest.fail(f'boxed-join run for case {case!r} wedged past {budget}s')
+
+  report_path = env.tree(name) / '.e2e-report.json'
+  report = json.loads(report_path.read_text()) if report_path.is_file() else {}
+  return BoxedJoinRun(
+    code=result['code'],
+    report=report,
+    member_records_exist=records.is_dir(),
+    member_ran_in_party=ran_in_party.get('id', False),
+    channels_after=transport.channels,
+    live_after=env.live_containers(),
+  )
+
+
+@pytest.fixture(scope='module')
+def boxed_join_clean(isolated_env: IsolatedEnv) -> BoxedJoinRun:
+  return _run_boxed_join_scenario(isolated_env, 'clean', _MEMBER_CLEAN, exit_after='ok')
+
+
+@pytest.fixture(scope='module')
+def boxed_join_teardown(isolated_env: IsolatedEnv) -> BoxedJoinRun:
+  return _run_boxed_join_scenario(isolated_env, 'teardown', _MEMBER_HANG, exit_after='started')
+
+
+class TestBoxedPartyJoin:
+  def test_member_runs_inside_the_party_container(self, boxed_join_clean: BoxedJoinRun) -> None:
+    assert boxed_join_clean.member_ran_in_party, (
+      'the member was not exec_d into the party container'
+    )
+    assert boxed_join_clean.code == 0
+
+  def test_member_lifecycle_routed_to_the_party(self, boxed_join_clean: BoxedJoinRun) -> None:
+    types = [message['type'] for message in boxed_join_clean.report['messages']]
+    assert types == ['mark', 'mark', 'mark', 'result'], boxed_join_clean.report['messages']
+    accepted, started, trail, completed = boxed_join_clean.report['messages']
+    assert accepted['payload'] == {'transition': 'accepted'}
+    assert started['payload'] == {'transition': 'started'}
+    assert trail['payload'] == {'transition': 'trail', 'trail_id': 'member-trail'}
+    assert completed['payload'] == {'outcome': 'ok', 'value': 'member-ok'}
+
+  def test_clean_member_records_removed(self, boxed_join_clean: BoxedJoinRun) -> None:
+    # the party container stays live in this scenario; its own teardown is the
+    # first session's, not the member's — the member's records go on its clean exit
+    assert not boxed_join_clean.member_records_exist
+    assert boxed_join_clean.channels_after == frozenset()
+    assert boxed_join_clean.live_after == []
+
+  def test_party_end_kills_a_live_member(self, boxed_join_teardown: BoxedJoinRun) -> None:
+    types = [message['type'] for message in boxed_join_teardown.report['messages']]
+    assert types == ['mark', 'mark'], boxed_join_teardown.report['messages']
+    assert [
+      message['payload']['transition'] for message in boxed_join_teardown.report['messages']
+    ] == [
+      'accepted',
+      'started',
+    ]
+    assert boxed_join_teardown.channels_after == frozenset()
+    assert boxed_join_teardown.live_after == [], 'the party container survived its first session'
+    # a killed member keeps its records for inspection
+    assert boxed_join_teardown.member_records_exist

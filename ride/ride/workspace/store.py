@@ -11,7 +11,7 @@ import shutil
 import tarfile
 from collections.abc import Collection
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from bro.base import credentials, log
@@ -124,32 +124,34 @@ def materialize_scoped_store(files: dict[str, bytes], directory: Path) -> Path:
   return directory
 
 
-def _bro_tarball(files: dict[str, bytes]) -> bytes:
+def store_tarball(files: dict[str, bytes], root: PurePosixPath) -> bytes:
   """pack a scoped credential store into a tar for `docker cp` into /home/ride.
 
-  Entries are prefixed `.bro/` so extracting at /home/ride lands them at
-  /home/ride/.bro/<file>. files are 0600, the dir 0700, all owned by the host
-  uid/gid (the same uid the entrypoint remaps `ride` to on Linux); the entrypoint
-  re-owns the tree to `ride` after its remap so the bytes are readable there and on
-  Docker for Mac (where the remap is skipped). mtime defaults to 0 — deterministic,
-  no clock needed.
+  Entries are prefixed with `root` (a relative path) so extracting at /home/ride
+  lands them at /home/ride/<root>/<file>. files are 0600, the dirs 0700, all owned
+  by the host uid/gid (the same uid the entrypoint remaps `ride` to on Linux); the
+  receiving side re-owns the tree to `ride` after that remap so the bytes are
+  readable there and on Docker for Mac (where the remap is skipped). mtime
+  defaults to 0 — deterministic, no clock needed.
   """
+  if root.is_absolute():
+    raise ValueError(f'store tar root must be relative, not {root}')
   uid, gid = os.getuid(), os.getgid()
   buffer = io.BytesIO()
+
+  def add_directory(tar: tarfile.TarFile, path: PurePosixPath) -> None:
+    info = tarfile.TarInfo(str(path))
+    info.type = tarfile.DIRTYPE
+    info.mode = 0o700
+    info.uid, info.gid = uid, gid
+    tar.addfile(info)
+
   with tarfile.open(fileobj=buffer, mode='w') as tar:
-    root = tarfile.TarInfo('.bro')
-    root.type = tarfile.DIRTYPE
-    root.mode = 0o700
-    root.uid, root.gid = uid, gid
-    tar.addfile(root)
-    credentials_directory = tarfile.TarInfo('.bro/creds')
-    credentials_directory.type = tarfile.DIRTYPE
-    credentials_directory.mode = 0o700
-    credentials_directory.uid, credentials_directory.gid = uid, gid
-    tar.addfile(credentials_directory)
+    for directory in (*reversed(root.parents[:-1]), root, root / 'creds'):
+      add_directory(tar, directory)
     for filename in sorted(files):
       data = files[filename]
-      info = tarfile.TarInfo(f'.bro/{filename}')
+      info = tarfile.TarInfo(str(root / filename))
       info.size = len(data)
       info.mode = 0o600
       info.uid, info.gid = uid, gid
