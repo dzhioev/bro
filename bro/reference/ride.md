@@ -929,7 +929,8 @@ The authorized spawn goes through the composite spawner with the requesting peer
 a grandchild’s lifecycle routes to the child that summoned it, and root exit still tears down the whole tree.
 Every event lands a host log line and a durable audit row under `<runtime-root>/summon/<name>.jsonl`.
 Each row keys the ride under `ride`, using the root workspace name.
-Each entry names its actual `summoner` as `{workspace, member?, bro, trail_id?}`, plus target, bounded args, transition, trail id, and terminal outcome.
+Each entry names its actual `summoner` as `{workspace, member?, bro, trail_id?}`, plus target, bounded request args, resolved `placement` as `{party, isolation}`, transition, trail id, and terminal outcome.
+The placement records the effective isolation inherited by a join, while a manual summon's isolation stays null because the user's launch settles it.
 Live readers never read that audit back:
 check, list, watch, and the session-local statusLine projector query the caller-scoped in-memory journal over their own broker channel, so the same surfaces work at any summon depth.
 The scope begins with quests the caller requested and includes their descendants;
