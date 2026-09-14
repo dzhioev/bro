@@ -40,7 +40,7 @@ class _Harness:
       ),
       patch(
         'ride.claude.runner._run_claude',
-        return_value=ride_runner.InteractiveRun(0, stopped=False),
+        return_value=ride_runner.Run(0, stopped=False),
       ),
       patch('ride.claude.runner.start_session_recorder'),
       patch('ride.claude.runner.apply_claude_auth'),
@@ -264,7 +264,7 @@ class TestSessionRun:
   def test_claude_exit_code_propagates(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      h.run_claude.return_value = ride_runner.InteractiveRun(42, stopped=False)
+      h.run_claude.return_value = ride_runner.Run(42, stopped=False)
       assert ride_runner.run_session(_spec()) == 42
 
   def test_ride_session_applies_auth_with_warning(self, monkeypatch, tmp_path):
@@ -339,12 +339,11 @@ class TestRunClaudeRootSolo:
     monkeypatch.setenv('RIDE_SESSION_DIR', str(session))
     trail_pointer.write(session / trail_pointer.FILENAME, 't-root')
     monkeypatch.setattr(ride_runner, 'RunLifecycle', FakeChannel)
-    run_claude = MagicMock(return_value=ride_runner.InteractiveRun(0, stopped=False))
-    monkeypatch.setattr(ride_runner, '_run_claude', run_claude)
-    transcripts = tmp_path / 'projects'
+    run_claude = MagicMock(return_value=ride_runner.Run(0, stopped=False))
+    monkeypatch.setattr(ride_runner, 'run_printing_through', run_claude)
 
-    assert ride_runner._run_claude_root_solo(['built'], {'ENV': 'yes'}, transcripts) == 0
-    assert run_claude.call_args.args == (['built'], {'ENV': 'yes'}, transcripts)
+    assert ride_runner._run_claude_root_solo(['built'], {'ENV': 'yes'}) == 0
+    assert run_claude.call_args.args == (['claude', 'built'], {'ENV': 'yes'})
     assert events == [
       ('trail', 't-root'),
       ('close',),
@@ -364,11 +363,11 @@ class TestRunClaudeRootSolo:
     monkeypatch.setattr(ride_runner, 'RunLifecycle', FakeChannel)
     monkeypatch.setattr(
       ride_runner,
-      '_run_claude',
-      MagicMock(return_value=ride_runner.InteractiveRun(0, stopped=True)),
+      'run_printing_through',
+      MagicMock(return_value=ride_runner.Run(0, stopped=True)),
     )
 
-    assert ride_runner._run_claude_root_solo([], {}, tmp_path / 'projects') == 0
+    assert ride_runner._run_claude_root_solo([], {}) == 0
     assert events == []
 
 
@@ -472,9 +471,9 @@ class TestRunClaudeSummonedInteractive:
     monkeypatch.setattr(ride_runner, '_TRAIL_POLL_SECONDS', 0.05)
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-manual')
 
-    def _linger(*_arguments) -> ride_runner.InteractiveRun:
+    def _linger(*_arguments) -> ride_runner.Run:
       time.sleep(0.4)
-      return ride_runner.InteractiveRun(0, stopped=False)
+      return ride_runner.Run(0, stopped=False)
 
     monkeypatch.setattr(ride_runner, 'run_interactive', _linger)
     transcripts = tmp_path / 'projects'
@@ -519,6 +518,16 @@ class TestSoloSession:
         assert ride_runner.run_session(_spec(solo=True)) == 5
       solo.assert_called_once()
       harness.run_claude.assert_not_called()
+
+  def test_a_failed_exit_is_logged_and_a_clean_one_is_not(self, monkeypatch, tmp_path, caplog):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path):
+      with patch('ride.claude.runner._run_claude_root_solo', return_value=0):
+        assert ride_runner.run_session(_spec(solo=True)) == 0
+      assert 'claude exited with status' not in caplog.text
+      with patch('ride.claude.runner._run_claude_root_solo', return_value=5):
+        assert ride_runner.run_session(_spec(solo=True)) == 5
+    assert 'claude exited with status 5' in caplog.text
 
 
 class TestSummonedSession:

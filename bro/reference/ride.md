@@ -19,7 +19,7 @@ workspace mechanics, credential scoping, broker supervision, and bro composition
 
 Runs one prompt without a TTY and writes the harness reply to stdout.
 The default harness is Claude Code and the default hold is `unattended`.
-Claude runs in print mode;
+Claude runs in print mode on the session's own streams, so the reply is its stdout and its diagnostics land on stderr beside the ride's own log lines;
 the bro harness runs `bro run` with the ask display preset.
 Both retain the session record needed by `ride resume` when the workspace is kept.
 

@@ -9,11 +9,11 @@ takes the whole turn down with it — the terminal payload and the sibling calls
 batched beside it.
 
 Reaching that interrupt from outside the session takes a different mechanism per
-flavor. Print-mode claude takes SIGINT as the interrupt and exits on it. A TUI
-claude reads its terminal in raw mode, where Ctrl-C is a keypress rather than a
-signal, and treats SIGINT as quit-now instead — so its interrupt has to arrive
-as that keypress, which is why an interactive run gives claude a pty of its own
-and proxies the session's terminal through it.
+flavor. Print-mode claude runs on the session's own streams, takes SIGINT as the
+interrupt and exits on it. A TUI claude reads its terminal in raw mode, where
+Ctrl-C is a keypress rather than a signal, and treats SIGINT as quit-now instead
+— so its interrupt has to arrive as that keypress, which is why an interactive
+run gives claude a pty of its own and proxies the session's terminal through it.
 """
 
 import contextlib
@@ -59,39 +59,54 @@ _EXIT_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
-class InteractiveRun:
-  """a finished interactive claude run and whether an external stop ended it."""
+class Run:
+  """a finished claude run: its exit code, and whether a stop request rather
+  than the agent's own completion ended it."""
 
   code: int
   stopped: bool
 
 
 @dataclass(frozen=True)
-class PrintedRun:
-  """a finished print-mode claude run: its exit code, the reply it printed, and
-  whether a stop request rather than the agent's own completion ended it."""
+class PrintedRun(Run):
+  """a finished print-mode claude run that captured the reply it printed."""
 
-  code: int
   output: str
-  stopped: bool
 
 
 def run_printing(argv: list[str], env: Mapping[str, str]) -> PrintedRun:
-  """run print-mode claude to completion, capturing its printed reply."""
-  process = subprocess.Popen(argv, env=dict(env), stdout=subprocess.PIPE, text=True)
+  """run print-mode claude to completion, capturing the reply it prints."""
+  process = _start_printing(argv, env, stdout=subprocess.PIPE)
   with stopped_on_sigterm(lambda: _interrupt_printing(process)) as stopped:
     output, _ = process.communicate()
-  return PrintedRun(process.returncode, output, stopped.is_set())
+  return PrintedRun(process.returncode, stopped.is_set(), output)
 
 
-def run_interactive(argv: list[str], env: Mapping[str, str], transcripts: Path) -> InteractiveRun:
+def run_printing_through(argv: list[str], env: Mapping[str, str]) -> Run:
+  """run print-mode claude to completion with its reply on the session's own
+  stdout."""
+  process = _start_printing(argv, env, stdout=None)
+  with stopped_on_sigterm(lambda: _interrupt_printing(process)) as stopped:
+    process.wait()
+  return Run(process.returncode, stopped.is_set())
+
+
+def _start_printing(
+  argv: list[str], env: Mapping[str, str], *, stdout: int | None
+) -> subprocess.Popen:
+  """start print-mode claude with its stderr on the session's own and its stdin
+  closed: print mode takes its prompt from argv, never from the session's input."""
+  return subprocess.Popen(argv, env=dict(env), stdin=subprocess.DEVNULL, stdout=stdout, text=True)
+
+
+def run_interactive(argv: list[str], env: Mapping[str, str], transcripts: Path) -> Run:
   """run claude's TUI on a pty proxying the session's terminal.
 
   `transcripts` is the projects dir the interrupted turn lands in."""
   with _terminal_run(argv, env) as run:
     with stopped_on_sigterm(lambda: _interrupt_interactive(run, transcripts)) as stopped:
       code = run.process.wait()
-  return InteractiveRun(code, stopped.is_set())
+  return Run(code, stopped.is_set())
 
 
 def _interrupt_printing(process: subprocess.Popen) -> None:
