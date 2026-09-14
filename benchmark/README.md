@@ -16,23 +16,26 @@ uv sync --directory benchmark --all-groups
 
 A benchmark task runs in a foreign image that must not be modified,
 and several carry no Python at all, so the agent brings its own.
-`benchmark bundle` builds a relocatable directory holding a pinned standalone CPython, the framework distributions a bro runs from — `bro`, `bro-native` and `bro-dev`
-— resolved from the framework's lock, and a `bro` shim over them:
+`benchmark bundle` builds a relocatable directory in the materialized-runtime layout `ride --runtime-bundle` takes:
+`venv/`, a pinned standalone CPython with the framework distributions a ride runs from
+— `bro`, `bro-native`, `bro-dev` and `bro-ride`, resolved from the framework's lock
+— installed into its own site-packages, every console script relocated to find that interpreter beside itself;
+`bin/`, the shim farm over the session commands, which leads a session's `PATH` and keeps the bundled `python3` off it;
+and `claude/`, the standalone Claude Code binary at the version ride pins, verified against the release manifest's checksum:
 
 ```
 uv run --project benchmark benchmark bundle
 ```
 
-It lands in `var/benchmark/bundle` unless `--output` says otherwise.
-Its `bundle.json` manifest identifies the source commit, exact framework wheels, dependency pins, interpreter, target, and shim that produced it.
+It lands in `var/benchmark/bundle` unless `--output` says otherwise, and the downloaded binary is kept under `var/benchmark/claude-code` for the next build.
+Its `bundle.json` manifest identifies the source commit, exact framework wheels, dependency pins, interpreter, target, and Claude Code binary that produced it.
 The canonical manifest digest is the bundle identity Harbor records as `agent_info.version` for every trial.
-Copying the directory somewhere is the whole installation, and
-the shim inside it is the framework's `bro` command:
+Copying the directory somewhere is the whole installation:
 
 ```
 docker exec <container> mkdir --parents /installed-agent
 docker cp var/benchmark/bundle <container>:/installed-agent/bro
-docker exec <container> /installed-agent/bro/bro show terminal
+docker exec <container> /installed-agent/bro/venv/bin/bro show terminal
 ```
 
 The bundle targets linux/x86_64 glibc, and a build refuses any other host rather than producing one
@@ -54,8 +57,25 @@ uv run --project benchmark bro.benchmark.job -c benchmark/bro/benchmark/terminal
 The completed job directory is Harbor's raw output plus one `bundle.json` copied from the bundle the trials ran, so later workflows can derive the source commit and framework revision without consulting the workspace.
 Conversion, publication, and durable retention are separate operations rather than part of this command.
 
+Each trial is one `ride solo` inside the task container:
+an unboxed root in the task's own directory, on the uploaded bundle as its runtime, permitted to have its summons join its party and start nothing
+— so the `terminal` bro delegates to further `terminal`s as processes beside it in the same tree, with no Docker in the container.
+The agent's `harness` kwarg selects the driving loop, `bro` or `claude`, and `llm_credential` the one credential the container gets:
+the LLM key on the bro harness, the `claude_code` setup token on the claude one.
+The pinned config runs the bro harness;
+a claude entry beside it reads:
+
+```yaml
+  - import_path: bro.benchmark.harbor_agent:BroAgent
+    model_name: claude-code/opus5:high
+    kwargs:
+      bro: terminal
+      harness: claude
+      llm_credential: claude_code+benchmark
+```
+
 The job config is the whole reproducibility contract
-— dataset digest, the bros under test, the model, concurrency, attempt depth, and the retry policy
+— dataset digest, the bros and harnesses under test, the model, concurrency, attempt depth, and the retry policy
 — so a run is described by that file plus the bundle.
 The config repeats every trial five times;
 `-k/--n-attempts` overrides that depth when a wave run needs fewer attempts.
@@ -67,9 +87,9 @@ The score lands in `<jobs_dir>/<job-name>/result.json` (`jobs/` unless `-o` says
 `stats.evals`, one entry per agent and dataset:
 `pass_at_k`, `reward_stats`, `exception_stats`,
 `n_trials`, `n_errors`.
-Each trial keeps its own directory beside it, with the bro's activity log
-(`agent/bro.log`), per-model token counts (`agent/usage.json`) and the trail the run recorded
-(`agent/ride/trails/`) as the run's record.
+Each trial keeps its own directory beside it, with the ride's activity log
+(`agent/bro.log`) and its runtime root (`agent/ride/`) as the run's record:
+the trail store (`agent/ride/trails/`), the workspace records, and the summon audit.
 
 They are copied out of the container once the trial ends,
 so a job runs wherever the docker daemon is reachable and leaves nothing of a trial on the docker host.
@@ -212,8 +232,10 @@ Following a run as it happens means reading the log where
 it is being written:
 `docker exec <task-container> tail -f /logs/agent/bro.log`.
 
-The container gets exactly one credential, the LLM key named by the `llm_credential` kwarg
-— use a
-dedicated, budget-capped instance.
+The container gets exactly one credential, the one the `llm_credential` kwarg names:
+on the bro harness an LLM key
+— use a dedicated, budget-capped instance
+— and on the claude harness a `claude_code` setup token, an account credential no budget caps, so a public run uses a dedicated Claude account whose token is revoked after the run.
+The ride hydrates it into a private temporary store outside the collected tree.
 It sits in a container where an LLM has unrestricted shell and
 internet, and the task instruction is third-party text the bro treats as its request.

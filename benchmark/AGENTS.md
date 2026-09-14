@@ -49,24 +49,32 @@ BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_
 
 - `bro/benchmark/cli.py` (`benchmark`) — owns every post-run verb:
   `bundle`, `retain`, `publish`, `query`, and `import-trails`
-- `bro/benchmark/bundle.py` (`benchmark bundle`) — builds the relocatable directory a foreign container runs `bro` from:
-  a pinned standalone CPython, the dependencies `WHEEL_PACKAGES` resolves to against the workspace lock, those distributions themselves entering as built wheels, and a shim setting `PYTHONPATH` over them.
+- `bro/benchmark/bundle.py` (`benchmark bundle`) — builds the relocatable runtime a foreign container runs `ride` from, in the materialized `venv/` + `bin/` layout `--runtime-bundle` takes:
+  a pinned standalone CPython with the dependencies `WHEEL_PACKAGES` resolves to against the workspace lock and those distributions themselves as built wheels installed into its own site-packages,
+  every console script relocated to find the interpreter beside itself,
+  ride's shim farm over the session commands,
+  and the Claude Code binary at ride's pinned version under `claude/`, checksum-verified from the release manifest and cached between builds.
   Its manifest records those inputs and gives the bundle a content-derived identity.
-  `Bundle` is the layout a consumer addresses — shim, interpreter, site-packages, CA store, manifest, and identity;
+  `Bundle` is the layout a consumer addresses — interpreter, scripts, shim farm, `claude`, manifest, and identity;
   `built(root)` reports an absent, incomplete, or malformed bundle rather than building one behind the caller's back
 - `bro/benchmark/harbor_agent.py` — `BroAgent`, the `BaseInstalledAgent` harbor imports.
-  Its Harbor version is the uploaded bundle's identity.
-  `install()` uploads the bundle and a scoped store holding only the LLM key, then runs
+  Its Harbor version is the uploaded bundle's identity, and its recorded name carries the bro and, off the default, the harness.
+  `install()` uploads the bundle and a scoped store holding only the LLM credential, then runs
   `bro show <bro>` through the uploaded bundle
   — the one validation the host cannot make, and a
-  smoke test of the bundle in the task's own image.
+  smoke test of the bundle in the task's own image
+  — and `claude --version` on the claude harness.
   `run()` is a single
-  `bro run <bro> <instruction>` under `setsid`, reaped through a fresh root exec when
-  harbor cancels the phase.
+  `ride solo --unboxed --tree "$PWD" --runtime-bundle <bundle> …` under `setsid`,
+  a join-only ride in the task's directory whose records land under the collected agent directory,
+  reaped through a fresh root exec when harbor cancels the phase.
   Harbor's `model_name` carries a registered provider's name plus a `--llm` recipe with its provider slot dropped
   — `<provider>/<model>[:<effort>][+fast]`, mapped onto `--llm :<recipe>`, the spelling
   that keeps the persona's own spec;
-  the retry classification is the roster providers' declared failure signatures
+  the retry classification is the roster providers' declared failure signatures;
+  the token counters harbor keeps are summed from the trial's trail store
+- `bro/benchmark/trial_store.py` — the trail store a trial's run leaves under its collected agent directory:
+  its path, whether a run recorded into it, and the token totals over its trails
 - `bro/benchmark/harbor_environment.py` — `UnmountedDockerEnvironment`, the environment the job
   config names:
   it keeps a trial's logs, artifacts and reward inside the task container for harbor

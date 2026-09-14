@@ -17,10 +17,11 @@ from harbor.utils.trajectory_validator import TrajectoryValidator
 from bro.base import credentials
 from bro.base.suite_environment import host_credential_store, token_spending_skip_reason
 from bro.benchmark.bundle import built, default_root, host_mismatch, workspace_root
-from bro.benchmark.trajectory import TRAILS_DIRECTORY
+from bro.benchmark.trial_store import TRAILS_DIRECTORY
 
 # the smallest image in the set, and one carrying neither python3 nor a CA
-# store — so a single trial exercises the bundle and SSL_CERT_FILE for real
+# store — so a single trial exercises the bundle's own interpreter and CA roots
+# for real
 TASK = 'terminal-bench/adaptive-rejection-sampler'
 JOB_CONFIG = Path(__file__).with_name('terminal_bench_2_1.yaml')
 
@@ -84,7 +85,7 @@ def assert_graded_run(jobs: Path) -> Path:
     assert evaluated['reward_stats'] != {}, f'{name} produced no reward'
   # what the reward alone cannot tell: a bro that died on startup is graded zero
   # like one that worked the task and failed. Tokens mean the loop actually ran,
-  # and that the usage file made it back out of the container
+  # and that the trail store made it back out of the container
   assert stats['n_output_tokens'] > 0
   job = results[0].parent
   trial_results = [

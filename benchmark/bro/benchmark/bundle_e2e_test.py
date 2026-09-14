@@ -1,4 +1,4 @@
-"""live check of a built bundle running a bro in an image with no Python of its own.
+"""live check of a built bundle riding a bro in an image with no Python of its own.
 
 `ubuntu:24.04` is the base most Terminal-Bench task images derive from, and
 `--network none` leaves the container nothing to fetch at run time. The bundle
@@ -13,12 +13,14 @@ roster:
 """
 
 import contextlib
+import json
 import subprocess
 from collections.abc import Generator
 
 import pytest
 
-from bro.benchmark.bundle import build, host_mismatch, workspace_root
+from bro.benchmark.bundle import build, claude_code_cache, host_mismatch, workspace_root
+from bro.benchmark.harbor_agent import ride_command
 
 IMAGE = 'ubuntu:24.04'
 INSTALL_DIRECTORY = '/installed-agent'
@@ -59,18 +61,40 @@ def _in(container: str, *command: str) -> str:
   return _docker('exec', container, *command)
 
 
-def test_the_bundle_runs_a_bro_where_no_python_is_installed(tmp_path):
-  bundle = build(workspace_root(), tmp_path / 'bundle')
+def test_the_bundle_rides_a_bro_where_no_python_is_installed(tmp_path):
+  workspace = workspace_root()
+  bundle = build(workspace, tmp_path / 'bundle', claude_code_cache(workspace))
+  claude_code = json.loads(bundle.manifest.read_text())['claude_code']
 
   with _container() as container:
     absent = _in(container, 'sh', '-c', 'command -v python3 python || true')
     assert absent == ''
-    _in(container, 'mkdir', '--parents', INSTALL_DIRECTORY)
+    _in(container, 'mkdir', '--parents', f'{INSTALL_DIRECTORY}/credentials', '/task', '/logs/agent')
     _docker('cp', str(bundle.root), f'{container}:{INSTALL_DIRECTORY}/bro')
-    shim = f'{INSTALL_DIRECTORY}/bro/bro'
+    installed = f'{INSTALL_DIRECTORY}/bro'
 
-    listed = _in(container, shim, 'list')
-    card = _in(container, shim, 'show', 'terminal')
+    listed = _in(container, f'{installed}/venv/bin/bro', 'list')
+    card = _in(container, f'{installed}/bin/bro', 'show', 'terminal')
+    claude_version = _in(container, f'{installed}/claude/claude', '--version')
+    # the trial's own launch, on the provider that answers without a key
+    ride = ride_command(bro='terminal', instruction='say hello', harness='bro', llm='echo:')
+    _in(
+      container,
+      'env',
+      '-i',
+      'HOME=/root',
+      'PATH=/usr/local/bin:/usr/bin:/bin',
+      'XDG_DATA_HOME=/logs/agent',
+      f'BRO_STORE={INSTALL_DIRECTORY}/credentials',
+      'sh',
+      '-c',
+      f'cd /task && {ride}',
+    )
+    trails = _in(container, 'sh', '-c', 'ls /logs/agent/ride/trails/trails | wc -l')
+    workspaces = _in(container, 'sh', '-c', 'ls /logs/agent/ride/workspaces | wc -l')
 
   assert 'terminal: ' in listed
   assert card.startswith('# terminal')
+  assert claude_version.startswith(claude_code['version'])
+  assert trails.strip() == '1'
+  assert workspaces.strip() == '1'

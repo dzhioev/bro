@@ -28,7 +28,7 @@ from typing import cast, override
 
 from bro.artifact import GET
 from bro.bench.job import BENCHMARK, benchmark_kind
-from bro.benchmark.bundle import build, default_root, workspace_root
+from bro.benchmark.bundle import build, claude_code_cache, default_root, workspace_root
 from bro.benchmark.e2e_test_helper import LIVE_TRIAL, assert_graded_run, one_task_config
 from bro.benchmark.job import BUNDLE_MANIFEST
 from bro.broker.brotocol import Message
@@ -158,7 +158,7 @@ def _config_in_the_tree(tree: Path) -> Generator[str]:
 
 def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
   tree = workspace_root()
-  bundle = build(tree, default_root(tree))
+  bundle = build(tree, default_root(tree), claude_code_cache(tree))
   runs = _RunDirectories(tmp_path / 'runs')
   spawner = _SessionSpawner()
   broker = Broker(TcpServerTransport([LOCAL_HOST]), spawner, job_output=runs)
