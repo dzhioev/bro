@@ -58,10 +58,34 @@ def _read_until(terminal: int, needle: bytes, *, timeout: float = 20.0) -> bytes
   raise AssertionError(f'{needle!r} never arrived; the terminal saw {seen!r}')
 
 
+@contextlib.contextmanager
+def _session_input(data: bytes) -> Generator[None]:
+  """stand this process's stdin on a pipe holding `data`, the way a session
+  launched with piped input runs."""
+  reader, writer = os.pipe()
+  os.write(writer, data)
+  os.close(writer)
+  saved = os.dup(0)
+  os.dup2(reader, 0)
+  os.close(reader)
+  try:
+    yield
+  finally:
+    os.dup2(saved, 0)
+    os.close(saved)
+
+
 class TestRunPrinting:
   def test_captures_the_printed_reply(self, tmp_path):
     run = interrupt.run_printing(_fake_claude(tmp_path, 'echo REPLY\n'), os.environ)
     assert run == interrupt.PrintedRun(code=0, output='REPLY\n', stopped=False)
+
+  def test_the_sessions_input_never_reaches_claude(self, tmp_path):
+    # print mode takes its prompt from argv: piped session input is not read
+    argv = _fake_claude(tmp_path, 'read -r line; echo "stdin:$line"\n')
+    with _session_input(b'typed\n'):
+      run = interrupt.run_printing(argv, os.environ)
+    assert run.output == 'stdin:\n'
 
   def test_a_stop_arrives_as_the_interrupt(self, tmp_path):
     argv = _fake_claude(
@@ -76,6 +100,29 @@ class TestRunPrinting:
     argv = _fake_claude(tmp_path, "trap '' INT\nsleep 0.2\nkill -TERM $PPID\n" + _IDLE)
     run = interrupt.run_printing(argv, os.environ)
     assert (run.code, run.stopped) == (-signal.SIGTERM, True)
+
+
+class TestRunPrintingThrough:
+  def test_the_reply_and_diagnostics_land_on_the_sessions_own_streams(self, tmp_path, capfd):
+    argv = _fake_claude(tmp_path, 'echo REPLY\necho DIAGNOSTIC >&2\n')
+    run = interrupt.run_printing_through(argv, os.environ)
+    assert run == interrupt.Run(code=0, stopped=False)
+    captured = capfd.readouterr()
+    assert (captured.out, captured.err) == ('REPLY\n', 'DIAGNOSTIC\n')
+
+  def test_a_stop_arrives_as_the_interrupt(self, tmp_path):
+    argv = _fake_claude(
+      tmp_path,
+      "trap 'exit 7' INT\ntrap 'exit 5' TERM\nsleep 0.2\nkill -TERM $PPID\n" + _IDLE,
+    )
+    run = interrupt.run_printing_through(argv, os.environ)
+    assert (run.code, run.stopped) == (7, True)
+
+  def test_the_sessions_input_never_reaches_claude(self, tmp_path, capfd):
+    argv = _fake_claude(tmp_path, 'read -r line; echo "stdin:$line"\n')
+    with _session_input(b'typed\n'):
+      interrupt.run_printing_through(argv, os.environ)
+    assert capfd.readouterr().out == 'stdin:\n'
 
 
 class TestRunInteractive:

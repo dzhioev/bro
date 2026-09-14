@@ -270,14 +270,14 @@ sys.exit(5)
 # the image's real one — then execs the runner itself ("$@", the same
 # `do-ride solo|along …` invocation the started-party launcher sends). the fake records
 # its argv/env to the report file, proving the argv was built in-container by the
-# frozen runtime; under RIDE_E2E_LINGER it waits for the interrupt keypress on its
-# own terminal (exit 7) so the harness can assert `docker stop` reaches claude
-# through tini → runner → the runner-owned pty.
+# frozen runtime; under RIDE_E2E_LINGER it waits for the print-mode interrupt,
+# SIGINT (exit 7), so the harness can assert `docker stop` reaches claude through
+# tini → runner.
 _DO_RIDE_WRAPPER = """
 mkdir -p /tmp/e2e-bin
 cat > /tmp/e2e-bin/claude <<'FAKE'
 #!/usr/bin/env python3
-import json, os, signal, sys, tty
+import json, os, signal, sys
 from pathlib import Path
 
 report = {
@@ -289,13 +289,10 @@ if '--settings' in argv:
   report['settings'] = json.loads(argv[argv.index('--settings') + 1])
 Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
 if os.environ.get('RIDE_E2E_LINGER') == '1':
-  # the fake stands in for a TUI that owns its terminal's mode; anything short of raw
-  # leaves the pty's line discipline to eat the interrupt — as the intr character, or
-  # as input canonical mode withholds until a line delimiter that never comes
-  tty.setraw(0)
-  signal.signal(signal.SIGINT, lambda signum, frame: sys.exit(9))
+  signal.signal(signal.SIGINT, lambda signum, frame: sys.exit(7))
   Path('/workspace/.e2e-ready').touch()
-  sys.exit(7 if os.read(0, 1) == b'\\x03' else 8)
+  signal.pause()
+  sys.exit(8)
 sys.exit(12)
 FAKE
 chmod +x /tmp/e2e-bin/claude
@@ -1139,9 +1136,9 @@ class TestDockerStopReachesClaude:
     self, scenario_g: LiveRun
   ) -> None:
     # docker stop SIGTERMs pid 1 (tini), which forwards to the exec'd runner,
-    # which types the interrupt into claude's terminal — the fake reads it and
-    # exits 7. its SIGINT handler's 9 means the keypress never arrived, and a
-    # SIGKILL after the grace period would surface as 137/143.
+    # which interrupts print-mode claude with SIGINT — the fake's handler exits
+    # 7. an 8 means it was woken some other way, and a SIGKILL after the grace
+    # period would surface as 137/143.
     assert scenario_g.reported_exit == '7', scenario_g.output
     assert scenario_g.exit_code == 7
 

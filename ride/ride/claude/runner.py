@@ -22,7 +22,7 @@ from ride.claude.claude_argv import build_claude_launch
 from ride.claude.claude_auth import apply_claude_auth
 from ride.claude.claude_config import latest_jsonl
 from ride.claude.harness import options
-from ride.claude.interrupt import InteractiveRun, run_interactive, run_printing
+from ride.claude.interrupt import Run, run_interactive, run_printing, run_printing_through
 from ride.claude.mcp import start_session_mcp_server
 from ride.claude.recorder import start_session_recorder
 from ride.claude.session_context import (
@@ -68,7 +68,7 @@ def _set_session_context(spec: 'SessionSpec | SessionRun', system_prompt: str, t
   os.environ[RIDE_SESSION_CONTEXT_ENV] = encode_session_context(records)
 
 
-def _run_claude(argv: list[str], env: dict[str, str], transcripts: Path) -> InteractiveRun:
+def _run_claude(argv: list[str], env: dict[str, str], transcripts: Path) -> Run:
   return run_interactive(['claude', *argv], env, transcripts)
 
 
@@ -134,10 +134,11 @@ def _complete_run(emitted: threading.Event, result: str | None) -> None:
     channel.close()
 
 
-def _run_claude_root_solo(argv: list[str], env: dict[str, str], transcripts: Path) -> int:
-  """run a root's print-mode Claude and close its host-anchored quest on success."""
+def _run_claude_root_solo(argv: list[str], env: dict[str, str]) -> int:
+  """run a root's print-mode Claude with its reply on the session's stdout, and
+  close its host-anchored quest on success."""
   with _trail_watch() as emitted:
-    run = _run_claude(argv, env, transcripts)
+    run = run_printing_through(['claude', *argv], env)
   if run.code == 0 and not run.stopped:
     _complete_run(emitted, None)
   return run.code
@@ -249,10 +250,12 @@ def run_session(spec: 'SessionSpec | SessionRun') -> int:
     if spec.solo and summoned():
       code = _run_claude_summoned(launch.argv, env)
     elif spec.solo:
-      code = _run_claude_root_solo(launch.argv, env, transcripts)
+      code = _run_claude_root_solo(launch.argv, env)
     elif summoned():
       code = _run_claude_summoned_interactive(launch.argv, env, transcripts)
     else:
       code = _run_claude(launch.argv, env, transcripts).code
+    if code != 0:
+      log.error('claude exited with status %d', code)
 
   return code
