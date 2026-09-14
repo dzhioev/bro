@@ -76,7 +76,7 @@ class RuntimeBundle:
     if not self.root.is_absolute():
       raise RuntimeBundleError(f'runtime bundle path must be absolute: {self.root}')
     if self.materialized:
-      _validate_materialized_runtime(self.root)
+      validate_materialized_runtime(self.root)
 
   @property
   def host_root(self) -> Path:
@@ -183,7 +183,9 @@ class RuntimeBundle:
     return env
 
 
-def _validate_materialized_runtime(root: Path) -> None:
+def validate_materialized_runtime(root: Path) -> None:
+  """refuse a `venv/` + `bin/` layout that is not the exact shim farm of its
+  session commands."""
   venv_bin = root / 'venv' / 'bin'
   shim_directory = root / 'bin'
   for directory in (venv_bin, shim_directory):
@@ -227,7 +229,7 @@ def runtime_root_from_reference(reference: str) -> Path:
 
 def reexec_from_runtime(reference: str, argv: list[str]) -> None:
   root = runtime_root_from_reference(reference)
-  _validate_materialized_runtime(root)
+  validate_materialized_runtime(root)
   runtime_venv = (root / 'venv').resolve()
   try:
     running_from_runtime = Path(sys.prefix).resolve() == runtime_venv
@@ -752,18 +754,32 @@ def _materialize(
     ['uv', 'pip', 'check', '--python', str(venv / 'bin' / 'python')],
     description='runtime dependency closure is incomplete',
   )
+  link_session_commands(target, run=command_runner)
+
+
+def link_session_commands(
+  target: Path, *, run: Callable[..., subprocess.CompletedProcess[str]] | None = None
+) -> list[str]:
+  """build `target/bin`, the shim farm over the session commands `target/venv` carries.
+
+  The shims are relative symlinks, so a layout keeps working wherever it is copied.
+  """
+  command_runner = _run if run is None else run
+  venv = target / 'venv'
   shim_dir = target / 'bin'
   command_runner(['mkdir', str(shim_dir)], description='cannot create runtime command directory')
-  for command in _session_commands(venv / 'bin' / 'python', run=command_runner):
+  commands = _session_commands(venv / 'bin' / 'python', run=command_runner)
+  for command in commands:
     command_target = venv / 'bin' / command
     command_runner(
       ['test', '-f', str(command_target)],
       description=f'session command has no materialized console script: {command_target}',
     )
     command_runner(
-      ['ln', '-s', str(command_target), str(shim_dir / command)],
+      ['ln', '-s', str(Path('..') / 'venv' / 'bin' / command), str(shim_dir / command)],
       description=f'cannot create session command shim {command}',
     )
+  return commands
 
 
 @contextlib.contextmanager
