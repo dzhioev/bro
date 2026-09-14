@@ -611,6 +611,12 @@ def test_unboxed_session_environment_is_a_closed_snapshot(monkeypatch, tmp_path)
   child_env = bundle.host_session_env(tree, forward_env=False)
   assert 'RIDE_TASK_ID' not in child_env
   assert child_env['PWD'] == str(tree)
+  added = bundle.host_session_env(
+    tree,
+    forward_env=True,
+    additions={'IS_SANDBOX': '1', 'LANG': 'de_DE.UTF-8', 'PATH': '/x', 'RIDE_TASK_ID': 'forged'},
+  )
+  assert added == {**env, 'IS_SANDBOX': '1'}
 
 
 def test_resolver_holds_the_bundle_lock(monkeypatch, tmp_path):

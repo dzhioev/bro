@@ -57,6 +57,23 @@ class TestSolo:
       'claude',
     ]
 
+  def test_env_additions_reach_the_spec_in_order(self):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      argv = ['ride', 'solo', '--env', 'IS_SANDBOX=1', '--env', 'PAIR=a=b', 'dev', 'do it']
+      assert ride_cli.main(argv) == 0
+    assert start.call_args.args[0].env == {'IS_SANDBOX': '1', 'PAIR': 'a=b'}
+
+  @pytest.mark.parametrize('addition', ['NOVALUE', '1BAD=x', 'A-B=x'])
+  def test_a_malformed_env_addition_is_a_cli_error(self, addition, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'solo', '--env', addition, 'dev', 'do it'])
+    assert '--env takes NAME=VALUE' in capsys.readouterr().err
+
+  def test_a_repeated_env_name_is_a_cli_error(self, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'solo', '--env', 'A=1', '--env', 'A=2', 'dev', 'do it'])
+    assert '--env names A twice' in capsys.readouterr().err
+
   def test_unboxed_keeps_the_unattended_default(self):
     with patch('ride.cli.start_session', return_value=0) as start:
       ride_cli.main(['ride', 'solo', '--unboxed', 'dev', 'do it'])
@@ -416,6 +433,7 @@ class TestSummonedLaunch:
       grant=('aws',),
       revoke=('openai',),
       summoner={'trail_id': 'T1'},
+      env={'IS_SANDBOX': '1'},
     )
     pending_summon.write(record)
     return record
@@ -434,6 +452,16 @@ class TestSummonedLaunch:
     with patch('ride.cli.start_session', return_value=0) as start:
       ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--grant', 'github', 'dev'])
     assert start.call_args.args[0].grant == ['aws', 'github']
+
+  def test_the_partys_env_is_the_manual_childs_own(self, pending):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', 'dev'])
+    assert start.call_args.args[0].env == {'IS_SANDBOX': '1'}
+
+  def test_a_manual_child_refuses_its_own_env_additions(self, pending, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--env', 'EXTRA=1', 'dev'])
+    assert "environment additions are the party's" in capsys.readouterr().err
 
   def test_summoned_refuses_a_prompt(self, pending, capsys):
     with pytest.raises(SystemExit):

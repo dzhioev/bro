@@ -125,6 +125,14 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
     'origin is fetched automatically; ignored once the workspace exists. default: the local '
     "checkout's current HEAD or a git URL's freshly fetched origin/HEAD",
   )
+  parser.add_argument(
+    '--env',
+    action='append',
+    default=None,
+    metavar='NAME=VALUE',
+    help='add NAME to the session environment of the root and of every party member it '
+    'summons, beneath everything else the launch composes there (repeatable)',
+  )
   if include_bro:
     parser.add_argument(
       '--bro',

@@ -6,7 +6,7 @@ import socket
 import sys
 import tempfile
 from collections.abc import Collection, Generator, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Optional
 
@@ -57,6 +57,7 @@ from ride.scope import (
   preflight_scoped_launch,
   scoped_secrets,
 )
+from ride.session_env import env_additions
 from ride.trails import local_trails_mounts
 from ride.workspace.clones import ensure_clone
 from ride.workspace.containers import broker_enabled
@@ -104,10 +105,12 @@ class SessionSpec:
   summon_harness: str = configs.DEFAULT_SUMMON_HARNESS
   tree: Optional[str] = None
   runtime_bundle: Optional[str] = None
+  env: dict[str, str] = field(default_factory=dict)
 
   def __post_init__(self) -> None:
     if not isinstance(self.isolation, Isolation):
       raise TypeError('session isolation must be boxed or unboxed')
+    env_additions(self.env)
     if self.tree is not None:
       if self.repo is not None:
         raise ValueError('an external tree requires a detached session')
@@ -154,6 +157,8 @@ class SessionSpec:
       parts.extend(['--revoke', value])
     if self.into is not None:
       parts.extend(['--into', self.into])
+    for name, value in self.env.items():
+      parts.extend(['--env', f'{name}={value}'])
     parts.extend(get_harness(self.harness).command_options(self))
     parts.append(self.bro)
     if self.prompt is not None:
@@ -294,7 +299,8 @@ def container_launch(
 ) -> Launch:
   """one managed session's container launch, whichever surface spawns it: the
   neutral session env and mounts around the harness's extras, with the
-  surface's own `env` and `mounts` on top."""
+  surface's own `env` and `mounts` on top, and the spec's `--env` additions as
+  the container's own lowest layer."""
   session_state = workspace_session_dir(workspace.path)
   party_dir = workspace_party_dir(workspace.path)
   # created before the container launch so the bind mounts find them and do not
@@ -322,6 +328,7 @@ def container_launch(
     name=spec.name,
     command=do_ride_command(spec, harness_flags=harness.session_flags(spec)),
     env=launch_env,
+    additions=dict(spec.env),
     secrets=scoped.required,
     optional_secrets=scoped.optional,
     credential_selection=scoped.selection,
@@ -366,12 +373,12 @@ def boxed_member_launch(
   workspace_session_dir(records).mkdir(parents=True, exist_ok=True)
   (records / 'trails').mkdir(parents=True, exist_ok=True)
   launch_env: dict[str, str] = {
+    **spec.env,
     **MEMBER_BASELINE_ENV,
     'RIDE_BRO': spec.bro,
     'RIDE_WORKSPACE': workspace.name,
     'RIDE_HOST_WORKSPACE': str(workspace.tree),
     'RIDE_HOST': socket.gethostname(),
-    'RIDE_IN_CONTAINER': '1',
     ISOLATION_ENV: Isolation.BOXED.value,
     RESOLVED_LLM_ENV: encode_resolved_llm(spec.resolved_llm),
     INSTALL_DIRECTORY_ENV: str(member_install_dir(member)),
@@ -421,7 +428,7 @@ def prepared_unboxed_session_launch(
   tree = workspace.tree
   session_command = do_ride_command(spec, harness_flags=harness.session_flags(spec))
   command = [str(runtime_bundle.host_venv / 'bin' / session_command[0]), *session_command[1:]]
-  runner_env = runtime_bundle.host_session_env(tree, forward_env=forward_env)
+  runner_env = runtime_bundle.host_session_env(tree, forward_env=forward_env, additions=spec.env)
   runner_env.update(env)
   runner_env['RIDE_BRO'] = spec.bro
   runner_env[RUNTIME_ENV] = str(runtime_bundle.host_root)
@@ -599,6 +606,7 @@ def _launch_session(
       permits=launch_scope.permits,
       summon_depth=spec.summon_depth,
       summon_harness=spec.summon_harness,
+      session_env=spec.env,
       credential_scope=launch_scope.scoped,
       container_runtime=container_runtime,
       runtime_bundle=runtime_bundle,

@@ -58,7 +58,11 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   — the `Harness` protocol (flag registration and option packing, scope, auth, session reads, and the launch hooks: `do-ride` argv flags, the session run, boxed extras, unboxed runner env), the harness roster, and the lazy harness resolver.
 - `ride/bro.py` — native harness implementation:
   native recipe resolution, the session runner spawning `bro run|chat …` with exact-recipe continuation, and the launch hooks.
-- `ride/flags.py` — common session, scope, and LLM flag registration, harness flag registration with the generic requires-`--harness` refusal and option packing, and the default an omitted `--hold` resolves to.
+- `ride/flags.py` — common session, scope, and LLM flag registration,
+  harness flag registration with the generic requires-`--harness` refusal and option packing,
+  and the default an omitted `--hold` resolves to.
+- `ride/session_env.py` — the `--env` contract:
+  assignment parsing for the CLI, and the validation every reader of a recorded mapping applies.
 - `ride/runtime_bundle.py` — installation freeze, content-addressed bundle persistence and locking, supplied-runtime validation/re-exec, shared host/container materialization, session-command shims, runtime-volume lifecycle, and bundle GC.
 - `ride/listing.py`, `ride/clean.py`, `ride/scope_report.py` — lifecycle implementations.
 - `ride/e2e_test.py` — live Docker launch coverage, outside the default test roster.
@@ -105,7 +109,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - Both isolations pass `BRO_STORE` and `BRO_INSTALL_KINDS` to `do-ride`, which installs the hooks through one applier into the named session environment directory,
   so a session's git and `gh` act as the identity it was scoped with and never reach the operator's own configuration.
   An unboxed process gets a closed environment snapshot with its workspace as `PWD`;
-  only the launch surface's admitted terminal, task, command, identity, and logging inputs cross from the ambient environment.
+  only the launch surface's admitted terminal, task, command, identity, and logging inputs cross from the ambient environment,
+  and a launch's recorded `--env` additions sit beneath it all, carried by the root and every party member alike.
   Every unboxed session's store and install-hook output share a private temporary root removed by its supervisor;
   retained workspace records therefore carry no credential material.
 - Mode verbs are detached unless `--repo` explicitly attaches a resolved checkout or git URL.

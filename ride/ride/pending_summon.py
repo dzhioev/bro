@@ -22,12 +22,13 @@ so a stale token fails the launch loudly.
 import json
 import os
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
 from bro.base.scope import PARTY_PERMITS
 from bro.workspace.paths import is_workspace_name, summon_dir
+from ride.session_env import env_additions
 
 
 class UnknownToken(Exception):
@@ -53,6 +54,7 @@ class PendingSummon:
   summoner: Optional[dict[str, Any]]  # the child's summoned_by provenance
   repo: Optional[str] = None  # attachment identity inherited from the root session
   into: Optional[str] = None  # unresolved ref overriding the parent-HEAD base
+  env: dict[str, str] = field(default_factory=dict)  # the party's --env additions
 
   def address(self, host: Optional[str] = None) -> str:
     """the channel address for a child that reaches the summoner's host at
@@ -131,6 +133,12 @@ def peek(token: str) -> PendingSummon:
     isinstance(value, str) and value in PARTY_PERMITS for value in permit_values
   ):
     raise ValueError(f'pending manual summon {token!r} carries invalid permits')
+  try:
+    env_additions(data.get('env'))
+  except ValueError as error:
+    raise ValueError(
+      f'pending manual summon {token!r} carries invalid env additions: {error}'
+    ) from error
   loaded = PendingSummon(
     **{
       **data,

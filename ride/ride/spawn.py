@@ -15,9 +15,10 @@ import contextlib
 import shutil
 import socket
 import tempfile
-from collections.abc import Collection
-from dataclasses import dataclass
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal, Optional
 
 from bro.artifact import GET, MINT
@@ -82,7 +83,9 @@ class SummonLaunchSpec(LaunchSpec):
   effective allow-list — never the summoner's, which the child is not authorized
   against — and a request naming no `harness` into the control's summon harness.
   `share` names artifact refs the control already checked against the
-  summoner's own reach; the lowering links them into the child's view."""
+  summoner's own reach; the lowering links them into the child's view.
+  `env` is the party's `--env` additions, carried by the child's session like
+  the root's."""
 
   target: str
   prompt: str
@@ -103,6 +106,7 @@ class SummonLaunchSpec(LaunchSpec):
   llm: Optional[str] = None
   party: Literal['start', 'join'] = 'start'
   isolation: Optional[Isolation] = Isolation.BOXED
+  env: dict[str, str] = field(default_factory=dict)
 
   def __post_init__(self) -> None:
     if self.party not in ('start', 'join'):
@@ -161,6 +165,7 @@ def _child_session_spec(
     summon_depth=launch.summon_depth,
     summon_harness=launch.summon_harness,
     runtime_bundle=runtime_reference,
+    env=dict(launch.env),
   )
 
 
@@ -453,6 +458,7 @@ def run_root_via_broker(
   permits: Collection[str] = DEFAULT_PERMITS,
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH,
   summon_harness: str = configs.DEFAULT_SUMMON_HARNESS,
+  session_env: Mapping[str, str] = MappingProxyType({}),
   credential_scope: ScopedSecrets,
   container_runtime: ContainerRuntimeResolver,
   runtime_bundle: RuntimeBundle,
@@ -484,7 +490,9 @@ def run_root_via_broker(
   journal denial event.
   `summon_depth` is the deepest child generation that handler authorizes, with the
   root itself at depth 0, and `summon_harness` the harness it runs a child under
-  when the request names none."""
+  when the request names none.
+  `session_env` is the root launch's `--env` additions, which every child it
+  authorizes carries in its own session environment."""
   targets = sorted(set(may_summon))
   if len(targets) > 0:
     log.info('session may summon: %s', ', '.join(targets))
@@ -538,6 +546,7 @@ def run_root_via_broker(
     audit_file=summon_dir() / f'{workspace.name}.jsonl',
     depth_cap=summon_depth,
     summon_harness=summon_harness,
+    session_env=session_env,
     runtime_bundle=runtime_bundle,
   )
   facade.on(PING, ping_handler)

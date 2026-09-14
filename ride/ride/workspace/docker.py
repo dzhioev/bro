@@ -24,6 +24,13 @@ from ride.workspace.store import store_tarball
 
 _RUNTIME_IMAGE_REPOSITORY = 'bro/ride-runtime'
 _RUNTIME_MOUNT = '/var/ride/runtime'
+
+# the runtime image's own environment: its Dockerfile takes each entry as the
+# build argument `IMAGE_<name>`
+IMAGE_ENV = {
+  'RIDE_IN_CONTAINER': '1',
+  'PATH': f'{_RUNTIME_MOUNT}/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin',
+}
 _SMOKE_TEST_TAG = 'bro/framework:smoke-test'
 _PREFLIGHT_MOUNT = '/var/ride/daemon-preflight'
 
@@ -137,6 +144,7 @@ class Launch:
   extra_mounts: Collection[str] = ()
   repo: Optional[Repository | Path] = None
   base_ref: Optional[str] = None
+  additions: Mapping[str, str] = field(default_factory=dict)
 
 
 # How a container reaches its session's broker upstream:
@@ -245,7 +253,8 @@ def runtime_image_tag(python_version: Optional[str] = None) -> str:
       ('uv-version', build_context.UV_VERSION_FILE),
     )
   )
-  return f'{_RUNTIME_IMAGE_REPOSITORY}:{_hash_files(inputs, seed=version)}'
+  seed = '\0'.join([version, *(f'{name}={value}' for name, value in sorted(IMAGE_ENV.items()))])
+  return f'{_RUNTIME_IMAGE_REPOSITORY}:{_hash_files(inputs, seed=seed)}'
 
 
 def project_image_tag(runtime_image: str, project: Repository | Path) -> Optional[str]:
@@ -310,6 +319,11 @@ def build_runtime_image(tag: str, python_version: str) -> None:
       f'CLAUDE_CODE_VERSION={claude_version}',
       '--build-arg',
       f'UV_VERSION={uv_version}',
+      *(
+        argument
+        for name, value in IMAGE_ENV.items()
+        for argument in ('--build-arg', f'IMAGE_{name}={value}')
+      ),
       '-',
     ],
     input=build_context.assemble_runtime(),
@@ -419,6 +433,7 @@ def prepare_container(launch: Launch) -> str:
     forward_env=launch.forward_env,
     tty=launch.tty,
     extra_mounts=list(launch.extra_mounts),
+    additions=launch.additions,
   )
   return _create_container(argv, store_tarball(store, PurePosixPath('.bro')), launch.name)
 
@@ -428,12 +443,11 @@ def prepare_container(launch: Launch) -> str:
 # one subdirectory per member
 CONTAINER_MEMBER_ROOT = PurePosixPath('/home/ride/.bro-party')
 
-# what an `env -i` member exec starts from: the runtime image's own PATH
-# (ride/setup/container/Dockerfile) plus the fixed session home and a headless
-# terminal baseline
+# what an `env -i` member exec starts from: the runtime image's own environment
+# plus the fixed session home and a headless terminal baseline
 MEMBER_BASELINE_ENV = {
+  **IMAGE_ENV,
   'HOME': '/home/ride',
-  'PATH': '/var/ride/runtime/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin',
   'TERM': 'dumb',
   'LANG': 'C.UTF-8',
 }
@@ -576,12 +590,21 @@ def _docker_create_argv(
   forward_env: bool = True,
   tty: bool = True,
   extra_mounts: Optional[list[str]] = None,
+  additions: Optional[Mapping[str, str]] = None,
 ) -> list[str]:
-  """The create half of create/copy/start, before scoped-store injection."""
+  """The create half of create/copy/start, before scoped-store injection.
+
+  `additions` reach the container only under names nothing else here sets."""
   repository = None if repo is None else as_repository(repo)
   _assert_bind_source(tree)
   for mount in extra_mounts or []:
     _assert_bind_source(Path(mount.split(':', 1)[0]))
+  session_facts = {
+    'HOME': '/home/ride',
+    'RIDE_WORKSPACE': name,
+    'RIDE_HOST_WORKSPACE': str(tree),
+    'RIDE_HOST': socket.gethostname(),
+  }
   argv = ['docker', 'create']
   if tty:
     argv.append('-it')
@@ -592,14 +615,10 @@ def _docker_create_argv(
     f'{tree}:/workspace',
     '-v',
     f'ride-runtime-{runtime_bundle_hash}:{_RUNTIME_MOUNT}:ro',
-    '-e',
-    'HOME=/home/ride',
-    '-e',
-    f'RIDE_WORKSPACE={name}',
-    '-e',
-    f'RIDE_HOST_WORKSPACE={tree}',
-    '-e',
-    f'RIDE_HOST={socket.gethostname()}',
+  ]
+  for key, value in session_facts.items():
+    argv += ['-e', f'{key}={value}']
+  argv += [
     '-w',
     '/workspace',
     '--memory=8g',
@@ -608,18 +627,26 @@ def _docker_create_argv(
     '--add-host',
     f'{CONTAINER_BROKER_HOST}:host-gateway',
   ]
+  owned = {*IMAGE_ENV, *session_facts}
   if repository is not None:
     argv += ['-e', f'RIDE_REPO={repository.identity}']
+    owned.add('RIDE_REPO')
   # Summoned children pass a complete explicit snapshot and disable ambient
   # forwarding so the parent's task and identity facts cannot leak into them.
   if forward_env:
     for variable in SESSION_FORWARD_ENV:
       if os.environ.get(variable) is not None:
         argv += ['-e', variable]
+        owned.add(variable)
   if extra_mounts is not None:
     for mount in extra_mounts:
       argv += ['-v', mount]
   if extra_env is not None:
     for key, value in extra_env.items():
       argv += ['-e', f'{key}={value}']
+    owned.update(extra_env)
+  if additions is not None:
+    for key, value in additions.items():
+      if key not in owned:
+        argv += ['-e', f'{key}={value}']
   return [*argv, tag, *command]

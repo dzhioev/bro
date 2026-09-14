@@ -58,6 +58,7 @@ def _spec(
   raw: bool = False,
   prompt: Optional[str] = None,
   arguments: Optional[list[str]] = None,
+  env: Optional[dict[str, str]] = None,
 ) -> ride_session.SessionSpec:
   from ride.claude.harness import ClaudeOptions
 
@@ -83,6 +84,7 @@ def _spec(
     subject=prompt,
     arguments=arguments if arguments is not None else [],
     harness_options=ClaudeOptions(raw=raw).dump(),
+    env=env if env is not None else {},
   )
 
 
@@ -499,6 +501,17 @@ class TestContainerCommand:
     assert launch.env['RIDE_ISOLATION'] == 'boxed'
     assert launch.env['RIDE_BRANCH'] == 'workspace-w'
 
+  def test_env_additions_are_the_containers_own_lowest_layer(self):
+    spec = _spec(drop=True, bro='dev', env={'IS_SANDBOX': '1', 'RIDE_BRO': 'impostor'})
+    with _ContainerHarness() as h:
+      assert ride_session.start_session(spec) == 0
+    launch = h.run_started_party.call_args.args[0]
+    assert launch.additions == spec.env
+    assert 'IS_SANDBOX' not in launch.env
+    assert launch.env['RIDE_BRO'] == 'dev'
+    # the party's children carry the same additions
+    assert h.run_started_party.call_args.kwargs['session_env'] == spec.env
+
   def test_local_trails_data_is_combined_with_claude_launch_data(self):
     with _ContainerHarness(secrets={'github', 'trails'}) as harness:
       harness.container_claude_state.return_value = (
@@ -731,6 +744,11 @@ class TestCommandArgv:
       'go',
     ]
 
+  def test_env_additions_are_restated_in_order(self):
+    parts = _spec(hold='attended', env={'IS_SANDBOX': '1', 'PAIR': 'a=b'}).to_command_argv()
+    first = parts.index('--env')
+    assert parts[first : first + 4] == ['--env', 'IS_SANDBOX=1', '--env', 'PAIR=a=b']
+
   def test_a_resume_is_its_own_command(self):
     # the recorded spec carries the flags, so the name is the whole command
     assert _spec(hold='attended', bro='dev').resume_variant().to_command_argv() == [
@@ -792,6 +810,7 @@ class TestResumeSpecRecord:
       into='feature',
       prompt='do it',
       arguments=['--foo'],
+      env={'IS_SANDBOX': '1'},
     )
     workspace = _workspace(tmp_path)
     ride_session.record_resume_spec(workspace, spec)
@@ -800,12 +819,22 @@ class TestResumeSpecRecord:
     assert loaded is not None and loaded.resume and not loaded.drop
     assert loaded.into is None and loaded.prompt is None and loaded.arguments == []
     # the forwarded flags survive, so the resumed session runs as it was launched
-    assert (loaded.hold, loaded.llm, loaded.bro, loaded.grant) == (
+    assert (loaded.hold, loaded.llm, loaded.bro, loaded.grant, loaded.env) == (
       'attended',
       '::xhigh',
       'dev',
       ['gmail_creds'],
+      {'IS_SANDBOX': '1'},
     )
+
+  @pytest.mark.parametrize('env', [[], {'A=B': '1'}, {'A': 1}])
+  def test_a_record_with_malformed_env_additions_is_unreadable(self, tmp_path, caplog, env):
+    workspace = _workspace(tmp_path)
+    data = _spec(hold='attended').resume_variant().dump()
+    data['env'] = env
+    workspace.resume_file.write_text(json.dumps(data))
+    assert ride_session.load_resume_spec(workspace) is None
+    assert 'ignoring unreadable resume spec' in caplog.text
 
   def test_solo_resume_becomes_an_along_session_with_its_default_hold(self, tmp_path):
     solo = replace(
@@ -1050,6 +1079,45 @@ class TestUnboxedSession:
     assert 'RIDE_IN_CONTAINER' not in launch.env
     assert launch.env['RIDE_TRAILS_ROOT'] == str(ride_trails_dir())
     assert 'VIRTUAL_ENV' not in launch.env
+
+  def test_env_additions_sit_beneath_everything_else_in_the_snapshot(self, monkeypatch, tmp_path):
+    workspace = self._workspace(monkeypatch, tmp_path)
+    monkeypatch.setenv('LANG', 'C.UTF-8')
+    monkeypatch.setenv('RIDE_COMMAND', 'ride along bro-dev')
+    spec = _spec(
+      isolation=Isolation.UNBOXED,
+      hold='attended',
+      env={
+        'IS_SANDBOX': '1',
+        'LANG': 'de_DE.UTF-8',
+        'PATH': '/elsewhere',
+        'PWD': '/elsewhere',
+        'RIDE_BRO': 'impostor',
+        'RIDE_COMMAND': 'forged',
+      },
+    )
+
+    launch = ride_session.started_party_launch(
+      spec,
+      workspace,
+      workspace.repository,
+      None,
+      _launch_scope(),
+      human_env={},
+      runtime_bundle=_runtime_bundle(tmp_path),
+      container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
+      forward_env=True,
+      env={},
+      credential_directory=workspace.path / 'credentials',
+      install_directory=workspace.path / 'environment',
+    )
+
+    assert launch.env['IS_SANDBOX'] == '1'
+    assert launch.env['LANG'] == 'C.UTF-8'
+    assert launch.env['PATH'].startswith(str(_runtime_bundle(tmp_path).host_bin))
+    assert launch.env['PWD'] == str(workspace.tree)
+    assert launch.env['RIDE_BRO'] == 'bro-dev'
+    assert launch.env['RIDE_COMMAND'] == 'ride along bro-dev'
 
   def test_detached_builder_clears_ambient_attachment_and_channel_facts(
     self, monkeypatch, tmp_path

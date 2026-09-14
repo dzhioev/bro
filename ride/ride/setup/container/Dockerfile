@@ -56,8 +56,11 @@ RUN gosu ride bash -ec '\
       rm -rf "$CLAUDE_CONFIG_DIR/plugins" "$CLAUDE_CONFIG_DIR/.claude.json" "$CLAUDE_CONFIG_DIR/backups"'
 
 WORKDIR /workspace
-ENV RIDE_IN_CONTAINER=1
-ENV PATH=/var/ride/runtime/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+ARG IMAGE_RIDE_IN_CONTAINER
+ARG IMAGE_PATH
+RUN [ -n "$IMAGE_RIDE_IN_CONTAINER" ] && [ -n "$IMAGE_PATH" ]
+ENV RIDE_IN_CONTAINER=${IMAGE_RIDE_IN_CONTAINER}
+ENV PATH=${IMAGE_PATH}
 
 # The entrypoint needs these before a workspace exists or the runtime volume is mounted.
 COPY .bro-container/prelude.sh .bro-container/log.sh .bro-container/strict.sh /usr/local/lib/bro-shell/

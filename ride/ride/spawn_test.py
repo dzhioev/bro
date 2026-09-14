@@ -606,6 +606,7 @@ class TestSummonLowering:
       harness='bro',
       party='join',
       isolation=None,
+      env={'IS_SANDBOX': '1'},
     )
     artifacts = _artifacts()
 
@@ -630,11 +631,14 @@ class TestSummonLowering:
     assert lowered.env['RIDE_MAY_SUMMON'] == 'reviewer'
     assert lowered.env['RIDE_PERMITS'] == 'party.join'
     assert lowered.env['RIDE_SUMMONED'] == '1'
+    assert lowered.env['IS_SANDBOX'] == '1'
     assert lowered.cleanup_directory is not None
     shutil.rmtree(lowered.cleanup_directory)
     shutil.rmtree(records)
 
-  def _boxed_join(self, monkeypatch, tmp_path) -> ride.spawn.ExecLaunchSpec:
+  def _boxed_join(
+    self, monkeypatch, tmp_path, env: dict[str, str] | None = None
+  ) -> ride.spawn.ExecLaunchSpec:
     workspace = Workspace.ensure(PARENT, None, Isolation.BOXED)
     monkeypatch.setattr(ride.session, 'find_container_id', lambda tree: 'cid-party')
     launch = ride.spawn.SummonLaunchSpec(
@@ -648,6 +652,7 @@ class TestSummonLowering:
       harness='bro',
       party='join',
       isolation=None,
+      env=env if env is not None else {},
     )
     runtime_bundle = MagicMock(spec=RuntimeBundle)
     runtime_bundle.host_root = Path('/runtime')
@@ -655,6 +660,13 @@ class TestSummonLowering:
     lowered = ride.spawn._lower_join(launch, 'broker-CH', runtime_bundle, _artifacts())
     assert isinstance(lowered, ride.spawn.ExecLaunchSpec)
     return lowered
+
+  def test_the_partys_env_additions_reach_a_boxed_member(
+    self, lowering_harness, monkeypatch, tmp_path
+  ):
+    lowered = self._boxed_join(monkeypatch, tmp_path, env={'IS_SANDBOX': '1', 'HOME': '/x'})
+    assert lowered.launch.env['IS_SANDBOX'] == '1'
+    assert lowered.launch.env['HOME'] == workspace_docker.MEMBER_BASELINE_ENV['HOME']
 
   def test_boxed_join_lowers_to_a_member_exec(self, lowering_harness, monkeypatch, tmp_path):
     lowered = self._boxed_join(monkeypatch, tmp_path)
@@ -680,7 +692,6 @@ class TestSummonLowering:
       'RIDE_WORKSPACE': PARENT,
       'RIDE_HOST_WORKSPACE': str(workspace.tree),
       'RIDE_HOST': socket.gethostname(),
-      'RIDE_IN_CONTAINER': '1',
       'RIDE_ISOLATION': 'boxed',
       ride.do_ride.RESOLVED_LLM_ENV: ride.do_ride.encode_resolved_llm(resolved.dump()),
       ride.do_ride.INSTALL_DIRECTORY_ENV: '/home/ride/.bro-party/broker-CH/environment',
@@ -1165,6 +1176,15 @@ class TestClaudeSummonLowering:
     assert spec.resolved_llm == ClaudeCodeSpec(model='claude-fable-5').dump()
     assert spec.summon_depth == 5
     assert spec.summon_harness == 'claude'
+
+  def test_the_partys_env_additions_reach_a_started_child(self, claude_harness, tmp_path):
+    lowered = _lower_boxed(
+      self._launch(env={'IS_SANDBOX': '1'}), 'broker-CH', _container_runtime(), _artifacts()
+    )
+    assert lowered.launch.additions == {'IS_SANDBOX': '1'}
+    spec = ride.session.load_resume_spec(Workspace.open('broker-CH'))
+    assert spec is not None
+    assert spec.env == {'IS_SANDBOX': '1'}
 
   def test_scope_follows_the_claude_recipe(self, claude_harness, monkeypatch):
     captured: list = []
