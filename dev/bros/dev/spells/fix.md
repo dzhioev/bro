@@ -7,13 +7,14 @@ This spell should be used when the user points you at a task and asks you to wor
 Accepts either an existing task ref or seed text for a new task,
 reads the task description and comment stream,
 gathers project + sibling context,
-plans an approach, records development events as task comments, implements + verifies,
+plans an approach and puts the problem and the design to the user before implementing,
+records development events as task comments, implements + verifies,
 and hands off to [[run pr]] when the change is ready.
 The canonical entry point for task-driven development work;
 `dive-in` seeds this spell as its first user message.
 
 parameters: {"task?": "ref of the existing task to work on", "new?": "seed text for a new task to create first"}
-version: 4.4.0
+version: 4.5.0
 ---
 
 {{iff #features contains brog}}
@@ -85,24 +86,34 @@ If they conflict with intervening changes, resolve them as part of the work, and
   `brog::list_tasks(project=<project.id>, status='open')` with a small `limit` shows the open sibling tasks.
 - Note any tags — they classify the task domain.
 
-## Step 3 — plan
+## Step 3 — analyze and design
 
 Synthesize what you learned.
 What is this task about, what is the goal, what is the project context?
 Figure out how to achieve it
-— for coding tasks, explore the codebase;
+— for coding tasks, explore the codebase until the design is settled:
+which files change and how, and what the change leaves behind;
 for tasks that need external information, say what you need.
-Present your understanding and proposed approach, then start working.
+
+Then put the design to the user as two summaries:
+
+- the problem — what is wrong or missing, where it shows, and why it matters
+- the implementation — what changes and where, what the user will see differ once it lands,
+  and any alternative you rejected, in a line
+
+Starting the implementation is the user's decision, not a step the task already authorizes:
+go on with their confirmation.
 
 ## Step 4 — development log
 
 Record development events on the task throughout the session via `brog::add_comment(task_id, topic, body)`.
 The comment stream gives the task a persistent record of what happened and why.
 
-After the plan is confirmed, record it under the topic `plan`:
+When the implementation starts, record the design it starts from under the topic `plan`
+— the two summaries of step 3, condensed:
 
 ```
-brog::add_comment(<task-id>, topic='plan', body='<concise summary of what you're going to do and why>')
+brog::add_comment(<task-id>, topic='plan', body='<the problem, and what you're going to do about it and why>')
 ```
 
 During implementation, add an entry when something non-obvious happens
@@ -121,7 +132,7 @@ Keep each checkpoint conventional (commit style from [[run pr]]'s steps 5-6);
 don't run the full suite per checkpoint
 — the one mandatory pass comes later (see step 6).
 
-Stop and ask if the approach turns out to need a different direction than you proposed.
+Stop and ask if the approach turns out to need a different direction than the design you put to the user.
 
 ### Rescue commits before a raise
 
