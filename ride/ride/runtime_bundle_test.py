@@ -493,6 +493,7 @@ def test_materializer_installs_exact_snapshot_checks_closure_and_builds_shims(
   assert str(wheel) in commands[1]
   assert commands[2][:3] == ['uv', 'pip', 'check']
   assert (host / 'bin' / 'summon').resolve() == host / 'venv' / 'bin' / 'summon'
+  assert not Path(os.readlink(host / 'bin' / 'summon')).is_absolute()
 
 
 class _FakeMaterializerProcess:
