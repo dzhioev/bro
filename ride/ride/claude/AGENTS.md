@@ -24,7 +24,8 @@ raw is not a harness value.
 - `mcp.py` — session-local HTTP MCP server lifetime and Claude MCP config.
 - `recorder.py` — Claude transcript recorder daemon lifetime;
   `trail_recorder.py` is the daemon itself and the `ride.claude.trail-recorder` console script.
-- `session_context.py` — typed launch-context records exported through `RIDE_SESSION_CONTEXT`.
+- `session_context.py` — claude's own typed launch-context records (the system prompt, MCP servers, root instructions) exported through `RIDE_SESSION_CONTEXT`;
+  the session's git state is the neutral `bro.trails.record.session` reader's, attached by the recorder.
 - `system_prompt.py` — shared prompt and persona assembly.
   Prompt assets are loaded from the `bro` distribution, not relative to this package.
 - `statusline.py` — the session-local projector process:

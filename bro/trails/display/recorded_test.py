@@ -343,6 +343,14 @@ class TestStructures:
     assert ('ride', 'ride along ws') in adapter.trail_metadata(ride_header).fields
     assert ('cw', 'cw ss ws') in adapter.trail_metadata(cw_header).fields
 
+  def test_a_bro_trail_names_the_launch_line_it_ran_under(self):
+    adapter = RecordedAdapter(_client(FakeClient()))
+    managed = _header('managed', native={'llm': {}, 'ride_command': 'ride solo dev go'})
+    in_process = _header('in-process', native={'llm': {}})
+
+    assert ('ride', 'ride solo dev go') in adapter.trail_metadata(managed).fields
+    assert not any(name == 'ride' for name, _ in adapter.trail_metadata(in_process).fields)
+
   def test_structural_adapters_reject_invalid_segment_and_end_status(self):
     fake = FakeClient()
     fake.headers['parent'] = _header('parent')

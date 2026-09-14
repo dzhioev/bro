@@ -164,8 +164,10 @@ class TestContainerSession:
     ]  # fmt: skip
     assert launch.env == {
       'RIDE_BRO': 'dev',
+      'RIDE_COMMAND': spec.ride_command,
       'RIDE_ISOLATION': 'boxed',
       'RIDE_BRANCH': 'workspace-w',
+      'RIDE_BASE_SHA': 'abc123',
       ride_session.RUNTIME_ENV: str(_runtime_bundle(tmp_path).host_root),
       ride_session.INSTALL_DIRECTORY_ENV: ride_session.CONTAINER_INSTALL_DIRECTORY,
       ride_session.RESOLVED_LLM_ENV: ride_session.encode_resolved_llm(spec.resolved_llm),
@@ -190,7 +192,7 @@ class TestContainerSession:
       ride_session._launch_session(
         spec,
         workspace,
-        None,
+        'abc123',
         _scope(),
         human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
@@ -211,7 +213,7 @@ class TestContainerSession:
       ride_session._launch_session(
         _spec(resume=True, prompt=None),
         workspace,
-        None,
+        'abc123',
         _scope(),
         human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
@@ -231,7 +233,7 @@ class TestContainerSession:
       ride_session._launch_session(
         _spec(),
         workspace,
-        None,
+        'abc123',
         _scope(),
         human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
@@ -250,7 +252,7 @@ class TestContainerSession:
       ride_session._launch_session(
         _spec(),
         workspace,
-        None,
+        'abc123',
         _scope(),
         human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
@@ -271,6 +273,7 @@ class TestUnboxedSession:
     (root / 'host' / 'venv' / 'bin' / 'do-ride').touch()
     runtime_bundle = RuntimeBundle(root, '3.12')
     monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_args: True)
+    monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_args: True)
     monkeypatch.setattr(ride_session, 'materialize_scoped_store', _materialize_store)
 
@@ -305,3 +308,4 @@ class TestUnboxedSession:
       'start here',
     ]
     assert launch.env['BRO_INSTALL_KINDS'] == ''
+    assert launch.env['RIDE_BASE_SHA'] == 'treehead'

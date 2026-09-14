@@ -8,6 +8,7 @@ from bro.base import configs, log
 from bro.llm.tracker import EndReason, StepKind, Tracker
 from bro.trails.model import BlazeRequest, ForkedFrom, tools_sha256
 from bro.trails.record import spine
+from bro.trails.record.session import managed_session
 from bro.trails.record.spine import Recording
 from bro.trails.store import TrailsStore
 
@@ -35,12 +36,22 @@ class Recorder(Tracker):
   ) -> str:
     if forked_from is not None and not isinstance(forked_from, ForkedFrom):
       raise TypeError('forked_from must be a ForkedFrom')
+    session = managed_session()
+    native: dict[str, Any] = {'llm': llm_spec}
+    body: dict[str, Any] = {
+      'records': [{'kind': 'system_prompt', 'body': system_prompt, 'turn_index': 0}]
+    }
+    if session is not None:
+      native['ride_command'] = session.ride_command
+      if session.git_record is not None:
+        body['launch_context'] = [session.git_record]
     request = BlazeRequest(
       harness='bro',
       bro=bro,
       version=configs.VERSION,
-      native={'llm': llm_spec},
-      body={'records': [{'kind': 'system_prompt', 'body': system_prompt, 'turn_index': 0}]},
+      native=native,
+      body=body,
+      location=None if session is None else session.location,
       forked_from=(
         {key: value for key, value in asdict(forked_from).items() if value is not None}
         if forked_from is not None

@@ -1122,7 +1122,7 @@ Wrappers and session daemons rely on a small set of env vars:
   `ride banner` reads it to render the session header.
 - `RIDE_ISOLATION` — the workspace's recorded `boxed` or `unboxed` isolation.
   Every launcher sets it explicitly for the session and its children.
-  `ride banner` derives the container path and Docker shell command from it rather than probing `/.dockerenv`.
+  `ride banner` derives the container path and Docker shell command from it rather than probing `/.dockerenv`, and a trail's `location.is_container` is the same fact.
   `do-ride` uses the same fact for isolation-specific setup, so an unboxed ride launched inside a foreign container remains unboxed.
 - `RIDE_REPO` — the root session's resolved checkout path or normalized git URL, absent when detached.
   Set by each launcher and overwritten from `do-ride --repo`;
@@ -1177,7 +1177,8 @@ Wrappers and session daemons rely on a small set of env vars:
 - `RIDE_TASK_ID` — set by `dive-in` when it has resolved a task (the canonical brog task id);
   read by the `spell::run-pr` spell to add a `Task: <url>` line to commit messages.
 - `RIDE_SESSION_CONTEXT` — the session's launch context as a JSON list of typed records.
-  It includes the system prompt, an attached session's git state, MCP servers, and the project's root instructions document.
+  It includes the system prompt, MCP servers, and the project's root instructions document
+  — claude's own launch, beside which the recorder attaches the session's git state from the neutral session env (see "Session recording").
   The Claude runner builds it through `ride/ride/claude/session_context.py` next to Claude in both isolations.
   The session recorder uploads it as the trail's launch-context attachment;
   `rewind` renders it as a `SESSION CONTEXT` preamble.
@@ -1251,7 +1252,9 @@ A verified same-segment resume reopens that segment's trail where the previous l
 an interactive resume's history copy opens a fork trail pointing at the prior one, and a whole conversation is the fork chain `rewind show` walks.
 The daemon nominates nothing:
 it blazes with the transcript's lineage evidence and the store's harness resolver decides the edge, or declines a transcript claude has not finished writing (`bro/trails/AGENTS.md`).
-The trail carries the launch recipe, the `RIDE_SESSION_CONTEXT` attachment, and the session's location facts, and the recorder publishes its current trail id to the session's trail pointer,
+The trail carries the launch recipe and the `RIDE_SESSION_CONTEXT` records, plus the managed-session facts a bro-harness session's trail carries alike
+— the session's location, its launch line, and the attached tree's git state, read off the session env by `bro.trails.record.session` in either harness's recorder —
+and the recorder publishes its current trail id to the session's trail pointer,
 from which summon control stamps the session's summoned children with `summoned_by.trail_id` (see "Summoning another bro").
 The daemon's stderr goes to `claude/session-recorder.log` in the session state dir;
 its durable signal is the health file it beats on every attempt (`bro/monitor/health.py`), which the statusLine and `ride banner` surface.

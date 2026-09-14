@@ -58,7 +58,6 @@ class SessionRun:
   prompt: Optional[str]
   arguments: list[str]
   harness_options: dict
-  into: Optional[str] = None
 
   @property
   def llm_spec(self) -> LLMSpec:

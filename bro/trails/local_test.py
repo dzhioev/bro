@@ -202,6 +202,15 @@ def test_a_writer_may_not_send_the_folded_head(tmp_path):
     store.blaze(request)
 
 
+def test_a_bro_writer_names_its_launch_line_as_text(tmp_path):
+  store = LocalStore(tmp_path)
+  request = _bro_request()
+  request.native['ride_command'] = ['ride', 'solo']
+
+  with pytest.raises(ValueError, match='ride_command must be a string'):
+    store.blaze(request)
+
+
 def test_the_lineage_index_answers_by_segment_and_by_record(tmp_path):
   store = LocalStore(tmp_path)
   raw = json.dumps({'type': 'user', 'uuid': 'uuid-1', 'message': {'content': 'hello'}})

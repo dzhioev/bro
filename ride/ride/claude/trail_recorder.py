@@ -30,7 +30,6 @@ import enum
 import json
 import os
 import signal
-import socket
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -40,10 +39,11 @@ from typing import Any, NamedTuple, Optional
 from bro.base import configs, credentials, log
 from bro.base.args import Parser
 from bro.launch.hold import session_hold
-from bro.monitor import health, trail_pointer, working_projects_dir
+from bro.monitor import SESSION_DIR_ENV, health, trail_pointer, working_projects_dir
 from bro.summon import summoned_by_from_env
 from bro.trails.backends import CLAUDE_ADAPTER
 from bro.trails.model import BlazeRequest, payload_sha256
+from bro.trails.record.session import ManagedSession, managed_session
 from bro.trails.record.spine import Recording
 from bro.trails.rows import project_messages
 from bro.trails.store import TrailsStore, default_store
@@ -177,39 +177,21 @@ def _compose(file_lines: list[str], chunks: list[list[int]]) -> list[str]:
   return lines
 
 
-def _launch_context() -> Optional[Any]:
+def _launch_context(session: ManagedSession) -> list[Any]:
+  """the trail's launch-context attachment: the session's git state, then the
+  records claude's own launch published through RIDE_SESSION_CONTEXT."""
+  records: list[Any] = [] if session.git_record is None else [session.git_record]
   raw = os.environ.get('RIDE_SESSION_CONTEXT')
   if raw is None:
-    return None
+    return records
   try:
-    return json.loads(raw)
+    context = json.loads(raw)
   except json.JSONDecodeError as e:
     log.warning('unparsable RIDE_SESSION_CONTEXT (%s); omitting the launch context', e)
-    return None
-
-
-def _in_container() -> bool:
-  return os.path.isfile('/.dockerenv')
-
-
-def _location(workspace: str) -> dict:
-  in_container = _in_container()
-  location: dict[str, Any] = {'workspace': workspace, 'is_container': in_container}
-  # `host` is the host machine, never a container hostname: the launcher stamps
-  # RIDE_HOST into the container env (workspace/docker.py); on host we are it
-  host = os.environ.get('RIDE_HOST')
-  if host is None and not in_container:
-    host = socket.gethostname()
-  if host is not None:
-    location['host'] = host
-  directory = os.environ.get('RIDE_HOST_WORKSPACE') if in_container else str(Path.cwd())
-  if directory is not None:
-    location['dir'] = directory
-  return location
-
-
-def _workspace_name() -> Optional[str]:
-  return os.environ.get('RIDE_WORKSPACE')
+    return records
+  if not isinstance(context, list):
+    raise ValueError('RIDE_SESSION_CONTEXT must be a JSON list')
+  return [*records, *context]
 
 
 def _verdict_chunks(result: dict) -> list[list[int]]:
@@ -312,18 +294,16 @@ class Recorder:
   def __init__(
     self,
     projects_dir: Path,
-    workspace: str,
     client: TrailsStore,
     *,
     llm: dict,
-    ride_command: str,
+    session: ManagedSession,
     started_after: float,
   ) -> None:
     self.projects_dir = projects_dir
-    self.workspace = workspace
     self.client = client
     self.llm = llm
-    self.ride_command = ride_command
+    self.session = session
     self.started_after = started_after
     # read once: every segment of this recorder lifetime belongs to the same
     # summoned run, and the reader consumes the env var
@@ -454,8 +434,8 @@ class Recorder:
     """settle the trail this transcript records into and return the verdict;
     None when the resolver declines to adopt the segment yet."""
     body: dict[str, Any] = {'records': []}
-    context = _launch_context()
-    if context is not None:
+    context = _launch_context(self.session)
+    if len(context) > 0:
       body['launch_context'] = context
     request = BlazeRequest(
       harness='claude',
@@ -465,10 +445,10 @@ class Recorder:
       native={
         'llm': self.llm,
         'segment': segment,
-        'ride_command': self.ride_command,
+        'ride_command': self.session.ride_command,
         'harness_version': 'unknown',
       },
-      location=_location(self.workspace),
+      location=self.session.location,
       body=body,
       bro=os.environ.get('RIDE_BRO'),
       hold=session_hold(),
@@ -568,17 +548,12 @@ def _watch(recorder: Recorder, interval: int) -> None:
 
 def record_session(
   interval: int = 3,
-  workspace: Optional[str] = None,
   projects_dir: Optional[Path] = None,
   llm: Optional[str] = None,
 ) -> int:
-  workspace_name = workspace if workspace is not None else _workspace_name()
-  if workspace_name is None:
-    log.error('cannot determine workspace name; pass --workspace or set RIDE_WORKSPACE')
-    return 1
-  ride_command = os.environ.get('RIDE_COMMAND')
-  if ride_command is None:
-    log.error('RIDE_COMMAND is not set; the trail header requires the launch command')
+  session = managed_session()
+  if session is None:
+    log.error('%s is unset: the trail recorder runs inside a managed session', SESSION_DIR_ENV)
     return 1
   try:
     llm_recipe = json.loads(llm) if llm is not None else {}
@@ -595,15 +570,8 @@ def record_session(
     return 1
 
   src = projects_dir if projects_dir is not None else working_projects_dir()
-  recorder = Recorder(
-    src,
-    workspace_name,
-    client,
-    llm=llm_recipe,
-    ride_command=ride_command,
-    started_after=time.time(),
-  )
-  log.info('recording %s (interval=%ds, workspace=%s)', src, interval, workspace_name)
+  recorder = Recorder(src, client, llm=llm_recipe, session=session, started_after=time.time())
+  log.info('recording %s (interval=%ds, workspace=%s)', src, interval, session.workspace)
   _watch(recorder, interval)
   return 0
 
@@ -612,9 +580,6 @@ def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='record a Claude Code session transcript to trails')
   parser.add_argument(
     '--interval', type=int, default=3, help='poll interval in seconds (default: 3)'
-  )
-  parser.add_argument(
-    '--workspace', default=None, help='workspace name (default: from RIDE_WORKSPACE)'
   )
   parser.add_argument(
     '--projects-dir',
