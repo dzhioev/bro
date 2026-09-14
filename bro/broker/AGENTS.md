@@ -93,6 +93,10 @@ the worker index remains until Worker death so a live session can keep requestin
 
 The host root is a normal `SpawnedWorker` on a host-anchored journal record.
 Root exit closes every live record as `killed`, or `detached` for expected workers, before Worker teardown.
+A caller that owns its process opts in with `run(root, end_on_sigterm=True)`:
+the run then holds SIGTERM until its teardown is over, the signal ending it the same way rather than killing the process, with the root exit reporting `TERMINATED_EXIT_CODE` before the teardown reaches every worker the run started;
+the default disposition is what it leaves behind.
+A run that does not opt in touches no process signal, so an embedder may drive it from any thread.
 
 `deny` is for refused worker-backed work:
 it sends `result{denied}` and journals the denial in one call.

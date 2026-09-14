@@ -1253,8 +1253,9 @@ class TestRunRootViaBroker:
       def subscribe(self, observer):
         captured['observers'].append(observer)
 
-      def run(self, launch):
+      def run(self, launch, *, end_on_sigterm=False):
         captured['launch'] = launch
+        captured['end_on_sigterm'] = end_on_sigterm
         return 3
 
     monkeypatch.setattr(ride.spawn, 'Broker', FakeBroker)
@@ -1322,3 +1323,4 @@ class TestRunRootViaBroker:
     assert control._audit_file == summon_dir() / 'ws.jsonl'
     assert control._depth_cap == 4
     assert captured['launch'] is launch
+    assert captured['end_on_sigterm'] is True

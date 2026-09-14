@@ -1,4 +1,7 @@
 import asyncio
+import os
+import signal
+import threading
 from pathlib import Path
 from typing import Optional, cast
 
@@ -10,6 +13,7 @@ from bro.broker.dispatcher import (
   EVENTS,
   PING,
   QUERY,
+  TERMINATED_EXIT_CODE,
   Dispatcher,
   events_handler,
   ping_handler,
@@ -23,15 +27,18 @@ from bro.broker.transports.tcp import Endpoint
 
 
 class FakeHandle:
-  def __init__(self):
+  def __init__(self, release: Optional[asyncio.Event] = None):
     self.exit = asyncio.get_running_loop().create_future()
     self.killed = False
+    self.release = release
 
   async def wait(self):
     return await self.exit
 
   async def kill(self):
     self.killed = True
+    if self.release is not None:
+      await self.release.wait()
     if not self.exit.done():
       self.exit.set_result(-15)
 
@@ -48,6 +55,7 @@ class FakeRuntime:
     self.launch_messages = []
     self.launch_error: Optional[Exception] = None
     self.provision_error: Optional[Exception] = None
+    self.kill_release: Optional[asyncio.Event] = None
 
   async def provision(self, events):
     if self.provision_error is not None:
@@ -59,7 +67,7 @@ class FakeRuntime:
   async def launch(self, launch, provisioned, quest):
     if self.launch_error is not None:
       raise self.launch_error
-    self.handle = FakeHandle()
+    self.handle = FakeHandle(self.kill_release)
     for message in self.launch_messages:
       self.events[provisioned.channel].on_message(message)
     return self.handle
@@ -506,3 +514,71 @@ async def test_worker_death_synthesizes_one_failed_result():
   assert len(results) == 1
   assert results[0].payload['detail']['reason'] == 'exit'
   assert dispatcher.journal.records['work'].outcome == 'failed'
+
+
+@pytest.mark.asyncio
+async def test_sigterm_ends_an_owning_run_through_its_teardown():
+  runtime = FakeRuntime()
+  dispatcher = Dispatcher()
+  dispatcher.bind(cast(Runtime, runtime))
+  run = asyncio.create_task(dispatcher.run(LaunchSpec(), end_on_sigterm=True))
+  await _settle()
+  assert runtime.handle is not None
+  assert not runtime.handle.killed
+
+  os.kill(os.getpid(), signal.SIGTERM)
+
+  assert await run == TERMINATED_EXIT_CODE
+  assert runtime.handle.killed
+  assert runtime.stopped
+  (root,) = [record for record in dispatcher.journal.records.values() if record.kind == 'root']
+  assert root.state == 'ended'
+  assert root.reason == 'killed'
+
+
+@pytest.mark.asyncio
+async def test_an_owning_run_holds_sigterm_through_its_teardown():
+  runtime = FakeRuntime()
+  runtime.kill_release = asyncio.Event()
+  dispatcher = Dispatcher()
+  dispatcher.bind(cast(Runtime, runtime))
+  run = asyncio.create_task(dispatcher.run(LaunchSpec(), end_on_sigterm=True))
+  await _settle()
+  assert runtime.handle is not None
+
+  os.kill(os.getpid(), signal.SIGTERM)
+  await _settle()
+  assert runtime.handle.killed
+  assert not run.done()
+  os.kill(os.getpid(), signal.SIGTERM)
+  await _settle()
+  assert not run.done()
+
+  runtime.kill_release.set()
+  assert await run == TERMINATED_EXIT_CODE
+  assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
+
+
+def test_a_run_leaves_the_processs_sigterm_alone_unless_asked():
+  outcome: dict[str, object] = {}
+
+  def drive() -> None:
+    async def run() -> int:
+      runtime = FakeRuntime()
+      dispatcher = Dispatcher()
+      dispatcher.bind(cast(Runtime, runtime))
+      task = asyncio.create_task(dispatcher.run(LaunchSpec()))
+      await _settle()
+      assert runtime.handle is not None
+      runtime.handle.exit.set_result(7)
+      return await task
+
+    outcome['code'] = asyncio.run(run())
+
+  before = signal.getsignal(signal.SIGTERM)
+  thread = threading.Thread(target=drive)
+  thread.start()
+  thread.join()
+
+  assert outcome['code'] == 7
+  assert signal.getsignal(signal.SIGTERM) is before

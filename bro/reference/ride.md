@@ -923,6 +923,8 @@ the session root's at launch, a summoned child's own resolved sets at its spawn)
 enforcement stays entirely host-side.
 Root exit kills in-flight children with a loud log naming what was killed;
 a result lost that way stays recoverable from the child's trail.
+A SIGTERM to the launcher ends the ride the same way:
+the root run reports the signal's exit code and its teardown kills the tree, the members running in sessions of their own included, rather than the signal orphaning them.
 A started-child supervisor removes its throwaway workspace only after a clean exit and retains it after failure or kill for inspection and recovery.
 A joined-member supervisor removes `party/<member>/` only after a clean exit and retains it after failure or kill;
 the member has no workspace or resume record, so its trail is its recovery surface.
