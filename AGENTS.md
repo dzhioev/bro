@@ -306,7 +306,8 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   It owns the shared spells inherited by the concrete-Bro family (`bros/bro/spells/`):
   `spell::ask` — the summon UX:
   phrasing → target + self-contained prompt, client pick (`summon` CLI vs the `summon` service tool), foreground-vs-background, failure relay (protocol and enforcement live in `bro/summon.py` and `ride/ride/summon_control.py`, not in the spell)
-  — and `spell::reflect` — post-mortem of the session or a given situation into durable-improvement proposals (spell / toolset / prompt / doc edits), each fixed in place or filed as a task.
+  — and `spell::reflect` — the improving half of the loop over what a bro runs under:
+  it reads recorded runs against the definition that drove them (the prompt texts, the bro's declaration, the launch scope) and writes its next version, each edit fixed in place or filed as a task.
   Development personas ship from `bro-dev`;
   `dev/AGENTS.md` maps them.
   Consumer personas register through the `bro` entry-point group and live in their contributing packages.
