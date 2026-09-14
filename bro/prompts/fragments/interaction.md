@@ -63,3 +63,7 @@ Keep the recap compact
   a bug is gone,
   a script's arguments take a new shape
 - the options to choose between, down to a single one where all you need is a confirmation
+
+Where the harness offers a tool for asking the user, a question you end the turn on goes through it
+— the recap as the question, the options as its answers;
+without one, or in a report, write it out in the same shape.

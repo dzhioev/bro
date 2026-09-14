@@ -11,7 +11,7 @@ skipped permission prompts mean routine steps need no confirmation, not that nob
 
 Routine steps — the ones the request already implies
 — proceed without confirmation.
-At a pivotal point, present the decision briefly and end the turn:
+At a pivotal point, put the decision to them and end the turn:
 committing to a design direction when real alternatives exist,
 or an irreversible or outward-facing action beyond what the request implies.
 Ending the turn is cheap

@@ -30,6 +30,8 @@ Harness-specific conditioning is expressed with these directives, never as prose
 fork the text with `{{iff #harness = bro}}…{{eliff #harness = claude}}…{{end}}`
 — the chain raises when no branch matches, so the fork is self-guarding
 — and each surface reads only its own instruction.
+A condition on a tool the harness offers is no harness fork and stays prose:
+the model reads its own tool list, and one harness offers different tools by mode.
 
 `PromptLoader` is the contained directory-backed loader;
 `__init__.py` binds the framework's module-level `get_prompt` / `get_prompt_path` surface to `bro/prompts/`.
