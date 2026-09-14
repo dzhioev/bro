@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from bro.base.spawn import console_script
@@ -82,7 +83,11 @@ def test_deployment_config_resolves_the_infra_credential(tmp_path):
     ],
     capture_output=True,
     text=True,
-    env={**os.environ, 'BRO_STORE': str(store)},
+    env={
+      **os.environ,
+      'BRO_STORE': str(store),
+      'PATH': os.pathsep.join((str(Path(sys.executable).parent), os.environ['PATH'])),
+    },
   )
 
   assert result.returncode == 0, result.stderr
