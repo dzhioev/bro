@@ -14,6 +14,7 @@ from ride.repository import Repository, as_repository
 
 SETUP_DIR = Path(__file__).resolve().parent.parent / 'setup'
 CONTAINER_DIR = SETUP_DIR / 'container'
+CLAUDE_CODE_VERSION_FILE = CONTAINER_DIR / 'claude-code-version'
 SHELL_DIR = shell_dir()
 UV_VERSION_FILE = SHELL_DIR / 'uv-version'
 SHELL_HELPERS = ('prelude.sh', 'log.sh', 'strict.sh', 'install_awscli.sh')
@@ -31,6 +32,11 @@ PROJECT_FILES = {DOCKERFILE_PATH: CONTAINER_DIR / 'project.Dockerfile'}
 
 _FIXED_MTIME = 0
 _INJECTED_MODE = 0o644
+
+
+def claude_code_version() -> str:
+  """the Claude Code version every managed session runs."""
+  return CLAUDE_CODE_VERSION_FILE.read_text().strip()
 
 
 def _local_member_directories(project: Path) -> list[Path]:

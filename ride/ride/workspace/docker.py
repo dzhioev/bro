@@ -241,7 +241,7 @@ def runtime_image_tag(python_version: Optional[str] = None) -> str:
   inputs.append(('project.Dockerfile', CONTAINER_DIR / 'project.Dockerfile'))
   inputs.extend(
     (
-      ('claude-code-version', CONTAINER_DIR / 'claude-code-version'),
+      ('claude-code-version', build_context.CLAUDE_CODE_VERSION_FILE),
       ('uv-version', build_context.UV_VERSION_FILE),
     )
   )
@@ -287,7 +287,7 @@ def _prune_superseded_images(current: str) -> None:
 
 
 def build_runtime_image(tag: str, python_version: str) -> None:
-  claude_version = (CONTAINER_DIR / 'claude-code-version').read_text().strip()
+  claude_version = build_context.claude_code_version()
   uv_version = build_context.UV_VERSION_FILE.read_text().strip()
   log.info(
     'building runtime image %s (python %s, claude-code %s, uv %s)',
