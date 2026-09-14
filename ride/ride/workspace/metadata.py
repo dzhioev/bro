@@ -9,7 +9,6 @@ from typing import Optional
 from bro.workspace.paths import is_workspace_name, workspace_dir
 
 _METADATA_FILE = 'workspace.json'
-BRANCH_ENV = 'RIDE_BRANCH'
 
 
 class WorkspaceNotFound(ValueError):

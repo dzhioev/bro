@@ -307,10 +307,11 @@ import json, os, sys
 from ride.root import run_started_party
 from ride.runtime_bundle import RuntimeBundle
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver, Launch
-from ride.workspace.metadata import BRANCH_ENV, Isolation
+from bro.workspace.git import rev_parse_commit
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
-from bro.workspace.paths import ISOLATION_ENV, project_root, runtime_base
+from bro.workspace.paths import BASE_SHA_ENV, BRANCH_ENV, ISOLATION_ENV, project_root, runtime_base
 
 name = os.environ['RIDE_E2E_NAME']
 workspace = Workspace.ensure(name, project_root(), Isolation.BOXED)
@@ -323,8 +324,10 @@ launch = Launch(name=name,
                 command=json.loads(os.environ['RIDE_E2E_COMMAND']),
                 env={'CLAUDE_CONFIG_DIR': '/home/ride/.claude',
                      'RIDE_BRO': 'bro-dev',
+                     'RIDE_COMMAND': 'ride along bro-dev',
                      ISOLATION_ENV: workspace.isolation.value,
                      BRANCH_ENV: workspace.metadata.branch,
+                     BASE_SHA_ENV: rev_parse_commit(project_root(), 'HEAD'),
                      'RIDE_SESSION_DIR': '/var/ride/session'},
                 secrets=tuple(json.loads(os.environ.get('RIDE_E2E_SECRETS', '[]'))),
                 tty=True, forward_env=True,

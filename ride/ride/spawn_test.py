@@ -72,7 +72,7 @@ def _runtime_bundle(tmp_path: Path) -> RuntimeBundle:
 SESSION = 'session-ws'
 
 
-def _do_ride_environment(workspace_name: str) -> dict[str, str]:
+def _do_ride_environment(workspace_name: str, base_sha: str = 'PARENT-SHA') -> dict[str, str]:
   workspace = Workspace.open(workspace_name)
   spec = ride.session.load_resume_spec(workspace)
   assert spec is not None
@@ -82,6 +82,7 @@ def _do_ride_environment(workspace_name: str) -> dict[str, str]:
     ride.do_ride.RESOLVED_LLM_ENV: ride.do_ride.encode_resolved_llm(spec.resolved_llm),
     'RIDE_ISOLATION': 'boxed',
     'RIDE_BRANCH': workspace.metadata.branch,
+    'RIDE_BASE_SHA': base_sha,
     'RIDE_RUNTIME': '/runtime',
   }
 
@@ -544,7 +545,7 @@ class TestSummonLowering:
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts()).launch
     assert lowered.env == {
-      **_do_ride_environment('broker-CH'),
+      **_do_ride_environment('broker-CH', base_sha='REF-SHA'),
       'RIDE_BRO': 'dev',
       'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness bro --into summon dev p',
       'RIDE_MAY_SUMMON': '',
