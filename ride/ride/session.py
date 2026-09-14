@@ -29,6 +29,7 @@ from bro.workspace.paths import (
   ISOLATION_ENV,
   TRAILS_ROOT_ENV,
   ensure_runtime_root,
+  ride_trails_dir,
   workspace_dir,
 )
 from ride import pending_summon
@@ -443,8 +444,10 @@ def prepared_unboxed_session_launch(
   runner_env[SESSION_DIR_ENV] = str(workspace_session_dir(records_directory))
   if spec.no_trails:
     runner_env['TRAILS_DISABLED'] = '1'
+    runner_env.pop(TRAILS_ROOT_ENV, None)
   else:
     runner_env.pop('TRAILS_DISABLED', None)
+    runner_env[TRAILS_ROOT_ENV] = str(ride_trails_dir())
   harness.prepare_unboxed_env(spec, records_directory, tree, runner_env)
   return ProcessLaunch(
     command=command,

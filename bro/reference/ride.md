@@ -1176,9 +1176,10 @@ Wrappers and session daemons rely on a small set of env vars:
   and by `ride banner` and `bro.prompts.session_fragment` so the run can tell in-session that it owes a summoner an answer.
 - `RIDE_PARTY_MEMBER` — the channel-derived member name when a session joined an existing party.
   Its presence makes the banner and session prompt state that the tree is shared, and makes `do-ride` skip persona workspace provisioning.
-- `RIDE_TRAILS_ROOT` — overrides the local trails backend's root (`bro.workspace.paths.trails_dir`).
-  Set only for a boxed party member, to its own `party/<member>/trails` under the party mount, since the ride-wide `/var/ride/trails` bind belongs to the first session and its scope may not have one;
-  the member's supervisor adopts those trails into the ride's own store when it settles, and the unboxed launch strips any inherited value so a host session resolves its own root.
+- `RIDE_TRAILS_ROOT` — names the local trails backend's root (`bro.workspace.paths.trails_dir`) to a session that cannot derive it.
+  An unboxed session gets its ride's own root, since its closed environment carries no data home and an inherited value would be its parent's;
+  a boxed party member gets its own `party/<member>/trails` under the party mount, since the ride-wide `/var/ride/trails` bind belongs to the first session and its scope may not have one,
+  and the member's supervisor adopts those trails into the ride's own store when it settles.
 - `RIDE_MAY_SUMMON` — the run's own effective summon allow-list, comma-separated and empty when it may summon nothing.
   The env name and its encoding are owned by `bro.summon`;
   set by the launch surfaces for a session root and by the summon lowering (or, for a manual child, the `--summoned` launch from the pending record) for a summoned child (its own resolved list, never its summoner's),

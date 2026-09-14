@@ -12,9 +12,8 @@ CONTAINER_SESSION_DIR = Path('/var/ride/session')
 CONTAINER_PARTY_DIR = Path('/var/ride/party')
 _DATA_HOME_ENV = 'XDG_DATA_HOME'
 ISOLATION_ENV = 'RIDE_ISOLATION'
-# overrides the local trails backend's root; a boxed party member points it at
-# its own records under the party mount, since the ride-wide /var/ride/trails
-# bind is the first session's and may be absent for its scope
+# the local trails backend's root, named to a session by its launcher where the
+# session's own environment cannot derive it (`trails_dir`)
 TRAILS_ROOT_ENV = 'RIDE_TRAILS_ROOT'
 # a name is one path component, and also becomes a git branch and a docker
 # container name; this is the narrowest of the three
@@ -112,13 +111,18 @@ def fresh_workspace_name(base: str) -> str:
       return name
 
 
+def ride_trails_dir() -> Path:
+  """the local trails root of the rides this runtime root launches."""
+  return runtime_base() / 'trails'
+
+
 def trails_dir() -> Path:
   override = os.environ.get(TRAILS_ROOT_ENV)
   if override is not None:
     return Path(override)
   if os.environ.get('RIDE_IN_CONTAINER') is not None:
     return CONTAINER_TRAILS_ROOT
-  return runtime_base() / 'trails'
+  return ride_trails_dir()
 
 
 def summon_dir() -> Path:
