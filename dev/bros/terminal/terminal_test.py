@@ -1,4 +1,5 @@
 from bro.bro import BaseBro
+from bro.harness import claude
 from bro.llm import providers
 from bro.llm.llms import openai
 from bros.bro import Bro
@@ -22,3 +23,10 @@ def test_llm_model_selection_preserves_terminal_compaction():
   assert isinstance(spec, openai.LLMSpec)
   assert spec.model == openai.MODELS['sol']
   assert spec.compact_threshold == declared.compact_threshold
+
+
+def test_terminal_withholds_claudes_own_delegation():
+  blocked = Terminal().blocked_tool_names('claude')
+
+  assert set(claude.DELEGATION) <= set(blocked)
+  assert Terminal().blocked_tool_names('bro') == ()
