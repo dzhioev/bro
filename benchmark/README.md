@@ -60,6 +60,8 @@ Conversion, publication, and durable retention are separate operations rather th
 Each trial is one `ride solo` inside the task container:
 an unboxed root in the task's own directory, on the uploaded bundle as its runtime, permitted to have its summons join its party and start nothing
 — so the `terminal` bro delegates to further `terminal`s as processes beside it in the same tree, with no Docker in the container.
+The launch declares the container a sandbox (`--env IS_SANDBOX=1`):
+its agent phase runs as root, and that declaration is what lets claude skip permission prompts under uid 0.
 The agent's `harness` kwarg selects the driving loop, `bro` or `claude`, and `llm_credential` the one credential the container gets:
 the LLM key on the bro harness, the `claude_code` setup token on the claude one.
 The pinned config runs the bro harness;

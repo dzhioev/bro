@@ -193,6 +193,13 @@ def test_the_harness_reaches_the_launch():
   assert '--harness claude terminal' in command
 
 
+def test_the_trial_declares_the_task_container_a_sandbox():
+  command = ride_command(bro='terminal', instruction='do it', harness='claude', llm=None)
+
+  # pins the variable claude consults before running as root with permissions skipped
+  assert '--env IS_SANDBOX=1' in command
+
+
 def test_the_recipe_reaches_the_run_with_its_provider_slot_empty():
   command = _run_command(llm='gpt-5.6-terra:high')
 
