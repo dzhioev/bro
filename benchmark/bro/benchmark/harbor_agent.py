@@ -206,7 +206,8 @@ def ride_command(*, bro: str, instruction: str, harness: str, llm: Optional[str]
 
   An unboxed root in that directory (`--tree "$PWD"`, the shell's own), on the
   bundle as its runtime, kept after a clean exit so its records stay for
-  collection, and permitted to have its summons join its party and nothing else.
+  collection, permitted to have its summons join its party and nothing else,
+  and declared a sandbox to the harness it rides.
   `llm` is the `--llm` selection as the launch takes it.
   """
   launch = [str(BUNDLE.script('ride')), 'solo', '--unboxed', '--tree']
@@ -217,6 +218,11 @@ def ride_command(*, bro: str, instruction: str, harness: str, llm: Optional[str]
     ':party.start.boxed',
     '--grant',
     ':party.join',
+    # the task container is thrown away after the verifier and its agent phase
+    # runs as root: the declaration under which claude accepts
+    # `--dangerously-skip-permissions` from uid 0
+    '--env',
+    'IS_SANDBOX=1',
     '--keep',
     '--harness',
     harness,
