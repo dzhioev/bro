@@ -21,7 +21,7 @@ import ride.summon_control
 from bro.base import credentials
 from bro.monitor import workspace_party_dir, workspace_session_dir
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
-from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR
+from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR, ride_trails_dir
 from ride import pending_summon
 from ride.repository import Repository
 from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError
@@ -1048,7 +1048,7 @@ class TestUnboxedSession:
     assert launch.env['BRO_SHELL_COMMAND'] == 'dive-in'
     assert 'RIDE_SUMMONED' not in launch.env
     assert 'RIDE_IN_CONTAINER' not in launch.env
-    assert 'RIDE_TRAILS_ROOT' not in launch.env
+    assert launch.env['RIDE_TRAILS_ROOT'] == str(ride_trails_dir())
     assert 'VIRTUAL_ENV' not in launch.env
 
   def test_detached_builder_clears_ambient_attachment_and_channel_facts(
