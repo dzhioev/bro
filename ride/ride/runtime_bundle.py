@@ -19,6 +19,8 @@ from email.message import Message
 from email.parser import Parser
 from pathlib import Path
 
+import certifi
+
 from bro.base import log
 from bro.workspace.paths import runtime_base
 
@@ -110,6 +112,21 @@ class RuntimeBundle:
   def container_volume(self) -> str:
     return f'{_RUNTIME_VOLUME_PREFIX}{self.hash}'
 
+  @property
+  def trust_roots(self) -> Path:
+    """the CA store a materialized runtime's sessions verify TLS against: the
+    certifi file in its own venv, the one `ride` re-executed from."""
+    if not self.materialized:
+      raise RuntimeBundleError(
+        f'runtime bundle {self.root} is a freeze of this host; its sessions trust the host store'
+      )
+    roots = Path(certifi.where())
+    if not roots.resolve().is_relative_to(self.host_venv.resolve()):
+      raise RuntimeBundleError(
+        f'certifi resolves to {roots}, outside the materialized runtime {self.host_venv}'
+      )
+    return roots
+
   def materialize_host(self) -> None:
     if self.materialized:
       return
@@ -180,6 +197,8 @@ class RuntimeBundle:
       path_entries = [entry for entry in path_entries if os.path.normpath(entry) != launcher_bin]
     env['PATH'] = os.pathsep.join(_unique_paths([str(self.host_bin), *path_entries]))
     env['PWD'] = str(cwd)
+    if self.materialized:
+      env['SSL_CERT_FILE'] = str(self.trust_roots)
     return env
 
 

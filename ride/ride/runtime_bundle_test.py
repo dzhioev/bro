@@ -594,6 +594,7 @@ def test_unboxed_session_environment_is_a_closed_snapshot(monkeypatch, tmp_path)
       'RIDE_SUMMONED': '1',
       'CLAUDE_CONFIG_DIR': '/parent/claude',
       'PYTHONHOME': '/python',
+      'SSL_CERT_FILE': '/etc/ssl/operator.pem',
     },
   )
 
@@ -808,6 +809,35 @@ def test_given_runtime_requires_the_materialized_layout(tmp_path):
   with pytest.raises(runtime_bundle.RuntimeBundleError, match='missing directory'):
     with runtime_bundle.resolve_runtime_bundle(str(root)):
       pass
+
+
+def test_a_given_runtime_session_trusts_the_roots_the_runtime_carries(tmp_path, monkeypatch):
+  root = _materialized_runtime(tmp_path / 'given')
+  monkeypatch.setattr(runtime_bundle, '_session_commands', lambda _python: _GIVEN_COMMANDS)
+  roots = root / 'venv' / 'lib' / 'python3.12' / 'site-packages' / 'certifi' / 'cacert.pem'
+  monkeypatch.setattr(runtime_bundle.certifi, 'where', lambda: str(roots))
+  monkeypatch.setattr(
+    runtime_bundle.os,
+    'environ',
+    {'HOME': '/root', 'PATH': '/usr/bin', 'SSL_CERT_FILE': '/etc/ssl/ambient.pem'},
+  )
+  bundle = runtime_bundle.RuntimeBundle(root, '3.12', materialized=True)
+
+  env = bundle.host_session_env(tmp_path / 'tree', forward_env=False)
+
+  assert env['SSL_CERT_FILE'] == str(roots)
+
+
+def test_a_given_runtime_refuses_roots_outside_its_venv(tmp_path, monkeypatch):
+  root = _materialized_runtime(tmp_path / 'given')
+  monkeypatch.setattr(runtime_bundle, '_session_commands', lambda _python: _GIVEN_COMMANDS)
+  monkeypatch.setattr(
+    runtime_bundle.certifi, 'where', lambda: '/another/venv/site-packages/certifi/cacert.pem'
+  )
+  bundle = runtime_bundle.RuntimeBundle(root, '3.12', materialized=True)
+
+  with pytest.raises(runtime_bundle.RuntimeBundleError, match='outside the materialized runtime'):
+    bundle.host_session_env(tmp_path / 'tree', forward_env=False)
 
 
 def test_runtime_reexec_uses_the_given_runtime_ride(tmp_path, monkeypatch):

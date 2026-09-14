@@ -15,7 +15,7 @@ uv sync --directory benchmark --all-groups
 ## The bundle
 
 A benchmark task runs in a foreign image that must not be modified,
-and several carry no Python at all, so the agent brings its own.
+and several carry neither Python nor a CA store, so the agent brings its own.
 `benchmark bundle` builds a relocatable directory in the materialized-runtime layout `ride --runtime-bundle` takes:
 `venv/`, a pinned standalone CPython with the framework distributions a ride runs from
 — `bro`, `bro-native`, `bro-dev` and `bro-ride`, resolved from the framework's lock
