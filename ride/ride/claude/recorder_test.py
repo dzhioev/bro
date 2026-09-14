@@ -30,14 +30,13 @@ class TestStart:
       patch('ride.claude.recorder.spawn.popen') as popen,
     ):
       recorder = start_session_recorder(
-        'w', tmp_path / 'ws', {'RIDE_WORKSPACE': 'w'}, llm=kwargs.pop('llm', {'model': 'm'})
+        tmp_path / 'ws', {'RIDE_WORKSPACE': 'w'}, llm=kwargs.pop('llm', {'model': 'm'})
       )
     return recorder, popen, session_dir, projects_dir
 
   def test_spawns_the_daemon_on_the_session_paths(self, tmp_path, monkeypatch):
     recorder, popen, session_dir, projects_dir = self._start(tmp_path, monkeypatch)
     argv = popen.call_args.args[0]
-    assert argv[argv.index('--workspace') + 1] == 'w'
     assert argv[argv.index('--projects-dir') + 1] == str(projects_dir)
     assert argv[argv.index('--llm') + 1] == '{"model": "m"}'
     assert popen.call_args.kwargs['env'] == {'RIDE_WORKSPACE': 'w'}
@@ -57,7 +56,7 @@ class TestStart:
       patch('ride.claude.recorder.spawn.popen', side_effect=OSError('no such command')),
       pytest.raises(RuntimeError, match='cannot start the session recorder'),
     ):
-      start_session_recorder('w', tmp_path / 'ws', {}, llm={})
+      start_session_recorder(tmp_path / 'ws', {}, llm={})
 
   def test_outside_a_session_the_wiring_is_a_bug(self, tmp_path, monkeypatch):
     monkeypatch.delenv('RIDE_SESSION_DIR', raising=False)
@@ -65,7 +64,7 @@ class TestStart:
       patch('ride.claude.recorder.claude_projects_dir', return_value=tmp_path / 'p'),
       pytest.raises(RuntimeError, match='RIDE_SESSION_DIR'),
     ):
-      start_session_recorder('w', tmp_path / 'ws', {}, llm={})
+      start_session_recorder(tmp_path / 'ws', {}, llm={})
 
 
 class TestStop:
@@ -142,6 +141,10 @@ class TestLiveRecording:
     monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(claude_dir))
     monkeypatch.setenv('BRO_STORE', str(credential_store))
+    monkeypatch.setenv('RIDE_WORKSPACE', 'ws')
+    monkeypatch.setenv('RIDE_HOST', 'laptop')
+    monkeypatch.setenv('RIDE_HOST_WORKSPACE', str(workspace))
+    monkeypatch.setenv('RIDE_ISOLATION', 'unboxed')
     monkeypatch.setenv('RIDE_COMMAND', 'ride along ws')
     segment = projects / 'seg-1.jsonl'
     segment.write_text('\n'.join(_TRANSCRIPT) + '\n')
@@ -149,7 +152,7 @@ class TestLiveRecording:
 
     store = LocalStore(trails_dir())
     with contextlib.ExitStack() as running:
-      recorder = start_session_recorder('ws', workspace, session_env, llm={'model': 'm'})
+      recorder = start_session_recorder(workspace, session_env, llm={'model': 'm'})
       running.callback(recorder.stop)
       header = _await_trail(store, segment)
 

@@ -11,6 +11,7 @@ from bro.base import configs
 from bro.trails.model import ForkedFrom, tools_sha256
 from bro.trails.network import HTTPStatusError, NetworkStore
 from bro.trails.record.bro import Recorder
+from bro.trails.record.session import managed_session
 from bro.trails.store import TransientUnavailable
 
 
@@ -378,3 +379,39 @@ class TestRecorderKeepalive:
       fake.queue(item)
     tracker.step('user_input', 'x', turn_index=0)
     tracker.end_trail('ok')
+
+
+class TestRecorderStampsTheManagedSession:
+  def _blaze(self, monkeypatch) -> dict:
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((201, b'{"id": "T1", "extent": 1}'))
+    Recorder(NetworkStore('https://bro.trails.example', 'tok')).start_trail(
+      bro='b', llm_spec={}, system_prompt='p', forked_from=None, interactive=False, surface='x'
+    )
+    return _request_payload(fake.requests[0])
+
+  def test_a_run_outside_a_managed_session_carries_no_session_facts(self, monkeypatch):
+    payload = self._blaze(monkeypatch)
+    assert 'location' not in payload
+    assert 'ride_command' not in payload['native']
+    assert 'launch_context' not in payload['body']
+
+  def test_a_managed_session_stamps_its_location_launch_line_and_git_state(self, monkeypatch):
+    for name, value in {
+      'RIDE_SESSION_DIR': '/var/ride/session',
+      'RIDE_WORKSPACE': 'ws',
+      'RIDE_HOST': 'laptop',
+      'RIDE_HOST_WORKSPACE': '/home/u/ws/tree',
+      'RIDE_ISOLATION': 'boxed',
+      'RIDE_COMMAND': 'ride solo --harness bro dev p',
+      'RIDE_BRANCH': 'workspace-ws',
+      'RIDE_BASE_SHA': 'abc',
+    }.items():
+      monkeypatch.setenv(name, value)
+    session = managed_session()
+    assert session is not None
+
+    payload = self._blaze(monkeypatch)
+    assert payload['location'] == session.location
+    assert payload['native']['ride_command'] == 'ride solo --harness bro dev p'
+    assert payload['body']['launch_context'] == [session.git_record]

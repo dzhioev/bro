@@ -11,14 +11,12 @@ import os
 import threading
 from collections.abc import Generator
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from bro.base import log
 from bro.monitor import SESSION_DIR_ENV, claude_projects_dir, harness_session_dir, trail_pointer
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import SUMMONER_ENV, summoned
-from bro.workspace.git import git_out
-from bro.workspace.paths import BRANCH_ENV
 from ride.claude.claude_argv import build_claude_launch
 from ride.claude.claude_auth import apply_claude_auth
 from ride.claude.claude_config import latest_jsonl
@@ -28,7 +26,6 @@ from ride.claude.mcp import start_session_mcp_server
 from ride.claude.recorder import start_session_recorder
 from ride.claude.session_context import (
   RIDE_SESSION_CONTEXT_ENV,
-  GitState,
   build_session_context,
   encode_session_context,
 )
@@ -39,28 +36,12 @@ if TYPE_CHECKING:
   from ride.session import SessionSpec
 
 
-def _git_state(spec: 'SessionSpec | SessionRun', tree: Path) -> Optional[GitState]:
-  """an attached session's git state: the base is the tree's HEAD — for a
-  fresh workspace the ref the outer based it on, for a resume the branch tip.
-  a detached session has none: with no repository attached, the tree is not
-  read for git state even when it happens to be a checkout, and the session
-  may run where no git is installed."""
-  if spec.repo is None:
-    return None
-  branch = os.environ.get(BRANCH_ENV)
-  if branch is None:
-    raise RuntimeError(f'attached session has no recorded branch in {BRANCH_ENV}')
-  base_sha = git_out('rev-parse', 'HEAD', cwd=str(tree))
-  return GitState(branch=branch, base_sha=base_sha, base_ref=spec.into)
-
-
 def _set_session_context(spec: 'SessionSpec | SessionRun', system_prompt: str, tree: Path) -> None:
   """capture the session's launch context into RIDE_SESSION_CONTEXT for the
   session recorder daemon (set in os.environ, which the daemon's spawn
   snapshots)."""
   records = build_session_context(
     system_prompt=system_prompt,
-    git=_git_state(spec, tree),
     bro=spec.bro,
     raw=options(spec).raw,
     proj_root=tree,
@@ -209,7 +190,7 @@ def run_session(spec: 'SessionSpec | SessionRun') -> int:
     # RIDE_SESSION_CONTEXT becomes the trail's launch-context attachment
     if os.environ.get('TRAILS_DISABLED') is None:
       try:
-        recorder = start_session_recorder(spec.name, tree, os.environ, llm=spec.llm_spec.dump())
+        recorder = start_session_recorder(tree, os.environ, llm=spec.llm_spec.dump())
       except RuntimeError as error:
         log.error('%s', error)
         return 1

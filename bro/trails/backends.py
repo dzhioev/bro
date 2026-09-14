@@ -215,6 +215,8 @@ def _bro_validate_create(native: dict) -> None:
   _validate_server_derived(native)
   if not isinstance(native.get('llm'), dict):
     raise ValueError('native.llm is required for the bro harness')
+  if 'ride_command' in native and not isinstance(native['ride_command'], str):
+    raise ValueError('native.ride_command must be a string')
 
 
 def _bro_llm_call_messages(record: dict) -> list[dict]:

@@ -53,7 +53,6 @@ class _SessionRecorder:
 
 
 def start_session_recorder(
-  name: str,
   workspace: Path,
   env: Mapping[str, str],
   llm: dict,
@@ -69,8 +68,6 @@ def start_session_recorder(
   try:
     argv = [
       spawn.console_script(RECORDER_COMMAND),
-      '--workspace',
-      name,
       '--projects-dir',
       str(projects_dir),
       '--llm',

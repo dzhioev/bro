@@ -128,7 +128,9 @@ bro · claude recorders                     readers
   the spans the mint verdict awarded, written once at blaze and carried through the replay seed.
   Client-side stores and recorders do not import `bro.trails.server`.
 - **Recorder placement:**
-  core `record/spine.py` owns the shared write spine.
+  core `record/spine.py` owns the shared write spine, and `record/session.py` the managed session a recorder runs in
+  — the header `location`, the launch line under `native.ride_command`, and an attached tree's `git` launch-context record, read off the environment the session's launcher published (`bro/reference/ride.md`, "Forwarded env vars"),
+  so a trail carries them whichever harness records it and a run outside a managed session carries none.
   Each engine distribution owns its recorder:
   `bro-native` contributes `bro.trails.record.bro`, while `bro-ride` contributes `ride.claude.trail_recorder`.
   They may import the core store contract, schema, adapters, and write spine, never the reverse.

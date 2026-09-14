@@ -9,6 +9,7 @@ import pytest
 from bro.monitor import health, trail_pointer
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest
+from bro.trails.record.session import managed_session
 from ride.claude.trail_recorder import (
   Recorder,
   _attempt,
@@ -87,6 +88,9 @@ def _interrupt_notice() -> str:
 
 _EPHEMERA = json.dumps({'type': 'mode', 'mode': 'normal'})
 
+# a launch-context record of claude's own, as the runner publishes it
+_MCP_RECORD = {'title': 'MCP servers', 'fields': {'mode': 'persona'}}
+
 
 def _pointer() -> Path:
   path = trail_pointer.path()
@@ -101,17 +105,17 @@ def environment(tmp_path: Path, monkeypatch):
   projects.mkdir(parents=True)
   monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
   monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
+  monkeypatch.setenv('RIDE_WORKSPACE', 'ws')
+  monkeypatch.setenv('RIDE_HOST', 'laptop')
+  monkeypatch.setenv('RIDE_HOST_WORKSPACE', '/home/u/ws/tree')
+  monkeypatch.setenv('RIDE_ISOLATION', 'unboxed')
   monkeypatch.setenv('RIDE_COMMAND', 'ride along ws')
+  monkeypatch.setenv('RIDE_BRANCH', 'workspace-ws')
+  monkeypatch.setenv('RIDE_BASE_SHA', 'abc')
   monkeypatch.setenv('RIDE_BRO', 'dev')
   monkeypatch.setenv('BRO_HOLD', 'attended')
-  monkeypatch.setenv(
-    'RIDE_SESSION_CONTEXT', json.dumps([{'title': 'git state', 'fields': {'branch': 'b'}}])
-  )
-  monkeypatch.delenv('RIDE_HOST', raising=False)
-  monkeypatch.delenv('RIDE_HOST_WORKSPACE', raising=False)
+  monkeypatch.setenv('RIDE_SESSION_CONTEXT', json.dumps([_MCP_RECORD]))
   monkeypatch.delenv('RIDE_SUMMONER', raising=False)
-  # the suite itself may run inside a container; pin the probe to the unboxed process
-  monkeypatch.setattr('ride.claude.trail_recorder._in_container', lambda: False)
   return projects
 
 
@@ -121,13 +125,10 @@ def store(tmp_path: Path) -> _Store:
 
 
 def _recorder(projects: Path, store: LocalStore, *, started_after: float = 0.0) -> Recorder:
+  session = managed_session()
+  assert session is not None
   return Recorder(
-    projects,
-    'ws',
-    store,
-    llm={'model': 'claude-fable-5'},
-    ride_command=os.environ['RIDE_COMMAND'],
-    started_after=started_after,
+    projects, store, llm={'model': 'claude-fable-5'}, session=session, started_after=started_after
   )
 
 
@@ -193,12 +194,36 @@ class TestAdoption:
     assert header['native']['segment'] == 'seg-1'
     assert header['native']['ride_command'] == 'ride along ws'
     assert header['native']['llm'] == {'model': 'claude-fable-5'}
-    assert header['location']['workspace'] == 'ws'
-    assert header['location']['is_container'] is False
-    assert store.get_launch_context(header['id']) == [
-      {'title': 'git state', 'fields': {'branch': 'b'}}
-    ]
+    session = managed_session()
+    assert session is not None
+    assert header['location'] == session.location
+    assert store.get_launch_context(header['id']) == [session.git_record, _MCP_RECORD]
     assert _rows(store, header['id']) == lines
+
+  def test_a_detached_session_attaches_only_claudes_own_context(
+    self, environment, store, monkeypatch
+  ):
+    monkeypatch.delenv('RIDE_BRANCH')
+    monkeypatch.delenv('RIDE_BASE_SHA')
+    _write_segment(environment, 'seg-1', [_user('hello', 'u1'), _assistant('hi', 'a1')])
+
+    assert _recorder(environment, store).tick() is True
+
+    [header] = _trails(store)
+    assert store.get_launch_context(header['id']) == [_MCP_RECORD]
+
+  def test_a_detached_session_without_claude_records_attaches_no_context(
+    self, environment, store, monkeypatch
+  ):
+    monkeypatch.delenv('RIDE_BRANCH')
+    monkeypatch.delenv('RIDE_BASE_SHA')
+    monkeypatch.delenv('RIDE_SESSION_CONTEXT')
+    _write_segment(environment, 'seg-1', [_user('hello', 'u1'), _assistant('hi', 'a1')])
+
+    assert _recorder(environment, store).tick() is True
+
+    [header] = _trails(store)
+    assert store.get_launch_context(header['id']) is None
 
   def test_transcripts_older_than_the_launch_are_not_adopted(self, environment, store):
     path = _write_segment(environment, 'seg-old', [_user('old', 'u1')])
