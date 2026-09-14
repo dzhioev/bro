@@ -601,7 +601,7 @@ class TestProcessChildWorkspaceCleanup:
 
   @pytest.mark.asyncio
   async def test_kill_graces_the_leader_then_forces_the_process_group(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(workspace_spawn, '_PROCESS_TERM_GRACE', 0.1)
+    monkeypatch.setattr(workspace_spawn, 'PROCESS_TERM_GRACE', 0.1)
     child_ready = tmp_path / 'child-ready'
     child_stopped = tmp_path / 'child-stopped'
     parent_ready = tmp_path / 'parent-ready'

@@ -63,8 +63,9 @@ from ride.workspace.model import Workspace
 DEFAULT_RING_BYTES = 1 << 16  # 64 KiB — a full traceback + context, bounded
 
 _DRAIN_CHUNK = 65536
+# seconds a process child gets to end on SIGTERM before its group is SIGKILLed:
 # room for do-ride's Claude path to flush a transcript and finish its own exit grace
-_PROCESS_TERM_GRACE = 30.0
+PROCESS_TERM_GRACE = 30.0
 
 
 @dataclass(frozen=True)
@@ -522,7 +523,7 @@ class _ProcessChild(ChildHandle):
     self._killed = True
     self._signal_process(signal.SIGTERM)
     try:
-      async with asyncio.timeout(_PROCESS_TERM_GRACE):
+      async with asyncio.timeout(PROCESS_TERM_GRACE):
         await self._process.wait()
         await asyncio.shield(self._drain)
     except TimeoutError:
@@ -670,7 +671,7 @@ class _ExecChild(ChildHandle):
     self._killed = True
     await self._signal_member('TERM')
     try:
-      async with asyncio.timeout(_PROCESS_TERM_GRACE):
+      async with asyncio.timeout(PROCESS_TERM_GRACE):
         await self._process.wait()
         await asyncio.shield(self._drain)
     except TimeoutError:
