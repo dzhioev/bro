@@ -1169,7 +1169,7 @@ Wrappers and session daemons rely on a small set of env vars:
 - `RIDE_TASK_ID` — set by `dive-in` when it has resolved a task (the canonical brog task id);
   read by the `spell::run-pr` spell to add a `Task: <url>` line to commit messages.
 - `RIDE_SESSION_CONTEXT` — the session's launch context as a JSON list of typed records.
-  It includes the system prompt, git state, MCP servers, and the project's root instructions document.
+  It includes the system prompt, an attached session's git state, MCP servers, and the project's root instructions document.
   The Claude runner builds it through `ride/ride/claude/session_context.py` next to Claude in both isolations.
   The session recorder uploads it as the trail's launch-context attachment;
   `rewind` renders it as a `SESSION CONTEXT` preamble.

@@ -1,7 +1,9 @@
+import json
 import os
 import signal
 import subprocess
 import time
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -43,6 +45,7 @@ class _Harness:
       patch('ride.claude.runner.start_session_recorder'),
       patch('ride.claude.runner.apply_claude_auth'),
       patch('ride.claude.runner.start_statusline_projector'),
+      patch('ride.claude.runner.git_out', return_value='head-sha'),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -66,6 +69,54 @@ class _Harness:
     for p in reversed(self._patches):
       p.__exit__(*exception)
     return False
+
+
+def _session_context() -> dict:
+  return {r['kind']: r for r in json.loads(os.environ['RIDE_SESSION_CONTEXT'])}
+
+
+class TestSetSessionContext:
+  def test_attached_session_records_the_trees_head(self, monkeypatch, tmp_path):
+    subprocess.run(['git', 'init', '-q'], cwd=tmp_path, check=True)
+    subprocess.run(
+      [
+        'git',
+        '-c',
+        'user.name=t',
+        '-c',
+        'user.email=t@t',
+        'commit',
+        '-q',
+        '--allow-empty',
+        '-m',
+        'base',
+      ],
+      cwd=tmp_path,
+      check=True,
+    )
+    head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=tmp_path, text=True).strip()
+    monkeypatch.chdir(tmp_path)
+    with patch.dict('os.environ', {'RIDE_BRANCH': 'workspace-w'}):
+      ride_runner._set_session_context(_spec(into='origin/master'), 'sp', tmp_path)
+      assert _session_context()['git']['fields'] == {
+        'branch': 'workspace-w',
+        'base_sha': head,
+        'base_ref': 'origin/master',
+      }
+
+  def test_detached_session_records_no_git_state_and_needs_no_git(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with patch.dict('os.environ', {'PATH': str(tmp_path / 'no-git')}):
+      os.environ.pop('RIDE_BRANCH', None)
+      ride_runner._set_session_context(replace(_spec(), repo=None), 'sp', tmp_path)
+      assert 'git' not in _session_context()
+
+  def test_attached_session_without_a_recorded_branch_fails(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with patch.dict('os.environ'):
+      os.environ.pop('RIDE_BRANCH', None)
+      with pytest.raises(RuntimeError, match='RIDE_BRANCH'):
+        ride_runner._set_session_context(_spec(), 'sp', tmp_path)
 
 
 class TestSessionRun:
