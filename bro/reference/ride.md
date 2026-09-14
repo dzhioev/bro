@@ -194,6 +194,11 @@ a missing executable, missing or extra shim, or shim targeting another command f
 The launcher re-executes from `PATH/venv/bin/ride` before reading workspace state,
 records the path for root and started-child resume, and uses its absolute `do-ride`,
 so every process in the ride runs that runtime even when the first command came from another installation.
+A given runtime also carries the roots its sessions trust:
+an unboxed session of one gets `SSL_CERT_FILE` set to the certifi store inside `PATH/venv`,
+so a runtime shipped to a host verifies TLS against what it ships rather than against a system store that host may lack;
+a frozen runtime's sessions carry no trust setting and verify against the host's own store,
+and neither admits a trust setting from the launcher's environment.
 A given runtime has no frozen manifest from which to build a container volume;
 a boxed root or boxed party start fails naming that constraint.
 Boxed isolation from a frozen runtime uses the same materializer inside the runtime image to populate `ride-runtime-<hash>`, mounted read-only at `/var/ride/runtime`;
@@ -1215,6 +1220,8 @@ Wrappers and session daemons rely on a small set of env vars:
 - `BROKER_DISABLED` — launcher-side presence-checked kill-switch:
   the session gets neither broker variable (see "The broker channel").
   Checked before any broker import (`ride/ride/workspace/containers.py:broker_enabled`).
+- `SSL_CERT_FILE` — set for an unboxed session of a given runtime to the certifi store inside that runtime's venv (see "Runtime bundles");
+  absent for a frozen runtime's sessions, and never admitted from the launcher's environment.
 - Plus the standard `GIT_AUTHOR_*` / `GIT_COMMITTER_*`
   — explicitly forwarded into a root session via `SESSION_FORWARD_ENV`.
   GitHub and AWS reach a session as the scoped `github` / `aws` secrets via their install hooks, not as forwarded env;

@@ -165,6 +165,7 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
   }
   assert _project_dependencies(_ROOT / 'ride' / 'pyproject.toml') == {
     'bro',
+    'certifi',
     'humanize',
     'mcp',
     'rich',

@@ -84,6 +84,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   either a locked freeze of the invoking installation, or the materialized `venv/` + `bin/` layout named by `--runtime-bundle` after re-executing its `ride`.
   Unboxed workspaces run its absolute host materialization;
   boxed workspaces require a frozen manifest, mount its named runtime volume read-only, and reuse the root's image tag and bundle hash for started children.
+  A given runtime's unboxed sessions verify TLS against the certifi store it carries, set as `SSL_CERT_FILE` in their snapshot;
+  a frozen runtime's sessions trust the host's own store.
   A manual token carries the frozen hash or given path, and its launch command names that runtime's own `ride`.
 - A bro resume reads the session-published pointer from the workspace's `session/` dir and continues that trail under the recipe recorded in the session spec.
   No pointer is published when trail recording is disabled.

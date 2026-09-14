@@ -467,6 +467,7 @@ version = "0.1.0"
 source = { editable = "ride" }
 dependencies = [
     { name = "bro" },
+    { name = "certifi" },
     { name = "humanize" },
     { name = "mcp" },
     { name = "rich" },
@@ -476,6 +477,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "bro", editable = "." },
+    { name = "certifi", specifier = "==2026.7.22" },
     { name = "humanize", specifier = "==4.16.0" },
     { name = "mcp", specifier = "==1.28.1" },
     { name = "rich", specifier = "==15.0.0" },

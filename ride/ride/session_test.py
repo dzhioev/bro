@@ -1117,10 +1117,14 @@ class TestUnboxedSession:
     monkeypatch.setattr(
       runtime_bundle_module, '_session_commands', lambda _python: session_commands
     )
+    roots = (
+      runtime_root / 'venv' / 'lib' / 'python3.12' / 'site-packages' / 'certifi' / 'cacert.pem'
+    )
+    monkeypatch.setattr(runtime_bundle_module.certifi, 'where', lambda: str(roots))
     for command in session_commands:
       executable = runtime_bin / command
       if command == 'do-ride':
-        executable.write_text('#!/bin/sh\npwd > trial-cwd\n')
+        executable.write_text('#!/bin/sh\npwd > trial-cwd\necho "$SSL_CERT_FILE" > trial-roots\n')
         executable.chmod(0o755)
       else:
         source = shutil.which(command)
@@ -1154,6 +1158,7 @@ class TestUnboxedSession:
     assert isinstance(launch, ride_session.ProcessLaunch)
     assert subprocess.run(launch.command, cwd=launch.cwd, env=launch.env).returncode == 0
     assert tree.joinpath('trial-cwd').read_text().strip() == str(tree)
+    assert tree.joinpath('trial-roots').read_text().strip() == str(roots)
 
   def test_unboxed_root_secrets_exist_only_for_the_session(self, monkeypatch, tmp_path):
     workspace = self._workspace(monkeypatch, tmp_path)
