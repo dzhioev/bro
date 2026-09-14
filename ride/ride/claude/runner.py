@@ -8,11 +8,10 @@ The outer `ride solo|along` validates policy once, so this runner repeats no pol
 
 import contextlib
 import os
-import subprocess
 import threading
 from collections.abc import Generator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from bro.base import log
 from bro.monitor import SESSION_DIR_ENV, claude_projects_dir, harness_session_dir, trail_pointer
@@ -28,6 +27,7 @@ from ride.claude.mcp import start_session_mcp_server
 from ride.claude.recorder import start_session_recorder
 from ride.claude.session_context import (
   RIDE_SESSION_CONTEXT_ENV,
+  GitState,
   build_session_context,
   encode_session_context,
 )
@@ -39,23 +39,28 @@ if TYPE_CHECKING:
   from ride.session import SessionSpec
 
 
+def _git_state(spec: 'SessionSpec | SessionRun', tree: Path) -> Optional[GitState]:
+  """an attached session's git state: the base is the tree's HEAD — for a
+  fresh workspace the ref the outer based it on, for a resume the branch tip.
+  a detached session has none: with no repository attached, the tree is not
+  read for git state even when it happens to be a checkout, and the session
+  may run where no git is installed."""
+  if spec.repo is None:
+    return None
+  branch = os.environ.get(BRANCH_ENV)
+  if branch is None:
+    raise RuntimeError(f'attached session has no recorded branch in {BRANCH_ENV}')
+  base_sha = git_out('rev-parse', 'HEAD', cwd=str(tree))
+  return GitState(branch=branch, base_sha=base_sha, base_ref=spec.into)
+
+
 def _set_session_context(spec: 'SessionSpec | SessionRun', system_prompt: str, tree: Path) -> None:
   """capture the session's launch context into RIDE_SESSION_CONTEXT for the
   session recorder daemon (set in os.environ, which the daemon's spawn
-  snapshots). the git base is the tree's HEAD — for a fresh workspace the
-  ref the outer based it on, for a resume the branch tip."""
-  try:
-    base_sha = git_out('rev-parse', 'HEAD', cwd=str(tree))
-  except subprocess.CalledProcessError:
-    base_sha = None
-  branch = os.environ.get(BRANCH_ENV)
-  if spec.repo is not None and branch is None:
-    raise RuntimeError(f'attached session has no recorded branch in {BRANCH_ENV}')
+  snapshots)."""
   records = build_session_context(
     system_prompt=system_prompt,
-    branch=branch,
-    base_sha=base_sha,
-    base_ref=spec.into,
+    git=_git_state(spec, tree),
     bro=spec.bro,
     raw=options(spec).raw,
     proj_root=tree,

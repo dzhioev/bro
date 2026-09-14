@@ -12,6 +12,7 @@ view without touching the renderer.
 """
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -21,6 +22,15 @@ RIDE_SESSION_CONTEXT_ENV = 'RIDE_SESSION_CONTEXT'
 # `AGENTS.md` is the cross-agent convention, `CLAUDE.md` the one Claude Code
 # loads on its own
 _INSTRUCTIONS_NAMES = ('AGENTS.md', 'CLAUDE.md')
+
+
+@dataclass(frozen=True)
+class GitState:
+  """an attached session's git state at launch."""
+
+  branch: str
+  base_sha: str
+  base_ref: Optional[str]
 
 
 def _mcp_record(bro: str, raw: bool) -> dict:
@@ -34,16 +44,15 @@ def _mcp_record(bro: str, raw: bool) -> dict:
 def build_session_context(
   *,
   system_prompt: str,
-  branch: Optional[str],
-  base_sha: Optional[str],
-  base_ref: Optional[str],
+  git: Optional[GitState],
   bro: str,
   raw: bool,
   proj_root: Path,
 ) -> list[dict]:
   """the launch-context records for a session.
 
-  `bro` names the session's bro; `raw` selects the system-prompt record's
+  `git` is an attached session's state, None for a detached one; `bro` names
+  the session's bro; `raw` selects the system-prompt record's
   shape: a raw session passes the whole prompt via --system-prompt (replaces
   the base), a ride-session passes only its --append-system-prompt addition on
   top of claude's base plus whatever instructions it loads itself.
@@ -58,12 +67,10 @@ def build_session_context(
     {'kind': 'system_prompt', 'subtype': sp_subtype, 'title': sp_title, 'content': system_prompt}
   )
 
-  if branch is not None:
-    git_fields: dict = {'branch': branch}
-    if base_sha is not None:
-      git_fields['base_sha'] = base_sha
-    if base_ref is not None:
-      git_fields['base_ref'] = base_ref
+  if git is not None:
+    git_fields: dict = {'branch': git.branch, 'base_sha': git.base_sha}
+    if git.base_ref is not None:
+      git_fields['base_ref'] = git.base_ref
     records.append(
       {'kind': 'git', 'subtype': 'state', 'title': 'git state at launch', 'fields': git_fields}
     )
