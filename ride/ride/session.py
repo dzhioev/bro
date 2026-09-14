@@ -22,8 +22,10 @@ from bro.monitor import (
   workspace_session_dir,
 )
 from bro.summon import RUNTIME_ENV, summoned_child_env
-from bro.workspace.git import resolve_head, resolve_ref
+from bro.workspace.git import resolve_head, resolve_ref, rev_parse_commit
 from bro.workspace.paths import (
+  BASE_SHA_ENV,
+  BRANCH_ENV,
   CONTAINER_PARTY_DIR,
   CONTAINER_SESSION_DIR,
   ISOLATION_ENV,
@@ -71,7 +73,7 @@ from ride.workspace.docker import (
   find_container_id,
   member_install_dir,
 )
-from ride.workspace.metadata import BRANCH_ENV, Isolation
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import AttachmentMismatch, IsolationMismatch, SessionBusy, Workspace
 from ride.workspace.store import ScopedSecrets, materialize_scoped_store
 from ride.workspace.worktrees import provision_workspace
@@ -166,6 +168,11 @@ class SessionSpec:
     if len(self.arguments) > 0:
       parts.extend(['--', *self.arguments])
     return parts
+
+  @property
+  def ride_command(self) -> str:
+    """the launch line the session runs under, as `RIDE_COMMAND` carries it."""
+    return ' '.join(self.to_command_argv())
 
   def resume_variant(self) -> 'SessionSpec':
     return replace(
@@ -283,6 +290,30 @@ def _summoned_env(
   }
 
 
+def _tree_head(tree: Path) -> str:
+  head = rev_parse_commit(tree, 'HEAD')
+  if head is None:
+    raise RuntimeError(f'cannot read HEAD of workspace tree {tree}')
+  return head
+
+
+def _base_commit(workspace: Workspace, base_ref: Optional[str]) -> str:
+  """the commit an attached session's tree starts at: the tree's HEAD where its
+  clone exists (a resume), else the base the clone is about to be made at."""
+  if (workspace.tree / '.git').is_dir():
+    return _tree_head(workspace.tree)
+  if base_ref is None:
+    raise ValueError('attached launch has no base to clone at')
+  return base_ref
+
+
+def _attached_tree_env(workspace: Workspace, base_sha: str) -> dict[str, str]:
+  branch = workspace.metadata.branch
+  if branch is None:
+    raise ValueError('attached workspace has no recorded branch')
+  return {BRANCH_ENV: branch, BASE_SHA_ENV: base_sha}
+
+
 def container_launch(
   harness: Harness,
   spec: SessionSpec,
@@ -310,6 +341,7 @@ def container_launch(
   extras = harness.container_extras(spec, workspace, scoped)
   launch_env: dict[str, str] = {
     'RIDE_BRO': spec.bro,
+    'RIDE_COMMAND': spec.ride_command,
     ISOLATION_ENV: Isolation.BOXED.value,
     RESOLVED_LLM_ENV: encode_resolved_llm(spec.resolved_llm),
     INSTALL_DIRECTORY_ENV: CONTAINER_INSTALL_DIRECTORY,
@@ -317,8 +349,8 @@ def container_launch(
     **human_env,
     **extras.env,
   }
-  if workspace.metadata.branch is not None:
-    launch_env[BRANCH_ENV] = workspace.metadata.branch
+  if workspace.repo is not None:
+    launch_env.update(_attached_tree_env(workspace, _base_commit(workspace, base_ref)))
   if spec.no_trails:
     # a run that records nothing binds no trails root
     launch_env['TRAILS_DISABLED'] = '1'
@@ -391,9 +423,7 @@ def boxed_member_launch(
   }
   if workspace.repo is not None:
     launch_env['RIDE_REPO'] = str(workspace.repo)
-    if workspace.metadata.branch is None:
-      raise ValueError('attached boxed workspace has no recorded branch')
-    launch_env[BRANCH_ENV] = workspace.metadata.branch
+    launch_env.update(_attached_tree_env(workspace, _tree_head(workspace.tree)))
   if spec.no_trails:
     launch_env['TRAILS_DISABLED'] = '1'
   harness.prepare_boxed_member_env(spec, records, member_root, launch_env)
@@ -422,27 +452,25 @@ def prepared_unboxed_session_launch(
   install_directory: Path,
   records_directory: Path,
 ) -> ProcessLaunch:
-  """Describe a session process in an already-prepared unboxed workspace tree."""
+  """Describe a session process in an already-prepared unboxed workspace tree:
+  the neutral session env around the harness's extras, with the surface's own
+  `env` on top."""
   harness = get_harness(spec.harness)
   runtime_bundle.materialize_host()
   tree = workspace.tree
   session_command = do_ride_command(spec, harness_flags=harness.session_flags(spec))
   command = [str(runtime_bundle.host_venv / 'bin' / session_command[0]), *session_command[1:]]
   runner_env = runtime_bundle.host_session_env(tree, forward_env=forward_env, additions=spec.env)
-  runner_env.update(env)
   runner_env['RIDE_BRO'] = spec.bro
+  runner_env['RIDE_COMMAND'] = spec.ride_command
   runner_env[RUNTIME_ENV] = str(runtime_bundle.host_root)
   runner_env[ISOLATION_ENV] = Isolation.UNBOXED.value
+  runner_env['RIDE_HOST'] = socket.gethostname()
   runner_env['RIDE_HOST_WORKSPACE'] = str(tree)
   runner_env.update(human_env)
   if workspace.repo is not None:
     runner_env['RIDE_REPO'] = str(workspace.repo)
-    if workspace.metadata.branch is None:
-      raise ValueError('attached unboxed workspace has no recorded branch')
-    runner_env[BRANCH_ENV] = workspace.metadata.branch
-  else:
-    runner_env.pop('RIDE_REPO', None)
-    runner_env.pop(BRANCH_ENV, None)
+    runner_env.update(_attached_tree_env(workspace, _tree_head(tree)))
   store_directory = materialize_scoped_store(launch_scope.store, credential_directory)
   runner_env['BRO_STORE'] = str(store_directory)
   runner_env['BRO_INSTALL_KINDS'] = ' '.join(sorted(launch_scope.hydrated_kinds))
@@ -456,6 +484,7 @@ def prepared_unboxed_session_launch(
     runner_env.pop('TRAILS_DISABLED', None)
     runner_env[TRAILS_ROOT_ENV] = str(ride_trails_dir())
   harness.prepare_unboxed_env(spec, records_directory, tree, runner_env)
+  runner_env.update(env)
   return ProcessLaunch(
     command=command,
     cwd=str(tree),
@@ -655,7 +684,7 @@ def _start_session(
   summoned: Optional[pending_summon.PendingSummon] = None,
 ) -> int:
   harness = get_harness(spec.harness)
-  os.environ['RIDE_COMMAND'] = ' '.join(spec.to_command_argv())
+  os.environ['RIDE_COMMAND'] = spec.ride_command
   os.environ['RIDE_WORKSPACE'] = spec.name
   os.environ[ISOLATION_ENV] = spec.isolation.value
   if spec.repo is None:
@@ -748,6 +777,11 @@ def _start_session(
           if base_ref is None:
             log.error("cannot read the summoner's HEAD at %s", summoned.parent_workspace)
             return 1
+      if repository is not None and base_ref is None:
+        base_ref = rev_parse_commit(repository.git_dir, 'HEAD')
+        if base_ref is None:
+          log.error('cannot read HEAD of %s', repository.git_dir)
+          return 1
       container_runtime = ContainerRuntimeResolver(runtime_bundle, repository)
       human_env = human_git_identity_env(repository)
       workspace = Workspace.ensure(

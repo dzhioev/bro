@@ -15,6 +15,10 @@ ISOLATION_ENV = 'RIDE_ISOLATION'
 # the local trails backend's root, named to a session by its launcher where the
 # session's own environment cannot derive it (`trails_dir`)
 TRAILS_ROOT_ENV = 'RIDE_TRAILS_ROOT'
+# an attached workspace's recorded branch and the commit its tree starts the
+# session at; a launch publishes both or neither
+BRANCH_ENV = 'RIDE_BRANCH'
+BASE_SHA_ENV = 'RIDE_BASE_SHA'
 # a name is one path component, and also becomes a git branch and a docker
 # container name; this is the narrowest of the three
 _WORKSPACE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]*')

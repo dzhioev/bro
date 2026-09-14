@@ -259,10 +259,7 @@ def _lower_summon(
       runtime_bundle=runtime_bundle,
       container_runtime=container_runtime,
       forward_env=False,
-      env={
-        'RIDE_COMMAND': ' '.join(spec.to_command_argv()),
-        **summoned_child_env(launch.may_summon, launch.permits, launch.summoner),
-      },
+      env=summoned_child_env(launch.may_summon, launch.permits, launch.summoner),
       mounts=mounts,
       credential_directory=(
         workspace.path / 'credentials' if temporary_store is None else temporary_store / 'store'

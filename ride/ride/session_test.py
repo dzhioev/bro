@@ -3,6 +3,7 @@ import json
 import os
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 from dataclasses import replace
@@ -210,6 +211,7 @@ class _ContainerHarness:
         'ride.workspace.docker.ContainerRuntimeResolver.resolve',
         return_value=ContainerRuntime('runtime-image', 'bundle-hash'),
       ),
+      patch('ride.session.rev_parse_commit', return_value='headsha'),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -477,8 +479,9 @@ class TestContainerCommand:
     ]  # fmt: skip
 
   def test_bro_carried_in_command_and_stamped_into_the_container_env(self):
+    spec = _spec(drop=True, bro='dev')
     with _ContainerHarness() as h:
-      rc = ride_session.start_session(_spec(drop=True, bro='dev'))
+      rc = ride_session.start_session(spec)
     assert rc == 0
     command = h.run_started_party.call_args.args[0].command
     assert command == [
@@ -500,6 +503,8 @@ class TestContainerCommand:
     assert launch.env['RIDE_BRO'] == 'dev'
     assert launch.env['RIDE_ISOLATION'] == 'boxed'
     assert launch.env['RIDE_BRANCH'] == 'workspace-w'
+    assert launch.env['RIDE_BASE_SHA'] == 'headsha'
+    assert launch.env['RIDE_COMMAND'] == spec.ride_command
 
   def test_env_additions_are_the_containers_own_lowest_layer(self):
     spec = _spec(drop=True, bro='dev', env={'IS_SANDBOX': '1', 'RIDE_BRO': 'impostor'})
@@ -577,7 +582,16 @@ class TestContainerCommand:
       rc = ride_session.start_session(_spec(drop=True))
     assert rc == 0
     launch = h.run_started_party.call_args.args[0]
-    assert launch.base_ref is None
+    assert launch.base_ref == 'headsha'
+    assert launch.env['RIDE_BASE_SHA'] == 'headsha'
+
+  def test_an_unreadable_source_head_fails_launch(self, caplog):
+    with _ContainerHarness() as h:
+      with patch('ride.session.rev_parse_commit', return_value=None):
+        rc = ride_session.start_session(_spec(drop=True))
+    assert rc == 1
+    assert 'cannot read HEAD' in caplog.text
+    assert h.run_started_party.call_count == 0
 
   def test_url_attachment_uses_fresh_origin_head_as_the_default_base(self, tmp_path):
     mirror = tmp_path / 'mirror'
@@ -963,6 +977,7 @@ class TestConcurrentSessionGuard:
     monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
     # the shared active-container refusal probes docker ahead of the launch body
     monkeypatch.setattr(ride_session, 'find_container_id', lambda tree: None)
+    monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda root, ref: 'headsha')
 
   def test_second_launch_is_refused_while_the_lock_is_held(self, tmp_path, caplog):
     workspace = _workspace(tmp_path)
@@ -1004,6 +1019,7 @@ class TestUnboxedSession:
       Isolation.UNBOXED,
     )
     monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_args: True)
+    monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_args: True)
     monkeypatch.setattr(ride_session, 'materialize_scoped_store', _materialize_store)
     monkeypatch.setattr(claude_harness, 'apply_claude_auth', lambda env, **_kwargs: None)
@@ -1068,7 +1084,10 @@ class TestUnboxedSession:
       '--foo',
     ]
     assert launch.env['RIDE_ISOLATION'] == 'unboxed'
+    assert launch.env['RIDE_HOST'] == socket.gethostname()
     assert launch.env['RIDE_BRANCH'] == 'workspace-w'
+    assert launch.env['RIDE_BASE_SHA'] == 'treehead'
+    assert launch.env['RIDE_COMMAND'] == spec.ride_command
     assert launch.env['BRO_INSTALL_KINDS'] == 'github trails'
     assert launch.env[HUMAN_NAME_ENV] == 'Ada Lovelace'
     assert launch.env['CLAUDE_CONFIG_DIR'] == str(tmp_path / 'claude-config')
@@ -1083,7 +1102,6 @@ class TestUnboxedSession:
   def test_env_additions_sit_beneath_everything_else_in_the_snapshot(self, monkeypatch, tmp_path):
     workspace = self._workspace(monkeypatch, tmp_path)
     monkeypatch.setenv('LANG', 'C.UTF-8')
-    monkeypatch.setenv('RIDE_COMMAND', 'ride along bro-dev')
     spec = _spec(
       isolation=Isolation.UNBOXED,
       hold='attended',
@@ -1117,7 +1135,7 @@ class TestUnboxedSession:
     assert launch.env['PATH'].startswith(str(_runtime_bundle(tmp_path).host_bin))
     assert launch.env['PWD'] == str(workspace.tree)
     assert launch.env['RIDE_BRO'] == 'bro-dev'
-    assert launch.env['RIDE_COMMAND'] == 'ride along bro-dev'
+    assert launch.env['RIDE_COMMAND'] == spec.ride_command
 
   def test_detached_builder_clears_ambient_attachment_and_channel_facts(
     self, monkeypatch, tmp_path
@@ -1350,6 +1368,7 @@ class TestHostBrokerPingRoundTrip:
 
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_a: True)
+    monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_a: True)
     monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
     monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
@@ -1448,6 +1467,7 @@ client.close(confirm=True)
 
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_a: True)
+    monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_a: True)
     monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
     monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
@@ -1526,7 +1546,8 @@ class TestSummonedSession:
       patch('ride.session.broker_enabled', return_value=True),
       patch('ride.session.resolve_head', return_value='parentsha') as head,
     ):
-      rc = ride_session.start_session(_spec(prompt='pair on this'), summoned=record)
+      spec = _spec(prompt='pair on this')
+      rc = ride_session.start_session(spec, summoned=record)
     assert rc == 0
     assert h.run_started_party.call_count == 0  # no broker of its own
     assert head.call_args.args == (tmp_path, ride_session.Path(record.parent_workspace))
@@ -1537,6 +1558,9 @@ class TestSummonedSession:
     assert launch.env['RIDE_WORKSPACE'] == 'w'
     assert json.loads(launch.env['RIDE_SUMMONER']) == {'trail_id': 'T1'}
     assert launch.base_ref == 'parentsha'
+    assert launch.env['RIDE_BASE_SHA'] == 'parentsha'
+    # the child forwards no ambient env, so the launch line reaches it explicitly
+    assert launch.env['RIDE_COMMAND'] == spec.ride_command
     assert launch.tty
     # the threaded claim consumes the token
     run.call_args.kwargs['claim']()

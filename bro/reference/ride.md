@@ -402,7 +402,8 @@ Whatever the isolation and harness, the outer:
   the bro harness preflights nothing — its LLM key rides the scoped store) is a launch preflight, so `ride resume` is gated like the launch that created the session.
   Neither runs in `do-ride`, whose parser has no outer machinery flags and therefore no placement policy to revalidate;
 - resolves and flock-holds one frozen runtime bundle for the root's full lifetime, or validates the materialized layout named by `--runtime-bundle` after re-executing its `ride`;
-  then sets `RIDE_COMMAND` (including the resolved `--repo` when attached) and resolves `--into` against that attachment to a sha;
+  then sets `RIDE_COMMAND` (including the resolved `--repo` when attached) and resolves the session's base to a sha
+  — `--into` against that attachment, or the attachment's HEAD when none was given;
 - runs every precondition that can reject the launch
   — the harness's auth preflight and the credential/summon scope preflight
   — before the workspace is recorded, so a refused launch creates no workspace (a URL resolution may already have refreshed its reusable mirror);
@@ -992,7 +993,7 @@ Unboxed isolation runs it from the snapshot venv and boxed isolation from the mo
 both expose only pinned session shims plus system paths.
 The distribution declares `do-ride` as both a console script and a session command, so every runtime bundle carries it beside `ride`.
 
-`do-ride` receives `RIDE_ISOLATION` and the recorded `RIDE_BRANCH`, then exports the bro git identity, `RIDE_WORKSPACE`, `RIDE_REPO`, `RIDE_BRO`, and the `BRO_HOLD` / `RIDE_RUNNER_PID` pair (see "Forwarded env vars").
+`do-ride` receives `RIDE_ISOLATION` and the attached tree's `RIDE_BRANCH` / `RIDE_BASE_SHA`, then exports the bro git identity, `RIDE_WORKSPACE`, `RIDE_REPO`, `RIDE_BRO`, and the `BRO_HOLD` / `RIDE_RUNNER_PID` pair (see "Forwarded env vars").
 It applies the persona's declared workspace provisioning when attached (`BaseBro.provision_workspace`), installs the scoped credential hooks, prepares missing Claude state and the installation's plugin seed, and owns the optional session broxy.
 Each step is idempotent, so a launcher may pre-provision state before invoking it.
 While the harness runs, `runner.pid` under `RIDE_SESSION_DIR` records the executable's pid and operating-system start-time identity as JSON;
@@ -1128,15 +1129,17 @@ Wrappers and session daemons rely on a small set of env vars:
   banner and summon lowering read this launch state rather than deriving a repository from cwd.
 - `RIDE_BRANCH` — the attached workspace's recorded branch, absent when detached.
   The launcher reads it from `workspace.json` and passes it to `do-ride`.
-  The Claude session context records this value rather than deriving a branch from the workspace name.
+- `RIDE_BASE_SHA` — the commit the attached workspace's tree starts the session at, set beside `RIDE_BRANCH` and absent with it:
+  the resolved base a fresh clone is made at, or the tree's HEAD for a resume and for a joined member.
 - `RIDE_HOST_WORKSPACE` — launcher-side absolute path to the workspace tree, set explicitly in both isolations.
   It is normally `<runtime-root>/workspaces/<name>/tree`, or the recorded external path for `--tree`;
   in a container it names the host path bound at `/workspace`.
+- `RIDE_HOST` — the launcher's hostname, set explicitly in both isolations.
 - `RIDE_RUNTIME` — launcher-side absolute path to the ride's materialized host runtime.
   Manual-summon surfaces use its `venv/bin/ride` so the child starts from the same runtime.
 - `RIDE_COMMAND` — the user-visible invocation this session launched under for telemetry and the banner:
   the reconstructed `ride solo|along …` command with its flags, `ride resume <ref>` for a resume, or the `summon --join …` request that started a joined member.
-  Set by `start_session` and by the summon lowering.
+  Set by the launch env of every started session, a child forwarding no ambient environment included, and by the join lowering for a member.
   A joined member also sets the same value as `BRO_SHELL_COMMAND`, so it never inherits the party starter’s outer command.
 - `RIDE_BRO` — names the bro the session runs as (the selected bro).
   Set explicitly in the container env at every boxed launch site

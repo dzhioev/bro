@@ -18,6 +18,7 @@ from bro.monitor import SESSION_DIR_ENV, claude_projects_dir, harness_session_di
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import SUMMONER_ENV, summoned
 from bro.workspace.git import git_out
+from bro.workspace.paths import BRANCH_ENV
 from ride.claude.claude_argv import build_claude_launch
 from ride.claude.claude_auth import apply_claude_auth
 from ride.claude.claude_config import latest_jsonl
@@ -32,7 +33,6 @@ from ride.claude.session_context import (
   encode_session_context,
 )
 from ride.claude.statusline import start_statusline_projector
-from ride.workspace.metadata import BRANCH_ENV
 
 if TYPE_CHECKING:
   from ride.do_ride import SessionRun
