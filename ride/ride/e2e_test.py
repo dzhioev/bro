@@ -1310,7 +1310,6 @@ def _run_boxed_join_scenario(
         command=_session_broxy_probe(member_probe),
         env={
           **MEMBER_BASELINE_ENV,
-          'RIDE_IN_CONTAINER': '1',
           'RIDE_SESSION_DIR': f'/var/ride/party/{_MEMBER_NAME}/session',
         },
         secrets=(),

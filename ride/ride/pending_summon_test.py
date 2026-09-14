@@ -26,7 +26,7 @@ def _record(**overrides) -> pending_summon.PendingSummon:
 
 
 def test_peek_round_trips_the_record(tmp_path):
-  record = _record(into='release')
+  record = _record(into='release', env={'IS_SANDBOX': '1'})
   pending_summon.write(record)
   assert pending_summon.peek('TOK-1') == record
   # a peek does not consume
@@ -130,6 +130,17 @@ def test_a_record_with_invalid_permits_is_refused(tmp_path):
   path.write_text(json.dumps(data))
 
   with pytest.raises(ValueError, match='invalid permits'):
+    pending_summon.peek('TOK-1')
+
+
+def test_a_record_with_invalid_env_additions_is_refused(tmp_path):
+  pending_summon.write(_record())
+  path = pending_summon._path('TOK-1')
+  data = json.loads(path.read_text())
+  data['env'] = {'IS_SANDBOX': 1}
+  path.write_text(json.dumps(data))
+
+  with pytest.raises(ValueError, match='invalid env additions'):
     pending_summon.peek('TOK-1')
 
 

@@ -55,13 +55,15 @@ ride solo dev 'inspect the launch path' -- --debug mcp
 ride along dev 'continue the inspection' -- --debug mcp
 ```
 
-Shared launch flags are `--repo`, `--boxed`, `--unboxed`, `--hold`, `--grant`, `--revoke`, `--into`, `--no-trails`, and the LLM selection set (`--provider`, `--model`, `--effort`, `--fast`, `--llm`).
+Shared launch flags are `--repo`, `--boxed`, `--unboxed`, `--hold`, `--grant`, `--revoke`, `--into`, `--no-trails`, `--env`, and the LLM selection set (`--provider`, `--model`, `--effort`, `--fast`, `--llm`).
 `--grant` and `--revoke` use the framework's unified grammar:
 credential names shape the scoped store, `@bro` names shape the summon allow-list, and `:permit` leaves shape party authority.
 The permit leaves are `:party.start.boxed`, `:party.start.unboxed`, and `:party.join`;
 the framework seed is boxed starts alone, and the intermediate names `:party` and `:party.start` are invalid.
 `--no-trails` disables trail recording for the session, whichever harness runs:
 the launch drops the `trails` scope baseline, sets `TRAILS_DISABLED` for the run, and a claude session starts no recorder daemon.
+`--env NAME=VALUE` (repeatable) adds a variable to the session environment of the root and of every party member it summons:
+it is the lowest layer of that environment, beneath the launch's own variables and the ambient inputs the launch admits, and the recorded session spec carries it, so a resume and every summon repeat it.
 
 ### Lifecycle verbs
 
@@ -761,6 +763,7 @@ The target runs as a one-shot, non-TTY session that either starts a party of its
 A *manual* summon instead has the user launch the child themselves either interactively or one-shot;
 see "Manual summon" below.
 The child's credential set, summon allow-list, and permits come from its own seeds and project/host layers under the request's `grant`/`revoke` layer, never by inheriting the requester's sets.
+The root launch's `--env` additions are the one input every started child and joined member does inherit, as facts about the environment the party runs in.
 An explicit request grant is bounded by the corresponding credential, target, or permit the requester holds.
 It runs under the harness the request names, or the launch's `[tool.bro] summon-harness` when it names none.
 Both harnesses run `do-ride solo …`:
@@ -852,8 +855,10 @@ The launcher puts the summoner's provisioned channel in `BROKER_UPSTREAM`, and t
 Its own nested summons therefore route through the summoner's control with per-peer authorization.
 The request fixes what the summoner authorized
 — the target bro, the prompt (delivered as the session's first message), the root session's repository attachment, the base (the request's `into` ref, or the summoner's workspace HEAD read at launch, like a spawned child's at its spawn),
-the child's resolved `may_summon` and permits, and the request's credential grant/revoke seeds.
+the child's resolved `may_summon` and permits, the request's credential grant/revoke seeds, and the party's `--env` additions.
 The launch's own credential `--grant`/`--revoke` layer may adjust its material, but `@bro` and `:permit` overrides are refused because the control enforces the sets it resolved at request time.
+`--env` is refused as well:
+the control stamps the party's additions on every summon the child makes, so the child carries exactly those.
 Launch-owned request fields (`timeout`/`hold`/`llm`/`harness`/`party`/`isolation`) are refused at the request:
 the human at the launch owns the session's shape, and there is no host-killable child for a timeout to bound, so a manual summon carries no timer at all.
 
@@ -1195,7 +1200,7 @@ Wrappers and session daemons rely on a small set of env vars:
   the launcher authorizes against its own copy, so only a relaunch (or the summon that spawns a child) changes what it may summon.
 - `RIDE_PERMITS` — the run's own effective party permits under the same encoding, publication, and host-side enforcement rule.
   `ride banner` renders each with its `:` grammar marker.
-- `RIDE_IN_CONTAINER=1` — set by the Dockerfile, marking a process running in an image this runtime built.
+- `RIDE_IN_CONTAINER=1` — the runtime image's own, marking a process running in an image this runtime built.
   `bro/workspace/paths.py:trails_dir` uses it only to resolve the image's fixed trails mount.
   Session placement comes from `RIDE_ISOLATION` instead.
 - `BRO_STORE` — the exclusive scoped credential-store directory delivered by the launcher.

@@ -1,6 +1,7 @@
 import subprocess
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, replace
+from types import MappingProxyType
 
 from bro.base import configs
 from bro.base.scope import DEFAULT_PERMITS
@@ -33,6 +34,7 @@ def _run_via_broker(
   permits: Collection[str],
   summon_depth: int,
   summon_harness: str,
+  session_env: Mapping[str, str],
   credential_scope: ScopedSecrets,
   container_runtime: ContainerRuntimeResolver,
   runtime_bundle: RuntimeBundle,
@@ -70,6 +72,7 @@ def _run_via_broker(
     permits=permits,
     summon_depth=summon_depth,
     summon_harness=summon_harness,
+    session_env=session_env,
     credential_scope=credential_scope,
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
@@ -96,11 +99,15 @@ def run_started_party(
   permits: Collection[str] = DEFAULT_PERMITS,
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH,
   summon_harness: str = configs.DEFAULT_SUMMON_HARNESS,
+  session_env: Mapping[str, str] = MappingProxyType({}),
   credential_scope: ScopedSecrets,
   container_runtime: ContainerRuntimeResolver,
   runtime_bundle: RuntimeBundle,
 ) -> int:
-  """Supervise a started party's first session and record how it ended."""
+  """Supervise a started party's first session and record how it ended.
+
+  `session_env` is the launch's `--env` additions, which every session the
+  party spawns carries like the first."""
   log_scoped_secrets(
     workspace.name,
     credential_scope.required,
@@ -125,6 +132,7 @@ def run_started_party(
       permits=permits,
       summon_depth=summon_depth,
       summon_harness=summon_harness,
+      session_env=session_env,
       credential_scope=credential_scope,
       container_runtime=container_runtime,
       runtime_bundle=runtime_bundle,

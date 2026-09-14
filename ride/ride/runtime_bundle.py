@@ -13,11 +13,12 @@ import tempfile
 import urllib.parse
 import urllib.request
 import zipfile
-from collections.abc import Callable, Generator, Iterable
+from collections.abc import Callable, Generator, Iterable, Mapping
 from dataclasses import dataclass
 from email.message import Message
 from email.parser import Parser
 from pathlib import Path
+from types import MappingProxyType
 
 import certifi
 
@@ -183,13 +184,17 @@ class RuntimeBundle:
           description='cannot mark container runtime complete',
         )
 
-  def host_session_env(self, cwd: Path, *, forward_env: bool) -> dict[str, str]:
-    """Build an unboxed session's closed host environment snapshot."""
+  def host_session_env(
+    self, cwd: Path, *, forward_env: bool, additions: Mapping[str, str] = MappingProxyType({})
+  ) -> dict[str, str]:
+    """Build an unboxed session's closed host environment snapshot, with
+    `additions` beneath everything it carries."""
     ambient = dict(os.environ)
     admitted = [*SESSION_BASE_ENV, *(key for key in ambient if key.startswith('LC_'))]
     if forward_env:
       admitted.extend(SESSION_FORWARD_ENV)
-    env = {key: ambient[key] for key in admitted if key in ambient}
+    env = dict(additions)
+    env.update({key: ambient[key] for key in admitted if key in ambient})
     launcher_venv = ambient.get('VIRTUAL_ENV')
     path_entries = ambient.get('PATH', '').split(os.pathsep)
     if launcher_venv is not None:

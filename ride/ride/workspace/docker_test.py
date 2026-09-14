@@ -223,6 +223,13 @@ class TestImageTag:
     monkeypatch.setattr(workspace_docker.build_context, 'UV_VERSION_FILE', edited)
     assert workspace_docker.runtime_image_tag('3.12') != before
 
+  def test_the_image_environment_changes_the_runtime_tag(self, project, monkeypatch):
+    before = workspace_docker.runtime_image_tag('3.12')
+    monkeypatch.setattr(
+      workspace_docker, 'IMAGE_ENV', {**workspace_docker.IMAGE_ENV, 'RIDE_IN_CONTAINER': '2'}
+    )
+    assert workspace_docker.runtime_image_tag('3.12') != before
+
   def test_a_repository_without_uv_manifests_uses_the_runtime_image(self, tmp_path):
     (tmp_path / 'pyproject.toml').write_text('[tool.bro]\ndefault = "bro"\n')
     runtime = workspace_docker.runtime_image_tag('3.12')
@@ -246,6 +253,32 @@ def test_runtime_build_passes_the_packaged_uv_pin(monkeypatch):
   assert arguments[position - 1] == '--build-arg'
   assert keywords['input'] == b'context'
   assert keywords['check'] is True
+
+
+def test_runtime_build_passes_the_image_environment(monkeypatch):
+  calls = []
+  monkeypatch.setattr(
+    workspace_docker.subprocess,
+    'run',
+    lambda arguments, **keywords: calls.append((arguments, keywords)) or _FakeProc(),
+  )
+  monkeypatch.setattr(workspace_docker.build_context, 'assemble_runtime', lambda: b'context')
+
+  workspace_docker.build_runtime_image('runtime:test', '3.12')
+
+  arguments, _ = calls[0]
+  for name, value in workspace_docker.IMAGE_ENV.items():
+    position = arguments.index(f'IMAGE_{name}={value}')
+    assert arguments[position - 1] == '--build-arg'
+
+
+def test_the_dockerfile_takes_every_image_variable_as_a_build_argument():
+  dockerfile = workspace_docker.build_context.RUNTIME_FILES[
+    workspace_docker.build_context.DOCKERFILE_PATH
+  ].read_text()
+  for name in workspace_docker.IMAGE_ENV:
+    assert f'ARG IMAGE_{name}\n' in dockerfile
+    assert f'ENV {name}=${{IMAGE_{name}}}\n' in dockerfile
 
 
 class TestDaemonPreflight:
@@ -448,6 +481,7 @@ class TestPrepareContainer:
       'forward_env': False,
       'tty': False,
       'extra_mounts': ['/host:/container'],
+      'additions': {},
     }
     assert events[3] == ('create', ['docker', 'create'], b'TARBALL', 'ws')
 
@@ -702,6 +736,32 @@ class TestDockerCreateArgv:
     argv = build_argv(extra_env={'TRAILS_DISABLED': '1'})
     assert 'TRAILS_DISABLED=1' in argv
     assert argv[argv.index('TRAILS_DISABLED=1') - 1] == '-e'
+
+  def test_an_addition_reaches_the_container_only_under_a_name_nothing_else_sets(
+    self, build_argv, monkeypatch
+  ):
+    monkeypatch.setenv('TERM', 'xterm')
+    argv = build_argv(
+      forward_env=True,
+      extra_env={'RIDE_BRO': 'bro'},
+      additions={
+        'IS_SANDBOX': '1',
+        'HOME': '/x',
+        'RIDE_REPO': '/x',
+        'TERM': 'dumb',
+        'RIDE_BRO': 'impostor',
+        'PATH': '/nowhere',
+        'RIDE_IN_CONTAINER': '0',
+      },
+    )
+    env_tokens = [argv[index + 1] for index, token in enumerate(argv) if token == '-e']
+    assert 'IS_SANDBOX=1' in env_tokens
+    names = [token.partition('=')[0] for token in env_tokens]
+    for name in ('HOME', 'RIDE_REPO', 'TERM', 'RIDE_BRO'):
+      assert names.count(name) == 1
+    # the image's own variables are never on the argv at all
+    assert not {'PATH', 'RIDE_IN_CONTAINER'} & set(names)
+    assert not {'HOME=/x', 'RIDE_REPO=/x', 'TERM=dumb', 'RIDE_BRO=impostor'} & set(env_tokens)
 
   def test_no_extra_env_by_default(self, build_argv):
     assert not any('TRAILS_DISABLED' in a for a in build_argv())

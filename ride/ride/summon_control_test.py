@@ -142,6 +142,7 @@ def _control(
   permits=('party.start.boxed',),
   depth_cap=configs.DEFAULT_SUMMON_DEPTH,
   summon_harness=configs.DEFAULT_SUMMON_HARNESS,
+  session_env=(),
 ):
   workspace = _workspace(tmp_path)
   scope = (
@@ -172,6 +173,7 @@ def _control(
     depth_cap=depth_cap,
     summon_harness=summon_harness,
     runtime_bundle=runtime_bundle,
+    session_env=dict(session_env),
   )
   control.test_journal = journal
   journal.subscribe(facts.observe_journal)
@@ -829,6 +831,22 @@ def test_manual_summon_writes_the_pending_record_before_acceptance(tmp_path, mon
   assert pending.channel_token == 'token'
   assert pending.runtime == 'a' * 64
   assert control._facts.for_quest(message.quest_id).manual is True
+
+
+def test_the_partys_env_additions_reach_every_spawn(tmp_path):
+  control = _control(tmp_path, session_env={'IS_SANDBOX': '1'})
+  context = FakeContext(control)
+  control.handle(cast(Dispatcher, context), ROOT, _message())
+  assert context.spawned[0][0].env == {'IS_SANDBOX': '1'}
+
+
+def test_a_manual_summons_pending_record_carries_the_partys_env(tmp_path, monkeypatch):
+  monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
+  control = _control(tmp_path, session_env={'IS_SANDBOX': '1'})
+  context = FakeContext(control)
+  message = _message(manual=True)
+  control.handle(cast(Dispatcher, context), ROOT, message)
+  assert ride.pending_summon.peek(message.quest_id).env == {'IS_SANDBOX': '1'}
 
 
 def test_claimed_manual_workspace_is_the_nested_base_source(tmp_path, monkeypatch):

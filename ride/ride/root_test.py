@@ -184,12 +184,14 @@ class TestBrokerStartedParty:
         permits={'party.start.boxed'},
         summon_depth=4,
         summon_harness='claude',
+        session_env={'IS_SANDBOX': '1'},
         credential_scope=_scope(),
         container_runtime=MagicMock(),
         runtime_bundle=MagicMock(),
       )
       == 3
     )
+    assert captured['session_env'] == {'IS_SANDBOX': '1'}
     wrapped = captured['launch']
     assert isinstance(wrapped, workspace_spawn.DockerLaunchSpec)
     assert wrapped.launch.env[bro.summon.MAY_SUMMON_ENV] == 'dev'
@@ -221,6 +223,7 @@ class TestBrokerStartedParty:
         permits={'party.start.boxed'},
         summon_depth=2,
         summon_harness='bro',
+        session_env={},
         credential_scope=_scope(),
         container_runtime=MagicMock(),
         runtime_bundle=MagicMock(),

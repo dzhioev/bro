@@ -12,9 +12,10 @@ Broker imports stay function-local where the pre-gate launch path requires it.
 """
 
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from bro.artifact import is_ref
@@ -339,6 +340,7 @@ class SummonControl:
     depth_cap: int,
     summon_harness: str,
     runtime_bundle: 'RuntimeBundle',
+    session_env: Mapping[str, str] = MappingProxyType({}),
   ):
     self._workspace = workspace
     self._facts = facts
@@ -352,6 +354,7 @@ class SummonControl:
       raise ValueError(f'summon harness must be one of {", ".join(HARNESS_NAMES)}')
     self._summon_harness = summon_harness
     self._runtime_bundle = runtime_bundle
+    self._session_env = dict(session_env)
     self._audit_attribution: dict[str, dict[str, str]] = {}
     self._audit_placements: dict[str, tuple[Literal['start', 'join'], Optional[Isolation]]] = {}
 
@@ -519,6 +522,7 @@ class SummonControl:
         llm=llm,
         party=party,
         isolation=isolation,
+        env=dict(self._session_env),
       ),
       peer,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,
@@ -557,6 +561,7 @@ class SummonControl:
           summoner=summoned_by,
           repo=self._workspace.metadata.repo,
           into=args.get('into'),
+          env=dict(self._session_env),
         ),
       )
 

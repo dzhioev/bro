@@ -28,6 +28,7 @@ from ride.repository import Repository, is_git_url, resolve_repository
 from ride.runtime_bundle import reexec_from_runtime
 from ride.scope import bind_launch_llm
 from ride.session import SessionSpec, recorded_runtime_reference, resume_session, start_session
+from ride.session_env import env_assignments
 from ride.workspace.containers import exec_in_workspace
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
@@ -247,6 +248,7 @@ def _start_mode(
     summon_depth = host_config.summon_depth(None if config is None else config.summon_depth)
     summon_harness = config.summon_harness if config is not None else configs.DEFAULT_SUMMON_HARNESS
     drop_piece_flags(args)
+    args['env'] = env_assignments(args['env'])
   except (LLMSelectionError, ValueError) as error:
     parser.error(str(error))
   args['grant'] = args['grant'] or []
@@ -258,6 +260,7 @@ def _start_mode(
     prompt = summoned.prompt
     args['grant'] = [*summoned.grant, *args['grant']]
     args['revoke'] = [*summoned.revoke, *args['revoke']]
+    args['env'] = dict(summoned.env)
   elif solo and prompt is None:
     parser.error('ride solo requires a prompt unless --summoned supplies it')
   harness_options = pop_harness_options(parser, args, harness_name, solo=solo, isolation=isolation)
@@ -316,6 +319,8 @@ def _validate_summoned(
     parser.error('--summoned takes its initial prompt from the summon request; drop the prompt')
   if args['into'] is not None:
     parser.error('--summoned takes its base from the summon request; drop --into')
+  if len(args['env']) > 0:
+    parser.error("a manual child's environment additions are the party's; drop --env")
   _, bro_overrides, permit_overrides = split_scope_overrides([*args['grant'], *args['revoke']])
   if len(bro_overrides) > 0:
     parser.error(
