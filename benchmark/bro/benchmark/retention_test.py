@@ -62,10 +62,10 @@ class FakeS3:
 
 def _bundle_manifest(job_directory: Path) -> str:
   manifest = {
-    'format': 2,
+    'format': 3,
+    'claude_code': {'version': '2.1.258', 'sha256': '3' * 64},
     'cpython': '3.12.14',
     'requirements': 'bro==0.1\n',
-    'shim': '1' * 64,
     'source_commit': SOURCE_COMMIT,
     'target': ['linux', 'x86_64', 'glibc'],
     'wheels': {'bro.whl': '2' * 64},

@@ -22,14 +22,11 @@ from harbor.models.trajectories import (
 )
 
 from bro.benchmark.harbor_agent import reported_agent_name
+from bro.benchmark.trial_store import TRAILS_DIRECTORY, recorded_a_trail
 from bro.llm import providers
 from bro.llm.usage import from_vendor_counts
 from bro.trails.local import LocalStore
 
-# harbor runs a trial's bro with the trial's `agent/` directory as its data
-# home, so the store the run recorded into is the local backend's root beneath
-# it (`bro.trails.store.local_root`)
-TRAILS_DIRECTORY = Path('ride') / 'trails'
 TRAJECTORY_FILENAME = 'trajectory.json'
 
 
@@ -354,7 +351,10 @@ def _build_trajectory(
     session_id=trail_id,
     trajectory_id=trail_id,
     agent=Agent(
-      name=reported_agent_name(_required_string(header.get('bro'), 'trail header bro')),
+      name=reported_agent_name(
+        _required_string(header.get('bro'), 'trail header bro'),
+        _required_string(header.get('harness'), 'trail header harness'),
+      ),
       version=agent_version,
       model_name=model,
     ),
@@ -424,16 +424,6 @@ def convert_trial_trajectory(
   return destination
 
 
-def _recorded_a_trail(store_root: Path) -> bool:
-  """whether the trial's store holds one. Opening a store creates its own
-  directories, so a run that ended before blazing a trail leaves the layout
-  behind with nothing in it."""
-  if not (store_root / 'trails').is_dir():
-    return False
-  with LocalStore(store_root) as store:
-    return next(store.iter_trails(max_items=1), None) is not None
-
-
 def convert_job_trajectories(
   job_directory: Path, *, agent_version: str, price_tables: Mapping[str, Any]
 ) -> list[Path]:
@@ -449,7 +439,7 @@ def convert_job_trajectories(
     if not trial_directory.is_dir() or not (trial_directory / 'result.json').is_file():
       continue
     agent_directory = trial_directory / 'agent'
-    if not _recorded_a_trail(agent_directory / TRAILS_DIRECTORY):
+    if not recorded_a_trail(agent_directory / TRAILS_DIRECTORY):
       continue
     destinations.append(
       convert_trial_trajectory(

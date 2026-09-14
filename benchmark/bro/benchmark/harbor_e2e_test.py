@@ -17,7 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from bro.benchmark.bundle import build, default_root, workspace_root
+from bro.benchmark.bundle import build, claude_code_cache, default_root, workspace_root
 from bro.benchmark.e2e_test_helper import (
   LIVE_TRIAL,
   assert_graded_run,
@@ -34,7 +34,7 @@ pytestmark = LIVE_TRIAL
 
 def test_a_real_task_is_driven_and_graded(tmp_path):
   workspace = workspace_root()
-  bundle = build(workspace, default_root(workspace))
+  bundle = build(workspace, default_root(workspace), claude_code_cache(workspace))
   jobs = tmp_path / 'jobs'
 
   subprocess.run(

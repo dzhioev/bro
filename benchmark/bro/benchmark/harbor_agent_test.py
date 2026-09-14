@@ -22,11 +22,19 @@ from bro.benchmark.harbor_agent import (
   STORE_DIR,
   BroAgent,
   bare_recipe,
+  harness_name,
   kill_command,
+  reported_agent_name,
+  ride_command,
   run_command,
   run_timeout,
   scoped_store,
 )
+from bro.benchmark.trial_store import TRAILS_DIRECTORY
+from bro.trails.local import LocalStore
+from bro.trails.model import BlazeRequest
+from bro.trails.record.spine import Recording
+from ride.workspace.spawn import PROCESS_TERM_GRACE
 
 CREDENTIAL = 'openai'
 INSTANCE = 'openai+benchmark'
@@ -62,7 +70,7 @@ def store(monkeypatch, tmp_path: Path) -> Path:
 class FakeEnvironment:
   """records what an agent asked of the environment, answering every exec.
 
-  The bro's own command never returns, the way a run harbor has to cancel
+  The ride's own command never returns, the way a run harbor has to cancel
   behaves; every other command answers at once, `results` deciding how.
   """
 
@@ -73,7 +81,7 @@ class FakeEnvironment:
     self.envs: list[Optional[dict[str, str]]] = []
     self.uploads: list[tuple[Path, str]] = []
     self.results: dict[str, ExecResult] = {}
-    self.bro_started = asyncio.Event()
+    self.ride_started = asyncio.Event()
 
   def as_environment(self) -> BaseEnvironment:
     return cast(BaseEnvironment, self)
@@ -85,7 +93,7 @@ class FakeEnvironment:
       if needle in command:
         return result
     if 'setsid' in command:
-      self.bro_started.set()
+      self.ride_started.set()
       await asyncio.Event().wait()
     return ExecResult(stdout='', stderr='', return_code=0)
 
@@ -96,6 +104,24 @@ class FakeEnvironment:
 def agent(tmp_path: Path, **kwargs: Any) -> BroAgent:
   kwargs.setdefault('llm_credential', 'openai')
   return BroAgent(logs_dir=tmp_path, **kwargs)
+
+
+def _run_command(**overrides: Any) -> str:
+  arguments: dict[str, Any] = {
+    'bro': 'terminal',
+    'instruction': 'do it',
+    'harness': 'bro',
+    'llm': None,
+    'timeout_sec': None,
+  }
+  arguments.update(overrides)
+  return run_command(**arguments)
+
+
+def _session(command: str) -> str:
+  """the script `setsid` runs, out of the launch line's quoting."""
+  launch = next(line for line in command.splitlines() if line.startswith('setsid'))
+  return shlex.split(launch)[shlex.split(launch).index('-c') + 1]
 
 
 def test_a_recipe_is_named_within_a_registered_provider():
@@ -123,6 +149,17 @@ def test_a_bad_model_fails_before_any_trial_runs(tmp_path):
     agent(tmp_path, bro='terminal', model_name='anthropic/opus')
 
 
+def test_a_harness_is_one_ride_knows():
+  assert harness_name('claude') == 'claude'
+  with pytest.raises(ValueError, match='codex'):
+    harness_name('codex')
+
+
+def test_a_bad_harness_fails_before_any_trial_runs(tmp_path):
+  with pytest.raises(ValueError, match='harness'):
+    agent(tmp_path, bro='terminal', harness='codex')
+
+
 def test_a_credential_is_never_implied(tmp_path):
   with pytest.raises(TypeError, match='llm_credential'):
     # kwargs arrive dynamically from a job config, so the runtime refusal is
@@ -135,56 +172,76 @@ def test_the_error_patterns_are_the_roster_providers_signatures():
   assert r'openai\.RateLimitError' in patterns  # the openai declaration reaches harbor
 
 
+def test_the_trial_rides_the_bundle_as_an_unboxed_root_in_the_tasks_directory():
+  command = ride_command(bro='terminal', instruction='do it', harness='bro', llm=None)
+
+  assert command.startswith(f'{BUNDLE.script("ride")} solo --unboxed --tree "$PWD" ')
+  assert f'--runtime-bundle {BUNDLE.root} ' in command
+  assert '--keep' in command
+  assert command.endswith(" --harness bro terminal 'do it'")
+
+
+def test_the_rides_summons_may_join_its_party_and_start_nothing():
+  command = ride_command(bro='terminal', instruction='do it', harness='bro', llm=None)
+
+  assert '--revoke :party.start.boxed --grant :party.join' in command
+
+
+def test_the_harness_reaches_the_launch():
+  command = ride_command(bro='terminal', instruction='do it', harness='claude', llm=None)
+
+  assert '--harness claude terminal' in command
+
+
 def test_the_recipe_reaches_the_run_with_its_provider_slot_empty():
-  command = run_command(
-    bro='terminal', instruction='do it', llm='gpt-5.6-terra:high', timeout_sec=None
-  )
+  command = _run_command(llm='gpt-5.6-terra:high')
 
   assert '--llm :gpt-5.6-terra:high' in command
 
 
 def test_no_recipe_leaves_the_bros_own():
-  command = run_command(bro='terminal', instruction='do it', llm=None, timeout_sec=None)
-
-  assert '--llm' not in command
-
-
-def test_the_run_drives_the_bundle_shim_in_this_process():
-  command = run_command(bro='terminal', instruction='do it', llm=None, timeout_sec=None)
-
-  assert f'{BUNDLE.shim} run terminal' in command
+  assert '--llm' not in _run_command()
 
 
 def test_the_instruction_is_one_argument_however_it_is_written():
   instruction = "rm -rf / ; echo 'the task instruction is third-party text'"
-  command = run_command(bro='terminal', instruction=instruction, llm=None, timeout_sec=None)
 
-  launch = next(line for line in command.splitlines() if line.startswith('setsid'))
-  session = shlex.split(launch)[shlex.split(launch).index('-c') + 1]
+  session = _session(_run_command(instruction=instruction))
 
   assert instruction in shlex.split(session)
 
 
+def test_the_bundled_claude_leads_the_sessions_path():
+  session = _session(_run_command())
+
+  assert f'export PATH={BUNDLE.claude_dir}:"$PATH"' in session
+
+
 def test_the_activity_log_lands_in_the_trial_directory():
-  command = run_command(bro='terminal', instruction='do it', llm=None, timeout_sec=None)
+  command = _run_command()
 
   assert '2> /logs/agent/bro.log' in command
   assert 'tail -c' in command
 
 
-def test_the_bro_runs_in_its_own_process_group():
-  command = run_command(bro='terminal', instruction='do it', llm=None, timeout_sec=None)
+def test_the_ride_runs_in_its_own_process_group():
+  command = _run_command()
 
   assert 'setsid --wait' in command
   assert f'echo $$ > {harbor_agent.PGID_FILE}' in command
 
 
 def test_an_in_container_ceiling_is_opt_in():
-  without = run_command(bro='terminal', instruction='do it', llm=None, timeout_sec=None)
-  with_ceiling = run_command(bro='terminal', instruction='do it', llm=None, timeout_sec=900)
+  without = _run_command()
+  with_ceiling = _run_command(timeout_sec=900)
 
   assert 'timeout ' not in without
-  assert '--kill-after=5 900' in with_ceiling
+  assert f'--kill-after={harbor_agent.TERM_GRACE_SEC} 900' in with_ceiling
+
+
+def test_the_kill_waits_past_the_rides_own_teardown_grace():
+  assert harbor_agent.TERM_GRACE_SEC > PROCESS_TERM_GRACE
+  assert f'seq {harbor_agent.TERM_GRACE_SEC}' in kill_command()
 
 
 @pytest.mark.parametrize('value', [0, -1, 'soon'])
@@ -221,15 +278,10 @@ def test_the_kill_reaps_the_group_and_reports_success():
   assert command.endswith('exit 0')
 
 
-def test_the_run_environment_points_at_the_store_bundle_and_record_root(tmp_path):
+def test_the_run_environment_points_at_the_store_and_the_record_root(tmp_path):
   environment = agent(tmp_path, bro='terminal').run_env()
 
-  assert environment == {
-    'BRO_STORE': str(STORE_DIR),
-    'BRO_USAGE_FILE': '/logs/agent/usage.json',
-    'SSL_CERT_FILE': str(BUNDLE.ca_bundle),
-    'XDG_DATA_HOME': '/logs/agent',
-  }
+  assert environment == {'BRO_STORE': str(STORE_DIR), 'XDG_DATA_HOME': '/logs/agent'}
 
 
 def test_the_store_carries_the_named_instance_under_its_kind(store):
@@ -254,26 +306,37 @@ def test_a_credential_the_host_cannot_resolve_fails_before_the_container(store):
       pass
 
 
-def test_the_recorded_identity_names_the_bro_and_bundle_under_test(monkeypatch, tmp_path):
+def test_the_recorded_identity_names_the_bro_harness_and_bundle_under_test(monkeypatch, tmp_path):
   identity = f'sha256:{"1" * 64}'
   monkeypatch.setattr(harbor_agent, 'benchmark_bundle', lambda: SimpleNamespace(identity=identity))
   dev = agent(tmp_path, bro='dev', model_name='openai/gpt-5.6-terra').to_agent_info()
   terminal_agent = agent(tmp_path, bro='terminal', model_name='openai/gpt-5.6-terra')
   terminal = terminal_agent.to_agent_info()
+  ridden = agent(
+    tmp_path, bro='terminal', harness='claude', model_name='claude-code/opus5'
+  ).to_agent_info()
 
-  assert dev.name != terminal.name
-  assert terminal.name == 'bro:terminal'
+  assert len({dev.name, terminal.name, ridden.name}) == 3
+  assert terminal.name == reported_agent_name('terminal')
+  assert ridden.name == reported_agent_name('terminal', 'claude')
   assert terminal.version == identity
   assert terminal_agent.version() == identity
   assert terminal.model_info is not None
   assert terminal.model_info.name == 'gpt-5.6-terra'
 
 
+def test_the_default_harness_leaves_the_identity_unqualified():
+  # the name retained runs and the Hub key a trial's statistics by
+  assert reported_agent_name('terminal') == 'bro:terminal'
+  assert reported_agent_name('terminal', 'bro') == 'bro:terminal'
+  assert reported_agent_name('terminal', 'claude') == 'bro:terminal:claude'
+
+
 def test_a_provider_failure_is_classified_from_the_frameworks_own_output(tmp_path):
   bro_agent = agent(tmp_path, bro='terminal')
 
   classified = bro_agent._classify_exec_error(
-    'bro run', ExecResult(stdout='', stderr='openai.RateLimitError: 429', return_code=1)
+    'ride solo', ExecResult(stdout='', stderr='openai.RateLimitError: 429', return_code=1)
   )
 
   assert isinstance(classified, ApiRateLimitError)
@@ -283,7 +346,7 @@ def test_task_prose_no_longer_classifies_a_failure(tmp_path):
   bro_agent = agent(tmp_path, bro='terminal')
 
   classified = bro_agent._classify_exec_error(
-    'bro run',
+    'ride solo',
     ExecResult(stdout='the service under test answers with Connection refused', return_code=1),
   )
 
@@ -294,31 +357,66 @@ def test_a_transport_failure_still_classifies(tmp_path):
   bro_agent = agent(tmp_path, bro='terminal')
 
   classified = bro_agent._classify_exec_error(
-    'bro run', ExecResult(stderr='openai.APIConnectionError: [Errno -2]', return_code=1)
+    'ride solo', ExecResult(stderr='openai.APIConnectionError: [Errno -2]', return_code=1)
   )
 
   assert isinstance(classified, NetworkConnectionError)
 
 
-def _usage(tmp_path: Path, **counts: int) -> None:
-  (tmp_path / 'usage.json').write_text(
-    json.dumps({'agent': 'bro//terminal', 'models': {'gpt-5.6-terra': counts}})
+def _record_trail(agent_directory: Path, calls: list[dict[str, Any]]) -> None:
+  """one trail under the agent directory's store, an `llm_call` per usage record."""
+  store = LocalStore(agent_directory / TRAILS_DIRECTORY)
+  recording = Recording.create(
+    store,
+    BlazeRequest(
+      harness='bro',
+      bro='terminal',
+      version='test',
+      native={'llm': {'type': 'openai', 'model': 'gpt-5.6-terra', 'effort': 'high'}},
+      body={'records': [{'kind': 'system_prompt', 'body': 'prompt'}]},
+      interactive=False,
+      surface='benchmark',
+    ),
   )
+  recording.append(
+    [
+      {
+        'kind': 'llm_call',
+        'body': {
+          'request': {'model': 'gpt-5.6-terra'},
+          'response': {'model': 'gpt-5.6-terra', 'usage': usage, 'output': []},
+        },
+      }
+      for usage in calls
+    ]
+  )
+  recording.end('ok')
+  store.close()
 
 
 def test_the_whole_prompt_is_reported_as_input(tmp_path):
-  _usage(tmp_path, input=10, cache_write=3, cache_read=100, output=7)
+  _record_trail(
+    tmp_path,
+    [
+      {
+        'input_tokens': 10,
+        'input_tokens_details': {'cached_tokens': 3, 'cache_write_tokens': 2},
+        'output_tokens': 4,
+      },
+      {'input_tokens': 5, 'output_tokens': 1},
+    ],
+  )
   context = AgentContext()
 
   agent(tmp_path, bro='terminal').populate_context_post_run(context)
 
-  assert context.n_input_tokens == 113
-  assert context.n_cache_tokens == 100
-  assert context.n_output_tokens == 7
+  assert context.n_input_tokens == 15
+  assert context.n_cache_tokens == 3
+  assert context.n_output_tokens == 5
   assert context.cost_usd is None
 
 
-def test_a_run_that_reached_no_model_reports_nothing(tmp_path):
+def test_a_run_that_recorded_no_trail_reports_nothing(tmp_path):
   context = AgentContext()
 
   agent(tmp_path, bro='terminal').populate_context_post_run(context)
@@ -326,8 +424,10 @@ def test_a_run_that_reached_no_model_reports_nothing(tmp_path):
   assert context.is_empty()
 
 
-def test_an_unreadable_usage_file_does_not_cost_the_trial_its_grade(tmp_path):
-  (tmp_path / 'usage.json').write_text('{ truncated')
+def test_an_unreadable_store_does_not_cost_the_trial_its_grade(tmp_path):
+  _record_trail(tmp_path, [{'input_tokens': 5, 'output_tokens': 1}])
+  for steps in (tmp_path / TRAILS_DIRECTORY).rglob('steps.jsonl'):
+    steps.write_text('{ truncated')
   context = AgentContext()
 
   agent(tmp_path, bro='terminal').populate_context_post_run(context)
@@ -348,16 +448,28 @@ async def test_the_install_uploads_both_trees_and_proves_the_bro(monkeypatch, tm
   )
 
   assert [target for _, target in environment.uploads] == [str(BUNDLE.root), str(STORE_DIR)]
-  assert f'{BUNDLE.shim} show terminal' in environment.commands[-1]
+  assert environment.commands[-1].endswith(f'{BUNDLE.script("bro")} show terminal')
 
 
-async def test_a_cancelled_phase_reaps_the_bro_and_stays_cancelled(tmp_path):
+async def test_the_install_proves_the_bundled_claude_on_its_harness(monkeypatch, tmp_path, store):
+  monkeypatch.setattr(harbor_agent, 'benchmark_bundle', lambda: harbor_agent.Bundle(tmp_path))
+  environment = FakeEnvironment()
+
+  await agent(tmp_path, bro='terminal', harness='claude', llm_credential=INSTANCE).install(
+    environment.as_environment()
+  )
+
+  assert environment.commands[-2].endswith(f'{BUNDLE.script("bro")} show terminal')
+  assert environment.commands[-1].endswith(f'{BUNDLE.claude} --version')
+
+
+async def test_a_cancelled_phase_reaps_the_ride_and_stays_cancelled(tmp_path):
   environment = FakeEnvironment()
   context = AgentContext()
   run = asyncio.ensure_future(
     agent(tmp_path, bro='terminal').run('do it', environment.as_environment(), context)
   )
-  await environment.bro_started.wait()
+  await environment.ride_started.wait()
 
   run.cancel()
   with pytest.raises(asyncio.CancelledError):
@@ -372,7 +484,7 @@ async def test_a_reap_that_fails_does_not_replace_the_cancellation(tmp_path):
   run = asyncio.ensure_future(
     agent(tmp_path, bro='terminal').run('do it', environment.as_environment(), AgentContext())
   )
-  await environment.bro_started.wait()
+  await environment.ride_started.wait()
 
   run.cancel()
   with pytest.raises(asyncio.CancelledError):

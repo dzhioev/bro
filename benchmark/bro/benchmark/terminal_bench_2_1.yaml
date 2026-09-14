@@ -17,11 +17,13 @@ agents:
     model_name: openai/gpt-5.6-terra:high
     kwargs:
       bro: dev
+      harness: bro
       llm_credential: openai+benchmark
   - import_path: bro.benchmark.harbor_agent:BroAgent
     model_name: openai/gpt-5.6-terra:high
     kwargs:
       bro: terminal
+      harness: bro
       llm_credential: openai+benchmark
 
 # a trial's files are copied out of its container, so a score is the same
