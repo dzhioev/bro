@@ -5,6 +5,7 @@ import base64
 import binascii
 import contextlib
 import json
+import signal
 from collections.abc import AsyncGenerator, Callable, Generator
 from typing import Any, Optional
 
@@ -210,9 +211,20 @@ class Dispatcher:
     if worker is self._root_worker and self._root_exit is not None and not self._root_exit.done():
       self._root_exit.set_result(report.exit_code if report.exit_code is not None else 1)
 
-  async def run(self, root: LaunchSpec) -> int:
-    self._root_exit = asyncio.get_running_loop().create_future()
-    async with self._runtime_lifetime():
+  async def run(self, root: LaunchSpec, *, end_on_sigterm: bool = False) -> int:
+    """supervise `root` until it exits and answer its exit code.
+
+    `end_on_sigterm` is for the caller that owns the process: the run then holds
+    SIGTERM until its teardown is over, ending on the signal the way it ends on
+    the root's exit instead of dying to it, and leaves the default disposition
+    behind. Only the main thread can take it.
+    """
+    loop = asyncio.get_running_loop()
+    self._root_exit = loop.create_future()
+    async with (
+      _ended_by_signal(loop, self._root_exit, enabled=end_on_sigterm),
+      self._runtime_lifetime(),
+    ):
       quest_id = lulid()
       record = self.journal.open(quest_id, 'root', None, None, {})
       self.live[quest_id] = record
@@ -551,11 +563,45 @@ class Broker:
   def on(self, kind: str, handler: RequestHandler) -> None:
     self._dispatcher.on(kind, handler)
 
-  def run(self, root: LaunchSpec) -> int:
-    return asyncio.run(self._dispatcher.run(root))
+  def run(self, root: LaunchSpec, *, end_on_sigterm: bool = False) -> int:
+    return asyncio.run(self._dispatcher.run(root, end_on_sigterm=end_on_sigterm))
 
   def stop(self) -> None:
     self._dispatcher.stop()
+
+
+# the exit code of a run ended by SIGTERM: the shell's convention for a process
+# the signal killed, since the run reports it in the signal's place
+TERMINATED_EXIT_CODE = 128 + signal.SIGTERM
+
+
+@contextlib.asynccontextmanager
+async def _ended_by_signal(
+  loop: asyncio.AbstractEventLoop, root_exit: 'asyncio.Future[int]', *, enabled: bool
+) -> AsyncGenerator[None]:
+  """end the run on SIGTERM rather than dying to it, so the teardown that
+  follows the root's exit reaches every worker the run started.
+
+  Entered outside the runtime lifetime, so the handler stays armed through the
+  teardown: a repeated signal while workers are still being ended is held
+  rather than left to kill the process around them.
+  """
+  if not enabled:
+    yield
+    return
+
+  def end() -> None:
+    if root_exit.done():
+      log.warning('broker root: SIGTERM again; still tearing down the workers')
+      return
+    log.warning('broker root: SIGTERM; ending the run and tearing down its workers')
+    root_exit.set_result(TERMINATED_EXIT_CODE)
+
+  loop.add_signal_handler(signal.SIGTERM, end)
+  try:
+    yield
+  finally:
+    loop.remove_signal_handler(signal.SIGTERM)
 
 
 def ping_handler(context: Dispatcher, peer: Peer, message: Message) -> None:
