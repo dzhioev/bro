@@ -710,6 +710,8 @@ Apply the same `--bro`, `--llm`, and `--into` modifiers when required.
 
 Finish with a concise inventory of repository files changed, active developer and harness configuration, framework SHA, and credential instance names plus selection layers without values.
 Also report brog state, setup commit and reachability, successful acceptance command, roster task state, and the exact next command.
+Tell the user how the pin moves from here:
+`[[bump bro]]` in a session of the developer takes a later framework revision, reading the range for the contract changes it brings and the workarounds it retires rather than only relocking.
 Ask the user to report the host result to the framework maintainers because real authentication, Docker launch, GitHub write authority, and attended `dive-in` behavior can be accepted only on their host.
 
 **Checkpoint 9:** report the final inventory and exact next command, with no hidden prerequisite left unresolved.

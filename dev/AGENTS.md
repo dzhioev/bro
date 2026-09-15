@@ -35,7 +35,7 @@ build the wheel with `uv build --package bro-dev`.
 - `bro/extra/github/` — `poll_pr.py` (the `poll-pr` review watcher) and `pr_state.py` (the `pr-state` reviewer-side read of a PR's review state).
   The GitHub client, App-auth source, and pull-request reads they consume remain in core at `bro.extra.github.api`, `.app`, and `.pulls`
 - `bro/prompts/dev/style.md` — the development style policy, tool-served by the Dev persona through `dev-style-source::read`
-- `bros/dev/` — generic developer with the file/shell/search toolset and the audit, credential-wiring, task, PR, and landing spells.
+- `bros/dev/` — generic developer with the file/shell/search toolset and the audit, credential-wiring, framework-bump, task, PR, and landing spells.
   Its optional `brog` feature mounts tracker tooling;
   its provisioning declaration installs the commit hooks
 - `bros/eyebro/` — code reviewer with the `review-diff` (revision/branch → findings list) and `review-pr` (drive a PR to a verdict through `poll-pr`) spells.

@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 7.4.0
+version: 7.5.0
 ---
 
 # run-pr
@@ -99,9 +99,12 @@ Restore the state that session had, reconcile what happened while nobody watched
 Run in parallel:
 - `git status` — no `-uall` flag (memory issue on large repos).
 - `git diff` — staged and unstaged together.
+- `git log origin/<base>..HEAD --oneline` — what the branch already carries.
 
-If `git status` is clean and there are no untracked files to add, stop
-— nothing to land.
+Stop only when all three are empty
+— a clean worktree, nothing untracked to add, and no commit ahead of `<base>`:
+nothing to land.
+A clean worktree over unlanded commits is the ordinary shape of a hand-off from a flow that committed as it went ([[fix]]'s checkpoints, [[bump bro]]'s commits) and continues at step 4.
 
 ### 2. Pre-commit gates
 
@@ -232,7 +235,9 @@ git log origin/<base>..HEAD --oneline
 One commit is the default:
 a branch that does one thing lands as one commit, checkpoint noise folded away.
 Land several when the branch carries a change that stands on its own beside the task
-— the unrelated bug fixed along the way, a drive-by cleanup worth its own line in the history.
+— the unrelated bug fixed along the way, a drive-by cleanup worth its own line in the history
+— or when the flow that handed off here decided the split already:
+[[bump bro]] lands the bump and each adoption apart, and that decision holds like the user's words do.
 The user's own words settle it either way ("land these as two commits", "one commit please").
 
 Write the plan as a scratch file (untracked — never stage it), one `fold` line per landed commit, oldest first, with that commit's message in the lines under it:
