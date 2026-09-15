@@ -83,6 +83,15 @@ def tree(tmp_path, monkeypatch):
   return tmp_path
 
 
+def _verb(command: list[str]) -> str:
+  """the benchmark project command a spawned `uv run` names, after uv's own options."""
+  return command[command.index('--project') + 2]
+
+
+def _option(command: list[str], flag: str) -> str:
+  return command[command.index(flag) + 1]
+
+
 def _composed(tree: Path) -> Path:
   [config] = (tree / 'var' / 'benchmark' / 'runs').glob('*.json')
   return config
@@ -212,10 +221,10 @@ class TestHostRun:
     def spawn(command, cwd, check, **kwargs):
       assert cwd == tree and check is True
       spawned.append(command)
-      if command[4] == 'bro.benchmark.job':
-        _write_job(Path(command[8]) / command[10])
+      if _verb(command) == 'bro.benchmark.job':
+        _write_job(Path(_option(command, '--jobs-dir')) / _option(command, '--job-name'))
         return subprocess.CompletedProcess(command, 0)
-      assert command[4:6] == ['benchmark', 'retain']
+      assert _verb(command) == 'benchmark'
       return subprocess.CompletedProcess(command, 0, stdout='s3://bucket/runs/2026-08-24/id/\n')
 
     monkeypatch.setattr(run.spawn, 'run', spawn)
@@ -229,6 +238,7 @@ class TestHostRun:
       [
         'uv',
         'run',
+        '--no-active',
         '--project',
         str(tree / 'benchmark'),
         'bro.benchmark.job',
@@ -251,13 +261,13 @@ class TestHostRun:
     elsewhere = tmp_path / 'elsewhere'
 
     assert main([*RUN, '--tasks', 'few', '--jobs-dir', str(elsewhere)]) == 0
-    assert commands[0][8] == str(elsewhere)
+    assert _option(commands[0], '--jobs-dir') == str(elsewhere)
     assert (elsewhere / _composed(tree).stem / 'result.json').is_file()
 
   def test_retain_finishes_with_the_retention_verb(self, tree, commands, capsys):
     assert main([*RUN, '--tasks', 'few', '--retain']) == 0
     job = tree / 'jobs' / _composed(tree).stem
-    assert commands[1][4:] == ['benchmark', 'retain', str(job)]
+    assert commands[1][-3:] == ['benchmark', 'retain', str(job)]
     assert 'retained s3://bucket/runs/2026-08-24/id/\n' in capsys.readouterr().out
 
   def test_a_failed_retention_fails_the_run_and_keeps_the_job(
@@ -266,7 +276,7 @@ class TestHostRun:
     spawn = run.spawn.run
 
     def failing_retention(command, **kwargs):
-      if command[4] == 'benchmark':
+      if _verb(command) == 'benchmark':
         raise subprocess.CalledProcessError(1, command)
       return spawn(command, **kwargs)
 
@@ -279,7 +289,7 @@ class TestHostRun:
 
   def test_a_failed_job_names_the_directory_it_left(self, tree, monkeypatch, capsys, caplog):
     def fail(command, cwd, check, **kwargs):
-      _write_job(Path(command[8]) / command[10])
+      _write_job(Path(_option(command, '--jobs-dir')) / _option(command, '--job-name'))
       raise subprocess.CalledProcessError(2, command)
 
     monkeypatch.setattr(run.spawn, 'run', fail)
