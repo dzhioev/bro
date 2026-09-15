@@ -83,6 +83,43 @@ def test_run_timeout_kills_grandchildren(grandchild) -> None:
   grandchild.assert_reaped()
 
 
+def test_run_timeout_with_grace_terminates_then_kills_the_survivors(grandchild) -> None:
+  # a group member that shrugs off the SIGTERM the grace sends is still gone once
+  # the grace passes: the SIGKILL that follows takes the whole group.
+  with pytest.raises(subprocess.TimeoutExpired):
+    spawn.run(
+      ['bash', '-c', f'(trap "" TERM; {grandchild.holding("sleep 60")}) | cat'],
+      timeout=1,
+      grace=0.5,
+      capture_output=True,
+      text=True,
+    )
+  grandchild.assert_reaped()
+
+
+def test_run_interrupted_during_the_grace_still_kills_the_group(grandchild, monkeypatch) -> None:
+  # the grace wait is where an operator's interrupt lands on a supervised job;
+  # the group must not outlive the wrapper it interrupted
+  grace = 7.5
+  communicate = subprocess.Popen.communicate
+
+  def interrupted(self, input=None, timeout=None):
+    if timeout == grace:
+      raise KeyboardInterrupt
+    return communicate(self, input, timeout)
+
+  monkeypatch.setattr(subprocess.Popen, 'communicate', interrupted)
+  with pytest.raises(KeyboardInterrupt):
+    spawn.run(
+      ['bash', '-c', f'(trap "" TERM; {grandchild.holding("sleep 60")}) | cat'],
+      timeout=1,
+      grace=grace,
+      capture_output=True,
+      text=True,
+    )
+  grandchild.assert_reaped()
+
+
 def test_run_check_raises_on_nonzero() -> None:
   with pytest.raises(subprocess.CalledProcessError):
     spawn.run(['false'], check=True)

@@ -1,0 +1,13 @@
+{
+  "agents": [
+    {
+      "import_path": "bro.benchmark.harbor_agent:BroAgent",
+      "model_name": "claude-code/opus5:high",
+      "kwargs": {
+        "bro": "terminal",
+        "harness": "claude",
+        "llm_credential": "claude_code+benchmark"
+      }
+    }
+  ]
+}

@@ -180,7 +180,7 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'constructs',
     'jsii',
   }
-  assert _project_dependencies(_ROOT / 'bench' / 'pyproject.toml') == {'bro', 'pyyaml'}
+  assert _project_dependencies(_ROOT / 'bench' / 'pyproject.toml') == {'bro'}
   assert _project_dependencies(_ROOT / 'benchmark' / 'pyproject.toml') >= {
     'bro',
     'bro-bench',

@@ -14,7 +14,7 @@ This is not a uv workspace member:
 pins `openai == 3`, so no single lock satisfies both.
 The directory therefore locks and syncs on its own:
 `uv sync --directory benchmark --all-groups` builds `.venv` from the `uv.lock` committed beside this file.
-It depends through editable path sources on core, ride, and `bro-bench`, whose launcher-side credential and command registrations are shared with the root environment.
+It depends through editable path sources on core, ride, and `bro-bench`, whose launcher-side credential and command registrations, and the preset composition the job runner reads, are shared with the root environment.
 The ride dependency supplies scoped-store materialization without pulling the native engine's other `openai` major;
 the two must never meet in one interpreter.
 The relocatable bundle builds and installs `bro` plus `bro-native`
@@ -82,9 +82,10 @@ BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_
   docker host
 - `bro/benchmark/trajectory.py` — converts the projected local trail in each finished trial into
   Harbor's ATIF v1.7 models at `agent/trajectory.json`, including normalized counts for reporting and step/final metrics priced through caller-supplied provider tables
-- `bro/benchmark/job.py` (`bro.benchmark.job`) — runs Harbor against a known concrete job directory and copies the built bundle's manifest into that raw result
+- `bro/benchmark/job.py` (`bro.benchmark.job`) — runs Harbor against a known concrete job directory and adds the run's provenance to that raw result:
+  the built bundle's manifest, and the presets record its config carries
 - `bro/benchmark/retention.py` (`benchmark retain`) — resolves one raw job from an artifact ref or local path.
-  It derives format 3 trial rows from Harbor records and local trail stores.
+  It derives the manifest's trial rows from Harbor records and local trail stores.
   It copies the snapshotted files under the flat date/job key with conditional checksummed puts and the manifest last.
   It also owns the reads of a retained run the later verbs share:
   the prefix shape, the manifest, its file list, and the verified download
@@ -92,7 +93,7 @@ BRO_LLM_TESTS=1 uv run --directory benchmark pytest bro/benchmark/benchmark_job_
   It derives Harbor trajectories and result costs from the manifest's captured rates.
   It uploads with the scoped Harbor credential and appends an immutable publication record
 - `bro/benchmark/query.py` (`benchmark query`) — loads DuckDB's S3 extensions and credential-chain secret,
-  then defines typed `runs` and `trials` views over the format 3 retention markers for inline, file, or interactive SQL
+  then defines typed `runs` and `trials` views over the current-format retention markers for inline, file, or interactive SQL
 - `bro/benchmark/import_trails.py` (`benchmark import-trails`) — downloads each trial's retained trail store from the manifest's file list and imports it whole, parents first, into the configured trails store
-- `bro/benchmark/terminal_bench_2_1.yaml` — the pinned harbor job config, and with the bundle the
-  whole of what a score depends on
+- `agents/`, `settings/`, `datasets/`, `tasks/` — the presets a run is composed from, a JSON file each, read by `bro.bench.presets` (`../bench/AGENTS.md`);
+  with the bundle, the whole of what a score depends on

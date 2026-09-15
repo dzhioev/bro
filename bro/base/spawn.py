@@ -5,7 +5,8 @@ any controlling terminal so a `/dev/tty` open fails with ENXIO instead of blocki
 stdin defaults to /dev/null.
 
 `run` and `run_async` additionally reap the child's whole process *group* on timeout
-(or any other error mid-run), not just the direct child. `start_new_session=True`
+(or any other error mid-run), not just the direct child;
+`run` gives the group a SIGTERM first when the caller names a `grace`. `start_new_session=True`
 makes the child a process-group leader, so a SIGKILL to the group also takes out any
 grandchildren the child spawned (shell pipelines, backgrounded helpers). Without this,
 a timed-out `bash -c 'grep -R ... | sed ...'` would kill only the shell and leave a
@@ -56,12 +57,26 @@ def terminate_group(process: subprocess.Popen | asyncio.subprocess.Process) -> N
   _signal_group(process.pid, signal.SIGTERM, process.terminate)
 
 
+def _end_group(process: subprocess.Popen, grace: Optional[float]) -> None:
+  """end the child's group past its deadline: SIGKILL outright, or with `grace`
+  a SIGTERM first and the SIGKILL once those seconds pass without an exit
+  — or sooner, whatever else ends the wait."""
+  try:
+    if grace is not None:
+      terminate_group(process)
+      with contextlib.suppress(subprocess.TimeoutExpired):
+        process.communicate(timeout=grace)
+  finally:
+    kill_group(process)
+
+
 def run(
   command,
   *,
   input=None,
   capture_output: bool = False,
   timeout: Optional[float] = None,
+  grace: Optional[float] = None,
   check: bool = False,
   **kwargs,
 ) -> subprocess.CompletedProcess:
@@ -84,10 +99,10 @@ def run(
     try:
       stdout, stderr = process.communicate(input, timeout=timeout)
     except subprocess.TimeoutExpired:
-      # kill the whole group, then drain — once every writer is dead the pipes hit
-      # EOF and the second communicate returns instead of hanging on a grandchild
+      # end the whole group, then drain — once every writer is dead the pipes hit
+      # EOF and the last communicate returns instead of hanging on a grandchild
       # that still holds the captured pipe open.
-      kill_group(process)
+      _end_group(process, grace)
       process.communicate()
       raise
     except BaseException:

@@ -260,14 +260,10 @@ version = "0.1.0"
 source = { editable = "../bench" }
 dependencies = [
     { name = "bro" },
-    { name = "pyyaml" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "bro", editable = "../" },
-    { name = "pyyaml", specifier = "==6.0.3" },
-]
+requires-dist = [{ name = "bro", editable = "../" }]
 
 [[package]]
 name = "bro-benchmark"

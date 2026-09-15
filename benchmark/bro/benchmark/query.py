@@ -17,6 +17,7 @@ _MANIFEST_COLUMNS = """{
   config: 'JSON',
   score_config_sha256: 'VARCHAR',
   roster_sha256: 'VARCHAR',
+  presets: 'STRUCT(agents VARCHAR, settings VARCHAR, tasks VARCHAR)',
   dataset: 'STRUCT(name VARCHAR, ref VARCHAR)',
   bundle: 'STRUCT(source_commit VARCHAR, framework_revision VARCHAR)',
   total_cost_usd: 'DOUBLE',
@@ -52,6 +53,9 @@ def define_views(connection: duckdb.DuckDBPyConnection, source: str) -> None:
       manifest.dataset.ref AS dataset_ref,
       manifest.score_config_sha256 AS score_config_sha256,
       manifest.roster_sha256 AS roster_sha256,
+      manifest.presets.agents AS agents_preset,
+      manifest.presets.settings AS settings_preset,
+      manifest.presets.tasks AS tasks_preset,
       manifest.total_cost_usd AS total_cost_usd,
       {_MANIFEST_KEY} AS manifest_key
     FROM {reader} AS manifest
@@ -70,6 +74,9 @@ def define_views(connection: duckdb.DuckDBPyConnection, source: str) -> None:
       manifest.dataset.ref AS dataset_ref,
       manifest.score_config_sha256 AS score_config_sha256,
       manifest.roster_sha256 AS roster_sha256,
+      manifest.presets.agents AS agents_preset,
+      manifest.presets.settings AS settings_preset,
+      manifest.presets.tasks AS tasks_preset,
       {_MANIFEST_KEY} AS manifest_key,
       trial.trial AS trial,
       trial.task AS task,

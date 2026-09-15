@@ -1,0 +1,15 @@
+{
+  "environment": {
+    "import_path": "bro.benchmark.harbor_environment:UnmountedDockerEnvironment"
+  },
+  "n_attempts": 1,
+  "n_concurrent_trials": 8,
+  "retry": {
+    "max_retries": 2,
+    "include_exceptions": [
+      "ApiRateLimitError",
+      "ApiInternalServerError",
+      "NetworkConnectionError"
+    ]
+  }
+}

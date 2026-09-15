@@ -146,7 +146,7 @@ class _RunDirectories:
 
 @contextlib.contextmanager
 def _config_in_the_tree(tree: Path) -> Generator[str]:
-  """the narrowed config where the kind accepts one: a file inside the workspace
+  """the composed config where the kind accepts one: a file inside the workspace
   tree, named relative to it — the same spelling an operator passes."""
   directory = tree / 'var' / 'benchmark' / 'e2e'
   directory.mkdir(parents=True, exist_ok=True)

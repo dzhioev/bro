@@ -41,20 +41,56 @@ docker exec <container> /installed-agent/bro/venv/bin/bro show terminal
 The bundle targets linux/x86_64 glibc, and a build refuses any other host rather than producing one
 that will not run.
 
-## Scoring Terminal-Bench 2.1
+## Running a benchmark
 
 Harbor drives every task container through the `docker compose` CLI plugin, which nothing else in
 this repository needs — install it before the first run.
 
-Build the bundle once, then start Harbor:
+A run is named by presets committed under `benchmark/`, a JSON file each:
+
+- `agents/<name>.json` — the Harbor `agents` list: the bro, the harness driving it, the model, and the credential the container gets, named `<bro>-<harness>-<model>-<effort>` after them
+- `settings/<name>.json` — everything else Harbor takes, so attempt depth, concurrency, the retry policy, and the environment:
+  `baseline` for a score, `smoke` for a cheap check
+- `datasets/<name>.json` — a dataset pin: the registry `name`, the content `ref`, and the `task_namespace` Harbor qualifies its task names with.
+  A pin is immutable by convention: a new revision of a dataset is a new file, never an edit of the ref in place, so every task set and every retained run keeps meaning what it meant
+- `tasks/<name>.json` — a task set: a dataset pin by name and a list of bare task names, empty for the whole dataset
+
+`benchmark-run` composes one of each into the Harbor job config, writes it to `var/benchmark/runs/<id>.json`, rebuilds the bundle unless `--keep-bundle`, runs the job, and prints where the results landed before a short report:
 
 ```
-uv run --project benchmark benchmark bundle
-uv run --project benchmark bro.benchmark.job -c benchmark/bro/benchmark/terminal_bench_2_1.yaml
+benchmark-run --agents terminal-bro-gpt-5.6-terra-high --settings baseline --tasks smoke
 ```
+
+`--dataset <name>` stands in for `--tasks` for a whole-dataset run, and positional task names beside it, bare or Harbor-qualified, make an ad hoc selection:
+
+```
+benchmark-run --agents terminal-bro-gpt-5.6-terra-high --settings smoke --dataset terminal-bench-2-1 regex-log
+```
+
+The composed config is what runs, gets digested, and lands in the retention manifest, so a run's identity is its three preset names in git
+— a baseline and the runs compared against it are the same names rather than the same retyped command line.
+Terminal-Bench 2.2 would arrive as a new pin file and new task sets naming it;
+task names are names inside one revision, so a 2.1 list is not reused against 2.2 without checking.
+
+Where the job runs depends on where the command runs.
+A managed session carries no docker socket, so from inside one the job goes through the session broker:
+the host runs `bro.benchmark.job` with its own Docker access through the `benchmark` broker kind from `bro-bench`, pointed at the composed config,
+and the finished run comes back as an artifact whose `output/` holds the job directory beside `stdout`, `stderr`, and `status.json`.
+`benchmark-run` prints `results <path>  artifact <ref>`;
+`artifact get <ref>` makes the run readable again, and the artifact store dies with the ride, so retain the ref before the ride ends when the run must become durable.
+`benchmark-job start -c <config> --detach` and `benchmark-job check <request-id>` drive the same broker kind by hand, for a composed config already in the tree.
+Outside a session, Harbor runs right here into `jobs/<id>` (`--jobs-dir` moves it), the same command from the benchmark project's own environment:
+
+```
+uv run --project benchmark benchmark-run --agents terminal-bro-gpt-5.6-terra-high --settings baseline --tasks smoke --retain
+```
+
+`--retain` finishes with `benchmark retain` on the run, from the credentials the process holds.
+A retention failure fails the command with the job left where it is, and `benchmark retain <job directory>` finishes it.
 
 `bro.benchmark.job` runs Harbor and nothing after it.
-The completed job directory is Harbor's raw output plus one `bundle.json` copied from the bundle the trials ran, so later workflows can derive the source commit and framework revision without consulting the workspace.
+The completed job directory is Harbor's raw output plus `bundle.json`, copied from the bundle the trials ran, and `presets.json`, the names the config was composed from,
+so later workflows derive the source commit, framework revision, and cohort without consulting the workspace.
 Conversion, publication, and durable retention are separate operations rather than part of this command.
 
 Each trial is one `ride solo` inside the task container:
@@ -62,30 +98,11 @@ an unboxed root in the task's own directory, on the uploaded bundle as its runti
 — so the `terminal` bro delegates to further `terminal`s as processes beside it in the same tree, with no Docker in the container.
 The launch declares the container a sandbox (`--env IS_SANDBOX=1`):
 its agent phase runs as root, and that declaration is what lets claude skip permission prompts under uid 0.
-The agent's `harness` kwarg selects the driving loop, `bro` or `claude`, and `llm_credential` the one credential the container gets:
+The agent preset's `harness` kwarg selects the driving loop, `bro` or `claude`, and `llm_credential` the one credential the container gets:
 the LLM key on the bro harness, the `claude_code` setup token on the claude one.
-The pinned config runs the bro harness;
-a claude entry beside it reads:
+The committed agent presets cover both harnesses, and the developer bro as it ships beside the purpose-built one, so their difference is a measured number.
 
-```yaml
-  - import_path: bro.benchmark.harbor_agent:BroAgent
-    model_name: claude-code/opus5:high
-    kwargs:
-      bro: terminal
-      harness: claude
-      llm_credential: claude_code+benchmark
-```
-
-The job config is the whole reproducibility contract
-— dataset digest, the bros and harnesses under test, the model, concurrency, attempt depth, and the retry policy
-— so a run is described by that file plus the bundle.
-The config repeats every trial five times;
-`-k/--n-attempts` overrides that depth when a wave run needs fewer attempts.
-To narrow a run to a subset of tasks, add a `task_names` list of globs under the dataset:
-harbor's `--include-task-name` applies only to a dataset the command line itself names,
-which would mean restating the pinned digest there.
-
-The score lands in `<jobs_dir>/<job-name>/result.json` (`jobs/` unless `-o` says otherwise), under
+The score lands in the job directory's `result.json`, under
 `stats.evals`, one entry per agent and dataset:
 `pass_at_k`, `reward_stats`, `exception_stats`,
 `n_trials`, `n_errors`.
@@ -107,23 +124,9 @@ BRO_STORE=/tmp/empty-bro-store XDG_DATA_HOME=<trial>/agent rewind show <trail-id
 
 On a host that configures no `trails` credential of its own, `XDG_DATA_HOME` alone is enough.
 
-Managed sessions carry no docker socket;
-from inside one, start the job through the session broker instead:
-
-```
-benchmark-job start -c benchmark/bro/benchmark/terminal_bench_2_1.yaml --detach
-benchmark-job check <request-id>
-```
-
-The host runs `bro.benchmark.job` with its own Docker access through the `benchmark` broker kind from `bro-bench`, pointed at the workspace's config and at the command job's output directory.
-`start` and `check` print the artifact ref of the raw run;
-`artifact get <ref>` makes it readable, with the whole `<jobs_dir>` under `output/` beside `stdout`, `stderr`, and `status.json`.
-`benchmark-run` builds and starts the same raw run, then prints `results <path>  artifact <ref>` before its short report.
-The artifact store dies with the ride, so retain its ref before the ride ends when the run must become durable.
-
 ## Retaining a run
 
-`benchmark retain` takes either the artifact ref printed by `benchmark-run` or a local Harbor job directory:
+`benchmark retain` takes either the artifact ref or the local job directory `benchmark-run` printed:
 
 ```
 uv run --project benchmark benchmark retain sha256:<artifact-digest>
@@ -140,10 +143,11 @@ Every object put is conditional on absence and carries its SHA-256 checksum.
 A restart skips an already-written object only when its stored checksum matches, while any collision is refused.
 `retention.json` is written last as the completion marker, and an existing marker refuses a second retain of that job.
 
-The format 3 marker records:
+The format 4 marker records:
 
 - `job`: `id`, `started_at`, `finished_at`, and Harbor's `n_retries`
 - `config`, `score_config_sha256`, and `roster_sha256`: the resolved job config and its score and roster identities
+- `presets`: the `agents`, `settings`, and `tasks` preset names the config was composed from, `tasks` null for an ad hoc selection
 - `dataset`: the one `name` and `ref` shared by the trials
 - `bundle`: `source_commit` and the content-derived `framework_revision`
 - `pricing`: each provider table's `as_of`, `source`, `sha256`, and vendor-vocabulary `rates` for the models it priced
@@ -156,7 +160,7 @@ Trajectories are produced only by publication and are not part of a raw run.
 
 ## Querying retained runs
 
-`benchmark query` loads DuckDB's `httpfs` and `aws` extensions and reads every complete format 3 marker directly from S3:
+`benchmark query` loads DuckDB's `httpfs` and `aws` extensions and reads every complete format 4 marker directly from S3:
 
 ```
 uv run --project benchmark benchmark query 'SELECT * FROM runs ORDER BY started_at DESC'
@@ -168,11 +172,12 @@ The last form opens an interactive DuckDB SQL shell over the same views.
 The extensions are fetched on first use, so that first query needs network access.
 A managed session needs both `aws` and `benchmark_retention` granted at launch, the same as retention.
 
-The `runs` view has one row per retained marker with its job times and retries, config, bundle source commit and revision, dataset, score and roster digests, total cost, and manifest key.
+The `runs` view has one row per retained marker with its job times and retries, config, bundle source commit and revision, dataset, score and roster digests, preset names, total cost, and manifest key.
 The `trials` view expands each marker's trial rows and joins those run dimensions to their agent dimensions, rewards, error, times, trail identity, token counts, and cost.
 Its `store_prefix` is the trial's retained local-store prefix.
 
-This query compares two source commits per task and scores an errored trial as zero:
+A cohort is selected by its preset names (`agents_preset`, `settings_preset`, `tasks_preset`) rather than by digest.
+This query compares two source commits of one cohort per task and scores an errored trial as zero:
 
 ```sql
 WITH scores AS (
@@ -184,6 +189,9 @@ WITH scores AS (
       AS candidate_mean
   FROM trials
   WHERE source_commit IN ('<baseline-commit>', '<candidate-commit>')
+    AND agents_preset = 'terminal-bro-gpt-5.6-terra-high'
+    AND settings_preset = 'baseline'
+    AND tasks_preset = '<task-set>'
   GROUP BY task
 )
 SELECT task, baseline_mean, candidate_mean, candidate_mean - baseline_mean AS delta

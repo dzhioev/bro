@@ -14,4 +14,6 @@ Run `sync-scripts --project bench` after adding or removing a CLI, and build the
 
 - `bro/bench/credentials.py` — the `harbor` and `benchmark_retention` credential-kind declarations.
 - `bro/bench/job.py` (`benchmark-job`) — the `benchmark` broker-kind handler and the session client that starts or checks a raw Harbor run.
-- `bro/bench/run.py` (`benchmark-run`) — the operator loop that narrows a config, builds the trial bundle, starts the broker job, and reports its raw artifact.
+- `bro/bench/presets.py` — the presets under `benchmark/` (agents, settings, datasets, tasks): their shapes, and their composition into a Harbor job config carrying the names it came from.
+- `bro/bench/run.py` (`benchmark-run`) — the operator loop around one run:
+  it composes the presets, builds the trial bundle, runs the job through the session broker or, outside a session, as a host process into a jobs directory, reports it, and retains it on request.

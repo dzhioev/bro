@@ -1,8 +1,8 @@
 """the one graded trial the live benchmark checks drive, and the gates it needs.
 
-Driving it spends real tokens, so the task, the narrowing of the pinned config,
-what a host must have to run it, and what a finished run must hold are settled
-here once rather than per check.
+Driving it spends real tokens, so the task, the presets its config is composed
+from, what a host must have to run it, and what a finished run must hold are
+settled here once rather than per check.
 """
 
 import json
@@ -11,24 +11,31 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
-from harbor.cli.config_sources import load_config_source
 from harbor.utils.trajectory_validator import TrajectoryValidator
 
 from bro.base import credentials
 from bro.base.suite_environment import host_credential_store, token_spending_skip_reason
+from bro.bench.presets import compose
 from bro.benchmark.bundle import built, default_root, host_mismatch, workspace_root
 from bro.benchmark.trial_store import TRAILS_DIRECTORY
 
 # the smallest image in the set, and one carrying neither python3 nor a CA
 # store — so a single trial exercises the bundle's own interpreter and CA roots
 # for real
-TASK = 'terminal-bench/adaptive-rejection-sampler'
-JOB_CONFIG = Path(__file__).with_name('terminal_bench_2_1.yaml')
+TASK = 'adaptive-rejection-sampler'
+# the smoke presets narrowed to that one task: one attempt of one agent is all
+# a graded trial takes, and the baseline depth would multiply what the live
+# trials spend
+JOB_CONFIG = compose(
+  workspace_root(),
+  agents='terminal-bro-gpt-5.6-terra-high',
+  settings='smoke',
+  dataset='terminal-bench-2-1',
+  task_names=[TASK],
+)
 
 # the credentials the trials will actually hydrate — the config names them
-_LLM_CREDENTIALS = sorted(
-  {agent['kwargs']['llm_credential'] for agent in load_config_source(JOB_CONFIG)['agents']}
-)
+_LLM_CREDENTIALS = sorted({agent['kwargs']['llm_credential'] for agent in JOB_CONFIG['agents']})
 
 
 def _available(*command: str) -> bool:
@@ -62,16 +69,10 @@ LIVE_TRIAL = [
 
 
 def one_task_config(directory: Path) -> Path:
-  """the pinned config narrowed to the one task, so the pins stay in one file.
-  One attempt per agent is all a graded trial takes, and the pinned score depth
-  would multiply what the live trials spend."""
-  config = load_config_source(JOB_CONFIG)
-  for dataset in config['datasets']:
-    dataset['task_names'] = [TASK]
-  config['n_attempts'] = 1
-  narrowed = directory / 'one-task.json'
-  narrowed.write_text(json.dumps(config))
-  return narrowed
+  """the composed config, written where a check can hand it to Harbor."""
+  config = directory / 'one-task.json'
+  config.write_text(json.dumps(JOB_CONFIG))
+  return config
 
 
 def assert_graded_run(jobs: Path) -> Path:

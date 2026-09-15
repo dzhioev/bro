@@ -33,7 +33,7 @@ STATUS_FILE = 'status.json'
 # seconds a killed job gets to end on SIGTERM before the group is SIGKILLed —
 # room for a command supervising resources of its own (containers, temp state)
 # to tear them down
-_TERM_GRACE = 10.0
+TERM_GRACE = 10.0
 
 
 @dataclass(frozen=True)
@@ -66,7 +66,7 @@ class _CommandHandle(ChildHandle):
       return
     self._signal_group(signal.SIGTERM)
     try:
-      await asyncio.wait_for(self._process.wait(), _TERM_GRACE)
+      await asyncio.wait_for(self._process.wait(), TERM_GRACE)
     except TimeoutError:
       self._signal_group(signal.SIGKILL)
       await self._process.wait()
