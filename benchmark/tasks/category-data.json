@@ -1,0 +1,19 @@
+{
+  "dataset": "terminal-bench-2-1",
+  "tasks": [
+    "constraints-scheduling",
+    "financial-document-processor",
+    "hf-model-inference",
+    "log-summary-date-ranges",
+    "mcmc-sampling-stan",
+    "mteb-leaderboard",
+    "mteb-retrieve",
+    "multi-source-data-merger",
+    "query-optimize",
+    "regex-log",
+    "reshard-c4-data",
+    "rstan-to-pystan",
+    "sam-cell-seg",
+    "sparql-university"
+  ]
+}

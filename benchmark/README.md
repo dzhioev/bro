@@ -55,6 +55,24 @@ A run is named by presets committed under `benchmark/`, a JSON file each:
   A pin is immutable by convention: a new revision of a dataset is a new file, never an edit of the ref in place, so every task set and every retained run keeps meaning what it meant
 - `tasks/<name>.json` — a task set: a dataset pin by name and a list of bare task names, empty for the whole dataset
 
+The committed task sets over `terminal-bench-2-1` come in families, named with the family as prefix so a `tasks_preset LIKE 'category-%'` query selects a whole family of retained runs:
+
+- `category-<name>` — eight sets partitioning the dataset by the task manifests' own category label.
+  `software-engineering`, `system-administration`, `security`, and `debugging` hold the tasks under those labels, `software-engineering` taking the `optimization` task as well;
+  `science` holds `scientific-computing` and `mathematics`;
+  `data` holds `data-science`, `data-processing`, `data-querying`, and `personal-assistant`;
+  `ml` holds `machine-learning` and `model-training`;
+  and `files-and-media` holds `file-operations`, `video-processing`, and `games`
+- `difficulty-<tier>` — three sets partitioning the dataset by the task manifests' own difficulty metadata:
+  a task the authors label hard is `hard`;
+  one they label easy, or medium with an expert time estimate of thirty minutes or less, is `easy`;
+  the rest is `medium`.
+  The rule is a first cut from metadata, to be replaced by tiers from measured pass rates once a whole-dataset baseline exists
+- `core` — twenty tasks for day-to-day runs: every category set represented, seven easy, eight medium, and five hard by the rule above, each with an agent timeout of thirty minutes or less, and `smoke` among them.
+  It leaves out large model and dataset downloads, the task tagged `no-verified-solution`, and the hard tasks the public leaderboard shows as essentially unsolved, since neither a regression nor an improvement would show on those
+- `long-horizon` — the sixteen tasks with an agent timeout above thirty minutes, the ones `core` leaves out, for context compaction and long-run stability
+- `smoke` — three quick tasks for checking that a run works at all
+
 `benchmark-run` composes one of each into the Harbor job config, writes it to `var/benchmark/runs/<id>.json`, rebuilds the bundle unless `--keep-bundle`, runs the job, and prints where the results landed before a short report:
 
 ```
