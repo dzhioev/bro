@@ -1,0 +1,12 @@
+{
+  "dataset": "terminal-bench-2-1",
+  "tasks": [
+    "caffe-cifar-10",
+    "count-dataset-tokens",
+    "distribution-search",
+    "llm-inference-batching-scheduler",
+    "pytorch-model-cli",
+    "pytorch-model-recovery",
+    "train-fasttext"
+  ]
+}

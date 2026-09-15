@@ -1,0 +1,31 @@
+{
+  "dataset": "terminal-bench-2-1",
+  "tasks": [
+    "adaptive-rejection-sampler",
+    "build-cython-ext",
+    "build-pmars",
+    "build-pov-ray",
+    "caffe-cifar-10",
+    "chess-best-move",
+    "compile-compcert",
+    "db-wal-recovery",
+    "distribution-search",
+    "filter-js-from-html",
+    "gcode-to-text",
+    "git-multibranch",
+    "headless-terminal",
+    "large-scale-text-editing",
+    "largest-eigenval",
+    "log-summary-date-ranges",
+    "mailman",
+    "modernize-scientific-stack",
+    "portfolio-optimization",
+    "pypi-server",
+    "query-optimize",
+    "regex-log",
+    "rstan-to-pystan",
+    "schemelike-metacircular-eval",
+    "sqlite-db-truncate",
+    "winning-avg-corewars"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "dataset": "terminal-bench-2-1",
+  "tasks": [
+    "break-filter-js-from-html",
+    "crack-7z-hash",
+    "filter-js-from-html",
+    "fix-code-vulnerability",
+    "openssl-selfsigned-cert",
+    "password-recovery",
+    "sanitize-git-repo",
+    "vulnerable-secret"
+  ]
+}

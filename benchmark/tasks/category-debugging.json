@@ -1,0 +1,10 @@
+{
+  "dataset": "terminal-bench-2-1",
+  "tasks": [
+    "build-cython-ext",
+    "custom-memory-heap-crash",
+    "merge-diff-arc-agi-task",
+    "overfull-hbox",
+    "sqlite-db-truncate"
+  ]
+}

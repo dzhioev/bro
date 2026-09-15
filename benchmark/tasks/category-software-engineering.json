@@ -1,0 +1,32 @@
+{
+  "dataset": "terminal-bench-2-1",
+  "tasks": [
+    "build-pmars",
+    "build-pov-ray",
+    "cancel-async-tasks",
+    "circuit-fibsqrt",
+    "cobol-modernization",
+    "code-from-image",
+    "fix-git",
+    "fix-ocaml-gc",
+    "git-leak-recovery",
+    "gpt2-codegolf",
+    "headless-terminal",
+    "kv-store-grpc",
+    "make-doom-for-mips",
+    "make-mips-interpreter",
+    "path-tracing",
+    "path-tracing-reverse",
+    "polyglot-c-py",
+    "polyglot-rust-c",
+    "portfolio-optimization",
+    "prove-plus-comm",
+    "pypi-server",
+    "regex-chess",
+    "schemelike-metacircular-eval",
+    "torch-pipeline-parallelism",
+    "torch-tensor-parallelism",
+    "winning-avg-corewars",
+    "write-compressor"
+  ]
+}

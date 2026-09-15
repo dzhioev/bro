@@ -1,0 +1,21 @@
+{
+  "dataset": "terminal-bench-2-1",
+  "tasks": [
+    "bn-fit-modify",
+    "build-pov-ray",
+    "circuit-fibsqrt",
+    "compile-compcert",
+    "distribution-search",
+    "fix-ocaml-gc",
+    "install-windows-3.11",
+    "mteb-leaderboard",
+    "portfolio-optimization",
+    "regex-chess",
+    "reshard-c4-data",
+    "sam-cell-seg",
+    "schemelike-metacircular-eval",
+    "train-fasttext",
+    "video-processing",
+    "winning-avg-corewars"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "dataset": "terminal-bench-2-1",
+  "tasks": [
+    "compile-compcert",
+    "configure-git-webserver",
+    "git-multibranch",
+    "install-windows-3.11",
+    "mailman",
+    "nginx-request-logging",
+    "qemu-alpine-ssh",
+    "qemu-startup",
+    "sqlite-with-gcov"
+  ]
+}

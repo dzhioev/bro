@@ -1,0 +1,25 @@
+{
+  "dataset": "terminal-bench-2-1",
+  "tasks": [
+    "adaptive-rejection-sampler",
+    "build-cython-ext",
+    "cancel-async-tasks",
+    "configure-git-webserver",
+    "db-wal-recovery",
+    "dna-assembly",
+    "fix-code-vulnerability",
+    "fix-git",
+    "git-multibranch",
+    "kv-store-grpc",
+    "large-scale-text-editing",
+    "log-summary-date-ranges",
+    "nginx-request-logging",
+    "openssl-selfsigned-cert",
+    "overfull-hbox",
+    "prove-plus-comm",
+    "pytorch-model-recovery",
+    "regex-log",
+    "sqlite-db-truncate",
+    "torch-pipeline-parallelism"
+  ]
+}
