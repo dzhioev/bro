@@ -1,0 +1,13 @@
+{
+  "agents": [
+    {
+      "import_path": "bro.benchmark.harbor_agent:BroAgent",
+      "model_name": "openai/gpt-5.6-terra:high",
+      "kwargs": {
+        "bro": "dev",
+        "harness": "bro",
+        "llm_credential": "openai+benchmark"
+      }
+    }
+  ]
+}

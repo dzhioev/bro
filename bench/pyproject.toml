@@ -9,7 +9,6 @@ description = "launcher-side commands and registrations for bro benchmarks"
 requires-python = ">=3.12"
 dependencies = [
   "bro",
-  "pyyaml==6.0.3",
 ]
 
 [project.scripts]

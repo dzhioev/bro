@@ -1,0 +1,8 @@
+{
+  "dataset": "terminal-bench-2-1",
+  "tasks": [
+    "regex-log",
+    "fix-git",
+    "sqlite-db-truncate"
+  ]
+}

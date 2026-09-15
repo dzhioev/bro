@@ -19,6 +19,7 @@ def _manifest(format: int, *, job_id: str, source_commit: str, trial: str) -> di
     'config': {'datasets': [{'name': 'terminal-bench'}]},
     'score_config_sha256': 'sha256:' + 'a' * 64,
     'roster_sha256': 'sha256:' + 'b' * 64,
+    'presets': {'agents': 'terminal-bro', 'settings': 'baseline', 'tasks': None},
     'dataset': {'name': 'terminal-bench', 'ref': 'sha256:dataset'},
     'bundle': {
       'source_commit': source_commit,
@@ -54,31 +55,33 @@ def _write_manifest(root: Path, date: str, job: str, manifest: dict[str, object]
   return path
 
 
-def test_views_project_format_three_runs_and_trial_stores(tmp_path):
+def test_views_project_current_format_runs_and_trial_stores(tmp_path):
   current_path = _write_manifest(
     tmp_path,
     '2026-09-11',
     'current',
-    _manifest(3, job_id='current-job', source_commit='candidate', trial='trial-current'),
+    _manifest(4, job_id='current-job', source_commit='candidate', trial='trial-current'),
   )
   _write_manifest(
     tmp_path,
     '2026-08-24',
     'legacy',
-    _manifest(2, job_id='legacy-job', source_commit='baseline', trial='trial-legacy'),
+    _manifest(3, job_id='legacy-job', source_commit='baseline', trial='trial-legacy'),
   )
 
   with duckdb.connect() as connection:
     query.define_views(connection, str(tmp_path / '*' / '*' / 'retention.json'))
 
     assert connection.sql(
-      'SELECT job_id, source_commit, dataset_name, total_cost_usd FROM runs'
-    ).fetchall() == [('current-job', 'candidate', 'terminal-bench', 1.25)]
+      'SELECT job_id, source_commit, dataset_name, agents_preset, tasks_preset, total_cost_usd '
+      'FROM runs'
+    ).fetchall() == [('current-job', 'candidate', 'terminal-bench', 'terminal-bro', None, 1.25)]
     assert connection.sql(
-      'SELECT task, rewards.reward, tokens.cache_read, store_prefix FROM trials'
+      'SELECT task, settings_preset, rewards.reward, tokens.cache_read, store_prefix FROM trials'
     ).fetchall() == [
       (
         'package-task',
+        'baseline',
         '1',
         5,
         str(current_path.parent / 'trial-current' / 'agent' / 'ride' / 'trails') + '/',

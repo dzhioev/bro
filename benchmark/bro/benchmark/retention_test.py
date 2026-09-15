@@ -21,6 +21,7 @@ SOURCE_COMMIT = 'b' * 40
 DATASET = 'terminal-bench/terminal-bench-2-1'
 DATASET_REF = 'sha256:' + 'd' * 64
 MODEL = 'gpt-5.6-terra'
+PRESETS = {'agents': 'dev-bro', 'settings': 'smoke', 'tasks': None}
 
 
 class FakeS3:
@@ -182,6 +183,7 @@ def _write_job(
   }
   (job_directory / 'result.json').write_text(json.dumps(result))
   (job_directory / 'config.json').write_text(json.dumps(config))
+  (job_directory / retention.PRESETS_RECORD).write_text(json.dumps(PRESETS))
 
   trial = job_directory / 'trial-one'
   trial.mkdir()
@@ -267,7 +269,7 @@ def test_every_source_file_and_a_last_manifest_land_under_the_flat_key(monkeypat
   assert [key.removeprefix(f'{retained.prefix}/') for key in keys[:-1]] == source_names
 
   manifest = _retained_manifest(s3, retained)
-  assert manifest['format'] == 3
+  assert manifest['format'] == 4
   assert manifest['job'] == {
     'id': str(JOB_ID),
     'started_at': '2026-08-24T20:36:50.123456+00:00',
@@ -275,6 +277,7 @@ def test_every_source_file_and_a_last_manifest_land_under_the_flat_key(monkeypat
     'n_retries': 2,
   }
   assert manifest['config'] == config
+  assert manifest['presets'] == PRESETS
   assert manifest['dataset'] == {'name': DATASET, 'ref': DATASET_REF}
   assert manifest['bundle'] == {
     'source_commit': SOURCE_COMMIT,
@@ -342,6 +345,16 @@ def test_a_trial_that_failed_before_install_keeps_an_error_row(monkeypatch, tmp_
   assert error['tokens'] is None
   assert error['cost_usd'] is None
   assert manifest['total_cost_usd'] is None
+
+
+def test_a_job_without_a_presets_record_is_refused(monkeypatch, tmp_path):
+  job_directory = tmp_path / 'job'
+  _write_job(job_directory)
+  (job_directory / retention.PRESETS_RECORD).unlink()
+  _configure(monkeypatch, FakeS3())
+
+  with pytest.raises(ValueError, match=retention.PRESETS_RECORD):
+    retention.retain_job(job_directory)
 
 
 def test_a_trial_that_reached_install_must_report_the_job_bundle(monkeypatch, tmp_path):

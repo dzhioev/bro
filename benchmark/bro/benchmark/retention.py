@@ -17,14 +17,16 @@ from harbor.models.trial.result import TrialResult
 
 from bro import artifact
 from bro.base import credentials
+from bro.bench.presets import Presets
 from bro.benchmark.bundle import Bundle
+from bro.benchmark.job import PRESETS_RECORD
 from bro.llm import providers, usage
 from bro.trails.cost import trail_cost
 from bro.trails.local import LocalStore
 
 RETENTION_CREDENTIAL = 'benchmark_retention'
 MANIFEST_FILENAME = 'retention.json'
-MANIFEST_FORMAT = 3
+MANIFEST_FORMAT = 4
 PREFIX_ROOT = 'runs'
 TRAILS_DIRECTORY = Path('agent') / 'ride' / 'trails'
 _DIGEST_PREFIX = 'sha256:'
@@ -373,6 +375,7 @@ def _manifest(job_directory: Path, inventory: list[InventoryFile]) -> tuple[dict
   if not isinstance(roster, list) or len(roster) == 0:
     raise ValueError(f'benchmark config at {job_directory} has no agent roster')
 
+  presets = Presets.from_record(_read_json_object(job_directory / PRESETS_RECORD))
   bundle = Bundle(job_directory)
   framework_revision = bundle.identity
   source_commit = bundle.source_commit
@@ -424,6 +427,7 @@ def _manifest(job_directory: Path, inventory: list[InventoryFile]) -> tuple[dict
     'config': config,
     'score_config_sha256': _sha256(_score_config(config)),
     'roster_sha256': _sha256(roster),
+    'presets': presets.record(),
     'dataset': dataset,
     'bundle': {
       'source_commit': source_commit,
