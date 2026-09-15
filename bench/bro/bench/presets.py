@@ -99,7 +99,8 @@ def _dataset(tree: Path, name: str) -> dict[str, str]:
   return preset
 
 
-def _task_set(tree: Path, name: str) -> tuple[str, list[str]]:
+def task_set(tree: Path, name: str) -> tuple[str, list[str]]:
+  """the dataset pin name and the bare task names a task set carries."""
   preset = _load(tree, TASKS, name)
   tasks = preset.get('tasks')
   if (
@@ -145,7 +146,7 @@ def compose(
       raise PresetError('a run names a task set or a dataset, not both')
     if len(task_names) > 0:
       raise PresetError('task names go with a dataset; a task set carries its own')
-    dataset, selected = _task_set(tree, tasks)
+    dataset, selected = task_set(tree, tasks)
   roster = _agents(tree, agents)
   run_settings = _settings(tree, settings)
   pin = _dataset(tree, dataset)

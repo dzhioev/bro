@@ -1,0 +1,17 @@
+{
+  "dataset": "terminal-bench-2-1",
+  "tasks": [
+    "adaptive-rejection-sampler",
+    "bn-fit-modify",
+    "dna-assembly",
+    "dna-insert",
+    "feal-differential-cryptanalysis",
+    "feal-linear-cryptanalysis",
+    "largest-eigenval",
+    "model-extraction-relu-logits",
+    "modernize-scientific-stack",
+    "protein-assembly",
+    "raman-fitting",
+    "tune-mjcf"
+  ]
+}

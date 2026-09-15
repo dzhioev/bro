@@ -1,0 +1,12 @@
+{
+  "dataset": "terminal-bench-2-1",
+  "tasks": [
+    "chess-best-move",
+    "db-wal-recovery",
+    "extract-elf",
+    "extract-moves-from-video",
+    "gcode-to-text",
+    "large-scale-text-editing",
+    "video-processing"
+  ]
+}
