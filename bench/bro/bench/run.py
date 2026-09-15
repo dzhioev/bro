@@ -39,7 +39,7 @@ JOBS_DIRECTORY = Path('jobs')
 
 def _benchmark_command(tree: Path, *arguments: str) -> list[str]:
   """a command of the benchmark project, run in its own environment."""
-  return ['uv', 'run', '--project', str(tree / 'benchmark'), *arguments]
+  return ['uv', 'run', '--no-active', '--project', str(tree / 'benchmark'), *arguments]
 
 
 def build_bundle(tree: Path) -> None:
