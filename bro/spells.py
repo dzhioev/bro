@@ -58,8 +58,10 @@ class _Interpretation(BaseModel):
     if self.error is not None:
       if self.spell is not None or self.arguments is not None:
         raise ValueError('an error interpretation cannot also contain an executable call')
-    elif self.spell is None or self.arguments is None:
-      raise ValueError('an executable interpretation requires spell and arguments')
+    elif self.spell is None:
+      raise ValueError('an executable interpretation requires a spell')
+    elif self.arguments is None:
+      self.arguments = []
     return self
 
 

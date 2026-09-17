@@ -493,6 +493,25 @@ class TestCast:
     assert mcp_result == 'spell: spell::do-work\n\nMCP'
 
   @pytest.mark.asyncio
+  async def test_success_with_null_arguments_is_a_call_without_arguments(
+    self, fake_packages, monkeypatch
+  ):
+    import bro.llm.mu as mu_module
+
+    package = fake_packages('_cast_null_arguments', {'do-work': _spell()})
+    monkeypatch.setattr(spell_store.credentials, 'available', lambda name: True)
+
+    async def fake_mu(prompt, result_class, *contents, model=None, reasoning_effort=None):
+      return result_class.model_validate(
+        {'spell': 'spell::do-work', 'arguments': None, 'error': None}
+      )
+
+    monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
+    result = await (await self._tool(package.bro_class()())).call({'command': 'do the work'})
+
+    assert result == 'spell: spell::do-work\n\nprocedure body'
+
+  @pytest.mark.asyncio
   async def test_expected_error_passes_through(self, fake_packages, monkeypatch):
     import bro.llm.mu as mu_module
 
@@ -537,6 +556,7 @@ class TestCast:
         'unknown argument',
       ),
       ({'spell': 'spell::do-work', 'arguments': []}, 'omitted required'),
+      ({'spell': 'spell::do-work', 'arguments': None}, 'omitted required'),
     ],
   )
   async def test_invalid_model_selection_fails_validation(
