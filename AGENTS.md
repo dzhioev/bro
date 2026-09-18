@@ -214,24 +214,19 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   — the session environment facts of `ride banner --llm` rendered in-process (`bro.workspace.banner.render_banner`, with the bro's name and the run's trail id passed explicitly
   — an in-process run's environment carries the launcher's `RIDE_BRO`, or none, and its own trail is published by no session recorder), so every bro detects its environment without a shell;
   the playbook is `bro/prompts/environment.md`.
-  Both service builds also mount `summon`, `summon_say`, `summon_check`, `summon_list`, and `summon_cancel` when the process has broker intent (`BROKER_CHANNEL` or `BROKER_UPSTREAM` set), forwarding to `bro.summon`
-  — every wait runs off-loop via `bro.base.offload.off_loop` so interactive surfaces stay responsive.
-  `summon` returns an accepted, question, or completed state with the request id;
-  `detach: true` returns after the host's acceptance mark and fails immediately on a denial or pre-acceptance launch failure.
-  It takes the same child-shaping knobs the launcher flags carry, plus the quest's widened `talk` rights.
-  `summon_say` sends a say, reply, or awaiting question to a child quest or the session's own quest;
-  a bounded wait that returns its question id leaves the host-owned question live for recovery.
-  `summon_check` reads a child or own-quest journal record with its talk, pending questions, and chat tail;
-  `wait: true` loops short `query {id, wait, since}` reads until terminal, a chat change, or its optional deadline, so the same quest continues after either end asks.
-  `summon_list` walks the journal's paginated caller-scoped listing and returns its summon records live-first.
-  `summon_cancel` ends a child quest this session requested and waits, bounded, for the quest to end.
-  The blocking modes own their per-call channel client on the loop and close it on cancellation, which unblocks the current short broker wait;
-  the host-retained terminal and chat remain readable by id.
-  The blocking-tool descriptions carry a `{{when #wire = mcp}}` transport-caution block, rendered at service-server build
+  Both service builds also mount `summon`, `summon_say`, `summon_check`, `summon_list`, and `summon_cancel` when the process has broker intent (`BROKER_CHANNEL` or `BROKER_UPSTREAM` set),
+  forwarding to `bro.summon` off-loop so interactive surfaces stay responsive.
+  The bare-wire shapes do not wait:
+  `summon` returns after host acceptance and has no `detach`, `summon_say(question=true)` mints a question id without waiting, `summon_check` is one journal read, and `summon_cancel` returns when the host accepts the cancellation.
+  Their later chat and lifecycle transitions arrive through `summon watch`, and the host-retained terminal and chat remain readable by id.
+  `summon_list` walks the journal's paginated caller-scoped listing and returns its summon records live-first on both wires.
+  The MCP-wire shapes retain the blocking controls:
+  `summon` may wait for an answer or question, `summon_say` may wait for the question's reply, `summon_check(wait=true)` long-polls through chat changes, and `summon_cancel` may wait for the quest to end.
+  Those blocking modes own their per-call channel client and close it on cancellation, which unblocks the current short broker wait.
+  Their descriptions carry a `{{when #wire = mcp}}` transport-caution block, rendered at service-server build
   — service tools are harness features, the one tool surface whose rendering vocabulary gets the system `#wire` fact injected next to the `#tools` roster.
   The MCP-served builds (`wire == 'mcp'`: persona and `--raw` claude sessions, consumed over streamable HTTP with a client-side call budget) steer long runs to detach plus repeatable polling;
   their lost-id recovery wording retains the `{{iff #tools contains summon_list}}` roster fork.
-  The in-process `bare` builds render the plain contract.
 
   **Observing.**
   `bro.llm.observer.ObservedEvent` is the provider-neutral live seam:
