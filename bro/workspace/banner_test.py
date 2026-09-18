@@ -18,7 +18,6 @@ class TestSessionFacts:
       'RIDE_ISOLATION',
       'RIDE_BRO',
       'RIDE_COMMAND',
-      'BRO_SHELL_COMMAND',
       'RIDE_HOST_WORKSPACE',
       'RIDE_REPO',
       summon.MAY_SUMMON_ENV,
@@ -34,7 +33,6 @@ class TestSessionFacts:
     monkeypatch.setenv('RIDE_WORKSPACE', 'my-task')
     monkeypatch.setenv('RIDE_BRO', 'dev')
     monkeypatch.setenv('RIDE_HOST_WORKSPACE', '/var/ride/0123456789abcdef/workspaces/my-task/tree')
-    monkeypatch.setenv('BRO_SHELL_COMMAND', 'bro chat dev')
     monkeypatch.setenv('RIDE_COMMAND', 'ride along --hold attended my-task')
     facts = SessionFacts.collect()
     assert facts.isolation == 'boxed'
@@ -43,7 +41,6 @@ class TestSessionFacts:
     assert facts.host_workspace == '/var/ride/0123456789abcdef/workspaces/my-task/tree'
     assert facts.container_workspace == '/workspace'
     assert facts.exec_command == 'ride exec my-task'
-    assert facts.shell_command == 'bro chat dev'
     assert facts.ride_command == 'ride along --hold attended my-task'
 
   def test_unmanaged_container_has_no_workspace(self, monkeypatch):
@@ -71,18 +68,11 @@ class TestSessionFacts:
     assert facts.host_workspace == str(worktree)
     assert facts.container_workspace is None
     assert facts.exec_command is None
-    assert facts.shell_command is None
     assert facts.ride_command == 'ride along feature'
 
   def test_a_missing_host_path_is_not_derived_from_cwd(self, monkeypatch):
     monkeypatch.setenv('RIDE_WORKSPACE', 'feature')
     assert SessionFacts.collect().host_workspace is None
-
-  def test_a_native_run_records_its_own_command(self, monkeypatch):
-    monkeypatch.setenv('BRO_SHELL_COMMAND', 'bro chat dev')
-    facts = SessionFacts.collect()
-    assert facts.shell_command == 'bro chat dev'
-    assert facts.ride_command is None
 
   def test_no_session_context(self):
     facts = SessionFacts.collect()
@@ -91,7 +81,6 @@ class TestSessionFacts:
     assert facts.bro is None
     assert facts.host_workspace is None
     assert facts.exec_command is None
-    assert facts.shell_command is None
     assert facts.ride_command is None
     assert facts.may_summon is None
     assert facts.summoned is False
@@ -142,7 +131,6 @@ def _facts(**overrides) -> SessionFacts:
     'container_workspace': '/workspace',
     'exec_command': 'ride exec task',
     'ride_command': None,
-    'shell_command': None,
     'recording_problem': None,
     'may_summon': None,
     'summoned': False,
@@ -157,7 +145,6 @@ class TestRenderBanner:
     out = _facts(
       bro='dev',
       ride_command='ride along --bro bro task',
-      shell_command='dive-in -t x',
     ).render_llm()
     assert '\033[' not in out  # no ANSI
     assert '██' not in out  # no logo
@@ -169,10 +156,9 @@ class TestRenderBanner:
     assert 'docker_shell_command: ride exec task' in out
     assert 'ride_command: ride along --bro bro task' in out
     assert 'launch_command:' not in out
-    assert 'dive-in -t x' not in out
 
   def test_llm_emits_ride_command_for_direct_session(self):
-    out = _facts(ride_command='ride along feature', shell_command='ride along feature').render_llm()
+    out = _facts(ride_command='ride along feature').render_llm()
     assert 'ride_command: ride along feature' in out
     assert 'launch_command:' not in out
 
@@ -309,18 +295,10 @@ class TestRenderBanner:
     ).render_visual()
     assert '(unknown' in out
 
-  def test_visual_launch_line_prefers_the_ride_command(self):
-    out = _facts(
-      ride_command='ride along --bro bro task', shell_command='bro chat bro'
-    ).render_visual()
+  def test_visual_shows_the_ride_command_as_launched(self):
+    out = _facts(ride_command='ride along --bro bro task').render_visual()
     assert 'launched:' in out
     assert 'ride along --bro bro task' in out
-    assert 'bro chat bro' not in out
-
-  def test_visual_launch_line_falls_back_to_the_native_command(self):
-    out = _facts(shell_command='bro chat bro').render_visual()
-    assert 'launched:' in out
-    assert 'bro chat bro' in out
 
   def test_llm_emits_the_recording_problem_as_first_line(self):
     out = _facts(recording_problem='FAILING — see session-recorder.log').render_llm()

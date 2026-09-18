@@ -1,7 +1,6 @@
 """In-process one-shot bro launcher."""
 
 import asyncio
-import os
 import sys
 from typing import TYPE_CHECKING, Optional
 
@@ -12,7 +11,6 @@ from bro.launch.llm_flags import (
   EFFORT_HELP,
   FAST_HELP,
   add_llm_flags,
-  canonicalize,
   resolve_native,
   selection_from_args,
 )
@@ -71,12 +69,10 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   args = parser.parse(argv)
   try:
     selection = selection_from_args(args)
-    canonicalize(args, selection)
     bro = create_bro_for_run(args['bro'], selection)
   except (KeyError, NotImplementedError, LLMSelectionError) as error:
     log.error('%s', error)
     return 1
-  os.environ.setdefault('BRO_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=program)))
 
   from bro.launch.broxy import session_broxy
 
