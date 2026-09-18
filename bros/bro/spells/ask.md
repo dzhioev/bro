@@ -12,7 +12,7 @@ A summon succeeds only when the target is in the summoner's allow-list
 — the session reads its own off the banner, fixed at launch
 — so a denial stays a normal outcome the spell relays.
 
-version: 1.17.0
+version: 1.18.0
 ---
 
 # Ask
@@ -267,18 +267,22 @@ If the user asked for a follow-up action on the answer, continue with it.
 ## Do not exit with a summon in flight
 
 When the session's root process exits, in-flight summoned children are killed (an in-flight manual child is only detached — the user's session lives on, but its answer can no longer arrive).
+When a summoned session exits with summons of its own in flight, those end `failed:orphaned` and their children are killed the same way.
 Before ending the session (or letting it end), wait for pending summons with `summon check --wait`;
 if a result was lost this way it is still recoverable from the child's trail.
 
 ## Stopping one deliberately
 
-The protocol has no per-child cancel command.
-The supported stop is ending the ride's root session, whose supervisor terminates every in-flight child;
-a manual child is detached instead because its user owns that launch.
-Launcher-side operators can stop a boxed child's container directly;
-an unboxed child, whether it starts or joins a party, is the supervised `do-ride` process group and has no separate session-side stop surface.
+`summon cancel <request-id>` ends a child quest this session summoned:
+the quest ends `failed:cancelled`, whatever the child summoned in turn ends `failed:orphaned`, a spawned child is killed, and a manual child is only detached
+— its user-owned session lives on, no longer answering the quest.
+The command returns once the quest has ended;
+`--timeout <s>` bounds the wait and exits 3 when it passes first, with the end still on its way.
+The tool client is `summon_cancel(request_id, timeout?)`, returning the ended state with its outcome or a pending one at the bound.
+Only the session that requested a quest can cancel it, so a grandchild is stopped by cancelling the child that summoned it.
+Ending the ride's root session still stops every in-flight child at once.
 A child that ran for a while has usually left durable state behind
 — a trail, a retained failed workspace, a pushed branch, an open PR, a review watcher now dead, or task comments.
-Reconcile that state *after* the process stops, not before:
+Reconcile that state *after* the cancel returns, not before:
 a PR can appear during shutdown.
 Record on the task what was left unattended.

@@ -802,6 +802,9 @@ A reply is authorized by the other end's question right.
 A summon defaults to `worker.say` and widens only through the request's `talk` field, spelled `--talk <right>[,<right>]` by the CLI;
 the host fixes and enforces the set when the quest opens, while both peer surfaces refuse a forbidden move before sending.
 The answer comes back synchronously, while permitted messages can travel for the quest's whole life.
+A quest also ends before its answer when its requester is gone or says so:
+a summoned session's exit, or a manual session's disconnect, ends every quest it requested as `failed:orphaned` and ends their workers down the tree, killing a spawned child and detaching a manual one,
+and the `cancel` kind ends one live quest its requester names as `failed:cancelled` the same way.
 A nested bro summon stamps the child trail's `summoned_by.trail_id`;
 a root session summon omits provenance until the session recorder publishes its current trail id.
 The UX is the shared `spell::ask` spell (`bros/bro/spells/ask.md`, inherited by every bro);
@@ -835,6 +838,8 @@ underneath it are two client surfaces over the same request:
   On a child quest it names the target and request;
   on the session's own quest it renders the other end as `summoner` and never echoes the session's own says.
   An event-retention gap prints a notice and re-arms from the current head.
+  `summon cancel <id> [--timeout <seconds>]` ends a child quest this session summoned and waits for the quest to end;
+  it exits 0 once the quest has ended and 3 when the bound passes first, the end still on its way.
   In a claude session, long summons run via the harness's background Bash;
   `rewind show <trail-id>` peeks mid-run.
   Contract details in `bro/summon.py`.
@@ -845,7 +850,8 @@ underneath it are two client surfaces over the same request:
   answer it with `summon_say`, then continue the same quest through `summon_check`.
   `summon_say` mirrors the CLI's say, reply, and bounded question roles at either end of the quest.
   `summon_check` mirrors the CLI's child or own-quest views and loops short long-polls with `wait: true` until terminal, a chat change, or its optional timeout;
-  `summon_list` mirrors the paginated CLI listing wherever the broker channel mounts the summon tools.
+  `summon_list` mirrors the paginated CLI listing wherever the broker channel mounts the summon tools,
+  and `summon_cancel` mirrors the CLI's cancel with the same bounded wait.
   A blocking tool call owns its channel client so cancellation aborts the current short wait, while the host journal retains the result and chat;
   MCP-served builds carry transport cautions that keep waits under the harness cap and recover by id instead of sending twice.
 

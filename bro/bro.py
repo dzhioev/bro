@@ -319,6 +319,18 @@ _SUMMON_CHECK_DESCRIPTION = (
 )
 
 
+_SUMMON_CANCEL_DESCRIPTION = (
+  'end a child summon by request id: its quest ends failed:cancelled, and whatever that '
+  'child summoned in turn ends failed:orphaned. a spawned child is killed; a manual child '
+  "is only detached from the quest, since the user's own session answers it and lives on. "
+  'waits for the quest to end and returns an ended state with its outcome, or a pending '
+  'state when the optional `timeout` seconds pass first; the end still comes, and '
+  '`summon_check` reads it. fails with the reason for a quest this session did not request '
+  'or that has already ended.'
+  "{{when #wire = mcp}} CAUTION: size `timeout` below the harness's idle cap.{{end}}"
+)
+
+
 _SUMMON_LIST_DESCRIPTION = (
   "list this session's caller-visible retained summon journal records, live first. "
   'each record carries its request id, args, talk, pending questions, lifecycle state, '
@@ -509,6 +521,26 @@ def _summon_list_tool(variables: Variables) -> llm_mcp.Tool:
   )
 
 
+def _summon_cancel_tool(variables: Variables) -> llm_mcp.Tool:
+  from bro import summon as summon_client
+
+  async def _summon_cancel(request_id: str, timeout: Optional[float] = None) -> dict[str, Any]:
+    if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
+      raise ValueError('timeout must be a finite positive number')
+    with summon_client.open_client() as client:
+      status = await off_loop(
+        summon_client.cancel_summon, request_id, timeout=timeout, client=client
+      )
+    return summon_client.cancel_view(status)
+
+  return llm_mcp.FunctionTool(
+    _summon_cancel,
+    name='summon_cancel',
+    description=_SUMMON_CANCEL_DESCRIPTION,
+    variables=variables,
+  )
+
+
 def _summon_check_tool(variables: Variables) -> llm_mcp.Tool:
   from bro import summon as summon_client
 
@@ -550,6 +582,7 @@ _SERVICE_TOOL_NAMES = (
   'summon_say',
   'summon_check',
   'summon_list',
+  'summon_cancel',
 )
 
 
@@ -570,8 +603,8 @@ def _build_service_server(
   # sense non-interactively (a caller to abort to — interactive callers pass
   # include_raise=False); `answer` is the summoned run's delivery surface — it
   # needs the summoned mark and broker intent, plus a killable session on the
-  # mcp wire (the bare flavor ends the run by exception); all three summon
-  # read/write tools need the same intent. The decided roster
+  # mcp wire (the bare flavor ends the run by exception); the summon tools
+  # need the same intent. The decided roster
   # then feeds the tools' rendering vocabulary: service tools are harness
   # features, the one tool surface that conditions on system facts, so `#wire`
   # is injected next to the `#tools` roster.
@@ -594,7 +627,7 @@ def _build_service_server(
   if has_answer:
     mounted.append('answer')
   if has_broker:
-    mounted.extend(['summon', 'summon_say', 'summon_check', 'summon_list'])
+    mounted.extend(['summon', 'summon_say', 'summon_check', 'summon_list', 'summon_cancel'])
   variables: Variables = {
     **mcp.surface_variables(wire=wire),
     'tools': SetVariable(frozenset(mounted), universe=frozenset(_SERVICE_TOOL_NAMES)),
@@ -614,6 +647,7 @@ def _build_service_server(
     tools.append(_summon_say_tool(variables))
     tools.append(_summon_check_tool(variables))
     tools.append(_summon_list_tool(variables))
+    tools.append(_summon_cancel_tool(variables))
   assert [tool.name for tool in tools] == mounted
   server = llm_mcp.InProcessMCPServer('bro', tools)
   server.tool_universe = _SERVICE_TOOL_NAMES

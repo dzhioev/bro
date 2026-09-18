@@ -1453,14 +1453,18 @@ class TestSummonTool:
     non_interactive = await _collect_tool_names(_native_servers(bro, hold='unattended'))
     interactive = await _collect_tool_names(_native_servers(bro, hold='guided'))
     # interactive surfaces (`call`) summon too — only `raise` is non-interactive-only
-    assert {'summon', 'summon_say', 'summon_check', 'summon_list'} <= set(non_interactive)
-    assert {'summon', 'summon_say', 'summon_check', 'summon_list'} <= set(interactive)
+    assert {'summon', 'summon_say', 'summon_check', 'summon_list', 'summon_cancel'} <= set(
+      non_interactive
+    )
+    assert {'summon', 'summon_say', 'summon_check', 'summon_list', 'summon_cancel'} <= set(
+      interactive
+    )
 
   @pytest.mark.asyncio
   async def test_proxy_failure_state_keeps_the_broker_tools_present(self, monkeypatch):
     monkeypatch.setenv('BROKER_UPSTREAM', 'tcp://token@127.0.0.1:9')
     names = await _collect_tool_names([_service_server(EchoBro())])
-    assert {'summon', 'summon_say', 'summon_check', 'summon_list'} <= set(names)
+    assert {'summon', 'summon_say', 'summon_check', 'summon_list', 'summon_cancel'} <= set(names)
 
   @pytest.mark.asyncio
   async def test_summon_list_returns_the_journal_records(self, monkeypatch):
@@ -1771,7 +1775,7 @@ class TestSummonTool:
     )
     mcp_tools = {t.name: t for t in await mcp_build.list_tools()}
     bare_tools = {t.name: t for t in await bare_build.list_tools()}
-    for name in ('summon', 'summon_say', 'summon_check'):
+    for name in ('summon', 'summon_say', 'summon_check', 'summon_cancel'):
       assert 'CAUTION' in mcp_tools[name].description
       assert 'CAUTION' not in bare_tools[name].description
 
@@ -1827,6 +1831,64 @@ class TestSummonTool:
       'trail_id': 'T1',
     }
     assert client.closed
+
+  @pytest.mark.asyncio
+  async def test_cancel_waits_on_its_own_client_and_returns_the_ended_state(self, monkeypatch):
+    from bro import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    client = _FakeSummonClient()
+    calls = []
+
+    def fake_cancel_summon(request_id, *, timeout=None, client=None):
+      calls.append({'request_id': request_id, 'timeout': timeout, 'client': client})
+      return summon_module.CancelStatus(
+        'ended', request_id, outcome='failed', reason='cancelled', trail_id='T1'
+      )
+
+    monkeypatch.setattr(summon_module, 'open_client', lambda: client)
+    monkeypatch.setattr(summon_module, 'cancel_summon', fake_cancel_summon)
+    tool = await _find_tool(EchoBro(), 'summon_cancel')
+
+    assert await tool.call({'request_id': 'REQ-1', 'timeout': 60}) == {
+      'state': 'ended',
+      'request_id': 'REQ-1',
+      'outcome': 'failed',
+      'reason': 'cancelled',
+      'trail_id': 'T1',
+    }
+    assert calls == [{'request_id': 'REQ-1', 'timeout': 60, 'client': client}]
+    assert client.closed
+
+  @pytest.mark.asyncio
+  async def test_cancel_returns_pending_at_its_deadline(self, monkeypatch):
+    from bro import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    client = _FakeSummonClient()
+    monkeypatch.setattr(summon_module, 'open_client', lambda: client)
+    monkeypatch.setattr(
+      summon_module,
+      'cancel_summon',
+      lambda request_id, *, timeout=None, client=None: summon_module.CancelStatus(
+        'pending', request_id
+      ),
+    )
+    tool = await _find_tool(EchoBro(), 'summon_cancel')
+
+    assert await tool.call({'request_id': 'REQ-1', 'timeout': 5}) == {
+      'state': 'pending',
+      'request_id': 'REQ-1',
+    }
+    assert client.closed
+
+  @pytest.mark.asyncio
+  @pytest.mark.parametrize('timeout', [float('nan'), float('inf'), 0])
+  async def test_cancel_rejects_a_non_finite_deadline(self, monkeypatch, timeout):
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    tool = await _find_tool(EchoBro(), 'summon_cancel')
+    with pytest.raises(ValueError, match='finite positive'):
+      await tool.call({'request_id': 'REQ-1', 'timeout': timeout})
 
   @pytest.mark.asyncio
   async def test_check_timeout_without_wait_is_an_error(self, monkeypatch):

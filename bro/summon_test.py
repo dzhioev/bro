@@ -856,7 +856,7 @@ def test_wait_deadline_bounds_a_stalled_broker_read(monkeypatch):
 
   monkeypatch.setattr(summon.time, 'monotonic', lambda: next(ticks))
 
-  with pytest.raises(summon.SummonError, match="no reply to broker 'query' read within 5s"):
+  with pytest.raises(summon.SummonError, match="no reply to broker 'query' request within 5s"):
     summon.wait_summon('REQ-1', timeout=5, client=client)
 
   client.call.assert_called_once_with('query', {'id': 'REQ-1'}, 5)
@@ -966,6 +966,101 @@ async def test_unknown_and_evicted_checks_fail(monkeypatch, caplog):
     assert await evicted == 1
   assert 'unknown quest id' in caplog.text
   assert 'no longer retained' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_cancel_sends_the_cancel_then_waits_for_the_quest_to_end(monkeypatch, caplog):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'cancel', 'REQ-1']))
+    channel, cancel = await _next(server)
+    assert cancel.kind == 'cancel'
+    assert cancel.args == {'id': 'REQ-1'}
+    await _reply(server, channel, cancel, outcome='ok')
+    channel, query = await _next(server)
+    assert query.args == {'id': 'REQ-1'}
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={'quest': _quest('REQ-1', 'started', trail_id='T9')},
+    )
+    channel, wait = await _next(server)
+    assert wait.args == {'id': 'REQ-1', 'wait': summon.READ_WAIT_SECONDS}
+    await _reply(
+      server,
+      channel,
+      wait,
+      outcome='ok',
+      value={
+        'quest': _quest(
+          'REQ-1',
+          'ended',
+          outcome='failed',
+          reason='cancelled',
+          trail_id='T9',
+          result={'outcome': 'failed', 'detail': {'reason': 'cancelled', 'exit_code': 137}},
+        )
+      },
+    )
+
+    assert await task == 0
+  assert 'summon ended failed:cancelled (request REQ-1)' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_cancel_refusal_fails_without_waiting(monkeypatch, caplog):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'cancel', 'REQ-1']))
+    channel, cancel = await _next(server)
+    await _reply(
+      server,
+      channel,
+      cancel,
+      outcome='denied',
+      error="no live quest 'REQ-1' requested by this peer",
+    )
+
+    assert await task == 1
+  assert "no live quest 'REQ-1' requested by this peer" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_cancel_fails_on_an_unknown_state_or_an_evicted_outcome(monkeypatch, caplog):
+  async with running_server(monkeypatch) as server:
+    unknown = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'cancel', 'REQ-1']))
+    channel, cancel = await _next(server)
+    await _reply(server, channel, cancel, outcome='ok')
+    channel, query = await _next(server)
+    await _reply(server, channel, query, outcome='ok', value={'quest': _quest('REQ-1', 'limbo')})
+    assert await unknown == 1
+
+    evicted = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'cancel', 'REQ-2']))
+    channel, cancel = await _next(server)
+    await _reply(server, channel, cancel, outcome='ok')
+    channel, query = await _next(server)
+    await _reply(server, channel, query, outcome='ok', value={'quest': _quest('REQ-2', 'evicted')})
+    assert await evicted == 1
+  assert "summon quest 'REQ-1' has unknown state 'limbo'" in caplog.text
+  assert "summon quest 'REQ-2' ended but its outcome is no longer retained" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_cancel_timeout_exits_pending_while_the_end_is_under_way(monkeypatch, caplog):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(summon.main, ['summon', 'cancel', 'REQ-1', '--timeout', '0.2'])
+    )
+    channel, cancel = await _next(server)
+    await _reply(server, channel, cancel, outcome='ok')
+    channel, query = await _next(server)
+    await _reply(server, channel, query, outcome='ok', value={'quest': _quest('REQ-1', 'started')})
+    _, wait = await _next(server)
+    assert wait.args['id'] == 'REQ-1'
+    assert 0 < wait.args['wait'] <= 0.2
+
+    assert await task == summon.PENDING_EXIT_CODE
+  assert 'summon cancel accepted; request REQ-1 has not ended within 0s' in caplog.text
 
 
 @pytest.mark.asyncio

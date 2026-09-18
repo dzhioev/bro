@@ -10,11 +10,13 @@ import pytest
 from bro.broker import brotocol
 from bro.broker.brotocol import Message, Tag
 from bro.broker.dispatcher import (
+  CANCEL,
   EVENTS,
   PING,
   QUERY,
   TERMINATED_EXIT_CODE,
   Dispatcher,
+  cancel_handler,
   events_handler,
   ping_handler,
   query_handler,
@@ -52,11 +54,13 @@ class FakeRuntime:
     self.sent = []
     self.events = {}
     self.handle = None
+    self.handles: dict[str, FakeHandle] = {}
     self.stopped = False
     self.launch_messages = []
     self.launch_error: Optional[Exception] = None
     self.provision_error: Optional[Exception] = None
     self.kill_release: Optional[asyncio.Event] = None
+    self.launch_gate: Optional[asyncio.Event] = None
 
   async def provision(self, events):
     if self.provision_error is not None:
@@ -68,7 +72,10 @@ class FakeRuntime:
   async def launch(self, launch, provisioned, quest, talk):
     if self.launch_error is not None:
       raise self.launch_error
+    if self.launch_gate is not None:
+      await self.launch_gate.wait()
     self.handle = FakeHandle(self.kill_release)
+    self.handles[quest] = self.handle
     for message in self.launch_messages:
       self.events[provisioned.channel].on_message(message)
     return self.handle
@@ -97,6 +104,10 @@ async def _settle():
 
 def _request(kind, args, quest):
   return Message(type=Tag.REQUEST, id=quest, payload={'kind': kind, 'args': args})
+
+
+def _spawn_handler(context, peer, message):
+  context.spawn(LaunchSpec(), peer, talk=frozenset())
 
 
 def _dispatcher(*, job_output=None):
@@ -787,3 +798,176 @@ def test_a_run_leaves_the_processs_sigterm_alone_unless_asked():
 
   assert outcome['code'] == 7
   assert signal.getsignal(signal.SIGTERM) is before
+
+
+@pytest.mark.asyncio
+async def test_a_dead_requester_orphans_the_quests_it_asked_for_down_the_tree():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on('work', _spawn_handler)
+  dispatcher.on_message('requester', _request('work', {}, 'child'))
+  await _settle()
+  child_peer = dispatcher.journal.records['child'].worker
+  assert child_peer is not None
+  runtime.events[child_peer].on_message(_request('work', {}, 'grandchild'))
+  await _settle()
+  grandchild_peer = dispatcher.journal.records['grandchild'].worker
+  assert grandchild_peer is not None
+  runtime.events[grandchild_peer].on_message(_request('work', {}, 'great-grandchild'))
+  await _settle()
+  delivered_before = len(runtime.sent)
+
+  runtime.handles['child'].exit.set_result(1)
+  await _settle()
+  await _settle()
+
+  records = dispatcher.journal.records
+  assert (records['child'].outcome, records['child'].reason) == ('failed', 'exit')
+  assert (records['grandchild'].outcome, records['grandchild'].reason) == ('failed', 'orphaned')
+  assert records['great-grandchild'].reason == 'orphaned'
+  assert records['grandchild'].result == {
+    'outcome': 'failed',
+    'detail': {'reason': 'orphaned', 'exit_code': -15, 'output_tail': 'output'},
+  }
+  assert runtime.handles['grandchild'].killed
+  assert runtime.handles['great-grandchild'].killed
+  assert dispatcher.live == {}
+  assert set(dispatcher.workers) == {'requester'}
+  # the dead child's own failure reaches its requester; nothing is sent to the dead child
+  assert [
+    (peer, message.quest_id, message.payload['detail']['reason'])
+    for peer, message in runtime.sent[delivered_before:]
+  ] == [('requester', 'child', 'exit')]
+
+
+@pytest.mark.asyncio
+async def test_root_exit_keeps_closing_live_quests_as_killed():
+  runtime = FakeRuntime()
+  dispatcher = Dispatcher()
+  dispatcher.bind(cast(Runtime, runtime))
+  dispatcher.on('work', _spawn_handler)
+  run = asyncio.create_task(dispatcher.run(LaunchSpec()))
+  await _settle()
+  root_peer = dispatcher.root
+  assert root_peer is not None
+  runtime.events[root_peer].on_message(_request('work', {}, 'child'))
+  await _settle()
+
+  runtime.handles[dispatcher.workers[root_peer]].exit.set_result(0)
+
+  assert await run == 0
+  child = dispatcher.journal.records['child']
+  assert (child.outcome, child.reason) == ('killed', 'killed')
+  assert runtime.handles['child'].killed
+
+
+@pytest.mark.asyncio
+async def test_cancel_ends_the_requesters_live_quest_and_orphans_what_it_asked_for():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on(CANCEL, cancel_handler)
+  dispatcher.on('work', _spawn_handler)
+  dispatcher.on_message('requester', _request('work', {}, 'child'))
+  await _settle()
+  child_peer = dispatcher.journal.records['child'].worker
+  assert child_peer is not None
+  runtime.events[child_peer].on_message(_request('work', {}, 'grandchild'))
+  await _settle()
+
+  dispatcher.on_message('requester', _request(CANCEL, {'id': 'child'}, 'cancel-child'))
+
+  reply = runtime.sent[-1][1]
+  assert (reply.quest_id, reply.payload) == ('cancel-child', {'outcome': 'ok'})
+  assert not dispatcher.journal.knows('cancel-child')
+  await _settle()
+  await _settle()
+  assert runtime.handles['child'].killed
+  child = dispatcher.journal.records['child']
+  assert (child.outcome, child.reason) == ('failed', 'cancelled')
+  assert child.result == {
+    'outcome': 'failed',
+    'detail': {'reason': 'cancelled', 'exit_code': -15, 'output_tail': 'output'},
+  }
+  assert [
+    peer
+    for peer, message in runtime.sent
+    if message.type == Tag.RESULT and message.quest_id == 'child'
+  ] == ['requester']
+  assert dispatcher.journal.records['grandchild'].reason == 'orphaned'
+  assert runtime.handles['grandchild'].killed
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_launch_answers_at_once_and_ends_the_quest_on_the_late_reap():
+  dispatcher, runtime = _dispatcher()
+  runtime.launch_gate = asyncio.Event()
+  dispatcher.on(CANCEL, cancel_handler)
+  dispatcher.on('work', _spawn_handler)
+  dispatcher.on_message('requester', _request('work', {}, 'child'))
+  await _settle()
+  assert dispatcher.journal.records['child'].started_at is None
+
+  dispatcher.on_message('requester', _request(CANCEL, {'id': 'child'}, 'cancel-child'))
+  await _settle()
+
+  assert [(message.quest_id, message.outcome) for _, message in runtime.sent[-1:]] == [
+    ('cancel-child', 'ok'),
+  ]
+  assert 'child' in dispatcher.live
+  runtime.launch_gate.set()
+  await _settle()
+  await _settle()
+  assert runtime.handles['child'].killed
+  child = dispatcher.journal.records['child']
+  assert (child.outcome, child.reason) == ('failed', 'cancelled')
+  assert [(message.quest_id, message.outcome) for _, message in runtime.sent[-1:]] == [
+    ('child', 'failed'),
+  ]
+
+
+@pytest.mark.asyncio
+async def test_a_result_sent_during_the_kill_does_not_outrun_the_cancel():
+  dispatcher, runtime = _dispatcher()
+  runtime.kill_release = asyncio.Event()
+  dispatcher.on(CANCEL, cancel_handler)
+  dispatcher.on('work', _spawn_handler)
+  dispatcher.on_message('requester', _request('work', {}, 'child'))
+  await _settle()
+  child_peer = dispatcher.journal.records['child'].worker
+  assert child_peer is not None
+
+  dispatcher.on_message('requester', _request(CANCEL, {'id': 'child'}, 'cancel-child'))
+  await _settle()
+  runtime.events[child_peer].on_message(brotocol.result('child', 'ok', value='too late'))
+  await _settle()
+
+  assert 'child' in dispatcher.live
+  assert runtime.handles['child'].killed
+  assert not runtime.handles['child'].exit.done()
+  runtime.kill_release.set()
+  await _settle()
+  await _settle()
+  child = dispatcher.journal.records['child']
+  assert (child.outcome, child.reason) == ('failed', 'cancelled')
+  assert [
+    message.outcome
+    for _, message in runtime.sent
+    if message.type == Tag.RESULT and message.quest_id == 'child'
+  ] == ['failed']
+
+
+def test_cancel_is_denied_unless_the_peer_requested_a_live_quest():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on(CANCEL, cancel_handler)
+  _live_chat(dispatcher, talk=set())
+  ended = dispatcher.journal.open('done', 'summon', 'root-quest', 'requester', {})
+  dispatcher.journal.end(ended, {'outcome': 'ok'})
+
+  dispatcher.on_message('child-worker', _request(CANCEL, {'id': 'child'}, 'cancel-1'))
+  dispatcher.on_message('stranger', _request(CANCEL, {'id': 'child'}, 'cancel-2'))
+  dispatcher.on_message('requester', _request(CANCEL, {'id': 'missing'}, 'cancel-3'))
+  dispatcher.on_message('requester', _request(CANCEL, {'id': 'done'}, 'cancel-4'))
+  dispatcher.on_message('requester', _request(CANCEL, {}, 'cancel-5'))
+  dispatcher.on_message('requester', _request(CANCEL, {'id': 'child', 'now': True}, 'cancel-6'))
+
+  assert [message.outcome for _, message in runtime.sent] == ['denied'] * 6
+  assert 'child' in dispatcher.live
+  assert not any(dispatcher.journal.knows(f'cancel-{index}') for index in range(1, 7))

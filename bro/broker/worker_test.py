@@ -430,3 +430,190 @@ async def test_job_worker_carries_collected_output_on_failure(tmp_path):
   assert result.payload['detail']['reason'] == 'exit'
   assert result.payload['detail']['exit_code'] == 3
   assert result.payload['detail']['ref'] == 'artifact'
+
+
+@pytest.mark.asyncio
+async def test_spawned_worker_end_kills_the_process_and_reports_the_reason_on_reap(tmp_path):
+  runtime = FakeRuntime(tmp_path)
+  listener = Listener()
+  worker = SpawnedWorker(
+    cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=10
+  )
+  worker.begin()
+  await _settle()
+
+  worker.end('cancelled')
+  worker.end('orphaned')
+  await _settle()
+
+  assert runtime.handle.killed
+  assert [report.reason for report in listener.deaths] == ['cancelled']
+  assert listener.deaths[0].exit_code == -15
+  assert listener.deaths[0].output_tail == 'tail'
+
+
+@pytest.mark.asyncio
+async def test_end_before_start_reports_only_once_the_late_handle_is_reaped(tmp_path):
+  class DelayedRuntime(FakeRuntime):
+    async def launch(self, launch, provisioned, quest, talk):
+      await asyncio.sleep(0.02)
+      return self.handle
+
+  runtime = DelayedRuntime(tmp_path)
+  listener = Listener()
+  worker = SpawnedWorker(
+    cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=10
+  )
+  worker.begin()
+  await _settle()
+
+  worker.end('orphaned')
+  await _settle()
+
+  assert worker.ending
+  assert listener.deaths == []
+  assert not runtime.handle.killed
+  await asyncio.sleep(0.05)
+  assert runtime.handle.killed
+  assert [report.reason for report in listener.deaths] == ['orphaned']
+  assert not worker.ending
+
+
+@pytest.mark.asyncio
+async def test_end_before_start_outranks_the_failure_of_the_interrupted_launch(tmp_path):
+  class FailingRuntime(FakeRuntime):
+    async def launch(self, launch, provisioned, quest, talk):
+      await asyncio.sleep(0.02)
+      raise RuntimeError('launch broke')
+
+  runtime = FailingRuntime(tmp_path)
+  listener = Listener()
+  worker = SpawnedWorker(
+    cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=10
+  )
+  worker.begin()
+  await _settle()
+
+  worker.end('cancelled')
+  await _settle()
+
+  assert listener.deaths == []
+  await asyncio.sleep(0.05)
+  assert [(report.reason, report.error) for report in listener.deaths] == [
+    ('cancelled', 'launch broke'),
+  ]
+
+
+@pytest.mark.asyncio
+async def test_expected_worker_end_during_preparation_reports_once_it_has_completed(tmp_path):
+  effects: list[str] = []
+  seen_at_death: list[list[str]] = []
+
+  class RecordingListener(Listener):
+    def on_worker_death(self, worker, report):
+      super().on_worker_death(worker, report)
+      seen_at_death.append(list(effects))
+
+  runtime = FakeRuntime(tmp_path)
+  listener = RecordingListener()
+  preparing = threading.Event()
+  release = threading.Event()
+
+  def ready(provisioned):
+    del provisioned
+    preparing.set()
+    assert release.wait(5)
+    effects.append('token written')
+
+  worker = ExpectedWorker(cast(Runtime, runtime), listener, 'quest', ready)
+  worker.begin()
+  async with asyncio.timeout(5):
+    while not preparing.is_set():
+      await asyncio.sleep(0.01)
+
+  worker.end('cancelled')
+  await _settle()
+
+  assert listener.deaths == []
+  release.set()
+  async with asyncio.timeout(5):
+    while listener.deaths == []:
+      await asyncio.sleep(0.01)
+  assert [report.reason for report in listener.deaths] == ['cancelled']
+  assert seen_at_death == [['token written']]
+  assert listener.ready == []
+
+
+@pytest.mark.asyncio
+async def test_expected_worker_end_reports_the_reason_instead_of_disconnected(tmp_path):
+  runtime = FakeRuntime(tmp_path)
+  listener = Listener()
+  worker = ExpectedWorker(cast(Runtime, runtime), listener, 'quest', lambda provisioned: None)
+  worker.begin()
+  await _settle()
+  assert runtime.events is not None
+  runtime.events.on_connect()
+
+  worker.end('cancelled')
+  await _settle()
+
+  assert [report.reason for report in listener.deaths] == ['cancelled']
+
+
+@pytest.mark.asyncio
+async def test_job_worker_end_reports_the_reason_with_its_collected_output(tmp_path):
+  runtime = FakeRuntime(tmp_path)
+  listener = Listener()
+  output = FakeOutput(tmp_path / 'run')
+  worker = JobWorker(
+    cast(Runtime, runtime),
+    listener,
+    'quest',
+    CommandJob(('sleep', '60'), {}),
+    output,
+    None,
+    'requester',
+    timeout=10,
+  )
+  worker.begin()
+  await _settle()
+
+  worker.end('cancelled')
+  await asyncio.sleep(0.05)
+
+  assert runtime.handle.killed
+  result = listener.messages[-1][0]
+  assert result.payload['outcome'] == 'failed'
+  assert result.payload['detail'] == {'reason': 'cancelled', 'exit_code': -15, 'ref': 'artifact'}
+  assert [report.reason for report in listener.deaths] == ['cancelled']
+
+
+@pytest.mark.asyncio
+async def test_job_worker_end_during_collection_reports_the_reason(tmp_path):
+  class StalledOutput(FakeOutput):
+    async def collect(self, directory, context, requester) -> dict:
+      await asyncio.Event().wait()
+      raise AssertionError('stalled collection resumed')
+
+  runtime = FakeRuntime(tmp_path)
+  listener = Listener()
+  worker = JobWorker(
+    cast(Runtime, runtime),
+    listener,
+    'quest',
+    CommandJob(('true',), {}),
+    StalledOutput(tmp_path / 'run'),
+    None,
+    'requester',
+    timeout=10,
+  )
+  worker.begin()
+  await _settle()
+  runtime.handle.exit.set_result(0)
+  await asyncio.sleep(0.02)
+
+  worker.end('orphaned')
+  await _settle()
+
+  assert [report.reason for report in listener.deaths] == ['orphaned']
+  assert listener.deaths[0].exit_code == 0
