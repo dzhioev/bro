@@ -4,6 +4,7 @@ import pytest
 
 from bro.llm.observer import (
   InterimAssistantTextEvent,
+  NotificationEvent,
   NullObserver,
   ReasoningEvent,
   ToolCallEvent,
@@ -21,6 +22,7 @@ def test_null_observer_discards_every_event():
     TurnStartedEvent('input'),
     ReasoningEvent('thinking'),
     InterimAssistantTextEvent('working'),
+    NotificationEvent('background news', ('job-1',)),
     ToolCallEvent('call-1', 'service__tool', {'value': 1}),
     ToolResultEvent('call-1', 'service__tool', {'ok': True}),
     TurnCompletedEvent('done'),

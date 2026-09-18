@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 import bro.base.args as base_args
+from bro.inbox import Inbox
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.mcp import MCPServer, ToolRegistry
 from bro.llm.observer import NullObserver, Observer
@@ -15,11 +16,13 @@ from bro.llm.tracker import NullTracker, Tracker
 class LLM(ABC):
   def __init__(
     self,
+    inbox: Inbox,
     mcp_servers: Optional[list[MCPServer]] = None,
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
     agent: Optional[str] = None,
   ):
+    self.inbox = inbox
     self.tools = ToolRegistry(mcp_servers if mcp_servers is not None else [])
     self.observer: Observer = observer if observer is not None else NullObserver()
     self.tracker: Tracker = tracker if tracker is not None else NullTracker()
@@ -27,6 +30,9 @@ class LLM(ABC):
 
   @abstractmethod
   async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str: ...
+
+  async def wake(self, *, request_timeout: Optional[float] = None) -> str:
+    raise NotImplementedError
 
   def cumulative_usage(self) -> Optional[dict[str, dict[str, int]]]:
     """per-model counts in the four billed token classes (`bro.llm.usage.CLASSES`),
@@ -44,7 +50,7 @@ async def llm_main(request: str, provider: str, model: Optional[str], attachment
     raise ValueError(f'provider {provider!r} builds no in-process client')
   if model is not None:
     spec = dataclasses.replace(spec, model=llm_providers.resolve_model(provider, model))
-  instance = native_providers.create(spec)
+  instance = native_providers.create(spec, Inbox())
   content: list[dict] = [{'type': 'text', 'text': request}]
   for path in attachments:
     content.append({'type': 'image_url', 'image_url': {'url': path}})

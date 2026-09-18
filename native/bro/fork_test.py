@@ -518,9 +518,10 @@ def _patch_native_openai_create(stub_responses):
   captured_kwargs: list[dict] = []
   created: list[openai_module.OpenAI] = []
 
-  def _create(spec, mcp_servers=None, observer=None, tracker=None, agent=None):
+  def _create(spec, inbox, mcp_servers=None, observer=None, tracker=None, agent=None):
     gpt = openai_module.OpenAI(
       api_key='dummy',
+      inbox=inbox,
       model=spec.model,
       reasoning_effort=spec.reasoning_effort,
       service_tier=spec.service_tier,

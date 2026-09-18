@@ -15,6 +15,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Static, TextArea
 from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
+from bro.base.offload import off_loop
 from bro.bro import AnswerDelivered
 from bro.launch.call import INTERRUPTED_NOTICE
 from bro.native.runner import Runner
@@ -124,6 +125,9 @@ class ChatApp(App):
     self._history = history if history is not None else []
     self._preset_name = preset_name
     self._turn: Worker | None = None
+    self._inbox_task: asyncio.Task | None = None
+    self._idle = asyncio.Event()
+    self._idle.set()
     self._display_lifetime = ExitStack()
     self._display_session: DisplaySession | None = None
     self._observer: LiveDisplayObserver | None = None
@@ -149,10 +153,15 @@ class ChatApp(App):
     )
     self._display_session.consume(self._history)
     self._display_session.consume(self._banner_notice())
+    self._inbox_task = asyncio.create_task(self._watch_inbox())
     if self._initial is not None and len(self._initial) > 0:
       self._submit(self._initial)
 
-  def on_unmount(self) -> None:
+  async def on_unmount(self) -> None:
+    if self._inbox_task is not None:
+      self._inbox_task.cancel()
+      with contextlib.suppress(asyncio.CancelledError):
+        await self._inbox_task
     self._display_lifetime.close()
 
   def on_text_selected(self) -> None:
@@ -187,6 +196,7 @@ class ChatApp(App):
     self._submit(event.text)
 
   def _begin_turn(self) -> None:
+    self._idle.clear()
     field = self.query_one('#input-bar', MessageInput)
     field.placeholder = _BUSY_PLACEHOLDER
     field.disabled = True
@@ -197,8 +207,60 @@ class ChatApp(App):
     field.disabled = False
     field.placeholder = _IDLE_PLACEHOLDER
     field.focus()
+    self._idle.set()
 
-  @work(exclusive=True)
+  async def _watch_inbox(self) -> None:
+    while True:
+      with self._runner.inbox.waiter() as cancelled:
+        await off_loop(self._runner.inbox.wait, None, cancelled)
+      await self._idle.wait()
+      if not self._runner.inbox.has_news():
+        continue
+      self._begin_turn()
+      self._turn = self._wake_from_news()
+
+  @work(exclusive=True, group='turn')
+  async def _wake_from_news(self) -> None:
+    observer = self._observer
+    session = self._display_session
+    if observer is None or session is None:
+      raise RuntimeError('chat display is not mounted')
+    try:
+      await self._runner.wake()
+    except AnswerDelivered as delivered:
+      self.delivered = delivered
+      self.exit()
+      return
+    except asyncio.CancelledError:
+      if self.is_running:
+        observer.close_activity()
+        session.consume(
+          Notice(
+            key=self._surface_key('interruption'),
+            origin=Origin.SURFACE,
+            timestamp=datetime.now().astimezone().isoformat(),
+            content=INTERRUPTED_NOTICE,
+            level='interruption',
+          )
+        )
+        self._end_turn()
+      raise
+    except Exception as error:
+      observer.close_activity()
+      if not observer.turn_finished:
+        session.consume(
+          Error(
+            key=self._surface_key('error'),
+            origin=Origin.SURFACE,
+            timestamp=datetime.now().astimezone().isoformat(),
+            content=f'{type(error).__name__}: {error}',
+          )
+        )
+      self._end_turn()
+      return
+    self._end_turn()
+
+  @work(exclusive=True, group='turn')
   async def _send_to_bro(self, text: str) -> None:
     observer = self._observer
     session = self._display_session

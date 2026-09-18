@@ -13,7 +13,8 @@ regenerate its scripts and committed
 
 ## Components
 
-- `bro/native/` — runner, live LLM contract, provider dispatch, and provider clients
+- `bro/native/` — runner, live LLM contract, provider dispatch, and provider clients;
+  the runner owns the core inbox and job registry, and OpenAI drains notifications after tool batches or into an idle turn
 - `bro/run.py` — the `bro` command dispatcher
 - `bro/launch/{run,call,call_tui,resume}.py` — native one-shot and interactive launch surfaces
 - `bro/fork.py` — replay and continuation of native trails

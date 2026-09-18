@@ -1,5 +1,6 @@
 from typing import Optional
 
+from bro.inbox import Inbox
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.llms.echo import LLMSpec as _EchoSpec
 from bro.llm.mcp import MCPServer
@@ -10,6 +11,7 @@ from bro.native.llm import LLM
 
 def create(
   spec: NativeLLMSpec,
+  inbox: Inbox,
   mcp_servers: Optional[list[MCPServer]] = None,
   observer: Optional[Observer] = None,
   tracker: Optional[Tracker] = None,
@@ -19,7 +21,7 @@ def create(
     raise TypeError(
       f'expected {_EchoSpec.__module__}.LLMSpec, got {type(spec).__module__}.{type(spec).__name__}'
     )
-  return Echo(mcp_servers=mcp_servers, observer=observer, tracker=tracker, agent=agent)
+  return Echo(inbox, mcp_servers=mcp_servers, observer=observer, tracker=tracker, agent=agent)
 
 
 class Echo(LLM):
@@ -34,3 +36,7 @@ class Echo(LLM):
       texts = [part.get('text', '') for part in content if part.get('type') == 'text']
       return '\n'.join(texts)
     return str(content)
+
+  async def wake(self, *, request_timeout: Optional[float] = None) -> str:
+    del request_timeout
+    return ''

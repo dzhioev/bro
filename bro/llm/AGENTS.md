@@ -55,7 +55,7 @@ The bro-native engine and provider clients live in `bro.native`.
 - `cli_tool.py` — the build side of `bro.mcp.sh(...)`:
   one installed CLI command served as a generated tool in the `sh` namespace, with a schema derived from `bro.base.args.CommandSignature` and a shell-free fixed argv.
 - `observer.py` — the closed provider-neutral `ObservedEvent` union and `Observer.on_event(event)` sink.
-  Providers emit reasoning, interim assistant text, and call-ID-aware tool events;
+  Providers emit reasoning, interim assistant text, background-job notifications, and call-ID-aware tool events;
   runners emit turn boundaries.
   `NullObserver` is the explicit no-op.
 - `usage.py` — shared per-model usage accounting, bro-run publishing and Claude transcript discovery, footer formatting/parsing, and the `usage` CLI.

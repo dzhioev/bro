@@ -377,6 +377,30 @@ def test_append_uses_ordinals_folds_raw_usage_and_is_idempotent(components):
   assert caught.value.actual == 3
 
 
+def test_notification_step_is_accepted_and_stored_as_text(components):
+  store, _, _ = components
+  trail_id = _blaze_bro(store)
+  body = '[notification: a background job reported]\njob output'
+
+  result = store.append_records(
+    trail_id,
+    offset=1,
+    records=[
+      {
+        'kind': 'notification',
+        'body': body,
+        'turn_index': 1,
+        'call_index': 2,
+        'job_ids': ['job-1'],
+      }
+    ],
+  )
+
+  assert result == {'extent': 2, 'appended': 1}
+  assert store.get_step(trail_id, 1)['body'] == body
+  assert store.check(trail_id)['ok'] is True
+
+
 def test_append_chunks_without_interleaving(components):
   store, dynamo, _ = components
   trail_id = _blaze_bro(store)
