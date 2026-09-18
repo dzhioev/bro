@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from bro.llm.observer import (
   InterimAssistantTextEvent,
+  NotificationEvent,
   ObservedEvent,
   Observer,
   ReasoningEvent,
@@ -24,6 +25,7 @@ from bro.trails.display.records import (
   Error,
   InterimAssistantText,
   LiveSource,
+  Notice,
   Origin,
   Reasoning,
   ToolCall,
@@ -87,6 +89,8 @@ class LiveDisplayObserver(Observer):
       record = Reasoning(content=event.content, **common)
     elif isinstance(event, InterimAssistantTextEvent):
       record = InterimAssistantText(content=event.content, **common)
+    elif isinstance(event, NotificationEvent):
+      record = Notice(content=event.content, **common)
     elif isinstance(event, ToolCallEvent):
       record = ToolCall(
         call_id=event.call_id,
@@ -136,7 +140,7 @@ class LiveDisplayObserver(Observer):
       self._consume_activity(self._activity_content())
     elif isinstance(event, (TurnCompletedEvent, TurnRefusedEvent, TurnFailedEvent)):
       self.close_activity()
-    elif isinstance(event, (ReasoningEvent, InterimAssistantTextEvent)):
+    elif isinstance(event, (ReasoningEvent, InterimAssistantTextEvent, NotificationEvent)):
       return
     else:
       assert_never(event)

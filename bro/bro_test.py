@@ -20,6 +20,8 @@ from bro.datasources.file import FileSource
 from bro.datasources.man import ManPage, ManSource
 from bro.datasources.searchable import Hit, SearchableDataSource
 from bro.harness import claude
+from bro.inbox import Inbox
+from bro.jobs import Registry
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer
 from bro.llm.tracker import ToolStepSource
 from bro.mcp import MCPServerSpec, describe
@@ -40,6 +42,8 @@ class StubRun:
   def __init__(self, trail_id: Optional[str] = None, tool_step: Optional[ToolStepSource] = None):
     self.trail_id = trail_id
     self.current_tool_step_id = tool_step
+    self.inbox = Inbox()
+    self.registry = Registry(self.inbox)
 
 
 def _native_servers(

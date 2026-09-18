@@ -12,9 +12,12 @@ from openai.types.responses import Response
 
 import bro.llm.usage as usage
 import bro.native.llms.openai as openai_llm
+from bro.inbox import Inbox
+from bro.jobs import Job, Registry
 from bro.llm.mcp import InProcessMCPServer, Tool, ToolControlSignal, ToolRegistry, wire_name
 from bro.llm.observer import (
   InterimAssistantTextEvent,
+  NotificationEvent,
   Observer,
   ReasoningEvent,
   ToolCallEvent,
@@ -48,7 +51,7 @@ class _StaticTool(Tool):
   def parameters(self) -> dict:
     return {'type': 'object', 'properties': {}}
 
-  async def call(self, arguments: dict):
+  async def call(self, arguments: dict) -> str:
     if self._raise_with is not None:
       raise self._raise_with
     return 'ok'
@@ -73,7 +76,7 @@ def _function_call_response(name: str) -> Response:
 
 
 def _make_openai(tools: list[Tool]) -> OpenAI:
-  gpt = OpenAI(api_key='dummy')
+  gpt = OpenAI(api_key='dummy', inbox=Inbox())
   gpt.tools = ToolRegistry([InProcessMCPServer(_TEST_NAMESPACE, tools)])
   return gpt
 
@@ -181,6 +184,7 @@ def _make_openai_with_tracker(
   reasoning_effort=None,
   compact_threshold: Optional[int] = None,
   agent: Optional[str] = None,
+  inbox: Optional[Inbox] = None,
 ) -> tuple[OpenAI, _RecordingTracker, list[dict]]:
   """build a OpenAI instance with mocked tool registry + tracker + a captured-
   kwargs sink for responses.create. callers wire `gpt.client.responses.create`
@@ -188,6 +192,7 @@ def _make_openai_with_tracker(
   """
   gpt = OpenAI(
     api_key='dummy',
+    inbox=inbox if inbox is not None else Inbox(),
     reasoning_effort=reasoning_effort,
     compact_threshold=compact_threshold,
     agent=agent,
@@ -539,6 +544,150 @@ class TestSendTrackerEmission:
     assert call_indexes == [1, 2]
 
 
+class _NewsTool(_StaticTool):
+  def __init__(self, registry: Registry):
+    super().__init__('news')
+    self.registry = registry
+
+  async def call(self, arguments: dict):
+    job = self.registry.start('printf "background news\\n"', 'watch')
+    await asyncio.to_thread(_wait_for_job, job)
+    return 'tool done'
+
+
+def _wait_for_job(job: Job) -> None:
+  with job._condition:
+    while not job._finished_locked():
+      job._condition.wait()
+
+
+class TestNotificationDelivery:
+  @pytest.mark.asyncio
+  async def test_tool_batch_appends_notification_after_function_outputs(self):
+    inbox = Inbox()
+    registry = Registry(inbox)
+    tool = _NewsTool(registry)
+    gpt, tracker, captured = _make_openai_with_tracker([tool], inbox=inbox)
+    observer = MagicMock(spec=Observer)
+    gpt.observer = observer
+    first = _fake_response(output=[_function_call_item('news', call_id='c1')])
+    second = _fake_response(output=[_message_item('done')], response_id='r2')
+    _install_responses(gpt, [first, second], captured)
+
+    assert await gpt.send([{'role': 'user', 'content': 'go'}]) == 'done'
+
+    [function_output, notification] = captured[1]['input']
+    assert function_output['type'] == 'function_call_output'
+    assert notification['role'] == 'user'
+    assert 'background news' in notification['content']
+    notification_steps = [step for step in tracker.steps if step[0] == 'notification']
+    assert notification_steps == [
+      (
+        'notification',
+        notification['content'],
+        {'turn_index': 0, 'call_index': 1, 'job_ids': ['job-1']},
+      )
+    ]
+    assert (
+      call(NotificationEvent(notification['content'], ('job-1',)))
+      in observer.on_event.call_args_list
+    )
+
+  @pytest.mark.asyncio
+  async def test_pending_news_precedes_the_next_user_message(self):
+    inbox = Inbox()
+    registry = Registry(inbox)
+    gpt, tracker, captured = _make_openai_with_tracker(inbox=inbox)
+    _install_responses(
+      gpt,
+      [
+        _fake_response(output=[_message_item('first')], response_id='r1'),
+        _fake_response(output=[_message_item('second')], response_id='r2'),
+      ],
+      captured,
+    )
+    await gpt.send([{'role': 'user', 'content': 'first'}])
+    job = registry.start('echo between turns', 'watch')
+    await asyncio.to_thread(_wait_for_job, job)
+
+    await gpt.send([{'role': 'user', 'content': 'second'}])
+
+    notification, user_message = captured[1]['input']
+    assert notification['role'] == 'user'
+    assert 'between turns' in notification['content']
+    assert user_message['role'] == 'user'
+    assert user_message['content'] == 'second'
+    turn_steps = [
+      (kind, extras['turn_index'])
+      for kind, _, extras in tracker.steps
+      if kind in {'notification', 'user_input'}
+    ]
+    assert turn_steps == [('user_input', 0), ('notification', 1), ('user_input', 1)]
+
+  @pytest.mark.asyncio
+  async def test_wake_starts_a_notification_only_turn(self):
+    inbox = Inbox()
+    registry = Registry(inbox)
+    gpt, tracker, captured = _make_openai_with_tracker(inbox=inbox)
+    _install_responses(
+      gpt,
+      [
+        _fake_response(output=[_message_item('first')], response_id='r1'),
+        _fake_response(output=[_message_item('noticed')], response_id='r2'),
+      ],
+      captured,
+    )
+    await gpt.send([{'role': 'user', 'content': 'first'}])
+    job = registry.start('echo wake', 'watch')
+    await asyncio.to_thread(_wait_for_job, job)
+
+    assert await gpt.wake() == 'noticed'
+
+    assert len(captured[1]['input']) == 1
+    assert captured[1]['input'][0]['role'] == 'user'
+    notification_steps = [step for step in tracker.steps if step[0] == 'notification']
+    assert notification_steps[0][2]['turn_index'] == 1
+    assert [step for step in tracker.steps if step[0] == 'user_input'] == [
+      ('user_input', 'first', {'turn_index': 0})
+    ]
+
+  @pytest.mark.asyncio
+  async def test_interrupted_delivery_rides_pending_input_into_the_next_turn(self):
+    inbox = Inbox()
+    registry = Registry(inbox)
+    tool = _NewsTool(registry)
+    gpt, tracker, captured = _make_openai_with_tracker([tool], inbox=inbox)
+    first = _fake_response(output=[_function_call_item('news', call_id='c1')])
+    followup_started = asyncio.Event()
+
+    async def create(**kwargs):
+      captured.append(kwargs)
+      if len(captured) == 1:
+        return first
+      followup_started.set()
+      await asyncio.Future()
+
+    gpt.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
+    turn = asyncio.create_task(gpt.send([{'role': 'user', 'content': 'go'}]))
+    await followup_started.wait()
+    turn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+      await turn
+
+    resumed: list[dict] = []
+    _install_responses(
+      gpt, [_fake_response(output=[_message_item('resumed')], response_id='r2')], resumed
+    )
+    assert await gpt.send([{'role': 'user', 'content': 'continue'}]) == 'resumed'
+
+    pending_output, pending_notification, user_message = resumed[0]['input']
+    assert pending_output['type'] == 'function_call_output'
+    assert pending_notification['role'] == 'user'
+    assert 'background news' in pending_notification['content']
+    assert user_message['content'] == 'continue'
+    assert len([step for step in tracker.steps if step[0] == 'notification']) == 1
+
+
 class TestParseResponse:
   def test_single_message_text_returned(self):
     response = _fake_response(output=[_message_item('hello')])
@@ -606,13 +755,13 @@ class TestReplyExtractionFallback:
 
 class TestReasoningKwargs:
   def test_include_added_when_reasoning_effort_set(self):
-    gpt = OpenAI(api_key='dummy', reasoning_effort='medium')
+    gpt = OpenAI(api_key='dummy', inbox=Inbox(), reasoning_effort='medium')
     kwargs = gpt._reasoning_kwargs()
     assert kwargs['reasoning'] == {'effort': 'medium', 'summary': 'auto'}
     assert kwargs['include'] == ['reasoning.encrypted_content']
 
   def test_no_include_when_reasoning_effort_absent(self):
-    gpt = OpenAI(api_key='dummy')
+    gpt = OpenAI(api_key='dummy', inbox=Inbox())
     assert gpt._reasoning_kwargs() == {}
 
   @pytest.mark.asyncio
@@ -626,13 +775,13 @@ class TestReasoningKwargs:
 
 class TestContextManagementKwargs:
   def test_kwargs_present_when_threshold_set(self):
-    gpt = OpenAI(api_key='dummy', compact_threshold=50_000)
+    gpt = OpenAI(api_key='dummy', inbox=Inbox(), compact_threshold=50_000)
     assert gpt._context_management_kwargs() == {
       'context_management': [{'type': 'compaction', 'compact_threshold': 50_000}]
     }
 
   def test_no_kwargs_when_threshold_absent(self):
-    gpt = OpenAI(api_key='dummy')
+    gpt = OpenAI(api_key='dummy', inbox=Inbox())
     assert gpt._context_management_kwargs() == {}
 
   @pytest.mark.asyncio

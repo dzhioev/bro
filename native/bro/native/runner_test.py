@@ -1,4 +1,7 @@
+import asyncio
 import os
+import threading
+import time
 from typing import ClassVar, Optional
 
 import pytest
@@ -10,6 +13,7 @@ from bro.bro import AnswerDelivered, BaseBro, BroRaised
 from bro.broker.brotocol import TALK_ENV, Message
 from bro.broker.client import CHANNEL_ENV, Client
 from bro.broker.transport import ClientTransport
+from bro.inbox import Inbox
 from bro.llm.mcp import InProcessMCPServer, MCPServer
 from bro.llm.observer import (
   NullObserver,
@@ -30,12 +34,18 @@ from bro.run_lifecycle import RunLifecycle
 
 class MockLLM(LLM):
   def __init__(self, response: str = 'mock', mcp_servers: Optional[list[MCPServer]] = None):
-    super().__init__(mcp_servers)
+    super().__init__(Inbox(), mcp_servers)
     self.response = response
     self.send_calls: list[list[dict]] = []
+    self.wake_calls = 0
 
   async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
     self.send_calls.append(messages)
+    return self.response
+
+  async def wake(self, *, request_timeout: Optional[float] = None) -> str:
+    self.inbox.drain()
+    self.wake_calls += 1
     return self.response
 
 
@@ -73,6 +83,7 @@ class StubRunner(Runner):
     self.llm = llm if llm is not None else MockLLM()
 
   def _create_llm(self, *, hold: str) -> LLM:
+    self.llm.inbox = self.inbox
     return self.llm
 
 
@@ -452,6 +463,14 @@ class TestLifetime:
         raise KeyboardInterrupt
     assert ends == ['ok']
 
+  def test_exit_closes_the_run_job_registry(self):
+    runner = StubRunner()
+    job = runner.registry.start('sleep 30')
+    with runner:
+      pass
+
+    assert job.process.wait(timeout=10) == -9
+
   @pytest.mark.asyncio
   async def test_context_ends_one_interactive_conversation(self):
     calls: list[str] = []
@@ -633,6 +652,21 @@ class TestSend:
     captured = await _captured_holds(lambda runner: runner.send('input', surface='test'))
     assert captured == ['guided']
 
+  @pytest.mark.asyncio
+  async def test_wake_runs_an_idle_notification_turn(self):
+    observer = CapturingObserver()
+    llm = MockLLM(response='noticed')
+    runner = StubRunner(llm)
+    await runner.send('first', observer=observer, surface='test')
+    job = runner.registry.start('echo news; sleep 30', 'watch')
+    assert await asyncio.to_thread(runner.inbox.wait, time.monotonic() + 10, threading.Event())
+
+    assert await runner.wake() == 'noticed'
+
+    assert llm.wake_calls == 1
+    assert observer.events[-1] == TurnCompletedEvent('noticed')
+    await asyncio.to_thread(job.kill)
+
 
 class _GatedBro(BaseBro):
   name = 'gated'
@@ -691,7 +725,7 @@ class TestCredentialGate:
 
 class _StubLLM(LLM):
   def __init__(self, response: str = 'ok', error: Optional[BaseException] = None):
-    super().__init__(mcp_servers=None)
+    super().__init__(Inbox(), mcp_servers=None)
     self._response = response
     self._error = error
 

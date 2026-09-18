@@ -235,7 +235,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
 
   **Observing.**
   `bro.llm.observer.ObservedEvent` is the provider-neutral live seam:
-  an `Observer` has one `on_event(event)` sink for turn starts, reasoning, interim assistant text, call-ID-scoped tool calls/results, and turn completion/refusal/failure.
+  an `Observer` has one `on_event(event)` sink for turn starts, reasoning, interim assistant text, background-job notifications, call-ID-scoped tool calls/results, and turn completion/refusal/failure.
   Providers emit only model/tool activity;
   `Runner.run()` / `send()` own turn boundaries and emit the exact returned completion once, including provider fallback extraction.
   Missing-credential refusal remains a failed one-shot run and a terminal interactive reply.
@@ -285,11 +285,17 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   `bro/trails/AGENTS.md` owns the recording subsystem.
 - `native/bro/native/` — the bro-native engine, the layer above the framework core:
   it imports `bro`, never the reverse, so declaring and inspecting a persona costs nothing of the loop that runs one.
-  `runner.py`'s `Runner(bro)` drives one declaration and owns the per-run LLM, observer, tracker, broker channel, and trail;
+  `runner.py`'s `Runner(bro)` drives one declaration and owns the per-run LLM, observer, tracker, inbox, job registry, broker channel, and trail;
   it satisfies `bro.bro.LiveRun` and builds its toolset through `BaseBro.assemble(harness='bro', wire='bare', ...)`.
+  Interactive owners call `wake()` when the inbox reports news;
+  OpenAI delivers the drained notification as user-role input, while a one-shot run closes the registry at the end of its turn.
   `llm.py` owns the live `LLM` ABC and diagnostic CLI, `providers.py` maps core `NativeLLMSpec` recipes to engine clients, and `llms/{openai,echo}.py` contain those clients.
   The same member owns `bro.run`, `bro.fork`, the native leaves in `bro.launch`, and `bro.trails.record.bro`;
   `native/AGENTS.md` maps it.
+- `jobs.py`, `job_supervisor.py`, and `inbox.py` — process jobs and the per-run notification seam:
+  a supervisor remains the live process-group leader until every command descendant exits;
+  merged output drains into a memory-bounded temporary spool, head and tail consumers share one cursor, and the exit is consumed once;
+  an inbox wait only observes the set of jobs with news, while its drain renders and consumes their bounded notification slices.
 - `shell.py` (`bro-shell-dir`) — validates the packaged shell helpers and prints their installed directory for shell consumers
 - `summon.py` (`summon`) — peer-side summon wire contract (the manual variant included) plus the blocking, detached, journal check/list, and event-watch client surfaces;
   host enforcement lives in `ride/ride/summon_control.py`
