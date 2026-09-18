@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from bro.base import log
 from bro.base.time_util import Moment, utc_now
-from bro.broker.brotocol import MAX_IDENTIFIER_BYTES
+from bro.broker.brotocol import EMPTY_TALK, MAX_IDENTIFIER_BYTES, End, Message, Tag, Talk
 from bro.broker.runtime import Peer
 
 MAX_RECORDS = 256
@@ -20,6 +20,10 @@ MAX_WAIT_SECONDS = 600.0
 MAX_JOURNAL_TEXT_BYTES = MAX_IDENTIFIER_BYTES
 ARGS_STRING_HEAD = 160
 ARGS_HEAD_BYTES = 2048
+MESSAGE_HEAD_BYTES = 4096
+MAX_PENDING_QUESTIONS = 16
+MAX_RECORD_MESSAGES = 32
+CHAT_TRANSITIONS = frozenset({'message', 'refused', 'listening'})
 
 
 @dataclass
@@ -29,7 +33,12 @@ class Record:
   parent: Optional[str]
   requester: Optional[Peer]
   args: dict[str, Any]
+  talk: Talk
   worker: Optional[Peer] = None
+  listening: bool = False
+  pending: list[dict[str, Any]] = field(default_factory=list)
+  messages: list[dict[str, Any]] = field(default_factory=list)
+  chat_seq: int = 0
   state: str = 'accepted'
   accepted_at: Optional[Moment] = None
   started_at: Optional[Moment] = None
@@ -47,13 +56,17 @@ class Record:
   def terminal(self) -> bool:
     return self.state in ('ended', 'denied')
 
-  def view(self, *, include_result: bool = False) -> dict[str, Any]:
+  def view(self, *, include_result: bool = False, include_messages: bool = False) -> dict[str, Any]:
     view: dict[str, Any] = {
       'id': self.quest_id,
       'kind': self.kind,
       'parent': self.parent,
       'args': self.args,
       'state': self.state,
+      'talk': sorted(self.talk),
+      'listening': self.listening,
+      'pending': list(self.pending),
+      'chat_seq': self.chat_seq,
     }
     for name in ('accepted_at', 'started_at', 'ended_at'):
       value = getattr(self, name)
@@ -70,6 +83,8 @@ class Record:
       view['result'] = self.result
     if include_result and self.result_evicted:
       view['result_evicted'] = True
+    if include_messages:
+      view['messages'] = list(self.messages)
     return view
 
 
@@ -138,6 +153,8 @@ class Journal:
     parent: Optional[str],
     requester: Optional[Peer],
     args: dict[str, Any],
+    *,
+    talk: Talk = EMPTY_TALK,
   ) -> Record:
     if quest_id in self.lineage:
       raise ValueError(f'quest id {quest_id!r} already exists')
@@ -148,6 +165,7 @@ class Journal:
       parent=parent,
       requester=requester,
       args=bounded_args(args),
+      talk=talk,
       accepted_at=now,
       order=self._next_order(),
     )
@@ -177,6 +195,7 @@ class Journal:
       parent=parent,
       requester=requester,
       args=bounded_args(args),
+      talk=EMPTY_TALK,
       state='denied',
       ended_at=now,
       outcome='denied',
@@ -221,6 +240,67 @@ class Journal:
     self._append(record, 'trail', event_payload)
     return True
 
+  def listening(self, record: Record) -> bool:
+    self._require_live(record)
+    if record.listening:
+      return False
+    record.listening = True
+    self._append(record, 'listening', {})
+    return True
+
+  def message(self, record: Record, sender: End, message: Message) -> None:
+    self._record_chat(record, sender, message, transition='message')
+
+  def refused(self, record: Record, sender: End, message: Message, reason: str) -> None:
+    bounded_reason, reason_truncated = _bounded_journal_text(reason)
+    details: dict[str, Any] = {'reason': bounded_reason}
+    if reason_truncated:
+      details['reason_truncated'] = True
+    self._record_chat(record, sender, message, transition='refused', details=details)
+
+  def _record_chat(
+    self,
+    record: Record,
+    sender: End,
+    message: Message,
+    *,
+    transition: str,
+    details: Optional[dict[str, Any]] = None,
+  ) -> None:
+    self._require_live(record)
+    if message.type != Tag.MESSAGE:
+      raise TypeError(f'chat transition needs a message envelope, got {message.type!r}')
+    payload: dict[str, Any] = {
+      'from': sender,
+      'head': bounded_args(
+        message.payload,
+        string_head=MESSAGE_HEAD_BYTES,
+        byte_budget=MESSAGE_HEAD_BYTES,
+      ),
+      **(details or {}),
+    }
+    if message.id is not None:
+      payload['id'] = message.id
+    if message.reply_to is not None:
+      payload['reply_to'] = message.reply_to
+    at = utc_now()
+    sequence = self._seq + 1
+    entry = {'seq': sequence, 'at': at.isoformat(), **payload}
+    record.chat_seq = sequence
+    record.messages.append(entry)
+    del record.messages[:-MAX_RECORD_MESSAGES]
+    if transition == 'message':
+      if message.reply_to is not None:
+        record.pending = [
+          pending
+          for pending in record.pending
+          if not (pending.get('from') != sender and pending.get('id') == message.reply_to)
+        ]
+      if message.id is not None:
+        record.pending.append(entry)
+        del record.pending[:-MAX_PENDING_QUESTIONS]
+    self._append(record, transition, payload, at=at)
+
   def end(
     self,
     record: Record,
@@ -236,6 +316,7 @@ class Journal:
     if full_reason is not None and not isinstance(full_reason, str):
       raise TypeError('result reason must be a string')
     record.state = 'ended'
+    record.pending.clear()
     record.ended_at = utc_now()
     record.order = self._next_order()
     record.result = result
@@ -289,6 +370,9 @@ class Journal:
       current = lineage.parent if lineage is not None else None
     return False
 
+  def visible_by_id(self, caller: Peer, record: Record, workers: dict[Peer, str]) -> bool:
+    return self.visible(caller, record, workers) or record.worker == caller
+
   def visible_records(self, caller: Peer, workers: dict[Peer, str]) -> list[Record]:
     records = [record for record in self.records.values() if self.visible(caller, record, workers)]
     records.sort(key=listing_position)
@@ -310,10 +394,12 @@ class Journal:
       record = self.records.get(event.quest)
       if record is None:
         lineage = self.lineage[event.quest]
-        probe = Record(event.quest, lineage.kind, lineage.parent, None, {})
+        probe = Record(event.quest, lineage.kind, lineage.parent, None, {}, EMPTY_TALK)
       else:
         probe = record
-      if self.visible(caller, probe, workers):
+      if self.visible(caller, probe, workers) or (
+        probe.worker == caller and event.transition in CHAT_TRANSITIONS
+      ):
         visible.append(event.view())
       if len(visible) == MAX_EVENT_BATCH:
         break
@@ -400,11 +486,21 @@ def listing_position(record: Record) -> tuple[bool, int, str]:
   return record.terminal, -record.order, record.quest_id
 
 
-def bounded_args(args: dict[str, Any]) -> dict[str, Any]:
-  value = _bounded_value(args)
+def bounded_args(
+  args: dict[str, Any],
+  *,
+  string_head: int = ARGS_STRING_HEAD,
+  byte_budget: int = ARGS_HEAD_BYTES,
+) -> dict[str, Any]:
+  minimum_budget = _payload_bytes({'head': '', 'truncated': True})
+  if string_head < 0 or byte_budget < minimum_budget:
+    raise ValueError(
+      f'bounded args need a non-negative string head and at least {minimum_budget} bytes'
+    )
+  value = _bounded_value(args, string_head)
   if not isinstance(value, dict):
-    raise TypeError('request args must be a dict')
-  if _payload_bytes(value) <= ARGS_HEAD_BYTES:
+    raise TypeError('bounded args must be a dict')
+  if _payload_bytes(value) <= byte_budget:
     return value
   encoded = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
   scalars = {key: inner for key, inner in value.items() if not isinstance(inner, (dict, list))}
@@ -413,28 +509,28 @@ def bounded_args(args: dict[str, Any]) -> dict[str, Any]:
   position = {key: index for index, key in enumerate(scalars)}
   total = _payload_bytes({'head': '', 'truncated': True}) + sum(cost.values())
   for key in sorted(scalars, key=lambda key: (cost[key], position[key]), reverse=True):
-    if total <= ARGS_HEAD_BYTES:
+    if total <= byte_budget:
       break
     total -= cost[key]
     del scalars[key]
-  head = encoded[:ARGS_HEAD_BYTES]
+  head = encoded[:byte_budget]
   bounded = {**scalars, 'head': head, 'truncated': True}
-  while _payload_bytes(bounded) > ARGS_HEAD_BYTES:
-    overflow = _payload_bytes(bounded) - ARGS_HEAD_BYTES
+  while _payload_bytes(bounded) > byte_budget:
+    overflow = _payload_bytes(bounded) - byte_budget
     head = head[: max(0, len(head) - overflow)]
     bounded['head'] = head
   return bounded
 
 
-def _bounded_value(value: Any) -> Any:
+def _bounded_value(value: Any, string_head: int) -> Any:
   if isinstance(value, str):
-    return value[:ARGS_STRING_HEAD]
+    return value[:string_head]
   if isinstance(value, dict):
     if not all(isinstance(key, str) for key in value):
-      raise TypeError('request arg object keys must be strings')
-    return {key: _bounded_value(inner) for key, inner in value.items()}
+      raise TypeError('bounded object keys must be strings')
+    return {key: _bounded_value(inner, string_head) for key, inner in value.items()}
   if isinstance(value, list):
-    return [_bounded_value(inner) for inner in value]
+    return [_bounded_value(inner, string_head) for inner in value]
   if value is None or isinstance(value, (bool, int, float)):
     return value
   raise TypeError(f'unsupported request arg value: {type(value).__name__}')

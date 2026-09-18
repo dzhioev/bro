@@ -12,7 +12,15 @@ from typing import Any, Optional
 from bro.base import log
 from bro.base.lulid import lulid
 from bro.broker import brotocol
-from bro.broker.brotocol import MAX_FRAME_BYTES, MAX_IDENTIFIER_BYTES, Message, Tag
+from bro.broker.brotocol import (
+  EMPTY_TALK,
+  MAX_FRAME_BYTES,
+  MAX_IDENTIFIER_BYTES,
+  End,
+  Message,
+  Tag,
+  Talk,
+)
 from bro.broker.job import CommandJob
 from bro.broker.journal import MAX_WAIT_SECONDS, Journal, Record, Subscriber, listing_position
 from bro.broker.runtime import Peer, Runtime
@@ -101,20 +109,28 @@ class Dispatcher:
     log.warning('broker dispatcher: denied request %s: %s', message.quest_id, error)
     self.deliver(peer, brotocol.result(message.quest_id, 'denied', error=error))
 
-  def spawn(self, launch: LaunchSpec, requester: Peer, *, timeout: Optional[float] = None) -> None:
-    record = self._open(requester)
+  def spawn(
+    self,
+    launch: LaunchSpec,
+    requester: Peer,
+    *,
+    talk: Talk,
+    timeout: Optional[float] = None,
+  ) -> None:
+    record = self._open(requester, talk=talk)
     worker = SpawnedWorker(
       self.runtime,
       self,
       record.quest_id,
       launch,
+      talk=talk,
       timeout=timeout if timeout is not None else self._default_timeout,
     )
     self._start_worker(worker)
     self._deliver_record(record, brotocol.mark(record.quest_id, 'accepted'))
 
   def job(self, command: CommandJob, requester: Peer, *, timeout: Optional[float] = None) -> None:
-    record = self._open(requester)
+    record = self._open(requester, talk=EMPTY_TALK)
     worker = JobWorker(
       self.runtime,
       self,
@@ -132,12 +148,13 @@ class Dispatcher:
     self,
     requester: Peer,
     *,
+    talk: Talk,
     timeout: Optional[float],
     ready: Callable[[Provisioned], None],
   ) -> None:
     if timeout is not None:
       raise ValueError('expected workers have no deadline')
-    record = self._open(requester)
+    record = self._open(requester, talk=talk)
     worker = ExpectedWorker(self.runtime, self, record.quest_id, ready)
     self._start_worker(worker)
 
@@ -157,17 +174,20 @@ class Dispatcher:
   def on_message(self, peer: Peer, message: Message) -> None:
     if message.type == Tag.REQUEST:
       self._on_request(peer, message)
-    else:
-      quest_id = self.workers.get(peer)
-      worker_quest = message.quest_id
-      if quest_id is None or worker_quest != quest_id:
-        self._refuse(peer, message, 'no matching worker quest')
-        return
-      record = self.live.get(worker_quest)
-      if record is None:
-        self._refuse(peer, message, 'no live quest')
-        return
-      self._on_worker_answer(record, peer, message, host_worker=False)
+      return
+    if message.type == Tag.MESSAGE:
+      self._on_chat_message(peer, message)
+      return
+    quest_id = self.workers.get(peer)
+    worker_quest = message.quest_id
+    if quest_id is None or worker_quest != quest_id:
+      self._refuse(peer, message, 'no matching worker quest')
+      return
+    record = self.live.get(worker_quest)
+    if record is None:
+      self._refuse(peer, message, 'no live quest')
+      return
+    self._on_worker_answer(record, peer, message, host_worker=False)
 
   def on_worker_bound(self, worker: Worker, peer: Peer) -> None:
     record = self.live.get(worker.quest)
@@ -189,6 +209,9 @@ class Dispatcher:
       raise RuntimeError(f'worker for quest {worker.quest} emitted before binding')
     if message.type == Tag.REQUEST and not host_worker:
       self._on_request(peer, message)
+      return
+    if message.type == Tag.MESSAGE and not host_worker:
+      self._on_chat_message(peer, message)
       return
     record = self.live.get(worker.quest)
     if record is None:
@@ -226,13 +249,14 @@ class Dispatcher:
       self._runtime_lifetime(),
     ):
       quest_id = lulid()
-      record = self.journal.open(quest_id, 'root', None, None, {})
+      record = self.journal.open(quest_id, 'root', None, None, {}, talk=EMPTY_TALK)
       self.live[quest_id] = record
       root_worker = SpawnedWorker(
         self.runtime,
         self,
         quest_id,
         root,
+        talk=EMPTY_TALK,
         timeout=None,
         launch_timeout=None,
       )
@@ -265,6 +289,37 @@ class Dispatcher:
       return
     self.invoke(peer, message)
 
+  def _on_chat_message(self, peer: Peer, message: Message) -> None:
+    record = self.live.get(message.quest_id)
+    if record is None:
+      self._refuse(peer, message, 'no live quest')
+      return
+    sender: Optional[End]
+    if peer == record.requester:
+      sender = 'requester'
+    elif peer == record.worker:
+      sender = 'worker'
+    else:
+      sender = None
+    if sender is None:
+      self._refuse(peer, message, 'peer is not an end of the quest')
+      return
+    if not brotocol.message_allowed(record.talk, sender, message):
+      reason = f'{sender} lacks the talk right for this message'
+      self._refuse(peer, message, reason)
+      self.journal.refused(record, sender, message, reason)
+      return
+    self.journal.message(record, sender, message)
+    receiver = record.worker if sender == 'requester' else record.requester
+    if receiver is None:
+      log.warning(
+        'broker dispatcher: dropping %r on quest %s with no receiver',
+        message.type,
+        record.quest_id,
+      )
+      return
+    self.deliver(receiver, message)
+
   def _on_worker_answer(
     self, record: Record, peer: Peer, message: Message, *, host_worker: bool
   ) -> None:
@@ -283,12 +338,12 @@ class Dispatcher:
         if not self.journal.started(record):
           self._refuse(peer, message, 'duplicate started mark')
           return
+      elif transition == 'listening' and not host_worker:
+        if not self.journal.listening(record):
+          return
       else:
         self._refuse(peer, message, 'wrong mark origin')
         return
-      self._deliver_record(record, message)
-      return
-    if message.type == Tag.PROGRESS:
       self._deliver_record(record, message)
       return
     if message.type == Tag.RESULT:
@@ -308,12 +363,14 @@ class Dispatcher:
     if record.requester is not None:
       self.deliver(record.requester, message)
 
-  def _open(self, requester: Peer) -> Record:
+  def _open(self, requester: Peer, *, talk: Talk) -> Record:
     message = self._active_message()
     parent = self.workers.get(requester)
     if parent is None:
       raise RuntimeError(f'cannot open quest for unattributed peer {requester}')
-    record = self.journal.open(message.quest_id, message.kind, parent, requester, message.args)
+    record = self.journal.open(
+      message.quest_id, message.kind, parent, requester, message.args, talk=talk
+    )
     self.live[record.quest_id] = record
     return record
 
@@ -402,9 +459,15 @@ class Dispatcher:
       self.reply(peer, {'outcome': 'denied', 'error': f'unknown quest id {quest_id!r}'})
       return
     wait = min(float(args.get('wait', 0)), MAX_WAIT_SECONDS)
+    since = args.get('since')
     record = self.journal.records.get(quest_id)
-    if wait > 0 and record is not None and not record.terminal:
-      self._track_read(self._wait_query(peer, message.quest_id, quest_id, wait))
+    if (
+      wait > 0
+      and record is not None
+      and not record.terminal
+      and (since is None or record.chat_seq <= since)
+    ):
+      self._track_read(self._wait_query(peer, message.quest_id, quest_id, wait, since))
       return
     self.deliver(peer, self._query_message(message.quest_id, view))
 
@@ -431,12 +494,17 @@ class Dispatcher:
     return value
 
   async def _wait_query(
-    self, peer: Peer, request_quest: str, target_quest: str, wait: float
+    self,
+    peer: Peer,
+    request_quest: str,
+    target_quest: str,
+    wait: float,
+    since: Optional[int],
   ) -> None:
     deadline = asyncio.get_running_loop().time() + wait
     while True:
       record = self.journal.records.get(target_quest)
-      if record is None or record.terminal:
+      if record is None or record.terminal or (since is not None and record.chat_seq > since):
         break
       remaining = deadline - asyncio.get_running_loop().time()
       if remaining <= 0:
@@ -460,14 +528,32 @@ class Dispatcher:
     message = brotocol.result(request_quest, 'ok', value={'quest': view})
     if len(message.to_bytes()) <= MAX_FRAME_BYTES:
       return message
-    if 'result' not in view:
-      raise RuntimeError('one journal record exceeds the query response frame')
-    bounded_view = {**view, 'result_evicted': True}
-    bounded_view.pop('result')
-    message = brotocol.result(request_quest, 'ok', value={'quest': bounded_view})
-    if len(message.to_bytes()) > MAX_FRAME_BYTES:
-      raise RuntimeError('one journal record exceeds the query response frame')
-    return message
+    messages = view.get('messages')
+    if not isinstance(messages, list):
+      raise RuntimeError('an oversized by-id journal view carries no message tail')
+
+    def fit_tail(candidate: dict[str, Any]) -> Optional[Message]:
+      message = brotocol.result(request_quest, 'ok', value={'quest': candidate})
+      if len(message.to_bytes()) <= MAX_FRAME_BYTES:
+        return message
+      bounded = {**candidate, 'messages_truncated': True}
+      for start in range(1, len(messages) + 1):
+        bounded['messages'] = messages[start:]
+        message = brotocol.result(request_quest, 'ok', value={'quest': bounded})
+        if len(message.to_bytes()) <= MAX_FRAME_BYTES:
+          return message
+      return None
+
+    message = fit_tail(view)
+    if message is not None:
+      return message
+    if 'result' in view:
+      result_evicted = {**view, 'result_evicted': True}
+      result_evicted.pop('result')
+      message = fit_tail(result_evicted)
+      if message is not None:
+        return message
+    raise RuntimeError('one journal record exceeds the query response frame')
 
   def events(self, peer: Peer, message: Message) -> None:
     args = message.args
@@ -529,13 +615,13 @@ class Dispatcher:
   def _query_view(self, peer: Peer, quest_id: str) -> Optional[dict[str, Any]]:
     record = self.journal.records.get(quest_id)
     if record is not None:
-      if not self.journal.visible(peer, record, self.workers):
+      if not self.journal.visible_by_id(peer, record, self.workers):
         return None
-      return record.view(include_result=True)
+      return record.view(include_result=True, include_messages=True)
     view = self.journal.evicted_view(quest_id)
     if view is None:
       return None
-    probe = Record(quest_id, view['kind'], view['parent'], None, {})
+    probe = Record(quest_id, view['kind'], view['parent'], None, {}, EMPTY_TALK)
     return view if self.journal.visible(peer, probe, self.workers) else None
 
 
@@ -618,7 +704,7 @@ def events_handler(context: Dispatcher, peer: Peer, message: Message) -> None:
 
 def spawn_test_handler(launch: LaunchSpec) -> RequestHandler:
   def handler(context: Dispatcher, peer: Peer, _message: Message) -> None:
-    context.spawn(launch, peer)
+    context.spawn(launch, peer, talk=EMPTY_TALK)
 
   return handler
 
@@ -647,7 +733,7 @@ def _decode_query_cursor(cursor: str) -> tuple[bool, int, str]:
 
 
 def _validate_query(args: dict[str, Any]) -> Optional[str]:
-  unknown = sorted(set(args) - {'id', 'wait', 'cursor'})
+  unknown = sorted(set(args) - {'id', 'wait', 'since', 'cursor'})
   if len(unknown) > 0:
     return f'unknown query field(s): {", ".join(unknown)}'
   quest_id = args.get('id')
@@ -665,8 +751,13 @@ def _validate_query(args: dict[str, Any]) -> Optional[str]:
     return "query 'wait' must be a non-negative number of seconds"
   if wait is not None and quest_id is None:
     return "query 'wait' requires 'id'"
-  if cursor is not None and (quest_id is not None or wait is not None):
-    return "query 'cursor' does not combine with 'id' or 'wait'"
+  since = args.get('since')
+  if since is not None and (not isinstance(since, int) or isinstance(since, bool) or since < 0):
+    return "query 'since' must be a non-negative integer"
+  if since is not None and quest_id is None:
+    return "query 'since' requires 'id'"
+  if cursor is not None and (quest_id is not None or wait is not None or since is not None):
+    return "query 'cursor' does not combine with 'id', 'wait', or 'since'"
   return None
 
 

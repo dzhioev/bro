@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from bro.base import log
-from bro.broker.brotocol import Message
+from bro.broker.brotocol import Message, Talk
 from bro.broker.job import CommandJob, launch as launch_job
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import ChannelID, Provisioned, ServerTransport
@@ -38,8 +38,10 @@ class Runtime:
     self._channels[provisioned.channel] = events
     return provisioned
 
-  async def launch(self, launch: LaunchSpec, provisioned: Provisioned, quest: str) -> ChildHandle:
-    return await self._spawner.spawn(launch, provisioned, quest)
+  async def launch(
+    self, launch: LaunchSpec, provisioned: Provisioned, quest: str, talk: Talk
+  ) -> ChildHandle:
+    return await self._spawner.spawn(launch, provisioned, quest, talk)
 
   async def launch_job(self, command: CommandJob, directory: Path) -> ChildHandle:
     return await launch_job(command, directory)

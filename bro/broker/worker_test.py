@@ -12,7 +12,7 @@ from bro.broker.runtime import Runtime
 from bro.broker.spawn import LaunchSpec
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
-from bro.broker.worker import ExpectedWorker, JobWorker, SpawnedWorker
+from bro.broker.worker import ExpectedWorker, JobWorker, SpawnedWorker, Worker
 
 
 class FakeHandle:
@@ -44,7 +44,7 @@ class FakeRuntime:
     self.events = events
     return Provisioned('worker-peer', Endpoint(1234, 'token'))
 
-  async def launch(self, launch, provisioned, quest):
+  async def launch(self, launch, provisioned, quest, talk):
     self.launch_call = (launch, provisioned, quest)
     assert self.events is not None
     for message in self.launch_messages:
@@ -84,11 +84,28 @@ async def _settle():
     await asyncio.sleep(0)
 
 
+def test_worker_passes_messages_for_other_quests_but_refuses_their_marks():
+  listener = Listener()
+  worker = Worker(cast(Runtime, object()), listener, 'own-quest', timeout=None)
+  worker._mark_started()
+  routed = brotocol.message('child-quest', {'text': 'steer'})
+
+  worker.on_message(routed)
+  worker.on_message(brotocol.mark('child-quest', 'trail', trail_id='wrong'))
+
+  assert [message for message, _ in listener.messages] == [
+    brotocol.mark('own-quest', 'started'),
+    routed,
+  ]
+
+
 @pytest.mark.asyncio
 async def test_spawned_worker_binds_before_launch_and_marks_started(tmp_path):
   runtime = FakeRuntime(tmp_path)
   listener = Listener()
-  worker = SpawnedWorker(cast(Runtime, runtime), listener, 'quest', LaunchSpec(), timeout=10)
+  worker = SpawnedWorker(
+    cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=10
+  )
   worker.begin()
   await _settle()
   assert listener.bound == ['worker-peer']
@@ -109,7 +126,9 @@ async def test_spawned_worker_folds_started_before_messages_sent_during_launch(t
     brotocol.result('quest', 'ok'),
   ]
   listener = Listener()
-  worker = SpawnedWorker(cast(Runtime, runtime), listener, 'quest', LaunchSpec(), timeout=10)
+  worker = SpawnedWorker(
+    cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=10
+  )
   worker.begin()
   await _settle()
   assert [message.payload for message, _ in listener.messages] == [
@@ -126,7 +145,9 @@ async def test_spawned_worker_folds_started_before_messages_sent_during_launch(t
 async def test_spawned_worker_drains_the_channel_before_reporting_exit(tmp_path):
   runtime = FakeRuntime(tmp_path)
   listener = Listener()
-  worker = SpawnedWorker(cast(Runtime, runtime), listener, 'quest', LaunchSpec(), timeout=10)
+  worker = SpawnedWorker(
+    cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=10
+  )
   worker.begin()
   await _settle()
   assert runtime.events is not None
@@ -144,7 +165,9 @@ async def test_spawned_worker_warns_when_channel_drain_expires(tmp_path, monkeyp
   monkeypatch.setattr('bro.broker.worker._DRAIN_TIMEOUT', 0)
   runtime = FakeRuntime(tmp_path)
   listener = Listener()
-  worker = SpawnedWorker(cast(Runtime, runtime), listener, 'quest', LaunchSpec(), timeout=10)
+  worker = SpawnedWorker(
+    cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=10
+  )
   worker.begin()
   await _settle()
   assert runtime.events is not None
@@ -165,7 +188,7 @@ async def test_launch_timeout_kills_a_handle_returned_after_cancellation(tmp_pat
       super().__init__(path)
       self.launched = []
 
-    async def launch(self, launch, provisioned, quest):
+    async def launch(self, launch, provisioned, quest, talk):
       await asyncio.sleep(0.02)
       self.launched.append(quest)
       return self.handle
@@ -177,6 +200,7 @@ async def test_launch_timeout_kills_a_handle_returned_after_cancellation(tmp_pat
     listener,
     'quest',
     LaunchSpec(),
+    talk=frozenset(),
     timeout=10,
     launch_timeout=0.001,
   )
@@ -191,7 +215,9 @@ async def test_launch_timeout_kills_a_handle_returned_after_cancellation(tmp_pat
 async def test_spawned_worker_timeout_kills_the_process_and_reports_on_reap(tmp_path):
   runtime = FakeRuntime(tmp_path)
   listener = Listener()
-  worker = SpawnedWorker(cast(Runtime, runtime), listener, 'quest', LaunchSpec(), timeout=0.001)
+  worker = SpawnedWorker(
+    cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=0.001
+  )
   worker.begin()
   await asyncio.sleep(0.01)
   await _settle()

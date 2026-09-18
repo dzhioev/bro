@@ -49,6 +49,7 @@ class PendingSummon:
   parent_workspace: str  # the summoner's tree — the default base-ref source
   may_summon: tuple[str, ...]  # the child's own resolved allow-list
   permits: tuple[str, ...]  # the child's own resolved party authority
+  talk: tuple[str, ...]  # the chat rights fixed for the manual quest
   grant: tuple[str, ...]  # the request's scope overrides, applied at launch
   revoke: tuple[str, ...]
   summoner: Optional[dict[str, Any]]  # the child's summoned_by provenance
@@ -133,6 +134,15 @@ def peek(token: str) -> PendingSummon:
     isinstance(value, str) and value in PARTY_PERMITS for value in permit_values
   ):
     raise ValueError(f'pending manual summon {token!r} carries invalid permits')
+  talk_values = data.get('talk')
+  if not isinstance(talk_values, list) or not all(isinstance(value, str) for value in talk_values):
+    raise ValueError(f'pending manual summon {token!r} carries invalid talk')
+  from bro.broker.brotocol import decode_talk
+
+  try:
+    decode_talk(','.join(talk_values))
+  except (TypeError, ValueError) as error:
+    raise ValueError(f'pending manual summon {token!r} carries invalid talk: {error}') from error
   try:
     env_additions(data.get('env'))
   except ValueError as error:
@@ -144,6 +154,7 @@ def peek(token: str) -> PendingSummon:
       **data,
       'may_summon': tuple(data['may_summon']),
       'permits': tuple(data['permits']),
+      'talk': tuple(data['talk']),
       'grant': tuple(data['grant']),
       'revoke': tuple(data['revoke']),
     }

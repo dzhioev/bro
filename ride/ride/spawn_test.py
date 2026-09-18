@@ -796,7 +796,9 @@ raise SystemExit(3)
       host_endpoint=Endpoint(port=7321, token='tk'),
     )
 
-    handle = await ride.spawn.ProcessSpawner().spawn(lowered, channel, 'X-1')
+    handle = await ride.spawn.ProcessSpawner().spawn(
+      lowered, channel, 'X-1', frozenset({'worker.say'})
+    )
 
     assert await handle.wait() == 3
     assert 'aws-hook-installed' in handle.output_tail()
@@ -859,8 +861,8 @@ raise SystemExit(3)
       def __init__(self):
         self.spawned: list = []
 
-      async def spawn(self, launch, channel, quest):
-        self.spawned.append((launch, channel, quest))
+      async def spawn(self, launch, channel, quest, talk):
+        self.spawned.append((launch, channel, quest, talk))
         return MagicMock()
 
     docker = RecordingDocker()
@@ -888,8 +890,8 @@ raise SystemExit(3)
       may_summon=(),
       harness='bro',
     )
-    await spawner.spawn(launch, channel, 'X-1')
-    [(lowered, lowered_channel, lowered_quest)] = docker.spawned
+    await spawner.spawn(launch, channel, 'X-1', frozenset({'worker.say'}))
+    [(lowered, lowered_channel, lowered_quest, lowered_talk)] = docker.spawned
     assert isinstance(lowered, ride.spawn.DockerLaunchSpec)
     assert lowered.launch.command == [
       'do-ride', 'solo', '--workspace', 'broker-CH', '--harness', 'bro', '--repo', '/proj',
@@ -898,6 +900,7 @@ raise SystemExit(3)
     assert lowered.launch.name == 'broker-CH'
     assert lowered_channel is channel
     assert lowered_quest == 'X-1'
+    assert lowered_talk == frozenset({'worker.say'})
 
   @pytest.mark.asyncio
   async def test_lowering_failure_propagates_out_of_spawn(self, lowering_harness):
@@ -925,7 +928,7 @@ raise SystemExit(3)
     # the raise crosses to_thread back onto the loop: Dispatcher.spawn turns it
     # into the correlated failed{reason: 'launch'}
     with pytest.raises(ValueError, match='nope'):
-      await spawner.spawn(launch, channel, 'X-1')
+      await spawner.spawn(launch, channel, 'X-1', frozenset({'worker.say'}))
 
 
 def test_unboxed_root_can_chain_joins_and_end_a_started_childs_party_without_a_daemon(
