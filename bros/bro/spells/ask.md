@@ -12,13 +12,13 @@ A summon succeeds only when the target is in the summoner's allow-list
 — the session reads its own off the banner, fixed at launch
 — so a denial stays a normal outcome the spell relays.
 
-version: 1.18.0
+version: 1.19.0
 ---
 
 # Ask
 
 Relay a request to another bro via **summon**:
-the target runs your prompt as a scoped one-shot in a started party of its own or as a member of this session’s party, and the answer comes back synchronously.
+the target runs your prompt as a scoped one-shot in a started party of its own or as a member of this session’s party, and the selected surface carries its retained answer back.
 You only formulate the request,
 fire the client,
 and relay the result
@@ -119,32 +119,37 @@ Size the timeout in hours (e.g. 28800), not minutes.
 
 ## Pick the client
 
-Prefer Bash where the session has it:
-its background run ends in a harness completion notification that wakes you, while a detached tool summon ends {{iff #harness = claude}}on the summon watch alone{{else}}with no wake-up at all, leaving the session dark until someone prompts it{{end}}.
-The mechanism is the same either way:
+The session's surface decides the client:
 
-- **Bash available** (a managed Claude session):
-  `summon <target> '<prompt>'` (`--start` / `--join` / `--boxed` / `--unboxed`, `--timeout <s>`, `--into <ref>`, `--hold <level>`, `--grant <name>`, `--revoke <name>`, `--talk <right>`, `--llm <recipe>`, `--harness <name>`).
-  It prints the request id and the started trail id to stderr,
-  then blocks until the answer or a child question lands on stdout.
-  A child question exits 4 and logs the exact `summon say` reply command;
-  other non-zero exits carry failures on stderr.
-- **No Bash, the `summon` tools present** (`bro::summon` / `bro::summon_say` / `bro::summon_check` — the `--raw` claude session case):
-  call `summon` with `target` and `prompt` (optional `party: start|join`, `isolation`, `timeout`, `into`, `hold`, `grant`, `revoke`, `talk`, `llm`, `harness`).
-  It returns a structured accepted, question, or completed state with the request id;
-  failures come back as the tool error with the reason.
-  A question state carries `{question: {id, text}}`:
-  answer it through `summon_say(request_id, text, reply_to=id)`, then call `summon_check(request_id, wait: true)` for the eventual result.
-  `detach: true` returns the accepted state after host acceptance and fails immediately on a denial;
-  `summon_check(request_id)` reads non-blockingly and `summon_check(request_id, wait: true)` long-polls the same repeatable journal record.
-- **Neither** — this session can't summon;
-  say so instead of improvising.
+{{iff #harness = claude}}
+**Managed Claude session:** prefer Bash.
+Run `summon <target> '<prompt>'` (`--start` / `--join` / `--boxed` / `--unboxed`, `--timeout <s>`, `--into <ref>`, `--hold <level>`, `--grant <name>`, `--revoke <name>`, `--talk <right>`, `--llm <recipe>`, `--harness <name>`).
+It prints the request id and the started trail id to stderr,
+then blocks until the answer or a child question lands on stdout.
+A child question exits 4 and logs the exact `summon say` reply command;
+other non-zero exits carry failures on stderr.
+{{eliff #wire = bare}}
+**Bro-native session:** use `bro::summon`, `bro::summon_say`, and `bro::summon_check`.
+`bro::summon` returns after host acceptance with the request id;
+later chat and lifecycle transitions arrive through the `summon watch` job the session contract has armed.
+Read the retained answer or failure with `bro::summon_check` when its terminal line arrives.
+{{else}}
+**Raw MCP session:** use `bro::summon`, `bro::summon_say`, and `bro::summon_check`.
+Call `summon` with `target` and `prompt` (optional `party: start|join`, `isolation`, `timeout`, `into`, `hold`, `grant`, `revoke`, `talk`, `llm`, `harness`).
+It returns a structured accepted, question, or completed state with the request id;
+failures come back as the tool error with the reason.
+A question state carries `{question: {id, text}}`:
+answer it through `summon_say(request_id, text, reply_to=id)`, then call `summon_check(request_id, wait: true)` for the eventual result.
+`detach: true` returns the accepted state after host acceptance and fails immediately on a denial;
+`summon_check(request_id)` reads non-blockingly and `summon_check(request_id, wait: true)` long-polls the same repeatable journal record.
+{{end}}
 
 ## Foreground vs background
 
 A summon typically runs **minutes** (workspace launch + a full LLM run of the target).
 
-With Bash, run anything that isn't trivially quick in the background (claude's foreground Bash cap is ~10 min — shorter than the 1800s summon default, so a foreground wait can be killed mid-run while the child keeps going):
+{{iff #harness = claude}}
+Run anything that isn't trivially quick in the background (claude's foreground Bash cap is ~10 min — shorter than the 1800s summon default, so a foreground wait can be killed mid-run while the child keeps going):
 use the harness's background run (`run_in_background`),
 keep working,
 and collect the output when the completion notification arrives.
@@ -162,17 +167,28 @@ Any summon is reclaimable by that id, foreground included:
 if a waiting process is killed mid-flight, the host journal retains the quest,
 `summon check <id>` polls it,
 and `summon check --wait <id>` waits on the same non-destructive read.
-`summon watch` arms at the current journal head and prints ordered transitions after it
-— your summons' and their descendants', messages and denials included;
-if retained events have a gap, it reports the loss and re-arms from the current head.
 
 When a blocking summon granted `worker.question` exits 4, stdout is the child's question and stderr names its request id, question id, and ready reply command.
 Answer it with `summon say <request-id> '<answer>' --reply-to <question-id>`, then resume the same quest with `summon check --wait <request-id>`.
 That check may itself exit 4 on another question;
 repeat the answer/check loop until it exits 0 with the child's final answer or 1 with a failure.
 Never restart the summon to answer it.
-
-Without Bash there is no true backgrounding, but the tools cover the long-run case:
+`summon watch` arms at the current journal head and prints ordered transitions after it
+— your summons' and their descendants', messages and denials included;
+if retained events have a gap, it reports the loss and re-arms from the current head.
+{{eliff #wire = bare}}
+`bro::summon` is detached by construction:
+note the accepted request id and keep working while the summon watch carries its chat and lifecycle transitions.
+When nothing else remains, call `bro::chill` and act on the next notification;
+read the retained answer with `bro::summon_check` once the watch reports the terminal state.
+If a child asks a question, answer it with `bro::summon_say(reply_to=…)`, then return to `bro::chill` rather than polling or restarting the summon.
+To ask the child, call `bro::summon_say(question=true)`;
+its reply arrives on the watch and remains readable with `bro::summon_check`.
+`summon watch` arms at the current journal head and prints ordered transitions after it
+— your summons' and their descendants', messages and denials included;
+if retained events have a gap, it reports the loss and re-arms from the current head.
+{{else}}
+There is no true backgrounding on the raw MCP surface, but the tools cover the long-run case:
 a blocking `summon` call fits anything conversational (tell the user it may take minutes);
 for a run that would outlast the surface's tool-call patience, `summon(…, detach: true)` returns the request id,
 and you check on it with `summon_check` between turns
@@ -180,6 +196,7 @@ and you check on it with `summon_check` between turns
 — or use `wait: true` to long-poll until it reports a question or completion.
 Keep each tool-side wait below the MCP call budget;
 a timed-out call does not end the host-owned quest, so recover it by id and never re-summon.
+{{end}}
 
 ## Manual summon — a child the user launches
 
@@ -193,24 +210,25 @@ nothing is spawned;
 instead the host registers the expectation and hands back a token,
 and the user launches the session themselves.
 
-- **Bash client**:
-  `summon --manual --detach <target> '<prompt>'`
-  — waits for the host to accept,
-  then prints the token (the request id) on stdout and logs the launch command to relay;
-  a denial fails right there, before any token exists.
-  `--into`,
-  `--grant`,
-  `--revoke`,
-  and `--talk` still apply;
-  `--timeout`,
-  `--hold`,
-  `--llm`,
-  `--harness`, and the placement flags (`--start` / `--join` / `--boxed` / `--unboxed`) are refused — the user’s launch owns those.
-  The requester still needs either party-start permit because the human launch starts a party.
-- **Tool client**:
-  `summon` with `manual: true` and any needed `talk` rights
-  — returns the token and the launch command once the host accepts;
-  a denial fails the call immediately.
+{{iff #harness = claude}}
+**Managed Claude client:** run `summon --manual --detach <target> '<prompt>'`.
+It waits for the host to accept,
+then prints the token (the request id) on stdout and logs the launch command to relay;
+a denial fails right there, before any token exists.
+`--into`,
+`--grant`,
+`--revoke`,
+and `--talk` still apply;
+`--timeout`,
+`--hold`,
+`--llm`,
+`--harness`, and the placement flags (`--start` / `--join` / `--boxed` / `--unboxed`) are refused — the user’s launch owns those.
+{{else}}
+**Bro tool client:** call `bro::summon` with `manual=true` and any needed `talk` rights.
+It returns the token and launch command once the host accepts;
+a denial fails the call immediately.
+{{end}}
+The requester still needs either party-start permit because the human launch starts a party.
 
 Relay the token to the user as the ready-to-paste interactive command
 — `ride along --summoned <token> <target>`
@@ -219,12 +237,20 @@ They may add their own launch flags (`--unboxed`, `--llm`, `--hold`, `--workspac
 The prompt you passed becomes the session's first message;
 the child bases on this workspace's HEAD *at the moment they launch* (or the `--into` ref you gave).
 
-Then wait like any detached summon:
+Then wait like any detached summon.
+{{iff #wire = bare}}
+The summon watch carries the start, chat, and end;
+call `bro::chill` when nothing else remains and read the retained answer with `bro::summon_check` after the terminal line.
+{{eliff #harness = claude}}
 `summon check <token>` polls (pending until the user launches and the child announces itself),
-`summon watch` streams the start/end events where mounted,
-and the answer arrives through the child's `answer` tool or as the printed reply from a clean one-shot run.
+while `summon watch` streams the start/end events.
 There is no timer on a manual summon
 — pace the polling to human time, and keep working meanwhile.
+{{else}}
+Call `bro::summon_check(request_id=token, wait=true)` with a bound under the MCP call cap;
+repeat after each bound until the user launches and the child ends.
+{{end}}
+The answer arrives through the child's `answer` tool or as the printed reply from a clean one-shot run.
 A child session the user quits without delivering surfaces as a failure;
 that is an answerable outcome, not an error to retry.
 
@@ -259,26 +285,39 @@ If the user asked for a follow-up action on the answer, continue with it.
   The message carries the reason and, once the child announced a trail, the `rewind show <trail-id>` that has the full trace;
   a child that died before recording says so, and the reason is all there is.
 - **Interrupted wait / unavailable retained payload**
-  — a killed or detached wait remains recoverable by quest id:
-  `summon check <quest-id>` polls,
-  and `summon check --wait <quest-id>` waits for the host-retained result (the `summon_check` tool does the same for tool-only sessions).
+  — a killed or detached wait remains recoverable by quest id.
+  {{iff #wire = bare}}Read it with `bro::summon_check` when the watch reports its terminal state.{{eliff #harness = claude}}`summon check <quest-id>` polls,
+  and `summon check --wait <quest-id>` waits for the host-retained result.{{else}}Read it with repeatable `bro::summon_check(request_id=quest_id, wait=true)` calls bounded under the MCP call cap.{{end}}
   If retention evicted the payload, the error points at the trail that still carries the run.
 
 ## Do not exit with a summon in flight
 
 When the session's root process exits, in-flight summoned children are killed (an in-flight manual child is only detached — the user's session lives on, but its answer can no longer arrive).
 When a summoned session exits with summons of its own in flight, those end `failed:orphaned` and their children are killed the same way.
-Before ending the session (or letting it end), wait for pending summons with `summon check --wait`;
-if a result was lost this way it is still recoverable from the child's trail.
+{{iff #wire = bare}}
+Before ending the session, return to `bro::chill` until every pending summon ends, then read each retained result with `bro::summon_check`.
+{{eliff #harness = claude}}
+Before ending the session (or letting it end), wait for pending summons with `summon check --wait`.
+{{else}}
+Before ending the session, wait for every pending summon with bounded `bro::summon_check(wait=true)` calls.
+{{end}}
+If a result was lost this way it is still recoverable from the child's trail.
 
 ## Stopping one deliberately
 
-`summon cancel <request-id>` ends a child quest this session summoned:
-the quest ends `failed:cancelled`, whatever the child summoned in turn ends `failed:orphaned`, a spawned child is killed, and a manual child is only detached
+Cancelling a child quest ends it `failed:cancelled`, whatever it summoned in turn ends `failed:orphaned`, a spawned child is killed, and a manual child is only detached
 — its user-owned session lives on, no longer answering the quest.
-The command returns once the quest has ended;
+{{iff #wire = bare}}
+Call `bro::summon_cancel(request_id)`;
+it returns when the host accepts the cancellation, and the quest's terminal state arrives through the summon watch.
+Read the retained end with `bro::summon_check`.
+{{eliff #harness = claude}}
+`summon cancel <request-id>` returns once the quest has ended;
 `--timeout <s>` bounds the wait and exits 3 when it passes first, with the end still on its way.
-The tool client is `summon_cancel(request_id, timeout?)`, returning the ended state with its outcome or a pending one at the bound.
+{{else}}
+Call `bro::summon_cancel(request_id, timeout)` with a bound under the MCP call cap;
+it returns the ended state or a pending state at the bound.
+{{end}}
 Only the session that requested a quest can cancel it, so a grandchild is stopped by cancelling the child that summoned it.
 Ending the ride's root session still stops every in-flight child at once.
 A child that ran for a while has usually left durable state behind

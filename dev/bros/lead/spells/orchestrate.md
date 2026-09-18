@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.6.0
+version: 2.7.0
 ---
 
 # orchestrate
@@ -124,10 +124,12 @@ and every failure mode
 this spell only says how a phase differs from a one-shot ask.
 
 - **Never wait inline.** No phase is short enough for a blocking wait:
-  send every one detached with `worker.question` in its talk and poll for its result.
+  send every one detached with `worker.question` in its talk and collect its result through the surface's watch or polling flow.
   {{iff #harness = claude}}Keep `summon watch` armed.
   When it reports a child's question, answer that quest with `summon say --reply-to`.
-  Then resume the same `summon check --wait` loop.{{eliff #harness = bro}}When `summon_check(wait: true)` returns a question, answer that quest with `summon_say(reply_to=…)`.
+  Then resume the same `summon check --wait` loop.{{eliff #wire = bare}}Keep the `summon watch` job armed and call `bro::chill` whenever nothing else remains.
+  When it reports a child's question, answer that quest with `bro::summon_say(reply_to=…)`, then chill again.
+  Read the retained answer with `bro::summon_check` after the terminal line.{{else}}On the raw MCP surface, when `summon_check(wait=true)` returns a question, answer that quest with `summon_say(reply_to=…)`.
   Then resume the same check loop.{{end}}
   Never launch a replacement phase to answer it.
 - **Hold and effort.** Leave both at the summon defaults.

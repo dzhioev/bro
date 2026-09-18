@@ -36,10 +36,11 @@ The public verbs deliberately accept no runtime shaping flags (`--summon`, `--gr
 
 `bro run` uses the ask preset:
 live activity on stderr and one undecorated reply on stdout.
-Its omitted hold is `unattended`.
+Its omitted hold is `unattended`, and the one-shot process ends with that turn, closing any watch jobs the model started.
 
 `bro chat` uses the chat preset and defaults to `guided`.
-Both text and Textual modes can interrupt a running turn and render `call.INTERRUPTED_NOTICE`;
+Between user turns, both text and Textual modes wait on the run inbox and call `Runner.wake()` when a watch reports news.
+Both modes can interrupt a running turn and render `call.INTERRUPTED_NOTICE`;
 the TUI prevents concurrent sends.
 The opening banner is a trusted surface notice rendered by `bro.workspace.banner.render_banner`, not conversation input.
 A recorded conversation's exit hint names `bro chat <bro> --fork <trail-id>`.

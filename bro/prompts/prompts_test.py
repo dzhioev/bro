@@ -103,12 +103,20 @@ class TestSessionFragment:
     assert '{{' not in fragment
     assert fragment.endswith(hold_fragment('attended', harness='claude', wire='mcp'))
 
-  def test_the_summon_watch_has_no_native_counterpart(self, monkeypatch):
+  def test_a_summoning_native_run_starts_a_watch_job_and_chills(self, monkeypatch):
     monkeypatch.delenv(SUMMONED_ENV, raising=False)
     monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
-    assert session_fragment('attended', harness='bro', wire='bare') == hold_fragment(
-      'attended', harness='bro', wire='bare'
-    )
+    fragment = session_fragment('attended', harness='bro', wire='bare')
+    assert "`bro::job('summon watch', mode='watch')`" in fragment
+    assert '`bro::chill`' in fragment
+    assert 'raw MCP session' not in fragment
+
+  def test_a_summoning_raw_mcp_run_keeps_the_polling_flow(self, monkeypatch):
+    monkeypatch.delenv(SUMMONED_ENV, raising=False)
+    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    fragment = session_fragment('attended', harness='bro', wire='mcp')
+    assert 'raw MCP session has no persistent watch' in fragment
+    assert '`bro::chill`' not in fragment
 
   def test_a_summoning_summoned_run_carries_both_contracts_in_order(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
@@ -130,21 +138,40 @@ class TestSessionFragment:
     fragment = session_fragment('guided', harness='claude', wire='mcp', talk=('worker.say',))
     assert fragment.endswith(hold_fragment('guided', harness='claude', wire='mcp'))
 
-  def test_a_speaking_summoner_arms_the_child_watch(self, monkeypatch):
+  @pytest.mark.parametrize(
+    ('harness', 'wire', 'marker'),
+    (
+      ('claude', 'mcp', 'Arm `Monitor` once on exactly `summon watch`'),
+      ('bro', 'bare', "`bro::job('summon watch', mode='watch')`"),
+      ('bro', 'mcp', 'raw MCP session has no persistent watch'),
+    ),
+  )
+  def test_a_speaking_summoner_reaches_the_child_by_surface(
+    self, monkeypatch, harness, wire, marker
+  ):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     fragment = session_fragment(
-      'attended', harness='claude', wire='mcp', talk=('requester.say', 'worker.say')
+      'attended', harness=harness, wire=wire, talk=('requester.say', 'worker.say')
     )
-    assert 'messages from the summoner then reach you' in fragment
-    assert 'exactly `summon watch`' in fragment
+    assert marker in fragment
 
-  def test_a_questioning_child_is_told_to_consult_and_recover(self, monkeypatch):
+  def test_a_questioning_native_child_asks_without_blocking(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     fragment = session_fragment(
       'unattended', harness='bro', wire='bare', talk=('worker.say', 'worker.question')
     )
-    assert '`bro::summon_say`' in fragment
+    assert '`question=true`' in fragment
+    assert 'reply arrives on the summon watch' in fragment
+    assert 'bounded `wait`' not in fragment
+
+  def test_a_questioning_raw_mcp_child_keeps_the_bounded_wait(self, monkeypatch):
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    fragment = session_fragment(
+      'unattended', harness='bro', wire='mcp', talk=('worker.say', 'worker.question')
+    )
+    assert 'bounded `wait`' in fragment
     assert 'recover the reply with `bro::summon_check`' in fragment
+    assert '`question=true`' not in fragment
 
   def test_a_silent_child_is_told_to_raise_instead_of_asking(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
