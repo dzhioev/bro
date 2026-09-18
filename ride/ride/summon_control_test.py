@@ -224,6 +224,32 @@ def test_authorized_summon_opens_identity_before_spawning(tmp_path):
   assert accepted['summoner'] == {'workspace': 'ws', 'bro': 'bro-dev'}
 
 
+def test_request_talk_widens_the_default_and_reaches_spawn(tmp_path):
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  message = _message(talk=['worker.question', 'requester.say'])
+
+  control.handle(cast(Dispatcher, context), ROOT, message)
+
+  assert context.journal.records[message.quest_id].talk == frozenset(
+    {'worker.say', 'worker.question', 'requester.say'}
+  )
+
+
+def test_manual_request_talk_reaches_the_pending_record(tmp_path, monkeypatch):
+  monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
+  control = _control(tmp_path)
+  context = FakeContext(control)
+  message = _message(manual=True, talk=['worker.question'])
+
+  control.handle(cast(Dispatcher, context), ROOT, message)
+
+  assert ride.pending_summon.peek(message.quest_id).talk == ('worker.question', 'worker.say')
+  assert context.journal.records[message.quest_id].talk == frozenset(
+    {'worker.say', 'worker.question'}
+  )
+
+
 def test_audit_attributes_every_worker_backed_kind_from_journal_parent(tmp_path):
   control = _control(tmp_path)
   context = FakeContext(control)
@@ -348,6 +374,9 @@ def test_authorization_and_shape_denials_use_one_prefixed_journal_reason(
     {'party': 'join', 'into': 'feature'},
     {'party': 'join', 'manual': True},
     {'isolation': 'shared'},
+    {'talk': 'worker.say'},
+    {'talk': ['worker.say', 'worker.say']},
+    {'talk': ['worker.shout']},
   ],
 )
 def test_malformed_requests_are_denied(tmp_path, overrides):
