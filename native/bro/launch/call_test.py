@@ -1,6 +1,8 @@
 import asyncio
 import json
 import signal
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import ClassVar, Optional
@@ -11,7 +13,8 @@ import pytest
 import bro.llm.llms.echo as llm_llms_echo
 import bro.llm.llms.openai as llm_llms_openai
 from bro.bro import AnswerDelivered, BaseBro
-from bro.launch.call import call_text, chat_main
+from bro.inbox import Inbox
+from bro.launch.call import _LineBuffer, _next_idle_event, call_text, chat_main
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.mcp import MCPServer
 from bro.llm.observer import (
@@ -45,12 +48,20 @@ from bros.bro import Bro
 
 class MockLLM(LLM):
   def __init__(self, response: str = 'mock', mcp_servers: Optional[list[MCPServer]] = None):
-    super().__init__(mcp_servers)
+    super().__init__(Inbox(), mcp_servers)
     self.response = response
     self.send_calls: list[list[dict]] = []
+    self.wake_calls = 0
+    self.woken = asyncio.Event()
 
   async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
     self.send_calls.append(messages)
+    return self.response
+
+  async def wake(self, *, request_timeout: Optional[float] = None) -> str:
+    self.inbox.drain()
+    self.wake_calls += 1
+    self.woken.set()
     return self.response
 
 
@@ -72,7 +83,24 @@ class _MockRunner(Runner):
     self.mock_llm = MockLLM(response=response)
 
   def _create_llm(self, *, hold: str) -> LLM:
+    self.mock_llm.inbox = self.inbox
     return self.mock_llm
+
+
+class _BlockingLine:
+  def __init__(self, line: str):
+    self.line = line
+    self.started = threading.Event()
+    self.release = threading.Event()
+    self._read = False
+
+  def __call__(self) -> str:
+    if self._read:
+      raise EOFError
+    self._read = True
+    self.started.set()
+    self.release.wait()
+    return self.line
 
 
 class _ScriptedLines:
@@ -150,6 +178,89 @@ async def test_text_returns_on_immediate_eof(capsys):
   await call_text(runner, 'only', read_line=_ScriptedLines([]), now=_fixed_now)
   assert len(runner.mock_llm.send_calls) == 1
   assert runner.mock_llm.send_calls[0][-1] == {'role': 'user', 'content': 'only'}
+
+
+@pytest.mark.asyncio
+async def test_idle_race_gives_buffered_lines_the_turn_after_one_output_page():
+  runner = _MockRunner(response='reply')
+  lines = _LineBuffer()
+  first = ('line', 'first')
+  second = ('line', 'second')
+  lines.put(first)
+  lines.put(second)
+  job = runner.registry.start('seq 1 201; sleep 30', 'watch')
+  assert await asyncio.to_thread(runner.inbox.wait, time.monotonic() + 10, threading.Event())
+
+  first_kind, _ = await _next_idle_event(runner, lines)
+  batch = runner.inbox.drain(limit=100)
+  second_event = await _next_idle_event(runner, lines, prefer_lines=True)
+
+  assert first_kind == 'notification'
+  assert batch is not None and 'pending: 101 lines' in batch.text
+  assert runner.inbox.has_news()
+  assert second_event == first
+  assert lines.get() == second
+  await asyncio.to_thread(job.kill)
+
+
+@pytest.mark.asyncio
+async def test_text_notification_wins_while_a_line_remains_for_the_next_turn(capsys):
+  runner = _MockRunner(response='reply')
+  reader = _BlockingLine('human next')
+  conversation = asyncio.create_task(call_text(runner, 'first', read_line=reader, now=_fixed_now))
+  await asyncio.to_thread(reader.started.wait)
+  job = runner.registry.start('echo news; sleep 30', 'watch')
+
+  await asyncio.wait_for(runner.mock_llm.woken.wait(), timeout=10)
+  assert runner.mock_llm.wake_calls == 1
+  await asyncio.to_thread(job.kill)
+  assert len(runner.mock_llm.send_calls) == 1
+  reader.release.set()
+  await asyncio.wait_for(conversation, timeout=10)
+
+  assert [call[-1]['content'] for call in runner.mock_llm.send_calls] == [
+    'first',
+    'human next',
+  ]
+
+
+@pytest.mark.asyncio
+async def test_text_answer_ends_with_a_stdin_read_pending(capsys):
+  runner = _MockRunner(response='reply')
+  reader = _BlockingLine('never delivered')
+  conversation = asyncio.create_task(call_text(runner, 'first', read_line=reader, now=_fixed_now))
+  await asyncio.to_thread(reader.started.wait)
+
+  async def deliver(*, request_timeout=None):
+    runner.inbox.drain()
+    raise AnswerDelivered('done')
+
+  runner.mock_llm.wake = deliver
+  job = runner.registry.start('echo news; sleep 30', 'watch')
+
+  with pytest.raises(AnswerDelivered, match='done'):
+    await asyncio.wait_for(conversation, timeout=10)
+  await asyncio.to_thread(job.kill)
+  reader.release.set()
+
+
+@pytest.mark.asyncio
+async def test_tui_starts_a_turn_when_news_arrives_while_idle(monkeypatch):
+  from bro.launch.call_tui import ChatApp, MessageInput
+
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  runner = _MockRunner(response='reply')
+  app = ChatApp(runner, 'first')
+  async with app.run_test(size=(80, 40)) as pilot:
+    await app.workers.wait_for_complete()
+    job = runner.registry.start('echo news; sleep 30', 'watch')
+    await asyncio.wait_for(runner.mock_llm.woken.wait(), timeout=10)
+    await asyncio.to_thread(job.kill)
+    await app.workers.wait_for_complete()
+    await pilot.pause()
+
+    assert runner.mock_llm.wake_calls >= 1
+    assert app.query_one('#input-bar', MessageInput).disabled is False
 
 
 @dataclass(frozen=True)

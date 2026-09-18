@@ -5,12 +5,15 @@ import importlib.util
 import json
 import signal
 import sys
-from collections.abc import Callable, Iterator
+import threading
+from collections import deque
+from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import datetime
 from typing import Optional, TextIO
 
 import bro.base.args as base_args
 from bro.base import log
+from bro.base.offload import off_loop
 from bro.bro import RAISE_EXIT_STATUS, AnswerDelivered, BroRaised
 from bro.launch.llm_flags import (
   EFFORT_HELP,
@@ -62,6 +65,85 @@ async def _turn(runner: Runner, message: str, *, observer: Observer, hold: str) 
       return await task
     except asyncio.CancelledError:
       return None
+
+
+async def _notification_turn(runner: Runner) -> Optional[str]:
+  task = asyncio.create_task(runner.wake())
+  with _interruptible(task):
+    try:
+      return await task
+    except asyncio.CancelledError:
+      return None
+
+
+class _LineBuffer:
+  def __init__(self):
+    self._lines: deque[tuple[str, object]] = deque()
+    self._available = asyncio.Event()
+
+  def put(self, line: tuple[str, object]) -> None:
+    self._lines.append(line)
+    self._available.set()
+
+  def has_lines(self) -> bool:
+    return len(self._lines) > 0
+
+  async def wait(self) -> None:
+    await self._available.wait()
+
+  def get(self) -> tuple[str, object]:
+    line = self._lines.popleft()
+    if len(self._lines) == 0:
+      self._available.clear()
+    return line
+
+
+@contextlib.asynccontextmanager
+async def _idle_waiters(
+  runner: Runner, lines: _LineBuffer
+) -> AsyncIterator[tuple[asyncio.Task, asyncio.Task, threading.Event]]:
+  cancelled = threading.Event()
+  line_task = asyncio.create_task(lines.wait())
+  news_task = asyncio.create_task(off_loop(runner.inbox.wait, None, cancelled))
+  try:
+    yield line_task, news_task, cancelled
+  finally:
+    runner.inbox.cancel(cancelled)
+    line_task.cancel()
+    news_task.cancel()
+    await asyncio.gather(line_task, news_task, return_exceptions=True)
+
+
+async def _next_idle_event(
+  runner: Runner, lines: _LineBuffer, *, prefer_lines: bool = False
+) -> tuple[str, object]:
+  while True:
+    if prefer_lines and lines.has_lines():
+      return lines.get()
+    if runner.inbox.has_news():
+      return ('notification', None)
+    if lines.has_lines():
+      return lines.get()
+    async with _idle_waiters(runner, lines) as (line_task, news_task, _):
+      await asyncio.wait({line_task, news_task}, return_when=asyncio.FIRST_COMPLETED)
+
+
+def _start_line_reader(read: Callable[[], str], lines: _LineBuffer) -> None:
+  loop = asyncio.get_running_loop()
+
+  def read_lines() -> None:
+    while True:
+      try:
+        line = read()
+      except EOFError:
+        loop.call_soon_threadsafe(lines.put, ('eof', None))
+        return
+      except BaseException as error:
+        loop.call_soon_threadsafe(lines.put, ('error', error))
+        return
+      loop.call_soon_threadsafe(lines.put, ('line', line))
+
+  threading.Thread(target=read_lines, daemon=True).start()
 
 
 def _surface_notice(
@@ -128,16 +210,37 @@ async def call_text(
         )
         interruption_number += 1
 
+    lines = _LineBuffer()
+    _start_line_reader(read, lines)
     if initial is not None:
       await exchange(initial)
+    prefer_lines = False
     while True:
-      try:
-        message = read()
-      except EOFError:
-        return
-      if len(message) == 0:
+      kind, value = await _next_idle_event(runner, lines, prefer_lines=prefer_lines)
+      prefer_lines = False
+      if kind == 'notification':
+        reply = await _notification_turn(runner)
+        prefer_lines = True
+        if reply is None:
+          session.consume(
+            _surface_notice(
+              f'surface:interruption:{interruption_number}',
+              INTERRUPTED_NOTICE,
+              now(),
+              level='interruption',
+            )
+          )
+          interruption_number += 1
         continue
-      await exchange(message)
+      if kind == 'eof':
+        return
+      if kind == 'error':
+        assert isinstance(value, BaseException)
+        raise value
+      assert kind == 'line' and isinstance(value, str)
+      if len(value) == 0:
+        continue
+      await exchange(value)
 
 
 def _tty_supported() -> bool:

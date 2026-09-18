@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Optional
 import bro.llm.usage as usage
 from bro.base import credentials, log
 from bro.base.offload import off_loop
+from bro.inbox import Inbox, NotificationBatch
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.llms.openai import (
   DEFAULT_MODEL as _DEFAULT_MODEL,
@@ -17,6 +18,7 @@ from bro.llm.llms.openai import (
 from bro.llm.mcp import MCPServer, Tool, ToolControlSignal
 from bro.llm.observer import (
   InterimAssistantTextEvent,
+  NotificationEvent,
   Observer,
   ReasoningEvent,
   ToolCallEvent,
@@ -41,6 +43,7 @@ if TYPE_CHECKING:
 
 def create(
   spec: NativeLLMSpec,
+  inbox: Inbox,
   mcp_servers: Optional[list[MCPServer]] = None,
   observer: Optional[Observer] = None,
   tracker: Optional[Tracker] = None,
@@ -53,6 +56,7 @@ def create(
   config = credentials.get_json('openai')
   return OpenAI(
     api_key=config['api_key'],
+    inbox=inbox,
     model=spec.model,
     reasoning_effort=spec.reasoning_effort,
     service_tier=spec.service_tier,
@@ -161,6 +165,7 @@ class OpenAI(LLM):
   def __init__(
     self,
     api_key: str,
+    inbox: Inbox,
     model: str = _DEFAULT_MODEL,
     mcp_servers: Optional[list[MCPServer]] = None,
     reasoning_effort: Optional[_ReasoningEffort] = None,
@@ -172,7 +177,7 @@ class OpenAI(LLM):
   ):
     from openai import AsyncOpenAI
 
-    super().__init__(mcp_servers, observer=observer, tracker=tracker, agent=agent)
+    super().__init__(inbox, mcp_servers, observer=observer, tracker=tracker, agent=agent)
     self.model = model
     # async is what makes a roundtrip interruptible: a cancelled await closes
     # the request, where the sync client pins the loop until the reply lands.
@@ -457,46 +462,91 @@ class OpenAI(LLM):
     self._emit_response_steps(response, llm_call_step_id=llm_call_step_id)
     return response
 
+  async def _drain_notifications(
+    self,
+    input_items: list[ResponseInputItemParam],
+    *,
+    call_index: int,
+    following: Optional[list[ResponseInputItemParam]] = None,
+  ) -> Optional[NotificationBatch]:
+    batch = self.inbox.drain()
+    if batch is None:
+      return None
+    input_items.append({'role': 'user', 'content': batch.text})
+    if following is not None:
+      input_items.extend(following)
+    # The drain consumed the jobs' news. Pin every item in its request before
+    # the first await so cancellation while recording cannot lose any of them.
+    self._pending_input = list(input_items)
+    await self._track_step(
+      'notification',
+      batch.text,
+      turn_index=self._turn_index,
+      call_index=call_index,
+      job_ids=list(batch.job_ids),
+    )
+    self.observer.on_event(NotificationEvent(batch.text, batch.job_ids))
+    return batch
+
   async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
+    return await self._send(messages, notification_turn=False, request_timeout=request_timeout)
+
+  async def wake(self, *, request_timeout: Optional[float] = None) -> str:
+    return await self._send([], notification_turn=True, request_timeout=request_timeout)
+
+  async def _send(
+    self,
+    messages: list[dict],
+    *,
+    notification_turn: bool,
+    request_timeout: Optional[float],
+  ) -> str:
     openai_tools = await self._resolve_openai_tools()
-    # client-side fork: the replayed prefix passes through unconverted (it is
-    # already in OpenAI input shape, mixing role-keyed messages with raw output
-    # items and function_call_outputs). the incoming system message is dropped
-    # because the prefix carries its own system at index 0. the prefix is
-    # consumed exactly once.
     api_input: list[ResponseInputItemParam] = []
     incoming = messages
     if self._input_prefix is not None:
       api_input.extend(self._input_prefix)
-      incoming = [msg for msg in messages if msg.get('role') != 'system']
+      incoming = [message for message in messages if message.get('role') != 'system']
       self._input_prefix = None
     api_input.extend(self._pending_input)
     self._pending_input = []
-    api_input.extend(convert_message(msg) for msg in incoming)
 
     user_messages = [message for message in incoming if message.get('role') == 'user']
+    if notification_turn or (len(user_messages) > 0 and self._has_user_input):
+      self._turn_index += 1
+    converted_incoming: list[ResponseInputItemParam] = [
+      convert_message(message) for message in incoming
+    ]
+    notification = await self._drain_notifications(
+      api_input,
+      call_index=self._call_index + 1,
+      following=converted_incoming,
+    )
+    if notification_turn and notification is None:
+      raise RuntimeError('notification turn started without inbox news')
+    if notification is None:
+      api_input.extend(converted_incoming)
+
     for message in user_messages:
-      if self._has_user_input:
-        self._turn_index += 1
       await self._track_step('user_input', _extract_text(message), turn_index=self._turn_index)
+    if notification_turn or len(user_messages) > 0:
       self._has_user_input = True
 
     response = await self._exchange(api_input, openai_tools, request_timeout=request_timeout)
+    self._pending_input = []
     while has_tool_calls(response):
       tool_results = await self._execute_tool_calls(
         response,
         turn_index=self._turn_index,
         call_index=self._call_index,
       )
+      await self._drain_notifications(tool_results, call_index=self._call_index)
       response = await self._exchange(tool_results, openai_tools, request_timeout=request_timeout)
+      self._pending_input = []
 
     try:
       return parse_response(response)
     except Exception as error:
-      # by now every tool call has executed and the terminal response is
-      # recorded, so an extraction failure degrades to the plain terminal
-      # message text instead of failing a run whose work is complete; with no
-      # text at all there is no reply to salvage and the failure propagates.
       texts = _message_texts([item for item in response.output if item.type == 'message'])
       if len(texts) == 0:
         raise

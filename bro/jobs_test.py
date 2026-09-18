@@ -1,10 +1,13 @@
+import gc
 import threading
 import time
+import weakref
+from pathlib import Path
 
 import pytest
 
 from bro.base.text_window import BYTE_LIMIT
-from bros.dev.jobs import Job, Registry
+from bro.jobs import Job, Registry
 
 
 def _wait_finished(job: Job, timeout: float = 10.0) -> None:
@@ -13,7 +16,7 @@ def _wait_finished(job: Job, timeout: float = 10.0) -> None:
   first read)."""
   deadline = time.monotonic() + timeout
   with job._condition:
-    while not job._finished():
+    while not job._finished_locked():
       remaining = deadline - time.monotonic()
       assert remaining > 0, 'job did not finish in time'
       job._condition.wait(remaining)
@@ -32,7 +35,7 @@ def _await_watching(job: Job, timeout: float = 10.0) -> None:
 def _await_spool(job: Job, expected: str, timeout: float = 10.0) -> None:
   deadline = time.monotonic() + timeout
   with job._condition:
-    while expected not in job._spool.getvalue():
+    while expected not in job._unread_locked():
       remaining = deadline - time.monotonic()
       assert remaining > 0, f'{expected!r} never spooled'
       job._condition.wait(remaining)
@@ -164,10 +167,13 @@ def test_concurrent_watch_fails_immediately_and_kill_wakes_the_blocked_watch():
   _await_watching(job)
   with pytest.raises(ValueError, match='job-1 is already being watched'):
     job.watch(wait_seconds=0, limit=100, tail=False)
-  assert job.kill(grace_seconds=5) == 'job-1 exited (code -15)'
+  killed = job.kill(grace_seconds=5)
+  state = killed.removeprefix('job-1 ')
   watcher.join(timeout=10)
   assert not watcher.is_alive()
-  assert blocked_result == ['exited (code -15)']
+  assert len(blocked_result) == 1
+  assert blocked_result[0].startswith(('running', state))
+  assert job.watch(wait_seconds=0, limit=100, tail=False) == state
 
 
 def test_wake_frees_the_job_for_the_next_watch():
@@ -211,11 +217,20 @@ def test_wake_that_lands_before_the_watch_starts_still_ends_it():
 def test_kill_terminates_and_record_stays_readable():
   job = Job('job-1', 'echo before; sleep 30')
   _await_spool(job, 'before\n')
-  assert job.kill(grace_seconds=5) == 'job-1 exited (code -15)'
+  killed = job.kill(grace_seconds=5)
+  state = killed.removeprefix('job-1 ')
+  assert state.startswith('exited (code -')
   out = job.watch(wait_seconds=5, limit=100, tail=False)
-  assert out.startswith('exited (code -15)\n')
+  assert out.startswith(f'{state}\n')
   assert _body(out) == ['before']
-  assert job.kill() == 'job-1 already exited (code -15)'
+  assert job.kill() == f'job-1 already {state}'
+
+
+def test_command_signal_exit_is_preserved_through_the_supervisor():
+  job = Job('job-1', 'kill -TERM $$', 'fg')
+  _wait_finished(job)
+
+  assert job.foreground_result() == 'exited (code -15)'
 
 
 def test_kill_escalates_to_sigkill_when_sigterm_is_ignored():
@@ -230,11 +245,52 @@ def test_kill_escalates_to_sigkill_when_sigterm_is_ignored():
   assert job.kill(grace_seconds=0.3) == 'job-1 exited (code -9)'
 
 
-def test_registry_close_reaps_only_live_jobs():
+def _process_is_running(process_id: int) -> bool:
+  try:
+    state = Path(f'/proc/{process_id}/stat').read_text().split()[2]
+  except (FileNotFoundError, ProcessLookupError):
+    return False
+  return state != 'Z'
+
+
+def test_supervisor_anchors_the_group_until_nested_descendants_exit():
+  job = Job('job-1', '(sleep 30 & echo $!) &')
+  _await_spool(job, '\n')
+  with job._condition:
+    child_process_id = int(job._unread_locked())
+
+  assert job.process.poll() is None
+  assert _process_is_running(child_process_id)
+  assert job.kill(grace_seconds=0.3) == 'job-1 exited (code -15)'
+  assert not _process_is_running(child_process_id)
+
+
+def test_registry_close_unregisters_the_atexit_backstop():
+  registry = Registry()
+  reference = weakref.ref(registry)
+
+  registry.close()
+  del registry
+  gc.collect()
+
+  assert reference() is None
+
+
+def test_registry_close_reaps_jobs_and_releases_spools():
   registry = Registry()
   finished = registry.start('true')
   finished.process.wait()
   running = registry.start('sleep 30')
+  orphaned = registry.start('(sleep 30 & echo $!) &')
+  _await_spool(orphaned, '\n')
+  with orphaned._condition:
+    child_process_id = int(orphaned._unread_locked())
+
   registry.close()
+
   assert running.process.wait(timeout=10) == -9
   assert finished.process.returncode == 0
+  assert not _process_is_running(child_process_id)
+  assert all(job._spool.closed for job in (finished, running, orphaned))
+  with pytest.raises(ValueError, match='unknown job id'):
+    registry.get('job-1')

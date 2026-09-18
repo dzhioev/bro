@@ -14,6 +14,8 @@ import pytest
 
 from bro.base.template import _DIRECTIVE_RE
 from bro.bro import BaseBro
+from bro.inbox import Inbox
+from bro.jobs import Registry
 from bro.llm.mcp import MCPServer, Tool
 from bro.mcp import Harness, Wire
 from bro.registry import create_bro, declared_specs
@@ -24,6 +26,8 @@ class _NoRun:
 
   trail_id = None
   current_tool_step_id = None
+  inbox = Inbox()
+  registry = Registry(inbox)
 
 
 def _servers(bro: BaseBro, *, harness: Harness = 'bro', wire: Wire = 'bare') -> list[MCPServer]:

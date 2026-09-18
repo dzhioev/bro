@@ -3,6 +3,7 @@ from typing import cast
 
 from bro.llm.observer import (
   InterimAssistantTextEvent,
+  NotificationEvent,
   ReasoningEvent,
   ToolCallEvent,
   ToolResultEvent,
@@ -18,6 +19,7 @@ from bro.trails.display.records import (
   Error,
   InterimAssistantText,
   LiveSource,
+  Notice,
   Origin,
   Reasoning,
   ToolCall,
@@ -55,6 +57,7 @@ def test_live_adapter_maps_all_events_with_arrival_provenance():
     TurnStartedEvent('input'),
     ReasoningEvent('thinking'),
     InterimAssistantTextEvent('working'),
+    NotificationEvent('background news', ('job-1',)),
     ToolCallEvent('call-1', 'service__tool', {'value': 1}),
     ToolResultEvent('call-1', 'service__tool', {'ok': True}, is_error=True),
     TurnCompletedEvent('done'),
@@ -69,6 +72,7 @@ def test_live_adapter_maps_all_events_with_arrival_provenance():
     UserInput,
     Reasoning,
     InterimAssistantText,
+    Notice,
     ToolCall,
     ToolResult,
     AssistantText,
@@ -80,7 +84,7 @@ def test_live_adapter_maps_all_events_with_arrival_provenance():
     assert record.origin is Origin.LIVE
     assert record.source == LiveSource('run-1', sequence)
     assert record.timestamp == '2026-08-15T01:02:03+00:00'
-  result = session.records[4]
+  result = session.records[5]
   assert isinstance(result, ToolResult)
   assert result.call_id == 'call-1'
   assert result.tool_name == 'service__tool'

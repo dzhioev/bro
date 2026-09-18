@@ -9,6 +9,8 @@ from typing import Any, Optional, Self
 
 from bro.base import log
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
+from bro.inbox import Inbox
+from bro.jobs import Registry
 from bro.llm.observer import (
   NullObserver,
   Observer,
@@ -76,6 +78,8 @@ class Runner:
 
   def __init__(self, bro: BaseBro):
     self.bro = bro
+    self.inbox = Inbox()
+    self.registry = Registry(self.inbox)
     self._llm: Optional[LLM] = None
     # a bro renders only through an observer its caller passes: an embedding
     # application must not get terminal output, or a display session, it never
@@ -124,6 +128,9 @@ class Runner:
     # fakes) — on self before _create_llm, so the LLM construction path picks
     # them up, then build the LLM, compose the hold prompt, open the trail, and
     # seed the message list.
+    if self.registry.closed:
+      self.inbox = Inbox()
+      self.registry = Registry(self.inbox)
     self._observer = observer
     self._tracker = tracker if tracker is not None else self._make_tracker()
     llm = self._create_llm(hold=hold)
@@ -177,6 +184,7 @@ class Runner:
       detail = str(exception)
       self._record_error_step(exception)
 
+    self.registry.close()
     self.bro.close()
     self._lifetime_active = False
     self._last_end_reason = reason
@@ -303,6 +311,21 @@ class Runner:
     effective_observer.on_event(TurnCompletedEvent(result))
     return result
 
+  async def wake(self, request_timeout: Optional[float] = None) -> str:
+    """Run one interactive turn from pending inbox news."""
+    if self._llm is None:
+      raise RuntimeError('cannot wake a conversation before its first turn')
+    observer = self._observer
+    try:
+      result = await self._llm.wake(request_timeout=request_timeout)
+    except AnswerDelivered:
+      raise
+    except Exception as error:
+      observer.on_event(TurnFailedEvent(str(error)))
+      raise
+    observer.on_event(TurnCompletedEvent(result))
+    return result
+
   def _record_error_step(self, error: BaseException) -> None:
     # best-effort: recording the failure must never mask it — the tracker may
     # well be down for the same reason the run is failing.
@@ -322,6 +345,7 @@ class Runner:
   def _create_llm(self, *, hold: str) -> LLM:
     return native_providers.create(
       self.bro.llm_spec,
+      self.inbox,
       mcp_servers=self.bro.assemble(
         harness='bro', wire='bare', include_raise=hold == 'unattended', live_run=self
       ),

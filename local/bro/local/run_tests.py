@@ -180,7 +180,8 @@ PYTEST_FILES = [
   'native/bro/launch/run_test.py',
   'dev/bros/dev/dev_test.py',
   'dev/bros/dev/mcp_test.py',
-  'dev/bros/dev/jobs_test.py',
+  'bro/jobs_test.py',
+  'bro/inbox_test.py',
   'dev/bros/eyebro/eyebro_test.py',
   'dev/bros/lead/lead_test.py',
   'dev/bros/terminal/terminal_test.py',
@@ -315,6 +316,7 @@ BENCHMARK_PYTEST_FILES = [
 LLM_PYTEST_FILES = [
   'bro/spells_llm_test.py',
   'dev/bros/dev/commit_llm_test.py',
+  'native/bro/native/llms/openai_llm_test.py',
 ]
 
 

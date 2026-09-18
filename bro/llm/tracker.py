@@ -3,7 +3,9 @@
 from abc import ABC, abstractmethod
 from typing import Any, Literal, Optional, TypedDict
 
-StepKind = Literal['system_prompt', 'user_input', 'tool_result', 'llm_call', 'error']
+StepKind = Literal[
+  'system_prompt', 'user_input', 'notification', 'tool_result', 'llm_call', 'error'
+]
 
 EndReason = Literal['ok', 'raised', 'error']
 

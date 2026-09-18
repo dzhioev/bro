@@ -2,6 +2,7 @@ import importlib
 from collections.abc import Callable
 from typing import Optional, cast
 
+from bro.inbox import Inbox
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.mcp import MCPServer
 from bro.llm.observer import Observer
@@ -14,13 +15,21 @@ _NATIVE_PROVIDER_MODULES = {
 }
 
 Factory = Callable[
-  [NativeLLMSpec, Optional[list[MCPServer]], Optional[Observer], Optional[Tracker], Optional[str]],
+  [
+    NativeLLMSpec,
+    Inbox,
+    Optional[list[MCPServer]],
+    Optional[Observer],
+    Optional[Tracker],
+    Optional[str],
+  ],
   LLM,
 ]
 
 
 def create(
   spec: NativeLLMSpec,
+  inbox: Inbox,
   mcp_servers: Optional[list[MCPServer]] = None,
   observer: Optional[Observer] = None,
   tracker: Optional[Tracker] = None,
@@ -30,4 +39,4 @@ def create(
   if module_name is None:
     raise ValueError(f'native provider {spec.TYPE!r} has no client')
   factory = cast(Factory, importlib.import_module(module_name).create)
-  return factory(spec, mcp_servers, observer, tracker, agent)
+  return factory(spec, inbox, mcp_servers, observer, tracker, agent)

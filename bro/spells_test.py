@@ -11,6 +11,8 @@ import bro.mcp as mcp
 from bro import bro as bro_module, spells as spell_store
 from bro.base.condition import SetVariable
 from bro.bro import BaseBro
+from bro.inbox import Inbox
+from bro.jobs import Registry
 from bro.llm.mcp import InProcessMCPServer, ToolRegistry
 from bro.mcp import MCPServerSpec, creds
 from bro.prompts import get_prompt
@@ -48,6 +50,8 @@ class _NoRun:
 
   trail_id = None
   current_tool_step_id = None
+  inbox = Inbox()
+  registry = Registry(inbox)
 
 
 def _servers(bro: BaseBro, wire: mcp.Wire) -> list[llm_mcp.MCPServer]:

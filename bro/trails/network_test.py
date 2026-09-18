@@ -354,6 +354,24 @@ class TestWrites:
       'tools': {'abc': [{'name': 'read'}]},
     }
 
+  def test_notification_record_posts_as_text(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((200, b'{"extent": 2, "appended": 1}'))
+    notification = {
+      'kind': 'notification',
+      'body': '[notification: a background job reported]',
+      'turn_index': 1,
+      'call_index': 2,
+      'job_ids': ['job-1'],
+    }
+
+    result = _client().append_records('T1', 1, [notification])
+
+    assert result == {'extent': 2, 'appended': 1}
+    body = fake.requests[0][2]
+    assert body is not None
+    assert json.loads(body)['records'] == [notification]
+
   def test_admin_operations_use_the_server_seam(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((200, b'{"format": 1, "migrated_rows": 0}'))

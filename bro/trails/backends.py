@@ -26,6 +26,7 @@ BRO_STEP_KINDS = frozenset(
   {
     'system_prompt',
     'user_input',
+    'notification',
     'tool_result',
     'llm_call',
     'error',
@@ -35,7 +36,7 @@ BRO_STEP_KINDS = frozenset(
 # the kinds whose body a reader is entitled to read as text: they project into a
 # message whose content carries no other shape, so a body that is not a string
 # leaves the trail unrenderable rather than merely odd
-BRO_TEXT_BODY_KINDS = frozenset({'system_prompt', 'user_input'})
+BRO_TEXT_BODY_KINDS = frozenset({'system_prompt', 'user_input', 'notification'})
 
 
 @dataclass(frozen=True)
