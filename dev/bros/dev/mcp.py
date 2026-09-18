@@ -1,43 +1,30 @@
-"""MCP tools for the dev Bro: file ops, shell, search, and background jobs.
+"""MCP file and search tools for the dev Bro.
 
-Each tool wraps a primitive a Claude Code session would normally reach as a
-built-in (Read / Write / Edit / Bash / Grep / Glob / run_in_background +
-TaskOutput / TaskStop). Exposing them via MCP keeps the Bro abstraction
+Each tool wraps a file or search primitive a Claude Code session would normally
+reach as a built-in. Exposing them via MCP keeps the Bro abstraction
 declarative: the dev Bro picks the toolset and the LLM reaches it through the
 same `ToolRegistry` used by every MCP provider.
 
-Shared behaviour (output `limit`, skipped-content markers, fat-finger clamp,
-the background-job model) lives in sibling `REFERENCE.md` so per-tool
-`describe()` text stays terse and the LLM can call `read_reference` once to
-learn the rules. Add new shared concepts there, not in each tool's description.
+Shared output-limit and marker behaviour lives in sibling `REFERENCE.md` so
+per-tool descriptions stay terse. Add new shared concepts there, not in each
+tool's description.
 """
 
-import asyncio
 import subprocess
-import threading
 from pathlib import Path
 from typing import Optional
 
 from bro.base import spawn
-from bro.base.offload import off_loop
 from bro.base.text_window import DEFAULT_LIMIT, apply_limit, numbered_window
-from bro.llm.mcp import Context
 from bro.mcp import Toolset
-from bros.dev import jobs
 
-# default wall-clock cap for the shell-out tools (bash, grep). On expiry the whole
-# process group is killed and the tool returns a TIMED OUT result; callers can raise
-# their `timeout_seconds` to retry. See REFERENCE.md.
+# default wall-clock cap for grep. On expiry its whole process group is killed;
+# callers can raise `timeout_seconds` to retry. See REFERENCE.md.
 DEFAULT_TIMEOUT_SECONDS = 45
-
-# default window a watch blocks for when the job has no pending output — short so
-# an unparameterized call can't stall an interactive surface; iterative watchers
-# pass an explicitly large value. See REFERENCE.md.
-DEFAULT_WAIT_SECONDS = 10
 
 _REFERENCE_PATH = Path(__file__).parent / 'REFERENCE.md'
 
-toolset = Toolset('dev', state=jobs.Registry, close=jobs.Registry.close)
+toolset = Toolset('dev')
 
 
 def _require_regular_file(path: Path) -> None:
@@ -107,28 +94,6 @@ def edit_file(file_path: str, old_string: str, new_string: str, replace_all: boo
 
 
 @toolset.tool(
-  'run a bash command, capture stdout and stderr, and return exit code + combined '
-  'output. bash keeps the tail (shell diagnostics live at the end). '
-  '{{iff #tools contains read_reference}}limit and timeout_seconds: see read_reference '
-  'for the shared output cap and timeout policies.{{else}}output beyond `limit` is '
-  'trimmed to the tail with a skipped-content marker; on timeout_seconds expiry the '
-  'whole process group is killed and the tool returns TIMED OUT.{{end}} '
-  'use for shell work (git, sed, awk, find, …) that has no dedicated tool.'
-)
-async def bash(
-  command: str, limit: int = DEFAULT_LIMIT, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
-) -> str:
-  try:
-    process = await spawn.run_async(['bash', '-c', command], timeout=timeout_seconds)
-  except subprocess.TimeoutExpired:
-    return (
-      f'TIMED OUT after {timeout_seconds}s — killed. Re-run with a larger '
-      'timeout_seconds if the command needs more time.'
-    )
-  return spawn.format_result(process, limit=limit, keep='tail')
-
-
-@toolset.tool(
   'recursively search for pattern (extended regex) in files under path. glob filters '
   'which files to match (e.g. "*.py"). case_insensitive lowers the comparison. '
   'limit and timeout_seconds: see read_reference for the shared output cap and '
@@ -178,55 +143,3 @@ def glob(pattern: str, path: Optional[str] = None, limit: int = DEFAULT_LIMIT) -
   if len(matches) == 0:
     return 'no matches'
   return apply_limit('\n'.join(str(p) for p in matches), limit, keep='head')
-
-
-@toolset.tool(
-  'start command as a background job (bash -c, stdout+stderr merged into one '
-  'chronological stream, spooled continuously so the process never blocks on unread '
-  'output) and return its job id immediately. No timeout — the job runs until it '
-  'exits or is killed. Read output with watch; terminate with kill. See '
-  'read_reference for the full background-job rules.'
-)
-def job(context: Context[jobs.Registry], command: str) -> str:
-  started = context.state.start(command)
-  return f'started {started.id} (pid {started.process.pid})'
-
-
-@toolset.tool(
-  'read new output from a background job, oldest-first from the per-job cursor; '
-  'every return opens with a state line (running / exited (code N)). Blocks up to '
-  'wait_seconds when nothing is pending (0 = non-blocking poll); tail=true waits '
-  'for exit instead and returns the last limit lines. Exclusive per job — a '
-  'concurrent watch on the same job fails immediately. limit: shared output cap. '
-  'See read_reference for the full background-job rules.'
-)
-async def watch(
-  context: Context[jobs.Registry],
-  job_id: str,
-  wait_seconds: float = DEFAULT_WAIT_SECONDS,
-  limit: int = DEFAULT_LIMIT,
-  tail: bool = False,
-) -> str:
-  target = context.state.get(job_id)
-  # the wait blocks; run it off-loop so concurrent tool calls — other jobs'
-  # watches included — stay serviceable. an interrupted watch is woken so the
-  # abandoned thread drops its claim on the job instead of holding it for the
-  # rest of the window.
-  woken = threading.Event()
-  try:
-    return await off_loop(
-      target.watch, wait_seconds=wait_seconds, limit=limit, tail=tail, woken=woken
-    )
-  except asyncio.CancelledError:
-    target.wake(woken)
-    raise
-
-
-@toolset.tool(
-  'terminate a background job: SIGTERM its whole process group, escalating to '
-  'SIGKILL after a short grace. The record and spooled output stay readable via '
-  'watch for a final collect. Reports when the job had already exited.'
-)
-async def kill(context: Context[jobs.Registry], job_id: str) -> str:
-  target = context.state.get(job_id)
-  return await off_loop(target.kill)

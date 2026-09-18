@@ -1,4 +1,4 @@
-"""claude `PreToolUse` gate admitting only the commands named in its own argv.
+"""Claude `PreToolUse` gate admitting only the commands named in its own argv.
 
 Claude runs a `PreToolUse` hook before the call it matches, handing it the tool's
 arguments on stdin and taking its verdict over the session's permission mode —
@@ -49,5 +49,5 @@ if __name__ == '__main__':
   try:
     sys.exit(main(sys.argv))
   except Exception as error:
-    print(f'watch guard failed, denying the call: {error}', file=sys.stderr)
+    print(f'command guard failed, denying the call: {error}', file=sys.stderr)
     sys.exit(2)

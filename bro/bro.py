@@ -1,5 +1,8 @@
+import asyncio
 import math
 import os
+import threading
+import time
 from abc import ABC
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -25,11 +28,11 @@ from bro.base.condition import (
 )
 from bro.base.offload import off_loop
 from bro.base.scope import permit_choices
+from bro.base.text_window import DEFAULT_LIMIT
 from bro.datasources.base import DataSource
 from bro.datasources.man import ManPage, manual
-from bro.harness import claude
 from bro.inbox import Inbox
-from bro.jobs import Registry
+from bro.jobs import Job, JobStatus, Registry
 from bro.llm.llm import EFFORT_LEVELS, NativeLLMSpec
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
@@ -755,6 +758,206 @@ def _summon_check_tool(variables: Variables, wire: mcp.Wire) -> llm_mcp.Tool:
   )
 
 
+_JOB_WAIT_CAP_SECONDS = 3600.0
+_FOREGROUND_WAIT_SECONDS = 45.0
+
+_JOB_DESCRIPTION = (
+  'start a shell command as one supervised job (`bash -c`, merged stdout and stderr, '
+  'continuously spooled output). the command must match this persona’s shell roster whole and '
+  'exact; unrestricted personas may run any command. `fg` waits for exit and returns tail-kept '
+  'output; if its timeout or other job news ends the wait first, the job becomes `bg` and the '
+  'result names its id and `poll` continuation. `bg` returns immediately'
+  '{{iff #wire = bare}} and reports only its exit through this run’s notifications; `watch` '
+  'returns immediately and reports output as it arrives plus its exit.{{else}}; this MCP-served '
+  'build offers no `watch`, background output and exit are read with `poll`, and foreground '
+  'waits must fit beneath the client’s MCP call cap.{{end}} `timeout_seconds` is capped at '
+  f'{_JOB_WAIT_CAP_SECONDS:g} and a clamp is named in the result. output is bounded by `limit` '
+  'lines and the shared byte '
+  'cap, with skipped/pending markers.'
+)
+
+_POLL_DESCRIPTION = (
+  'read currently unread output from a job without blocking. the default is a head read: oldest '
+  'lines first, advancing only past what it returned and leaving the rest behind a pending '
+  'marker. `tail=true` jumps to the end, keeps the last `limit` lines, and announces the skipped '
+  'middle, which is not delivered later. every result starts with `running` or '
+  '`exited (code N)`. output is bounded by `limit` lines and the shared byte cap.'
+)
+
+_KILL_DESCRIPTION = (
+  'terminate a job’s whole supervised process group with SIGTERM, escalating to SIGKILL after '
+  'the grace period. waits for and consumes the exit it forces, so no later exit notification '
+  'follows; unread output remains available to `poll`, and unread watch output remains eligible '
+  'for notification delivery.'
+)
+
+_JOBS_DESCRIPTION = (
+  'list every job in this service registry with its id, mode, command, running/exited state, '
+  'exit code, and count of unread output lines.'
+)
+
+_CHILL_DESCRIPTION = (
+  'wait until this run’s background jobs have news or the requested seconds pass, without '
+  'consuming the news. refuses when no job is live because nothing could wake it early. seconds '
+  f'defaults to and is capped at {_JOB_WAIT_CAP_SECONDS:g}; a clamp is named in the result. an '
+  'interrupted tool call cancels its worker wait immediately.'
+)
+
+
+def _bounded_wait(seconds: float, field: str) -> tuple[float, Optional[str]]:
+  if not math.isfinite(seconds) or seconds <= 0:
+    raise ValueError(f'{field} must be a finite positive number')
+  if seconds <= _JOB_WAIT_CAP_SECONDS:
+    return seconds, None
+  return _JOB_WAIT_CAP_SECONDS, f'{field} {seconds:g} clamped to {_JOB_WAIT_CAP_SECONDS:g}'
+
+
+def _require_job_registry(live_run: Optional[LiveRun], owned: Optional[Registry]) -> Registry:
+  if owned is not None:
+    return owned
+  if live_run is None:
+    raise RuntimeError('job tools on the bare wire require a live run')
+  return live_run.registry
+
+
+def _admit_shell_command(command: str, *, commands: tuple[str, ...], unrestricted: bool) -> str:
+  normalized = command.strip()
+  if len(normalized) == 0:
+    raise ValueError('command must be non-empty')
+  if unrestricted or normalized in commands:
+    return normalized
+  listing = ', '.join(f'`{allowed}`' for allowed in commands)
+  raise ValueError(
+    f'this persona may run {listing} and nothing else — the command must match exactly, '
+    'with nothing appended'
+  )
+
+
+async def _wait_for_foreground_job(
+  job: Job,
+  *,
+  inbox: Optional[Inbox],
+  timeout_seconds: float,
+  limit: int,
+) -> str:
+  wait_seconds, clamp_note = _bounded_wait(timeout_seconds, 'timeout_seconds')
+  deadline = time.monotonic() + wait_seconds
+  try:
+    if inbox is None:
+      cancelled = threading.Event()
+      try:
+        await off_loop(job.wait_finished, deadline, cancelled)
+      except asyncio.CancelledError:
+        cancelled.set()
+        job.wake()
+        raise
+    else:
+      with inbox.waiter() as cancelled:
+        await off_loop(inbox.wait, deadline, cancelled)
+  except asyncio.CancelledError:
+    job.become_background()
+    raise
+
+  result, became_background = job.settle_foreground(limit)
+  if became_background:
+    result = f'{result}\n{job.id} continues in bg mode; read on with poll(id={job.id!r})'
+  if clamp_note is not None:
+    result = f'{result}\n[{clamp_note}]'
+  return result
+
+
+def _job_tools(
+  *,
+  wire: mcp.Wire,
+  live_run: Optional[LiveRun],
+  registry: Optional[Registry],
+  commands: tuple[str, ...],
+  unrestricted: bool,
+  variables: Variables,
+) -> list[llm_mcp.Tool]:
+  def start(command: str, mode: str) -> Job:
+    admitted = _admit_shell_command(command, commands=commands, unrestricted=unrestricted)
+    return _require_job_registry(live_run, registry).start(admitted, mode)  # type: ignore[arg-type]
+
+  if wire == 'bare':
+
+    async def _bare_job(
+      command: str,
+      mode: Literal['fg', 'bg', 'watch'] = 'fg',
+      timeout_seconds: float = _FOREGROUND_WAIT_SECONDS,
+      limit: int = DEFAULT_LIMIT,
+    ) -> str:
+      started = start(command, mode)
+      if mode != 'fg':
+        return f'started {started.id} ({mode})'
+      inbox = None if live_run is None else live_run.inbox
+      if inbox is None:
+        raise RuntimeError('foreground jobs on the bare wire require a live run')
+      return await _wait_for_foreground_job(
+        started, inbox=inbox, timeout_seconds=timeout_seconds, limit=limit
+      )
+
+    job_function = _bare_job
+  else:
+
+    async def _mcp_job(
+      command: str,
+      mode: Literal['fg', 'bg'] = 'fg',
+      timeout_seconds: float = _FOREGROUND_WAIT_SECONDS,
+      limit: int = DEFAULT_LIMIT,
+    ) -> str:
+      started = start(command, mode)
+      if mode == 'bg':
+        return f'started {started.id} (bg)'
+      return await _wait_for_foreground_job(
+        started, inbox=None, timeout_seconds=timeout_seconds, limit=limit
+      )
+
+    job_function = _mcp_job
+
+  def poll(id: str, limit: int = DEFAULT_LIMIT, tail: bool = False) -> str:
+    return _require_job_registry(live_run, registry).get(id).poll(limit, tail=tail)
+
+  async def kill(id: str) -> str:
+    target = _require_job_registry(live_run, registry).get(id)
+    return await off_loop(target.kill)
+
+  def jobs() -> list[JobStatus]:
+    return [job.status() for job in _require_job_registry(live_run, registry).values()]
+
+  return [
+    llm_mcp.FunctionTool(
+      job_function, name='job', description=_JOB_DESCRIPTION, variables=variables
+    ),
+    llm_mcp.FunctionTool(poll, name='poll', description=_POLL_DESCRIPTION, variables=variables),
+    llm_mcp.FunctionTool(kill, name='kill', description=_KILL_DESCRIPTION, variables=variables),
+    llm_mcp.FunctionTool(jobs, name='jobs', description=_JOBS_DESCRIPTION, variables=variables),
+  ]
+
+
+def _chill_tool(live_run: Optional[LiveRun], variables: Variables) -> llm_mcp.Tool:
+  async def chill(seconds: float = _JOB_WAIT_CAP_SECONDS) -> dict[str, Any]:
+    if live_run is None:
+      raise RuntimeError('chill requires a live run')
+    if not live_run.registry.has_live_jobs():
+      raise ValueError('chill needs at least one live job')
+    wait_seconds, clamp_note = _bounded_wait(seconds, 'seconds')
+    started = time.monotonic()
+    with live_run.inbox.waiter() as cancelled:
+      woken = await off_loop(live_run.inbox.wait, time.monotonic() + wait_seconds, cancelled)
+    result: dict[str, Any] = {
+      'slept': round(time.monotonic() - started, 3),
+      'woken': woken,
+    }
+    if clamp_note is not None:
+      result['note'] = clamp_note
+    return result
+
+  return llm_mcp.FunctionTool(
+    chill, name='chill', description=_CHILL_DESCRIPTION, variables=variables
+  )
+
+
 # the service roster's tool names — the closed `#tools` universe the service
 # descriptions render against
 _SERVICE_TOOL_NAMES = (
@@ -768,6 +971,11 @@ _SERVICE_TOOL_NAMES = (
   'summon_check',
   'summon_list',
   'summon_cancel',
+  'job',
+  'poll',
+  'kill',
+  'jobs',
+  'chill',
 )
 
 
@@ -802,6 +1010,11 @@ def _build_service_server(
   has_answer = (
     has_broker and summoned() and (wire == 'bare' or os.environ.get('RIDE_RUNNER_PID') is not None)
   )
+  selection = bro._selected_tools_for(harness)
+  has_jobs = harness == 'bro' and (
+    selection.shell_unrestricted or len(selection.shell_commands) > 0
+  )
+  owned_registry = Registry() if has_jobs and wire == 'mcp' else None
   mounted = ['banner']
   if has_cast:
     mounted.append('cast')
@@ -813,6 +1026,10 @@ def _build_service_server(
     mounted.append('answer')
   if has_broker:
     mounted.extend(['summon', 'summon_say', 'summon_check', 'summon_list', 'summon_cancel'])
+  if has_jobs:
+    mounted.extend(['job', 'poll', 'kill', 'jobs'])
+    if wire == 'bare':
+      mounted.append('chill')
   variables: Variables = {
     **mcp.surface_variables(wire=wire),
     'tools': SetVariable(frozenset(mounted), universe=frozenset(_SERVICE_TOOL_NAMES)),
@@ -833,8 +1050,23 @@ def _build_service_server(
     tools.append(_summon_check_tool(variables, wire))
     tools.append(_summon_list_tool(variables))
     tools.append(_summon_cancel_tool(variables, wire))
+  if has_jobs:
+    tools.extend(
+      _job_tools(
+        wire=wire,
+        live_run=live_run,
+        registry=owned_registry,
+        commands=selection.shell_commands,
+        unrestricted=selection.shell_unrestricted,
+        variables=variables,
+      )
+    )
+    if wire == 'bare':
+      tools.append(_chill_tool(live_run, variables))
   assert [tool.name for tool in tools] == mounted
-  server = llm_mcp.InProcessMCPServer('bro', tools)
+  server = llm_mcp.InProcessMCPServer(
+    'bro', tools, close=None if owned_registry is None else owned_registry.close
+  )
   server.tool_universe = _SERVICE_TOOL_NAMES
   return server
 
@@ -869,6 +1101,11 @@ def _component_optional_secrets(component: mcp.MCPServerSpec | DataSource) -> se
   return set(component.optional_secrets)
 
 
+SUMMON_WATCH_COMMAND = 'summon watch'
+_CLAUDE_COMMAND_TOOLS = ('Bash', 'Monitor')
+_CLAUDE_COMMAND_CONTROL = ('BashOutput', 'KillShell', 'TaskOutput', 'TaskStop')
+
+
 @dataclass(frozen=True)
 class _ToolSelection:
   """what a bro's tool layers amount to on one harness."""
@@ -877,6 +1114,17 @@ class _ToolSelection:
   blocked_tool_names: tuple[str, ...]
   # native tool name -> the commands it may reach, for the harness to enforce
   narrowed_tool_commands: dict[str, tuple[str, ...]]
+  shell_commands: tuple[str, ...]
+  shell_unrestricted: bool
+
+
+def _summon_watch_is_admitted(
+  *, may_summon: tuple[str, ...], summoned: bool, talk: Optional[tuple[str, ...]]
+) -> bool:
+  summoner_can_speak = talk is not None and any(
+    right in talk for right in ('requester.say', 'requester.question')
+  )
+  return len(may_summon) > 0 or (summoned and summoner_can_speak)
 
 
 def _fold_tool_layers(
@@ -891,6 +1139,8 @@ def _fold_tool_layers(
   blocked_names: list[str] = []
   narrowed: dict[str, list[str]] = {}
   handed_back: dict[str, str] = {}
+  declared_shell_commands: list[str] = []
+  shell_unrestricted = False
   for layer in layers:
     server_specs.extend(layer.server_specs)
     native = (
@@ -909,6 +1159,21 @@ def _fold_tool_layers(
       handed_back[name] = 'narrowed to specific commands'
     for name in layer.served_native_tool_names:
       handed_back[name] = 'served whole'
+    for command in layer.shell_commands:
+      if command is mcp.ANY:
+        shell_unrestricted = True
+      else:
+        assert isinstance(command, str)
+        declared_shell_commands.append(command)
+
+  shell_commands = list(dict.fromkeys(declared_shell_commands))
+  if harness == 'claude' and len(shell_commands) > 0 and not shell_unrestricted:
+    for name in _CLAUDE_COMMAND_TOOLS:
+      narrowed.setdefault(name, []).extend(shell_commands)
+      handed_back[name] = 'narrowed through the shell roster'
+    for name in _CLAUDE_COMMAND_CONTROL:
+      handed_back[name] = 'served as shell job control'
+
   blocked = dict.fromkeys(blocked_names)
   for name, form in handed_back.items():
     # a tool handed back is one the harness serves, so it leaves the block set
@@ -918,16 +1183,29 @@ def _fold_tool_layers(
         'nothing where the bro does not withhold it'
       )
     del blocked[name]
-  if harness == 'claude':
-    claude.admit_summon_watch(
-      blocked, narrowed, may_summon=may_summon, summoned=summoned, talk=talk
-    )
+
+  if _summon_watch_is_admitted(may_summon=may_summon, summoned=summoned, talk=talk):
+    if harness == 'bro':
+      if not shell_unrestricted and SUMMON_WATCH_COMMAND not in shell_commands:
+        shell_commands.append(SUMMON_WATCH_COMMAND)
+    else:
+      if 'Monitor' in blocked:
+        del blocked['Monitor']
+        narrowed['Monitor'] = []
+      if 'Monitor' in narrowed:
+        if SUMMON_WATCH_COMMAND not in narrowed['Monitor']:
+          narrowed['Monitor'].append(SUMMON_WATCH_COMMAND)
+        for name in ('TaskOutput', 'TaskStop'):
+          blocked.pop(name, None)
+
   return _ToolSelection(
     server_specs=server_specs,
     blocked_tool_names=tuple(blocked),
     narrowed_tool_commands={
       name: tuple(dict.fromkeys(commands)) for name, commands in narrowed.items()
     },
+    shell_commands=tuple(shell_commands),
+    shell_unrestricted=shell_unrestricted,
   )
 
 
