@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import os
+import shlex
 import signal
 import time
 from pathlib import Path
@@ -2188,29 +2189,44 @@ class TestJobServiceTools:
         await tools['job'].call({'command': 'printf allowed; true', 'mode': 'fg'})
 
   @pytest.mark.asyncio
-  async def test_foreground_job_interrupted_by_other_news_becomes_background(self):
+  async def test_foreground_job_interrupted_by_other_news_becomes_background(self, tmp_path):
     run = StubRun()
     server, tools = await self._tools(run=run)
+    release = tmp_path / 'release-foreground-job'
+    command = (
+      f'printf early; while [ ! -e {shlex.quote(str(release))} ]; do sleep 0.01; done; printf late'
+    )
     with contextlib.ExitStack() as stack:
       stack.callback(run.registry.close)
       stack.callback(server.close)
-      run.registry.start('sleep 0.3', 'bg')
-      result = await tools['job'].call(
-        {'command': 'printf early; sleep 1; printf late', 'mode': 'fg', 'timeout_seconds': 5}
+      call = asyncio.create_task(
+        tools['job'].call({'command': command, 'mode': 'fg', 'timeout_seconds': 5})
       )
+      async with asyncio.timeout(5):
+        while len(run.registry.values()) == 0:
+          await asyncio.sleep(0.01)
+        [foreground_job] = run.registry.values()
+        while foreground_job.status().unread_lines == 0:
+          await asyncio.sleep(0.01)
+      run.registry.start('true', 'bg')
+      async with asyncio.timeout(5):
+        while foreground_job.status().mode != 'bg':
+          await asyncio.sleep(0.01)
+
+      result = await call
       assert isinstance(result, str)
       assert result.startswith('running\nearly')
-      assert "continues in bg mode; read on with poll(id='job-2')" in result
-      assert run.registry.get('job-2').mode == 'bg'
+      assert "continues in bg mode; read on with poll(id='job-1')" in result
       first = run.inbox.drain()
-      assert first is not None and 'job-1' in first.job_ids
+      assert first is not None and 'job-2' in first.job_ids
 
+      release.touch()
       chilled = await tools['chill'].call({'seconds': 5})
       assert isinstance(chilled, dict)
       assert chilled['woken'] is True
       second = run.inbox.drain()
       assert second is not None
-      assert '[job-2 bg `printf early; sleep 1; printf late` exited (code 0)]' in second.text
+      assert f'[job-1 bg `{command}` exited (code 0)]' in second.text
       assert 'late' in second.text
       assert run.inbox.drain() is None
 
