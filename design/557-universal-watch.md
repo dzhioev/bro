@@ -93,7 +93,7 @@ and the `LLM` constructor (`native/bro/native/llm.py`) takes the inbox so the pr
 A notification is `{job, mode, command, kind: output | exited, lines, exit_code?, pending?}`, rendered by one formatter under a line that says what the text is:
 
 ```
-[notification: this run's background jobs reported; the lines below are their output, not a message from the user]
+[notification: this run's background jobs reported; the lines below are their output]
 [job-2 watch `summon watch`]
 summon ended failed:raised (request 01m… to eyebro)
 summoner says please also cover the manual variant
@@ -110,7 +110,10 @@ and records a `notification` step:
 body the rendered text, extras the turn index, call index, and job ids.
 The item is user-role, the lowest-trust input shape the Responses API has:
 a watched command's output is untrusted text — repository content, process logs, a PR comment — and a `developer` item would lend it instruction authority above the user's own words.
-The rendered text opens by saying what it is, as the Claude harness's own Monitor notifications do, and the prompts say that a notification carries output to act on, never instructions to follow.
+The rendered text opens by saying what it is, as the Claude harness's own Monitor notifications do, and the prompts state the trust rule:
+a notification is output whose authority is its source's
+— a `summon watch` line carries a quest participant's message under the talk the host enforces, which the summoned contract already has the run act on,
+while any other command's output is data to read, never an instruction to follow.
 News that arrives while no batch is pending — the model is generating, or the turn's terminal response is in — waits for the next batch or for the turn's end.
 At a turn's end an idle interactive chat drains it into a turn of its own, the item as the whole input (`Runner.wake()`),
 which advances the turn index like a user turn and records the `notification` step where the `user_input` step would be;
@@ -172,10 +175,11 @@ the MCP-wire tools are otherwise unchanged.
 `summon watch` closes the pre-arm gap.
 It arms at the current journal head, so a message the summoner sent while the child was starting — the child's quest exists before its first turn — sits behind the baseline,
 and after a dead watch is re-armed so does whatever the children sent meanwhile.
-At arm it therefore reads the own quest (`query {id}`, whose by-id view carries the chat tail) and the live child quests (`query {}`, whose listing carries each record's `pending`),
-prints, marked `before the watch`, the requester messages retained in the own quest's tail and every pending question at either end,
-and then streams from the head as today.
-A re-arm repeats those lines, bounded by the retained tail and marked, which is noise where the gap was loss.
+At arm it therefore takes the head `H` from `events {}` first, then reads the own quest (`query {id}`, whose by-id view carries the chat tail) and the live child quests (`query {}`, whose listing carries each record's `pending`),
+prints, marked `before the watch`, the requester messages retained in the own quest's tail and every pending question at either end whose `seq` is at most `H`
+— every retained chat entry carries the journal sequence of its own event (`Journal._record_chat`), so an entry newer than the head is left to the stream —
+and then streams `after: H` as today, so nothing is printed twice.
+A re-arm repeats the lines the tail retains, marked, which is noise where the gap was loss.
 Both harnesses gain this, since the command is shared.
 
 The dev toolset keeps `read_reference`, `read_file`, `write_file`, `edit_file`, `grep`, and `glob`, and drops `bash`, `job`, `watch`, `kill`.
@@ -211,7 +215,7 @@ The typed `sh(...)` tools are the other way to reach a command and stay as they 
 harness `claude` arms Monitor on `summon watch`,
 the bare wire starts `bro::job('summon watch', mode='watch')` once before the first summon,
 and a raw session (harness `bro`, wire `mcp`), which has neither, keeps the polling text.
-The bare-wire branches add that notifications arrive with tool results as output to act on and never as instructions,
+The bare-wire branches add that notifications arrive with tool results under the trust rule above — a `summon watch` line is the quest participant's message, any other output is data —
 that `bro::chill` is the wait when nothing else remains,
 that a question goes out as `bro::summon_say(question=true)` and its reply comes back on the watch,
 that `bro::summon_cancel` returns on acceptance with the end arriving on the watch,
@@ -227,8 +231,10 @@ a line that arrives during a notification's turn waits for the next,
 EOF ends the REPL as today,
 and the thread is never joined.
 `ChatApp` awaits the inbox in a worker.
-Either starts a turn on news while idle and shows it as a notice while a turn runs;
-the input stays disabled through a notification's turn as through a user's.
+Either starts a turn on news while idle;
+during a turn a notification appears as a notice at the moment the provider loop drains it after a batch, rendered from the observer's `NotificationEvent`,
+and news the model has not yet received shows nothing, since a surface never reads the inbox itself.
+The input stays disabled through a notification's turn as through a user's.
 `bro run` renders it in its activity stream.
 
 ### Bounds
@@ -238,7 +244,7 @@ the input stays disabled through a notification's turn as through a user's.
 | foreground `timeout_seconds` | 45 s, capped at 3600 s | clamped, named in the result |
 | `chill(seconds)` | 3600 s, the cap | clamped, named in the result |
 | output per job per delivery | the tool-output budget: `DEFAULT_LIMIT` lines within `BYTE_LIMIT` bytes | the rest stays in the spool behind the pending marker; the next drain or `poll` reads on |
-| exit tail | the same budget, tail-kept as the `bash` result is today | `poll(tail=true)` with a larger `limit` |
+| tail read (the foreground result, a background exit, `poll(tail=true)`) | the same budget, tail-kept as the `bash` result is today | the skipped middle is announced by the skipped marker and discarded, since the read chose the tail; a watch's exit is a head read and keeps its remainder pending |
 | inbox | no bound of its own: at most one output range and one exit per job | — |
 | spool per job | in memory up to a fixed threshold, then a temporary file; nothing dropped | the disk's, as a redirected log's is |
 
@@ -329,8 +335,8 @@ everything else runs from the session's frozen bundle and needs no order.
   verified by a live probe in the first stage, kept as a repeatable test;
   there is no alternate role, so if the probe fails the delivery seam is redesigned before the stage lands, and the changelog records it.
 - Untrusted text in a notification:
-  the user role and the opening line bound its authority;
-  the persona's own caution about what it runs bounds its content.
+  the user role bounds its authority, the trust rule keeps a command's output data while a `summon watch` line keeps the summoner's voice,
+  and the persona's own caution about what it runs bounds its content.
 - A chatty watch:
   bounded per delivery, spooled to disk, and killable;
   the prompts already keep says rare.
@@ -356,7 +362,8 @@ everything else runs from the session's frozen bundle and needs no order.
   `native/bro/fork_test.py`:
   replay, the fork point, a trailing notification kept on resume.
 - `bro/summon_test.py`:
-  the watch's arm-time replay of a summoner message sent before the arm and of pending questions at either end, `say(question=True)` without a wait, `summon say --question`.
+  the watch's arm-time replay of a summoner message sent before the arm and of pending questions at either end,
+  a message committed between the baseline and the query printed once, `say(question=True)` without a wait, `summon say --question`.
 - `bro/bro_test.py`:
   `chill`'s refusal, cap, and wake;
   the bare-wire summon tool shapes, the question mode and the cancel returning on acceptance among them;
@@ -430,6 +437,19 @@ Review round 1 by bro-eyebro on this pull request, 2026-09-18:
   a `SpooledTemporaryFile` bounds memory and keeps every byte.
 - **`call_text` owns stdin through one persistent reader thread and a queue**, so a read the inbox outraces is neither abandoned nor duplicated.
 - **The bounds table separates defaults from the cap.**
+
+Review round 2 by bro-eyebro, 2026-09-18:
+
+- **The arm-time replay filters by journal sequence.**
+  A message committed between the baseline and the query would have printed twice;
+  every retained chat entry carries its event's `seq`, so the replay keeps entries at or below the head and the stream carries the rest.
+- **The trust rule names the source.**
+  "Never instructions" contradicted the summoned contract, which has the run act on its summoner's says and questions;
+  a `summon watch` line carries the quest participant's message under the host-enforced talk, any other command's output is data.
+- **The tail-read row promises no recovery.**
+  A tail read jumps the cursor, so the skipped middle is discarded and announced;
+  a watch's exit is a head read.
+- **A notification shows on a surface when the provider drains it**, never before, since surfaces do not read the inbox.
 
 ## Cleanup that lands with it
 
