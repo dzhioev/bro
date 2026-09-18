@@ -49,15 +49,17 @@ An accepted attach answers `ok <PROTOCOL_REVISION>`, and both client adapters re
 - `dispatcher.py` routes over journal records, binds one Worker per worker-backed quest, synthesizes failure from Worker death, and serves the reserved `query` / `events` read kinds.
   Its handler vocabulary is `reply`, `deny`, `spawn`, `job`, and `expect`.
   Delivery fits an oversized generated result into a correlated failure or denial with a truncation marker.
-- `client.py` is the synchronous peer handle for requests, marks, results, received messages, and correlated waits.
+- `client.py` is the synchronous peer handle for requests, lifecycle answers, chat messages, listeners, and both request- and reply-correlated waits.
+  It reads the launched peer's own quest and talk from `BROKER_QUEST` and `BROKER_TALK`, refusing a disallowed own-quest move before sending.
   `BROKER_CHANNEL` is its client address;
   `BROKER_UPSTREAM` without a channel means the session proxy failed at launch and raises with the broxy log path.
 - `broxy.py` is the stateless session multiplexer:
-  it holds one upstream channel, authenticates local clients with one shared token, and keeps sticky quest-to-connection routes only until local EOF or result delivery.
+  it holds one upstream channel, authenticates local clients with one shared token, and routes inbound traffic first by reply id, then by a request's quest id, then to every listener for the quest.
+  Routes live until result delivery for a request or local EOF for questions and listeners.
   Local delivery never drains;
   a reply whose waiter died is dropped because recovery reads the host journal.
-  `MAX_ROUTES` is a leak backstop, not retention.
-- `cli.py` exposes the low-level broker request and receive surface.
+  `MAX_ROUTES` bounds request, question, and listener registrations together as a leak backstop, not retention.
+- `cli.py` exposes the low-level broker request, chat message, receive, and listen surface.
 
 ## Journal
 
