@@ -44,9 +44,6 @@ class SessionFacts:
     - container_workspace — '/workspace' in a managed container session, else None
     - exec_command — `ride exec <name>` for container sessions
     - ride_command — the canonical `ride solo|along …` invocation (RIDE_COMMAND)
-    - shell_command — the command a native CLI (`bro run`, `bro chat`) records
-      for its own run (BRO_SHELL_COMMAND); the launch line the visual banner
-      shows when no ride command is published
     - recording_problem — set when the session-recorder health file reports a
       failing or a stopped recorder, so the banner can warn that the transcript
       is not being recorded
@@ -67,7 +64,6 @@ class SessionFacts:
   container_workspace: Optional[str]
   exec_command: Optional[str]
   ride_command: Optional[str]
-  shell_command: Optional[str]
   recording_problem: Optional[str]
   may_summon: Optional[tuple[str, ...]]
   summoned: bool
@@ -96,7 +92,6 @@ class SessionFacts:
     repo = os.environ.get('RIDE_REPO') or None
     bro = bro_override if bro_override is not None else (os.environ.get('RIDE_BRO') or None)
     ride_command = os.environ.get('RIDE_COMMAND') or None
-    shell_command = os.environ.get('BRO_SHELL_COMMAND') or None
     host_workspace: Optional[str] = os.environ.get('RIDE_HOST_WORKSPACE') or None
     container_workspace: Optional[str] = (
       '/workspace' if isolation == 'boxed' and name is not None else None
@@ -118,7 +113,6 @@ class SessionFacts:
       container_workspace=container_workspace,
       exec_command=exec_command,
       ride_command=ride_command,
-      shell_command=shell_command,
       recording_problem=health.problem(),
       may_summon=summon.may_summon(),
       permits=summon.permits(),
@@ -209,9 +203,8 @@ class SessionFacts:
     if self.trail_id is not None:
       rows.append(('trail:', '', f'{dim}{self.trail_id}{reset}'))
 
-    launched = self.ride_command if self.ride_command is not None else self.shell_command
-    if launched is not None:
-      rows.append(('launched:', '', f'{dim}{launched}{reset}'))
+    if self.ride_command is not None:
+      rows.append(('launched:', '', f'{dim}{self.ride_command}{reset}'))
 
     # auto-align the value column to one space past the widest label
     width = max(len(label) for label, _, _ in rows)

@@ -3,7 +3,6 @@ import contextlib
 import http.client
 import importlib.util
 import json
-import os
 import signal
 import sys
 from collections.abc import Callable, Iterator
@@ -17,7 +16,6 @@ from bro.launch.llm_flags import (
   EFFORT_HELP,
   FAST_HELP,
   add_llm_flags,
-  canonicalize,
   selection_from_args,
 )
 from bro.launch.resume import RESUME_LATEST
@@ -177,11 +175,9 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   args = parser.parse(argv)
   try:
     selection = selection_from_args(args)
-    canonicalize(args, selection)
   except LLMSelectionError as error:
     log.error('%s', error)
     return 1
-  os.environ.setdefault('BRO_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=program)))
 
   continuing = args['continue_trail'] is not None or args['continue_llm'] is not None
   if (args['continue_trail'] is None) != (args['continue_llm'] is None):
