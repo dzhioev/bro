@@ -341,6 +341,7 @@ def _build_presets() -> Mapping[PresetName, DisplayConfig]:
     RecordKind.TRAIL_METADATA,
     RecordKind.LAUNCH_CONTEXT,
     RecordKind.SEGMENT_BOUNDARY,
+    RecordKind.NOTICE,
   }
   rewind_show = DisplayConfig(
     record_filter=_filter_for(rewind_show_kinds),

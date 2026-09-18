@@ -217,6 +217,27 @@ class TestShow:
     assert '→ bash {cmd: ls}' in output
     assert 'file.txt' in output
 
+  def test_renders_notification_steps_as_notices(self, capsys):
+    client = FakeClient()
+    client.add_bro(
+      'T1',
+      [
+        {
+          'step_id': 0,
+          'kind': 'notification',
+          'body': '[notification: a background job reported]\njob output',
+          'ts': None,
+        }
+      ],
+    )
+
+    assert _command_show(_client(client), _args('T1')) == 0
+
+    output = capsys.readouterr().out
+    assert '[notification: a background job reported]' in output
+    assert 'job output' in output
+    assert '#1 USER' not in output
+
   def test_unknown_id_propagates_not_found(self):
     with pytest.raises(TrailNotFound, match='trail not found'):
       _command_show(_client(FakeClient()), _args('missing'))
@@ -332,6 +353,23 @@ class TestGrep:
     output = capsys.readouterr().out
     assert 'T-claude:' in output and 'T-bro:' in output
     assert '\x1b[' not in output
+
+  def test_matches_notification_output(self, capsys):
+    client = FakeClient()
+    client.add_bro(
+      'T-bro',
+      [
+        {
+          'step_id': 0,
+          'kind': 'notification',
+          'body': '[notification: a background job reported]\nthe watch needle',
+          'ts': None,
+        }
+      ],
+    )
+
+    assert _command_grep(_client(client), self._grep_args('watch needle')) == 0
+    assert 'T-bro:' in capsys.readouterr().out
 
   def test_searches_the_same_fork_chain_and_keeps_the_whole_trail_id(self, capsys):
     client = FakeClient()

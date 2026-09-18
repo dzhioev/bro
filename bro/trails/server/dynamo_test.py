@@ -398,6 +398,11 @@ def test_notification_step_is_accepted_and_stored_as_text(components):
 
   assert result == {'extent': 2, 'appended': 1}
   assert store.get_step(trail_id, 1)['body'] == body
+  [message] = store.get_messages(trail_id, after=0, limit=10, types=None)['messages']
+  assert message['type'] == 'notification'
+  assert message['source'] == {'step_id': 1, 'index': 0}
+  assert message['content'] == body
+  assert isinstance(message['ts'], str)
   assert store.check(trail_id)['ok'] is True
 
 

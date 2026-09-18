@@ -23,6 +23,7 @@ from bro.trails.display import (
   LiveDisplayObserver,
   LiveSource,
   NativeStep,
+  Notice,
   Origin,
   RecordedAdapter,
   RecordedSource,
@@ -135,6 +136,7 @@ class TestMessages:
       'trail',
       [
         _message('system_prompt', 0, content='system'),
+        _message('notification', 1, content='background news'),
         _message(
           'user_input',
           1,
@@ -157,6 +159,7 @@ class TestMessages:
 
     assert [type(record).__name__ for record in records] == [
       'SystemPrompt',
+      'Notice',
       'UserInput',
       'LLMCall',
       'Reasoning',
@@ -168,7 +171,10 @@ class TestMessages:
       'HarnessEvent',
     ]
     assert all(record.timestamp is None for record in records)
-    user = records[1]
+    notice = records[1]
+    assert isinstance(notice, Notice)
+    assert notice.content == 'background news'
+    user = records[2]
     assert isinstance(user, UserInput)
     assert user.content == 'hello'
     assert user.is_meta and user.is_sidechain

@@ -17,6 +17,7 @@ from bro.trails.display.records import (
   LineageNode,
   LLMCall,
   NativeStep,
+  Notice,
   Origin,
   Reasoning,
   RecordedSource,
@@ -466,6 +467,8 @@ class RecordedAdapter:
         return SystemPrompt(
           content=_text_content(message.get('content'), 'system prompt'), **common
         )
+      if message_type == 'notification':
+        return Notice(content=_text_content(message.get('content'), 'notification'), **common)
       if message_type == 'user_input':
         is_meta = message.get('isMeta', False)
         is_sidechain = message.get('isSidechain', False)
