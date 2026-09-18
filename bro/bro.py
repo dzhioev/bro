@@ -85,7 +85,9 @@ def _render_skill_loader() -> str:
 
 def _render_spells(*, include_cast: bool) -> str:
   run_instruction = (
-    'call `bro::cast` with the enclosed text and follow the returned instructions'
+    'call `bro::cast` with the enclosed text and follow the returned instructions. An error '
+    'result is relayed as it came back — the spell is not carried here, the command is '
+    'ambiguous, or an argument is missing — and no other spell stands in for it'
     if include_cast
     else "call the named spell's own tool"
   )
