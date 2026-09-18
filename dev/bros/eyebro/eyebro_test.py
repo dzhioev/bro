@@ -20,6 +20,11 @@ def test_reviewer_carries_review_spells_but_no_author_procedures():
   assert 'land' not in bro.spell_paths
 
 
+def test_eyebro_declares_an_unrestricted_shell_on_both_harnesses():
+  for harness in get_args(mcp.Harness):
+    assert Eyebro()._selected_tools_for(harness).shell_unrestricted is True
+
+
 def test_claude_surface_selects_the_reference_tools():
   assert [
     server.namespace

@@ -134,15 +134,33 @@ def _lowlevel_server(label: str, entries: list['Tool']) -> 'Server':
   return server
 
 
+class _ServerOwner:
+  def __init__(self, servers: list['MCPServer']):
+    self._servers = servers
+    self._closed = False
+
+  def close(self) -> None:
+    if self._closed:
+      return
+    self._closed = True
+    with contextlib.ExitStack() as stack:
+      for server in self._servers:
+        stack.callback(server.close)
+
+
 class _BearerAuth:
   """ASGI wrapper requiring `Authorization: Bearer <token>` on every HTTP request.
 
   `/health` is exempt so a readiness poll needs no secret.
   """
 
-  def __init__(self, app: 'ASGIApp', token: str):
+  def __init__(self, app: 'ASGIApp', token: str, owner: _ServerOwner):
     self._app = app
     self._expected = f'Bearer {token}'.encode()
+    self._owner = owner
+
+  def close(self) -> None:
+    self._owner.close()
 
   async def __call__(self, scope: 'Scope', receive: 'Receive', send: 'Send') -> None:
     from starlette.responses import JSONResponse
@@ -174,44 +192,53 @@ def create_http_app(servers: list['MCPServer'], bearer_token: str) -> _BearerAut
   from starlette.responses import JSONResponse, Response
   from starlette.routing import Route
 
+  owner = _ServerOwner(servers)
+
   async def collect() -> dict[str, list['Tool']]:
     by_namespace: dict[str, list[Tool]] = {}
     for server in servers:
       by_namespace.setdefault(server.namespace, []).extend(await server.list_tools())
     return by_namespace
 
-  by_namespace = asyncio.run(collect())
+  try:
+    by_namespace = asyncio.run(collect())
 
-  managers: list[StreamableHTTPSessionManager] = []
-  routes: list[Route] = []
-  for namespace, entries in by_namespace.items():
-    manager = StreamableHTTPSessionManager(
-      app=_lowlevel_server(namespace, entries), stateless=True, json_response=True
-    )
-    managers.append(manager)
-    routes.append(Route(f'/{namespace}', StreamableHTTPASGIApp(manager)))
+    managers: list[StreamableHTTPSessionManager] = []
+    routes: list[Route] = []
+    for namespace, entries in by_namespace.items():
+      manager = StreamableHTTPSessionManager(
+        app=_lowlevel_server(namespace, entries), stateless=True, json_response=True
+      )
+      managers.append(manager)
+      routes.append(Route(f'/{namespace}', StreamableHTTPASGIApp(manager)))
 
-  async def health(request: Request) -> Response:
-    return JSONResponse({'status': 'ok', 'namespaces': sorted(by_namespace)})
+    async def health(request: Request) -> Response:
+      return JSONResponse({'status': 'ok', 'namespaces': sorted(by_namespace)})
 
-  routes.append(Route('/health', health))
+    routes.append(Route('/health', health))
 
-  @contextlib.asynccontextmanager
-  async def lifespan(app: Starlette):
-    async with contextlib.AsyncExitStack() as stack:
-      for manager in managers:
-        await stack.enter_async_context(manager.run())
-      yield
+    @contextlib.asynccontextmanager
+    async def lifespan(app: Starlette):
+      async with contextlib.AsyncExitStack() as stack:
+        stack.callback(owner.close)
+        for manager in managers:
+          await stack.enter_async_context(manager.run())
+        yield
 
-  return _BearerAuth(Starlette(routes=routes, lifespan=lifespan), bearer_token)
+    app = Starlette(routes=routes, lifespan=lifespan)
+  except BaseException:
+    owner.close()
+    raise
+  return _BearerAuth(app, bearer_token, owner)
 
 
 async def run(mcp_server: 'MCPServer'):
   from mcp.server.stdio import stdio_server
 
-  server = _lowlevel_server('mcp', await mcp_server.list_tools())
-  async with stdio_server() as (read_stream, write_stream):
-    await server.run(read_stream, write_stream, server.create_initialization_options())
+  with contextlib.closing(mcp_server):
+    server = _lowlevel_server('mcp', await mcp_server.list_tools())
+    async with stdio_server() as (read_stream, write_stream):
+      await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
 def _write_port_file(path: str, port: int) -> None:
@@ -273,5 +300,6 @@ def main(argv: list[str]) -> Optional[int]:
   app = create_http_app(_resolve_servers(args['server']), bearer_token)
   import uvicorn
 
-  uvicorn.Server(uvicorn.Config(app, log_level='info')).run(sockets=[server_socket])
+  with contextlib.closing(app):
+    uvicorn.Server(uvicorn.Config(app, log_level='info')).run(sockets=[server_socket])
   return None

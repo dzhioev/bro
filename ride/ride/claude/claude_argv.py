@@ -10,6 +10,7 @@ the session runs. Model, effort and fast mode come off the session's claude-code
 `LLMSpec` (`SessionRun.llm_spec`).
 """
 
+import contextlib
 import json
 import shlex
 import sys
@@ -125,12 +126,15 @@ def build_claude_launch(
   }
   argv = ['--model', llm.model]
   bro = create_bro(spec.bro)
-  servers = bro_servers(bro) if options(spec).raw else persona_servers(bro)
+  with contextlib.ExitStack() as server_stack:
+    servers = bro_servers(bro) if options(spec).raw else persona_servers(bro)
+    for server in servers:
+      server_stack.callback(server.close)
+    namespaces = list(dict.fromkeys(server.namespace for server in servers))
   blocked_tool_names = () if options(spec).raw else bro.blocked_tool_names('claude')
   narrowed_tool_commands = {} if options(spec).raw else bro.narrowed_tool_commands('claude')
   if len(narrowed_tool_commands) > 0:
     settings['hooks'] = _tool_gate_hooks(narrowed_tool_commands)
-  namespaces = list(dict.fromkeys(server.namespace for server in servers))
   mcp_config = http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
   if options(spec).raw:
     settings['apiKeyHelper'] = _settings_command('ride.claude.print_anthropic_key')

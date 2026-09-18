@@ -2,10 +2,9 @@ import bro.brog.mcp as brog_mcp
 import bro.llm.llms.openai as openai
 from bro.base.condition import when
 from bro.bro import feature
-from bro.mcp import creds, harness, mount
+from bro.mcp import ANY, creds, mount, shell
 from bro.oops import mcp as operations_mcp
 from bros.bro import Bro
-from bros.dev import mcp as dev_mcp
 
 SYSTEM_PROMPT = """\
 You are the devoops Bro. You operate the services a repository declares: deploy them,
@@ -32,7 +31,7 @@ class Devoops(Bro):
   tools = [
     mount(operations_mcp.toolset),
     when(feature('brog'), mount(brog_mcp.toolset)),
-    when(harness == 'bro', mount(dev_mcp.toolset, 'bash')),
+    shell(ANY),
   ]
   spells = ('deploy.md',)
   system_prompt = SYSTEM_PROMPT

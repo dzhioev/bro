@@ -159,7 +159,11 @@ class TestToolLayer:
   @pytest.mark.parametrize(
     ('tool_names', 'error_type', 'message'),
     [
-      ((), ValueError, 'must mount a server, block a native tool, narrow one, or serve one'),
+      (
+        (),
+        ValueError,
+        'must mount a server, block or narrow a native tool, serve one, or declare shell commands',
+      ),
       (('',), TypeError, 'non-empty strings'),
       (('Read', 'Read'), ValueError, 'duplicate names'),
     ],
@@ -200,6 +204,23 @@ class TestToolLayer:
     layer = mcp.allow_commands('Monitor', 'watch it') | mcp.serve('TaskStop')
     assert layer.native_tool_commands == (('Monitor', 'watch it'),)
     assert layer.served_native_tool_names == ('TaskStop',)
+
+  def test_shell_declares_exact_commands_or_any(self):
+    assert mcp.shell(' git status ', 'git diff').shell_commands == ('git status', 'git diff')
+    assert mcp.shell(mcp.ANY).shell_commands == (mcp.ANY,)
+
+  @pytest.mark.parametrize(
+    ('commands', 'error_type', 'message'),
+    [
+      ((), ValueError, 'needs at least one command'),
+      (('',), TypeError, 'non-empty command strings'),
+      ((mcp.ANY, 'git status'), ValueError, 'ANY must be the only'),
+      (('git status', 'git status'), ValueError, 'duplicate shell commands'),
+    ],
+  )
+  def test_shell_rejects_ambiguous_rosters(self, commands, error_type, message):
+    with pytest.raises(error_type, match=message):
+      mcp.shell(*commands)
 
   def test_mount_selects_from_one_toolset_type(self):
     toolset = mcp.Toolset('layer')

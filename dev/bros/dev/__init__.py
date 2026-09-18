@@ -3,7 +3,7 @@ from bro import brog
 from bro.base.condition import when
 from bro.bro import feature
 from bro.dev import references
-from bro.mcp import creds, harness, mount
+from bro.mcp import ANY, creds, harness, mount, shell
 from bro.workflow.commit_footer import provision_hooks
 from bros.bro import Bro
 from bros.dev import mcp
@@ -43,9 +43,9 @@ class Dev(Bro):
   features = {'brog': creds.contains('brog')}
   # the dev family attributes token spend to its commits
   provisioning = (provision_hooks,)
-  # the dev toolset duplicates the claude harness's built-in file/shell tools
   tools = [
     when(harness == 'bro', mount(mcp.toolset)),
+    shell(ANY),
     when(feature('brog'), mount(brog_mcp.toolset)),
   ]
   data_sources = [references.dev_style]

@@ -1,7 +1,7 @@
 import bro.brog.mcp as brog_mcp
 from bro.datasources.references import man
 from bro.harness import claude
-from bro.mcp import mount, sh
+from bro.mcp import cli, mount
 from bros.bro import Bro
 
 SYSTEM_PROMPT = """\
@@ -32,12 +32,12 @@ class Lead(Bro):
   tools = [
     mount(brog_mcp.toolset),
     claude.block(*claude.FILES, *claude.SHELL, *claude.DELEGATION),
-    sh('bro list'),
-    sh('bro show', 'name'),
-    sh('rewind list', 'harness', 'bro', 'since', 'until', 'forked_from', 'limit'),
-    sh('rewind show', 'trail_id', 'output_offset', 'output_limit'),
-    sh('rewind steps', 'trail_id', 'output_offset', 'output_limit'),
-    sh(
+    cli('bro list'),
+    cli('bro show', 'name'),
+    cli('rewind list', 'harness', 'bro', 'since', 'until', 'forked_from', 'limit'),
+    cli('rewind show', 'trail_id', 'output_offset', 'output_limit'),
+    cli('rewind steps', 'trail_id', 'output_offset', 'output_limit'),
+    cli(
       'rewind grep',
       'pattern',
       'trails',
@@ -50,7 +50,7 @@ class Lead(Bro):
       'output_offset',
       'output_limit',
     ),
-    sh('rewind tree', 'trail_id', 'output_offset', 'output_limit'),
+    cli('rewind tree', 'trail_id', 'output_offset', 'output_limit'),
   ]
   data_sources = [
     man('environment'),
