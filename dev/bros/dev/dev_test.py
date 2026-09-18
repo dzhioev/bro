@@ -88,3 +88,14 @@ def test_review_delegation_renders_only_for_a_granted_eyebro(monkeypatch):
   monkeypatch.setenv(MAY_SUMMON_ENV, 'eyebro')
   assert 'eyebro' in bro.get_spell_body('run-pr', harness='claude', wire='mcp')
   assert 'eyebro' in bro.get_spell_body('land', harness='claude', wire='mcp')
+
+
+def test_review_delegation_uses_wire_specific_detachment(monkeypatch):
+  monkeypatch.setenv(MAY_SUMMON_ENV, 'eyebro')
+  bro = _TrackerDev()
+
+  bare_body = bro.get_spell_body('run-pr', harness='bro', wire='bare')
+  mcp_body = bro.get_spell_body('run-pr', harness='bro', wire='mcp')
+
+  assert 'with `detach: true`' not in bare_body
+  assert 'with `detach: true`' in mcp_body

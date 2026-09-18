@@ -478,9 +478,9 @@ If the `Monitor` schema needs a `ToolSearch` fetch, load `TaskStop` in the same 
 
 Don't wait for a review to arrive — hand it over:
 
-1. Summon the eyebro detached, with the watcher already running
+1. Summon the eyebro with the watcher already running
    — the watcher baselines existing events as seen at start, so a review posted before it starts would never fire.
-   `bro::summon` targeting the eyebro your banner's `may_summon` names, with `detach: true`, a `timeout` sized in hours (a review conversation outlives the default; `14400` fits), and a self-contained prompt naming the PR
+   `bro::summon` targeting the eyebro your banner's `may_summon` names, {{iff #wire = mcp}}with `detach: true`, {{eliff #wire = bare}}{{end}}a four-hour timeout (`14400`) and a self-contained prompt naming the PR
    — the child shares no context with this session:
    `[[review pr <pr-url>]]`.
 2. The conversation runs through the PR:
