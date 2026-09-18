@@ -22,6 +22,12 @@ class TestForwardedFlags:
     args = vars(parser.parse_args(['--env', 'A=1', '--env', 'B=x=y']))
     assert ride_flags.extract_forwarded_argv(args) == ['--env', 'A=1', '--env', 'B=x=y']
 
+  def test_extract_forwarded_argv_round_trips_session_log(self):
+    parser = Parser(add_help=False)
+    ride_flags.add_forwarded_flags(parser)
+    args = vars(parser.parse_args(['--session-log', 'verbose']))
+    assert ride_flags.extract_forwarded_argv(args) == ['--session-log', 'verbose']
+
   def test_extract_forwarded_argv_round_trips_into(self):
     parser = Parser(add_help=False)
     ride_flags.add_forwarded_flags(parser)

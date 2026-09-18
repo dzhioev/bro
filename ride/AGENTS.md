@@ -17,7 +17,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/ask.py`, `ride/call.py` — pure option-preserving aliases of `ride solo` and `ride along`.
   Their scripts live in this distribution and add no implied fast mode or other flags.
 - `ride/dive_in.py` — task utility wrapper:
-  prefetch, task-derived workspace naming, `RIDE_TASK_ID`, fresh-origin base selection, hold defaults, and forwarding to `ride along` with the project-default bro.
+  prefetch, task-derived workspace naming, fresh-origin base selection, hold defaults, and forwarding to `ride along` with the project-default bro.
 - `ride/session.py` — harness-neutral session lifecycle:
   recorded `SessionSpec` including isolation and the optional repository attachment, base resolution, auth/scope preflight, and the workspace lock,
   resume records, keep/drop finish behavior, and the one started-party launcher that prepares attached or detached workspaces in either isolation for roots and spawned children.
@@ -109,7 +109,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - Both isolations pass `BRO_STORE` and `BRO_INSTALL_KINDS` to `do-ride`, which installs the hooks through one applier into the named session environment directory,
   so a session's git and `gh` act as the identity it was scoped with and never reach the operator's own configuration.
   An unboxed process gets a closed environment snapshot with its workspace as `PWD`;
-  only the launch surface's admitted terminal, task, command, identity, and logging inputs cross from the ambient environment,
+  only the baseline roster and, for a session on the launcher's terminal, its identity cross from the ambient environment,
   and a launch's recorded `--env` additions sit beneath it all, carried by the root and every party member alike.
   Every unboxed session's store and install-hook output share a private temporary root removed by its supervisor;
   retained workspace records therefore carry no credential material.

@@ -36,7 +36,6 @@ class TestDockerLaunchSpec:
       env={},
       secrets=(),
       tty=False,
-      forward_env=False,
       image='runtime-image',
       runtime_bundle_hash='bundle-hash',
     )
@@ -52,7 +51,6 @@ class TestBrokerLaunch:
       env={'RIDE_BRO': 'dev'},
       secrets=(),
       tty=False,
-      forward_env=False,
       image='runtime-image',
       runtime_bundle_hash='bundle-hash',
       extra_mounts=('/existing:/mount',),
@@ -68,7 +66,6 @@ class TestBrokerLaunch:
     }
     assert adapted.extra_mounts == ('/existing:/mount',)
     assert adapted.tty is False
-    assert adapted.forward_env is False
     assert launch.env == {'RIDE_BRO': 'dev'}
     assert launch.extra_mounts == ('/existing:/mount',)
 
@@ -1170,7 +1167,6 @@ class TestCompositeSpawner:
         env={},
         secrets=(),
         tty=False,
-        forward_env=False,
         image='runtime-image',
         runtime_bundle_hash='bundle-hash',
       )
@@ -1248,7 +1244,6 @@ class TestDockerSpawnerModes:
       env={},
       secrets=('github',),
       tty=True,
-      forward_env=True,
       image='runtime-image',
       runtime_bundle_hash='bundle-hash',
       optional_secrets=('openai',),
@@ -1277,7 +1272,6 @@ class TestDockerSpawnerModes:
       env={},
       secrets=(),
       tty=False,
-      forward_env=True,
       image='runtime-image',
       runtime_bundle_hash='bundle-hash',
     )
@@ -1299,7 +1293,6 @@ class TestDockerSpawnerModes:
       env={},
       secrets=(),
       tty=False,
-      forward_env=False,
       image='runtime-image',
       runtime_bundle_hash='bundle-hash',
     )
@@ -1321,7 +1314,6 @@ class TestDockerSpawnerModes:
       env={},
       secrets=(),
       tty=False,
-      forward_env=False,
       image='runtime-image',
       runtime_bundle_hash='bundle-hash',
     )

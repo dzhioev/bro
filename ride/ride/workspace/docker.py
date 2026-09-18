@@ -15,7 +15,7 @@ from bro.base import credentials, log
 from bro.monitor import PROCESS_FILENAME
 from bro.workspace.paths import runtime_base, workspace_tree
 from ride.repository import Repository, as_repository
-from ride.runtime_bundle import SESSION_FORWARD_ENV, RuntimeBundle
+from ride.runtime_bundle import SESSION_TERMINAL_ENV, RuntimeBundle
 from ride.workspace import build_context
 from ride.workspace.build_context import CONTAINER_DIR
 from ride.workspace.clones import ensure_clone
@@ -136,7 +136,6 @@ class Launch:
   env: Mapping[str, str]
   secrets: Collection[str]
   tty: bool
-  forward_env: bool
   image: str
   runtime_bundle_hash: str
   optional_secrets: Collection[str] = ()
@@ -430,7 +429,6 @@ def prepare_container(launch: Launch) -> str:
     tree,
     launch.command,
     extra_env=launch_env,
-    forward_env=launch.forward_env,
     tty=launch.tty,
     extra_mounts=list(launch.extra_mounts),
     additions=launch.additions,
@@ -587,7 +585,6 @@ def _docker_create_argv(
   command: list[str],
   *,
   extra_env: Optional[Mapping[str, str]] = None,
-  forward_env: bool = True,
   tty: bool = True,
   extra_mounts: Optional[list[str]] = None,
   additions: Optional[Mapping[str, str]] = None,
@@ -631,10 +628,9 @@ def _docker_create_argv(
   if repository is not None:
     argv += ['-e', f'RIDE_REPO={repository.identity}']
     owned.add('RIDE_REPO')
-  # Summoned children pass a complete explicit snapshot and disable ambient
-  # forwarding so the parent's task and identity facts cannot leak into them.
-  if forward_env:
-    for variable in SESSION_FORWARD_ENV:
+  # a tty is the launcher's own terminal, whose identity crosses with it
+  if tty:
+    for variable in SESSION_TERMINAL_ENV:
       if os.environ.get(variable) is not None:
         argv += ['-e', variable]
         owned.add(variable)

@@ -987,7 +987,6 @@ def main(argv: list[str]) -> Optional[int]:
     if args['share'] is not None:
       log.error("a manual summon's workspace is not launched by summon control; drop --share")
       return 1
-  os.environ.setdefault('BRO_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=['summon'])))
   if args['detach']:
     try:
       if args['manual']:

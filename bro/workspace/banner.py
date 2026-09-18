@@ -17,29 +17,6 @@ _BRO_LOGO = """\
 ╚═════╝   ╚═╝  ╚═╝   ╚═════╝\
 """
 
-# tokens after which the rest of an unquoted launch command is the user-typed
-# prompt — `dive-in --new <seed>` or a mode command whose prompt follows `--`.
-# rfind so the *last* marker wins if more than one is present.
-_PROMPT_MARKERS = (' --new ',)
-
-
-def _split_launch_prompt(command: str) -> tuple[str, Optional[str]]:
-  """split a launch command into (prefix, prompt) at the prompt marker, if any.
-
-  prefix keeps the marker token (e.g. 'dive-in --new ') so callers can append a
-  placeholder. returns (command, None) when no marker is present or nothing
-  follows it.
-  """
-  for marker in _PROMPT_MARKERS:
-    index = command.rfind(marker)
-    if index < 0:
-      continue
-    head = command[: index + len(marker)]
-    tail = command[index + len(marker) :].strip()
-    if len(tail) > 0:
-      return head, tail
-  return command, None
-
 
 def _render_summon_targets(names: tuple[str, ...]) -> str:
   """the allow-list entries, each marked with the further names it answers to."""
@@ -67,12 +44,9 @@ class SessionFacts:
     - container_workspace — '/workspace' in a managed container session, else None
     - exec_command — `ride exec <name>` for container sessions
     - ride_command — the canonical `ride solo|along …` invocation (RIDE_COMMAND)
-    - shell_command — the outer launch command (BRO_SHELL_COMMAND). For wrappers
-      like dive-in this differs from ride_command; for direct `ride` use the two
-      are equal and the banner suppresses the duplicate
-    - prompt — the user-typed prompt extracted from shell_command when the
-      dive-in `--new` marker is found; shell_command is shown with
-      the prompt portion replaced by a placeholder in this case
+    - shell_command — the command a native CLI (`bro run`, `bro chat`) records
+      for its own run (BRO_SHELL_COMMAND); the launch line the visual banner
+      shows when no ride command is published
     - recording_problem — set when the session-recorder health file reports a
       failing or a stopped recorder, so the banner can warn that the transcript
       is not being recorded
@@ -94,7 +68,6 @@ class SessionFacts:
   exec_command: Optional[str]
   ride_command: Optional[str]
   shell_command: Optional[str]
-  prompt: Optional[str]
   recording_problem: Optional[str]
   may_summon: Optional[tuple[str, ...]]
   summoned: bool
@@ -123,17 +96,13 @@ class SessionFacts:
     repo = os.environ.get('RIDE_REPO') or None
     bro = bro_override if bro_override is not None else (os.environ.get('RIDE_BRO') or None)
     ride_command = os.environ.get('RIDE_COMMAND') or None
-    shell_command = os.environ.get('BRO_SHELL_COMMAND') or ride_command
+    shell_command = os.environ.get('BRO_SHELL_COMMAND') or None
     host_workspace: Optional[str] = os.environ.get('RIDE_HOST_WORKSPACE') or None
     container_workspace: Optional[str] = (
       '/workspace' if isolation == 'boxed' and name is not None else None
     )
 
     exec_command = f'ride exec {name}' if isolation == 'boxed' and name is not None else None
-
-    prompt: Optional[str] = None
-    if shell_command is not None:
-      shell_command, prompt = _split_launch_prompt(shell_command)
 
     trail_id = trail_id_override
     if trail_id is None:
@@ -150,7 +119,6 @@ class SessionFacts:
       exec_command=exec_command,
       ride_command=ride_command,
       shell_command=shell_command,
-      prompt=prompt,
       recording_problem=health.problem(),
       may_summon=summon.may_summon(),
       permits=summon.permits(),
@@ -167,7 +135,7 @@ class SessionFacts:
     """render the banner with ANSI colour + the Bro logo for bro sessions."""
     red = '\033[31m'
     bold = '\033[1m'
-    bold_white = '\033[1;97m'  # bright-white bold — emphasis for the @prompt@ slot
+    bold_white = '\033[1;97m'  # bright-white bold — emphasis for the bro name
     dim = '\033[2m'
     reset = '\033[0m'
 
@@ -197,12 +165,6 @@ class SessionFacts:
         else f'{dim}{self.repo}{reset}',
       ),
     ]
-
-    # `ride command` is the canonical `ride solo|along …` invocation; suppress when it's
-    # the same string as `launched` (direct `ride` use) so we don't show the
-    # same text twice
-    if self.ride_command is not None and self.ride_command != self.shell_command:
-      rows.append(('ride command:', '', f'{dim}{self.ride_command}{reset}'))
 
     if self.isolation == 'boxed':
       # /workspace inside, host bind-mount path below — both are useful and
@@ -247,14 +209,9 @@ class SessionFacts:
     if self.trail_id is not None:
       rows.append(('trail:', '', f'{dim}{self.trail_id}{reset}'))
 
-    if self.shell_command is not None:
-      launched = f'{dim}{self.shell_command}{reset}'
-      if self.prompt is not None:
-        launched += f'{bold_white}@prompt@{reset}'
-      rows.append(('launched:', '', launched))
-
-    if self.prompt is not None:
-      rows.append(('prompt:', bold_white, self.prompt))
+    launched = self.ride_command if self.ride_command is not None else self.shell_command
+    if launched is not None:
+      rows.append(('launched:', '', f'{dim}{launched}{reset}'))
 
     # auto-align the value column to one space past the widest label
     width = max(len(label) for label, _, _ in rows)

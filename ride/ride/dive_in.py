@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 """start a ride session focused on a task."""
 
-import os
 import re
 import subprocess
 from pathlib import Path
@@ -175,8 +174,6 @@ def dive_in(
       base = 'dive-in'
     name = fresh_workspace_name(base)
     log.info('workspace: %s', name)
-
-    os.environ['RIDE_TASK_ID'] = brog_task.id
   else:
     prompt = command
     name = fresh_workspace_name('dive-in')
@@ -223,10 +220,6 @@ def main(argv: list[str]) -> Optional[int]:
   )
   args = parser.parse(argv)
   repo = project_root()
-  os.environ.setdefault(
-    'BRO_SHELL_COMMAND',
-    ' '.join(parser.reconstruct(args, prog=['dive-in'], exclude=('dry_run',))),
-  )
   if args['into'] is None:
     base_ref = _fresh_origin_head(repo)
     if base_ref is None:

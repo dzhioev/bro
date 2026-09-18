@@ -120,23 +120,6 @@ class TestLaunchCommand:
     assert 'RIDE_BRO' not in os.environ
 
 
-class TestShellCommandReconstruction:
-  """the visual banner receives the wrapper invocation, not the underlying `ride solo|along`."""
-
-  def test_forwarded_flags_appear_in_the_reconstruction(self, fake_proj, monkeypatch):
-    monkeypatch.delenv('BRO_SHELL_COMMAND', raising=False)
-    rc = dive_in.main(['dive-in', '-n', '--hold', 'guided', '--bro', 'bro-dev'])
-    assert rc == 0
-    assert os.environ['BRO_SHELL_COMMAND'] == 'dive-in --hold guided --bro bro-dev'
-
-  def test_new_seed_keeps_the_prompt_marker_tail(self, fake_proj, monkeypatch):
-    monkeypatch.delenv('BRO_SHELL_COMMAND', raising=False)
-    rc = dive_in.main(['dive-in', '-n', '--new', 'do a thing'])
-    assert rc == 0
-    # `ride banner` splits the user prompt off at the last ` --new ` marker
-    assert os.environ['BRO_SHELL_COMMAND'] == 'dive-in --new do a thing'
-
-
 class TestBaseRef:
   """an omitted --into resolves to origin's fresh HEAD; explicit values pass through."""
 
@@ -159,12 +142,6 @@ class TestBaseRef:
     assert rc == 0
     args, harness_arguments = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
     assert args['into'] is None
-
-  def test_resolved_sha_stays_out_of_the_shell_command(self, fake_proj, monkeypatch):
-    monkeypatch.delenv('BRO_SHELL_COMMAND', raising=False)
-    rc = dive_in.main(['dive-in', '-n'])
-    assert rc == 0
-    assert os.environ['BRO_SHELL_COMMAND'] == 'dive-in'
 
 
 class TestNewMode:
@@ -216,16 +193,13 @@ class TestTaskMode:
     name = _workspace(shlex.split(capsys.readouterr().out.strip()))
     assert re.fullmatch(r'dive-in-[0-9a-f]{8}', name) is not None
 
-  def test_seeds_fix_with_the_original_ref_and_exports_the_canonical_id(
-    self, fake_proj, monkeypatch, capsys
-  ):
+  def test_seeds_fix_with_the_original_ref(self, fake_proj, monkeypatch, capsys):
     monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
     rc = dive_in.dive_in(forwarded=[], dry_run=True, task=URL)
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
     prompt = tokens[-1]
     assert prompt.startswith(f'[[fix {URL}]]\n\ntask block')
-    assert os.environ['RIDE_TASK_ID'] == UUID
 
   def test_raw_flavor_keeps_prefetch_and_appended_command_outside_spell_command(
     self, fake_proj, monkeypatch, capsys

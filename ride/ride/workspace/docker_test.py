@@ -448,7 +448,6 @@ class TestPrepareContainer:
       env={'MARKER': 'x'},
       secrets=('github',),
       tty=False,
-      forward_env=False,
       image='runtime-image',
       runtime_bundle_hash='bundle-hash',
       optional_secrets=('openai',),
@@ -478,7 +477,6 @@ class TestPrepareContainer:
         'BRO_STORE': '/home/ride/.bro',
         'BRO_INSTALL_KINDS': 'github',
       },
-      'forward_env': False,
       'tty': False,
       'extra_mounts': ['/host:/container'],
       'additions': {},
@@ -657,7 +655,6 @@ class TestDockerCreateArgv:
       None,
       tmp_path / 'tree',
       ['claude'],
-      forward_env=False,
     )
     assert not any('/host-repo' in value for value in argv)
     assert not any(value.startswith('RIDE_REPO=') for value in argv)
@@ -674,7 +671,6 @@ class TestDockerCreateArgv:
       repository,
       tmp_path / 'tree',
       ['claude'],
-      forward_env=False,
     )
     assert not any(str(repository.git_dir) in value for value in argv)
     assert f'RIDE_REPO={repository.identity}' in argv
@@ -720,17 +716,24 @@ class TestDockerCreateArgv:
     assert 'RIDE_BRO' not in build_argv()
     assert 'RIDE_BRO=bro' in build_argv(extra_env={'RIDE_BRO': 'bro'})
 
-  def test_forward_env_false_switches_the_forward_loop_off(self, build_argv, monkeypatch):
-    # a broker-spawned child's environment is its LaunchSpec snapshot (extra_env)
-    # only; none of the ambient SESSION_FORWARD_ENV vars may reach it
-    for var in workspace_docker.SESSION_FORWARD_ENV:
+  def test_a_tty_launch_forwards_the_terminal_identity_by_name(self, build_argv, monkeypatch):
+    monkeypatch.setenv('TERM', 'xterm-kitty')
+    monkeypatch.delenv('COLORTERM', raising=False)
+    argv = build_argv(tty=True)
+    assert argv[argv.index('TERM') - 1] == '-e'
+    assert 'COLORTERM' not in argv
+
+  def test_a_headless_launch_forwards_no_terminal_identity(self, build_argv, monkeypatch):
+    # a session attached to no terminal has no use for the launcher's: its
+    # environment is the explicit snapshot (extra_env) alone
+    for var in workspace_docker.SESSION_TERMINAL_ENV:
       monkeypatch.setenv(var, 'ambient')
-    argv = build_argv(forward_env=False, extra_env={'MARKER': 'x'})
-    assert not any(var in argv for var in workspace_docker.SESSION_FORWARD_ENV)
+    argv = build_argv(tty=False, extra_env={'MARKER': 'x'})
+    assert not any(var in argv for var in workspace_docker.SESSION_TERMINAL_ENV)
     assert 'MARKER=x' in argv
 
   def test_extra_env_injected_as_explicit_key_value(self, build_argv, monkeypatch):
-    # extra_env sets the value here (`-e KEY=VALUE`), unlike SESSION_FORWARD_ENV which
+    # extra_env sets the value here (`-e KEY=VALUE`), unlike SESSION_TERMINAL_ENV which
     # forwards a host var by name — so it works even with no such var on the host.
     monkeypatch.delenv('TRAILS_DISABLED', raising=False)
     argv = build_argv(extra_env={'TRAILS_DISABLED': '1'})
@@ -742,7 +745,6 @@ class TestDockerCreateArgv:
   ):
     monkeypatch.setenv('TERM', 'xterm')
     argv = build_argv(
-      forward_env=True,
       extra_env={'RIDE_BRO': 'bro'},
       additions={
         'IS_SANDBOX': '1',

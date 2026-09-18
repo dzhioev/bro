@@ -56,7 +56,7 @@ Restore the state that session had, reconcile what happened while nobody watched
    A fresh clone sits on a `workspace-<name>` branch at the base ref
    — the PR's head branch is not checked out locally;
    `gh pr checkout` fetches it and sets up tracking so later pushes go to the right branch.
-2. **Recover the context** the environment no longer carries (`RIDE_TASK_ID` is unset here):
+2. **Recover the context** a fresh session lacks:
    ```bash
    gh pr view <number> --json number,url,state,baseRefName,title,body
    ```
@@ -159,7 +159,7 @@ only where they state none, survey `git log --oneline -10` and match the recent 
 Then:
 
 - **Task metadata**:
-  add the task link the repo requires (resolve it via `brog::get_task(task_id).url`; the task id comes from `RIDE_TASK_ID` or a task created earlier in this session).
+  add the task link the repo requires (resolve it via `brog::get_task(task_id).url`; the task is the one this session works on — the one [[fix]] ran against, or one created earlier in the session).
   Omit task metadata when no task id is available.
 - **Never** hand-write `Co-Authored-By:` lines or generated-by boilerplate.
   An interactive session's commit hook adds the co-author trailer itself (`bro.workflow.co_author`);
@@ -378,7 +378,7 @@ here at creation, and again after each push of review-fix commits (step 15).
 
 ### 13. Log "PR opened" to the task (sessions with a task)
 
-If the session has a task (`RIDE_TASK_ID` — `dive-in` sets it — or a task resolved earlier in this session) and the brog tools are available, record the event with `brog::add_comment(task_id, topic='PR opened', body=...)`:
+If the session has a task (the one [[fix]] ran against, or one resolved earlier in this session) and the brog tools are available, record the event with `brog::add_comment(task_id, topic='PR opened', body=...)`:
 
 ```
 [PR:<n>](<pr-url>)

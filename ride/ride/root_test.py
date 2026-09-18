@@ -32,7 +32,6 @@ def _docker_launch() -> workspace_docker.Launch:
     optional_secrets=('openai',),
     credential_selection={'github': 'reviewer'},
     tty=True,
-    forward_env=True,
     image='runtime-image',
     runtime_bundle_hash='bundle-hash',
   )
@@ -147,7 +146,6 @@ class TestManualStartedParty:
       env={'RIDE_BRO': 'bro-dev'},
       secrets=(),
       tty=False,
-      forward_env=False,
       image='runtime-image',
       runtime_bundle_hash='bundle-hash',
     )

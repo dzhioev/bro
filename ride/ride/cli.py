@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from bro.base import configs, host_config
+from bro.base import configs, host_config, log
 from bro.base.args import REMAINDER, Parser
 from bro.launch.llm_flags import canonicalize, drop_piece_flags, selection_from_args
 from bro.llm.providers import LLMSelectionError
@@ -255,6 +255,9 @@ def _start_mode(
   args['revoke'] = args['revoke'] or []
   bro = args.pop('bro')
   prompt = args.pop('prompt')
+  session_log = args.pop('session_log')
+  if session_log is not None and log.LEVEL_ENV in args['env']:
+    parser.error(f'--session-log and --env {log.LEVEL_ENV} both set the session log level')
   if summoned is not None:
     _validate_summoned(parser, summoned, bro=bro, prompt=prompt, args=args)
     prompt = summoned.prompt
@@ -263,6 +266,9 @@ def _start_mode(
     args['env'] = dict(summoned.env)
   elif solo and prompt is None:
     parser.error('ride solo requires a prompt unless --summoned supplies it')
+  if session_log is not None:
+    # after the party's additions: a manual child's own launch owns its level
+    args['env'][log.LEVEL_ENV] = session_log.upper()
   harness_options = pop_harness_options(parser, args, harness_name, solo=solo, isolation=isolation)
   try:
     # not every harness's llm resolution consults the registry, so the launch

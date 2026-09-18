@@ -42,14 +42,7 @@ SESSION_BASE_ENV = (
   'LANG',
   'LANGUAGE',
 )
-SESSION_FORWARD_ENV = (
-  'RIDE_TASK_ID',
-  'GIT_AUTHOR_NAME',
-  'GIT_AUTHOR_EMAIL',
-  'GIT_COMMITTER_NAME',
-  'GIT_COMMITTER_EMAIL',
-  'BRO_LOG_LEVEL',
-  'BRO_SHELL_COMMAND',
+SESSION_TERMINAL_ENV = (
   'TERM',
   'TERM_PROGRAM',
   'TERM_PROGRAM_VERSION',
@@ -184,14 +177,15 @@ class RuntimeBundle:
         )
 
   def host_session_env(
-    self, cwd: Path, *, forward_env: bool, additions: Mapping[str, str] = MappingProxyType({})
+    self, cwd: Path, *, tty: bool, additions: Mapping[str, str] = MappingProxyType({})
   ) -> dict[str, str]:
     """Build an unboxed session's closed host environment snapshot, with
-    `additions` beneath everything it carries."""
+    `additions` beneath everything it carries; a session on the launcher's
+    terminal (`tty`) carries its identity."""
     ambient = dict(os.environ)
     admitted = [*SESSION_BASE_ENV, *(key for key in ambient if key.startswith('LC_'))]
-    if forward_env:
-      admitted.extend(SESSION_FORWARD_ENV)
+    if tty:
+      admitted.extend(SESSION_TERMINAL_ENV)
     env = dict(additions)
     env.update({key: ambient[key] for key in admitted if key in ambient})
     launcher_venv = ambient.get('VIRTUAL_ENV')

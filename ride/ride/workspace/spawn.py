@@ -7,8 +7,7 @@ and host-log redirection; a headless root inherits separate stdout and stderr;
 a headless child captures merged output in a bounded ring and can remove its
 workspace after a clean exit when the workspace records itself throwaway — a
 failed or killed child's stays on disk for inspection. The neutral launch owns
-the complete docker inputs, including the explicit env snapshot and whether
-ambient forwarding is allowed.
+the complete docker inputs, including the explicit env snapshot.
 
 `ProcessSpawner` adds the provisioned channel's loopback address and quest id
 to the launch's explicit environment.

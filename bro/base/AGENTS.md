@@ -89,8 +89,9 @@ run those with `--help` for flags.
   stage detail logs VERBOSE.
   The threshold defaults to INFO, is set per invocation with `--log <level>` (`--verbose` is shorthand for `--log verbose`), and propagates to child processes:
   `set_level` exports `BRO_LOG_LEVEL`, which both `log.py` (at import) and `bro/setup/log.sh` (the shell-script counterpart, same line shape) read.
-  A launch CLI's verbosity therefore reaches workspace provisioning, containers, and the `do-ride` session executable;
-  an explicit `--log` overrides the inherited value.
+  A launch CLI's verbosity therefore reaches the processes it spawns on the host, workspace provisioning among them, and stops at the session boundary:
+  a managed session's environment is composed explicitly, and `ride`'s `--session-log` is what sets the level the session's own processes run at;
+  an explicit `--log` overrides an inherited value.
 - `lulid.py` — `lulid()`, the repo's id mint:
   a ULID restyled lowercase and dash-grouped 10-8-8 (`01kwphn3q5-w1fdwep2-apw9ag3b`).
   The restyle preserves lexicographic order, so lulids sort by mint time and are safe as range/sort keys.
