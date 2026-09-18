@@ -53,12 +53,42 @@ def _request(kind: str, args: dict[str, Any], timeout: Optional[float]) -> int:
   return 0
 
 
+def _message(
+  quest: str,
+  payload: dict[str, Any],
+  reply_to: Optional[str],
+  question: bool,
+) -> int:
+  client = Client.from_env()
+  if client is None:
+    log.info(f'broker: {CHANNEL_ENV} unset, message not sent')
+    return 0
+  with client:
+    sent = client.message(quest, payload, reply_to=reply_to, question=question)
+  sys.stdout.write(sent.to_bytes().decode('utf-8') + '\n')
+  return 0
+
+
 def _receive(timeout: Optional[float]) -> int:
   client = Client.from_env()
   if client is None:
     log.info(f'broker: {CHANNEL_ENV} unset, nothing to receive')
     return 0
   with client:
+    message = client.receive(timeout)
+  if message is None:
+    return 1
+  sys.stdout.write(message.to_bytes().decode('utf-8') + '\n')
+  return 0
+
+
+def _listen(quest: str, timeout: Optional[float]) -> int:
+  client = Client.from_env()
+  if client is None:
+    log.info(f'broker: {CHANNEL_ENV} unset, nothing to listen for')
+    return 0
+  with client:
+    client.listen(quest)
     message = client.receive(timeout)
   if message is None:
     return 1
@@ -91,6 +121,17 @@ def main(argv: list[str]) -> Optional[int]:
   )
   request_parser.set_handler(_request)
 
+  message_parser = subparsers.add_parser(
+    'message', help='send a chat message and print its wire envelope'
+  )
+  message_parser.add_argument('quest', help='the quest the message belongs to')
+  message_parser.add_argument('payload', type=_args, help='JSON object message payload')
+  message_parser.add_argument('--reply-to', help='the question id this message answers')
+  message_parser.add_argument(
+    '--question', action='store_true', help='mint an id so the message can receive a reply'
+  )
+  message_parser.set_handler(_message)
+
   receive_parser = subparsers.add_parser(
     'receive', help='receive one message and print it; exit 1 when nothing arrives'
   )
@@ -98,5 +139,14 @@ def main(argv: list[str]) -> Optional[int]:
     '--timeout', type=float, help='seconds to wait for a message (default: wait indefinitely)'
   )
   receive_parser.set_handler(_receive)
+
+  listen_parser = subparsers.add_parser(
+    'listen', help='register for a quest, receive one message, and print it'
+  )
+  listen_parser.add_argument('quest', help='the quest whose unsolicited messages to receive')
+  listen_parser.add_argument(
+    '--timeout', type=float, help='seconds to wait for a message (default: wait indefinitely)'
+  )
+  listen_parser.set_handler(_listen)
 
   return parser.dispatch(argv)

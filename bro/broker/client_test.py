@@ -5,9 +5,9 @@ from dataclasses import dataclass
 import pytest
 
 from bro.broker import brotocol
-from bro.broker.brotocol import Message
-from bro.broker.client import CHANNEL_ENV, UPSTREAM_ENV, Client
-from bro.broker.transport import ChannelID
+from bro.broker.brotocol import TALK_ENV, Message, Tag
+from bro.broker.client import CHANNEL_ENV, QUEST_ENV, UPSTREAM_ENV, Client, talk_from_env
+from bro.broker.transport import ChannelID, ClientTransport
 from bro.broker.transports.tcp import LOCAL_HOST, TcpClientTransport, TcpServerTransport
 
 TIMEOUT = 5.0
@@ -420,3 +420,167 @@ async def test_await_reply_recovers_a_result_set_aside_during_a_journal_query():
     result = await asyncio.to_thread(client.await_reply, original, TIMEOUT)
     assert result.payload == {'outcome': 'ok', 'value': 'answer'}
     client.close()
+
+
+@pytest.mark.asyncio
+async def test_message_mints_question_id_and_carries_reply_correlation():
+  async with running_server() as server:
+    provisioned = await server.transport.provision()
+    client = Client(await _transport(provisioned))
+
+    sent = await asyncio.to_thread(
+      client.message,
+      'quest',
+      {'text': 'answer?'},
+      reply_to='earlier',
+      question=True,
+    )
+    _, received = await _next(server.sink.messages)
+
+    assert received == sent
+    assert sent.type == Tag.MESSAGE
+    assert sent.id is not None
+    assert sent.reply_to == 'earlier'
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_listen_emits_the_worker_listening_mark():
+  async with running_server() as server:
+    provisioned = await server.transport.provision()
+    client = Client(await _transport(provisioned))
+
+    await asyncio.to_thread(client.listen, 'quest')
+    _, received = await _next(server.sink.messages)
+
+    assert received == brotocol.mark('quest', 'listening')
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_await_reply_to_correlates_on_message_id_and_sets_other_traffic_aside():
+  async with running_server() as server:
+    provisioned = await server.transport.provision()
+    client = Client(await _transport(provisioned))
+    question = await asyncio.to_thread(client.message, 'quest', {}, question=True)
+    await _next(server.sink.messages)
+    wait = asyncio.create_task(asyncio.to_thread(client.await_reply_to, question, TIMEOUT))
+
+    unrelated = brotocol.message('quest', {'text': 'other'}, reply_to='other-question')
+    reply = brotocol.message('quest', {'text': 'answer'}, reply_to=question.id)
+    await server.transport.send(provisioned.channel, unrelated)
+    await server.transport.send(provisioned.channel, reply)
+
+    assert await asyncio.wait_for(wait, TIMEOUT) == reply
+    assert await asyncio.to_thread(client.receive, 0.2) == unrelated
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_await_reply_to_recovers_a_reply_set_aside_during_a_journal_query():
+  async with running_server() as server:
+    provisioned = await server.transport.provision()
+    client = Client(await _transport(provisioned))
+    question = await asyncio.to_thread(client.message, 'quest', {}, question=True)
+    assert question.id is not None
+    await _next(server.sink.messages)
+    query_task = asyncio.create_task(
+      asyncio.to_thread(client.call, 'query', {'id': 'quest'}, TIMEOUT)
+    )
+    channel, query = await _next(server.sink.messages)
+
+    reply = brotocol.message('quest', {'text': 'answer'}, reply_to=question.id)
+    await server.transport.send(channel, reply)
+    await server.transport.send(
+      channel,
+      brotocol.result(query.id or '', 'ok', value={'quest': {'id': 'quest'}}),
+    )
+    await query_task
+
+    assert await asyncio.to_thread(client.await_reply_to, question, TIMEOUT) == reply
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_await_reply_until_returns_the_matching_interim():
+  async with running_server() as server:
+    provisioned = await server.transport.provision()
+    client = Client(await _transport(provisioned))
+    request = await asyncio.to_thread(client.send, 'summon', {})
+    await _next(server.sink.messages)
+    wait = asyncio.create_task(
+      asyncio.to_thread(
+        client.await_reply,
+        request,
+        TIMEOUT,
+        until=lambda message: message.type == Tag.MESSAGE and message.is_question,
+      )
+    )
+
+    question = brotocol.message(request.quest_id, {'text': 'approve?'}, id='question')
+    await server.transport.send(provisioned.channel, question)
+
+    assert await asyncio.wait_for(wait, TIMEOUT) == question
+    client.close()
+
+
+def test_talk_from_env_distinguishes_unpublished_and_empty_talk(monkeypatch):
+  monkeypatch.delenv(TALK_ENV, raising=False)
+  assert talk_from_env() is None
+  monkeypatch.setenv(TALK_ENV, '')
+  assert talk_from_env() == frozenset()
+  monkeypatch.setenv(TALK_ENV, 'worker.question,worker.say')
+  assert talk_from_env() == frozenset({'worker.say', 'worker.question'})
+
+
+def test_talk_from_env_rejects_an_unknown_right(monkeypatch):
+  monkeypatch.setenv(TALK_ENV, 'worker.guess')
+  with pytest.raises(ValueError, match='worker.guess'):
+    talk_from_env()
+
+
+@pytest.mark.parametrize(
+  ('talk', 'reply_to', 'question', 'missing_right'),
+  [
+    ('worker.question', None, False, 'worker.say'),
+    ('worker.say', None, True, 'worker.question'),
+    ('worker.say', 'requester-question', False, 'requester.question'),
+  ],
+)
+def test_message_refuses_a_move_missing_from_the_own_quest_talk(
+  monkeypatch, talk, reply_to, question, missing_right
+):
+  transport = FakeClientTransport()
+  client = Client(transport)
+  monkeypatch.setenv(QUEST_ENV, 'own-quest')
+  monkeypatch.setenv(TALK_ENV, talk)
+
+  with pytest.raises(PermissionError, match=missing_right):
+    client.message('own-quest', {}, reply_to=reply_to, question=question)
+
+  assert transport.sent == []
+
+
+def test_message_does_not_apply_the_own_talk_to_a_child_quest(monkeypatch):
+  transport = FakeClientTransport()
+  client = Client(transport)
+  monkeypatch.setenv(QUEST_ENV, 'own-quest')
+  monkeypatch.setenv(TALK_ENV, '')
+
+  sent = client.message('child-quest', {})
+
+  assert transport.sent == [sent]
+
+
+class FakeClientTransport(ClientTransport):
+  def __init__(self):
+    self.sent: list[Message] = []
+
+  def send(self, message: Message) -> None:
+    self.sent.append(message)
+
+  def receive(self, timeout):
+    raise AssertionError('receive called')
+
+  def close(self, confirm=False):
+    pass

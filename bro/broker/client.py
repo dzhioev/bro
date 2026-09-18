@@ -13,8 +13,9 @@ Uncorrelated arrivals are set aside and handed out by later `receive` calls rath
 No reader thread — concurrent in-flight requests are a consumer need that has not arisen.
 
 `send` returns the sent request (ids are minted client-side); `await_reply` is `call`'s wait detached from its send and `await_any` is `request`'s, so a consumer can expose the request id the moment it is on the wire and block — or reattach — separately.
+`message` sends chat traffic, `await_reply_to` correlates a reply by message id, and `listen` registers the connection for unsolicited quest messages.
 `mark` and `result` are the answering-side lifecycle calls;
-a worker peer emits them against the quest id its launch carried (`QUEST_ENV`).
+a worker peer emits them against the quest id its launch carried (`QUEST_ENV`), with its fixed chat rights in `BROKER_TALK`.
 """
 
 import os
@@ -24,14 +25,31 @@ from collections.abc import Callable
 from types import TracebackType
 from typing import Any, Optional
 
+from bro.base.lulid import lulid
 from bro.broker import brotocol
-from bro.broker.brotocol import Message, Tag
+from bro.broker.brotocol import Message, Tag, Talk
 from bro.broker.transport import ClientTransport, connect
 from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV, broxy_log_path
 
 # the quest a launched peer answers, set beside CHANNEL_ENV by whatever
 # launches it (the host's spawner adapters, a manual summon's launch surface)
 QUEST_ENV = 'BROKER_QUEST'
+
+
+def talk_from_env() -> Optional[Talk]:
+  """Read this peer's quest talk, or None when its launcher published no talk."""
+  value = os.environ.get(brotocol.TALK_ENV)
+  return None if value is None else brotocol.decode_talk(value)
+
+
+def _missing_worker_right(talk: Talk, message: Message) -> str:
+  if message.is_say:
+    return 'worker.say'
+  if message.is_reply and 'requester.question' not in talk:
+    return 'requester.question'
+  if message.is_question and 'worker.question' not in talk:
+    return 'worker.question'
+  raise RuntimeError('allowed message has no missing talk right')
 
 
 class Client:
@@ -60,6 +78,29 @@ class Client:
   def mark(self, quest_id: str, transition: str, **payload: Any) -> None:
     """emit a lifecycle mark on ``quest_id`` from its worker peer."""
     self._transport.send(brotocol.mark(quest_id, transition, **payload))
+
+  def message(
+    self,
+    quest_id: str,
+    payload: dict[str, Any],
+    *,
+    reply_to: Optional[str] = None,
+    question: bool = False,
+  ) -> Message:
+    """Send chat traffic on a quest and return the sent envelope."""
+    message = brotocol.message(
+      quest_id,
+      payload,
+      id=lulid() if question else None,
+      reply_to=reply_to,
+    )
+    self._require_own_quest_talk(message)
+    self._transport.send(message)
+    return message
+
+  def listen(self, quest_id: str) -> None:
+    """Register this connection for unsolicited messages on `quest_id`."""
+    self.mark(quest_id, 'listening')
 
   def result(self, quest_id: str, payload: dict[str, Any]) -> None:
     """emit the result closing `quest_id` from its worker peer."""
@@ -100,17 +141,19 @@ class Client:
     on_interim: Optional[Callable[[Message], None]] = None,
     timeout_after_interim: Optional[float] = None,
     rearm_on_interim: Optional[Callable[[Message], bool]] = None,
+    until: Optional[Callable[[Message], bool]] = None,
   ) -> Message:
     """block for the result correlated to an already-sent `request` — the detached
     tail of `call`, for a caller that sent first (to expose the request id) and
     awaits separately. Semantics and errors are exactly `call`'s wait, except when
     `timeout_after_interim` is set:
     correlated interim messages re-arm the deadline to that many seconds from arrival.
-    `rearm_on_interim` narrows which interim messages trigger that re-arm."""
+    `rearm_on_interim` narrows which interim messages trigger that re-arm.
+    `until` returns a matching interim message instead of waiting for the result."""
     deadline = time.monotonic() + timeout if timeout is not None else None
     while True:
       message = self._receive_correlated(request, deadline, timeout)
-      if message.type == Tag.RESULT:
+      if message.type == Tag.RESULT or (until is not None and until(message)):
         return message
       should_rearm = rearm_on_interim is None or rearm_on_interim(message)
       if timeout_after_interim is not None and should_rearm:
@@ -118,6 +161,33 @@ class Client:
         timeout = timeout_after_interim
       if on_interim is not None:
         on_interim(message)
+
+  def await_reply_to(self, question: Message, timeout: Optional[float]) -> Message:
+    """Block for the chat message whose `reply_to` names `question`."""
+    if question.type != Tag.MESSAGE or question.id is None:
+      raise ValueError('await_reply_to needs a question message with an id')
+    deadline = time.monotonic() + timeout if timeout is not None else None
+    buffered = next(
+      (message for message in self._set_aside if message.reply_to == question.id),
+      None,
+    )
+    if buffered is not None:
+      self._set_aside.remove(buffered)
+      return buffered
+    while True:
+      remaining = None
+      if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+          raise TimeoutError(f'no reply to message {question.id} within {timeout}s')
+      message = self._transport.receive(remaining)
+      if message is None:
+        if deadline is not None and time.monotonic() >= deadline:
+          raise TimeoutError(f'no reply to message {question.id} within {timeout}s')
+        raise ConnectionError(f'broker channel closed awaiting reply to message {question.id}')
+      if message.reply_to == question.id:
+        return message
+      self._set_aside.append(message)
 
   def await_any(self, request: Message, timeout: Optional[float]) -> Message:
     """block for the first correlated envelope correlated to `request`."""
@@ -149,6 +219,18 @@ class Client:
       if message.quest_id == request.id:
         return message
       self._set_aside.append(message)
+
+  @staticmethod
+  def _require_own_quest_talk(message: Message) -> None:
+    if message.quest_id != os.environ.get(QUEST_ENV):
+      return
+    talk = talk_from_env()
+    if talk is None or brotocol.message_allowed(talk, 'worker', message):
+      return
+    missing_right = _missing_worker_right(talk, message)
+    raise PermissionError(
+      f'{brotocol.TALK_ENV} lacks {missing_right} for a message on the session quest'
+    )
 
   def receive(self, timeout: Optional[float]) -> Optional[Message]:
     if len(self._set_aside) > 0:
