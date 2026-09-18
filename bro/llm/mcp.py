@@ -414,8 +414,10 @@ class InProcessMCPServer(MCPServer):
     return list(self._tools)
 
   def close(self) -> None:
-    if self._close is not None:
-      self._close()
+    close = self._close
+    self._close = None
+    if close is not None:
+      close()
 
 
 class UnknownToolError(Exception):

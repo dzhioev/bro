@@ -80,7 +80,7 @@ Consumers:
 
 - a bro's `tools` / `data_sources` entries may be `when`-wrapped or `iff`-grouped;
   `BaseBro.__init__` selects at harness `bro`, so an unmatched declaration is never applied.
-  E.g. the dev toolset mounts only on the bro harness (claude has built-in file/shell tools):
+  E.g. the dev toolset mounts only on the bro harness (Claude has built-in file/search tools):
   `tools = [when(harness == 'bro', mount(dev_mcp.toolset))]`.
   The same wrapper gates native blocks:
   `tools = [when(harness == 'claude', block('Read', 'Write'))]`;

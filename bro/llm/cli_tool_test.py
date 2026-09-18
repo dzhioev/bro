@@ -4,11 +4,11 @@ import pytest
 
 from bro.base.args import Argument, CommandSignature
 from bro.llm.cli_tool import _CommandTool, build_server
-from bro.mcp import sh
+from bro.mcp import cli
 
 
 def _tool(command: str, *arguments: str) -> _CommandTool:
-  server = sh(command, *arguments).server_specs[0].build()
+  server = cli(command, *arguments).server_specs[0].build()
   tool = asyncio.run(server.list_tools())[0]
   assert isinstance(tool, _CommandTool)
   return tool
@@ -43,14 +43,14 @@ class TestDeclaration:
   @pytest.mark.parametrize('command', ['bro list; rm -rf /', 'bro | tee out', '$(bro) list'])
   def test_shell_syntax_is_not_a_command(self, command):
     with pytest.raises(ValueError, match='not a command word'):
-      sh(command)
+      cli(command)
 
   def test_empty_command_raises(self):
     with pytest.raises(ValueError, match='needs a command'):
-      sh('   ')
+      cli('   ')
 
   def test_declaration_neither_reads_nor_runs_the_command(self):
-    sh('definitely-not-installed subcommand')
+    cli('definitely-not-installed subcommand')
 
 
 class TestGeneratedSurface:

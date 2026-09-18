@@ -98,13 +98,13 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   Subclasses set `name`, `description`, and class-level `system_prompt = "..."` plus optionally `data_sources = [...]`, `tools = [...]`, `spells = (...)`, and `provisioning = (...)`.
   Every `tools` item is one frozen `bro.mcp.ToolLayer`:
   `mount(toolset, *tool_names)` adds a toolset's full or selected roster,
-  `sh('<command>', *argument_names)` generates one from an installed CLI command (`bro/llm/cli_tool.py`),
+  `cli('<command>', *argument_names)` generates one from an installed CLI command (`bro/llm/cli_tool.py`),
   `block(*tool_names)` names harness-native tools to remove,
   `allow_commands(tool_name, *commands)` serves a blocked native tool whose argument is a command line, reaching only the named commands,
   and `serve(*tool_names)` serves blocked native tools whole, for those with no command line to narrow on.
   Tool-pack modules export a typed `toolset`;
   the module itself is not a declaration.
-  Entries in `tools` and `data_sources` may be wrapped with `bro.base.condition.when(...)` to gate them on the assembling surface's facts, e.g. `when(harness == 'bro', mount(dev_mcp.toolset))` because claude has built-in file and shell tools,
+  Entries in `tools` and `data_sources` may be wrapped with `bro.base.condition.when(...)` to gate them on the assembling surface's facts, e.g. `when(harness == 'bro', mount(dev_mcp.toolset))` because Claude has built-in file and search tools,
   or `when(harness == 'claude', block('Read', 'Write'))` to restrict those built-ins.
   A block selected for the `bro` harness is a declaration error because bro-native and raw Claude surfaces already serve exactly the declared roster.
   Conditions are decided where composition happens (`bro.mcp.select`, harness `bro`), so an unmatched layer is never applied (conditioning reference: `bro/reference/conditions.md`).
@@ -214,6 +214,10 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   — the session environment facts of `ride banner --llm` rendered in-process (`bro.workspace.banner.render_banner`, with the bro's name and the run's trail id passed explicitly
   — an in-process run's environment carries the launcher's `RIDE_BRO`, or none, and its own trail is published by no session recorder), so every bro detects its environment without a shell;
   the playbook is `bro/prompts/environment.md`.
+  On the bro harness, a declared `shell` roster mounts `job`, `poll`, `kill`, and `jobs` on both wires, plus `chill` on the bare wire.
+  Bare tools use the run's registry and inbox;
+  the MCP service server owns and closes its registry, offers only foreground/background jobs, and has no notification wake.
+  With no shell declaration, automatic `summon watch` admission mounts the same bare tools narrowed to that command alone.
   Both service builds also mount `summon`, `summon_say`, `summon_check`, `summon_list`, and `summon_cancel` when the process has broker intent (`BROKER_CHANNEL` or `BROKER_UPSTREAM` set),
   forwarding to `bro.summon` off-loop so interactive surfaces stay responsive.
   The bare-wire shapes do not wait:
@@ -357,18 +361,17 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
     lookup is case- and whitespace-tolerant and a miss raises with the topics listed.
     Output is capped at `PAGE_LIMIT` lines, so a page longer than that is read across successive `offset`s
 - `mcp.py` — declaration vocabulary for persona tool layers and toolset modules:
-  surface facts and rendering, `MCPServerSpec`, `ToolLayer`, `Toolset`, and the `mount` / `block` / `allow_commands` / `serve` / `sh` constructors.
+  surface facts and rendering, `MCPServerSpec`, `ToolLayer`, `Toolset`, and the `mount` / `block` / `allow_commands` / `serve` / `cli` / `shell` constructors.
   Live tool and server objects stay in `llm/mcp.py` and are imported only when a declaration is built
 - `llm/` — the provider-neutral declaration and shared-contract layer:
   `LLMSpec` recipes and provider selection, the live MCP tool/server seam engines consume, observers and trackers, token-usage accounting, and `mu`, the typed one-shot call helper an extension calls directly;
   see `llm/AGENTS.md`
 - `harness/` — what a consuming harness brings of its own, named where a persona can declare against it.
-  `claude.py` holds Claude Code's tool names in capability groups (`FILES`, `SHELL`, `DELEGATION`) plus `claude.block(*names)` and `claude.watch(*commands)`
-  — the `block(...)` layer and an `allow_commands(...)` + `serve(...)` pair, already conditioned on the claude harness;
-  the second narrows `Monitor` to the commands a persona declares and hands back the task control over what those watches start, so it holds the harness's push channel without its shell.
+  `claude.py` holds Claude Code's tool names in capability groups (`FILES`, `SHELL`, `DELEGATION`) plus `claude.block(*names)`, conditioned on the Claude harness.
+  A finite `shell(...)` roster over a blocked shell hands back `Bash` and `Monitor` behind the command gate plus their job controls;
+  `shell(ANY)` leaves an unblocked Claude shell unrestricted.
   `summon watch` needs no declaring:
-  for a run that may summon, or a summoned run whose talk lets its requester say or question, the fold admits it through `Monitor` over any block or narrowing of that tool (`claude.admit_summon_watch`),
-  since the matching session fragment tells that run to keep it armed.
+  for a run that may summon, or a summoned run whose talk lets its requester say or question, the fold admits it through `Monitor` over any block or narrowing of that tool.
   A persona names another product's tool surface when it withholds or narrows one, so the names live here rather than in each persona that forgoes them
 - `registry.py` — process-wide registry of bro classes:
   `register(cls)`, `get_class(name)`, `create_bro(name, llm_spec=None)`, `list_classes()`, `known_names()` (every resolvable name, read without importing any bro module — what `ride/ride/summon_control.py` validates summon targets against).
@@ -422,10 +425,12 @@ add tool sources as class attributes too:
   every page the class hierarchy declares folds into the bro's single `man` source
 - `tools = [mount(project_tools.mcp.toolset)]` adds a contributing package's full toolset
 - `tools = [mount(project_tools.mcp.toolset, 'search', 'update')]` scopes the mount to specific tools (validated at declaration)
-- `tools = [when(harness == 'bro', mount(dev_mcp.toolset))]` (`from bros.dev import mcp as dev_mcp`, supplied by `bro-dev`) mounts the developer toolset (file/shell/search tools; source in `dev/bros/dev/mcp.py`) only on the bro harness
-- `tools = [sh('bro list')]` serves one installed CLI command as a generated tool in the `sh` namespace (`sh::bro_list`).
+- `tools = [when(harness == 'bro', mount(dev_mcp.toolset))]` (`from bros.dev import mcp as dev_mcp`, supplied by `bro-dev`) mounts its file and search tools only on the bro harness
+- `tools = [claude.block(*claude.SHELL), shell('git status', 'git diff')]` declares the exact command lines the persona may run on either harness;
+  the block lets the finite roster narrow Claude's shell, while `shell(ANY)` leaves its unblocked shell unrestricted and an empty declaration is invalid
+- `tools = [cli('bro list')]` serves one installed CLI command as a generated tool in the `cli` namespace (`cli::bro_list`).
   The command is a program name and any subcommands;
-  trailing names narrow what the tool exposes (`sh('bro show', 'name')` withholds `--system-prompt`).
+  trailing names narrow what the tool exposes (`cli('bro show', 'name')` withholds `--system-prompt`).
   Nothing is read at declaration:
   the signature is derived at build from the command's own argument declarations, so a command that cannot be read
   — not an installed CLI, a dispatcher rather than a leaf, an argument shape that cannot be described

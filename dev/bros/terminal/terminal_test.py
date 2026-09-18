@@ -1,3 +1,6 @@
+from typing import get_args
+
+import bro.mcp as mcp
 from bro.bro import BaseBro
 from bro.harness import claude
 from bro.llm import providers
@@ -23,6 +26,11 @@ def test_llm_model_selection_preserves_terminal_compaction():
   assert isinstance(spec, openai.LLMSpec)
   assert spec.model == openai.MODELS['sol']
   assert spec.compact_threshold == declared.compact_threshold
+
+
+def test_terminal_declares_an_unrestricted_shell_on_both_harnesses():
+  for harness in get_args(mcp.Harness):
+    assert Terminal()._selected_tools_for(harness).shell_unrestricted is True
 
 
 def test_terminal_withholds_claudes_own_delegation():

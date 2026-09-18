@@ -115,8 +115,31 @@ class TestRideSessionLaunch:
       'summon watch',
     ]
 
-  def test_a_summoning_session_gets_the_summon_watch_over_a_blocked_shell(self, monkeypatch):
+  def test_shell_roster_gates_bash_and_monitor_and_returns_job_control(self, monkeypatch):
     from bro.bro import BaseBro
+    from bro.harness import claude
+    from bro.mcp import shell
+
+    class ShellBro(BaseBro):
+      name = 'shell'
+      description = 'd'
+      tools: ClassVar = [claude.block(*claude.SHELL), shell('git status')]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: ShellBro())
+    argv = _ride_session_launch(_spec(bro='shell'), claude_args=[]).argv
+    disallowed = argv[argv.index('--disallowed-tools') + 1].split(',')
+    assert set(claude.SHELL).isdisjoint(disallowed)
+    hooks = _settings(argv)['hooks']['PreToolUse']
+    assert [entry['matcher'] for entry in hooks] == ['Bash', 'Monitor']
+    for entry in hooks:
+      command = shlex.split(entry['hooks'][0]['command'])
+      assert command[-2:] == [entry['matcher'], 'git status']
+
+  def test_a_summoning_session_gets_the_summon_watch_over_a_blocked_shell(self, monkeypatch):
+    from bro.bro import SUMMON_WATCH_COMMAND, BaseBro
     from bro.harness import claude
     from bro.summon import MAY_SUMMON_ENV, encode_may_summon
 
@@ -137,7 +160,7 @@ class TestRideSessionLaunch:
     (entry,) = _settings(argv)['hooks']['PreToolUse']
     assert entry['matcher'] == 'Monitor'
     (hook,) = entry['hooks']
-    assert shlex.split(hook['command'])[-1] == claude.SUMMON_WATCH
+    assert shlex.split(hook['command'])[-1] == SUMMON_WATCH_COMMAND
 
   def test_no_narrowing_declares_no_hooks(self):
     assert 'hooks' not in _settings(_ride_session_launch(_spec(), claude_args=[]).argv)

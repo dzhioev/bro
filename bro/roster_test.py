@@ -107,7 +107,7 @@ async def test_lead_exposes_the_rewind_read_surface_as_generated_commands():
   lead = create_bro('lead')
   tools = {}
   for server in _servers(lead):
-    if server.namespace == 'sh':
+    if server.namespace == 'cli':
       tools.update({tool.name: tool for tool in await server.list_tools()})
 
   assert {

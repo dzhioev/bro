@@ -176,23 +176,23 @@ Events fire for the review parties
   an event source kept failing past the grace window and the watch ended;
   the process exits right after.
 
-{{iff #harness = bro}}
-Run it as a background job and read it iteratively
-— a plain `dev::bash` call would kill it at its timeout:
-
-1. `dev::job("poll-pr …")` → note the job id.
-2. Loop on `dev::watch(job_id, wait_seconds=1500)`:
-   new output → react to every JSON line per step 6, then watch again;
-   a bare `running` state line → watch again;
-   `exited` right after a `merged`/`closed`/`watch_failed` event → react per step 6, stop looping;
-   `exited` with no terminal event → the watcher died:
-   reconcile first (step 2 — a restarted watch baselines everything as seen), then start a new job.
-3. Stop the watcher with `dev::kill(job_id)` when the review ends.
+{{iff #wire = bare}}
+Start it with `bro::job("poll-pr …", mode="watch")` and keep the returned job id.
+Its JSON lines arrive as background-job notifications.
+React to every line per step 6, use `bro::poll` when a pending marker says more output remains, then call `bro::chill()` whenever nothing else remains.
+A notification that the job exited right after `merged`, `closed`, or `watch_failed` is terminal;
+an exit without one means the watcher died.
+Reconcile first (step 2) before starting another watch, because a restart baselines existing events as seen.
+Stop it with `bro::kill(id=job_id)` when the review ends.
 
 **The watch loop is the rest of the run, until the verdict.**
 Approval (step 7) or a terminal PR event ends it, and nothing before does:
-keep calling `dev::watch` however quiet the PR stays
+return to `bro::chill()` however quiet the PR stays
 — the idling is the run working as designed, not a stall to wrap up.
+{{eliff #harness = bro}}
+The raw MCP surface has no notification wake or `chill`, so it cannot own this persistent review loop.
+Do not start a watcher that the run cannot observe;
+raise that the review must continue under bro-native or a full Claude session.
 {{eliff #harness = claude}}
 **MUST launch via the `Monitor` tool with `persistent: true`.
 Do NOT use Bash `run_in_background`**

@@ -239,9 +239,18 @@ def _validate_native_names(names: object, field: str, verb: str) -> None:
     raise ValueError(f'a tool layer {verb} duplicate names: {names!r}')
 
 
+class _AnyCommand:
+  def __repr__(self) -> str:
+    return 'ANY'
+
+
+ANY = _AnyCommand()
+ShellCommand = str | _AnyCommand
+
+
 @dataclass(frozen=True)
 class ToolLayer:
-  """one composable layer of server mounts and harness-native tool blocks."""
+  """one composable layer of server mounts and harness-native tool policy."""
 
   server_specs: tuple[MCPServerSpec, ...] = ()
   blocked_native_tool_names: tuple[str, ...] = ()
@@ -251,6 +260,8 @@ class ToolLayer:
   native_tool_commands: tuple[tuple[str, str], ...] = ()
   # harness-native tools served whole over a block, their calls unrestricted
   served_native_tool_names: tuple[str, ...] = ()
+  # commands reachable through the harness's shell capability; ANY lifts the roster
+  shell_commands: tuple[ShellCommand, ...] = ()
 
   def __post_init__(self) -> None:
     if not isinstance(self.server_specs, tuple) or any(
@@ -264,14 +275,26 @@ class ToolLayer:
       not isinstance(value, str) or len(value) == 0 for pair in pairs for value in pair
     ):
       raise TypeError('native_tool_commands must be a tuple of non-empty (name, command) pairs')
+    commands = self.shell_commands
+    if not isinstance(commands, tuple) or any(
+      command is not ANY and (not isinstance(command, str) or len(command.strip()) == 0)
+      for command in commands
+    ):
+      raise TypeError('shell_commands must be a tuple of non-empty command strings or ANY')
+    if len(set(commands)) != len(commands):
+      raise ValueError(f'a tool layer declares duplicate shell commands: {commands!r}')
+    if ANY in commands and len(commands) != 1:
+      raise ValueError('ANY must be the only shell command in its layer')
     if (
       len(self.server_specs) == 0
       and len(self.blocked_native_tool_names) == 0
       and len(pairs) == 0
       and len(self.served_native_tool_names) == 0
+      and len(commands) == 0
     ):
       raise ValueError(
-        'a tool layer must mount a server, block a native tool, narrow one, or serve one'
+        'a tool layer must mount a server, block or narrow a native tool, serve one, '
+        'or declare shell commands'
       )
 
   def __or__(self, other: ToolLayer) -> ToolLayer:
@@ -281,6 +304,7 @@ class ToolLayer:
       blocked_native_tool_names=self.blocked_native_tool_names + other.blocked_native_tool_names,
       native_tool_commands=self.native_tool_commands + other.native_tool_commands,
       served_native_tool_names=self.served_native_tool_names + other.served_native_tool_names,
+      shell_commands=self.shell_commands + other.shell_commands,
     )
 
 
@@ -299,8 +323,8 @@ def allow_commands(tool_name: str, *commands: str) -> ToolLayer:
 
   For a native tool whose argument is a command line to run: the harness admits
   a call whose command is exactly one of `commands` and rejects the rest, so a
-  persona reaches what it declares and no more — `sh`'s bargain, for a tool the
-  harness serves rather than this layer.
+  persona reaches what it declares and no more — the same bargain as `shell`,
+  for a tool the harness serves rather than this layer.
   """
   if len(commands) == 0:
     raise ValueError(f'narrowing {tool_name} needs at least one command')
@@ -318,10 +342,25 @@ def serve(*tool_names: str) -> ToolLayer:
   return ToolLayer(served_native_tool_names=tool_names)
 
 
+def shell(*commands: ShellCommand) -> ToolLayer:
+  """declare the whole command lines reachable through the harness shell.
+
+  Commands match exactly after surrounding whitespace is removed. `ANY` lifts
+  the roster and must be the declaration's only argument; an empty declaration
+  never means unrestricted access.
+  """
+  if len(commands) == 0:
+    raise ValueError('shell needs at least one command or ANY')
+  normalized = tuple(
+    command.strip() if isinstance(command, str) else command for command in commands
+  )
+  return ToolLayer(shell_commands=normalized)
+
+
 _COMMAND_WORD = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]*')
 
 
-def sh(command: str, *argument_names: str) -> ToolLayer:
+def cli(command: str, *argument_names: str) -> ToolLayer:
   """serve one installed CLI command as a generated tool.
 
   `command` is a program name and any subcommands (`'bro list'`); the tool's
@@ -337,7 +376,7 @@ def sh(command: str, *argument_names: str) -> ToolLayer:
   """
   words = tuple(command.split())
   if len(words) == 0:
-    raise ValueError('sh needs a command')
+    raise ValueError('cli needs a command')
   for word in words:
     if _COMMAND_WORD.fullmatch(word) is None:
       raise ValueError(

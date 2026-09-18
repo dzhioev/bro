@@ -17,7 +17,7 @@ from bro.base.args import Argument, CommandSignature, command_signature
 from bro.base.text_window import DEFAULT_LIMIT
 from bro.llm.mcp import InProcessMCPServer, Tool
 
-NAMESPACE = 'sh'
+NAMESPACE = 'cli'
 
 TIMEOUT_SECONDS = 45
 

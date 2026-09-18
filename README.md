@@ -53,7 +53,7 @@ from bro.datasources.references import man
 from bro.datasources.web_search import WebSearch
 from bro.harness import claude
 from bro.llm.llms import openai
-from bro.mcp import creds, harness, mount, sh
+from bro.mcp import cli, creds, harness, mount
 from bros.bro import Bro
 from bros.dev import mcp as dev_mcp
 
@@ -84,8 +84,8 @@ class Triage(Bro):
     when(feature('brog'), mount(brog_mcp.toolset, 'create_task', 'add_comment')),
     when(harness == 'bro', mount(dev_mcp.toolset, 'read_file', 'grep')),
     claude.block(*claude.SHELL, *claude.DELEGATION),
-    sh('bro show', 'name'),
-    sh('rewind show', 'trail_id', 'output_limit'),
+    cli('bro show', 'name'),
+    cli('rewind show', 'trail_id', 'output_limit'),
   ]
   data_sources = [WebSearch(), man('environment')]
   spells = ('triage.md',)
@@ -173,7 +173,7 @@ Read the class line by line and nothing is left to configure elsewhere:
 - `when(harness == 'bro', …)` gives the bro file reading only where the harness brings no file tools of its own.
 - `claude.block(*claude.SHELL, *claude.DELEGATION)` withholds Claude's shell and subagents:
   triage holds no shell, and delegation goes through summons, inside the boundary.
-- `sh('bro show', 'name')` and `sh('rewind show', 'trail_id', 'output_limit')` are the two commands it may run, each served as a tool:
+- `cli('bro show', 'name')` and `cli('rewind show', 'trail_id', 'output_limit')` are the two commands it may run, each served as a tool:
   the card of a bro it is about to hand work to, and the run the analyst names.
   How a command becomes a tool is below.
 - `data_sources` are read-only connectors whose summaries land in the prompt: web search and the reference manual.
@@ -185,9 +185,9 @@ Read the class line by line and nothing is left to configure elsewhere:
 - `spells = ('triage.md',)` names its procedure, `bros/triage/spells/triage.md` beside the class, served as the `spell::triage` tool.
 
 **A command is a tool.**
-`sh('rewind show', 'trail_id', 'output_limit')` reads the arguments `rewind show` declares
+`cli('rewind show', 'trail_id', 'output_limit')` reads the arguments `rewind show` declares
 — from its parser, not its help text
-— and serves it as `sh::rewind_show` with the two named parameters, the rest withheld.
+— and serves it as `cli::rewind_show` with the two named parameters, the rest withheld.
 This is what the model sees:
 
 ```json
@@ -197,7 +197,7 @@ This is what the model sees:
 }
 ```
 
-A call `sh::rewind_show(trail_id='01m1z954qq-q9frvz3q-scmg8x5h', output_limit=200)` runs one fixed argv, with no shell in between:
+A call `cli::rewind_show(trail_id='01m1z954qq-q9frvz3q-scmg8x5h', output_limit=200)` runs one fixed argv, with no shell in between:
 
 ```console
 rewind show --output-limit=200 -- 01m1z954qq-q9frvz3q-scmg8x5h
@@ -241,7 +241,7 @@ $ bro show triage
   …
 - `dev` — 2 tools
   …
-- `sh` — 2 tools
+- `cli` — 2 tools
   - `bro_show` — print an info card for a bro
   - `rewind_show` — render one generalized conversation (the default command)
 
