@@ -25,7 +25,6 @@ from pathlib import Path
 
 from bro.base import credentials
 from bro.base.suite_environment import (
-  KEPT_VARIABLES,
   SESSION_NAMESPACES,
   SESSION_VARIABLES,
   rebuild_environment,
@@ -99,7 +98,7 @@ def test_every_read_variable_is_swept_or_external():
     tree = ast.parse(path.read_text())
     for node in ast.walk(tree):
       for name in _named_by(node):
-        if _swept(name) or name in KEPT_VARIABLES or name in _EXTERNAL:
+        if _swept(name) or name in _EXTERNAL:
           continue
         undeclared.setdefault(name, []).append(str(path.relative_to(_ROOT)))
   assert undeclared == {}, (

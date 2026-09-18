@@ -14,7 +14,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # every stage `run-tests` names, one runner each
+        # every stage `run-tests` runs by default, one runner each; the opt-in
+        # llm stage spends tokens and stays out
         stage: [lint, types, unit, benchmark, docker, broker_e2e]
     steps:
       - uses: actions/checkout@v7

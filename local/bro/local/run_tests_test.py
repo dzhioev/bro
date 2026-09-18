@@ -35,12 +35,54 @@ package = false
   assert lock_file.read_bytes() == locked
 
 
-def test_the_workflow_matrix_names_every_gate_stage():
+def test_the_workflow_matrix_names_every_default_gate_stage():
   workflow = yaml.safe_load((run_tests.DIR / '.github/workflows/tests.yml').read_text())
 
   matrix = workflow['jobs']['stage']['strategy']['matrix']['stage']
 
-  assert matrix == [stage.name for stage in run_tests.STAGES]
+  assert matrix == [stage.name for stage in run_tests.STAGES if not stage.opt_in]
+
+
+def test_the_llm_stage_names_each_probe_on_the_command_line(invocations):
+  run_tests.llm_stage()
+
+  assert invocations == [(sys.executable, '-m', 'pytest', *run_tests.LLM_PYTEST_FILES)]
+
+
+def test_a_probe_is_collected_only_as_a_named_file():
+  def collected(path: str) -> str:
+    return subprocess.run(
+      [sys.executable, '-m', 'pytest', '--collect-only', '-q', '-p', 'no:cacheprovider', path],
+      cwd=run_tests.DIR,
+      check=True,
+      capture_output=True,
+      text=True,
+    ).stdout
+
+  probe = 'dev/bros/dev/commit_llm_test.py'
+  assert probe in run_tests.LLM_PYTEST_FILES
+
+  assert probe not in collected('dev/bros/dev')
+  assert probe in collected(probe)
+
+
+def test_an_opt_in_stage_runs_only_when_named(monkeypatch, capsys):
+  ran = []
+  monkeypatch.setattr(
+    run_tests,
+    'STAGES',
+    [
+      run_tests.Stage('types', lambda: ran.append('types')),
+      run_tests.Stage('llm', lambda: ran.append('llm'), opt_in=True),
+    ],
+  )
+
+  assert run_tests.main([]) is None
+  assert ran == ['types']
+  assert capsys.readouterr().err.endswith('gate: types ok\n')
+
+  assert run_tests.main(['run-tests', '--only', 'llm']) is None
+  assert ran == ['types', 'llm']
 
 
 @pytest.fixture

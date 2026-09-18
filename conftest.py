@@ -24,8 +24,8 @@ level-sensitive test — including every subprocess it spawns — must not see.
 
 `*_llm_test.py` files are live-LLM behavior probes: they run a real bro against
 the configured provider and spend real tokens, so they stay outside the default
-roster and `pytest_collection_modifyitems` below skips them unless
-`BRO_LLM_TESTS=1` explicitly opts in.
+roster and `collect_ignore_glob` below keeps a directory walk from reaching
+them — pytest collects one only as a file named on its command line.
 """
 
 import logging
@@ -35,22 +35,14 @@ import pytest
 
 import bro.llm.usage as usage
 from bro.base import log
-from bro.base.suite_environment import rebuild_environment, token_spending_skip_reason
+from bro.base.suite_environment import rebuild_environment
 from bro.llm.tracker import NullTracker
 from bro.native.runner import set_default_tracker_factory
 
 set_default_tracker_factory(NullTracker)
 rebuild_environment()
 
-
-def pytest_collection_modifyitems(items):
-  reason = token_spending_skip_reason()
-  if reason is None:
-    return
-  skip = pytest.mark.skip(reason=f'live-LLM behavior probe; {reason}')
-  for item in items:
-    if item.path.name.endswith('_llm_test.py'):
-      item.add_marker(skip)
+collect_ignore_glob = ['*_llm_test.py']
 
 
 @pytest.fixture(autouse=True)

@@ -3,9 +3,6 @@ change in a workspace carrying the persona's declared provisioning, and the
 commit carries the token-accounting footer end to end — the agent commits
 without bypassing or hand-writing anything, and the commit-msg hook appends the
 footer from the run's own published usage.
-
-`*_llm_test.py` semantics (roster exclusion, the BRO_LLM_TESTS=1 opt-in) are
-owned by the root conftest.
 """
 
 import subprocess

@@ -2,9 +2,6 @@
 action no roster spell is named after or lists as a trigger resolves to an
 error, however well the objects it mentions fit another spell's arguments,
 while a listed trigger still resolves to its spell with the argument extracted.
-
-`*_llm_test.py` semantics (roster exclusion, the BRO_LLM_TESTS=1 opt-in) are
-owned by the root conftest.
 """
 
 import pytest

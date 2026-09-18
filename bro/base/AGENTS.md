@@ -77,7 +77,7 @@ run those with `--help` for flags.
   the zone pinned,
   the log level reset.
   It ships, so a pytest root outside this repository imports it the same way.
-  `SESSION_NAMESPACES` / `SESSION_VARIABLES` / `KEPT_VARIABLES` are the sweep's own statement of what carries session state, for a policy holding the framework to it.
+  `SESSION_NAMESPACES` / `SESSION_VARIABLES` are the sweep's own statement of what carries session state, for a policy holding the framework to it.
   `host_credential_store()` lifts the credential pin for a block, for a test that has to ask what the host holds.
 - `offload.py` — `off_loop(function, …)`, awaiting a blocking call in a daemon thread.
   The `asyncio.to_thread` alternative wherever a call may still be running when the process wants to exit:
