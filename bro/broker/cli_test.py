@@ -60,7 +60,9 @@ def test_inert_when_channel_unset(monkeypatch, capsys):
   monkeypatch.delenv(CHANNEL_ENV, raising=False)
   assert broker_cli.main(['broker', 'send', 'ping']) == 0
   assert broker_cli.main(['broker', 'request', 'ping']) == 0
+  assert broker_cli.main(['broker', 'message', 'quest', '{}']) == 0
   assert broker_cli.main(['broker', 'receive', '--timeout', '0.2']) == 0
+  assert broker_cli.main(['broker', 'listen', 'quest', '--timeout', '0.2']) == 0
   assert capsys.readouterr().out == ''  # stdout stays data-only
 
 
@@ -141,3 +143,49 @@ async def test_receive_nothing_exits_nonzero(monkeypatch, capsys):
     argv = ['broker', 'receive', '--timeout', '0.2']
     assert await asyncio.to_thread(broker_cli.main, argv) == 1
     assert capsys.readouterr().out == ''
+
+
+@pytest.mark.asyncio
+async def test_message_prints_the_sent_question(monkeypatch, capsys):
+  async with running_server() as server:
+    provisioned = await server.transport.provision()
+    monkeypatch.setenv(CHANNEL_ENV, provisioned.host_endpoint.address(LOCAL_HOST))
+    argv = [
+      'broker',
+      'message',
+      'quest',
+      '{"text": "approve?"}',
+      '--reply-to',
+      'earlier',
+      '--question',
+    ]
+
+    assert await asyncio.to_thread(broker_cli.main, argv) == 0
+    _, received = await _next(server.sink.messages)
+    printed = Message.from_bytes(capsys.readouterr().out.rstrip().encode())
+
+    assert printed == received
+    assert received.id is not None
+    assert received.reply_to == 'earlier'
+    assert received.payload == {'text': 'approve?'}
+
+
+@pytest.mark.asyncio
+async def test_listen_marks_the_connection_before_receiving(monkeypatch, capsys):
+  async with running_server() as server:
+    provisioned = await server.transport.provision()
+    monkeypatch.setenv(CHANNEL_ENV, provisioned.host_endpoint.address(LOCAL_HOST))
+    main_task = asyncio.create_task(
+      asyncio.to_thread(
+        broker_cli.main,
+        ['broker', 'listen', 'quest', '--timeout', str(TIMEOUT)],
+      )
+    )
+
+    channel, listening = await _next(server.sink.messages)
+    assert listening == brotocol.mark('quest', 'listening')
+    incoming = brotocol.message('quest', {'text': 'hello'})
+    await server.transport.send(channel, incoming)
+
+    assert await asyncio.wait_for(main_task, TIMEOUT) == 0
+    assert Message.from_bytes(capsys.readouterr().out.rstrip().encode()) == incoming

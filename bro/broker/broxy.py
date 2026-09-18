@@ -4,10 +4,12 @@
 A session-lifetime daemon between a session's broker clients and its one host
 channel: it holds the single upstream connection to the host broker and listens
 on a loopback port of its own. `BROKER_CHANNEL` points at the local address, so
-every existing client (`broker` CLI, `Client.from_env`, `RunLifecycle`) works
-through it unchanged. Upstream, the host sees exactly one long-lived connection
-per channel — the shape its supersede-on-accept semantics were built for — while
-the local side multiplexes the session's short-lived process swarm.
+every client (`broker` CLI, `Client.from_env`, `RunLifecycle`) works through it.
+Request routes live through their result, question routes through local EOF, and
+quest listeners receive unsolicited chat traffic until local EOF. Upstream, the
+host sees exactly one long-lived connection per channel — the shape its
+supersede-on-accept semantics were built for — while the local side multiplexes
+the session's short-lived process swarm.
 
 One event loop, no locks (the tcp adapter's concurrency model). Both sides speak
 that adapter's NDJSON framing over brotocol's encoding and open with its attach
@@ -40,6 +42,7 @@ import subprocess
 import tempfile
 import time
 from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -84,6 +87,20 @@ class _Connection:
     self.writer = writer
 
 
+@dataclass(frozen=True)
+class _CorrelationRoute:
+  id: str
+
+
+@dataclass(frozen=True)
+class _ListenerRoute:
+  quest: str
+  connection: _Connection
+
+
+type _Registration = _CorrelationRoute | _ListenerRoute
+
+
 class Broxy:
   def __init__(
     self,
@@ -100,6 +117,8 @@ class Broxy:
     self._token = secrets.token_urlsafe(_TOKEN_BYTES)
     self._max_routes = max_routes
     self._routes: dict[str, _Connection] = {}
+    self._listeners: dict[str, set[_Connection]] = {}
+    self._registrations: dict[_Registration, None] = {}
     self._upstream_writer: Optional[asyncio.StreamWriter] = None
     self._local_tasks: set[asyncio.Task] = set()
     self._stopped = asyncio.Event()
@@ -168,17 +187,35 @@ class Broxy:
       self._route_inbound(message, frame)
 
   def _route_inbound(self, message: Message, frame: bytes) -> None:
+    if message.type == Tag.MESSAGE and message.reply_to is not None:
+      connection = self._routes.get(message.reply_to)
+      if connection is not None and self._deliver(connection, frame):
+        return
+      log.warning('broxy: no waiting route for reply to message %s', message.reply_to)
+
     connection = self._routes.get(message.quest_id)
-    if connection is None:
-      log.warning('broxy: dropping upstream message for unknown quest %s', message.quest_id)
+    if connection is not None and self._deliver(connection, frame):
+      if message.type == Tag.RESULT:
+        self._remove_route(message.quest_id)
       return
+
+    listeners = list(self._listeners.get(message.quest_id, ()))
+    delivered = False
+    for listener in listeners:
+      delivered = self._deliver(listener, frame) or delivered
+    if delivered:
+      return
+    if message.type == Tag.MESSAGE and message.reply_to is None:
+      log.info('broxy: dropping message for quest %s with no listener', message.quest_id)
+    elif message.type != Tag.MESSAGE:
+      log.warning('broxy: dropping upstream message for unknown quest %s', message.quest_id)
+
+  def _deliver(self, connection: _Connection, frame: bytes) -> bool:
     if connection.writer.is_closing():
       self._remove_connection_routes(connection)
-      log.warning('broxy: dropping upstream message for disconnected quest %s', message.quest_id)
-      return
+      return False
     connection.writer.write(frame + b'\n')
-    if message.type == Tag.RESULT:
-      self._routes.pop(message.quest_id, None)
+    return True
 
   async def _serve_local_connection(
     self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -205,6 +242,10 @@ class Broxy:
           break
         if message.type == Tag.REQUEST:
           self._register_route(message.quest_id, connection)
+        elif message.type == Tag.MESSAGE and message.id is not None:
+          self._register_route(message.id, connection)
+        elif message.type == Tag.MARK and message.payload['transition'] == 'listening':
+          self._register_listener(message.quest_id, connection)
         assert self._upstream_writer is not None
         self._upstream_writer.write(frame + b'\n')
         await self._upstream_writer.drain()
@@ -222,23 +263,62 @@ class Broxy:
       self._remove_connection_routes(connection)
       writer.close()
 
-  def _register_route(self, quest_id: str, connection: _Connection) -> None:
-    self._routes.pop(quest_id, None)
-    if len(self._routes) >= self._max_routes:
-      evicted_quest = next(iter(self._routes))
-      self._routes.pop(evicted_quest)
-      log.warning(
-        'broxy: over %d routes, dropping route for quest %s', self._max_routes, evicted_quest
-      )
-    self._routes[quest_id] = connection
+  def _register_route(self, correlation_id: str, connection: _Connection) -> None:
+    registration = _CorrelationRoute(correlation_id)
+    self._remove_registration(registration)
+    self._make_room()
+    self._routes[correlation_id] = connection
+    self._registrations[registration] = None
+
+  def _register_listener(self, quest_id: str, connection: _Connection) -> None:
+    registration = _ListenerRoute(quest_id, connection)
+    if registration in self._registrations:
+      return
+    self._make_room()
+    self._listeners.setdefault(quest_id, set()).add(connection)
+    self._registrations[registration] = None
+
+  def _make_room(self) -> None:
+    if len(self._registrations) < self._max_routes:
+      return
+    oldest = next(iter(self._registrations))
+    self._remove_registration(oldest)
+    correlation = isinstance(oldest, _CorrelationRoute)
+    name = oldest.id if correlation else oldest.quest
+    kind = 'correlation route' if correlation else 'listener'
+    log.warning(
+      'broxy: at %d-route bound, dropping oldest %s for %s',
+      self._max_routes,
+      kind,
+      name,
+    )
+
+  def _remove_route(self, correlation_id: str) -> None:
+    self._remove_registration(_CorrelationRoute(correlation_id))
+
+  def _remove_registration(self, registration: _Registration) -> None:
+    self._registrations.pop(registration, None)
+    if isinstance(registration, _CorrelationRoute):
+      self._routes.pop(registration.id, None)
+      return
+    listeners = self._listeners.get(registration.quest)
+    if listeners is None:
+      return
+    listeners.discard(registration.connection)
+    if len(listeners) == 0:
+      self._listeners.pop(registration.quest)
 
   def _remove_connection_routes(self, connection: _Connection) -> None:
-    for quest_id in [
-      quest_id
-      for quest_id, route_connection in self._routes.items()
-      if route_connection is connection
+    for registration in [
+      registration
+      for registration in self._registrations
+      if (
+        isinstance(registration, _CorrelationRoute)
+        and self._routes.get(registration.id) is connection
+      )
+      or (isinstance(registration, _ListenerRoute) and registration.connection is connection)
     ]:
-      self._routes.pop(quest_id)
+      self._remove_registration(registration)
 
 
 def _serve(upstream: Optional[str], address_file: Optional[str]) -> int:
