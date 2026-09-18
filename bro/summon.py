@@ -10,8 +10,8 @@ Blocking waits bound silence rather than the run.
 After silence they query the journal by quest id, interpret a retained terminal
 result, or resume waiting while the host-owned Worker deadline keeps the quest
 live.
-Check and list are repeatable journal reads, and watch long-polls the ordered
-event stream from the head it arms at.
+Check and list are repeatable journal reads.
+Watch replays retained chat through the head it arms at, then long-polls the ordered event stream after it.
 
 Unlike the substrate CLI, an unset ``BROKER_CHANNEL`` is an error.
 Broker imports stay deferred so importing summon constants does not pull in the
@@ -869,6 +869,19 @@ class CancelStatus:
   trail_id: Optional[str] = None
 
 
+def request_cancel(
+  request_id: str,
+  *,
+  client: Optional['Client'] = None,
+) -> CancelStatus:
+  """Ask the host to cancel a child quest and return once it accepts the request."""
+  from bro.broker.dispatcher import CANCEL
+
+  with _connection(client) as connection:
+    _call_ok(connection, CANCEL, {'id': request_id}, timeout=ACCEPT_TIMEOUT)
+  return CancelStatus('accepted', request_id)
+
+
 def cancel_summon(
   request_id: str,
   *,
@@ -876,13 +889,11 @@ def cancel_summon(
   client: Optional['Client'] = None,
 ) -> CancelStatus:
   """End a child quest this session requested and wait for it to end."""
-  from bro.broker.dispatcher import CANCEL
-
   if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
     raise SummonError('timeout must be a finite positive number')
   deadline = None if timeout is None else time.monotonic() + timeout
   with _connection(client) as connection:
-    _call_ok(connection, CANCEL, {'id': request_id}, timeout=ACCEPT_TIMEOUT)
+    request_cancel(request_id, client=connection)
     initial_timeout = None if deadline is None else deadline - time.monotonic()
     quest = _query_quest(connection, request_id, read_timeout=initial_timeout)
     quest = _poll_quest(
@@ -956,6 +967,7 @@ def say(
   request_id: Optional[str] = None,
   *,
   reply_to: Optional[str] = None,
+  question: bool = False,
   wait: Optional[float] = None,
   client: Optional['Client'] = None,
 ) -> SayStatus:
@@ -964,6 +976,7 @@ def say(
 
   if wait is not None and (wait <= 0 or math.isnan(wait)):
     raise SummonError('wait must be a positive number of seconds')
+  asks_question = question or wait is not None
   resolved = _resolve_request_id(request_id)
   with _connection(client) as connection:
     quest = _query_quest(connection, resolved)
@@ -975,7 +988,7 @@ def say(
       candidate = brotocol.message(
         resolved,
         {'text': _bounded_text(text)},
-        id='question' if wait is not None else None,
+        id='question' if asks_question else None,
         reply_to=reply_to,
       )
     except brotocol.ProtocolError as error:
@@ -996,14 +1009,15 @@ def say(
         resolved,
         candidate.payload,
         reply_to=reply_to,
-        question=wait is not None,
+        question=asks_question,
       )
     except (PermissionError, brotocol.ProtocolError) as error:
       raise SummonError(str(error)) from error
     if sent.id is None:
       return SayStatus('accepted', resolved)
     question_id = sent.id
-    assert wait is not None
+    if wait is None:
+      return SayStatus('question', resolved, question_id=question_id)
     deadline = None if math.isinf(wait) else time.monotonic() + wait
     initial_remaining = None if deadline is None else deadline - time.monotonic()
     if initial_remaining is not None and initial_remaining <= 0:
@@ -1030,26 +1044,29 @@ def say(
     return SayStatus('completed', resolved, question_id=question_id, answer=answer)
 
 
-def list_summons() -> dict[str, Any]:
-  """Return every caller-visible retained summon record, live first."""
+def _query_summons(client: 'Client') -> list[dict[str, Any]]:
   from bro.broker.dispatcher import QUERY
 
   quests: list[dict[str, Any]] = []
   cursor: Optional[str] = None
+  while True:
+    args = {} if cursor is None else {'cursor': cursor}
+    value = _read_value(client, QUERY, args, timeout=ACCEPT_TIMEOUT)
+    page = value.get('quests')
+    if not isinstance(page, list) or not all(isinstance(quest, dict) for quest in page):
+      raise SummonError('query listing returned malformed quest records')
+    quests.extend(quest for quest in page if quest.get('kind') == SUMMON)
+    cursor = value.get('cursor')
+    if cursor is None:
+      return quests
+    if not isinstance(cursor, str):
+      raise SummonError('query listing returned a malformed cursor')
+
+
+def list_summons() -> dict[str, Any]:
+  """Return every caller-visible retained summon record, live first."""
   with _open_client() as client:
-    while True:
-      args = {} if cursor is None else {'cursor': cursor}
-      value = _read_value(client, QUERY, args, timeout=ACCEPT_TIMEOUT)
-      page = value.get('quests')
-      if not isinstance(page, list) or not all(isinstance(quest, dict) for quest in page):
-        raise SummonError('query listing returned malformed quest records')
-      quests.extend(quest for quest in page if quest.get('kind') == SUMMON)
-      cursor = value.get('cursor')
-      if cursor is None:
-        break
-      if not isinstance(cursor, str):
-        raise SummonError('query listing returned a malformed cursor')
-  return {'quests': quests}
+    return {'quests': _query_summons(client)}
 
 
 def _single_line(text: str) -> str:
@@ -1123,8 +1140,66 @@ def _event_line(event: dict[str, Any], own_quest: str) -> str:
   return _single_line(f'{head} ({_request_clause(event, own_quest)})')
 
 
+def _chat_entry_event(quest: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
+  request_id = quest.get('id')
+  parent = quest.get('parent')
+  args = quest.get('args')
+  if not isinstance(request_id, str) or not isinstance(parent, str) or not isinstance(args, dict):
+    raise SummonError('query returned a malformed quest for watch replay')
+  return {
+    'kind': quest.get('kind'),
+    'quest': request_id,
+    'parent': parent,
+    'args': args,
+    **entry,
+  }
+
+
+def _arm_replay(client: 'Client', own_quest: str, head: int) -> list[str]:
+  own = _query_quest(client, own_quest)
+  own_messages = own.get('messages')
+  own_pending = own.get('pending')
+  if not isinstance(own_messages, list) or not all(
+    isinstance(entry, dict) for entry in own_messages
+  ):
+    raise SummonError('own quest query returned a malformed chat tail')
+  if not isinstance(own_pending, list) or not all(isinstance(entry, dict) for entry in own_pending):
+    raise SummonError('own quest query returned malformed pending questions')
+
+  events = [
+    _chat_entry_event(own, entry) for entry in own_messages if entry.get('from') == 'requester'
+  ]
+  events.extend(_chat_entry_event(own, entry) for entry in own_pending)
+  for quest in _query_summons(client):
+    state = quest.get('state')
+    if state in ('ended', 'denied', 'evicted'):
+      continue
+    if state not in ('accepted', 'started'):
+      raise SummonError(f'summon listing returned an unknown state: {state!r}')
+    pending = quest.get('pending')
+    if not isinstance(pending, list) or not all(isinstance(entry, dict) for entry in pending):
+      raise SummonError('summon listing returned malformed pending questions')
+    events.extend(_chat_entry_event(quest, entry) for entry in pending)
+
+  replay: dict[int, str] = {}
+  for event in events:
+    sequence = event.get('seq')
+    if not isinstance(sequence, int) or isinstance(sequence, bool):
+      raise SummonError('watch replay entry carried a malformed sequence')
+    if sequence > head:
+      continue
+    line = _chat_event_line(event, own_quest)
+    if line is None:
+      continue
+    marked = _single_line(f'before the watch: {line}')
+    previous = replay.setdefault(sequence, marked)
+    if previous != marked:
+      raise SummonError(f'watch replay carried conflicting entries at sequence {sequence}')
+  return [replay[sequence] for sequence in sorted(replay)]
+
+
 def watch_summons(wait_seconds: float = READ_WAIT_SECONDS) -> Generator[str]:
-  """Yield ordered summon journal transitions from the moment the watch is armed."""
+  """Yield retained chat at arm, then ordered summon journal transitions."""
   if wait_seconds <= 0:
     raise SummonError('events wait must be positive')
   from bro.broker.client import QUEST_ENV
@@ -1142,6 +1217,7 @@ def watch_summons(wait_seconds: float = READ_WAIT_SECONDS) -> Generator[str]:
     if not isinstance(head, int) or isinstance(head, bool):
       raise SummonError('events arm returned a malformed head')
     cursor = head
+    yield from _arm_replay(client, own_quest, head)
     while True:
       try:
         value = _read_value(
@@ -1159,6 +1235,7 @@ def watch_summons(wait_seconds: float = READ_WAIT_SECONDS) -> Generator[str]:
           raise SummonError('events re-arm returned a malformed head') from error
         cursor = head
         yield _single_line(f'summon watch gap: {error}; re-armed at {head}')
+        yield from _arm_replay(client, own_quest, head)
         continue
       events = value.get('events')
       if not isinstance(events, list) or not all(isinstance(event, dict) for event in events):
@@ -1319,10 +1396,11 @@ def _say(
   text: str,
   request_id: Optional[str],
   reply_to: Optional[str],
+  question: bool,
   wait: Optional[float],
 ) -> int:
   try:
-    status = say(text, request_id, reply_to=reply_to, wait=wait)
+    status = say(text, request_id, reply_to=reply_to, question=question, wait=wait)
   except (SummonError, ValueError) as error:
     log.error('%s', error)
     return 1
@@ -1383,7 +1461,13 @@ def main(argv: list[str]) -> Optional[int]:
     )
     parser.add_argument('text', help='message text')
     parser.add_argument('--reply-to', help='question id this message answers')
-    parser.add_argument(
+    question_mode = parser.add_mutually_exclusive_group()
+    question_mode.add_argument(
+      '--question',
+      action='store_true',
+      help=f'ask a question without waiting for its reply; prints its id and exits {QUESTION_EXIT_CODE}',
+    )
+    question_mode.add_argument(
       '--wait',
       nargs='?',
       const=math.inf,

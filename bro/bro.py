@@ -251,9 +251,10 @@ def _answer_tool(wire: mcp.Wire, variables: Variables) -> llm_mcp.Tool:
 # time out while the host-owned quest keeps running.
 # The recovery wording remains conditioned on the mounted service roster.
 _SUMMON_DESCRIPTION = (
-  'summon another bro: it runs your prompt in a new party or joins your party, '
-  'and this call blocks — typically for minutes — until its answer or a question '
-  'comes back. pass `target` (a bro name; you have your own summon allow-list, and '
+  'summon another bro: it runs your prompt in a new party or joins your party. '
+  '{{iff #wire = bare}}this call returns after host acceptance.{{else}}this call blocks — '
+  'typically for minutes — until its answer or a question comes back.{{end}} pass `target` '
+  '(a bro name; you have your own summon allow-list, and '
   'a target outside it — or a summon nested past the depth cap — fails immediately '
   'with the reason) and `prompt` (the full request, self-contained — the target '
   'shares no context with you). optional `timeout` (seconds, default 1800) bounds '
@@ -282,15 +283,18 @@ _SUMMON_DESCRIPTION = (
   'optional `share` list names artifact refs (from `artifact mint`) to hand the '
   'child read access to — only refs this session can itself read. '
   'the optional `talk` list widens the child quest from worker.say with requester.say, '
-  'requester.question, worker.say, or worker.question. this call returns an accepted, '
-  'question, or completed state with the request id; a question state carries its id and text. '
-  'answer it with `summon_say`, then collect the eventual answer from the same quest with '
-  '`summon_check` rather than summoning again. the optional `party` (`start` or `join`) and `isolation` (`boxed` or `unboxed`) fields '
-  'place the child; an unmarked request starts boxed when permitted, otherwise unboxed. '
-  'a join shares your tree and refuses `isolation`, `into`, and `manual`. '
-  'fails with the reason when the run raises, errors out, or dies. `detach: true` '
-  'waits for host acceptance, then returns the accepted state with its request id; a denial '
-  'or launch failure before acceptance fails this call. poll that id with repeatable `summon_check` reads. '
+  'requester.question, worker.say, or worker.question. the optional `party` (`start` or `join`) '
+  'and `isolation` (`boxed` or `unboxed`) fields place the child; an unmarked request starts '
+  'boxed when permitted, otherwise unboxed. a join shares your tree and refuses `isolation`, '
+  '`into`, and `manual`. {{iff #wire = bare}}acceptance returns the request id; answers, '
+  'questions, replies, refusals, and terminal states arrive through `summon watch`, and '
+  '`summon_check` reads the retained state.{{else}}this call returns an accepted, question, '
+  'or completed state with the request id; a question state carries its id and text. answer it '
+  'with `summon_say`, then collect the eventual answer from the same quest with `summon_check` '
+  'rather than summoning again. fails with the reason when the run raises, errors out, or dies. '
+  '`detach: true` waits for host acceptance, then returns the accepted state with its request id; '
+  'a denial or launch failure before acceptance fails this call. poll that id with repeatable '
+  '`summon_check` reads.{{end}} '
   '`manual: true` registers a manual summon instead of spawning: acceptance returns '
   'a token and `ride` command to relay to the user, who launches the child session; '
   'manual refuses `timeout`/`hold`/`llm`/`harness`/`party`/`isolation` because the user’s '
@@ -315,6 +319,13 @@ _SUMMON_SAY_DESCRIPTION = (
 )
 
 
+_SUMMON_SAY_BARE_DESCRIPTION = (
+  "send chat text to a child summon by `request_id`, or to this session's summoner when omitted. "
+  '`reply_to` answers a pending question; `question: true` asks without waiting and returns its id. '
+  'the reply arrives through `summon watch` and remains readable with `summon_check`.'
+)
+
+
 _SUMMON_CHECK_DESCRIPTION = (
   "check a child summon by request id, or this session's own quest when omitted, through "
   'the host journal. returns a pending, question, or completed state with the quest talk, '
@@ -327,6 +338,13 @@ _SUMMON_CHECK_DESCRIPTION = (
 )
 
 
+_SUMMON_CHECK_BARE_DESCRIPTION = (
+  "read a child summon by request id, or this session's own quest when omitted, through the host "
+  'journal without blocking. returns retained lifecycle, talk, pending questions, and chat; '
+  'unknown ids, evicted results, and failed summons raise with their reason.'
+)
+
+
 _SUMMON_CANCEL_DESCRIPTION = (
   'end a child summon by request id: its quest ends failed:cancelled, and whatever that '
   'child summoned in turn ends failed:orphaned. a spawned child is killed; a manual child '
@@ -336,6 +354,13 @@ _SUMMON_CANCEL_DESCRIPTION = (
   '`summon_check` reads it. fails with the reason for a quest this session did not request '
   'or that has already ended.'
   "{{when #wire = mcp}} CAUTION: size `timeout` below the harness's idle cap.{{end}}"
+)
+
+
+_SUMMON_CANCEL_BARE_DESCRIPTION = (
+  'ask the host to cancel a child summon and return when the request is accepted. the child and '
+  'its descendants end asynchronously; their terminal states arrive through `summon watch` and '
+  'remain readable with `summon_check`.'
 )
 
 
@@ -372,13 +397,121 @@ def _banner_tool(bro: 'BaseBro', live_run: Optional[LiveRun], variables: Variabl
   )
 
 
-def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.Tool:
+async def _run_summon_request(
+  live_run: Optional[LiveRun],
+  target: str,
+  prompt: str,
+  *,
+  timeout: Optional[float],
+  into: Optional[str],
+  hold: Optional[str],
+  grant: Optional[list[str]],
+  revoke: Optional[list[str]],
+  share: Optional[list[str]],
+  llm: Optional[str],
+  harness: Optional[str],
+  party: Optional[Literal['start', 'join']],
+  isolation: Optional[Literal['boxed', 'unboxed']],
+  talk: Optional[list[str]],
+  manual: bool,
+  detached: bool,
+) -> dict[str, Any]:
+  from bro import summon as summon_client
+
+  source = None if live_run is None else live_run.current_tool_step_id
+  step_id = source['step_id'] if source is not None else None
+  index = source['index'] if source is not None else None
+  if manual:
+    launch_owned = {
+      'timeout': timeout,
+      'hold': hold,
+      'llm': llm,
+      'harness': harness,
+      'party': party,
+      'isolation': isolation,
+    }
+    passed = sorted(name for name, value in launch_owned.items() if value is not None)
+    if passed:
+      raise ValueError(f"a manual summon's launch owns {', '.join(passed)}; drop the field(s)")
+    if share is not None:
+      raise ValueError(
+        "a manual summon's workspace is not launched by summon control, so 'share' cannot be honored"
+      )
+    token = await off_loop(
+      summon_client.summon_manual,
+      target,
+      prompt,
+      into=into,
+      grant=grant,
+      revoke=revoke,
+      talk=talk,
+      step_id=step_id,
+      index=index,
+    )
+    return {
+      'state': 'accepted',
+      'request_id': token,
+      'command': summon_client.manual_launch_command(token, target),
+    }
+  if detached:
+    request_id = await off_loop(
+      summon_client.summon_detached,
+      target,
+      prompt,
+      timeout=timeout,
+      into=into,
+      hold=hold,
+      grant=grant,
+      revoke=revoke,
+      share=share,
+      llm=llm,
+      harness=harness,
+      party=party,
+      isolation=isolation,
+      talk=talk,
+      step_id=step_id,
+      index=index,
+    )
+    return {'state': 'accepted', 'request_id': request_id}
+
+  sent: list[str] = []
+  with summon_client.open_client() as client:
+    outcome = await off_loop(
+      summon_client.summon_and_wait,
+      target,
+      prompt,
+      timeout=timeout,
+      into=into,
+      hold=hold,
+      grant=grant,
+      revoke=revoke,
+      share=share,
+      llm=llm,
+      harness=harness,
+      party=party,
+      isolation=isolation,
+      talk=talk,
+      step_id=step_id,
+      index=index,
+      on_sent=sent.append,
+      client=client,
+      silence_timeout=summon_client.READ_WAIT_SECONDS,
+    )
+  [request_id] = sent
+  if isinstance(outcome, summon_client.SummonQuestion):
+    return {
+      'state': 'question',
+      'request_id': request_id,
+      'question': {'id': outcome.id, 'text': outcome.text},
+    }
+  return {'state': 'completed', 'request_id': request_id, 'answer': outcome}
+
+
+def _mcp_summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.Tool:
   # A fresh channel client per blocking call is closed on cancellation, unblocking
   # its short broker wait; the retained journal result remains readable later.
   # the run's tool position names the summon call's projected source, so the
   # child's `summoned_by` can carry the precise fork position.
-  from bro import summon as summon_client
-
   async def _summon(
     target: str,
     prompt: str,
@@ -396,99 +529,75 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
     talk: Optional[list[str]] = None,
     manual: bool = False,
   ) -> dict[str, Any]:
-    source = None if live_run is None else live_run.current_tool_step_id
-    step_id = source['step_id'] if source is not None else None
-    index = source['index'] if source is not None else None
-    if manual:
-      launch_owned = {
-        'timeout': timeout,
-        'hold': hold,
-        'llm': llm,
-        'harness': harness,
-        'party': party,
-        'isolation': isolation,
-      }
-      passed = sorted(name for name, value in launch_owned.items() if value is not None)
-      if len(passed) > 0:
-        raise ValueError(f"a manual summon's launch owns {', '.join(passed)}; drop the field(s)")
-      if share is not None:
-        raise ValueError(
-          "a manual summon's workspace is not launched by summon control, so 'share' cannot be honored"
-        )
-      # a manual child is launched and paced by a human, so the manual path only
-      # waits for the host's acceptance — a blocking wait for the answer would
-      # outlive any transport budget
-      token = await off_loop(
-        summon_client.summon_manual,
-        target,
-        prompt,
-        into=into,
-        grant=grant,
-        revoke=revoke,
-        talk=talk,
-        step_id=step_id,
-        index=index,
-      )
-      command = summon_client.manual_launch_command(token, target)
-      return {'state': 'accepted', 'request_id': token, 'command': command}
-    if detach:
-      request_id = await off_loop(
-        summon_client.summon_detached,
-        target,
-        prompt,
-        timeout=timeout,
-        into=into,
-        hold=hold,
-        grant=grant,
-        revoke=revoke,
-        share=share,
-        llm=llm,
-        harness=harness,
-        party=party,
-        isolation=isolation,
-        talk=talk,
-        step_id=step_id,
-        index=index,
-      )
-      return {'state': 'accepted', 'request_id': request_id}
-    sent: list[str] = []
-    with summon_client.open_client() as client:
-      outcome = await off_loop(
-        summon_client.summon_and_wait,
-        target,
-        prompt,
-        timeout=timeout,
-        into=into,
-        hold=hold,
-        grant=grant,
-        revoke=revoke,
-        share=share,
-        llm=llm,
-        harness=harness,
-        party=party,
-        isolation=isolation,
-        talk=talk,
-        step_id=step_id,
-        index=index,
-        on_sent=sent.append,
-        client=client,
-        silence_timeout=summon_client.READ_WAIT_SECONDS,
-      )
-    [request_id] = sent
-    if isinstance(outcome, summon_client.SummonQuestion):
-      return {
-        'state': 'question',
-        'request_id': request_id,
-        'question': {'id': outcome.id, 'text': outcome.text},
-      }
-    return {'state': 'completed', 'request_id': request_id, 'answer': outcome}
+    return await _run_summon_request(
+      live_run,
+      target,
+      prompt,
+      timeout=timeout,
+      into=into,
+      hold=hold,
+      grant=grant,
+      revoke=revoke,
+      share=share,
+      llm=llm,
+      harness=harness,
+      party=party,
+      isolation=isolation,
+      talk=talk,
+      manual=manual,
+      detached=detach,
+    )
 
   return llm_mcp.FunctionTool(
     _summon, name='summon', description=_SUMMON_DESCRIPTION, variables=variables
   )
 
 
-def _summon_say_tool(variables: Variables) -> llm_mcp.Tool:
+def _summon_tool(variables: Variables, live_run: Optional[LiveRun], wire: mcp.Wire) -> llm_mcp.Tool:
+  if wire == 'mcp':
+    return _mcp_summon_tool(variables, live_run)
+
+  async def _summon(
+    target: str,
+    prompt: str,
+    timeout: Optional[float] = None,
+    into: Optional[str] = None,
+    hold: Optional[str] = None,
+    grant: Optional[list[str]] = None,
+    revoke: Optional[list[str]] = None,
+    share: Optional[list[str]] = None,
+    llm: Optional[str] = None,
+    harness: Optional[str] = None,
+    party: Optional[Literal['start', 'join']] = None,
+    isolation: Optional[Literal['boxed', 'unboxed']] = None,
+    talk: Optional[list[str]] = None,
+    manual: bool = False,
+  ) -> dict[str, Any]:
+    return await _run_summon_request(
+      live_run,
+      target,
+      prompt,
+      timeout=timeout,
+      into=into,
+      hold=hold,
+      grant=grant,
+      revoke=revoke,
+      share=share,
+      llm=llm,
+      harness=harness,
+      party=party,
+      isolation=isolation,
+      talk=talk,
+      manual=manual,
+      detached=True,
+    )
+
+  return llm_mcp.FunctionTool(
+    _summon, name='summon', description=_SUMMON_DESCRIPTION, variables=variables
+  )
+
+
+def _mcp_summon_say_tool(variables: Variables) -> llm_mcp.Tool:
   from bro import summon as summon_client
 
   async def _summon_say(
@@ -518,6 +627,38 @@ def _summon_say_tool(variables: Variables) -> llm_mcp.Tool:
   )
 
 
+def _summon_say_tool(variables: Variables, wire: mcp.Wire) -> llm_mcp.Tool:
+  if wire == 'mcp':
+    return _mcp_summon_say_tool(variables)
+
+  from bro import summon as summon_client
+
+  async def _summon_say(
+    text: str,
+    request_id: Optional[str] = None,
+    reply_to: Optional[str] = None,
+    question: bool = False,
+  ) -> dict[str, Any]:
+    status = await off_loop(
+      summon_client.say,
+      text,
+      request_id,
+      reply_to=reply_to,
+      question=question,
+    )
+    result: dict[str, Any] = {'state': status.state, 'request_id': status.request_id}
+    if status.question_id is not None:
+      result['id'] = status.question_id
+    return result
+
+  return llm_mcp.FunctionTool(
+    _summon_say,
+    name='summon_say',
+    description=_SUMMON_SAY_BARE_DESCRIPTION,
+    variables=variables,
+  )
+
+
 def _summon_list_tool(variables: Variables) -> llm_mcp.Tool:
   from bro import summon as summon_client
 
@@ -529,7 +670,7 @@ def _summon_list_tool(variables: Variables) -> llm_mcp.Tool:
   )
 
 
-def _summon_cancel_tool(variables: Variables) -> llm_mcp.Tool:
+def _mcp_summon_cancel_tool(variables: Variables) -> llm_mcp.Tool:
   from bro import summon as summon_client
 
   async def _summon_cancel(request_id: str, timeout: Optional[float] = None) -> dict[str, Any]:
@@ -549,7 +690,25 @@ def _summon_cancel_tool(variables: Variables) -> llm_mcp.Tool:
   )
 
 
-def _summon_check_tool(variables: Variables) -> llm_mcp.Tool:
+def _summon_cancel_tool(variables: Variables, wire: mcp.Wire) -> llm_mcp.Tool:
+  if wire == 'mcp':
+    return _mcp_summon_cancel_tool(variables)
+
+  from bro import summon as summon_client
+
+  async def _summon_cancel(request_id: str) -> dict[str, Any]:
+    status = await off_loop(summon_client.request_cancel, request_id)
+    return summon_client.cancel_view(status)
+
+  return llm_mcp.FunctionTool(
+    _summon_cancel,
+    name='summon_cancel',
+    description=_SUMMON_CANCEL_BARE_DESCRIPTION,
+    variables=variables,
+  )
+
+
+def _mcp_summon_check_tool(variables: Variables) -> llm_mcp.Tool:
   from bro import summon as summon_client
 
   async def _summon_check(
@@ -575,6 +734,24 @@ def _summon_check_tool(variables: Variables) -> llm_mcp.Tool:
 
   return llm_mcp.FunctionTool(
     _summon_check, name='summon_check', description=_SUMMON_CHECK_DESCRIPTION, variables=variables
+  )
+
+
+def _summon_check_tool(variables: Variables, wire: mcp.Wire) -> llm_mcp.Tool:
+  if wire == 'mcp':
+    return _mcp_summon_check_tool(variables)
+
+  from bro import summon as summon_client
+
+  async def _summon_check(request_id: Optional[str] = None) -> dict[str, Any]:
+    status = await off_loop(summon_client.check_summon, request_id)
+    return summon_client.status_view(status)
+
+  return llm_mcp.FunctionTool(
+    _summon_check,
+    name='summon_check',
+    description=_SUMMON_CHECK_BARE_DESCRIPTION,
+    variables=variables,
   )
 
 
@@ -651,11 +828,11 @@ def _build_service_server(
   if has_answer:
     tools.append(_answer_tool(wire, variables))
   if has_broker:
-    tools.append(_summon_tool(variables, live_run))
-    tools.append(_summon_say_tool(variables))
-    tools.append(_summon_check_tool(variables))
+    tools.append(_summon_tool(variables, live_run, wire))
+    tools.append(_summon_say_tool(variables, wire))
+    tools.append(_summon_check_tool(variables, wire))
     tools.append(_summon_list_tool(variables))
-    tools.append(_summon_cancel_tool(variables))
+    tools.append(_summon_cancel_tool(variables, wire))
   assert [tool.name for tool in tools] == mounted
   server = llm_mcp.InProcessMCPServer('bro', tools)
   server.tool_universe = _SERVICE_TOOL_NAMES

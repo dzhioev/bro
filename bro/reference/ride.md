@@ -821,10 +821,11 @@ underneath it are two client surfaces over the same request:
   A blocking wait rides through child says.
   When `worker.question` is granted, a child's question instead prints on stdout and exits 4 so the summoner gets a turn;
   stderr names the question and the exact `summon say <quest> '<answer>' --reply-to <question>` command that answers it.
-  `summon say [<quest>] '<text>' [--reply-to <question>] [--wait [<seconds>]]` sends a say, reply, or question:
+  `summon say [<quest>] '<text>' [--reply-to <question>] [--question | --wait [<seconds>]]` sends a say, reply, or question:
   with a quest it addresses that child, and without one it addresses this session's summoner.
-  An awaiting question prints its id and exits 4 when its optional bound expires;
-  its reply remains recoverable from the journal.
+  `--question` prints the question id and returns without waiting;
+  `--wait` asks the same question but waits for its reply, printing the id when its optional bound expires.
+  Either pending question exits 4, and its reply remains recoverable from the journal.
   `--detach` waits for the first correlated message:
   host `accepted` prints the quest id, while a denial or pre-acceptance launch failure exits with its reason and prints no id.
   Any summon is reclaimable by that quest id, detached or interrupted.
@@ -834,26 +835,27 @@ underneath it are two client surfaces over the same request:
   `summon check --wait [<id>]` loops bounded `query {id, wait, since}` reads until terminal, the next message, or its optional timeout;
   concurrent waiters and later reads see the same state.
   `summon list` walks the caller-scoped paginated `query {}` listing and prints retained summon records live-first, including their talk and pending questions.
-  `summon watch` arms at the current `events {}` head, long-polls ordered events after its cursor, and prints lifecycle transitions, messages, and refusals in the caller's scope.
+  `summon watch` first takes the current `events {}` head, then replays retained own-quest messages and pending questions whose journal sequence is no newer than that head, marked `before the watch`.
+  It then long-polls ordered events after the head, so chat committed between the head and replay queries arrives once through the stream.
   On a child quest it names the target and request;
   on the session's own quest it renders the other end as `summoner` and never echoes the session's own says.
-  An event-retention gap prints a notice and re-arms from the current head.
+  An event-retention gap prints a notice, re-arms from the current head, and repeats the retained replay.
   `summon cancel <id> [--timeout <seconds>]` ends a child quest this session summoned and waits for the quest to end;
   it exits 0 once the quest has ended and 3 when the bound passes first, the end still on its way.
   In a claude session, long summons run via the harness's background Bash;
   `rewind show <trail-id>` peeks mid-run.
   Contract details in `bro/summon.py`.
-- the bro service tools (`bro::summon` / `bro::summon_say` / `bro::summon_check` / `bro::summon_list`), for bro LLM processes and `--raw` sessions
-  — `summon` takes the CLI’s request fields as parameters, including `talk`, and returns a structured accepted, question, or completed state with the request id.
-  `detach: true` returns the accepted state instead of waiting for chat or the result.
-  A question state carries its id and text;
-  answer it with `summon_say`, then continue the same quest through `summon_check`.
-  `summon_say` mirrors the CLI's say, reply, and bounded question roles at either end of the quest.
-  `summon_check` mirrors the CLI's child or own-quest views and loops short long-polls with `wait: true` until terminal, a chat change, or its optional timeout;
-  `summon_list` mirrors the paginated CLI listing wherever the broker channel mounts the summon tools,
-  and `summon_cancel` mirrors the CLI's cancel with the same bounded wait.
-  A blocking tool call owns its channel client so cancellation aborts the current short wait, while the host journal retains the result and chat;
-  MCP-served builds carry transport cautions that keep waits under the harness cap and recover by id instead of sending twice.
+- the bro service tools (`bro::summon` / `bro::summon_say` / `bro::summon_check` / `bro::summon_list`), for bro LLM processes and `--raw` sessions.
+  On the bare wire, `summon` returns the accepted state after host acceptance and has no `detach` parameter;
+  answers, questions, replies, refusals, and terminal states arrive through `summon watch`.
+  `summon_say` sends and returns, with `question: true` minting a question id whose reply arrives through the watch;
+  `summon_check` is one non-blocking child or own-quest journal read;
+  and `summon_cancel` returns once the host accepts the cancellation, with the terminal following on the watch.
+  `summon_list` is the same paginated journal listing on both wires.
+  On the MCP wire, the blocking service tools retain their polling controls:
+  `summon` blocks unless `detach: true`, `summon_say` may wait for a question's reply, `summon_check(wait=true)` long-polls until terminal or chat changes, and `summon_cancel` may wait for the terminal.
+  Each MCP blocking call owns its channel client so cancellation aborts the current short wait, while the host journal retains the result and chat;
+  its transport cautions keep waits under the harness cap and recover by id instead of sending twice.
 
 A claude-harness child is scoped through the claude-full recipe
 — `claude_code` required, no LLM key

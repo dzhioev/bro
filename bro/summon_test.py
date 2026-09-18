@@ -1,6 +1,8 @@
 import asyncio
 import contextlib
 import json
+import queue
+import threading
 from dataclasses import dataclass
 from unittest.mock import MagicMock
 
@@ -8,9 +10,11 @@ import pytest
 
 from bro import summon
 from bro.broker import brotocol
-from bro.broker.brotocol import Message
-from bro.broker.client import CHANNEL_ENV, QUEST_ENV
-from bro.broker.transport import ChannelID
+from bro.broker.brotocol import Message, Talk
+from bro.broker.client import CHANNEL_ENV, QUEST_ENV, Client
+from bro.broker.dispatcher import Broker, Dispatcher
+from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
+from bro.broker.transport import ChannelID, Provisioned, connect
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 
 TIMEOUT = 5.0
@@ -34,6 +38,70 @@ class StubSink:
 class Harness:
   transport: TcpServerTransport
   sink: StubSink
+
+
+class LiveHandle(ChildHandle):
+  def __init__(self):
+    self._done = threading.Event()
+    self._lock = threading.Lock()
+    self._exit_code: int | None = None
+
+  def finish(self, exit_code: int) -> None:
+    with self._lock:
+      if self._exit_code is None:
+        self._exit_code = exit_code
+        self._done.set()
+
+  async def wait(self) -> int:
+    await asyncio.to_thread(self._done.wait)
+    assert self._exit_code is not None
+    return self._exit_code
+
+  async def kill(self) -> None:
+    self.finish(-15)
+
+  def output_tail(self) -> str:
+    return ''
+
+
+@dataclass(frozen=True)
+class SpawnedEndpoint:
+  channel: Provisioned
+  quest: str
+  talk: Talk
+  handle: LiveHandle
+
+
+class LiveSpawner(Spawner):
+  def __init__(self):
+    self.spawned: queue.Queue[SpawnedEndpoint] = queue.Queue()
+
+  async def spawn(
+    self, launch: LaunchSpec, channel: Provisioned, quest: str, talk: Talk
+  ) -> ChildHandle:
+    del launch
+    handle = LiveHandle()
+    self.spawned.put(SpawnedEndpoint(channel, quest, talk, handle))
+    return handle
+
+
+@contextlib.asynccontextmanager
+async def running_live_broker():
+  spawner = LiveSpawner()
+  broker = Broker(TcpServerTransport([LOCAL_HOST]), spawner)
+
+  def spawn_summon(context: Dispatcher, peer, message: Message) -> None:
+    talk: Talk = frozenset(message.args.get('talk', []))
+    context.spawn(LaunchSpec(), peer, talk=talk)
+
+  broker.on(summon.SUMMON, spawn_summon)
+  broker_task = asyncio.create_task(asyncio.to_thread(broker.run, LaunchSpec()))
+  root = await asyncio.to_thread(spawner.spawned.get, True, TIMEOUT)
+  try:
+    yield spawner, root
+  finally:
+    root.handle.finish(0)
+    await asyncio.wait_for(broker_task, TIMEOUT)
 
 
 @contextlib.asynccontextmanager
@@ -64,6 +132,21 @@ def _id(message: Message) -> str:
 
 async def _reply(server: Harness, channel: ChannelID, request: Message, **payload) -> None:
   await server.transport.send(channel, brotocol.result(_id(request), **payload))
+
+
+async def _reply_empty_watch_replay(server: Harness) -> None:
+  channel, own_query = await _next(server)
+  assert own_query.args == {'id': 'ROOT'}
+  await _reply(
+    server,
+    channel,
+    own_query,
+    outcome='ok',
+    value={'quest': _quest('ROOT', 'started', kind='root')},
+  )
+  channel, listing = await _next(server)
+  assert listing.args == {}
+  await _reply(server, channel, listing, outcome='ok', value={'quests': []})
 
 
 def _quest(
@@ -318,6 +401,29 @@ async def test_say_without_a_quest_uses_the_session_quest_and_published_talk(mon
     assert message.quest_id == 'OWN-QUEST'
     assert message.payload == {'text': 'progress'}
     assert await task == 0
+
+
+@pytest.mark.asyncio
+async def test_say_question_returns_its_id_without_waiting(monkeypatch, capsys):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(
+        summon.main,
+        ['summon', 'say', 'REQ-1', 'ready?', '--question'],
+      )
+    )
+    channel, query = await _next(server)
+    live = _quest(
+      'REQ-1',
+      'started',
+      talk=['requester.question', 'worker.say'],
+    )
+    await _reply(server, channel, query, outcome='ok', value={'quest': live})
+    _, question = await _next(server)
+
+    assert question.id is not None
+    assert await task == summon.QUESTION_EXIT_CODE
+    assert capsys.readouterr().out == f'{question.id}\n'
 
 
 @pytest.mark.asyncio
@@ -1099,6 +1205,198 @@ async def test_list_reads_every_page_and_keeps_only_summons(monkeypatch, capsys)
 
 
 @pytest.mark.asyncio
+async def test_watch_arm_replays_live_broker_chat_and_streams_a_racing_message_once(monkeypatch):
+  async with running_live_broker() as (spawner, root_endpoint):
+    with contextlib.ExitStack() as clients:
+      root = clients.enter_context(
+        Client(connect(root_endpoint.channel.host_endpoint.address(LOCAL_HOST)))
+      )
+      monkeypatch.setenv(QUEST_ENV, root_endpoint.quest)
+      monkeypatch.setenv(brotocol.TALK_ENV, brotocol.encode_talk(root_endpoint.talk))
+      child_request = root.send(
+        summon.SUMMON,
+        {
+          'target': 'dev',
+          'prompt': 'work',
+          'talk': ['requester.say', 'requester.question', 'worker.question'],
+        },
+      )
+      summon._await_acceptance(root, child_request)
+      child_endpoint = await asyncio.to_thread(spawner.spawned.get, True, TIMEOUT)
+      root.message(child_endpoint.quest, {'text': 'start with docs'})
+
+      child = clients.enter_context(
+        Client(connect(child_endpoint.channel.host_endpoint.address(LOCAL_HOST)))
+      )
+      monkeypatch.setenv(QUEST_ENV, child_endpoint.quest)
+      monkeypatch.setenv(brotocol.TALK_ENV, brotocol.encode_talk(child_endpoint.talk))
+      own = summon._query_quest(child, child_endpoint.quest, wait_seconds=1, since=0)
+      before_race = own['chat_seq']
+      grandchild_request = child.send(
+        summon.SUMMON,
+        {
+          'target': 'reviewer',
+          'prompt': 'review',
+          'talk': ['worker.question'],
+        },
+      )
+      summon._await_acceptance(child, grandchild_request)
+      grandchild_endpoint = await asyncio.to_thread(spawner.spawned.get, True, TIMEOUT)
+      grandchild = clients.enter_context(
+        Client(connect(grandchild_endpoint.channel.host_endpoint.address(LOCAL_HOST)))
+      )
+      monkeypatch.setenv(QUEST_ENV, grandchild_endpoint.quest)
+      monkeypatch.setenv(brotocol.TALK_ENV, brotocol.encode_talk(grandchild_endpoint.talk))
+      grandchild_question = grandchild.message(
+        grandchild_endpoint.quest, {'text': 'ship this?'}, question=True
+      )
+
+      monkeypatch.setenv(QUEST_ENV, child_endpoint.quest)
+      monkeypatch.setenv(CHANNEL_ENV, child_endpoint.channel.host_endpoint.address(LOCAL_HOST))
+      monkeypatch.setenv(brotocol.TALK_ENV, brotocol.encode_talk(child_endpoint.talk))
+      summon._query_quest(child, grandchild_endpoint.quest, wait_seconds=1, since=0)
+      original_read = summon._read_value
+      raced = False
+
+      def inject_racing_message(client, kind, args, *, timeout):
+        nonlocal raced
+        value = original_read(client, kind, args, timeout=timeout)
+        if not raced and kind == 'events' and args == {}:
+          raced = True
+          monkeypatch.setenv(QUEST_ENV, root_endpoint.quest)
+          monkeypatch.setenv(brotocol.TALK_ENV, brotocol.encode_talk(root_endpoint.talk))
+          root.message(child_endpoint.quest, {'text': 'also run lint'})
+          summon._query_quest(
+            root,
+            child_endpoint.quest,
+            wait_seconds=1,
+            since=before_race,
+          )
+          monkeypatch.setenv(QUEST_ENV, child_endpoint.quest)
+          monkeypatch.setenv(brotocol.TALK_ENV, brotocol.encode_talk(child_endpoint.talk))
+        return value
+
+      monkeypatch.setattr(summon, '_read_value', inject_racing_message)
+      with contextlib.closing(summon.watch_summons(wait_seconds=0.05)) as watch:
+        assert await asyncio.to_thread(next, watch) == (
+          'before the watch: summoner says start with docs'
+        )
+        assert await asyncio.to_thread(next, watch) == (
+          'before the watch: summon asks ship this? '
+          f'(request {grandchild_endpoint.quest} to reviewer, '
+          f'question {grandchild_question.id})'
+        )
+        assert await asyncio.to_thread(next, watch) == 'summoner says also run lint'
+
+
+@pytest.mark.asyncio
+async def test_watch_replays_retained_chat_at_arm_without_repeating_a_racing_message(monkeypatch):
+  async with running_server(monkeypatch) as server:
+    monkeypatch.setenv(QUEST_ENV, 'ROOT')
+    watch = summon.watch_summons(wait_seconds=0.05)
+    first_line = asyncio.create_task(asyncio.to_thread(next, watch))
+    channel, arm = await _next(server)
+    await _reply(server, channel, arm, outcome='ok', value={'head': 10, 'events': []})
+
+    before = {
+      'seq': 5,
+      'at': 'before',
+      'transition': 'message',
+      'from': 'requester',
+      'head': {'text': 'start with docs'},
+    }
+    own_question = {
+      'seq': 6,
+      'at': 'before',
+      'transition': 'message',
+      'from': 'requester',
+      'id': 'OWN-QUESTION',
+      'head': {'text': 'which branch?'},
+    }
+    racing = {
+      'seq': 11,
+      'at': 'after',
+      'transition': 'message',
+      'from': 'requester',
+      'head': {'text': 'also run lint'},
+    }
+    channel, own_query = await _next(server)
+    await _reply(
+      server,
+      channel,
+      own_query,
+      outcome='ok',
+      value={
+        'quest': _quest(
+          'ROOT',
+          'started',
+          kind='root',
+          pending=[own_question],
+          messages=[before, own_question, racing],
+          chat_seq=11,
+        )
+      },
+    )
+    child_question = {
+      'seq': 8,
+      'at': 'before',
+      'transition': 'message',
+      'from': 'worker',
+      'id': 'CHILD-QUESTION',
+      'head': {'text': 'ship this?'},
+    }
+    channel, listing = await _next(server)
+    await _reply(
+      server,
+      channel,
+      listing,
+      outcome='ok',
+      value={
+        'quests': [
+          _quest(
+            'CHILD',
+            'started',
+            pending=[child_question],
+            talk=['worker.question'],
+          )
+        ]
+      },
+    )
+
+    assert await first_line == 'before the watch: summoner says start with docs'
+    assert await asyncio.to_thread(next, watch) == (
+      'before the watch: summoner asks which branch? (question OWN-QUESTION)'
+    )
+    assert await asyncio.to_thread(next, watch) == (
+      'before the watch: summon asks ship this? (request CHILD to dev, question CHILD-QUESTION)'
+    )
+
+    racing_line = asyncio.create_task(asyncio.to_thread(next, watch))
+    channel, poll = await _next(server)
+    assert poll.args == {'after': 10, 'wait': 0.05}
+    await _reply(
+      server,
+      channel,
+      poll,
+      outcome='ok',
+      value={
+        'head': 11,
+        'events': [
+          {
+            **racing,
+            'kind': 'summon',
+            'quest': 'ROOT',
+            'parent': 'PARENT',
+            'args': {'target': 'dev'},
+          }
+        ],
+      },
+    )
+    assert await racing_line == 'summoner says also run lint'
+    watch.close()
+
+
+@pytest.mark.asyncio
 async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypatch):
   async with running_server(monkeypatch) as server:
     monkeypatch.setenv(QUEST_ENV, 'ROOT')
@@ -1108,6 +1406,7 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
     assert arm.kind == 'events'
     assert arm.args == {}
     await _reply(server, channel, arm, outcome='ok', value={'head': 10, 'events': []})
+    await _reply_empty_watch_replay(server)
     channel, poll = await _next(server)
     assert poll.args == {'after': 10, 'wait': 0.05}
     await _reply(
@@ -1224,6 +1523,76 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
     watch.close()
 
 
+@pytest.mark.asyncio
+async def test_watch_replays_retained_chat_after_an_event_gap(monkeypatch):
+  async with running_server(monkeypatch) as server:
+    with contextlib.closing(summon.watch_summons(wait_seconds=0.05)) as watch:
+      gap_line = asyncio.create_task(asyncio.to_thread(next, watch))
+      channel, arm = await _next(server)
+      await _reply(server, channel, arm, outcome='ok', value={'head': 10, 'events': []})
+      await _reply_empty_watch_replay(server)
+      channel, poll = await _next(server)
+      assert poll.args == {'after': 10, 'wait': 0.05}
+      await _reply(server, channel, poll, outcome='denied', error='events gap: oldest is 15')
+      channel, rearm = await _next(server)
+      assert rearm.args == {}
+      await _reply(server, channel, rearm, outcome='ok', value={'head': 20, 'events': []})
+      assert await gap_line == ('summon watch gap: events gap: oldest is 15; re-armed at 20')
+
+      replay_line = asyncio.create_task(asyncio.to_thread(next, watch))
+      retained = {
+        'seq': 18,
+        'at': 'before',
+        'transition': 'message',
+        'from': 'requester',
+        'head': {'text': 'while disconnected'},
+      }
+      channel, own_query = await _next(server)
+      await _reply(
+        server,
+        channel,
+        own_query,
+        outcome='ok',
+        value={
+          'quest': _quest(
+            'ROOT',
+            'started',
+            kind='root',
+            messages=[retained],
+            chat_seq=18,
+          )
+        },
+      )
+      channel, listing = await _next(server)
+      await _reply(server, channel, listing, outcome='ok', value={'quests': []})
+      assert await replay_line == 'before the watch: summoner says while disconnected'
+
+      resumed = asyncio.create_task(asyncio.to_thread(next, watch))
+      channel, poll = await _next(server)
+      assert poll.args == {'after': 20, 'wait': 0.05}
+      await _reply(
+        server,
+        channel,
+        poll,
+        outcome='ok',
+        value={
+          'head': 21,
+          'events': [
+            {
+              'seq': 21,
+              'kind': 'summon',
+              'quest': 'S1',
+              'parent': 'ROOT',
+              'args': {'target': 'dev'},
+              'transition': 'denied',
+              'reason': 'not allowed',
+            }
+          ],
+        },
+      )
+      assert await resumed == 'not allowed (request S1 to dev)'
+
+
 def test_chat_watch_lines_show_the_other_end_and_every_refusal():
   child = {
     'kind': 'summon',
@@ -1277,6 +1646,7 @@ async def test_watch_refuses_an_accepted_summon_event_without_a_target(monkeypat
     first_line = asyncio.create_task(asyncio.to_thread(next, watch))
     channel, arm = await _next(server)
     await _reply(server, channel, arm, outcome='ok', value={'head': 0, 'events': []})
+    await _reply_empty_watch_replay(server)
     channel, poll = await _next(server)
     await _reply(
       server,
