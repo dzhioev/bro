@@ -9,8 +9,7 @@ terminating service tools leave the status their session is to report there
 (`bro/workspace/session.py`), so a test exercising them would decide the exit
 status of the session running the suite. Clearing by namespace rather than by
 name is what keeps the next variable the framework invents from having to be
-discovered the same way. `BRO_LLM_TESTS` is the one name kept: an opt-in a
-caller passes the run deliberately rather than session state it stands in.
+discovered the same way.
 
 Three fixed variables carry session state without living in those namespaces and are
 named one by one: `PWD`, which the transcript fallback resolves the working
@@ -50,7 +49,6 @@ import os
 import tempfile
 import time
 from collections.abc import Iterator
-from typing import Optional
 
 from bro.base import configs, credentials, log
 
@@ -77,27 +75,14 @@ def _credential_install_variables() -> frozenset[str]:
 SESSION_VARIABLES = frozenset({'AI_AGENT', 'MCP_SERVER_BEARER_TOKEN', 'PWD'}) | (
   _credential_install_variables()
 )
-TOKENS_OPT_IN = 'BRO_LLM_TESTS'
-KEPT_VARIABLES = frozenset({TOKENS_OPT_IN})
 TIMEZONE = 'Asia/Kolkata'
 
 # The absent exclusive store a suite resolves against.
 ABSENT_CREDENTIAL_STORE = os.path.join(tempfile.gettempdir(), 'bro-suite-absent-credential-store')
 
 
-def token_spending_skip_reason() -> Optional[str]:
-  """why a test that spends real tokens is skipped, or None where the run asked
-  for it. Every pytest root gates its own spenders on this, so what counts as
-  opting in is decided once."""
-  if os.environ.get(TOKENS_OPT_IN) == '1':
-    return None
-  return f'spends real tokens — set {TOKENS_OPT_IN}=1 to run'
-
-
 def _carries_session_state(name: str) -> bool:
-  return (
-    name.startswith(SESSION_NAMESPACES) or name in SESSION_VARIABLES
-  ) and name not in KEPT_VARIABLES
+  return name.startswith(SESSION_NAMESPACES) or name in SESSION_VARIABLES
 
 
 def rebuild_environment() -> None:

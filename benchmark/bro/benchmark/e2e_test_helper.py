@@ -14,7 +14,7 @@ import pytest
 from harbor.utils.trajectory_validator import TrajectoryValidator
 
 from bro.base import credentials
-from bro.base.suite_environment import host_credential_store, token_spending_skip_reason
+from bro.base.suite_environment import host_credential_store
 from bro.bench.presets import compose
 from bro.benchmark.bundle import built, default_root, host_mismatch, workspace_root
 from bro.benchmark.trial_store import TRAILS_DIRECTORY
@@ -51,10 +51,8 @@ def _host_holds_the_llm_keys() -> bool:
 
 
 _HOST_MISMATCH = host_mismatch()
-_TOKENS_WITHHELD = token_spending_skip_reason()
 
 LIVE_TRIAL = [
-  pytest.mark.skipif(_TOKENS_WITHHELD is not None, reason=_TOKENS_WITHHELD or ''),
   pytest.mark.skipif(not _available('docker', 'info'), reason='no reachable docker daemon'),
   pytest.mark.skipif(_HOST_MISMATCH is not None, reason=str(_HOST_MISMATCH)),
   # harbor drives every container through the compose CLI plugin, which is

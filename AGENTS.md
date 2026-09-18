@@ -34,6 +34,7 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   `types` (pyright),
   `unit` (the pytest roster, run in parallel, then a second run in one process for the modules `run_tests.py` holds out of the pool),
   `benchmark` (the benchmark project's own: it syncs `benchmark/.venv` and runs pyright and pytest inside it, since the workspace venv cannot import `bro.benchmark` at all),
+  the opt-in `llm` (the live-LLM behavior probes, run only when `--only` names the stage, since they spend real tokens),
   and the host-only `docker` (the container entrypoint's postconditions and the launch path from a cold image tag) and `broker_e2e` (the live broker-supervised container launch seam, `ride/ride/e2e_test.py`),
   both skipped when the gate itself runs inside a container.
   `--only` and `--skip` name stages, are repeatable, and are mutually exclusive.
@@ -48,11 +49,10 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   `run-tests --changed` is the pre-push gate;
   the whole gate is the pull request's, a runner per stage (`.github/workflows/tests.yml`, on `pull_request`, on `push` to `master`, and on `workflow_dispatch`
   — a push to a feature branch triggers nothing, so a branch that never opens a PR runs on a dispatch or not at all)
-- `BRO_LLM_TESTS=1 pytest dev/bros/dev/commit_llm_test.py` — live-LLM behavior probes (`*_llm_test.py`):
+- `run-tests --only llm` — the live-LLM behavior probes (`*_llm_test.py`):
   a real bro against the configured provider, asserting on the artifacts it produces.
-  They spend real tokens, so they stay outside the default roster and are collected-but-skipped without the explicit env var.
-  The opt-in is repository-wide rather than theirs alone:
-  every pytest root gates its own token spenders on it
+  They spend real tokens, so the stage lists them and runs only when named, and pytest collects one only as a file named on its command line, never by walking a directory (`conftest.py`);
+  the benchmark project holds its graded trials out of directory collection the same way
 - `sync-scripts --project <directory>` — regenerate a distribution's `[project.scripts]` and committed `_entrypoints.py`, then `uv sync --all-packages --all-groups --all-extras`
 - `uv build --package bro`, `uv build --package bro-bench`, `uv build --package bro-native`, `uv build --package bro-dev`, `uv build --package bro-oops`, and `uv build --package bro-ride`
   — build the workspace wheels;

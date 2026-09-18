@@ -310,6 +310,12 @@ BENCHMARK_PYTEST_FILES = [
   'bro/benchmark/retention_test.py',
   'bro/benchmark/trajectory_test.py',
 ]
+# live-LLM behavior probes: each runs a real bro against the configured provider
+# and spends real tokens, so the stage naming them runs only when asked for
+LLM_PYTEST_FILES = [
+  'bro/spells_llm_test.py',
+  'dev/bros/dev/commit_llm_test.py',
+]
 
 
 FAILURE_REPLAY_LINES = 40
@@ -482,11 +488,17 @@ def broker_e2e_stage() -> None:
   run(sys.executable, '-m', 'pytest', BROKER_E2E_PYTEST_FILE)
 
 
+def llm_stage() -> None:
+  print('pytest: live-LLM behavior probes', file=sys.stderr)
+  run(sys.executable, '-m', 'pytest', *LLM_PYTEST_FILES)
+
+
 @dataclass(frozen=True)
 class Stage:
   name: str
   run: Callable[[], None]
   host_only: bool = False
+  opt_in: bool = False
 
 
 STAGES = [
@@ -496,6 +508,7 @@ STAGES = [
   Stage('benchmark', benchmark_stage),
   Stage('docker', docker_stage, host_only=True),
   Stage('broker_e2e', broker_e2e_stage, host_only=True),
+  Stage('llm', llm_stage, opt_in=True),
 ]
 
 
@@ -544,6 +557,12 @@ def main(argv: list[str]) -> Optional[int]:
   failures: list[tuple[str, list[str]]] = []
   for stage in stages:
     if only is not None and stage.name not in only:
+      continue
+    if stage.opt_in and only is None:
+      print(
+        f'skipping the {stage.name} stage (opt-in; run it with --only {stage.name})',
+        file=sys.stderr,
+      )
       continue
     if stage.name in skip:
       print(f'skipping the {stage.name} stage (--skip)', file=sys.stderr)
