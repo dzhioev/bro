@@ -860,7 +860,7 @@ The launcher puts the summoner's provisioned channel in `BROKER_UPSTREAM`, and t
 Its own nested summons therefore route through the summoner's control with per-peer authorization.
 The request fixes what the summoner authorized
 — the target bro, the prompt (delivered as the session's first message), the root session's repository attachment, the base (the request's `into` ref, or the summoner's workspace HEAD read at launch, like a spawned child's at its spawn),
-the child's resolved `may_summon` and permits, the request's credential grant/revoke seeds, and the party's `--env` additions.
+the child's resolved `may_summon`, permits, and quest talk, the request's credential grant/revoke seeds, and the party's `--env` additions.
 The launch's own credential `--grant`/`--revoke` layer may adjust its material, but `@bro` and `:permit` overrides are refused because the control enforces the sets it resolved at request time.
 `--env` is refused as well:
 the control stamps the party's additions on every summon the child makes, so the child carries exactly those.
@@ -871,7 +871,7 @@ The bridge between the two halves is the pending record (`ride/ride/pending_summ
 written under `<runtime-root>/summon/pending/<token>.json` when the channel is provisioned and one-shot-claimed by the launch as its last fallible step before the session starts.
 The record carries the ride runtime as its frozen bundle hash or given path, and token minting materializes its host half off the broker loop before writing the pending record and emitting acceptance.
 A `ride along --summoned` entered through another installation reads that field first and re-executes from the owning runtime before it loads the rest of the record.
-The protocol revision check is unnecessary because the launcher and pending-record reader therefore run the minting ride's code.
+The child still completes the broker attach revision check after re-execution, so a missing or mismatched wire revision is refused before any envelope can be misparsed.
 A second launch on the same token fails loudly (two sessions must not share one channel), and a summon that ends unclaimed (root teardown, a failure) discards it, so a stale token fails the launch with the reason.
 The claim records the user-chosen workspace name beside it (`claimed/<token>.json`), which is how the host attributes the manual peer
 — the base-ref source for the child's own summons and the tree its artifact mints resolve against

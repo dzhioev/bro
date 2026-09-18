@@ -107,7 +107,7 @@ class FakeContext:
     )
     self.replies.append((peer, {'outcome': 'denied', 'error': record.reason}))
 
-  def spawn(self, launch, peer, *, timeout=None):
+  def spawn(self, launch, peer, *, talk, timeout=None):
     assert self.active is not None
     self.journal.open(
       self.active.quest_id,
@@ -115,10 +115,11 @@ class FakeContext:
       self.workers[peer],
       peer,
       self.active.args,
+      talk=talk,
     )
     self.spawned.append((launch, peer, timeout))
 
-  def expect(self, peer, *, timeout, ready):
+  def expect(self, peer, *, talk, timeout, ready):
     assert self.active is not None
     self.journal.open(
       self.active.quest_id,
@@ -126,6 +127,7 @@ class FakeContext:
       self.workers[peer],
       peer,
       self.active.args,
+      talk=talk,
     )
     self.expected.append((peer, timeout))
     ready(Provisioned(CHILD, Endpoint(7321, 'token')))
@@ -210,6 +212,7 @@ def test_authorized_summon_opens_identity_before_spawning(tmp_path):
   assert peer == ROOT
   assert timeout == DEFAULT_TIMEOUT
   assert control._facts.for_quest(message.quest_id).bro == 'dev'
+  assert context.journal.records[message.quest_id].talk == frozenset({'worker.say'})
   assert not (tmp_path / 'summon-status.json').exists()
   accepted = _audit(tmp_path)[-1]
   assert accepted['transition'] == 'accepted'
@@ -830,6 +833,8 @@ def test_manual_summon_writes_the_pending_record_before_acceptance(tmp_path, mon
   assert pending.target == 'dev'
   assert pending.channel_token == 'token'
   assert pending.runtime == 'a' * 64
+  assert pending.talk == ('worker.say',)
+  assert context.journal.records[message.quest_id].talk == frozenset({'worker.say'})
   assert control._facts.for_quest(message.quest_id).manual is True
 
 

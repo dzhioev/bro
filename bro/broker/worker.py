@@ -9,7 +9,7 @@ from typing import Any, Optional, Protocol
 
 from bro.base import log
 from bro.broker import brotocol
-from bro.broker.brotocol import Message, Tag
+from bro.broker.brotocol import Message, Tag, Talk
 from bro.broker.job import CommandJob, record_status
 from bro.broker.runtime import Peer, Runtime
 from bro.broker.spawn import ChildHandle, LaunchSpec
@@ -158,7 +158,7 @@ class Worker:
     pass
 
   def on_message(self, message: Message) -> None:
-    if message.type != Tag.REQUEST and message.quest_id != self.quest:
+    if message.type not in (Tag.REQUEST, Tag.MESSAGE) and message.quest_id != self.quest:
       log.warning(
         'broker worker %s refused %r for quest %s',
         self.quest,
@@ -201,11 +201,13 @@ class SpawnedWorker(Worker):
     quest: str,
     launch: LaunchSpec,
     *,
+    talk: Talk,
     timeout: Optional[float],
     launch_timeout: Optional[float] = LAUNCH_TIMEOUT,
   ):
     super().__init__(runtime, listener, quest, timeout=timeout, launch_timeout=launch_timeout)
     self._launch = launch
+    self._talk = talk
     self._handle: Optional[ChildHandle] = None
     self._connected = False
     self._disconnected = asyncio.Event()
@@ -214,7 +216,9 @@ class SpawnedWorker(Worker):
     try:
       provisioned = await self.runtime.provision(self)
       self._bind(provisioned.channel)
-      self._handle = await _owned_launch(self.runtime.launch(self._launch, provisioned, self.quest))
+      self._handle = await _owned_launch(
+        self.runtime.launch(self._launch, provisioned, self.quest, self._talk)
+      )
     except asyncio.CancelledError:
       raise
     except Exception as error:

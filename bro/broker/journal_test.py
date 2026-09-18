@@ -1,6 +1,6 @@
 import json
 
-from bro.broker import journal as journal_module
+from bro.broker import brotocol, journal as journal_module
 from bro.broker.journal import Journal
 
 
@@ -184,3 +184,122 @@ def test_event_gap_is_denied_but_zero_accepts_retained_history(monkeypatch):
     raise AssertionError('old positive cursor was accepted')
   _, events = journal.events_after(0, 'root-peer', {'root-peer': 'root'})
   assert [event['seq'] for event in events] == [3, 4]
+
+
+def test_chat_folds_bounded_tail_pending_questions_and_chat_sequence(monkeypatch):
+  monkeypatch.setattr(journal_module, 'MAX_RECORD_MESSAGES', 2)
+  monkeypatch.setattr(journal_module, 'MAX_PENDING_QUESTIONS', 2)
+  journal = Journal()
+  record = journal.open(
+    'child',
+    'summon',
+    'root',
+    'requester',
+    {},
+    talk=frozenset({'requester.question', 'worker.say', 'worker.question'}),
+  )
+  journal.message(record, 'requester', brotocol.message('child', {'text': 'first'}, id='Q1'))
+  first_chat_seq = record.chat_seq
+  journal.message(record, 'worker', brotocol.message('child', {'text': 'answer'}, reply_to='Q1'))
+  journal.message(record, 'worker', brotocol.message('child', {'text': 'second'}, id='Q2'))
+  journal.message(record, 'worker', brotocol.message('child', {'text': 'third'}, id='Q3'))
+  journal.message(record, 'worker', brotocol.message('child', {'text': 'fourth'}, id='Q4'))
+
+  assert record.chat_seq > first_chat_seq
+  assert [entry['id'] for entry in record.pending] == ['Q3', 'Q4']
+  assert [entry['id'] for entry in record.messages] == ['Q3', 'Q4']
+  assert record.messages[-1]['from'] == 'worker'
+  assert record.messages[-1]['head'] == {'text': 'fourth'}
+
+  journal.end(record, {'outcome': 'ok'})
+  assert record.pending == []
+
+
+def test_chat_state_is_folded_before_subscribers_observe_the_event():
+  journal = Journal()
+  record = journal.open('child', 'summon', None, None, {}, talk=frozenset({'worker.question'}))
+  observed = []
+  journal.subscribe(
+    lambda event, current: observed.append(
+      (event.seq, current.chat_seq, list(current.messages), list(current.pending))
+    )
+  )
+
+  journal.message(record, 'worker', brotocol.message('child', {'text': 'ask'}, id='Q1'))
+
+  [(event_sequence, chat_sequence, messages, pending)] = observed
+  assert event_sequence == chat_sequence
+  assert messages[-1]['id'] == 'Q1'
+  assert pending[-1]['id'] == 'Q1'
+
+
+def test_refusal_joins_the_tail_without_turning_a_question_pending():
+  journal = Journal()
+  record = journal.open('child', 'summon', 'root', 'requester', {}, talk=frozenset())
+  candidate = brotocol.message('child', {'text': 'blocked'}, id='Q1', reply_to='Q0')
+
+  journal.refused(record, 'worker', candidate, 'worker lacks the talk right')
+
+  assert record.pending == []
+  assert record.chat_seq == record.messages[-1]['seq']
+  assert record.messages[-1]['id'] == 'Q1'
+  assert record.messages[-1]['reply_to'] == 'Q0'
+  assert record.messages[-1]['reason'] == 'worker lacks the talk right'
+  _, events = journal.events_after(0, 'requester', {'requester': 'root'})
+  assert events[-1]['transition'] == 'refused'
+  assert events[-1]['id'] == 'Q1'
+  assert events[-1]['reply_to'] == 'Q0'
+
+
+def test_message_heads_use_the_message_byte_budget():
+  journal = Journal()
+  record = journal.open('child', 'summon', None, None, {}, talk=frozenset({'worker.say'}))
+  journal.message(
+    record,
+    'worker',
+    brotocol.message('child', {'text': 'å' * journal_module.MESSAGE_HEAD_BYTES}),
+  )
+
+  encoded = json.dumps(
+    record.messages[-1]['head'], ensure_ascii=False, separators=(',', ':')
+  ).encode()
+  assert len(encoded) <= journal_module.MESSAGE_HEAD_BYTES
+  assert record.messages[-1]['head']['truncated'] is True
+
+
+def test_every_retained_view_has_chat_state_but_only_the_by_id_view_has_the_tail():
+  journal = Journal()
+  record = journal.open('child', 'summon', None, None, {}, talk=frozenset({'worker.say'}))
+  journal.listening(record)
+  journal.message(record, 'worker', brotocol.message('child', {'text': 'ready'}))
+
+  listing = record.view()
+  by_id = record.view(include_messages=True)
+  assert listing['talk'] == ['worker.say']
+  assert listing['listening'] is True
+  assert listing['pending'] == []
+  assert listing['chat_seq'] == record.chat_seq
+  assert 'messages' not in listing
+  assert by_id['messages'] == record.messages
+
+
+def test_own_quest_event_visibility_is_limited_to_chat_transitions():
+  journal = Journal()
+  root = journal.open('root', 'root', None, None, {})
+  journal.bind(root, 'root-peer')
+  child = journal.open('child', 'summon', 'root', 'root-peer', {}, talk=frozenset({'worker.say'}))
+  journal.bind(child, 'child-peer')
+  journal.started(child)
+  journal.listening(child)
+  journal.message(child, 'worker', brotocol.message('child', {'text': 'ready'}))
+  journal.refused(
+    child,
+    'worker',
+    brotocol.message('child', {'text': 'question'}, id='Q1'),
+    'not allowed',
+  )
+
+  _, events = journal.events_after(0, 'child-peer', {'root-peer': 'root', 'child-peer': 'child'})
+  assert [event['transition'] for event in events] == ['listening', 'message', 'refused']
+  assert journal.visible_by_id('child-peer', child, {'child-peer': 'child'})
+  assert not journal.visible('child-peer', child, {'child-peer': 'child'})

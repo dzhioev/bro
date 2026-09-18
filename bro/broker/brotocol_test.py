@@ -5,12 +5,17 @@ import pytest
 from bro.broker.brotocol import (
   MAX_FRAME_BYTES,
   MAX_IDENTIFIER_BYTES,
+  PROTOCOL_REVISION,
   Message,
   ProtocolError,
   Tag,
+  Talk,
+  decode_talk,
+  encode_talk,
   frame_safe_result,
   mark,
-  progress,
+  message,
+  message_allowed,
   request,
   result,
 )
@@ -26,9 +31,54 @@ def test_mark_round_trip():
   assert Message.from_bytes(message.to_bytes()) == message
 
 
-def test_progress_round_trip():
-  message = progress('quest-1', {'note': 'working'})
-  assert Message.from_bytes(message.to_bytes()) == message
+def test_message_round_trip():
+  candidate = message('quest-1', {'note': 'working'}, id='question-1', reply_to='question-0')
+  assert Message.from_bytes(candidate.to_bytes()) == candidate
+
+
+def test_message_roles_cover_say_question_reply_and_counter_question():
+  say = message('quest', {})
+  question = message('quest', {}, id='question')
+  reply = message('quest', {}, reply_to='question')
+  counter_question = message('quest', {}, id='counter', reply_to='question')
+
+  assert say.is_say and not say.is_question and not say.is_reply
+  assert question.is_question and not question.is_say and not question.is_reply
+  assert reply.is_reply and not reply.is_say and not reply.is_question
+  assert counter_question.is_question and counter_question.is_reply and not counter_question.is_say
+
+
+def test_talk_encoding_is_canonical_and_strict():
+  talk = decode_talk('worker.say,requester.question')
+  assert encode_talk(talk) == 'requester.question,worker.say'
+  assert decode_talk('') == frozenset()
+  with pytest.raises(ValueError, match='unknown talk right'):
+    decode_talk('worker.command')
+  with pytest.raises(ValueError, match='duplicate'):
+    decode_talk('worker.say,worker.say')
+
+
+def test_talk_roles_require_the_senders_move_and_the_other_ends_question_for_a_reply():
+  talk: Talk = frozenset({'requester.say', 'requester.question', 'worker.question'})
+  assert message_allowed(talk, 'requester', message('quest', {}))
+  assert message_allowed(talk, 'requester', message('quest', {}, id='question'))
+  assert message_allowed(talk, 'requester', message('quest', {}, reply_to='worker-question'))
+  assert not message_allowed(talk, 'worker', message('quest', {}))
+  assert message_allowed(talk, 'worker', message('quest', {}, reply_to='requester-question'))
+  assert not message_allowed(
+    frozenset({'worker.question'}),
+    'worker',
+    message('quest', {}, reply_to='requester-question'),
+  )
+  assert not message_allowed(
+    frozenset({'worker.question'}),
+    'requester',
+    message('quest', {}, id='counter', reply_to='worker-question'),
+  )
+
+
+def test_protocol_revision_identifies_the_message_wire():
+  assert PROTOCOL_REVISION == 3
 
 
 def test_result_round_trip():
@@ -60,7 +110,7 @@ def test_quest_id_unifies_opening_and_correlated_messages():
   opened = request('ping', {})
   assert opened.quest_id == opened.id
   assert mark('quest-1', 'accepted').quest_id == 'quest-1'
-  assert progress('quest-1', {}).quest_id == 'quest-1'
+  assert message('quest-1', {}).quest_id == 'quest-1'
   assert result('quest-1', 'ok').quest_id == 'quest-1'
 
 
@@ -85,13 +135,13 @@ def test_accessors_reject_the_wrong_type():
   with pytest.raises(ProtocolError):
     _ = result('quest-1', 'ok').kind
   with pytest.raises(ProtocolError):
-    _ = progress('quest-1', {}).args
+    _ = message('quest-1', {}).args
   with pytest.raises(ProtocolError):
     _ = request('ping', {}).outcome
 
 
 def test_unknown_mark_transition_is_rejected():
-  with pytest.raises(ProtocolError, match='accepted, started, trail'):
+  with pytest.raises(ProtocolError, match='accepted, listening, started, trail'):
     mark('quest-1', 'finished')
 
 
@@ -101,8 +151,8 @@ def test_oversize_identifiers_are_rejected():
     Message(type=Tag.REQUEST, id=oversize, payload={'kind': 'ping', 'args': {}})
   with pytest.raises(ProtocolError, match='request kind'):
     Message(type=Tag.REQUEST, id='request', payload={'kind': oversize, 'args': {}})
-  with pytest.raises(ProtocolError, match='progress quest'):
-    progress(oversize, {})
+  with pytest.raises(ProtocolError, match='message quest'):
+    message(oversize, {})
   with pytest.raises(ProtocolError, match='trail id'):
     mark('quest', 'trail', trail_id=oversize)
 
@@ -116,8 +166,8 @@ def test_to_bytes_has_no_framing():
 
 
 def test_to_bytes_utf8_round_trip():
-  message = progress('quest-1', {'msg': 'naïve — café ☕'})
-  assert Message.from_bytes(message.to_bytes()) == message
+  candidate = message('quest-1', {'msg': 'naïve — café ☕'})
+  assert Message.from_bytes(candidate.to_bytes()) == candidate
 
 
 @pytest.mark.parametrize(
@@ -133,8 +183,8 @@ def test_to_bytes_utf8_round_trip():
     {'type': 'mark', 'payload': {}, 'quest': 'q'},
     {'type': 'mark', 'payload': {'transition': 'unknown'}, 'quest': 'q'},
     {'type': 'mark', 'payload': {'transition': 'trail'}, 'quest': 'q'},
-    {'type': 'progress', 'payload': {}},
-    {'type': 'progress', 'payload': {}, 'quest': 'q', 'id': 'i'},
+    {'type': 'message', 'payload': {}},
+    {'type': 'message', 'payload': {}, 'quest': 'q', 'id': ''},
     {'type': 'result', 'payload': {}, 'quest': 'q'},
     {'type': 'result', 'payload': {'outcome': 'done'}, 'quest': 'q'},
     {'type': 'result', 'payload': {'outcome': 'ok', 'extra': 1}, 'quest': 'q'},
@@ -154,7 +204,7 @@ def test_construction_rejects_malformed_envelopes(kwargs):
   [
     {'type': 'request', 'id': 'i', 'quest': None, 'payload': {'kind': 'ping', 'args': {}}},
     {'type': 'mark', 'id': None, 'quest': 'q', 'payload': {'transition': 'accepted'}},
-    {'type': 'progress', 'id': None, 'quest': 'q', 'payload': {}},
+    {'type': 'message', 'id': None, 'quest': 'q', 'payload': {}},
     {'type': 'result', 'id': None, 'quest': 'q', 'payload': {'outcome': 'ok'}},
   ],
 )

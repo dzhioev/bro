@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 from bro.artifact import is_ref
 from bro.base import credentials, log
@@ -44,7 +44,7 @@ from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
-  from bro.broker.brotocol import Message
+  from bro.broker.brotocol import Message, Talk
   from bro.broker.dispatcher import Dispatcher
   from bro.broker.journal import Event, Journal, Record
   from bro.broker.runtime import Peer
@@ -76,6 +76,7 @@ _ARGS_KEYS = frozenset(
 # fields a manual summon refuses: the user's launch owns the session's shape, and
 # there is no host-killable child for a timeout to bound
 _LAUNCH_OWNED_KEYS = ('timeout', 'hold', 'llm', 'harness', 'party', 'isolation')
+DEFAULT_SUMMON_TALK = cast('Talk', frozenset({'worker.say'}))
 
 
 def summon_allow_list(
@@ -525,6 +526,7 @@ class SummonControl:
         env=dict(self._session_env),
       ),
       peer,
+      talk=DEFAULT_SUMMON_TALK,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,
     )
 
@@ -556,6 +558,7 @@ class SummonControl:
           parent_workspace=str(requester.identity.tree),
           may_summon=tuple(sorted(child_allow_list)),
           permits=tuple(sorted(child_permits)),
+          talk=tuple(sorted(DEFAULT_SUMMON_TALK)),
           grant=tuple(grant),
           revoke=tuple(revoke),
           summoner=summoned_by,
@@ -565,7 +568,7 @@ class SummonControl:
         ),
       )
 
-    context.expect(peer, timeout=None, ready=_ready)
+    context.expect(peer, talk=DEFAULT_SUMMON_TALK, timeout=None, ready=_ready)
 
   def _requester(self, context: 'Dispatcher', peer: 'Peer') -> _Requester:
     quest, fact = self._facts.resolve(context, peer)

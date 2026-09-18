@@ -92,25 +92,20 @@ async def test_from_env_connects_and_sends(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mark_progress_and_result_emit_against_a_quest():
-  # the answering side emits every non-request envelope against the quest id
-  # its launch carried.
+async def test_mark_and_result_emit_against_a_quest():
   async with running_server() as server:
     provisioned = await server.transport.provision()
     client = Client(await _transport(provisioned))
     await asyncio.to_thread(client.mark, 'X', 'trail', trail_id='t1')
-    await asyncio.to_thread(client.progress, 'X', {'step': 1})
     await asyncio.to_thread(client.result, 'X', {'outcome': 'ok', 'value': 'answer'})
 
     _, trail = await _next(server.sink.messages)
-    _, progress = await _next(server.sink.messages)
     _, done = await _next(server.sink.messages)
     assert (trail.type, trail.quest, trail.payload) == (
       'mark',
       'X',
       {'transition': 'trail', 'trail_id': 't1'},
     )
-    assert progress.payload == {'step': 1}
     assert (done.type, done.quest) == ('result', 'X')
     assert done.payload == {'outcome': 'ok', 'value': 'answer'}
     client.close()
@@ -125,7 +120,7 @@ async def test_request_correlates_and_sets_unrelated_aside():
 
     channel, request_message = await _next(server.sink.messages)
     assert request_message.kind == 'ping'
-    unrelated = brotocol.progress('some-other-quest', {'note': 'unrelated'})
+    unrelated = brotocol.message('some-other-quest', {'note': 'unrelated'})
     await server.transport.send(channel, unrelated)
     await server.transport.send(
       channel, brotocol.result(request_message.id, 'ok', value={'pong': 1})
@@ -167,7 +162,7 @@ async def test_request_raises_on_channel_close():
 
 
 @pytest.mark.asyncio
-async def test_call_surfaces_marks_and_progress_then_returns_the_result():
+async def test_call_surfaces_marks_and_message_then_returns_the_result():
   async with running_server() as server:
     provisioned = await server.transport.provision()
     client = Client(await _transport(provisioned))
@@ -181,8 +176,8 @@ async def test_call_surfaces_marks_and_progress_then_returns_the_result():
     channel, request_message = await _next(server.sink.messages)
     assert request_message.kind == 'summon'
     await server.transport.send(channel, brotocol.mark(request_message.id, 'accepted'))
-    await server.transport.send(channel, brotocol.progress(request_message.id, {'note': 'working'}))
-    unrelated = brotocol.progress('some-other-quest', {'note': 'unrelated'})
+    await server.transport.send(channel, brotocol.message(request_message.id, {'note': 'working'}))
+    unrelated = brotocol.message('some-other-quest', {'note': 'unrelated'})
     await server.transport.send(channel, unrelated)
     await server.transport.send(channel, brotocol.result(request_message.id, 'ok', value='r'))
 
@@ -191,7 +186,7 @@ async def test_call_surfaces_marks_and_progress_then_returns_the_result():
     assert result.payload == {'outcome': 'ok', 'value': 'r'}
     assert [(interim.type, interim.payload) for interim in interims] == [
       ('mark', {'transition': 'accepted'}),
-      ('progress', {'note': 'working'}),
+      ('message', {'note': 'working'}),
     ]
 
     # the uncorrelated message call() read past was set aside, not dropped
@@ -201,8 +196,8 @@ async def test_call_surfaces_marks_and_progress_then_returns_the_result():
 
 
 @pytest.mark.asyncio
-async def test_call_rides_every_progress_while_await_any_returns_the_first():
-  # every correlated progress rides through a call's wait; await_any is the one
+async def test_call_rides_every_message_while_await_any_returns_the_first():
+  # every correlated message rides through a call's wait; await_any is the one
   # surface that returns the first correlated message as-is — what a manual
   # summon's acceptance handshake reads
   async with running_server() as server:
@@ -213,8 +208,8 @@ async def test_call_rides_every_progress_while_await_any_returns_the_first():
       asyncio.to_thread(client.call, 'summon', {}, TIMEOUT, on_interim=interims.append)
     )
     channel, request_message = await _next(server.sink.messages)
-    await server.transport.send(channel, brotocol.progress(request_message.id, {}))
-    await server.transport.send(channel, brotocol.progress(request_message.id, {'trail_id': 't1'}))
+    await server.transport.send(channel, brotocol.message(request_message.id, {}))
+    await server.transport.send(channel, brotocol.message(request_message.id, {'trail_id': 't1'}))
     await server.transport.send(channel, brotocol.result(request_message.id, 'ok', value='r'))
     result = await asyncio.wait_for(call_task, TIMEOUT)
     assert result.type == 'result'
@@ -230,14 +225,14 @@ async def test_call_rides_every_progress_while_await_any_returns_the_first():
 
 
 @pytest.mark.asyncio
-async def test_call_without_callback_skips_progress_and_returns_failed():
+async def test_call_without_callback_skips_message_and_returns_failed():
   async with running_server() as server:
     provisioned = await server.transport.provision()
     client = Client(await _transport(provisioned))
     call_task = asyncio.create_task(asyncio.to_thread(client.call, 'summon', {}, TIMEOUT))
 
     channel, request_message = await _next(server.sink.messages)
-    await server.transport.send(channel, brotocol.progress(request_message.id, {'trail_id': 't'}))
+    await server.transport.send(channel, brotocol.message(request_message.id, {'trail_id': 't'}))
     await server.transport.send(
       channel, brotocol.result(request_message.id, 'failed', detail={'reason': 'exit'})
     )
@@ -249,15 +244,15 @@ async def test_call_without_callback_skips_progress_and_returns_failed():
 
 
 @pytest.mark.asyncio
-async def test_call_deadline_spans_interim_progress():
-  # `timeout` bounds the whole call: an interim progress does not extend the result wait.
+async def test_call_deadline_spans_interim_message():
+  # `timeout` bounds the whole call: an interim message does not extend the result wait.
   async with running_server() as server:
     provisioned = await server.transport.provision()
     client = Client(await _transport(provisioned))
     call_task = asyncio.create_task(asyncio.to_thread(client.call, 'summon', {}, 0.3))
 
     channel, request_message = await _next(server.sink.messages)
-    await server.transport.send(channel, brotocol.progress(request_message.id, {}))
+    await server.transport.send(channel, brotocol.message(request_message.id, {}))
     with pytest.raises(TimeoutError):
       await asyncio.wait_for(call_task, TIMEOUT)
     client.close()
@@ -290,7 +285,7 @@ async def test_await_reply_reattaches_to_a_sent_request():
     )
 
     channel, request_message = await _next(server.sink.messages)
-    await server.transport.send(channel, brotocol.progress(request_message.id, {'trail_id': 't1'}))
+    await server.transport.send(channel, brotocol.message(request_message.id, {'trail_id': 't1'}))
     await server.transport.send(channel, brotocol.result(request_message.id, 'ok', value='r'))
 
     result = await asyncio.wait_for(await_task, TIMEOUT)
@@ -300,8 +295,8 @@ async def test_await_reply_reattaches_to_a_sent_request():
 
 
 @pytest.mark.asyncio
-async def test_await_reply_progress_rearms_the_deadline():
-  # timeout_after_interim opts out of the whole-wait bound: a correlated progress
+async def test_await_reply_message_rearms_the_deadline():
+  # timeout_after_interim opts out of the whole-wait bound: a correlated message
   # re-arms the deadline, so a result past the initial bound still lands
   async with running_server() as server:
     provisioned = await server.transport.provision()
@@ -312,7 +307,7 @@ async def test_await_reply_progress_rearms_the_deadline():
     )
 
     channel, request_message = await _next(server.sink.messages)
-    await server.transport.send(channel, brotocol.progress(request_message.id, {}))
+    await server.transport.send(channel, brotocol.message(request_message.id, {}))
     await asyncio.sleep(0.5)  # outlive the initial 0.3s bound; the re-armed deadline holds
     await server.transport.send(channel, brotocol.result(request_message.id, 'ok', value='r'))
 
@@ -346,9 +341,9 @@ async def test_await_reply_can_leave_acceptance_out_of_the_rearm():
 
 
 @pytest.mark.asyncio
-async def test_await_reply_progress_rearm_shortens_a_longer_bound():
+async def test_await_reply_message_rearm_shortens_a_longer_bound():
   # the re-arm is to exactly now + timeout_after_interim, shortening a still-long
-  # initial bound too, so post-progress silence is caught at the tighter bound
+  # initial bound too, so post-message silence is caught at the tighter bound
   async with running_server() as server:
     provisioned = await server.transport.provision()
     client = Client(await _transport(provisioned))
@@ -358,7 +353,7 @@ async def test_await_reply_progress_rearm_shortens_a_longer_bound():
     )
 
     channel, request_message = await _next(server.sink.messages)
-    await server.transport.send(channel, brotocol.progress(request_message.id, {}))
+    await server.transport.send(channel, brotocol.message(request_message.id, {}))
     with pytest.raises(TimeoutError, match='within 0.2s'):
       await asyncio.wait_for(await_task, TIMEOUT)
     client.close()

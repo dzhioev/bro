@@ -124,7 +124,7 @@ async def test_from_env_client_works_through_the_broxy(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_marks_and_progress_keep_the_sticky_route_until_the_result():
+async def test_marks_and_messages_keep_the_sticky_route_until_the_result():
   async with running_broxy() as harness:
     client = await _local_client(harness)
     interims: list[Message] = []
@@ -134,7 +134,7 @@ async def test_marks_and_progress_keep_the_sticky_route_until_the_result():
 
     channel, request = await _next(harness.sink.messages)
     await harness.transport.send(channel, brotocol.mark(request.id, 'accepted'))
-    await harness.transport.send(channel, brotocol.progress(request.id, {'step': 1}))
+    await harness.transport.send(channel, brotocol.message(request.id, {'step': 1}))
     await _wait_until(lambda: len(interims) == 2, 'the interim messages never reached the client')
     assert harness.broxy._routes[request.id].writer.is_closing() is False
 
@@ -143,7 +143,7 @@ async def test_marks_and_progress_keep_the_sticky_route_until_the_result():
     assert result.payload == {'outcome': 'ok', 'value': 'done'}
     assert [(message.type, message.payload) for message in interims] == [
       (Tag.MARK, {'transition': 'accepted'}),
-      (Tag.PROGRESS, {'step': 1}),
+      (Tag.MESSAGE, {'step': 1}),
     ]
     assert request.id not in harness.broxy._routes
     client.close()
@@ -277,7 +277,7 @@ async def test_malformed_local_frame_drops_only_that_connection():
     host, port, token = parse_address(harness.address)
     raw = socket.create_connection((host, port), timeout=TIMEOUT)
     raw.sendall(token.encode() + b'\n')
-    assert await asyncio.to_thread(raw.recv, 1024) == b'ok\n'
+    assert await asyncio.to_thread(raw.recv, 1024) == b'ok 3\n'
     raw.sendall(b'not json\n')
     assert await asyncio.to_thread(raw.recv, 1024) == b''
     raw.close()

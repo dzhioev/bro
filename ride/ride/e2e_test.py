@@ -1314,7 +1314,7 @@ def _run_boxed_join_scenario(
       party_workspace=name,
       records_directory=str(records),
     )
-    context.spawn(member, peer)
+    context.spawn(member, peer, talk=frozenset())
 
   party_members = PartyMembers()
   transport = TcpServerTransport(broker_bind_hosts())

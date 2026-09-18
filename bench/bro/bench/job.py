@@ -163,9 +163,8 @@ def _interpret_result(message: Message) -> str:
 
 
 def _await_outcome(client: Client, request: Message, timeout: float) -> str:
-  """block for the request's result and interpret it. The host's started
-  progress re-arms the deadline, so `timeout` bounds the silence since the last
-  message rather than the whole wait."""
+  """Block for the request's result and interpret it.
+  The host's `started` mark re-arms the deadline, so `timeout` bounds the silence since the last message rather than the whole wait."""
   try:
     result = client.await_reply(
       request,

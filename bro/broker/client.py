@@ -8,15 +8,12 @@ a failed session proxy when only `BROKER_UPSTREAM` remains.
 `request` and `call` are correlate-on-receive:
 they send a request, then read inbound messages until one names the quest opened by the request.
 `request` returns the first correlated message;
-`call` rides through marks and progress (surfaced to a callback) and returns the correlated result. Uncorrelated
-arrivals are set aside and handed out by later `receive` calls rather than
-dropped. No reader thread — concurrent in-flight requests are a consumer need
-that has not arisen.
+`call` rides through marks and messages (surfaced to a callback) and returns the correlated result.
+Uncorrelated arrivals are set aside and handed out by later `receive` calls rather than dropped.
+No reader thread — concurrent in-flight requests are a consumer need that has not arisen.
 
-`send` returns the sent request (ids are minted client-side); `await_reply` is
-`call`'s wait detached from its send and `await_any` is `request`'s, so a
-consumer can expose the request id the moment it is on the wire and block — or
-reattach — separately. `mark`, `progress`, and `result` are the answering side:
+`send` returns the sent request (ids are minted client-side); `await_reply` is `call`'s wait detached from its send and `await_any` is `request`'s, so a consumer can expose the request id the moment it is on the wire and block — or reattach — separately.
+`mark` and `result` are the answering-side lifecycle calls;
 a worker peer emits them against the quest id its launch carried (`QUEST_ENV`).
 """
 
@@ -64,10 +61,6 @@ class Client:
     """emit a lifecycle mark on ``quest_id`` from its worker peer."""
     self._transport.send(brotocol.mark(quest_id, transition, **payload))
 
-  def progress(self, quest_id: str, payload: dict[str, Any]) -> None:
-    """emit progress on ``quest_id`` from its worker peer."""
-    self._transport.send(brotocol.progress(quest_id, payload))
-
   def result(self, quest_id: str, payload: dict[str, Any]) -> None:
     """emit the result closing `quest_id` from its worker peer."""
     self._transport.send(Message(type=Tag.RESULT, payload=payload, quest=quest_id))
@@ -92,7 +85,7 @@ class Client:
   ) -> Message:
     """send a request and block for the result correlated to it.
 
-    Correlated marks and progress are surfaced to `on_interim` and the wait continues.
+    Correlated marks and messages are surfaced to `on_interim` and the wait continues.
     The correlated result is returned.
     `timeout` bounds the whole call, interim messages included.
     Raises as `request` does.
@@ -127,7 +120,7 @@ class Client:
         on_interim(message)
 
   def await_any(self, request: Message, timeout: Optional[float]) -> Message:
-    """block for the first mark, progress, or result correlated to `request`."""
+    """block for the first correlated envelope correlated to `request`."""
     deadline = time.monotonic() + timeout if timeout is not None else None
     return self._receive_correlated(request, deadline, timeout)
 

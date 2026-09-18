@@ -125,11 +125,11 @@ async def test_receive_prints_one_message(monkeypatch, capsys):
     main_task = asyncio.create_task(asyncio.to_thread(broker_cli.main, argv))
 
     await _next(server.sink.connects)  # the CLI's client attached
-    await server.transport.send(provisioned.channel, brotocol.progress('X', {'n': 7}))
+    await server.transport.send(provisioned.channel, brotocol.message('X', {'n': 7}))
 
     assert await asyncio.wait_for(main_task, TIMEOUT) == 0
     printed = json.loads(capsys.readouterr().out)
-    assert printed['type'] == 'progress'
+    assert printed['type'] == 'message'
     assert printed['payload'] == {'n': 7}
 
 
