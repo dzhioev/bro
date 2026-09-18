@@ -7,4 +7,6 @@ your own, and the ones your children make in turn, marked with the request they 
 
 When a child asks a question, answer with `summon say <quest> '<answer>' --reply-to <question>`.
 Then collect the child's eventual answer with `summon check --wait <quest>` rather than summoning it again.
+End a child you no longer need with `summon cancel <quest>`;
+it returns once the quest has ended, with a spawned child killed and a manual child's session detached.
 {{end}}

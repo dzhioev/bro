@@ -64,7 +64,7 @@ class Worker:
     self._task: Optional[asyncio.Task[None]] = None
     self._timer: Optional[asyncio.TimerHandle] = None
     self._started = False
-    self._timed_out = False
+    self._end_reason: Optional[str] = None
     self._finished = False
     self._stopping = False
     self._pending_messages: list[Message] = []
@@ -108,15 +108,32 @@ class Worker:
 
   def _deadline(self) -> None:
     self._timer = None
-    if self._finished or self._stopping:
+    self.end('timeout')
+
+  def end(self, reason: str) -> None:
+    """Kill the worker; the death it then reports carries `reason`."""
+    if self._finished or self._stopping or self._end_reason is not None:
       return
-    self._timed_out = True
-    if not self._started:
-      if self._task is not None:
-        self._task.cancel()
-      self._finish(DeathReport('timeout'))
+    self._end_reason = reason
+    self._cancel_timer()
+    self._end_now()
+
+  @property
+  def ending(self) -> bool:
+    """Whether an end was accepted and the death carrying it is still to be reported."""
+    return self._end_reason is not None and not self._finished
+
+  def _reason_or(self, default: str) -> str:
+    """The accepted end reason, or `default` when no end was accepted."""
+    return self._end_reason if self._end_reason is not None else default
+
+  def _end_now(self) -> None:
+    if self._started:
+      asyncio.create_task(self._kill())
       return
-    asyncio.create_task(self._kill())
+    if self._task is None:
+      raise RuntimeError('worker ended before it began')
+    self._task.cancel()
 
   async def _kill(self) -> None:
     raise NotImplementedError
@@ -147,12 +164,17 @@ class Worker:
       self._timer = None
 
   def _task_done(self, task: asyncio.Task[None]) -> None:
-    if task.cancelled() or self._stopping:
+    if self._stopping:
+      return
+    if task.cancelled():
+      if self._end_reason is not None:
+        self._finish(DeathReport(self._end_reason))
       return
     error = task.exception()
     if error is not None and not self._finished:
       log.warning('broker worker %s failed: %r', self.quest, error)
-      self._finish(DeathReport('launch' if not self._started else 'exit', error=str(error)))
+      default = 'launch' if not self._started else 'exit'
+      self._finish(DeathReport(self._reason_or(default), error=str(error)))
 
   def on_connect(self) -> None:
     pass
@@ -175,17 +197,23 @@ class Worker:
     pass
 
 
-async def _owned_launch(launch: Coroutine[Any, Any, ChildHandle]) -> ChildHandle:
-  task = asyncio.create_task(launch)
+async def _own[T](work: Coroutine[Any, Any, T]) -> tuple[T, bool]:
+  """Await `work` to completion even when the awaiting task is cancelled meanwhile.
+
+  The flag says whether that happened; the caller settles what completed, then re-raises."""
+  task = asyncio.create_task(work)
   cancelled = False
   while True:
     try:
-      handle = await asyncio.shield(task)
-      break
+      return await asyncio.shield(task), cancelled
     except asyncio.CancelledError:
       cancelled = True
       if task.cancelled():
         raise
+
+
+async def _owned_launch(launch: Coroutine[Any, Any, ChildHandle]) -> ChildHandle:
+  handle, cancelled = await _own(launch)
   if not cancelled:
     return handle
   await handle.kill()
@@ -222,7 +250,7 @@ class SpawnedWorker(Worker):
     except asyncio.CancelledError:
       raise
     except Exception as error:
-      self._finish(DeathReport('launch', error=str(error)))
+      self._finish(DeathReport(self._reason_or('launch'), error=str(error)))
       return
     self._mark_started()
     code = await self._handle.wait()
@@ -236,10 +264,9 @@ class SpawnedWorker(Worker):
           self.quest,
           _DRAIN_TIMEOUT,
         )
-    reason = 'timeout' if self._timed_out else 'exit'
     self._finish(
       DeathReport(
-        reason,
+        self._reason_or('exit'),
         exit_code=code,
         output_tail=self._handle.output_tail(),
       )
@@ -273,15 +300,17 @@ class ExpectedWorker(Worker):
     try:
       provisioned = await self.runtime.provision(self)
       self._bind(provisioned.channel)
-      await asyncio.to_thread(self._ready, provisioned)
+      _, cancelled = await _own(asyncio.to_thread(self._ready, provisioned))
+      if cancelled:
+        raise asyncio.CancelledError
       self.listener.on_worker_ready(self)
     except asyncio.CancelledError:
       raise
     except Exception as error:
-      self._finish(DeathReport('launch', error=str(error)))
+      self._finish(DeathReport(self._reason_or('launch'), error=str(error)))
       return
     await self._gone.wait()
-    self._finish(DeathReport('disconnected'))
+    self._finish(DeathReport(self._reason_or('disconnected')))
 
   async def _kill(self) -> None:
     self._gone.set()
@@ -339,17 +368,14 @@ class JobWorker(Worker):
       raise
     except Exception as error:
       await asyncio.to_thread(_remove_run, directory)
-      self._finish(DeathReport('launch', error=str(error)))
+      self._finish(DeathReport(self._reason_or('launch'), error=str(error)))
       return
     self._mark_started()
     code = await self._handle.wait()
     self._reaped = True
     self._exit_code = code
-    status: dict[str, Any] = {
-      'reason': 'timeout' if self._timed_out else 'exit',
-      'exit_code': code,
-    }
-    clean = code == 0 and not self._timed_out
+    status: dict[str, Any] = {'reason': self._reason_or('exit'), 'exit_code': code}
+    clean = code == 0 and self._end_reason is None
     try:
       await asyncio.to_thread(record_status, directory, status)
       value = await self._output.collect(directory, self._context, self._requester)
@@ -371,17 +397,14 @@ class JobWorker(Worker):
     self.listener.on_worker_message(self, message, host_worker=True)
     self._finish(DeathReport(status['reason'], exit_code=code))
 
-  def _deadline(self) -> None:
+  def _end_now(self) -> None:
     if not self._reaped:
-      super()._deadline()
+      super()._end_now()
       return
-    self._timer = None
-    if self._finished or self._stopping:
-      return
-    self._timed_out = True
+    assert self._end_reason is not None
     if self._task is not None:
       self._task.cancel()
-    self._finish(DeathReport('timeout', exit_code=self._exit_code))
+    self._finish(DeathReport(self._end_reason, exit_code=self._exit_code))
 
   async def _kill(self) -> None:
     if self._handle is not None:

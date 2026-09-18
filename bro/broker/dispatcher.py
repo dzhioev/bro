@@ -1,4 +1,4 @@
-"""Journal-backed broker dispatch and built-in read kinds."""
+"""Journal-backed broker dispatch and the built-in read and cancel kinds."""
 
 import asyncio
 import base64
@@ -39,6 +39,7 @@ DEFAULT_TIMEOUT = 600.0
 PING = 'ping'
 QUERY = 'query'
 EVENTS = 'events'
+CANCEL = 'cancel'
 
 RequestHandler = Callable[['Dispatcher', Peer, Message], None]
 
@@ -230,6 +231,8 @@ class Dispatcher:
       self._end(record, message)
     if worker.peer is not None:
       self.workers.pop(worker.peer, None)
+      if worker is not self._root_worker:
+        self._orphan(worker.peer)
     self._retire(worker)
     if worker is self._root_worker and self._root_exit is not None and not self._root_exit.done():
       self._root_exit.set_result(report.exit_code if report.exit_code is not None else 1)
@@ -347,6 +350,10 @@ class Dispatcher:
       self._deliver_record(record, message)
       return
     if message.type == Tag.RESULT:
+      worker = self._worker_for(record.quest_id)
+      if not host_worker and worker is not None and worker.ending:
+        self._refuse(peer, message, 'the quest is ending; its reap owns the terminal')
+        return
       self._end(record, message)
       return
     self._refuse(peer, message, 'unsupported worker message')
@@ -360,7 +367,7 @@ class Dispatcher:
     self.live.pop(record.quest_id, None)
 
   def _deliver_record(self, record: Record, message: Message) -> None:
-    if record.requester is not None:
+    if record.requester is not None and record.requester in self.workers:
       self.deliver(record.requester, message)
 
   def _open(self, requester: Peer, *, talk: Talk) -> Record:
@@ -377,6 +384,16 @@ class Dispatcher:
   def _start_worker(self, worker: Worker) -> None:
     self._worker_objects.add(worker)
     worker.begin()
+
+  def _orphan(self, requester: Peer) -> None:
+    for record in [entry for entry in self.live.values() if entry.requester == requester]:
+      self._require_worker(record).end('orphaned')
+
+  def _require_worker(self, record: Record) -> Worker:
+    worker = self._worker_for(record.quest_id)
+    if worker is None:
+      raise RuntimeError(f'live quest {record.quest_id} has no worker')
+    return worker
 
   def _retire(self, worker: Worker) -> None:
     self._worker_objects.discard(worker)
@@ -612,6 +629,23 @@ class Dispatcher:
       raise RuntimeError('one journal event exceeds the events response frame')
     return brotocol.result(request_quest, 'ok', value={'head': head, 'events': selected})
 
+  def cancel(self, peer: Peer, message: Message) -> None:
+    args = message.args
+    error = _validate_cancel(args)
+    if error is not None:
+      self.reply(peer, {'outcome': 'denied', 'error': error})
+      return
+    quest_id = args['id']
+    record = self.live.get(quest_id)
+    if record is None or record.requester != peer:
+      self.reply(
+        peer,
+        {'outcome': 'denied', 'error': f'no live quest {quest_id!r} requested by this peer'},
+      )
+      return
+    self._require_worker(record).end('cancelled')
+    self.reply(peer, {'outcome': 'ok'})
+
   def _query_view(self, peer: Peer, quest_id: str) -> Optional[dict[str, Any]]:
     record = self.journal.records.get(quest_id)
     if record is not None:
@@ -638,6 +672,7 @@ class Broker:
     self._dispatcher.bind(Runtime(transport, spawner))
     self._dispatcher.on(QUERY, query_handler)
     self._dispatcher.on(EVENTS, events_handler)
+    self._dispatcher.on(CANCEL, cancel_handler)
 
   @property
   def journal(self) -> Journal:
@@ -702,6 +737,10 @@ def events_handler(context: Dispatcher, peer: Peer, message: Message) -> None:
   context.events(peer, message)
 
 
+def cancel_handler(context: Dispatcher, peer: Peer, message: Message) -> None:
+  context.cancel(peer, message)
+
+
 def spawn_test_handler(launch: LaunchSpec) -> RequestHandler:
   def handler(context: Dispatcher, peer: Peer, _message: Message) -> None:
     context.spawn(launch, peer, talk=EMPTY_TALK)
@@ -737,10 +776,10 @@ def _validate_query(args: dict[str, Any]) -> Optional[str]:
   if len(unknown) > 0:
     return f'unknown query field(s): {", ".join(unknown)}'
   quest_id = args.get('id')
-  if quest_id is not None and (not isinstance(quest_id, str) or len(quest_id) == 0):
-    return "query 'id' must be a non-empty string"
-  if isinstance(quest_id, str) and len(quest_id.encode('utf-8')) > MAX_IDENTIFIER_BYTES:
-    return "query 'id' exceeds the protocol identifier bound"
+  if quest_id is not None:
+    error = _identifier_error("query 'id'", quest_id)
+    if error is not None:
+      return error
   cursor = args.get('cursor')
   if cursor is not None and (not isinstance(cursor, str) or len(cursor) == 0):
     return "query 'cursor' must be a non-empty string"
@@ -758,6 +797,21 @@ def _validate_query(args: dict[str, Any]) -> Optional[str]:
     return "query 'since' requires 'id'"
   if cursor is not None and (quest_id is not None or wait is not None or since is not None):
     return "query 'cursor' does not combine with 'id', 'wait', or 'since'"
+  return None
+
+
+def _validate_cancel(args: dict[str, Any]) -> Optional[str]:
+  unknown = sorted(set(args) - {'id'})
+  if len(unknown) > 0:
+    return f'unknown cancel field(s): {", ".join(unknown)}'
+  return _identifier_error("cancel 'id'", args.get('id'))
+
+
+def _identifier_error(field: str, value: Any) -> Optional[str]:
+  if not isinstance(value, str) or len(value) == 0:
+    return f'{field} must be a non-empty string'
+  if len(value.encode('utf-8')) > MAX_IDENTIFIER_BYTES:
+    return f'{field} exceeds the protocol identifier bound'
   return None
 
 

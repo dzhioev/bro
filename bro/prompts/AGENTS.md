@@ -93,7 +93,7 @@ It renders when `bro.summon.party_member()` reads `RIDE_PARTY_MEMBER` from the l
 It renders only for a run whose effective allow-list (`bro.summon.effective_may_summon()`) is non-empty, and its body forks on the harness:
 the Claude harness holds the watch on a persistent `Monitor`, which the tool fold keeps reachable for exactly that command over any persona's block on the same fact (`bro/harness/claude.py:admit_summon_watch`), while the bro harness renders nothing
 — a native run is never idle, so no notification could reach it.
-The same text tells the summoner how to answer a child's pending question and continue its retained quest.
+The same text tells the summoner how to answer a child's pending question, continue its retained quest, and end a child it no longer needs.
 
 ### Summoned contract
 

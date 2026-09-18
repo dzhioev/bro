@@ -1695,3 +1695,105 @@ Path('/workspace/.quest-chat-report').write_text(status.answer)
   assert code == 0
   assert report.read_text() == 'approved|run the focused tests'
   assert env.live_containers() == []
+
+
+# --- K: cancelling a live child ------------------------------------------------
+
+_CANCEL_CHILD = """
+import time
+from bro.run_lifecycle import RunLifecycle
+from bro.summon import say
+
+channel = RunLifecycle.from_env()
+assert channel is not None
+channel.trail('e2e-cancel-trail')
+say('running')
+time.sleep(600)
+"""
+
+
+def test_cancel_kills_a_live_child_and_ends_its_quest_on_reap(
+  isolated_env: IsolatedEnv, monkeypatch
+) -> None:
+  import ride.spawn as ride_spawn
+  from ride.runtime_bundle import RuntimeBundle
+  from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
+  from ride.workspace.metadata import Isolation
+  from ride.workspace.model import Workspace
+  from ride.workspace.store import ScopedSecrets
+
+  env = isolated_env
+  name = f'{_NAME_PREFIX}k-cancel-party'
+  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  runtime_bundle = RuntimeBundle(
+    env.runtime_root / 'runtime' / env.runtime_bundle_hash,
+    f'{sys.version_info.major}.{sys.version_info.minor}',
+  )
+  container_runtime = ContainerRuntimeResolver.fixed(
+    ContainerRuntime(env.image, env.runtime_bundle_hash), workspace.repository
+  )
+  original_started_party_launch = ride_spawn.started_party_launch
+
+  def started_party_launch(*arguments, **keywords):
+    launch = original_started_party_launch(*arguments, **keywords)
+    return replace(launch, command=_session_broxy_probe(_CANCEL_CHILD))
+
+  monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
+  monkeypatch.setenv('HOME', str(env.home))
+  report = workspace.tree / '.quest-cancel-report'
+  root_source = """
+import json
+from pathlib import Path
+from bro.broker.client import Client
+from bro.summon import cancel_summon, summon_detached, wait_summon
+
+request_id = summon_detached(
+  'bro', 'hang until cancelled', llm='echo', harness='bro', timeout=600
+)
+running = wait_summon(request_id, timeout=120)
+assert running.pending and running.chat_seq > 0, running
+ended = cancel_summon(request_id, timeout=120)
+client = Client.from_env()
+assert client is not None
+with client:
+  quest = client.call('query', {'id': request_id}, 30).payload['value']['quest']
+Path('/workspace/.quest-cancel-report').write_text(json.dumps({
+  'state': ended.state,
+  'outcome': ended.outcome,
+  'reason': ended.reason,
+  'trail_id': ended.trail_id,
+  'exit_code': quest['result']['detail']['exit_code'],
+}))
+"""
+  launch = DockerLaunchSpec(
+    workspace_docker.Launch(
+      name=name,
+      command=_session_broxy_probe(root_source),
+      env={'RIDE_BRO': 'bro-dev'},
+      secrets=(),
+      tty=False,
+      image=env.image,
+      runtime_bundle_hash=env.runtime_bundle_hash,
+      repo=env.project,
+    )
+  )
+
+  code = ride_spawn.run_root_via_broker(
+    launch,
+    workspace=workspace,
+    bro='bro-dev',
+    may_summon={'bro'},
+    permits={'party.start.boxed'},
+    summon_depth=2,
+    credential_scope=ScopedSecrets(set(), set()),
+    container_runtime=container_runtime,
+    runtime_bundle=runtime_bundle,
+  )
+
+  assert code == 0
+  outcome = json.loads(report.read_text())
+  assert outcome['state'] == 'ended'
+  assert (outcome['outcome'], outcome['reason']) == ('failed', 'cancelled')
+  assert outcome['trail_id'] == 'e2e-cancel-trail'
+  assert outcome['exit_code'] != 0
+  assert env.live_containers() == []

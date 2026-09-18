@@ -1,7 +1,7 @@
 """summon — request another bro through the session broker.
 
 The module owns the summon request shape and every peer-side surface: blocking,
-detached, manual, quest chat, query-backed check/list, and the journal event watch.
+detached, manual, quest chat, cancel, query-backed check/list, and the journal event watch.
 A detached or manual request returns its quest id only after the first correlated
 message is the host's ``accepted`` mark; an immediate result is interpreted as
 the refusal or launch failure it carries.
@@ -367,19 +367,26 @@ def _interpret_result(message: 'Message', trail_id: Optional[str]) -> str:
   return _interpret_payload(message.payload, trail_id)
 
 
-def _read_value(
+def _call_ok(
   client: 'Client', kind: str, args: dict[str, Any], *, timeout: float
 ) -> dict[str, Any]:
+  """Send one inline request and return its `ok` result payload."""
   try:
     result = client.call(kind, args, timeout)
   except TimeoutError:
-    raise _BrokerReadTimeout(f'no reply to broker {kind!r} read within {timeout:.0f}s') from None
+    raise _BrokerReadTimeout(f'no reply to broker {kind!r} request within {timeout:.0f}s') from None
   except ConnectionError as error:
-    raise SummonError(f'broker channel closed during {kind!r} read: {error}') from None
+    raise SummonError(f'broker channel closed during {kind!r} request: {error}') from None
   payload = result.payload
   if payload.get('outcome') != 'ok':
     raise SummonError(str(payload.get('error', payload)))
-  value = payload.get('value')
+  return payload
+
+
+def _read_value(
+  client: 'Client', kind: str, args: dict[str, Any], *, timeout: float
+) -> dict[str, Any]:
+  value = _call_ok(client, kind, args, timeout=timeout).get('value')
   if not isinstance(value, dict):
     raise SummonError(f'broker {kind!r} read returned a malformed value: {value!r}')
   return value
@@ -412,6 +419,48 @@ def _query_quest(
   if not isinstance(quest, dict):
     raise SummonError(f'query for {request_id!r} returned no quest record')
   return quest
+
+
+def _poll_quest(
+  connection: 'Client',
+  request_id: str,
+  quest: dict[str, Any],
+  *,
+  deadline: Optional[float],
+  done: Callable[[dict[str, Any]], bool],
+  on_chat: bool,
+) -> dict[str, Any]:
+  """Re-read `quest` through bounded waits until `done` holds or `deadline` passes.
+
+  With `on_chat`, a wait also ends when the quest's chat advances.
+  Returns the last record read, so a caller past the deadline sees the state it stopped at."""
+  while not done(quest):
+    remaining = None if deadline is None else deadline - time.monotonic()
+    if remaining is not None and remaining <= 0:
+      break
+    poll_seconds = READ_WAIT_SECONDS if remaining is None else min(READ_WAIT_SECONDS, remaining)
+    try:
+      quest = _query_quest(
+        connection,
+        request_id,
+        wait_seconds=poll_seconds,
+        since=quest.get('chat_seq', 0) if on_chat else None,
+        read_timeout=remaining,
+      )
+    except _BrokerReadTimeout:
+      if deadline is None or time.monotonic() < deadline:
+        raise
+      break
+  return quest
+
+
+def _quest_ended(quest: dict[str, Any]) -> bool:
+  state = quest.get('state')
+  if state in ('accepted', 'started'):
+    return False
+  if state in ('ended', 'denied', 'evicted'):
+    return True
+  raise SummonError(f'summon quest {quest.get("id")!r} has unknown state {state!r}')
 
 
 def _summon_answer(quest: dict[str, Any]) -> Optional[str]:
@@ -791,44 +840,77 @@ def wait_summon(
   *,
   timeout: Optional[float] = None,
   client: Optional['Client'] = None,
-  wait_seconds: Optional[float] = None,
 ) -> SummonStatus:
   """Long-poll a summon quest until terminal or its chat next changes."""
   if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
     raise SummonError('timeout must be a finite positive number')
-  interval = wait_seconds if wait_seconds is not None else READ_WAIT_SECONDS
-  if interval <= 0:
-    raise SummonError('query wait must be positive')
   resolved = _resolve_request_id(request_id)
   deadline = None if timeout is None else time.monotonic() + timeout
   with _connection(client) as connection:
     initial_timeout = None if deadline is None else deadline - time.monotonic()
     quest = _query_quest(connection, resolved, read_timeout=initial_timeout)
     caller = _caller_end(quest, resolved)
-    status = _summon_status(quest, caller=caller)
-    if not status.pending or status.question is not None:
-      return status
-    cursor = status.chat_seq
-    while True:
-      remaining = None if deadline is None else deadline - time.monotonic()
-      if remaining is not None and remaining <= 0:
-        return status
-      poll_seconds = interval if remaining is None else min(interval, remaining)
-      try:
-        quest = _query_quest(
-          connection,
-          resolved,
-          wait_seconds=poll_seconds,
-          since=cursor,
-          read_timeout=remaining,
-        )
-      except _BrokerReadTimeout:
-        if deadline is None or time.monotonic() < deadline:
-          raise
-        return status
-      status = _summon_status(quest, caller=caller)
-      if not status.pending or status.chat_seq > cursor:
-        return status
+    cursor = _summon_status(quest, caller=caller).chat_seq
+
+    def done(current: dict[str, Any]) -> bool:
+      status = _summon_status(current, caller=caller)
+      return not status.pending or status.question is not None or status.chat_seq > cursor
+
+    quest = _poll_quest(connection, resolved, quest, deadline=deadline, done=done, on_chat=True)
+    return _summon_status(quest, caller=caller)
+
+
+@dataclass(frozen=True)
+class CancelStatus:
+  state: str
+  request_id: str
+  outcome: Optional[str] = None
+  reason: Optional[str] = None
+  trail_id: Optional[str] = None
+
+
+def cancel_summon(
+  request_id: str,
+  *,
+  timeout: Optional[float] = None,
+  client: Optional['Client'] = None,
+) -> CancelStatus:
+  """End a child quest this session requested and wait for it to end."""
+  from bro.broker.dispatcher import CANCEL
+
+  if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
+    raise SummonError('timeout must be a finite positive number')
+  deadline = None if timeout is None else time.monotonic() + timeout
+  with _connection(client) as connection:
+    _call_ok(connection, CANCEL, {'id': request_id}, timeout=ACCEPT_TIMEOUT)
+    initial_timeout = None if deadline is None else deadline - time.monotonic()
+    quest = _query_quest(connection, request_id, read_timeout=initial_timeout)
+    quest = _poll_quest(
+      connection, request_id, quest, deadline=deadline, done=_quest_ended, on_chat=False
+    )
+  trail_id = quest.get('trail_id')
+  trail_id = trail_id if isinstance(trail_id, str) else None
+  if not _quest_ended(quest):
+    return CancelStatus('pending', request_id, trail_id=trail_id)
+  if quest.get('state') == 'evicted':
+    raise SummonError(
+      f'summon quest {request_id!r} ended but its outcome is no longer retained; '
+      f'{_trails_hint(trail_id)}'
+    )
+  outcome = quest.get('outcome')
+  reason = quest.get('reason')
+  if not isinstance(outcome, str) or (reason is not None and not isinstance(reason, str)):
+    raise SummonError(f'summon quest {request_id!r} ended with a malformed outcome: {outcome!r}')
+  return CancelStatus('ended', request_id, outcome=outcome, reason=reason, trail_id=trail_id)
+
+
+def cancel_view(status: CancelStatus) -> dict[str, Any]:
+  view: dict[str, Any] = {'state': status.state, 'request_id': status.request_id}
+  for name in ('outcome', 'reason', 'trail_id'):
+    value = getattr(status, name)
+    if value is not None:
+      view[name] = value
+  return view
 
 
 @dataclass(frozen=True)
@@ -932,27 +1014,20 @@ def say(
       if deadline is None or time.monotonic() < deadline:
         raise
       return SayStatus('question', resolved, question_id=question_id)
-    while True:
-      answer = _reply_from_tail(current, question_id)
-      if answer is not None:
-        return SayStatus('completed', resolved, question_id=question_id, answer=answer)
-      _require_live_summon(current)
-      remaining = None if deadline is None else deadline - time.monotonic()
-      if remaining is not None and remaining <= 0:
-        return SayStatus('question', resolved, question_id=question_id)
-      poll_seconds = READ_WAIT_SECONDS if remaining is None else min(READ_WAIT_SECONDS, remaining)
-      try:
-        current = _query_quest(
-          connection,
-          resolved,
-          wait_seconds=poll_seconds,
-          since=current.get('chat_seq', 0),
-          read_timeout=remaining,
-        )
-      except _BrokerReadTimeout:
-        if deadline is None or time.monotonic() < deadline:
-          raise
-        return SayStatus('question', resolved, question_id=question_id)
+
+    def replied(quest: dict[str, Any]) -> bool:
+      if _reply_from_tail(quest, question_id) is not None:
+        return True
+      _require_live_summon(quest)
+      return False
+
+    current = _poll_quest(
+      connection, resolved, current, deadline=deadline, done=replied, on_chat=True
+    )
+    answer = _reply_from_tail(current, question_id)
+    if answer is None:
+      return SayStatus('question', resolved, question_id=question_id)
+    return SayStatus('completed', resolved, question_id=question_id, answer=answer)
 
 
 def list_summons() -> dict[str, Any]:
@@ -1261,6 +1336,21 @@ def _say(
   return 0
 
 
+def _cancel(request_id: str, timeout: Optional[float]) -> int:
+  try:
+    status = cancel_summon(request_id, timeout=timeout)
+  except SummonError as error:
+    log.error('%s', error)
+    return 1
+  if status.state == 'pending':
+    assert timeout is not None
+    log.info('summon cancel accepted; request %s has not ended within %.0fs', request_id, timeout)
+    return PENDING_EXIT_CODE
+  outcome = status.outcome if status.reason is None else f'{status.outcome}:{status.reason}'
+  log.info('summon ended %s (request %s)', outcome, request_id)
+  return 0
+
+
 def _check(request_id: Optional[str], wait: bool, timeout: Optional[float]) -> int:
   if timeout is not None and not wait:
     log.error('--timeout only bounds a wait; a plain check never blocks')
@@ -1317,6 +1407,21 @@ def main(argv: list[str]) -> Optional[int]:
       'Runs until killed; what is already in flight when it starts is the baseline',
     )
     return _watch(**parser.parse(argv[1:]))
+  if len(argv) > 1 and argv[1] == 'cancel':
+    parser = base_args.Parser(
+      prog='summon cancel',
+      description='end a child quest this session summoned: the quest ends failed:cancelled and '
+      'whatever the child summoned in turn ends failed:orphaned; a spawned child is killed, '
+      "a manual child only detached from the quest while the user's session lives on; "
+      f'exits 0 once the quest has ended and {PENDING_EXIT_CODE} when --timeout passes first',
+    )
+    parser.add_argument('request_id', help='child quest id')
+    parser.add_argument(
+      '--timeout',
+      type=float,
+      help='maximum seconds to wait for the quest to end; omitted waits until it has',
+    )
+    return _cancel(**parser.parse(argv[1:]))
   if len(argv) > 1 and argv[1] == 'check':
     parser = base_args.Parser(
       prog='summon check',

@@ -43,10 +43,14 @@ An accepted attach answers `ok <PROTOCOL_REVISION>`, and both client adapters re
   its pre-acceptance preparation runs off-loop before the ready mark.
   The shared Worker base owns wait-task teardown and the two-phase deadline:
   the fixed launch bound is replaced by the request timeout at `started`.
+  `Worker.end(reason)` is the host-initiated end:
+  it kills the worker's process, or for an expected Worker ends its channel, and the death the worker then reports carries `reason`;
+  the deadline is `end('timeout')`.
+  An end accepted before the worker started reports its death only once the launch or off-loop preparation it interrupted has settled, whether that returned a handle to reap or failed, and the accepted reason is what the death carries.
 - `journal.py` owns one mutable record per worker-backed quest, the ordered event ring, and permanent lineage.
   Every projection subscribes to its one append funnel;
   a raising subscriber is logged without breaking later subscribers.
-- `dispatcher.py` routes over journal records, binds one Worker per worker-backed quest, synthesizes failure from Worker death, and serves the reserved `query` / `events` read kinds.
+- `dispatcher.py` routes over journal records, binds one Worker per worker-backed quest, synthesizes failure from Worker death, and serves the reserved `query` / `events` read kinds and the `cancel` kind.
   Its handler vocabulary is `reply`, `deny`, `spawn`, `job`, and `expect`.
   Delivery fits an oversized generated result into a correlated failure or denial with a truncation marker.
 - `client.py` is the synchronous peer handle for requests, lifecycle answers, chat messages, listeners, and both request- and reply-correlated waits.
@@ -109,9 +113,19 @@ A process-sent `listening` is also set once, with repeats accepted silently.
 A Worker-generated `started` mark folds into the journal before forwarding.
 A delivered or synthesized result folds `ended` and removes the record from the live index;
 the worker index remains until Worker death so a live session can keep requesting work after answering its parent quest.
+A record's marks and result are delivered only while its requester is still in that index.
+
+A Worker's death orphans every live quest its peer requested:
+each of those Workers is ended with reason `orphaned`, and the death it then reports ends its record `failed{orphaned}` and orphans the quests it requested in turn, so the cascade follows the tree.
+`cancel {id}` ends one live quest for the peer that requested it:
+the Worker is ended with reason `cancelled` and the request is answered `ok` inline, while the quest's `failed{cancelled}` result follows the reap;
+any other id is denied.
+While a Worker's end is accepted, a result its process sends is refused, so the reap owns the quest's single terminal.
+Like the read kinds, `cancel` is answered inline and never recorded.
 
 The host root is a normal `SpawnedWorker` on a host-anchored journal record.
-Root exit closes every live record as `killed`, or `detached` for expected workers, before Worker teardown.
+Root exit is not a cascade:
+it closes every live record as `killed`, or `detached` for expected workers, before Worker teardown.
 A caller that owns its process opts in with `run(root, end_on_sigterm=True)`:
 the run then holds SIGTERM until its teardown is over, the signal ending it the same way rather than killing the process, with the root exit reporting `TERMINATED_EXIT_CODE` before the teardown reaches every worker the run started;
 the default disposition is what it leaves behind.
@@ -127,8 +141,8 @@ Unknown kinds and lineage collisions are dispatcher wire denials and remain unjo
 - `brotocol_test.py` covers envelope validation, builders, chat roles, talk encoding and enforcement, and the frame cap.
 - `transports/tcp_test.py` covers attach authenticity and revision checks, supersession, framing, delivery, disconnect, and shutdown over real sockets.
 - `runtime_test.py` covers the shape-free transport and launch seam.
-- `worker_test.py` covers each supervision shape, start timing, timeout kill, collection, and death reports.
+- `worker_test.py` covers each supervision shape, start timing, the host-initiated end and its timeout case, collection, and death reports.
 - `journal_test.py` covers folding, subscribers, retention, lineage, bounds, event gaps, and ancestry scope.
-- `dispatcher_test.py` covers routing, origin checks, journaled denial, Worker synthesis, and the read kinds.
+- `dispatcher_test.py` covers routing, origin checks, journaled denial, Worker synthesis, the requester-death cascade, the cancel kind, and the read kinds.
 - `job_test.py` and `spawn_test.py` cover the process and launch ports.
 - `client_test.py`, `cli_test.py`, and `broxy_test.py` cover the peer-facing and stateless proxy surfaces.
