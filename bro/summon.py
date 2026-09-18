@@ -176,6 +176,17 @@ def may_summon() -> Optional[tuple[str, ...]]:
   return tuple(name for name in raw.split(',') if len(name) > 0)
 
 
+def talk() -> Optional[tuple[str, ...]]:
+  """the chat rights fixed for this run's own quest — empty when it is mute,
+  and None when its launcher published no talk."""
+  from bro.broker.brotocol import TALK_ENV, decode_talk
+
+  raw = os.environ.get(TALK_ENV)
+  if raw is None:
+    return None
+  return tuple(sorted(decode_talk(raw)))
+
+
 def permits() -> Optional[tuple[str, ...]]:
   """The party permits fixed by this run's launcher."""
   raw = os.environ.get(PERMITS_ENV)

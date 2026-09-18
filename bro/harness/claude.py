@@ -10,6 +10,8 @@ persona forgoes: `FILES` reaches the workspace, `SHELL` runs commands in it, and
 `DELEGATION` starts work in another agent.
 """
 
+from typing import Optional
+
 from bro.base.condition import When, when
 from bro.mcp import (
   ToolLayer,
@@ -31,8 +33,6 @@ SHELL = ('Bash', 'BashOutput', 'KillShell', 'Monitor', *_TASK_CONTROL)
 # spawner has shipped under both `Task` and `Agent`; naming both costs nothing
 # and a denylist that misses the live name grants the capability back
 DELEGATION = ('Task', 'Agent', 'Workflow')
-# the stream of the session's own summon transitions — the one command a
-# session that may summon is told to keep `Monitor` on (bro/prompts/summoner.md)
 SUMMON_WATCH = 'summon watch'
 
 
@@ -60,8 +60,15 @@ def watch(*commands: str) -> When[ToolLayer]:
   return when(harness == HARNESS, _allow_commands('Monitor', *commands) | _serve(*_TASK_CONTROL))
 
 
-def admit_summon_watch(blocked: dict[str, None], narrowed: dict[str, list[str]]) -> None:
-  """keep `SUMMON_WATCH` reachable through `Monitor` over whatever a persona withheld.
+def admit_summon_watch(
+  blocked: dict[str, None],
+  narrowed: dict[str, list[str]],
+  *,
+  may_summon: tuple[str, ...],
+  summoned: bool,
+  talk: Optional[tuple[str, ...]],
+) -> None:
+  """keep `SUMMON_WATCH` reachable where this session receives summon events.
 
   A block of `Monitor` hands it back narrowed to that one command, a narrowing
   of `Monitor` gains it, and the task control over what the watch starts comes
@@ -69,6 +76,11 @@ def admit_summon_watch(blocked: dict[str, None], narrowed: dict[str, list[str]])
   the persona's own layers, so a persona that never withheld `Monitor` is left
   as it is.
   """
+  summoner_can_speak = talk is not None and any(
+    right in talk for right in ('requester.say', 'requester.question')
+  )
+  if len(may_summon) == 0 and not (summoned and summoner_can_speak):
+    return
   if 'Monitor' in blocked:
     del blocked['Monitor']
     narrowed['Monitor'] = []

@@ -48,6 +48,7 @@ def session_fragment(
   harness: Optional['Harness'] = None,
   wire: Optional['Wire'] = None,
   creds: Optional['Iterable[str]'] = None,
+  talk: Optional['Iterable[str]'] = None,
 ) -> str:
   """the per-session prompt text a launch surface appends after the composed
   prompt: the summoner's watch when this run may summon, the summoned-delivery
@@ -64,7 +65,7 @@ def session_fragment(
   if summon.summoned():
     contracts.append('summoned.md')
   parts = [
-    mcp.render_text(get_prompt(name), harness=harness, wire=wire, creds=creds).strip()
+    mcp.render_text(get_prompt(name), harness=harness, wire=wire, creds=creds, talk=talk).strip()
     for name in contracts
   ]
   parts.append(hold_fragment(hold, harness=harness, wire=wire, creds=creds))

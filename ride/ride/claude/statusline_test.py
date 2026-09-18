@@ -8,7 +8,7 @@ import time
 from datetime import UTC, datetime
 
 from bro.broker import brotocol
-from bro.broker.client import Client
+from bro.broker.client import QUEST_ENV, Client
 from bro.monitor import health
 from ride.claude import statusline
 
@@ -27,14 +27,17 @@ def _quest(
   at: float | None = None,
   outcome: str | None = None,
   reason: str | None = None,
+  pending: list[dict] | None = None,
+  parent: str = 'ROOT',
 ) -> dict:
   at = time.time() if at is None else at
   quest = {
     'id': request_id,
     'kind': 'summon',
-    'parent': 'ROOT',
+    'parent': parent,
     'args': {'target': target, 'prompt': 'work', **({'manual': True} if manual else {})},
     'state': state,
+    'pending': list(pending or []),
   }
   if state in ('accepted', 'started'):
     quest['accepted_at'] = _iso(at)
@@ -54,6 +57,7 @@ def _quest(
 def _render(monkeypatch, tmp_path, *, recording=None, quests=None, detached=False) -> str:
   monkeypatch.delenv('RIDE_WORKSPACE', raising=False)
   monkeypatch.delenv('RIDE_REPO', raising=False)
+  monkeypatch.setenv(QUEST_ENV, 'ROOT')
   if detached:
     monkeypatch.setenv('RIDE_WORKSPACE', 'ws')
   monkeypatch.setattr(health, 'health_path', lambda: tmp_path / 'health.json')
@@ -92,6 +96,27 @@ class TestRenderedStatusline:
   def test_launched_manual_summon_shows_like_any_active_one(self, monkeypatch, tmp_path):
     quest = _quest('TOK-1', 'started', manual=True, trail_id='T1', at=time.time() - 5)
     assert '⚡ summoning reviewer 5s (trail T1)' in _render(monkeypatch, tmp_path, quests=[quest])
+
+  def test_a_child_question_awaiting_the_session_shows_beside_the_live_summon(
+    self, monkeypatch, tmp_path
+  ):
+    question = {'from': 'worker', 'id': 'Q1', 'head': {'text': 'approve?'}}
+    quest = _quest('R1', 'started', pending=[question])
+    output = _render(monkeypatch, tmp_path, quests=[quest])
+    assert '⚡ summoning reviewer' in output
+    assert '❓ reviewer is awaiting your reply' in output
+
+  def test_the_sessions_own_question_does_not_read_as_awaiting_it(self, monkeypatch, tmp_path):
+    question = {'from': 'requester', 'id': 'Q1', 'head': {'text': 'status?'}}
+    quest = _quest('R1', 'started', pending=[question])
+    assert 'awaiting your reply' not in _render(monkeypatch, tmp_path, quests=[quest])
+
+  def test_a_descendants_question_does_not_read_as_awaiting_this_session(
+    self, monkeypatch, tmp_path
+  ):
+    question = {'from': 'worker', 'id': 'Q1', 'head': {'text': 'approve?'}}
+    quest = _quest('R1', 'started', pending=[question], parent='CHILD')
+    assert 'awaiting your reply' not in _render(monkeypatch, tmp_path, quests=[quest])
 
   def test_recent_terminal_outcome_shows(self, monkeypatch, tmp_path):
     quest = _quest('R1', 'ended', outcome='ok', at=time.time() - 30)

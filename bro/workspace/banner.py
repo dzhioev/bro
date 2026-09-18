@@ -50,6 +50,7 @@ class SessionFacts:
     - may_summon — the bros the session may summon, as its launch fixed them;
       empty when it may summon none, None when it was launched by a surface that
       publishes no list
+    - talk — the fixed chat rights of this run's own quest, under the same publication rule
     - permits — the party actions the session may request, under the same publication rule
     - party_member — the member name when this session joined an existing party
     - summoned — whether another session summoned this one and waits on its result
@@ -71,6 +72,7 @@ class SessionFacts:
   repo: Optional[str] = None
   permits: Optional[tuple[str, ...]] = None
   party_member: Optional[str] = None
+  talk: Optional[tuple[str, ...]] = None
 
   @classmethod
   def collect(
@@ -116,6 +118,7 @@ class SessionFacts:
       recording_problem=health.problem(),
       may_summon=summon.may_summon(),
       permits=summon.permits(),
+      talk=summon.talk(),
       party_member=summon.party_member(),
       summoned=summon.summoned(),
       trail_id=trail_id,
@@ -196,6 +199,10 @@ class SessionFacts:
       targets = _render_summon_targets(self.may_summon) if len(self.may_summon) > 0 else '(none)'
       rows.append(('may summon:', '', f'{dim}{targets}{reset}'))
 
+    if self.talk is not None:
+      rights = ', '.join(self.talk) or '(none)'
+      rows.append(('talk:', '', f'{dim}{rights}{reset}'))
+
     if self.permits is not None:
       permits = ', '.join(f':{permit}' for permit in self.permits) or '(none)'
       rows.append(('permits:', '', f'{dim}{permits}{reset}'))
@@ -249,6 +256,8 @@ class SessionFacts:
       # answer from a launch surface that publishes no list at all
       targets = _render_summon_targets(self.may_summon) if len(self.may_summon) > 0 else 'none'
       lines.append(f'may_summon: {targets}')
+    if self.talk is not None:
+      lines.append(f'talk: {", ".join(self.talk) or "none"}')
     if self.permits is not None:
       permits = ', '.join(f':{permit}' for permit in self.permits) or 'none'
       lines.append(f'permits: {permits}')

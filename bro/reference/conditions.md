@@ -102,7 +102,7 @@ The facts triple a conditioning surface knows, exported by `bro/mcp.py` as ready
 - `creds` — the set of secrets the environment resolves.
   The supplied universe is closed (the registry's known names) and membership probes `bro.base.credentials.available` lazily
 
-Two more facts sit outside the triple.
+Three more facts sit outside the triple.
 
 `may_summon` — the session's effective summon allow-list, as its launch fixed it
 (`bro.summon.effective_may_summon()` off `RIDE_MAY_SUMMON`, an unpublished list collapsed to empty).
@@ -118,13 +118,19 @@ Only the fact widens
 The universe is the installed persona names plus the list itself, so a typo'd target fails every render while a granted-but-uninstalled one still tests.
 No ready-made placeholder is exported.
 
+`talk` — the fixed rights of this run's own quest, read from `BROKER_TALK` as a set over `requester.say`, `requester.question`, `worker.say`, and `worker.question`.
+`bro.prompts.session_fragment` receives it from each launch surface, so the summoned contract can state only moves the host permits.
+An unpublished fact stays undefined and a `#talk` directive then raises;
+an empty published set is the root or another mute quest and tests every right false.
+No ready-made placeholder is exported.
+
 `hold` — the session's user-involvement level (`unattended | detached | attended | guided`, the domain is `bro.mcp.HOLDS`).
 It is supplied only when rendering the hold text (`bro.prompts.hold_fragment` → `render_text(hold=…)`), never by the general conditioning surfaces, so hold-neutral text
 — spells, procedure docs
 — fails fast on a stray `#hold` directive.
 No ready-made placeholder is exported.
 
-`bro.mcp.select(entries, harness=…, wire=…, creds=…, may_summon=…)` owns the facts-to-variables mapping for declarative lists (`bro.mcp.render_text` is its sibling for text — see `bro/reference/template.md`).
+`bro.mcp.select(entries, harness=…, wire=…, creds=…, may_summon=…, talk=…)` owns the facts-to-variables mapping for declarative lists (`bro.mcp.render_text` is its sibling for text — see `bro/reference/template.md`).
 Both accept `extra` — a caller-owned vocabulary merged next to the facts (bro features, below).
 A fact the surface doesn't know defines no variable, so a condition referencing it raises.
 Select in the process that consumes the result, where the credential store is the session's own.

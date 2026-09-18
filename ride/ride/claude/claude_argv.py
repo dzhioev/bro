@@ -16,7 +16,7 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from bro import prompts
+from bro import prompts, summon
 from bro.base import credentials
 from ride.claude.assembly import bro_servers, persona_servers
 from ride.claude.harness import llm_spec, options
@@ -138,7 +138,11 @@ def build_claude_launch(
     # leak their directives — with the --raw surface's facts: bro harness over
     # mcp wire
     fragment = prompts.session_fragment(
-      spec.hold, harness='bro', wire='mcp', creds=credentials.known_names()
+      spec.hold,
+      harness='bro',
+      wire='mcp',
+      creds=credentials.known_names(),
+      talk=summon.talk(),
     )
     system_prompt = f'{bro.claude_system_prompt}\n\n{fragment}'
     argv += [

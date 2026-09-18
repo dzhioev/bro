@@ -1,4 +1,6 @@
 import ride.claude.system_prompt as ride_system_prompt
+from bro.broker.brotocol import TALK_ENV
+from bro.summon import SUMMONED_ENV
 
 
 class TestSessionAppendPrompt:
@@ -43,6 +45,13 @@ class TestSessionAppendPrompt:
     assert '[[…]]' in out
     assert '`bro::cast`' in out
     assert '`/<name>`' not in out
+
+  def test_summoned_contract_receives_the_quest_talk(self, monkeypatch):
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    monkeypatch.setenv(TALK_ENV, 'requester.say,worker.say')
+    out = ride_system_prompt.session_append_prompt('unattended', 'bro')
+    assert 'exactly `summon watch`' in out
+    assert 'messages from the summoner then reach you' in out
 
 
 class TestSurfaceRendering:
