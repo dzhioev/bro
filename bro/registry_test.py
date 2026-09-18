@@ -5,6 +5,7 @@ from typing import ClassVar, Optional
 import pytest
 
 import bro.registry
+from bro.inbox import Inbox
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.mcp import MCPServer
 from bro.native.llm import LLM
@@ -14,7 +15,7 @@ from bros.bro import Bro
 
 class MockLLM(LLM):
   def __init__(self, mcp_servers: Optional[list[MCPServer]] = None):
-    super().__init__(mcp_servers)
+    super().__init__(Inbox(), mcp_servers)
 
   async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
     return ''

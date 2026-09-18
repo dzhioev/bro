@@ -28,6 +28,8 @@ from bro.base.scope import permit_choices
 from bro.datasources.base import DataSource
 from bro.datasources.man import ManPage, manual
 from bro.harness import claude
+from bro.inbox import Inbox
+from bro.jobs import Registry
 from bro.llm.llm import EFFORT_LEVELS, NativeLLMSpec
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
@@ -118,6 +120,12 @@ class LiveRun(Protocol):
 
   @property
   def current_tool_step_id(self) -> Optional[ToolStepSource]: ...
+
+  @property
+  def inbox(self) -> Inbox: ...
+
+  @property
+  def registry(self) -> Registry: ...
 
 
 RAISE_EXIT_STATUS = 1

@@ -21,6 +21,12 @@ class InterimAssistantTextEvent:
 
 
 @dataclass(frozen=True)
+class NotificationEvent:
+  content: str
+  job_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ToolCallEvent:
   call_id: str
   tool_name: str
@@ -62,6 +68,7 @@ type ObservedEvent = (
   TurnStartedEvent
   | ReasoningEvent
   | InterimAssistantTextEvent
+  | NotificationEvent
   | ToolCallEvent
   | ToolResultEvent
   | TurnCompletedEvent

@@ -17,7 +17,9 @@ The following modules ship from `bro-native`:
   It creates the bro under the resolved native recipe, runs it under the ask display preset, and records with surface `ask`.
 - `call.py` — parser and UI for `bro chat <bro> [what]`.
   An omitted message opens an empty REPL.
-  The Textual UI is used when both terminal streams and its dependencies are available, the stream UI otherwise.
+  The stream UI owns stdin through one daemon reader and races its line queue against the run inbox without abandoning a read.
+  The Textual UI awaits the same inbox in a worker;
+  either calls `Runner.wake()` when background news arrives while idle.
   `--fork [TRAIL_ID] [--at STEP_ID]` forks recorded history under the bro class's current recipe;
   omitting the id selects the bro's newest recorded call.
   The suppressed `--continue-trail` / `--continue-llm` pair is the managed bro harness's exact-recipe continuation contract.
