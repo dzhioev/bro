@@ -71,6 +71,7 @@ _ARGS_KEYS = frozenset(
     'manual',
     'party',
     'isolation',
+    'talk',
   }
 )
 # fields a manual summon refuses: the user's launch owns the session's shape, and
@@ -203,6 +204,16 @@ def _validate(args: dict[str, Any]) -> Optional[str]:
   isolation = args.get('isolation')
   if isolation is not None and isolation not in {value.value for value in Isolation}:
     return "summon 'isolation' must be 'boxed' or 'unboxed'"
+  if 'talk' in args:
+    from bro.broker.brotocol import TALK_RIGHTS
+
+    talk = args['talk']
+    if (
+      not isinstance(talk, list)
+      or not all(isinstance(right, str) and right in TALK_RIGHTS for right in talk)
+      or len(talk) != len(set(talk))
+    ):
+      return "summon 'talk' must be a list of distinct talk rights"
   if party == 'join':
     refused = [key for key in ('isolation', 'into', 'manual') if key in args]
     if len(refused) > 0:
@@ -377,6 +388,7 @@ class SummonControl:
     if requester.depth + 1 > self._depth_cap:
       self._deny(context, peer, f'summon depth cap ({self._depth_cap}) reached')
       return
+    talk = cast('Talk', DEFAULT_SUMMON_TALK | frozenset(args.get('talk', ())))
     target = args['target']
     if target not in requester.allow_list:
       from bro.registry import known_names
@@ -499,6 +511,7 @@ class SummonControl:
         child_permits=child_permits,
         grant=list(grant),
         revoke=list(revoke),
+        talk=talk,
       )
       return
     timeout = args.get('timeout')
@@ -526,7 +539,7 @@ class SummonControl:
         env=dict(self._session_env),
       ),
       peer,
-      talk=DEFAULT_SUMMON_TALK,
+      talk=talk,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,
     )
 
@@ -542,6 +555,7 @@ class SummonControl:
     child_permits: set[str],
     grant: list[str],
     revoke: list[str],
+    talk: 'Talk',
   ) -> None:
     args = message.args
 
@@ -558,7 +572,7 @@ class SummonControl:
           parent_workspace=str(requester.identity.tree),
           may_summon=tuple(sorted(child_allow_list)),
           permits=tuple(sorted(child_permits)),
-          talk=tuple(sorted(DEFAULT_SUMMON_TALK)),
+          talk=tuple(sorted(talk)),
           grant=tuple(grant),
           revoke=tuple(revoke),
           summoner=summoned_by,
@@ -568,7 +582,7 @@ class SummonControl:
         ),
       )
 
-    context.expect(peer, talk=DEFAULT_SUMMON_TALK, timeout=None, ready=_ready)
+    context.expect(peer, talk=talk, timeout=None, ready=_ready)
 
   def _requester(self, context: 'Dispatcher', peer: 'Peer') -> _Requester:
     quest, fact = self._facts.resolve(context, peer)

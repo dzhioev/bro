@@ -46,7 +46,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   reflink-or-copy ingest into content-addressed objects, per-peer view directories behind the read-only `/var/ride/artifacts` mounts, the sharing rules with their uniform denial, the byte cap, and the JSONL audit beside the store.
   A broker job's run directory is staged in the store and collected through the same ingest, reaching the peer that requested the job and its summoners.
   The peer wire and CLI are the framework's `bro/artifact.py`.
-- `ride/summon_control.py` — summon host authorization, child authority resolution, and start/join placement, plus journal projections for audit, lifecycle logging, and manual-token cleanup;
+- `ride/summon_control.py` — summon host authorization, child authority and quest-talk resolution, and start/join placement, plus journal projections for audit, lifecycle logging, and manual-token cleanup;
   the manual variant registers as an expected external Worker with its pending record.
   The peer wire and self-contained CLI are the framework's `bro/summon.py`.
 - `ride/pending_summon.py` — pending manual summons:

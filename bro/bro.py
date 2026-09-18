@@ -273,7 +273,10 @@ _SUMMON_DESCRIPTION = (
   'OAuth token) fails the summon, whatever the target itself declares. the '
   'optional `share` list names artifact refs (from `artifact mint`) to hand the '
   'child read access to — only refs this session can itself read. '
-  'the optional `party` (`start` or `join`) and `isolation` (`boxed` or `unboxed`) fields '
+  'the optional `talk` list widens the child quest from worker.say with requester.say, '
+  'requester.question, worker.say, or worker.question. this call returns an accepted, '
+  'question, or completed state with the request id; answer a question with summon_say '
+  'and collect the eventual answer with summon_check. the optional `party` (`start` or `join`) and `isolation` (`boxed` or `unboxed`) fields '
   'place the child; an unmarked request starts boxed when permitted, otherwise unboxed. '
   'a join shares your tree and refuses `isolation`, `into`, and `manual`. '
   'fails with the reason when the run raises, errors out, or dies. `detach: true` '
@@ -292,13 +295,22 @@ _SUMMON_DESCRIPTION = (
 )
 
 
+_SUMMON_SAY_DESCRIPTION = (
+  "send chat text to a child summon by `request_id`, or to this session's summoner when "
+  'it is omitted. `reply_to` answers a pending question. `wait` asks a question and '
+  'bounds the wait for its reply in seconds; a timeout returns the question id for recovery '
+  'through summon_check. returns a structured accepted, question, or completed state.'
+  '{{when #wire = mcp}} CAUTION: keep `wait` below the MCP call cap; after a question '
+  'state, recover the eventual reply with summon_check.{{end}}'
+)
+
+
 _SUMMON_CHECK_DESCRIPTION = (
-  'check a detached or interrupted summon by quest id through the host journal. '
-  'without `wait`, returns `{state: pending, trail_id?}` while live or '
-  '`{state: completed, answer}` when terminal. reads are non-destructive and '
-  'repeatable from any process, including after another waiter saw the result. '
-  '`wait: true` long-polls until terminal or until `timeout` seconds pass, then '
-  'returns `{state: pending, trail_id?}` so the wait can be repeated. service polls '
+  "check a child summon by quest id, or this session's own quest when omitted, through "
+  'the host journal. returns a pending, question, or completed state with the quest talk, '
+  'pending questions, and chat tail. reads are non-destructive and repeatable from any '
+  'process, including after another waiter saw the result. `wait: true` long-polls until '
+  'terminal, the next chat message, or until `timeout` seconds passes. service polls '
   'stay short enough to react to a cancelled tool call. unknown ids, evicted results, '
   'and failed summons raise with their reason.'
   "{{when #wire = mcp}} CAUTION: size `timeout` below the harness's idle cap.{{end}}"
@@ -357,8 +369,9 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
     harness: Optional[str] = None,
     party: Optional[Literal['start', 'join']] = None,
     isolation: Optional[Literal['boxed', 'unboxed']] = None,
+    talk: Optional[list[str]] = None,
     manual: bool = False,
-  ) -> str:
+  ) -> dict[str, Any]:
     source = None if live_run is None else live_run.current_tool_step_id
     step_id = source['step_id'] if source is not None else None
     index = source['index'] if source is not None else None
@@ -388,16 +401,14 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
         into=into,
         grant=grant,
         revoke=revoke,
+        talk=talk,
         step_id=step_id,
         index=index,
       )
       command = summon_client.manual_launch_command(token, target)
-      return (
-        f'manual summon accepted; token {token}. relay the launch command to the '
-        f'user: `{command}` — then poll the token with summon_check'
-      )
+      return {'state': 'accepted', 'request_id': token, 'command': command}
     if detach:
-      return await off_loop(
+      request_id = await off_loop(
         summon_client.summon_detached,
         target,
         prompt,
@@ -411,11 +422,14 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
         harness=harness,
         party=party,
         isolation=isolation,
+        talk=talk,
         step_id=step_id,
         index=index,
       )
+      return {'state': 'accepted', 'request_id': request_id}
+    sent: list[str] = []
     with summon_client.open_client() as client:
-      return await off_loop(
+      outcome = await off_loop(
         summon_client.summon_and_wait,
         target,
         prompt,
@@ -429,14 +443,54 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
         harness=harness,
         party=party,
         isolation=isolation,
+        talk=talk,
         step_id=step_id,
         index=index,
+        on_sent=sent.append,
         client=client,
         silence_timeout=summon_client.READ_WAIT_SECONDS,
       )
+    [request_id] = sent
+    if isinstance(outcome, summon_client.SummonQuestion):
+      return {
+        'state': 'question',
+        'request_id': request_id,
+        'question': {'id': outcome.id, 'text': outcome.text},
+      }
+    return {'state': 'completed', 'request_id': request_id, 'answer': outcome}
 
   return llm_mcp.FunctionTool(
     _summon, name='summon', description=_SUMMON_DESCRIPTION, variables=variables
+  )
+
+
+def _summon_say_tool(variables: Variables) -> llm_mcp.Tool:
+  from bro import summon as summon_client
+
+  async def _summon_say(
+    text: str,
+    request_id: Optional[str] = None,
+    reply_to: Optional[str] = None,
+    wait: Optional[float] = None,
+  ) -> dict[str, Any]:
+    with summon_client.open_client() as client:
+      status = await off_loop(
+        summon_client.say,
+        text,
+        request_id,
+        reply_to=reply_to,
+        wait=wait,
+        client=client,
+      )
+    result: dict[str, Any] = {'state': status.state, 'request_id': status.request_id}
+    if status.question_id is not None:
+      result['id'] = status.question_id
+    if status.answer is not None:
+      result['answer'] = status.answer
+    return result
+
+  return llm_mcp.FunctionTool(
+    _summon_say, name='summon_say', description=_SUMMON_SAY_DESCRIPTION, variables=variables
   )
 
 
@@ -455,7 +509,7 @@ def _summon_check_tool(variables: Variables) -> llm_mcp.Tool:
   from bro import summon as summon_client
 
   async def _summon_check(
-    request_id: str,
+    request_id: Optional[str] = None,
     wait: bool = False,
     timeout: Optional[float] = None,
   ) -> dict[str, Any]:
@@ -473,12 +527,7 @@ def _summon_check_tool(variables: Variables) -> llm_mcp.Tool:
       if timeout is not None:
         raise ValueError('timeout only bounds a wait; a plain check never blocks')
       status = await off_loop(summon_client.check_summon, request_id)
-    if status.pending:
-      pending: dict[str, Any] = {'state': 'pending'}
-      if status.trail_id is not None:
-        pending['trail_id'] = status.trail_id
-      return pending
-    return {'state': 'completed', 'answer': status.answer}
+    return summon_client.status_view(status)
 
   return llm_mcp.FunctionTool(
     _summon_check, name='summon_check', description=_SUMMON_CHECK_DESCRIPTION, variables=variables
@@ -494,6 +543,7 @@ _SERVICE_TOOL_NAMES = (
   'raise',
   'answer',
   'summon',
+  'summon_say',
   'summon_check',
   'summon_list',
 )
@@ -540,7 +590,7 @@ def _build_service_server(
   if has_answer:
     mounted.append('answer')
   if has_broker:
-    mounted.extend(['summon', 'summon_check', 'summon_list'])
+    mounted.extend(['summon', 'summon_say', 'summon_check', 'summon_list'])
   variables: Variables = {
     **mcp.surface_variables(wire=wire),
     'tools': SetVariable(frozenset(mounted), universe=frozenset(_SERVICE_TOOL_NAMES)),
@@ -557,6 +607,7 @@ def _build_service_server(
     tools.append(_answer_tool(wire, variables))
   if has_broker:
     tools.append(_summon_tool(variables, live_run))
+    tools.append(_summon_say_tool(variables))
     tools.append(_summon_check_tool(variables))
     tools.append(_summon_list_tool(variables))
   assert [tool.name for tool in tools] == mounted

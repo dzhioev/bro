@@ -20,7 +20,8 @@ H — joining a boxed party (a member `docker exec`'d into the party's running
 container: the store `docker cp`'d in, the `env -i` snapshot, the pid handshake
 read back through the party mount, the member lifecycle routed to the first
 session, and the first session's exit tearing a live member down);
-I — the full boxed → join → unboxed → join → boxed chain through summon control.
+I — the full boxed → join → unboxed → join → boxed chain through summon control;
+J — a summoned child question, summoner steering and reply, and journal-backed collection.
 
 Isolation: every launch runs under a throwaway HOME, data home and project root,
 so no scenario touches the user's own claude or runtime state. The
@@ -1588,3 +1589,109 @@ time.sleep(2)
   assert report.read_text() == 'boxed-member>unboxed-owner>unboxed-member>boxed-final'
   assert env.live_containers() == []
   assert not party_directory.exists() or list(party_directory.iterdir()) == []
+
+
+# --- J: summon chat across a live child ---------------------------------------
+
+_QUEST_CHAT_CHILD = """
+from bro.run_lifecycle import RunLifecycle
+from bro.summon import check_summon, say
+
+channel = RunLifecycle.from_env()
+assert channel is not None
+channel.trail('quest-chat-child')
+reply = say('approve the change?', wait=120)
+assert reply.state == 'completed', reply
+status = check_summon()
+steering = [
+  entry['head']['text']
+  for entry in status.messages
+  if entry.get('from') == 'requester'
+  and entry.get('reply_to') is None
+  and entry.get('id') is None
+]
+assert steering == ['run the focused tests'], steering
+channel.completed(reply.answer + '|' + steering[0], 'ok')
+channel.close()
+"""
+
+
+def test_summon_chat_question_reply_and_steering_cross_the_live_broker(
+  isolated_env: IsolatedEnv, monkeypatch
+) -> None:
+  import ride.spawn as ride_spawn
+  from ride.runtime_bundle import RuntimeBundle
+  from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
+  from ride.workspace.metadata import Isolation
+  from ride.workspace.model import Workspace
+  from ride.workspace.store import ScopedSecrets
+
+  env = isolated_env
+  name = f'{_NAME_PREFIX}j-chat-party'
+  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  runtime_bundle = RuntimeBundle(
+    env.runtime_root / 'runtime' / env.runtime_bundle_hash,
+    f'{sys.version_info.major}.{sys.version_info.minor}',
+  )
+  container_runtime = ContainerRuntimeResolver.fixed(
+    ContainerRuntime(env.image, env.runtime_bundle_hash), workspace.repository
+  )
+  original_started_party_launch = ride_spawn.started_party_launch
+
+  def started_party_launch(*arguments, **keywords):
+    launch = original_started_party_launch(*arguments, **keywords)
+    return replace(launch, command=_session_broxy_probe(_QUEST_CHAT_CHILD))
+
+  monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
+  monkeypatch.setenv('HOME', str(env.home))
+  report = workspace.tree / '.quest-chat-report'
+  root_source = """
+from pathlib import Path
+from bro.summon import SummonQuestion, say, summon_and_wait, wait_summon
+
+request_ids = []
+question = summon_and_wait(
+  'bro',
+  'ask the summoner',
+  talk=['worker.question', 'requester.say'],
+  llm='echo',
+  harness='bro',
+  timeout=120,
+  on_sent=request_ids.append,
+)
+assert isinstance(question, SummonQuestion), question
+[request_id] = request_ids
+say('run the focused tests', request_id)
+say('approved', request_id, reply_to=question.id)
+status = wait_summon(request_id, timeout=120)
+assert not status.pending, status
+Path('/workspace/.quest-chat-report').write_text(status.answer)
+"""
+  launch = DockerLaunchSpec(
+    workspace_docker.Launch(
+      name=name,
+      command=_session_broxy_probe(root_source),
+      env={'RIDE_BRO': 'bro-dev'},
+      secrets=(),
+      tty=False,
+      image=env.image,
+      runtime_bundle_hash=env.runtime_bundle_hash,
+      repo=env.project,
+    )
+  )
+
+  code = ride_spawn.run_root_via_broker(
+    launch,
+    workspace=workspace,
+    bro='bro-dev',
+    may_summon={'bro'},
+    permits={'party.start.boxed'},
+    summon_depth=2,
+    credential_scope=ScopedSecrets(set(), set()),
+    container_runtime=container_runtime,
+    runtime_bundle=runtime_bundle,
+  )
+
+  assert code == 0
+  assert report.read_text() == 'approved|run the focused tests'
+  assert env.live_containers() == []

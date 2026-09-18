@@ -64,7 +64,7 @@ An accepted attach answers `ok <PROTOCOL_REVISION>`, and both client adapters re
 ## Journal
 
 A `Record` stores quest id, kind, parent quest, requester, worker, bounded args, folded lifecycle, trail id, retained result, and the quest's talk.
-It also stores `listening`, the bounded pending-question set, the bounded message/refusal tail, and `chat_seq`, the journal sequence of its latest message or refusal.
+It also stores `listening`, the bounded pending-question set, the bounded message/refusal tail with each entry's transition, and `chat_seq`, the journal sequence of its latest message or refusal.
 Worker-backed authorization calls `Journal.open`, which appends `accepted`;
 `Dispatcher.deny` creates a terminal denial record.
 Inline and read kinds answer without records.

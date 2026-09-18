@@ -44,6 +44,7 @@ async def running_server(monkeypatch):
   await asyncio.sleep(0)
   provisioned = await transport.provision()
   monkeypatch.setenv(CHANNEL_ENV, provisioned.host_endpoint.address(LOCAL_HOST))
+  monkeypatch.setenv(QUEST_ENV, 'ROOT')
   monkeypatch.setenv(summon.RUNTIME_ENV, '/runtime')
   try:
     yield Harness(transport=transport, sink=sink)
@@ -72,6 +73,7 @@ def _quest(
   result: dict | None = None,
   kind: str = 'summon',
   trail_id: str | None = None,
+  **overrides,
 ) -> dict:
   quest = {
     'id': request_id,
@@ -79,11 +81,16 @@ def _quest(
     'parent': 'ROOT',
     'args': {'target': 'dev', 'prompt': 'work'},
     'state': state,
+    'talk': [],
+    'pending': [],
+    'messages': [],
+    'chat_seq': 0,
   }
   if result is not None:
     quest['result'] = result
   if trail_id is not None:
     quest['trail_id'] = trail_id
+  quest.update(overrides)
   return quest
 
 
@@ -107,7 +114,7 @@ def test_bare_summon_forwards_the_request(monkeypatch):
   monkeypatch.setattr(
     summon,
     'relay_summon',
-    lambda target, prompt, *, timeout, into, hold, grant, revoke, share, llm, harness, party, isolation, manual: (
+    lambda target, prompt, *, timeout, into, hold, grant, revoke, share, llm, harness, party, isolation, talk, manual: (
       calls.append((target, prompt, timeout, into)) or 0
     ),
   )
@@ -233,6 +240,312 @@ async def test_blocking_summon_relays_the_answer(monkeypatch, capsys, caplog):
 
 
 @pytest.mark.asyncio
+async def test_blocking_summon_returns_at_a_child_question_and_rides_through_says(
+  monkeypatch, capsys, caplog
+):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(
+        summon.main,
+        ['summon', '--talk', 'worker.question', 'dev', 'work'],
+      )
+    )
+    channel, request = await _next(server)
+    assert request.args['talk'] == ['worker.question']
+    await server.transport.send(channel, brotocol.mark(_id(request), 'accepted'))
+    await server.transport.send(channel, brotocol.message(_id(request), {'text': 'still working'}))
+    await server.transport.send(
+      channel, brotocol.message(_id(request), {'text': 'approve?'}, id='QUESTION-1')
+    )
+
+    assert await task == summon.QUESTION_EXIT_CODE
+    assert capsys.readouterr().out == 'approve?\n'
+    assert 'still working' in caplog.text
+    assert 'QUESTION-1' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_say_to_a_child_checks_talk_then_sends(monkeypatch):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(summon.main, ['summon', 'say', 'REQ-1', 'steer left'])
+    )
+    channel, query = await _next(server)
+    assert query.args == {'id': 'REQ-1'}
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={
+        'quest': _quest(
+          'REQ-1',
+          'started',
+          talk=['requester.say', 'worker.say'],
+          pending=[],
+          messages=[],
+          chat_seq=0,
+        )
+      },
+    )
+    _, message = await _next(server)
+    assert message.type == brotocol.Tag.MESSAGE
+    assert message.quest_id == 'REQ-1'
+    assert message.payload == {'text': 'steer left'}
+    assert await task == 0
+
+
+@pytest.mark.asyncio
+async def test_say_without_a_quest_uses_the_session_quest_and_published_talk(monkeypatch):
+  async with running_server(monkeypatch) as server:
+    monkeypatch.setenv(QUEST_ENV, 'OWN-QUEST')
+    monkeypatch.setenv(brotocol.TALK_ENV, 'worker.say')
+    task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'say', 'progress']))
+    channel, query = await _next(server)
+    assert query.args == {'id': 'OWN-QUEST'}
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={
+        'quest': _quest(
+          'OWN-QUEST', 'started', talk=['worker.say'], pending=[], messages=[], chat_seq=0
+        )
+      },
+    )
+    _, message = await _next(server)
+    assert message.quest_id == 'OWN-QUEST'
+    assert message.payload == {'text': 'progress'}
+    assert await task == 0
+
+
+@pytest.mark.asyncio
+async def test_say_question_timeout_returns_its_recoverable_id(monkeypatch, capsys):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(
+        summon.main,
+        ['summon', 'say', 'REQ-1', 'ready?', '--wait', '0.1'],
+      )
+    )
+    channel, query = await _next(server)
+    live = _quest(
+      'REQ-1',
+      'started',
+      talk=['requester.question', 'worker.say'],
+      pending=[],
+      messages=[],
+      chat_seq=0,
+    )
+    await _reply(server, channel, query, outcome='ok', value={'quest': live})
+    _, question = await _next(server)
+    assert question.id is not None
+    channel, query = await _next(server)
+    asked = {
+      'seq': 1,
+      'at': 'now',
+      'transition': 'message',
+      'from': 'requester',
+      'id': question.id,
+      'head': {'text': 'ready?'},
+    }
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={'quest': {**live, 'pending': [asked], 'messages': [asked], 'chat_seq': 1}},
+    )
+    _, waiting = await _next(server)
+    assert waiting.args['since'] == 1
+
+    assert await task == summon.QUESTION_EXIT_CODE
+    assert capsys.readouterr().out == f'{question.id}\n'
+
+
+@pytest.mark.asyncio
+async def test_waiting_question_fails_on_its_correlated_host_refusal(monkeypatch, caplog):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(
+        summon.main,
+        ['summon', 'say', 'REQ-1', 'ready?', '--wait', '1'],
+      )
+    )
+    channel, query = await _next(server)
+    live = _quest('REQ-1', 'started', talk=['requester.question', 'worker.say'])
+    await _reply(server, channel, query, outcome='ok', value={'quest': live})
+    _, question = await _next(server)
+    assert question.id is not None
+    refused = {
+      'seq': 1,
+      'at': 'now',
+      'transition': 'refused',
+      'from': 'requester',
+      'id': question.id,
+      'head': {'text': 'ready?'},
+      'reason': 'host refused the move',
+    }
+    channel, query = await _next(server)
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={
+        'quest': {**live, 'messages': [refused], 'chat_seq': 1},
+      },
+    )
+
+    assert await task == 1
+    assert 'host refused the move' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_waiting_question_fails_when_the_quest_ends_without_a_reply(monkeypatch, caplog):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(
+        summon.main,
+        ['summon', 'say', 'REQ-1', 'ready?', '--wait', '1'],
+      )
+    )
+    channel, query = await _next(server)
+    live = _quest('REQ-1', 'started', talk=['requester.question', 'worker.say'])
+    await _reply(server, channel, query, outcome='ok', value={'quest': live})
+    _, question = await _next(server)
+    assert question.id is not None
+    channel, query = await _next(server)
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={
+        'quest': _quest(
+          'REQ-1',
+          'ended',
+          result={'outcome': 'ok', 'value': 'child stopped'},
+          talk=['requester.question', 'worker.say'],
+        )
+      },
+    )
+
+    assert await task == 1
+    assert 'already ended successfully' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_say_refuses_an_ended_quest_before_sending(monkeypatch, caplog):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(summon.main, ['summon', 'say', 'REQ-1', 'too late'])
+    )
+    channel, query = await _next(server)
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={
+        'quest': _quest(
+          'REQ-1',
+          'ended',
+          result={'outcome': 'ok', 'value': 'done'},
+          talk=['requester.say', 'worker.say'],
+        )
+      },
+    )
+
+    assert await task == 1
+    assert 'already ended successfully' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_say_reports_an_oversized_reply_id_as_a_cli_error(monkeypatch, caplog):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(
+        summon.main,
+        [
+          'summon',
+          'say',
+          'REQ-1',
+          'reply',
+          '--reply-to',
+          'x' * (brotocol.MAX_IDENTIFIER_BYTES + 1),
+        ],
+      )
+    )
+    channel, query = await _next(server)
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={
+        'quest': _quest(
+          'REQ-1',
+          'started',
+          talk=['worker.question', 'worker.say'],
+        )
+      },
+    )
+
+    assert await task == 1
+    assert 'over' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_say_refuses_a_descendant_that_is_not_a_direct_child(monkeypatch, caplog):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(summon.main, ['summon', 'say', 'GRANDCHILD', 'skip a level'])
+    )
+    channel, query = await _next(server)
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={
+        'quest': _quest(
+          'GRANDCHILD',
+          'started',
+          talk=['requester.say', 'worker.say'],
+          parent='CHILD',
+        )
+      },
+    )
+
+    assert await task == 1
+    assert 'not a direct child' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_say_refuses_a_move_the_child_quest_talk_forbids(monkeypatch, caplog):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(summon.main, ['summon', 'say', 'REQ-1', 'not allowed'])
+    )
+    channel, query = await _next(server)
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={
+        'quest': _quest(
+          'REQ-1', 'started', talk=['worker.say'], pending=[], messages=[], chat_seq=0
+        )
+      },
+    )
+    assert await task == 1
+    assert 'query REQ-1 forbids' in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_silent_blocking_wait_queries_live_state_then_resumes(monkeypatch, capsys):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(
@@ -304,6 +617,197 @@ async def test_check_queries_pending_without_consuming(monkeypatch, caplog):
 
 
 @pytest.mark.asyncio
+async def test_check_without_a_quest_reads_the_session_quest_and_reports_a_question(
+  monkeypatch, capsys
+):
+  async with running_server(monkeypatch) as server:
+    monkeypatch.setenv(QUEST_ENV, 'OWN-QUEST')
+    task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'check']))
+    channel, query = await _next(server)
+    assert query.args == {'id': 'OWN-QUEST'}
+    question = {
+      'seq': 2,
+      'at': 'now',
+      'transition': 'message',
+      'from': 'requester',
+      'id': 'QUESTION-2',
+      'head': {'text': 'which region?'},
+    }
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={
+        'quest': _quest(
+          'OWN-QUEST',
+          'started',
+          talk=['requester.question', 'worker.say'],
+          pending=[question],
+          messages=[question],
+          chat_seq=2,
+        )
+      },
+    )
+
+    assert await task == summon.QUESTION_EXIT_CODE
+    output = json.loads(capsys.readouterr().out)
+    assert output['question'] == {'id': 'QUESTION-2', 'text': 'which region?'}
+    assert output['talk'] == ['requester.question', 'worker.say']
+
+
+@pytest.mark.asyncio
+async def test_check_keeps_descendant_lifecycle_recovery_without_claiming_its_question(
+  monkeypatch, capsys
+):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'check', 'GRANDCHILD']))
+    channel, query = await _next(server)
+    question = {
+      'seq': 2,
+      'at': 'now',
+      'transition': 'message',
+      'from': 'worker',
+      'id': 'QUESTION-2',
+      'head': {'text': 'ask my direct summoner'},
+    }
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={
+        'quest': _quest(
+          'GRANDCHILD',
+          'started',
+          parent='CHILD',
+          talk=['worker.question', 'worker.say'],
+          pending=[question],
+          messages=[question],
+          chat_seq=2,
+        )
+      },
+    )
+
+    assert await task == summon.PENDING_EXIT_CODE
+    output = json.loads(capsys.readouterr().out)
+    assert output['messages'] == [question]
+    assert 'question' not in output
+
+
+@pytest.mark.asyncio
+async def test_check_wait_collects_a_descendant_answer(monkeypatch, capsys):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(
+        summon.main,
+        ['summon', 'check', '--wait', '--timeout', '1', 'GRANDCHILD'],
+      )
+    )
+    channel, query = await _next(server)
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={
+        'quest': _quest(
+          'GRANDCHILD',
+          'ended',
+          parent='CHILD',
+          result={'outcome': 'ok', 'value': 'descendant answer'},
+        )
+      },
+    )
+
+    assert await task == 0
+    assert capsys.readouterr().out == 'descendant answer\n'
+
+
+@pytest.mark.asyncio
+async def test_check_recovers_a_reply_after_the_original_waiter_is_gone(monkeypatch, capsys):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1']))
+    channel, query = await _next(server)
+    reply = {
+      'seq': 3,
+      'at': 'now',
+      'transition': 'message',
+      'from': 'worker',
+      'reply_to': 'QUESTION-1',
+      'head': {'text': 'yes'},
+    }
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={
+        'quest': _quest(
+          'REQ-1',
+          'started',
+          talk=['requester.question', 'worker.say'],
+          pending=[],
+          messages=[reply],
+          messages_truncated=True,
+          chat_seq=3,
+        )
+      },
+    )
+
+    assert await task == summon.PENDING_EXIT_CODE
+    output = json.loads(capsys.readouterr().out)
+    assert output['messages'][-1]['head']['text'] == 'yes'
+    assert output['messages_truncated'] is True
+
+
+@pytest.mark.asyncio
+async def test_check_surfaces_a_message_sent_past_the_local_guard_and_refused_by_the_host(
+  monkeypatch, capsys
+):
+  async with running_server(monkeypatch) as server:
+
+    def send_anyway() -> None:
+      with summon.open_client() as client:
+        client.message('REQ-1', {'text': 'blocked'})
+
+    sending = asyncio.create_task(asyncio.to_thread(send_anyway))
+    _, message = await _next(server)
+    assert message.type == brotocol.Tag.MESSAGE
+    await sending
+
+    task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1']))
+    channel, query = await _next(server)
+    refused = {
+      'seq': 4,
+      'at': 'now',
+      'transition': 'refused',
+      'from': 'requester',
+      'head': {'text': 'blocked'},
+      'reason': 'quest talk lacks requester.say',
+    }
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={
+        'quest': _quest(
+          'REQ-1',
+          'started',
+          talk=['worker.say'],
+          pending=[],
+          messages=[refused],
+          chat_seq=4,
+        )
+      },
+    )
+
+    assert await task == summon.PENDING_EXIT_CODE
+    assert json.loads(capsys.readouterr().out)['messages'] == [refused]
+
+
+@pytest.mark.asyncio
 async def test_check_returns_the_retained_answer_repeatably(monkeypatch, capsys):
   async with running_server(monkeypatch) as server:
     for _ in range(2):
@@ -327,12 +831,13 @@ async def test_check_returns_the_retained_answer_repeatably(monkeypatch, capsys)
 
 
 def test_wait_deadline_returns_pending_without_starting_another_poll(monkeypatch):
+  monkeypatch.setenv(QUEST_ENV, 'ROOT')
   ticks = iter((10.0, 10.0, 15.0))
   polls: list[tuple[float, float | None]] = []
 
   monkeypatch.setattr(summon.time, 'monotonic', lambda: next(ticks))
 
-  def query(client, request_id, *, wait_seconds=0, read_timeout=None):
+  def query(client, request_id, *, wait_seconds=0, since=None, read_timeout=None):
     del client
     polls.append((wait_seconds, read_timeout))
     return _quest(request_id, 'started', trail_id='T9')
@@ -340,7 +845,7 @@ def test_wait_deadline_returns_pending_without_starting_another_poll(monkeypatch
   monkeypatch.setattr(summon, '_query_quest', query)
   status = summon.wait_summon('REQ-1', timeout=5, client=MagicMock())
 
-  assert status == summon.SummonStatus(pending=True, trail_id='T9')
+  assert status == summon.SummonStatus(pending=True, trail_id='T9', request_id='REQ-1')
   assert polls == [(0, 5)]
 
 
@@ -592,7 +1097,74 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
       },
     )
     assert await third_line == "unknown bro 'x\\ny' (request S3 to x\\ny)"
+
+    refusal_line = asyncio.create_task(asyncio.to_thread(next, watch))
+    channel, poll = await _next(server)
+    assert poll.args == {'after': 14, 'wait': 0.05}
+    await _reply(
+      server,
+      channel,
+      poll,
+      outcome='ok',
+      value={
+        'head': 15,
+        'events': [
+          {
+            'seq': 15,
+            'kind': 'summon',
+            'quest': 'S4',
+            'parent': 'ROOT',
+            'args': {'target': 'dev'},
+            'transition': 'refused',
+            'from': 'requester',
+            'reason': 'quest talk lacks requester.say',
+            'head': {'text': 'blocked'},
+          }
+        ],
+      },
+    )
+    assert await refusal_line == (
+      'summon refused quest talk lacks requester.say: blocked (request S4 to dev)'
+    )
     watch.close()
+
+
+def test_chat_watch_lines_show_the_other_end_and_every_refusal():
+  child = {
+    'kind': 'summon',
+    'quest': 'CHILD',
+    'parent': 'ROOT',
+    'args': {'target': 'dev'},
+    'transition': 'message',
+    'from': 'worker',
+    'id': 'QUESTION-1',
+    'head': {'text': 'approve?'},
+  }
+  assert summon._chat_event_line(child, 'ROOT') == (
+    'summon asks approve? (request CHILD to dev, question QUESTION-1)'
+  )
+  own = {
+    **child,
+    'quest': 'ROOT',
+    'parent': 'PARENT',
+    'from': 'requester',
+    'id': None,
+    'reply_to': 'QUESTION-2',
+    'head': {'text': 'approved'},
+  }
+  assert summon._chat_event_line(own, 'ROOT') == 'summoner replies approved (to QUESTION-2)'
+  assert summon._chat_event_line({**own, 'from': 'worker'}, 'ROOT') is None
+  refused = {
+    **child,
+    'transition': 'refused',
+    'from': 'requester',
+    'id': None,
+    'reason': 'quest talk lacks requester.say',
+    'head': {'text': 'blocked'},
+  }
+  assert summon._chat_event_line(refused, 'ROOT') == (
+    'summon refused quest talk lacks requester.say: blocked (request CHILD to dev)'
+  )
 
 
 def test_the_watch_line_can_carry_any_registered_name_whole():
@@ -641,6 +1213,15 @@ async def test_watch_refuses_to_start_without_the_quest_this_session_answers(mon
     watch = summon.watch_summons(wait_seconds=0.05)
     with pytest.raises(summon.SummonError, match=QUEST_ENV):
       await asyncio.to_thread(next, watch)
+
+
+def test_summon_chat_text_is_capped_to_a_complete_journal_head():
+  from bro.broker.journal import MESSAGE_HEAD_BYTES
+
+  bounded = summon._bounded_text('"\n' * MESSAGE_HEAD_BYTES)
+  encoded = json.dumps({'text': bounded}, ensure_ascii=False, separators=(',', ':')).encode()
+  assert len(encoded) <= MESSAGE_HEAD_BYTES
+  assert len(bounded) < MESSAGE_HEAD_BYTES
 
 
 def test_may_summon_round_trips_the_launch_published_list(monkeypatch):

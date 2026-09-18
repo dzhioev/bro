@@ -285,7 +285,7 @@ class Journal:
       payload['reply_to'] = message.reply_to
     at = utc_now()
     sequence = self._seq + 1
-    entry = {'seq': sequence, 'at': at.isoformat(), **payload}
+    entry = {'seq': sequence, 'at': at.isoformat(), 'transition': transition, **payload}
     record.chat_seq = sequence
     record.messages.append(entry)
     del record.messages[:-MAX_RECORD_MESSAGES]
