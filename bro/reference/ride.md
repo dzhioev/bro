@@ -137,6 +137,11 @@ unboxed sessions provision the workspace clone and run the runtime snapshot's `d
 
 The bro harness owns no flags of its own;
 it rejects Claude's `--raw`.
+A native session that can receive summon traffic starts `summon watch` as a watch-mode `bro::job` once, and its output reaches the LLM as notifications after tool results or in an idle interactive turn.
+`bro::chill` waits on the run's whole background-job inbox when no other work remains.
+A one-shot `bro run` still ends with its turn and closes its watches, while `bro chat` stays idle on the inbox and starts a turn when news arrives.
+A raw Claude session runs the bro toolset over MCP instead:
+that wire has no notification wake or `chill`, so its session text keeps the retained-quest polling flow.
 
 Each session publishes its own current-trail pointer beside the workspace's `resume.json`:
 the native runner publishes when its trail opens, and the Claude recorder republishes as segments turn over.
@@ -1227,7 +1232,8 @@ Wrappers and session daemons rely on a small set of env vars:
 - `RIDE_MAY_SUMMON` — the run's own effective summon allow-list, comma-separated and empty when it may summon nothing.
   The env name and its encoding are owned by `bro.summon`;
   set by the launch surfaces for a session root and by the summon lowering (or, for a manual child, the `--summoned` launch from the pending record) for a summoned child (its own resolved list, never its summoner's),
-  read by `ride banner` to render the fact, by `bro.prompts.session_fragment` to give a run that may summon the summoner's watch, and by the tool fold to keep that watch's command reachable through `Monitor` for such a run.
+  read by `ride banner` to render the fact, and by `bro.prompts.session_fragment` to tell the surface how to arm or poll the summon watch;
+  the tool fold admits that command through Claude's `Monitor` or bro-native's roster-gated `job` for such a run.
   Read-only in the session:
   the launcher authorizes against its own copy, so only a relaunch (or the summon that spawns a child) changes what it may summon.
 - `RIDE_PERMITS` — the run's own effective party permits under the same encoding, publication, and host-side enforcement rule.
