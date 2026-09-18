@@ -65,6 +65,10 @@ def session_append_prompt(hold: str, bro_name: str) -> str:
     extra=bro.vocabulary(),
   )
   fragment = prompts.session_fragment(
-    hold, harness='claude', wire='mcp', creds=credentials.known_names()
+    hold,
+    harness='claude',
+    wire='mcp',
+    creds=credentials.known_names(),
+    talk=summon.talk(),
   )
   return f'{rendered}\n\n{fragment}'

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from bro.broker.brotocol import TALK_ENV
 from bro.prompts import PromptLoader, get_prompt, get_prompt_path, hold_fragment, session_fragment
 from bro.summon import MAY_SUMMON_ENV, PARTY_MEMBER_ENV, SUMMONED_ENV, encode_may_summon
 
@@ -111,19 +112,46 @@ class TestSessionFragment:
 
   def test_a_summoning_summoned_run_carries_both_contracts_in_order(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
+    monkeypatch.setenv(TALK_ENV, 'worker.say')
     monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
-    fragment = session_fragment('attended', harness='claude', wire='mcp')
+    fragment = session_fragment('attended', harness='claude', wire='mcp', talk=('worker.say',))
     assert fragment.index('# Summoning session') < fragment.index('# Summoned session')
 
   def test_a_summoned_run_carries_the_delivery_contract_at_every_hold(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     for hold in ('unattended', 'detached', 'attended', 'guided'):
-      fragment = session_fragment(hold, harness='claude', wire='mcp')
+      fragment = session_fragment(hold, harness='claude', wire='mcp', talk=('worker.say',))
       assert fragment.startswith('# Summoned session')
       assert '{{' not in fragment
 
   def test_the_hold_fragment_stays_the_suffix(self, monkeypatch):
     # the resumed-hold swap in `native/bro/fork.py` replaces it there
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    fragment = session_fragment('guided', harness='claude', wire='mcp')
+    fragment = session_fragment('guided', harness='claude', wire='mcp', talk=('worker.say',))
     assert fragment.endswith(hold_fragment('guided', harness='claude', wire='mcp'))
+
+  def test_a_speaking_summoner_arms_the_child_watch(self, monkeypatch):
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    fragment = session_fragment(
+      'attended', harness='claude', wire='mcp', talk=('requester.say', 'worker.say')
+    )
+    assert 'messages from the summoner then reach you' in fragment
+    assert 'exactly `summon watch`' in fragment
+
+  def test_a_questioning_child_is_told_to_consult_and_recover(self, monkeypatch):
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    fragment = session_fragment(
+      'unattended', harness='bro', wire='bare', talk=('worker.say', 'worker.question')
+    )
+    assert '`bro::summon_say`' in fragment
+    assert 'recover the reply with `bro::summon_check`' in fragment
+
+  def test_a_silent_child_is_told_to_raise_instead_of_asking(self, monkeypatch):
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    fragment = session_fragment('unattended', harness='bro', wire='bare', talk=())
+    assert 'quest does not permit' in fragment
+
+  def test_a_summoned_contract_requires_the_talk_fact(self, monkeypatch):
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    with pytest.raises(ValueError, match='unknown variable #talk'):
+      session_fragment('attended', harness='claude', wire='mcp')

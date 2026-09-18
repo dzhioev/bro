@@ -92,6 +92,10 @@ class TestMembership:
     assert render(text, _creds('openai')) == 'summarized'
     assert render(text, _creds()) == 'raw'
 
+  def test_dotted_literal(self):
+    talk = {'talk': SetVariable(frozenset({'worker.question'}), universe=None)}
+    assert render('{{iff #talk contains worker.question}}ask{{end}}', talk) == 'ask'
+
   def test_variable_element(self):
     variables = {**_harness('bro'), 'creds': SetVariable(frozenset({'bro'}), universe=None)}
     assert render('{{iff #creds contains #harness}}yes{{end}}', variables) == 'yes'

@@ -244,7 +244,7 @@ def _answer_tool(wire: mcp.Wire, variables: Variables) -> llm_mcp.Tool:
 # The recovery wording remains conditioned on the mounted service roster.
 _SUMMON_DESCRIPTION = (
   'summon another bro: it runs your prompt in a new party or joins your party, '
-  'and this call blocks — typically for minutes — until its answer '
+  'and this call blocks — typically for minutes — until its answer or a question '
   'comes back. pass `target` (a bro name; you have your own summon allow-list, and '
   'a target outside it — or a summon nested past the depth cap — fails immediately '
   'with the reason) and `prompt` (the full request, self-contained — the target '
@@ -275,13 +275,14 @@ _SUMMON_DESCRIPTION = (
   'child read access to — only refs this session can itself read. '
   'the optional `talk` list widens the child quest from worker.say with requester.say, '
   'requester.question, worker.say, or worker.question. this call returns an accepted, '
-  'question, or completed state with the request id; answer a question with summon_say '
-  'and collect the eventual answer with summon_check. the optional `party` (`start` or `join`) and `isolation` (`boxed` or `unboxed`) fields '
+  'question, or completed state with the request id; a question state carries its id and text. '
+  'answer it with `summon_say`, then collect the eventual answer from the same quest with '
+  '`summon_check` rather than summoning again. the optional `party` (`start` or `join`) and `isolation` (`boxed` or `unboxed`) fields '
   'place the child; an unmarked request starts boxed when permitted, otherwise unboxed. '
   'a join shares your tree and refuses `isolation`, `into`, and `manual`. '
   'fails with the reason when the run raises, errors out, or dies. `detach: true` '
-  'waits for host acceptance, then returns the quest id; a denial or launch failure '
-  'before acceptance fails this call. poll that id with repeatable `summon_check` reads. '
+  'waits for host acceptance, then returns the accepted state with its request id; a denial '
+  'or launch failure before acceptance fails this call. poll that id with repeatable `summon_check` reads. '
   '`manual: true` registers a manual summon instead of spawning: acceptance returns '
   'a token and `ride` command to relay to the user, who launches the child session; '
   'manual refuses `timeout`/`hold`/`llm`/`harness`/`party`/`isolation` because the user’s '
@@ -297,20 +298,21 @@ _SUMMON_DESCRIPTION = (
 
 _SUMMON_SAY_DESCRIPTION = (
   "send chat text to a child summon by `request_id`, or to this session's summoner when "
-  'it is omitted. `reply_to` answers a pending question. `wait` asks a question and '
-  'bounds the wait for its reply in seconds; a timeout returns the question id for recovery '
-  'through summon_check. returns a structured accepted, question, or completed state.'
-  '{{when #wire = mcp}} CAUTION: keep `wait` below the MCP call cap; after a question '
-  'state, recover the eventual reply with summon_check.{{end}}'
+  'it is omitted. `reply_to` answers a pending question. `wait` turns the message into a '
+  'question and bounds this call in seconds; expiry returns a question state with the id, '
+  'while the host keeps the question live. returns a structured accepted, question, or '
+  'completed state.'
+  '{{when #wire = mcp}} CAUTION: keep `wait` below the MCP call cap. After a question '
+  'state, recover the eventual reply with `summon_check`; do not send the question again.{{end}}'
 )
 
 
 _SUMMON_CHECK_DESCRIPTION = (
-  "check a child summon by quest id, or this session's own quest when omitted, through "
+  "check a child summon by request id, or this session's own quest when omitted, through "
   'the host journal. returns a pending, question, or completed state with the quest talk, '
   'pending questions, and chat tail. reads are non-destructive and repeatable from any '
   'process, including after another waiter saw the result. `wait: true` long-polls until '
-  'terminal, the next chat message, or until `timeout` seconds passes. service polls '
+  'terminal or the next chat message, bounded by optional `timeout` seconds. service polls '
   'stay short enough to react to a cancelled tool call. unknown ids, evicted results, '
   'and failed summons raise with their reason.'
   "{{when #wire = mcp}} CAUTION: size `timeout` below the harness's idle cap.{{end}}"
@@ -319,15 +321,17 @@ _SUMMON_CHECK_DESCRIPTION = (
 
 _SUMMON_LIST_DESCRIPTION = (
   "list this session's caller-visible retained summon journal records, live first. "
-  'each record carries its quest id, args, lifecycle state, timestamps, trail, and '
-  'terminal outcome. use an id to recover an interrupted wait with summon_check.'
+  'each record carries its request id, args, talk, pending questions, lifecycle state, '
+  'timestamps, trail, and terminal outcome. use an id to recover an interrupted wait '
+  'with `summon_check`.'
 )
 
 _BANNER_DESCRIPTION = (
   "return this session's environment facts as `key: value` lines: `isolation` "
   '(`boxed` or `unboxed`), workspace name and paths, the bro persona, the launch '
-  'command, joined-party membership, the bros it may delegate to (`may_summon`), its party '
-  'permits, and the trail it is recorded into (`trail_id`). call it once at session start to detect your '
+  'command, joined-party membership, the bros it may delegate to (`may_summon`), its quest '
+  'chat rights (`talk`), party permits, and the trail it is recorded into (`trail_id`). call '
+  'it once at session start to detect your '
   'environment.'
 )
 
@@ -657,7 +661,12 @@ class _ToolSelection:
 
 
 def _fold_tool_layers(
-  layers: list[mcp.ToolLayer], harness: mcp.Harness, *, may_summon: tuple[str, ...]
+  layers: list[mcp.ToolLayer],
+  harness: mcp.Harness,
+  *,
+  may_summon: tuple[str, ...],
+  summoned: bool,
+  talk: Optional[tuple[str, ...]],
 ) -> _ToolSelection:
   server_specs: list[mcp.MCPServerSpec] = []
   blocked_names: list[str] = []
@@ -690,8 +699,10 @@ def _fold_tool_layers(
         'nothing where the bro does not withhold it'
       )
     del blocked[name]
-  if harness == 'claude' and len(may_summon) > 0:
-    claude.admit_summon_watch(blocked, narrowed)
+  if harness == 'claude':
+    claude.admit_summon_watch(
+      blocked, narrowed, may_summon=may_summon, summoned=summoned, talk=talk
+    )
   return _ToolSelection(
     server_specs=server_specs,
     blocked_tool_names=tuple(blocked),
@@ -951,7 +962,11 @@ class BaseBro(ABC):
       tool_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
     )
     self._mcp_specs = _fold_tool_layers(
-      selected_tools, 'bro', may_summon=summon.effective_may_summon()
+      selected_tools,
+      'bro',
+      may_summon=summon.effective_may_summon(),
+      summoned=summon.summoned(),
+      talk=summon.talk(),
     ).server_specs
     self._data_sources: list[DataSource] = _fold_man_pages(
       mcp.select(
@@ -1075,7 +1090,13 @@ class BaseBro(ABC):
       creds=credentials.known_names(),
       extra=self._feature_vocabulary,
     )
-    return _fold_tool_layers(selected, harness, may_summon=summon.effective_may_summon())
+    return _fold_tool_layers(
+      selected,
+      harness,
+      may_summon=summon.effective_may_summon(),
+      summoned=summon.summoned(),
+      talk=summon.talk(),
+    )
 
   def blocked_tool_names(self, harness: mcp.Harness) -> tuple[str, ...]:
     """harness-native tool names blocked by this bro's selected layers."""
@@ -1242,5 +1263,6 @@ class BaseBro(ABC):
       harness='bro',
       wire='bare',
       creds=credentials.known_names(),
+      talk=summon.talk(),
     )
     return f'{self.system_prompt}\n\n{fragment}'

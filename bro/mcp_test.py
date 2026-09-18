@@ -1,7 +1,7 @@
 import pytest
 
 from bro import mcp, registry
-from bro.base.condition import ConditionError, when
+from bro.base.condition import ConditionError, var, when
 from bro.llm.mcp import InProcessMCPServer
 from bro.mcp import render_text, select
 from bros.bro import Bro
@@ -118,6 +118,19 @@ class TestRenderText:
   def test_absent_may_summon_raises_on_reference(self):
     with pytest.raises(ValueError, match='unknown variable #may_summon'):
       render_text('{{when #may_summon contains bro}}x{{end}}', harness='bro')
+
+  def test_talk_membership_is_the_supplied_rights(self):
+    text = '{{when #talk contains worker.question}}consult{{end}}'
+    assert render_text(text, talk=['worker.question']) == 'consult'
+    assert render_text(text, talk=[]) == ''
+
+  def test_talk_rejects_an_unknown_supplied_right(self):
+    with pytest.raises(ValueError, match='unknown talk right'):
+      render_text('{{when #talk contains worker.say}}x{{end}}', talk=['worker.sing'])
+
+  def test_absent_talk_raises_on_reference(self):
+    with pytest.raises(ValueError, match='unknown variable #talk'):
+      render_text('{{when #talk contains worker.say}}x{{end}}', harness='bro')
 
   def test_hold_undefined_outside_hold_text(self):
     # the hold fact is supplied only when rendering the hold text, so a
@@ -255,6 +268,11 @@ class TestSelect:
     assert select(entries, creds=['openai']) == ['summary']
     monkeypatch.setattr(mcp.credentials, 'available', lambda name: False)
     assert select(entries, creds=['openai']) == []
+
+  def test_talk_condition_filters_entries(self):
+    entries = [when(var('talk').contains('worker.question'), 'consult')]
+    assert select(entries, talk=['worker.question']) == ['consult']
+    assert select(entries, talk=[]) == []
 
   def test_absent_fact_raises_on_reference(self):
     with pytest.raises(ConditionError, match='unknown variable #wire'):

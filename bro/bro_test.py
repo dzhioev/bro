@@ -15,6 +15,7 @@ import bro.workspace.banner as workspace_banner
 from bro.base import credentials
 from bro.base.condition import ConditionError, iff, when
 from bro.bro import BaseBro, BroRaised, feature
+from bro.broker.brotocol import TALK_ENV
 from bro.datasources.file import FileSource
 from bro.datasources.man import ManPage, ManSource
 from bro.datasources.searchable import Hit, SearchableDataSource
@@ -22,7 +23,7 @@ from bro.harness import claude
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer
 from bro.llm.tracker import ToolStepSource
 from bro.mcp import MCPServerSpec, describe
-from bro.summon import MAY_SUMMON_ENV, encode_may_summon
+from bro.summon import MAY_SUMMON_ENV, SUMMONED_ENV, encode_may_summon
 
 
 class EchoBro(BaseBro):
@@ -559,6 +560,20 @@ class TestToolLayers:
 
   def test_a_run_that_may_summon_nobody_keeps_its_block_of_monitor(self, monkeypatch):
     monkeypatch.delenv(MAY_SUMMON_ENV, raising=False)
+    bro = _ShellBlockingBro()
+    assert 'Monitor' in bro.blocked_tool_names('claude')
+    assert bro.narrowed_tool_commands('claude') == {}
+
+  def test_a_summoned_run_with_a_speaking_summoner_reaches_the_watch(self, monkeypatch):
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    monkeypatch.setenv(TALK_ENV, 'requester.say,worker.say')
+    bro = _ShellBlockingBro()
+    assert bro.narrowed_tool_commands('claude') == {'Monitor': (claude.SUMMON_WATCH,)}
+    assert set(bro.blocked_tool_names('claude')).isdisjoint({'Monitor', *claude._TASK_CONTROL})
+
+  def test_a_summoned_run_with_a_silent_summoner_keeps_monitor_blocked(self, monkeypatch):
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    monkeypatch.setenv(TALK_ENV, 'worker.say,worker.question')
     bro = _ShellBlockingBro()
     assert 'Monitor' in bro.blocked_tool_names('claude')
     assert bro.narrowed_tool_commands('claude') == {}
@@ -1364,6 +1379,13 @@ class TestSessionModePrompts:
     assert bro.system_prompt in prompt
     assert '# Guided session' in prompt
     assert '# Unattended session' not in prompt
+
+  def test_native_system_prompt_passes_the_runs_talk_to_the_summoned_contract(self, monkeypatch):
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    monkeypatch.setenv(TALK_ENV, 'worker.question')
+    prompt = EchoBro().system_prompt_for(hold='unattended')
+    assert 'call `bro::summon_say`' in prompt
+    assert 'recover the reply with `bro::summon_check`' in prompt
 
 
 class TestBannerTool:

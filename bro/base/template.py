@@ -29,6 +29,7 @@ from bro.base.condition import (
 )
 
 _NAME = r'[A-Za-z0-9_-]+'
+_VALUE = rf'(?:#{_NAME}|[A-Za-z0-9_.-]+)'
 
 _DIRECTIVE_RE = re.compile(
   r'\{\{\s*(?P<keyword>when|iff|eliff|else|end|assert|include|insert)\b(?P<argument>[^}]*)\}\}'
@@ -39,9 +40,9 @@ _INCLUDE_NAME_RE = re.compile(r'^\s*(?P<name>[A-Za-z0-9._/-]+)\s*$')
 _INSERT_REFERENCE_RE = re.compile(rf'^\s*#(?P<name>{_NAME})\s*$')
 
 _CONDITION_RE = re.compile(
-  rf'^\s*(?P<left>\#?{_NAME})'
+  rf'^\s*(?P<left>{_VALUE})'
   rf'(?:\s*(?P<equals>=)\s*|\s+(?P<contains>contains)\s+)'
-  rf'(?P<right>\#?{_NAME})\s*$'
+  rf'(?P<right>{_VALUE})\s*$'
 )
 
 

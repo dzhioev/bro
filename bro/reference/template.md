@@ -16,7 +16,8 @@ block     := '{{iff' condition '}}' template
              '{{end}}'
 when-block:= '{{when' condition '}}' template '{{end}}'
 condition := value ('=' value | 'contains' value)
-value     := '#' name | name            name: [A-Za-z0-9_-]+
+value     := '#' name | literal         name: [A-Za-z0-9_-]+
+literal   := [A-Za-z0-9_.-]+
 file      := prompt file name           file: [A-Za-z0-9._/-]+
 ```
 
@@ -70,7 +71,7 @@ file      := prompt file name           file: [A-Za-z0-9._/-]+
 
 ## Rendering surfaces
 
-`bro.mcp.render_text(text, harness=…, wire=…, creds=…, may_summon=…, hold=…, extra=…)` renders directives against the facts the call site knows
+`bro.mcp.render_text(text, harness=…, wire=…, creds=…, may_summon=…, talk=…, hold=…, extra=…)` renders directives against the facts the call site knows
 (the facts, `#hold`'s single-purpose supply rule included, are documented in `bro/reference/conditions.md`;
 `extra` merges a caller-owned vocabulary next to them
 — the bro surfaces pass the owning bro's `#features`) and resolves `{{include}}` targets through the `prompts` loader.

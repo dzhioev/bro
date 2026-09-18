@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from bro.base import log, spawn
-from bro.broker.client import Client
+from bro.broker.client import QUEST_ENV, Client
 from bro.monitor import SESSION_DIR_ENV, harness_session_dir, health
 
 __cli_name__ = 'ride.claude.statusline'
@@ -97,6 +97,13 @@ def _target(quest: dict[str, Any]) -> str:
   return target if isinstance(target, str) else 'unknown target'
 
 
+def _question_awaiting_requester(quest: dict[str, Any]) -> bool:
+  pending = quest.get('pending')
+  if not isinstance(pending, list) or not all(isinstance(question, dict) for question in pending):
+    raise ValueError('summon listing carried malformed pending questions')
+  return any(question.get('from') == 'worker' for question in pending)
+
+
 def _summon_parts(now: float) -> list[str]:
   try:
     quests = _query_summons()
@@ -119,6 +126,8 @@ def _summon_parts(now: float) -> list[str]:
           f'{_YELLOW}⚡ summoning {_target(quest)} {age} '
           f'({_trail(trail_id if isinstance(trail_id, str) else None)}){_RESET}'
         )
+      if quest.get('parent') == os.environ.get(QUEST_ENV) and _question_awaiting_requester(quest):
+        parts.append(f'{_YELLOW}❓ {_target(quest)} is awaiting your reply{_RESET}')
     terminal = next(
       (quest for quest in quests if quest.get('state') in ('ended', 'denied')),
       None,

@@ -12,7 +12,7 @@ A summon succeeds only when the target is in the summoner's allow-list
 — the session reads its own off the banner, fixed at launch
 — so a denial stays a normal outcome the spell relays.
 
-version: 1.16.0
+version: 1.17.0
 ---
 
 # Ask
@@ -46,8 +46,8 @@ From the user's wording extract:
   Spell out concrete names,
   refs,
   and expectations ("list the deploy targets and their kinds", not "list them").
-  Ask for what the user actually wants back
-  — the reply is the only thing that returns.
+  Ask for what the user actually wants in the final answer;
+  live messages handle progress and questions but do not replace that deliverable.
   Shape the request around the card:
   name the outcome and leave the mechanics to the target's own tools,
   which run against paths and setup you cannot see from here.
@@ -93,6 +93,21 @@ or a bro the target has to reach onward (`@reviewer` so a developer child can ha
 An instance grant replaces the target's selection for that kind.
 Both directions are strict, so a no-op grant or a revoke of a kind or bro the target lacks fails the summon rather than passing quietly.
 
+The quest's **talk** is a separate least-authority knob.
+The child gets `worker.say` by default;
+widen it only for conversation the request needs:
+
+- `requester.say` lets this session steer the child with unsolicited messages;
+- `requester.question` lets this session ask the child and await its reply;
+- `worker.say` lets the child send progress before its final answer and is already in the default;
+- `worker.question` lets the child stop for an answer from this session.
+
+A reply follows the question right in the other direction, so do not add a say right merely to permit replies.
+Grant `worker.question` when the work may need a decision, approval, or missing fact from the summoner rather than forcing the child to raise and lose its live state.
+Grant requester rights only when someone will keep the watch armed and act on those messages.
+The Bash client takes repeatable or comma-separated `--talk <right>` values;
+the tool client takes a `talk` list.
+
 The harness and LLM knobs above answer to that same bound, since the driving loop they pick brings credentials of its own:
 what the pair adds on top of the target's default scope has to be in your scope too, so where summons run natively a session running under the bro harness cannot ask for a `claude` child unless its own launch hydrated the Claude OAuth token.
 Relay that denial like any other
@@ -109,16 +124,19 @@ its background run ends in a harness completion notification that wakes you, whi
 The mechanism is the same either way:
 
 - **Bash available** (a managed Claude session):
-  `summon <target> '<prompt>'` (`--start` / `--join` / `--boxed` / `--unboxed`, `--timeout <s>`, `--into <ref>`, `--hold <level>`, `--grant <name>`, `--revoke <name>`, `--llm <recipe>`, `--harness <name>`).
+  `summon <target> '<prompt>'` (`--start` / `--join` / `--boxed` / `--unboxed`, `--timeout <s>`, `--into <ref>`, `--hold <level>`, `--grant <name>`, `--revoke <name>`, `--talk <right>`, `--llm <recipe>`, `--harness <name>`).
   It prints the request id and the started trail id to stderr,
-  then blocks until the answer lands on stdout;
-  non-zero exit + stderr on failure.
-- **No Bash, the `summon` tools present** (`bro::summon` / `bro::summon_check` — the `--raw` claude session case):
-  call `summon` with `target` and `prompt` (optional `party: start|join`, `isolation`, `timeout`, `into`, `hold`, `grant`, `revoke`, `llm`, `harness`).
-  It blocks and returns the answer;
+  then blocks until the answer or a child question lands on stdout.
+  A child question exits 4 and logs the exact `summon say` reply command;
+  other non-zero exits carry failures on stderr.
+- **No Bash, the `summon` tools present** (`bro::summon` / `bro::summon_say` / `bro::summon_check` — the `--raw` claude session case):
+  call `summon` with `target` and `prompt` (optional `party: start|join`, `isolation`, `timeout`, `into`, `hold`, `grant`, `revoke`, `talk`, `llm`, `harness`).
+  It returns a structured accepted, question, or completed state with the request id;
   failures come back as the tool error with the reason.
-  `detach: true` returns the quest id after host acceptance and fails immediately on a denial;
-  `summon_check(request_id)` reads non-blockingly (`{state: pending|completed, …}`) and `summon_check(request_id, wait: true)` long-polls the same repeatable journal record.
+  A question state carries `{question: {id, text}}`:
+  answer it through `summon_say(request_id, text, reply_to=id)`, then call `summon_check(request_id, wait: true)` for the eventual result.
+  `detach: true` returns the accepted state after host acceptance and fails immediately on a denial;
+  `summon_check(request_id)` reads non-blockingly and `summon_check(request_id, wait: true)` long-polls the same repeatable journal record.
 - **Neither** — this session can't summon;
   say so instead of improvising.
 
@@ -145,15 +163,23 @@ if a waiting process is killed mid-flight, the host journal retains the quest,
 `summon check <id>` polls it,
 and `summon check --wait <id>` waits on the same non-destructive read.
 `summon watch` arms at the current journal head and prints ordered transitions after it
-— your summons' and their descendants', denials included;
+— your summons' and their descendants', messages and denials included;
 if retained events have a gap, it reports the loss and re-arms from the current head.
+
+When a blocking summon granted `worker.question` exits 4, stdout is the child's question and stderr names its request id, question id, and ready reply command.
+Answer it with `summon say <request-id> '<answer>' --reply-to <question-id>`, then resume the same quest with `summon check --wait <request-id>`.
+That check may itself exit 4 on another question;
+repeat the answer/check loop until it exits 0 with the child's final answer or 1 with a failure.
+Never restart the summon to answer it.
 
 Without Bash there is no true backgrounding, but the tools cover the long-run case:
 a blocking `summon` call fits anything conversational (tell the user it may take minutes);
 for a run that would outlast the surface's tool-call patience, `summon(…, detach: true)` returns the request id,
 and you check on it with `summon_check` between turns
 — non-destructive, so polling is safe
-— or use `wait: true` to long-poll until it reports completed.
+— or use `wait: true` to long-poll until it reports a question or completion.
+Keep each tool-side wait below the MCP call budget;
+a timed-out call does not end the host-owned quest, so recover it by id and never re-summon.
 
 ## Manual summon — a child the user launches
 
@@ -174,20 +200,21 @@ and the user launches the session themselves.
   a denial fails right there, before any token exists.
   `--into`,
   `--grant`,
-  `--revoke` still apply;
+  `--revoke`,
+  and `--talk` still apply;
   `--timeout`,
   `--hold`,
   `--llm`,
   `--harness`, and the placement flags (`--start` / `--join` / `--boxed` / `--unboxed`) are refused — the user’s launch owns those.
   The requester still needs either party-start permit because the human launch starts a party.
 - **Tool client**:
-  `summon` with `manual: true`
+  `summon` with `manual: true` and any needed `talk` rights
   — returns the token and the launch command once the host accepts;
   a denial fails the call immediately.
 
 Relay the token to the user as the ready-to-paste interactive command
 — `ride along --summoned <token> <target>`
-— and note they may instead run `ride solo --summoned <token> <target>` for a one-shot request with no conversation.
+— and note they may instead run `ride solo --summoned <token> <target>` for a one-shot request without an interactive terminal.
 They may add their own launch flags (`--unboxed`, `--llm`, `--hold`, `--workspace`, a claude/bro harness).
 The prompt you passed becomes the session's first message;
 the child bases on this workspace's HEAD *at the moment they launch* (or the `--into` ref you gave).

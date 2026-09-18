@@ -64,6 +64,7 @@ def render_text(
   wire: Optional[Wire] = None,
   creds: Optional[Iterable[str]] = None,
   may_summon: Optional[Iterable[str]] = None,
+  talk: Optional[Iterable[str]] = None,
   hold: Optional[str] = None,
   extra: Optional[condition.Variables] = None,
 ) -> str:
@@ -76,8 +77,9 @@ def render_text(
   summon allow-list — `bro.summon.effective_may_summon()`; membership is is-a,
   so a granted bro answers to the bros it derives from (`registry.lineage`) as
   well as to its own name, and the universe adds the installed persona names,
-  so a granted-but-uninstalled target still tests), `hold` → `#hold` (hold text
-  only — supplied by `bro.prompts.hold_fragment`, no other call site). A fact
+  so a granted-but-uninstalled target still tests), `talk` → `#talk` (the fixed
+  rights of this run's own quest), `hold` → `#hold` (hold text only — supplied
+  by `bro.prompts.hold_fragment`, no other call site). A fact
   left None defines no variable, so a directive referencing it raises. `extra`
   merges a caller-owned domain vocabulary next to the facts (same shape as
   `FunctionTool`'s `variables`); its names shadow same-named facts.
@@ -90,7 +92,12 @@ def render_text(
   if '{{' not in text:
     return text
   variables = surface_variables(
-    harness=harness, wire=wire, creds=creds, may_summon=may_summon, hold=hold
+    harness=harness,
+    wire=wire,
+    creds=creds,
+    may_summon=may_summon,
+    talk=talk,
+    hold=hold,
   )
   if extra is not None:
     variables.update(extra)
@@ -110,6 +117,7 @@ def select[T](
   wire: Optional[Wire] = None,
   creds: Optional[Iterable[str]] = None,
   may_summon: Optional[Iterable[str]] = None,
+  talk: Optional[Iterable[str]] = None,
   extra: Optional[condition.Variables] = None,
 ) -> list[T]:
   """resolve the `bro.base.condition` wrappers (`when` / `iff`) in a declarative
@@ -117,7 +125,9 @@ def select[T](
   None defines no variable, so a condition referencing it raises. `extra`
   merges a caller-owned domain vocabulary next to the facts, as in
   `render_text`. The conditioning reference is `reference/conditions.md`."""
-  variables = surface_variables(harness=harness, wire=wire, creds=creds, may_summon=may_summon)
+  variables = surface_variables(
+    harness=harness, wire=wire, creds=creds, may_summon=may_summon, talk=talk
+  )
   if extra is not None:
     variables.update(extra)
   return condition.select(entries, variables)
@@ -154,6 +164,7 @@ def surface_variables(
   wire: Optional[Wire] = None,
   creds: Optional[Iterable[str]] = None,
   may_summon: Optional[Iterable[str]] = None,
+  talk: Optional[Iterable[str]] = None,
   hold: Optional[str] = None,
 ) -> dict[str, condition.StringVariable | condition.SetVariable | bool]:
   """the harness facts as a `Variables` mapping — what `render_text` / `select`
@@ -175,6 +186,14 @@ def surface_variables(
     variables['may_summon'] = condition.SetVariable(
       _answers_to(granted), universe=granted | _persona_names()
     )
+  if talk is not None:
+    from bro.broker.brotocol import TALK_RIGHTS
+
+    rights = frozenset(talk)
+    unknown = sorted(rights - TALK_RIGHTS)
+    if len(unknown) > 0:
+      raise ValueError(f'unknown talk right(s): {", ".join(unknown)}')
+    variables['talk'] = condition.SetVariable(rights.__contains__, universe=TALK_RIGHTS)
   if hold is not None:
     if hold not in _HOLDS:
       raise ValueError(f'unknown hold {hold!r}; known: {", ".join(HOLDS)}')
