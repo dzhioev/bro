@@ -8,13 +8,13 @@ This session becomes the coordinator:
 it opens a root task as the single source of truth,
 then walks the work through design, review and planning, per-stage implementation, integration, and verification,
 running each phase in a session of its own
-— the design and planning phases as interactive sessions it hands to the user to launch, the rest as summoned bros in started parties
+— the design and planning phases as manual summons the user launches into an interactive session, the rest as summoned bros in started parties
 — and recording each outcome on the root task before starting the next.
 It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.5.0
+version: 2.6.0
 ---
 
 # orchestrate
@@ -40,9 +40,8 @@ and ends.
   record the outcome,
   review the artifact,
   then launch the next.
-  Everything durable must land on the page:
-  a summoned phase answers you as well,
-  a handed-off one returns nothing at all.
+  Everything durable must land on the page;
+  a phase's answer carries only what you have to act on.
 - **You are the human's interface.** A summoned bro runs isolated with no human channel,
   but each phase is granted `worker.question` so it can consult this coordinator before giving up its live state.
   Questions,
@@ -81,8 +80,6 @@ Never redo a completed phase.
    — the one that does rollouts, say
    — settle that now too,
    and say so up front when the list holds nobody who could run a phase, since the list is fixed at launch and only a relaunch widens it.
-   The list bounds the summoned phases alone;
-   a handed-off phase names its bro on the command the user runs.
 3. `brog::create_task` with the name,
    tags,
    and a `## Goal` body stating in a few lines what the work must achieve.
@@ -115,8 +112,8 @@ Recover per-stage progress from the stage tasks' own statuses, not from memory.
 Every phase below opens with its **launch line**
 — the knobs that phase needs;
 anything the line does not name takes the default.
-Design and review-and-plan run as interactive sessions you hand to the user;
-the rest are summoned.
+Design and review-and-plan are manual summons the user launches into an interactive session;
+the rest are summoned outright.
 
 ### Summoned phases
 
@@ -153,33 +150,34 @@ this spell only says how a phase differs from a one-shot ask.
 Do not let this session end with a phase in flight;
 [[ask]] covers reclaiming a summon whose wait was lost.
 
-### Handed-off phases
+### Manually summoned phases
 
-These want an interactive session rather than a one-shot summon, and no session can launch one for itself.
-Give the user one command;
-`--harness` selects Claude Code or the bro's native chat loop:
+These want the user in the session rather than a one-shot run, so they go out as manual summons
+— the host registers the phase on a token, and the user launches the session against it.
+The mechanics are [[ask]]'s;
+the summon carries the phase prompt and none of the launch line, since hold, effort, and harness belong to the launch.
+Relay the token as the command the user pastes, the launch line appended and `--harness` selecting Claude Code or the bro's native chat loop:
 
 ```
-ride along <bro> '<phase prompt>' <launch line> --harness <claude|bro>
+ride along --summoned <token> <bro> <launch line> --harness <claude|bro>
 ```
 
 - The launch line's `--hold` and `--effort` carry the same meaning under either harness.
-- The phase prompt goes in verbatim as the positional argument, so the session starts on it directly instead of through [[fix]].
-  It is as self-contained as a summon's
+- The phase prompt becomes the session's first message, so the session starts on it directly instead of through [[fix]].
+  It is as self-contained as any summon's
   — the session shares no context with you either.
-  Quote it so its own apostrophes and backticks survive the shell.
 - No base ref:
   neither phase needs one
   — design only reads the codebase,
   and review-and-plan resets the integration branch to `origin/master` itself.{{when #may_summon contains eyebro}}
 - No eyebro either:
   neither phase opens a pull request.{{end}}
-- **Nothing returns to you.** There is no answer channel, so whatever the phase has to report goes on the root task page
-  — its prompt closes by recording a comment rather than answering.
-- Then stop and wait.
-  The session runs in the user's terminal, not yours;
-  you learn it finished when they tell you.
-  Pick up by reading the page.
+- No talk beyond the default:
+  the user is in the session, so its questions go to them rather than to you.
+- **The answer reaches you.** A manual child delivers through `answer` like any summoned one, so the prompt closes by answering with what you have to act on.
+- Then wait as for any detached summon:
+  the token reads `pending` until the user launches, and a manual summon carries no timer, so pace the wait to human time.
+  Pick up from the answer and the page.
 
 ## Phases
 
@@ -191,7 +189,7 @@ or a design change is yours to resolve
 
 ### 1 — design
 
-**Hand off:** `--hold attended --effort max`
+**Manual summon:** launched `--hold attended --effort max`
 
 Attended because this is where the human's input is worth the most:
 the session brings each pivotal decision to them as it comes up.
@@ -213,18 +211,18 @@ the session brings each pivotal decision to them as it comes up.
 > Do NOT implement code,
 > open a PR,
 > or change the task status.
-> Close by recording a comment on that task (`brog::add_comment`, topic `design`) with a summary of the design,
+> Answer with a summary of the design,
 > every question left unsettled,
 > and any prerequisite you could not satisfy from inside this session
 > — a credential you would have needed,
 > a step that needs the host.
 
 Outcome:
-`## Design` on the page, and a `design` comment carrying what the coordinator has to act on.
+`## Design` on the page, and an answer carrying what the coordinator has to act on.
 
 ### 2 — review and plan
 
-**Hand off:** `--hold attended --effort max`
+**Manual summon:** launched `--hold attended --effort max`
 
 A fresh session supplies independent eyes.
 Attended hold lets it bring material objections and open design decisions to the user before finalizing the design.
@@ -258,7 +256,7 @@ the reviewer ends up holding the deepest understanding of the design, which is w
 > the integration branch name and the ordered stages, each linking its stage task.
 > Do NOT implement code or open a PR,
 > and do not change any task's status.
-> Close by recording a comment on the root task (`brog::add_comment`, topic `plan`) with what you changed in the design and why,
+> Answer with what you changed in the design and why,
 > the stage list,
 > the integration branch name,
 > and any prerequisite implementation will still need.
@@ -267,7 +265,7 @@ Outcome:
 a finalized `## Design`,
 stage tasks created and linked under `## Implementation plan`,
 the integration branch pushed,
-and a `plan` comment.
+and an answer carrying what changed and what the coordinator has to act on.
 Take material objections and open questions to the user before starting stage 1.
 
 ### 3 — stages
