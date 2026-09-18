@@ -122,12 +122,12 @@ Classify each changed file by its reach:
   — and read every call in the repository's scripts for what it consumes of that:
   the arguments it passes, the output it captures or parses, the status it branches on, the environment it sets first, the files it expects afterwards.
 - **Commands** — a member's `[project.scripts]` or `bro.session_commands` table, or the module behind a command.
-  Grep the repository for the command name in scripts, CI workflows, git hooks, docs, `sh(...)` tool declarations, and deploy-target commands, and read each use the same way:
+  Grep the repository for the command name in scripts, CI workflows, git hooks, docs, `cli(...)` tool declarations, and deploy-target commands, and read each use the same way:
   the flags it passes, the output it consumes, the exit status it relies on, the environment and files it assumes.
 - **Declaration strings** — the persona API (`bro/bro.py`, `bro/mcp.py`, `bros/dev/__init__.py`, `bro/datasources/references.py`, `bro/harness/*`).
   The repository's type check holds its imports and signatures;
   the strings are yours:
-  `man('<topic>')` topics, `sh('<command>')` commands, `mount(toolset, '<tool>')` names, feature names, `[[…]]` spell markers in prompt text, and `{{…}}` directive vocabulary.
+  `man('<topic>')` topics, `cli('<command>')` commands, `mount(toolset, '<tool>')` names, feature names, `[[…]]` spell markers in prompt text, and `{{…}}` directive vocabulary.
   Read each string-keyed call in the repository's persona modules against the new declaration.
 - **Declarative schemas** — what the framework reads as data:
   `[tool.bro]` and its sub-tables (`bro/workspace/project.py` and each section's owner),
@@ -188,8 +188,8 @@ Run the repository's formatter, then a persona construction smoke through the pr
 — `uv run bro show <default bro>` for the `[tool.bro] default`, and `uv run bro list`
 — which resolves entry points and loads spells and declarations against the new framework, so an import or declaration error surfaces before the suite does.
 Then run the repository's own gate (its docs name the command).{{when #harness = bro}}
-Run it with an explicit large `timeout_seconds`
-— `dev::bash`'s default kills a gate run mid-call.{{end}}
+Run a long gate through `bro::job` in `fg` mode with an explicit large `timeout_seconds`;
+keep the bound beneath the client call cap on the MCP wire.{{end}}
 
 Deploy scripts are exercised by none of this;
 step 3 is their gate.

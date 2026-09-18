@@ -1,32 +1,20 @@
 import asyncio
-import contextlib
 import os
 import tempfile
-import threading
 
 import pytest
 
-from bro.base.liveness_test_helper import Liveness
-from bro.base.offload import off_loop
 from bro.base.text_window import DEFAULT_LIMIT
-from bro.llm.mcp import Context
 from bro.mcp import mount
-from bros.dev import jobs
 from bros.dev.mcp import (
-  bash,
   edit_file,
   glob,
   grep,
-  job,
-  kill,
   read_file,
   read_reference,
   toolset,
-  watch,
   write_file,
 )
-
-_WAKE_TIMEOUT = 10.0
 
 
 def test_read_file_returns_numbered_lines():
@@ -119,27 +107,6 @@ def test_edit_file_not_found_raises():
       edit_file(path, 'zzz', 'X')
 
 
-@pytest.mark.asyncio
-async def test_bash_captures_stdout_and_exit_code():
-  result = await bash('echo hello')
-  assert 'exit_code: 0' in result
-  assert 'hello' in result
-  assert 'skipped' not in result
-
-
-@pytest.mark.asyncio
-async def test_bash_captures_stderr():
-  result = await bash('echo oops 1>&2 ; false')
-  assert 'exit_code: 1' in result
-  assert 'oops' in result
-
-
-@pytest.mark.asyncio
-async def test_bash_timeout_returns_clearly():
-  result = await bash('sleep 5', timeout_seconds=1)
-  assert 'TIMED OUT' in result
-
-
 def test_file_ops_reject_non_regular_file():
   # a FIFO would block open()/read_text forever; the file tools refuse it up front.
   with tempfile.TemporaryDirectory() as d:
@@ -162,20 +129,6 @@ async def test_grep_skips_fifo_without_blocking():
     fifo = os.path.join(d, 'pipe')
     os.mkfifo(fifo)
     assert await grep('anything', path=fifo, timeout_seconds=5) == 'no matches'
-
-
-@pytest.mark.asyncio
-async def test_bash_long_output_emits_before_marker_keeps_tail():
-  # bash tails are usually most informative — confirm we keep the LAST `limit`
-  # lines and report the dropped head via a [...skipped before...] marker.
-  result = await bash(f'for i in $(seq 1 {DEFAULT_LIMIT + 30}); do echo "L$i"; done')
-  assert 'exit_code: 0' in result
-  assert 'skipped before:' in result
-  assert '30 lines' in result
-  # last lines kept
-  assert f'L{DEFAULT_LIMIT + 30}' in result
-  # earliest lines dropped
-  assert 'L1\n' not in result
 
 
 @pytest.mark.asyncio
@@ -258,77 +211,19 @@ def test_glob_no_matches():
     assert glob('*.nonexistent', path=d) == 'no matches'
 
 
-def test_job_watch_kill_round_trip():
-  context = Context(state=jobs.Registry())
-
-  async def round_trip():
-    started = job(context, 'echo out; echo err >&2')
-    assert started.startswith('started job-1 (pid ')
-    collected = await watch(context, 'job-1', wait_seconds=10, tail=True)
-    assert collected.startswith('exited (code 0)\n')
-    assert 'out\nerr' in collected
-    long_running = job(context, 'sleep 30')
-    assert long_running.startswith('started job-2')
-    assert (await kill(context, 'job-2')).startswith('job-2 exited')
-
-  asyncio.run(round_trip())
-
-
-class _BlockedJob:
-  """stands in for a job whose watch is in flight: `watch` blocks until `wake`, and
-  ends only when woken through the very event it was handed."""
-
-  def __init__(self) -> None:
-    self.watching = threading.Event()
-    self.ended = threading.Event()
-
-  def watch(self, *, wait_seconds: float, limit: int, tail: bool, woken: threading.Event) -> str:
-    self.watching.set()
-    if woken.wait(_WAKE_TIMEOUT):
-      self.ended.set()
-    return 'running'
-
-  def wake(self, woken: threading.Event) -> None:
-    woken.set()
-
-
-@pytest.mark.asyncio
-async def test_interrupted_watch_wakes_the_job_it_abandoned(monkeypatch):
-  # the claim outlives the abandoned thread, so an interrupted watch has to wake
-  # its job — otherwise the job stays unwatchable for the rest of a window an
-  # iterative watcher may have sized in minutes.
-  target = _BlockedJob()
-  registry = jobs.Registry()
-  monkeypatch.setattr(registry, 'get', lambda job_id: target)
-  watching = asyncio.create_task(watch(Context(state=registry), 'job-1', wait_seconds=600))
-  assert await off_loop(target.watching.wait, _WAKE_TIMEOUT), 'the watch never reached the job'
-  watching.cancel()
-  with pytest.raises(asyncio.CancelledError):
-    await watching
-  assert await off_loop(target.ended.wait, _WAKE_TIMEOUT), 'the abandoned watch was not woken'
-
-
-@pytest.mark.asyncio
-async def test_interrupted_bash_leaves_no_process_behind(tmp_path):
-  with contextlib.closing(Liveness(tmp_path / 'liveness')) as shell:
-    running = asyncio.create_task(bash(shell.holding('sleep 30'), timeout_seconds=60))
-    await off_loop(shell.wait_started)
-    running.cancel()
-    with pytest.raises(asyncio.CancelledError):
-      await running
-    shell.assert_reaped()
-
-
-def test_watch_unknown_job_raises():
-  context = Context(state=jobs.Registry())
-  with pytest.raises(ValueError, match='unknown job id'):
-    asyncio.run(watch(context, 'job-1'))
-
-
-def test_toolset_build_lists_all_tools():
+def test_toolset_build_lists_only_file_and_search_tools():
   server = toolset.build()
   tools = asyncio.run(server.list_tools())
-  assert {t.name for t in tools} == set(toolset.tool_names)
+  names = {tool.name for tool in tools}
+  assert names == {
+    'read_reference',
+    'read_file',
+    'write_file',
+    'edit_file',
+    'grep',
+    'glob',
+  }
+  assert names.isdisjoint({'bash', 'job', 'watch', 'kill'})
 
 
 def test_read_reference_returns_file_contents():
@@ -336,10 +231,10 @@ def test_read_reference_returns_file_contents():
 
 
 def test_toolset_subset_filters_tools():
-  server = toolset.build('read_file', 'bash')
+  server = toolset.build('read_file', 'grep')
   tools = asyncio.run(server.list_tools())
   names = {t.name for t in tools}
-  assert names == {'read_file', 'bash'}
+  assert names == {'read_file', 'grep'}
 
 
 def test_mount_unknown_tool_raises():

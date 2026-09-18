@@ -1,5 +1,4 @@
 import gc
-import threading
 import time
 import weakref
 from pathlib import Path
@@ -12,23 +11,13 @@ from bro.jobs import Job, Registry
 
 def _wait_finished(job: Job, timeout: float = 10.0) -> None:
   """block until the job has exited and its spool is fully drained, without
-  touching the watch cursor (tests want a deterministic backlog before the
+  touching the poll cursor (tests want a deterministic backlog before the
   first read)."""
   deadline = time.monotonic() + timeout
   with job._condition:
     while not job._finished_locked():
       remaining = deadline - time.monotonic()
       assert remaining > 0, 'job did not finish in time'
-      job._condition.wait(remaining)
-
-
-def _await_watching(job: Job, timeout: float = 10.0) -> None:
-  """block until a watch has claimed the job."""
-  deadline = time.monotonic() + timeout
-  with job._condition:
-    while not job._watching:
-      remaining = deadline - time.monotonic()
-      assert remaining > 0, 'no watch claimed the job in time'
       job._condition.wait(remaining)
 
 
@@ -42,19 +31,20 @@ def _await_spool(job: Job, expected: str, timeout: float = 10.0) -> None:
 
 
 def _drain(job: Job, limit: int) -> list[str]:
-  """watch until a bare exited state line; returns every watch result."""
+  """poll until a bare exited state line; returns every poll result."""
   results = []
   for _ in range(300):
-    out = job.watch(wait_seconds=5, limit=limit, tail=False)
+    out = job.poll(limit, tail=False)
     results.append(out)
     if out.startswith('exited') and '\n' not in out:
       return results
+    time.sleep(0.01)
   raise AssertionError('job never drained')
 
 
-def _body(watch_result: str) -> list[str]:
+def _body(poll_result: str) -> list[str]:
   # strip the state line and any markers, keep the output lines
-  lines = watch_result.splitlines()[1:]
+  lines = poll_result.splitlines()[1:]
   return [line for line in lines if not line.startswith('[...')]
 
 
@@ -76,25 +66,26 @@ def test_registry_unknown_id_lists_known_jobs():
     registry.get('job-9')
 
 
-def test_watch_tail_waits_for_exit_and_returns_output():
+def test_poll_tail_returns_finished_output():
   job = Job('job-1', 'echo one; echo two >&2; exit 3')
-  out = job.watch(wait_seconds=10, limit=100, tail=True)
+  _wait_finished(job)
+  out = job.poll(100, tail=True)
   assert out.startswith('exited (code 3)\n')
   # stderr merged into the one chronological stream
   assert 'one\ntwo' in out
-  # cursor jumped to the spool end: the next incremental watch is a bare state line
-  assert job.watch(wait_seconds=0, limit=100, tail=False) == 'exited (code 3)'
+  # cursor jumped to the spool end: the next incremental poll is a bare state line
+  assert job.poll(100) == 'exited (code 3)'
 
 
-def test_watch_incremental_paginates_oldest_first_with_pending_marker():
+def test_poll_head_paginates_oldest_first_with_pending_marker():
   total = 10
   job = Job('job-1', f'seq 1 {total}')
   _wait_finished(job)
-  first = job.watch(wait_seconds=0, limit=3, tail=False)
+  first = job.poll(3)
   assert first.startswith('exited (code 0)\n')
   assert _body(first) == ['1', '2', '3']
   assert '[...pending: 7 lines' in first
-  second = job.watch(wait_seconds=0, limit=3, tail=False)
+  second = job.poll(3)
   assert _body(second) == ['4', '5', '6']
   results = _drain(job, limit=3)
   collected = [line for result in results for line in _body(result)]
@@ -103,7 +94,7 @@ def test_watch_incremental_paginates_oldest_first_with_pending_marker():
   assert results[-1] == 'exited (code 0)'
 
 
-def test_watch_incremental_loses_nothing_across_slices():
+def test_poll_head_loses_nothing_across_slices():
   total = 50
   job = Job('job-1', f'seq 1 {total}')
   results = _drain(job, limit=7)
@@ -111,41 +102,19 @@ def test_watch_incremental_loses_nothing_across_slices():
   assert collected == [str(i) for i in range(1, total + 1)]
 
 
-def test_watch_quiet_window_returns_bare_running_heartbeat():
-  job = Job('job-1', 'sleep 30')
-  started = time.monotonic()
-  assert job.watch(wait_seconds=0.2, limit=100, tail=False) == 'running'
-  assert time.monotonic() - started < 5
-  job.kill(grace_seconds=1)
-
-
-def test_watch_nonblocking_poll_returns_immediately():
-  job = Job('job-1', 'sleep 30')
-  started = time.monotonic()
-  assert job.watch(wait_seconds=0, limit=100, tail=False) == 'running'
-  assert time.monotonic() - started < 1
-  job.kill(grace_seconds=1)
-
-
-def test_watch_blocks_until_output_arrives():
-  job = Job('job-1', 'sleep 0.3; echo late')
-  out = job.watch(wait_seconds=10, limit=100, tail=False)
-  assert _body(out) == ['late']
-
-
-def test_watch_tail_timeout_gives_progress_glimpse_and_jumps_cursor():
+def test_poll_tail_gives_progress_glimpse_and_jumps_cursor():
   job = Job('job-1', 'seq 1 20; sleep 30')
   _await_spool(job, '20\n')
-  out = job.watch(wait_seconds=0, limit=5, tail=True)
+  out = job.poll(5, tail=True)
   assert out.startswith('running\n')
   assert 'skipped before: 15 lines' in out
   assert _body(out) == ['16', '17', '18', '19', '20']
   # the skipped middle is discarded, not pending
-  assert job.watch(wait_seconds=0, limit=5, tail=False) == 'running'
+  assert job.poll(5) == 'running'
   job.kill(grace_seconds=1)
 
 
-def test_watch_giant_single_line_pages_mid_line_without_loss():
+def test_poll_giant_single_line_pages_mid_line_without_loss():
   length = BYTE_LIMIT + 500
   job = Job('job-1', f'head -c {length} /dev/zero | tr "\\0" x; echo')
   _wait_finished(job)
@@ -155,72 +124,13 @@ def test_watch_giant_single_line_pages_mid_line_without_loss():
   assert collected == 'x' * length
 
 
-def test_concurrent_watch_fails_immediately_and_kill_wakes_the_blocked_watch():
-  job = Job('job-1', 'sleep 30')
-  blocked_result: list[str] = []
-
-  def blocked_watch():
-    blocked_result.append(job.watch(wait_seconds=20, limit=100, tail=False))
-
-  watcher = threading.Thread(target=blocked_watch)
-  watcher.start()
-  _await_watching(job)
-  with pytest.raises(ValueError, match='job-1 is already being watched'):
-    job.watch(wait_seconds=0, limit=100, tail=False)
-  killed = job.kill(grace_seconds=5)
-  state = killed.removeprefix('job-1 ')
-  watcher.join(timeout=10)
-  assert not watcher.is_alive()
-  assert len(blocked_result) == 1
-  assert blocked_result[0].startswith(('running', state))
-  assert job.watch(wait_seconds=0, limit=100, tail=False) == state
-
-
-def test_wake_frees_the_job_for_the_next_watch():
-  job = Job('job-1', 'sleep 30')
-  woken = threading.Event()
-  woken_result: list[str] = []
-
-  def blocked_watch():
-    woken_result.append(job.watch(wait_seconds=600, limit=100, tail=False, woken=woken))
-
-  watcher = threading.Thread(target=blocked_watch)
-  watcher.start()
-  _await_watching(job)
-  job.wake(woken)
-  watcher.join(timeout=10)
-  assert not watcher.is_alive()
-  assert woken_result == ['running']
-  assert job.watch(wait_seconds=0, limit=100, tail=False) == 'running'
-  assert job.kill(grace_seconds=5) == 'job-1 exited (code -15)'
-
-
-def test_wake_that_lands_before_the_watch_starts_still_ends_it():
-  # the window outlasts the join below, so a wake this call fails to see shows up as
-  # a thread still running rather than as a slow pass.
-  job = Job('job-1', 'sleep 30')
-  woken = threading.Event()
-  job.wake(woken)
-  early_result: list[str] = []
-
-  def late_watch():
-    early_result.append(job.watch(wait_seconds=600, limit=100, tail=False, woken=woken))
-
-  watcher = threading.Thread(target=late_watch)
-  watcher.start()
-  watcher.join(timeout=10)
-  assert not watcher.is_alive(), 'the pre-woken watch blocked for its whole window'
-  assert early_result == ['running']
-  assert job.kill(grace_seconds=5) == 'job-1 exited (code -15)'
-
-
 def test_kill_terminates_and_record_stays_readable():
   job = Job('job-1', 'echo before; sleep 30')
   _await_spool(job, 'before\n')
   killed = job.kill(grace_seconds=5)
   state = killed.removeprefix('job-1 ')
   assert state.startswith('exited (code -')
-  out = job.watch(wait_seconds=5, limit=100, tail=False)
+  out = job.poll(100)
   assert out.startswith(f'{state}\n')
   assert _body(out) == ['before']
   assert job.kill() == f'job-1 already {state}'

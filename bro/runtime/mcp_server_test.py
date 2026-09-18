@@ -301,3 +301,67 @@ class TestCredsRendering:
       # summary LLM key; with the secret absent the listing advertises raw-only mode
       assert '{{' not in fetch['description']
       assert 'summarisation is unavailable' in fetch['description']
+
+
+class _ClosingServer(InProcessMCPServer):
+  def __init__(self, name: str = 'closing'):
+    super().__init__(name, [FunctionTool(_ping)])
+    self.close_count = 0
+
+  def close(self) -> None:
+    self.close_count += 1
+    super().close()
+
+
+class TestServerLifetime:
+  def test_http_lifespan_closes_every_resolved_server_once(self):
+    first = _ClosingServer('first')
+    second = _ClosingServer('second')
+    app = create_http_app([first, second], TOKEN)
+
+    with TestClient(app) as client:
+      assert client.get('/health').status_code == 200
+
+    assert first.close_count == 1
+    assert second.close_count == 1
+    app.close()
+    assert first.close_count == 1
+    assert second.close_count == 1
+
+  def test_http_construction_failure_closes_every_server(self):
+    first = _ClosingServer('same')
+    second = _ClosingServer('same')
+    with pytest.raises(SystemExit, match="duplicate tool name '_ping'"):
+      create_http_app([first, second], TOKEN)
+    assert first.close_count == 1
+    assert second.close_count == 1
+
+  @pytest.mark.asyncio
+  async def test_stdio_closes_the_server_after_its_streams(self, monkeypatch):
+    import contextlib
+
+    import mcp.server.stdio
+
+    events: list[str] = []
+    served = _ClosingServer()
+
+    class LowLevelServer:
+      def create_initialization_options(self):
+        return None
+
+      async def run(self, read_stream, write_stream, options):
+        assert (read_stream, write_stream, options) == ('read', 'write', None)
+        events.append('served')
+
+    @contextlib.asynccontextmanager
+    async def streams():
+      yield 'read', 'write'
+      events.append('streams closed')
+
+    monkeypatch.setattr(mcp_server, '_lowlevel_server', lambda label, tools: LowLevelServer())
+    monkeypatch.setattr(mcp.server.stdio, 'stdio_server', streams)
+
+    await mcp_server.run(served)
+
+    assert events == ['served', 'streams closed']
+    assert served.close_count == 1

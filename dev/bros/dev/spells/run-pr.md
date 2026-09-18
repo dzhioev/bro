@@ -285,9 +285,9 @@ a branch that is final before review cannot account for the work that follows it
 The flow's one mandatory local pass
 — on the folded, rebased tree, which is the tree that ships.
 Run the repo's gate over what the change reaches:
-a change-scoped selection where the repo offers one, otherwise the affected test files (the repo's own docs name the command and any environment-specific flags).{{when #harness = bro}} Run it with an explicit large `timeout_seconds` (600 fits)
-— `dev::bash`'s default kills a gate run mid-call;
-same for any other long command.{{end}}
+a change-scoped selection where offered, otherwise affected tests (use the repo's command and environment flags).{{when #harness = bro}} Run long commands through `bro::job` in `fg` mode with an explicit `timeout_seconds` (600 fits)
+— the default foreground wait is shorter;
+keep the bound beneath the client call cap on the MCP wire.{{end}}
 
 What this pass is worth is keeping a broken branch away from a reviewer, and a change-scoped selection buys that at a fraction of the price.
 The whole gate is the pull request's:
@@ -439,35 +439,28 @@ poll-pr <owner>/<repo> <pr_number>
 
 How to run it:
 
-{{iff #harness = bro}}
-Run it as a background job and read it iteratively
-— a plain `dev::bash` call would kill it at its timeout:
-
-1. `dev::job("poll-pr …")` → note the job id.
-2. Loop on `dev::watch(job_id, wait_seconds=1500)`.
-   Each return is one iteration:
-   - new output → react to every JSON line per step 15, then watch again;
-   - a bare `running` state line (quiet window) → watch again;
-   - `exited` right after a `merged`/`closed` event → the PR is terminal;
-     react per step 15, stop looping;
-   - `exited` right after a `watch_failed` event → react per step 15, stop looping;
-   - `exited` with no terminal event → the watcher died.
-     Do not just restart it
-     — a fresh `poll-pr` baselines all existing events as seen;
-     reconcile first (re-entry step 4), then start a new `dev::job`.
-3. When chaining into [[land]], stop the watcher with `dev::kill(job_id)`.
-
-The large `wait_seconds` keeps the run idling inside the tool call between events;
-don't shorten it to poll
-— every quiet return costs a full model round trip.
+{{iff #wire = bare}}
+Start it with `bro::job("poll-pr …", mode="watch")` and keep the returned job id.
+Its JSON lines arrive as background-job notifications.
+React to every line per step 15, use `bro::poll` when a pending marker says more output remains, then call `bro::chill()` whenever nothing else remains.
+A notification that the job exited right after `merged`, `closed`, or `watch_failed` is terminal;
+an exit without one means the watcher died.
+Do not just restart it
+— a fresh `poll-pr` baselines all existing events as seen;
+reconcile first (re-entry step 4), then start a new watch job.
+When chaining into [[land]], stop the watcher with `bro::kill(id=job_id)`.
 
 **The watch loop is the rest of the run.**
 Your terminal answer comes only after the PR reaches a terminal state
 — merged (typically via the [[land]] chain on APPROVED) or closed.
-Until then, keep calling `dev::watch` iteration after iteration, however quiet the PR stays;
+Until then, return to `bro::chill()` however quiet the PR stays;
 that idling is the run working as designed, not a stall to wrap up.
 Do not kill the job and end the run with a "waiting for review" report
 — an ended run watches nothing, and every later review event goes unhandled.
+{{eliff #harness = bro}}
+The raw MCP surface has no notification wake or `chill`, so it cannot own this persistent review loop.
+Do not start a watcher that the run cannot observe;
+raise that the PR must continue under bro-native or a full Claude session.
 {{eliff #harness = claude}}
 **MUST launch via the `Monitor` tool with `persistent: true`.
 Do NOT use Bash `run_in_background`**
@@ -600,7 +593,7 @@ Watcher silence is not evidence that checks finished.
 If this gate is not clear, leave the watcher running, retain the cleared review gates for this head, and wait for its green event.
 
 With all three gates clear, chain into the merge, and batch it
-— stop the watcher ({{iff #harness = bro}}`dev::kill(job_id)`{{else}}`TaskStop`{{end}}) and [[land]] **in the same response**, then follow it (it reads the branch to decide what master should carry, then merges with a single `land-pr` command).
+— {{iff #wire = bare}}stop the watcher with `bro::kill(id=job_id)`{{eliff #harness = claude}}stop it with `TaskStop`{{else}}the raw MCP surface has no watcher{{end}}, then [[land]] **in the same response** and follow it through the merge.
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**:
 informational;

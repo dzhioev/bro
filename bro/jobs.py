@@ -9,7 +9,6 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional
 
@@ -35,6 +34,16 @@ class Notification:
   lines: str
   exit_code: Optional[int] = None
   pending: bool = False
+
+
+@dataclass(frozen=True)
+class JobStatus:
+  id: str
+  mode: JobMode
+  command: str
+  state: Literal['running', 'exited']
+  exit_code: Optional[int]
+  unread_lines: int
 
 
 def _pending_marker(remainder: str, clamp_note: str, job_id: Optional[str] = None) -> Optional[str]:
@@ -73,7 +82,6 @@ class Job:
     self._returncode: Optional[int] = None
     self._exit_consumed = False
     self._cursor = self._spool.tell()
-    self._watching = False
     ready_read_fd, ready_write_fd = os.pipe()
     with (
       os.fdopen(ready_read_fd, 'rb') as ready_reader,
@@ -188,91 +196,82 @@ class Job:
     if has_news:
       self._mark_news()
 
-  @contextlib.contextmanager
-  def _claimed(self) -> Generator[None]:
+  def wait_finished(self, deadline: float, cancelled: threading.Event) -> bool:
+    """Wait for the exit and complete output drain without consuming either."""
     with self._condition:
-      if self._watching:
-        raise ValueError(
-          f'{self.id} is already being watched; watch is exclusive per job — the running '
-          'call holds the job for its whole wait, retry after it returns'
-        )
-      self._watching = True
-      self._condition.notify_all()
-    try:
-      yield
-    finally:
-      with self._condition:
-        self._watching = False
-        self._condition.notify_all()
+      while not self._finished_locked() and not cancelled.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+          return False
+        self._condition.wait(remaining)
+      return self._finished_locked()
 
-  def watch(
-    self,
-    *,
-    wait_seconds: float,
-    limit: int,
-    tail: bool,
-    woken: Optional[threading.Event] = None,
-  ) -> str:
-    """Block for a head or tail read, exclusively for this job."""
-    if woken is None:
-      woken = threading.Event()
-    deadline = time.monotonic() + max(wait_seconds, 0.0)
-    with self._claimed(), self._condition:
-      if tail:
-        return self._watch_tail(deadline, limit, woken)
-      return self._watch_head(deadline, limit, woken)
-
-  def wake(self, woken: threading.Event) -> None:
-    woken.set()
+  def wake(self) -> None:
     with self._condition:
       self._condition.notify_all()
 
-  def _watch_head(self, deadline: float, limit: int, woken: threading.Event) -> str:
-    while True:
+  def poll(self, limit: int = DEFAULT_LIMIT, *, tail: bool = False) -> str:
+    """Read the current unread head or tail without blocking."""
+    with self._condition:
       pending = self._unread_locked()
-      if len(pending) > 0:
-        return self._emit_head_locked(pending, limit)
-      if self._finished_locked():
-        return self._state_line_locked()
-      remaining = deadline - time.monotonic()
-      if remaining <= 0 or woken.is_set():
-        return self._state_line_locked()
-      self._condition.wait(remaining)
-
-  def _emit_head_locked(self, pending: str, limit: int) -> str:
-    kept, clamp_note = take_head(pending, limit)
-    self._advance_locked(len(kept))
-    pieces = [self._state_line_locked(), kept.rstrip('\n')]
-    marker = _pending_marker(pending[len(kept) :], clamp_note)
-    if marker is not None:
-      pieces.append(marker)
-    return '\n'.join(pieces)
-
-  def _watch_tail(self, deadline: float, limit: int, woken: threading.Event) -> str:
-    while True:
-      remaining = deadline - time.monotonic()
-      if self._finished_locked() or remaining <= 0 or woken.is_set():
-        section = self._unread_locked()
+      if tail:
         self._cursor = self._end_locked()
-        if len(section) == 0:
+        if len(pending) == 0:
           return self._state_line_locked()
-        return f'{self._state_line_locked()}\n{apply_limit(section, limit, keep="tail")}'
-      self._condition.wait(remaining)
+        return f'{self._state_line_locked()}\n{apply_limit(pending, limit, keep="tail")}'
+      if len(pending) == 0:
+        return self._state_line_locked()
+      kept, clamp_note = take_head(pending, limit)
+      self._advance_locked(len(kept))
+      pieces = [self._state_line_locked(), kept.rstrip('\n')]
+      marker = _pending_marker(pending[len(kept) :], clamp_note)
+      if marker is not None:
+        pieces.append(marker)
+      return '\n'.join(pieces)
+
+  def status(self) -> JobStatus:
+    with self._condition:
+      unread = self._unread_locked()
+      return JobStatus(
+        id=self.id,
+        mode=self.mode,
+        command=self.command,
+        state='running' if self._returncode is None else 'exited',
+        exit_code=self._returncode,
+        unread_lines=len(unread.splitlines()),
+      )
+
+  def settle_foreground(self, limit: int = DEFAULT_LIMIT) -> tuple[str, bool]:
+    """Consume a finished foreground result or atomically move a live job to background."""
+    with self._condition:
+      if self.mode != 'fg':
+        raise ValueError(f'{self.id} is {self.mode}, not foreground')
+      section = self._unread_locked()
+      self._cursor = self._end_locked()
+      if self._finished_locked():
+        if self._exit_consumed:
+          raise RuntimeError(f'{self.id} exit was already consumed')
+        self._exit_consumed = True
+        state = self._state_line_locked()
+        result = (
+          state if len(section) == 0 else f'{state}\n{apply_limit(section, limit, keep="tail")}'
+        )
+        return result, False
+      self.mode = 'bg'
+      self._condition.notify_all()
+      result = (
+        'running' if len(section) == 0 else f'running\n{apply_limit(section, limit, keep="tail")}'
+      )
+      return result, True
 
   def foreground_result(self, limit: int = DEFAULT_LIMIT) -> Optional[str]:
     """Consume a finished foreground job's exit and tail, or return None while live."""
     with self._condition:
-      if self.mode != 'fg':
-        raise ValueError(f'{self.id} is {self.mode}, not foreground')
       if not self._finished_locked():
         return None
-      if self._exit_consumed:
-        raise RuntimeError(f'{self.id} exit was already consumed')
-      section = self._unread_locked()
-      self._cursor = self._end_locked()
-      self._exit_consumed = True
-      state = self._state_line_locked()
-    return state if len(section) == 0 else f'{state}\n{apply_limit(section, limit, keep="tail")}'
+    result, became_background = self.settle_foreground(limit)
+    assert not became_background
+    return result
 
   def drain_notification(self, limit: int = DEFAULT_LIMIT) -> Optional[Notification]:
     with self._condition:

@@ -32,7 +32,8 @@ raw is not a harness value.
   it renders recording and summon state into an atomic file while its pid file is live, exits when its runner parent disappears, and holds a session-state lock that serializes resume;
   a runner-side monitor reaps it and clears only the live files that pid still owns, while Claude's refresh command only checks the pid and cats the projection.
 - `print_anthropic_key.py` and `watch_guard.py`
-  — leaf modules invoked by Claude settings through the runner interpreter (`python -m ride.claude.<module>`).
+  — leaf modules invoked by Claude settings through the runner interpreter (`python -m ride.claude.<module>`);
+  the guard applies a folded finite shell roster to both Bash and Monitor calls.
 
 ## Invariants
 

@@ -1,7 +1,9 @@
 import asyncio
+import contextlib
 import json
 import os
 import signal
+import time
 from pathlib import Path
 from typing import ClassVar, Optional
 from unittest.mock import MagicMock
@@ -14,6 +16,7 @@ import bro.mcp as mcp
 import bro.workspace.banner as workspace_banner
 from bro.base import credentials
 from bro.base.condition import ConditionError, iff, when
+from bro.base.liveness_test_helper import Liveness
 from bro.bro import BaseBro, BroRaised, feature
 from bro.broker.brotocol import TALK_ENV
 from bro.datasources.file import FileSource
@@ -21,8 +24,8 @@ from bro.datasources.man import ManPage, ManSource
 from bro.datasources.searchable import Hit, SearchableDataSource
 from bro.harness import claude
 from bro.inbox import Inbox
-from bro.jobs import Registry
-from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer
+from bro.jobs import Job, Registry
+from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, Tool
 from bro.llm.tracker import ToolStepSource
 from bro.mcp import MCPServerSpec, describe
 from bro.summon import MAY_SUMMON_ENV, SUMMONED_ENV, encode_may_summon
@@ -544,10 +547,10 @@ class TestToolLayers:
   def test_a_summoning_run_reaches_the_summon_watch_over_a_block_of_monitor(self, monkeypatch):
     monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
     bro = _ShellBlockingBro()
-    assert bro.narrowed_tool_commands('claude') == {'Monitor': (claude.SUMMON_WATCH,)}
+    assert bro.narrowed_tool_commands('claude') == {'Monitor': (bro_module.SUMMON_WATCH_COMMAND,)}
     blocked = set(bro.blocked_tool_names('claude'))
     assert 'Bash' in blocked
-    assert blocked.isdisjoint({'Monitor', *claude._TASK_CONTROL})
+    assert blocked.isdisjoint({'Monitor', 'TaskOutput', 'TaskStop'})
 
   def test_a_summoning_run_gains_the_summon_watch_on_a_narrowed_monitor(self, monkeypatch):
     monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
@@ -555,13 +558,14 @@ class TestToolLayers:
     class WatchingBro(BaseBro):
       name = 'watching-and-summoning'
       description = 'd'
-      tools: ClassVar = [claude.block(*claude.SHELL), claude.watch('watch it')]
+      tools: ClassVar = [claude.block(*claude.SHELL), mcp.shell('watch it')]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
     assert WatchingBro().narrowed_tool_commands('claude') == {
-      'Monitor': ('watch it', claude.SUMMON_WATCH)
+      'Bash': ('watch it',),
+      'Monitor': ('watch it', bro_module.SUMMON_WATCH_COMMAND),
     }
 
   def test_a_run_that_may_summon_nobody_keeps_its_block_of_monitor(self, monkeypatch):
@@ -574,8 +578,8 @@ class TestToolLayers:
     monkeypatch.setenv(SUMMONED_ENV, '1')
     monkeypatch.setenv(TALK_ENV, 'requester.say,worker.say')
     bro = _ShellBlockingBro()
-    assert bro.narrowed_tool_commands('claude') == {'Monitor': (claude.SUMMON_WATCH,)}
-    assert set(bro.blocked_tool_names('claude')).isdisjoint({'Monitor', *claude._TASK_CONTROL})
+    assert bro.narrowed_tool_commands('claude') == {'Monitor': (bro_module.SUMMON_WATCH_COMMAND,)}
+    assert set(bro.blocked_tool_names('claude')).isdisjoint({'Monitor', 'TaskOutput', 'TaskStop'})
 
   def test_a_summoned_run_with_a_silent_summoner_keeps_monitor_blocked(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
@@ -2049,3 +2053,271 @@ class TestPersona:
 class TestAgentIdentity:
   def test_agent_namespaces_the_bro_name(self):
     assert EchoBro().agent == 'bro//echo'
+
+
+class TestShellRoster:
+  def test_exact_rosters_fold_in_declaration_order(self):
+    class ShellBro(BaseBro):
+      name = 'shell-roster'
+      description = 'd'
+      tools: ClassVar = [mcp.shell('git status'), mcp.shell('git diff', 'git status')]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    selection = ShellBro()._selected_tools_for('bro')
+    assert selection.shell_commands == ('git status', 'git diff')
+    assert selection.shell_unrestricted is False
+
+  def test_any_dominates_exact_commands(self):
+    class ShellBro(BaseBro):
+      name = 'shell-any'
+      description = 'd'
+      tools: ClassVar = [mcp.shell('git status'), mcp.shell(mcp.ANY)]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    selection = ShellBro()._selected_tools_for('bro')
+    assert selection.shell_unrestricted is True
+
+  def test_finite_claude_roster_gates_bash_and_monitor_and_returns_control(self):
+    class ShellBro(BaseBro):
+      name = 'shell-gated'
+      description = 'd'
+      tools: ClassVar = [claude.block(*claude.SHELL), mcp.shell('git status')]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    bro = ShellBro()
+    assert bro.blocked_tool_names('claude') == ()
+    assert bro.narrowed_tool_commands('claude') == {
+      'Bash': ('git status',),
+      'Monitor': ('git status',),
+    }
+
+  def test_finite_claude_roster_requires_the_shell_to_be_blocked(self):
+    class InvalidBro(BaseBro):
+      name = 'shell-unblocked'
+      description = 'd'
+      tools: ClassVar = [mcp.shell('git status')]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(
+      ValueError, match='Bash is narrowed through the shell roster but never blocked'
+    ):
+      InvalidBro().blocked_tool_names('claude')
+
+  def test_any_leaves_claude_native_shell_untouched(self):
+    class ShellBro(BaseBro):
+      name = 'shell-unrestricted'
+      description = 'd'
+      tools: ClassVar = [mcp.shell(mcp.ANY)]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    bro = ShellBro()
+    assert bro.blocked_tool_names('claude') == ()
+    assert bro.narrowed_tool_commands('claude') == {}
+
+  def test_summon_watch_is_the_only_native_command_without_a_declaration(self, monkeypatch):
+    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    selection = EchoBro()._selected_tools_for('bro')
+    assert selection.shell_commands == (bro_module.SUMMON_WATCH_COMMAND,)
+    assert selection.shell_unrestricted is False
+
+
+class TestJobServiceTools:
+  class AnyShellBro(BaseBro):
+    name = 'job-tools'
+    description = 'd'
+    tools: ClassVar = [mcp.shell(mcp.ANY)]
+
+    def __init__(self):
+      super().__init__(system_prompt='')
+
+  async def _tools(
+    self, *, wire: mcp.Wire = 'bare', run: Optional[StubRun] = None
+  ) -> tuple[MCPServer, dict[str, Tool]]:
+    server = _service_server(self.AnyShellBro(), run=run, wire=wire)
+    return server, {tool.name: tool for tool in await server.list_tools()}
+
+  @pytest.mark.asyncio
+  async def test_mounting_follows_harness_and_wire(self):
+    run = StubRun()
+    bare_server, bare = await self._tools(run=run)
+    mcp_server, served = await self._tools(wire='mcp')
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(bare_server.close)
+      stack.callback(mcp_server.close)
+      assert {'job', 'poll', 'kill', 'jobs', 'chill'} <= set(bare)
+      assert {'job', 'poll', 'kill', 'jobs'} <= set(served)
+      assert 'chill' not in served
+      mode = served['job'].parameters['properties']['mode']
+      assert set(mode['enum']) == {'fg', 'bg'}
+      claude_server = bro_module._build_service_server(
+        self.AnyShellBro(), include_raise=False, harness='claude', wire='mcp'
+      )
+      claude_names = {tool.name for tool in await claude_server.list_tools()}
+      assert claude_names.isdisjoint({'job', 'poll', 'kill', 'jobs', 'chill'})
+
+  @pytest.mark.asyncio
+  async def test_exact_roster_rejects_appended_shell_syntax(self):
+    class ExactShellBro(BaseBro):
+      name = 'exact-shell'
+      description = 'd'
+      tools: ClassVar = [mcp.shell('printf allowed')]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    run = StubRun()
+    server = _service_server(ExactShellBro(), run=run)
+    tools = {tool.name: tool for tool in await server.list_tools()}
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      result = await tools['job'].call({'command': '  printf allowed  ', 'mode': 'fg'})
+      assert result == 'exited (code 0)\nallowed'
+      with pytest.raises(ValueError, match='must match exactly'):
+        await tools['job'].call({'command': 'printf allowed; true', 'mode': 'fg'})
+
+  @pytest.mark.asyncio
+  async def test_foreground_job_interrupted_by_other_news_becomes_background(self):
+    run = StubRun()
+    server, tools = await self._tools(run=run)
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      run.registry.start('sleep 0.3', 'bg')
+      result = await tools['job'].call(
+        {'command': 'printf early; sleep 1; printf late', 'mode': 'fg', 'timeout_seconds': 5}
+      )
+      assert isinstance(result, str)
+      assert result.startswith('running\nearly')
+      assert "continues in bg mode; read on with poll(id='job-2')" in result
+      assert run.registry.get('job-2').mode == 'bg'
+      first = run.inbox.drain()
+      assert first is not None and 'job-1' in first.job_ids
+
+      chilled = await tools['chill'].call({'seconds': 5})
+      assert isinstance(chilled, dict)
+      assert chilled['woken'] is True
+      second = run.inbox.drain()
+      assert second is not None
+      assert '[job-2 bg `printf early; sleep 1; printf late` exited (code 0)]' in second.text
+      assert 'late' in second.text
+      assert run.inbox.drain() is None
+
+  @pytest.mark.asyncio
+  async def test_foreground_timeout_becomes_background_and_names_its_clamp(self, monkeypatch):
+    run = StubRun()
+    server, tools = await self._tools(run=run)
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      monkeypatch.setattr(bro_module, '_JOB_WAIT_CAP_SECONDS', 0.05)
+      result = await tools['job'].call({'command': 'sleep 0.3', 'mode': 'fg', 'timeout_seconds': 5})
+      assert isinstance(result, str)
+      assert result.startswith('running')
+      assert "continues in bg mode; read on with poll(id='job-1')" in result
+      assert '[timeout_seconds 5 clamped to 0.05]' in result
+      assert run.registry.get('job-1').mode == 'bg'
+
+  @pytest.mark.asyncio
+  async def test_exit_during_foreground_settlement_is_consumed_once(self, monkeypatch):
+    original = Job.settle_foreground
+
+    def delayed_settlement(job: Job, limit: int) -> tuple[str, bool]:
+      time.sleep(0.1)
+      return original(job, limit)
+
+    monkeypatch.setattr(Job, 'settle_foreground', delayed_settlement)
+    run = StubRun()
+    server, tools = await self._tools(run=run)
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      result = await tools['job'].call(
+        {'command': 'sleep 0.05; printf done', 'mode': 'fg', 'timeout_seconds': 0.01}
+      )
+      assert result == 'exited (code 0)\ndone'
+      assert run.inbox.drain() is None
+
+  @pytest.mark.asyncio
+  async def test_chill_refuses_without_a_live_job_and_names_its_clamp(self, monkeypatch):
+    run = StubRun()
+    server, tools = await self._tools(run=run)
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      with pytest.raises(ValueError, match='at least one live job'):
+        await tools['chill'].call({})
+      run.registry.start('sleep 0.3', 'bg')
+      monkeypatch.setattr(bro_module, '_JOB_WAIT_CAP_SECONDS', 0.05)
+      result = await tools['chill'].call({'seconds': 5})
+      assert isinstance(result, dict)
+      assert result['woken'] is False
+      assert result['note'] == 'seconds 5 clamped to 0.05'
+
+  @pytest.mark.asyncio
+  async def test_cancelling_foreground_wait_leaves_a_background_job(self):
+    run = StubRun()
+    server, tools = await self._tools(run=run)
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      call = asyncio.create_task(
+        tools['job'].call({'command': 'sleep 30', 'mode': 'fg', 'timeout_seconds': 60})
+      )
+      for _ in range(100):
+        if len(run.registry.values()) > 0:
+          break
+        await asyncio.sleep(0.01)
+      call.cancel()
+      with pytest.raises(asyncio.CancelledError):
+        await call
+      [job] = run.registry.values()
+      assert job.mode == 'bg'
+
+  @pytest.mark.asyncio
+  async def test_summon_watch_admission_mounts_a_single_command_shell(self, monkeypatch):
+    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    run = StubRun()
+    server = _service_server(EchoBro(), run=run)
+    tools = {tool.name: tool for tool in await server.list_tools()}
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      assert {'job', 'poll', 'kill', 'jobs', 'chill'} <= set(tools)
+      started = await tools['job'].call({'command': bro_module.SUMMON_WATCH_COMMAND, 'mode': 'bg'})
+      assert started == 'started job-1 (bg)'
+      with pytest.raises(ValueError, match='must match exactly'):
+        await tools['job'].call({'command': 'true', 'mode': 'bg'})
+
+  @pytest.mark.asyncio
+  async def test_mcp_service_owns_and_closes_its_registry(self, tmp_path):
+    server, tools = await self._tools(wire='mcp')
+    with contextlib.ExitStack() as stack:
+      stack.callback(server.close)
+      liveness = stack.enter_context(contextlib.closing(Liveness(tmp_path / 'job-liveness')))
+      await tools['job'].call({'command': liveness.holding('sleep 30'), 'mode': 'bg'})
+      await asyncio.to_thread(liveness.wait_started)
+      listed = await tools['jobs'].call({})
+      assert isinstance(listed, dict)
+      [status] = listed['result']
+      assert status['id'] == 'job-1'
+      assert status['mode'] == 'bg'
+      assert status['state'] == 'running'
+      assert status['exit_code'] is None
+
+      server.close()
+
+      liveness.assert_reaped()
+      with pytest.raises(RuntimeError, match='registry is closed'):
+        await tools['job'].call({'command': 'true', 'mode': 'bg'})
