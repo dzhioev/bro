@@ -13,12 +13,25 @@ import pytest
 import bro.llm.llms.openai as llm_llms_openai
 import bro.llm.usage as usage
 from bro.base import credentials
+from bro.base.suite_environment import host_credential_store
 from bro.native.runner import Runner
 from bros.dev import Dev
 
+
+def _host_holds_the_openai_key() -> bool:
+  with host_credential_store():
+    return credentials.available('openai')
+
+
 pytestmark = pytest.mark.skipif(
-  not credentials.available('openai'), reason='needs the openai credential'
+  not _host_holds_the_openai_key(), reason='needs the openai credential'
 )
+
+
+@pytest.fixture
+def host_store():
+  with host_credential_store():
+    yield
 
 
 class _ProbeDev(Dev):
@@ -52,7 +65,7 @@ def staged_repo(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_dev_commit_carries_the_footer(staged_repo):
+async def test_dev_commit_carries_the_footer(staged_repo, host_store):
   runner = Runner(_ProbeDev.create(llm_llms_openai.LLMSpec(reasoning_effort='low')))
   await runner.run(
     'Commit the staged change in this repository with an appropriate message '
