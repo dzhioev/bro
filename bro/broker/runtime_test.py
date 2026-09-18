@@ -4,6 +4,7 @@ from typing import cast
 import pytest
 
 from bro.broker import brotocol
+from bro.broker.brotocol import Talk
 from bro.broker.runtime import Runtime
 from bro.broker.spawn import LaunchSpec, Spawner
 from bro.broker.transport import Provisioned, ServerTransport
@@ -52,8 +53,8 @@ class FakeSpawner:
     self.calls = []
     self.handle = FakeHandle()
 
-  async def spawn(self, launch, provisioned, quest):
-    self.calls.append((launch, provisioned, quest))
+  async def spawn(self, launch, provisioned, quest, talk):
+    self.calls.append((launch, provisioned, quest, talk))
     return self.handle
 
 
@@ -94,9 +95,10 @@ async def test_runtime_launches_through_the_spawn_port():
   spawner = FakeSpawner()
   runtime = Runtime(cast(ServerTransport, transport), cast(Spawner, spawner))
   provisioned = await runtime.provision(ChannelEvents())
-  handle = await runtime.launch(LaunchSpec(), provisioned, 'quest')
+  talk: Talk = frozenset({'worker.say'})
+  handle = await runtime.launch(LaunchSpec(), provisioned, 'quest', talk)
   assert handle is spawner.handle
-  assert spawner.calls[0][1:] == (provisioned, 'quest')
+  assert spawner.calls[0][1:] == (provisioned, 'quest', talk)
 
 
 @pytest.mark.asyncio

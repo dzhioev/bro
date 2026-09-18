@@ -8,12 +8,13 @@ from types import SimpleNamespace
 import pytest
 
 from bro.broker import brotocol
-from bro.broker.brotocol import MAX_FRAME_BYTES, Message
+from bro.broker.brotocol import MAX_FRAME_BYTES, PROTOCOL_REVISION, Message
 from bro.broker.transport import ChannelID, connect
 from bro.broker.transports.tcp import (
   Endpoint,
   TcpClientTransport,
   TcpServerTransport,
+  open_channel,
   parse_address,
   redacted,
 )
@@ -71,7 +72,7 @@ async def _raw_attach(provisioned) -> tuple[asyncio.StreamReader, asyncio.Stream
   reader, writer = await asyncio.open_connection(HOST, provisioned.host_endpoint.port)
   writer.write(provisioned.host_endpoint.token.encode() + b'\n')
   await writer.drain()
-  assert await asyncio.wait_for(reader.readline(), TIMEOUT) == b'ok\n'
+  assert await asyncio.wait_for(reader.readline(), TIMEOUT) == f'ok {PROTOCOL_REVISION}\n'.encode()
   return reader, writer
 
 
@@ -88,9 +89,9 @@ async def test_delivery_and_channel_authenticity():
     # exercises scheme dispatch
     client_b = await asyncio.to_thread(connect, provisioned_b.host_endpoint.address(HOST))
 
-    await asyncio.to_thread(client_a.send, brotocol.progress('X', {'who': 'a'}))
+    await asyncio.to_thread(client_a.send, brotocol.message('X', {'who': 'a'}))
     # B puts a forged claim in its payload; attribution must still follow the token
-    await asyncio.to_thread(client_b.send, brotocol.progress('X', {'who': 'b', 'claim': 'I am A'}))
+    await asyncio.to_thread(client_b.send, brotocol.message('X', {'who': 'b', 'claim': 'I am A'}))
 
     seen = {}
     for _ in range(2):
@@ -124,6 +125,56 @@ async def test_unknown_token_is_refused_at_attach():
 
 
 @pytest.mark.asyncio
+async def test_attach_ack_carries_the_protocol_revision():
+  async with running_server() as server:
+    provisioned = await server.transport.provision()
+    reader, writer = await _raw_attach(provisioned)
+    del reader
+    writer.close()
+    await writer.wait_closed()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('ack', [b'ok 2\n', b'ok\n'])
+async def test_async_client_refuses_a_different_or_missing_protocol_revision(ack):
+  async def answer_attach(reader, writer):
+    await reader.readline()
+    writer.write(ack)
+    await writer.drain()
+    writer.close()
+
+  server = await asyncio.start_server(answer_attach, HOST, 0)
+  try:
+    port = server.sockets[0].getsockname()[1]
+    address = Endpoint(port=port, token='token').address(HOST)
+    with pytest.raises(ConnectionError, match=r'local 3, remote (2|missing)'):
+      await open_channel(address)
+  finally:
+    server.close()
+    await server.wait_closed()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('ack', [b'ok 2\n', b'ok\n'])
+async def test_synchronous_client_refuses_a_different_or_missing_protocol_revision(ack):
+  async def answer_attach(reader, writer):
+    await reader.readline()
+    writer.write(ack)
+    await writer.drain()
+    writer.close()
+
+  server = await asyncio.start_server(answer_attach, HOST, 0)
+  try:
+    port = server.sockets[0].getsockname()[1]
+    address = Endpoint(port=port, token='token').address(HOST)
+    with pytest.raises(ConnectionError, match=r'local 3, remote (2|missing)'):
+      await asyncio.to_thread(TcpClientTransport, address)
+  finally:
+    server.close()
+    await server.wait_closed()
+
+
+@pytest.mark.asyncio
 async def test_oversize_attach_line_is_refused():
   async with running_server() as server:
     provisioned = await server.transport.provision()
@@ -147,7 +198,7 @@ async def test_accept_fires_on_connect_before_any_message():
     assert await _next(server.sink.connects) == provisioned.channel
     assert server.sink.messages.empty()  # birth precedes the first frame
 
-    await asyncio.to_thread(client.send, brotocol.progress('X', {}))
+    await asyncio.to_thread(client.send, brotocol.message('X', {}))
     channel, _ = await _next(server.sink.messages)
     assert channel == provisioned.channel
     client.close()
@@ -163,10 +214,10 @@ async def test_server_reply_reaches_only_its_channel():
     for _ in range(2):
       await _next(server.sink.connects)
 
-    await server.transport.send(provisioned_a.channel, brotocol.progress('X', {'r': 1}))
+    await server.transport.send(provisioned_a.channel, brotocol.message('X', {'r': 1}))
     reply = await asyncio.to_thread(client_a.receive, TIMEOUT)
     assert reply is not None
-    assert reply.type == 'progress'
+    assert reply.type == 'message'
     assert reply.payload == {'r': 1}
     assert await asyncio.to_thread(client_b.receive, 0.2) is None
     client_a.close()
@@ -180,15 +231,15 @@ async def test_ndjson_framing_coalesced_and_split():
     _, writer = await _raw_attach(provisioned)
 
     # two frames written in one syscall must deframe into two messages
-    frame1 = brotocol.progress('X', {'n': 1}).to_bytes() + b'\n'
-    frame2 = brotocol.progress('X', {'n': 2}).to_bytes() + b'\n'
+    frame1 = brotocol.message('X', {'n': 1}).to_bytes() + b'\n'
+    frame2 = brotocol.message('X', {'n': 2}).to_bytes() + b'\n'
     writer.write(frame1 + frame2)
     await writer.drain()
     numbers = {(await _next(server.sink.messages))[1].payload['n'] for _ in range(2)}
     assert numbers == {1, 2}
 
     # one frame split across two writes must reassemble into one message
-    frame3 = brotocol.progress('X', {'n': 3}).to_bytes() + b'\n'
+    frame3 = brotocol.message('X', {'n': 3}).to_bytes() + b'\n'
     writer.write(frame3[:4])
     await writer.drain()
     writer.write(frame3[4:])

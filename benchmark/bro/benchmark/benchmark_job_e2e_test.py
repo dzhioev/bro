@@ -30,7 +30,7 @@ from bro.bench.job import BENCHMARK, benchmark_kind
 from bro.benchmark.bundle import build, claude_code_cache, default_root, workspace_root
 from bro.benchmark.e2e_test_helper import LIVE_TRIAL, assert_graded_run, one_task_config
 from bro.benchmark.job import BUNDLE_MANIFEST
-from bro.broker.brotocol import Message
+from bro.broker.brotocol import TALK_ENV, Message, Talk, encode_talk
 from bro.broker.dispatcher import Broker, Dispatcher
 from bro.broker.job import OUTPUT_DIRECTORY
 from bro.broker.runtime import Peer
@@ -93,7 +93,9 @@ class _SessionSpawner(Spawner):
     self.handle: _SessionHandle | None = None
 
   @override
-  async def spawn(self, launch: LaunchSpec, channel: Provisioned, quest: str) -> ChildHandle:
+  async def spawn(
+    self, launch: LaunchSpec, channel: Provisioned, quest: str, talk: Talk
+  ) -> ChildHandle:
     assert isinstance(launch, _SessionCommand)
     process = await asyncio.create_subprocess_exec(
       *launch.argv,
@@ -101,6 +103,7 @@ class _SessionSpawner(Spawner):
         **os.environ,
         'BROKER_CHANNEL': channel.host_endpoint.address(LOCAL_HOST),
         'BROKER_QUEST': quest,
+        TALK_ENV: encode_talk(talk),
       },
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,

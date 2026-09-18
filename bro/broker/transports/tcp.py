@@ -6,7 +6,8 @@ the constructor names — all on the same port, so a single port number reaches
 the broker from wherever a peer runs.
 
 Channel authenticity: a connection opens with its channel's token alone on the
-first line, and the server answers `ok` before any message flows. The token is
+first line, and the server answers `ok <protocol revision>` before any message flows.
+The token is
 what the server attributes the connection by; the peer can put nothing on the
 wire that changes that, and there is no `from` field to forge. A connection that
 opens with an unknown token, an oversize line, or nothing at all within
@@ -39,7 +40,7 @@ from urllib.parse import urlsplit
 
 from bro.base import log
 from bro.base.lulid import lulid
-from bro.broker.brotocol import MAX_FRAME_BYTES, Message, ProtocolError
+from bro.broker.brotocol import MAX_FRAME_BYTES, PROTOCOL_REVISION, Message, ProtocolError
 from bro.broker.transport import (
   Address,
   ChannelID,
@@ -56,7 +57,7 @@ _LISTEN_BACKLOG = 16
 _READ_CHUNK = 65536
 _TOKEN_BYTES = 32
 _ATTACH_TIMEOUT = 30.0
-_ATTACH_ACK = b'ok'
+_ATTACH_ACK = f'ok {PROTOCOL_REVISION}'.encode()
 _MAX_ATTACH_LINE = 4096  # the client's bound on the ack; the server's is the stream limit
 _BIND_ATTEMPTS = 8  # a port free on the first host may be taken on a later one
 
@@ -102,10 +103,27 @@ async def open_channel(
   writer.write(token.encode() + b'\n')
   await writer.drain()
   ack = await asyncio.wait_for(reader.readline(), _ATTACH_TIMEOUT)
-  if ack.strip() != _ATTACH_ACK:
+  try:
+    _require_attach_revision(ack.strip())
+  except ConnectionError as error:
     writer.close()
-    raise ConnectionError(f'channel {redacted(address)} refused the attach')
+    await writer.wait_closed()
+    raise ConnectionError(f'channel {redacted(address)} refused the attach: {error}') from error
   return reader, writer
+
+
+def _require_attach_revision(line: bytes) -> None:
+  prefix = b'ok '
+  remote: object = 'missing'
+  if line.startswith(prefix):
+    try:
+      remote = int(line.removeprefix(prefix))
+    except ValueError:
+      remote = line.removeprefix(prefix).decode('utf-8', errors='replace') or 'missing'
+  if remote != PROTOCOL_REVISION:
+    raise ConnectionError(
+      f'broker protocol revision mismatch: local {PROTOCOL_REVISION}, remote {remote}'
+    )
 
 
 async def read_attach_token(reader: asyncio.StreamReader) -> Optional[str]:
@@ -375,8 +393,10 @@ class TcpClientTransport(ClientTransport):
       self._read_buffer += data
     line = bytes(self._read_buffer[:newline_index])
     del self._read_buffer[: newline_index + 1]
-    if line != _ATTACH_ACK:
-      raise ConnectionError(f'broker channel answered the attach with {line!r}')
+    try:
+      _require_attach_revision(line)
+    except ConnectionError as error:
+      raise ConnectionError(f'broker channel refused the attach: {error}') from error
 
   def send(self, message: Message) -> None:
     frame = message.to_bytes()

@@ -287,9 +287,12 @@ def _summoned_env(
   """the env that makes a launch the manual summon child the token names: the
   summoner's channel, the quest the child answers (its token), and the
   summoned-child facts."""
+  from bro.broker.brotocol import TALK_ENV, encode_talk
+
   return {
     UPSTREAM_ENV: address,
     'BROKER_QUEST': summoned.token,
+    TALK_ENV: encode_talk(summoned.talk),
     'RIDE_WORKSPACE': spec.name,
     **summoned_child_env(summoned.may_summon, summoned.permits, summoned.summoner),
   }

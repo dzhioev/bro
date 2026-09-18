@@ -9,16 +9,21 @@ it imports neither `ride` nor the bro class graph.
 `brotocol.py` owns four closed envelope types:
 
 - `request {id, payload: {kind, args}}` opens a quest.
-- `mark {quest, payload}` carries `accepted`, `started`, or `trail`.
-- `progress {quest, payload}` carries kind-defined interim data.
+- `mark {quest, payload}` carries `accepted`, `started`, `trail`, or `listening`.
+- `message {quest, payload, id?, reply_to?}` carries kind-defined chat traffic in either direction.
 - `result {quest, payload}` closes the quest exactly once.
   Its optional error and detail reason are strings.
 
+A message with neither role field is a say, one with `id` is a question, and one with `reply_to` is a reply;
+a reply may carry both fields to ask a counter-question.
+Every quest fixes a subset of `requester.say`, `requester.question`, `worker.say`, and `worker.question` as its talk when it opens.
+A reply needs the other end's question right, and a counter-question also needs the sender's question right.
 Mark origin is structural:
-`accepted` is dispatcher-born, `started` is Worker-born, and `trail` is the only mark a worker process may send.
+`accepted` is dispatcher-born, `started` is Worker-born, and a worker process may send `trail` or `listening`.
 `MAX_FRAME_BYTES` is the encoded-frame bound;
-`MAX_IDENTIFIER_BYTES` keeps quest, kind, and trail identifiers small enough for journal projections.
+`MAX_IDENTIFIER_BYTES` keeps quest, kind, trail, and chat identifiers small enough for journal projections.
 The TCP adapter owns NDJSON framing and the attach handshake.
+An accepted attach answers `ok <PROTOCOL_REVISION>`, and both client adapters refuse a missing or differing revision before messages flow.
 
 ## Layers
 
@@ -27,6 +32,7 @@ The TCP adapter owns NDJSON framing and the attach handshake.
   The secret attach token authenticates and attributes a channel;
   a new accepted attach supersedes its predecessor.
 - `spawn.py` defines the `Spawner` / `ChildHandle` launch port and the bounded output-tail buffer.
+  Every spawner receives the quest's talk and publishes it as sorted, comma-joined `BROKER_TALK` beside `BROKER_QUEST`.
 - `job.py` launches mute host jobs in their own process group and owns the run-directory layout.
 - `runtime.py` is shape-free mechanism:
   transport serving, per-channel connect/disconnect demultiplexing, send, provision/close, and process launch helpers.
@@ -43,7 +49,7 @@ The TCP adapter owns NDJSON framing and the attach handshake.
 - `dispatcher.py` routes over journal records, binds one Worker per worker-backed quest, synthesizes failure from Worker death, and serves the reserved `query` / `events` read kinds.
   Its handler vocabulary is `reply`, `deny`, `spawn`, `job`, and `expect`.
   Delivery fits an oversized generated result into a correlated failure or denial with a truncation marker.
-- `client.py` is the synchronous peer handle for requests, marks, progress, results, and correlated waits.
+- `client.py` is the synchronous peer handle for requests, marks, results, received messages, and correlated waits.
   `BROKER_CHANNEL` is its client address;
   `BROKER_UPSTREAM` without a channel means the session proxy failed at launch and raises with the broxy log path.
 - `broxy.py` is the stateless session multiplexer:
@@ -55,13 +61,16 @@ The TCP adapter owns NDJSON framing and the attach handshake.
 
 ## Journal
 
-A `Record` stores quest id, kind, parent quest, requester, worker, bounded args, folded lifecycle, trail id, and the retained result.
+A `Record` stores quest id, kind, parent quest, requester, worker, bounded args, folded lifecycle, trail id, retained result, and the quest's talk.
+It also stores `listening`, the bounded pending-question set, the bounded message/refusal tail, and `chat_seq`, the journal sequence of its latest message or refusal.
 Worker-backed authorization calls `Journal.open`, which appends `accepted`;
 `Dispatcher.deny` creates a terminal denial record.
 Inline and read kinds answer without records.
 
 The event sequence is monotone for the broker root.
 Events carry their own quest, kind, parent, args, transition, timestamp, and transition payload.
+`message`, `refused`, and `listening` are the chat transitions.
+Message heads use the same parameterized bounding implementation as args, with their own string-head and byte budget.
 The retention ladder exempts live records:
 retained result payloads age out first, then terminal records, while lineage remains for the session lifetime.
 The event ring is independently bounded.
@@ -72,21 +81,29 @@ a dict over budget keeps its top-level scalar fields, dropping the largest while
 Trail ids and terminal reasons use a bounded journal projection with an explicit truncation marker.
 
 `query` returns caller-scoped, frame-bounded live-first pages with an opaque continuation cursor;
-it also supports a terminal wait by id and reports `result_evicted` when a retained result cannot fit its response frame.
+it supports a terminal wait by id, `since` returns that wait when `chat_seq` advances, and `result_evicted` reports a retained result that cannot fit its response frame.
+The listing view carries talk, listening, pending questions, and chat sequence, while the by-id view also carries the chat tail.
+A by-id response keeps every pending question and the newest suffix of the tail that fits the frame;
+`messages_truncated` marks omitted older tail entries.
+The retained result has priority over the tail and becomes `result_evicted` only when it cannot fit after the tail is removed.
 `events` returns caller-scoped, frame-bounded ordered batches after a cursor and supports bounded long-polling.
 Both clamp waits to 600 seconds, are answered inline, and never record themselves.
-A caller sees the quests it requested and their descendants according to permanent journal ancestry;
-it never sees the parent-owned quest that its own worker answers.
+A caller sees the quests it requested and their descendants according to permanent journal ancestry.
+It may also query the quest its own worker answers by id and see that quest's three chat transitions, but not list it or see its lifecycle transitions.
 
 ## Dispatcher invariants
 
 The three routing rules are:
 
-1. a live quest accepts marks, progress, and a result only from its bound worker;
-2. a request invokes its one registered kind handler, unless its id already exists in lineage;
-3. every other message is dropped and logged.
+1. a live quest accepts marks and a result only from its bound worker;
+2. a `message` is routed by the quest it names when it comes from either bound end and its role is in the quest's talk, then delivered to the other end and journaled;
+3. a request invokes its one registered kind handler unless its id already exists in lineage, and every other envelope is dropped and logged.
 
-A process-sent mark is accepted only for a first, non-empty `trail`.
+A chat envelope from a stranger is dropped, while one from a bound end without the required talk right is also journaled as `refused` with its correlation fields.
+Delivery to an absent receiver is dropped and logged rather than buffered;
+the journal remains the inbox of record.
+A process-sent `trail` is accepted only once with a non-empty id.
+A process-sent `listening` is also set once, with repeats accepted silently.
 A Worker-generated `started` mark folds into the journal before forwarding.
 A delivered or synthesized result folds `ended` and removes the record from the live index;
 the worker index remains until Worker death so a live session can keep requesting work after answering its parent quest.
@@ -105,8 +122,8 @@ Unknown kinds and lineage collisions are dispatcher wire denials and remain unjo
 
 ## Tests
 
-- `brotocol_test.py` covers envelope validation, builders, accessors, and the frame cap.
-- `transports/tcp_test.py` covers attach authenticity, supersession, framing, delivery, disconnect, and shutdown over real sockets.
+- `brotocol_test.py` covers envelope validation, builders, chat roles, talk encoding and enforcement, and the frame cap.
+- `transports/tcp_test.py` covers attach authenticity and revision checks, supersession, framing, delivery, disconnect, and shutdown over real sockets.
 - `runtime_test.py` covers the shape-free transport and launch seam.
 - `worker_test.py` covers each supervision shape, start timing, timeout kill, collection, and death reports.
 - `journal_test.py` covers folding, subscribers, retention, lineage, bounds, event gaps, and ancestry scope.

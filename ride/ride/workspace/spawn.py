@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import log
+from bro.broker.brotocol import TALK_ENV, Talk, encode_talk
 from bro.broker.spawn import ChildHandle, LaunchSpec, RingBuffer, Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST
@@ -117,12 +118,15 @@ class ExecLaunchSpec(LaunchSpec):
   ring_bytes: int = DEFAULT_RING_BYTES
 
 
-def _broker_launch(launch: DockerLaunch, channel: Provisioned, quest: str) -> DockerLaunch:
+def _broker_launch(
+  launch: DockerLaunch, channel: Provisioned, quest: str, talk: Talk
+) -> DockerLaunch:
   """Add the provisioned broker upstream and the peer's quest id to a neutral container launch."""
   env = dict(launch.env)
   env.pop(CHANNEL_ENV, None)
   env[UPSTREAM_ENV] = channel.host_endpoint.address(CONTAINER_BROKER_HOST)
   env['BROKER_QUEST'] = quest
+  env[TALK_ENV] = encode_talk(talk)
   return replace(launch, env=env)
 
 
@@ -687,12 +691,15 @@ class ExecSpawner(Spawner):
   def __init__(self, party_members: Optional[PartyMembers] = None):
     self._party_members = party_members if party_members is not None else PartyMembers()
 
-  async def spawn(self, launch: LaunchSpec, channel: Provisioned, quest: str) -> ChildHandle:
+  async def spawn(
+    self, launch: LaunchSpec, channel: Provisioned, quest: str, talk: Talk
+  ) -> ChildHandle:
     assert isinstance(launch, ExecLaunchSpec)
     env = dict(launch.launch.env)
     env.pop(CHANNEL_ENV, None)
     env[UPSTREAM_ENV] = channel.host_endpoint.address(CONTAINER_BROKER_HOST)
     env['BROKER_QUEST'] = quest
+    env[TALK_ENV] = encode_talk(talk)
     member_exec = replace(launch.launch, env=env)
     argv = await asyncio.to_thread(prepare_member_exec, member_exec)
     process = await asyncio.create_subprocess_exec(
@@ -738,9 +745,9 @@ class _HeadlessRoot(ChildHandle):
 
 
 def _prepare_docker_spawn(
-  launch: DockerLaunchSpec, channel: Provisioned, quest: str
+  launch: DockerLaunchSpec, channel: Provisioned, quest: str, talk: Talk
 ) -> tuple[str, Optional[Workspace]]:
-  docker_launch = _broker_launch(launch.launch, channel, quest)
+  docker_launch = _broker_launch(launch.launch, channel, quest, talk)
   workspace = Workspace.ensure(docker_launch.name, docker_launch.repo, Isolation.BOXED)
   container_id = prepare_container(docker_launch)
   if not workspace.metadata.throwaway:
@@ -754,9 +761,13 @@ class DockerSpawner(Spawner):
     self._host_log = host_log
     self._party_members = party_members if party_members is not None else PartyMembers()
 
-  async def spawn(self, launch: LaunchSpec, channel: Provisioned, quest: str) -> ChildHandle:
+  async def spawn(
+    self, launch: LaunchSpec, channel: Provisioned, quest: str, talk: Talk
+  ) -> ChildHandle:
     assert isinstance(launch, DockerLaunchSpec)
-    container_id, workspace = await asyncio.to_thread(_prepare_docker_spawn, launch, channel, quest)
+    container_id, workspace = await asyncio.to_thread(
+      _prepare_docker_spawn, launch, channel, quest, talk
+    )
     if launch.launch.tty:
       process = await asyncio.create_subprocess_exec(
         'docker', 'start', '-a', '-i', DETACH_FLAG, container_id
@@ -807,12 +818,15 @@ class ProcessSpawner(Spawner):
     self._host_log = host_log
     self._party_members = party_members if party_members is not None else PartyMembers()
 
-  async def spawn(self, launch: LaunchSpec, channel: Provisioned, quest: str) -> ChildHandle:
+  async def spawn(
+    self, launch: LaunchSpec, channel: Provisioned, quest: str, talk: Talk
+  ) -> ChildHandle:
     assert isinstance(launch, ProcessLaunchSpec)
     env = dict(launch.env)
     env.pop(CHANNEL_ENV, None)
     env[UPSTREAM_ENV] = channel.host_endpoint.address(LOCAL_HOST)
     env['BROKER_QUEST'] = quest
+    env[TALK_ENV] = encode_talk(talk)
     cleanup_directory = None if launch.cleanup_directory is None else Path(launch.cleanup_directory)
     records_directory = None if launch.records_directory is None else Path(launch.records_directory)
     async with _cleanup_on_failure(cleanup_directory) as cleanup:
@@ -866,8 +880,10 @@ class CompositeSpawner(Spawner):
   def __init__(self, spawners: dict[type[LaunchSpec], Spawner]):
     self._spawners = spawners
 
-  async def spawn(self, launch: LaunchSpec, channel: Provisioned, quest: str) -> ChildHandle:
+  async def spawn(
+    self, launch: LaunchSpec, channel: Provisioned, quest: str, talk: Talk
+  ) -> ChildHandle:
     spawner = self._spawners.get(type(launch))
     if spawner is None:
       raise ValueError(f'no spawner registered for {type(launch).__name__}')
-    return await spawner.spawn(launch, channel, quest)
+    return await spawner.spawn(launch, channel, quest, talk)

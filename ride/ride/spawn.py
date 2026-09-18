@@ -24,6 +24,7 @@ from typing import Any, Literal, Optional
 from bro.artifact import GET, MINT
 from bro.base import configs, log
 from bro.base.scope import DEFAULT_PERMITS
+from bro.broker.brotocol import Talk
 from bro.broker.dispatcher import PING, Broker, ping_handler
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
@@ -398,7 +399,9 @@ class SummonSpawner(Spawner):
     self._facts = facts
     self._artifacts = artifacts
 
-  async def spawn(self, launch: LaunchSpec, channel: Provisioned, quest: str) -> ChildHandle:
+  async def spawn(
+    self, launch: LaunchSpec, channel: Provisioned, quest: str, talk: Talk
+  ) -> ChildHandle:
     assert isinstance(launch, SummonLaunchSpec)
     child_name = _workspace_name(channel.channel)
     if launch.party == 'join':
@@ -421,10 +424,10 @@ class SummonSpawner(Spawner):
         self._artifacts,
       )
     if isinstance(lowered, DockerLaunchSpec):
-      return await self._docker.spawn(lowered, channel, quest)
+      return await self._docker.spawn(lowered, channel, quest, talk)
     if isinstance(lowered, ExecLaunchSpec):
-      return await self._exec.spawn(lowered, channel, quest)
-    return await self._process.spawn(lowered, channel, quest)
+      return await self._exec.spawn(lowered, channel, quest, talk)
+    return await self._process.spawn(lowered, channel, quest, talk)
 
 
 def broker_bind_hosts() -> list[str]:

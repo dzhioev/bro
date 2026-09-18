@@ -58,11 +58,14 @@ class TestBrokerLaunch:
     channel = workspace_spawn.Provisioned(
       channel='X', host_endpoint=Endpoint(port=7321, token='tk')
     )
-    adapted = workspace_spawn._broker_launch(launch, channel, 'X-1')
+    adapted = workspace_spawn._broker_launch(
+      launch, channel, 'X-1', frozenset({'requester.question', 'worker.say'})
+    )
     assert adapted.env == {
       'RIDE_BRO': 'dev',
       'BROKER_UPSTREAM': 'tcp://tk@host.docker.internal:7321',
       'BROKER_QUEST': 'X-1',
+      'BROKER_TALK': 'requester.question,worker.say',
     }
     assert adapted.extra_mounts == ('/existing:/mount',)
     assert adapted.tty is False
@@ -421,7 +424,9 @@ class TestProcessSpawner:
     provisioned = workspace_spawn.Provisioned(
       channel='CH', host_endpoint=Endpoint(port=7321, token='tk')
     )
-    return await workspace_spawn.ProcessSpawner().spawn(launch, provisioned, 'X-1')
+    return await workspace_spawn.ProcessSpawner().spawn(
+      launch, provisioned, 'X-1', frozenset({'worker.say'})
+    )
 
   @pytest.mark.asyncio
   async def test_env_is_the_spec_snapshot_plus_broker_channel(self, monkeypatch, tmp_path):
@@ -436,6 +441,7 @@ class TestProcessSpawner:
     assert env['MARKER'] == 'x'
     assert env['BROKER_UPSTREAM'] == 'tcp://tk@127.0.0.1:7321'
     assert env['BROKER_QUEST'] == 'X-1'
+    assert env['BROKER_TALK'] == 'worker.say'
     # a spawn is a pure function of its LaunchSpec: nothing ambient leaks in
     assert 'RIDE_AMBIENT_CANARY' not in env
 
@@ -454,7 +460,9 @@ class TestProcessSpawner:
     provisioned = workspace_spawn.Provisioned(
       channel='CH', host_endpoint=Endpoint(port=7321, token='tk')
     )
-    handle = await workspace_spawn.ProcessSpawner().spawn(launch, provisioned, 'X-1')
+    handle = await workspace_spawn.ProcessSpawner().spawn(
+      launch, provisioned, 'X-1', frozenset({'worker.say'})
+    )
     assert isinstance(handle, workspace_spawn._HeadlessProcess)
     assert await handle.wait() == 0
 
@@ -487,7 +495,9 @@ class TestProcessChildWorkspaceCleanup:
       channel='CH',
       host_endpoint=Endpoint(port=7321, token='tk'),
     )
-    return await workspace_spawn.ProcessSpawner().spawn(launch, channel, 'X-1')
+    return await workspace_spawn.ProcessSpawner().spawn(
+      launch, channel, 'X-1', frozenset({'worker.say'})
+    )
 
   @pytest.mark.asyncio
   async def test_clean_exit_removes_workspace_and_store(self, tmp_path):
@@ -766,7 +776,9 @@ class TestProcessChildPartyRecords:
     channel = workspace_spawn.Provisioned(
       channel='CH', host_endpoint=Endpoint(port=7321, token='tk')
     )
-    return await workspace_spawn.ProcessSpawner().spawn(launch, channel, 'X-1')
+    return await workspace_spawn.ProcessSpawner().spawn(
+      launch, channel, 'X-1', frozenset({'worker.say'})
+    )
 
   @pytest.mark.asyncio
   async def test_started_party_exit_kills_members_before_removing_its_workspace(
@@ -798,6 +810,7 @@ class TestProcessChildPartyRecords:
       ),
       channel,
       'owner-quest',
+      frozenset({'worker.say'}),
     )
     member = await spawner.spawn(
       workspace_spawn.ProcessLaunchSpec(
@@ -812,6 +825,7 @@ class TestProcessChildPartyRecords:
       ),
       channel,
       'member-quest',
+      frozenset({'worker.say'}),
     )
 
     with caplog.at_level('WARNING'):
@@ -867,6 +881,7 @@ time.sleep(30)
       ),
       channel,
       'owner-quest',
+      frozenset({'worker.say'}),
     )
     member = await spawner.spawn(
       workspace_spawn.ProcessLaunchSpec(
@@ -881,6 +896,7 @@ time.sleep(30)
       ),
       channel,
       'member-quest',
+      frozenset({'worker.say'}),
     )
     async with asyncio.timeout(5):
       while not ready.exists():
@@ -922,6 +938,7 @@ time.sleep(30)
       ),
       channel,
       'owner-quest',
+      frozenset({'worker.say'}),
     )
     member = await spawner.spawn(
       workspace_spawn.ProcessLaunchSpec(
@@ -936,6 +953,7 @@ time.sleep(30)
       ),
       channel,
       'member-quest',
+      frozenset({'worker.say'}),
     )
 
     async def fail_cleanup(directory):
@@ -1040,7 +1058,7 @@ class TestExecMember:
     channel = workspace_spawn.Provisioned(
       channel='CH', host_endpoint=Endpoint(port=7321, token='tk')
     )
-    child = await spawner.spawn(launch, channel, 'X-1')
+    child = await spawner.spawn(launch, channel, 'X-1', frozenset({'worker.say'}))
     assert isinstance(child, workspace_spawn._ExecChild)
     return child
 
@@ -1059,6 +1077,7 @@ class TestExecMember:
       'RIDE_BRO': 'dev',
       'BROKER_UPSTREAM': channel.host_endpoint.address(CONTAINER_BROKER_HOST),
       'BROKER_QUEST': 'X-1',
+      'BROKER_TALK': 'worker.say',
     }
     assert not records.exists()  # a clean exit removes the member records
 
@@ -1147,7 +1166,7 @@ class TestCompositeSpawner:
     def __init__(self):
       self.spawned: list = []
 
-    async def spawn(self, launch, channel, quest) -> workspace_spawn.ChildHandle:
+    async def spawn(self, launch, channel, quest, talk) -> workspace_spawn.ChildHandle:
       self.spawned.append(launch)
       return MagicMock()
 
@@ -1172,8 +1191,8 @@ class TestCompositeSpawner:
       )
     )
     process_launch = workspace_spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
-    await composite.spawn(docker_launch, channel, 'X-1')
-    await composite.spawn(process_launch, channel, 'X-1')
+    await composite.spawn(docker_launch, channel, 'X-1', frozenset({'worker.say'}))
+    await composite.spawn(process_launch, channel, 'X-1', frozenset({'worker.say'}))
     assert docker.spawned == [docker_launch]
     assert process.spawned == [process_launch]
 
@@ -1185,7 +1204,7 @@ class TestCompositeSpawner:
     )
     launch = workspace_spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
     with pytest.raises(ValueError, match='ProcessLaunchSpec'):
-      await composite.spawn(launch, channel, 'X-1')
+      await composite.spawn(launch, channel, 'X-1', frozenset({'worker.say'}))
 
 
 class TestDockerSpawnerModes:
@@ -1252,7 +1271,9 @@ class TestDockerSpawnerModes:
     provisioned = workspace_spawn.Provisioned(
       channel='CH', host_endpoint=Endpoint(port=7321, token='tk')
     )
-    handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned, 'X-1')
+    handle = await workspace_spawn.DockerSpawner().spawn(
+      launch, provisioned, 'X-1', frozenset({'worker.say'})
+    )
     try:
       assert isinstance(handle, workspace_spawn._AttachedRoot)
       assert handle.output_tail() == ''
@@ -1279,7 +1300,9 @@ class TestDockerSpawnerModes:
     provisioned = workspace_spawn.Provisioned(
       channel='CH', host_endpoint=Endpoint(port=7321, token='tk')
     )
-    handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned, 'X-1')
+    handle = await workspace_spawn.DockerSpawner().spawn(
+      launch, provisioned, 'X-1', frozenset({'worker.say'})
+    )
     assert isinstance(handle, workspace_spawn._HeadlessRoot)
     assert spawn_harness['starts'] == [['docker', 'start', '-a', 'cid123']]
     assert spawn_harness['start_kwargs'] == [{}]
@@ -1300,7 +1323,9 @@ class TestDockerSpawnerModes:
     provisioned = workspace_spawn.Provisioned(
       channel='CH', host_endpoint=Endpoint(port=7321, token='tk')
     )
-    handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned, 'X-1')
+    handle = await workspace_spawn.DockerSpawner().spawn(
+      launch, provisioned, 'X-1', frozenset({'worker.say'})
+    )
     assert isinstance(handle, workspace_spawn._DockerChild)
     assert spawn_harness['prepared'][0].name == 'broker-CH'
     assert spawn_harness['starts'] == [['docker', 'start', '-a', 'cid123']]
@@ -1321,7 +1346,9 @@ class TestDockerSpawnerModes:
     provisioned = workspace_spawn.Provisioned(
       channel='CH', host_endpoint=Endpoint(port=7321, token='tk')
     )
-    handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned, 'X-1')
+    handle = await workspace_spawn.DockerSpawner().spawn(
+      launch, provisioned, 'X-1', frozenset({'worker.say'})
+    )
     loop_thread = threading.get_ident()
     assert spawn_harness['prepare_threads'][0] != loop_thread
     assert spawn_harness['workspace_threads'][0] != loop_thread
