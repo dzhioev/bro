@@ -164,7 +164,7 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
 - `GET /v1/tools/{sha256}` serves a tool blob by digest under the read permission, answering `model.tool_not_found_body` when the store holds none.
 - `GET /v1/trails/{id}/context` returns `{"launch_context": null}` for an existing trail without context and 404 only when the trail is missing.
 - Bro projection derives reasoning, assistant text, tool calls, and terminal assistant status from `llm_call.response.output`, and copies the response's service tier onto the projected call when present.
-  `BRO_STEP_KINDS` separately admits `notification` as a text-bodied native step.
+  Its text-bodied native kinds are system prompts, user inputs, and notifications, each projected under its own message type.
   The decoding reads the OpenAI Responses API shape.
 - Header responses expose provider-raw usage by model.
   Provider normalization belongs to the provider-aware usage layer, not the harness adapter.

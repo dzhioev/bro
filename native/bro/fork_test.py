@@ -252,6 +252,30 @@ class TestReplayMessages:
     fco = result[-1]
     assert fco['output'] == json.dumps({'rows': [1, 2]})
 
+  def test_replays_notification_as_user_input(self):
+    trail = RecordedTrail(
+      header=_trail_header(),
+      steps=[
+        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+        _step('user_input', 'hello', step_id=1, turn_index=0),
+        _step(
+          'llm_call',
+          _llm_call_body(_output_message('working')),
+          step_id=2,
+          turn_index=1,
+          response_id='r1',
+        ),
+        _step('notification', 'background news', step_id=3, turn_index=2),
+      ],
+    )
+
+    assert replay_messages(trail, 3) == [
+      {'role': 'system', 'content': _SYS_TEXT},
+      {'role': 'user', 'content': 'hello'},
+      _output_message('working'),
+      {'role': 'user', 'content': 'background news'},
+    ]
+
   def test_multi_turn_after_second_user_input(self):
     first_reply = _output_message('first reply')
     trail = RecordedTrail(
@@ -357,6 +381,25 @@ class TestLatestForkPoint:
         _step('user_input', 'follow up', step_id=3, turn_index=2),
       ],
     )
+    assert latest_fork_point(trail) == 3
+
+  def test_picks_a_trailing_notification(self):
+    trail = RecordedTrail(
+      header=_trail_header(),
+      steps=[
+        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+        _step('user_input', 'hello', step_id=1, turn_index=0),
+        _step(
+          'llm_call',
+          _llm_call_body(_output_message('waiting')),
+          step_id=2,
+          turn_index=1,
+          response_id='r1',
+        ),
+        _step('notification', 'background news', step_id=3, turn_index=2),
+      ],
+    )
+
     assert latest_fork_point(trail) == 3
 
   def test_skips_an_llm_call_with_unanswered_function_calls(self):
@@ -766,6 +809,32 @@ class TestForkClientSideReplay:
   - cross-model / cross-provider forks
   - swapped system prompt
   """
+
+  @pytest.mark.asyncio
+  async def test_resume_keeps_a_trailing_notification(self):
+    recorded = _simple_trail()
+    trail = RecordedTrail(
+      header=recorded.header,
+      steps=[
+        *recorded.steps,
+        _step('notification', 'background news', step_id=3, turn_index=2),
+      ],
+    )
+    context, captured, _ = _patch_native_openai_create(
+      [_fake_response(output=[_message_item('continued')])]
+    )
+
+    with context:
+      runner = fork(trail, latest_fork_point(trail), record=False, surface='test')
+      await runner.send('continue', surface='test')
+
+    assert captured[0]['input'] == [
+      {'role': 'system', 'content': _SYS_TEXT},
+      {'role': 'user', 'content': 'hello'},
+      _output_message('hi back'),
+      {'role': 'user', 'content': 'background news'},
+      {'role': 'user', 'content': 'continue'},
+    ]
 
   @pytest.mark.asyncio
   async def test_fork_at_first_user_input(self):
