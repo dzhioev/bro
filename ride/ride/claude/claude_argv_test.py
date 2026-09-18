@@ -7,7 +7,9 @@ from unittest.mock import patch
 import pytest
 
 import ride.claude.claude_argv as ride_claude_argv
+from bro.broker.brotocol import TALK_ENV
 from bro.llm.llms import claude_code
+from bro.summon import SUMMONED_ENV
 from ride.claude.assembly import bro_servers, persona_servers
 from ride.claude.mcp import MCPEndpoint
 from ride.claude.statusline import statusline_command
@@ -279,6 +281,13 @@ class TestRawLaunch:
     assert 'full authorization' not in guided
     # the fragment renders at build — no directive may leak into the prompt
     assert '{{' not in guided
+
+  def test_raw_summoned_contract_receives_the_quest_talk(self, monkeypatch):
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    monkeypatch.setenv(TALK_ENV, 'worker.question')
+    prompt = self._launch(hold='unattended').system_prompt
+    assert 'call `bro::summon_say`' in prompt
+    assert 'recover the reply with `bro::summon_check`' in prompt
 
   def test_solo_combines_bare_and_print_modes(self):
     argv = self._launch(solo=True, hold='unattended', prompt='answer').argv

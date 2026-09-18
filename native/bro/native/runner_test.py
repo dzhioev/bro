@@ -7,7 +7,7 @@ import bro.mcp as mcp
 import bro.native.runner as native_runner
 from bro.base import credentials
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
-from bro.broker.brotocol import Message
+from bro.broker.brotocol import TALK_ENV, Message
 from bro.broker.client import CHANNEL_ENV, Client
 from bro.broker.transport import ClientTransport
 from bro.llm.mcp import InProcessMCPServer, MCPServer
@@ -850,6 +850,7 @@ class TestRunLifecycle:
   @pytest.mark.asyncio
   async def test_summoned_send_announces_started(self, monkeypatch):
     monkeypatch.setenv('RIDE_SUMMONED', '1')
+    monkeypatch.setenv(TALK_ENV, 'worker.say')
     channel, transport = _make_channel()
     runner = _ChannelRunner(channel, _StubLLM(response='chat'))
     assert await runner.send('hi', tracker=_TrailIDTracker(), surface='test') == 'chat'

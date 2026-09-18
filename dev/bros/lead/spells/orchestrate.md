@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.4.0
+version: 2.5.0
 ---
 
 # orchestrate
@@ -43,11 +43,12 @@ and ends.
   Everything durable must land on the page:
   a summoned phase answers you as well,
   a handed-off one returns nothing at all.
-- **You are the human's interface.** A summoned bro runs isolated with no human channel:
-  one that cannot proceed raises with a reason instead of asking.
+- **You are the human's interface.** A summoned bro runs isolated with no human channel,
+  but each phase is granted `worker.question` so it can consult this coordinator before giving up its live state.
   Questions,
   corrections,
-  and go/no-go between phases are yours to handle.
+  and go/no-go between phases are yours to handle;
+  a phase raises only when its question channel cannot resolve the blocker.
 
 ## Invocation forms
 
@@ -126,7 +127,12 @@ and every failure mode
 this spell only says how a phase differs from a one-shot ask.
 
 - **Never wait inline.** No phase is short enough for a blocking wait:
-  send every one detached and poll for its result.
+  send every one detached with `worker.question` in its talk and poll for its result.
+  {{iff #harness = claude}}Keep `summon watch` armed.
+  When it reports a child's question, answer that quest with `summon say --reply-to`.
+  Then resume the same `summon check --wait` loop.{{eliff #harness = bro}}When `summon_check(wait: true)` returns a question, answer that quest with `summon_say(reply_to=…)`.
+  Then resume the same check loop.{{end}}
+  Never launch a replacement phase to answer it.
 - **Hold and effort.** Leave both at the summon defaults.
   A bro with no human channel either delivers or raises with a reason you relay, and these phases execute a settled plan rather than working one out
   — the thinking was bought in the phases before them.
@@ -266,7 +272,7 @@ Take material objections and open questions to the user before starting stage 1.
 
 ### 3 — stages
 
-**Summon:** `into` the integration branch · `timeout` 28800{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}}
+**Summon:** `into` the integration branch · `timeout` 28800 · `talk` `worker.question`{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}}
 
 The long timeout covers the PR review a phase ends on:
 it idles on human latency, and the summon default kills it mid-watch.
@@ -293,7 +299,7 @@ the retry is a fresh summon on the same stage task.
 
 ### 4 — integrate
 
-**Summon:** `into` the integration branch · `timeout` 28800{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}} · `grant` `@<the bro that does rollouts>` when the work needs one to go live
+**Summon:** `into` the integration branch · `timeout` 28800 · `talk` `worker.question`{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}} · `grant` `@<the bro that does rollouts>` when the work needs one to go live
 
 Once every stage task is done, tell the user what the last step needs from them:
 where master is a protected base, the approving review that lands the integration PR is theirs to give, and nobody in the run can supply it.
@@ -335,7 +341,7 @@ When the phase reports a rollout it could not hand off
 
 ### 5 — verify
 
-**Summon:** `into` `master`, which the work is on by then · `grant` the credentials its live surface needs
+**Summon:** `into` `master`, which the work is on by then · `talk` `worker.question` · `grant` the credentials its live surface needs
 
 Once the work is live
 — merged, and rolled out if it needed a rollout:

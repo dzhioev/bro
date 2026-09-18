@@ -200,7 +200,8 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   — same delegation shape as `banner` → `bro.workspace.banner.render_banner`), naming `RAISE_EXIT_STATUS` as the status the session reports, so an abort looks the same to whoever launched it whichever harness ran the bro.
   The abort stays machine-readable after the fact through the recorded trail
   — the raise call with its reason is the transcript's last record, and `ride.claude.trail_recorder` ends the session's trail as `raised` with that reason as `end.detail`.
-  `BaseBro.system_prompt_for` appends the matching hold fragment via `bro.prompts.hold_fragment` (`run()` defaults to unattended, `send()` to guided, and every launch surface overrides per its `--hold`
+  `BaseBro.system_prompt_for` appends the matching session fragments, passing `bro.summon.talk()` so the summoned contract renders only the quest's permitted chat moves.
+  It then appends the hold fragment via `bro.prompts.hold_fragment` (`run()` defaults to unattended, `send()` to guided, and every launch surface overrides per its `--hold`
   — defaults in `bro/launch/AGENTS.md`, "Display and holds";
   the level files are documented in `bro/prompts/AGENTS.md`, "Hold text"), so the hold is injected at run start, never runtime-detected.
   Every other hold mounts no `raise`
@@ -218,13 +219,14 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   `summon` returns an accepted, question, or completed state with the request id;
   `detach: true` returns after the host's acceptance mark and fails immediately on a denial or pre-acceptance launch failure.
   It takes the same child-shaping knobs the launcher flags carry, plus the quest's widened `talk` rights.
-  `summon_say` sends a say, reply, or awaiting question to a child quest or the session's own quest.
+  `summon_say` sends a say, reply, or awaiting question to a child quest or the session's own quest;
+  a bounded wait that returns its question id leaves the host-owned question live for recovery.
   `summon_check` reads a child or own-quest journal record with its talk, pending questions, and chat tail;
-  `wait: true` loops short `query {id, wait, since}` reads until terminal, a chat change, or its optional deadline.
+  `wait: true` loops short `query {id, wait, since}` reads until terminal, a chat change, or its optional deadline, so the same quest continues after either end asks.
   `summon_list` walks the journal's paginated caller-scoped listing and returns its summon records live-first.
   The blocking modes own their per-call channel client on the loop and close it on cancellation, which unblocks the current short broker wait;
   the host-retained terminal and chat remain readable by id.
-  Both descriptions carry a `{{when #wire = mcp}}` transport-caution block, rendered at service-server build
+  The three blocking-tool descriptions carry a `{{when #wire = mcp}}` transport-caution block, rendered at service-server build
   — service tools are harness features, the one tool surface whose rendering vocabulary gets the system `#wire` fact injected next to the `#tools` roster.
   The MCP-served builds (`wire == 'mcp'`: persona and `--raw` claude sessions, consumed over streamable HTTP with a client-side call budget) steer long runs to detach plus repeatable polling;
   their lost-id recovery wording retains the `{{iff #tools contains summon_list}}` roster fork.
@@ -307,7 +309,8 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   inherit from `BaseBro` only when opting out of those defaults is the persona's point.
   It owns the shared spells inherited by the concrete-Bro family (`bros/bro/spells/`):
   `spell::ask` — the summon UX:
-  phrasing → target + self-contained prompt, client pick (`summon` CLI vs the `summon` service tool), foreground-vs-background, failure relay (protocol and enforcement live in `bro/summon.py` and `ride/ride/summon_control.py`, not in the spell)
+  phrasing → target + self-contained prompt, least-authority talk rights, client pick (`summon` CLI vs the `summon` service tool), foreground-vs-background, the question/reply/check loop, and failure relay;
+  protocol and enforcement live in `bro/summon.py` and `ride/ride/summon_control.py`, not in the spell
   — and `spell::reflect` — the improving half of the loop over what a bro runs under:
   it reads recorded runs against the definition that drove them (the prompt texts, the bro's declaration, the launch scope) and writes its next version, each edit fixed in place or filed as a task.
   Development personas ship from `bro-dev`;
@@ -362,7 +365,8 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   — the `block(...)` layer and an `allow_commands(...)` + `serve(...)` pair, already conditioned on the claude harness;
   the second narrows `Monitor` to the commands a persona declares and hands back the task control over what those watches start, so it holds the harness's push channel without its shell.
   `summon watch` needs no declaring:
-  for a run that may summon, the fold admits it through `Monitor` over any block or narrowing of that tool (`claude.admit_summon_watch`), since the session fragment tells such a run to keep it armed.
+  for a run that may summon, or a summoned run whose talk lets its requester say or question, the fold admits it through `Monitor` over any block or narrowing of that tool (`claude.admit_summon_watch`),
+  since the matching session fragment tells that run to keep it armed.
   A persona names another product's tool surface when it withholds or narrows one, so the names live here rather than in each persona that forgoes them
 - `registry.py` — process-wide registry of bro classes:
   `register(cls)`, `get_class(name)`, `create_bro(name, llm_spec=None)`, `list_classes()`, `known_names()` (every resolvable name, read without importing any bro module — what `ride/ride/summon_control.py` validates summon targets against).

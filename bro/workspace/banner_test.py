@@ -2,6 +2,7 @@ import pytest
 
 import bro.workspace.banner as workspace_banner
 from bro import registry, summon
+from bro.broker.brotocol import TALK_ENV
 from bro.monitor import trail_pointer
 from bro.workspace.banner import SessionFacts
 
@@ -24,6 +25,7 @@ class TestSessionFacts:
       summon.PARTY_MEMBER_ENV,
       summon.PERMITS_ENV,
       summon.SUMMONED_ENV,
+      TALK_ENV,
     ):
       monkeypatch.delenv(v, raising=False)
     monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
@@ -83,6 +85,7 @@ class TestSessionFacts:
     assert facts.exec_command is None
     assert facts.ride_command is None
     assert facts.may_summon is None
+    assert facts.talk is None
     assert facts.summoned is False
     assert facts.trail_id is None
 
@@ -93,6 +96,14 @@ class TestSessionFacts:
   def test_may_summon_distinguishes_an_empty_list_from_an_unset_one(self, monkeypatch):
     monkeypatch.setenv(summon.MAY_SUMMON_ENV, '')
     assert SessionFacts.collect().may_summon == ()
+
+  def test_talk_reads_the_launch_published_rights(self, monkeypatch):
+    monkeypatch.setenv(TALK_ENV, 'requester.say,worker.question')
+    assert SessionFacts.collect().talk == ('requester.say', 'worker.question')
+
+  def test_talk_distinguishes_a_mute_quest_from_an_unpublished_one(self, monkeypatch):
+    monkeypatch.setenv(TALK_ENV, '')
+    assert SessionFacts.collect().talk == ()
 
   def test_summoned_reads_the_child_mark(self, monkeypatch):
     monkeypatch.setenv(summon.SUMMONED_ENV, '1')
@@ -193,6 +204,18 @@ class TestRenderBanner:
     # distinguishable from the omitted line of a launch that published no list
     assert 'may_summon: none' in _facts(may_summon=()).render_llm()
 
+  def test_llm_and_visual_render_the_quest_talk(self):
+    facts = _facts(talk=('requester.say', 'worker.question'))
+    assert 'talk: requester.say, worker.question' in facts.render_llm()
+    assert 'talk:' in facts.render_visual()
+    assert 'requester.say, worker.question' in facts.render_visual()
+
+  def test_llm_and_visual_spell_out_a_mute_quest(self):
+    facts = _facts(talk=())
+    assert 'talk: none' in facts.render_llm()
+    assert 'talk:' in facts.render_visual()
+    assert '(none)' in facts.render_visual()
+
   def test_llm_omits_may_summon_when_no_list_was_published(self):
     assert 'may_summon' not in _facts(may_summon=None).render_llm()
 
@@ -231,6 +254,7 @@ class TestRenderBanner:
   def test_visual_omits_the_unpublished_facts(self):
     out = _facts().render_visual()
     assert 'may summon:' not in out
+    assert 'talk:' not in out
     assert 'trail:' not in out
 
   def test_visual_shows_logo_with_bro_signature(self):
