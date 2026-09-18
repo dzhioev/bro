@@ -15,6 +15,7 @@ TRAIL_FORMAT = INITIAL_TRAIL_FORMAT
 MESSAGE_TYPES = frozenset(
   {
     'user_input',
+    'notification',
     'llm_call',
     'reasoning',
     'assistant',

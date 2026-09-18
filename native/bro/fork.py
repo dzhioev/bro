@@ -60,7 +60,7 @@ def replay_messages(
     fork step, its system message dropped — the youngest trail's recorded
     prompt stands for the whole conversation). a fork trail replayed without
     `fetch_forked_from` raises rather than silently truncating the conversation.
-  - `{'role': 'user', 'content': <text>}` for each `user_input`.
+  - `{'role': 'user', 'content': <text>}` for each `user_input` or `notification`.
   - each `llm_call`'s `response.output` items appended in order — these carry
     intact `call_id`s on `function_call` items, which is what makes correct
     replay possible. `compaction` items are dropped: the replayed verbatim
@@ -77,6 +77,7 @@ def replay_messages(
   replay is exactly the ancestor prefix). forking mid-tool-loop (right after
   an `llm_call` whose outputs include unanswered `function_call`s) produces an
   input the model cannot consume.
+  A `notification` is legal wherever no function call is pending.
 
   raises `ValueError` if the trail has no `system_prompt` step or if
   `up_to_step_id` does not appear in it.
@@ -112,7 +113,7 @@ def replay_messages(
 def _replay_step_items(trail: RecordedTrail, up_to_step_id: int) -> list[dict]:
   items: list[dict] = []
   for step in trail.steps:
-    if step.kind == 'user_input':
+    if step.kind in {'user_input', 'notification'}:
       items.append({'role': 'user', 'content': step.body})
     elif step.kind == 'llm_call':
       items.extend(_response_output_items(step.body))
@@ -133,8 +134,8 @@ def latest_fork_point(trail: RecordedTrail) -> int:
   """the step id of the newest legal fork point — where a resume continues from.
 
   walks the steps tracking the turn's unanswered `function_call`s; a step
-  qualifies when nothing is pending after it: a `user_input`, an `llm_call`
-  with no function calls in its output, or the `tool_result` that answers its
+  qualifies when nothing is pending after it: a `user_input`, a `notification`,
+  an `llm_call` with no function calls in its output, or the `tool_result` that answers its
   turn's last call. a trail killed mid-tool-loop thus resumes from the last
   consistent point before the unanswered call. for a fork trail the
   `system_prompt` step qualifies as the floor — an empty continuation still
@@ -149,7 +150,7 @@ def latest_fork_point(trail: RecordedTrail) -> int:
     if step.kind == 'system_prompt':
       if trail.header.forked_from is not None and last_good is None:
         last_good = step.step_id
-    elif step.kind == 'user_input':
+    elif step.kind in {'user_input', 'notification'}:
       if len(pending) == 0:
         last_good = step.step_id
     elif step.kind == 'llm_call':

@@ -296,7 +296,7 @@ def _bro_project(record: dict) -> list[dict]:
   kind = record.get('kind')
   if kind == 'llm_call':
     return _bro_llm_call_messages(record)
-  if kind in {'system_prompt', 'user_input', 'tool_result', 'error'}:
+  if kind in {'system_prompt', 'user_input', 'notification', 'tool_result', 'error'}:
     fields: dict[str, Any] = {'content': record.get('body')}
     for key in ('tool_name', 'arguments', 'call_id', 'is_error'):
       if key in record:
@@ -482,6 +482,7 @@ BRO_ADAPTER = Adapter(
   emitted_message_types=frozenset(
     {
       'user_input',
+      'notification',
       'llm_call',
       'reasoning',
       'assistant',

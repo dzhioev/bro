@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from bro.trails.model import BlazeRequest, validate_end
+from bro.trails.model import MESSAGE_TYPES, BlazeRequest, validate_end
 
 
 def _wire_request(**overrides):
@@ -18,6 +18,10 @@ def _wire_request(**overrides):
   }
   data.update(overrides)
   return data
+
+
+def test_messages_wire_admits_notifications():
+  assert 'notification' in MESSAGE_TYPES
 
 
 def test_blaze_request_round_trips_wire_data_and_is_frozen():
