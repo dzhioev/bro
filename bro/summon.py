@@ -1,7 +1,7 @@
 """summon — request another bro through the session broker.
 
 The module owns the summon request shape and every peer-side surface: blocking,
-detached, manual, query-backed check/list, and the journal event watch.
+detached, manual, quest chat, query-backed check/list, and the journal event watch.
 A detached or manual request returns its quest id only after the first correlated
 message is the host's ``accepted`` mark; an immediate result is interpreted as
 the refusal or launch failure it carries.
@@ -26,7 +26,7 @@ import shlex
 import time
 from collections.abc import Callable, Collection, Generator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 import bro.base.args as base_args
 from bro.base import log
@@ -42,7 +42,7 @@ from bro.llm.providers import LLMSelectionError
 from bro.mcp import HOLDS
 
 if TYPE_CHECKING:
-  from bro.broker.brotocol import Message
+  from bro.broker.brotocol import End, Message, Talk
   from bro.broker.client import Client
 
 __cli_name__ = 'summon'
@@ -68,6 +68,7 @@ READ_WAIT_SECONDS = 25.0
 # `summon check` exit code while the result is not in yet (0 = answer relayed,
 # 1 = failure, 2 = argparse usage error)
 PENDING_EXIT_CODE = 3
+QUESTION_EXIT_CODE = 4
 HOLD_HELP = "the child's user-involvement level; omitted lets the child use its unattended default"
 MANUAL_HELP = (
   'register a manual summon instead of spawning: the request id becomes the token '
@@ -92,6 +93,10 @@ SHARE_HELP = (
 )
 INTO_HELP = "base the child's workspace on this git ref instead of the summoner's workspace HEAD"
 DETACH_HELP = 'print the request id and exit after sending; collect it with summon check'
+TALK_HELP = (
+  'widen the child quest chat rights from worker.say; comma-separated values from '
+  'requester.say, requester.question, worker.say, worker.question'
+)
 
 
 def manual_launch_command(request_id: str, target: str) -> str:
@@ -117,6 +122,23 @@ def encode_permits(permits: Collection[str]) -> str:
   if unknown:
     raise ValueError(f'unknown permit(s): {", ".join(unknown)}')
   return ','.join(sorted(values))
+
+
+def parse_talk(values: Optional[list[str]]) -> Optional[list[str]]:
+  """Validate comma-separated talk flags and return their request-field shape."""
+  if values is None:
+    return None
+  from bro.broker.brotocol import TALK_RIGHTS
+
+  rights = [right for value in values for right in value.split(',')]
+  if any(not right for right in rights):
+    raise ValueError('talk contains an empty right')
+  unknown = sorted(set(rights) - TALK_RIGHTS)
+  if unknown:
+    raise ValueError(f'unknown talk right(s): {", ".join(unknown)}')
+  if len(rights) != len(set(rights)):
+    raise ValueError('talk contains a duplicate right')
+  return rights
 
 
 def summoned_child_env(
@@ -247,6 +269,7 @@ def _payload(
   harness: Optional[str] = None,
   party: Optional[str] = None,
   isolation: Optional[str] = None,
+  talk: Optional[list[str]] = None,
   manual: bool = False,
 ) -> dict[str, Any]:
   payload: dict[str, Any] = {'target': target, 'prompt': prompt}
@@ -274,6 +297,8 @@ def _payload(
     payload['party'] = party
   if isolation is not None:
     payload['isolation'] = isolation
+  if talk is not None:
+    payload['talk'] = list(talk)
   if manual:
     payload['manual'] = True
   return payload
@@ -354,6 +379,7 @@ def _query_quest(
   request_id: str,
   *,
   wait_seconds: float = 0,
+  since: Optional[int] = None,
   read_timeout: Optional[float] = None,
 ) -> dict[str, Any]:
   from bro.broker.dispatcher import QUERY
@@ -361,6 +387,8 @@ def _query_quest(
   args: dict[str, Any] = {'id': request_id}
   if wait_seconds > 0:
     args['wait'] = wait_seconds
+  if since is not None:
+    args['since'] = since
   value = _read_value(
     client,
     QUERY,
@@ -395,6 +423,63 @@ def _summon_answer(quest: dict[str, Any]) -> Optional[str]:
   return _interpret_payload(result, trail_id if isinstance(trail_id, str) else None)
 
 
+def _require_live_summon(quest: dict[str, Any]) -> None:
+  answer = _summon_answer(quest)
+  if answer is not None:
+    raise SummonError(f'summon quest {quest.get("id")!r} already ended successfully')
+
+
+def _text_from_payload(payload: Any) -> str:
+  if (
+    not isinstance(payload, dict)
+    or set(payload) != {'text'}
+    or not isinstance(payload['text'], str)
+  ):
+    raise SummonError(f'summon chat carried a malformed text payload: {payload!r}')
+  return payload['text']
+
+
+def _text_from_entry(entry: dict[str, Any]) -> str:
+  return _text_from_payload(entry.get('head'))
+
+
+def _bounded_text(text: str) -> str:
+  from bro.broker.journal import MESSAGE_HEAD_BYTES
+
+  if not isinstance(text, str) or not text:
+    raise ValueError('summon chat text must be a non-empty string')
+
+  def payload_size(candidate: str) -> int:
+    return len(
+      json.dumps({'text': candidate}, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    )
+
+  if payload_size(text) <= MESSAGE_HEAD_BYTES:
+    return text
+  lower = 0
+  upper = len(text)
+  while lower < upper:
+    middle = (lower + upper + 1) // 2
+    if payload_size(text[:middle]) <= MESSAGE_HEAD_BYTES:
+      lower = middle
+    else:
+      upper = middle - 1
+  return text[:lower]
+
+
+@dataclass(frozen=True)
+class SummonQuestion:
+  id: str
+  text: str
+  request_id: Optional[str] = None
+
+
+def _question_from_message(message: 'Message') -> SummonQuestion:
+  if message.id is None:
+    raise SummonError('summon question carried no id')
+  return SummonQuestion(message.id, _text_from_payload(message.payload), message.quest_id)
+
+
 def _await_answer(
   client: 'Client',
   request: 'Message',
@@ -402,14 +487,17 @@ def _await_answer(
   timeout: float,
   on_started: Optional[Callable[[str], None]] = None,
   silence_timeout: Optional[float] = None,
-) -> str:
-  """Wait for a direct result, consulting the journal whenever the wire is silent."""
+) -> str | SummonQuestion:
+  """Wait for a result or child question, consulting the journal on wire silence."""
   from bro.broker.brotocol import Tag
 
   trail_id: Optional[str] = None
 
   def _interim(message: 'Message') -> None:
     nonlocal trail_id
+    if message.type == Tag.MESSAGE:
+      log.info('summon says %s', _single_line(_text_from_payload(message.payload)))
+      return
     if message.type != Tag.MARK or message.payload.get('transition') != 'trail':
       return
     value = message.payload.get('trail_id')
@@ -427,12 +515,15 @@ def _await_answer(
         silence,
         on_interim=_interim,
         timeout_after_interim=silence,
+        until=lambda message: message.type == Tag.MESSAGE and message.id is not None,
       )
     except TimeoutError:
       quest = _query_quest(client, request.quest_id)
-      answer = _summon_answer(quest)
-      if answer is not None:
-        return answer
+      status = _summon_status(quest)
+      if status.answer is not None:
+        return status.answer
+      if status.question is not None:
+        return status.question
       queried_trail = quest.get('trail_id')
       if isinstance(queried_trail, str) and queried_trail != trail_id:
         trail_id = queried_trail
@@ -441,6 +532,8 @@ def _await_answer(
       continue
     except ConnectionError as error:
       raise SummonError(f'broker channel closed awaiting the summon result: {error}') from None
+    if result.type == Tag.MESSAGE:
+      return _question_from_message(result)
     return _interpret_result(result, trail_id)
 
 
@@ -463,12 +556,14 @@ def summon_and_wait(
   harness: Optional[str] = None,
   party: Optional[str] = None,
   isolation: Optional[str] = None,
+  talk: Optional[list[str]] = None,
   step_id: Optional[int] = None,
   index: Optional[int] = None,
+  on_sent: Optional[Callable[[str], None]] = None,
   client: Optional['Client'] = None,
   silence_timeout: Optional[float] = None,
-) -> str:
-  """Send one summon and wait for its answer."""
+) -> str | SummonQuestion:
+  """Send one summon and wait for its answer or first child question."""
   payload = _payload(
     target,
     prompt,
@@ -484,9 +579,12 @@ def summon_and_wait(
     harness=harness,
     party=party,
     isolation=isolation,
+    talk=talk,
   )
   with _connection(client) as connection:
     request = _send_summon(connection, payload)
+    if on_sent is not None:
+      on_sent(request.quest_id)
     return _await_answer(
       connection,
       request,
@@ -526,6 +624,7 @@ def summon_detached(
   harness: Optional[str] = None,
   party: Optional[str] = None,
   isolation: Optional[str] = None,
+  talk: Optional[list[str]] = None,
   step_id: Optional[int] = None,
   index: Optional[int] = None,
 ) -> str:
@@ -545,6 +644,7 @@ def summon_detached(
     harness=harness,
     party=party,
     isolation=isolation,
+    talk=talk,
   )
   with _open_client() as client:
     request = _send_summon(client, payload)
@@ -559,6 +659,7 @@ def summon_manual(
   into: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
+  talk: Optional[list[str]] = None,
   step_id: Optional[int] = None,
   index: Optional[int] = None,
 ) -> str:
@@ -569,6 +670,7 @@ def summon_manual(
     into=into,
     grant=grant,
     revoke=revoke,
+    talk=talk,
     manual=True,
     step_id=step_id,
     index=index,
@@ -581,73 +683,265 @@ def summon_manual(
 
 @dataclass(frozen=True)
 class SummonStatus:
-  """A repeatable journal-backed check: pending, or the retained answer."""
+  """A repeatable journal-backed quest-chat check."""
 
   pending: bool
   answer: Optional[str] = None
   trail_id: Optional[str] = None
+  request_id: Optional[str] = None
+  talk: tuple[str, ...] = ()
+  pending_questions: tuple[dict[str, Any], ...] = ()
+  messages: tuple[dict[str, Any], ...] = ()
+  messages_truncated: bool = False
+  question: Optional[SummonQuestion] = None
+  chat_seq: int = 0
 
 
-def _summon_status(quest: dict[str, Any]) -> SummonStatus:
+def _caller_end(quest: dict[str, Any], request_id: str) -> Optional['End']:
+  from bro.broker.client import QUEST_ENV
+
+  own_quest = os.environ.get(QUEST_ENV)
+  if own_quest is None:
+    raise SummonError(f'{QUEST_ENV} is missing from the session environment')
+  if own_quest == request_id:
+    return 'worker'
+  return 'requester' if quest.get('parent') == own_quest else None
+
+
+def _summon_status(quest: dict[str, Any], *, caller: Optional['End'] = 'requester') -> SummonStatus:
   answer = _summon_answer(quest)
   trail_id = quest.get('trail_id')
+  request_id = quest.get('id')
+  talk = quest.get('talk')
+  pending_questions = quest.get('pending')
+  messages = quest.get('messages')
+  messages_truncated = quest.get('messages_truncated', False)
+  chat_seq = quest.get('chat_seq')
+  if not isinstance(request_id, str):
+    raise SummonError('summon query returned no request id')
+  if not isinstance(talk, list) or not all(isinstance(right, str) for right in talk):
+    raise SummonError('summon query returned malformed talk rights')
+  _talk_for_quest(quest)
+  if not isinstance(pending_questions, list) or not all(
+    isinstance(entry, dict) for entry in pending_questions
+  ):
+    raise SummonError('summon query returned malformed pending questions')
+  if not isinstance(messages, list) or not all(isinstance(entry, dict) for entry in messages):
+    raise SummonError('summon query returned a malformed chat tail')
+  if not isinstance(messages_truncated, bool):
+    raise SummonError('summon query returned a malformed chat truncation marker')
+  if not isinstance(chat_seq, int) or isinstance(chat_seq, bool):
+    raise SummonError('summon query returned a malformed chat sequence')
+  incoming = (
+    [] if caller is None else [entry for entry in pending_questions if entry.get('from') != caller]
+  )
+  question = None
+  if incoming:
+    latest = incoming[-1]
+    question_id = latest.get('id')
+    if not isinstance(question_id, str):
+      raise SummonError('pending summon question carried no id')
+    question = SummonQuestion(question_id, _text_from_entry(latest), request_id)
   return SummonStatus(
     pending=answer is None,
     answer=answer,
     trail_id=trail_id if isinstance(trail_id, str) else None,
+    request_id=request_id,
+    talk=tuple(talk),
+    pending_questions=tuple(pending_questions),
+    messages=tuple(messages),
+    messages_truncated=messages_truncated,
+    question=question,
+    chat_seq=chat_seq,
   )
 
 
-def check_summon(request_id: str) -> SummonStatus:
-  """Read one summon quest without consuming its retained result."""
+def _resolve_request_id(request_id: Optional[str]) -> str:
+  if request_id is not None:
+    return request_id
+  from bro.broker.client import QUEST_ENV
+
+  own_quest = os.environ.get(QUEST_ENV)
+  if own_quest is None:
+    raise SummonError(f'no quest given and {QUEST_ENV} is unset')
+  return own_quest
+
+
+def check_summon(request_id: Optional[str] = None) -> SummonStatus:
+  """Read one summon quest without consuming its retained result or chat."""
+  resolved = _resolve_request_id(request_id)
   with _open_client() as client:
-    quest = _query_quest(client, request_id)
-  return _summon_status(quest)
+    quest = _query_quest(client, resolved)
+  return _summon_status(quest, caller=_caller_end(quest, resolved))
 
 
 def wait_summon(
-  request_id: str,
+  request_id: Optional[str] = None,
   *,
   timeout: Optional[float] = None,
   client: Optional['Client'] = None,
   wait_seconds: Optional[float] = None,
 ) -> SummonStatus:
-  """Long-poll a summon quest until terminal or the optional deadline passes."""
+  """Long-poll a summon quest until terminal or its chat next changes."""
   if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
     raise SummonError('timeout must be a finite positive number')
   interval = wait_seconds if wait_seconds is not None else READ_WAIT_SECONDS
   if interval <= 0:
     raise SummonError('query wait must be positive')
+  resolved = _resolve_request_id(request_id)
   deadline = None if timeout is None else time.monotonic() + timeout
   with _connection(client) as connection:
-    status: Optional[SummonStatus] = None
-    if deadline is not None:
-      status = _summon_status(
-        _query_quest(connection, request_id, read_timeout=deadline - time.monotonic())
-      )
-      if not status.pending:
-        return status
+    initial_timeout = None if deadline is None else deadline - time.monotonic()
+    quest = _query_quest(connection, resolved, read_timeout=initial_timeout)
+    caller = _caller_end(quest, resolved)
+    status = _summon_status(quest, caller=caller)
+    if not status.pending or status.question is not None:
+      return status
+    cursor = status.chat_seq
     while True:
       remaining = None if deadline is None else deadline - time.monotonic()
       if remaining is not None and remaining <= 0:
-        assert status is not None
         return status
       poll_seconds = interval if remaining is None else min(interval, remaining)
       try:
         quest = _query_quest(
           connection,
-          request_id,
+          resolved,
           wait_seconds=poll_seconds,
+          since=cursor,
           read_timeout=remaining,
         )
       except _BrokerReadTimeout:
         if deadline is None or time.monotonic() < deadline:
           raise
-        assert status is not None
         return status
-      status = _summon_status(quest)
-      if not status.pending:
+      status = _summon_status(quest, caller=caller)
+      if not status.pending or status.chat_seq > cursor:
         return status
+
+
+@dataclass(frozen=True)
+class SayStatus:
+  state: str
+  request_id: str
+  question_id: Optional[str] = None
+  answer: Optional[str] = None
+
+
+def _talk_for_quest(quest: dict[str, Any]) -> 'Talk':
+  from bro.broker.brotocol import TALK_RIGHTS
+
+  values = quest.get('talk')
+  if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+    raise SummonError('summon query returned malformed talk rights')
+  talk = frozenset(values)
+  if len(talk) != len(values) or not talk.issubset(TALK_RIGHTS):
+    raise SummonError('summon query returned invalid talk rights')
+  return cast('Talk', talk)
+
+
+def _reply_from_tail(quest: dict[str, Any], question_id: str) -> Optional[str]:
+  messages = quest.get('messages')
+  if not isinstance(messages, list) or not all(isinstance(entry, dict) for entry in messages):
+    raise SummonError('summon query returned a malformed chat tail')
+  for entry in reversed(messages):
+    transition = entry.get('transition')
+    if transition not in ('message', 'refused'):
+      raise SummonError(f'summon chat tail carried an unknown transition: {transition!r}')
+    if transition == 'refused' and entry.get('id') == question_id:
+      reason = entry.get('reason')
+      if not isinstance(reason, str):
+        raise SummonError('refused summon chat entry carried no reason')
+      raise SummonError(reason)
+    if transition == 'message' and entry.get('reply_to') == question_id:
+      return _text_from_entry(entry)
+  return None
+
+
+def say(
+  text: str,
+  request_id: Optional[str] = None,
+  *,
+  reply_to: Optional[str] = None,
+  wait: Optional[float] = None,
+  client: Optional['Client'] = None,
+) -> SayStatus:
+  """Send summon chat traffic and optionally wait for the question's reply."""
+  from bro.broker import brotocol
+
+  if wait is not None and (wait <= 0 or math.isnan(wait)):
+    raise SummonError('wait must be a positive number of seconds')
+  resolved = _resolve_request_id(request_id)
+  with _connection(client) as connection:
+    quest = _query_quest(connection, resolved)
+    sender = _caller_end(quest, resolved)
+    if sender is None:
+      raise SummonError(f'quest {resolved!r} is not a direct child of this session')
+    _require_live_summon(quest)
+    try:
+      candidate = brotocol.message(
+        resolved,
+        {'text': _bounded_text(text)},
+        id='question' if wait is not None else None,
+        reply_to=reply_to,
+      )
+    except brotocol.ProtocolError as error:
+      raise SummonError(str(error)) from error
+    talk = _talk_for_quest(quest)
+    if sender == 'worker':
+      from bro.broker.client import talk_from_env
+
+      published_talk = talk_from_env()
+      if published_talk is None:
+        raise SummonError(f'{brotocol.TALK_ENV} is missing from the session environment')
+      talk = published_talk
+    if not brotocol.message_allowed(talk, sender, candidate):
+      source = brotocol.TALK_ENV if sender == 'worker' else f'query {resolved}'
+      raise SummonError(f'{source} forbids this summon chat move')
+    try:
+      sent = connection.message(
+        resolved,
+        candidate.payload,
+        reply_to=reply_to,
+        question=wait is not None,
+      )
+    except (PermissionError, brotocol.ProtocolError) as error:
+      raise SummonError(str(error)) from error
+    if sent.id is None:
+      return SayStatus('accepted', resolved)
+    question_id = sent.id
+    assert wait is not None
+    deadline = None if math.isinf(wait) else time.monotonic() + wait
+    initial_remaining = None if deadline is None else deadline - time.monotonic()
+    if initial_remaining is not None and initial_remaining <= 0:
+      return SayStatus('question', resolved, question_id=question_id)
+    try:
+      current = _query_quest(connection, resolved, read_timeout=initial_remaining)
+    except _BrokerReadTimeout:
+      if deadline is None or time.monotonic() < deadline:
+        raise
+      return SayStatus('question', resolved, question_id=question_id)
+    while True:
+      answer = _reply_from_tail(current, question_id)
+      if answer is not None:
+        return SayStatus('completed', resolved, question_id=question_id, answer=answer)
+      _require_live_summon(current)
+      remaining = None if deadline is None else deadline - time.monotonic()
+      if remaining is not None and remaining <= 0:
+        return SayStatus('question', resolved, question_id=question_id)
+      poll_seconds = READ_WAIT_SECONDS if remaining is None else min(READ_WAIT_SECONDS, remaining)
+      try:
+        current = _query_quest(
+          connection,
+          resolved,
+          wait_seconds=poll_seconds,
+          since=current.get('chat_seq', 0),
+          read_timeout=remaining,
+        )
+      except _BrokerReadTimeout:
+        if deadline is None or time.monotonic() < deadline:
+          raise
+        return SayStatus('question', resolved, question_id=question_id)
 
 
 def list_summons() -> dict[str, Any]:
@@ -692,6 +986,41 @@ def _request_clause(event: dict[str, Any], own_quest: str) -> str:
   if parent != own_quest:
     clause += f', summoned by request {parent}'
   return clause
+
+
+def _chat_event_line(event: dict[str, Any], own_quest: str) -> Optional[str]:
+  transition = event.get('transition')
+  is_own_quest = event.get('quest') == own_quest
+  sender = event.get('from')
+  other_end = sender == ('requester' if is_own_quest else 'worker')
+  if transition == 'message' and not other_end:
+    return None
+  if transition == 'listening':
+    if is_own_quest:
+      return None
+    return _single_line(f'summon listening ({_request_clause(event, own_quest)})')
+  if transition not in ('message', 'refused'):
+    return None
+  actor = 'summoner' if is_own_quest else 'summon'
+  if transition == 'refused':
+    reason = event.get('reason')
+    if not isinstance(reason, str):
+      raise SummonError('refused summon event carried no reason')
+    head = f'{actor} refused {reason}: {_text_from_entry(event)}'
+  elif event.get('id') is not None:
+    head = f'{actor} asks {_text_from_entry(event)}'
+  elif event.get('reply_to') is not None:
+    head = f'{actor} replies {_text_from_entry(event)}'
+  else:
+    head = f'{actor} says {_text_from_entry(event)}'
+  details = []
+  if not is_own_quest:
+    details.append(_request_clause(event, own_quest))
+  if event.get('id') is not None:
+    details.append(f'question {event["id"]}')
+  if event.get('reply_to') is not None:
+    details.append(f'to {event["reply_to"]}')
+  return _single_line(head if not details else f'{head} ({", ".join(details)})')
 
 
 def _event_line(event: dict[str, Any], own_quest: str) -> str:
@@ -753,7 +1082,12 @@ def watch_summons(wait_seconds: float = READ_WAIT_SECONDS) -> Generator[str]:
         if not isinstance(sequence, int) or isinstance(sequence, bool):
           raise SummonError('events read returned a malformed sequence')
         cursor = max(cursor, sequence)
-        if event.get('kind') == SUMMON:
+        if event.get('kind') != SUMMON:
+          continue
+        chat_line = _chat_event_line(event, own_quest)
+        if chat_line is not None:
+          yield chat_line
+        elif event.get('transition') not in ('message', 'refused', 'listening'):
           yield _event_line(event, own_quest)
 
 
@@ -771,6 +1105,7 @@ def relay_summon(
   harness: Optional[str] = None,
   party: Optional[str] = None,
   isolation: Optional[str] = None,
+  talk: Optional[list[str]] = None,
   manual: bool = False,
 ) -> int:
   """send one summon and relay its outcome as a CLI would: the request id and
@@ -792,6 +1127,7 @@ def relay_summon(
     harness=harness,
     party=party,
     isolation=isolation,
+    talk=talk,
     manual=manual,
   )
   try:
@@ -827,12 +1163,23 @@ def relay_summon(
 # --- CLI ------------------------------------------------------------------------
 
 
-def _relay(await_answer: Callable[[], str]) -> int:
+def _relay(await_answer: Callable[[], str | SummonQuestion]) -> int:
   try:
     result = await_answer()
-  except SummonError as e:
-    log.error('%s', e)
+  except SummonError as error:
+    log.error('%s', error)
     return 1
+  if isinstance(result, SummonQuestion):
+    print(result.text)
+    if result.request_id is None:
+      raise RuntimeError('a blocking summon question carried no request id')
+    log.info(
+      "summon question %s; reply with `summon say %s '<text>' --reply-to %s`",
+      result.id,
+      result.request_id,
+      result.id,
+    )
+    return QUESTION_EXIT_CODE
   print(result)
   return 0
 
@@ -857,7 +1204,53 @@ def _watch() -> int:
   return 0
 
 
-def _check(request_id: str, wait: bool, timeout: Optional[float]) -> int:
+def status_view(status: SummonStatus) -> dict[str, Any]:
+  if status.question is not None:
+    state = 'question'
+  elif status.pending:
+    state = 'pending'
+  else:
+    state = 'completed'
+  view: dict[str, Any] = {
+    'state': state,
+    'request_id': status.request_id,
+    'talk': list(status.talk),
+    'pending': list(status.pending_questions),
+    'messages': list(status.messages),
+  }
+  if status.trail_id is not None:
+    view['trail_id'] = status.trail_id
+  if status.messages_truncated:
+    view['messages_truncated'] = True
+  if status.question is not None:
+    view['question'] = {'id': status.question.id, 'text': status.question.text}
+  if not status.pending:
+    view['answer'] = status.answer
+  return view
+
+
+def _say(
+  text: str,
+  request_id: Optional[str],
+  reply_to: Optional[str],
+  wait: Optional[float],
+) -> int:
+  try:
+    status = say(text, request_id, reply_to=reply_to, wait=wait)
+  except (SummonError, ValueError) as error:
+    log.error('%s', error)
+    return 1
+  if status.state == 'completed':
+    print(status.answer)
+    return 0
+  if status.state == 'question':
+    assert status.question_id is not None
+    print(status.question_id)
+    return QUESTION_EXIT_CODE
+  return 0
+
+
+def _check(request_id: Optional[str], wait: bool, timeout: Optional[float]) -> int:
   if timeout is not None and not wait:
     log.error('--timeout only bounds a wait; a plain check never blocks')
     return 1
@@ -866,7 +1259,11 @@ def _check(request_id: str, wait: bool, timeout: Optional[float]) -> int:
   except SummonError as error:
     log.error('%s', error)
     return 1
+  if status.question is not None:
+    print(json.dumps(status_view(status), indent=2, ensure_ascii=False))
+    return QUESTION_EXIT_CODE
   if status.pending:
+    print(json.dumps(status_view(status), indent=2, ensure_ascii=False))
     log.info('summon still running; %s', _trails_hint(status.trail_id))
     return PENDING_EXIT_CODE
   assert status.answer is not None
@@ -875,6 +1272,25 @@ def _check(request_id: str, wait: bool, timeout: Optional[float]) -> int:
 
 
 def main(argv: list[str]) -> Optional[int]:
+  if len(argv) > 1 and argv[1] == 'say':
+    parser = base_args.Parser(
+      prog='summon say',
+      description="send a message to a child quest, or to this session's summoner when no quest is given",
+    )
+    parser.add_argument(
+      'request_id', nargs='?', help='child quest id; omit for this session’s quest'
+    )
+    parser.add_argument('text', help='message text')
+    parser.add_argument('--reply-to', help='question id this message answers')
+    parser.add_argument(
+      '--wait',
+      nargs='?',
+      const=math.inf,
+      type=float,
+      metavar='SECONDS',
+      help=f'ask a question and wait for its reply; a timed-out question exits {QUESTION_EXIT_CODE}',
+    )
+    return _say(**parser.parse(argv[1:]))
   if len(argv) > 1 and argv[1] == 'list':
     parser = base_args.Parser(
       prog='summon list',
@@ -897,11 +1313,15 @@ def main(argv: list[str]) -> Optional[int]:
       'print the answer if the result is in, otherwise report `still running` and '
       f'exit {PENDING_EXIT_CODE} without blocking; --wait long-polls the same repeatable read',
     )
-    parser.add_argument('request_id', help='request id printed by the original summon')
+    parser.add_argument(
+      'request_id',
+      nargs='?',
+      help="child request id; omit to check this session's own summon quest",
+    )
     parser.add_argument(
       '--wait',
       action='store_true',
-      help='block until the retained terminal result arrives or --timeout passes; '
+      help='block until the result or next chat message arrives, or --timeout passes; '
       'concurrent waits and later checks are safe because journal reads are non-destructive',
     )
     parser.add_argument(
@@ -922,6 +1342,9 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument('--grant', action='append', default=None, metavar='NAME', help=GRANT_HELP)
   parser.add_argument('--revoke', action='append', default=None, metavar='NAME', help=REVOKE_HELP)
   parser.add_argument('--share', action='append', default=None, metavar='REF', help=SHARE_HELP)
+  parser.add_argument(
+    '--talk', action='append', default=None, metavar='RIGHT[,RIGHT]', help=TALK_HELP
+  )
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP)
   parser.add_argument('--harness', default=None, help=HARNESS_HELP)
@@ -965,7 +1388,8 @@ def main(argv: list[str]) -> Optional[int]:
   args = parser.parse(argv)
   try:
     canonicalize(args, selection_from_args(args))
-  except LLMSelectionError as error:
+    args['talk'] = parse_talk(args['talk'])
+  except (LLMSelectionError, ValueError) as error:
     log.error('%s', error)
     return 1
   if args['party'] == 'join' and args['into'] is not None:
@@ -996,6 +1420,7 @@ def main(argv: list[str]) -> Optional[int]:
           into=args['into'],
           grant=args['grant'],
           revoke=args['revoke'],
+          talk=args['talk'],
         )
         log.info('have the user run: %s', manual_launch_command(request_id, args['target']))
       else:
@@ -1012,6 +1437,7 @@ def main(argv: list[str]) -> Optional[int]:
           harness=args['harness'],
           party=args['party'],
           isolation=args['isolation'],
+          talk=args['talk'],
         )
     except SummonError as error:
       log.error('%s', error)
@@ -1031,5 +1457,6 @@ def main(argv: list[str]) -> Optional[int]:
     harness=args['harness'],
     party=args['party'],
     isolation=args['isolation'],
+    talk=args['talk'],
     manual=args['manual'],
   )

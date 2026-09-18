@@ -242,6 +242,7 @@ def test_refusal_joins_the_tail_without_turning_a_question_pending():
 
   assert record.pending == []
   assert record.chat_seq == record.messages[-1]['seq']
+  assert record.messages[-1]['transition'] == 'refused'
   assert record.messages[-1]['id'] == 'Q1'
   assert record.messages[-1]['reply_to'] == 'Q0'
   assert record.messages[-1]['reason'] == 'worker lacks the talk right'

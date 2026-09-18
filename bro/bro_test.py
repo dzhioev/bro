@@ -1421,6 +1421,7 @@ class TestSummonTool:
     bro = EchoBro()
     names = await _collect_tool_names([_service_server(bro)])
     assert 'summon' not in names
+    assert 'summon_say' not in names
     assert 'summon_check' not in names
 
   @pytest.mark.asyncio
@@ -1430,14 +1431,14 @@ class TestSummonTool:
     non_interactive = await _collect_tool_names(_native_servers(bro, hold='unattended'))
     interactive = await _collect_tool_names(_native_servers(bro, hold='guided'))
     # interactive surfaces (`call`) summon too — only `raise` is non-interactive-only
-    assert {'summon', 'summon_check', 'summon_list'} <= set(non_interactive)
-    assert {'summon', 'summon_check', 'summon_list'} <= set(interactive)
+    assert {'summon', 'summon_say', 'summon_check', 'summon_list'} <= set(non_interactive)
+    assert {'summon', 'summon_say', 'summon_check', 'summon_list'} <= set(interactive)
 
   @pytest.mark.asyncio
   async def test_proxy_failure_state_keeps_the_broker_tools_present(self, monkeypatch):
     monkeypatch.setenv('BROKER_UPSTREAM', 'tcp://token@127.0.0.1:9')
     names = await _collect_tool_names([_service_server(EchoBro())])
-    assert {'summon', 'summon_check', 'summon_list'} <= set(names)
+    assert {'summon', 'summon_say', 'summon_check', 'summon_list'} <= set(names)
 
   @pytest.mark.asyncio
   async def test_summon_list_returns_the_journal_records(self, monkeypatch):
@@ -1448,6 +1449,29 @@ class TestSummonTool:
     monkeypatch.setattr(summon_module, 'list_summons', lambda: listing)
     tool = await _find_tool(EchoBro(), 'summon_list')
     assert await tool.call({}) == listing
+
+  @pytest.mark.asyncio
+  async def test_summon_say_returns_structured_question_and_closes_its_client(self, monkeypatch):
+    from bro import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    client = _FakeSummonClient()
+    monkeypatch.setattr(summon_module, 'open_client', lambda: client)
+    monkeypatch.setattr(
+      summon_module,
+      'say',
+      lambda text, request_id, *, reply_to, wait, client: summon_module.SayStatus(
+        'question', request_id, question_id='QUESTION-1'
+      ),
+    )
+    tool = await _find_tool(EchoBro(), 'summon_say')
+
+    assert await tool.call({'text': 'approve?', 'request_id': 'REQ-1', 'wait': 60}) == {
+      'state': 'question',
+      'request_id': 'REQ-1',
+      'id': 'QUESTION-1',
+    }
+    assert client.closed
 
   @pytest.mark.asyncio
   async def test_calls_summon_and_wait_off_loop(self, monkeypatch):
@@ -1471,8 +1495,10 @@ class TestSummonTool:
       harness=None,
       party=None,
       isolation=None,
+      talk=None,
       step_id=None,
       index=None,
+      on_sent=None,
       client=None,
       silence_timeout=None,
     ):
@@ -1487,12 +1513,15 @@ class TestSummonTool:
           'llm': llm,
           'party': party,
           'isolation': isolation,
+          'talk': talk,
           'step_id': step_id,
           'index': index,
           'client': client,
           'silence_timeout': silence_timeout,
         }
       )
+      assert on_sent is not None
+      on_sent('REQ-ID')
       return 'the answer'
 
     monkeypatch.setattr(summon_module, 'open_client', lambda: client)
@@ -1513,9 +1542,10 @@ class TestSummonTool:
         'llm': 'openai:sol:high+fast',
         'party': 'start',
         'isolation': 'unboxed',
+        'talk': ['worker.question'],
       }
     )
-    assert result == 'the answer'
+    assert result == {'state': 'completed', 'request_id': 'REQ-ID', 'answer': 'the answer'}
     # the request carries the summon call's own tool_call step for provenance
     assert calls == [
       {
@@ -1528,6 +1558,7 @@ class TestSummonTool:
         'llm': 'openai:sol:high+fast',
         'party': 'start',
         'isolation': 'unboxed',
+        'talk': ['worker.question'],
         'step_id': 42,
         'index': 3,
         'client': client,
@@ -1535,6 +1566,27 @@ class TestSummonTool:
       }
     ]
     assert client.closed  # the per-call client is closed on the way out
+
+  @pytest.mark.asyncio
+  async def test_blocking_summon_returns_a_structured_child_question(self, monkeypatch):
+    from bro import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    monkeypatch.setattr(summon_module, 'open_client', _FakeSummonClient)
+
+    def ask(*args, on_sent=None, **kwargs):
+      assert on_sent is not None
+      on_sent('REQ-1')
+      return summon_module.SummonQuestion('QUESTION-1', 'approve?')
+
+    monkeypatch.setattr(summon_module, 'summon_and_wait', ask)
+    tool = await _find_tool(EchoBro(), 'summon')
+
+    assert await tool.call({'target': 'dev', 'prompt': 'work', 'talk': ['worker.question']}) == {
+      'state': 'question',
+      'request_id': 'REQ-1',
+      'question': {'id': 'QUESTION-1', 'text': 'approve?'},
+    }
 
   @pytest.mark.asyncio
   async def test_detach_returns_the_request_id_without_waiting(self, monkeypatch):
@@ -1557,6 +1609,7 @@ class TestSummonTool:
       harness=None,
       party=None,
       isolation=None,
+      talk=None,
       step_id=None,
       index=None,
     ):
@@ -1570,7 +1623,7 @@ class TestSummonTool:
     monkeypatch.setattr(summon_module, 'summon_and_wait', fail_summon_and_wait)
     tool = await _find_tool(EchoBro(), 'summon')
     result = await tool.call({'target': 'dev', 'prompt': 'deploy', 'detach': True})
-    assert result == 'REQ-ID'
+    assert result == {'state': 'accepted', 'request_id': 'REQ-ID'}
     assert calls == [{'target': 'dev', 'prompt': 'deploy', 'timeout': None, 'into': None}]
 
   @pytest.mark.asyncio
@@ -1584,8 +1637,42 @@ class TestSummonTool:
     ]
     monkeypatch.setattr(summon_module, 'check_summon', lambda request_id: statuses.pop(0))
     tool = await _find_tool(EchoBro(), 'summon_check')
-    assert await tool.call({'request_id': 'REQ-1'}) == {'state': 'pending', 'trail_id': 'T1'}
-    assert await tool.call({'request_id': 'REQ-1'}) == {'state': 'completed', 'answer': 'pong'}
+    assert await tool.call({'request_id': 'REQ-1'}) == {
+      'state': 'pending',
+      'request_id': None,
+      'talk': [],
+      'pending': [],
+      'messages': [],
+      'trail_id': 'T1',
+    }
+    assert await tool.call({'request_id': 'REQ-1'}) == {
+      'state': 'completed',
+      'request_id': None,
+      'talk': [],
+      'pending': [],
+      'messages': [],
+      'trail_id': 'T1',
+      'answer': 'pong',
+    }
+
+  @pytest.mark.asyncio
+  async def test_check_without_a_request_id_reads_the_own_quest(self, monkeypatch):
+    from bro import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    calls = []
+
+    def check(request_id=None):
+      calls.append(request_id)
+      return summon_module.SummonStatus(pending=True, request_id='OWN-QUEST')
+
+    monkeypatch.setattr(summon_module, 'check_summon', check)
+    tool = await _find_tool(EchoBro(), 'summon_check')
+
+    result = await tool.call({})
+    assert isinstance(result, dict)
+    assert result['request_id'] == 'OWN-QUEST'
+    assert calls == [None]
 
   @pytest.mark.asyncio
   async def test_check_schema_has_no_conversation_cursor(self, monkeypatch):
@@ -1621,8 +1708,10 @@ class TestSummonTool:
       harness=None,
       party=None,
       isolation=None,
+      talk=None,
       step_id=None,
       index=None,
+      on_sent=None,
       client=None,
       silence_timeout=None,
     ):
@@ -1660,7 +1749,7 @@ class TestSummonTool:
     )
     mcp_tools = {t.name: t for t in await mcp_build.list_tools()}
     bare_tools = {t.name: t for t in await bare_build.list_tools()}
-    for name in ('summon', 'summon_check'):
+    for name in ('summon', 'summon_say', 'summon_check'):
       assert 'CAUTION' in mcp_tools[name].description
       assert 'CAUTION' not in bare_tools[name].description
 
@@ -1680,7 +1769,14 @@ class TestSummonTool:
     monkeypatch.setattr(summon_module, 'wait_summon', fake_wait_summon)
     tool = await _find_tool(EchoBro(), 'summon_check')
     result = await tool.call({'request_id': 'REQ-1', 'wait': True, 'timeout': 60})
-    assert result == {'state': 'completed', 'answer': 'collected'}
+    assert result == {
+      'state': 'completed',
+      'request_id': None,
+      'talk': [],
+      'pending': [],
+      'messages': [],
+      'answer': 'collected',
+    }
     assert calls == [{'request_id': 'REQ-1', 'timeout': 60, 'client': client}]
     assert client.closed
 
@@ -1702,6 +1798,10 @@ class TestSummonTool:
 
     assert await tool.call({'request_id': 'REQ-1', 'wait': True, 'timeout': 60}) == {
       'state': 'pending',
+      'request_id': None,
+      'talk': [],
+      'pending': [],
+      'messages': [],
       'trail_id': 'T1',
     }
     assert client.closed
@@ -1741,8 +1841,10 @@ class TestSummonTool:
       harness=None,
       party=None,
       isolation=None,
+      talk=None,
       step_id=None,
       index=None,
+      on_sent=None,
       client=None,
       silence_timeout=None,
     ):
