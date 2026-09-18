@@ -391,8 +391,6 @@ async def _captured_holds(drive) -> list[str]:
 
 class TestLifetime:
   def test_exit_closes_the_live_servers(self):
-    # what a session holds — the dev toolset's background jobs are the built-in
-    # case — is released when its lifetime ends, not at interpreter exit.
     closed: list[str] = []
 
     class _ClosingServer(InProcessMCPServer):
