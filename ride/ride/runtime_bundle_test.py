@@ -590,7 +590,7 @@ def test_unboxed_session_environment_is_a_closed_snapshot(monkeypatch, tmp_path)
       'HOME': '/home/operator',
       'LANG': 'en_US.UTF-8',
       'LC_TIME': 'C',
-      'RIDE_TASK_ID': 'task-1',
+      'TERM': 'xterm-kitty',
       'RIDE_SUMMONED': '1',
       'CLAUDE_CONFIG_DIR': '/parent/claude',
       'PYTHONHOME': '/python',
@@ -598,23 +598,23 @@ def test_unboxed_session_environment_is_a_closed_snapshot(monkeypatch, tmp_path)
     },
   )
 
-  env = bundle.host_session_env(tree, forward_env=True)
+  env = bundle.host_session_env(tree, tty=True)
 
   assert env == {
     'HOME': '/home/operator',
     'LANG': 'en_US.UTF-8',
     'LC_TIME': 'C',
-    'RIDE_TASK_ID': 'task-1',
+    'TERM': 'xterm-kitty',
     'PATH': os.pathsep.join([str(bundle.host_bin), '/usr/local/bin', '/usr/bin']),
     'PWD': str(tree),
   }
-  child_env = bundle.host_session_env(tree, forward_env=False)
-  assert 'RIDE_TASK_ID' not in child_env
-  assert child_env['PWD'] == str(tree)
+  headless = bundle.host_session_env(tree, tty=False)
+  assert 'TERM' not in headless
+  assert headless['PWD'] == str(tree)
   added = bundle.host_session_env(
     tree,
-    forward_env=True,
-    additions={'IS_SANDBOX': '1', 'LANG': 'de_DE.UTF-8', 'PATH': '/x', 'RIDE_TASK_ID': 'forged'},
+    tty=True,
+    additions={'IS_SANDBOX': '1', 'LANG': 'de_DE.UTF-8', 'PATH': '/x', 'TERM': 'forged'},
   )
   assert added == {**env, 'IS_SANDBOX': '1'}
 
@@ -829,7 +829,7 @@ def test_a_given_runtime_session_trusts_the_roots_the_runtime_carries(tmp_path, 
   )
   bundle = runtime_bundle.RuntimeBundle(root, '3.12', materialized=True)
 
-  env = bundle.host_session_env(tmp_path / 'tree', forward_env=False)
+  env = bundle.host_session_env(tmp_path / 'tree', tty=False)
 
   assert env['SSL_CERT_FILE'] == str(roots)
 
@@ -843,7 +843,7 @@ def test_a_given_runtime_refuses_roots_outside_its_venv(tmp_path, monkeypatch):
   bundle = runtime_bundle.RuntimeBundle(root, '3.12', materialized=True)
 
   with pytest.raises(runtime_bundle.RuntimeBundleError, match='outside the materialized runtime'):
-    bundle.host_session_env(tmp_path / 'tree', forward_env=False)
+    bundle.host_session_env(tmp_path / 'tree', tty=False)
 
 
 def test_runtime_reexec_uses_the_given_runtime_ride(tmp_path, monkeypatch):

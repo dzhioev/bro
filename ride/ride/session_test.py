@@ -35,8 +35,8 @@ from ride.workspace.store import finalize_scoped_secrets
 
 @pytest.fixture(autouse=True)
 def isolated_environ():
-  """start_session exports session facts (RIDE_COMMAND, RIDE_WORKSPACE,
-  BRO_SHELL_COMMAND) into the live process environment; snapshot-restore it so
+  """start_session exports session facts (RIDE_COMMAND, RIDE_WORKSPACE) into
+  the live process environment; snapshot-restore it so
   no test here leaks them into the rest of the suite."""
   with patch.dict(os.environ, {}, clear=False):
     yield
@@ -454,7 +454,6 @@ class TestDetachedSession:
         human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
-        forward_env=True,
         env={},
         credential_directory=workspace.path / 'credentials',
         install_directory=workspace.path / 'environment',
@@ -1038,8 +1037,7 @@ class TestUnboxedSession:
     monkeypatch.setenv('RIDE_TRAILS_ROOT', '/parent/trails')
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', '/parent/claude')
     monkeypatch.setenv('PWD', '/parent/tree')
-    monkeypatch.setenv('RIDE_TASK_ID', 'task-1')
-    monkeypatch.setenv('BRO_SHELL_COMMAND', 'dive-in')
+    monkeypatch.setenv('TERM', 'xterm-kitty')
     human = {HUMAN_NAME_ENV: 'Ada Lovelace', HUMAN_EMAIL_ENV: 'ada@example.com'}
     spec = _spec(
       isolation=Isolation.UNBOXED,
@@ -1058,7 +1056,6 @@ class TestUnboxedSession:
       human_env=human,
       runtime_bundle=runtime_bundle,
       container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
-      forward_env=True,
       env={},
       credential_directory=workspace.path / 'credentials',
       install_directory=workspace.path / 'environment',
@@ -1092,8 +1089,7 @@ class TestUnboxedSession:
     assert launch.env[HUMAN_NAME_ENV] == 'Ada Lovelace'
     assert launch.env['CLAUDE_CONFIG_DIR'] == str(tmp_path / 'claude-config')
     assert launch.env['PWD'] == str(workspace.tree)
-    assert launch.env['RIDE_TASK_ID'] == 'task-1'
-    assert launch.env['BRO_SHELL_COMMAND'] == 'dive-in'
+    assert launch.env['TERM'] == 'xterm-kitty'
     assert 'RIDE_SUMMONED' not in launch.env
     assert 'RIDE_IN_CONTAINER' not in launch.env
     assert launch.env['RIDE_TRAILS_ROOT'] == str(ride_trails_dir())
@@ -1124,7 +1120,6 @@ class TestUnboxedSession:
       human_env={},
       runtime_bundle=_runtime_bundle(tmp_path),
       container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
-      forward_env=True,
       env={},
       credential_directory=workspace.path / 'credentials',
       install_directory=workspace.path / 'environment',
@@ -1147,14 +1142,13 @@ class TestUnboxedSession:
     monkeypatch.setenv('BROKER_UPSTREAM', 'ambient-upstream')
     monkeypatch.setenv('RIDE_PARTY_MEMBER', 'broker-parent')
     monkeypatch.setenv('RIDE_SUMMONED', '1')
-    monkeypatch.setenv('RIDE_TASK_ID', 'task-1')
-    monkeypatch.setenv('BRO_SHELL_COMMAND', 'parent-command')
+    monkeypatch.setenv('TERM', 'xterm-kitty')
     monkeypatch.setenv('RIDE_IN_CONTAINER', '1')
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', '/parent/claude')
     monkeypatch.setenv('PWD', '/parent/tree')
 
     launch = ride_session.started_party_launch(
-      replace(_spec(isolation=Isolation.UNBOXED), repo=None),
+      replace(_spec(isolation=Isolation.UNBOXED, solo=True), repo=None),
       workspace,
       None,
       None,
@@ -1162,7 +1156,6 @@ class TestUnboxedSession:
       human_env={},
       runtime_bundle=_runtime_bundle(tmp_path),
       container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
-      forward_env=False,
       env={'MARKER': 'child'},
       credential_directory=workspace.path / 'credentials',
       install_directory=workspace.path / 'environment',
@@ -1175,8 +1168,7 @@ class TestUnboxedSession:
     assert 'BROKER_UPSTREAM' not in launch.env
     assert 'RIDE_PARTY_MEMBER' not in launch.env
     assert 'RIDE_SUMMONED' not in launch.env
-    assert 'RIDE_TASK_ID' not in launch.env
-    assert 'BRO_SHELL_COMMAND' not in launch.env
+    assert 'TERM' not in launch.env
     assert 'RIDE_IN_CONTAINER' not in launch.env
     assert launch.env['CLAUDE_CONFIG_DIR'] == str(tmp_path / 'claude-config')
     assert launch.env['PWD'] == str(workspace.tree)
@@ -1235,7 +1227,6 @@ class TestUnboxedSession:
       human_env={},
       runtime_bundle=runtime_bundle,
       container_runtime=ContainerRuntimeResolver(runtime_bundle, None),
-      forward_env=True,
       env={},
       credential_directory=tmp_path / 'private' / 'store',
       install_directory=tmp_path / 'private' / 'environment',

@@ -159,7 +159,6 @@ def launched(isolated: Isolated) -> Iterator[Launched]:
           env={},
           secrets=(),
           tty=False,
-          forward_env=False,
           image=runtime.image,
           runtime_bundle_hash=runtime.bundle_hash,
           repo=isolated.project,

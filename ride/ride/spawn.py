@@ -258,7 +258,6 @@ def _lower_summon(
       human_env=human_git_identity_env(repo),
       runtime_bundle=runtime_bundle,
       container_runtime=container_runtime,
-      forward_env=False,
       env=summoned_child_env(launch.may_summon, launch.permits, launch.summoner),
       mounts=mounts,
       credential_directory=(
@@ -325,7 +324,6 @@ def _lower_join(
   records.mkdir(parents=True)
   ride_command = _joined_ride_command(launch)
   member_env = {
-    'BRO_SHELL_COMMAND': ride_command,
     'RIDE_COMMAND': ride_command,
     PARTY_MEMBER_ENV: member,
     **summoned_child_env(launch.may_summon, launch.permits, launch.summoner),
@@ -359,7 +357,6 @@ def _lower_join(
       launch_scope,
       human_env=human_git_identity_env(repository),
       runtime_bundle=runtime_bundle,
-      forward_env=False,
       env=member_env,
       credential_directory=temporary_store / 'store',
       install_directory=temporary_store / 'environment',

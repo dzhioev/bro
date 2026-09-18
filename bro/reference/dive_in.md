@@ -60,6 +60,8 @@ It forwards `--boxed`,
 `--revoke`,
 `--into`,
 `--no-trails`,
+`--env`,
+`--session-log`,
 `--harness` with every harness's own flags (claude's `--raw`),
 and the LLM-selection flags.
 
@@ -67,9 +69,3 @@ Task prefetch reads brog through the selected harness's prospective scope and th
 A missing backend or invalid scope override fails before a workspace is launched.
 
 `-n / --dry-run` prints the final `ride along` command with shell quoting.
-
-## Environment
-
-- `RIDE_TASK_ID` is set to the canonical task id after a task is resolved.
-  The PR workflow reads it when recording task attribution.
-- `BRO_SHELL_COMMAND` preserves the user-facing `dive-in` invocation for the visual banner rather than exposing the generated `ride along` command.

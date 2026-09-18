@@ -55,7 +55,7 @@ ride solo dev 'inspect the launch path' -- --debug mcp
 ride along dev 'continue the inspection' -- --debug mcp
 ```
 
-Shared launch flags are `--repo`, `--boxed`, `--unboxed`, `--hold`, `--grant`, `--revoke`, `--into`, `--no-trails`, `--env`, and the LLM selection set (`--provider`, `--model`, `--effort`, `--fast`, `--llm`).
+Shared launch flags are `--repo`, `--boxed`, `--unboxed`, `--hold`, `--grant`, `--revoke`, `--into`, `--no-trails`, `--env`, `--session-log`, and the LLM selection set (`--provider`, `--model`, `--effort`, `--fast`, `--llm`).
 `--grant` and `--revoke` use the framework's unified grammar:
 credential names shape the scoped store, `@bro` names shape the summon allow-list, and `:permit` leaves shape party authority.
 The permit leaves are `:party.start.boxed`, `:party.start.unboxed`, and `:party.join`;
@@ -64,6 +64,10 @@ the framework seed is boxed starts alone, and the intermediate names `:party` an
 the launch drops the `trails` scope baseline, sets `TRAILS_DISABLED` for the run, and a claude session starts no recorder daemon.
 `--env NAME=VALUE` (repeatable) adds a variable to the session environment of the root and of every party member it summons:
 it is the lowest layer of that environment, beneath the launch's own variables and the ambient inputs the launch admits, and the recorded session spec carries it, so a resume and every summon repeat it.
+`--session-log LEVEL` sets the level the session's own processes log at
+— `do-ride`, the session MCP server, the recorder daemon, and the hook scripts all read `BRO_LOG_LEVEL`
+— by recording the `--env` addition `BRO_LOG_LEVEL=LEVEL`, so every party member and a resume carry it the same way;
+the launcher's own `--log` never reaches the session.
 
 ### Lifecycle verbs
 
@@ -414,7 +418,7 @@ Whatever the isolation and harness, the outer:
   a claude transcript under the workspace's state dir, a bro trail pointer), run before the tree is materialized for a mistyped name (the claude runner resolves the actual session id later, from its cwd);
 - calls the shared started-party launcher to prepare the workspace (the two isolation sections below) and the `do-ride` command with only the session shape;
   the launcher emits a container description for boxed isolation or a closed process-environment snapshot for unboxed isolation,
-  whose `PWD` names the session tree and whose only ambient inputs are the baseline and root-forwarding rosters in `ride.runtime_bundle`;
+  whose `PWD` names the session tree and whose only ambient inputs are the baseline roster in `ride.runtime_bundle` and, for a session attached to the launcher's terminal, its terminal identity;
   both run the frozen bundle through the host materialization or container volume;
 - owns the post-exit UX, identical in both isolations
   — the resume hint, `--drop` removal (honored only on a clean exit; see the flag).
@@ -529,7 +533,7 @@ Inside the container, the entrypoint (running as root first):
 
 Every root and spawned child goes through `ride.session.started_party_launch` with a `SessionSpec`, workspace, hydrated scope, runtime bundle, and requested isolation.
 The boxed result is one broker-free `ride.workspace.docker.Launch` carrying the full launch:
-the workspace name, optional resolved repository attachment and base ref, command, explicit env snapshot, credential tiers, TTY and ambient-forwarding policy, extra mounts, resolved image tag, and runtime bundle hash.
+the workspace name, optional resolved repository attachment and base ref, command, explicit env snapshot, credential tiers, TTY, extra mounts, resolved image tag, and runtime bundle hash.
 `prepare_container` consumes that immutable description for clone preparation → scoped-store build → `docker create` + store copy;
 it does not re-resolve images or bundles.
 The unboxed result is a `ProcessLaunch` carrying the absolute snapshot command, cwd, and complete environment;
@@ -1139,13 +1143,12 @@ Wrappers and session daemons rely on a small set of env vars:
   Manual-summon surfaces use its `venv/bin/ride` so the child starts from the same runtime.
 - `RIDE_COMMAND` — the user-visible invocation this session launched under for telemetry and the banner:
   the reconstructed `ride solo|along …` command with its flags, `ride resume <ref>` for a resume, or the `summon --join …` request that started a joined member.
-  Set by the launch env of every started session, a child forwarding no ambient environment included, and by the join lowering for a member.
-  A joined member also sets the same value as `BRO_SHELL_COMMAND`, so it never inherits the party starter’s outer command.
+  Set by the launch env of every started session and by the join lowering for a member.
 - `RIDE_BRO` — names the bro the session runs as (the selected bro).
   Set explicitly in the container env at every boxed launch site
   — a `ride along` container carries its session bro, a bro-harness container or summon child the launched bro (`ride/ride/spawn.py`)
   — and exported by the session executable layer;
-  deliberately not in `SESSION_FORWARD_ENV`, so a calling session's ambient value never leaks into a child that runs a different bro.
+  never admitted from the ambient environment, so a calling session's value never leaks into a child that runs a different bro.
   Purely a theming output
   — the banner's ASCII Bro logo + bro-name header, the statusLine
   — never an input:
@@ -1174,8 +1177,6 @@ Wrappers and session daemons rely on a small set of env vars:
   — `ride`’s own in both isolations, and a summon’s child spawn.
   `do-ride` requires it before starting the harness.
   Read by `bro/monitor` — a process without it is in no managed session and so has no trail pointer to publish and no recording health to report.
-- `RIDE_TASK_ID` — set by `dive-in` when it has resolved a task (the canonical brog task id);
-  read by the `spell::run-pr` spell to add a `Task: <url>` line to commit messages.
 - `RIDE_SESSION_CONTEXT` — the session's launch context as a JSON list of typed records.
   It includes the system prompt, MCP servers, and the project's root instructions document
   — claude's own launch, beside which the recorder attaches the session's git state from the neutral session env (see "Session recording").
@@ -1231,9 +1232,12 @@ Wrappers and session daemons rely on a small set of env vars:
   Checked before any broker import (`ride/ride/workspace/containers.py:broker_enabled`).
 - `SSL_CERT_FILE` — set for an unboxed session of a given runtime to the certifi store inside that runtime's venv (see "Runtime bundles");
   absent for a frozen runtime's sessions, and never admitted from the launcher's environment.
-- Plus the standard `GIT_AUTHOR_*` / `GIT_COMMITTER_*`
-  — explicitly forwarded into a root session via `SESSION_FORWARD_ENV`.
-  GitHub and AWS reach a session as the scoped `github` / `aws` secrets via their install hooks, not as forwarded env;
+- `TERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `COLORTERM`, `VTE_VERSION` — the launcher's terminal identity (`SESSION_TERMINAL_ENV` in `ride.runtime_bundle`).
+  Forwarded in either isolation into a session attached to that terminal
+  — an `along` root, or a manual summon child, which the user launches from a terminal of their own
+  — and into nothing else:
+  a solo run, a spawned child, and a joined member are attached to no terminal and get no identity for one.
+- GitHub and AWS reach a session as the scoped `github` / `aws` secrets via their install hooks, not as forwarded env;
   an ambient host `GITHUB_TOKEN` is deliberately not admitted into either isolation.
 
 ## Session recording

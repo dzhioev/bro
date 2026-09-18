@@ -217,7 +217,6 @@ class TestSummonLowering:
         secrets={'aws', 'trails'},
         optional_secrets={'openai'},
         tty=False,
-        forward_env=False,
         image='runtime-image',
         runtime_bundle_hash='bundle-hash',
         extra_mounts=(
@@ -628,7 +627,6 @@ class TestSummonLowering:
     assert lowered.env[SESSION_DIR_ENV] == str(records / 'session')
     assert lowered.env['RIDE_PARTY_MEMBER'] == 'broker-CH'
     assert lowered.env['RIDE_COMMAND'].startswith('summon --join')
-    assert lowered.env['BRO_SHELL_COMMAND'] == lowered.env['RIDE_COMMAND']
     assert lowered.env['RIDE_MAY_SUMMON'] == 'reviewer'
     assert lowered.env['RIDE_PERMITS'] == 'party.join'
     assert lowered.env['RIDE_SUMMONED'] == '1'
@@ -699,7 +697,6 @@ class TestSummonLowering:
       SESSION_DIR_ENV: '/var/ride/party/broker-CH/session',
       'RIDE_TRAILS_ROOT': '/var/ride/party/broker-CH/trails',
       'RIDE_RUNTIME': '/runtime',
-      'BRO_SHELL_COMMAND': ride_command,
       'RIDE_COMMAND': ride_command,
       'RIDE_PARTY_MEMBER': 'broker-CH',
       'RIDE_SUMMONED': '1',
@@ -1158,7 +1155,6 @@ class TestClaudeSummonLowering:
       ride.artifacts.view_mount(SESSION, 'broker-CH'),
     )
     assert lowered.launch.tty is False
-    assert lowered.launch.forward_env is False
 
   def test_records_the_claude_resume_spec(self, claude_harness, tmp_path):
     from bro.llm.llms.claude_code import LLMSpec as ClaudeCodeSpec

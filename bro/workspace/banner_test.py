@@ -6,24 +6,6 @@ from bro.monitor import trail_pointer
 from bro.workspace.banner import SessionFacts
 
 
-class TestSplitLaunchPrompt:
-  def test_new_marker(self):
-    head, prompt = workspace_banner._split_launch_prompt('dive-in --hold attended --new I want X')
-    assert head == 'dive-in --hold attended --new '
-    assert prompt == 'I want X'
-
-  def test_no_marker_returns_command_unchanged(self):
-    head, prompt = workspace_banner._split_launch_prompt('dive-in -t abc123')
-    assert head == 'dive-in -t abc123'
-    assert prompt is None
-
-  def test_marker_without_trailing_content_is_not_a_match(self):
-    # `dive-in --new ` with no seed should not produce an empty prompt
-    head, prompt = workspace_banner._split_launch_prompt('dive-in --hold attended --new ')
-    assert prompt is None
-    assert head == 'dive-in --hold attended --new '
-
-
 class TestSessionFacts:
   @pytest.fixture(autouse=True)
   def isolate_env(self, monkeypatch, tmp_path):
@@ -52,7 +34,7 @@ class TestSessionFacts:
     monkeypatch.setenv('RIDE_WORKSPACE', 'my-task')
     monkeypatch.setenv('RIDE_BRO', 'dev')
     monkeypatch.setenv('RIDE_HOST_WORKSPACE', '/var/ride/0123456789abcdef/workspaces/my-task/tree')
-    monkeypatch.setenv('BRO_SHELL_COMMAND', 'dive-in -t abc')
+    monkeypatch.setenv('BRO_SHELL_COMMAND', 'bro chat dev')
     monkeypatch.setenv('RIDE_COMMAND', 'ride along --hold attended my-task')
     facts = SessionFacts.collect()
     assert facts.isolation == 'boxed'
@@ -61,9 +43,8 @@ class TestSessionFacts:
     assert facts.host_workspace == '/var/ride/0123456789abcdef/workspaces/my-task/tree'
     assert facts.container_workspace == '/workspace'
     assert facts.exec_command == 'ride exec my-task'
-    assert facts.shell_command == 'dive-in -t abc'
+    assert facts.shell_command == 'bro chat dev'
     assert facts.ride_command == 'ride along --hold attended my-task'
-    assert facts.prompt is None
 
   def test_unmanaged_container_has_no_workspace(self, monkeypatch):
     monkeypatch.setenv('RIDE_ISOLATION', 'boxed')
@@ -74,12 +55,6 @@ class TestSessionFacts:
     assert facts.exec_command is None
     assert 'workspace_container_path' not in facts.render_llm()
     assert '(boxed session without a workspace)' in facts.render_visual()
-
-  def test_extracts_prompt_from_dive_in_new(self, monkeypatch):
-    monkeypatch.setenv('BRO_SHELL_COMMAND', 'dive-in --hold attended --new I want X')
-    facts = SessionFacts.collect()
-    assert facts.shell_command == 'dive-in --hold attended --new '
-    assert facts.prompt == 'I want X'
 
   def test_host_worktree_reads_paths_from_the_session_environment(self, monkeypatch, tmp_path):
     worktree = tmp_path / 'tree'
@@ -96,18 +71,18 @@ class TestSessionFacts:
     assert facts.host_workspace == str(worktree)
     assert facts.container_workspace is None
     assert facts.exec_command is None
-    assert facts.shell_command == 'ride along feature'
+    assert facts.shell_command is None
     assert facts.ride_command == 'ride along feature'
 
   def test_a_missing_host_path_is_not_derived_from_cwd(self, monkeypatch):
     monkeypatch.setenv('RIDE_WORKSPACE', 'feature')
     assert SessionFacts.collect().host_workspace is None
 
-  def test_shell_command_falls_back_to_ride_command(self, monkeypatch):
-    monkeypatch.setenv('RIDE_COMMAND', 'ride along x')
+  def test_a_native_run_records_its_own_command(self, monkeypatch):
+    monkeypatch.setenv('BRO_SHELL_COMMAND', 'bro chat dev')
     facts = SessionFacts.collect()
-    assert facts.shell_command == 'ride along x'
-    assert facts.ride_command == 'ride along x'
+    assert facts.shell_command == 'bro chat dev'
+    assert facts.ride_command is None
 
   def test_no_session_context(self):
     facts = SessionFacts.collect()
@@ -118,7 +93,6 @@ class TestSessionFacts:
     assert facts.exec_command is None
     assert facts.shell_command is None
     assert facts.ride_command is None
-    assert facts.prompt is None
     assert facts.may_summon is None
     assert facts.summoned is False
     assert facts.trail_id is None
@@ -169,7 +143,6 @@ def _facts(**overrides) -> SessionFacts:
     'exec_command': 'ride exec task',
     'ride_command': None,
     'shell_command': None,
-    'prompt': None,
     'recording_problem': None,
     'may_summon': None,
     'summoned': False,
@@ -197,12 +170,6 @@ class TestRenderBanner:
     assert 'ride_command: ride along --bro bro task' in out
     assert 'launch_command:' not in out
     assert 'dive-in -t x' not in out
-
-  def test_llm_excludes_launch_prompt(self):
-    out = _facts(shell_command='dive-in --new ', prompt='I want X').render_llm()
-    assert 'I want X' not in out
-    assert 'prompt:' not in out
-    assert 'launch_command:' not in out
 
   def test_llm_emits_ride_command_for_direct_session(self):
     out = _facts(ride_command='ride along feature', shell_command='ride along feature').render_llm()
@@ -342,28 +309,18 @@ class TestRenderBanner:
     ).render_visual()
     assert '(unknown' in out
 
-  def test_visual_shows_ride_command_when_distinct(self):
+  def test_visual_launch_line_prefers_the_ride_command(self):
     out = _facts(
-      ride_command='ride along --bro bro task', shell_command='dive-in -t x'
+      ride_command='ride along --bro bro task', shell_command='bro chat bro'
     ).render_visual()
-    assert 'ride command:' in out
+    assert 'launched:' in out
     assert 'ride along --bro bro task' in out
+    assert 'bro chat bro' not in out
 
-  def test_visual_suppresses_ride_command_when_equal(self):
-    out = _facts(
-      ride_command='ride along feature', shell_command='ride along feature'
-    ).render_visual()
-    assert 'ride command:' not in out
-
-  def test_visual_replaces_prompt_with_placeholder_and_separate_line(self):
-    out = _facts(shell_command='dive-in --new ', prompt='I want a banner').render_visual()
-    # bright-white bold for both the @prompt@ placeholder and the prompt: label
-    # (the label style wraps the padded label, so trailing spaces sit inside)
-    assert '\033[1;97m@prompt@\033[0m' in out
-    assert '\033[1;97mprompt:' in out and '\033[0m' in out
-    # the actual prompt text appears once, on its own line
-    assert 'I want a banner' in out
-    assert out.count('I want a banner') == 1
+  def test_visual_launch_line_falls_back_to_the_native_command(self):
+    out = _facts(shell_command='bro chat bro').render_visual()
+    assert 'launched:' in out
+    assert 'bro chat bro' in out
 
   def test_llm_emits_the_recording_problem_as_first_line(self):
     out = _facts(recording_problem='FAILING — see session-recorder.log').render_llm()

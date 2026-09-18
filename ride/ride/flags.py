@@ -1,3 +1,4 @@
+from bro.base import log
 from bro.base.args import Parser
 from bro.base.scope import permit_choices
 from ride.harness import HARNESS_NAMES, get_harness
@@ -132,6 +133,15 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
     metavar='NAME=VALUE',
     help='add NAME to the session environment of the root and of every party member it '
     'summons, beneath everything else the launch composes there (repeatable)',
+  )
+  parser.add_argument(
+    '--session-log',
+    dest='session_log',
+    default=None,
+    choices=log.LEVEL_NAMES,
+    help="log level of the session's own processes (do-ride, the session MCP server, the "
+    'recorder, hook scripts), carried to every party member as the BRO_LOG_LEVEL environment '
+    'addition; default: info',
   )
   if include_bro:
     parser.add_argument(

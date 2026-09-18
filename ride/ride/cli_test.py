@@ -74,6 +74,18 @@ class TestSolo:
       ride_cli.main(['ride', 'solo', '--env', 'A=1', '--env', 'A=2', 'dev', 'do it'])
     assert '--env names A twice' in capsys.readouterr().err
 
+  def test_session_log_is_recorded_as_the_level_addition(self):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      argv = ['ride', 'solo', '--session-log', 'verbose', '--env', 'A=1', 'dev', 'do it']
+      assert ride_cli.main(argv) == 0
+    assert start.call_args.args[0].env == {'A': '1', 'BRO_LOG_LEVEL': 'VERBOSE'}
+
+  def test_session_log_and_an_env_addition_of_the_level_clash(self, capsys):
+    argv = ['ride', 'solo', '--session-log', 'verbose', '--env', 'BRO_LOG_LEVEL=DEBUG', 'dev', 'x']
+    with pytest.raises(SystemExit):
+      ride_cli.main(argv)
+    assert 'both set the session log level' in capsys.readouterr().err
+
   def test_unboxed_keeps_the_unattended_default(self):
     with patch('ride.cli.start_session', return_value=0) as start:
       ride_cli.main(['ride', 'solo', '--unboxed', 'dev', 'do it'])
@@ -462,6 +474,11 @@ class TestSummonedLaunch:
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--env', 'EXTRA=1', 'dev'])
     assert "environment additions are the party's" in capsys.readouterr().err
+
+  def test_a_manual_childs_session_log_layers_over_the_partys(self, pending):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--session-log', 'debug', 'dev'])
+    assert start.call_args.args[0].env == {'IS_SANDBOX': '1', 'BRO_LOG_LEVEL': 'DEBUG'}
 
   def test_summoned_refuses_a_prompt(self, pending, capsys):
     with pytest.raises(SystemExit):

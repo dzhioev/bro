@@ -286,7 +286,6 @@ class TestUnboxedSession:
       human_env={},
       runtime_bundle=runtime_bundle,
       container_runtime=_container_runtime(),
-      forward_env=True,
       env={},
       credential_directory=workspace.path / 'credentials',
       install_directory=workspace.path / 'environment',

@@ -131,6 +131,11 @@ class SessionSpec:
   def llm_spec(self) -> LLMSpec:
     return LLMSpec.from_dict(self.resolved_llm)
 
+  @property
+  def tty(self) -> bool:
+    """whether the session runs on the launcher's terminal."""
+    return not self.solo
+
   def to_command_argv(self) -> list[str]:
     if self.resume:
       return ['ride', 'resume', self.name]
@@ -324,7 +329,6 @@ def container_launch(
   repo: Optional[Repository | Path],
   base_ref: Optional[str],
   human_env: Mapping[str, str],
-  forward_env: bool,
   env: Mapping[str, str],
   mounts: Collection[str],
 ) -> Launch:
@@ -364,8 +368,7 @@ def container_launch(
     secrets=scoped.required,
     optional_secrets=scoped.optional,
     credential_selection=scoped.selection,
-    tty=not spec.solo,
-    forward_env=forward_env,
+    tty=spec.tty,
     image=container_runtime.image,
     runtime_bundle_hash=container_runtime.bundle_hash,
     extra_mounts=(
@@ -446,7 +449,6 @@ def prepared_unboxed_session_launch(
   *,
   human_env: Mapping[str, str],
   runtime_bundle: RuntimeBundle,
-  forward_env: bool,
   env: Mapping[str, str],
   credential_directory: Path,
   install_directory: Path,
@@ -460,7 +462,7 @@ def prepared_unboxed_session_launch(
   tree = workspace.tree
   session_command = do_ride_command(spec, harness_flags=harness.session_flags(spec))
   command = [str(runtime_bundle.host_venv / 'bin' / session_command[0]), *session_command[1:]]
-  runner_env = runtime_bundle.host_session_env(tree, forward_env=forward_env, additions=spec.env)
+  runner_env = runtime_bundle.host_session_env(tree, tty=spec.tty, additions=spec.env)
   runner_env['RIDE_BRO'] = spec.bro
   runner_env['RIDE_COMMAND'] = spec.ride_command
   runner_env[RUNTIME_ENV] = str(runtime_bundle.host_root)
@@ -489,7 +491,7 @@ def prepared_unboxed_session_launch(
     command=command,
     cwd=str(tree),
     env=runner_env,
-    interactive=not spec.solo,
+    interactive=spec.tty,
   )
 
 
@@ -503,7 +505,6 @@ def started_party_launch(
   human_env: Mapping[str, str],
   runtime_bundle: RuntimeBundle,
   container_runtime: ContainerRuntimeResolver,
-  forward_env: bool,
   env: Mapping[str, str],
   mounts: Collection[str] = (),
   credential_directory: Path,
@@ -526,7 +527,6 @@ def started_party_launch(
       repo=workspace.repo if isinstance(workspace.repo, Path) else repository,
       base_ref=base_ref,
       human_env=human_env,
-      forward_env=forward_env,
       env={RUNTIME_ENV: str(runtime_bundle.host_root), **env},
       mounts=mounts,
     )
@@ -553,7 +553,6 @@ def started_party_launch(
     launch_scope,
     human_env=human_env,
     runtime_bundle=runtime_bundle,
-    forward_env=forward_env,
     env=env,
     credential_directory=credential_directory,
     install_directory=install_directory,
@@ -609,7 +608,6 @@ def _launch_session(
         human_env=human_env,
         runtime_bundle=runtime_bundle,
         container_runtime=container_runtime,
-        forward_env=summoned is None,
         env=summoned_env,
         credential_directory=credential_directory,
         install_directory=install_directory,
@@ -691,7 +689,6 @@ def _start_session(
     os.environ.pop('RIDE_REPO', None)
   else:
     os.environ['RIDE_REPO'] = spec.repo
-  os.environ.setdefault('BRO_SHELL_COMMAND', os.environ['RIDE_COMMAND'])
 
   ensure_runtime_root()
   if spec.repo is None:

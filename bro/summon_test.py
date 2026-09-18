@@ -1,7 +1,6 @@
 import asyncio
 import contextlib
 import json
-import os
 from dataclasses import dataclass
 from unittest.mock import MagicMock
 
@@ -103,9 +102,8 @@ def test_help_names_check_list_and_no_cursor_option(capsys):
   assert 'ride solo --summoned <token>' in ' '.join(output.split())
 
 
-def test_bare_summon_forwards_with_its_own_shell_command(monkeypatch):
+def test_bare_summon_forwards_the_request(monkeypatch):
   calls: list[tuple] = []
-  monkeypatch.delenv('BRO_SHELL_COMMAND', raising=False)
   monkeypatch.setattr(
     summon,
     'relay_summon',
@@ -116,7 +114,6 @@ def test_bare_summon_forwards_with_its_own_shell_command(monkeypatch):
 
   assert summon.main(['summon', '--timeout', '60', 'dev', 'deploy']) == 0
   assert calls == [('dev', 'deploy', 60.0, None)]
-  assert os.environ['BRO_SHELL_COMMAND'] == 'summon --timeout 60.0 dev deploy'
 
 
 def test_manual_summon_refuses_launch_owned_flags(monkeypatch, caplog):
