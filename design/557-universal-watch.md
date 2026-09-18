@@ -183,7 +183,7 @@ A re-arm repeats the lines the tail retains, marked, which is noise where the ga
 Both harnesses gain this, since the command is shared.
 
 The dev toolset keeps `read_reference`, `read_file`, `write_file`, `edit_file`, `grep`, and `glob`, and drops `bash`, `job`, `watch`, `kill`.
-Every persona whose shell came from that mount declares `commands(ANY)` in its place
+Every persona whose shell came from that mount declares `shell(ANY)` in its place
 — `dev`, `eyebro`, `analyst`, `terminal`, and `devoops`, whose `mount(dev_mcp.toolset, 'bash')` becomes the declaration alone;
 `lead` declares nothing.
 #65 (the multi-job `dev::watch` wait) is subsumed:
@@ -191,7 +191,7 @@ Every persona whose shell came from that mount declares `commands(ANY)` in its p
 
 ### Authority: one roster of commands
 
-One declaration in `bro.mcp`, `commands(*commands)` or `commands(ANY)`, a new `ToolLayer` field folded per harness (`bro/bro.py:_fold_tool_layers`):
+One declaration in `bro.mcp`, `shell(*commands)` or `shell(ANY)`, a new `ToolLayer` field folded per harness (`bro/bro.py:_fold_tool_layers`):
 
 - native:
   the roster `job` accepts in any mode, matched whole and exact;
@@ -205,9 +205,10 @@ One declaration in `bro.mcp`, `commands(*commands)` or `commands(ANY)`, a new `T
 
 `claude.watch` (`bro/harness/claude.py`) retires into it.
 The `summon watch` admission keeps its rule on both harnesses — a run that may summon, or a summoned run whose summoner may say or question — adding the command to the native roster as it adds it to Monitor's today.
-The personas that held a shell through the dev toolset declare `commands(ANY)` (above);
+The personas that held a shell through the dev toolset declare `shell(ANY)` (above);
 lead declares nothing.
-The typed `sh(...)` tools are the other way to reach a command and stay as they are.
+The typed `cli(...)` tools are the other way to reach a command — a fixed argv with no shell between, its parameters derived from the CLI's own argument declarations;
+today's `sh(...)`, renamed with its `sh::` namespace to `cli::`, so that `shell('bro list')`, a shell admitting that command line, and `cli('bro list')`, that CLI served as a typed tool, read apart at the declaration.
 
 ### Prompts
 
@@ -372,9 +373,11 @@ everything else runs from the session's frozen bundle and needs no order.
 - `bro/runtime/mcp_server_test.py`:
   the resolved servers closed on the lifespan's exit and after the stdio streams close.
 - `bro/mcp_test.py`, `bro/harness/claude_test.py`, `ride/ride/claude/claude_argv_test.py`:
-  the `commands` fold on both harnesses, the Bash gate.
+  the `shell` fold on both harnesses, the Bash gate;
+  `bro/llm/cli_tool_test.py`:
+  the `cli` namespace.
 - `dev/bros/dev/mcp_test.py` and the persona tests:
-  the dropped tools, `commands(ANY)` on every persona that held the shell through the mount.
+  the dropped tools, `shell(ANY)` on every persona that held the shell through the mount.
 - `bro/prompts/prompts_test.py`:
   the fragments per surface.
 - `native/bro/launch/call_test.py`:
@@ -403,7 +406,7 @@ Review-and-plan, 2026-09-18 (trail `01m2tk0kgy-bt2hq1mj-gmamnhye`), against the 
   Validation runs in the store's process (the server for the network backend, the recorder for the local one) and a refusal aborts the run, so the server upgrades first;
   projection runs on the server too, so readers older than it fail loudly on `rewind show` of a new trail;
   the brotocol is unchanged, and host and peers are one bundle by construction.
-- **Every persona whose shell came from the dev toolset declares `commands(ANY)`:**
+- **Every persona whose shell came from the dev toolset declares `shell(ANY)`:**
   `dev`, `eyebro`, `analyst`, `terminal`, and `devoops`, whose scoped `mount(dev_mcp.toolset, 'bash')` breaks at declaration once `bash` is gone.
   The design named only `dev`.
 - **Invariants made explicit:**
@@ -451,6 +454,12 @@ Review round 2 by bro-eyebro, 2026-09-18:
   a watch's exit is a head read.
 - **A notification shows on a surface when the provider drains it**, never before, since surfaces do not read the inbox.
 
+Settled with the user after the eyebro's approval, 2026-09-18:
+
+- **The roster declaration is `shell(...)`, and `sh(...)` becomes `cli(...)` with the `cli::` namespace.**
+  `commands(...)` named its argument rather than the capability;
+  `shell` beside `sh` would have put two names for the two routes to a command a keystroke apart, so the typed route says what it is made from, a CLI.
+
 ## Cleanup that lands with it
 
 - `bros/bro/spells/ask.md`:
@@ -463,7 +472,7 @@ Review round 2 by bro-eyebro, 2026-09-18:
   `dev/bros/dev/spells/bump-bro.md`:
   the `dev::bash` timeout note.
 - `dev/bros/dev/__init__.py`, `dev/bros/eyebro/__init__.py`, `dev/bros/analyst/__init__.py`, `dev/bros/terminal/__init__.py`, `oops/bros/devoops/__init__.py`:
-  `commands(ANY)` in place of the shell the dev toolset mount gave them.
+  `shell(ANY)` in place of the shell the dev toolset mount gave them.
 - `bro/prompts/summoner.md`, `bro/prompts/summoned.md`, `bro/prompts/AGENTS.md`:
   per the Prompts section, the cancel sentence's bare-wire branch included.
 - `dev/bros/dev/REFERENCE.md`:
@@ -472,6 +481,8 @@ Review round 2 by bro-eyebro, 2026-09-18:
   the watch's arm-time replay, `summon say --question`, and the bare-wire twins of `summon_say`, `summon_check`, and `summon_cancel`.
 - `bro/runtime/mcp_server.py` and `bro/runtime/AGENTS.md`:
   the resolved servers closed on shutdown.
+- `bro/mcp.py`, `bro/llm/cli_tool.py`, `dev/bros/lead/__init__.py`, `README.md`, `bro/llm/AGENTS.md`, `dev/bros/dev/spells/bump-bro.md`, and the root `AGENTS.md`:
+  `sh(...)` becomes `cli(...)` and its namespace `cli::`.
 - `bro/harness/claude.py`, the root `AGENTS.md` (the service-tool roster, `claude.watch`, the dev toolset), `native/AGENTS.md`, `bro/launch/AGENTS.md`,
   `bro/trails/AGENTS.md` (the record kinds), `bro/reference/ride.md` (the summon surfaces, the bro harness section, `RIDE_MAY_SUMMON`'s Monitor sentence), and the service tool descriptions.
 
