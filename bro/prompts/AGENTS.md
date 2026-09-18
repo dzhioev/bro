@@ -89,11 +89,10 @@ It renders when `bro.summon.party_member()` reads `RIDE_PARTY_MEMBER` from the l
 
 ### Summoner contract
 
-`summoner.md` (top level) has a session that may summon keep the summon watch armed, so every summon's lifecycle and chat reaches it as a harness notification.
-It renders only for a run whose effective allow-list (`bro.summon.effective_may_summon()`) is non-empty, and its body forks on the harness:
-the Claude harness holds the watch on a persistent `Monitor`, which the tool fold keeps reachable for exactly that command over any persona's block on the same fact (`bro/harness/claude.py:admit_summon_watch`), while the bro harness renders nothing
-— a native run is never idle, so no notification could reach it.
-The same text tells the summoner how to answer a child's pending question, continue its retained quest, and end a child it no longer needs.
+`summoner.md` (top level) has a session that may summon keep the summon watch armed, so every summon's lifecycle and chat remains observable.
+It renders only for a run whose effective allow-list (`bro.summon.effective_may_summon()`) is non-empty, and its body forks by surface:
+the Claude harness holds the watch on a persistent `Monitor`, bro-native starts `summon watch` as a watch-mode job and chills on its inbox, and raw MCP sessions poll the retained quests because that wire has no notification wake.
+The same text states the notification trust rule and tells the summoner how to exchange questions, continue a retained quest, cancel a child, and keep a one-shot run alive while work remains.
 
 ### Summoned contract
 
@@ -101,7 +100,8 @@ The same text tells the summoner how to answer a child's pending question, conti
 It renders only for a run `bro.summon.summoned()` reports as summoned, and hold-neutrally
 — the duty comes with being summoned, so an attended or guided child carries the same text a spawned unattended one does.
 Its `#talk` branches admit only the quest's live moves:
-a speaking summoner is watched or polled by harness, `worker.say` enables progress, `worker.question` enables a bounded consult recovered through check, and a child without that right raises instead of asking.
+a speaking summoner reaches managed Claude through Monitor, bro-native through its watch job, and raw MCP through retained-quest polls.
+`worker.say` enables progress, `worker.question` uses the surface's non-blocking watch or bounded consult, and a child without that right raises instead of asking.
 
 ### Hold text
 

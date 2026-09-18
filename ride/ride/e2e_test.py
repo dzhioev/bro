@@ -21,7 +21,9 @@ container: the store `docker cp`'d in, the `env -i` snapshot, the pid handshake
 read back through the party mount, the member lifecycle routed to the first
 session, and the first session's exit tearing a live member down);
 I — the full boxed → join → unboxed → join → boxed chain through summon control;
-J — a summoned child question, summoner steering and reply, and journal-backed collection.
+J — native summon-watch wake routes through the real broker;
+K — a summoned child question, summoner steering and reply, and journal-backed collection;
+L — cancellation of a live child.
 
 Isolation: every launch runs under a throwaway HOME, data home and project root,
 so no scenario touches the user's own claude or runtime state. The
@@ -1591,7 +1593,249 @@ time.sleep(2)
   assert not party_directory.exists() or list(party_directory.iterdir()) == []
 
 
-# --- J: summon chat across a live child ---------------------------------------
+# --- J: native summon-watch routes --------------------------------------------
+
+_NATIVE_RAISE_CHILD = """
+import contextlib
+from bro.run_lifecycle import RunLifecycle
+
+channel = RunLifecycle.from_env()
+assert channel is not None
+with contextlib.closing(channel):
+  channel.trail('native-watch-raised-child')
+  channel.completed('expected e2e failure', 'raised')
+"""
+
+_NATIVE_ROOT_WATCH = """
+import json
+import time
+from pathlib import Path
+
+from bro.bro import BaseBro
+from bro.native.runner import Runner
+from bro.summon import summon_detached
+
+class WatchBro(BaseBro):
+  name = 'e2e-watch-root'
+  description = 'watches background summon events'
+  system_prompt = 'observe the watch'
+
+started = time.monotonic()
+deadline = started + 30
+notifications = []
+with Runner(WatchBro()) as runner:
+  runner.registry.start('summon watch', 'watch')
+  request_id = summon_detached(
+    'bro', 'raise for the native watch route', llm='echo', harness='bro', timeout=120
+  )
+  while not any('summon ended failed:raised' in text for text in notifications):
+    with runner.inbox.waiter() as cancelled:
+      if not runner.inbox.wait(deadline, cancelled):
+        raise TimeoutError('the native root was not woken by the child end')
+    batch = runner.inbox.drain()
+    if batch is not None:
+      notifications.append(batch.text)
+Path('/workspace/.native-root-watch-report').write_text(json.dumps({
+  'request_id': request_id,
+  'elapsed': time.monotonic() - started,
+  'notifications': notifications,
+}))
+"""
+
+_NATIVE_WATCHED_CHILD = """
+import contextlib
+import json
+import time
+
+from bro.bro import BaseBro
+from bro.native.runner import Runner
+from bro.run_lifecycle import RunLifecycle
+from bro.summon import check_summon, say
+
+class WatchBro(BaseBro):
+  name = 'e2e-watched-child'
+  description = 'watches own-quest messages'
+  system_prompt = 'observe the watch'
+
+def incoming(text):
+  return any(
+    entry.get('from') == 'requester' and entry['head']['text'] == text
+    for entry in check_summon().messages
+  )
+
+def wait_for_incoming(text, deadline):
+  while not incoming(text):
+    if time.monotonic() >= deadline:
+      raise TimeoutError(f'did not receive {text!r}')
+    time.sleep(0.1)
+
+wait_for_incoming('before arm', time.monotonic() + 30)
+notifications = []
+with Runner(WatchBro()) as runner:
+  runner.registry.start('summon watch', 'watch')
+  deadline = time.monotonic() + 30
+  while not any('before the watch: summoner says before arm' in text for text in notifications):
+    with runner.inbox.waiter() as cancelled:
+      if not runner.inbox.wait(deadline, cancelled):
+        raise TimeoutError('the arm replay did not wake the native child')
+    batch = runner.inbox.drain()
+    if batch is not None:
+      notifications.append(batch.text)
+  say('watch armed')
+  while not any('summoner says after arm' in text for text in notifications):
+    with runner.inbox.waiter() as cancelled:
+      if not runner.inbox.wait(deadline, cancelled):
+        raise TimeoutError('live steering did not wake the native child')
+    batch = runner.inbox.drain()
+    if batch is not None:
+      notifications.append(batch.text)
+channel = RunLifecycle.from_env()
+assert channel is not None
+with contextlib.closing(channel):
+  channel.trail('native-watch-steered-child')
+  channel.completed(json.dumps(notifications), 'ok')
+"""
+
+_NATIVE_CHILD_WATCH_ROOT = """
+import time
+from pathlib import Path
+
+from bro.summon import check_summon, say, summon_detached
+
+request_id = summon_detached(
+  'bro',
+  'receive steering through the native own-quest watch',
+  talk=['requester.say'],
+  llm='echo',
+  harness='bro',
+  timeout=120,
+)
+say('before arm', request_id)
+deadline = time.monotonic() + 45
+while True:
+  status = check_summon(request_id)
+  if any(
+    entry.get('from') == 'worker' and entry['head']['text'] == 'watch armed'
+    for entry in status.messages
+  ):
+    break
+  if not status.pending:
+    raise RuntimeError(f'the child ended before arming its watch: {status}')
+  if time.monotonic() >= deadline:
+    raise TimeoutError('the child did not arm its watch')
+  time.sleep(0.1)
+say('after arm', request_id)
+while True:
+  status = check_summon(request_id)
+  if not status.pending:
+    break
+  if time.monotonic() >= deadline:
+    raise TimeoutError('the steered child did not finish')
+  time.sleep(0.1)
+Path('/workspace/.native-child-watch-report').write_text(status.answer)
+"""
+
+
+def _run_native_watch_route(
+  env: IsolatedEnv,
+  monkeypatch: pytest.MonkeyPatch,
+  *,
+  case: str,
+  root_source: str,
+  child_source: str,
+  report_name: str,
+) -> tuple[int, str]:
+  import ride.spawn as ride_spawn
+  from ride.runtime_bundle import RuntimeBundle
+  from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
+  from ride.workspace.metadata import Isolation
+  from ride.workspace.model import Workspace
+  from ride.workspace.store import ScopedSecrets
+
+  name = f'{_NAME_PREFIX}j-{case}-party'
+  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  runtime_bundle = RuntimeBundle(
+    env.runtime_root / 'runtime' / env.runtime_bundle_hash,
+    f'{sys.version_info.major}.{sys.version_info.minor}',
+  )
+  container_runtime = ContainerRuntimeResolver.fixed(
+    ContainerRuntime(env.image, env.runtime_bundle_hash), workspace.repository
+  )
+  original_started_party_launch = ride_spawn.started_party_launch
+
+  def started_party_launch(*arguments, **keywords):
+    launch = original_started_party_launch(*arguments, **keywords)
+    return replace(launch, command=_session_broxy_probe(child_source))
+
+  monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
+  monkeypatch.setenv('HOME', str(env.home))
+  report = workspace.tree / report_name
+  launch = DockerLaunchSpec(
+    workspace_docker.Launch(
+      name=name,
+      command=_session_broxy_probe(root_source),
+      env={'RIDE_BRO': 'bro-dev'},
+      secrets=(),
+      tty=False,
+      image=env.image,
+      runtime_bundle_hash=env.runtime_bundle_hash,
+      repo=env.project,
+    )
+  )
+
+  code = ride_spawn.run_root_via_broker(
+    launch,
+    workspace=workspace,
+    bro='bro-dev',
+    may_summon={'bro'},
+    permits={'party.start.boxed'},
+    summon_depth=2,
+    credential_scope=ScopedSecrets(set(), set()),
+    container_runtime=container_runtime,
+    runtime_bundle=runtime_bundle,
+  )
+  return code, report.read_text()
+
+
+def test_native_root_watch_wakes_on_a_detached_child_raise(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  code, raw_report = _run_native_watch_route(
+    isolated_env,
+    monkeypatch,
+    case='root-watch',
+    root_source=_NATIVE_ROOT_WATCH,
+    child_source=_NATIVE_RAISE_CHILD,
+    report_name='.native-root-watch-report',
+  )
+
+  report = json.loads(raw_report)
+  assert code == 0
+  assert report['elapsed'] < 30
+  assert any('summon ended failed:raised' in text for text in report['notifications'])
+  assert isolated_env.live_containers() == []
+
+
+def test_native_child_watch_replays_pre_arm_steering_and_receives_live_steering(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  code, raw_report = _run_native_watch_route(
+    isolated_env,
+    monkeypatch,
+    case='child-watch',
+    root_source=_NATIVE_CHILD_WATCH_ROOT,
+    child_source=_NATIVE_WATCHED_CHILD,
+    report_name='.native-child-watch-report',
+  )
+
+  notifications = json.loads(raw_report)
+  assert code == 0
+  assert any('before the watch: summoner says before arm' in text for text in notifications)
+  assert any('summoner says after arm' in text for text in notifications)
+  assert isolated_env.live_containers() == []
+
+
+# --- K: summon chat across a live child ---------------------------------------
 
 _QUEST_CHAT_CHILD = """
 from bro.run_lifecycle import RunLifecycle
@@ -1697,7 +1941,7 @@ Path('/workspace/.quest-chat-report').write_text(status.answer)
   assert env.live_containers() == []
 
 
-# --- K: cancelling a live child ------------------------------------------------
+# --- L: cancelling a live child ------------------------------------------------
 
 _CANCEL_CHILD = """
 import time

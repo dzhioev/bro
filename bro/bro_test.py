@@ -1400,8 +1400,8 @@ class TestSessionModePrompts:
     monkeypatch.setenv(SUMMONED_ENV, '1')
     monkeypatch.setenv(TALK_ENV, 'worker.question')
     prompt = EchoBro().system_prompt_for(hold='unattended')
-    assert 'call `bro::summon_say`' in prompt
-    assert 'recover the reply with `bro::summon_check`' in prompt
+    assert '`question=true`' in prompt
+    assert 'quest does not permit' not in prompt
 
 
 class TestBannerTool:
