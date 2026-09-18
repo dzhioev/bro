@@ -57,12 +57,14 @@ def _native_servers(
   )
 
 
-def _service_server(bro: BaseBro, *, run: Optional[StubRun] = None) -> MCPServer:
+def _service_server(
+  bro: BaseBro, *, run: Optional[StubRun] = None, wire: mcp.Wire = 'bare'
+) -> MCPServer:
   return bro_module._build_service_server(
     bro,
     include_raise=True,
     harness='bro',
-    wire='bare',
+    wire=wire,
     live_run=run if run is not None else StubRun(),
   )
 
@@ -1166,8 +1168,14 @@ async def _collect_tool_names(servers):
   return names
 
 
-async def _find_tool(bro: BaseBro, name: str, *, run: Optional[StubRun] = None):
-  for candidate in await _service_server(bro, run=run).list_tools():
+async def _find_tool(
+  bro: BaseBro,
+  name: str,
+  *,
+  run: Optional[StubRun] = None,
+  wire: mcp.Wire = 'bare',
+):
+  for candidate in await _service_server(bro, run=run, wire=wire).list_tools():
     if candidate.name == name:
       return candidate
   raise AssertionError(f'no {name!r} tool on the service server')
@@ -1481,7 +1489,89 @@ class TestSummonTool:
     assert await tool.call({}) == listing
 
   @pytest.mark.asyncio
-  async def test_summon_say_returns_structured_question_and_closes_its_client(self, monkeypatch):
+  async def test_bare_service_tool_schemas_have_no_waiting_controls(self, monkeypatch):
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    bare = {tool.name: tool for tool in await _service_server(EchoBro()).list_tools()}
+    served = {tool.name: tool for tool in await _service_server(EchoBro(), wire='mcp').list_tools()}
+
+    assert 'detach' not in bare['summon'].parameters['properties']
+    assert set(bare['summon_check'].parameters['properties']) == {'request_id'}
+    assert set(bare['summon_say'].parameters['properties']) == {
+      'text',
+      'request_id',
+      'reply_to',
+      'question',
+    }
+    assert set(bare['summon_cancel'].parameters['properties']) == {'request_id'}
+    assert 'detach' in served['summon'].parameters['properties']
+    assert {'wait', 'timeout'} <= set(served['summon_check'].parameters['properties'])
+    assert 'wait' in served['summon_say'].parameters['properties']
+    assert 'timeout' in served['summon_cancel'].parameters['properties']
+
+  @pytest.mark.asyncio
+  async def test_bare_summon_returns_after_acceptance(self, monkeypatch):
+    from bro import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    calls = []
+
+    def accepted(target, prompt, **kwargs):
+      calls.append((target, prompt, kwargs))
+      return 'REQ-1'
+
+    monkeypatch.setattr(summon_module, 'summon_detached', accepted)
+    tool = await _find_tool(EchoBro(), 'summon', run=StubRun(tool_step={'step_id': 9, 'index': 2}))
+
+    assert await tool.call({'target': 'dev', 'prompt': 'work'}) == {
+      'state': 'accepted',
+      'request_id': 'REQ-1',
+    }
+    assert calls[0][0:2] == ('dev', 'work')
+    assert calls[0][2]['step_id'] == 9
+    assert calls[0][2]['index'] == 2
+
+  @pytest.mark.asyncio
+  async def test_bare_summon_say_asks_without_waiting(self, monkeypatch):
+    from bro import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    calls = []
+
+    def say(text, request_id, *, reply_to, question):
+      calls.append((text, request_id, reply_to, question))
+      return summon_module.SayStatus('question', request_id, question_id='QUESTION-1')
+
+    monkeypatch.setattr(summon_module, 'say', say)
+    tool = await _find_tool(EchoBro(), 'summon_say')
+
+    assert await tool.call({'text': 'approve?', 'request_id': 'REQ-1', 'question': True}) == {
+      'state': 'question',
+      'request_id': 'REQ-1',
+      'id': 'QUESTION-1',
+    }
+    assert calls == [('approve?', 'REQ-1', None, True)]
+
+  @pytest.mark.asyncio
+  async def test_bare_summon_cancel_returns_after_acceptance(self, monkeypatch):
+    from bro import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    monkeypatch.setattr(
+      summon_module,
+      'request_cancel',
+      lambda request_id: summon_module.CancelStatus('accepted', request_id),
+    )
+    tool = await _find_tool(EchoBro(), 'summon_cancel')
+
+    assert await tool.call({'request_id': 'REQ-1'}) == {
+      'state': 'accepted',
+      'request_id': 'REQ-1',
+    }
+
+  @pytest.mark.asyncio
+  async def test_mcp_summon_say_returns_structured_question_and_closes_its_client(
+    self, monkeypatch
+  ):
     from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
@@ -1494,7 +1584,7 @@ class TestSummonTool:
         'question', request_id, question_id='QUESTION-1'
       ),
     )
-    tool = await _find_tool(EchoBro(), 'summon_say')
+    tool = await _find_tool(EchoBro(), 'summon_say', wire='mcp')
 
     assert await tool.call({'text': 'approve?', 'request_id': 'REQ-1', 'wait': 60}) == {
       'state': 'question',
@@ -1504,7 +1594,7 @@ class TestSummonTool:
     assert client.closed
 
   @pytest.mark.asyncio
-  async def test_calls_summon_and_wait_off_loop(self, monkeypatch):
+  async def test_mcp_calls_summon_and_wait_off_loop(self, monkeypatch):
     from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
@@ -1558,7 +1648,7 @@ class TestSummonTool:
     monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
     run = StubRun(tool_step={'step_id': 42, 'index': 3})
     tool = None
-    for candidate in await _service_server(EchoBro(), run=run).list_tools():
+    for candidate in await _service_server(EchoBro(), run=run, wire='mcp').list_tools():
       if candidate.name == 'summon':
         tool = candidate
     assert tool is not None
@@ -1598,7 +1688,7 @@ class TestSummonTool:
     assert client.closed  # the per-call client is closed on the way out
 
   @pytest.mark.asyncio
-  async def test_blocking_summon_returns_a_structured_child_question(self, monkeypatch):
+  async def test_mcp_blocking_summon_returns_a_structured_child_question(self, monkeypatch):
     from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
@@ -1610,7 +1700,7 @@ class TestSummonTool:
       return summon_module.SummonQuestion('QUESTION-1', 'approve?')
 
     monkeypatch.setattr(summon_module, 'summon_and_wait', ask)
-    tool = await _find_tool(EchoBro(), 'summon')
+    tool = await _find_tool(EchoBro(), 'summon', wire='mcp')
 
     assert await tool.call({'target': 'dev', 'prompt': 'work', 'talk': ['worker.question']}) == {
       'state': 'question',
@@ -1619,7 +1709,7 @@ class TestSummonTool:
     }
 
   @pytest.mark.asyncio
-  async def test_detach_returns_the_request_id_without_waiting(self, monkeypatch):
+  async def test_mcp_detach_returns_the_request_id_without_waiting(self, monkeypatch):
     from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
@@ -1651,7 +1741,7 @@ class TestSummonTool:
 
     monkeypatch.setattr(summon_module, 'summon_detached', fake_summon_detached)
     monkeypatch.setattr(summon_module, 'summon_and_wait', fail_summon_and_wait)
-    tool = await _find_tool(EchoBro(), 'summon')
+    tool = await _find_tool(EchoBro(), 'summon', wire='mcp')
     result = await tool.call({'target': 'dev', 'prompt': 'deploy', 'detach': True})
     assert result == {'state': 'accepted', 'request_id': 'REQ-ID'}
     assert calls == [{'target': 'dev', 'prompt': 'deploy', 'timeout': None, 'into': None}]
@@ -1711,7 +1801,7 @@ class TestSummonTool:
     assert 'last_seen' not in tool.parameters['properties']
 
   @pytest.mark.asyncio
-  async def test_cancelled_blocking_summon_closes_its_client(self, monkeypatch):
+  async def test_cancelled_mcp_summon_closes_its_client(self, monkeypatch):
     # the client-side abort path: cancelling the tool call (the MCP client timed
     # out or aborted) must close the per-call channel client, which unblocks the
     # worker thread and detaches the broxy route
@@ -1757,7 +1847,7 @@ class TestSummonTool:
     monkeypatch.setattr(client, 'close', fake_close)
     monkeypatch.setattr(summon_module, 'open_client', lambda: client)
     monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
-    tool = await _find_tool(EchoBro(), 'summon')
+    tool = await _find_tool(EchoBro(), 'summon', wire='mcp')
     task = asyncio.create_task(tool.call({'target': 'dev', 'prompt': 'deploy'}))
     assert await asyncio.to_thread(entered.wait, 5)
     task.cancel()
@@ -1797,7 +1887,7 @@ class TestSummonTool:
 
     monkeypatch.setattr(summon_module, 'open_client', lambda: client)
     monkeypatch.setattr(summon_module, 'wait_summon', fake_wait_summon)
-    tool = await _find_tool(EchoBro(), 'summon_check')
+    tool = await _find_tool(EchoBro(), 'summon_check', wire='mcp')
     result = await tool.call({'request_id': 'REQ-1', 'wait': True, 'timeout': 60})
     assert result == {
       'state': 'completed',
@@ -1824,7 +1914,7 @@ class TestSummonTool:
 
     monkeypatch.setattr(summon_module, 'open_client', lambda: client)
     monkeypatch.setattr(summon_module, 'wait_summon', fake_wait_summon)
-    tool = await _find_tool(EchoBro(), 'summon_check')
+    tool = await _find_tool(EchoBro(), 'summon_check', wire='mcp')
 
     assert await tool.call({'request_id': 'REQ-1', 'wait': True, 'timeout': 60}) == {
       'state': 'pending',
@@ -1852,7 +1942,7 @@ class TestSummonTool:
 
     monkeypatch.setattr(summon_module, 'open_client', lambda: client)
     monkeypatch.setattr(summon_module, 'cancel_summon', fake_cancel_summon)
-    tool = await _find_tool(EchoBro(), 'summon_cancel')
+    tool = await _find_tool(EchoBro(), 'summon_cancel', wire='mcp')
 
     assert await tool.call({'request_id': 'REQ-1', 'timeout': 60}) == {
       'state': 'ended',
@@ -1878,7 +1968,7 @@ class TestSummonTool:
         'pending', request_id
       ),
     )
-    tool = await _find_tool(EchoBro(), 'summon_cancel')
+    tool = await _find_tool(EchoBro(), 'summon_cancel', wire='mcp')
 
     assert await tool.call({'request_id': 'REQ-1', 'timeout': 5}) == {
       'state': 'pending',
@@ -1888,29 +1978,29 @@ class TestSummonTool:
 
   @pytest.mark.asyncio
   @pytest.mark.parametrize('timeout', [float('nan'), float('inf'), 0])
-  async def test_cancel_rejects_a_non_finite_deadline(self, monkeypatch, timeout):
+  async def test_mcp_cancel_rejects_a_non_finite_deadline(self, monkeypatch, timeout):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    tool = await _find_tool(EchoBro(), 'summon_cancel')
+    tool = await _find_tool(EchoBro(), 'summon_cancel', wire='mcp')
     with pytest.raises(ValueError, match='finite positive'):
       await tool.call({'request_id': 'REQ-1', 'timeout': timeout})
 
   @pytest.mark.asyncio
-  async def test_check_timeout_without_wait_is_an_error(self, monkeypatch):
+  async def test_mcp_check_timeout_without_wait_is_an_error(self, monkeypatch):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    tool = await _find_tool(EchoBro(), 'summon_check')
+    tool = await _find_tool(EchoBro(), 'summon_check', wire='mcp')
     with pytest.raises(ValueError, match='wait'):
       await tool.call({'request_id': 'REQ-1', 'timeout': 60})
 
   @pytest.mark.asyncio
   @pytest.mark.parametrize('timeout', [float('nan'), float('inf')])
-  async def test_check_wait_rejects_non_finite_deadlines(self, monkeypatch, timeout):
+  async def test_mcp_check_wait_rejects_non_finite_deadlines(self, monkeypatch, timeout):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    tool = await _find_tool(EchoBro(), 'summon_check')
+    tool = await _find_tool(EchoBro(), 'summon_check', wire='mcp')
     with pytest.raises(ValueError, match='finite positive'):
       await tool.call({'request_id': 'REQ-1', 'wait': True, 'timeout': timeout})
 
   @pytest.mark.asyncio
-  async def test_summon_failure_propagates_as_the_tool_error(self, monkeypatch):
+  async def test_mcp_summon_failure_propagates_as_the_tool_error(self, monkeypatch):
     from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
@@ -1942,7 +2032,7 @@ class TestSummonTool:
     monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
     bro = EchoBro()
     tool = None
-    for candidate in await _service_server(bro).list_tools():
+    for candidate in await _service_server(bro, wire='mcp').list_tools():
       if candidate.name == 'summon':
         tool = candidate
     assert tool is not None
