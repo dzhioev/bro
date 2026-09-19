@@ -377,15 +377,7 @@ class Journal:
 
   def visible(self, caller: Peer, record: Record, workers: dict[Peer, str]) -> bool:
     caller_quest = workers.get(caller)
-    if caller_quest is None:
-      return False
-    current = record.parent
-    while current is not None:
-      if current == caller_quest:
-        return True
-      lineage = self.lineage.get(current)
-      current = lineage.parent if lineage is not None else None
-    return False
+    return caller_quest is not None and record.parent == caller_quest
 
   def visible_by_id(self, caller: Peer, record: Record, workers: dict[Peer, str]) -> bool:
     return self.visible(caller, record, workers) or record.worker == caller
