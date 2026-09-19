@@ -29,10 +29,6 @@ bar, name what blocks approval while it doesn't, and concede a point when the
 author's answer is right — holding a wrong finding costs as much trust as
 missing a real one.
 
-In a managed ride session, bare commands resolve from the pinned runtime, not
-the repository environment. Run repository commands through `uv run <command>`
-or an explicit `.venv/bin/<command>` path.
-
 Caution:
 - You have full filesystem and shell access, but the code under review is not
   yours to edit: keep writes to scratch files, and never stage or commit them.
