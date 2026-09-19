@@ -99,13 +99,15 @@ def resolve(quest_id: str) -> str:
   return quest_id
 
 
-def caller_end(quest: dict[str, Any], quest_id: str) -> Optional['End']:
+def caller_end(quest: dict[str, Any], quest_id: str) -> 'End':
   """which end of the quest this session is: `summoned` on its own quest,
-  `summoner` on a direct child, and None on a deeper descendant."""
+  `summoner` on a child it summoned."""
   own = own_quest()
   if quest_id == own:
     return 'summoned'
-  return 'summoner' if quest.get('parent') == own else None
+  if quest.get('parent') == own:
+    return 'summoner'
+  raise QuestError(f'quest {quest_id!r} is not one this session summoned')
 
 
 def trails_hint(trail_id: Optional[str]) -> str:
@@ -391,7 +393,7 @@ class Outcome:
     return 'running'
 
 
-def _outcome_of(quest: dict[str, Any], quest_id: str, caller: Optional['End']) -> Outcome:
+def _outcome_of(quest: dict[str, Any], quest_id: str, caller: 'End') -> Outcome:
   answer = answer_of(quest)
   trail_id = quest.get('trail_id')
   questions: tuple[Question, ...] = ()
@@ -464,7 +466,7 @@ class History:
   ended: bool = False
 
 
-def _history_of(quest: dict[str, Any], quest_id: str, caller: Optional['End']) -> History:
+def _history_of(quest: dict[str, Any], quest_id: str, caller: 'End') -> History:
   if quest.get('state') == 'evicted':
     raise QuestError(f'quest {quest_id!r} is no longer retained')
   truncated = quest.get('messages_truncated', False)
@@ -476,7 +478,7 @@ def _history_of(quest: dict[str, Any], quest_id: str, caller: Optional['End']) -
     tuple(_entries(quest)),
     truncated,
     _chat_seq(quest),
-    () if caller is None else open_questions(quest, awaiting=caller),
+    open_questions(quest, awaiting=caller),
     _ended(quest),
   )
 
@@ -537,8 +539,6 @@ def _send(
   resolved = resolve(quest_id)
   quest = query_quest(client, resolved)
   sender = caller_end(quest, resolved)
-  if sender is None:
-    raise QuestError(f'quest {resolved!r} is not a direct child of this session')
   _require_live(quest)
   try:
     candidate = brotocol.message(
@@ -770,7 +770,7 @@ def _quest_clause(event: dict[str, Any], own: str) -> str:
   elif event.get('transition') != 'denied':
     raise QuestError('events read returned an accepted summon without a target')
   if parent != own:
-    clause += f', summoned by quest {parent}'
+    raise QuestError('events read returned a quest this session did not summon')
   return clause
 
 
@@ -1121,10 +1121,10 @@ def main(argv: list[str]) -> Optional[int]:
 
   watch_parser = verbs.add_parser(
     'watch',
-    help='stream the transitions of every summon beneath this session',
-    description="stream the ordered transitions of every summon in this session's subtree "
-    '— its own and the ones its summoned bros make in turn — and the messages that reach '
-    'it. Runs until killed; what is already in flight when it starts is the baseline',
+    help='stream the transitions of every summon this session makes',
+    description='stream the ordered transitions of every summon this session makes and the '
+    'messages that reach it. Runs until killed; what is already in flight when it starts is '
+    'the baseline',
   )
   watch_parser.set_handler(_watch)
 

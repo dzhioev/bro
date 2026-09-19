@@ -99,7 +99,7 @@ A by-id response that must fit the frame drops the oldest unmarked entries first
 The retained result has priority over the tail and becomes `result_evicted` only when it cannot fit after the tail is removed.
 `events` returns caller-scoped, frame-bounded ordered batches after a cursor and supports bounded long-polling.
 Both clamp waits to 600 seconds, are answered inline, and never record themselves.
-A caller sees the quests it requested and their descendants according to permanent journal ancestry.
+A caller sees the quests it requested and nothing beneath them.
 It may also query the quest its own worker answers by id and see that quest's three chat transitions, but not list it or see its lifecycle transitions.
 
 ## Dispatcher invariants
@@ -147,7 +147,7 @@ Unknown kinds and lineage collisions are dispatcher wire denials and remain unjo
 - `transports/tcp_test.py` covers attach authenticity and revision checks, supersession, framing, delivery, disconnect, and shutdown over real sockets.
 - `runtime_test.py` covers the shape-free transport and launch seam.
 - `worker_test.py` covers each supervision shape, start timing, the host-initiated end and its timeout case, collection, and death reports.
-- `journal_test.py` covers folding, subscribers, retention, lineage, bounds, event gaps, and ancestry scope.
+- `journal_test.py` covers folding, subscribers, retention, lineage, bounds, event gaps, and caller scope.
 - `dispatcher_test.py` covers routing, origin checks, journaled denial, Worker synthesis, the requester-death cascade, the cancel kind, and the read kinds.
 - `job_test.py` and `spawn_test.py` cover the process and launch ports.
 - `client_test.py`, `cli_test.py`, and `broxy_test.py` cover the peer-facing and stateless proxy surfaces.

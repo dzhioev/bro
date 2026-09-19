@@ -105,23 +105,22 @@ def test_ancestry_uses_the_permanent_lineage():
   assert journal.ancestry('leaf') == ('child', 'root')
 
 
-def test_scope_includes_only_the_callers_subtree():
+def test_scope_is_the_callers_own_children():
   journal = Journal()
   root = journal.open('root', 'root', None, None, {})
   journal.bind(root, 'root-peer')
   left = journal.open('left', 'summon', 'root', 'root-peer', {})
   journal.bind(left, 'left-peer')
   right = journal.open('right', 'summon', 'root', 'root-peer', {})
-  journal.open('leaf', 'job', 'left', 'left-peer', {})
+  leaf = journal.open('leaf', 'job', 'left', 'left-peer', {})
   workers = {'root-peer': 'root', 'left-peer': 'left'}
   assert [view['id'] for view in journal.views('left-peer', workers)] == ['leaf']
-  assert {view['id'] for view in journal.views('root-peer', workers)} == {
-    'left',
-    'right',
-    'leaf',
-  }
+  assert {view['id'] for view in journal.views('root-peer', workers)} == {'left', 'right'}
+  assert not journal.visible('root-peer', leaf, workers)
   assert not journal.visible('left-peer', left, workers)
   assert not journal.visible('left-peer', right, workers)
+  _, events = journal.events_after(0, 'root-peer', workers)
+  assert {event['quest'] for event in events} == {'left', 'right'}
 
 
 def test_bounded_args_keep_scalar_fields_when_containers_overflow():

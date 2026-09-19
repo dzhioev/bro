@@ -8,7 +8,7 @@ import time
 from datetime import UTC, datetime
 
 from bro.broker import brotocol
-from bro.broker.client import QUEST_ENV, Client
+from bro.broker.client import Client
 from bro.monitor import health
 from ride.claude import statusline
 
@@ -28,13 +28,12 @@ def _quest(
   outcome: str | None = None,
   reason: str | None = None,
   pending: list[dict] | None = None,
-  parent: str = 'ROOT',
 ) -> dict:
   at = time.time() if at is None else at
   quest = {
     'id': quest_id,
     'kind': 'summon',
-    'parent': parent,
+    'parent': 'ROOT',
     'args': {'target': target, 'prompt': 'work', **({'manual': True} if manual else {})},
     'state': state,
     'pending': list(pending or []),
@@ -57,7 +56,6 @@ def _quest(
 def _render(monkeypatch, tmp_path, *, recording=None, quests=None, detached=False) -> str:
   monkeypatch.delenv('RIDE_WORKSPACE', raising=False)
   monkeypatch.delenv('RIDE_REPO', raising=False)
-  monkeypatch.setenv(QUEST_ENV, 'ROOT')
   if detached:
     monkeypatch.setenv('RIDE_WORKSPACE', 'ws')
   monkeypatch.setattr(health, 'health_path', lambda: tmp_path / 'health.json')
@@ -109,13 +107,6 @@ class TestRenderedStatusline:
   def test_the_sessions_own_question_does_not_read_as_awaiting_it(self, monkeypatch, tmp_path):
     question = {'from': 'summoner', 'id': 'Q1', 'head': {'text': 'status?'}}
     quest = _quest('R1', 'started', pending=[question])
-    assert 'awaiting your reply' not in _render(monkeypatch, tmp_path, quests=[quest])
-
-  def test_a_descendants_question_does_not_read_as_awaiting_this_session(
-    self, monkeypatch, tmp_path
-  ):
-    question = {'from': 'summoned', 'id': 'Q1', 'head': {'text': 'approve?'}}
-    quest = _quest('R1', 'started', pending=[question], parent='CHILD')
     assert 'awaiting your reply' not in _render(monkeypatch, tmp_path, quests=[quest])
 
   def test_recent_terminal_outcome_shows(self, monkeypatch, tmp_path):

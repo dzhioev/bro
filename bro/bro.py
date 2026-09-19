@@ -395,8 +395,9 @@ _QUEST_CANCEL_DESCRIPTION = (
 
 _QUEST_CANCEL_BARE_DESCRIPTION = (
   'ask the host to cancel a child quest by `quest_id` and return when the request is '
-  'accepted. the child and its descendants end asynchronously; their ends arrive through '
-  '`quest watch` and remain readable with `quest_check`.'
+  'accepted. the child ends asynchronously, and whatever it summoned in turn ends '
+  'failed:orphaned with it; its end arrives through `quest watch` and remains readable '
+  'with `quest_check`.'
 )
 
 

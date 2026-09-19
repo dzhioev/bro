@@ -493,7 +493,7 @@ def test_spawn_and_expect_require_explicit_talk():
     )
 
 
-def test_query_lists_the_callers_subtree_and_reads_its_own_quest_by_id():
+def test_query_lists_the_callers_children_and_reads_its_own_quest_by_id():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(QUERY, query_handler)
   child = dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {'target': 'dev'})
@@ -510,7 +510,7 @@ def test_query_lists_the_callers_subtree_and_reads_its_own_quest_by_id():
   assert not dispatcher.journal.knows('query-self')
 
 
-def test_query_returns_the_minimal_view_of_an_evicted_descendant():
+def test_query_returns_the_minimal_view_of_an_evicted_child():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(QUERY, query_handler)
   child = dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {})
