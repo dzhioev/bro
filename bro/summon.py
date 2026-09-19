@@ -503,28 +503,24 @@ def _text_from_entry(entry: dict[str, Any]) -> str:
   return _text_from_payload(entry.get('head'))
 
 
-def _bounded_text(text: str) -> str:
-  from bro.broker.journal import MESSAGE_HEAD_BYTES
+def _refused_text(entry: dict[str, Any]) -> Optional[str]:
+  head = entry.get('head')
+  if isinstance(head, dict) and head.get('truncated') is True:
+    return None
+  return _text_from_payload(head)
+
+
+def chat_payload(text: str) -> dict[str, Any]:
+  """The chat payload carrying `text`, refused over the message bound."""
+  from bro.broker.journal import oversized_message
 
   if not isinstance(text, str) or not text:
     raise ValueError('summon chat text must be a non-empty string')
-
-  def payload_size(candidate: str) -> int:
-    return len(
-      json.dumps({'text': candidate}, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-    )
-
-  if payload_size(text) <= MESSAGE_HEAD_BYTES:
-    return text
-  lower = 0
-  upper = len(text)
-  while lower < upper:
-    middle = (lower + upper + 1) // 2
-    if payload_size(text[:middle]) <= MESSAGE_HEAD_BYTES:
-      lower = middle
-    else:
-      upper = middle - 1
-  return text[:lower]
+  payload = {'text': text}
+  reason = oversized_message(payload)
+  if reason is not None:
+    raise SummonError(f'{reason}; mint an artifact and send the ref')
+  return payload
 
 
 @dataclass(frozen=True)
@@ -977,6 +973,7 @@ def say(
   if wait is not None and (wait <= 0 or math.isnan(wait)):
     raise SummonError('wait must be a positive number of seconds')
   asks_question = question or wait is not None
+  payload = chat_payload(text)
   resolved = _resolve_request_id(request_id)
   with _connection(client) as connection:
     quest = _query_quest(connection, resolved)
@@ -987,7 +984,7 @@ def say(
     try:
       candidate = brotocol.message(
         resolved,
-        {'text': _bounded_text(text)},
+        payload,
         id='question' if asks_question else None,
         reply_to=reply_to,
       )
@@ -1109,7 +1106,10 @@ def _chat_event_line(event: dict[str, Any], own_quest: str) -> Optional[str]:
     reason = event.get('reason')
     if not isinstance(reason, str):
       raise SummonError('refused summon event carried no reason')
-    head = f'{actor} refused {reason}: {_text_from_entry(event)}'
+    head = f'{actor} refused {reason}'
+    text = _refused_text(event)
+    if text is not None:
+      head += f': {text}'
   elif event.get('id') is not None:
     head = f'{actor} asks {_text_from_entry(event)}'
   elif event.get('reply_to') is not None:
@@ -1459,7 +1459,10 @@ def main(argv: list[str]) -> Optional[int]:
     parser.add_argument(
       'request_id', nargs='?', help='child quest id; omit for this session’s quest'
     )
-    parser.add_argument('text', help='message text')
+    parser.add_argument(
+      'text',
+      help='message text; over the message bound it is refused, and an artifact ref goes instead',
+    )
     parser.add_argument('--reply-to', help='question id this message answers')
     question_mode = parser.add_mutually_exclusive_group()
     question_mode.add_argument(

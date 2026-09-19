@@ -316,7 +316,8 @@ _SUMMON_SAY_DESCRIPTION = (
   'it is omitted. `reply_to` answers a pending question. `wait` turns the message into a '
   'question and bounds this call in seconds; expiry returns a question state with the id, '
   'while the host keeps the question live. returns a structured accepted, question, or '
-  'completed state.'
+  'completed state. text over the message bound is refused with its size; mint an artifact '
+  'and send the ref instead.'
   '{{when #wire = mcp}} CAUTION: keep `wait` below the MCP call cap. After a question '
   'state, recover the eventual reply with `summon_check`; do not send the question again.{{end}}'
 )
@@ -325,7 +326,8 @@ _SUMMON_SAY_DESCRIPTION = (
 _SUMMON_SAY_BARE_DESCRIPTION = (
   "send chat text to a child summon by `request_id`, or to this session's summoner when omitted. "
   '`reply_to` answers a pending question; `question: true` asks without waiting and returns its id. '
-  'the reply arrives through `summon watch` and remains readable with `summon_check`.'
+  'the reply arrives through `summon watch` and remains readable with `summon_check`. '
+  'text over the message bound is refused with its size; mint an artifact and send the ref instead.'
 )
 
 
@@ -609,6 +611,8 @@ def _mcp_summon_say_tool(variables: Variables) -> llm_mcp.Tool:
     reply_to: Optional[str] = None,
     wait: Optional[float] = None,
   ) -> dict[str, Any]:
+    # refused before the client this tool owns opens, so an over-bound text attaches nothing
+    summon_client.chat_payload(text)
     with summon_client.open_client() as client:
       status = await off_loop(
         summon_client.say,

@@ -1,7 +1,10 @@
 import json
 
+import pytest
+
 from bro.broker import brotocol, journal as journal_module
 from bro.broker.journal import Journal
+from bro.broker.journal_test_helper import text_at_the_message_bound
 
 
 def test_transitions_fold_the_record_and_emit_ordered_events():
@@ -252,20 +255,37 @@ def test_refusal_joins_the_tail_without_turning_a_question_pending():
   assert events[-1]['reply_to'] == 'Q0'
 
 
-def test_message_heads_use_the_message_byte_budget():
+def test_a_message_at_the_bound_is_journaled_whole():
   journal = Journal()
   record = journal.open('child', 'summon', None, None, {}, talk=frozenset({'worker.say'}))
-  journal.message(
-    record,
-    'worker',
-    brotocol.message('child', {'text': 'å' * journal_module.MESSAGE_HEAD_BYTES}),
-  )
+  payload = {'text': text_at_the_message_bound()}
 
-  encoded = json.dumps(
-    record.messages[-1]['head'], ensure_ascii=False, separators=(',', ':')
-  ).encode()
-  assert len(encoded) <= journal_module.MESSAGE_HEAD_BYTES
-  assert record.messages[-1]['head']['truncated'] is True
+  journal.message(record, 'worker', brotocol.message('child', payload))
+
+  assert record.messages[-1]['head'] == payload
+
+
+def test_a_message_over_the_bound_is_a_journal_error():
+  journal = Journal()
+  record = journal.open('child', 'summon', None, None, {}, talk=frozenset({'worker.say'}))
+  payload = {'text': text_at_the_message_bound() + 'x'}
+
+  with pytest.raises(ValueError, match='exceeds'):
+    journal.message(record, 'worker', brotocol.message('child', payload))
+  assert record.messages == []
+
+
+def test_a_refused_message_over_the_bound_keeps_a_marked_head():
+  journal = Journal()
+  record = journal.open('child', 'summon', None, None, {}, talk=frozenset())
+  candidate = brotocol.message('child', {'text': text_at_the_message_bound() + 'x'})
+
+  journal.refused(record, 'worker', candidate, 'over the bound')
+
+  head = record.messages[-1]['head']
+  assert head['truncated'] is True
+  encoded = json.dumps(head, ensure_ascii=False, separators=(',', ':')).encode()
+  assert len(encoded) <= journal_module.MAX_MESSAGE_BYTES
 
 
 def test_every_retained_view_has_chat_state_but_only_the_by_id_view_has_the_tail():

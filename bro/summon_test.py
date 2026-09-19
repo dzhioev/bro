@@ -13,6 +13,8 @@ from bro.broker import brotocol
 from bro.broker.brotocol import Message, Talk
 from bro.broker.client import CHANNEL_ENV, QUEST_ENV, Client
 from bro.broker.dispatcher import Broker, Dispatcher
+from bro.broker.journal import MAX_MESSAGE_BYTES
+from bro.broker.journal_test_helper import text_at_the_message_bound
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import ChannelID, Provisioned, connect
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
@@ -375,6 +377,33 @@ async def test_say_to_a_child_checks_talk_then_sends(monkeypatch):
     assert message.type == brotocol.Tag.MESSAGE
     assert message.quest_id == 'REQ-1'
     assert message.payload == {'text': 'steer left'}
+    assert await task == 0
+
+
+@pytest.mark.asyncio
+async def test_say_sends_text_at_the_message_bound_whole(monkeypatch):
+  text = text_at_the_message_bound()
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'say', 'REQ-1', text]))
+    channel, query = await _next(server)
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={
+        'quest': _quest(
+          'REQ-1',
+          'started',
+          talk=['requester.say', 'worker.say'],
+          pending=[],
+          messages=[],
+          chat_seq=0,
+        )
+      },
+    )
+    _, message = await _next(server)
+    assert message.payload == {'text': text}
     assert await task == 0
 
 
@@ -1629,6 +1658,14 @@ def test_chat_watch_lines_show_the_other_end_and_every_refusal():
   assert summon._chat_event_line(refused, 'ROOT') == (
     'summon refused quest talk lacks requester.say: blocked (request CHILD to dev)'
   )
+  oversized = {
+    **refused,
+    'reason': 'over the message bound',
+    'head': {'head': '{"text":"xx', 'truncated': True},
+  }
+  assert summon._chat_event_line(oversized, 'ROOT') == (
+    'summon refused over the message bound (request CHILD to dev)'
+  )
 
 
 def test_the_watch_line_can_carry_any_registered_name_whole():
@@ -1680,13 +1717,14 @@ async def test_watch_refuses_to_start_without_the_quest_this_session_answers(mon
       await asyncio.to_thread(next, watch)
 
 
-def test_summon_chat_text_is_capped_to_a_complete_journal_head():
-  from bro.broker.journal import MESSAGE_HEAD_BYTES
+def test_say_refuses_text_over_the_message_bound_before_any_broker_traffic(monkeypatch, caplog):
+  monkeypatch.delenv(CHANNEL_ENV, raising=False)
+  text = text_at_the_message_bound() + 'x'
 
-  bounded = summon._bounded_text('"\n' * MESSAGE_HEAD_BYTES)
-  encoded = json.dumps({'text': bounded}, ensure_ascii=False, separators=(',', ':')).encode()
-  assert len(encoded) <= MESSAGE_HEAD_BYTES
-  assert len(bounded) < MESSAGE_HEAD_BYTES
+  assert summon.main(['summon', 'say', 'REQ-1', text]) == 1
+
+  assert f'{MAX_MESSAGE_BYTES + 1} bytes' in caplog.text
+  assert 'mint an artifact' in caplog.text
 
 
 def test_may_summon_round_trips_the_launch_published_list(monkeypatch):

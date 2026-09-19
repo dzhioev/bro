@@ -76,7 +76,8 @@ Inline and read kinds answer without records.
 The event sequence is monotone for the broker root.
 Events carry their own quest, kind, parent, args, transition, timestamp, and transition payload.
 `message`, `refused`, and `listening` are the chat transitions.
-Message heads use the same parameterized bounding implementation as args, with their own string-head and byte budget.
+A journaled message carries its payload whole, at most `MAX_MESSAGE_BYTES`;
+the dispatcher refuses a larger one, and only a refused entry's head is bounded like args, since its size can be what was refused.
 The retention ladder exempts live records:
 retained result payloads age out first, then terminal records, while lineage remains for the session lifetime.
 The event ring is independently bounded.
@@ -102,10 +103,10 @@ It may also query the quest its own worker answers by id and see that quest's th
 The three routing rules are:
 
 1. a live quest accepts marks and a result only from its bound worker;
-2. a `message` is routed by the quest it names when it comes from either bound end and its role is in the quest's talk, then delivered to the other end and journaled;
+2. a `message` is routed by the quest it names when it comes from either bound end, its payload fits `MAX_MESSAGE_BYTES`, and its role is in the quest's talk, then delivered to the other end and journaled;
 3. a request invokes its one registered kind handler unless its id already exists in lineage, and every other envelope is dropped and logged.
 
-A chat envelope from a stranger is dropped, while one from a bound end without the required talk right is also journaled as `refused` with its correlation fields.
+A chat envelope from a stranger is dropped, while one from a bound end over `MAX_MESSAGE_BYTES` or without the required talk right is also journaled as `refused` with its correlation fields.
 Delivery to an absent receiver is dropped and logged rather than buffered;
 the journal remains the inbox of record.
 A process-sent `trail` is accepted only once with a non-empty id.
