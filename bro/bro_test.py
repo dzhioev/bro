@@ -4,6 +4,7 @@ import json
 import os
 import shlex
 import signal
+import threading
 import time
 from pathlib import Path
 from typing import ClassVar, Optional
@@ -2262,22 +2263,23 @@ class TestJobServiceTools:
       assert run.registry.get('job-1').mode == 'bg'
 
   @pytest.mark.asyncio
-  async def test_exit_during_foreground_settlement_is_consumed_once(self, monkeypatch):
+  async def test_exit_during_foreground_settlement_is_consumed_once(self, monkeypatch, tmp_path):
     original = Job.settle_foreground
+    release = tmp_path / 'release-settlement'
 
-    def delayed_settlement(job: Job, limit: int) -> tuple[str, bool]:
-      time.sleep(0.1)
+    def settlement_after_the_exit(job: Job, limit: int) -> tuple[str, bool]:
+      release.touch()
+      assert job.wait_finished(time.monotonic() + 10, threading.Event())
       return original(job, limit)
 
-    monkeypatch.setattr(Job, 'settle_foreground', delayed_settlement)
+    monkeypatch.setattr(Job, 'settle_foreground', settlement_after_the_exit)
     run = StubRun()
     server, tools = await self._tools(run=run)
+    command = f'while [ ! -e {shlex.quote(str(release))} ]; do sleep 0.01; done; printf done'
     with contextlib.ExitStack() as stack:
       stack.callback(run.registry.close)
       stack.callback(server.close)
-      result = await tools['job'].call(
-        {'command': 'sleep 0.05; printf done', 'mode': 'fg', 'timeout_seconds': 0.01}
-      )
+      result = await tools['job'].call({'command': command, 'mode': 'fg', 'timeout_seconds': 0.01})
       assert result == 'exited (code 0)\ndone'
       assert run.inbox.drain() is None
 
