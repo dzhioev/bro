@@ -52,6 +52,40 @@ def _missing_summoned_right(talk: Talk, message: Message) -> str:
   raise RuntimeError('allowed message has no missing talk right')
 
 
+class ReplyDeadline:
+  """when a reply wait expires: `timeout` seconds from `now`, re-armed to `after_interim`
+  seconds from each interim it observes — every one, or only those `rearms_on` admits.
+  `timeout` is the bound in force, what an expiry reports."""
+
+  def __init__(
+    self,
+    timeout: Optional[float],
+    now: float,
+    *,
+    after_interim: Optional[float] = None,
+    rearms_on: Optional[Callable[[Message], bool]] = None,
+  ):
+    self.timeout = timeout
+    self._expiry = now + timeout if timeout is not None else None
+    self._after_interim = after_interim
+    self._rearms_on = rearms_on
+
+  def observe(self, interim: Message, now: float) -> None:
+    if self._after_interim is None:
+      return
+    if self._rearms_on is not None and not self._rearms_on(interim):
+      return
+    self.timeout = self._after_interim
+    self._expiry = now + self._after_interim
+
+  def remaining(self, now: float) -> Optional[float]:
+    """seconds until the expiry, None while unbounded."""
+    return None if self._expiry is None else self._expiry - now
+
+  def expired(self, now: float) -> bool:
+    return self._expiry is not None and now >= self._expiry
+
+
 class Client:
   def __init__(self, transport: ClientTransport):
     self._transport = transport
@@ -113,8 +147,7 @@ class Client:
     ConnectionError when the channel reaches EOF first.
     """
     request = self.send(kind, args)
-    deadline = time.monotonic() + timeout if timeout is not None else None
-    return self._receive_correlated(request, deadline, timeout)
+    return self._receive_correlated(request, ReplyDeadline(timeout, time.monotonic()))
 
   def call(
     self,
@@ -150,15 +183,14 @@ class Client:
     correlated interim messages re-arm the deadline to that many seconds from arrival.
     `rearm_on_interim` narrows which interim messages trigger that re-arm.
     `until` returns a matching interim message instead of waiting for the result."""
-    deadline = time.monotonic() + timeout if timeout is not None else None
+    deadline = ReplyDeadline(
+      timeout, time.monotonic(), after_interim=timeout_after_interim, rearms_on=rearm_on_interim
+    )
     while True:
-      message = self._receive_correlated(request, deadline, timeout)
+      message = self._receive_correlated(request, deadline)
       if message.type == Tag.RESULT or (until is not None and until(message)):
         return message
-      should_rearm = rearm_on_interim is None or rearm_on_interim(message)
-      if timeout_after_interim is not None and should_rearm:
-        deadline = time.monotonic() + timeout_after_interim
-        timeout = timeout_after_interim
+      deadline.observe(message, time.monotonic())
       if on_interim is not None:
         on_interim(message)
 
@@ -166,57 +198,42 @@ class Client:
     """Block for the chat message whose `reply_to` names `question`."""
     if question.type != Tag.MESSAGE or question.id is None:
       raise ValueError('await_reply_to needs a question message with an id')
-    deadline = time.monotonic() + timeout if timeout is not None else None
-    buffered = next(
-      (message for message in self._set_aside if message.reply_to == question.id),
-      None,
+    return self._receive_matching(
+      lambda message: message.reply_to == question.id,
+      ReplyDeadline(timeout, time.monotonic()),
+      f'message {question.id}',
     )
-    if buffered is not None:
-      self._set_aside.remove(buffered)
-      return buffered
-    while True:
-      remaining = None
-      if deadline is not None:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-          raise TimeoutError(f'no reply to message {question.id} within {timeout}s')
-      message = self._transport.receive(remaining)
-      if message is None:
-        if deadline is not None and time.monotonic() >= deadline:
-          raise TimeoutError(f'no reply to message {question.id} within {timeout}s')
-        raise ConnectionError(f'broker channel closed awaiting reply to message {question.id}')
-      if message.reply_to == question.id:
-        return message
-      self._set_aside.append(message)
 
   def await_any(self, request: Message, timeout: Optional[float]) -> Message:
     """block for the first correlated envelope correlated to `request`."""
-    deadline = time.monotonic() + timeout if timeout is not None else None
-    return self._receive_correlated(request, deadline, timeout)
+    return self._receive_correlated(request, ReplyDeadline(timeout, time.monotonic()))
 
-  def _receive_correlated(
-    self, request: Message, deadline: Optional[float], timeout: Optional[float]
-  ) -> Message:
-    """read until a message correlates to `request`, setting uncorrelated arrivals aside."""
-    buffered = next(
-      (message for message in self._set_aside if message.quest_id == request.id), None
+  def _receive_correlated(self, request: Message, deadline: ReplyDeadline) -> Message:
+    return self._receive_matching(
+      lambda message: message.quest_id == request.id,
+      deadline,
+      f'{request.kind!r} request {request.id}',
     )
+
+  def _receive_matching(
+    self, matches: Callable[[Message], bool], deadline: ReplyDeadline, awaited: str
+  ) -> Message:
+    """read until a message `matches`, setting the others aside; `awaited` names the reply in errors."""
+    buffered = next((message for message in self._set_aside if matches(message)), None)
     if buffered is not None:
       self._set_aside.remove(buffered)
       return buffered
     while True:
-      remaining = None
-      if deadline is not None:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-          raise TimeoutError(f'no reply to {request.kind!r} request {request.id} within {timeout}s')
-      message = self._transport.receive(remaining)
+      now = time.monotonic()
+      if deadline.expired(now):
+        raise TimeoutError(f'no reply to {awaited} within {deadline.timeout}s')
+      message = self._transport.receive(deadline.remaining(now))
       if message is None:
         # the transport returns None for both timeout and EOF; the deadline says which
-        if deadline is not None and time.monotonic() >= deadline:
-          raise TimeoutError(f'no reply to {request.kind!r} request {request.id} within {timeout}s')
-        raise ConnectionError(f'broker channel closed awaiting reply to {request.kind!r} request')
-      if message.quest_id == request.id:
+        if deadline.expired(time.monotonic()):
+          raise TimeoutError(f'no reply to {awaited} within {deadline.timeout}s')
+        raise ConnectionError(f'broker channel closed awaiting reply to {awaited}')
+      if matches(message):
         return message
       self._set_aside.append(message)
 
