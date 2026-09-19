@@ -882,7 +882,7 @@ class TestRunLifecycle:
   @pytest.mark.asyncio
   async def test_summoned_send_announces_started(self, monkeypatch):
     monkeypatch.setenv('RIDE_SUMMONED', '1')
-    monkeypatch.setenv(TALK_ENV, 'worker.say')
+    monkeypatch.setenv(TALK_ENV, 'summoned.say')
     channel, transport = _make_channel()
     runner = _ChannelRunner(channel, _StubLLM(response='chat'))
     assert await runner.send('hi', tracker=_TrailIDTracker(), surface='test') == 'chat'

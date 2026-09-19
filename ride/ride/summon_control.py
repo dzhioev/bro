@@ -1,11 +1,11 @@
 """Host authorization and journal projection for the ``summon`` kind.
 
 ``SummonControl.handle`` validates and authorizes each request against the
-requesting peer's recorded identity, placement, and party permits, then binds a spawned or expected Worker
+summoning peer's recorded identity, placement, and party permits, then binds a spawned or expected Worker
 through the Dispatcher primitives. Deterministic refusals use ``Dispatcher.deny``
 so answer and journal record are one operation.
 
-The quest-keyed peer-facts table resolves every requester and its journal ancestry.
+The quest-keyed peer-facts table resolves every summoner and its journal ancestry.
 The control's journal subscribers write the human-facing audit, log lifecycle changes, and clean up manual tokens.
 
 Broker imports stay function-local where the pre-gate launch path requires it.
@@ -77,7 +77,7 @@ _ARGS_KEYS = frozenset(
 # fields a manual summon refuses: the user's launch owns the session's shape, and
 # there is no host-killable child for a timeout to bound
 _LAUNCH_OWNED_KEYS = ('timeout', 'hold', 'llm', 'harness', 'party', 'isolation')
-DEFAULT_SUMMON_TALK = cast('Talk', frozenset({'worker.say'}))
+DEFAULT_SUMMON_TALK = cast('Talk', frozenset({'summoned.say'}))
 
 
 def summon_allow_list(
@@ -230,7 +230,7 @@ def _validate(args: dict[str, Any]) -> Optional[str]:
 
 
 @dataclass(frozen=True)
-class _Requester:
+class _Summoner:
   fact: PeerFact
   credentials: Callable[[], ScopedSecrets]
   attribution: dict[str, str]
@@ -277,7 +277,7 @@ def _placement(
 
 
 def _credential_refusal(
-  requester: _Requester,
+  summoner: _Summoner,
   target: str,
   *,
   attachment: Optional[str],
@@ -287,7 +287,7 @@ def _credential_refusal(
   summon_harness: str,
 ) -> Optional[str]:
   """why the request's credential widening is refused, or None when it stays
-  inside the requester's own scope. Two widenings, one bound: what `grant`
+  inside the summoner's own scope. Two widenings, one bound: what `grant`
   names outright, and what the requested `harness`/`llm` add on top of the
   target's own default scope under `summon_harness`, the driving loop they
   select contributing credentials of its own. Only that delta is bounded — the
@@ -295,7 +295,7 @@ def _credential_refusal(
   scope that cannot be computed at all is a refusal of its own, carrying the
   reason.
 
-  Raises `UnattributablePeer` when the requester's own scope cannot be read."""
+  Raises `UnattributablePeer` when the summoner's own scope cannot be read."""
   widening: set[str] = set()
   if harness_name is not None or llm is not None:
     try:
@@ -313,7 +313,7 @@ def _credential_refusal(
       return str(error)
   if len(grant_credentials) == 0 and len(widening) == 0:
     return None
-  held_scope = requester.credentials()
+  held_scope = summoner.credentials()
   held_kinds = held_scope.required | held_scope.optional
   beyond: list[str] = []
   for grant in grant_credentials:
@@ -377,7 +377,7 @@ class SummonControl:
 
     args = message.args
     try:
-      requester = self._requester(context, peer)
+      summoner = self._summoner(context, peer)
     except UnattributablePeer as reason:
       self._deny(context, peer, str(reason))
       return
@@ -385,23 +385,23 @@ class SummonControl:
     if error is not None:
       self._deny(context, peer, error)
       return
-    if requester.depth + 1 > self._depth_cap:
+    if summoner.depth + 1 > self._depth_cap:
       self._deny(context, peer, f'summon depth cap ({self._depth_cap}) reached')
       return
     talk = cast('Talk', DEFAULT_SUMMON_TALK | frozenset(args.get('talk', ())))
     target = args['target']
-    if target not in requester.allow_list:
+    if target not in summoner.allow_list:
       from bro.registry import known_names
 
       if target not in known_names():
         error = f'unknown bro {target!r}'
       else:
-        error = f'{target!r} is not in {requester.list_description}'
+        error = f'{target!r} is not in {summoner.list_description}'
       self._deny(context, peer, error)
       return
     manual = args.get('manual', False)
     party, isolation, refusal = _placement(
-      requester.permits,
+      summoner.permits,
       party=args.get('party'),
       isolation=args.get('isolation'),
       manual=manual,
@@ -432,7 +432,7 @@ class SummonControl:
     except (RuntimeError, ValueError) as error:
       self._deny(context, peer, str(error))
       return
-    beyond = sorted(set(grant_bros) - requester.allow_list)
+    beyond = sorted(set(grant_bros) - summoner.allow_list)
     if len(beyond) > 0:
       self._deny(
         context,
@@ -440,7 +440,7 @@ class SummonControl:
         f'cannot grant summon target(s) the summoner may not summon itself: {", ".join(beyond)}',
       )
       return
-    unheld_permits = sorted(set(grant_permits) - requester.permits)
+    unheld_permits = sorted(set(grant_permits) - summoner.permits)
     if len(unheld_permits) > 0:
       self._deny(
         context,
@@ -451,7 +451,7 @@ class SummonControl:
       return
     try:
       refusal = _credential_refusal(
-        requester,
+        summoner,
         target,
         attachment=self._workspace.metadata.repo,
         grant_credentials=grant_credentials,
@@ -466,7 +466,7 @@ class SummonControl:
       return
     share = args.get('share', [])
     unreachable = sorted(
-      ref for ref in share if not self._artifacts.reachable(ref, requester.identity.workspace)
+      ref for ref in share if not self._artifacts.reachable(ref, summoner.identity.workspace)
     )
     if len(unreachable) > 0:
       self._deny(
@@ -477,10 +477,10 @@ class SummonControl:
       return
     prompt = args['prompt']
     audit_isolation = (
-      Workspace.open(requester.identity.workspace).isolation if party == 'join' else isolation
+      Workspace.open(summoner.identity.workspace).isolation if party == 'join' else isolation
     )
     self._audit_placements[message.quest_id] = (party, audit_isolation)
-    summoned_by = self._summoned_by(requester.attribution)
+    summoned_by = self._summoned_by(summoner.attribution)
     step_id = args.get('step_id')
     if summoned_by is not None and step_id is not None:
       summoned_by = {**summoned_by, 'step_id': step_id}
@@ -505,7 +505,7 @@ class SummonControl:
         context,
         peer,
         message,
-        requester,
+        summoner,
         summoned_by=summoned_by,
         child_allow_list=child_allow_list,
         child_permits=child_permits,
@@ -519,8 +519,8 @@ class SummonControl:
       SummonLaunchSpec(
         target=target,
         prompt=prompt,
-        parent=requester.identity.workspace,
-        parent_tree=requester.identity.tree,
+        parent=summoner.identity.workspace,
+        parent_tree=summoner.identity.tree,
         repo=self._workspace.repository,
         summoner=summoned_by,
         may_summon=tuple(sorted(child_allow_list)),
@@ -548,7 +548,7 @@ class SummonControl:
     context: 'Dispatcher',
     peer: 'Peer',
     message: 'Message',
-    requester: _Requester,
+    summoner: _Summoner,
     *,
     summoned_by: Optional[dict[str, Any]],
     child_allow_list: set[str],
@@ -569,7 +569,7 @@ class SummonControl:
           channel_token=provisioned.host_endpoint.token,
           target=args['target'],
           prompt=args['prompt'],
-          parent_workspace=str(requester.identity.tree),
+          parent_workspace=str(summoner.identity.tree),
           may_summon=tuple(sorted(child_allow_list)),
           permits=tuple(sorted(child_permits)),
           talk=tuple(sorted(talk)),
@@ -584,9 +584,9 @@ class SummonControl:
 
     context.expect(peer, talk=talk, timeout=None, ready=_ready)
 
-  def _requester(self, context: 'Dispatcher', peer: 'Peer') -> _Requester:
+  def _summoner(self, context: 'Dispatcher', peer: 'Peer') -> _Summoner:
     quest, fact = self._facts.resolve(context, peer)
-    return _Requester(
+    return _Summoner(
       fact=fact,
       credentials=lambda: self._credentials(fact),
       attribution=self._facts.attribution_for_quest(context.journal, quest),
@@ -647,7 +647,7 @@ class SummonControl:
     if event.transition == 'accepted':
       action = 'expecting a manual launch' if fact.manual else 'spawning'
       log.info(
-        'summon: %s %s %s (request %s)',
+        'summon: %s %s %s (quest %s)',
         self._workspace.name,
         action,
         fact.bro,

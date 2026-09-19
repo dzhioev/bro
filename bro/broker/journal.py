@@ -9,7 +9,15 @@ from typing import Any, Optional
 
 from bro.base import log
 from bro.base.time_util import Moment, utc_now
-from bro.broker.brotocol import EMPTY_TALK, MAX_IDENTIFIER_BYTES, End, Message, Tag, Talk
+from bro.broker.brotocol import (
+  EMPTY_TALK,
+  MAX_IDENTIFIER_BYTES,
+  End,
+  Message,
+  Tag,
+  Talk,
+  encoded_text_bytes,
+)
 from bro.broker.runtime import Peer
 
 MAX_RECORDS = 256
@@ -38,6 +46,7 @@ class Record:
   listening: bool = False
   pending: list[dict[str, Any]] = field(default_factory=list)
   messages: list[dict[str, Any]] = field(default_factory=list)
+  messages_truncated: bool = False
   chat_seq: int = 0
   state: str = 'accepted'
   accepted_at: Optional[Moment] = None
@@ -65,9 +74,14 @@ class Record:
       'state': self.state,
       'talk': sorted(self.talk),
       'listening': self.listening,
-      'pending': list(self.pending),
       'chat_seq': self.chat_seq,
     }
+    if include_messages:
+      view['messages'] = self.conversation()
+      if self.messages_truncated:
+        view['messages_truncated'] = True
+    else:
+      view['pending'] = list(self.pending)
     for name in ('accepted_at', 'started_at', 'ended_at'):
       value = getattr(self, name)
       if value is not None:
@@ -83,9 +97,14 @@ class Record:
       view['result'] = self.result
     if include_result and self.result_evicted:
       view['result_evicted'] = True
-    if include_messages:
-      view['messages'] = list(self.messages)
     return view
+
+  def conversation(self) -> list[dict[str, Any]]:
+    """the chat tail with every open question folded in by sequence and marked `pending`,
+    so one older than the tail still appears."""
+    entries = {entry['seq']: entry for entry in self.messages}
+    entries.update((entry['seq'], {**entry, 'pending': True}) for entry in self.pending)
+    return [entries[sequence] for sequence in sorted(entries)]
 
 
 @dataclass(frozen=True)
@@ -284,7 +303,9 @@ class Journal:
     entry = {'seq': sequence, 'at': at.isoformat(), 'transition': transition, **payload}
     record.chat_seq = sequence
     record.messages.append(entry)
-    del record.messages[:-MAX_RECORD_MESSAGES]
+    if len(record.messages) > MAX_RECORD_MESSAGES:
+      del record.messages[:-MAX_RECORD_MESSAGES]
+      record.messages_truncated = True
     if transition == 'message':
       if message.reply_to is not None:
         record.pending = [
@@ -550,10 +571,17 @@ def _bounded_value(value: Any, string_head: int) -> Any:
 
 
 def _bounded_journal_text(value: str) -> tuple[str, bool]:
-  encoded = value.encode('utf-8')
-  if len(encoded) <= MAX_JOURNAL_TEXT_BYTES:
+  if encoded_text_bytes(value) <= MAX_JOURNAL_TEXT_BYTES:
     return value, False
-  return encoded[:MAX_JOURNAL_TEXT_BYTES].decode('utf-8', errors='ignore'), True
+  lower = 0
+  upper = len(value)
+  while lower < upper:
+    middle = (lower + upper + 1) // 2
+    if encoded_text_bytes(value[:middle]) <= MAX_JOURNAL_TEXT_BYTES:
+      lower = middle
+    else:
+      upper = middle - 1
+  return value[:lower], True
 
 
 def _payload_bytes(payload: dict[str, Any]) -> int:

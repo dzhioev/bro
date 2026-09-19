@@ -94,7 +94,7 @@ class TestRideSessionLaunch:
       description = 'd'
       tools: ClassVar = [
         when(harness == 'claude', block('Bash', 'Monitor')),
-        when(harness == 'claude', allow_commands('Monitor', 'summon watch')),
+        when(harness == 'claude', allow_commands('Monitor', 'quest watch')),
       ]
 
       def __init__(self):
@@ -112,7 +112,7 @@ class TestRideSessionLaunch:
       '-m',
       'ride.claude.watch_guard',
       'Monitor',
-      'summon watch',
+      'quest watch',
     ]
 
   def test_shell_roster_gates_bash_and_monitor_and_returns_job_control(self, monkeypatch):
@@ -139,7 +139,7 @@ class TestRideSessionLaunch:
       assert command[-2:] == [entry['matcher'], 'git status']
 
   def test_a_summoning_session_gets_the_summon_watch_over_a_blocked_shell(self, monkeypatch):
-    from bro.bro import SUMMON_WATCH_COMMAND, BaseBro
+    from bro.bro import QUEST_WATCH_COMMAND, BaseBro
     from bro.harness import claude
     from bro.summon import MAY_SUMMON_ENV, encode_may_summon
 
@@ -160,7 +160,7 @@ class TestRideSessionLaunch:
     (entry,) = _settings(argv)['hooks']['PreToolUse']
     assert entry['matcher'] == 'Monitor'
     (hook,) = entry['hooks']
-    assert shlex.split(hook['command'])[-1] == SUMMON_WATCH_COMMAND
+    assert shlex.split(hook['command'])[-1] == QUEST_WATCH_COMMAND
 
   def test_no_narrowing_declares_no_hooks(self):
     assert 'hooks' not in _settings(_ride_session_launch(_spec(), claude_args=[]).argv)
@@ -307,10 +307,10 @@ class TestRawLaunch:
 
   def test_raw_summoned_contract_receives_the_quest_talk(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    monkeypatch.setenv(TALK_ENV, 'worker.question')
+    monkeypatch.setenv(TALK_ENV, 'summoned.question')
     prompt = self._launch(hold='unattended').system_prompt
-    assert 'call `bro::summon_say`' in prompt
-    assert 'recover the reply with `bro::summon_check`' in prompt
+    assert 'call `bro::quest_ask` on `self`' in prompt
+    assert 'recover the reply with `bro::quest_history`' in prompt
 
   def test_solo_combines_bare_and_print_modes(self):
     argv = self._launch(solo=True, hold='unattended', prompt='answer').argv

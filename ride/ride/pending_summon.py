@@ -1,7 +1,7 @@
 """pending manual summons: the host-side records a launch token resolves to.
 
 A manual summon leaves the host with an expectation (a provisioned broker
-channel awaiting an external child) and the user with a token (the request id).
+channel awaiting an external child) and the user with a token (the quest id).
 This module is the bridge between them: `SummonControl` writes one record per
 registered manual summon under `<runtime-root>/summon/pending/<token>.json`,
 and the user's `ride along --summoned <token>` or `ride solo --summoned <token>`
@@ -38,7 +38,7 @@ class UnknownToken(Exception):
 
 @dataclass(frozen=True)
 class PendingSummon:
-  """one registered manual summon, keyed by its token (the request id)."""
+  """one registered manual summon, keyed by its token (the quest id)."""
 
   token: str
   runtime: str  # the ride's frozen hash or given materialized-runtime path

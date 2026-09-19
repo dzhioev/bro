@@ -21,7 +21,7 @@ from bro.broker.dispatcher import Dispatcher, RequestHandler
 from bro.broker.job import OUTPUT_DIRECTORY, CommandJob
 from bro.broker.runtime import Peer
 from bro.kinds import KindContext, tree_path
-from bro.summon import ACCEPT_TIMEOUT, READ_WAIT_SECONDS
+from bro.quest import ACCEPT_TIMEOUT, READ_WAIT_SECONDS
 
 __cli_name__ = 'benchmark-job'
 

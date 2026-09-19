@@ -529,22 +529,22 @@ def test_talk_from_env_distinguishes_unpublished_and_empty_talk(monkeypatch):
   assert talk_from_env() is None
   monkeypatch.setenv(TALK_ENV, '')
   assert talk_from_env() == frozenset()
-  monkeypatch.setenv(TALK_ENV, 'worker.question,worker.say')
-  assert talk_from_env() == frozenset({'worker.say', 'worker.question'})
+  monkeypatch.setenv(TALK_ENV, 'summoned.question,summoned.say')
+  assert talk_from_env() == frozenset({'summoned.say', 'summoned.question'})
 
 
 def test_talk_from_env_rejects_an_unknown_right(monkeypatch):
-  monkeypatch.setenv(TALK_ENV, 'worker.guess')
-  with pytest.raises(ValueError, match='worker.guess'):
+  monkeypatch.setenv(TALK_ENV, 'summoned.guess')
+  with pytest.raises(ValueError, match='summoned.guess'):
     talk_from_env()
 
 
 @pytest.mark.parametrize(
   ('talk', 'reply_to', 'question', 'missing_right'),
   [
-    ('worker.question', None, False, 'worker.say'),
-    ('worker.say', None, True, 'worker.question'),
-    ('worker.say', 'requester-question', False, 'requester.question'),
+    ('summoned.question', None, False, 'summoned.say'),
+    ('summoned.say', None, True, 'summoned.question'),
+    ('summoned.say', 'summoner-question', False, 'summoner.question'),
   ],
 )
 def test_message_refuses_a_move_missing_from_the_own_quest_talk(

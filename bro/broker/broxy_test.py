@@ -10,7 +10,7 @@ import pytest
 
 import bro.broker.broxy as broker_broxy
 from bro.broker import brotocol
-from bro.broker.brotocol import Message, Tag
+from bro.broker.brotocol import PROTOCOL_REVISION, Message, Tag
 from bro.broker.broxy import Broxy
 from bro.broker.client import CHANNEL_ENV, Client
 from bro.broker.dispatcher import QUERY, Dispatcher, query_handler
@@ -281,7 +281,7 @@ async def test_malformed_local_frame_drops_only_that_connection():
     host, port, token = parse_address(harness.address)
     raw = socket.create_connection((host, port), timeout=TIMEOUT)
     raw.sendall(token.encode() + b'\n')
-    assert await asyncio.to_thread(raw.recv, 1024) == b'ok 3\n'
+    assert await asyncio.to_thread(raw.recv, 1024) == f'ok {PROTOCOL_REVISION}\n'.encode()
     raw.sendall(b'not json\n')
     assert await asyncio.to_thread(raw.recv, 1024) == b''
     raw.close()
@@ -567,7 +567,7 @@ async def running_chat(talk):
 
 @pytest.mark.asyncio
 async def test_live_chat_crosses_dispatcher_and_broxies_in_both_directions():
-  async with running_chat({'requester.question', 'worker.say'}) as harness:
+  async with running_chat({'summoner.question', 'summoned.say'}) as harness:
     requester = Client(await asyncio.to_thread(connect, harness.requester_address))
     worker = Client(await asyncio.to_thread(connect, harness.worker_address))
     observer = Client(await asyncio.to_thread(connect, harness.worker_address))
@@ -628,7 +628,7 @@ def _await_reply_through_journal(
 
 @pytest.mark.asyncio
 async def test_refused_live_question_is_correlated_in_the_journal():
-  async with running_chat({'requester.question', 'worker.say'}) as harness:
+  async with running_chat({'summoner.question', 'summoned.say'}) as harness:
     worker = Client(await asyncio.to_thread(connect, harness.worker_address))
     query = Client(await asyncio.to_thread(connect, harness.worker_address))
     before = harness.dispatcher.journal.records[harness.quest].chat_seq
@@ -638,7 +638,7 @@ async def test_refused_live_question_is_correlated_in_the_journal():
       {'text': 'may I?'},
       question=True,
     )
-    reason = 'worker lacks the talk right for this message'
+    reason = 'summoned lacks the talk right for this message'
     with pytest.raises(PermissionError, match=reason):
       await asyncio.to_thread(
         _await_reply_through_journal,

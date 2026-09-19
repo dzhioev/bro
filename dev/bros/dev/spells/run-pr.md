@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 7.5.0
+version: 7.6.0
 ---
 
 # run-pr
@@ -82,7 +82,7 @@ Restore the state that session had, reconcile what happened while nobody watched
    Its first green edge clears the checks gate before landing;
    watcher silence does not.{{when #may_summon contains eyebro}}
    A reviewer's verdict does not survive the session that summoned it, and the PR is no substitute:
-   the request id `bro::summon_check` needs died with that session, and an approval sitting on the PR says a review approved, not that the reviewer you delegated to did
+   the quest id `bro::quest_check` needs died with that session, and an approval sitting on the PR says a review approved, not that the reviewer you delegated to did
    — on a public repository any account can leave one.
    Summon a reviewer again and read the answer off that summon.
    A child that finds the head already approved reconciles it as a completed review and returns saying so without posting again, which is both the verdict you need and the reason waiting on the watcher here would wait forever.{{end}}
@@ -486,20 +486,20 @@ Don't wait for a review to arrive — hand it over:
 2. The conversation runs through the PR:
    the eyebro's reviews and comments fire as ordinary step-15 events, and your replies and pushed fixes reach it the same way.
    Its verdict does not.
-   **Keep the request id**: the child's own answer is what gates the merge, and `bro::summon_check` is the only channel that carries it.
+   **Keep the quest id**: the child's own answer is what gates the merge, and `bro::quest_check` is the only channel that carries it.
    Nothing on the PR records which account you handed the review to, so an approving review read off the PR says a review approved, not that the reviewer you delegated to did.
    Don't block on it meanwhile
    — the child runs as long as the review takes;
    step 15's APPROVED handler is where you collect it.
    It is not the only place, because the child can finish without posting anything new:
    one that finds the head already approved reconciles that as a completed review and reports rather than approving twice, so no event fires and the handler never runs.
-   {{iff #harness = claude}}The summon watch's `summon ended` line is what carries that end
-   — `bro::summon_check` on the request id then, and a completed answer is the verdict whether or not a PR event carried it.{{else}}A PR that stays quiet past reason is therefore a reason to check the summon rather than to keep waiting
-   — `bro::summon_check` on the request id, and a completed answer is the verdict whether or not an event carried it.{{end}}
+   {{iff #harness = claude}}The quest watch's `summon ended` line is what carries that end
+   — `bro::quest_check` on the quest id then, and a completed answer is the verdict whether or not a PR event carried it.{{else}}A PR that stays quiet past reason is therefore a reason to check the quest rather than to keep waiting
+   — `bro::quest_check` on the quest id, and a completed answer is the verdict whether or not an event carried it.{{end}}
 3. A summon denied at launch, or a child that raises before it reviews anything
    — typically because its GitHub identity is the PR author's own, which GitHub refuses to let approve
    — means no reviewer ran:
-   {{when #harness = claude}}the second arrives as `summon ended failed:raised` on the summon watch, its reason on `bro::summon_check`;
+   {{when #harness = claude}}the second arrives as `summon ended failed:raised` on the quest watch, its reason on `bro::quest_check`;
    {{end}}report the reason and carry on under human review, with the merge left to whatever the base branch requires of it.
    A child that ran and ended without approving is the opposite case and blocks the merge;
    step 15 handles it.
@@ -559,15 +559,15 @@ stopping it is what you would have to undo, and a fresh `poll-pr` baselines ever
 **The reviewer's verdict.**{{iff #may_summon contains eyebro}}
 With no eyebro summoned this event is it.
 Where you did summon one, its own answer is the verdict:
-`bro::summon_check` on the request id, without waiting
-— the child exits moments after posting its approval, so a `pending` answer wants one more check rather than a blocking wait.
+`bro::quest_check` on the quest id, without waiting
+— the child exits moments after posting its approval, so a `running` state wants one more check rather than a blocking wait.
 An answer that is not an approval
 — findings still standing, a `raise`, an error
 — blocks the merge whatever the PR says:
 report it and stop where questions reach the user, `raise` when unattended.
 Never read the PR's own approval as the missing verdict.
 An approval you already read covers the head it was given for, so a later review event on that same head calls for no second read
-— `bro::summon_check` is repeatable and returns the host-retained approval again.{{else}}
+— `bro::quest_check` is repeatable and returns the host-retained approval again.{{else}}
 This event is it.{{end}}
 
 **The base's gate**, in this event's `review_decision`.

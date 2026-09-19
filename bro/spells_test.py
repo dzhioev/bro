@@ -183,10 +183,10 @@ class TestSpellStore:
     path = Path(spell_store.__file__).parent.parent / 'bros/bro/spells/ask.md'
     body = mcp.render_text(load_spell('ask', path).body, harness='bro', wire='mcp')
 
-    assert '`bro::summon_check' in body
-    assert '`summon watch`' not in body
-    assert '`summon check' not in body
-    assert '`summon cancel' not in body
+    assert '`bro::quest_check' in body
+    assert '`quest watch`' not in body
+    assert '`quest check' not in body
+    assert '`quest cancel' not in body
 
   def test_spell_body_renders_against_the_bro_features(self, fake_packages, monkeypatch):
     package = fake_packages(

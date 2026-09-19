@@ -17,7 +17,7 @@ def _record(**overrides) -> pending_summon.PendingSummon:
       'parent_workspace': '/workspaces/parent/tree',
       'may_summon': ('bro',),
       'permits': ('party.start.boxed',),
-      'talk': ('worker.say',),
+      'talk': ('summoned.say',),
       'grant': ('aws',),
       'revoke': (),
       'summoner': {'trail_id': 'T1'},
@@ -138,7 +138,7 @@ def test_a_record_with_invalid_talk_is_refused(tmp_path):
   pending_summon.write(_record())
   path = pending_summon._path('TOK-1')
   data = json.loads(path.read_text())
-  data['talk'] = ['worker.command']
+  data['talk'] = ['summoned.command']
   path.write_text(json.dumps(data))
 
   with pytest.raises(ValueError, match='invalid talk'):

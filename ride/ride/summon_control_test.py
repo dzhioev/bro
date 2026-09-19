@@ -212,7 +212,7 @@ def test_authorized_summon_opens_identity_before_spawning(tmp_path):
   assert peer == ROOT
   assert timeout == DEFAULT_TIMEOUT
   assert control._facts.for_quest(message.quest_id).bro == 'dev'
-  assert context.journal.records[message.quest_id].talk == frozenset({'worker.say'})
+  assert context.journal.records[message.quest_id].talk == frozenset({'summoned.say'})
   assert not (tmp_path / 'summon-status.json').exists()
   accepted = _audit(tmp_path)[-1]
   assert accepted['transition'] == 'accepted'
@@ -227,12 +227,12 @@ def test_authorized_summon_opens_identity_before_spawning(tmp_path):
 def test_request_talk_widens_the_default_and_reaches_spawn(tmp_path):
   control = _control(tmp_path)
   context = FakeContext(control)
-  message = _message(talk=['worker.question', 'requester.say'])
+  message = _message(talk=['summoned.question', 'summoner.say'])
 
   control.handle(cast(Dispatcher, context), ROOT, message)
 
   assert context.journal.records[message.quest_id].talk == frozenset(
-    {'worker.say', 'worker.question', 'requester.say'}
+    {'summoned.say', 'summoned.question', 'summoner.say'}
   )
 
 
@@ -240,13 +240,13 @@ def test_manual_request_talk_reaches_the_pending_record(tmp_path, monkeypatch):
   monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
   control = _control(tmp_path)
   context = FakeContext(control)
-  message = _message(manual=True, talk=['worker.question'])
+  message = _message(manual=True, talk=['summoned.question'])
 
   control.handle(cast(Dispatcher, context), ROOT, message)
 
-  assert ride.pending_summon.peek(message.quest_id).talk == ('worker.question', 'worker.say')
+  assert ride.pending_summon.peek(message.quest_id).talk == ('summoned.question', 'summoned.say')
   assert context.journal.records[message.quest_id].talk == frozenset(
-    {'worker.say', 'worker.question'}
+    {'summoned.say', 'summoned.question'}
   )
 
 
@@ -374,9 +374,9 @@ def test_authorization_and_shape_denials_use_one_prefixed_journal_reason(
     {'party': 'join', 'into': 'feature'},
     {'party': 'join', 'manual': True},
     {'isolation': 'shared'},
-    {'talk': 'worker.say'},
-    {'talk': ['worker.say', 'worker.say']},
-    {'talk': ['worker.shout']},
+    {'talk': 'summoned.say'},
+    {'talk': ['summoned.say', 'summoned.say']},
+    {'talk': ['summoned.shout']},
   ],
 )
 def test_malformed_requests_are_denied(tmp_path, overrides):
@@ -862,8 +862,8 @@ def test_manual_summon_writes_the_pending_record_before_acceptance(tmp_path, mon
   assert pending.target == 'dev'
   assert pending.channel_token == 'token'
   assert pending.runtime == 'a' * 64
-  assert pending.talk == ('worker.say',)
-  assert context.journal.records[message.quest_id].talk == frozenset({'worker.say'})
+  assert pending.talk == ('summoned.say',)
+  assert context.journal.records[message.quest_id].talk == frozenset({'summoned.say'})
   assert control._facts.for_quest(message.quest_id).manual is True
 
 

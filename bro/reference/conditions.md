@@ -118,7 +118,7 @@ Only the fact widens
 The universe is the installed persona names plus the list itself, so a typo'd target fails every render while a granted-but-uninstalled one still tests.
 No ready-made placeholder is exported.
 
-`talk` — the fixed rights of this run's own quest, read from `BROKER_TALK` as a set over `requester.say`, `requester.question`, `worker.say`, and `worker.question`.
+`talk` — the fixed rights of this run's own quest, read from `BROKER_TALK` as a set over `summoner.say`, `summoner.question`, `summoned.say`, and `summoned.question`.
 `bro.prompts.session_fragment` receives it from each launch surface, so the summoned contract can state only moves the host permits.
 An unpublished fact stays undefined and a `#talk` directive then raises;
 an empty published set is the root or another mute quest and tests every right false.

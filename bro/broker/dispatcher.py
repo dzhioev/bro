@@ -20,6 +20,7 @@ from bro.broker.brotocol import (
   Message,
   Tag,
   Talk,
+  encoded_text_bytes,
 )
 from bro.broker.job import CommandJob
 from bro.broker.journal import (
@@ -306,9 +307,9 @@ class Dispatcher:
       return
     sender: Optional[End]
     if peer == record.requester:
-      sender = 'requester'
+      sender = 'summoner'
     elif peer == record.worker:
-      sender = 'worker'
+      sender = 'summoned'
     else:
       sender = None
     if sender is None:
@@ -322,7 +323,7 @@ class Dispatcher:
       self.journal.refused(record, sender, message, reason)
       return
     self.journal.message(record, sender, message)
-    receiver = record.worker if sender == 'requester' else record.requester
+    receiver = record.worker if sender == 'summoner' else record.requester
     if receiver is None:
       log.warning(
         'broker dispatcher: dropping %r on quest %s with no receiver',
@@ -557,14 +558,18 @@ class Dispatcher:
     messages = view.get('messages')
     if not isinstance(messages, list):
       raise RuntimeError('an oversized by-id journal view carries no message tail')
+    droppable = [index for index, entry in enumerate(messages) if entry.get('pending') is not True]
 
     def fit_tail(candidate: dict[str, Any]) -> Optional[Message]:
       message = brotocol.result(request_quest, 'ok', value={'quest': candidate})
       if len(message.to_bytes()) <= MAX_FRAME_BYTES:
         return message
       bounded = {**candidate, 'messages_truncated': True}
-      for start in range(1, len(messages) + 1):
-        bounded['messages'] = messages[start:]
+      for count in range(1, len(droppable) + 1):
+        dropped = set(droppable[:count])
+        bounded['messages'] = [
+          entry for index, entry in enumerate(messages) if index not in dropped
+        ]
         message = brotocol.result(request_quest, 'ok', value={'quest': bounded})
         if len(message.to_bytes()) <= MAX_FRAME_BYTES:
           return message
@@ -819,7 +824,7 @@ def _validate_cancel(args: dict[str, Any]) -> Optional[str]:
 def _identifier_error(field: str, value: Any) -> Optional[str]:
   if not isinstance(value, str) or len(value) == 0:
     return f'{field} must be a non-empty string'
-  if len(value.encode('utf-8')) > MAX_IDENTIFIER_BYTES:
+  if encoded_text_bytes(value) > MAX_IDENTIFIER_BYTES:
     return f'{field} exceeds the protocol identifier bound'
   return None
 
