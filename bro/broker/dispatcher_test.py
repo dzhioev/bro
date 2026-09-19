@@ -34,6 +34,8 @@ from bro.broker.runtime import Runtime
 from bro.broker.spawn import LaunchSpec
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
+from bro.broker.worker import Scheduler, call_later
+from bro.broker.worker_test_helper import FakeScheduler
 
 
 class FakeHandle:
@@ -117,9 +119,9 @@ def _spawn_handler(context, peer, message):
   context.spawn(LaunchSpec(), peer, talk=frozenset())
 
 
-def _dispatcher(*, job_output=None):
+def _dispatcher(*, job_output=None, schedule: Scheduler = call_later):
   runtime = FakeRuntime()
-  dispatcher = Dispatcher(job_output=job_output)
+  dispatcher = Dispatcher(job_output=job_output, schedule=schedule)
   dispatcher.bind(cast(Runtime, runtime))
   root = dispatcher.journal.open('root-quest', 'root', None, None, {})
   dispatcher.journal.bind(root, 'requester')
@@ -302,22 +304,22 @@ async def test_spawned_quest_marks_lifecycle_and_routes_only_its_worker():
 
 @pytest.mark.asyncio
 async def test_result_disarms_the_deadline_while_the_worker_stays_routable():
-  dispatcher, runtime = _dispatcher()
+  schedule = FakeScheduler()
+  dispatcher, runtime = _dispatcher(schedule=schedule)
   dispatcher.on(
     'work',
-    lambda context, peer, message: context.spawn(
-      LaunchSpec(), peer, talk=frozenset(), timeout=0.01
-    ),
+    lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset(), timeout=10),
   )
   dispatcher.on(PING, ping_handler)
   dispatcher.on_message('requester', _request('work', {}, 'work'))
   await _settle()
   worker = dispatcher.journal.records['work'].worker
   assert worker is not None
+  quest_deadline = schedule.timers[-1]
+  assert not quest_deadline.cancelled
   runtime.events[worker].on_message(brotocol.result('work', 'ok'))
-  await asyncio.sleep(0.03)  # sleep: bound — past the 0.01s deadline the result disarmed
+  assert quest_deadline.cancelled
   assert runtime.handle is not None
-  assert not runtime.handle.killed
   runtime.events[worker].on_message(_request(PING, {'nested': True}, 'nested'))
   assert runtime.sent[-1][1].payload['value'] == {'nested': True}
   runtime.handle.exit.set_result(0)

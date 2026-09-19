@@ -2,7 +2,7 @@
 
 import asyncio
 import shutil
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Protocol
@@ -16,6 +16,17 @@ from bro.broker.spawn import ChildHandle, LaunchSpec
 
 LAUNCH_TIMEOUT = 1800.0
 _DRAIN_TIMEOUT = 2.0
+
+
+class Timer(Protocol):
+  def cancel(self) -> None: ...
+
+
+Scheduler = Callable[[float, Callable[[], None]], Timer]
+
+
+def call_later(seconds: float, callback: Callable[[], None]) -> asyncio.TimerHandle:
+  return asyncio.get_running_loop().call_later(seconds, callback)
 
 
 def job_peer(quest: str) -> Peer:
@@ -54,6 +65,7 @@ class Worker:
     *,
     timeout: Optional[float],
     launch_timeout: Optional[float] = LAUNCH_TIMEOUT,
+    schedule: Scheduler = call_later,
   ):
     self.runtime = runtime
     self.listener = listener
@@ -61,8 +73,9 @@ class Worker:
     self.timeout = timeout
     self.peer: Optional[Peer] = None
     self._launch_timeout = launch_timeout
+    self._schedule = schedule
     self._task: Optional[asyncio.Task[None]] = None
-    self._timer: Optional[asyncio.TimerHandle] = None
+    self._timer: Optional[Timer] = None
     self._started = False
     self._end_reason: Optional[str] = None
     self._finished = False
@@ -104,7 +117,7 @@ class Worker:
   def _arm(self, seconds: Optional[float]) -> None:
     self._cancel_timer()
     if seconds is not None:
-      self._timer = asyncio.get_running_loop().call_later(seconds, self._deadline)
+      self._timer = self._schedule(seconds, self._deadline)
 
   def _deadline(self) -> None:
     self._timer = None
@@ -232,8 +245,11 @@ class SpawnedWorker(Worker):
     talk: Talk,
     timeout: Optional[float],
     launch_timeout: Optional[float] = LAUNCH_TIMEOUT,
+    schedule: Scheduler = call_later,
   ):
-    super().__init__(runtime, listener, quest, timeout=timeout, launch_timeout=launch_timeout)
+    super().__init__(
+      runtime, listener, quest, timeout=timeout, launch_timeout=launch_timeout, schedule=schedule
+    )
     self._launch = launch
     self._talk = talk
     self._handle: Optional[ChildHandle] = None
@@ -335,8 +351,11 @@ class JobWorker(Worker):
     *,
     timeout: Optional[float],
     launch_timeout: Optional[float] = LAUNCH_TIMEOUT,
+    schedule: Scheduler = call_later,
   ):
-    super().__init__(runtime, listener, quest, timeout=timeout, launch_timeout=launch_timeout)
+    super().__init__(
+      runtime, listener, quest, timeout=timeout, launch_timeout=launch_timeout, schedule=schedule
+    )
     self._command = command
     self._output = output
     self._context = context
