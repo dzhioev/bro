@@ -127,7 +127,8 @@ this spell only says how a phase differs from a one-shot ask.
   send every one detached with `summoned.question` in its talk and collect its result through the surface's watch or polling flow.
   {{iff #harness = claude}}Keep `quest watch` armed.
   When it reports a child's question, answer that quest with `quest say --reply-to`.
-  Then resume the same `quest check --wait` loop.{{eliff #wire = bare}}Keep the `quest watch` job armed and call `bro::chill` whenever nothing else remains.
+  Then resume the same `quest check --wait` loop.{{eliff #wire = bare}}Keep the `quest watch` job armed and call `bro::chill` whenever nothing else remains;
+  a turn that ends with a phase in flight gets one notice, and the next such turn end ends the run and orphans the phase.
   When it reports a child's question, answer that quest with `bro::quest_say(reply_to=…)`, then chill again.
   Read the retained answer with `bro::quest_check` after the terminal line.{{else}}On the raw MCP surface, when `quest_check(wait=true)` returns a question, answer that quest with `quest_say(reply_to=…)`.
   Then resume the same check loop.{{end}}

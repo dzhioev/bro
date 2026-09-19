@@ -36,7 +36,8 @@ The public verbs deliberately accept no runtime shaping flags (`--summon`, `--gr
 
 `bro run` uses the ask preset:
 live activity on stderr and one undecorated reply on stdout.
-Its omitted hold is `unattended`, and the one-shot process ends with that turn, closing any watch jobs the model started.
+Its omitted hold is `unattended`, and the one-shot process ends when a turn ends with nothing running and nothing in flight, closing any job still live;
+a turn that ends with live work gets the runner's one notice first (`bro/reference/ride.md`, "Bro harness").
 
 `bro chat` uses the chat preset and defaults to `guided`.
 Between user turns, both text and Textual modes wait on the run inbox and call `Runner.wake()` when a watch reports news.

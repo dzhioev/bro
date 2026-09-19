@@ -308,10 +308,15 @@ When the session's root process exits, in-flight summoned children are killed (a
 When a summoned session exits with summons of its own in flight, those end `failed:orphaned` and their children are killed the same way.
 {{iff #wire = bare}}
 Before ending the session, return to `bro::chill` until every pending summon ends, then read each retained result with `bro::quest_check`.
+A one-shot turn that ends with a summon in flight gets one notice naming it;
+chill on it, or cancel what is no longer needed, since the next such turn end ends the run.
 {{eliff #harness = claude}}
 Before ending the session (or letting it end), wait for pending summons with `quest check --wait`.
+A one-shot session holds while the quest watch is armed and re-invokes you on its events, so ending the turn under the watch is a wait;
+once every summon has ended, stop the watch with `TaskStop` before the final turn ends.
 {{else}}
 Before ending the session, wait for every pending summon with bounded `bro::quest_check(wait=true)` calls.
+A one-shot turn that ends with a summon in flight gets one notice to wait for or cancel it first.
 {{end}}
 If a result was lost this way it is still recoverable from the child's trail.
 
