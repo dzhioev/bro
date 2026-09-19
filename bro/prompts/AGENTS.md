@@ -92,7 +92,10 @@ It renders when `bro.summon.party_member()` reads `RIDE_PARTY_MEMBER` from the l
 `summoner.md` (top level) has a session that may summon keep the summon watch armed, so every summon's lifecycle and chat remains observable.
 It renders only for a run whose effective allow-list (`bro.summon.effective_may_summon()`) is non-empty, and its body forks by surface:
 the Claude harness holds the watch on a persistent `Monitor`, bro-native starts `summon watch` as a watch-mode job and chills on its inbox, and raw MCP sessions poll the retained quests because that wire has no notification wake.
-The same text states the notification trust rule and tells the summoner how to exchange questions, continue a retained quest, cancel a child, and keep a one-shot run alive while work remains.
+The same text states the notification trust rule and tells the summoner how to exchange questions, continue a retained quest, cancel a child, and how a one-shot run ends on its surface:
+native ends when a turn ends with nothing running and nothing in flight and gives one notice otherwise,
+managed Claude holds while the watch is armed and stops it once every summon has ended,
+and raw ends with its turn after one notice for summons still in flight.
 
 ### Summoned contract
 
