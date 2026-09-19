@@ -1237,7 +1237,7 @@ def _fold_tool_layers(
       if 'Monitor' in narrowed:
         if QUEST_WATCH_COMMAND not in narrowed['Monitor']:
           narrowed['Monitor'].append(QUEST_WATCH_COMMAND)
-        for name in ('TaskOutput', 'TaskStop'):
+        for name in _CLAUDE_COMMAND_CONTROL:
           blocked.pop(name, None)
 
   return _ToolSelection(

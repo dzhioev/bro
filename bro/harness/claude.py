@@ -17,7 +17,10 @@ HARNESS = 'claude'
 
 # reading, searching, and modifying the workspace
 FILES = ('Read', 'Write', 'Edit', 'NotebookEdit', 'Glob', 'Grep')
-# running commands, and the job control that reaches the commands already running
+# running commands, and the job control that reaches the commands already
+# running. the job controls have shipped under two names each — `BashOutput` /
+# `TaskOutput` and `KillShell` / `TaskStop` — and a denylist naming either
+# disables the tool, so whatever hands one back must free both of its names
 SHELL = ('Bash', 'BashOutput', 'KillShell', 'Monitor', 'TaskOutput', 'TaskStop')
 # starting work in another agent — outside the framework's own summon path, so
 # outside its container isolation, credential scoping, and recording. the
