@@ -901,6 +901,62 @@ async def test_cancel_timeout_exits_running_while_the_end_is_under_way(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_live_children_keeps_the_own_unended_summons_only(monkeypatch):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(asyncio.to_thread(quest.live_children))
+    channel, query = await next_message(server)
+    assert query.args == {}
+    await reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={
+        'quests': [
+          quest_record('S2', 'accepted', args={'target': 'reviewer', 'prompt': 'review'}),
+          quest_record('S1', 'started'),
+          quest_record('G1', 'started', parent='S1'),
+          quest_record('B1', 'started', kind='benchmark'),
+          quest_record('S0', 'ended', result={'outcome': 'ok', 'value': 'done'}),
+          quest_record('D0', 'denied', result={'outcome': 'denied', 'error': 'no'}),
+        ]
+      },
+    )
+
+    assert await task == [quest.LiveChild('S2', 'reviewer'), quest.LiveChild('S1', 'dev')]
+
+
+@pytest.mark.asyncio
+async def test_live_children_refuses_an_unknown_quest_state(monkeypatch):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(asyncio.to_thread(quest.live_children))
+    channel, query = await next_message(server)
+    await reply(
+      server, channel, query, outcome='ok', value={'quests': [quest_record('S1', 'limbo')]}
+    )
+
+    with pytest.raises(quest.QuestError, match="unknown state 'limbo'"):
+      await task
+
+
+@pytest.mark.asyncio
+async def test_live_children_refuses_a_live_summon_without_a_target(monkeypatch):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(asyncio.to_thread(quest.live_children))
+    channel, query = await next_message(server)
+    await reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={'quests': [quest_record('S1', 'started', args={})]},
+    )
+
+    with pytest.raises(quest.QuestError, match='without a target'):
+      await task
+
+
+@pytest.mark.asyncio
 async def test_list_reads_every_page_and_keeps_only_summons(monkeypatch, capsys):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'list']))

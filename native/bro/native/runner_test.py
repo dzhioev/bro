@@ -16,6 +16,7 @@ from bro.broker.transport import ClientTransport
 from bro.inbox import Inbox
 from bro.llm.mcp import InProcessMCPServer, MCPServer
 from bro.llm.observer import (
+  InterimAssistantTextEvent,
   NullObserver,
   ObservedEvent,
   Observer,
@@ -29,6 +30,7 @@ from bro.mcp import MCPServerSpec
 from bro.monitor import trail_pointer
 from bro.native.llm import LLM
 from bro.native.runner import Runner, set_default_tracker_factory
+from bro.quest import LiveChild
 from bro.run_lifecycle import RunLifecycle
 
 
@@ -664,6 +666,153 @@ class TestSend:
     assert llm.wake_calls == 1
     assert observer.events[-1] == TurnCompletedEvent('noticed')
     await asyncio.to_thread(job.kill)
+
+
+class _ScriptedLLM(MockLLM):
+  """an LLM whose reminder turns run a scripted action each and report what they drained."""
+
+  def __init__(self, actions: list, *, response: str = 'first reply'):
+    super().__init__(response=response)
+    self.actions = list(actions)
+    self.drained: list[str] = []
+
+  async def wake(self, *, request_timeout: Optional[float] = None) -> str:
+    batch = self.inbox.drain()
+    assert batch is not None
+    self.drained.append(batch.text)
+    self.wake_calls += 1
+    action = self.actions.pop(0)
+    return await action(self)
+
+
+async def _end_without_acting(llm: MockLLM) -> str:
+  return 'ended again'
+
+
+def _kill_and_end(job):
+  async def action(llm: MockLLM) -> str:
+    await asyncio.to_thread(job.kill)
+    return 'settled'
+
+  return action
+
+
+class TestLiveWorkReminder:
+  """a one-shot turn that ends with work still live gets one notice to settle it."""
+
+  @pytest.mark.asyncio
+  async def test_a_live_background_job_earns_one_reminder_naming_it(self):
+    observer = CapturingObserver()
+    llm = _ScriptedLLM([])
+    runner = StubRunner(llm)
+    job = runner.registry.start('sleep 30', 'bg')
+    llm.actions.append(_kill_and_end(job))
+
+    result = await runner.run('go', observer=observer, surface='test')
+
+    assert result == 'settled'
+    [notice] = llm.drained
+    assert notice.startswith(native_runner._LIVE_WORK_HEADER)
+    assert '\njob-1 bg `sleep 30`\n' in notice
+    assert 'bro::chill' in notice
+    assert observer.events == [
+      TurnStartedEvent('go'),
+      InterimAssistantTextEvent('first reply'),
+      TurnCompletedEvent('settled'),
+    ]
+
+  @pytest.mark.asyncio
+  async def test_a_live_watch_is_named_with_its_mode(self):
+    llm = _ScriptedLLM([])
+    runner = StubRunner(llm)
+    job = runner.registry.start('quest watch', 'watch')
+    llm.actions.append(_kill_and_end(job))
+
+    await runner.run('go', surface='test')
+
+    assert '\njob-1 watch `quest watch`\n' in llm.drained[0]
+
+  @pytest.mark.asyncio
+  async def test_an_in_flight_summon_is_named_by_request_and_target(self, monkeypatch):
+    monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:1')
+    monkeypatch.setattr(
+      native_runner, 'live_children', lambda: [LiveChild('01m-child', 'bro-eyebro')]
+    )
+    llm = _ScriptedLLM([_end_without_acting])
+    runner = _ChannelRunner(None, llm)
+
+    result = await runner.run('go', surface='test')
+
+    assert result == 'ended again'
+    [notice] = llm.drained
+    assert '\nquest 01m-child to bro-eyebro\n' in notice
+    assert 'job-' not in notice
+
+  @pytest.mark.asyncio
+  async def test_the_same_live_set_ending_again_ends_the_run_and_kills(self):
+    llm = _ScriptedLLM([_end_without_acting])
+    runner = StubRunner(llm)
+    job = runner.registry.start('sleep 30', 'bg')
+
+    result = await runner.run('go', surface='test')
+
+    assert result == 'ended again'
+    assert llm.wake_calls == 1
+    assert job.process.wait(timeout=10) == -9
+    assert runner._last_end_reason == 'ok'
+
+  @pytest.mark.asyncio
+  async def test_job_news_drained_in_the_reminder_turn_earns_a_fresh_reminder(self):
+    llm = _ScriptedLLM([_end_without_acting, _end_without_acting])
+    runner = StubRunner(llm)
+    exiting = runner.registry.start('echo done', 'bg')
+    live = runner.registry.start('sleep 30', 'bg')
+    assert await asyncio.to_thread(runner.inbox.wait, time.monotonic() + 10, threading.Event())
+
+    result = await runner.run('go', surface='test')
+
+    assert result == 'ended again'
+    assert llm.wake_calls == 2
+    first, second = llm.drained
+    assert '[job-1 bg `echo done` exited (code 0)]' in first
+    assert first.endswith(native_runner._LIVE_WORK_RULE)
+    assert second.startswith(native_runner._LIVE_WORK_HEADER)
+    assert 'job-2 bg `sleep 30`' in second
+    assert exiting.process.poll() == 0
+    assert live.process.wait(timeout=10) == -9
+
+  @pytest.mark.asyncio
+  async def test_a_delivered_answer_ends_the_run_without_a_reminder(self):
+    runner = StubRunner(_StubLLM(error=AnswerDelivered('the answer')))
+    job = runner.registry.start('sleep 30', 'bg')
+
+    result = await runner.run('go', surface='test')
+
+    assert result == 'the answer'
+    assert runner.inbox.drain() is None
+    assert job.process.wait(timeout=10) == -9
+
+  @pytest.mark.asyncio
+  async def test_an_exited_job_awaiting_its_exit_notice_is_not_live_work(self):
+    runner = StubRunner()
+    with runner:
+      job = runner.registry.start('true', 'bg')
+      assert await asyncio.to_thread(runner.inbox.wait, time.monotonic() + 10, threading.Event())
+      assert job.has_news()
+
+      assert runner._live_work().jobs == ()
+
+  @pytest.mark.asyncio
+  async def test_nothing_live_ends_as_before(self):
+    observer = CapturingObserver()
+    llm = _ScriptedLLM([], response='done')
+    runner = StubRunner(llm)
+
+    result = await runner.run('go', observer=observer, surface='test')
+
+    assert result == 'done'
+    assert llm.wake_calls == 0
+    assert observer.events == [TurnStartedEvent('go'), TurnCompletedEvent('done')]
 
 
 class _GatedBro(BaseBro):
