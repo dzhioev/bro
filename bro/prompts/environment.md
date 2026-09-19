@@ -17,9 +17,8 @@ Interpret them as follows:
    - `repo: none (detached)` means no repository is attached.
      `/workspace` is a plain writable directory, not a checkout, so do not infer git state from cwd.
    - `docker_shell_command` (`ride exec <name>`) is what the user runs from the launcher to enter the box.
-   - Bare commands resolve from the root's pinned runtime.
-     Use `uv run <command>` or `.venv/bin/<command>` for repository tools.
-     Activate the workspace venv only when a human explicitly wants to replace that ordering in an interactive shell.
+   - Bare commands resolve from the root's pinned runtime;
+     the repository's own guide says how its tools are reached.
 
 2. `isolation: unboxed` means the workspace tree runs directly on the launcher's filesystem.
    The launcher may itself be inside a foreign container, so unboxed does not imply access to the physical host.

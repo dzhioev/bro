@@ -23,9 +23,10 @@ core imports none of them, and `bro-ride` spawns rather than imports `bro-native
 `benchmark/` ships from here too but is deliberately **not** a member:
 it publishes `bro-benchmark` (package `bro.benchmark`) and locks, syncs and tests in an environment of its own, for the reason `benchmark/AGENTS.md` gives.
 `./setup.sh` syncs the workspace and installs the repository hooks;
-`source .venv/bin/activate` then puts third-party development tools and every console script on `PATH` as bare commands.
-It leaves `benchmark/.venv` alone
-— that one is synced on demand, by the gate stage or by hand.
+it leaves `benchmark/.venv` alone, which is synced on demand, by the gate stage or by hand.
+Run the repository's console scripts and its own shell scripts through `uv run <command>` (`uv run ./format.sh`, `uv run run-tests --changed`) or `.venv/bin/<command>`.
+A session that carries a `bro::banner` tool runs on a frozen runtime bundle whose `PATH` publishes these same command names;
+activating the checkout's venv over it would shadow them with the code being edited.
 The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for every member, and the test gate for all of them:
 
 - `./format.sh` — format and autofix the whole repository
