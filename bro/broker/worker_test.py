@@ -14,6 +14,7 @@ from bro.broker.spawn import LaunchSpec
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
 from bro.broker.worker import ExpectedWorker, JobWorker, SpawnedWorker, Worker
+from bro.broker.worker_test_helper import FakeScheduler
 
 TIMEOUT = 5.0
 
@@ -205,9 +206,36 @@ async def test_spawned_worker_warns_when_channel_drain_expires(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_started_replaces_the_launch_bound_with_the_quest_timeout(tmp_path):
+  runtime = FakeRuntime(tmp_path)
+  schedule = FakeScheduler()
+  worker = SpawnedWorker(
+    cast(Runtime, runtime),
+    Listener(),
+    'quest',
+    LaunchSpec(),
+    talk=frozenset(),
+    timeout=10,
+    launch_timeout=30,
+    schedule=schedule,
+  )
+  worker.begin()
+  assert [(timer.seconds, timer.cancelled) for timer in schedule.timers] == [(30, False)]
+  await _settle()
+  assert [(timer.seconds, timer.cancelled) for timer in schedule.timers] == [
+    (30, True),
+    (10, False),
+  ]
+  runtime.handle.exit.set_result(0)
+  await _settle()
+  assert schedule.timers[1].cancelled
+
+
+@pytest.mark.asyncio
 async def test_launch_timeout_kills_a_handle_returned_after_cancellation(tmp_path):
   runtime = GatedRuntime(tmp_path)
   listener = Listener()
+  schedule = FakeScheduler()
   worker = SpawnedWorker(
     cast(Runtime, runtime),
     listener,
@@ -215,10 +243,13 @@ async def test_launch_timeout_kills_a_handle_returned_after_cancellation(tmp_pat
     LaunchSpec(),
     talk=frozenset(),
     timeout=10,
-    launch_timeout=0.001,
+    schedule=schedule,
   )
   worker.begin()
-  await _until(lambda: worker.ending)
+  await _settle()
+  (launch_deadline,) = schedule.timers
+  launch_deadline.fire()
+  assert worker.ending
   assert runtime.launched == []
   runtime.release.set()
   await _until(lambda: listener.deaths != [])
@@ -231,10 +262,19 @@ async def test_launch_timeout_kills_a_handle_returned_after_cancellation(tmp_pat
 async def test_spawned_worker_timeout_kills_the_process_and_reports_on_reap(tmp_path):
   runtime = FakeRuntime(tmp_path)
   listener = Listener()
+  schedule = FakeScheduler()
   worker = SpawnedWorker(
-    cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=0.001
+    cast(Runtime, runtime),
+    listener,
+    'quest',
+    LaunchSpec(),
+    talk=frozenset(),
+    timeout=10,
+    schedule=schedule,
   )
   worker.begin()
+  await _settle()
+  schedule.timers[-1].fire()
   await _until(lambda: listener.deaths != [])
   assert runtime.handle.killed
   assert listener.deaths[0].reason == 'timeout'

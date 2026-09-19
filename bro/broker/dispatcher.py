@@ -39,8 +39,10 @@ from bro.broker.worker import (
   ExpectedWorker,
   JobOutput,
   JobWorker,
+  Scheduler,
   SpawnedWorker,
   Worker,
+  call_later,
 )
 
 DEFAULT_TIMEOUT = 600.0
@@ -61,10 +63,12 @@ class Dispatcher:
     default_timeout: float = DEFAULT_TIMEOUT,
     job_output: Optional[JobOutput] = None,
     journal: Optional[Journal] = None,
+    schedule: Scheduler = call_later,
   ):
     self._runtime: Optional[Runtime] = None
     self._default_timeout = default_timeout
     self._job_output = job_output
+    self._schedule = schedule
     self.journal = journal if journal is not None else Journal()
     self.live: dict[str, Record] = {}
     self.workers: dict[Peer, str] = {}
@@ -134,6 +138,7 @@ class Dispatcher:
       launch,
       talk=talk,
       timeout=timeout if timeout is not None else self._default_timeout,
+      schedule=self._schedule,
     )
     self._start_worker(worker)
     self._deliver_record(record, brotocol.mark(record.quest_id, 'accepted'))
@@ -149,6 +154,7 @@ class Dispatcher:
       self,
       requester,
       timeout=timeout if timeout is not None else self._default_timeout,
+      schedule=self._schedule,
     )
     self._start_worker(worker)
     self._deliver_record(record, brotocol.mark(record.quest_id, 'accepted'))
@@ -270,6 +276,7 @@ class Dispatcher:
         talk=EMPTY_TALK,
         timeout=None,
         launch_timeout=None,
+        schedule=self._schedule,
       )
       self._root_worker = root_worker
       self._start_worker(root_worker)
