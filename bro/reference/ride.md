@@ -963,7 +963,7 @@ The placement records the effective isolation inherited by a join, while a manua
 Live readers never read that audit back:
 check, list, watch, and the session-local statusLine projector query the caller-scoped in-memory journal over their own broker channel, so the same surfaces work at any summon depth.
 The statusLine places a child's pending question beside its live summon until the requester replies.
-The scope begins with quests the caller requested and includes their descendants;
+The scope is the quests the caller requested and nothing beneath them;
 it excludes the parent-owned quest that the caller's own worker answers.
 Each authorized launch also carries the allow-list and permits it will be judged against into the run itself (`RIDE_MAY_SUMMON` and `RIDE_PERMITS`:
 the session root's at launch, a summoned child's own resolved sets at its spawn), so a peer reads its authority off the banner instead of discovering it by denial;

@@ -633,7 +633,7 @@ async def test_say_reports_an_oversized_reply_id_as_a_cli_error(monkeypatch, cap
 
 
 @pytest.mark.asyncio
-async def test_say_refuses_a_descendant_that_is_not_a_direct_child(monkeypatch, caplog):
+async def test_say_refuses_a_quest_this_session_did_not_request(monkeypatch, caplog):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(
       asyncio.to_thread(summon.main, ['summon', 'say', 'GRANDCHILD', 'skip a level'])
@@ -655,7 +655,7 @@ async def test_say_refuses_a_descendant_that_is_not_a_direct_child(monkeypatch, 
     )
 
     assert await task == 1
-    assert 'not a direct child' in caplog.text
+    assert 'not one this session requested' in caplog.text
 
 
 @pytest.mark.asyncio
@@ -789,74 +789,6 @@ async def test_check_without_a_quest_reads_the_session_quest_and_reports_a_quest
     output = json.loads(capsys.readouterr().out)
     assert output['question'] == {'id': 'QUESTION-2', 'text': 'which region?'}
     assert output['talk'] == ['requester.question', 'worker.say']
-
-
-@pytest.mark.asyncio
-async def test_check_keeps_descendant_lifecycle_recovery_without_claiming_its_question(
-  monkeypatch, capsys
-):
-  async with running_server(monkeypatch) as server:
-    task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'check', 'GRANDCHILD']))
-    channel, query = await _next(server)
-    question = {
-      'seq': 2,
-      'at': 'now',
-      'transition': 'message',
-      'from': 'worker',
-      'id': 'QUESTION-2',
-      'head': {'text': 'ask my direct summoner'},
-    }
-    await _reply(
-      server,
-      channel,
-      query,
-      outcome='ok',
-      value={
-        'quest': _quest(
-          'GRANDCHILD',
-          'started',
-          parent='CHILD',
-          talk=['worker.question', 'worker.say'],
-          pending=[question],
-          messages=[question],
-          chat_seq=2,
-        )
-      },
-    )
-
-    assert await task == summon.PENDING_EXIT_CODE
-    output = json.loads(capsys.readouterr().out)
-    assert output['messages'] == [question]
-    assert 'question' not in output
-
-
-@pytest.mark.asyncio
-async def test_check_wait_collects_a_descendant_answer(monkeypatch, capsys):
-  async with running_server(monkeypatch) as server:
-    task = asyncio.create_task(
-      asyncio.to_thread(
-        summon.main,
-        ['summon', 'check', '--wait', '--timeout', '1', 'GRANDCHILD'],
-      )
-    )
-    channel, query = await _next(server)
-    await _reply(
-      server,
-      channel,
-      query,
-      outcome='ok',
-      value={
-        'quest': _quest(
-          'GRANDCHILD',
-          'ended',
-          parent='CHILD',
-          result={'outcome': 'ok', 'value': 'descendant answer'},
-        )
-      },
-    )
-
-    assert await task == 0
-    assert capsys.readouterr().out == 'descendant answer\n'
 
 
 @pytest.mark.asyncio
@@ -1483,7 +1415,7 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
             'seq': 13,
             'kind': 'summon',
             'quest': 'S2',
-            'parent': 'C1',
+            'parent': 'ROOT',
             'args': {'target': 'dev'},
             'transition': 'ended',
             'outcome': 'failed',
@@ -1492,9 +1424,7 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
         ],
       },
     )
-    assert await second_line == (
-      'summon ended failed:timeout (request S2 to dev, summoned by request C1)'
-    )
+    assert await second_line == 'summon ended failed:timeout (request S2 to dev)'
 
     third_line = asyncio.create_task(asyncio.to_thread(next, watch))
     channel, poll = await _next(server)
@@ -1705,6 +1635,39 @@ async def test_watch_refuses_an_accepted_summon_event_without_a_target(monkeypat
       },
     )
     with pytest.raises(summon.SummonError, match='without a target'):
+      await first_line
+
+
+@pytest.mark.asyncio
+async def test_watch_refuses_a_summon_this_session_did_not_request(monkeypatch):
+  async with running_server(monkeypatch) as server:
+    monkeypatch.setenv(QUEST_ENV, 'ROOT')
+    watch = summon.watch_summons(wait_seconds=0.05)
+    first_line = asyncio.create_task(asyncio.to_thread(next, watch))
+    channel, arm = await _next(server)
+    await _reply(server, channel, arm, outcome='ok', value={'head': 0, 'events': []})
+    await _reply_empty_watch_replay(server)
+    channel, poll = await _next(server)
+    await _reply(
+      server,
+      channel,
+      poll,
+      outcome='ok',
+      value={
+        'head': 1,
+        'events': [
+          {
+            'seq': 1,
+            'kind': 'summon',
+            'quest': 'GRANDCHILD',
+            'parent': 'CHILD',
+            'args': {'target': 'dev'},
+            'transition': 'started',
+          }
+        ],
+      },
+    )
+    with pytest.raises(summon.SummonError, match='did not request'):
       await first_line
 
 
