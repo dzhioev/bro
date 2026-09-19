@@ -22,7 +22,14 @@ from bro.broker.brotocol import (
   Talk,
 )
 from bro.broker.job import CommandJob
-from bro.broker.journal import MAX_WAIT_SECONDS, Journal, Record, Subscriber, listing_position
+from bro.broker.journal import (
+  MAX_WAIT_SECONDS,
+  Journal,
+  Record,
+  Subscriber,
+  listing_position,
+  oversized_message,
+)
 from bro.broker.runtime import Peer, Runtime
 from bro.broker.spawn import LaunchSpec, Spawner
 from bro.broker.transport import Provisioned, ServerTransport
@@ -307,8 +314,10 @@ class Dispatcher:
     if sender is None:
       self._refuse(peer, message, 'peer is not an end of the quest')
       return
-    if not brotocol.message_allowed(record.talk, sender, message):
+    reason = oversized_message(message.payload)
+    if reason is None and not brotocol.message_allowed(record.talk, sender, message):
       reason = f'{sender} lacks the talk right for this message'
+    if reason is not None:
       self._refuse(peer, message, reason)
       self.journal.refused(record, sender, message, reason)
       return

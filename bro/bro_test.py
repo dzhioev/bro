@@ -1599,6 +1599,20 @@ class TestSummonTool:
     assert client.closed
 
   @pytest.mark.asyncio
+  async def test_mcp_summon_say_refuses_over_bound_text_before_opening_its_client(
+    self, monkeypatch
+  ):
+    from bro import summon as summon_module
+    from bro.broker.journal_test_helper import text_at_the_message_bound
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    monkeypatch.setattr(summon_module, 'open_client', lambda: pytest.fail('a client was opened'))
+    tool = await _find_tool(EchoBro(), 'summon_say', wire='mcp')
+
+    with pytest.raises(summon_module.SummonError, match='mint an artifact'):
+      await tool.call({'text': text_at_the_message_bound() + 'x', 'request_id': 'REQ-1'})
+
+  @pytest.mark.asyncio
   async def test_mcp_calls_summon_and_wait_off_loop(self, monkeypatch):
     from bro import summon as summon_module
 

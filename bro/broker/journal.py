@@ -20,7 +20,7 @@ MAX_WAIT_SECONDS = 600.0
 MAX_JOURNAL_TEXT_BYTES = MAX_IDENTIFIER_BYTES
 ARGS_STRING_HEAD = 160
 ARGS_HEAD_BYTES = 2048
-MESSAGE_HEAD_BYTES = 4096
+MAX_MESSAGE_BYTES = 16 << 10
 MAX_PENDING_QUESTIONS = 16
 MAX_RECORD_MESSAGES = 32
 CHAT_TRANSITIONS = frozenset({'message', 'refused', 'listening'})
@@ -272,11 +272,7 @@ class Journal:
       raise TypeError(f'chat transition needs a message envelope, got {message.type!r}')
     payload: dict[str, Any] = {
       'from': sender,
-      'head': bounded_args(
-        message.payload,
-        string_head=MESSAGE_HEAD_BYTES,
-        byte_budget=MESSAGE_HEAD_BYTES,
-      ),
+      'head': _chat_head(message.payload, transition),
       **(details or {}),
     }
     if message.id is not None:
@@ -520,6 +516,23 @@ def bounded_args(
     head = head[: max(0, len(head) - overflow)]
     bounded['head'] = head
   return bounded
+
+
+def oversized_message(payload: dict[str, Any]) -> Optional[str]:
+  size = _payload_bytes(payload)
+  if size <= MAX_MESSAGE_BYTES:
+    return None
+  return f'message payload of {size} bytes exceeds the {MAX_MESSAGE_BYTES}-byte bound'
+
+
+def _chat_head(payload: dict[str, Any], transition: str) -> dict[str, Any]:
+  # a refusal can be about the size itself, so its head is bounded rather than kept whole
+  if transition == 'refused':
+    return bounded_args(payload, string_head=MAX_MESSAGE_BYTES, byte_budget=MAX_MESSAGE_BYTES)
+  reason = oversized_message(payload)
+  if reason is not None:
+    raise ValueError(reason)
+  return payload
 
 
 def _bounded_value(value: Any, string_head: int) -> Any:

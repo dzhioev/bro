@@ -22,7 +22,8 @@ from bro.broker.dispatcher import (
   query_handler,
 )
 from bro.broker.job import CommandJob
-from bro.broker.journal import MAX_PENDING_QUESTIONS, MAX_RECORD_MESSAGES, MESSAGE_HEAD_BYTES
+from bro.broker.journal import MAX_MESSAGE_BYTES, MAX_PENDING_QUESTIONS, MAX_RECORD_MESSAGES
+from bro.broker.journal_test_helper import text_at_the_message_bound
 from bro.broker.runtime import Runtime
 from bro.broker.spawn import LaunchSpec
 from bro.broker.transport import Provisioned
@@ -420,6 +421,35 @@ def test_disallowed_message_is_journaled_as_a_correlated_refusal(caplog):
   assert 'lacks the talk right' in caplog.text
 
 
+def test_a_message_at_the_bound_is_routed_whole():
+  dispatcher, runtime = _dispatcher()
+  record = _live_chat(dispatcher, talk={'worker.say'})
+  message = brotocol.message(record.quest_id, {'text': text_at_the_message_bound()})
+
+  dispatcher.on_message('child-worker', message)
+
+  assert runtime.sent == [('requester', message)]
+  assert record.messages[-1]['head'] == message.payload
+
+
+def test_oversized_message_is_journaled_as_a_correlated_refusal(caplog):
+  dispatcher, runtime = _dispatcher()
+  record = _live_chat(dispatcher, talk={'worker.say', 'worker.question'})
+  candidate = brotocol.message(
+    record.quest_id, {'text': text_at_the_message_bound() + 'x'}, id='Q1'
+  )
+
+  dispatcher.on_message('child-worker', candidate)
+
+  assert runtime.sent == []
+  assert record.pending == []
+  assert record.messages[-1]['transition'] == 'refused'
+  assert record.messages[-1]['id'] == 'Q1'
+  assert f'{MAX_MESSAGE_BYTES + 1} bytes' in record.messages[-1]['reason']
+  assert record.messages[-1]['head']['truncated'] is True
+  assert 'exceeds' in caplog.text
+
+
 def test_listening_is_worker_born_set_once_and_repeats_are_silent():
   dispatcher, runtime = _dispatcher()
   record = _live_chat(dispatcher, talk={'worker.say'})
@@ -541,11 +571,11 @@ def test_query_trims_chat_before_evicting_a_retained_result():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(QUERY, query_handler)
   child = _live_chat(dispatcher, talk={'worker.say'})
-  for index in range(MAX_RECORD_MESSAGES):
+  for _ in range(MAX_RECORD_MESSAGES):
     dispatcher.journal.message(
       child,
       'worker',
-      brotocol.message(child.quest_id, {'text': str(index) + 'x' * MESSAGE_HEAD_BYTES}),
+      brotocol.message(child.quest_id, {'text': text_at_the_message_bound()}),
     )
   dispatcher.journal.end(
     child, {'outcome': 'ok', 'value': 'answer' * (brotocol.MAX_FRAME_BYTES // 10)}
