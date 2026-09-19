@@ -29,7 +29,7 @@ def test_coordination_spells_render_for_every_surface():
           )
 
 
-def test_orchestrate_grants_a_derived_eyebro_to_both_pull_request_phases(monkeypatch):
+def test_orchestrate_grants_a_derived_eyebro_to_every_pull_request_phase(monkeypatch):
   bro = Lead()
   ungranted = bro.get_spell_body('orchestrate', harness='claude', wire='mcp')
   assert '@<the eyebro>' not in ungranted
@@ -37,4 +37,4 @@ def test_orchestrate_grants_a_derived_eyebro_to_both_pull_request_phases(monkeyp
   monkeypatch.setenv(MAY_SUMMON_ENV, 'bro-eyebro')
   granted = bro.get_spell_body('orchestrate', harness='claude', wire='mcp')
 
-  assert granted.count('`grant` `@<the eyebro>`') == 2
+  assert granted.count('`grant` `@<the eyebro>`') == 3
