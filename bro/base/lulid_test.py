@@ -20,7 +20,7 @@ def test_unique():
 
 def test_sorts_by_mint_time():
   earlier = lulid()
-  time.sleep(0.002)  # cross a millisecond boundary so the timestamp prefixes differ
+  time.sleep(0.002)  # sleep: subject — crosses a millisecond boundary so the prefixes differ
   later = lulid()
   assert earlier < later
 

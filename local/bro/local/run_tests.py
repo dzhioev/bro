@@ -276,6 +276,7 @@ PYTEST_FILES = [
   'local/bro/local/packaging_policy_test.py',
   'local/bro/local/environment_policy_test.py',
   'local/bro/local/spell_policy_test.py',
+  'local/bro/local/sleep_policy_test.py',
   'dev/bro/dev/affected_tests_test.py',
   'dev/bro/dev/packaging_policy_test.py',
   'dev/bro/dev/distribution_test.py',
@@ -286,6 +287,7 @@ PYTEST_FILES = [
   'dev/bro/dev/usage_report_test.py',
   'dev/bro/dev/install_test.py',
   'dev/bro/dev/shell_policy_test.py',
+  'dev/bro/dev/sleep_policy_test.py',
 ]
 # collected by one process rather than by every worker in the pool: an xdist
 # worker collects the whole roster, not the share it runs, so a module importing
