@@ -118,6 +118,38 @@ class TestSessionFragment:
     assert 'raw MCP session has no persistent watch' in fragment
     assert '`bro::chill`' not in fragment
 
+  @pytest.mark.parametrize(
+    ('harness', 'wire', 'marker'),
+    (
+      ('claude', 'mcp', 'stop the watch with `TaskStop` and end the turn'),
+      ('bro', 'bare', 'ends when a turn ends with nothing running and nothing in flight'),
+      ('bro', 'mcp', 'ends with its turn, so a turn that ends with summons in flight'),
+    ),
+  )
+  def test_a_summoning_run_is_told_how_its_one_shot_ends_per_surface(
+    self, monkeypatch, harness, wire, marker
+  ):
+    monkeypatch.delenv(SUMMONED_ENV, raising=False)
+    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    fragment = session_fragment('unattended', harness=harness, wire=wire)
+    assert marker in fragment
+    assert 'watches included' not in fragment
+
+  @pytest.mark.parametrize(
+    ('harness', 'wire', 'marker'),
+    (
+      ('claude', 'mcp', 'so end it through `bro::answer`'),
+      ('bro', 'bare', 'ends when a turn ends with nothing running and nothing in flight'),
+      ('bro', 'mcp', 'one notice to wait for or cancel them before delivering'),
+    ),
+  )
+  def test_a_summoned_run_is_told_how_its_one_shot_ends_per_surface(
+    self, monkeypatch, harness, wire, marker
+  ):
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    fragment = session_fragment('unattended', harness=harness, wire=wire, talk=('worker.say',))
+    assert marker in fragment
+
   def test_a_summoning_summoned_run_carries_both_contracts_in_order(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     monkeypatch.setenv(TALK_ENV, 'worker.say')

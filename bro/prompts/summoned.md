@@ -56,8 +56,14 @@ If the call returns the question state, keep its id and recover the reply with `
 When the work cannot proceed without input, call `bro::raise` with the blocker instead of asking a question the quest does not permit.
 {{end}}
 
-{{when #wire = bare}}
-Ending the turn ends a one-shot run, watches included, so do not end it while work remains.
+{{iff #wire = bare}}
+A one-shot run ends when a turn ends with nothing running and nothing in flight;
+a turn that ends otherwise gets one notice naming the live jobs and summons, and a next turn that ends with the same set and nothing else reported ends the run and kills them.
+{{eliff #harness = claude}}
+A one-shot session stays open while the summon watch is armed and re-invokes you on its events, so end it through `bro::answer`;
+a turn that ends with summons in flight and no watch armed, or with the watch armed and nothing in flight, gets one notice to settle it.
+{{else}}
+A one-shot session ends with its turn, so a turn that ends with summons in flight gets one notice to wait for or cancel them before delivering.
 {{end}}
 The natural end is after the work is fully done
 — a change merged, a deploy live

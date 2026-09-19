@@ -128,6 +128,17 @@ The outer runs the separate `do-ride solo|along` session executable.
 Unboxed isolation takes it from the frozen host snapshot;
 boxed isolation takes it from the same bundle materialized at `/var/ride/runtime`.
 
+A solo session runs Claude in print mode, which ends only once nothing is pending:
+while a background task or a Monitor is live the process stays open and the model is re-invoked as a fresh turn on each event,
+so a persistent Monitor on an endless command, which is how `summon watch` is armed, holds the process until the session is killed.
+A solo session's settings therefore wire `ride.claude.stop_guard` as its `Stop` hook:
+reading the running tasks off the hook input and the run's own in-flight summons off the host journal, it blocks a turn end once per turn (Claude's `stop_hook_active` marks the second stop)
+when summons are in flight with no watch armed, where the exiting process would orphan them,
+or when the watch is armed with nothing in flight, where it would hold the session until killed;
+a watch over summons in flight is the wait it should be and passes.
+The stop guard reads `background_tasks`, which Claude Code sends undocumented;
+`ride/ride/claude/stop_guard_llm_test.py` probes it live against the `claude` on PATH, and the container pins the version.
+
 ## Bro harness
 
 The bro harness drives the selected bro's native LLM loop:
@@ -139,7 +150,12 @@ The bro harness owns no flags of its own;
 it rejects Claude's `--raw`.
 A native session that can receive summon traffic starts `summon watch` as a watch-mode `bro::job` once, and its output reaches the LLM as notifications after tool results or in an idle interactive turn.
 `bro::chill` waits on the run's whole background-job inbox when no other work remains.
-A one-shot `bro run` still ends with its turn and closes its watches, while `bro chat` stays idle on the inbox and starts a turn when news arrives.
+A one-shot `bro run` ends when a turn ends with nothing running and nothing in flight:
+a turn that ends with a live job or an own summon still in flight gets one framework notice through the same seam (a user-role item recorded as a `notification` step),
+naming each `job-N <mode> <command>` and each `summon <request id> to <target>`,
+and the run ends only when a turn ends with nothing live or when a reminded turn ends with the same set and no job news drained since.
+The end still closes every job and orphans every in-flight summon, as a delivered `answer` or a `raise` does at once.
+`bro chat` stays idle on the inbox and starts a turn when news arrives.
 A raw Claude session runs the bro toolset over MCP instead:
 that wire has no notification wake or `chill`, so its session text keeps the retained-quest polling flow.
 
