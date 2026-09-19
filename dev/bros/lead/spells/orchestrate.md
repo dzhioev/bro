@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.8.1
+version: 2.9.0
 ---
 
 # orchestrate
@@ -173,8 +173,8 @@ ride along --summoned <token> <bro> <launch line> --harness <claude|bro>
   neither phase needs one
   — design only reads the codebase,
   and review-and-plan resets the integration branch to `origin/master` itself.{{when #may_summon contains eyebro}}
-- No eyebro either:
-  neither phase opens a pull request.{{end}}
+- The eyebro goes to review-and-plan alone, on its summon request rather than the launch line, since the request fixes a manual child's allow-list;
+  the design phase opens no pull request.{{end}}
 - No talk beyond the default:
   the user is in the session, so its questions go to them rather than to you.
 - **The answer reaches you.** A manual child delivers through `answer` like any summoned one, so the prompt closes by answering with what you have to act on.
@@ -225,10 +225,12 @@ Outcome:
 
 ### 2 — review and plan
 
-**Manual summon:** launched `--hold attended --effort max`
+**Manual summon:** launched `--hold attended --effort max`{{when #may_summon contains eyebro}}, requested with `grant` `@<the eyebro>`{{end}}
 
 A fresh session supplies independent eyes.
-Attended hold lets it bring material objections and open design decisions to the user before finalizing the design.
+Attended hold lets it bring material objections and open design decisions to the user before finalizing the design.{{when #may_summon contains eyebro}}
+The eyebro reviews the design as a document on a throwaway pull request:
+a line-addressable surface, and approvals on record.{{end}}
 Reviewing and planning are one phase:
 the reviewer ends up holding the deepest understanding of the design, which is what splitting it into stages needs.
 
@@ -240,8 +242,15 @@ the reviewer ends up holding the deepest understanding of the design, which is w
 > APIs,
 > and call sites instead of leaving them as open questions;
 > for every contract shared with a separately deployed process, state the rollout order and how mixed versions remain operable.
-> Bring material objections and open design decisions to the user before editing the design.
-> Finalize the design in place (`brog::edit_description` on the `## Design` section, leaving the other sections intact).
+> Bring material objections and open design decisions to the user before editing the design.{{when #may_summon contains eyebro}}
+> Then put the design as it stands into a markdown file on a throwaway branch and open a temporary pull request against master whose title and body say it is a design review only, never to be merged.
+> [[Ask <the eyebro>]] to review that pull request as a document, not code:
+> gaps, contradictions, unverified assumptions, a missing rollout order, and better alternatives, not tests or CI.
+> Fold its findings into the file until it approves, settling with the user in this session whatever needs their opinion;
+> the design is settled when both the eyebro and the user have approved the pull request on GitHub.{{end}}
+> Finalize the design in place (`brog::edit_description` on the `## Design` section, leaving the other sections intact).{{when #may_summon contains eyebro}}
+> Then close the pull request without merging and delete the branch:
+> the page is the single source of truth and the repository copy is throwaway.{{end}}
 > Then plan the implementation of the design you just finalized and split it into stages
 > — one stage if the work is small.
 > For EACH stage call `brog::create_task` to open a stage task whose body carries:
@@ -257,9 +266,10 @@ the reviewer ends up holding the deepest understanding of the design, which is w
 > The prefix is what lets a repository write branch rules over the branches stages merge into, so the name is part of the contract, not decoration.
 > Finally write `## Implementation plan` on the root task (`brog::append_description`):
 > the integration branch name and the ordered stages, each linking its stage task.
-> Do NOT implement code or open a PR,
+> Do NOT implement code or open a PR{{when #may_summon contains eyebro}} other than the design review's{{end}},
 > and do not change any task's status.
-> Answer with what you changed in the design and why,
+> Answer with what you changed in the design and why,{{when #may_summon contains eyebro}}
+> the closed design-review pull request,{{end}}
 > the stage list,
 > the integration branch name,
 > and any prerequisite implementation will still need.
