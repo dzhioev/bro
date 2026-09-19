@@ -205,7 +205,7 @@ class TestFlushWait:
       while time.monotonic() < writing_until:
         with transcript.open('a') as stream:
           stream.write('{}\n')
-        time.sleep(0.02)
+        time.sleep(0.02)  # sleep: subject — a cadence inside the settle window
 
     writer = threading.Thread(target=_write)
     writer.start()

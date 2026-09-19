@@ -470,7 +470,7 @@ def _poll_gone(predicate: Callable[[], bool], timeout: float) -> bool:
   while time.monotonic() < deadline:
     if predicate():
       return True
-    time.sleep(0.5)
+    time.sleep(0.5)  # sleep: bound — an expiry is the observation the caller records
   return False
 
 

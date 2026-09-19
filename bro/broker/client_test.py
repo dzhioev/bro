@@ -308,7 +308,7 @@ async def test_await_reply_message_rearms_the_deadline():
 
     channel, request_message = await _next(server.sink.messages)
     await server.transport.send(channel, brotocol.message(request_message.id, {}))
-    await asyncio.sleep(0.5)  # outlive the initial 0.3s bound; the re-armed deadline holds
+    await asyncio.sleep(0.5)  # sleep: bound — past the initial 0.3s deadline the interim re-armed
     await server.transport.send(channel, brotocol.result(request_message.id, 'ok', value='r'))
 
     result = await asyncio.wait_for(await_task, TIMEOUT)
@@ -334,7 +334,7 @@ async def test_await_reply_can_leave_acceptance_out_of_the_rearm():
 
     channel, request_message = await _next(server.sink.messages)
     await server.transport.send(channel, brotocol.mark(request_message.id, 'accepted'))
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0.1)  # sleep: bound — past the 0.05s a re-arm on the mark would have set
     await server.transport.send(channel, brotocol.result(request_message.id, 'ok'))
     assert (await asyncio.wait_for(await_task, TIMEOUT)).outcome == 'ok'
     client.close()

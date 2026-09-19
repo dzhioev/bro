@@ -315,7 +315,7 @@ async def test_result_disarms_the_deadline_while_the_worker_stays_routable():
   worker = dispatcher.journal.records['work'].worker
   assert worker is not None
   runtime.events[worker].on_message(brotocol.result('work', 'ok'))
-  await asyncio.sleep(0.03)
+  await asyncio.sleep(0.03)  # sleep: bound — past the 0.01s deadline the result disarmed
   assert runtime.handle is not None
   assert not runtime.handle.killed
   runtime.events[worker].on_message(_request(PING, {'nested': True}, 'nested'))
