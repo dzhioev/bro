@@ -137,7 +137,7 @@ unboxed sessions provision the workspace clone and run the runtime snapshot's `d
 
 The bro harness owns no flags of its own;
 it rejects Claude's `--raw`.
-A native session that can receive summon traffic starts `summon watch` as a watch-mode `bro::job` once, and its output reaches the LLM as notifications after tool results or in an idle interactive turn.
+A native session that can receive summon traffic starts `quest watch` as a watch-mode `bro::job` once, and its output reaches the LLM as notifications after tool results or in an idle interactive turn.
 `bro::chill` waits on the run's whole background-job inbox when no other work remains.
 A one-shot `bro run` still ends with its turn and closes its watches, while `bro chat` stays idle on the inbox and starts a turn when news arrives.
 A raw Claude session runs the bro toolset over MCP instead:
@@ -154,7 +154,7 @@ they use ambient credentials and create no workspace or scope.
 `bro chat --fork [TRAIL_ID] [--at N]` explicitly forks recorded history under the bro class's current recipe;
 an omitted trail id selects the bro's newest recorded call.
 `ask` and `call` are aliases of `ride solo` and `ride along`, with no implied flags;
-`summon` is the self-contained peer client.
+`summon` and `quest` are the self-contained peer clients.
 
 ## Boxed launches and Docker daemons
 
@@ -677,8 +677,8 @@ Unboxed scoping is still a convenience rather than a security boundary, because 
 - **Launch overrides.**
   `--grant KIND` adds an absent kind to the required tier under the computed selection.
   `--grant KIND+INSTANCE` writes that explicit selection and adds or promotes the kind in the required tier, replacing any computed selection for the kind directly.
-  A requester may pass an instance-spelled grant to a summoned child only when its own scope resolves that kind to the same instance;
-  a bare kind grant remains bounded by the requester's possession of the kind.
+  A summoner may pass an instance-spelled grant to a summoned child only when its own scope resolves that kind to the same instance;
+  a bare kind grant remains bounded by the summoner's possession of the kind.
   `--revoke KIND` removes the kind from either tier.
   An instance-spelled revoke fails and names the kind form, because the scope contains one entry per kind.
   Overrides are strict:
@@ -772,15 +772,15 @@ A session can summon another bro over its channel.
 The target runs as a one-shot, non-TTY session that either starts a party of its own or joins the summoner’s party.
 A *manual* summon instead has the user launch the child themselves either interactively or one-shot;
 see "Manual summon" below.
-The child's credential set, summon allow-list, and permits come from its own seeds and project/host layers under the request's `grant`/`revoke` layer, never by inheriting the requester's sets.
+The child's credential set, summon allow-list, and permits come from its own seeds and project/host layers under the request's `grant`/`revoke` layer, never by inheriting the summoner's sets.
 The root launch's `--env` additions are the one input every started child and joined member does inherit, as facts about the environment the party runs in.
-An explicit request grant is bounded by the corresponding credential, target, or permit the requester holds.
+An explicit request grant is bounded by the corresponding credential, target, or permit the summoner holds.
 It runs under the harness the request names, or the launch's `[tool.bro] summon-harness` when it names none.
 Both harnesses run `do-ride solo …`:
 `bro` spawns the target's own LLM process there, while `claude` starts a one-shot managed Claude Code session of the target persona in full mode.
 The request’s `party` field accepts `start` or `join`, and a start’s optional `isolation` is `boxed` or `unboxed`.
 The CLI spells those choices as `--start`, `--join`, `--boxed`, and `--unboxed`.
-An unmarked request starts boxed when the requester holds `:party.start.boxed`, otherwise unboxed when it holds `:party.start.unboxed`, and otherwise fails naming the permits held;
+An unmarked request starts boxed when the summoner holds `:party.start.boxed`, otherwise unboxed when it holds `:party.start.unboxed`, and otherwise fails naming the permits held;
 it is never converted into a join.
 An explicitly boxed or unboxed start requires the matching start permit.
 A join is always explicit, requires `:party.join`, inherits the summoner’s party isolation, and refuses `isolation`, `into`, and `manual`.
@@ -802,21 +802,21 @@ A started child in an attached ride bases on the summoner’s workspace `HEAD` r
 a container summoner’s local-only commits are transferred into the attachment first so the child’s host-side clone can copy them) unless the request’s `into` ref overrides, while a detached root starts detached children and rejects `into`.
 A joined child uses the party’s existing tree directly, including its current uncommitted state, and runs no workspace setup or persona provisioning of its own.
 The quest carries a fixed **talk** over four rights:
-`requester.say`, `requester.question`, `worker.say`, and `worker.question`.
+`summoner.say`, `summoner.question`, `summoned.say`, and `summoned.question`.
 A reply is authorized by the other end's question right.
-A summon defaults to `worker.say` and widens only through the request's `talk` field, spelled `--talk <right>[,<right>]` by the CLI;
+A summon defaults to `summoned.say` and widens only through the request's `talk` field, spelled `--talk <right>[,<right>]` by the CLI;
 the host fixes and enforces the set when the quest opens, while both peer surfaces refuse a forbidden move before sending.
 The answer comes back synchronously, while permitted messages can travel for the quest's whole life.
-A quest also ends before its answer when its requester is gone or says so:
-a summoned session's exit, or a manual session's disconnect, ends every quest it requested as `failed:orphaned` and ends their workers down the tree, killing a spawned child and detaching a manual one,
-and the `cancel` kind ends one live quest its requester names as `failed:cancelled` the same way.
+A quest also ends before its answer when its summoner is gone or says so:
+a summoned session's exit, or a manual session's disconnect, ends every quest it opened as `failed:orphaned` and ends their workers down the tree, killing a spawned child and detaching a manual one,
+and the `cancel` kind ends one live quest its summoner names as `failed:cancelled` the same way.
 A nested bro summon stamps the child trail's `summoned_by.trail_id`;
 a root session summon omits provenance until the session recorder publishes its current trail id.
 The UX is the shared `spell::ask` spell (`bros/bro/spells/ask.md`, inherited by every bro);
-underneath it are two client surfaces over the same request:
+underneath it are two client surfaces over the same request, each split into the summon that opens a quest and the verbs over the quest that exists:
 
-- `summon <target> <prompt>`, for Bash-capable sessions
-  — blocking by default (request id + started trail id on stderr, answer on stdout, non-zero exit with the reason on failure),
+- `summon <target> <prompt>` and `quest <verb> <quest-id>`, for Bash-capable sessions.
+  `summon` is blocking by default (quest id + started trail id on stderr, answer on stdout, non-zero exit with the reason on failure);
   `--start` / `--join` / `--boxed` / `--unboxed` select placement.
   The forwarded fields are `--timeout <s>` / `--into <ref>` / `--hold <level>` / `--grant <name>` / `--revoke <name>` / `--share <ref>` / `--talk <right>` / `--harness <name>` plus the LLM flags;
   an omitted hold leaves the child's unattended default.
@@ -824,42 +824,42 @@ underneath it are two client surfaces over the same request:
   Grant/revoke and the LLM flags shape the child exactly as they shape a managed run — see the shared launch flags above — except that a summon may only widen the child's credential scope with what the summoning session itself holds,
   whether it names the credential outright or reaches it through `--harness`/the LLM flags.
   A blocking wait rides through child says.
-  When `worker.question` is granted, a child's question instead prints on stdout and exits 4 so the summoner gets a turn;
-  stderr names the question and the exact `summon say <quest> '<answer>' --reply-to <question>` command that answers it.
-  `summon say [<quest>] '<text>' [--reply-to <question>] [--question | --wait [<seconds>]]` sends a say, reply, or question:
-  with a quest it addresses that child, and without one it addresses this session's summoner.
-  `--question` prints the question id and returns without waiting;
-  `--wait` asks the same question but waits for its reply, printing the id when its optional bound expires.
-  Either pending question exits 4, and its reply remains recoverable from the journal.
+  When `summoned.question` is granted, a child's question instead prints on stdout and exits 4 so the summoner gets a turn;
+  stderr names the question and the exact `quest say <quest> '<answer>' --reply-to <question>` command that answers it.
   `--detach` waits for the first correlated message:
   host `accepted` prints the quest id, while a denial or pre-acceptance launch failure exits with its reason and prints no id.
-  Any summon is reclaimable by that quest id, detached or interrupted.
-  `summon check [<id>]` reads the child quest, or the session's own quest when the id is omitted, through a non-destructive journal query.
-  Its JSON view carries talk, pending questions, and the retained chat tail;
-  it exits 4 when a question awaits the caller, 3 while merely pending, and 0 with the terminal answer.
-  `summon check --wait [<id>]` loops bounded `query {id, wait, since}` reads until terminal, the next message, or its optional timeout;
-  concurrent waiters and later reads see the same state.
-  `summon list` walks the caller-scoped paginated `query {}` listing and prints retained summon records live-first, including their talk and pending questions.
-  `summon watch` first takes the current `events {}` head, then replays retained own-quest messages and pending questions whose journal sequence is no newer than that head, marked `before the watch`.
+  Any summon is reclaimable by that quest id, detached or interrupted, and `self` names the session's own quest on every verb that reads a conversation or talks.
+  `quest check <id> [--wait] [--timeout <s>]` reads the outcome alone through a non-destructive journal query:
+  it prints the answer and exits 0 once the quest ended well, exits 3 while it runs, exits 4 with the open questions a direct child is stalled on, and exits 1 with the reason when it failed or was denied;
+  `--wait` loops bounded `query {id, wait, since}` reads until the end or such a question, and `check self` is refused.
+  `quest history <id> [--wait] [--timeout <s>]` reads the conversation:
+  the talk rights and the retained tail with every open question marked `pending` in place and `truncated` when older entries were dropped;
+  it exits 4 when a question awaits the caller, and `--wait` returns on the next message or the end.
+  `quest say <id> '<text>' [--reply-to <question>]` sends a message that expects no reply, or a reply;
+  `quest ask <id> '<text>' [--reply-to <question>] [--wait [<seconds>]]` asks a question and prints its id, a counter-question with `--reply-to`;
+  `--wait` blocks for the reply and prints it, exiting 4 with the id when its optional bound passes first, the reply still recoverable from the journal.
+  Concurrent waiters and later reads see the same state.
+  `quest list` walks the caller-scoped paginated `query {}` listing and prints retained summon records live-first, including their talk and pending questions.
+  `quest watch` first takes the current `events {}` head, then replays retained own-quest messages and open questions whose journal sequence is no newer than that head, marked `before the watch`.
   It then long-polls ordered events after the head, so chat committed between the head and replay queries arrives once through the stream.
-  On a child quest it names the target and request;
+  On a child quest it names the target and quest;
   on the session's own quest it renders the other end as `summoner` and never echoes the session's own says.
   An event-retention gap prints a notice, re-arms from the current head, and repeats the retained replay.
-  `summon cancel <id> [--timeout <seconds>]` ends a child quest this session summoned and waits for the quest to end;
+  `quest cancel <id> [--timeout <seconds>]` ends a child quest this session summoned and waits for the quest to end;
   it exits 0 once the quest has ended and 3 when the bound passes first, the end still on its way.
   In a claude session, long summons run via the harness's background Bash;
   `rewind show <trail-id>` peeks mid-run.
-  Contract details in `bro/summon.py`.
-- the bro service tools (`bro::summon` / `bro::summon_say` / `bro::summon_check` / `bro::summon_list`), for bro LLM processes and `--raw` sessions.
+  Contract details in `bro/summon.py` and `bro/quest.py`.
+- the bro service tools (`bro::summon`, then `bro::quest_check` / `quest_history` / `quest_say` / `quest_ask` / `quest_list` / `quest_cancel` on the `quest_id` it returns), for bro LLM processes and `--raw` sessions.
   On the bare wire, `summon` returns the accepted state after host acceptance and has no `detach` parameter;
-  answers, questions, replies, refusals, and terminal states arrive through `summon watch`.
-  `summon_say` sends and returns, with `question: true` minting a question id whose reply arrives through the watch;
-  `summon_check` is one non-blocking child or own-quest journal read;
-  and `summon_cancel` returns once the host accepts the cancellation, with the terminal following on the watch.
-  `summon_list` is the same paginated journal listing on both wires.
+  answers, questions, replies, refusals, and terminal states arrive through `quest watch`.
+  `quest_say` sends and returns, `quest_ask` mints a question id whose reply arrives through the watch;
+  `quest_check` and `quest_history` are one non-blocking journal read each;
+  and `quest_cancel` returns once the host accepts the cancellation, with the terminal following on the watch.
+  `quest_list` is the same paginated journal listing on both wires.
   On the MCP wire, the blocking service tools retain their polling controls:
-  `summon` blocks unless `detach: true`, `summon_say` may wait for a question's reply, `summon_check(wait=true)` long-polls until terminal or chat changes, and `summon_cancel` may wait for the terminal.
-  Each MCP blocking call owns its channel client so cancellation aborts the current short wait, while the host journal retains the result and chat;
+  `summon` blocks unless `detach: true`, `quest_ask` may wait for the reply, `quest_check(wait=true)` long-polls to the end or a child question, `quest_history(wait=true)` to the next message, and `quest_cancel` may wait for the terminal.
+  Each MCP blocking call owns its channel client so cancellation aborts the current short wait, while the host journal retains the outcome and chat;
   its transport cautions keep waits under the harness cap and recover by id instead of sending twice.
 
 A claude-harness child is scoped through the claude-full recipe
@@ -874,10 +874,10 @@ The recorder stamps the child trail's `summoned_by` from the summoner attributio
 
 A `manual: true` summon (`summon --manual`, or the `summon` tool's `manual` parameter, which never blocks for the answer) inverts the launch.
 It takes the same `talk` / `--talk` widening as a spawned child, so the interactive session can exchange only the roles fixed at registration.
-The requester needs either party-start permit, but the request refuses `party` and `isolation` because the user's launch owns the actual placement.
+The summoner needs either party-start permit, but the request refuses `party` and `isolation` because the user's launch owns the actual placement.
 The host spawns nothing and instead registers an *expected external peer*
 — a provisioned broker channel awaiting a child someone else starts
-— and the request id doubles as the launch token.
+— and the quest id doubles as the launch token.
 The registration is acknowledged with an `accepted` mark once the token is claimable, and the manual client waits for it, so a denial fails at the summon itself
 — a token is only ever handed out for a summon the launcher is expecting.
 The summoner relays `<runtime>/venv/bin/ride along --summoned <token> <target>` as the default launch command for an interactive session, using the ride's own host runtime.
@@ -919,13 +919,13 @@ there is no process for the host to reap, and the session's broxy holds one upst
 Root exit *detaches* an in-flight manual child rather than killing it
 — the user's session lives on, un-summoned, its channel gone.
 The summoner's side is the ordinary detach flow:
-the token works with `summon check` / `summon list` / `summon watch`, showing `pending` until the user launches.
+the token works with `quest check` / `quest list` / `quest watch`, reading as running until the user launches.
 
 Host side, `PeerFacts` (`ride/ride/peer_facts.py`) holds one row keyed by the quest a peer answers:
 workspace, optional joined-member name, bro, effective allow-list and permits, credential-scope inputs (`grant`, `revoke`, `llm`, `harness`), and whether the child is manual.
 The journal's host-anchored quest seeds the root row;
 an authorized summon adds its child row before spawning, with a started child’s channel-named workspace, a joined child’s inherited workspace plus channel-named member, or the claimed workspace for a manual child filled at spawn.
-Every requester resolves through one join
+Every summoner resolves through one join
 — peer to answered quest through the dispatcher's worker binding, then quest to facts row
 — and depth is the journal ancestry length.
 `SummonControl` (`ride/ride/summon_control.py`) validates and authorizes each request against that row's allow-list.
@@ -948,8 +948,8 @@ one the named harness cannot run is denied at the request rather than failing th
 A peer the control cannot attribute a bro to is denied, and the launch-resolved depth cap guards against seed cycles recursing through real containers.
 The root sits at depth 0, and a request that would create a child past the configured `summon-depth` is denied.
 Denials reply immediately and land in the journal and audit as `denied` transitions (reason, quest id, summoner, and bounded request args).
-Each spawned child records `summoned_by` provenance from the requester's current trail plus the summoning bro's own `tool_call` step id when the request carries one.
-Requester attribution has one shape in the audit: `{workspace, member?, bro, trail_id?}`.
+Each spawned child records `summoned_by` provenance from the summoner's current trail plus the summoning bro's own `tool_call` step id when the request carries one.
+Summoner attribution has one shape in the audit: `{workspace, member?, bro, trail_id?}`.
 The trail is read from that session’s pointer for every request because Claude segments move it
 — the workspace’s `session/` for its first member, or `party/<member>/session/` for a joined one
 — with the answered quest’s journal `trail` mark as fallback.
@@ -962,7 +962,7 @@ Each entry names its actual `summoner` as `{workspace, member?, bro, trail_id?}`
 The placement records the effective isolation inherited by a join, while a manual summon's isolation stays null because the user's launch settles it.
 Live readers never read that audit back:
 check, list, watch, and the session-local statusLine projector query the caller-scoped in-memory journal over their own broker channel, so the same surfaces work at any summon depth.
-The statusLine places a child's pending question beside its live summon until the requester replies.
+The statusLine places a child's pending question beside its live summon until the summoner replies.
 The scope begins with quests the caller requested and includes their descendants;
 it excludes the parent-owned quest that the caller's own worker answers.
 Each authorized launch also carries the allow-list and permits it will be judged against into the run itself (`RIDE_MAY_SUMMON` and `RIDE_PERMITS`:
@@ -1232,7 +1232,7 @@ Wrappers and session daemons rely on a small set of env vars:
 - `RIDE_MAY_SUMMON` — the run's own effective summon allow-list, comma-separated and empty when it may summon nothing.
   The env name and its encoding are owned by `bro.summon`;
   set by the launch surfaces for a session root and by the summon lowering (or, for a manual child, the `--summoned` launch from the pending record) for a summoned child (its own resolved list, never its summoner's),
-  read by `ride banner` to render the fact, and by `bro.prompts.session_fragment` to tell the surface how to arm or poll the summon watch;
+  read by `ride banner` to render the fact, and by `bro.prompts.session_fragment` to tell the surface how to arm or poll the quest watch;
   the tool fold admits that command through Claude's `Monitor` or bro-native's roster-gated `job` for such a run.
   Read-only in the session:
   the launcher authorizes against its own copy, so only a relaunch (or the summon that spawns a child) changes what it may summon.

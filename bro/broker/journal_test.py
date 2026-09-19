@@ -171,6 +171,17 @@ def test_trail_and_reason_text_are_bounded_in_records_and_events(monkeypatch):
   assert events[-1]['reason_truncated'] is True
 
 
+def test_journal_text_is_bounded_by_its_encoded_cost(monkeypatch):
+  monkeypatch.setattr(journal_module, 'MAX_JOURNAL_TEXT_BYTES', 12)
+  journal = Journal()
+  record = journal.open('child', 'summon', None, None, {})
+  journal.end(record, {'outcome': 'failed', 'detail': {'reason': '\x00' * 20}})
+
+  view = record.view()
+  assert view['reason'] == '\x00' * 2
+  assert view['reason_truncated'] is True
+
+
 def test_event_gap_is_denied_but_zero_accepts_retained_history(monkeypatch):
   monkeypatch.setattr(journal_module, 'MAX_EVENTS', 2)
   journal = Journal()
@@ -199,19 +210,19 @@ def test_chat_folds_bounded_tail_pending_questions_and_chat_sequence(monkeypatch
     'root',
     'requester',
     {},
-    talk=frozenset({'requester.question', 'worker.say', 'worker.question'}),
+    talk=frozenset({'summoner.question', 'summoned.say', 'summoned.question'}),
   )
-  journal.message(record, 'requester', brotocol.message('child', {'text': 'first'}, id='Q1'))
+  journal.message(record, 'summoner', brotocol.message('child', {'text': 'first'}, id='Q1'))
   first_chat_seq = record.chat_seq
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'answer'}, reply_to='Q1'))
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'second'}, id='Q2'))
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'third'}, id='Q3'))
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'fourth'}, id='Q4'))
+  journal.message(record, 'summoned', brotocol.message('child', {'text': 'answer'}, reply_to='Q1'))
+  journal.message(record, 'summoned', brotocol.message('child', {'text': 'second'}, id='Q2'))
+  journal.message(record, 'summoned', brotocol.message('child', {'text': 'third'}, id='Q3'))
+  journal.message(record, 'summoned', brotocol.message('child', {'text': 'fourth'}, id='Q4'))
 
   assert record.chat_seq > first_chat_seq
   assert [entry['id'] for entry in record.pending] == ['Q3', 'Q4']
   assert [entry['id'] for entry in record.messages] == ['Q3', 'Q4']
-  assert record.messages[-1]['from'] == 'worker'
+  assert record.messages[-1]['from'] == 'summoned'
   assert record.messages[-1]['head'] == {'text': 'fourth'}
 
   journal.end(record, {'outcome': 'ok'})
@@ -220,7 +231,7 @@ def test_chat_folds_bounded_tail_pending_questions_and_chat_sequence(monkeypatch
 
 def test_chat_state_is_folded_before_subscribers_observe_the_event():
   journal = Journal()
-  record = journal.open('child', 'summon', None, None, {}, talk=frozenset({'worker.question'}))
+  record = journal.open('child', 'summon', None, None, {}, talk=frozenset({'summoned.question'}))
   observed = []
   journal.subscribe(
     lambda event, current: observed.append(
@@ -228,7 +239,7 @@ def test_chat_state_is_folded_before_subscribers_observe_the_event():
     )
   )
 
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'ask'}, id='Q1'))
+  journal.message(record, 'summoned', brotocol.message('child', {'text': 'ask'}, id='Q1'))
 
   [(event_sequence, chat_sequence, messages, pending)] = observed
   assert event_sequence == chat_sequence
@@ -241,14 +252,14 @@ def test_refusal_joins_the_tail_without_turning_a_question_pending():
   record = journal.open('child', 'summon', 'root', 'requester', {}, talk=frozenset())
   candidate = brotocol.message('child', {'text': 'blocked'}, id='Q1', reply_to='Q0')
 
-  journal.refused(record, 'worker', candidate, 'worker lacks the talk right')
+  journal.refused(record, 'summoned', candidate, 'summoned lacks the talk right')
 
   assert record.pending == []
   assert record.chat_seq == record.messages[-1]['seq']
   assert record.messages[-1]['transition'] == 'refused'
   assert record.messages[-1]['id'] == 'Q1'
   assert record.messages[-1]['reply_to'] == 'Q0'
-  assert record.messages[-1]['reason'] == 'worker lacks the talk right'
+  assert record.messages[-1]['reason'] == 'summoned lacks the talk right'
   _, events = journal.events_after(0, 'requester', {'requester': 'root'})
   assert events[-1]['transition'] == 'refused'
   assert events[-1]['id'] == 'Q1'
@@ -257,21 +268,21 @@ def test_refusal_joins_the_tail_without_turning_a_question_pending():
 
 def test_a_message_at_the_bound_is_journaled_whole():
   journal = Journal()
-  record = journal.open('child', 'summon', None, None, {}, talk=frozenset({'worker.say'}))
+  record = journal.open('child', 'summon', None, None, {}, talk=frozenset({'summoned.say'}))
   payload = {'text': text_at_the_message_bound()}
 
-  journal.message(record, 'worker', brotocol.message('child', payload))
+  journal.message(record, 'summoned', brotocol.message('child', payload))
 
   assert record.messages[-1]['head'] == payload
 
 
 def test_a_message_over_the_bound_is_a_journal_error():
   journal = Journal()
-  record = journal.open('child', 'summon', None, None, {}, talk=frozenset({'worker.say'}))
+  record = journal.open('child', 'summon', None, None, {}, talk=frozenset({'summoned.say'}))
   payload = {'text': text_at_the_message_bound() + 'x'}
 
   with pytest.raises(ValueError, match='exceeds'):
-    journal.message(record, 'worker', brotocol.message('child', payload))
+    journal.message(record, 'summoned', brotocol.message('child', payload))
   assert record.messages == []
 
 
@@ -280,7 +291,7 @@ def test_a_refused_message_over_the_bound_keeps_a_marked_head():
   record = journal.open('child', 'summon', None, None, {}, talk=frozenset())
   candidate = brotocol.message('child', {'text': text_at_the_message_bound() + 'x'})
 
-  journal.refused(record, 'worker', candidate, 'over the bound')
+  journal.refused(record, 'summoned', candidate, 'over the bound')
 
   head = record.messages[-1]['head']
   assert head['truncated'] is True
@@ -288,34 +299,80 @@ def test_a_refused_message_over_the_bound_keeps_a_marked_head():
   assert len(encoded) <= journal_module.MAX_MESSAGE_BYTES
 
 
-def test_every_retained_view_has_chat_state_but_only_the_by_id_view_has_the_tail():
+def test_the_listing_view_keeps_pending_while_the_by_id_view_marks_the_conversation():
   journal = Journal()
-  record = journal.open('child', 'summon', None, None, {}, talk=frozenset({'worker.say'}))
+  record = journal.open(
+    'child', 'summon', None, None, {}, talk=frozenset({'summoned.say', 'summoned.question'})
+  )
   journal.listening(record)
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'ready'}))
+  journal.message(record, 'summoned', brotocol.message('child', {'text': 'ready'}))
+  journal.message(record, 'summoned', brotocol.message('child', {'text': 'go on?'}, id='Q1'))
 
   listing = record.view()
   by_id = record.view(include_messages=True)
-  assert listing['talk'] == ['worker.say']
+  assert listing['talk'] == ['summoned.question', 'summoned.say']
   assert listing['listening'] is True
-  assert listing['pending'] == []
+  assert [entry['id'] for entry in listing['pending']] == ['Q1']
   assert listing['chat_seq'] == record.chat_seq
   assert 'messages' not in listing
-  assert by_id['messages'] == record.messages
+  assert 'pending' not in by_id
+  assert [entry.get('id') for entry in by_id['messages']] == [None, 'Q1']
+  assert 'pending' not in by_id['messages'][0]
+  assert by_id['messages'][1]['pending'] is True
+
+
+def test_the_tail_marks_entries_its_retention_dropped(monkeypatch):
+  monkeypatch.setattr(journal_module, 'MAX_RECORD_MESSAGES', 2)
+  journal = Journal()
+  record = journal.open('child', 'summon', None, None, {}, talk=frozenset({'summoned.say'}))
+  journal.message(record, 'summoned', brotocol.message('child', {'text': 'first'}))
+  journal.message(record, 'summoned', brotocol.message('child', {'text': 'second'}))
+  assert 'messages_truncated' not in record.view(include_messages=True)
+
+  journal.message(record, 'summoned', brotocol.message('child', {'text': 'third'}))
+
+  view = record.view(include_messages=True)
+  assert [entry['head']['text'] for entry in view['messages']] == ['second', 'third']
+  assert view['messages_truncated'] is True
+  assert 'messages_truncated' not in record.view()
+
+
+def test_the_conversation_folds_an_open_question_older_than_the_tail_in_by_sequence(monkeypatch):
+  monkeypatch.setattr(journal_module, 'MAX_RECORD_MESSAGES', 2)
+  journal = Journal()
+  record = journal.open(
+    'child', 'summon', None, None, {}, talk=frozenset({'summoned.say', 'summoned.question'})
+  )
+  journal.message(record, 'summoned', brotocol.message('child', {'text': 'ship?'}, id='Q1'))
+  journal.message(record, 'summoned', brotocol.message('child', {'text': 'first'}))
+  journal.message(record, 'summoned', brotocol.message('child', {'text': 'second'}))
+
+  conversation = record.conversation()
+  assert [entry['seq'] for entry in record.messages] == [3, 4]
+  assert [(entry['seq'], entry.get('pending')) for entry in conversation] == [
+    (2, True),
+    (3, None),
+    (4, None),
+  ]
+  assert conversation[0]['head'] == {'text': 'ship?'}
+
+  journal.message(record, 'summoner', brotocol.message('child', {'text': 'yes'}, reply_to='Q1'))
+  assert [entry['seq'] for entry in record.conversation()] == [4, 5]
+  assert not any('pending' in entry for entry in record.conversation())
 
 
 def test_own_quest_event_visibility_is_limited_to_chat_transitions():
   journal = Journal()
   root = journal.open('root', 'root', None, None, {})
   journal.bind(root, 'root-peer')
-  child = journal.open('child', 'summon', 'root', 'root-peer', {}, talk=frozenset({'worker.say'}))
+  child = journal.open('child', 'summon', 'root', 'root-peer', {}, talk=frozenset({'summoned.say'}))
   journal.bind(child, 'child-peer')
   journal.started(child)
   journal.listening(child)
-  journal.message(child, 'worker', brotocol.message('child', {'text': 'ready'}))
+  journal.message(child, 'summoned', brotocol.message('child', {'text': 'ready'}))
   journal.refused(
     child,
-    'worker',
+    'summoned',
     brotocol.message('child', {'text': 'question'}, id='Q1'),
     'not allowed',
   )

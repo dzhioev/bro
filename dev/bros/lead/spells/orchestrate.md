@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.7.0
+version: 2.8.1
 ---
 
 # orchestrate
@@ -43,7 +43,7 @@ and ends.
   Everything durable must land on the page;
   a phase's answer carries only what you have to act on.
 - **You are the human's interface.** A summoned bro runs isolated with no human channel,
-  but each phase is granted `worker.question` so it can consult this coordinator before giving up its live state.
+  but each phase is granted `summoned.question` so it can consult this coordinator before giving up its live state.
   Questions,
   corrections,
   and go/no-go between phases are yours to handle;
@@ -124,12 +124,12 @@ and every failure mode
 this spell only says how a phase differs from a one-shot ask.
 
 - **Never wait inline.** No phase is short enough for a blocking wait:
-  send every one detached with `worker.question` in its talk and collect its result through the surface's watch or polling flow.
-  {{iff #harness = claude}}Keep `summon watch` armed.
-  When it reports a child's question, answer that quest with `summon say --reply-to`.
-  Then resume the same `summon check --wait` loop.{{eliff #wire = bare}}Keep the `summon watch` job armed and call `bro::chill` whenever nothing else remains.
-  When it reports a child's question, answer that quest with `bro::summon_say(reply_to=…)`, then chill again.
-  Read the retained answer with `bro::summon_check` after the terminal line.{{else}}On the raw MCP surface, when `summon_check(wait=true)` returns a question, answer that quest with `summon_say(reply_to=…)`.
+  send every one detached with `summoned.question` in its talk and collect its result through the surface's watch or polling flow.
+  {{iff #harness = claude}}Keep `quest watch` armed.
+  When it reports a child's question, answer that quest with `quest say --reply-to`.
+  Then resume the same `quest check --wait` loop.{{eliff #wire = bare}}Keep the `quest watch` job armed and call `bro::chill` whenever nothing else remains.
+  When it reports a child's question, answer that quest with `bro::quest_say(reply_to=…)`, then chill again.
+  Read the retained answer with `bro::quest_check` after the terminal line.{{else}}On the raw MCP surface, when `quest_check(wait=true)` returns a question, answer that quest with `quest_say(reply_to=…)`.
   Then resume the same check loop.{{end}}
   Never launch a replacement phase to answer it.
 - **Hold and effort.** Leave both at the summon defaults.
@@ -178,7 +178,7 @@ ride along --summoned <token> <bro> <launch line> --harness <claude|bro>
   the user is in the session, so its questions go to them rather than to you.
 - **The answer reaches you.** A manual child delivers through `answer` like any summoned one, so the prompt closes by answering with what you have to act on.
 - Then wait as for any detached summon:
-  the token reads `pending` until the user launches, and a manual summon carries no timer, so pace the wait to human time.
+  the token reads as running until the user launches, and a manual summon carries no timer, so pace the wait to human time.
   Pick up from the answer and the page.
 
 ## Phases
@@ -272,7 +272,7 @@ Take material objections and open questions to the user before starting stage 1.
 
 ### 3 — stages
 
-**Summon:** `into` the integration branch · `timeout` 28800 · `talk` `worker.question`{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}}
+**Summon:** `into` the integration branch · `timeout` 28800 · `talk` `summoned.question`{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}}
 
 The long timeout covers the PR review a phase ends on:
 it idles on human latency, and the summon default kills it mid-watch.
@@ -299,7 +299,7 @@ the retry is a fresh summon on the same stage task.
 
 ### 4 — integrate
 
-**Summon:** `into` the integration branch · `timeout` 28800 · `talk` `worker.question`{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}} · `grant` `@<the bro that does rollouts>` when the work needs one to go live
+**Summon:** `into` the integration branch · `timeout` 28800 · `talk` `summoned.question`{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}} · `grant` `@<the bro that does rollouts>` when the work needs one to go live
 
 Once every stage task is done, tell the user what the last step needs from them:
 where master is a protected base, the approving review that lands the integration PR is theirs to give, and nobody in the run can supply it.
@@ -341,7 +341,7 @@ When the phase reports a rollout it could not hand off
 
 ### 5 — verify
 
-**Summon:** `into` `master`, which the work is on by then · `talk` `worker.question` · `grant` the credentials its live surface needs
+**Summon:** `into` `master`, which the work is on by then · `talk` `summoned.question` · `grant` the credentials its live surface needs
 
 Once the work is live
 — merged, and rolled out if it needed a rollout:

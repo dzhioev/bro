@@ -5,7 +5,7 @@ import pytest
 
 import ride.claude.watch_guard as watch_guard
 
-_ARGV = ['watch_guard', 'Monitor', 'summon watch', 'tail the log']
+_ARGV = ['watch_guard', 'Monitor', 'quest watch', 'tail the log']
 
 
 def _gate(monkeypatch, capsys, tool_input) -> str:
@@ -19,24 +19,24 @@ def _denial(monkeypatch, capsys, tool_input) -> dict:
 
 
 class TestGate:
-  @pytest.mark.parametrize('command', ['summon watch', 'tail the log', '  summon watch\n'])
+  @pytest.mark.parametrize('command', ['quest watch', 'tail the log', '  quest watch\n'])
   def test_a_declared_command_passes_silently(self, monkeypatch, capsys, command):
     assert _gate(monkeypatch, capsys, {'command': command}) == ''
 
   @pytest.mark.parametrize(
     'command',
     [
-      'summon watch; rm -rf /',
-      'summon watch | tee /tmp/out',
-      'summon watch --verbose',
-      'echo summon watch',
+      'quest watch; rm -rf /',
+      'quest watch | tee /tmp/out',
+      'quest watch --verbose',
+      'echo quest watch',
       '',
     ],
   )
   def test_anything_else_is_denied(self, monkeypatch, capsys, command):
     decision = _denial(monkeypatch, capsys, {'command': command})
     assert decision['permissionDecision'] == 'deny'
-    assert 'summon watch' in decision['permissionDecisionReason']
+    assert 'quest watch' in decision['permissionDecisionReason']
 
   def test_a_call_carrying_no_command_is_denied(self, monkeypatch, capsys):
     # Monitor takes a websocket in place of a command; nothing declares one

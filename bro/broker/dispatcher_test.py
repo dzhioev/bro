@@ -22,7 +22,13 @@ from bro.broker.dispatcher import (
   query_handler,
 )
 from bro.broker.job import CommandJob
-from bro.broker.journal import MAX_MESSAGE_BYTES, MAX_PENDING_QUESTIONS, MAX_RECORD_MESSAGES
+from bro.broker.journal import (
+  ARGS_HEAD_BYTES,
+  ARGS_STRING_HEAD,
+  MAX_MESSAGE_BYTES,
+  MAX_PENDING_QUESTIONS,
+  MAX_RECORD_MESSAGES,
+)
 from bro.broker.journal_test_helper import text_at_the_message_bound
 from bro.broker.runtime import Runtime
 from bro.broker.spawn import LaunchSpec
@@ -376,7 +382,7 @@ def _live_chat(dispatcher, *, talk):
 
 def test_message_routes_by_its_named_quest_in_both_directions():
   dispatcher, runtime = _dispatcher()
-  record = _live_chat(dispatcher, talk={'requester.say', 'worker.say'})
+  record = _live_chat(dispatcher, talk={'summoner.say', 'summoned.say'})
 
   requester_message = brotocol.message(record.quest_id, {'text': 'start'})
   worker_message = brotocol.message(record.quest_id, {'text': 'working'})
@@ -387,12 +393,12 @@ def test_message_routes_by_its_named_quest_in_both_directions():
     ('child-worker', requester_message),
     ('requester', worker_message),
   ]
-  assert [entry['from'] for entry in record.messages] == ['requester', 'worker']
+  assert [entry['from'] for entry in record.messages] == ['summoner', 'summoned']
 
 
 def test_message_from_a_stranger_is_dropped_without_journaling(caplog):
   dispatcher, runtime = _dispatcher()
-  record = _live_chat(dispatcher, talk={'worker.say'})
+  record = _live_chat(dispatcher, talk={'summoned.say'})
   before = dispatcher.journal.head
 
   dispatcher.on_message('stranger', brotocol.message(record.quest_id, {'text': 'forged'}))
@@ -404,7 +410,7 @@ def test_message_from_a_stranger_is_dropped_without_journaling(caplog):
 
 def test_disallowed_message_is_journaled_as_a_correlated_refusal(caplog):
   dispatcher, runtime = _dispatcher()
-  record = _live_chat(dispatcher, talk={'worker.say'})
+  record = _live_chat(dispatcher, talk={'summoned.say'})
   candidate = brotocol.message(
     record.quest_id,
     {'text': 'may I?'},
@@ -415,7 +421,7 @@ def test_disallowed_message_is_journaled_as_a_correlated_refusal(caplog):
   dispatcher.on_message('child-worker', candidate)
 
   assert runtime.sent == []
-  assert record.messages[-1]['reason'] == 'worker lacks the talk right for this message'
+  assert record.messages[-1]['reason'] == 'summoned lacks the talk right for this message'
   assert record.messages[-1]['id'] == 'Q1'
   assert record.messages[-1]['reply_to'] == 'Q0'
   assert 'lacks the talk right' in caplog.text
@@ -423,7 +429,7 @@ def test_disallowed_message_is_journaled_as_a_correlated_refusal(caplog):
 
 def test_a_message_at_the_bound_is_routed_whole():
   dispatcher, runtime = _dispatcher()
-  record = _live_chat(dispatcher, talk={'worker.say'})
+  record = _live_chat(dispatcher, talk={'summoned.say'})
   message = brotocol.message(record.quest_id, {'text': text_at_the_message_bound()})
 
   dispatcher.on_message('child-worker', message)
@@ -434,7 +440,7 @@ def test_a_message_at_the_bound_is_routed_whole():
 
 def test_oversized_message_is_journaled_as_a_correlated_refusal(caplog):
   dispatcher, runtime = _dispatcher()
-  record = _live_chat(dispatcher, talk={'worker.say', 'worker.question'})
+  record = _live_chat(dispatcher, talk={'summoned.say', 'summoned.question'})
   candidate = brotocol.message(
     record.quest_id, {'text': text_at_the_message_bound() + 'x'}, id='Q1'
   )
@@ -452,7 +458,7 @@ def test_oversized_message_is_journaled_as_a_correlated_refusal(caplog):
 
 def test_listening_is_worker_born_set_once_and_repeats_are_silent():
   dispatcher, runtime = _dispatcher()
-  record = _live_chat(dispatcher, talk={'worker.say'})
+  record = _live_chat(dispatcher, talk={'summoned.say'})
   listening = brotocol.mark(record.quest_id, 'listening')
 
   dispatcher.on_message('requester', listening)
@@ -540,20 +546,26 @@ def test_query_reports_a_retained_result_as_evicted_when_its_response_would_exce
 def test_query_trims_the_oldest_chat_tail_entries_but_keeps_every_pending_question():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(QUERY, query_handler)
-  child = _live_chat(dispatcher, talk={'worker.question'})
-  identifier = 'i' * brotocol.MAX_IDENTIFIER_BYTES
-  reply_to = 'r' * brotocol.MAX_IDENTIFIER_BYTES
-  for index in range(MAX_RECORD_MESSAGES):
+  child = _live_chat(dispatcher, talk={'summoned.say', 'summoned.question'})
+  padding = 'x' * (brotocol.MAX_IDENTIFIER_BYTES - 3)
+  for index in range(MAX_PENDING_QUESTIONS):
     dispatcher.journal.message(
       child,
-      'worker',
+      'summoned',
       brotocol.message(
-        child.quest_id,
-        {'text': str(index) + 'x' * brotocol.MAX_IDENTIFIER_BYTES},
-        id=identifier,
-        reply_to=reply_to,
+        child.quest_id, {'text': text_at_the_message_bound()}, id=f'Q{index:02d}' + padding
       ),
     )
+  for _ in range(MAX_RECORD_MESSAGES - MAX_PENDING_QUESTIONS):
+    dispatcher.journal.message(
+      child,
+      'summoned',
+      brotocol.message(
+        child.quest_id, {'text': text_at_the_message_bound()}, reply_to='R' + padding
+      ),
+    )
+  assert len(child.pending) == MAX_PENDING_QUESTIONS
+  assert len(child.messages) == MAX_RECORD_MESSAGES
 
   dispatcher.on_message('requester', _request(QUERY, {'id': child.quest_id}, 'query-chat'))
 
@@ -561,20 +573,72 @@ def test_query_trims_the_oldest_chat_tail_entries_but_keeps_every_pending_questi
   view = response.payload['value']['quest']
   assert len(response.to_bytes()) <= brotocol.MAX_FRAME_BYTES
   assert view['messages_truncated'] is True
-  assert len(view['messages']) < MAX_RECORD_MESSAGES
-  assert view['messages'] == child.messages[-len(view['messages']) :]
-  assert view['pending'] == child.pending
-  assert len(view['pending']) == MAX_PENDING_QUESTIONS
+  assert 'pending' not in view
+  marked = [entry for entry in view['messages'] if entry.get('pending') is True]
+  unmarked = [entry for entry in view['messages'] if entry.get('pending') is not True]
+  assert [entry['id'] for entry in marked] == [entry['id'] for entry in child.pending]
+  assert 0 < len(unmarked) < MAX_RECORD_MESSAGES - MAX_PENDING_QUESTIONS
+  # the oldest says went first; the ones kept are the newest suffix of the says
+  says = [entry for entry in child.messages if entry.get('id') is None]
+  assert unmarked == says[-len(unmarked) :]
+
+
+def test_the_largest_pending_set_fits_both_query_projections():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on(QUERY, query_handler)
+  # a legal identifier whose JSON encoding is as large as the bound allows
+  expanding = '\x00' * (brotocol.MAX_IDENTIFIER_BYTES // 6)
+  child = dispatcher.journal.open(
+    expanding,
+    'summon',
+    'root-quest',
+    'requester',
+    {f'field-{index}': 'x' * ARGS_STRING_HEAD for index in range(ARGS_HEAD_BYTES)},
+    talk=frozenset({'summoner.question', 'summoned.say', 'summoned.question'}),
+  )
+  dispatcher.journal.bind(child, 'child-worker')
+  dispatcher.live[child.quest_id] = child
+  dispatcher.workers['child-worker'] = child.quest_id
+  dispatcher.journal.trail(child, expanding)
+  for index in range(MAX_PENDING_QUESTIONS):
+    dispatcher.journal.message(
+      child,
+      'summoned',
+      brotocol.message(
+        child.quest_id,
+        {'text': text_at_the_message_bound()},
+        id=f'{index:04d}' + '\x00' * ((brotocol.MAX_IDENTIFIER_BYTES - 4) // 6),
+        reply_to=expanding,
+      ),
+    )
+  for _ in range(MAX_RECORD_MESSAGES - MAX_PENDING_QUESTIONS):
+    dispatcher.journal.message(
+      child, 'summoned', brotocol.message(child.quest_id, {'text': text_at_the_message_bound()})
+    )
+  assert len(child.pending) == MAX_PENDING_QUESTIONS
+  request = '\x01' * (brotocol.MAX_IDENTIFIER_BYTES // 6)
+
+  dispatcher.on_message('requester', _request(QUERY, {'id': child.quest_id}, request))
+  by_id = runtime.sent[-1][1]
+  dispatcher.on_message('requester', _request(QUERY, {}, request))
+  listing = runtime.sent[-1][1]
+
+  assert len(by_id.to_bytes()) <= brotocol.MAX_FRAME_BYTES
+  marked = [entry for entry in by_id.payload['value']['quest']['messages'] if entry.get('pending')]
+  assert [entry['id'] for entry in marked] == [entry['id'] for entry in child.pending]
+  assert len(listing.to_bytes()) <= brotocol.MAX_FRAME_BYTES
+  [record] = listing.payload['value']['quests']
+  assert record['pending'] == child.pending
 
 
 def test_query_trims_chat_before_evicting_a_retained_result():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(QUERY, query_handler)
-  child = _live_chat(dispatcher, talk={'worker.say'})
+  child = _live_chat(dispatcher, talk={'summoned.say'})
   for _ in range(MAX_RECORD_MESSAGES):
     dispatcher.journal.message(
       child,
-      'worker',
+      'summoned',
       brotocol.message(child.quest_id, {'text': text_at_the_message_bound()}),
     )
   dispatcher.journal.end(
@@ -644,7 +708,7 @@ async def test_query_wait_answers_the_terminal_state():
 async def test_query_since_returns_when_the_quests_chat_sequence_advances():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(QUERY, query_handler)
-  child = _live_chat(dispatcher, talk={'worker.say'})
+  child = _live_chat(dispatcher, talk={'summoned.say'})
   dispatcher.on_message(
     'requester',
     _request(QUERY, {'id': child.quest_id, 'since': child.chat_seq, 'wait': 1}, 'wait-chat'),
@@ -701,7 +765,7 @@ def test_events_pages_every_visible_event_inside_the_frame_cap():
       'requester',
       {},
     )
-    dispatcher.journal.trail(record, 'x' * 2048)
+    dispatcher.journal.trail(record, 'x' * brotocol.MAX_IDENTIFIER_BYTES)
 
   cursor = 0
   seen = []
@@ -734,7 +798,7 @@ async def test_events_wait_answers_when_a_visible_event_arrives():
       'requester',
       {},
     )
-    dispatcher.journal.trail(record, 'x' * 2048)
+    dispatcher.journal.trail(record, 'x' * brotocol.MAX_IDENTIFIER_BYTES)
   await _settle()
 
   response = runtime.sent[-1][1]

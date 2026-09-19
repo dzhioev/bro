@@ -442,7 +442,7 @@ class TestSummonedLaunch:
       parent_workspace=str(tmp_path / 'parent'),
       may_summon=('bro',),
       permits=('party.start.boxed',),
-      talk=('worker.say',),
+      talk=('summoned.say',),
       grant=('aws',),
       revoke=('openai',),
       summoner={'trail_id': 'T1'},

@@ -139,6 +139,6 @@ class TestSummonRecovery:
     server = next(server for server in _servers(bro, wire='mcp') if server.namespace == 'bro')
     by_name = {tool.name: tool for tool in __import__('asyncio').run(server.list_tools())}
 
-    assert {'summon', 'summon_check', 'summon_list'} <= set(by_name)
-    assert 'recover the quest id with summon_list' in by_name['summon'].description
-    assert 'last_seen' not in by_name['summon_check'].description
+    assert {'summon', 'quest_check', 'quest_history', 'quest_list'} <= set(by_name)
+    assert 'recover the quest id with quest_list' in by_name['summon'].description
+    assert 'last_seen' not in by_name['quest_check'].description

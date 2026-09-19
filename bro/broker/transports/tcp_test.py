@@ -147,7 +147,7 @@ async def test_async_client_refuses_a_different_or_missing_protocol_revision(ack
   try:
     port = server.sockets[0].getsockname()[1]
     address = Endpoint(port=port, token='token').address(HOST)
-    with pytest.raises(ConnectionError, match=r'local 3, remote (2|missing)'):
+    with pytest.raises(ConnectionError, match=rf'local {PROTOCOL_REVISION}, remote (2|missing)'):
       await open_channel(address)
   finally:
     server.close()
@@ -167,7 +167,7 @@ async def test_synchronous_client_refuses_a_different_or_missing_protocol_revisi
   try:
     port = server.sockets[0].getsockname()[1]
     address = Endpoint(port=port, token='token').address(HOST)
-    with pytest.raises(ConnectionError, match=r'local 3, remote (2|missing)'):
+    with pytest.raises(ConnectionError, match=rf'local {PROTOCOL_REVISION}, remote (2|missing)'):
       await asyncio.to_thread(TcpClientTransport, address)
   finally:
     server.close()

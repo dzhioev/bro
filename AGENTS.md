@@ -217,20 +217,20 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   On the bro harness, a declared `shell` roster mounts `job`, `poll`, `kill`, and `jobs` on both wires, plus `chill` on the bare wire.
   Bare tools use the run's registry and inbox;
   the MCP service server owns and closes its registry, offers only foreground/background jobs, and has no notification wake.
-  With no shell declaration, automatic `summon watch` admission mounts the same bare tools narrowed to that command alone.
-  Both service builds also mount `summon`, `summon_say`, `summon_check`, `summon_list`, and `summon_cancel` when the process has broker intent (`BROKER_CHANNEL` or `BROKER_UPSTREAM` set),
-  forwarding to `bro.summon` off-loop so interactive surfaces stay responsive.
+  With no shell declaration, automatic `quest watch` admission mounts the same bare tools narrowed to that command alone.
+  Both service builds also mount `summon` and the quest verbs `quest_check`, `quest_history`, `quest_say`, `quest_ask`, `quest_list`, and `quest_cancel` when the process has broker intent (`BROKER_CHANNEL` or `BROKER_UPSTREAM` set),
+  forwarding to `bro.summon` and `bro.quest` off-loop so interactive surfaces stay responsive.
   The bare-wire shapes do not wait:
-  `summon` returns after host acceptance and has no `detach`, `summon_say(question=true)` mints a question id without waiting, `summon_check` is one journal read, and `summon_cancel` returns when the host accepts the cancellation.
-  Their later chat and lifecycle transitions arrive through `summon watch`, and the host-retained terminal and chat remain readable by id.
-  `summon_list` walks the journal's paginated caller-scoped listing and returns its summon records live-first on both wires.
+  `summon` returns after host acceptance and has no `detach`, `quest_ask` mints a question id without waiting, `quest_check` and `quest_history` are one journal read each, and `quest_cancel` returns when the host accepts the cancellation.
+  Their later chat and lifecycle transitions arrive through `quest watch`, and the host-retained outcome and conversation remain readable by id.
+  `quest_list` walks the journal's paginated caller-scoped listing and returns its summon records live-first on both wires.
   The MCP-wire shapes retain the blocking controls:
-  `summon` may wait for an answer or question, `summon_say` may wait for the question's reply, `summon_check(wait=true)` long-polls through chat changes, and `summon_cancel` may wait for the quest to end.
+  `summon` may wait for an answer or question, `quest_ask` may wait for the reply, `quest_check(wait=true)` long-polls to the end or a child question, `quest_history(wait=true)` to the next message, and `quest_cancel` may wait for the quest to end.
   Those blocking modes own their per-call channel client and close it on cancellation, which unblocks the current short broker wait.
   Their descriptions carry a `{{when #wire = mcp}}` transport-caution block, rendered at service-server build
   — service tools are harness features, the one tool surface whose rendering vocabulary gets the system `#wire` fact injected next to the `#tools` roster.
   The MCP-served builds (`wire == 'mcp'`: persona and `--raw` claude sessions, consumed over streamable HTTP with a client-side call budget) steer long runs to detach plus repeatable polling;
-  their lost-id recovery wording retains the `{{iff #tools contains summon_list}}` roster fork.
+  their lost-id recovery wording retains the `{{iff #tools contains quest_list}}` roster fork.
 
   **Observing.**
   `bro.llm.observer.ObservedEvent` is the provider-neutral live seam:
@@ -296,8 +296,10 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   merged output drains into a memory-bounded temporary spool, head and tail consumers share one cursor, and the exit is consumed once;
   an inbox wait only observes the set of jobs with news, while its drain renders and consumes their bounded notification slices.
 - `shell.py` (`bro-shell-dir`) — validates the packaged shell helpers and prints their installed directory for shell consumers
-- `summon.py` (`summon`) — peer-side summon wire contract (the manual variant included) plus the blocking, detached, journal check/list, and event-watch client surfaces;
+- `summon.py` (`summon`) — the summon request contract (the manual variant included), the facts a summoned run reads off its environment, and the summoning surfaces: blocking, detached, and manual;
   host enforcement lives in `ride/ride/summon_control.py`
+- `quest.py` (`quest`) — every peer-side surface over the quest a summon opens, by its id or `self` for the session's own:
+  the outcome and conversation reads, say and ask, the caller-scoped listing, the ordered event watch, and cancel
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint` / `artifact.get` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session command;
   the host store and enforcement live in `ride/ride/artifacts.py`
 - `kinds.py` — the contributed broker-kind contract:
@@ -315,8 +317,8 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   inherit from `BaseBro` only when opting out of those defaults is the persona's point.
   It owns the shared spells inherited by the concrete-Bro family (`bros/bro/spells/`):
   `spell::ask` — the summon UX:
-  phrasing → target + self-contained prompt, least-authority talk rights, client pick (`summon` CLI vs the `summon` service tool), foreground-vs-background, the question/reply/check loop, and failure relay;
-  protocol and enforcement live in `bro/summon.py` and `ride/ride/summon_control.py`, not in the spell
+  phrasing → target + self-contained prompt, least-authority talk rights, client pick (the `summon` and `quest` CLIs vs the `summon` and `quest_*` service tools), foreground-vs-background, the question/reply/check loop, and failure relay;
+  protocol and enforcement live in `bro/summon.py`, `bro/quest.py`, and `ride/ride/summon_control.py`, not in the spell
   — and `spell::reflect` — the improving half of the loop over what a bro runs under:
   it reads recorded runs against the definition that drove them (the prompt texts, the bro's declaration, the launch scope) and writes its next version, each edit fixed in place or filed as a task.
   Development personas ship from `bro-dev`;
@@ -370,8 +372,8 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   `claude.py` holds Claude Code's tool names in capability groups (`FILES`, `SHELL`, `DELEGATION`) plus `claude.block(*names)`, conditioned on the Claude harness.
   A finite `shell(...)` roster over a blocked shell hands back `Bash` and `Monitor` behind the command gate plus their job controls;
   `shell(ANY)` leaves an unblocked Claude shell unrestricted.
-  `summon watch` needs no declaring:
-  for a run that may summon, or a summoned run whose talk lets its requester say or question, the fold admits it through `Monitor` over any block or narrowing of that tool.
+  `quest watch` needs no declaring:
+  for a run that may summon, or a summoned run whose talk lets its summoner say or question or lets the run itself ask, the fold admits it through `Monitor` over any block or narrowing of that tool.
   A persona names another product's tool surface when it withholds or narrows one, so the names live here rather than in each persona that forgoes them
 - `registry.py` — process-wide registry of bro classes:
   `register(cls)`, `get_class(name)`, `create_bro(name, llm_spec=None)`, `list_classes()`, `known_names()` (every resolvable name, read without importing any bro module — what `ride/ride/summon_control.py` validates summon targets against).
