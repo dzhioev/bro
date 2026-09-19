@@ -420,7 +420,10 @@ class TestRunClaudeSummonedInteractive:
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-manual')
 
     def _linger(*_arguments) -> ride_runner.Run:
-      time.sleep(0.4)
+      deadline = time.monotonic() + 5
+      while ('close',) not in channel_events:
+        assert time.monotonic() < deadline, 'the trail watch never announced'
+        time.sleep(0.01)
       return ride_runner.Run(0, stopped=False)
 
     monkeypatch.setattr(ride_runner, 'run_interactive', _linger)

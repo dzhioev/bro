@@ -2361,10 +2361,9 @@ class TestJobServiceTools:
       call = asyncio.create_task(
         tools['job'].call({'command': 'sleep 30', 'mode': 'fg', 'timeout_seconds': 60})
       )
-      for _ in range(100):
-        if len(run.registry.values()) > 0:
-          break
-        await asyncio.sleep(0.01)
+      async with asyncio.timeout(5):
+        while len(run.registry.values()) == 0:
+          await asyncio.sleep(0.01)
       call.cancel()
       with pytest.raises(asyncio.CancelledError):
         await call
