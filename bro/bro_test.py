@@ -551,7 +551,7 @@ class TestToolLayers:
     assert bro.narrowed_tool_commands('claude') == {'Monitor': (bro_module.SUMMON_WATCH_COMMAND,)}
     blocked = set(bro.blocked_tool_names('claude'))
     assert 'Bash' in blocked
-    assert blocked.isdisjoint({'Monitor', 'TaskOutput', 'TaskStop'})
+    assert blocked.isdisjoint({'Monitor', 'BashOutput', 'KillShell', 'TaskOutput', 'TaskStop'})
 
   def test_a_summoning_run_gains_the_summon_watch_on_a_narrowed_monitor(self, monkeypatch):
     monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
@@ -580,7 +580,9 @@ class TestToolLayers:
     monkeypatch.setenv(TALK_ENV, 'requester.say,worker.say')
     bro = _ShellBlockingBro()
     assert bro.narrowed_tool_commands('claude') == {'Monitor': (bro_module.SUMMON_WATCH_COMMAND,)}
-    assert set(bro.blocked_tool_names('claude')).isdisjoint({'Monitor', 'TaskOutput', 'TaskStop'})
+    assert set(bro.blocked_tool_names('claude')).isdisjoint(
+      {'Monitor', 'BashOutput', 'KillShell', 'TaskOutput', 'TaskStop'}
+    )
 
   def test_a_summoned_run_with_a_silent_summoner_keeps_monitor_blocked(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
