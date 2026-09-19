@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -13,6 +14,8 @@ from bro.broker.spawn import LaunchSpec
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
 from bro.broker.worker import ExpectedWorker, JobWorker, SpawnedWorker, Worker
+
+TIMEOUT = 5.0
 
 
 class FakeHandle:
@@ -59,6 +62,20 @@ class FakeRuntime:
     self.closed.append(peer)
 
 
+class GatedRuntime(FakeRuntime):
+  """a runtime whose launch completes only once the test releases it."""
+
+  def __init__(self, tmp_path: Path):
+    super().__init__(tmp_path)
+    self.release = asyncio.Event()
+    self.launched = []
+
+  async def launch(self, launch, provisioned, quest, talk):
+    await self.release.wait()
+    self.launched.append(quest)
+    return self.handle
+
+
 class Listener:
   def __init__(self):
     self.bound = []
@@ -82,6 +99,12 @@ class Listener:
 async def _settle():
   for _ in range(20):
     await asyncio.sleep(0)
+
+
+async def _until(condition: Callable[[], bool]) -> None:
+  async with asyncio.timeout(TIMEOUT):
+    while not condition():
+      await asyncio.sleep(0.01)
 
 
 def test_worker_passes_messages_for_other_quests_but_refuses_their_marks():
@@ -183,17 +206,7 @@ async def test_spawned_worker_warns_when_channel_drain_expires(tmp_path, monkeyp
 
 @pytest.mark.asyncio
 async def test_launch_timeout_kills_a_handle_returned_after_cancellation(tmp_path):
-  class DelayedRuntime(FakeRuntime):
-    def __init__(self, path):
-      super().__init__(path)
-      self.launched = []
-
-    async def launch(self, launch, provisioned, quest, talk):
-      await asyncio.sleep(0.02)
-      self.launched.append(quest)
-      return self.handle
-
-  runtime = DelayedRuntime(tmp_path)
+  runtime = GatedRuntime(tmp_path)
   listener = Listener()
   worker = SpawnedWorker(
     cast(Runtime, runtime),
@@ -205,7 +218,10 @@ async def test_launch_timeout_kills_a_handle_returned_after_cancellation(tmp_pat
     launch_timeout=0.001,
   )
   worker.begin()
-  await asyncio.sleep(0.05)
+  await _until(lambda: worker.ending)
+  assert runtime.launched == []
+  runtime.release.set()
+  await _until(lambda: listener.deaths != [])
   assert runtime.launched == ['quest']
   assert runtime.handle.killed
   assert listener.deaths[0].reason == 'timeout'
@@ -219,8 +235,7 @@ async def test_spawned_worker_timeout_kills_the_process_and_reports_on_reap(tmp_
     cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=0.001
   )
   worker.begin()
-  await asyncio.sleep(0.01)
-  await _settle()
+  await _until(lambda: listener.deaths != [])
   assert runtime.handle.killed
   assert listener.deaths[0].reason == 'timeout'
 
@@ -258,15 +273,11 @@ async def test_expected_worker_prepares_off_loop_before_ready(tmp_path):
 
   worker = ExpectedWorker(cast(Runtime, runtime), listener, 'quest', ready)
   worker.begin()
-  async with asyncio.timeout(5):
-    while not preparing.is_set():
-      await asyncio.sleep(0.01)
+  await _until(preparing.is_set)
   assert listener.ready == []
   await asyncio.sleep(0)
   release.set()
-  async with asyncio.timeout(5):
-    while listener.ready == []:
-      await asyncio.sleep(0.01)
+  await _until(lambda: listener.ready != [])
   assert listener.ready == ['quest']
   await worker.stop()
 
@@ -295,6 +306,19 @@ class FakeOutput:
   async def collect(self, directory, context, requester):
     self.collected.append((directory, context, requester))
     return {'ref': 'artifact'}
+
+
+class StalledOutput(FakeOutput):
+  """an output whose collection never completes."""
+
+  def __init__(self, directory):
+    super().__init__(directory)
+    self.collecting = asyncio.Event()
+
+  async def collect(self, directory, context, requester) -> dict:
+    self.collecting.set()
+    await asyncio.Event().wait()
+    raise AssertionError('stalled collection resumed')
 
 
 @pytest.mark.asyncio
@@ -343,7 +367,7 @@ async def test_job_worker_collects_clean_exit_as_success(tmp_path):
   await _settle()
   assert listener.bound == ['job:quest']
   runtime.handle.exit.set_result(0)
-  await asyncio.sleep(0.05)
+  await _until(lambda: listener.deaths != [])
   result = listener.messages[-1][0]
   assert result.payload == {'outcome': 'ok', 'value': {'ref': 'artifact'}}
   assert output.collected[0][1:] == ('context', 'requester')
@@ -371,38 +395,10 @@ async def test_job_collection_failure_emits_failed_output_and_keeps_the_run(tmp_
   worker.begin()
   await _settle()
   runtime.handle.exit.set_result(0)
-  await asyncio.sleep(0.05)
+  await _until(lambda: listener.deaths != [])
   result = listener.messages[-1][0]
   assert result.payload['detail']['reason'] == 'output'
   assert result.payload['error'] == 'collect broke'
-  assert output.directory.is_dir()
-
-
-@pytest.mark.asyncio
-async def test_job_collection_is_bounded_by_the_quest_deadline(tmp_path):
-  class StalledOutput(FakeOutput):
-    async def collect(self, directory, context, requester) -> dict:
-      await asyncio.Event().wait()
-      raise AssertionError('stalled collection resumed')
-
-  runtime = FakeRuntime(tmp_path)
-  listener = Listener()
-  output = StalledOutput(tmp_path / 'run')
-  worker = JobWorker(
-    cast(Runtime, runtime),
-    listener,
-    'quest',
-    CommandJob(('true',), {}),
-    output,
-    None,
-    'requester',
-    timeout=0.01,
-  )
-  worker.begin()
-  await _settle()
-  runtime.handle.exit.set_result(0)
-  await asyncio.sleep(0.05)
-  assert listener.deaths[-1].reason == 'timeout'
   assert output.directory.is_dir()
 
 
@@ -424,7 +420,7 @@ async def test_job_worker_carries_collected_output_on_failure(tmp_path):
   worker.begin()
   await _settle()
   runtime.handle.exit.set_result(3)
-  await asyncio.sleep(0.05)
+  await _until(lambda: listener.deaths != [])
   result = listener.messages[-1][0]
   assert result.payload['outcome'] == 'failed'
   assert result.payload['detail']['reason'] == 'exit'
@@ -454,12 +450,7 @@ async def test_spawned_worker_end_kills_the_process_and_reports_the_reason_on_re
 
 @pytest.mark.asyncio
 async def test_end_before_start_reports_only_once_the_late_handle_is_reaped(tmp_path):
-  class DelayedRuntime(FakeRuntime):
-    async def launch(self, launch, provisioned, quest, talk):
-      await asyncio.sleep(0.02)
-      return self.handle
-
-  runtime = DelayedRuntime(tmp_path)
+  runtime = GatedRuntime(tmp_path)
   listener = Listener()
   worker = SpawnedWorker(
     cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=10
@@ -473,7 +464,8 @@ async def test_end_before_start_reports_only_once_the_late_handle_is_reaped(tmp_
   assert worker.ending
   assert listener.deaths == []
   assert not runtime.handle.killed
-  await asyncio.sleep(0.05)
+  runtime.release.set()
+  await _until(lambda: listener.deaths != [])
   assert runtime.handle.killed
   assert [report.reason for report in listener.deaths] == ['orphaned']
   assert not worker.ending
@@ -481,9 +473,9 @@ async def test_end_before_start_reports_only_once_the_late_handle_is_reaped(tmp_
 
 @pytest.mark.asyncio
 async def test_end_before_start_outranks_the_failure_of_the_interrupted_launch(tmp_path):
-  class FailingRuntime(FakeRuntime):
+  class FailingRuntime(GatedRuntime):
     async def launch(self, launch, provisioned, quest, talk):
-      await asyncio.sleep(0.02)
+      await super().launch(launch, provisioned, quest, talk)
       raise RuntimeError('launch broke')
 
   runtime = FailingRuntime(tmp_path)
@@ -498,7 +490,8 @@ async def test_end_before_start_outranks_the_failure_of_the_interrupted_launch(t
   await _settle()
 
   assert listener.deaths == []
-  await asyncio.sleep(0.05)
+  runtime.release.set()
+  await _until(lambda: listener.deaths != [])
   assert [(report.reason, report.error) for report in listener.deaths] == [
     ('cancelled', 'launch broke'),
   ]
@@ -527,18 +520,14 @@ async def test_expected_worker_end_during_preparation_reports_once_it_has_comple
 
   worker = ExpectedWorker(cast(Runtime, runtime), listener, 'quest', ready)
   worker.begin()
-  async with asyncio.timeout(5):
-    while not preparing.is_set():
-      await asyncio.sleep(0.01)
+  await _until(preparing.is_set)
 
   worker.end('cancelled')
   await _settle()
 
   assert listener.deaths == []
   release.set()
-  async with asyncio.timeout(5):
-    while listener.deaths == []:
-      await asyncio.sleep(0.01)
+  await _until(lambda: listener.deaths != [])
   assert [report.reason for report in listener.deaths] == ['cancelled']
   assert seen_at_death == [['token written']]
   assert listener.ready == []
@@ -579,7 +568,7 @@ async def test_job_worker_end_reports_the_reason_with_its_collected_output(tmp_p
   await _settle()
 
   worker.end('cancelled')
-  await asyncio.sleep(0.05)
+  await _until(lambda: listener.deaths != [])
 
   assert runtime.handle.killed
   result = listener.messages[-1][0]
@@ -589,20 +578,16 @@ async def test_job_worker_end_reports_the_reason_with_its_collected_output(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_job_worker_end_during_collection_reports_the_reason(tmp_path):
-  class StalledOutput(FakeOutput):
-    async def collect(self, directory, context, requester) -> dict:
-      await asyncio.Event().wait()
-      raise AssertionError('stalled collection resumed')
-
+async def test_job_worker_end_during_collection_reports_the_reason_and_keeps_the_run(tmp_path):
   runtime = FakeRuntime(tmp_path)
   listener = Listener()
+  output = StalledOutput(tmp_path / 'run')
   worker = JobWorker(
     cast(Runtime, runtime),
     listener,
     'quest',
     CommandJob(('true',), {}),
-    StalledOutput(tmp_path / 'run'),
+    output,
     None,
     'requester',
     timeout=10,
@@ -610,10 +595,11 @@ async def test_job_worker_end_during_collection_reports_the_reason(tmp_path):
   worker.begin()
   await _settle()
   runtime.handle.exit.set_result(0)
-  await asyncio.sleep(0.02)
+  await asyncio.wait_for(output.collecting.wait(), TIMEOUT)
 
   worker.end('orphaned')
   await _settle()
 
   assert [report.reason for report in listener.deaths] == ['orphaned']
   assert listener.deaths[0].exit_code == 0
+  assert output.directory.is_dir()

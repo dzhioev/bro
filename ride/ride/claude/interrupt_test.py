@@ -48,14 +48,13 @@ def _read_until(terminal: int, needle: bytes, *, timeout: float = 20.0) -> bytes
   os.set_blocking(terminal, False)
   seen = b''
   deadline = time.monotonic() + timeout
-  while time.monotonic() < deadline:
+  while needle not in seen:
+    assert time.monotonic() < deadline, f'{needle!r} never arrived; the terminal saw {seen!r}'
     try:
       seen += os.read(terminal, 65536)
     except BlockingIOError:
       time.sleep(0.02)
-    if needle in seen:
-      return seen
-  raise AssertionError(f'{needle!r} never arrived; the terminal saw {seen!r}')
+  return seen
 
 
 @contextlib.contextmanager

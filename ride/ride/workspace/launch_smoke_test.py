@@ -72,14 +72,15 @@ def _cold_image(tag: str) -> Iterator[None]:
 
 
 def _wait_running(marker: Path, container_id: str, attached: subprocess.Popen[str]) -> bool:
+  """whether the container is running once its session command has marked the
+  workspace; False when the attached client exits first."""
   deadline = time.monotonic() + _RUNNING_TIMEOUT
-  while time.monotonic() < deadline:
-    if marker.is_file():
-      return workspace_docker.container_running(container_id)
+  while not marker.is_file():
     if attached.poll() is not None:
       return False
+    assert time.monotonic() < deadline, f'no {_READY_MARKER} within {_RUNNING_TIMEOUT:.0f}s'
     time.sleep(0.2)
-  return False
+  return workspace_docker.container_running(container_id)
 
 
 def _drain(attached: subprocess.Popen[str]) -> str:

@@ -456,12 +456,13 @@ def _wait_until(
   predicate: Callable[[], bool], timeout: float, what: str, context: Optional[Callable[[], str]]
 ) -> None:
   deadline = time.monotonic() + timeout
-  while time.monotonic() < deadline:
-    if predicate():
-      return
+  while not predicate():
+    if time.monotonic() >= deadline:
+      pytest.fail(
+        f'timed out after {timeout}s waiting for {what}'
+        + ('' if context is None else f'\n--- context ---\n{context()}')
+      )
     time.sleep(0.2)
-  detail = f'\n--- context ---\n{context()}' if context is not None else ''
-  pytest.fail(f'timed out after {timeout}s waiting for {what}{detail}')
 
 
 def _poll_gone(predicate: Callable[[], bool], timeout: float) -> bool:
@@ -738,7 +739,7 @@ def _run_broker_scenario(
     while thread.is_alive() and time.monotonic() < deadline:
       max_channels = max(max_channels, len(transport.channels))
       max_live = max(max_live, len(env.live_containers()))
-      time.sleep(0.25)
+      thread.join(0.25)
     if thread.is_alive():
       _remove_stray_containers(env)
       thread.join(30)
@@ -1364,9 +1365,7 @@ def _run_boxed_join_scenario(
         None,
       )
       (env.tree(name) / '.party-release').touch()
-    deadline = time.monotonic() + budget
-    while thread.is_alive() and time.monotonic() < deadline:
-      time.sleep(0.25)
+    thread.join(budget)
     if thread.is_alive():
       _remove_stray_containers(env)
       thread.join(30)

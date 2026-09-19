@@ -31,15 +31,22 @@ async def test_propagates_the_call_exception() -> None:
 @pytest.mark.asyncio
 async def test_runs_in_another_thread_leaving_the_loop_free() -> None:
   ticks = 0
+  ticked = threading.Event()
 
   async def tick() -> None:
     nonlocal ticks
     while True:
       ticks += 1
-      await asyncio.sleep(0.01)
+      if ticks > 1:
+        ticked.set()
+      await asyncio.sleep(0)
+
+  def blocking_call() -> int:
+    assert ticked.wait(5)
+    return threading.get_ident()
 
   ticker = asyncio.create_task(tick())
-  thread_id = await off_loop(lambda: (time.sleep(0.2), threading.get_ident())[1])
+  thread_id = await off_loop(blocking_call)
   ticker.cancel()
   assert thread_id != threading.get_ident()
   assert ticks > 1
@@ -49,12 +56,21 @@ async def test_runs_in_another_thread_leaving_the_loop_free() -> None:
 async def test_cancelling_the_await_leaves_the_call_running() -> None:
   # the abandonment contract: the thread is not killed, so whatever the call
   # holds is the caller's to release.
+  started = threading.Event()
+  release = threading.Event()
   finished = threading.Event()
-  task = asyncio.create_task(off_loop(lambda: (time.sleep(0.2), finished.set())))
-  await asyncio.sleep(0.05)
+
+  def blocking_call() -> None:
+    started.set()
+    assert release.wait(timeout=5)
+    finished.set()
+
+  task = asyncio.create_task(off_loop(blocking_call))
+  assert await asyncio.to_thread(started.wait, 5)
   task.cancel()
   with pytest.raises(asyncio.CancelledError):
     await task
+  release.set()
   assert finished.wait(timeout=5)
 
 

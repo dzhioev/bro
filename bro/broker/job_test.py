@@ -1,10 +1,12 @@
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
 import pytest
 
+from bro.base.offload import off_loop
 from bro.broker.job import (
   OUTPUT_DIRECTORY,
   STATUS_FILE,
@@ -62,15 +64,18 @@ async def test_env_is_the_explicit_snapshot(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_kill_takes_the_whole_process_group(tmp_path: Path):
-  marker = tmp_path / 'survivor'
+  # only the background child holds the fifo's write end, so EOF on it is that
+  # child gone — not merely the leader the handle reaps
+  held = tmp_path / 'held'
+  os.mkfifo(held)
   handle = await launch(
-    CommandJob(command=('/bin/sh', '-c', f'(sleep 0.2; touch {marker}) & sleep 3600'), env={}),
+    CommandJob(command=('/bin/sh', '-c', f'(exec 3>{held}; sleep 3600) & sleep 3600'), env={}),
     tmp_path,
   )
-  await handle.kill()
-  assert await asyncio.wait_for(handle.wait(), TIMEOUT) != 0
-  await asyncio.sleep(1.0)  # the background child would have written its marker by now
-  assert not marker.exists()
+  with await asyncio.wait_for(off_loop(held.open, 'rb'), TIMEOUT) as reader:
+    await handle.kill()
+    assert await asyncio.wait_for(handle.wait(), TIMEOUT) != 0
+    assert await asyncio.wait_for(off_loop(reader.read), TIMEOUT) == b''
 
 
 @pytest.mark.asyncio

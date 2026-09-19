@@ -187,11 +187,9 @@ async def test_grep_default_limit_caps_pathological_output():
 
 def test_glob_returns_matches_sorted_by_mtime():
   with tempfile.TemporaryDirectory() as d:
-    write_file(os.path.join(d, 'old.py'), '')
-    import time
-
-    time.sleep(0.01)
-    write_file(os.path.join(d, 'new.py'), '')
+    for name, modified in (('old.py', 1_000), ('new.py', 2_000)):
+      write_file(os.path.join(d, name), '')
+      os.utime(os.path.join(d, name), (modified, modified))
     result = glob('*.py', path=d).splitlines()
     assert result[0].endswith('new.py')
     assert result[1].endswith('old.py')
