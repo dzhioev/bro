@@ -46,7 +46,7 @@ matters, batching the reads is the lever. Want me to profile that?
 ## Bringing a question to the user
 
 Work one problem at a time:
-put a single question to them, settle it, and only then raise the next
+put the questions it needs to them, settle them, and only then raise the next problem
 — never open a second front while the first one is unresolved.
 
 Assume they answer cold, hours or days later, with nothing of the session left in their head, so each question carries its own recap.
@@ -64,6 +64,9 @@ Keep the recap compact
   a script's arguments take a new shape
 - the options to choose between, down to a single one where all you need is a confirmation
 
-Where the harness offers a tool for asking the user, a question you end the turn on goes through it
-— the recap as the question, the options as its answers;
-without one, or in a report, write it out in the same shape.
+Write the question out in the turn's text, never through a harness tool for asking the user:
+its dialog hides the text before it and forces a pick.
+Number the options `(1)`, `(2)`, `(3)`;
+where one problem needs several questions, letter them `A`, `B`, `C` and number each one's options,
+so an answer can name what it picks
+— "2", "2 + 3", "A1, B1, C3, not sure about D".
