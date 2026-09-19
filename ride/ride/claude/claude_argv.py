@@ -61,6 +61,22 @@ def _tool_gate_hooks(narrowed: dict[str, tuple[str, ...]]) -> dict:
   }
 
 
+def _stop_guard_hooks(surface: str) -> dict:
+  """the `hooks` settings block holding a one-shot session's turn end to its summon work."""
+  return {
+    'Stop': [
+      {
+        'hooks': [
+          {
+            'type': 'command',
+            'command': _settings_command('ride.claude.stop_guard', surface),
+          }
+        ]
+      }
+    ]
+  }
+
+
 @dataclass(frozen=True)
 class ClaudeLaunch:
   """a built claude invocation: the argv (everything after the `claude` program
@@ -133,8 +149,13 @@ def build_claude_launch(
     namespaces = list(dict.fromkeys(server.namespace for server in servers))
   blocked_tool_names = () if options(spec).raw else bro.blocked_tool_names('claude')
   narrowed_tool_commands = {} if options(spec).raw else bro.narrowed_tool_commands('claude')
+  hooks: dict = {}
   if len(narrowed_tool_commands) > 0:
-    settings['hooks'] = _tool_gate_hooks(narrowed_tool_commands)
+    hooks.update(_tool_gate_hooks(narrowed_tool_commands))
+  if spec.solo:
+    hooks.update(_stop_guard_hooks('raw' if options(spec).raw else 'full'))
+  if len(hooks) > 0:
+    settings['hooks'] = hooks
   mcp_config = http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
   if options(spec).raw:
     settings['apiKeyHelper'] = _settings_command('ride.claude.print_anthropic_key')

@@ -157,6 +157,8 @@ class TestRideSessionLaunch:
     disallowed = argv[argv.index('--disallowed-tools') + 1].split(',')
     assert 'Bash' in disallowed
     assert 'Monitor' not in disallowed
+    # both names of each job control: claude disables a tool named under either
+    assert set(disallowed).isdisjoint({'BashOutput', 'KillShell', 'TaskOutput', 'TaskStop'})
     (entry,) = _settings(argv)['hooks']['PreToolUse']
     assert entry['matcher'] == 'Monitor'
     (hook,) = entry['hooks']
@@ -164,6 +166,45 @@ class TestRideSessionLaunch:
 
   def test_no_narrowing_declares_no_hooks(self):
     assert 'hooks' not in _settings(_ride_session_launch(_spec(), claude_args=[]).argv)
+
+  def test_a_solo_session_holds_its_turn_end_through_the_stop_guard(self):
+    argv = _ride_session_launch(
+      _spec(solo=True, hold='unattended', prompt='go'), claude_args=[]
+    ).argv
+
+    (entry,) = _settings(argv)['hooks']['Stop']
+    (hook,) = entry['hooks']
+    assert 'matcher' not in entry
+    assert shlex.split(hook['command']) == [sys.executable, '-m', 'ride.claude.stop_guard', 'full']
+
+  def test_an_interactive_session_carries_no_stop_guard(self):
+    assert 'hooks' not in _settings(_ride_session_launch(_spec(), claude_args=[]).argv)
+
+  def test_a_summoning_solo_session_keeps_both_hook_kinds(self, monkeypatch):
+    from bro.bro import BaseBro
+    from bro.harness import claude
+    from bro.summon import MAY_SUMMON_ENV, encode_may_summon
+
+    class BlockingBro(BaseBro):
+      name = 'blocking'
+      description = 'd'
+      tools: ClassVar = [claude.block(*claude.SHELL)]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: BlockingBro())
+    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    argv = _ride_session_launch(
+      _spec(bro='blocking', solo=True, hold='unattended', prompt='go'), claude_args=[]
+    ).argv
+
+    hooks = _settings(argv)['hooks']
+    assert [entry['matcher'] for entry in hooks['PreToolUse']] == ['Monitor']
+    assert shlex.split(hooks['Stop'][0]['hooks'][0]['command'])[-2:] == [
+      'ride.claude.stop_guard',
+      'full',
+    ]
 
   def test_fast_mode_lands_in_settings(self):
     assert (
@@ -321,6 +362,16 @@ class TestRawLaunch:
     assert '--system-prompt' in argv
     assert '--no-session-persistence' not in argv
     assert argv[-1].endswith('answer')
+
+  def test_a_raw_solo_session_holds_its_turn_end_as_the_raw_surface(self):
+    argv = self._launch(solo=True, hold='unattended', prompt='answer').argv
+
+    (entry,) = _settings(argv)['hooks']['Stop']
+    command = shlex.split(entry['hooks'][0]['command'])
+    assert command == [sys.executable, '-m', 'ride.claude.stop_guard', 'raw']
+
+  def test_a_raw_interactive_session_carries_no_stop_guard(self):
+    assert 'hooks' not in _settings(self._launch().argv)
 
   def test_unknown_bro_raises(self):
     with pytest.raises(KeyError, match='unknown bro'):
