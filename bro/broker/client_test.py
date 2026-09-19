@@ -1,12 +1,22 @@
 import asyncio
 import contextlib
+from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Optional
 
 import pytest
 
 from bro.broker import brotocol
 from bro.broker.brotocol import TALK_ENV, Message, Tag
-from bro.broker.client import CHANNEL_ENV, QUEST_ENV, UPSTREAM_ENV, Client, talk_from_env
+from bro.broker.client import (
+  CHANNEL_ENV,
+  QUEST_ENV,
+  UPSTREAM_ENV,
+  Client,
+  ReplyDeadline,
+  talk_from_env,
+)
 from bro.broker.transport import ChannelID, ClientTransport
 from bro.broker.transports.tcp import LOCAL_HOST, TcpClientTransport, TcpServerTransport
 
@@ -294,69 +304,64 @@ async def test_await_reply_reattaches_to_a_sent_request():
     client.close()
 
 
-@pytest.mark.asyncio
-async def test_await_reply_message_rearms_the_deadline():
-  # timeout_after_interim opts out of the whole-wait bound: a correlated message
-  # re-arms the deadline, so a result past the initial bound still lands
-  async with running_server() as server:
-    provisioned = await server.transport.provision()
-    client = Client(await _transport(provisioned))
-    sent = await asyncio.to_thread(client.send, 'summon', {})
-    await_task = asyncio.create_task(
-      asyncio.to_thread(client.await_reply, sent, 0.3, timeout_after_interim=TIMEOUT)
-    )
+def test_reply_deadline_rearms_on_an_interim():
+  deadline = ReplyDeadline(1.0, 100.0, after_interim=10.0)
+  assert deadline.remaining(100.5) == 0.5
 
-    channel, request_message = await _next(server.sink.messages)
-    await server.transport.send(channel, brotocol.message(request_message.id, {}))
-    await asyncio.sleep(0.5)  # sleep: bound — past the initial 0.3s deadline the interim re-armed
-    await server.transport.send(channel, brotocol.result(request_message.id, 'ok', value='r'))
+  deadline.observe(brotocol.message('quest', {}), 100.25)
 
-    result = await asyncio.wait_for(await_task, TIMEOUT)
-    assert result.type == 'result'
-    client.close()
+  assert deadline.remaining(100.5) == 9.75
+  assert deadline.timeout == 10.0
 
 
-@pytest.mark.asyncio
-async def test_await_reply_can_leave_acceptance_out_of_the_rearm():
-  async with running_server() as server:
-    provisioned = await server.transport.provision()
-    client = Client(await _transport(provisioned))
-    sent = await asyncio.to_thread(client.send, 'summon', {})
-    await_task = asyncio.create_task(
-      asyncio.to_thread(
-        client.await_reply,
-        sent,
-        0.3,
-        timeout_after_interim=0.05,
-        rearm_on_interim=lambda message: message.payload.get('transition') == 'trail',
-      )
-    )
+def test_reply_deadline_rearms_only_on_the_interims_it_is_told_to():
+  deadline = ReplyDeadline(
+    1.0,
+    100.0,
+    after_interim=10.0,
+    rearms_on=lambda message: message.payload.get('transition') == 'trail',
+  )
 
-    channel, request_message = await _next(server.sink.messages)
-    await server.transport.send(channel, brotocol.mark(request_message.id, 'accepted'))
-    await asyncio.sleep(0.1)  # sleep: bound — past the 0.05s a re-arm on the mark would have set
-    await server.transport.send(channel, brotocol.result(request_message.id, 'ok'))
-    assert (await asyncio.wait_for(await_task, TIMEOUT)).outcome == 'ok'
-    client.close()
+  deadline.observe(brotocol.mark('quest', 'accepted'), 100.5)
+  assert deadline.remaining(100.5) == 0.5
+  deadline.observe(brotocol.mark('quest', 'trail', trail_id='t1'), 100.5)
+  assert deadline.remaining(100.5) == 10.0
 
 
-@pytest.mark.asyncio
-async def test_await_reply_message_rearm_shortens_a_longer_bound():
-  # the re-arm is to exactly now + timeout_after_interim, shortening a still-long
-  # initial bound too, so post-message silence is caught at the tighter bound
-  async with running_server() as server:
-    provisioned = await server.transport.provision()
-    client = Client(await _transport(provisioned))
-    sent = await asyncio.to_thread(client.send, 'summon', {})
-    await_task = asyncio.create_task(
-      asyncio.to_thread(client.await_reply, sent, TIMEOUT * 4, timeout_after_interim=0.2)
-    )
+def test_reply_deadline_rearm_shortens_a_longer_bound():
+  deadline = ReplyDeadline(20.0, 100.0, after_interim=0.25)
 
-    channel, request_message = await _next(server.sink.messages)
-    await server.transport.send(channel, brotocol.message(request_message.id, {}))
-    with pytest.raises(TimeoutError, match='within 0.2s'):
-      await asyncio.wait_for(await_task, TIMEOUT)
-    client.close()
+  deadline.observe(brotocol.message('quest', {}), 100.5)
+
+  assert deadline.remaining(100.5) == 0.25
+  assert deadline.timeout == 0.25
+  assert not deadline.expired(100.5)
+  assert deadline.expired(100.75)
+
+
+def test_reply_deadline_is_unbounded_without_a_timeout_until_an_interim():
+  deadline = ReplyDeadline(None, 100.0, after_interim=5.0)
+  assert deadline.remaining(1e9) is None
+  assert not deadline.expired(1e9)
+
+  deadline.observe(brotocol.message('quest', {}), 100.5)
+
+  assert deadline.remaining(100.5) == 5.0
+
+
+def test_await_reply_bounds_the_read_by_the_rearmed_deadline():
+  request = brotocol.request('summon', {})
+  transport = FakeClientTransport(
+    [brotocol.message(request.quest_id, {}), brotocol.result(request.quest_id, 'ok')]
+  )
+  client = Client(transport)
+
+  result = client.await_reply(request, 20.0, timeout_after_interim=0.25)
+
+  assert result.outcome == 'ok'
+  first, second = transport.read_bounds
+  assert first is not None and first > 0.25
+  assert second is not None and second <= 0.25
 
 
 @pytest.mark.asyncio
@@ -573,14 +578,19 @@ def test_message_does_not_apply_the_own_talk_to_a_child_quest(monkeypatch):
 
 
 class FakeClientTransport(ClientTransport):
-  def __init__(self):
+  def __init__(self, inbound: Sequence[Message] = ()):
     self.sent: list[Message] = []
+    self.inbound = deque(inbound)
+    self.read_bounds: list[Optional[float]] = []
 
   def send(self, message: Message) -> None:
     self.sent.append(message)
 
   def receive(self, timeout):
-    raise AssertionError('receive called')
+    self.read_bounds.append(timeout)
+    if len(self.inbound) == 0:
+      raise AssertionError('receive called past the scripted traffic')
+    return self.inbound.popleft()
 
   def close(self, confirm=False):
     pass
