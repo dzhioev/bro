@@ -1234,6 +1234,45 @@ async def test_list_reads_every_page_and_keeps_only_summons(monkeypatch, capsys)
 
 
 @pytest.mark.asyncio
+async def test_live_children_keeps_the_own_unended_summons_only(monkeypatch):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(asyncio.to_thread(summon.live_children))
+    channel, query = await _next(server)
+    assert query.args == {}
+    await _reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={
+        'quests': [
+          _quest('S2', 'accepted', args={'target': 'reviewer', 'prompt': 'review'}),
+          _quest('S1', 'started'),
+          _quest('G1', 'started', parent='S1'),
+          _quest('B1', 'started', kind='benchmark'),
+          _quest('S0', 'ended', result={'outcome': 'ok', 'value': 'done'}),
+          _quest('D0', 'denied', result={'outcome': 'denied', 'error': 'no'}),
+        ]
+      },
+    )
+
+    assert await task == [summon.LiveChild('S2', 'reviewer'), summon.LiveChild('S1', 'dev')]
+
+
+@pytest.mark.asyncio
+async def test_live_children_refuses_a_live_summon_without_a_target(monkeypatch):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(asyncio.to_thread(summon.live_children))
+    channel, query = await _next(server)
+    await _reply(
+      server, channel, query, outcome='ok', value={'quests': [_quest('S1', 'started', args={})]}
+    )
+
+    with pytest.raises(summon.SummonError, match='without an id or a target'):
+      await task
+
+
+@pytest.mark.asyncio
 async def test_watch_arm_replays_live_broker_chat_and_streams_a_racing_message_once(monkeypatch):
   async with running_live_broker() as (spawner, root_endpoint):
     with contextlib.ExitStack() as clients:

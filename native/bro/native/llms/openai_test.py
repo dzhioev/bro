@@ -652,6 +652,40 @@ class TestNotificationDelivery:
     ]
 
   @pytest.mark.asyncio
+  async def test_wake_delivers_a_posted_notice_as_a_user_item_without_job_ids(self):
+    inbox = Inbox()
+    gpt, tracker, captured = _make_openai_with_tracker(inbox=inbox)
+    observer = MagicMock(spec=Observer)
+    gpt.observer = observer
+    _install_responses(
+      gpt,
+      [
+        _fake_response(output=[_message_item('first')], response_id='r1'),
+        _fake_response(output=[_message_item('settled')], response_id='r2'),
+      ],
+      captured,
+    )
+    await gpt.send([{'role': 'user', 'content': 'first'}])
+    inbox.post('[notification: the framework]\nsettle the run')
+
+    assert await gpt.wake() == 'settled'
+
+    assert captured[1]['input'] == [
+      {'role': 'user', 'content': '[notification: the framework]\nsettle the run'}
+    ]
+    assert [step for step in tracker.steps if step[0] == 'notification'] == [
+      (
+        'notification',
+        '[notification: the framework]\nsettle the run',
+        {'turn_index': 1, 'call_index': 2, 'job_ids': []},
+      )
+    ]
+    assert (
+      call(NotificationEvent('[notification: the framework]\nsettle the run', ()))
+      in observer.on_event.call_args_list
+    )
+
+  @pytest.mark.asyncio
   async def test_interrupted_delivery_rides_pending_input_into_the_next_turn(self):
     inbox = Inbox()
     registry = Registry(inbox)

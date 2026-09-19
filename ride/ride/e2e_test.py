@@ -21,7 +21,7 @@ container: the store `docker cp`'d in, the `env -i` snapshot, the pid handshake
 read back through the party mount, the member lifecycle routed to the first
 session, and the first session's exit tearing a live member down);
 I — the full boxed → join → unboxed → join → boxed chain through summon control;
-J — native summon-watch wake routes through the real broker;
+J — native summon-watch wake routes through the real broker, and a native child's turn-end reminder;
 K — a summoned child question, summoner steering and reply, and journal-backed collection;
 L — cancellation of a live child.
 
@@ -1833,6 +1833,174 @@ def test_native_child_watch_replays_pre_arm_steering_and_receives_live_steering(
   assert any('before the watch: summoner says before arm' in text for text in notifications)
   assert any('summoner says after arm' in text for text in notifications)
   assert isolated_env.live_containers() == []
+
+
+_NATIVE_REMIND_GRANDCHILD = """
+import contextlib
+from bro.run_lifecycle import RunLifecycle
+
+channel = RunLifecycle.from_env()
+assert channel is not None
+with contextlib.closing(channel):
+  channel.trail('native-remind-grandchild')
+  channel.completed('grandchild result', 'ok')
+"""
+
+_NATIVE_REMIND_CHILD = """
+import asyncio
+import json
+from typing import Optional
+
+from bro.bro import BaseBro
+from bro.llm.llms.echo import LLMSpec as EchoSpec
+from bro.llm.tracker import NullTracker
+from bro.native.llm import LLM
+from bro.native.runner import Runner
+
+class RemindBro(BaseBro):
+  name = 'e2e-remind-child'
+  description = 'ends its turn with a grandchild in flight'
+  system_prompt = 'observe the reminder'
+  llm_spec = EchoSpec()
+
+class ScriptedLLM(LLM):
+  def __init__(self, inbox, mcp_servers):
+    super().__init__(inbox, mcp_servers)
+    self.notices = []
+    self.request_id = None
+
+  async def send(self, messages, *, request_timeout=None):
+    started = await self.tools.call('bro__job', {'command': 'summon watch', 'mode': 'watch'})
+    assert started == 'started job-1 (watch)', started
+    accepted = await self.tools.call(
+      'bro__summon',
+      {'target': 'bro', 'prompt': 'grandchild result', 'llm': 'echo', 'harness': 'bro', 'timeout': 120},
+    )
+    assert accepted['state'] == 'accepted', accepted
+    self.request_id = accepted['request_id']
+    return 'ended the turn without chilling'
+
+  def _drain(self):
+    batch = self.inbox.drain()
+    if batch is not None:
+      self.notices.append(batch.text)
+
+  def _grandchild_ended(self):
+    return any(f'summon ended ok (request {self.request_id} to bro)' in text for text in self.notices)
+
+  async def wake(self, *, request_timeout=None):
+    self._drain()
+    while not self._grandchild_ended():
+      chilled = await self.tools.call('bro__chill', {'seconds': 60})
+      assert chilled['woken'], chilled
+      self._drain()
+    status = await self.tools.call('bro__summon_check', {'request_id': self.request_id})
+    await self.tools.call('bro__kill', {'id': 'job-1'})
+    return json.dumps({'notices': self.notices, 'answer': status['answer']})
+
+class ScriptedRunner(Runner):
+  def _create_llm(self, *, hold):
+    servers = self.bro.assemble(harness='bro', wire='bare', include_raise=True, live_run=self)
+    return ScriptedLLM(self.inbox, servers)
+
+asyncio.run(ScriptedRunner(RemindBro()).run('go', surface='e2e', tracker=NullTracker()))
+"""
+
+_NATIVE_REMIND_ROOT = """
+import json
+import time
+from pathlib import Path
+
+from bro.summon import check_summon, summon_detached
+
+request_id = summon_detached(
+  'bro', 'remind-child', grant=['@bro'], llm='echo', harness='bro', timeout=180
+)
+deadline = time.monotonic() + 150
+while True:
+  status = check_summon(request_id)
+  if not status.pending:
+    break
+  if time.monotonic() >= deadline:
+    raise TimeoutError('the reminded child did not deliver')
+  time.sleep(0.5)
+Path('/workspace/.native-remind-report').write_text(json.dumps({
+  'request_id': request_id,
+  'answer': status.answer,
+}))
+"""
+
+
+def test_native_child_reminded_at_its_turn_end_chills_and_delivers_the_grandchild_result(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  import ride.spawn as ride_spawn
+  from ride.runtime_bundle import RuntimeBundle
+  from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
+  from ride.workspace.metadata import Isolation
+  from ride.workspace.model import Workspace
+  from ride.workspace.store import ScopedSecrets
+
+  env = isolated_env
+  name = f'{_NAME_PREFIX}j-remind-party'
+  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  runtime_bundle = RuntimeBundle(
+    env.runtime_root / 'runtime' / env.runtime_bundle_hash,
+    f'{sys.version_info.major}.{sys.version_info.minor}',
+  )
+  container_runtime = ContainerRuntimeResolver.fixed(
+    ContainerRuntime(env.image, env.runtime_bundle_hash), workspace.repository
+  )
+  original_started_party_launch = ride_spawn.started_party_launch
+
+  def started_party_launch(*arguments, **keywords):
+    launch = original_started_party_launch(*arguments, **keywords)
+    prompt = arguments[0].prompt
+    if prompt == 'remind-child':
+      return replace(launch, command=_session_broxy_probe(_NATIVE_REMIND_CHILD))
+    if prompt == 'grandchild result':
+      return replace(launch, command=_session_broxy_probe(_NATIVE_REMIND_GRANDCHILD))
+    raise ValueError(f'unexpected summon prompt {prompt!r}')
+
+  monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
+  monkeypatch.setenv('HOME', str(env.home))
+  report = workspace.tree / '.native-remind-report'
+  launch = DockerLaunchSpec(
+    workspace_docker.Launch(
+      name=name,
+      command=_session_broxy_probe(_NATIVE_REMIND_ROOT),
+      env={'RIDE_BRO': 'bro-dev'},
+      secrets=(),
+      tty=False,
+      image=env.image,
+      runtime_bundle_hash=env.runtime_bundle_hash,
+      repo=env.project,
+    )
+  )
+
+  code = ride_spawn.run_root_via_broker(
+    launch,
+    workspace=workspace,
+    bro='bro-dev',
+    may_summon={'bro'},
+    permits={'party.start.boxed'},
+    summon_depth=3,
+    credential_scope=ScopedSecrets(set(), set()),
+    container_runtime=container_runtime,
+    runtime_bundle=runtime_bundle,
+  )
+
+  assert code == 0
+  outcome = json.loads(report.read_text())
+  delivered = json.loads(outcome['answer'])
+  assert delivered['answer'] == 'grandchild result'
+  reminder = delivered['notices'][0]
+  assert reminder.startswith('[notification: the turn ended with work still running')
+  assert 'job-1 watch `summon watch`' in reminder
+  assert ' to bro\n' in reminder
+  assert 'bro::chill' in reminder
+  assert any('summon ended ok' in text for text in delivered['notices'][1:])
+  assert env.live_containers() == []
 
 
 # --- K: summon chat across a live child ---------------------------------------

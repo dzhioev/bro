@@ -1066,6 +1066,34 @@ def list_summons() -> dict[str, Any]:
     return {'quests': _query_summons(client)}
 
 
+@dataclass(frozen=True)
+class LiveChild:
+  request_id: str
+  target: str
+
+
+def live_children() -> list[LiveChild]:
+  """Return the run's own summons that have not ended, newest first."""
+  from bro.broker.client import QUEST_ENV
+
+  own_quest = os.environ.get(QUEST_ENV)
+  if own_quest is None:
+    raise SummonError(f'{QUEST_ENV} is missing from the session environment')
+  with _open_client() as client:
+    quests = _query_summons(client)
+  children: list[LiveChild] = []
+  for quest in quests:
+    if quest.get('parent') != own_quest or quest.get('state') in ('ended', 'denied'):
+      continue
+    request_id = quest.get('id')
+    args = quest.get('args')
+    target = args.get('target') if isinstance(args, dict) else None
+    if not isinstance(request_id, str) or not isinstance(target, str):
+      raise SummonError('query listing returned a live summon without an id or a target')
+    children.append(LiveChild(request_id, target))
+  return children
+
+
 def _single_line(text: str) -> str:
   return ''.join(
     character if character.isprintable() else repr(character)[1:-1] for character in text
