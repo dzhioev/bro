@@ -22,6 +22,10 @@ def ride_claude_statusline():
   return run_cli('ride.claude.statusline', sys.argv)
 
 
+def ride_claude_stop_guard():
+  return run_cli('ride.claude.stop_guard', sys.argv)
+
+
 def ride_claude_trail_recorder():
   return run_cli('ride.claude.trail_recorder', sys.argv)
 

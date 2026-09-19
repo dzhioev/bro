@@ -28,6 +28,7 @@ dependencies = [
 "ride.call" = "ride._entrypoints:ride_call"
 "ride.claude.print-anthropic-key" = "ride._entrypoints:ride_claude_print_anthropic_key"
 "ride.claude.statusline" = "ride._entrypoints:ride_claude_statusline"
+"ride.claude.stop-guard" = "ride._entrypoints:ride_claude_stop_guard"
 "ride.claude.trail-recorder" = "ride._entrypoints:ride_claude_trail_recorder"
 "ride.claude.watch-guard" = "ride._entrypoints:ride_claude_watch_guard"
 "ride.cli" = "ride._entrypoints:ride_cli"
