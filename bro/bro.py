@@ -363,9 +363,9 @@ _SUMMON_CANCEL_DESCRIPTION = (
 
 
 _SUMMON_CANCEL_BARE_DESCRIPTION = (
-  'ask the host to cancel a child summon and return when the request is accepted. the child and '
-  'its descendants end asynchronously; their terminal states arrive through `summon watch` and '
-  'remain readable with `summon_check`.'
+  'ask the host to cancel a child summon and return when the request is accepted. the child '
+  'ends asynchronously, and whatever it summoned in turn ends failed:orphaned with it; its '
+  'terminal state arrives through `summon watch` and remains readable with `summon_check`.'
 )
 
 

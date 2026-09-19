@@ -753,7 +753,7 @@ class SummonStatus:
   chat_seq: int = 0
 
 
-def _caller_end(quest: dict[str, Any], request_id: str) -> Optional['End']:
+def _caller_end(quest: dict[str, Any], request_id: str) -> 'End':
   from bro.broker.client import QUEST_ENV
 
   own_quest = os.environ.get(QUEST_ENV)
@@ -761,10 +761,12 @@ def _caller_end(quest: dict[str, Any], request_id: str) -> Optional['End']:
     raise SummonError(f'{QUEST_ENV} is missing from the session environment')
   if own_quest == request_id:
     return 'worker'
-  return 'requester' if quest.get('parent') == own_quest else None
+  if quest.get('parent') == own_quest:
+    return 'requester'
+  raise SummonError(f'quest {request_id!r} is not one this session requested')
 
 
-def _summon_status(quest: dict[str, Any], *, caller: Optional['End'] = 'requester') -> SummonStatus:
+def _summon_status(quest: dict[str, Any], *, caller: 'End' = 'requester') -> SummonStatus:
   answer = _summon_answer(quest)
   trail_id = quest.get('trail_id')
   request_id = quest.get('id')
@@ -788,9 +790,7 @@ def _summon_status(quest: dict[str, Any], *, caller: Optional['End'] = 'requeste
     raise SummonError('summon query returned a malformed chat truncation marker')
   if not isinstance(chat_seq, int) or isinstance(chat_seq, bool):
     raise SummonError('summon query returned a malformed chat sequence')
-  incoming = (
-    [] if caller is None else [entry for entry in pending_questions if entry.get('from') != caller]
-  )
+  incoming = [entry for entry in pending_questions if entry.get('from') != caller]
   question = None
   if incoming:
     latest = incoming[-1]
@@ -978,8 +978,6 @@ def say(
   with _connection(client) as connection:
     quest = _query_quest(connection, resolved)
     sender = _caller_end(quest, resolved)
-    if sender is None:
-      raise SummonError(f'quest {resolved!r} is not a direct child of this session')
     _require_live_summon(quest)
     try:
       candidate = brotocol.message(
@@ -1084,7 +1082,7 @@ def _request_clause(event: dict[str, Any], own_quest: str) -> str:
   elif event.get('transition') != 'denied':
     raise SummonError('events read returned an accepted summon without a target')
   if parent != own_quest:
-    clause += f', summoned by request {parent}'
+    raise SummonError('events read returned a summon this session did not request')
   return clause
 
 
@@ -1489,8 +1487,7 @@ def main(argv: list[str]) -> Optional[int]:
   if len(argv) > 1 and argv[1] == 'watch':
     parser = base_args.Parser(
       prog='summon watch',
-      description="stream the ordered transitions of every summon in this session's subtree "
-      '— its own and the ones its summoned bros make in turn. '
+      description='stream the ordered transitions of every summon this session makes. '
       'Runs until killed; what is already in flight when it starts is the baseline',
     )
     return _watch(**parser.parse(argv[1:]))

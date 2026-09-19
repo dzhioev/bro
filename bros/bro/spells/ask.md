@@ -174,7 +174,7 @@ That check may itself exit 4 on another question;
 repeat the answer/check loop until it exits 0 with the child's final answer or 1 with a failure.
 Never restart the summon to answer it.
 `summon watch` arms at the current journal head and prints ordered transitions after it
-— your summons' and their descendants', messages and denials included;
+— your summons', messages and denials included;
 if retained events have a gap, it reports the loss and re-arms from the current head.
 {{eliff #wire = bare}}
 `bro::summon` is detached by construction:
@@ -185,7 +185,7 @@ If a child asks a question, answer it with `bro::summon_say(reply_to=…)`, then
 To ask the child, call `bro::summon_say(question=true)`;
 its reply arrives on the watch and remains readable with `bro::summon_check`.
 `summon watch` arms at the current journal head and prints ordered transitions after it
-— your summons' and their descendants', messages and denials included;
+— your summons', messages and denials included;
 if retained events have a gap, it reports the loss and re-arms from the current head.
 {{else}}
 There is no true backgrounding on the raw MCP surface, but the tools cover the long-run case:
