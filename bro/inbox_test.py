@@ -146,3 +146,33 @@ def test_registry_close_group_kills_live_descendants():
   registry.close()
 
   assert job.process.wait(timeout=10) == -9
+
+
+def test_a_posted_notice_wakes_waiters_and_drains_without_job_ids():
+  inbox = Inbox()
+
+  inbox.post('[notification: framework]\nact on it')
+
+  assert inbox.wait(time.monotonic() + 10, threading.Event())
+  assert inbox.has_news()
+  batch = inbox.drain()
+  assert batch is not None
+  assert batch.text == '[notification: framework]\nact on it'
+  assert batch.job_ids == ()
+  assert inbox.job_news_drains == 0
+  assert inbox.drain() is None
+
+
+def test_a_drain_puts_job_news_before_the_posted_notice_and_counts_it():
+  inbox = Inbox()
+  job = Job('job-1', 'echo news', 'watch', inbox=inbox)
+  _wait_finished(job)
+  inbox.post('[notification: framework]')
+
+  batch = inbox.drain()
+
+  assert batch is not None
+  assert batch.job_ids == ('job-1',)
+  assert batch.text.startswith('[notification: this run')
+  assert batch.text.endswith('\nnews\n[notification: framework]')
+  assert inbox.job_news_drains == 1

@@ -4,14 +4,18 @@ import os
 import traceback
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Optional, Self
 
 from bro.base import log
+from bro.base.offload import off_loop
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
+from bro.broker.client import CHANNEL_ENV
 from bro.inbox import Inbox
-from bro.jobs import Registry
+from bro.jobs import JobStatus, Registry
 from bro.llm.observer import (
+  InterimAssistantTextEvent,
   NullObserver,
   Observer,
   TurnCompletedEvent,
@@ -23,11 +27,49 @@ from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
 from bro.monitor import trail_pointer
 from bro.native import providers as native_providers
 from bro.native.llm import LLM
+from bro.quest import LiveChild, live_children
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import summoned, summoned_by_from_env
 from bro.trails.record.bro import Recorder
 
 _TRAILS_DISABLED_ENV = 'TRAILS_DISABLED'
+
+_LIVE_WORK_HEADER = (
+  '[notification: the turn ended with work still running, so this run has not ended]'
+)
+_LIVE_WORK_RULE = (
+  'A one-shot run ends only when a turn ends with nothing running and nothing in flight. '
+  'To wait on this work, call `bro::chill` (a summon in flight needs a live '
+  "`bro::job('quest watch', mode='watch')` first); otherwise `bro::kill` each job and "
+  '`bro::quest_cancel` each summon you no longer need, then end the turn. This notice comes '
+  'once: a turn that ends with the same work live and nothing else reported ends the run, '
+  "which kills its jobs and spawned children and detaches a manual summon's session."
+)
+
+
+@dataclass(frozen=True)
+class LiveWork:
+  """What a one-shot run still has running at a turn end."""
+
+  jobs: tuple[JobStatus, ...]
+  children: tuple[LiveChild, ...]
+
+  def keys(self) -> frozenset[str]:
+    return frozenset([*(job.id for job in self.jobs), *(child.quest_id for child in self.children)])
+
+  def is_empty(self) -> bool:
+    return len(self.jobs) == 0 and len(self.children) == 0
+
+
+def live_work_notice(work: LiveWork) -> str:
+  lines = [_LIVE_WORK_HEADER]
+  for job in work.jobs:
+    command = job.command.replace('`', '\\`')
+    lines.append(f'{job.id} {job.mode} `{command}`')
+  for child in work.children:
+    lines.append(f'quest {child.quest_id} to {child.target}')
+  lines.append(_LIVE_WORK_RULE)
+  return '\n'.join(lines)
 
 
 def _observer_scope(observer: Observer) -> AbstractContextManager[Observer]:
@@ -231,7 +273,7 @@ class Runner:
       try:
         with self:
           try:
-            result = await llm.send(messages, request_timeout=request_timeout)
+            result = await self._turns_until_settled(llm, messages, request_timeout=request_timeout)
           except AnswerDelivered as delivered:
             # the `answer` service tool's explicit end: the answer is the result
             result = delivered.answer
@@ -310,6 +352,34 @@ class Runner:
       raise
     effective_observer.on_event(TurnCompletedEvent(result))
     return result
+
+  async def _turns_until_settled(
+    self, llm: LLM, messages: list[dict], *, request_timeout: Optional[float]
+  ) -> str:
+    """the one-shot's turns: the input's, then a reminder turn for each turn that
+    ends with work still live, until a turn ends with nothing live or a reminded
+    turn ends with the same live set and no job news drained since the reminder.
+    """
+    reply = await llm.send(messages, request_timeout=request_timeout)
+    reminded: Optional[frozenset[str]] = None
+    drains_at_reminder = 0
+    while True:
+      work = await off_loop(self._live_work)
+      if work.is_empty():
+        return reply
+      if reminded == work.keys() and self.inbox.job_news_drains == drains_at_reminder:
+        return reply
+      self._observer.on_event(InterimAssistantTextEvent(reply))
+      self.inbox.post(live_work_notice(work))
+      reminded = work.keys()
+      drains_at_reminder = self.inbox.job_news_drains
+      reply = await llm.wake(request_timeout=request_timeout)
+
+  def _live_work(self) -> LiveWork:
+    statuses = [job.status() for job in self.registry.values()]
+    jobs = tuple(status for status in statuses if status.state == 'running')
+    children = tuple(live_children()) if os.environ.get(CHANNEL_ENV) is not None else ()
+    return LiveWork(jobs, children)
 
   async def wake(self, request_timeout: Optional[float] = None) -> str:
     """Run one interactive turn from pending inbox news."""

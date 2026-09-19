@@ -749,6 +749,29 @@ def list_quests() -> dict[str, Any]:
     return {'quests': _query_listing(client)}
 
 
+@dataclass(frozen=True)
+class LiveChild:
+  quest_id: str
+  target: str
+
+
+def live_children() -> list[LiveChild]:
+  """Return the quests this session summoned that have not ended, newest first."""
+  own = own_quest()
+  with open_client() as client:
+    quests = _query_listing(client)
+  children: list[LiveChild] = []
+  for quest in quests:
+    if quest.get('parent') != own or _ended(quest):
+      continue
+    args = quest.get('args')
+    target = args.get('target') if isinstance(args, dict) else None
+    if not isinstance(target, str):
+      raise QuestError('query listing returned a live summon without a target')
+    children.append(LiveChild(_quest_id(quest), target))
+  return children
+
+
 # --- watch ----------------------------------------------------------------------
 
 

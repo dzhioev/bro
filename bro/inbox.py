@@ -22,16 +22,30 @@ class NotificationBatch:
 
 
 class Inbox:
-  """Wake waiters on job news without consuming it."""
+  """Wake waiters on job news and framework notices without consuming them."""
 
   def __init__(self):
     self._condition = threading.Condition()
     self._jobs_with_news: set[Job] = set()
+    self._notices: list[str] = []
+    self._job_news_drains = 0
 
   def mark(self, job: Job) -> None:
     with self._condition:
       self._jobs_with_news.add(job)
       self._condition.notify_all()
+
+  def post(self, notice: str) -> None:
+    """Queue a framework-originated notice for the next drain."""
+    with self._condition:
+      self._notices.append(notice)
+      self._condition.notify_all()
+
+  @property
+  def job_news_drains(self) -> int:
+    """How many drains carried job news, framework notices aside."""
+    with self._condition:
+      return self._job_news_drains
 
   def notify(self) -> None:
     with self._condition:
@@ -49,14 +63,14 @@ class Inbox:
     finally:
       self.cancel(cancelled)
 
-  def _prune_locked(self) -> None:
+  def _has_news_locked(self) -> bool:
     self._jobs_with_news = {job for job in self._jobs_with_news if job.has_news()}
+    return len(self._jobs_with_news) > 0 or len(self._notices) > 0
 
   def wait(self, deadline: Optional[float], cancelled: threading.Event) -> bool:
     """Return on news, cancellation, or the monotonic deadline; consume nothing."""
     with self._condition:
-      self._prune_locked()
-      while len(self._jobs_with_news) == 0 and not cancelled.is_set():
+      while not self._has_news_locked() and not cancelled.is_set():
         if deadline is None:
           self._condition.wait()
         else:
@@ -64,18 +78,18 @@ class Inbox:
           if remaining <= 0:
             return False
           self._condition.wait(remaining)
-        self._prune_locked()
-      return len(self._jobs_with_news) > 0
+      return self._has_news_locked()
 
   def has_news(self) -> bool:
     with self._condition:
-      self._prune_locked()
-      return len(self._jobs_with_news) > 0
+      return self._has_news_locked()
 
   def drain(self, limit: int = DEFAULT_LIMIT) -> Optional[NotificationBatch]:
     with self._condition:
       jobs = sorted(self._jobs_with_news, key=lambda job: job.id)
       self._jobs_with_news.clear()
+      notices = self._notices
+      self._notices = []
 
     notifications: list[Notification] = []
     for job in jobs:
@@ -85,10 +99,17 @@ class Inbox:
       if job.has_news():
         self.mark(job)
 
-    if len(notifications) == 0:
+    if len(notifications) == 0 and len(notices) == 0:
       return None
+    parts = list(notices)
+    if len(notifications) > 0:
+      with self._condition:
+        self._job_news_drains += 1
+      parts.insert(
+        0, '\n'.join([_OPENING_LINE, *(_format(notification) for notification in notifications)])
+      )
     return NotificationBatch(
-      text='\n'.join([_OPENING_LINE, *(_format(notification) for notification in notifications)]),
+      text='\n'.join(parts),
       job_ids=tuple(notification.job_id for notification in notifications),
     )
 
