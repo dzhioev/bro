@@ -98,8 +98,8 @@ class TestSessionFacts:
     assert SessionFacts.collect().may_summon == ()
 
   def test_talk_reads_the_launch_published_rights(self, monkeypatch):
-    monkeypatch.setenv(TALK_ENV, 'requester.say,worker.question')
-    assert SessionFacts.collect().talk == ('requester.say', 'worker.question')
+    monkeypatch.setenv(TALK_ENV, 'summoner.say,summoned.question')
+    assert SessionFacts.collect().talk == ('summoned.question', 'summoner.say')
 
   def test_talk_distinguishes_a_mute_quest_from_an_unpublished_one(self, monkeypatch):
     monkeypatch.setenv(TALK_ENV, '')
@@ -205,10 +205,10 @@ class TestRenderBanner:
     assert 'may_summon: none' in _facts(may_summon=()).render_llm()
 
   def test_llm_and_visual_render_the_quest_talk(self):
-    facts = _facts(talk=('requester.say', 'worker.question'))
-    assert 'talk: requester.say, worker.question' in facts.render_llm()
+    facts = _facts(talk=('summoner.say', 'summoned.question'))
+    assert 'talk: summoner.say, summoned.question' in facts.render_llm()
     assert 'talk:' in facts.render_visual()
-    assert 'requester.say, worker.question' in facts.render_visual()
+    assert 'summoner.say, summoned.question' in facts.render_visual()
 
   def test_llm_and_visual_spell_out_a_mute_quest(self):
     facts = _facts(talk=())

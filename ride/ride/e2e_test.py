@@ -1624,8 +1624,8 @@ started = time.monotonic()
 deadline = started + 30
 notifications = []
 with Runner(WatchBro()) as runner:
-  runner.registry.start('summon watch', 'watch')
-  request_id = summon_detached(
+  runner.registry.start('quest watch', 'watch')
+  quest_id = summon_detached(
     'bro', 'raise for the native watch route', llm='echo', harness='bro', timeout=120
   )
   while not any('summon ended failed:raised' in text for text in notifications):
@@ -1636,7 +1636,7 @@ with Runner(WatchBro()) as runner:
     if batch is not None:
       notifications.append(batch.text)
 Path('/workspace/.native-root-watch-report').write_text(json.dumps({
-  'request_id': request_id,
+  'quest_id': quest_id,
   'elapsed': time.monotonic() - started,
   'notifications': notifications,
 }))
@@ -1650,7 +1650,7 @@ import time
 from bro.bro import BaseBro
 from bro.native.runner import Runner
 from bro.run_lifecycle import RunLifecycle
-from bro.summon import check_summon, say
+from bro.quest import history, say
 
 class WatchBro(BaseBro):
   name = 'e2e-watched-child'
@@ -1659,8 +1659,8 @@ class WatchBro(BaseBro):
 
 def incoming(text):
   return any(
-    entry.get('from') == 'requester' and entry['head']['text'] == text
-    for entry in check_summon().messages
+    entry.get('from') == 'summoner' and entry['head']['text'] == text
+    for entry in history('self').messages
   )
 
 def wait_for_incoming(text, deadline):
@@ -1672,7 +1672,7 @@ def wait_for_incoming(text, deadline):
 wait_for_incoming('before arm', time.monotonic() + 30)
 notifications = []
 with Runner(WatchBro()) as runner:
-  runner.registry.start('summon watch', 'watch')
+  runner.registry.start('quest watch', 'watch')
   deadline = time.monotonic() + 30
   while not any('before the watch: summoner says before arm' in text for text in notifications):
     with runner.inbox.waiter() as cancelled:
@@ -1681,7 +1681,7 @@ with Runner(WatchBro()) as runner:
     batch = runner.inbox.drain()
     if batch is not None:
       notifications.append(batch.text)
-  say('watch armed')
+  say('self', 'watch armed')
   while not any('summoner says after arm' in text for text in notifications):
     with runner.inbox.waiter() as cancelled:
       if not runner.inbox.wait(deadline, cancelled):
@@ -1700,39 +1700,40 @@ _NATIVE_CHILD_WATCH_ROOT = """
 import time
 from pathlib import Path
 
-from bro.summon import check_summon, say, summon_detached
+from bro.quest import check, history, say
+from bro.summon import summon_detached
 
-request_id = summon_detached(
+quest_id = summon_detached(
   'bro',
   'receive steering through the native own-quest watch',
-  talk=['requester.say'],
+  talk=['summoner.say'],
   llm='echo',
   harness='bro',
   timeout=120,
 )
-say('before arm', request_id)
+say(quest_id, 'before arm')
 deadline = time.monotonic() + 45
 while True:
-  status = check_summon(request_id)
+  conversation = history(quest_id)
   if any(
-    entry.get('from') == 'worker' and entry['head']['text'] == 'watch armed'
-    for entry in status.messages
+    entry.get('from') == 'summoned' and entry['head']['text'] == 'watch armed'
+    for entry in conversation.messages
   ):
     break
-  if not status.pending:
-    raise RuntimeError(f'the child ended before arming its watch: {status}')
+  if conversation.ended:
+    raise RuntimeError(f'the child ended before arming its watch: {conversation}')
   if time.monotonic() >= deadline:
     raise TimeoutError('the child did not arm its watch')
   time.sleep(0.1)
-say('after arm', request_id)
+say(quest_id, 'after arm')
 while True:
-  status = check_summon(request_id)
-  if not status.pending:
+  outcome = check(quest_id)
+  if outcome.state == 'completed':
     break
   if time.monotonic() >= deadline:
     raise TimeoutError('the steered child did not finish')
   time.sleep(0.1)
-Path('/workspace/.native-child-watch-report').write_text(status.answer)
+Path('/workspace/.native-child-watch-report').write_text(outcome.answer)
 """
 
 
@@ -1839,23 +1840,23 @@ def test_native_child_watch_replays_pre_arm_steering_and_receives_live_steering(
 
 _QUEST_CHAT_CHILD = """
 from bro.run_lifecycle import RunLifecycle
-from bro.summon import check_summon, say
+from bro.quest import ask, history
 
 channel = RunLifecycle.from_env()
 assert channel is not None
 channel.trail('quest-chat-child')
-reply = say('approve the change?', wait=120)
-assert reply.state == 'completed', reply
-status = check_summon()
+asked = ask('self', 'approve the change?', wait=120)
+assert asked.state == 'answered', asked
+conversation = history('self')
 steering = [
   entry['head']['text']
-  for entry in status.messages
-  if entry.get('from') == 'requester'
+  for entry in conversation.messages
+  if entry.get('from') == 'summoner'
   and entry.get('reply_to') is None
   and entry.get('id') is None
 ]
 assert steering == ['run the focused tests'], steering
-channel.completed(reply.answer + '|' + steering[0], 'ok')
+channel.completed(asked.answer + '|' + steering[0], 'ok')
 channel.close()
 """
 
@@ -1891,25 +1892,26 @@ def test_summon_chat_question_reply_and_steering_cross_the_live_broker(
   report = workspace.tree / '.quest-chat-report'
   root_source = """
 from pathlib import Path
-from bro.summon import SummonQuestion, say, summon_and_wait, wait_summon
+from bro.quest import Question, check, say
+from bro.summon import summon_and_wait
 
-request_ids = []
+quest_ids = []
 question = summon_and_wait(
   'bro',
   'ask the summoner',
-  talk=['worker.question', 'requester.say'],
+  talk=['summoned.question', 'summoner.say'],
   llm='echo',
   harness='bro',
   timeout=120,
-  on_sent=request_ids.append,
+  on_sent=quest_ids.append,
 )
-assert isinstance(question, SummonQuestion), question
-[request_id] = request_ids
-say('run the focused tests', request_id)
-say('approved', request_id, reply_to=question.id)
-status = wait_summon(request_id, timeout=120)
-assert not status.pending, status
-Path('/workspace/.quest-chat-report').write_text(status.answer)
+assert isinstance(question, Question), question
+[quest_id] = quest_ids
+say(quest_id, 'run the focused tests')
+say(quest_id, 'approved', reply_to=question.id)
+outcome = check(quest_id, wait=True, timeout=120)
+assert outcome.state == 'completed', outcome
+Path('/workspace/.quest-chat-report').write_text(outcome.answer)
 """
   launch = DockerLaunchSpec(
     workspace_docker.Launch(
@@ -1946,12 +1948,12 @@ Path('/workspace/.quest-chat-report').write_text(status.answer)
 _CANCEL_CHILD = """
 import time
 from bro.run_lifecycle import RunLifecycle
-from bro.summon import say
+from bro.quest import say
 
 channel = RunLifecycle.from_env()
 assert channel is not None
 channel.trail('e2e-cancel-trail')
-say('running')
+say('self', 'running')
 time.sleep(600)
 """
 
@@ -1989,18 +1991,19 @@ def test_cancel_kills_a_live_child_and_ends_its_quest_on_reap(
 import json
 from pathlib import Path
 from bro.broker.client import Client
-from bro.summon import cancel_summon, summon_detached, wait_summon
+from bro.quest import cancel, history
+from bro.summon import summon_detached
 
-request_id = summon_detached(
+quest_id = summon_detached(
   'bro', 'hang until cancelled', llm='echo', harness='bro', timeout=600
 )
-running = wait_summon(request_id, timeout=120)
-assert running.pending and running.chat_seq > 0, running
-ended = cancel_summon(request_id, timeout=120)
+running = history(quest_id, wait=True, timeout=120)
+assert not running.ended and running.chat_seq > 0, running
+ended = cancel(quest_id, timeout=120)
 client = Client.from_env()
 assert client is not None
 with client:
-  quest = client.call('query', {'id': request_id}, 30).payload['value']['quest']
+  quest = client.call('query', {'id': quest_id}, 30).payload['value']['quest']
 Path('/workspace/.quest-cancel-report').write_text(json.dumps({
   'state': ended.state,
   'outcome': ended.outcome,

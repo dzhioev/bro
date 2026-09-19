@@ -42,13 +42,13 @@ def talk_from_env() -> Optional[Talk]:
   return None if value is None else brotocol.decode_talk(value)
 
 
-def _missing_worker_right(talk: Talk, message: Message) -> str:
+def _missing_summoned_right(talk: Talk, message: Message) -> str:
   if message.is_say:
-    return 'worker.say'
-  if message.is_reply and 'requester.question' not in talk:
-    return 'requester.question'
-  if message.is_question and 'worker.question' not in talk:
-    return 'worker.question'
+    return 'summoned.say'
+  if message.is_reply and 'summoner.question' not in talk:
+    return 'summoner.question'
+  if message.is_question and 'summoned.question' not in talk:
+    return 'summoned.question'
   raise RuntimeError('allowed message has no missing talk right')
 
 
@@ -225,9 +225,9 @@ class Client:
     if message.quest_id != os.environ.get(QUEST_ENV):
       return
     talk = talk_from_env()
-    if talk is None or brotocol.message_allowed(talk, 'worker', message):
+    if talk is None or brotocol.message_allowed(talk, 'summoned', message):
       return
-    missing_right = _missing_worker_right(talk, message)
+    missing_right = _missing_summoned_right(talk, message)
     raise PermissionError(
       f'{brotocol.TALK_ENV} lacks {missing_right} for a message on the session quest'
     )

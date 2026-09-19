@@ -548,7 +548,7 @@ class TestToolLayers:
   def test_a_summoning_run_reaches_the_summon_watch_over_a_block_of_monitor(self, monkeypatch):
     monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
     bro = _ShellBlockingBro()
-    assert bro.narrowed_tool_commands('claude') == {'Monitor': (bro_module.SUMMON_WATCH_COMMAND,)}
+    assert bro.narrowed_tool_commands('claude') == {'Monitor': (bro_module.QUEST_WATCH_COMMAND,)}
     blocked = set(bro.blocked_tool_names('claude'))
     assert 'Bash' in blocked
     assert blocked.isdisjoint({'Monitor', 'TaskOutput', 'TaskStop'})
@@ -566,7 +566,7 @@ class TestToolLayers:
 
     assert WatchingBro().narrowed_tool_commands('claude') == {
       'Bash': ('watch it',),
-      'Monitor': ('watch it', bro_module.SUMMON_WATCH_COMMAND),
+      'Monitor': ('watch it', bro_module.QUEST_WATCH_COMMAND),
     }
 
   def test_a_run_that_may_summon_nobody_keeps_its_block_of_monitor(self, monkeypatch):
@@ -577,14 +577,21 @@ class TestToolLayers:
 
   def test_a_summoned_run_with_a_speaking_summoner_reaches_the_watch(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    monkeypatch.setenv(TALK_ENV, 'requester.say,worker.say')
+    monkeypatch.setenv(TALK_ENV, 'summoner.say,summoned.say')
     bro = _ShellBlockingBro()
-    assert bro.narrowed_tool_commands('claude') == {'Monitor': (bro_module.SUMMON_WATCH_COMMAND,)}
+    assert bro.narrowed_tool_commands('claude') == {'Monitor': (bro_module.QUEST_WATCH_COMMAND,)}
     assert set(bro.blocked_tool_names('claude')).isdisjoint({'Monitor', 'TaskOutput', 'TaskStop'})
 
-  def test_a_summoned_run_with_a_silent_summoner_keeps_monitor_blocked(self, monkeypatch):
+  def test_a_summoned_run_that_may_ask_reaches_the_watch(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    monkeypatch.setenv(TALK_ENV, 'worker.say,worker.question')
+    monkeypatch.setenv(TALK_ENV, 'summoned.say,summoned.question')
+    bro = _ShellBlockingBro()
+    assert bro.narrowed_tool_commands('claude') == {'Monitor': (bro_module.QUEST_WATCH_COMMAND,)}
+    assert set(bro.blocked_tool_names('claude')).isdisjoint({'Monitor', 'TaskOutput', 'TaskStop'})
+
+  def test_a_summoned_run_that_can_only_report_keeps_monitor_blocked(self, monkeypatch):
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    monkeypatch.setenv(TALK_ENV, 'summoned.say')
     bro = _ShellBlockingBro()
     assert 'Monitor' in bro.blocked_tool_names('claude')
     assert bro.narrowed_tool_commands('claude') == {}
@@ -1399,9 +1406,9 @@ class TestSessionModePrompts:
 
   def test_native_system_prompt_passes_the_runs_talk_to_the_summoned_contract(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    monkeypatch.setenv(TALK_ENV, 'worker.question')
+    monkeypatch.setenv(TALK_ENV, 'summoned.question')
     prompt = EchoBro().system_prompt_for(hold='unattended')
-    assert '`question=true`' in prompt
+    assert 'call `bro::quest_ask` on `self`' in prompt
     assert 'quest does not permit' not in prompt
 
 
@@ -1437,7 +1444,7 @@ class TestBannerTool:
 
 
 class _FakeSummonClient:
-  """stands in for summon.open_client(): records the close the tool owes it."""
+  """stands in for quest.open_client(): records the close the tool owes it."""
 
   def __init__(self):
     self.closed = False
@@ -1453,15 +1460,24 @@ class _FakeSummonClient:
     self.close()
 
 
+_QUEST_TOOLS = {
+  'summon',
+  'quest_check',
+  'quest_history',
+  'quest_say',
+  'quest_ask',
+  'quest_list',
+  'quest_cancel',
+}
+
+
 class TestSummonTool:
   @pytest.mark.asyncio
   async def test_absent_without_a_channel(self):
     # conftest drops BROKER_CHANNEL, so the plain construction has no channel
     bro = EchoBro()
     names = await _collect_tool_names([_service_server(bro)])
-    assert 'summon' not in names
-    assert 'summon_say' not in names
-    assert 'summon_check' not in names
+    assert _QUEST_TOOLS.isdisjoint(names)
 
   @pytest.mark.asyncio
   async def test_present_on_both_service_builds_when_a_channel_is_set(self, monkeypatch):
@@ -1470,27 +1486,23 @@ class TestSummonTool:
     non_interactive = await _collect_tool_names(_native_servers(bro, hold='unattended'))
     interactive = await _collect_tool_names(_native_servers(bro, hold='guided'))
     # interactive surfaces (`call`) summon too — only `raise` is non-interactive-only
-    assert {'summon', 'summon_say', 'summon_check', 'summon_list', 'summon_cancel'} <= set(
-      non_interactive
-    )
-    assert {'summon', 'summon_say', 'summon_check', 'summon_list', 'summon_cancel'} <= set(
-      interactive
-    )
+    assert _QUEST_TOOLS <= set(non_interactive)
+    assert _QUEST_TOOLS <= set(interactive)
 
   @pytest.mark.asyncio
   async def test_proxy_failure_state_keeps_the_broker_tools_present(self, monkeypatch):
     monkeypatch.setenv('BROKER_UPSTREAM', 'tcp://token@127.0.0.1:9')
     names = await _collect_tool_names([_service_server(EchoBro())])
-    assert {'summon', 'summon_say', 'summon_check', 'summon_list', 'summon_cancel'} <= set(names)
+    assert _QUEST_TOOLS <= set(names)
 
   @pytest.mark.asyncio
-  async def test_summon_list_returns_the_journal_records(self, monkeypatch):
-    from bro import summon as summon_module
+  async def test_quest_list_returns_the_journal_records(self, monkeypatch):
+    from bro import quest as quest_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     listing = {'quests': [{'id': 'R1', 'state': 'ended', 'outcome': 'ok'}]}
-    monkeypatch.setattr(summon_module, 'list_summons', lambda: listing)
-    tool = await _find_tool(EchoBro(), 'summon_list')
+    monkeypatch.setattr(quest_module, 'list_quests', lambda: listing)
+    tool = await _find_tool(EchoBro(), 'quest_list')
     assert await tool.call({}) == listing
 
   @pytest.mark.asyncio
@@ -1499,19 +1511,21 @@ class TestSummonTool:
     bare = {tool.name: tool for tool in await _service_server(EchoBro()).list_tools()}
     served = {tool.name: tool for tool in await _service_server(EchoBro(), wire='mcp').list_tools()}
 
-    assert 'detach' not in bare['summon'].parameters['properties']
-    assert set(bare['summon_check'].parameters['properties']) == {'request_id'}
-    assert set(bare['summon_say'].parameters['properties']) == {
-      'text',
-      'request_id',
-      'reply_to',
-      'question',
-    }
-    assert set(bare['summon_cancel'].parameters['properties']) == {'request_id'}
-    assert 'detach' in served['summon'].parameters['properties']
-    assert {'wait', 'timeout'} <= set(served['summon_check'].parameters['properties'])
-    assert 'wait' in served['summon_say'].parameters['properties']
-    assert 'timeout' in served['summon_cancel'].parameters['properties']
+    def properties(tool) -> set[str]:
+      return set(tool.parameters['properties'])
+
+    assert 'detach' not in properties(bare['summon'])
+    assert properties(bare['quest_check']) == {'quest_id'}
+    assert properties(bare['quest_history']) == {'quest_id'}
+    assert properties(bare['quest_say']) == {'quest_id', 'text', 'reply_to'}
+    assert properties(bare['quest_ask']) == {'quest_id', 'text', 'reply_to'}
+    assert properties(bare['quest_cancel']) == {'quest_id'}
+    assert 'detach' in properties(served['summon'])
+    assert {'wait', 'timeout'} <= properties(served['quest_check'])
+    assert {'wait', 'timeout'} <= properties(served['quest_history'])
+    assert properties(served['quest_say']) == {'quest_id', 'text', 'reply_to'}
+    assert 'wait' in properties(served['quest_ask'])
+    assert 'timeout' in properties(served['quest_cancel'])
 
   @pytest.mark.asyncio
   async def test_bare_summon_returns_after_acceptance(self, monkeypatch):
@@ -1529,92 +1543,109 @@ class TestSummonTool:
 
     assert await tool.call({'target': 'dev', 'prompt': 'work'}) == {
       'state': 'accepted',
-      'request_id': 'REQ-1',
+      'quest_id': 'REQ-1',
     }
     assert calls[0][0:2] == ('dev', 'work')
     assert calls[0][2]['step_id'] == 9
     assert calls[0][2]['index'] == 2
 
   @pytest.mark.asyncio
-  async def test_bare_summon_say_asks_without_waiting(self, monkeypatch):
-    from bro import summon as summon_module
+  async def test_bare_quest_ask_asks_without_waiting(self, monkeypatch):
+    from bro import quest as quest_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     calls = []
 
-    def say(text, request_id, *, reply_to, question):
-      calls.append((text, request_id, reply_to, question))
-      return summon_module.SayStatus('question', request_id, question_id='QUESTION-1')
+    def ask(quest_id, text, *, reply_to):
+      calls.append((quest_id, text, reply_to))
+      return quest_module.Asked(quest_id, 'QUESTION-1')
 
-    monkeypatch.setattr(summon_module, 'say', say)
-    tool = await _find_tool(EchoBro(), 'summon_say')
+    monkeypatch.setattr(quest_module, 'ask', ask)
+    tool = await _find_tool(EchoBro(), 'quest_ask')
 
-    assert await tool.call({'text': 'approve?', 'request_id': 'REQ-1', 'question': True}) == {
-      'state': 'question',
-      'request_id': 'REQ-1',
-      'id': 'QUESTION-1',
+    assert await tool.call({'quest_id': 'REQ-1', 'text': 'approve?'}) == {
+      'state': 'asked',
+      'quest_id': 'REQ-1',
+      'question_id': 'QUESTION-1',
     }
-    assert calls == [('approve?', 'REQ-1', None, True)]
+    assert calls == [('REQ-1', 'approve?', None)]
 
   @pytest.mark.asyncio
-  async def test_bare_summon_cancel_returns_after_acceptance(self, monkeypatch):
-    from bro import summon as summon_module
+  async def test_quest_say_returns_the_sent_state(self, monkeypatch):
+    from bro import quest as quest_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    calls = []
+
+    def say(quest_id, text, *, reply_to):
+      calls.append((quest_id, text, reply_to))
+      return 'OWN-QUEST'
+
+    monkeypatch.setattr(quest_module, 'say', say)
+    for wire in ('bare', 'mcp'):
+      tool = await _find_tool(EchoBro(), 'quest_say', wire=wire)
+      assert await tool.call({'quest_id': 'self', 'text': 'yes', 'reply_to': 'Q1'}) == {
+        'state': 'sent',
+        'quest_id': 'OWN-QUEST',
+      }
+    assert calls == [('self', 'yes', 'Q1')] * 2
+
+  @pytest.mark.asyncio
+  async def test_bare_quest_cancel_returns_after_acceptance(self, monkeypatch):
+    from bro import quest as quest_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     monkeypatch.setattr(
-      summon_module,
+      quest_module,
       'request_cancel',
-      lambda request_id: summon_module.CancelStatus('accepted', request_id),
+      lambda quest_id: quest_module.CancelStatus('accepted', quest_id),
     )
-    tool = await _find_tool(EchoBro(), 'summon_cancel')
+    tool = await _find_tool(EchoBro(), 'quest_cancel')
 
-    assert await tool.call({'request_id': 'REQ-1'}) == {
+    assert await tool.call({'quest_id': 'REQ-1'}) == {
       'state': 'accepted',
-      'request_id': 'REQ-1',
+      'quest_id': 'REQ-1',
     }
 
   @pytest.mark.asyncio
-  async def test_mcp_summon_say_returns_structured_question_and_closes_its_client(
-    self, monkeypatch
-  ):
-    from bro import summon as summon_module
+  async def test_mcp_quest_ask_returns_the_asked_state_and_closes_its_client(self, monkeypatch):
+    from bro import quest as quest_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     client = _FakeSummonClient()
-    monkeypatch.setattr(summon_module, 'open_client', lambda: client)
+    monkeypatch.setattr(quest_module, 'open_client', lambda: client)
     monkeypatch.setattr(
-      summon_module,
-      'say',
-      lambda text, request_id, *, reply_to, wait, client: summon_module.SayStatus(
-        'question', request_id, question_id='QUESTION-1'
-      ),
+      quest_module,
+      'ask',
+      lambda quest_id, text, *, reply_to, wait, client: quest_module.Asked(quest_id, 'QUESTION-1'),
     )
-    tool = await _find_tool(EchoBro(), 'summon_say', wire='mcp')
+    tool = await _find_tool(EchoBro(), 'quest_ask', wire='mcp')
 
-    assert await tool.call({'text': 'approve?', 'request_id': 'REQ-1', 'wait': 60}) == {
-      'state': 'question',
-      'request_id': 'REQ-1',
-      'id': 'QUESTION-1',
+    assert await tool.call({'quest_id': 'REQ-1', 'text': 'approve?', 'wait': 60}) == {
+      'state': 'asked',
+      'quest_id': 'REQ-1',
+      'question_id': 'QUESTION-1',
     }
     assert client.closed
 
   @pytest.mark.asyncio
-  async def test_mcp_summon_say_refuses_over_bound_text_before_opening_its_client(
-    self, monkeypatch
-  ):
-    from bro import summon as summon_module
+  @pytest.mark.parametrize(
+    ('name', 'wire'), [('quest_ask', 'mcp'), ('quest_say', 'mcp'), ('quest_say', 'bare')]
+  )
+  async def test_over_bound_text_is_refused_before_a_client_opens(self, monkeypatch, name, wire):
+    from bro import quest as quest_module
     from bro.broker.journal_test_helper import text_at_the_message_bound
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    monkeypatch.setattr(summon_module, 'open_client', lambda: pytest.fail('a client was opened'))
-    tool = await _find_tool(EchoBro(), 'summon_say', wire='mcp')
+    monkeypatch.setattr(quest_module, 'open_client', lambda: pytest.fail('a client was opened'))
+    tool = await _find_tool(EchoBro(), name, wire=wire)
 
-    with pytest.raises(summon_module.SummonError, match='mint an artifact'):
-      await tool.call({'text': text_at_the_message_bound() + 'x', 'request_id': 'REQ-1'})
+    with pytest.raises(quest_module.QuestError, match='mint an artifact'):
+      await tool.call({'quest_id': 'REQ-1', 'text': text_at_the_message_bound() + 'x'})
 
   @pytest.mark.asyncio
   async def test_mcp_calls_summon_and_wait_off_loop(self, monkeypatch):
-    from bro import summon as summon_module
+    from bro import quest as quest_module, summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     calls: list = []
@@ -1663,7 +1694,7 @@ class TestSummonTool:
       on_sent('REQ-ID')
       return 'the answer'
 
-    monkeypatch.setattr(summon_module, 'open_client', lambda: client)
+    monkeypatch.setattr(quest_module, 'open_client', lambda: client)
     monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
     run = StubRun(tool_step={'step_id': 42, 'index': 3})
     tool = None
@@ -1681,10 +1712,10 @@ class TestSummonTool:
         'llm': 'openai:sol:high+fast',
         'party': 'start',
         'isolation': 'unboxed',
-        'talk': ['worker.question'],
+        'talk': ['summoned.question'],
       }
     )
-    assert result == {'state': 'completed', 'request_id': 'REQ-ID', 'answer': 'the answer'}
+    assert result == {'state': 'completed', 'quest_id': 'REQ-ID', 'answer': 'the answer'}
     # the request carries the summon call's own tool_call step for provenance
     assert calls == [
       {
@@ -1697,38 +1728,38 @@ class TestSummonTool:
         'llm': 'openai:sol:high+fast',
         'party': 'start',
         'isolation': 'unboxed',
-        'talk': ['worker.question'],
+        'talk': ['summoned.question'],
         'step_id': 42,
         'index': 3,
         'client': client,
-        'silence_timeout': summon_module.READ_WAIT_SECONDS,
+        'silence_timeout': quest_module.READ_WAIT_SECONDS,
       }
     ]
     assert client.closed  # the per-call client is closed on the way out
 
   @pytest.mark.asyncio
   async def test_mcp_blocking_summon_returns_a_structured_child_question(self, monkeypatch):
-    from bro import summon as summon_module
+    from bro import quest as quest_module, summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    monkeypatch.setattr(summon_module, 'open_client', _FakeSummonClient)
+    monkeypatch.setattr(quest_module, 'open_client', _FakeSummonClient)
 
     def ask(*args, on_sent=None, **kwargs):
       assert on_sent is not None
       on_sent('REQ-1')
-      return summon_module.SummonQuestion('QUESTION-1', 'approve?')
+      return quest_module.Question('QUESTION-1', 'approve?', 'REQ-1')
 
     monkeypatch.setattr(summon_module, 'summon_and_wait', ask)
     tool = await _find_tool(EchoBro(), 'summon', wire='mcp')
 
-    assert await tool.call({'target': 'dev', 'prompt': 'work', 'talk': ['worker.question']}) == {
+    assert await tool.call({'target': 'dev', 'prompt': 'work', 'talk': ['summoned.question']}) == {
       'state': 'question',
-      'request_id': 'REQ-1',
+      'quest_id': 'REQ-1',
       'question': {'id': 'QUESTION-1', 'text': 'approve?'},
     }
 
   @pytest.mark.asyncio
-  async def test_mcp_detach_returns_the_request_id_without_waiting(self, monkeypatch):
+  async def test_mcp_detach_returns_the_quest_id_without_waiting(self, monkeypatch):
     from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
@@ -1762,62 +1793,74 @@ class TestSummonTool:
     monkeypatch.setattr(summon_module, 'summon_and_wait', fail_summon_and_wait)
     tool = await _find_tool(EchoBro(), 'summon', wire='mcp')
     result = await tool.call({'target': 'dev', 'prompt': 'deploy', 'detach': True})
-    assert result == {'state': 'accepted', 'request_id': 'REQ-ID'}
+    assert result == {'state': 'accepted', 'quest_id': 'REQ-ID'}
     assert calls == [{'target': 'dev', 'prompt': 'deploy', 'timeout': None, 'into': None}]
 
   @pytest.mark.asyncio
-  async def test_check_reports_pending_and_completed(self, monkeypatch):
-    from bro import summon as summon_module
+  async def test_check_reports_running_completed_and_a_stalled_child(self, monkeypatch):
+    from bro import quest as quest_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    statuses = [
-      summon_module.SummonStatus(pending=True, trail_id='T1'),
-      summon_module.SummonStatus(pending=False, answer='pong', trail_id='T1'),
+    outcomes = [
+      quest_module.Outcome('REQ-1', trail_id='T1'),
+      quest_module.Outcome(
+        'REQ-1', trail_id='T1', questions=(quest_module.Question('Q1', 'approve?', 'REQ-1'),)
+      ),
+      quest_module.Outcome('REQ-1', answer='pong', trail_id='T1'),
     ]
-    monkeypatch.setattr(summon_module, 'check_summon', lambda request_id: statuses.pop(0))
-    tool = await _find_tool(EchoBro(), 'summon_check')
-    assert await tool.call({'request_id': 'REQ-1'}) == {
-      'state': 'pending',
-      'request_id': None,
-      'talk': [],
-      'pending': [],
-      'messages': [],
+    calls = []
+
+    def check(quest_id):
+      calls.append(quest_id)
+      return outcomes.pop(0)
+
+    monkeypatch.setattr(quest_module, 'check', check)
+    tool = await _find_tool(EchoBro(), 'quest_check')
+    assert await tool.call({'quest_id': 'REQ-1'}) == {
+      'state': 'running',
+      'quest_id': 'REQ-1',
       'trail_id': 'T1',
     }
-    assert await tool.call({'request_id': 'REQ-1'}) == {
+    assert await tool.call({'quest_id': 'REQ-1'}) == {
+      'state': 'question',
+      'quest_id': 'REQ-1',
+      'trail_id': 'T1',
+      'questions': [{'id': 'Q1', 'text': 'approve?'}],
+    }
+    assert await tool.call({'quest_id': 'REQ-1'}) == {
       'state': 'completed',
-      'request_id': None,
-      'talk': [],
-      'pending': [],
-      'messages': [],
+      'quest_id': 'REQ-1',
       'trail_id': 'T1',
       'answer': 'pong',
     }
+    assert calls == ['REQ-1'] * 3
 
   @pytest.mark.asyncio
-  async def test_check_without_a_request_id_reads_the_own_quest(self, monkeypatch):
-    from bro import summon as summon_module
+  async def test_history_reports_the_marked_conversation(self, monkeypatch):
+    from bro import quest as quest_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    calls = []
+    question = {'seq': 1, 'from': 'summoner', 'id': 'Q1', 'head': {'text': 'go?'}, 'pending': True}
 
-    def check(request_id=None):
-      calls.append(request_id)
-      return summon_module.SummonStatus(pending=True, request_id='OWN-QUEST')
+    def history(quest_id):
+      assert quest_id == 'self'
+      return quest_module.History(
+        'OWN-QUEST',
+        ('summoner.question',),
+        (question,),
+        truncated=True,
+        chat_seq=1,
+        awaiting=(quest_module.Question('Q1', 'go?', 'OWN-QUEST'),),
+      )
 
-    monkeypatch.setattr(summon_module, 'check_summon', check)
-    tool = await _find_tool(EchoBro(), 'summon_check')
-
-    result = await tool.call({})
-    assert isinstance(result, dict)
-    assert result['request_id'] == 'OWN-QUEST'
-    assert calls == [None]
-
-  @pytest.mark.asyncio
-  async def test_check_schema_has_no_conversation_cursor(self, monkeypatch):
-    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    tool = await _find_tool(EchoBro(), 'summon_check')
-    assert 'last_seen' not in tool.parameters['properties']
+    monkeypatch.setattr(quest_module, 'history', history)
+    tool = await _find_tool(EchoBro(), 'quest_history')
+    assert await tool.call({'quest_id': 'self'}) == {
+      'quest_id': 'OWN-QUEST',
+      'talk': ['summoner.question'],
+      'messages': [question],
+      'truncated': True,
+    }
 
   @pytest.mark.asyncio
   async def test_cancelled_mcp_summon_closes_its_client(self, monkeypatch):
@@ -1826,7 +1869,7 @@ class TestSummonTool:
     # worker thread and detaches the broxy route
     import threading
 
-    from bro import summon as summon_module
+    from bro import quest as quest_module, summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     client = _FakeSummonClient()
@@ -1856,7 +1899,7 @@ class TestSummonTool:
     ):
       entered.set()
       release.wait()
-      raise summon_module.SummonError('broker channel closed awaiting the summon result')
+      raise quest_module.QuestError('broker channel closed awaiting the summon result')
 
     def fake_close(confirm: bool = False) -> None:
       del confirm
@@ -1864,7 +1907,7 @@ class TestSummonTool:
       release.set()
 
     monkeypatch.setattr(client, 'close', fake_close)
-    monkeypatch.setattr(summon_module, 'open_client', lambda: client)
+    monkeypatch.setattr(quest_module, 'open_client', lambda: client)
     monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
     tool = await _find_tool(EchoBro(), 'summon', wire='mcp')
     task = asyncio.create_task(tool.call({'target': 'dev', 'prompt': 'deploy'}))
@@ -1877,7 +1920,7 @@ class TestSummonTool:
   @pytest.mark.asyncio
   async def test_transport_caution_only_on_the_mcp_wire(self, monkeypatch):
     # wire 'mcp' builds are consumed over an MCP transport with a client-side
-    # call budget; their summon descriptions carry the timeout caution
+    # call budget; their blocking descriptions carry the timeout caution
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     bro_instance = EchoBro()
     mcp_build = bro_module._build_service_server(
@@ -1888,110 +1931,118 @@ class TestSummonTool:
     )
     mcp_tools = {t.name: t for t in await mcp_build.list_tools()}
     bare_tools = {t.name: t for t in await bare_build.list_tools()}
-    for name in ('summon', 'summon_say', 'summon_check', 'summon_cancel'):
+    for name in ('summon', 'quest_ask', 'quest_check', 'quest_history', 'quest_cancel'):
       assert 'CAUTION' in mcp_tools[name].description
       assert 'CAUTION' not in bare_tools[name].description
+    assert 'CAUTION' not in mcp_tools['quest_say'].description
 
   @pytest.mark.asyncio
   async def test_check_wait_collects(self, monkeypatch):
-    from bro import summon as summon_module
+    from bro import quest as quest_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     calls: list = []
     client = _FakeSummonClient()
 
-    def fake_wait_summon(request_id, *, timeout=None, client=None, wait_seconds=None):
-      calls.append({'request_id': request_id, 'timeout': timeout, 'client': client})
-      return summon_module.SummonStatus(pending=False, answer='collected')
+    def fake_check(quest_id, *, wait=False, timeout=None, client=None):
+      calls.append({'quest_id': quest_id, 'wait': wait, 'timeout': timeout, 'client': client})
+      return quest_module.Outcome(quest_id, answer='collected')
 
-    monkeypatch.setattr(summon_module, 'open_client', lambda: client)
-    monkeypatch.setattr(summon_module, 'wait_summon', fake_wait_summon)
-    tool = await _find_tool(EchoBro(), 'summon_check', wire='mcp')
-    result = await tool.call({'request_id': 'REQ-1', 'wait': True, 'timeout': 60})
-    assert result == {
-      'state': 'completed',
-      'request_id': None,
-      'talk': [],
-      'pending': [],
-      'messages': [],
-      'answer': 'collected',
-    }
-    assert calls == [{'request_id': 'REQ-1', 'timeout': 60, 'client': client}]
+    monkeypatch.setattr(quest_module, 'open_client', lambda: client)
+    monkeypatch.setattr(quest_module, 'check', fake_check)
+    tool = await _find_tool(EchoBro(), 'quest_check', wire='mcp')
+    result = await tool.call({'quest_id': 'REQ-1', 'wait': True, 'timeout': 60})
+    assert result == {'state': 'completed', 'quest_id': 'REQ-1', 'answer': 'collected'}
+    assert calls == [{'quest_id': 'REQ-1', 'wait': True, 'timeout': 60, 'client': client}]
     assert client.closed
 
   @pytest.mark.asyncio
-  async def test_check_wait_returns_pending_at_its_deadline(self, monkeypatch):
-    from bro import summon as summon_module
+  async def test_check_wait_returns_running_at_its_deadline(self, monkeypatch):
+    from bro import quest as quest_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     client = _FakeSummonClient()
 
-    def fake_wait_summon(request_id, *, timeout=None, client=None):
-      assert request_id == 'REQ-1'
-      assert timeout == 60
-      return summon_module.SummonStatus(pending=True, trail_id='T1')
+    def fake_check(quest_id, *, wait=False, timeout=None, client=None):
+      assert (quest_id, wait, timeout) == ('REQ-1', True, 60)
+      return quest_module.Outcome(quest_id, trail_id='T1')
 
-    monkeypatch.setattr(summon_module, 'open_client', lambda: client)
-    monkeypatch.setattr(summon_module, 'wait_summon', fake_wait_summon)
-    tool = await _find_tool(EchoBro(), 'summon_check', wire='mcp')
+    monkeypatch.setattr(quest_module, 'open_client', lambda: client)
+    monkeypatch.setattr(quest_module, 'check', fake_check)
+    tool = await _find_tool(EchoBro(), 'quest_check', wire='mcp')
 
-    assert await tool.call({'request_id': 'REQ-1', 'wait': True, 'timeout': 60}) == {
-      'state': 'pending',
-      'request_id': None,
-      'talk': [],
-      'pending': [],
-      'messages': [],
+    assert await tool.call({'quest_id': 'REQ-1', 'wait': True, 'timeout': 60}) == {
+      'state': 'running',
+      'quest_id': 'REQ-1',
       'trail_id': 'T1',
     }
     assert client.closed
 
   @pytest.mark.asyncio
+  async def test_history_wait_reads_on_its_own_client(self, monkeypatch):
+    from bro import quest as quest_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    calls: list = []
+    client = _FakeSummonClient()
+
+    def fake_history(quest_id, *, wait=False, timeout=None, client=None):
+      calls.append({'quest_id': quest_id, 'wait': wait, 'timeout': timeout, 'client': client})
+      return quest_module.History(quest_id, ('summoned.say',), (), chat_seq=0)
+
+    monkeypatch.setattr(quest_module, 'open_client', lambda: client)
+    monkeypatch.setattr(quest_module, 'history', fake_history)
+    tool = await _find_tool(EchoBro(), 'quest_history', wire='mcp')
+    result = await tool.call({'quest_id': 'REQ-1', 'wait': True, 'timeout': 60})
+    assert result == {'quest_id': 'REQ-1', 'talk': ['summoned.say'], 'messages': []}
+    assert calls == [{'quest_id': 'REQ-1', 'wait': True, 'timeout': 60, 'client': client}]
+    assert client.closed
+
+  @pytest.mark.asyncio
   async def test_cancel_waits_on_its_own_client_and_returns_the_ended_state(self, monkeypatch):
-    from bro import summon as summon_module
+    from bro import quest as quest_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     client = _FakeSummonClient()
     calls = []
 
-    def fake_cancel_summon(request_id, *, timeout=None, client=None):
-      calls.append({'request_id': request_id, 'timeout': timeout, 'client': client})
-      return summon_module.CancelStatus(
-        'ended', request_id, outcome='failed', reason='cancelled', trail_id='T1'
+    def fake_cancel(quest_id, *, timeout=None, client=None):
+      calls.append({'quest_id': quest_id, 'timeout': timeout, 'client': client})
+      return quest_module.CancelStatus(
+        'ended', quest_id, outcome='failed', reason='cancelled', trail_id='T1'
       )
 
-    monkeypatch.setattr(summon_module, 'open_client', lambda: client)
-    monkeypatch.setattr(summon_module, 'cancel_summon', fake_cancel_summon)
-    tool = await _find_tool(EchoBro(), 'summon_cancel', wire='mcp')
+    monkeypatch.setattr(quest_module, 'open_client', lambda: client)
+    monkeypatch.setattr(quest_module, 'cancel', fake_cancel)
+    tool = await _find_tool(EchoBro(), 'quest_cancel', wire='mcp')
 
-    assert await tool.call({'request_id': 'REQ-1', 'timeout': 60}) == {
+    assert await tool.call({'quest_id': 'REQ-1', 'timeout': 60}) == {
       'state': 'ended',
-      'request_id': 'REQ-1',
+      'quest_id': 'REQ-1',
       'outcome': 'failed',
       'reason': 'cancelled',
       'trail_id': 'T1',
     }
-    assert calls == [{'request_id': 'REQ-1', 'timeout': 60, 'client': client}]
+    assert calls == [{'quest_id': 'REQ-1', 'timeout': 60, 'client': client}]
     assert client.closed
 
   @pytest.mark.asyncio
   async def test_cancel_returns_pending_at_its_deadline(self, monkeypatch):
-    from bro import summon as summon_module
+    from bro import quest as quest_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     client = _FakeSummonClient()
-    monkeypatch.setattr(summon_module, 'open_client', lambda: client)
+    monkeypatch.setattr(quest_module, 'open_client', lambda: client)
     monkeypatch.setattr(
-      summon_module,
-      'cancel_summon',
-      lambda request_id, *, timeout=None, client=None: summon_module.CancelStatus(
-        'pending', request_id
-      ),
+      quest_module,
+      'cancel',
+      lambda quest_id, *, timeout=None, client=None: quest_module.CancelStatus('pending', quest_id),
     )
-    tool = await _find_tool(EchoBro(), 'summon_cancel', wire='mcp')
+    tool = await _find_tool(EchoBro(), 'quest_cancel', wire='mcp')
 
-    assert await tool.call({'request_id': 'REQ-1', 'timeout': 5}) == {
+    assert await tool.call({'quest_id': 'REQ-1', 'timeout': 5}) == {
       'state': 'pending',
-      'request_id': 'REQ-1',
+      'quest_id': 'REQ-1',
     }
     assert client.closed
 
@@ -1999,28 +2050,29 @@ class TestSummonTool:
   @pytest.mark.parametrize('timeout', [float('nan'), float('inf'), 0])
   async def test_mcp_cancel_rejects_a_non_finite_deadline(self, monkeypatch, timeout):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    tool = await _find_tool(EchoBro(), 'summon_cancel', wire='mcp')
+    tool = await _find_tool(EchoBro(), 'quest_cancel', wire='mcp')
     with pytest.raises(ValueError, match='finite positive'):
-      await tool.call({'request_id': 'REQ-1', 'timeout': timeout})
+      await tool.call({'quest_id': 'REQ-1', 'timeout': timeout})
 
   @pytest.mark.asyncio
-  async def test_mcp_check_timeout_without_wait_is_an_error(self, monkeypatch):
+  @pytest.mark.parametrize('name', ['quest_check', 'quest_history'])
+  async def test_mcp_read_timeout_without_wait_is_an_error(self, monkeypatch, name):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    tool = await _find_tool(EchoBro(), 'summon_check', wire='mcp')
+    tool = await _find_tool(EchoBro(), name, wire='mcp')
     with pytest.raises(ValueError, match='wait'):
-      await tool.call({'request_id': 'REQ-1', 'timeout': 60})
+      await tool.call({'quest_id': 'REQ-1', 'timeout': 60})
 
   @pytest.mark.asyncio
   @pytest.mark.parametrize('timeout', [float('nan'), float('inf')])
   async def test_mcp_check_wait_rejects_non_finite_deadlines(self, monkeypatch, timeout):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    tool = await _find_tool(EchoBro(), 'summon_check', wire='mcp')
+    tool = await _find_tool(EchoBro(), 'quest_check', wire='mcp')
     with pytest.raises(ValueError, match='finite positive'):
-      await tool.call({'request_id': 'REQ-1', 'wait': True, 'timeout': timeout})
+      await tool.call({'quest_id': 'REQ-1', 'wait': True, 'timeout': timeout})
 
   @pytest.mark.asyncio
   async def test_mcp_summon_failure_propagates_as_the_tool_error(self, monkeypatch):
-    from bro import summon as summon_module
+    from bro import quest as quest_module, summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
 
@@ -2045,9 +2097,9 @@ class TestSummonTool:
       client=None,
       silence_timeout=None,
     ):
-      raise summon_module.SummonError('summon denied: no')
+      raise quest_module.QuestError('summon denied: no')
 
-    monkeypatch.setattr(summon_module, 'open_client', lambda: _FakeSummonClient())
+    monkeypatch.setattr(quest_module, 'open_client', lambda: _FakeSummonClient())
     monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
     bro = EchoBro()
     tool = None
@@ -2056,7 +2108,7 @@ class TestSummonTool:
         tool = candidate
     assert tool is not None
     # a generic exception is the agent-loop tool-error contract (vs ToolControlSignal)
-    with pytest.raises(summon_module.SummonError, match='summon denied'):
+    with pytest.raises(quest_module.QuestError, match='summon denied'):
       await tool.call({'target': 'dev', 'prompt': 'deploy'})
 
 
@@ -2142,7 +2194,7 @@ class TestShellRoster:
   def test_summon_watch_is_the_only_native_command_without_a_declaration(self, monkeypatch):
     monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
     selection = EchoBro()._selected_tools_for('bro')
-    assert selection.shell_commands == (bro_module.SUMMON_WATCH_COMMAND,)
+    assert selection.shell_commands == (bro_module.QUEST_WATCH_COMMAND,)
     assert selection.shell_unrestricted is False
 
 
@@ -2325,10 +2377,25 @@ class TestJobServiceTools:
       stack.callback(run.registry.close)
       stack.callback(server.close)
       assert {'job', 'poll', 'kill', 'jobs', 'chill'} <= set(tools)
-      started = await tools['job'].call({'command': bro_module.SUMMON_WATCH_COMMAND, 'mode': 'bg'})
+      started = await tools['job'].call({'command': bro_module.QUEST_WATCH_COMMAND, 'mode': 'bg'})
       assert started == 'started job-1 (bg)'
       with pytest.raises(ValueError, match='must match exactly'):
         await tools['job'].call({'command': 'true', 'mode': 'bg'})
+
+  @pytest.mark.asyncio
+  async def test_a_summoned_native_run_that_may_ask_gets_the_watch_job(self, monkeypatch):
+    monkeypatch.delenv(MAY_SUMMON_ENV, raising=False)
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    monkeypatch.setenv(TALK_ENV, 'summoned.say,summoned.question')
+    run = StubRun()
+    server = _service_server(EchoBro(), run=run)
+    tools = {tool.name: tool for tool in await server.list_tools()}
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      assert {'job', 'chill'} <= set(tools)
+      started = await tools['job'].call({'command': bro_module.QUEST_WATCH_COMMAND, 'mode': 'bg'})
+      assert started == 'started job-1 (bg)'
 
   @pytest.mark.asyncio
   async def test_mcp_service_owns_and_closes_its_registry(self, tmp_path):

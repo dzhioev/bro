@@ -30,6 +30,10 @@ def bro_llm_usage():
   return run_cli('bro.llm.usage', sys.argv)
 
 
+def bro_quest():
+  return run_cli('bro.quest', sys.argv)
+
+
 def bro_runtime_mcp_server():
   return run_cli('bro.runtime.mcp_server', sys.argv)
 

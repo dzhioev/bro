@@ -15,7 +15,7 @@ regenerate its scripts and committed
 
 - `bro/native/` — runner, live LLM contract, provider dispatch, and provider clients;
   the runner owns the core inbox and job registry, and OpenAI drains notifications after tool batches or into an idle turn.
-  The session text tells a run to arm `summon watch` as a watch-mode job when it can receive summon traffic and use `chill` as its idle wait;
+  The session text tells a run to arm `quest watch` as a watch-mode job when it can receive summon traffic and use `chill` as its idle wait;
   a one-shot run still ends with its turn and closes every job
 - `bro/run.py` — the `bro` command dispatcher
 - `bro/launch/{run,call,call_tui,resume}.py` — native one-shot and interactive launch surfaces

@@ -17,24 +17,24 @@ from typing import Any, Literal, Optional, cast
 
 from bro.base.lulid import lulid
 
-PROTOCOL_REVISION = 3
-MAX_FRAME_BYTES = 256 * 1024
+PROTOCOL_REVISION = 4
+MAX_FRAME_BYTES = 512 * 1024
 MAX_IDENTIFIER_BYTES = 4096
 TALK_ENV = 'BROKER_TALK'
 
 OUTCOMES = frozenset({'ok', 'denied', 'failed'})
 _MARK_TRANSITIONS = frozenset({'accepted', 'listening', 'started', 'trail'})
 
-type End = Literal['requester', 'worker']
+type End = Literal['summoner', 'summoned']
 type TalkRight = Literal[
-  'requester.say',
-  'requester.question',
-  'worker.say',
-  'worker.question',
+  'summoner.say',
+  'summoner.question',
+  'summoned.say',
+  'summoned.question',
 ]
 type Talk = frozenset[TalkRight]
 TALK_RIGHTS: Talk = frozenset(
-  {'requester.say', 'requester.question', 'worker.say', 'worker.question'}
+  {'summoner.say', 'summoner.question', 'summoned.say', 'summoned.question'}
 )
 EMPTY_TALK: Talk = frozenset()
 
@@ -228,7 +228,7 @@ def message_allowed(talk: Talk, sender: End, candidate: Message) -> bool:
   """Whether `sender` may send this chat role under a quest's fixed talk."""
   if candidate.type != Tag.MESSAGE:
     raise ProtocolError(f'cannot apply talk to a {candidate.type} message')
-  other: End = 'worker' if sender == 'requester' else 'requester'
+  other: End = 'summoned' if sender == 'summoner' else 'summoner'
   if candidate.is_say:
     return f'{sender}.say' in talk
   if candidate.is_reply and f'{other}.question' not in talk:
@@ -334,10 +334,15 @@ def _validate_optional_identifier(name: str, value: Any) -> None:
   _validate_identifier_size(name, value)
 
 
+def encoded_text_bytes(value: str) -> int:
+  """what `value` costs inside a frame: its JSON string encoding, quotes aside."""
+  return len(json.dumps(value, ensure_ascii=False).encode('utf-8')) - 2
+
+
 def _validate_identifier_size(name: str, value: str) -> None:
-  size = len(value.encode('utf-8'))
+  size = encoded_text_bytes(value)
   if size > MAX_IDENTIFIER_BYTES:
-    raise ProtocolError(f'{name} is {size} bytes, over {MAX_IDENTIFIER_BYTES}')
+    raise ProtocolError(f'{name} encodes to {size} bytes, over {MAX_IDENTIFIER_BYTES}')
 
 
 def _require_message_envelope_keys(data: dict) -> None:

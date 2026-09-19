@@ -49,36 +49,36 @@ def test_message_roles_cover_say_question_reply_and_counter_question():
 
 
 def test_talk_encoding_is_canonical_and_strict():
-  talk = decode_talk('worker.say,requester.question')
-  assert encode_talk(talk) == 'requester.question,worker.say'
+  talk = decode_talk('summoned.say,summoner.question')
+  assert encode_talk(talk) == 'summoned.say,summoner.question'
   assert decode_talk('') == frozenset()
   with pytest.raises(ValueError, match='unknown talk right'):
-    decode_talk('worker.command')
+    decode_talk('summoned.command')
   with pytest.raises(ValueError, match='duplicate'):
-    decode_talk('worker.say,worker.say')
+    decode_talk('summoned.say,summoned.say')
 
 
 def test_talk_roles_require_the_senders_move_and_the_other_ends_question_for_a_reply():
-  talk: Talk = frozenset({'requester.say', 'requester.question', 'worker.question'})
-  assert message_allowed(talk, 'requester', message('quest', {}))
-  assert message_allowed(talk, 'requester', message('quest', {}, id='question'))
-  assert message_allowed(talk, 'requester', message('quest', {}, reply_to='worker-question'))
-  assert not message_allowed(talk, 'worker', message('quest', {}))
-  assert message_allowed(talk, 'worker', message('quest', {}, reply_to='requester-question'))
+  talk: Talk = frozenset({'summoner.say', 'summoner.question', 'summoned.question'})
+  assert message_allowed(talk, 'summoner', message('quest', {}))
+  assert message_allowed(talk, 'summoner', message('quest', {}, id='question'))
+  assert message_allowed(talk, 'summoner', message('quest', {}, reply_to='summoned-question'))
+  assert not message_allowed(talk, 'summoned', message('quest', {}))
+  assert message_allowed(talk, 'summoned', message('quest', {}, reply_to='summoner-question'))
   assert not message_allowed(
-    frozenset({'worker.question'}),
-    'worker',
-    message('quest', {}, reply_to='requester-question'),
+    frozenset({'summoned.question'}),
+    'summoned',
+    message('quest', {}, reply_to='summoner-question'),
   )
   assert not message_allowed(
-    frozenset({'worker.question'}),
-    'requester',
-    message('quest', {}, id='counter', reply_to='worker-question'),
+    frozenset({'summoned.question'}),
+    'summoner',
+    message('quest', {}, id='counter', reply_to='summoned-question'),
   )
 
 
 def test_protocol_revision_identifies_the_message_wire():
-  assert PROTOCOL_REVISION == 3
+  assert PROTOCOL_REVISION == 4
 
 
 def test_result_round_trip():
@@ -157,8 +157,16 @@ def test_oversize_identifiers_are_rejected():
     mark('quest', 'trail', trail_id=oversize)
 
 
-def test_wire_frame_cap_is_256_kibibytes():
-  assert MAX_FRAME_BYTES == 256 * 1024
+def test_identifier_bound_measures_the_encoded_cost():
+  assert message('quest', {}, id='x' * MAX_IDENTIFIER_BYTES).id is not None
+  expanding = '\x00' * (MAX_IDENTIFIER_BYTES // 6 + 1)
+  assert len(expanding.encode()) < MAX_IDENTIFIER_BYTES
+  with pytest.raises(ProtocolError, match='encodes to'):
+    message('quest', {}, id=expanding)
+
+
+def test_wire_frame_cap_is_512_kibibytes():
+  assert MAX_FRAME_BYTES == 512 * 1024
 
 
 def test_to_bytes_has_no_framing():

@@ -797,7 +797,7 @@ raise SystemExit(3)
     )
 
     handle = await ride.spawn.ProcessSpawner().spawn(
-      lowered, channel, 'X-1', frozenset({'worker.say'})
+      lowered, channel, 'X-1', frozenset({'summoned.say'})
     )
 
     assert await handle.wait() == 3
@@ -890,7 +890,7 @@ raise SystemExit(3)
       may_summon=(),
       harness='bro',
     )
-    await spawner.spawn(launch, channel, 'X-1', frozenset({'worker.say'}))
+    await spawner.spawn(launch, channel, 'X-1', frozenset({'summoned.say'}))
     [(lowered, lowered_channel, lowered_quest, lowered_talk)] = docker.spawned
     assert isinstance(lowered, ride.spawn.DockerLaunchSpec)
     assert lowered.launch.command == [
@@ -900,7 +900,7 @@ raise SystemExit(3)
     assert lowered.launch.name == 'broker-CH'
     assert lowered_channel is channel
     assert lowered_quest == 'X-1'
-    assert lowered_talk == frozenset({'worker.say'})
+    assert lowered_talk == frozenset({'summoned.say'})
 
   @pytest.mark.asyncio
   async def test_lowering_failure_propagates_out_of_spawn(self, lowering_harness):
@@ -928,7 +928,7 @@ raise SystemExit(3)
     # the raise crosses to_thread back onto the loop: Dispatcher.spawn turns it
     # into the correlated failed{reason: 'launch'}
     with pytest.raises(ValueError, match='nope'):
-      await spawner.spawn(launch, channel, 'X-1', frozenset({'worker.say'}))
+      await spawner.spawn(launch, channel, 'X-1', frozenset({'summoned.say'}))
 
 
 def test_unboxed_root_can_chain_joins_and_end_a_started_childs_party_without_a_daemon(

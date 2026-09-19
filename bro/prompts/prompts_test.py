@@ -107,7 +107,7 @@ class TestSessionFragment:
     monkeypatch.delenv(SUMMONED_ENV, raising=False)
     monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
     fragment = session_fragment('attended', harness='bro', wire='bare')
-    assert "`bro::job('summon watch', mode='watch')`" in fragment
+    assert "`bro::job('quest watch', mode='watch')`" in fragment
     assert '`bro::chill`' in fragment
     assert 'raw MCP session' not in fragment
 
@@ -120,29 +120,29 @@ class TestSessionFragment:
 
   def test_a_summoning_summoned_run_carries_both_contracts_in_order(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    monkeypatch.setenv(TALK_ENV, 'worker.say')
+    monkeypatch.setenv(TALK_ENV, 'summoned.say')
     monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
-    fragment = session_fragment('attended', harness='claude', wire='mcp', talk=('worker.say',))
+    fragment = session_fragment('attended', harness='claude', wire='mcp', talk=('summoned.say',))
     assert fragment.index('# Summoning session') < fragment.index('# Summoned session')
 
   def test_a_summoned_run_carries_the_delivery_contract_at_every_hold(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     for hold in ('unattended', 'detached', 'attended', 'guided'):
-      fragment = session_fragment(hold, harness='claude', wire='mcp', talk=('worker.say',))
+      fragment = session_fragment(hold, harness='claude', wire='mcp', talk=('summoned.say',))
       assert fragment.startswith('# Summoned session')
       assert '{{' not in fragment
 
   def test_the_hold_fragment_stays_the_suffix(self, monkeypatch):
     # the resumed-hold swap in `native/bro/fork.py` replaces it there
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    fragment = session_fragment('guided', harness='claude', wire='mcp', talk=('worker.say',))
+    fragment = session_fragment('guided', harness='claude', wire='mcp', talk=('summoned.say',))
     assert fragment.endswith(hold_fragment('guided', harness='claude', wire='mcp'))
 
   @pytest.mark.parametrize(
     ('harness', 'wire', 'marker'),
     (
-      ('claude', 'mcp', 'Arm `Monitor` once on exactly `summon watch`'),
-      ('bro', 'bare', "`bro::job('summon watch', mode='watch')`"),
+      ('claude', 'mcp', 'Arm `Monitor` once on exactly `quest watch`'),
+      ('bro', 'bare', "`bro::job('quest watch', mode='watch')`"),
       ('bro', 'mcp', 'raw MCP session has no persistent watch'),
     ),
   )
@@ -151,27 +151,35 @@ class TestSessionFragment:
   ):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     fragment = session_fragment(
-      'attended', harness=harness, wire=wire, talk=('requester.say', 'worker.say')
+      'attended', harness=harness, wire=wire, talk=('summoner.say', 'summoned.say')
     )
     assert marker in fragment
 
   def test_a_questioning_native_child_asks_without_blocking(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     fragment = session_fragment(
-      'unattended', harness='bro', wire='bare', talk=('worker.say', 'worker.question')
+      'unattended', harness='bro', wire='bare', talk=('summoned.say', 'summoned.question')
     )
-    assert '`question=true`' in fragment
-    assert 'reply arrives on the summon watch' in fragment
+    assert 'call `bro::quest_ask` on `self`' in fragment
+    assert 'reply arrives on the quest watch' in fragment
     assert 'bounded `wait`' not in fragment
+
+  def test_a_questioning_claude_child_arms_the_watch_for_the_reply(self, monkeypatch):
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+    fragment = session_fragment(
+      'unattended', harness='claude', wire='mcp', talk=('summoned.say', 'summoned.question')
+    )
+    assert "`quest ask self '<question>' --wait`" in fragment
+    assert 'arm `Monitor` once on exactly `quest watch`' in fragment
 
   def test_a_questioning_raw_mcp_child_keeps_the_bounded_wait(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     fragment = session_fragment(
-      'unattended', harness='bro', wire='mcp', talk=('worker.say', 'worker.question')
+      'unattended', harness='bro', wire='mcp', talk=('summoned.say', 'summoned.question')
     )
     assert 'bounded `wait`' in fragment
-    assert 'recover the reply with `bro::summon_check`' in fragment
-    assert '`question=true`' not in fragment
+    assert 'recover the reply with `bro::quest_history`' in fragment
+    assert 'arrives on the quest watch' not in fragment
 
   def test_a_silent_child_is_told_to_raise_instead_of_asking(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')

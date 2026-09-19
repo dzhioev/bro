@@ -16,12 +16,15 @@ it imports neither `ride` nor the bro class graph.
 
 A message with neither role field is a say, one with `id` is a question, and one with `reply_to` is a reply;
 a reply may carry both fields to ask a counter-question.
-Every quest fixes a subset of `requester.say`, `requester.question`, `worker.say`, and `worker.question` as its talk when it opens.
+Every quest fixes a subset of `summoner.say`, `summoner.question`, `summoned.say`, and `summoned.question` as its talk when it opens;
+the two ends are the peer that opened it and the peer answering it.
 A reply needs the other end's question right, and a counter-question also needs the sender's question right.
 Mark origin is structural:
 `accepted` is dispatcher-born, `started` is Worker-born, and a worker process may send `trail` or `listening`.
-`MAX_FRAME_BYTES` is the encoded-frame bound;
-`MAX_IDENTIFIER_BYTES` keeps quest, kind, trail, and chat identifiers small enough for journal projections.
+`MAX_FRAME_BYTES` is the encoded-frame bound, sized so a record's view carrying `MAX_PENDING_QUESTIONS` questions at the message and identifier bounds fits beside the rest of the record;
+`MAX_IDENTIFIER_BYTES` bounds what a quest, kind, trail, or chat identifier costs inside a frame
+— its JSON encoding, quotes aside
+— so their journal projections are sized by it.
 The TCP adapter owns NDJSON framing and the attach handshake.
 An accepted attach answers `ok <PROTOCOL_REVISION>`, and both client adapters refuse a missing or differing revision before messages flow.
 
@@ -85,13 +88,14 @@ The bounds live with the journal constants.
 
 Args share one bounded-head implementation for memory and audit:
 a dict over budget keeps its top-level scalar fields, dropping the largest while they overflow the budget on their own, and collapses the rest into a JSON head marked `truncated`.
-Trail ids and terminal reasons use a bounded journal projection with an explicit truncation marker.
+Trail ids and terminal reasons use a bounded journal projection, measured by the same encoded cost, with an explicit truncation marker.
 
 `query` returns caller-scoped, frame-bounded live-first pages with an opaque continuation cursor;
 it supports a terminal wait by id, `since` returns that wait when `chat_seq` advances, and `result_evicted` reports a retained result that cannot fit its response frame.
-The listing view carries talk, listening, pending questions, and chat sequence, while the by-id view also carries the chat tail.
-A by-id response keeps every pending question and the newest suffix of the tail that fits the frame;
-`messages_truncated` marks omitted older tail entries.
+The listing view carries talk, listening, pending questions, and chat sequence, while the by-id view carries `messages` in place of `pending`:
+the chat tail with every open question folded in by sequence and marked `pending`, so one older than the tail still appears.
+A by-id response that must fit the frame drops the oldest unmarked entries first and never a marked one;
+`messages_truncated` marks entries dropped by that fit or by the tail's retention bound.
 The retained result has priority over the tail and becomes `result_evicted` only when it cannot fit after the tail is removed.
 `events` returns caller-scoped, frame-bounded ordered batches after a cursor and supports bounded long-polling.
 Both clamp waits to 600 seconds, are answered inline, and never record themselves.

@@ -12,13 +12,17 @@ A summon succeeds only when the target is in the summoner's allow-list
 — the session reads its own off the banner, fixed at launch
 — so a denial stays a normal outcome the spell relays.
 
-version: 1.19.0
+version: 1.20.0
 ---
 
 # Ask
 
 Relay a request to another bro via **summon**:
 the target runs your prompt as a scoped one-shot in a started party of its own or as a member of this session’s party, and the selected surface carries its retained answer back.
+A summon opens a **quest** and prints its id;
+everything done to the quest afterwards
+— reading its outcome or conversation, talking on it, ending it
+— goes through the `quest` surfaces on that id.
 You only formulate the request,
 fire the client,
 and relay the result
@@ -94,17 +98,17 @@ An instance grant replaces the target's selection for that kind.
 Both directions are strict, so a no-op grant or a revoke of a kind or bro the target lacks fails the summon rather than passing quietly.
 
 The quest's **talk** is a separate least-authority knob.
-The child gets `worker.say` by default;
+The child gets `summoned.say` by default;
 widen it only for conversation the request needs:
 
-- `requester.say` lets this session steer the child with unsolicited messages;
-- `requester.question` lets this session ask the child and await its reply;
-- `worker.say` lets the child send progress before its final answer and is already in the default;
-- `worker.question` lets the child stop for an answer from this session.
+- `summoner.say` lets this session steer the child with unsolicited messages;
+- `summoner.question` lets this session ask the child and await its reply;
+- `summoned.say` lets the child send progress before its final answer and is already in the default;
+- `summoned.question` lets the child stop for an answer from this session.
 
 A reply follows the question right in the other direction, so do not add a say right merely to permit replies.
-Grant `worker.question` when the work may need a decision, approval, or missing fact from the summoner rather than forcing the child to raise and lose its live state.
-Grant requester rights only when someone will keep the watch armed and act on those messages.
+Grant `summoned.question` when the work may need a decision, approval, or missing fact from the summoner rather than forcing the child to raise and lose its live state.
+Grant summoner rights only when someone will keep the watch armed and act on those messages.
 The Bash client takes repeatable or comma-separated `--talk <right>` values;
 the tool client takes a `talk` list.
 
@@ -124,24 +128,30 @@ The session's surface decides the client:
 {{iff #harness = claude}}
 **Managed Claude session:** prefer Bash.
 Run `summon <target> '<prompt>'` (`--start` / `--join` / `--boxed` / `--unboxed`, `--timeout <s>`, `--into <ref>`, `--hold <level>`, `--grant <name>`, `--revoke <name>`, `--talk <right>`, `--llm <recipe>`, `--harness <name>`).
-It prints the request id and the started trail id to stderr,
+It prints the quest id and the started trail id to stderr,
 then blocks until the answer or a child question lands on stdout.
-A child question exits 4 and logs the exact `summon say` reply command;
+A child question exits 4 and logs the exact `quest say` reply command;
 other non-zero exits carry failures on stderr.
+Everything after the summon is `quest <verb> <quest-id>`:
+`check` for the outcome,
+`history` for the conversation,
+`say` and `ask` to talk,
+`cancel` to end it
+— `quest --help` lists them.
 {{eliff #wire = bare}}
-**Bro-native session:** use `bro::summon`, `bro::summon_say`, and `bro::summon_check`.
-`bro::summon` returns after host acceptance with the request id;
-later chat and lifecycle transitions arrive through the `summon watch` job the session contract has armed.
-Read the retained answer or failure with `bro::summon_check` when its terminal line arrives.
+**Bro-native session:** use `bro::summon` to open the quest and the `bro::quest_*` tools on its id.
+`bro::summon` returns after host acceptance with the quest id;
+later chat and lifecycle transitions arrive through the `quest watch` job the session contract has armed.
+Read the retained answer or failure with `bro::quest_check` when its terminal line arrives, and the conversation with `bro::quest_history`.
 {{else}}
-**Raw MCP session:** use `bro::summon`, `bro::summon_say`, and `bro::summon_check`.
+**Raw MCP session:** use `bro::summon` to open the quest and the `bro::quest_*` tools on its id.
 Call `summon` with `target` and `prompt` (optional `party: start|join`, `isolation`, `timeout`, `into`, `hold`, `grant`, `revoke`, `talk`, `llm`, `harness`).
-It returns a structured accepted, question, or completed state with the request id;
+It returns a structured accepted, question, or completed state with the quest id;
 failures come back as the tool error with the reason.
 A question state carries `{question: {id, text}}`:
-answer it through `summon_say(request_id, text, reply_to=id)`, then call `summon_check(request_id, wait: true)` for the eventual result.
+answer it through `quest_say(quest_id, text, reply_to=id)`, then call `quest_check(quest_id, wait: true)` for the eventual result.
 `detach: true` returns the accepted state after host acceptance and fails immediately on a denial;
-`summon_check(request_id)` reads non-blockingly and `summon_check(request_id, wait: true)` long-polls the same repeatable journal record.
+`quest_check(quest_id)` reads the outcome non-blockingly, `quest_check(quest_id, wait: true)` long-polls the same repeatable journal record, and `quest_history(quest_id)` reads the conversation with its open questions marked.
 {{end}}
 
 ## Foreground vs background
@@ -153,45 +163,47 @@ Run anything that isn't trivially quick in the background (claude's foreground B
 use the harness's background run (`run_in_background`),
 keep working,
 and collect the output when the completion notification arrives.
-To peek mid-run, use `rewind show <trail-id>` with the trail id from the summon's stderr, or `summon check <request-id>`
+To peek mid-run, use `rewind show <trail-id>` with the trail id from the summon's stderr, or `quest check <quest-id>`
 — non-blocking:
 prints the answer if the result is already in,
 says `still running` (exit 3) if not,
+exits 4 with the questions the child is stalled on,
 and never disturbs the backgrounded wait.
 Alternatively `summon --detach` waits for host acceptance, prints the quest id, and exits;
-wait for the retained result later with `summon check --wait <quest-id>`.
+wait for the retained result later with `quest check --wait <quest-id>`.
 
-Every summon prints its request id up front (stderr in blocking mode, stdout with `--detach`)
+Every summon prints its quest id up front (stderr in blocking mode, stdout with `--detach`)
 — note it.
 Any summon is reclaimable by that id, foreground included:
 if a waiting process is killed mid-flight, the host journal retains the quest,
-`summon check <id>` polls it,
-and `summon check --wait <id>` waits on the same non-destructive read.
+`quest check <id>` polls it,
+and `quest check --wait <id>` waits on the same non-destructive read.
 
-When a blocking summon granted `worker.question` exits 4, stdout is the child's question and stderr names its request id, question id, and ready reply command.
-Answer it with `summon say <request-id> '<answer>' --reply-to <question-id>`, then resume the same quest with `summon check --wait <request-id>`.
-That check may itself exit 4 on another question;
+When a blocking summon granted `summoned.question` exits 4, stdout is the child's question and stderr names its quest id, question id, and ready reply command.
+Answer it with `quest say <quest-id> '<answer>' --reply-to <question-id>`, then resume the same quest with `quest check --wait <quest-id>`.
+That check may itself exit 4 with the open questions the child is stalled on;
 repeat the answer/check loop until it exits 0 with the child's final answer or 1 with a failure.
 Never restart the summon to answer it.
-`summon watch` arms at the current journal head and prints ordered transitions after it
+`quest history <quest-id>` shows the conversation so far, open questions marked `pending`.
+`quest watch` arms at the current journal head and prints ordered transitions after it
 — your summons' and their descendants', messages and denials included;
 if retained events have a gap, it reports the loss and re-arms from the current head.
 {{eliff #wire = bare}}
 `bro::summon` is detached by construction:
-note the accepted request id and keep working while the summon watch carries its chat and lifecycle transitions.
+note the accepted quest id and keep working while the quest watch carries its chat and lifecycle transitions.
 When nothing else remains, call `bro::chill` and act on the next notification;
-read the retained answer with `bro::summon_check` once the watch reports the terminal state.
-If a child asks a question, answer it with `bro::summon_say(reply_to=…)`, then return to `bro::chill` rather than polling or restarting the summon.
-To ask the child, call `bro::summon_say(question=true)`;
-its reply arrives on the watch and remains readable with `bro::summon_check`.
-`summon watch` arms at the current journal head and prints ordered transitions after it
+read the retained answer with `bro::quest_check` once the watch reports the terminal state.
+If a child asks a question, answer it with `bro::quest_say(reply_to=…)`, then return to `bro::chill` rather than polling or restarting the summon.
+To ask the child, call `bro::quest_ask`;
+its reply arrives on the watch and remains readable with `bro::quest_history`.
+`quest watch` arms at the current journal head and prints ordered transitions after it
 — your summons' and their descendants', messages and denials included;
 if retained events have a gap, it reports the loss and re-arms from the current head.
 {{else}}
 There is no true backgrounding on the raw MCP surface, but the tools cover the long-run case:
 a blocking `summon` call fits anything conversational (tell the user it may take minutes);
-for a run that would outlast the surface's tool-call patience, `summon(…, detach: true)` returns the request id,
-and you check on it with `summon_check` between turns
+for a run that would outlast the surface's tool-call patience, `summon(…, detach: true)` returns the quest id,
+and you check on it with `quest_check` between turns
 — non-destructive, so polling is safe
 — or use `wait: true` to long-poll until it reports a question or completion.
 Keep each tool-side wait below the MCP call budget;
@@ -213,7 +225,7 @@ and the user launches the session themselves.
 {{iff #harness = claude}}
 **Managed Claude client:** run `summon --manual --detach <target> '<prompt>'`.
 It waits for the host to accept,
-then prints the token (the request id) on stdout and logs the launch command to relay;
+then prints the token (the quest id) on stdout and logs the launch command to relay;
 a denial fails right there, before any token exists.
 `--into`,
 `--grant`,
@@ -228,7 +240,7 @@ and `--talk` still apply;
 It returns the token and launch command once the host accepts;
 a denial fails the call immediately.
 {{end}}
-The requester still needs either party-start permit because the human launch starts a party.
+The summoner still needs either party-start permit because the human launch starts a party.
 
 Relay the token to the user as the ready-to-paste interactive command
 — `ride along --summoned <token> <target>`
@@ -239,15 +251,15 @@ the child bases on this workspace's HEAD *at the moment they launch* (or the `--
 
 Then wait like any detached summon.
 {{iff #wire = bare}}
-The summon watch carries the start, chat, and end;
-call `bro::chill` when nothing else remains and read the retained answer with `bro::summon_check` after the terminal line.
+The quest watch carries the start, chat, and end;
+call `bro::chill` when nothing else remains and read the retained answer with `bro::quest_check` after the terminal line.
 {{eliff #harness = claude}}
-`summon check <token>` polls (pending until the user launches and the child announces itself),
-while `summon watch` streams the start/end events.
+`quest check <token>` polls (running until the user launches and the child answers),
+while `quest watch` streams the start/end events.
 There is no timer on a manual summon
 — pace the polling to human time, and keep working meanwhile.
 {{else}}
-Call `bro::summon_check(request_id=token, wait=true)` with a bound under the MCP call cap;
+Call `bro::quest_check(quest_id=token, wait=true)` with a bound under the MCP call cap;
 repeat after each bound until the user launches and the child ends.
 {{end}}
 The answer arrives through the child's `answer` tool or as the printed reply from a clean one-shot run.
@@ -286,8 +298,8 @@ If the user asked for a follow-up action on the answer, continue with it.
   a child that died before recording says so, and the reason is all there is.
 - **Interrupted wait / unavailable retained payload**
   — a killed or detached wait remains recoverable by quest id.
-  {{iff #wire = bare}}Read it with `bro::summon_check` when the watch reports its terminal state.{{eliff #harness = claude}}`summon check <quest-id>` polls,
-  and `summon check --wait <quest-id>` waits for the host-retained result.{{else}}Read it with repeatable `bro::summon_check(request_id=quest_id, wait=true)` calls bounded under the MCP call cap.{{end}}
+  {{iff #wire = bare}}Read it with `bro::quest_check` when the watch reports its terminal state.{{eliff #harness = claude}}`quest check <quest-id>` polls,
+  and `quest check --wait <quest-id>` waits for the host-retained result.{{else}}Read it with repeatable `bro::quest_check(quest_id, wait=true)` calls bounded under the MCP call cap.{{end}}
   If retention evicted the payload, the error points at the trail that still carries the run.
 
 ## Do not exit with a summon in flight
@@ -295,11 +307,11 @@ If the user asked for a follow-up action on the answer, continue with it.
 When the session's root process exits, in-flight summoned children are killed (an in-flight manual child is only detached — the user's session lives on, but its answer can no longer arrive).
 When a summoned session exits with summons of its own in flight, those end `failed:orphaned` and their children are killed the same way.
 {{iff #wire = bare}}
-Before ending the session, return to `bro::chill` until every pending summon ends, then read each retained result with `bro::summon_check`.
+Before ending the session, return to `bro::chill` until every pending summon ends, then read each retained result with `bro::quest_check`.
 {{eliff #harness = claude}}
-Before ending the session (or letting it end), wait for pending summons with `summon check --wait`.
+Before ending the session (or letting it end), wait for pending summons with `quest check --wait`.
 {{else}}
-Before ending the session, wait for every pending summon with bounded `bro::summon_check(wait=true)` calls.
+Before ending the session, wait for every pending summon with bounded `bro::quest_check(wait=true)` calls.
 {{end}}
 If a result was lost this way it is still recoverable from the child's trail.
 
@@ -308,17 +320,17 @@ If a result was lost this way it is still recoverable from the child's trail.
 Cancelling a child quest ends it `failed:cancelled`, whatever it summoned in turn ends `failed:orphaned`, a spawned child is killed, and a manual child is only detached
 — its user-owned session lives on, no longer answering the quest.
 {{iff #wire = bare}}
-Call `bro::summon_cancel(request_id)`;
-it returns when the host accepts the cancellation, and the quest's terminal state arrives through the summon watch.
-Read the retained end with `bro::summon_check`.
+Call `bro::quest_cancel(quest_id)`;
+it returns when the host accepts the cancellation, and the quest's terminal state arrives through the quest watch.
+Read the retained end with `bro::quest_check`.
 {{eliff #harness = claude}}
-`summon cancel <request-id>` returns once the quest has ended;
+`quest cancel <quest-id>` returns once the quest has ended;
 `--timeout <s>` bounds the wait and exits 3 when it passes first, with the end still on its way.
 {{else}}
-Call `bro::summon_cancel(request_id, timeout)` with a bound under the MCP call cap;
+Call `bro::quest_cancel(quest_id, timeout)` with a bound under the MCP call cap;
 it returns the ended state or a pending state at the bound.
 {{end}}
-Only the session that requested a quest can cancel it, so a grandchild is stopped by cancelling the child that summoned it.
+Only the session that summoned a quest can cancel it, so a grandchild is stopped by cancelling the child that summoned it.
 Ending the ride's root session still stops every in-flight child at once.
 A child that ran for a while has usually left durable state behind
 — a trail, a retained failed workspace, a pushed branch, an open PR, a review watcher now dead, or task comments.

@@ -18,7 +18,7 @@ def _iso(seconds: float) -> str:
 
 
 def _quest(
-  request_id: str,
+  quest_id: str,
   state: str,
   *,
   target: str = 'reviewer',
@@ -32,7 +32,7 @@ def _quest(
 ) -> dict:
   at = time.time() if at is None else at
   quest = {
-    'id': request_id,
+    'id': quest_id,
     'kind': 'summon',
     'parent': parent,
     'args': {'target': target, 'prompt': 'work', **({'manual': True} if manual else {})},
@@ -100,21 +100,21 @@ class TestRenderedStatusline:
   def test_a_child_question_awaiting_the_session_shows_beside_the_live_summon(
     self, monkeypatch, tmp_path
   ):
-    question = {'from': 'worker', 'id': 'Q1', 'head': {'text': 'approve?'}}
+    question = {'from': 'summoned', 'id': 'Q1', 'head': {'text': 'approve?'}}
     quest = _quest('R1', 'started', pending=[question])
     output = _render(monkeypatch, tmp_path, quests=[quest])
     assert '⚡ summoning reviewer' in output
     assert '❓ reviewer is awaiting your reply' in output
 
   def test_the_sessions_own_question_does_not_read_as_awaiting_it(self, monkeypatch, tmp_path):
-    question = {'from': 'requester', 'id': 'Q1', 'head': {'text': 'status?'}}
+    question = {'from': 'summoner', 'id': 'Q1', 'head': {'text': 'status?'}}
     quest = _quest('R1', 'started', pending=[question])
     assert 'awaiting your reply' not in _render(monkeypatch, tmp_path, quests=[quest])
 
   def test_a_descendants_question_does_not_read_as_awaiting_this_session(
     self, monkeypatch, tmp_path
   ):
-    question = {'from': 'worker', 'id': 'Q1', 'head': {'text': 'approve?'}}
+    question = {'from': 'summoned', 'id': 'Q1', 'head': {'text': 'approve?'}}
     quest = _quest('R1', 'started', pending=[question], parent='CHILD')
     assert 'awaiting your reply' not in _render(monkeypatch, tmp_path, quests=[quest])
 

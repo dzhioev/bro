@@ -48,9 +48,9 @@ class TestSessionAppendPrompt:
 
   def test_summoned_contract_receives_the_quest_talk(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    monkeypatch.setenv(TALK_ENV, 'requester.say,worker.say')
+    monkeypatch.setenv(TALK_ENV, 'summoner.say,summoned.say')
     out = ride_system_prompt.session_append_prompt('unattended', 'bro')
-    assert 'exactly `summon watch`' in out
+    assert 'exactly `quest watch`' in out
     assert 'messages from the summoner then reach you' in out
 
 
