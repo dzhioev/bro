@@ -133,10 +133,10 @@ A solo session runs Claude in print mode, which ends only once nothing is pendin
 while a background task or a Monitor is live the process stays open and the model is re-invoked as a fresh turn on each event,
 so a persistent Monitor on an endless command, which is how `quest watch` is armed, holds the process until the session is killed.
 A solo session's settings therefore wire `ride.claude.stop_guard` as its `Stop` hook:
-reading the running tasks off the hook input and the run's own in-flight summons off the host journal, it blocks a turn end once per turn (Claude's `stop_hook_active` marks the second stop)
-when summons are in flight with no watch armed, where the exiting process would orphan them,
+reading the running tasks off the hook input and every mission the run owns off the host journal, it blocks a turn end once per turn (Claude's `stop_hook_active` marks the second stop)
+when missions are in flight with no watch armed, where the exiting process would orphan them,
 or when the watch is armed with nothing in flight, where it would hold the session until killed;
-a watch over summons in flight is the wait it should be and passes.
+a watch over missions in flight is the wait it should be and passes.
 The stop guard reads `background_tasks`, which Claude Code sends undocumented;
 `ride/ride/claude/stop_guard_llm_test.py` probes it live against the `claude` on PATH, and the container pins the version.
 
@@ -152,10 +152,10 @@ it rejects Claude's `--raw`.
 A native session that can receive summon traffic starts `quest watch` as a watch-mode `bro::job` once, and its output reaches the LLM as notifications after tool results or in an idle interactive turn.
 `bro::chill` waits on the run's whole background-job inbox when no other work remains.
 A one-shot `bro run` ends when a turn ends with nothing running and nothing in flight:
-a turn that ends with a live job or an own summon still in flight gets one framework notice through the same seam (a user-role item recorded as a `notification` step),
-naming each `job-N <mode> <command>` and each `quest <quest id> to <target>`,
+a turn that ends with a live job or an owned mission still in flight gets one framework notice through the same seam (a user-role item recorded as a `notification` step),
+naming each `job-N <mode> <command>`, each bro mission as `quest <quest id> to <target>`, and each other mission by id and type,
 and the run ends only when a turn ends with nothing live or when a reminded turn ends with the same set and no job news drained since.
-The end still closes every job and orphans every in-flight summon, as a delivered `answer` or a `raise` does at once.
+The end still closes every job and orphans every in-flight mission, as a delivered `answer` or a `raise` does at once.
 `bro chat` stays idle on the inbox and starts a turn when news arrives.
 A raw Claude session runs the bro toolset over MCP instead:
 that wire has no notification wake or `chill`, so its session text keeps the retained-quest polling flow.
@@ -762,7 +762,7 @@ A proxy-less *summoned child* cannot report its result
 The live broker registers the reserved `ping` kind, so a session can verify its channel with `broker request ping '{}'`;
 the journal projection logs the root's host-anchored mission
 — its launch carries the mission id in `BROKER_MISSION` beside the channel, and the host process is the owner;
-and the `launch` kind handler over the installed `bro.worker_types` registry.
+and the `launch` kind handler over the installed `bro.worker_types` registry, including the bro and benchmark types.
 The root launch carries the session's summon allow-list (`run_root_via_broker(may_summon=…)`, computed at launch by `ride/ride/bro_worker.py`;
 see the shared launch flags above), while `LaunchControl` enforces common launch arguments and `BroType` enforces per-peer summon authorization (see "Summoning another bro").
 Because the channel sits on the critical path of every launch, a broker defect would too
@@ -827,7 +827,7 @@ the host fixes and enforces the set when the quest opens, while both peer surfac
 The answer comes back synchronously, while permitted messages can travel for the quest's whole life.
 A quest also ends before its answer when its summoner is gone or says so:
 a summoned session's exit, or a manual session's disconnect, ends every quest it opened as `failed:orphaned` and ends their workers down the tree, killing a spawned child and detaching a manual one,
-and the `cancel` kind ends one live quest its summoner names as `failed:cancelled` the same way.
+and the `cancel` kind ends any live mission its owner names as `failed:cancelled` the same way.
 A nested bro summon stamps the child trail's `summoned_by.trail_id`;
 a root session summon omits provenance until the session recorder publishes its current trail id.
 The UX is the shared `spell::ask` spell (`bros/bro/spells/ask.md`, inherited by every bro);
@@ -860,11 +860,12 @@ underneath it are two client surfaces over the same request, each split into the
   `quest list` walks the caller-scoped paginated `query {}` listing and prints retained summon records live-first, including their talk and pending questions.
   `quest watch` first takes the current `events {}` head, then replays retained own-quest messages and open questions whose journal sequence is no newer than that head, marked `before the watch`.
   It then long-polls ordered events after the head, so chat committed between the head and replay queries arrives once through the stream.
+  The stream carries lifecycle lines for every worker type, naming a non-bro launch by its type and mission id.
   On a child quest it names the target and quest;
   on the session's own quest it renders the other end as `summoner` and never echoes the session's own says.
   An event-retention gap prints a notice, re-arms from the current head, and repeats the retained replay.
-  `quest cancel <id> [--timeout <seconds>]` ends a child quest this session summoned and waits for the quest to end;
-  it exits 0 once the quest has ended and 3 when the bound passes first, the end still on its way.
+  `quest cancel <id> [--timeout <seconds>]` ends any mission this session owns and waits for it to end;
+  it exits 0 once the mission has ended and 3 when the bound passes first, the end still on its way.
   In a claude session, long summons run via the harness's background Bash;
   `rewind show <trail-id>` peeks mid-run.
   Contract details in `bro/summon.py` and `bro/quest.py`.
@@ -983,7 +984,8 @@ the bro contributes its target and resolved `placement` as `{party, isolation}` 
 The placement records the effective isolation inherited by a join, while a manual summon's isolation stays null because the user's launch settles it.
 Live readers never read that audit back:
 check, list, watch, and the session-local statusLine projector query the caller-scoped in-memory journal over their own broker channel, so the same surfaces work at any summon depth.
-The statusLine places a child's pending question beside its live summon until the summoner replies.
+Quest check and list keep the bro workflow's type filter, while watch, cancellation, turn-end guards, and the statusLine account for every owned mission.
+The statusLine places a child's pending question beside its live summon, renders another live launch as its worker type, and keeps the most recent terminal outcome briefly visible.
 The scope is the quests the caller requested and nothing beneath them;
 it excludes the parent-owned quest that the caller's own worker answers.
 Each authorized launch also carries the allow-list and permits it will be judged against into the run itself (`RIDE_MAY_SUMMON` and `RIDE_PERMITS`:
@@ -1033,7 +1035,7 @@ Peers pass files by content-addressed reference through the ride's store the lau
   — while mints, gets, shares, and denials outlive it in a JSONL audit under `<runtime-root>/artifacts/<ride>.jsonl`, beside the launch audit.
   Each audit row keys the ride under `ride`.
 
-Kind handlers resolve refs through the same store (`bro.kinds.KindContext.artifacts`), under the same sharing check.
+Worker types resolve accepted shared refs through `Host.artifacts`, under the same sharing check.
 
 ### The launcher↔session contract
 

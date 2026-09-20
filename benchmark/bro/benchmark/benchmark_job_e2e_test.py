@@ -1,6 +1,6 @@
 """live check of the same graded trial started the way a managed ride starts it.
 
-What this adds to the direct harbor run is the whole `benchmark` kind seam — its
+What this adds to the direct harbor run is the whole `benchmark` worker-type seam — its
 checks, the command it builds, the run directory the job fills, and the result
 the CLI turns back into an exit status.
 
@@ -23,10 +23,10 @@ import sys
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast, override
+from typing import override
 
 from bro.artifact import GET
-from bro.bench.job import BENCHMARK, benchmark_kind
+from bro.bench.job import BENCHMARK, BenchmarkType
 from bro.benchmark.bundle import build, claude_code_cache, default_root, workspace_root
 from bro.benchmark.e2e_test_helper import LIVE_TRIAL, assert_graded_run, one_task_config
 from bro.benchmark.job import BUNDLE_MANIFEST
@@ -38,7 +38,10 @@ from bro.broker.runtime import Peer
 from bro.broker.spawn import ChildHandle, LaunchSpec, RingBuffer, Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
-from bro.kinds import ArtifactResolver, KindContext
+from bro.quest import LAUNCH
+from bro.worker_types import ArtifactResolver, PeerDescription
+from ride.launch_control import LaunchControl
+from ride.peer_facts import PeerFacts, WorkerFacts
 
 pytestmark = LIVE_TRIAL
 
@@ -116,6 +119,18 @@ class _SessionSpawner(Spawner):
     return '' if self.handle is None else self.handle.output_tail()
 
 
+class _NoArtifacts:
+  def resolve(self, ref: str, peer: PeerDescription) -> Path:
+    raise AssertionError(f'benchmark launch unexpectedly resolved {ref} for {peer.mission}')
+
+
+@dataclass(frozen=True)
+class _Host:
+  peers: PeerFacts
+  artifacts: ArtifactResolver
+  credential_kinds: frozenset[str]
+
+
 class _RunDirectories:
   """the `JobOutput` the ride's artifact store stands in for here: it keeps
   each run where the test can read it, and answers with the directory itself as
@@ -149,8 +164,8 @@ class _RunDirectories:
 
 @contextlib.contextmanager
 def _config_in_the_tree(tree: Path) -> Generator[str]:
-  """the composed config where the kind accepts one: a file inside the workspace
-  tree, named relative to it — the same spelling an operator passes."""
+  """the composed config where the worker type accepts one: a file inside the
+  workspace tree, named relative to it — the same spelling an operator passes."""
   directory = tree / 'var' / 'benchmark' / 'e2e'
   directory.mkdir(parents=True, exist_ok=True)
   try:
@@ -165,17 +180,27 @@ def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
   runs = _RunDirectories(tmp_path / 'runs')
   spawner = _SessionSpawner()
   broker = Broker(TcpServerTransport([LOCAL_HOST]), job_output=runs)
-  broker.on(GET, runs.get)
-  broker.on(
-    BENCHMARK,
-    benchmark_kind(
-      KindContext(
-        workspace_tree=tree,
-        artifacts=cast(ArtifactResolver, object()),
-        credential_scope=frozenset(),
-      )
-    ),
+  facts = PeerFacts(
+    WorkerFacts(type='bro', workspace='benchmark-e2e', tree=tree),
+    root_tree=tree,
+    root_path=tmp_path / 'root',
   )
+  facts.bind_journal(broker.journal)
+  host = _Host(facts, _NoArtifacts(), frozenset())
+  control = LaunchControl(
+    ride='benchmark-e2e',
+    types={BENCHMARK: BenchmarkType(host)},
+    peers=facts,
+    journal=broker.journal,
+    audit_file=tmp_path / 'launch.jsonl',
+    runtime_bundle=object(),
+    session_env={},
+  )
+  broker.on(GET, runs.get)
+  broker.on(LAUNCH, control.handle)
+  broker.subscribe(facts.observe_journal)
+  broker.subscribe(control.audit_event)
+  broker.subscribe(control.observe_journal)
 
   with _config_in_the_tree(tree) as config:
     exit_code = broker.run(

@@ -123,7 +123,7 @@ class TestSessionFragment:
     (
       ('claude', 'mcp', 'stop the watch with `TaskStop` and end the turn'),
       ('bro', 'bare', 'ends when a turn ends with nothing running and nothing in flight'),
-      ('bro', 'mcp', 'ends with its turn, so a turn that ends with summons in flight'),
+      ('bro', 'mcp', 'ends with its turn, so a turn that ends with missions in flight'),
     ),
   )
   def test_a_summoning_run_is_told_how_its_one_shot_ends_per_surface(

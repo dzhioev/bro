@@ -7,10 +7,10 @@ import pytest
 
 import ride.claude.stop_guard as stop_guard
 from bro.broker.environment import BROKER_CHANNEL
-from bro.quest import LiveChild
+from bro.quest import LiveMission
 
-_CHILD = LiveChild('01m-child', 'bro-eyebro')
-_OTHER = LiveChild('01m-other', 'bro')
+_CHILD = LiveMission('01m-child', 'bro', 'bro-eyebro')
+_OTHER = LiveMission('01m-other', 'benchmark', 'benchmark')
 
 
 def _task(command: str, *, status: str = 'running', task_id: str = 'task-1') -> dict:
@@ -26,22 +26,22 @@ def _payload(*tasks: dict, stop_hook_active: bool = False) -> dict:
 
 
 class TestNotice:
-  def test_summons_in_flight_without_a_watch_are_held_and_named(self):
+  def test_missions_in_flight_without_a_watch_are_held_and_named(self):
     reason = stop_guard.notice(
       _payload(_task('sleep 30')), [_CHILD, _OTHER], 'full', summoned=False
     )
 
     assert reason is not None
-    assert reason.startswith('2 summons in flight and no `quest watch` armed')
+    assert reason.startswith('2 missions in flight and no `quest watch` armed')
     assert 'Arm `Monitor` on exactly `quest watch`, persistent' in reason
-    assert reason.endswith('quest 01m-child to bro-eyebro\nquest 01m-other to bro')
+    assert reason.endswith('quest 01m-child to bro-eyebro\nmission 01m-other: benchmark')
 
   def test_a_raw_session_is_told_to_poll_instead_of_arming_a_monitor(self):
     reason = stop_guard.notice(_payload(), [_CHILD], 'raw', summoned=False)
 
     assert reason is not None
-    assert reason.startswith('1 summon in flight and no `quest watch` armed')
-    assert '`bro::quest_check(quest_id, wait=true)`' in reason
+    assert reason.startswith('1 mission in flight and no `quest watch` armed')
+    assert '`bro::quest_cancel`' in reason
     assert 'Monitor' not in reason
 
   def test_a_watch_with_nothing_in_flight_is_held_with_its_task_named(self):
@@ -50,7 +50,7 @@ class TestNotice:
     reason = stop_guard.notice(payload, [], 'full', summoned=False)
 
     assert reason is not None
-    assert reason.startswith('`quest watch` is armed (task bf8) with no summon in flight')
+    assert reason.startswith('`quest watch` is armed (task bf8) with no mission in flight')
     assert 'Stop it with `TaskStop` and end the turn' in reason
 
   def test_a_summoned_session_with_an_idle_watch_is_told_to_answer(self):
@@ -62,7 +62,7 @@ class TestNotice:
     assert 'Deliver your result with `bro::answer`, which ends the session' in reason
     assert 'TaskStop' not in reason
 
-  def test_a_watch_over_summons_in_flight_is_the_wait_and_passes(self):
+  def test_a_watch_over_missions_in_flight_is_the_wait_and_passes(self):
     assert (
       stop_guard.notice(_payload(_task('quest watch')), [_CHILD], 'full', summoned=False) is None
     )
@@ -75,7 +75,7 @@ class TestNotice:
     reason = stop_guard.notice(payload, [_CHILD], 'full', summoned=False)
 
     assert reason is not None
-    assert reason.startswith('1 summon in flight and no `quest watch` armed')
+    assert reason.startswith('1 mission in flight and no `quest watch` armed')
 
   def test_the_stop_after_a_held_one_stands_whatever_is_live(self):
     payload = _payload(_task('quest watch'), stop_hook_active=True)
@@ -97,7 +97,7 @@ class TestMain:
 
   def test_a_held_turn_end_is_a_block_decision_on_stdout(self, monkeypatch, capsys):
     monkeypatch.setenv(BROKER_CHANNEL, 'tcp://token@127.0.0.1:1')
-    monkeypatch.setattr(stop_guard, 'live_children', lambda: [_CHILD])
+    monkeypatch.setattr(stop_guard, 'live_missions', lambda: [_CHILD])
 
     out = self._run(monkeypatch, capsys, _payload())
 
@@ -107,7 +107,7 @@ class TestMain:
 
   def test_a_standing_turn_end_prints_nothing(self, monkeypatch, capsys):
     monkeypatch.setenv(BROKER_CHANNEL, 'tcp://token@127.0.0.1:1')
-    monkeypatch.setattr(stop_guard, 'live_children', lambda: [_CHILD])
+    monkeypatch.setattr(stop_guard, 'live_missions', lambda: [_CHILD])
 
     assert self._run(monkeypatch, capsys, _payload(_task('quest watch'))) == ''
 
@@ -117,7 +117,7 @@ class TestMain:
     def unreachable():
       raise AssertionError('no channel, no query')
 
-    monkeypatch.setattr(stop_guard, 'live_children', unreachable)
+    monkeypatch.setattr(stop_guard, 'live_missions', unreachable)
 
     out = self._run(monkeypatch, capsys, _payload(_task('quest watch', task_id='w1')))
 

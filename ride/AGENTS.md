@@ -32,15 +32,13 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   and `launch_llm_spec`, that value resolved within the driving harness for the surfaces that need only the recipe.
   In-process `bro run` / `bro chat` create no scope.
 - `ride/root.py` — supervision of either neutral started-party launch for roots and manually launched children, behind the broker availability gate.
-- `ride/broker_root.py` — broker-root composition over the installed `bro.worker_types` classes, the common launch control, artifact kinds, and the contributed benchmark kind.
+- `ride/broker_root.py` — broker-root composition over the installed `bro.worker_types` classes, the common launch control, and artifact kinds.
   The channel listener binds loopback plus the Docker bridge gateway when that is an address of this host.
 - `ride/bro_worker.py` — the registered bro worker type and summon lowering:
   validation and authorization, placement, child authority, the manual expectation, lifecycle projection, `SummonLaunchSpec`, and `SummonSpawner`.
   Started parties go through the common isolation-parameterized launcher and carry a resume spec;
   joined members run in the summoner’s existing tree with member-scoped records and no resume.
 - `ride/launch_control.py` — common `launch` argument validation, owner attribution, worker-type dispatch, run lowering, launch audit, and manual-token lifecycle.
-- `ride/kinds.py` — the `bro.broker_kinds` entry-point group:
-  broker request kinds contributed by installed distributions, each entry a factory `(context: bro.kinds.KindContext) -> RequestHandler`, loaded into every root broker beside the built-ins.
 - `ride/peer_facts.py` — the mission-keyed generic worker facts and peer directory for one broker root:
   peer resolution through the journal worker binding, workspace/member/type attribution, type-owned extensions, ancestry, and per-member current-trail attribution shared by launch, artifacts, and audit.
 - `ride/artifacts.py` — the ride's artifact store, the `artifact.mint` / `artifact.get` kinds, and the broker's `JobOutput`:
