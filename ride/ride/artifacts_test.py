@@ -12,13 +12,13 @@ from bro.artifact import GET, MINT, digest_path
 from bro.broker import brotocol
 from bro.broker.dispatcher import Dispatcher
 from bro.broker.journal import Journal
-from bro.kinds import ArtifactDenied
+from bro.worker_types import ArtifactDenied, PeerDescription, UnattributablePeer
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir, workspace_tree
 from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts
-from ride.peer_facts import PeerFact, PeerFacts, PeerIdentity, UnattributablePeer
+from ride.bro_worker import BroFacts
+from ride.peer_facts import PeerFacts, WorkerFacts
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
-from ride.workspace.store import ScopedSecrets
 
 ROOT = 'ROOT-CHANNEL'
 CHILD = 'CHILD-CHANNEL'
@@ -37,7 +37,30 @@ def store(workspace):
   return ArtifactStore(workspace, root_boxed=True)
 
 
-def _root_identity() -> PeerIdentity:
+def PeerIdentity(
+  workspace: str,
+  tree: Path,
+  member: str | None = None,
+  manual: bool = False,
+  artifact_view: bool = True,
+) -> PeerDescription:
+  artifact_view = artifact_view and not manual
+  return PeerDescription(
+    mission='mission',
+    workspace=workspace,
+    tree=tree,
+    type='bro',
+    bro='dev',
+    permits=frozenset(),
+    member=member,
+    expected=manual,
+    artifact_view=artifact_view,
+    published_ports=(),
+    depth=0,
+  )
+
+
+def _root_identity() -> PeerDescription:
   return PeerIdentity(workspace='ws', tree=workspace_tree('ws'))
 
 
@@ -208,7 +231,7 @@ class TestMaterialize:
     workspace = Workspace.create('broker-CH', tmp_path, Isolation.UNBOXED, throwaway=True)
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
     store.share([ref], to=workspace.name, by='ws')
-    child = PeerIdentity(workspace=workspace.name, tree=workspace.tree)
+    child = PeerIdentity(workspace=workspace.name, tree=workspace.tree, artifact_view=False)
 
     path = Path(store.materialize(child, ref))
 
@@ -230,7 +253,9 @@ class TestMaterialize:
   def test_an_unboxed_joined_member_uses_the_partys_workspace_view(self, workspace):
     store = ArtifactStore(workspace, root_boxed=False)
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
-    member = PeerIdentity(workspace='ws', tree=workspace.tree, member='broker-CH')
+    member = PeerIdentity(
+      workspace='ws', tree=workspace.tree, member='broker-CH', artifact_view=False
+    )
 
     path = Path(store.materialize(member, ref))
 
@@ -241,7 +266,7 @@ class TestMaterialize:
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
     store.share([ref], to='my-manual', by='ws')
     manual = PeerIdentity(workspace='my-manual', tree=workspace_tree('my-manual'), manual=True)
-    with pytest.raises(ArtifactDenied, match='manually launched session'):
+    with pytest.raises(ArtifactDenied, match='manually launched worker'):
       store.materialize(manual, ref)
 
   def test_an_unreachable_ref_is_denied_uniformly(self, store):
@@ -280,16 +305,18 @@ class FakeContext:
 
 def _facts_context(workspace):
   facts = PeerFacts(
-    PeerFact(
+    WorkerFacts(
+      type='bro',
       workspace=workspace.name,
-      bro='bro-dev',
-      allow_list=frozenset(),
-      credential_scope=ScopedSecrets(set(), set()),
+      tree=workspace.tree,
+      artifact_view=True,
+      extension=BroFacts('bro-dev', frozenset()),
     ),
     root_tree=workspace.tree,
     root_path=workspace.path,
   )
   journal = Journal()
+  facts.bind_journal(journal)
   journal.subscribe(facts.observe_journal)
   root = journal.open('root-quest', 'root', None, None, {}, type='bro')
   journal.bind(root, ROOT)

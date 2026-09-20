@@ -12,17 +12,19 @@ import pytest
 
 import ride.artifacts
 import ride.bro
+import ride.bro_worker
+import ride.broker_root
 import ride.do_ride
 import ride.harness
 import ride.identity
 import ride.peer_facts
 import ride.scope
 import ride.session
-import ride.spawn
-import ride.summon_control
 import ride.workspace.docker as workspace_docker
+import ride.workspace.spawn as workspace_spawn
 import ride.workspace.store as workspace_store
 from bro.broker.journal import Journal
+from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST, Endpoint
 from bro.monitor import (
   SESSION_DIR_ENV,
@@ -34,7 +36,6 @@ from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 from bro.workspace.paths import (
   CONTAINER_PARTY_DIR,
   CONTAINER_SESSION_DIR,
-  summon_dir,
   workspace_dir,
   workspace_tree,
 )
@@ -96,22 +97,22 @@ def _party_mount(workspace_name: str) -> str:
 
 
 def _lower_boxed(
-  launch: ride.spawn.SummonLaunchSpec,
+  launch: ride.bro_worker.SummonLaunchSpec,
   workspace_name: str,
   container_runtime: workspace_docker.ContainerRuntimeResolver,
   artifacts: ride.artifacts.ArtifactStore,
-) -> ride.spawn.DockerLaunchSpec:
+) -> workspace_spawn.DockerLaunchSpec:
   runtime_bundle = MagicMock(spec=RuntimeBundle)
   runtime_bundle.host_root = Path('/runtime')
   runtime_bundle.recorded_reference = None
-  lowered = ride.spawn._lower_summon(
+  lowered = ride.bro_worker._lower_summon(
     launch,
     workspace_name,
     runtime_bundle,
     container_runtime,
     artifacts,
   )
-  assert isinstance(lowered, ride.spawn.DockerLaunchSpec)
+  assert isinstance(lowered, workspace_spawn.DockerLaunchSpec)
   return lowered
 
 
@@ -124,11 +125,23 @@ def _artifacts() -> ride.artifacts.ArtifactStore:
 def _facts_expecting(quest: str) -> ride.peer_facts.PeerFacts:
   workspace = Workspace.ensure(SESSION, None, Isolation.BOXED)
   facts = ride.peer_facts.PeerFacts(
-    ride.peer_facts.PeerFact('ws', 'bro-dev', frozenset()),
+    ride.peer_facts.WorkerFacts(
+      'bro',
+      'ws',
+      extension=ride.bro_worker.BroFacts('bro-dev', frozenset()),
+    ),
     root_tree=workspace.tree,
     root_path=workspace.path,
   )
-  facts.add(quest, ride.peer_facts.PeerFact(None, 'dev', frozenset()))
+  facts.add(
+    quest,
+    ride.peer_facts.WorkerFacts(
+      'bro',
+      None,
+      expected=True,
+      extension=ride.bro_worker.BroFacts('dev', frozenset()),
+    ),
+  )
   return facts
 
 
@@ -152,31 +165,31 @@ def lowering_harness(monkeypatch, tmp_path):
       revoke=revoke_credentials,
     )
 
-  monkeypatch.setattr(ride.spawn, 'scoped_secrets', fake_scoped_secrets)
+  monkeypatch.setattr(ride.bro_worker, 'scoped_secrets', fake_scoped_secrets)
   monkeypatch.setattr(
-    ride.spawn,
+    ride.bro_worker,
     'preflight_scoped_launch',
     lambda scoped, *_args, **_kwargs: (
       set(),
-      {'party.start.boxed'},
+      {'bro.party.start.boxed'},
       ride.scope.HydratedStore({}, frozenset(scoped.required | scoped.optional)),
     ),
   )
   monkeypatch.setattr(ride.session, 'local_trails_mounts', lambda scoped: ())
-  monkeypatch.setattr(ride.spawn, 'human_git_identity_env', lambda repository: {})
+  monkeypatch.setattr(ride.bro_worker, 'human_git_identity_env', lambda repository: {})
   monkeypatch.setattr(
-    ride.spawn,
+    ride.bro_worker,
     'resolve_head',
     lambda root, repository: 'PARENT-SHA' if repository == workspace_tree(PARENT) else None,
   )
   monkeypatch.setattr(
-    ride.spawn, 'resolve_ref', lambda root, ref: 'REF-SHA' if ref == 'summon' else None
+    ride.bro_worker, 'resolve_ref', lambda root, ref: 'REF-SHA' if ref == 'summon' else None
   )
 
 
 class TestSummonLowering:
   def test_lowers_to_the_bro_run_docker_launch(self, lowering_harness):
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='deploy the thing',
       parent=PARENT,
@@ -187,7 +200,7 @@ class TestSummonLowering:
       harness='bro',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
-    assert lowered == ride.spawn.DockerLaunchSpec(
+    assert lowered == workspace_spawn.DockerLaunchSpec(
       workspace_docker.Launch(
         name='broker-CH',
         command=[
@@ -209,7 +222,7 @@ class TestSummonLowering:
           'RIDE_BRO': 'dev',
           'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness bro dev deploy the thing',
           'RIDE_MAY_SUMMON': '',
-          'RIDE_PERMITS': 'party.start.boxed',
+          'RIDE_PERMITS': 'bro.party.start.boxed',
           'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
           'RIDE_SUMMONED': '1',
           'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
@@ -230,7 +243,7 @@ class TestSummonLowering:
     )
 
   def test_lowering_logs_the_scope_like_any_container_launch(self, lowering_harness, caplog):
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent=PARENT,
@@ -245,7 +258,7 @@ class TestSummonLowering:
     assert 'scoped secrets for summoned dev: aws, trails' in caplog.text
 
   def test_hold_rides_the_childs_do_ride_argv(self, lowering_harness):
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='deploy the thing',
       parent=PARENT,
@@ -260,7 +273,7 @@ class TestSummonLowering:
     assert lowered.launch.command[-4:] == ['--hold', 'attended', 'dev', 'deploy the thing']
 
   def test_the_llm_recipe_rides_the_childs_do_ride_argv(self, lowering_harness):
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='deploy the thing',
       parent=PARENT,
@@ -284,7 +297,7 @@ class TestSummonLowering:
       json.dumps({'projects': {'/proj': {'bros': {'dev': {'llm': 'openai:sol:xhigh'}}}}})
     )
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent=PARENT,
@@ -319,8 +332,8 @@ class TestSummonLowering:
       captured.append(llm_spec)
       return workspace_store.ScopedSecrets(required=set(), optional=set())
 
-    monkeypatch.setattr(ride.spawn, 'scoped_secrets', capture_scope)
-    launch = ride.spawn.SummonLaunchSpec(
+    monkeypatch.setattr(ride.bro_worker, 'scoped_secrets', capture_scope)
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent=PARENT,
@@ -337,7 +350,7 @@ class TestSummonLowering:
   def test_credential_overrides_adjust_the_childs_scope(self, lowering_harness):
     # only the credential halves reach the scope; the `@bro` half was already
     # resolved into may_summon by the control
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent=PARENT,
@@ -354,7 +367,7 @@ class TestSummonLowering:
     assert lowered.launch.optional_secrets == set()
 
   def test_no_op_credential_override_fails_the_spawn(self, lowering_harness, tmp_path):
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent=PARENT,
@@ -373,7 +386,7 @@ class TestSummonLowering:
       Workspace.open('broker-CH')
 
   def test_lowering_records_the_childs_resume_spec(self, lowering_harness, tmp_path):
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='deploy the thing',
       parent=PARENT,
@@ -417,7 +430,7 @@ class TestSummonLowering:
     )
 
   def test_child_resume_record_carries_a_given_runtime(self, lowering_harness):
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent=PARENT,
@@ -432,14 +445,14 @@ class TestSummonLowering:
     runtime_bundle.host_root = Path('/given-runtime')
     runtime_bundle.host_venv = Path('/given-runtime/venv')
     runtime_bundle.host_session_env.return_value = {}
-    lowered = ride.spawn._lower_summon(
+    lowered = ride.bro_worker._lower_summon(
       launch,
       'broker-CH',
       runtime_bundle,
       _container_runtime(),
       _artifacts(),
     )
-    assert isinstance(lowered, ride.spawn.ProcessLaunchSpec)
+    assert isinstance(lowered, workspace_spawn.ProcessLaunchSpec)
     spec = ride.session.load_resume_spec(Workspace.open('broker-CH'))
     assert spec is not None
     assert spec.runtime_bundle == '/given-runtime'
@@ -457,7 +470,7 @@ class TestSummonLowering:
         env={}, mounts=('/host/state:/state',)
       ),
     )
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent=PARENT,
@@ -477,7 +490,7 @@ class TestSummonLowering:
     )
 
   def test_the_child_keeps_session_state_like_any_boxed_session(self, lowering_harness):
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent=PARENT,
@@ -493,7 +506,7 @@ class TestSummonLowering:
     assert _session_state_mount('broker-CH') in lowered.launch.extra_mounts
 
   def test_the_childs_own_allow_list_rides_its_environment(self, lowering_harness):
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent=PARENT,
@@ -509,14 +522,14 @@ class TestSummonLowering:
   def test_the_child_credits_the_human_of_the_repository_it_shares(
     self, lowering_harness, monkeypatch, tmp_path
   ):
-    monkeypatch.setattr(ride.spawn, 'human_git_identity_env', _REAL_HUMAN_IDENTITY)
+    monkeypatch.setattr(ride.bro_worker, 'human_git_identity_env', _REAL_HUMAN_IDENTITY)
     monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(tmp_path / 'absent-global'))
     monkeypatch.setenv('GIT_CONFIG_SYSTEM', str(tmp_path / 'absent-system'))
     repository = tmp_path / 'repo'
     subprocess.run(['git', 'init', '-q', '-b', 'master', str(repository)], check=True)
     for key, value in (('user.name', 'Ada Lovelace'), ('user.email', 'ada@example.com')):
       subprocess.run(['git', 'config', key, value], cwd=repository, check=True)
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent=PARENT,
@@ -531,7 +544,7 @@ class TestSummonLowering:
     assert lowered.launch.env[HUMAN_EMAIL_ENV] == 'ada@example.com'
 
   def test_into_overrides_the_inherited_base_ref(self, lowering_harness):
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent=PARENT,
@@ -548,7 +561,7 @@ class TestSummonLowering:
       'RIDE_BRO': 'dev',
       'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness bro --into summon dev p',
       'RIDE_MAY_SUMMON': '',
-      'RIDE_PERMITS': 'party.start.boxed',
+      'RIDE_PERMITS': 'bro.party.start.boxed',
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
       'RIDE_SUMMONED': '1',
       'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
@@ -556,7 +569,7 @@ class TestSummonLowering:
     assert lowered.base_ref == 'REF-SHA'
 
   def test_unresolvable_into_fails_the_spawn(self, lowering_harness):
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent=PARENT,
@@ -574,9 +587,9 @@ class TestSummonLowering:
     self, lowering_harness, monkeypatch
   ):
     monkeypatch.setattr(
-      ride.spawn, 'resolve_head', lambda root, repository: pytest.fail('git must not be read')
+      ride.bro_worker, 'resolve_head', lambda root, repository: pytest.fail('git must not be read')
     )
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent='empty',
@@ -595,14 +608,14 @@ class TestSummonLowering:
   ):
     workspace = Workspace.ensure(PARENT, None, Isolation.UNBOXED)
     workspace.tree.mkdir(parents=True)
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='work beside me',
       parent=PARENT,
       parent_tree=workspace.tree,
       summoner=SUMMONER,
       may_summon=('reviewer',),
-      permits=('party.join',),
+      permits=('bro.party.join',),
       harness='bro',
       party='join',
       isolation=None,
@@ -610,14 +623,14 @@ class TestSummonLowering:
     )
     artifacts = _artifacts()
 
-    lowered = ride.spawn._lower_join(
+    lowered = ride.bro_worker._lower_join(
       launch,
       'broker-CH',
       _runtime_bundle(tmp_path),
       artifacts,
     )
 
-    assert isinstance(lowered, ride.spawn.ProcessLaunchSpec)
+    assert isinstance(lowered, workspace_spawn.ProcessLaunchSpec)
     records = party_member_dir(workspace.path, 'broker-CH')
     assert lowered.cwd == str(workspace.tree)
     assert lowered.workspace is None
@@ -628,7 +641,7 @@ class TestSummonLowering:
     assert lowered.env['RIDE_PARTY_MEMBER'] == 'broker-CH'
     assert lowered.env['RIDE_COMMAND'].startswith('summon --join')
     assert lowered.env['RIDE_MAY_SUMMON'] == 'reviewer'
-    assert lowered.env['RIDE_PERMITS'] == 'party.join'
+    assert lowered.env['RIDE_PERMITS'] == 'bro.party.join'
     assert lowered.env['RIDE_SUMMONED'] == '1'
     assert lowered.env['IS_SANDBOX'] == '1'
     assert lowered.cleanup_directory is not None
@@ -637,17 +650,17 @@ class TestSummonLowering:
 
   def _boxed_join(
     self, monkeypatch, tmp_path, env: dict[str, str] | None = None
-  ) -> ride.spawn.ExecLaunchSpec:
+  ) -> workspace_spawn.ExecLaunchSpec:
     workspace = Workspace.ensure(PARENT, None, Isolation.BOXED)
     monkeypatch.setattr(ride.session, 'find_container_id', lambda tree: 'cid-party')
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='work beside me',
       parent=PARENT,
       parent_tree=workspace.tree,
       summoner=SUMMONER,
       may_summon=('reviewer',),
-      permits=('party.join',),
+      permits=('bro.party.join',),
       harness='bro',
       party='join',
       isolation=None,
@@ -656,8 +669,8 @@ class TestSummonLowering:
     runtime_bundle = MagicMock(spec=RuntimeBundle)
     runtime_bundle.host_root = Path('/runtime')
     runtime_bundle.recorded_reference = None
-    lowered = ride.spawn._lower_join(launch, 'broker-CH', runtime_bundle, _artifacts())
-    assert isinstance(lowered, ride.spawn.ExecLaunchSpec)
+    lowered = ride.bro_worker._lower_join(launch, 'broker-CH', runtime_bundle, _artifacts())
+    assert isinstance(lowered, workspace_spawn.ExecLaunchSpec)
     return lowered
 
   def test_the_partys_env_additions_reach_a_boxed_member(
@@ -701,7 +714,7 @@ class TestSummonLowering:
       'RIDE_PARTY_MEMBER': 'broker-CH',
       'RIDE_SUMMONED': '1',
       'RIDE_MAY_SUMMON': 'reviewer',
-      'RIDE_PERMITS': 'party.join',
+      'RIDE_PERMITS': 'bro.party.join',
       'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
     }
     assert 'BRO_STORE' not in member.env  # delivered into the container at spawn
@@ -710,7 +723,7 @@ class TestSummonLowering:
   def test_boxed_join_requires_a_running_container(self, lowering_harness, monkeypatch, tmp_path):
     workspace = Workspace.ensure(PARENT, None, Isolation.BOXED)
     monkeypatch.setattr(ride.session, 'find_container_id', lambda tree: None)
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent=PARENT,
@@ -725,7 +738,7 @@ class TestSummonLowering:
     runtime_bundle.host_root = Path('/runtime')
     runtime_bundle.recorded_reference = None
     with pytest.raises(RuntimeError, match='no running container'):
-      ride.spawn._lower_join(launch, 'broker-CH', runtime_bundle, _artifacts())
+      ride.bro_worker._lower_join(launch, 'broker-CH', runtime_bundle, _artifacts())
 
   def test_boxed_member_records_under_its_own_party_records(
     self, lowering_harness, monkeypatch, tmp_path
@@ -746,7 +759,7 @@ class TestSummonLowering:
   async def test_unboxed_started_child_keeps_failed_workspace_without_credentials(
     self, lowering_harness, tmp_path
   ):
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent='detached-root',
@@ -756,14 +769,14 @@ class TestSummonLowering:
       harness='bro',
       isolation=Isolation.UNBOXED,
     )
-    lowered = ride.spawn._lower_summon(
+    lowered = ride.bro_worker._lower_summon(
       launch,
       'broker-CH',
       _runtime_bundle(tmp_path),
       _container_runtime(),
       _artifacts(),
     )
-    assert isinstance(lowered, ride.spawn.ProcessLaunchSpec)
+    assert isinstance(lowered, workspace_spawn.ProcessLaunchSpec)
     assert lowered.workspace == 'broker-CH'
     assert lowered.cleanup_directory is not None
     private_store = Path(lowered.cleanup_directory)
@@ -791,12 +804,12 @@ print('aws-hook-installed')
 raise SystemExit(3)
 """
     lowered = replace(lowered, command=[sys.executable, '-c', hook_probe])
-    channel = ride.spawn.Provisioned(
+    channel = Provisioned(
       channel='CH',
       host_endpoint=Endpoint(port=7321, token='tk'),
     )
 
-    handle = await ride.spawn.ProcessSpawner().spawn(
+    handle = await workspace_spawn.ProcessSpawner().spawn(
       lowered, channel, 'X-1', frozenset({'worker.say'})
     )
 
@@ -810,7 +823,7 @@ raise SystemExit(3)
   def test_unboxed_lowering_surfaces_private_store_cleanup_failure(
     self, lowering_harness, monkeypatch, tmp_path
   ):
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent='detached-root',
@@ -824,16 +837,16 @@ raise SystemExit(3)
     def fail_launch(*_args, **_kwargs):
       raise ValueError('launch failed')
 
-    monkeypatch.setattr(ride.spawn, 'started_party_launch', fail_launch)
+    monkeypatch.setattr(ride.session, 'started_party_launch', fail_launch)
 
     def fail_cleanup(path):
       del path
       raise OSError('cleanup refused')
 
-    monkeypatch.setattr(ride.spawn.shutil, 'rmtree', fail_cleanup)
+    monkeypatch.setattr(ride.bro_worker.shutil, 'rmtree', fail_cleanup)
 
     with pytest.raises(OSError, match='cleanup refused'):
-      ride.spawn._lower_summon(
+      ride.bro_worker._lower_summon(
         launch,
         'broker-CH',
         _runtime_bundle(tmp_path),
@@ -842,7 +855,7 @@ raise SystemExit(3)
       )
 
   def test_unreadable_parent_head_fails_the_spawn(self, lowering_harness):
-    launch = ride.spawn.SummonLaunchSpec(
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent='gone',
@@ -857,7 +870,7 @@ raise SystemExit(3)
 
   @pytest.mark.asyncio
   async def test_spawner_lowers_off_loop_and_delegates_to_docker(self, lowering_harness):
-    class RecordingDocker(ride.spawn.DockerSpawner):
+    class RecordingDocker(workspace_spawn.DockerSpawner):
       def __init__(self):
         self.spawned: list = []
 
@@ -870,17 +883,17 @@ raise SystemExit(3)
     runtime_bundle = MagicMock(spec=RuntimeBundle)
     runtime_bundle.recorded_reference = None
     runtime_bundle.host_root = Path('/runtime')
-    spawner = ride.spawn.SummonSpawner(
+    spawner = ride.bro_worker.SummonSpawner(
       docker,
-      ride.spawn.ProcessSpawner(),
-      ride.spawn.ExecSpawner(),
+      workspace_spawn.ProcessSpawner(),
+      workspace_spawn.ExecSpawner(),
       runtime_bundle,
       _container_runtime(),
       facts,
       _artifacts(),
     )
-    channel = ride.spawn.Provisioned(channel='CH', host_endpoint=Endpoint(port=7321, token='tk'))
-    launch = ride.spawn.SummonLaunchSpec(
+    channel = Provisioned(channel='CH', host_endpoint=Endpoint(port=7321, token='tk'))
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent=PARENT,
@@ -892,7 +905,7 @@ raise SystemExit(3)
     )
     await spawner.spawn(launch, channel, 'X-1', frozenset({'worker.say'}))
     [(lowered, lowered_channel, lowered_quest, lowered_talk)] = docker.spawned
-    assert isinstance(lowered, ride.spawn.DockerLaunchSpec)
+    assert isinstance(lowered, workspace_spawn.DockerLaunchSpec)
     assert lowered.launch.command == [
       'do-ride', 'solo', '--workspace', 'broker-CH', '--harness', 'bro', '--repo', '/proj',
       '--hold', 'unattended', 'dev', 'p',
@@ -903,18 +916,65 @@ raise SystemExit(3)
     assert lowered_talk == frozenset({'worker.say'})
 
   @pytest.mark.asyncio
+  async def test_boxed_join_records_an_artifact_view(self, lowering_harness, monkeypatch):
+    class RecordingExec(workspace_spawn.ExecSpawner):
+      def __init__(self):
+        pass
+
+      async def spawn(self, launch, channel, mission, talk):
+        return MagicMock()
+
+    parent = Workspace.ensure('nested-parent', None, Isolation.BOXED)
+    facts = _facts_expecting('X-1')
+    lowered = workspace_spawn.ExecLaunchSpec(
+      launch=MagicMock(),
+      party_workspace=parent.name,
+      records_directory=str(parent.path / 'party' / 'member'),
+    )
+    monkeypatch.setattr(ride.bro_worker, '_lower_join', lambda *args: lowered)
+    spawner = ride.bro_worker.SummonSpawner(
+      MagicMock(),
+      MagicMock(),
+      RecordingExec(),
+      MagicMock(),
+      _container_runtime(),
+      facts,
+      _artifacts(),
+    )
+    launch = ride.bro_worker.SummonLaunchSpec(
+      target='dev',
+      prompt='p',
+      parent=parent.name,
+      parent_tree=parent.tree,
+      summoner=SUMMONER,
+      may_summon=(),
+      harness='bro',
+      party='join',
+      isolation=None,
+    )
+
+    await spawner.spawn(
+      launch,
+      Provisioned(channel='CH', host_endpoint=Endpoint(port=7321, token='tk')),
+      'X-1',
+      frozenset(),
+    )
+
+    assert facts.for_mission('X-1').artifact_view
+
+  @pytest.mark.asyncio
   async def test_lowering_failure_propagates_out_of_spawn(self, lowering_harness):
-    spawner = ride.spawn.SummonSpawner(
-      ride.spawn.DockerSpawner(),
-      ride.spawn.ProcessSpawner(),
-      ride.spawn.ExecSpawner(),
+    spawner = ride.bro_worker.SummonSpawner(
+      workspace_spawn.DockerSpawner(),
+      workspace_spawn.ProcessSpawner(),
+      workspace_spawn.ExecSpawner(),
       MagicMock(),
       _container_runtime(),
       _facts_expecting('X-1'),
       _artifacts(),
     )
-    channel = ride.spawn.Provisioned(channel='CH', host_endpoint=Endpoint(port=7321, token='tk'))
-    launch = ride.spawn.SummonLaunchSpec(
+    channel = Provisioned(channel='CH', host_endpoint=Endpoint(port=7321, token='tk'))
+    launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent=PARENT,
@@ -996,32 +1056,32 @@ with session_broxy():
     'dev',
     'first',
     party='join',
-    grant=['@dev', ':party.join'],
+    grant=['@dev', ':bro.party.join'],
     timeout=20,
   )
   owner = summon_and_wait(
     'dev',
     'owner',
     isolation='unboxed',
-    grant=['@dev', ':party.join'],
+    grant=['@dev', ':bro.party.join'],
     timeout=20,
   )
   Path({str(report)!r}).write_text(answer + '|' + owner)
   time.sleep(1)
 """
-  launch = ride.spawn.ProcessLaunchSpec(
+  launch = workspace_spawn.ProcessLaunchSpec(
     command=[sys.executable, '-c', root_source],
     cwd=str(workspace.tree),
     env=dict(os.environ),
     interactive=False,
   )
 
-  code = ride.spawn.run_root_via_broker(
+  code = ride.broker_root.run_root_via_broker(
     launch,
     workspace=workspace,
     bro='bro-dev',
     may_summon={'dev'},
-    permits={'party.join', 'party.start.unboxed'},
+    permits={'bro.party.join', 'bro.party.start.unboxed'},
     credential_scope=workspace_store.ScopedSecrets(set(), set()),
     container_runtime=_container_runtime(),
     runtime_bundle=runtime_bundle,
@@ -1052,7 +1112,7 @@ class TestClaudeSummonLowering:
       ),
     )
 
-  def _launch(self, **overrides) -> ride.spawn.SummonLaunchSpec:
+  def _launch(self, **overrides) -> ride.bro_worker.SummonLaunchSpec:
     fields: dict = {
       'target': 'dev',
       'prompt': 'deploy the thing',
@@ -1064,7 +1124,7 @@ class TestClaudeSummonLowering:
       'harness': 'claude',
       **overrides,
     }
-    return ride.spawn.SummonLaunchSpec(**fields)
+    return ride.bro_worker.SummonLaunchSpec(**fields)
 
   def test_unboxed_join_provisions_claude_state_under_the_member_records(
     self, claude_harness, monkeypatch, tmp_path
@@ -1084,7 +1144,7 @@ class TestClaudeSummonLowering:
       env[CLAUDE_CONFIG_DIR_ENV] = str(claude)
 
     monkeypatch.setattr(CLAUDE, 'prepare_unboxed_env', prepare)
-    lowered = ride.spawn._lower_join(
+    lowered = ride.bro_worker._lower_join(
       self._launch(
         repo=None,
         parent_tree=workspace.tree,
@@ -1095,7 +1155,7 @@ class TestClaudeSummonLowering:
       _runtime_bundle(tmp_path),
       _artifacts(),
     )
-    assert isinstance(lowered, ride.spawn.ProcessLaunchSpec)
+    assert isinstance(lowered, workspace_spawn.ProcessLaunchSpec)
     records = party_member_dir(workspace.path, 'broker-CH')
     assert seen == [(records, workspace.tree)]
     assert lowered.env[CLAUDE_CONFIG_DIR_ENV] == str(records / 'claude')
@@ -1116,14 +1176,14 @@ class TestClaudeSummonLowering:
     runtime_bundle.host_root = Path('/runtime')
     runtime_bundle.recorded_reference = None
 
-    lowered = ride.spawn._lower_join(
+    lowered = ride.bro_worker._lower_join(
       self._launch(repo=None, parent_tree=workspace.tree, party='join', isolation=None),
       'broker-CH',
       runtime_bundle,
       _artifacts(),
     )
 
-    assert isinstance(lowered, ride.spawn.ExecLaunchSpec)
+    assert isinstance(lowered, workspace_spawn.ExecLaunchSpec)
     records = party_member_dir(workspace.path, 'broker-CH')
     assert lowered.launch.env[CLAUDE_CONFIG_DIR_ENV] == '/var/ride/party/broker-CH/claude'
     assert lowered.launch.env['DISABLE_INSTALLATION_CHECKS'] == '1'
@@ -1145,7 +1205,7 @@ class TestClaudeSummonLowering:
       'RIDE_BRO': 'dev',
       'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness claude dev deploy the thing',
       'RIDE_MAY_SUMMON': '',
-      'RIDE_PERMITS': 'party.start.boxed',
+      'RIDE_PERMITS': 'bro.party.start.boxed',
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
       'RIDE_SUMMONED': '1',
       'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
@@ -1202,7 +1262,7 @@ class TestClaudeSummonLowering:
       captured.append(recipe.name)
       return workspace_store.ScopedSecrets(required=set(), optional=set())
 
-    monkeypatch.setattr(ride.spawn, 'scoped_secrets', capture_scope)
+    monkeypatch.setattr(ride.bro_worker, 'scoped_secrets', capture_scope)
     _lower_boxed(self._launch(), 'broker-CH', _container_runtime(), _artifacts())
     assert captured == ['claude-full']
 
@@ -1246,100 +1306,76 @@ class TestBrokerBindHosts:
   real; these pin the two ways it falls back to loopback alone."""
 
   def test_a_host_with_no_docker_bridge_binds_loopback_alone(self, monkeypatch):
-    monkeypatch.setattr(ride.spawn, 'bridge_gateway', lambda: None)
-    assert ride.spawn.broker_bind_hosts() == [LOCAL_HOST]
+    monkeypatch.setattr(ride.broker_root, 'bridge_gateway', lambda: None)
+    assert ride.broker_root.broker_bind_hosts() == [LOCAL_HOST]
 
   def test_a_gateway_that_is_no_address_here_binds_loopback_alone(self, monkeypatch):
     # what a daemon in a VM reports: its own gateway, which this host cannot bind
-    monkeypatch.setattr(ride.spawn, 'bridge_gateway', lambda: '192.0.2.1')
-    assert ride.spawn.broker_bind_hosts() == [LOCAL_HOST]
+    monkeypatch.setattr(ride.broker_root, 'bridge_gateway', lambda: '192.0.2.1')
+    assert ride.broker_root.broker_bind_hosts() == [LOCAL_HOST]
 
 
 class TestRunRootViaBroker:
-  def test_wires_root_and_summon_spawners_handlers_and_run(self, monkeypatch, tmp_path):
+  def test_wires_registered_types_launch_and_contributed_kinds(self, monkeypatch, tmp_path):
+    from bro.worker_types import LaunchRequest, WorkerType
+
     captured: dict = {}
+
+    class TestWorkerType(WorkerType):
+      name = 'test'
+
+      def talk(self, request: LaunchRequest):
+        return frozenset()
+
+      def launch(self, request: LaunchRequest):
+        raise NotImplementedError
 
     class FakeBroker:
       def __init__(self, transport, **kwargs):
-        captured['transport'] = transport
         captured['handlers'] = {}
         captured['observers'] = []
         self.journal = Journal()
 
-      def on(self, message_type, handler):
-        captured['handlers'][message_type] = handler
+      def on(self, kind, handler):
+        captured['handlers'][kind] = handler
 
       def subscribe(self, observer):
         captured['observers'].append(observer)
 
       def run(self, launch, spawner, *, type, end_on_sigterm=False):
-        captured['launch'] = launch
-        captured['root_spawner'] = spawner
-        captured['type'] = type
-        captured['end_on_sigterm'] = end_on_sigterm
+        captured.update(launch=launch, spawner=spawner, type=type, end=end_on_sigterm)
         return 3
 
-    monkeypatch.setattr(ride.spawn, 'Broker', FakeBroker)
-
-    def contributed_handler(context, peer, message):
-      del context, peer, message
-
-    kind_contexts: list = []
-
-    def fake_extension_kinds(context):
-      kind_contexts.append(context)
-      return {'contributed': contributed_handler}
-
-    monkeypatch.setattr(ride.spawn, 'extension_kinds', fake_extension_kinds)
-    launch = ride.spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
+    monkeypatch.setattr(ride.broker_root, 'Broker', FakeBroker)
+    monkeypatch.setattr(ride.broker_root, 'broker_bind_hosts', lambda: [LOCAL_HOST])
+    monkeypatch.setattr(
+      ride.broker_root,
+      'extension_kinds',
+      lambda context: {'contributed': lambda context, peer, message: None},
+    )
+    launch = workspace_spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
     workspace = Workspace.create('ws', tmp_path / 'proj', Isolation.BOXED)
+
     assert (
-      ride.spawn.run_root_via_broker(
+      ride.broker_root.run_root_via_broker(
         launch,
         workspace=workspace,
         bro='bro-dev',
-        summon_depth=4,
         credential_scope=workspace_store.ScopedSecrets({'harbor'}, set()),
         container_runtime=_container_runtime(),
         runtime_bundle=MagicMock(),
+        types={'test': TestWorkerType},
       )
       == 3
     )
-    assert captured['transport']._bind_hosts[0] == LOCAL_HOST
-    assert captured['type'] == 'bro'
-    root_spawner = captured['root_spawner']
-    assert isinstance(root_spawner, ride.spawn.ProcessSpawner)
-    control = captured['handlers']['summon'].__self__
-    assert isinstance(control, ride.summon_control.SummonControl)
-    summon_spawner = control._spawner
-    assert isinstance(summon_spawner, ride.spawn.SummonSpawner)
-    assert isinstance(summon_spawner._docker, ride.spawn.DockerSpawner)
-    assert summon_spawner._process is root_spawner
-    assert isinstance(summon_spawner._exec, ride.spawn.ExecSpawner)
-    host_log = workspace.host_log
-    assert summon_spawner._docker._host_log == host_log
-    assert root_spawner._host_log == host_log
     assert set(captured['handlers']) == {
       'ping',
-      'summon',
+      'launch',
       'artifact.mint',
       'artifact.get',
       'contributed',
     }
-    assert captured['handlers']['ping'] is ride.spawn.ping_handler
-    # installed distributions' kinds register beside the built-ins, built for
-    # this session's workspace tree
-    assert captured['handlers']['contributed'] is contributed_handler
-    [kind_context] = kind_contexts
-    assert kind_context.workspace_tree == workspace.tree
-    assert isinstance(kind_context.artifacts, ride.artifacts.ArtifactControl)
-    assert kind_context.credential_scope == frozenset({'harbor'})
-    facts_projection, lifecycle_projection, audit_writer = captured['observers']
-    assert isinstance(facts_projection.__self__, ride.peer_facts.PeerFacts)
-    assert lifecycle_projection.__self__ is control
-    assert audit_writer.__self__ is control
-    assert control._workspace is workspace
-    assert control._audit_file == summon_dir() / 'ws.jsonl'
-    assert control._depth_cap == 4
+    assert isinstance(captured['spawner'], workspace_spawn.ProcessSpawner)
+    assert captured['type'] == 'bro'
+    assert captured['end'] is True
     assert captured['launch'] is launch
-    assert captured['end_on_sigterm'] is True

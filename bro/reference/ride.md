@@ -58,8 +58,9 @@ ride along dev 'continue the inspection' -- --debug mcp
 Shared launch flags are `--repo`, `--boxed`, `--unboxed`, `--hold`, `--grant`, `--revoke`, `--into`, `--no-trails`, `--env`, `--session-log`, and the LLM selection set (`--provider`, `--model`, `--effort`, `--fast`, `--llm`).
 `--grant` and `--revoke` use the framework's unified grammar:
 credential names shape the scoped store, `@bro` names shape the summon allow-list, and `:permit` leaves shape party authority.
-The permit leaves are `:party.start.boxed`, `:party.start.unboxed`, and `:party.join`;
-the framework seed is boxed starts alone, and the intermediate names `:party` and `:party.start` are invalid.
+Worker permits have the form `:<type>.<leaf>`, with one or more dot-separated leaf segments.
+The bro type declares `:bro.party.start.boxed`, `:bro.party.start.unboxed`, and `:bro.party.join`;
+the framework seed is boxed starts alone, `:bro` is malformed, and `:bro.party` names an undeclared leaf rather than expanding to its descendants.
 `--no-trails` disables trail recording for the session, whichever harness runs:
 the launch drops the `trails` scope baseline, sets `TRAILS_DISABLED` for the run, and a claude session starts no recorder daemon.
 `--env NAME=VALUE` (repeatable) adds a variable to the session environment of the root and of every party member it summons:
@@ -187,7 +188,7 @@ The runtime command is `ride`, and runtime-owned environment facts use `RIDE_*`.
 Persistent runtime data lives outside every checkout under the user's global **`<runtime-root>`**:
 `~/.local/share/ride/`, or `$XDG_DATA_HOME/ride/` where that variable names an absolute path.
 A launch creates it with mode 0700 on first use.
-Its top-level stores are `workspaces/`, `runtime/`, `repos/`, `trails/`, `summon/`, and `broker/`;
+Its top-level stores are `workspaces/`, `runtime/`, `repos/`, `trails/`, `launch/`, and `broker/`;
 workspace metadata records which repository, if any, each workspace is attached to.
 
 Workspace metadata is read only in its current strict shape.
@@ -299,7 +300,7 @@ its supervisor adopts them into the ride's own local trails store when the membe
 An unboxed member records straight to the ride's local trails store like any host session.
 Its records are removed after a clean exit and kept after failure or kill;
 the member is not resumable, so its trail is the recovery record.
-The one deliberate exception to all of this is the summon audit, under `<runtime-root>/summon/`, because it must survive a workspace drop.
+The one deliberate exception to all of this is the launch audit, under `<runtime-root>/launch/`, because it must survive a workspace drop.
 
 `workspace.json` is written once at creation and read by every later launch, so nothing downstream re-derives it:
 
@@ -367,8 +368,8 @@ harness = "claude"                   # optional ride default; claude when omitte
 summon-harness = "bro"               # optional: the harness a summon naming none runs its
                                      # child under; bro when omitted
 summon-depth = 4                      # optional deepest summon generation
-grant = ["github", "@reviewer", ":party.join"]
-revoke = [":party.start.boxed"]
+grant = ["github", "@reviewer", ":bro.party.join"]
+revoke = [":bro.party.start.boxed"]
 image-repository = "custom-images"   # optional: docker repository for the repo's session-container
                                      # images, defaulting to bro/<default> (bro/foo here)
 build-context-command = "list-files"  # optional: stdout is the session image's context file list,
@@ -726,9 +727,9 @@ Every session runs as the root peer of a **broker** (see `bro/broker/AGENTS.md`)
 the outer provisions a channel on the session's one listening port, points `BROKER_UPSTREAM` at `tcp://<token>@<host>:<port>`, and supervises the session from the broker's event loop until it exits.
 The token is the channel's whole credential
 — a port is reachable by every local process, so a connection is attributed to the channel whose token it opens with.
-The listener binds loopback plus, when the docker daemon runs on this host, the bridge gateway a container reaches back through (`ride/ride/spawn.py:broker_bind_hosts`);
+The listener binds loopback plus, when the docker daemon runs on this host, the bridge gateway a container reaches back through (`ride/ride/broker_root.py:broker_bind_hosts`);
 a daemon in a VM names a gateway that is no address here, so only loopback binds and the VM's own `host.docker.internal` proxy carries the container to it.
-The shared root supervisor adapts the started-party launch to the isolation's spawner (`ride/ride/workspace/spawn.py`, composed by `ride/ride/spawn.py:run_root_via_broker`) and address host:
+The shared root supervisor adapts the started-party launch to the isolation's spawner (`ride/ride/workspace/spawn.py`, composed by `ride/ride/broker_root.py:run_root_via_broker`) and address host:
 
 - boxed — `DockerLaunchSpec` through `DockerSpawner`, with an address naming `host.docker.internal`, which every launch maps to the host gateway with `--add-host`;
 - unboxed — `ProcessLaunchSpec` through `ProcessSpawner`, with an address naming loopback.
@@ -761,9 +762,9 @@ A proxy-less *summoned child* cannot report its result
 The live broker registers the reserved `ping` kind, so a session can verify its channel with `broker request ping '{}'`;
 the journal projection logs the root's host-anchored mission
 — its launch carries the mission id in `BROKER_MISSION` beside the channel, and the host process is the owner;
-and the `summon` kind handler
-— the root launch carries the session's summon allow-list (`run_root_via_broker(may_summon=…)`, computed at launch by `ride/ride/summon_control.py`;
-see the shared launch flags above) and wires the per-root `SummonControl` enforcing per-peer summon authorization (see "Summoning another bro").
+and the `launch` kind handler over the installed `bro.worker_types` registry.
+The root launch carries the session's summon allow-list (`run_root_via_broker(may_summon=…)`, computed at launch by `ride/ride/bro_worker.py`;
+see the shared launch flags above), while `LaunchControl` enforces common launch arguments and `BroType` enforces per-peer summon authorization (see "Summoning another bro").
 Because the channel sits on the critical path of every launch, a broker defect would too
 — `BROKER_DISABLED` (presence-checked, parallel to `TRAILS_DISABLED`) is the kill-switch that skips broker provisioning and dispatch entirely, so no launcher starts a broxy.
 The broker-less path runs `docker start -a -i` in boxed isolation and a plain runner spawn in unboxed isolation.
@@ -777,14 +778,15 @@ The flip is TTY-gated, so a headless run keeps everything on stderr;
 launch-time output (scoped-secrets lines, a first image build) and the post-exit finish print before and after the attached span, so they stay on the terminal.
 When anything was written during the span, one post-exit line points at it (`session host log: <path> (<n> lines this session)`);
 nothing is replayed to the terminal.
-The projector-backed statusLine and the durable summon audit under `<runtime-root>/summon/` are unaffected
+The projector-backed statusLine and the durable launch audit under `<runtime-root>/launch/` are unaffected
 — they remain the live surfaces.
-Unlike the summon audit, the host log is diagnostics, not audit:
+Unlike the launch audit, the host log is diagnostics, not audit:
 workspace removal (`--drop`, `ride clean`) deletes it with the workspace.
 
 ### Summoning another bro
 
 A session can summon another bro over its channel.
+The summon surfaces are wrappers over `launch {type: bro, …}`, the same request kind every registered worker type uses.
 The target runs as a one-shot, non-TTY session that either starts a party of its own or joins the summoner’s party.
 A *manual* summon instead has the user launch the child themselves either interactively or one-shot;
 see "Manual summon" below.
@@ -796,10 +798,10 @@ Both harnesses run `do-ride solo …`:
 `bro` spawns the target's own LLM process there, while `claude` starts a one-shot managed Claude Code session of the target persona in full mode.
 The request’s `party` field accepts `start` or `join`, and a start’s optional `isolation` is `boxed` or `unboxed`.
 The CLI spells those choices as `--start`, `--join`, `--boxed`, and `--unboxed`.
-An unmarked request starts boxed when the summoner holds `:party.start.boxed`, otherwise unboxed when it holds `:party.start.unboxed`, and otherwise fails naming the permits held;
+An unmarked request starts boxed when the summoner holds `:bro.party.start.boxed`, otherwise unboxed when it holds `:bro.party.start.unboxed`, and otherwise fails naming the permits held;
 it is never converted into a join.
 An explicitly boxed or unboxed start requires the matching start permit.
-A join is always explicit, requires `:party.join`, inherits the summoner’s party isolation, and refuses `isolation`, `into`, and `manual`.
+A join is always explicit, requires `:bro.party.join`, inherits the summoner’s party isolation, and refuses `isolation`, `into`, and `manual`.
 The started-party lowering emits `DockerLaunchSpec` or `ProcessLaunchSpec` through the common launcher roots use.
 An unboxed join emits a member `ProcessLaunchSpec` in the summoner’s existing tree with an explicit environment snapshot and loopback broker upstream.
 A boxed join emits a member `ExecLaunchSpec`:
@@ -914,8 +916,8 @@ the control stamps the party's additions on every summon the child makes, so the
 Launch-owned request fields (`timeout`/`hold`/`llm`/`harness`/`party`/`isolation`) are refused at the request:
 the human at the launch owns the session's shape, and there is no host-killable child for a timeout to bound, so a manual summon carries no timer at all.
 
-The bridge between the two halves is the pending record (`ride/ride/pending_summon.py`),
-written under `<runtime-root>/summon/pending/<token>.json` when the channel is provisioned and one-shot-claimed by the launch as its last fallible step before the session starts.
+The bridge between the two halves is the generic pending record (`ride/ride/pending_launch.py`),
+written under `<runtime-root>/launch/pending/<token>.json` when the channel is provisioned and one-shot-claimed by the launch as its last fallible step before the session starts.
 The record carries the ride runtime as its frozen bundle hash or given path, and token minting materializes its host half off the broker loop before writing the pending record and emitting acceptance.
 A `ride along --summoned` entered through another installation reads that field first and re-executes from the owning runtime before it loads the rest of the record.
 The child still completes the broker attach revision check after re-execution, so a missing or mismatched wire revision is refused before any envelope can be misparsed.
@@ -937,14 +939,15 @@ Root exit *detaches* an in-flight manual child rather than killing it
 The summoner's side is the ordinary detach flow:
 the token works with `quest check` / `quest list` / `quest watch`, reading as running until the user launches.
 
-Host side, `PeerFacts` (`ride/ride/peer_facts.py`) holds one row keyed by the quest a peer answers:
-workspace, optional joined-member name, bro, effective allow-list and permits, credential-scope inputs (`grant`, `revoke`, `llm`, `harness`), and whether the child is manual.
-The journal's host-anchored quest seeds the root row;
-an authorized summon adds its child row before spawning, with a started child’s channel-named workspace, a joined child’s inherited workspace plus channel-named member, or the claimed workspace for a manual child filled at spawn.
-Every summoner resolves through one join
-— peer to answered quest through the dispatcher's worker binding, then quest to facts row
+Host side, `PeerFacts` (`ride/ride/peer_facts.py`) holds a generic `WorkerFacts` row keyed by the mission a peer undertakes:
+type, workspace and optional joined-member name, permits, expected/artifact-view state, published ports, and a type-owned extension.
+The bro extension carries its name, effective allow-list, credential-scope inputs, and resolved placement.
+The journal's host-anchored mission seeds the root row;
+an authorized launch adds its worker row before starting, with a started bro’s channel-named workspace, a joined bro’s inherited workspace plus channel-named member, or the claimed workspace for an expected bro filled at launch.
+Every owner resolves through one join
+— peer to undertaken mission through the dispatcher's worker binding, then mission to facts row
 — and depth is the journal ancestry length.
-`SummonControl` (`ride/ride/summon_control.py`) validates and authorizes each request against that row's allow-list.
+`LaunchControl` (`ride/ride/launch_control.py`) validates the common request and `BroType` (`ride/ride/bro_worker.py`) authorizes the summon against that row's extension.
 A child's allow-list and permit set are its static seeds under the project and host configuration layers, then its request's matching grant/revoke values.
 The configured layers are idempotent;
 a malformed or no-op request override is denied outright.
@@ -965,16 +968,18 @@ A peer the control cannot attribute a bro to is denied, and the launch-resolved 
 The root sits at depth 0, and a request that would create a child past the configured `summon-depth` is denied.
 Denials reply immediately and land in the journal and audit as `denied` transitions (reason, quest id, summoner, and bounded request args).
 Each spawned child records `summoned_by` provenance from the summoner's current trail plus the summoning bro's own `tool_call` step id when the request carries one.
-Summoner attribution has one shape in the audit: `{workspace, member?, bro, trail_id?}`.
+Owner attribution has one shape in the audit: `{workspace, type, member?, bro?, trail_id?}`.
 The trail is read from that session’s pointer for every request because Claude segments move it
 — the workspace’s `session/` for its first member, or `party/<member>/session/` for a joined one
 — with the answered quest’s journal `trail` mark as fallback.
 The authorized spawn carries its `SummonSpawner` into the dispatcher with the requesting peer as parent.
 `SummonSpawner` lowers the request off-loop through the started-party launcher or joined-member builder, then dispatches its concrete Docker, process, or member-exec description;
 a grandchild’s lifecycle routes to the child that summoned it, and root exit still tears down the whole tree.
-Every event lands a host log line and a durable audit row under `<runtime-root>/summon/<name>.jsonl`.
+Every event lands a host log line and a durable audit row under `<runtime-root>/launch/<name>.jsonl`.
 Each row keys the ride under `ride`, using the root workspace name.
-Each entry names its actual `summoner` as `{workspace, member?, bro, trail_id?}`, plus target, bounded request args, resolved `placement` as `{party, isolation}`, transition, trail id, and terminal outcome.
+Each entry names its actual `owner`, worker `type`, `published_ports`, bounded request args, transition, trail id, and terminal outcome.
+Type-owned audit fields are isolated under `extension`;
+the bro contributes its target and resolved `placement` as `{party, isolation}` there.
 The placement records the effective isolation inherited by a join, while a manual summon's isolation stays null because the user's launch settles it.
 Live readers never read that audit back:
 check, list, watch, and the session-local statusLine projector query the caller-scoped in-memory journal over their own broker channel, so the same surfaces work at any summon depth.
@@ -1025,7 +1030,7 @@ Peers pass files by content-addressed reference through the ride's store the lau
   — while its mints flow upward normally, attributed to the workspace its own `--summoned` launch claimed the token with.
 - The store is ride-scoped and dies with the ride
   — a resumed root starts a new ride with an empty store, so a stale ref fails at its own `artifact get`
-  — while mints, gets, shares, and denials outlive it in a JSONL audit under `<runtime-root>/artifacts/<ride>.jsonl`, beside the summon audit.
+  — while mints, gets, shares, and denials outlive it in a JSONL audit under `<runtime-root>/artifacts/<ride>.jsonl`, beside the launch audit.
   Each audit row keys the ride under `ride`.
 
 Kind handlers resolve refs through the same store (`bro.kinds.KindContext.artifacts`), under the same sharing check.
@@ -1194,7 +1199,7 @@ Wrappers and session daemons rely on a small set of env vars:
   Set by the launch env of every started session and by the join lowering for a member.
 - `RIDE_BRO` — names the bro the session runs as (the selected bro).
   Set explicitly in the container env at every boxed launch site
-  — a `ride along` container carries its session bro, a bro-harness container or summon child the launched bro (`ride/ride/spawn.py`)
+  — a `ride along` container carries its session bro, a bro-harness container or summon child the launched bro (`ride/ride/bro_worker.py`)
   — and exported by the session executable layer;
   never admitted from the ambient environment, so a calling session's value never leaks into a child that runs a different bro.
   Purely a theming output

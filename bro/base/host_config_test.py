@@ -284,13 +284,13 @@ class TestScopeLayers:
   def test_defaults_project_and_bro_layers_stay_in_precedence_order(self, config_file, tmp_path):
     config_file(
       {
-        'defaults': {'grant': [':party.join', '@reviewer']},
+        'defaults': {'grant': [':bro.party.join', '@reviewer']},
         'projects': {
           str(tmp_path): {
-            'revoke': [':party.join'],
+            'revoke': [':bro.party.join'],
             'bros': {
               'dev': {
-                'grant': ['github+work', ':party.start.unboxed'],
+                'grant': ['github+work', ':bro.party.start.unboxed'],
                 'revoke': ['@reviewer'],
               }
             },
@@ -303,10 +303,10 @@ class TestScopeLayers:
 
     assert selected.instances == {'github': 'work'}
     assert selected.scope_layers == (
-      host_config.ScopeLayer(grant=(':party.join', '@reviewer')),
-      host_config.ScopeLayer(revoke=(':party.join',)),
+      host_config.ScopeLayer(grant=(':bro.party.join', '@reviewer')),
+      host_config.ScopeLayer(revoke=(':bro.party.join',)),
       host_config.ScopeLayer(
-        grant=('github+work', ':party.start.unboxed'),
+        grant=('github+work', ':bro.party.start.unboxed'),
         revoke=('@reviewer',),
       ),
     )
@@ -318,8 +318,8 @@ class TestScopeLayers:
       {
         'projects': {
           str(tmp_path): {
-            'grant': [':party.join'],
-            'bros': {'dev': {'revoke': [':party.start.boxed']}},
+            'grant': [':bro.party.join'],
+            'bros': {'dev': {'revoke': [':bro.party.start.boxed']}},
           }
         }
       }
@@ -327,11 +327,11 @@ class TestScopeLayers:
     attachment = host_config.Attachment(path=str(tmp_path))
 
     assert host_config.launch_selection(attachment, 'reviewer').scope_layers == (
-      host_config.ScopeLayer(grant=(':party.join',)),
+      host_config.ScopeLayer(grant=(':bro.party.join',)),
     )
     assert host_config.launch_selection(attachment, 'dev').scope_layers == (
-      host_config.ScopeLayer(grant=(':party.join',)),
-      host_config.ScopeLayer(revoke=(':party.start.boxed',)),
+      host_config.ScopeLayer(grant=(':bro.party.join',)),
+      host_config.ScopeLayer(revoke=(':bro.party.start.boxed',)),
     )
 
 

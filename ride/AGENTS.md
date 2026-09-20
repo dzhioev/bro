@@ -32,28 +32,25 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   and `launch_llm_spec`, that value resolved within the driving harness for the surfaces that need only the recipe.
   In-process `bro run` / `bro chat` create no scope.
 - `ride/root.py` — supervision of either neutral started-party launch for roots and manually launched children, behind the broker availability gate.
-- `ride/spawn.py` — broker-root composition and summon lowering:
-  each root runs with its Docker or process spawner directly, while each accepted summon passes `SummonSpawner` with that launch;
-  started parties go through the common isolation-parameterized launcher and carry a resume spec;
-  joined members run in the summoner’s existing tree with member-scoped records and no resume;
-  per-root journal subscribers project audit and manual-token cleanup, and the bounded credential scope reaches contributed kinds.
-  The channel listener's bind hosts are derived here:
-  loopback, plus the docker bridge gateway when that is an address of this host.
+- `ride/broker_root.py` — broker-root composition over the installed `bro.worker_types` classes, the common launch control, artifact kinds, and the contributed benchmark kind.
+  The channel listener binds loopback plus the Docker bridge gateway when that is an address of this host.
+- `ride/bro_worker.py` — the registered bro worker type and summon lowering:
+  validation and authorization, placement, child authority, the manual expectation, lifecycle projection, `SummonLaunchSpec`, and `SummonSpawner`.
+  Started parties go through the common isolation-parameterized launcher and carry a resume spec;
+  joined members run in the summoner’s existing tree with member-scoped records and no resume.
+- `ride/launch_control.py` — common `launch` argument validation, owner attribution, worker-type dispatch, run lowering, launch audit, and manual-token lifecycle.
 - `ride/kinds.py` — the `bro.broker_kinds` entry-point group:
   broker request kinds contributed by installed distributions, each entry a factory `(context: bro.kinds.KindContext) -> RequestHandler`, loaded into every root broker beside the built-ins.
-- `ride/peer_facts.py` — the quest-keyed facts table for one broker root:
-  peer resolution through the journal worker binding, workspace/member/bro attribution, effective summon authority, scope inputs, ancestry, and per-member current-trail attribution shared by summon, artifacts, and audit.
+- `ride/peer_facts.py` — the mission-keyed generic worker facts and peer directory for one broker root:
+  peer resolution through the journal worker binding, workspace/member/type attribution, type-owned extensions, ancestry, and per-member current-trail attribution shared by launch, artifacts, and audit.
 - `ride/artifacts.py` — the ride's artifact store, the `artifact.mint` / `artifact.get` kinds, and the broker's `JobOutput`:
   reflink-or-copy ingest into content-addressed objects, per-peer view directories behind the read-only `/var/ride/artifacts` mounts, the sharing rules with their uniform denial, the byte cap, and the JSONL audit beside the store.
   A broker job's run directory is staged in the store and collected through the same ingest, reaching the peer that requested the job and its summoners.
   The peer wire and CLI are the framework's `bro/artifact.py`.
-- `ride/summon_control.py` — summon host authorization, child authority and quest-talk resolution, and start/join placement, plus journal projections for audit, lifecycle logging, and manual-token cleanup;
-  the manual variant registers as an expected external supervisor with its pending record.
-  The peer wire and self-contained CLI are the framework's `bro/summon.py`.
-- `ride/pending_summon.py` — pending manual summons:
-  the runtime-carrying record a launch token resolves to, including the quest's talk.
-  The control writes it and an interactive or solo `--summoned` launch claims it once;
-  that claim records the child's workspace name — the attribution source for the manual peer.
+- `ride/pending_launch.py` — pending manual worker launches:
+  the runtime-carrying generic record a launch token resolves to, including the type, talk, owner tree, environment, and type-owned JSON extension.
+  The launch control writes it and an interactive or solo bro `--summoned` launch claims it once;
+  that claim records the worker's workspace name — the attribution source for the expected peer.
 - `ride/trails.py` — local-trails mounts for launch descriptions whose computed scope records locally.
 - `ride/identity.py` — managed-session git identities:
   the bro a session commits as, and the launching human it credits, read from the attachment's own git configuration.

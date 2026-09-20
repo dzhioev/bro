@@ -32,7 +32,8 @@ def _quest(
   at = time.time() if at is None else at
   quest = {
     'id': quest_id,
-    'kind': 'summon',
+    'kind': 'launch',
+    'type': 'bro',
     'parent': 'ROOT',
     'args': {'target': target, 'prompt': 'work', **({'manual': True} if manual else {})},
     'state': state,
@@ -154,6 +155,7 @@ def test_query_summons_reads_the_channel_once(monkeypatch):
         value={
           'missions': [
             _quest('S1', 'started'),
+            {'id': 'W1', 'kind': 'launch', 'type': 'test', 'state': 'started'},
             {'id': 'B1', 'kind': 'benchmark', 'state': 'started'},
           ]
         },

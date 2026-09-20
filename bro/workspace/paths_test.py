@@ -79,7 +79,7 @@ def test_a_relative_data_home_is_refused(monkeypatch):
 def test_runtime_paths_share_the_flat_root():
   root = workspace_paths.runtime_base()
   assert workspace_paths.workspaces_dir() == root / 'workspaces'
-  assert workspace_paths.summon_dir() == root / 'summon'
+  assert workspace_paths.launch_dir() == root / 'launch'
   assert workspace_paths.trails_dir() == root / 'trails'
 
 

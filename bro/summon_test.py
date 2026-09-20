@@ -60,8 +60,8 @@ async def test_detached_summon_waits_for_acceptance(monkeypatch, capsys):
       asyncio.to_thread(summon.main, ['summon', '--detach', '--timeout', '42', 'dev', 'work'])
     )
     channel, request = await next_message(server)
-    assert request.kind == 'summon'
-    assert request.args == {'target': 'dev', 'prompt': 'work', 'timeout': 42.0}
+    assert request.kind == 'launch'
+    assert request.args == {'type': 'bro', 'target': 'dev', 'prompt': 'work', 'timeout': 42.0}
     await server.transport.send(channel, brotocol.mark(message_id(request), 'accepted'))
 
     assert await task == 0
@@ -127,7 +127,7 @@ async def test_manual_detached_summon_returns_launch_token_after_acceptance(
       asyncio.to_thread(summon.main, ['summon', '--manual', '--detach', 'dev', 'work'])
     )
     channel, request = await next_message(server)
-    assert request.args == {'target': 'dev', 'prompt': 'work', 'manual': True}
+    assert request.args == {'type': 'bro', 'target': 'dev', 'prompt': 'work', 'manual': True}
     await server.transport.send(channel, brotocol.mark(message_id(request), 'accepted'))
 
     assert await task == 0
@@ -275,7 +275,7 @@ def test_may_summon_distinguishes_empty_and_unpublished(monkeypatch):
 
 
 def test_invalid_published_permit_fails(monkeypatch):
-  monkeypatch.setenv(summon.PERMITS_ENV, 'party.start')
+  monkeypatch.setenv(summon.PERMITS_ENV, 'party')
 
   with pytest.raises(ValueError, match='unknown permit'):
     summon.permits()
@@ -289,12 +289,12 @@ def test_errors_without_a_channel(monkeypatch, caplog):
 
 def test_summoned_child_env_is_what_the_child_reads_back(monkeypatch):
   for key, value in summon.summoned_child_env(
-    {'reviewer', 'dev'}, {'party.join'}, {'trail_id': 'T1'}
+    {'reviewer', 'dev'}, {'bro.party.join'}, {'trail_id': 'T1'}
   ).items():
     monkeypatch.setenv(key, value)
   assert summon.summoned()
   assert summon.may_summon() == ('dev', 'reviewer')
-  assert summon.permits() == ('party.join',)
+  assert summon.permits() == ('bro.party.join',)
   assert summon.summoned_by_from_env() == {'trail_id': 'T1'}
 
 

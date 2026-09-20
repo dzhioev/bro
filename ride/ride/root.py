@@ -4,9 +4,9 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 
 from bro.base import configs
-from bro.base.scope import DEFAULT_PERMITS
 from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
 from ride.runtime_bundle import RuntimeBundle
+from ride.scope import DEFAULT_PERMITS
 from ride.workspace.containers import attach_interactive, broker_enabled
 from ride.workspace.docker import (
   ContainerRuntimeResolver,
@@ -42,7 +42,7 @@ def _run_via_broker(
 ) -> int:
   from bro.summon import MAY_SUMMON_ENV, PERMITS_ENV, encode_may_summon, encode_permits
   from ride.artifacts import view_mount
-  from ride.spawn import run_root_via_broker
+  from ride.broker_root import run_root_via_broker
   from ride.workspace.spawn import DockerLaunchSpec, ProcessLaunchSpec
 
   launch_env = dict(launch.env)

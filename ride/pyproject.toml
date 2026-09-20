@@ -39,6 +39,9 @@ dependencies = [
 "do-ride" = "ride._entrypoints:ride_do_ride"
 "ride" = "ride._entrypoints:ride_cli"
 
+[project.entry-points."bro.worker_types"]
+bro = "ride.bro_worker:BroType"
+
 [project.entry-points."bro.mcp.targets"]
 bro = "ride.claude.assembly:resolve_bro_target"
 persona = "ride.claude.assembly:resolve_persona_target"

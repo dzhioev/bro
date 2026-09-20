@@ -8,7 +8,8 @@ import pytest
 import ride.cli as ride_cli
 from bro.base import configs
 from bro.workspace.paths import workspace_dir
-from ride import pending_summon
+from ride import pending_launch
+from ride.bro_worker import pending_bro
 from ride.do_ride import command as do_ride_command
 from ride.harness import get_harness
 from ride.workspace.metadata import Isolation
@@ -432,24 +433,29 @@ class TestLifecycle:
 class TestSummonedLaunch:
   @pytest.fixture
   def pending(self, monkeypatch, tmp_path):
-    record = pending_summon.PendingSummon(
+    record = pending_launch.PendingLaunch(
       token='TOK-1',
       runtime='/runtime',
       port=7321,
       channel_token='tk',
-      target='dev',
-      prompt='work this out with the user',
-      parent_workspace=str(tmp_path / 'parent'),
-      may_summon=('bro',),
-      permits=('party.start.boxed',),
+      type='bro',
       talk=('worker.say',),
-      grant=('aws',),
-      revoke=('openai',),
-      summoner={'trail_id': 'T1'},
+      owner_tree=str(tmp_path / 'parent'),
       env={'IS_SANDBOX': '1'},
+      extension={
+        'target': 'dev',
+        'prompt': 'work this out with the user',
+        'may_summon': ['bro'],
+        'permits': ['bro.party.start.boxed'],
+        'grant': ['aws'],
+        'revoke': ['openai'],
+        'summoner': {'trail_id': 'T1'},
+        'repo': None,
+        'into': None,
+      },
     )
-    pending_summon.write(record)
-    return record
+    pending_launch.write(record)
+    return pending_bro(record)
 
   def test_summoned_launch_takes_prompt_and_scope_from_the_record(self, pending):
     with patch('ride.cli.start_session', return_value=0) as start:
@@ -498,7 +504,7 @@ class TestSummonedLaunch:
 
   def test_summoned_refuses_permit_overrides(self, pending, capsys):
     with pytest.raises(SystemExit):
-      ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--grant', ':party.join', 'dev'])
+      ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--grant', ':bro.party.join', 'dev'])
     assert 'permits were fixed by the summon request' in capsys.readouterr().err
 
   def test_summoned_validates_the_bro_against_the_record(self, pending, capsys):
@@ -509,10 +515,10 @@ class TestSummonedLaunch:
   def test_unknown_token_is_a_cli_error(self, pending, capsys):
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'along', '--summoned', 'TOK-9', 'dev'])
-    assert 'no pending manual summon for token' in capsys.readouterr().err
+    assert 'no pending manual launch for token' in capsys.readouterr().err
 
   def test_runtime_is_read_and_reexeced_before_the_full_record(self, pending, monkeypatch):
-    path = pending_summon._path(pending.token)
+    path = pending_launch._path(pending.token)
     data = json.loads(path.read_text())
     data['future_field'] = {'new': 'shape'}
     path.write_text(json.dumps(data))
