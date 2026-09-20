@@ -1316,7 +1316,7 @@ class TestBrokerBindHosts:
 
 
 class TestRunRootViaBroker:
-  def test_wires_registered_types_launch_and_contributed_kinds(self, monkeypatch, tmp_path):
+  def test_wires_registered_types_through_launch(self, monkeypatch, tmp_path):
     from bro.worker_types import LaunchRequest, WorkerType
 
     captured: dict = {}
@@ -1348,11 +1348,6 @@ class TestRunRootViaBroker:
 
     monkeypatch.setattr(ride.broker_root, 'Broker', FakeBroker)
     monkeypatch.setattr(ride.broker_root, 'broker_bind_hosts', lambda: [LOCAL_HOST])
-    monkeypatch.setattr(
-      ride.broker_root,
-      'extension_kinds',
-      lambda context: {'contributed': lambda context, peer, message: None},
-    )
     launch = workspace_spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
     workspace = Workspace.create('ws', tmp_path / 'proj', Isolation.BOXED)
 
@@ -1373,7 +1368,6 @@ class TestRunRootViaBroker:
       'launch',
       'artifact.mint',
       'artifact.get',
-      'contributed',
     }
     assert isinstance(captured['spawner'], workspace_spawn.ProcessSpawner)
     assert captured['type'] == 'bro'

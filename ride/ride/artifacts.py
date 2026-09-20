@@ -13,9 +13,9 @@ construction, so the read path re-verifies nothing.
 Each boxed peer has a view directory `shared/<workspace>/` holding one
 hardlink (or hardlinked tree) per ref it may reach — the source of its
 read-only `/var/ride/artifacts` bind mount, so a ref linked while the peer
-runs appears without a remount. A mint links the minter and its summoners up
-to the root; a summon's `share` list is linked into the child's view during
-spawn lowering (`ride/ride/bro_worker.py`). An unboxed peer has no mount
+runs appears without a remount. A mint links the minter and its owners up
+to the root; a launch's `share` list is linked into the worker's view during
+its lowering. An unboxed peer has no mount
 namespace: its `get` falls back to a private copy under that workspace's own
 `artifacts/` directory. A manually launched child has no host-built launch
 and therefore no view; its `get` is denied with the reason.
@@ -25,14 +25,14 @@ the ride — while the JSONL audit beside it (`<ride>.jsonl`) survives,
 recording mints, gets, shares, and denials.
 
 `JobArtifacts` collects a broker job's run directory the same way: the run is
-staged under the store's `jobs/`, and the ref that closes the job's quest
-reaches the peer that requested the job and its summoners.
+staged under the store's `jobs/`, and the ref that closes the job's mission
+reaches the peer that requested the job and its owners.
 
 `ArtifactControl` serves the `artifact.mint` / `artifact.get` kinds
-(contract: `bro/artifact.py`) and implements the contributed-kind resolver
+(contract: `bro/artifact.py`) and implements the worker-type resolver
 (`bro.worker_types.ArtifactResolver`). Attribution and shape validation run on the
 broker loop; store I/O runs in a thread with the correlated result delivered
-from a done-callback. The quest never enters the dispatcher's table, so
+from a done-callback. The request never enters the dispatcher's table, so
 exactly-one-result is this module's duty: the callback folds a store refusal
 into `result{denied}` and any other exception into `result{failed}` instead
 of letting it vanish. A sharing denial is uniform — identical whether or not
@@ -429,7 +429,7 @@ def _validate_get(args: dict[str, Any]) -> Optional[str]:
 class JobArtifacts:
   """`bro.broker.dispatcher.JobOutput` over one store: a broker job's run is
   collected in the store and answered with its ref, reaching the requesting
-  peer and its summoners exactly as that peer's own mint would."""
+  peer and its owners exactly as that peer's own mint would."""
 
   def __init__(self, store: ArtifactStore, facts: PeerFacts):
     self._store = store
@@ -453,10 +453,11 @@ class JobArtifacts:
 
 
 class ArtifactControl:
-  """the artifact kinds and the contributed-kind resolver over one store (see
-  the module docstring). `mint` and `get` register as the broker's
-  `artifact.mint` / `artifact.get` handlers; everything here runs on the
-  broker loop, with store content work threaded."""
+  """The artifact kinds and worker-type resolver over one store.
+
+  `mint` and `get` register as the broker's `artifact.mint` / `artifact.get`
+  handlers; everything here runs on the broker loop, with store content work threaded.
+  """
 
   def __init__(self, store: ArtifactStore, facts: PeerFacts):
     self._store = store
@@ -499,27 +500,11 @@ class ArtifactControl:
       context, peer, message.request_id, lambda: {'path': self._store.materialize(identity, ref)}
     )
 
-  def resolve(
-    self,
-    ref: str,
-    peer: Any,
-    requester: Any = None,
-  ) -> Path:
-    """Resolve a ref for a described peer.
-
-    The three-argument form serves broker-kind handlers that attribute their
-    requester through the dispatcher.
-    """
-    try:
-      description = peer if requester is None else self._facts.resolve(peer, requester)
-    except UnattributablePeer:
-      raise ArtifactDenied(_denial(ref)) from None
-    if not isinstance(description, PeerDescription):
-      raise TypeError('artifact resolution needs a peer description')
-    return self._store.resolve(ref, description.workspace)
+  def resolve(self, ref: str, peer: PeerDescription) -> Path:
+    return self._store.resolve(ref, peer.workspace)
 
   def _answer_off_loop(
-    self, context: Dispatcher, peer: Peer, quest: str, work: Callable[[], dict[str, Any]]
+    self, context: Dispatcher, peer: Peer, request_id: str, work: Callable[[], dict[str, Any]]
   ) -> None:
     from bro.broker import brotocol
 
@@ -530,14 +515,14 @@ class ArtifactControl:
         return
       error = finished.exception()
       if error is None:
-        result = brotocol.result(quest, 'ok', value=finished.result())
+        result = brotocol.result(request_id, 'ok', value=finished.result())
       elif isinstance(error, ArtifactDenied):
         log.warning('artifact: %s', error)
-        self._store.audit('deny', {'request_id': quest, 'reason': str(error)})
-        result = brotocol.result(quest, 'denied', error=str(error))
+        self._store.audit('deny', {'request_id': request_id, 'reason': str(error)})
+        result = brotocol.result(request_id, 'denied', error=str(error))
       else:
-        log.warning('artifact request %s failed: %r', quest, error)
-        result = brotocol.result(quest, 'failed', error=str(error), detail={'reason': 'error'})
+        log.warning('artifact request %s failed: %r', request_id, error)
+        result = brotocol.result(request_id, 'failed', error=str(error), detail={'reason': 'error'})
       context.deliver(peer, result)
 
     task.add_done_callback(_answered)

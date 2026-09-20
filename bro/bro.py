@@ -383,21 +383,20 @@ _QUEST_ASK_BARE_DESCRIPTION = (
 
 
 _QUEST_CANCEL_DESCRIPTION = (
-  'end a child quest by `quest_id`: it ends failed:cancelled, and whatever that child '
-  'summoned in turn ends failed:orphaned. a spawned child is killed; a manual child is only '
-  "detached from the quest, since the user's own session answers it and lives on. waits for "
-  'the quest to end and returns an ended state with its outcome, or a pending state when the '
-  'optional `timeout` seconds pass first; the end still comes, and `quest_check` reads it. '
-  'fails with the reason for a quest this session did not summon or that has already ended.'
+  'end any mission this session owns by `quest_id`: it ends failed:cancelled, and whatever '
+  'its worker launched in turn ends failed:orphaned. a host-supervised worker is killed; an '
+  'expected worker is detached. waits for the mission to end and returns an ended state with '
+  'its outcome, or a pending state when the optional `timeout` seconds pass first; the end '
+  'still arrives through `quest watch`. fails with the reason for a mission this session does '
+  'not own or that has already ended.'
   "{{when #wire = mcp}} CAUTION: size `timeout` below the harness's idle cap.{{end}}"
 )
 
 
 _QUEST_CANCEL_BARE_DESCRIPTION = (
-  'ask the host to cancel a child quest by `quest_id` and return when the request is '
-  'accepted. the child ends asynchronously, and whatever it summoned in turn ends '
-  'failed:orphaned with it; its end arrives through `quest watch` and remains readable '
-  'with `quest_check`.'
+  'ask the host to cancel any mission this session owns by `quest_id` and return when the '
+  'request is accepted. the worker ends asynchronously, and whatever it launched in turn '
+  'ends failed:orphaned with it; its end arrives through `quest watch`.'
 )
 
 

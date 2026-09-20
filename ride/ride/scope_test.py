@@ -663,7 +663,9 @@ class TestPermitLayers:
       )
 
   def test_unknown_type_lists_the_installed_types(self):
-    with pytest.raises(ValueError, match="unknown worker type 'missing'.*installed types: bro"):
+    with pytest.raises(
+      ValueError, match="unknown worker type 'missing'.*installed types: benchmark, bro"
+    ):
       ride.scope.effective_permits((), grant=[':missing.use'], revoke=[], strict=True)
 
   def test_undeclared_leaf_is_refused(self):

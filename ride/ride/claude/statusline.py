@@ -69,32 +69,52 @@ def _trail(trail_id: Optional[str]) -> str:
   return f'trail {trail_id}'
 
 
-def _query_summons() -> list[dict[str, Any]]:
+def _query_missions() -> list[dict[str, Any]]:
   if os.environ.get(BROKER_CHANNEL) is None:
     return []
   client = Client.from_env()
   if client is None:
     return []
+  missions: list[dict[str, Any]] = []
+  cursor: str | None = None
   with client:
-    result = client.call('query', {}, _QUERY_TIMEOUT)
-  payload = result.payload
-  if payload.get('outcome') != 'ok':
-    return []
-  value = payload.get('value')
-  quests = value.get('missions') if isinstance(value, dict) else None
-  if not isinstance(quests, list):
-    return []
-  return [
-    quest
-    for quest in quests
-    if isinstance(quest, dict) and quest.get('kind') == LAUNCH and quest.get('type') == BRO
-  ]
+    while True:
+      args = {} if cursor is None else {'cursor': cursor}
+      result = client.call('query', args, _QUERY_TIMEOUT)
+      payload = result.payload
+      if payload.get('outcome') != 'ok':
+        return []
+      value = payload.get('value')
+      if not isinstance(value, dict):
+        return []
+      page = value.get('missions')
+      if not isinstance(page, list):
+        return []
+      missions.extend(
+        mission
+        for mission in page
+        if isinstance(mission, dict)
+        and mission.get('kind') == LAUNCH
+        and isinstance(mission.get('type'), str)
+      )
+      cursor = value.get('cursor')
+      if cursor is None:
+        return missions
+      if not isinstance(cursor, str):
+        return []
 
 
 def _timestamp(value: object) -> Optional[float]:
   if not isinstance(value, str):
     return None
   return datetime.fromisoformat(value).timestamp()
+
+
+def _worker_type(mission: dict[str, Any]) -> str:
+  worker_type = mission.get('type')
+  if not isinstance(worker_type, str):
+    raise ValueError('launch listing carried no worker type')
+  return worker_type
 
 
 def _target(quest: dict[str, Any]) -> str:
@@ -110,32 +130,36 @@ def _question_awaiting_summoner(quest: dict[str, Any]) -> bool:
   return any(question.get('from') == 'worker' for question in pending)
 
 
-def _summon_parts(now: float) -> list[str]:
+def _mission_parts(now: float) -> list[str]:
   try:
-    quests = _query_summons()
+    missions = _query_missions()
     parts = []
-    for quest in quests:
-      state = quest.get('state')
+    for mission in missions:
+      state = mission.get('state')
       if state not in ('accepted', 'started'):
         continue
-      started_at = _timestamp(quest.get('started_at')) or _timestamp(quest.get('accepted_at'))
+      started_at = _timestamp(mission.get('started_at')) or _timestamp(mission.get('accepted_at'))
       if started_at is None:
         return []
       age = _age(now - started_at)
-      args = quest.get('args')
-      manual = isinstance(args, dict) and args.get('manual') is True
-      trail_id = quest.get('trail_id')
-      if manual and trail_id is None:
-        parts.append(f'{_YELLOW}⚡ awaiting manual {_target(quest)} launch {age}{_RESET}')
+      worker_type = _worker_type(mission)
+      if worker_type == BRO:
+        args = mission.get('args')
+        manual = isinstance(args, dict) and args.get('manual') is True
+        trail_id = mission.get('trail_id')
+        if manual and trail_id is None:
+          parts.append(f'{_YELLOW}⚡ awaiting manual {_target(mission)} launch {age}{_RESET}')
+        else:
+          parts.append(
+            f'{_YELLOW}⚡ summoning {_target(mission)} {age} '
+            f'({_trail(trail_id if isinstance(trail_id, str) else None)}){_RESET}'
+          )
+        if _question_awaiting_summoner(mission):
+          parts.append(f'{_YELLOW}❓ {_target(mission)} is awaiting your reply{_RESET}')
       else:
-        parts.append(
-          f'{_YELLOW}⚡ summoning {_target(quest)} {age} '
-          f'({_trail(trail_id if isinstance(trail_id, str) else None)}){_RESET}'
-        )
-      if _question_awaiting_summoner(quest):
-        parts.append(f'{_YELLOW}❓ {_target(quest)} is awaiting your reply{_RESET}')
+        parts.append(f'{_YELLOW}⚡ {worker_type} {age}{_RESET}')
     terminal = next(
-      (quest for quest in quests if quest.get('state') in ('ended', 'denied')),
+      (mission for mission in missions if mission.get('state') in ('ended', 'denied')),
       None,
     )
     if terminal is not None:
@@ -150,7 +174,9 @@ def _summon_parts(now: float) -> list[str]:
           rendered += f':{reason}'
         color = _GREEN if outcome == 'ok' else _RED
         mark = '✓' if outcome == 'ok' else '✗'
-        parts.append(f'{color}{mark} summon {_target(terminal)}: {rendered}{_RESET}')
+        worker_type = _worker_type(terminal)
+        label = f'summon {_target(terminal)}' if worker_type == BRO else worker_type
+        parts.append(f'{color}{mark} {label}: {rendered}{_RESET}')
     return parts
   except Exception:
     return []
@@ -163,7 +189,7 @@ def render_statusline(now: Optional[float] = None) -> str:
   problem = health.problem()
   if problem is not None:
     parts.append(f'{_RED}⚠ session recording {problem}{_RESET}')
-  parts.extend(_summon_parts(time.time() if now is None else now))
+  parts.extend(_mission_parts(time.time() if now is None else now))
   return ' · '.join(parts)
 
 

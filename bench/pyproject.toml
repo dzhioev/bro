@@ -18,8 +18,8 @@ dependencies = [
 "bro.bench.job" = "bro.bench._entrypoints:bro_bench_job"
 "bro.bench.run" = "bro.bench._entrypoints:bro_bench_run"
 
-[project.entry-points."bro.broker_kinds"]
-benchmark = "bro.bench.job:benchmark_kind"
+[project.entry-points."bro.worker_types"]
+benchmark = "bro.bench.job:BenchmarkType"
 
 [project.entry-points."bro.credentials"]
 harbor = "bro.bench.credentials:HARBOR"

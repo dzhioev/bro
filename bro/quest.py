@@ -1,10 +1,10 @@
 """quest — read, talk to, and end a quest through the session broker.
 
 A quest is what a summon opens: another session working a request until it
-answers. This module owns every peer-side surface over one that exists — the
-outcome read, the conversation read, say and ask, the caller-scoped listing,
-the ordered event watch, and cancel — as a library and as the ``quest`` CLI.
-``self`` names the session's own quest, the one it answers.
+answers. This module owns the outcome read, conversation read, say, ask, and
+caller-scoped listing for quests, plus the ordered watch and cancellation shared
+by every mission type, as a library and as the ``quest`` CLI. ``self`` names the
+session's own quest, the one it answers.
 
 Reads are repeatable journal queries. A wait bounds silence rather than the
 quest: it re-reads the journal through bounded long-polls until the state it
@@ -678,7 +678,7 @@ class CancelStatus:
 
 
 def request_cancel(quest_id: str, *, client: Optional['Client'] = None) -> CancelStatus:
-  """Ask the host to cancel a child quest and return once it accepts the request."""
+  """Ask the host to cancel an owned mission and return once it accepts the request."""
   from bro.broker.dispatcher import CANCEL
 
   resolved = resolve(quest_id)
@@ -693,7 +693,7 @@ def cancel(
   timeout: Optional[float] = None,
   client: Optional['Client'] = None,
 ) -> CancelStatus:
-  """End a child quest this session summoned and wait for it to end."""
+  """End an owned mission and wait for it to end."""
   deadline = wait_deadline(True, timeout)
   resolved = resolve(quest_id)
   with connection(client) as connected:
@@ -727,25 +727,31 @@ def cancel_view(status: CancelStatus) -> dict[str, Any]:
 # --- list -----------------------------------------------------------------------
 
 
-def _query_listing(client: 'Client') -> list[dict[str, Any]]:
+def _query_missions(client: 'Client') -> list[dict[str, Any]]:
   from bro.broker.dispatcher import QUERY
 
-  quests: list[dict[str, Any]] = []
+  missions: list[dict[str, Any]] = []
   cursor: Optional[str] = None
   while True:
     args = {} if cursor is None else {'cursor': cursor}
     value = _read_value(client, QUERY, args, timeout=ACCEPT_TIMEOUT)
     page = value.get('missions')
-    if not isinstance(page, list) or not all(isinstance(quest, dict) for quest in page):
-      raise QuestError('query listing returned malformed quest records')
-    quests.extend(
-      quest for quest in page if quest.get('kind') == LAUNCH and quest.get('type') == BRO
-    )
+    if not isinstance(page, list) or not all(isinstance(mission, dict) for mission in page):
+      raise QuestError('query listing returned malformed mission records')
+    missions.extend(page)
     cursor = value.get('cursor')
     if cursor is None:
-      return quests
+      return missions
     if not isinstance(cursor, str):
       raise QuestError('query listing returned a malformed cursor')
+
+
+def _query_listing(client: 'Client') -> list[dict[str, Any]]:
+  return [
+    mission
+    for mission in _query_missions(client)
+    if mission.get('kind') == LAUNCH and mission.get('type') == BRO
+  ]
 
 
 def list_quests() -> dict[str, Any]:
@@ -755,26 +761,38 @@ def list_quests() -> dict[str, Any]:
 
 
 @dataclass(frozen=True)
-class LiveChild:
-  quest_id: str
-  target: str
+class LiveMission:
+  mission_id: str
+  type: str
+  label: str
 
 
-def live_children() -> list[LiveChild]:
-  """Return the quests this session summoned that have not ended, newest first."""
+def live_mission_line(mission: LiveMission) -> str:
+  if mission.type == BRO:
+    return f'quest {mission.mission_id} to {mission.label}'
+  return f'mission {mission.mission_id}: {mission.label}'
+
+
+def live_missions() -> list[LiveMission]:
+  """Return the live missions this session owns, newest first."""
   own = own_quest()
   with open_client() as client:
-    quests = _query_listing(client)
-  children: list[LiveChild] = []
-  for quest in quests:
-    if quest.get('parent') != own or _ended(quest):
+    records = _query_missions(client)
+  missions: list[LiveMission] = []
+  for record in records:
+    if record.get('kind') != LAUNCH or record.get('parent') != own or _ended(record):
       continue
-    args = quest.get('args')
-    target = args.get('target') if isinstance(args, dict) else None
-    if not isinstance(target, str):
-      raise QuestError('query listing returned a live summon without a target')
-    children.append(LiveChild(_quest_id(quest), target))
-  return children
+    worker_type = record.get('type')
+    if not isinstance(worker_type, str):
+      raise QuestError('query listing returned a live mission without a worker type')
+    label = worker_type
+    if worker_type == BRO:
+      args = record.get('args')
+      label = args.get('target') if isinstance(args, dict) else None
+      if not isinstance(label, str):
+        raise QuestError('query listing returned a live bro mission without a target')
+    missions.append(LiveMission(_quest_id(record), worker_type, label))
+  return missions
 
 
 # --- watch ----------------------------------------------------------------------
@@ -854,6 +872,25 @@ def _event_line(event: dict[str, Any], own: str) -> str:
   return _single_line(f'{head} ({_quest_clause(event, own)})')
 
 
+def _mission_event_line(event: dict[str, Any], own: str) -> str:
+  mission_id = event.get('mission')
+  worker_type = event.get('type')
+  parent = event.get('parent')
+  if not isinstance(mission_id, str) or not isinstance(worker_type, str):
+    raise QuestError('events read returned a malformed mission record')
+  if parent != own:
+    raise QuestError('events read returned a mission this session did not launch')
+  transition = event.get('transition')
+  if transition == 'trail':
+    transition = f'trail {event.get("trail_id")}'
+  elif transition == 'ended':
+    reason = f':{event["reason"]}' if event.get('reason') is not None else ''
+    transition = f'ended {event.get("outcome")}{reason}'
+  elif transition == 'denied':
+    transition = f'denied: {event.get("reason")}'
+  return _single_line(f'launch {worker_type} {transition} (mission {mission_id})')
+
+
 def _chat_entry_event(quest: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
   quest_id = quest.get('id')
   parent = quest.get('parent')
@@ -862,6 +899,7 @@ def _chat_entry_event(quest: dict[str, Any], entry: dict[str, Any]) -> dict[str,
     raise QuestError('query returned a malformed quest for watch replay')
   return {
     'kind': quest.get('kind'),
+    'type': quest.get('type'),
     'mission': quest_id,
     'parent': parent,
     'args': args,
@@ -903,7 +941,7 @@ def _arm_replay(client: 'Client', own: str, head: int) -> list[str]:
 
 
 def watch(wait_seconds: float = READ_WAIT_SECONDS) -> Generator[str]:
-  """Yield retained chat at arm, then ordered summon journal transitions."""
+  """Yield retained quest chat at arm, then ordered launch transitions."""
   if wait_seconds <= 0:
     raise QuestError('events wait must be positive')
   from bro.broker.dispatcher import EVENTS
@@ -949,13 +987,20 @@ def watch(wait_seconds: float = READ_WAIT_SECONDS) -> Generator[str]:
         if not isinstance(sequence, int) or isinstance(sequence, bool):
           raise QuestError('events read returned a malformed sequence')
         cursor = max(cursor, sequence)
-        if event.get('kind') != LAUNCH or event.get('type') != BRO:
+        if event.get('kind') != LAUNCH:
           continue
-        chat_line = _chat_event_line(event, own)
-        if chat_line is not None:
-          yield chat_line
-        elif event.get('transition') not in ('message', 'refused', 'listening'):
-          yield _event_line(event, own)
+        if event.get('type') == BRO:
+          chat_line = _chat_event_line(event, own)
+          if chat_line is not None:
+            yield chat_line
+          elif event.get('transition') not in ('message', 'refused', 'listening'):
+            yield _event_line(event, own)
+        elif isinstance(event.get('type'), str) and event.get('transition') not in (
+          'message',
+          'refused',
+          'listening',
+        ):
+          yield _mission_event_line(event, own)
 
 
 # --- CLI ------------------------------------------------------------------------
@@ -1147,22 +1192,22 @@ def main(argv: list[str]) -> Optional[int]:
 
   watch_parser = verbs.add_parser(
     'watch',
-    help='stream the transitions of every summon this session makes',
-    description='stream the ordered transitions of every summon this session makes and the '
-    'messages that reach it. Runs until killed; what is already in flight when it starts is '
-    'the baseline',
+    help='stream every mission this session launches',
+    description='stream the ordered lifecycle transitions of every mission this session '
+    'launches and the messages on its bro quests. Runs until killed; what is already in '
+    'flight when it starts is the baseline',
   )
   watch_parser.set_handler(_watch)
 
   cancel_parser = verbs.add_parser(
     'cancel',
-    help='end a child quest',
-    description='end a child quest this session summoned: the quest ends failed:cancelled and '
-    'whatever the child summoned in turn ends failed:orphaned; a spawned child is killed, '
-    "a manual child only detached from the quest while the user's session lives on; "
-    f'exits 0 once the quest has ended and {RUNNING_EXIT_CODE} when --timeout passes first',
+    help='end a mission this session owns',
+    description='end a mission this session owns: it ends failed:cancelled and whatever its '
+    'worker launched in turn ends failed:orphaned; a host-supervised worker is killed and an '
+    f'expected worker detached; exits 0 once it ends and {RUNNING_EXIT_CODE} when --timeout '
+    'passes first',
   )
-  cancel_parser.add_argument('quest_id', metavar='<quest-id>', help='child quest id')
+  cancel_parser.add_argument('quest_id', metavar='<mission-id>', help='owned mission id')
   cancel_parser.add_argument(
     '--timeout',
     type=float,

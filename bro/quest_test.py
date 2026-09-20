@@ -798,7 +798,7 @@ async def test_history_of_an_evicted_quest_fails(monkeypatch, caplog):
 
 
 @pytest.mark.asyncio
-async def test_cancel_sends_the_cancel_then_waits_for_the_quest_to_end(monkeypatch, caplog):
+async def test_cancel_accepts_a_non_bro_mission_and_waits_for_its_end(monkeypatch, caplog):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'cancel', 'REQ-1']))
     channel, cancel = await next_message(server)
@@ -812,7 +812,15 @@ async def test_cancel_sends_the_cancel_then_waits_for_the_quest_to_end(monkeypat
       channel,
       query,
       outcome='ok',
-      value={'mission': quest_record('REQ-1', 'started', trail_id='T9')},
+      value={
+        'mission': quest_record(
+          'REQ-1',
+          'started',
+          type='benchmark',
+          args={'config': 'benchmark/job.yaml'},
+          trail_id='T9',
+        )
+      },
     )
     channel, wait = await next_message(server)
     assert wait.args == {'id': 'REQ-1', 'wait': quest.READ_WAIT_SECONDS}
@@ -825,6 +833,8 @@ async def test_cancel_sends_the_cancel_then_waits_for_the_quest_to_end(monkeypat
         'mission': quest_record(
           'REQ-1',
           'ended',
+          type='benchmark',
+          args={'config': 'benchmark/job.yaml'},
           outcome='failed',
           reason='cancelled',
           trail_id='T9',
@@ -902,9 +912,9 @@ async def test_cancel_timeout_exits_running_while_the_end_is_under_way(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_live_children_keeps_the_own_unended_summons_only(monkeypatch):
+async def test_live_missions_keeps_every_owned_unended_launch(monkeypatch):
   async with running_server(monkeypatch) as server:
-    task = asyncio.create_task(asyncio.to_thread(quest.live_children))
+    task = asyncio.create_task(asyncio.to_thread(quest.live_missions))
     channel, query = await next_message(server)
     assert query.args == {}
     await reply(
@@ -924,13 +934,17 @@ async def test_live_children_keeps_the_own_unended_summons_only(monkeypatch):
       },
     )
 
-    assert await task == [quest.LiveChild('S2', 'reviewer'), quest.LiveChild('S1', 'dev')]
+    assert await task == [
+      quest.LiveMission('S2', 'bro', 'reviewer'),
+      quest.LiveMission('S1', 'bro', 'dev'),
+      quest.LiveMission('W1', 'test', 'test'),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_live_children_refuses_an_unknown_quest_state(monkeypatch):
+async def test_live_missions_refuses_an_unknown_mission_state(monkeypatch):
   async with running_server(monkeypatch) as server:
-    task = asyncio.create_task(asyncio.to_thread(quest.live_children))
+    task = asyncio.create_task(asyncio.to_thread(quest.live_missions))
     channel, query = await next_message(server)
     await reply(
       server, channel, query, outcome='ok', value={'missions': [quest_record('S1', 'limbo')]}
@@ -941,9 +955,9 @@ async def test_live_children_refuses_an_unknown_quest_state(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_live_children_refuses_a_live_summon_without_a_target(monkeypatch):
+async def test_live_missions_refuses_a_live_bro_without_a_target(monkeypatch):
   async with running_server(monkeypatch) as server:
-    task = asyncio.create_task(asyncio.to_thread(quest.live_children))
+    task = asyncio.create_task(asyncio.to_thread(quest.live_missions))
     channel, query = await next_message(server)
     await reply(
       server,
@@ -953,7 +967,7 @@ async def test_live_children_refuses_a_live_summon_without_a_target(monkeypatch)
       value={'missions': [quest_record('S1', 'started', args={})]},
     )
 
-    with pytest.raises(quest.QuestError, match='without a target'):
+    with pytest.raises(quest.QuestError, match='bro mission without a target'):
       await task
 
 
@@ -1216,10 +1230,11 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
         'events': [
           {
             'seq': 11,
-            'kind': 'benchmark',
+            'kind': 'launch',
+            'type': 'benchmark',
             'mission': 'B1',
             'parent': 'ROOT',
-            'args': {},
+            'args': {'config': 'benchmark/job.yaml'},
             'transition': 'started',
           },
           {
@@ -1235,7 +1250,10 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
         ],
       },
     )
-    assert await first_line == 'summon denied: not allowed (quest S1 to reviewer)'
+    assert await first_line == 'launch benchmark started (mission B1)'
+    assert await asyncio.to_thread(next, watch) == (
+      'summon denied: not allowed (quest S1 to reviewer)'
+    )
 
     second_line = asyncio.create_task(asyncio.to_thread(next, watch))
     channel, poll = await next_message(server)
@@ -1425,6 +1443,23 @@ def test_chat_watch_lines_show_the_other_end_and_every_refusal():
   }
   assert quest._chat_event_line(oversized, 'ROOT') == (
     'summon refused over the message bound (quest CHILD to dev)'
+  )
+
+
+def test_non_bro_watch_lines_name_the_type_mission_and_outcome():
+  event = {
+    'kind': 'launch',
+    'type': 'benchmark',
+    'mission': 'B1',
+    'parent': 'ROOT',
+    'args': {'config': 'benchmark/job.yaml'},
+    'transition': 'ended',
+    'outcome': 'failed',
+    'reason': 'timeout',
+  }
+
+  assert quest._mission_event_line(event, 'ROOT') == (
+    'launch benchmark ended failed:timeout (mission B1)'
   )
 
 

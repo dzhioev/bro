@@ -1,34 +1,25 @@
 import asyncio
 import contextlib
 from pathlib import Path
-from typing import Optional, cast
+from typing import cast
 
 import pytest
 
 from bro.bench import job
 from bro.broker import brotocol
 from bro.broker.brotocol import Message, Tag
-from bro.broker.dispatcher import Dispatcher
+from bro.broker.client import Client
 from bro.broker.environment import BROKER_CHANNEL
-from bro.broker.job import OUTPUT_DIRECTORY, CommandJob
+from bro.broker.job import OUTPUT_DIRECTORY
 from bro.broker.transport import ChannelID
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
-from bro.kinds import ArtifactResolver, KindContext
+from bro.quest import LAUNCH
+from bro.worker_types import Host, LaunchDenied, LaunchRequest, PeerDescription, installed_type
 
 TIMEOUT = 5.0
 CONFIG = 'benchmark/bro/benchmark/job.yaml'
 ROOT = 'root-peer'
 REF = 'sha256:' + 'a' * 64
-
-
-def _kind(tree: Path, credential_scope=frozenset()):
-  return job.benchmark_kind(
-    KindContext(
-      workspace_tree=tree,
-      artifacts=cast(ArtifactResolver, object()),
-      credential_scope=credential_scope,
-    )
-  )
 
 
 @pytest.fixture
@@ -41,54 +32,67 @@ def tree(tmp_path):
   return tmp_path
 
 
-class FakeContext:
-  """the Dispatcher surface `benchmark_kind`'s handler drives: root exposure,
-  the denial reply, and the job launch."""
-
-  def __init__(self, root: Optional[str] = ROOT):
-    self.root = root
-    self.replies: list[tuple[str, dict]] = []
-    self.jobs: list[tuple[CommandJob, str, Optional[float]]] = []
-
-  def deny(self, peer, error, *, type=None):
-    assert type == 'benchmark'
-    self.replies.append((peer, {'outcome': 'denied', 'error': error}))
-
-  def job(self, command, requester, *, type, timeout=None):
-    assert type == 'benchmark'
-    self.jobs.append((command, requester, timeout))
-
-
-def _request(args: dict) -> Message:
-  return Message(
-    type=Tag.REQUEST,
-    id='R',
-    payload={'kind': 'benchmark', 'args': args},
+def _owner(tree: Path, *, depth: int = 0) -> PeerDescription:
+  return PeerDescription(
+    mission=ROOT,
+    workspace='workspace',
+    tree=tree,
+    type='bro',
+    bro='bro-dev',
+    permits=frozenset(),
+    member=None,
+    expected=False,
+    artifact_view=False,
+    published_ports=(),
+    depth=depth,
   )
 
 
-def _denial(tree, args, *, peer=ROOT, context=None) -> str:
-  context = context if context is not None else FakeContext()
-  _kind(tree)(cast(Dispatcher, context), peer, _request(args))
-  assert context.jobs == []
-  [(target, payload)] = context.replies
-  assert target == peer
-  assert payload['outcome'] == 'denied'
-  return payload['error']
+def _request(tree: Path, args: dict, *, depth: int = 0) -> LaunchRequest:
+  return LaunchRequest(
+    id='R',
+    type=job.BENCHMARK,
+    args=args,
+    owner=_owner(tree, depth=depth),
+    requested_talk=frozenset(),
+    timeout=job.DEFAULT_TIMEOUT,
+    share=(),
+    manual=False,
+  )
 
 
-class TestBenchmarkKind:
-  def test_root_request_starts_the_job(self, tree, monkeypatch):
+def _worker_type() -> job.BenchmarkType:
+  return job.BenchmarkType(cast(Host, object()))
+
+
+def _denial(tree: Path, args: dict, *, depth: int = 0) -> str:
+  with pytest.raises(LaunchDenied) as raised:
+    _worker_type().launch(_request(tree, args, depth=depth))
+  return str(raised.value)
+
+
+class TestBenchmarkType:
+  def test_installed_worker_type_resolves_to_the_benchmark(self):
+    assert installed_type(job.BENCHMARK) is job.BenchmarkType
+
+  def test_declarations_are_fixed_for_a_mute_host_job(self):
+    worker_type = _worker_type()
+    assert worker_type.name == 'benchmark'
+    assert worker_type.permits == frozenset()
+    assert worker_type.default_timeout == 12 * 3600
+    assert worker_type.widens_talk is False
+    assert worker_type.manual is False
+    assert worker_type.talk(cast(LaunchRequest, object())) == frozenset()
+
+  def test_root_request_builds_the_job(self, tree, monkeypatch):
     monkeypatch.setenv('BENCH_SENTINEL', 'yes')
     monkeypatch.setenv('HARBOR_API_KEY', 'ambient-key-outside-the-session-scope')
     monkeypatch.setenv('UV_PROJECT_ENVIRONMENT', '/wrong/shared-environment')
     monkeypatch.setenv('VIRTUAL_ENV', '/the/launcher/venv')
-    context = FakeContext()
-    handle = _kind(tree)
-    handle(cast(Dispatcher, context), ROOT, _request({'config': CONFIG}))
-    assert context.replies == []
-    [(command, requester, timeout)] = context.jobs
-    assert command.command == (
+
+    run = _worker_type().launch(_request(tree, {'config': CONFIG}))
+
+    assert run.command.command == (
       'uv',
       'run',
       '--project',
@@ -99,40 +103,22 @@ class TestBenchmarkKind:
       '--jobs-dir',
       OUTPUT_DIRECTORY,
     )
-    assert command.env['BENCH_SENTINEL'] == 'yes'  # the host environment rides the job
-    assert 'HARBOR_API_KEY' not in command.env
-    host_environment = Path(command.env['UV_PROJECT_ENVIRONMENT'])
+    assert run.command.env['BENCH_SENTINEL'] == 'yes'
+    assert 'HARBOR_API_KEY' not in run.command.env
+    host_environment = Path(run.command.env['UV_PROJECT_ENVIRONMENT'])
     assert host_environment == tree.parent / 'benchmark-venv'
     assert not host_environment.is_relative_to(tree)
-    assert 'VIRTUAL_ENV' not in command.env
-    assert (requester, timeout) == (ROOT, job.DEFAULT_TIMEOUT)
+    assert 'VIRTUAL_ENV' not in run.command.env
+    assert run.permits == frozenset()
 
-  def test_request_timeout_bounds_the_job(self, tree):
-    context = FakeContext()
-    handle = _kind(tree)
-    handle(cast(Dispatcher, context), ROOT, _request({'config': CONFIG, 'timeout': 60}))
-    [(_, _, timeout)] = context.jobs
-    assert timeout == 60.0
-
-  def test_non_root_peer_is_denied(self, tree):
-    error = _denial(tree, {'config': CONFIG}, peer='child-peer')
-    assert 'only the session root' in error
-
-  def test_unset_root_is_denied(self, tree):
-    error = _denial(tree, {'config': CONFIG}, context=FakeContext(root=None))
-    assert 'only the session root' in error
+  def test_non_root_owner_is_denied(self, tree):
+    assert 'only the session root' in _denial(tree, {'config': CONFIG}, depth=1)
 
   def test_unknown_field_is_denied(self, tree):
-    assert 'unknown benchmark field' in _denial(tree, {'config': CONFIG, 'timout': 5})
+    assert 'unknown benchmark field' in _denial(tree, {'config': CONFIG, 'upload': 'private'})
 
   def test_missing_config_is_denied(self, tree):
     assert "non-empty string 'config'" in _denial(tree, {})
-
-  def test_bad_timeout_is_denied(self, tree):
-    assert 'positive number' in _denial(tree, {'config': CONFIG, 'timeout': 0})
-
-  def test_upload_is_an_unknown_field(self, tree):
-    assert 'unknown benchmark field' in _denial(tree, {'config': CONFIG, 'upload': 'private'})
 
   def test_absolute_config_is_denied(self, tree):
     assert 'relative to the workspace root' in _denial(tree, {'config': str(tree / CONFIG)})
@@ -160,7 +146,7 @@ def test_await_outcome_logs_launch_only_for_started(caplog):
   request = Message(
     type=Tag.REQUEST,
     id='request',
-    payload={'kind': job.BENCHMARK, 'args': {}},
+    payload={'kind': LAUNCH, 'args': {'type': job.BENCHMARK}},
   )
 
   class FakeClient:
@@ -170,7 +156,7 @@ def test_await_outcome_logs_launch_only_for_started(caplog):
       on_interim(brotocol.mark(sent.request_id, 'trail', trail_id='trail'))
       return brotocol.result(sent.request_id, 'ok', value={'ref': REF})
 
-  assert job._await_outcome(cast(job.Client, FakeClient()), request, 10) == REF
+  assert job._await_outcome(cast(Client, FakeClient()), request, 10) == REF
   assert [record.message for record in caplog.records].count('benchmark job launched') == 1
 
 
@@ -242,8 +228,8 @@ async def test_start_detach_sends_the_request_and_prints_its_id(monkeypatch, cap
     argv = ['benchmark-job', 'start', '-c', CONFIG, '--timeout', '60', '--detach']
     task = asyncio.create_task(asyncio.to_thread(job.main, argv))
     channel, message = await asyncio.wait_for(sink.messages.get(), TIMEOUT)
-    assert message.kind == job.BENCHMARK
-    assert message.args == {'config': CONFIG, 'timeout': 60.0}
+    assert message.kind == LAUNCH
+    assert message.args == {'type': job.BENCHMARK, 'config': CONFIG, 'timeout': 60.0}
     await transport.send(channel, brotocol.mark(message.id, 'accepted'))
     assert await task == 0
     assert capsys.readouterr().out.strip() == message.id
@@ -303,7 +289,8 @@ async def test_check_reads_pending_and_terminal_journal_records(monkeypatch, cap
         value={
           'mission': {
             'id': 'JOB-1',
-            'kind': 'benchmark',
+            'kind': 'launch',
+            'type': 'benchmark',
             'parent': 'ROOT',
             'args': {'config': CONFIG},
             'state': 'started',
@@ -326,7 +313,8 @@ async def test_check_reads_pending_and_terminal_journal_records(monkeypatch, cap
         value={
           'mission': {
             'id': 'JOB-1',
-            'kind': 'benchmark',
+            'kind': 'launch',
+            'type': 'benchmark',
             'parent': 'ROOT',
             'args': {'config': CONFIG},
             'state': 'ended',
