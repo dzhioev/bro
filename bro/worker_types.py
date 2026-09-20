@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.metadata
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 if TYPE_CHECKING:
@@ -59,6 +61,112 @@ class LaunchRequest:
   manual: bool
 
 
+_RESERVED_CONTAINER_ENV = ('BROKER_', 'RIDE_', 'BRO_')
+_ENV_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
+
+
+@dataclass(frozen=True)
+class WorkerContainer:
+  files: Mapping[str, bytes]
+  command: tuple[str, ...]
+  env: Mapping[str, str]
+  published_ports: tuple[int, ...]
+
+  def __post_init__(self) -> None:
+    files = dict(self.files)
+    if not all(
+      isinstance(path, str) and isinstance(content, bytes) for path, content in files.items()
+    ):
+      raise ValueError('worker container files must map POSIX paths to bytes')
+    for path in files:
+      segments = path.split('/')
+      normalized = str(PurePosixPath(path))
+      if (
+        len(path) == 0
+        or '\0' in path
+        or path.startswith('/')
+        or any(segment in ('', '.', '..') for segment in segments)
+        or normalized != path
+      ):
+        raise ValueError(
+          f'worker container file path {path!r} is not a normalized NUL-free relative POSIX path'
+        )
+    dockerfile = files.get('Dockerfile')
+    if dockerfile is None:
+      raise ValueError("worker container files need a 'Dockerfile'")
+    try:
+      dockerfile_text = dockerfile.decode()
+    except UnicodeDecodeError as error:
+      raise ValueError('worker container Dockerfile must be UTF-8') from error
+    instructions = [
+      line.strip()
+      for line in dockerfile_text.splitlines()
+      if line.strip() and not line.lstrip().startswith('#')
+    ]
+    try:
+      from_index = next(
+        index
+        for index, instruction in enumerate(instructions)
+        if instruction.upper().startswith('FROM ')
+      )
+    except StopIteration as error:
+      raise ValueError('worker container Dockerfile must open FROM ${RUNTIME_IMAGE}') from error
+    if not any(
+      instruction.upper() == 'ARG RUNTIME_IMAGE' for instruction in instructions[:from_index]
+    ) or instructions[from_index].split() != ['FROM', '${RUNTIME_IMAGE}']:
+      raise ValueError(
+        'worker container Dockerfile must open with ARG RUNTIME_IMAGE and FROM ${RUNTIME_IMAGE}'
+      )
+
+    if (
+      not isinstance(self.command, tuple)
+      or len(self.command) == 0
+      or not all(isinstance(argument, str) and '\0' not in argument for argument in self.command)
+      or not self.command[0]
+    ):
+      raise ValueError(
+        'worker container command must name an executable in a non-empty string tuple'
+      )
+    env = dict(self.env)
+    if not all(
+      isinstance(name, str)
+      and _ENV_NAME.fullmatch(name) is not None
+      and isinstance(value, str)
+      and '\0' not in value
+      for name, value in env.items()
+    ):
+      raise ValueError(
+        'worker container env must map environment variable names to NUL-free strings'
+      )
+    reserved = sorted(
+      name for name in env if name in ('HOME', 'PATH') or name.startswith(_RESERVED_CONTAINER_ENV)
+    )
+    if reserved:
+      raise ValueError(f'worker container env names host-owned variable(s): {", ".join(reserved)}')
+    ports = self.published_ports
+    if not isinstance(ports, tuple) or not all(
+      isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535 for port in ports
+    ):
+      raise ValueError('worker container published ports must be a tuple of ports in 1..65535')
+    if len(ports) != len(set(ports)):
+      raise ValueError('worker container published ports must be distinct')
+    object.__setattr__(self, 'files', MappingProxyType(files))
+    object.__setattr__(self, 'env', MappingProxyType(env))
+
+  def image_hash(self, runtime_image: str) -> str:
+    if not isinstance(runtime_image, str) or not runtime_image:
+      raise ValueError('worker container runtime image must be a non-empty string')
+    digest = hashlib.sha256()
+    runtime_bytes = runtime_image.encode()
+    digest.update(len(runtime_bytes).to_bytes(8, 'big'))
+    digest.update(runtime_bytes)
+    for path, content in sorted(self.files.items()):
+      for value in (path.encode(), content):
+        digest.update(len(value).to_bytes(8, 'big'))
+        digest.update(value)
+    return digest.hexdigest()[:12]
+
+
 @dataclass(frozen=True)
 class Spawn:
   launch: Any
@@ -75,13 +183,20 @@ class Job:
 
 
 @dataclass(frozen=True)
+class Container:
+  spec: WorkerContainer
+  extension: Any = None
+  permits: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
 class Expect:
   pending: dict[str, Any]
   extension: Any = None
   permits: frozenset[str] = frozenset()
 
 
-Run = Spawn | Job | Expect
+Run = Spawn | Job | Container | Expect
 JournalSubscriber = Callable[['Event', 'Record'], None]
 
 

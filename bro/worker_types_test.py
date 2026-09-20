@@ -127,3 +127,119 @@ def test_tree_path_rejects_an_escape(tmp_path):
   with pytest.raises(ValueError, match='escapes'):
     worker_types.tree_path(tmp_path, '../outside')
   assert worker_types.tree_path(tmp_path, 'inside') == Path(tmp_path / 'inside')
+
+
+_CONTAINER_FILES = {
+  'Dockerfile': b'# syntax=docker/dockerfile:1\nARG RUNTIME_IMAGE\nFROM ${RUNTIME_IMAGE}\n',
+  'worker/data.bin': b'payload',
+}
+
+
+def _worker_container(**changes):
+  values = {
+    'files': _CONTAINER_FILES,
+    'command': ('worker', '--serve'),
+    'env': {'WORKER_MODE': 'test'},
+    'published_ports': (8080, 9090),
+  }
+  values.update(changes)
+  return worker_types.WorkerContainer(**values)
+
+
+def test_worker_container_copies_its_mappings_and_has_a_stable_image_hash():
+  files = dict(_CONTAINER_FILES)
+  env = {'WORKER_MODE': 'test'}
+  container = _worker_container(files=files, env=env)
+  expected = container.image_hash('bro/ride-runtime:one')
+  files['worker/data.bin'] = b'changed'
+  env['WORKER_MODE'] = 'changed'
+
+  assert container.files['worker/data.bin'] == b'payload'
+  assert container.env == {'WORKER_MODE': 'test'}
+  assert (
+    _worker_container(files=dict(reversed(_CONTAINER_FILES.items()))).image_hash(
+      'bro/ride-runtime:one'
+    )
+    == expected
+  )
+  assert container.image_hash('bro/ride-runtime:two') != expected
+  assert (
+    _worker_container(files={**_CONTAINER_FILES, 'worker/data.bin': b'changed'}).image_hash(
+      'bro/ride-runtime:one'
+    )
+    != expected
+  )
+
+
+@pytest.mark.parametrize(
+  'path',
+  [
+    '',
+    '/Dockerfile',
+    '../Dockerfile',
+    'worker/../Dockerfile',
+    'worker//Dockerfile',
+    './Dockerfile',
+    'worker\0hidden',
+  ],
+)
+def test_worker_container_refuses_non_normalized_file_paths(path):
+  files = dict(_CONTAINER_FILES)
+  files[path] = b'data'
+  with pytest.raises(ValueError, match='relative POSIX path'):
+    _worker_container(files=files)
+
+
+@pytest.mark.parametrize(
+  'dockerfile',
+  [
+    None,
+    b'FROM python:3.12\n',
+    b'FROM ${RUNTIME_IMAGE}\n',
+    b'ARG RUNTIME_IMAGE\nRUN true\n',
+    b'ARG RUNTIME_IMAGE\nFROM ${RUNTIME_IMAGE} AS worker\n',
+  ],
+)
+def test_worker_container_requires_the_runtime_image_dockerfile_prelude(dockerfile):
+  files = dict(_CONTAINER_FILES)
+  if dockerfile is None:
+    files.pop('Dockerfile')
+  else:
+    files['Dockerfile'] = dockerfile
+  with pytest.raises(ValueError, match='Dockerfile'):
+    _worker_container(files=files)
+
+
+@pytest.mark.parametrize('command', [(), ('',), ('worker', 'bad\0argument'), ['worker']])
+def test_worker_container_refuses_invalid_commands(command):
+  with pytest.raises(ValueError, match='command'):
+    _worker_container(command=command)
+
+
+def test_worker_container_allows_an_empty_argument_after_the_executable():
+  assert _worker_container(command=('worker', '')).command == ('worker', '')
+
+
+@pytest.mark.parametrize(
+  'name', ['BROKER_CHANNEL', 'RIDE_WORKSPACE', 'BRO_FEATURE', 'HOME', 'PATH']
+)
+def test_worker_container_refuses_host_owned_environment(name):
+  with pytest.raises(ValueError, match='host-owned'):
+    _worker_container(env={name: 'value'})
+
+
+@pytest.mark.parametrize('name', ['', '9NAME', 'NAME-WITH-DASH', 'HOME=value', 'BAD\0NAME'])
+def test_worker_container_refuses_invalid_environment_names(name):
+  with pytest.raises(ValueError, match='environment variable names'):
+    _worker_container(env={name: 'value'})
+
+
+def test_worker_container_refuses_a_nul_in_an_environment_value():
+  with pytest.raises(ValueError, match='NUL-free'):
+    _worker_container(env={'WORKER_MODE': 'bad\0value'})
+
+
+@pytest.mark.parametrize('ports', [(0,), (65536,), (8080, 8080), (True,), [8080]])
+def test_worker_container_refuses_invalid_published_ports(ports):
+  with pytest.raises(ValueError, match='published ports'):
+    _worker_container(published_ports=ports)

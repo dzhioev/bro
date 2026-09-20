@@ -170,6 +170,57 @@ except Exception:
   raise
 """
 
+# Scenario N root: launch a worker container and retain what it reports over chat.
+_PROBE_WORKER_CONTAINER = """
+import json
+from pathlib import Path
+
+from bro.broker.client import Client
+
+client = Client.from_env()
+assert client is not None
+with client:
+  launched = client.send('launch', {'type': 'container-e2e'})
+  report = {'transitions': []}
+  while True:
+    message = client.receive(120)
+    assert message is not None, 'worker container launch timed out'
+    if message.request_id != launched.id:
+      continue
+    if message.type == 'mark':
+      report['transitions'].append(message.payload['transition'])
+    elif message.type == 'message':
+      report['worker'] = message.payload
+    elif message.type == 'result':
+      report['result'] = message.payload
+      break
+
+Path('/workspace/.worker-container-report').write_text(json.dumps(report))
+"""
+
+_WORKER_CONTAINER_SCRIPT = b"""#!/var/ride/runtime/venv/bin/python
+import os
+from pathlib import Path
+
+from bro.artifact import mint_artifact
+from bro.broker.client import Client
+
+Path('/workspace/worker-output').write_text('worker-container-e2e')
+artifact = mint_artifact('worker-output', timeout=30)
+ports = dict(
+  pair.split('=', 1)
+  for pair in os.environ['RIDE_PUBLISHED_PORTS'].split(',')
+  if pair
+)
+client = Client.from_env()
+assert client is not None
+with client:
+  ping = client.request('ping', {'worker': True}, 30)
+  assert ping.payload == {'outcome': 'ok', 'value': {'worker': True}}, ping.payload
+  client.message(os.environ['BROKER_MISSION'], {'ref': artifact.ref, 'port': ports['8080']})
+"""
+
+
 # scenario B root: ping (with a forged identity claim in the payload), then spawn a
 # child and record every message as received, wire-level, into a report file
 _PROBE_B_ROOT = """
@@ -365,7 +416,9 @@ code = run_started_party(
     workspace,
     credential_scope=ScopedSecrets(set(launch.secrets), set()),
     container_runtime=ContainerRuntimeResolver.fixed(
-        ContainerRuntime(launch.image, runtime_hash), workspace.repository
+        ContainerRuntime(
+            launch.image, runtime_hash, os.environ['RIDE_E2E_RUNTIME_IMAGE']
+        ), workspace.repository
     ),
     runtime_bundle=runtime_bundle,
 )
@@ -387,6 +440,7 @@ class IsolatedEnv:
   data_home: Path
   runtime_root: Path
   image: str
+  runtime_image: str
   runtime_bundle_hash: str
 
   @property
@@ -465,6 +519,7 @@ def isolated_env() -> Iterator[IsolatedEnv]:
           data_home=data_home,
           runtime_root=runtime_root,
           image=runtime.image,
+          runtime_image=runtime.runtime_image,
           runtime_bundle_hash=runtime.bundle_hash,
         )
         yield env
@@ -509,6 +564,7 @@ class _Driver:
     driver_env['RIDE_E2E_NAME'] = name
     driver_env['RIDE_E2E_COMMAND'] = json.dumps(command)
     driver_env['RIDE_E2E_IMAGE'] = env.image
+    driver_env['RIDE_E2E_RUNTIME_IMAGE'] = env.runtime_image
     driver_env['RIDE_E2E_RUNTIME_HASH'] = env.runtime_bundle_hash
     driver_env['XDG_DATA_HOME'] = str(env.data_home)
     driver_env.update(extra_env)
@@ -1475,7 +1531,7 @@ def test_cross_isolation_summon_chain_uses_both_join_lowerings(
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(env.image, env.runtime_bundle_hash), workspace.repository
+    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
   )
   original_started_party_launch = ride_spawn.started_party_launch
   original_boxed_member_launch = ride_spawn.boxed_member_launch
@@ -1731,7 +1787,7 @@ def _run_native_watch_route(
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(env.image, env.runtime_bundle_hash), workspace.repository
+    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
   )
   original_started_party_launch = ride_spawn.started_party_launch
 
@@ -1942,7 +1998,7 @@ def test_native_child_reminded_at_its_turn_end_chills_and_delivers_the_grandchil
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(env.image, env.runtime_bundle_hash), workspace.repository
+    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
   )
   original_started_party_launch = ride_spawn.started_party_launch
 
@@ -2040,7 +2096,7 @@ def test_summon_chat_question_reply_and_steering_cross_the_live_broker(
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(env.image, env.runtime_bundle_hash), workspace.repository
+    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
   )
   original_started_party_launch = ride_spawn.started_party_launch
 
@@ -2138,7 +2194,7 @@ def test_cancel_kills_a_live_child_and_ends_its_quest_on_reap(
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(env.image, env.runtime_bundle_hash), workspace.repository
+    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
   )
   original_started_party_launch = ride_spawn.started_party_launch
 
@@ -2230,7 +2286,7 @@ def test_benchmark_launch_runs_as_a_registered_type(isolated_env: IsolatedEnv, m
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(env.image, env.runtime_bundle_hash), workspace.repository
+    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
   )
   original_launch = BenchmarkType.launch
 
@@ -2274,4 +2330,107 @@ def test_benchmark_launch_runs_as_a_registered_type(isolated_env: IsolatedEnv, m
   diagnostic = error_report.read_text() if error_report.is_file() else 'no root error report'
   assert code == 0, diagnostic
   assert report.read_text().startswith('sha256:')
+  assert env.live_containers() == []
+
+
+# --- N: worker container registered type --------------------------------------
+
+
+def test_worker_container_runs_through_the_live_broker(
+  isolated_env: IsolatedEnv, monkeypatch
+) -> None:
+  import ride.broker_root as broker_root
+  from bro.broker.brotocol import Talk
+  from bro.worker_types import Container, LaunchRequest, WorkerContainer, WorkerType
+  from bro.workspace.paths import launch_dir
+  from ride.artifacts import audit_file as artifact_audit_file
+  from ride.runtime_bundle import RuntimeBundle
+  from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
+  from ride.workspace.metadata import Isolation
+  from ride.workspace.model import Workspace
+  from ride.workspace.spawn import DockerLaunchSpec
+  from ride.workspace.store import ScopedSecrets
+
+  class ContainerType(WorkerType):
+    name = 'container-e2e'
+    default_timeout = 120.0
+
+    def talk(self, request: LaunchRequest) -> Talk:
+      return frozenset({'worker.say'})
+
+    def launch(self, request: LaunchRequest) -> Container:
+      assert request.args == {}
+      return Container(
+        WorkerContainer(
+          files={
+            'Dockerfile': (
+              b'ARG RUNTIME_IMAGE\n'
+              b'FROM ${RUNTIME_IMAGE}\n'
+              b'COPY worker.py /usr/local/bin/container-e2e-worker\n'
+              b'RUN chmod 755 /usr/local/bin/container-e2e-worker\n'
+            ),
+            'worker.py': _WORKER_CONTAINER_SCRIPT,
+          },
+          command=('container-e2e-worker',),
+          env={'WORKER_MARKER': 'e2e'},
+          published_ports=(8080,),
+        )
+      )
+
+  env = isolated_env
+  name = f'{_NAME_PREFIX}n-worker-container'
+  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  runtime_bundle = RuntimeBundle(
+    env.runtime_root / 'runtime' / env.runtime_bundle_hash,
+    f'{sys.version_info.major}.{sys.version_info.minor}',
+  )
+  container_runtime = ContainerRuntimeResolver.fixed(
+    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image),
+    workspace.repository,
+  )
+  monkeypatch.setenv('HOME', str(env.home))
+  launch = DockerLaunchSpec(
+    workspace_docker.Launch(
+      name=name,
+      command=_session_broxy_probe(_PROBE_WORKER_CONTAINER),
+      env={'RIDE_BRO': 'bro-dev'},
+      secrets=(),
+      tty=False,
+      image=env.image,
+      runtime_bundle_hash=env.runtime_bundle_hash,
+      repo=env.project,
+    )
+  )
+
+  code = broker_root.run_root_via_broker(
+    launch,
+    workspace=workspace,
+    bro='bro-dev',
+    credential_scope=ScopedSecrets(set(), set()),
+    container_runtime=container_runtime,
+    runtime_bundle=runtime_bundle,
+    types={ContainerType.name: ContainerType},
+  )
+
+  report_path = workspace.tree / '.worker-container-report'
+  diagnostic = report_path.read_text() if report_path.is_file() else 'no root report'
+  assert code == 0, diagnostic
+  report = json.loads(diagnostic)
+  assert report['transitions'] == ['accepted', 'started']
+  assert report['result']['outcome'] == 'failed'
+  assert report['result']['detail']['reason'] == 'exit'
+  assert report['result']['detail']['exit_code'] == 0
+  assert report['worker']['ref'].startswith('sha256:')
+  assert int(report['worker']['port']) > 0
+  assert not any(path.name.startswith('container-e2e-') for path in env.workspaces_dir.iterdir())
+  artifact_audit = [json.loads(line) for line in artifact_audit_file(name).read_text().splitlines()]
+  assert any(
+    entry.get('event') == 'mint' and entry.get('ref') == report['worker']['ref']
+    for entry in artifact_audit
+  )
+  audit = [json.loads(line) for line in (launch_dir() / f'{name}.jsonl').read_text().splitlines()]
+  worker_events = [entry for entry in audit if entry.get('type') == ContainerType.name]
+  assert any(
+    entry['published_ports'] == [[int(report['worker']['port']), 8080]] for entry in worker_events
+  )
   assert env.live_containers() == []

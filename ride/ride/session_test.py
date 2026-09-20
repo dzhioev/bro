@@ -209,7 +209,7 @@ class _ContainerHarness:
       patch('ride.session.local_trails_mounts', return_value=()),
       patch(
         'ride.workspace.docker.ContainerRuntimeResolver.resolve',
-        return_value=ContainerRuntime('runtime-image', 'bundle-hash'),
+        return_value=ContainerRuntime('runtime-image', 'bundle-hash', 'runtime-image'),
       ),
       patch('ride.session.rev_parse_commit', return_value='headsha'),
     ]
@@ -453,7 +453,9 @@ class TestDetachedSession:
         _launch_scope(),
         human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
-        container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
+        container_runtime=ContainerRuntimeResolver.fixed(
+          ContainerRuntime('runtime', 'hash', 'runtime')
+        ),
         env={},
         credential_directory=workspace.path / 'credentials',
         install_directory=workspace.path / 'environment',
@@ -1055,7 +1057,9 @@ class TestUnboxedSession:
       _launch_scope(hydrated_kinds=frozenset({'github', 'trails'})),
       human_env=human,
       runtime_bundle=runtime_bundle,
-      container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
+      container_runtime=ContainerRuntimeResolver.fixed(
+        ContainerRuntime('runtime', 'hash', 'runtime')
+      ),
       env={},
       credential_directory=workspace.path / 'credentials',
       install_directory=workspace.path / 'environment',
@@ -1119,7 +1123,9 @@ class TestUnboxedSession:
       _launch_scope(),
       human_env={},
       runtime_bundle=_runtime_bundle(tmp_path),
-      container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
+      container_runtime=ContainerRuntimeResolver.fixed(
+        ContainerRuntime('runtime', 'hash', 'runtime')
+      ),
       env={},
       credential_directory=workspace.path / 'credentials',
       install_directory=workspace.path / 'environment',
@@ -1155,7 +1161,9 @@ class TestUnboxedSession:
       _launch_scope(),
       human_env={},
       runtime_bundle=_runtime_bundle(tmp_path),
-      container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
+      container_runtime=ContainerRuntimeResolver.fixed(
+        ContainerRuntime('runtime', 'hash', 'runtime')
+      ),
       env={'MARKER': 'child'},
       credential_directory=workspace.path / 'credentials',
       install_directory=workspace.path / 'environment',
@@ -1258,7 +1266,9 @@ class TestUnboxedSession:
         _launch_scope(),
         human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
-        container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
+        container_runtime=ContainerRuntimeResolver.fixed(
+          ContainerRuntime('runtime', 'hash', 'runtime')
+        ),
       )
       == 0
     )
@@ -1290,7 +1300,9 @@ class TestUnboxedSession:
         scope,
         human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
-        container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
+        container_runtime=ContainerRuntimeResolver.fixed(
+          ContainerRuntime('runtime', 'hash', 'runtime')
+        ),
       )
       == 5
     )
@@ -1318,7 +1330,9 @@ class TestUnboxedSession:
         _launch_scope(),
         human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
-        container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
+        container_runtime=ContainerRuntimeResolver.fixed(
+          ContainerRuntime('runtime', 'hash', 'runtime')
+        ),
       )
       == 1
     )
@@ -1381,7 +1395,7 @@ class TestHostBrokerPingRoundTrip:
         human_env={},
         runtime_bundle=runtime_bundle,
         container_runtime=ContainerRuntimeResolver.fixed(
-          ContainerRuntime('runtime-image', 'bundle-hash')
+          ContainerRuntime('runtime-image', 'bundle-hash', 'runtime-image')
         ),
       )
       == 0
@@ -1481,7 +1495,7 @@ client.close(confirm=True)
         human_env={},
         runtime_bundle=runtime_bundle,
         container_runtime=ContainerRuntimeResolver.fixed(
-          ContainerRuntime('runtime-image', 'bundle-hash')
+          ContainerRuntime('runtime-image', 'bundle-hash', 'runtime-image')
         ),
       )
       == 0
