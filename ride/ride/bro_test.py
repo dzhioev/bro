@@ -54,7 +54,9 @@ def _runtime_bundle(tmp_path: Path) -> RuntimeBundle:
 
 
 def _container_runtime() -> ContainerRuntimeResolver:
-  return ContainerRuntimeResolver.fixed(ContainerRuntime('runtime-image', 'bundle-hash'))
+  return ContainerRuntimeResolver.fixed(
+    ContainerRuntime('runtime-image', 'bundle-hash', 'runtime-image')
+  )
 
 
 def _scope(**overrides) -> ScopedLaunch:

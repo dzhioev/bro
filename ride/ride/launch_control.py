@@ -14,6 +14,7 @@ from bro.base import log
 from bro.broker.brotocol import TALK_RIGHTS, Talk
 from bro.worker_types import (
   ArtifactDenied,
+  Container,
   Expect,
   Job,
   LaunchDenied,
@@ -26,12 +27,14 @@ from bro.worker_types import (
 )
 from ride import pending_launch
 from ride.peer_facts import WorkerFacts
+from ride.worker_container import WorkerContainerLaunch
 
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message
   from bro.broker.dispatcher import Dispatcher
   from bro.broker.journal import Event, Journal, Record
   from bro.broker.runtime import Peer
+  from bro.broker.spawn import Spawner
 
 _COMMON_FIELDS = frozenset({'type', 'timeout', 'share', 'talk', 'manual'})
 
@@ -64,6 +67,7 @@ class LaunchControl:
     audit_file: Path,
     runtime_bundle: Any,
     session_env: Mapping[str, str],
+    worker_container_spawner: Spawner,
   ):
     self._ride = ride
     self._types = dict(types)
@@ -72,6 +76,7 @@ class LaunchControl:
     self._audit_file = audit_file
     self._runtime_bundle = runtime_bundle
     self._session_env = dict(session_env)
+    self._worker_container_spawner = worker_container_spawner
     self._audit_fields: dict[str, dict[str, Any]] = {}
     self._owners: dict[str, dict[str, str]] = {}
 
@@ -131,6 +136,21 @@ class LaunchControl:
         run.command,
         peer,
         type=request.type,
+        timeout=request.timeout,
+      )
+      return
+    if isinstance(run, Container):
+      context.spawn(
+        WorkerContainerLaunch(
+          type=request.type,
+          spec=run.spec,
+          owner_workspace=request.owner.workspace,
+          share=request.share,
+        ),
+        self._worker_container_spawner,
+        peer,
+        type=request.type,
+        talk=talk,
         timeout=request.timeout,
       )
       return

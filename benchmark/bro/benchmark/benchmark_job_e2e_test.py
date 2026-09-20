@@ -23,7 +23,7 @@ import sys
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import override
+from typing import cast, override
 
 from bro.artifact import GET
 from bro.bench.job import BENCHMARK, BenchmarkType
@@ -195,6 +195,7 @@ def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
     audit_file=tmp_path / 'launch.jsonl',
     runtime_bundle=object(),
     session_env={},
+    worker_container_spawner=cast(Spawner, object()),
   )
   broker.on(GET, runs.get)
   broker.on(LAUNCH, control.handle)

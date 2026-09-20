@@ -52,7 +52,7 @@ _REAL_HUMAN_IDENTITY = ride.identity.human_git_identity_env
 
 def _container_runtime() -> workspace_docker.ContainerRuntimeResolver:
   return workspace_docker.ContainerRuntimeResolver.fixed(
-    workspace_docker.ContainerRuntime('runtime-image', 'bundle-hash')
+    workspace_docker.ContainerRuntime('runtime-image', 'bundle-hash', 'runtime-image')
   )
 
 
