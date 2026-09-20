@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.9.0
+version: 2.10.0
 ---
 
 # orchestrate
@@ -244,6 +244,7 @@ the reviewer ends up holding the deepest understanding of the design, which is w
 > for every contract shared with a separately deployed process, state the rollout order and how mixed versions remain operable.
 > Bring material objections and open design decisions to the user before editing the design.{{when #may_summon contains eyebro}}
 > Then put the design as it stands into a markdown file on a throwaway branch and open a temporary pull request against master whose title and body say it is a design review only, never to be merged.
+> Watch it with `poll-pr` the way [[run pr]] watches the pull requests it opens, armed before the reviewer is summoned.
 > [[Ask <the eyebro>]] to review that pull request as a document, not code:
 > gaps, contradictions, unverified assumptions, a missing rollout order, and better alternatives, not tests or CI.
 > Fold its findings into the file until it approves, settling with the user in this session whatever needs their opinion;
