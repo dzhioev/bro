@@ -66,5 +66,4 @@ Harness flags choose a recipe within the selected harness and never silently swi
 ## Session support
 
 - `hold.py` — the session hold as the environment carries it, and the interactive-session predicate over it.
-- `broker_environment.py` — the broker env names and the session broxy-log path shared by launchers and clients.
-- `broxy.py` — host-session wrapper around `broxy launch`, consuming `BROKER_UPSTREAM`, publishing the session-local `BROKER_CHANNEL` only after readiness, and owning context-managed teardown.
+- `broxy.py` — host-session wrapper around `broxy launch`, consuming `BROKER_UPSTREAM`, publishing the session-local `BROKER_CHANNEL` only after readiness, owning the session broxy-log path, and pairing setup with context-managed teardown.

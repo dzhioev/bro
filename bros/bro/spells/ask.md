@@ -98,16 +98,16 @@ An instance grant replaces the target's selection for that kind.
 Both directions are strict, so a no-op grant or a revoke of a kind or bro the target lacks fails the summon rather than passing quietly.
 
 The quest's **talk** is a separate least-authority knob.
-The child gets `summoned.say` by default;
+The child gets `worker.say` by default;
 widen it only for conversation the request needs:
 
-- `summoner.say` lets this session steer the child with unsolicited messages;
-- `summoner.question` lets this session ask the child and await its reply;
-- `summoned.say` lets the child send progress before its final answer and is already in the default;
-- `summoned.question` lets the child stop for an answer from this session.
+- `owner.say` lets this session steer the child with unsolicited messages;
+- `owner.question` lets this session ask the child and await its reply;
+- `worker.say` lets the child send progress before its final answer and is already in the default;
+- `worker.question` lets the child stop for an answer from this session.
 
 A reply follows the question right in the other direction, so do not add a say right merely to permit replies.
-Grant `summoned.question` when the work may need a decision, approval, or missing fact from the summoner rather than forcing the child to raise and lose its live state.
+Grant `worker.question` when the work may need a decision, approval, or missing fact from the summoner rather than forcing the child to raise and lose its live state.
 Grant summoner rights only when someone will keep the watch armed and act on those messages.
 The Bash client takes repeatable or comma-separated `--talk <right>` values;
 the tool client takes a `talk` list.
@@ -179,7 +179,7 @@ if a waiting process is killed mid-flight, the host journal retains the quest,
 `quest check <id>` polls it,
 and `quest check --wait <id>` waits on the same non-destructive read.
 
-When a blocking summon granted `summoned.question` exits 4, stdout is the child's question and stderr names its quest id, question id, and ready reply command.
+When a blocking summon granted `worker.question` exits 4, stdout is the child's question and stderr names its quest id, question id, and ready reply command.
 Answer it with `quest say <quest-id> '<answer>' --reply-to <question-id>`, then resume the same quest with `quest check --wait <quest-id>`.
 That check may itself exit 4 with the open questions the child is stalled on;
 repeat the answer/check loop until it exits 0 with the child's final answer or 1 with a failure.

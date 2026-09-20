@@ -8,8 +8,8 @@ from dataclasses import dataclass
 
 from bro.broker import brotocol
 from bro.broker.brotocol import Message, Talk
-from bro.broker.client import CHANNEL_ENV, QUEST_ENV
 from bro.broker.dispatcher import Broker, Dispatcher
+from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import ChannelID, Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
@@ -91,10 +91,10 @@ async def running_live_broker():
 
   def spawn_summon(context: Dispatcher, peer, message: Message) -> None:
     talk: Talk = frozenset(message.args.get('talk', []))
-    context.spawn(LaunchSpec(), peer, talk=talk)
+    context.spawn(LaunchSpec(), peer, type='bro', talk=talk)
 
   broker.on(SUMMON, spawn_summon)
-  broker_task = asyncio.create_task(asyncio.to_thread(broker.run, LaunchSpec()))
+  broker_task = asyncio.create_task(asyncio.to_thread(broker.run, LaunchSpec(), type='bro'))
   root = await asyncio.to_thread(spawner.spawned.get, True, TIMEOUT)
   try:
     yield spawner, root
@@ -110,8 +110,8 @@ async def running_server(monkeypatch):
   serve_task = asyncio.create_task(transport.serve(sink))
   await asyncio.sleep(0)
   provisioned = await transport.provision()
-  monkeypatch.setenv(CHANNEL_ENV, provisioned.host_endpoint.address(LOCAL_HOST))
-  monkeypatch.setenv(QUEST_ENV, 'ROOT')
+  monkeypatch.setenv(BROKER_CHANNEL, provisioned.host_endpoint.address(LOCAL_HOST))
+  monkeypatch.setenv(BROKER_MISSION, 'ROOT')
   monkeypatch.setenv(RUNTIME_ENV, '/runtime')
   try:
     yield Harness(transport=transport, sink=sink)

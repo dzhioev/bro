@@ -5,7 +5,7 @@ A `Message` serializes to UTF-8 JSON with no delimiter (`to_bytes`) and parses b
 Framing belongs to the transport adapter; the TCP adapter uses NDJSON.
 
 The envelope has four types:
-a `request` opens a quest (`id`, `payload: {kind, args}`), `mark` carries a lifecycle transition, `message` carries kind-defined chat payload in either direction, and `result` closes the quest.
+a `request` opens a mission (`id`, `payload: {kind, args}`), `mark` carries a lifecycle transition, `message` carries kind-defined chat payload in either direction, and `result` closes the mission.
 The type set is closed and the codec enforces every shape, so malformed envelopes fail at the boundary.
 The channel attach handshake carries `PROTOCOL_REVISION` for incompatible wire changes.
 """
@@ -17,29 +17,26 @@ from typing import Any, Literal, Optional, cast
 
 from bro.base.lulid import lulid
 
-PROTOCOL_REVISION = 4
+PROTOCOL_REVISION = 5
 MAX_FRAME_BYTES = 512 * 1024
 MAX_IDENTIFIER_BYTES = 4096
-TALK_ENV = 'BROKER_TALK'
 
 OUTCOMES = frozenset({'ok', 'denied', 'failed'})
 _MARK_TRANSITIONS = frozenset({'accepted', 'listening', 'started', 'trail'})
 
-type End = Literal['summoner', 'summoned']
+type End = Literal['owner', 'worker']
 type TalkRight = Literal[
-  'summoner.say',
-  'summoner.question',
-  'summoned.say',
-  'summoned.question',
+  'owner.say',
+  'owner.question',
+  'worker.say',
+  'worker.question',
 ]
 type Talk = frozenset[TalkRight]
-TALK_RIGHTS: Talk = frozenset(
-  {'summoner.say', 'summoner.question', 'summoned.say', 'summoned.question'}
-)
+TALK_RIGHTS: Talk = frozenset({'owner.say', 'owner.question', 'worker.say', 'worker.question'})
 EMPTY_TALK: Talk = frozenset()
 
 _REQUEST_ENVELOPE_KEYS = frozenset({'type', 'id', 'payload'})
-_CORRELATED_ENVELOPE_KEYS = frozenset({'type', 'quest', 'payload'})
+_CORRELATED_ENVELOPE_KEYS = frozenset({'type', 'request', 'payload'})
 _MESSAGE_ENVELOPE_KEYS = _CORRELATED_ENVELOPE_KEYS | {'id', 'reply_to'}
 _ENVELOPE_KEYS = _REQUEST_ENVELOPE_KEYS | _MESSAGE_ENVELOPE_KEYS
 _RESULT_KEYS = frozenset({'outcome', 'value', 'error', 'detail'})
@@ -63,16 +60,16 @@ class Message:
   type: str
   payload: dict[str, Any]
   id: Optional[str] = None
-  quest: Optional[str] = None
+  request: Optional[str] = None
   reply_to: Optional[str] = None
 
   def __post_init__(self):
-    _validate(self.type, self.id, self.quest, self.reply_to, self.payload)
+    _validate(self.type, self.id, self.request, self.reply_to, self.payload)
 
   @property
-  def quest_id(self) -> str:
-    """The quest this envelope belongs to."""
-    identifier = self.id if self.type == Tag.REQUEST else self.quest
+  def request_id(self) -> str:
+    """The request this envelope belongs to."""
+    identifier = self.id if self.type == Tag.REQUEST else self.request
     assert identifier is not None
     return identifier
 
@@ -123,7 +120,7 @@ class Message:
     if self.type == Tag.REQUEST:
       wire: dict[str, Any] = {'type': self.type, 'id': self.id, 'payload': self.payload}
     else:
-      wire = {'type': self.type, 'quest': self.quest, 'payload': self.payload}
+      wire = {'type': self.type, 'request': self.request, 'payload': self.payload}
       if self.type == Tag.MESSAGE:
         if self.id is not None:
           wire['id'] = self.id
@@ -154,36 +151,36 @@ class Message:
       type=message_type,
       payload=payload,
       id=parsed.get('id'),
-      quest=parsed.get('quest'),
+      request=parsed.get('request'),
       reply_to=parsed.get('reply_to'),
     )
 
 
 def request(kind: str, args: dict[str, Any]) -> Message:
-  """A fresh request opening a quest, with its lulid minted here."""
+  """A fresh request opening a mission, with its lulid minted here."""
   return Message(type=Tag.REQUEST, payload={'kind': kind, 'args': args}, id=lulid())
 
 
-def mark(quest_id: str, transition: str, **details: Any) -> Message:
+def mark(request_id: str, transition: str, **details: Any) -> Message:
   return Message(
     type=Tag.MARK,
     payload={'transition': transition, **details},
-    quest=quest_id,
+    request=request_id,
   )
 
 
 def message(
-  quest_id: str,
+  request_id: str,
   payload: dict[str, Any],
   *,
   id: Optional[str] = None,
   reply_to: Optional[str] = None,
 ) -> Message:
-  return Message(type=Tag.MESSAGE, payload=payload, quest=quest_id, id=id, reply_to=reply_to)
+  return Message(type=Tag.MESSAGE, payload=payload, request=request_id, id=id, reply_to=reply_to)
 
 
 def result(
-  quest_id: str,
+  request_id: str,
   outcome: str,
   *,
   value: Any = None,
@@ -197,11 +194,11 @@ def result(
     payload['error'] = error
   if detail is not None:
     payload['detail'] = detail
-  return Message(type=Tag.RESULT, payload=payload, quest=quest_id)
+  return Message(type=Tag.RESULT, payload=payload, request=request_id)
 
 
 def encode_talk(talk: Collection[str]) -> str:
-  """Encode quest talk for `BROKER_TALK`: sorted and comma-joined, empty for none."""
+  """Encode mission talk for `BROKER_TALK`: sorted and comma-joined, empty for none."""
   values = set(talk)
   unknown = sorted(values - TALK_RIGHTS)
   if len(unknown) > 0:
@@ -225,10 +222,10 @@ def decode_talk(value: str) -> Talk:
 
 
 def message_allowed(talk: Talk, sender: End, candidate: Message) -> bool:
-  """Whether `sender` may send this chat role under a quest's fixed talk."""
+  """Whether `sender` may send this chat role under a mission's fixed talk."""
   if candidate.type != Tag.MESSAGE:
     raise ProtocolError(f'cannot apply talk to a {candidate.type} message')
-  other: End = 'summoned' if sender == 'summoner' else 'summoner'
+  other: End = 'worker' if sender == 'owner' else 'owner'
   if candidate.is_say:
     return f'{sender}.say' in talk
   if candidate.is_reply and f'{other}.question' not in talk:
@@ -253,26 +250,26 @@ def frame_safe_result(message: Message) -> Message:
   upper = len(error)
   while lower < upper:
     middle = (lower + upper + 1) // 2
-    candidate = result(message.quest_id, outcome, error=error[:middle], detail=detail)
+    candidate = result(message.request_id, outcome, error=error[:middle], detail=detail)
     if len(candidate.to_bytes()) <= MAX_FRAME_BYTES:
       lower = middle
     else:
       upper = middle - 1
-  fitted = result(message.quest_id, outcome, error=error[:lower], detail=detail)
+  fitted = result(message.request_id, outcome, error=error[:lower], detail=detail)
   if len(fitted.to_bytes()) > MAX_FRAME_BYTES:
     raise ProtocolError('a result identifier leaves no room for a bounded payload')
   return fitted
 
 
-def _validate(type_: Any, id_: Any, quest_id: Any, reply_to: Any, payload: Any) -> None:
+def _validate(type_: Any, id_: Any, request_id: Any, reply_to: Any, payload: Any) -> None:
   if not isinstance(payload, dict):
     raise ProtocolError(f"message 'payload' must be dict, got {type(payload).__name__}")
   if type_ == Tag.REQUEST:
     if not isinstance(id_, str) or len(id_) == 0:
       raise ProtocolError("a request needs a non-empty string 'id'")
     _validate_identifier_size('request id', id_)
-    if quest_id is not None:
-      raise ProtocolError("a request carries no 'quest' field")
+    if request_id is not None:
+      raise ProtocolError("a request carries no 'request' field")
     if reply_to is not None:
       raise ProtocolError("a request carries no 'reply_to' field")
     kind = payload.get('kind')
@@ -287,9 +284,9 @@ def _validate(type_: Any, id_: Any, quest_id: Any, reply_to: Any, payload: Any) 
     return
   if type_ not in (Tag.MARK, Tag.MESSAGE, Tag.RESULT):
     raise ProtocolError(f'unknown message type {type_!r}')
-  if not isinstance(quest_id, str) or len(quest_id) == 0:
-    raise ProtocolError(f"a {type_} needs a non-empty string 'quest'")
-  _validate_identifier_size(f'{type_} quest', quest_id)
+  if not isinstance(request_id, str) or len(request_id) == 0:
+    raise ProtocolError(f"a {type_} needs a non-empty string 'request'")
+  _validate_identifier_size(f'{type_} request', request_id)
   if type_ != Tag.MESSAGE:
     if id_ is not None:
       raise ProtocolError(f"a {type_} carries no 'id' field")

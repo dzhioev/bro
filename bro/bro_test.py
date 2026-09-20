@@ -20,7 +20,7 @@ from bro.base import credentials
 from bro.base.condition import ConditionError, iff, when
 from bro.base.liveness_test_helper import Liveness
 from bro.bro import BaseBro, BroRaised, feature
-from bro.broker.brotocol import TALK_ENV
+from bro.broker.environment import BROKER_TALK
 from bro.datasources.file import FileSource
 from bro.datasources.man import ManPage, ManSource
 from bro.datasources.searchable import Hit, SearchableDataSource
@@ -578,7 +578,7 @@ class TestToolLayers:
 
   def test_a_summoned_run_with_a_speaking_summoner_reaches_the_watch(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    monkeypatch.setenv(TALK_ENV, 'summoner.say,summoned.say')
+    monkeypatch.setenv(BROKER_TALK, 'owner.say,worker.say')
     bro = _ShellBlockingBro()
     assert bro.narrowed_tool_commands('claude') == {'Monitor': (bro_module.QUEST_WATCH_COMMAND,)}
     assert set(bro.blocked_tool_names('claude')).isdisjoint(
@@ -587,14 +587,14 @@ class TestToolLayers:
 
   def test_a_summoned_run_that_may_ask_reaches_the_watch(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    monkeypatch.setenv(TALK_ENV, 'summoned.say,summoned.question')
+    monkeypatch.setenv(BROKER_TALK, 'worker.say,worker.question')
     bro = _ShellBlockingBro()
     assert bro.narrowed_tool_commands('claude') == {'Monitor': (bro_module.QUEST_WATCH_COMMAND,)}
     assert set(bro.blocked_tool_names('claude')).isdisjoint({'Monitor', 'TaskOutput', 'TaskStop'})
 
   def test_a_summoned_run_that_can_only_report_keeps_monitor_blocked(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    monkeypatch.setenv(TALK_ENV, 'summoned.say')
+    monkeypatch.setenv(BROKER_TALK, 'worker.say')
     bro = _ShellBlockingBro()
     assert 'Monitor' in bro.blocked_tool_names('claude')
     assert bro.narrowed_tool_commands('claude') == {}
@@ -1409,7 +1409,7 @@ class TestSessionModePrompts:
 
   def test_native_system_prompt_passes_the_runs_talk_to_the_summoned_contract(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    monkeypatch.setenv(TALK_ENV, 'summoned.question')
+    monkeypatch.setenv(BROKER_TALK, 'worker.question')
     prompt = EchoBro().system_prompt_for(hold='unattended')
     assert 'call `bro::quest_ask` on `self`' in prompt
     assert 'quest does not permit' not in prompt
@@ -1715,7 +1715,7 @@ class TestSummonTool:
         'llm': 'openai:sol:high+fast',
         'party': 'start',
         'isolation': 'unboxed',
-        'talk': ['summoned.question'],
+        'talk': ['worker.question'],
       }
     )
     assert result == {'state': 'completed', 'quest_id': 'REQ-ID', 'answer': 'the answer'}
@@ -1731,7 +1731,7 @@ class TestSummonTool:
         'llm': 'openai:sol:high+fast',
         'party': 'start',
         'isolation': 'unboxed',
-        'talk': ['summoned.question'],
+        'talk': ['worker.question'],
         'step_id': 42,
         'index': 3,
         'client': client,
@@ -1755,7 +1755,7 @@ class TestSummonTool:
     monkeypatch.setattr(summon_module, 'summon_and_wait', ask)
     tool = await _find_tool(EchoBro(), 'summon', wire='mcp')
 
-    assert await tool.call({'target': 'dev', 'prompt': 'work', 'talk': ['summoned.question']}) == {
+    assert await tool.call({'target': 'dev', 'prompt': 'work', 'talk': ['worker.question']}) == {
       'state': 'question',
       'quest_id': 'REQ-1',
       'question': {'id': 'QUESTION-1', 'text': 'approve?'},
@@ -1843,13 +1843,13 @@ class TestSummonTool:
     from bro import quest as quest_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    question = {'seq': 1, 'from': 'summoner', 'id': 'Q1', 'head': {'text': 'go?'}, 'pending': True}
+    question = {'seq': 1, 'from': 'owner', 'id': 'Q1', 'head': {'text': 'go?'}, 'pending': True}
 
     def history(quest_id):
       assert quest_id == 'self'
       return quest_module.History(
         'OWN-QUEST',
-        ('summoner.question',),
+        ('owner.question',),
         (question,),
         truncated=True,
         chat_seq=1,
@@ -1860,7 +1860,7 @@ class TestSummonTool:
     tool = await _find_tool(EchoBro(), 'quest_history')
     assert await tool.call({'quest_id': 'self'}) == {
       'quest_id': 'OWN-QUEST',
-      'talk': ['summoner.question'],
+      'talk': ['owner.question'],
       'messages': [question],
       'truncated': True,
     }
@@ -1991,13 +1991,13 @@ class TestSummonTool:
 
     def fake_history(quest_id, *, wait=False, timeout=None, client=None):
       calls.append({'quest_id': quest_id, 'wait': wait, 'timeout': timeout, 'client': client})
-      return quest_module.History(quest_id, ('summoned.say',), (), chat_seq=0)
+      return quest_module.History(quest_id, ('worker.say',), (), chat_seq=0)
 
     monkeypatch.setattr(quest_module, 'open_client', lambda: client)
     monkeypatch.setattr(quest_module, 'history', fake_history)
     tool = await _find_tool(EchoBro(), 'quest_history', wire='mcp')
     result = await tool.call({'quest_id': 'REQ-1', 'wait': True, 'timeout': 60})
-    assert result == {'quest_id': 'REQ-1', 'talk': ['summoned.say'], 'messages': []}
+    assert result == {'quest_id': 'REQ-1', 'talk': ['worker.say'], 'messages': []}
     assert calls == [{'quest_id': 'REQ-1', 'wait': True, 'timeout': 60, 'client': client}]
     assert client.closed
 
@@ -2389,7 +2389,7 @@ class TestJobServiceTools:
   async def test_a_summoned_native_run_that_may_ask_gets_the_watch_job(self, monkeypatch):
     monkeypatch.delenv(MAY_SUMMON_ENV, raising=False)
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    monkeypatch.setenv(TALK_ENV, 'summoned.say,summoned.question')
+    monkeypatch.setenv(BROKER_TALK, 'worker.say,worker.question')
     run = StubRun()
     server = _service_server(EchoBro(), run=run)
     tools = {tool.name: tool for tool in await server.list_tools()}

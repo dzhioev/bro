@@ -6,7 +6,7 @@ channel: it holds the single upstream connection to the host broker and listens
 on a loopback port of its own. `BROKER_CHANNEL` points at the local address, so
 every client (`broker` CLI, `Client.from_env`, `RunLifecycle`) works through it.
 Request routes live through their result, question routes through local EOF, and
-quest listeners receive unsolicited chat traffic until local EOF. Upstream, the
+request listeners receive unsolicited chat traffic until local EOF. Upstream, the
 host sees exactly one long-lived connection per channel — the shape its
 supersede-on-accept semantics were built for — while the local side multiplexes
 the session's short-lived process swarm.
@@ -49,7 +49,7 @@ from typing import Optional
 import bro.base.args as base_args
 from bro.base import log, spawn
 from bro.broker.brotocol import MAX_FRAME_BYTES, Message, ProtocolError, Tag
-from bro.broker.client import CHANNEL_ENV
+from bro.broker.environment import BROKER_CHANNEL
 from bro.broker.transport import Address, connect
 from bro.broker.transports import tcp
 from bro.broker.transports.tcp import LOCAL_HOST
@@ -94,7 +94,7 @@ class _CorrelationRoute:
 
 @dataclass(frozen=True)
 class _ListenerRoute:
-  quest: str
+  request: str
   connection: _Connection
 
 
@@ -193,22 +193,22 @@ class Broxy:
         return
       log.warning('broxy: no waiting route for reply to message %s', message.reply_to)
 
-    connection = self._routes.get(message.quest_id)
+    connection = self._routes.get(message.request_id)
     if connection is not None and self._deliver(connection, frame):
       if message.type == Tag.RESULT:
-        self._remove_route(message.quest_id)
+        self._remove_route(message.request_id)
       return
 
-    listeners = list(self._listeners.get(message.quest_id, ()))
+    listeners = list(self._listeners.get(message.request_id, ()))
     delivered = False
     for listener in listeners:
       delivered = self._deliver(listener, frame) or delivered
     if delivered:
       return
     if message.type == Tag.MESSAGE and message.reply_to is None:
-      log.info('broxy: dropping message for quest %s with no listener', message.quest_id)
+      log.info('broxy: dropping message for request %s with no listener', message.request_id)
     elif message.type != Tag.MESSAGE:
-      log.warning('broxy: dropping upstream message for unknown quest %s', message.quest_id)
+      log.warning('broxy: dropping upstream message for unknown request %s', message.request_id)
 
   def _deliver(self, connection: _Connection, frame: bytes) -> bool:
     if connection.writer.is_closing():
@@ -241,11 +241,11 @@ class Broxy:
           log.warning('broxy: dropping local connection on malformed frame: %s', error)
           break
         if message.type == Tag.REQUEST:
-          self._register_route(message.quest_id, connection)
+          self._register_route(message.request_id, connection)
         elif message.type == Tag.MESSAGE and message.id is not None:
           self._register_route(message.id, connection)
         elif message.type == Tag.MARK and message.payload['transition'] == 'listening':
-          self._register_listener(message.quest_id, connection)
+          self._register_listener(message.request_id, connection)
         assert self._upstream_writer is not None
         self._upstream_writer.write(frame + b'\n')
         await self._upstream_writer.drain()
@@ -270,12 +270,12 @@ class Broxy:
     self._routes[correlation_id] = connection
     self._registrations[registration] = None
 
-  def _register_listener(self, quest_id: str, connection: _Connection) -> None:
-    registration = _ListenerRoute(quest_id, connection)
+  def _register_listener(self, request_id: str, connection: _Connection) -> None:
+    registration = _ListenerRoute(request_id, connection)
     if registration in self._registrations:
       return
     self._make_room()
-    self._listeners.setdefault(quest_id, set()).add(connection)
+    self._listeners.setdefault(request_id, set()).add(connection)
     self._registrations[registration] = None
 
   def _make_room(self) -> None:
@@ -284,7 +284,7 @@ class Broxy:
     oldest = next(iter(self._registrations))
     self._remove_registration(oldest)
     correlation = isinstance(oldest, _CorrelationRoute)
-    name = oldest.id if correlation else oldest.quest
+    name = oldest.id if correlation else oldest.request
     kind = 'correlation route' if correlation else 'listener'
     log.warning(
       'broxy: at %d-route bound, dropping oldest %s for %s',
@@ -301,12 +301,12 @@ class Broxy:
     if isinstance(registration, _CorrelationRoute):
       self._routes.pop(registration.id, None)
       return
-    listeners = self._listeners.get(registration.quest)
+    listeners = self._listeners.get(registration.request)
     if listeners is None:
       return
     listeners.discard(registration.connection)
     if len(listeners) == 0:
-      self._listeners.pop(registration.quest)
+      self._listeners.pop(registration.request)
 
   def _remove_connection_routes(self, connection: _Connection) -> None:
     for registration in [
@@ -323,9 +323,9 @@ class Broxy:
 
 def _serve(upstream: Optional[str], address_file: Optional[str]) -> int:
   if upstream is None:
-    upstream = os.environ.get(CHANNEL_ENV)
+    upstream = os.environ.get(BROKER_CHANNEL)
   if upstream is None:
-    log.error('no upstream channel: pass --upstream or set %s', CHANNEL_ENV)
+    log.error('no upstream channel: pass --upstream or set %s', BROKER_CHANNEL)
     return 1
   try:
     broxy = Broxy(upstream)
@@ -394,9 +394,9 @@ def _stop_launched_process(process: subprocess.Popen) -> None:
 
 def _launch(log_path: str, upstream: Optional[str], timeout: float) -> int:
   if upstream is None:
-    upstream = os.environ.get(CHANNEL_ENV)
+    upstream = os.environ.get(BROKER_CHANNEL)
   if upstream is None:
-    log.error('no upstream channel: pass --upstream or set %s', CHANNEL_ENV)
+    log.error('no upstream channel: pass --upstream or set %s', BROKER_CHANNEL)
     return 1
 
   with tempfile.TemporaryDirectory(prefix='broxy-launch-') as scratch:
@@ -434,7 +434,7 @@ def main(argv: list[str]) -> Optional[int]:
     '--log-file', dest='log_path', required=True, help='serve stdout and stderr log file'
   )
   launch_parser.add_argument(
-    '--upstream', help=f'upstream channel address (default: ${CHANNEL_ENV})'
+    '--upstream', help=f'upstream channel address (default: ${BROKER_CHANNEL})'
   )
   launch_parser.add_argument(
     '--timeout',
@@ -450,7 +450,7 @@ def main(argv: list[str]) -> Optional[int]:
     'no restart — it fails loudly)',
   )
   serve_parser.add_argument(
-    '--upstream', help=f'upstream channel address (default: ${CHANNEL_ENV})'
+    '--upstream', help=f'upstream channel address (default: ${BROKER_CHANNEL})'
   )
   serve_parser.add_argument(
     '--address-file', dest='address_file', help='file to write the local address to once listening'

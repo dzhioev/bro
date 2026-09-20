@@ -65,8 +65,8 @@ class PeerFacts:
     """Seed the root row when its host-anchored quest opens."""
     if record.kind != 'root' or event.transition != 'accepted':
       return
-    self.add(event.quest, self._root)
-    self._root_quest = event.quest
+    self.add(event.mission, self._root)
+    self._root_quest = event.mission
 
   def add(self, quest: str, fact: PeerFact) -> None:
     if quest in self._facts:

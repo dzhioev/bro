@@ -77,7 +77,7 @@ _ARGS_KEYS = frozenset(
 # fields a manual summon refuses: the user's launch owns the session's shape, and
 # there is no host-killable child for a timeout to bound
 _LAUNCH_OWNED_KEYS = ('timeout', 'hold', 'llm', 'harness', 'party', 'isolation')
-DEFAULT_SUMMON_TALK = cast('Talk', frozenset({'summoned.say'}))
+DEFAULT_SUMMON_TALK = cast('Talk', frozenset({'worker.say'}))
 
 
 def summon_allow_list(
@@ -479,7 +479,7 @@ class SummonControl:
     audit_isolation = (
       Workspace.open(summoner.identity.workspace).isolation if party == 'join' else isolation
     )
-    self._audit_placements[message.quest_id] = (party, audit_isolation)
+    self._audit_placements[message.request_id] = (party, audit_isolation)
     summoned_by = self._summoned_by(summoner.attribution)
     step_id = args.get('step_id')
     if summoned_by is not None and step_id is not None:
@@ -487,7 +487,7 @@ class SummonControl:
       if args.get('index') is not None:
         summoned_by['index'] = args['index']
     self._facts.add(
-      message.quest_id,
+      message.request_id,
       PeerFact(
         workspace=None,
         bro=target,
@@ -539,6 +539,7 @@ class SummonControl:
         env=dict(self._session_env),
       ),
       peer,
+      type='bro',
       talk=talk,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,
     )
@@ -563,7 +564,7 @@ class SummonControl:
       self._runtime_bundle.materialize_host()
       pending_summon.write(
         pending_summon.PendingSummon(
-          token=message.quest_id,
+          token=message.request_id,
           runtime=self._runtime_bundle.reference,
           port=provisioned.host_endpoint.port,
           channel_token=provisioned.host_endpoint.token,
@@ -582,7 +583,7 @@ class SummonControl:
         ),
       )
 
-    context.expect(peer, talk=talk, timeout=None, ready=_ready)
+    context.expect(peer, type='bro', talk=talk, timeout=None, ready=_ready)
 
   def _summoner(self, context: 'Dispatcher', peer: 'Peer') -> _Summoner:
     quest, fact = self._facts.resolve(context, peer)
@@ -624,7 +625,7 @@ class SummonControl:
   def _deny(self, context: 'Dispatcher', peer: 'Peer', reason: str) -> None:
     error = f'summon denied: {reason}'
     log.warning('summon: %s: %s', self._workspace.name, error)
-    context.deny(peer, error)
+    context.deny(peer, error, type='bro')
 
   def observe_journal(self, event: 'Event', journal_record: 'Record') -> None:
     """Log lifecycle changes and clean up terminal manual-summon tokens."""
@@ -641,7 +642,7 @@ class SummonControl:
     if journal_record.kind != 'summon':
       return
     try:
-      fact = self._facts.for_quest(event.quest)
+      fact = self._facts.for_quest(event.mission)
     except UnattributablePeer:
       return
     if event.transition == 'accepted':
@@ -651,7 +652,7 @@ class SummonControl:
         self._workspace.name,
         action,
         fact.bro,
-        event.quest,
+        event.mission,
       )
       return
     if event.transition == 'trail':
@@ -660,7 +661,7 @@ class SummonControl:
     if event.transition != 'ended':
       return
     if fact.manual:
-      pending_summon.discard(event.quest)
+      pending_summon.discard(event.mission)
     outcome = str(event.payload.get('outcome'))
     reason = event.payload.get('reason')
     if outcome == 'failed' and reason is not None:
@@ -674,13 +675,13 @@ class SummonControl:
       **event.view(),
     }
     if journal_record.parent is not None:
-      attribution = self._audit_attribution.get(event.quest)
+      attribution = self._audit_attribution.get(event.mission)
       if attribution is None:
         attribution = self._facts.attribution_for_quest(self._journal, journal_record.parent)
-        self._audit_attribution[event.quest] = attribution
+        self._audit_attribution[event.mission] = attribution
       entry['summoner'] = attribution
     if journal_record.kind == 'summon':
-      placement = self._audit_placements.get(event.quest)
+      placement = self._audit_placements.get(event.mission)
       if placement is not None:
         party, isolation = placement
         entry['placement'] = {
@@ -688,7 +689,7 @@ class SummonControl:
           'isolation': None if isolation is None else isolation.value,
         }
       try:
-        entry['target'] = self._facts.for_quest(event.quest).bro
+        entry['target'] = self._facts.for_quest(event.mission).bro
       except UnattributablePeer:
         target = journal_record.args.get('target')
         if isinstance(target, str):
@@ -700,5 +701,5 @@ class SummonControl:
     except OSError as error:
       log.warning('could not append summon audit record to %s: %s', self._audit_file, error)
     if event.transition in ('ended', 'denied'):
-      self._audit_attribution.pop(event.quest, None)
-      self._audit_placements.pop(event.quest, None)
+      self._audit_attribution.pop(event.mission, None)
+      self._audit_placements.pop(event.mission, None)

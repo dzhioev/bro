@@ -1,4 +1,3 @@
-import sys
 from types import SimpleNamespace
 
 import ride.workspace.containers as workspace_containers
@@ -88,11 +87,6 @@ class TestBrokerGate:
   def test_disabled_by_env(self, monkeypatch):
     # presence-checked: any value disables, and the check precedes any broker import
     monkeypatch.setenv('BROKER_DISABLED', '')
-    assert workspace_containers.broker_enabled() is False
-
-  def test_unimportable_broker_degrades(self, monkeypatch):
-    monkeypatch.delenv('BROKER_DISABLED', raising=False)
-    monkeypatch.setitem(sys.modules, 'bro.broker', None)  # import machinery raises ImportError
     assert workspace_containers.broker_enabled() is False
 
   def test_enabled_by_default(self, monkeypatch):

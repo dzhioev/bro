@@ -1,4 +1,4 @@
-"""job launch — a host command run as the answering process of a quest.
+"""job launch — a host command run as the worker process of a mission.
 
 A job is the third answer shape: the host launches a process that does not
 speak the protocol, observes it, and speaks on its behalf — no channel is

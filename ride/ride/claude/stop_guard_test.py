@@ -6,7 +6,7 @@ import sys
 import pytest
 
 import ride.claude.stop_guard as stop_guard
-from bro.broker.client import CHANNEL_ENV
+from bro.broker.environment import BROKER_CHANNEL
 from bro.quest import LiveChild
 
 _CHILD = LiveChild('01m-child', 'bro-eyebro')
@@ -96,7 +96,7 @@ class TestMain:
     return capsys.readouterr().out
 
   def test_a_held_turn_end_is_a_block_decision_on_stdout(self, monkeypatch, capsys):
-    monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:1')
+    monkeypatch.setenv(BROKER_CHANNEL, 'tcp://token@127.0.0.1:1')
     monkeypatch.setattr(stop_guard, 'live_children', lambda: [_CHILD])
 
     out = self._run(monkeypatch, capsys, _payload())
@@ -106,13 +106,13 @@ class TestMain:
     assert decision['reason'].endswith('quest 01m-child to bro-eyebro')
 
   def test_a_standing_turn_end_prints_nothing(self, monkeypatch, capsys):
-    monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:1')
+    monkeypatch.setenv(BROKER_CHANNEL, 'tcp://token@127.0.0.1:1')
     monkeypatch.setattr(stop_guard, 'live_children', lambda: [_CHILD])
 
     assert self._run(monkeypatch, capsys, _payload(_task('quest watch'))) == ''
 
   def test_without_a_broker_channel_the_journal_is_not_read(self, monkeypatch, capsys):
-    monkeypatch.delenv(CHANNEL_ENV, raising=False)
+    monkeypatch.delenv(BROKER_CHANNEL, raising=False)
 
     def unreachable():
       raise AssertionError('no channel, no query')

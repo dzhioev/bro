@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 from bro.base import log, spawn
 from bro.broker.client import Client
+from bro.broker.environment import BROKER_CHANNEL
 from bro.monitor import SESSION_DIR_ENV, harness_session_dir, health
 
 __cli_name__ = 'ride.claude.statusline'
@@ -68,7 +69,7 @@ def _trail(trail_id: Optional[str]) -> str:
 
 
 def _query_summons() -> list[dict[str, Any]]:
-  if os.environ.get('BROKER_CHANNEL') is None:
+  if os.environ.get(BROKER_CHANNEL) is None:
     return []
   client = Client.from_env()
   if client is None:
@@ -79,7 +80,7 @@ def _query_summons() -> list[dict[str, Any]]:
   if payload.get('outcome') != 'ok':
     return []
   value = payload.get('value')
-  quests = value.get('quests') if isinstance(value, dict) else None
+  quests = value.get('missions') if isinstance(value, dict) else None
   if not isinstance(quests, list):
     return []
   return [quest for quest in quests if isinstance(quest, dict) and quest.get('kind') == 'summon']
@@ -101,7 +102,7 @@ def _question_awaiting_summoner(quest: dict[str, Any]) -> bool:
   pending = quest.get('pending')
   if not isinstance(pending, list) or not all(isinstance(question, dict) for question in pending):
     raise ValueError('summon listing carried malformed pending questions')
-  return any(question.get('from') == 'summoned' for question in pending)
+  return any(question.get('from') == 'worker' for question in pending)
 
 
 def _summon_parts(now: float) -> list[str]:

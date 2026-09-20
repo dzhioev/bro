@@ -104,7 +104,7 @@ It renders only for a run `bro.summon.summoned()` reports as summoned, and hold-
 — the duty comes with being summoned, so an attended or guided child carries the same text a spawned unattended one does.
 Its `#talk` branches admit only the quest's live moves:
 a speaking summoner reaches managed Claude through Monitor, bro-native through its watch job, and raw MCP through retained-quest polls.
-`summoned.say` enables progress, `summoned.question` uses the surface's non-blocking watch or bounded consult, and a child without that right raises instead of asking.
+`worker.say` enables progress, `worker.question` uses the surface's non-blocking watch or bounded consult, and a child without that right raises instead of asking.
 
 ### Hold text
 

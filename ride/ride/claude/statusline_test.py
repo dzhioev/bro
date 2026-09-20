@@ -98,14 +98,14 @@ class TestRenderedStatusline:
   def test_a_child_question_awaiting_the_session_shows_beside_the_live_summon(
     self, monkeypatch, tmp_path
   ):
-    question = {'from': 'summoned', 'id': 'Q1', 'head': {'text': 'approve?'}}
+    question = {'from': 'worker', 'id': 'Q1', 'head': {'text': 'approve?'}}
     quest = _quest('R1', 'started', pending=[question])
     output = _render(monkeypatch, tmp_path, quests=[quest])
     assert '⚡ summoning reviewer' in output
     assert '❓ reviewer is awaiting your reply' in output
 
   def test_the_sessions_own_question_does_not_read_as_awaiting_it(self, monkeypatch, tmp_path):
-    question = {'from': 'summoner', 'id': 'Q1', 'head': {'text': 'status?'}}
+    question = {'from': 'owner', 'id': 'Q1', 'head': {'text': 'status?'}}
     quest = _quest('R1', 'started', pending=[question])
     assert 'awaiting your reply' not in _render(monkeypatch, tmp_path, quests=[quest])
 
@@ -152,7 +152,7 @@ def test_query_summons_reads_the_channel_once(monkeypatch):
         'QUERY',
         'ok',
         value={
-          'quests': [
+          'missions': [
             _quest('S1', 'started'),
             {'id': 'B1', 'kind': 'benchmark', 'state': 'started'},
           ]

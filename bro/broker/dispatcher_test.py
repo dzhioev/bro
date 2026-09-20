@@ -116,14 +116,14 @@ def _request(kind, args, quest):
 
 
 def _spawn_handler(context, peer, message):
-  context.spawn(LaunchSpec(), peer, talk=frozenset())
+  context.spawn(LaunchSpec(), peer, talk=frozenset(), type='bro')
 
 
 def _dispatcher(*, job_output=None, schedule: Scheduler = call_later):
   runtime = FakeRuntime()
   dispatcher = Dispatcher(job_output=job_output, schedule=schedule)
   dispatcher.bind(cast(Runtime, runtime))
-  root = dispatcher.journal.open('root-quest', 'root', None, None, {})
+  root = dispatcher.journal.open('root-quest', 'root', None, None, {}, type='bro')
   dispatcher.journal.bind(root, 'requester')
   dispatcher.workers['requester'] = 'root-quest'
   return dispatcher, runtime
@@ -131,11 +131,11 @@ def _dispatcher(*, job_output=None, schedule: Scheduler = call_later):
 
 def _maximum_frame_result_payload() -> dict:
   value = 'x' * brotocol.MAX_FRAME_BYTES
-  message = Message(type=Tag.RESULT, payload={'outcome': 'ok', 'value': value}, quest='child')
+  message = Message(type=Tag.RESULT, payload={'outcome': 'ok', 'value': value}, request='child')
   overflow = len(message.to_bytes()) - brotocol.MAX_FRAME_BYTES
   payload = {'outcome': 'ok', 'value': value[:-overflow]}
   assert (
-    len(Message(type=Tag.RESULT, payload=payload, quest='child').to_bytes())
+    len(Message(type=Tag.RESULT, payload=payload, request='child').to_bytes())
     <= brotocol.MAX_FRAME_BYTES
   )
   return payload
@@ -170,10 +170,13 @@ def test_unknown_kind_and_lineage_collision_are_denied_without_records():
 
 def test_handler_deny_answers_and_journals_refused_work():
   dispatcher, runtime = _dispatcher()
-  dispatcher.on('work', lambda context, peer, message: context.deny(peer, 'not allowed'))
+  dispatcher.on(
+    'work', lambda context, peer, message: context.deny(peer, 'not allowed', type='bro')
+  )
   dispatcher.on_message('requester', _request('work', {'target': 'x'}, 'denied'))
   assert runtime.sent[-1][1].payload == {'outcome': 'denied', 'error': 'not allowed'}
   assert dispatcher.journal.records['denied'].state == 'denied'
+  assert dispatcher.journal.records['denied'].type == 'bro'
 
 
 def test_handler_deny_bounds_the_response_to_a_maximum_frame_request():
@@ -203,7 +206,7 @@ async def test_job_output_open_failure_closes_the_journal_record():
   dispatcher, runtime = _dispatcher(job_output=RaisingOutput())
   dispatcher.on(
     'job',
-    lambda context, peer, message: context.job(CommandJob(('true',), {}), peer),
+    lambda context, peer, message: context.job(CommandJob(('true',), {}), peer, type='benchmark'),
   )
   dispatcher.on_message('requester', _request('job', {}, 'job'))
   await _settle()
@@ -211,6 +214,7 @@ async def test_job_output_open_failure_closes_the_journal_record():
   assert record.state == 'ended'
   assert record.reason == 'output'
   assert record.talk == frozenset()
+  assert record.type == 'benchmark'
   assert runtime.sent[-1][1].payload['detail']['reason'] == 'output'
 
 
@@ -219,7 +223,8 @@ async def test_spawn_launch_failure_synthesizes_one_terminal():
   dispatcher, runtime = _dispatcher()
   runtime.launch_error = RuntimeError('launch broke')
   dispatcher.on(
-    'work', lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset())
+    'work',
+    lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset(), type='bro'),
   )
   dispatcher.on_message('requester', _request('work', {}, 'work'))
   await _settle()
@@ -227,6 +232,7 @@ async def test_spawn_launch_failure_synthesizes_one_terminal():
   assert len(results) == 1
   assert results[0].payload['detail']['reason'] == 'launch'
   assert dispatcher.journal.records['work'].state == 'ended'
+  assert dispatcher.journal.records['work'].type == 'bro'
 
 
 @pytest.mark.asyncio
@@ -239,7 +245,7 @@ async def test_expected_ready_failure_synthesizes_one_terminal():
   dispatcher.on(
     'manual',
     lambda context, peer, message: context.expect(
-      peer, talk=frozenset(), timeout=None, ready=fail_ready
+      peer, talk=frozenset(), timeout=None, ready=fail_ready, type='bro'
     ),
   )
   dispatcher.on_message('requester', _request('manual', {}, 'manual'))
@@ -248,6 +254,7 @@ async def test_expected_ready_failure_synthesizes_one_terminal():
   assert len(results) == 1
   assert results[0].payload['detail']['reason'] == 'launch'
   assert dispatcher.journal.records['manual'].state == 'ended'
+  assert dispatcher.journal.records['manual'].type == 'bro'
 
 
 @pytest.mark.asyncio
@@ -258,14 +265,15 @@ async def test_messages_sent_during_launch_follow_started_in_the_journal():
     brotocol.result('work', 'ok'),
   ]
   dispatcher.on(
-    'work', lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset())
+    'work',
+    lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset(), type='bro'),
   )
   dispatcher.on_message('requester', _request('work', {}, 'work'))
   await _settle()
   transitions = [
     event['transition']
     for event in dispatcher.journal.events_after(0, 'requester', dispatcher.workers)[1]
-    if event['quest'] == 'work'
+    if event['mission'] == 'work'
   ]
   assert transitions == ['accepted', 'started', 'trail', 'ended']
   assert runtime.handle is not None
@@ -277,7 +285,8 @@ async def test_messages_sent_during_launch_follow_started_in_the_journal():
 async def test_spawned_quest_marks_lifecycle_and_routes_only_its_worker():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(
-    'work', lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset())
+    'work',
+    lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset(), type='bro'),
   )
   dispatcher.on_message('requester', _request('work', {'prompt': 'go'}, 'work'))
   assert runtime.sent[-1][1].payload == {'transition': 'accepted'}
@@ -308,7 +317,9 @@ async def test_result_disarms_the_deadline_while_the_worker_stays_routable():
   dispatcher, runtime = _dispatcher(schedule=schedule)
   dispatcher.on(
     'work',
-    lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset(), timeout=10),
+    lambda context, peer, message: context.spawn(
+      LaunchSpec(), peer, talk=frozenset(), timeout=10, type='bro'
+    ),
   )
   dispatcher.on(PING, ping_handler)
   dispatcher.on_message('requester', _request('work', {}, 'work'))
@@ -330,7 +341,8 @@ async def test_result_disarms_the_deadline_while_the_worker_stays_routable():
 async def test_process_cannot_emit_dispatcher_or_worker_marks():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(
-    'work', lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset())
+    'work',
+    lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset(), type='bro'),
   )
   dispatcher.on_message('requester', _request('work', {}, 'work'))
   await _settle()
@@ -341,7 +353,7 @@ async def test_process_cannot_emit_dispatcher_or_worker_marks():
   transitions = [
     event['transition']
     for event in dispatcher.journal.events_after(0, 'requester', dispatcher.workers)[1]
-    if event['quest'] == 'work'
+    if event['mission'] == 'work'
   ]
   assert transitions == ['accepted', 'started']
   assert runtime.handle is not None
@@ -356,7 +368,7 @@ async def test_expected_worker_defers_wire_acceptance_until_ready_and_starts_on_
   dispatcher.on(
     'manual',
     lambda context, peer, message: context.expect(
-      peer, talk=frozenset(), timeout=None, ready=ready.append
+      peer, talk=frozenset(), timeout=None, ready=ready.append, type='bro'
     ),
   )
   dispatcher.on_message('requester', _request('manual', {}, 'manual'))
@@ -374,20 +386,20 @@ async def test_expected_worker_defers_wire_acceptance_until_ready_and_starts_on_
 
 def _live_chat(dispatcher, *, talk):
   record = dispatcher.journal.open(
-    'child', 'summon', 'root-quest', 'requester', {}, talk=frozenset(talk)
+    'child', 'summon', 'root-quest', 'requester', {}, talk=frozenset(talk), type='bro'
   )
   dispatcher.journal.bind(record, 'child-worker')
-  dispatcher.live[record.quest_id] = record
-  dispatcher.workers['child-worker'] = record.quest_id
+  dispatcher.live[record.mission_id] = record
+  dispatcher.workers['child-worker'] = record.mission_id
   return record
 
 
 def test_message_routes_by_its_named_quest_in_both_directions():
   dispatcher, runtime = _dispatcher()
-  record = _live_chat(dispatcher, talk={'summoner.say', 'summoned.say'})
+  record = _live_chat(dispatcher, talk={'owner.say', 'worker.say'})
 
-  requester_message = brotocol.message(record.quest_id, {'text': 'start'})
-  worker_message = brotocol.message(record.quest_id, {'text': 'working'})
+  requester_message = brotocol.message(record.mission_id, {'text': 'start'})
+  worker_message = brotocol.message(record.mission_id, {'text': 'working'})
   dispatcher.on_message('requester', requester_message)
   dispatcher.on_message('child-worker', worker_message)
 
@@ -395,26 +407,26 @@ def test_message_routes_by_its_named_quest_in_both_directions():
     ('child-worker', requester_message),
     ('requester', worker_message),
   ]
-  assert [entry['from'] for entry in record.messages] == ['summoner', 'summoned']
+  assert [entry['from'] for entry in record.messages] == ['owner', 'worker']
 
 
 def test_message_from_a_stranger_is_dropped_without_journaling(caplog):
   dispatcher, runtime = _dispatcher()
-  record = _live_chat(dispatcher, talk={'summoned.say'})
+  record = _live_chat(dispatcher, talk={'worker.say'})
   before = dispatcher.journal.head
 
-  dispatcher.on_message('stranger', brotocol.message(record.quest_id, {'text': 'forged'}))
+  dispatcher.on_message('stranger', brotocol.message(record.mission_id, {'text': 'forged'}))
 
   assert runtime.sent == []
   assert dispatcher.journal.head == before
-  assert 'not an end of the quest' in caplog.text
+  assert 'not an end of the mission' in caplog.text
 
 
 def test_disallowed_message_is_journaled_as_a_correlated_refusal(caplog):
   dispatcher, runtime = _dispatcher()
-  record = _live_chat(dispatcher, talk={'summoned.say'})
+  record = _live_chat(dispatcher, talk={'worker.say'})
   candidate = brotocol.message(
-    record.quest_id,
+    record.mission_id,
     {'text': 'may I?'},
     id='Q1',
     reply_to='Q0',
@@ -423,7 +435,7 @@ def test_disallowed_message_is_journaled_as_a_correlated_refusal(caplog):
   dispatcher.on_message('child-worker', candidate)
 
   assert runtime.sent == []
-  assert record.messages[-1]['reason'] == 'summoned lacks the talk right for this message'
+  assert record.messages[-1]['reason'] == 'worker lacks the talk right for this message'
   assert record.messages[-1]['id'] == 'Q1'
   assert record.messages[-1]['reply_to'] == 'Q0'
   assert 'lacks the talk right' in caplog.text
@@ -431,8 +443,8 @@ def test_disallowed_message_is_journaled_as_a_correlated_refusal(caplog):
 
 def test_a_message_at_the_bound_is_routed_whole():
   dispatcher, runtime = _dispatcher()
-  record = _live_chat(dispatcher, talk={'summoned.say'})
-  message = brotocol.message(record.quest_id, {'text': text_at_the_message_bound()})
+  record = _live_chat(dispatcher, talk={'worker.say'})
+  message = brotocol.message(record.mission_id, {'text': text_at_the_message_bound()})
 
   dispatcher.on_message('child-worker', message)
 
@@ -442,9 +454,9 @@ def test_a_message_at_the_bound_is_routed_whole():
 
 def test_oversized_message_is_journaled_as_a_correlated_refusal(caplog):
   dispatcher, runtime = _dispatcher()
-  record = _live_chat(dispatcher, talk={'summoned.say', 'summoned.question'})
+  record = _live_chat(dispatcher, talk={'worker.say', 'worker.question'})
   candidate = brotocol.message(
-    record.quest_id, {'text': text_at_the_message_bound() + 'x'}, id='Q1'
+    record.mission_id, {'text': text_at_the_message_bound() + 'x'}, id='Q1'
   )
 
   dispatcher.on_message('child-worker', candidate)
@@ -460,8 +472,8 @@ def test_oversized_message_is_journaled_as_a_correlated_refusal(caplog):
 
 def test_listening_is_worker_born_set_once_and_repeats_are_silent():
   dispatcher, runtime = _dispatcher()
-  record = _live_chat(dispatcher, talk={'summoned.say'})
-  listening = brotocol.mark(record.quest_id, 'listening')
+  record = _live_chat(dispatcher, talk={'worker.say'})
+  listening = brotocol.mark(record.mission_id, 'listening')
 
   dispatcher.on_message('requester', listening)
   assert not record.listening
@@ -473,40 +485,42 @@ def test_listening_is_worker_born_set_once_and_repeats_are_silent():
   transitions = [
     event['transition']
     for event in dispatcher.journal.events_after(0, 'requester', dispatcher.workers)[1]
-    if event['quest'] == record.quest_id
+    if event['mission'] == record.mission_id
   ]
   assert transitions.count('listening') == 1
 
 
-def test_message_on_a_non_live_quest_is_dropped(caplog):
+def test_message_on_a_non_live_mission_is_dropped(caplog):
   dispatcher, runtime = _dispatcher()
   dispatcher.on_message('requester', brotocol.message('ended', {'text': 'late'}))
   assert runtime.sent == []
-  assert 'no live quest' in caplog.text
+  assert 'no live mission' in caplog.text
 
 
 def test_spawn_and_expect_require_explicit_talk():
   dispatcher, _ = _dispatcher()
   with pytest.raises(TypeError, match='talk'):
-    dispatcher.spawn(LaunchSpec(), 'requester')  # type: ignore[call-arg]
+    dispatcher.spawn(LaunchSpec(), 'requester', type='bro')  # type: ignore[call-arg]
   with pytest.raises(TypeError, match='talk'):
     dispatcher.expect(  # type: ignore[call-arg]
-      'requester', timeout=None, ready=lambda provisioned: None
+      'requester', timeout=None, ready=lambda provisioned: None, type='bro'
     )
 
 
 def test_query_lists_the_callers_children_and_reads_its_own_quest_by_id():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(QUERY, query_handler)
-  child = dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {'target': 'dev'})
+  child = dispatcher.journal.open(
+    'child', 'summon', 'root-quest', 'requester', {'target': 'dev'}, type='bro'
+  )
   dispatcher.journal.end(child, {'outcome': 'ok', 'value': 'answer'})
   dispatcher.on_message('requester', _request(QUERY, {}, 'list'))
-  listed = runtime.sent[-1][1].payload['value']['quests']
+  listed = runtime.sent[-1][1].payload['value']['missions']
   assert {record['id'] for record in listed} == {'child'}
   dispatcher.on_message('requester', _request(QUERY, {'id': 'child'}, 'query-one'))
-  assert runtime.sent[-1][1].payload['value']['quest']['result']['value'] == 'answer'
+  assert runtime.sent[-1][1].payload['value']['mission']['result']['value'] == 'answer'
   dispatcher.on_message('requester', _request(QUERY, {'id': 'root-quest'}, 'query-self'))
-  assert runtime.sent[-1][1].payload['value']['quest']['id'] == 'root-quest'
+  assert runtime.sent[-1][1].payload['value']['mission']['id'] == 'root-quest'
   assert not dispatcher.journal.knows('list')
   assert not dispatcher.journal.knows('query-one')
   assert not dispatcher.journal.knows('query-self')
@@ -515,15 +529,15 @@ def test_query_lists_the_callers_children_and_reads_its_own_quest_by_id():
 def test_query_returns_the_minimal_view_of_an_evicted_child():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(QUERY, query_handler)
-  child = dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {})
+  child = dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {}, type='bro')
   dispatcher.journal.end(child, {'outcome': 'ok'})
-  dispatcher.journal.records.pop(child.quest_id)
+  dispatcher.journal.records.pop(child.mission_id)
 
-  dispatcher.on_message('requester', _request(QUERY, {'id': child.quest_id}, 'query-evicted'))
+  dispatcher.on_message('requester', _request(QUERY, {'id': child.mission_id}, 'query-evicted'))
 
   response = runtime.sent[-1][1]
-  assert response.payload['value']['quest'] == {
-    'id': child.quest_id,
+  assert response.payload['value']['mission'] == {
+    'id': child.mission_id,
     'kind': 'summon',
     'parent': 'root-quest',
     'state': 'evicted',
@@ -533,14 +547,14 @@ def test_query_returns_the_minimal_view_of_an_evicted_child():
 def test_query_reports_a_retained_result_as_evicted_when_its_response_would_exceed_the_frame():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(QUERY, query_handler)
-  child = dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {})
+  child = dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {}, type='bro')
   dispatcher.journal.end(child, _maximum_frame_result_payload())
 
   dispatcher.on_message('requester', _request(QUERY, {'id': 'child'}, 'query-one'))
 
   response = runtime.sent[-1][1]
   assert len(response.to_bytes()) <= brotocol.MAX_FRAME_BYTES
-  view = response.payload['value']['quest']
+  view = response.payload['value']['mission']
   assert 'result' not in view
   assert view['result_evicted'] is True
 
@@ -548,31 +562,31 @@ def test_query_reports_a_retained_result_as_evicted_when_its_response_would_exce
 def test_query_trims_the_oldest_chat_tail_entries_but_keeps_every_pending_question():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(QUERY, query_handler)
-  child = _live_chat(dispatcher, talk={'summoned.say', 'summoned.question'})
+  child = _live_chat(dispatcher, talk={'worker.say', 'worker.question'})
   padding = 'x' * (brotocol.MAX_IDENTIFIER_BYTES - 3)
   for index in range(MAX_PENDING_QUESTIONS):
     dispatcher.journal.message(
       child,
-      'summoned',
+      'worker',
       brotocol.message(
-        child.quest_id, {'text': text_at_the_message_bound()}, id=f'Q{index:02d}' + padding
+        child.mission_id, {'text': text_at_the_message_bound()}, id=f'Q{index:02d}' + padding
       ),
     )
   for _ in range(MAX_RECORD_MESSAGES - MAX_PENDING_QUESTIONS):
     dispatcher.journal.message(
       child,
-      'summoned',
+      'worker',
       brotocol.message(
-        child.quest_id, {'text': text_at_the_message_bound()}, reply_to='R' + padding
+        child.mission_id, {'text': text_at_the_message_bound()}, reply_to='R' + padding
       ),
     )
   assert len(child.pending) == MAX_PENDING_QUESTIONS
   assert len(child.messages) == MAX_RECORD_MESSAGES
 
-  dispatcher.on_message('requester', _request(QUERY, {'id': child.quest_id}, 'query-chat'))
+  dispatcher.on_message('requester', _request(QUERY, {'id': child.mission_id}, 'query-chat'))
 
   response = runtime.sent[-1][1]
-  view = response.payload['value']['quest']
+  view = response.payload['value']['mission']
   assert len(response.to_bytes()) <= brotocol.MAX_FRAME_BYTES
   assert view['messages_truncated'] is True
   assert 'pending' not in view
@@ -596,18 +610,19 @@ def test_the_largest_pending_set_fits_both_query_projections():
     'root-quest',
     'requester',
     {f'field-{index}': 'x' * ARGS_STRING_HEAD for index in range(ARGS_HEAD_BYTES)},
-    talk=frozenset({'summoner.question', 'summoned.say', 'summoned.question'}),
+    talk=frozenset({'owner.question', 'worker.say', 'worker.question'}),
+    type='bro',
   )
   dispatcher.journal.bind(child, 'child-worker')
-  dispatcher.live[child.quest_id] = child
-  dispatcher.workers['child-worker'] = child.quest_id
+  dispatcher.live[child.mission_id] = child
+  dispatcher.workers['child-worker'] = child.mission_id
   dispatcher.journal.trail(child, expanding)
   for index in range(MAX_PENDING_QUESTIONS):
     dispatcher.journal.message(
       child,
-      'summoned',
+      'worker',
       brotocol.message(
-        child.quest_id,
+        child.mission_id,
         {'text': text_at_the_message_bound()},
         id=f'{index:04d}' + '\x00' * ((brotocol.MAX_IDENTIFIER_BYTES - 4) // 6),
         reply_to=expanding,
@@ -615,42 +630,44 @@ def test_the_largest_pending_set_fits_both_query_projections():
     )
   for _ in range(MAX_RECORD_MESSAGES - MAX_PENDING_QUESTIONS):
     dispatcher.journal.message(
-      child, 'summoned', brotocol.message(child.quest_id, {'text': text_at_the_message_bound()})
+      child, 'worker', brotocol.message(child.mission_id, {'text': text_at_the_message_bound()})
     )
   assert len(child.pending) == MAX_PENDING_QUESTIONS
   request = '\x01' * (brotocol.MAX_IDENTIFIER_BYTES // 6)
 
-  dispatcher.on_message('requester', _request(QUERY, {'id': child.quest_id}, request))
+  dispatcher.on_message('requester', _request(QUERY, {'id': child.mission_id}, request))
   by_id = runtime.sent[-1][1]
   dispatcher.on_message('requester', _request(QUERY, {}, request))
   listing = runtime.sent[-1][1]
 
   assert len(by_id.to_bytes()) <= brotocol.MAX_FRAME_BYTES
-  marked = [entry for entry in by_id.payload['value']['quest']['messages'] if entry.get('pending')]
+  marked = [
+    entry for entry in by_id.payload['value']['mission']['messages'] if entry.get('pending')
+  ]
   assert [entry['id'] for entry in marked] == [entry['id'] for entry in child.pending]
   assert len(listing.to_bytes()) <= brotocol.MAX_FRAME_BYTES
-  [record] = listing.payload['value']['quests']
+  [record] = listing.payload['value']['missions']
   assert record['pending'] == child.pending
 
 
 def test_query_trims_chat_before_evicting_a_retained_result():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(QUERY, query_handler)
-  child = _live_chat(dispatcher, talk={'summoned.say'})
+  child = _live_chat(dispatcher, talk={'worker.say'})
   for _ in range(MAX_RECORD_MESSAGES):
     dispatcher.journal.message(
       child,
-      'summoned',
-      brotocol.message(child.quest_id, {'text': text_at_the_message_bound()}),
+      'worker',
+      brotocol.message(child.mission_id, {'text': text_at_the_message_bound()}),
     )
   dispatcher.journal.end(
     child, {'outcome': 'ok', 'value': 'answer' * (brotocol.MAX_FRAME_BYTES // 10)}
   )
 
-  dispatcher.on_message('requester', _request(QUERY, {'id': child.quest_id}, 'query-chat'))
+  dispatcher.on_message('requester', _request(QUERY, {'id': child.mission_id}, 'query-chat'))
 
   response = runtime.sent[-1][1]
-  view = response.payload['value']['quest']
+  view = response.payload['value']['mission']
   assert len(response.to_bytes()) <= brotocol.MAX_FRAME_BYTES
   assert view['messages_truncated'] is True
   assert view['result'] == child.result
@@ -668,6 +685,7 @@ def test_query_pages_every_live_record_inside_the_frame_cap():
       'root-quest',
       'requester',
       {f'field-{field}': str(index) * 200 for field in range(20)},
+      type='bro',
     )
   cursor = None
   seen = []
@@ -678,7 +696,7 @@ def test_query_pages_every_live_record_inside_the_frame_cap():
     response = runtime.sent[-1][1]
     assert len(response.to_bytes()) <= brotocol.MAX_FRAME_BYTES
     value = response.payload['value']
-    seen.extend(record['id'] for record in value['quests'])
+    seen.extend(record['id'] for record in value['missions'])
     cursor = value.get('cursor')
     if cursor is None:
       break
@@ -698,29 +716,29 @@ def test_query_rejects_an_invalid_listing_cursor():
 async def test_query_wait_answers_the_terminal_state():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(QUERY, query_handler)
-  child = dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {})
+  child = dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {}, type='bro')
   dispatcher.on_message('requester', _request(QUERY, {'id': 'child', 'wait': 1}, 'wait'))
   assert runtime.sent == []
   dispatcher.journal.end(child, {'outcome': 'ok', 'value': 'answer'})
   await _settle()
-  assert runtime.sent[-1][1].payload['value']['quest']['result']['value'] == 'answer'
+  assert runtime.sent[-1][1].payload['value']['mission']['result']['value'] == 'answer'
 
 
 @pytest.mark.asyncio
 async def test_query_since_returns_when_the_quests_chat_sequence_advances():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(QUERY, query_handler)
-  child = _live_chat(dispatcher, talk={'summoned.say'})
+  child = _live_chat(dispatcher, talk={'worker.say'})
   dispatcher.on_message(
     'requester',
-    _request(QUERY, {'id': child.quest_id, 'since': child.chat_seq, 'wait': 1}, 'wait-chat'),
+    _request(QUERY, {'id': child.mission_id, 'since': child.chat_seq, 'wait': 1}, 'wait-chat'),
   )
   assert runtime.sent == []
 
-  dispatcher.on_message('child-worker', brotocol.message(child.quest_id, {'text': 'working'}))
+  dispatcher.on_message('child-worker', brotocol.message(child.mission_id, {'text': 'working'}))
   await _settle()
 
-  response = runtime.sent[-1][1].payload['value']['quest']
+  response = runtime.sent[-1][1].payload['value']['mission']
   assert response['chat_seq'] == child.chat_seq
   assert response['messages'][-1]['head'] == {'text': 'working'}
 
@@ -729,7 +747,7 @@ async def test_query_since_returns_when_the_quests_chat_sequence_advances():
 async def test_query_wait_reports_an_oversize_retained_result_as_evicted():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(QUERY, query_handler)
-  child = dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {})
+  child = dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {}, type='bro')
   dispatcher.on_message('requester', _request(QUERY, {'id': 'child', 'wait': 1}, 'wait'))
 
   dispatcher.journal.end(child, _maximum_frame_result_payload())
@@ -737,7 +755,7 @@ async def test_query_wait_reports_an_oversize_retained_result_as_evicted():
 
   response = runtime.sent[-1][1]
   assert len(response.to_bytes()) <= brotocol.MAX_FRAME_BYTES
-  view = response.payload['value']['quest']
+  view = response.payload['value']['mission']
   assert 'result' not in view
   assert view['result_evicted'] is True
 
@@ -750,10 +768,10 @@ def test_events_from_now_and_retained_history():
     'head': dispatcher.journal.head,
     'events': [],
   }
-  dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {})
+  dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {}, type='bro')
   dispatcher.on_message('requester', _request(EVENTS, {'after': 0}, 'history'))
   history = runtime.sent[-1][1].payload['value']['events']
-  assert [event['quest'] for event in history] == ['child']
+  assert [event['mission'] for event in history] == ['child']
 
 
 def test_events_pages_every_visible_event_inside_the_frame_cap():
@@ -766,6 +784,7 @@ def test_events_pages_every_visible_event_inside_the_frame_cap():
       'root-quest',
       'requester',
       {},
+      type='bro',
     )
     dispatcher.journal.trail(record, 'x' * brotocol.MAX_IDENTIFIER_BYTES)
 
@@ -799,6 +818,7 @@ async def test_events_wait_answers_when_a_visible_event_arrives():
       'root-quest',
       'requester',
       {},
+      type='bro',
     )
     dispatcher.journal.trail(record, 'x' * brotocol.MAX_IDENTIFIER_BYTES)
   await _settle()
@@ -806,7 +826,7 @@ async def test_events_wait_answers_when_a_visible_event_arrives():
   response = runtime.sent[-1][1]
   assert len(response.to_bytes()) <= brotocol.MAX_FRAME_BYTES
   events = response.payload['value']['events']
-  assert events[0]['quest'] == 'child-0'
+  assert events[0]['mission'] == 'child-0'
   assert len(events) < 256
 
 
@@ -814,7 +834,8 @@ async def test_events_wait_answers_when_a_visible_event_arrives():
 async def test_worker_death_synthesizes_one_failed_result():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(
-    'work', lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset())
+    'work',
+    lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset(), type='bro'),
   )
   dispatcher.on_message('requester', _request('work', {}, 'work'))
   await _settle()
@@ -832,7 +853,7 @@ async def test_sigterm_ends_an_owning_run_through_its_teardown():
   runtime = FakeRuntime()
   dispatcher = Dispatcher()
   dispatcher.bind(cast(Runtime, runtime))
-  run = asyncio.create_task(dispatcher.run(LaunchSpec(), end_on_sigterm=True))
+  run = asyncio.create_task(dispatcher.run(LaunchSpec(), end_on_sigterm=True, type='bro'))
   await _settle()
   assert runtime.handle is not None
   assert not runtime.handle.killed
@@ -854,7 +875,7 @@ async def test_an_owning_run_holds_sigterm_through_its_teardown():
   runtime.kill_release = asyncio.Event()
   dispatcher = Dispatcher()
   dispatcher.bind(cast(Runtime, runtime))
-  run = asyncio.create_task(dispatcher.run(LaunchSpec(), end_on_sigterm=True))
+  run = asyncio.create_task(dispatcher.run(LaunchSpec(), end_on_sigterm=True, type='bro'))
   await _settle()
   assert runtime.handle is not None
 
@@ -879,7 +900,7 @@ def test_a_run_leaves_the_processs_sigterm_alone_unless_asked():
       runtime = FakeRuntime()
       dispatcher = Dispatcher()
       dispatcher.bind(cast(Runtime, runtime))
-      task = asyncio.create_task(dispatcher.run(LaunchSpec()))
+      task = asyncio.create_task(dispatcher.run(LaunchSpec(), type='bro'))
       await _settle()
       assert runtime.handle is not None
       runtime.handle.exit.set_result(7)
@@ -930,7 +951,7 @@ async def test_a_dead_requester_orphans_the_quests_it_asked_for_down_the_tree():
   assert set(dispatcher.workers) == {'requester'}
   # the dead child's own failure reaches its requester; nothing is sent to the dead child
   assert [
-    (peer, message.quest_id, message.payload['detail']['reason'])
+    (peer, message.request_id, message.payload['detail']['reason'])
     for peer, message in runtime.sent[delivered_before:]
   ] == [('requester', 'child', 'exit')]
 
@@ -941,7 +962,7 @@ async def test_root_exit_keeps_closing_live_quests_as_killed():
   dispatcher = Dispatcher()
   dispatcher.bind(cast(Runtime, runtime))
   dispatcher.on('work', _spawn_handler)
-  run = asyncio.create_task(dispatcher.run(LaunchSpec()))
+  run = asyncio.create_task(dispatcher.run(LaunchSpec(), type='bro'))
   await _settle()
   root_peer = dispatcher.root
   assert root_peer is not None
@@ -971,7 +992,7 @@ async def test_cancel_ends_the_requesters_live_quest_and_orphans_what_it_asked_f
   dispatcher.on_message('requester', _request(CANCEL, {'id': 'child'}, 'cancel-child'))
 
   reply = runtime.sent[-1][1]
-  assert (reply.quest_id, reply.payload) == ('cancel-child', {'outcome': 'ok'})
+  assert (reply.request_id, reply.payload) == ('cancel-child', {'outcome': 'ok'})
   assert not dispatcher.journal.knows('cancel-child')
   await _settle()
   await _settle()
@@ -985,7 +1006,7 @@ async def test_cancel_ends_the_requesters_live_quest_and_orphans_what_it_asked_f
   assert [
     peer
     for peer, message in runtime.sent
-    if message.type == Tag.RESULT and message.quest_id == 'child'
+    if message.type == Tag.RESULT and message.request_id == 'child'
   ] == ['requester']
   assert dispatcher.journal.records['grandchild'].reason == 'orphaned'
   assert runtime.handles['grandchild'].killed
@@ -1004,7 +1025,7 @@ async def test_cancel_during_launch_answers_at_once_and_ends_the_quest_on_the_la
   dispatcher.on_message('requester', _request(CANCEL, {'id': 'child'}, 'cancel-child'))
   await _settle()
 
-  assert [(message.quest_id, message.outcome) for _, message in runtime.sent[-1:]] == [
+  assert [(message.request_id, message.outcome) for _, message in runtime.sent[-1:]] == [
     ('cancel-child', 'ok'),
   ]
   assert 'child' in dispatcher.live
@@ -1014,7 +1035,7 @@ async def test_cancel_during_launch_answers_at_once_and_ends_the_quest_on_the_la
   assert runtime.handles['child'].killed
   child = dispatcher.journal.records['child']
   assert (child.outcome, child.reason) == ('failed', 'cancelled')
-  assert [(message.quest_id, message.outcome) for _, message in runtime.sent[-1:]] == [
+  assert [(message.request_id, message.outcome) for _, message in runtime.sent[-1:]] == [
     ('child', 'failed'),
   ]
 
@@ -1046,7 +1067,7 @@ async def test_a_result_sent_during_the_kill_does_not_outrun_the_cancel():
   assert [
     message.outcome
     for _, message in runtime.sent
-    if message.type == Tag.RESULT and message.quest_id == 'child'
+    if message.type == Tag.RESULT and message.request_id == 'child'
   ] == ['failed']
 
 
@@ -1054,7 +1075,7 @@ def test_cancel_is_denied_unless_the_peer_requested_a_live_quest():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(CANCEL, cancel_handler)
   _live_chat(dispatcher, talk=set())
-  ended = dispatcher.journal.open('done', 'summon', 'root-quest', 'requester', {})
+  ended = dispatcher.journal.open('done', 'summon', 'root-quest', 'requester', {}, type='bro')
   dispatcher.journal.end(ended, {'outcome': 'ok'})
 
   dispatcher.on_message('child-worker', _request(CANCEL, {'id': 'child'}, 'cancel-1'))

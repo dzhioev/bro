@@ -139,11 +139,12 @@ class Minted:
 
 
 def _open_client() -> 'Client':
-  from bro.broker.client import CHANNEL_ENV, Client
+  from bro.broker.client import Client
+  from bro.broker.environment import BROKER_CHANNEL
 
   client = Client.from_env()
   if client is None:
-    raise ArtifactError(f'no broker channel ({CHANNEL_ENV} unset); artifacts need a session channel')  # fmt: skip
+    raise ArtifactError(f'no broker channel ({BROKER_CHANNEL} unset); artifacts need a session channel')  # fmt: skip
   return client
 
 

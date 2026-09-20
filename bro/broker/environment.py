@@ -1,0 +1,6 @@
+"""Environment names shared by broker launchers and clients."""
+
+BROKER_CHANNEL = 'BROKER_CHANNEL'
+BROKER_UPSTREAM = 'BROKER_UPSTREAM'
+BROKER_MISSION = 'BROKER_MISSION'
+BROKER_TALK = 'BROKER_TALK'

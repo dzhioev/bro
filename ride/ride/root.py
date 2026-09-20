@@ -5,6 +5,7 @@ from types import MappingProxyType
 
 from bro.base import configs
 from bro.base.scope import DEFAULT_PERMITS
+from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
 from ride.runtime_bundle import RuntimeBundle
 from ride.workspace.containers import attach_interactive, broker_enabled
 from ride.workspace.docker import (
@@ -82,8 +83,8 @@ def _run_via_broker(
 def _run_direct(launch: DockerLaunch | ProcessLaunch) -> int:
   if isinstance(launch, ProcessLaunch):
     env = dict(launch.env)
-    env.pop('BROKER_CHANNEL', None)
-    env.pop('BROKER_UPSTREAM', None)
+    env.pop(BROKER_CHANNEL, None)
+    env.pop(BROKER_UPSTREAM, None)
     return subprocess.run(launch.command, cwd=launch.cwd, env=env).returncode
   container_id = prepare_container(launch)
   if launch.tty:

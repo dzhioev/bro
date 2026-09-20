@@ -2,7 +2,7 @@
 
 `DockerSpawner` unwraps a broker-free `ride.workspace.docker.Launch`, adds
 `BROKER_UPSTREAM` (the provisioned channel under the container-facing host name)
-and `BROKER_QUEST`, and runs the shared blocking container prepare off-loop. A TTY root attaches with inherited stdio
+and `BROKER_MISSION`, and runs the shared blocking container prepare off-loop. A TTY root attaches with inherited stdio
 and host-log redirection; a headless root inherits separate stdout and stderr;
 a headless child captures merged output in a bounded ring and can remove its
 workspace after a clean exit when the workspace records itself throwaway — a
@@ -40,11 +40,11 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import log
-from bro.broker.brotocol import TALK_ENV, Talk, encode_talk
+from bro.broker.brotocol import Talk, encode_talk
+from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION, BROKER_TALK, BROKER_UPSTREAM
 from bro.broker.spawn import ChildHandle, LaunchSpec, RingBuffer, Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST
-from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV
 from bro.monitor import PROCESS_FILENAME, workspace_session_dir
 from ride.workspace.docker import (
   CONTAINER_BROKER_HOST,
@@ -123,10 +123,10 @@ def _broker_launch(
 ) -> DockerLaunch:
   """Add the provisioned broker upstream and the peer's quest id to a neutral container launch."""
   env = dict(launch.env)
-  env.pop(CHANNEL_ENV, None)
-  env[UPSTREAM_ENV] = channel.host_endpoint.address(CONTAINER_BROKER_HOST)
-  env['BROKER_QUEST'] = quest
-  env[TALK_ENV] = encode_talk(talk)
+  env.pop(BROKER_CHANNEL, None)
+  env[BROKER_UPSTREAM] = channel.host_endpoint.address(CONTAINER_BROKER_HOST)
+  env[BROKER_MISSION] = quest
+  env[BROKER_TALK] = encode_talk(talk)
   return replace(launch, env=env)
 
 
@@ -696,10 +696,10 @@ class ExecSpawner(Spawner):
   ) -> ChildHandle:
     assert isinstance(launch, ExecLaunchSpec)
     env = dict(launch.launch.env)
-    env.pop(CHANNEL_ENV, None)
-    env[UPSTREAM_ENV] = channel.host_endpoint.address(CONTAINER_BROKER_HOST)
-    env['BROKER_QUEST'] = quest
-    env[TALK_ENV] = encode_talk(talk)
+    env.pop(BROKER_CHANNEL, None)
+    env[BROKER_UPSTREAM] = channel.host_endpoint.address(CONTAINER_BROKER_HOST)
+    env[BROKER_MISSION] = quest
+    env[BROKER_TALK] = encode_talk(talk)
     member_exec = replace(launch.launch, env=env)
     argv = await asyncio.to_thread(prepare_member_exec, member_exec)
     process = await asyncio.create_subprocess_exec(
@@ -823,10 +823,10 @@ class ProcessSpawner(Spawner):
   ) -> ChildHandle:
     assert isinstance(launch, ProcessLaunchSpec)
     env = dict(launch.env)
-    env.pop(CHANNEL_ENV, None)
-    env[UPSTREAM_ENV] = channel.host_endpoint.address(LOCAL_HOST)
-    env['BROKER_QUEST'] = quest
-    env[TALK_ENV] = encode_talk(talk)
+    env.pop(BROKER_CHANNEL, None)
+    env[BROKER_UPSTREAM] = channel.host_endpoint.address(LOCAL_HOST)
+    env[BROKER_MISSION] = quest
+    env[BROKER_TALK] = encode_talk(talk)
     cleanup_directory = None if launch.cleanup_directory is None else Path(launch.cleanup_directory)
     records_directory = None if launch.records_directory is None else Path(launch.records_directory)
     async with _cleanup_on_failure(cleanup_directory) as cleanup:

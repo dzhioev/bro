@@ -291,9 +291,9 @@ def _facts_context(workspace):
   )
   journal = Journal()
   journal.subscribe(facts.observe_journal)
-  root = journal.open('root-quest', 'root', None, None, {})
+  root = journal.open('root-quest', 'root', None, None, {}, type='bro')
   journal.bind(root, ROOT)
-  return facts, FakeContext(journal, {ROOT: root.quest_id})
+  return facts, FakeContext(journal, {ROOT: root.mission_id})
 
 
 async def _delivered(context: FakeContext) -> tuple[str, brotocol.Message]:
@@ -365,7 +365,7 @@ class TestArtifactControl:
     assert context.replies == []
     peer, result = await _delivered(context)
     assert peer == ROOT
-    assert result.quest == message.id
+    assert result.request == message.id
     assert result.payload['outcome'] == 'ok'
     value = result.payload['value']
     assert value['ref'] == digest_path(workspace_tree('ws') / 'out/a.bin')

@@ -13,7 +13,8 @@ from typing import Any, Optional
 
 import bro.base.args as base_args
 from bro.base import log
-from bro.broker.client import CHANNEL_ENV, Client
+from bro.broker.client import Client
+from bro.broker.environment import BROKER_CHANNEL
 
 __cli_name__ = 'broker'
 
@@ -31,7 +32,7 @@ def _args(arg: str) -> dict[str, Any]:
 def _send(kind: str, args: dict[str, Any]) -> int:
   client = Client.from_env()
   if client is None:
-    log.info(f'broker: {CHANNEL_ENV} unset, request not sent')
+    log.info(f'broker: {BROKER_CHANNEL} unset, request not sent')
     return 0
   with client:
     client.send(kind, args)
@@ -41,7 +42,7 @@ def _send(kind: str, args: dict[str, Any]) -> int:
 def _request(kind: str, args: dict[str, Any], timeout: Optional[float]) -> int:
   client = Client.from_env()
   if client is None:
-    log.info(f'broker: {CHANNEL_ENV} unset, request not sent')
+    log.info(f'broker: {BROKER_CHANNEL} unset, request not sent')
     return 0
   with client:
     try:
@@ -54,17 +55,17 @@ def _request(kind: str, args: dict[str, Any], timeout: Optional[float]) -> int:
 
 
 def _message(
-  quest: str,
+  request_id: str,
   payload: dict[str, Any],
   reply_to: Optional[str],
   question: bool,
 ) -> int:
   client = Client.from_env()
   if client is None:
-    log.info(f'broker: {CHANNEL_ENV} unset, message not sent')
+    log.info(f'broker: {BROKER_CHANNEL} unset, message not sent')
     return 0
   with client:
-    sent = client.message(quest, payload, reply_to=reply_to, question=question)
+    sent = client.message(request_id, payload, reply_to=reply_to, question=question)
   sys.stdout.write(sent.to_bytes().decode('utf-8') + '\n')
   return 0
 
@@ -72,7 +73,7 @@ def _message(
 def _receive(timeout: Optional[float]) -> int:
   client = Client.from_env()
   if client is None:
-    log.info(f'broker: {CHANNEL_ENV} unset, nothing to receive')
+    log.info(f'broker: {BROKER_CHANNEL} unset, nothing to receive')
     return 0
   with client:
     message = client.receive(timeout)
@@ -82,13 +83,13 @@ def _receive(timeout: Optional[float]) -> int:
   return 0
 
 
-def _listen(quest: str, timeout: Optional[float]) -> int:
+def _listen(request_id: str, timeout: Optional[float]) -> int:
   client = Client.from_env()
   if client is None:
-    log.info(f'broker: {CHANNEL_ENV} unset, nothing to listen for')
+    log.info(f'broker: {BROKER_CHANNEL} unset, nothing to listen for')
     return 0
   with client:
-    client.listen(quest)
+    client.listen(request_id)
     message = client.receive(timeout)
   if message is None:
     return 1
@@ -124,7 +125,7 @@ def main(argv: list[str]) -> Optional[int]:
   message_parser = subparsers.add_parser(
     'message', help='send a chat message and print its wire envelope'
   )
-  message_parser.add_argument('quest', help='the quest the message belongs to')
+  message_parser.add_argument('request_id', help='the request the message belongs to')
   message_parser.add_argument('payload', type=_args, help='JSON object message payload')
   message_parser.add_argument('--reply-to', help='the question id this message answers')
   message_parser.add_argument(
@@ -141,9 +142,9 @@ def main(argv: list[str]) -> Optional[int]:
   receive_parser.set_handler(_receive)
 
   listen_parser = subparsers.add_parser(
-    'listen', help='register for a quest, receive one message, and print it'
+    'listen', help='register for a request, receive one message, and print it'
   )
-  listen_parser.add_argument('quest', help='the quest whose unsolicited messages to receive')
+  listen_parser.add_argument('request_id', help='the request whose unsolicited messages to receive')
   listen_parser.add_argument(
     '--timeout', type=float, help='seconds to wait for a message (default: wait indefinitely)'
   )

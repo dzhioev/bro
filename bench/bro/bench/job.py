@@ -16,8 +16,9 @@ from typing import Any, Optional
 import bro.base.args as base_args
 from bro.base import log
 from bro.broker.brotocol import Message, Tag
-from bro.broker.client import CHANNEL_ENV, Client
+from bro.broker.client import Client
 from bro.broker.dispatcher import Dispatcher, RequestHandler
+from bro.broker.environment import BROKER_CHANNEL
 from bro.broker.job import OUTPUT_DIRECTORY, CommandJob
 from bro.broker.runtime import Peer
 from bro.kinds import KindContext, tree_path
@@ -102,6 +103,7 @@ def benchmark_kind(kind_context: KindContext) -> RequestHandler:
     context.job(
       CommandJob(command=command, env=environment),
       peer,
+      type='benchmark',
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,
     )
     log.info('benchmark: job started (request %s, config %s)', message.id, config)
@@ -111,7 +113,7 @@ def benchmark_kind(kind_context: KindContext) -> RequestHandler:
 
 def _deny(context: Dispatcher, peer: Peer, error: str) -> None:
   log.warning('benchmark: %s', error)
-  context.deny(peer, error)
+  context.deny(peer, error, type='benchmark')
 
 
 # --- the session side: the benchmark-job CLI ---------------------------------------
@@ -131,7 +133,7 @@ def _open_client() -> Client:
   client = Client.from_env()
   if client is None:
     raise JobError(
-      f'no broker channel ({CHANNEL_ENV} unset); benchmark jobs need a session channel'
+      f'no broker channel ({BROKER_CHANNEL} unset); benchmark jobs need a session channel'
     )
   return client
 
@@ -179,7 +181,7 @@ def _await_outcome(client: Client, request: Message, timeout: float) -> str:
   except TimeoutError:
     raise JobError(
       f'no result within {timeout:.0f}s — the job may still be running; '
-      f'reattach with `benchmark-job check {request.quest_id}`'
+      f'reattach with `benchmark-job check {request.request_id}`'
     ) from None
   except ConnectionError as e:
     raise JobError(f'broker channel closed awaiting the job result: {e}') from None
@@ -212,7 +214,7 @@ def run_job(config: str, timeout: Optional[float] = None) -> str:
   of its collected run. Raises `JobError` with the operator-facing reason."""
   with _open_client() as client:
     request = client.send(BENCHMARK, _job_args(config, timeout))
-    log.info('benchmark job request %s', request.quest_id)
+    log.info('benchmark job request %s', request.request_id)
     return _await_outcome(client, request, timeout if timeout is not None else DEFAULT_TIMEOUT)
 
 
@@ -226,7 +228,7 @@ def _start(config: str, timeout: Optional[float], detach: bool) -> int:
     return 1
   with client:
     request = client.send(BENCHMARK, _job_args(config, timeout))
-    log.info('benchmark job request %s', request.quest_id)
+    log.info('benchmark job request %s', request.request_id)
     try:
       first = client.await_any(request, ACCEPT_TIMEOUT)
     except (TimeoutError, ConnectionError) as error:
@@ -237,7 +239,7 @@ def _start(config: str, timeout: Optional[float], detach: bool) -> int:
     if first.type != Tag.MARK or first.payload.get('transition') != 'accepted':
       log.error('unexpected first benchmark job reply: %s', first.payload)
       return 1
-    print(request.quest_id)
+    print(request.request_id)
     return 0
 
 
@@ -257,12 +259,12 @@ def _query_job(client: Client, request_id: str, *, wait_seconds: float = 0) -> d
   if payload.get('outcome') != 'ok':
     raise JobError(str(payload.get('error', payload)))
   value = payload.get('value')
-  quest = value.get('quest') if isinstance(value, dict) else None
-  if not isinstance(quest, dict):
+  mission = value.get('mission') if isinstance(value, dict) else None
+  if not isinstance(mission, dict):
     raise JobError(f'query for {request_id!r} returned no quest record')
-  if quest.get('kind') != BENCHMARK:
+  if mission.get('kind') != BENCHMARK:
     raise JobError(f'quest {request_id!r} is not a benchmark job')
-  return quest
+  return mission
 
 
 def _queried_ref(quest: dict[str, Any]) -> Optional[str]:
@@ -277,7 +279,7 @@ def _queried_ref(quest: dict[str, Any]) -> Optional[str]:
   payload = quest.get('result')
   if not isinstance(payload, dict):
     raise JobError(f'benchmark job {request_id!r} has no retained result')
-  return _interpret_result(Message(type=Tag.RESULT, quest=str(request_id), payload=payload))
+  return _interpret_result(Message(type=Tag.RESULT, request=str(request_id), payload=payload))
 
 
 def _wait_for_job(request_id: str, timeout: Optional[float]) -> str:

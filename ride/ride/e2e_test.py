@@ -11,8 +11,7 @@ session broxy on the channel, ping round-trip through it, an artifact
 mint/get through the read-only view mount); B — child
 lifecycle over the real ports (spawn
 routing, early exit, timeout, teardown, channel-pinned identity); C — the
-`BROKER_DISABLED` kill-switch; D — degrade when broker is unimportable in the
-launcher; E — SIGINT handling through the attached root; F — `do-ride` as the
+`BROKER_DISABLED` kill-switch; E — SIGINT handling through the attached root; F — `do-ride` as the
 session runner as the container command (exit-code propagation, in-container
 argv build: merged --settings, MCP namespaces, RIDE_SESSION_CONTEXT);
 G — the stop interrupt, so `docker stop` lands in claude as a keypress;
@@ -108,7 +107,7 @@ channel = os.environ.get('BROKER_CHANNEL')
 assert channel, 'the launch carried no channel'
 assert os.environ.get('BROKER_UPSTREAM') is None, 'the broxy did not consume its upstream'
 assert parse_address(channel)[0] == '127.0.0.1', channel  # the broxy's, not the host's
-assert os.environ.get('BROKER_QUEST'), 'the launch did not carry the quest id'
+assert os.environ.get('BROKER_MISSION'), 'the launch did not carry the quest id'
 from bro.run_lifecycle import RunLifecycle
 channel = RunLifecycle.from_env()
 assert channel is not None
@@ -173,7 +172,7 @@ def main():
   assert reply is not None, 'no ping reply'
   report['ping_reply'] = {
     'type': reply.type,
-    'quest': reply.quest,
+    'request': reply.request,
     'payload': reply.payload,
   }
   request = brotocol.request('spawn', {})
@@ -187,7 +186,7 @@ def main():
       break
     report['messages'].append({
       'type': message.type,
-      'quest': message.quest,
+      'request': message.request,
       'payload': message.payload,
       'elapsed': time.monotonic() - start,
     })
@@ -237,7 +236,7 @@ channel.trail('e2e-trail')
 time.sleep(600)
 """
 
-# scenarios C/D: assert the broker-less container surface
+# scenario C: assert the broker-less container surface
 _PROBE_NO_CHANNEL = """
 import os, subprocess, sys
 from pathlib import Path
@@ -497,8 +496,7 @@ class _Driver:
     self._master = master
     # -P keeps the driver's cwd (the isolated project clone, which carries its own copy
     # of every package) off sys.path: the launcher code under test must resolve from
-    # this checkout's editable venv, and scenario D's PYTHONPATH shadow must win the
-    # `import bro.broker` lookup
+    # this checkout's editable venv rather than the isolated project clone
     self.process = subprocess.Popen(
       [sys.executable, '-P', '-c', _DRIVER],
       stdin=slave,
@@ -731,7 +729,7 @@ def _run_broker_scenario(
   result: dict[str, int] = {}
   with pytest.MonkeyPatch.context() as monkeypatch:
     monkeypatch.setenv('HOME', str(env.home))
-    thread = threading.Thread(target=lambda: result.update(code=facade.run(root)))
+    thread = threading.Thread(target=lambda: result.update(code=facade.run(root, type='bro')))
     thread.start()
     max_channels = 0
     max_live = 0
@@ -811,7 +809,7 @@ class TestChildLifecycle:
     assert 'error' not in b_clean.report, b_clean.report.get('error')
     reply = b_clean.report['ping_reply']
     assert reply['type'] == 'result'
-    assert reply['quest'] == b_clean.report['ping_id']
+    assert reply['request'] == b_clean.report['ping_id']
     assert reply['payload'] == {'outcome': 'ok', 'value': {'n': 1, 'from': 'forged-peer-identity'}}
     # the dispatcher attributed the request to the socket's own channel, not the
     # forged payload claim — identity is pinned to the channel the message arrived on
@@ -824,12 +822,12 @@ class TestChildLifecycle:
     types = [m['type'] for m in b_clean.report['messages']]
     assert types == ['mark', 'mark', 'mark', 'result'], b_clean.report['messages']
     accepted, started, trail, completed = b_clean.report['messages']
-    assert {message['quest'] for message in b_clean.report['messages']} == {request_id}
+    assert {message['request'] for message in b_clean.report['messages']} == {request_id}
     assert accepted['payload'] == {'transition': 'accepted'}
     assert started['payload'] == {'transition': 'started'}
-    assert trail['quest'] == request_id
+    assert trail['request'] == request_id
     assert trail['payload'] == {'transition': 'trail', 'trail_id': 'e2e-trail'}
-    assert completed['quest'] == request_id
+    assert completed['request'] == request_id
     assert completed['payload'] == {'outcome': 'ok', 'value': 'child-ok'}
     assert b_clean.max_channels == 2
     assert b_clean.max_live == 2
@@ -849,7 +847,7 @@ class TestChildLifecycle:
     accepted, started, failed = b_early_exit.report['messages']
     assert accepted['payload'] == {'transition': 'accepted'}
     assert started['payload'] == {'transition': 'started'}
-    assert failed['quest'] == b_early_exit.report['request_id']
+    assert failed['request'] == b_early_exit.report['request_id']
     assert failed['payload']['outcome'] == 'failed'
     detail = failed['payload']['detail']
     assert detail['reason'] == 'exit'
@@ -867,7 +865,7 @@ class TestChildLifecycle:
     accepted, started, failed = b_timeout.report['messages']
     assert accepted['payload'] == {'transition': 'accepted'}
     assert started['payload'] == {'transition': 'started'}
-    assert failed['quest'] == b_timeout.report['request_id']
+    assert failed['request'] == b_timeout.report['request_id']
     assert failed['payload']['outcome'] == 'failed'
     assert failed['payload']['detail']['reason'] == 'timeout'
     assert failed['payload']['detail']['exit_code'] != 0
@@ -911,56 +909,8 @@ class TestKillSwitch:
     assert scenario_c.exit_code == 0, scenario_c.output
     assert 'RIDE_E2E_NO_CHANNEL_OK' in scenario_c.output
 
-  def test_short_circuits_before_any_broker_import(self, scenario_c: LiveRun) -> None:
-    assert scenario_c.broker_modules == []
-
-
-# --- D: broker unimportable in the launcher -----------------------------------
-
-
-# makes `import bro.broker` fail in the launcher. a module file cannot shadow a
-# submodule of an installed package — the name resolves through the real
-# `bro.__path__` and never consults PYTHONPATH — so the block is a meta-path
-# finder, delivered through the `sitecustomize` that site imports from PYTHONPATH
-# at interpreter start.
-_BROKER_SHADOW = """
-import sys
-
-
-class _Unimportable:
-  def find_spec(self, name, path=None, target=None):
-    if name == 'bro.broker' or name.startswith('bro.broker.'):
-      raise ImportError('shadowed for the degrade scenario')
-    return None
-
-
-sys.meta_path.insert(0, _Unimportable())
-"""
-
-
-@pytest.fixture(scope='module')
-def scenario_d(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> LiveRun:
-  env = isolated_env
-  shadow = env.root / 'shadow'
-  shadow.mkdir(exist_ok=True)
-  (shadow / 'sitecustomize.py').write_text(_BROKER_SHADOW)
-  name = f'{_NAME_PREFIX}d-root'
-  driver = _Driver(
-    env, name, [_RUNTIME_PYTHON, '-c', _PROBE_NO_CHANNEL], extra_env={'PYTHONPATH': str(shadow)}
-  )
-  request.addfinalizer(driver.close)
-  run = LiveRun(exit_code=-1, output='')
-  run.exit_code = driver.wait(270)
-  run.output = driver.output()
-  return run
-
-
-class TestBrokerUnimportable:
-  def test_degrades_to_direct_launch_with_warning(self, scenario_d: LiveRun) -> None:
-    assert scenario_d.exit_code == 0, scenario_d.output
-    assert 'broker package not importable' in scenario_d.output
-    assert 'RIDE_E2E_NO_CHANNEL_OK' in scenario_d.output
-    assert scenario_d.broker_modules == []
+  def test_short_circuits_before_broker_machinery(self, scenario_c: LiveRun) -> None:
+    assert scenario_c.broker_modules == ['bro.broker.environment']
 
 
 # --- E: SIGINT through the attached root --------------------------------------
@@ -1318,7 +1268,7 @@ def _run_boxed_join_scenario(
       party_workspace=name,
       records_directory=str(records),
     )
-    context.spawn(member, peer, talk=frozenset())
+    context.spawn(member, peer, talk=frozenset(), type='bro')
 
   party_members = PartyMembers()
   transport = TcpServerTransport(broker_bind_hosts())
@@ -1335,7 +1285,7 @@ def _run_boxed_join_scenario(
   result: dict[str, int] = {}
   with pytest.MonkeyPatch.context() as monkeypatch:
     monkeypatch.setenv('HOME', str(env.home))
-    thread = threading.Thread(target=lambda: result.update(code=facade.run(root)))
+    thread = threading.Thread(target=lambda: result.update(code=facade.run(root, type='bro')))
     thread.start()
     ready = env.tree(name) / '.e2e-ready'
     _wait_until(
@@ -1658,7 +1608,7 @@ class WatchBro(BaseBro):
 
 def incoming(text):
   return any(
-    entry.get('from') == 'summoner' and entry['head']['text'] == text
+    entry.get('from') == 'owner' and entry['head']['text'] == text
     for entry in history('self').messages
   )
 
@@ -1705,7 +1655,7 @@ from bro.summon import summon_detached
 quest_id = summon_detached(
   'bro',
   'receive steering through the native own-quest watch',
-  talk=['summoner.say'],
+  talk=['owner.say'],
   llm='echo',
   harness='bro',
   timeout=120,
@@ -1715,7 +1665,7 @@ deadline = time.monotonic() + 45
 while True:
   conversation = history(quest_id)
   if any(
-    entry.get('from') == 'summoned' and entry['head']['text'] == 'watch armed'
+    entry.get('from') == 'worker' and entry['head']['text'] == 'watch armed'
     for entry in conversation.messages
   ):
     break
@@ -1843,7 +1793,7 @@ from bro.run_lifecycle import RunLifecycle
 
 deadline = time.monotonic() + 120
 while not any(
-  entry.get('from') == 'summoner' and entry['head']['text'] == 'release'
+  entry.get('from') == 'owner' and entry['head']['text'] == 'release'
   for entry in history('self').messages
 ):
   if time.monotonic() >= deadline:
@@ -1890,7 +1840,7 @@ class ScriptedLLM(LLM):
         'llm': 'echo',
         'harness': 'bro',
         'timeout': 120,
-        'talk': ['summoner.say'],
+        'talk': ['owner.say'],
       },
     )
     assert accepted['state'] == 'accepted', accepted
@@ -2038,7 +1988,7 @@ conversation = history('self')
 steering = [
   entry['head']['text']
   for entry in conversation.messages
-  if entry.get('from') == 'summoner'
+  if entry.get('from') == 'owner'
   and entry.get('reply_to') is None
   and entry.get('id') is None
 ]
@@ -2086,7 +2036,7 @@ quest_ids = []
 question = summon_and_wait(
   'bro',
   'ask the summoner',
-  talk=['summoned.question', 'summoner.say'],
+  talk=['worker.question', 'owner.say'],
   llm='echo',
   harness='bro',
   timeout=120,
@@ -2190,7 +2140,7 @@ ended = cancel(quest_id, timeout=120)
 client = Client.from_env()
 assert client is not None
 with client:
-  quest = client.call('query', {'id': quest_id}, 30).payload['value']['quest']
+  quest = client.call('query', {'id': quest_id}, 30).payload['value']['mission']
 Path('/workspace/.quest-cancel-report').write_text(json.dumps({
   'state': ended.state,
   'outcome': ended.outcome,

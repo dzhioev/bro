@@ -82,8 +82,8 @@ SHARE_HELP = (
 INTO_HELP = "base the child's workspace on this git ref instead of the summoner's workspace HEAD"
 DETACH_HELP = 'print the quest id and exit after host acceptance; read it with `quest check`'
 TALK_HELP = (
-  'widen the child quest chat rights from summoned.say; comma-separated values from '
-  'summoner.say, summoner.question, summoned.say, summoned.question'
+  'widen the child quest chat rights from worker.say; comma-separated values from '
+  'owner.say, owner.question, worker.say, worker.question'
 )
 
 
@@ -167,9 +167,10 @@ def may_summon() -> Optional[tuple[str, ...]]:
 def talk() -> Optional[tuple[str, ...]]:
   """the chat rights fixed for this run's own quest — empty when it is mute,
   and None when its launcher published no talk."""
-  from bro.broker.brotocol import TALK_ENV, decode_talk
+  from bro.broker.brotocol import decode_talk
+  from bro.broker.environment import BROKER_TALK
 
-  raw = os.environ.get(TALK_ENV)
+  raw = os.environ.get(BROKER_TALK)
   if raw is None:
     return None
   return tuple(sorted(decode_talk(raw)))
@@ -332,11 +333,11 @@ def _await_answer(
         until=lambda message: message.type == Tag.MESSAGE and message.id is not None,
       )
     except TimeoutError:
-      record = quest.query_quest(client, request.quest_id)
+      record = quest.query_quest(client, request.request_id)
       answer = quest.answer_of(record)
       if answer is not None:
         return answer
-      questions = quest.open_questions(record, awaiting='summoner')
+      questions = quest.open_questions(record, awaiting='owner')
       if len(questions) > 0:
         return questions[0]
       queried_trail = record.get('trail_id')
@@ -394,7 +395,7 @@ def summon_and_wait(
   with quest.connection(client) as connection:
     request = _send_summon(connection, payload)
     if on_sent is not None:
-      on_sent(request.quest_id)
+      on_sent(request.request_id)
     return _await_answer(
       connection,
       request,
@@ -461,7 +462,7 @@ def summon_detached(
   with quest.open_client() as client:
     request = _send_summon(client, payload)
     _await_acceptance(client, request)
-    return request.quest_id
+    return request.request_id
 
 
 def summon_manual(
@@ -490,7 +491,7 @@ def summon_manual(
   with quest.open_client() as client:
     request = _send_summon(client, payload)
     _await_acceptance(client, request)
-    return request.quest_id
+    return request.request_id
 
 
 def relay_summon(
@@ -543,14 +544,14 @@ def relay_summon(
     except QuestError as error:
       log.error('%s', error)
       return 1
-    log.info('summon quest %s', request.quest_id)
+    log.info('summon quest %s', request.request_id)
     if manual:
       try:
         _await_acceptance(client, request)
       except QuestError as e:
         log.error('%s', e)
         return 1
-      log.info('have the user run: %s', manual_launch_command(request.quest_id, target))
+      log.info('have the user run: %s', manual_launch_command(request.request_id, target))
     effective = timeout if timeout is not None else DEFAULT_TIMEOUT
     return _relay(
       lambda: _await_answer(

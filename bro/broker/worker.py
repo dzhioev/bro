@@ -1,4 +1,4 @@
-"""Worker-owned supervision for spawned, job, and expected broker quests."""
+"""Worker-owned supervision for spawned, job, and expected broker missions."""
 
 import asyncio
 import shutil
@@ -111,7 +111,7 @@ class Worker:
       self.listener.on_worker_message(self, message, host_worker=False)
 
   def settle(self) -> None:
-    """Disarm the quest deadline after its result without ending supervision."""
+    """Disarm the mission deadline after its result without ending supervision."""
     self._cancel_timer()
 
   def _arm(self, seconds: Optional[float]) -> None:
@@ -193,12 +193,12 @@ class Worker:
     pass
 
   def on_message(self, message: Message) -> None:
-    if message.type not in (Tag.REQUEST, Tag.MESSAGE) and message.quest_id != self.quest:
+    if message.type not in (Tag.REQUEST, Tag.MESSAGE) and message.request_id != self.quest:
       log.warning(
-        'broker worker %s refused %r for quest %s',
+        'broker worker %s refused %r for mission %s',
         self.quest,
         message.type,
-        message.quest_id,
+        message.request_id,
       )
       return
     if self._started:
