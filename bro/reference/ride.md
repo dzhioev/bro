@@ -969,7 +969,7 @@ Summoner attribution has one shape in the audit: `{workspace, member?, bro, trai
 The trail is read from that session’s pointer for every request because Claude segments move it
 — the workspace’s `session/` for its first member, or `party/<member>/session/` for a joined one
 — with the answered quest’s journal `trail` mark as fallback.
-The authorized spawn goes through the composite spawner with the requesting peer as parent.
+The authorized spawn carries its `SummonSpawner` into the dispatcher with the requesting peer as parent.
 `SummonSpawner` lowers the request off-loop through the started-party launcher or joined-member builder, then dispatches its concrete Docker, process, or member-exec description;
 a grandchild’s lifecycle routes to the child that summoned it, and root exit still tears down the whole tree.
 Every event lands a host log line and a durable audit row under `<runtime-root>/summon/<name>.jsonl`.

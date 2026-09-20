@@ -16,6 +16,7 @@ from bro.base.condition import when
 from bro.broker import brotocol
 from bro.broker.dispatcher import Dispatcher
 from bro.broker.journal import Journal
+from bro.broker.spawn import Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
 from bro.datasources.base import DataSource
@@ -109,8 +110,9 @@ class FakeContext:
     )
     self.replies.append((peer, {'outcome': 'denied', 'error': record.reason}))
 
-  def spawn(self, launch, peer, *, type, talk, timeout=None):
+  def spawn(self, launch, spawner, peer, *, type, talk, timeout):
     assert self.active is not None
+    assert spawner is self.control._spawner
     assert type == 'bro'
     self.journal.open(
       self.active.request_id,
@@ -123,7 +125,7 @@ class FakeContext:
     )
     self.spawned.append((launch, peer, timeout))
 
-  def expect(self, peer, *, type, talk, timeout, ready):
+  def expect(self, peer, *, type, talk, ready):
     assert self.active is not None
     assert type == 'bro'
     self.journal.open(
@@ -135,7 +137,7 @@ class FakeContext:
       type=type,
       talk=talk,
     )
-    self.expected.append((peer, timeout))
+    self.expected.append((peer, None))
     ready(Provisioned(CHILD, Endpoint(7321, 'token')))
 
 
@@ -181,6 +183,7 @@ def _control(
     depth_cap=depth_cap,
     summon_harness=summon_harness,
     runtime_bundle=runtime_bundle,
+    spawner=cast(Spawner, object()),
     session_env=dict(session_env),
   )
   control.test_journal = journal

@@ -33,19 +33,18 @@ from bro.broker.journal import (
 )
 from bro.broker.runtime import Peer, Runtime
 from bro.broker.spawn import LaunchSpec, Spawner
-from bro.broker.transport import Provisioned, ServerTransport
-from bro.broker.worker import (
+from bro.broker.supervisor import (
   DeathReport,
-  ExpectedWorker,
+  ExpectedSupervisor,
   JobOutput,
-  JobWorker,
+  JobSupervisor,
   Scheduler,
-  SpawnedWorker,
-  Worker,
+  SpawnedSupervisor,
+  Supervisor,
   call_later,
 )
+from bro.broker.transport import Provisioned, ServerTransport
 
-DEFAULT_TIMEOUT = 600.0
 PING = 'ping'
 QUERY = 'query'
 EVENTS = 'events'
@@ -54,29 +53,45 @@ CANCEL = 'cancel'
 RequestHandler = Callable[['Dispatcher', Peer, Message], None]
 
 
+class _SupervisorEvents:
+  def __init__(self, dispatcher: 'Dispatcher'):
+    self._dispatcher = dispatcher
+
+  def on_bound(self, supervisor: Supervisor, worker: Peer) -> None:
+    self._dispatcher._on_bound(supervisor, worker)
+
+  def on_ready(self, supervisor: Supervisor) -> None:
+    self._dispatcher._on_ready(supervisor)
+
+  def on_message(self, supervisor: Supervisor, message: Message, *, from_supervisor: bool) -> None:
+    self._dispatcher._on_supervisor_message(supervisor, message, from_supervisor=from_supervisor)
+
+  def on_death(self, supervisor: Supervisor, report: DeathReport) -> None:
+    self._dispatcher._on_death(supervisor, report)
+
+
 class Dispatcher:
   """Route requests and worker messages over journal-owned mission records."""
 
   def __init__(
     self,
     *,
-    default_timeout: float = DEFAULT_TIMEOUT,
     job_output: Optional[JobOutput] = None,
     journal: Optional[Journal] = None,
     schedule: Scheduler = call_later,
   ):
     self._runtime: Optional[Runtime] = None
-    self._default_timeout = default_timeout
     self._job_output = job_output
     self._schedule = schedule
+    self._supervisor_events = _SupervisorEvents(self)
     self.journal = journal if journal is not None else Journal()
     self.live: dict[str, Record] = {}
     self.workers: dict[Peer, str] = {}
-    self._worker_objects: set[Worker] = set()
+    self._supervisors: set[Supervisor] = set()
     self._handlers: dict[str, RequestHandler] = {}
     self._active: Optional[Message] = None
     self._root: Optional[Peer] = None
-    self._root_worker: Optional[Worker] = None
+    self._root_supervisor: Optional[Supervisor] = None
     self._root_exit: Optional[asyncio.Future[int]] = None
     self._read_tasks: set[asyncio.Task[None]] = set()
     self._retirement_tasks: set[asyncio.Task[None]] = set()
@@ -129,41 +144,41 @@ class Dispatcher:
   def spawn(
     self,
     launch: LaunchSpec,
+    spawner: Spawner,
     owner: Peer,
     *,
     type: str,
     talk: Talk,
-    timeout: Optional[float] = None,
+    timeout: Optional[float],
   ) -> None:
     record = self._open(owner, type=type, talk=talk)
-    worker = SpawnedWorker(
+    supervisor = SpawnedSupervisor(
       self.runtime,
-      self,
+      self._supervisor_events,
       record.mission_id,
       launch,
+      spawner,
       talk=talk,
-      timeout=timeout if timeout is not None else self._default_timeout,
+      timeout=timeout,
       schedule=self._schedule,
     )
-    self._start_worker(worker)
+    self._start_supervisor(supervisor)
     self._deliver_record(record, brotocol.mark(record.mission_id, 'accepted'))
 
-  def job(
-    self, command: CommandJob, owner: Peer, *, type: str, timeout: Optional[float] = None
-  ) -> None:
+  def job(self, command: CommandJob, owner: Peer, *, type: str, timeout: Optional[float]) -> None:
     record = self._open(owner, type=type, talk=EMPTY_TALK)
-    worker = JobWorker(
+    supervisor = JobSupervisor(
       self.runtime,
-      self,
+      self._supervisor_events,
       record.mission_id,
       command,
       self.job_output,
       self,
       owner,
-      timeout=timeout if timeout is not None else self._default_timeout,
+      timeout=timeout,
       schedule=self._schedule,
     )
-    self._start_worker(worker)
+    self._start_supervisor(supervisor)
     self._deliver_record(record, brotocol.mark(record.mission_id, 'accepted'))
 
   def expect(
@@ -172,14 +187,11 @@ class Dispatcher:
     *,
     type: str,
     talk: Talk,
-    timeout: Optional[float],
     ready: Callable[[Provisioned], None],
   ) -> None:
-    if timeout is not None:
-      raise ValueError('expected workers have no deadline')
     record = self._open(owner, type=type, talk=talk)
-    worker = ExpectedWorker(self.runtime, self, record.mission_id, ready)
-    self._start_worker(worker)
+    supervisor = ExpectedSupervisor(self.runtime, self._supervisor_events, record.mission_id, ready)
+    self._start_supervisor(supervisor)
 
   @contextlib.contextmanager
   def _as_active(self, message: Message) -> Generator[None]:
@@ -210,56 +222,64 @@ class Dispatcher:
     if record is None:
       self._refuse(peer, message, 'no live mission')
       return
-    self._on_worker_answer(record, peer, message, host_worker=False)
+    self._on_worker_answer(record, peer, message, from_supervisor=False)
 
-  def on_worker_bound(self, worker: Worker, peer: Peer) -> None:
-    record = self.live.get(worker.quest)
+  def _on_bound(self, supervisor: Supervisor, worker: Peer) -> None:
+    record = self.live.get(supervisor.mission)
     if record is None:
       return
-    self.journal.bind(record, peer)
-    self.workers[peer] = worker.quest
-    if worker is self._root_worker:
-      self._root = peer
+    self.journal.bind(record, worker)
+    self.workers[worker] = supervisor.mission
+    if supervisor is self._root_supervisor:
+      self._root = worker
 
-  def on_worker_ready(self, worker: Worker) -> None:
-    record = self.live.get(worker.quest)
+  def _on_ready(self, supervisor: Supervisor) -> None:
+    record = self.live.get(supervisor.mission)
     if record is not None:
       self._deliver_record(record, brotocol.mark(record.mission_id, 'accepted'))
 
-  def on_worker_message(self, worker: Worker, message: Message, *, host_worker: bool) -> None:
-    peer = worker.peer
+  def _on_supervisor_message(
+    self, supervisor: Supervisor, message: Message, *, from_supervisor: bool
+  ) -> None:
+    peer = supervisor.peer
     if peer is None:
-      raise RuntimeError(f'worker for quest {worker.quest} emitted before binding')
-    if message.type == Tag.REQUEST and not host_worker:
+      raise RuntimeError(f'supervisor for mission {supervisor.mission} emitted before binding')
+    if message.type == Tag.REQUEST and not from_supervisor:
       self._on_request(peer, message)
       return
-    if message.type == Tag.MESSAGE and not host_worker:
+    if message.type == Tag.MESSAGE and not from_supervisor:
       self._on_chat_message(peer, message)
       return
-    record = self.live.get(worker.quest)
+    record = self.live.get(supervisor.mission)
     if record is None:
       return
-    self._on_worker_answer(record, peer, message, host_worker=host_worker)
+    self._on_worker_answer(record, peer, message, from_supervisor=from_supervisor)
 
-  def on_worker_death(self, worker: Worker, report: DeathReport) -> None:
-    record = self.live.get(worker.quest)
+  def _on_death(self, supervisor: Supervisor, report: DeathReport) -> None:
+    record = self.live.get(supervisor.mission)
     if record is not None:
       detail: dict[str, Any] = {'reason': report.reason}
       if report.exit_code is not None:
         detail['exit_code'] = report.exit_code
       if report.output_tail is not None:
         detail['output_tail'] = report.output_tail
-      message = brotocol.result(worker.quest, 'failed', error=report.error, detail=detail)
+      message = brotocol.result(supervisor.mission, 'failed', error=report.error, detail=detail)
       self._end(record, message)
-    if worker.peer is not None:
-      self.workers.pop(worker.peer, None)
-      if worker is not self._root_worker:
-        self._orphan(worker.peer)
-    self._retire(worker)
-    if worker is self._root_worker and self._root_exit is not None and not self._root_exit.done():
+    if supervisor.peer is not None:
+      self.workers.pop(supervisor.peer, None)
+      if supervisor is not self._root_supervisor:
+        self._orphan(supervisor.peer)
+    self._retire(supervisor)
+    if (
+      supervisor is self._root_supervisor
+      and self._root_exit is not None
+      and not self._root_exit.done()
+    ):
       self._root_exit.set_result(report.exit_code if report.exit_code is not None else 1)
 
-  async def run(self, root: LaunchSpec, *, type: str, end_on_sigterm: bool = False) -> int:
+  async def run(
+    self, root: LaunchSpec, spawner: Spawner, *, type: str, end_on_sigterm: bool = False
+  ) -> int:
     """supervise `root` until it exits and answer its exit code.
 
     `end_on_sigterm` is for the caller that owns the process: the run then holds
@@ -276,18 +296,19 @@ class Dispatcher:
       mission_id = lulid()
       record = self.journal.open(mission_id, 'root', None, None, {}, type=type, talk=EMPTY_TALK)
       self.live[mission_id] = record
-      root_worker = SpawnedWorker(
+      root_supervisor = SpawnedSupervisor(
         self.runtime,
-        self,
+        self._supervisor_events,
         mission_id,
         root,
+        spawner,
         talk=EMPTY_TALK,
         timeout=None,
         launch_timeout=None,
         schedule=self._schedule,
       )
-      self._root_worker = root_worker
-      self._start_worker(root_worker)
+      self._root_supervisor = root_supervisor
+      self._start_supervisor(root_supervisor)
       return await self._root_exit
 
   @contextlib.asynccontextmanager
@@ -349,11 +370,11 @@ class Dispatcher:
     self.deliver(receiver, message)
 
   def _on_worker_answer(
-    self, record: Record, peer: Peer, message: Message, *, host_worker: bool
+    self, record: Record, peer: Peer, message: Message, *, from_supervisor: bool
   ) -> None:
     if message.type == Tag.MARK:
       transition = message.payload['transition']
-      if transition == 'trail' and not host_worker:
+      if transition == 'trail' and not from_supervisor:
         trail_id = message.payload.get('trail_id')
         if (
           not isinstance(trail_id, str)
@@ -362,11 +383,11 @@ class Dispatcher:
         ):
           self._refuse(peer, message, 'invalid or duplicate trail mark')
           return
-      elif transition == 'started' and host_worker:
+      elif transition == 'started' and from_supervisor:
         if not self.journal.started(record):
           self._refuse(peer, message, 'duplicate started mark')
           return
-      elif transition == 'listening' and not host_worker:
+      elif transition == 'listening' and not from_supervisor:
         if not self.journal.listening(record):
           return
       else:
@@ -375,8 +396,8 @@ class Dispatcher:
       self._deliver_record(record, message)
       return
     if message.type == Tag.RESULT:
-      worker = self._worker_for(record.mission_id)
-      if not host_worker and worker is not None and worker.ending:
+      supervisor = self._supervisor_for(record.mission_id)
+      if not from_supervisor and supervisor is not None and supervisor.ending:
         self._refuse(peer, message, 'the mission is ending; its reap owns the terminal')
         return
       self._end(record, message)
@@ -384,9 +405,9 @@ class Dispatcher:
     self._refuse(peer, message, 'unsupported worker message')
 
   def _end(self, record: Record, message: Message) -> None:
-    worker = self._worker_for(record.mission_id)
-    if worker is not None:
-      worker.settle()
+    supervisor = self._supervisor_for(record.mission_id)
+    if supervisor is not None:
+      supervisor.settle()
     self._deliver_record(record, message)
     self.journal.end(record, message.payload)
     self.live.pop(record.mission_id, None)
@@ -406,31 +427,31 @@ class Dispatcher:
     self.live[record.mission_id] = record
     return record
 
-  def _start_worker(self, worker: Worker) -> None:
-    self._worker_objects.add(worker)
-    worker.begin()
+  def _start_supervisor(self, supervisor: Supervisor) -> None:
+    self._supervisors.add(supervisor)
+    supervisor.begin()
 
   def _orphan(self, owner: Peer) -> None:
     for record in [entry for entry in self.live.values() if entry.owner == owner]:
-      self._require_worker(record).end('orphaned')
+      self._require_supervisor(record).end('orphaned')
 
-  def _require_worker(self, record: Record) -> Worker:
-    worker = self._worker_for(record.mission_id)
-    if worker is None:
-      raise RuntimeError(f'live mission {record.mission_id} has no worker')
-    return worker
+  def _require_supervisor(self, record: Record) -> Supervisor:
+    supervisor = self._supervisor_for(record.mission_id)
+    if supervisor is None:
+      raise RuntimeError(f'live mission {record.mission_id} has no supervisor')
+    return supervisor
 
-  def _retire(self, worker: Worker) -> None:
-    self._worker_objects.discard(worker)
-    task = asyncio.create_task(worker.stop())
+  def _retire(self, supervisor: Supervisor) -> None:
+    self._supervisors.discard(supervisor)
+    task = asyncio.create_task(supervisor.stop())
     self._retirement_tasks.add(task)
     task.add_done_callback(self._retirement_tasks.discard)
     task.add_done_callback(self._report_task)
 
   async def _teardown(self) -> None:
     for record in list(self.live.values()):
-      worker = self._worker_for(record.mission_id)
-      detached = isinstance(worker, ExpectedWorker)
+      supervisor = self._supervisor_for(record.mission_id)
+      detached = isinstance(supervisor, ExpectedSupervisor)
       outcome = 'detached' if detached else 'killed'
       payload = {'outcome': 'failed', 'detail': {'reason': outcome}}
       self.journal.end(record, payload, outcome=outcome, reason=outcome)
@@ -439,17 +460,19 @@ class Dispatcher:
     for task in tasks:
       task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
-    workers = list(self._worker_objects)
-    await asyncio.gather(*(worker.stop() for worker in workers), return_exceptions=True)
-    self._worker_objects.clear()
+    supervisors = list(self._supervisors)
+    await asyncio.gather(*(supervisor.stop() for supervisor in supervisors), return_exceptions=True)
+    self._supervisors.clear()
     retirements = list(self._retirement_tasks)
     await asyncio.gather(*retirements, return_exceptions=True)
     self._retirement_tasks.clear()
     self.workers.clear()
     await self.runtime.stop()
 
-  def _worker_for(self, mission_id: str) -> Optional[Worker]:
-    return next((worker for worker in self._worker_objects if worker.quest == mission_id), None)
+  def _supervisor_for(self, mission_id: str) -> Optional[Supervisor]:
+    return next(
+      (supervisor for supervisor in self._supervisors if supervisor.mission == mission_id), None
+    )
 
   def _wire_deny(self, peer: Peer, mission_id: str, error: str) -> None:
     log.warning('broker dispatcher: denied request %s: %s', mission_id, error)
@@ -672,7 +695,7 @@ class Dispatcher:
         {'outcome': 'denied', 'error': f'no live mission {mission_id!r} owned by this peer'},
       )
       return
-    self._require_worker(record).end('cancelled')
+    self._require_supervisor(record).end('cancelled')
     self.reply(peer, {'outcome': 'ok'})
 
   def _query_view(self, peer: Peer, mission_id: str) -> Optional[dict[str, Any]]:
@@ -692,13 +715,11 @@ class Broker:
   def __init__(
     self,
     transport: ServerTransport,
-    spawner: Spawner,
     *,
-    default_timeout: float = DEFAULT_TIMEOUT,
     job_output: Optional[JobOutput] = None,
   ):
-    self._dispatcher = Dispatcher(default_timeout=default_timeout, job_output=job_output)
-    self._dispatcher.bind(Runtime(transport, spawner))
+    self._dispatcher = Dispatcher(job_output=job_output)
+    self._dispatcher.bind(Runtime(transport))
     self._dispatcher.on(QUERY, query_handler)
     self._dispatcher.on(EVENTS, events_handler)
     self._dispatcher.on(CANCEL, cancel_handler)
@@ -713,8 +734,12 @@ class Broker:
   def on(self, kind: str, handler: RequestHandler) -> None:
     self._dispatcher.on(kind, handler)
 
-  def run(self, root: LaunchSpec, *, type: str, end_on_sigterm: bool = False) -> int:
-    return asyncio.run(self._dispatcher.run(root, type=type, end_on_sigterm=end_on_sigterm))
+  def run(
+    self, root: LaunchSpec, spawner: Spawner, *, type: str, end_on_sigterm: bool = False
+  ) -> int:
+    return asyncio.run(
+      self._dispatcher.run(root, spawner, type=type, end_on_sigterm=end_on_sigterm)
+    )
 
   def stop(self) -> None:
     self._dispatcher.stop()
@@ -730,10 +755,10 @@ async def _ended_by_signal(
   loop: asyncio.AbstractEventLoop, root_exit: 'asyncio.Future[int]', *, enabled: bool
 ) -> AsyncGenerator[None]:
   """end the run on SIGTERM rather than dying to it, so the teardown that
-  follows the root's exit reaches every worker the run started.
+  follows the root's exit reaches every supervisor the run started.
 
   Entered outside the runtime lifetime, so the handler stays armed through the
-  teardown: a repeated signal while workers are still being ended is held
+  teardown: a repeated signal while supervisors are still ending workers is held
   rather than left to kill the process around them.
   """
   if not enabled:
@@ -742,9 +767,9 @@ async def _ended_by_signal(
 
   def end() -> None:
     if root_exit.done():
-      log.warning('broker root: SIGTERM again; still tearing down the workers')
+      log.warning('broker root: SIGTERM again; still tearing down supervised workers')
       return
-    log.warning('broker root: SIGTERM; ending the run and tearing down its workers')
+    log.warning('broker root: SIGTERM; ending the run and tearing down supervised workers')
     root_exit.set_result(TERMINATED_EXIT_CODE)
 
   loop.add_signal_handler(signal.SIGTERM, end)
@@ -770,9 +795,11 @@ def cancel_handler(context: Dispatcher, peer: Peer, message: Message) -> None:
   context.cancel(peer, message)
 
 
-def spawn_test_handler(launch: LaunchSpec) -> RequestHandler:
+def spawn_test_handler(
+  launch: LaunchSpec, spawner: Spawner, *, timeout: Optional[float]
+) -> RequestHandler:
   def handler(context: Dispatcher, peer: Peer, _message: Message) -> None:
-    context.spawn(launch, peer, type='test', talk=EMPTY_TALK)
+    context.spawn(launch, spawner, peer, type='test', talk=EMPTY_TALK, timeout=timeout)
 
   return handler
 

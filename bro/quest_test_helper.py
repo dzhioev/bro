@@ -76,25 +76,27 @@ class LiveSpawner(Spawner):
     self.spawned: queue.Queue[SpawnedEndpoint] = queue.Queue()
 
   async def spawn(
-    self, launch: LaunchSpec, channel: Provisioned, quest: str, talk: Talk
+    self, launch: LaunchSpec, channel: Provisioned, mission: str, talk: Talk
   ) -> ChildHandle:
     del launch
     handle = LiveHandle()
-    self.spawned.put(SpawnedEndpoint(channel, quest, talk, handle))
+    self.spawned.put(SpawnedEndpoint(channel, mission, talk, handle))
     return handle
 
 
 @contextlib.asynccontextmanager
 async def running_live_broker():
   spawner = LiveSpawner()
-  broker = Broker(TcpServerTransport([LOCAL_HOST]), spawner)
+  broker = Broker(TcpServerTransport([LOCAL_HOST]))
 
   def spawn_summon(context: Dispatcher, peer, message: Message) -> None:
     talk: Talk = frozenset(message.args.get('talk', []))
-    context.spawn(LaunchSpec(), peer, type='bro', talk=talk)
+    context.spawn(LaunchSpec(), spawner, peer, type='bro', talk=talk, timeout=None)
 
   broker.on(SUMMON, spawn_summon)
-  broker_task = asyncio.create_task(asyncio.to_thread(broker.run, LaunchSpec(), type='bro'))
+  broker_task = asyncio.create_task(
+    asyncio.to_thread(broker.run, LaunchSpec(), spawner, type='bro')
+  )
   root = await asyncio.to_thread(spawner.spawned.get, True, TIMEOUT)
   try:
     yield spawner, root
