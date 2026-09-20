@@ -11,7 +11,7 @@ from typing import Any, Optional, Self
 from bro.base import log
 from bro.base.offload import off_loop
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
-from bro.broker.client import CHANNEL_ENV
+from bro.broker.environment import BROKER_CHANNEL
 from bro.inbox import Inbox
 from bro.jobs import JobStatus, Registry
 from bro.llm.observer import (
@@ -378,7 +378,7 @@ class Runner:
   def _live_work(self) -> LiveWork:
     statuses = [job.status() for job in self.registry.values()]
     jobs = tuple(status for status in statuses if status.state == 'running')
-    children = tuple(live_children()) if os.environ.get(CHANNEL_ENV) is not None else ()
+    children = tuple(live_children()) if os.environ.get(BROKER_CHANNEL) is not None else ()
     return LiveWork(jobs, children)
 
   async def wake(self, request_timeout: Optional[float] = None) -> str:

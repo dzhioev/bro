@@ -26,8 +26,8 @@ from bro.base import log, spawn
 from bro.base.lulid import lulid
 from bro.bench.job import JobError, run_job
 from bro.bench.presets import PresetError, compose
+from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
 from bro.broker.job import OUTPUT_DIRECTORY, TERM_GRACE
-from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV
 from bro.workspace.git import git_out
 
 __cli_name__ = 'benchmark-run'
@@ -154,7 +154,7 @@ def _checkout_root() -> Path:
 def _in_session() -> bool:
   """whether a session broker is there to run the job: its channel, or the
   mark a failed proxy launch leaves behind."""
-  return CHANNEL_ENV in os.environ or UPSTREAM_ENV in os.environ
+  return BROKER_CHANNEL in os.environ or BROKER_UPSTREAM in os.environ
 
 
 def _through_broker(config: str, timeout: Optional[float]) -> tuple[Path, str]:

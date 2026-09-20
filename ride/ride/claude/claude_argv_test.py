@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 import ride.claude.claude_argv as ride_claude_argv
-from bro.broker.brotocol import TALK_ENV
+from bro.broker.environment import BROKER_TALK
 from bro.llm.llms import claude_code
 from bro.summon import SUMMONED_ENV
 from ride.claude.assembly import bro_servers, persona_servers
@@ -348,7 +348,7 @@ class TestRawLaunch:
 
   def test_raw_summoned_contract_receives_the_quest_talk(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    monkeypatch.setenv(TALK_ENV, 'summoned.question')
+    monkeypatch.setenv(BROKER_TALK, 'worker.question')
     prompt = self._launch(hold='unattended').system_prompt
     assert 'call `bro::quest_ask` on `self`' in prompt
     assert 'recover the reply with `bro::quest_history`' in prompt

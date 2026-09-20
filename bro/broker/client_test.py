@@ -8,15 +8,16 @@ from typing import Optional
 import pytest
 
 from bro.broker import brotocol
-from bro.broker.brotocol import TALK_ENV, Message, Tag
+from bro.broker.brotocol import Message, Tag
 from bro.broker.client import (
-  CHANNEL_ENV,
-  QUEST_ENV,
-  UPSTREAM_ENV,
+  BROKER_CHANNEL,
+  BROKER_MISSION,
+  BROKER_UPSTREAM,
   Client,
   ReplyDeadline,
   talk_from_env,
 )
+from bro.broker.environment import BROKER_TALK
 from bro.broker.transport import ChannelID, ClientTransport
 from bro.broker.transports.tcp import LOCAL_HOST, TcpClientTransport, TcpServerTransport
 
@@ -71,16 +72,15 @@ async def _next(queue: asyncio.Queue):
 
 
 def test_from_env_returns_none_when_no_channel_is_intended(monkeypatch):
-  monkeypatch.delenv(CHANNEL_ENV, raising=False)
-  monkeypatch.delenv(UPSTREAM_ENV, raising=False)
+  monkeypatch.delenv(BROKER_CHANNEL, raising=False)
+  monkeypatch.delenv(BROKER_UPSTREAM, raising=False)
   assert Client.from_env() is None
 
 
-def test_from_env_reports_a_failed_session_proxy(monkeypatch, tmp_path):
-  monkeypatch.delenv(CHANNEL_ENV, raising=False)
-  monkeypatch.setenv(UPSTREAM_ENV, 'tcp://upstream@127.0.0.1:7')
-  monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
-  with pytest.raises(RuntimeError, match=rf'session proxy failed at launch.*{tmp_path}/broxy.log'):
+def test_from_env_reports_a_failed_session_proxy(monkeypatch):
+  monkeypatch.delenv(BROKER_CHANNEL, raising=False)
+  monkeypatch.setenv(BROKER_UPSTREAM, 'tcp://upstream@127.0.0.1:7')
+  with pytest.raises(RuntimeError, match='session proxy failed at launch'):
     Client.from_env()
 
 
@@ -88,7 +88,7 @@ def test_from_env_reports_a_failed_session_proxy(monkeypatch, tmp_path):
 async def test_from_env_connects_and_sends(monkeypatch):
   async with running_server() as server:
     provisioned = await server.transport.provision()
-    monkeypatch.setenv(CHANNEL_ENV, provisioned.host_endpoint.address(LOCAL_HOST))
+    monkeypatch.setenv(BROKER_CHANNEL, provisioned.host_endpoint.address(LOCAL_HOST))
     client = await asyncio.to_thread(Client.from_env)
     assert client is not None
 
@@ -97,7 +97,7 @@ async def test_from_env_connects_and_sends(monkeypatch):
     assert channel == provisioned.channel
     assert message.type == 'request'
     assert message.payload == {'kind': 'ping', 'args': {'n': 1}}
-    assert message.quest is None
+    assert message.request is None
     client.close()
 
 
@@ -111,12 +111,12 @@ async def test_mark_and_result_emit_against_a_quest():
 
     _, trail = await _next(server.sink.messages)
     _, done = await _next(server.sink.messages)
-    assert (trail.type, trail.quest, trail.payload) == (
+    assert (trail.type, trail.request, trail.payload) == (
       'mark',
       'X',
       {'transition': 'trail', 'trail_id': 't1'},
     )
-    assert (done.type, done.quest) == ('result', 'X')
+    assert (done.type, done.request) == ('result', 'X')
     assert done.payload == {'outcome': 'ok', 'value': 'answer'}
     client.close()
 
@@ -138,7 +138,7 @@ async def test_request_correlates_and_sets_unrelated_aside():
 
     reply = await asyncio.wait_for(request_task, TIMEOUT)
     assert reply.type == 'result'
-    assert reply.quest == request_message.id
+    assert reply.request == request_message.id
     assert reply.payload == {'outcome': 'ok', 'value': {'pong': 1}}
 
     # the unrelated message request() read past was set aside, not dropped
@@ -230,7 +230,7 @@ async def test_call_rides_every_message_while_await_any_returns_the_first():
     channel, request_message = await _next(server.sink.messages)
     await server.transport.send(channel, brotocol.mark(request_message.id, 'accepted'))
     first = await asyncio.wait_for(any_task, TIMEOUT)
-    assert (first.type, first.quest) == ('mark', sent.id)
+    assert (first.type, first.request) == ('mark', sent.id)
     client.close()
 
 
@@ -352,7 +352,7 @@ def test_reply_deadline_is_unbounded_without_a_timeout_until_an_interim():
 def test_await_reply_bounds_the_read_by_the_rearmed_deadline():
   request = brotocol.request('summon', {})
   transport = FakeClientTransport(
-    [brotocol.message(request.quest_id, {}), brotocol.result(request.quest_id, 'ok')]
+    [brotocol.message(request.request_id, {}), brotocol.result(request.request_id, 'ok')]
   )
   client = Client(transport)
 
@@ -522,7 +522,7 @@ async def test_await_reply_until_returns_the_matching_interim():
       )
     )
 
-    question = brotocol.message(request.quest_id, {'text': 'approve?'}, id='question')
+    question = brotocol.message(request.request_id, {'text': 'approve?'}, id='question')
     await server.transport.send(provisioned.channel, question)
 
     assert await asyncio.wait_for(wait, TIMEOUT) == question
@@ -530,26 +530,26 @@ async def test_await_reply_until_returns_the_matching_interim():
 
 
 def test_talk_from_env_distinguishes_unpublished_and_empty_talk(monkeypatch):
-  monkeypatch.delenv(TALK_ENV, raising=False)
+  monkeypatch.delenv(BROKER_TALK, raising=False)
   assert talk_from_env() is None
-  monkeypatch.setenv(TALK_ENV, '')
+  monkeypatch.setenv(BROKER_TALK, '')
   assert talk_from_env() == frozenset()
-  monkeypatch.setenv(TALK_ENV, 'summoned.question,summoned.say')
-  assert talk_from_env() == frozenset({'summoned.say', 'summoned.question'})
+  monkeypatch.setenv(BROKER_TALK, 'worker.question,worker.say')
+  assert talk_from_env() == frozenset({'worker.say', 'worker.question'})
 
 
 def test_talk_from_env_rejects_an_unknown_right(monkeypatch):
-  monkeypatch.setenv(TALK_ENV, 'summoned.guess')
-  with pytest.raises(ValueError, match='summoned.guess'):
+  monkeypatch.setenv(BROKER_TALK, 'worker.guess')
+  with pytest.raises(ValueError, match='worker.guess'):
     talk_from_env()
 
 
 @pytest.mark.parametrize(
   ('talk', 'reply_to', 'question', 'missing_right'),
   [
-    ('summoned.question', None, False, 'summoned.say'),
-    ('summoned.say', None, True, 'summoned.question'),
-    ('summoned.say', 'summoner-question', False, 'summoner.question'),
+    ('worker.question', None, False, 'worker.say'),
+    ('worker.say', None, True, 'worker.question'),
+    ('worker.say', 'owner-question', False, 'owner.question'),
   ],
 )
 def test_message_refuses_a_move_missing_from_the_own_quest_talk(
@@ -557,8 +557,8 @@ def test_message_refuses_a_move_missing_from_the_own_quest_talk(
 ):
   transport = FakeClientTransport()
   client = Client(transport)
-  monkeypatch.setenv(QUEST_ENV, 'own-quest')
-  monkeypatch.setenv(TALK_ENV, talk)
+  monkeypatch.setenv(BROKER_MISSION, 'own-quest')
+  monkeypatch.setenv(BROKER_TALK, talk)
 
   with pytest.raises(PermissionError, match=missing_right):
     client.message('own-quest', {}, reply_to=reply_to, question=question)
@@ -569,8 +569,8 @@ def test_message_refuses_a_move_missing_from_the_own_quest_talk(
 def test_message_does_not_apply_the_own_talk_to_a_child_quest(monkeypatch):
   transport = FakeClientTransport()
   client = Client(transport)
-  monkeypatch.setenv(QUEST_ENV, 'own-quest')
-  monkeypatch.setenv(TALK_ENV, '')
+  monkeypatch.setenv(BROKER_MISSION, 'own-quest')
+  monkeypatch.setenv(BROKER_TALK, '')
 
   sent = client.message('child-quest', {})
 

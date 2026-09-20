@@ -4,7 +4,8 @@ from typing import Optional
 import pytest
 
 from bro.broker.brotocol import Message
-from bro.broker.client import CHANNEL_ENV, QUEST_ENV, Client
+from bro.broker.client import Client
+from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION
 from bro.broker.transport import ClientTransport
 from bro.run_lifecycle import MAX_ANSWER_BYTES, RunLifecycle
 
@@ -31,7 +32,7 @@ def _make_channel() -> tuple[RunLifecycle, FakeClientTransport]:
 
 class TestRunLifecycle:
   def test_from_env_returns_none_when_unset(self, monkeypatch):
-    monkeypatch.delenv(CHANNEL_ENV, raising=False)
+    monkeypatch.delenv(BROKER_CHANNEL, raising=False)
     assert RunLifecycle.from_env() is None
 
   def test_from_env_raises_when_the_quest_is_missing(self, monkeypatch):
@@ -39,16 +40,16 @@ class TestRunLifecycle:
     # not correlate its lifecycle, so it must fail loudly rather than emit garbage
     transport = FakeClientTransport()
     monkeypatch.setattr('bro.broker.client.connect', lambda address: transport)
-    monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:9')
-    monkeypatch.delenv(QUEST_ENV, raising=False)
-    with pytest.raises(ValueError, match=QUEST_ENV):
+    monkeypatch.setenv(BROKER_CHANNEL, 'tcp://token@127.0.0.1:9')
+    monkeypatch.delenv(BROKER_MISSION, raising=False)
+    with pytest.raises(ValueError, match=BROKER_MISSION):
       RunLifecycle.from_env()
     assert transport.closed  # the channel it opened before noticing is released
 
   def test_from_env_returns_none_when_broker_unimportable(self, monkeypatch):
     # an environment provisioned before broker existed: the channel env is set but
     # the package cannot be imported — the hook must stay inert, not crash the run
-    monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:9')
+    monkeypatch.setenv(BROKER_CHANNEL, 'tcp://token@127.0.0.1:9')
     # None-poisoning makes the import machinery raise ImportError; the submodule must be
     # poisoned too — a cached bro.broker.client would satisfy the from-import on its own
     monkeypatch.setitem(sys.modules, 'bro.broker', None)
@@ -61,7 +62,7 @@ class TestRunLifecycle:
     assert len(transport.sent) == 1
     message = transport.sent[0]
     assert message.type == 'mark'
-    assert message.quest == 'X'
+    assert message.request == 'X'
     assert message.payload == {'transition': 'trail', 'trail_id': 'trail-1'}
 
   def test_completed_truncates_an_oversize_answer_with_its_trail(self):
@@ -78,7 +79,7 @@ class TestRunLifecycle:
     assert len(transport.sent) == 1
     message = transport.sent[0]
     assert message.type == 'result'
-    assert message.quest == 'X'
+    assert message.request == 'X'
     assert message.payload == {'outcome': 'ok', 'value': 'the answer'}
 
   def test_completed_raised_emits_failed_with_the_reason(self):

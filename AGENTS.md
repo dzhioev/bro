@@ -309,7 +309,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
 - `kinds.py` — the contributed broker-kind contract:
   the `KindContext` a `bro.broker_kinds` factory receives, the artifact-resolver port and bounded credential scope it carries, and the workspace-relative path validation shared by kinds that take tree paths
 - `run_lifecycle.py` — `RunLifecycle`, the worker-process emitter over `bro.broker.client.Client`:
-  it answers the quest named in `BROKER_QUEST`, emits the run's set-once `trail` mark after recording opens, and sends the closing result.
+  it undertakes the broker mission named in `BROKER_MISSION`, emits the run's set-once `trail` mark after recording opens, and sends the closing result.
   `Runner.run()` builds one through `_make_channel()`;
   a summoned interactive native run emits its trail on the first `send`, while an un-summoned conversation emits nothing.
   The shared answer bound is enforced at the `answer` tool while the run can react;

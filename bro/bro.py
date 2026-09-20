@@ -29,6 +29,7 @@ from bro.base.condition import (
 from bro.base.offload import off_loop
 from bro.base.scope import permit_choices
 from bro.base.text_window import DEFAULT_LIMIT
+from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
 from bro.datasources.base import DataSource
 from bro.datasources.man import ManPage, manual
 from bro.inbox import Inbox
@@ -286,8 +287,8 @@ _SUMMON_DESCRIPTION = (
   'OAuth token) fails the summon, whatever the target itself declares. the '
   'optional `share` list names artifact refs (from `artifact mint`) to hand the '
   'child read access to — only refs this session can itself read. '
-  'the optional `talk` list widens the child quest from summoned.say with summoner.say, '
-  'summoner.question, summoned.say, or summoned.question. the optional `party` (`start` or '
+  'the optional `talk` list widens the child quest from worker.say with owner.say, '
+  'owner.question, worker.say, or worker.question. the optional `party` (`start` or '
   '`join`) and `isolation` (`boxed` or `unboxed`) fields place the child; an unmarked request '
   'starts boxed when permitted, otherwise unboxed. a join shares your tree and refuses '
   '`isolation`, `into`, and `manual`. {{iff #wire = bare}}acceptance returns the quest id; '
@@ -1033,9 +1034,7 @@ def _build_service_server(
   from bro.summon import summoned
 
   has_cast = len(bro.spell_paths) > 0 and spell_store.cast_available()
-  has_broker = any(
-    os.environ.get(name) is not None for name in ('BROKER_CHANNEL', 'BROKER_UPSTREAM')
-  )
+  has_broker = any(os.environ.get(name) is not None for name in (BROKER_CHANNEL, BROKER_UPSTREAM))
   has_answer = (
     has_broker and summoned() and (wire == 'bare' or os.environ.get('RIDE_RUNNER_PID') is not None)
   )
@@ -1165,7 +1164,7 @@ def _quest_watch_is_admitted(
   # a summoned run hears its summoner's says and questions, and the replies to its own
   # questions, only through the watch
   quest_traffic = talk is not None and any(
-    right in talk for right in ('summoner.say', 'summoner.question', 'summoned.question')
+    right in talk for right in ('owner.say', 'owner.question', 'worker.question')
   )
   return len(may_summon) > 0 or (summoned and quest_traffic)
 

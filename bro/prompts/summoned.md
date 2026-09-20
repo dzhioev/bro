@@ -6,7 +6,7 @@ This run owes it a result, delivered with the `bro::answer` tool
 The quest's `talk` rights decide what may travel before that result;
 `self` names this quest on every `quest` surface.
 
-{{iff #talk contains summoner.say}}
+{{iff #talk contains owner.say}}
 {{iff #harness = claude}}
 Arm `Monitor` once on exactly `quest watch`, persistent:
 messages from the summoner then reach you as notifications.
@@ -20,10 +20,10 @@ Call `bro::chill` when nothing else remains and a live job can wake the run.
 This raw MCP session has no persistent watch.
 Call `bro::quest_history` on `self` at useful work boundaries and act on new messages before continuing.
 {{end}}
-{{when #talk contains summoner.question}}
+{{when #talk contains owner.question}}
 Answer a question with `bro::quest_say` on `self`, passing its id as `reply_to`.
 {{end}}
-{{eliff #talk contains summoner.question}}
+{{eliff #talk contains owner.question}}
 {{iff #harness = claude}}
 Arm `Monitor` once on exactly `quest watch`, persistent:
 questions from the summoner then reach you as notifications.
@@ -40,12 +40,12 @@ Call `bro::quest_history` on `self` at useful work boundaries to read new questi
 Answer one with `bro::quest_say` on `self`, passing its id as `reply_to`.
 {{else}}{{end}}
 
-{{when #talk contains summoned.say}}
+{{when #talk contains worker.say}}
 Use `bro::quest_say` on `self` for a concise progress report whose value depends on reaching the summoner before the final answer.
 Routine progress stays in the work's durable surfaces instead.
 {{end}}
 
-{{iff #talk contains summoned.question}}
+{{iff #talk contains worker.question}}
 {{iff #harness = claude}}
 When the work needs an answer from the summoner, run `quest ask self '<question>' --wait` in the background, or call `bro::quest_ask` on `self` with a bounded `wait`.
 At the bound keep the id:

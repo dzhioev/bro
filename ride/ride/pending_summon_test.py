@@ -17,7 +17,7 @@ def _record(**overrides) -> pending_summon.PendingSummon:
       'parent_workspace': '/workspaces/parent/tree',
       'may_summon': ('bro',),
       'permits': ('party.start.boxed',),
-      'talk': ('summoned.say',),
+      'talk': ('worker.say',),
       'grant': ('aws',),
       'revoke': (),
       'summoner': {'trail_id': 'T1'},

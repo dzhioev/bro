@@ -1,5 +1,5 @@
 import ride.claude.system_prompt as ride_system_prompt
-from bro.broker.brotocol import TALK_ENV
+from bro.broker.environment import BROKER_TALK
 from bro.summon import SUMMONED_ENV
 
 
@@ -48,7 +48,7 @@ class TestSessionAppendPrompt:
 
   def test_summoned_contract_receives_the_quest_talk(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    monkeypatch.setenv(TALK_ENV, 'summoner.say,summoned.say')
+    monkeypatch.setenv(BROKER_TALK, 'owner.say,worker.say')
     out = ride_system_prompt.session_append_prompt('unattended', 'bro')
     assert 'exactly `quest watch`' in out
     assert 'messages from the summoner then reach you' in out

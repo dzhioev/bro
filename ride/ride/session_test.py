@@ -1518,7 +1518,7 @@ def _pending_record(tmp_path, **overrides) -> pending_summon.PendingSummon:
       'parent_workspace': str(tmp_path / 'parent-tree'),
       'may_summon': ('dev',),
       'permits': ('party.start.boxed',),
-      'talk': ('summoned.say',),
+      'talk': ('worker.say',),
       'grant': (),
       'revoke': (),
       'summoner': {'trail_id': 'T1'},
@@ -1547,7 +1547,7 @@ class TestSummonedSession:
     assert launch.env['BROKER_UPSTREAM'] == 'tcp://tk@host.docker.internal:7321'
     assert launch.env['RIDE_SUMMONED'] == '1'
     assert launch.env['RIDE_MAY_SUMMON'] == 'dev'
-    assert launch.env['BROKER_TALK'] == 'summoned.say'
+    assert launch.env['BROKER_TALK'] == 'worker.say'
     assert launch.env['RIDE_WORKSPACE'] == 'w'
     assert json.loads(launch.env['RIDE_SUMMONER']) == {'trail_id': 'T1'}
     assert launch.base_ref == 'parentsha'

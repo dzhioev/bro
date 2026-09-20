@@ -95,7 +95,7 @@ async def test_runtime_launches_through_the_spawn_port():
   spawner = FakeSpawner()
   runtime = Runtime(cast(ServerTransport, transport), cast(Spawner, spawner))
   provisioned = await runtime.provision(ChannelEvents())
-  talk: Talk = frozenset({'summoned.say'})
+  talk: Talk = frozenset({'worker.say'})
   handle = await runtime.launch(LaunchSpec(), provisioned, 'quest', talk)
   assert handle is spawner.handle
   assert spawner.calls[0][1:] == (provisioned, 'quest', talk)

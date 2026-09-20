@@ -53,8 +53,8 @@ Interpret them as follows:
    widening means relaunching with `--grant @<bro>`, which is the user's call.
 
 6. `talk` lists the chat moves fixed for this run's own quest.
-   `summoner.say` and `summoner.question` let the summoner send messages or questions to a summoned run;
-   `summoned.say` and `summoned.question` let that run report or consult its summoner.
+   `owner.say` and `owner.question` let the summoner send messages or questions to a summoned run;
+   `worker.say` and `worker.question` let that run report or consult its summoner.
    `talk: none` means the quest is mute, while an absent line means the launcher published no talk.
    The host enforces these rights and nothing in-session widens them.
 

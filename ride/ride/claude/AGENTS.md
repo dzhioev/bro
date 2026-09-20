@@ -44,8 +44,8 @@ raw is not a harness value.
   The repeated statusLine command stays shell-only;
   Python rendering runs once per session in the projector process.
 - Imports point directly at leaf modules, never through the package hub.
-- Broker imports remain behind the framework's broker gate;
-  a disabled or unavailable broker must degrade before importing its implementation.
+- Broker machinery imports remain behind the framework's broker gate;
+  a disabled broker must degrade before importing its implementation, while the constants-only environment module may load before the gate.
 - Full mode scopes the bro through `harness='claude'` and requires `claude_code`.
   Raw mode scopes through `harness='bro'` and requires `anthropic`.
 - Settings commands that run Python use the runner's interpreter and `ride.claude` module paths;

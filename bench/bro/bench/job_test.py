@@ -8,8 +8,8 @@ import pytest
 from bro.bench import job
 from bro.broker import brotocol
 from bro.broker.brotocol import Message, Tag
-from bro.broker.client import CHANNEL_ENV
 from bro.broker.dispatcher import Dispatcher
+from bro.broker.environment import BROKER_CHANNEL
 from bro.broker.job import OUTPUT_DIRECTORY, CommandJob
 from bro.broker.transport import ChannelID
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
@@ -50,10 +50,12 @@ class FakeContext:
     self.replies: list[tuple[str, dict]] = []
     self.jobs: list[tuple[CommandJob, str, Optional[float]]] = []
 
-  def deny(self, peer, error):
+  def deny(self, peer, error, *, type=None):
+    assert type == 'benchmark'
     self.replies.append((peer, {'outcome': 'denied', 'error': error}))
 
-  def job(self, command, requester, *, timeout=None):
+  def job(self, command, requester, *, type, timeout=None):
+    assert type == 'benchmark'
     self.jobs.append((command, requester, timeout))
 
 
@@ -151,7 +153,7 @@ class TestBenchmarkKind:
 
 
 def _result(request_id: str, payload: dict) -> Message:
-  return Message(type=Tag.RESULT, payload=payload, quest=request_id)
+  return Message(type=Tag.RESULT, payload=payload, request=request_id)
 
 
 def test_await_outcome_logs_launch_only_for_started(caplog):
@@ -163,10 +165,10 @@ def test_await_outcome_logs_launch_only_for_started(caplog):
 
   class FakeClient:
     def await_reply(self, sent, timeout, *, on_interim, timeout_after_interim):
-      on_interim(brotocol.mark(sent.quest_id, 'accepted'))
-      on_interim(brotocol.mark(sent.quest_id, 'started'))
-      on_interim(brotocol.mark(sent.quest_id, 'trail', trail_id='trail'))
-      return brotocol.result(sent.quest_id, 'ok', value={'ref': REF})
+      on_interim(brotocol.mark(sent.request_id, 'accepted'))
+      on_interim(brotocol.mark(sent.request_id, 'started'))
+      on_interim(brotocol.mark(sent.request_id, 'trail', trail_id='trail'))
+      return brotocol.result(sent.request_id, 'ok', value={'ref': REF})
 
   assert job._await_outcome(cast(job.Client, FakeClient()), request, 10) == REF
   assert [record.message for record in caplog.records].count('benchmark job launched') == 1
@@ -226,7 +228,7 @@ async def running_server(monkeypatch):
   serve_task = asyncio.create_task(transport.serve(sink))
   await asyncio.sleep(0)  # let serve install the sink before any connection is accepted
   provisioned = await transport.provision()
-  monkeypatch.setenv(CHANNEL_ENV, provisioned.host_endpoint.address(LOCAL_HOST))
+  monkeypatch.setenv(BROKER_CHANNEL, provisioned.host_endpoint.address(LOCAL_HOST))
   try:
     yield transport, sink
   finally:
@@ -248,10 +250,10 @@ async def test_start_detach_sends_the_request_and_prints_its_id(monkeypatch, cap
 
 
 def test_start_without_a_channel_fails(monkeypatch, capsys, caplog):
-  monkeypatch.delenv(CHANNEL_ENV, raising=False)
+  monkeypatch.delenv(BROKER_CHANNEL, raising=False)
   assert job.main(['benchmark-job', 'start', '-c', CONFIG]) == 1
   assert capsys.readouterr().out == ''
-  assert any(CHANNEL_ENV in record.getMessage() for record in caplog.records)
+  assert any(BROKER_CHANNEL in record.getMessage() for record in caplog.records)
 
 
 def test_check_help_has_no_conversation_cursor(capsys):
@@ -261,7 +263,7 @@ def test_check_help_has_no_conversation_cursor(capsys):
 
 
 def test_check_timeout_without_wait_errors(monkeypatch, caplog):
-  monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:1')
+  monkeypatch.setenv(BROKER_CHANNEL, 'tcp://token@127.0.0.1:1')
   assert job.main(['benchmark-job', 'check', 'R-1', '--timeout', '5']) == 1
   assert any('--timeout' in record.getMessage() for record in caplog.records)
 
@@ -299,7 +301,7 @@ async def test_check_reads_pending_and_terminal_journal_records(monkeypatch, cap
         query.id,
         'ok',
         value={
-          'quest': {
+          'mission': {
             'id': 'JOB-1',
             'kind': 'benchmark',
             'parent': 'ROOT',
@@ -322,7 +324,7 @@ async def test_check_reads_pending_and_terminal_journal_records(monkeypatch, cap
         query.id,
         'ok',
         value={
-          'quest': {
+          'mission': {
             'id': 'JOB-1',
             'kind': 'benchmark',
             'parent': 'ROOT',

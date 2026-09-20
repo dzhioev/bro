@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from bro.broker.brotocol import TALK_ENV
+from bro.broker.environment import BROKER_TALK
 from bro.prompts import PromptLoader, get_prompt, get_prompt_path, hold_fragment, session_fragment
 from bro.summon import MAY_SUMMON_ENV, PARTY_MEMBER_ENV, SUMMONED_ENV, encode_may_summon
 
@@ -147,27 +147,27 @@ class TestSessionFragment:
     self, monkeypatch, harness, wire, marker
   ):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    fragment = session_fragment('unattended', harness=harness, wire=wire, talk=('summoned.say',))
+    fragment = session_fragment('unattended', harness=harness, wire=wire, talk=('worker.say',))
     assert marker in fragment
 
   def test_a_summoning_summoned_run_carries_both_contracts_in_order(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    monkeypatch.setenv(TALK_ENV, 'summoned.say')
+    monkeypatch.setenv(BROKER_TALK, 'worker.say')
     monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
-    fragment = session_fragment('attended', harness='claude', wire='mcp', talk=('summoned.say',))
+    fragment = session_fragment('attended', harness='claude', wire='mcp', talk=('worker.say',))
     assert fragment.index('# Summoning session') < fragment.index('# Summoned session')
 
   def test_a_summoned_run_carries_the_delivery_contract_at_every_hold(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     for hold in ('unattended', 'detached', 'attended', 'guided'):
-      fragment = session_fragment(hold, harness='claude', wire='mcp', talk=('summoned.say',))
+      fragment = session_fragment(hold, harness='claude', wire='mcp', talk=('worker.say',))
       assert fragment.startswith('# Summoned session')
       assert '{{' not in fragment
 
   def test_the_hold_fragment_stays_the_suffix(self, monkeypatch):
     # the resumed-hold swap in `native/bro/fork.py` replaces it there
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    fragment = session_fragment('guided', harness='claude', wire='mcp', talk=('summoned.say',))
+    fragment = session_fragment('guided', harness='claude', wire='mcp', talk=('worker.say',))
     assert fragment.endswith(hold_fragment('guided', harness='claude', wire='mcp'))
 
   @pytest.mark.parametrize(
@@ -183,14 +183,14 @@ class TestSessionFragment:
   ):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     fragment = session_fragment(
-      'attended', harness=harness, wire=wire, talk=('summoner.say', 'summoned.say')
+      'attended', harness=harness, wire=wire, talk=('owner.say', 'worker.say')
     )
     assert marker in fragment
 
   def test_a_questioning_native_child_asks_without_blocking(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     fragment = session_fragment(
-      'unattended', harness='bro', wire='bare', talk=('summoned.say', 'summoned.question')
+      'unattended', harness='bro', wire='bare', talk=('worker.say', 'worker.question')
     )
     assert 'call `bro::quest_ask` on `self`' in fragment
     assert 'reply arrives on the quest watch' in fragment
@@ -199,7 +199,7 @@ class TestSessionFragment:
   def test_a_questioning_claude_child_arms_the_watch_for_the_reply(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     fragment = session_fragment(
-      'unattended', harness='claude', wire='mcp', talk=('summoned.say', 'summoned.question')
+      'unattended', harness='claude', wire='mcp', talk=('worker.say', 'worker.question')
     )
     assert "`quest ask self '<question>' --wait`" in fragment
     assert 'arm `Monitor` once on exactly `quest watch`' in fragment
@@ -207,7 +207,7 @@ class TestSessionFragment:
   def test_a_questioning_raw_mcp_child_keeps_the_bounded_wait(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     fragment = session_fragment(
-      'unattended', harness='bro', wire='mcp', talk=('summoned.say', 'summoned.question')
+      'unattended', harness='bro', wire='mcp', talk=('worker.say', 'worker.question')
     )
     assert 'bounded `wait`' in fragment
     assert 'recover the reply with `bro::quest_history`' in fragment

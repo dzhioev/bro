@@ -61,11 +61,12 @@ class _BrokerReadTimeout(QuestError):
 
 def open_client() -> 'Client':
   """Open a channel client whose lifecycle the caller owns."""
-  from bro.broker.client import CHANNEL_ENV, Client
+  from bro.broker.client import Client
+  from bro.broker.environment import BROKER_CHANNEL
 
   client = Client.from_env()
   if client is None:
-    raise QuestError(f'no broker channel ({CHANNEL_ENV} unset); quests need a session channel')
+    raise QuestError(f'no broker channel ({BROKER_CHANNEL} unset); quests need a session channel')
   return client
 
 
@@ -82,11 +83,11 @@ def connection(client: Optional['Client']) -> Generator['Client']:
 
 def own_quest() -> str:
   """the id of the quest this session answers."""
-  from bro.broker.client import QUEST_ENV
+  from bro.broker.environment import BROKER_MISSION
 
-  value = os.environ.get(QUEST_ENV)
+  value = os.environ.get(BROKER_MISSION)
   if value is None:
-    raise QuestError(f'{QUEST_ENV} is missing from the session environment')
+    raise QuestError(f'{BROKER_MISSION} is missing from the session environment')
   return value
 
 
@@ -104,9 +105,9 @@ def caller_end(quest: dict[str, Any], quest_id: str) -> 'End':
   `summoner` on a child it summoned."""
   own = own_quest()
   if quest_id == own:
-    return 'summoned'
+    return 'worker'
   if quest.get('parent') == own:
-    return 'summoner'
+    return 'owner'
   raise QuestError(f'quest {quest_id!r} is not one this session summoned')
 
 
@@ -185,7 +186,7 @@ def query_quest(
       max(ACCEPT_TIMEOUT, wait_seconds + ACCEPT_TIMEOUT) if read_timeout is None else read_timeout
     ),
   )
-  quest = value.get('quest')
+  quest = value.get('mission')
   if not isinstance(quest, dict):
     raise QuestError(f'query for {quest_id!r} returned no quest record')
   return quest
@@ -352,13 +353,13 @@ class Question:
 def question_from_message(message: 'Message') -> Question:
   if message.id is None:
     raise QuestError('quest question carried no id')
-  return Question(message.id, _text_from_payload(message.payload), message.quest_id)
+  return Question(message.id, _text_from_payload(message.payload), message.request_id)
 
 
 def open_questions(quest: dict[str, Any], *, awaiting: 'End') -> tuple[Question, ...]:
   """the open questions the `awaiting` end owes a reply to: the other end's
   marked entries, oldest first."""
-  other = 'summoned' if awaiting == 'summoner' else 'summoner'
+  other = 'worker' if awaiting == 'owner' else 'owner'
   questions = []
   for entry in _entries(quest):
     if entry.get('pending') is not True or entry.get('from') != other:
@@ -397,8 +398,8 @@ def _outcome_of(quest: dict[str, Any], quest_id: str, caller: 'End') -> Outcome:
   answer = answer_of(quest)
   trail_id = quest.get('trail_id')
   questions: tuple[Question, ...] = ()
-  if answer is None and caller == 'summoner':
-    questions = open_questions(quest, awaiting='summoner')
+  if answer is None and caller == 'owner':
+    questions = open_questions(quest, awaiting='owner')
   return Outcome(quest_id, answer, trail_id if isinstance(trail_id, str) else None, questions)
 
 
@@ -430,7 +431,7 @@ def check(
         quest,
         deadline=deadline,
         done=lambda current: _outcome_of(current, resolved, caller).state != 'running',
-        on_chat=caller == 'summoner',
+        on_chat=caller == 'owner',
       )
   return _outcome_of(quest, resolved, caller)
 
@@ -535,6 +536,7 @@ def _send(
   """Send one chat move on a live quest this session is an end of, checking the
   quest's talk before the host does; returns the resolved id and the sent envelope."""
   from bro.broker import brotocol
+  from bro.broker.environment import BROKER_TALK
 
   resolved = resolve(quest_id)
   quest = query_quest(client, resolved)
@@ -550,15 +552,15 @@ def _send(
   except brotocol.ProtocolError as error:
     raise QuestError(str(error)) from error
   talk = _talk_of(quest)
-  if sender == 'summoned':
+  if sender == 'worker':
     from bro.broker.client import talk_from_env
 
     published_talk = talk_from_env()
     if published_talk is None:
-      raise QuestError(f'{brotocol.TALK_ENV} is missing from the session environment')
+      raise QuestError(f'{BROKER_TALK} is missing from the session environment')
     talk = published_talk
   if not brotocol.message_allowed(talk, sender, candidate):
-    source = brotocol.TALK_ENV if sender == 'summoned' else f'query {resolved}'
+    source = BROKER_TALK if sender == 'worker' else f'query {resolved}'
     raise QuestError(f'{source} forbids this quest chat move')
   try:
     sent = client.message(resolved, candidate.payload, reply_to=reply_to, question=question)
@@ -732,7 +734,7 @@ def _query_listing(client: 'Client') -> list[dict[str, Any]]:
   while True:
     args = {} if cursor is None else {'cursor': cursor}
     value = _read_value(client, QUERY, args, timeout=ACCEPT_TIMEOUT)
-    page = value.get('quests')
+    page = value.get('missions')
     if not isinstance(page, list) or not all(isinstance(quest, dict) for quest in page):
       raise QuestError('query listing returned malformed quest records')
     quests.extend(quest for quest in page if quest.get('kind') == SUMMON)
@@ -786,7 +788,7 @@ def _quest_clause(event: dict[str, Any], own: str) -> str:
   parent = event.get('parent')
   if not isinstance(args, dict) or not isinstance(parent, str):
     raise QuestError('events read returned a malformed summon record')
-  clause = f'quest {event.get("quest")}'
+  clause = f'quest {event.get("mission")}'
   target = args.get('target')
   if isinstance(target, str):
     clause += f' to {target}'
@@ -799,9 +801,9 @@ def _quest_clause(event: dict[str, Any], own: str) -> str:
 
 def _chat_event_line(event: dict[str, Any], own: str) -> Optional[str]:
   transition = event.get('transition')
-  is_own_quest = event.get('quest') == own
+  is_own_quest = event.get('mission') == own
   sender = event.get('from')
-  other_end = sender == ('summoner' if is_own_quest else 'summoned')
+  other_end = sender == ('owner' if is_own_quest else 'worker')
   if transition == 'message' and not other_end:
     return None
   if transition == 'listening':
@@ -857,7 +859,7 @@ def _chat_entry_event(quest: dict[str, Any], entry: dict[str, Any]) -> dict[str,
     raise QuestError('query returned a malformed quest for watch replay')
   return {
     'kind': quest.get('kind'),
-    'quest': quest_id,
+    'mission': quest_id,
     'parent': parent,
     'args': args,
     **entry,
@@ -867,9 +869,7 @@ def _chat_entry_event(quest: dict[str, Any], entry: dict[str, Any]) -> dict[str,
 def _arm_replay(client: 'Client', own: str, head: int) -> list[str]:
   record = query_quest(client, own)
   events = [
-    _chat_entry_event(record, entry)
-    for entry in _entries(record)
-    if entry.get('from') == 'summoner'
+    _chat_entry_event(record, entry) for entry in _entries(record) if entry.get('from') == 'owner'
   ]
   for quest in _query_listing(client):
     state = quest.get('state')
@@ -903,14 +903,14 @@ def watch(wait_seconds: float = READ_WAIT_SECONDS) -> Generator[str]:
   """Yield retained chat at arm, then ordered summon journal transitions."""
   if wait_seconds <= 0:
     raise QuestError('events wait must be positive')
-  from bro.broker.client import QUEST_ENV
   from bro.broker.dispatcher import EVENTS
+  from bro.broker.environment import BROKER_MISSION
 
   with open_client() as client:
-    own = os.environ.get(QUEST_ENV)
+    own = os.environ.get(BROKER_MISSION)
     if own is None:
       raise QuestError(
-        f'broker channel present but {QUEST_ENV} unset; '
+        f'broker channel present but {BROKER_MISSION} unset; '
         'the launch did not name the quest this session answers'
       )
     baseline = _read_value(client, EVENTS, {}, timeout=ACCEPT_TIMEOUT)

@@ -478,7 +478,7 @@ class ArtifactControl:
       self._deny(context, peer, message, identity, error)
       return
     path = args['path']
-    self._answer_off_loop(context, peer, message.quest_id, lambda: self._minted(identity, ancestors, path))  # fmt: skip
+    self._answer_off_loop(context, peer, message.request_id, lambda: self._minted(identity, ancestors, path))  # fmt: skip
 
   def _minted(self, identity: PeerIdentity, ancestors: Sequence[str], path: str) -> dict[str, Any]:
     ref, size = self._store.mint(identity, ancestors, path)
@@ -497,7 +497,7 @@ class ArtifactControl:
       return
     ref = args['ref']
     self._answer_off_loop(
-      context, peer, message.quest_id, lambda: {'path': self._store.materialize(identity, ref)}
+      context, peer, message.request_id, lambda: {'path': self._store.materialize(identity, ref)}
     )
 
   def resolve(self, ref: str, context: 'Dispatcher', requester: 'Peer') -> Path:

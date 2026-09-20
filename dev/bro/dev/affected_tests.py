@@ -66,7 +66,7 @@ def import_graph(root: Path, source_roots: Sequence[Path]) -> dict[str, set[str]
 
   importers: dict[str, set[str]] = {}
   for path, name in names.items():
-    for imported in _imported_names(path, name):
+    for imported in imported_names(path, name):
       if imported in known and imported != name:
         importers.setdefault(imported, set()).add(name)
   return importers
@@ -85,7 +85,7 @@ def reachable(importers: dict[str, set[str]], modules: Iterable[str]) -> set[str
   return seen
 
 
-def _imported_names(path: Path, name: str) -> set[str]:
+def imported_names(path: Path, name: str) -> set[str]:
   """every module name the file names in an import, each with its parent packages.
 
   Importing `a.b.c` executes `a` and `a.b` too, so both are edges this file has.
