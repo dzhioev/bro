@@ -39,6 +39,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   Started parties go through the common isolation-parameterized launcher and carry a resume spec;
   joined members run in the summoner’s existing tree with member-scoped records and no resume.
 - `ride/launch_control.py` — common `launch` argument validation, owner attribution, worker-type dispatch, run lowering, launch audit, and manual-token lifecycle.
+- `ride/worker_container.py` — off-loop lowering of core `WorkerContainer` runs:
+  runtime-derived image builds and pruning, detached throwaway workspaces, artifact views, loopback port allocation and facts, and delegation to Docker supervision.
 - `ride/peer_facts.py` — the mission-keyed generic worker facts and peer directory for one broker root:
   peer resolution through the journal worker binding, workspace/member/type attribution, type-owned extensions, ancestry, and per-member current-trail attribution shared by launch, artifacts, and audit.
 - `ride/artifacts.py` — the ride's artifact store, the `artifact.mint` / `artifact.get` kinds, and the broker's `JobOutput`:

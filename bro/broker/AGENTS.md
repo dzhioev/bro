@@ -72,6 +72,7 @@ The module contains constants only, so launch paths may import it before the bro
 - `broxy.py` is the stateless peer multiplexer.
   It routes inbound traffic first by reply id, then by request id, then to every listener for the request.
   `broxy run [--log-file PATH] -- <command…>` attaches once through `BROKER_UPSTREAM`, gives the command the local `BROKER_CHANNEL`, forwards SIGTERM, and returns the command status.
+  Worker-container commands use this wrapper so the worker and its short-lived artifact or broker clients share one upstream attach.
 - `cli.py` exposes the low-level broker request, chat message, receive, and listen surface.
 
 ## Journal

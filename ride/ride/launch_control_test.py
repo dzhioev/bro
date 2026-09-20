@@ -7,10 +7,12 @@ import pytest
 
 from bro.broker.brotocol import Message, Talk, request
 from bro.broker.job import CommandJob
+from bro.broker.spawn import Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
 from bro.worker_types import (
   ArtifactDenied,
+  Container,
   Expect,
   Job,
   LaunchDenied,
@@ -18,6 +20,7 @@ from bro.worker_types import (
   PeerDescription,
   Spawn,
   UnattributablePeer,
+  WorkerContainer,
   WorkerType,
 )
 from ride import pending_launch
@@ -142,7 +145,7 @@ def owner(tmp_path):
   )
 
 
-def _control(tmp_path, owner, run, *, type_class=SampleType):
+def _control(tmp_path, owner, run, *, type_class=SampleType, worker_container_spawner=None):
   host = Host()
   worker_type = type_class(host, run)
   peers = Peers(owner)
@@ -155,6 +158,10 @@ def _control(tmp_path, owner, run, *, type_class=SampleType):
     audit_file=tmp_path / 'audit.jsonl',
     runtime_bundle=runtime,
     session_env={'ONE': '1'},
+    worker_container_spawner=cast(
+      Spawner,
+      object() if worker_container_spawner is None else worker_container_spawner,
+    ),
   )
   return control, worker_type, peers, host
 
@@ -248,6 +255,38 @@ def test_unreachable_share_is_denied(tmp_path, owner):
   host.artifacts.denied = True
   context = _handle(control, _message(share=[ref]))
   assert 'owner cannot reach' in context.denied[0][1]
+
+
+def test_container_run_hands_the_spec_and_share_to_the_host_spawner(tmp_path, owner):
+  ref = 'sha256:' + 'a' * 64
+  spec = WorkerContainer(
+    files={'Dockerfile': b'ARG RUNTIME_IMAGE\nFROM ${RUNTIME_IMAGE}\n'},
+    command=('worker',),
+    env={},
+    published_ports=(8080,),
+  )
+  spawner = object()
+  control, _, peers, _ = _control(
+    tmp_path,
+    owner,
+    Container(spec, extension={'worker': 'facts'}, permits=frozenset({'test.use'})),
+    worker_container_spawner=spawner,
+  )
+  message = _message(share=[ref])
+  context = _handle(control, message)
+
+  [(launch, selected_spawner, peer, options)] = context.spawned
+  assert launch.type == 'test'
+  assert launch.spec is spec
+  assert launch.owner_workspace == owner.workspace
+  assert launch.share == (ref,)
+  assert selected_spawner is spawner
+  assert peer == ROOT
+  assert options['type'] == 'test'
+  facts = peers.facts[message.request_id]
+  assert facts.extension == {'worker': 'facts'}
+  assert facts.permits == frozenset({'test.use'})
+  assert facts.artifact_view is False
 
 
 @pytest.mark.parametrize(

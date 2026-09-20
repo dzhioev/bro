@@ -23,6 +23,7 @@ from ride.launch_control import LaunchControl
 from ride.peer_facts import PeerFacts, WorkerFacts
 from ride.runtime_bundle import RuntimeBundle
 from ride.scope import DEFAULT_PERMITS
+from ride.worker_container import WorkerContainerSpawner
 from ride.workspace.docker import ContainerRuntimeResolver, bridge_gateway
 from ride.workspace.model import Workspace
 from ride.workspace.spawn import (
@@ -126,6 +127,12 @@ def run_root_via_broker(
     facts,
     artifacts,
   )
+  worker_container_spawner = WorkerContainerSpawner(
+    docker_spawner,
+    container_runtime,
+    facts,
+    artifacts,
+  )
   artifact_control = ArtifactControl(artifacts, facts)
   facade = Broker(
     TcpServerTransport(broker_bind_hosts()),
@@ -157,6 +164,7 @@ def run_root_via_broker(
     audit_file=launch_dir() / f'{workspace.name}.jsonl',
     runtime_bundle=runtime_bundle,
     session_env=session_env,
+    worker_container_spawner=worker_container_spawner,
   )
   facade.on(PING, ping_handler)
   facade.on(LAUNCH, control.handle)

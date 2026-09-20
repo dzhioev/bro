@@ -200,6 +200,7 @@ PYTEST_FILES = [
   'ride/ride/bro_worker_test.py',
   'ride/ride/bro_worker_lowering_test.py',
   'ride/ride/launch_control_test.py',
+  'ride/ride/worker_container_test.py',
   'ride/ride/peer_facts_test.py',
   'ride/ride/artifacts_test.py',
   'ride/ride/pending_launch_test.py',
