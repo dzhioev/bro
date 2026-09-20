@@ -15,7 +15,7 @@ hardlink (or hardlinked tree) per ref it may reach — the source of its
 read-only `/var/ride/artifacts` bind mount, so a ref linked while the peer
 runs appears without a remount. A mint links the minter and its summoners up
 to the root; a summon's `share` list is linked into the child's view during
-spawn lowering (`ride/ride/spawn.py`). An unboxed peer has no mount
+spawn lowering (`ride/ride/bro_worker.py`). An unboxed peer has no mount
 namespace: its `get` falls back to a private copy under that workspace's own
 `artifacts/` directory. A manually launched child has no host-built launch
 and therefore no view; its `get` is denied with the reason.
@@ -30,7 +30,7 @@ reaches the peer that requested the job and its summoners.
 
 `ArtifactControl` serves the `artifact.mint` / `artifact.get` kinds
 (contract: `bro/artifact.py`) and implements the contributed-kind resolver
-(`bro.kinds.ArtifactResolver`). Attribution and shape validation run on the
+(`bro.worker_types.ArtifactResolver`). Attribution and shape validation run on the
 broker loop; store I/O runs in a thread with the correlated result delivered
 from a done-callback. The quest never enters the dispatcher's table, so
 exactly-one-result is this module's duty: the callback folds a store refusal
@@ -39,6 +39,8 @@ of letting it vanish. A sharing denial is uniform — identical whether or not
 the ref exists. Broker imports stay function-local: `ride/ride/root.py`
 composes the root view mount from the path helpers here before the broker
 gate."""
+
+from __future__ import annotations
 
 import asyncio
 import contextlib
@@ -55,10 +57,9 @@ from typing import TYPE_CHECKING, Any, Optional
 from bro.artifact import digest_path, is_ref
 from bro.base import log
 from bro.base.lulid import lulid
-from bro.kinds import ArtifactDenied, tree_path
+from bro.worker_types import ArtifactDenied, PeerDescription, UnattributablePeer, tree_path
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, artifacts_dir, workspace_dir
-from ride.peer_facts import PeerFacts, PeerIdentity, UnattributablePeer
-from ride.workspace.metadata import Isolation
+from ride.peer_facts import PeerFacts
 from ride.workspace.model import Workspace
 
 if TYPE_CHECKING:
@@ -169,7 +170,7 @@ class ArtifactStore:
   run outside it, so a mint hashing for seconds never blocks a loop-side
   check."""
 
-  def __init__(self, workspace: 'Workspace', *, root_boxed: bool):
+  def __init__(self, workspace: Workspace, *, root_boxed: bool):
     self.ride = workspace.name
     self._root_boxed = root_boxed
     self._lock = threading.Lock()
@@ -210,7 +211,7 @@ class ArtifactStore:
     directory.mkdir()
     return directory
 
-  def mint(self, identity: PeerIdentity, ancestors: Sequence[str], relative: str) -> tuple[str, int]:  # fmt: skip
+  def mint(self, identity: PeerDescription, ancestors: Sequence[str], relative: str) -> tuple[str, int]:  # fmt: skip
     """ingest the file or directory at `relative` in the minting peer's tree
     and return its ref and size, shared with the minter and its ancestors.
     Raises `ArtifactDenied` on any refusal; heavy, called off-loop."""
@@ -357,25 +358,21 @@ class ArtifactStore:
       self._link_into_view(to, ref)
     self.audit('share', {'by': by, 'to': to, 'refs': list(refs)})
 
-  def materialize(self, identity: PeerIdentity, ref: str) -> str:
+  def materialize(self, identity: PeerDescription, ref: str) -> str:
     """the path `ref` appears at for the requesting peer — its view mount for
     a boxed peer, a private copy under the workspace directory for the
     unboxed root. Raises `ArtifactDenied` on any refusal; the copy is heavy,
     called off-loop."""
     if not self.reachable(ref, identity.workspace):
       raise ArtifactDenied(_denial(ref))
-    if identity.manual:
-      raise ArtifactDenied('no artifact view is mounted for a manually launched session')
-    unboxed = (
-      not self._root_boxed
-      if identity.workspace == self.ride
-      else Workspace.open(identity.workspace).isolation is Isolation.UNBOXED
-    )
-    if unboxed:
-      path = str(self._unboxed_copy(ref, identity.workspace))
-    else:
+    if identity.expected:
+      raise ArtifactDenied('no artifact view is mounted for a manually launched worker')
+    artifact_view = self._root_boxed if identity.workspace == self.ride else identity.artifact_view
+    if artifact_view:
       self._link_into_view(identity.workspace, ref)
       path = str(CONTAINER_ARTIFACTS_ROOT / ref)
+    else:
+      path = str(self._unboxed_copy(ref, identity.workspace))
     self.audit('get', {'peer': identity.workspace, 'ref': ref})
     return path
 
@@ -441,8 +438,8 @@ class JobArtifacts:
   def open(self) -> Path:
     return self._store.job_run()
 
-  async def collect(self, directory: Path, context: 'Dispatcher', requester: 'Peer') -> dict:
-    identity = self._facts.identity(context, requester)
+  async def collect(self, directory: Path, context: Dispatcher, requester: Peer) -> dict:
+    identity = self._facts.resolve(context, requester)
     ancestors = self._facts.ancestors(context, requester)
     ref, size = await asyncio.to_thread(
       self._store.adopt,
@@ -465,10 +462,10 @@ class ArtifactControl:
     self._store = store
     self._facts = facts
 
-  def mint(self, context: 'Dispatcher', peer: 'Peer', message: 'Message') -> None:
+  def mint(self, context: Dispatcher, peer: Peer, message: Message) -> None:
     args = message.args
     try:
-      identity = self._facts.identity(context, peer)
+      identity = self._facts.resolve(context, peer)
       ancestors = self._facts.ancestors(context, peer)
     except UnattributablePeer as reason:
       self._deny(context, peer, message, None, f'artifact mint denied: {reason}')
@@ -480,14 +477,16 @@ class ArtifactControl:
     path = args['path']
     self._answer_off_loop(context, peer, message.request_id, lambda: self._minted(identity, ancestors, path))  # fmt: skip
 
-  def _minted(self, identity: PeerIdentity, ancestors: Sequence[str], path: str) -> dict[str, Any]:
+  def _minted(
+    self, identity: PeerDescription, ancestors: Sequence[str], path: str
+  ) -> dict[str, Any]:
     ref, size = self._store.mint(identity, ancestors, path)
     return {'ref': ref, 'size': size}
 
-  def get(self, context: 'Dispatcher', peer: 'Peer', message: 'Message') -> None:
+  def get(self, context: Dispatcher, peer: Peer, message: Message) -> None:
     args = message.args
     try:
-      identity = self._facts.identity(context, peer)
+      identity = self._facts.resolve(context, peer)
     except UnattributablePeer as reason:
       self._deny(context, peer, message, None, f'artifact get denied: {reason}')
       return
@@ -500,17 +499,27 @@ class ArtifactControl:
       context, peer, message.request_id, lambda: {'path': self._store.materialize(identity, ref)}
     )
 
-  def resolve(self, ref: str, context: 'Dispatcher', requester: 'Peer') -> Path:
-    """`bro.kinds.ArtifactResolver`: the host path of `ref` for a kind
-    handler's requesting peer, with the denial as uniform as the wire one."""
+  def resolve(
+    self,
+    ref: str,
+    peer: Any,
+    requester: Any = None,
+  ) -> Path:
+    """Resolve a ref for a described peer.
+
+    The three-argument form serves broker-kind handlers that attribute their
+    requester through the dispatcher.
+    """
     try:
-      identity = self._facts.identity(context, requester)
+      description = peer if requester is None else self._facts.resolve(peer, requester)
     except UnattributablePeer:
       raise ArtifactDenied(_denial(ref)) from None
-    return self._store.resolve(ref, identity.workspace)
+    if not isinstance(description, PeerDescription):
+      raise TypeError('artifact resolution needs a peer description')
+    return self._store.resolve(ref, description.workspace)
 
   def _answer_off_loop(
-    self, context: 'Dispatcher', peer: 'Peer', quest: str, work: Callable[[], dict[str, Any]]
+    self, context: Dispatcher, peer: Peer, quest: str, work: Callable[[], dict[str, Any]]
   ) -> None:
     from bro.broker import brotocol
 
@@ -535,10 +544,10 @@ class ArtifactControl:
 
   def _deny(
     self,
-    context: 'Dispatcher',
-    peer: 'Peer',
-    message: 'Message',
-    identity: Optional[PeerIdentity],
+    context: Dispatcher,
+    peer: Peer,
+    message: Message,
+    identity: Optional[PeerDescription],
     error: str,
   ) -> None:
     log.warning('artifact: %s', error)

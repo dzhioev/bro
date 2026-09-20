@@ -16,6 +16,7 @@ from bro.base import log, spawn
 from bro.broker.client import Client
 from bro.broker.environment import BROKER_CHANNEL
 from bro.monitor import SESSION_DIR_ENV, harness_session_dir, health
+from bro.quest import BRO, LAUNCH
 
 __cli_name__ = 'ride.claude.statusline'
 
@@ -83,7 +84,11 @@ def _query_summons() -> list[dict[str, Any]]:
   quests = value.get('missions') if isinstance(value, dict) else None
   if not isinstance(quests, list):
     return []
-  return [quest for quest in quests if isinstance(quest, dict) and quest.get('kind') == 'summon']
+  return [
+    quest
+    for quest in quests
+    if isinstance(quest, dict) and quest.get('kind') == LAUNCH and quest.get('type') == BRO
+  ]
 
 
 def _timestamp(value: object) -> Optional[float]:

@@ -13,17 +13,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import ride.bro_worker
 import ride.claude.harness as claude_harness
 import ride.runtime_bundle as runtime_bundle_module
 import ride.scope
 import ride.session as ride_session
-import ride.spawn
-import ride.summon_control
 from bro.base import credentials
 from bro.monitor import workspace_party_dir, workspace_session_dir
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR, ride_trails_dir
-from ride import pending_summon
+from ride import pending_launch
+from ride.bro_worker import pending_bro
 from ride.repository import Repository
 from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError
 from ride.scope import ScopedSecrets, split_scope_overrides
@@ -119,7 +119,7 @@ def _launch_scope(**overrides) -> ride_session.ScopedLaunch:
   base = {
     'scoped': ScopedSecrets({'github'}, set()),
     'may_summon': set(),
-    'permits': {'party.start.boxed'},
+    'permits': {'bro.party.start.boxed'},
     'store': _scoped_store(),
   }
   base.update(overrides)
@@ -204,7 +204,7 @@ class _ContainerHarness:
       patch('ride.workspace.model.BoxedWorkspace.remove'),
       patch('ride.session._print_resume_hint'),
       # keep the bro-registry import out; threading is asserted per-test
-      patch('ride.summon_control.summon_allow_list', return_value=set()),
+      patch('ride.bro_worker.summon_allow_list', return_value=set()),
       patch('ride.claude.harness.load_anthropic_key', return_value={'api_key': 'k'}),
       patch('ride.session.local_trails_mounts', return_value=()),
       patch(
@@ -352,12 +352,12 @@ class TestSummonAllowList:
       code = ride_session.start_session(
         _spec(
           drop=True,
-          grant=[':party.start.unboxed'],
-          revoke=[':party.start.boxed'],
+          grant=[':bro.party.start.unboxed'],
+          revoke=[':bro.party.start.boxed'],
         )
       )
     assert code == 0
-    assert harness.run_started_party.call_args.kwargs['permits'] == {'party.start.unboxed'}
+    assert harness.run_started_party.call_args.kwargs['permits'] == {'bro.party.start.unboxed'}
 
   def test_boxed_session_threads_the_summon_depth(self):
     with _ContainerHarness() as harness:
@@ -973,7 +973,7 @@ class TestConcurrentSessionGuard:
       'build_scoped_store',
       lambda store, names, optional=(): (_scoped_store(), frozenset()),
     )
-    monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(ride.bro_worker, 'summon_allow_list', lambda *_a, **_k: set())
     # the shared active-container refusal probes docker ahead of the launch body
     monkeypatch.setattr(ride_session, 'find_container_id', lambda tree: None)
     monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda root, ref: 'headsha')
@@ -1361,7 +1361,7 @@ class TestHostBrokerPingRoundTrip:
     monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_a: True)
     monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_a: True)
-    monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(ride.bro_worker, 'summon_allow_list', lambda *_a, **_k: set())
     monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set())
@@ -1420,8 +1420,9 @@ while time.time() < deadline:
 if not records:
   sys.exit(3)
 record = json.loads(records[0].read_text())
-from ride import pending_summon
-pending_summon.claim(record['token'], workspace='external-ws')
+from ride import pending_launch
+from ride.bro_worker import pending_bro
+pending_launch.claim(record['token'], workspace='external-ws')
 client = connect(Endpoint(port=record['port'], token=record['channel_token']).address(LOCAL_HOST))
 quest = record['token']
 client.send(brotocol.mark(quest, 'trail', trail_id='t-manual'))
@@ -1431,7 +1432,7 @@ client.close(confirm=True)
 
   def test_manual_summon_round_trip_from_a_unboxed_session(self, monkeypatch, capfd, tmp_path):
     from bro.monitor import trail_pointer as trail_pointer_module
-    from bro.workspace.paths import summon_dir, workspace_dir
+    from bro.workspace.paths import launch_dir, workspace_dir
 
     root = tmp_path
     monkeypatch.setenv('XDG_DATA_HOME', str(root / 'state'))
@@ -1443,7 +1444,7 @@ client.close(confirm=True)
     workspace.tree.mkdir(parents=True)
     answer_child = root / 'answer_child.py'
     answer_child.write_text(self._ANSWER_CHILD)
-    pending_dir = summon_dir() / 'pending'
+    pending_dir = launch_dir() / 'pending'
     runtime_bundle = _runtime_bundle(root)
     session_binary = runtime_bundle.host_venv / 'bin' / 'do-ride'
     # stands in for do-ride: register the manual summon, let the
@@ -1460,7 +1461,7 @@ client.close(confirm=True)
     monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_a: True)
     monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_a: True)
-    monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(ride.bro_worker, 'summon_allow_list', lambda *_a, **_k: set())
     monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set())
@@ -1489,9 +1490,11 @@ client.close(confirm=True)
     assert 'the pair verdict' in capfd.readouterr().out
     # the summon ended: both token records are discarded and the journal audit carries it
     assert list(pending_dir.glob('*.json')) == []
-    assert list((summon_dir() / 'claimed').glob('*.json')) == []
-    audit = [json.loads(line) for line in (summon_dir() / 'w.jsonl').read_text().splitlines()]
-    summon_events = [entry for entry in audit if entry['kind'] == 'summon']
+    assert list((launch_dir() / 'claimed').glob('*.json')) == []
+    audit = [json.loads(line) for line in (launch_dir() / 'w.jsonl').read_text().splitlines()]
+    summon_events = [
+      entry for entry in audit if entry['kind'] == 'launch' and entry['type'] == 'bro'
+    ]
     assert [entry['transition'] for entry in summon_events] == [
       'accepted',
       'started',
@@ -1506,27 +1509,35 @@ client.close(confirm=True)
     assert trail_pointer_module.read(pointer) is None
 
 
-def _pending_record(tmp_path, **overrides) -> pending_summon.PendingSummon:
-  record = pending_summon.PendingSummon(
-    **{
-      'token': 'TOK-1',
-      'runtime': '/runtime',
-      'port': 7321,
-      'channel_token': 'tk',
-      'target': 'bro-dev',
-      'prompt': 'pair on this',
-      'parent_workspace': str(tmp_path / 'parent-tree'),
-      'may_summon': ('dev',),
-      'permits': ('party.start.boxed',),
-      'talk': ('worker.say',),
-      'grant': (),
-      'revoke': (),
-      'summoner': {'trail_id': 'T1'},
-      **overrides,
-    }
+def _pending_record(tmp_path, **overrides):
+  extension = {
+    'target': 'bro-dev',
+    'prompt': 'pair on this',
+    'may_summon': ['dev'],
+    'permits': ['bro.party.start.boxed'],
+    'grant': [],
+    'revoke': [],
+    'summoner': {'trail_id': 'T1'},
+    'repo': None,
+    'into': None,
+  }
+  extension.update(overrides.pop('extension', {}))
+  for key in tuple(extension):
+    if key in overrides:
+      extension[key] = overrides.pop(key)
+  record = pending_launch.PendingLaunch(
+    token='TOK-1',
+    runtime='/runtime',
+    port=7321,
+    channel_token='tk',
+    type='bro',
+    talk=('worker.say',),
+    owner_tree=str(tmp_path / 'parent-tree'),
+    extension=extension,
+    **overrides,
   )
-  pending_summon.write(record)
-  return record
+  pending_launch.write(record)
+  return pending_bro(record)
 
 
 class TestSummonedSession:
@@ -1542,7 +1553,7 @@ class TestSummonedSession:
       rc = ride_session.start_session(spec, summoned=record)
     assert rc == 0
     assert h.run_started_party.call_count == 0  # no broker of its own
-    assert head.call_args.args == (tmp_path, ride_session.Path(record.parent_workspace))
+    assert head.call_args.args == (tmp_path, ride_session.Path(record.owner_tree))
     launch = run.call_args.args[0]
     assert launch.env['BROKER_UPSTREAM'] == 'tcp://tk@host.docker.internal:7321'
     assert launch.env['RIDE_SUMMONED'] == '1'
@@ -1557,8 +1568,8 @@ class TestSummonedSession:
     assert launch.tty
     # the threaded claim consumes the token
     run.call_args.kwargs['claim']()
-    with pytest.raises(pending_summon.UnknownToken):
-      pending_summon.peek(record.token)
+    with pytest.raises(pending_launch.UnknownToken):
+      pending_launch.peek(record.token)
 
   def test_solo_summoned_launch_uses_the_one_shot_mode(self, tmp_path):
     record = _pending_record(tmp_path)
@@ -1577,7 +1588,7 @@ class TestSummonedSession:
 
   def test_summoned_launch_fails_cleanly_on_a_spent_token(self, tmp_path, caplog):
     record = _pending_record(tmp_path)
-    pending_summon.claim(record.token, workspace='spender')
+    pending_launch.claim(record.token, workspace='spender')
 
     def claim(*args, **keywords):
       return keywords['claim']()

@@ -10,13 +10,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 from bro.base import credentials, host_config
-from bro.base.scope import (
-  DEFAULT_PERMITS,
-  ScopeLayer,
-  apply_idempotent,
-  split_scope_overrides,
-)
+from bro.base.scope import ScopeLayer, apply_idempotent, split_scope_overrides
 from bro.launch.llm_flags import with_host_defaults
+from bro.summon import PARTY_START_BOXED
 from ride.repository import Repository, attachment_identities, open_repository
 from ride.workspace.store import (
   ScopedSecrets,
@@ -34,6 +30,7 @@ if TYPE_CHECKING:
 # it selects a backend (`bro.trails.store.resolve_config`) rather than enabling
 # recording, so a launch that cannot resolve it still records.
 _TRAILS_BASELINE = frozenset({'trails'})
+DEFAULT_PERMITS = frozenset({PARTY_START_BOXED})
 
 
 class LaunchScopeError(Exception):
@@ -130,16 +127,44 @@ def _namespace_values(layer: ScopeLayer, index: int) -> tuple[list[str], list[st
   return grant, revoke
 
 
+def validate_permits(values: Collection[str]) -> None:
+  """Check explicit permit names against only the worker types they name."""
+  from bro.worker_types import installed_type
+
+  by_type: dict[str, set[str]] = {}
+  for value in values:
+    type_name, leaf = value.split('.', 1)
+    by_type.setdefault(type_name, set()).add(leaf)
+  for type_name, leaves in sorted(by_type.items()):
+    try:
+      worker_type = installed_type(type_name)
+    except KeyError as error:
+      raise ValueError(error.args[0]) from error
+    unknown = sorted(leaves - set(worker_type.permits))
+    if unknown:
+      rendered = ', '.join(f':{type_name}.{leaf}' for leaf in unknown)
+      raise ValueError(f'worker type {type_name!r} does not declare permit(s): {rendered}')
+
+
 def effective_permits(
   layers: Sequence[ScopeLayer], *, grant: Sequence[str], revoke: Sequence[str], strict: bool
 ) -> set[str]:
   """Apply configured and request permit layers to the framework seed."""
-  permits = set(DEFAULT_PERMITS)
+  configured: list[tuple[list[str], list[str]]] = []
+  explicit: set[str] = set()
   for layer in layers:
     layer_grant, layer_revoke = _namespace_values(layer, 2)
-    permits = apply_idempotent(permits, grant=layer_grant, revoke=layer_revoke)
+    configured.append((layer_grant, layer_revoke))
+    explicit.update(layer_grant)
+    explicit.update(layer_revoke)
   grant_permits = split_scope_overrides(grant)[2]
   revoke_permits = split_scope_overrides(revoke)[2]
+  explicit.update(grant_permits)
+  explicit.update(revoke_permits)
+  validate_permits(explicit)
+  permits = set(DEFAULT_PERMITS)
+  for layer_grant, layer_revoke in configured:
+    permits = apply_idempotent(permits, grant=layer_grant, revoke=layer_revoke)
   if strict:
     return credentials.apply_grant_revoke(
       permits, grant=grant_permits, revoke=revoke_permits, subject='permit set'
@@ -295,7 +320,7 @@ def preflight_scoped_launch(
 ) -> tuple[set[str], set[str], HydratedStore]:
   """the scope preflight every launch surface runs before creating anything
   (worktree, container, workspace dir): compute the summon allow-list of a launch
-  running as `bro_name` (`summon_control.summon_allow_list`) from the `@bro`
+  running as `bro_name` (`bro_worker.summon_allow_list`) from the `@bro`
   halves of the unified overrides (`split_scope_overrides`; the credential halves
   already shaped `scoped`), and hydrate the scoped store
   (`credentials.build_scoped_store`) — any failure raised as a single
@@ -305,9 +330,7 @@ def preflight_scoped_launch(
   create, so container callers drop it — the build is the preflight itself; a
   unboxed session materializes the returned one.
   """
-  # imported here, not at module level, parallel to every launch-surface import of
-  # summon_control: the module sits on the pre-gate launch path
-  from ride.summon_control import summon_allow_list
+  from ride.bro_worker import summon_allow_list
 
   with launch_scope_errors():
     configured_layers = configured_scope_layers(

@@ -27,7 +27,6 @@ from bro.base.condition import (
   var,
 )
 from bro.base.offload import off_loop
-from bro.base.scope import permit_choices
 from bro.base.text_window import DEFAULT_LIMIT
 from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
 from bro.datasources.base import DataSource
@@ -277,7 +276,7 @@ _SUMMON_DESCRIPTION = (
   'provider and model, `:opus5` names a model; a recipe the harness cannot run fails the '
   'summon rather than switching the harness). its scope is shaped by '
   'the optional `grant` / `revoke` lists — entries are credential kinds, instance grants, '
-  f'`@bro` targets, or party permits ({permit_choices()}). an instance grant replaces '
+  f'`@bro` targets, or party permits ({summon.party_permit_choices()}). an instance grant replaces '
   'the child kind selection, and is allowed '
   'only when your own scope resolves that instance. you can only grant what you hold '
   'yourself (a credential kind, a bro in your allow-list, or a permit), and '
@@ -1387,7 +1386,7 @@ class BaseBro(ABC):
   # bros this bro may summon — its static outgoing allow-list. root sessions get
   # it adjusted per session by `--grant @bro`/`--revoke @bro`; a summoned child
   # follows the bare seeds, so summons chain transitively through seeded bros
-  # under the host's depth cap (see ride/ride/summon_control.py). MRO-walked and
+  # under the host's depth cap (see ride/ride/bro_worker.py). MRO-walked and
   # unioned like `extra_secrets`.
   may_summon: tuple[str, ...] = ()
   # session-start steps for the session's workspace, applied to its root at

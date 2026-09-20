@@ -13,7 +13,7 @@ from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import ChannelID, Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
-from bro.quest import SUMMON
+from bro.quest import BRO, LAUNCH
 from bro.summon import RUNTIME_ENV
 
 TIMEOUT = 5.0
@@ -93,7 +93,7 @@ async def running_live_broker():
     talk: Talk = frozenset(message.args.get('talk', []))
     context.spawn(LaunchSpec(), spawner, peer, type='bro', talk=talk, timeout=None)
 
-  broker.on(SUMMON, spawn_summon)
+  broker.on(LAUNCH, spawn_summon)
   broker_task = asyncio.create_task(
     asyncio.to_thread(broker.run, LaunchSpec(), spawner, type='bro')
   )
@@ -140,7 +140,8 @@ def quest_record(
   state: str,
   *,
   result: dict | None = None,
-  kind: str = 'summon',
+  kind: str = LAUNCH,
+  type: str | None = BRO,
   trail_id: str | None = None,
   **overrides,
 ) -> dict:
@@ -155,6 +156,8 @@ def quest_record(
     'messages': [],
     'chat_seq': 0,
   }
+  if type is not None:
+    quest['type'] = type
   if result is not None:
     quest['result'] = result
   if trail_id is not None:

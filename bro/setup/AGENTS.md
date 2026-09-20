@@ -117,21 +117,21 @@ The optional host config selects stored credential instances and layers session 
 {
   "defaults": {
     "creds": ["github+dev", "trails+write"],
-    "grant": [":party.join"]
+    "grant": [":bro.party.join"]
   },
   "projects": {
     "https://github.com/me/bro": {
       "creds": ["brog+github", "github+dev"],
       "grant": ["@reviewer"],
       "bros": {
-        "bro-eyebro": {"creds": ["github+reviewer"], "revoke": [":party.join"]},
+        "bro-eyebro": {"creds": ["github+reviewer"], "revoke": [":bro.party.join"]},
         "eyebro": {"grant": ["github+reviewer"], "llm": "openai:sol:xhigh"}
       }
     },
     "/home/me/projects/bro": {
       "creds": ["aws+laptop"],
-      "grant": [":party.start.unboxed"],
-      "revoke": [":party.start.boxed"]
+      "grant": [":bro.party.start.unboxed"],
+      "revoke": [":bro.party.start.boxed"]
     }
   },
   "user": {
@@ -148,8 +148,9 @@ An entry is `kind+instance`, its instance left empty (`kind+`) to select the kin
 one list may name a kind once.
 `defaults`, each project entry, and each `bros.<bro>` entry may also carry `grant` and `revoke` in the full launch-scope grammar:
 a credential kind changes the required tier, an instance-spelled grant also selects that instance, `@bro` changes the summon allow-list, and a `:permit` leaf changes party authority.
-The permit leaves are `:party.start.boxed`, `:party.start.unboxed`, and `:party.join`;
-`:party` and `:party.start` are refused rather than expanded.
+Worker permits have the form `:<type>.<leaf>`, with one or more dot-separated leaf segments.
+The bro type declares `:bro.party.start.boxed`, `:bro.party.start.unboxed`, and `:bro.party.join`;
+`:bro` is malformed and `:bro.party` names an undeclared leaf rather than expanding to its descendants.
 A bro's `creds` selects only among the kinds its launch reads;
 a selection of any other kind fails the launch and names `grant`, since it would otherwise sit inert.
 An entry names a credential kind in `creds` or in `grant`, not both.

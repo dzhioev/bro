@@ -129,8 +129,8 @@ def trails_dir() -> Path:
   return ride_trails_dir()
 
 
-def summon_dir() -> Path:
-  return runtime_base() / 'summon'
+def launch_dir() -> Path:
+  return runtime_base() / 'launch'
 
 
 def artifacts_dir() -> Path:

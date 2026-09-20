@@ -5,8 +5,8 @@ import pytest
 
 import bro.summon
 import ride.artifacts
+import ride.broker_root
 import ride.root
-import ride.spawn
 import ride.workspace.docker as workspace_docker
 import ride.workspace.spawn as workspace_spawn
 from bro.workspace.paths import workspace_dir
@@ -85,14 +85,14 @@ class TestDirectStartedParty:
       ride.root.run_started_party(
         launch,
         workspace,
-        permits={'party.start.unboxed'},
+        permits={'bro.party.start.unboxed'},
         credential_scope=_scope(),
         container_runtime=MagicMock(),
         runtime_bundle=MagicMock(),
       )
       == 0
     )
-    assert run.call_args.kwargs['env']['RIDE_PERMITS'] == 'party.start.unboxed'
+    assert run.call_args.kwargs['env']['RIDE_PERMITS'] == 'bro.party.start.unboxed'
     assert 'BROKER_CHANNEL' not in run.call_args.kwargs['env']
     assert 'BROKER_UPSTREAM' not in run.call_args.kwargs['env']
 
@@ -171,7 +171,7 @@ class TestBrokerStartedParty:
       captured.update(kwargs)
       return 3
 
-    monkeypatch.setattr(ride.spawn, 'run_root_via_broker', fake_run_root)
+    monkeypatch.setattr(ride.broker_root, 'run_root_via_broker', fake_run_root)
     workspace = _workspace(tmp_path)
 
     assert (
@@ -179,7 +179,7 @@ class TestBrokerStartedParty:
         _docker_launch(),
         workspace,
         may_summon={'dev'},
-        permits={'party.start.boxed'},
+        permits={'bro.party.start.boxed'},
         summon_depth=4,
         summon_harness='claude',
         session_env={'IS_SANDBOX': '1'},
@@ -193,7 +193,7 @@ class TestBrokerStartedParty:
     wrapped = captured['launch']
     assert isinstance(wrapped, workspace_spawn.DockerLaunchSpec)
     assert wrapped.launch.env[bro.summon.MAY_SUMMON_ENV] == 'dev'
-    assert wrapped.launch.env[bro.summon.PERMITS_ENV] == 'party.start.boxed'
+    assert wrapped.launch.env[bro.summon.PERMITS_ENV] == 'bro.party.start.boxed'
     assert wrapped.launch.extra_mounts == (ride.artifacts.view_mount('ws', 'ws'),)
     assert captured['workspace'] is workspace
     assert captured['credential_scope'] == _scope()
@@ -201,7 +201,7 @@ class TestBrokerStartedParty:
   def test_wraps_an_unboxed_root_as_a_process_spec(self, monkeypatch, tmp_path):
     captured: dict = {}
     monkeypatch.setattr(
-      ride.spawn,
+      ride.broker_root,
       'run_root_via_broker',
       lambda launch, **kwargs: captured.update(launch=launch, **kwargs) or 0,
     )
@@ -218,7 +218,7 @@ class TestBrokerStartedParty:
         launch,
         workspace,
         may_summon=(),
-        permits={'party.start.boxed'},
+        permits={'bro.party.start.boxed'},
         summon_depth=2,
         summon_harness='bro',
         session_env={},
