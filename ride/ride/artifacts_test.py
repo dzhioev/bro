@@ -447,11 +447,9 @@ class TestArtifactControl:
     assert payload['outcome'] == 'denied'
     assert 'cannot attribute' in payload['error']
 
-  def test_resolve_serves_kind_handlers_with_the_same_denial(self, workspace, store):
-    facts, context = _facts_context(workspace)
-    control = ArtifactControl(store, facts)
+  def test_resolve_serves_worker_types_with_the_same_denial(self, control, store):
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
-    resolved = control.resolve(ref, cast(Dispatcher, context), ROOT)
+    resolved = control.resolve(ref, _root_identity())
     assert resolved.read_bytes() == b'payload'
     with pytest.raises(ArtifactDenied, match='is not shared with this peer'):
-      control.resolve(ref, cast(Dispatcher, context), CHILD)
+      control.resolve(ref, PeerIdentity('broker-OTHER', workspace_tree('broker-OTHER')))

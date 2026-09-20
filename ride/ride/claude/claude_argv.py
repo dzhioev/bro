@@ -62,7 +62,7 @@ def _tool_gate_hooks(narrowed: dict[str, tuple[str, ...]]) -> dict:
 
 
 def _stop_guard_hooks(surface: str) -> dict:
-  """the `hooks` settings block holding a one-shot session's turn end to its summon work."""
+  """the `hooks` settings block holding a one-shot session's turn end to its missions."""
   return {
     'Stop': [
       {
