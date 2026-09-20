@@ -69,6 +69,7 @@ class FakeClient:
       'native': {'llm': {'model': 'gpt-5'}},
       'usage': {},
       'models': ['gpt-5'],
+      'extent': len(steps),
       **header,
     }
     self.steps[trail_id] = steps
@@ -93,6 +94,18 @@ class FakeClient:
     harness = self.trails[trail_id]['harness']
     for row in self.iter_steps(trail_id, after=after):
       yield from BACKENDS[harness].project(row)
+
+  def collect_steps(self, trail_id: str, *, extent: int) -> list[dict[str, Any]]:
+    return [row for row in self.iter_steps(trail_id) if row['step_id'] < extent]
+
+  def collect_messages(
+    self, trail_id: str, *, extent: int, types: Optional[set[str]] = None
+  ) -> list[dict[str, Any]]:
+    return [
+      message
+      for message in self.iter_messages(trail_id)
+      if message['source']['step_id'] < extent and (types is None or message['type'] in types)
+    ]
 
   def iter_trails(self, **filters: Any):
     selected = []
@@ -424,7 +437,7 @@ class TestGrep:
 class FollowClient(FakeClient):
   def __init__(self):
     super().__init__()
-    self.add_bro('T1', [])
+    self.add_bro('T1', [], extent=1)
     self.result_sent = False
 
   def iter_messages(self, trail_id: str, *, after: Optional[int] = None):

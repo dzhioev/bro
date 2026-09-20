@@ -225,7 +225,7 @@ class RecordedAdapter:
               segment=segment,
             )
           )
-        messages = list(self._bounded_messages(segment_id, bound))
+        messages = self._segment_messages(segment_id, segment_header, bound)
         records.extend(self.message_records(segment_id, messages))
       return records
 
@@ -426,24 +426,24 @@ class RecordedAdapter:
     collect(root, 0, True, ())
     return records
 
-  def _bounded_messages(
-    self, trail_id: str, bound: dict[str, Any] | None
-  ) -> Iterable[dict[str, Any]]:
+  def _segment_messages(
+    self, trail_id: str, header: dict[str, Any], bound: dict[str, Any] | None
+  ) -> list[dict[str, Any]]:
     if bound is None:
-      yield from self.client.iter_messages(trail_id)
-      return
+      extent = _require_integer(header.get('extent'), 'trail extent')
+      return self.client.collect_messages(trail_id, extent=extent)
     bound_step_id = _require_integer(bound.get('step_id'), 'fork bound step_id')
+    messages = self.client.collect_messages(trail_id, extent=bound_step_id + 1)
     bound_index_value = bound.get('index')
-    bound_index = (
-      None if bound_index_value is None else _require_integer(bound_index_value, 'fork bound index')
-    )
-    for message in self.client.iter_messages(trail_id):
+    if bound_index_value is None:
+      return messages
+    bound_index = _require_integer(bound_index_value, 'fork bound index')
+
+    def within_bound(message: dict[str, Any]) -> bool:
       source = self._message_source(trail_id, message)
-      if source.step_id > bound_step_id:
-        return
-      if source.step_id == bound_step_id and bound_index is not None and source.index > bound_index:
-        return
-      yield message
+      return source.step_id < bound_step_id or source.index <= bound_index
+
+    return [message for message in messages if within_bound(message)]
 
   def _message_record(self, trail_id: str, message: dict[str, Any]) -> DisplayRecord:
     source = self._message_source(trail_id, message)

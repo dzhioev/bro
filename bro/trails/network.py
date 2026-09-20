@@ -66,9 +66,9 @@ def _append_conflict_extents(raw: bytes) -> Optional[tuple[int, int]]:
 class NetworkStore(TrailsStore):
   """synchronous transport proxy for a trails server.
 
-  one persistent connection per store; transport blips drop the socket and
-  reopen on the next attempt. the transport lock also lets a recording adapter
-  share the connection safely with its keepalive thread.
+  connections are pooled: a request takes an idle one or opens another and
+  returns it once answered, and a transport blip or a refused response closes
+  the one it was on, so callers on different threads never share a socket.
   """
 
   # the budget covers a blaze whose lineage resolution walks a long transcript,
@@ -86,8 +86,9 @@ class NetworkStore(TrailsStore):
     self._scheme = parsed.scheme
     self._host = hostname
     self._port = parsed.port
-    self._connection: Optional[http.client.HTTPConnection] = None
-    self._lock = threading.RLock()
+    self._idle: list[http.client.HTTPConnection] = []
+    self._closed = False
+    self._lock = threading.Lock()
 
   def list_trails(
     self,
@@ -294,8 +295,13 @@ class NetworkStore(TrailsStore):
     )
 
   def close(self) -> None:
+    """close the idle connections and refuse further requests; a connection out
+    on a request closes when that request returns it."""
     with self._lock:
-      self._drop_connection()
+      self._closed = True
+      idle, self._idle = self._idle, []
+    for connection in idle:
+      connection.close()
 
   def fetch_spilled_body(self, url: str) -> Any:
     """download a spilled step body from its presigned S3 URL and parse it the
@@ -353,90 +359,89 @@ class NetworkStore(TrailsStore):
     retry_delays: tuple[float, ...] = _DEFAULT_RETRY_DELAYS_SECONDS,
   ) -> dict:
     last_exception: Optional[Exception] = None
-    schedule = (0.0,) + retry_delays
-    with self._lock:
-      for delay in schedule:
-        if delay > 0:
-          time.sleep(delay)
-        connection = self._get_connection()
-        try:
-          connection.request(method, path, body=body, headers=headers)
-          response = connection.getresponse()
-          raw = response.read()
-          if response.status >= 400:
-            exception = HTTPStatusError(
-              response.status,
-              f'{method} {path} -> HTTP {response.status}: {raw.decode(errors="replace")}',
-              raw,
-            )
-            if response.status == 404:
-              missing_trail = reported_missing_trail(raw)
-              if missing_trail is not None:
-                raise TrailNotFound(missing_trail) from exception
-              missing_tool = reported_missing_tool(raw)
-              if missing_tool is not None:
-                raise ToolNotFound(missing_tool) from exception
-            if response.status == 409:
-              extents = _append_conflict_extents(raw)
-              if extents is not None:
-                raise AppendConflict(*extents) from exception
-              collided = reported_collision(raw)
-              if collided is not None:
-                raise TrailCollision(collided, str(exception)) from exception
-            if response.status in (401, 403):
-              raise PermissionDenied(str(exception)) from exception
-            if response.status == 501:
-              raise UnsupportedOperation(str(exception)) from exception
-            if response.status == 400:
-              raise InvalidRequest(str(exception)) from exception
-            if is_retryable_status(response.status):
-              raise TransientUnavailable(str(exception)) from exception
-            raise exception
-          if response.status == 204 or len(raw) == 0:
-            return {}
-          return json.loads(raw)
-        except (
-          TrailNotFound,
-          ToolNotFound,
-          TrailCollision,
-          AppendConflict,
-          PermissionDenied,
-          UnsupportedOperation,
-          HTTPStatusError,
-          ValueError,
-          KeyError,
-          TypeError,
-        ):
-          self._drop_connection()
-          raise
-        except TransientUnavailable as exception:
-          last_exception = exception
-          self._drop_connection()
-        except (OSError, http.client.HTTPException) as exception:
-          last_exception = exception
-          self._drop_connection()
+    for delay in (0.0,) + retry_delays:
+      if delay > 0:
+        time.sleep(delay)
+      connection = self._take_connection()
+      try:
+        result = _exchange(connection, method, path, headers, body)
+      except TransientUnavailable as exception:
+        last_exception = exception
+        connection.close()
+      except (OSError, http.client.HTTPException) as exception:
+        last_exception = exception
+        connection.close()
+      except BaseException:
+        connection.close()
+        raise
+      else:
+        self._return_connection(connection)
+        return result
     assert last_exception is not None
     if isinstance(last_exception, TransientUnavailable):
       raise last_exception
     raise TransientUnavailable(str(last_exception)) from last_exception
 
-  def _get_connection(self) -> http.client.HTTPConnection:
-    if self._connection is not None:
-      return self._connection
+  def _take_connection(self) -> http.client.HTTPConnection:
+    with self._lock:
+      if self._closed:
+        raise RuntimeError(f'trails store for {self._base_url} is closed')
+      if len(self._idle) > 0:
+        return self._idle.pop()
     if self._scheme == 'http':
-      self._connection = http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
-    else:
-      context = ssl.create_default_context()
-      self._connection = http.client.HTTPSConnection(
-        self._host, self._port, timeout=self._timeout, context=context
-      )
-    return self._connection
+      return http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
+    return http.client.HTTPSConnection(
+      self._host, self._port, timeout=self._timeout, context=ssl.create_default_context()
+    )
 
-  def _drop_connection(self) -> None:
-    if self._connection is None:
-      return
-    try:
-      self._connection.close()
-    except Exception:
-      pass
-    self._connection = None
+  def _return_connection(self, connection: http.client.HTTPConnection) -> None:
+    with self._lock:
+      if not self._closed:
+        self._idle.append(connection)
+        return
+    connection.close()
+
+
+def _exchange(
+  connection: http.client.HTTPConnection,
+  method: str,
+  path: str,
+  headers: dict,
+  body: Optional[bytes],
+) -> dict:
+  """one request over `connection`, its response mapped onto the store errors."""
+  connection.request(method, path, body=body, headers=headers)
+  response = connection.getresponse()
+  raw = response.read()
+  if response.status >= 400:
+    exception = HTTPStatusError(
+      response.status,
+      f'{method} {path} -> HTTP {response.status}: {raw.decode(errors="replace")}',
+      raw,
+    )
+    if response.status == 404:
+      missing_trail = reported_missing_trail(raw)
+      if missing_trail is not None:
+        raise TrailNotFound(missing_trail) from exception
+      missing_tool = reported_missing_tool(raw)
+      if missing_tool is not None:
+        raise ToolNotFound(missing_tool) from exception
+    if response.status == 409:
+      extents = _append_conflict_extents(raw)
+      if extents is not None:
+        raise AppendConflict(*extents) from exception
+      collided = reported_collision(raw)
+      if collided is not None:
+        raise TrailCollision(collided, str(exception)) from exception
+    if response.status in (401, 403):
+      raise PermissionDenied(str(exception)) from exception
+    if response.status == 501:
+      raise UnsupportedOperation(str(exception)) from exception
+    if response.status == 400:
+      raise InvalidRequest(str(exception)) from exception
+    if is_retryable_status(response.status):
+      raise TransientUnavailable(str(exception)) from exception
+    raise exception
+  if response.status == 204 or len(raw) == 0:
+    return {}
+  return json.loads(raw)

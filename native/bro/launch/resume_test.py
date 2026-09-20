@@ -21,7 +21,7 @@ class FakeTrailsStore:
     spilled: Optional[dict[str, Any]] = None,
   ):
     # newest-first, like the real listing
-    self._headers = headers
+    self._headers = [{**header, 'extent': len(steps.get(header['id'], []))} for header in headers]
     self._steps = steps
     self._spilled = spilled if spilled is not None else {}
 
@@ -52,6 +52,15 @@ class FakeTrailsStore:
           if 'content' in resolved:
             resolved['content'] = self.resolve_body(resolved['content'])
           yield resolved
+
+  def collect_messages(
+    self, trail_id: str, *, extent: int, types: Optional[set[str]] = None
+  ) -> list[dict]:
+    return [
+      message
+      for message in self.iter_messages(trail_id, types=types)
+      if message['source']['step_id'] < extent
+    ]
 
   def get_launch_context(self, trail_id: str):
     return None

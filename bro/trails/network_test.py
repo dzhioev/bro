@@ -1,5 +1,7 @@
 import http.client
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 from unittest.mock import patch
 
@@ -105,6 +107,69 @@ class TestConstructor:
 
     store = NetworkStore('http://127.0.0.1:8004', 'tok')
     assert store.get_trail('T1') == {'id': 'T1', 'format': INITIAL_TRAIL_FORMAT}
+
+
+class TestConnectionPool:
+  def test_concurrent_requests_take_their_own_connections_and_return_them(self, monkeypatch):
+    opened: list[_FakeConnection] = []
+    both_opened = threading.Event()
+
+    class _WaitingConnection(_FakeConnection):
+      def getresponse(self) -> _FakeResponse:
+        if not both_opened.wait(timeout=10):
+          raise AssertionError('the second request never got a connection of its own')
+        return super().getresponse()
+
+    def open_connection(*args: Any, **kwargs: Any) -> _FakeConnection:
+      connection = _WaitingConnection()
+      connection.queue((200, b'{"id": "T1"}'))
+      opened.append(connection)
+      if len(opened) == 2:
+        both_opened.set()
+      return connection
+
+    monkeypatch.setattr(http.client, 'HTTPSConnection', open_connection)
+    store = _client()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+      results = list(executor.map(lambda _: store.get_trail('T1'), range(2)))
+    assert results == [{'id': 'T1', 'format': INITIAL_TRAIL_FORMAT}] * 2
+    assert [len(connection.requests) for connection in opened] == [1, 1]
+
+    for connection in opened:
+      connection.queue((200, b'{"id": "T2"}'))
+    assert store.get_trail('T2') == {'id': 'T2', 'format': INITIAL_TRAIL_FORMAT}
+    assert len(opened) == 2
+
+    store.close()
+    assert [connection.closes for connection in opened] == [1, 1]
+
+  def test_a_connection_out_on_a_request_during_close_is_closed_on_return(self, monkeypatch):
+    request_in_flight = threading.Event()
+    store_closed = threading.Event()
+
+    class _HeldConnection(_FakeConnection):
+      def getresponse(self) -> _FakeResponse:
+        request_in_flight.set()
+        if not store_closed.wait(timeout=10):
+          raise AssertionError('close() never ran while the request was in flight')
+        return super().getresponse()
+
+    connection = _HeldConnection()
+    connection.queue((200, b'{"id": "T1"}'))
+    monkeypatch.setattr(http.client, 'HTTPSConnection', lambda *args, **kwargs: connection)
+    store = _client()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+      request = executor.submit(store.get_trail, 'T1')
+      if not request_in_flight.wait(timeout=10):
+        raise AssertionError('the request never reached the connection')
+      store.close()
+      assert connection.closes == 0
+      store_closed.set()
+      assert request.result(timeout=10) == {'id': 'T1', 'format': INITIAL_TRAIL_FORMAT}
+
+    assert connection.closes == 1
+    with pytest.raises(RuntimeError, match='is closed'):
+      store.get_trail('T1')
 
 
 class TestGetTrail:

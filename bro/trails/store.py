@@ -1,7 +1,8 @@
 """Store-neutral trails facade and credential-level backend selection."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from types import TracebackType
@@ -22,6 +23,7 @@ from bro.workspace import paths
 
 DEFAULT_LIST_PAGE_SIZE = 100
 DEFAULT_STEPS_PAGE_SIZE = 200
+COLLECT_WORKERS = 8
 IMPORT_CHUNK_ROWS = 100
 IMPORT_CHUNK_BYTES = 8 * 1024 * 1024
 
@@ -89,6 +91,41 @@ def refusing_invalid_requests(description: str) -> Iterator[None]:
     raise
   except (KeyError, TypeError, ValueError) as exception:
     raise InvalidRequest(f'{description}: {exception}') from exception
+
+
+Page = tuple[list[dict], Optional[int]]
+
+
+def _page(response: dict, rows_key: str) -> Page:
+  return response[rows_key], response['through']
+
+
+def _collect_windows(
+  extent: int, window: int, fetch: Callable[[Optional[int], int], Page]
+) -> list[dict]:
+  """the rows of steps `[0, extent)` in order: each window of `window` steps is
+  paged through `fetch(after, limit)` until covered, the windows concurrently."""
+  if extent < 0:
+    raise ValueError(f'extent must be non-negative, got {extent}')
+  if window < 1:
+    raise ValueError(f'window must be positive, got {window}')
+
+  def collect(start: int) -> list[dict]:
+    last = min(start + window, extent) - 1
+    after = start - 1
+    rows: list[dict] = []
+    while after < last:
+      page_rows, through = fetch(after if after >= 0 else None, last - after)
+      rows.extend(page_rows)
+      if through is None:
+        raise RuntimeError(f'rows ran out after step {after}, wanted them through step {last}')
+      if through <= after:
+        raise RuntimeError(f'page evaluated through step {through}, not past step {after}')
+      after = through
+    return rows
+
+  with ThreadPoolExecutor(max_workers=COLLECT_WORKERS) as executor:
+    return [row for rows in executor.map(collect, range(0, extent, window)) for row in rows]
 
 
 class TrailsStore(ABC):
@@ -186,6 +223,35 @@ class TrailsStore(ABC):
       after = page.get('next')
       if after is None:
         return
+
+  def collect_steps(
+    self, trail_id: str, *, extent: int, window: int = DEFAULT_STEPS_PAGE_SIZE
+  ) -> list[dict]:
+    """the trail's first `extent` steps in order, fetched as concurrent windows
+    of `window` steps."""
+    return _collect_windows(
+      extent,
+      window,
+      lambda after, limit: _page(self.get_steps(trail_id, after=after, limit=limit), 'steps'),
+    )
+
+  def collect_messages(
+    self,
+    trail_id: str,
+    *,
+    extent: int,
+    types: Optional[set[str]] = None,
+    window: int = DEFAULT_STEPS_PAGE_SIZE,
+  ) -> list[dict]:
+    """the messages of the trail's first `extent` steps in order, fetched as
+    concurrent windows of `window` steps."""
+    return _collect_windows(
+      extent,
+      window,
+      lambda after, limit: _page(
+        self.get_messages(trail_id, types=types, after=after, limit=limit), 'messages'
+      ),
+    )
 
   @abstractmethod
   def get_launch_context(self, trail_id: str) -> Optional[Any]: ...

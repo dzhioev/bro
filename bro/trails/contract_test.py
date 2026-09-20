@@ -307,15 +307,30 @@ class TestTrailsStoreContract:
     assert trails_store.get_step(trail_id, 1)['body'] == 'hello'
     first_page = trails_store.get_steps(trail_id, limit=1)
     assert [step['step_id'] for step in first_page['steps']] == [0]
-    assert first_page['next'] == 0
+    assert (first_page['next'], first_page['through']) == (0, 0)
+    last_page = trails_store.get_steps(trail_id, after=0, limit=5)
+    assert [step['step_id'] for step in last_page['steps']] == [1, 2]
+    assert (last_page['next'], last_page['through']) == (None, 2)
     assert [step['step_id'] for step in trails_store.iter_steps(trail_id, page_size=1)] == [0, 1, 2]
     messages = trails_store.get_messages(trail_id, types={'user_input'})
     assert [message['content'] for message in messages['messages']] == ['hello']
+    assert messages['through'] == 2
     assert [message['type'] for message in trails_store.iter_messages(trail_id)] == [
       'system_prompt',
       'user_input',
       'tool_result',
     ]
+    steps = list(trails_store.iter_steps(trail_id))
+    assert trails_store.collect_steps(trail_id, extent=3, window=2) == steps
+    assert trails_store.collect_steps(trail_id, extent=2) == steps[:2]
+    assert trails_store.collect_steps(trail_id, extent=0) == []
+    assert [
+      message['type'] for message in trails_store.collect_messages(trail_id, extent=3, window=1)
+    ] == ['system_prompt', 'user_input', 'tool_result']
+    assert [
+      message['content']
+      for message in trails_store.collect_messages(trail_id, extent=3, types={'user_input'})
+    ] == ['hello']
 
     trails_store.keepalive(trail_id)
     assert trails_store.set_subject(trail_id, 'updated')['subject'] == 'updated'

@@ -341,11 +341,10 @@ class TestRecorderKeepalive:
       fake.queue(_append_response(extent))
       tracker.step('user_input', 'x', turn_index=extent - 2)
       threading.Event().wait(0.02)
-    fake.queue((204, b''))
-    tracker.end_trail('ok')
     thread = tracker._keepalive_thread
     assert thread is not None
-    thread.join(2.0)
+    fake.queue((204, b''))
+    tracker.end_trail('ok')
     assert not thread.is_alive()
     assert len(self._keepalive_requests(fake)) == 0
 
@@ -355,14 +354,12 @@ class TestRecorderKeepalive:
     assert thread is not None and thread.is_alive()
     fake.queue((204, b''))
     tracker.end_trail('ok')
-    thread.join(2.0)
     assert not thread.is_alive()
 
     tracker, _ = self._start(monkeypatch, interval=3600.0)
     thread = tracker._keepalive_thread
     assert thread is not None and thread.is_alive()
     tracker.close()
-    thread.join(2.0)
     assert not thread.is_alive()
 
   def test_keepalive_failure_does_not_stop_recording(self, monkeypatch, capsys):
