@@ -1,4 +1,4 @@
-"""The broker journal: quest records, ordered events, and permanent lineage."""
+"""The broker journal: mission records, ordered events, and permanent lineage."""
 
 import asyncio
 import json
@@ -36,10 +36,11 @@ CHAT_TRANSITIONS = frozenset({'message', 'refused', 'listening'})
 
 @dataclass
 class Record:
-  quest_id: str
+  mission_id: str
   kind: str
+  type: Optional[str]
   parent: Optional[str]
-  requester: Optional[Peer]
+  owner: Optional[Peer]
   args: dict[str, Any]
   talk: Talk
   worker: Optional[Peer] = None
@@ -67,7 +68,7 @@ class Record:
 
   def view(self, *, include_result: bool = False, include_messages: bool = False) -> dict[str, Any]:
     view: dict[str, Any] = {
-      'id': self.quest_id,
+      'id': self.mission_id,
       'kind': self.kind,
       'parent': self.parent,
       'args': self.args,
@@ -76,6 +77,8 @@ class Record:
       'listening': self.listening,
       'chat_seq': self.chat_seq,
     }
+    if self.type is not None:
+      view['type'] = self.type
     if include_messages:
       view['messages'] = self.conversation()
       if self.messages_truncated:
@@ -111,24 +114,28 @@ class Record:
 class Event:
   seq: int
   at: Moment
-  quest: str
+  mission: str
   kind: str
+  type: Optional[str]
   parent: Optional[str]
   args: dict[str, Any]
   transition: str
   payload: dict[str, Any]
 
   def view(self) -> dict[str, Any]:
-    return {
+    view = {
       'seq': self.seq,
       'at': self.at.isoformat(),
-      'quest': self.quest,
+      'mission': self.mission,
       'kind': self.kind,
       'parent': self.parent,
       'args': self.args,
       'transition': self.transition,
       **self.payload,
     }
+    if self.type is not None:
+      view['type'] = self.type
+    return view
 
 
 @dataclass(frozen=True)
@@ -162,57 +169,62 @@ class Journal:
   def subscribe(self, subscriber: Subscriber) -> None:
     self._subscribers.append(subscriber)
 
-  def knows(self, quest_id: str) -> bool:
-    return quest_id in self.lineage
+  def knows(self, mission_id: str) -> bool:
+    return mission_id in self.lineage
 
   def open(
     self,
-    quest_id: str,
+    mission_id: str,
     kind: str,
     parent: Optional[str],
-    requester: Optional[Peer],
+    owner: Optional[Peer],
     args: dict[str, Any],
     *,
+    type: str,
     talk: Talk = EMPTY_TALK,
   ) -> Record:
-    if quest_id in self.lineage:
-      raise ValueError(f'quest id {quest_id!r} already exists')
+    if mission_id in self.lineage:
+      raise ValueError(f'mission id {mission_id!r} already exists')
     now = utc_now()
     record = Record(
-      quest_id=quest_id,
+      mission_id=mission_id,
       kind=kind,
+      type=type,
       parent=parent,
-      requester=requester,
+      owner=owner,
       args=bounded_args(args),
       talk=talk,
       accepted_at=now,
       order=self._next_order(),
     )
-    self.records[quest_id] = record
-    self.lineage[quest_id] = Lineage(parent, kind)
+    self.records[mission_id] = record
+    self.lineage[mission_id] = Lineage(parent, kind)
     self._append(record, 'accepted', {}, at=now)
     self._retain()
     return record
 
   def deny(
     self,
-    quest_id: str,
+    mission_id: str,
     kind: str,
     parent: Optional[str],
-    requester: Peer,
+    owner: Peer,
     args: dict[str, Any],
     reason: str,
+    *,
+    type: Optional[str] = None,
   ) -> Record:
-    if quest_id in self.lineage:
-      raise ValueError(f'quest id {quest_id!r} already exists')
+    if mission_id in self.lineage:
+      raise ValueError(f'mission id {mission_id!r} already exists')
     now = utc_now()
     result = {'outcome': 'denied', 'error': reason}
     bounded_reason, reason_truncated = _bounded_journal_text(reason)
     record = Record(
-      quest_id=quest_id,
+      mission_id=mission_id,
       kind=kind,
+      type=type,
       parent=parent,
-      requester=requester,
+      owner=owner,
       args=bounded_args(args),
       talk=EMPTY_TALK,
       state='denied',
@@ -224,8 +236,8 @@ class Journal:
       order=self._next_order(),
     )
     self._result_bytes += _payload_bytes(result)
-    self.records[quest_id] = record
-    self.lineage[quest_id] = Lineage(parent, kind)
+    self.records[mission_id] = record
+    self.lineage[mission_id] = Lineage(parent, kind)
     event_payload: dict[str, Any] = {'reason': bounded_reason}
     if reason_truncated:
       event_payload['reason_truncated'] = True
@@ -236,7 +248,7 @@ class Journal:
   def bind(self, record: Record, worker: Peer) -> None:
     self._require_current(record)
     if record.worker is not None:
-      raise RuntimeError(f'quest {record.quest_id} already has a worker')
+      raise RuntimeError(f'mission {record.mission_id} already has a worker')
     record.worker = worker
 
   def started(self, record: Record) -> bool:
@@ -349,29 +361,29 @@ class Journal:
     self._append(record, 'ended', event_payload, at=record.ended_at)
     self._retain()
 
-  def evicted_view(self, quest_id: str) -> Optional[dict[str, Any]]:
-    lineage = self.lineage.get(quest_id)
+  def evicted_view(self, mission_id: str) -> Optional[dict[str, Any]]:
+    lineage = self.lineage.get(mission_id)
     if lineage is None:
       return None
     return {
-      'id': quest_id,
+      'id': mission_id,
       'kind': lineage.kind,
       'parent': lineage.parent,
       'state': 'evicted',
     }
 
-  def ancestry(self, quest_id: str) -> tuple[str, ...]:
-    """The quest's ancestors, nearest parent first."""
+  def ancestry(self, mission_id: str) -> tuple[str, ...]:
+    """The mission's ancestors, nearest parent first."""
     ancestors = []
-    lineage = self.lineage.get(quest_id)
+    lineage = self.lineage.get(mission_id)
     if lineage is None:
-      raise ValueError(f'unknown quest id {quest_id!r}')
+      raise ValueError(f'unknown mission id {mission_id!r}')
     parent = lineage.parent
     while parent is not None:
       ancestors.append(parent)
       lineage = self.lineage.get(parent)
       if lineage is None:
-        raise RuntimeError(f'quest {quest_id!r} has unknown ancestor {parent!r}')
+        raise RuntimeError(f'mission {mission_id!r} has unknown ancestor {parent!r}')
       parent = lineage.parent
     return tuple(ancestors)
 
@@ -400,10 +412,10 @@ class Journal:
     for event in self._events:
       if event.seq <= after:
         continue
-      record = self.records.get(event.quest)
+      record = self.records.get(event.mission)
       if record is None:
-        lineage = self.lineage[event.quest]
-        probe = Record(event.quest, lineage.kind, lineage.parent, None, {}, EMPTY_TALK)
+        lineage = self.lineage[event.mission]
+        probe = Record(event.mission, lineage.kind, None, lineage.parent, None, {}, EMPTY_TALK)
       else:
         probe = record
       if self.visible(caller, probe, workers) or (
@@ -429,8 +441,9 @@ class Journal:
     event = Event(
       self._seq,
       at if at is not None else utc_now(),
-      record.quest_id,
+      record.mission_id,
       record.kind,
+      record.type,
       record.parent,
       record.args,
       transition,
@@ -473,7 +486,7 @@ class Journal:
       )
       if record is None:
         break
-      self.records.pop(record.quest_id)
+      self.records.pop(record.mission_id)
       if record.result is not None:
         self._result_bytes -= _payload_bytes(record.result)
 
@@ -482,17 +495,17 @@ class Journal:
     return self._order
 
   def _require_current(self, record: Record) -> None:
-    if self.records.get(record.quest_id) is not record:
-      raise RuntimeError(f'quest {record.quest_id} is not retained')
+    if self.records.get(record.mission_id) is not record:
+      raise RuntimeError(f'mission {record.mission_id} is not retained')
 
   def _require_live(self, record: Record) -> None:
     self._require_current(record)
     if record.terminal:
-      raise RuntimeError(f'quest {record.quest_id} is already terminal')
+      raise RuntimeError(f'mission {record.mission_id} is already terminal')
 
 
 def listing_position(record: Record) -> tuple[bool, int, str]:
-  return record.terminal, -record.order, record.quest_id
+  return record.terminal, -record.order, record.mission_id
 
 
 def bounded_args(

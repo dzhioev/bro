@@ -751,22 +751,22 @@ It retains the returned pid to stop the daemon on session exit and writes `broxy
 When `broxy launch` cannot run
 — missing from the session runtime or not ready within the gate
 — the call site leaves `BROKER_UPSTREAM` set and `BROKER_CHANNEL` unset.
-The session launch still proceeds, but every attempted broker client raises `session proxy failed at launch` with that log path instead of silently behaving like a broker-less session.
+The session launch still proceeds, but every attempted broker client raises `session proxy failed at launch` instead of silently behaving like a broker-less session;
+the launch warning names the log path.
 With both variables unset, no channel was intended:
 the substrate CLI stays inert, while summon and artifact surfaces report that no broker channel exists.
 A proxy-less *summoned child* cannot report its result
 — its exit surfaces to the summoner as the synthesized `result{failed, reason: exit}` with the output tail, and the child's trail as the fallback record.
 
 The live broker registers the reserved `ping` kind, so a session can verify its channel with `broker request ping '{}'`;
-the journal projection logs the root's host-anchored quest
-— its launch carries the quest id in `BROKER_QUEST` beside the channel, and the host process is the requester;
+the journal projection logs the root's host-anchored mission
+— its launch carries the mission id in `BROKER_MISSION` beside the channel, and the host process is the owner;
 and the `summon` kind handler
 — the root launch carries the session's summon allow-list (`run_root_via_broker(may_summon=…)`, computed at launch by `ride/ride/summon_control.py`;
 see the shared launch flags above) and wires the per-root `SummonControl` enforcing per-peer summon authorization (see "Summoning another bro").
 Because the channel sits on the critical path of every launch, a broker defect would too
-— `BROKER_DISABLED` (presence-checked, parallel to `TRAILS_DISABLED`) is the kill-switch that skips broker provisioning/dispatch entirely (no channel, so no launcher starts a broxy),
-and a venv that can't import broker degrades the same way with a warning;
-both fall back to the direct launch (`docker start -a -i` in boxed isolation, a plain unboxed runner spawn).
+— `BROKER_DISABLED` (presence-checked, parallel to `TRAILS_DISABLED`) is the kill-switch that skips broker provisioning and dispatch entirely, so no launcher starts a broxy.
+The broker-less path runs `docker start -a -i` in boxed isolation and a plain runner spawn in unboxed isolation.
 The post-exit finish (resume hint, `--drop`) runs after `Broker.run()` returns, so it is identical on both paths.
 
 While an interactive root owns the terminal
@@ -818,9 +818,9 @@ A started child in an attached ride bases on the summoner’s workspace `HEAD` r
 a container summoner’s local-only commits are transferred into the attachment first so the child’s host-side clone can copy them) unless the request’s `into` ref overrides, while a detached root starts detached children and rejects `into`.
 A joined child uses the party’s existing tree directly, including its current uncommitted state, and runs no workspace setup or persona provisioning of its own.
 The quest carries a fixed **talk** over four rights:
-`summoner.say`, `summoner.question`, `summoned.say`, and `summoned.question`.
+`owner.say`, `owner.question`, `worker.say`, and `worker.question`.
 A reply is authorized by the other end's question right.
-A summon defaults to `summoned.say` and widens only through the request's `talk` field, spelled `--talk <right>[,<right>]` by the CLI;
+A summon defaults to `worker.say` and widens only through the request's `talk` field, spelled `--talk <right>[,<right>]` by the CLI;
 the host fixes and enforces the set when the quest opens, while both peer surfaces refuse a forbidden move before sending.
 The answer comes back synchronously, while permitted messages can travel for the quest's whole life.
 A quest also ends before its answer when its summoner is gone or says so:
@@ -840,7 +840,7 @@ underneath it are two client surfaces over the same request, each split into the
   Grant/revoke and the LLM flags shape the child exactly as they shape a managed run — see the shared launch flags above — except that a summon may only widen the child's credential scope with what the summoning session itself holds,
   whether it names the credential outright or reaches it through `--harness`/the LLM flags.
   A blocking wait rides through child says.
-  When `summoned.question` is granted, a child's question instead prints on stdout and exits 4 so the summoner gets a turn;
+  When `worker.question` is granted, a child's question instead prints on stdout and exits 4 so the summoner gets a turn;
   stderr names the question and the exact `quest say <quest> '<answer>' --reply-to <question>` command that answers it.
   `--detach` waits for the first correlated message:
   host `accepted` prints the quest id, while a denial or pre-acceptance launch failure exits with its reason and prints no id.
@@ -1254,9 +1254,13 @@ Wrappers and session daemons rely on a small set of env vars:
   the launcher authorizes against its own copy, so only a relaunch (or the summon that spawns a child) changes what it may summon.
 - `RIDE_PERMITS` — the run's own effective party permits under the same encoding, publication, and host-side enforcement rule.
   `ride banner` renders each with its `:` grammar marker.
+- `BROKER_MISSION` — the broker mission this run undertakes.
+  Every spawner writes it beside the channel;
+  a manual summon's token is its mission id and carries the same value into the user-launched session.
+  The bro workflow exposes this mission as the run's own quest, named `self` on its quest surfaces.
 - `BROKER_TALK` — the sorted, comma-separated rights of the run's own quest;
   empty means mute and unset means the launcher published no fact.
-  Every spawner writes it beside `BROKER_QUEST`, and a manual summon's pending record carries it into the user-launched session.
+  Every spawner writes it beside `BROKER_MISSION`, and a manual summon's pending record carries it into the user-launched session.
   `bro.summon.talk()` feeds the banner, the session prompt's `#talk` fact, and the Claude tool fold;
   the host journal remains the enforcing copy.
 - `RIDE_IN_CONTAINER=1` — the runtime image's own, marking a process running in an image this runtime built.
@@ -1272,7 +1276,8 @@ Wrappers and session daemons rely on a small set of env vars:
   `do-ride` uses it instead of resolving an omitted or partial `--llm` against defaults that may have changed before a resume.
 - `BROKER_UPSTREAM` — the host broker address supplied by a launcher, `tcp://<token>@<host>:<port>`.
   Only the session broxy consumes it (`host.docker.internal` in a container, loopback on host), removing it once the local proxy is ready.
-  If proxy launch fails, it remains set while `BROKER_CHANNEL` stays unset, which makes `Client.from_env` raise with the session's `broxy.log` path.
+  If proxy launch fails, it remains set while `BROKER_CHANNEL` stays unset, which makes `Client.from_env` report the failed session proxy;
+  the launch warning names the session's `broxy.log` path.
 - `BROKER_CHANNEL` — the address broker clients connect to, with the same URI shape.
   The broxy publishes its loopback address here after readiness;
   a launcher that intentionally runs no broxy may publish a direct channel instead.
@@ -1283,7 +1288,8 @@ Wrappers and session daemons rely on a small set of env vars:
   Both broker variables unset means no channel was intended.
 - `BROKER_DISABLED` — launcher-side presence-checked kill-switch:
   the session gets neither broker variable (see "The broker channel").
-  Checked before any broker import (`ride/ride/workspace/containers.py:broker_enabled`).
+  Checked before broker machinery imports (`ride/ride/workspace/containers.py:broker_enabled`);
+  the constants-only `bro.broker.environment` module may already be loaded.
 - `SSL_CERT_FILE` — set for an unboxed session of a given runtime to the certifi store inside that runtime's venv (see "Runtime bundles");
   absent for a frozen runtime's sessions, and never admitted from the launcher's environment.
 - `TERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `COLORTERM`, `VTE_VERSION` — the launcher's terminal identity (`SESSION_TERMINAL_ENV` in `ride.runtime_bundle`).

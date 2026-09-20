@@ -13,34 +13,35 @@ ANSWER_TOO_LARGE = 'answer too large; mint an artifact and return the ref'
 
 
 class RunLifecycle:
-  def __init__(self, client: 'Client', quest: str):
+  def __init__(self, client: 'Client', mission: str):
     self._client = client
-    self._quest = quest
+    self._mission = mission
     self._trail_id: Optional[str] = None
 
   @classmethod
   def from_env(cls) -> Optional['RunLifecycle']:
     try:
-      from bro.broker.client import QUEST_ENV, Client
+      from bro.broker.client import Client
+      from bro.broker.environment import BROKER_MISSION
     except ImportError:
       return None
     client = Client.from_env()
     if client is None:
       return None
-    quest = os.environ.get(QUEST_ENV)
-    if quest is None:
+    mission = os.environ.get(BROKER_MISSION)
+    if mission is None:
       client.close()
       raise ValueError(
-        f'broker channel present but {QUEST_ENV} unset; '
-        'the launch did not name the quest this run answers'
+        f'broker channel present but {BROKER_MISSION} unset; '
+        'the launch did not name the mission this run undertakes'
       )
-    return cls(client, quest)
+    return cls(client, mission)
 
   def trail(self, trail_id: str) -> None:
     if self._trail_id is not None:
       raise RuntimeError('run lifecycle trail already emitted')
     self._trail_id = trail_id
-    self._client.mark(self._quest, 'trail', trail_id=trail_id)
+    self._client.mark(self._mission, 'trail', trail_id=trail_id)
 
   def completed(
     self,
@@ -60,7 +61,7 @@ class RunLifecycle:
       payload = {'outcome': 'failed', 'detail': {'reason': end_reason}}
       if bounded is not None:
         payload['error'] = bounded
-    self._client.result(self._quest, payload)
+    self._client.result(self._mission, payload)
 
   def close(self) -> None:
     self._client.close(confirm=True)

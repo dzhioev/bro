@@ -10,8 +10,9 @@ import bro.mcp as mcp
 import bro.native.runner as native_runner
 from bro.base import credentials
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
-from bro.broker.brotocol import TALK_ENV, Message
-from bro.broker.client import CHANNEL_ENV, Client
+from bro.broker.brotocol import Message
+from bro.broker.client import Client
+from bro.broker.environment import BROKER_CHANNEL, BROKER_TALK
 from bro.broker.transport import ClientTransport
 from bro.inbox import Inbox
 from bro.llm.mcp import InProcessMCPServer, MCPServer
@@ -734,7 +735,7 @@ class TestLiveWorkReminder:
 
   @pytest.mark.asyncio
   async def test_an_in_flight_summon_is_named_by_request_and_target(self, monkeypatch):
-    monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:1')
+    monkeypatch.setenv(BROKER_CHANNEL, 'tcp://token@127.0.0.1:1')
     monkeypatch.setattr(
       native_runner, 'live_children', lambda: [LiveChild('01m-child', 'bro-eyebro')]
     )
@@ -1009,7 +1010,7 @@ class TestRunLifecycle:
 
   @pytest.mark.asyncio
   async def test_run_without_channel_emits_nothing(self, monkeypatch):
-    monkeypatch.delenv(CHANNEL_ENV, raising=False)
+    monkeypatch.delenv(BROKER_CHANNEL, raising=False)
     assert await StubRunner(_StubLLM(response='fine')).run('input', surface='test') == 'fine'
 
   @pytest.mark.asyncio
@@ -1031,7 +1032,7 @@ class TestRunLifecycle:
   @pytest.mark.asyncio
   async def test_summoned_send_announces_started(self, monkeypatch):
     monkeypatch.setenv('RIDE_SUMMONED', '1')
-    monkeypatch.setenv(TALK_ENV, 'summoned.say')
+    monkeypatch.setenv(BROKER_TALK, 'worker.say')
     channel, transport = _make_channel()
     runner = _ChannelRunner(channel, _StubLLM(response='chat'))
     assert await runner.send('hi', tracker=_TrailIDTracker(), surface='test') == 'chat'

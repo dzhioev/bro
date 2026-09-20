@@ -30,8 +30,9 @@ from bro.bench.job import BENCHMARK, benchmark_kind
 from bro.benchmark.bundle import build, claude_code_cache, default_root, workspace_root
 from bro.benchmark.e2e_test_helper import LIVE_TRIAL, assert_graded_run, one_task_config
 from bro.benchmark.job import BUNDLE_MANIFEST
-from bro.broker.brotocol import TALK_ENV, Message, Talk, encode_talk
+from bro.broker.brotocol import Message, Talk, encode_talk
 from bro.broker.dispatcher import Broker, Dispatcher
+from bro.broker.environment import BROKER_TALK
 from bro.broker.job import OUTPUT_DIRECTORY
 from bro.broker.runtime import Peer
 from bro.broker.spawn import ChildHandle, LaunchSpec, RingBuffer, Spawner
@@ -102,8 +103,8 @@ class _SessionSpawner(Spawner):
       env={
         **os.environ,
         'BROKER_CHANNEL': channel.host_endpoint.address(LOCAL_HOST),
-        'BROKER_QUEST': quest,
-        TALK_ENV: encode_talk(talk),
+        'BROKER_MISSION': quest,
+        BROKER_TALK: encode_talk(talk),
       },
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,
@@ -180,7 +181,8 @@ def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
     exit_code = broker.run(
       _SessionCommand(
         (str(BENCHMARK_JOB), 'start', '-c', config, '--timeout', str(JOB_TIMEOUT_SEC))
-      )
+      ),
+      type='bro',
     )
 
   assert exit_code == 0, spawner.output()

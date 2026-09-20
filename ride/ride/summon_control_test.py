@@ -92,41 +92,47 @@ class FakeContext:
     self.expected = []
     self.active = None
     self.journal = control.test_journal
-    root = self.journal.open('root-quest', 'root', None, None, {})
+    root = self.journal.open('root-quest', 'root', None, None, {}, type='bro')
     self.journal.bind(root, ROOT)
 
-  def deny(self, peer, error):
+  def deny(self, peer, error, *, type=None):
     assert self.active is not None
+    assert type == 'bro'
     record = self.journal.deny(
-      self.active.quest_id,
+      self.active.request_id,
       'summon',
       self.workers.get(peer),
       peer,
       self.active.args,
       error,
+      type=type,
     )
     self.replies.append((peer, {'outcome': 'denied', 'error': record.reason}))
 
-  def spawn(self, launch, peer, *, talk, timeout=None):
+  def spawn(self, launch, peer, *, type, talk, timeout=None):
     assert self.active is not None
+    assert type == 'bro'
     self.journal.open(
-      self.active.quest_id,
+      self.active.request_id,
       'summon',
       self.workers[peer],
       peer,
       self.active.args,
+      type=type,
       talk=talk,
     )
     self.spawned.append((launch, peer, timeout))
 
-  def expect(self, peer, *, talk, timeout, ready):
+  def expect(self, peer, *, type, talk, timeout, ready):
     assert self.active is not None
+    assert type == 'bro'
     self.journal.open(
-      self.active.quest_id,
+      self.active.request_id,
       'summon',
       self.workers[peer],
       peer,
       self.active.args,
+      type=type,
       talk=talk,
     )
     self.expected.append((peer, timeout))
@@ -211,8 +217,8 @@ def test_authorized_summon_opens_identity_before_spawning(tmp_path):
   assert launch.parent == 'ws'
   assert peer == ROOT
   assert timeout == DEFAULT_TIMEOUT
-  assert control._facts.for_quest(message.quest_id).bro == 'dev'
-  assert context.journal.records[message.quest_id].talk == frozenset({'summoned.say'})
+  assert control._facts.for_quest(message.request_id).bro == 'dev'
+  assert context.journal.records[message.request_id].talk == frozenset({'worker.say'})
   assert not (tmp_path / 'summon-status.json').exists()
   accepted = _audit(tmp_path)[-1]
   assert accepted['transition'] == 'accepted'
@@ -227,12 +233,12 @@ def test_authorized_summon_opens_identity_before_spawning(tmp_path):
 def test_request_talk_widens_the_default_and_reaches_spawn(tmp_path):
   control = _control(tmp_path)
   context = FakeContext(control)
-  message = _message(talk=['summoned.question', 'summoner.say'])
+  message = _message(talk=['worker.question', 'owner.say'])
 
   control.handle(cast(Dispatcher, context), ROOT, message)
 
-  assert context.journal.records[message.quest_id].talk == frozenset(
-    {'summoned.say', 'summoned.question', 'summoner.say'}
+  assert context.journal.records[message.request_id].talk == frozenset(
+    {'worker.say', 'worker.question', 'owner.say'}
   )
 
 
@@ -240,20 +246,22 @@ def test_manual_request_talk_reaches_the_pending_record(tmp_path, monkeypatch):
   monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
   control = _control(tmp_path)
   context = FakeContext(control)
-  message = _message(manual=True, talk=['summoned.question'])
+  message = _message(manual=True, talk=['worker.question'])
 
   control.handle(cast(Dispatcher, context), ROOT, message)
 
-  assert ride.pending_summon.peek(message.quest_id).talk == ('summoned.question', 'summoned.say')
-  assert context.journal.records[message.quest_id].talk == frozenset(
-    {'summoned.say', 'summoned.question'}
+  assert ride.pending_summon.peek(message.request_id).talk == ('worker.question', 'worker.say')
+  assert context.journal.records[message.request_id].talk == frozenset(
+    {'worker.say', 'worker.question'}
   )
 
 
 def test_audit_attributes_every_worker_backed_kind_from_journal_parent(tmp_path):
   control = _control(tmp_path)
   context = FakeContext(control)
-  record = context.journal.open('job-quest', 'benchmark', 'root-quest', ROOT, {'work': 'score'})
+  record = context.journal.open(
+    'job-quest', 'benchmark', 'root-quest', ROOT, {'work': 'score'}, type='bro'
+  )
   context.journal.started(record)
   context.journal.end(record, {'outcome': 'ok'})
   entries = _audit(tmp_path)[-3:]
@@ -266,9 +274,9 @@ def test_joined_summoner_audit_names_its_party_member(tmp_path):
   context = FakeContext(control)
   joined = _message(party='join')
   control.handle(cast(Dispatcher, context), ROOT, joined)
-  control._facts.note_member(joined.quest_id, 'ws', 'broker-CH')
-  context.workers[CHILD] = joined.quest_id
-  context.journal.bind(context.journal.records[joined.quest_id], CHILD)
+  control._facts.note_member(joined.request_id, 'ws', 'broker-CH')
+  context.workers[CHILD] = joined.request_id
+  context.journal.bind(context.journal.records[joined.request_id], CHILD)
 
   control.handle(cast(Dispatcher, context), CHILD, _message(target=''))
 
@@ -295,11 +303,11 @@ def test_journal_trail_and_terminal_update_identity_audit_and_cleanup(tmp_path):
   context = FakeContext(control)
   message = _message()
   control.handle(cast(Dispatcher, context), ROOT, message)
-  record = context.journal.records[message.quest_id]
+  record = context.journal.records[message.request_id]
   context.journal.bind(record, CHILD)
   context.journal.started(record)
   context.journal.trail(record, 'trail-1')
-  assert control._facts.for_quest(message.quest_id).bro == 'dev'
+  assert control._facts.for_quest(message.request_id).bro == 'dev'
   context.journal.end(record, {'outcome': 'failed', 'error': 'no', 'detail': {'reason': 'raised'}})
   audit = _audit(tmp_path)
   assert [entry['transition'] for entry in audit[-3:]] == [
@@ -311,7 +319,7 @@ def test_journal_trail_and_terminal_update_identity_audit_and_cleanup(tmp_path):
   assert all(
     entry['placement'] == {'party': 'start', 'isolation': 'boxed'} for entry in summon_entries
   )
-  assert control._facts.for_quest(message.quest_id).bro == 'dev'
+  assert control._facts.for_quest(message.request_id).bro == 'dev'
   assert not (tmp_path / 'summon-status.json').exists()
 
 
@@ -328,7 +336,7 @@ def test_terminal_variants_reach_the_audit(tmp_path, payload, outcome, reason, e
   context = FakeContext(control)
   message = _message()
   control.handle(cast(Dispatcher, context), ROOT, message)
-  record = context.journal.records[message.quest_id]
+  record = context.journal.records[message.request_id]
   context.journal.end(record, payload, outcome=outcome, reason=reason)
   terminal = _audit(tmp_path)[-1]
   assert terminal['transition'] == 'ended'
@@ -353,7 +361,7 @@ def test_authorization_and_shape_denials_use_one_prefixed_journal_reason(
   assert reply['outcome'] == 'denied'
   assert reply['error'].startswith('summon denied: ')
   assert reply['error'].count('summon denied: ') == 1
-  denial = context.journal.records[message.quest_id]
+  denial = context.journal.records[message.request_id]
   assert denial.state == 'denied'
   assert denial.reason == reply['error']
   assert _audit(tmp_path)[-1]['transition'] == 'denied'
@@ -374,8 +382,8 @@ def test_authorization_and_shape_denials_use_one_prefixed_journal_reason(
     {'party': 'join', 'into': 'feature'},
     {'party': 'join', 'manual': True},
     {'isolation': 'shared'},
-    {'talk': 'summoned.say'},
-    {'talk': ['summoned.say', 'summoned.say']},
+    {'talk': 'worker.say'},
+    {'talk': ['worker.say', 'worker.say']},
     {'talk': ['summoned.shout']},
   ],
 )
@@ -490,7 +498,7 @@ def test_request_may_grant_only_a_permit_the_requester_holds(tmp_path):
     'party.start.boxed',
     'party.start.unboxed',
   )
-  assert allowed._facts.for_quest(message.quest_id).permits == frozenset(
+  assert allowed._facts.for_quest(message.request_id).permits == frozenset(
     {'party.start.boxed', 'party.start.unboxed'}
   )
 
@@ -505,7 +513,7 @@ def test_manual_request_needs_either_start_permit_and_records_child_permits(tmp_
   allowed_context = FakeContext(allowed)
   message = _message(manual=True)
   allowed.handle(cast(Dispatcher, allowed_context), ROOT, message)
-  pending = ride.pending_summon.peek(message.quest_id)
+  pending = ride.pending_summon.peek(message.request_id)
   assert pending.permits == ('party.start.boxed',)
   assert _audit(tmp_path)[-1]['placement'] == {'party': 'start', 'isolation': None}
 
@@ -678,8 +686,8 @@ def test_child_grant_bound_recomputes_its_llm_scope(tmp_path, monkeypatch):
   context = FakeContext(control)
   parent = _message(target='bro-dev', llm='echo')
   control.handle(cast(Dispatcher, context), ROOT, parent)
-  context.workers[CHILD] = parent.quest_id
-  _record_worker_workspace(control, parent.quest_id, f'broker-{CHILD}')
+  context.workers[CHILD] = parent.request_id
+  _record_worker_workspace(control, parent.request_id, f'broker-{CHILD}')
   calls.clear()
   control.handle(
     cast(Dispatcher, context),
@@ -773,8 +781,8 @@ def test_nested_request_outside_the_childs_allow_list_is_denied(tmp_path):
   context = FakeContext(control)
   parent = _message()
   control.handle(cast(Dispatcher, context), ROOT, parent)
-  context.workers[CHILD] = parent.quest_id
-  _record_worker_workspace(control, parent.quest_id, f'broker-{CHILD}')
+  context.workers[CHILD] = parent.request_id
+  _record_worker_workspace(control, parent.request_id, f'broker-{CHILD}')
   control.handle(cast(Dispatcher, context), CHILD, _message(target='bro-dev'))
   assert 'not in' in context.replies[-1][1]['error']
 
@@ -784,12 +792,12 @@ def test_depth_cap_denies_a_third_generation(tmp_path):
   context = FakeContext(control)
   first = _message(target='bro-dev')
   control.handle(cast(Dispatcher, context), ROOT, first)
-  context.workers[CHILD] = first.quest_id
-  _record_worker_workspace(control, first.quest_id, f'broker-{CHILD}')
+  context.workers[CHILD] = first.request_id
+  _record_worker_workspace(control, first.request_id, f'broker-{CHILD}')
   second = _message(target='dev')
   control.handle(cast(Dispatcher, context), CHILD, second)
-  context.workers[GRANDCHILD] = second.quest_id
-  _record_worker_workspace(control, second.quest_id, f'broker-{GRANDCHILD}')
+  context.workers[GRANDCHILD] = second.request_id
+  _record_worker_workspace(control, second.request_id, f'broker-{GRANDCHILD}')
   control.handle(cast(Dispatcher, context), GRANDCHILD, _message())
   assert 'depth cap' in context.replies[-1][1]['error']
 
@@ -800,8 +808,8 @@ def test_configured_depth_cap_controls_nested_authorization(tmp_path):
   first = _message(target='bro-dev')
   control.handle(cast(Dispatcher, context), ROOT, first)
   assert context.spawned[-1][0].summon_depth == 1
-  context.workers[CHILD] = first.quest_id
-  _record_worker_workspace(control, first.quest_id, f'broker-{CHILD}')
+  context.workers[CHILD] = first.request_id
+  _record_worker_workspace(control, first.request_id, f'broker-{CHILD}')
 
   control.handle(cast(Dispatcher, context), CHILD, _message())
 
@@ -857,14 +865,14 @@ def test_manual_summon_writes_the_pending_record_before_acceptance(tmp_path, mon
   control.handle(cast(Dispatcher, context), ROOT, message)
   assert context.spawned == []
   assert context.expected == [(ROOT, None)]
-  pending = ride.pending_summon.peek(message.quest_id)
+  pending = ride.pending_summon.peek(message.request_id)
   cast(MagicMock, control._runtime_bundle.materialize_host).assert_called_once_with()
   assert pending.target == 'dev'
   assert pending.channel_token == 'token'
   assert pending.runtime == 'a' * 64
-  assert pending.talk == ('summoned.say',)
-  assert context.journal.records[message.quest_id].talk == frozenset({'summoned.say'})
-  assert control._facts.for_quest(message.quest_id).manual is True
+  assert pending.talk == ('worker.say',)
+  assert context.journal.records[message.request_id].talk == frozenset({'worker.say'})
+  assert control._facts.for_quest(message.request_id).manual is True
 
 
 def test_the_partys_env_additions_reach_every_spawn(tmp_path):
@@ -880,7 +888,7 @@ def test_a_manual_summons_pending_record_carries_the_partys_env(tmp_path, monkey
   context = FakeContext(control)
   message = _message(manual=True)
   control.handle(cast(Dispatcher, context), ROOT, message)
-  assert ride.pending_summon.peek(message.quest_id).env == {'IS_SANDBOX': '1'}
+  assert ride.pending_summon.peek(message.request_id).env == {'IS_SANDBOX': '1'}
 
 
 def test_claimed_manual_workspace_is_the_nested_base_source(tmp_path, monkeypatch):
@@ -892,8 +900,8 @@ def test_claimed_manual_workspace_is_the_nested_base_source(tmp_path, monkeypatc
   external_tree = tmp_path / 'external-tree'
   external_tree.mkdir()
   Workspace.ensure('external-workspace', None, Isolation.UNBOXED, tree=external_tree)
-  ride.pending_summon.claim(parent.quest_id, workspace='external-workspace')
-  context.workers[CHILD] = parent.quest_id
+  ride.pending_summon.claim(parent.request_id, workspace='external-workspace')
+  context.workers[CHILD] = parent.request_id
   child = _message(target='dev')
   control.handle(cast(Dispatcher, context), CHILD, child)
   assert context.spawned[-1][0].parent == 'external-workspace'
@@ -908,8 +916,8 @@ def test_manual_child_cannot_grant_unattributable_credentials(tmp_path, monkeypa
   external_tree = tmp_path / 'external-tree'
   external_tree.mkdir()
   Workspace.ensure('external-workspace', None, Isolation.UNBOXED, tree=external_tree)
-  ride.pending_summon.claim(parent.quest_id, workspace='external-workspace')
-  context.workers[CHILD] = parent.quest_id
+  ride.pending_summon.claim(parent.request_id, workspace='external-workspace')
+  context.workers[CHILD] = parent.request_id
   control.handle(
     cast(Dispatcher, context),
     CHILD,
@@ -924,10 +932,10 @@ def test_manual_terminal_discards_pending_token(tmp_path, monkeypatch):
   context = FakeContext(control)
   message = _message(manual=True)
   control.handle(cast(Dispatcher, context), ROOT, message)
-  record = context.journal.records[message.quest_id]
+  record = context.journal.records[message.request_id]
   context.journal.end(record, {'outcome': 'failed', 'detail': {'reason': 'disconnected'}})
   with pytest.raises(ride.pending_summon.UnknownToken):
-    ride.pending_summon.peek(message.quest_id)
+    ride.pending_summon.peek(message.request_id)
 
 
 def test_child_uses_the_allow_list_recorded_for_its_parent(tmp_path):
@@ -935,8 +943,8 @@ def test_child_uses_the_allow_list_recorded_for_its_parent(tmp_path):
   context = FakeContext(control)
   parent = _message(target='bro-dev')
   control.handle(cast(Dispatcher, context), ROOT, parent)
-  context.workers[CHILD] = parent.quest_id
-  _record_worker_workspace(control, parent.quest_id, f'broker-{CHILD}')
+  context.workers[CHILD] = parent.request_id
+  _record_worker_workspace(control, parent.request_id, f'broker-{CHILD}')
   child = _message(target='dev')
   control.handle(cast(Dispatcher, context), CHILD, child)
   assert context.spawned[-1][0].target == 'dev'

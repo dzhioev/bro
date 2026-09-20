@@ -43,7 +43,7 @@ and ends.
   Everything durable must land on the page;
   a phase's answer carries only what you have to act on.
 - **You are the human's interface.** A summoned bro runs isolated with no human channel,
-  but each phase is granted `summoned.question` so it can consult this coordinator before giving up its live state.
+  but each phase is granted `worker.question` so it can consult this coordinator before giving up its live state.
   Questions,
   corrections,
   and go/no-go between phases are yours to handle;
@@ -124,7 +124,7 @@ and every failure mode
 this spell only says how a phase differs from a one-shot ask.
 
 - **Never wait inline.** No phase is short enough for a blocking wait:
-  send every one detached with `summoned.question` in its talk and collect its result through the surface's watch or polling flow.
+  send every one detached with `worker.question` in its talk and collect its result through the surface's watch or polling flow.
   {{iff #harness = claude}}Keep `quest watch` armed.
   When it reports a child's question, answer that quest with `quest say --reply-to`.
   Then resume the same `quest check --wait` loop.{{eliff #wire = bare}}Keep the `quest watch` job armed and call `bro::chill` whenever nothing else remains;
@@ -283,7 +283,7 @@ Take material objections and open questions to the user before starting stage 1.
 
 ### 3 — stages
 
-**Summon:** `into` the integration branch · `timeout` 28800 · `talk` `summoned.question`{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}}
+**Summon:** `into` the integration branch · `timeout` 28800 · `talk` `worker.question`{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}}
 
 The long timeout covers the PR review a phase ends on:
 it idles on human latency, and the summon default kills it mid-watch.
@@ -310,7 +310,7 @@ the retry is a fresh summon on the same stage task.
 
 ### 4 — integrate
 
-**Summon:** `into` the integration branch · `timeout` 28800 · `talk` `summoned.question`{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}} · `grant` `@<the bro that does rollouts>` when the work needs one to go live
+**Summon:** `into` the integration branch · `timeout` 28800 · `talk` `worker.question`{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}} · `grant` `@<the bro that does rollouts>` when the work needs one to go live
 
 Once every stage task is done, tell the user what the last step needs from them:
 where master is a protected base, the approving review that lands the integration PR is theirs to give, and nobody in the run can supply it.
@@ -352,7 +352,7 @@ When the phase reports a rollout it could not hand off
 
 ### 5 — verify
 
-**Summon:** `into` `master`, which the work is on by then · `talk` `summoned.question` · `grant` the credentials its live surface needs
+**Summon:** `into` `master`, which the work is on by then · `talk` `worker.question` · `grant` the credentials its live surface needs
 
 Once the work is live
 — merged, and rolled out if it needed a rollout:

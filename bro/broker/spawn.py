@@ -51,8 +51,8 @@ class ChildHandle(ABC):
 class Spawner(ABC):
   """launch a peer's process and return a handle the Broker supervises.
 
-  `quest` is the id of the quest the peer is launched to answer;
-  `talk` is the fixed set of chat moves that quest grants it.
+  `quest` is the id of the mission the peer is launched to answer;
+  `talk` is the fixed set of chat moves that mission grants it.
   The adapter delivers both beside the channel endpoint."""
 
   @abstractmethod

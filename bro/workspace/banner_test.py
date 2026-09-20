@@ -2,7 +2,7 @@ import pytest
 
 import bro.workspace.banner as workspace_banner
 from bro import registry, summon
-from bro.broker.brotocol import TALK_ENV
+from bro.broker.environment import BROKER_TALK
 from bro.monitor import trail_pointer
 from bro.workspace.banner import SessionFacts
 
@@ -25,7 +25,7 @@ class TestSessionFacts:
       summon.PARTY_MEMBER_ENV,
       summon.PERMITS_ENV,
       summon.SUMMONED_ENV,
-      TALK_ENV,
+      BROKER_TALK,
     ):
       monkeypatch.delenv(v, raising=False)
     monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
@@ -98,11 +98,11 @@ class TestSessionFacts:
     assert SessionFacts.collect().may_summon == ()
 
   def test_talk_reads_the_launch_published_rights(self, monkeypatch):
-    monkeypatch.setenv(TALK_ENV, 'summoner.say,summoned.question')
-    assert SessionFacts.collect().talk == ('summoned.question', 'summoner.say')
+    monkeypatch.setenv(BROKER_TALK, 'owner.say,worker.question')
+    assert SessionFacts.collect().talk == ('owner.say', 'worker.question')
 
   def test_talk_distinguishes_a_mute_quest_from_an_unpublished_one(self, monkeypatch):
-    monkeypatch.setenv(TALK_ENV, '')
+    monkeypatch.setenv(BROKER_TALK, '')
     assert SessionFacts.collect().talk == ()
 
   def test_summoned_reads_the_child_mark(self, monkeypatch):
@@ -205,10 +205,10 @@ class TestRenderBanner:
     assert 'may_summon: none' in _facts(may_summon=()).render_llm()
 
   def test_llm_and_visual_render_the_quest_talk(self):
-    facts = _facts(talk=('summoner.say', 'summoned.question'))
-    assert 'talk: summoner.say, summoned.question' in facts.render_llm()
+    facts = _facts(talk=('owner.say', 'worker.question'))
+    assert 'talk: owner.say, worker.question' in facts.render_llm()
     assert 'talk:' in facts.render_visual()
-    assert 'summoner.say, summoned.question' in facts.render_visual()
+    assert 'owner.say, worker.question' in facts.render_visual()
 
   def test_llm_and_visual_spell_out_a_mute_quest(self):
     facts = _facts(talk=())

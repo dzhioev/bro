@@ -2,7 +2,7 @@ import os
 import subprocess
 
 from bro.base import log
-from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV
+from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
 from ride.workspace.docker import (
   DETACH_FLAG,
   container_running,
@@ -33,7 +33,7 @@ def exec_in_workspace(name: str, command: list[str]) -> int:
     return 1
   requested_command = ['bash'] if len(command) == 0 else command
   # Docker exec starts from container configuration, where the upstream is launch input.
-  docker_command = ['env', '-u', CHANNEL_ENV, '-u', UPSTREAM_ENV, *requested_command]
+  docker_command = ['env', '-u', BROKER_CHANNEL, '-u', BROKER_UPSTREAM, *requested_command]
   # run as ride, not the image's default root: docker exec ignores the entrypoint's
   # gosu drop, so without -u every exec'd command runs as root and writes
   # root-owned files into the bind-mounted /workspace that the host user can't
@@ -50,19 +50,9 @@ def broker_enabled() -> bool:
 
   `BROKER_DISABLED` is the presence-checked kill-switch (parallel to `TRAILS_DISABLED`):
   the broker sits on the critical launch path of every session, so a broker defect
-  needs an escape valve that works without touching code. It is checked before
-  any broker import, and an unimportable broker package (an environment provisioned
-  before broker existed) degrades to the broker-less path with a warning — the gate
-  itself can never break a launch.
+  needs an escape valve that works without touching code.
   """
-  if os.environ.get('BROKER_DISABLED') is not None:
-    return False
-  try:
-    import bro.broker  # noqa: F401
-  except ImportError:
-    log.warning('broker package not importable; launching without a broker channel')
-    return False
-  return True
+  return os.environ.get('BROKER_DISABLED') is None
 
 
 def attach_interactive(container_id: str) -> int:

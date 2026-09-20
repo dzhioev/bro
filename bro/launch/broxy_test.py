@@ -75,7 +75,7 @@ async def test_session_broxy_serves_the_rewritten_channel():
       await server.transport.send(channel, brotocol.result(message.id, 'ok', value={'pong': {}}))
       reply = await asyncio.wait_for(request_task, TIMEOUT)
       assert reply.type == 'result'
-      assert reply.quest == message.id
+      assert reply.request == message.id
       client.close()
     finally:
       broxy.stop()
@@ -116,7 +116,7 @@ def test_session_broxy_leaves_upstream_visible_when_launch_fails(monkeypatch, tm
 
   with ride_broxy.session_broxy():
     assert 'BROKER_CHANNEL' not in os.environ
-    with pytest.raises(RuntimeError, match=r'session proxy failed at launch.*broxy\.log'):
+    with pytest.raises(RuntimeError, match='session proxy failed at launch'):
       Client.from_env()
 
   assert os.environ['BROKER_UPSTREAM'] == 'tcp://root-token@127.0.0.1:7'

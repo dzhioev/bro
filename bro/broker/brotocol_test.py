@@ -49,36 +49,36 @@ def test_message_roles_cover_say_question_reply_and_counter_question():
 
 
 def test_talk_encoding_is_canonical_and_strict():
-  talk = decode_talk('summoned.say,summoner.question')
-  assert encode_talk(talk) == 'summoned.say,summoner.question'
+  talk = decode_talk('owner.question,worker.say')
+  assert encode_talk(talk) == 'owner.question,worker.say'
   assert decode_talk('') == frozenset()
   with pytest.raises(ValueError, match='unknown talk right'):
-    decode_talk('summoned.command')
+    decode_talk('worker.command')
   with pytest.raises(ValueError, match='duplicate'):
-    decode_talk('summoned.say,summoned.say')
+    decode_talk('worker.say,worker.say')
 
 
 def test_talk_roles_require_the_senders_move_and_the_other_ends_question_for_a_reply():
-  talk: Talk = frozenset({'summoner.say', 'summoner.question', 'summoned.question'})
-  assert message_allowed(talk, 'summoner', message('quest', {}))
-  assert message_allowed(talk, 'summoner', message('quest', {}, id='question'))
-  assert message_allowed(talk, 'summoner', message('quest', {}, reply_to='summoned-question'))
-  assert not message_allowed(talk, 'summoned', message('quest', {}))
-  assert message_allowed(talk, 'summoned', message('quest', {}, reply_to='summoner-question'))
+  talk: Talk = frozenset({'owner.say', 'owner.question', 'worker.question'})
+  assert message_allowed(talk, 'owner', message('quest', {}))
+  assert message_allowed(talk, 'owner', message('quest', {}, id='question'))
+  assert message_allowed(talk, 'owner', message('quest', {}, reply_to='worker-question'))
+  assert not message_allowed(talk, 'worker', message('quest', {}))
+  assert message_allowed(talk, 'worker', message('quest', {}, reply_to='owner-question'))
   assert not message_allowed(
-    frozenset({'summoned.question'}),
-    'summoned',
-    message('quest', {}, reply_to='summoner-question'),
+    frozenset({'worker.question'}),
+    'worker',
+    message('quest', {}, reply_to='owner-question'),
   )
   assert not message_allowed(
-    frozenset({'summoned.question'}),
-    'summoner',
-    message('quest', {}, id='counter', reply_to='summoned-question'),
+    frozenset({'worker.question'}),
+    'owner',
+    message('quest', {}, id='counter', reply_to='worker-question'),
   )
 
 
 def test_protocol_revision_identifies_the_message_wire():
-  assert PROTOCOL_REVISION == 4
+  assert PROTOCOL_REVISION == 5
 
 
 def test_result_round_trip():
@@ -102,16 +102,16 @@ def test_frame_safe_result_bounds_an_oversize_error_with_a_visible_marker():
 def test_request_id_minted_and_unique():
   first = request('ping', {})
   second = request('ping', {})
-  assert len(first.quest_id) == 28
+  assert len(first.request_id) == 28
   assert first.id != second.id
 
 
 def test_quest_id_unifies_opening_and_correlated_messages():
   opened = request('ping', {})
-  assert opened.quest_id == opened.id
-  assert mark('quest-1', 'accepted').quest_id == 'quest-1'
-  assert message('quest-1', {}).quest_id == 'quest-1'
-  assert result('quest-1', 'ok').quest_id == 'quest-1'
+  assert opened.request_id == opened.id
+  assert mark('quest-1', 'accepted').request_id == 'quest-1'
+  assert message('quest-1', {}).request_id == 'quest-1'
+  assert result('quest-1', 'ok').request_id == 'quest-1'
 
 
 def test_request_wire_carries_no_quest_key():
@@ -121,7 +121,7 @@ def test_request_wire_carries_no_quest_key():
 
 def test_correlated_wire_carries_no_id_key():
   wire = json.loads(result('quest-1', 'ok').to_bytes())
-  assert set(wire) == {'type', 'quest', 'payload'}
+  assert set(wire) == {'type', 'request', 'payload'}
 
 
 def test_accessors():
@@ -151,7 +151,7 @@ def test_oversize_identifiers_are_rejected():
     Message(type=Tag.REQUEST, id=oversize, payload={'kind': 'ping', 'args': {}})
   with pytest.raises(ProtocolError, match='request kind'):
     Message(type=Tag.REQUEST, id='request', payload={'kind': oversize, 'args': {}})
-  with pytest.raises(ProtocolError, match='message quest'):
+  with pytest.raises(ProtocolError, match='message request'):
     message(oversize, {})
   with pytest.raises(ProtocolError, match='trail id'):
     mark('quest', 'trail', trail_id=oversize)
@@ -183,23 +183,23 @@ def test_to_bytes_utf8_round_trip():
   [
     {'type': 'started', 'payload': {}, 'id': 'i'},
     {'type': 'request', 'payload': {'kind': 'ping', 'args': {}}},
-    {'type': 'request', 'payload': {'kind': 'ping', 'args': {}}, 'id': 'i', 'quest': 'q'},
+    {'type': 'request', 'payload': {'kind': 'ping', 'args': {}}, 'id': 'i', 'request': 'q'},
     {'type': 'request', 'payload': {'args': {}}, 'id': 'i'},
     {'type': 'request', 'payload': {'kind': 'ping'}, 'id': 'i'},
     {'type': 'request', 'payload': {'kind': 'ping', 'args': {}, 'extra': 1}, 'id': 'i'},
     {'type': 'mark', 'payload': {'transition': 'accepted'}},
-    {'type': 'mark', 'payload': {}, 'quest': 'q'},
-    {'type': 'mark', 'payload': {'transition': 'unknown'}, 'quest': 'q'},
-    {'type': 'mark', 'payload': {'transition': 'trail'}, 'quest': 'q'},
+    {'type': 'mark', 'payload': {}, 'request': 'q'},
+    {'type': 'mark', 'payload': {'transition': 'unknown'}, 'request': 'q'},
+    {'type': 'mark', 'payload': {'transition': 'trail'}, 'request': 'q'},
     {'type': 'message', 'payload': {}},
-    {'type': 'message', 'payload': {}, 'quest': 'q', 'id': ''},
-    {'type': 'result', 'payload': {}, 'quest': 'q'},
-    {'type': 'result', 'payload': {'outcome': 'done'}, 'quest': 'q'},
-    {'type': 'result', 'payload': {'outcome': 'ok', 'extra': 1}, 'quest': 'q'},
-    {'type': 'result', 'payload': {'outcome': 'failed', 'error': 7}, 'quest': 'q'},
-    {'type': 'result', 'payload': {'outcome': 'failed', 'detail': []}, 'quest': 'q'},
-    {'type': 'result', 'payload': {'outcome': 'failed', 'detail': {'reason': 7}}, 'quest': 'q'},
-    {'type': 'result', 'payload': [], 'quest': 'q'},
+    {'type': 'message', 'payload': {}, 'request': 'q', 'id': ''},
+    {'type': 'result', 'payload': {}, 'request': 'q'},
+    {'type': 'result', 'payload': {'outcome': 'done'}, 'request': 'q'},
+    {'type': 'result', 'payload': {'outcome': 'ok', 'extra': 1}, 'request': 'q'},
+    {'type': 'result', 'payload': {'outcome': 'failed', 'error': 7}, 'request': 'q'},
+    {'type': 'result', 'payload': {'outcome': 'failed', 'detail': []}, 'request': 'q'},
+    {'type': 'result', 'payload': {'outcome': 'failed', 'detail': {'reason': 7}}, 'request': 'q'},
+    {'type': 'result', 'payload': [], 'request': 'q'},
   ],
 )
 def test_construction_rejects_malformed_envelopes(kwargs):
@@ -210,10 +210,10 @@ def test_construction_rejects_malformed_envelopes(kwargs):
 @pytest.mark.parametrize(
   'wire',
   [
-    {'type': 'request', 'id': 'i', 'quest': None, 'payload': {'kind': 'ping', 'args': {}}},
-    {'type': 'mark', 'id': None, 'quest': 'q', 'payload': {'transition': 'accepted'}},
-    {'type': 'message', 'id': None, 'quest': 'q', 'payload': {}},
-    {'type': 'result', 'id': None, 'quest': 'q', 'payload': {'outcome': 'ok'}},
+    {'type': 'request', 'id': 'i', 'request': None, 'payload': {'kind': 'ping', 'args': {}}},
+    {'type': 'mark', 'id': None, 'request': 'q', 'payload': {'transition': 'accepted'}},
+    {'type': 'message', 'id': None, 'request': 'q', 'payload': {}},
+    {'type': 'result', 'id': None, 'request': 'q', 'payload': {'outcome': 'ok'}},
   ],
 )
 def test_from_bytes_rejects_forbidden_null_envelope_fields(wire):
@@ -231,7 +231,7 @@ def test_from_bytes_rejects_forbidden_null_envelope_fields(wire):
     json.dumps({'type': 'request', 'id': 'i'}).encode('utf-8'),
     json.dumps({'type': 5, 'id': 'i', 'payload': {}}).encode('utf-8'),
     json.dumps({'type': 'request', 'id': 'i', 'payload': []}).encode('utf-8'),
-    json.dumps({'type': 'result', 'quest': 5, 'payload': {'outcome': 'ok'}}).encode('utf-8'),
+    json.dumps({'type': 'result', 'request': 5, 'payload': {'outcome': 'ok'}}).encode('utf-8'),
     json.dumps(
       {'type': 'request', 'id': 'i', 'payload': {'kind': 'ping', 'args': {}}, 'v': 1}
     ).encode('utf-8'),

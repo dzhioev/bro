@@ -10,7 +10,7 @@ from bro.bench import run
 from bro.bench.job import JobError
 from bro.bench.presets import AGENTS, DATASETS, PRESETS_KEY, SETTINGS, TASKS
 from bro.bench.run import main, one_job, report
-from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV
+from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
 
 JOB_RESULT = {
   'started_at': '2026-08-24T20:36:54.446642',
@@ -78,8 +78,8 @@ def tree(tmp_path, monkeypatch):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value))
   monkeypatch.setattr('bro.bench.run._checkout_root', lambda: tmp_path)
-  monkeypatch.delenv(CHANNEL_ENV, raising=False)
-  monkeypatch.delenv(UPSTREAM_ENV, raising=False)
+  monkeypatch.delenv(BROKER_CHANNEL, raising=False)
+  monkeypatch.delenv(BROKER_UPSTREAM, raising=False)
   return tmp_path
 
 
@@ -162,7 +162,7 @@ def test_a_missing_preset_fails_before_anything_runs(tree, caplog):
 
 
 def test_a_session_run_starts_the_composed_config_over_the_broker(tree, monkeypatch, capsys):
-  monkeypatch.setenv(CHANNEL_ENV, 'tcp://127.0.0.1:1')
+  monkeypatch.setenv(BROKER_CHANNEL, 'tcp://127.0.0.1:1')
   artifact = tree / 'artifact'
   job = _write_job(artifact / 'output' / 'job')
   captured = {}
@@ -187,7 +187,7 @@ def test_a_session_run_starts_the_composed_config_over_the_broker(tree, monkeypa
 
 
 def test_a_session_run_names_the_run_a_failed_job_left(tree, monkeypatch, capsys, caplog):
-  monkeypatch.setenv(CHANNEL_ENV, 'tcp://127.0.0.1:1')
+  monkeypatch.setenv(BROKER_CHANNEL, 'tcp://127.0.0.1:1')
   artifact = tree / 'artifact'
   artifact.mkdir()
 
@@ -203,7 +203,7 @@ def test_a_session_run_names_the_run_a_failed_job_left(tree, monkeypatch, capsys
 
 
 def test_jobs_dir_is_refused_in_a_session(tree, monkeypatch, caplog):
-  monkeypatch.setenv(CHANNEL_ENV, 'tcp://127.0.0.1:1')
+  monkeypatch.setenv(BROKER_CHANNEL, 'tcp://127.0.0.1:1')
 
   assert main([*RUN, '--tasks', 'few', '--jobs-dir', 'elsewhere']) == 1
   assert '--jobs-dir' in caplog.text

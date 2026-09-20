@@ -17,7 +17,7 @@ import os
 import sys
 from typing import Any, Literal
 
-from bro.broker.client import CHANNEL_ENV
+from bro.broker.environment import BROKER_CHANNEL
 from bro.quest import LiveChild, live_children
 from bro.summon import summoned
 
@@ -99,7 +99,7 @@ def main(argv: list[str]) -> int:
   if surface not in ('full', 'raw'):
     raise ValueError(f'unknown session surface {surface!r}')
   payload = json.load(sys.stdin)
-  children = live_children() if os.environ.get(CHANNEL_ENV) is not None else []
+  children = live_children() if os.environ.get(BROKER_CHANNEL) is not None else []
   reason = notice(payload, children, surface, summoned=summoned())
   if reason is not None:
     _block(reason)

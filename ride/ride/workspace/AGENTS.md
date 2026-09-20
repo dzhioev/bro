@@ -18,9 +18,10 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
   Runtime paths, project configuration, and git helpers remain in `bro.workspace`;
   this package imports those contracts, `bro.base`, and the broker interfaces.
   The framework never imports `ride`.
-- **Lazy broker import.**
-  `spawn.py` is imported only after the `containers.broker_enabled` gate.
-  `BROKER_DISABLED`, and an environment that cannot import the broker, must short-circuit first.
+- **Broker gate cost.**
+  `spawn.py` and the dispatcher machinery are imported only after the `containers.broker_enabled` gate.
+  The constants-only `bro.broker.environment` module may be imported before the gate;
+  `BROKER_DISABLED` short-circuits before any broker machinery loads.
 - **No re-export hub.**
   Consumers and package code import submodules directly.
 

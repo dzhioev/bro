@@ -16,9 +16,14 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import log, spawn
-from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV, broxy_log_path
+from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
 
+BROXY_LOG_NAME = 'broxy.log'
 _LAUNCH_TIMEOUT = 10.0
+
+
+def broxy_log_path(environment: Mapping[str, str]) -> Path:
+  return Path(environment.get('RIDE_SESSION_DIR', '/tmp')) / BROXY_LOG_NAME
 
 
 @dataclass
@@ -84,22 +89,22 @@ def _start_session_broxy(upstream: str, env: Mapping[str, str]) -> Optional[_Ses
 @contextlib.contextmanager
 def session_broxy() -> Generator[None]:
   """Give a session with an unconsumed upstream its local client channel."""
-  upstream = os.environ.get(UPSTREAM_ENV)
-  if upstream is None or os.environ.get(CHANNEL_ENV) is not None:
+  upstream = os.environ.get(BROKER_UPSTREAM)
+  if upstream is None or os.environ.get(BROKER_CHANNEL) is not None:
     yield
     return
 
-  previous_channel = os.environ.pop(CHANNEL_ENV, None)
+  previous_channel = os.environ.pop(BROKER_CHANNEL, None)
   broxy = _start_session_broxy(upstream, os.environ)
   if broxy is not None:
-    os.environ.pop(UPSTREAM_ENV)
-    os.environ[CHANNEL_ENV] = broxy.address
+    os.environ.pop(BROKER_UPSTREAM)
+    os.environ[BROKER_CHANNEL] = broxy.address
   try:
     yield
   finally:
     if broxy is not None:
       broxy.stop()
-      os.environ.pop(CHANNEL_ENV, None)
-      os.environ[UPSTREAM_ENV] = upstream
+      os.environ.pop(BROKER_CHANNEL, None)
+      os.environ[BROKER_UPSTREAM] = upstream
     if previous_channel is not None:
-      os.environ[CHANNEL_ENV] = previous_channel
+      os.environ[BROKER_CHANNEL] = previous_channel
