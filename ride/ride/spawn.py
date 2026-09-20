@@ -563,4 +563,4 @@ def run_root_via_broker(
   with contextlib.closing(artifacts):
     # the launcher owns the process: a SIGTERM ends the ride through the same
     # teardown the root's exit runs, joined members included
-    return facade.run(launch, end_on_sigterm=True)
+    return facade.run(launch, type='bro', end_on_sigterm=True)

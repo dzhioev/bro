@@ -4,7 +4,7 @@ import pytest
 
 from bro import quest, summon
 from bro.broker import brotocol
-from bro.broker.client import CHANNEL_ENV
+from bro.broker.environment import BROKER_CHANNEL
 from bro.quest_test_helper import (
   entry,
   message_id,
@@ -39,7 +39,7 @@ def test_bare_summon_forwards_the_request(monkeypatch):
 
 
 def test_manual_summon_refuses_launch_owned_flags(monkeypatch, caplog):
-  monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:1')
+  monkeypatch.setenv(BROKER_CHANNEL, 'tcp://token@127.0.0.1:1')
   for flags in (
     ['--timeout', '60'],
     ['--hold', 'attended'],
@@ -90,12 +90,12 @@ async def test_placement_flags_reach_the_request(monkeypatch, flag, field, value
 
 
 def test_join_refuses_into_before_opening_a_channel(monkeypatch, caplog):
-  monkeypatch.delenv(CHANNEL_ENV, raising=False)
+  monkeypatch.delenv(BROKER_CHANNEL, raising=False)
 
   assert summon.main(['summon', '--join', '--into', 'feature', 'dev', 'work']) == 1
 
   assert 'shares the summoner' in caplog.text
-  assert CHANNEL_ENV not in caplog.text
+  assert BROKER_CHANNEL not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -160,10 +160,10 @@ async def test_blocking_summon_returns_at_a_child_question_and_rides_through_say
 ):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(
-      asyncio.to_thread(summon.main, ['summon', '--talk', 'summoned.question', 'dev', 'work'])
+      asyncio.to_thread(summon.main, ['summon', '--talk', 'worker.question', 'dev', 'work'])
     )
     channel, request = await next_message(server)
-    assert request.args['talk'] == ['summoned.question']
+    assert request.args['talk'] == ['worker.question']
     await server.transport.send(channel, brotocol.mark(message_id(request), 'accepted'))
     await server.transport.send(
       channel, brotocol.message(message_id(request), {'text': 'still working'})
@@ -198,7 +198,7 @@ async def test_silent_blocking_wait_queries_live_state_then_resumes(monkeypatch,
       query_channel,
       query,
       outcome='ok',
-      value={'quest': quest_record(message_id(original), 'started', trail_id='T2')},
+      value={'mission': quest_record(message_id(original), 'started', trail_id='T2')},
     )
 
     assert await task == 0
@@ -219,7 +219,7 @@ async def test_silent_blocking_wait_interprets_terminal_query(monkeypatch, capsy
       query,
       outcome='ok',
       value={
-        'quest': quest_record(
+        'mission': quest_record(
           message_id(original),
           'ended',
           result={'outcome': 'ok', 'value': 'retained answer'},
@@ -241,17 +241,17 @@ async def test_silent_blocking_wait_returns_an_open_child_question_from_the_jour
     )
     _, original = await next_message(server)
     channel, query = await next_message(server)
-    question = entry(1, 'summoned', 'approve?', id='QUESTION-1', pending=True)
+    question = entry(1, 'worker', 'approve?', id='QUESTION-1', pending=True)
     await reply(
       server,
       channel,
       query,
       outcome='ok',
       value={
-        'quest': quest_record(
+        'mission': quest_record(
           message_id(original),
           'started',
-          talk=['summoned.question', 'summoned.say'],
+          talk=['worker.question', 'worker.say'],
           messages=[question],
           chat_seq=1,
         )
@@ -282,9 +282,9 @@ def test_invalid_published_permit_fails(monkeypatch):
 
 
 def test_errors_without_a_channel(monkeypatch, caplog):
-  monkeypatch.delenv(CHANNEL_ENV, raising=False)
+  monkeypatch.delenv(BROKER_CHANNEL, raising=False)
   assert summon.main(['summon', 'dev', 'work']) == 1
-  assert CHANNEL_ENV in caplog.text
+  assert BROKER_CHANNEL in caplog.text
 
 
 def test_summoned_child_env_is_what_the_child_reads_back(monkeypatch):

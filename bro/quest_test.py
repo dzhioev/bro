@@ -7,7 +7,8 @@ import pytest
 
 from bro import quest, summon
 from bro.broker import brotocol
-from bro.broker.client import CHANNEL_ENV, QUEST_ENV, Client
+from bro.broker.client import Client
+from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION, BROKER_TALK
 from bro.broker.journal import MAX_MESSAGE_BYTES
 from bro.broker.journal_test_helper import text_at_the_message_bound
 from bro.broker.transport import connect
@@ -31,11 +32,11 @@ async def _reply_empty_watch_replay(server) -> None:
     channel,
     own_query,
     outcome='ok',
-    value={'quest': quest_record('ROOT', 'started', kind='root')},
+    value={'mission': quest_record('ROOT', 'started', kind='root')},
   )
   channel, listing = await next_message(server)
   assert listing.args == {}
-  await reply(server, channel, listing, outcome='ok', value={'quests': []})
+  await reply(server, channel, listing, outcome='ok', value={'missions': []})
 
 
 def test_help_lists_every_verb(capsys):
@@ -80,11 +81,11 @@ async def test_say_to_a_child_checks_talk_then_sends(monkeypatch):
       channel,
       query,
       outcome='ok',
-      value={'quest': quest_record('REQ-1', 'started', talk=['summoner.say', 'summoned.say'])},
+      value={'mission': quest_record('REQ-1', 'started', talk=['owner.say', 'worker.say'])},
     )
     _, message = await next_message(server)
     assert message.type == brotocol.Tag.MESSAGE
-    assert message.quest_id == 'REQ-1'
+    assert message.request_id == 'REQ-1'
     assert message.payload == {'text': 'steer left'}
     assert message.id is None
     assert await task == 0
@@ -93,8 +94,8 @@ async def test_say_to_a_child_checks_talk_then_sends(monkeypatch):
 @pytest.mark.asyncio
 async def test_say_on_self_uses_the_session_quest_and_published_talk(monkeypatch):
   async with running_server(monkeypatch) as server:
-    monkeypatch.setenv(QUEST_ENV, 'OWN-QUEST')
-    monkeypatch.setenv(brotocol.TALK_ENV, 'summoned.say')
+    monkeypatch.setenv(BROKER_MISSION, 'OWN-QUEST')
+    monkeypatch.setenv(BROKER_TALK, 'worker.say')
     task = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'say', 'self', 'progress']))
     channel, query = await next_message(server)
     assert query.args == {'id': 'OWN-QUEST'}
@@ -103,10 +104,10 @@ async def test_say_on_self_uses_the_session_quest_and_published_talk(monkeypatch
       channel,
       query,
       outcome='ok',
-      value={'quest': quest_record('OWN-QUEST', 'started', talk=['summoned.say'])},
+      value={'mission': quest_record('OWN-QUEST', 'started', talk=['worker.say'])},
     )
     _, message = await next_message(server)
-    assert message.quest_id == 'OWN-QUEST'
+    assert message.request_id == 'OWN-QUEST'
     assert message.payload == {'text': 'progress'}
     assert await task == 0
 
@@ -116,8 +117,8 @@ async def test_ask_prints_the_question_id_without_waiting(monkeypatch, capsys):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'ask', 'REQ-1', 'ready?']))
     channel, query = await next_message(server)
-    live = quest_record('REQ-1', 'started', talk=['summoner.question', 'summoned.say'])
-    await reply(server, channel, query, outcome='ok', value={'quest': live})
+    live = quest_record('REQ-1', 'started', talk=['owner.question', 'worker.say'])
+    await reply(server, channel, query, outcome='ok', value={'mission': live})
     _, question = await next_message(server)
 
     assert question.id is not None
@@ -132,28 +133,28 @@ async def test_ask_wait_prints_the_reply(monkeypatch, capsys):
       asyncio.to_thread(quest.main, ['quest', 'ask', 'REQ-1', 'ready?', '--wait', '5'])
     )
     channel, query = await next_message(server)
-    live = quest_record('REQ-1', 'started', talk=['summoner.question', 'summoned.say'])
-    await reply(server, channel, query, outcome='ok', value={'quest': live})
+    live = quest_record('REQ-1', 'started', talk=['owner.question', 'worker.say'])
+    await reply(server, channel, query, outcome='ok', value={'mission': live})
     _, question = await next_message(server)
     assert question.id is not None
-    asked = entry(1, 'summoner', 'ready?', id=question.id, pending=True)
+    asked = entry(1, 'owner', 'ready?', id=question.id, pending=True)
     channel, query = await next_message(server)
     await reply(
       server,
       channel,
       query,
       outcome='ok',
-      value={'quest': {**live, 'messages': [asked], 'chat_seq': 1}},
+      value={'mission': {**live, 'messages': [asked], 'chat_seq': 1}},
     )
     channel, waiting = await next_message(server)
     assert waiting.args['since'] == 1
-    answered = entry(2, 'summoned', 'yes', reply_to=question.id)
+    answered = entry(2, 'worker', 'yes', reply_to=question.id)
     await reply(
       server,
       channel,
       waiting,
       outcome='ok',
-      value={'quest': {**live, 'messages': [asked, answered], 'chat_seq': 2}},
+      value={'mission': {**live, 'messages': [asked, answered], 'chat_seq': 2}},
     )
 
     assert await task == 0
@@ -167,18 +168,18 @@ async def test_ask_wait_timeout_returns_its_recoverable_id(monkeypatch, capsys):
       asyncio.to_thread(quest.main, ['quest', 'ask', 'REQ-1', 'ready?', '--wait', '0.1'])
     )
     channel, query = await next_message(server)
-    live = quest_record('REQ-1', 'started', talk=['summoner.question', 'summoned.say'])
-    await reply(server, channel, query, outcome='ok', value={'quest': live})
+    live = quest_record('REQ-1', 'started', talk=['owner.question', 'worker.say'])
+    await reply(server, channel, query, outcome='ok', value={'mission': live})
     _, question = await next_message(server)
     assert question.id is not None
     channel, query = await next_message(server)
-    asked = entry(1, 'summoner', 'ready?', id=question.id, pending=True)
+    asked = entry(1, 'owner', 'ready?', id=question.id, pending=True)
     await reply(
       server,
       channel,
       query,
       outcome='ok',
-      value={'quest': {**live, 'messages': [asked], 'chat_seq': 1}},
+      value={'mission': {**live, 'messages': [asked], 'chat_seq': 1}},
     )
     _, waiting = await next_message(server)
     assert waiting.args['since'] == 1
@@ -194,13 +195,13 @@ async def test_waiting_question_fails_on_its_correlated_host_refusal(monkeypatch
       asyncio.to_thread(quest.main, ['quest', 'ask', 'REQ-1', 'ready?', '--wait', '1'])
     )
     channel, query = await next_message(server)
-    live = quest_record('REQ-1', 'started', talk=['summoner.question', 'summoned.say'])
-    await reply(server, channel, query, outcome='ok', value={'quest': live})
+    live = quest_record('REQ-1', 'started', talk=['owner.question', 'worker.say'])
+    await reply(server, channel, query, outcome='ok', value={'mission': live})
     _, question = await next_message(server)
     assert question.id is not None
     refused = entry(
       1,
-      'summoner',
+      'owner',
       'ready?',
       id=question.id,
       transition='refused',
@@ -212,7 +213,7 @@ async def test_waiting_question_fails_on_its_correlated_host_refusal(monkeypatch
       channel,
       query,
       outcome='ok',
-      value={'quest': {**live, 'messages': [refused], 'chat_seq': 1}},
+      value={'mission': {**live, 'messages': [refused], 'chat_seq': 1}},
     )
 
     assert await task == 1
@@ -226,8 +227,8 @@ async def test_waiting_question_fails_when_the_quest_ends_without_a_reply(monkey
       asyncio.to_thread(quest.main, ['quest', 'ask', 'REQ-1', 'ready?', '--wait', '1'])
     )
     channel, query = await next_message(server)
-    live = quest_record('REQ-1', 'started', talk=['summoner.question', 'summoned.say'])
-    await reply(server, channel, query, outcome='ok', value={'quest': live})
+    live = quest_record('REQ-1', 'started', talk=['owner.question', 'worker.say'])
+    await reply(server, channel, query, outcome='ok', value={'mission': live})
     _, question = await next_message(server)
     assert question.id is not None
     channel, query = await next_message(server)
@@ -237,11 +238,11 @@ async def test_waiting_question_fails_when_the_quest_ends_without_a_reply(monkey
       query,
       outcome='ok',
       value={
-        'quest': quest_record(
+        'mission': quest_record(
           'REQ-1',
           'ended',
           result={'outcome': 'ok', 'value': 'child stopped'},
-          talk=['summoner.question', 'summoned.say'],
+          talk=['owner.question', 'worker.say'],
         )
       },
     )
@@ -261,11 +262,11 @@ async def test_say_refuses_an_ended_quest_before_sending(monkeypatch, caplog):
       query,
       outcome='ok',
       value={
-        'quest': quest_record(
+        'mission': quest_record(
           'REQ-1',
           'ended',
           result={'outcome': 'ok', 'value': 'done'},
-          talk=['summoner.say', 'summoned.say'],
+          talk=['owner.say', 'worker.say'],
         )
       },
     )
@@ -296,7 +297,7 @@ async def test_say_reports_an_oversized_reply_id_as_a_cli_error(monkeypatch, cap
       channel,
       query,
       outcome='ok',
-      value={'quest': quest_record('REQ-1', 'started', talk=['summoned.question', 'summoned.say'])},
+      value={'mission': quest_record('REQ-1', 'started', talk=['worker.question', 'worker.say'])},
     )
 
     assert await task == 1
@@ -316,8 +317,8 @@ async def test_say_refuses_a_quest_this_session_did_not_summon(monkeypatch, capl
       query,
       outcome='ok',
       value={
-        'quest': quest_record(
-          'GRANDCHILD', 'started', talk=['summoner.say', 'summoned.say'], parent='CHILD'
+        'mission': quest_record(
+          'GRANDCHILD', 'started', talk=['owner.say', 'worker.say'], parent='CHILD'
         )
       },
     )
@@ -338,7 +339,7 @@ async def test_say_refuses_a_move_the_child_quest_talk_forbids(monkeypatch, capl
       channel,
       query,
       outcome='ok',
-      value={'quest': quest_record('REQ-1', 'started', talk=['summoned.say'])},
+      value={'mission': quest_record('REQ-1', 'started', talk=['worker.say'])},
     )
     assert await task == 1
     assert 'query REQ-1 forbids' in caplog.text
@@ -355,7 +356,7 @@ async def test_say_sends_text_at_the_message_bound_whole(monkeypatch):
       channel,
       query,
       outcome='ok',
-      value={'quest': quest_record('REQ-1', 'started', talk=['summoner.say', 'summoned.say'])},
+      value={'mission': quest_record('REQ-1', 'started', talk=['owner.say', 'worker.say'])},
     )
     _, message = await next_message(server)
     assert message.payload == {'text': text}
@@ -366,7 +367,7 @@ async def test_say_sends_text_at_the_message_bound_whole(monkeypatch):
 def test_text_over_the_message_bound_is_refused_before_any_broker_traffic(
   monkeypatch, caplog, verb
 ):
-  monkeypatch.delenv(CHANNEL_ENV, raising=False)
+  monkeypatch.delenv(BROKER_CHANNEL, raising=False)
   text = text_at_the_message_bound() + 'x'
 
   assert quest.main(['quest', verb, 'REQ-1', text]) == 1
@@ -390,7 +391,7 @@ async def test_check_reports_a_running_quest_with_its_trail(monkeypatch, capsys,
       channel,
       query,
       outcome='ok',
-      value={'quest': quest_record('REQ-1', 'started', trail_id='T9')},
+      value={'mission': quest_record('REQ-1', 'started', trail_id='T9')},
     )
 
     assert await task == quest.RUNNING_EXIT_CODE
@@ -404,8 +405,8 @@ async def test_check_reports_a_running_quest_with_its_trail(monkeypatch, capsys,
 
 
 def test_check_refuses_the_sessions_own_quest(monkeypatch, caplog):
-  monkeypatch.setenv(QUEST_ENV, 'OWN-QUEST')
-  monkeypatch.setenv(CHANNEL_ENV, 'tcp://token@127.0.0.1:1')
+  monkeypatch.setenv(BROKER_MISSION, 'OWN-QUEST')
+  monkeypatch.setenv(BROKER_CHANNEL, 'tcp://token@127.0.0.1:1')
 
   assert quest.main(['quest', 'check', 'self']) == 1
   assert quest.main(['quest', 'check', 'OWN-QUEST']) == 1
@@ -417,20 +418,20 @@ async def test_check_reports_the_open_questions_a_child_is_stalled_on(monkeypatc
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'check', 'REQ-1']))
     channel, query = await next_message(server)
-    answered = entry(1, 'summoned', 'which branch?', id='QUESTION-1')
-    answer = entry(2, 'summoner', 'master', reply_to='QUESTION-1')
-    open_question = entry(3, 'summoned', 'approve?', id='QUESTION-2', pending=True)
+    answered = entry(1, 'worker', 'which branch?', id='QUESTION-1')
+    answer = entry(2, 'owner', 'master', reply_to='QUESTION-1')
+    open_question = entry(3, 'worker', 'approve?', id='QUESTION-2', pending=True)
     await reply(
       server,
       channel,
       query,
       outcome='ok',
       value={
-        'quest': quest_record(
+        'mission': quest_record(
           'REQ-1',
           'started',
           trail_id='T9',
-          talk=['summoner.question', 'summoned.question', 'summoned.say'],
+          talk=['owner.question', 'worker.question', 'worker.say'],
           messages=[answered, answer, open_question],
           chat_seq=3,
         )
@@ -453,18 +454,18 @@ async def test_check_wait_returns_early_when_the_child_asks(monkeypatch, capsys)
       asyncio.to_thread(quest.main, ['quest', 'check', '--wait', '--timeout', '5', 'REQ-1'])
     )
     channel, query = await next_message(server)
-    live = quest_record('REQ-1', 'started', talk=['summoned.question', 'summoned.say'])
-    await reply(server, channel, query, outcome='ok', value={'quest': live})
+    live = quest_record('REQ-1', 'started', talk=['worker.question', 'worker.say'])
+    await reply(server, channel, query, outcome='ok', value={'mission': live})
     channel, waiting = await next_message(server)
     assert waiting.args['id'] == 'REQ-1'
     assert waiting.args['since'] == 0
-    question = entry(1, 'summoned', 'approve?', id='QUESTION-1', pending=True)
+    question = entry(1, 'worker', 'approve?', id='QUESTION-1', pending=True)
     await reply(
       server,
       channel,
       waiting,
       outcome='ok',
-      value={'quest': {**live, 'messages': [question], 'chat_seq': 1}},
+      value={'mission': {**live, 'messages': [question], 'chat_seq': 1}},
     )
 
     assert await task == quest.QUESTION_EXIT_CODE
@@ -485,7 +486,7 @@ async def test_check_returns_the_retained_answer_repeatably(monkeypatch, capsys)
         query,
         outcome='ok',
         value={
-          'quest': quest_record(
+          'mission': quest_record(
             'REQ-1', 'ended', result={'outcome': 'ok', 'value': 'retained answer'}
           )
         },
@@ -495,7 +496,7 @@ async def test_check_returns_the_retained_answer_repeatably(monkeypatch, capsys)
 
 
 def test_wait_deadline_returns_running_without_starting_another_poll(monkeypatch):
-  monkeypatch.setenv(QUEST_ENV, 'ROOT')
+  monkeypatch.setenv(BROKER_MISSION, 'ROOT')
   ticks = iter((10.0, 10.0, 15.0))
   polls: list[tuple[float, float | None]] = []
 
@@ -515,7 +516,7 @@ def test_wait_deadline_returns_running_without_starting_another_poll(monkeypatch
 
 
 def test_wait_deadline_bounds_a_stalled_broker_read(monkeypatch):
-  monkeypatch.setenv(QUEST_ENV, 'ROOT')
+  monkeypatch.setenv(BROKER_MISSION, 'ROOT')
   ticks = iter((10.0, 10.0))
   client = MagicMock()
   client.call.side_effect = TimeoutError
@@ -530,7 +531,7 @@ def test_wait_deadline_bounds_a_stalled_broker_read(monkeypatch):
 
 @pytest.mark.parametrize('timeout', [float('nan'), float('inf')])
 def test_wait_rejects_non_finite_deadlines(monkeypatch, timeout):
-  monkeypatch.setenv(QUEST_ENV, 'ROOT')
+  monkeypatch.setenv(BROKER_MISSION, 'ROOT')
   with pytest.raises(ValueError, match='finite positive'):
     quest.check('REQ-1', wait=True, timeout=timeout, client=MagicMock())
   with pytest.raises(ValueError, match='finite positive'):
@@ -538,7 +539,7 @@ def test_wait_rejects_non_finite_deadlines(monkeypatch, timeout):
 
 
 def test_a_timeout_without_a_wait_is_refused(monkeypatch, caplog):
-  monkeypatch.setenv(QUEST_ENV, 'ROOT')
+  monkeypatch.setenv(BROKER_MISSION, 'ROOT')
   assert quest.main(['quest', 'check', '--timeout', '5', 'REQ-1']) == 1
   assert quest.main(['quest', 'history', '--timeout', '5', 'REQ-1']) == 1
   assert caplog.text.count('only bounds a wait') == 2
@@ -571,7 +572,7 @@ async def test_check_wait_deadline_returns_running_when_the_final_read_times_out
       channel,
       initial,
       outcome='ok',
-      value={'quest': quest_record('REQ-1', 'started', trail_id='T9')},
+      value={'mission': quest_record('REQ-1', 'started', trail_id='T9')},
     )
 
     _, final = await next_message(server)
@@ -592,7 +593,7 @@ async def test_check_wait_loops_query_until_terminal(monkeypatch, capsys):
     channel, query = await next_message(server)
     assert query.args == {'id': 'REQ-1'}
     await reply(
-      server, channel, query, outcome='ok', value={'quest': quest_record('REQ-1', 'started')}
+      server, channel, query, outcome='ok', value={'mission': quest_record('REQ-1', 'started')}
     )
     channel, query = await next_message(server)
     assert query.args['id'] == 'REQ-1'
@@ -602,7 +603,7 @@ async def test_check_wait_loops_query_until_terminal(monkeypatch, capsys):
       channel,
       query,
       outcome='ok',
-      value={'quest': quest_record('REQ-1', 'ended', result={'outcome': 'ok', 'value': 'done'})},
+      value={'mission': quest_record('REQ-1', 'ended', result={'outcome': 'ok', 'value': 'done'})},
     )
 
     assert await task == 0
@@ -620,7 +621,7 @@ async def test_unknown_and_evicted_checks_fail(monkeypatch, caplog):
     evicted = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'check', 'OLD']))
     channel, query = await next_message(server)
     await reply(
-      server, channel, query, outcome='ok', value={'quest': quest_record('OLD', 'evicted')}
+      server, channel, query, outcome='ok', value={'mission': quest_record('OLD', 'evicted')}
     )
     assert await evicted == 1
   assert 'unknown quest id' in caplog.text
@@ -633,22 +634,22 @@ async def test_unknown_and_evicted_checks_fail(monkeypatch, caplog):
 @pytest.mark.asyncio
 async def test_history_of_self_marks_the_summoners_open_question(monkeypatch, capsys):
   async with running_server(monkeypatch) as server:
-    monkeypatch.setenv(QUEST_ENV, 'OWN-QUEST')
+    monkeypatch.setenv(BROKER_MISSION, 'OWN-QUEST')
     task = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'history', 'self']))
     channel, query = await next_message(server)
     assert query.args == {'id': 'OWN-QUEST'}
-    steer = entry(1, 'summoner', 'start with docs')
-    question = entry(2, 'summoner', 'which region?', id='QUESTION-2', pending=True)
+    steer = entry(1, 'owner', 'start with docs')
+    question = entry(2, 'owner', 'which region?', id='QUESTION-2', pending=True)
     await reply(
       server,
       channel,
       query,
       outcome='ok',
       value={
-        'quest': quest_record(
+        'mission': quest_record(
           'OWN-QUEST',
           'started',
-          talk=['summoner.question', 'summoner.say', 'summoned.say'],
+          talk=['owner.question', 'owner.say', 'worker.say'],
           messages=[steer, question],
           chat_seq=2,
         )
@@ -658,7 +659,7 @@ async def test_history_of_self_marks_the_summoners_open_question(monkeypatch, ca
     assert await task == quest.QUESTION_EXIT_CODE
     assert json.loads(capsys.readouterr().out) == {
       'quest_id': 'OWN-QUEST',
-      'talk': ['summoned.say', 'summoner.question', 'summoner.say'],
+      'talk': ['owner.question', 'owner.say', 'worker.say'],
       'messages': [steer, question],
     }
 
@@ -668,17 +669,17 @@ async def test_history_shows_a_truncated_tail_and_the_recovered_reply(monkeypatc
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'history', 'REQ-1']))
     channel, query = await next_message(server)
-    answer = entry(3, 'summoned', 'yes', reply_to='QUESTION-1')
+    answer = entry(3, 'worker', 'yes', reply_to='QUESTION-1')
     await reply(
       server,
       channel,
       query,
       outcome='ok',
       value={
-        'quest': quest_record(
+        'mission': quest_record(
           'REQ-1',
           'started',
-          talk=['summoner.question', 'summoned.say'],
+          talk=['owner.question', 'worker.say'],
           messages=[answer],
           messages_truncated=True,
           chat_seq=3,
@@ -710,7 +711,7 @@ async def test_history_surfaces_a_message_sent_past_the_local_guard_and_refused_
     task = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'history', 'REQ-1']))
     channel, query = await next_message(server)
     refused = entry(
-      4, 'summoner', 'blocked', transition='refused', reason='quest talk lacks summoner.say'
+      4, 'owner', 'blocked', transition='refused', reason='quest talk lacks owner.say'
     )
     await reply(
       server,
@@ -718,8 +719,8 @@ async def test_history_surfaces_a_message_sent_past_the_local_guard_and_refused_
       query,
       outcome='ok',
       value={
-        'quest': quest_record(
-          'REQ-1', 'started', talk=['summoned.say'], messages=[refused], chat_seq=4
+        'mission': quest_record(
+          'REQ-1', 'started', talk=['worker.say'], messages=[refused], chat_seq=4
         )
       },
     )
@@ -735,17 +736,17 @@ async def test_history_wait_returns_on_the_next_message(monkeypatch, capsys):
       asyncio.to_thread(quest.main, ['quest', 'history', '--wait', '--timeout', '5', 'REQ-1'])
     )
     channel, query = await next_message(server)
-    live = quest_record('REQ-1', 'started', talk=['summoned.say'])
-    await reply(server, channel, query, outcome='ok', value={'quest': live})
+    live = quest_record('REQ-1', 'started', talk=['worker.say'])
+    await reply(server, channel, query, outcome='ok', value={'mission': live})
     channel, waiting = await next_message(server)
     assert waiting.args == {'id': 'REQ-1', 'wait': waiting.args['wait'], 'since': 0}
-    said = entry(1, 'summoned', 'working')
+    said = entry(1, 'worker', 'working')
     await reply(
       server,
       channel,
       waiting,
       outcome='ok',
-      value={'quest': {**live, 'messages': [said], 'chat_seq': 1}},
+      value={'mission': {**live, 'messages': [said], 'chat_seq': 1}},
     )
 
     assert await task == 0
@@ -759,18 +760,18 @@ async def test_history_wait_returns_at_once_on_an_ended_quest(monkeypatch, capsy
       asyncio.to_thread(quest.main, ['quest', 'history', '--wait', 'REQ-1'])
     )
     channel, query = await next_message(server)
-    said = entry(1, 'summoned', 'done')
+    said = entry(1, 'worker', 'done')
     await reply(
       server,
       channel,
       query,
       outcome='ok',
       value={
-        'quest': quest_record(
+        'mission': quest_record(
           'REQ-1',
           'ended',
           result={'outcome': 'ok', 'value': 'answer'},
-          talk=['summoned.say'],
+          talk=['worker.say'],
           messages=[said],
           chat_seq=1,
         )
@@ -787,7 +788,7 @@ async def test_history_of_an_evicted_quest_fails(monkeypatch, caplog):
     task = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'history', 'OLD']))
     channel, query = await next_message(server)
     await reply(
-      server, channel, query, outcome='ok', value={'quest': quest_record('OLD', 'evicted')}
+      server, channel, query, outcome='ok', value={'mission': quest_record('OLD', 'evicted')}
     )
     assert await task == 1
   assert 'no longer retained' in caplog.text
@@ -811,7 +812,7 @@ async def test_cancel_sends_the_cancel_then_waits_for_the_quest_to_end(monkeypat
       channel,
       query,
       outcome='ok',
-      value={'quest': quest_record('REQ-1', 'started', trail_id='T9')},
+      value={'mission': quest_record('REQ-1', 'started', trail_id='T9')},
     )
     channel, wait = await next_message(server)
     assert wait.args == {'id': 'REQ-1', 'wait': quest.READ_WAIT_SECONDS}
@@ -821,7 +822,7 @@ async def test_cancel_sends_the_cancel_then_waits_for_the_quest_to_end(monkeypat
       wait,
       outcome='ok',
       value={
-        'quest': quest_record(
+        'mission': quest_record(
           'REQ-1',
           'ended',
           outcome='failed',
@@ -861,7 +862,7 @@ async def test_cancel_fails_on_an_unknown_state_or_an_evicted_outcome(monkeypatc
     await reply(server, channel, cancel, outcome='ok')
     channel, query = await next_message(server)
     await reply(
-      server, channel, query, outcome='ok', value={'quest': quest_record('REQ-1', 'limbo')}
+      server, channel, query, outcome='ok', value={'mission': quest_record('REQ-1', 'limbo')}
     )
     assert await unknown == 1
 
@@ -870,7 +871,7 @@ async def test_cancel_fails_on_an_unknown_state_or_an_evicted_outcome(monkeypatc
     await reply(server, channel, cancel, outcome='ok')
     channel, query = await next_message(server)
     await reply(
-      server, channel, query, outcome='ok', value={'quest': quest_record('REQ-2', 'evicted')}
+      server, channel, query, outcome='ok', value={'mission': quest_record('REQ-2', 'evicted')}
     )
     assert await evicted == 1
   assert "quest 'REQ-1' has unknown state 'limbo'" in caplog.text
@@ -887,7 +888,7 @@ async def test_cancel_timeout_exits_running_while_the_end_is_under_way(monkeypat
     await reply(server, channel, cancel, outcome='ok')
     channel, query = await next_message(server)
     await reply(
-      server, channel, query, outcome='ok', value={'quest': quest_record('REQ-1', 'started')}
+      server, channel, query, outcome='ok', value={'mission': quest_record('REQ-1', 'started')}
     )
     _, wait = await next_message(server)
     assert wait.args['id'] == 'REQ-1'
@@ -912,7 +913,7 @@ async def test_live_children_keeps_the_own_unended_summons_only(monkeypatch):
       query,
       outcome='ok',
       value={
-        'quests': [
+        'missions': [
           quest_record('S2', 'accepted', args={'target': 'reviewer', 'prompt': 'review'}),
           quest_record('S1', 'started'),
           quest_record('G1', 'started', parent='S1'),
@@ -932,7 +933,7 @@ async def test_live_children_refuses_an_unknown_quest_state(monkeypatch):
     task = asyncio.create_task(asyncio.to_thread(quest.live_children))
     channel, query = await next_message(server)
     await reply(
-      server, channel, query, outcome='ok', value={'quests': [quest_record('S1', 'limbo')]}
+      server, channel, query, outcome='ok', value={'missions': [quest_record('S1', 'limbo')]}
     )
 
     with pytest.raises(quest.QuestError, match="unknown state 'limbo'"):
@@ -949,7 +950,7 @@ async def test_live_children_refuses_a_live_summon_without_a_target(monkeypatch)
       channel,
       query,
       outcome='ok',
-      value={'quests': [quest_record('S1', 'started', args={})]},
+      value={'missions': [quest_record('S1', 'started', args={})]},
     )
 
     with pytest.raises(quest.QuestError, match='without a target'):
@@ -968,7 +969,7 @@ async def test_list_reads_every_page_and_keeps_only_summons(monkeypatch, capsys)
       query,
       outcome='ok',
       value={
-        'quests': [
+        'missions': [
           quest_record('ROOT', 'started', kind='root'),
           quest_record('S1', 'started'),
         ],
@@ -983,7 +984,7 @@ async def test_list_reads_every_page_and_keeps_only_summons(monkeypatch, capsys)
       query,
       outcome='ok',
       value={
-        'quests': [
+        'missions': [
           quest_record('B1', 'ended', kind='benchmark'),
           quest_record('S0', 'denied', result={'outcome': 'denied', 'error': 'no'}),
         ]
@@ -1007,14 +1008,14 @@ async def test_watch_arm_replays_live_broker_chat_and_streams_a_racing_message_o
       root = clients.enter_context(
         Client(connect(root_endpoint.channel.host_endpoint.address(LOCAL_HOST)))
       )
-      monkeypatch.setenv(QUEST_ENV, root_endpoint.quest)
-      monkeypatch.setenv(brotocol.TALK_ENV, brotocol.encode_talk(root_endpoint.talk))
+      monkeypatch.setenv(BROKER_MISSION, root_endpoint.quest)
+      monkeypatch.setenv(BROKER_TALK, brotocol.encode_talk(root_endpoint.talk))
       child_request = root.send(
         quest.SUMMON,
         {
           'target': 'dev',
           'prompt': 'work',
-          'talk': ['summoner.say', 'summoner.question', 'summoned.question'],
+          'talk': ['owner.say', 'owner.question', 'worker.question'],
         },
       )
       summon._await_acceptance(root, child_request)
@@ -1024,28 +1025,28 @@ async def test_watch_arm_replays_live_broker_chat_and_streams_a_racing_message_o
       child = clients.enter_context(
         Client(connect(child_endpoint.channel.host_endpoint.address(LOCAL_HOST)))
       )
-      monkeypatch.setenv(QUEST_ENV, child_endpoint.quest)
-      monkeypatch.setenv(brotocol.TALK_ENV, brotocol.encode_talk(child_endpoint.talk))
+      monkeypatch.setenv(BROKER_MISSION, child_endpoint.quest)
+      monkeypatch.setenv(BROKER_TALK, brotocol.encode_talk(child_endpoint.talk))
       own = quest.query_quest(child, child_endpoint.quest, wait_seconds=1, since=0)
       before_race = own['chat_seq']
       grandchild_request = child.send(
         quest.SUMMON,
-        {'target': 'reviewer', 'prompt': 'review', 'talk': ['summoned.question']},
+        {'target': 'reviewer', 'prompt': 'review', 'talk': ['worker.question']},
       )
       summon._await_acceptance(child, grandchild_request)
       grandchild_endpoint = await asyncio.to_thread(spawner.spawned.get, True, TIMEOUT)
       grandchild = clients.enter_context(
         Client(connect(grandchild_endpoint.channel.host_endpoint.address(LOCAL_HOST)))
       )
-      monkeypatch.setenv(QUEST_ENV, grandchild_endpoint.quest)
-      monkeypatch.setenv(brotocol.TALK_ENV, brotocol.encode_talk(grandchild_endpoint.talk))
+      monkeypatch.setenv(BROKER_MISSION, grandchild_endpoint.quest)
+      monkeypatch.setenv(BROKER_TALK, brotocol.encode_talk(grandchild_endpoint.talk))
       grandchild_question = grandchild.message(
         grandchild_endpoint.quest, {'text': 'ship this?'}, question=True
       )
 
-      monkeypatch.setenv(QUEST_ENV, child_endpoint.quest)
-      monkeypatch.setenv(CHANNEL_ENV, child_endpoint.channel.host_endpoint.address(LOCAL_HOST))
-      monkeypatch.setenv(brotocol.TALK_ENV, brotocol.encode_talk(child_endpoint.talk))
+      monkeypatch.setenv(BROKER_MISSION, child_endpoint.quest)
+      monkeypatch.setenv(BROKER_CHANNEL, child_endpoint.channel.host_endpoint.address(LOCAL_HOST))
+      monkeypatch.setenv(BROKER_TALK, brotocol.encode_talk(child_endpoint.talk))
       quest.query_quest(child, grandchild_endpoint.quest, wait_seconds=1, since=0)
       original_read = quest._read_value
       raced = False
@@ -1055,12 +1056,12 @@ async def test_watch_arm_replays_live_broker_chat_and_streams_a_racing_message_o
         value = original_read(client, kind, args, timeout=timeout)
         if not raced and kind == 'events' and args == {}:
           raced = True
-          monkeypatch.setenv(QUEST_ENV, root_endpoint.quest)
-          monkeypatch.setenv(brotocol.TALK_ENV, brotocol.encode_talk(root_endpoint.talk))
+          monkeypatch.setenv(BROKER_MISSION, root_endpoint.quest)
+          monkeypatch.setenv(BROKER_TALK, brotocol.encode_talk(root_endpoint.talk))
           root.message(child_endpoint.quest, {'text': 'also run lint'})
           quest.query_quest(root, child_endpoint.quest, wait_seconds=1, since=before_race)
-          monkeypatch.setenv(QUEST_ENV, child_endpoint.quest)
-          monkeypatch.setenv(brotocol.TALK_ENV, brotocol.encode_talk(child_endpoint.talk))
+          monkeypatch.setenv(BROKER_MISSION, child_endpoint.quest)
+          monkeypatch.setenv(BROKER_TALK, brotocol.encode_talk(child_endpoint.talk))
         return value
 
       monkeypatch.setattr(quest, '_read_value', inject_racing_message)
@@ -1079,15 +1080,15 @@ async def test_watch_arm_replays_live_broker_chat_and_streams_a_racing_message_o
 @pytest.mark.asyncio
 async def test_watch_replays_retained_chat_at_arm_without_repeating_a_racing_message(monkeypatch):
   async with running_server(monkeypatch) as server:
-    monkeypatch.setenv(QUEST_ENV, 'ROOT')
+    monkeypatch.setenv(BROKER_MISSION, 'ROOT')
     watch = quest.watch(wait_seconds=0.05)
     first_line = asyncio.create_task(asyncio.to_thread(next, watch))
     channel, arm = await next_message(server)
     await reply(server, channel, arm, outcome='ok', value={'head': 10, 'events': []})
 
-    before = entry(5, 'summoner', 'start with docs')
-    own_question = entry(6, 'summoner', 'which branch?', id='OWN-QUESTION', pending=True)
-    racing = entry(11, 'summoner', 'also run lint')
+    before = entry(5, 'owner', 'start with docs')
+    own_question = entry(6, 'owner', 'which branch?', id='OWN-QUESTION', pending=True)
+    racing = entry(11, 'owner', 'also run lint')
     channel, own_query = await next_message(server)
     await reply(
       server,
@@ -1095,7 +1096,7 @@ async def test_watch_replays_retained_chat_at_arm_without_repeating_a_racing_mes
       own_query,
       outcome='ok',
       value={
-        'quest': quest_record(
+        'mission': quest_record(
           'ROOT',
           'started',
           kind='root',
@@ -1104,7 +1105,7 @@ async def test_watch_replays_retained_chat_at_arm_without_repeating_a_racing_mes
         )
       },
     )
-    child_question = entry(8, 'summoned', 'ship this?', id='CHILD-QUESTION')
+    child_question = entry(8, 'worker', 'ship this?', id='CHILD-QUESTION')
     channel, listing = await next_message(server)
     await reply(
       server,
@@ -1112,9 +1113,9 @@ async def test_watch_replays_retained_chat_at_arm_without_repeating_a_racing_mes
       listing,
       outcome='ok',
       value={
-        'quests': [
+        'missions': [
           {
-            **quest_record('CHILD', 'started', talk=['summoned.question']),
+            **quest_record('CHILD', 'started', talk=['worker.question']),
             'pending': [child_question],
           }
         ]
@@ -1143,7 +1144,7 @@ async def test_watch_replays_retained_chat_at_arm_without_repeating_a_racing_mes
           {
             **racing,
             'kind': 'summon',
-            'quest': 'ROOT',
+            'mission': 'ROOT',
             'parent': 'PARENT',
             'args': {'target': 'dev'},
           }
@@ -1157,13 +1158,13 @@ async def test_watch_replays_retained_chat_at_arm_without_repeating_a_racing_mes
 @pytest.mark.asyncio
 async def test_watch_arm_replays_an_open_question_older_than_the_tail(monkeypatch):
   async with running_server(monkeypatch) as server:
-    monkeypatch.setenv(QUEST_ENV, 'ROOT')
+    monkeypatch.setenv(BROKER_MISSION, 'ROOT')
     watch = quest.watch(wait_seconds=0.05)
     first_line = asyncio.create_task(asyncio.to_thread(next, watch))
     channel, arm = await next_message(server)
     await reply(server, channel, arm, outcome='ok', value={'head': 40, 'events': []})
-    old_question = entry(3, 'summoner', 'which branch?', id='OLD-QUESTION', pending=True)
-    recent = entry(39, 'summoner', 'nearly there?')
+    old_question = entry(3, 'owner', 'which branch?', id='OLD-QUESTION', pending=True)
+    recent = entry(39, 'owner', 'nearly there?')
     channel, own_query = await next_message(server)
     await reply(
       server,
@@ -1171,7 +1172,7 @@ async def test_watch_arm_replays_an_open_question_older_than_the_tail(monkeypatc
       own_query,
       outcome='ok',
       value={
-        'quest': quest_record(
+        'mission': quest_record(
           'ROOT',
           'started',
           kind='root',
@@ -1182,7 +1183,7 @@ async def test_watch_arm_replays_an_open_question_older_than_the_tail(monkeypatc
       },
     )
     channel, listing = await next_message(server)
-    await reply(server, channel, listing, outcome='ok', value={'quests': []})
+    await reply(server, channel, listing, outcome='ok', value={'missions': []})
 
     assert await first_line == (
       'before the watch: summoner asks which branch? (question OLD-QUESTION)'
@@ -1194,7 +1195,7 @@ async def test_watch_arm_replays_an_open_question_older_than_the_tail(monkeypatc
 @pytest.mark.asyncio
 async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypatch):
   async with running_server(monkeypatch) as server:
-    monkeypatch.setenv(QUEST_ENV, 'ROOT')
+    monkeypatch.setenv(BROKER_MISSION, 'ROOT')
     watch = quest.watch(wait_seconds=0.05)
     first_line = asyncio.create_task(asyncio.to_thread(next, watch))
     channel, arm = await next_message(server)
@@ -1215,7 +1216,7 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
           {
             'seq': 11,
             'kind': 'benchmark',
-            'quest': 'B1',
+            'mission': 'B1',
             'parent': 'ROOT',
             'args': {},
             'transition': 'started',
@@ -1223,7 +1224,7 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
           {
             'seq': 12,
             'kind': 'summon',
-            'quest': 'S1',
+            'mission': 'S1',
             'parent': 'ROOT',
             'args': {'target': 'reviewer'},
             'transition': 'denied',
@@ -1248,7 +1249,7 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
           {
             'seq': 13,
             'kind': 'summon',
-            'quest': 'S2',
+            'mission': 'S2',
             'parent': 'ROOT',
             'args': {'target': 'dev'},
             'transition': 'ended',
@@ -1274,7 +1275,7 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
           {
             'seq': 14,
             'kind': 'summon',
-            'quest': 'S3',
+            'mission': 'S3',
             'parent': 'ROOT',
             'args': {'target': 'x\ny'},
             'transition': 'denied',
@@ -1299,19 +1300,19 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
           {
             'seq': 15,
             'kind': 'summon',
-            'quest': 'S4',
+            'mission': 'S4',
             'parent': 'ROOT',
             'args': {'target': 'dev'},
             'transition': 'refused',
-            'from': 'summoner',
-            'reason': 'quest talk lacks summoner.say',
+            'from': 'owner',
+            'reason': 'quest talk lacks owner.say',
             'head': {'text': 'blocked'},
           }
         ],
       },
     )
     assert await refusal_line == (
-      'summon refused quest talk lacks summoner.say: blocked (quest S4 to dev)'
+      'summon refused quest talk lacks owner.say: blocked (quest S4 to dev)'
     )
     watch.close()
 
@@ -1333,7 +1334,7 @@ async def test_watch_replays_retained_chat_after_an_event_gap(monkeypatch):
       assert await gap_line == 'quest watch gap: events gap: oldest is 15; re-armed at 20'
 
       replay_line = asyncio.create_task(asyncio.to_thread(next, watch))
-      retained = entry(18, 'summoner', 'while disconnected')
+      retained = entry(18, 'owner', 'while disconnected')
       channel, own_query = await next_message(server)
       await reply(
         server,
@@ -1341,11 +1342,11 @@ async def test_watch_replays_retained_chat_after_an_event_gap(monkeypatch):
         own_query,
         outcome='ok',
         value={
-          'quest': quest_record('ROOT', 'started', kind='root', messages=[retained], chat_seq=18)
+          'mission': quest_record('ROOT', 'started', kind='root', messages=[retained], chat_seq=18)
         },
       )
       channel, listing = await next_message(server)
-      await reply(server, channel, listing, outcome='ok', value={'quests': []})
+      await reply(server, channel, listing, outcome='ok', value={'missions': []})
       assert await replay_line == 'before the watch: summoner says while disconnected'
 
       resumed = asyncio.create_task(asyncio.to_thread(next, watch))
@@ -1362,7 +1363,7 @@ async def test_watch_replays_retained_chat_after_an_event_gap(monkeypatch):
             {
               'seq': 21,
               'kind': 'summon',
-              'quest': 'S1',
+              'mission': 'S1',
               'parent': 'ROOT',
               'args': {'target': 'dev'},
               'transition': 'denied',
@@ -1377,11 +1378,11 @@ async def test_watch_replays_retained_chat_after_an_event_gap(monkeypatch):
 def test_chat_watch_lines_show_the_other_end_and_every_refusal():
   child = {
     'kind': 'summon',
-    'quest': 'CHILD',
+    'mission': 'CHILD',
     'parent': 'ROOT',
     'args': {'target': 'dev'},
     'transition': 'message',
-    'from': 'summoned',
+    'from': 'worker',
     'id': 'QUESTION-1',
     'head': {'text': 'approve?'},
   }
@@ -1390,25 +1391,25 @@ def test_chat_watch_lines_show_the_other_end_and_every_refusal():
   )
   own = {
     **child,
-    'quest': 'ROOT',
+    'mission': 'ROOT',
     'parent': 'PARENT',
-    'from': 'summoner',
+    'from': 'owner',
     'id': None,
     'reply_to': 'QUESTION-2',
     'head': {'text': 'approved'},
   }
   assert quest._chat_event_line(own, 'ROOT') == 'summoner replies approved (to QUESTION-2)'
-  assert quest._chat_event_line({**own, 'from': 'summoned'}, 'ROOT') is None
+  assert quest._chat_event_line({**own, 'from': 'worker'}, 'ROOT') is None
   refused = {
     **child,
     'transition': 'refused',
-    'from': 'summoner',
+    'from': 'owner',
     'id': None,
-    'reason': 'quest talk lacks summoner.say',
+    'reason': 'quest talk lacks owner.say',
     'head': {'text': 'blocked'},
   }
   assert quest._chat_event_line(refused, 'ROOT') == (
-    'summon refused quest talk lacks summoner.say: blocked (quest CHILD to dev)'
+    'summon refused quest talk lacks owner.say: blocked (quest CHILD to dev)'
   )
   oversized = {
     **refused,
@@ -1430,7 +1431,7 @@ def test_the_watch_line_can_carry_any_registered_name_whole():
 @pytest.mark.asyncio
 async def test_watch_refuses_an_accepted_summon_event_without_a_target(monkeypatch):
   async with running_server(monkeypatch) as server:
-    monkeypatch.setenv(QUEST_ENV, 'ROOT')
+    monkeypatch.setenv(BROKER_MISSION, 'ROOT')
     watch = quest.watch(wait_seconds=0.05)
     first_line = asyncio.create_task(asyncio.to_thread(next, watch))
     channel, arm = await next_message(server)
@@ -1448,7 +1449,7 @@ async def test_watch_refuses_an_accepted_summon_event_without_a_target(monkeypat
           {
             'seq': 1,
             'kind': 'summon',
-            'quest': 'S1',
+            'mission': 'S1',
             'parent': 'ROOT',
             'args': {'head': '{"target":"dev","share":[', 'truncated': True},
             'transition': 'accepted',
@@ -1463,7 +1464,7 @@ async def test_watch_refuses_an_accepted_summon_event_without_a_target(monkeypat
 @pytest.mark.asyncio
 async def test_watch_refuses_a_quest_this_session_did_not_summon(monkeypatch):
   async with running_server(monkeypatch) as server:
-    monkeypatch.setenv(QUEST_ENV, 'ROOT')
+    monkeypatch.setenv(BROKER_MISSION, 'ROOT')
     watch = quest.watch(wait_seconds=0.05)
     first_line = asyncio.create_task(asyncio.to_thread(next, watch))
     channel, arm = await next_message(server)
@@ -1481,7 +1482,7 @@ async def test_watch_refuses_a_quest_this_session_did_not_summon(monkeypatch):
           {
             'seq': 1,
             'kind': 'summon',
-            'quest': 'GRANDCHILD',
+            'mission': 'GRANDCHILD',
             'parent': 'CHILD',
             'args': {'target': 'dev'},
             'transition': 'started',
@@ -1496,9 +1497,9 @@ async def test_watch_refuses_a_quest_this_session_did_not_summon(monkeypatch):
 @pytest.mark.asyncio
 async def test_watch_refuses_to_start_without_the_quest_this_session_answers(monkeypatch):
   async with running_server(monkeypatch):
-    monkeypatch.delenv(QUEST_ENV, raising=False)
+    monkeypatch.delenv(BROKER_MISSION, raising=False)
     watch = quest.watch(wait_seconds=0.05)
-    with pytest.raises(quest.QuestError, match=QUEST_ENV):
+    with pytest.raises(quest.QuestError, match=BROKER_MISSION):
       await asyncio.to_thread(next, watch)
 
 
@@ -1506,12 +1507,12 @@ async def test_watch_refuses_to_start_without_the_quest_this_session_answers(mon
 
 
 def test_errors_without_a_channel(monkeypatch, caplog):
-  monkeypatch.delenv(CHANNEL_ENV, raising=False)
-  monkeypatch.setenv(QUEST_ENV, 'ROOT')
+  monkeypatch.delenv(BROKER_CHANNEL, raising=False)
+  monkeypatch.setenv(BROKER_MISSION, 'ROOT')
   assert quest.main(['quest', 'check', 'SOME-ID']) == 1
   assert quest.main(['quest', 'history', 'self']) == 1
   assert quest.main(['quest', 'list']) == 1
-  assert CHANNEL_ENV in caplog.text
+  assert BROKER_CHANNEL in caplog.text
 
 
 def test_a_failure_before_any_trail_does_not_point_at_trails():

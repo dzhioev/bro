@@ -39,10 +39,10 @@ def facts(tmp_path, monkeypatch):
   )
   journal = Journal()
   journal.subscribe(table.observe_journal)
-  root = journal.open('root-quest', 'root', None, None, {})
+  root = journal.open('root-quest', 'root', None, None, {}, type='bro')
   journal.bind(root, ROOT)
   context = _Context(journal)
-  context.workers[ROOT] = root.quest_id
+  context.workers[ROOT] = root.mission_id
   return table, cast(Dispatcher, context), workspace
 
 
@@ -56,7 +56,7 @@ def _spawned(facts, context, peer, quest, parent, *, manual=False):
       manual=manual,
     ),
   )
-  record = context.journal.open(quest, 'summon', parent, ROOT, {'target': 'dev'})
+  record = context.journal.open(quest, 'summon', parent, ROOT, {'target': 'dev'}, type='bro')
   context.journal.bind(record, peer)
   context.workers[peer] = quest
 
@@ -89,7 +89,9 @@ def test_joined_peer_uses_the_party_tree_and_its_own_trail_pointer(facts):
     'child-quest',
     PeerFact('ws', 'dev', frozenset(), member='broker-CH'),
   )
-  record = context.journal.open('child-quest', 'summon', 'root-quest', ROOT, {'target': 'dev'})
+  record = context.journal.open(
+    'child-quest', 'summon', 'root-quest', ROOT, {'target': 'dev'}, type='bro'
+  )
   context.journal.bind(record, CHILD)
   context.workers[CHILD] = 'child-quest'
   records = party_member_dir(workspace.path, 'broker-CH')

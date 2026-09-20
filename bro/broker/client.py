@@ -6,16 +6,16 @@ host-side broker is async. `from_env()` resolves the client address from
 a failed session proxy when only `BROKER_UPSTREAM` remains.
 
 `request` and `call` are correlate-on-receive:
-they send a request, then read inbound messages until one names the quest opened by the request.
+they send a request, then read inbound messages until one names the mission opened by the request.
 `request` returns the first correlated message;
 `call` rides through marks and messages (surfaced to a callback) and returns the correlated result.
 Uncorrelated arrivals are set aside and handed out by later `receive` calls rather than dropped.
 No reader thread — concurrent in-flight requests are a consumer need that has not arisen.
 
 `send` returns the sent request (ids are minted client-side); `await_reply` is `call`'s wait detached from its send and `await_any` is `request`'s, so a consumer can expose the request id the moment it is on the wire and block — or reattach — separately.
-`message` sends chat traffic, `await_reply_to` correlates a reply by message id, and `listen` registers the connection for unsolicited quest messages.
+`message` sends chat traffic, `await_reply_to` correlates a reply by message id, and `listen` registers the connection for unsolicited request messages.
 `mark` and `result` are the answering-side lifecycle calls;
-a worker peer emits them against the quest id its launch carried (`QUEST_ENV`), with its fixed chat rights in `BROKER_TALK`.
+a worker peer emits them against the request id its launch carried (`BROKER_MISSION`), with its fixed chat rights in `BROKER_TALK`.
 """
 
 import os
@@ -28,27 +28,23 @@ from typing import Any, Optional
 from bro.base.lulid import lulid
 from bro.broker import brotocol
 from bro.broker.brotocol import Message, Tag, Talk
+from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION, BROKER_TALK, BROKER_UPSTREAM
 from bro.broker.transport import ClientTransport, connect
-from bro.launch.broker_environment import CHANNEL_ENV, UPSTREAM_ENV, broxy_log_path
-
-# the quest a launched peer answers, set beside CHANNEL_ENV by whatever
-# launches it (the host's spawner adapters, a manual summon's launch surface)
-QUEST_ENV = 'BROKER_QUEST'
 
 
 def talk_from_env() -> Optional[Talk]:
-  """Read this peer's quest talk, or None when its launcher published no talk."""
-  value = os.environ.get(brotocol.TALK_ENV)
+  """Read this peer's mission talk, or None when its launcher published no talk."""
+  value = os.environ.get(BROKER_TALK)
   return None if value is None else brotocol.decode_talk(value)
 
 
-def _missing_summoned_right(talk: Talk, message: Message) -> str:
+def _missing_worker_right(talk: Talk, message: Message) -> str:
   if message.is_say:
-    return 'summoned.say'
-  if message.is_reply and 'summoner.question' not in talk:
-    return 'summoner.question'
-  if message.is_question and 'summoned.question' not in talk:
-    return 'summoned.question'
+    return 'worker.say'
+  if message.is_reply and 'owner.question' not in talk:
+    return 'owner.question'
+  if message.is_question and 'worker.question' not in talk:
+    return 'worker.question'
   raise RuntimeError('allowed message has no missing talk right')
 
 
@@ -93,14 +89,12 @@ class Client:
 
   @classmethod
   def from_env(cls) -> Optional['Client']:
-    address = os.environ.get(CHANNEL_ENV)
+    address = os.environ.get(BROKER_CHANNEL)
     if address is not None:
       return cls(connect(address))
-    if os.environ.get(UPSTREAM_ENV) is None:
+    if os.environ.get(BROKER_UPSTREAM) is None:
       return None
-    raise RuntimeError(
-      f'session proxy failed at launch; see the broxy log at {broxy_log_path(os.environ)}'
-    )
+    raise RuntimeError('session proxy failed at launch')
 
   def send(self, kind: str, args: dict[str, Any]) -> Message:
     """send a fresh request and return it — the id is minted client-side, so the
@@ -109,36 +103,36 @@ class Client:
     self._transport.send(message)
     return message
 
-  def mark(self, quest_id: str, transition: str, **payload: Any) -> None:
-    """emit a lifecycle mark on ``quest_id`` from its worker peer."""
-    self._transport.send(brotocol.mark(quest_id, transition, **payload))
+  def mark(self, request_id: str, transition: str, **payload: Any) -> None:
+    """emit a lifecycle mark on ``request_id`` from its worker peer."""
+    self._transport.send(brotocol.mark(request_id, transition, **payload))
 
   def message(
     self,
-    quest_id: str,
+    request_id: str,
     payload: dict[str, Any],
     *,
     reply_to: Optional[str] = None,
     question: bool = False,
   ) -> Message:
-    """Send chat traffic on a quest and return the sent envelope."""
+    """Send chat traffic on a request and return the sent envelope."""
     message = brotocol.message(
-      quest_id,
+      request_id,
       payload,
       id=lulid() if question else None,
       reply_to=reply_to,
     )
-    self._require_own_quest_talk(message)
+    self._require_own_mission_talk(message)
     self._transport.send(message)
     return message
 
-  def listen(self, quest_id: str) -> None:
-    """Register this connection for unsolicited messages on `quest_id`."""
-    self.mark(quest_id, 'listening')
+  def listen(self, request_id: str) -> None:
+    """Register this connection for unsolicited messages on `request_id`."""
+    self.mark(request_id, 'listening')
 
-  def result(self, quest_id: str, payload: dict[str, Any]) -> None:
-    """emit the result closing `quest_id` from its worker peer."""
-    self._transport.send(Message(type=Tag.RESULT, payload=payload, quest=quest_id))
+  def result(self, request_id: str, payload: dict[str, Any]) -> None:
+    """emit the result closing `request_id` from its worker peer."""
+    self._transport.send(Message(type=Tag.RESULT, payload=payload, request=request_id))
 
   def request(self, kind: str, args: dict[str, Any], timeout: Optional[float]) -> Message:
     """send a request and block for the first message correlated to it.
@@ -210,7 +204,7 @@ class Client:
 
   def _receive_correlated(self, request: Message, deadline: ReplyDeadline) -> Message:
     return self._receive_matching(
-      lambda message: message.quest_id == request.id,
+      lambda message: message.request_id == request.id,
       deadline,
       f'{request.kind!r} request {request.id}',
     )
@@ -238,15 +232,15 @@ class Client:
       self._set_aside.append(message)
 
   @staticmethod
-  def _require_own_quest_talk(message: Message) -> None:
-    if message.quest_id != os.environ.get(QUEST_ENV):
+  def _require_own_mission_talk(message: Message) -> None:
+    if message.request_id != os.environ.get(BROKER_MISSION):
       return
     talk = talk_from_env()
-    if talk is None or brotocol.message_allowed(talk, 'summoned', message):
+    if talk is None or brotocol.message_allowed(talk, 'worker', message):
       return
-    missing_right = _missing_summoned_right(talk, message)
+    missing_right = _missing_worker_right(talk, message)
     raise PermissionError(
-      f'{brotocol.TALK_ENV} lacks {missing_right} for a message on the session quest'
+      f'{BROKER_TALK} lacks {missing_right} for a message on the session mission'
     )
 
   def receive(self, timeout: Optional[float]) -> Optional[Message]:

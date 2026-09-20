@@ -12,7 +12,7 @@ from typing import Optional
 
 from bro.base import configs, log
 from bro.base.scope import scope_override_key, scope_revoke_key
-from bro.launch.broker_environment import UPSTREAM_ENV
+from bro.broker.environment import BROKER_MISSION, BROKER_UPSTREAM
 from bro.llm.llm import LLMSpec
 from bro.monitor import (
   SESSION_DIR_ENV,
@@ -287,12 +287,13 @@ def _summoned_env(
   """the env that makes a launch the manual summon child the token names: the
   summoner's channel, the quest the child answers (its token), and the
   summoned-child facts."""
-  from bro.broker.brotocol import TALK_ENV, encode_talk
+  from bro.broker.brotocol import encode_talk
+  from bro.broker.environment import BROKER_TALK
 
   return {
-    UPSTREAM_ENV: address,
-    'BROKER_QUEST': summoned.token,
-    TALK_ENV: encode_talk(summoned.talk),
+    BROKER_UPSTREAM: address,
+    BROKER_MISSION: summoned.token,
+    BROKER_TALK: encode_talk(summoned.talk),
     'RIDE_WORKSPACE': spec.name,
     **summoned_child_env(summoned.may_summon, summoned.permits, summoned.summoner),
   }
