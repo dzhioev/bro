@@ -35,7 +35,8 @@ if TYPE_CHECKING:
 
 __cli_name__ = 'quest'
 
-SUMMON = 'summon'  # the kind a summon request names, and so the kind of every quest here
+LAUNCH = 'launch'
+BRO = 'bro'
 SELF = 'self'  # the quest id naming the session's own quest — the one it answers
 # acceptance and inline-read replies should arrive promptly; the bound turns a
 # wedged broker into a clean client failure
@@ -268,9 +269,9 @@ def answer_of(quest: dict[str, Any]) -> Optional[str]:
   """the retained answer of a summon quest, None while it runs; a failed,
   denied, or evicted quest raises with the reason."""
   quest_id = quest.get('id')
-  if quest.get('kind') != SUMMON:
-    raise QuestError(f'quest {quest_id!r} is not a summon')
   state = quest.get('state')
+  if state != 'evicted' and (quest.get('kind') != LAUNCH or quest.get('type') != BRO):
+    raise QuestError(f'quest {quest_id!r} is not a bro launch')
   if state in ('accepted', 'started'):
     return None
   trail_id = quest.get('trail_id')
@@ -737,7 +738,9 @@ def _query_listing(client: 'Client') -> list[dict[str, Any]]:
     page = value.get('missions')
     if not isinstance(page, list) or not all(isinstance(quest, dict) for quest in page):
       raise QuestError('query listing returned malformed quest records')
-    quests.extend(quest for quest in page if quest.get('kind') == SUMMON)
+    quests.extend(
+      quest for quest in page if quest.get('kind') == LAUNCH and quest.get('type') == BRO
+    )
     cursor = value.get('cursor')
     if cursor is None:
       return quests
@@ -946,7 +949,7 @@ def watch(wait_seconds: float = READ_WAIT_SECONDS) -> Generator[str]:
         if not isinstance(sequence, int) or isinstance(sequence, bool):
           raise QuestError('events read returned a malformed sequence')
         cursor = max(cursor, sequence)
-        if event.get('kind') != SUMMON:
+        if event.get('kind') != LAUNCH or event.get('type') != BRO:
           continue
         chat_line = _chat_event_line(event, own)
         if chat_line is not None:

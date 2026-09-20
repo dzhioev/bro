@@ -917,7 +917,7 @@ async def test_live_children_keeps_the_own_unended_summons_only(monkeypatch):
           quest_record('S2', 'accepted', args={'target': 'reviewer', 'prompt': 'review'}),
           quest_record('S1', 'started'),
           quest_record('G1', 'started', parent='S1'),
-          quest_record('B1', 'started', kind='benchmark'),
+          quest_record('W1', 'started', type='test'),
           quest_record('S0', 'ended', result={'outcome': 'ok', 'value': 'done'}),
           quest_record('D0', 'denied', result={'outcome': 'denied', 'error': 'no'}),
         ]
@@ -985,7 +985,7 @@ async def test_list_reads_every_page_and_keeps_only_summons(monkeypatch, capsys)
       outcome='ok',
       value={
         'missions': [
-          quest_record('B1', 'ended', kind='benchmark'),
+          quest_record('W1', 'ended', type='test'),
           quest_record('S0', 'denied', result={'outcome': 'denied', 'error': 'no'}),
         ]
       },
@@ -1011,7 +1011,7 @@ async def test_watch_arm_replays_live_broker_chat_and_streams_a_racing_message_o
       monkeypatch.setenv(BROKER_MISSION, root_endpoint.quest)
       monkeypatch.setenv(BROKER_TALK, brotocol.encode_talk(root_endpoint.talk))
       child_request = root.send(
-        quest.SUMMON,
+        quest.LAUNCH,
         {
           'target': 'dev',
           'prompt': 'work',
@@ -1030,7 +1030,7 @@ async def test_watch_arm_replays_live_broker_chat_and_streams_a_racing_message_o
       own = quest.query_quest(child, child_endpoint.quest, wait_seconds=1, since=0)
       before_race = own['chat_seq']
       grandchild_request = child.send(
-        quest.SUMMON,
+        quest.LAUNCH,
         {'target': 'reviewer', 'prompt': 'review', 'talk': ['worker.question']},
       )
       summon._await_acceptance(child, grandchild_request)
@@ -1143,7 +1143,8 @@ async def test_watch_replays_retained_chat_at_arm_without_repeating_a_racing_mes
         'events': [
           {
             **racing,
-            'kind': 'summon',
+            'kind': 'launch',
+            'type': 'bro',
             'mission': 'ROOT',
             'parent': 'PARENT',
             'args': {'target': 'dev'},
@@ -1223,7 +1224,8 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
           },
           {
             'seq': 12,
-            'kind': 'summon',
+            'kind': 'launch',
+            'type': 'bro',
             'mission': 'S1',
             'parent': 'ROOT',
             'args': {'target': 'reviewer'},
@@ -1248,7 +1250,8 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
         'events': [
           {
             'seq': 13,
-            'kind': 'summon',
+            'kind': 'launch',
+            'type': 'bro',
             'mission': 'S2',
             'parent': 'ROOT',
             'args': {'target': 'dev'},
@@ -1274,7 +1277,8 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
         'events': [
           {
             'seq': 14,
-            'kind': 'summon',
+            'kind': 'launch',
+            'type': 'bro',
             'mission': 'S3',
             'parent': 'ROOT',
             'args': {'target': 'x\ny'},
@@ -1299,7 +1303,8 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
         'events': [
           {
             'seq': 15,
-            'kind': 'summon',
+            'kind': 'launch',
+            'type': 'bro',
             'mission': 'S4',
             'parent': 'ROOT',
             'args': {'target': 'dev'},
@@ -1362,7 +1367,8 @@ async def test_watch_replays_retained_chat_after_an_event_gap(monkeypatch):
           'events': [
             {
               'seq': 21,
-              'kind': 'summon',
+              'kind': 'launch',
+              'type': 'bro',
               'mission': 'S1',
               'parent': 'ROOT',
               'args': {'target': 'dev'},
@@ -1377,7 +1383,8 @@ async def test_watch_replays_retained_chat_after_an_event_gap(monkeypatch):
 
 def test_chat_watch_lines_show_the_other_end_and_every_refusal():
   child = {
-    'kind': 'summon',
+    'kind': 'launch',
+    'type': 'bro',
     'mission': 'CHILD',
     'parent': 'ROOT',
     'args': {'target': 'dev'},
@@ -1448,7 +1455,8 @@ async def test_watch_refuses_an_accepted_summon_event_without_a_target(monkeypat
         'events': [
           {
             'seq': 1,
-            'kind': 'summon',
+            'kind': 'launch',
+            'type': 'bro',
             'mission': 'S1',
             'parent': 'ROOT',
             'args': {'head': '{"target":"dev","share":[', 'truncated': True},
@@ -1481,7 +1489,8 @@ async def test_watch_refuses_a_quest_this_session_did_not_summon(monkeypatch):
         'events': [
           {
             'seq': 1,
-            'kind': 'summon',
+            'kind': 'launch',
+            'type': 'bro',
             'mission': 'GRANDCHILD',
             'parent': 'CHILD',
             'args': {'target': 'dev'},

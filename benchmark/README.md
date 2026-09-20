@@ -126,7 +126,7 @@ The score lands in the job directory's `result.json`, under
 `n_trials`, `n_errors`.
 Each trial keeps its own directory beside it, with the ride's activity log
 (`agent/bro.log`) and its runtime root (`agent/ride/`) as the run's record:
-the trail store (`agent/ride/trails/`), the workspace records, and the summon audit.
+the trail store (`agent/ride/trails/`), the workspace records, and the launch audit.
 
 They are copied out of the container once the trial ends,
 so a job runs wherever the docker daemon is reachable and leaves nothing of a trial on the docker host.

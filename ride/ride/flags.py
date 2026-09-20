@@ -69,7 +69,7 @@ def add_scope_flags(parser: Parser) -> None:
     action='append',
     default=None,
     metavar='NAME',
-    help=f'add a credential (KIND or KIND+INSTANCE), a summonable bro (@BRO), or a party permit ({permit_choices()}) to the session scope; an instance grant replaces the kind selection (repeatable)',
+    help=f'add a credential (KIND or KIND+INSTANCE), a summonable bro (@BRO), or a worker permit ({permit_choices()}) to the session scope; an instance grant replaces the kind selection (repeatable)',
   )
   parser.add_argument(
     '--revoke',

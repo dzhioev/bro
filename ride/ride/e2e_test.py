@@ -60,8 +60,8 @@ from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Broker, Dispatcher, ping_handler, spawn_test_handler
 from bro.broker.runtime import Peer
 from bro.broker.transports.tcp import TcpServerTransport, parse_address
+from ride.broker_root import broker_bind_hosts
 from ride.runtime_bundle import resolve_runtime_bundle
-from ride.spawn import broker_bind_hosts
 from ride.workspace.docker import CONTAINER_BROKER_HOST, find_container_id
 from ride.workspace.spawn import DockerLaunchSpec, DockerSpawner
 
@@ -1400,7 +1400,7 @@ if prompt == 'boxed-member':
     'bro',
     'unboxed-owner',
     isolation='unboxed',
-    grant=['@bro', ':party.join'],
+    grant=['@bro', ':bro.party.join'],
     llm='echo',
     harness='bro',
     timeout=120,
@@ -1436,7 +1436,8 @@ channel.close()
 def test_cross_isolation_summon_chain_uses_both_join_lowerings(
   isolated_env: IsolatedEnv, monkeypatch
 ) -> None:
-  import ride.spawn as ride_spawn
+  import ride.bro_worker as ride_spawn
+  import ride.broker_root as broker_root
   from ride.root import ProcessLaunch
   from ride.runtime_bundle import RuntimeBundle
   from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
@@ -1502,7 +1503,7 @@ answer = summon_and_wait(
   'bro',
   'boxed-member',
   party='join',
-  grant=['@bro', ':party.start.unboxed', ':party.join'],
+  grant=['@bro', ':bro.party.start.unboxed', ':bro.party.join'],
   llm='echo',
   harness='bro',
   timeout=120,
@@ -1524,12 +1525,12 @@ time.sleep(2)
     )
   )
 
-  code = ride_spawn.run_root_via_broker(
+  code = broker_root.run_root_via_broker(
     launch,
     workspace=workspace,
     bro='bro-dev',
     may_summon={'bro'},
-    permits={'party.start.boxed', 'party.start.unboxed', 'party.join'},
+    permits={'bro.party.start.boxed', 'bro.party.start.unboxed', 'bro.party.join'},
     summon_depth=5,
     credential_scope=ScopedSecrets(set(), set()),
     container_runtime=container_runtime,
@@ -1695,7 +1696,8 @@ def _run_native_watch_route(
   child_source: str,
   report_name: str,
 ) -> tuple[int, str]:
-  import ride.spawn as ride_spawn
+  import ride.bro_worker as ride_spawn
+  import ride.broker_root as broker_root
   from ride.runtime_bundle import RuntimeBundle
   from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
   from ride.workspace.metadata import Isolation
@@ -1733,12 +1735,12 @@ def _run_native_watch_route(
     )
   )
 
-  code = ride_spawn.run_root_via_broker(
+  code = broker_root.run_root_via_broker(
     launch,
     workspace=workspace,
     bro='bro-dev',
     may_summon={'bro'},
-    permits={'party.start.boxed'},
+    permits={'bro.party.start.boxed'},
     summon_depth=2,
     credential_scope=ScopedSecrets(set(), set()),
     container_runtime=container_runtime,
@@ -1904,7 +1906,8 @@ Path('/workspace/.native-remind-report').write_text(json.dumps({
 def test_native_child_reminded_at_its_turn_end_chills_and_delivers_the_grandchild_result(
   isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-  import ride.spawn as ride_spawn
+  import ride.bro_worker as ride_spawn
+  import ride.broker_root as broker_root
   from ride.runtime_bundle import RuntimeBundle
   from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
   from ride.workspace.metadata import Isolation
@@ -1948,12 +1951,12 @@ def test_native_child_reminded_at_its_turn_end_chills_and_delivers_the_grandchil
     )
   )
 
-  code = ride_spawn.run_root_via_broker(
+  code = broker_root.run_root_via_broker(
     launch,
     workspace=workspace,
     bro='bro-dev',
     may_summon={'bro'},
-    permits={'party.start.boxed'},
+    permits={'bro.party.start.boxed'},
     summon_depth=3,
     credential_scope=ScopedSecrets(set(), set()),
     container_runtime=container_runtime,
@@ -2001,7 +2004,8 @@ channel.close()
 def test_summon_chat_question_reply_and_steering_cross_the_live_broker(
   isolated_env: IsolatedEnv, monkeypatch
 ) -> None:
-  import ride.spawn as ride_spawn
+  import ride.bro_worker as ride_spawn
+  import ride.broker_root as broker_root
   from ride.runtime_bundle import RuntimeBundle
   from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
   from ride.workspace.metadata import Isolation
@@ -2063,12 +2067,12 @@ Path('/workspace/.quest-chat-report').write_text(outcome.answer)
     )
   )
 
-  code = ride_spawn.run_root_via_broker(
+  code = broker_root.run_root_via_broker(
     launch,
     workspace=workspace,
     bro='bro-dev',
     may_summon={'bro'},
-    permits={'party.start.boxed'},
+    permits={'bro.party.start.boxed'},
     summon_depth=2,
     credential_scope=ScopedSecrets(set(), set()),
     container_runtime=container_runtime,
@@ -2098,7 +2102,8 @@ time.sleep(600)
 def test_cancel_kills_a_live_child_and_ends_its_quest_on_reap(
   isolated_env: IsolatedEnv, monkeypatch
 ) -> None:
-  import ride.spawn as ride_spawn
+  import ride.bro_worker as ride_spawn
+  import ride.broker_root as broker_root
   from ride.runtime_bundle import RuntimeBundle
   from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
   from ride.workspace.metadata import Isolation
@@ -2162,12 +2167,12 @@ Path('/workspace/.quest-cancel-report').write_text(json.dumps({
     )
   )
 
-  code = ride_spawn.run_root_via_broker(
+  code = broker_root.run_root_via_broker(
     launch,
     workspace=workspace,
     bro='bro-dev',
     may_summon={'bro'},
-    permits={'party.start.boxed'},
+    permits={'bro.party.start.boxed'},
     summon_depth=2,
     credential_scope=ScopedSecrets(set(), set()),
     container_runtime=container_runtime,

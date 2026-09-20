@@ -11,7 +11,8 @@ from bro.registry import get_class
 from bro.workspace.banner import banner
 from bro.workspace.paths import fresh_workspace_name, project_root
 from bro.workspace.project import project_config
-from ride import pending_summon
+from ride import pending_launch
+from ride.bro_worker import PendingBro, pending_bro
 from ride.clean import clean_workspaces
 from ride.errors import reports_runtime_errors
 from ride.flags import (
@@ -174,8 +175,8 @@ def _bootstrap_mode_runtime(parser: Parser, args: dict, launch_argv: list[str]) 
     if runtime is not None:
       parser.error('--summoned takes its runtime from the summon token; drop --runtime-bundle')
     try:
-      runtime = pending_summon.runtime_reference(token)
-    except (pending_summon.UnknownToken, ValueError) as error:
+      runtime = pending_launch.runtime_reference(token)
+    except (pending_launch.UnknownToken, ValueError) as error:
       parser.error(str(error))
   elif runtime is not None:
     runtime = str(Path(runtime).expanduser().resolve())
@@ -303,16 +304,16 @@ def _start_mode(
   return start_session(spec, repository, summoned=summoned)
 
 
-def _peek_summoned(parser: Parser, token: str) -> pending_summon.PendingSummon:
+def _peek_summoned(parser: Parser, token: str) -> PendingBro:
   try:
-    return pending_summon.peek(token)
-  except (pending_summon.UnknownToken, ValueError) as error:
+    return pending_bro(pending_launch.peek(token))
+  except (pending_launch.UnknownToken, ValueError) as error:
     parser.error(str(error))
 
 
 def _validate_summoned(
   parser: Parser,
-  pending: pending_summon.PendingSummon,
+  pending: PendingBro,
   *,
   bro: str,
   prompt: Optional[str],

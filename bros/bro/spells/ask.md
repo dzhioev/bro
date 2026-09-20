@@ -84,7 +84,7 @@ The child's scope is a knob too:
 grants and revokes.
 A grant names a credential kind, a `kind+instance`, `@bro` for a summon target of the target's own, or a party permit;
 a revoke names a credential kind, `@bro`, or a permit.
-The permits are `:party.start.boxed`, `:party.start.unboxed`, and `:party.join`, always as leaves.
+The permits are `:bro.party.start.boxed`, `:bro.party.start.unboxed`, and `:bro.party.join`, always as leaves.
 They start from the target's own declarations, not yours
 — nothing of your scope reaches the child unless you name it, and you can only name what you hold yourself:
 a credential in your own scope,
