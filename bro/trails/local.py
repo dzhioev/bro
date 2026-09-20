@@ -141,8 +141,9 @@ class LocalStore(TrailsStore):
       formats.upgrade_row(row)
       for row in _parse_rows(trail_id, lines[start : start + page_size], start)
     ]
-    next_cursor = page[-1]['step_id'] if len(lines) > start + page_size else None
-    return {'steps': page, 'next': next_cursor}
+    through = page[-1]['step_id'] if len(page) > 0 else None
+    next_cursor = through if len(lines) > start + page_size else None
+    return {'steps': page, 'next': next_cursor, 'through': through}
 
   def get_messages(
     self,
@@ -155,7 +156,7 @@ class LocalStore(TrailsStore):
     page = self.get_steps(trail_id, after=after, limit=limit)
     header = self.get_trail(trail_id)
     messages = rows.project_messages(self._adapter(header['harness']), page['steps'], types)
-    return {'messages': messages, 'next': page['next']}
+    return {'messages': messages, 'next': page['next'], 'through': page['through']}
 
   def get_launch_context(self, trail_id: str) -> Optional[Any]:
     with self._locked(trail_id, shared=True):

@@ -710,7 +710,7 @@ class DynamoStore(TrailsStore):
     adapter = self._backend(header['harness'])
     page = self._query_rows(header, after=after, limit=page_size)
     messages = rows.project_messages(adapter, page['steps'], types)
-    return {'messages': messages, 'next': page['next']}
+    return {'messages': messages, 'next': page['next'], 'through': page['through']}
 
   def _query_rows(
     self,
@@ -719,11 +719,14 @@ class DynamoStore(TrailsStore):
     after: Optional[int],
     limit: int,
   ) -> dict:
+    # a reader bounds its snapshot by the extent of a consistently read header,
+    # so the rows must read no less freshly than the header does
     kwargs: dict[str, Any] = {
       'TableName': self._steps_table,
       'KeyConditionExpression': 'trail_id = :trail_id',
       'ExpressionAttributeValues': {':trail_id': _ddb(header['id'])},
       'Limit': limit,
+      'ConsistentRead': True,
     }
     if after is not None:
       kwargs['ExclusiveStartKey'] = _ddb_item({'trail_id': header['id'], 'step_id': after})
@@ -736,8 +739,13 @@ class DynamoStore(TrailsStore):
       raw_rows,
     )
     last = response.get('LastEvaluatedKey')
-    next_cursor = _from_ddb(last['step_id']) if last is not None else None
-    return {'steps': list(rows), 'next': next_cursor}
+    if last is not None:
+      through = _from_ddb(last['step_id'])
+      next_cursor = through
+    else:
+      through = raw_rows[-1]['step_id'] if len(raw_rows) > 0 else None
+      next_cursor = None
+    return {'steps': list(rows), 'next': next_cursor, 'through': through}
 
   def _resolve_row_body(self, harness: str, row: dict) -> dict:
     resolved = self._resolve_body(dict(row), parse_json=harness != 'claude')

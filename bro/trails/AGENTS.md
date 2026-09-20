@@ -38,6 +38,7 @@ bro · claude recorders                     readers
   The `dynamo` branch lazy-imports the server package.
 - `network.py` owns `NetworkStore`, the authenticated wire proxy.
   HTTPS is required except for HTTP loopback hosts.
+  It pools its connections, one per request in flight, so concurrent callers never share a socket.
   It maps not-found, append-conflict, refused-permission, unsupported-operation, and transient transport failures onto the store errors and owns operation-specific retry schedules.
   A 404 becomes `TrailNotFound` only when its body reports the missing trail (`model.trail_not_found_body` is the shape both sides read), and a 409 becomes `TrailHasForks` only when its body names them (`model.trail_has_forks_body`);
   a missing tool blob (`model.tool_not_found_body`) and an import collision (`model.trail_collision_body`) are read the same way, and every other 404 surfaces as `HTTPStatusError` carrying what the response said.
@@ -160,6 +161,7 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   A committed retry returns the current extent without folding again;
   any other extent mismatch is a conflict.
 - `/steps` returns the native stream and `/messages` its generalized projection.
+  A page carries `next`, the cursor of the page after it or null past the last row, and `through`, the last step ordinal it evaluated, which a `/messages` type filter does not shorten.
   Large bodies remain inline over the wire.
 - `GET /v1/tools/{sha256}` serves a tool blob by digest under the read permission, answering `model.tool_not_found_body` when the store holds none.
 - `GET /v1/trails/{id}/context` returns `{"launch_context": null}` for an existing trail without context and 404 only when the trail is missing.
@@ -185,6 +187,7 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   neither function follows lineage or summon edges.
 - `rewind.py` (`rewind`) is the reader CLI for every harness, working through `TrailsStore`:
   it owns argument parsing, queries, follow polling, regex matching, and grep context, while every `show`, `steps`, `list`, `tree`, and `grep` record renders through the matching display preset.
+  A `show`, `steps`, or `grep` snapshot reads its trail through `TrailsStore.collect_steps` / `collect_messages`, which fetch the step range as concurrent windows, and `--follow` continues on the sequential page cursor.
   The text views accept `--output-offset` / `--output-limit` for bounded windows.
 - `admin.py` (`trails`) is the operator CLI beside it, carrying `export`, `import`, `migrate`, and `delete`.
   Export reads under the read permission and writes a store layout, import and migration reach every backend through the store contract and the administer-permission routes.

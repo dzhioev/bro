@@ -62,6 +62,15 @@ class FakeClient:
       step for step in self.steps.get(trail_id, []) if after is None or step['step_id'] > after
     )
 
+  def collect_messages(
+    self, trail_id: str, *, extent: int, types: set[str] | None = None
+  ) -> list[dict[str, Any]]:
+    return [
+      message
+      for message in self.iter_messages(trail_id)
+      if message['source']['step_id'] < extent and (types is None or message['type'] in types)
+    ]
+
   def get_launch_context(self, trail_id: str) -> Any:
     return self.contexts.get(trail_id)
 
@@ -257,7 +266,7 @@ class TestCollection:
     fake = FakeClient()
     fake.headers['parent'] = _header('parent')
     fake.headers['child'] = _header(
-      'child', forked_from={'trail_id': 'parent', 'step_id': 1, 'index': 1}
+      'child', extent=1, forked_from={'trail_id': 'parent', 'step_id': 1, 'index': 1}
     )
     fake.messages['parent'] = [
       _message('user_input', 0, content='kept zero'),
@@ -281,7 +290,9 @@ class TestCollection:
   def test_tool_call_ids_are_scoped_across_collected_segments(self):
     fake = FakeClient()
     fake.headers['parent'] = _header('parent')
-    fake.headers['child'] = _header('child', forked_from={'trail_id': 'parent', 'step_id': 1})
+    fake.headers['child'] = _header(
+      'child', extent=2, forked_from={'trail_id': 'parent', 'step_id': 1}
+    )
     fake.messages['parent'] = [
       _message('tool_call', 0, call_id='same', tool_name='read', arguments={}),
       _message('tool_result', 1, call_id='same', content='parent result'),

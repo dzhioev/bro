@@ -180,7 +180,7 @@ def _command_steps(client: TrailsStore, args: dict[str, Any]) -> int:
   adapter = RecordedAdapter(client)
   trail_id = args['trail_id']
   header = client.get_trail(trail_id)
-  steps = list(client.iter_steps(trail_id))
+  steps = client.collect_steps(trail_id, extent=header['extent'])
   records: list[DisplayRecord] = [
     adapter.trail_metadata(header),
     *adapter.native_step_records(trail_id, steps),

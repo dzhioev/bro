@@ -123,6 +123,9 @@ class Recorder(Tracker):
     if self._keepalive_stop is not None:
       self._keepalive_stop.set()
       self._keepalive_stop = None
+    if self._keepalive_thread is not None:
+      self._keepalive_thread.join()
+      self._keepalive_thread = None
 
   def _keepalive_loop(self, stop: threading.Event) -> None:
     while not stop.wait(spine.KEEPALIVE_INTERVAL_SECONDS):

@@ -7,6 +7,7 @@ from bro.base import credentials
 from bro.trails.local import LocalStore
 from bro.trails.network import NetworkStore
 from bro.trails.store import (
+  TrailsStore,
   build_store,
   configured_store,
   default_store,
@@ -104,3 +105,58 @@ def test_configured_store_requires_the_trails_credential():
   ):
     with pytest.raises(credentials.SecretNotFound):
       configured_store()
+
+
+class _CappedPages:
+  """serves at most two rows per page whatever the limit asks, the way a
+  size-capped backend does."""
+
+  def __init__(self, count: int):
+    self.rows = [{'step_id': step_id} for step_id in range(count)]
+    self.calls: list[tuple[Optional[int], int]] = []
+
+  def get_steps(
+    self, trail_id: str, *, after: Optional[int] = None, limit: Optional[int] = None
+  ) -> dict:
+    assert limit is not None
+    self.calls.append((after, limit))
+    start = 0 if after is None else after + 1
+    page = self.rows[start : start + min(limit, 2)]
+    through = page[-1]['step_id'] if len(page) > 0 else None
+    more = start + len(page) < len(self.rows)
+    return {'steps': page, 'next': through if more else None, 'through': through}
+
+
+def test_collect_steps_pages_every_window_to_its_end_and_no_further():
+  backend = _CappedPages(7)
+  store = cast(TrailsStore, backend)
+
+  assert TrailsStore.collect_steps(store, 'T', extent=7, window=3) == backend.rows
+
+  assert len(backend.calls) == 5
+  assert set(backend.calls) == {(None, 3), (1, 1), (2, 3), (4, 1), (5, 1)}
+
+
+def test_collect_steps_stops_at_the_extent():
+  backend = _CappedPages(7)
+
+  assert TrailsStore.collect_steps(cast(TrailsStore, backend), 'T', extent=4) == backend.rows[:4]
+
+
+def test_collect_steps_refuses_rows_that_run_out_before_the_extent():
+  backend = _CappedPages(5)
+
+  with pytest.raises(RuntimeError, match='ran out after step 4, wanted them through step 5'):
+    TrailsStore.collect_steps(cast(TrailsStore, backend), 'T', extent=7, window=3)
+
+
+def test_collect_steps_refuses_a_page_that_does_not_advance():
+  class _StuckPage:
+    def get_steps(
+      self, trail_id: str, *, after: Optional[int] = None, limit: Optional[int] = None
+    ) -> dict:
+      through = -1 if after is None else after
+      return {'steps': [], 'next': through, 'through': through}
+
+  with pytest.raises(RuntimeError, match='not past step -1'):
+    TrailsStore.collect_steps(cast(TrailsStore, _StuckPage()), 'T', extent=3)
