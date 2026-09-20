@@ -85,6 +85,7 @@ def _assert_bind_source(source: Path) -> None:
 class ContainerRuntime:
   image: str
   bundle_hash: str
+  runtime_image: str
 
 
 class ContainerRuntimeResolver:
@@ -123,7 +124,11 @@ class ContainerRuntimeResolver:
         runtime_image if self._repo is None else _ensure_project_image(runtime_image, self._repo)
       )
       self._bundle.materialize_container(runtime_image)
-      self._resolved = ContainerRuntime(image=image, bundle_hash=self._bundle.hash)
+      self._resolved = ContainerRuntime(
+        image=image,
+        bundle_hash=self._bundle.hash,
+        runtime_image=runtime_image,
+      )
       return self._resolved
 
 
@@ -141,6 +146,7 @@ class Launch:
   optional_secrets: Collection[str] = ()
   credential_selection: Mapping[str, str] = field(default_factory=dict)
   extra_mounts: Collection[str] = ()
+  published_ports: Collection[tuple[int, int]] = ()
   repo: Optional[Repository | Path] = None
   base_ref: Optional[str] = None
   additions: Mapping[str, str] = field(default_factory=dict)
@@ -272,11 +278,11 @@ def project_image_tag(runtime_image: str, project: Repository | Path) -> Optiona
   return f'{repository.project_config().image_repository}:{digest.hexdigest()[:12]}'
 
 
-def _image_present(tag: str) -> bool:
+def image_present(tag: str) -> bool:
   return subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True).returncode == 0
 
 
-def _prune_superseded_images(current: str) -> None:
+def prune_superseded_images(current: str) -> None:
   """untag unused predecessors from the current runtime or project repository."""
   repository = current.rsplit(':', 1)[0]
   listed = subprocess.run(
@@ -350,22 +356,22 @@ def build_project_image(tag: str, runtime_image: str, project: Repository | Path
 
 
 def _ensure_runtime_image(tag: str, python_version: str) -> None:
-  if _image_present(tag):
+  if image_present(tag):
     log.verbose('image %s ready', tag)
     return
   build_runtime_image(tag, python_version)
-  _prune_superseded_images(tag)
+  prune_superseded_images(tag)
 
 
 def _ensure_project_image(runtime_image: str, project: Repository | Path) -> str:
   tag = project_image_tag(runtime_image, project)
   if tag is None:
     return runtime_image
-  if _image_present(tag):
+  if image_present(tag):
     log.verbose('image %s ready', tag)
     return tag
   build_project_image(tag, runtime_image, project)
-  _prune_superseded_images(tag)
+  prune_superseded_images(tag)
   return tag
 
 
@@ -431,6 +437,7 @@ def prepare_container(launch: Launch) -> str:
     extra_env=launch_env,
     tty=launch.tty,
     extra_mounts=list(launch.extra_mounts),
+    published_ports=list(launch.published_ports),
     additions=launch.additions,
   )
   return _create_container(argv, store_tarball(store, PurePosixPath('.bro')), launch.name)
@@ -587,6 +594,7 @@ def _docker_create_argv(
   extra_env: Optional[Mapping[str, str]] = None,
   tty: bool = True,
   extra_mounts: Optional[list[str]] = None,
+  published_ports: Optional[list[tuple[int, int]]] = None,
   additions: Optional[Mapping[str, str]] = None,
 ) -> list[str]:
   """The create half of create/copy/start, before scoped-store injection.
@@ -637,6 +645,9 @@ def _docker_create_argv(
   if extra_mounts is not None:
     for mount in extra_mounts:
       argv += ['-v', mount]
+  if published_ports is not None:
+    for host_port, container_port in published_ports:
+      argv += ['-p', f'127.0.0.1:{host_port}:{container_port}']
   if extra_env is not None:
     for key, value in extra_env.items():
       argv += ['-e', f'{key}={value}']

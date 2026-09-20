@@ -341,7 +341,15 @@ class TestContainerRuntimeResolver:
     first = resolver.resolve()
     second = resolver.resolve()
 
-    assert first == second == workspace_docker.ContainerRuntime('project-image', 'a' * 64)
+    assert (
+      first
+      == second
+      == workspace_docker.ContainerRuntime(
+        'project-image',
+        'a' * 64,
+        workspace_docker.runtime_image_tag('3.12'),
+      )
+    )
     assert [event[0] for event in events] == ['runtime', 'project', 'volume']
 
   def test_detached_runtime_skips_project_image_resolution(self, monkeypatch, tmp_path):
@@ -380,7 +388,7 @@ class TestPruneSupersededImages:
       stdout='bro/framework:cur\nbro/framework:smoke-test\nbro/framework:<none>\nbro/framework:old1\nbro/framework:old2\n',
     )
     calls = self._patch_run(monkeypatch, listing)
-    workspace_docker._prune_superseded_images('bro/framework:cur')
+    workspace_docker.prune_superseded_images('bro/framework:cur')
     removals = [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']]
     assert removals == [
       ['docker', 'image', 'rm', 'bro/framework:old1'],
@@ -400,7 +408,7 @@ class TestPruneSupersededImages:
       return _FakeProc(returncode=0)
 
     calls = self._patch_run(monkeypatch, listing, remove_result)
-    workspace_docker._prune_superseded_images('bro/framework:cur')
+    workspace_docker.prune_superseded_images('bro/framework:cur')
     removals = [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']]
     assert removals == [
       ['docker', 'image', 'rm', 'bro/framework:in-use'],
@@ -409,7 +417,7 @@ class TestPruneSupersededImages:
 
   def test_listing_failure_skips_pruning(self, monkeypatch):
     calls = self._patch_run(monkeypatch, _FakeProc(returncode=1, stderr='daemon down'))
-    workspace_docker._prune_superseded_images('bro/framework:cur')
+    workspace_docker.prune_superseded_images('bro/framework:cur')
     assert [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']] == []
 
 
@@ -479,6 +487,7 @@ class TestPrepareContainer:
       },
       'tty': False,
       'extra_mounts': ['/host:/container'],
+      'published_ports': [],
       'additions': {},
     }
     assert events[3] == ('create', ['docker', 'create'], b'TARBALL', 'ws')
@@ -779,6 +788,11 @@ class TestDockerCreateArgv:
     argv = build_argv(extra_mounts=[mount])
     assert mount in argv
     assert argv[argv.index(mount) - 1] == '-v'
+
+  def test_published_ports_bind_only_on_loopback(self, build_argv):
+    argv = build_argv(published_ports=[(49152, 8080), (49153, 9090)])
+    assert argv[argv.index('127.0.0.1:49152:8080') - 1] == '-p'
+    assert argv[argv.index('127.0.0.1:49153:9090') - 1] == '-p'
 
   def test_a_bind_source_outside_the_runtime_root_is_refused(self, build_argv):
     with pytest.raises(ValueError, match='outside the ride runtime root'):

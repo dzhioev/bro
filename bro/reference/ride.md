@@ -783,6 +783,25 @@ The projector-backed statusLine and the durable launch audit under `<runtime-roo
 Unlike the launch audit, the host log is diagnostics, not audit:
 workspace removal (`--drop`, `ride clean`) deletes it with the workspace.
 
+### Worker containers
+
+A registered worker type can return a core `Container(WorkerContainer(…))` run without importing ride.
+Its declaration ships a byte-valued Docker build context whose normalized relative paths include a `Dockerfile` opening with `ARG RUNTIME_IMAGE` and `FROM ${RUNTIME_IMAGE}`, plus a command, environment, and distinct container ports.
+The environment cannot claim host-owned `BROKER_*`, `RIDE_*`, `BRO_*`, `HOME`, or `PATH` names.
+The runtime image tag and sorted build-context files determine the worker image tag `bro/<type>:<hash>`;
+ride builds a missing tag lazily and prunes unused predecessors from that type's image repository.
+
+The host lowers each run off the broker loop into a detached throwaway boxed workspace named `<type>-<channel>`.
+It mounts the frozen runtime volume read-only, an empty scoped credential store, and the worker's read-only artifact view, linking every accepted `share` ref before start.
+It mounts no session, party, or trails state.
+The declared command runs as `broxy run -- <command…>`, so its clients multiplex through the worker's one upstream attach.
+
+For each declared container port, the host reserves an available launcher-loopback port, releases the probe, and creates the container with `-p 127.0.0.1:<host>:<container>`.
+A process taking that host port before `docker start` makes the launch fail rather than moving the binding.
+The worker receives the selected mapping as `RIDE_PUBLISHED_PORTS=<container>=<host>,…`, reports any usable address to its owner over its granted talk, and exposes the same host/container pairs through peer facts and the launch audit.
+Docker supervision captures a bounded merged output tail;
+a clean exit removes the throwaway workspace, while a failed or killed worker keeps it and includes the tail in the synthesized death result.
+
 ### Summoning another bro
 
 A session can summon another bro over its channel.
@@ -1270,6 +1289,8 @@ Wrappers and session daemons rely on a small set of env vars:
   Every spawner writes it beside `BROKER_MISSION`, and a manual summon's pending record carries it into the user-launched session.
   `bro.summon.talk()` feeds the banner, the session prompt's `#talk` fact, and the Claude tool fold;
   the host journal remains the enforcing copy.
+- `RIDE_PUBLISHED_PORTS` — a worker container's comma-separated `<container>=<host>` loopback port mappings, including an empty value when it declares none.
+  Session containers do not receive it.
 - `RIDE_IN_CONTAINER=1` — the runtime image's own, marking a process running in an image this runtime built.
   `bro/workspace/paths.py:trails_dir` uses it only to resolve the image's fixed trails mount.
   Session placement comes from `RIDE_ISOLATION` instead.

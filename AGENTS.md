@@ -305,8 +305,10 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
 - `quest.py` (`quest`) — the outcome and conversation reads, say, ask, and caller-scoped listing over bro quests, plus the ordered watch and cancellation surfaces shared by every mission type
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint` / `artifact.get` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session command;
   the host store and enforcement live in `ride/ride/artifacts.py`
-- `worker_types.py` — the core contract for a worker type, its launch request and run shapes, peer descriptions, host ports, registry, and shared artifact/path helpers;
-  installed types register through `bro.worker_types`, with ride contributing `bro` and bench contributing `benchmark`
+- `worker_types.py` — the core contract for a worker type, its launch request and run shapes, peer descriptions, host ports, registry, and shared artifact/path helpers.
+  `WorkerContainer` is the validated, host-neutral container declaration:
+  packaged build-context bytes over the runtime image, a command and environment, and container ports the host publishes on loopback.
+  Installed types register through `bro.worker_types`, with ride contributing `bro` and bench contributing `benchmark`.
 - `run_lifecycle.py` — `RunLifecycle`, the worker-process emitter over `bro.broker.client.Client`:
   it undertakes the broker mission named in `BROKER_MISSION`, emits the run's set-once `trail` mark after recording opens, and sends the closing result.
   `Runner.run()` builds one through `_make_channel()`;
