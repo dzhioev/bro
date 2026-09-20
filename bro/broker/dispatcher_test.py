@@ -31,11 +31,11 @@ from bro.broker.journal import (
 )
 from bro.broker.journal_test_helper import text_at_the_message_bound
 from bro.broker.runtime import Runtime
-from bro.broker.spawn import LaunchSpec
+from bro.broker.spawn import LaunchSpec, Spawner
+from bro.broker.supervisor import LAUNCH_TIMEOUT, Scheduler, call_later
+from bro.broker.supervisor_test_helper import FakeScheduler
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
-from bro.broker.worker import Scheduler, call_later
-from bro.broker.worker_test_helper import FakeScheduler
 
 
 class FakeHandle:
@@ -78,13 +78,13 @@ class FakeRuntime:
     self.events[channel] = events
     return Provisioned(channel, Endpoint(1234, f'token-{channel}'))
 
-  async def launch(self, launch, provisioned, quest, talk):
+  async def spawn(self, launch, provisioned, mission, talk):
     if self.launch_error is not None:
       raise self.launch_error
     if self.launch_gate is not None:
       await self.launch_gate.wait()
     self.handle = FakeHandle(self.kill_release)
-    self.handles[quest] = self.handle
+    self.handles[mission] = self.handle
     for message in self.launch_messages:
       self.events[provisioned.channel].on_message(message)
     return self.handle
@@ -115,8 +115,11 @@ def _request(kind, args, quest):
   return Message(type=Tag.REQUEST, id=quest, payload={'kind': kind, 'args': args})
 
 
-def _spawn_handler(context, peer, message):
-  context.spawn(LaunchSpec(), peer, talk=frozenset(), type='bro')
+def _spawn_handler(spawner: Spawner):
+  def handle(context, peer, message):
+    context.spawn(LaunchSpec(), spawner, peer, talk=frozenset(), type='bro', timeout=None)
+
+  return handle
 
 
 def _dispatcher(*, job_output=None, schedule: Scheduler = call_later):
@@ -206,7 +209,9 @@ async def test_job_output_open_failure_closes_the_journal_record():
   dispatcher, runtime = _dispatcher(job_output=RaisingOutput())
   dispatcher.on(
     'job',
-    lambda context, peer, message: context.job(CommandJob(('true',), {}), peer, type='benchmark'),
+    lambda context, peer, message: context.job(
+      CommandJob(('true',), {}), peer, type='benchmark', timeout=None
+    ),
   )
   dispatcher.on_message('requester', _request('job', {}, 'job'))
   await _settle()
@@ -224,7 +229,9 @@ async def test_spawn_launch_failure_synthesizes_one_terminal():
   runtime.launch_error = RuntimeError('launch broke')
   dispatcher.on(
     'work',
-    lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset(), type='bro'),
+    lambda context, peer, message: context.spawn(
+      LaunchSpec(), cast(Spawner, runtime), peer, talk=frozenset(), type='bro', timeout=None
+    ),
   )
   dispatcher.on_message('requester', _request('work', {}, 'work'))
   await _settle()
@@ -245,7 +252,7 @@ async def test_expected_ready_failure_synthesizes_one_terminal():
   dispatcher.on(
     'manual',
     lambda context, peer, message: context.expect(
-      peer, talk=frozenset(), timeout=None, ready=fail_ready, type='bro'
+      peer, talk=frozenset(), ready=fail_ready, type='bro'
     ),
   )
   dispatcher.on_message('requester', _request('manual', {}, 'manual'))
@@ -266,7 +273,9 @@ async def test_messages_sent_during_launch_follow_started_in_the_journal():
   ]
   dispatcher.on(
     'work',
-    lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset(), type='bro'),
+    lambda context, peer, message: context.spawn(
+      LaunchSpec(), cast(Spawner, runtime), peer, talk=frozenset(), type='bro', timeout=None
+    ),
   )
   dispatcher.on_message('requester', _request('work', {}, 'work'))
   await _settle()
@@ -286,7 +295,9 @@ async def test_spawned_quest_marks_lifecycle_and_routes_only_its_worker():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(
     'work',
-    lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset(), type='bro'),
+    lambda context, peer, message: context.spawn(
+      LaunchSpec(), cast(Spawner, runtime), peer, talk=frozenset(), type='bro', timeout=None
+    ),
   )
   dispatcher.on_message('requester', _request('work', {'prompt': 'go'}, 'work'))
   assert runtime.sent[-1][1].payload == {'transition': 'accepted'}
@@ -318,7 +329,7 @@ async def test_result_disarms_the_deadline_while_the_worker_stays_routable():
   dispatcher.on(
     'work',
     lambda context, peer, message: context.spawn(
-      LaunchSpec(), peer, talk=frozenset(), timeout=10, type='bro'
+      LaunchSpec(), cast(Spawner, runtime), peer, talk=frozenset(), timeout=10, type='bro'
     ),
   )
   dispatcher.on(PING, ping_handler)
@@ -338,11 +349,39 @@ async def test_result_disarms_the_deadline_while_the_worker_stays_routable():
 
 
 @pytest.mark.asyncio
+async def test_none_timeout_leaves_the_started_mission_unbounded():
+  schedule = FakeScheduler()
+  dispatcher, runtime = _dispatcher(schedule=schedule)
+  dispatcher.on(
+    'work',
+    lambda context, peer, message: context.spawn(
+      LaunchSpec(),
+      cast(Spawner, runtime),
+      peer,
+      talk=frozenset(),
+      timeout=None,
+      type='bro',
+    ),
+  )
+
+  dispatcher.on_message('requester', _request('work', {}, 'work'))
+  await _settle()
+
+  assert [(timer.seconds, timer.cancelled) for timer in schedule.timers] == [(LAUNCH_TIMEOUT, True)]
+  assert 'work' in dispatcher.live
+  assert runtime.handle is not None
+  runtime.handle.exit.set_result(0)
+  await _settle()
+
+
+@pytest.mark.asyncio
 async def test_process_cannot_emit_dispatcher_or_worker_marks():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(
     'work',
-    lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset(), type='bro'),
+    lambda context, peer, message: context.spawn(
+      LaunchSpec(), cast(Spawner, runtime), peer, talk=frozenset(), type='bro', timeout=None
+    ),
   )
   dispatcher.on_message('requester', _request('work', {}, 'work'))
   await _settle()
@@ -368,7 +407,7 @@ async def test_expected_worker_defers_wire_acceptance_until_ready_and_starts_on_
   dispatcher.on(
     'manual',
     lambda context, peer, message: context.expect(
-      peer, talk=frozenset(), timeout=None, ready=ready.append, type='bro'
+      peer, talk=frozenset(), ready=ready.append, type='bro'
     ),
   )
   dispatcher.on_message('requester', _request('manual', {}, 'manual'))
@@ -498,12 +537,27 @@ def test_message_on_a_non_live_mission_is_dropped(caplog):
 
 
 def test_spawn_and_expect_require_explicit_talk():
-  dispatcher, _ = _dispatcher()
+  dispatcher, runtime = _dispatcher()
+  spawner = cast(Spawner, runtime)
   with pytest.raises(TypeError, match='talk'):
-    dispatcher.spawn(LaunchSpec(), 'requester', type='bro')  # type: ignore[call-arg]
+    dispatcher.spawn(  # type: ignore[call-arg]
+      LaunchSpec(), spawner, 'requester', type='bro', timeout=None
+    )
   with pytest.raises(TypeError, match='talk'):
     dispatcher.expect(  # type: ignore[call-arg]
-      'requester', timeout=None, ready=lambda provisioned: None, type='bro'
+      'requester', ready=lambda provisioned: None, type='bro'
+    )
+
+
+def test_spawn_and_job_require_an_explicit_timeout():
+  dispatcher, runtime = _dispatcher()
+  with pytest.raises(TypeError, match='timeout'):
+    dispatcher.spawn(  # type: ignore[call-arg]
+      LaunchSpec(), cast(Spawner, runtime), 'requester', type='bro', talk=frozenset()
+    )
+  with pytest.raises(TypeError, match='timeout'):
+    dispatcher.job(  # type: ignore[call-arg]
+      CommandJob(('true',), {}), 'requester', type='benchmark'
     )
 
 
@@ -835,7 +889,9 @@ async def test_worker_death_synthesizes_one_failed_result():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(
     'work',
-    lambda context, peer, message: context.spawn(LaunchSpec(), peer, talk=frozenset(), type='bro'),
+    lambda context, peer, message: context.spawn(
+      LaunchSpec(), cast(Spawner, runtime), peer, talk=frozenset(), type='bro', timeout=None
+    ),
   )
   dispatcher.on_message('requester', _request('work', {}, 'work'))
   await _settle()
@@ -853,7 +909,9 @@ async def test_sigterm_ends_an_owning_run_through_its_teardown():
   runtime = FakeRuntime()
   dispatcher = Dispatcher()
   dispatcher.bind(cast(Runtime, runtime))
-  run = asyncio.create_task(dispatcher.run(LaunchSpec(), end_on_sigterm=True, type='bro'))
+  run = asyncio.create_task(
+    dispatcher.run(LaunchSpec(), cast(Spawner, runtime), end_on_sigterm=True, type='bro')
+  )
   await _settle()
   assert runtime.handle is not None
   assert not runtime.handle.killed
@@ -875,7 +933,9 @@ async def test_an_owning_run_holds_sigterm_through_its_teardown():
   runtime.kill_release = asyncio.Event()
   dispatcher = Dispatcher()
   dispatcher.bind(cast(Runtime, runtime))
-  run = asyncio.create_task(dispatcher.run(LaunchSpec(), end_on_sigterm=True, type='bro'))
+  run = asyncio.create_task(
+    dispatcher.run(LaunchSpec(), cast(Spawner, runtime), end_on_sigterm=True, type='bro')
+  )
   await _settle()
   assert runtime.handle is not None
 
@@ -900,7 +960,7 @@ def test_a_run_leaves_the_processs_sigterm_alone_unless_asked():
       runtime = FakeRuntime()
       dispatcher = Dispatcher()
       dispatcher.bind(cast(Runtime, runtime))
-      task = asyncio.create_task(dispatcher.run(LaunchSpec(), type='bro'))
+      task = asyncio.create_task(dispatcher.run(LaunchSpec(), cast(Spawner, runtime), type='bro'))
       await _settle()
       assert runtime.handle is not None
       runtime.handle.exit.set_result(7)
@@ -920,7 +980,7 @@ def test_a_run_leaves_the_processs_sigterm_alone_unless_asked():
 @pytest.mark.asyncio
 async def test_a_dead_requester_orphans_the_quests_it_asked_for_down_the_tree():
   dispatcher, runtime = _dispatcher()
-  dispatcher.on('work', _spawn_handler)
+  dispatcher.on('work', _spawn_handler(cast(Spawner, runtime)))
   dispatcher.on_message('requester', _request('work', {}, 'child'))
   await _settle()
   child_peer = dispatcher.journal.records['child'].worker
@@ -961,8 +1021,8 @@ async def test_root_exit_keeps_closing_live_quests_as_killed():
   runtime = FakeRuntime()
   dispatcher = Dispatcher()
   dispatcher.bind(cast(Runtime, runtime))
-  dispatcher.on('work', _spawn_handler)
-  run = asyncio.create_task(dispatcher.run(LaunchSpec(), type='bro'))
+  dispatcher.on('work', _spawn_handler(cast(Spawner, runtime)))
+  run = asyncio.create_task(dispatcher.run(LaunchSpec(), cast(Spawner, runtime), type='bro'))
   await _settle()
   root_peer = dispatcher.root
   assert root_peer is not None
@@ -981,7 +1041,7 @@ async def test_root_exit_keeps_closing_live_quests_as_killed():
 async def test_cancel_ends_the_requesters_live_quest_and_orphans_what_it_asked_for():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(CANCEL, cancel_handler)
-  dispatcher.on('work', _spawn_handler)
+  dispatcher.on('work', _spawn_handler(cast(Spawner, runtime)))
   dispatcher.on_message('requester', _request('work', {}, 'child'))
   await _settle()
   child_peer = dispatcher.journal.records['child'].worker
@@ -1017,7 +1077,7 @@ async def test_cancel_during_launch_answers_at_once_and_ends_the_quest_on_the_la
   dispatcher, runtime = _dispatcher()
   runtime.launch_gate = asyncio.Event()
   dispatcher.on(CANCEL, cancel_handler)
-  dispatcher.on('work', _spawn_handler)
+  dispatcher.on('work', _spawn_handler(cast(Spawner, runtime)))
   dispatcher.on_message('requester', _request('work', {}, 'child'))
   await _settle()
   assert dispatcher.journal.records['child'].started_at is None
@@ -1045,7 +1105,7 @@ async def test_a_result_sent_during_the_kill_does_not_outrun_the_cancel():
   dispatcher, runtime = _dispatcher()
   runtime.kill_release = asyncio.Event()
   dispatcher.on(CANCEL, cancel_handler)
-  dispatcher.on('work', _spawn_handler)
+  dispatcher.on('work', _spawn_handler(cast(Spawner, runtime)))
   dispatcher.on_message('requester', _request('work', {}, 'child'))
   await _settle()
   child_peer = dispatcher.journal.records['child'].worker

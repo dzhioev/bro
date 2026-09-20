@@ -1,7 +1,11 @@
 import asyncio
 import contextlib
+import json
+import os
+import signal
 import socket
 import subprocess
+import sys
 from dataclasses import dataclass
 from typing import cast
 from unittest.mock import MagicMock
@@ -14,9 +18,8 @@ from bro.broker.brotocol import PROTOCOL_REVISION, Message, Tag
 from bro.broker.broxy import Broxy
 from bro.broker.client import Client
 from bro.broker.dispatcher import QUERY, Dispatcher, query_handler
-from bro.broker.environment import BROKER_CHANNEL
+from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
 from bro.broker.runtime import Runtime
-from bro.broker.spawn import Spawner
 from bro.broker.transport import ChannelID, Sink, connect
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport, parse_address
 
@@ -75,6 +78,20 @@ async def running_broxy(**broxy_kwargs):
   finally:
     broxy.stop()
     await asyncio.wait_for(run_task, TIMEOUT)
+    await transport.shutdown()
+    await asyncio.wait_for(serve_task, TIMEOUT)
+
+
+@contextlib.asynccontextmanager
+async def running_upstream():
+  transport = TcpServerTransport([LOCAL_HOST])
+  sink = StubSink()
+  serve_task = asyncio.create_task(transport.serve(sink))
+  await asyncio.sleep(0)
+  provisioned = await transport.provision()
+  try:
+    yield provisioned.host_endpoint.address(LOCAL_HOST), sink
+  finally:
     await transport.shutdown()
     await asyncio.wait_for(serve_task, TIMEOUT)
 
@@ -316,6 +333,81 @@ async def test_upstream_eof_exits_nonzero_and_closes_local_connections():
     client.close()
 
 
+@pytest.mark.asyncio
+async def test_run_swaps_in_the_local_channel_and_relays_the_command_status(tmp_path):
+  environment_path = tmp_path / 'environment.json'
+  log_path = tmp_path / 'broxy.log'
+  code = (
+    'import json, os, sys; '
+    'json.dump({"channel": os.environ.get("BROKER_CHANNEL"), '
+    '"upstream": os.environ.get("BROKER_UPSTREAM")}, open(sys.argv[1], "w")); '
+    'raise SystemExit(7)'
+  )
+  async with running_upstream() as (upstream, sink):
+    environment = {**os.environ, BROKER_UPSTREAM: upstream, BROKER_CHANNEL: 'ambient'}
+    process = await asyncio.create_subprocess_exec(
+      'broxy',
+      'run',
+      '--log-file',
+      str(log_path),
+      '--',
+      sys.executable,
+      '-c',
+      code,
+      str(environment_path),
+      env=environment,
+    )
+    assert await asyncio.wait_for(process.wait(), TIMEOUT) == 7
+    await _next(sink.connects)
+
+  child_environment = json.loads(environment_path.read_text())
+  assert child_environment['channel'].startswith('tcp://')
+  assert child_environment['channel'] != 'ambient'
+  assert child_environment['upstream'] is None
+  assert 'broxy: serving' in log_path.read_text()
+
+
+@pytest.mark.asyncio
+async def test_run_forwards_sigterm_and_logs_to_stderr_by_default(tmp_path):
+  ready = tmp_path / 'ready'
+  stopped = tmp_path / 'stopped'
+  code = f"""
+import signal
+from pathlib import Path
+
+
+def stop(*_args):
+  Path({str(stopped)!r}).touch()
+  raise SystemExit(23)
+
+
+signal.signal(signal.SIGTERM, stop)
+Path({str(ready)!r}).touch()
+signal.pause()
+"""
+  async with running_upstream() as (upstream, sink):
+    environment = {**os.environ, BROKER_UPSTREAM: upstream}
+    process = await asyncio.create_subprocess_exec(
+      'broxy',
+      'run',
+      '--',
+      sys.executable,
+      '-c',
+      code,
+      env=environment,
+      stderr=asyncio.subprocess.PIPE,
+    )
+    await _wait_until(ready.exists, 'the wrapped command did not start')
+    process.send_signal(signal.SIGTERM)
+    _, stderr = await asyncio.wait_for(process.communicate(), TIMEOUT)
+    await _next(sink.connects)
+
+  assert process.returncode == 23
+  assert stopped.is_file()
+  assert stderr is not None
+  assert b'broxy: serving' in stderr
+
+
 def test_launch_starts_serve_and_prints_address_and_pid(tmp_path, monkeypatch, capsys):
   process = MagicMock(pid=123)
   popen = MagicMock(return_value=process)
@@ -335,6 +427,7 @@ def test_launch_starts_serve_and_prints_address_and_pid(tmp_path, monkeypatch, c
 
 def test_launch_stops_serve_when_readiness_fails(tmp_path, monkeypatch):
   process = MagicMock(pid=123)
+  process.poll.return_value = None
   monkeypatch.setattr(broker_broxy.spawn, 'popen', MagicMock(return_value=process))
   monkeypatch.setattr(broker_broxy, '_await_address', MagicMock(return_value=_LOCAL_ADDRESS))
   monkeypatch.setattr(broker_broxy, '_await_ready', MagicMock(return_value=1))
@@ -525,7 +618,7 @@ async def running_chat(talk):
   requester = await transport.provision()
   worker = await transport.provision()
   dispatcher = Dispatcher()
-  dispatcher.bind(Runtime(transport, cast(Spawner, object())))
+  dispatcher.bind(Runtime(transport))
   dispatcher.on(QUERY, query_handler)
   root = dispatcher.journal.open('root', 'root', None, None, {}, type='bro')
   dispatcher.journal.bind(root, requester.channel)

@@ -95,7 +95,7 @@ class _SessionSpawner(Spawner):
 
   @override
   async def spawn(
-    self, launch: LaunchSpec, channel: Provisioned, quest: str, talk: Talk
+    self, launch: LaunchSpec, channel: Provisioned, mission: str, talk: Talk
   ) -> ChildHandle:
     assert isinstance(launch, _SessionCommand)
     process = await asyncio.create_subprocess_exec(
@@ -103,7 +103,7 @@ class _SessionSpawner(Spawner):
       env={
         **os.environ,
         'BROKER_CHANNEL': channel.host_endpoint.address(LOCAL_HOST),
-        'BROKER_MISSION': quest,
+        'BROKER_MISSION': mission,
         BROKER_TALK: encode_talk(talk),
       },
       stdout=asyncio.subprocess.PIPE,
@@ -164,7 +164,7 @@ def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
   bundle = build(tree, default_root(tree), claude_code_cache(tree))
   runs = _RunDirectories(tmp_path / 'runs')
   spawner = _SessionSpawner()
-  broker = Broker(TcpServerTransport([LOCAL_HOST]), spawner, job_output=runs)
+  broker = Broker(TcpServerTransport([LOCAL_HOST]), job_output=runs)
   broker.on(GET, runs.get)
   broker.on(
     BENCHMARK,
@@ -182,6 +182,7 @@ def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
       _SessionCommand(
         (str(BENCHMARK_JOB), 'start', '-c', config, '--timeout', str(JOB_TIMEOUT_SEC))
       ),
+      spawner,
       type='bro',
     )
 

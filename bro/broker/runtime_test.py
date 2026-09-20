@@ -1,12 +1,9 @@
-from dataclasses import dataclass
 from typing import cast
 
 import pytest
 
 from bro.broker import brotocol
-from bro.broker.brotocol import Talk
 from bro.broker.runtime import Runtime
-from bro.broker.spawn import LaunchSpec, Spawner
 from bro.broker.transport import Provisioned, ServerTransport
 from bro.broker.transports.tcp import Endpoint
 
@@ -34,30 +31,6 @@ class FakeTransport:
     self.stopped = True
 
 
-@dataclass
-class FakeHandle:
-  code: int = 0
-
-  async def wait(self):
-    return self.code
-
-  async def kill(self):
-    pass
-
-  def output_tail(self):
-    return ''
-
-
-class FakeSpawner:
-  def __init__(self):
-    self.calls = []
-    self.handle = FakeHandle()
-
-  async def spawn(self, launch, provisioned, quest, talk):
-    self.calls.append((launch, provisioned, quest, talk))
-    return self.handle
-
-
 class ChannelEvents:
   def __init__(self):
     self.connected = 0
@@ -77,7 +50,7 @@ class ChannelEvents:
 @pytest.mark.asyncio
 async def test_runtime_demultiplexes_channel_events_and_messages():
   transport = FakeTransport()
-  runtime = Runtime(cast(ServerTransport, transport), cast(Spawner, FakeSpawner()))
+  runtime = Runtime(cast(ServerTransport, transport))
   events = ChannelEvents()
   provisioned = await runtime.provision(events)
   message = brotocol.request('ping', {})
@@ -90,21 +63,9 @@ async def test_runtime_demultiplexes_channel_events_and_messages():
 
 
 @pytest.mark.asyncio
-async def test_runtime_launches_through_the_spawn_port():
-  transport = FakeTransport()
-  spawner = FakeSpawner()
-  runtime = Runtime(cast(ServerTransport, transport), cast(Spawner, spawner))
-  provisioned = await runtime.provision(ChannelEvents())
-  talk: Talk = frozenset({'worker.say'})
-  handle = await runtime.launch(LaunchSpec(), provisioned, 'quest', talk)
-  assert handle is spawner.handle
-  assert spawner.calls[0][1:] == (provisioned, 'quest', talk)
-
-
-@pytest.mark.asyncio
 async def test_send_close_and_stop_delegate_to_the_transport():
   transport = FakeTransport()
-  runtime = Runtime(cast(ServerTransport, transport), cast(Spawner, FakeSpawner()))
+  runtime = Runtime(cast(ServerTransport, transport))
   await runtime.provision(ChannelEvents())
   message = brotocol.result('quest', 'ok')
   runtime.send('channel', message)
@@ -118,7 +79,7 @@ async def test_send_close_and_stop_delegate_to_the_transport():
 
 @pytest.mark.asyncio
 async def test_unknown_channels_are_ignored():
-  runtime = Runtime(cast(ServerTransport, FakeTransport()), cast(Spawner, FakeSpawner()))
+  runtime = Runtime(cast(ServerTransport, FakeTransport()))
   await runtime.on_connect('missing')
   await runtime.on_message('missing', brotocol.request('ping', {}))
   await runtime.on_disconnect('missing')

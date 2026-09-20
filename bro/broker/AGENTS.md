@@ -1,7 +1,7 @@
 # Broker messaging substrate
 
 `bro.broker` is the consumer-neutral host↔peer messaging substrate.
-It owns the wire, environment names, transport, journal, Worker supervision, and dispatch logic.
+It owns the wire, environment names, transport, journal, host supervision, and dispatch logic.
 Every module in the package imports only the standard library, `bro.base`, and `bro.broker`;
 test modules may also import `pytest`.
 The repository enforces that boundary in `local/bro/local/import_policy_test.py`.
@@ -26,7 +26,7 @@ a reply may carry both fields to ask a counter-question.
 Every mission fixes a subset of `owner.say`, `owner.question`, `worker.say`, and `worker.question` as its talk when it opens.
 A reply needs the other end's question right, and a counter-question also needs the sender's question right.
 Mark origin is structural:
-`accepted` is dispatcher-born, `started` is Worker-born, and a worker process may send `trail` or `listening`.
+`accepted` is dispatcher-born, `started` is supervisor-born, and a worker process may send `trail` or `listening`.
 
 `MAX_FRAME_BYTES` is the encoded-frame bound.
 `MAX_IDENTIFIER_BYTES` bounds the encoded cost of request, kind, trail, and chat identifiers inside a frame.
@@ -52,24 +52,26 @@ The module contains constants only, so launch paths may import it before the bro
 - `spawn.py` defines the `Spawner` / `ChildHandle` launch port and the bounded output-tail buffer.
   Every spawner publishes `BROKER_MISSION` and `BROKER_TALK` beside the channel.
 - `job.py` launches mute host jobs in their own process group and owns the run-directory layout.
-- `runtime.py` owns shape-free transport serving, channel demultiplexing, send, provision/close, and process launch helpers.
-- `worker.py` owns supervision by shape.
-  `SpawnedWorker` drains the channel before deciding from process reap;
-  `JobWorker` collects the run directory through `JobOutput` and answers from reap;
-  `ExpectedWorker` treats attach as start and EOF as death because no host child handle exists.
-  The shared Worker base owns wait-task teardown and the two-phase deadline.
+- `runtime.py` owns shape-free transport serving, channel demultiplexing, send, and provision/close.
+- `supervisor.py` owns supervision by shape.
+  `SpawnedSupervisor` drains the channel before deciding from process reap;
+  `JobSupervisor` collects the run directory through `JobOutput` and answers from reap;
+  `ExpectedSupervisor` treats attach as start and EOF as death because no host child handle exists.
+  The shared `Supervisor` base owns wait-task teardown and the two-phase deadline.
 - `journal.py` owns one mutable record per worker-backed mission, the ordered event ring, and permanent lineage.
   Every projection subscribes to its one append funnel;
   a raising subscriber is logged without breaking later subscribers.
-- `dispatcher.py` routes over journal records, binds one Worker per worker-backed mission, synthesizes failure from Worker death, and serves `query`, `events`, and `cancel`.
+- `dispatcher.py` routes over journal records, binds one supervisor per worker-backed mission, synthesizes failure from supervisor death, and serves `query`, `events`, and `cancel`.
   Its handler vocabulary is `reply`, `deny`, `spawn`, `job`, and `expect`.
   `spawn`, `job`, and `expect` require the worker type they record;
+  `spawn` also takes the spawner for its launch, while `spawn` and `job` require the caller-owned timeout (`None` is unbounded);
   `deny` accepts an optional type for requests that named one.
 - `client.py` is the synchronous peer handle for requests, lifecycle answers, chat messages, listeners, and request- and reply-correlated waits.
   It reads the launched peer's mission and talk from `BROKER_MISSION` and `BROKER_TALK`, refusing a disallowed worker move before sending.
   `BROKER_UPSTREAM` without a channel reports that the session proxy failed at launch.
-- `broxy.py` is the stateless session multiplexer.
+- `broxy.py` is the stateless peer multiplexer.
   It routes inbound traffic first by reply id, then by request id, then to every listener for the request.
+  `broxy run [--log-file PATH] -- <command…>` attaches once through `BROKER_UPSTREAM`, gives the command the local `BROKER_CHANNEL`, forwards SIGTERM, and returns the command status.
 - `cli.py` exposes the low-level broker request, chat message, receive, and listen surface.
 
 ## Journal
@@ -108,9 +110,9 @@ Delivery to an absent receiver is dropped and logged rather than buffered;
 the journal remains the inbox of record.
 A process-sent `trail` is accepted only once with a non-empty id.
 A process-sent `listening` is also set once.
-A Worker's death orphans every live mission its peer owns, cascading through the mission tree.
+A supervisor's worker death orphans every live mission its peer owns, cascading through the mission tree.
 `cancel {id}` ends one live mission for its owner.
-Root exit closes every live record as `killed`, or `detached` for expected workers, before Worker teardown.
+Root exit closes every live record as `killed`, or `detached` for expected workers, before supervisor teardown.
 
 `deny` is for refused worker-backed work:
 it sends `result{denied}` and journals the denial in one call.
@@ -121,9 +123,9 @@ Unknown kinds and lineage collisions are wire denials and remain unjournaled.
 
 - `brotocol_test.py` covers envelope validation, builders, chat roles, talk encoding, revision, and the frame cap.
 - `transports/tcp_test.py` covers attach authenticity and revision checks, supersession, framing, delivery, disconnect, and shutdown.
-- `runtime_test.py` covers the shape-free transport and launch seam.
-- `worker_test.py` covers each supervision shape, start timing, host-initiated end, timeout, collection, and death reports.
+- `runtime_test.py` covers the shape-free transport runtime.
+- `supervisor_test.py` covers each supervision shape, start timing, host-initiated end, timeout, collection, and death reports.
 - `journal_test.py` covers folding, worker types, subscribers, retention, lineage, bounds, event gaps, and caller scope.
-- `dispatcher_test.py` covers routing, type threading, origin checks, denial, Worker synthesis, orphaning, cancel, and reads.
+- `dispatcher_test.py` covers routing, type threading, origin checks, denial, supervisor synthesis, orphaning, cancel, and reads.
 - `job_test.py` and `spawn_test.py` cover the process and launch ports.
 - `client_test.py`, `cli_test.py`, and `broxy_test.py` cover the peer-facing and proxy surfaces.

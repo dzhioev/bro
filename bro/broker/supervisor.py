@@ -1,4 +1,4 @@
-"""Worker-owned supervision for spawned, job, and expected broker missions."""
+"""Host supervision for spawned, job, and expected broker missions."""
 
 import asyncio
 import shutil
@@ -10,9 +10,9 @@ from typing import Any, Optional, Protocol
 from bro.base import log
 from bro.broker import brotocol
 from bro.broker.brotocol import Message, Tag, Talk
-from bro.broker.job import CommandJob, record_status
+from bro.broker.job import CommandJob, launch as launch_job, record_status
 from bro.broker.runtime import Peer, Runtime
-from bro.broker.spawn import ChildHandle, LaunchSpec
+from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 
 LAUNCH_TIMEOUT = 1800.0
 _DRAIN_TIMEOUT = 2.0
@@ -29,8 +29,8 @@ def call_later(seconds: float, callback: Callable[[], None]) -> asyncio.TimerHan
   return asyncio.get_running_loop().call_later(seconds, callback)
 
 
-def job_peer(quest: str) -> Peer:
-  return f'job:{quest}'
+def job_peer(mission: str) -> Peer:
+  return f'job:{mission}'
 
 
 @dataclass(frozen=True)
@@ -41,11 +41,13 @@ class DeathReport:
   output_tail: Optional[str] = None
 
 
-class WorkerListener(Protocol):
-  def on_worker_bound(self, worker: 'Worker', peer: Peer) -> None: ...
-  def on_worker_ready(self, worker: 'Worker') -> None: ...
-  def on_worker_message(self, worker: 'Worker', message: Message, *, host_worker: bool) -> None: ...
-  def on_worker_death(self, worker: 'Worker', report: DeathReport) -> None: ...
+class SupervisorListener(Protocol):
+  def on_bound(self, supervisor: 'Supervisor', worker: Peer) -> None: ...
+  def on_ready(self, supervisor: 'Supervisor') -> None: ...
+  def on_message(
+    self, supervisor: 'Supervisor', message: Message, *, from_supervisor: bool
+  ) -> None: ...
+  def on_death(self, supervisor: 'Supervisor', report: DeathReport) -> None: ...
 
 
 class JobOutput(Protocol):
@@ -54,14 +56,14 @@ class JobOutput(Protocol):
   async def collect(self, directory: Path, context: Any, requester: Peer) -> dict: ...
 
 
-class Worker:
+class Supervisor:
   """Shared wait-task, two-phase deadline, and teardown ownership."""
 
   def __init__(
     self,
     runtime: Runtime,
-    listener: WorkerListener,
-    quest: str,
+    listener: SupervisorListener,
+    mission: str,
     *,
     timeout: Optional[float],
     launch_timeout: Optional[float] = LAUNCH_TIMEOUT,
@@ -69,7 +71,7 @@ class Worker:
   ):
     self.runtime = runtime
     self.listener = listener
-    self.quest = quest
+    self.mission = mission
     self.timeout = timeout
     self.peer: Optional[Peer] = None
     self._launch_timeout = launch_timeout
@@ -85,7 +87,7 @@ class Worker:
 
   def begin(self) -> None:
     if self._task is not None:
-      raise RuntimeError('worker already begun')
+      raise RuntimeError('supervisor already begun')
     self._task = asyncio.create_task(self._run())
     self._task.add_done_callback(self._task_done)
     self._arm(self._launch_timeout)
@@ -95,20 +97,20 @@ class Worker:
 
   def _bind(self, peer: Peer) -> None:
     if self.peer is not None:
-      raise RuntimeError('worker already bound')
+      raise RuntimeError('supervisor already bound')
     self.peer = peer
-    self.listener.on_worker_bound(self, peer)
+    self.listener.on_bound(self, peer)
 
   def _mark_started(self) -> None:
     if self._started:
       return
     self._started = True
     self._arm(self.timeout)
-    self.listener.on_worker_message(self, brotocol.mark(self.quest, 'started'), host_worker=True)
+    self.listener.on_message(self, brotocol.mark(self.mission, 'started'), from_supervisor=True)
     pending = self._pending_messages
     self._pending_messages = []
     for message in pending:
-      self.listener.on_worker_message(self, message, host_worker=False)
+      self.listener.on_message(self, message, from_supervisor=False)
 
   def settle(self) -> None:
     """Disarm the mission deadline after its result without ending supervision."""
@@ -124,7 +126,7 @@ class Worker:
     self.end('timeout')
 
   def end(self, reason: str) -> None:
-    """Kill the worker; the death it then reports carries `reason`."""
+    """End the supervised worker; the death it reports carries `reason`."""
     if self._finished or self._stopping or self._end_reason is not None:
       return
     self._end_reason = reason
@@ -145,7 +147,7 @@ class Worker:
       asyncio.create_task(self._kill())
       return
     if self._task is None:
-      raise RuntimeError('worker ended before it began')
+      raise RuntimeError('supervisor ended before it began')
     self._task.cancel()
 
   async def _kill(self) -> None:
@@ -156,7 +158,7 @@ class Worker:
       return
     self._finished = True
     self._cancel_timer()
-    self.listener.on_worker_death(self, report)
+    self.listener.on_death(self, report)
 
   async def stop(self) -> None:
     if self._stopping:
@@ -185,7 +187,7 @@ class Worker:
       return
     error = task.exception()
     if error is not None and not self._finished:
-      log.warning('broker worker %s failed: %r', self.quest, error)
+      log.warning('broker supervisor for %s failed: %r', self.mission, error)
       default = 'launch' if not self._started else 'exit'
       self._finish(DeathReport(self._reason_or(default), error=str(error)))
 
@@ -193,16 +195,16 @@ class Worker:
     pass
 
   def on_message(self, message: Message) -> None:
-    if message.type not in (Tag.REQUEST, Tag.MESSAGE) and message.request_id != self.quest:
+    if message.type not in (Tag.REQUEST, Tag.MESSAGE) and message.request_id != self.mission:
       log.warning(
-        'broker worker %s refused %r for mission %s',
-        self.quest,
+        'broker supervisor for %s refused %r for mission %s',
+        self.mission,
         message.type,
         message.request_id,
       )
       return
     if self._started:
-      self.listener.on_worker_message(self, message, host_worker=False)
+      self.listener.on_message(self, message, from_supervisor=False)
     else:
       self._pending_messages.append(message)
 
@@ -234,13 +236,14 @@ async def _owned_launch(launch: Coroutine[Any, Any, ChildHandle]) -> ChildHandle
   raise asyncio.CancelledError
 
 
-class SpawnedWorker(Worker):
+class SpawnedSupervisor(Supervisor):
   def __init__(
     self,
     runtime: Runtime,
-    listener: WorkerListener,
-    quest: str,
+    listener: SupervisorListener,
+    mission: str,
     launch: LaunchSpec,
+    spawner: Spawner,
     *,
     talk: Talk,
     timeout: Optional[float],
@@ -248,9 +251,10 @@ class SpawnedWorker(Worker):
     schedule: Scheduler = call_later,
   ):
     super().__init__(
-      runtime, listener, quest, timeout=timeout, launch_timeout=launch_timeout, schedule=schedule
+      runtime, listener, mission, timeout=timeout, launch_timeout=launch_timeout, schedule=schedule
     )
     self._launch = launch
+    self._spawner = spawner
     self._talk = talk
     self._handle: Optional[ChildHandle] = None
     self._connected = False
@@ -261,7 +265,7 @@ class SpawnedWorker(Worker):
       provisioned = await self.runtime.provision(self)
       self._bind(provisioned.channel)
       self._handle = await _owned_launch(
-        self.runtime.launch(self._launch, provisioned, self.quest, self._talk)
+        self._spawner.spawn(self._launch, provisioned, self.mission, self._talk)
       )
     except asyncio.CancelledError:
       raise
@@ -275,9 +279,9 @@ class SpawnedWorker(Worker):
         await asyncio.wait_for(self._disconnected.wait(), _DRAIN_TIMEOUT)
       except TimeoutError:
         log.warning(
-          'broker worker %s channel did not disconnect within %.0fs after process exit; '
+          'broker supervisor for %s saw no channel disconnect within %.0fs after process exit; '
           'reporting exit without a complete drain',
-          self.quest,
+          self.mission,
           _DRAIN_TIMEOUT,
         )
     self._finish(
@@ -300,15 +304,15 @@ class SpawnedWorker(Worker):
     self._disconnected.set()
 
 
-class ExpectedWorker(Worker):
+class ExpectedSupervisor(Supervisor):
   def __init__(
     self,
     runtime: Runtime,
-    listener: WorkerListener,
-    quest: str,
+    listener: SupervisorListener,
+    mission: str,
     ready,
   ):
-    super().__init__(runtime, listener, quest, timeout=None, launch_timeout=None)
+    super().__init__(runtime, listener, mission, timeout=None, launch_timeout=None)
     self._ready = ready
     self._gone = asyncio.Event()
 
@@ -319,7 +323,7 @@ class ExpectedWorker(Worker):
       _, cancelled = await _own(asyncio.to_thread(self._ready, provisioned))
       if cancelled:
         raise asyncio.CancelledError
-      self.listener.on_worker_ready(self)
+      self.listener.on_ready(self)
     except asyncio.CancelledError:
       raise
     except Exception as error:
@@ -338,12 +342,12 @@ class ExpectedWorker(Worker):
     self._gone.set()
 
 
-class JobWorker(Worker):
+class JobSupervisor(Supervisor):
   def __init__(
     self,
     runtime: Runtime,
-    listener: WorkerListener,
-    quest: str,
+    listener: SupervisorListener,
+    mission: str,
     command: CommandJob,
     output: JobOutput,
     context: Any,
@@ -354,7 +358,7 @@ class JobWorker(Worker):
     schedule: Scheduler = call_later,
   ):
     super().__init__(
-      runtime, listener, quest, timeout=timeout, launch_timeout=launch_timeout, schedule=schedule
+      runtime, listener, mission, timeout=timeout, launch_timeout=launch_timeout, schedule=schedule
     )
     self._command = command
     self._output = output
@@ -373,7 +377,7 @@ class JobWorker(Worker):
     return self._directory
 
   async def _run(self) -> None:
-    self._bind(job_peer(self.quest))
+    self._bind(job_peer(self.mission))
     try:
       directory = self._output.open()
       self._directory = directory
@@ -381,7 +385,7 @@ class JobWorker(Worker):
       self._finish(DeathReport('output', error=str(error)))
       return
     try:
-      self._handle = await _owned_launch(self.runtime.launch_job(self._command, directory))
+      self._handle = await _owned_launch(launch_job(self._command, directory))
     except asyncio.CancelledError:
       await asyncio.to_thread(_remove_run, directory)
       raise
@@ -400,20 +404,20 @@ class JobWorker(Worker):
       value = await self._output.collect(directory, self._context, self._requester)
       await asyncio.to_thread(_remove_run, directory)
       message = (
-        brotocol.result(self.quest, 'ok', value=value)
+        brotocol.result(self.mission, 'ok', value=value)
         if clean
-        else brotocol.result(self.quest, 'failed', detail={**status, **value})
+        else brotocol.result(self.mission, 'failed', detail={**status, **value})
       )
     except Exception as error:
       log.warning(
-        'broker worker: job %s collection failed: %r; its run is kept at %s',
-        self.quest,
+        'broker supervisor: job %s collection failed: %r; its run is kept at %s',
+        self.mission,
         error,
         directory,
       )
       detail = {'reason': 'output'} if clean else status
-      message = brotocol.result(self.quest, 'failed', error=str(error), detail=detail)
-    self.listener.on_worker_message(self, message, host_worker=True)
+      message = brotocol.result(self.mission, 'failed', error=str(error), detail=detail)
+    self.listener.on_message(self, message, from_supervisor=True)
     self._finish(DeathReport(status['reason'], exit_code=code))
 
   def _end_now(self) -> None:
@@ -434,4 +438,6 @@ def _remove_run(directory: Path) -> None:
   try:
     shutil.rmtree(directory)
   except OSError as error:
-    log.warning('broker worker: could not remove the job run directory %s: %s', directory, error)
+    log.warning(
+      'broker supervisor: could not remove the job run directory %s: %s', directory, error
+    )

@@ -1,14 +1,11 @@
-"""Shape-free broker runtime over transport and process-launch ports."""
+"""Shape-free broker runtime over one transport."""
 
 import asyncio
 from collections.abc import Coroutine
-from pathlib import Path
 from typing import Any, Protocol
 
 from bro.base import log
-from bro.broker.brotocol import Message, Talk
-from bro.broker.job import CommandJob, launch as launch_job
-from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
+from bro.broker.brotocol import Message
 from bro.broker.transport import ChannelID, Provisioned, ServerTransport
 
 Peer = ChannelID
@@ -21,30 +18,16 @@ class ChannelEvents(Protocol):
 
 
 class Runtime:
-  """Own the event loop's transport and process-launch mechanisms.
+  """Own transport serving, channel demultiplexing, delivery, and teardown."""
 
-  Per-shape supervision belongs to ``Worker`` implementations. The runtime only
-  provisions and closes channels, launches and reaps processes, and demultiplexes
-  channel lifecycle to the worker that owns each channel.
-  """
-
-  def __init__(self, transport: ServerTransport, spawner: Spawner):
+  def __init__(self, transport: ServerTransport):
     self._transport = transport
-    self._spawner = spawner
     self._channels: dict[ChannelID, ChannelEvents] = {}
 
   async def provision(self, events: ChannelEvents) -> Provisioned:
     provisioned = await self._transport.provision()
     self._channels[provisioned.channel] = events
     return provisioned
-
-  async def launch(
-    self, launch: LaunchSpec, provisioned: Provisioned, quest: str, talk: Talk
-  ) -> ChildHandle:
-    return await self._spawner.spawn(launch, provisioned, quest, talk)
-
-  async def launch_job(self, command: CommandJob, directory: Path) -> ChildHandle:
-    return await launch_job(command, directory)
 
   def send(self, peer: Peer, message: Message) -> None:
     self._schedule(self._transport.send(peer, message))

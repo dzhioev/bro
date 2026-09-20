@@ -33,6 +33,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   In-process `bro run` / `bro chat` create no scope.
 - `ride/root.py` — supervision of either neutral started-party launch for roots and manually launched children, behind the broker availability gate.
 - `ride/spawn.py` — broker-root composition and summon lowering:
+  each root runs with its Docker or process spawner directly, while each accepted summon passes `SummonSpawner` with that launch;
   started parties go through the common isolation-parameterized launcher and carry a resume spec;
   joined members run in the summoner’s existing tree with member-scoped records and no resume;
   per-root journal subscribers project audit and manual-token cleanup, and the bounded credential scope reaches contributed kinds.
@@ -47,7 +48,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   A broker job's run directory is staged in the store and collected through the same ingest, reaching the peer that requested the job and its summoners.
   The peer wire and CLI are the framework's `bro/artifact.py`.
 - `ride/summon_control.py` — summon host authorization, child authority and quest-talk resolution, and start/join placement, plus journal projections for audit, lifecycle logging, and manual-token cleanup;
-  the manual variant registers as an expected external Worker with its pending record.
+  the manual variant registers as an expected external supervisor with its pending record.
   The peer wire and self-contained CLI are the framework's `bro/summon.py`.
 - `ride/pending_summon.py` — pending manual summons:
   the runtime-carrying record a launch token resolves to, including the quest's talk.

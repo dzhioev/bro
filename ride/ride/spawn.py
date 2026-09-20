@@ -57,7 +57,6 @@ from ride.workspace.docker import ContainerRuntimeResolver, bridge_gateway
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.spawn import (
-  CompositeSpawner,
   DockerLaunchSpec,
   DockerSpawner,
   ExecLaunchSpec,
@@ -400,12 +399,12 @@ class SummonSpawner(Spawner):
     self._artifacts = artifacts
 
   async def spawn(
-    self, launch: LaunchSpec, channel: Provisioned, quest: str, talk: Talk
+    self, launch: LaunchSpec, channel: Provisioned, mission: str, talk: Talk
   ) -> ChildHandle:
     assert isinstance(launch, SummonLaunchSpec)
     child_name = _workspace_name(channel.channel)
     if launch.party == 'join':
-      self._facts.note_member(quest, launch.parent, child_name)
+      self._facts.note_member(mission, launch.parent, child_name)
       lowered = await asyncio.to_thread(
         _lower_join,
         launch,
@@ -414,7 +413,7 @@ class SummonSpawner(Spawner):
         self._artifacts,
       )
     else:
-      self._facts.note_workspace(quest, child_name)
+      self._facts.note_workspace(mission, child_name)
       lowered = await asyncio.to_thread(
         _lower_summon,
         launch,
@@ -424,10 +423,10 @@ class SummonSpawner(Spawner):
         self._artifacts,
       )
     if isinstance(lowered, DockerLaunchSpec):
-      return await self._docker.spawn(lowered, channel, quest, talk)
+      return await self._docker.spawn(lowered, channel, mission, talk)
     if isinstance(lowered, ExecLaunchSpec):
-      return await self._exec.spawn(lowered, channel, quest, talk)
-    return await self._process.spawn(lowered, channel, quest, talk)
+      return await self._exec.spawn(lowered, channel, mission, talk)
+    return await self._process.spawn(lowered, channel, mission, talk)
 
 
 def broker_bind_hosts() -> list[str]:
@@ -461,9 +460,9 @@ def run_root_via_broker(
   runtime_bundle: RuntimeBundle,
 ) -> int:
   """run `launch` as the root peer of a broker on this host, supervise it on the
-  broker loop until it exits, and return its exit code. The spawner composes both
-  workspace isolations plus summon lowering, so either root can start either kind
-  of child.
+  broker loop until it exits, and return its exit code. The root runs through the
+  spawner for its own isolation, while each summon carries `SummonSpawner` with
+  its launch.
   The broker answers the reserved ping kind, so a session can verify its channel
   (`broker request ping '{}'`), the artifact kinds over the ride store
   (`ride.artifacts`, which also collects the run of any job a kind starts), plus
@@ -515,25 +514,24 @@ def run_root_via_broker(
     root_path=workspace.path,
   )
   artifacts = ArtifactStore(workspace, root_boxed=isinstance(launch, DockerLaunchSpec))
-  spawner = CompositeSpawner(
-    {
-      DockerLaunchSpec: docker_spawner,
-      ProcessLaunchSpec: process_spawner,
-      ExecLaunchSpec: exec_spawner,
-      SummonLaunchSpec: SummonSpawner(
-        docker_spawner,
-        process_spawner,
-        exec_spawner,
-        runtime_bundle,
-        container_runtime,
-        facts,
-        artifacts,
-      ),
-    }
+  if isinstance(launch, DockerLaunchSpec):
+    root_spawner: Spawner = docker_spawner
+  elif isinstance(launch, ProcessLaunchSpec):
+    root_spawner = process_spawner
+  else:
+    raise TypeError(f'unsupported root launch {type(launch).__name__}')
+  summon_spawner = SummonSpawner(
+    docker_spawner,
+    process_spawner,
+    exec_spawner,
+    runtime_bundle,
+    container_runtime,
+    facts,
+    artifacts,
   )
   artifact_control = ArtifactControl(artifacts, facts)
   facade = Broker(
-    TcpServerTransport(broker_bind_hosts()), spawner, job_output=JobArtifacts(artifacts, facts)
+    TcpServerTransport(broker_bind_hosts()), job_output=JobArtifacts(artifacts, facts)
   )
   control = SummonControl(
     workspace=workspace,
@@ -545,6 +543,7 @@ def run_root_via_broker(
     summon_harness=summon_harness,
     session_env=session_env,
     runtime_bundle=runtime_bundle,
+    spawner=summon_spawner,
   )
   facade.on(PING, ping_handler)
   facade.on(SUMMON, control.handle)
@@ -563,4 +562,4 @@ def run_root_via_broker(
   with contextlib.closing(artifacts):
     # the launcher owns the process: a SIGTERM ends the ride through the same
     # teardown the root's exit runs, joined members included
-    return facade.run(launch, type='bro', end_on_sigterm=True)
+    return facade.run(launch, root_spawner, type='bro', end_on_sigterm=True)
