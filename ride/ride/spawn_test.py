@@ -861,8 +861,8 @@ raise SystemExit(3)
       def __init__(self):
         self.spawned: list = []
 
-      async def spawn(self, launch, channel, quest, talk):
-        self.spawned.append((launch, channel, quest, talk))
+      async def spawn(self, launch, channel, mission, talk):
+        self.spawned.append((launch, channel, mission, talk))
         return MagicMock()
 
     docker = RecordingDocker()
@@ -1256,13 +1256,12 @@ class TestBrokerBindHosts:
 
 
 class TestRunRootViaBroker:
-  def test_wires_bind_hosts_composite_spawner_handlers_and_run(self, monkeypatch, tmp_path):
+  def test_wires_root_and_summon_spawners_handlers_and_run(self, monkeypatch, tmp_path):
     captured: dict = {}
 
     class FakeBroker:
-      def __init__(self, transport, spawner, **kwargs):
+      def __init__(self, transport, **kwargs):
         captured['transport'] = transport
-        captured['spawner'] = spawner
         captured['handlers'] = {}
         captured['observers'] = []
         self.journal = Journal()
@@ -1273,8 +1272,9 @@ class TestRunRootViaBroker:
       def subscribe(self, observer):
         captured['observers'].append(observer)
 
-      def run(self, launch, *, type, end_on_sigterm=False):
+      def run(self, launch, spawner, *, type, end_on_sigterm=False):
         captured['launch'] = launch
+        captured['root_spawner'] = spawner
         captured['type'] = type
         captured['end_on_sigterm'] = end_on_sigterm
         return 3
@@ -1307,19 +1307,18 @@ class TestRunRootViaBroker:
     )
     assert captured['transport']._bind_hosts[0] == LOCAL_HOST
     assert captured['type'] == 'bro'
-    # the composite over both launch modes plus the summon lowering: any root can
-    # spawn docker children, summons included
-    spawner = captured['spawner']
-    assert isinstance(spawner, ride.spawn.CompositeSpawner)
-    docker_spawner = spawner._spawners[ride.spawn.DockerLaunchSpec]
-    process_spawner = spawner._spawners[ride.spawn.ProcessLaunchSpec]
-    assert isinstance(docker_spawner, ride.spawn.DockerSpawner)
-    assert isinstance(process_spawner, ride.spawn.ProcessSpawner)
-    assert isinstance(spawner._spawners[ride.spawn.SummonLaunchSpec], ride.spawn.SummonSpawner)
-    # both attached-capable spawners point at the same per-session host log
+    root_spawner = captured['root_spawner']
+    assert isinstance(root_spawner, ride.spawn.ProcessSpawner)
+    control = captured['handlers']['summon'].__self__
+    assert isinstance(control, ride.summon_control.SummonControl)
+    summon_spawner = control._spawner
+    assert isinstance(summon_spawner, ride.spawn.SummonSpawner)
+    assert isinstance(summon_spawner._docker, ride.spawn.DockerSpawner)
+    assert summon_spawner._process is root_spawner
+    assert isinstance(summon_spawner._exec, ride.spawn.ExecSpawner)
     host_log = workspace.host_log
-    assert docker_spawner._host_log == host_log
-    assert process_spawner._host_log == host_log
+    assert summon_spawner._docker._host_log == host_log
+    assert root_spawner._host_log == host_log
     assert set(captured['handlers']) == {
       'ping',
       'summon',
@@ -1335,8 +1334,6 @@ class TestRunRootViaBroker:
     assert kind_context.workspace_tree == workspace.tree
     assert isinstance(kind_context.artifacts, ride.artifacts.ArtifactControl)
     assert kind_context.credential_scope == frozenset({'harbor'})
-    control = captured['handlers']['summon'].__self__
-    assert isinstance(control, ride.summon_control.SummonControl)
     facts_projection, lifecycle_projection, audit_writer = captured['observers']
     assert isinstance(facts_projection.__self__, ride.peer_facts.PeerFacts)
     assert lifecycle_projection.__self__ is control

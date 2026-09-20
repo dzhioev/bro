@@ -1161,52 +1161,6 @@ class TestExecMember:
     assert records.is_dir()
 
 
-class TestCompositeSpawner:
-  class _Recording(workspace_spawn.Spawner):
-    def __init__(self):
-      self.spawned: list = []
-
-    async def spawn(self, launch, channel, quest, talk) -> workspace_spawn.ChildHandle:
-      self.spawned.append(launch)
-      return MagicMock()
-
-  @pytest.mark.asyncio
-  async def test_dispatches_on_launch_spec_type(self):
-    docker, process = self._Recording(), self._Recording()
-    composite = workspace_spawn.CompositeSpawner(
-      {workspace_spawn.DockerLaunchSpec: docker, workspace_spawn.ProcessLaunchSpec: process}
-    )
-    channel = workspace_spawn.Provisioned(
-      channel='CH', host_endpoint=Endpoint(port=7321, token='tk')
-    )
-    docker_launch = workspace_spawn.DockerLaunchSpec(
-      workspace_docker.Launch(
-        name='broker-CH',
-        command=['x'],
-        env={},
-        secrets=(),
-        tty=False,
-        image='runtime-image',
-        runtime_bundle_hash='bundle-hash',
-      )
-    )
-    process_launch = workspace_spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
-    await composite.spawn(docker_launch, channel, 'X-1', frozenset({'worker.say'}))
-    await composite.spawn(process_launch, channel, 'X-1', frozenset({'worker.say'}))
-    assert docker.spawned == [docker_launch]
-    assert process.spawned == [process_launch]
-
-  @pytest.mark.asyncio
-  async def test_unregistered_type_raises(self):
-    composite = workspace_spawn.CompositeSpawner({})
-    channel = workspace_spawn.Provisioned(
-      channel='CH', host_endpoint=Endpoint(port=7321, token='tk')
-    )
-    launch = workspace_spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
-    with pytest.raises(ValueError, match='ProcessLaunchSpec'):
-      await composite.spawn(launch, channel, 'X-1', frozenset({'worker.say'}))
-
-
 class TestDockerSpawnerModes:
   @pytest.fixture
   def spawn_harness(self, monkeypatch, tmp_path):

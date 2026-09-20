@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """broxy — the peer-side broker proxy (`broxy` console script).
 
-A session-lifetime daemon between a session's broker clients and its one host
+A peer-lifetime daemon between a peer's broker clients and its one host
 channel: it holds the single upstream connection to the host broker and listens
 on a loopback port of its own. `BROKER_CHANNEL` points at the local address, so
 every client (`broker` CLI, `Client.from_env`, `RunLifecycle`) works through it.
@@ -9,7 +9,7 @@ Request routes live through their result, question routes through local EOF, and
 request listeners receive unsolicited chat traffic until local EOF. Upstream, the
 host sees exactly one long-lived connection per channel — the shape its
 supersede-on-accept semantics were built for — while the local side multiplexes
-the session's short-lived process swarm.
+the peer's local client processes.
 
 One event loop, no locks (the tcp adapter's concurrency model). Both sides speak
 that adapter's NDJSON framing over brotocol's encoding and open with its attach
@@ -22,15 +22,17 @@ time a local half-close is answered, everything that connection sent has reached
 the host — the guarantee `ClientTransport.close(confirm=True)` rides on.
 
 `serve` runs one proxy and fails loudly — no restart. The upstream is the
-session's own host broker: it never comes back within a session, so a lost
+peer's host broker: it never comes back within that peer's lifetime, so a lost
 upstream is unrecoverable, and any other failure is a code bug to surface, not
-ride through. Exit 0 means SIGTERM/SIGINT — the launcher's own teardown, the one
-expected end; anything else exits 1, and the listener dies with the process, so
-the session's channel disappears cleanly. The local port is ephemeral, so
+ride through. Exit 0 means SIGTERM/SIGINT — its owner's teardown, the one
+expected end. Anything else exits 1, and the listener dies with the process, so
+the peer's channel disappears cleanly. The local port is ephemeral, so
 `serve` publishes the address it bound through `--address-file`. `launch` owns
 daemon spawn, log redirection, the readiness gate, and failure cleanup; it prints
-the ready address and daemon pid for launch-policy callers. `await` remains the
-standalone readiness probe.
+the ready address and daemon pid for launch-policy callers. `run` owns a proxy and
+one command for the same span, swapping the local channel into the command's
+environment and forwarding SIGTERM. `await` remains the standalone readiness
+probe.
 """
 
 import asyncio
@@ -39,9 +41,10 @@ import os
 import secrets
 import signal
 import subprocess
+import sys
 import tempfile
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -49,7 +52,7 @@ from typing import Optional
 import bro.base.args as base_args
 from bro.base import log, spawn
 from bro.broker.brotocol import MAX_FRAME_BYTES, Message, ProtocolError, Tag
-from bro.broker.environment import BROKER_CHANNEL
+from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
 from bro.broker.transport import Address, connect
 from bro.broker.transports import tcp
 from bro.broker.transports.tcp import LOCAL_HOST
@@ -384,6 +387,8 @@ def _await_ready(address: str, timeout: float) -> int:
 
 
 def _stop_launched_process(process: subprocess.Popen) -> None:
+  if process.poll() is not None:
+    return
   process.terminate()
   try:
     process.wait(timeout=10)
@@ -421,9 +426,82 @@ def _launch(log_path: str, upstream: Optional[str], timeout: float) -> int:
   return 0
 
 
+@contextlib.contextmanager
+def _forward_sigterm(process: subprocess.Popen) -> Generator[None]:
+  def forward(_number, _frame) -> None:
+    if process.poll() is None:
+      process.terminate()
+
+  previous = signal.signal(signal.SIGTERM, forward)
+  try:
+    yield
+  finally:
+    signal.signal(signal.SIGTERM, previous)
+
+
+@contextlib.contextmanager
+def _command_proxy(upstream: str, log_path: Optional[str]) -> Generator[Optional[Address]]:
+  with contextlib.ExitStack() as resources:
+    scratch = Path(resources.enter_context(tempfile.TemporaryDirectory(prefix='broxy-run-')))
+    address_file = scratch / 'address'
+    if log_path is None:
+      output = sys.stderr
+    else:
+      try:
+        output = resources.enter_context(open(log_path, 'a'))
+      except OSError as error:
+        log.error('cannot open broxy log: %s', error)
+        yield None
+        return
+    try:
+      process = spawn.popen(
+        ['broxy', 'serve', '--upstream', upstream, '--address-file', str(address_file)],
+        stdout=output,
+        stderr=subprocess.STDOUT,
+      )
+    except OSError as error:
+      log.error('cannot start broxy: %s', error)
+      yield None
+      return
+    address = _await_address(address_file, process, DEFAULT_AWAIT_TIMEOUT)
+    if address is None or _await_ready(address, DEFAULT_AWAIT_TIMEOUT) != 0:
+      _stop_launched_process(process)
+      yield None
+      return
+    try:
+      yield address
+    finally:
+      _stop_launched_process(process)
+
+
+def _run(argv: list[str], log_path: Optional[str]) -> int:
+  command = argv[1:] if argv[:1] == ['--'] else argv
+  upstream = os.environ.get(BROKER_UPSTREAM)
+  if upstream is None:
+    log.error('no upstream channel: set %s', BROKER_UPSTREAM)
+    return 1
+  if len(command) == 0:
+    log.error('no command: pass one after --')
+    return 1
+  with _command_proxy(upstream, log_path) as address:
+    if address is None:
+      return 1
+    environment = dict(os.environ)
+    environment.pop(BROKER_UPSTREAM, None)
+    environment[BROKER_CHANNEL] = address
+    try:
+      process = subprocess.Popen(command, env=environment)
+    except OSError as error:
+      log.error('cannot start command: %s', error)
+      return 1
+    with _forward_sigterm(process):
+      status = process.wait()
+  return status if status >= 0 else 128 - status
+
+
 def main(argv: list[str]) -> Optional[int]:
   parser = base_args.Parser(
-    description='peer-side broker proxy: one upstream channel, a local port for the session swarm'
+    description="peer-side broker proxy: one upstream channel, a local port for the peer's clients"
   )
   subparsers = parser.add_subparsers(dest='command')
 
@@ -443,6 +521,15 @@ def main(argv: list[str]) -> Optional[int]:
     help='seconds to wait for readiness (default: %(default)s)',
   )
   launch_parser.set_handler(_launch)
+
+  run_parser = subparsers.add_parser(
+    'run', help=f'run a command through a proxy attached to ${BROKER_UPSTREAM}'
+  )
+  run_parser.add_argument('--log-file', dest='log_path', help='proxy log file (default: stderr)')
+  run_parser.add_argument(
+    'argv', nargs=base_args.REMAINDER, metavar='COMMAND', help='command and arguments after --'
+  )
+  run_parser.set_handler(_run)
 
   serve_parser = subparsers.add_parser(
     'serve',
