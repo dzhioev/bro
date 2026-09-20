@@ -34,7 +34,8 @@ from bro.workspace.paths import (
   ride_trails_dir,
   workspace_dir,
 )
-from ride import pending_summon
+from ride import pending_launch
+from ride.bro_worker import PendingBro
 from ride.do_ride import (
   CONTAINER_INSTALL_DIRECTORY,
   INSTALL_DIRECTORY_ENV,
@@ -281,9 +282,7 @@ def _print_resume_hint(spec: SessionSpec, workspace: Workspace) -> None:
   print(f'  ride resume {workspace.name}')
 
 
-def _summoned_env(
-  summoned: pending_summon.PendingSummon, spec: SessionSpec, address: str
-) -> dict[str, str]:
+def _summoned_env(summoned: PendingBro, spec: SessionSpec, address: str) -> dict[str, str]:
   """the env that makes a launch the manual summon child the token names: the
   summoner's channel, the quest the child answers (its token), and the
   summoned-child facts."""
@@ -583,7 +582,7 @@ def _launch_session(
   human_env: dict[str, str],
   runtime_bundle: RuntimeBundle,
   container_runtime: ContainerRuntimeResolver,
-  summoned: Optional[pending_summon.PendingSummon] = None,
+  summoned: Optional[PendingBro] = None,
 ) -> int:
   harness = get_harness(spec.harness)
   if workspace.isolation is Isolation.BOXED and find_container_id(workspace.tree) is not None:
@@ -625,9 +624,9 @@ def _launch_session(
           launch,
           workspace,
           credential_scope=launch_scope.scoped,
-          claim=lambda: pending_summon.claim(summoned.token, workspace=spec.name),
+          claim=lambda: pending_launch.claim(summoned.token, workspace=spec.name),
         )
-      except pending_summon.UnknownToken as error:
+      except pending_launch.UnknownToken as error:
         log.error('%s', error)
         return 1
     return run_started_party(
@@ -662,7 +661,7 @@ def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
 def start_session(
   spec: SessionSpec,
   repository: Optional[Repository] = None,
-  summoned: Optional[pending_summon.PendingSummon] = None,
+  summoned: Optional[PendingBro] = None,
 ) -> int:
   try:
     if spec.runtime_bundle is not None:
@@ -683,7 +682,7 @@ def _start_session(
   spec: SessionSpec,
   runtime_bundle: RuntimeBundle,
   repository: Optional[Repository] = None,
-  summoned: Optional[pending_summon.PendingSummon] = None,
+  summoned: Optional[PendingBro] = None,
 ) -> int:
   harness = get_harness(spec.harness)
   os.environ['RIDE_COMMAND'] = spec.ride_command
@@ -774,9 +773,9 @@ def _start_session(
             log.error('cannot resolve the summon into ref: %s', summoned.into)
             return 1
         elif repository is not None:
-          base_ref = resolve_head(repository.git_dir, Path(summoned.parent_workspace))
+          base_ref = resolve_head(repository.git_dir, Path(summoned.owner_tree))
           if base_ref is None:
-            log.error("cannot read the summoner's HEAD at %s", summoned.parent_workspace)
+            log.error("cannot read the summoner's HEAD at %s", summoned.owner_tree)
             return 1
       if repository is not None and base_ref is None:
         base_ref = rev_parse_commit(repository.git_dir, 'HEAD')

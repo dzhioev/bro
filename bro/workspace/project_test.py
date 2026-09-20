@@ -122,14 +122,14 @@ class TestProjectConfig:
     (project_dir / 'pyproject.toml').write_text(
       '[tool.bro]\n'
       'default = "foo"\n'
-      'grant = ["github", "@reviewer", ":party.join"]\n'
-      'revoke = ["openai", ":party.start.boxed"]\n'
+      'grant = ["github", "@reviewer", ":bro.party.join"]\n'
+      'revoke = ["openai", ":bro.party.start.boxed"]\n'
     )
 
     config = project_config()
 
-    assert config.grant == ('github', '@reviewer', ':party.join')
-    assert config.revoke == ('openai', ':party.start.boxed')
+    assert config.grant == ('github', '@reviewer', ':bro.party.join')
+    assert config.revoke == ('openai', ':bro.party.start.boxed')
 
   def test_project_grant_refuses_a_host_specific_credential_instance(self, project_dir):
     (project_dir / 'pyproject.toml').write_text(
@@ -139,11 +139,11 @@ class TestProjectConfig:
     with pytest.raises(ValueError, match='host-specific'):
       project_config()
 
-  @pytest.mark.parametrize('value', ['":party"', '":party.start"', '":unknown"'])
+  @pytest.mark.parametrize('value', ['":party"', '":party..start"', '":Party.start"'])
   def test_project_scope_requires_a_permit_leaf(self, project_dir, value):
     (project_dir / 'pyproject.toml').write_text(f'[tool.bro]\ndefault = "foo"\ngrant = [{value}]\n')
 
-    with pytest.raises(ValueError, match='expected one of'):
+    with pytest.raises(ValueError, match='<type>.<leaf>'):
       project_config()
 
   def test_unknown_key_raises(self, project_dir):

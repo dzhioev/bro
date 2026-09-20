@@ -1,5 +1,6 @@
 """The unified launch-scope grant and revoke grammar."""
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -7,16 +8,22 @@ from bro.base import credentials
 
 BRO_MARK = '@'
 PERMIT_MARK = ':'
-PARTY_START_BOXED = 'party.start.boxed'
-PARTY_START_UNBOXED = 'party.start.unboxed'
-PARTY_JOIN = 'party.join'
-PARTY_PERMIT_NAMES = (PARTY_START_BOXED, PARTY_START_UNBOXED, PARTY_JOIN)
-PARTY_PERMITS = frozenset(PARTY_PERMIT_NAMES)
-DEFAULT_PERMITS = frozenset({PARTY_START_BOXED})
+_PERMIT_SEGMENT = re.compile(r'[a-z][a-z0-9-]*')
 
 
 def permit_choices() -> str:
-  return ', '.join(f'{PERMIT_MARK}{name}' for name in PARTY_PERMIT_NAMES)
+  return ':<type>.<leaf>'
+
+
+def permit_name(value: str) -> str:
+  """Validate one unmarked worker permit and return it."""
+  segments = value.split('.') if isinstance(value, str) else []
+  if len(segments) < 2 or any(_PERMIT_SEGMENT.fullmatch(segment) is None for segment in segments):
+    raise ValueError(
+      f'unknown permit {PERMIT_MARK + str(value)!r}; expected {permit_choices()} with '
+      'dot-separated lowercase segments'
+    )
+  return value
 
 
 @dataclass(frozen=True)
@@ -39,10 +46,7 @@ def split_scope_overrides(values: Iterable[str]) -> tuple[list[str], list[str], 
         raise ValueError(f'malformed grant/revoke {value!r}: expected {BRO_MARK}<bro-name>')
       bro_names.append(name)
     elif value.startswith(PERMIT_MARK):
-      permit = value.removeprefix(PERMIT_MARK)
-      if permit not in PARTY_PERMITS:
-        raise ValueError(f'unknown permit {value!r}; expected one of {permit_choices()}')
-      permits.append(permit)
+      permits.append(permit_name(value.removeprefix(PERMIT_MARK)))
     else:
       credential_names.append(value)
   return credential_names, bro_names, permits

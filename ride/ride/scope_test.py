@@ -393,12 +393,12 @@ class TestHostConfigBroLayer:
 class TestUnifiedScopeGrammar:
   def test_split_has_credentials_bros_and_permits(self):
     assert ride.scope.split_scope_overrides(
-      ['github+work', '@reviewer', ':party.start.unboxed']
-    ) == (['github+work'], ['reviewer'], ['party.start.unboxed'])
+      ['github+work', '@reviewer', ':bro.party.start.unboxed']
+    ) == (['github+work'], ['reviewer'], ['bro.party.start.unboxed'])
 
-  @pytest.mark.parametrize('value', [':party', ':party.start', ':other'])
+  @pytest.mark.parametrize('value', [':party', ':party..start', ':Party.start', ':other'])
   def test_permits_are_leaf_only(self, value):
-    with pytest.raises(ValueError, match='expected one of'):
+    with pytest.raises(ValueError, match='<type>.<leaf>'):
       ride.scope.split_scope_overrides([value])
 
 
@@ -570,7 +570,7 @@ class TestPreflightScopedLaunch:
     # one unified grant list: the @names feed the summon allow-list, the plain
     # names already shaped the scope and are not reapplied
     with (
-      patch('ride.summon_control.summon_allow_list', return_value={'dev'}) as allow_list,
+      patch('ride.bro_worker.summon_allow_list', return_value={'dev'}) as allow_list,
       patch(
         'ride.scope.credentials.build_scoped_store',
         return_value=({'creds/x.cred': b'v'}, frozenset({'x'})),
@@ -582,7 +582,7 @@ class TestPreflightScopedLaunch:
         revoke=['@bro'],
       )
     assert may_summon == {'dev'}
-    assert permits == {'party.start.boxed'}
+    assert permits == {'bro.party.start.boxed'}
     assert store == {'creds/x.cred': b'v'}
     assert store.kinds == frozenset({'x'})
     assert allow_list.call_args == (
@@ -599,7 +599,7 @@ class TestPreflightScopedLaunch:
   def test_bad_summon_target_raises_launch_scope_error(self):
     with (
       patch(
-        'ride.summon_control.summon_allow_list',
+        'ride.bro_worker.summon_allow_list',
         side_effect=ValueError('unknown summon target(s)'),
       ),
       patch('ride.scope.credentials.build_scoped_store', return_value=({}, frozenset())),
@@ -611,7 +611,7 @@ class TestPreflightScopedLaunch:
     from bro.base import credentials
 
     with (
-      patch('ride.summon_control.summon_allow_list', return_value=set()),
+      patch('ride.bro_worker.summon_allow_list', return_value=set()),
       patch(
         'ride.scope.credentials.build_scoped_store',
         side_effect=credentials.SecretNotFound('github'),
@@ -624,21 +624,23 @@ class TestPreflightScopedLaunch:
 class TestPermitLayers:
   def test_project_host_and_launch_layers_apply_in_order(self, tmp_path, monkeypatch):
     (tmp_path / 'pyproject.toml').write_text(
-      '[tool.bro]\ndefault = "bro-dev"\ngrant = [":party.join"]\nrevoke = [":party.start.boxed"]\n'
+      '[tool.bro]\ndefault = "bro-dev"\ngrant = [":bro.party.join"]\nrevoke = [":bro.party.start.boxed"]\n'
     )
     config = tmp_path / 'bro.json'
     config.write_text(
       json.dumps(
         {
-          'defaults': {'grant': [':party.start.boxed']},
-          'projects': {str(tmp_path): {'bros': {'bro-dev': {'grant': [':party.start.unboxed']}}}},
+          'defaults': {'grant': [':bro.party.start.boxed']},
+          'projects': {
+            str(tmp_path): {'bros': {'bro-dev': {'grant': [':bro.party.start.unboxed']}}}
+          },
         }
       )
     )
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
 
     with (
-      patch('ride.summon_control.summon_allow_list', return_value=set()),
+      patch('ride.bro_worker.summon_allow_list', return_value=set()),
       patch('ride.scope.credentials.build_scoped_store', return_value=({}, frozenset())),
     ):
       _, permits, _ = ride.scope.preflight_scoped_launch(
@@ -646,19 +648,44 @@ class TestPermitLayers:
         'bro-dev',
         attachment=str(tmp_path),
         grant=[],
-        revoke=[':party.start.boxed'],
+        revoke=[':bro.party.start.boxed'],
       )
 
-    assert permits == {'party.join', 'party.start.unboxed'}
+    assert permits == {'bro.party.join', 'bro.party.start.unboxed'}
 
   def test_launch_permit_overrides_are_strict(self):
     with pytest.raises(ride.scope.LaunchScopeError, match='already in the permit set'):
       ride.scope.preflight_scoped_launch(
         ride.scope.ScopedSecrets(set(), set()),
         'bro-dev',
-        grant=[':party.start.boxed'],
+        grant=[':bro.party.start.boxed'],
         revoke=[],
       )
+
+  def test_unknown_type_lists_the_installed_types(self):
+    with pytest.raises(ValueError, match="unknown worker type 'missing'.*installed types: bro"):
+      ride.scope.effective_permits((), grant=[':missing.use'], revoke=[], strict=True)
+
+  def test_undeclared_leaf_is_refused(self):
+    with pytest.raises(ValueError, match='does not declare permit.*:bro.unknown'):
+      ride.scope.effective_permits((), grant=[':bro.unknown'], revoke=[], strict=True)
+
+  def test_existence_check_loads_only_named_types_and_skips_the_seed(self, monkeypatch):
+    from bro import worker_types
+
+    loaded = []
+
+    def installed_type(name):
+      loaded.append(name)
+      return type('Type', (), {'permits': frozenset({'use'})})
+
+    monkeypatch.setattr(worker_types, 'installed_type', installed_type)
+    assert ride.scope.effective_permits((), grant=[], revoke=[], strict=False) == {
+      'bro.party.start.boxed'
+    }
+    assert loaded == []
+    ride.scope.effective_permits((), grant=[':alpha.use', ':beta.use'], revoke=[], strict=False)
+    assert loaded == ['alpha', 'beta']
 
 
 class TestLaunchViewStore:

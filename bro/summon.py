@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import bro.base.args as base_args
 from bro import quest
 from bro.base import log
-from bro.base.scope import PARTY_PERMITS, permit_choices
+from bro.base.scope import permit_name
 from bro.launch.llm_flags import (
   EFFORT_HELP,
   FAST_HELP,
@@ -37,7 +37,7 @@ from bro.launch.llm_flags import (
 )
 from bro.llm.providers import LLMSelectionError
 from bro.mcp import HOLDS
-from bro.quest import SUMMON, QuestError
+from bro.quest import BRO, LAUNCH, QuestError
 
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message
@@ -53,7 +53,21 @@ SUMMONED_ENV = 'RIDE_SUMMONED'
 MAY_SUMMON_ENV = 'RIDE_MAY_SUMMON'
 PERMITS_ENV = 'RIDE_PERMITS'
 PARTY_MEMBER_ENV = 'RIDE_PARTY_MEMBER'
+PARTY_START_BOXED_LEAF = 'party.start.boxed'
+PARTY_START_UNBOXED_LEAF = 'party.start.unboxed'
+PARTY_JOIN_LEAF = 'party.join'
+PARTY_PERMIT_LEAVES = frozenset({PARTY_START_BOXED_LEAF, PARTY_START_UNBOXED_LEAF, PARTY_JOIN_LEAF})
+PARTY_START_BOXED = f'{BRO}.{PARTY_START_BOXED_LEAF}'
+PARTY_START_UNBOXED = f'{BRO}.{PARTY_START_UNBOXED_LEAF}'
+PARTY_JOIN = f'{BRO}.{PARTY_JOIN_LEAF}'
+PARTY_PERMITS = frozenset(f'{BRO}.{leaf}' for leaf in PARTY_PERMIT_LEAVES)
 RUNTIME_ENV = 'RIDE_RUNTIME'
+
+
+def party_permit_choices() -> str:
+  return ', '.join(f':{permit}' for permit in sorted(PARTY_PERMITS))
+
+
 # request-lifecycle bound for a summoned child — sized so the flagship deploy
 # workload survives the default; the substrate's generic 600s default is untouched
 DEFAULT_TIMEOUT = 1800.0
@@ -70,7 +84,7 @@ HARNESS_HELP = (
 )
 GRANT_HELP = (
   'add a credential (KIND or KIND+INSTANCE), summonable bro (@BRO), or party permit '
-  f"({permit_choices()}) to the child's scope (repeatable)"
+  f"({party_permit_choices()}) to the child's scope (repeatable)"
 )
 REVOKE_HELP = (
   "remove a credential kind (KIND), summonable bro (@BRO), or party permit from the child's "
@@ -106,9 +120,8 @@ def encode_may_summon(targets: Collection[str]) -> str:
 def encode_permits(permits: Collection[str]) -> str:
   """An effective permit set as the `PERMITS_ENV` value."""
   values = set(permits)
-  unknown = sorted(values - PARTY_PERMITS)
-  if unknown:
-    raise ValueError(f'unknown permit(s): {", ".join(unknown)}')
+  for value in values:
+    permit_name(value)
   return ','.join(sorted(values))
 
 
@@ -182,9 +195,11 @@ def permits() -> Optional[tuple[str, ...]]:
   if raw is None:
     return None
   values = tuple(name for name in raw.split(',') if name)
-  unknown = sorted(set(values) - PARTY_PERMITS)
-  if unknown:
-    raise ValueError(f'{PERMITS_ENV} carries unknown permit(s): {", ".join(unknown)}')
+  for value in values:
+    try:
+      permit_name(value)
+    except ValueError as error:
+      raise ValueError(f'{PERMITS_ENV} carries an invalid permit: {error}') from error
   return values
 
 
@@ -290,7 +305,7 @@ def _send_summon(client: 'Client', payload: dict[str, Any]) -> 'Message':
   from bro.broker.brotocol import ProtocolError
 
   try:
-    return client.send(SUMMON, payload)
+    return client.send(LAUNCH, {'type': BRO, **payload})
   except ProtocolError:
     raise QuestError('prompt too large; share an artifact instead') from None
 
@@ -622,21 +637,21 @@ def main(argv: list[str]) -> Optional[int]:
     dest='party',
     action='store_const',
     const='join',
-    help='join the summoner’s party (requires :party.join)',
+    help='join the summoner’s party (requires :bro.party.join)',
   )
   placement.add_argument(
     '--boxed',
     dest='isolation',
     action='store_const',
     const='boxed',
-    help='start a boxed party (requires :party.start.boxed)',
+    help='start a boxed party (requires :bro.party.start.boxed)',
   )
   placement.add_argument(
     '--unboxed',
     dest='isolation',
     action='store_const',
     const='unboxed',
-    help='start an unboxed party (requires :party.start.unboxed)',
+    help='start an unboxed party (requires :bro.party.start.unboxed)',
   )
   parser.add_argument('--manual', action='store_true', help=MANUAL_HELP)
   parser.add_argument('--detach', action='store_true', help=DETACH_HELP)

@@ -221,8 +221,8 @@ class TestRenderBanner:
 
   def test_llm_lists_the_party_permits(self):
     assert (
-      'permits: :party.join, :party.start.unboxed'
-      in _facts(permits=('party.join', 'party.start.unboxed')).render_llm()
+      'permits: :bro.party.join, :bro.party.start.unboxed'
+      in _facts(permits=('bro.party.join', 'bro.party.start.unboxed')).render_llm()
     )
 
   def test_llm_and_visual_state_joined_party_membership(self):

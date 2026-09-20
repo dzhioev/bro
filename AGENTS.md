@@ -300,14 +300,16 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   merged output drains into a memory-bounded temporary spool, head and tail consumers share one cursor, and the exit is consumed once;
   an inbox wait only observes the set of jobs with news and the framework notices posted to it, while its drain renders and consumes their bounded notification slices.
 - `shell.py` (`bro-shell-dir`) — validates the packaged shell helpers and prints their installed directory for shell consumers
-- `summon.py` (`summon`) — the summon request contract (the manual variant included), the facts a summoned run reads off its environment, and the summoning surfaces: blocking, detached, and manual;
-  host enforcement lives in `ride/ride/summon_control.py`
+- `summon.py` (`summon`) — the bro wrapper over `launch {type: bro, …}` (the manual variant included), the facts a summoned run reads off its environment, and the summoning surfaces: blocking, detached, and manual;
+  common launch enforcement lives in `ride/ride/launch_control.py`, and bro authorization in `ride/ride/bro_worker.py`
 - `quest.py` (`quest`) — every peer-side surface over the quest a summon opens, by its id or `self` for the session's own:
   the outcome and conversation reads, say and ask, the caller-scoped listing, the ordered event watch, and cancel
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint` / `artifact.get` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session command;
   the host store and enforcement live in `ride/ride/artifacts.py`
-- `kinds.py` — the contributed broker-kind contract:
-  the `KindContext` a `bro.broker_kinds` factory receives, the artifact-resolver port and bounded credential scope it carries, and the workspace-relative path validation shared by kinds that take tree paths
+- `worker_types.py` — the core contract for a worker type, its launch request and run shapes, peer descriptions, host ports, registry, and shared artifact/path helpers;
+  installed types register through `bro.worker_types`, and ride contributes the `bro` type
+- `kinds.py` — the `KindContext` contributed `bro.broker_kinds` factories receive;
+  the benchmark is the remaining contributor
 - `run_lifecycle.py` — `RunLifecycle`, the worker-process emitter over `bro.broker.client.Client`:
   it undertakes the broker mission named in `BROKER_MISSION`, emits the run's set-once `trail` mark after recording opens, and sends the closing result.
   `Runner.run()` builds one through `_make_channel()`;
@@ -322,7 +324,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   It owns the shared spells inherited by the concrete-Bro family (`bros/bro/spells/`):
   `spell::ask` — the summon UX:
   phrasing → target + self-contained prompt, least-authority talk rights, client pick (the `summon` and `quest` CLIs vs the `summon` and `quest_*` service tools), foreground-vs-background, the question/reply/check loop, and failure relay;
-  protocol and enforcement live in `bro/summon.py`, `bro/quest.py`, and `ride/ride/summon_control.py`, not in the spell
+  protocol and enforcement live in `bro/summon.py`, `bro/quest.py`, `ride/ride/launch_control.py`, and `ride/ride/bro_worker.py`, not in the spell
   — and `spell::reflect` — the improving half of the loop over what a bro runs under:
   it reads recorded runs against the definition that drove them (the prompt texts, the bro's declaration, the launch scope) and writes its next version, each edit fixed in place or filed as a task.
   Development personas ship from `bro-dev`;
@@ -380,7 +382,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   for a run that may summon, or a summoned run whose talk lets its summoner say or question or lets the run itself ask, the fold admits it through `Monitor` over any block or narrowing of that tool.
   A persona names another product's tool surface when it withholds or narrows one, so the names live here rather than in each persona that forgoes them
 - `registry.py` — process-wide registry of bro classes:
-  `register(cls)`, `get_class(name)`, `create_bro(name, llm_spec=None)`, `list_classes()`, `known_names()` (every resolvable name, read without importing any bro module — what `ride/ride/summon_control.py` validates summon targets against).
+  `register(cls)`, `get_class(name)`, `create_bro(name, llm_spec=None)`, `list_classes()`, `known_names()` (every resolvable name, read without importing any bro module — what `ride/ride/bro_worker.py` validates summon targets against).
   A name is 1 to `MAX_NAME_LENGTH` characters.
   `create_bro` returns a fresh instance every call.
   `lineage(name)` is the names a bro answers to — its own plus every registered bro on its MRO, which is what `#may_summon`'s is-a membership tests against.
@@ -411,8 +413,9 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
 
 Installed distributions extend the framework through `bro` (personas), `bro.credential_sources` (minting source types), `bro.credentials` (registry entries), `bro.brog.backends` (task-tracker backends), `bro.toolsets` (standalone MCP toolsets;
 each entry targets its module's `toolset` object), `bro.mcp.targets` (assembled target prefixes;
-each resolver accepts the value after `<prefix>:` and returns live MCP servers), `bro.session_commands` (console scripts exposed on managed-session PATH), and `bro.broker_kinds` (request kinds served by every managed session's host broker;
-each entry names the kind and targets a factory `(context: bro.kinds.KindContext) -> RequestHandler` — see `ride/ride/kinds.py`).
+each resolver accepts the value after `<prefix>:` and returns live MCP servers), `bro.session_commands` (console scripts exposed on managed-session PATH),
+`bro.worker_types` (worker classes served through the common `launch` kind), and `bro.broker_kinds` (the benchmark's contributed request kind);
+each worker entry's name matches its `bro.worker_types.WorkerType.name`, while a broker-kind entry names the kind and targets a factory `(context: bro.kinds.KindContext) -> RequestHandler`.
 Declarations are installation metadata:
 run `uv sync` after adding or removing an entry point;
 editing an already-declared target module needs no reinstall.
