@@ -181,8 +181,8 @@ class TrailsServerStack(Stack):
     task_definition = ecs.FargateTaskDefinition(
       self,
       'TrailsTaskDef',
-      cpu=256,
-      memory_limit_mib=512,
+      cpu=2048,
+      memory_limit_mib=4096,
       execution_role=execution_role,
       task_role=task_role,
     )
