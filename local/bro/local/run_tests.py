@@ -235,7 +235,7 @@ PYTEST_FILES = [
   'bro/broker/spawn_test.py',
   'bro/broker/job_test.py',
   'bro/broker/runtime_test.py',
-  'bro/broker/worker_test.py',
+  'bro/broker/supervisor_test.py',
   'bro/broker/journal_test.py',
   'bro/broker/dispatcher_test.py',
   'bro/broker/client_test.py',

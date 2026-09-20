@@ -9,7 +9,7 @@ workspace after a clean exit when the workspace records itself throwaway — a
 failed or killed child's stays on disk for inspection. The neutral launch owns
 the complete docker inputs, including the explicit env snapshot.
 
-`ProcessSpawner` adds the provisioned channel's loopback address and quest id
+`ProcessSpawner` adds the provisioned channel's loopback address and mission id
 to the launch's explicit environment.
 An interactive root inherits stdio and gets signal and host-log handling;
 a headless child owns a process group, captures bounded merged output, requires
@@ -22,9 +22,6 @@ inside, so spawn completes only once the member's process record (written ahead
 of the session command) or the client's exit is seen, and a kill signals
 through the container after checking the recorded start time against its
 `/proc` — a late kill finds no target and never a reused pid.
-
-`CompositeSpawner` dispatches on the concrete `LaunchSpec` type, so a broker
-root of either mode can spawn children of any registered kind.
 """
 
 import asyncio
@@ -119,13 +116,13 @@ class ExecLaunchSpec(LaunchSpec):
 
 
 def _broker_launch(
-  launch: DockerLaunch, channel: Provisioned, quest: str, talk: Talk
+  launch: DockerLaunch, channel: Provisioned, mission: str, talk: Talk
 ) -> DockerLaunch:
-  """Add the provisioned broker upstream and the peer's quest id to a neutral container launch."""
+  """Add the provisioned broker upstream and the peer's mission id to a neutral container launch."""
   env = dict(launch.env)
   env.pop(BROKER_CHANNEL, None)
   env[BROKER_UPSTREAM] = channel.host_endpoint.address(CONTAINER_BROKER_HOST)
-  env[BROKER_MISSION] = quest
+  env[BROKER_MISSION] = mission
   env[BROKER_TALK] = encode_talk(talk)
   return replace(launch, env=env)
 
@@ -692,13 +689,13 @@ class ExecSpawner(Spawner):
     self._party_members = party_members if party_members is not None else PartyMembers()
 
   async def spawn(
-    self, launch: LaunchSpec, channel: Provisioned, quest: str, talk: Talk
+    self, launch: LaunchSpec, channel: Provisioned, mission: str, talk: Talk
   ) -> ChildHandle:
     assert isinstance(launch, ExecLaunchSpec)
     env = dict(launch.launch.env)
     env.pop(BROKER_CHANNEL, None)
     env[BROKER_UPSTREAM] = channel.host_endpoint.address(CONTAINER_BROKER_HOST)
-    env[BROKER_MISSION] = quest
+    env[BROKER_MISSION] = mission
     env[BROKER_TALK] = encode_talk(talk)
     member_exec = replace(launch.launch, env=env)
     argv = await asyncio.to_thread(prepare_member_exec, member_exec)
@@ -745,9 +742,9 @@ class _HeadlessRoot(ChildHandle):
 
 
 def _prepare_docker_spawn(
-  launch: DockerLaunchSpec, channel: Provisioned, quest: str, talk: Talk
+  launch: DockerLaunchSpec, channel: Provisioned, mission: str, talk: Talk
 ) -> tuple[str, Optional[Workspace]]:
-  docker_launch = _broker_launch(launch.launch, channel, quest, talk)
+  docker_launch = _broker_launch(launch.launch, channel, mission, talk)
   workspace = Workspace.ensure(docker_launch.name, docker_launch.repo, Isolation.BOXED)
   container_id = prepare_container(docker_launch)
   if not workspace.metadata.throwaway:
@@ -762,11 +759,11 @@ class DockerSpawner(Spawner):
     self._party_members = party_members if party_members is not None else PartyMembers()
 
   async def spawn(
-    self, launch: LaunchSpec, channel: Provisioned, quest: str, talk: Talk
+    self, launch: LaunchSpec, channel: Provisioned, mission: str, talk: Talk
   ) -> ChildHandle:
     assert isinstance(launch, DockerLaunchSpec)
     container_id, workspace = await asyncio.to_thread(
-      _prepare_docker_spawn, launch, channel, quest, talk
+      _prepare_docker_spawn, launch, channel, mission, talk
     )
     if launch.launch.tty:
       process = await asyncio.create_subprocess_exec(
@@ -819,13 +816,13 @@ class ProcessSpawner(Spawner):
     self._party_members = party_members if party_members is not None else PartyMembers()
 
   async def spawn(
-    self, launch: LaunchSpec, channel: Provisioned, quest: str, talk: Talk
+    self, launch: LaunchSpec, channel: Provisioned, mission: str, talk: Talk
   ) -> ChildHandle:
     assert isinstance(launch, ProcessLaunchSpec)
     env = dict(launch.env)
     env.pop(BROKER_CHANNEL, None)
     env[BROKER_UPSTREAM] = channel.host_endpoint.address(LOCAL_HOST)
-    env[BROKER_MISSION] = quest
+    env[BROKER_MISSION] = mission
     env[BROKER_TALK] = encode_talk(talk)
     cleanup_directory = None if launch.cleanup_directory is None else Path(launch.cleanup_directory)
     records_directory = None if launch.records_directory is None else Path(launch.records_directory)
@@ -868,22 +865,3 @@ class ProcessSpawner(Spawner):
               raise ValueError(f'party {launch.party_workspace!r} ended before the member started')
           return child
         return _HeadlessProcess(process)
-
-
-class CompositeSpawner(Spawner):
-  """dispatch to the spawner registered for the concrete `LaunchSpec` type.
-
-  the broker holds one spawner for the root and every spawned child alike, so a
-  single-mode spawner would confine children to the root's launch mode; the
-  composite lets an unboxed root (`ProcessLaunchSpec`) spawn docker children."""
-
-  def __init__(self, spawners: dict[type[LaunchSpec], Spawner]):
-    self._spawners = spawners
-
-  async def spawn(
-    self, launch: LaunchSpec, channel: Provisioned, quest: str, talk: Talk
-  ) -> ChildHandle:
-    spawner = self._spawners.get(type(launch))
-    if spawner is None:
-      raise ValueError(f'no spawner registered for {type(launch).__name__}')
-    return await spawner.spawn(launch, channel, quest, talk)

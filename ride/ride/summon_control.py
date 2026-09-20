@@ -1,7 +1,7 @@
 """Host authorization and journal projection for the ``summon`` kind.
 
 ``SummonControl.handle`` validates and authorizes each request against the
-summoning peer's recorded identity, placement, and party permits, then binds a spawned or expected Worker
+summoning peer's recorded identity, placement, and party permits, then binds a spawned or expected supervisor
 through the Dispatcher primitives. Deterministic refusals use ``Dispatcher.deny``
 so answer and journal record are one operation.
 
@@ -48,6 +48,7 @@ if TYPE_CHECKING:
   from bro.broker.dispatcher import Dispatcher
   from bro.broker.journal import Event, Journal, Record
   from bro.broker.runtime import Peer
+  from bro.broker.spawn import Spawner
   from bro.broker.transport import Provisioned
   from ride.artifacts import ArtifactStore
   from ride.runtime_bundle import RuntimeBundle
@@ -352,6 +353,7 @@ class SummonControl:
     depth_cap: int,
     summon_harness: str,
     runtime_bundle: 'RuntimeBundle',
+    spawner: 'Spawner',
     session_env: Mapping[str, str] = MappingProxyType({}),
   ):
     self._workspace = workspace
@@ -366,6 +368,7 @@ class SummonControl:
       raise ValueError(f'summon harness must be one of {", ".join(HARNESS_NAMES)}')
     self._summon_harness = summon_harness
     self._runtime_bundle = runtime_bundle
+    self._spawner = spawner
     self._session_env = dict(session_env)
     self._audit_attribution: dict[str, dict[str, str]] = {}
     self._audit_placements: dict[str, tuple[Literal['start', 'join'], Optional[Isolation]]] = {}
@@ -538,6 +541,7 @@ class SummonControl:
         isolation=isolation,
         env=dict(self._session_env),
       ),
+      self._spawner,
       peer,
       type='bro',
       talk=talk,
@@ -583,7 +587,7 @@ class SummonControl:
         ),
       )
 
-    context.expect(peer, type='bro', talk=talk, timeout=None, ready=_ready)
+    context.expect(peer, type='bro', talk=talk, ready=_ready)
 
   def _summoner(self, context: 'Dispatcher', peer: 'Peer') -> _Summoner:
     quest, fact = self._facts.resolve(context, peer)

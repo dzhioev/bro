@@ -10,11 +10,11 @@ import pytest
 from bro.broker import brotocol
 from bro.broker.job import CommandJob
 from bro.broker.runtime import Runtime
-from bro.broker.spawn import LaunchSpec
+from bro.broker.spawn import LaunchSpec, Spawner
+from bro.broker.supervisor import ExpectedSupervisor, JobSupervisor, SpawnedSupervisor, Supervisor
+from bro.broker.supervisor_test_helper import FakeScheduler
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
-from bro.broker.worker import ExpectedWorker, JobWorker, SpawnedWorker, Worker
-from bro.broker.worker_test_helper import FakeScheduler
 
 TIMEOUT = 5.0
 
@@ -48,8 +48,8 @@ class FakeRuntime:
     self.events = events
     return Provisioned('worker-peer', Endpoint(1234, 'token'))
 
-  async def launch(self, launch, provisioned, quest, talk):
-    self.launch_call = (launch, provisioned, quest)
+  async def spawn(self, launch, provisioned, mission, talk):
+    self.spawn_call = (launch, provisioned, mission)
     assert self.events is not None
     for message in self.launch_messages:
       self.events.on_message(message)
@@ -71,9 +71,9 @@ class GatedRuntime(FakeRuntime):
     self.release = asyncio.Event()
     self.launched = []
 
-  async def launch(self, launch, provisioned, quest, talk):
+  async def spawn(self, launch, provisioned, mission, talk):
     await self.release.wait()
-    self.launched.append(quest)
+    self.launched.append(mission)
     return self.handle
 
 
@@ -84,16 +84,16 @@ class Listener:
     self.messages = []
     self.deaths = []
 
-  def on_worker_bound(self, worker, peer):
-    self.bound.append(peer)
+  def on_bound(self, supervisor, worker):
+    self.bound.append(worker)
 
-  def on_worker_ready(self, worker):
-    self.ready.append(worker.quest)
+  def on_ready(self, supervisor):
+    self.ready.append(supervisor.mission)
 
-  def on_worker_message(self, worker, message, *, host_worker):
-    self.messages.append((message, host_worker))
+  def on_message(self, supervisor, message, *, from_supervisor):
+    self.messages.append((message, from_supervisor))
 
-  def on_worker_death(self, worker, report):
+  def on_death(self, supervisor, report):
     self.deaths.append(report)
 
 
@@ -108,32 +108,38 @@ async def _until(condition: Callable[[], bool]) -> None:
       await asyncio.sleep(0.01)
 
 
-def test_worker_passes_messages_for_other_quests_but_refuses_their_marks():
+def test_supervisor_passes_messages_for_other_missions_but_refuses_their_marks():
   listener = Listener()
-  worker = Worker(cast(Runtime, object()), listener, 'own-quest', timeout=None)
-  worker._mark_started()
-  routed = brotocol.message('child-quest', {'text': 'steer'})
+  supervisor = Supervisor(cast(Runtime, object()), listener, 'own-mission', timeout=None)
+  supervisor._mark_started()
+  routed = brotocol.message('child-mission', {'text': 'steer'})
 
-  worker.on_message(routed)
-  worker.on_message(brotocol.mark('child-quest', 'trail', trail_id='wrong'))
+  supervisor.on_message(routed)
+  supervisor.on_message(brotocol.mark('child-mission', 'trail', trail_id='wrong'))
 
   assert [message for message, _ in listener.messages] == [
-    brotocol.mark('own-quest', 'started'),
+    brotocol.mark('own-mission', 'started'),
     routed,
   ]
 
 
 @pytest.mark.asyncio
-async def test_spawned_worker_binds_before_launch_and_marks_started(tmp_path):
+async def test_spawned_supervisor_binds_before_launch_and_marks_started(tmp_path):
   runtime = FakeRuntime(tmp_path)
   listener = Listener()
-  worker = SpawnedWorker(
-    cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=10
+  supervisor = SpawnedSupervisor(
+    cast(Runtime, runtime),
+    listener,
+    'mission',
+    LaunchSpec(),
+    cast(Spawner, runtime),
+    talk=frozenset(),
+    timeout=10,
   )
-  worker.begin()
+  supervisor.begin()
   await _settle()
   assert listener.bound == ['worker-peer']
-  assert runtime.launch_call[2] == 'quest'
+  assert runtime.spawn_call[2] == 'mission'
   assert listener.messages[0][0].payload == {'transition': 'started'}
   runtime.handle.exit.set_result(0)
   await _settle()
@@ -143,17 +149,23 @@ async def test_spawned_worker_binds_before_launch_and_marks_started(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_spawned_worker_folds_started_before_messages_sent_during_launch(tmp_path):
+async def test_spawned_supervisor_folds_started_before_messages_sent_during_launch(tmp_path):
   runtime = FakeRuntime(tmp_path)
   runtime.launch_messages = [
-    brotocol.mark('quest', 'trail', trail_id='trail'),
-    brotocol.result('quest', 'ok'),
+    brotocol.mark('mission', 'trail', trail_id='trail'),
+    brotocol.result('mission', 'ok'),
   ]
   listener = Listener()
-  worker = SpawnedWorker(
-    cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=10
+  supervisor = SpawnedSupervisor(
+    cast(Runtime, runtime),
+    listener,
+    'mission',
+    LaunchSpec(),
+    cast(Spawner, runtime),
+    talk=frozenset(),
+    timeout=10,
   )
-  worker.begin()
+  supervisor.begin()
   await _settle()
   assert [message.payload for message, _ in listener.messages] == [
     {'transition': 'started'},
@@ -166,13 +178,19 @@ async def test_spawned_worker_folds_started_before_messages_sent_during_launch(t
 
 
 @pytest.mark.asyncio
-async def test_spawned_worker_drains_the_channel_before_reporting_exit(tmp_path):
+async def test_spawned_supervisor_drains_the_channel_before_reporting_exit(tmp_path):
   runtime = FakeRuntime(tmp_path)
   listener = Listener()
-  worker = SpawnedWorker(
-    cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=10
+  supervisor = SpawnedSupervisor(
+    cast(Runtime, runtime),
+    listener,
+    'mission',
+    LaunchSpec(),
+    cast(Spawner, runtime),
+    talk=frozenset(),
+    timeout=10,
   )
-  worker.begin()
+  supervisor.begin()
   await _settle()
   assert runtime.events is not None
   runtime.events.on_connect()
@@ -185,14 +203,20 @@ async def test_spawned_worker_drains_the_channel_before_reporting_exit(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_spawned_worker_warns_when_channel_drain_expires(tmp_path, monkeypatch, caplog):
-  monkeypatch.setattr('bro.broker.worker._DRAIN_TIMEOUT', 0)
+async def test_spawned_supervisor_warns_when_channel_drain_expires(tmp_path, monkeypatch, caplog):
+  monkeypatch.setattr('bro.broker.supervisor._DRAIN_TIMEOUT', 0)
   runtime = FakeRuntime(tmp_path)
   listener = Listener()
-  worker = SpawnedWorker(
-    cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=10
+  supervisor = SpawnedSupervisor(
+    cast(Runtime, runtime),
+    listener,
+    'mission',
+    LaunchSpec(),
+    cast(Spawner, runtime),
+    talk=frozenset(),
+    timeout=10,
   )
-  worker.begin()
+  supervisor.begin()
   await _settle()
   assert runtime.events is not None
   runtime.events.on_connect()
@@ -206,20 +230,21 @@ async def test_spawned_worker_warns_when_channel_drain_expires(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_started_replaces_the_launch_bound_with_the_quest_timeout(tmp_path):
+async def test_started_replaces_the_launch_bound_with_the_mission_timeout(tmp_path):
   runtime = FakeRuntime(tmp_path)
   schedule = FakeScheduler()
-  worker = SpawnedWorker(
+  supervisor = SpawnedSupervisor(
     cast(Runtime, runtime),
     Listener(),
-    'quest',
+    'mission',
     LaunchSpec(),
+    cast(Spawner, runtime),
     talk=frozenset(),
     timeout=10,
     launch_timeout=30,
     schedule=schedule,
   )
-  worker.begin()
+  supervisor.begin()
   assert [(timer.seconds, timer.cancelled) for timer in schedule.timers] == [(30, False)]
   await _settle()
   assert [(timer.seconds, timer.cancelled) for timer in schedule.timers] == [
@@ -236,43 +261,45 @@ async def test_launch_timeout_kills_a_handle_returned_after_cancellation(tmp_pat
   runtime = GatedRuntime(tmp_path)
   listener = Listener()
   schedule = FakeScheduler()
-  worker = SpawnedWorker(
+  supervisor = SpawnedSupervisor(
     cast(Runtime, runtime),
     listener,
-    'quest',
+    'mission',
     LaunchSpec(),
+    cast(Spawner, runtime),
     talk=frozenset(),
     timeout=10,
     schedule=schedule,
   )
-  worker.begin()
+  supervisor.begin()
   await _settle()
   (launch_deadline,) = schedule.timers
   launch_deadline.fire()
-  assert worker.ending
+  assert supervisor.ending
   assert runtime.launched == []
   runtime.release.set()
   await _until(lambda: listener.deaths != [])
-  assert runtime.launched == ['quest']
+  assert runtime.launched == ['mission']
   assert runtime.handle.killed
   assert listener.deaths[0].reason == 'timeout'
 
 
 @pytest.mark.asyncio
-async def test_spawned_worker_timeout_kills_the_process_and_reports_on_reap(tmp_path):
+async def test_spawned_supervisor_timeout_kills_the_process_and_reports_on_reap(tmp_path):
   runtime = FakeRuntime(tmp_path)
   listener = Listener()
   schedule = FakeScheduler()
-  worker = SpawnedWorker(
+  supervisor = SpawnedSupervisor(
     cast(Runtime, runtime),
     listener,
-    'quest',
+    'mission',
     LaunchSpec(),
+    cast(Spawner, runtime),
     talk=frozenset(),
     timeout=10,
     schedule=schedule,
   )
-  worker.begin()
+  supervisor.begin()
   await _settle()
   schedule.timers[-1].fire()
   await _until(lambda: listener.deaths != [])
@@ -281,15 +308,15 @@ async def test_spawned_worker_timeout_kills_the_process_and_reports_on_reap(tmp_
 
 
 @pytest.mark.asyncio
-async def test_expected_worker_defers_ready_then_marks_started_on_attach(tmp_path):
+async def test_expected_supervisor_defers_ready_then_marks_started_on_attach(tmp_path):
   runtime = FakeRuntime(tmp_path)
   listener = Listener()
   provisioned = []
-  worker = ExpectedWorker(cast(Runtime, runtime), listener, 'quest', provisioned.append)
-  worker.begin()
+  supervisor = ExpectedSupervisor(cast(Runtime, runtime), listener, 'mission', provisioned.append)
+  supervisor.begin()
   await _settle()
   assert provisioned[0].channel == 'worker-peer'
-  assert listener.ready == ['quest']
+  assert listener.ready == ['mission']
   assert listener.messages == []
   assert runtime.events is not None
   runtime.events.on_connect()
@@ -300,7 +327,7 @@ async def test_expected_worker_defers_ready_then_marks_started_on_attach(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_expected_worker_prepares_off_loop_before_ready(tmp_path):
+async def test_expected_supervisor_prepares_off_loop_before_ready(tmp_path):
   runtime = FakeRuntime(tmp_path)
   listener = Listener()
   preparing = threading.Event()
@@ -311,25 +338,27 @@ async def test_expected_worker_prepares_off_loop_before_ready(tmp_path):
     preparing.set()
     assert release.wait(5)
 
-  worker = ExpectedWorker(cast(Runtime, runtime), listener, 'quest', ready)
-  worker.begin()
+  supervisor = ExpectedSupervisor(cast(Runtime, runtime), listener, 'mission', ready)
+  supervisor.begin()
   await _until(preparing.is_set)
   assert listener.ready == []
   await asyncio.sleep(0)
   release.set()
   await _until(lambda: listener.ready != [])
-  assert listener.ready == ['quest']
-  await worker.stop()
+  assert listener.ready == ['mission']
+  await supervisor.stop()
 
 
 @pytest.mark.asyncio
-async def test_expected_worker_kill_closes_only_its_host_channel(tmp_path):
+async def test_expected_supervisor_kill_closes_only_its_host_channel(tmp_path):
   runtime = FakeRuntime(tmp_path)
   listener = Listener()
-  worker = ExpectedWorker(cast(Runtime, runtime), listener, 'quest', lambda provisioned: None)
-  worker.begin()
+  supervisor = ExpectedSupervisor(
+    cast(Runtime, runtime), listener, 'mission', lambda provisioned: None
+  )
+  supervisor.begin()
   await _settle()
-  await worker.stop()
+  await supervisor.stop()
   assert runtime.closed == ['worker-peer']
   assert not runtime.handle.killed
 
@@ -372,40 +401,41 @@ async def test_job_output_open_failure_is_terminal(tmp_path):
 
   runtime = FakeRuntime(tmp_path)
   listener = Listener()
-  worker = JobWorker(
+  supervisor = JobSupervisor(
     cast(Runtime, runtime),
     listener,
-    'quest',
+    'mission',
     CommandJob(('true',), {}),
     RaisingOutput(),
     None,
     'requester',
     timeout=10,
   )
-  worker.begin()
+  supervisor.begin()
   await _settle()
   assert listener.deaths[0].reason == 'output'
   assert listener.deaths[0].error == 'cannot open'
 
 
 @pytest.mark.asyncio
-async def test_job_worker_collects_clean_exit_as_success(tmp_path):
+async def test_job_supervisor_collects_clean_exit_as_success(tmp_path, monkeypatch):
   runtime = FakeRuntime(tmp_path)
+  monkeypatch.setattr('bro.broker.supervisor.launch_job', runtime.launch_job)
   listener = Listener()
   output = FakeOutput(tmp_path / 'run')
-  worker = JobWorker(
+  supervisor = JobSupervisor(
     cast(Runtime, runtime),
     listener,
-    'quest',
+    'mission',
     CommandJob(('true',), {}),
     output,
     'context',
     'requester',
     timeout=10,
   )
-  worker.begin()
+  supervisor.begin()
   await _settle()
-  assert listener.bound == ['job:quest']
+  assert listener.bound == ['job:mission']
   runtime.handle.exit.set_result(0)
   await _until(lambda: listener.deaths != [])
   result = listener.messages[-1][0]
@@ -414,25 +444,26 @@ async def test_job_worker_collects_clean_exit_as_success(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_job_collection_failure_emits_failed_output_and_keeps_the_run(tmp_path):
+async def test_job_collection_failure_emits_failed_output_and_keeps_the_run(tmp_path, monkeypatch):
   class RaisingOutput(FakeOutput):
     async def collect(self, directory, context, requester) -> dict:
       raise OSError('collect broke')
 
   runtime = FakeRuntime(tmp_path)
+  monkeypatch.setattr('bro.broker.supervisor.launch_job', runtime.launch_job)
   listener = Listener()
   output = RaisingOutput(tmp_path / 'run')
-  worker = JobWorker(
+  supervisor = JobSupervisor(
     cast(Runtime, runtime),
     listener,
-    'quest',
+    'mission',
     CommandJob(('true',), {}),
     output,
     None,
     'requester',
     timeout=1,
   )
-  worker.begin()
+  supervisor.begin()
   await _settle()
   runtime.handle.exit.set_result(0)
   await _until(lambda: listener.deaths != [])
@@ -443,21 +474,22 @@ async def test_job_collection_failure_emits_failed_output_and_keeps_the_run(tmp_
 
 
 @pytest.mark.asyncio
-async def test_job_worker_carries_collected_output_on_failure(tmp_path):
+async def test_job_supervisor_carries_collected_output_on_failure(tmp_path, monkeypatch):
   runtime = FakeRuntime(tmp_path)
+  monkeypatch.setattr('bro.broker.supervisor.launch_job', runtime.launch_job)
   listener = Listener()
   output = FakeOutput(tmp_path / 'run')
-  worker = JobWorker(
+  supervisor = JobSupervisor(
     cast(Runtime, runtime),
     listener,
-    'quest',
+    'mission',
     CommandJob(('false',), {}),
     output,
     None,
     'requester',
     timeout=10,
   )
-  worker.begin()
+  supervisor.begin()
   await _settle()
   runtime.handle.exit.set_result(3)
   await _until(lambda: listener.deaths != [])
@@ -469,17 +501,23 @@ async def test_job_worker_carries_collected_output_on_failure(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_spawned_worker_end_kills_the_process_and_reports_the_reason_on_reap(tmp_path):
+async def test_spawned_supervisor_end_kills_the_process_and_reports_the_reason_on_reap(tmp_path):
   runtime = FakeRuntime(tmp_path)
   listener = Listener()
-  worker = SpawnedWorker(
-    cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=10
+  supervisor = SpawnedSupervisor(
+    cast(Runtime, runtime),
+    listener,
+    'mission',
+    LaunchSpec(),
+    cast(Spawner, runtime),
+    talk=frozenset(),
+    timeout=10,
   )
-  worker.begin()
+  supervisor.begin()
   await _settle()
 
-  worker.end('cancelled')
-  worker.end('orphaned')
+  supervisor.end('cancelled')
+  supervisor.end('orphaned')
   await _settle()
 
   assert runtime.handle.killed
@@ -492,41 +530,53 @@ async def test_spawned_worker_end_kills_the_process_and_reports_the_reason_on_re
 async def test_end_before_start_reports_only_once_the_late_handle_is_reaped(tmp_path):
   runtime = GatedRuntime(tmp_path)
   listener = Listener()
-  worker = SpawnedWorker(
-    cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=10
+  supervisor = SpawnedSupervisor(
+    cast(Runtime, runtime),
+    listener,
+    'mission',
+    LaunchSpec(),
+    cast(Spawner, runtime),
+    talk=frozenset(),
+    timeout=10,
   )
-  worker.begin()
+  supervisor.begin()
   await _settle()
 
-  worker.end('orphaned')
+  supervisor.end('orphaned')
   await _settle()
 
-  assert worker.ending
+  assert supervisor.ending
   assert listener.deaths == []
   assert not runtime.handle.killed
   runtime.release.set()
   await _until(lambda: listener.deaths != [])
   assert runtime.handle.killed
   assert [report.reason for report in listener.deaths] == ['orphaned']
-  assert not worker.ending
+  assert not supervisor.ending
 
 
 @pytest.mark.asyncio
 async def test_end_before_start_outranks_the_failure_of_the_interrupted_launch(tmp_path):
   class FailingRuntime(GatedRuntime):
-    async def launch(self, launch, provisioned, quest, talk):
-      await super().launch(launch, provisioned, quest, talk)
+    async def spawn(self, launch, provisioned, mission, talk):
+      await super().spawn(launch, provisioned, mission, talk)
       raise RuntimeError('launch broke')
 
   runtime = FailingRuntime(tmp_path)
   listener = Listener()
-  worker = SpawnedWorker(
-    cast(Runtime, runtime), listener, 'quest', LaunchSpec(), talk=frozenset(), timeout=10
+  supervisor = SpawnedSupervisor(
+    cast(Runtime, runtime),
+    listener,
+    'mission',
+    LaunchSpec(),
+    cast(Spawner, runtime),
+    talk=frozenset(),
+    timeout=10,
   )
-  worker.begin()
+  supervisor.begin()
   await _settle()
 
-  worker.end('cancelled')
+  supervisor.end('cancelled')
   await _settle()
 
   assert listener.deaths == []
@@ -538,13 +588,13 @@ async def test_end_before_start_outranks_the_failure_of_the_interrupted_launch(t
 
 
 @pytest.mark.asyncio
-async def test_expected_worker_end_during_preparation_reports_once_it_has_completed(tmp_path):
+async def test_expected_supervisor_end_during_preparation_reports_once_it_has_completed(tmp_path):
   effects: list[str] = []
   seen_at_death: list[list[str]] = []
 
   class RecordingListener(Listener):
-    def on_worker_death(self, worker, report):
-      super().on_worker_death(worker, report)
+    def on_death(self, supervisor, report):
+      super().on_death(supervisor, report)
       seen_at_death.append(list(effects))
 
   runtime = FakeRuntime(tmp_path)
@@ -558,11 +608,11 @@ async def test_expected_worker_end_during_preparation_reports_once_it_has_comple
     assert release.wait(5)
     effects.append('token written')
 
-  worker = ExpectedWorker(cast(Runtime, runtime), listener, 'quest', ready)
-  worker.begin()
+  supervisor = ExpectedSupervisor(cast(Runtime, runtime), listener, 'mission', ready)
+  supervisor.begin()
   await _until(preparing.is_set)
 
-  worker.end('cancelled')
+  supervisor.end('cancelled')
   await _settle()
 
   assert listener.deaths == []
@@ -574,40 +624,45 @@ async def test_expected_worker_end_during_preparation_reports_once_it_has_comple
 
 
 @pytest.mark.asyncio
-async def test_expected_worker_end_reports_the_reason_instead_of_disconnected(tmp_path):
+async def test_expected_supervisor_end_reports_the_reason_instead_of_disconnected(tmp_path):
   runtime = FakeRuntime(tmp_path)
   listener = Listener()
-  worker = ExpectedWorker(cast(Runtime, runtime), listener, 'quest', lambda provisioned: None)
-  worker.begin()
+  supervisor = ExpectedSupervisor(
+    cast(Runtime, runtime), listener, 'mission', lambda provisioned: None
+  )
+  supervisor.begin()
   await _settle()
   assert runtime.events is not None
   runtime.events.on_connect()
 
-  worker.end('cancelled')
+  supervisor.end('cancelled')
   await _settle()
 
   assert [report.reason for report in listener.deaths] == ['cancelled']
 
 
 @pytest.mark.asyncio
-async def test_job_worker_end_reports_the_reason_with_its_collected_output(tmp_path):
+async def test_job_supervisor_end_reports_the_reason_with_its_collected_output(
+  tmp_path, monkeypatch
+):
   runtime = FakeRuntime(tmp_path)
+  monkeypatch.setattr('bro.broker.supervisor.launch_job', runtime.launch_job)
   listener = Listener()
   output = FakeOutput(tmp_path / 'run')
-  worker = JobWorker(
+  supervisor = JobSupervisor(
     cast(Runtime, runtime),
     listener,
-    'quest',
+    'mission',
     CommandJob(('sleep', '60'), {}),
     output,
     None,
     'requester',
     timeout=10,
   )
-  worker.begin()
+  supervisor.begin()
   await _settle()
 
-  worker.end('cancelled')
+  supervisor.end('cancelled')
   await _until(lambda: listener.deaths != [])
 
   assert runtime.handle.killed
@@ -618,26 +673,29 @@ async def test_job_worker_end_reports_the_reason_with_its_collected_output(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_job_worker_end_during_collection_reports_the_reason_and_keeps_the_run(tmp_path):
+async def test_job_supervisor_end_during_collection_reports_the_reason_and_keeps_the_run(
+  tmp_path, monkeypatch
+):
   runtime = FakeRuntime(tmp_path)
+  monkeypatch.setattr('bro.broker.supervisor.launch_job', runtime.launch_job)
   listener = Listener()
   output = StalledOutput(tmp_path / 'run')
-  worker = JobWorker(
+  supervisor = JobSupervisor(
     cast(Runtime, runtime),
     listener,
-    'quest',
+    'mission',
     CommandJob(('true',), {}),
     output,
     None,
     'requester',
     timeout=10,
   )
-  worker.begin()
+  supervisor.begin()
   await _settle()
   runtime.handle.exit.set_result(0)
   await asyncio.wait_for(output.collecting.wait(), TIMEOUT)
 
-  worker.end('orphaned')
+  supervisor.end('orphaned')
   await _settle()
 
   assert [report.reason for report in listener.deaths] == ['orphaned']

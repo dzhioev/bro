@@ -10,7 +10,7 @@ correlated message is the host's ``accepted`` mark; an immediate result is
 interpreted as the refusal or launch failure it carries.
 A blocking wait bounds silence rather than the run: after silence it reads the
 quest's journal record, returning a retained answer or an open child question,
-and otherwise resumes waiting while the host-owned Worker deadline keeps the
+and otherwise resumes waiting while the host-owned supervisor deadline keeps the
 quest live.
 
 Unlike the substrate CLI, an unset ``BROKER_CHANNEL`` is an error.

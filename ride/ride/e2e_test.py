@@ -685,7 +685,7 @@ def _run_broker_scenario(
   case: str,
   child_command: list[str],
   *,
-  default_timeout: float,
+  mission_timeout: float,
   probe_deadline: float,
   exit_after: str = 'ok',
   budget: float = 180,
@@ -716,7 +716,8 @@ def _run_broker_scenario(
     )
   )
   transport = TcpServerTransport(broker_bind_hosts())
-  facade = Broker(transport, DockerSpawner(), default_timeout=default_timeout)
+  spawner = DockerSpawner()
+  facade = Broker(transport)
   observed_pings: list[tuple[Peer, dict]] = []
 
   def recording_ping(context: Dispatcher, peer: Peer, message: Message) -> None:
@@ -724,12 +725,14 @@ def _run_broker_scenario(
     ping_handler(context, peer, message)
 
   facade.on('ping', recording_ping)
-  facade.on('spawn', spawn_test_handler(child))
+  facade.on('spawn', spawn_test_handler(child, spawner, timeout=mission_timeout))
 
   result: dict[str, int] = {}
   with pytest.MonkeyPatch.context() as monkeypatch:
     monkeypatch.setenv('HOME', str(env.home))
-    thread = threading.Thread(target=lambda: result.update(code=facade.run(root, type='bro')))
+    thread = threading.Thread(
+      target=lambda: result.update(code=facade.run(root, spawner, type='bro'))
+    )
     thread.start()
     max_channels = 0
     max_live = 0
@@ -765,7 +768,7 @@ def b_clean(isolated_env: IsolatedEnv) -> BrokerRun:
     isolated_env,
     'clean',
     _session_broxy_probe(_CHILD_CLEAN),
-    default_timeout=600,
+    mission_timeout=600,
     probe_deadline=120,
   )
 
@@ -776,7 +779,7 @@ def b_early_exit(isolated_env: IsolatedEnv) -> BrokerRun:
     isolated_env,
     'early',
     [_RUNTIME_PYTHON, '-c', _CHILD_EARLY_EXIT],
-    default_timeout=600,
+    mission_timeout=600,
     probe_deadline=120,
   )
 
@@ -787,7 +790,7 @@ def b_timeout(isolated_env: IsolatedEnv) -> BrokerRun:
     isolated_env,
     'timeout',
     ['sleep', '300'],
-    default_timeout=30,
+    mission_timeout=30,
     probe_deadline=90,
   )
 
@@ -798,7 +801,7 @@ def b_teardown(isolated_env: IsolatedEnv) -> BrokerRun:
     isolated_env,
     'teardown',
     _session_broxy_probe(_CHILD_STARTED_THEN_HANG),
-    default_timeout=600,
+    mission_timeout=600,
     probe_deadline=120,
     exit_after='started',
   )
@@ -858,7 +861,7 @@ class TestChildLifecycle:
     assert b_early_exit.channels_after == frozenset()
     assert b_early_exit.live_after == []
 
-  def test_wedged_child_times_out_at_default_timeout(self, b_timeout: BrokerRun) -> None:
+  def test_wedged_child_times_out_at_its_mission_timeout(self, b_timeout: BrokerRun) -> None:
     assert b_timeout.code == 0
     types = [m['type'] for m in b_timeout.report['messages']]
     assert types == ['mark', 'mark', 'result'], b_timeout.report['messages']
@@ -869,7 +872,7 @@ class TestChildLifecycle:
     assert failed['payload']['outcome'] == 'failed'
     assert failed['payload']['detail']['reason'] == 'timeout'
     assert failed['payload']['detail']['exit_code'] != 0
-    # the request timeout is armed at the Worker's started transition;
+    # the request timeout is armed at the supervisor's started transition;
     # the slack covers process launch and reap.
     assert 30 <= failed['elapsed'] <= 60, failed['elapsed']
     assert b_timeout.channels_after == frozenset()
@@ -1221,7 +1224,6 @@ def _run_boxed_join_scenario(
   from ride.workspace.metadata import Isolation
   from ride.workspace.model import Workspace
   from ride.workspace.spawn import (
-    CompositeSpawner,
     ExecLaunchSpec,
     ExecSpawner,
     PartyMembers,
@@ -1268,24 +1270,22 @@ def _run_boxed_join_scenario(
       party_workspace=name,
       records_directory=str(records),
     )
-    context.spawn(member, peer, talk=frozenset(), type='bro')
+    context.spawn(member, exec_spawner, peer, talk=frozenset(), type='bro', timeout=600)
 
   party_members = PartyMembers()
   transport = TcpServerTransport(broker_bind_hosts())
-  spawner = CompositeSpawner(
-    {
-      DockerLaunchSpec: DockerSpawner(party_members=party_members),
-      ExecLaunchSpec: ExecSpawner(party_members),
-    }
-  )
-  facade = Broker(transport, spawner, default_timeout=600)
+  docker_spawner = DockerSpawner(party_members=party_members)
+  exec_spawner = ExecSpawner(party_members)
+  facade = Broker(transport)
   facade.on('ping', ping_handler)
   facade.on('spawn', spawn_member)
 
   result: dict[str, int] = {}
   with pytest.MonkeyPatch.context() as monkeypatch:
     monkeypatch.setenv('HOME', str(env.home))
-    thread = threading.Thread(target=lambda: result.update(code=facade.run(root, type='bro')))
+    thread = threading.Thread(
+      target=lambda: result.update(code=facade.run(root, docker_spawner, type='bro'))
+    )
     thread.start()
     ready = env.tree(name) / '.e2e-ready'
     _wait_until(

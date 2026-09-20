@@ -51,11 +51,11 @@ class ChildHandle(ABC):
 class Spawner(ABC):
   """launch a peer's process and return a handle the Broker supervises.
 
-  `quest` is the id of the mission the peer is launched to answer;
+  `mission` is the id of the mission the peer is launched to answer;
   `talk` is the fixed set of chat moves that mission grants it.
   The adapter delivers both beside the channel endpoint."""
 
   @abstractmethod
   async def spawn(
-    self, launch: LaunchSpec, channel: Provisioned, quest: str, talk: Talk
+    self, launch: LaunchSpec, channel: Provisioned, mission: str, talk: Talk
   ) -> ChildHandle: ...
