@@ -394,7 +394,7 @@ class BroAgent(BaseInstalledAgent):
   def run_env(self) -> dict[str, str]:
     return {
       'BRO_STORE': str(STORE_DIR),
-      # the ride's runtime root: its workspace records, summon audit, and trail
+      # the ride's runtime root: its workspace records, launch audit, and trail
       # store have to stay inside the directory harbor collects, and out of the
       # filesystem the verifier grades
       'XDG_DATA_HOME': str(AGENT_DIR),

@@ -31,7 +31,7 @@ from bro.mcp import MCPServerSpec
 from bro.monitor import trail_pointer
 from bro.native.llm import LLM
 from bro.native.runner import Runner, set_default_tracker_factory
-from bro.quest import LiveChild
+from bro.quest import LiveMission
 from bro.run_lifecycle import RunLifecycle
 
 
@@ -734,10 +734,15 @@ class TestLiveWorkReminder:
     assert '\njob-1 watch `quest watch`\n' in llm.drained[0]
 
   @pytest.mark.asyncio
-  async def test_an_in_flight_summon_is_named_by_request_and_target(self, monkeypatch):
+  async def test_in_flight_missions_are_named_by_id_and_label(self, monkeypatch):
     monkeypatch.setenv(BROKER_CHANNEL, 'tcp://token@127.0.0.1:1')
     monkeypatch.setattr(
-      native_runner, 'live_children', lambda: [LiveChild('01m-child', 'bro-eyebro')]
+      native_runner,
+      'live_missions',
+      lambda: [
+        LiveMission('01m-child', 'bro', 'bro-eyebro'),
+        LiveMission('01m-benchmark', 'benchmark', 'benchmark'),
+      ],
     )
     llm = _ScriptedLLM([_end_without_acting])
     runner = _ChannelRunner(None, llm)
@@ -747,6 +752,8 @@ class TestLiveWorkReminder:
     assert result == 'ended again'
     [notice] = llm.drained
     assert '\nquest 01m-child to bro-eyebro\n' in notice
+    assert '\nmission 01m-benchmark: benchmark\n' in notice
+    assert 'bro::quest_cancel' in notice
     assert 'job-' not in notice
 
   @pytest.mark.asyncio

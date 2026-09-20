@@ -27,7 +27,7 @@ from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
 from bro.monitor import trail_pointer
 from bro.native import providers as native_providers
 from bro.native.llm import LLM
-from bro.quest import LiveChild, live_children
+from bro.quest import LiveMission, live_mission_line, live_missions
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import summoned, summoned_by_from_env
 from bro.trails.record.bro import Recorder
@@ -39,11 +39,11 @@ _LIVE_WORK_HEADER = (
 )
 _LIVE_WORK_RULE = (
   'A one-shot run ends only when a turn ends with nothing running and nothing in flight. '
-  'To wait on this work, call `bro::chill` (a summon in flight needs a live '
+  'To wait on this work, call `bro::chill` (a mission in flight needs a live '
   "`bro::job('quest watch', mode='watch')` first); otherwise `bro::kill` each job and "
-  '`bro::quest_cancel` each summon you no longer need, then end the turn. This notice comes '
+  '`bro::quest_cancel` each mission you no longer need, then end the turn. This notice comes '
   'once: a turn that ends with the same work live and nothing else reported ends the run, '
-  "which kills its jobs and spawned children and detaches a manual summon's session."
+  'which kills its jobs and host-supervised workers and detaches expected workers.'
 )
 
 
@@ -52,13 +52,15 @@ class LiveWork:
   """What a one-shot run still has running at a turn end."""
 
   jobs: tuple[JobStatus, ...]
-  children: tuple[LiveChild, ...]
+  missions: tuple[LiveMission, ...]
 
   def keys(self) -> frozenset[str]:
-    return frozenset([*(job.id for job in self.jobs), *(child.quest_id for child in self.children)])
+    return frozenset(
+      [*(job.id for job in self.jobs), *(mission.mission_id for mission in self.missions)]
+    )
 
   def is_empty(self) -> bool:
-    return len(self.jobs) == 0 and len(self.children) == 0
+    return len(self.jobs) == 0 and len(self.missions) == 0
 
 
 def live_work_notice(work: LiveWork) -> str:
@@ -66,8 +68,8 @@ def live_work_notice(work: LiveWork) -> str:
   for job in work.jobs:
     command = job.command.replace('`', '\\`')
     lines.append(f'{job.id} {job.mode} `{command}`')
-  for child in work.children:
-    lines.append(f'quest {child.quest_id} to {child.target}')
+  for mission in work.missions:
+    lines.append(live_mission_line(mission))
   lines.append(_LIVE_WORK_RULE)
   return '\n'.join(lines)
 
@@ -378,8 +380,8 @@ class Runner:
   def _live_work(self) -> LiveWork:
     statuses = [job.status() for job in self.registry.values()]
     jobs = tuple(status for status in statuses if status.state == 'running')
-    children = tuple(live_children()) if os.environ.get(BROKER_CHANNEL) is not None else ()
-    return LiveWork(jobs, children)
+    missions = tuple(live_missions()) if os.environ.get(BROKER_CHANNEL) is not None else ()
+    return LiveWork(jobs, missions)
 
   async def wake(self, request_timeout: Optional[float] = None) -> str:
     """Run one interactive turn from pending inbox news."""

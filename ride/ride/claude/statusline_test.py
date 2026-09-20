@@ -28,12 +28,13 @@ def _quest(
   outcome: str | None = None,
   reason: str | None = None,
   pending: list[dict] | None = None,
+  worker_type: str = 'bro',
 ) -> dict:
   at = time.time() if at is None else at
   quest = {
     'id': quest_id,
     'kind': 'launch',
-    'type': 'bro',
+    'type': worker_type,
     'parent': 'ROOT',
     'args': {'target': target, 'prompt': 'work', **({'manual': True} if manual else {})},
     'state': state,
@@ -62,7 +63,7 @@ def _render(monkeypatch, tmp_path, *, recording=None, quests=None, detached=Fals
   monkeypatch.setattr(health, 'health_path', lambda: tmp_path / 'health.json')
   if recording is not None:
     health.write(recording, interval=3)
-  monkeypatch.setattr(statusline, '_query_summons', lambda: list(quests or []))
+  monkeypatch.setattr(statusline, '_query_missions', lambda: list(quests or []))
   return statusline.render_statusline()
 
 
@@ -81,6 +82,10 @@ class TestRenderedStatusline:
   def test_active_summon_shows_target_trail_and_age(self, monkeypatch, tmp_path):
     quest = _quest('R1', 'started', trail_id='T1', at=time.time() - 185)
     assert '⚡ summoning reviewer 3m (trail T1)' in _render(monkeypatch, tmp_path, quests=[quest])
+
+  def test_active_non_bro_mission_shows_its_type_and_age(self, monkeypatch, tmp_path):
+    mission = _quest('B1', 'started', worker_type='benchmark', at=time.time() - 125)
+    assert '⚡ benchmark 2m' in _render(monkeypatch, tmp_path, quests=[mission])
 
   def test_accepted_summon_without_a_trail_uses_acceptance_age(self, monkeypatch, tmp_path):
     quest = _quest('R1', 'accepted', at=time.time() - 5)
@@ -114,6 +119,10 @@ class TestRenderedStatusline:
     quest = _quest('R1', 'ended', outcome='ok', at=time.time() - 30)
     assert '✓ summon reviewer: ok' in _render(monkeypatch, tmp_path, quests=[quest])
 
+  def test_recent_non_bro_outcome_shows_its_type(self, monkeypatch, tmp_path):
+    mission = _quest('B1', 'ended', worker_type='benchmark', outcome='ok', at=time.time() - 30)
+    assert '✓ benchmark: ok' in _render(monkeypatch, tmp_path, quests=[mission])
+
   def test_failed_outcome_includes_reason(self, monkeypatch, tmp_path):
     quest = _quest('R1', 'ended', outcome='failed', reason='timeout', at=time.time() - 30)
     assert '✗ summon reviewer: failed:timeout' in _render(monkeypatch, tmp_path, quests=[quest])
@@ -126,7 +135,7 @@ class TestRenderedStatusline:
     def fail():
       raise ConnectionError('gone')
 
-    monkeypatch.setattr(statusline, '_query_summons', fail)
+    monkeypatch.setattr(statusline, '_query_missions', fail)
     monkeypatch.setattr(health, 'health_path', lambda: tmp_path / 'health.json')
     monkeypatch.setenv('RIDE_WORKSPACE', 'ws')
     monkeypatch.delenv('RIDE_REPO', raising=False)
@@ -139,7 +148,9 @@ class TestRenderedStatusline:
     assert ' · ' in output
 
 
-def test_query_summons_reads_the_channel_once(monkeypatch):
+def test_query_missions_reads_every_page_and_keeps_typed_launches(monkeypatch):
+  calls = []
+
   class FakeClient:
     def __enter__(self):
       return self
@@ -148,22 +159,28 @@ def test_query_summons_reads_the_channel_once(monkeypatch):
       return False
 
     def call(self, kind, args, timeout):
-      assert (kind, args, timeout) == ('query', {}, statusline._QUERY_TIMEOUT)
-      return brotocol.result(
-        'QUERY',
-        'ok',
-        value={
+      calls.append((kind, args, timeout))
+      if args == {}:
+        value = {
           'missions': [
             _quest('S1', 'started'),
-            {'id': 'W1', 'kind': 'launch', 'type': 'test', 'state': 'started'},
             {'id': 'B1', 'kind': 'benchmark', 'state': 'started'},
-          ]
-        },
-      )
+            {'id': 'D1', 'kind': 'launch', 'state': 'denied'},
+          ],
+          'cursor': 'NEXT',
+        }
+      else:
+        value = {'missions': [{'id': 'W1', 'kind': 'launch', 'type': 'test', 'state': 'started'}]}
+      return brotocol.result('QUERY', 'ok', value=value)
 
   monkeypatch.setenv('BROKER_CHANNEL', 'tcp://unused@127.0.0.1:1')
   monkeypatch.setattr(Client, 'from_env', lambda: FakeClient())
-  assert [quest['id'] for quest in statusline._query_summons()] == ['S1']
+
+  assert [mission['id'] for mission in statusline._query_missions()] == ['S1', 'W1']
+  assert calls == [
+    ('query', {}, statusline._QUERY_TIMEOUT),
+    ('query', {'cursor': 'NEXT'}, statusline._QUERY_TIMEOUT),
+  ]
 
 
 def test_settings_command_hides_stale_projection(monkeypatch, tmp_path):

@@ -14,13 +14,11 @@ from bro.base import configs, log
 from bro.broker.dispatcher import PING, Broker, ping_handler
 from bro.broker.spawn import LaunchSpec, Spawner
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
-from bro.kinds import KindContext
 from bro.quest import BRO, LAUNCH
 from bro.worker_types import WorkerType, installed_types
 from bro.workspace.paths import launch_dir
 from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts
 from ride.bro_worker import BroFacts, Placement, SummonSpawner
-from ride.kinds import extension_kinds
 from ride.launch_control import LaunchControl
 from ride.peer_facts import PeerFacts, WorkerFacts
 from ride.runtime_bundle import RuntimeBundle
@@ -164,9 +162,6 @@ def run_root_via_broker(
   facade.on(LAUNCH, control.handle)
   facade.on(MINT, artifact_control.mint)
   facade.on(GET, artifact_control.get)
-  kind_context = KindContext(workspace.tree, artifact_control, host.credential_kinds)
-  for kind, handler in extension_kinds(kind_context).items():
-    facade.on(kind, handler)
   facade.subscribe(facts.observe_journal)
   facade.subscribe(control.audit_event)
   facade.subscribe(control.observe_journal)

@@ -63,13 +63,13 @@ When the work cannot proceed without input, call `bro::raise` with the blocker i
 
 {{iff #wire = bare}}
 A one-shot run ends when a turn ends with nothing running and nothing in flight;
-a turn that ends otherwise gets one notice naming the live jobs and summons, and a next turn that ends with the same set and nothing else reported ends the run,
-which kills its jobs and spawned children and detaches a manual child's session.
+a turn that ends otherwise gets one notice naming the live jobs and missions, and a next turn that ends with the same set and nothing else reported ends the run,
+which kills its jobs and host-supervised workers and detaches expected workers.
 {{eliff #harness = claude}}
 A one-shot session stays open while the quest watch is armed and re-invokes you on its events, so end it through `bro::answer`;
-a turn that ends with summons in flight and no watch armed, or with the watch armed and nothing in flight, gets one notice to settle it.
+a turn that ends with missions in flight and no watch armed, or with the watch armed and nothing in flight, gets one notice to settle it.
 {{else}}
-A one-shot session ends with its turn, so a turn that ends with summons in flight gets one notice to wait for or cancel them before delivering.
+A one-shot session ends with its turn, so a turn that ends with missions in flight gets one notice to wait for or cancel them before delivering.
 {{end}}
 The natural end is after the work is fully done
 — a change merged, a deploy live

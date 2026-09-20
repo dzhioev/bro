@@ -29,13 +29,13 @@ raw is not a harness value.
 - `system_prompt.py` — shared prompt and persona assembly.
   Prompt assets are loaded from the `bro` distribution, not relative to this package.
 - `statusline.py` — the session-local projector process:
-  it renders recording and summon state into an atomic file while its pid file is live, exits when its runner parent disappears, and holds a session-state lock that serializes resume;
+  it renders recording and every owned mission's state into an atomic file while its pid file is live, exits when its runner parent disappears, and holds a session-state lock that serializes resume;
   a runner-side monitor reaps it and clears only the live files that pid still owns, while Claude's refresh command only checks the pid and cats the projection.
 - `print_anthropic_key.py`, `watch_guard.py`, and `stop_guard.py`
   — leaf modules invoked by Claude settings through the runner interpreter (`python -m ride.claude.<module>`);
   the watch guard applies a folded finite shell roster to both Bash and Monitor calls,
   and the stop guard is a solo session's `Stop` hook:
-  print mode holds the process while a background task is pending, so it blocks a turn end once per turn only when summons are in flight with no `quest watch` armed or the watch is armed with nothing in flight,
+  print mode holds the process while a background task is pending, so it blocks a turn end once per turn only when missions are in flight with no `quest watch` armed or the watch is armed with nothing in flight,
   reading the running tasks off the hook input's undocumented `background_tasks`.
 
 ## Invariants

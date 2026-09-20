@@ -92,11 +92,11 @@ task names are names inside one revision, so a 2.1 list is not reused against 2.
 
 Where the job runs depends on where the command runs.
 A managed session carries no docker socket, so from inside one the job goes through the session broker:
-the host runs `bro.benchmark.job` with its own Docker access through the `benchmark` broker kind from `bro-bench`, pointed at the composed config,
+the host runs `bro.benchmark.job` with its own Docker access through the registered `benchmark` worker type from `bro-bench`, pointed at the composed config,
 and the finished run comes back as an artifact whose `output/` holds the job directory beside `stdout`, `stderr`, and `status.json`.
 `benchmark-run` prints `results <path>  artifact <ref>`;
 `artifact get <ref>` makes the run readable again, and the artifact store dies with the ride, so retain the ref before the ride ends when the run must become durable.
-`benchmark-job start -c <config> --detach` and `benchmark-job check <request-id>` drive the same broker kind by hand, for a composed config already in the tree.
+`benchmark-job start -c <config> --detach` and `benchmark-job check <request-id>` drive the same worker type through `launch`, for a composed config already in the tree.
 Outside a session, Harbor runs right here into `jobs/<id>` (`--jobs-dir` moves it), the same command from the benchmark project's own environment:
 
 ```

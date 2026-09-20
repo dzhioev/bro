@@ -15,7 +15,7 @@ The repository is a uv workspace whose root publishes the `bro` distribution fro
 `dev/` publishes `bro-dev` (the `bro.dev` and `bro.workflow` packages, `poll-pr` and `pr-state`, and the development personas),
 `oops/` publishes `bro-oops` (consumer-neutral deployment and operations machinery),
 `ride/` publishes `bro-ride` (top-level `ride`, the managed-workspace runtime and both harness adapters),
-`bench/` publishes `bro-bench` (the launcher-side benchmark credentials, broker kind, and session commands),
+`bench/` publishes `bro-bench` (the launcher-side benchmark credentials, registered worker type, and session commands),
 and `local/` is the `bro-local` member (`bro.local`)
 — this checkout's own personas and policy scripts, kept out of every published wheel by riding the root's `dev` dependency group.
 All published members depend on `bro`;
@@ -63,7 +63,7 @@ The repository root carries `pyproject.toml` (core distribution metadata, the wo
 the suite's environment is rebuilt rather than patched by `bro/base/suite_environment.py`, clearing the framework's own namespaces plus installed credential-hook variables and pinning the credential resolver's exclusive store at an absent path,
 so a run launched from inside a managed session inherits none of it and resolves only what a test installed itself
 — the rebuild lives in core so every pytest root applies it, `benchmark/`'s own conftest included, and `local/bro/local/environment_policy_test.py` enforces each part repository-wide), `bench/` (the `bro-bench` member:
-the benchmark credentials, the `benchmark` broker kind, and its `benchmark-job` and `benchmark-run` session commands), `local/` (the `bro-local` member:
+the benchmark credentials, the `benchmark` worker type, and its `benchmark-job` and `benchmark-run` session commands), `local/` (the `bro-local` member:
 the `bro-dev` and `bro-eyebro` personas under `bros/`, sharing `bro/local/prompts.py`'s framework-project context, `bro/local/run_tests.py`'s explicit test roster behind the `run-tests` console script,
 and the tests that hold this repository as a whole to a policy
 — whatever is meaningful only inside this checkout), and `README.md` (the front page: the framework's features and limits, shown on one example crew, linking into the references).
@@ -291,7 +291,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
   Interactive owners call `wake()` when the inbox reports news;
   OpenAI delivers the drained notification as user-role input.
   A one-shot run ends when a turn ends with nothing running and nothing in flight;
-  otherwise the runner posts one notice naming the live jobs and its own in-flight summons (`bro.summon.live_children`) through the inbox and runs one more turn, and the registry closes only at the end.
+  otherwise the runner posts one notice naming the live jobs and every mission the session owns (`bro.quest.live_missions`) through the inbox and runs one more turn, and the registry closes only at the end.
   `llm.py` owns the live `LLM` ABC and diagnostic CLI, `providers.py` maps core `NativeLLMSpec` recipes to engine clients, and `llms/{openai,echo}.py` contain those clients.
   The same member owns `bro.run`, `bro.fork`, the native leaves in `bro.launch`, and `bro.trails.record.bro`;
   `native/AGENTS.md` maps it.
@@ -302,14 +302,11 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
 - `shell.py` (`bro-shell-dir`) — validates the packaged shell helpers and prints their installed directory for shell consumers
 - `summon.py` (`summon`) — the bro wrapper over `launch {type: bro, …}` (the manual variant included), the facts a summoned run reads off its environment, and the summoning surfaces: blocking, detached, and manual;
   common launch enforcement lives in `ride/ride/launch_control.py`, and bro authorization in `ride/ride/bro_worker.py`
-- `quest.py` (`quest`) — every peer-side surface over the quest a summon opens, by its id or `self` for the session's own:
-  the outcome and conversation reads, say and ask, the caller-scoped listing, the ordered event watch, and cancel
+- `quest.py` (`quest`) — the outcome and conversation reads, say, ask, and caller-scoped listing over bro quests, plus the ordered watch and cancellation surfaces shared by every mission type
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint` / `artifact.get` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session command;
   the host store and enforcement live in `ride/ride/artifacts.py`
 - `worker_types.py` — the core contract for a worker type, its launch request and run shapes, peer descriptions, host ports, registry, and shared artifact/path helpers;
-  installed types register through `bro.worker_types`, and ride contributes the `bro` type
-- `kinds.py` — the `KindContext` contributed `bro.broker_kinds` factories receive;
-  the benchmark is the remaining contributor
+  installed types register through `bro.worker_types`, with ride contributing `bro` and bench contributing `benchmark`
 - `run_lifecycle.py` — `RunLifecycle`, the worker-process emitter over `bro.broker.client.Client`:
   it undertakes the broker mission named in `BROKER_MISSION`, emits the run's set-once `trail` mark after recording opens, and sends the closing result.
   `Runner.run()` builds one through `_make_channel()`;
@@ -414,8 +411,8 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
 Installed distributions extend the framework through `bro` (personas), `bro.credential_sources` (minting source types), `bro.credentials` (registry entries), `bro.brog.backends` (task-tracker backends), `bro.toolsets` (standalone MCP toolsets;
 each entry targets its module's `toolset` object), `bro.mcp.targets` (assembled target prefixes;
 each resolver accepts the value after `<prefix>:` and returns live MCP servers), `bro.session_commands` (console scripts exposed on managed-session PATH),
-`bro.worker_types` (worker classes served through the common `launch` kind), and `bro.broker_kinds` (the benchmark's contributed request kind);
-each worker entry's name matches its `bro.worker_types.WorkerType.name`, while a broker-kind entry names the kind and targets a factory `(context: bro.kinds.KindContext) -> RequestHandler`.
+and `bro.worker_types` (worker classes served through the common `launch` kind).
+Each worker entry's name matches its `bro.worker_types.WorkerType.name`.
 Declarations are installation metadata:
 run `uv sync` after adding or removing an entry point;
 editing an already-declared target module needs no reinstall.

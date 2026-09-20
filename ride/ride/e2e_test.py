@@ -22,7 +22,8 @@ session, and the first session's exit tearing a live member down);
 I — the full boxed → join → unboxed → join → boxed chain through summon control;
 J — native summon-watch wake routes through the real broker, and a native child's turn-end reminder;
 K — a summoned child question, summoner steering and reply, and journal-backed collection;
-L — cancellation of a live child.
+L — cancellation of a live child;
+M — a benchmark launch through its registered worker type, host job, and artifact result.
 
 Isolation: every launch runs under a throwaway HOME, data home and project root,
 so no scenario touches the user's own claude or runtime state. The
@@ -148,6 +149,25 @@ except OSError:
   print('RIDE_E2E_ARTIFACT_OK', flush=True)
 else:
   print('RIDE_E2E_ARTIFACT_WRITABLE', flush=True)
+"""
+
+# Scenario M root: launch the benchmark type and read the host job's collected output.
+_PROBE_BENCHMARK_TYPE = """
+from pathlib import Path
+
+from bro.artifact import get_artifact
+from bro.bench.job import run_job
+
+try:
+  ref = run_job('benchmark/pyproject.toml', timeout=60)
+  run = Path(get_artifact(ref, timeout=30))
+  marker = run / 'output' / 'marker'
+  assert marker.read_text() == 'benchmark-e2e', marker
+  Path('/workspace/.benchmark-type-report').write_text(ref)
+except Exception:
+  import traceback
+  Path('/workspace/.benchmark-type-error').write_text(traceback.format_exc())
+  raise
 """
 
 # scenario B root: ping (with a forged identity claim in the payload), then spawn a
@@ -2185,4 +2205,73 @@ Path('/workspace/.quest-cancel-report').write_text(json.dumps({
   assert (outcome['outcome'], outcome['reason']) == ('failed', 'cancelled')
   assert outcome['trail_id'] == 'e2e-cancel-trail'
   assert outcome['exit_code'] != 0
+  assert env.live_containers() == []
+
+
+# --- M: benchmark registered worker type --------------------------------------
+
+
+def test_benchmark_launch_runs_as_a_registered_type(isolated_env: IsolatedEnv, monkeypatch) -> None:
+  from bro.bench.job import BenchmarkType
+  from bro.broker.job import CommandJob
+  from bro.worker_types import Job, LaunchRequest
+  from ride.root import run_started_party
+  from ride.runtime_bundle import RuntimeBundle
+  from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
+  from ride.workspace.metadata import Isolation
+  from ride.workspace.model import Workspace
+  from ride.workspace.store import ScopedSecrets
+
+  env = isolated_env
+  name = f'{_NAME_PREFIX}m-benchmark-type'
+  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  runtime_bundle = RuntimeBundle(
+    env.runtime_root / 'runtime' / env.runtime_bundle_hash,
+    f'{sys.version_info.major}.{sys.version_info.minor}',
+  )
+  container_runtime = ContainerRuntimeResolver.fixed(
+    ContainerRuntime(env.image, env.runtime_bundle_hash), workspace.repository
+  )
+  original_launch = BenchmarkType.launch
+
+  # The live Harbor command has its own benchmark-project e2e test.
+  # This route keeps the original authorization and replaces only the collected job's command.
+  def quick_launch(worker_type: BenchmarkType, request: LaunchRequest) -> Job:
+    run = original_launch(worker_type, request)
+    command = CommandJob(
+      command=(
+        sys.executable,
+        '-c',
+        "from pathlib import Path; Path('output/marker').write_text('benchmark-e2e')",
+      ),
+      env=run.command.env,
+    )
+    return Job(command, run.extension, run.permits)
+
+  monkeypatch.setattr(BenchmarkType, 'launch', quick_launch)
+  monkeypatch.setenv('HOME', str(env.home))
+  report = workspace.tree / '.benchmark-type-report'
+  error_report = workspace.tree / '.benchmark-type-error'
+  launch = workspace_docker.Launch(
+    name=name,
+    command=_session_broxy_probe(_PROBE_BENCHMARK_TYPE),
+    env={'RIDE_BRO': 'bro-dev'},
+    secrets=(),
+    tty=False,
+    image=env.image,
+    runtime_bundle_hash=env.runtime_bundle_hash,
+    repo=env.project,
+  )
+
+  code = run_started_party(
+    launch,
+    workspace,
+    credential_scope=ScopedSecrets(set(), set()),
+    container_runtime=container_runtime,
+    runtime_bundle=runtime_bundle,
+  )
+
+  diagnostic = error_report.read_text() if error_report.is_file() else 'no root error report'
+  assert code == 0, diagnostic
+  assert report.read_text().startswith('sha256:')
   assert env.live_containers() == []
