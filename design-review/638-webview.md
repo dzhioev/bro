@@ -16,13 +16,13 @@ and `## Goal`'s "other bros never touch it" becomes the policy `### The type` st
 
 A *webview* is a mission of the `webview` worker type:
 opened by `launch {type: webview, …}` from the session that becomes its *owner*, undertaken by a worker container running Chromium and the `webview serve` daemon,
-and ended by a close command, cancellation (`quest cancel` or `mission cancel`), the owner's death, or root teardown.
+and ended by a close command, `mission cancel`, the owner's death, or root teardown.
 A *command* is an owner question on the mission's chat carrying one JSON object;
 a *reply* is the worker's reply to it, and a *say* is the worker's unsolicited event.
 `vnc` is the one mode that puts a human at the screen.
 The browser's vocabulary is Playwright MCP's, minus the tools the daemon withholds.
 
-### The mission surface: `bro/mission.py`, with `quest` narrowed to bro quests
+### The mission surface: `bro/mission.py`, with `quest` the bro-only view over it
 
 The quest verbs were written for bro quests:
 `quest say` and `quest ask` refuse a mission of another type (their liveness check reads the bro answer), `quest history` renders `{text}` payloads alone, and `quest watch` prints chat for bro quests only.
@@ -42,19 +42,27 @@ The webview needs a surface that is per mission rather than per type, with typed
   a chat line over `WATCH_LINE_BYTES` (1 KiB) is cut and ends with `[<n> bytes, cut; seq <seq> in mission history <id>]`.
 - `mission cancel <id> [--timeout S]` ends an owned mission.
 
-`quest` becomes a view over the same module, narrowed where its verbs are bro-shaped:
-`check`, `list`, `history`, `say`, and `ask` take bro quests alone, with `{text}` payloads taken and printed as text and `check` printing the answer, and `watch` prints chat for bro quests alone.
-Its lifecycle lines on `watch` for every owned mission and its `cancel` of any owned mission stay exactly as #691 shipped them,
-so the Claude stop guard, the native runner's turn-end rule, the automatic `quest watch` admission, the turn-end notices, and the `quest_*` tool descriptions change nothing:
-one `quest watch` notices any mission's end, and `quest cancel` or `bro::quest_cancel` ends a webview as it ends a quest.
-The verbs' exit codes, the `quest_*` service tools, and the public functions importers use keep their names and shapes, so prompts, spells, holds, and docs stay as they are;
+`quest` becomes the bro-only view over the same module, on every verb:
+`check`, `list`, `history`, `say`, `ask`, `watch`, and `cancel` take bro quests alone, with `{text}` payloads taken and printed as text, `check` printing the answer, and `watch` printing bro quests' lifecycle and chat and nothing else;
+the `quest_*` service tools, `bro::quest_cancel` included, narrow the same way.
+A flow that never launches another type never meets the word mission:
+the verbs' exit codes, the `quest_*` tools, and the public functions importers use keep their names and shapes, so prompts, spells, holds, and docs stay as they are;
 the functions are `check`, `history`, `say`, `ask`, `watch`, `cancel`, `live_missions`, and the constants.
-`mission watch` is therefore optional, for reading a non-bro mission's chat live;
-a session that owns both kinds arms `quest watch` as today and `mission watch --type webview` beside it when it wants that chat.
-There are no `mission_*` service tools:
-`mission` is a CLI on the session PATH, and a bro that drives non-bro missions declares it once for both harnesses, `shell('mission ask', 'mission history', 'mission watch')` behind its shell block, or mounts `cli('mission …')` as tools.
+A bro that launches another type is told about `mission` and declares it:
+`cli('mission ask')` and `cli('mission history')` mount the parameterized verbs as tools with typed arguments derived from the CLI's declarations,
+since a shell roster admits complete command lines by exact match and cannot carry a mission id or a payload,
+and `shell('mission watch')` (or `shell('mission watch --type webview')`) admits the fixed watch command behind the shell block on both harnesses.
+There are no `mission_*` service tools, and the automatic `quest watch` admission is unchanged.
 Two watches run side by side:
 each is an ordinary channel client with its own cursor over the non-destructive `events` read, multiplexed by the session's broxy.
+
+The turn-end guards are the one shared place, and they speak both vocabularies without matching either:
+a one-shot session's turn end is held while the session owns a live mission of any type (`live_missions()`, as #691 made it) and no background task runs,
+since print mode holds the process on any pending task and the guard runs again at the next stop, which is the rule the native runner already applies to its jobs.
+The Claude stop guard (`ride/ride/claude/stop_guard.py`) drops its exact `quest watch` match and its idle-watch notice for that one rule;
+its notice lists the missions as `live_mission_line` words them (`quest <id> to <bro>`, `mission <id>: <type>`)
+and names the way out per kind present, `quest watch` and `quest cancel` for quests, `mission watch` and `mission cancel` when any mission is not one.
+The native runner's notice (`native/bro/native/runner.py`) gains the same per-kind wording.
 
 ### The type: `bro/webview/worker.py`
 
@@ -86,10 +94,11 @@ Container(
 
 The packaged file is read through `importlib.resources` at launch, never at import, and the module imports only `bro.worker_types` and the standard library at module level, since the permit preflight loads it.
 `audit_fields` renders the facts as `{vnc, allowed_origins, blocked_origins}`.
-Any attributable owner may open a webview, and the type interprets no other permit:
-`## Goal`'s rule that other bros reach the web only through the browser bro is policy until #522 makes the bare `:webview` the permit that gates opening one,
-held by the browser bro's seeds and lacked by other bros, while the root session, a human, opens one directly, which the `vnc` route needs.
-A generic type names no persona, so the rule is not enforced here.
+Any attributable owner may open a webview, and the type interprets no other permit.
+`## Goal`'s rule that other bros reach the web only through the browser bro is policy here and stays policy for a root session, which holds every installed type under #522 as it holds every permit today;
+for a summoned child #522 makes it enforced, since a child then opens a webview only with the bare `:webview`,
+which it holds through its own bro's configured layers (a project's `[tool.bro.browser]` grant, or the host config) or a summoner's grant bounded by its own, and which other bros' layers do not grant.
+A generic type names no persona, so nothing of this is enforced here.
 The launch's `share` refs are linked into the worker's artifact view by the generic lowering;
 there is no manual variant.
 
@@ -129,7 +138,8 @@ and reads the published host port from `RIDE_PUBLISHED_PORTS` (a missing mapping
 starts Playwright MCP (`playwright-mcp`) as a stdio subprocess driven through the `mcp` SDK's client session,
 with cwd `/workspace`, a minimal environment (`PATH`, `HOME`, `DISPLAY`, `PLAYWRIGHT_BROWSERS_PATH`), Chromium headed on the Xvfb display, `--isolated` (an in-memory profile),
 `--no-sandbox` (Docker's default seccomp profile denies the user namespaces Chromium's sandbox needs; the container is the boundary),
-the origin lists as `--allowed-origins` and `--blocked-origins`, `--output-dir /workspace/output`, `--image-responses omit`, `--file-paths absolute`, and the default capability set (`pdf`, `vision`, and `devtools` off);
+the origin lists as `--allowed-origins` and `--blocked-origins`, `--output-dir /workspace/output`, `--image-responses omit`, `--file-paths absolute`, and the default capability set (`pdf`, `vision`, and `devtools` off),
+and a `--config` file the daemon writes outside the workspace setting `browser.contextOptions.acceptDownloads` to false, so the browser refuses every download a page triggers;
 the server's own file rule then confines uploads, drops, and named outputs to `/workspace` and refuses `file://` navigation;
 warms the browser with `browser_navigate` to `about:blank`, so a Chromium that cannot start fails the launch rather than the first command;
 opens `Client.from_env()`, emits `listening`, and says `{"event": "ready", "vnc": <url or null>}`.
@@ -157,14 +167,18 @@ a tool error is `{"error": "<text>"}`, and a withheld or malformed command likew
 The files are collected by diffing the workspace around the call:
 before it the daemon records every file under `/workspace` (the `artifacts` mount excluded),
 and after it every file new or changed is minted as an artifact (`bro.artifact.mint_artifact` from the daemon's workspace, through the shared attach), listed in `files`, and removed from the workspace.
-So a file is attributed to the command that wrote it wherever the server put it (`--output-dir` takes the automatically named ones; a `filename` argument resolves against the workspace root), and the next command starts clean;
-a file the server is still writing when the call returns is minted as it stands.
+So a file is attributed to the command that wrote it wherever the server put it (`--output-dir` takes the automatically named ones; a `filename` argument resolves against the workspace root), and the next command starts clean.
+The collector never meets an open file:
+every tool writes its files inside its handler before its result returns, and the one writer without a completion signal, a page-triggered download, which the server saves asynchronously after the call, is refused at the browser context;
+the server routes the refused save into the rejection listener its live context installs, so the process survives,
+and a file a page offers for download reaches the owner through `browser_network_request` with `part: response-body` and a `filename`, an owner command bounded like any other.
 A mint the store's byte cap refuses is listed as `{"name": "<file>", "error": "<reason>"}` and the file is removed all the same;
 a command whose files together exceed `OUTPUT_LIMIT_BYTES` (256 MiB) has none of them minted, all of them removed, and its reply is `{"error"}` naming the size.
 
 The reply is measured whole against the bound.
 Over it, the `text` is minted first and `{"spilled": "text", "ref": "sha256:…", "bytes": <n>, "files": […]}` stands in;
-when that still does not fit (a long `files` list, the roster), the whole reply object is minted and `{"spilled": "reply", "ref": "sha256:…", "bytes": <n>}` is sent, so no reply is ever refused by the dispatcher.
+when that still does not fit (a long `files` list, the roster), the whole reply object is minted and `{"spilled": "reply", "ref": "sha256:…", "bytes": <n>}` is sent;
+and a spill whose own mint fails (the store cap, an ingest error) is answered `{"error": "<reason>", "dropped": <bytes>}` with the reason cut at 1 KiB, an object that fits by construction, so no reply is ever refused by the dispatcher.
 A mint reaches the owner and its ancestors and is linked into each one's view at once,
 so a boxed owner reads a spilled snapshot or a screenshot at `/var/ride/artifacts/<ref>` as soon as the reply names it, and an unboxed owner through `artifact get`;
 a snapshot of a real page usually crosses the bound, so that is the common step.
@@ -182,8 +196,8 @@ and when its bound (`OPEN_TIMEOUT`, 1200 s, re-armed by each mark and below the 
 `webview close [MISSION]` sends `{"webview": "close"}`, waits for the reply and then for the record to end, and prints the outcome;
 with one live webview per owner, `MISSION` defaults to the session's live webview, found in the caller's listing by type.
 Everything between open and close is `mission ask <id> '<command>' --wait` (or `cli('mission ask')` from a bro that mounted it), and `mission history <id>` shows the conversation.
-`quest watch` prints a webview's lifecycle as it prints every mission's, and `mission watch` adds its chat;
-`quest check` and `quest list` stay about bros.
+`mission watch` prints a webview's lifecycle and chat;
+`quest` stays about bros on every verb.
 A `ride exec` shell has no channel of its own, so driving a webview by hand happens from a session process, or on the human's side through `vnc`.
 
 ### Isolation and the human
@@ -210,20 +224,20 @@ The journal keeps every command and reply (the record's 32-message tail, full pa
 
 ### Lifecycle and bounds
 
-A webview lives until its owner closes it, `quest cancel` or `mission cancel` (`failed:cancelled`; the workspace is kept like any killed worker's until `ride clean` reclaims the empty tree),
+A webview lives until its owner closes it, `mission cancel` (`failed:cancelled`; the workspace is kept like any killed worker's until `ride clean` reclaims the empty tree),
 the owner's death (`failed:orphaned` through the cascade), root teardown (`killed`), or a `timeout` the open request named (none by default).
 A live one holds a one-shot session's turn end and shows in the status line, as #691 made every mission do, which is the nudge to close it.
 A ride on a supplied runtime (`--runtime-bundle`) cannot open one, having no runtime volume, as with any boxed launch;
 an unboxed ride can, given Docker.
 A command sent before `ready` is dropped by the worker's broxy and stays pending in the journal;
 `webview open` returns at `ready`, so an owner that waits for it never sends one.
-The one quantity no bound reaches is a single command's transient write, a download landing on the host-backed workspace before the daemon sees it:
-the lowering has no quota for a bind mount, so it is the owner's command to avoid, a rule for the browse spell.
+The workspace has no quota, so what bounds its transient use is that every write there is an owner's tool call, closed before the call returns and removed after minting:
+a page cannot land a file of its own choosing, since downloads are refused.
 
 | bound | value | on overflow |
 |---|---|---|
 | command | `MAX_MESSAGE_BYTES` (16 KiB) | `mission ask` refuses it before sending |
-| reply | `MAX_MESSAGE_BYTES` | the text is minted, then the whole reply; `{"spilled", "ref", "bytes"}` stands in |
+| reply | `MAX_MESSAGE_BYTES` | the text is minted, then the whole reply; `{"spilled", "ref", "bytes"}` stands in, or a bounded `{"error"}` when the spill itself fails |
 | one command's files | `OUTPUT_LIMIT_BYTES` (256 MiB) | nothing minted, all removed, an error reply naming the size |
 | files kept | the store's `MAX_STORE_BYTES` | the refused mint is listed per file as an error |
 | one command | `COMMAND_DEADLINE` (120 s) | the webview ends `failed:exit`, the tail naming the command |
@@ -236,10 +250,10 @@ the lowering has no quota for a bind mount, so it is the owner's command to avoi
 ### Packaging, surfaces, and docs
 
 Core:
-`bro/mission.py` (`mission`, a session command registered like `quest`), `bro/quest.py` narrowed to the bro view over it,
-and `bro/worker_types.py` (`WorkerContainer.artifact_view`, `PeerDescription.artifact_view` as a path).
+`bro/mission.py` (`mission`, a session command registered like `quest`), `bro/quest.py` narrowed to the bro-only view over it,
+`bro/worker_types.py` (`WorkerContainer.artifact_view`, `PeerDescription.artifact_view` as a path), and `native/bro/native/runner.py` (the per-kind notice).
 Ride:
-`ride/ride/worker_container.py` (the view mount path, the per-tag build lock, the captured build output),
+`ride/ride/claude/stop_guard.py` (the one rule), `ride/ride/worker_container.py` (the view mount path, the per-tag build lock, the captured build output),
 `ride/ride/peer_facts.py` and `ride/ride/artifacts.py` (the view path on the facts row and in `materialize`), and the callers that pass it (`broker_root.py`, `bro_worker.py`).
 A new workspace member `webview/` publishes `bro-webview` (package `bro.webview`, a portion of the `bro` namespace like `bro.bench`), depending on `bro` and `mcp`;
 modules `worker.py`, `serve.py`, `cli.py` (`__cli_name__ = 'webview'`), `container/Dockerfile`, the generated `_entrypoints.py`, and `webview/AGENTS.md`;
@@ -281,9 +295,16 @@ a consumer pinning the framework adds `bro-webview` when it wants webviews.
   88 files and the bro vocabulary in every prompt and spell;
   the narrowed `quest` keeps the bro workflows as they are and gives non-bro missions the universal surface.
   Settled with the user.
-- A `quest` strictly typed to bros:
-  the stop guard, the native runner, the automatic admission, and the turn-end notices rely on `quest watch` reporting every mission's lifecycle and on `quest cancel` ending any;
-  narrowing those would leave a webview holding the turn end while the one watch every bro arms stayed silent.
+- A `quest` that keeps every mission's lifecycle lines and its universal `cancel`:
+  a bro-only flow would meet missions on its watch, and the guards would still need to know which watch covers what;
+  the one-rule guard covers the mixed set instead.
+  Settled with the user.
+- A stop guard matching the watch command and covering missions per kind:
+  print mode holds the process on any pending task and the guard runs again at the next stop, so "missions in flight and no background task" is the whole rule, and the idle-watch notice goes with it.
+  Settled with the user.
+- Enforcing browser-bro-only ownership in the type:
+  a generic component naming a persona;
+  #522 enforces it for summoned children through the permit their bro's layers grant, and a root session's use stays policy.
   Settled with the user.
 - `mission_*` service tools beside the `quest_*` ones:
   six more tools in every bro's roster for a surface few bros drive;
@@ -294,15 +315,16 @@ a consumer pinning the framework adds `bro-webview` when it wants webviews.
 - JSON commands inside `{text}` payloads:
   they needed no client, but every reader would parse text twice;
   the wire carries any JSON object and `mission` renders it.
-- Enforcing browser-bro-only ownership in the type:
-  a generic component naming a persona;
-  #522's permit is the enforcement point, and the root's direct route stays.
-  Settled with the user.
 - Image content blocks beside output files:
   Playwright MCP writes every screenshot into the workspace anyway, so files are the one carrier.
   Settled with the user.
 - Withholding or rewriting `filename` arguments so every output lands in `--output-dir`:
   a vocabulary change for what a workspace diff collects exactly.
+- Accepting downloads:
+  the one writer without a completion signal, saved by the server after the call returns, with a size the page chooses on an ordinary click and no quota on the workspace;
+  refused at the context, with the response-body route for a file the owner wants.
+- Declaring `mission` for a bro with `shell('mission ask', …)`:
+  a shell roster admits complete command lines by exact match, so the parameterized verbs go through `cli(…)` mounts and only the fixed watch fits the roster.
 - `--allow-unrestricted-file-access`, alone or with a daemon-side path rule:
   uploads and `file://` would then reach the process environments and their channel tokens through an owner a page talked into it.
   Settled with the user.
@@ -349,7 +371,9 @@ a consumer pinning the framework adds `bro-webview` when it wants webviews.
   every verb over a fake journal read, `check` on a bro and on a non-bro result, `say` and `ask` with JSON payloads and the talk refusal,
   `history --seq` through the events read, the watch lines for both types with the cut line and its marker, `list --type`.
   `bro/quest_test.py`:
-  the narrowed verbs refusing a non-bro mission (`check`, `history`, `say`, `ask`, absent from `list` and from the watch's chat lines) while `watch` keeps its lifecycle line and `cancel` ends it, beside everything it keeps.
+  every verb refusing or omitting a non-bro mission (`check`, `history`, `say`, `ask`, `cancel`, absent from `list` and from `watch`), beside everything it keeps.
+  `ride/ride/claude/stop_guard_test.py` and `native/bro/native/runner_test.py`:
+  the one rule, a live mission of either kind held with no task running and let stand under any running task, and the notice's per-kind wording.
 - `bro/worker_types_test.py`:
   `artifact_view` validation and its default.
   `ride/ride/worker_container_test.py`:
@@ -361,7 +385,8 @@ a consumer pinning the framework adds `bro-webview` when it wants webviews.
   the packaged Dockerfile validating as a `WorkerContainer` with a stable hash, and the module importing no broker or MCP machinery at module level.
 - `serve_test.py`, over an in-process broker and a fake stdio MCP server (a small `mcp` server script):
   the mount check, `listening` then `ready` after the warm-up, a command's reply verbatim,
-  files collected by the diff wherever the fake wrote them, minted, listed, and removed, a reply over the bound spilling its text and then the whole reply, the per-command file limit,
+  files collected by the diff wherever the fake wrote them, minted, listed, and removed, a reply over the bound spilling its text and then the whole reply, a spill whose mint is refused answered as a bounded error, the per-command file limit,
+  the config file refusing downloads,
   `tools` and `close` with the ok result, a malformed command's and a withheld tool's error reply, the server's cwd and minimal environment,
   a server dying while idle and mid-command and a stuck command each ending the daemon non-zero naming the cause;
   the display and VNC processes behind fake `Xvfb`, `x11vnc`, and `websockify` executables on PATH, readiness probed and a dead one ending the daemon.
@@ -370,7 +395,8 @@ a consumer pinning the framework adds `bro-webview` when it wants webviews.
   `close` waiting for the end and defaulting to the live webview.
 - `webview/bro/webview/e2e_test.py` (`broker_e2e`, host-only, over `ride.e2e_test`'s fixtures), a real webview from `run_root_via_broker` with the installed runtime:
   open, `browser_navigate` to a `data:` URL, `browser_snapshot`, `browser_take_screenshot` with and without a `filename`, each yielding a file artifact the owner reads from its view and gone from the workspace,
-  `browser_file_upload` of a shared ref from `/workspace/artifacts`, `browser_run_code_unsafe` refused by the daemon, `file://` navigation refused by the server, close ending `ok`, the container and workspace gone;
+  `browser_file_upload` of a shared ref from `/workspace/artifacts`, `browser_run_code_unsafe` refused by the daemon, `file://` navigation refused by the server,
+  a page-triggered download refused with nothing written and the next command answered, a response body saved through `browser_network_request` and minted, close ending `ok`, the container and workspace gone;
   a `--vnc` open answering on the published loopback port and denied without the permit;
   cleanup asserted against the live runtime root rather than the fixture's, so the scenario does not inherit #708.
 - `local/`:
@@ -442,3 +468,20 @@ Design review round 1 (bro-eyebro on PR #709, 2026-09-21):
   one repository, one revision, one pin for every distribution, and a loud failure on skew from the daemon's mount check and the missing field.
 - **The task page is reconciled at write-back:**
   `## Goal`, `## Shape`, and `## Follow-ups` are brought to this vocabulary in place.
+
+Design review round 2 (bro-eyebro on PR #709, 2026-09-21):
+
+- **`quest` is bro-only on every verb, and the turn-end guard has one rule.**
+  Round 1's hybrid left `quest watch` printing a webview's lifecycle but not its chat, and the guards would have needed to know which watch covers which mission;
+  now a bro-only flow never meets the word mission, a bro that launches another type declares `mission`, and a turn end is held while a live mission of any type has no background task running, the rule the native runner already applies.
+  Settled with the user, reversing round 1's first entry.
+- **Ownership is enforced by #522 for summoned children only.**
+  #522 gives the root every installed type and a child none unless granted, so a root bro's opening stays policy;
+  a child's `:webview` comes through its own bro's configured layers or a summoner's bounded grant, which is where "only the browser bro" is written.
+- **Downloads are refused at the browser context, and the collector never meets an open file.**
+  The pinned server saves a page-triggered download asynchronously after the tool call returns, the one writer without a completion signal, with a size the page chooses;
+  `acceptDownloads: false` in a config file refuses it in the browser, the server's live context routes the refused save into its own rejection listener,
+  every other file is closed before its tool returns, and the response-body route covers a file the owner wants.
+- **A spill whose own mint fails is answered as a bounded error**, so no reply is ever refused by the dispatcher.
+- **The parameterized `mission` verbs are mounted with `cli(…)`**, since a shell roster admits complete command lines by exact match;
+  only the fixed watch command fits the roster.
