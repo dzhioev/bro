@@ -12,6 +12,8 @@ from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
+from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
+
 if TYPE_CHECKING:
   from bro.broker.brotocol import Talk
   from bro.broker.job import CommandJob
@@ -43,7 +45,7 @@ class PeerDescription:
   permits: frozenset[str]
   member: str | None
   expected: bool
-  artifact_view: bool
+  artifact_view: PurePosixPath | None
   published_ports: tuple[tuple[int, int], ...]
   depth: int
   extension: Any = None
@@ -71,8 +73,24 @@ class WorkerContainer:
   command: tuple[str, ...]
   env: Mapping[str, str]
   published_ports: tuple[int, ...]
+  artifact_view: PurePosixPath = PurePosixPath(CONTAINER_ARTIFACTS_ROOT)
 
   def __post_init__(self) -> None:
+    artifact_view = self.artifact_view
+    if not isinstance(artifact_view, (str, PurePosixPath)):
+      raise ValueError('worker container artifact view must be an absolute POSIX path')
+    raw_artifact_view = str(artifact_view)
+    normalized_artifact_view = PurePosixPath(raw_artifact_view)
+    segments = raw_artifact_view.split('/')[1:]
+    if (
+      not normalized_artifact_view.is_absolute()
+      or raw_artifact_view.startswith('//')
+      or '\0' in raw_artifact_view
+      or (raw_artifact_view != '/' and any(segment in ('', '.', '..') for segment in segments))
+      or str(normalized_artifact_view) != raw_artifact_view
+    ):
+      raise ValueError('worker container artifact view must be an absolute normalized POSIX path')
+
     files = dict(self.files)
     if not all(
       isinstance(path, str) and isinstance(content, bytes) for path, content in files.items()
@@ -152,6 +170,7 @@ class WorkerContainer:
       raise ValueError('worker container published ports must be distinct')
     object.__setattr__(self, 'files', MappingProxyType(files))
     object.__setattr__(self, 'env', MappingProxyType(env))
+    object.__setattr__(self, 'artifact_view', normalized_artifact_view)
 
   def image_hash(self, runtime_image: str) -> str:
     if not isinstance(runtime_image, str) or not runtime_image:

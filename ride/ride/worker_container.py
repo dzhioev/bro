@@ -8,6 +8,8 @@ import io
 import socket
 import subprocess
 import tarfile
+import threading
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 
 from bro.broker.brotocol import Talk
@@ -17,6 +19,7 @@ from bro.worker_types import WorkerContainer
 from ride.artifacts import ArtifactStore, view_mount
 from ride.peer_facts import PeerFacts
 from ride.workspace.docker import (
+  ContainerRuntime,
   ContainerRuntimeResolver,
   Launch as DockerLaunch,
   image_present,
@@ -24,9 +27,13 @@ from ride.workspace.docker import (
 )
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
-from ride.workspace.spawn import DockerLaunchSpec, DockerSpawner
+from ride.workspace.spawn import DEFAULT_RING_BYTES, DockerLaunchSpec, DockerSpawner
 
 _PUBLISHED_PORTS_ENV = 'RIDE_PUBLISHED_PORTS'
+_IMAGE_LOCKS_GUARD = threading.Lock()
+_IMAGE_LOCKS: dict[str, threading.Lock] = {}
+_IMAGE_RESERVATIONS_GUARD = threading.Lock()
+_IMAGE_RESERVATIONS: dict[str, int] = {}
 
 
 @dataclass(frozen=True)
@@ -55,24 +62,95 @@ def worker_image_tag(worker_type: str, runtime_image: str, spec: WorkerContainer
   return f'bro/{worker_type}:{spec.image_hash(runtime_image)}'
 
 
+def _image_lock(tag: str) -> threading.Lock:
+  with _IMAGE_LOCKS_GUARD:
+    return _IMAGE_LOCKS.setdefault(tag, threading.Lock())
+
+
+def _acquire_worker_image(tag: str) -> None:
+  with _IMAGE_RESERVATIONS_GUARD:
+    _IMAGE_RESERVATIONS[tag] = _IMAGE_RESERVATIONS.get(tag, 0) + 1
+
+
+def _release_worker_image(tag: str) -> None:
+  with _IMAGE_RESERVATIONS_GUARD:
+    remaining = _IMAGE_RESERVATIONS[tag] - 1
+    if remaining == 0:
+      del _IMAGE_RESERVATIONS[tag]
+    else:
+      _IMAGE_RESERVATIONS[tag] = remaining
+
+
+@contextlib.contextmanager
+def _reserve_worker_image(tag: str) -> Iterator[None]:
+  _acquire_worker_image(tag)
+  try:
+    yield
+  finally:
+    _release_worker_image(tag)
+
+
+async def _wait_for_worker(operation: asyncio.Task[None]) -> bool:
+  cancelled = False
+  while True:
+    try:
+      await asyncio.shield(operation)
+      return cancelled
+    except asyncio.CancelledError:
+      cancelled = True
+
+
+async def _complete_worker_call(function: Callable[[str], None], tag: str) -> bool:
+  operation = asyncio.create_task(asyncio.to_thread(function, tag))
+  return await _wait_for_worker(operation)
+
+
+@contextlib.asynccontextmanager
+async def _reserve_worker_image_off_loop(tag: str) -> AsyncIterator[None]:
+  acquisition = asyncio.create_task(asyncio.to_thread(_acquire_worker_image, tag))
+  if await _wait_for_worker(acquisition):
+    await _complete_worker_call(_release_worker_image, tag)
+    raise asyncio.CancelledError
+  try:
+    yield
+  finally:
+    if await _complete_worker_call(_release_worker_image, tag):
+      raise asyncio.CancelledError
+
+
+def _prune_worker_images(tag: str) -> None:
+  with _IMAGE_RESERVATIONS_GUARD:
+    prune_superseded_images(tag, protected=_IMAGE_RESERVATIONS)
+
+
 def ensure_worker_image(worker_type: str, runtime_image: str, spec: WorkerContainer) -> str:
   tag = worker_image_tag(worker_type, runtime_image, spec)
-  if image_present(tag):
-    return tag
-  subprocess.run(
-    [
-      'docker',
-      'build',
-      '-t',
-      tag,
-      '--build-arg',
-      f'RUNTIME_IMAGE={runtime_image}',
-      '-',
-    ],
-    input=_build_context(dict(spec.files)),
-    check=True,
-  )
-  prune_superseded_images(tag)
+  with _reserve_worker_image(tag), _image_lock(tag):
+    if image_present(tag):
+      return tag
+    built = subprocess.run(
+      [
+        'docker',
+        'build',
+        '-t',
+        tag,
+        '--build-arg',
+        f'RUNTIME_IMAGE={runtime_image}',
+        '-',
+      ],
+      input=_build_context(dict(spec.files)),
+      stdout=subprocess.PIPE,
+      stderr=subprocess.STDOUT,
+    )
+    if built.stdout is None:
+      raise RuntimeError(f'worker image build for {tag} returned no captured output')
+    if built.returncode != 0:
+      tail = built.stdout[-DEFAULT_RING_BYTES:].decode('utf-8', errors='replace').strip()
+      detail = tail or '(no build output)'
+      raise RuntimeError(
+        f'worker image build for {tag} failed with exit code {built.returncode}:\n{detail}'
+      )
+    _prune_worker_images(tag)
   return tag
 
 
@@ -89,11 +167,10 @@ def _published_ports(container_ports: tuple[int, ...]) -> tuple[tuple[int, int],
 def _lower_worker_container(
   launch: WorkerContainerLaunch,
   workspace_name: str,
-  container_runtime: ContainerRuntimeResolver,
+  runtime: ContainerRuntime,
+  image: str,
   artifacts: ArtifactStore,
 ) -> DockerLaunchSpec:
-  runtime = container_runtime.resolve()
-  image = ensure_worker_image(launch.type, runtime.runtime_image, launch.spec)
   ports = _published_ports(launch.spec.published_ports)
   workspace = Workspace.ensure(
     workspace_name,
@@ -115,7 +192,7 @@ def _lower_worker_container(
         tty=False,
         image=image,
         runtime_bundle_hash=runtime.bundle_hash,
-        extra_mounts=(view_mount(artifacts.ride, workspace_name),),
+        extra_mounts=(view_mount(artifacts.ride, workspace_name, launch.spec.artifact_view),),
         published_ports=ports,
       )
     )
@@ -147,13 +224,27 @@ class WorkerContainerSpawner(Spawner):
   ) -> ChildHandle:
     assert isinstance(launch, WorkerContainerLaunch)
     workspace_name = f'{launch.type}-{channel.channel}'
-    self._facts.note_workspace(mission, workspace_name, artifact_view=True)
-    lowered = await asyncio.to_thread(
-      _lower_worker_container,
-      launch,
+    self._facts.note_workspace(
+      mission,
       workspace_name,
-      self._container_runtime,
-      self._artifacts,
+      artifact_view=launch.spec.artifact_view,
     )
-    self._facts.note_published_ports(mission, tuple(lowered.launch.published_ports))
-    return await self._docker.spawn(lowered, channel, mission, talk)
+    runtime = await asyncio.to_thread(self._container_runtime.resolve)
+    tag = worker_image_tag(launch.type, runtime.runtime_image, launch.spec)
+    async with _reserve_worker_image_off_loop(tag):
+      image = await asyncio.to_thread(
+        ensure_worker_image,
+        launch.type,
+        runtime.runtime_image,
+        launch.spec,
+      )
+      lowered = await asyncio.to_thread(
+        _lower_worker_container,
+        launch,
+        workspace_name,
+        runtime,
+        image,
+        self._artifacts,
+      )
+      self._facts.note_published_ports(mission, tuple(lowered.launch.published_ports))
+      return await self._docker.spawn(lowered, channel, mission, talk)

@@ -1,4 +1,4 @@
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,7 +9,7 @@ import ride.broker_root
 import ride.root
 import ride.workspace.docker as workspace_docker
 import ride.workspace.spawn as workspace_spawn
-from bro.workspace.paths import workspace_dir
+from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
@@ -194,7 +194,9 @@ class TestBrokerStartedParty:
     assert isinstance(wrapped, workspace_spawn.DockerLaunchSpec)
     assert wrapped.launch.env[bro.summon.MAY_SUMMON_ENV] == 'dev'
     assert wrapped.launch.env[bro.summon.PERMITS_ENV] == 'bro.party.start.boxed'
-    assert wrapped.launch.extra_mounts == (ride.artifacts.view_mount('ws', 'ws'),)
+    assert wrapped.launch.extra_mounts == (
+      ride.artifacts.view_mount('ws', 'ws', PurePosixPath(CONTAINER_ARTIFACTS_ROOT)),
+    )
     assert captured['workspace'] is workspace
     assert captured['credential_scope'] == _scope()
 

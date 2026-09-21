@@ -282,7 +282,7 @@ def image_present(tag: str) -> bool:
   return subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True).returncode == 0
 
 
-def prune_superseded_images(current: str) -> None:
+def prune_superseded_images(current: str, *, protected: Collection[str] = ()) -> None:
   """untag unused predecessors from the current runtime or project repository."""
   repository = current.rsplit(':', 1)[0]
   listed = subprocess.run(
@@ -293,7 +293,7 @@ def prune_superseded_images(current: str) -> None:
   if listed.returncode != 0:
     return
   for image in listed.stdout.split():
-    if image in (current, _SMOKE_TEST_TAG) or image.endswith(':<none>'):
+    if image in (current, _SMOKE_TEST_TAG) or image in protected or image.endswith(':<none>'):
       continue
     removed = subprocess.run(['docker', 'image', 'rm', image], capture_output=True, text=True)
     if removed.returncode == 0:

@@ -5,7 +5,7 @@ import socket
 import subprocess
 import sys
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest.mock import MagicMock
 
 import pytest
@@ -34,6 +34,7 @@ from bro.monitor import (
 )
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 from bro.workspace.paths import (
+  CONTAINER_ARTIFACTS_ROOT,
   CONTAINER_PARTY_DIR,
   CONTAINER_SESSION_DIR,
   workspace_dir,
@@ -235,7 +236,7 @@ class TestSummonLowering:
         extra_mounts=(
           _session_state_mount('broker-CH'),
           _party_mount('broker-CH'),
-          ride.artifacts.view_mount(SESSION, 'broker-CH'),
+          ride.artifacts.view_mount(SESSION, 'broker-CH', PurePosixPath(CONTAINER_ARTIFACTS_ROOT)),
         ),
         repo=Path('/proj'),
         base_ref='PARENT-SHA',
@@ -486,7 +487,7 @@ class TestSummonLowering:
       '/host/trails:/var/ride/trails',
       _session_state_mount('broker-CH'),
       _party_mount('broker-CH'),
-      ride.artifacts.view_mount(SESSION, 'broker-CH'),
+      ride.artifacts.view_mount(SESSION, 'broker-CH', PurePosixPath(CONTAINER_ARTIFACTS_ROOT)),
     )
 
   def test_the_child_keeps_session_state_like_any_boxed_session(self, lowering_harness):
@@ -960,7 +961,7 @@ raise SystemExit(3)
       frozenset(),
     )
 
-    assert facts.for_mission('X-1').artifact_view
+    assert facts.for_mission('X-1').artifact_view == PurePosixPath(CONTAINER_ARTIFACTS_ROOT)
 
   @pytest.mark.asyncio
   async def test_lowering_failure_propagates_out_of_spawn(self, lowering_harness):
@@ -1215,7 +1216,7 @@ class TestClaudeSummonLowering:
       '/host/claude:/home/ride/.claude',
       _session_state_mount('broker-CH'),
       _party_mount('broker-CH'),
-      ride.artifacts.view_mount(SESSION, 'broker-CH'),
+      ride.artifacts.view_mount(SESSION, 'broker-CH', PurePosixPath(CONTAINER_ARTIFACTS_ROOT)),
     )
     assert lowered.launch.tty is False
 
