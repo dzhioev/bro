@@ -1,4 +1,4 @@
-#!/usr/bin/env -S bash -e
+#!/usr/bin/env bash
 #
 # shared docker/podman smoke-test helper for server images.
 # source this with the OCI command and a build-preparation function, then call:
