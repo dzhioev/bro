@@ -126,6 +126,8 @@ PYTEST_FILES = [
   'bro/mcp_test.py',
   'bro/harness/claude_test.py',
   'bro/bro_test.py',
+  'bro/mission_test.py',
+  'bro/quest_test.py',
   'bro/artifact_test.py',
   'bro/run_lifecycle_test.py',
   'native/bro/fork_test.py',
