@@ -58,6 +58,7 @@ DISTRIBUTIONS = [
       '^native/',
       '^oops/',
       '^ride/',
+      '^webview/',
       f'^{BENCHMARK}/',
       '.venv/',
       '.claude/',
@@ -93,6 +94,11 @@ DISTRIBUTIONS = [
   ),
   Distribution(
     directory='ride',
+    deptry_exclude=(TEST_MODULE_PATTERN,),
+    deptry_known_first_party=('bro',),
+  ),
+  Distribution(
+    directory='webview',
     deptry_exclude=(TEST_MODULE_PATTERN,),
     deptry_known_first_party=('bro',),
   ),
@@ -280,6 +286,8 @@ PYTEST_FILES = [
   'bench/bro/bench/job_test.py',
   'bench/bro/bench/presets_test.py',
   'bench/bro/bench/run_test.py',
+  'webview/bro/webview/worker_test.py',
+  'webview/bro/webview/serve_test.py',
   'local/bro/local/run_tests_test.py',
   'local/bro/local/gate_display_test.py',
   'local/bro/local/shell_policy_test.py',

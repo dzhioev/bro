@@ -17,6 +17,7 @@ members = [
     "bro-native",
     "bro-oops",
     "bro-ride",
+    "bro-webview",
 ]
 
 [[package]]
@@ -484,6 +485,21 @@ requires-dist = [
     { name = "mcp", specifier = "==1.28.1" },
     { name = "rich", specifier = "==15.0.0" },
     { name = "textual", specifier = "==8.2.8" },
+]
+
+[[package]]
+name = "bro-webview"
+version = "0.1.0"
+source = { editable = "webview" }
+dependencies = [
+    { name = "bro" },
+    { name = "mcp" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bro", editable = "." },
+    { name = "mcp", specifier = "==1.28.1" },
 ]
 
 [[package]]
