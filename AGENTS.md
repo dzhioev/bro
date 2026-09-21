@@ -16,6 +16,7 @@ The repository is a uv workspace whose root publishes the `bro` distribution fro
 `oops/` publishes `bro-oops` (consumer-neutral deployment and operations machinery),
 `ride/` publishes `bro-ride` (top-level `ride`, the managed-workspace runtime and both harness adapters),
 `bench/` publishes `bro-bench` (the launcher-side benchmark credentials, registered worker type, and session commands),
+`webview/` publishes `bro-webview` (the registered browser worker type, its image, and daemon),
 and `local/` is the `bro-local` member (`bro.local`)
 — this checkout's own personas and policy scripts, kept out of every published wheel by riding the root's `dev` dependency group.
 All published members depend on `bro`;
@@ -55,7 +56,7 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   They spend real tokens, so the stage lists them and runs only when named, and pytest collects one only as a file named on its command line, never by walking a directory (`conftest.py`);
   the benchmark project holds its graded trials out of directory collection the same way
 - `sync-scripts --project <directory>` — regenerate a distribution's `[project.scripts]` and committed `_entrypoints.py`, then `uv sync --all-packages --all-groups --all-extras`
-- `uv build --package bro`, `uv build --package bro-bench`, `uv build --package bro-native`, `uv build --package bro-dev`, `uv build --package bro-oops`, and `uv build --package bro-ride`
+- `uv build --package bro`, `uv build --package bro-bench`, `uv build --package bro-native`, `uv build --package bro-dev`, `uv build --package bro-oops`, `uv build --package bro-ride`, and `uv build --package bro-webview`
   — build the workspace wheels;
   `benchmark/`'s is `uv build --directory benchmark`, since it is no member to name with `--package`
 

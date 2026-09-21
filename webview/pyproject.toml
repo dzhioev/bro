@@ -1,0 +1,42 @@
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "bro-webview"
+version = "0.1.0"
+description = "browser worker type and daemon for bro"
+requires-python = ">=3.12"
+dependencies = [
+  "bro",
+  "mcp==1.28.1",
+]
+
+[project.scripts]
+# bro
+"bro.webview.cli" = "bro.webview._entrypoints:bro_webview_cli"
+"webview" = "bro.webview._entrypoints:bro_webview_cli"
+
+[project.entry-points."bro.worker_types"]
+webview = "bro.webview.worker:WebviewType"
+
+[project.entry-points."bro.session_commands"]
+webview = "bro.webview._entrypoints:bro_webview_cli"
+
+[tool.uv.sources]
+bro = { workspace = true }
+
+[tool.deptry.package_module_name_map]
+bro = ["bro"]
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = ["bro.webview"]
+namespace = true
+wheel-exclude = [
+  "**/*_test.py",
+  "**/*_test_helper.py",
+  "**/conftest.py",
+  "**/AGENTS.md",
+  "**/*.egg-info",
+]
