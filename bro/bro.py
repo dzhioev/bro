@@ -234,8 +234,7 @@ async def _claude_answer(answer: str) -> str:
 _ANSWER_DESCRIPTION = (
   'deliver the final answer of this summoned session to the summoner waiting on '
   'it, and end the session. This session runs on behalf of another session; call '
-  'this exactly once, when the work is done — in an attended session, once the '
-  'user confirms nothing is left — with a self-contained answer: the summoner '
+  'this exactly once, when the work is done, with a self-contained answer: the summoner '
   'sees nothing else of this session. A session that ends without this call '
   'reports no answer and surfaces to the summoner as a failure.'
   '{{when #wire = mcp}} The call records the answer and terminates the session; '

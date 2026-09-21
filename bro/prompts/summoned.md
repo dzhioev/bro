@@ -77,5 +77,5 @@ The natural end is after the work is fully done
 the call ends the session, and ending it kills the watchers the remaining work runs under.
 
 This duty comes with being summoned, not with the hold.
-Where a human is present the call still happens, once they confirm nothing is left;
-their presence changes when to ask, not whether to deliver.
+Where a human is present the call still happens, as the closing step the request implies;
+the hold alone says which steps are confirmed with them, and the delivery asks for no go-ahead of its own.
