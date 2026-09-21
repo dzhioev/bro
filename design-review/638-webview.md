@@ -46,8 +46,11 @@ The webview needs a surface that is per mission rather than per type, with typed
 `check`, `list`, `history`, `say`, `ask`, `watch`, and `cancel` take bro quests alone, with `{text}` payloads taken and printed as text, `check` printing the answer, and `watch` printing bro quests' lifecycle and chat and nothing else;
 the `quest_*` service tools, `bro::quest_cancel` included, narrow the same way.
 A flow that never launches another type never meets the word mission:
-the verbs' exit codes, the `quest_*` tools, and the public functions importers use keep their names and shapes, so prompts, spells, holds, and docs stay as they are;
+the verbs' exit codes, the `quest_*` tools, and the public functions importers use keep their names and shapes;
 the functions are `check`, `history`, `say`, `ask`, `watch`, `cancel`, `live_missions`, and the constants.
+What changes is wording:
+every description, prompt, and doc sentence that promised `quest cancel`, `bro::quest_cancel`, or `quest watch` for any mission says quests, with `mission` named for the rest;
+`### Packaging, surfaces, and docs` lists them.
 A bro that launches another type is told about `mission` and declares it:
 `cli('mission ask')` and `cli('mission history')` mount the parameterized verbs as tools with typed arguments derived from the CLI's declarations,
 since a shell roster admits complete command lines by exact match and cannot carry a mission id or a payload,
@@ -56,10 +59,16 @@ There are no `mission_*` service tools, and the automatic `quest watch` admissio
 Two watches run side by side:
 each is an ordinary channel client with its own cursor over the non-destructive `events` read, multiplexed by the session's broxy.
 
-The turn-end guards are the one shared place, and they speak both vocabularies without matching either:
+The watch a bro arms is a background task on every harness the guards know:
+on the Claude persona harness a `shell(…)` roster narrows the native `Monitor` to its commands (`bro/bro.py:_fold_tool_layers`), so `mission watch` is a Claude background task the Stop hook lists, as `quest watch` is;
+on the bro harness it is a `bro::job(…, mode='watch')` in the run's own registry, which the native runner's end rule reads;
+a `--raw` session runs both watches in the service server's registry, invisible to the Stop hook, which is why its notice already says to keep the turn active.
+
+The turn-end guards are the one shared place, and they speak both vocabularies without matching either watch command:
 a one-shot session's turn end is held while the session owns a live mission of any type (`live_missions()`, as #691 made it) and no background task runs,
-since print mode holds the process on any pending task and the guard runs again at the next stop, which is the rule the native runner already applies to its jobs.
-The Claude stop guard (`ride/ride/claude/stop_guard.py`) drops its exact `quest watch` match and its idle-watch notice for that one rule;
+since print mode holds the process on any pending task and the guard runs again at the next stop, which is the rule the native runner already applies to its jobs;
+and a turn end with no mission in flight and a background task still running is held once too, naming the tasks, since a persistent watch nobody stops holds print mode forever.
+The Claude stop guard (`ride/ride/claude/stop_guard.py`) drops its exact `quest watch` match for those two rules;
 its notice lists the missions as `live_mission_line` words them (`quest <id> to <bro>`, `mission <id>: <type>`)
 and names the way out per kind present, `quest watch` and `quest cancel` for quests, `mission watch` and `mission cancel` when any mission is not one.
 The native runner's notice (`native/bro/native/runner.py`) gains the same per-kind wording.
@@ -252,8 +261,13 @@ a page cannot land a file of its own choosing, since downloads are refused.
 Core:
 `bro/mission.py` (`mission`, a session command registered like `quest`), `bro/quest.py` narrowed to the bro-only view over it,
 `bro/worker_types.py` (`WorkerContainer.artifact_view`, `PeerDescription.artifact_view` as a path), and `native/bro/native/runner.py` (the per-kind notice).
+The wording that promised every mission becomes quests, with `mission` named for the rest:
+the `quest_cancel` tool descriptions in `bro/bro.py`, the module docstring and the `watch` and `cancel` help texts in `bro/quest.py`,
+the three sentences of `bro/prompts/summoner.md` that end "any mission" with `quest cancel` or `bro::quest_cancel`, the runner's and the stop guard's notices,
+`bro/reference/ride.md` (the stop-guard paragraph, the `quest cancel` line of the CLI section, and the sentence that has watch and cancellation account for every owned mission),
+and root `AGENTS.md` (the runner's turn-end sentence and the `quest.py` entry).
 Ride:
-`ride/ride/claude/stop_guard.py` (the one rule), `ride/ride/worker_container.py` (the view mount path, the per-tag build lock, the captured build output),
+`ride/ride/claude/stop_guard.py` (the two rules), `ride/ride/worker_container.py` (the view mount path, the per-tag build lock, the captured build output),
 `ride/ride/peer_facts.py` and `ride/ride/artifacts.py` (the view path on the facts row and in `materialize`), and the callers that pass it (`broker_root.py`, `bro_worker.py`).
 A new workspace member `webview/` publishes `bro-webview` (package `bro.webview`, a portion of the `bro` namespace like `bro.bench`), depending on `bro` and `mcp`;
 modules `worker.py`, `serve.py`, `cli.py` (`__cli_name__ = 'webview'`), `container/Dockerfile`, the generated `_entrypoints.py`, and `webview/AGENTS.md`;
@@ -300,8 +314,10 @@ a consumer pinning the framework adds `bro-webview` when it wants webviews.
   the one-rule guard covers the mixed set instead.
   Settled with the user.
 - A stop guard matching the watch command and covering missions per kind:
-  print mode holds the process on any pending task and the guard runs again at the next stop, so "missions in flight and no background task" is the whole rule, and the idle-watch notice goes with it.
+  print mode holds the process on any pending task and the guard runs again at the next stop, so "missions in flight and no background task" and its idle converse are the whole rule.
   Settled with the user.
+- Dropping the idle notice with the command match:
+  a persistent watch nobody stops holds print mode forever after the last mission ends, so the notice stays, over any running task.
 - Enforcing browser-bro-only ownership in the type:
   a generic component naming a persona;
   #522 enforces it for summoned children through the permit their bro's layers grant, and a root session's use stays policy.
@@ -485,3 +501,12 @@ Design review round 2 (bro-eyebro on PR #709, 2026-09-21):
 - **A spill whose own mint fails is answered as a bounded error**, so no reply is ever refused by the dispatcher.
 - **The parameterized `mission` verbs are mounted with `cli(…)`**, since a shell roster admits complete command lines by exact match;
   only the fixed watch command fits the roster.
+
+Design review round 3 (bro-eyebro on PR #709, 2026-09-21):
+
+- **The watch route is stated per harness, and the idle notice stays.**
+  A `shell(…)` roster narrows the native `Monitor` on the Claude persona harness and mounts `bro::job` on the bro harness, so `mission watch` is a task each guard sees, as `quest watch` is;
+  `--raw` runs both in the service registry the Stop hook never lists, as today.
+  The idle-watch notice is kept over any running task rather than dropped, since a persistent watch nobody stops would hold print mode forever.
+- **Every surface whose wording promised `quest cancel` or `quest watch` for any mission is listed** under packaging and reworded to quests, with `mission` named for the rest;
+  names and shapes stay.
