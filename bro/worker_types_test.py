@@ -1,13 +1,14 @@
 import importlib.metadata
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
 import bro.worker_types as worker_types
 from bro.base.scope import split_scope_overrides
 from bro.worker_types import LaunchRequest, WorkerType
+from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 
 
 class AlphaType(WorkerType):
@@ -169,6 +170,30 @@ def test_worker_container_copies_its_mappings_and_has_a_stable_image_hash():
     )
     != expected
   )
+  assert container.artifact_view == PurePosixPath(CONTAINER_ARTIFACTS_ROOT)
+  assert (
+    _worker_container(artifact_view=PurePosixPath('/workspace/artifacts')).image_hash(
+      'bro/ride-runtime:one'
+    )
+    == expected
+  )
+
+
+@pytest.mark.parametrize(
+  'artifact_view',
+  [
+    PurePosixPath('artifacts'),
+    '/workspace/../artifacts',
+    '/workspace//artifacts',
+    '/workspace/artifacts/',
+    '//workspace/artifacts',
+    '/workspace/./artifacts',
+    '/workspace/artifacts\0hidden',
+  ],
+)
+def test_worker_container_refuses_non_normalized_artifact_views(artifact_view):
+  with pytest.raises(ValueError, match='absolute normalized POSIX path'):
+    _worker_container(artifact_view=artifact_view)
 
 
 @pytest.mark.parametrize(

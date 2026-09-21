@@ -40,11 +40,11 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   joined members run in the summoner’s existing tree with member-scoped records and no resume.
 - `ride/launch_control.py` — common `launch` argument validation, owner attribution, worker-type dispatch, run lowering, launch audit, and manual-token lifecycle.
 - `ride/worker_container.py` — off-loop lowering of core `WorkerContainer` runs:
-  runtime-derived image builds and pruning, detached throwaway workspaces, artifact views, loopback port allocation and facts, and delegation to Docker supervision.
+  coordinated runtime-derived image builds and pruning, detached throwaway workspaces, artifact views, loopback port allocation and facts, and delegation to Docker supervision.
 - `ride/peer_facts.py` — the mission-keyed generic worker facts and peer directory for one broker root:
   peer resolution through the journal worker binding, workspace/member/type attribution, type-owned extensions, ancestry, and per-member current-trail attribution shared by launch, artifacts, and audit.
 - `ride/artifacts.py` — the ride's artifact store, the `artifact.mint` / `artifact.get` kinds, and the broker's `JobOutput`:
-  reflink-or-copy ingest into content-addressed objects, per-peer view directories behind the read-only `/var/ride/artifacts` mounts, the sharing rules with their uniform denial, the byte cap, and the JSONL audit beside the store.
+  reflink-or-copy ingest into content-addressed objects, per-peer view directories behind read-only mounts at each peer's declared artifact-view path, the sharing rules with their uniform denial, the byte cap, and the JSONL audit beside the store.
   A broker job's run directory is staged in the store and collected through the same ingest, reaching the peer that requested the job and its summoners.
   The peer wire and CLI are the framework's `bro/artifact.py`.
 - `ride/pending_launch.py` — pending manual worker launches:

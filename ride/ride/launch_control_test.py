@@ -1,5 +1,5 @@
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -23,6 +23,7 @@ from bro.worker_types import (
   WorkerContainer,
   WorkerType,
 )
+from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride import pending_launch
 from ride.launch_control import LaunchControl
 
@@ -139,7 +140,7 @@ def owner(tmp_path):
     permits=frozenset(),
     member=None,
     expected=False,
-    artifact_view=True,
+    artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
     published_ports=(),
     depth=0,
   )
@@ -286,7 +287,7 @@ def test_container_run_hands_the_spec_and_share_to_the_host_spawner(tmp_path, ow
   facts = peers.facts[message.request_id]
   assert facts.extension == {'worker': 'facts'}
   assert facts.permits == frozenset({'test.use'})
-  assert facts.artifact_view is False
+  assert facts.artifact_view is None
 
 
 @pytest.mark.parametrize(

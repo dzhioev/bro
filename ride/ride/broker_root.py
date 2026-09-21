@@ -6,6 +6,7 @@ import contextlib
 import socket
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Any
 
@@ -16,7 +17,7 @@ from bro.broker.spawn import LaunchSpec, Spawner
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 from bro.quest import BRO, LAUNCH
 from bro.worker_types import WorkerType, installed_types
-from bro.workspace.paths import launch_dir
+from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, launch_dir
 from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts
 from ride.bro_worker import BroFacts, Placement, SummonSpawner
 from ride.launch_control import LaunchControl
@@ -105,7 +106,9 @@ def run_root_via_broker(
       workspace=workspace.name,
       tree=workspace.tree,
       permits=frozenset(permits),
-      artifact_view=isinstance(launch, DockerLaunchSpec),
+      artifact_view=(
+        PurePosixPath(CONTAINER_ARTIFACTS_ROOT) if isinstance(launch, DockerLaunchSpec) else None
+      ),
       extension=root_extension,
     ),
     root_tree=workspace.tree,

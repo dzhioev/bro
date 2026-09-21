@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 import pytest
@@ -23,6 +23,7 @@ from ride.workspace.model import Workspace
 ROOT = 'ROOT-CHANNEL'
 CHILD = 'CHILD-CHANNEL'
 UNKNOWN_REF = f'sha256:{"a" * 64}'
+_DEFAULT_ARTIFACT_VIEW = PurePosixPath(CONTAINER_ARTIFACTS_ROOT)
 
 
 @pytest.fixture
@@ -42,9 +43,10 @@ def PeerIdentity(
   tree: Path,
   member: str | None = None,
   manual: bool = False,
-  artifact_view: bool = True,
+  artifact_view: PurePosixPath | None = _DEFAULT_ARTIFACT_VIEW,
 ) -> PeerDescription:
-  artifact_view = artifact_view and not manual
+  if manual:
+    artifact_view = None
   return PeerDescription(
     mission='mission',
     workspace=workspace,
@@ -224,14 +226,18 @@ class TestMaterialize:
     Workspace.create('broker-CH', tmp_path, Isolation.BOXED, throwaway=True)
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
     store.share([ref], to='broker-CH', by='ws')
-    child = PeerIdentity(workspace='broker-CH', tree=workspace_tree('broker-CH'))
-    assert store.materialize(child, ref) == str(CONTAINER_ARTIFACTS_ROOT / ref)
+    child = PeerIdentity(
+      workspace='broker-CH',
+      tree=workspace_tree('broker-CH'),
+      artifact_view=PurePosixPath('/workspace/shared'),
+    )
+    assert store.materialize(child, ref) == f'/workspace/shared/{ref}'
 
   def test_a_shared_unboxed_child_gets_a_private_workspace_copy(self, store, tmp_path):
     workspace = Workspace.create('broker-CH', tmp_path, Isolation.UNBOXED, throwaway=True)
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
     store.share([ref], to=workspace.name, by='ws')
-    child = PeerIdentity(workspace=workspace.name, tree=workspace.tree, artifact_view=False)
+    child = PeerIdentity(workspace=workspace.name, tree=workspace.tree, artifact_view=None)
 
     path = Path(store.materialize(child, ref))
 
@@ -254,7 +260,7 @@ class TestMaterialize:
     store = ArtifactStore(workspace, root_boxed=False)
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
     member = PeerIdentity(
-      workspace='ws', tree=workspace.tree, member='broker-CH', artifact_view=False
+      workspace='ws', tree=workspace.tree, member='broker-CH', artifact_view=None
     )
 
     path = Path(store.materialize(member, ref))
@@ -309,7 +315,7 @@ def _facts_context(workspace):
       type='bro',
       workspace=workspace.name,
       tree=workspace.tree,
-      artifact_view=True,
+      artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
       extension=BroFacts('bro-dev', frozenset()),
     ),
     root_tree=workspace.tree,

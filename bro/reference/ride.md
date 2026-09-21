@@ -789,10 +789,13 @@ A registered worker type can return a core `Container(WorkerContainer(…))` run
 Its declaration ships a byte-valued Docker build context whose normalized relative paths include a `Dockerfile` opening with `ARG RUNTIME_IMAGE` and `FROM ${RUNTIME_IMAGE}`, plus a command, environment, and distinct container ports.
 The environment cannot claim host-owned `BROKER_*`, `RIDE_*`, `BRO_*`, `HOME`, or `PATH` names.
 The runtime image tag and sorted build-context files determine the worker image tag `bro/<type>:<hash>`;
-ride builds a missing tag lazily and prunes unused predecessors from that type's image repository.
+ride builds a missing tag lazily under a per-tag lock and prunes unused predecessors from that type's image repository.
+A launch reserves its tag from the build through container creation, so concurrent builds of different tags cannot prune an image another launch is about to use.
+A failed build reports the captured output tail with its exit status.
 
 The host lowers each run off the broker loop into a detached throwaway boxed workspace named `<type>-<channel>`.
-It mounts the frozen runtime volume read-only, an empty scoped credential store, and the worker's read-only artifact view, linking every accepted `share` ref before start.
+It mounts the frozen runtime volume read-only, an empty scoped credential store, and the worker's read-only artifact view at the absolute normalized POSIX path the declaration names, linking every accepted `share` ref before start.
+The view path defaults to `CONTAINER_ARTIFACTS_ROOT` and is a launch fact, so changing it does not rebuild the image.
 It mounts no session, party, or trails state.
 The declared command runs as `broxy run -- <command…>`, so its clients multiplex through the worker's one upstream attach.
 
@@ -1040,8 +1043,9 @@ Peers pass files by content-addressed reference through the ride's store the lau
   Re-minting unchanged content answers the same ref without storing anything new;
   a mint past the ride's byte cap is refused rather than evicted.
 - `artifact get <ref>` makes a ref visible to the requesting peer and prints the path it appears at.
-  A boxed peer reads it under `/var/ride/artifacts`
-  — a per-peer view directory bind-mounted read-only, so a ref shared while the peer runs appears without a remount and writes fail with `EROFS`
+  A boxed peer reads it under its declared artifact-view path
+  — `CONTAINER_ARTIFACTS_ROOT` unless its worker-container declaration chooses another absolute normalized POSIX path;
+  the per-peer view directory is bind-mounted read-only, so a ref shared while the peer runs appears without a remount and writes fail with `EROFS`
   — while an unboxed party, having no mount namespace, gets a private copy under the workspace’s own `artifacts/` directory, shared by its members.
   Either way the path is not for editing in place;
   a peer that wants an editable copy makes one.
