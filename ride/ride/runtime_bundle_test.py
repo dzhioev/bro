@@ -780,6 +780,7 @@ def test_installed_distributions_publish_the_session_command_roster():
     'summon',
     'trails-server',
     'usage',
+    'webview',
   ]
 
 
