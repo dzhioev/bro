@@ -383,18 +383,18 @@ _QUEST_ASK_BARE_DESCRIPTION = (
 
 
 _QUEST_CANCEL_DESCRIPTION = (
-  'end any mission this session owns by `quest_id`: it ends failed:cancelled, and whatever '
+  'end a bro quest this session owns by `quest_id`: it ends failed:cancelled, and whatever '
   'its worker launched in turn ends failed:orphaned. a host-supervised worker is killed; an '
-  'expected worker is detached. waits for the mission to end and returns an ended state with '
+  'expected worker is detached. waits for the quest to end and returns an ended state with '
   'its outcome, or a pending state when the optional `timeout` seconds pass first; the end '
-  'still arrives through `quest watch`. fails with the reason for a mission this session does '
+  'still arrives through `quest watch`. fails with the reason for a quest this session does '
   'not own or that has already ended.'
   "{{when #wire = mcp}} CAUTION: size `timeout` below the harness's idle cap.{{end}}"
 )
 
 
 _QUEST_CANCEL_BARE_DESCRIPTION = (
-  'ask the host to cancel any mission this session owns by `quest_id` and return when the '
+  'ask the host to cancel a bro quest this session owns by `quest_id` and return when the '
   'request is accepted. the worker ends asynchronously, and whatever it launched in turn '
   'ends failed:orphaned with it; its end arrives through `quest watch`.'
 )

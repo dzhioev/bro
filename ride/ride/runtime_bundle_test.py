@@ -771,6 +771,7 @@ def test_installed_distributions_publish_the_session_command_roster():
     'fold-branch',
     'land-pr',
     'mcp-server',
+    'mission',
     'poll-pr',
     'pr-state',
     'quest',

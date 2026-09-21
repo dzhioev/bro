@@ -134,9 +134,9 @@ while a background task or a Monitor is live the process stays open and the mode
 so a persistent Monitor on an endless command, which is how `quest watch` is armed, holds the process until the session is killed.
 A solo session's settings therefore wire `ride.claude.stop_guard` as its `Stop` hook:
 reading the running tasks off the hook input and every mission the run owns off the host journal, it blocks a turn end once per turn (Claude's `stop_hook_active` marks the second stop)
-when missions are in flight with no watch armed, where the exiting process would orphan them,
-or when the watch is armed with nothing in flight, where it would hold the session until killed;
-a watch over missions in flight is the wait it should be and passes.
+when missions are in flight with no background task running, where the exiting process would orphan them,
+or when a background task is running with nothing in flight, where it would hold the session until killed;
+any running task over missions in flight is the wait it should be and passes.
 The stop guard reads `background_tasks`, which Claude Code sends undocumented;
 `ride/ride/claude/stop_guard_llm_test.py` probes it live against the `claude` on PATH, and the container pins the version.
 
@@ -876,18 +876,19 @@ underneath it are two client surfaces over the same request, each split into the
   `quest ask <id> '<text>' [--reply-to <question>] [--wait [<seconds>]]` asks a question and prints its id, a counter-question with `--reply-to`;
   `--wait` blocks for the reply and prints it, exiting 4 with the id when its optional bound passes first, the reply still recoverable from the journal.
   Concurrent waiters and later reads see the same state.
-  `quest list` walks the caller-scoped paginated `query {}` listing and prints retained summon records live-first, including their talk and pending questions.
+  `quest list` walks the caller-scoped paginated `query {}` listing and prints retained bro summons live-first, including their talk and pending questions.
   `quest watch` first takes the current `events {}` head, then replays retained own-quest messages and open questions whose journal sequence is no newer than that head, marked `before the watch`.
-  It then long-polls ordered events after the head, so chat committed between the head and replay queries arrives once through the stream.
-  The stream carries lifecycle lines for every worker type, naming a non-bro launch by its type and mission id.
+  It then long-polls ordered bro-quest lifecycle and chat events after the head, so chat committed between the head and replay queries arrives once through the stream.
   On a child quest it names the target and quest;
   on the session's own quest it renders the other end as `summoner` and never echoes the session's own says.
   An event-retention gap prints a notice, re-arms from the current head, and repeats the retained replay.
-  `quest cancel <id> [--timeout <seconds>]` ends any mission this session owns and waits for it to end;
-  it exits 0 once the mission has ended and 3 when the bound passes first, the end still on its way.
+  `quest cancel <id> [--timeout <seconds>]` ends a bro quest this session owns and waits for it to end;
+  it exits 0 once the quest has ended and 3 when the bound passes first, the end still on its way.
+  `mission check|history|say|ask|list|watch|cancel` is the corresponding universal surface for every worker type:
+  chat payloads are JSON objects, `history --seq N` recovers one full retained entry, list and watch accept `--type`, and watch cuts chat lines over 1 KiB with a history pointer.
   In a claude session, long summons run via the harness's background Bash;
   `rewind show <trail-id>` peeks mid-run.
-  Contract details in `bro/summon.py` and `bro/quest.py`.
+  Contract details in `bro/summon.py`, `bro/mission.py`, and `bro/quest.py`.
 - the bro service tools (`bro::summon`, then `bro::quest_check` / `quest_history` / `quest_say` / `quest_ask` / `quest_list` / `quest_cancel` on the `quest_id` it returns), for bro LLM processes and `--raw` sessions.
   On the bare wire, `summon` returns the accepted state after host acceptance and has no `detach` parameter;
   answers, questions, replies, refusals, and terminal states arrive through `quest watch`.
@@ -1003,7 +1004,7 @@ the bro contributes its target and resolved `placement` as `{party, isolation}` 
 The placement records the effective isolation inherited by a join, while a manual summon's isolation stays null because the user's launch settles it.
 Live readers never read that audit back:
 check, list, watch, and the session-local statusLine projector query the caller-scoped in-memory journal over their own broker channel, so the same surfaces work at any summon depth.
-Quest check and list keep the bro workflow's type filter, while watch, cancellation, turn-end guards, and the statusLine account for every owned mission.
+Quest verbs keep the bro workflow's type filter, while the mission surface, turn-end guards, and statusLine account for every owned mission.
 The statusLine places a child's pending question beside its live summon, renders another live launch as its worker type, and keeps the most recent terminal outcome briefly visible.
 The scope is the quests the caller requested and nothing beneath them;
 it excludes the parent-owned quest that the caller's own worker answers.
