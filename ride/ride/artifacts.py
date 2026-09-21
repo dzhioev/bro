@@ -12,7 +12,7 @@ construction, so the read path re-verifies nothing.
 
 Each boxed peer has a view directory `shared/<workspace>/` holding one
 hardlink (or hardlinked tree) per ref it may reach — the source of its
-read-only `/var/ride/artifacts` bind mount, so a ref linked while the peer
+declared read-only artifact-view bind mount, so a ref linked while the peer
 runs appears without a remount. A mint links the minter and its owners up
 to the root; a launch's `share` list is linked into the worker's view during
 its lowering. An unboxed peer has no mount
@@ -51,7 +51,7 @@ import shutil
 import threading
 import time
 from collections.abc import Callable, Generator, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Optional
 
 from bro.artifact import digest_path, is_ref
@@ -93,9 +93,9 @@ def view_dir(ride: str, peer_workspace: str) -> Path:
   return store_dir(ride) / 'shared' / peer_workspace
 
 
-def view_mount(ride: str, peer_workspace: str) -> str:
+def view_mount(ride: str, peer_workspace: str, container_path: PurePosixPath) -> str:
   """a peer's read-only view bind mount, as a docker mount spec."""
-  return f'{view_dir(ride, peer_workspace)}:{CONTAINER_ARTIFACTS_ROOT}:ro'
+  return f'{view_dir(ride, peer_workspace)}:{container_path}:ro'
 
 
 def _denial(ref: str) -> str:
@@ -367,10 +367,13 @@ class ArtifactStore:
       raise ArtifactDenied(_denial(ref))
     if identity.expected:
       raise ArtifactDenied('no artifact view is mounted for a manually launched worker')
-    artifact_view = self._root_boxed if identity.workspace == self.ride else identity.artifact_view
-    if artifact_view:
+    if identity.workspace == self.ride:
+      artifact_view = PurePosixPath(CONTAINER_ARTIFACTS_ROOT) if self._root_boxed else None
+    else:
+      artifact_view = identity.artifact_view
+    if artifact_view is not None:
       self._link_into_view(identity.workspace, ref)
-      path = str(CONTAINER_ARTIFACTS_ROOT / ref)
+      path = str(artifact_view / ref)
     else:
       path = str(self._unboxed_copy(ref, identity.workspace))
     self.audit('get', {'peer': identity.workspace, 'ref': ref})

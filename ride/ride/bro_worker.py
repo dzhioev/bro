@@ -11,7 +11,7 @@ import shutil
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Literal, Optional, Protocol, cast
 
 from bro.base import configs, credentials, log
@@ -34,6 +34,7 @@ from bro.worker_types import (
   UnattributablePeer,
   WorkerType,
 )
+from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride.workspace.metadata import Isolation
 
 if TYPE_CHECKING:
@@ -356,7 +357,13 @@ def _lower_summon(
   temporary_store: Optional[Path] = None
   if launch.isolation is Isolation.BOXED:
     artifacts.view(workspace_name)
-    mounts = (view_mount(artifacts.ride, workspace_name),)
+    mounts = (
+      view_mount(
+        artifacts.ride,
+        workspace_name,
+        PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
+      ),
+    )
   else:
     temporary_store = Path(tempfile.mkdtemp(prefix=f'ride-{workspace_name}-store-'))
   with contextlib.ExitStack() as cleanup:
@@ -528,7 +535,11 @@ class SummonSpawner:
         mission,
         launch.parent,
         child_name,
-        artifact_view=workspace_isolation(launch.parent) is Isolation.BOXED,
+        artifact_view=(
+          PurePosixPath(CONTAINER_ARTIFACTS_ROOT)
+          if workspace_isolation(launch.parent) is Isolation.BOXED
+          else None
+        ),
       )
       lowered = await asyncio.to_thread(
         _lower_join,
@@ -541,7 +552,9 @@ class SummonSpawner:
       self._facts.note_workspace(
         mission,
         child_name,
-        artifact_view=launch.isolation is Isolation.BOXED,
+        artifact_view=(
+          PurePosixPath(CONTAINER_ARTIFACTS_ROOT) if launch.isolation is Isolation.BOXED else None
+        ),
       )
       lowered = await asyncio.to_thread(
         _lower_summon,

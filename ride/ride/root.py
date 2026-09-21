@@ -1,6 +1,7 @@
 import subprocess
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, replace
+from pathlib import PurePosixPath
 from types import MappingProxyType
 
 from bro.base import configs
@@ -41,6 +42,7 @@ def _run_via_broker(
   runtime_bundle: RuntimeBundle,
 ) -> int:
   from bro.summon import MAY_SUMMON_ENV, PERMITS_ENV, encode_may_summon, encode_permits
+  from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
   from ride.artifacts import view_mount
   from ride.broker_root import run_root_via_broker
   from ride.workspace.spawn import DockerLaunchSpec, ProcessLaunchSpec
@@ -49,7 +51,11 @@ def _run_via_broker(
   launch_env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
   launch_env[PERMITS_ENV] = encode_permits(permits)
   if isinstance(launch, DockerLaunch):
-    artifacts_mount = view_mount(workspace.name, workspace.name)
+    artifacts_mount = view_mount(
+      workspace.name,
+      workspace.name,
+      PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
+    )
     broker_launch = DockerLaunchSpec(
       replace(
         launch,

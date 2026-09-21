@@ -1,3 +1,4 @@
+from pathlib import PurePosixPath
 from typing import cast
 
 import pytest
@@ -6,7 +7,7 @@ from bro.broker.dispatcher import Dispatcher
 from bro.broker.journal import Journal
 from bro.monitor import party_member_dir
 from bro.worker_types import PeerDescription, UnattributablePeer
-from bro.workspace.paths import workspace_tree
+from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_tree
 from ride import pending_launch
 from ride.bro_worker import BroFacts
 from ride.peer_facts import PeerFacts, WorkerFacts
@@ -34,7 +35,7 @@ def facts(tmp_path, monkeypatch):
       workspace='ws',
       tree=workspace.tree,
       permits=frozenset({'bro.party.start.boxed'}),
-      artifact_view=True,
+      artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
       extension=BroFacts('bro-dev', frozenset({'dev'})),
     ),
     root_tree=workspace.tree,
@@ -85,7 +86,7 @@ def test_root_row_is_seeded_by_the_host_anchored_mission(facts):
     permits=frozenset({'bro.party.start.boxed'}),
     member=None,
     expected=False,
-    artifact_view=True,
+    artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
     published_ports=(),
     depth=0,
     extension=description.extension,

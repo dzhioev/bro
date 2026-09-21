@@ -1,4 +1,4 @@
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import cast
 
@@ -7,6 +7,7 @@ import pytest
 import ride.bro_worker as bro_worker
 from bro.broker.brotocol import Talk
 from bro.worker_types import Expect, LaunchDenied, LaunchRequest, PeerDescription, Spawn
+from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride.bro_worker import BroFacts, BroType, Placement, SummonLaunchSpec
 from ride.workspace.metadata import Isolation
 from ride.workspace.store import ScopedSecrets
@@ -55,7 +56,7 @@ def _owner(
     permits=frozenset(permits),
     member=None,
     expected=False,
-    artifact_view=True,
+    artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
     published_ports=(),
     depth=depth,
     extension=extension if type == 'bro' else None,

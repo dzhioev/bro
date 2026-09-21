@@ -42,7 +42,7 @@ def _owner(tree: Path, *, depth: int = 0) -> PeerDescription:
     permits=frozenset(),
     member=None,
     expected=False,
-    artifact_view=False,
+    artifact_view=None,
     published_ports=(),
     depth=depth,
   )

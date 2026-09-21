@@ -395,6 +395,19 @@ class TestPruneSupersededImages:
       ['docker', 'image', 'rm', 'bro/framework:old2'],
     ]
 
+  def test_keeps_every_protected_image(self, monkeypatch):
+    listing = _FakeProc(
+      returncode=0,
+      stdout='bro/framework:cur\nbro/framework:active\nbro/framework:old\n',
+    )
+    calls = self._patch_run(monkeypatch, listing)
+    workspace_docker.prune_superseded_images(
+      'bro/framework:cur',
+      protected={'bro/framework:active'},
+    )
+    removals = [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']]
+    assert removals == [['docker', 'image', 'rm', 'bro/framework:old']]
+
   def test_refused_removal_is_tolerated(self, monkeypatch):
     # `docker image rm` without -f refuses images a container still references;
     # that refusal keeps live sessions' images and must not abort the prune
