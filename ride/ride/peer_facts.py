@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from bro.monitor import party_member_dir
@@ -29,7 +29,7 @@ class WorkerFacts:
   member: str | None = None
   permits: frozenset[str] = frozenset()
   expected: bool = False
-  artifact_view: bool = False
+  artifact_view: PurePosixPath | None = None
   published_ports: tuple[tuple[int, int], ...] = ()
   extension: Any = None
 
@@ -68,13 +68,12 @@ class PeerFacts:
     mission: str,
     workspace: str,
     *,
-    artifact_view: bool | None = None,
+    artifact_view: PurePosixPath | None = None,
   ) -> None:
     facts = self.for_mission(mission)
     facts.workspace = workspace
     facts.member = None
-    if artifact_view is not None:
-      facts.artifact_view = artifact_view
+    facts.artifact_view = artifact_view
 
   def note_member(
     self,
@@ -82,7 +81,7 @@ class PeerFacts:
     workspace: str,
     member: str,
     *,
-    artifact_view: bool,
+    artifact_view: PurePosixPath | None,
   ) -> None:
     facts = self.for_mission(mission)
     facts.workspace = workspace
