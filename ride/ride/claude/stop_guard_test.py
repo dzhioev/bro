@@ -7,7 +7,7 @@ import pytest
 
 import ride.claude.stop_guard as stop_guard
 from bro.broker.environment import BROKER_CHANNEL
-from bro.quest import LiveMission
+from bro.mission import LiveMission
 
 _CHILD = LiveMission('01m-child', 'bro', 'bro-eyebro')
 _OTHER = LiveMission('01m-other', 'benchmark', 'benchmark')
@@ -27,22 +27,29 @@ def _payload(*tasks: dict, stop_hook_active: bool = False) -> dict:
 
 class TestNotice:
   def test_missions_in_flight_without_a_watch_are_held_and_named(self):
-    reason = stop_guard.notice(
-      _payload(_task('sleep 30')), [_CHILD, _OTHER], 'full', summoned=False
-    )
+    reason = stop_guard.notice(_payload(), [_CHILD, _OTHER], 'full', summoned=False)
 
     assert reason is not None
-    assert reason.startswith('2 missions in flight and no `quest watch` armed')
-    assert 'Arm `Monitor` on exactly `quest watch`, persistent' in reason
+    assert reason.startswith('2 missions in flight and no background task running')
+    assert '`quest watch` and `quest cancel <quest id>`' in reason
+    assert '`mission watch` and `mission cancel <mission id>`' in reason
     assert reason.endswith('quest 01m-child to bro-eyebro\nmission 01m-other: benchmark')
 
   def test_a_raw_session_is_told_to_poll_instead_of_arming_a_monitor(self):
     reason = stop_guard.notice(_payload(), [_CHILD], 'raw', summoned=False)
 
     assert reason is not None
-    assert reason.startswith('1 mission in flight and no `quest watch` armed')
-    assert '`bro::quest_cancel`' in reason
+    assert reason.startswith('1 mission in flight and no background task running')
+    assert '`bro::quest_check` and `bro::quest_cancel`' in reason
+    assert "bro::job('quest watch'" not in reason
     assert 'Monitor' not in reason
+
+  def test_a_raw_session_gets_poll_and_cancel_routes_for_other_missions(self):
+    reason = stop_guard.notice(_payload(), [_OTHER], 'raw', summoned=False)
+
+    assert reason is not None
+    assert '`mission history` and `mission cancel <mission id>`' in reason
+    assert '`mission watch`' not in reason
 
   def test_a_watch_with_nothing_in_flight_is_held_with_its_task_named(self):
     payload = _payload(_task('quest watch', task_id='bf8'))
@@ -50,8 +57,10 @@ class TestNotice:
     reason = stop_guard.notice(payload, [], 'full', summoned=False)
 
     assert reason is not None
-    assert reason.startswith('`quest watch` is armed (task bf8) with no mission in flight')
-    assert 'Stop it with `TaskStop` and end the turn' in reason
+    assert reason.startswith(
+      'Background tasks are running with no mission in flight: bf8 `quest watch`'
+    )
+    assert 'Stop the tasks with `TaskStop` and end the turn' in reason
 
   def test_a_summoned_session_with_an_idle_watch_is_told_to_answer(self):
     payload = _payload(_task('quest watch', task_id='bf8'))
@@ -62,20 +71,22 @@ class TestNotice:
     assert 'Deliver your result with `bro::answer`, which ends the session' in reason
     assert 'TaskStop' not in reason
 
-  def test_a_watch_over_missions_in_flight_is_the_wait_and_passes(self):
-    assert (
-      stop_guard.notice(_payload(_task('quest watch')), [_CHILD], 'full', summoned=False) is None
-    )
+  @pytest.mark.parametrize('command', ['quest watch', 'mission watch', 'sleep 30'])
+  def test_any_running_task_over_missions_in_flight_is_the_wait_and_passes(self, command):
+    assert stop_guard.notice(_payload(_task(command)), [_CHILD], 'full', summoned=False) is None
 
-  def test_nothing_armed_and_nothing_in_flight_passes(self):
-    assert stop_guard.notice(_payload(_task('sleep 30')), [], 'full', summoned=False) is None
+  def test_a_running_task_without_a_mission_is_held_and_named(self):
+    reason = stop_guard.notice(_payload(_task('sleep 30')), [], 'full', summoned=False)
+
+    assert reason is not None
+    assert 'task-1 `sleep 30`' in reason
 
   def test_a_watch_that_is_no_longer_running_does_not_count(self):
     payload = _payload(_task('quest watch', status='killed'))
     reason = stop_guard.notice(payload, [_CHILD], 'full', summoned=False)
 
     assert reason is not None
-    assert reason.startswith('1 mission in flight and no `quest watch` armed')
+    assert reason.startswith('1 mission in flight and no background task running')
 
   def test_the_stop_after_a_held_one_stands_whatever_is_live(self):
     payload = _payload(_task('quest watch'), stop_hook_active=True)
@@ -121,7 +132,9 @@ class TestMain:
 
     out = self._run(monkeypatch, capsys, _payload(_task('quest watch', task_id='w1')))
 
-    assert json.loads(out)['reason'].startswith('`quest watch` is armed (task w1)')
+    assert json.loads(out)['reason'].startswith(
+      'Background tasks are running with no mission in flight: w1 `quest watch`'
+    )
 
   def test_an_unknown_surface_is_refused(self, monkeypatch):
     monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))

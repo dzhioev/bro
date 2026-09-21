@@ -24,10 +24,10 @@ from bro.llm.observer import (
   TurnStartedEvent,
 )
 from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
+from bro.mission import LiveMission, live_mission_line, live_missions
 from bro.monitor import trail_pointer
 from bro.native import providers as native_providers
 from bro.native.llm import LLM
-from bro.quest import LiveMission, live_mission_line, live_missions
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import summoned, summoned_by_from_env
 from bro.trails.record.bro import Recorder
@@ -39,12 +39,27 @@ _LIVE_WORK_HEADER = (
 )
 _LIVE_WORK_RULE = (
   'A one-shot run ends only when a turn ends with nothing running and nothing in flight. '
-  'To wait on this work, call `bro::chill` (a mission in flight needs a live '
-  "`bro::job('quest watch', mode='watch')` first); otherwise `bro::kill` each job and "
-  '`bro::quest_cancel` each mission you no longer need, then end the turn. This notice comes '
-  'once: a turn that ends with the same work live and nothing else reported ends the run, '
-  'which kills its jobs and host-supervised workers and detaches expected workers.'
+  'To wait on running jobs, call `bro::chill`; otherwise `bro::kill` each job and end the turn. '
+  'This notice comes once: a turn that ends with the same work live and nothing else reported '
+  'ends the run, which kills its jobs and host-supervised workers and detaches expected workers.'
 )
+
+
+def _mission_work_rule(missions: tuple[LiveMission, ...]) -> str:
+  routes = []
+  if any(mission.type == 'bro' for mission in missions):
+    routes.append(
+      "arm `bro::job('quest watch', mode='watch')` and use `bro::quest_cancel` for quests"
+    )
+  if any(mission.type != 'bro' for mission in missions):
+    routes.append('arm `mission watch` and use `mission cancel` for other missions')
+  guidance = '; '.join(routes)
+  return (
+    'A one-shot run ends only when a turn ends with nothing running and nothing in flight. '
+    f'To wait on this work, {guidance}, then call `bro::chill`; otherwise end or cancel it. '
+    'This notice comes once: a turn that ends with the same work live and nothing else reported '
+    'ends the run, which kills its jobs and host-supervised workers and detaches expected workers.'
+  )
 
 
 @dataclass(frozen=True)
@@ -70,7 +85,7 @@ def live_work_notice(work: LiveWork) -> str:
     lines.append(f'{job.id} {job.mode} `{command}`')
   for mission in work.missions:
     lines.append(live_mission_line(mission))
-  lines.append(_LIVE_WORK_RULE)
+  lines.append(_mission_work_rule(work.missions) if work.missions else _LIVE_WORK_RULE)
   return '\n'.join(lines)
 
 

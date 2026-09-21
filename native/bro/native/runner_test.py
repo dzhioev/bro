@@ -28,10 +28,10 @@ from bro.llm.observer import (
 )
 from bro.llm.tracker import NullTracker, Tracker
 from bro.mcp import MCPServerSpec
+from bro.mission import LiveMission
 from bro.monitor import trail_pointer
 from bro.native.llm import LLM
 from bro.native.runner import Runner, set_default_tracker_factory
-from bro.quest import LiveMission
 from bro.run_lifecycle import RunLifecycle
 
 
@@ -753,7 +753,10 @@ class TestLiveWorkReminder:
     [notice] = llm.drained
     assert '\nquest 01m-child to bro-eyebro\n' in notice
     assert '\nmission 01m-benchmark: benchmark\n' in notice
+    assert "bro::job('quest watch', mode='watch')" in notice
     assert 'bro::quest_cancel' in notice
+    assert '`mission watch`' in notice
+    assert '`mission cancel`' in notice
     assert 'job-' not in notice
 
   @pytest.mark.asyncio
