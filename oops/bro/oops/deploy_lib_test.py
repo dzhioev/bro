@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 
 from bro.base.spawn import console_script
+from bro.oops.assets import asset_directory
 from bro.oops.targets import PLAN_UNSAFE_EXIT_CODE
 from bro.shell import shell_dir
 
@@ -162,7 +163,7 @@ def test_ensure_server_base_passes_the_packaged_uv_pin(tmp_path):
     'bro-server-base',
     '--build-arg',
     f'UV_VERSION={version}',
-    str(_DEPLOY_LIBRARY.parent / 'server_base'),
+    str(asset_directory() / 'server_base'),
   ]
 
 

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # sourceable helpers for service deployment scripts; callers provide deployment config.
 
-_DEPLOY_LIB_DIRECTORY="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 _UV_VERSION="$(cat "$(bro-shell-dir)/uv-version")"
 
 BRO_SERVER_BASE_IMAGE="${BRO_SERVER_BASE_IMAGE:-bro-server-base}"
@@ -119,7 +118,7 @@ ensure_server_base() {
     return 0
   fi
   docker buildx build --provenance=false --load -t "$BRO_SERVER_BASE_IMAGE" \
-    --build-arg "UV_VERSION=$_UV_VERSION" "$@" "$_DEPLOY_LIB_DIRECTORY/server_base"
+    --build-arg "UV_VERSION=$_UV_VERSION" "$@" "$(bro-oops-dir)/server_base"
 }
 
 prepare_image_build() {

@@ -1,8 +1,7 @@
 #!/usr/bin/env -S bash -e
 source "$(bro-shell-dir)/prelude.sh"
 
-DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-REPO_ROOT="$DIR/.."
+REPO_ROOT="$HERE/.."
 source "$(bro-oops-dir)/deploy_lib.sh"
 
 if [ "$#" -ne 1 ] || [ "$1" != 'trails' ]; then

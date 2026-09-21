@@ -1,13 +1,12 @@
 #!/usr/bin/env -S bash -e
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../prelude.sh"
 
-SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-source "$SCRIPT_DIR/../versions.sh"
+source "$HERE/../versions.sh"
 
 TMUX_TARBALL="tmux-${TMUX_VERSION}.tar.gz"
 TMUX_URL="https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/${TMUX_TARBALL}"
 
-BUILD_DIR="${SCRIPT_DIR}/.tmux_build"
+BUILD_DIR="${HERE}/.tmux_build"
 PREFIX="${HOME}/.local"
 
 echo "Installing tmux ${TMUX_VERSION} from source into ${PREFIX}"
@@ -26,7 +25,7 @@ cd "tmux-${TMUX_VERSION}"
 make -j"$(nproc)"
 make install
 
-cd "$SCRIPT_DIR"
+cd "$HERE"
 rm -rf "$BUILD_DIR"
 
 echo "tmux ${TMUX_VERSION} installed to ${PREFIX}/bin/tmux"

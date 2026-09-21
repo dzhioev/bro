@@ -2,8 +2,6 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/prelude.sh"
 set -o pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-
 # a container's environment comes baked into its image
 if [ -f /.dockerenv ]; then
   log VERBOSE "inside a container; skipping environment setup"
@@ -23,7 +21,7 @@ done
 
 # profile: a checkout vendoring the framework as a submodule needs only the tools ride
 # operates with; framework development itself needs the full set
-if [ -n "$(git -C "$SCRIPT_DIR/../.." rev-parse --show-superproject-working-tree)" ]; then
+if [ -n "$(git -C "$HERE/../.." rev-parse --show-superproject-working-tree)" ]; then
   PROFILE=core
 else
   PROFILE=full
@@ -36,8 +34,8 @@ fi
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/bro"
 STAMP="$STATE_DIR/setup-env-$PROFILE.stamp"
 INPUTS_HASH="$(
-  cat "$SCRIPT_DIR/setup_env.sh" "$SCRIPT_DIR/install_awscli.sh" "$SCRIPT_DIR/uv-version" \
-    "$SCRIPT_DIR/versions.sh" "$SCRIPT_DIR"/ubuntu/*.sh \
+  cat "$HERE/setup_env.sh" "$HERE/install_awscli.sh" "$HERE/uv-version" \
+    "$HERE/versions.sh" "$HERE"/ubuntu/*.sh \
     | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
 )"
 if [ "$FORCE" != "1" ] && [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$INPUTS_HASH" ]; then
@@ -98,8 +96,8 @@ fi
 
 echo "Setting up dev environment on ${PLATFORM} ($PROFILE profile)"
 
-source "$SCRIPT_DIR/versions.sh"
-UV_VERSION="$(cat "$SCRIPT_DIR/uv-version")"
+source "$HERE/versions.sh"
+UV_VERSION="$(cat "$HERE/uv-version")"
 
 check_brew() {
   if ! command -v brew &> /dev/null; then
@@ -133,7 +131,7 @@ install_stow() {
     check_brew
     brew install stow
   else
-    "$SCRIPT_DIR/ubuntu/install_stow.sh"
+    "$HERE/ubuntu/install_stow.sh"
   fi
   if ! check_stow_version; then
     echo "stow is still older than pinned ${STOW_VERSION} after install" >&2
@@ -165,7 +163,7 @@ install_tmux() {
     check_brew
     brew install tmux
   else
-    "$SCRIPT_DIR/ubuntu/install_tmux.sh"
+    "$HERE/ubuntu/install_tmux.sh"
   fi
   if ! check_tmux_version; then
     echo "tmux is still older than pinned ${TMUX_VERSION} after install" >&2
@@ -334,7 +332,7 @@ if [ "$PROFILE" = "full" ]; then
   install_stow
   install_tmux
   install_tkinter
-  "$SCRIPT_DIR/install_awscli.sh"
+  "$HERE/install_awscli.sh"
 fi
 
 mkdir -p "$STATE_DIR"

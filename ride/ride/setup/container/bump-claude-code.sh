@@ -1,6 +1,5 @@
 #!/usr/bin/env -S bash -e
 source "$(bro-shell-dir)/prelude.sh"
-DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 VERSION=$(npm view @anthropic-ai/claude-code version)
-echo "$VERSION" > "$DIR/claude-code-version"
+echo "$VERSION" > "$HERE/claude-code-version"
 echo "claude-code pinned to $VERSION" >&2
