@@ -949,7 +949,9 @@ and its credential grants are always denied as unattributable — its actual sco
 The child announces the trail mark (`{trail_id}`)
 — the Claude runner from its trail watch, the native chat surface on its first turn.
 The `answer` service tool is mounted in every summoned session with a channel.
-An interactive child calls it once when the user confirms the work is done, and the session ends with the quest's ok result delivered to the waiting summoner.
+An interactive child calls it once when the work is done, a step its hold treats like any other
+— confirmed first only under a hold that confirms each significant step
+— and the session ends with the quest's ok result delivered to the waiting summoner.
 A one-shot child follows the same lifecycle as a spawned child:
 a clean exit delivers its printed reply, while `answer` remains available when the run needs to end by delivering explicitly.
 An interactive session the user quits without answering produces no result, and the channel's EOF surfaces to the summoner as the synthesized `result{failed, reason: disconnected}` (channel EOF is an expected peer's death signal:
