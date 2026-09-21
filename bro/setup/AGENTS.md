@@ -40,7 +40,8 @@ editable installs record absolute source paths.
 - `versions.sh` and `ubuntu/` — pinned host-tool versions and Ubuntu installers used only by `setup_env.sh`
 - `uv-version` — packaged uv pin shared by host provisioning and image builds;
   `bump-uv.sh` updates it from PyPI and remains checkout-only
-- `prelude.sh` — shell-script prelude every executable framework script sources;
+- `prelude.sh` — shell-script prelude every executable framework script sources,
+  publishing `HERE`, the executed script's directory;
   consumers resolve the packaged directory with `bro-shell-dir`
 - `install_awscli.sh` — packaged macOS/Linux AWS CLI installer
 - `log.sh` — leveled shell logging thresholded by `BRO_LOG_LEVEL`

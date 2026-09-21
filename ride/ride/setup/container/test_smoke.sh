@@ -1,8 +1,7 @@
 #!/usr/bin/env -S bash -e
 source "$(bro-shell-dir)/prelude.sh"
 
-DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-PROJECT="$(realpath "$DIR/../../../..")"
+PROJECT="$(realpath "$HERE/../../../..")"
 TAG="bro/framework:smoke-test"
 
 # Colima shares the project tree but not the host's default temporary directory.

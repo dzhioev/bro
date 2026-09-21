@@ -1,8 +1,7 @@
 #!/usr/bin/env -S bash -e
 source "$(bro-shell-dir)/prelude.sh"
 
-SCRIPT_DIRECTORY="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-source "$SCRIPT_DIRECTORY/deployment_config.sh"
+source "$HERE/deployment_config.sh"
 load_trails_deployment_config
 
 put_parameter() {

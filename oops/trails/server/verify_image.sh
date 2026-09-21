@@ -1,8 +1,7 @@
 #!/usr/bin/env -S bash -e
 source "$(bro-shell-dir)/prelude.sh"
 
-SCRIPT_DIRECTORY="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-REPO_ROOT="$SCRIPT_DIRECTORY/../../.."
+REPO_ROOT="$HERE/../../.."
 cd "$REPO_ROOT"
 
 source "$(bro-oops-dir)/deploy_lib.sh"
