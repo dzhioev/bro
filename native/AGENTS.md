@@ -18,7 +18,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   interactive owners call `wake()` when the inbox reports news.
   The session text tells a run to arm `quest watch` as a watch-mode job when it can receive summon traffic and use `chill` as its idle wait.
   A one-shot run ends when a turn ends with nothing running and nothing in flight;
-  otherwise the runner posts one notice naming the live jobs and every mission the session owns (`bro.quest.live_missions`) through the inbox and runs one more turn, and the registry closes only at the end (`bro/reference/ride.md`, "Bro harness").
+  otherwise the runner posts one notice naming the live jobs and every mission the session owns (`bro.mission.live_missions`) through the inbox and runs one more turn, and the registry closes only at the end (`bro/reference/ride.md`, "Bro harness").
   `llm.py` owns the live `LLM` ABC and diagnostic CLI, `providers.py` maps core `NativeLLMSpec` recipes to engine clients, and `llms/{openai,echo}.py` contain those clients.
 - `bro/run.py` (`bro`) — lightweight CLI dispatcher shipped by `bro-native`:
   `bro run` and `bro chat` import the native launcher implementations only when selected;

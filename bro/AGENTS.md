@@ -37,7 +37,8 @@ A subpackage with a map of its own is pointed at, not described here.
   identity, features, credential manifest and optional tier, LLM key, and roster.
 - `summon.py` (`summon`) — the bro wrapper over `launch {type: bro, …}` (the manual variant included), the facts a summoned run reads off its environment, and the summoning surfaces: blocking, detached, and manual;
   common launch enforcement lives in `ride/ride/launch_control.py`, and bro authorization in `ride/ride/bro_worker.py`
-- `quest.py` (`quest`) — the outcome and conversation reads, say, ask, and caller-scoped listing over bro quests, plus the ordered watch and cancellation surfaces shared by every mission type
+- `mission.py` (`mission`) — the universal typed outcome and conversation reads, say, ask, caller-scoped listing, ordered watch, and cancellation surfaces for every worker mission
+- `quest.py` (`quest`) — the bro-only view over the mission surface, preserving the summon-shaped answers, text chat, verbs, functions, and service tools
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint` / `artifact.get` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session command;
   the host store and enforcement live in `ride/ride/artifacts.py`
 - `jobs.py`, `job_supervisor.py`, and `inbox.py` — process jobs and the per-run notification seam:
@@ -99,7 +100,7 @@ A subpackage with a map of its own is pointed at, not described here.
   It owns the shared spells inherited by the concrete-Bro family (`bros/bro/spells/`):
   `spell::ask` — the summon UX:
   phrasing → target + self-contained prompt, least-authority talk rights, client pick (the `summon` and `quest` CLIs vs the `summon` and `quest_*` service tools), foreground-vs-background, the question/reply/check loop, and failure relay;
-  protocol and enforcement live in `bro/summon.py`, `bro/quest.py`, `ride/ride/launch_control.py`, and `ride/ride/bro_worker.py`, not in the spell
+  protocol and enforcement live in `bro/summon.py`, `bro/mission.py`, `bro/quest.py`, `ride/ride/launch_control.py`, and `ride/ride/bro_worker.py`, not in the spell
   — and `spell::reflect` — the improving half of the loop over what a bro runs under:
   it reads recorded runs against the definition that drove them (the prompt texts, the bro's declaration, the launch scope) and writes its next version, each edit fixed in place or filed as a task.
   Development personas ship from `bro-dev`;

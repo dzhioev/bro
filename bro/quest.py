@@ -2,8 +2,8 @@
 
 A quest is what a summon opens: another session working a request until it
 answers. This module owns the outcome read, conversation read, say, ask, and
-caller-scoped listing for quests, plus the ordered watch and cancellation shared
-by every mission type, as a library and as the ``quest`` CLI. ``self`` names the
+caller-scoped listing, ordered watch, and cancellation for bro quests,
+as a library and as the ``quest`` CLI. ``self`` names the
 session's own quest, the one it answers.
 
 Reads are repeatable journal queries. A wait bounds silence rather than the
@@ -17,105 +17,51 @@ Broker imports stay deferred so importing the constants does not pull in the
 broker implementation on pre-gate launch paths.
 """
 
-import contextlib
 import json
 import math
 import os
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Generator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional
 
 import bro.base.args as base_args
+from bro import mission as mission_client
 from bro.base import log
 
 if TYPE_CHECKING:
-  from bro.broker.brotocol import End, Message, Talk
+  from bro.broker.brotocol import End, Message
   from bro.broker.client import Client
 
 __cli_name__ = 'quest'
 
-LAUNCH = 'launch'
-BRO = 'bro'
-SELF = 'self'  # the quest id naming the session's own quest — the one it answers
-# acceptance and inline-read replies should arrive promptly; the bound turns a
-# wedged broker into a clean client failure
-ACCEPT_TIMEOUT = 30.0
-# journal long-polls stay well inside harness-side MCP call budgets
-READ_WAIT_SECONDS = 25.0
-# exit codes beside 0 (done) and 1 (failure): the quest still runs, or a
-# question awaits the caller
-RUNNING_EXIT_CODE = 3
-QUESTION_EXIT_CODE = 4
+LAUNCH = mission_client.LAUNCH
+BRO = mission_client.BRO
+SELF = mission_client.SELF
+ACCEPT_TIMEOUT = mission_client.ACCEPT_TIMEOUT
+READ_WAIT_SECONDS = mission_client.READ_WAIT_SECONDS
+RUNNING_EXIT_CODE = mission_client.RUNNING_EXIT_CODE
+QUESTION_EXIT_CODE = mission_client.QUESTION_EXIT_CODE
 QUEST_ID_HELP = f"quest id; `{SELF}` names this session's own quest"
 
 
-class QuestError(Exception):
-  """a quest read or move that produced no usable result: the quest was denied,
-  failed, or is no longer retained, a read came back malformed, or the move is
-  forbidden. The message is the operator-facing reason."""
-
-
-class _BrokerReadTimeout(QuestError):
-  pass
-
-
-def open_client() -> 'Client':
-  """Open a channel client whose lifecycle the caller owns."""
-  from bro.broker.client import Client
-  from bro.broker.environment import BROKER_CHANNEL
-
-  client = Client.from_env()
-  if client is None:
-    raise QuestError(f'no broker channel ({BROKER_CHANNEL} unset); quests need a session channel')
-  return client
-
-
-@contextlib.contextmanager
-def connection(client: Optional['Client']) -> Generator['Client']:
-  """the channel client a call runs on: a caller-owned one passed through with
-  its lifecycle left alone, or a fresh one closed on the way out."""
-  if client is not None:
-    yield client
-    return
-  with open_client() as owned:
-    yield owned
-
-
-def own_quest() -> str:
-  """the id of the quest this session answers."""
-  from bro.broker.environment import BROKER_MISSION
-
-  value = os.environ.get(BROKER_MISSION)
-  if value is None:
-    raise QuestError(f'{BROKER_MISSION} is missing from the session environment')
-  return value
-
-
-def resolve(quest_id: str) -> str:
-  """the journal id `quest_id` names: itself, or the session's own quest for `self`."""
-  if quest_id == SELF:
-    return own_quest()
-  if len(quest_id) == 0:
-    raise QuestError('quest id must be non-empty')
-  return quest_id
-
-
-def caller_end(quest: dict[str, Any], quest_id: str) -> 'End':
-  """which end of the quest this session is: `summoned` on its own quest,
-  `summoner` on a child it summoned."""
-  own = own_quest()
-  if quest_id == own:
-    return 'worker'
-  if quest.get('parent') == own:
-    return 'owner'
-  raise QuestError(f'quest {quest_id!r} is not one this session summoned')
-
-
-def trails_hint(trail_id: Optional[str]) -> str:
-  if trail_id is not None:
-    return f'inspect the run with `rewind show {trail_id}`'
-  return 'the run has announced no trail'
+QuestError = mission_client.MissionError
+_BrokerReadTimeout = mission_client._BrokerReadTimeout
+open_client = mission_client.open_client
+connection = mission_client.connection
+own_quest = mission_client.own_mission
+resolve = mission_client.resolve
+caller_end = mission_client.caller_end
+trails_hint = mission_client.trails_hint
+call_ok = mission_client.call_ok
+_read_value = mission_client._read_value
+query_quest = mission_client.query_mission
+_poll_quest = mission_client._poll_mission
+wait_deadline = mission_client.wait_deadline
+_remaining = mission_client._remaining
+_quest_id = mission_client._mission_id
+_chat_seq = mission_client._chat_seq
+_ended = mission_client._ended
 
 
 def interpret_result(payload: dict[str, Any], trail_id: Optional[str]) -> str:
@@ -140,129 +86,12 @@ def interpret_result(payload: dict[str, Any], trail_id: Optional[str]) -> str:
   raise QuestError('; '.join(parts))
 
 
-def call_ok(client: 'Client', kind: str, args: dict[str, Any], *, timeout: float) -> dict[str, Any]:
-  """Send one inline request and return its `ok` result payload."""
-  try:
-    result = client.call(kind, args, timeout)
-  except TimeoutError:
-    raise _BrokerReadTimeout(f'no reply to broker {kind!r} request within {timeout:.0f}s') from None
-  except ConnectionError as error:
-    raise QuestError(f'broker channel closed during {kind!r} request: {error}') from None
-  payload = result.payload
-  if payload.get('outcome') != 'ok':
-    raise QuestError(str(payload.get('error', payload)))
-  return payload
-
-
-def _read_value(
-  client: 'Client', kind: str, args: dict[str, Any], *, timeout: float
-) -> dict[str, Any]:
-  value = call_ok(client, kind, args, timeout=timeout).get('value')
-  if not isinstance(value, dict):
-    raise QuestError(f'broker {kind!r} read returned a malformed value: {value!r}')
-  return value
-
-
-def query_quest(
-  client: 'Client',
-  quest_id: str,
-  *,
-  wait_seconds: float = 0,
-  since: Optional[int] = None,
-  read_timeout: Optional[float] = None,
-) -> dict[str, Any]:
-  """One by-id journal read, optionally long-polling for the end or a chat advance."""
-  from bro.broker.dispatcher import QUERY
-
-  args: dict[str, Any] = {'id': quest_id}
-  if wait_seconds > 0:
-    args['wait'] = wait_seconds
-  if since is not None:
-    args['since'] = since
-  value = _read_value(
-    client,
-    QUERY,
-    args,
-    timeout=(
-      max(ACCEPT_TIMEOUT, wait_seconds + ACCEPT_TIMEOUT) if read_timeout is None else read_timeout
-    ),
-  )
-  quest = value.get('mission')
-  if not isinstance(quest, dict):
-    raise QuestError(f'query for {quest_id!r} returned no quest record')
-  return quest
-
-
-def _poll_quest(
-  client: 'Client',
-  quest_id: str,
-  quest: dict[str, Any],
-  *,
-  deadline: Optional[float],
-  done: Callable[[dict[str, Any]], bool],
-  on_chat: bool,
-) -> dict[str, Any]:
-  """Re-read `quest` through bounded waits until `done` holds or `deadline` passes.
-
-  With `on_chat`, a wait also ends when the quest's chat advances.
-  Returns the last record read, so a caller past the deadline sees the state it stopped at."""
-  while not done(quest):
-    remaining = None if deadline is None else deadline - time.monotonic()
-    if remaining is not None and remaining <= 0:
-      break
-    poll_seconds = READ_WAIT_SECONDS if remaining is None else min(READ_WAIT_SECONDS, remaining)
-    try:
-      quest = query_quest(
-        client,
-        quest_id,
-        wait_seconds=poll_seconds,
-        since=_chat_seq(quest) if on_chat else None,
-        read_timeout=remaining,
-      )
-    except _BrokerReadTimeout:
-      if deadline is None or time.monotonic() < deadline:
-        raise
-      break
-  return quest
-
-
-def wait_deadline(wait: bool, timeout: Optional[float]) -> Optional[float]:
-  """the monotonic deadline a bounded wait runs to, None for an unbounded one;
-  a bound without a wait or a non-finite bound is an argument error."""
-  if timeout is None:
-    return None
-  if not wait:
-    raise ValueError('timeout only bounds a wait; a plain read never blocks')
-  if not math.isfinite(timeout) or timeout <= 0:
-    raise ValueError('timeout must be a finite positive number')
-  return time.monotonic() + timeout
-
-
-def _remaining(deadline: Optional[float]) -> Optional[float]:
-  return None if deadline is None else deadline - time.monotonic()
-
-
-def _quest_id(quest: dict[str, Any]) -> str:
+def _require_bro(quest: dict[str, Any]) -> None:
   quest_id = quest.get('id')
-  if not isinstance(quest_id, str):
-    raise QuestError('quest query returned no quest id')
-  return quest_id
-
-
-def _chat_seq(quest: dict[str, Any]) -> int:
-  chat_seq = quest.get('chat_seq', 0)
-  if not isinstance(chat_seq, int) or isinstance(chat_seq, bool):
-    raise QuestError('quest query returned a malformed chat sequence')
-  return chat_seq
-
-
-def _ended(quest: dict[str, Any]) -> bool:
-  state = quest.get('state')
-  if state in ('accepted', 'started'):
-    return False
-  if state in ('ended', 'denied', 'evicted'):
-    return True
-  raise QuestError(f'quest {quest.get("id")!r} has unknown state {state!r}')
+  if quest.get('state') == 'evicted':
+    raise QuestError(f'quest {quest_id!r} is no longer retained')
+  if quest.get('kind') != LAUNCH or quest.get('type') != BRO:
+    raise QuestError(f'quest {quest_id!r} is not a bro launch')
 
 
 def answer_of(quest: dict[str, Any]) -> Optional[str]:
@@ -270,8 +99,8 @@ def answer_of(quest: dict[str, Any]) -> Optional[str]:
   denied, or evicted quest raises with the reason."""
   quest_id = quest.get('id')
   state = quest.get('state')
-  if state != 'evicted' and (quest.get('kind') != LAUNCH or quest.get('type') != BRO):
-    raise QuestError(f'quest {quest_id!r} is not a bro launch')
+  if state != 'evicted':
+    _require_bro(quest)
   if state in ('accepted', 'started'):
     return None
   trail_id = quest.get('trail_id')
@@ -325,23 +154,8 @@ def chat_payload(text: str) -> dict[str, Any]:
   return payload
 
 
-def _talk_of(quest: dict[str, Any]) -> 'Talk':
-  from bro.broker.brotocol import TALK_RIGHTS
-
-  values = quest.get('talk')
-  if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
-    raise QuestError('quest query returned malformed talk rights')
-  talk = frozenset(values)
-  if len(talk) != len(values) or not talk.issubset(TALK_RIGHTS):
-    raise QuestError('quest query returned invalid talk rights')
-  return cast('Talk', talk)
-
-
-def _entries(quest: dict[str, Any]) -> list[dict[str, Any]]:
-  messages = quest.get('messages')
-  if not isinstance(messages, list) or not all(isinstance(entry, dict) for entry in messages):
-    raise QuestError('quest query returned a malformed conversation')
-  return messages
+_talk_of = mission_client._talk_of
+_entries = mission_client._entries
 
 
 @dataclass(frozen=True)
@@ -501,6 +315,7 @@ def history(
   with connection(client) as connected:
     quest = query_quest(connected, resolved, read_timeout=_remaining(deadline))
     caller = caller_end(quest, resolved)
+    _require_bro(quest)
     if wait:
       cursor = _history_of(quest, resolved, caller).chat_seq
 
@@ -534,40 +349,14 @@ def _send(
   reply_to: Optional[str],
   question: bool,
 ) -> tuple[str, 'Message']:
-  """Send one chat move on a live quest this session is an end of, checking the
-  quest's talk before the host does; returns the resolved id and the sent envelope."""
-  from bro.broker import brotocol
-  from bro.broker.environment import BROKER_TALK
-
-  resolved = resolve(quest_id)
-  quest = query_quest(client, resolved)
-  sender = caller_end(quest, resolved)
-  _require_live(quest)
-  try:
-    candidate = brotocol.message(
-      resolved,
-      payload,
-      id='question' if question else None,
-      reply_to=reply_to,
-    )
-  except brotocol.ProtocolError as error:
-    raise QuestError(str(error)) from error
-  talk = _talk_of(quest)
-  if sender == 'worker':
-    from bro.broker.client import talk_from_env
-
-    published_talk = talk_from_env()
-    if published_talk is None:
-      raise QuestError(f'{BROKER_TALK} is missing from the session environment')
-    talk = published_talk
-  if not brotocol.message_allowed(talk, sender, candidate):
-    source = BROKER_TALK if sender == 'worker' else f'query {resolved}'
-    raise QuestError(f'{source} forbids this quest chat move')
-  try:
-    sent = client.message(resolved, candidate.payload, reply_to=reply_to, question=question)
-  except (PermissionError, brotocol.ProtocolError) as error:
-    raise QuestError(str(error)) from error
-  return resolved, sent
+  return mission_client._send(
+    client,
+    quest_id,
+    payload,
+    reply_to=reply_to,
+    question=question,
+    validate=_require_bro,
+  )
 
 
 def say(
@@ -677,14 +466,20 @@ class CancelStatus:
   trail_id: Optional[str] = None
 
 
-def request_cancel(quest_id: str, *, client: Optional['Client'] = None) -> CancelStatus:
-  """Ask the host to cancel an owned mission and return once it accepts the request."""
-  from bro.broker.dispatcher import CANCEL
+def _quest_cancel_status(status: mission_client.CancelStatus) -> CancelStatus:
+  return CancelStatus(
+    status.state,
+    status.mission_id,
+    outcome=status.outcome,
+    reason=status.reason,
+    trail_id=status.trail_id,
+  )
 
-  resolved = resolve(quest_id)
-  with connection(client) as connected:
-    call_ok(connected, CANCEL, {'id': resolved}, timeout=ACCEPT_TIMEOUT)
-  return CancelStatus('accepted', resolved)
+
+def request_cancel(quest_id: str, *, client: Optional['Client'] = None) -> CancelStatus:
+  """Ask the host to cancel an owned bro quest and return once it accepts."""
+  status = mission_client.request_cancel(quest_id, client=client, validate=_require_bro)
+  return _quest_cancel_status(status)
 
 
 def cancel(
@@ -693,26 +488,14 @@ def cancel(
   timeout: Optional[float] = None,
   client: Optional['Client'] = None,
 ) -> CancelStatus:
-  """End an owned mission and wait for it to end."""
-  deadline = wait_deadline(True, timeout)
-  resolved = resolve(quest_id)
-  with connection(client) as connected:
-    request_cancel(resolved, client=connected)
-    quest = query_quest(connected, resolved, read_timeout=_remaining(deadline))
-    quest = _poll_quest(connected, resolved, quest, deadline=deadline, done=_ended, on_chat=False)
-  trail_id = quest.get('trail_id')
-  trail_id = trail_id if isinstance(trail_id, str) else None
-  if not _ended(quest):
-    return CancelStatus('pending', resolved, trail_id=trail_id)
-  if quest.get('state') == 'evicted':
-    raise QuestError(
-      f'quest {resolved!r} ended but its outcome is no longer retained; {trails_hint(trail_id)}'
-    )
-  outcome = quest.get('outcome')
-  reason = quest.get('reason')
-  if not isinstance(outcome, str) or (reason is not None and not isinstance(reason, str)):
-    raise QuestError(f'quest {resolved!r} ended with a malformed outcome: {outcome!r}')
-  return CancelStatus('ended', resolved, outcome=outcome, reason=reason, trail_id=trail_id)
+  """End an owned bro quest and wait for it to end."""
+  status = mission_client.cancel(
+    quest_id,
+    timeout=timeout,
+    client=client,
+    validate=_require_bro,
+  )
+  return _quest_cancel_status(status)
 
 
 def cancel_view(status: CancelStatus) -> dict[str, Any]:
@@ -727,23 +510,10 @@ def cancel_view(status: CancelStatus) -> dict[str, Any]:
 # --- list -----------------------------------------------------------------------
 
 
-def _query_missions(client: 'Client') -> list[dict[str, Any]]:
-  from bro.broker.dispatcher import QUERY
-
-  missions: list[dict[str, Any]] = []
-  cursor: Optional[str] = None
-  while True:
-    args = {} if cursor is None else {'cursor': cursor}
-    value = _read_value(client, QUERY, args, timeout=ACCEPT_TIMEOUT)
-    page = value.get('missions')
-    if not isinstance(page, list) or not all(isinstance(mission, dict) for mission in page):
-      raise QuestError('query listing returned malformed mission records')
-    missions.extend(page)
-    cursor = value.get('cursor')
-    if cursor is None:
-      return missions
-    if not isinstance(cursor, str):
-      raise QuestError('query listing returned a malformed cursor')
+_query_missions = mission_client._query_missions
+LiveMission = mission_client.LiveMission
+live_mission_line = mission_client.live_mission_line
+live_missions = mission_client.live_missions
 
 
 def _query_listing(client: 'Client') -> list[dict[str, Any]]:
@@ -758,41 +528,6 @@ def list_quests() -> dict[str, Any]:
   """Return every caller-visible retained summon record, live first."""
   with open_client() as client:
     return {'quests': _query_listing(client)}
-
-
-@dataclass(frozen=True)
-class LiveMission:
-  mission_id: str
-  type: str
-  label: str
-
-
-def live_mission_line(mission: LiveMission) -> str:
-  if mission.type == BRO:
-    return f'quest {mission.mission_id} to {mission.label}'
-  return f'mission {mission.mission_id}: {mission.label}'
-
-
-def live_missions() -> list[LiveMission]:
-  """Return the live missions this session owns, newest first."""
-  own = own_quest()
-  with open_client() as client:
-    records = _query_missions(client)
-  missions: list[LiveMission] = []
-  for record in records:
-    if record.get('kind') != LAUNCH or record.get('parent') != own or _ended(record):
-      continue
-    worker_type = record.get('type')
-    if not isinstance(worker_type, str):
-      raise QuestError('query listing returned a live mission without a worker type')
-    label = worker_type
-    if worker_type == BRO:
-      args = record.get('args')
-      label = args.get('target') if isinstance(args, dict) else None
-      if not isinstance(label, str):
-        raise QuestError('query listing returned a live bro mission without a target')
-    missions.append(LiveMission(_quest_id(record), worker_type, label))
-  return missions
 
 
 # --- watch ----------------------------------------------------------------------
@@ -870,25 +605,6 @@ def _event_line(event: dict[str, Any], own: str) -> str:
   else:
     head = f'summon {transition}'
   return _single_line(f'{head} ({_quest_clause(event, own)})')
-
-
-def _mission_event_line(event: dict[str, Any], own: str) -> str:
-  mission_id = event.get('mission')
-  worker_type = event.get('type')
-  parent = event.get('parent')
-  if not isinstance(mission_id, str) or not isinstance(worker_type, str):
-    raise QuestError('events read returned a malformed mission record')
-  if parent != own:
-    raise QuestError('events read returned a mission this session did not launch')
-  transition = event.get('transition')
-  if transition == 'trail':
-    transition = f'trail {event.get("trail_id")}'
-  elif transition == 'ended':
-    reason = f':{event["reason"]}' if event.get('reason') is not None else ''
-    transition = f'ended {event.get("outcome")}{reason}'
-  elif transition == 'denied':
-    transition = f'denied: {event.get("reason")}'
-  return _single_line(f'launch {worker_type} {transition} (mission {mission_id})')
 
 
 def _chat_entry_event(quest: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
@@ -989,18 +705,13 @@ def watch(wait_seconds: float = READ_WAIT_SECONDS) -> Generator[str]:
         cursor = max(cursor, sequence)
         if event.get('kind') != LAUNCH:
           continue
-        if event.get('type') == BRO:
-          chat_line = _chat_event_line(event, own)
-          if chat_line is not None:
-            yield chat_line
-          elif event.get('transition') not in ('message', 'refused', 'listening'):
-            yield _event_line(event, own)
-        elif isinstance(event.get('type'), str) and event.get('transition') not in (
-          'message',
-          'refused',
-          'listening',
-        ):
-          yield _mission_event_line(event, own)
+        if event.get('type') != BRO:
+          continue
+        chat_line = _chat_event_line(event, own)
+        if chat_line is not None:
+          yield chat_line
+        elif event.get('transition') not in ('message', 'refused', 'listening'):
+          yield _event_line(event, own)
 
 
 # --- CLI ------------------------------------------------------------------------
@@ -1192,22 +903,20 @@ def main(argv: list[str]) -> Optional[int]:
 
   watch_parser = verbs.add_parser(
     'watch',
-    help='stream every mission this session launches',
-    description='stream the ordered lifecycle transitions of every mission this session '
-    'launches and the messages on its bro quests. Runs until killed; what is already in '
-    'flight when it starts is the baseline',
+    help='stream every bro quest this session summons',
+    description='stream the ordered lifecycle and chat of every bro quest this session '
+    'summons. Runs until killed; what is already in flight when it starts is the baseline',
   )
   watch_parser.set_handler(_watch)
 
   cancel_parser = verbs.add_parser(
     'cancel',
-    help='end a mission this session owns',
-    description='end a mission this session owns: it ends failed:cancelled and whatever its '
-    'worker launched in turn ends failed:orphaned; a host-supervised worker is killed and an '
-    f'expected worker detached; exits 0 once it ends and {RUNNING_EXIT_CODE} when --timeout '
-    'passes first',
+    help='end a bro quest this session owns',
+    description='end a bro quest this session owns: it ends failed:cancelled and whatever it '
+    'launched in turn ends failed:orphaned; a host-supervised worker is killed and an expected '
+    f'worker detached; exits 0 once it ends and {RUNNING_EXIT_CODE} when --timeout passes first',
   )
-  cancel_parser.add_argument('quest_id', metavar='<mission-id>', help='owned mission id')
+  cancel_parser.add_argument('quest_id', metavar='<quest-id>', help='owned bro quest id')
   cancel_parser.add_argument(
     '--timeout',
     type=float,

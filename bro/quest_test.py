@@ -248,7 +248,7 @@ async def test_waiting_question_fails_when_the_quest_ends_without_a_reply(monkey
     )
 
     assert await task == 1
-    assert 'already ended successfully' in caplog.text
+    assert 'already ended' in caplog.text
 
 
 @pytest.mark.asyncio
@@ -272,7 +272,7 @@ async def test_say_refuses_an_ended_quest_before_sending(monkeypatch, caplog):
     )
 
     assert await task == 1
-    assert 'already ended successfully' in caplog.text
+    assert 'already ended' in caplog.text
 
 
 @pytest.mark.asyncio
@@ -324,7 +324,7 @@ async def test_say_refuses_a_quest_this_session_did_not_summon(monkeypatch, capl
     )
 
     assert await task == 1
-    assert 'not one this session summoned' in caplog.text
+    assert 'not one this session owns or undertakes' in caplog.text
 
 
 @pytest.mark.asyncio
@@ -798,30 +798,34 @@ async def test_history_of_an_evicted_quest_fails(monkeypatch, caplog):
 
 
 @pytest.mark.asyncio
-async def test_cancel_accepts_a_non_bro_mission_and_waits_for_its_end(monkeypatch, caplog):
+async def test_cancel_refuses_a_non_bro_mission_before_sending(monkeypatch, caplog):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'cancel', 'REQ-1']))
-    channel, cancel = await next_message(server)
-    assert cancel.kind == 'cancel'
-    assert cancel.args == {'id': 'REQ-1'}
-    await reply(server, channel, cancel, outcome='ok')
     channel, query = await next_message(server)
-    assert query.args == {'id': 'REQ-1'}
     await reply(
       server,
       channel,
       query,
       outcome='ok',
-      value={
-        'mission': quest_record(
-          'REQ-1',
-          'started',
-          type='benchmark',
-          args={'config': 'benchmark/job.yaml'},
-          trail_id='T9',
-        )
-      },
+      value={'mission': quest_record('REQ-1', 'started', type='benchmark')},
     )
+
+    assert await task == 1
+  assert 'not a bro launch' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_cancel_checks_the_bro_quest_then_waits_for_its_end(monkeypatch, caplog):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'cancel', 'REQ-1']))
+    channel, query = await next_message(server)
+    live = quest_record('REQ-1', 'started', trail_id='T9')
+    await reply(server, channel, query, outcome='ok', value={'mission': live})
+    channel, cancel = await next_message(server)
+    assert cancel.kind == 'cancel'
+    await reply(server, channel, cancel, outcome='ok')
+    channel, query = await next_message(server)
+    await reply(server, channel, query, outcome='ok', value={'mission': live})
     channel, wait = await next_message(server)
     assert wait.args == {'id': 'REQ-1', 'wait': quest.READ_WAIT_SECONDS}
     await reply(
@@ -833,12 +837,10 @@ async def test_cancel_accepts_a_non_bro_mission_and_waits_for_its_end(monkeypatc
         'mission': quest_record(
           'REQ-1',
           'ended',
-          type='benchmark',
-          args={'config': 'benchmark/job.yaml'},
           outcome='failed',
           reason='cancelled',
           trail_id='T9',
-          result={'outcome': 'failed', 'detail': {'reason': 'cancelled', 'exit_code': 137}},
+          result={'outcome': 'failed', 'detail': {'reason': 'cancelled'}},
         )
       },
     )
@@ -851,61 +853,69 @@ async def test_cancel_accepts_a_non_bro_mission_and_waits_for_its_end(monkeypatc
 async def test_cancel_refusal_fails_without_waiting(monkeypatch, caplog):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'cancel', 'REQ-1']))
-    channel, cancel = await next_message(server)
+    channel, query = await next_message(server)
     await reply(
       server,
       channel,
-      cancel,
-      outcome='denied',
-      error="no live quest 'REQ-1' requested by this peer",
+      query,
+      outcome='ok',
+      value={'mission': quest_record('REQ-1', 'started')},
     )
+    channel, cancel = await next_message(server)
+    await reply(server, channel, cancel, outcome='denied', error='cancel refused')
 
     assert await task == 1
-  assert "no live quest 'REQ-1' requested by this peer" in caplog.text
+  assert 'cancel refused' in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_cancel_fails_on_an_unknown_state_or_an_evicted_outcome(monkeypatch, caplog):
-  async with running_server(monkeypatch) as server:
-    unknown = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'cancel', 'REQ-1']))
-    channel, cancel = await next_message(server)
-    await reply(server, channel, cancel, outcome='ok')
-    channel, query = await next_message(server)
-    await reply(
-      server, channel, query, outcome='ok', value={'mission': quest_record('REQ-1', 'limbo')}
-    )
-    assert await unknown == 1
-
-    evicted = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'cancel', 'REQ-2']))
-    channel, cancel = await next_message(server)
-    await reply(server, channel, cancel, outcome='ok')
-    channel, query = await next_message(server)
-    await reply(
-      server, channel, query, outcome='ok', value={'mission': quest_record('REQ-2', 'evicted')}
-    )
-    assert await evicted == 1
-  assert "quest 'REQ-1' has unknown state 'limbo'" in caplog.text
-  assert "quest 'REQ-2' ended but its outcome is no longer retained" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_cancel_timeout_exits_running_while_the_end_is_under_way(monkeypatch, caplog):
+async def test_cancel_timeout_keeps_the_quest_recoverable(monkeypatch, caplog):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(
       asyncio.to_thread(quest.main, ['quest', 'cancel', 'REQ-1', '--timeout', '0.2'])
     )
+    channel, query = await next_message(server)
+    live = quest_record('REQ-1', 'started')
+    await reply(server, channel, query, outcome='ok', value={'mission': live})
     channel, cancel = await next_message(server)
     await reply(server, channel, cancel, outcome='ok')
     channel, query = await next_message(server)
-    await reply(
-      server, channel, query, outcome='ok', value={'mission': quest_record('REQ-1', 'started')}
-    )
+    await reply(server, channel, query, outcome='ok', value={'mission': live})
     _, wait = await next_message(server)
-    assert wait.args['id'] == 'REQ-1'
     assert 0 < wait.args['wait'] <= 0.2
 
     assert await task == quest.RUNNING_EXIT_CODE
-  assert 'cancel accepted; quest REQ-1 has not ended within 0s' in caplog.text
+  assert 'cancel accepted; quest REQ-1 has not ended' in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+  ('verb', 'arguments'),
+  [
+    ('check', []),
+    ('history', []),
+    ('say', ['text']),
+    ('ask', ['question']),
+  ],
+)
+async def test_every_conversation_verb_refuses_a_non_bro_mission(
+  monkeypatch, caplog, verb, arguments
+):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(quest.main, ['quest', verb, 'OTHER-1', *arguments])
+    )
+    channel, query = await next_message(server)
+    await reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={'mission': quest_record('OTHER-1', 'started', type='benchmark')},
+    )
+
+    assert await task == 1
+  assert 'not a bro launch' in caplog.text
 
 
 # --- list -------------------------------------------------------------------------
@@ -1250,10 +1260,7 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
         ],
       },
     )
-    assert await first_line == 'launch benchmark started (mission B1)'
-    assert await asyncio.to_thread(next, watch) == (
-      'summon denied: not allowed (quest S1 to reviewer)'
-    )
+    assert await first_line == 'summon denied: not allowed (quest S1 to reviewer)'
 
     second_line = asyncio.create_task(asyncio.to_thread(next, watch))
     channel, poll = await next_message(server)
@@ -1443,23 +1450,6 @@ def test_chat_watch_lines_show_the_other_end_and_every_refusal():
   }
   assert quest._chat_event_line(oversized, 'ROOT') == (
     'summon refused over the message bound (quest CHILD to dev)'
-  )
-
-
-def test_non_bro_watch_lines_name_the_type_mission_and_outcome():
-  event = {
-    'kind': 'launch',
-    'type': 'benchmark',
-    'mission': 'B1',
-    'parent': 'ROOT',
-    'args': {'config': 'benchmark/job.yaml'},
-    'transition': 'ended',
-    'outcome': 'failed',
-    'reason': 'timeout',
-  }
-
-  assert quest._mission_event_line(event, 'ROOT') == (
-    'launch benchmark ended failed:timeout (mission B1)'
   )
 
 
