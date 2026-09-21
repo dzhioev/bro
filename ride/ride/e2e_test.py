@@ -76,6 +76,7 @@ pytestmark = [
 
 _NAME_PREFIX = 'ride-e2e-'
 _RUNTIME_PYTHON = '/var/ride/runtime/venv/bin/python'
+_WEDGED_MISSION_TIMEOUT = 2
 
 
 def _broxy_probe(python: str, source: str) -> list[str]:
@@ -866,7 +867,7 @@ def b_timeout(isolated_env: IsolatedEnv) -> BrokerRun:
     isolated_env,
     'timeout',
     ['sleep', '300'],
-    mission_timeout=30,
+    mission_timeout=_WEDGED_MISSION_TIMEOUT,
     probe_deadline=90,
   )
 
@@ -950,7 +951,8 @@ class TestChildLifecycle:
     assert failed['payload']['detail']['exit_code'] != 0
     # the request timeout is armed at the supervisor's started transition;
     # the slack covers process launch and reap.
-    assert 30 <= failed['elapsed'] <= 60, failed['elapsed']
+    elapsed = failed['elapsed']
+    assert _WEDGED_MISSION_TIMEOUT <= elapsed <= _WEDGED_MISSION_TIMEOUT + 30, elapsed
     assert b_timeout.channels_after == frozenset()
     assert b_timeout.live_after == [], 'timed-out child container not killed'
 
