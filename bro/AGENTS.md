@@ -49,7 +49,7 @@ A subpackage with a map of its own is pointed at, not described here.
 - `worker_types.py` — the core contract for a worker type, its launch request and run shapes, peer descriptions, host ports, registry, and shared artifact/path helpers.
   `WorkerContainer` is the validated, host-neutral container declaration:
   packaged build-context bytes over the runtime image, a command and environment, and container ports the host publishes on loopback.
-  Installed types register through `bro.worker_types`, with ride contributing `bro` and bench contributing `benchmark`.
+  Installed types register through `bro.worker_types`, with ride contributing `bro`, bench contributing `benchmark`, and webview contributing `webview`.
 - `run_lifecycle.py` — `RunLifecycle`, the worker-process emitter over `bro.broker.client.Client`:
   it undertakes the broker mission named in `BROKER_MISSION`, emits the run's set-once `trail` mark after recording opens, and sends the closing result.
   `Runner.run()` builds one through `_make_channel()`;

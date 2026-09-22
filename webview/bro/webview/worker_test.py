@@ -191,6 +191,8 @@ class TestWebviewType:
     dockerfile = first.files['Dockerfile'].decode()
     assert dockerfile.splitlines()[:2] == ['ARG RUNTIME_IMAGE', 'FROM ${RUNTIME_IMAGE}']
     assert re.search(r'npm install -g @playwright/mcp@\d+\.\d+\.\d+', dockerfile) is not None
+    assert 'PLAYWRIGHT_ROOT="$(npm root -g)/@playwright"' in dockerfile
+    assert '/usr/local/lib/node_modules' not in dockerfile
     assert first.image_hash('runtime:one') == second.image_hash('runtime:one')
     assert first.image_hash('runtime:one') != first.image_hash('runtime:two')
 

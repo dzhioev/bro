@@ -151,6 +151,16 @@ def test_a_shard_outside_the_broker_e2e_stage_or_its_count_is_refused(argv, caps
   assert 'shard' in capsys.readouterr().err
 
 
+def test_the_live_broker_stages_name_their_own_modules(invocations):
+  run_tests.broker_e2e_stage()
+  run_tests.webview_e2e_stage()
+
+  assert invocations == [
+    (sys.executable, '-m', 'pytest', '-q', run_tests.BROKER_E2E_PYTEST_FILE),
+    (sys.executable, '-m', 'pytest', '-q', *run_tests.WEBVIEW_E2E_PYTEST_FILES),
+  ]
+
+
 def test_the_llm_stage_names_each_probe_on_the_command_line(invocations):
   run_tests.llm_stage()
 

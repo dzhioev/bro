@@ -77,12 +77,14 @@ The module contains constants only, so launch paths may import it before the bro
 
 ## Journal
 
-A `Record` stores mission id, kind, worker type, parent mission, owner, worker, bounded args, folded lifecycle, trail id, retained result, and talk.
+A `Record` stores mission id, kind, worker type, parent mission, owner, worker, bounded args, folded lifecycle, trail id, retained result, supervision settlement, and talk.
 An accepted record requires its worker type.
 A denial may have no usable type;
 its record and events keep `type` unset and omit it from views.
 An `Event` carries `mission`, kind, type when known, parent, bounded args, transition, timestamp, and transition payload.
 The list query answers `{missions: […], cursor?}` and a by-id query answers `{mission: view}`.
+A worker result ends the record, while `settled: true` appears after its supervisor reaps the execution and finishes host cleanup;
+a by-id query with `settled: true` and `wait` can long-poll for that second boundary.
 An evicted view retains only id, kind, parent, and state because lineage is unchanged.
 
 The event sequence is monotone for the broker root.

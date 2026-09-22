@@ -6,9 +6,9 @@ ordered watch, and cancellation surfaces, as a library and as the ``mission`` CL
 ``self`` names the session's own mission.
 
 Reads are repeatable journal queries. A wait bounds silence rather than the
-mission: it re-reads the journal through bounded long-polls until the state it
-waits for or its deadline, and a caller past the deadline sees the state it
-stopped at. Watch replays retained chat through the head it arms at, then
+mission: it re-reads the journal through bounded long-polls until the state,
+chat advance, or supervision settlement it waits for, and a caller past the
+deadline sees the state it stopped at. Watch replays retained chat through the head it arms at, then
 long-polls the ordered event stream after it.
 
 Unlike the substrate CLI, an unset ``BROKER_CHANNEL`` is an error.
@@ -148,9 +148,10 @@ def query_mission(
   *,
   wait_seconds: float = 0,
   since: Optional[int] = None,
+  wait_for_settlement: bool = False,
   read_timeout: Optional[float] = None,
 ) -> dict[str, Any]:
-  """One by-id journal read, optionally long-polling for the end or a chat advance."""
+  """One by-id journal read, optionally long-polling for the end, settlement, or chat."""
   from bro.broker.dispatcher import QUERY
 
   args: dict[str, Any] = {'id': mission_id}
@@ -158,6 +159,8 @@ def query_mission(
     args['wait'] = wait_seconds
   if since is not None:
     args['since'] = since
+  if wait_for_settlement:
+    args['settled'] = True
   value = _read_value(
     client,
     QUERY,
