@@ -8,10 +8,10 @@ from typing import Any, cast
 import pytest
 
 import ride.artifacts
-from bro.artifact import GET, MINT, digest_path
+from bro.artifact import GET, MINT, SHARE, digest_path
 from bro.broker import brotocol
 from bro.broker.dispatcher import Dispatcher
-from bro.broker.journal import Journal
+from bro.broker.journal import Journal, Record
 from bro.worker_types import ArtifactDenied, PeerDescription, UnattributablePeer
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir, workspace_tree
 from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts
@@ -341,6 +341,7 @@ class _ArtifactControlHarness(ArtifactControl):
   def __init__(self, store, facts, context):
     super().__init__(store, facts)
     self.test_context = context
+    self.test_facts = facts
 
 
 class _JobArtifactsHarness(JobArtifacts):
@@ -357,6 +358,35 @@ def control(workspace, store):
 
 def _context(owner: Any) -> FakeContext:
   return owner.test_context
+
+
+def _live_mission(
+  control: _ArtifactControlHarness,
+  *,
+  owner: str = ROOT,
+  expected: bool = False,
+  mission_id: str = 'WEB-1',
+) -> Record:
+  context = _context(control)
+  record = context.journal.open(
+    mission_id,
+    'launch',
+    'root-quest',
+    owner,
+    {'type': 'webview'},
+    type='webview',
+  )
+  control.test_facts.add(
+    mission_id,
+    WorkerFacts(
+      type='webview',
+      workspace='webview-CH',
+      tree=workspace_tree('ws'),
+      expected=expected,
+      artifact_view=PurePosixPath('/workspace/artifacts'),
+    ),
+  )
+  return record
 
 
 class TestJobArtifacts:
@@ -417,6 +447,71 @@ class TestArtifactControl:
     }
 
   @pytest.mark.asyncio
+  async def test_share_links_an_owner_reachable_ref_into_the_live_worker_view(self, control, store):
+    ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
+    _live_mission(control)
+    context = _context(control)
+    message = brotocol.request(SHARE, {'id': 'WEB-1', 'ref': ref})
+
+    control.share(cast(Dispatcher, context), ROOT, message)
+
+    assert context.replies == []
+    peer, result = await _delivered(context)
+    assert peer == ROOT
+    assert result.request == message.id
+    assert result.payload == {'outcome': 'ok', 'value': {}}
+    assert store.reachable(ref, 'webview-CH')
+    assert (ride.artifacts.view_dir('ws', 'webview-CH') / ref).read_bytes() == b'payload'
+
+  @pytest.mark.parametrize('terminal', [False, True])
+  def test_share_refuses_a_mission_the_caller_does_not_live_own(self, control, terminal):
+    record = _live_mission(control, owner=ROOT if terminal else CHILD)
+    context = _context(control)
+    if terminal:
+      context.journal.end(record, {'outcome': 'ok'})
+
+    control.share(
+      cast(Dispatcher, context),
+      ROOT,
+      brotocol.request(SHARE, {'id': 'WEB-1', 'ref': UNKNOWN_REF}),
+    )
+
+    [(peer, payload)] = context.replies
+    assert peer == ROOT
+    assert payload['outcome'] == 'denied'
+    assert payload['error'] == "no live mission 'WEB-1' owned by this peer"
+
+  def test_share_refuses_a_ref_the_owner_cannot_reach(self, control, store):
+    _live_mission(control)
+    context = _context(control)
+
+    control.share(
+      cast(Dispatcher, context),
+      ROOT,
+      brotocol.request(SHARE, {'id': 'WEB-1', 'ref': UNKNOWN_REF}),
+    )
+
+    [(_, payload)] = context.replies
+    assert payload['outcome'] == 'denied'
+    assert payload['error'] == f'cannot share artifact the owner cannot reach: {UNKNOWN_REF}'
+    assert not store.reachable(UNKNOWN_REF, 'webview-CH')
+
+  def test_share_refuses_a_manual_worker_without_a_host_built_view(self, control, store):
+    ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
+    _live_mission(control, expected=True)
+    context = _context(control)
+
+    control.share(
+      cast(Dispatcher, context),
+      ROOT,
+      brotocol.request(SHARE, {'id': 'WEB-1', 'ref': ref}),
+    )
+
+    [(_, payload)] = context.replies
+    assert payload['outcome'] == 'denied'
+    assert 'manually launched worker' in payload['error']
+
+  @pytest.mark.asyncio
   async def test_a_store_refusal_is_the_correlated_denial(self, control):
     context = _context(control)
     message = brotocol.request(MINT, {'path': 'absent.bin'})
@@ -439,11 +534,21 @@ class TestArtifactControl:
     control.mint(cast(Dispatcher, context), ROOT, brotocol.request(MINT, {'path': ''}))
     control.mint(cast(Dispatcher, context), ROOT, brotocol.request(MINT, {'path': 'x', 'extra': 1}))  # fmt: skip
     control.get(cast(Dispatcher, context), ROOT, brotocol.request(GET, {'ref': 'nope'}))
-    assert [payload['outcome'] for _, payload in context.replies] == ['denied'] * 3
+    control.share(
+      cast(Dispatcher, context), ROOT, brotocol.request(SHARE, {'id': '', 'ref': UNKNOWN_REF})
+    )
+    control.share(
+      cast(Dispatcher, context),
+      ROOT,
+      brotocol.request(SHARE, {'id': 'WEB-1', 'ref': UNKNOWN_REF, 'extra': 1}),
+    )
+    assert [payload['outcome'] for _, payload in context.replies] == ['denied'] * 5
     assert "non-empty string 'path'" in context.replies[0][1]['error']
     assert 'unknown artifact.mint field(s): extra' in context.replies[1][1]['error']
     assert "well-formed 'ref'" in context.replies[2][1]['error']
-    assert [entry['event'] for entry in _audit()] == ['deny'] * 3
+    assert "non-empty string 'id'" in context.replies[3][1]['error']
+    assert 'unknown artifact.share field(s): extra' in context.replies[4][1]['error']
+    assert [entry['event'] for entry in _audit()] == ['deny'] * 5
 
   def test_an_unattributable_peer_is_denied(self, control):
     context = _context(control)

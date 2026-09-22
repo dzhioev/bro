@@ -1,19 +1,20 @@
 #!/usr/bin/env python
 """artifact — pass files between broker peers by content-addressed reference.
 
-The peer side of artifact sharing: two request kinds on the peer's channel,
-answered by the ride's host-side store (`ride/ride/artifacts.py`). This module owns
-the wire contract — the kinds, their args keys, and the ref grammar — for the
-library client and the `artifact` CLI/session command.
+The peer side of artifact sharing uses three request kinds on the peer's channel.
+The ride's host-side store answers them (`ride/ride/artifacts.py`).
+This module owns their kinds, argument keys, and ref grammar for the library clients and CLI/session commands.
 
 - `artifact.mint` with args `{path}` — `path` names a file or directory
-  relative to the requesting peer's workspace root. The host ingests a private
-  copy into the ride store and answers `ok{ref, size}`.
-- `artifact.get` with args `{ref}` — the host makes the ref visible to the
-  requesting peer and answers `ok{path}` with the path it appears at: the
-  read-only view mount for a boxed peer, a copy under the peer's workspace
-  directory for an unboxed one. The path is not the peer's to
-  write; a peer that wants an editable copy makes one itself.
+  relative to the requesting peer's workspace root.
+  The host ingests a private copy into the ride store and answers `ok{ref, size}`.
+- `artifact.get` with args `{ref}` — the host makes the ref visible to the requesting peer
+  and answers `ok{path}` with the path it appears at:
+  the read-only view mount for a boxed peer, or a copy under the peer's workspace directory
+  for an unboxed one.
+  The path is not the peer's to write;
+  a peer that wants an editable copy makes one itself.
+- `artifact.share` with args `{id, ref}` — the owner of a live mission hands one ref it can reach to that mission's worker.
 
 A ref is `sha256:` plus 64 hex digits. For a file it is the plain content
 digest, so `sha256sum` checks it. For a directory it is the digest of a
@@ -24,9 +25,9 @@ and executable bit of a file or the recorded (never followed) target of a
 symlink, refused when that target escapes the directory; the manifest digested
 as compact sorted-key JSON.
 
-A minted ref is readable by the minting peer and its summoners up to the
-ride root; a summon request's `share` list hands refs down to the child it
-spawns. Nothing else reaches a ref — knowing one is not access.
+A minted ref is readable by the minting peer and its summoners up to the ride root.
+An owner may hand a ref down when the mission opens or after it is live.
+Nothing else reaches a ref — knowing one is not access.
 
 The CLI blocks for the host's answer: `artifact mint <path>` prints the ref,
 `artifact get <ref>` prints the path, and `artifact digest <path>` computes a
@@ -56,6 +57,7 @@ __cli_name__ = 'artifact'
 
 MINT = 'artifact.mint'  # the kind a mint request names; args {path}
 GET = 'artifact.get'  # the kind a get request names; args {ref}
+SHARE = 'artifact.share'  # the kind a live mission share names; args {id, ref}
 # client-side bound on the host's answer — ingest reads and copies the full
 # content, so a multi-gigabyte bundle takes real time
 DEFAULT_TIMEOUT = 600.0

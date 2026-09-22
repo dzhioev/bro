@@ -37,9 +37,9 @@ A subpackage with a map of its own is pointed at, not described here.
   identity, features, credential manifest and optional tier, LLM key, and roster.
 - `summon.py` (`summon`) — the bro wrapper over `launch {type: bro, …}` (the manual variant included), the facts a summoned run reads off its environment, and the summoning surfaces: blocking, detached, and manual;
   common launch enforcement lives in `ride/ride/launch_control.py`, and bro authorization in `ride/ride/bro_worker.py`
-- `mission.py` (`mission`) — the universal typed outcome and conversation reads, say, ask, caller-scoped listing, ordered watch, and cancellation surfaces for every worker mission
+- `mission.py` (`mission`) — the universal typed outcome and conversation reads, say, ask, live artifact sharing, caller-scoped listing, ordered watch, and cancellation surfaces for every worker mission
 - `quest.py` (`quest`) — the bro-only view over the mission surface, preserving the summon-shaped answers, text chat, verbs, functions, and service tools
-- `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint` / `artifact.get` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session command;
+- `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint`, `artifact.get`, and `artifact.share` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session commands;
   the host store and enforcement live in `ride/ride/artifacts.py`
 - `jobs.py`, `job_supervisor.py`, and `inbox.py` — process jobs and the per-run notification seam:
   a supervisor remains the live process-group leader until every command descendant exits;
