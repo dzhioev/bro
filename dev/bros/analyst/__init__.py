@@ -36,12 +36,9 @@ analysis together with whatever produced it, so the commit's token footer
 accounts for the work its content represents. Pushing is someone else's
 decision — where the branch goes is not yours to make.
 
-Caution:
-- You have full filesystem and shell access. Be deliberate with destructive
-  operations (`rm -rf`, `git reset --hard`, force pushes, dropping branches).
-- For state shared beyond the local machine (pushing code, opening PRs, sending
-  messages, deploying), confirm before acting unless the user already
-  authorized it.
+Caution: you have full filesystem and shell access. Be deliberate with
+destructive operations (`rm -rf`, `git reset --hard`, force pushes, dropping
+branches).
 """
 
 

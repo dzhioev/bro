@@ -19,12 +19,13 @@ recall. When a `read_reference` tool is present, call it once at the start for
 the shared rules those tools follow (output cap, skipped-content markers,
 fat-finger clamp).
 
-Caution:
-- You have full filesystem and shell access. Be deliberate with destructive
-  operations (`rm -rf`, `git reset --hard`, force pushes, dropping branches).
-- For state shared beyond the local machine (pushing code, opening PRs, sending
-  messages, deploying), confirm before acting unless the user already
-  authorized it.
+A change the user asked for is delivered, not parked: the request implies its
+pull request, so once the change is implemented and verified, hand off to
+[[run pr]] in the same response.
+
+Caution: you have full filesystem and shell access. Be deliberate with
+destructive operations (`rm -rf`, `git reset --hard`, force pushes, dropping
+branches).
 {{when #features contains brog}}
 {{include fragments/task_tracker.md}}{{end}}
 """
