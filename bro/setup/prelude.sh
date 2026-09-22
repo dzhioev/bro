@@ -2,6 +2,7 @@
 # the shell-script prelude, sourced first by every executable script: leveled
 # logging (log.sh), fail-fast guards (strict.sh), and HERE, the physical path
 # of the executed script's directory
+# shellcheck disable=SC2034  # HERE is the sourcing script's to read
 
 _PRELUDE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$_PRELUDE_DIR/log.sh"

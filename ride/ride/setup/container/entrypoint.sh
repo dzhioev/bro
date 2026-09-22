@@ -1,5 +1,6 @@
 #!/usr/bin/env -S bash -e
 
+# shellcheck source=bro/setup/prelude.sh
 source /usr/local/lib/bro-shell/prelude.sh
 
 # root phase: align container user with host uid/gid, then re-exec as ride

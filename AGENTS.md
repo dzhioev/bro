@@ -31,7 +31,7 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
 
 - `./format.sh` — format and autofix the whole repository
 - `run-tests` — the test gate, a sequence of named stages:
-  `lint` (console-script drift, deptry, ruff's lint and format checks),
+  `lint` (console-script drift, deptry, ruff's lint and format checks, ShellCheck over the shell scripts),
   `types` (pyright),
   `unit` (the pytest roster, run in parallel, then a second run in one process for the modules `run_tests.py` holds out of the pool),
   `benchmark` (the benchmark project's own: it syncs `benchmark/.venv` and runs pyright and pytest inside it, since the workspace venv cannot import `bro.benchmark` at all),
@@ -44,7 +44,7 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   `--changed` narrows the gate to what a diff against `--base` (default `origin/master`) can reach through the repository's import graph (`bro.dev.affected_tests`):
   `unit` drops the test modules the change cannot reach
   — a roster module with no source module of its own holds a repository-wide invariant and runs whatever changed;
-  `lint` runs `sync-scripts` and deptry only for the distributions the change lands in, leaving both ruff checks repo-wide;
+  `lint` runs `sync-scripts` and deptry only for the distributions the change lands in, leaving both ruff checks and ShellCheck repo-wide;
   `benchmark` is skipped whole unless the change reaches something that project imports or edits any project's metadata;
   and `types` is never narrowed, since pyright loads the dependency closure whatever file list it is given, so a shorter list hides errors instead of skipping work.
   Each stage names the scope it ran, and a stage the narrowing drops reads `skipped` in the closing verdict rather than going missing from it.
@@ -69,7 +69,8 @@ the `bro-dev` and `bro-eyebro` personas under `bros/`, sharing `bro/local/prompt
 and the tests that hold this repository as a whole to a policy
 — whatever is meaningful only inside this checkout), and `README.md` (the front page: the framework's features and limits, shown on one example crew, linking into the references).
 The development style policy is `dev/bro/prompts/dev/style.md`, tool-served to dev sessions as `dev-style-source::read`;
-shell scripts follow `dev/bro/dev/shell_policy.py` (prelude sourcing, shebang), enforced repository-wide by `local/bro/local/shell_policy_test.py`;
+shell scripts follow `dev/bro/dev/shell_policy.py` (prelude sourcing, shebang), enforced repository-wide by `local/bro/local/shell_policy_test.py`,
+and pass ShellCheck, which reads each file's dialect off its shebang and follows the sourced libraries through the root `.shellcheckrc`;
 markdown prose follows the semantic line breaks of `dev/bro/dev/markdown_policy.py`, enforced repository-wide by `local/bro/local/markdown_policy_test.py` and checked over a reflow by `check-markdown`;
 and a test module's sleeps follow `dev/bro/dev/sleep_policy.py` (a yield, a poll interval in a loudly bounded loop, or a marked subject or bound), enforced repository-wide by `local/bro/local/sleep_policy_test.py`.
 Every member builds through uv's own backend, which ships each declared module root whole, so a `[tool.uv.build-backend] wheel-exclude` glob is what keeps a file out of the wheel

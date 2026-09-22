@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # sourceable trails deployment configuration resolved from the infra credential.
+# shellcheck disable=SC2034  # the TRAILS_* variables are the sourcing script's to read
 
 load_trails_deployment_config() {
   local config

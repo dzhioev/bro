@@ -71,6 +71,7 @@ detect_platform() {
       ;;
     Linux)
       if [ -f /etc/os-release ]; then
+        # shellcheck source=/dev/null
         . /etc/os-release
         if [ "$ID" = "ubuntu" ]; then
           echo "Ubuntu"

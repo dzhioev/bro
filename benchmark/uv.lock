@@ -250,6 +250,7 @@ dev = [
     { name = "pytest-xdist", specifier = "==3.8.0" },
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "ruff", specifier = "==0.15.20" },
+    { name = "shellcheck-py", specifier = "==0.11.0.1" },
     { name = "types-python-dateutil", specifier = "==2.9.0.20260518" },
     { name = "types-pyyaml", specifier = "==6.0.12.20260815" },
 ]

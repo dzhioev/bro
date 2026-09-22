@@ -1,5 +1,6 @@
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 import yaml
@@ -278,6 +279,19 @@ def test_the_lint_stage_refuses_a_file_the_formatter_would_rewrite(monkeypatch, 
     run_tests.lint_stage([])
 
   assert raised.value.cmd == (sys.executable, '-m', 'ruff', 'format', '--check', '.')
+
+
+def test_the_lint_stage_refuses_a_shell_script_shellcheck_flags(monkeypatch, tmp_path):
+  subprocess.run(('git', 'init', '-q'), check=True, cwd=tmp_path)
+  # an unquoted expansion: nothing ruff reads, so shellcheck is the only step that can refuse it
+  (tmp_path / 'probe.sh').write_text('#!/usr/bin/env bash\necho $1\n')
+  monkeypatch.setattr(run_tests, 'DIR', tmp_path)
+
+  with pytest.raises(subprocess.CalledProcessError) as raised:
+    run_tests.lint_stage([])
+
+  assert Path(raised.value.cmd[0]).name == 'shellcheck'
+  assert raised.value.cmd[1:] == ('probe.sh',)
 
 
 def test_a_dropped_stage_reads_skipped_in_the_verdict(monkeypatch, capsys):
