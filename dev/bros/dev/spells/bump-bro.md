@@ -16,7 +16,7 @@ and hands off to [[run pr]].
 The framework checkout itself has nothing to bump.
 
 parameters: {"to?": "framework ref to pin — a commit, branch, or tag; default: the head of the branch the sources name"}
-version: 1.0.0
+version: 1.0.1
 ---
 
 # bump bro
@@ -133,7 +133,7 @@ Classify each changed file by its reach:
   `[tool.bro]` and its sub-tables (`bro/workspace/project.py` and each section's owner),
   the host config (`bro/base/host_config.py`),
   credential kinds and material shapes (`bro/base/registry.json`, `bro/setup/AGENTS.md`),
-  the entry-point groups the repository contributes to (root `AGENTS.md`, "Extension entry points"),
+  the entry-point groups the repository contributes to (`bro/reference/extending.md`, "Entry-point groups"),
   and the operations registry (`bro/oops/targets.py`).
   Hold the repository's `pyproject.toml`, entry points, registry module, and credential material shapes against the new schema.
 - **Copied files** — a file the repository holds as a copy of a packaged pattern rather than reading it from the wheel (a CodeBuild buildspec, a workflow, a Dockerfile fragment).
