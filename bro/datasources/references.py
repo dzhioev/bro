@@ -62,7 +62,21 @@ dive_in = FileSource(
   path=reference.DIRECTORY / 'dive_in.md',
 )
 
-_PAGES = NameMap({page.name: page for page in (environment, template, conditions, ride, dive_in)})
+extending = FileSource(
+  'extending',
+  summary=(
+    'how a distribution extends the framework: declaring and registering a bro, '
+    'adding a data source or a toolset, and the entry-point groups. Read it when '
+    'writing or changing a persona declaration.'
+  ),
+  path=reference.DIRECTORY / 'extending.md',
+  # carries directive examples; rendering would execute them
+  render=False,
+)
+
+_PAGES = NameMap(
+  {page.name: page for page in (environment, template, conditions, ride, dive_in, extending)}
+)
 
 
 def man(topic: str) -> ManPage:

@@ -14,5 +14,6 @@ class BroEyebro(Eyebro):
     man('template'),
     man('conditions'),
     man('ride'),
+    man('extending'),
   ]
   system_prompt = FRAMEWORK_PROJECT

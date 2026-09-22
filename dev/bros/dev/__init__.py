@@ -2,6 +2,7 @@ import bro.brog.mcp as brog_mcp
 from bro import brog
 from bro.base.condition import when
 from bro.bro import feature
+from bro.datasources.references import man
 from bro.dev import references
 from bro.mcp import ANY, creds, harness, mount, shell
 from bro.workflow.commit_footer import provision_hooks
@@ -44,6 +45,6 @@ class Dev(Bro):
     shell(ANY),
     when(feature('brog'), mount(brog_mcp.toolset)),
   ]
-  data_sources = [references.dev_style]
+  data_sources = [references.dev_style, man('extending')]
   spells = ('audit.md', 'bump-bro.md', 'fix.md', 'land.md', 'run-pr.md', 'wire.md')
   system_prompt = SYSTEM_PROMPT
