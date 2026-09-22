@@ -75,7 +75,10 @@ CONSUMER_UV_REPO="$SMOKE_TMP/consumer-uv-repo"
 CONSUMER_UV_TAG="bro/consumer-uv-smoke:test"
 make_consumer_repo "$CONSUMER_UV_REPO" bro/consumer-uv-smoke
 uv lock --directory "$CONSUMER_UV_REPO"
-! grep -Eq '^name = "bro(-native|-ride|-dev)?"$' "$CONSUMER_UV_REPO/uv.lock"
+if grep -Eq '^name = "bro(-[a-z]+)?"$' "$CONSUMER_UV_REPO/uv.lock"; then
+  echo "the consumer lock resolves a framework distribution" >&2
+  exit 1
+fi
 git -C "$CONSUMER_UV_REPO" add .
 git -C "$CONSUMER_UV_REPO" commit --quiet -m initial
 
