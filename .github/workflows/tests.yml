@@ -8,15 +8,23 @@ on:
 
 jobs:
   stage:
-    name: ${{ matrix.stage }}
+    name: ${{ matrix.stage }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         # every stage `run-tests` runs by default, one runner each; the opt-in
-        # llm stage spends tokens and stays out
-        stage: [lint, types, unit, benchmark, docker, broker_e2e]
+        # llm stage spends tokens and stays out. broker_e2e launches its live
+        # scenarios one after another, so it is dealt over shards, a runner each
+        stage: [lint, types, unit, benchmark, docker]
+        include:
+          - stage: broker_e2e
+            shard: 1/3
+          - stage: broker_e2e
+            shard: 2/3
+          - stage: broker_e2e
+            shard: 3/3
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
@@ -25,7 +33,7 @@ jobs:
       - name: run-tests
         run: |
           source .venv/bin/activate
-          run-tests --only ${{ matrix.stage }}
+          run-tests --only ${{ matrix.stage }} ${{ matrix.shard && format('--shard {0}', matrix.shard) || '' }}
 
   # the branch ruleset requires one check named `tests`; this job is it, and it
   # reports the matrix's aggregate result
