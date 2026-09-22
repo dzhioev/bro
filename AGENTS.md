@@ -29,7 +29,7 @@ The root also carries `pyproject.toml` (core distribution metadata, the workspac
 `conftest.py` (test isolation: `local/AGENTS.md`, "Test gate"),
 and `README.md` (the front page: the framework's features and limits, shown on one example crew, linking into the references).
 Reference docs for framework users live in `bro/reference/` and ship in the wheel:
-`extending.md` (declaring and registering a bro, adding a data source, the entry-point groups), `conditions.md` and `template.md` (conditioning in code and in text), `ride.md` (the runtime), and `dive_in.md`.
+`extending.md` (declaring and registering a bro, adding a data source or a toolset, the entry-point groups), `conditions.md` and `template.md` (conditioning in code and in text), `ride.md` (the runtime), and `dive_in.md`.
 `BOOTSTRAP.md` is the executable checklist for adopting the framework in another repository.
 
 ## Development

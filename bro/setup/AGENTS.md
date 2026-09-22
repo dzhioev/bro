@@ -12,17 +12,8 @@ A setup script can run `uv sync`, activate the project environment only for its 
 managed sessions keep that environment off PATH.
 In containers, `RIDE_VENV_MANIFEST` names the optional project's staged manifests so setup can reuse the bake until the tree diverges.
 
-The framework repository is a uv workspace whose root publishes `bro`;
-`native/` publishes `bro-native`,
-`dev/` publishes `bro-dev`,
-`ride/` publishes `bro-ride`,
-`bench/` publishes the benchmark launch integration as `bro-bench`,
-and `local/` publishes this checkout's `bro-local` personas and policy scripts.
-`uv sync --all-packages --all-groups --all-extras` creates the root `.venv`, installs all six editably, and registers each distribution's committed console-script bridge.
-The root owns the tool configuration and development gate for every member.
-
-Prerequisites are documented in `README.md`.
-`setup_env.sh` remains an optional macOS/Ubuntu reference installer and is not invoked by repository provisioning.
+The framework checkout's own bring-up is `./setup.sh` (root `AGENTS.md`, "Development");
+its prerequisites are documented in `README.md`.
 
 ### Worktrees
 
@@ -222,15 +213,8 @@ Common material paths and shapes:
 - `creds/github+<instance>.cred` — a GitHub App config such as `{"app_id": ..., "installation_id": ..., "private_key": "<PEM>"}` when the matching `creds.json` entry is `{"github+<instance>": {"type": "github_app"}}`.
   Resolution mints an installation token and holds it at `creds/github+<instance>.cred.minted`.
 
-**Scoped per-bro hydration.**
-Managed sessions receive a synthesized store rather than the host store.
-A selected instance materializes under its kind as `creds/<kind>.cred`, and generated `creds.json` contains typed-source annotations only.
-The store directory itself is the bound:
-anything not hydrated resolves to `SecretNotFound`, while the code registry's full kind universe remains known for capability checks.
-Container launches pack `.bro/`, its `creds/` directory, material, and `creds.json` into an in-memory tar.
-Host sessions materialize the same layout under the workspace state and set `BRO_STORE` to it.
-Required credentials fail hydration strictly;
-optional credentials are skipped when absent.
-Install hooks come from the code registry and receive the explicit hydrated declared-kind set, excluding transitive reference pulls.
-Full mechanics:
-`bro/reference/ride.md` ("Scoped credential hydration").
+**Scoped stores.**
+A managed session reads a synthesized store rather than the host's, in this same layout, and the directory is the bound:
+a name not hydrated resolves to `SecretNotFound`, while the code registry's full kind universe remains known for capability checks.
+How a launch selects, hydrates, and delivers it, install hooks included:
+`bro/reference/ride.md`, "Scoped credential hydration".

@@ -13,12 +13,13 @@ A subpackage with a map of its own is pointed at, not described here.
 - `bro.py` — `BaseBro` ABC (the framework) and the framework helpers (`BroRaised`).
   The class is the persona *declaration* and its composition;
   the engine that runs one is `native/bro/native/runner.py`.
-  How a declaration composes and what a run mounts: "The bro declaration" below.
+  How to declare one: `bro/reference/extending.md`;
+  what a run renders, mounts, and counts: "Running a declaration" below.
 - `mcp.py` — declaration vocabulary for persona tool layers and toolset modules:
   surface facts and rendering, `MCPServerSpec`, `ToolLayer`, `Toolset`, and the `mount` / `block` / `allow_commands` / `serve` / `cli` / `shell` constructors.
   Live tool and server objects stay in `llm/mcp.py` and are imported only when a declaration is built
 - `spells.py` — the spell store:
-  validation of the files a bro's `spells` declaration names and the reserved `spell` MCP namespace they are served under, with `bro::cast` and the native `bro::skill` loader ("Spells and skills" below).
+  validation of the files a bro's `spells` declaration names and the reserved `spell` MCP namespace they are served under, with `bro::cast` and the native `bro::skill` loader (`bro/reference/ride.md`, "Bro spells and skills").
 - `procedures.py` — `parse_frontmatter`, the flat frontmatter grammar a spell file opens with (`bro/reference/extending.md`, "Declaring a bro").
 - `registry.py` — process-wide registry of bro classes:
   `register(cls)`, `get_class(name)`, `create_bro(name, llm_spec=None)`, `list_classes()`, `known_names()` (every resolvable name, read without importing any bro module — what `ride/ride/bro_worker.py` validates summon targets against).
@@ -105,178 +106,76 @@ A subpackage with a map of its own is pointed at, not described here.
   `dev/AGENTS.md` maps them.
   Consumer personas register through the `bro` entry-point group and live in their contributing packages.
 
-## The bro declaration
+## Running a declaration
 
-What `BaseBro` makes of a declaration:
-how the class-level attributes compose along the MRO, which prompt flavor each surface renders, what a run mounts and gates on, and how credentials are counted.
-How to declare one is `bro/reference/extending.md`.
-
-### Declaration and composition
-
-Subclasses set `name`, `description`, and class-level `system_prompt = "..."` plus optionally `data_sources = [...]`, `tools = [...]`, `spells = (...)`, and `provisioning = (...)`.
-Every `tools` item is one frozen `bro.mcp.ToolLayer`:
-`mount(toolset, *tool_names)` adds a toolset's full or selected roster,
-`cli('<command>', *argument_names)` generates one from an installed CLI command (`bro/llm/cli_tool.py`),
-`block(*tool_names)` names harness-native tools to remove,
-`allow_commands(tool_name, *commands)` serves a blocked native tool whose argument is a command line, reaching only the named commands,
-and `serve(*tool_names)` serves blocked native tools whole, for those with no command line to narrow on.
-Tool-pack modules export a typed `toolset`;
-the module itself is not a declaration.
-Entries in `tools` and `data_sources` may be wrapped with `bro.base.condition.when(...)` to gate them on the assembling surface's facts, e.g. `when(harness == 'bro', mount(dev_mcp.toolset))` because Claude has built-in file and search tools,
-or `when(harness == 'claude', block('Read', 'Write'))` to restrict those built-ins.
-A block selected for the `bro` harness is a declaration error because bro-native and raw Claude surfaces already serve exactly the declared roster.
-Conditions are decided where composition happens (`bro.mcp.select`, harness `bro`), so an unmatched layer is never applied (conditioning reference: `bro/reference/conditions.md`).
-Live servers are built lazily, once, when the bro first runs tools (`_live_mcp_servers()`), so metadata surfaces (credential scoping, prompt composition, `bro show`) never construct them and a live server's constructor may hold real resources
-— released through `BaseBro.close()` when the run's lifetime ends, so a session leaves no process of its own behind.
-
-`BaseBro.__init__` walks the MRO from base to most-derived class and concatenates each class's own `tools`, `data_sources`, and `system_prompt`.
-A `ReviewDev(Dev)` subclass declares only what it adds;
-Dev's own entries flow through automatically, and the `features` map merges along the same walk with derived classes overriding per name.
-The legacy `super().__init__(system_prompt=...)` escape hatch remains for callers that need a dynamic prompt computed at instantiation;
-a bro that wants the current time can instead pull it through the `CurrentTime()` data source.
-
-### Features
-
-`features` is the class-level map of named optional capabilities
-— feature name → the gate deciding whether it's on:
-a `Condition` over the environment's resolvable credentials (`creds.contains('brog')`) or a plain bool constant (`True` pins it on; `False` disables it terminally — a descendant re-enabling a disabled feature fails construction).
-The declaration feeds a `#features` vocabulary (`BaseBro.vocabulary()`) into every surface the bro renders or assembles, so `when(feature('brog'), mount(brog_mcp.toolset))` entries and `{{iff #features contains brog}}` text switch together,
-and a gated component joins `needed_secrets()` only where its gates resolve.
-The credential a gate probes is the feature's own, tiered with it:
-in `optional_secrets()` while the feature is gated, in `needed_secrets()` once a descendant pins the feature on.
-`bro-dev`'s Dev persona is the built-in example:
-the tracker toolset, task-workflow spell branches, and tracker prompt fragment all ride it.
-Semantics:
-`bro/reference/conditions.md` "Bro features".
+How to declare a bro is `bro/reference/extending.md`;
+this section is what `BaseBro` renders, mounts, and counts when one runs.
 
 ### Prompt flavors
 
-`BaseBro` also auto-prepends every `bro/prompts/shared/*.md` to the system prompt and appends a `## Data sources` block describing each declared `DataSource`.
-When the bro has any namespaced tools or spells it also appends the tool-name rule (`bro/prompts/tool_names.md`, templated on the `#wire` scheme),
-and closes the prompt with the tool-grounding fragment (`bro/prompts/grounding.md`), whose directives render its body only into the claude-bare flavor (see `bro/prompts/AGENTS.md`).
-Each composed flavor renders once with its surface facts (`bro.mcp.render_text`: harness `bro`, the flavor's wire, the environment's credentials and summon allow-list)
-— the wire is where the flavors diverge:
-`system_prompt` (bro-native LLM runs) renders `bare` (`namespace::tool` resolves to the wire name `namespace__tool` the bro's tool list carries),
-while `claude_system_prompt` (what `ride solo|along --raw` passes as claude's `--system-prompt`) renders `mcp`, because there each namespace is mounted as an MCP server and the wire names are `mcp__namespace__tool`.
-The bro's own class prompts (MRO-concatenated, before those additions) are kept as `persona`;
-`ride/ride/claude/system_prompt.py:session_append_prompt` injects it plus the shared spell instructions into every managed Claude session (the mode verb's bro positional)
-so it carries that bro's policies and canonical spell invocation contract without running under `--raw`.
+`BaseBro.__init__` keeps the MRO-concatenated class prompts as `persona`, under a `# Persona: <name>` heading, and composes two full flavors around it:
+every `bro/prompts/shared/*.md` first, then the persona, the tool-name rule (`bro/prompts/tool_names.md`), a `## Data sources` block describing each declared `DataSource`,
+the `## Spells` contract when the bro has spells, the `## Skills` block mapping `/<name>` requests to `bro::skill`,
+and last the grounding fragment (`bro/prompts/grounding.md`), whose own directives render it only for the claude-bare surface.
+Each flavor renders once with its surface facts (`bro.mcp.render_text`: harness `bro`, the flavor's wire, the environment's credentials and summon allow-list, the `#features` vocabulary), and the wire is where they diverge:
+`system_prompt` renders `bare`, the wire of bro-native LLM runs;
+`claude_system_prompt` renders `mcp`, what `ride solo|along --raw` passes as claude's `--system-prompt`, where each namespace is mounted as an MCP server.
+A managed Claude session runs under neither flavor;
+its append prompt injects `persona` beside the shared prompts (`bro/reference/ride.md`, "Auto-injected system prompt").
+`system_prompt_for(hold=…)` is the text a bro-native run starts under:
+the `bare` flavor plus the session fragments and the hold text (`bro/prompts/AGENTS.md`, "Session fragments").
 
-### LLM spec
+### Service tools
 
-`llm_spec` is a class-level attribute holding the bro's `NativeLLMSpec`
-— a provider-specific frozen dataclass (e.g. `bro.llm.llms.openai.LLMSpec` with typed `model`, `reasoning_effort`, `service_tier`) that carries the knobs the LLM accepts and validates them in `__post_init__`.
-Default is `DEFAULT_LLM_SPEC`, an `openai.LLMSpec`;
-each bro overrides the whole spec at class level.
-Construction-time overrides go through `BaseBro.create(spec)`
-— it instantiates the class then replaces `llm_spec`, so subclass constructors never have to forward anything.
-Specs also expose `dump()` → dict / `LLMSpec.from_dict(data)` for serialization round-trip;
-`from_dict` eagerly imports the known providers so dispatch works in processes that haven't pulled the provider module in themselves.
+Every assembly (`assemble(harness, wire, …)`) appends the `bro` service server;
+`_build_service_server` decides its roster from the surface and the process environment:
 
-The declaration is the bro-native recipe
-— the one an LLM process runs the bro under, which is what `NativeLLMSpec` narrows the attribute to.
-A Claude Code session is the other kind of recipe (`bro.llm.llms.claude_code`), carrying the model and knobs the session itself runs under;
-the claude surfaces resolve their own rather than reading one off the bro.
-Either kind is named at launch by `--provider` / `--model` / `--llm`
-— roster and grammar in `bro/llm/AGENTS.md` (`providers.py`), the per-surface flags in `bro/launch/AGENTS.md` ("Naming the LLM").
+- `banner`, always:
+  the session facts of `ride banner --llm` rendered in-process by `bro.workspace.banner.render_banner`, with the bro's name and the run's trail id passed explicitly since an in-process run's environment carries the launcher's;
+  the playbook is `bro/prompts/environment.md`.
+- `raise`, at the unattended hold alone
+  — `Runner.run()`'s default, `bro run`, summoned children, and the Claude builds when `do-ride` exports `BRO_HOLD=unattended` with `RIDE_RUNNER_PID`:
+  the agent aborts with a reason when the request cannot be fulfilled.
+  The bare flavor raises `BroRaised(reason)` out of `Runner.run()`;
+  the mcp flavor emits the run's failed result over the broker channel where one exists, then terminates the session through `bro.workspace.session.terminate_session` with `RAISE_EXIT_STATUS` as its status,
+  since no exception can abort the consuming claude session.
+  Every other hold mounts no `raise`;
+  its hold text tells the agent how to involve the human instead.
+- `answer`, `raise`'s twin for a summoned run's clean end, mounted when the run is summoned (`RIDE_SUMMONED`) with broker intent, and on the mcp wire only where `RIDE_RUNNER_PID` makes the session killable:
+  bare raises `AnswerDelivered`, which the runner or chat surface turns into the run's ok result;
+  mcp emits that result over the channel then terminates the session, and unlike `raise` an undeliverable answer errors back to the agent.
+- `cast` when the bro has spells and its key resolves, and `skill` on the harnesses without a native skill loader (`bro/reference/ride.md`, "Bro spells and skills").
+- the job tools of a declared `shell` roster, on the bro harness alone
+  — `job`, `poll`, `kill`, and `jobs` on both wires, `chill` on bare;
+  with no `shell` declared, automatic `quest watch` admission mounts the same tools narrowed to that command.
+  Bare tools use the run's registry and inbox;
+  the MCP service server owns and closes its registry, offers only foreground and background jobs, and has no notification wake.
+- `summon` and the quest verbs (`quest_check`, `quest_history`, `quest_say`, `quest_ask`, `quest_list`, `quest_cancel`) when the process has broker intent (`BROKER_CHANNEL`, or `BROKER_UPSTREAM` left by a failed proxy launch),
+  forwarding to `bro.summon` and `bro.quest` off-loop.
 
-### Spells and skills
-
-A bro's `spells` declaration names its procedure files under `<bro_pkg>/spells/`, and the roster composes by MRO with derived overrides.
-A spell's flat frontmatter may declare a one-line JSON parameter map (`parameters: {"task": "task ref", "notes?": "optional context"}`);
-the `?` suffix marks an optional string parameter.
-`bro/spells.py` validates the store and builds the reserved `spell` MCP namespace on every surface with spells;
-each spell is one canonical `spell::<name>` tool, and its full frontmatter description stays on that tool.
-When OpenAI resolves, the `bro` service server also mounts `bro::cast`:
-a prompt-backed structured `mu` call interprets free text against the spell roster and returns the resolved spell's rendered instructions with the interpreted arguments, or an expected error.
-The composed `## Spells` block always carries the `[[…]]` marker contract
-— the enclosed text names a spell in whatever form its sentence takes, run only where the sentence asks for it
-— and forks on the run path alone:
-`bro::cast` where it is mounted, the spell's own tool otherwise.
-Bro-native and `ride --raw` builds additionally mount `bro::skill(name)` because those harnesses have no native third-party skill loader;
-its current skill set is empty, so valid calls return an empty body.
-Their composed `## Skills` block maps third-party `/<name>` requests to that loader.
-An ordinary managed Claude persona session keeps Claude's own skill mechanism and mounts neither the framework loader nor spell-to-`SKILL.md` adapters.
-`bro show` lists only the bro's spell roster.
-
-### Run-start credential gate
-
-A run refuses to start when any name in `missing_secrets()`
-— the manifest plus the LLM key
-— doesn't resolve, listing all missing names:
-`Runner.run()` raises `BroRaised`, interactive surfaces reply with the report.
-The optional tier stays best-effort.
-
-### Interactive vs non-interactive paths
-
-Runs at the unattended hold
-— `Runner.run()`'s default, `bro run`, and summoned children
-— expose a built-in `raise` service tool
-— the agent calls it to abort with a reason when the request cannot be fulfilled (missing credentials, no appropriate tool, contradictory constraints, unclear/uninterpretable input);
-the call raises `BroRaised(reason)` out of `Runner.run()`.
-The Claude adapter builds (`ride.claude.assembly.bro_servers` / `persona_servers`) mount `raise` too when the session is unattended and killable (`BRO_HOLD=unattended` + `RIDE_RUNNER_PID` in the environment
-— `do-ride` exports them), in the tool's mcp-wire flavor:
-no exception can abort the consuming claude session,
-so the call emits the run's `result{failed, reason: raised}` over the broker channel where one exists,
-then terminates the session via `bro.workspace.session.terminate_session` (SIGTERM to `do-ride`,
-which ends claude the way a user's own interrupt would,
-so the closing turn reaches the transcript before it goes
-— `ride/ride/claude/interrupt.py`
-— same delegation shape as `banner` → `bro.workspace.banner.render_banner`), naming `RAISE_EXIT_STATUS` as the status the session reports, so an abort looks the same to whoever launched it whichever harness ran the bro.
-The abort stays machine-readable after the fact through the recorded trail
-— the raise call with its reason is the transcript's last record, and `ride.claude.trail_recorder` ends the session's trail as `raised` with that reason as `end.detail`.
-`BaseBro.system_prompt_for` appends the matching session fragments, passing `bro.summon.talk()` so the summoned contract renders only the quest's permitted chat moves.
-It then appends the hold fragment via `bro.prompts.hold_fragment` (`run()` defaults to unattended, `send()` to guided, and every launch surface overrides per its `--hold`
-— defaults in `bro/launch/AGENTS.md`, "Display and holds";
-the level files are documented in `bro/prompts/AGENTS.md`, "Hold text"), so the hold is injected at run start, never runtime-detected.
-Every other hold mounts no `raise`
-— the injected fragment tells the agent how to involve the human instead, down to guided's ask-clarifying-questions convention on the interactive paths (`Runner.send()` and the `bro chat` CLI).
-`answer` is `raise`'s twin for a *summoned* run's clean end
-— mounted when the run is a summoned child (`RIDE_SUMMONED`) with broker intent (`BROKER_CHANNEL`, or `BROKER_UPSTREAM` left by a failed proxy launch; mcp flavor additionally killable):
-the bare flavor ends the run by raising `AnswerDelivered` (the runner or chat surface turns it into the run's ok result), the mcp flavor emits that result over the channel then terminates the session;
-unlike raise, an undeliverable answer errors back to the agent instead of killing the session.
-Both service builds always mount a `banner` tool
-— the session environment facts of `ride banner --llm` rendered in-process (`bro.workspace.banner.render_banner`, with the bro's name and the run's trail id passed explicitly
-— an in-process run's environment carries the launcher's `RIDE_BRO`, or none, and its own trail is published by no session recorder), so every bro detects its environment without a shell;
-the playbook is `bro/prompts/environment.md`.
-On the bro harness, a declared `shell` roster mounts `job`, `poll`, `kill`, and `jobs` on both wires, plus `chill` on the bare wire.
-Bare tools use the run's registry and inbox;
-the MCP service server owns and closes its registry, offers only foreground/background jobs, and has no notification wake.
-With no shell declaration, automatic `quest watch` admission mounts the same bare tools narrowed to that command alone.
-Both service builds also mount `summon` and the quest verbs `quest_check`, `quest_history`, `quest_say`, `quest_ask`, `quest_list`, and `quest_cancel` when the process has broker intent (`BROKER_CHANNEL` or `BROKER_UPSTREAM` set),
-forwarding to `bro.summon` and `bro.quest` off-loop so interactive surfaces stay responsive.
-The bare-wire shapes do not wait:
-`summon` returns after host acceptance and has no `detach`, `quest_ask` mints a question id without waiting, `quest_check` and `quest_history` are one journal read each, and `quest_cancel` returns when the host accepts the cancellation.
-Their later chat and lifecycle transitions arrive through `quest watch`, and the host-retained outcome and conversation remain readable by id.
-`quest_list` walks the journal's paginated caller-scoped listing and returns its summon records live-first on both wires.
-The MCP-wire shapes retain the blocking controls:
-`summon` may wait for an answer or question, `quest_ask` may wait for the reply, `quest_check(wait=true)` long-polls to the end or a child question, `quest_history(wait=true)` to the next message, and `quest_cancel` may wait for the quest to end.
-Those blocking modes own their per-call channel client and close it on cancellation, which unblocks the current short broker wait.
-Their descriptions carry a `{{when #wire = mcp}}` transport-caution block, rendered at service-server build
-— service tools are harness features, the one tool surface whose rendering vocabulary gets the system `#wire` fact injected next to the `#tools` roster.
-The MCP-served builds (`wire == 'mcp'`: persona and `--raw` claude sessions, consumed over streamable HTTP with a client-side call budget) steer long runs to detach plus repeatable polling;
-their lost-id recovery wording retains the `{{iff #tools contains quest_list}}` roster fork.
+The wires differ in waiting.
+The bare shapes return at once
+— `summon` on host acceptance with no `detach`, `quest_ask` with a minted question id, `quest_check` and `quest_history` after one journal read, `quest_cancel` when the host accepts
+— and later transitions arrive through `quest watch`.
+The MCP shapes keep the blocking controls
+— `summon` waits for an answer or question, `quest_ask` for the reply, `quest_check(wait=true)` to the end or a child question, `quest_history(wait=true)` to the next message, `quest_cancel` to the end
+— each owning a per-call channel client closed on cancellation;
+their descriptions carry the `{{when #wire = mcp}}` transport caution that steers a long run to detach plus polling.
 
 ### Credential manifest
 
-`bro.needed_secrets()` is the bro's component credential manifest
-— the union of each declared MCP server spec's and data source's `needed_secrets`, the bro's MRO-collected `extra_secrets`, and the credentials of its pinned-on features.
-It is harness-aware:
-`needed_secrets(harness='claude')` counts only components whose conditions hold on that harness, matching what `ride.claude.assembly.persona_servers()` mounts.
-It deliberately excludes the LLM key (`llm_spec.needed_secrets()`):
-surfaces that run the bro as an LLM process add it, while a claude-code session uses its own authentication.
-Components declare credentials through pure metadata (`WebSearch` → `brave`; `openai.LLMSpec` → `openai`);
-`extra_secrets` is the escape hatch for environment needs no component expresses.
-The host hydrates the per-surface set into a scoped credential store before a container starts, and missing required secrets fail on the host.
-Full mechanics:
-`bro/reference/ride.md` ("Scoped credential hydration").
-`bro show` renders the features, manifest, optional tier, LLM key, and per-surface baseline note.
+`bro.needed_secrets(harness)` is the bro's component credential manifest:
+the union of each declared MCP server spec's and data source's `needed_secrets` over the components whose conditions hold on that harness (matching what `ride.claude.assembly.persona_servers()` mounts for `claude`),
+the MRO-collected `extra_secrets`, and the credentials of its pinned-on features.
+It excludes the LLM key (`llm_spec.needed_secrets()`):
+surfaces that run the bro as an LLM process add it, while a claude-code session authenticates on its own.
+`missing_secrets()` is the manifest plus the LLM key, checked against the process's store;
+`Runner.run()` refuses to start on any missing name, raising `BroRaised` with them all listed, and interactive surfaces reply with the report.
+The host hydrates the per-surface set into a scoped store before a session starts (`bro/reference/ride.md`, "Scoped credential hydration").
 
 ### Optional credential tier
 
-`bro.optional_secrets()` is the best-effort sibling of the manifest
-— the union of each declared component's `optional_secrets`, the credentials of the bro's gated features, and OpenAI when the bro has spells, minus `needed_secrets()` so a hard requirement is never downgraded.
-It is for credentials a capability uses when present but degrades without, such as the LLM key behind a `SearchableDataSource`'s query-focused summary or spell casting.
-The host hydrates it via `build_scoped_store(optional=...)`;
-resolvable names are materialized and absent optional names are skipped.
-`bro.base.credentials.available(name)` is the presence predicate behind runtime gates and feature directives in static text.
+`bro.optional_secrets(harness)` is the manifest's best-effort sibling:
+each declared component's `optional_secrets`, the credentials of the bro's gated features, and the cast key when the bro has spells, minus `needed_secrets()` so a hard requirement is never downgraded.
+It holds credentials a capability uses when present and degrades without, such as the LLM key behind a `SearchableDataSource`'s query-focused summary;
+absent optional names are skipped at hydration, and `bro.base.credentials.available(name)` is the presence predicate behind runtime gates and feature directives in static text.

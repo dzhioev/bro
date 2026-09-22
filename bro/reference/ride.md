@@ -1145,7 +1145,7 @@ Selected `block(...)` layers join `--disallowed-tools`, removing the named Claud
 raw sessions already pass `--tools ''`, and selecting a block for their `bro` harness is a declaration error.
 Persona sessions rely on Claude's native third-party skill mechanism instead of mounting `bro::skill` or generated spell adapters.
 Both assemblies also mount the `raise` service tool when the session is unattended (`BRO_HOLD=unattended` + `RIDE_RUNNER_PID` in the server's inherited environment — see "Forwarded env vars"),
-in its terminate-the-session flavor (semantics in `bro/AGENTS.md`, "Interactive vs non-interactive paths");
+in its terminate-the-session flavor (semantics in `bro/AGENTS.md`, "Service tools");
 every other level gets no `raise`
 — a human exists to report to.
 Either way there is one streamable-HTTP endpoint per tool namespace;
@@ -1170,8 +1170,8 @@ In boxed isolation the server runs inside the container, so the scoped credentia
 
 ### Bro spells and skills
 
-A bro's spells (the files its `spells` declaration names under `bros/<bro>/spells/`, MRO-merged with derived overrides) are canonical `spell::<name>` tools in both session flavors;
-`bro::cast` joins the service server when OpenAI resolves, and the Spells contract routes `[[…]]` markers to it rather than to the spells' own tools:
+A bro's spells (the files its `spells` declaration names, `bro/reference/extending.md`, "Declaring a bro") are canonical `spell::<name>` tools in both session flavors;
+`bro::cast` joins the service server when OpenAI resolves, and the Spells contract routes `[[…]]` markers to it where it is mounted and to the spell's own tool otherwise:
 
 - a **full mode** gets the Spells contract through its append prompt and keeps Claude's native third-party skill discovery.
   Bro spells are not copied into `.claude/skills/` and have no slash-command aliases;

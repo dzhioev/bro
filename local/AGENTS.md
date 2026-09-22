@@ -54,6 +54,6 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
   the benchmark project holds its graded trials out of directory collection the same way
 
 The root `conftest.py` owns test isolation:
-the suite's environment is rebuilt rather than patched by `bro/base/suite_environment.py`, clearing the framework's own namespaces plus installed credential-hook variables and pinning the credential resolver's exclusive store at an absent path,
-so a run launched from inside a managed session inherits none of it and resolves only what a test installed itself
-— the rebuild lives in core so every pytest root applies it, `benchmark/`'s own conftest included, and `local/bro/local/environment_policy_test.py` enforces each part repository-wide.
+it rebuilds the suite's environment through `bro.base.suite_environment.rebuild_environment` (`bro/base/AGENTS.md`), as does `benchmark/`'s own conftest,
+so a run launched from inside a managed session inherits none of it and resolves only what a test installed itself;
+`local/bro/local/environment_policy_test.py` holds every pytest root and each part of the sweep to it repository-wide.

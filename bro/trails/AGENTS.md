@@ -68,12 +68,8 @@ bro · claude recorders                     readers
   `stored_trail_ids`, `stored_header`, `stored_rows`, and `stored_launch_context` read the layout as written, formats untouched, for a copy that must not upgrade what it carries.
   An import builds its initial trail atomically under `<root>/staging/` and renames it into place with an import mark, so two begins of the same id settle on the rename and transfers refuse the live partial state.
 - The local root is the global `bro.workspace.paths.trails_dir` under the runtime state root.
-  `ride.trails` contributes its dedicated mount to the `Launch` composed by the Claude and bro harness launch surfaces, binding the host root at the fixed in-container `/var/ride/trails` path.
-- `TRAILS_DISABLED` (presence-checked) turns a process's recording off, since a backend now resolves for every run.
+- `TRAILS_DISABLED` (presence-checked) turns a process's recording off, since a backend resolves for every run.
   It is the recovery path for deploying or repairing `trails-server` through a bro whose own recording would otherwise go through it.
-  `ride solo|along --no-trails` applies it to a managed run of either harness
-  — a claude session then starts no session recorder;
-  a direct in-process `bro run` / `bro chat` sets the variable in its shell.
 - `server/server.py` is an aiohttp proxy over any configured `TrailsStore`;
   every synchronous store call runs through `asyncio.to_thread`.
   The process resolves its hosted store with `configured_store()`, whose credential is required
