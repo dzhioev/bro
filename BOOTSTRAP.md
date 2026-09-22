@@ -329,7 +329,7 @@ PROJECT_PROMPT = """\
 ## <project> project
 
 You are operating inside the <project> repository.
-Read the root and relevant subsystem `AGENTS.md` files before changing code.
+Read the root and relevant subsystem `AGENTS.md` files before changing code, unless they are already in your context.
 Follow the repository's own formatter, test, and build instructions.
 <Only confirmed, always-applicable project constraints go here.>
 """
