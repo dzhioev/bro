@@ -42,6 +42,7 @@ class TestPricing:
   @pytest.mark.parametrize(
     'model,expected',
     [
+      ('claude-opus-5-5', Decimal('0.0000372')),
       ('claude-opus-5', Decimal('0.00004675')),
       ('claude-sonnet-5', Decimal('0.0000187')),
       ('claude-fable-5', Decimal('0.0000935')),

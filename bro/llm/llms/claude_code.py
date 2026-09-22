@@ -16,13 +16,15 @@ from typing import Any, ClassVar, Optional, Self
 import bro.llm.llm as llm_llm
 from bro.llm import pricing
 
-DEFAULT_MODEL = 'fable'
+DEFAULT_MODEL = 'opus'
 
-# `--model` short names for this provider's models. `fable` is not a model id
-# but Claude Code's own family alias, which it resolves to whichever model it
-# currently defaults that family to — so it stands for itself.
+# `--model` short names for this provider's models. `opus` and `fable` are not
+# model ids but Claude Code's own family aliases, which it resolves to whichever
+# model it currently defaults each family to — so they stand for themselves.
 MODELS: dict[str, str] = {
+  'opus': 'opus',
   'opus5': 'claude-opus-5',
+  'opus55': 'claude-opus-5-5',
   'sonnet5': 'claude-sonnet-5',
   'fable': 'fable',
   'fable5': 'claude-fable-5',
@@ -128,9 +130,16 @@ def price_table_from_content(source: str, as_of: str, models: Mapping[str, Any])
 # with this date. Pricing never fetches vendor data at run time.
 PRICE_TABLE = PriceTable(
   source='https://platform.claude.com/docs/en/about-claude/pricing',
-  as_of=date(2026, 9, 11),
+  as_of=date(2026, 9, 22),
   models=MappingProxyType(
     {
+      'claude-opus-5-5': TokenRates(
+        input=Decimal('4.00'),
+        cache_write_5m=Decimal('5.00'),
+        cache_write_1h=Decimal('8.00'),
+        cache_read=Decimal('0.20'),
+        output=Decimal('20.00'),
+      ),
       'claude-opus-5': TokenRates(
         input=Decimal('5.00'),
         cache_write_5m=Decimal('6.25'),

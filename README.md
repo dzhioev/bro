@@ -112,7 +112,7 @@ dive-in --harness bro --llm openai:sol:high 'triage the queue'
 Back on Claude Code, pinned to one model at maximum effort:
 
 ```console
-dive-in --llm :fable5:max 'triage the queue'
+dive-in --llm :opus55:max 'triage the queue'
 ```
 
 Another bro of the project, in an unboxed clone with permission prompts kept:
