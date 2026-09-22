@@ -4,11 +4,14 @@ import functools
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
+from bro.base import log
+from bro.base.ansi import should_color
 from bro.base.args import Parser
 from bro.dev.affected_tests import (
   changed_paths,
@@ -20,6 +23,7 @@ from bro.dev.affected_tests import (
 from bro.dev.packaging_policy import TEST_MODULE_SUFFIXES, distribution_roots
 from bro.dev.sharding import Shard, parse_shard
 from bro.dev.shell_policy import shell_files
+from bro.local import gate_display
 
 __cli_name__ = 'run-tests'
 
@@ -275,6 +279,7 @@ PYTEST_FILES = [
   'bench/bro/bench/presets_test.py',
   'bench/bro/bench/run_test.py',
   'local/bro/local/run_tests_test.py',
+  'local/bro/local/gate_display_test.py',
   'local/bro/local/shell_policy_test.py',
   'local/bro/local/markdown_policy_test.py',
   'local/bro/local/setup_test.py',
@@ -332,26 +337,46 @@ LLM_PYTEST_FILES = [
 ]
 
 
-FAILURE_REPLAY_LINES = 40
 DEFAULT_BASE = 'origin/master'
 
-_recording: Optional[list[str]] = None
+_display: Optional[gate_display.Display] = None
 
 
 @contextlib.contextmanager
-def _record() -> Iterator[list[str]]:
-  """collect what a stage's commands write, so its failure can be replayed last."""
-  global _recording
-  lines: list[str] = []
-  _recording = lines
+def _displayed(display: gate_display.Display) -> Iterator[None]:
+  global _display
+  _display = display
   try:
-    yield lines
+    yield
   finally:
-    _recording = None
+    _display = None
+
+
+def _shown() -> gate_display.Display:
+  assert _display is not None, 'the gate runs under a display'
+  return _display
+
+
+def step(text: str) -> None:
+  """announce the command a stage is about to run."""
+  _shown().step(text)
+
+
+def _color_environment(color: bool) -> dict[str, str]:
+  """the environment a command reads the display's color decision from,
+  in place of the terminal test its pipe fails."""
+  environment = {
+    name: value for name, value in os.environ.items() if name not in ('FORCE_COLOR', 'NO_COLOR')
+  }
+  environment['FORCE_COLOR' if color else 'NO_COLOR'] = '1'
+  return environment
 
 
 def run(*args: str, extra_env: Optional[dict[str, str]] = None, cwd: Optional[Path] = None) -> None:
-  env = None if extra_env is None else {**os.environ, **extra_env}
+  """run one command, handing each output line to the display and keeping them all for its failure."""
+  display = _shown()
+  env = {**_color_environment(display.color), **(extra_env or {})}
+  lines: list[str] = []
   with subprocess.Popen(
     args,
     cwd=DIR if cwd is None else cwd,
@@ -362,60 +387,75 @@ def run(*args: str, extra_env: Optional[dict[str, str]] = None, cwd: Optional[Pa
   ) as process:
     assert process.stdout is not None
     for line in process.stdout:
-      sys.stderr.write(line)
-      if _recording is not None:
-        _recording.append(line)
+      lines.append(line)
+      display.line(line)
   if process.returncode:
-    raise subprocess.CalledProcessError(process.returncode, args)
+    raise subprocess.CalledProcessError(process.returncode, args, output=''.join(lines))
 
 
 def node_env() -> dict[str, str]:
   return {'NODE_OPTIONS': '--max-old-space-size=4096'}
 
 
-def lint_stage(distributions: Sequence[Distribution] = DISTRIBUTIONS) -> None:
+def pytest_command(python: str) -> tuple[str, ...]:
+  return (python, '-m', 'pytest', '-q')
+
+
+def lint_scope(distributions: Sequence[Distribution]) -> str:
   scope = (
     'every distribution'
     if len(distributions) == len(DISTRIBUTIONS)
     else f'{len(distributions)} of {len(DISTRIBUTIONS)} distributions'
   )
-  print(f'sync-scripts, deptry: {scope}', file=sys.stderr)
+  return f'sync-scripts and deptry over {scope}, ruff check, ruff format, shellcheck'
+
+
+def lint_stage(distributions: Sequence[Distribution] = DISTRIBUTIONS) -> None:
   for distribution in distributions:
     directory = DIR / distribution.directory
-    print(f'sync-scripts: verifying {directory} console-script metadata', file=sys.stderr)
+    step(f'sync-scripts and deptry in {directory}')
     run(sys.executable, '-m', 'bro.dev.sync_scripts', '--check', '--project', str(directory))
     deptry_args = [sys.executable, '-m', 'deptry', '.']
+    if not _shown().color:
+      # deptry reads neither NO_COLOR nor the pipe
+      deptry_args.append('--no-ansi')
     for pattern in distribution.deptry_exclude:
       deptry_args += ['-ee', pattern]
     for module in distribution.deptry_known_first_party:
       deptry_args += ['-kf', module]
     run(*deptry_args, cwd=directory)
-  print('ruff: lint check', file=sys.stderr)
+  step('ruff check')
   run(sys.executable, '-m', 'ruff', 'check', '.')
-  print('ruff: format check', file=sys.stderr)
+  step('ruff format --check')
   run(sys.executable, '-m', 'ruff', 'format', '--check', '.')
-  print('shellcheck: shell scripts', file=sys.stderr)
-  run(str(Path(sys.executable).parent / 'shellcheck'), *shell_files(DIR))
+  step('shellcheck over the shell scripts')
+  # shellcheck reads the pipe but not FORCE_COLOR
+  colored = ('--color=always',) if _shown().color else ()
+  run(str(Path(sys.executable).parent / 'shellcheck'), *colored, *shell_files(DIR))
 
 
 def types_stage() -> None:
-  print('pyright: type check', file=sys.stderr)
+  step('pyright')
   run(sys.executable, '-m', 'pyright', extra_env=node_env())
+
+
+def unit_scope(roster: Sequence[str], single_process_roster: Sequence[str]) -> str:
+  selected = len(roster) + len(single_process_roster)
+  total = len(PYTEST_FILES) + len(SINGLE_PROCESS_PYTEST_FILES)
+  scope = 'the whole roster' if selected == total else f'{selected} of {total} modules'
+  return f'pytest over {scope}'
 
 
 def unit_stage(
   roster: Sequence[str] = PYTEST_FILES,
   single_process_roster: Sequence[str] = SINGLE_PROCESS_PYTEST_FILES,
 ) -> None:
-  selected = len(roster) + len(single_process_roster)
-  total = len(PYTEST_FILES) + len(SINGLE_PROCESS_PYTEST_FILES)
-  scope = 'whole roster' if selected == total else f'{selected} of {total} modules'
-  print(f'pytest: unit suite ({scope})', file=sys.stderr)
   if len(roster) > 0:
-    run(sys.executable, '-m', 'pytest', '-n', 'auto', *roster)
+    step(f'pytest, {len(roster)} modules in the worker pool')
+    run(*pytest_command(sys.executable), '-n', 'auto', *roster)
   if len(single_process_roster) > 0:
-    print('pytest: unit suite (single-process modules)', file=sys.stderr)
-    run(sys.executable, '-m', 'pytest', *single_process_roster)
+    step(f'pytest, {len(single_process_roster)} single-process modules')
+    run(*pytest_command(sys.executable), *single_process_roster)
 
 
 @dataclass(frozen=True)
@@ -483,50 +523,78 @@ def benchmark_stage() -> None:
   # naming the environment uv is about to sync keeps it from reporting the
   # workspace venv this gate runs from as one it is ignoring
   in_environment = {'VIRTUAL_ENV': str(environment)}
-  print(f'benchmark: syncing {environment}', file=sys.stderr)
-  run('uv', 'sync', '--locked', '--all-groups', cwd=directory, extra_env=in_environment)
+  step(f'uv sync into {environment}')
+  run('uv', 'sync', '-q', '--locked', '--all-groups', cwd=directory, extra_env=in_environment)
   python = str(environment / 'bin' / 'python')
-  print('benchmark: type check', file=sys.stderr)
+  step('pyright')
   run(python, '-m', 'pyright', cwd=directory, extra_env={**in_environment, **node_env()})
-  print('benchmark: unit suite', file=sys.stderr)
-  run(python, '-m', 'pytest', *BENCHMARK_PYTEST_FILES, cwd=directory, extra_env=in_environment)
+  step('pytest')
+  run(*pytest_command(python), *BENCHMARK_PYTEST_FILES, cwd=directory, extra_env=in_environment)
 
 
 def docker_stage() -> None:
-  print('smoke: container entrypoint', file=sys.stderr)
+  step('the container entrypoint smoke')
   run(str(DIR / 'ride' / 'ride' / 'setup' / 'container' / 'test_smoke.sh'))
-  print('smoke: host docker daemon', file=sys.stderr)
-  run(sys.executable, '-m', 'pytest', *DOCKER_PYTEST_FILES)
+  step('pytest against the host docker daemon')
+  run(*pytest_command(sys.executable), *DOCKER_PYTEST_FILES)
 
 
 def broker_e2e_stage(shard: Optional[Shard] = None) -> None:
-  print('broker_e2e: broker-supervised container launch seam', file=sys.stderr)
+  step('pytest' if shard is None else f'pytest, shard {shard}')
   dealt = () if shard is None else (f'--shard={shard}',)
-  run(sys.executable, '-m', 'pytest', BROKER_E2E_PYTEST_FILE, *dealt)
+  run(*pytest_command(sys.executable), BROKER_E2E_PYTEST_FILE, *dealt)
 
 
 def llm_stage() -> None:
-  print('pytest: live-LLM behavior probes', file=sys.stderr)
-  run(sys.executable, '-m', 'pytest', *LLM_PYTEST_FILES)
+  step('pytest')
+  run(*pytest_command(sys.executable), *LLM_PYTEST_FILES)
 
 
 @dataclass(frozen=True)
 class Stage:
   name: str
   run: Callable[[], None]
+  scope: str
   host_only: bool = False
   opt_in: bool = False
 
 
 STAGES = [
-  Stage('lint', lint_stage),
-  Stage('types', types_stage),
-  Stage('unit', unit_stage),
-  Stage('benchmark', benchmark_stage),
-  Stage('docker', docker_stage, host_only=True),
-  Stage('broker_e2e', broker_e2e_stage, host_only=True),
-  Stage('llm', llm_stage, opt_in=True),
+  Stage('lint', lint_stage, lint_scope(DISTRIBUTIONS)),
+  Stage('types', types_stage, 'pyright'),
+  Stage('unit', unit_stage, unit_scope(PYTEST_FILES, SINGLE_PROCESS_PYTEST_FILES)),
+  Stage('benchmark', benchmark_stage, 'uv sync, pyright, pytest in benchmark/.venv'),
+  Stage(
+    'docker',
+    docker_stage,
+    'the container entrypoint smoke, pytest against the host docker daemon',
+    host_only=True,
+  ),
+  Stage(
+    'broker_e2e',
+    broker_e2e_stage,
+    'pytest over the broker-supervised container launch seam',
+    host_only=True,
+  ),
+  Stage('llm', llm_stage, 'pytest over the live-LLM behavior probes', opt_in=True),
 ]
+
+
+def narrow(stage: Stage, selected: Selection) -> Stage:
+  """the stage over the selection's share of its work."""
+  if stage.name == 'lint':
+    return replace(
+      stage,
+      run=functools.partial(lint_stage, selected.distributions),
+      scope=lint_scope(selected.distributions),
+    )
+  if stage.name == 'unit':
+    return replace(
+      stage,
+      run=functools.partial(unit_stage, selected.roster, selected.single_process_roster),
+      scope=unit_scope(selected.roster, selected.single_process_roster),
+    )
+  return stage
 
 
 def main(argv: list[str]) -> Optional[int]:
@@ -557,6 +625,12 @@ def main(argv: list[str]) -> Optional[int]:
     metavar='K/N',
     help='run the K-th of N shards of the broker_e2e stage; pass --only broker_e2e alone',
   )
+  parser.add_argument(
+    '--color',
+    default='auto',
+    choices=['auto', 'always', 'never'],
+    help='color output (default: auto = on if stderr is a TTY and NO_COLOR is unset)',
+  )
   parser.add_exclusive_groups(['only'], ['skip'])
   args = parser.parse(argv)
   only = args['only']
@@ -575,11 +649,7 @@ def main(argv: list[str]) -> Optional[int]:
   dropped: frozenset[str] = frozenset()
   if args['changed']:
     selected = select(args['base'] or DEFAULT_BASE)
-    narrowed: dict[str, Callable[[], None]] = {
-      'lint': functools.partial(lint_stage, selected.distributions),
-      'unit': functools.partial(unit_stage, selected.roster, selected.single_process_roster),
-    }
-    stages = [replace(stage, run=narrowed.get(stage.name, stage.run)) for stage in STAGES]
+    stages = [narrow(stage, selected) for stage in STAGES]
     dropped = selected.dropped
   if shard is not None:
     stages = [
@@ -589,51 +659,49 @@ def main(argv: list[str]) -> Optional[int]:
       for stage in stages
     ]
   in_container = Path('/.dockerenv').is_file()
+  display = gate_display.choose(
+    sys.stderr, color=should_color(args['color'], sys.stderr), verbose=log.verbose_enabled()
+  )
 
   verdicts: list[tuple[str, str]] = []
-  failures: list[tuple[str, list[str]]] = []
-  for stage in stages:
-    if only is not None and stage.name not in only:
-      continue
-    if stage.opt_in and only is None:
-      print(
-        f'skipping the {stage.name} stage (opt-in; run it with --only {stage.name})',
-        file=sys.stderr,
-      )
-      continue
-    if stage.name in skip:
-      print(f'skipping the {stage.name} stage (--skip)', file=sys.stderr)
-      continue
-    # unlike --skip, this narrowing is the gate's own deduction, so it owes a
-    # verdict rather than going missing from the closing line
-    if stage.name in dropped:
-      print(
-        f'skipping the {stage.name} stage (--changed: the diff reaches nothing it runs)',
-        file=sys.stderr,
-      )
-      verdicts.append((stage.name, 'skipped'))
-      continue
-    if stage.host_only and in_container:
-      if only is not None:
-        parser.error(f'the {stage.name} stage drives the host docker daemon; run it on the host')
-      print(f'skipping the {stage.name} stage (inside container; run on host)', file=sys.stderr)
-      continue
-    with _record() as recorded:
+  failures: list[tuple[str, str, subprocess.CalledProcessError]] = []
+  with display.running(), _displayed(display):
+    for stage in stages:
+      if only is not None and stage.name not in only:
+        continue
+      if stage.opt_in and only is None:
+        display.skipped(stage.name, f'opt-in; run it with --only {stage.name}')
+        continue
+      if stage.name in skip:
+        display.skipped(stage.name, '--skip')
+        continue
+      # unlike --skip, this narrowing is the gate's own deduction, so it owes a
+      # verdict rather than going missing from the closing line
+      if stage.name in dropped:
+        display.skipped(stage.name, '--changed: the diff reaches nothing it runs')
+        verdicts.append((stage.name, 'skipped'))
+        continue
+      if stage.host_only and in_container:
+        if only is not None:
+          parser.error(f'the {stage.name} stage drives the host docker daemon; run it on the host')
+        display.skipped(stage.name, 'inside container; run on host')
+        continue
+      display.stage_started(stage.name, stage.scope)
+      started = time.monotonic()
       try:
         stage.run()
-        passed = True
-      except subprocess.CalledProcessError:
-        failures.append((stage.name, recorded[-FAILURE_REPLAY_LINES:]))
-        passed = False
-    verdicts.append((stage.name, 'ok' if passed else 'FAILED'))
+        verdict = 'ok'
+      except subprocess.CalledProcessError as error:
+        failed_step = display.step_text
+        assert failed_step is not None, 'a command ran outside a step'
+        failures.append((stage.name, failed_step, error))
+        verdict = 'FAILED'
+      display.stage_ended(verdict, time.monotonic() - started)
+      verdicts.append((stage.name, verdict))
 
-  for name, replay in failures:
-    print(f'\n=== {name} failed ===', file=sys.stderr)
-    sys.stderr.writelines(replay)
-  print(
-    '\ngate: ' + ' | '.join(f'{name} {verdict}' for name, verdict in verdicts),
-    file=sys.stderr,
-  )
+  for name, failed_step, error in failures:
+    display.failure(name, failed_step, error)
+  display.verdict(verdicts)
   return 1 if failures else None
 
 

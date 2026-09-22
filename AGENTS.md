@@ -24,7 +24,8 @@ core imports none of them, and `bro-ride` spawns rather than imports `bro-native
 it publishes `bro-benchmark` (package `bro.benchmark`) and locks, syncs and tests in an environment of its own, for the reason `benchmark/AGENTS.md` gives.
 `./setup.sh` syncs the workspace and installs the repository hooks;
 it leaves `benchmark/.venv` alone, which is synced on demand, by the gate stage or by hand.
-Run the repository's console scripts and its own shell scripts through `uv run <command>` (`uv run ./format.sh`, `uv run run-tests --changed`) or `.venv/bin/<command>`.
+Run the repository's console scripts and its own shell scripts through `uv run -q <command>` (`uv run -q ./format.sh`, `uv run -q run-tests --changed`) or `.venv/bin/<command>`;
+`-q` keeps uv's own sync report out of the command's output.
 A session that carries a `bro::banner` tool runs on a frozen runtime bundle whose `PATH` publishes these same command names;
 activating the checkout's venv over it would shadow them with the code being edited.
 The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for every member, and the test gate for all of them:
@@ -40,7 +41,12 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   both skipped when the gate itself runs inside a container.
   `--only` and `--skip` name stages, are repeatable, and are mutually exclusive.
   `--shard K/N` runs the K-th of N shards of the `broker_e2e` stage (`bro.dev.sharding` deals them), for a runner per shard.
-  Every selected stage runs whatever the ones before it did, and the gate closes on a replay of each failing stage's output and a one-line verdict per stage, so one pass reports every problem the tree has.
+  Every selected stage runs whatever the ones before it did, so one pass reports every problem the tree has.
+  The gate keeps its commands' output to itself:
+  it prints a line as a stage starts and its verdict with the elapsed time as it ends,
+  and closes on the whole output of every failed command under a header naming its stage and step, then the one-line verdict per stage;
+  `--verbose` streams the commands' output as they run, and on a terminal the stages draw as a live table with pytest's progress.
+  Color follows `--color` (by default, whether stderr is a terminal) and is passed down to the commands, which see only a pipe.
   `--changed` narrows the gate to what a diff against `--base` (default `origin/master`) can reach through the repository's import graph (`bro.dev.affected_tests`):
   `unit` drops the test modules the change cannot reach
   — a roster module with no source module of its own holds a repository-wide invariant and runs whatever changed;

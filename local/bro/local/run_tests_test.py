@@ -1,3 +1,4 @@
+import io
 import subprocess
 import sys
 from pathlib import Path
@@ -5,7 +6,70 @@ from pathlib import Path
 import pytest
 import yaml
 
-from bro.local import run_tests
+from bro.local import gate_display, run_tests
+
+
+@pytest.fixture(autouse=True)
+def display(monkeypatch):
+  """a stage under way on a display writing where no test reads."""
+  shown = gate_display.Plain(io.StringIO(), color=False, verbose=False)
+  shown.stage_started('probe', 'probe')
+  monkeypatch.setattr(run_tests, '_display', shown)
+  return shown
+
+
+def test_a_failed_command_carries_its_whole_output():
+  with pytest.raises(subprocess.CalledProcessError) as raised:
+    run_tests.run(
+      sys.executable,
+      '-c',
+      'import sys; print("first", flush=True); print("second", file=sys.stderr); sys.exit(3)',
+    )
+
+  assert raised.value.returncode == 3
+  assert raised.value.output == 'first\nsecond\n'
+
+
+def test_a_command_output_reaches_the_display_line_by_line(monkeypatch):
+  stream = io.StringIO()
+  monkeypatch.setattr(run_tests, '_display', gate_display.Plain(stream, color=False, verbose=True))
+
+  run_tests.run(sys.executable, '-c', 'print("one"); print("two")')
+
+  assert stream.getvalue() == 'one\ntwo\n'
+
+
+def test_a_command_reads_the_display_color_decision_from_its_environment(monkeypatch):
+  stream = io.StringIO()
+  shown = gate_display.Plain(stream, color=False, verbose=True)
+  monkeypatch.setattr(run_tests, '_display', shown)
+  monkeypatch.setenv('FORCE_COLOR', '1')
+  probe = 'import os; print(os.environ.get("FORCE_COLOR"), os.environ.get("NO_COLOR"))'
+
+  run_tests.run(sys.executable, '-c', probe)
+  shown.color = True
+  run_tests.run(sys.executable, '-c', probe)
+
+  assert stream.getvalue() == 'None 1\n1 None\n'
+
+
+def test_the_commands_deaf_to_the_environment_are_told_the_color_decision_by_flag(
+  invocations, display
+):
+  distribution = run_tests.Distribution(
+    directory='.', deptry_exclude=(), deptry_known_first_party=()
+  )
+
+  run_tests.lint_stage([distribution])
+  assert invocations[1] == (sys.executable, '-m', 'deptry', '.', '--no-ansi')
+  assert Path(invocations[-1][0]).name == 'shellcheck'
+  assert '--color=always' not in invocations[-1]
+
+  display.color = True
+  invocations.clear()
+  run_tests.lint_stage([distribution])
+  assert invocations[1] == (sys.executable, '-m', 'deptry', '.')
+  assert invocations[-1][:2] == (str(Path(sys.executable).parent / 'shellcheck'), '--color=always')
 
 
 def test_benchmark_stage_refuses_to_rewrite_a_stale_lock(monkeypatch, tmp_path):
@@ -32,7 +96,8 @@ package = false
   with pytest.raises(subprocess.CalledProcessError) as raised:
     run_tests.benchmark_stage()
 
-  assert raised.value.cmd == ('uv', 'sync', '--locked', '--all-groups')
+  assert raised.value.cmd == ('uv', 'sync', '-q', '--locked', '--all-groups')
+  assert '--locked' in raised.value.output
   assert lock_file.read_bytes() == locked
 
 
@@ -60,12 +125,12 @@ def test_the_workflow_matrix_deals_every_broker_e2e_shard():
 
 def test_a_shard_reaches_the_broker_e2e_stage_alone(monkeypatch, invocations):
   monkeypatch.setattr(
-    run_tests, 'STAGES', [run_tests.Stage('broker_e2e', run_tests.broker_e2e_stage)]
+    run_tests, 'STAGES', [run_tests.Stage('broker_e2e', run_tests.broker_e2e_stage, 'a probe')]
   )
 
   assert run_tests.main(['run-tests', '--only', 'broker_e2e', '--shard', '2/3']) is None
   assert invocations == [
-    (sys.executable, '-m', 'pytest', run_tests.BROKER_E2E_PYTEST_FILE, '--shard=2/3')
+    (sys.executable, '-m', 'pytest', '-q', run_tests.BROKER_E2E_PYTEST_FILE, '--shard=2/3')
   ]
 
 
@@ -89,7 +154,7 @@ def test_a_shard_outside_the_broker_e2e_stage_or_its_count_is_refused(argv, caps
 def test_the_llm_stage_names_each_probe_on_the_command_line(invocations):
   run_tests.llm_stage()
 
-  assert invocations == [(sys.executable, '-m', 'pytest', *run_tests.LLM_PYTEST_FILES)]
+  assert invocations == [(sys.executable, '-m', 'pytest', '-q', *run_tests.LLM_PYTEST_FILES)]
 
 
 def test_a_probe_is_collected_only_as_a_named_file():
@@ -115,8 +180,8 @@ def test_an_opt_in_stage_runs_only_when_named(monkeypatch, capsys):
     run_tests,
     'STAGES',
     [
-      run_tests.Stage('types', lambda: ran.append('types')),
-      run_tests.Stage('llm', lambda: ran.append('llm'), opt_in=True),
+      run_tests.Stage('types', lambda: ran.append('types'), 'a probe'),
+      run_tests.Stage('llm', lambda: ran.append('llm'), 'a probe', opt_in=True),
     ],
   )
 
@@ -213,8 +278,8 @@ def test_the_single_process_roster_runs_outside_the_worker_pool(invocations):
   run_tests.unit_stage(['thing/store_test.py'], ['thing/heavy_test.py'])
 
   assert invocations == [
-    (sys.executable, '-m', 'pytest', '-n', 'auto', 'thing/store_test.py'),
-    (sys.executable, '-m', 'pytest', 'thing/heavy_test.py'),
+    (sys.executable, '-m', 'pytest', '-q', '-n', 'auto', 'thing/store_test.py'),
+    (sys.executable, '-m', 'pytest', '-q', 'thing/heavy_test.py'),
   ]
 
 
@@ -300,8 +365,8 @@ def test_a_dropped_stage_reads_skipped_in_the_verdict(monkeypatch, capsys):
     run_tests,
     'STAGES',
     [
-      run_tests.Stage('types', lambda: ran.append('types')),
-      run_tests.Stage('benchmark', lambda: ran.append('benchmark')),
+      run_tests.Stage('types', lambda: ran.append('types'), 'a probe'),
+      run_tests.Stage('benchmark', lambda: ran.append('benchmark'), 'a probe'),
     ],
   )
   monkeypatch.setattr(
@@ -317,20 +382,23 @@ def test_a_dropped_stage_reads_skipped_in_the_verdict(monkeypatch, capsys):
   assert 'gate: types ok | benchmark skipped' in capsys.readouterr().err
 
 
-def test_every_selected_stage_runs_and_the_summary_reports_each(monkeypatch, capsys):
+def test_every_selected_stage_runs_and_each_failed_command_is_replayed_whole(monkeypatch, capsys):
   def fail() -> None:
-    raise subprocess.CalledProcessError(1, ('probe',))
+    run_tests.step('probe')
+    raise subprocess.CalledProcessError(1, ('probe',), output='first line\nlast line\n')
 
   ran = []
   monkeypatch.setattr(
     run_tests,
     'STAGES',
     [
-      run_tests.Stage('first', fail),
-      run_tests.Stage('second', lambda: ran.append('second')),
+      run_tests.Stage('first', fail, 'a probe that fails'),
+      run_tests.Stage('second', lambda: ran.append('second'), 'a probe that passes'),
     ],
   )
 
   assert run_tests.main([]) == 1
   assert ran == ['second']
-  assert 'gate: first FAILED | second ok' in capsys.readouterr().err
+  written = capsys.readouterr().err
+  assert '=== first: probe exited with 1 ===\nfirst line\nlast line\n' in written
+  assert written.endswith('gate: first FAILED | second ok\n')
