@@ -292,6 +292,7 @@ PYTEST_FILES = [
   'dev/bro/dev/install_test.py',
   'dev/bro/dev/shell_policy_test.py',
   'dev/bro/dev/sleep_policy_test.py',
+  'dev/bro/dev/sharding_test.py',
 ]
 # collected by one process rather than by every worker in the pool: an xdist
 # worker collects the whole roster, not the share it runs, so a module importing

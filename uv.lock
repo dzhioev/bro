@@ -384,12 +384,14 @@ source = { editable = "dev" }
 dependencies = [
     { name = "bro" },
     { name = "markdown-it-py" },
+    { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "bro", editable = "." },
     { name = "markdown-it-py" },
+    { name = "pytest" },
 ]
 
 [[package]]
