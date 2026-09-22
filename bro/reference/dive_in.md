@@ -62,7 +62,7 @@ It forwards `--boxed`,
 `--no-trails`,
 `--env`,
 `--session-log`,
-`--harness` with every harness's own flags (claude's `--raw`),
+`--harness`,
 and the LLM-selection flags.
 
 Task prefetch reads brog through the selected harness's prospective scope and the same grant/revoke values that the session receives.

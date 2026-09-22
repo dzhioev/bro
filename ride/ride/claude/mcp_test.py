@@ -96,10 +96,10 @@ class TestStartSessionMCPServer:
       exec sleep 60
       """,
     )
-    server = ride_mcp.start_session_mcp_server('bro:dev', tmp_path, env)
+    server = ride_mcp.start_session_mcp_server('persona:dev', tmp_path, env)
     server.stop()
     argv = (tmp_path / 'argv').read_text().splitlines()
-    assert argv[0] == 'bro:dev'
+    assert argv[0] == 'persona:dev'
     assert '--bearer-token' not in argv
     assert server.endpoint.token not in argv
     assert (tmp_path / 'token').read_text() == server.endpoint.token
@@ -131,7 +131,7 @@ class TestStartSessionMCPServer:
 class TestWaitHealthy:
   def test_returns_once_health_answers(self, tmp_path, fake_mcp_server):
     env = fake_mcp_server(_HEALTH_SERVER_BODY)
-    server = ride_mcp.start_session_mcp_server('bro:dev', tmp_path, env)
+    server = ride_mcp.start_session_mcp_server('persona:dev', tmp_path, env)
     try:
       server.wait_healthy()
     finally:
@@ -147,7 +147,7 @@ class TestWaitHealthy:
       exec sleep 60
       """,
     )
-    server = ride_mcp.start_session_mcp_server('bro:dev', tmp_path, env)
+    server = ride_mcp.start_session_mcp_server('persona:dev', tmp_path, env)
     try:
       with pytest.raises(RuntimeError, match='not healthy'):
         server.wait_healthy()
@@ -162,7 +162,7 @@ class TestWaitHealthy:
       sleep 0.1
       """,
     )
-    server = ride_mcp.start_session_mcp_server('bro:dev', tmp_path, env)
+    server = ride_mcp.start_session_mcp_server('persona:dev', tmp_path, env)
     try:
       with pytest.raises(RuntimeError, match='before /health'):
         server.wait_healthy()

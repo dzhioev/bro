@@ -27,7 +27,7 @@ def _payload(*tasks: dict, stop_hook_active: bool = False) -> dict:
 
 class TestNotice:
   def test_missions_in_flight_without_a_watch_are_held_and_named(self):
-    reason = stop_guard.notice(_payload(), [_CHILD, _OTHER], 'full', summoned=False)
+    reason = stop_guard.notice(_payload(), [_CHILD, _OTHER], summoned=False)
 
     assert reason is not None
     assert reason.startswith('2 missions in flight and no background task running')
@@ -35,26 +35,10 @@ class TestNotice:
     assert '`mission watch` and `mission cancel <mission id>`' in reason
     assert reason.endswith('quest 01m-child to bro-eyebro\nmission 01m-other: benchmark')
 
-  def test_a_raw_session_is_told_to_poll_instead_of_arming_a_monitor(self):
-    reason = stop_guard.notice(_payload(), [_CHILD], 'raw', summoned=False)
-
-    assert reason is not None
-    assert reason.startswith('1 mission in flight and no background task running')
-    assert '`bro::quest_check` and `bro::quest_cancel`' in reason
-    assert "bro::job('quest watch'" not in reason
-    assert 'Monitor' not in reason
-
-  def test_a_raw_session_gets_poll_and_cancel_routes_for_other_missions(self):
-    reason = stop_guard.notice(_payload(), [_OTHER], 'raw', summoned=False)
-
-    assert reason is not None
-    assert '`mission history` and `mission cancel <mission id>`' in reason
-    assert '`mission watch`' not in reason
-
   def test_a_watch_with_nothing_in_flight_is_held_with_its_task_named(self):
     payload = _payload(_task('quest watch', task_id='bf8'))
 
-    reason = stop_guard.notice(payload, [], 'full', summoned=False)
+    reason = stop_guard.notice(payload, [], summoned=False)
 
     assert reason is not None
     assert reason.startswith(
@@ -65,7 +49,7 @@ class TestNotice:
   def test_a_summoned_session_with_an_idle_watch_is_told_to_answer(self):
     payload = _payload(_task('quest watch', task_id='bf8'))
 
-    reason = stop_guard.notice(payload, [], 'full', summoned=True)
+    reason = stop_guard.notice(payload, [], summoned=True)
 
     assert reason is not None
     assert 'Deliver your result with `bro::answer`, which ends the session' in reason
@@ -73,17 +57,17 @@ class TestNotice:
 
   @pytest.mark.parametrize('command', ['quest watch', 'mission watch', 'sleep 30'])
   def test_any_running_task_over_missions_in_flight_is_the_wait_and_passes(self, command):
-    assert stop_guard.notice(_payload(_task(command)), [_CHILD], 'full', summoned=False) is None
+    assert stop_guard.notice(_payload(_task(command)), [_CHILD], summoned=False) is None
 
   def test_a_running_task_without_a_mission_is_held_and_named(self):
-    reason = stop_guard.notice(_payload(_task('sleep 30')), [], 'full', summoned=False)
+    reason = stop_guard.notice(_payload(_task('sleep 30')), [], summoned=False)
 
     assert reason is not None
     assert 'task-1 `sleep 30`' in reason
 
   def test_a_watch_that_is_no_longer_running_does_not_count(self):
     payload = _payload(_task('quest watch', status='killed'))
-    reason = stop_guard.notice(payload, [_CHILD], 'full', summoned=False)
+    reason = stop_guard.notice(payload, [_CHILD], summoned=False)
 
     assert reason is not None
     assert reason.startswith('1 mission in flight and no background task running')
@@ -91,19 +75,19 @@ class TestNotice:
   def test_the_stop_after_a_held_one_stands_whatever_is_live(self):
     payload = _payload(_task('quest watch'), stop_hook_active=True)
 
-    assert stop_guard.notice(payload, [], 'full', summoned=False) is None
+    assert stop_guard.notice(payload, [], summoned=False) is None
 
   def test_a_payload_without_the_task_list_is_refused(self):
     payload = {'hook_event_name': 'Stop', 'stop_hook_active': False}
 
     with pytest.raises(ValueError, match='no background_tasks list'):
-      stop_guard.notice(payload, [], 'full', summoned=False)
+      stop_guard.notice(payload, [], summoned=False)
 
 
 class TestMain:
-  def _run(self, monkeypatch, capsys, payload: dict, *, surface: str = 'full') -> str:
+  def _run(self, monkeypatch, capsys, payload: dict) -> str:
     monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(payload)))
-    assert stop_guard.main(['stop_guard', surface]) == 0
+    assert stop_guard.main(['stop_guard']) == 0
     return capsys.readouterr().out
 
   def test_a_held_turn_end_is_a_block_decision_on_stdout(self, monkeypatch, capsys):
@@ -136,15 +120,10 @@ class TestMain:
       'Background tasks are running with no mission in flight: w1 `quest watch`'
     )
 
-  def test_an_unknown_surface_is_refused(self, monkeypatch):
-    monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
-    with pytest.raises(ValueError, match="unknown session surface 'tui'"):
-      stop_guard.main(['stop_guard', 'tui'])
-
 
 def test_a_failure_lets_the_turn_end_stand_with_the_reason_on_stderr():
   completed = subprocess.run(
-    [sys.executable, '-m', 'ride.claude.stop_guard', 'full'],
+    [sys.executable, '-m', 'ride.claude.stop_guard'],
     input=json.dumps({'hook_event_name': 'Stop', 'stop_hook_active': False}),
     capture_output=True,
     text=True,

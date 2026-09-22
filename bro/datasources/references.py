@@ -37,7 +37,7 @@ conditions = FileSource(
   summary=(
     'the declarative conditioning model: typed variables, condition '
     'combinators (`eq` / `contains`), `when` / `select` for declarative '
-    'lists, the facts triple.'
+    'lists, the facts pair.'
   ),
   path=reference.DIRECTORY / 'conditions.md',
   # carries directive examples; rendering would execute them

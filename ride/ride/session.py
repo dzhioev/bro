@@ -102,7 +102,6 @@ class SessionSpec:
   prompt: Optional[str]
   subject: Optional[str]
   arguments: list[str]
-  harness_options: dict
   repo: Optional[str] = None
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
   summon_harness: str = configs.DEFAULT_SUMMON_HARNESS
@@ -167,7 +166,6 @@ class SessionSpec:
       parts.extend(['--into', self.into])
     for name, value in self.env.items():
       parts.extend(['--env', f'{name}={value}'])
-    parts.extend(get_harness(self.harness).command_options(self))
     parts.append(self.bro)
     if self.prompt is not None:
       parts.append(self.prompt)
@@ -365,7 +363,7 @@ def container_launch(
   trails_mounts = () if spec.no_trails else local_trails_mounts(scoped)
   return Launch(
     name=spec.name,
-    command=do_ride_command(spec, harness_flags=harness.session_flags(spec)),
+    command=do_ride_command(spec),
     env=launch_env,
     additions=dict(spec.env),
     secrets=scoped.required,
@@ -437,7 +435,7 @@ def boxed_member_launch(
   return MemberExec(
     container=container_id,
     member=member,
-    command=do_ride_command(spec, harness_flags=harness.session_flags(spec)),
+    command=do_ride_command(spec),
     env=launch_env,
     secrets=scoped.required,
     optional_secrets=scoped.optional,
@@ -463,7 +461,7 @@ def prepared_unboxed_session_launch(
   harness = get_harness(spec.harness)
   runtime_bundle.materialize_host()
   tree = workspace.tree
-  session_command = do_ride_command(spec, harness_flags=harness.session_flags(spec))
+  session_command = do_ride_command(spec)
   command = [str(runtime_bundle.host_venv / 'bin' / session_command[0]), *session_command[1:]]
   runner_env = runtime_bundle.host_session_env(tree, tty=spec.tty, additions=spec.env)
   runner_env['RIDE_BRO'] = spec.bro
@@ -714,7 +712,7 @@ def _start_session(
   if auth_error is not None:
     log.error('%s', auth_error)
     return 1
-  recipe = harness.scope_recipe(spec.harness_options)
+  recipe = harness.scope_recipe()
   if spec.no_trails:
     recipe = dataclasses.replace(recipe, optional_baseline=frozenset())
   try:

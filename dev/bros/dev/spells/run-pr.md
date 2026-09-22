@@ -286,8 +286,7 @@ The flow's one mandatory local pass
 — on the folded, rebased tree, which is the tree that ships.
 Run the repo's gate over what the change reaches:
 a change-scoped selection where offered, otherwise affected tests (use the repo's command and environment flags).{{when #harness = bro}} Run long commands through `bro::job` in `fg` mode with an explicit `timeout_seconds` (600 fits)
-— the default foreground wait is shorter;
-keep the bound beneath the client call cap on the MCP wire.{{end}}
+— the default foreground wait is shorter.{{end}}
 
 What this pass is worth is keeping a broken branch away from a reviewer, and a change-scoped selection buys that at a fraction of the price.
 The whole gate is the pull request's:
@@ -439,7 +438,7 @@ poll-pr <owner>/<repo> <pr_number>
 
 How to run it:
 
-{{iff #wire = bare}}
+{{iff #harness = bro}}
 Start it with `bro::job("poll-pr …", mode="watch")` and keep the returned job id.
 Its JSON lines arrive as background-job notifications.
 React to every line per step 15, use `bro::poll` when a pending marker says more output remains, then call `bro::chill()` whenever nothing else remains.
@@ -457,10 +456,6 @@ Until then, return to `bro::chill()` however quiet the PR stays;
 that idling is the run working as designed, not a stall to wrap up.
 Do not kill the job and end the run with a "waiting for review" report
 — an ended run watches nothing, and every later review event goes unhandled.
-{{eliff #harness = bro}}
-The raw MCP surface has no notification wake or `chill`, so it cannot own this persistent review loop.
-Do not start a watcher that the run cannot observe;
-raise that the PR must continue under bro-native or a full Claude session.
 {{eliff #harness = claude}}
 **MUST launch via the `Monitor` tool with `persistent: true`.
 Do NOT use Bash `run_in_background`**
@@ -480,7 +475,7 @@ Don't wait for a review to arrive — hand it over:
 
 1. Summon the eyebro with the watcher already running
    — the watcher baselines existing events as seen at start, so a review posted before it starts would never fire.
-   `bro::summon` targeting the eyebro your banner's `may_summon` names, {{iff #wire = mcp}}with `detach: true`, {{eliff #wire = bare}}{{end}}a four-hour timeout (`14400`) and a self-contained prompt naming the PR
+   `bro::summon` targeting the eyebro your banner's `may_summon` names, {{when #harness = claude}}with `detach: true`, {{end}}a four-hour timeout (`14400`) and a self-contained prompt naming the PR
    — the child shares no context with this session:
    `[[review pr <pr-url>]]`.
 2. The conversation runs through the PR:
@@ -593,7 +588,7 @@ Watcher silence is not evidence that checks finished.
 If this gate is not clear, leave the watcher running, retain the cleared review gates for this head, and wait for its green event.
 
 With all three gates clear, chain into the merge, and batch it
-— {{iff #wire = bare}}stop the watcher with `bro::kill(id=job_id)`{{eliff #harness = claude}}stop it with `TaskStop`{{else}}the raw MCP surface has no watcher{{end}}, then [[land]] **in the same response** and follow it through the merge.
+— {{iff #harness = bro}}stop the watcher with `bro::kill(id=job_id)`{{eliff #harness = claude}}stop it with `TaskStop`{{end}}, then [[land]] **in the same response** and follow it through the merge.
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**:
 informational;

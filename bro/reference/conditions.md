@@ -10,7 +10,7 @@ The template directive front (`bro/reference/template.md`) lowers text condition
 ## Why
 
 Component declarations (a bro's `tools` / `data_sources`) and static text (system prompts, spell bodies, tool descriptions) are written once but consumed by different surfaces
-— the bro-native LLM loop, `--raw` claude sessions, managed Claude sessions
+— the bro-native LLM loop and managed Claude sessions
 — with different toolsets, wire-name spellings, and credentials.
 Conditioning derives each surface's variant from one declaration, and fails fast on a typo instead of silently deciding one way forever.
 
@@ -90,19 +90,16 @@ Consumers:
 
 ## Facts
 
-The facts triple a conditioning surface knows, exported by `bro/mcp.py` as ready-made placeholders (`from bro.mcp import creds, harness, wire`):
+The facts pair a conditioning surface knows, exported by `bro/mcp.py` as ready-made placeholders (`from bro.mcp import creds, harness`):
 
-- `harness` — which toolset drives the work:
-  `bro` (bro-native LLM runs and `--raw` claude sessions) or `claude` (Claude Code's own harness with its built-in tools)
-
-- `wire` — how the surface spells canonical `namespace::tool` names:
-  `bare` (`namespace__tool`, the bro-native LLM loop) or `mcp` (`mcp__namespace__tool`, any claude session).
-  Orthogonal to `harness` — a `--raw` session runs the bro harness over mcp wire names
+- `harness` — the loop that drives the work, which decides how the bro's tools are served and how canonical `namespace::tool` names are spelled:
+  `bro` (the bro-native LLM loop, whose tools run in-process and list as `namespace__tool`)
+  or `claude` (Claude Code with its built-in tools, where the bro's additions are mounted as MCP servers and list as `mcp__namespace__tool`)
 
 - `creds` — the set of secrets the environment resolves.
   The supplied universe is closed (the registry's known names) and membership probes `bro.base.credentials.available` lazily
 
-Three more facts sit outside the triple.
+Three more facts sit outside the pair.
 
 `may_summon` — the session's effective summon allow-list, as its launch fixed it
 (`bro.summon.effective_may_summon()` off `RIDE_MAY_SUMMON`, an unpublished list collapsed to empty).
@@ -130,7 +127,7 @@ It is supplied only when rendering the hold text (`bro.prompts.hold_fragment` �
 — fails fast on a stray `#hold` directive.
 No ready-made placeholder is exported.
 
-`bro.mcp.select(entries, harness=…, wire=…, creds=…, may_summon=…, talk=…)` owns the facts-to-variables mapping for declarative lists (`bro.mcp.render_text` is its sibling for text — see `bro/reference/template.md`).
+`bro.mcp.select(entries, harness=…, creds=…, may_summon=…, talk=…)` owns the facts-to-variables mapping for declarative lists (`bro.mcp.render_text` is its sibling for text — see `bro/reference/template.md`).
 Both accept `extra` — a caller-owned vocabulary merged next to the facts (bro features, below).
 A fact the surface doesn't know defines no variable, so a condition referencing it raises.
 Select in the process that consumes the result, where the credential store is the session's own.
@@ -156,7 +153,7 @@ The `#features` universe is the declared feature names
 — environment-independent, so a typo'd name fails every render.
 A gate condition evaluates against the surfaces' `creds` fact alone (`bro.mcp.surface_variables(creds=…)`), read when the feature is probed,
 so a typo'd kind in a gate fails the way one in a `when` entry or a directive does.
-A feature holds for the environment rather than for a harness or a wire,
+A feature holds for the environment rather than for a harness,
 so any other variable reference in a gate raises.
 The condition model has no conjunction, so a feature needing several secrets has no gate spelling until an `and` combinator exists.
 
@@ -174,12 +171,12 @@ a server must read the same served standalone, so it renders at build time again
   The source's own name rides along as `source` (for `{{insert #source}}`)
 
 The one exception is the `bro` service-tool build:
-service tools are harness features, so it injects the system `#wire` fact (`bro.mcp.surface_variables`) next to its `#tools` roster.
+service tools are harness features, so it injects the system `#harness` fact (`bro.mcp.surface_variables`) next to its `#tools` roster.
 
 ## Code map
 
 - `bro/base/condition.py` — the model:
   typed variables, `Variable` operators, the evaluator, `when` / `iff` / `select`
 - `bro/mcp.py` — `select` / `render_text` and the fact placeholders:
-  the surface-facts front (`Harness`, `Wire`, credentials)
+  the surface-facts front (`Harness`, credentials)
 - `bro/base/template.py` — the text front, lowering `{{…}}` directives onto this model (`bro/reference/template.md`)

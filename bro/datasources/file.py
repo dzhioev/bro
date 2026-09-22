@@ -17,7 +17,7 @@ class FileSource(DataSource):
 
   One rendering of the body is read by every harness, so the file must be
   surface-neutral: `read` renders `bro.base.template` directives with no surface
-  facts — a `#harness`/`#wire`/`#creds` directive raises at read time instead
+  facts — a `#harness`/`#creds` directive raises at read time instead
   of silently picking a branch. Pass `render=False` to serve the file verbatim
   — for a doc whose payload is the directive syntax itself, where rendering
   would choke on the examples.

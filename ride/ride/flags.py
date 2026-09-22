@@ -1,7 +1,7 @@
 from bro.base import log
 from bro.base.args import Parser
 from bro.base.scope import permit_choices
-from ride.harness import HARNESS_NAMES, get_harness
+from ride.harness import HARNESS_NAMES
 from ride.workspace.metadata import Isolation
 
 
@@ -19,47 +19,13 @@ def isolation_from_args(args: dict) -> Isolation:
 
 
 def add_harness_flags(parser: Parser) -> None:
-  """Register `--harness` and every harness's own flags."""
+  """Register `--harness`."""
   parser.add_argument(
     '--harness',
     choices=HARNESS_NAMES,
     default=None,
     help='driving harness (default: project [tool.bro] harness, then claude)',
   )
-  for name in HARNESS_NAMES:
-    get_harness(name).add_flags(parser)
-
-
-def _harness_flag_defaults() -> dict[str, dict]:
-  """Per harness, the flag dests it registers with their parser defaults."""
-  defaults: dict[str, dict] = {}
-  for name in HARNESS_NAMES:
-    scratch = Parser(add_help=False)
-    dests = get_harness(name).add_flags(scratch)
-    by_dest = {action.dest: action.default for action in scratch._actions}
-    defaults[name] = {dest: by_dest[dest] for dest in dests}
-  return defaults
-
-
-def pop_harness_options(
-  parser: Parser, args: dict, harness_name: str, *, solo: bool, isolation: Isolation
-) -> dict:
-  """Pop every harness's flag values out of `args` and pack the selected one."""
-  if harness_name not in HARNESS_NAMES:
-    parser.error(f'unknown harness: {harness_name}')
-  packed: dict = {}
-  for name, flag_defaults in _harness_flag_defaults().items():
-    values = {dest: args.pop(dest) for dest in flag_defaults}
-    if name == harness_name:
-      try:
-        packed = get_harness(name).parse_options(values, solo=solo, isolation=isolation)
-      except ValueError as error:
-        parser.error(str(error))
-      continue
-    for dest, default in flag_defaults.items():
-      if values[dest] != default:
-        parser.error(f'--{dest.replace("_", "-")} requires --harness {name}')
-  return packed
 
 
 def add_scope_flags(parser: Parser) -> None:

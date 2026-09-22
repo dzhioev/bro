@@ -52,7 +52,7 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   Credentials the command reads are the declaring bro's `extra_secrets`.
 - `tools = [when(harness == 'claude', block('Read', 'Write'))]` removes harness-native tools.
   One block may group several related names;
-  it must be gated away from `harness == 'bro'`, whose native and raw-Claude surfaces expose only the declared tools, or construction raises.
+  it must be gated away from `harness == 'bro'`, whose native loop exposes only the declared tools, or construction raises.
   `tools = [when(harness == 'claude', allow_commands('Monitor', 'journalctl -f'))]` hands one of those tools back narrowed to the commands it names, and `serve('TaskStop')` hands one back whole where there is no command line to narrow on;
   either way the tool must be blocked too, since handing back bounds nothing a bro does not otherwise withhold.
   Import `block`, `allow_commands`, `serve`, `harness`, and `mount` from `bro.mcp`.

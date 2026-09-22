@@ -19,8 +19,7 @@ def isolated_environ():
 
 
 def _command(spec) -> list[str]:
-  harness = get_harness(spec.harness)
-  return do_ride.command(spec, harness_flags=harness.session_flags(spec))
+  return do_ride.command(spec)
 
 
 def _parsed_run(argv: list[str]) -> do_ride.SessionRun:
@@ -48,10 +47,10 @@ class TestCommand:
       '--hold', 'attended', '--llm', '::xhigh+fast', 'dev', 'do it', '--', '--foo',
     ]  # fmt: skip
 
-  def test_resume_and_harness_flags_are_carried(self):
-    spec = _spec(resume=True, bro='dev', raw=True)
+  def test_resume_is_carried(self):
+    spec = _spec(resume=True, bro='dev')
     assert _command(spec) == [
-      'do-ride', 'along', '--workspace', 'w', '--harness', 'claude', '--resume', '--raw',
+      'do-ride', 'along', '--workspace', 'w', '--harness', 'claude', '--resume',
       '--repo', str(spec.repo), '--hold', 'attended', 'dev',
     ]  # fmt: skip
 
@@ -77,9 +76,7 @@ class TestCommand:
     assert run.resolved_llm == get_harness('bro').resolve_llm('::low', 'dev').dump()
 
   def test_the_bro_harness_uses_the_same_executable(self):
-    spec = dataclasses.replace(
-      _spec(solo=True, bro='dev', prompt='go'), harness='bro', harness_options={}
-    )
+    spec = dataclasses.replace(_spec(solo=True, bro='dev', prompt='go'), harness='bro')
     assert _command(spec) == [
       'do-ride', 'solo', '--workspace', 'w', '--harness', 'bro', '--repo', str(spec.repo),
       '--hold', 'attended', 'dev', 'go',
@@ -207,7 +204,6 @@ class TestRunSession:
       bro='dev',
       prompt=None,
       arguments=[],
-      harness_options={},
     )
     return do_ride.run_session(harness, run), harness, declaration
 

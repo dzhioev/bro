@@ -41,8 +41,8 @@ def test_read_raises_on_a_surface_directive(env_file):
 
 def test_read_verbatim_serves_directive_payload_raw(env_file):
   # a doc about the directive syntax carries examples that rendering would
-  # execute (or crash on — #wire is not a fact FileSource supplies)
-  body = 'grammar: {{iff #harness = bro}}…{{end}} and {{assert #wire = bare}}'
+  # execute (or crash on — #hold is not a fact FileSource supplies)
+  body = 'grammar: {{iff #harness = bro}}…{{end}} and {{assert #hold = guided}}'
   env_file.write_text(body)
   src = FileSource('conditions', summary='x', path=env_file, render=False)
   assert src.read() == body

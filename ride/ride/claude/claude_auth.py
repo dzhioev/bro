@@ -1,21 +1,6 @@
-"""claude-session auth: the setup-token overlay and the anthropic api key read."""
-
-from typing import Optional
+"""claude-session auth: the setup-token overlay."""
 
 from bro.base import credentials, log
-
-
-def load_anthropic_key() -> Optional[str]:
-  """return the api_key from the `anthropic` secret, or None if missing/invalid."""
-  try:
-    config = credentials.get_json('anthropic')
-  except credentials.SecretNotFound:
-    return None
-  key = config.get('api_key')
-  if not isinstance(key, str) or len(key) == 0:
-    return None
-  return key
-
 
 # auth env vars that outrank CLAUDE_CODE_OAUTH_TOKEN in claude's credential
 # precedence: a value inherited from the launching shell would silently hijack
@@ -33,9 +18,8 @@ def apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) -
   no OAuth credentials file, so the token is a managed session's whole auth —
   both launch surfaces gate on it before anything is created, and
   `warn_when_missing` diagnoses a runner that reaches this layer without the
-  preflight contract. a `--raw` session authenticates via apiKeyHelper and
-  resolves no token by design. a managed session already carries the same var
-  from the secret's registry install hook; re-applying it here is idempotent.
+  preflight contract. a managed session already carries the same var from the
+  secret's registry install hook; re-applying it here is idempotent.
   """
   for var in _OUTRANKING_AUTH_VARS:
     if env.pop(var, None) is not None:

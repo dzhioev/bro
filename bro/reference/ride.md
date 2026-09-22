@@ -82,7 +82,7 @@ the launcher's own `--log` never reaches the session.
 - `ride exec <workspace> [command ...]` enters a running boxed workspace.
   The exec process is outside the running session's process tree and has no broker channel of its own.
 - `ride check-clean <workspace>` reports whether removal is safe.
-- `ride scope [--repo PATH|URL] [--bro BRO] [--harness HARNESS] [--raw]` prints the prospective credential tiers and selected credential instances.
+- `ride scope [--repo PATH|URL] [--bro BRO] [--harness HARNESS]` prints the prospective credential tiers and selected credential instances.
   Detached scope requires `--bro`;
   an attachment may supply the project default.
 - `ride banner [--llm]` renders the session facts.
@@ -103,27 +103,22 @@ A recipe whose provider the harness cannot run errors with `--harness` as the re
 The neutral layer (`ride/ride/session.py`) owns one started-party launcher parameterized by workspace isolation.
 It prepares either a container `Launch` or an explicit process launch, and a harness implementation supplies what differs:
 
-- its flag registration (`add_flags` reports the dests it registered, so the neutral layer refuses a non-selected harness's flag generically) and the validation and packing of those flags into its serialized options (`parse_options`);
-- the `ScopeRecipe` its packed options select, the auth preflight, and LLM resolution;
-- the `do-ride` command run inside the prepared workspace, consumed by both isolations;
-- the harness-owned flags a reconstructed argv restates;
+- its `ScopeRecipe`, the auth preflight, and LLM resolution;
+- the session run under `do-ride` inside the prepared workspace, consumed by both isolations;
 - session existence with its resume-refusal wording, the subject read, and the session trail-pointer path;
 - the boxed extras (env, mounts) and the unboxed runner-env preparation.
 
-`scope_recipe` takes the packed options rather than a full session, so surfaces with no session
+`scope_recipe` takes no session, so surfaces with no session
 — `ride scope`, dive-in's task prefetch
 — resolve their recipe through the same seam.
 
 The generic scope computation and the bro-run recipe live beside the seam in `ride.scope`, so native launch and summon lowering share the same policy.
-Claude's full/raw recipes remain private to `ride.claude`;
-raw is a Claude mode, not a harness value.
+Claude's recipe remains private to `ride.claude`.
 
 ## Claude harness
 
-Claude full mode retains Claude Code's built-ins, skills, and base prompt while adding the selected bro's persona, spells, filtered MCP namespaces, and blocked-tool declarations.
-`--raw` runs `claude --bare` under the bro's own composed prompt and MCP surface.
-Raw remains boxed-only and requires the `anthropic` secret;
-full mode requires the `claude_code` setup token.
+A Claude session retains Claude Code's built-ins, skills, and base prompt while adding the selected bro's persona, spells, filtered MCP namespaces, and blocked-tool declarations.
+It requires the `claude_code` setup token.
 
 The outer runs the separate `do-ride solo|along` session executable.
 Unboxed isolation takes it from the frozen host snapshot;
@@ -147,8 +142,6 @@ its runner spawns `bro run|chat …` in the workspace and waits, forwarding SIGT
 Boxed sessions run the same `do-ride` command summoned children get;
 unboxed sessions provision the workspace clone and run the runtime snapshot's `do-ride` under the same broker-root supervision and scoped credential store.
 
-The bro harness owns no flags of its own;
-it rejects Claude's `--raw`.
 A native session that can receive summon traffic starts `quest watch` as a watch-mode `bro::job` once, and its output reaches the LLM as notifications after tool results or in an idle interactive turn.
 `bro::chill` waits on the run's whole background-job inbox when no other work remains.
 A one-shot `bro run` ends when a turn ends with nothing running and nothing in flight:
@@ -157,8 +150,6 @@ naming each `job-N <mode> <command>`, each bro mission as `quest <quest id> to <
 and the run ends only when a turn ends with nothing live or when a reminded turn ends with the same set and no job news drained since.
 The end still closes every job and orphans every in-flight mission, as a delivered `answer` or a `raise` does at once.
 `bro chat` stays idle on the inbox and starts a turn when news arrives.
-A raw Claude session runs the bro toolset over MCP instead:
-that wire has no notification wake or `chill`, so its session text keeps the retained-quest polling flow.
 
 Each session publishes its own current-trail pointer beside the workspace's `resume.json`:
 the native runner publishes when its trail opens, and the Claude recorder republishes as segments turn over.
@@ -331,9 +322,8 @@ Removing an attached workspace whose recorded checkout or managed mirror no long
 
 ## The launch stack
 
-Every managed session launches through the same stack, whichever harness drives it.
-`--unboxed` changes only the outer machinery;
-`--raw` changes only the claude argv flavor (and the scope recipe the outer computes through the seam):
+Every managed session launches through the same stack, whichever harness drives it;
+`--unboxed` changes only the outer machinery:
 
 - **the neutral outer** (`ride/ride/session.py:start_session` and `started_party_launch`)
   — policy validation, one isolation-parameterized workspace preparation path, session supervision, and post-exit UX.
@@ -346,13 +336,11 @@ Every managed session launches through the same stack, whichever harness drives 
   One code path for every flag combination and both harnesses carries the session environment and persona provisioning, then hands off to the harness's runner
   — claude's `ride/ride/claude/runner.py`, or the bro harness's spawn of the native LLM process.
   See "The session executable".
-- **the claude flavor** — the full mode/raw fork (a **full mode** is the default flavor:
-  claude's full harness themed with the session's bro — prompt, spells, MCP namespaces;
-  `--raw` runs bare claude over the bro's own toolset), confined to the claude argv builder plus the harness's private full/raw `ScopeRecipe` values (the secret manifest), which the outer consumes through the seam.
+- **the claude argv** — claude's harness themed with the session's bro (prompt, spells, MCP namespaces), confined to the claude argv builder plus the harness's private `ScopeRecipe` (the secret manifest), which the outer consumes through the seam.
   See "The claude argv".
 
 A neutral session-shaping flag lands once in the outer and reaches both execution modes and every harness;
-a claude-shaping one lands once in the runner or the argv builder and applies to both isolations and both flavors by construction.
+a claude-shaping one lands once in the runner or the argv builder and applies to both isolations by construction.
 
 ## Per-project defaults (`[tool.bro]`)
 
@@ -423,8 +411,8 @@ Boxed isolation is the default, and `--boxed` spells it explicitly.
 `--unboxed` runs the same clone directly on the launcher's filesystem.
 Whatever the isolation and harness, the outer:
 
-- validates policy once — a harness flag's constraints are an argv check in its `parse_options` (claude's `--raw` × `--unboxed` gate lives there), and the harness's auth precondition (`preflight_auth`:
-  the `anthropic` key under `--raw`, the `claude_code` setup-token for a full mode;
+- validates policy once — the harness's auth precondition (`preflight_auth`:
+  the `claude_code` setup-token for a Claude session;
   the bro harness preflights nothing — its LLM key rides the scoped store) is a launch preflight, so `ride resume` is gated like the launch that created the session.
   Neither runs in `do-ride`, whose parser has no outer machinery flags and therefore no placement policy to revalidate;
 - resolves and flock-holds one frozen runtime bundle for the root's full lifetime, or validates the materialized layout named by `--runtime-bundle` after re-executing its `ride`;
@@ -615,11 +603,12 @@ Instead, the launch provisions a container-private `.claude.json` in the workspa
   — `ride` aborts asking you to log in on the launcher first.
   Subsequent sessions keep whatever the container last wrote.
   Stops per-project mutations (mcpServers, allowedTools, hasTrustDialogAccepted) from being usable to escalate into the next unboxed session.
-- **Session auth (`CLAUDE_CODE_OAUTH_TOKEN`)** — Full-mode sessions authenticate with this env var, which the **required** `claude_code` secret (a `claude setup-token` long-lived token) exports via its registry install hook.
+- **Session auth (`CLAUDE_CODE_OAUTH_TOKEN`)** — Claude sessions authenticate with this env var, which the **required** `claude_code` secret (a `claude setup-token` long-lived token) exports via its registry install hook.
   Claude Code reads it above any credentials file, and one stable bearer is shared by every session
   — so no OAuth credentials file is mounted or synced, and none of the cross-session refresh-token rotation that forced the periodic `/login`.
   Being required, a missing token fails loudly on the launcher at scoped-store hydration, before the container starts (not as a turn-1 401 inside it).
-  `--raw`/bro-run containers run `claude --bare` against the `anthropic` api key and request the token only on the full-mode path.
+  Bro-run containers request no token;
+  only the Claude path does.
   Unboxed sessions get the same var injected into the claude subprocess env directly (`ride.claude.claude_auth.apply_claude_auth`, applied idempotently by both the outer unboxed launch and the `do-ride` session executable next to claude),
   and the token is equally required there:
   the launch aborts up front when the secret doesn't resolve, since the session's private config dir carries no OAuth file to fall back on (see "Unboxed Claude-state isolation").
@@ -687,8 +676,7 @@ Unboxed scoping is still a convenience rather than a security boundary, because 
   Direct `bro run` and `bro chat` use ambient credentials and do not call this layer.
 - **Per-recipe sets.**
   Harness implementations own `ScopeRecipe` values and pass them to the shared scope computation.
-  Claude full uses the persona's claude-harness manifest plus `claude_code`;
-  Claude raw uses the bro's full manifest plus `anthropic`;
+  Claude uses the persona's claude-harness manifest plus `claude_code`;
   the bro harness uses the full manifest plus the resolved LLM recipe's key.
   Each surface includes the bro's matching optional tier.
 - **Launch overrides.**
@@ -819,7 +807,7 @@ The root launch's `--env` additions are the one input every started child and jo
 An explicit request grant is bounded by the corresponding credential, target, or permit the summoner holds.
 It runs under the harness the request names, or the launch's `[tool.bro] summon-harness` when it names none.
 Both harnesses run `do-ride solo …`:
-`bro` spawns the target's own LLM process there, while `claude` starts a one-shot managed Claude Code session of the target persona in full mode.
+`bro` spawns the target's own LLM process there, while `claude` starts a one-shot managed Claude Code session of the target persona.
 The request’s `party` field accepts `start` or `join`, and a start’s optional `isolation` is `boxed` or `unboxed`.
 The CLI spells those choices as `--start`, `--join`, `--boxed`, and `--unboxed`.
 An unmarked request starts boxed when the summoner holds `:bro.party.start.boxed`, otherwise unboxed when it holds `:bro.party.start.unboxed`, and otherwise fails naming the permits held;
@@ -896,19 +884,19 @@ underneath it are two client surfaces over the same request, each split into the
   In a claude session, long summons run via the harness's background Bash;
   `rewind show <trail-id>` peeks mid-run.
   Contract details in `bro/summon.py`, `bro/mission.py`, and `bro/quest.py`.
-- the bro service tools (`bro::summon`, then `bro::quest_check` / `quest_history` / `quest_say` / `quest_ask` / `quest_list` / `quest_cancel` on the `quest_id` it returns), for bro LLM processes and `--raw` sessions.
-  On the bare wire, `summon` returns the accepted state after host acceptance and has no `detach` parameter;
+- the bro service tools (`bro::summon`, then `bro::quest_check` / `quest_history` / `quest_say` / `quest_ask` / `quest_list` / `quest_cancel` on the `quest_id` it returns), for bro LLM processes, and mounted beside the CLIs in a claude session.
+  On the bro harness, `summon` returns the accepted state after host acceptance and has no `detach` parameter;
   answers, questions, replies, refusals, and terminal states arrive through `quest watch`.
   `quest_say` sends and returns, `quest_ask` mints a question id whose reply arrives through the watch;
   `quest_check` and `quest_history` are one non-blocking journal read each;
   and `quest_cancel` returns once the host accepts the cancellation, with the terminal following on the watch.
-  `quest_list` is the same paginated journal listing on both wires.
-  On the MCP wire, the blocking service tools retain their polling controls:
+  `quest_list` is the same paginated journal listing on both harnesses.
+  On the claude harness, the blocking service tools retain their polling controls:
   `summon` blocks unless `detach: true`, `quest_ask` may wait for the reply, `quest_check(wait=true)` long-polls to the end or a child question, `quest_history(wait=true)` to the next message, and `quest_cancel` may wait for the terminal.
   Each MCP blocking call owns its channel client so cancellation aborts the current short wait, while the host journal retains the outcome and chat;
   its transport cautions keep waits under the harness cap and recover by id instead of sending twice.
 
-A claude-harness child is scoped through the claude-full recipe
+A claude-harness child is scoped through the claude recipe
 — `claude_code` required, no LLM key
 — and the seam's auth preflight runs in the lowering, so an unresolvable setup token fails the spawn with the preflight's remedy as the correlated launch failure.
 Its lifecycle comes from the `do-ride` session executable rather than `bro.native.runner.Runner.run`:
@@ -1105,18 +1093,10 @@ The bro harness's runner resolves a resume's trail from the session's current-tr
 
 ### The claude argv
 
-One builder for both flavors (`ride/ride/claude/claude_argv.py:build_claude_launch`):
-the merged `--settings` (fastMode, the statusLine and the attribution opt-out, plus under `--raw` the apiKeyHelper) is built once,
-as are the forwarded claude args, prompt seeding, and the `--model` / `--effort` / fastMode it reads off the session's claude-code recipe;
-only the flavor forks:
-
-- **full mode** — the full harness plus the ride-injected `--append-system-prompt` (see "Auto-injected system prompt"), `--dangerously-skip-permissions` under every `--hold` level but guided,
-  the `--mcp-config` mounting the persona's namespaces from the session-local server below, and `--disallowed-tools mcp__claude_ai_*` to keep account-level claude.ai MCP integrations out of the managed session.
-- **raw** — `--bare --strict-mcp-config --tools ''`:
-  no project/user CLAUDE.md, no host MCP servers, no built-in tools, and only the bro's MCP namespaces allowed (`--allowed-tools mcp__<ns>__*`),
-  with the bro's `claude_system_prompt` plus the hold fragment (see "Auto-injected system prompt") as `--system-prompt`.
-  Auth is the `anthropic` secret, read by `ride.claude.print_anthropic_key` and wired as `apiKeyHelper` in the merged `--settings`
-  — a helper avoids the "Detected a custom API key" prompt that `ANTHROPIC_API_KEY` would trigger every session, and flag-level `--settings` (flagSettings, not project/local) means claude executes it without a workspace trust gate.
+The builder (`ride/ride/claude/claude_argv.py:build_claude_launch`) assembles the merged `--settings` (fastMode, the statusLine and the attribution opt-out),
+the forwarded claude args, prompt seeding, the `--model` / `--effort` / fastMode it reads off the session's claude-code recipe,
+the ride-injected `--append-system-prompt` (see "Auto-injected system prompt"), `--dangerously-skip-permissions` under every `--hold` level but guided,
+the `--mcp-config` mounting the persona's namespaces from the session-local server below, and `--disallowed-tools mcp__claude_ai_*` to keep account-level claude.ai MCP integrations out of the managed session.
 
 The statusLine is ride's, not the operated project's.
 The runner starts one session-local projector process from its frozen runtime;
@@ -1137,71 +1117,57 @@ the framework carries commit attribution of its own, and the same flagSettings r
 ### Session-local MCP serving
 
 Every session gets its MCP tools from a session-local HTTP server the runner owns
-— one mechanism for both execution modes and both flavors, dying with the session.
-The runner starts the PATH-selected `mcp-server <spec> --http` (`bro:<name>` for `--raw`,
-`persona:<name>` for a full mode) on an OS-assigned port (a fixed port would collide between concurrent sessions sharing a netns) with a per-session bearer token.
+— one mechanism for both execution modes, dying with the session.
+The runner starts the PATH-selected `mcp-server persona:<name> --http` on an OS-assigned port (a fixed port would collide between concurrent sessions sharing a netns) with a per-session bearer token.
 `mcp-server --http --port 0 --port-file <path>` binds the socket *before* its heavy imports and publishes the real port through the port file, which the runner polls (milliseconds) before building the `--mcp-config` and launching claude;
 a claude connect that lands mid-import sits in the TCP backlog until uvicorn accepts on the pre-bound socket.
 The server is terminated when claude exits;
 a SIGKILLed runner orphans it.
 Its output lands in a `ride-mcp-*` temp dir alongside the port file.
 
-`bro-ride` contributes both target prefixes through `bro.mcp.targets`;
-the core `mcp-server` discovers the matching resolver without knowing either target.
-`ride.claude.assembly` resolves `bro:<name>` through `bro_servers()`
-— `BaseBro.assemble(harness='bro', wire='mcp', ...)`, yielding declared servers and data sources, the `spell` server, and the bro service server with its `bro::skill` loader
-— while `persona:<name>` resolves through `persona_servers()` and `assemble(harness='claude', wire='mcp', ...)`, yielding only the additions that hold on the Claude harness (an entry gated `harness == 'bro'`, like the dev toolset, never mounts:
-Claude's built-ins cover it), plus the `spell` and bro service servers.
-`bro::cast` joins the service server on either surface when the bro has spells and OpenAI resolves.
+`bro-ride` contributes the `persona:` target prefix through `bro.mcp.targets`;
+the core `mcp-server` discovers the matching resolver without knowing the target.
+`ride.claude.assembly` resolves `persona:<name>` through `persona_servers()`
+— `BaseBro.assemble(harness='claude', ...)`, yielding only the additions that hold on the Claude harness, plus the `spell` and bro service servers;
+an entry gated `harness == 'bro'`, like the dev toolset, never mounts, since Claude's built-ins cover it.
+`bro::cast` joins the service server when the bro has spells and OpenAI resolves.
 Selected `block(...)` layers join `--disallowed-tools`, removing the named Claude-native tools;
-raw sessions already pass `--tools ''`, and selecting a block for their `bro` harness is a declaration error.
+selecting a block for the `bro` harness is a declaration error.
 Persona sessions rely on Claude's native third-party skill mechanism instead of mounting `bro::skill` or generated spell adapters.
-Both assemblies also mount the `raise` service tool when the session is unattended (`BRO_HOLD=unattended` + `RIDE_RUNNER_PID` in the server's inherited environment — see "Forwarded env vars"),
+The assembly also mounts the `raise` service tool when the session is unattended (`BRO_HOLD=unattended` + `RIDE_RUNNER_PID` in the server's inherited environment — see "Forwarded env vars"),
 in its terminate-the-session flavor (semantics in `bro/AGENTS.md`, "Service tools");
 every other level gets no `raise`
 — a human exists to report to.
-Either way there is one streamable-HTTP endpoint per tool namespace;
+There is one streamable-HTTP endpoint per tool namespace;
 the argv builder mounts each endpoint under its namespace as the claude server key, so tools surface as `mcp__<namespace>__<tool>`
 — `/tasks` → `mcp__tasks__list_tasks`, `/bro` → `mcp__bro__banner`, `/<name>-source` → `mcp__<name>-source__<tool>` (e.g. `mcp__current-time-source__get_time`)
-— matching the `bro/prompts/tool_names.md` convention
-— which is why a `--raw` session's `--system-prompt` is the bro's `claude_system_prompt`, the composition that carries that file as its tool-name rule rather than the bro-native `ns__tool` block.
+— matching the `bro/prompts/tool_names.md` convention.
 Every server entry in a ride-generated `--mcp-config` carries `alwaysLoad: true`:
 a headless (`-p`) run then holds its first request until the server is connected, but an interactive session's argv-seeded first prompt does not wait
-— claude's MCP connects stay async, so that first turn can reach the model with no tools attached.
-The mitigation for that window is layered twice
-— `--tools ''` leaves the raw flavor no built-ins, ToolSearch, or harness still-connecting reminder to bridge a toolless first turn:
-the grounding fragment (`bro/prompts/grounding.md`) closes the composed system prompt, pre-explaining that a missing tool may still be loading and instructing the model to say so and end the turn rather than improvise;
-and the argv builder prepends a `[launch note: …]` line to the flavor's seeded first prompt (`ride/ride/claude/claude_argv.py`), delivering the same warning inside the racing turn itself
-— next to the request
-— where a static system-prompt rule alone measurably loses to concrete-argument pressure.
-The runner also polls the server's `/health` until ready *before* launching claude, so the configured bro and tool graph's potentially heavy imports is paid off claude's critical path instead of inside that startup block and its connect timeout;
+— claude's MCP connects stay async, so that first turn can reach the model with no tools attached, bridged by Claude's own still-connecting reminder and ToolSearch.
+The runner polls the server's `/health` until ready *before* launching claude, so the configured bro and tool graph's potentially heavy imports is paid off claude's critical path instead of inside that startup block and its connect timeout;
 the runner's own argv build overlaps the server's import, so much of the wait is already paid when the gate is reached.
 
-In boxed isolation the server runs inside the container, so the scoped credential store carries the served tools' own secrets (for a full mode, the persona's claude-harness manifest)
+In boxed isolation the server runs inside the container, so the scoped credential store carries the served tools' own secrets (the persona's claude-harness manifest)
 — no deployed-server token is involved.
 
 ### Bro spells and skills
 
-A bro's spells (the files its `spells` declaration names, `bro/reference/extending.md`, "Declaring a bro") are canonical `spell::<name>` tools in both session flavors;
-`bro::cast` joins the service server when OpenAI resolves, and the Spells contract routes `[[…]]` markers to it where it is mounted and to the spell's own tool otherwise:
-
-- a **full mode** gets the Spells contract through its append prompt and keeps Claude's native third-party skill discovery.
-  Bro spells are not copied into `.claude/skills/` and have no slash-command aliases;
-- a **`--raw` session** gets the Spells contract through the bro's composed system prompt.
-  Because `--bare` has no Claude skill discovery, the bro service server also exposes `bro::skill(name)` and the prompt maps third-party `/<name>` requests to it.
-  An empty body means the requested skill is unavailable.
+A bro's spells (the files its `spells` declaration names, `bro/reference/extending.md`, "Declaring a bro") are canonical `spell::<name>` tools;
+`bro::cast` joins the service server when OpenAI resolves, and the Spells contract routes `[[…]]` markers to it where it is mounted and to the spell's own tool otherwise.
+A session gets the Spells contract through its append prompt and keeps Claude's native third-party skill discovery;
+bro spells are not copied into `.claude/skills/` and have no slash-command aliases.
 
 
 ## Auto-injected system prompt
 
-For every non-raw `ride along` session (regardless of mode), `ride/ride/claude/system_prompt.py:session_append_prompt` builds the `--append-system-prompt` text:
+For every `ride solo|along` session, `ride/ride/claude/system_prompt.py:session_append_prompt` builds the `--append-system-prompt` text:
 the base prompts from `bro/prompts/shared/*` and the top-level reference docs the loader registers (see `bro/prompts/AGENTS.md` for the inventory), plus the session bro's own persona prompts (`BaseBro.persona` — the selected bro),
-so a full mode carries the bro's policies without running under `--raw`.
+so the session carries the bro's policies under Claude's own harness.
 `shared/` is also injected into every bro;
-the top-level reference docs are Claude-Code-specific and are **not** injected when `--raw` is used (the raw flavor runs `--bare` with its own `--system-prompt`)
-— except `tool_names.md`, which reaches `--raw` sessions through the bro's `claude_system_prompt` composition (`bro/AGENTS.md`, "Prompt flavors").
+the top-level reference docs are Claude-Code-specific and reach no other harness.
 
-Both flavors also carry the hold fragment, rendered at launch by `bro.prompts.hold_fragment` from the session's `--hold` level (the level files live in `bro/prompts/holds/` — see `bro/prompts/AGENTS.md`, "Hold text"),
+The session also carries the hold fragment, rendered at launch by `bro.prompts.hold_fragment` from the session's `--hold` level (the level files live in `bro/prompts/holds/` — see `bro/prompts/AGENTS.md`, "Hold text"),
 so a session is told its hold up front rather than detecting it at runtime.
 Bro-native runs compose the same level files through `bro/bro.py:BaseBro.system_prompt_for`, from the hold their own launch surface picks (`bro/launch/AGENTS.md`, "Display and holds").
 
@@ -1346,8 +1312,6 @@ Wrappers and session daemons rely on a small set of env vars:
 
 The Claude runner under `do-ride` starts a `ride.claude.trail-recorder` daemon (via `ride/ride/claude/recorder.py`) before launching Claude and stops it after Claude exits
 — the stop is the recorder's final append and trail end.
-One mechanism for every session flavor, deliberately not a Claude Code hook:
-`--raw` sessions run `claude --bare` (minimal mode), which runs no hooks at all.
 The daemon records continuously through the backend the session's own `trails` credential selects, and to the local filesystem where the session has none
 — the scoped baseline hydrates that credential best-effort, so a session records either way unless `--no-trails` turned recording off, in which case the runner starts no daemon.
 For local storage, the launch description binds the host's `<runtime-root>/trails` at `/var/ride/trails` inside the container, so the trail survives container removal and is visible to host-side `rewind` while the session runs.

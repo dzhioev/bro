@@ -671,8 +671,8 @@ class TestForkLinkage:
     from bro.prompts import hold_fragment
 
     known_credentials = credentials.known_names()
-    unattended = hold_fragment('unattended', harness='bro', wire='bare', creds=known_credentials)
-    attended = hold_fragment('attended', harness='bro', wire='bare', creds=known_credentials)
+    unattended = hold_fragment('unattended', harness='bro', creds=known_credentials)
+    attended = hold_fragment('attended', harness='bro', creds=known_credentials)
     recorded = _simple_trail(hold='unattended')
     trail = RecordedTrail(
       header=recorded.header,

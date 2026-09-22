@@ -160,7 +160,7 @@ def resolve_native(base: 'NativeLLMSpec', selection: 'LLMSelection') -> 'NativeL
   if not isinstance(spec, NativeLLMSpec):
     raise LLMSelectionError(
       f'{spec.TYPE} runs its own agent loop, so a bro cannot be launched against it here; '
-      f'run the bro under that harness with `ride solo|along --harness claude --raw --llm {selection.format()}`'
+      f'run the bro under that harness with `ride solo|along --harness claude --llm {selection.format()}`'
     )
   return spec
 

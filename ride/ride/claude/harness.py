@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Optional
 
@@ -6,7 +5,7 @@ from bro.base import credentials
 from bro.llm.llms.claude_code import LLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import CLAUDE_CONFIG_DIR_ENV
-from ride.claude.claude_auth import apply_claude_auth, load_anthropic_key
+from ride.claude.claude_auth import apply_claude_auth
 from ride.claude.claude_config import (
   container_claude_state,
   container_member_claude_state,
@@ -17,48 +16,20 @@ from ride.claude.claude_config import (
 )
 from ride.harness import ContainerExtras
 from ride.scope import ScopeRecipe
-from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
-  from bro.base.args import Parser
   from ride.do_ride import SessionRun
   from ride.session import SessionSpec
 
 
-_FULL_SCOPE = ScopeRecipe(
-  name='claude-full',
+_SCOPE = ScopeRecipe(
+  name='claude',
   harness='claude',
   auth_secret='claude_code',
   llm_key=False,
 )
-_RAW_SCOPE = ScopeRecipe(
-  name='claude-raw',
-  harness='bro',
-  auth_secret='anthropic',
-  llm_key=False,
-)
-
-
-@dataclass(frozen=True)
-class ClaudeOptions:
-  raw: bool
-
-  def dump(self) -> dict:
-    return {'raw': self.raw}
-
-  @classmethod
-  def load(cls, data: dict) -> 'ClaudeOptions':
-    if data.keys() != {'raw'}:
-      raise ValueError(f'unexpected claude option fields: {sorted(data.keys())}')
-    if not isinstance(data['raw'], bool):
-      raise TypeError('invalid claude harness options')
-    return cls(raw=data['raw'])
-
-
-def options(spec: 'SessionSpec | SessionRun') -> ClaudeOptions:
-  return ClaudeOptions.load(spec.harness_options)
 
 
 def llm_spec(spec: 'SessionSpec | SessionRun') -> LLMSpec:
@@ -71,25 +42,8 @@ def llm_spec(spec: 'SessionSpec | SessionRun') -> LLMSpec:
 class ClaudeHarness:
   name = 'claude'
 
-  def add_flags(self, parser: 'Parser') -> tuple[str, ...]:
-    parser.add_argument(
-      '--raw',
-      action='store_true',
-      help="run bare Claude under the bro's prompt and MCP toolset; container only, requires `anthropic`",
-    )
-    return ('raw',)
-
-  def parse_options(self, args: dict, *, solo: bool, isolation: Isolation) -> dict:
-    del solo
-    if args['raw'] and isolation is Isolation.UNBOXED:
-      raise ValueError('--raw cannot be combined with --unboxed')
-    return ClaudeOptions(raw=args['raw']).dump()
-
-  def default_options(self) -> dict:
-    return ClaudeOptions(raw=False).dump()
-
-  def scope_recipe(self, options: dict) -> ScopeRecipe:
-    return _RAW_SCOPE if ClaudeOptions.load(options).raw else _FULL_SCOPE
+  def scope_recipe(self) -> ScopeRecipe:
+    return _SCOPE
 
   def resolve_llm(self, value: str | None, bro_name: str) -> LLMSpec:
     del bro_name
@@ -105,13 +59,7 @@ class ClaudeHarness:
     return resolved
 
   def preflight_auth(self, spec: 'SessionSpec') -> Optional[str]:
-    if options(spec).raw:
-      if load_anthropic_key() is not None:
-        return None
-      return (
-        '--raw requires the `anthropic` secret to provide an api_key '
-        '({"api_key": "..."}); claude --bare does not use OAuth or keychain'
-      )
+    del spec
     if credentials.try_get('claude_code') is not None:
       return None
     material_path = credentials.default_store().material_path('claude_code')
@@ -120,16 +68,10 @@ class ClaudeHarness:
       f'setup-token; mint one with `claude setup-token` and store it at {material_path}'
     )
 
-  def session_flags(self, spec: 'SessionSpec') -> tuple[str, ...]:
-    return ('--raw',) if options(spec).raw else ()
-
   def run_session(self, spec: 'SessionRun') -> int:
     from ride.claude.runner import run_session
 
     return run_session(spec)
-
-  def command_options(self, spec: 'SessionSpec') -> list[str]:
-    return ['--raw'] if options(spec).raw else []
 
   def session_exists(self, workspace: Workspace) -> bool:
     return latest_jsonl(workspace_projects_dir(workspace)) is not None

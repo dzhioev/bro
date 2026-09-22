@@ -43,8 +43,7 @@ def _server_entry(url: str, token: str) -> dict:
   """one server entry of a claude `--mcp-config`. `alwaysLoad` holds a headless
   (`-p`) run's first request until the server is connected; an interactive
   session's argv-seeded first prompt does not wait on it — MCP connects stay
-  async, so that first turn can reach the model with no tools attached (the bare
-  flavor's first-turn launch note in `ride/ride/claude/claude_argv.py` covers that window)."""
+  async, so that first turn can reach the model with no tools attached."""
   return {
     'type': 'http',
     'url': url,

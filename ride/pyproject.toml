@@ -26,7 +26,6 @@ dependencies = [
 "ride" = "ride._entrypoints:ride_cli"
 "ride.ask" = "ride._entrypoints:ride_ask"
 "ride.call" = "ride._entrypoints:ride_call"
-"ride.claude.print-anthropic-key" = "ride._entrypoints:ride_claude_print_anthropic_key"
 "ride.claude.statusline" = "ride._entrypoints:ride_claude_statusline"
 "ride.claude.stop-guard" = "ride._entrypoints:ride_claude_stop_guard"
 "ride.claude.trail-recorder" = "ride._entrypoints:ride_claude_trail_recorder"
@@ -43,7 +42,6 @@ dependencies = [
 bro = "ride.bro_worker:BroType"
 
 [project.entry-points."bro.mcp.targets"]
-bro = "ride.claude.assembly:resolve_bro_target"
 persona = "ride.claude.assembly:resolve_persona_target"
 
 [tool.uv.sources]

@@ -112,23 +112,20 @@ A subpackage with a map of its own is pointed at, not described here.
 How to declare a bro is `bro/reference/extending.md`;
 this section is what `BaseBro` renders, mounts, and counts when one runs.
 
-### Prompt flavors
+### Prompt composition
 
-`BaseBro.__init__` keeps the MRO-concatenated class prompts as `persona`, under a `# Persona: <name>` heading, and composes two full flavors around it:
+`BaseBro.__init__` keeps the MRO-concatenated class prompts as `persona`, under a `# Persona: <name>` heading, and composes the bro-native `system_prompt` around it:
 every `bro/prompts/shared/*.md` first, then the persona, the tool-name rule (`bro/prompts/tool_names.md`), a `## Data sources` block describing each declared `DataSource`,
-the `## Spells` contract when the bro has spells, the `## Skills` block mapping `/<name>` requests to `bro::skill`,
-and last the grounding fragment (`bro/prompts/grounding.md`), whose own directives render it only for the claude-bare surface.
-Each flavor renders once with its surface facts (`bro.mcp.render_text`: harness `bro`, the flavor's wire, the environment's credentials and summon allow-list, the `#features` vocabulary), and the wire is where they diverge:
-`system_prompt` renders `bare`, the wire of bro-native LLM runs;
-`claude_system_prompt` renders `mcp`, what `ride solo|along --raw` passes as claude's `--system-prompt`, where each namespace is mounted as an MCP server.
-A managed Claude session runs under neither flavor;
+the `## Spells` contract when the bro has spells, and the `## Skills` block mapping `/<name>` requests to `bro::skill`.
+The composition renders once with its surface facts (`bro.mcp.render_text`: harness `bro`, the environment's credentials and summon allow-list, the `#features` vocabulary).
+A managed Claude session runs under a prompt of its own;
 its append prompt injects `persona` beside the shared prompts (`bro/reference/ride.md`, "Auto-injected system prompt").
 `system_prompt_for(hold=…)` is the text a bro-native run starts under:
-the `bare` flavor plus the session fragments and the hold text (`bro/prompts/AGENTS.md`, "Session fragments").
+the composed prompt plus the session fragments and the hold text (`bro/prompts/AGENTS.md`, "Session fragments").
 
 ### Service tools
 
-Every assembly (`assemble(harness, wire, …)`) appends the `bro` service server;
+Every assembly (`assemble(harness, …)`) appends the `bro` service server;
 `_build_service_server` decides its roster from the surface and the process environment:
 
 - `banner`, always:
@@ -137,31 +134,29 @@ Every assembly (`assemble(harness, wire, …)`) appends the `bro` service server
 - `raise`, at the unattended hold alone
   — `Runner.run()`'s default, `bro run`, summoned children, and the Claude builds when `do-ride` exports `BRO_HOLD=unattended` with `RIDE_RUNNER_PID`:
   the agent aborts with a reason when the request cannot be fulfilled.
-  The bare flavor raises `BroRaised(reason)` out of `Runner.run()`;
-  the mcp flavor emits the run's failed result over the broker channel where one exists, then terminates the session through `bro.workspace.session.terminate_session` with `RAISE_EXIT_STATUS` as its status,
+  On the bro harness it raises `BroRaised(reason)` out of `Runner.run()`;
+  on the claude harness it emits the run's failed result over the broker channel where one exists, then terminates the session through `bro.workspace.session.terminate_session` with `RAISE_EXIT_STATUS` as its status,
   since no exception can abort the consuming claude session.
   Every other hold mounts no `raise`;
   its hold text tells the agent how to involve the human instead.
-- `answer`, `raise`'s twin for a summoned run's clean end, mounted when the run is summoned (`RIDE_SUMMONED`) with broker intent, and on the mcp wire only where `RIDE_RUNNER_PID` makes the session killable:
-  bare raises `AnswerDelivered`, which the runner or chat surface turns into the run's ok result;
-  mcp emits that result over the channel then terminates the session, and unlike `raise` an undeliverable answer errors back to the agent.
+- `answer`, `raise`'s twin for a summoned run's clean end, mounted when the run is summoned (`RIDE_SUMMONED`) with broker intent, and on the claude harness only where `RIDE_RUNNER_PID` makes the session killable:
+  the bro harness raises `AnswerDelivered`, which the runner or chat surface turns into the run's ok result;
+  the claude harness emits that result over the channel then terminates the session, and unlike `raise` an undeliverable answer errors back to the agent.
 - `cast` when the bro has spells and its key resolves, and `skill` on the harnesses without a native skill loader (`bro/reference/ride.md`, "Bro spells and skills").
 - the job tools of a declared `shell` roster, on the bro harness alone
-  — `job`, `poll`, `kill`, and `jobs` on both wires, `chill` on bare;
+  — `job`, `poll`, `kill`, `jobs`, and `chill`, over the run's registry and inbox;
   with no `shell` declared, automatic `quest watch` admission mounts the same tools narrowed to that command.
-  Bare tools use the run's registry and inbox;
-  the MCP service server owns and closes its registry, offers only foreground and background jobs, and has no notification wake.
 - `summon` and the quest verbs (`quest_check`, `quest_history`, `quest_say`, `quest_ask`, `quest_list`, `quest_cancel`) when the process has broker intent (`BROKER_CHANNEL`, or `BROKER_UPSTREAM` left by a failed proxy launch),
   forwarding to `bro.summon` and `bro.quest` off-loop.
 
-The wires differ in waiting.
-The bare shapes return at once
+The harnesses differ in waiting.
+The bro-harness shapes return at once
 — `summon` on host acceptance with no `detach`, `quest_ask` with a minted question id, `quest_check` and `quest_history` after one journal read, `quest_cancel` when the host accepts
 — and later transitions arrive through `quest watch`.
-The MCP shapes keep the blocking controls
+The claude-harness shapes keep the blocking controls
 — `summon` waits for an answer or question, `quest_ask` for the reply, `quest_check(wait=true)` to the end or a child question, `quest_history(wait=true)` to the next message, `quest_cancel` to the end
 — each owning a per-call channel client closed on cancellation;
-their descriptions carry the `{{when #wire = mcp}}` transport caution that steers a long run to detach plus polling.
+their descriptions carry the `{{when #harness = claude}}` transport caution that steers a long run to detach plus polling.
 
 ### Credential manifest
 

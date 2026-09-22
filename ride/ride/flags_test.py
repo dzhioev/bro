@@ -34,11 +34,11 @@ class TestForwardedFlags:
     args = vars(parser.parse_args(['--into', 'my-branch']))
     assert ride_flags.extract_forwarded_argv(args) == ['--into', 'my-branch']
 
-  def test_extract_forwarded_argv_round_trips_bro_and_raw(self):
+  def test_extract_forwarded_argv_round_trips_bro(self):
     parser = Parser(add_help=False)
     ride_flags.add_forwarded_flags(parser)
-    args = vars(parser.parse_args(['--bro', 'dev', '--raw']))
-    assert ride_flags.extract_forwarded_argv(args) == ['--bro', 'dev', '--raw']
+    args = vars(parser.parse_args(['--bro', 'dev']))
+    assert ride_flags.extract_forwarded_argv(args) == ['--bro', 'dev']
 
   def test_extract_forwarded_argv_round_trips_harness(self):
     parser = Parser(add_help=False)

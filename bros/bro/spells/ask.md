@@ -138,20 +138,11 @@ Everything after the summon is `quest <verb> <quest-id>`:
 `say` and `ask` to talk,
 `cancel` to end it
 — `quest --help` lists them.
-{{eliff #wire = bare}}
+{{eliff #harness = bro}}
 **Bro-native session:** use `bro::summon` to open the quest and the `bro::quest_*` tools on its id.
 `bro::summon` returns after host acceptance with the quest id;
 later chat and lifecycle transitions arrive through the `quest watch` job the session contract has armed.
 Read the retained answer or failure with `bro::quest_check` when its terminal line arrives, and the conversation with `bro::quest_history`.
-{{else}}
-**Raw MCP session:** use `bro::summon` to open the quest and the `bro::quest_*` tools on its id.
-Call `summon` with `target` and `prompt` (optional `party: start|join`, `isolation`, `timeout`, `into`, `hold`, `grant`, `revoke`, `talk`, `llm`, `harness`).
-It returns a structured accepted, question, or completed state with the quest id;
-failures come back as the tool error with the reason.
-A question state carries `{question: {id, text}}`:
-answer it through `quest_say(quest_id, text, reply_to=id)`, then call `quest_check(quest_id, wait: true)` for the eventual result.
-`detach: true` returns the accepted state after host acceptance and fails immediately on a denial;
-`quest_check(quest_id)` reads the outcome non-blockingly, `quest_check(quest_id, wait: true)` long-polls the same repeatable journal record, and `quest_history(quest_id)` reads the conversation with its open questions marked.
 {{end}}
 
 ## Foreground vs background
@@ -188,7 +179,7 @@ Never restart the summon to answer it.
 `quest watch` arms at the current journal head and prints ordered transitions after it
 — your summons', messages and denials included;
 if retained events have a gap, it reports the loss and re-arms from the current head.
-{{eliff #wire = bare}}
+{{eliff #harness = bro}}
 `bro::summon` is detached by construction:
 note the accepted quest id and keep working while the quest watch carries its chat and lifecycle transitions.
 When nothing else remains, call `bro::chill` and act on the next notification;
@@ -199,15 +190,6 @@ its reply arrives on the watch and remains readable with `bro::quest_history`.
 `quest watch` arms at the current journal head and prints ordered transitions after it
 — your summons', messages and denials included;
 if retained events have a gap, it reports the loss and re-arms from the current head.
-{{else}}
-There is no true backgrounding on the raw MCP surface, but the tools cover the long-run case:
-a blocking `summon` call fits anything conversational (tell the user it may take minutes);
-for a run that would outlast the surface's tool-call patience, `summon(…, detach: true)` returns the quest id,
-and you check on it with `quest_check` between turns
-— non-destructive, so polling is safe
-— or use `wait: true` to long-poll until it reports a question or completion.
-Keep each tool-side wait below the MCP call budget;
-a timed-out call does not end the host-owned quest, so recover it by id and never re-summon.
 {{end}}
 
 ## Manual summon — a child the user launches
@@ -250,7 +232,7 @@ The prompt you passed becomes the session's first message;
 the child bases on this workspace's HEAD *at the moment they launch* (or the `--into` ref you gave).
 
 Then wait like any detached summon.
-{{iff #wire = bare}}
+{{iff #harness = bro}}
 The quest watch carries the start, chat, and end;
 call `bro::chill` when nothing else remains and read the retained answer with `bro::quest_check` after the terminal line.
 {{eliff #harness = claude}}
@@ -258,9 +240,6 @@ call `bro::chill` when nothing else remains and read the retained answer with `b
 while `quest watch` streams the start/end events.
 There is no timer on a manual summon
 — pace the polling to human time, and keep working meanwhile.
-{{else}}
-Call `bro::quest_check(quest_id=token, wait=true)` with a bound under the MCP call cap;
-repeat after each bound until the user launches and the child ends.
 {{end}}
 The answer arrives through the child's `answer` tool or as the printed reply from a clean one-shot run.
 A child session the user quits without delivering surfaces as a failure;
@@ -298,15 +277,15 @@ If the user asked for a follow-up action on the answer, continue with it.
   a child that died before recording says so, and the reason is all there is.
 - **Interrupted wait / unavailable retained payload**
   — a killed or detached wait remains recoverable by quest id.
-  {{iff #wire = bare}}Read it with `bro::quest_check` when the watch reports its terminal state.{{eliff #harness = claude}}`quest check <quest-id>` polls,
-  and `quest check --wait <quest-id>` waits for the host-retained result.{{else}}Read it with repeatable `bro::quest_check(quest_id, wait=true)` calls bounded under the MCP call cap.{{end}}
+  {{iff #harness = bro}}Read it with `bro::quest_check` when the watch reports its terminal state.{{eliff #harness = claude}}`quest check <quest-id>` polls,
+  and `quest check --wait <quest-id>` waits for the host-retained result.{{end}}
   If retention evicted the payload, the error points at the trail that still carries the run.
 
 ## Do not exit with a summon in flight
 
 When the session's root process exits, in-flight summoned children are killed (an in-flight manual child is only detached — the user's session lives on, but its answer can no longer arrive).
 When a summoned session exits with summons of its own in flight, those end `failed:orphaned` and their children are killed the same way.
-{{iff #wire = bare}}
+{{iff #harness = bro}}
 Before ending the session, return to `bro::chill` until every pending summon ends, then read each retained result with `bro::quest_check`.
 A one-shot turn that ends with a summon in flight gets one notice naming it;
 chill on it, or cancel what is no longer needed, since the next such turn end ends the run.
@@ -314,9 +293,6 @@ chill on it, or cancel what is no longer needed, since the next such turn end en
 Before ending the session (or letting it end), wait for pending summons with `quest check --wait`.
 A one-shot session holds while the quest watch is armed and re-invokes you on its events, so ending the turn under the watch is a wait;
 once every summon has ended, stop the watch with `TaskStop` before the final turn ends.
-{{else}}
-Before ending the session, wait for every pending summon with bounded `bro::quest_check(wait=true)` calls.
-A one-shot turn that ends with a summon in flight gets one notice to wait for or cancel it first.
 {{end}}
 If a result was lost this way it is still recoverable from the child's trail.
 
@@ -324,16 +300,13 @@ If a result was lost this way it is still recoverable from the child's trail.
 
 Cancelling a child quest ends it `failed:cancelled`, whatever it summoned in turn ends `failed:orphaned`, a spawned child is killed, and a manual child is only detached
 — its user-owned session lives on, no longer answering the quest.
-{{iff #wire = bare}}
+{{iff #harness = bro}}
 Call `bro::quest_cancel(quest_id)`;
 it returns when the host accepts the cancellation, and the quest's terminal state arrives through the quest watch.
 Read the retained end with `bro::quest_check`.
 {{eliff #harness = claude}}
 `quest cancel <quest-id>` returns once the quest has ended;
 `--timeout <s>` bounds the wait and exits 3 when it passes first, with the end still on its way.
-{{else}}
-Call `bro::quest_cancel(quest_id, timeout)` with a bound under the MCP call cap;
-it returns the ended state or a pending state at the bound.
 {{end}}
 Only the session that summoned a quest can cancel it, so a grandchild is stopped by cancelling the child that summoned it.
 Ending the ride's root session still stops every in-flight child at once.

@@ -54,27 +54,25 @@ class _NoRun:
   registry = Registry(inbox)
 
 
-def _servers(bro: BaseBro, wire: mcp.Wire) -> list[llm_mcp.MCPServer]:
-  return bro.assemble(harness='bro', wire=wire, include_raise=True, live_run=_NoRun())
+def _servers(bro: BaseBro) -> list[llm_mcp.MCPServer]:
+  return bro.assemble(harness='bro', include_raise=True, live_run=_NoRun())
 
 
 def _persona_servers(bro: BaseBro) -> list[llm_mcp.MCPServer]:
-  return bro.assemble(harness='claude', wire='mcp', include_raise=True)
+  return bro.assemble(harness='claude', include_raise=True)
 
 
-def _spell_server(bro: BaseBro, *, wire: mcp.Wire = 'bare') -> llm_mcp.MCPServer:
-  return next(server for server in _servers(bro, wire) if server.namespace == NAMESPACE)
+def _spell_server(bro: BaseBro) -> llm_mcp.MCPServer:
+  return next(server for server in _servers(bro) if server.namespace == NAMESPACE)
 
 
 def _service_server(
-  bro: BaseBro, *, wire: mcp.Wire = 'bare', include_raise: bool = True
+  bro: BaseBro, *, harness: mcp.Harness = 'bro', include_raise: bool = True
 ) -> llm_mcp.MCPServer:
   # built on its own rather than picked out of a full assembly: these tests read
   # service tools only, and materializing a bro's declared servers would demand
   # the credentials they hold.
-  return bro_module._build_service_server(
-    bro, include_raise=include_raise, harness='bro', wire=wire
-  )
+  return bro_module._build_service_server(bro, include_raise=include_raise, harness=harness)
 
 
 class TestSpellDeclaration:
@@ -107,7 +105,7 @@ class TestSpellDeclaration:
 
   def test_a_nested_path_names_the_spell_by_its_stem(self, fake_packages):
     package = fake_packages('_spell_nested', {'review/pr': _spell(body='nested')})
-    assert package.bro_class()().get_spell_body('pr', harness='bro', wire='bare') == 'nested'
+    assert package.bro_class()().get_spell_body('pr', harness='bro') == 'nested'
 
   @pytest.mark.parametrize(
     ('entry', 'match'),
@@ -153,12 +151,12 @@ class TestSpellStore:
     bro = package.bro_class()()
 
     assert bro.spell_descriptions() == [('do-work', 'First sentence. Full detail follows.')]
-    assert bro.get_spell_body('do-work', harness='bro', wire='bare') == '# Procedure\n\nwork'
+    assert bro.get_spell_body('do-work', harness='bro') == '# Procedure\n\nwork'
 
   def test_unknown_spell_names_available_spells(self, fake_packages):
     package = fake_packages('_spell_unknown', {'known': _spell()})
     with pytest.raises(KeyError, match='available: known'):
-      package.bro_class()().get_spell_body('missing', harness='bro', wire='bare')
+      package.bro_class()().get_spell_body('missing', harness='bro')
 
   def test_checked_in_spells_render_for_every_surface(self):
     spell_files = sorted((Path(spell_store.__file__).parent.parent / 'bros').glob('*/spells/*.md'))
@@ -169,24 +167,13 @@ class TestSpellStore:
     for path in spell_files:
       spell = load_spell(path.stem, path)
       for harness in get_args(mcp.Harness):
-        for wire in get_args(mcp.Wire):
-          for enabled in (True, False):
-            mcp.render_text(
-              spell.body,
-              harness=harness,
-              wire=wire,
-              creds=spell_store.credentials.known_names(),
-              extra={'features': SetVariable(lambda name, on=enabled: on, universe=feature_names)},
-            )
-
-  def test_raw_ask_names_only_tool_client_summon_controls(self):
-    path = Path(spell_store.__file__).parent.parent / 'bros/bro/spells/ask.md'
-    body = mcp.render_text(load_spell('ask', path).body, harness='bro', wire='mcp')
-
-    assert '`bro::quest_check' in body
-    assert '`quest watch`' not in body
-    assert '`quest check' not in body
-    assert '`quest cancel' not in body
+        for enabled in (True, False):
+          mcp.render_text(
+            spell.body,
+            harness=harness,
+            creds=spell_store.credentials.known_names(),
+            extra={'features': SetVariable(lambda name, on=enabled: on, universe=feature_names)},
+          )
 
   def test_spell_body_renders_against_the_bro_features(self, fake_packages, monkeypatch):
     package = fake_packages(
@@ -200,9 +187,9 @@ class TestSpellStore:
 
     # the probe is live: one instance renders both states as availability moves
     monkeypatch.setattr(spell_store.credentials, 'available', lambda name: name == 'xkey')
-    assert bro.get_spell_body('gated', harness='bro', wire='bare') == 'on-branch'
+    assert bro.get_spell_body('gated', harness='bro') == 'on-branch'
     monkeypatch.setattr(spell_store.credentials, 'available', lambda name: False)
-    assert bro.get_spell_body('gated', harness='bro', wire='bare') == 'off-branch'
+    assert bro.get_spell_body('gated', harness='bro') == 'off-branch'
 
   def test_checked_in_store_has_no_legacy_skill_directories(self):
     skill_directories = list((Path(spell_store.__file__).parent.parent / 'bros').glob('*/skills'))
@@ -248,12 +235,11 @@ class TestSpellValidation:
 
 class TestSpellServer:
   @pytest.mark.asyncio
-  async def test_mounts_on_native_and_both_claude_surfaces(self, fake_packages):
+  async def test_mounts_on_both_harnesses(self, fake_packages):
     package = fake_packages('_spell_mount', {'do-work': _spell()})
     bro = package.bro_class()()
 
-    assert NAMESPACE in {server.namespace for server in _servers(bro, 'bare')}
-    assert NAMESPACE in {server.namespace for server in _servers(bro, 'mcp')}
+    assert NAMESPACE in {server.namespace for server in _servers(bro)}
     assert NAMESPACE in {server.namespace for server in _persona_servers(bro)}
     registry = ToolRegistry([_spell_server(bro)])
     assert {tool.name for tool in await registry.resolve()} == {'spell__do-work'}
@@ -261,8 +247,7 @@ class TestSpellServer:
   def test_empty_store_mounts_no_spell_server(self, fake_packages):
     package = fake_packages('_spell_empty')
     bro = package.bro_class()()
-    assert NAMESPACE not in {server.namespace for server in _servers(bro, 'bare')}
-    assert NAMESPACE not in {server.namespace for server in _servers(bro, 'mcp')}
+    assert NAMESPACE not in {server.namespace for server in _servers(bro)}
     assert NAMESPACE not in {server.namespace for server in _persona_servers(bro)}
 
   def test_declared_server_cannot_claim_reserved_namespace(self, fake_packages):
@@ -279,7 +264,7 @@ class TestSpellServer:
       },
     )
     with pytest.raises(ValueError, match='reserved for bro framework tools'):
-      _servers(bro_class(), 'bare')
+      _servers(bro_class())
 
   @pytest.mark.asyncio
   async def test_skill_loader_is_a_framework_service_tool(self, fake_packages):
@@ -295,16 +280,13 @@ class TestSpellServer:
     package = fake_packages('_skill_loader_empty')
     bro = package.bro_class()()
     native_tools = await _service_server(bro).list_tools()
-    claude_bro_tools = await _service_server(bro, wire='mcp').list_tools()
     persona_tool_names = {
       tool.name for server in _persona_servers(bro) for tool in await server.list_tools()
     }
 
     native_skill = next(tool for tool in native_tools if tool.name == 'skill')
-    assert 'skill' in {tool.name for tool in claude_bro_tools}
     assert 'skill' not in persona_tool_names
     assert '## Skills' in bro.system_prompt
-    assert '## Skills' in bro.claude_system_prompt
     assert native_skill.parameters['required'] == ['name']
     assert await native_skill.call({'name': 'third-party'}) == ''
 
@@ -333,26 +315,22 @@ class TestSpellServer:
 
   @pytest.mark.asyncio
   async def test_renders_body_and_appends_passed_arguments(self, fake_packages):
-    body = (
-      '{{iff #harness = bro}}BRO{{else}}CLAUDE{{end}} {{iff #wire = bare}}BARE{{else}}MCP{{end}}'
-    )
+    body = '{{iff #harness = bro}}BRO{{else}}CLAUDE{{end}}'
     package = fake_packages(
       '_spell_render',
       {'do-work': _spell(body=body, parameters={'task': 'task ref', 'notes?': 'context'})},
     )
     bro = package.bro_class()()
-    bare_tool = (await _spell_server(bro).list_tools())[0]
-    mcp_tool = (await _spell_server(bro, wire='mcp').list_tools())[0]
+    native_tool = (await _spell_server(bro).list_tools())[0]
     persona_server = next(
       server for server in _persona_servers(bro) if server.namespace == NAMESPACE
     )
     persona_tool = (await persona_server.list_tools())[0]
 
-    assert await bare_tool.call({'task': 'T-1'}) == 'BRO BARE\n\n# Arguments\n\ntask: T-1'
-    assert await mcp_tool.call({'task': 'T-2', 'notes': 'urgent'}) == (
-      'BRO MCP\n\n# Arguments\n\ntask: T-2\nnotes: urgent'
+    assert await native_tool.call({'task': 'T-1'}) == 'BRO\n\n# Arguments\n\ntask: T-1'
+    assert await persona_tool.call({'task': 'T-2', 'notes': 'urgent'}) == (
+      'CLAUDE\n\n# Arguments\n\ntask: T-2\nnotes: urgent'
     )
-    assert await persona_tool.call({'task': 'T-3'}) == ('CLAUDE MCP\n\n# Arguments\n\ntask: T-3')
 
   @pytest.mark.asyncio
   async def test_no_arguments_section_when_none_are_declared_or_passed(self, fake_packages):
@@ -394,8 +372,8 @@ class TestSpellServer:
 
 class TestCast:
   @staticmethod
-  async def _tool(bro: BaseBro, *, wire: mcp.Wire = 'bare'):
-    tools = await _service_server(bro, wire=wire).list_tools()
+  async def _tool(bro: BaseBro, *, harness: mcp.Harness = 'bro'):
+    tools = await _service_server(bro, harness=harness).list_tools()
     return next(tool for tool in tools if tool.name == 'cast')
 
   @pytest.mark.asyncio
@@ -414,16 +392,12 @@ class TestCast:
     available_bro = bro_class()
     native_spells = {tool.name for tool in await _spell_server(available_bro).list_tools()}
     native_services = {tool.name for tool in await _service_server(available_bro).list_tools()}
-    claude_services = {
-      tool.name for tool in await _service_server(available_bro, wire='mcp').list_tools()
-    }
     persona_service = next(
       server for server in _persona_servers(available_bro) if server.namespace == 'bro'
     )
     persona_services = {tool.name for tool in await persona_service.list_tools()}
     assert native_spells == {'do-work'}
     assert 'cast' in native_services
-    assert 'cast' in claude_services
     assert 'cast' in persona_services
 
   @pytest.mark.asyncio
@@ -488,7 +462,7 @@ class TestCast:
 
     package = fake_packages(
       '_cast_render',
-      {'do-work': _spell(body='{{iff #wire = bare}}BARE{{else}}MCP{{end}}')},
+      {'do-work': _spell(body='{{iff #harness = bro}}NATIVE{{else}}CLAUDE{{end}}')},
     )
     monkeypatch.setattr(spell_store.credentials, 'available', lambda name: True)
 
@@ -500,10 +474,10 @@ class TestCast:
     monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
     bro = package.bro_class()()
 
-    bare_result = await (await self._tool(bro)).call({'command': 'do the work'})
-    mcp_result = await (await self._tool(bro, wire='mcp')).call({'command': 'do the work'})
-    assert bare_result == 'spell: spell::do-work\n\nBARE'
-    assert mcp_result == 'spell: spell::do-work\n\nMCP'
+    native_result = await (await self._tool(bro)).call({'command': 'do the work'})
+    claude_result = await (await self._tool(bro, harness='claude')).call({'command': 'do the work'})
+    assert native_result == 'spell: spell::do-work\n\nNATIVE'
+    assert claude_result == 'spell: spell::do-work\n\nCLAUDE'
 
   @pytest.mark.asyncio
   async def test_success_with_null_arguments_is_a_call_without_arguments(
@@ -622,10 +596,9 @@ class TestSpellsPrompt:
     monkeypatch.setattr(spell_store.credentials, 'available', lambda name: name == CAST_SECRET)
     bro = package.bro_class()()
 
-    for prompt in (bro.system_prompt, bro.claude_system_prompt):
-      assert '## Spells' in prompt
-      assert '`bro::cast`' in prompt
-      assert 'follow the returned instructions' in prompt
+    assert '## Spells' in bro.system_prompt
+    assert '`bro::cast`' in bro.system_prompt
+    assert 'follow the returned instructions' in bro.system_prompt
 
   def test_section_is_absent_without_spells(self, fake_packages):
     package = fake_packages('_spell_prompt_empty')
@@ -647,8 +620,8 @@ class TestSpellOptionalSecret:
 class TestSpellToolNames:
   def test_tool_name_prompt_uses_the_ordinary_namespace_rule(self):
     text = get_prompt('tool_names.md')
-    bare = mcp.render_text(text, wire='bare')
-    mcp_text = mcp.render_text(text, wire='mcp')
-    assert 'replace `::` with `__` and call that wire name directly' in bare
-    assert 'prepend `mcp__`' in mcp_text
-    assert 'spells `at` on the wire' not in bare
+    native = mcp.render_text(text, harness='bro')
+    claude = mcp.render_text(text, harness='claude')
+    assert 'replace `::` with `__` and call that wire name directly' in native
+    assert 'prepend `mcp__`' in claude
+    assert 'spells `at` on the wire' not in native

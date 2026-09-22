@@ -30,7 +30,7 @@ def test_claude_surface_selects_tracker_and_reference_tools(monkeypatch):
   )
 
   def namespaces() -> set[str]:
-    servers = Dev().assemble(harness='claude', wire='mcp', include_raise=False)
+    servers = Dev().assemble(harness='claude', include_raise=False)
     return {server.namespace for server in servers}
 
   monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
@@ -58,39 +58,37 @@ def test_development_spells_render_for_every_surface():
   for path in _TrackerDev().spell_paths.values():
     spell = load_spell(path.stem, path)
     for harness in get_args(mcp.Harness):
-      for wire in get_args(mcp.Wire):
-        for enabled in (True, False):
-          for granted in (('eyebro',), ()):
-            mcp.render_text(
-              spell.body,
-              harness=harness,
-              wire=wire,
-              creds=spell_store.credentials.known_names(),
-              may_summon=granted,
-              extra={
-                'features': SetVariable(
-                  lambda name, on=enabled: on,
-                  universe=feature_names,
-                )
-              },
-            )
+      for enabled in (True, False):
+        for granted in (('eyebro',), ()):
+          mcp.render_text(
+            spell.body,
+            harness=harness,
+            creds=spell_store.credentials.known_names(),
+            may_summon=granted,
+            extra={
+              'features': SetVariable(
+                lambda name, on=enabled: on,
+                universe=feature_names,
+              )
+            },
+          )
 
 
 def test_review_delegation_renders_only_for_a_granted_eyebro(monkeypatch):
   bro = _TrackerDev()
-  assert 'summon' not in bro.get_spell_body('run-pr', harness='claude', wire='mcp').lower()
-  assert 'eyebro' not in bro.get_spell_body('land', harness='claude', wire='mcp')
+  assert 'summon' not in bro.get_spell_body('run-pr', harness='claude').lower()
+  assert 'eyebro' not in bro.get_spell_body('land', harness='claude')
   monkeypatch.setenv(MAY_SUMMON_ENV, 'eyebro')
-  assert 'eyebro' in bro.get_spell_body('run-pr', harness='claude', wire='mcp')
-  assert 'eyebro' in bro.get_spell_body('land', harness='claude', wire='mcp')
+  assert 'eyebro' in bro.get_spell_body('run-pr', harness='claude')
+  assert 'eyebro' in bro.get_spell_body('land', harness='claude')
 
 
-def test_review_delegation_uses_wire_specific_detachment(monkeypatch):
+def test_review_delegation_detaches_only_on_the_claude_harness(monkeypatch):
   monkeypatch.setenv(MAY_SUMMON_ENV, 'eyebro')
   bro = _TrackerDev()
 
-  bare_body = bro.get_spell_body('run-pr', harness='bro', wire='bare')
-  mcp_body = bro.get_spell_body('run-pr', harness='bro', wire='mcp')
+  native_body = bro.get_spell_body('run-pr', harness='bro')
+  claude_body = bro.get_spell_body('run-pr', harness='claude')
 
-  assert 'with `detach: true`' not in bare_body
-  assert 'with `detach: true`' in mcp_body
+  assert 'with `detach: true`' not in native_body
+  assert 'with `detach: true`' in claude_body

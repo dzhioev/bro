@@ -18,7 +18,6 @@ import bro.mcp as mcp
 import bro.workspace.banner as workspace_banner
 from bro.base import credentials
 from bro.base.condition import ConditionError, iff, when
-from bro.base.liveness_test_helper import Liveness
 from bro.bro import BaseBro, BroRaised, feature
 from bro.broker.environment import BROKER_TALK
 from bro.datasources.file import FileSource
@@ -56,20 +55,18 @@ def _native_servers(
 ) -> list[MCPServer]:
   return bro.assemble(
     harness='bro',
-    wire='bare',
     include_raise=hold == 'unattended',
     live_run=run if run is not None else StubRun(),
   )
 
 
 def _service_server(
-  bro: BaseBro, *, run: Optional[StubRun] = None, wire: mcp.Wire = 'bare'
+  bro: BaseBro, *, run: Optional[StubRun] = None, harness: mcp.Harness = 'bro'
 ) -> MCPServer:
   return bro_module._build_service_server(
     bro,
     include_raise=True,
-    harness='bro',
-    wire=wire,
+    harness=harness,
     live_run=run if run is not None else StubRun(),
   )
 
@@ -265,28 +262,7 @@ class TestToolNamesBlock:
     bro = BareBro()
     assert '# Tool names' in bro.system_prompt
     assert '`namespace__tool`' in bro.system_prompt
-    assert '`mcp__namespace__tool`' in bro.claude_system_prompt
-
-  def test_claude_flavor_teaches_mcp_wire_form(self):
-    class ToolBro(BaseBro):
-      name = 'tooled'
-      description = 'd'
-      tools: ClassVar = [_make_layer('a')]
-
-      def __init__(self):
-        super().__init__(system_prompt='base')
-
-    bro = ToolBro()
-    assert '`mcp__namespace__tool`' in bro.claude_system_prompt
     assert '`mcp__namespace__tool`' not in bro.system_prompt
-    assert '`namespace__tool`' in bro.system_prompt
-    # everything before the tool-names rule is shared between the flavors; the
-    # grounding block closes the claude flavor only (mcp wire)
-    assert bro.claude_system_prompt.startswith(bro.system_prompt.split('# Tool names')[0])
-    assert '# Tool grounding' not in bro.system_prompt
-    grounding_index = bro.claude_system_prompt.index('# Tool grounding')
-    assert grounding_index > bro.claude_system_prompt.index('# Tool names')
-    assert bro.claude_system_prompt.endswith('as text.')
 
   @pytest.mark.asyncio
   async def test_data_source_search_and_fetch_calls(self):
@@ -846,12 +822,12 @@ class TestClaudePersonaServers:
     return PersonaBro()
 
   def test_serves_only_claude_harness_components(self):
-    servers = self._bro().assemble(harness='claude', wire='mcp', include_raise=False)
+    servers = self._bro().assemble(harness='claude', include_raise=False)
     assert [s.namespace for s in servers] == ['test', 'bro']
 
   def test_service_server_carries_banner_but_not_raise(self):
     names = asyncio.run(
-      _collect_tool_names(self._bro().assemble(harness='claude', wire='mcp', include_raise=False))
+      _collect_tool_names(self._bro().assemble(harness='claude', include_raise=False))
     )
     # `raise` is gated on the session hold (not unattended here — no BRO_HOLD);
     # the environment facts stay available as `banner`
@@ -1188,9 +1164,9 @@ async def _find_tool(
   name: str,
   *,
   run: Optional[StubRun] = None,
-  wire: mcp.Wire = 'bare',
+  harness: mcp.Harness = 'bro',
 ):
-  for candidate in await _service_server(bro, run=run, wire=wire).list_tools():
+  for candidate in await _service_server(bro, run=run, harness=harness).list_tools():
     if candidate.name == name:
       return candidate
   raise AssertionError(f'no {name!r} tool on the service server')
@@ -1230,9 +1206,7 @@ class TestMCPRaise:
   """the MCP flavor records the abort and terminates its managed runner."""
 
   async def _mcp_raise_tool(self):
-    server = bro_module._build_service_server(
-      EchoBro(), include_raise=True, harness='bro', wire='mcp'
-    )
+    server = bro_module._build_service_server(EchoBro(), include_raise=True, harness='claude')
     for tool in await server.list_tools():
       if tool.name == 'raise':
         return tool
@@ -1278,69 +1252,65 @@ class TestMCPRaise:
     assert kills == [(4242, signal.SIGTERM)]
 
   @pytest.mark.asyncio
-  async def test_raise_description_forks_on_wire(self):
+  async def test_raise_description_forks_on_harness(self):
     mcp_tool = await self._mcp_raise_tool()
-    bare_tool = await _find_raise_tool(EchoBro())
+    native_tool = await _find_raise_tool(EchoBro())
     assert 'terminates the session' in mcp_tool.description
-    assert 'terminates the session' not in bare_tool.description
+    assert 'terminates the session' not in native_tool.description
 
 
 class TestAnswer:
   """the summoned run's delivery tool: mounted only where a summoned child can
-  actually send the terminal, ending the run by exception (bare) or by channel
-  emission + session termination (mcp)."""
+  actually send the terminal, ending the run by exception (bro harness) or by
+  channel emission + session termination (claude harness)."""
 
-  async def _names(self, wire) -> set[str]:
-    server = bro_module._build_service_server(
-      EchoBro(), include_raise=False, harness='bro', wire=wire
-    )
+  async def _names(self, harness) -> set[str]:
+    server = bro_module._build_service_server(EchoBro(), include_raise=False, harness=harness)
     return {tool.name for tool in await server.list_tools()}
 
   @pytest.mark.asyncio
   async def test_mounted_for_a_summoned_run_with_a_channel(self, monkeypatch):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     monkeypatch.setenv('RIDE_SUMMONED', '1')
-    assert 'answer' in await self._names('bare')
+    assert 'answer' in await self._names('bro')
 
   @pytest.mark.asyncio
   async def test_unmounted_without_the_summoned_mark_or_channel(self, monkeypatch):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    assert 'answer' not in await self._names('bare')
+    assert 'answer' not in await self._names('bro')
     monkeypatch.delenv('BROKER_CHANNEL')
     monkeypatch.setenv('RIDE_SUMMONED', '1')
-    assert 'answer' not in await self._names('bare')
+    assert 'answer' not in await self._names('bro')
 
   @pytest.mark.asyncio
-  async def test_mcp_flavor_needs_a_killable_session(self, monkeypatch):
+  async def test_claude_flavor_needs_a_killable_session(self, monkeypatch):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     monkeypatch.setenv('RIDE_SUMMONED', '1')
-    assert 'answer' not in await self._names('mcp')
+    assert 'answer' not in await self._names('claude')
     monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
-    assert 'answer' in await self._names('mcp')
+    assert 'answer' in await self._names('claude')
 
-  async def _tool(self, wire, monkeypatch, tmp_path):
+  async def _tool(self, harness, monkeypatch, tmp_path):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     monkeypatch.setenv('RIDE_SUMMONED', '1')
     monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
     monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
-    server = bro_module._build_service_server(
-      EchoBro(), include_raise=False, harness='bro', wire=wire
-    )
+    server = bro_module._build_service_server(EchoBro(), include_raise=False, harness=harness)
     for tool in await server.list_tools():
       if tool.name == 'answer':
         return tool
     raise AssertionError('answer tool not found on the service build')
 
   @pytest.mark.asyncio
-  async def test_bare_answer_ends_the_run_with_the_answer(self, monkeypatch, tmp_path):
-    tool = await self._tool('bare', monkeypatch, tmp_path)
+  async def test_native_answer_ends_the_run_with_the_answer(self, monkeypatch, tmp_path):
+    tool = await self._tool('bro', monkeypatch, tmp_path)
     with pytest.raises(bro_module.AnswerDelivered) as exception:
       await tool.call({'answer': 'the verdict'})
     assert exception.value.answer == 'the verdict'
 
   @pytest.mark.asyncio
-  async def test_bare_answer_rejects_oversize_output_before_ending(self, monkeypatch, tmp_path):
-    tool = await self._tool('bare', monkeypatch, tmp_path)
+  async def test_native_answer_rejects_oversize_output_before_ending(self, monkeypatch, tmp_path):
+    tool = await self._tool('bro', monkeypatch, tmp_path)
     with pytest.raises(ValueError, match='answer too large; mint an artifact'):
       await tool.call({'answer': 'x' * ((64 << 10) + 1)})
 
@@ -1350,7 +1320,7 @@ class TestAnswer:
     monkeypatch.setattr('bro.bro.RunLifecycle.from_env', lambda: channel)
     kills: list[tuple[int, int]] = []
     monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
-    tool = await self._tool('mcp', monkeypatch, tmp_path)
+    tool = await self._tool('claude', monkeypatch, tmp_path)
     await tool.call({'answer': 'the verdict'})
     channel.completed.assert_called_once_with('the verdict', 'ok')
     channel.close.assert_called_once_with()
@@ -1362,7 +1332,7 @@ class TestAnswer:
     monkeypatch.setattr('bro.bro.RunLifecycle.from_env', lambda: channel)
     kills = []
     monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
-    tool = await self._tool('mcp', monkeypatch, tmp_path)
+    tool = await self._tool('claude', monkeypatch, tmp_path)
     with pytest.raises(ValueError, match='answer too large; mint an artifact'):
       await tool.call({'answer': 'x' * ((64 << 10) + 1)})
     assert kills == []
@@ -1375,7 +1345,7 @@ class TestAnswer:
     monkeypatch.setattr('bro.bro.RunLifecycle.from_env', lambda: None)
     kills: list[tuple[int, int]] = []
     monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
-    tool = await self._tool('mcp', monkeypatch, tmp_path)
+    tool = await self._tool('claude', monkeypatch, tmp_path)
     with pytest.raises(RuntimeError, match='cannot reach the summoner'):
       await tool.call({'answer': 'the verdict'})
     assert kills == []
@@ -1509,20 +1479,22 @@ class TestSummonTool:
     assert await tool.call({}) == listing
 
   @pytest.mark.asyncio
-  async def test_bare_service_tool_schemas_have_no_waiting_controls(self, monkeypatch):
+  async def test_native_service_tool_schemas_have_no_waiting_controls(self, monkeypatch):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    bare = {tool.name: tool for tool in await _service_server(EchoBro()).list_tools()}
-    served = {tool.name: tool for tool in await _service_server(EchoBro(), wire='mcp').list_tools()}
+    native = {tool.name: tool for tool in await _service_server(EchoBro()).list_tools()}
+    served = {
+      tool.name: tool for tool in await _service_server(EchoBro(), harness='claude').list_tools()
+    }
 
     def properties(tool) -> set[str]:
       return set(tool.parameters['properties'])
 
-    assert 'detach' not in properties(bare['summon'])
-    assert properties(bare['quest_check']) == {'quest_id'}
-    assert properties(bare['quest_history']) == {'quest_id'}
-    assert properties(bare['quest_say']) == {'quest_id', 'text', 'reply_to'}
-    assert properties(bare['quest_ask']) == {'quest_id', 'text', 'reply_to'}
-    assert properties(bare['quest_cancel']) == {'quest_id'}
+    assert 'detach' not in properties(native['summon'])
+    assert properties(native['quest_check']) == {'quest_id'}
+    assert properties(native['quest_history']) == {'quest_id'}
+    assert properties(native['quest_say']) == {'quest_id', 'text', 'reply_to'}
+    assert properties(native['quest_ask']) == {'quest_id', 'text', 'reply_to'}
+    assert properties(native['quest_cancel']) == {'quest_id'}
     assert 'detach' in properties(served['summon'])
     assert {'wait', 'timeout'} <= properties(served['quest_check'])
     assert {'wait', 'timeout'} <= properties(served['quest_history'])
@@ -1531,7 +1503,7 @@ class TestSummonTool:
     assert 'timeout' in properties(served['quest_cancel'])
 
   @pytest.mark.asyncio
-  async def test_bare_summon_returns_after_acceptance(self, monkeypatch):
+  async def test_native_summon_returns_after_acceptance(self, monkeypatch):
     from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
@@ -1553,7 +1525,7 @@ class TestSummonTool:
     assert calls[0][2]['index'] == 2
 
   @pytest.mark.asyncio
-  async def test_bare_quest_ask_asks_without_waiting(self, monkeypatch):
+  async def test_native_quest_ask_asks_without_waiting(self, monkeypatch):
     from bro import quest as quest_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
@@ -1585,8 +1557,8 @@ class TestSummonTool:
       return 'OWN-QUEST'
 
     monkeypatch.setattr(quest_module, 'say', say)
-    for wire in ('bare', 'mcp'):
-      tool = await _find_tool(EchoBro(), 'quest_say', wire=wire)
+    for harness in ('bro', 'claude'):
+      tool = await _find_tool(EchoBro(), 'quest_say', harness=harness)
       assert await tool.call({'quest_id': 'self', 'text': 'yes', 'reply_to': 'Q1'}) == {
         'state': 'sent',
         'quest_id': 'OWN-QUEST',
@@ -1594,7 +1566,7 @@ class TestSummonTool:
     assert calls == [('self', 'yes', 'Q1')] * 2
 
   @pytest.mark.asyncio
-  async def test_bare_quest_cancel_returns_after_acceptance(self, monkeypatch):
+  async def test_native_quest_cancel_returns_after_acceptance(self, monkeypatch):
     from bro import quest as quest_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
@@ -1622,7 +1594,7 @@ class TestSummonTool:
       'ask',
       lambda quest_id, text, *, reply_to, wait, client: quest_module.Asked(quest_id, 'QUESTION-1'),
     )
-    tool = await _find_tool(EchoBro(), 'quest_ask', wire='mcp')
+    tool = await _find_tool(EchoBro(), 'quest_ask', harness='claude')
 
     assert await tool.call({'quest_id': 'REQ-1', 'text': 'approve?', 'wait': 60}) == {
       'state': 'asked',
@@ -1633,15 +1605,15 @@ class TestSummonTool:
 
   @pytest.mark.asyncio
   @pytest.mark.parametrize(
-    ('name', 'wire'), [('quest_ask', 'mcp'), ('quest_say', 'mcp'), ('quest_say', 'bare')]
+    ('name', 'harness'), [('quest_ask', 'claude'), ('quest_say', 'claude'), ('quest_say', 'bro')]
   )
-  async def test_over_bound_text_is_refused_before_a_client_opens(self, monkeypatch, name, wire):
+  async def test_over_bound_text_is_refused_before_a_client_opens(self, monkeypatch, name, harness):
     from bro import quest as quest_module
     from bro.broker.journal_test_helper import text_at_the_message_bound
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     monkeypatch.setattr(quest_module, 'open_client', lambda: pytest.fail('a client was opened'))
-    tool = await _find_tool(EchoBro(), name, wire=wire)
+    tool = await _find_tool(EchoBro(), name, harness=harness)
 
     with pytest.raises(quest_module.QuestError, match='mint an artifact'):
       await tool.call({'quest_id': 'REQ-1', 'text': text_at_the_message_bound() + 'x'})
@@ -1701,7 +1673,7 @@ class TestSummonTool:
     monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
     run = StubRun(tool_step={'step_id': 42, 'index': 3})
     tool = None
-    for candidate in await _service_server(EchoBro(), run=run, wire='mcp').list_tools():
+    for candidate in await _service_server(EchoBro(), run=run, harness='claude').list_tools():
       if candidate.name == 'summon':
         tool = candidate
     assert tool is not None
@@ -1753,7 +1725,7 @@ class TestSummonTool:
       return quest_module.Question('QUESTION-1', 'approve?', 'REQ-1')
 
     monkeypatch.setattr(summon_module, 'summon_and_wait', ask)
-    tool = await _find_tool(EchoBro(), 'summon', wire='mcp')
+    tool = await _find_tool(EchoBro(), 'summon', harness='claude')
 
     assert await tool.call({'target': 'dev', 'prompt': 'work', 'talk': ['worker.question']}) == {
       'state': 'question',
@@ -1794,7 +1766,7 @@ class TestSummonTool:
 
     monkeypatch.setattr(summon_module, 'summon_detached', fake_summon_detached)
     monkeypatch.setattr(summon_module, 'summon_and_wait', fail_summon_and_wait)
-    tool = await _find_tool(EchoBro(), 'summon', wire='mcp')
+    tool = await _find_tool(EchoBro(), 'summon', harness='claude')
     result = await tool.call({'target': 'dev', 'prompt': 'deploy', 'detach': True})
     assert result == {'state': 'accepted', 'quest_id': 'REQ-ID'}
     assert calls == [{'target': 'dev', 'prompt': 'deploy', 'timeout': None, 'into': None}]
@@ -1912,7 +1884,7 @@ class TestSummonTool:
     monkeypatch.setattr(client, 'close', fake_close)
     monkeypatch.setattr(quest_module, 'open_client', lambda: client)
     monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
-    tool = await _find_tool(EchoBro(), 'summon', wire='mcp')
+    tool = await _find_tool(EchoBro(), 'summon', harness='claude')
     task = asyncio.create_task(tool.call({'target': 'dev', 'prompt': 'deploy'}))
     assert await asyncio.to_thread(entered.wait, 5)
     task.cancel()
@@ -1921,23 +1893,23 @@ class TestSummonTool:
     assert client.closed
 
   @pytest.mark.asyncio
-  async def test_transport_caution_only_on_the_mcp_wire(self, monkeypatch):
-    # wire 'mcp' builds are consumed over an MCP transport with a client-side
-    # call budget; their blocking descriptions carry the timeout caution
+  async def test_transport_caution_only_on_the_claude_harness(self, monkeypatch):
+    # claude-harness builds are consumed over an MCP transport with a
+    # client-side call budget; their blocking descriptions carry the timeout caution
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     bro_instance = EchoBro()
-    mcp_build = bro_module._build_service_server(
-      bro_instance, include_raise=False, harness='bro', wire='mcp'
+    claude_build = bro_module._build_service_server(
+      bro_instance, include_raise=False, harness='claude'
     )
-    bare_build = bro_module._build_service_server(
-      bro_instance, include_raise=False, harness='bro', wire='bare'
+    native_build = bro_module._build_service_server(
+      bro_instance, include_raise=False, harness='bro'
     )
-    mcp_tools = {t.name: t for t in await mcp_build.list_tools()}
-    bare_tools = {t.name: t for t in await bare_build.list_tools()}
+    claude_tools = {t.name: t for t in await claude_build.list_tools()}
+    native_tools = {t.name: t for t in await native_build.list_tools()}
     for name in ('summon', 'quest_ask', 'quest_check', 'quest_history', 'quest_cancel'):
-      assert 'CAUTION' in mcp_tools[name].description
-      assert 'CAUTION' not in bare_tools[name].description
-    assert 'CAUTION' not in mcp_tools['quest_say'].description
+      assert 'CAUTION' in claude_tools[name].description
+      assert 'CAUTION' not in native_tools[name].description
+    assert 'CAUTION' not in claude_tools['quest_say'].description
 
   @pytest.mark.asyncio
   async def test_check_wait_collects(self, monkeypatch):
@@ -1953,7 +1925,7 @@ class TestSummonTool:
 
     monkeypatch.setattr(quest_module, 'open_client', lambda: client)
     monkeypatch.setattr(quest_module, 'check', fake_check)
-    tool = await _find_tool(EchoBro(), 'quest_check', wire='mcp')
+    tool = await _find_tool(EchoBro(), 'quest_check', harness='claude')
     result = await tool.call({'quest_id': 'REQ-1', 'wait': True, 'timeout': 60})
     assert result == {'state': 'completed', 'quest_id': 'REQ-1', 'answer': 'collected'}
     assert calls == [{'quest_id': 'REQ-1', 'wait': True, 'timeout': 60, 'client': client}]
@@ -1972,7 +1944,7 @@ class TestSummonTool:
 
     monkeypatch.setattr(quest_module, 'open_client', lambda: client)
     monkeypatch.setattr(quest_module, 'check', fake_check)
-    tool = await _find_tool(EchoBro(), 'quest_check', wire='mcp')
+    tool = await _find_tool(EchoBro(), 'quest_check', harness='claude')
 
     assert await tool.call({'quest_id': 'REQ-1', 'wait': True, 'timeout': 60}) == {
       'state': 'running',
@@ -1995,7 +1967,7 @@ class TestSummonTool:
 
     monkeypatch.setattr(quest_module, 'open_client', lambda: client)
     monkeypatch.setattr(quest_module, 'history', fake_history)
-    tool = await _find_tool(EchoBro(), 'quest_history', wire='mcp')
+    tool = await _find_tool(EchoBro(), 'quest_history', harness='claude')
     result = await tool.call({'quest_id': 'REQ-1', 'wait': True, 'timeout': 60})
     assert result == {'quest_id': 'REQ-1', 'talk': ['worker.say'], 'messages': []}
     assert calls == [{'quest_id': 'REQ-1', 'wait': True, 'timeout': 60, 'client': client}]
@@ -2017,7 +1989,7 @@ class TestSummonTool:
 
     monkeypatch.setattr(quest_module, 'open_client', lambda: client)
     monkeypatch.setattr(quest_module, 'cancel', fake_cancel)
-    tool = await _find_tool(EchoBro(), 'quest_cancel', wire='mcp')
+    tool = await _find_tool(EchoBro(), 'quest_cancel', harness='claude')
 
     assert await tool.call({'quest_id': 'REQ-1', 'timeout': 60}) == {
       'state': 'ended',
@@ -2041,7 +2013,7 @@ class TestSummonTool:
       'cancel',
       lambda quest_id, *, timeout=None, client=None: quest_module.CancelStatus('pending', quest_id),
     )
-    tool = await _find_tool(EchoBro(), 'quest_cancel', wire='mcp')
+    tool = await _find_tool(EchoBro(), 'quest_cancel', harness='claude')
 
     assert await tool.call({'quest_id': 'REQ-1', 'timeout': 5}) == {
       'state': 'pending',
@@ -2053,7 +2025,7 @@ class TestSummonTool:
   @pytest.mark.parametrize('timeout', [float('nan'), float('inf'), 0])
   async def test_mcp_cancel_rejects_a_non_finite_deadline(self, monkeypatch, timeout):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    tool = await _find_tool(EchoBro(), 'quest_cancel', wire='mcp')
+    tool = await _find_tool(EchoBro(), 'quest_cancel', harness='claude')
     with pytest.raises(ValueError, match='finite positive'):
       await tool.call({'quest_id': 'REQ-1', 'timeout': timeout})
 
@@ -2061,7 +2033,7 @@ class TestSummonTool:
   @pytest.mark.parametrize('name', ['quest_check', 'quest_history'])
   async def test_mcp_read_timeout_without_wait_is_an_error(self, monkeypatch, name):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    tool = await _find_tool(EchoBro(), name, wire='mcp')
+    tool = await _find_tool(EchoBro(), name, harness='claude')
     with pytest.raises(ValueError, match='wait'):
       await tool.call({'quest_id': 'REQ-1', 'timeout': 60})
 
@@ -2069,7 +2041,7 @@ class TestSummonTool:
   @pytest.mark.parametrize('timeout', [float('nan'), float('inf')])
   async def test_mcp_check_wait_rejects_non_finite_deadlines(self, monkeypatch, timeout):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    tool = await _find_tool(EchoBro(), 'quest_check', wire='mcp')
+    tool = await _find_tool(EchoBro(), 'quest_check', harness='claude')
     with pytest.raises(ValueError, match='finite positive'):
       await tool.call({'quest_id': 'REQ-1', 'wait': True, 'timeout': timeout})
 
@@ -2106,7 +2078,7 @@ class TestSummonTool:
     monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
     bro = EchoBro()
     tool = None
-    for candidate in await _service_server(bro, wire='mcp').list_tools():
+    for candidate in await _service_server(bro, harness='claude').list_tools():
       if candidate.name == 'summon':
         tool = candidate
     assert tool is not None
@@ -2210,28 +2182,22 @@ class TestJobServiceTools:
     def __init__(self):
       super().__init__(system_prompt='')
 
-  async def _tools(
-    self, *, wire: mcp.Wire = 'bare', run: Optional[StubRun] = None
-  ) -> tuple[MCPServer, dict[str, Tool]]:
-    server = _service_server(self.AnyShellBro(), run=run, wire=wire)
+  async def _tools(self, *, run: Optional[StubRun] = None) -> tuple[MCPServer, dict[str, Tool]]:
+    server = _service_server(self.AnyShellBro(), run=run)
     return server, {tool.name: tool for tool in await server.list_tools()}
 
   @pytest.mark.asyncio
-  async def test_mounting_follows_harness_and_wire(self):
+  async def test_mounting_follows_the_harness(self):
     run = StubRun()
-    bare_server, bare = await self._tools(run=run)
-    mcp_server, served = await self._tools(wire='mcp')
+    native_server, native = await self._tools(run=run)
     with contextlib.ExitStack() as stack:
       stack.callback(run.registry.close)
-      stack.callback(bare_server.close)
-      stack.callback(mcp_server.close)
-      assert {'job', 'poll', 'kill', 'jobs', 'chill'} <= set(bare)
-      assert {'job', 'poll', 'kill', 'jobs'} <= set(served)
-      assert 'chill' not in served
-      mode = served['job'].parameters['properties']['mode']
-      assert set(mode['enum']) == {'fg', 'bg'}
+      stack.callback(native_server.close)
+      assert {'job', 'poll', 'kill', 'jobs', 'chill'} <= set(native)
+      mode = native['job'].parameters['properties']['mode']
+      assert set(mode['enum']) == {'fg', 'bg', 'watch'}
       claude_server = bro_module._build_service_server(
-        self.AnyShellBro(), include_raise=False, harness='claude', wire='mcp'
+        self.AnyShellBro(), include_raise=False, harness='claude'
       )
       claude_names = {tool.name for tool in await claude_server.list_tools()}
       assert claude_names.isdisjoint({'job', 'poll', 'kill', 'jobs', 'chill'})
@@ -2399,25 +2365,3 @@ class TestJobServiceTools:
       assert {'job', 'chill'} <= set(tools)
       started = await tools['job'].call({'command': bro_module.QUEST_WATCH_COMMAND, 'mode': 'bg'})
       assert started == 'started job-1 (bg)'
-
-  @pytest.mark.asyncio
-  async def test_mcp_service_owns_and_closes_its_registry(self, tmp_path):
-    server, tools = await self._tools(wire='mcp')
-    with contextlib.ExitStack() as stack:
-      stack.callback(server.close)
-      liveness = stack.enter_context(contextlib.closing(Liveness(tmp_path / 'job-liveness')))
-      await tools['job'].call({'command': liveness.holding('sleep 30'), 'mode': 'bg'})
-      await asyncio.to_thread(liveness.wait_started)
-      listed = await tools['jobs'].call({})
-      assert isinstance(listed, dict)
-      [status] = listed['result']
-      assert status['id'] == 'job-1'
-      assert status['mode'] == 'bg'
-      assert status['state'] == 'running'
-      assert status['exit_code'] is None
-
-      server.close()
-
-      liveness.assert_reaped()
-      with pytest.raises(RuntimeError, match='registry is closed'):
-        await tools['job'].call({'command': 'true', 'mode': 'bg'})

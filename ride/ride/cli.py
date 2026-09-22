@@ -21,7 +21,6 @@ from ride.flags import (
   add_session_flags,
   default_hold,
   isolation_from_args,
-  pop_harness_options,
 )
 from ride.harness import get_harness
 from ride.listing import list_workspaces
@@ -270,7 +269,6 @@ def _start_mode(
   if session_log is not None:
     # after the party's additions: a manual child's own launch owns its level
     args['env'][log.LEVEL_ENV] = session_log.upper()
-  harness_options = pop_harness_options(parser, args, harness_name, solo=solo, isolation=isolation)
   try:
     # not every harness's llm resolution consults the registry, so the launch
     # checks the name itself
@@ -294,7 +292,6 @@ def _start_mode(
     resolved_llm=resolved_llm.dump(),
     solo=solo,
     resume=False,
-    harness_options=harness_options,
     summon_depth=summon_depth,
     summon_harness=summon_harness,
     tree=tree,
@@ -411,7 +408,6 @@ def main(argv: list[str]) -> Optional[int]:
       if repository is not None
       else 'claude'
     )
-    options = pop_harness_options(parser, args, harness_name, solo=False, isolation=Isolation.BOXED)
-    return report_scope(repo=repository, bro=args['bro'], harness=harness_name, options=options)
+    return report_scope(repo=repository, bro=args['bro'], harness=harness_name)
   assert command == 'banner'
   return banner(llm=args['llm'])

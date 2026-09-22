@@ -32,8 +32,7 @@ def project(monkeypatch):
 
 
 def _session_command(spec) -> list[str]:
-  harness = get_harness(spec.harness)
-  return do_ride_command(spec, harness_flags=harness.session_flags(spec))
+  return do_ride_command(spec)
 
 
 class TestSolo:
@@ -298,11 +297,6 @@ class TestAlong:
       '--hold', 'attended', 'dev', '--', '--fork',
     ]  # fmt: skip
 
-  def test_raw_unboxed_combination_errors(self, capsys):
-    with pytest.raises(SystemExit):
-      ride_cli.main(['ride', 'along', '--unboxed', '--raw', 'dev'])
-    assert '--raw cannot be combined with --unboxed' in capsys.readouterr().err
-
   def test_incompatible_provider_names_the_harness_remedy(self, capsys):
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'along', '--provider', 'openai', 'dev'])
@@ -392,18 +386,8 @@ class TestLifecycle:
 
   def test_scope_dispatches_harness(self):
     with patch('ride.scope_report.report_scope', return_value=0) as report:
-      assert ride_cli.main(['ride', 'scope', '--bro', 'dev', '--harness', 'claude', '--raw']) == 0
-    assert report.call_args.kwargs == {
-      'repo': None,
-      'bro': 'dev',
-      'harness': 'claude',
-      'options': {'raw': True},
-    }
-
-  def test_scope_rejects_a_non_selected_harness_flag(self, capsys):
-    with pytest.raises(SystemExit):
-      ride_cli.main(['ride', 'scope', '--bro', 'dev', '--harness', 'bro', '--raw'])
-    assert '--raw requires --harness claude' in capsys.readouterr().err
+      assert ride_cli.main(['ride', 'scope', '--bro', 'dev', '--harness', 'claude']) == 0
+    assert report.call_args.kwargs == {'repo': None, 'bro': 'dev', 'harness': 'claude'}
 
   def test_an_unusable_runtime_location_is_a_cli_error(self, monkeypatch, caplog):
     monkeypatch.setenv('XDG_DATA_HOME', 'share')

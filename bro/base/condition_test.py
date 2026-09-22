@@ -127,8 +127,8 @@ class TestSelect:
     assert select(entries, _harness('claude')) == ['tools']
 
   def test_condition_error_propagates(self):
-    with pytest.raises(ConditionError, match='unknown variable #wire'):
-      select([when(var('wire') == 'bare', 'x')], _harness('bro'))
+    with pytest.raises(ConditionError, match='unknown variable #missing'):
+      select([when(var('missing') == 'x', 'x')], _harness('bro'))
 
 
 class TestIff:
