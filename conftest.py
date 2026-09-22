@@ -43,6 +43,7 @@ set_default_tracker_factory(NullTracker)
 rebuild_environment()
 
 collect_ignore_glob = ['*_llm_test.py']
+pytest_plugins = ['bro.dev.sharding']
 
 
 @pytest.fixture(autouse=True)

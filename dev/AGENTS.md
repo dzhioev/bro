@@ -24,6 +24,7 @@ build the wheel with `uv build --package bro-dev`.
   - `shell_policy.py`, `packaging_policy.py`, `markdown_policy.py`, and `sleep_policy.py` expose reusable repository checks over an explicit root;
     `markdown_policy.py` also backs `check-markdown`, which holds a bulk prose reflow to whitespace and nothing else
   - `affected_tests.py` reads a diff and the import graph over a repository's source roots, answering which of its modules a change can reach
+  - `sharding.py` is the `--shard K/N` pytest plugin, dealing a collection into shards by test class or standalone function
   - `references.py` declares the `dev-style` source over `bro/prompts/dev/style.md`
 - `bro/workflow/` — development delivery mechanics:
   co-author and token-accounting commit metadata,
