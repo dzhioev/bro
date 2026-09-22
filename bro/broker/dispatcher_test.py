@@ -180,6 +180,14 @@ def test_handler_deny_answers_and_journals_refused_work():
   assert runtime.sent[-1][1].payload == {'outcome': 'denied', 'error': 'not allowed'}
   assert dispatcher.journal.records['denied'].state == 'denied'
   assert dispatcher.journal.records['denied'].type == 'bro'
+  assert dispatcher.journal.records['denied'].settled is True
+
+  dispatcher.on(QUERY, query_handler)
+  dispatcher.on_message(
+    'requester',
+    _request(QUERY, {'id': 'denied', 'wait': 10, 'settled': True}, 'denied-query'),
+  )
+  assert runtime.sent[-1][1].payload['value']['mission']['settled'] is True
 
 
 def test_handler_deny_bounds_the_response_to_a_maximum_frame_request():
@@ -314,11 +322,13 @@ async def test_spawned_quest_marks_lifecycle_and_routes_only_its_worker():
   dispatcher.on_message(worker, brotocol.result('work', 'ok', value='done'))
   assert dispatcher.journal.records['work'].trail_id == 'trail-1'
   assert dispatcher.journal.records['work'].result == {'outcome': 'ok', 'value': 'done'}
+  assert dispatcher.journal.records['work'].settled is False
   assert 'work' not in dispatcher.live
   assert runtime.handle is not None
   runtime.handle.exit.set_result(7)
   await _settle()
   assert dispatcher.journal.records['work'].outcome == 'ok'
+  assert dispatcher.journal.records['work'].settled is True
   assert [message.type for _, message in runtime.sent] == ['mark', 'mark', 'mark', 'result']
 
 
@@ -346,6 +356,33 @@ async def test_result_disarms_the_deadline_while_the_worker_stays_routable():
   assert runtime.sent[-1][1].payload['value'] == {'nested': True}
   runtime.handle.exit.set_result(0)
   await _settle()
+
+
+@pytest.mark.asyncio
+async def test_query_can_wait_for_worker_supervision_to_settle_after_its_result():
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on(QUERY, query_handler)
+  dispatcher.on('work', _spawn_handler(cast(Spawner, runtime)))
+  dispatcher.on_message('requester', _request('work', {}, 'work'))
+  await _settle()
+  worker = dispatcher.journal.records['work'].worker
+  assert worker is not None
+  runtime.events[worker].on_message(brotocol.result('work', 'ok'))
+  delivered = len(runtime.sent)
+
+  dispatcher.on_message(
+    'requester',
+    _request(QUERY, {'id': 'work', 'wait': 10, 'settled': True}, 'settlement-query'),
+  )
+  await _settle()
+  assert len(runtime.sent) == delivered
+  assert runtime.handle is not None
+  runtime.handle.exit.set_result(0)
+  await _settle()
+
+  _, answer = runtime.sent[-1]
+  assert answer.request_id == 'settlement-query'
+  assert answer.payload['value']['mission']['settled'] is True
 
 
 @pytest.mark.asyncio

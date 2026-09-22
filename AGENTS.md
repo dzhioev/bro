@@ -16,7 +16,7 @@ The repository is a uv workspace whose root publishes the `bro` distribution fro
 `oops/` publishes `bro-oops` (consumer-neutral deployment and operations machinery),
 `ride/` publishes `bro-ride` (top-level `ride`, the managed-workspace runtime and both harness adapters),
 `bench/` publishes `bro-bench` (the launcher-side benchmark credentials, registered worker type, and session commands),
-`webview/` publishes `bro-webview` (the registered browser worker type, its image, and daemon),
+`webview/` publishes `bro-webview` (the registered browser worker type, owner command, image, and daemon),
 and `local/` is the `bro-local` member (`bro.local`)
 — this checkout's own personas and policy scripts, kept out of every published wheel by riding the root's `dev` dependency group.
 All published members depend on `bro`;
@@ -37,8 +37,10 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   `unit` (the pytest roster, run in parallel, then a second run in one process for the modules `run_tests.py` holds out of the pool),
   `benchmark` (the benchmark project's own: it syncs `benchmark/.venv` and runs pyright and pytest inside it, since the workspace venv cannot import `bro.benchmark` at all),
   the opt-in `llm` (the live-LLM behavior probes, run only when `--only` names the stage, since they spend real tokens),
-  and the host-only `docker` (the container entrypoint's postconditions and the launch path from a cold image tag) and `broker_e2e` (the live broker-supervised container launch seam, `ride/ride/e2e_test.py`),
-  both skipped when the gate itself runs inside a container.
+  and the host-only `docker` (the container entrypoint's postconditions and the launch path from a cold image tag),
+  `broker_e2e` (the live broker-supervised container launch seam, `ride/ride/e2e_test.py`),
+  and `webview_e2e` (the real browser worker route, `webview/bro/webview/e2e_test.py`),
+  all skipped when the gate itself runs inside a container.
   `--only` and `--skip` name stages, are repeatable, and are mutually exclusive.
   Every selected stage runs whatever the ones before it did, and the gate closes on a replay of each failing stage's output and a one-line verdict per stage, so one pass reports every problem the tree has.
   `--changed` narrows the gate to what a diff against `--base` (default `origin/master`) can reach through the repository's import graph (`bro.dev.affected_tests`):
@@ -310,7 +312,7 @@ Native-owned paths are relative to `native/bro/` and keep their public `bro.*` i
 - `worker_types.py` — the core contract for a worker type, its launch request and run shapes, peer descriptions, host ports, registry, and shared artifact/path helpers.
   `WorkerContainer` is the validated, host-neutral container declaration:
   packaged build-context bytes over the runtime image, a command and environment, and container ports the host publishes on loopback.
-  Installed types register through `bro.worker_types`, with ride contributing `bro` and bench contributing `benchmark`.
+  Installed types register through `bro.worker_types`, with ride contributing `bro`, bench contributing `benchmark`, and webview contributing `webview`.
 - `run_lifecycle.py` — `RunLifecycle`, the worker-process emitter over `bro.broker.client.Client`:
   it undertakes the broker mission named in `BROKER_MISSION`, emits the run's set-once `trail` mark after recording opens, and sends the closing result.
   `Runner.run()` builds one through `_make_channel()`;

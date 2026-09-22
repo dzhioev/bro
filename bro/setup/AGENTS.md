@@ -15,10 +15,12 @@ In containers, `RIDE_VENV_MANIFEST` names the optional project's staged manifest
 The framework repository is a uv workspace whose root publishes `bro`;
 `native/` publishes `bro-native`,
 `dev/` publishes `bro-dev`,
+`oops/` publishes `bro-oops`,
 `ride/` publishes `bro-ride`,
 `bench/` publishes the benchmark launch integration as `bro-bench`,
+`webview/` publishes the browser worker integration as `bro-webview`,
 and `local/` publishes this checkout's `bro-local` personas and policy scripts.
-`uv sync --all-packages --all-groups --all-extras` creates the root `.venv`, installs all six editably, and registers each distribution's committed console-script bridge.
+`uv sync --all-packages --all-groups --all-extras` creates the root `.venv`, installs all eight editably, and registers each distribution's committed console-script bridge.
 The root owns the tool configuration and development gate for every member.
 
 Prerequisites are documented in `README.md`.
@@ -149,7 +151,7 @@ one list may name a kind once.
 `defaults`, each project entry, and each `bros.<bro>` entry may also carry `grant` and `revoke` in the full launch-scope grammar:
 a credential kind changes the required tier, an instance-spelled grant also selects that instance, `@bro` changes the summon allow-list, and a `:permit` leaf changes party authority.
 Worker permits have the form `:<type>.<leaf>`, with one or more dot-separated leaf segments.
-The bro type declares `:bro.party.start.boxed`, `:bro.party.start.unboxed`, and `:bro.party.join`;
+The bro type declares `:bro.party.start.boxed`, `:bro.party.start.unboxed`, and `:bro.party.join`, while the webview type declares `:webview.vnc`;
 `:bro` is malformed and `:bro.party` names an undeclared leaf rather than expanding to its descendants.
 A bro's `creds` selects only among the kinds its launch reads;
 a selection of any other kind fails the launch and names `grant`, since it would otherwise sit inert.
