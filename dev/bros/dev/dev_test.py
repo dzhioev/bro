@@ -33,6 +33,7 @@ def test_claude_surface_selects_tracker_and_reference_tools(monkeypatch):
     server.namespace for server in Dev().assemble(harness='claude', wire='mcp', include_raise=False)
   ] == [
     'dev-style-source',
+    'man-source',
     'bro',
     'spell',
   ]
@@ -43,6 +44,7 @@ def test_claude_surface_selects_tracker_and_reference_tools(monkeypatch):
   ] == [
     'brog',
     'dev-style-source',
+    'man-source',
     'bro',
     'spell',
   ]
