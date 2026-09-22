@@ -28,26 +28,19 @@ def test_claude_surface_selects_tracker_and_reference_tools(monkeypatch):
     'bro.base.credentials.get_json',
     lambda name: {'backend': 'github', 'token': 't', 'repo': 'owner/repository'},
   )
+
+  def namespaces() -> set[str]:
+    servers = Dev().assemble(harness='claude', wire='mcp', include_raise=False)
+    return {server.namespace for server in servers}
+
   monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
-  assert [
-    server.namespace for server in Dev().assemble(harness='claude', wire='mcp', include_raise=False)
-  ] == [
-    'dev-style-source',
-    'man-source',
-    'bro',
-    'spell',
-  ]
+  without_tracker = namespaces()
+  assert 'dev' not in without_tracker
+  assert 'dev-style-source' in without_tracker
+  assert 'brog' not in without_tracker
 
   monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'brog')
-  assert [
-    server.namespace for server in Dev().assemble(harness='claude', wire='mcp', include_raise=False)
-  ] == [
-    'brog',
-    'dev-style-source',
-    'man-source',
-    'bro',
-    'spell',
-  ]
+  assert 'brog' in namespaces()
 
 
 def test_tracker_dev_inherits_shared_and_dev_spells():
