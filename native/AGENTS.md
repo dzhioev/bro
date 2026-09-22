@@ -1,31 +1,25 @@
 # bro-native
 
 `native/` is the `bro-native` uv workspace member.
-It publishes the framework's native LLM engine
-and the `bro` command, and depends on the core `bro` distribution.
-Core and `bro-ride` never import
-it.
+It publishes the framework's native LLM engine and the `bro` command, and depends on the core `bro` distribution.
+Core and `bro-ride` never import it.
 The root repository owns formatting, lint, typing, packaging policy, and the test gate.
-Build this
-member with `uv build --package bro-native`;
-regenerate its scripts and committed
-`bro/native/_entrypoints.py` with `sync-scripts --project native`.
+Build this member with `uv build --package bro-native`;
+regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scripts --project native`.
 
 ## Components
 
 - `bro/native/` — the bro-native engine, the layer above the framework core:
-  runner, live LLM contract, provider dispatch, and provider clients;
-  the runner owns the core inbox and job registry, and OpenAI drains notifications after tool batches or into an idle turn.
-  The session text tells a run to arm `quest watch` as a watch-mode job when it can receive summon traffic and use `chill` as its idle wait.
+  runner, live LLM contract, provider dispatch, and provider clients.
   It imports `bro`, never the reverse, so declaring and inspecting a persona costs nothing of the loop that runs one.
   `runner.py`'s `Runner(bro)` drives one declaration and owns the per-run LLM, observer, tracker, inbox, job registry, broker channel, and trail;
   it satisfies `bro.bro.LiveRun` and builds its toolset through `BaseBro.assemble(harness='bro', wire='bare', ...)`.
-  Interactive owners call `wake()` when the inbox reports news;
-  OpenAI delivers the drained notification as user-role input.
+  OpenAI drains the inbox's notifications after tool batches or into an idle turn, delivering them as user-role input;
+  interactive owners call `wake()` when the inbox reports news.
+  The session text tells a run to arm `quest watch` as a watch-mode job when it can receive summon traffic and use `chill` as its idle wait.
   A one-shot run ends when a turn ends with nothing running and nothing in flight;
   otherwise the runner posts one notice naming the live jobs and every mission the session owns (`bro.quest.live_missions`) through the inbox and runs one more turn, and the registry closes only at the end (`bro/reference/ride.md`, "Bro harness").
   `llm.py` owns the live `LLM` ABC and diagnostic CLI, `providers.py` maps core `NativeLLMSpec` recipes to engine clients, and `llms/{openai,echo}.py` contain those clients.
-  The same member owns `bro.run`, `bro.fork`, the native leaves in `bro.launch`, and `bro.trails.record.bro`.
 - `bro/run.py` (`bro`) — lightweight CLI dispatcher shipped by `bro-native`:
   `bro run` and `bro chat` import the native launcher implementations only when selected;
   `bro list` and `bro show <name> [--system-prompt]` remain metadata paths (card renderer in core `show.py`)
@@ -46,37 +40,28 @@ What `Runner` owns around one run, beyond the loop itself.
 
 ### Observing
 
-`bro.llm.observer.ObservedEvent` is the provider-neutral live seam:
-an `Observer` has one `on_event(event)` sink for turn starts, reasoning, interim assistant text, background-job notifications, call-ID-scoped tool calls/results, and turn completion/refusal/failure.
-Providers emit only model/tool activity;
-`Runner.run()` / `send()` own turn boundaries and emit the exact returned completion once, including provider fallback extraction.
-Missing-credential refusal remains a failed one-shot run and a terminal interactive reply.
-`NullObserver` is the explicit no-op.
-
-A run renders only through the observer its caller passes
-— the default is `NullObserver`, so an embedding application never gets terminal output it did not ask for.
-The launch surfaces pass a trails-display observer per their preset (`bro/launch/AGENTS.md`, "Display and holds").
+A run renders only through the `bro.llm.observer.Observer` its caller passes
+— the default is `NullObserver`, so an embedding application never gets terminal output it did not ask for;
+the launch surfaces pass a trails-display observer per their preset (`bro/launch/AGENTS.md`, "Display and holds").
+Providers emit only model and tool activity (`bro/llm/AGENTS.md`, `observer.py`);
+`Runner.run()` / `send()` own the turn boundaries and emit the exact returned completion once, including provider fallback extraction.
+A missing-credential refusal is a failed one-shot run and a terminal interactive reply.
 
 ### Usage publishing
 
 The runner's LLM construction passes `agent=bro.agent` (the `bro//<name>` surface identity), so the provider publishes its cumulative per-model usage under that identity to the env-pointed usage file (`bro.llm.usage`) after every LLM call.
-Tool subprocesses inherit the pointer, which is how `bro.workflow.commit_footer` credits a native bro run's commits
-— the file carries the agent identity itself rather than leaning on the environment
-— an in-process run's `RIDE_BRO` is the launcher's, not the bro's.
+Tool subprocesses inherit the pointer, which is how `bro.workflow.commit_footer` credits a native bro run's commits;
+the file carries the agent identity itself because an in-process run's `RIDE_BRO` is the launcher's, not the bro's.
 
 ### Recording
 
-Each `Runner.run()` or first `.send()` opens a trail through a `bro.llm.tracker.Tracker` and emits the opening `system_prompt` step.
+Each `Runner.run()` or first `.send()` opens a trail through a `bro.llm.tracker.Tracker` and emits the opening `system_prompt` step;
+the same tracker is plumbed into the LLM so provider implementations record the replayable native stream.
 The runner's context-managed lifetime ends that trail once with clean → `ok`, `BroRaised` → `raised`, and other exceptions → `error`;
 `run()` supplies its own lifetime, while interactive owners keep one around the conversation.
-The same tracker is plumbed into the LLM so provider implementations record the replayable native stream.
-The default factory builds a `bro.trails.record.bro.Recorder` over the backend the `trails` secret selects;
-recording is mandatory in production, while `NullTracker` is explicit through `TRAILS_DISABLED`, a per-run argument, or `set_default_tracker_factory`.
 `run()`, `send()`, and `bro.fork.fork()` require the caller to name the driving `surface`.
-The framework revision is recorded as `configs.VERSION`;
-`bro/trails/AGENTS.md` owns the recording subsystem.
+The default factory builds a `bro.trails.record.bro.Recorder`;
+a per-run `tracker=` argument or `set_default_tracker_factory` replaces it, and `TRAILS_DISABLED` makes the default a `NullTracker` (`bro/trails/AGENTS.md`, which owns the recording subsystem).
 
 `bro`, `bro.launch`, `bro.trails`, and `bro.trails.record` are shared namespace package trees.
-This
-member's source root contains only native-owned leaves, so its build can publish that `bro` portion
-whole without reaching another member's source tree.
+This member's source root contains only native-owned leaves, so its build can publish that `bro` portion whole without reaching another member's source tree.

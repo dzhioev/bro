@@ -1,15 +1,12 @@
 # Data sources
 
-`DataSource` ABC + `SourceUnavailable` (`base.py`) + connectors to read-only sources.
-The base ABC declares `name`, `summary`, `namespace` (a property, `f'{name}-source'`), `needed_secrets` / `optional_secrets`, and `as_mcp_server()`.
-The `SearchableDataSource` subclass (`searchable.py`) adds the canonical `search` + `fetch` pair, exposed as bare `search` / `fetch` tools inside the source's `<name>-source` namespace (wire name `<name>-source__search`).
-Subclasses implement `search` and `_fetch_content(id)` (raw record);
-the base `fetch(id, query=None)` returns the raw record when no query is given and otherwise summarises it for the query via `mu` (one `source_summary` prompt for every source).
-That summary path reads the LLM key, so `SUMMARY_SECRET='openai'` is a base-level `optional_secret` (best-effort, hydrated when present);
-with it absent, a non-null `query` raises rather than silently returning raw text.
+The `DataSource` ABC and `SourceUnavailable` (`base.py`), and the read-only connectors built on them.
+The base declares `name`, `summary`, `namespace` (a property, `f'{name}-source'`), `needed_secrets` / `optional_secrets`, and `as_mcp_server()`.
+`SearchableDataSource` (`searchable.py`) is the search/fetch shape:
+bare `search` / `fetch` tools inside the source's `<name>-source` namespace (wire name `<name>-source__search`),
+where the base `fetch` summarises a record for a query through `mu` (one `source_summary` prompt for every source) as long as `SUMMARY_SECRET` (`openai`, a base-level `optional_secret`) resolves.
 The fetch tool's description advertises which mode is live via a `#features` directive (`bro/AGENTS.md`, "Optional credential tier").
-Subclass `DataSource` directly for sources that don't fit the search/fetch shape and override `as_mcp_server()`, stamping `self.namespace` onto the returned server.
-Adding one: `bro/reference/extending.md`, "Adding a data source".
+How to add a source of either shape: `bro/reference/extending.md`, "Adding a data source".
 
 ## Modules
 
