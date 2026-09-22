@@ -10,6 +10,7 @@ from pathlib import PurePosixPath
 
 import pytest
 
+import ride.clean as ride_clean
 import ride.workspace.docker as workspace_docker
 import ride.workspace.host_docker_test_helper as host_docker
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
@@ -270,6 +271,33 @@ except Exception:
   raise
 """
 
+_KILLED_ROUTE = r"""
+import json
+import subprocess
+import traceback
+from pathlib import Path
+
+workspace = Path('/workspace')
+report_path = workspace / '.webview-killed-report.json'
+error_path = workspace / '.webview-killed-error'
+
+try:
+  opened_process = subprocess.run(
+    ['webview', 'open'], capture_output=True, text=True, check=True
+  )
+  opened = json.loads(opened_process.stdout)
+  subprocess.run(
+    ['mission', 'cancel', opened['mission'], '--timeout', '180'],
+    capture_output=True,
+    text=True,
+    check=True,
+  )
+  report_path.write_text(json.dumps(opened))
+except Exception:
+  error_path.write_text(traceback.format_exc())
+  raise
+"""
+
 
 @contextlib.contextmanager
 def _route_observer(
@@ -475,3 +503,33 @@ def test_vnc_open_answers_on_its_published_loopback_port(
     directory.name.startswith('webview-') for directory in workspace.path.parent.iterdir()
   )
   assert _live_containers(workspace) == []
+
+
+def test_plain_clean_reclaims_a_cancelled_webview_workspace(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  code, workspace = _run_route(
+    isolated_env,
+    monkeypatch,
+    suffix='killed',
+    source=_KILLED_ROUTE,
+    permits=set(),
+    observer=lambda _workspace, _route_ended: None,
+  )
+
+  assert code == 0, _diagnostic(workspace, '.webview-killed-error')
+  worker_directories = [
+    directory
+    for directory in workspace.path.parent.iterdir()
+    if directory.name.startswith('webview-')
+  ]
+  assert len(worker_directories) == 1, worker_directories
+  worker = Workspace.open(worker_directories[0].name)
+  assert worker.is_clean() == (True, [])
+  assert list(worker.tree.iterdir()) == []
+  assert _live_containers(workspace) == []
+
+  monkeypatch.setattr(ride_clean, 'clean_managed_mirrors', lambda *_args, **_kwargs: (0, 0))
+  monkeypatch.setattr(ride_clean, 'clean_runtime_bundles', lambda **_kwargs: (0, 0))
+  assert ride_clean.clean_workspaces(names=[worker.name]) == 0
+  assert not worker.path.exists()
