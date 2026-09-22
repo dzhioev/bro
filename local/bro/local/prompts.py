@@ -4,8 +4,9 @@ FRAMEWORK_PROJECT = """\
 ## Bro framework project
 
 You are operating inside the bro framework repository. Read the root and
-relevant subsystem `AGENTS.md` files before working on the code; they carry
-the repository's non-obvious development rules.
+relevant subsystem `AGENTS.md` files before working on the code, unless they
+are already in your context; they carry the repository's non-obvious
+development rules.
 
 The framework is in early beta: much of what you find is a first approximation —
 drafts, experiments, provisional structure — and none of it is fixed in stone.
