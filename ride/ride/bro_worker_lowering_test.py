@@ -425,7 +425,6 @@ class TestSummonLowering:
         prompt='deploy the thing',
         subject='deploy the thing',
         arguments=[],
-        harness_options={},
         repo='/proj',
       ).resume_variant()
     )
@@ -1233,7 +1232,6 @@ class TestClaudeSummonLowering:
     spec = ride.session.load_resume_spec(workspace)
     assert spec is not None
     assert spec.harness == 'claude'
-    assert spec.harness_options == {'raw': False}
     assert spec.resolved_llm == ClaudeCodeSpec(model='claude-fable-5').dump()
     assert spec.summon_depth == 5
     assert spec.summon_harness == 'claude'
@@ -1265,7 +1263,7 @@ class TestClaudeSummonLowering:
 
     monkeypatch.setattr(ride.bro_worker, 'scoped_secrets', capture_scope)
     _lower_boxed(self._launch(), 'broker-CH', _container_runtime(), _artifacts())
-    assert captured == ['claude-full']
+    assert captured == ['claude']
 
   def test_auth_preflight_failure_fails_the_spawn_before_the_workspace(
     self, lowering_harness, monkeypatch, tmp_path

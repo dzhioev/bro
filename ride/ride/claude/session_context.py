@@ -22,39 +22,27 @@ RIDE_SESSION_CONTEXT_ENV = 'RIDE_SESSION_CONTEXT'
 _INSTRUCTIONS_NAMES = ('AGENTS.md', 'CLAUDE.md')
 
 
-def _mcp_record(bro: str, raw: bool) -> dict:
-  if raw:
-    fields = {'mode': 'bro', 'servers': [f'bro:{bro}']}
-  else:
-    fields = {'mode': 'persona', 'servers': [f'persona:{bro}']}
+def _mcp_record(bro: str) -> dict:
+  fields = {'servers': [f'persona:{bro}']}
   return {'kind': 'mcp', 'subtype': 'servers', 'title': 'MCP servers', 'fields': fields}
 
 
-def build_session_context(
-  *,
-  system_prompt: str,
-  bro: str,
-  raw: bool,
-  proj_root: Path,
-) -> list[dict]:
+def build_session_context(*, system_prompt: str, bro: str, proj_root: Path) -> list[dict]:
   """the launch-context records for a session.
 
-  `bro` names the session's bro; `raw` selects the system-prompt record's
-  shape: a raw session passes the whole prompt via --system-prompt (replaces
-  the base), a ride-session passes only its --append-system-prompt addition on
-  top of claude's base plus whatever instructions it loads itself.
+  `bro` names the session's bro; `system_prompt` is the session's
+  --append-system-prompt addition on top of claude's base plus whatever
+  instructions it loads itself.
   """
-  records: list[dict] = []
-
-  if raw:
-    sp_subtype, sp_title = 'bro', 'bro system prompt (--system-prompt, replaces base)'
-  else:
-    sp_subtype, sp_title = 'ride_injected', 'ride-injected system prompt (--append-system-prompt)'
-  records.append(
-    {'kind': 'system_prompt', 'subtype': sp_subtype, 'title': sp_title, 'content': system_prompt}
-  )
-
-  records.append(_mcp_record(bro, raw))
+  records: list[dict] = [
+    {
+      'kind': 'system_prompt',
+      'subtype': 'ride_injected',
+      'title': 'ride-injected system prompt (--append-system-prompt)',
+      'content': system_prompt,
+    },
+    _mcp_record(bro),
+  ]
 
   for name in _INSTRUCTIONS_NAMES:
     instructions = proj_root / name

@@ -296,15 +296,11 @@ def _replace_hold_fragment(
   from bro.prompts import hold_fragment
 
   known_credentials = credentials.known_names()
-  recorded_fragment = hold_fragment(
-    recorded_hold, harness='bro', wire='bare', creds=known_credentials
-  )
+  recorded_fragment = hold_fragment(recorded_hold, harness='bro', creds=known_credentials)
   suffix = f'\n\n{recorded_fragment}'
   if not system_prompt.endswith(suffix):
     raise ValueError('recorded system prompt does not end with its hold fragment')
-  resumed_fragment = hold_fragment(
-    resumed_hold, harness='bro', wire='bare', creds=known_credentials
-  )
+  resumed_fragment = hold_fragment(resumed_hold, harness='bro', creds=known_credentials)
   return f'{system_prompt.removesuffix(suffix)}\n\n{resumed_fragment}'
 
 

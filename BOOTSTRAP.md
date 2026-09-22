@@ -13,10 +13,9 @@ ride solo my-dev "sup?" --repo .
 
 `my-dev` is the suggested public name.
 If the user chooses another name, substitute only that name in the acceptance command.
-The bootstrapped repository installs both harnesses, Claude Code in full mode and bro's native loop, whichever harness executes this prompt.
+The bootstrapped repository installs both harnesses, Claude Code and bro's native loop, whichever harness executes this prompt.
 Which harness a launch or a summon runs under when nothing names one is the user's configuration choice in section 3;
 either harness stays reachable per launch through `--harness` and per summon through the request's `harness` field.
-Never recommend `--raw`.
 Do not use Anthropic API-key authentication or replace the exact acceptance command with unboxed isolation.
 
 ## Operating contract

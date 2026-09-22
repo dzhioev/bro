@@ -11,12 +11,10 @@ from bro.monitor import trail_pointer
 from ride.do_ride import SessionRun, run_agent
 from ride.harness import ContainerExtras
 from ride.scope import BRO_RUN_RECIPE, ScopeRecipe
-from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
-  from bro.base.args import Parser
   from ride.session import SessionSpec
 
 
@@ -47,19 +45,7 @@ def _session_arguments(spec: 'SessionSpec | SessionRun', resume_trail: Optional[
 class BroHarness:
   name = 'bro'
 
-  def add_flags(self, parser: 'Parser') -> tuple[str, ...]:
-    del parser
-    return ()
-
-  def parse_options(self, args: dict, *, solo: bool, isolation: Isolation) -> dict:
-    del args, solo, isolation
-    return {}
-
-  def default_options(self) -> dict:
-    return {}
-
-  def scope_recipe(self, options: dict) -> ScopeRecipe:
-    del options
+  def scope_recipe(self) -> ScopeRecipe:
     return BRO_RUN_RECIPE
 
   def resolve_llm(self, value: str | None, bro_name: str) -> NativeLLMSpec:
@@ -71,10 +57,6 @@ class BroHarness:
   def preflight_auth(self, spec: 'SessionSpec') -> Optional[str]:
     del spec
     return None
-
-  def command_options(self, spec: 'SessionSpec') -> list[str]:
-    del spec
-    return []
 
   def session_exists(self, workspace: Workspace) -> bool:
     return trail_pointer.read(trail_pointer.session_pointer(workspace.path)) is not None
@@ -90,10 +72,6 @@ class BroHarness:
 
     spec = load_resume_spec(workspace)
     return None if spec is None else spec.subject
-
-  def session_flags(self, spec: 'SessionSpec') -> tuple[str, ...]:
-    del spec
-    return ()
 
   def run_session(self, spec: 'SessionSpec | SessionRun') -> int:
     if shutil.which('bro') is None:

@@ -1,7 +1,6 @@
 import asyncio
 import math
 import os
-import threading
 import time
 from abc import ABC
 from collections.abc import Callable, Iterable, Mapping
@@ -189,13 +188,13 @@ _RAISE_DESCRIPTION = (
   'task. Do NOT reply with a clarifying question — there is no follow-up turn; '
   'raise instead. Pass a clear, specific reason — it surfaces to the caller as '
   'the failure cause.'
-  '{{when #wire = mcp}} The call records the abort and terminates the session; '
+  '{{when #harness = claude}} The call records the abort and terminates the session; '
   'nothing after it will run, so make the reason self-contained.{{end}}'
 )
 
 
-def _raise_tool(wire: mcp.Wire, variables: Variables) -> llm_mcp.Tool:
-  target = _raise if wire == 'bare' else _claude_raise
+def _raise_tool(harness: mcp.Harness, variables: Variables) -> llm_mcp.Tool:
+  target = _claude_raise if harness == 'claude' else _raise
   return llm_mcp.FunctionTool(
     target, name='raise', description=_RAISE_DESCRIPTION, variables=variables
   )
@@ -237,25 +236,25 @@ _ANSWER_DESCRIPTION = (
   'this exactly once, when the work is done, with a self-contained answer: the summoner '
   'sees nothing else of this session. A session that ends without this call '
   'reports no answer and surfaces to the summoner as a failure.'
-  '{{when #wire = mcp}} The call records the answer and terminates the session; '
+  '{{when #harness = claude}} The call records the answer and terminates the session; '
   'nothing after it will run.{{end}}'
 )
 
 
-def _answer_tool(wire: mcp.Wire, variables: Variables) -> llm_mcp.Tool:
-  target = _answer if wire == 'bare' else _claude_answer
+def _answer_tool(harness: mcp.Harness, variables: Variables) -> llm_mcp.Tool:
+  target = _claude_answer if harness == 'claude' else _answer
   return llm_mcp.FunctionTool(
     target, name='answer', description=_ANSWER_DESCRIPTION, variables=variables
   )
 
 
-# The MCP-wire cautions steer long work away from a tool call whose client may
-# time out while the host-owned quest keeps running.
+# The claude-harness cautions steer long work away from a tool call whose MCP
+# client may time out while the host-owned quest keeps running.
 # The recovery wording remains conditioned on the mounted service roster.
 _SUMMON_DESCRIPTION = (
   'summon another bro: it runs your prompt in a new party or joins your party, as a quest '
   'whose id every `quest_*` tool takes. '
-  '{{iff #wire = bare}}this call returns after host acceptance.{{else}}this call blocks — '
+  '{{iff #harness = bro}}this call returns after host acceptance.{{else}}this call blocks — '
   'typically for minutes — until its answer or a question comes back.{{end}} pass `target` '
   '(a bro name; you have your own summon allow-list, and '
   'a target outside it — or a summon nested past the depth cap — fails immediately '
@@ -289,7 +288,7 @@ _SUMMON_DESCRIPTION = (
   'owner.question, worker.say, or worker.question. the optional `party` (`start` or '
   '`join`) and `isolation` (`boxed` or `unboxed`) fields place the child; an unmarked request '
   'starts boxed when permitted, otherwise unboxed. a join shares your tree and refuses '
-  '`isolation`, `into`, and `manual`. {{iff #wire = bare}}acceptance returns the quest id; '
+  '`isolation`, `into`, and `manual`. {{iff #harness = bro}}acceptance returns the quest id; '
   'answers, questions, replies, refusals, and terminal states arrive through `quest watch`, '
   'and `quest_check` reads the retained outcome.{{else}}this call returns an accepted, '
   'question, or completed state with the quest id; a question state carries its id and text. '
@@ -302,7 +301,7 @@ _SUMMON_DESCRIPTION = (
   'a token and `ride` command to relay to the user, who launches the child session; '
   'manual refuses `timeout`/`hold`/`llm`/`harness`/`party`/`isolation` because the user’s '
   'launch owns them, and requires either party-start permit.'
-  '{{when #wire = mcp}} CAUTION: this tool is served over MCP, and the harness may '
+  '{{when #harness = claude}} CAUTION: this tool is served over MCP, and the harness may '
   'time a blocking call out while the quest keeps running. prefer `detach: true` for '
   'long work, and do NOT re-summon after a timed-out blocking call'
   '{{iff #tools contains quest_list}}: recover the quest id with quest_list and '
@@ -320,11 +319,11 @@ _QUEST_CHECK_DESCRIPTION = (
   'bounded by optional `timeout` seconds, and at the bound it reports running. unknown ids, '
   'evicted results, and failed or denied quests raise with their reason; `self` is refused, '
   'since the outcome of your own quest is yours to give.'
-  "{{when #wire = mcp}} CAUTION: size `timeout` below the harness's idle cap.{{end}}"
+  "{{when #harness = claude}} CAUTION: size `timeout` below the harness's idle cap.{{end}}"
 )
 
 
-_QUEST_CHECK_BARE_DESCRIPTION = (
+_QUEST_CHECK_NATIVE_DESCRIPTION = (
   'read the outcome of a child quest by `quest_id` through the host journal, without '
   'blocking: a running state with its trail id, a question state with the open questions the '
   'child is stalled on (they wait on your reply, sent with `quest_say`), or the completed '
@@ -341,11 +340,11 @@ _QUEST_HISTORY_DESCRIPTION = (
   'dropped. answer each marked question from the other end with `quest_say` and its id as '
   '`reply_to`. `wait: true` long-polls until the next message or the end, bounded by optional '
   '`timeout` seconds, and returns at once while a question awaits you.'
-  "{{when #wire = mcp}} CAUTION: size `timeout` below the harness's idle cap.{{end}}"
+  "{{when #harness = claude}} CAUTION: size `timeout` below the harness's idle cap.{{end}}"
 )
 
 
-_QUEST_HISTORY_BARE_DESCRIPTION = (
+_QUEST_HISTORY_NATIVE_DESCRIPTION = (
   "read a quest's conversation by `quest_id` — `self` for your own — through the host "
   'journal, without blocking: its talk rights and the retained message tail, oldest first, '
   'with every open question marked `pending: true` in place, and `truncated: true` when older '
@@ -368,12 +367,12 @@ _QUEST_ASK_DESCRIPTION = (
   'blocks for the reply in seconds and returns the answered state; expiry returns the asked '
   'state with the id, while the host keeps the question live. text over the message bound is '
   'refused with its size; mint an artifact and send the ref instead.'
-  '{{when #wire = mcp}} CAUTION: keep `wait` below the MCP call cap. After an asked state, '
+  '{{when #harness = claude}} CAUTION: keep `wait` below the MCP call cap. After an asked state, '
   'recover the eventual reply with `quest_history`; do not ask again.{{end}}'
 )
 
 
-_QUEST_ASK_BARE_DESCRIPTION = (
+_QUEST_ASK_NATIVE_DESCRIPTION = (
   'ask a question on a quest by `quest_id` — a child quest, or `self` to your own summoner — '
   'and return its id; `reply_to` makes it a counter-question to the question named. the reply '
   'arrives through `quest watch` and remains readable with `quest_history`. text over the '
@@ -388,11 +387,11 @@ _QUEST_CANCEL_DESCRIPTION = (
   'its outcome, or a pending state when the optional `timeout` seconds pass first; the end '
   'still arrives through `quest watch`. fails with the reason for a quest this session does '
   'not own or that has already ended.'
-  "{{when #wire = mcp}} CAUTION: size `timeout` below the harness's idle cap.{{end}}"
+  "{{when #harness = claude}} CAUTION: size `timeout` below the harness's idle cap.{{end}}"
 )
 
 
-_QUEST_CANCEL_BARE_DESCRIPTION = (
+_QUEST_CANCEL_NATIVE_DESCRIPTION = (
   'ask the host to cancel a bro quest this session owns by `quest_id` and return when the '
   'request is accepted. the worker ends asynchronously, and whatever it launched in turn '
   'ends failed:orphaned with it; its end arrives through `quest watch`.'
@@ -542,7 +541,7 @@ async def _run_summon_request(
   return {'state': 'completed', 'quest_id': quest_id, 'answer': outcome}
 
 
-def _mcp_summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.Tool:
+def _claude_summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.Tool:
   # A fresh channel client per blocking call is closed on cancellation, unblocking
   # its short broker wait; the retained journal result remains readable later.
   # the run's tool position names the summon call's projected source, so the
@@ -588,9 +587,11 @@ def _mcp_summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_m
   )
 
 
-def _summon_tool(variables: Variables, live_run: Optional[LiveRun], wire: mcp.Wire) -> llm_mcp.Tool:
-  if wire == 'mcp':
-    return _mcp_summon_tool(variables, live_run)
+def _summon_tool(
+  variables: Variables, live_run: Optional[LiveRun], harness: mcp.Harness
+) -> llm_mcp.Tool:
+  if harness == 'claude':
+    return _claude_summon_tool(variables, live_run)
 
   async def _summon(
     target: str,
@@ -632,12 +633,12 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun], wire: mcp.Wi
   )
 
 
-def _quest_check_tool(variables: Variables, wire: mcp.Wire) -> llm_mcp.Tool:
+def _quest_check_tool(variables: Variables, harness: mcp.Harness) -> llm_mcp.Tool:
   from bro import quest as quest_client
 
-  if wire == 'mcp':
+  if harness == 'claude':
 
-    async def _mcp_quest_check(
+    async def _claude_quest_check(
       quest_id: str, wait: bool = False, timeout: Optional[float] = None
     ) -> dict[str, Any]:
       quest_client.wait_deadline(wait, timeout)
@@ -648,7 +649,7 @@ def _quest_check_tool(variables: Variables, wire: mcp.Wire) -> llm_mcp.Tool:
       return quest_client.outcome_view(outcome)
 
     return llm_mcp.FunctionTool(
-      _mcp_quest_check,
+      _claude_quest_check,
       name='quest_check',
       description=_QUEST_CHECK_DESCRIPTION,
       variables=variables,
@@ -660,17 +661,17 @@ def _quest_check_tool(variables: Variables, wire: mcp.Wire) -> llm_mcp.Tool:
   return llm_mcp.FunctionTool(
     _quest_check,
     name='quest_check',
-    description=_QUEST_CHECK_BARE_DESCRIPTION,
+    description=_QUEST_CHECK_NATIVE_DESCRIPTION,
     variables=variables,
   )
 
 
-def _quest_history_tool(variables: Variables, wire: mcp.Wire) -> llm_mcp.Tool:
+def _quest_history_tool(variables: Variables, harness: mcp.Harness) -> llm_mcp.Tool:
   from bro import quest as quest_client
 
-  if wire == 'mcp':
+  if harness == 'claude':
 
-    async def _mcp_quest_history(
+    async def _claude_quest_history(
       quest_id: str, wait: bool = False, timeout: Optional[float] = None
     ) -> dict[str, Any]:
       quest_client.wait_deadline(wait, timeout)
@@ -681,7 +682,7 @@ def _quest_history_tool(variables: Variables, wire: mcp.Wire) -> llm_mcp.Tool:
       return quest_client.history_view(conversation)
 
     return llm_mcp.FunctionTool(
-      _mcp_quest_history,
+      _claude_quest_history,
       name='quest_history',
       description=_QUEST_HISTORY_DESCRIPTION,
       variables=variables,
@@ -693,7 +694,7 @@ def _quest_history_tool(variables: Variables, wire: mcp.Wire) -> llm_mcp.Tool:
   return llm_mcp.FunctionTool(
     _quest_history,
     name='quest_history',
-    description=_QUEST_HISTORY_BARE_DESCRIPTION,
+    description=_QUEST_HISTORY_NATIVE_DESCRIPTION,
     variables=variables,
   )
 
@@ -710,12 +711,12 @@ def _quest_say_tool(variables: Variables) -> llm_mcp.Tool:
   )
 
 
-def _quest_ask_tool(variables: Variables, wire: mcp.Wire) -> llm_mcp.Tool:
+def _quest_ask_tool(variables: Variables, harness: mcp.Harness) -> llm_mcp.Tool:
   from bro import quest as quest_client
 
-  if wire == 'mcp':
+  if harness == 'claude':
 
-    async def _mcp_quest_ask(
+    async def _claude_quest_ask(
       quest_id: str,
       text: str,
       reply_to: Optional[str] = None,
@@ -730,7 +731,7 @@ def _quest_ask_tool(variables: Variables, wire: mcp.Wire) -> llm_mcp.Tool:
       return quest_client.asked_view(asked)
 
     return llm_mcp.FunctionTool(
-      _mcp_quest_ask, name='quest_ask', description=_QUEST_ASK_DESCRIPTION, variables=variables
+      _claude_quest_ask, name='quest_ask', description=_QUEST_ASK_DESCRIPTION, variables=variables
     )
 
   async def _quest_ask(quest_id: str, text: str, reply_to: Optional[str] = None) -> dict[str, Any]:
@@ -738,7 +739,7 @@ def _quest_ask_tool(variables: Variables, wire: mcp.Wire) -> llm_mcp.Tool:
     return quest_client.asked_view(asked)
 
   return llm_mcp.FunctionTool(
-    _quest_ask, name='quest_ask', description=_QUEST_ASK_BARE_DESCRIPTION, variables=variables
+    _quest_ask, name='quest_ask', description=_QUEST_ASK_NATIVE_DESCRIPTION, variables=variables
   )
 
 
@@ -753,19 +754,21 @@ def _quest_list_tool(variables: Variables) -> llm_mcp.Tool:
   )
 
 
-def _quest_cancel_tool(variables: Variables, wire: mcp.Wire) -> llm_mcp.Tool:
+def _quest_cancel_tool(variables: Variables, harness: mcp.Harness) -> llm_mcp.Tool:
   from bro import quest as quest_client
 
-  if wire == 'mcp':
+  if harness == 'claude':
 
-    async def _mcp_quest_cancel(quest_id: str, timeout: Optional[float] = None) -> dict[str, Any]:
+    async def _claude_quest_cancel(
+      quest_id: str, timeout: Optional[float] = None
+    ) -> dict[str, Any]:
       quest_client.wait_deadline(True, timeout)
       with quest_client.open_client() as client:
         status = await off_loop(quest_client.cancel, quest_id, timeout=timeout, client=client)
       return quest_client.cancel_view(status)
 
     return llm_mcp.FunctionTool(
-      _mcp_quest_cancel,
+      _claude_quest_cancel,
       name='quest_cancel',
       description=_QUEST_CANCEL_DESCRIPTION,
       variables=variables,
@@ -778,7 +781,7 @@ def _quest_cancel_tool(variables: Variables, wire: mcp.Wire) -> llm_mcp.Tool:
   return llm_mcp.FunctionTool(
     _quest_cancel,
     name='quest_cancel',
-    description=_QUEST_CANCEL_BARE_DESCRIPTION,
+    description=_QUEST_CANCEL_NATIVE_DESCRIPTION,
     variables=variables,
   )
 
@@ -791,11 +794,9 @@ _JOB_DESCRIPTION = (
   'continuously spooled output). the command must match this persona’s shell roster whole and '
   'exact; unrestricted personas may run any command. `fg` waits for exit and returns tail-kept '
   'output; if its timeout or other job news ends the wait first, the job becomes `bg` and the '
-  'result names its id and `poll` continuation. `bg` returns immediately'
-  '{{iff #wire = bare}} and reports only its exit through this run’s notifications; `watch` '
-  'returns immediately and reports output as it arrives plus its exit.{{else}}; this MCP-served '
-  'build offers no `watch`, background output and exit are read with `poll`, and foreground '
-  'waits must fit beneath the client’s MCP call cap.{{end}} `timeout_seconds` is capped at '
+  'result names its id and `poll` continuation. `bg` returns immediately and reports only its '
+  'exit through this run’s notifications; `watch` returns immediately and reports output as it '
+  'arrives plus its exit. `timeout_seconds` is capped at '
   f'{_JOB_WAIT_CAP_SECONDS:g} and a clamp is named in the result. output is bounded by `limit` '
   'lines and the shared byte '
   'cap, with skipped/pending markers.'
@@ -837,14 +838,6 @@ def _bounded_wait(seconds: float, field: str) -> tuple[float, Optional[str]]:
   return _JOB_WAIT_CAP_SECONDS, f'{field} {seconds:g} clamped to {_JOB_WAIT_CAP_SECONDS:g}'
 
 
-def _require_job_registry(live_run: Optional[LiveRun], owned: Optional[Registry]) -> Registry:
-  if owned is not None:
-    return owned
-  if live_run is None:
-    raise RuntimeError('job tools on the bare wire require a live run')
-  return live_run.registry
-
-
 def _admit_shell_command(command: str, *, commands: tuple[str, ...], unrestricted: bool) -> str:
   normalized = command.strip()
   if len(normalized) == 0:
@@ -861,24 +854,15 @@ def _admit_shell_command(command: str, *, commands: tuple[str, ...], unrestricte
 async def _wait_for_foreground_job(
   job: Job,
   *,
-  inbox: Optional[Inbox],
+  inbox: Inbox,
   timeout_seconds: float,
   limit: int,
 ) -> str:
   wait_seconds, clamp_note = _bounded_wait(timeout_seconds, 'timeout_seconds')
   deadline = time.monotonic() + wait_seconds
   try:
-    if inbox is None:
-      cancelled = threading.Event()
-      try:
-        await off_loop(job.wait_finished, deadline, cancelled)
-      except asyncio.CancelledError:
-        cancelled.set()
-        job.wake()
-        raise
-    else:
-      with inbox.waiter() as cancelled:
-        await off_loop(inbox.wait, deadline, cancelled)
+    with inbox.waiter() as cancelled:
+      await off_loop(inbox.wait, deadline, cancelled)
   except asyncio.CancelledError:
     job.become_background()
     raise
@@ -893,77 +877,48 @@ async def _wait_for_foreground_job(
 
 def _job_tools(
   *,
-  wire: mcp.Wire,
-  live_run: Optional[LiveRun],
-  registry: Optional[Registry],
+  live_run: LiveRun,
   commands: tuple[str, ...],
   unrestricted: bool,
   variables: Variables,
 ) -> list[llm_mcp.Tool]:
   def start(command: str, mode: str) -> Job:
     admitted = _admit_shell_command(command, commands=commands, unrestricted=unrestricted)
-    return _require_job_registry(live_run, registry).start(admitted, mode)  # type: ignore[arg-type]
+    return live_run.registry.start(admitted, mode)  # type: ignore[arg-type]
 
-  if wire == 'bare':
-
-    async def _bare_job(
-      command: str,
-      mode: Literal['fg', 'bg', 'watch'] = 'fg',
-      timeout_seconds: float = _FOREGROUND_WAIT_SECONDS,
-      limit: int = DEFAULT_LIMIT,
-    ) -> str:
-      started = start(command, mode)
-      if mode != 'fg':
-        return f'started {started.id} ({mode})'
-      inbox = None if live_run is None else live_run.inbox
-      if inbox is None:
-        raise RuntimeError('foreground jobs on the bare wire require a live run')
-      return await _wait_for_foreground_job(
-        started, inbox=inbox, timeout_seconds=timeout_seconds, limit=limit
-      )
-
-    job_function = _bare_job
-  else:
-
-    async def _mcp_job(
-      command: str,
-      mode: Literal['fg', 'bg'] = 'fg',
-      timeout_seconds: float = _FOREGROUND_WAIT_SECONDS,
-      limit: int = DEFAULT_LIMIT,
-    ) -> str:
-      started = start(command, mode)
-      if mode == 'bg':
-        return f'started {started.id} (bg)'
-      return await _wait_for_foreground_job(
-        started, inbox=None, timeout_seconds=timeout_seconds, limit=limit
-      )
-
-    job_function = _mcp_job
+  async def job(
+    command: str,
+    mode: Literal['fg', 'bg', 'watch'] = 'fg',
+    timeout_seconds: float = _FOREGROUND_WAIT_SECONDS,
+    limit: int = DEFAULT_LIMIT,
+  ) -> str:
+    started = start(command, mode)
+    if mode != 'fg':
+      return f'started {started.id} ({mode})'
+    return await _wait_for_foreground_job(
+      started, inbox=live_run.inbox, timeout_seconds=timeout_seconds, limit=limit
+    )
 
   def poll(id: str, limit: int = DEFAULT_LIMIT, tail: bool = False) -> str:
-    return _require_job_registry(live_run, registry).get(id).poll(limit, tail=tail)
+    return live_run.registry.get(id).poll(limit, tail=tail)
 
   async def kill(id: str) -> str:
-    target = _require_job_registry(live_run, registry).get(id)
+    target = live_run.registry.get(id)
     return await off_loop(target.kill)
 
   def jobs() -> list[JobStatus]:
-    return [job.status() for job in _require_job_registry(live_run, registry).values()]
+    return [entry.status() for entry in live_run.registry.values()]
 
   return [
-    llm_mcp.FunctionTool(
-      job_function, name='job', description=_JOB_DESCRIPTION, variables=variables
-    ),
+    llm_mcp.FunctionTool(job, name='job', description=_JOB_DESCRIPTION, variables=variables),
     llm_mcp.FunctionTool(poll, name='poll', description=_POLL_DESCRIPTION, variables=variables),
     llm_mcp.FunctionTool(kill, name='kill', description=_KILL_DESCRIPTION, variables=variables),
     llm_mcp.FunctionTool(jobs, name='jobs', description=_JOBS_DESCRIPTION, variables=variables),
   ]
 
 
-def _chill_tool(live_run: Optional[LiveRun], variables: Variables) -> llm_mcp.Tool:
+def _chill_tool(live_run: LiveRun, variables: Variables) -> llm_mcp.Tool:
   async def chill(seconds: float = _JOB_WAIT_CAP_SECONDS) -> dict[str, Any]:
-    if live_run is None:
-      raise RuntimeError('chill requires a live run')
     if not live_run.registry.has_live_jobs():
       raise ValueError('chill needs at least one live job')
     wait_seconds, clamp_note = _bounded_wait(seconds, 'seconds')
@@ -1011,7 +966,6 @@ def _build_service_server(
   *,
   include_raise: bool,
   harness: mcp.Harness,
-  wire: mcp.Wire,
   live_run: Optional[LiveRun] = None,
 ) -> llm_mcp.MCPServer:
   # built only on the paths that serve a bro, never at construction: deriving the
@@ -1023,23 +977,24 @@ def _build_service_server(
   # sense non-interactively (a caller to abort to — interactive callers pass
   # include_raise=False); `answer` is the summoned run's delivery surface — it
   # needs the summoned mark and broker intent, plus a killable session on the
-  # mcp wire (the bare flavor ends the run by exception); the summon tools
-  # need the same intent. The decided roster
-  # then feeds the tools' rendering vocabulary: service tools are harness
-  # features, the one tool surface that conditions on system facts, so `#wire`
-  # is injected next to the `#tools` roster.
+  # claude harness (the native flavor ends the run by exception); the summon
+  # tools need the same intent. The decided roster then feeds the tools'
+  # rendering vocabulary: service tools are harness features, the one tool
+  # surface that conditions on system facts, so `#harness` is injected next to
+  # the `#tools` roster.
   from bro.summon import summoned
 
   has_cast = len(bro.spell_paths) > 0 and spell_store.cast_available()
   has_broker = any(os.environ.get(name) is not None for name in (BROKER_CHANNEL, BROKER_UPSTREAM))
   has_answer = (
-    has_broker and summoned() and (wire == 'bare' or os.environ.get('RIDE_RUNNER_PID') is not None)
+    has_broker
+    and summoned()
+    and (harness == 'bro' or os.environ.get('RIDE_RUNNER_PID') is not None)
   )
   selection = bro._selected_tools_for(harness)
   has_jobs = harness == 'bro' and (
     selection.shell_unrestricted or len(selection.shell_commands) > 0
   )
-  owned_registry = Registry() if has_jobs and wire == 'mcp' else None
   mounted = ['banner']
   if has_cast:
     mounted.append('cast')
@@ -1062,48 +1017,43 @@ def _build_service_server(
       ]
     )
   if has_jobs:
-    mounted.extend(['job', 'poll', 'kill', 'jobs'])
-    if wire == 'bare':
-      mounted.append('chill')
+    mounted.extend(['job', 'poll', 'kill', 'jobs', 'chill'])
   variables: Variables = {
-    **mcp.surface_variables(wire=wire),
+    **mcp.surface_variables(harness=harness),
     'tools': SetVariable(frozenset(mounted), universe=frozenset(_SERVICE_TOOL_NAMES)),
   }
 
   tools: list[llm_mcp.Tool] = [_banner_tool(bro, live_run, variables)]
   if has_cast:
-    tools.append(spell_store.build_cast_tool(bro, harness=harness, wire=wire))
+    tools.append(spell_store.build_cast_tool(bro, harness=harness))
   if harness == 'bro':
     tools.append(spell_store.build_skill_tool())
   if include_raise:
-    tools.append(_raise_tool(wire, variables))
+    tools.append(_raise_tool(harness, variables))
   if has_answer:
-    tools.append(_answer_tool(wire, variables))
+    tools.append(_answer_tool(harness, variables))
   if has_broker:
-    tools.append(_summon_tool(variables, live_run, wire))
-    tools.append(_quest_check_tool(variables, wire))
-    tools.append(_quest_history_tool(variables, wire))
+    tools.append(_summon_tool(variables, live_run, harness))
+    tools.append(_quest_check_tool(variables, harness))
+    tools.append(_quest_history_tool(variables, harness))
     tools.append(_quest_say_tool(variables))
-    tools.append(_quest_ask_tool(variables, wire))
+    tools.append(_quest_ask_tool(variables, harness))
     tools.append(_quest_list_tool(variables))
-    tools.append(_quest_cancel_tool(variables, wire))
+    tools.append(_quest_cancel_tool(variables, harness))
   if has_jobs:
+    if live_run is None:
+      raise RuntimeError('job tools require a live run')
     tools.extend(
       _job_tools(
-        wire=wire,
         live_run=live_run,
-        registry=owned_registry,
         commands=selection.shell_commands,
         unrestricted=selection.shell_unrestricted,
         variables=variables,
       )
     )
-    if wire == 'bare':
-      tools.append(_chill_tool(live_run, variables))
+    tools.append(_chill_tool(live_run, variables))
   assert [tool.name for tool in tools] == mounted
-  server = llm_mcp.InProcessMCPServer(
-    'bro', tools, close=None if owned_registry is None else owned_registry.close
-  )
+  server = llm_mcp.InProcessMCPServer('bro', tools)
   server.tool_universe = _SERVICE_TOOL_NAMES
   return server
 
@@ -1406,9 +1356,6 @@ class BaseBro(ABC):
   system_prompt: str = ''
   # the bro's own class prompts (MRO-concatenated); set in __init__
   persona: str
-  # `system_prompt` with the Claude-Code tool-name rule in place of the
-  # bro-native one; set in __init__, consumed by `ride solo|along --raw`
-  claude_system_prompt: str
 
   def __init_subclass__(cls, **kwargs: Any) -> None:
     super().__init_subclass__(**kwargs)
@@ -1486,11 +1433,9 @@ class BaseBro(ABC):
     # the membership probe is lazy, so the vocabulary built here stays current
     # with the store — only selection (below) bakes feature truth in.
     self._feature_vocabulary: Variables = _feature_variables(feature_gates)
-    # the raw declaration entries, kept for per-harness selection
+    # the declaration entries as declared, kept for per-harness selection
     # (_components_for); the bro-harness selection is materialized eagerly —
-    # the prompt compositions below and the live-server cache read it. wire is
-    # not a fact — component inclusion is wire-independent (the wire only
-    # spells tool names).
+    # the prompt composition below and the live-server cache read it.
     self._tool_entries = tool_entries
     self._data_source_entries = data_source_entries
     surface_creds = credentials.known_names()
@@ -1520,46 +1465,31 @@ class BaseBro(ABC):
     # `# Persona: <name>` heading — the segment lands inside larger composed
     # prompts (below, and ride's append prompt), where headingless identity text
     # reads as a stray fragment. no shared / data-source / spells blocks here;
-    # injected into dive-in Claude Code sessions (ride/ride/claude/system_prompt.py) so they
-    # carry the bro's policies outside --raw mode.
+    # injected into managed Claude sessions (ride/ride/claude/system_prompt.py)
+    # so they carry the bro's policies under the claude harness.
     self.persona = (
       '\n\n'.join([f'# Persona: {self.name}', *prompt_parts]) if len(prompt_parts) > 0 else ''
     )
     shared = _load_shared_prompts()
     spell_instructions = self.spell_instructions()
-
-    def compose(wire: mcp.Wire) -> str:
-      parts = []
-      if len(shared) > 0:
-        parts.append(shared)
-      if len(self.persona) > 0:
-        parts.append(self.persona)
-      parts.append(get_prompt('tool_names.md').strip())
-      if len(self._data_sources) > 0:
-        parts.append(_render_data_sources(self._data_sources))
-      if len(spell_instructions) > 0:
-        parts.append(spell_instructions)
-      parts.append(_render_skill_loader())
-      # last, so it sits at the end of the prompt where instruction recency is
-      # strongest; the file's directives scope it to the claude-bare surface.
-      parts.append(get_prompt('grounding.md').strip())
-      # both composed flavors serve the bro harness; only the wire scheme differs.
-      # stripped: a fragment whose whole body is a skipped directive block
-      # (grounding.md outside the claude-bare surface) collapses to bare join
-      # separators at the prompt edge.
-      return mcp.render_text(
-        '\n\n'.join(parts),
-        harness='bro',
-        wire=wire,
-        creds=credentials.known_names(),
-        may_summon=summon.effective_may_summon(),
-        extra=self._feature_vocabulary,
-      ).strip()
-
-    self.system_prompt = compose('bare')
-    # the same prompt over mcp wire names — what a `ride solo|along --raw` session passes
-    # as --system-prompt (ride/ride/claude/claude_argv.py).
-    self.claude_system_prompt = compose('mcp')
+    parts = []
+    if len(shared) > 0:
+      parts.append(shared)
+    if len(self.persona) > 0:
+      parts.append(self.persona)
+    parts.append(get_prompt('tool_names.md').strip())
+    if len(self._data_sources) > 0:
+      parts.append(_render_data_sources(self._data_sources))
+    if len(spell_instructions) > 0:
+      parts.append(spell_instructions)
+    parts.append(_render_skill_loader())
+    self.system_prompt = mcp.render_text(
+      '\n\n'.join(parts),
+      harness='bro',
+      creds=credentials.known_names(),
+      may_summon=summon.effective_may_summon(),
+      extra=self._feature_vocabulary,
+    ).strip()
 
   @property
   def agent(self) -> str:
@@ -1572,7 +1502,7 @@ class BaseBro(ABC):
     """the bro's own rendering vocabulary — `#features` over the declared
     feature names. merged (as `extra`) next to the surface facts wherever this
     bro's declarations or text evaluate; the bro counterpart of
-    `DataSource.vocabulary`. Any surface that renders the raw `persona` must
+    `DataSource.vocabulary`. Any surface that renders `persona` on its own must
     pass it too — the class prompts may carry `#features` directives."""
     return self._feature_vocabulary
 
@@ -1594,7 +1524,7 @@ class BaseBro(ABC):
     """the bro's spell files by spell name, read-only."""
     return MappingProxyType(self._spells)
 
-  def get_spell_body(self, name: str, *, harness: mcp.Harness, wire: mcp.Wire) -> str:
+  def get_spell_body(self, name: str, *, harness: mcp.Harness) -> str:
     path = self._spells.get(name)
     if path is None:
       available = ', '.join(sorted(self._spells)) if len(self._spells) > 0 else '(none)'
@@ -1603,7 +1533,6 @@ class BaseBro(ABC):
     return mcp.render_text(
       spell.body,
       harness=harness,
-      wire=wire,
       creds=credentials.known_names(),
       may_summon=summon.effective_may_summon(),
       extra=self._feature_vocabulary,
@@ -1728,17 +1657,13 @@ class BaseBro(ABC):
     return bro
 
   def _servers_with_spell_tools(
-    self,
-    servers: list[llm_mcp.MCPServer],
-    *,
-    harness: mcp.Harness,
-    wire: mcp.Wire,
+    self, servers: list[llm_mcp.MCPServer], *, harness: mcp.Harness
   ) -> list[llm_mcp.MCPServer]:
     if any(server.namespace == spell_store.NAMESPACE for server in servers):
       raise ValueError(f'namespace {spell_store.NAMESPACE!r} is reserved for bro framework tools')
     if len(self._spells) == 0:
       return servers
-    return [*servers, spell_store.build_spell_server(self, harness=harness, wire=wire)]
+    return [*servers, spell_store.build_spell_server(self, harness=harness)]
 
   def _live_mcp_servers(self) -> list[llm_mcp.MCPServer]:
     # specs materialize here, on first tool use — always in a serving process,
@@ -1765,7 +1690,6 @@ class BaseBro(ABC):
     self,
     *,
     harness: mcp.Harness,
-    wire: mcp.Wire,
     include_raise: bool,
     live_run: Optional[LiveRun] = None,
   ) -> list[llm_mcp.MCPServer]:
@@ -1777,15 +1701,9 @@ class BaseBro(ABC):
       servers = [spec.build() for spec in specs]
       servers.extend(source.as_mcp_server() for source in sources)
     servers.append(
-      _build_service_server(
-        self,
-        include_raise=include_raise,
-        harness=harness,
-        wire=wire,
-        live_run=live_run,
-      )
+      _build_service_server(self, include_raise=include_raise, harness=harness, live_run=live_run)
     )
-    return self._servers_with_spell_tools(servers, harness=harness, wire=wire)
+    return self._servers_with_spell_tools(servers, harness=harness)
 
   def system_prompt_for(self, *, hold: str) -> str:
     """the bro-native system prompt under a hold — the composed prompt plus the
@@ -1797,7 +1715,6 @@ class BaseBro(ABC):
     fragment = session_fragment(
       hold,
       harness='bro',
-      wire='bare',
       creds=credentials.known_names(),
       talk=summon.talk(),
     )

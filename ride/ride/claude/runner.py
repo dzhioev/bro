@@ -20,7 +20,6 @@ from bro.summon import SUMMONER_ENV, summoned
 from ride.claude.claude_argv import build_claude_launch
 from ride.claude.claude_auth import apply_claude_auth
 from ride.claude.claude_config import latest_jsonl
-from ride.claude.harness import options
 from ride.claude.interrupt import Run, run_interactive, run_printing, run_printing_through
 from ride.claude.mcp import start_session_mcp_server
 from ride.claude.recorder import start_session_recorder
@@ -40,12 +39,7 @@ def _set_session_context(spec: 'SessionSpec | SessionRun', system_prompt: str, t
   """capture the session's launch context into RIDE_SESSION_CONTEXT for the
   session recorder daemon (set in os.environ, which the daemon's spawn
   snapshots)."""
-  records = build_session_context(
-    system_prompt=system_prompt,
-    bro=spec.bro,
-    raw=options(spec).raw,
-    proj_root=tree,
-  )
+  records = build_session_context(system_prompt=system_prompt, bro=spec.bro, proj_root=tree)
   os.environ[RIDE_SESSION_CONTEXT_ENV] = encode_session_context(records)
 
 
@@ -168,16 +162,11 @@ def run_session(spec: 'SessionSpec | SessionRun') -> int:
     claude_args = ['--resume', latest.stem, *claude_args]
 
   with contextlib.ExitStack() as teardown:
-    # session-local MCP serving, one mechanism for both flavors: OS-assigned port
-    # published via a port file, per-session bearer token. the server imports from
-    # the session runtime selected by PATH — the snapshot on host, the runtime
-    # volume in a container.
-    if options(spec).raw:
-      mcp_spec = f'bro:{spec.bro}'
-    else:
-      mcp_spec = f'persona:{spec.bro}'
+    # session-local MCP serving: OS-assigned port published via a port file,
+    # per-session bearer token. the server imports from the session runtime
+    # selected by PATH — the snapshot on host, the runtime volume in a container.
     try:
-      server = start_session_mcp_server(mcp_spec, tree, os.environ)
+      server = start_session_mcp_server(f'persona:{spec.bro}', tree, os.environ)
     except RuntimeError as error:
       log.error('%s', error)
       return 1
@@ -221,12 +210,10 @@ def run_session(spec: 'SessionSpec | SessionRun') -> int:
     # claude's MCP tool-call timeout (ms): the ~1-minute default kills
     # legitimately slow tools (vision audits, renders)
     env['MCP_TOOL_TIMEOUT'] = str(10 * 60 * 1000)
-    raw = options(spec).raw
-    if not raw:
-      # claude resolves fast-mode availability from a stored OAuth credentials
-      # file, and left to guess without one reports it disabled by an organization
-      env['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK'] = '1'
-    apply_claude_auth(env, warn_when_missing=not raw)
+    # claude resolves fast-mode availability from a stored OAuth credentials
+    # file, and left to guess without one reports it disabled by an organization
+    env['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK'] = '1'
+    apply_claude_auth(env, warn_when_missing=True)
     log.info('launching claude')
     if spec.solo and summoned():
       code = _run_claude_summoned(launch.argv, env)

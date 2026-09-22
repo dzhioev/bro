@@ -206,10 +206,6 @@ class Job:
         self._condition.wait(remaining)
       return self._finished_locked()
 
-  def wake(self) -> None:
-    with self._condition:
-      self._condition.notify_all()
-
   def poll(self, limit: int = DEFAULT_LIMIT, *, tail: bool = False) -> str:
     """Read the current unread head or tail without blocking."""
     with self._condition:

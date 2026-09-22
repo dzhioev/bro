@@ -175,10 +175,9 @@ def _render_spell_call(
   arguments: dict[str, Any],
   *,
   harness: mcp.Harness,
-  wire: mcp.Wire,
   offset: int = 0,
 ) -> str:
-  body = bro.get_spell_body(spell.name, harness=harness, wire=wire)
+  body = bro.get_spell_body(spell.name, harness=harness)
   passed = [
     f'{parameter.name}: {arguments[parameter.name]}'
     for parameter in spell.parameters
@@ -226,7 +225,6 @@ async def _interpret(
   spells: list[Spell],
   bro: 'BaseBro',
   harness: mcp.Harness,
-  wire: mcp.Wire,
 ) -> dict[str, Any] | str:
   from bro.llm.mu import JSON, mu
   from bro.prompts import get_prompt
@@ -244,7 +242,7 @@ async def _interpret(
       raise ValueError('spell interpreter returned an empty error')
     return {'error': interpretation.error}
   spell, arguments = _validated_call(interpretation, spells)
-  rendered = _render_spell_call(bro, spell, arguments, harness=harness, wire=wire)
+  rendered = _render_spell_call(bro, spell, arguments, harness=harness)
   return f'spell: {_canonical_name(spell)}\n\n{rendered}'
 
 
@@ -255,12 +253,10 @@ class SpellTool(llm_mcp.Tool):
     spell: Spell,
     *,
     harness: mcp.Harness,
-    wire: mcp.Wire,
   ):
     self._bro = bro
     self._spell = spell
     self._harness: mcp.Harness = harness
-    self._wire: mcp.Wire = wire
     properties: dict[str, dict[str, Any]] = {
       parameter.name: {'type': 'string', 'description': parameter.description}
       for parameter in spell.parameters
@@ -309,7 +305,7 @@ class SpellTool(llm_mcp.Tool):
     if isinstance(offset, bool) or not isinstance(offset, int):
       raise ValueError('spell argument "offset" must be an integer')
     return _render_spell_call(
-      self._bro, self._spell, arguments, harness=self._harness, wire=self._wire, offset=offset
+      self._bro, self._spell, arguments, harness=self._harness, offset=offset
     )
 
 
@@ -352,12 +348,10 @@ class CastTool(llm_mcp.Tool):
     spells: list[Spell],
     *,
     harness: mcp.Harness,
-    wire: mcp.Wire,
   ):
     self._bro = bro
     self._spells = spells
     self._harness: mcp.Harness = harness
-    self._wire: mcp.Wire = wire
 
   @property
   def name(self) -> str:
@@ -389,26 +383,24 @@ class CastTool(llm_mcp.Tool):
     command = arguments['command']
     if not isinstance(command, str) or len(command.strip()) == 0:
       raise ValueError('spell interpreter argument "command" must be a non-empty string')
-    return await _interpret(command, self._spells, self._bro, self._harness, self._wire)
+    return await _interpret(command, self._spells, self._bro, self._harness)
 
 
 def _load_bro_spells(bro: 'BaseBro') -> list[Spell]:
   return [load_spell(name, path) for name, path in bro.spell_paths.items()]
 
 
-def build_cast_tool(bro: 'BaseBro', *, harness: mcp.Harness, wire: mcp.Wire) -> llm_mcp.Tool:
-  return CastTool(bro, _load_bro_spells(bro), harness=harness, wire=wire)
+def build_cast_tool(bro: 'BaseBro', *, harness: mcp.Harness) -> llm_mcp.Tool:
+  return CastTool(bro, _load_bro_spells(bro), harness=harness)
 
 
 def build_skill_tool() -> llm_mcp.Tool:
   return SkillTool()
 
 
-def build_spell_server(
-  bro: 'BaseBro', *, harness: mcp.Harness, wire: mcp.Wire
-) -> llm_mcp.MCPServer:
+def build_spell_server(bro: 'BaseBro', *, harness: mcp.Harness) -> llm_mcp.MCPServer:
   tools: list[llm_mcp.Tool] = [
-    SpellTool(bro, spell, harness=harness, wire=wire) for spell in _load_bro_spells(bro)
+    SpellTool(bro, spell, harness=harness) for spell in _load_bro_spells(bro)
   ]
   server = llm_mcp.InProcessMCPServer(NAMESPACE, tools)
   server.tool_universe = tuple(tool.name for tool in tools)

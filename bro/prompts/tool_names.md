@@ -5,8 +5,8 @@ it can appear anywhere
 — a spell,
 a doc,
 a tool description,
-a user message. {{iff #wire = bare}}In your tool list it is `namespace__tool`:
-replace `::` with `__` and call that wire name directly.{{eliff #wire = mcp}}It resolves to the MCP tool `mcp__namespace__tool`:
+a user message. {{iff #harness = bro}}In your tool list it is `namespace__tool`:
+replace `::` with `__` and call that wire name directly.{{eliff #harness = claude}}It resolves to the MCP tool `mcp__namespace__tool`:
 replace `::` with `__` and prepend `mcp__`.{{end}}
 
 The canonical `spell` namespace is reserved for spells.

@@ -1,11 +1,9 @@
 """the session recorder daemon the Claude runner starts next to Claude.
 
-Every session flavor gets continuous transcript recording to trails from one
+Every session gets continuous transcript recording to trails from one
 mechanism: the runner spawns the recorder before launching claude and stops it
 after claude exits — the stop is the daemon's final append and trail end
-(`ride/ride/claude/trail_recorder.py` owns transcript acquisition). Deliberately
-not a Claude Code hook: `--raw` sessions run `claude --bare`, which runs no
-hooks at all.
+(`ride/ride/claude/trail_recorder.py` owns transcript acquisition).
 
 The daemon's stderr goes to the session state dir, among the claude harness's
 own session artifacts; its durable failure signal is the health file

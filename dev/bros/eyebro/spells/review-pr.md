@@ -176,7 +176,7 @@ Events fire for the review parties
   an event source kept failing past the grace window and the watch ended;
   the process exits right after.
 
-{{iff #wire = bare}}
+{{iff #harness = bro}}
 Start it with `bro::job("poll-pr …", mode="watch")` and keep the returned job id.
 Its JSON lines arrive as background-job notifications.
 React to every line per step 6, use `bro::poll` when a pending marker says more output remains, then call `bro::chill()` whenever nothing else remains.
@@ -189,10 +189,6 @@ Stop it with `bro::kill(id=job_id)` when the review ends.
 Approval (step 7) or a terminal PR event ends it, and nothing before does:
 return to `bro::chill()` however quiet the PR stays
 — the idling is the run working as designed, not a stall to wrap up.
-{{eliff #harness = bro}}
-The raw MCP surface has no notification wake or `chill`, so it cannot own this persistent review loop.
-Do not start a watcher that the run cannot observe;
-raise that the review must continue under bro-native or a full Claude session.
 {{eliff #harness = claude}}
 **MUST launch via the `Monitor` tool with `persistent: true`.
 Do NOT use Bash `run_in_background`**

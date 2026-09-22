@@ -6,7 +6,7 @@ import os
 import signal
 import subprocess
 import threading
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -57,14 +57,13 @@ class SessionRun:
   bro: str
   prompt: Optional[str]
   arguments: list[str]
-  harness_options: dict
 
   @property
   def llm_spec(self) -> LLMSpec:
     return LLMSpec.from_dict(self.resolved_llm)
 
 
-def command(spec: 'SessionSpec', *, harness_flags: Sequence[str]) -> list[str]:
+def command(spec: 'SessionSpec') -> list[str]:
   """Build the do-ride argv for a launcher's session spec."""
   verb = 'solo' if spec.solo else 'along'
   parts = [
@@ -75,7 +74,6 @@ def command(spec: 'SessionSpec', *, harness_flags: Sequence[str]) -> list[str]:
     '--harness',
     spec.harness,
     *(['--resume'] if spec.resume else []),
-    *harness_flags,
   ]
   if spec.repo is not None:
     parts.extend(['--repo', spec.repo])
@@ -92,7 +90,7 @@ def command(spec: 'SessionSpec', *, harness_flags: Sequence[str]) -> list[str]:
 
 def _configure_mode_parser(parser: Parser, *, solo: bool) -> None:
   from bro.mcp import HOLDS
-  from ride.harness import HARNESS_NAMES, get_harness
+  from ride.harness import HARNESS_NAMES
 
   parser.add_argument('--workspace', required=True, help='prepared workspace name')
   parser.add_argument('--harness', required=True, choices=HARNESS_NAMES, help='driving harness')
@@ -102,8 +100,6 @@ def _configure_mode_parser(parser: Parser, *, solo: bool) -> None:
   parser.add_argument('--repo', default=None, metavar='PATH|URL', help='repository attachment')
   parser.add_argument('--hold', required=True, choices=HOLDS, help='session user-involvement level')
   parser.add_argument('--llm', default=None, help='session LLM recipe')
-  for harness_name in HARNESS_NAMES:
-    get_harness(harness_name).add_flags(parser)
   parser.add_argument('bro', help='bro personality to run the harness as')
   parser.add_argument(
     'prompt',
@@ -146,21 +142,11 @@ def _resolved_llm(harness: 'Harness', llm: Optional[str], bro: str) -> dict:
 
 
 def _session_run(args: dict, arguments: list[str]) -> tuple['Harness', SessionRun]:
-  from ride.flags import pop_harness_options
   from ride.harness import get_harness
-  from ride.workspace.metadata import Isolation
 
   mode = args.pop('mode')
   harness_name = args.pop('harness')
   harness = get_harness(harness_name)
-  parser = build_parser()
-  harness_options = pop_harness_options(
-    parser,
-    args,
-    harness_name,
-    solo=mode == 'solo',
-    isolation=Isolation.BOXED,
-  )
   name = args.pop('workspace')
   bro = args.pop('bro')
   llm = args.pop('llm')
@@ -172,7 +158,6 @@ def _session_run(args: dict, arguments: list[str]) -> tuple['Harness', SessionRu
     llm=llm,
     resolved_llm=_resolved_llm(harness, llm, bro),
     arguments=arguments,
-    harness_options=harness_options,
     **args,
   )
   return harness, run

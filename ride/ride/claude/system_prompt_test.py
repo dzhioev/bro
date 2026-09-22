@@ -55,7 +55,7 @@ class TestSessionAppendPrompt:
 
 
 class TestSurfaceRendering:
-  def test_tool_names_rendered_for_mcp_wire(self):
+  def test_tool_names_rendered_for_the_claude_harness(self):
     out = ride_system_prompt.session_append_prompt('guided', 'dev')
     assert 'mcp__namespace__tool' in out
     assert 'call that wire name directly' not in out

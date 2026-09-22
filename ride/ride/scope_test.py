@@ -22,12 +22,6 @@ CLAUDE_RECIPE = ScopeRecipe(
   auth_secret='claude_code',
   llm_key=False,
 )
-RAW_RECIPE = ScopeRecipe(
-  name='test-raw',
-  harness='bro',
-  auth_secret='anthropic',
-  llm_key=False,
-)
 
 
 class SearchBro(Bro):
@@ -75,23 +69,6 @@ class TestScopedSecrets:
   def test_ride_session_set_covers_the_bros_manifest(self):
     scoped = ride.scope.scoped_secrets('scope-search', CLAUDE_RECIPE)
     assert {'catalog', 'brave'} <= scoped.required
-
-  def test_raw_session_uses_full_manifest_and_anthropic(self):
-    # --raw serves the bro's own MCP servers, so it gets the full manifest (brog)
-    # plus anthropic for the apiKeyHelper.
-    scoped = ride.scope.scoped_secrets('bro-dev', RAW_RECIPE)
-    assert {'brog', 'github', 'anthropic'} <= scoped.required
-    # --raw runs claude --bare, which ignores CLAUDE_CODE_OAUTH_TOKEN, so the token
-    # secret is not requested on this surface
-    assert 'claude_code' not in scoped.optional
-    assert 'claude_code' not in scoped.required
-
-  def test_raw_session_includes_optional_secrets(self):
-    # searchable data sources advertise openai best-effort
-    # for the query-focused fetch summary; --raw hydrates it as the optional tier.
-    scoped = ride.scope.scoped_secrets('scope-search', RAW_RECIPE)
-    assert 'openai' in scoped.optional
-    assert 'openai' not in scoped.required  # optional, not required
 
   def test_bro_run_manifest_plus_llm_key(self):
     # dev runs as an LLM process: its manifest plus its LLM key (openai →
@@ -193,7 +170,7 @@ class TestScopedSecrets:
 
     assert scoped.selection == {'brog': 'default'}
 
-  @pytest.mark.parametrize('recipe', [CLAUDE_RECIPE, RAW_RECIPE, BRO_RUN_RECIPE])
+  @pytest.mark.parametrize('recipe', [CLAUDE_RECIPE, BRO_RUN_RECIPE])
   def test_unknown_bro_fails_the_scope(self, recipe):
     with pytest.raises(ride.scope.LaunchScopeError, match="unknown bro 'nonexistent-bro'"):
       ride.scope.scoped_secrets('nonexistent-bro', recipe)

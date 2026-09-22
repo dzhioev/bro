@@ -15,12 +15,7 @@ from bro.workspace.git import fetch_ref
 from bro.workspace.paths import fresh_workspace_name, project_root
 from bro.workspace.project import project_config
 from ride.cli import reports_runtime_errors
-from ride.flags import (
-  add_forwarded_flags,
-  extract_forwarded_argv,
-  isolation_from_args,
-  pop_harness_options,
-)
+from ride.flags import add_forwarded_flags, extract_forwarded_argv
 from ride.harness import get_harness
 from ride.scope import (
   LaunchScopeError,
@@ -89,7 +84,6 @@ def _task_system(
   revoke: list[str],
   bro: Optional[str],
   harness: str,
-  harness_options: dict,
   llm: Optional[str],
 ) -> brog_system.System:
   """the brog backend for the task prefetch, reading `brog` through the launch's
@@ -105,7 +99,7 @@ def _task_system(
     store = launch_view_store(
       scoped_secrets(
         bro_name,
-        driver.scope_recipe(harness_options),
+        driver.scope_recipe(),
         attachment=str(repo),
         llm_spec=launch_llm_spec(driver, str(repo), bro_name, llm),
         grant=grant,
@@ -130,14 +124,13 @@ def dive_in(
   revoke: Optional[list[str]] = None,
   bro: Optional[str] = None,
   harness: str = 'claude',
-  harness_options: Optional[dict] = None,
   llm: Optional[str] = None,
   repo: Optional[Path] = None,
 ) -> int:
   """launch the session. session shaping — the bro (prompt, spells, MCP
-  namespaces) selected by `--bro` or the project default, the harness, or the
-  claude `--raw` flavor — rides the forwarded flags; dive-in adds nothing of
-  its own beyond binding the task prefetch to the same scope (`_task_system`)."""
+  namespaces) selected by `--bro` or the project default, and the harness —
+  rides the forwarded flags; dive-in adds nothing of its own beyond binding the
+  task prefetch to the same scope (`_task_system`)."""
   repo = project_root() if repo is None else repo
   prompt: Optional[str] = None
   if new:
@@ -156,7 +149,6 @@ def dive_in(
         revoke or [],
         bro,
         harness,
-        harness_options if harness_options is not None else {},
         llm,
       )
       brog_task, task_block = _prefetch_task(system, task_ref)
@@ -231,11 +223,6 @@ def main(argv: list[str]) -> Optional[int]:
   # scope-shaping flags are read here as well as forwarded
   config = project_config(repo)
   harness_name = args['harness'] or config.harness
-  harness_arguments = dict(args)
-  isolation = isolation_from_args(harness_arguments)
-  harness_options = pop_harness_options(
-    parser, harness_arguments, harness_name, solo=False, isolation=isolation
-  )
   try:
     selection = selection_from_args(args, project=config)
   except ValueError as error:
@@ -248,7 +235,6 @@ def main(argv: list[str]) -> Optional[int]:
     repo=repo,
     forwarded=forwarded,
     harness=harness_name,
-    harness_options=harness_options,
     **scope_args,
     **args,
   )

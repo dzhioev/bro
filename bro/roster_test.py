@@ -17,7 +17,7 @@ from bro.bro import BaseBro
 from bro.inbox import Inbox
 from bro.jobs import Registry
 from bro.llm.mcp import MCPServer, Tool
-from bro.mcp import Harness, Wire
+from bro.mcp import Harness
 from bro.registry import create_bro, declared_specs
 
 
@@ -30,16 +30,15 @@ class _NoRun:
   registry = Registry(inbox)
 
 
-def _servers(bro: BaseBro, *, harness: Harness = 'bro', wire: Wire = 'bare') -> list[MCPServer]:
-  return bro.assemble(harness=harness, wire=wire, include_raise=True, live_run=_NoRun())
+def _servers(bro: BaseBro, *, harness: Harness = 'bro') -> list[MCPServer]:
+  return bro.assemble(harness=harness, include_raise=True, live_run=_NoRun())
 
 
-# (surface label, server-list builder) — the three assembly shapes a bro's
+# (surface label, server-list builder) — the two assembly shapes a bro's
 # declared components serve
 _SURFACES = [
   ('bro-native', _servers),
-  ('bro-over-mcp', lambda bro: _servers(bro, wire='mcp')),
-  ('alternate-harness', lambda bro: _servers(bro, harness='claude', wire='mcp')),
+  ('alternate-harness', lambda bro: _servers(bro, harness='claude')),
 ]
 
 
@@ -128,15 +127,14 @@ async def test_lead_exposes_the_rewind_read_surface_as_generated_commands():
 @pytest.mark.parametrize('name', sorted(declared_specs()))
 async def test_composed_prompts_leak_no_directives(name):
   bro = create_bro(name)
-  for prompt in (bro.system_prompt, bro.claude_system_prompt):
-    assert _DIRECTIVE_RE.search(prompt) is None
+  assert _DIRECTIVE_RE.search(bro.system_prompt) is None
 
 
 class TestSummonRecovery:
   def test_channel_mounts_query_backed_list_and_renders_recovery(self, monkeypatch):
     monkeypatch.setenv('BROKER_CHANNEL', '/tmp/test-broker.sock')
     bro = create_bro('bro')
-    server = next(server for server in _servers(bro, wire='mcp') if server.namespace == 'bro')
+    server = next(server for server in _servers(bro, harness='claude') if server.namespace == 'bro')
     by_name = {tool.name: tool for tool in __import__('asyncio').run(server.list_tools())}
 
     assert {'summon', 'quest_check', 'quest_history', 'quest_list'} <= set(by_name)

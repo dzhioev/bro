@@ -267,7 +267,6 @@ def _child_session_spec(
     prompt=launch.prompt,
     subject=launch.prompt,
     arguments=[],
-    harness_options=harness.default_options(),
     summon_depth=launch.summon_depth,
     summon_harness=launch.summon_harness,
     runtime_bundle=runtime_reference,
@@ -288,7 +287,7 @@ def _child_launch_scope(
     raise ValueError(auth_error)
   scoped = scoped_secrets(
     launch.target,
-    harness.scope_recipe(spec.harness_options),
+    harness.scope_recipe(),
     attachment=None if repository is None else repository.identity,
     attachment_repository=repository,
     grant=spec.grant,
@@ -649,7 +648,7 @@ def _summoned_scope(
   try:
     return scoped_secrets(
       target,
-      harness.scope_recipe(harness.default_options()),
+      harness.scope_recipe(),
       attachment=attachment,
       grant=list(grant),
       revoke=list(revoke),

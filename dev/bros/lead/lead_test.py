@@ -18,23 +18,21 @@ def test_coordination_spells_render_for_every_surface():
   for path in Lead().spell_paths.values():
     spell = load_spell(path.stem, path)
     for harness in get_args(mcp.Harness):
-      for wire in get_args(mcp.Wire):
-        for granted in (('eyebro',), ()):
-          mcp.render_text(
-            spell.body,
-            harness=harness,
-            wire=wire,
-            creds=spell_store.credentials.known_names(),
-            may_summon=granted,
-          )
+      for granted in (('eyebro',), ()):
+        mcp.render_text(
+          spell.body,
+          harness=harness,
+          creds=spell_store.credentials.known_names(),
+          may_summon=granted,
+        )
 
 
 def test_orchestrate_grants_a_derived_eyebro_to_every_pull_request_phase(monkeypatch):
   bro = Lead()
-  ungranted = bro.get_spell_body('orchestrate', harness='claude', wire='mcp')
+  ungranted = bro.get_spell_body('orchestrate', harness='claude')
   assert '@<the eyebro>' not in ungranted
 
   monkeypatch.setenv(MAY_SUMMON_ENV, 'bro-eyebro')
-  granted = bro.get_spell_body('orchestrate', harness='claude', wire='mcp')
+  granted = bro.get_spell_body('orchestrate', harness='claude')
 
   assert granted.count('`grant` `@<the eyebro>`') == 3

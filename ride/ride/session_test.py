@@ -56,13 +56,10 @@ def _spec(
   resume: bool = False,
   into: Optional[str] = None,
   bro: Optional[str] = None,
-  raw: bool = False,
   prompt: Optional[str] = None,
   arguments: Optional[list[str]] = None,
   env: Optional[dict[str, str]] = None,
 ) -> ride_session.SessionSpec:
-  from ride.claude.harness import ClaudeOptions
-
   resolved_bro = bro if bro is not None else 'bro-dev'
   return ride_session.SessionSpec(
     name=name,
@@ -84,7 +81,6 @@ def _spec(
     prompt=prompt,
     subject=prompt,
     arguments=arguments if arguments is not None else [],
-    harness_options=ClaudeOptions(raw=raw).dump(),
     env=env if env is not None else {},
   )
 
@@ -205,7 +201,6 @@ class _ContainerHarness:
       patch('ride.session._print_resume_hint'),
       # keep the bro-registry import out; threading is asserted per-test
       patch('ride.bro_worker.summon_allow_list', return_value=set()),
-      patch('ride.claude.harness.load_anthropic_key', return_value={'api_key': 'k'}),
       patch('ride.session.local_trails_mounts', return_value=()),
       patch(
         'ride.workspace.docker.ContainerRuntimeResolver.resolve',
@@ -223,7 +218,7 @@ class _ContainerHarness:
     self.remove_workspace = entered[7]
     self.scoped_secrets = entered[3]
     self.summon_allow_list = entered[9]
-    self.local_trails_mounts = entered[11]
+    self.local_trails_mounts = entered[10]
     return self
 
   def __exit__(self, *exception):
@@ -290,12 +285,6 @@ class TestGrantRevoke:
     assert rc == 1
     assert harness.run_started_party.call_count == 0
     assert 'mint one with `claude setup-token`' in caplog.text
-
-  def test_missing_setup_token_does_not_gate_a_raw_launch(self):
-    with _ContainerHarness() as harness:
-      harness.try_get.return_value = None
-      rc = ride_session.start_session(_spec(drop=True, raw=True))
-    assert rc == 0
 
   def test_start_session_grant_already_present_returns_1(self):
     with _ContainerHarness() as h:
@@ -438,7 +427,6 @@ class TestDetachedSession:
     spec = replace(_spec(isolation=Isolation.UNBOXED), repo=None)
     workspace = Workspace.create('detached-host', None, Isolation.UNBOXED)
     harness = MagicMock()
-    harness.session_flags.return_value = []
     with (
       patch('ride.session.get_harness', return_value=harness),
       patch('ride.session.ensure_clone') as ensure_worktree,
@@ -536,26 +524,6 @@ class TestContainerCommand:
       f'{workspace_session_dir(workspace.path)}:{CONTAINER_SESSION_DIR}',
       f'{workspace_party_dir(workspace.path)}:{CONTAINER_PARTY_DIR}',
     )
-
-  def test_raw_carried_in_the_container_command(self):
-    with _ContainerHarness() as h:
-      rc = ride_session.start_session(_spec(drop=True, bro='dev', raw=True))
-    assert rc == 0
-    command = h.run_started_party.call_args.args[0].command
-    assert command == [
-      'do-ride',
-      'along',
-      '--workspace',
-      'w',
-      '--harness',
-      'claude',
-      '--raw',
-      '--repo',
-      str(Path.cwd()),
-      '--hold',
-      'attended',
-      'dev',
-    ]
 
   def test_solo_launch_has_no_container_tty(self):
     spec = replace(
@@ -950,12 +918,6 @@ class TestResumeHint:
     monkeypatch.setattr('sys.stdout.isatty', lambda: False)
     ride_session._print_resume_hint(_spec(), _workspace(tmp_path))
     assert capsys.readouterr().out == ''
-
-
-class TestHarnessScopeRecipe:
-  def test_raw_selects_the_harness_scope_recipe(self):
-    assert claude_harness.CLAUDE.scope_recipe(_spec(raw=True).harness_options).name == 'claude-raw'
-    assert claude_harness.CLAUDE.scope_recipe(_spec().harness_options).name == 'claude-full'
 
 
 class TestConcurrentSessionGuard:

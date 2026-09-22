@@ -188,8 +188,7 @@ Run the repository's formatter, then a persona construction smoke through the pr
 — `uv run bro show <default bro>` for the `[tool.bro] default`, and `uv run bro list`
 — which resolves entry points and loads spells and declarations against the new framework, so an import or declaration error surfaces before the suite does.
 Then run the repository's own gate (its docs name the command).{{when #harness = bro}}
-Run a long gate through `bro::job` in `fg` mode with an explicit large `timeout_seconds`;
-keep the bound beneath the client call cap on the MCP wire.{{end}}
+Run a long gate through `bro::job` in `fg` mode with an explicit large `timeout_seconds`.{{end}}
 
 Deploy scripts are exercised by none of this;
 step 3 is their gate.

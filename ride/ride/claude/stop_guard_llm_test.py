@@ -106,7 +106,7 @@ def test_print_mode_stops_carry_the_running_background_tasks(tmp_path: Path) -> 
   assert task['status'] == 'running'
   assert task['command'] == _MONITOR_COMMAND
   assert isinstance(task['id'], str) and len(task['id']) > 0
-  reason = stop_guard.notice(first, [], 'full', summoned=False)
+  reason = stop_guard.notice(first, [], summoned=False)
   assert reason is not None
   assert task['id'] in reason
   assert _MONITOR_COMMAND in reason

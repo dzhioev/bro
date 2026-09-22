@@ -162,16 +162,6 @@ class TestSessionRun:
       assert h.start_recorder.call_count == 0
       assert h.run_claude.call_count == 1
 
-  def test_raw_session_serves_health_gates_and_syncs(self, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      assert ride_runner.run_session(_spec(bro='dev', raw=True)) == 0
-      assert h.start_server.call_args[0][0] == 'bro:dev'
-      assert h.server.wait_healthy.call_count == 1
-      assert h.server.stop.call_count == 1
-      assert h.start_recorder.call_count == 1
-      assert h.build.call_args.kwargs['endpoint'] == h.server.endpoint
-
   def test_ride_session_serves_the_persona_and_health_gates(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
@@ -199,7 +189,7 @@ class TestSessionRun:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.server.wait_healthy.side_effect = RuntimeError('not healthy')
-      assert ride_runner.run_session(_spec(bro='dev', raw=True)) == 1
+      assert ride_runner.run_session(_spec(bro='dev')) == 1
       assert h.run_claude.call_count == 0
       assert h.server.stop.call_count == 1
 
@@ -223,30 +213,18 @@ class TestSessionRun:
       # the transformed env is the one claude is spawned with
       assert h.apply_auth.call_args.args[0] is h.run_claude.call_args.args[1]
 
-  def test_raw_session_applies_auth_without_warning(self, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      assert ride_runner.run_session(_spec(bro='dev', raw=True)) == 0
-      assert h.apply_auth.call_args.kwargs == {'warn_when_missing': False}
-
   def test_extends_claudes_mcp_tool_call_timeout(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       assert ride_runner.run_session(_spec()) == 0
       assert h.run_claude.call_args.args[1]['MCP_TOOL_TIMEOUT'] == '600000'
 
-  def test_full_session_skips_claudes_fast_mode_org_check(self, monkeypatch, tmp_path):
+  def test_the_session_skips_claudes_fast_mode_org_check(self, monkeypatch, tmp_path):
     # pins the name claude itself reads
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       assert ride_runner.run_session(_spec()) == 0
       assert h.run_claude.call_args.args[1]['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK'] == '1'
-
-  def test_raw_session_keeps_claudes_fast_mode_org_check(self, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      assert ride_runner.run_session(_spec(bro='dev', raw=True)) == 0
-      assert 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK' not in h.run_claude.call_args.args[1]
 
 
 def _fake_claude(tmp_path: Path, script: str) -> dict[str, str]:

@@ -14,10 +14,6 @@ def ride_call():
   return run_cli('ride.call', sys.argv)
 
 
-def ride_claude_print_anthropic_key():
-  return run_cli('ride.claude.print_anthropic_key', sys.argv)
-
-
 def ride_claude_statusline():
   return run_cli('ride.claude.statusline', sys.argv)
 

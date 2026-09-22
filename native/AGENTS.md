@@ -13,7 +13,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   runner, live LLM contract, provider dispatch, and provider clients.
   It imports `bro`, never the reverse, so declaring and inspecting a persona costs nothing of the loop that runs one.
   `runner.py`'s `Runner(bro)` drives one declaration and owns the per-run LLM, observer, tracker, inbox, job registry, broker channel, and trail;
-  it satisfies `bro.bro.LiveRun` and builds its toolset through `BaseBro.assemble(harness='bro', wire='bare', ...)`.
+  it satisfies `bro.bro.LiveRun` and builds its toolset through `BaseBro.assemble(harness='bro', ...)`.
   OpenAI drains the inbox's notifications after tool batches or into an idle turn, delivering them as user-role input;
   interactive owners call `wake()` when the inbox reports news.
   The session text tells a run to arm `quest watch` as a watch-mode job when it can receive summon traffic and use `chill` as its idle wait.

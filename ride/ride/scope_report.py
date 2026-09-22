@@ -15,9 +15,7 @@ from ride.scope import (
 )
 
 
-def report_scope(
-  repo: Optional[Repository | Path], bro: Optional[str], harness: str, options: dict
-) -> int:
+def report_scope(repo: Optional[Repository | Path], bro: Optional[str], harness: str) -> int:
   repo = None if repo is None else as_repository(repo)
   if repo is None and bro is None:
     raise ValueError('ride scope requires --bro when detached')
@@ -32,7 +30,7 @@ def report_scope(
   else:
     bro_name = bro
   driver = get_harness(harness)
-  recipe = driver.scope_recipe(options)
+  recipe = driver.scope_recipe()
   attachment = None if repo is None else repo.identity
   try:
     binding = bind_launch_credentials(attachment, bro_name)

@@ -18,9 +18,9 @@ load explicitly by name (top-level `*.prompt` / `*.prompt.template`).
   `get_prompt` enforces "template ↔ kwargs" symmetry
   — passing kwargs to a non-template, or omitting kwargs for a template, raises
 
-Prompt content may carry `bro.base.template` directives (`#harness`/`#wire`/`#creds`, plus session-fragment `#talk`; grammar and semantics: `bro/reference/template.md`):
+Prompt content may carry `bro.base.template` directives (`#harness`/`#creds`, plus session-fragment `#talk`; grammar and semantics: `bro/reference/template.md`):
 every rendering surface renders its text once with its own facts via `bro.mcp.render_text`
-— `BaseBro.__init__` for the two bro flavors, `ride/ride/claude/system_prompt.py:session_append_prompt` for managed Claude sessions
+— `BaseBro.__init__` for the bro-native prompt, `ride/ride/claude/system_prompt.py:session_append_prompt` for managed Claude sessions
 — so a directive works in `shared/` and bro class prompts alike.
 `FileSource`-served docs are the exception:
 one rendering is read by every harness, so their bodies must be surface-neutral
@@ -66,17 +66,16 @@ Current reference docs:
   every surface calls the `bro::banner` service tool and reads this doc through the `environment` page (`ride banner --llm` stays as the human CLI).
   Tool-served only — not injected
 
-- `tool_names.md` — the tool-name resolution rule, templated on the `#wire` scheme;
+- `tool_names.md` — the tool-name resolution rule, templated on `#harness`;
   one file serves every surface.
-  Claude sessions get the `mcp` rendering (`ns::tool` → `mcp__ns__tool`):
-  injected here for non-raw sessions, composed into `BaseBro.claude_system_prompt` for `ride solo|along --raw` ones.
-  Bro-native LLM runs compose the `bare` rendering (`ns::tool` → `ns__tool`) into `BaseBro.system_prompt`.
+  Managed Claude sessions get the claude rendering (`ns::tool` → `mcp__ns__tool`), injected here;
+  bro-native LLM runs compose the bro rendering (`ns::tool` → `ns__tool`) into `BaseBro.system_prompt`.
   Deliberately no `FileSource`
 
 ## Session fragments
 
 `bro.prompts.session_fragment(hold, …facts)` renders the text a launch surface appends after the composed prompt, and every injection site calls it
-(`ride/ride/claude/system_prompt.py:session_append_prompt`, `ride/ride/claude/claude_argv.py` for `--raw`, `bro/bro.py:BaseBro.system_prompt_for`).
+(`ride/ride/claude/system_prompt.py:session_append_prompt`, `bro/bro.py:BaseBro.system_prompt_for`).
 Those callers pass `bro.summon.talk()` as the `#talk` fact for the summoned contract;
 unset stays unpublished and empty means the run's quest is mute.
 It is the joined-party warning when the run is a member, the summoner’s watch when the run may summon, the summoned-delivery contract when the run is one another session is waiting on, then the hold fragment
@@ -91,11 +90,10 @@ It renders when `bro.summon.party_member()` reads `RIDE_PARTY_MEMBER` from the l
 
 `summoner.md` (top level) has a session that may summon keep the quest watch armed, so every summon's lifecycle and chat remains observable.
 It renders only for a run whose effective allow-list (`bro.summon.effective_may_summon()`) is non-empty, and its body forks by surface:
-the Claude harness holds the watch on a persistent `Monitor`, bro-native starts `quest watch` as a watch-mode job and chills on its inbox, and raw MCP sessions poll the retained quests because that wire has no notification wake.
+the Claude harness holds the watch on a persistent `Monitor`, and bro-native starts `quest watch` as a watch-mode job and chills on its inbox.
 The same text states the notification trust rule and tells the summoner how to exchange questions, continue a retained quest, cancel a child, and how a one-shot run ends on its surface:
 native ends when a turn ends with nothing running and nothing in flight and gives one notice otherwise,
-managed Claude holds while the watch is armed and stops it once every summon has ended,
-and raw ends with its turn after one notice for summons still in flight.
+and managed Claude holds while the watch is armed and stops it once every summon has ended.
 
 ### Summoned contract
 
@@ -103,7 +101,7 @@ and raw ends with its turn after one notice for summons still in flight.
 It renders only for a run `bro.summon.summoned()` reports as summoned, and hold-neutrally
 — the duty comes with being summoned, so an attended or guided child carries the same text a spawned unattended one does.
 Its `#talk` branches admit only the quest's live moves:
-a speaking summoner reaches managed Claude through Monitor, bro-native through its watch job, and raw MCP through retained-quest polls.
+a speaking summoner reaches managed Claude through Monitor and bro-native through its watch job.
 `worker.say` enables progress, `worker.question` uses the surface's non-blocking watch or bounded consult, and a child without that right raises instead of asking.
 
 ### Hold text
@@ -113,8 +111,7 @@ A session's hold — its user-involvement level
 Every session gets exactly one level's text, picked by the launching surface at session start
 — a session is told its hold, never left to detect it at runtime:
 
-- `ride solo|along` picks by its `--hold` flag for both claude flavors
-  — the managed Claude session append prompt and the `--raw` `--system-prompt` (flag semantics: `bro/reference/ride.md`)
+- `ride solo|along` picks by its `--hold` flag for the managed Claude session append prompt (flag semantics: `bro/reference/ride.md`)
 - the bro-native launch surfaces pick it through `bro/bro.py:BaseBro.system_prompt_for`
   — `run()` defaults unattended, `send()` guided, with every launcher's `--hold` overriding (per-surface defaults: `bro/launch/AGENTS.md`, "Display and holds")
 
@@ -129,14 +126,6 @@ a stray `#hold` directive in a spell or procedure doc raises.
 
 The level files are the single place the levels differ:
 unattended carries the never-ask + `raise` convention, detached the carry-questions-into-the-report convention, attended the end-the-turn-at-pivotal-points convention, guided the confirm-each-significant-step convention.
-
-## Bare-session grounding fragment
-
-`grounding.md` (top level, not in `_BASE_PROMPT_FILES`) is the tool-grounding rule for `ride solo|along --raw` sessions:
-`BaseBro` appends it at the end of both composed bro prompt flavors
-— last, where instruction recency is strongest
-— and the file's own directives render its body only for the claude-bare surface (harness `bro`, wire `mcp`),
-the flavor whose argv-seeded first turn can reach the model before its MCP servers connect (`bro/reference/ride.md` "Session-local MCP serving").
 
 ## Top-level one-shot prompts
 

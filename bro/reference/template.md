@@ -71,25 +71,25 @@ file      := prompt file name           file: [A-Za-z0-9._/-]+
 
 ## Rendering surfaces
 
-`bro.mcp.render_text(text, harness=…, wire=…, creds=…, may_summon=…, talk=…, hold=…, extra=…)` renders directives against the facts the call site knows
+`bro.mcp.render_text(text, harness=…, creds=…, may_summon=…, talk=…, hold=…, extra=…)` renders directives against the facts the call site knows
 (the facts, `#hold`'s single-purpose supply rule included, are documented in `bro/reference/conditions.md`;
 `extra` merges a caller-owned vocabulary next to them
 — the bro surfaces pass the owning bro's `#features`) and resolves `{{include}}` targets through the `prompts` loader.
 Each surface renders its copy once, with its own facts:
 
-- `BaseBro.__init__` — the two bro prompt flavors (harness `bro`; wire `bare` / `mcp`)
-- `ride/ride/claude/system_prompt.py` — a managed Claude session's append prompt, the injected persona included (harness `claude`, wire `mcp`)
+- `BaseBro.__init__` — the bro-native system prompt (harness `bro`)
+- `ride/ride/claude/system_prompt.py` — a managed Claude session's append prompt, the injected persona included (harness `claude`)
 - `bro.prompts.hold_fragment` — the hold text (`bro/prompts/hold.md` selecting over `bro/prompts/holds/`), the only surface that supplies `#hold`
 - spell bodies — each `spell::` tool renders for its serving harness;
-  bro-native and `--raw` use the bro branch, while a ride persona session uses the Claude branch
+  the bro-native loop uses the bro branch, while a managed Claude session uses the Claude branch
 - tool descriptions and parameter annotations
   — rendered by the owning server at build time against its own vocabulary, not the harness facts (`#tools` for a `Toolset`'s roster, a data source's `#features` + `#source`;
-  the bro service-tool build additionally injects `#wire`), so no unprocessed directive leaves a server and a standalone server serves final text
+  the bro service-tool build additionally injects `#harness`), so no unprocessed directive leaves a server and a standalone server serves final text
   — see `bro/reference/conditions.md` "Server-domain vocabularies"
 - data-source summaries — `DataSource.rendered_summary()`, the source's vocabulary again, rendered where the prompt composes
 - credential install hooks — `bro.base.credentials.Secret.from_dict` renders each registry secret's `install` text with `#name` bound to the secret's own name, its own single-variable vocabulary like the server-domain ones
 - `FileSource.read` — no facts:
-  one rendering is read by every harness, so a served doc must be surface-neutral and a `#harness`/`#wire`/`#creds` directive raises;
+  one rendering is read by every harness, so a served doc must be surface-neutral and a `#harness`/`#creds` directive raises;
   `render=False` opts a source out entirely, for a doc whose payload is the directive syntax itself (this reference and `bro/reference/conditions.md`)
 
 Authoring rule for prompt files

@@ -31,11 +31,6 @@ class TestRenderText:
     assert render_text(text, harness='bro') == 'watch: job/watch'
     assert render_text(text, harness='claude') == 'watch: Monitor'
 
-  def test_wire_branches(self):
-    text = 'call {{iff #wire = bare}}ns__tool{{eliff #wire = mcp}}mcp__ns__tool{{end}}'
-    assert render_text(text, wire='bare') == 'call ns__tool'
-    assert render_text(text, wire='mcp') == 'call mcp__ns__tool'
-
   def test_creds_membership_probes_availability(self, monkeypatch):
     monkeypatch.setattr(mcp.credentials, 'available', lambda name: name == 'openai')
     text = '{{iff #creds contains openai}}summarized{{else}}raw{{end}}'
@@ -61,12 +56,12 @@ class TestRenderText:
     assert probed == ['openai']
 
   def test_absent_fact_raises_on_reference(self):
-    with pytest.raises(ValueError, match='unknown variable #wire'):
-      render_text('{{when #wire = bare}}x{{end}}', harness='bro')
+    with pytest.raises(ValueError, match='unknown variable #creds'):
+      render_text('{{when #creds contains openai}}x{{end}}', harness='bro')
 
   def test_facts_combine(self):
-    text = '{{when #harness = bro}}B{{end}}{{when #wire = mcp}}M{{end}}'
-    assert render_text(text, harness='bro', wire='mcp') == 'BM'
+    text = '{{when #harness = bro}}B{{end}}{{when #hold = guided}}H{{end}}'
+    assert render_text(text, harness='bro', hold='guided') == 'BH'
 
   def test_plain_text_unchanged_without_consulting_availability(self, monkeypatch):
     def boom(name: str) -> bool:
@@ -82,10 +77,6 @@ class TestRenderText:
   def test_unknown_harness_argument_raises(self):
     with pytest.raises(ValueError, match='unknown harness'):
       render_text('{{iff a = a}}x{{end}}', harness='gemini')  # type: ignore[arg-type]
-
-  def test_unknown_wire_argument_raises(self):
-    with pytest.raises(ValueError, match='unknown wire'):
-      render_text('{{iff a = a}}x{{end}}', wire='grpc')  # type: ignore[arg-type]
 
   def test_hold_fact_selects_a_branch(self):
     text = '{{iff #hold = unattended}}U{{else}}other{{end}}'
@@ -136,7 +127,7 @@ class TestRenderText:
     # the hold fact is supplied only when rendering the hold text, so a
     # stray #hold directive in hold-neutral text fails instead of picking a side
     with pytest.raises(ValueError, match='unknown variable #hold'):
-      render_text('{{when #hold = unattended}}x{{end}}', harness='claude', wire='mcp')
+      render_text('{{when #hold = unattended}}x{{end}}', harness='claude')
 
   def test_unknown_hold_argument_raises(self):
     with pytest.raises(ValueError, match='unknown hold'):
@@ -296,8 +287,8 @@ class TestSelect:
     assert select(entries, talk=[]) == []
 
   def test_absent_fact_raises_on_reference(self):
-    with pytest.raises(ConditionError, match='unknown variable #wire'):
-      select([when(mcp.wire == 'bare', 'x')], harness='bro')
+    with pytest.raises(ConditionError, match='unknown variable #creds'):
+      select([when(mcp.creds.contains('openai'), 'x')], harness='bro')
 
   def test_unknown_harness_argument_raises(self):
     with pytest.raises(ValueError, match='unknown harness'):

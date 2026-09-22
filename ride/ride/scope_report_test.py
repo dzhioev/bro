@@ -23,7 +23,6 @@ def _run(
   available=lambda name: True,
   bro=None,
   harness='claude',
-  options=None,
 ):
   with (
     patch(
@@ -40,12 +39,7 @@ def _run(
     patch('ride.scope_report.scoped_secrets', return_value=scoped) as scope,
     patch('ride.scope_report.credentials.available', available),
   ):
-    rc = report_scope(
-      repo=Path('/repo'),
-      bro=bro,
-      harness=harness,
-      options=options if options is not None else {'raw': False},
-    )
+    rc = report_scope(repo=Path('/repo'), bro=bro, harness=harness)
   return rc, capsys.readouterr().out, scope
 
 
@@ -59,7 +53,7 @@ class TestReportScope:
     )
     assert rc == 0
     assert 'repository: /repo' in out
-    assert 'bro:        bro-dev (claude-full)' in out
+    assert 'bro:        bro-dev (claude)' in out
     assert f'brog+github ({PROJECT_URL_LAYER})' in out
     assert f'github+reviewer ({PROJECT_PATH_BRO_LAYER})' in out
     assert 'optional:' in out and 'openai' in out
@@ -100,15 +94,9 @@ class TestReportScope:
     assert 'brog' in out
     assert 'REFUSED' not in out
 
-  def test_raw_scopes_the_raw_flavor_and_bro_overrides_the_default(self, capsys):
-    _, out, scope = _run(
-      capsys,
-      selection={},
-      scoped=ScopedSecrets({'trails'}, set()),
-      bro='dev',
-      options={'raw': True},
-    )
-    assert 'bro:        dev (claude-raw)' in out
+  def test_an_explicit_bro_overrides_the_default(self, capsys):
+    _, out, scope = _run(capsys, selection={}, scoped=ScopedSecrets({'trails'}, set()), bro='dev')
+    assert 'bro:        dev (claude)' in out
     assert scope.call_args.args[0] == 'dev'
 
   def test_the_scope_follows_the_hosts_per_bro_recipe(self, capsys, monkeypatch, tmp_path):
@@ -116,9 +104,7 @@ class TestReportScope:
     config.write_text(json.dumps({'projects': {'/repo': {'bros': {'bro-dev': {'llm': 'echo'}}}}}))
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
 
-    _, _, scope = _run(
-      capsys, selection={}, scoped=ScopedSecrets(set(), set()), harness='bro', options={}
-    )
+    _, _, scope = _run(capsys, selection={}, scoped=ScopedSecrets(set(), set()), harness='bro')
 
     assert scope.call_args.kwargs['llm_spec'] == EchoLLMSpec()
 
@@ -129,7 +115,6 @@ class TestReportScope:
       scoped=ScopedSecrets(set(), set()),
       bro='no-such-bro',
       harness='bro',
-      options={},
     )
     assert rc == 1
     assert "cannot compute the scope: unknown bro 'no-such-bro'" in out
@@ -140,7 +125,6 @@ class TestReportScope:
       selection={},
       scoped=ScopedSecrets({'openai'}, {'trails'}),
       harness='bro',
-      options={},
     )
     assert 'bro:        bro-dev (bro-run)' in out
     assert scope.call_args.args[1].name == 'bro-run'

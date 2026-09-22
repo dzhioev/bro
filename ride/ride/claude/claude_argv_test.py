@@ -7,10 +7,8 @@ from unittest.mock import patch
 import pytest
 
 import ride.claude.claude_argv as ride_claude_argv
-from bro.broker.environment import BROKER_TALK
 from bro.llm.llms import claude_code
-from bro.summon import SUMMONED_ENV
-from ride.claude.assembly import bro_servers, persona_servers
+from ride.claude.assembly import persona_servers
 from ride.claude.mcp import MCPEndpoint
 from ride.claude.statusline import statusline_command
 from ride.session_test import _spec as _session_spec
@@ -32,12 +30,6 @@ def _brog_config(monkeypatch):
     'bro.base.credentials.get_json',
     lambda name: {'backend': 'github', 'token': 't', 'repo': 'owner/repository'},
   )
-
-
-def _dev_namespaces() -> list[str]:
-  from bro.registry import create_bro
-
-  return list(dict.fromkeys(server.namespace for server in bro_servers(create_bro('dev'))))
 
 
 def _dev_persona_namespaces() -> list[str]:
@@ -175,7 +167,7 @@ class TestRideSessionLaunch:
     (entry,) = _settings(argv)['hooks']['Stop']
     (hook,) = entry['hooks']
     assert 'matcher' not in entry
-    assert shlex.split(hook['command']) == [sys.executable, '-m', 'ride.claude.stop_guard', 'full']
+    assert shlex.split(hook['command']) == [sys.executable, '-m', 'ride.claude.stop_guard']
 
   def test_an_interactive_session_carries_no_stop_guard(self):
     assert 'hooks' not in _settings(_ride_session_launch(_spec(), claude_args=[]).argv)
@@ -201,10 +193,7 @@ class TestRideSessionLaunch:
 
     hooks = _settings(argv)['hooks']
     assert [entry['matcher'] for entry in hooks['PreToolUse']] == ['Monitor']
-    assert shlex.split(hooks['Stop'][0]['hooks'][0]['command'])[-2:] == [
-      'ride.claude.stop_guard',
-      'full',
-    ]
+    assert shlex.split(hooks['Stop'][0]['hooks'][0]['command'])[-1] == 'ride.claude.stop_guard'
 
   def test_fast_mode_lands_in_settings(self):
     assert (
@@ -267,121 +256,13 @@ class TestRideSessionLaunch:
     assert argv[-2:] == ['--', 'answer']
 
 
-class TestRawLaunch:
-  def _launch(self, **kwargs) -> ride_claude_argv.ClaudeLaunch:
-    spec = _spec(bro='dev', raw=True, **kwargs)
-    return ride_claude_argv.build_claude_launch(spec, claude_args=[], endpoint=_ENDPOINT)
-
-  def test_basic_shape(self):
-    argv = self._launch().argv
-    assert '--bare' in argv
-    assert '--strict-mcp-config' in argv
-    # --bare skips project/user skill discovery; framework tools provide the
-    # spell and skill surfaces while built-in slash commands stay enabled
-    assert '--disable-slash-commands' not in argv
-    # tools disabled (empty string follows --tools)
-    assert argv[argv.index('--tools') + 1] == ''
-
-  def test_seeded_prompt_carries_the_launch_note(self):
-    argv = self._launch(prompt='do it').argv
-    seeded = argv[argv.index('--') + 1]
-    assert seeded.startswith('[launch note:')
-    assert seeded.endswith('do it')
-    # a ride session keeps the seed verbatim (harness reminders cover it)
-    native = _ride_session_launch(_spec(prompt='do it'), claude_args=[]).argv
-    assert native[native.index('--') + 1] == 'do it'
-
-  def test_allowed_tools_cover_each_namespace(self):
-    argv = self._launch().argv
-    assert argv[argv.index('--allowed-tools') + 1] == ','.join(
-      f'mcp__{namespace}__*' for namespace in _dev_namespaces()
+def test_unknown_bro_raises():
+  with pytest.raises(KeyError, match='unknown bro'):
+    ride_claude_argv.build_claude_launch(
+      _spec(bro='does-not-exist'), claude_args=[], endpoint=_ENDPOINT
     )
 
-  def test_mcp_config_one_http_entry_per_namespace(self):
-    argv = self._launch().argv
-    config = json.loads(argv[argv.index('--mcp-config') + 1])
-    namespaces = _dev_namespaces()
-    # the service tools ride the `bro` namespace
-    assert 'bro' in namespaces
-    assert list(config['mcpServers']) == namespaces
-    for namespace, entry in config['mcpServers'].items():
-      assert entry['type'] == 'http'
-      assert entry['url'] == f'http://127.0.0.1:1234/{namespace}'
-      assert entry['headers'] == {'Authorization': 'Bearer tok'}
-      assert entry['alwaysLoad'] is True
 
-  def test_settings_merge_fast_mode_and_api_key_helper(self):
-    # the merged --settings is what lets --fast reach a --raw session
-    settings = _settings(self._launch(llm='+fast').argv)
-    assert settings['fastMode'] is True
-    assert (
-      settings['apiKeyHelper']
-      == f'{shlex.quote(sys.executable)} -m ride.claude.print_anthropic_key'
-    )
-    assert _settings(self._launch().argv)['fastMode'] is False
-
-  def test_status_line_lands_in_settings(self):
-    status_line = _settings(self._launch().argv)['statusLine']
-    assert status_line['command'] == statusline_command()
-
-  def test_system_prompt_is_bros_claude_flavor(self):
-    from bro.registry import create_bro
-
-    launch = self._launch()
-    argv = launch.argv
-    prompt = argv[argv.index('--system-prompt') + 1]
-    assert prompt.startswith(create_bro('dev').claude_system_prompt)
-    assert launch.system_prompt == prompt
-    # the flavor whose tool-name rule matches the mcp__<namespace>__<tool> mounts
-    assert '`mcp__namespace__tool`' in prompt
-
-  def test_hold_fragment_follows_the_hold(self):
-    attended = self._launch(hold='attended')
-    assert '# Attended session' in attended.system_prompt
-    assert 'full authorization' in attended.system_prompt
-    assert '--dangerously-skip-permissions' in attended.argv
-    guided = self._launch(hold='guided').system_prompt
-    assert '# Guided session' in guided
-    assert 'full authorization' not in guided
-    # the fragment renders at build — no directive may leak into the prompt
-    assert '{{' not in guided
-
-  def test_raw_summoned_contract_receives_the_quest_talk(self, monkeypatch):
-    monkeypatch.setenv(SUMMONED_ENV, '1')
-    monkeypatch.setenv(BROKER_TALK, 'worker.question')
-    prompt = self._launch(hold='unattended').system_prompt
-    assert 'call `bro::quest_ask` on `self`' in prompt
-    assert 'recover the reply with `bro::quest_history`' in prompt
-
-  def test_solo_combines_bare_and_print_modes(self):
-    argv = self._launch(solo=True, hold='unattended', prompt='answer').argv
-    assert '--bare' in argv
-    assert '-p' in argv
-    assert '--dangerously-skip-permissions' in argv
-    assert '--mcp-config' in argv
-    assert '--system-prompt' in argv
-    assert '--no-session-persistence' not in argv
-    assert argv[-1].endswith('answer')
-
-  def test_a_raw_solo_session_holds_its_turn_end_as_the_raw_surface(self):
-    argv = self._launch(solo=True, hold='unattended', prompt='answer').argv
-
-    (entry,) = _settings(argv)['hooks']['Stop']
-    command = shlex.split(entry['hooks'][0]['command'])
-    assert command == [sys.executable, '-m', 'ride.claude.stop_guard', 'raw']
-
-  def test_a_raw_interactive_session_carries_no_stop_guard(self):
-    assert 'hooks' not in _settings(self._launch().argv)
-
-  def test_unknown_bro_raises(self):
-    with pytest.raises(KeyError, match='unknown bro'):
-      ride_claude_argv.build_claude_launch(
-        _spec(bro='does-not-exist'), claude_args=[], endpoint=_ENDPOINT
-      )
-
-
-def test_the_attribution_opt_out_reaches_every_flavor():
-  raw = ride_claude_argv.build_claude_launch(_spec(raw=True), claude_args=[], endpoint=_ENDPOINT)
-  ride_session = _ride_session_launch(_spec(), claude_args=[])
-  for launch in (raw, ride_session):
-    assert _settings(launch.argv)['attribution'] == ride_claude_argv._ATTRIBUTION
+def test_the_attribution_opt_out_lands_in_settings():
+  launch = _ride_session_launch(_spec(), claude_args=[])
+  assert _settings(launch.argv)['attribution'] == ride_claude_argv._ATTRIBUTION

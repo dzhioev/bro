@@ -115,12 +115,6 @@ Back on Claude Code, pinned to one model at maximum effort:
 dive-in --llm :fable5:max 'triage the queue'
 ```
 
-Bare Claude, holding only the declared tools and none of Claude's own:
-
-```console
-dive-in --raw 'triage the queue'
-```
-
 Another bro of the project, in an unboxed clone with permission prompts kept:
 
 ```console
@@ -256,7 +250,7 @@ $ bro show triage
 - `github`
 - `openai` — optional (used if present)
 - `openai` — LLM key
-- _session baselines (`trails`; `anthropic` for `--raw`) added per-surface_
+- _session baselines (`trails`) added per-surface_
 …
 ```
 
@@ -344,7 +338,7 @@ The persona is the same on every harness:
 its prompt, its spells, its credentials, its allow-list.
 What differs is what the harness brings of its own, and the declaration decides what to do with it.
 A Claude session comes with Claude's tools and skills, so the declaration withholds the ones it does not want and adds its namespaces as MCP servers beside the rest;
-bro's own loop and a bare session serve exactly the declared roster.
+bro's own loop serves exactly the declared roster.
 The model is a launch decision as much as a declaration:
 `--llm provider:model:effort[+fast]`, any part left empty to keep the host's per-bro default for the checkout and then the declared one, or a preset the project names.
 

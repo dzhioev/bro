@@ -434,7 +434,7 @@ class Runner:
       self.bro.llm_spec,
       self.inbox,
       mcp_servers=self.bro.assemble(
-        harness='bro', wire='bare', include_raise=hold == 'unattended', live_run=self
+        harness='bro', include_raise=hold == 'unattended', live_run=self
       ),
       observer=self._observer,
       tracker=self._tracker,

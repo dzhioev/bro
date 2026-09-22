@@ -28,19 +28,14 @@ def validate_segment(kind: str, value: str) -> None:
     )
 
 
-# the agent harness a rendered text is consumed under — which toolset drives the
-# work: `bro` is the bro toolset (native LLM runs and `--raw` claude sessions,
-# where `--bare` strips claude's built-ins), `claude` is Claude Code's own
-# harness with its built-in tools.
+# the agent harness a rendered text is consumed under — the loop that drives the
+# work, which decides how the bro's tools are served and how the canonical
+# `namespace::tool` names are spelled: `bro` is the bro-native LLM loop, whose
+# tools run in-process and list as `namespace__tool`; `claude` is Claude Code
+# with its built-in tools, where the bro's additions are mounted as MCP servers
+# and list as `mcp__namespace__tool`.
 Harness = Literal['bro', 'claude']
 _HARNESSES = frozenset(get_args(Harness))
-
-# how a surface's tool list spells the canonical `namespace::tool` names: `bare`
-# is the bro-native LLM loop's `namespace__tool`; `mcp` is any claude session's
-# `mcp__namespace__tool` (each namespace mounted as an MCP server). orthogonal to
-# `Harness` — a `--raw` session runs the bro harness over mcp wire names.
-Wire = Literal['bare', 'mcp']
-_WIRES = frozenset(get_args(Wire))
 
 # the session's hold — its user-involvement level, ordered from no human
 # channel to human-driven. unlike the other facts it is supplied only when
@@ -50,10 +45,9 @@ Hold = Literal['unattended', 'detached', 'attended', 'guided']
 HOLDS: tuple[str, ...] = get_args(Hold)
 _HOLDS = frozenset(HOLDS)
 
-# the facts triple as ready-made condition variables, so declarations read
+# the facts pair as ready-made condition variables, so declarations read
 # `harness == 'bro'` / `creds.contains('openai')`.
 harness = var('harness')
-wire = var('wire')
 creds = var('creds')
 
 
@@ -61,7 +55,6 @@ def render_text(
   text: str,
   *,
   harness: Optional[Harness] = None,
-  wire: Optional[Wire] = None,
   creds: Optional[Iterable[str]] = None,
   may_summon: Optional[Iterable[str]] = None,
   talk: Optional[Iterable[str]] = None,
@@ -70,7 +63,7 @@ def render_text(
 ) -> str:
   """render `bro.base.template` directives in static agent-facing text (system
   prompts, spell bodies, service-tool descriptions) against the surface facts
-  the call site knows: `harness` → `#harness`, `wire` → `#wire`, `creds` →
+  the call site knows: `harness` → `#harness`, `creds` →
   `#creds` (the closed universe; membership probes `credentials.available`
   lazily, so render in the process that consumes the text, where the store is
   the session's own), `may_summon` → `#may_summon` (the session's effective
@@ -92,12 +85,7 @@ def render_text(
   if '{{' not in text:
     return text
   variables = surface_variables(
-    harness=harness,
-    wire=wire,
-    creds=creds,
-    may_summon=may_summon,
-    talk=talk,
-    hold=hold,
+    harness=harness, creds=creds, may_summon=may_summon, talk=talk, hold=hold
   )
   if extra is not None:
     variables.update(extra)
@@ -114,7 +102,6 @@ def select[T](
   entries: Iterable[condition.Entry[T]],
   *,
   harness: Optional[Harness] = None,
-  wire: Optional[Wire] = None,
   creds: Optional[Iterable[str]] = None,
   may_summon: Optional[Iterable[str]] = None,
   talk: Optional[Iterable[str]] = None,
@@ -125,9 +112,7 @@ def select[T](
   None defines no variable, so a condition referencing it raises. `extra`
   merges a caller-owned domain vocabulary next to the facts, as in
   `render_text`. The conditioning reference is `reference/conditions.md`."""
-  variables = surface_variables(
-    harness=harness, wire=wire, creds=creds, may_summon=may_summon, talk=talk
-  )
+  variables = surface_variables(harness=harness, creds=creds, may_summon=may_summon, talk=talk)
   if extra is not None:
     variables.update(extra)
   return condition.select(entries, variables)
@@ -161,7 +146,6 @@ def _answers_to(granted: frozenset[str]) -> Callable[[str], bool]:
 def surface_variables(
   *,
   harness: Optional[Harness] = None,
-  wire: Optional[Wire] = None,
   creds: Optional[Iterable[str]] = None,
   may_summon: Optional[Iterable[str]] = None,
   talk: Optional[Iterable[str]] = None,
@@ -175,10 +159,6 @@ def surface_variables(
     if harness not in _HARNESSES:
       raise ValueError(f'unknown harness {harness!r}; known: {", ".join(sorted(_HARNESSES))}')
     variables['harness'] = condition.StringVariable(harness, domain=_HARNESSES)
-  if wire is not None:
-    if wire not in _WIRES:
-      raise ValueError(f'unknown wire scheme {wire!r}; known: {", ".join(sorted(_WIRES))}')
-    variables['wire'] = condition.StringVariable(wire, domain=_WIRES)
   if creds is not None:
     variables['creds'] = condition.SetVariable(credentials.available, universe=frozenset(creds))
   if may_summon is not None:

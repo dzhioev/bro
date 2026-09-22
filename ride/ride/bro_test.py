@@ -43,7 +43,6 @@ def _spec(**overrides) -> SessionSpec:
     'prompt': 'start here',
     'subject': 'start here',
     'arguments': [],
-    'harness_options': {},
   }
   values.update(overrides)
   return SessionSpec(**values)

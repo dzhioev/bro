@@ -55,12 +55,10 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/identity.py` — managed-session git identities:
   the bro a session commits as, and the launching human it credits, read from the attachment's own git configuration.
 - `ride/harness.py`
-  — the `Harness` protocol (flag registration and option packing, scope, auth, session reads, and the launch hooks: `do-ride` argv flags, the session run, boxed extras, unboxed runner env), the harness roster, and the lazy harness resolver.
+  — the `Harness` protocol (scope, auth, session reads, and the launch hooks: the session run, boxed extras, unboxed runner env), the harness roster, and the lazy harness resolver.
 - `ride/bro.py` — native harness implementation:
   native recipe resolution, the session runner spawning `bro run|chat …` with exact-recipe continuation, and the launch hooks.
-- `ride/flags.py` — common session, scope, and LLM flag registration,
-  harness flag registration with the generic requires-`--harness` refusal and option packing,
-  and the default an omitted `--hold` resolves to.
+- `ride/flags.py` — common session, scope, LLM, and harness flag registration, and the default an omitted `--hold` resolves to.
 - `ride/session_env.py` — the `--env` contract:
   assignment parsing for the CLI, and the validation every reader of a recorded mapping applies.
 - `ride/runtime_bundle.py` — installation freeze, content-addressed bundle persistence and locking, supplied-runtime validation/re-exec, shared host/container materialization, session-command shims, runtime-volume lifecycle, and bundle GC.
@@ -75,10 +73,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 
 ## Invariants
 
-- The runtime layer names no Claude detail in its serialized harness options.
-  `SessionSpec.harness_options` belongs to the selected implementation and is validated there.
 - The neutral layer owns one started-party launcher parameterized by isolation;
-  the harness seam supplies scope recipes, auth, LLM resolution, the `do-ride` command, session-state reads, and the per-harness launch extras.
+  the harness seam supplies scope recipes, auth, LLM resolution, the session run under `do-ride`, session-state reads, and the per-harness launch extras.
   `do-ride` owns every session's common setup before calling the selected harness runner.
   A managed boxed or unboxed workspace is always launched by `ride`;
   a summon child is spawned by `summon`

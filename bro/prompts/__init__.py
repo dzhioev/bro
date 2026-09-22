@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
   from collections.abc import Iterable
 
-  from bro.mcp import Harness, Wire
+  from bro.mcp import Harness
 
 
 class PromptLoader:
@@ -46,7 +46,6 @@ def session_fragment(
   hold: str,
   *,
   harness: Optional['Harness'] = None,
-  wire: Optional['Wire'] = None,
   creds: Optional['Iterable[str]'] = None,
   talk: Optional['Iterable[str]'] = None,
 ) -> str:
@@ -65,10 +64,10 @@ def session_fragment(
   if summon.summoned():
     contracts.append('summoned.md')
   parts = [
-    mcp.render_text(get_prompt(name), harness=harness, wire=wire, creds=creds, talk=talk).strip()
+    mcp.render_text(get_prompt(name), harness=harness, creds=creds, talk=talk).strip()
     for name in contracts
   ]
-  parts.append(hold_fragment(hold, harness=harness, wire=wire, creds=creds))
+  parts.append(hold_fragment(hold, harness=harness, creds=creds))
   return '\n\n'.join(part for part in parts if len(part) > 0)
 
 
@@ -76,7 +75,6 @@ def hold_fragment(
   hold: str,
   *,
   harness: Optional['Harness'] = None,
-  wire: Optional['Wire'] = None,
   creds: Optional['Iterable[str]'] = None,
 ) -> str:
   """render the hold fragment for `hold` — the one rendering path, so the
@@ -87,6 +85,4 @@ def hold_fragment(
   """
   from bro import mcp
 
-  return mcp.render_text(
-    get_prompt('hold.md'), hold=hold, harness=harness, wire=wire, creds=creds
-  ).strip()
+  return mcp.render_text(get_prompt('hold.md'), hold=hold, harness=harness, creds=creds).strip()
