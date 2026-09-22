@@ -15,4 +15,5 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
 - `bros/` — this checkout's developer and reviewer persona declarations.
 - `bro/local/prompts.py` — framework-project context shared by those personas.
 - `bro/local/run_tests.py` (`run-tests`) — the checkout-wide staged test gate and explicit test rosters.
+- `bro/local/gate_display.py` — how the gate reports: plain lines on a pipe, a live table on a terminal.
 - `bro/local/*_policy_test.py` — repository-wide policy assertions that have no consumer-neutral package owner.
