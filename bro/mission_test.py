@@ -1,12 +1,17 @@
 import asyncio
 import contextlib
 import json
+from typing import cast
 
 import pytest
 
 from bro import mission
+from bro.artifact import DEFAULT_TIMEOUT as ARTIFACT_TIMEOUT, SHARE
+from bro.broker.client import Client
 from bro.broker.environment import BROKER_MISSION
 from bro.quest_test_helper import next_message, quest_record, reply, running_server
+
+REF = f'sha256:{"a" * 64}'
 
 
 def _typed_entry(
@@ -39,7 +44,7 @@ def test_help_lists_every_verb(capsys):
     mission.main(['mission', '--help'])
 
   output = capsys.readouterr().out
-  for verb in ('check', 'history', 'say', 'ask', 'list', 'watch', 'cancel'):
+  for verb in ('check', 'history', 'say', 'ask', 'share', 'list', 'watch', 'cancel'):
     assert f'  {verb}' in output
 
 
@@ -219,6 +224,44 @@ async def test_list_type_filters_the_fully_read_listing(monkeypatch, capsys):
 
     assert await task == 0
     assert [record['id'] for record in json.loads(capsys.readouterr().out)['missions']] == ['WEB-1']
+
+
+@pytest.mark.asyncio
+async def test_share_sends_the_artifact_ref_to_an_owned_mission(monkeypatch):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(asyncio.to_thread(mission.main, ['mission', 'share', 'WEB-1', REF]))
+    channel, request = await next_message(server)
+
+    assert request.kind == SHARE
+    assert request.args == {'id': 'WEB-1', 'ref': REF}
+    await reply(server, channel, request, outcome='ok', value={})
+    assert await task == 0
+
+
+def test_share_refuses_a_malformed_ref_before_opening_a_channel():
+  with pytest.raises(ValueError, match='artifact ref'):
+    mission.share('WEB-1', 'not-a-ref')
+
+
+def test_share_uses_the_artifact_timeout_and_accepts_an_override(monkeypatch):
+  timeouts = []
+
+  def call_ok(client, kind, args, *, timeout):
+    timeouts.append(timeout)
+    return {}
+
+  monkeypatch.setattr(mission, 'call_ok', call_ok)
+  client = cast(Client, object())
+
+  mission.share('WEB-1', REF, client=client)
+  mission.share('WEB-1', REF, timeout=42, client=client)
+
+  assert timeouts == [ARTIFACT_TIMEOUT, 42]
+
+
+def test_share_refuses_an_invalid_timeout():
+  with pytest.raises(ValueError, match='finite positive'):
+    mission.share('WEB-1', REF, timeout=0, client=cast(Client, object()))
 
 
 @pytest.mark.asyncio

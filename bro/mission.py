@@ -1,8 +1,9 @@
 """mission — read, talk to, and end a mission through the session broker.
 
-A mission is work undertaken by any registered worker type. This module owns the
-universal outcome and conversation reads, typed chat moves, caller-scoped listing,
-ordered watch, and cancellation surfaces, as a library and as the ``mission`` CLI.
+A mission is work undertaken by any registered worker type.
+This module owns the universal outcome and conversation reads, typed chat moves,
+artifact sharing, caller-scoped listing, ordered watch, and cancellation surfaces,
+as a library and as the ``mission`` CLI.
 ``self`` names the session's own mission.
 
 Reads are repeatable journal queries. A wait bounds silence rather than the
@@ -574,6 +575,29 @@ def asked_view(asked: Asked) -> dict[str, Any]:
   return view
 
 
+# --- artifact sharing -----------------------------------------------------------
+
+
+def share(
+  mission_id: str,
+  ref: str,
+  *,
+  timeout: Optional[float] = None,
+  client: Optional['Client'] = None,
+) -> None:
+  """Share one reachable artifact ref with a live mission this session owns."""
+  from bro.artifact import DEFAULT_TIMEOUT, SHARE, is_ref
+
+  resolved = resolve(mission_id)
+  if not is_ref(ref):
+    raise ValueError('artifact ref must be sha256: followed by 64 lowercase hex digits')
+  wait_seconds = DEFAULT_TIMEOUT if timeout is None else timeout
+  if not math.isfinite(wait_seconds) or wait_seconds <= 0:
+    raise ValueError('timeout must be a finite positive number')
+  with connection(client) as connected:
+    call_ok(connected, SHARE, {'id': resolved, 'ref': ref}, timeout=wait_seconds)
+
+
 # --- cancel ---------------------------------------------------------------------
 
 
@@ -974,6 +998,15 @@ def _ask(
   return 0 if wait is None else QUESTION_EXIT_CODE
 
 
+def _share(mission_id: str, ref: str, timeout: Optional[float]) -> int:
+  try:
+    share(mission_id, ref, timeout=timeout)
+  except (MissionError, ValueError) as error:
+    log.error('%s', error)
+    return 1
+  return 0
+
+
 def _cancel(mission_id: str, timeout: Optional[float]) -> int:
   try:
     status = cancel(mission_id, timeout=timeout)
@@ -1012,7 +1045,7 @@ def _watch(worker_type: Optional[str]) -> int:
 def main(argv: list[str]) -> Optional[int]:
   parser = base_args.Parser(
     prog='mission',
-    description='read, talk to, watch, list, and end missions owned by this session',
+    description='read, talk to, share artifacts with, watch, list, and end owned missions',
   )
   verbs = parser.add_subparsers(dest='verb', metavar='<verb>')
 
@@ -1054,6 +1087,14 @@ def main(argv: list[str]) -> Optional[int]:
     help='block for the reply, without a value until it arrives or the mission ends',
   )
   ask_parser.set_handler(_ask)
+
+  share_parser = verbs.add_parser('share', help='hand a reachable artifact ref to a live mission')
+  share_parser.add_argument('mission_id', metavar='<mission-id>', help='owned mission id')
+  share_parser.add_argument('ref', metavar='<ref>', help='artifact ref (sha256:<64 hex digits>)')
+  share_parser.add_argument(
+    '--timeout', type=float, metavar='SECONDS', help="seconds to wait for the host's answer"
+  )
+  share_parser.set_handler(_share)
 
   list_parser = verbs.add_parser('list', help='retained owned missions, live first')
   list_parser.add_argument('--type', dest='worker_type', metavar='TYPE', help='worker type to keep')

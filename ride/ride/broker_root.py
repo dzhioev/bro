@@ -10,7 +10,7 @@ from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Any
 
-from bro.artifact import GET, MINT
+from bro.artifact import GET, MINT, SHARE
 from bro.base import configs, log
 from bro.broker.dispatcher import PING, Broker, ping_handler
 from bro.broker.spawn import LaunchSpec, Spawner
@@ -173,6 +173,7 @@ def run_root_via_broker(
   facade.on(LAUNCH, control.handle)
   facade.on(MINT, artifact_control.mint)
   facade.on(GET, artifact_control.get)
+  facade.on(SHARE, artifact_control.share)
   facade.subscribe(facts.observe_journal)
   facade.subscribe(control.audit_event)
   facade.subscribe(control.observe_journal)

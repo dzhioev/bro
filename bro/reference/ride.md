@@ -889,8 +889,10 @@ underneath it are two client surfaces over the same request, each split into the
   An event-retention gap prints a notice, re-arms from the current head, and repeats the retained replay.
   `quest cancel <id> [--timeout <seconds>]` ends a bro quest this session owns and waits for it to end;
   it exits 0 once the quest has ended and 3 when the bound passes first, the end still on its way.
-  `mission check|history|say|ask|list|watch|cancel` is the corresponding universal surface for every worker type:
-  chat payloads are JSON objects, `history --seq N` recovers one full retained entry, list and watch accept `--type`, and watch cuts chat lines over 1 KiB with a history pointer.
+  `mission check|history|say|ask|share|list|watch|cancel` is the corresponding universal surface for every worker type:
+  Chat payloads are JSON objects, and `history --seq N` recovers one full retained entry.
+  `share <id> <ref> [--timeout <seconds>]` hands an owner-reachable artifact to a live worker.
+  List and watch accept `--type`, and watch cuts chat lines over 1 KiB with a history pointer.
   In a claude session, long summons run via the harness's background Bash;
   `rewind show <trail-id>` peeks mid-run.
   Contract details in `bro/summon.py`, `bro/mission.py`, and `bro/quest.py`.
@@ -1052,10 +1054,13 @@ Peers pass files by content-addressed reference through the ride's store the lau
   Either way the path is not for editing in place;
   a peer that wants an editable copy makes one.
 - Reach follows the launch tree, and nothing a peer says widens it:
-  a mint is readable by the minting peer and its summoners up to the ride root, and a summon request's `share` list (`summon --share <ref>`, the service tool's `share` field) hands refs the summoner itself can read down to the child it spawns.
+  a mint is readable by the minting peer and its summoners up to the ride root;
+  a launch request's `share` list (`summon --share <ref>`, the service tool's `share` field, or another worker type's corresponding launch argument) hands refs the owner itself can read down as the mission opens;
+  and `mission share <id> <ref>` gives one such ref to a live mission owned by the caller.
+  A share into a boxed worker appears in its mounted artifact view without a remount.
   There is no other path
   — knowing a ref is not access, and a denial is uniform whether or not the ref exists.
-  A manual summon refuses `share` and a manual child's `get` is denied
+  A manual summon refuses launch-time and live `share`, and a manual child's `get` is denied
   — the launcher builds no launch for it, so no view is mounted
   — while its mints flow upward normally, attributed to the workspace its own `--summoned` launch claimed the token with.
 - The store is ride-scoped and dies with the ride

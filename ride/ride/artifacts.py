@@ -13,9 +13,10 @@ construction, so the read path re-verifies nothing.
 Each boxed peer has a view directory `shared/<workspace>/` holding one
 hardlink (or hardlinked tree) per ref it may reach — the source of its
 declared read-only artifact-view bind mount, so a ref linked while the peer
-runs appears without a remount. A mint links the minter and its owners up
-to the root; a launch's `share` list is linked into the worker's view during
-its lowering. An unboxed peer has no mount
+runs appears without a remount.
+A mint links the minter and its owners up to the root.
+An artifact share links the ref into the worker's view either during lowering or after it is live.
+An unboxed peer has no mount
 namespace: its `get` falls back to a private copy under that workspace's own
 `artifacts/` directory. A manually launched child has no host-built launch
 and therefore no view; its `get` is denied with the reason.
@@ -28,10 +29,11 @@ recording mints, gets, shares, and denials.
 staged under the store's `jobs/`, and the ref that closes the job's mission
 reaches the peer that requested the job and its owners.
 
-`ArtifactControl` serves the `artifact.mint` / `artifact.get` kinds
+`ArtifactControl` serves the `artifact.mint`, `artifact.get`, and `artifact.share` kinds
 (contract: `bro/artifact.py`) and implements the worker-type resolver
-(`bro.worker_types.ArtifactResolver`). Attribution and shape validation run on the
-broker loop; store I/O runs in a thread with the correlated result delivered
+(`bro.worker_types.ArtifactResolver`).
+Attribution, authorization, and shape validation run on the broker loop;
+store I/O runs in a thread with the correlated result delivered
 from a done-callback. The request never enters the dispatcher's table, so
 exactly-one-result is this module's duty: the callback folds a store refusal
 into `result{denied}` and any other exception into `result{failed}` instead
@@ -76,6 +78,7 @@ _FICLONE = 0x40049409
 
 _MINT_KEYS = frozenset({'path'})
 _GET_KEYS = frozenset({'ref'})
+_SHARE_KEYS = frozenset({'id', 'ref'})
 
 
 def store_dir(ride: str) -> Path:
@@ -346,8 +349,8 @@ class ArtifactStore:
 
   def share(self, refs: Sequence[str], *, to: str, by: str) -> None:
     """extend each ref's reach to the peer named `to` and link it into that
-    peer's view. The caller checked `by`'s own reach on the loop; the linking
-    is called off-loop, during spawn lowering."""
+    peer's view. The caller checked `by`'s own reach on the loop;
+    the linking is called off-loop."""
     if len(refs) == 0:
       return
     with self._lock:
@@ -429,6 +432,18 @@ def _validate_get(args: dict[str, Any]) -> Optional[str]:
   return None
 
 
+def _validate_share(args: dict[str, Any]) -> Optional[str]:
+  unknown = sorted(set(args) - _SHARE_KEYS)
+  if len(unknown) > 0:
+    return f'unknown artifact.share field(s): {", ".join(unknown)}'
+  mission_id = args.get('id')
+  if not isinstance(mission_id, str) or len(mission_id) == 0:
+    return "artifact.share needs a non-empty string 'id'"
+  if not is_ref(args.get('ref')):
+    return "artifact.share needs a well-formed 'ref' (sha256:<64 hex digits>)"
+  return None
+
+
 class JobArtifacts:
   """`bro.broker.dispatcher.JobOutput` over one store: a broker job's run is
   collected in the store and answered with its ref, reaching the requesting
@@ -458,8 +473,8 @@ class JobArtifacts:
 class ArtifactControl:
   """The artifact kinds and worker-type resolver over one store.
 
-  `mint` and `get` register as the broker's `artifact.mint` / `artifact.get`
-  handlers; everything here runs on the broker loop, with store content work threaded.
+  `mint`, `get`, and `share` register as the broker's artifact request handlers.
+  Everything here runs on the broker loop, with store content work threaded.
   """
 
   def __init__(self, store: ArtifactStore, facts: PeerFacts):
@@ -502,6 +517,72 @@ class ArtifactControl:
     self._answer_off_loop(
       context, peer, message.request_id, lambda: {'path': self._store.materialize(identity, ref)}
     )
+
+  def share(self, context: Dispatcher, peer: Peer, message: Message) -> None:
+    args = message.args
+    try:
+      owner = self._facts.resolve(context, peer)
+    except UnattributablePeer as reason:
+      self._deny(context, peer, message, None, f'artifact share denied: {reason}')
+      return
+    error = _validate_share(args)
+    if error is not None:
+      self._deny(context, peer, message, owner, error)
+      return
+    mission_id = args['id']
+    record = context.journal.records.get(mission_id)
+    if record is None or record.terminal or record.owner != peer:
+      self._deny(
+        context,
+        peer,
+        message,
+        owner,
+        f'no live mission {mission_id!r} owned by this peer',
+      )
+      return
+    ref = args['ref']
+    try:
+      self._store.resolve(ref, owner.workspace)
+    except ArtifactDenied:
+      self._deny(
+        context,
+        peer,
+        message,
+        owner,
+        f'cannot share artifact the owner cannot reach: {ref}',
+      )
+      return
+    worker_facts = self._facts.for_mission(mission_id)
+    if worker_facts.expected:
+      self._deny(
+        context,
+        peer,
+        message,
+        owner,
+        'artifact share denied: no artifact view is mounted for a manually launched worker',
+      )
+      return
+    try:
+      worker = self._facts.describe(mission_id)
+    except UnattributablePeer:
+      self._deny(
+        context,
+        peer,
+        message,
+        owner,
+        f'artifact share denied: mission {mission_id!r} has no available artifact workspace',
+      )
+      return
+    self._answer_off_loop(
+      context,
+      peer,
+      message.request_id,
+      lambda: self._shared(ref, owner=owner.workspace, worker=worker.workspace),
+    )
+
+  def _shared(self, ref: str, *, owner: str, worker: str) -> dict[str, Any]:
+    self._store.share((ref,), to=worker, by=owner)
+    return {}
 
   def resolve(self, ref: str, peer: PeerDescription) -> Path:
     return self._store.resolve(ref, peer.workspace)

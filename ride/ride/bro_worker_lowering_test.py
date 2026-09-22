@@ -1369,6 +1369,7 @@ class TestRunRootViaBroker:
       'launch',
       'artifact.mint',
       'artifact.get',
+      'artifact.share',
     }
     assert isinstance(captured['spawner'], workspace_spawn.ProcessSpawner)
     assert captured['type'] == 'bro'
