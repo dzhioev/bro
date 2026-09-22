@@ -52,3 +52,18 @@ build the wheel with `uv build --package bro-dev`.
 The `bro`, `bro.extra`, `bro.prompts`, and `bros` package trees are shared with other distributions.
 Declare every shipped leaf in `[tool.uv.build-backend].module-name`;
 do not build one of those parent trees wholesale.
+
+## Wheel contents
+
+Every member builds through uv's own backend, which ships each declared module root whole, so a `[tool.uv.build-backend] wheel-exclude` glob is what keeps a file out of the wheel
+— the test modules (`*_test.py`, `*_test_helper.py`, `conftest.py`) among them, held against the built wheels by `dev/bro/dev/packaging_policy.py` and enforced repository-wide by its sibling `packaging_policy_test.py`.
+That module derives the distributions from the root's `members`, so a project shipped from outside the workspace is named to it explicitly;
+`local/` holds the name, next to the gate's other checkout-specific facts
+— the modules a wheel must carry among them.
+
+## Commit metadata
+
+Agent commits carry the token-accounting footer automatically
+— the installed `commit-msg` hook appends it whenever the environment carries an agent usage source, and human commits stay footerless (`bro.workflow.commit_footer`);
+an interactive session's commits carry a `Co-Authored-By` trailer for the human it works for beneath it (`bro.workflow.co_author`).
+Never hand-write or strip either.

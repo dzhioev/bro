@@ -194,7 +194,8 @@ Construct every read as `https://raw.githubusercontent.com/dzhioev/bro/${BRO_SHA
 Fetch and read these paths before using their contracts:
 
 - `README.md`;
-- `AGENTS.md`, especially **Adding a Bro**;
+- `AGENTS.md`;
+- `bro/reference/extending.md`, especially **Declaring a bro** and **Registering a bro**;
 - `bro/registry.py`;
 - `dev/bros/dev/__init__.py`;
 - `local/bros/bro_dev/__init__.py`;

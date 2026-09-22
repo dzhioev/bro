@@ -412,7 +412,7 @@ the attachment — checkout path or normalized URL
 A repository may provide `setup.sh` to provision its workspace clone;
 the launch logs and skips that step when it is absent.
 The project environment need not install `bro-ride`, because session machinery comes from the runtime bundle.
-Personas remain registered through the `bro` entry-point group (`AGENTS.md`, "Register the new bro")
+Personas remain registered through the `bro` entry-point group (`bro/reference/extending.md`, "Registering a bro")
 — in the invoking installation, whose registry a repository names its default bro out of but contributes nothing to.
 `dive-in` is deliberately the one cwd-bound launcher:
 it refuses a cwd outside git, resolves that checkout, and passes it to `ride along --repo` explicitly.
@@ -1145,7 +1145,7 @@ Selected `block(...)` layers join `--disallowed-tools`, removing the named Claud
 raw sessions already pass `--tools ''`, and selecting a block for their `bro` harness is a declaration error.
 Persona sessions rely on Claude's native third-party skill mechanism instead of mounting `bro::skill` or generated spell adapters.
 Both assemblies also mount the `raise` service tool when the session is unattended (`BRO_HOLD=unattended` + `RIDE_RUNNER_PID` in the server's inherited environment — see "Forwarded env vars"),
-in its terminate-the-session flavor (semantics in `AGENTS.md`, "Interactive vs non-interactive paths");
+in its terminate-the-session flavor (semantics in `bro/AGENTS.md`, "Interactive vs non-interactive paths");
 every other level gets no `raise`
 — a human exists to report to.
 Either way there is one streamable-HTTP endpoint per tool namespace;
@@ -1187,7 +1187,7 @@ the base prompts from `bro/prompts/shared/*` and the top-level reference docs th
 so a full mode carries the bro's policies without running under `--raw`.
 `shared/` is also injected into every bro;
 the top-level reference docs are Claude-Code-specific and are **not** injected when `--raw` is used (the raw flavor runs `--bare` with its own `--system-prompt`)
-— except `tool_names.md`, which reaches `--raw` sessions through the bro's `claude_system_prompt` composition (see `AGENTS.md`).
+— except `tool_names.md`, which reaches `--raw` sessions through the bro's `claude_system_prompt` composition (`bro/AGENTS.md`, "Prompt flavors").
 
 Both flavors also carry the hold fragment, rendered at launch by `bro.prompts.hold_fragment` from the session's `--hold` level (the level files live in `bro/prompts/holds/` — see `bro/prompts/AGENTS.md`, "Hold text"),
 so a session is told its hold up front rather than detecting it at runtime.

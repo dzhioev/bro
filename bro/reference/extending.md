@@ -1,0 +1,128 @@
+# Extending the framework
+
+How an installed distribution adds to the framework:
+the entry-point groups it contributes through, and how a bro, a data source, and a toolset are declared and registered.
+Declarations compose through the vocabulary of `bro.mcp`;
+conditions on them follow `conditions.md`, and the text they carry follows `template.md`.
+
+## Entry-point groups
+
+Installed distributions extend the framework through `bro` (personas), `bro.credential_sources` (minting source types), `bro.credentials` (registry entries), `bro.brog.backends` (task-tracker backends), `bro.toolsets` (standalone MCP toolsets;
+each entry targets its module's `toolset` object), `bro.mcp.targets` (assembled target prefixes;
+each resolver accepts the value after `<prefix>:` and returns live MCP servers), `bro.session_commands` (console scripts exposed on managed-session PATH),
+and `bro.worker_types` (worker classes served through the common `launch` kind).
+Each worker entry's name matches its `bro.worker_types.WorkerType.name`.
+Declarations are installation metadata:
+run `uv sync` after adding or removing an entry point;
+editing an already-declared target module needs no reinstall.
+Name-keyed groups load only the matching entry, while credential-registry assembly loads every `bro.credentials` contribution, so those target modules must remain import-cheap.
+
+## Declaring a bro
+
+Create `bros/<name>/__init__.py` with `from bros.bro import Bro` and a `class YourBro(Bro)` (inherit from the concrete `Bro` so you pick up the shared defaults; use `BaseBro` only when you want to opt out).
+Declare `name`, `description`, and `system_prompt` as class attributes;
+add tool sources as class attributes too:
+
+- `system_prompt = "..."` — class-level.
+  When you `class B(A)` and both declare `system_prompt`, `__init__` concatenates A's then B's (MRO base-to-derived) so subclasses only declare their *additions*.
+- `data_sources = [YourSource()]` for read-only data connectors
+- `data_sources = [man('conditions'), man('ride')]` (`from bro.datasources.references import man`) declares reference pages one topic at a time;
+  every page the class hierarchy declares folds into the bro's single `man` source
+- `tools = [mount(project_tools.mcp.toolset)]` adds a contributing package's full toolset
+- `tools = [mount(project_tools.mcp.toolset, 'search', 'update')]` scopes the mount to specific tools (validated at declaration)
+- `tools = [when(harness == 'bro', mount(dev_mcp.toolset))]` (`from bros.dev import mcp as dev_mcp`, supplied by `bro-dev`) mounts its file and search tools only on the bro harness
+- `tools = [claude.block(*claude.SHELL), shell('git status', 'git diff')]` declares the exact command lines the persona may run on either harness;
+  the block lets the finite roster narrow Claude's shell, while `shell(ANY)` leaves its unblocked shell unrestricted and an empty declaration is invalid
+- `tools = [cli('bro list')]` serves one installed CLI command as a generated tool in the `cli` namespace (`cli::bro_list`).
+  The command is a program name and any subcommands;
+  trailing names narrow what the tool exposes (`cli('bro show', 'name')` withholds `--system-prompt`).
+  Nothing is read at declaration:
+  the signature is derived at build from the command's own argument declarations, so a command that cannot be read
+  — not an installed CLI, a dispatcher rather than a leaf, an argument shape that cannot be described
+  — fails there.
+  Credentials the command reads are the declaring bro's `extra_secrets`.
+- `tools = [when(harness == 'claude', block('Read', 'Write'))]` removes harness-native tools.
+  One block may group several related names;
+  it must be gated away from `harness == 'bro'`, whose native and raw-Claude surfaces expose only the declared tools, or construction raises.
+  `tools = [when(harness == 'claude', allow_commands('Monitor', 'journalctl -f'))]` hands one of those tools back narrowed to the commands it names, and `serve('TaskStop')` hands one back whole where there is no command line to narrow on;
+  either way the tool must be blocked too, since handing back bounds nothing a bro does not otherwise withhold.
+  Import `block`, `allow_commands`, `serve`, `harness`, and `mount` from `bro.mcp`.
+- Roster-based servers export a `bro.mcp.Toolset` conventionally named `toolset`
+  — tools register via `@toolset.tool`, secrets via the static `secrets` class var or a `get_secrets` override when the set depends on the selected tools.
+  `MCPServerSpec.of(ServerClass, *ctor_args)` remains the manifest escape hatch for irregular server classes;
+  wrap it in `ToolLayer(server_specs=(server_spec,))`.
+- `tools` and `data_sources` are walked along the MRO and concatenated, so a `ReviewDev(Dev)` subclass declares only its additional components and retains Dev's declarations.
+- An entry in either list may be gated on surface facts with `when(...)` (`from bro.base.condition import when`;
+  `when` also accepts a plain bool for a genuinely static predicate), or choose among alternatives with `iff(c1, a1, c2, a2[, e])`, which raises when nothing matches and no else item is given.
+  Conditions evaluate at assembly, so an unmatched declaration is never applied
+  — see `bro/reference/conditions.md`.
+  Declarations skip the `ClassVar` annotation
+  — BaseBro's class-level declarations carry the types;
+  ruff's RUF012 is ignored for `bros/*/__init__.py`.
+- `llm_spec = openai.LLMSpec(...)` (or any other bro-native provider's `LLMSpec`) overrides the LLM recipe.
+  Per-instance overrides go through `YourBro.create(spec)`.
+- `extra_secrets = ('github',)` declares credentials no component expresses (a bro's environment needs).
+  MRO-walked and unioned like `tools`;
+  folded into `bro.needed_secrets()`, which the host hydrates into the scoped container store.
+  Most secrets come from the declared MCP servers / data sources / `llm_spec` and need no entry here
+  — see `bro/AGENTS.md`, "Credential manifest".
+- `features = {'brog': creds.contains('brog')}` declares named optional capabilities
+  — feature name → the gate deciding whether it's on:
+  a `Condition` over the environment's resolvable credentials (`from bro.mcp import creds`), or a plain bool (`True` pins it on, `False` disables it; MRO-merged, derived wins per name, and `False` is terminal — descendants cannot re-enable).
+  Gate components with `when(feature('brog'), …)` (`from bro.bro import feature`) and text with `{{iff #features contains brog}}`;
+  a gated component's secrets enter the manifest only where its gates resolve, and the gate's own credential is tiered with the feature.
+  See `bro/reference/conditions.md` "Bro features".
+- `may_summon = ('reviewer',)` declares which bros this bro may summon
+  — its static outgoing allow-list, adjusted per launch by `--grant @bro` and `--revoke @bro`.
+  A summoned child may name only bros its summoner could summon, so widening is explicit and bounded by the host's depth cap.
+  The declaration is MRO-walked and unioned like `extra_secrets`;
+  each seed expands the transitive launch authority and should be added deliberately.
+- `provisioning = (provision_hooks,)` declares session-start steps for the session's workspace
+  — each is a `Callable[[Path], None]` applied to the workspace root by whatever starts the session (`ride/ride/inner.py` for a managed one, on either harness).
+  MRO-walked and concatenated like `extra_secrets`.
+  Every session start runs them, resumes included, so each step is idempotent.
+- `spells = ('fix.md', 'run-pr.md')` declares spells:
+  each entry is a markdown file's path relative to `bros/<name>/spells/` (flat frontmatter with `name`, `description`, an optional one-line JSON `parameters`, and an optional informational `version` bumped when the spell changes;
+  markdown body after the closing `---`).
+  A frontmatter value is either inline after the key or, where a bare `key:` is followed by a blank line, the block of lines under it up to the next blank line or the closing fence
+  — folded into one paragraph on single spaces, so a long description breaks semantically in the file (one clause per line, for reviewable diffs) and still reaches the tool as one paragraph.
+  The filename stem is the spell's name, canonical and validated against `name:`;
+  spell and parameter names must fit the wire charset, parameter name `offset` is reserved, and malformed declarations fail at load;
+  an entry naming no file, one escaping the directory, or two entries sharing a stem fails the bro's construction.
+  Spell names are imperative verb phrases (`fix`, `land`, `run-pr`, `orchestrate`), kebab-cased when multi-word.
+  Prose that refers to *running* one
+  — in a spell, a prompt, or a doc
+  — marks it `[[…]]`, hyphens as spaces and the phrasing fitted to the sentence (`hand off to [[run pr]]`, `blocks [[land]] later`);
+  canonical `spell::<name>` stays for the mechanism and for component inventories.
+  Spells follow the same MRO walk as `system_prompt` and `tools`:
+  each ancestor's declaration contributes, derived classes override parents on name collision, and the concrete `Bro`'s spells reach every bro deriving from it.
+  The full description is the tool description;
+  keep it useful for tool selection rather than optimizing its first sentence.
+
+## Registering a bro
+
+Add one entry to this distribution's `[project.entry-points.bro]` (`your-name = "bros.your_pkg:YourBro"`) and run `uv sync`, since entry points are installation metadata.
+There is no auto-discovery;
+the declaration is what makes `create_bro('your-name')` work, and the key must equal the class's `name` attribute, which the registry validates when it lazily imports the module.
+A bro shipped from outside this repository declares exactly the same thing in its own distribution.
+
+A bro living outside the framework repository registers through the `bro` entry-point group:
+the consumer project's pyproject declares `[project.entry-points.bro] your-name = "your.module:YourBro"`, and the registry resolves the name in any environment that installs both distributions.
+An external name may not shadow a built-in, and the key must equal the class's `name`.
+Package-relative spells and MRO-collected `tools` / `data_sources` declarations work across distributions.
+Project launch defaults (`[tool.bro] default`, image repository) are documented in `bro/reference/ride.md`, "Per-project defaults".
+
+## Adding a data source
+
+Set `name` (slug) and `summary` (one-line; injected into the system prompt of every Bro that uses it).
+For the common search/fetch shape, subclass `SearchableDataSource` and implement `async search(query, limit) -> list[Hit]` and `async _fetch_content(id) -> str` (the raw record).
+The base provides `fetch(id, query=None)`:
+it returns the raw record when no query is given and otherwise summarises it for the query via `mu`
+— so you don't write summarisation per source.
+That summary path depends on the `openai` key, declared once on the base as an `optional_secret`;
+with the key absent a non-null `query` raises (no raw-text fallback).
+For other shapes (e.g. a singleton fact like `current_time.py`), subclass `DataSource` directly and override `as_mcp_server()` to expose whatever tools fit.
+When an upstream HTTP/network failure makes the source temporarily unusable, raise `bro.datasources.base.SourceUnavailable(source, reason)` rather than letting raw transport exceptions escape
+— the agent loop turns it into a tool result the model can route around.
+If the source reads a credential through the store, declare it with `needed_secrets = ('catalog',)` (or `optional_secrets` for one it degrades without) so the host hydrates it into any bro that uses the source (see "Credential manifest").
+Bind to a Bro by declaring `data_sources = [YourSource()]` on its class.

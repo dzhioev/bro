@@ -430,7 +430,8 @@ the native loop's third-party skill loader exists with nothing loaded yet.
 
 ## Read more
 
-- [`AGENTS.md`](AGENTS.md) — the framework map, and how to add a bro, a data source, a toolset
+- [`AGENTS.md`](AGENTS.md) — the repository map, and the rules every change follows
+- [`bro/reference/extending.md`](bro/reference/extending.md) — how to add a bro, a data source, a toolset, and the entry-point groups they register through
 - [`bro/reference/ride.md`](bro/reference/ride.md) — the runtime: workspaces, credentials, summons, recording
 - [`bro/reference/conditions.md`](bro/reference/conditions.md) and [`bro/reference/template.md`](bro/reference/template.md) — conditioning in code and in text
 - [`bro/setup/AGENTS.md`](bro/setup/AGENTS.md) — the credential store and the host config
