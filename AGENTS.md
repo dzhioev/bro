@@ -22,7 +22,7 @@ core imports none of them, and `bro-ride` spawns rather than imports `bro-native
 | `ride/` | `bro-ride` | top-level `ride`, the managed-workspace runtime and both harness adapters | `ride/AGENTS.md` |
 | `oops/` | `bro-oops` | consumer-neutral deployment and operations machinery | `oops/AGENTS.md` |
 | `bench/` | `bro-bench` | the launcher-side benchmark credentials, registered worker type, and session commands | `bench/AGENTS.md` |
-| `webview/` | `bro-webview` | the registered browser worker type, its image, and daemon | `webview/AGENTS.md` |
+| `webview/` | `bro-webview` | the registered browser worker type, owner command, image, and daemon | `webview/AGENTS.md` |
 | `local/` | `bro-local` | this checkout's own personas and policy scripts, kept out of every published wheel by riding the root's `dev` dependency group | `local/AGENTS.md` |
 | `benchmark/` | `bro-benchmark` | the Terminal-Bench harness adapter; deliberately **not** a member, it locks, syncs and tests in an environment of its own | `benchmark/AGENTS.md` |
 

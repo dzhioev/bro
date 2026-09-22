@@ -59,7 +59,7 @@ Interpret them as follows:
    The host enforces these rights and nothing in-session widens them.
 
 7. `permits` lists the worker-type actions this session may request.
-   The bro's party leaves are shown with their grant markers (`:bro.party.start.boxed`, `:bro.party.start.unboxed`, `:bro.party.join`):
+   Worker leaves are shown with their grant markers, including the bro's party permits (`:bro.party.start.boxed`, `:bro.party.start.unboxed`, `:bro.party.join`) and the webview's human-view permit (`:webview.vnc`):
    `permits: none` means no worker-type action is authorized, and an absent line means the launcher published no set.
    An unmarked summon starts boxed when that leaf is present, otherwise unboxed when its leaf is present;
    it is refused when neither start leaf is present and is never turned into a join.

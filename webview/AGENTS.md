@@ -1,11 +1,12 @@
 # Webview worker
 
-The `bro-webview` member publishes the registered `webview` worker type and its container-side daemon in the `bro.webview` namespace.
+The `bro-webview` member publishes the registered `webview` worker type, its owner command, and its container-side daemon in the `bro.webview` namespace.
 It depends on core for broker and artifact contracts and on the MCP SDK for the Playwright stdio client.
 
 ## Development
 
 Formatting, linting, typing, tests, and packaging use the root repository gate.
+The host-only real-browser route runs separately with `run-tests --only webview_e2e`.
 Run `sync-scripts --project webview` after adding or removing a CLI, and build the wheel with `uv build --package bro-webview`.
 
 ## Components
@@ -13,7 +14,15 @@ Run `sync-scripts --project webview` after adding or removing a CLI, and build t
 - `bro/webview/worker.py` — the dependency-light registered type, launch validation, and packaged container specification
 - `bro/webview/container/Dockerfile` — the runtime-derived image with Xvfb, noVNC, Chromium, and the pinned Playwright MCP
 - `bro/webview/serve.py` — the container daemon and Playwright MCP command loop
-- `bro/webview/cli.py` (`webview`) — the session command; this stage carries the container-side `serve` verb
+- `bro/webview/cli.py` (`webview`) — the owner-side `open` and `close` verbs and the container-side `serve` verb
+
+## Owner command
+
+`webview open` forwards optional VNC, advisory origin lists, shared artifact refs, and a lifetime bound to `launch`, then waits through the accepted and started marks for the daemon's ready event.
+It prints the mission id and optional noVNC URL as JSON;
+a denial, failed launch, or startup silence exits non-zero, with startup expiry cancelling the launch.
+`webview close [MISSION]` asks the daemon to close, waits for its acknowledgement, terminal outcome, and settled worker supervision, and defaults to the session's one live webview.
+Commands between those verbs use `mission ask <id> '<json>' --wait`, with `mission history <id>` retaining their full payloads.
 
 ## Mission wire
 

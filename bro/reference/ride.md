@@ -59,7 +59,7 @@ Shared launch flags are `--repo`, `--boxed`, `--unboxed`, `--hold`, `--grant`, `
 `--grant` and `--revoke` use the framework's unified grammar:
 credential names shape the scoped store, `@bro` names shape the summon allow-list, and `:permit` leaves shape party authority.
 Worker permits have the form `:<type>.<leaf>`, with one or more dot-separated leaf segments.
-The bro type declares `:bro.party.start.boxed`, `:bro.party.start.unboxed`, and `:bro.party.join`;
+The bro type declares `:bro.party.start.boxed`, `:bro.party.start.unboxed`, and `:bro.party.join`, while the webview type declares `:webview.vnc` for its human-visible loopback view;
 the framework seed is boxed starts alone, `:bro` is malformed, and `:bro.party` names an undeclared leaf rather than expanding to its descendants.
 `--no-trails` disables trail recording for the session, whichever harness runs:
 the launch drops the `trails` scope baseline, sets `TRAILS_DISABLED` for the run, and a claude session starts no recorder daemon.
@@ -762,7 +762,7 @@ A proxy-less *summoned child* cannot report its result
 The live broker registers the reserved `ping` kind, so a session can verify its channel with `broker request ping '{}'`;
 the journal projection logs the root's host-anchored mission
 — its launch carries the mission id in `BROKER_MISSION` beside the channel, and the host process is the owner;
-and the `launch` kind handler over the installed `bro.worker_types` registry, including the bro and benchmark types.
+and the `launch` kind handler over the installed `bro.worker_types` registry, including the bro, benchmark, and webview types.
 The root launch carries the session's summon allow-list (`run_root_via_broker(may_summon=…)`, computed at launch by `ride/ride/bro_worker.py`;
 see the shared launch flags above), while `LaunchControl` enforces common launch arguments and `BroType` enforces per-peer summon authorization (see "Summoning another bro").
 Because the channel sits on the critical path of every launch, a broker defect would too
@@ -786,6 +786,8 @@ workspace removal (`--drop`, `ride clean`) deletes it with the workspace.
 ### Worker containers
 
 A registered worker type can return a core `Container(WorkerContainer(…))` run without importing ride.
+The shipped `webview` type is a browser worker container driven through `webview open`, `mission ask`, and `webview close`;
+its optional noVNC loopback view requires `:webview.vnc`.
 Its declaration ships a byte-valued Docker build context whose normalized relative paths include a `Dockerfile` opening with `ARG RUNTIME_IMAGE` and `FROM ${RUNTIME_IMAGE}`, plus a command, environment, and distinct container ports.
 The environment cannot claim host-owned `BROKER_*`, `RIDE_*`, `BRO_*`, `HOME`, or `PATH` names.
 The runtime image tag and sorted build-context files determine the worker image tag `bro/<type>:<hash>`;
@@ -1044,7 +1046,7 @@ Peers pass files by content-addressed reference through the ride's store the lau
   a mint past the ride's byte cap is refused rather than evicted.
 - `artifact get <ref>` makes a ref visible to the requesting peer and prints the path it appears at.
   A boxed peer reads it under its declared artifact-view path
-  — `CONTAINER_ARTIFACTS_ROOT` unless its worker-container declaration chooses another absolute normalized POSIX path;
+  — `CONTAINER_ARTIFACTS_ROOT` unless its worker-container declaration chooses another absolute normalized POSIX path, as webview does with `/workspace/artifacts`;
   the per-peer view directory is bind-mounted read-only, so a ref shared while the peer runs appears without a remount and writes fail with `EROFS`
   — while an unboxed party, having no mount namespace, gets a private copy under the workspace’s own `artifacts/` directory, shared by its members.
   Either way the path is not for editing in place;

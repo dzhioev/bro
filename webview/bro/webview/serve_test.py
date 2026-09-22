@@ -79,6 +79,8 @@ for line in sys.stdin:
   if name == 'browser_navigate':
     if arguments == {'url': 'about:blank'}:
       warmed = True
+      Path('output').mkdir(exist_ok=True)
+      Path('output/warm-up.yml').write_text('warm-up snapshot')
       answer(identifier, content('warmed'))
     elif warmed:
       dynamic = True
@@ -281,13 +283,25 @@ def test_options_fail_fast_on_malformed_values(raw):
     serve.decode_options(raw)
 
 
-def test_mount_check_requires_the_declared_view(tmp_path, monkeypatch):
+def test_mount_check_requires_the_declared_view_in_the_process_mount_table(tmp_path, monkeypatch):
   monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
+  monkeypatch.setattr(serve, 'MOUNTINFO', tmp_path / 'mountinfo')
   serve.ARTIFACT_VIEW.mkdir()
-  monkeypatch.setattr(os.path, 'ismount', lambda path: False)
+  serve.MOUNTINFO.write_text('')
 
   with pytest.raises(serve.DaemonError, match='/artifacts'):
     serve._require_artifact_view()
+
+
+def test_mount_check_accepts_a_bind_from_the_same_device(tmp_path, monkeypatch):
+  monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
+  monkeypatch.setattr(serve, 'MOUNTINFO', tmp_path / 'mountinfo')
+  serve.ARTIFACT_VIEW.mkdir()
+  serve.MOUNTINFO.write_text(
+    f'42 31 8:1 /source {serve.ARTIFACT_VIEW} ro,relatime - ext4 /dev/root rw\n'
+  )
+
+  serve._require_artifact_view()
 
 
 def test_published_port_parser_requires_the_vnc_mapping():
@@ -317,6 +331,7 @@ async def test_startup_warms_browser_then_listens_and_commands_reply_verbatim(
     daemon = asyncio.create_task(serve.serve())
     channel, ready = await _ready(sink)
     assert ready == {'event': 'ready', 'vnc': None}
+    assert not (workspace / 'output/warm-up.yml').exists()
 
     reply = await _ask(sink, channel, {'tool': 'echo', 'arguments': {'text': 'verbatim\ntext'}})
     assert reply == {'text': 'verbatim\ntext', 'files': []}
@@ -332,6 +347,7 @@ async def test_startup_warms_browser_then_listens_and_commands_reply_verbatim(
     }
     assert facts['environment']['DISPLAY'] == ':73'
     assert facts['config'] == {'browser': {'contextOptions': {'acceptDownloads': False}}}
+    assert ['--browser', 'chromium'] == facts['arguments'][2:4]
     assert facts['arguments'][-2:] == ['--blocked-origins', 'https://blocked.example']
     assert ['--allowed-origins', 'https://allowed.example'] == facts['arguments'][-4:-2]
 
