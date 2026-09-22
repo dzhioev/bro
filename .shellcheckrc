@@ -1,0 +1,6 @@
+# relative entries resolve from the working directory: run shellcheck from the repository root
+external-sources=true
+source-path=SCRIPTDIR
+source-path=bro/setup
+source-path=oops/bro/oops/infra
+source-path=oops/trails/server

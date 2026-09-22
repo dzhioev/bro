@@ -25,5 +25,6 @@ if ! manifests_match; then
   uv sync --all-packages --all-groups --all-extras
 fi
 
+# shellcheck source=/dev/null
 source "$DIR/.venv/bin/activate"
 bro.dev.install

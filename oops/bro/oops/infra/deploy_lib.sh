@@ -77,7 +77,7 @@ stage_bro_wheel() {
 
   if _framework_checkout "$repository_root"; then
     (
-      cd "$repository_root"
+      cd "$repository_root" || exit 1
       uv build --package bro --wheel --out-dir "$output_directory" --clear --no-build-logs \
         --no-create-gitignore
     )
@@ -92,7 +92,7 @@ stage_bro_wheel() {
       trap 'rm -rf "$checkout"' EXIT
       git clone --quiet --filter=blob:none "$url" "$checkout"
       git -C "$checkout" checkout --quiet --detach "$revision"
-      cd "$checkout"
+      cd "$checkout" || exit 1
       uv build --package bro --wheel --out-dir "$output_directory" --clear --no-build-logs \
         --no-create-gitignore
     )

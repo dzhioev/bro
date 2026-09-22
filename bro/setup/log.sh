@@ -38,6 +38,6 @@ log() {
   local level="$1"
   shift
   if log_enabled "$level"; then
-    echo "$(date '+%Y-%m-%dT%H:%M:%S') $level[$_LOG_SCOPE] $*" >&2
+    echo "$(date '+%Y-%m-%dT%H:%M:%S') ${level}[$_LOG_SCOPE] $*" >&2
   fi
 }

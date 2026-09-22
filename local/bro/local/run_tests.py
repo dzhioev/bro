@@ -19,6 +19,7 @@ from bro.dev.affected_tests import (
 )
 from bro.dev.packaging_policy import TEST_MODULE_SUFFIXES, distribution_roots
 from bro.dev.sharding import Shard, parse_shard
+from bro.dev.shell_policy import shell_files
 
 __cli_name__ = 'run-tests'
 
@@ -393,6 +394,8 @@ def lint_stage(distributions: Sequence[Distribution] = DISTRIBUTIONS) -> None:
   run(sys.executable, '-m', 'ruff', 'check', '.')
   print('ruff: format check', file=sys.stderr)
   run(sys.executable, '-m', 'ruff', 'format', '--check', '.')
+  print('shellcheck: shell scripts', file=sys.stderr)
+  run(str(Path(sys.executable).parent / 'shellcheck'), *shell_files(DIR))
 
 
 def types_stage() -> None:

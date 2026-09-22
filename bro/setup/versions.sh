@@ -2,6 +2,7 @@
 # pinned versions of the system tools managed by setup_env.sh — the single source
 # of truth shared by its version checks and the ubuntu/ installers' build targets.
 # Bumping a pin here makes the next setup_env.sh run upgrade existing machines.
+# shellcheck disable=SC2034  # the pins are the sourcing script's to read
 
 TMUX_VERSION="3.7b"
 
