@@ -18,6 +18,7 @@ from bro.dev.affected_tests import (
   reachable,
 )
 from bro.dev.packaging_policy import TEST_MODULE_SUFFIXES, distribution_roots
+from bro.dev.sharding import Shard, parse_shard
 
 __cli_name__ = 'run-tests'
 
@@ -495,9 +496,10 @@ def docker_stage() -> None:
   run(sys.executable, '-m', 'pytest', *DOCKER_PYTEST_FILES)
 
 
-def broker_e2e_stage() -> None:
+def broker_e2e_stage(shard: Optional[Shard] = None) -> None:
   print('broker_e2e: broker-supervised container launch seam', file=sys.stderr)
-  run(sys.executable, '-m', 'pytest', BROKER_E2E_PYTEST_FILE)
+  dealt = () if shard is None else (f'--shard={shard}',)
+  run(sys.executable, '-m', 'pytest', BROKER_E2E_PYTEST_FILE, *dealt)
 
 
 def llm_stage() -> None:
@@ -547,12 +549,25 @@ def main(argv: list[str]) -> Optional[int]:
     help='narrow the gate to the work the diff can reach',
   )
   parser.add_argument('--base', help=f'the ref --changed diffs against (default: {DEFAULT_BASE})')
+  parser.add_argument(
+    '--shard',
+    metavar='K/N',
+    help='run the K-th of N shards of the broker_e2e stage; pass --only broker_e2e alone',
+  )
   parser.add_exclusive_groups(['only'], ['skip'])
   args = parser.parse(argv)
   only = args['only']
   skip = args['skip'] if args['skip'] is not None else []
   if args['base'] is not None and not args['changed']:
     parser.error('--base names the ref --changed diffs against; pass --changed too')
+  shard: Optional[Shard] = None
+  if args['shard'] is not None:
+    if only != ['broker_e2e']:
+      parser.error('--shard deals the broker_e2e stage; pass --only broker_e2e alone')
+    try:
+      shard = parse_shard(args['shard'])
+    except ValueError as error:
+      parser.error(str(error))
   stages = STAGES
   dropped: frozenset[str] = frozenset()
   if args['changed']:
@@ -563,6 +578,13 @@ def main(argv: list[str]) -> Optional[int]:
     }
     stages = [replace(stage, run=narrowed.get(stage.name, stage.run)) for stage in STAGES]
     dropped = selected.dropped
+  if shard is not None:
+    stages = [
+      replace(stage, run=functools.partial(broker_e2e_stage, shard))
+      if stage.name == 'broker_e2e'
+      else stage
+      for stage in stages
+    ]
   in_container = Path('/.dockerenv').is_file()
 
   verdicts: list[tuple[str, str]] = []

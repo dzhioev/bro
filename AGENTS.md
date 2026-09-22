@@ -39,6 +39,7 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   and the host-only `docker` (the container entrypoint's postconditions and the launch path from a cold image tag) and `broker_e2e` (the live broker-supervised container launch seam, `ride/ride/e2e_test.py`),
   both skipped when the gate itself runs inside a container.
   `--only` and `--skip` name stages, are repeatable, and are mutually exclusive.
+  `--shard K/N` runs the K-th of N shards of the `broker_e2e` stage (`bro.dev.sharding` deals them), for a runner per shard.
   Every selected stage runs whatever the ones before it did, and the gate closes on a replay of each failing stage's output and a one-line verdict per stage, so one pass reports every problem the tree has.
   `--changed` narrows the gate to what a diff against `--base` (default `origin/master`) can reach through the repository's import graph (`bro.dev.affected_tests`):
   `unit` drops the test modules the change cannot reach
@@ -48,7 +49,7 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   and `types` is never narrowed, since pyright loads the dependency closure whatever file list it is given, so a shorter list hides errors instead of skipping work.
   Each stage names the scope it ran, and a stage the narrowing drops reads `skipped` in the closing verdict rather than going missing from it.
   `run-tests --changed` is the pre-push gate;
-  the whole gate is the pull request's, a runner per stage (`.github/workflows/tests.yml`, on `pull_request`, on `push` to `master`, and on `workflow_dispatch`
+  the whole gate is the pull request's, a runner per stage and per `broker_e2e` shard (`.github/workflows/tests.yml`, on `pull_request`, on `push` to `master`, and on `workflow_dispatch`
   — a push to a feature branch triggers nothing, so a branch that never opens a PR runs on a dispatch or not at all)
 - `run-tests --only llm` — the live-LLM behavior probes (`*_llm_test.py`):
   a real bro against the configured provider, asserting on the artifacts it produces.

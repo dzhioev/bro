@@ -38,9 +38,51 @@ package = false
 def test_the_workflow_matrix_names_every_default_gate_stage():
   workflow = yaml.safe_load((run_tests.DIR / '.github/workflows/tests.yml').read_text())
 
-  matrix = workflow['jobs']['stage']['strategy']['matrix']['stage']
+  matrix = workflow['jobs']['stage']['strategy']['matrix']
+  named = [*matrix['stage'], *(entry['stage'] for entry in matrix['include'])]
 
-  assert matrix == [stage.name for stage in run_tests.STAGES if not stage.opt_in]
+  assert sorted(set(named)) == sorted(stage.name for stage in run_tests.STAGES if not stage.opt_in)
+
+
+def test_the_workflow_matrix_deals_every_broker_e2e_shard():
+  workflow = yaml.safe_load((run_tests.DIR / '.github/workflows/tests.yml').read_text())
+
+  shards = [
+    entry['shard']
+    for entry in workflow['jobs']['stage']['strategy']['matrix']['include']
+    if entry['stage'] == 'broker_e2e'
+  ]
+
+  count = len(shards)
+  assert shards == [f'{index}/{count}' for index in range(1, count + 1)]
+
+
+def test_a_shard_reaches_the_broker_e2e_stage_alone(monkeypatch, invocations):
+  monkeypatch.setattr(
+    run_tests, 'STAGES', [run_tests.Stage('broker_e2e', run_tests.broker_e2e_stage)]
+  )
+
+  assert run_tests.main(['run-tests', '--only', 'broker_e2e', '--shard', '2/3']) is None
+  assert invocations == [
+    (sys.executable, '-m', 'pytest', run_tests.BROKER_E2E_PYTEST_FILE, '--shard=2/3')
+  ]
+
+
+@pytest.mark.parametrize(
+  'argv',
+  [
+    ['--shard', '1/3'],
+    ['--only', 'docker', '--shard', '1/3'],
+    ['--only', 'broker_e2e', '--only', 'docker', '--shard', '1/3'],
+    ['--only', 'broker_e2e', '--shard', '4/3'],
+  ],
+)
+def test_a_shard_outside_the_broker_e2e_stage_or_its_count_is_refused(argv, capsys):
+  with pytest.raises(SystemExit) as raised:
+    run_tests.main(['run-tests', *argv])
+
+  assert raised.value.code == 2
+  assert 'shard' in capsys.readouterr().err
 
 
 def test_the_llm_stage_names_each_probe_on_the_command_line(invocations):
