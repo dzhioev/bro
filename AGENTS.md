@@ -59,6 +59,16 @@ Wheel contents are policy too (`dev/AGENTS.md`, "Wheel contents").
 
 ## Conventions
 
+Framework code stays consumer-neutral:
+what belongs to a consumer
+— personas, credentials, task backends, toolsets
+— reaches the framework through the entry-point groups (`bro/reference/extending.md`, "Entry-point groups"), and this checkout's own lives in `local/`.
+Never stage a credential store or a synthesized secret directory.
+Backward compatibility is not a design constraint:
+the framework is in early beta with no external consumers to protect, so when the right design breaks an interface, moves a mechanism between distributions, or deletes a half-finished idea, that is the change to make
+— "nothing existing changes" is no merit of a proposal;
+the merit is the structure left behind.
+
 A commit subject names its area, then states the change in the imperative, lowercase and without a trailing period: `trails: score the retirement soak by coverage`.
 The area is the subsystem the change lands in
 — a distribution or package directory (`ride:`, `trails:`, `bro/launch:` for a subpackage), the console script or spell it changes (`dive-in:`, `run-pr:`), `docs:` for a documentation-only change, `repo:` for a repository-wide one.
