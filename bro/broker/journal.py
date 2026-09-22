@@ -60,6 +60,7 @@ class Record:
   trail_id_truncated: bool = False
   result: Optional[dict[str, Any]] = None
   result_evicted: bool = False
+  settled: bool = False
   order: int = field(default=0, repr=False)
 
   @property
@@ -100,6 +101,8 @@ class Record:
       view['result'] = self.result
     if include_result and self.result_evicted:
       view['result_evicted'] = True
+    if self.settled:
+      view['settled'] = True
     return view
 
   def conversation(self) -> list[dict[str, Any]]:
@@ -233,6 +236,7 @@ class Journal:
       reason=bounded_reason,
       reason_truncated=reason_truncated,
       result=result,
+      settled=True,
       order=self._next_order(),
     )
     self._result_bytes += _payload_bytes(result)
@@ -360,6 +364,16 @@ class Journal:
       event_payload['reason_truncated'] = True
     self._append(record, 'ended', event_payload, at=record.ended_at)
     self._retain()
+
+  def settle(self, record: Record) -> None:
+    if not record.terminal:
+      raise ValueError(f'cannot settle live mission {record.mission_id!r}')
+    if record.settled:
+      return
+    record.settled = True
+    changed = self._changed
+    self._changed = asyncio.Event()
+    changed.set()
 
   def evicted_view(self, mission_id: str) -> Optional[dict[str, Any]]:
     lineage = self.lineage.get(mission_id)

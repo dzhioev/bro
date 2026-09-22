@@ -281,6 +281,7 @@ PYTEST_FILES = [
   'bench/bro/bench/run_test.py',
   'webview/bro/webview/worker_test.py',
   'webview/bro/webview/serve_test.py',
+  'webview/bro/webview/cli_test.py',
   'local/bro/local/run_tests_test.py',
   'local/bro/local/shell_policy_test.py',
   'local/bro/local/markdown_policy_test.py',
@@ -312,7 +313,8 @@ DOCKER_PYTEST_FILES = [
   'ride/ride/workspace/launch_smoke_test.py',
   'ride/ride/runtime_bundle_smoke_test.py',
 ]
-BROKER_E2E_PYTEST_FILE = 'ride/ride/e2e_test.py'
+BROKER_E2E_PYTEST_FILES = ['ride/ride/e2e_test.py']
+WEBVIEW_E2E_PYTEST_FILES = ['webview/bro/webview/e2e_test.py']
 # run from the benchmark project's own environment, the only one that can import
 # it. The e2e modules stay out of every stage: two of them spend real tokens
 BENCHMARK_PYTEST_FILES = [
@@ -505,7 +507,12 @@ def docker_stage() -> None:
 
 def broker_e2e_stage() -> None:
   print('broker_e2e: broker-supervised container launch seam', file=sys.stderr)
-  run(sys.executable, '-m', 'pytest', BROKER_E2E_PYTEST_FILE)
+  run(sys.executable, '-m', 'pytest', *BROKER_E2E_PYTEST_FILES)
+
+
+def webview_e2e_stage() -> None:
+  print('webview_e2e: browser worker over the live broker and docker daemon', file=sys.stderr)
+  run(sys.executable, '-m', 'pytest', *WEBVIEW_E2E_PYTEST_FILES)
 
 
 def llm_stage() -> None:
@@ -528,6 +535,7 @@ STAGES = [
   Stage('benchmark', benchmark_stage),
   Stage('docker', docker_stage, host_only=True),
   Stage('broker_e2e', broker_e2e_stage, host_only=True),
+  Stage('webview_e2e', webview_e2e_stage, host_only=True),
   Stage('llm', llm_stage, opt_in=True),
 ]
 

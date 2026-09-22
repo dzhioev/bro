@@ -43,6 +43,16 @@ def test_the_workflow_matrix_names_every_default_gate_stage():
   assert matrix == [stage.name for stage in run_tests.STAGES if not stage.opt_in]
 
 
+def test_the_live_broker_stages_name_their_own_modules(invocations):
+  run_tests.broker_e2e_stage()
+  run_tests.webview_e2e_stage()
+
+  assert invocations == [
+    (sys.executable, '-m', 'pytest', *run_tests.BROKER_E2E_PYTEST_FILES),
+    (sys.executable, '-m', 'pytest', *run_tests.WEBVIEW_E2E_PYTEST_FILES),
+  ]
+
+
 def test_the_llm_stage_names_each_probe_on_the_command_line(invocations):
   run_tests.llm_stage()
 

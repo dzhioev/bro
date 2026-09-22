@@ -16,7 +16,7 @@ jobs:
       matrix:
         # every stage `run-tests` runs by default, one runner each; the opt-in
         # llm stage spends tokens and stays out
-        stage: [lint, types, unit, benchmark, docker, broker_e2e]
+        stage: [lint, types, unit, benchmark, docker, broker_e2e, webview_e2e]
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7

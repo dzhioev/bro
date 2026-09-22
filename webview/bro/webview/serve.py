@@ -30,6 +30,7 @@ from bro.broker.journal import MAX_MESSAGE_BYTES
 
 WORKSPACE = Path('/workspace')
 ARTIFACT_VIEW = WORKSPACE / 'artifacts'
+MOUNTINFO = Path('/proc/self/mountinfo')
 OUTPUT_DIRECTORY = WORKSPACE / 'output'
 OPTIONS_ENV = 'WEBVIEW_OPTIONS'
 PUBLISHED_PORTS_ENV = 'RIDE_PUBLISHED_PORTS'
@@ -98,7 +99,19 @@ def decode_options(raw: str) -> Options:
 
 
 def _require_artifact_view() -> None:
-  if not ARTIFACT_VIEW.is_dir() or not os.path.ismount(ARTIFACT_VIEW):
+  try:
+    mount_lines = MOUNTINFO.read_text().splitlines()
+  except OSError as error:
+    raise DaemonError(f'cannot read the process mount table at {MOUNTINFO}: {error}') from error
+  mounted = False
+  for line in mount_lines:
+    fields = line.split()
+    if len(fields) < 6:
+      raise DaemonError(f'{MOUNTINFO} contains a malformed mount record: {line!r}')
+    if fields[4] == str(ARTIFACT_VIEW):
+      mounted = True
+      break
+  if not ARTIFACT_VIEW.is_dir() or not mounted:
     raise DaemonError(f'artifact view is not mounted at {ARTIFACT_VIEW}')
 
 
@@ -218,6 +231,8 @@ def _playwright_arguments(options: Options, config: Path) -> list[str]:
   arguments = [
     '--isolated',
     '--no-sandbox',
+    '--browser',
+    'chromium',
     '--output-dir',
     str(OUTPUT_DIRECTORY),
     '--image-responses',
@@ -438,6 +453,12 @@ def workspace_files() -> dict[Path, FileState]:
 
 def _changed_files(before: Mapping[Path, FileState], after: Mapping[Path, FileState]) -> list[Path]:
   return sorted(path for path, state in after.items() if before.get(path) != state)
+
+
+def discard_changed_files(before: Mapping[Path, FileState]) -> None:
+  after = workspace_files()
+  for path in _changed_files(before, after):
+    _remove_workspace_file(path)
 
 
 def _remove_workspace_file(relative: Path) -> None:
@@ -697,7 +718,9 @@ async def serve() -> None:
         _playwright(options, config, display)
       )
       async with _supervising([*sync_processes, ('Playwright MCP', mcp_process)]) as supervisor:
+        before_warmup = await asyncio.to_thread(workspace_files)
         await _warm_browser(session, supervisor)
+        await asyncio.to_thread(discard_changed_files, before_warmup)
         client = await asyncio.to_thread(Client.from_env)
         if client is None:
           raise DaemonError('no broker channel')

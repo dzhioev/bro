@@ -265,6 +265,9 @@ class Dispatcher:
         detail['output_tail'] = report.output_tail
       message = brotocol.result(supervisor.mission, 'failed', error=report.error, detail=detail)
       self._end(record, message)
+    retained = self.journal.records.get(supervisor.mission)
+    if retained is not None and retained.terminal:
+      self.journal.settle(retained)
     if supervisor.peer is not None:
       self.workers.pop(supervisor.peer, None)
       if supervisor is not self._root_supervisor:
@@ -525,14 +528,24 @@ class Dispatcher:
       return
     wait = min(float(args.get('wait', 0)), MAX_WAIT_SECONDS)
     since = args.get('since')
+    wait_for_settlement = args.get('settled', False)
     record = self.journal.records.get(mission_id)
-    if (
-      wait > 0
-      and record is not None
-      and not record.terminal
-      and (since is None or record.chat_seq <= since)
-    ):
-      self._track_read(self._wait_query(peer, message.request_id, mission_id, wait, since))
+    pending = record is not None and (
+      not record.settled
+      if wait_for_settlement
+      else not record.terminal and (since is None or record.chat_seq <= since)
+    )
+    if wait > 0 and pending:
+      self._track_read(
+        self._wait_query(
+          peer,
+          message.request_id,
+          mission_id,
+          wait,
+          since,
+          wait_for_settlement,
+        )
+      )
       return
     self.deliver(peer, self._query_message(message.request_id, view))
 
@@ -565,11 +578,17 @@ class Dispatcher:
     target_mission: str,
     wait: float,
     since: Optional[int],
+    wait_for_settlement: bool,
   ) -> None:
     deadline = asyncio.get_running_loop().time() + wait
     while True:
       record = self.journal.records.get(target_mission)
-      if record is None or record.terminal or (since is not None and record.chat_seq > since):
+      complete = record is not None and (
+        record.settled
+        if wait_for_settlement
+        else record.terminal or (since is not None and record.chat_seq > since)
+      )
+      if record is None or complete:
         break
       remaining = deadline - asyncio.get_running_loop().time()
       if remaining <= 0:
@@ -828,7 +847,7 @@ def _decode_query_cursor(cursor: str) -> tuple[bool, int, str]:
 
 
 def _validate_query(args: dict[str, Any]) -> Optional[str]:
-  unknown = sorted(set(args) - {'id', 'wait', 'since', 'cursor'})
+  unknown = sorted(set(args) - {'id', 'wait', 'since', 'settled', 'cursor'})
   if len(unknown) > 0:
     return f'unknown query field(s): {", ".join(unknown)}'
   mission_id = args.get('id')
@@ -851,8 +870,15 @@ def _validate_query(args: dict[str, Any]) -> Optional[str]:
     return "query 'since' must be a non-negative integer"
   if since is not None and mission_id is None:
     return "query 'since' requires 'id'"
-  if cursor is not None and (mission_id is not None or wait is not None or since is not None):
-    return "query 'cursor' does not combine with 'id', 'wait', or 'since'"
+  settled = args.get('settled')
+  if settled is not None and not isinstance(settled, bool):
+    return "query 'settled' must be a boolean"
+  if settled is not None and mission_id is None:
+    return "query 'settled' requires 'id'"
+  if cursor is not None and (
+    mission_id is not None or wait is not None or since is not None or settled is not None
+  ):
+    return "query 'cursor' does not combine with 'id', 'wait', 'since', or 'settled'"
   return None
 
 
