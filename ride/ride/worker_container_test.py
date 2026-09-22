@@ -361,6 +361,66 @@ def test_lowering_builds_a_detached_throwaway_launch(monkeypatch, tmp_path):
   ]
 
 
+@pytest.mark.parametrize('operation', ['wait', 'kill'])
+@pytest.mark.asyncio
+async def test_worker_child_prunes_its_empty_artifact_view_after_termination(
+  operation, monkeypatch, tmp_path
+):
+  monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path))
+  workspace = Workspace.create('webview-CH', None, Isolation.BOXED, throwaway=True)
+  artifact_view = workspace.tree / 'mounts' / 'artifacts'
+  artifact_view.mkdir(parents=True)
+  retained = workspace.tree / 'retained'
+  retained.mkdir()
+
+  class _Child:
+    def __init__(self):
+      self.waited = False
+      self.killed = False
+
+    async def wait(self):
+      self.waited = True
+      return 3
+
+    async def kill(self):
+      self.killed = True
+
+    def output_tail(self):
+      return 'worker output'
+
+  delegated = _Child()
+  child = worker_container._WorkerContainerChild(
+    cast(Any, delegated),
+    workspace.name,
+    PurePosixPath('/workspace/mounts/artifacts'),
+  )
+
+  result = await getattr(child, operation)()
+
+  assert result == (3 if operation == 'wait' else None)
+  assert delegated.waited is (operation == 'wait')
+  assert delegated.killed is (operation == 'kill')
+  assert child.output_tail() == 'worker output'
+  assert not artifact_view.exists()
+  assert not artifact_view.parent.exists()
+  assert retained.is_dir()
+
+
+def test_artifact_view_mount_cleanup_preserves_content(monkeypatch, tmp_path):
+  monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path))
+  workspace = Workspace.create('webview-CH', None, Isolation.BOXED, throwaway=True)
+  artifact_view = workspace.tree / 'artifacts'
+  artifact_view.mkdir(parents=True)
+  result = artifact_view / 'result.txt'
+  result.write_text('keep')
+
+  worker_container._remove_empty_artifact_view_mount(
+    workspace.name, PurePosixPath('/workspace/artifacts')
+  )
+
+  assert result.read_text() == 'keep'
+
+
 @pytest.mark.asyncio
 async def test_spawner_records_lowered_facts_and_delegates(monkeypatch):
   lowered = DockerLaunchSpec(
@@ -412,7 +472,7 @@ async def test_spawner_records_lowered_facts_and_delegates(monkeypatch):
 
   child = await spawner.spawn(launch, channel, 'mission', talk)
 
-  assert child is not None
+  assert isinstance(child, worker_container._WorkerContainerChild)
   assert facts.workspaces == [('mission', 'webview-CH', PurePosixPath(CONTAINER_ARTIFACTS_ROOT))]
   assert facts.ports == [('mission', ((49152, 8080),))]
   assert docker.calls == [(lowered, channel, 'mission', talk)]

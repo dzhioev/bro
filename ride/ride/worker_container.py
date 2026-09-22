@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import io
 import socket
 import subprocess
@@ -11,11 +12,14 @@ import tarfile
 import threading
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
+from bro.base import log
 from bro.broker.brotocol import Talk
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
 from bro.worker_types import WorkerContainer
+from bro.workspace.paths import workspace_tree
 from ride.artifacts import ArtifactStore, view_mount
 from ride.peer_facts import PeerFacts
 from ride.workspace.docker import (
@@ -200,6 +204,69 @@ def _lower_worker_container(
   return lowered
 
 
+_CONTAINER_WORKSPACE = PurePosixPath('/workspace')
+
+
+def _remove_empty_artifact_view_mount(workspace_name: str, artifact_view: PurePosixPath) -> None:
+  try:
+    relative_view = artifact_view.relative_to(_CONTAINER_WORKSPACE)
+  except ValueError:
+    return
+  if not relative_view.parts:
+    return
+  tree = workspace_tree(workspace_name)
+  path = tree.joinpath(*relative_view.parts)
+  while path != tree:
+    try:
+      path.rmdir()
+    except FileNotFoundError:
+      pass
+    except OSError as error:
+      if error.errno in (errno.EEXIST, errno.ENOTDIR, errno.ENOTEMPTY):
+        return
+      log.warning('could not remove artifact-view mount point %s: %s', path, error)
+      return
+    path = path.parent
+
+
+class _WorkerContainerChild(ChildHandle):
+  def __init__(
+    self,
+    child: ChildHandle,
+    workspace_name: str,
+    artifact_view: PurePosixPath,
+  ):
+    self._child = child
+    self._workspace_name = workspace_name
+    self._artifact_view: PurePosixPath | None = artifact_view
+
+  async def _remove_artifact_view_mount(self) -> None:
+    artifact_view, self._artifact_view = self._artifact_view, None
+    if artifact_view is None:
+      return
+    operation = asyncio.create_task(
+      asyncio.to_thread(
+        _remove_empty_artifact_view_mount,
+        self._workspace_name,
+        artifact_view,
+      )
+    )
+    if await _wait_for_worker(operation):
+      raise asyncio.CancelledError
+
+  async def wait(self) -> int:
+    code = await self._child.wait()
+    await self._remove_artifact_view_mount()
+    return code
+
+  async def kill(self) -> None:
+    await self._child.kill()
+    await self._remove_artifact_view_mount()
+
+  def output_tail(self) -> str:
+    return self._child.output_tail()
+
+
 class WorkerContainerSpawner(Spawner):
   """Lower a core worker-container run off-loop and delegate it to Docker."""
 
@@ -247,4 +314,5 @@ class WorkerContainerSpawner(Spawner):
         self._artifacts,
       )
       self._facts.note_published_ports(mission, tuple(lowered.launch.published_ports))
-      return await self._docker.spawn(lowered, channel, mission, talk)
+      child = await self._docker.spawn(lowered, channel, mission, talk)
+      return _WorkerContainerChild(child, workspace_name, launch.spec.artifact_view)
