@@ -128,22 +128,37 @@ async def _next_idle_event(
       await asyncio.wait({line_task, news_task}, return_when=asyncio.FIRST_COMPLETED)
 
 
-def _start_line_reader(read: Callable[[], str], lines: _LineBuffer) -> None:
+def _start_line_reader(read: Callable[[], str], lines: _LineBuffer) -> threading.Thread:
   loop = asyncio.get_running_loop()
+
+  def post(item: tuple[str, object]) -> bool:
+    """deliver `item` to the loop; False once the loop has closed."""
+    try:
+      loop.call_soon_threadsafe(lines.put, item)
+    except RuntimeError:
+      # a blocking read cannot be interrupted, so the reader outlives a loop
+      # that ends first, and what it read then has no consumer
+      if not loop.is_closed():
+        raise
+      return False
+    return True
 
   def read_lines() -> None:
     while True:
       try:
         line = read()
       except EOFError:
-        loop.call_soon_threadsafe(lines.put, ('eof', None))
+        post(('eof', None))
         return
       except BaseException as error:
-        loop.call_soon_threadsafe(lines.put, ('error', error))
+        post(('error', error))
         return
-      loop.call_soon_threadsafe(lines.put, ('line', line))
+      if not post(('line', line)):
+        return
 
-  threading.Thread(target=read_lines, daemon=True).start()
+  thread = threading.Thread(target=read_lines, daemon=True)
+  thread.start()
+  return thread
 
 
 def _surface_notice(

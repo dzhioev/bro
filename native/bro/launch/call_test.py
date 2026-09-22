@@ -14,7 +14,13 @@ import bro.llm.llms.echo as llm_llms_echo
 import bro.llm.llms.openai as llm_llms_openai
 from bro.bro import AnswerDelivered, BaseBro
 from bro.inbox import Inbox
-from bro.launch.call import _LineBuffer, _next_idle_event, call_text, chat_main
+from bro.launch.call import (
+  _LineBuffer,
+  _next_idle_event,
+  _start_line_reader,
+  call_text,
+  chat_main,
+)
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.mcp import MCPServer
 from bro.llm.observer import (
@@ -98,6 +104,23 @@ class _BlockingLine:
     if self._read:
       raise EOFError
     self._read = True
+    self.started.set()
+    self.release.wait()
+    return self.line
+
+
+class _RepeatingLine:
+  """callable that blocks until released, then returns the same line on every
+  call, counting them."""
+
+  def __init__(self, line: str):
+    self.line = line
+    self.started = threading.Event()
+    self.release = threading.Event()
+    self.calls = 0
+
+  def __call__(self) -> str:
+    self.calls += 1
     self.started.set()
     self.release.wait()
     return self.line
@@ -242,6 +265,24 @@ async def test_text_answer_ends_with_a_stdin_read_pending(capsys):
     await asyncio.wait_for(conversation, timeout=10)
   await asyncio.to_thread(job.kill)
   reader.release.set()
+
+
+def test_a_line_reader_outliving_its_loop_ends_quietly_without_reading_on(monkeypatch):
+  raised: list[threading.ExceptHookArgs] = []
+  monkeypatch.setattr(threading, 'excepthook', raised.append)
+  reader = _RepeatingLine('late')
+
+  async def start() -> threading.Thread:
+    return _start_line_reader(reader, _LineBuffer())
+
+  thread = asyncio.run(start())
+  assert reader.started.wait(timeout=10)
+  reader.release.set()
+  thread.join(timeout=10)
+
+  assert not thread.is_alive()
+  assert raised == []
+  assert reader.calls == 1
 
 
 @pytest.mark.asyncio
