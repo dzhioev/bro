@@ -23,25 +23,12 @@ from ride.claude.claude_config import latest_jsonl
 from ride.claude.interrupt import Run, run_interactive, run_streaming
 from ride.claude.mcp import start_session_mcp_server
 from ride.claude.recorder import start_session_recorder
-from ride.claude.session_context import (
-  RIDE_SESSION_CONTEXT_ENV,
-  build_session_context,
-  encode_session_context,
-)
 from ride.claude.shell_prefix import apply_shell_prefix
 from ride.claude.statusline import start_statusline_projector
 
 if TYPE_CHECKING:
   from ride.do_ride import SessionRun
   from ride.session import SessionSpec
-
-
-def _set_session_context(spec: 'SessionSpec | SessionRun', system_prompt: str, tree: Path) -> None:
-  """capture the session's launch context into RIDE_SESSION_CONTEXT for the
-  session recorder daemon (set in os.environ, which the daemon's spawn
-  snapshots)."""
-  records = build_session_context(system_prompt=system_prompt, bro=spec.bro, proj_root=tree)
-  os.environ[RIDE_SESSION_CONTEXT_ENV] = encode_session_context(records)
 
 
 def _run_claude(argv: list[str], env: dict[str, str], transcripts: Path) -> Run:
@@ -180,10 +167,6 @@ def run_session(spec: 'SessionSpec | SessionRun') -> int:
     teardown.callback(server.stop)
 
     launch = build_claude_launch(spec, claude_args=claude_args, endpoint=server.endpoint)
-    _set_session_context(spec, launch.system_prompt, tree)
-
-    # after the session context: the daemon's spawn snapshots os.environ, and
-    # RIDE_SESSION_CONTEXT becomes the trail's launch-context attachment
     if os.environ.get('TRAILS_DISABLED') is None:
       try:
         recorder = start_session_recorder(tree, os.environ, llm=spec.llm_spec.dump())

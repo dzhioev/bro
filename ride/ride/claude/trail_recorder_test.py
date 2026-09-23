@@ -88,9 +88,6 @@ def _interrupt_notice() -> str:
 
 _EPHEMERA = json.dumps({'type': 'mode', 'mode': 'normal'})
 
-# a launch-context record of claude's own, as the runner publishes it
-_MCP_RECORD = {'title': 'MCP servers', 'fields': {'mode': 'persona'}}
-
 
 def _pointer() -> Path:
   path = trail_pointer.path()
@@ -114,7 +111,6 @@ def environment(tmp_path: Path, monkeypatch):
   monkeypatch.setenv('RIDE_BASE_SHA', 'abc')
   monkeypatch.setenv('RIDE_BRO', 'dev')
   monkeypatch.setenv('BRO_HOLD', 'attended')
-  monkeypatch.setenv('RIDE_SESSION_CONTEXT', json.dumps([_MCP_RECORD]))
   monkeypatch.delenv('RIDE_SUMMONER', raising=False)
   return projects
 
@@ -197,27 +193,12 @@ class TestAdoption:
     session = managed_session()
     assert session is not None
     assert header['location'] == session.location
-    assert store.get_launch_context(header['id']) == [session.git_record, _MCP_RECORD]
+    assert store.get_launch_context(header['id']) == [session.git_record]
     assert _rows(store, header['id']) == lines
 
-  def test_a_detached_session_attaches_only_claudes_own_context(
-    self, environment, store, monkeypatch
-  ):
+  def test_a_detached_session_attaches_no_context(self, environment, store, monkeypatch):
     monkeypatch.delenv('RIDE_BRANCH')
     monkeypatch.delenv('RIDE_BASE_SHA')
-    _write_segment(environment, 'seg-1', [_user('hello', 'u1'), _assistant('hi', 'a1')])
-
-    assert _recorder(environment, store).tick() is True
-
-    [header] = _trails(store)
-    assert store.get_launch_context(header['id']) == [_MCP_RECORD]
-
-  def test_a_detached_session_without_claude_records_attaches_no_context(
-    self, environment, store, monkeypatch
-  ):
-    monkeypatch.delenv('RIDE_BRANCH')
-    monkeypatch.delenv('RIDE_BASE_SHA')
-    monkeypatch.delenv('RIDE_SESSION_CONTEXT')
     _write_segment(environment, 'seg-1', [_user('hello', 'u1'), _assistant('hi', 'a1')])
 
     assert _recorder(environment, store).tick() is True

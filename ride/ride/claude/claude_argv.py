@@ -91,12 +91,10 @@ def watch_delivery_hooks() -> dict:
 
 @dataclass(frozen=True)
 class ClaudeLaunch:
-  """a built claude invocation: the argv (everything after the `claude` program
-  token) plus the session-shaping prompt text (the `--append-system-prompt`)
-  that RIDE_SESSION_CONTEXT captures."""
+  """a built claude invocation: the argv, everything after the `claude` program
+  token."""
 
   argv: list[str]
-  system_prompt: str
   # a solo session's prompt, delivered as its first stream-json message; an
   # interactive session seeds its prompt through the argv instead
   prompt: Optional[str] = None
@@ -160,7 +158,6 @@ def build_claude_launch(
     hooks.update(_stop_guard_hooks())
   settings['hooks'] = hooks
   mcp_config = http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
-  system_prompt = session_append_prompt(spec.hold, spec.bro)
   argv += [
     '--disallowed-tools',
     ','.join(('mcp__claude_ai_*', *blocked_tool_names)),
@@ -169,7 +166,7 @@ def build_claude_launch(
     '--mcp-config',
     mcp_config,
     '--append-system-prompt',
-    system_prompt,
+    session_append_prompt(spec.hold, spec.bro),
   ]
   if spec.hold != 'guided':
     argv.append('--dangerously-skip-permissions')
@@ -179,7 +176,7 @@ def build_claude_launch(
     argv += STREAM_JSON_ARGS
   argv += claude_args
   if spec.solo:
-    return ClaudeLaunch(argv=argv, system_prompt=system_prompt, prompt=spec.prompt)
+    return ClaudeLaunch(argv=argv, prompt=spec.prompt)
   if spec.prompt is not None:
     argv += ['--', spec.prompt]
-  return ClaudeLaunch(argv=argv, system_prompt=system_prompt)
+  return ClaudeLaunch(argv=argv)

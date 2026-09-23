@@ -56,7 +56,6 @@ class TestRideSessionLaunch:
     assert '--bare' not in argv
     assert argv[argv.index('--disallowed-tools') + 1] == 'mcp__claude_ai_*'
     assert argv[argv.index('--append-system-prompt') + 1] == 'append text'
-    assert launch.system_prompt == 'append text'
     assert '--foo' in argv
 
   def test_selected_tool_blocks_reach_disallowed_tools(self, monkeypatch):
