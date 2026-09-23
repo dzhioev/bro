@@ -1104,7 +1104,7 @@ A harness supplies only `run_session`, so nothing every session needs is written
 The Claude harness's runner (`ride/ride/claude/runner.py`) then, in order:
 resolves a resume's Claude session id from its cwd's projects dir;
 starts the session-local MCP server and surfaces bro spells (both below);
-builds the Claude argv (below) and captures `RIDE_SESSION_CONTEXT` (see "Forwarded env vars");
+builds the Claude argv (below);
 starts the session recorder daemon (see "Session recording");
 gates on the server's `/health`;
 then runs `claude` and waits, ending it on a SIGTERM aimed at `do-ride` (`docker stop`, kill, a terminating service tool) as the interrupt a user issues rather than as a signal, so the turn in flight reaches the transcript before Claude goes.
@@ -1252,14 +1252,6 @@ Wrappers and session daemons rely on a small set of env vars:
   — `ride`’s own in both isolations, and a summon’s child spawn.
   `do-ride` requires it before starting the harness.
   Read by `bro/monitor` — a process without it is in no managed session and so has no trail pointer to publish and no recording health to report.
-- `RIDE_SESSION_CONTEXT` — the session's launch context as a JSON list of typed records.
-  It includes the system prompt, MCP servers, and the project's root instructions document
-  — claude's own launch, beside which the recorder attaches the session's git state from the neutral session env (see "Session recording").
-  The Claude runner builds it through `ride/ride/claude/session_context.py` next to Claude in both isolations.
-  The session recorder uploads it as the trail's launch-context attachment;
-  `rewind` renders it as a `SESSION CONTEXT` preamble.
-  It captures what the model was told but the transcript omits
-  — Claude Code's base harness prompt stays in-process and is not included.
 - `RIDE_SUMMONED` — marks a run as a summoned child.
   The env name is owned by `bro.summon` and read back through its `summoned()` predicate;
   set by the summon lowering and by the `--summoned` launch,
@@ -1343,7 +1335,7 @@ A verified same-segment resume reopens that segment's trail where the previous l
 an interactive resume's history copy opens a fork trail pointing at the prior one, and a whole conversation is the fork chain `rewind show` walks.
 The daemon nominates nothing:
 it blazes with the transcript's lineage evidence and the store's harness resolver decides the edge, or declines a transcript claude has not finished writing (`bro/trails/AGENTS.md`).
-The trail carries the launch recipe and the `RIDE_SESSION_CONTEXT` records, plus the managed-session facts a bro-harness session's trail carries alike
+The trail carries the launch recipe, plus the managed-session facts a bro-harness session's trail carries alike
 — the session's location, its launch line, and the attached tree's git state, read off the session env by `bro.trails.record.session` in either harness's recorder —
 and the recorder publishes its current trail id to the session's trail pointer,
 from which summon control stamps the session's summoned children with `summoned_by.trail_id` (see "Summoning another bro").

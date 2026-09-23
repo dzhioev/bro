@@ -13,7 +13,7 @@ lifecycle over the real ports (spawn
 routing, early exit, timeout, teardown, channel-pinned identity); C — the
 `BROKER_DISABLED` kill-switch; E — SIGINT handling through the attached root; F — `do-ride` as the
 session runner as the container command (exit-code propagation, in-container
-argv build: merged --settings, MCP namespaces, RIDE_SESSION_CONTEXT);
+argv build: merged --settings, MCP namespaces);
 G — the stop interrupt, so `docker stop` lands in claude as a keypress;
 H — joining a boxed party (a member `docker exec`'d into the party's running
 container: the store `docker cp`'d in, the `env -i` snapshot, the pid handshake
@@ -354,10 +354,7 @@ cat > /tmp/e2e-bin/claude <<'FAKE'
 import json, os, signal, sys
 from pathlib import Path
 
-report = {
-  'argv': sys.argv[1:],
-  'session_context_set': os.environ.get('RIDE_SESSION_CONTEXT') is not None,
-}
+report = {'argv': sys.argv[1:]}
 argv = sys.argv[1:]
 if '--settings' in argv:
   report['settings'] = json.loads(argv[argv.index('--settings') + 1])
@@ -1121,7 +1118,6 @@ class TestDoRideContainerCommand:
     assert '--add-dir' not in argv
     mcp_config = json.loads(argv[argv.index('--mcp-config') + 1])
     assert 'brog' in mcp_config['mcpServers']
-    assert report['session_context_set'] is True
 
   def test_fast_mode_reaches_the_merged_settings(
     self, scenario_f: LiveRun, isolated_env: IsolatedEnv

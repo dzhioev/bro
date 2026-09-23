@@ -177,23 +177,6 @@ def _compose(file_lines: list[str], chunks: list[list[int]]) -> list[str]:
   return lines
 
 
-def _launch_context(session: ManagedSession) -> list[Any]:
-  """the trail's launch-context attachment: the session's git state, then the
-  records claude's own launch published through RIDE_SESSION_CONTEXT."""
-  records: list[Any] = [] if session.git_record is None else [session.git_record]
-  raw = os.environ.get('RIDE_SESSION_CONTEXT')
-  if raw is None:
-    return records
-  try:
-    context = json.loads(raw)
-  except json.JSONDecodeError as e:
-    log.warning('unparsable RIDE_SESSION_CONTEXT (%s); omitting the launch context', e)
-    return records
-  if not isinstance(context, list):
-    raise ValueError('RIDE_SESSION_CONTEXT must be a JSON list')
-  return [*records, *context]
-
-
 def _verdict_chunks(result: dict) -> list[list[int]]:
   chunks = result.get('chunks')
   if (
@@ -434,9 +417,8 @@ class Recorder:
     """settle the trail this transcript records into and return the verdict;
     None when the resolver declines to adopt the segment yet."""
     body: dict[str, Any] = {'records': []}
-    context = _launch_context(self.session)
-    if len(context) > 0:
-      body['launch_context'] = context
+    if self.session.git_record is not None:
+      body['launch_context'] = [self.session.git_record]
     request = BlazeRequest(
       harness='claude',
       version=configs.VERSION,

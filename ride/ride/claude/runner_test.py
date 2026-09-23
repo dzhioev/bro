@@ -37,7 +37,7 @@ class _Harness:
       patch('ride.claude.runner.start_session_mcp_server', return_value=self.server),
       patch(
         'ride.claude.runner.build_claude_launch',
-        return_value=ClaudeLaunch(argv=['built'], system_prompt='sp', prompt='go'),
+        return_value=ClaudeLaunch(argv=['built'], prompt='go'),
       ),
       patch(
         'ride.claude.runner._run_claude',
@@ -119,8 +119,6 @@ class TestSessionRun:
       assert h.start_recorder.call_args.args[0] == tmp_path
       # the launch recipe lands on the trail header as native.llm
       assert h.start_recorder.call_args.kwargs['llm'] == claude_code.LLMSpec().dump()
-      # spawned after the session context is set, so the daemon inherits it
-      assert 'RIDE_SESSION_CONTEXT' in h.start_recorder.call_args.args[1]
       assert h.start_recorder.return_value.stop.call_count == 1
 
   def test_statusline_projector_runs_for_the_session_and_stops_after(self, monkeypatch, tmp_path):
@@ -195,12 +193,6 @@ class TestSessionRun:
       assert ride_runner.run_session(_spec(bro='dev')) == 1
       assert h.run_claude.call_count == 0
       assert h.server.stop.call_count == 1
-
-  def test_session_context_set_next_to_claude(self, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      assert ride_runner.run_session(_spec()) == 0
-      assert 'RIDE_SESSION_CONTEXT' in h.env
 
   def test_claude_exit_code_propagates(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)

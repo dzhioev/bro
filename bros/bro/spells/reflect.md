@@ -52,7 +52,7 @@ and `rewind grep <pattern> <trail-id>…` finds one step's traces across them.
 Read each run against the version of the definition in force during it, not the current files.
 The trail carries most of it:
 a spell as the `spell::<name>` or `bro::cast` result,
-the system prompt in the session context,
+the system prompt as a claude trail's `prompt_snapshot` notice or a bro trail's `system_prompt` step (`rewind steps`),
 a doc as the tool served it,
 the scope as the launch line and the banner the run read (`may_summon`, `permits`, the grants on the command).
 What the trail does not carry is recoverable only for a surface the launched repository owns, from the commit the trail's launch line names (its `--into` ref, the git state at launch);

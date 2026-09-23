@@ -12,7 +12,7 @@ Claude Code's own harness themed with the session's bro.
   a session selects the Claude harness, mounting the bro's additions to Claude Code's native tools.
   It contributes the `persona:` resolver through `bro.mcp.targets`.
 - `runner.py` — the Claude harness run under `ride/do_ride.py`:
-  resume-id lookup, hold and kill wiring, session MCP server, launch context, recorder, readiness gate, the Bash tool's shell prefix, and Claude process lifetime.
+  resume-id lookup, hold and kill wiring, session MCP server, recorder, readiness gate, the Bash tool's shell prefix, and Claude process lifetime.
 - `interrupt.py` — how a Claude process is ended so its in-flight turn reaches the transcript:
   SIGINT for print mode, and for a TUI the interrupt keypress on a runner-owned pty that proxies the session's terminal.
 - `claude_argv.py`
@@ -25,8 +25,6 @@ Claude Code's own harness themed with the session's bro.
 - `mcp.py` — session-local HTTP MCP server lifetime and Claude MCP config.
 - `recorder.py` — Claude transcript recorder daemon lifetime;
   `trail_recorder.py` is the daemon itself and the `ride.claude.trail-recorder` console script.
-- `session_context.py` — claude's own typed launch-context records (the system prompt, MCP servers, root instructions) exported through `RIDE_SESSION_CONTEXT`;
-  the session's git state is the neutral `bro.trails.record.session` reader's, attached by the recorder.
 - `system_prompt.py` — shared prompt and persona assembly.
   Prompt assets are loaded from the `bro` distribution, not relative to this package.
 - `statusline.py` — the session-local projector process:
