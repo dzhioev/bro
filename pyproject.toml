@@ -88,6 +88,8 @@ bro-local = { workspace = true }
 "bro.trails.admin" = "bro._entrypoints:bro_trails_admin"
 "bro.trails.rewind" = "bro._entrypoints:bro_trails_rewind"
 "bro.trails.server.server" = "bro._entrypoints:bro_trails_server_server"
+"bro.watch-next" = "bro._entrypoints:bro_watch_next"
+"bro.watch-run" = "bro._entrypoints:bro_watch_run"
 "broker" = "bro._entrypoints:bro_broker_cli"
 "broxy" = "bro._entrypoints:bro_broker_broxy"
 "credentials" = "bro._entrypoints:bro_base_credentials"
@@ -99,6 +101,8 @@ bro-local = { workspace = true }
 "trails" = "bro._entrypoints:bro_trails_admin"
 "trails-server" = "bro._entrypoints:bro_trails_server_server"
 "usage" = "bro._entrypoints:bro_llm_usage"
+"watch-next" = "bro._entrypoints:bro_watch_next"
+"watch-run" = "bro._entrypoints:bro_watch_run"
 
 [project.entry-points."bro.session_commands"]
 "artifact" = "bro._entrypoints:bro_artifact"

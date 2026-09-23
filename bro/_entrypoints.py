@@ -60,3 +60,11 @@ def bro_trails_rewind():
 
 def bro_trails_server_server():
   return run_cli('bro.trails.server.server', sys.argv)
+
+
+def bro_watch_next():
+  return run_cli('bro.watch_next', sys.argv)
+
+
+def bro_watch_run():
+  return run_cli('bro.watch_run', sys.argv)
