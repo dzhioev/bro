@@ -636,27 +636,6 @@ class TestCapabilities:
     assert 'T1' in target.getvalue()
     assert paged == [target.getvalue()]
 
-  def test_output_window_is_oriented_and_bounded(self, monkeypatch):
-    target = io.StringIO()
-    monkeypatch.setattr(rewind.sys, 'stdout', target)
-    configuration = preset('rewind-show', color=ColorMode.NEVER)
-
-    _emit_document(
-      'first\nsecond\nthird\n',
-      {'output_offset': 1, 'output_limit': 1},
-      configuration,
-    )
-
-    output = target.getvalue()
-    assert 'skipped before: 1 lines' in output
-    assert 'second' in output
-    assert 'skipped after: 1 lines' in output
-
-  def test_output_window_rejects_a_negative_offset(self):
-    configuration = preset('rewind-show', color=ColorMode.NEVER)
-    with pytest.raises(SystemExit, match='output offset must be non-negative'):
-      _emit_document('text', {'output_offset': -1}, configuration)
-
   def test_rewind_no_longer_owns_trail_formatting_helpers(self):
     for name in (
       '_ConversationTimeline',

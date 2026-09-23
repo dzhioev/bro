@@ -1,9 +1,10 @@
 import asyncio
+import sys
 
 import pytest
 
 from bro.base.args import Argument, CommandSignature
-from bro.llm.cli_tool import _CommandTool, build_server
+from bro.llm.cli_tool import LIMIT, OFFSET, _CommandTool, build_server
 from bro.mcp import cli
 
 
@@ -33,6 +34,15 @@ def _synthetic(*arguments: Argument) -> _CommandTool:
   return _CommandTool('tool_sub', signature, arguments)
 
 
+def _printing(line_count: int) -> _CommandTool:
+  signature = CommandSignature(
+    command=(sys.executable, '-c', f'for index in range({line_count}): print(index)'),
+    description='prints numbered lines',
+    arguments=(),
+  )
+  return _CommandTool('printing', signature, ())
+
+
 class TestDeclaration:
   def test_words_become_the_tool_name(self):
     assert _tool('bro list').name == 'bro_list'
@@ -56,7 +66,8 @@ class TestDeclaration:
 class TestGeneratedSurface:
   def test_globals_are_not_arguments(self):
     tool = _tool('bro list')
-    assert tool.parameters == {'type': 'object', 'properties': {}, 'required': []}
+    assert set(tool.parameters['properties']) == {OFFSET, LIMIT}
+    assert tool.parameters['required'] == []
 
   def test_description_carries_the_command_summary(self):
     assert _tool('bro list').description.startswith('list registered bros')
@@ -78,7 +89,11 @@ class TestGeneratedSurface:
     }
 
   def test_exposure_narrows_to_the_named_arguments(self):
-    assert set(_tool('bro show', 'name').parameters['properties']) == {'name'}
+    assert set(_tool('bro show', 'name').parameters['properties']) == {'name', OFFSET, LIMIT}
+
+  def test_exposing_an_output_window_name_raises(self):
+    with pytest.raises(ValueError, match='reserves for its output window'):
+      _synthetic(_argument(LIMIT))
 
   def test_exposure_keeps_the_commands_own_argument_order(self):
     tool = _tool('rewind grep', 'trails', 'color', 'pattern')
@@ -154,6 +169,10 @@ class TestArgv:
     with pytest.raises(ValueError, match='takes one value'):
       _synthetic(_argument('limit'))._argv({'limit': [1, 2]})
 
+  def test_output_window_stays_out_of_the_argv(self):
+    tool = _synthetic(_argument('limit'))
+    assert tool._argv({'limit': 5, OFFSET: 2, LIMIT: 3}) == ['tool', 'sub', '--limit=5']
+
 
 class TestCall:
   def test_running_the_command_returns_its_exit_code_and_output(self):
@@ -165,3 +184,21 @@ class TestCall:
     monkeypatch.setenv('HOME', str(tmp_path))
     result = asyncio.run(_tool('bro show').call({'name': 'lead'}))
     assert result.startswith('exit_code: 0\n# lead')
+
+  def test_output_window_pages_the_command_output(self):
+    lines = asyncio.run(_printing(300).call({OFFSET: 20, LIMIT: 250})).splitlines()
+    assert 'skipped before' in lines[1]
+    assert lines[2:-1] == [str(index) for index in range(20, 270)]
+    assert 'skipped after' in lines[-1]
+
+  def test_output_without_a_window_is_still_bounded(self):
+    result = asyncio.run(_printing(300).call({}))
+    assert '[...skipped after' in result.splitlines()[-1]
+
+  def test_negative_offset_raises(self):
+    with pytest.raises(ValueError, match='must be non-negative'):
+      asyncio.run(_printing(1).call({OFFSET: -1}))
+
+  def test_non_integer_window_raises(self):
+    with pytest.raises(ValueError, match='takes an integer'):
+      asyncio.run(_printing(1).call({LIMIT: '5'}))

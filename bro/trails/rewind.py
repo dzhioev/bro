@@ -10,7 +10,6 @@ from typing import Any, Optional
 import bro.base.args as base_args
 from bro.base import log, pager
 from bro.base.ansi import Colors, should_color
-from bro.base.text_window import DEFAULT_LIMIT, window
 from bro.trails.display import (
   ColorMode,
   DisplayConfig,
@@ -40,18 +39,7 @@ def _retained_document(records: Iterable[DisplayRecord], configuration: DisplayC
   return renderer.document()
 
 
-def _window_output(text: str, args: dict[str, Any]) -> str:
-  offset = args.get('output_offset')
-  limit = args.get('output_limit')
-  if offset is None and limit is None:
-    return text
-  if offset is not None and offset < 0:
-    raise SystemExit('output offset must be non-negative')
-  return window(text, offset or 0, DEFAULT_LIMIT if limit is None else limit)
-
-
 def _emit_document(text: str, args: dict[str, Any], configuration: DisplayConfig) -> None:
-  text = _window_output(text, args)
   if (
     configuration.paging
     and sys.stdout.isatty()
@@ -321,20 +309,6 @@ def _add_terminal_arguments(parser: base_args.Parser) -> None:
   )
 
 
-def _add_output_window_arguments(parser: base_args.Parser) -> None:
-  parser.add_argument(
-    '--output-offset',
-    type=int,
-    help='skip this many rendered output lines before printing',
-  )
-  parser.add_argument(
-    '--output-limit',
-    type=int,
-    help=f'max rendered output lines (default with an offset: {DEFAULT_LIMIT}; '
-    'without either window flag the whole document prints)',
-  )
-
-
 def _add_view_arguments(parser: base_args.Parser) -> None:
   parser.add_argument('trail_id', help='trail id (or a legacy claude session id)')
   parser.add_argument(
@@ -347,7 +321,6 @@ def _add_view_arguments(parser: base_args.Parser) -> None:
   parser.add_argument(
     '--interval', type=float, default=2.0, help='seconds between polls with --follow'
   )
-  _add_output_window_arguments(parser)
   _add_terminal_arguments(parser)
 
 
@@ -403,7 +376,6 @@ def main(argv: list[str]) -> Optional[int]:
   grep_parser.add_argument(
     '--limit', type=int, default=None, help='max trails to search (default: all)'
   )
-  _add_output_window_arguments(grep_parser)
   _add_terminal_arguments(grep_parser)
   grep_parser.set_handler(lambda **args: _dispatch(_command_grep, args))
 
@@ -411,7 +383,6 @@ def main(argv: list[str]) -> Optional[int]:
     'tree', help='render the forked_from/fork hierarchy reachable from a trail'
   )
   tree_parser.add_argument('trail_id')
-  _add_output_window_arguments(tree_parser)
   _add_terminal_arguments(tree_parser)
   tree_parser.set_handler(lambda **args: _dispatch(_command_tree, args))
 

@@ -35,8 +35,8 @@ class Lead(Bro):
     cli('bro list'),
     cli('bro show', 'name'),
     cli('rewind list', 'harness', 'bro', 'since', 'until', 'forked_from', 'limit'),
-    cli('rewind show', 'trail_id', 'output_offset', 'output_limit'),
-    cli('rewind steps', 'trail_id', 'output_offset', 'output_limit'),
+    cli('rewind show', 'trail_id'),
+    cli('rewind steps', 'trail_id'),
     cli(
       'rewind grep',
       'pattern',
@@ -47,10 +47,8 @@ class Lead(Bro):
       'before_context',
       'context',
       'limit',
-      'output_offset',
-      'output_limit',
     ),
-    cli('rewind tree', 'trail_id', 'output_offset', 'output_limit'),
+    cli('rewind tree', 'trail_id'),
   ]
   data_sources = [
     man('environment'),

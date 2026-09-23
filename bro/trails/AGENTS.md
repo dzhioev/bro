@@ -190,7 +190,6 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   it owns argument parsing, queries, follow polling, regex matching, and grep context, while every `show`, `steps`, `list`, `tree`, and `grep` record renders through the matching display preset.
   A `show`, `steps`, or `grep` snapshot reads its trail through `TrailsStore.collect_steps` / `collect_messages`, which fetch the step range as concurrent windows, and `--follow` continues on the sequential page cursor.
   `steps` prints every stored record whole.
-  The text views accept `--output-offset` / `--output-limit` for bounded windows.
 - `admin.py` (`trails`) is the operator CLI beside it, carrying `export`, `import`, `migrate`, and `delete`.
   Export reads under the read permission and writes a store layout, import and migration reach every backend through the store contract and the administer-permission routes.
 - `contract_test.py` runs the same contract suite against `LocalStore` and `NetworkStore` over a real loopback aiohttp server backed by `LocalStore`, the import wire and the blob read among it;

@@ -53,7 +53,7 @@ The bro-native engine and provider clients live in `bro.native`.
   Rendering, validation, `InProcessMCPServer`, namespace wrappers, and canonical/wire-name conversion complete the serving path.
   Declaration objects and factories live in `bro.mcp` and import these live objects only when built.
 - `cli_tool.py` — the build side of `bro.mcp.cli(...)`:
-  one installed CLI command served as a generated tool in the `cli` namespace, with a schema derived from `bro.base.args.CommandSignature` and a shell-free fixed argv.
+  one installed CLI command served as a generated tool in the `cli` namespace, with a schema derived from `bro.base.args.CommandSignature` plus a window over the command's output, and a shell-free fixed argv.
 - `observer.py` — the closed provider-neutral `ObservedEvent` union and `Observer.on_event(event)` sink.
   Providers emit reasoning, interim assistant text, background-job notifications, and call-ID-aware tool events;
   runners emit turn boundaries.
