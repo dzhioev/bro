@@ -32,7 +32,7 @@ drives both, and `--skip benchmark` skips that whole stage.
 Build the wheel with `uv build` from this
 directory rather than `uv build --package`.
 
-The `*_e2e_test.py` modules stay out of the gate's roster:
+The `*_e2e_test.py` modules sit in a roster no gate stage runs (`BENCHMARK_E2E_PYTEST_FILES`):
 they build a bundle and drive the host
 docker daemon, the way `ride/ride/e2e_test.py` does.
 The two that grade a trial spend real tokens as well, so `conftest.py` holds them out of directory collection:

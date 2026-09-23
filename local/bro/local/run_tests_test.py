@@ -412,3 +412,54 @@ def test_every_selected_stage_runs_and_each_failed_command_is_replayed_whole(mon
   written = capsys.readouterr().err
   assert '=== first: probe exited with 1 ===\nfirst line\nlast line\n' in written
   assert written.endswith('gate: first FAILED | second ok\n')
+
+
+@pytest.fixture
+def rosters(repository, monkeypatch):
+  """the checkout above with every roster over its own test modules: the two it
+  sets, a broker e2e module at the root, and a benchmark module named from the
+  benchmark project."""
+  (repository / 'thing/e2e_test.py').write_text('')
+  (repository / f'{run_tests.BENCHMARK}/bro/benchmark/job_test.py').write_text('')
+  monkeypatch.setattr(run_tests, 'BROKER_E2E_PYTEST_FILE', 'thing/e2e_test.py')
+  monkeypatch.setattr(run_tests, 'BENCHMARK_PYTEST_FILES', ['bro/benchmark/job_test.py'])
+  for name in (
+    'DOCKER_PYTEST_FILES',
+    'WEBVIEW_E2E_PYTEST_FILES',
+    'LLM_PYTEST_FILES',
+    'BENCHMARK_E2E_PYTEST_FILES',
+  ):
+    monkeypatch.setattr(run_tests, name, [])
+  return repository
+
+
+def test_rosters_naming_every_test_module_once_have_no_problem(rosters):
+  assert run_tests.roster_problems() == []
+
+
+def test_a_roster_entry_naming_no_file_is_a_problem(rosters):
+  (rosters / 'thing/api_test.py').unlink()
+
+  assert run_tests.roster_problems() == ['thing/api_test.py is in a roster but is no file']
+
+
+def test_a_test_module_no_roster_names_is_a_problem(rosters):
+  (rosters / 'thing/new_test.py').write_text('')
+
+  assert run_tests.roster_problems() == ['thing/new_test.py is in no roster']
+
+
+def test_a_test_module_two_rosters_name_is_a_problem(rosters, monkeypatch):
+  monkeypatch.setattr(run_tests, 'PYTEST_FILES', [*run_tests.PYTEST_FILES, 'thing/heavy_test.py'])
+
+  assert run_tests.roster_problems() == ['thing/heavy_test.py is in 2 rosters']
+
+
+def test_the_gate_refuses_to_start_over_a_roster_problem(rosters, monkeypatch):
+  ran = []
+  monkeypatch.setattr(run_tests, 'STAGES', [run_tests.Stage('types', lambda: ran.append(1), '')])
+  (rosters / 'thing/api_test.py').unlink()
+
+  with pytest.raises(SystemExit, match='thing/api_test.py is in a roster but is no file'):
+    run_tests.main([])
+  assert ran == []

@@ -119,6 +119,7 @@ PYTEST_FILES = [
   'bro/base/log_test.py',
   'bro/base/lulid_test.py',
   'bro/base/name_map_test.py',
+  'bro/base/offload_test.py',
   'bro/base/spawn_test.py',
   'bro/base/suite_environment_test.py',
   'bro/base/template_test.py',
@@ -147,6 +148,8 @@ PYTEST_FILES = [
   'native/bro/native/runner_test.py',
   'bro/roster_test.py',
   'bro/spells_test.py',
+  'bro/procedures_test.py',
+  'bro/watches_test.py',
   'bro/datasources/current_time_test.py',
   'bro/datasources/file_test.py',
   'bro/datasources/man_test.py',
@@ -171,6 +174,8 @@ PYTEST_FILES = [
   'bro/trails/display/terminal_test.py',
   'bro/trails/display/textual_test.py',
   'bro/trails/display/_reflow_test.py',
+  'bro/trails/display/_yaml_test.py',
+  'bro/trails/record/session_test.py',
   'bro/trails/lineage_test.py',
   'bro/trails/claude_lineage_test.py',
   'bro/trails/rewind_test.py',
@@ -221,6 +226,8 @@ PYTEST_FILES = [
   'ride/ride/claude/claude_argv_test.py',
   'ride/ride/claude/stop_guard_test.py',
   'ride/ride/claude/watch_delivery_test.py',
+  'ride/ride/claude/watch_guard_test.py',
+  'ride/ride/claude/interrupt_test.py',
   'ride/ride/claude/claude_config_test.py',
   'ride/ride/alias_test.py',
   'ride/ride/cli_test.py',
@@ -235,6 +242,8 @@ PYTEST_FILES = [
   'ride/ride/claude/claude_release_test.py',
   'ride/ride/claude/recorder_test.py',
   'ride/ride/session_test.py',
+  'ride/ride/session_env_test.py',
+  'ride/ride/listing_test.py',
   'ride/ride/claude/system_prompt_test.py',
   'ride/ride/packaging_test.py',
   'bro/workspace/banner_test.py',
@@ -242,6 +251,7 @@ PYTEST_FILES = [
   'ride/ride/workspace/containers_test.py',
   'ride/ride/workspace/docker_test.py',
   'bro/workspace/git_test.py',
+  'bro/workspace/human_test.py',
   'ride/ride/workspace/model_test.py',
   'bro/workspace/paths_test.py',
   'bro/workspace/project_test.py',
@@ -327,7 +337,7 @@ DOCKER_PYTEST_FILES = [
 BROKER_E2E_PYTEST_FILE = 'ride/ride/e2e_test.py'
 WEBVIEW_E2E_PYTEST_FILES = ['webview/bro/webview/e2e_test.py']
 # run from the benchmark project's own environment, the only one that can import
-# it. The e2e modules stay out of every stage: two of them spend real tokens
+# it
 BENCHMARK_PYTEST_FILES = [
   'bro/benchmark/bundle_test.py',
   'bro/benchmark/cli_test.py',
@@ -341,6 +351,13 @@ BENCHMARK_PYTEST_FILES = [
   'bro/benchmark/retention_test.py',
   'bro/benchmark/trajectory_test.py',
 ]
+# run by hand from the benchmark project, never by a stage: two of them spend real
+# tokens
+BENCHMARK_E2E_PYTEST_FILES = [
+  'bro/benchmark/benchmark_job_e2e_test.py',
+  'bro/benchmark/bundle_e2e_test.py',
+  'bro/benchmark/harbor_e2e_test.py',
+]
 # live-LLM behavior probes: each runs a real bro against the configured provider
 # and spends real tokens, so the stage naming them runs only when asked for
 LLM_PYTEST_FILES = [
@@ -351,6 +368,43 @@ LLM_PYTEST_FILES = [
   'ride/ride/claude/shell_prefix_llm_test.py',
   'ride/ride/claude/stop_guard_llm_test.py',
 ]
+
+
+def _rosters() -> list[tuple[str, Sequence[str]]]:
+  """every roster, with the directory its paths are relative to."""
+  return [
+    ('.', PYTEST_FILES),
+    ('.', SINGLE_PROCESS_PYTEST_FILES),
+    ('.', DOCKER_PYTEST_FILES),
+    ('.', [BROKER_E2E_PYTEST_FILE]),
+    ('.', WEBVIEW_E2E_PYTEST_FILES),
+    ('.', LLM_PYTEST_FILES),
+    (BENCHMARK, BENCHMARK_PYTEST_FILES),
+    (BENCHMARK, BENCHMARK_E2E_PYTEST_FILES),
+  ]
+
+
+def roster_problems() -> list[str]:
+  """how the rosters fall short of naming every test module of the checkout
+  exactly once. pytest under xdist reports a missing path as no tests at all,
+  so an entry naming no file costs its whole run."""
+  counts: dict[str, int] = {}
+  for root, roster in _rosters():
+    for path in roster:
+      checkout_path = (Path(root) / path).as_posix()
+      counts[checkout_path] = counts.get(checkout_path, 0) + 1
+  listing = subprocess.run(
+    ('git', 'ls-files', '--cached', '--others', '--exclude-standard', '*_test.py'),
+    cwd=DIR,
+    capture_output=True,
+    text=True,
+    check=True,
+  ).stdout
+  modules = {path for path in listing.splitlines() if (DIR / path).is_file()}
+  problems = [f'{path} is in a roster but is no file' for path in counts if path not in modules]
+  problems += [f'{path} is in {count} rosters' for path, count in counts.items() if count > 1]
+  problems += [f'{path} is in no roster' for path in modules if path not in counts]
+  return sorted(problems)
 
 
 DEFAULT_BASE = 'origin/master'
@@ -664,6 +718,13 @@ def main(argv: list[str]) -> Optional[int]:
   skip = args['skip'] if args['skip'] is not None else []
   if args['base'] is not None and not args['changed']:
     parser.error('--base names the ref --changed diffs against; pass --changed too')
+  problems = roster_problems()
+  if len(problems) > 0:
+    raise SystemExit(
+      '\n'.join(
+        ('the rosters must name every test module once:', *(f'  {problem}' for problem in problems))
+      )
+    )
   shard: Optional[Shard] = None
   if args['shard'] is not None:
     if only != ['broker_e2e']:
