@@ -345,6 +345,7 @@ LLM_PYTEST_FILES = [
   'bro/spells_llm_test.py',
   'dev/bros/dev/commit_llm_test.py',
   'native/bro/native/llms/openai_llm_test.py',
+  'ride/ride/claude/interrupt_llm_test.py',
   'ride/ride/claude/stop_guard_llm_test.py',
 ]
 
