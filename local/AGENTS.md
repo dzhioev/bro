@@ -35,6 +35,8 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
   `--only` and `--skip` name stages, are repeatable, and are mutually exclusive.
   `--shard K/N` runs the K-th of N shards of the `broker_e2e` stage (`bro.dev.sharding` deals them), for a runner per shard.
   Every selected stage runs whatever the ones before it did, so one pass reports every problem the tree has.
+  Before any stage, the gate refuses to start while a roster entry names no file or a `*_test.py` of the checkout sits in no roster or in several;
+  a module run only by hand sits in a roster no stage runs.
   The gate keeps its commands' output to itself:
   it prints a line as a stage starts and its verdict with the elapsed time as it ends,
   and closes on the whole output of every failed command under a header naming its stage and step, then the one-line verdict per stage;
