@@ -236,6 +236,8 @@ _ANSWER_DESCRIPTION = (
   'this exactly once, when the work is done, with a self-contained answer: the summoner '
   'sees nothing else of this session. A session that ends without this call '
   'reports no answer and surfaces to the summoner as a failure.'
+  '{{when #tools contains raise}} An answer means the request was met; a request this run '
+  'cannot fulfill, or declines, ends through `raise` with the reason instead.{{end}}'
   '{{when #harness = claude}} The call records the answer and terminates the session; '
   'nothing after it will run.{{end}}'
 )
