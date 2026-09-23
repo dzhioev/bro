@@ -244,6 +244,12 @@ def runtime_root_from_reference(reference: str) -> Path:
   return path.resolve()
 
 
+def _bundle_environment() -> dict[str, str]:
+  """the ambient environment without the interpreter's own `PYTHON*` settings,
+  which would select code outside the bundle."""
+  return {key: value for key, value in os.environ.items() if not key.startswith('PYTHON')}
+
+
 def reexec_from_runtime(reference: str, argv: list[str]) -> None:
   root = runtime_root_from_reference(reference)
   validate_materialized_runtime(root)
@@ -255,7 +261,7 @@ def reexec_from_runtime(reference: str, argv: list[str]) -> None:
   if running_from_runtime:
     return
   executable = root / 'venv' / 'bin' / 'ride'
-  os.execv(str(executable), [str(executable), *argv[1:]])
+  os.execve(str(executable), [str(executable), *argv[1:]], _bundle_environment())
 
 
 def _unique_paths(paths: Iterable[str]) -> list[str]:
@@ -612,11 +618,14 @@ def _staging_directory(parent: Path) -> Generator[Path]:
     shutil.rmtree(path, ignore_errors=True)
 
 
+def _bundle_hash(manifest: dict) -> str:
+  return hashlib.sha256(_manifest_bytes(manifest)).hexdigest()
+
+
 def _persist_bundle(base: Path, manifest: dict, wheels: list[Path]) -> Path:
   runtime = base / 'runtime'
   runtime.mkdir(parents=True, exist_ok=True)
-  digest = hashlib.sha256(_manifest_bytes(manifest)).hexdigest()
-  target = runtime / digest
+  target = runtime / _bundle_hash(manifest)
   if target.exists():
     _verify_bundle(target, manifest)
     return target
@@ -799,6 +808,26 @@ def link_session_commands(
   return commands
 
 
+def _running_bundle_hash(base: Path) -> str | None:
+  """the frozen bundle under `base` whose host venv this interpreter runs from, if any."""
+  runtime = (base / 'runtime').resolve()
+  prefix = Path(sys.prefix).resolve()
+  if not prefix.is_relative_to(runtime):
+    return None
+  parts = prefix.relative_to(runtime).parts
+  if len(parts) != 3 or parts[1:] != ('host', 'venv') or _HASH_PATTERN.fullmatch(parts[0]) is None:
+    return None
+  return parts[0]
+
+
+def _hold_bundle(lifetime: contextlib.ExitStack, root: Path) -> None:
+  """hold the bundle's shared lock for `lifetime`; the handle is inheritable, so
+  the hold survives the root's re-exec into the bundle."""
+  handle = lifetime.enter_context((root / '.lock').open('a+'))
+  os.set_inheritable(handle.fileno(), True)
+  fcntl.flock(handle, fcntl.LOCK_SH)
+
+
 @contextlib.contextmanager
 def resolve_runtime_bundle(reference: str | None = None) -> Generator[RuntimeBundle]:
   if reference is not None and _HASH_PATTERN.fullmatch(reference) is None:
@@ -821,8 +850,7 @@ def resolve_runtime_bundle(reference: str | None = None) -> Generator[RuntimeBun
         python = manifest.get('python')
         if not isinstance(python, str) or python == '':
           raise RuntimeBundleError(f'frozen runtime bundle {reference} has no Python version')
-        handle = lifetime.enter_context((root / '.lock').open('a+'))
-        fcntl.flock(handle, fcntl.LOCK_SH)
+        _hold_bundle(lifetime, root)
       yield RuntimeBundle(root, python)
     return
 
@@ -834,10 +862,15 @@ def resolve_runtime_bundle(reference: str | None = None) -> Generator[RuntimeBun
     with tempfile.TemporaryDirectory(prefix='ride-runtime-wheels-') as temporary:
       wheels = _build_wheels(local, Path(temporary))
       manifest = _manifest(python, pins, wheels)
+      running = _running_bundle_hash(base)
+      if running is not None and running != _bundle_hash(manifest):
+        raise RuntimeBundleError(
+          f'frozen runtime bundle {running} re-froze as {_bundle_hash(manifest)}: '
+          'a snapshot must reproduce itself'
+        )
       with _locked_file(runtime / '.lock', fcntl.LOCK_SH):
         root = _persist_bundle(base, manifest, wheels)
-        handle = lifetime.enter_context((root / '.lock').open('a+'))
-        fcntl.flock(handle, fcntl.LOCK_SH)
+        _hold_bundle(lifetime, root)
     yield RuntimeBundle(root, python)
 
 

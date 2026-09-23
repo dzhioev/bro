@@ -459,7 +459,6 @@ def prepared_unboxed_session_launch(
   the neutral session env around the harness's extras, with the surface's own
   `env` on top."""
   harness = get_harness(spec.harness)
-  runtime_bundle.materialize_host()
   tree = workspace.tree
   session_command = do_ride_command(spec)
   command = [str(runtime_bundle.host_venv / 'bin' / session_command[0]), *session_command[1:]]
@@ -662,14 +661,14 @@ def start_session(
   summoned: Optional[PendingBro] = None,
 ) -> int:
   try:
-    if spec.runtime_bundle is not None:
-      reexec_from_runtime(spec.runtime_bundle, spec.to_command_argv())
     runtime_context = (
       resolve_runtime_bundle()
       if spec.runtime_bundle is None
       else resolve_runtime_bundle(spec.runtime_bundle)
     )
     with runtime_context as runtime_bundle:
+      runtime_bundle.materialize_host()
+      reexec_from_runtime(runtime_bundle.reference, spec.to_command_argv())
       return _start_session(spec, runtime_bundle, repository, summoned)
   except RuntimeBundleError as error:
     log.error('%s', error)
@@ -738,9 +737,7 @@ def _start_session(
     log.error('%s', error)
     return 1
 
-  if spec.isolation is Isolation.UNBOXED:
-    runtime_bundle.materialize_host()
-  else:
+  if spec.isolation is Isolation.BOXED:
     try:
       runtime_bundle.require_frozen_manifest()
     except RuntimeBundleError as error:

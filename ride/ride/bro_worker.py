@@ -348,8 +348,6 @@ def _lower_summon(
   launch_scope, scoped = _child_launch_scope(launch, spec, repo)
   if launch.isolation is Isolation.BOXED:
     container_runtime.resolve()
-  else:
-    runtime_bundle.materialize_host()
   workspace = Workspace.ensure(workspace_name, repo, launch.isolation, throwaway=True)
   record_resume_spec(workspace, spec)
   mounts: tuple[str, ...] = ()

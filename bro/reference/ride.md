@@ -206,11 +206,20 @@ The root holds the bundle's shared flock until its session and summoned children
 and sweeps up what a hard-killed ride can leave on the daemon:
 labeled materializer containers whose bundle is gone or reclaimable, and runtime volumes no bundle directory names.
 
-Unboxed isolation materializes the bundle once as `host/venv`, checks its dependency closure, and builds `host/bin` as symlinks to console scripts declared through `bro.session_commands`.
+Every root materializes the bundle once as `host/venv`, checks its dependency closure, and builds `host/bin` as symlinks to console scripts declared through `bro.session_commands`,
+then re-executes `host/venv/bin/ride` before reading workspace state,
+so the launcher
+— the broker root and the `launch` handler it hosts, whose imports and prompt reads resolve lazily
+— runs the snapshot rather than the installation that invoked it.
+The re-executed launcher freezes the venv it runs from, which lands on that same bundle;
+a freeze from inside a frozen bundle that lands elsewhere fails the launch, since the launcher would otherwise re-execute without end.
+The bundle's lock handle is inheritable, so the hold crosses the exec,
+and the exec drops every `PYTHON*` variable from the environment, so an ambient `PYTHONPATH` or `PYTHONHOME` selects no code outside the bundle.
+A change to a local source therefore reaches the next launch through a fresh freeze and never a running ride.
 `--runtime-bundle PATH` instead takes an existing materialized layout at `PATH/venv` and `PATH/bin`.
 The latter must be the exact shim farm for the former's full `bro.session_commands` roster;
 a missing executable, missing or extra shim, or shim targeting another command fails before launch.
-The launcher re-executes from `PATH/venv/bin/ride` before reading workspace state,
+The launcher re-executes from `PATH/venv/bin/ride` the same way,
 records the path for root and started-child resume, and uses its absolute `do-ride`,
 so every process in the ride runs that runtime even when the first command came from another installation.
 A given runtime also carries the roots its sessions trust:
@@ -415,7 +424,9 @@ Whatever the isolation and harness, the outer:
   the `claude_code` setup-token for a Claude session;
   the bro harness preflights nothing — its LLM key rides the scoped store) is a launch preflight, so `ride resume` is gated like the launch that created the session.
   Neither runs in `do-ride`, whose parser has no outer machinery flags and therefore no placement policy to revalidate;
-- resolves and flock-holds one frozen runtime bundle for the root's full lifetime, or validates the materialized layout named by `--runtime-bundle` after re-executing its `ride`;
+- resolves and flock-holds one runtime bundle for the root's full lifetime
+  — a freeze of the invoking installation, materialized for the host, or the materialized layout named by `--runtime-bundle`
+  — and re-executes from its `ride`, so the rest of the launch and the broker root run that runtime;
   then sets `RIDE_COMMAND` (including the resolved `--repo` when attached) and resolves the session's base to a sha
   — `--into` against that attachment, or the attachment's HEAD when none was given;
 - runs every precondition that can reject the launch
@@ -448,7 +459,7 @@ The lock releases with the session, so re-entry and `ride resume` afterwards are
 An unboxed workspace runs its tree directly on the launcher's filesystem.
 With an attachment, the first launch creates the same independent clone a boxed workspace uses and checks out the workspace's recorded branch at the resolved base.
 Later launches preserve that clone exactly as the session left it.
-After clone preparation, `ride` runs the tree's `setup.sh` when present, materializes the runtime bundle's host half, and starts its absolute `do-ride` with the tree as cwd.
+After clone preparation, `ride` runs the tree's `setup.sh` when present and starts the runtime bundle's absolute `do-ride` with the tree as cwd.
 Every unboxed session's store and install-hook output live under one private temporary root that its supervisor removes after exit, so a retained workspace contains no credential material.
 `BRO_STORE` and `BRO_INSTALL_DIR` point at those directories.
 The harness's `prepare_unboxed_env` hook supplies launch-time state;
@@ -934,7 +945,7 @@ the human at the launch owns the session's shape, and there is no host-killable 
 
 The bridge between the two halves is the generic pending record (`ride/ride/pending_launch.py`),
 written under `<runtime-root>/launch/pending/<token>.json` when the channel is provisioned and one-shot-claimed by the launch as its last fallible step before the session starts.
-The record carries the ride runtime as its frozen bundle hash or given path, and token minting materializes its host half off the broker loop before writing the pending record and emitting acceptance.
+The record carries the ride runtime as its frozen bundle hash or given path.
 A `ride along --summoned` entered through another installation reads that field first and re-executes from the owning runtime before it loads the rest of the record.
 The child still completes the broker attach revision check after re-execution, so a missing or mismatched wire revision is refused before any envelope can be misparsed.
 A second launch on the same token fails loudly (two sessions must not share one channel), and a summon that ends unclaimed (root teardown, a failure) discards it, so a stale token fails the launch with the reason.

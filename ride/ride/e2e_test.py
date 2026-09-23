@@ -512,6 +512,7 @@ def isolated_env() -> Iterator[IsolatedEnv]:
       monkeypatch.setenv('DOCKER_HOST', host_docker.daemon_endpoint())
       runtime_root = workspace_paths.runtime_base()
       with resolve_runtime_bundle() as bundle:
+        bundle.materialize_host()
         runtime = workspace_docker.ContainerRuntimeResolver(bundle, project).resolve()
         env = IsolatedEnv(
           root=root,

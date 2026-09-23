@@ -641,6 +641,60 @@ def test_hash_resolver_holds_the_existing_bundle_lock(monkeypatch, tmp_path):
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
+def test_the_bundle_hold_survives_the_holders_exec(tmp_path):
+  data_home = tmp_path / 'data'
+  manifest = runtime_bundle._manifest('3.12', [], [])
+  root = runtime_bundle._persist_bundle(data_home / 'ride', manifest, [])
+  waiter = 'import sys; print("held", flush=True); sys.stdin.readline()'
+  holder = (
+    'import os, sys\n'
+    'from ride.runtime_bundle import resolve_runtime_bundle\n'
+    f'with resolve_runtime_bundle({root.name!r}):\n'
+    f'  os.execv(sys.executable, [sys.executable, "-c", {waiter!r}])\n'
+  )
+
+  with subprocess.Popen(
+    [sys.executable, '-c', holder],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    text=True,
+    env={**os.environ, 'XDG_DATA_HOME': str(data_home)},
+  ) as process:
+    assert process.stdin is not None and process.stdout is not None
+    assert process.stdout.readline() == 'held\n'
+    with (root / '.lock').open('a+') as handle:
+      with pytest.raises(BlockingIOError):
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+      process.stdin.close()
+      assert process.wait(timeout=60) == 0
+      fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def test_a_freeze_from_inside_a_frozen_bundle_resolves_that_bundle(monkeypatch, tmp_path):
+  monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
+  monkeypatch.setattr(runtime_bundle, '_classify_installation', lambda: ('3.12', ['a==1'], []))
+  manifest = runtime_bundle._manifest('3.12', ['a==1'], [])
+  root = runtime_bundle._persist_bundle(tmp_path, manifest, [])
+  (root / 'host' / 'venv').mkdir(parents=True)
+  monkeypatch.setattr(runtime_bundle.sys, 'prefix', str(root / 'host' / 'venv'))
+
+  with runtime_bundle.resolve_runtime_bundle() as bundle:
+    assert bundle.root == root
+
+
+def test_a_freeze_from_inside_a_frozen_bundle_must_reproduce_it(monkeypatch, tmp_path):
+  monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
+  monkeypatch.setattr(runtime_bundle, '_classify_installation', lambda: ('3.12', ['a==2'], []))
+  running = tmp_path / 'runtime' / ('b' * 64) / 'host' / 'venv'
+  running.mkdir(parents=True)
+  monkeypatch.setattr(runtime_bundle.sys, 'prefix', str(running))
+
+  with pytest.raises(runtime_bundle.RuntimeBundleError, match='must reproduce itself'):
+    with runtime_bundle.resolve_runtime_bundle():
+      pass
+  assert [path.name for path in (tmp_path / 'runtime').iterdir()] == ['b' * 64]
+
+
 def _without_docker(monkeypatch):
   monkeypatch.setattr(
     runtime_bundle.subprocess,
@@ -853,13 +907,46 @@ def test_runtime_reexec_uses_the_given_runtime_ride(tmp_path, monkeypatch):
   root = _materialized_runtime(tmp_path / 'given')
   monkeypatch.setattr(runtime_bundle, '_session_commands', lambda _python: _GIVEN_COMMANDS)
   monkeypatch.setattr(runtime_bundle.sys, 'prefix', '/another/venv')
+  monkeypatch.setenv('PYTHONPATH', str(tmp_path / 'shadow'))
+  monkeypatch.setenv('PYTHONHOME', str(tmp_path / 'home'))
+  monkeypatch.setenv('RIDE_PROBE', 'kept')
   calls = []
   monkeypatch.setattr(
-    runtime_bundle.os, 'execv', lambda executable, argv: calls.append((executable, argv))
+    runtime_bundle.os,
+    'execve',
+    lambda executable, argv, env: calls.append((executable, argv, env)),
   )
   runtime_bundle.reexec_from_runtime(str(root), ['ride', 'solo', 'dev', 'work'])
   executable = str(root / 'venv' / 'bin' / 'ride')
-  assert calls == [(executable, [executable, 'solo', 'dev', 'work'])]
+  [(called, argv, env)] = calls
+  assert (called, argv) == (executable, [executable, 'solo', 'dev', 'work'])
+  assert env['RIDE_PROBE'] == 'kept'
+  assert 'PYTHONPATH' not in env and 'PYTHONHOME' not in env
+
+
+def test_the_reexeced_ride_ignores_an_ambient_shadow(tmp_path):
+  root = _materialized_runtime(tmp_path / 'given')
+  shadow = tmp_path / 'shadow' / 'ride'
+  shadow.mkdir(parents=True)
+  (shadow / '__init__.py').write_text('raise SystemExit("shadow ride imported")\n')
+  launcher = (
+    'import os\n'
+    'import ride.runtime_bundle as runtime_bundle\n'
+    f'runtime_bundle._session_commands = lambda _python: {_GIVEN_COMMANDS!r}\n'
+    f'os.environ["PYTHONPATH"] = {str(shadow.parent)!r}\n'
+    f'runtime_bundle.reexec_from_runtime({str(root)!r}, ["ride", "--help"])\n'
+  )
+
+  result = subprocess.run(
+    [sys.executable, '-c', launcher],
+    capture_output=True,
+    text=True,
+    env={key: value for key, value in os.environ.items() if key != 'PYTHONPATH'},
+  )
+
+  assert result.returncode == 0, result.stderr
+  assert 'shadow ride imported' not in result.stderr
+  assert result.stdout.startswith('usage: ride')
 
 
 def test_runtime_reexec_is_a_noop_inside_the_named_runtime(tmp_path, monkeypatch):
@@ -868,7 +955,7 @@ def test_runtime_reexec_is_a_noop_inside_the_named_runtime(tmp_path, monkeypatch
   monkeypatch.setattr(runtime_bundle.sys, 'prefix', str(root / 'venv'))
   monkeypatch.setattr(
     runtime_bundle.os,
-    'execv',
+    'execve',
     lambda *_args: pytest.fail('the runtime must not re-exec itself again'),
   )
   runtime_bundle.reexec_from_runtime(str(root), ['ride', 'list'])

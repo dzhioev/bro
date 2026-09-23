@@ -61,7 +61,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/flags.py` — common session, scope, LLM, and harness flag registration, and the default an omitted `--hold` resolves to.
 - `ride/session_env.py` — the `--env` contract:
   assignment parsing for the CLI, and the validation every reader of a recorded mapping applies.
-- `ride/runtime_bundle.py` — installation freeze, content-addressed bundle persistence and locking, supplied-runtime validation/re-exec, shared host/container materialization, session-command shims, runtime-volume lifecycle, and bundle GC.
+- `ride/runtime_bundle.py` — installation freeze, content-addressed bundle persistence and locking, runtime validation and re-exec, shared host/container materialization, session-command shims, runtime-volume lifecycle, and bundle GC.
 - `ride/listing.py`, `ride/clean.py`, `ride/scope_report.py` — lifecycle implementations.
 - `ride/e2e_test.py` — live Docker launch coverage, outside the default test roster.
 - `ride/workspace/` — managed workspace creation, provisioning, container execution, credential hydration, broker spawners, and teardown;
@@ -80,8 +80,9 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   a summon child is spawned by `summon`
   — except a manual one, which the user launches with `ride along --summoned <token>` or the one-shot `ride solo --summoned <token>` against the summoner's provisioned channel.
 - Every harness keeps its session state among the workspace's own records, so reclaiming a workspace is `Workspace.remove()` for all of them and no harness supplies a teardown of its own.
-- Every outer root runs one runtime bundle for its full lifetime:
-  either a locked freeze of the invoking installation, or the materialized `venv/` + `bin/` layout named by `--runtime-bundle` after re-executing its `ride`.
+- Every outer root runs one runtime bundle for its full lifetime, re-executing its launcher from that bundle's `ride`:
+  either a locked freeze of the invoking installation, materialized for the host before the re-exec, or the materialized `venv/` + `bin/` layout named by `--runtime-bundle`.
+  A freeze taken from inside a frozen bundle's host venv must land on that bundle.
   Unboxed workspaces run its absolute host materialization;
   boxed workspaces require a frozen manifest, mount its named runtime volume read-only, and reuse the root's image tag and bundle hash for started children.
   A given runtime's unboxed sessions verify TLS against the certifi store it carries, set as `SSL_CERT_FILE` in their snapshot;
