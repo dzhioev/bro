@@ -230,6 +230,7 @@ PYTEST_FILES = [
   'ride/ride/claude/mcp_test.py',
   'ride/ride/claude/runner_test.py',
   'ride/ride/claude/claude_auth_test.py',
+  'ride/ride/claude/claude_release_test.py',
   'ride/ride/claude/session_context_test.py',
   'ride/ride/claude/recorder_test.py',
   'ride/ride/session_test.py',

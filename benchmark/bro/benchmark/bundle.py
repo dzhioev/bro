@@ -21,7 +21,6 @@ import re
 import shutil
 import subprocess
 import sys
-import urllib.request
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +29,7 @@ from typing import Optional
 from bro.base import log, spawn
 from bro.base.args import Parser
 from bro.base.source_root import SOURCE_ROOT
+from ride.claude import claude_release
 from ride.runtime_bundle import link_session_commands, validate_materialized_runtime
 from ride.workspace.build_context import claude_code_version
 
@@ -40,7 +40,6 @@ WHEEL_PACKAGES = ('bro', 'bro-native', 'bro-dev', 'bro-ride')
 TARGET = ('linux', 'x86_64', 'glibc')
 # `TARGET`, as the Claude Code release manifest names it
 CLAUDE_CODE_PLATFORM = 'linux-x64'
-CLAUDE_CODE_RELEASES = 'https://downloads.claude.ai/claude-code-releases'
 MANIFEST_FORMAT = 3
 
 # a console script that finds its interpreter beside itself wherever the bundle
@@ -362,57 +361,9 @@ def _relocate_scripts(bundle: Bundle) -> None:
   log.verbose('relocated %d console scripts', len(relocated))
 
 
-def _fetch_json(url: str) -> dict[str, object]:
-  with urllib.request.urlopen(url) as response:
-    manifest = json.load(response)
-  if not isinstance(manifest, dict):
-    raise ValueError(f'{url} is not a JSON object')
-  return manifest
-
-
-def claude_code_checksum(release_manifest: dict[str, object]) -> str:
-  """the digest the Claude Code release manifest states for `CLAUDE_CODE_PLATFORM`."""
-  platforms = release_manifest.get('platforms')
-  if not isinstance(platforms, dict) or CLAUDE_CODE_PLATFORM not in platforms:
-    raise ValueError(f'the Claude Code release manifest has no {CLAUDE_CODE_PLATFORM} platform')
-  entry = platforms[CLAUDE_CODE_PLATFORM]
-  checksum = entry.get('checksum') if isinstance(entry, dict) else None
-  if not _digest_valid(checksum):
-    raise ValueError(f'the Claude Code release manifest has no {CLAUDE_CODE_PLATFORM} checksum')
-  return str(checksum)
-
-
-def _download(url: str, into: Path) -> None:
-  into.parent.mkdir(parents=True, exist_ok=True)
-  with urllib.request.urlopen(url) as response, into.open('wb') as file:
-    shutil.copyfileobj(response, file)
-
-
-def cached_claude_code(version: str, cache: Path) -> Path:
-  """the Claude Code binary of `version`, downloaded into `cache` unless a copy
-  matching the release manifest's checksum is already there."""
-  release = f'{CLAUDE_CODE_RELEASES}/{version}'
-  checksum = claude_code_checksum(_fetch_json(f'{release}/manifest.json'))
-  binary = cache / version / 'claude'
-  if binary.is_file() and _file_digest(binary) == checksum:
-    return binary
-  log.info('downloading Claude Code %s', version)
-  staged = binary.with_suffix('.download')
-  _download(f'{release}/{CLAUDE_CODE_PLATFORM}/claude', staged)
-  digest = _file_digest(staged)
-  if digest != checksum:
-    staged.unlink()
-    raise ValueError(
-      f'Claude Code {version} for {CLAUDE_CODE_PLATFORM} downloaded with digest {digest}, '
-      f'the release manifest states {checksum}'
-    )
-  staged.replace(binary)
-  return binary
-
-
 def _install_claude_code(bundle: Bundle, cache: Path) -> dict[str, str]:
   version = claude_code_version()
-  binary = cached_claude_code(version, cache)
+  binary = claude_release.cached_binary(version, CLAUDE_CODE_PLATFORM, cache)
   bundle.claude_dir.mkdir()
   shutil.copyfile(binary, bundle.claude)
   bundle.claude.chmod(0o755)

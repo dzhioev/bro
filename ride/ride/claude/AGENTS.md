@@ -18,6 +18,7 @@ Claude Code's own harness themed with the session's bro.
 - `claude_argv.py`
   — the argv builder, including solo print mode, settings, status line, MCP config, the append prompt, blocked and narrowed native tools, model/effort/fast selection, prompt, and forwarded Claude arguments.
 - `claude_auth.py` — the setup-token environment.
+- `claude_release.py` — a Claude Code version's standalone release binary for one platform, checksum-verified against its release manifest and cached.
 - `claude_config.py` — the `claude/` state dir under a workspace:
   settings, transcript paths, subject reads, provisioning, and the container mount and env that carry it in.
 - `mcp.py` — session-local HTTP MCP server lifetime and Claude MCP config.

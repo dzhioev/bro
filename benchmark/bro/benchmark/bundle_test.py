@@ -1,4 +1,3 @@
-import hashlib
 import json
 import os
 import platform
@@ -10,7 +9,6 @@ import pytest
 
 from bro.benchmark import bundle as bundle_module
 from bro.benchmark.bundle import (
-  CLAUDE_CODE_PLATFORM,
   CPYTHON_VERSION,
   MANIFEST_FORMAT,
   TARGET,
@@ -18,9 +16,7 @@ from bro.benchmark.bundle import (
   Bundle,
   build,
   built,
-  cached_claude_code,
   claude_code_cache,
-  claude_code_checksum,
   default_root,
   export_command,
   host_mismatch,
@@ -280,75 +276,6 @@ def test_the_install_targets_the_bundled_interpreter_with_nothing_resolved():
   assert '--target' not in command
   assert '--no-deps' in command
   assert command[-2:] == ['/staging/bro.whl', '/staging/bro_native.whl']
-
-
-def _release_manifest(checksum: str) -> dict[str, object]:
-  return {'version': '2.1.258', 'platforms': {CLAUDE_CODE_PLATFORM: {'checksum': checksum}}}
-
-
-def test_the_release_checksum_is_the_targeted_platforms():
-  assert claude_code_checksum(_release_manifest('5' * 64)) == '5' * 64
-
-
-@pytest.mark.parametrize(
-  'manifest',
-  [{}, {'platforms': {'darwin-arm64': {'checksum': '5' * 64}}}, _release_manifest('short')],
-)
-def test_a_release_manifest_without_the_platform_is_refused(manifest):
-  with pytest.raises(ValueError, match=CLAUDE_CODE_PLATFORM):
-    claude_code_checksum(manifest)
-
-
-@pytest.fixture
-def releases(monkeypatch):
-  """the Claude Code release site, answering the manifest and a binary."""
-  binary = b'#!/bin/sh\necho claude\n'
-  checksum = hashlib.sha256(binary).hexdigest()
-  fetched: list[str] = []
-  monkeypatch.setattr(
-    bundle_module, '_fetch_json', lambda url: fetched.append(url) or _release_manifest(checksum)
-  )
-
-  def download(url: str, into: Path) -> None:
-    fetched.append(url)
-    into.parent.mkdir(parents=True, exist_ok=True)
-    into.write_bytes(binary)
-
-  monkeypatch.setattr(bundle_module, '_download', download)
-  return binary, checksum, fetched
-
-
-def test_a_binary_is_downloaded_once_and_verified(tmp_path, releases):
-  binary, _, fetched = releases
-
-  first = cached_claude_code('2.1.258', tmp_path / 'cache')
-  second = cached_claude_code('2.1.258', tmp_path / 'cache')
-
-  assert first == second == tmp_path / 'cache' / '2.1.258' / 'claude'
-  assert first.read_bytes() == binary
-  assert fetched == [
-    f'{bundle_module.CLAUDE_CODE_RELEASES}/2.1.258/manifest.json',
-    f'{bundle_module.CLAUDE_CODE_RELEASES}/2.1.258/{CLAUDE_CODE_PLATFORM}/claude',
-    f'{bundle_module.CLAUDE_CODE_RELEASES}/2.1.258/manifest.json',
-  ]
-
-
-def test_a_cached_binary_off_the_release_checksum_is_replaced(tmp_path, releases):
-  binary, _, fetched = releases
-  stale = tmp_path / 'cache' / '2.1.258' / 'claude'
-  stale.parent.mkdir(parents=True)
-  stale.write_bytes(b'stale')
-
-  assert cached_claude_code('2.1.258', tmp_path / 'cache').read_bytes() == binary
-  assert len(fetched) == 2
-
-
-def test_a_download_off_the_release_checksum_is_refused(tmp_path, releases, monkeypatch):
-  monkeypatch.setattr(bundle_module, '_fetch_json', lambda url: _release_manifest('0' * 64))
-
-  with pytest.raises(ValueError, match='release manifest states'):
-    cached_claude_code('2.1.258', tmp_path / 'cache')
-  assert list((tmp_path / 'cache').rglob('*')) == [tmp_path / 'cache' / '2.1.258']
 
 
 def test_the_workspace_is_the_checkout_the_framework_runs_from():

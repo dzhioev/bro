@@ -1,5 +1,5 @@
 """Live probes of the stdin-open print session `ride.claude.interrupt.run_streaming`
-drives, against the `claude` on PATH.
+drives, against the pinned Claude Code.
 
 Claude Code starts a turn of its own when a background task finishes only while
 the session's stdin is open, and holds the session for as long as it is; a
@@ -10,7 +10,6 @@ behavior is what lets a session wait on a watch at no cost, so it is held here.
 import contextlib
 import json
 import os
-import shutil
 import signal
 from collections.abc import Generator
 from pathlib import Path
@@ -18,23 +17,22 @@ from pathlib import Path
 import pytest
 
 import ride.claude.interrupt as interrupt
-from bro.base import credentials
-from bro.base.suite_environment import host_credential_store
 from bro.monitor import SESSION_DIR_ENV
 from ride.claude.claude_argv import STREAM_JSON_ARGS
+from ride.claude.live_claude_test_helper import (
+  REQUIRES_CLAUDE_CREDENTIAL,
+  claude_token,
+  pinned_claude,
+)
 
 _SESSION_TIMEOUT_SECONDS = 300.0
 
-
-def _claude_token() -> str | None:
-  with host_credential_store():
-    return credentials.try_get('claude_code')
+pytestmark = REQUIRES_CLAUDE_CREDENTIAL
 
 
-pytestmark = pytest.mark.skipif(
-  shutil.which('claude') is None or _claude_token() is None,
-  reason='needs the claude executable and the claude_code credential',
-)
+@pytest.fixture(scope='module')
+def claude(pytestconfig: pytest.Config) -> Path:
+  return pinned_claude(pytestconfig)
 
 
 def _session_env(tmp_path: Path) -> dict[str, str]:
@@ -46,7 +44,7 @@ def _session_env(tmp_path: Path) -> dict[str, str]:
     for name, value in os.environ.items()
     if name not in ('CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'ANTHROPIC_API_KEY')
   }
-  env['CLAUDE_CODE_OAUTH_TOKEN'] = _claude_token() or ''
+  env['CLAUDE_CODE_OAUTH_TOKEN'] = claude_token() or ''
   env['CLAUDE_CONFIG_DIR'] = str(config)
   env['DISABLE_AUTOUPDATER'] = '1'
   env[SESSION_DIR_ENV] = str(tmp_path / 'session')
@@ -72,10 +70,10 @@ def _bounded(seconds: float) -> Generator[None]:
     signal.signal(signal.SIGALRM, previous)
 
 
-def _run(tmp_path: Path, prompt: str, *, tools: str) -> interrupt.StreamedRun:
+def _run(tmp_path: Path, claude: Path, prompt: str, *, tools: str) -> interrupt.StreamedRun:
   """run a haiku session over stream-json to its own end."""
   argv = [
-    'claude',
+    str(claude),
     '--model',
     'haiku',
     '--allowedTools',
@@ -94,7 +92,7 @@ def _words(run: interrupt.StreamedRun) -> list[str]:
 
 
 def test_a_finished_background_task_wakes_the_model_and_the_idle_turn_ends_the_session(
-  tmp_path: Path, monkeypatch
+  tmp_path: Path, claude: Path, monkeypatch
 ) -> None:
   monkeypatch.chdir(tmp_path)
   prompt = (
@@ -104,14 +102,14 @@ def test_a_finished_background_task_wakes_the_model_and_the_idle_turn_ends_the_s
     'command finished, reply with the single word finished and end your turn.'
   )
 
-  run = _run(tmp_path, prompt, tools='Bash')
+  run = _run(tmp_path, claude, prompt, tools='Bash')
 
   assert run.code == 0 and not run.stopped, run
   assert _words(run) == ['started', 'finished'], run
 
 
 def test_a_watch_next_wake_carries_the_watched_line_to_the_model(
-  tmp_path: Path, monkeypatch
+  tmp_path: Path, claude: Path, monkeypatch
 ) -> None:
   monkeypatch.chdir(tmp_path)
   prompt = (
@@ -124,7 +122,7 @@ def test_a_watch_next_wake_carries_the_watched_line_to_the_model(
     'watch-run command with the TaskStop tool and end your turn.'
   )
 
-  run = _run(tmp_path, prompt, tools='Bash,Read,TaskStop')
+  run = _run(tmp_path, claude, prompt, tools='Bash,Read,TaskStop')
 
   assert run.code == 0 and not run.stopped, run
   words = _words(run)

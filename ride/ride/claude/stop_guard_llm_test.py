@@ -2,9 +2,9 @@
 
 Claude Code sends a Stop hook the session's running background tasks as
 `background_tasks`, each with its id, status, and command, and fires the hook
-in print mode. Undocumented, so the contract is held here against the `claude`
-on PATH for both task kinds a session leaves running, a Monitor and a background
-shell; the container pins its version in `ride/setup/container/claude-code-version`.
+in print mode. Undocumented, so the contract is held here against the pinned
+Claude Code for both task kinds a session leaves running, a Monitor and a
+background shell.
 """
 
 import json
@@ -17,9 +17,12 @@ from pathlib import Path
 import pytest
 
 import ride.claude.stop_guard as stop_guard
-from bro.base import credentials
-from bro.base.suite_environment import host_credential_store
 from bro.monitor import SESSION_DIR_ENV
+from ride.claude.live_claude_test_helper import (
+  REQUIRES_CLAUDE_CREDENTIAL,
+  claude_token,
+  pinned_claude,
+)
 
 _MONITOR_COMMAND = 'sleep 20'
 _WATCH_COMMAND = 'watch-run sleep 30'
@@ -31,19 +34,17 @@ with Path(sys.argv[1]).open('a') as dump:
   dump.write(json.dumps(payload) + '\\n')
 """
 
-
-def _claude_token() -> str | None:
-  with host_credential_store():
-    return credentials.try_get('claude_code')
+pytestmark = REQUIRES_CLAUDE_CREDENTIAL
 
 
-pytestmark = pytest.mark.skipif(
-  shutil.which('claude') is None or _claude_token() is None,
-  reason='needs the claude executable and the claude_code credential',
-)
+@pytest.fixture(scope='module')
+def claude(pytestconfig: pytest.Config) -> Path:
+  return pinned_claude(pytestconfig)
 
 
-def _stops(tmp_path: Path, prompt: str, *, tools: str, environment: dict[str, str]) -> list[dict]:
+def _stops(
+  tmp_path: Path, claude: Path, prompt: str, *, tools: str, environment: dict[str, str]
+) -> list[dict]:
   """run a haiku print session whose Stop hook dumps its payloads, and return them."""
   hook = tmp_path / 'hook.py'
   hook.write_text(_HOOK_SCRIPT)
@@ -72,13 +73,13 @@ def _stops(tmp_path: Path, prompt: str, *, tools: str, environment: dict[str, st
     for name, value in os.environ.items()
     if name not in ('CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'ANTHROPIC_API_KEY')
   }
-  env['CLAUDE_CODE_OAUTH_TOKEN'] = _claude_token() or ''
+  env['CLAUDE_CODE_OAUTH_TOKEN'] = claude_token() or ''
   env['CLAUDE_CONFIG_DIR'] = str(config)
   env['DISABLE_AUTOUPDATER'] = '1'
   env.update(environment)
   completed = subprocess.run(
     [
-      'claude',
+      str(claude),
       '-p',
       '--model',
       'haiku',
@@ -109,7 +110,7 @@ def _running_task(stop: dict) -> dict:
   return task
 
 
-def test_print_mode_stops_carry_a_running_monitor(tmp_path: Path) -> None:
+def test_print_mode_stops_carry_a_running_monitor(tmp_path: Path, claude: Path) -> None:
   prompt = (
     'Call the Monitor tool exactly once with timeout_ms=5000, description '
     f"'probe', and command exactly: {_MONITOR_COMMAND}\n"
@@ -117,7 +118,7 @@ def test_print_mode_stops_carry_a_running_monitor(tmp_path: Path) -> None:
     'If a notification arrives later, reply with the single word DONE and end your turn.'
   )
 
-  stops = _stops(tmp_path, prompt, tools='Monitor', environment={})
+  stops = _stops(tmp_path, claude, prompt, tools='Monitor', environment={})
 
   task = _running_task(stops[0])
   assert task['command'] == _MONITOR_COMMAND
@@ -127,7 +128,9 @@ def test_print_mode_stops_carry_a_running_monitor(tmp_path: Path) -> None:
   assert _MONITOR_COMMAND in reason
 
 
-def test_print_mode_stops_carry_a_background_watch_run_as_typed(tmp_path: Path) -> None:
+def test_print_mode_stops_carry_a_background_watch_run_as_typed(
+  tmp_path: Path, claude: Path
+) -> None:
   watch_run = shutil.which('watch-run')
   assert watch_run is not None, 'watch-run is not on PATH'
   session = tmp_path / 'session'
@@ -140,6 +143,7 @@ def test_print_mode_stops_carry_a_background_watch_run_as_typed(tmp_path: Path) 
 
   stops = _stops(
     tmp_path,
+    claude,
     prompt,
     tools='Bash',
     environment={
