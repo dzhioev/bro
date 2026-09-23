@@ -109,6 +109,11 @@ The three routing rules are:
 3. A request invokes its registered kind handler unless its id already exists in lineage;
    every other envelope is dropped and logged.
 
+A handler that raises is logged with its traceback;
+a request it left unanswered
+— no result delivered, no record opened under a supervisor, no read deferred
+— gets a wire denial naming the error.
+A supervisor that fails to begin ends its record with a launch failure, as its death at launch would.
 Delivery to an absent receiver is dropped and logged rather than buffered;
 the journal remains the inbox of record.
 A process-sent `trail` is accepted only once with a non-empty id.

@@ -4,6 +4,7 @@ import select
 import threading
 from dataclasses import dataclass
 from types import SimpleNamespace
+from typing import Optional
 
 import pytest
 
@@ -30,11 +31,14 @@ class StubSink:
     self.connects: asyncio.Queue = asyncio.Queue()  # channel
     self.messages: asyncio.Queue = asyncio.Queue()  # (channel, message)
     self.disconnects: asyncio.Queue = asyncio.Queue()  # channel
+    self.message_error: Optional[Exception] = None
 
   async def on_connect(self, channel: ChannelID) -> None:
     self.connects.put_nowait(channel)
 
   async def on_message(self, channel: ChannelID, message: Message) -> None:
+    if self.message_error is not None:
+      raise self.message_error
     self.messages.put_nowait((channel, message))
 
   async def on_disconnect(self, channel: ChannelID) -> None:
@@ -271,6 +275,22 @@ async def test_peer_disconnect_notifies_sink():
     await _next(server.sink.connects)
     client.close()
     assert await _next(server.sink.disconnects) == provisioned.channel
+
+
+@pytest.mark.asyncio
+async def test_a_sink_failure_drops_the_channel_and_notifies_the_disconnect(caplog):
+  async with running_server() as server:
+    provisioned = await server.transport.provision()
+    server.sink.message_error = RuntimeError('sink bug')
+    client = await client_for(provisioned)
+    await _next(server.sink.connects)
+
+    await asyncio.to_thread(client.send, brotocol.message('X', {}))
+
+    assert await _next(server.sink.disconnects) == provisioned.channel
+    assert await asyncio.to_thread(client.receive, TIMEOUT) is None  # the peer sees EOF
+    assert 'sink bug' in caplog.text
+    client.close()
 
 
 @pytest.mark.asyncio

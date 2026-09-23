@@ -88,9 +88,14 @@ class Supervisor:
   def begin(self) -> None:
     if self._task is not None:
       raise RuntimeError('supervisor already begun')
-    self._task = asyncio.create_task(self._run())
-    self._task.add_done_callback(self._task_done)
-    self._arm(self._launch_timeout)
+    task = asyncio.create_task(self._run())
+    try:
+      self._arm(self._launch_timeout)
+    except BaseException:
+      task.cancel()
+      raise
+    self._task = task
+    task.add_done_callback(self._task_done)
 
   async def _run(self) -> None:
     raise NotImplementedError
