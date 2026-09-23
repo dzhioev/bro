@@ -46,7 +46,7 @@ Where the session has a shell, `rewind show <trail-id>` replays a trail named by
 a run named by description ("the last few assistant sessions") is located with `rewind list` and its filters (`--bro`, `--since`, `--limit`),
 and when more than one trail plausibly matches and the choice changes the material, confirm the pick before reading.
 Several runs under one definition are read together:
-`rewind show` pages a long trail through `--output-offset` / `--output-limit`,
+a long trail is rendered whole into a scratch file (`rewind show <trail-id> > <file>`) and read from there,
 and `rewind grep <pattern> <trail-id>…` finds one step's traces across them.
 
 Read each run against the version of the definition in force during it, not the current files.

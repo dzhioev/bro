@@ -1,3 +1,4 @@
+import contextlib
 import io
 import json
 from typing import Any, Optional, cast
@@ -614,6 +615,26 @@ class TestCapabilities:
 
     assert paged == ['finite']
     assert target.getvalue() == 'follow'
+
+  @pytest.mark.parametrize(
+    'command',
+    [['list'], ['show', 'T1'], ['steps', 'T1'], ['grep', 'hello', 'T1'], ['tree', 'T1']],
+  )
+  def test_every_command_pages_a_tty_document_that_no_pager_prints(self, monkeypatch, command):
+    client = FakeClient()
+    client.add_claude('T1', [_user('hello')])
+    monkeypatch.setattr(rewind, 'default_store', lambda: contextlib.nullcontext(_client(client)))
+    paged: list[str] = []
+    monkeypatch.setattr(rewind.pager, 'page', paged.append)
+    target = TTYBuffer()
+    monkeypatch.setattr(rewind.sys, 'stdout', target)
+
+    assert rewind.main(['rewind', *command]) == 0
+    assert target.getvalue() == ''
+    assert rewind.main(['rewind', *command, '--no-pager']) == 0
+
+    assert 'T1' in target.getvalue()
+    assert paged == [target.getvalue()]
 
   def test_output_window_is_oriented_and_bounded(self, monkeypatch):
     target = io.StringIO()
