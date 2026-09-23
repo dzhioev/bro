@@ -31,8 +31,9 @@ class TestNotice:
 
     assert reason is not None
     assert reason.startswith('2 missions in flight and no background task running')
-    assert '`quest watch` and `quest cancel <quest id>`' in reason
-    assert '`mission watch` and `mission cancel <mission id>`' in reason
+    assert '`watch-run quest watch` in the background with `watch-next` waiting' in reason
+    assert '`quest cancel <quest id>`, for quests' in reason
+    assert '`mission cancel <mission id>`, for other missions' in reason
     assert reason.endswith('quest 01m-child to bro-eyebro\nmission 01m-other: benchmark')
 
   def test_a_watch_with_nothing_in_flight_is_held_with_its_task_named(self):
@@ -76,6 +77,31 @@ class TestNotice:
     payload = _payload(_task('quest watch'), stop_hook_active=True)
 
     assert stop_guard.notice(payload, [], summoned=False) is None
+
+  @pytest.mark.parametrize('missions', [[], [_CHILD]])
+  def test_a_watch_running_without_a_wait_is_held_whatever_is_in_flight(self, missions):
+    payload = _payload(_task('watch-run quest watch', task_id='p1'))
+
+    reason = stop_guard.notice(payload, missions, summoned=False)
+
+    assert reason is not None
+    assert reason.startswith(
+      'A watch runs with no `watch-next` waiting: p1 `watch-run quest watch`'
+    )
+    assert 'Run `watch-next` in the background' in reason
+
+  def test_a_prefixed_watch_command_still_counts_as_a_watch(self):
+    payload = _payload(_task('PATH=/venv/bin:$PATH watch-run poll-pr o/r 1'))
+
+    assert stop_guard.notice(payload, [], summoned=False) is not None
+
+  @pytest.mark.parametrize('missions', [[], [_CHILD]])
+  def test_a_watch_with_its_wait_is_the_wait_and_passes(self, missions):
+    payload = _payload(
+      _task('watch-run quest watch', task_id='p1'), _task('watch-next', task_id='w1')
+    )
+
+    assert stop_guard.notice(payload, missions, summoned=False) is None
 
   def test_a_payload_without_the_task_list_is_refused(self):
     payload = {'hook_event_name': 'Stop', 'stop_hook_active': False}

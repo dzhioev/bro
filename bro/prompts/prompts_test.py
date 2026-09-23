@@ -107,13 +107,13 @@ class TestSessionFragment:
     monkeypatch.delenv(SUMMONED_ENV, raising=False)
     monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
     fragment = session_fragment('attended', harness='bro')
-    assert "`bro::job('quest watch', mode='watch')`" in fragment
+    assert "`bro::job('<command>', mode='watch')`" in fragment
     assert '`bro::chill`' in fragment
 
   @pytest.mark.parametrize(
     ('harness', 'marker'),
     (
-      ('claude', 'stop the watch with `TaskStop` and end the turn'),
+      ('claude', 'stop the watch and end the turn'),
       ('bro', 'ends when a turn ends with nothing running and nothing in flight'),
     ),
   )
@@ -163,8 +163,8 @@ class TestSessionFragment:
   @pytest.mark.parametrize(
     ('harness', 'marker'),
     (
-      ('claude', 'Arm `Monitor` once on exactly `quest watch`'),
-      ('bro', "`bro::job('quest watch', mode='watch')`"),
+      ('claude', '`watch-run <command>`'),
+      ('bro', "`bro::job('<command>', mode='watch')`"),
     ),
   )
   def test_a_speaking_summoner_reaches_the_child_by_surface(self, monkeypatch, harness, marker):
@@ -185,7 +185,8 @@ class TestSessionFragment:
       'unattended', harness='claude', talk=('worker.say', 'worker.question')
     )
     assert "`quest ask self '<question>' --wait`" in fragment
-    assert 'arm `Monitor` once on exactly `quest watch`' in fragment
+    assert 'Keep the quest watch for that reply' in fragment
+    assert '`watch-run <command>`' in fragment
 
   def test_a_silent_child_is_told_to_raise_instead_of_asking(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
@@ -196,3 +197,21 @@ class TestSessionFragment:
     monkeypatch.setenv(SUMMONED_ENV, '1')
     with pytest.raises(ValueError, match='unknown variable #talk'):
       session_fragment('attended', harness='claude')
+
+
+def test_the_session_texts_cast_no_spell(monkeypatch):
+  # every bro renders them, and only the concrete-Bro family carries spells
+  talks = ((), ('owner.say', 'worker.say'), ('owner.question',), ('worker.say', 'worker.question'))
+  for summoning, summoned in ((True, False), (False, True), (True, True)):
+    if summoning:
+      monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    else:
+      monkeypatch.delenv(MAY_SUMMON_ENV, raising=False)
+    if summoned:
+      monkeypatch.setenv(SUMMONED_ENV, '1')
+    else:
+      monkeypatch.delenv(SUMMONED_ENV, raising=False)
+    for harness in ('claude', 'bro'):
+      for talk in talks:
+        fragment = session_fragment('unattended', harness=harness, talk=talk)
+        assert '[[' not in fragment, (summoning, summoned, harness, talk)

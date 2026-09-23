@@ -8,7 +8,7 @@ This spell should be used when the user asks to review a GitHub pull request and
 Reconciles the PR's existing review state, reviews the head, posts findings as PR review comments, watches for the author's answers and pushes with `poll-pr`, re-reviews round by round, and approves once every finding is addressed or conceded.
 
 parameters: {"pr": "pull request URL or number to review"}
-version: 1.5.0
+version: 1.6.0
 ---
 
 {{iff #features contains github}}
@@ -176,27 +176,16 @@ Events fire for the review parties
   an event source kept failing past the grace window and the watch ended;
   the process exits right after.
 
-{{iff #harness = bro}}
-Start it with `bro::job("poll-pr …", mode="watch")` and keep the returned job id.
-Its JSON lines arrive as background-job notifications.
-React to every line per step 6, use `bro::poll` when a pending marker says more output remains, then call `bro::chill()` whenever nothing else remains.
-A notification that the job exited right after `merged`, `closed`, or `watch_failed` is terminal;
+[[watch poll-pr <owner>/<repo> <n>]], and react to every line per step 6.
+An exit of the watched command right after `merged`, `closed`, or `watch_failed` is terminal;
 an exit without one means the watcher died.
-Reconcile first (step 2) before starting another watch, because a restart baselines existing events as seen.
-Stop it with `bro::kill(id=job_id)` when the review ends.
+Reconcile first (step 2) before starting the watch anew, because a fresh `poll-pr` baselines existing events as seen.
+End the watch when the review ends.
 
 **The watch loop is the rest of the run, until the verdict.**
 Approval (step 7) or a terminal PR event ends it, and nothing before does:
-return to `bro::chill()` however quiet the PR stays
+keep waiting on the watch however quiet the PR stays
 — the idling is the run working as designed, not a stall to wrap up.
-{{eliff #harness = claude}}
-**MUST launch via the `Monitor` tool with `persistent: true`.
-Do NOT use Bash `run_in_background`**
-— that only notifies on process exit, so the author's answers would sit silently in the output file.
-The harness wakes you on each output event;
-react per step 6.
-Stop the watcher with `TaskStop` when the review ends.
-{{end}}
 
 ## 6. React to events
 

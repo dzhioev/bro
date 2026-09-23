@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 7.6.0
+version: 7.7.0
 ---
 
 # run-pr
@@ -437,36 +437,21 @@ poll-pr <owner>/<repo> <pr_number>
   `baseline` means the watch never started at all.
 
 How to run it:
-
-{{iff #harness = bro}}
-Start it with `bro::job("poll-pr …", mode="watch")` and keep the returned job id.
-Its JSON lines arrive as background-job notifications.
-React to every line per step 15, use `bro::poll` when a pending marker says more output remains, then call `bro::chill()` whenever nothing else remains.
-A notification that the job exited right after `merged`, `closed`, or `watch_failed` is terminal;
+[[watch poll-pr <owner>/<repo> <pr_number>]], and react to every line per step 15.
+An exit of the watched command right after `merged`, `closed`, or `watch_failed` is terminal;
 an exit without one means the watcher died.
-Do not just restart it
+Do not just start it again
 — a fresh `poll-pr` baselines all existing events as seen;
-reconcile first (re-entry step 4), then start a new watch job.
-When chaining into [[land]], stop the watcher with `bro::kill(id=job_id)`.
+reconcile first (re-entry step 4), then start the watch anew.
+When chaining into [[land]], end the watch.
 
 **The watch loop is the rest of the run.**
 Your terminal answer comes only after the PR reaches a terminal state
 — merged (typically via the [[land]] chain on APPROVED) or closed.
-Until then, return to `bro::chill()` however quiet the PR stays;
+Until then, keep waiting on the watch however quiet the PR stays;
 that idling is the run working as designed, not a stall to wrap up.
-Do not kill the job and end the run with a "waiting for review" report
+Do not end the watch and the run with a "waiting for review" report
 — an ended run watches nothing, and every later review event goes unhandled.
-{{eliff #harness = claude}}
-**MUST launch via the `Monitor` tool with `persistent: true`.
-Do NOT use Bash `run_in_background`**
-— that only notifies on process exit, so review/comment events sit silently in the output file and approvals never trigger the auto-chain.
-The harness wakes you on each output event;
-react per step 15.
-Stop the watcher with `TaskStop` when chaining into [[land]].
-
-If the `Monitor` schema needs a `ToolSearch` fetch, load `TaskStop` in the same query (`select:Monitor,TaskStop`)
-— the APPROVED handler needs it and shouldn't spend a round trip on it later.
-{{end}}
 {{when #may_summon contains eyebro}}
 
 ### Hand the review to the eyebro

@@ -291,8 +291,8 @@ A one-shot turn that ends with a summon in flight gets one notice naming it;
 chill on it, or cancel what is no longer needed, since the next such turn end ends the run.
 {{eliff #harness = claude}}
 Before ending the session (or letting it end), wait for pending summons with `quest check --wait`.
-A one-shot session holds while the quest watch is armed and re-invokes you on its events, so ending the turn under the watch is a wait;
-once every summon has ended, stop the watch with `TaskStop` before the final turn ends.
+A one-shot session holds while a background task runs and re-invokes you when one ends, so ending the turn with `watch-next` waiting is a wait;
+once every summon has ended, stop the watch before the final turn ends.
 {{end}}
 If a result was lost this way it is still recoverable from the child's trail.
 

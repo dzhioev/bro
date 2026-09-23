@@ -1,8 +1,10 @@
 """Claude `Stop` hook holding a one-shot session's turn end to its live work.
 
-Print mode holds the process while any background task is pending.
-The hook blocks the two unpaired states once per turn: missions in flight with no
-running task, and running tasks with no mission in flight.
+A one-shot session ends at a turn end with no background task running, and
+only a task's end starts a turn. The hook blocks the unpaired states once per
+turn: a watch running with no `watch-next` waiting, which nothing would wake;
+missions in flight with no running task; and running tasks with neither a
+mission in flight nor a wait.
 
 `background_tasks` (id, status, command per task) is read off the hook input as
 Claude Code sends it, undocumented.
@@ -11,6 +13,7 @@ A payload without it is reported on stderr with a non-blocking status.
 
 import json
 import os
+import re
 import sys
 from typing import Any
 
@@ -21,8 +24,16 @@ from bro.summon import summoned
 FAILURE_STATUS = 1
 
 
+_WATCH_RUN = re.compile(r'(^|\s)watch-run(\s|$)')
+_WATCH_NEXT = re.compile(r'(^|\s)watch-next(\s|$)')
+
+
 def _running_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
   return [task for task in tasks if task.get('status') == 'running']
+
+
+def _running(tasks: list[dict[str, Any]], pattern: re.Pattern[str]) -> list[dict[str, Any]]:
+  return [task for task in tasks if pattern.search(str(task.get('command', '')))]
 
 
 def _in_flight_lines(missions: list[LiveMission]) -> str:
@@ -34,9 +45,15 @@ def _mission_routes(missions: list[LiveMission]) -> str:
   has_other_missions = any(mission.type != 'bro' for mission in missions)
   routes = []
   if has_quests:
-    routes.append('`quest watch` and `quest cancel <quest id>` for quests')
+    routes.append(
+      '`watch-run quest watch` in the background with `watch-next` waiting, and '
+      '`quest cancel <quest id>`, for quests'
+    )
   if has_other_missions:
-    routes.append('`mission watch` and `mission cancel <mission id>` for other missions')
+    routes.append(
+      '`watch-run mission watch` in the background with `watch-next` waiting, and '
+      '`mission cancel <mission id>`, for other missions'
+    )
   return '; '.join(routes)
 
 
@@ -45,9 +62,17 @@ def _unwatched_notice(missions: list[LiveMission]) -> str:
   plural = 's' if count > 1 else ''
   return (
     f'{count} mission{plural} in flight and no background task running: ending this turn ends '
-    f'the session and orphans {"them" if count > 1 else "it"}. Arm `Monitor`, persistent, on '
-    'the watch command this work needs and end the turn to wait for its events; use '
-    f'{_mission_routes(missions)}.\n{_in_flight_lines(missions)}'
+    f'the session and orphans {"them" if count > 1 else "it"}. Keep a watch on this work and '
+    f'end the turn to wait for its lines: {_mission_routes(missions)}.\n{_in_flight_lines(missions)}'
+  )
+
+
+def _unwaited_watch_notice(producers: list[dict[str, Any]]) -> str:
+  labels = ', '.join(_task_label(task) for task in producers)
+  return (
+    f'A watch runs with no `watch-next` waiting: {labels}. Nothing would start your next turn '
+    'for its lines. Run `watch-next` in the background and end the turn, or stop the watch with '
+    '`TaskStop` once it is no longer needed.'
   )
 
 
@@ -80,9 +105,13 @@ def notice(payload: dict[str, Any], missions: list[LiveMission], *, summoned: bo
   if not isinstance(tasks, list) or not all(isinstance(task, dict) for task in tasks):
     raise ValueError('the Stop hook input carries no background_tasks list')
   running = _running_tasks(tasks)
+  producers = _running(running, _WATCH_RUN)
+  waits = _running(running, _WATCH_NEXT)
+  if len(producers) > 0 and len(waits) == 0:
+    return _unwaited_watch_notice(producers)
   if len(missions) > 0 and len(running) == 0:
     return _unwatched_notice(missions)
-  if len(missions) == 0 and len(running) > 0:
+  if len(missions) == 0 and len(running) > 0 and len(waits) == 0:
     return _idle_tasks_notice(running, summoned=summoned)
   return None
 
