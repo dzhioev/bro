@@ -232,7 +232,6 @@ class LaunchControl:
     )
 
   def _ready(self, request: LaunchRequest, run: Expect, talk: Talk, provisioned: Any) -> None:
-    self._runtime_bundle.materialize_host()
     pending_launch.write(
       pending_launch.PendingLaunch(
         token=request.id,

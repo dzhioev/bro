@@ -150,7 +150,7 @@ def _control(tmp_path, owner, run, *, type_class=SampleType, worker_container_sp
   host = Host()
   worker_type = type_class(host, run)
   peers = Peers(owner)
-  runtime = SimpleNamespace(reference='/runtime', materialize_host=lambda: None)
+  runtime = SimpleNamespace(reference='/runtime')
   control = LaunchControl(
     ride='ride',
     types={'test': worker_type},

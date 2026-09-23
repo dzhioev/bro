@@ -21,7 +21,12 @@ import ride.session as ride_session
 from bro.base import credentials
 from bro.monitor import workspace_party_dir, workspace_session_dir
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
-from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR, ride_trails_dir
+from bro.workspace.paths import (
+  CONTAINER_PARTY_DIR,
+  CONTAINER_SESSION_DIR,
+  ride_trails_dir,
+  workspace_dir,
+)
 from ride import pending_launch
 from ride.bro_worker import pending_bro
 from ride.repository import Repository
@@ -157,6 +162,11 @@ def configured_project(monkeypatch, tmp_path):
     yield _runtime_bundle(tmp_path)
 
   monkeypatch.setattr(ride_session, 'resolve_runtime_bundle', resolved_runtime_bundle)
+  monkeypatch.setattr(ride_session, 'reexec_from_runtime', lambda _reference, _argv: None)
+
+
+class _Replaced(Exception):
+  """the fake re-exec: the process image was replaced."""
 
 
 def _fake_scoped_secrets(secrets: set[str], optional_secrets: set[str]):
@@ -238,7 +248,29 @@ class TestRuntimeBundle:
 
     assert ride_session.start_session(_spec(name='fresh')) == 1
     assert 'unclassifiable installation' in caplog.text
-    assert not (tmp_path / 'var' / 'ride' / 'workspaces' / 'fresh').exists()
+    assert not workspace_dir('fresh').exists()
+
+  def test_the_launch_reexecs_from_the_held_bundle_before_any_workspace(
+    self, monkeypatch, tmp_path
+  ):
+    events = []
+    monkeypatch.setattr(
+      RuntimeBundle, 'materialize_host', lambda bundle: events.append(('materialize', bundle.root))
+    )
+
+    def replaced(reference, argv):
+      events.append(('reexec', reference, argv))
+      raise _Replaced
+
+    monkeypatch.setattr(ride_session, 'reexec_from_runtime', replaced)
+    spec = _spec(name='fresh')
+
+    with pytest.raises(_Replaced):
+      ride_session.start_session(spec)
+
+    bundle = _runtime_bundle(tmp_path)
+    assert events == [('materialize', bundle.root), ('reexec', bundle.hash, spec.to_command_argv())]
+    assert not workspace_dir('fresh').exists()
 
   def test_recorded_runtime_is_read_without_loading_the_session_spec(self, tmp_path):
     workspace = _workspace(tmp_path, Isolation.UNBOXED)
