@@ -452,11 +452,9 @@ def _classify_installation() -> tuple[str, list[str], list[_LocalDistribution]]:
   return python, pins, local
 
 
-def _run(
-  command: list[str], *, description: str, env: Mapping[str, str] | None = None
-) -> subprocess.CompletedProcess[str]:
+def _run(command: list[str], *, description: str) -> subprocess.CompletedProcess[str]:
   try:
-    result = subprocess.run(command, capture_output=True, text=True, env=env)
+    result = subprocess.run(command, capture_output=True, text=True)
   except OSError as error:
     raise RuntimeBundleError(f'{description}: {error}') from error
   if result.returncode == 0:
@@ -526,19 +524,6 @@ def _wheel_record(path: Path, suffix: str) -> Message:
     raise RuntimeBundleError(f'cannot inspect wheel {path}: {error}') from error
 
 
-def _build_environment(egg_base: Path) -> dict[str, str]:
-  """the environment a local source builds in, with setuptools writing its `*.egg-info` into
-  `egg_base` rather than the source tree.
-
-  The sdist then carries no egg-info of its own, so its wheel must come from the same build:
-  that step takes the sdist's file list from `egg_base`, the only record of the files a finder
-  plugin such as setuptools-scm contributed.
-  """
-  config = egg_base / 'setup.cfg'
-  config.write_text(f'[egg_info]\negg_base = {str(egg_base).replace("%", "%%")}\n')
-  return {**os.environ, 'DIST_EXTRA_CONFIG': str(config)}
-
-
 def _build_wheels(local: list[_LocalDistribution], wheels: Path) -> list[Path]:
   built: list[Path] = []
   names: set[str] = set()
@@ -548,14 +533,11 @@ def _build_wheels(local: list[_LocalDistribution], wheels: Path) -> list[Path]:
     if distribution.source.suffix == '.whl':
       shutil.copyfile(distribution.source, output / distribution.source.name)
     else:
-      egg_base = wheels / f'{output.name}.egg-base'
-      egg_base.mkdir()
       # built through the sdist: a leftover in the tree, such as a stale setuptools `build/lib`,
       # never reaches the wheel
       _run(
         ['uv', 'build', '--no-build-logs', '--out-dir', str(output), str(distribution.source)],
         description=f'cannot build local distribution {distribution.name}',
-        env=_build_environment(egg_base),
       )
     candidates = list(output.glob('*.whl'))
     if len(candidates) != 1:
