@@ -28,6 +28,7 @@ from ride.claude.session_context import (
   build_session_context,
   encode_session_context,
 )
+from ride.claude.shell_prefix import apply_shell_prefix
 from ride.claude.statusline import start_statusline_projector
 
 if TYPE_CHECKING:
@@ -47,11 +48,15 @@ def _run_claude(argv: list[str], env: dict[str, str], transcripts: Path) -> Run:
   return run_interactive(['claude', *argv], env, transcripts)
 
 
-def _claude_temp_dir() -> Path:
+def _claude_state_dir() -> Path:
   session_state = harness_session_dir('claude')
   if session_state is None:
     raise RuntimeError(f'{SESSION_DIR_ENV} is unset')
-  temp_dir = session_state / 'tmp'
+  return session_state
+
+
+def _claude_temp_dir() -> Path:
+  temp_dir = _claude_state_dir() / 'tmp'
   temp_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
   return temp_dir
 
@@ -215,6 +220,7 @@ def run_session(spec: 'SessionSpec | SessionRun') -> int:
     # claude resolves fast-mode availability from a stored OAuth credentials
     # file, and left to guess without one reports it disabled by an organization
     env['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK'] = '1'
+    apply_shell_prefix(env, _claude_state_dir())
     apply_claude_auth(env, warn_when_missing=True)
     log.info('launching claude')
     if spec.solo:

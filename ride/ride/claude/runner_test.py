@@ -15,6 +15,7 @@ from ride.claude.claude_argv import ClaudeLaunch
 from ride.claude.fake_claude_test_helper import fake_claude_env
 from ride.claude.interrupt import StreamedRun
 from ride.claude.mcp import MCPEndpoint
+from ride.claude.shell_prefix import SHELL_PREFIX_ENV
 from ride.session_test import _spec
 
 
@@ -220,6 +221,16 @@ class TestSessionRun:
     with _Harness(tmp_path) as h:
       assert ride_runner.run_session(_spec()) == 0
       assert h.run_claude.call_args.args[1]['MCP_TOOL_TIMEOUT'] == '600000'
+
+  def test_claudes_bash_commands_run_through_the_session_path_prefix(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      assert ride_runner.run_session(_spec()) == 0
+      env = h.run_claude.call_args.args[1]
+      prefix = Path(env[SHELL_PREFIX_ENV])
+      assert prefix.parent == h.session_dir / 'claude'
+      assert os.access(prefix, os.X_OK)
+      assert env['PATH'] in prefix.read_text()
 
   def test_the_session_skips_claudes_fast_mode_org_check(self, monkeypatch, tmp_path):
     # pins the name claude itself reads

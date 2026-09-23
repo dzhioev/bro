@@ -12,13 +12,14 @@ Claude Code's own harness themed with the session's bro.
   a session selects the Claude harness, mounting the bro's additions to Claude Code's native tools.
   It contributes the `persona:` resolver through `bro.mcp.targets`.
 - `runner.py` — the Claude harness run under `ride/do_ride.py`:
-  resume-id lookup, hold and kill wiring, session MCP server, launch context, recorder, readiness gate, and Claude process lifetime.
+  resume-id lookup, hold and kill wiring, session MCP server, launch context, recorder, readiness gate, the Bash tool's shell prefix, and Claude process lifetime.
 - `interrupt.py` — how a Claude process is ended so its in-flight turn reaches the transcript:
   SIGINT for print mode, and for a TUI the interrupt keypress on a runner-owned pty that proxies the session's terminal.
 - `claude_argv.py`
   — the argv builder, including solo print mode, settings, status line, MCP config, the append prompt, blocked and narrowed native tools, model/effort/fast selection, prompt, and forwarded Claude arguments.
 - `claude_auth.py` — the setup-token environment.
 - `claude_release.py` — a Claude Code version's standalone release binary for one platform, checksum-verified against its release manifest and cached.
+- `shell_prefix.py` — the shell claude's Bash commands run in, pinned, and the prefix script through which each of them gets the session's PATH.
 - `claude_config.py` — the `claude/` state dir under a workspace:
   settings, transcript paths, subject reads, provisioning, and the container mount and env that carry it in.
 - `mcp.py` — session-local HTTP MCP server lifetime and Claude MCP config.
