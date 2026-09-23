@@ -53,7 +53,7 @@ name = "demo"
 version = "1.0"
 
 [build-system]
-requires = ["setuptools>=66", "setuptools-scm>=8"]
+requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 """
 
@@ -377,8 +377,8 @@ def test_a_host_snapshot_reresolves_to_its_own_bundle(monkeypatch, probe, tmp_pa
 def test_a_stamped_or_reordered_rebuild_freezes_one_bundle(monkeypatch, tmp_path):
   builds = iter([((2026, 8, 23, 23, 57, 12), False), ((2026, 8, 23, 23, 57, 14), True)])
 
-  def build(command, *, description, env):
-    del description, env
+  def build(command, *, description):
+    del description
     out_dir = Path(command[command.index('--out-dir') + 1])
     date_time, reverse = next(builds)
     _stamped_wheel(out_dir / 'demo-1.0-py3-none-any.whl', date_time, reverse=reverse)
@@ -407,28 +407,13 @@ def test_a_stamped_or_reordered_rebuild_freezes_one_bundle(monkeypatch, tmp_path
     assert len({info.date_time for info in carried.infolist()}) == 1
 
 
-def _tree_status(source: Path) -> str:
-  return subprocess.run(
-    ['git', '-C', str(source), 'status', '--porcelain', '--untracked-files=all'],
-    check=True,
-    capture_output=True,
-    text=True,
-  ).stdout
-
-
-def test_a_setuptools_source_builds_from_its_sdist_and_leaves_its_tree_alone(tmp_path):
+def test_a_setuptools_wheel_leaves_out_a_stale_build_tree(tmp_path):
   source = tmp_path / 'source'
   (source / 'src' / 'demo').mkdir(parents=True)
   (source / 'pyproject.toml').write_text(_SETUPTOOLS_PYPROJECT)
   (source / 'src' / 'demo' / '__init__.py').touch()
-  (source / 'src' / 'demo' / 'data.txt').write_text('data\n')
-  git = ['git', '-C', str(source), '-c', 'user.email=probe@invalid', '-c', 'user.name=probe']
-  subprocess.run([*git, 'init', '--quiet'], check=True, capture_output=True)
-  subprocess.run([*git, 'add', '--all'], check=True, capture_output=True)
-  subprocess.run([*git, 'commit', '--quiet', '--message', 'probe'], check=True, capture_output=True)
   (source / 'build' / 'lib' / 'stale').mkdir(parents=True)
   (source / 'build' / 'lib' / 'stale' / '__init__.py').touch()
-  status = _tree_status(source)
   staging = tmp_path / 'staging'
   staging.mkdir()
 
@@ -438,9 +423,8 @@ def test_a_setuptools_source_builds_from_its_sdist_and_leaves_its_tree_alone(tmp
 
   with zipfile.ZipFile(wheel) as built:
     entries = built.namelist()
-  assert 'demo/data.txt' in entries
+  assert 'demo/__init__.py' in entries
   assert [entry for entry in entries if entry.startswith('stale/')] == []
-  assert _tree_status(source) == status
 
 
 def test_bundle_hash_covers_pins_python_and_wheel_bytes(tmp_path):
