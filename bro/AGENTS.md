@@ -39,6 +39,8 @@ A subpackage with a map of its own is pointed at, not described here.
   common launch enforcement lives in `ride/ride/launch_control.py`, and bro authorization in `ride/ride/bro_worker.py`
 - `mission.py` (`mission`) — the universal typed outcome and conversation reads, say, ask, live artifact sharing, caller-scoped listing, ordered watch, and cancellation surfaces for every worker mission
 - `quest.py` (`quest`) — the bro-only view over the mission surface, preserving the summon-shaped answers, text chat, verbs, functions, and service tools
+- `watches.py`, `watch_run.py` (`watch-run`), and `watch_next.py` (`watch-next`) — a session's watches:
+  a command run once for the run with its lines kept under the session state dir, and the wait that returns the lines a reader has not seen
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint`, `artifact.get`, and `artifact.share` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session commands;
   the host store and enforcement live in `ride/ride/artifacts.py`
 - `jobs.py`, `job_supervisor.py`, and `inbox.py` — process jobs and the per-run notification seam:
