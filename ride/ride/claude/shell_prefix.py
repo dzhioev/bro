@@ -1,8 +1,8 @@
 """the Bash tool's shell, pinned, and the prefix that hands every command the session's PATH.
 
 Claude Code runs a Bash command in a login shell whenever its startup shell
-snapshot is missing, and a Debian `/etc/profile` there resets PATH to the
-system default. Claude Code runs every command, hooks included, as
+snapshot is missing, and a login profile that resets PATH there — Debian's
+`/etc/profile`, or the user's own — drops the session's commands. Claude Code runs every command, hooks included, as
 `<prefix> '<command string>'`; this prefix restores the session's PATH, drops
 the two variables so nothing the command starts inherits them, and executes
 the command string in the pinned shell.

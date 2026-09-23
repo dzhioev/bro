@@ -139,7 +139,7 @@ Claude Code notifies a finished background command with the path of its output f
 Every session's settings therefore wire `ride.claude.watch_delivery` as its `UserPromptSubmit` hook, which Claude Code also runs on a task notification:
 for a notified `watch-next` it returns the output as additional context, so the woken model has the watch's lines without reading the file.
 
-Claude Code runs a Bash command in a login shell whenever its startup shell snapshot is missing, and a Debian `/etc/profile` there resets PATH, dropping the session commands.
+Claude Code runs a Bash command in a login shell whenever its startup shell snapshot is missing, and a login profile that resets PATH there, Debian's `/etc/profile` or the user's own, drops the session commands.
 The runner therefore pins the shell through `CLAUDE_CODE_SHELL` and routes every command through a `CLAUDE_CODE_SHELL_PREFIX` script (`ride.claude.shell_prefix`) that restores the session's PATH first;
 `ride/ride/claude/shell_prefix_llm_test.py` holds that fallback live against the pinned release.
 

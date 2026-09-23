@@ -1,6 +1,9 @@
 """Live probe of the Bash tool's PATH when Claude Code's shell snapshot times out,
 held against the pinned release: without the prefix the session's commands
 vanish, with it they resolve.
+
+The session's home carries the login profile that resets PATH, as Debian's
+`/etc/profile` does, so the probe holds on a host whose own profile keeps it.
 """
 
 import json
@@ -22,6 +25,8 @@ pytestmark = REQUIRES_CLAUDE_CREDENTIAL
 
 # claude builds the snapshot by sourcing the shell's rc file within 10 seconds
 _SLOW_RC = 'sleep 12\n'
+# bash reads it only as a login shell: in the fallback, never in the snapshot's commands
+_PATH_RESETTING_PROFILE = 'PATH=/usr/bin:/bin\n'
 _MISSING = 'NO-WATCH-RUN'
 
 
@@ -43,6 +48,7 @@ def _session_env(tmp_path: Path) -> dict[str, str]:
   home = tmp_path / 'home'
   home.mkdir()
   (home / '.bashrc').write_text(_SLOW_RC)
+  (home / '.bash_profile').write_text(_PATH_RESETTING_PROFILE)
   config = tmp_path / 'config'
   config.mkdir()
   (config / '.claude.json').write_text(json.dumps({'hasCompletedOnboarding': True}))
