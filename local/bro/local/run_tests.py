@@ -230,6 +230,7 @@ PYTEST_FILES = [
   'ride/ride/claude/assembly_test.py',
   'ride/ride/claude/mcp_test.py',
   'ride/ride/claude/runner_test.py',
+  'ride/ride/claude/shell_prefix_test.py',
   'ride/ride/claude/claude_auth_test.py',
   'ride/ride/claude/claude_release_test.py',
   'ride/ride/claude/session_context_test.py',
@@ -348,6 +349,7 @@ LLM_PYTEST_FILES = [
   'dev/bros/dev/commit_llm_test.py',
   'native/bro/native/llms/openai_llm_test.py',
   'ride/ride/claude/interrupt_llm_test.py',
+  'ride/ride/claude/shell_prefix_llm_test.py',
   'ride/ride/claude/stop_guard_llm_test.py',
 ]
 
