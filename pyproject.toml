@@ -116,6 +116,8 @@ bro-local = { workspace = true }
 "summon" = "bro._entrypoints:bro_summon"
 "trails-server" = "bro._entrypoints:bro_trails_server_server"
 "usage" = "bro._entrypoints:bro_llm_usage"
+"watch-next" = "bro._entrypoints:bro_watch_next"
+"watch-run" = "bro._entrypoints:bro_watch_run"
 
 [project.entry-points.bro]
 bro = "bros.bro:Bro"
