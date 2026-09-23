@@ -10,7 +10,7 @@ a run that ends while the job runs kills it.
 Run `watch-run <command>` with the Bash tool in the background, once:
 it runs the command for the rest of the session and keeps every line it prints.
 Whenever waiting is all that is left, run `watch-next` with the Bash tool in the background and end the turn:
-it returns as soon as a watch has new lines, each tagged `[<command>]`, and its result opens your next turn.
+it returns as soon as a watch has new lines, each tagged `[<command>]`, and the notification of its end opens your next turn with those lines attached.
 Act on the lines, then run `watch-next` again the same way.
 It may start beside `watch-run` in the same turn, and one `watch-next` serves every watch you run;
 with several, name a command after it to read that watch alone.

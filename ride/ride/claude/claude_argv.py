@@ -73,6 +73,22 @@ def _stop_guard_hooks() -> dict:
   }
 
 
+def watch_delivery_hooks() -> dict:
+  """the `hooks` settings block attaching a finished `watch-next`'s lines to its notification."""
+  return {
+    'UserPromptSubmit': [
+      {
+        'hooks': [
+          {
+            'type': 'command',
+            'command': _settings_command('ride.claude.watch_delivery'),
+          }
+        ]
+      }
+    ]
+  }
+
+
 @dataclass(frozen=True)
 class ClaudeLaunch:
   """a built claude invocation: the argv (everything after the `claude` program
@@ -137,13 +153,12 @@ def build_claude_launch(
     namespaces = list(dict.fromkeys(server.namespace for server in servers))
   blocked_tool_names = bro.blocked_tool_names('claude')
   narrowed_tool_commands = bro.narrowed_tool_commands('claude')
-  hooks: dict = {}
+  hooks = watch_delivery_hooks()
   if len(narrowed_tool_commands) > 0:
     hooks.update(_tool_gate_hooks(narrowed_tool_commands))
   if spec.solo:
     hooks.update(_stop_guard_hooks())
-  if len(hooks) > 0:
-    settings['hooks'] = hooks
+  settings['hooks'] = hooks
   mcp_config = http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
   system_prompt = session_append_prompt(spec.hold, spec.bro)
   argv += [

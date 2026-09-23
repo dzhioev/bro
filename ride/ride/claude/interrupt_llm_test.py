@@ -4,7 +4,8 @@ drives, against the pinned Claude Code.
 Claude Code starts a turn of its own when a background task finishes only while
 the session's stdin is open, and holds the session for as long as it is; a
 single-shot print session exits moments after its final reply instead. That
-behavior is what lets a session wait on a watch at no cost, so it is held here.
+behavior is what lets a session wait on a watch at no cost, so it is held here,
+along with the session's `watch-next` wake bringing its lines without a file read.
 """
 
 import contextlib
@@ -18,7 +19,7 @@ import pytest
 
 import ride.claude.interrupt as interrupt
 from bro.monitor import SESSION_DIR_ENV
-from ride.claude.claude_argv import STREAM_JSON_ARGS
+from ride.claude.claude_argv import STREAM_JSON_ARGS, watch_delivery_hooks
 from ride.claude.live_claude_test_helper import (
   REQUIRES_CLAUDE_CREDENTIAL,
   claude_token,
@@ -70,7 +71,9 @@ def _bounded(seconds: float) -> Generator[None]:
     signal.signal(signal.SIGALRM, previous)
 
 
-def _run(tmp_path: Path, claude: Path, prompt: str, *, tools: str) -> interrupt.StreamedRun:
+def _run(
+  tmp_path: Path, claude: Path, prompt: str, *, tools: str, extra_args: tuple[str, ...] = ()
+) -> interrupt.StreamedRun:
   """run a haiku session over stream-json to its own end."""
   argv = [
     str(claude),
@@ -81,6 +84,7 @@ def _run(tmp_path: Path, claude: Path, prompt: str, *, tools: str) -> interrupt.
     '--dangerously-skip-permissions',
     '--max-turns',
     '6',
+    *extra_args,
     *STREAM_JSON_ARGS,
   ]
   with _bounded(_SESSION_TIMEOUT_SECONDS):
@@ -117,12 +121,23 @@ def test_a_watch_next_wake_carries_the_watched_line_to_the_model(
     "watch-run bash -c 'sleep 5; echo hello-from-watch; sleep 120'. Then use the Bash tool "
     'with run_in_background set to true to run exactly this command: watch-next. Do not wait '
     'for either and do not poll. Reply with the single word armed and end your turn. Later, '
-    'when a notification tells you the watch-next command finished, read its output file with '
-    "the Read tool and reply with only the last word of that file's first line; then stop the "
-    'watch-run command with the TaskStop tool and end your turn.'
+    'when a notification tells you the watch-next command finished, reply with the line it '
+    'printed, quoted exactly, without reading any file; then stop the watch-run command with '
+    'the TaskStop tool and end your turn.'
   )
 
-  run = _run(tmp_path, claude, prompt, tools='Bash,Read,TaskStop')
+  run = _run(
+    tmp_path,
+    claude,
+    prompt,
+    tools='Bash,TaskStop',
+    extra_args=(
+      '--disallowedTools',
+      'Read',
+      '--settings',
+      json.dumps({'hooks': watch_delivery_hooks()}),
+    ),
+  )
 
   assert run.code == 0 and not run.stopped, run
   words = _words(run)

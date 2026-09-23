@@ -26,6 +26,10 @@ def ride_claude_trail_recorder():
   return run_cli('ride.claude.trail_recorder', sys.argv)
 
 
+def ride_claude_watch_delivery():
+  return run_cli('ride.claude.watch_delivery', sys.argv)
+
+
 def ride_claude_watch_guard():
   return run_cli('ride.claude.watch_guard', sys.argv)
 

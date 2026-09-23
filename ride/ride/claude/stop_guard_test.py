@@ -95,6 +95,16 @@ class TestNotice:
 
     assert stop_guard.notice(payload, [], summoned=False) is not None
 
+  def test_a_command_that_only_names_watch_next_is_no_wait(self):
+    payload = _payload(
+      _task('watch-run quest watch', task_id='p1'), _task('rg watch-next src', task_id='r1')
+    )
+
+    reason = stop_guard.notice(payload, [], summoned=False)
+
+    assert reason is not None
+    assert reason.startswith('A watch runs with no `watch-next` waiting: p1')
+
   @pytest.mark.parametrize('missions', [[], [_CHILD]])
   def test_a_watch_with_its_wait_is_the_wait_and_passes(self, missions):
     payload = _payload(

@@ -220,6 +220,7 @@ PYTEST_FILES = [
   'ride/ride/pending_launch_test.py',
   'ride/ride/claude/claude_argv_test.py',
   'ride/ride/claude/stop_guard_test.py',
+  'ride/ride/claude/watch_delivery_test.py',
   'ride/ride/claude/claude_config_test.py',
   'ride/ride/alias_test.py',
   'ride/ride/cli_test.py',
