@@ -85,7 +85,7 @@ class Triage(Bro):
     when(harness == 'bro', mount(dev_mcp.toolset, 'read_file', 'grep')),
     claude.block(*claude.SHELL, *claude.DELEGATION),
     cli('bro show', 'name'),
-    cli('rewind show', 'trail_id', 'output_limit'),
+    cli('rewind show', 'trail_id'),
   ]
   data_sources = [WebSearch(), man('environment')]
   spells = ('triage.md',)
@@ -167,7 +167,7 @@ Read the class line by line and nothing is left to configure elsewhere:
 - `when(harness == 'bro', …)` gives the bro file reading only where the harness brings no file tools of its own.
 - `claude.block(*claude.SHELL, *claude.DELEGATION)` withholds Claude's shell and subagents:
   triage holds no shell, and delegation goes through summons, inside the boundary.
-- `cli('bro show', 'name')` and `cli('rewind show', 'trail_id', 'output_limit')` are the two commands it may run, each served as a tool:
+- `cli('bro show', 'name')` and `cli('rewind show', 'trail_id')` are the two commands it may run, each served as a tool:
   the card of a bro it is about to hand work to, and the run the analyst names.
   How a command becomes a tool is below.
 - `data_sources` are read-only connectors whose summaries land in the prompt: web search and the reference manual.
@@ -179,22 +179,25 @@ Read the class line by line and nothing is left to configure elsewhere:
 - `spells = ('triage.md',)` names its procedure, `bros/triage/spells/triage.md` beside the class, served as the `spell::triage` tool.
 
 **A command is a tool.**
-`cli('rewind show', 'trail_id', 'output_limit')` reads the arguments `rewind show` declares
+`cli('rewind show', 'trail_id')` reads the arguments `rewind show` declares
 — from its parser, not its help text
-— and serves it as `cli::rewind_show` with the two named parameters, the rest withheld.
+— and serves it as `cli::rewind_show` with the named parameter, the rest withheld,
+beside the window over its output that every generated tool takes.
 This is what the model sees:
 
 ```json
 {
   "trail_id": {"type": "string", "description": "trail id (or a legacy claude session id)"},
-  "output_limit": {"type": "integer", "description": "max rendered output lines (default with an offset: 100)"}
+  "output_offset": {"type": "integer", "minimum": 0, "description": "output lines to skip before the window (default 0)"},
+  "output_limit": {"type": "integer", "description": "max output lines to return (default 100); values above 2,000 are clamped, with the clamp announced inline, and a window also stops at 30.0 KB"}
 }
 ```
 
-A call `cli::rewind_show(trail_id='01m1z954qq-q9frvz3q-scmg8x5h', output_limit=200)` runs one fixed argv, with no shell in between:
+A call `cli::rewind_show(trail_id='01m1z954qq-q9frvz3q-scmg8x5h', output_limit=200)` runs one fixed argv, with no shell in between,
+and returns the first 200 lines of what it prints:
 
 ```console
-rewind show --output-limit=200 -- 01m1z954qq-q9frvz3q-scmg8x5h
+rewind show -- 01m1z954qq-q9frvz3q-scmg8x5h
 ```
 
 The program and its subcommands come from the declaration, never from the model, and a value that looks like an option still reaches the command as a value.

@@ -66,7 +66,7 @@ run those with `--help` for flags.
   — always capturing, and reaping the group when the await is cancelled as well as on timeout, so an interrupted tool call leaves no orphan.
   `kill_group` / `terminate_group` signal a child's whole group directly, for callers that manage lifetime themselves.
   `format_result` is the shape a finished child takes as agent-tool output
-  — exit code, then the captured streams capped through `text_window`.
+  — exit code, then a `text_window` window over the captured streams.
   Used by every agent shell-out.
   `console_script` resolves a console script beside the running interpreter, for machinery a process spawns beside itself rather than looks up on the PATH it was launched with.
 - `liveness_test_helper.py` — `Liveness`, a FIFO a spawned process holds for as long as it lives:

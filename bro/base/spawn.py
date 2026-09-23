@@ -29,9 +29,9 @@ import sys
 import sysconfig
 from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Optional
 
-from bro.base.text_window import apply_limit
+from bro.base.text_window import window
 
 
 def _signal_group(pid: int, signal_number: int, fallback: Callable[[], None]) -> None:
@@ -155,23 +155,19 @@ async def run_async(
   )
 
 
-def format_result(
-  process: subprocess.CompletedProcess[str],
-  *,
-  limit: int,
-  keep: Literal['head', 'tail'] = 'head',
-) -> str:
-  """a finished child's result as agent-tool output: the exit code, then the
-  captured output with stderr under a divider, capped to `limit` lines."""
+def format_result(process: subprocess.CompletedProcess[str], *, offset: int, limit: int) -> str:
+  """a finished child's result as agent-tool output: the exit code, then a window
+  of `limit` lines from line `offset` of the captured output, stderr under a
+  divider."""
   combined = process.stdout
   if len(process.stderr) > 0:
     combined = (
       f'{combined}\n--- stderr ---\n{process.stderr}' if len(combined) > 0 else process.stderr
     )
-  capped = apply_limit(combined, limit, keep=keep)
-  if len(capped) == 0:
+  windowed = window(combined, offset, limit)
+  if len(windowed) == 0:
     return f'exit_code: {process.returncode}'
-  return f'exit_code: {process.returncode}\n{capped}'
+  return f'exit_code: {process.returncode}\n{windowed}'
 
 
 def popen(command, **kwargs) -> subprocess.Popen:
