@@ -258,9 +258,10 @@ class LineageNode(Record):
 @dataclass(frozen=True, kw_only=True)
 class Notice(Record):
   kind: ClassVar[RecordKind] = RecordKind.NOTICE
-  content: str
+  content: str | dict[str, Any]
   level: str = 'info'
   trusted_visual: bool = False
+  event: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

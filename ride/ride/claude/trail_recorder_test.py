@@ -612,6 +612,38 @@ class TestClose:
 
     assert store.get_trail(worker.trail_id)['end']['reason'] == 'ok'
 
+  def test_a_task_notification_does_not_clear_the_raise(self, environment, store):
+    notification = _user(
+      '<task-notification>done</task-notification>', 'u2', origin={'kind': 'task-notification'}
+    )
+    path = _write_segment(
+      environment, 'seg-1', [_user('go', 'u1'), _raise_call('stuck'), notification]
+    )
+    worker = _worker(store, path)
+
+    worker.close()
+
+    end = store.get_trail(worker.trail_id)['end']
+    assert (end['reason'], end['detail']) == ('raised', 'stuck')
+
+  def test_a_prompt_typed_mid_turn_clears_the_raise(self, environment, store):
+    queued = _record(
+      type='attachment',
+      uuid='q1',
+      attachment={
+        'type': 'queued_command',
+        'prompt': 'resumed',
+        'commandMode': 'prompt',
+        'origin': {'kind': 'human'},
+      },
+    )
+    path = _write_segment(environment, 'seg-1', [_user('go', 'u1'), _raise_call('stuck'), queued])
+    worker = _worker(store, path)
+
+    worker.close()
+
+    assert store.get_trail(worker.trail_id)['end']['reason'] == 'ok'
+
   def test_closing_a_rewound_segment_ends_the_trail_without_appending(self, environment, store):
     lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
     worker = _worker(store, _write_segment(environment, 'seg-1', lines))

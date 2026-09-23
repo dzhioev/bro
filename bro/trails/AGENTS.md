@@ -164,6 +164,11 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
 - Bro projection derives reasoning, assistant text, tool calls, and terminal assistant status from `llm_call.response.output`, and copies the response's service tier onto the projected call when present.
   Its text-bodied native kinds are system prompts, user inputs, and notifications, each projected under its own message type.
   The decoding reads the OpenAI Responses API shape.
+- Claude projection reads the transcript record a row carries.
+  What claude puts into the model's input without the model or a person writing it
+  — every `attachment` record, its system-prompt snapshot among them, and a task notification whether it opened a turn or was queued into one —
+  projects to a `notification` whose `event` names it: the attachment type, or `task-notification`.
+  A prompt queued mid-turn from any other origin is a `user_input`, like the `user` record it would have been at a turn's start.
 - Header responses expose provider-raw usage by model.
   Provider normalization belongs to the provider-aware usage layer, not the harness adapter.
 - List queries accept exactly one selector

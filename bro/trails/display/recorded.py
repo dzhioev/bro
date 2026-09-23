@@ -468,7 +468,15 @@ class RecordedAdapter:
           content=_text_content(message.get('content'), 'system prompt'), **common
         )
       if message_type == 'notification':
-        return Notice(content=_text_content(message.get('content'), 'notification'), **common)
+        content = message.get('content')
+        event = message.get('event')
+        if event is not None:
+          event = _require_string(event, 'notification event', nonempty=True)
+        return Notice(
+          content=content if isinstance(content, dict) else _text_content(content, 'notification'),
+          event=event,
+          **common,
+        )
       if message_type == 'user_input':
         is_meta = message.get('isMeta', False)
         is_sidechain = message.get('isSidechain', False)
