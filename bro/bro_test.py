@@ -522,15 +522,15 @@ class TestToolLayers:
     with pytest.raises(ValueError, match='TaskStop is served whole but never blocked'):
       InvalidBro().blocked_tool_names('claude')
 
-  def test_a_summoning_run_reaches_the_summon_watch_over_a_block_of_monitor(self, monkeypatch):
+  def test_a_summoning_run_reaches_the_summon_watch_over_a_block_of_the_shell(self, monkeypatch):
     monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
     bro = _ShellBlockingBro()
-    assert bro.narrowed_tool_commands('claude') == {'Monitor': (bro_module.QUEST_WATCH_COMMAND,)}
+    assert bro.narrowed_tool_commands('claude') == {'Bash': bro_module.QUEST_WATCH_SHELL_COMMANDS}
     blocked = set(bro.blocked_tool_names('claude'))
-    assert 'Bash' in blocked
-    assert blocked.isdisjoint({'Monitor', 'BashOutput', 'KillShell', 'TaskOutput', 'TaskStop'})
+    assert 'Monitor' in blocked
+    assert blocked.isdisjoint({'Bash', 'BashOutput', 'KillShell', 'TaskOutput', 'TaskStop'})
 
-  def test_a_summoning_run_gains_the_summon_watch_on_a_narrowed_monitor(self, monkeypatch):
+  def test_a_summoning_run_gains_the_summon_watch_on_a_narrowed_shell(self, monkeypatch):
     monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
 
     class WatchingBro(BaseBro):
@@ -542,52 +542,52 @@ class TestToolLayers:
         super().__init__(system_prompt='')
 
     assert WatchingBro().narrowed_tool_commands('claude') == {
-      'Bash': ('watch it',),
-      'Monitor': ('watch it', bro_module.QUEST_WATCH_COMMAND),
+      'Bash': ('watch it', *bro_module.QUEST_WATCH_SHELL_COMMANDS),
+      'Monitor': ('watch it',),
     }
 
-  def test_a_run_that_may_summon_nobody_keeps_its_block_of_monitor(self, monkeypatch):
+  def test_a_run_that_may_summon_nobody_keeps_its_block_of_the_shell(self, monkeypatch):
     monkeypatch.delenv(MAY_SUMMON_ENV, raising=False)
     bro = _ShellBlockingBro()
-    assert 'Monitor' in bro.blocked_tool_names('claude')
+    assert {'Bash', 'Monitor'} <= set(bro.blocked_tool_names('claude'))
     assert bro.narrowed_tool_commands('claude') == {}
 
   def test_a_summoned_run_with_a_speaking_summoner_reaches_the_watch(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     monkeypatch.setenv(BROKER_TALK, 'owner.say,worker.say')
     bro = _ShellBlockingBro()
-    assert bro.narrowed_tool_commands('claude') == {'Monitor': (bro_module.QUEST_WATCH_COMMAND,)}
+    assert bro.narrowed_tool_commands('claude') == {'Bash': bro_module.QUEST_WATCH_SHELL_COMMANDS}
     assert set(bro.blocked_tool_names('claude')).isdisjoint(
-      {'Monitor', 'BashOutput', 'KillShell', 'TaskOutput', 'TaskStop'}
+      {'Bash', 'BashOutput', 'KillShell', 'TaskOutput', 'TaskStop'}
     )
 
   def test_a_summoned_run_that_may_ask_reaches_the_watch(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     monkeypatch.setenv(BROKER_TALK, 'worker.say,worker.question')
     bro = _ShellBlockingBro()
-    assert bro.narrowed_tool_commands('claude') == {'Monitor': (bro_module.QUEST_WATCH_COMMAND,)}
-    assert set(bro.blocked_tool_names('claude')).isdisjoint({'Monitor', 'TaskOutput', 'TaskStop'})
+    assert bro.narrowed_tool_commands('claude') == {'Bash': bro_module.QUEST_WATCH_SHELL_COMMANDS}
+    assert set(bro.blocked_tool_names('claude')).isdisjoint({'Bash', 'TaskOutput', 'TaskStop'})
 
-  def test_a_summoned_run_that_can_only_report_keeps_monitor_blocked(self, monkeypatch):
+  def test_a_summoned_run_that_can_only_report_keeps_the_shell_blocked(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     monkeypatch.setenv(BROKER_TALK, 'worker.say')
     bro = _ShellBlockingBro()
-    assert 'Monitor' in bro.blocked_tool_names('claude')
+    assert 'Bash' in bro.blocked_tool_names('claude')
     assert bro.narrowed_tool_commands('claude') == {}
 
-  def test_an_unwithheld_monitor_is_left_as_it_is(self, monkeypatch):
+  def test_an_unwithheld_shell_is_left_as_it_is(self, monkeypatch):
     monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
 
     class OpenBro(BaseBro):
-      name = 'open-monitor'
+      name = 'open-shell'
       description = 'd'
-      tools: ClassVar = [claude.block('Bash')]
+      tools: ClassVar = [claude.block('Monitor')]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
     bro = OpenBro()
-    assert bro.blocked_tool_names('claude') == ('Bash',)
+    assert bro.blocked_tool_names('claude') == ('Monitor',)
     assert bro.narrowed_tool_commands('claude') == {}
 
 

@@ -1266,7 +1266,7 @@ Wrappers and session daemons rely on a small set of env vars:
   The env name and its encoding are owned by `bro.summon`;
   set by the launch surfaces for a session root and by the summon lowering (or, for a manual child, the `--summoned` launch from the pending record) for a summoned child (its own resolved list, never its summoner's),
   read by `ride banner` to render the fact, and by `bro.prompts.session_fragment` to tell the surface how to arm or poll the quest watch;
-  the tool fold admits that command through Claude's `Monitor` or bro-native's roster-gated `job` for such a run.
+  the tool fold admits that command through bro-native's roster-gated `job` for such a run, and `watch-run quest watch` with `watch-next` through Claude's `Bash`.
   Read-only in the session:
   the launcher authorizes against its own copy, so only a relaunch (or the summon that spawns a child) changes what it may summon.
 - `RIDE_PERMITS` — the run's own effective party permits under the same encoding, publication, and host-side enforcement rule.

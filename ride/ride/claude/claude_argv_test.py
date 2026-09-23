@@ -131,7 +131,7 @@ class TestRideSessionLaunch:
       assert command[-2:] == [entry['matcher'], 'git status']
 
   def test_a_summoning_session_gets_the_summon_watch_over_a_blocked_shell(self, monkeypatch):
-    from bro.bro import QUEST_WATCH_COMMAND, BaseBro
+    from bro.bro import QUEST_WATCH_SHELL_COMMANDS, BaseBro
     from bro.harness import claude
     from bro.summon import MAY_SUMMON_ENV, encode_may_summon
 
@@ -147,14 +147,15 @@ class TestRideSessionLaunch:
     monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
     argv = _ride_session_launch(_spec(bro='blocking'), claude_args=[]).argv
     disallowed = argv[argv.index('--disallowed-tools') + 1].split(',')
-    assert 'Bash' in disallowed
-    assert 'Monitor' not in disallowed
+    assert 'Bash' not in disallowed
+    assert 'Monitor' in disallowed
     # both names of each job control: claude disables a tool named under either
     assert set(disallowed).isdisjoint({'BashOutput', 'KillShell', 'TaskOutput', 'TaskStop'})
     (entry,) = _settings(argv)['hooks']['PreToolUse']
-    assert entry['matcher'] == 'Monitor'
+    assert entry['matcher'] == 'Bash'
     (hook,) = entry['hooks']
-    assert shlex.split(hook['command'])[-1] == QUEST_WATCH_COMMAND
+    admitted = shlex.split(hook['command'])[-len(QUEST_WATCH_SHELL_COMMANDS) :]
+    assert admitted == list(QUEST_WATCH_SHELL_COMMANDS)
 
   def test_no_narrowing_declares_no_hooks(self):
     assert 'hooks' not in _settings(_ride_session_launch(_spec(), claude_args=[]).argv)
@@ -192,7 +193,7 @@ class TestRideSessionLaunch:
     ).argv
 
     hooks = _settings(argv)['hooks']
-    assert [entry['matcher'] for entry in hooks['PreToolUse']] == ['Monitor']
+    assert [entry['matcher'] for entry in hooks['PreToolUse']] == ['Bash']
     assert shlex.split(hooks['Stop'][0]['hooks'][0]['command'])[-1] == 'ride.claude.stop_guard'
 
   def test_fast_mode_lands_in_settings(self):

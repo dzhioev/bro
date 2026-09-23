@@ -1089,6 +1089,12 @@ def _component_optional_secrets(component: mcp.MCPServerSpec | DataSource) -> se
 
 
 QUEST_WATCH_COMMAND = 'quest watch'
+# how a claude session keeps the quest watch, as the `watch` spell prescribes it
+QUEST_WATCH_SHELL_COMMANDS = (
+  f'watch-run {QUEST_WATCH_COMMAND}',
+  'watch-next',
+  f'watch-next {QUEST_WATCH_COMMAND}',
+)
 _CLAUDE_COMMAND_TOOLS = ('Bash', 'Monitor')
 _CLAUDE_COMMAND_CONTROL = ('BashOutput', 'KillShell', 'TaskOutput', 'TaskStop')
 
@@ -1178,12 +1184,13 @@ def _fold_tool_layers(
       if not shell_unrestricted and QUEST_WATCH_COMMAND not in shell_commands:
         shell_commands.append(QUEST_WATCH_COMMAND)
     else:
-      if 'Monitor' in blocked:
-        del blocked['Monitor']
-        narrowed['Monitor'] = []
-      if 'Monitor' in narrowed:
-        if QUEST_WATCH_COMMAND not in narrowed['Monitor']:
-          narrowed['Monitor'].append(QUEST_WATCH_COMMAND)
+      if 'Bash' in blocked:
+        del blocked['Bash']
+        narrowed['Bash'] = []
+      if 'Bash' in narrowed:
+        for command in QUEST_WATCH_SHELL_COMMANDS:
+          if command not in narrowed['Bash']:
+            narrowed['Bash'].append(command)
         for name in _CLAUDE_COMMAND_CONTROL:
           blocked.pop(name, None)
 
