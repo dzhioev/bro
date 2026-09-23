@@ -133,7 +133,7 @@ when missions are in flight with no background task running, where the exiting p
 or when a background task is running with nothing in flight, where it would hold the session until killed;
 any running task over missions in flight is the wait it should be and passes.
 The stop guard reads `background_tasks`, which Claude Code sends undocumented;
-`ride/ride/claude/stop_guard_llm_test.py` probes it live against the `claude` on PATH, and the container pins the version.
+`ride/ride/claude/stop_guard_llm_test.py` probes it live against the Claude Code release the container pins.
 
 ## Bro harness
 
