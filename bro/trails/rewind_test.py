@@ -345,6 +345,31 @@ class TestSteps:
     assert '{response: {id: r1}}' in output
     assert 'response_id=r1' in output
 
+  def test_prints_every_record_whole(self, capsys):
+    padding = 'x' * 5000
+    client = FakeClient()
+    client.add_claude('T1', [_user(f'{padding} the end of the body')])
+    client.add_bro(
+      'T2',
+      [
+        {
+          'step_id': 0,
+          'kind': 'tool_result',
+          'body': 'ok',
+          'tool_name': f'{padding} the end of the attribute',
+          'ts': None,
+        }
+      ],
+    )
+
+    assert _command_steps(_client(client), _args('T1')) == 0
+    assert _command_steps(_client(client), _args('T2')) == 0
+
+    output = capsys.readouterr().out
+    assert 'the end of the body' in output
+    assert 'the end of the attribute' in output
+    assert 'more chars' not in output
+
   def test_spilled_body_is_an_omission_marker_and_is_not_fetched(self, capsys):
     client = FakeClient()
     client.add_bro(

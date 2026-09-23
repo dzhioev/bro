@@ -424,13 +424,7 @@ class DisplaySession:
       return tuple(segment_items)
     if isinstance(record, NativeStep):
       if isinstance(record.body, InlineStepBody):
-        body = self._item(
-          record.body.value,
-          record.kind,
-          label=record.step_kind,
-          style=style,
-          limit=240,
-        )
+        body = self._item(record.body.value, record.kind, label=record.step_kind, style=style)
       elif isinstance(record.body, SpilledStepBody):
         body = BlockItem(
           f'<{record.body.size} bytes spilled> {record.body.url}',
@@ -440,7 +434,7 @@ class DisplaySession:
       else:
         raise AssertionError(f'unhandled native step body: {record.body!r}')
       attributes = tuple(
-        self._item(value, record.kind, label=label, style=StyleRole.MUTED, limit=80)
+        self._item(value, record.kind, label=label, style=StyleRole.MUTED)
         for label, value in record.attributes
       )
       return (body, *attributes)
