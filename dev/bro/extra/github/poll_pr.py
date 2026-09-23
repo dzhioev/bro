@@ -10,6 +10,11 @@ hears whoever starts reviewing, and a reviewer's watch hears the author's
 replies — including an author that is a bot account, which is why there is no
 blanket bot filter: a bot that never reviews is not a party and stays silent
 anyway.
+
+A push fires unless a branch of the local checkout already points at the new
+head: a push from the checkout sends one of its own branch tips, while a push
+from anywhere else lands on a commit no local branch holds — even once a fetch
+has brought its objects in.
 """
 
 import contextlib
@@ -20,11 +25,13 @@ import time
 import urllib.error
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional, TypeVar
 
 from bro.base import credentials, log
 from bro.base.args import Parser
 from bro.extra.github import api, pulls
+from bro.workspace.git import git_out, git_run
 
 __cli_name__ = 'poll-pr'
 
@@ -230,10 +237,11 @@ class CheckTracker:
     return CheckTransition([])
 
 
-def _checks_event(pr: int, failed: list[dict[str, Any]]) -> dict[str, Any]:
+def _checks_event(pr: int, head: str, failed: list[dict[str, Any]]) -> dict[str, Any]:
   return {
     'event': 'checks',
     'pr': pr,
+    'head': head,
     'failing': [
       {
         'name': run.get('name', ''),
@@ -325,6 +333,7 @@ def poll_pr(
   token: Callable[[], str],
   interval: int,
   failure_grace: float,
+  local_tip: Callable[[str], bool],
 ) -> int:
   seen_comment_ids: set[int] = set()
   seen_review_ids: set[int] = set()
@@ -379,7 +388,7 @@ def poll_pr(
 
         head_sha = pr_data.get('head', {}).get('sha')
         moved_to = head.update(head_sha)
-        if moved_to is not None:
+        if moved_to is not None and not local_tip(moved_to):
           _emit({'event': 'pushed', 'pr': pr, 'head': moved_to})
         if head_sha is not None:
           check_runs = sources.probe(
@@ -388,7 +397,7 @@ def poll_pr(
           if check_runs is not None:
             transition = checks.update(head_sha, check_runs)
             if transition is not None:
-              _emit(_checks_event(pr, transition.failed_runs))
+              _emit(_checks_event(pr, head_sha, transition.failed_runs))
 
       sources.probe(
         'reviews',
@@ -417,6 +426,38 @@ def poll_pr(
       }
     )
     return _WATCH_FAILED_EXIT
+
+
+def branch_tip_probe(checkout: Optional[Path]) -> Callable[[str], bool]:
+  """a predicate telling whether a branch of the git repository at `checkout`
+  points at a sha.
+
+  `None` stands for the working directory, where no repository is a condition
+  rather than an error: every sha then answers False. A named `checkout` must
+  be a repository."""
+  if checkout is None:
+    located = git_run('rev-parse', '--absolute-git-dir')
+    if located.returncode != 0:
+      log.info(f'no local repository ({located.stderr.strip()}); every push fires')
+      return lambda sha: False
+    git_dir = located.stdout.strip()
+  else:
+    git_dir = git_out('rev-parse', '--absolute-git-dir', cwd=str(checkout))
+
+  def points_at(sha: str) -> bool:
+    return (
+      git_out(
+        '--git-dir',
+        git_dir,
+        'for-each-ref',
+        f'--points-at={sha}',
+        '--format=%(refname)',
+        'refs/heads',
+      )
+      != ''
+    )
+
+  return points_at
 
 
 def _token_provider(credential: str) -> Callable[[], str]:
@@ -449,6 +490,15 @@ def main(argv: list[str]) -> Optional[int]:
     default=300,
     help='seconds an event source may keep failing before the watch reports it and exits',
   )
+  parser.add_argument(
+    '--repo',
+    dest='checkout',
+    type=Path,
+    metavar='path',
+    env=False,
+    help='local checkout whose branch tips mark a push as its own and silence it '
+    '(default: the working directory, where no repository means every push fires)',
+  )
   namespace = parser.parse(argv)
   owner, repo = namespace['repo']
   return poll_pr(
@@ -458,4 +508,5 @@ def main(argv: list[str]) -> Optional[int]:
     token=_token_provider(namespace['credential']),
     interval=namespace['interval'],
     failure_grace=namespace['failure_grace'],
+    local_tip=branch_tip_probe(namespace['checkout']),
   )

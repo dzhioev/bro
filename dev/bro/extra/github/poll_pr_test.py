@@ -3,7 +3,9 @@ import email.message
 import http.client
 import itertools
 import json
+import subprocess
 import urllib.error
+from pathlib import Path
 from typing import Any, Optional
 
 import pytest
@@ -125,6 +127,7 @@ def _poll(**overrides) -> int:
     'token': lambda: 't',
     'interval': 0,
     'failure_grace': 300,
+    'local_tip': lambda sha: False,
   }
   return poll_pr.poll_pr(**{**arguments, **overrides})
 
@@ -603,7 +606,7 @@ class TestCheckEvents:
 
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     checks = [event for event in events if event['event'] == 'checks']
-    assert checks == [{'event': 'checks', 'pr': 1, 'failing': []}]
+    assert checks == [{'event': 'checks', 'pr': 1, 'head': 'deadbeef', 'failing': []}]
 
   def test_a_pr_without_a_head_sha_skips_the_check_fetch(self, monkeypatch):
     self._baseline(monkeypatch)
@@ -784,14 +787,105 @@ class TestPushedEvents:
     events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
     assert events == [{'event': 'merged', 'pr': 1}]
 
+  def _green_after_a_move_to(self, monkeypatch, capsys, local_tip) -> list[dict[str, Any]]:
+    monkeypatch.setattr(
+      poll_pr.pulls,
+      'pull_request',
+      _Stepper([_open_pr(sha='aaa'), _open_pr(sha='aaa'), _open_pr(sha='bbb'), {'merged': True}]),
+    )
+    monkeypatch.setattr(
+      poll_pr,
+      '_fetch_check_runs',
+      lambda owner, repo, sha, token: (
+        [_check_run('tests', 'completed', 'success')]
+        if sha == 'bbb'
+        else [_check_run('tests', 'in_progress')]
+      ),
+    )
+    assert _poll(local_tip=local_tip) == 0
+    return [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+
+  def test_a_move_to_a_local_branch_tip_stays_quiet_but_its_checks_fire(self, monkeypatch, capsys):
+    self._baseline(monkeypatch)
+    events = self._green_after_a_move_to(monkeypatch, capsys, local_tip=lambda sha: sha == 'bbb')
+    assert events == [
+      {'event': 'checks', 'pr': 1, 'head': 'bbb', 'failing': []},
+      {'event': 'merged', 'pr': 1},
+    ]
+
+  def test_a_move_no_local_branch_holds_fires_before_its_checks(self, monkeypatch, capsys):
+    self._baseline(monkeypatch)
+    events = self._green_after_a_move_to(monkeypatch, capsys, local_tip=lambda sha: sha == 'aaa')
+    assert events == [
+      {'event': 'pushed', 'pr': 1, 'head': 'bbb'},
+      {'event': 'checks', 'pr': 1, 'head': 'bbb', 'failing': []},
+      {'event': 'merged', 'pr': 1},
+    ]
+
+
+def _git(root: Path, *arguments: str) -> str:
+  return subprocess.run(
+    ['git', '-c', 'user.name=t', '-c', 'user.email=t@t', *arguments],
+    cwd=root,
+    check=True,
+    capture_output=True,
+    text=True,
+  ).stdout.strip()
+
+
+@pytest.fixture
+def checkout(tmp_path) -> Path:
+  root = tmp_path / 'checkout'
+  root.mkdir()
+  _git(root, 'init', '-q', '-b', 'master')
+  _git(root, 'commit', '-q', '--allow-empty', '-m', 'first')
+  _git(root, 'commit', '-q', '--allow-empty', '-m', 'second')
+  return root
+
+
+class TestBranchTipProbe:
+  def test_a_branch_tip_is_held_and_its_ancestor_is_not(self, checkout):
+    probe = poll_pr.branch_tip_probe(checkout)
+    assert probe(_git(checkout, 'rev-parse', 'HEAD'))
+    assert not probe(_git(checkout, 'rev-parse', 'HEAD~1'))
+
+  def test_a_commit_fetched_into_a_remote_ref_is_not_held(self, checkout, tmp_path):
+    clone = tmp_path / 'clone'
+    _git(tmp_path, 'clone', '-q', str(checkout), str(clone))
+    _git(checkout, 'commit', '-q', '--allow-empty', '-m', 'pushed from elsewhere')
+    _git(clone, 'fetch', '-q', 'origin')
+    assert not poll_pr.branch_tip_probe(clone)(_git(checkout, 'rev-parse', 'HEAD'))
+
+  def test_an_unknown_sha_is_not_held(self, checkout):
+    assert not poll_pr.branch_tip_probe(checkout)('0' * 40)
+
+  def test_the_working_directory_is_the_default_checkout(self, checkout, monkeypatch):
+    monkeypatch.chdir(checkout)
+    assert poll_pr.branch_tip_probe(None)(_git(checkout, 'rev-parse', 'HEAD'))
+
+  def test_a_working_directory_outside_a_repository_holds_nothing(
+    self, checkout, tmp_path, monkeypatch
+  ):
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path))
+    monkeypatch.chdir(outside)
+    assert not poll_pr.branch_tip_probe(None)(_git(checkout, 'rev-parse', 'HEAD'))
+
+  def test_a_named_checkout_outside_a_repository_is_an_error(self, tmp_path, monkeypatch):
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path.parent))
+    with pytest.raises(subprocess.CalledProcessError):
+      poll_pr.branch_tip_probe(tmp_path)
+
 
 class TestMain:
   def _capture_poll(self, monkeypatch) -> dict:
     captured = {}
 
-    def fake_poll(owner, repo, pr, token, interval, failure_grace):
+    def fake_poll(owner, repo, pr, token, interval, failure_grace, local_tip):
       captured['token'] = token
       captured['failure_grace'] = failure_grace
+      captured['local_tip'] = local_tip
       return 0
 
     monkeypatch.setattr(poll_pr, 'poll_pr', fake_poll)
@@ -812,3 +906,8 @@ class TestMain:
     captured = self._capture_poll(monkeypatch)
     assert poll_pr.main(['poll-pr', 'x/y', '1', '--failure-grace', '60']) == 0
     assert captured['failure_grace'] == 60
+
+  def test_repo_flag_names_the_checkout_whose_tips_stay_quiet(self, monkeypatch, checkout):
+    captured = self._capture_poll(monkeypatch)
+    assert poll_pr.main(['poll-pr', 'x/y', '1', '--repo', str(checkout)]) == 0
+    assert captured['local_tip'](_git(checkout, 'rev-parse', 'HEAD'))

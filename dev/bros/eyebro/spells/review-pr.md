@@ -8,7 +8,7 @@ This spell should be used when the user asks to review a GitHub pull request and
 Reconciles the PR's existing review state, reviews the head, posts findings as PR review comments, watches for the author's answers and pushes with `poll-pr`, re-reviews round by round, and approves once every finding is addressed or conceded.
 
 parameters: {"pr": "pull request URL or number to review"}
-version: 1.6.0
+version: 1.7.0
 ---
 
 {{iff #features contains github}}
@@ -166,8 +166,8 @@ Events fire for the review parties
   — a new review, its inline comments bundled under `comments`.
 - `{"event": "pushed", "pr": N, "head": "…"}`
   — the PR's head moved to a new commit.
-- `{"event": "checks", "pr": N, "failing": […]}`
-  — the head's checks reached a red or green edge;
+- `{"event": "checks", "pr": N, "head": "…", "failing": […]}`
+  — the checks on `head` reached a red or green edge;
   a non-empty `failing` array reports failures, while an empty one reports that every run concluded without failure.
 - `{"event": "conflicts", "pr": N}` — the PR became unmergeable into its base.
 - `{"event": "merged", "pr": N}` / `{"event": "closed", "pr": N}` — the PR is terminal.
