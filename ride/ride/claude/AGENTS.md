@@ -34,7 +34,7 @@ Claude Code's own harness themed with the session's bro.
   — leaf modules invoked by Claude settings through the runner interpreter (`python -m ride.claude.<module>`);
   the watch guard applies a folded finite shell roster to both Bash and Monitor calls,
   and the stop guard is a solo session's `Stop` hook:
-  print mode holds the process while a background task is pending, so it blocks a turn end once per turn only when missions are in flight with no running task or a task is running with nothing in flight,
+  the runner ends a solo session at a turn end with no background task running, so it blocks a turn end once per turn only when missions are in flight with no running task or a task is running with nothing in flight,
   reading the running tasks off the hook input's undocumented `background_tasks` and naming quest or mission routes for the worker types present.
 
 ## Invariants

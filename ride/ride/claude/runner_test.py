@@ -12,6 +12,8 @@ from bro.llm.llms import claude_code
 from bro.monitor import SESSION_DIR_ENV, trail_pointer
 from bro.summon import SUMMONED_ENV
 from ride.claude.claude_argv import ClaudeLaunch
+from ride.claude.fake_claude_test_helper import fake_claude_env
+from ride.claude.interrupt import StreamedRun
 from ride.claude.mcp import MCPEndpoint
 from ride.session_test import _spec
 
@@ -34,7 +36,7 @@ class _Harness:
       patch('ride.claude.runner.start_session_mcp_server', return_value=self.server),
       patch(
         'ride.claude.runner.build_claude_launch',
-        return_value=ClaudeLaunch(argv=['built'], system_prompt='sp'),
+        return_value=ClaudeLaunch(argv=['built'], system_prompt='sp', prompt='go'),
       ),
       patch(
         'ride.claude.runner._run_claude',
@@ -227,15 +229,6 @@ class TestSessionRun:
       assert h.run_claude.call_args.args[1]['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK'] == '1'
 
 
-def _fake_claude(tmp_path: Path, script: str) -> dict[str, str]:
-  bin_dir = tmp_path / 'bin'
-  bin_dir.mkdir(exist_ok=True)
-  fake = bin_dir / 'claude'
-  fake.write_text(f'#!/usr/bin/env bash\n{script}')
-  fake.chmod(0o755)
-  return {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'}
-
-
 class _RecordingChannel:
   def __init__(self, events: list):
     self._events = events
@@ -265,11 +258,11 @@ class TestRunClaudeRootSolo:
     monkeypatch.setenv('RIDE_SESSION_DIR', str(session))
     trail_pointer.write(session / trail_pointer.FILENAME, 't-root')
     monkeypatch.setattr(ride_runner, 'RunLifecycle', FakeChannel)
-    run_claude = MagicMock(return_value=ride_runner.Run(0, stopped=False))
-    monkeypatch.setattr(ride_runner, 'run_printing_through', run_claude)
+    run_claude = MagicMock(return_value=StreamedRun(0, stopped=False, results=('hi',)))
+    monkeypatch.setattr(ride_runner, 'run_streaming', run_claude)
 
-    assert ride_runner._run_claude_root_solo(['built'], {'ENV': 'yes'}) == 0
-    assert run_claude.call_args.args == (['claude', 'built'], {'ENV': 'yes'})
+    assert ride_runner._run_claude_root_solo(['built'], {'ENV': 'yes'}, 'go') == 0
+    assert run_claude.call_args.args == (['claude', 'built'], {'ENV': 'yes'}, 'go')
     assert events == [
       ('trail', 't-root'),
       ('close',),
@@ -289,11 +282,11 @@ class TestRunClaudeRootSolo:
     monkeypatch.setattr(ride_runner, 'RunLifecycle', FakeChannel)
     monkeypatch.setattr(
       ride_runner,
-      'run_printing_through',
-      MagicMock(return_value=ride_runner.Run(0, stopped=True)),
+      'run_streaming',
+      MagicMock(return_value=StreamedRun(0, stopped=True, results=())),
     )
 
-    assert ride_runner._run_claude_root_solo([], {}) == 0
+    assert ride_runner._run_claude_root_solo([], {}, 'go') == 0
     assert events == []
 
 
@@ -320,8 +313,8 @@ class TestRunClaudeSummoned:
     self, tmp_path, session_state, channel_events, capfd
   ):
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-child')
-    env = _fake_claude(tmp_path, 'echo "THE REPLY"\n')
-    assert ride_runner._run_claude_summoned([], env) == 0
+    env = fake_claude_env(tmp_path, 'result("THE REPLY")\nsys.stdin.read()\n')
+    assert ride_runner._run_claude_summoned([], env, 'go') == 0
     assert channel_events == [
       ('trail', 't-child'),
       ('close',),
@@ -336,8 +329,8 @@ class TestRunClaudeSummoned:
   ):
     monkeypatch.setattr(ride_runner, '_TRAIL_POLL_SECONDS', 0.05)
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-child')
-    env = _fake_claude(tmp_path, 'sleep 0.4\necho LATE\n')
-    assert ride_runner._run_claude_summoned([], env) == 0
+    env = fake_claude_env(tmp_path, 'time.sleep(0.4)\nresult("LATE")\nsys.stdin.read()\n')
+    assert ride_runner._run_claude_summoned([], env, 'go') == 0
     assert channel_events == [
       ('trail', 't-child'),
       ('close',),
@@ -348,15 +341,15 @@ class TestRunClaudeSummoned:
   def test_an_unpublished_trail_still_delivers_the_terminal(
     self, tmp_path, session_state, channel_events
   ):
-    env = _fake_claude(tmp_path, 'echo DONE\n')
-    assert ride_runner._run_claude_summoned([], env) == 0
+    env = fake_claude_env(tmp_path, 'result("DONE")\nsys.stdin.read()\n')
+    assert ride_runner._run_claude_summoned([], env, 'go') == 0
     assert channel_events == [('completed', 'DONE', 'ok', None), ('close',)]
 
   def test_failed_exit_emits_no_terminal_but_echoes(
     self, tmp_path, session_state, channel_events, capfd
   ):
-    env = _fake_claude(tmp_path, 'echo PARTIAL\nexit 3\n')
-    assert ride_runner._run_claude_summoned([], env) == 3
+    env = fake_claude_env(tmp_path, 'result("PARTIAL")\nsys.exit(3)\n')
+    assert ride_runner._run_claude_summoned([], env, 'go') == 3
     assert channel_events == []
     assert capfd.readouterr().out == 'PARTIAL\n'
 
@@ -372,11 +365,12 @@ class TestRunClaudeSummoned:
       original_send_signal(process, signal_number)
 
     monkeypatch.setattr(subprocess.Popen, 'send_signal', record_signal)
-    env = _fake_claude(
+    env = fake_claude_env(
       tmp_path,
-      'trap "exit 0" INT TERM\nsleep 0.2\nkill -TERM $PPID\nwhile true; do sleep 0.05; done\n',
+      'signal.signal(signal.SIGINT, lambda *_: sys.exit(0))\ntime.sleep(0.2)\n'
+      'os.kill(os.getppid(), signal.SIGTERM)\ntime.sleep(10)\n',
     )
-    ride_runner._run_claude_summoned([], env)
+    ride_runner._run_claude_summoned([], env, 'go')
     assert received_signals[:1] == [signal.SIGINT]
     assert not [event for event in channel_events if event[0] == 'completed']
 
@@ -385,8 +379,8 @@ class TestRunClaudeSummoned:
   ):
     monkeypatch.delenv('BROKER_CHANNEL', raising=False)
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-child')
-    env = _fake_claude(tmp_path, 'echo OK\n')
-    assert ride_runner._run_claude_summoned([], env) == 0
+    env = fake_claude_env(tmp_path, 'result("OK")\nsys.stdin.read()\n')
+    assert ride_runner._run_claude_summoned([], env, 'go') == 0
     assert capfd.readouterr().out == 'OK\n'
 
 

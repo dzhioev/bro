@@ -20,7 +20,7 @@ from bro.summon import SUMMONER_ENV, summoned
 from ride.claude.claude_argv import build_claude_launch
 from ride.claude.claude_auth import apply_claude_auth
 from ride.claude.claude_config import latest_jsonl
-from ride.claude.interrupt import Run, run_interactive, run_printing, run_printing_through
+from ride.claude.interrupt import Run, run_interactive, run_streaming
 from ride.claude.mcp import start_session_mcp_server
 from ride.claude.recorder import start_session_recorder
 from ride.claude.session_context import (
@@ -109,30 +109,32 @@ def _complete_run(emitted: threading.Event, result: str | None) -> None:
     channel.close()
 
 
-def _run_claude_root_solo(argv: list[str], env: dict[str, str]) -> int:
-  """run a root's print-mode Claude with its reply on the session's stdout, and
-  close its host-anchored quest on success."""
+def _run_claude_root_solo(argv: list[str], env: dict[str, str], prompt: str) -> int:
+  """run a root's print-mode Claude with each turn's reply on the session's
+  stdout, and close its host-anchored quest on success."""
   with _trail_watch() as emitted:
-    run = run_printing_through(['claude', *argv], env)
+    run = run_streaming(
+      ['claude', *argv], env, prompt, on_result=lambda reply: print(reply, flush=True)
+    )
   if run.code == 0 and not run.stopped:
     _complete_run(emitted, None)
   return run.code
 
 
-def _run_claude_summoned(argv: list[str], env: dict[str, str]) -> int:
+def _run_claude_summoned(argv: list[str], env: dict[str, str], prompt: str) -> int:
   """run a summoned print-mode Claude and emit its broker lifecycle.
 
-  A clean exit answers with the printed reply. A non-zero exit or a stopped run
-  emits no result: the broker synthesizes `result{failed}` from reap for the
+  A clean exit answers with the last turn's reply. A non-zero exit or a stopped
+  run emits no result: the broker synthesizes `result{failed}` from reap for the
   former, and a `raise`- or `answer`-ended session already sent its own. The
-  captured reply is echoed to stdout either way, so the output tail still
-  carries it."""
+  reply is echoed to stdout either way, so the output tail still carries it."""
   with _trail_watch() as emitted:
-    run = run_printing(['claude', *argv], env)
-  print(run.output, end='', flush=True)
+    run = run_streaming(['claude', *argv], env, prompt)
+  reply = run.results[-1] if len(run.results) > 0 else ''
+  print(reply, flush=True)
   if run.code != 0 or run.stopped:
     return run.code
-  _complete_run(emitted, run.output.rstrip('\n'))
+  _complete_run(emitted, reply)
   return run.code
 
 
@@ -215,10 +217,13 @@ def run_session(spec: 'SessionSpec | SessionRun') -> int:
     env['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK'] = '1'
     apply_claude_auth(env, warn_when_missing=True)
     log.info('launching claude')
-    if spec.solo and summoned():
-      code = _run_claude_summoned(launch.argv, env)
-    elif spec.solo:
-      code = _run_claude_root_solo(launch.argv, env)
+    if spec.solo:
+      if launch.prompt is None:
+        raise RuntimeError('a solo session launches with a prompt')
+      if summoned():
+        code = _run_claude_summoned(launch.argv, env, launch.prompt)
+      else:
+        code = _run_claude_root_solo(launch.argv, env, launch.prompt)
     elif summoned():
       code = _run_claude_summoned_interactive(launch.argv, env, transcripts)
     else:

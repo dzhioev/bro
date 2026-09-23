@@ -13,7 +13,7 @@ import json
 import shlex
 import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from ride.claude.assembly import persona_servers
 from ride.claude.harness import llm_spec
@@ -81,7 +81,21 @@ class ClaudeLaunch:
 
   argv: list[str]
   system_prompt: str
+  # a solo session's prompt, delivered as its first stream-json message; an
+  # interactive session seeds its prompt through the argv instead
+  prompt: Optional[str] = None
 
+
+# print mode over stream-json: the prompt travels as the first user message
+# rather than in the argv
+STREAM_JSON_ARGS = (
+  '-p',
+  '--input-format',
+  'stream-json',
+  '--output-format',
+  'stream-json',
+  '--verbose',
+)
 
 # claude's built-in attribution, all off — an empty string is its "omit" value
 # for the commit trailer and the pull-request line.
@@ -147,8 +161,10 @@ def build_claude_launch(
   if llm.effort is not None:
     argv += ['--effort', llm.effort]
   if spec.solo:
-    argv.append('-p')
+    argv += STREAM_JSON_ARGS
   argv += claude_args
+  if spec.solo:
+    return ClaudeLaunch(argv=argv, system_prompt=system_prompt, prompt=spec.prompt)
   if spec.prompt is not None:
     argv += ['--', spec.prompt]
   return ClaudeLaunch(argv=argv, system_prompt=system_prompt)

@@ -10,7 +10,10 @@ import time
 from collections.abc import Generator
 from pathlib import Path
 
+import pytest
+
 import ride.claude.interrupt as interrupt
+from ride.claude.fake_claude_test_helper import fake_claude_argv
 
 # a bash trap only runs between foreground commands, so a fake waiting for a
 # signal loops over short sleeps rather than one long one
@@ -74,54 +77,54 @@ def _session_input(data: bytes) -> Generator[None]:
     os.close(saved)
 
 
-class TestRunPrinting:
-  def test_captures_the_printed_reply(self, tmp_path):
-    run = interrupt.run_printing(_fake_claude(tmp_path, 'echo REPLY\n'), os.environ)
-    assert run == interrupt.PrintedRun(code=0, output='REPLY\n', stopped=False)
+class TestRunStreaming:
+  def test_the_prompt_is_the_first_message_and_an_idle_turn_end_ends_the_run(self, tmp_path):
+    argv = fake_claude_argv(tmp_path, 'result("echo:" + prompt)\nsys.stdin.read()\n')
 
-  def test_the_sessions_input_never_reaches_claude(self, tmp_path):
-    # print mode takes its prompt from argv: piped session input is not read
-    argv = _fake_claude(tmp_path, 'read -r line; echo "stdin:$line"\n')
-    with _session_input(b'typed\n'):
-      run = interrupt.run_printing(argv, os.environ)
-    assert run.output == 'stdin:\n'
+    run = interrupt.run_streaming(argv, os.environ, 'hello')
+
+    assert run == interrupt.StreamedRun(code=0, stopped=False, results=('echo:hello',))
+
+  def test_a_running_task_holds_the_session_until_the_woken_turn_ends(self, tmp_path):
+    argv = fake_claude_argv(
+      tmp_path,
+      'tasks("t1")\nresult("started")\ntime.sleep(0.3)\ntasks()\nresult("finished")\n'
+      'sys.stdin.read()\n',
+    )
+    seen: list[str] = []
+
+    run = interrupt.run_streaming(argv, os.environ, 'go', on_result=seen.append)
+
+    assert run == interrupt.StreamedRun(code=0, stopped=False, results=('started', 'finished'))
+    assert seen == ['started', 'finished']
 
   def test_a_stop_arrives_as_the_interrupt(self, tmp_path):
-    argv = _fake_claude(
+    argv = fake_claude_argv(
       tmp_path,
-      "trap 'exit 7' INT\ntrap 'exit 5' TERM\nsleep 0.2\nkill -TERM $PPID\n" + _IDLE,
+      'signal.signal(signal.SIGINT, lambda *_: sys.exit(0))\ntasks("t1")\nresult("started")\n'
+      'time.sleep(0.2)\nos.kill(os.getppid(), signal.SIGTERM)\ntime.sleep(10)\n',
     )
-    run = interrupt.run_printing(argv, os.environ)
-    assert (run.code, run.stopped) == (7, True)
+
+    run = interrupt.run_streaming(argv, os.environ, 'go')
+
+    assert run.stopped and run.code == 0
 
   def test_a_claude_deaf_to_the_interrupt_is_terminated(self, tmp_path, monkeypatch):
     monkeypatch.setattr(interrupt, '_EXIT_TIMEOUT_SECONDS', 0.2)
-    argv = _fake_claude(tmp_path, "trap '' INT\nsleep 0.2\nkill -TERM $PPID\n" + _IDLE)
-    run = interrupt.run_printing(argv, os.environ)
+    argv = fake_claude_argv(
+      tmp_path,
+      'signal.signal(signal.SIGINT, signal.SIG_IGN)\ntasks("t1")\nresult("started")\n'
+      'time.sleep(0.2)\nos.kill(os.getppid(), signal.SIGTERM)\ntime.sleep(10)\n',
+    )
+
+    run = interrupt.run_streaming(argv, os.environ, 'go')
+
     assert (run.code, run.stopped) == (-signal.SIGTERM, True)
 
-
-class TestRunPrintingThrough:
-  def test_the_reply_and_diagnostics_land_on_the_sessions_own_streams(self, tmp_path, capfd):
-    argv = _fake_claude(tmp_path, 'echo REPLY\necho DIAGNOSTIC >&2\n')
-    run = interrupt.run_printing_through(argv, os.environ)
-    assert run == interrupt.Run(code=0, stopped=False)
-    captured = capfd.readouterr()
-    assert (captured.out, captured.err) == ('REPLY\n', 'DIAGNOSTIC\n')
-
-  def test_a_stop_arrives_as_the_interrupt(self, tmp_path):
-    argv = _fake_claude(
-      tmp_path,
-      "trap 'exit 7' INT\ntrap 'exit 5' TERM\nsleep 0.2\nkill -TERM $PPID\n" + _IDLE,
-    )
-    run = interrupt.run_printing_through(argv, os.environ)
-    assert (run.code, run.stopped) == (7, True)
-
-  def test_the_sessions_input_never_reaches_claude(self, tmp_path, capfd):
-    argv = _fake_claude(tmp_path, 'read -r line; echo "stdin:$line"\n')
-    with _session_input(b'typed\n'):
-      interrupt.run_printing_through(argv, os.environ)
-    assert capfd.readouterr().out == 'stdin:\n'
+  def test_a_line_that_is_not_stream_json_fails_the_run(self, tmp_path):
+    argv = fake_claude_argv(tmp_path, 'print("garbage")\nsys.stdout.flush()\nsys.stdin.read()\n')
+    with pytest.raises(RuntimeError, match='not stream-json'):
+      interrupt.run_streaming(argv, os.environ, 'go')
 
 
 class TestRunInteractive:

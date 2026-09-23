@@ -253,7 +253,6 @@ class TestRideSessionLaunch:
     assert '--mcp-config' in argv
     assert '--append-system-prompt' in argv
     assert '--no-session-persistence' not in argv
-    assert argv[-2:] == ['--', 'answer']
 
 
 def test_unknown_bro_raises():
@@ -266,3 +265,20 @@ def test_unknown_bro_raises():
 def test_the_attribution_opt_out_lands_in_settings():
   launch = _ride_session_launch(_spec(), claude_args=[])
   assert _settings(launch.argv)['attribution'] == ride_claude_argv._ATTRIBUTION
+
+
+def test_a_solo_session_streams_its_prompt_over_stdin():
+  launch = _ride_session_launch(_spec(solo=True, hold='unattended', prompt='go'), claude_args=[])
+
+  assert launch.prompt == 'go'
+  assert '--' not in launch.argv and 'go' not in launch.argv
+  assert '-p' in launch.argv and '--verbose' in launch.argv
+  for flag, value in (('--input-format', 'stream-json'), ('--output-format', 'stream-json')):
+    assert launch.argv[launch.argv.index(flag) + 1] == value
+
+
+def test_an_interactive_session_seeds_its_prompt_through_the_argv():
+  launch = _ride_session_launch(_spec(prompt='hi'), claude_args=[])
+
+  assert launch.prompt is None
+  assert launch.argv[-2:] == ['--', 'hi'] and '-p' not in launch.argv

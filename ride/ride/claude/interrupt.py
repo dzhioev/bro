@@ -9,8 +9,8 @@ takes the whole turn down with it — the terminal payload and the sibling calls
 batched beside it.
 
 Reaching that interrupt from outside the session takes a different mechanism per
-flavor. Print-mode claude runs on the session's own streams, takes SIGINT as the
-interrupt and exits on it. A TUI claude reads its terminal in raw mode, where
+flavor. Print-mode claude runs on pipes, its reply parsed off stdout, takes SIGINT
+as the interrupt and exits on it. A TUI claude reads its terminal in raw mode, where
 Ctrl-C is a keypress rather than a signal, and treats SIGINT as quit-now instead
 — so its interrupt has to arrive as that keypress, which is why an interactive
 run gives claude a pty of its own and proxies the session's terminal through it.
@@ -18,6 +18,7 @@ run gives claude a pty of its own and proxies the session's terminal through it.
 
 import contextlib
 import fcntl
+import json
 import os
 import pty
 import selectors
@@ -27,7 +28,7 @@ import termios
 import threading
 import time
 import tty
-from collections.abc import Generator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -68,35 +69,97 @@ class Run:
 
 
 @dataclass(frozen=True)
-class PrintedRun(Run):
-  """a finished print-mode claude run that captured the reply it printed."""
+class StreamedRun(Run):
+  """a finished stream-json claude run: the text of every turn's `result`, in order."""
 
-  output: str
-
-
-def run_printing(argv: list[str], env: Mapping[str, str]) -> PrintedRun:
-  """run print-mode claude to completion, capturing the reply it prints."""
-  process = _start_printing(argv, env, stdout=subprocess.PIPE)
-  with stopped_on_sigterm(lambda: _interrupt_printing(process)) as stopped:
-    output, _ = process.communicate()
-  return PrintedRun(process.returncode, stopped.is_set(), output)
+  results: tuple[str, ...]
 
 
-def run_printing_through(argv: list[str], env: Mapping[str, str]) -> Run:
-  """run print-mode claude to completion with its reply on the session's own
-  stdout."""
-  process = _start_printing(argv, env, stdout=None)
-  with stopped_on_sigterm(lambda: _interrupt_printing(process)) as stopped:
+def run_streaming(
+  argv: list[str],
+  env: Mapping[str, str],
+  prompt: str,
+  *,
+  on_result: Callable[[str], None] | None = None,
+) -> StreamedRun:
+  """run print-mode claude over stream-json with its stdin held open.
+
+  `prompt` goes in as the first user message. Claude then keeps the session
+  alive as long as stdin is open, and a finished background task wakes it for
+  a turn of its own; the run closes stdin at the first turn end with no
+  background task running, which ends the session. `on_result` sees each
+  turn's reply as it lands.
+  """
+  process = subprocess.Popen(
+    argv,
+    env=dict(env),
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    text=True,
+    bufsize=1,
+  )
+  assert process.stdin is not None and process.stdout is not None
+  results: list[str] = []
+  with stopped_on_sigterm(lambda: _interrupt_printing(process)) as stopped, _ended(process):
+    with contextlib.closing(process.stdin) as stdin:
+      # a claude gone before its first message reports through its exit code
+      with contextlib.suppress(BrokenPipeError):
+        stdin.write(json.dumps(_user_message(prompt)) + '\n')
+        stdin.flush()
+      tasks_running = False
+      pending_input = True
+      for line in process.stdout:
+        event = _stream_event(line)
+        if event is None:
+          continue
+        if event.get('type') == 'system' and event.get('subtype') == 'background_tasks_changed':
+          tasks_running = len(_task_list(event)) > 0
+        elif event.get('type') == 'result':
+          text = event.get('result')
+          reply = text if isinstance(text, str) else ''
+          results.append(reply)
+          if on_result is not None:
+            on_result(reply)
+          if pending_input and not tasks_running:
+            stdin.close()
+            pending_input = False
+  return StreamedRun(process.returncode, stopped.is_set(), tuple(results))
+
+
+@contextlib.contextmanager
+def _ended(process: subprocess.Popen) -> Generator[None]:
+  """wait for `process` on the way out, terminating it first when the block failed."""
+  try:
+    yield
+  except BaseException:
+    process.terminate()
+    raise
+  finally:
     process.wait()
-  return Run(process.returncode, stopped.is_set())
 
 
-def _start_printing(
-  argv: list[str], env: Mapping[str, str], *, stdout: int | None
-) -> subprocess.Popen:
-  """start print-mode claude with its stderr on the session's own and its stdin
-  closed: print mode takes its prompt from argv, never from the session's input."""
-  return subprocess.Popen(argv, env=dict(env), stdin=subprocess.DEVNULL, stdout=stdout, text=True)
+def _user_message(text: str) -> dict:
+  return {'type': 'user', 'message': {'role': 'user', 'content': text}}
+
+
+def _stream_event(line: str) -> dict | None:
+  """one stream-json line as its event, None for a blank line."""
+  if line.strip() == '':
+    return None
+  try:
+    event = json.loads(line)
+  except json.JSONDecodeError as error:
+    raise RuntimeError(f'claude wrote a line that is not stream-json: {line!r}') from error
+  if not isinstance(event, dict):
+    raise RuntimeError(f'claude wrote a stream-json line that is not an event: {line!r}')
+  return event
+
+
+def _task_list(event: dict) -> list:
+  tasks = event.get('tasks')
+  if not isinstance(tasks, list):
+    raise RuntimeError('a background_tasks_changed event carries no tasks list')
+  return tasks
 
 
 def run_interactive(argv: list[str], env: Mapping[str, str], transcripts: Path) -> Run:

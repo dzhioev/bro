@@ -19,7 +19,7 @@ workspace mechanics, credential scoping, broker supervision, and bro composition
 
 Runs one prompt without a TTY and writes the harness reply to stdout.
 The default harness is Claude Code and the default hold is `unattended`.
-Claude runs in print mode on the session's own streams, so the reply is its stdout and its diagnostics land on stderr beside the ride's own log lines;
+Claude runs in print mode over stream-json with its stdin held open, so each turn's reply lands on the session's stdout and its diagnostics on stderr beside the ride's own log lines;
 the bro harness runs `bro run` with the ask display preset.
 Both retain the session record needed by `ride resume` when the workspace is kept.
 
@@ -124,9 +124,9 @@ The outer runs the separate `do-ride solo|along` session executable.
 Unboxed isolation takes it from the frozen host snapshot;
 boxed isolation takes it from the same bundle materialized at `/var/ride/runtime`.
 
-A solo session runs Claude in print mode, which ends only once nothing is pending:
-while a background task or a Monitor is live the process stays open and the model is re-invoked as a fresh turn on each event,
-so a persistent Monitor on an endless command, which is how `quest watch` is armed, holds the process until the session is killed.
+A solo session runs Claude in print mode over stream-json, its prompt delivered as the first user message and its stdin held open:
+Claude then stays alive as long as stdin is open and starts a turn of its own when a background task finishes,
+and the runner closes stdin at the first turn end with no background task running, which ends the session.
 A solo session's settings therefore wire `ride.claude.stop_guard` as its `Stop` hook:
 reading the running tasks off the hook input and every mission the run owns off the host journal, it blocks a turn end once per turn (Claude's `stop_hook_active` marks the second stop)
 when missions are in flight with no background task running, where the exiting process would orphan them,
@@ -911,7 +911,7 @@ A claude-harness child is scoped through the claude recipe
 — `claude_code` required, no LLM key
 — and the seam's auth preflight runs in the lowering, so an unresolvable setup token fails the spawn with the preflight's remedy as the correlated launch failure.
 Its lifecycle comes from the `do-ride` session executable rather than `bro.native.runner.Runner.run`:
-the runner captures the print-mode reply, announces the trail mark once the session recorder publishes the workspace's current-trail pointer, and sends the quest's ok result on a clean exit
+the runner takes the last turn's reply, announces the trail mark once the session recorder publishes the workspace's current-trail pointer, and sends the quest's ok result on a clean exit
 — a non-zero exit emits no result and surfaces as the synthesized `result{failed, reason: exit}` (the echoed reply lands in its output tail), while an unattended abort is the `raise` service tool's own `result{failed, reason: raised}`.
 The recorder stamps the child trail's `summoned_by` from the summoner attribution, and the child's recorded resume spec is a claude spec, so a kept workspace resumes into the claude conversation.
 
