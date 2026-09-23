@@ -1,9 +1,10 @@
-"""Live print-mode probe for the Stop hook input `ride.claude.stop_guard` reads.
+"""Live print-mode probes for the Stop hook input `ride.claude.stop_guard` reads.
 
 Claude Code sends a Stop hook the session's running background tasks as
 `background_tasks`, each with its id, status, and command, and fires the hook
 in print mode. Undocumented, so the contract is held here against the `claude`
-on PATH; the container pins its version in `ride/setup/container/claude-code-version`.
+on PATH for both task kinds a session leaves running, a Monitor and a background
+shell; the container pins its version in `ride/setup/container/claude-code-version`.
 """
 
 import json
@@ -18,8 +19,10 @@ import pytest
 import ride.claude.stop_guard as stop_guard
 from bro.base import credentials
 from bro.base.suite_environment import host_credential_store
+from bro.monitor import SESSION_DIR_ENV
 
 _MONITOR_COMMAND = 'sleep 20'
+_WATCH_COMMAND = 'watch-run sleep 30'
 _HOOK_SCRIPT = """
 import json, sys
 from pathlib import Path
@@ -40,7 +43,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_print_mode_stops_carry_the_running_background_tasks(tmp_path: Path) -> None:
+def _stops(tmp_path: Path, prompt: str, *, tools: str, environment: dict[str, str]) -> list[dict]:
+  """run a haiku print session whose Stop hook dumps its payloads, and return them."""
   hook = tmp_path / 'hook.py'
   hook.write_text(_HOOK_SCRIPT)
   dump = tmp_path / 'stops.jsonl'
@@ -71,12 +75,7 @@ def test_print_mode_stops_carry_the_running_background_tasks(tmp_path: Path) -> 
   env['CLAUDE_CODE_OAUTH_TOKEN'] = _claude_token() or ''
   env['CLAUDE_CONFIG_DIR'] = str(config)
   env['DISABLE_AUTOUPDATER'] = '1'
-  prompt = (
-    'Call the Monitor tool exactly once with persistent=false, timeout_ms=5000, description '
-    f"'probe', and command exactly: {_MONITOR_COMMAND}\n"
-    'Then end your turn immediately, replying with the single word ARMED and nothing else. '
-    'If a notification arrives later, reply with the single word DONE and end your turn.'
-  )
+  env.update(environment)
   completed = subprocess.run(
     [
       'claude',
@@ -84,7 +83,7 @@ def test_print_mode_stops_carry_the_running_background_tasks(tmp_path: Path) -> 
       '--model',
       'haiku',
       '--allowedTools',
-      'Monitor',
+      tools,
       '--dangerously-skip-permissions',
       prompt,
     ],
@@ -96,17 +95,62 @@ def test_print_mode_stops_carry_the_running_background_tasks(tmp_path: Path) -> 
     check=False,
   )
   assert completed.returncode == 0, completed.stderr
-
   stops = [json.loads(line) for line in dump.read_text().splitlines()]
   assert len(stops) >= 1, completed.stdout
-  first = stops[0]
-  assert first['hook_event_name'] == 'Stop'
-  assert first['stop_hook_active'] is False
-  [task] = first['background_tasks']
+  return stops
+
+
+def _running_task(stop: dict) -> dict:
+  assert stop['hook_event_name'] == 'Stop'
+  assert stop['stop_hook_active'] is False
+  [task] = stop['background_tasks']
   assert task['status'] == 'running'
-  assert task['command'] == _MONITOR_COMMAND
   assert isinstance(task['id'], str) and len(task['id']) > 0
-  reason = stop_guard.notice(first, [], summoned=False)
+  return task
+
+
+def test_print_mode_stops_carry_a_running_monitor(tmp_path: Path) -> None:
+  prompt = (
+    'Call the Monitor tool exactly once with timeout_ms=5000, description '
+    f"'probe', and command exactly: {_MONITOR_COMMAND}\n"
+    'Then end your turn immediately, replying with the single word ARMED and nothing else. '
+    'If a notification arrives later, reply with the single word DONE and end your turn.'
+  )
+
+  stops = _stops(tmp_path, prompt, tools='Monitor', environment={})
+
+  task = _running_task(stops[0])
+  assert task['command'] == _MONITOR_COMMAND
+  reason = stop_guard.notice(stops[0], [], summoned=False)
   assert reason is not None
   assert task['id'] in reason
   assert _MONITOR_COMMAND in reason
+
+
+def test_print_mode_stops_carry_a_background_watch_run_as_typed(tmp_path: Path) -> None:
+  watch_run = shutil.which('watch-run')
+  assert watch_run is not None, 'watch-run is not on PATH'
+  session = tmp_path / 'session'
+  session.mkdir()
+  prompt = (
+    'Use the Bash tool with run_in_background set to true to run exactly this command: '
+    f'{_WATCH_COMMAND}\n'
+    'Then end your turn immediately, replying with the single word ARMED and nothing else.'
+  )
+
+  stops = _stops(
+    tmp_path,
+    prompt,
+    tools='Bash',
+    environment={
+      SESSION_DIR_ENV: str(session),
+      'PATH': f'{Path(watch_run).parent}:{os.environ["PATH"]}',
+    },
+  )
+
+  task = _running_task(stops[0])
+  assert task['command'] == _WATCH_COMMAND
+  reason = stop_guard.notice(stops[0], [], summoned=False)
+  assert reason is not None
+  assert reason.startswith('A watch runs with no `watch-next` waiting')
+  assert task['id'] in reason
