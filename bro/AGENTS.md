@@ -73,7 +73,8 @@ A subpackage with a map of its own is pointed at, not described here.
   A finite `shell(...)` roster over a blocked shell hands back `Bash` and `Monitor` behind the command gate plus their job controls;
   `shell(ANY)` leaves an unblocked Claude shell unrestricted.
   `quest watch` needs no declaring:
-  for a run that may summon, or a summoned run whose talk lets its summoner say or question or lets the run itself ask, the fold admits it through `Monitor` over any block or narrowing of that tool.
+  for a run that may summon, or a summoned run whose talk lets its summoner say or question or lets the run itself ask,
+  the fold admits `watch-run quest watch` and `watch-next` through `Bash` over any block or narrowing of that tool, with the job controls that stop the watch.
   A persona names another product's tool surface when it withholds or narrows one, so the names live here rather than in each persona that forgoes them
 - `launch/` + `native/bro/launch/` — core owns cross-harness launch primitives;
   `bro-native` owns the in-process `run` / `chat` launchers, chat UIs, and fork-resume flow.
