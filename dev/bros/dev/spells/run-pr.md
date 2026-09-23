@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 7.7.0
+version: 7.8.0
 ---
 
 # run-pr
@@ -406,14 +406,15 @@ poll-pr <owner>/<repo> <pr_number>
   — the PR became unmergeable into its base (GitHub's `mergeable` turned false, typically after something landed on the base).
   Fires once per conflicted episode
   — it re-arms only after the PR turns mergeable again.
-- `{"event": "checks", "pr": N, "failing": [{"name": "...", "conclusion": "...", "url": "..."}]}`
-  — the PR head's check result changed.
+- `{"event": "checks", "pr": N, "head": "...", "failing": [{"name": "...", "conclusion": "...", "url": "..."}]}`
+  — the check result changed on `head`, the PR head it was read for.
   A non-empty `failing` array fires once per red episode;
   an empty array fires once when a non-empty set of check runs has all concluded without failure.
   The green edge re-arms on a new head or a newly pending or failed run.
   Watcher silence is not evidence that checks are green.
 - `{"event": "pushed", "pr": N, "head": "..."}`
-  — the PR's head moved to a new commit.
+  — a push from somewhere other than this checkout moved the PR's head;
+  your own pushes stay silent.
 - `{"event": "comment", "id": N, "user": "...", "body": "...", "path": "...", "url": "..."}`
   — new comment from a party to the review:
   the PR author, the repo owner, or anyone with a review on the PR (self filtered out — a reviewing session hears the author this way).
@@ -566,7 +567,7 @@ nothing is broken, and the approval is still coming.
 handle it as feedback above.
 
 **The head checks.**
-Only a `checks` event with an empty `failing` array on the current head clears this gate.
+Only a `checks` event with an empty `failing` array whose `head` is the current head clears this gate.
 Retain all cleared gates against that head SHA;
 a push invalidates the reviewer, base, and check results together, while a non-empty `failing` array clears the check result.
 Watcher silence is not evidence that checks finished.
@@ -591,14 +592,13 @@ never wait for it to disappear on a re-run you didn't trigger, and never land ar
 — `land-pr` refuses a failed check anyway.
 
 **`checks` event with an empty `failing` array**:
-retain that the current head is green.
+retain that its `head` is green.
 If an APPROVED review already cleared the reviewer and base gates for this same head, resume that handler and chain into the merge;
 otherwise keep watching for review events.
 
 **`pushed` event**:
-clear every gate retained for the previous head, including the reviewer verdict and base decision.
-This is usually your own push of review fixes echoing back — nothing else to do.
-One you didn't cause means someone else pushed to the PR branch (typically the user amending it directly):
+someone else pushed to the PR branch (typically the user amending it directly).
+Clear every gate retained for the previous head, including the reviewer verdict and base decision;
 `git fetch origin` and reset your local branch onto the pushed head before your next commit
 — continuing from the stale head would discard their commits on your next force-with-lease push.
 
