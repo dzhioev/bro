@@ -31,13 +31,15 @@ Claude Code's own harness themed with the session's bro.
 - `statusline.py` — the session-local projector process:
   it renders recording and every owned mission's state into an atomic file while its pid file is live, exits when its runner parent disappears, and holds a session-state lock that serializes resume;
   a runner-side monitor reaps it and clears only the live files that pid still owns, while Claude's refresh command only checks the pid and cats the projection.
-- `watch_guard.py` and `stop_guard.py`
+- `watch_guard.py`, `stop_guard.py`, and `watch_delivery.py`
   — leaf modules invoked by Claude settings through the runner interpreter (`python -m ride.claude.<module>`);
   the watch guard applies a folded finite shell roster to both Bash and Monitor calls,
   and the stop guard is a solo session's `Stop` hook:
   the runner ends a solo session at a turn end with no background task running and only a task's end starts a turn,
   so it blocks a turn end once per turn when a watch runs with no `watch-next` waiting, when missions are in flight with no running task, or when tasks run with neither a mission in flight nor a wait,
-  reading the running tasks off the hook input's undocumented `background_tasks` and naming quest or mission routes for the worker types present.
+  reading the running tasks off the hook input's undocumented `background_tasks` and naming quest or mission routes for the worker types present;
+  the watch delivery is every session's `UserPromptSubmit` hook, attaching a finished `watch-next`'s lines to the task notification that wakes the model.
+- `watch_commands.py` — the patterns matching a shell command line that invokes `watch-run` or `watch-next`.
 
 ## Invariants
 

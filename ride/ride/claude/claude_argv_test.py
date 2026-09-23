@@ -157,8 +157,19 @@ class TestRideSessionLaunch:
     admitted = shlex.split(hook['command'])[-len(QUEST_WATCH_SHELL_COMMANDS) :]
     assert admitted == list(QUEST_WATCH_SHELL_COMMANDS)
 
-  def test_no_narrowing_declares_no_hooks(self):
-    assert 'hooks' not in _settings(_ride_session_launch(_spec(), claude_args=[]).argv)
+  def test_no_narrowing_declares_no_tool_gate(self):
+    assert (
+      'PreToolUse' not in _settings(_ride_session_launch(_spec(), claude_args=[]).argv)['hooks']
+    )
+
+  def test_every_session_attaches_watch_lines_to_task_notifications(self):
+    for spec in (_spec(), _spec(solo=True, hold='unattended', prompt='go')):
+      (entry,) = _settings(_ride_session_launch(spec, claude_args=[]).argv)['hooks'][
+        'UserPromptSubmit'
+      ]
+      (hook,) = entry['hooks']
+      assert 'matcher' not in entry
+      assert shlex.split(hook['command']) == [sys.executable, '-m', 'ride.claude.watch_delivery']
 
   def test_a_solo_session_holds_its_turn_end_through_the_stop_guard(self):
     argv = _ride_session_launch(
@@ -171,7 +182,7 @@ class TestRideSessionLaunch:
     assert shlex.split(hook['command']) == [sys.executable, '-m', 'ride.claude.stop_guard']
 
   def test_an_interactive_session_carries_no_stop_guard(self):
-    assert 'hooks' not in _settings(_ride_session_launch(_spec(), claude_args=[]).argv)
+    assert 'Stop' not in _settings(_ride_session_launch(_spec(), claude_args=[]).argv)['hooks']
 
   def test_a_summoning_solo_session_keeps_both_hook_kinds(self, monkeypatch):
     from bro.bro import BaseBro

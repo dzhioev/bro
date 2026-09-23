@@ -135,6 +135,10 @@ any running task over missions in flight is the wait it should be and passes.
 The stop guard reads `background_tasks`, which Claude Code sends undocumented;
 `ride/ride/claude/stop_guard_llm_test.py` probes it live against the Claude Code release the container pins.
 
+Claude Code notifies a finished background command with the path of its output file, never the output.
+Every session's settings therefore wire `ride.claude.watch_delivery` as its `UserPromptSubmit` hook, which Claude Code also runs on a task notification:
+for a notified `watch-next` it returns the output as additional context, so the woken model has the watch's lines without reading the file.
+
 ## Bro harness
 
 The bro harness drives the selected bro's native LLM loop:
@@ -1104,7 +1108,7 @@ The bro harness's runner resolves a resume's trail from the session's current-tr
 
 ### The claude argv
 
-The builder (`ride/ride/claude/claude_argv.py:build_claude_launch`) assembles the merged `--settings` (fastMode, the statusLine and the attribution opt-out),
+The builder (`ride/ride/claude/claude_argv.py:build_claude_launch`) assembles the merged `--settings` (fastMode, the statusLine, the attribution opt-out, and the hooks),
 the forwarded claude args, prompt seeding, the `--model` / `--effort` / fastMode it reads off the session's claude-code recipe,
 the ride-injected `--append-system-prompt` (see "Auto-injected system prompt"), `--dangerously-skip-permissions` under every `--hold` level but guided,
 the `--mcp-config` mounting the persona's namespaces from the session-local server below, and `--disallowed-tools mcp__claude_ai_*` to keep account-level claude.ai MCP integrations out of the managed session.

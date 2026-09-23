@@ -20,12 +20,9 @@ from typing import Any
 from bro.broker.environment import BROKER_CHANNEL
 from bro.mission import LiveMission, live_mission_line, live_missions
 from bro.summon import summoned
+from ride.claude.watch_commands import WATCH_NEXT, WATCH_RUN
 
 FAILURE_STATUS = 1
-
-
-_WATCH_RUN = re.compile(r'(^|\s)watch-run(\s|$)')
-_WATCH_NEXT = re.compile(r'(^|\s)watch-next(\s|$)')
 
 
 def _running_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -105,8 +102,8 @@ def notice(payload: dict[str, Any], missions: list[LiveMission], *, summoned: bo
   if not isinstance(tasks, list) or not all(isinstance(task, dict) for task in tasks):
     raise ValueError('the Stop hook input carries no background_tasks list')
   running = _running_tasks(tasks)
-  producers = _running(running, _WATCH_RUN)
-  waits = _running(running, _WATCH_NEXT)
+  producers = _running(running, WATCH_RUN)
+  waits = _running(running, WATCH_NEXT)
   if len(producers) > 0 and len(waits) == 0:
     return _unwaited_watch_notice(producers)
   if len(missions) > 0 and len(running) == 0:

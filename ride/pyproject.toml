@@ -29,6 +29,7 @@ dependencies = [
 "ride.claude.statusline" = "ride._entrypoints:ride_claude_statusline"
 "ride.claude.stop-guard" = "ride._entrypoints:ride_claude_stop_guard"
 "ride.claude.trail-recorder" = "ride._entrypoints:ride_claude_trail_recorder"
+"ride.claude.watch-delivery" = "ride._entrypoints:ride_claude_watch_delivery"
 "ride.claude.watch-guard" = "ride._entrypoints:ride_claude_watch_guard"
 "ride.cli" = "ride._entrypoints:ride_cli"
 "ride.dive-in" = "ride._entrypoints:ride_dive_in"
