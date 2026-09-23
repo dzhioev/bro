@@ -125,7 +125,7 @@ this spell only says how a phase differs from a one-shot ask.
 
 - **Never wait inline.** No phase is short enough for a blocking wait:
   send every one detached with `worker.question` in its talk and collect its result through the surface's watch or polling flow.
-  {{iff #harness = claude}}Keep `quest watch` armed.
+  {{iff #harness = claude}}Keep a `watch-next` waiting on the quest watch.
   When it reports a child's question, answer that quest with `quest say --reply-to`.
   Then resume the same `quest check --wait` loop.{{eliff #harness = bro}}Keep the `quest watch` job armed and call `bro::chill` whenever nothing else remains;
   a turn that ends with a phase in flight gets one notice, and the next such turn end ends the run and orphans the phase.

@@ -104,8 +104,9 @@ A subpackage with a map of its own is pointed at, not described here.
   `spell::ask` — the summon UX:
   phrasing → target + self-contained prompt, least-authority talk rights, client pick (the `summon` and `quest` CLIs vs the `summon` and `quest_*` service tools), foreground-vs-background, the question/reply/check loop, and failure relay;
   protocol and enforcement live in `bro/summon.py`, `bro/mission.py`, `bro/quest.py`, `ride/ride/launch_control.py`, and `ride/ride/bro_worker.py`, not in the spell
-  — and `spell::reflect` — the improving half of the loop over what a bro runs under:
-  it reads recorded runs against the definition that drove them (the prompt texts, the bro's declaration, the launch scope) and writes its next version, each edit fixed in place or filed as a task.
+  — `spell::reflect` — the improving half of the loop over what a bro runs under:
+  it reads recorded runs against the definition that drove them (the prompt texts, the bro's declaration, the launch scope) and writes its next version, each edit fixed in place or filed as a task
+  — and `spell::watch` — keeping a command's lines in view for the rest of a run, its per-harness mechanics spliced from the same prompts fragment the session texts splice for the quest watch.
   Development personas ship from `bro-dev`;
   `dev/AGENTS.md` maps them.
   Consumer personas register through the `bro` entry-point group and live in their contributing packages.

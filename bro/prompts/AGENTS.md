@@ -88,12 +88,12 @@ It renders when `bro.summon.party_member()` reads `RIDE_PARTY_MEMBER` from the l
 
 ### Summoner contract
 
-`summoner.md` (top level) has a session that may summon keep the quest watch armed, so every summon's lifecycle and chat remains observable.
-It renders only for a run whose effective allow-list (`bro.summon.effective_may_summon()`) is non-empty, and its body forks by surface:
-the Claude harness holds the watch on a persistent `Monitor`, and bro-native starts `quest watch` as a watch-mode job and chills on its inbox.
+`summoner.md` (top level) has a session that may summon keep the quest watch, so every summon's lifecycle and chat remains observable:
+it splices `fragments/watch.md`, the per-harness mechanics of keeping a command's lines in view, which the `watch` spell of the concrete-Bro family splices too.
+It renders only for a run whose effective allow-list (`bro.summon.effective_may_summon()`) is non-empty.
 The same text states the notification trust rule and tells the summoner how to exchange questions, continue a retained quest, cancel a child, and how a one-shot run ends on its surface:
 native ends when a turn ends with nothing running and nothing in flight and gives one notice otherwise,
-and managed Claude holds while the watch is armed and stops it once every summon has ended.
+and managed Claude ends at a turn end with no background task running, so it stops the watch once every summon has ended.
 
 ### Summoned contract
 
@@ -101,7 +101,7 @@ and managed Claude holds while the watch is armed and stops it once every summon
 It renders only for a run `bro.summon.summoned()` reports as summoned, and hold-neutrally
 — the duty comes with being summoned, so an attended or guided child carries the same text a spawned unattended one does.
 Its `#talk` branches admit only the quest's live moves:
-a speaking summoner reaches managed Claude through Monitor and bro-native through its watch job.
+a speaking summoner reaches the child through the same `fragments/watch.md` mechanics on `quest watch`.
 `worker.say` enables progress, `worker.question` uses the surface's non-blocking watch or bounded consult, and a child without that right raises instead of asking.
 
 ### Hold text
