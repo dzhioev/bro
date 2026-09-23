@@ -157,6 +157,10 @@ def _assistant(text: str, uuid: str = 'a1') -> str:
   )
 
 
+def _attachment(attachment: dict[str, Any], uuid: str = 'x1') -> str:
+  return json.dumps({'type': 'attachment', 'uuid': uuid, 'attachment': attachment})
+
+
 def _args(trail_id: str, **changes: Any) -> dict[str, Any]:
   return {
     'trail_id': trail_id,
@@ -250,6 +254,67 @@ class TestShow:
     assert '[notification: a background job reported]' in output
     assert 'job output' in output
     assert '#1 USER' not in output
+
+  def test_renders_claudes_attachments_as_notices_named_by_their_type(self, capsys):
+    client = FakeClient()
+    client.add_claude(
+      'T1',
+      [
+        _attachment({'type': 'hook_additional_context', 'content': ['the watched lines']}),
+        _attachment({'type': 'total_tokens_reminder', 'text': 'budget left'}),
+      ],
+    )
+
+    assert _command_show(_client(client), _args('T1')) == 0
+
+    output = capsys.readouterr().out
+    assert 'NOTICE · hook_additional_context' in output
+    assert 'the watched lines' in output
+    assert 'NOTICE · total_tokens_reminder' in output
+    assert 'budget left' in output
+
+  def test_a_task_notification_is_a_notice_whether_it_opened_a_turn_or_was_queued(self, capsys):
+    opening = json.dumps(
+      {
+        'type': 'user',
+        'uuid': 'u1',
+        'origin': {'kind': 'task-notification'},
+        'message': {'content': 'the first task ended'},
+      }
+    )
+    queued = _attachment(
+      {
+        'type': 'queued_command',
+        'prompt': 'the second task ended',
+        'commandMode': 'task-notification',
+      }
+    )
+    client = FakeClient()
+    client.add_claude('T1', [opening, queued])
+
+    assert _command_show(_client(client), _args('T1')) == 0
+
+    output = capsys.readouterr().out
+    assert output.count('NOTICE · task-notification') == 2
+    assert 'the first task ended' in output and 'the second task ended' in output
+    assert 'USER' not in output
+
+  def test_a_prompt_typed_mid_turn_is_the_users(self, capsys):
+    queued = _attachment(
+      {
+        'type': 'queued_command',
+        'prompt': 'also check the docs',
+        'commandMode': 'prompt',
+        'origin': {'kind': 'human'},
+      }
+    )
+    client = FakeClient()
+    client.add_claude('T1', [queued])
+
+    assert _command_show(_client(client), _args('T1')) == 0
+
+    output = capsys.readouterr().out
+    assert '#1 USER' in output and 'also check the docs' in output
 
   def test_unknown_id_propagates_not_found(self):
     with pytest.raises(TrailNotFound, match='trail not found'):

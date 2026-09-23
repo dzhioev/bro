@@ -599,7 +599,16 @@ class DisplaySession:
   def _ordinal_for(self, record: DisplayRecord) -> int | None:
     if self.configuration.appearance is not Appearance.REWIND or not isinstance(
       record,
-      (UserInput, Reasoning, InterimAssistantText, AssistantText, ToolCall, ToolResult, Error),
+      (
+        UserInput,
+        Reasoning,
+        InterimAssistantText,
+        AssistantText,
+        ToolCall,
+        ToolResult,
+        Error,
+        Notice,
+      ),
     ):
       return None
     source = record.source
@@ -631,8 +640,13 @@ class DisplaySession:
       return record.trail_id
     if isinstance(record, NativeStep):
       return f'{label} {record.step_id}'
-    if isinstance(record, Notice) and record.level != 'info':
-      return f'{label} · {record.level}'
+    if isinstance(record, Notice):
+      qualifiers = [
+        qualifier
+        for qualifier in (record.level if record.level != 'info' else None, record.event)
+        if qualifier is not None
+      ]
+      return ' · '.join((label, *qualifiers))
     return label
 
   def _timestamp(self, record: DisplayRecord) -> str | None:

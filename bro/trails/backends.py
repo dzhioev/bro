@@ -38,6 +38,9 @@ BRO_STEP_KINDS = frozenset(
 # leaves the trail unrenderable rather than merely odd
 BRO_TEXT_BODY_KINDS = frozenset({'system_prompt', 'user_input', 'notification'})
 
+# the origin claude gives the prompt it writes when a background task finishes
+_CLAUDE_TASK_NOTIFICATION = 'task-notification'
+
 
 @dataclass(frozen=True)
 class ParsedRecord:
@@ -447,6 +450,8 @@ def _claude_user_messages(record: dict, native: dict, message: dict) -> list[dic
       for index, block in enumerate(content)
       if isinstance(block, dict)
     ]
+  if _claude_origin_kind(native.get('origin')) == _CLAUDE_TASK_NOTIFICATION:
+    return [_event(record, 'notification', content=content, event=_CLAUDE_TASK_NOTIFICATION)]
   return [
     _event(
       record,
@@ -461,6 +466,45 @@ def _claude_user_messages(record: dict, native: dict, message: dict) -> list[dic
   ]
 
 
+def _claude_origin_kind(origin: Any) -> Optional[str]:
+  kind = origin.get('kind') if isinstance(origin, dict) else None
+  return kind if isinstance(kind, str) else None
+
+
+def _claude_queued_messages(record: dict, native: dict, queued: dict) -> list[dict]:
+  """a prompt claude delivered mid-turn, projected as the `user` record it
+  writes for one that opens a turn."""
+  # claude's own reading: a queued command without an origin that runs in
+  # task-notification mode is a task notification
+  origin_kind = _claude_origin_kind(queued.get('origin'))
+  if origin_kind is None and queued.get('commandMode') == _CLAUDE_TASK_NOTIFICATION:
+    origin_kind = _CLAUDE_TASK_NOTIFICATION
+  if origin_kind == _CLAUDE_TASK_NOTIFICATION:
+    return [
+      _event(record, 'notification', content=queued.get('prompt'), event=_CLAUDE_TASK_NOTIFICATION)
+    ]
+  return [
+    _event(
+      record,
+      'user_input',
+      content=queued.get('prompt'),
+      isMeta=queued.get('isMeta') is True,
+      isSidechain=native.get('isSidechain', False),
+      interrupted=False,
+    )
+  ]
+
+
+def _claude_attachment_messages(record: dict, native: dict, attachment: dict) -> list[dict]:
+  attachment_type = attachment.get('type')
+  if not isinstance(attachment_type, str):
+    return [_event(record, 'harness_event', raw=native)]
+  if attachment_type == 'queued_command':
+    return _claude_queued_messages(record, native, attachment)
+  payload = {key: value for key, value in attachment.items() if key != 'type'}
+  return [_event(record, 'notification', content=payload, event=attachment_type)]
+
+
 def _claude_project(record: dict) -> list[dict]:
   native = _claude_parse(record).native['record']
   if not isinstance(native, dict):
@@ -470,6 +514,9 @@ def _claude_project(record: dict) -> list[dict]:
     return _claude_assistant_messages(record, native, message)
   if native.get('type') == 'user' and isinstance(message, dict):
     return _claude_user_messages(record, native, message)
+  attachment = native.get('attachment')
+  if native.get('type') == 'attachment' and isinstance(attachment, dict):
+    return _claude_attachment_messages(record, native, attachment)
   return [_event(record, 'harness_event', raw=native)]
 
 
@@ -505,6 +552,7 @@ CLAUDE_ADAPTER = Adapter(
   emitted_message_types=frozenset(
     {
       'user_input',
+      'notification',
       'llm_call',
       'reasoning',
       'assistant',

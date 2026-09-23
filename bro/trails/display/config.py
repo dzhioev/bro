@@ -282,6 +282,7 @@ def _build_presets() -> Mapping[PresetName, DisplayConfig]:
     (RecordKind.TOOL_CALL, 'ASSISTANT'),
     (RecordKind.TOOL_RESULT, 'ASSISTANT'),
     (RecordKind.ERROR, 'ERROR'),
+    (RecordKind.NOTICE, 'NOTICE'),
     (RecordKind.LAUNCH_CONTEXT, 'SESSION CONTEXT'),
   )
   log_limits = ContentLimits(

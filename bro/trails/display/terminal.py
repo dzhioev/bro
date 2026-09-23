@@ -327,6 +327,9 @@ class _TerminalFormatter:
     elif block.style is StyleRole.ERROR:
       role_style = StyleRole.ERROR
       role = self._configuration.labels.for_kind(RecordKind.ERROR)
+    elif block.kind is BlockKind.NOTICE:
+      role_style = StyleRole.NOTICE
+      role = block.label
     else:
       role_style = StyleRole.ASSISTANT
       kind = RecordKind.TOOL_CALL if block.kind is BlockKind.TOOL else RecordKind.ASSISTANT
