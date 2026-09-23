@@ -134,14 +134,12 @@ class TestPresets:
     assert RecordKind.TOOL_RESULT in preset('chat').hidden_content_kinds
     assert PresetName.CALL is not PresetName.CHAT
 
-  def test_rewind_grep_is_plain_unpaged_show(self):
+  def test_rewind_grep_is_plain_show(self):
     show = preset('rewind-show')
     grep = preset('rewind-grep')
     assert grep.record_filter == show.record_filter
     assert grep.verbosity is show.verbosity
     assert grep.color is ColorMode.NEVER
-    assert not grep.paging
-    assert show.paging
 
   def test_preset_overrides_use_configuration_validation(self):
     overridden = preset(

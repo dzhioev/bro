@@ -284,7 +284,7 @@ def _command_grep(client: TrailsStore, args: dict[str, Any]) -> int:
       groups.append('\n'.join(matches))
   if len(groups) > 0:
     separator = f'\n{colors.cyan}--{colors.reset}\n' if has_context else '\n'
-    sys.stdout.write(_window_output(separator.join(groups) + '\n', args))
+    _emit_document(separator.join(groups) + '\n', args, configuration)
     sys.stdout.flush()
   if unrenderable_trails > 0:
     log.warning('%d of %d trails could not be rendered', unrenderable_trails, len(headers))
@@ -311,7 +311,8 @@ def _with_default_command(argv: list[str]) -> list[str]:
   return [argv[0], 'show', *remaining]
 
 
-def _add_color_argument(parser: base_args.Parser) -> None:
+def _add_terminal_arguments(parser: base_args.Parser) -> None:
+  parser.add_argument('--no-pager', action='store_true', help='do not pipe output through a pager')
   parser.add_argument(
     '--color',
     default='auto',
@@ -329,13 +330,13 @@ def _add_output_window_arguments(parser: base_args.Parser) -> None:
   parser.add_argument(
     '--output-limit',
     type=int,
-    help=f'max rendered output lines (default with an offset: {DEFAULT_LIMIT})',
+    help=f'max rendered output lines (default with an offset: {DEFAULT_LIMIT}; '
+    'without either window flag the whole document prints)',
   )
 
 
 def _add_view_arguments(parser: base_args.Parser) -> None:
   parser.add_argument('trail_id', help='trail id (or a legacy claude session id)')
-  parser.add_argument('--no-pager', action='store_true', help='do not pipe output through a pager')
   parser.add_argument(
     '-f',
     '--follow',
@@ -347,7 +348,7 @@ def _add_view_arguments(parser: base_args.Parser) -> None:
     '--interval', type=float, default=2.0, help='seconds between polls with --follow'
   )
   _add_output_window_arguments(parser)
-  _add_color_argument(parser)
+  _add_terminal_arguments(parser)
 
 
 def main(argv: list[str]) -> Optional[int]:
@@ -364,10 +365,7 @@ def main(argv: list[str]) -> Optional[int]:
   list_parser.add_argument('--until', help='ISO timestamp upper bound on started_at')
   list_parser.add_argument('--forked-from', help='list forks of this trail id')
   list_parser.add_argument('--limit', type=int, default=50, help='max trails to list')
-  list_parser.add_argument(
-    '--no-pager', action='store_true', help='do not pipe output through a pager'
-  )
-  _add_color_argument(list_parser)
+  _add_terminal_arguments(list_parser)
   list_parser.set_handler(lambda **args: _dispatch(_command_list, args))
 
   show_parser = subparsers.add_parser(
@@ -406,7 +404,7 @@ def main(argv: list[str]) -> Optional[int]:
     '--limit', type=int, default=None, help='max trails to search (default: all)'
   )
   _add_output_window_arguments(grep_parser)
-  _add_color_argument(grep_parser)
+  _add_terminal_arguments(grep_parser)
   grep_parser.set_handler(lambda **args: _dispatch(_command_grep, args))
 
   tree_parser = subparsers.add_parser(
@@ -414,7 +412,7 @@ def main(argv: list[str]) -> Optional[int]:
   )
   tree_parser.add_argument('trail_id')
   _add_output_window_arguments(tree_parser)
-  _add_color_argument(tree_parser)
+  _add_terminal_arguments(tree_parser)
   tree_parser.set_handler(lambda **args: _dispatch(_command_tree, args))
 
   return parser.dispatch(_with_default_command(argv))

@@ -382,11 +382,9 @@ def _build_presets() -> Mapping[PresetName, DisplayConfig]:
         layout=Layout.LINEAGE_TREE,
         appearance=Appearance.REWIND,
         timestamps=TimestampPolicy.HIDDEN,
+        paging=True,
       ),
-      PresetName.REWIND_GREP: rewind_show.override(
-        color=ColorMode.NEVER,
-        paging=False,
-      ),
+      PresetName.REWIND_GREP: rewind_show.override(color=ColorMode.NEVER),
     }
   )
 
