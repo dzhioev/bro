@@ -32,8 +32,9 @@ class Provisioned:
 class Sink(Protocol):
   """the Broker implements this; the ServerTransport calls it on the event loop.
 
-  Symmetric channel lifecycle: on_connect at accept, on_disconnect on a
-  peer-initiated drop (a host-side close/shutdown suppresses it). on_connect
+  Symmetric channel lifecycle: on_connect at accept, on_disconnect once the
+  channel's serving ends — the peer dropping, a refused frame, or the sink itself
+  raising — except on a host-side close/shutdown, which suppresses it. on_connect
   precedes any on_message for that channel.
   """
 

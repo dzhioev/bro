@@ -7,6 +7,7 @@ import contextlib
 import json
 import signal
 from collections.abc import AsyncGenerator, Callable, Generator
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from bro.base import log
@@ -53,6 +54,12 @@ CANCEL = 'cancel'
 RequestHandler = Callable[['Dispatcher', Peer, Message], None]
 
 
+@dataclass
+class _Invocation:
+  message: Message
+  answer_owed: bool = True
+
+
 class _SupervisorEvents:
   def __init__(self, dispatcher: 'Dispatcher'):
     self._dispatcher = dispatcher
@@ -89,7 +96,7 @@ class Dispatcher:
     self.workers: dict[Peer, str] = {}
     self._supervisors: set[Supervisor] = set()
     self._handlers: dict[str, RequestHandler] = {}
-    self._active: Optional[Message] = None
+    self._active: Optional[_Invocation] = None
     self._root: Optional[Peer] = None
     self._root_supervisor: Optional[Supervisor] = None
     self._root_exit: Optional[asyncio.Future[int]] = None
@@ -124,6 +131,12 @@ class Dispatcher:
 
   def deliver(self, peer: Peer, message: Message) -> None:
     delivered = brotocol.frame_safe_result(message) if message.type == Tag.RESULT else message
+    if (
+      message.type == Tag.RESULT
+      and self._active is not None
+      and self._active.message.request_id == message.request_id
+    ):
+      self._active.answer_owed = False
     self.runtime.send(peer, delivered)
 
   def reply(self, peer: Peer, payload: dict[str, Any]) -> None:
@@ -151,26 +164,24 @@ class Dispatcher:
     talk: Talk,
     timeout: Optional[float],
   ) -> None:
-    record = self._open(owner, type=type, talk=talk)
     supervisor = SpawnedSupervisor(
       self.runtime,
       self._supervisor_events,
-      record.mission_id,
+      self._request_id(),
       launch,
       spawner,
       talk=talk,
       timeout=timeout,
       schedule=self._schedule,
     )
-    self._start_supervisor(supervisor)
+    record = self._supervise(supervisor, owner, type=type, talk=talk)
     self._deliver_record(record, brotocol.mark(record.mission_id, 'accepted'))
 
   def job(self, command: CommandJob, owner: Peer, *, type: str, timeout: Optional[float]) -> None:
-    record = self._open(owner, type=type, talk=EMPTY_TALK)
     supervisor = JobSupervisor(
       self.runtime,
       self._supervisor_events,
-      record.mission_id,
+      self._request_id(),
       command,
       self.job_output,
       self,
@@ -178,7 +189,7 @@ class Dispatcher:
       timeout=timeout,
       schedule=self._schedule,
     )
-    self._start_supervisor(supervisor)
+    record = self._supervise(supervisor, owner, type=type, talk=EMPTY_TALK)
     self._deliver_record(record, brotocol.mark(record.mission_id, 'accepted'))
 
   def expect(
@@ -189,22 +200,37 @@ class Dispatcher:
     talk: Talk,
     ready: Callable[[Provisioned], None],
   ) -> None:
-    record = self._open(owner, type=type, talk=talk)
-    supervisor = ExpectedSupervisor(self.runtime, self._supervisor_events, record.mission_id, ready)
-    self._start_supervisor(supervisor)
+    supervisor = ExpectedSupervisor(
+      self.runtime, self._supervisor_events, self._request_id(), ready
+    )
+    self._supervise(supervisor, owner, type=type, talk=talk)
 
   @contextlib.contextmanager
-  def _as_active(self, message: Message) -> Generator[None]:
+  def _as_active(self, message: Message) -> Generator[_Invocation]:
     previous = self._active
-    self._active = message
+    invocation = _Invocation(message)
+    self._active = invocation
     try:
-      yield
+      yield invocation
     finally:
       self._active = previous
 
   def invoke(self, peer: Peer, message: Message) -> None:
-    with self._as_active(message):
-      self._handlers[message.kind](self, peer, message)
+    with self._as_active(message) as invocation:
+      try:
+        self._handlers[message.kind](self, peer, message)
+      except Exception as error:
+        log.exception(
+          'broker dispatcher: the %r handler failed on request %s',
+          message.kind,
+          message.request_id,
+        )
+        if invocation.answer_owed:
+          self._wire_deny(
+            peer,
+            message.request_id,
+            f'internal error in the {message.kind!r} handler: {type(error).__name__}: {error}',
+          )
 
   def on_message(self, peer: Peer, message: Message) -> None:
     if message.type == Tag.REQUEST:
@@ -419,8 +445,10 @@ class Dispatcher:
     if record.owner is not None and record.owner in self.workers:
       self.deliver(record.owner, message)
 
-  def _open(self, owner: Peer, *, type: str, talk: Talk) -> Record:
-    message = self._active_message()
+  def _supervise(self, supervisor: Supervisor, owner: Peer, *, type: str, talk: Talk) -> Record:
+    """open the request's record under `supervisor`, which answers it from here on."""
+    invocation = self._active_invocation()
+    message = invocation.message
     parent = self.workers.get(owner)
     if parent is None:
       raise RuntimeError(f'cannot open mission for unattributed peer {owner}')
@@ -428,11 +456,21 @@ class Dispatcher:
       message.request_id, message.kind, parent, owner, message.args, type=type, talk=talk
     )
     self.live[record.mission_id] = record
+    try:
+      self._start_supervisor(supervisor)
+    except Exception as error:
+      self._end(
+        record,
+        brotocol.result(record.mission_id, 'failed', error=str(error), detail={'reason': 'launch'}),
+      )
+      self.journal.settle(record)
+      raise
+    invocation.answer_owed = False
     return record
 
   def _start_supervisor(self, supervisor: Supervisor) -> None:
-    self._supervisors.add(supervisor)
     supervisor.begin()
+    self._supervisors.add(supervisor)
 
   def _orphan(self, owner: Peer) -> None:
     for record in [entry for entry in self.live.values() if entry.owner == owner]:
@@ -489,11 +527,15 @@ class Dispatcher:
     return self._active_message().request_id
 
   def _active_message(self) -> Message:
+    return self._active_invocation().message
+
+  def _active_invocation(self) -> _Invocation:
     if self._active is None:
       raise RuntimeError('handler primitive called outside a request handler')
     return self._active
 
   def _track_read(self, coroutine) -> None:
+    self._active_invocation().answer_owed = False
     task = asyncio.create_task(coroutine)
     self._read_tasks.add(task)
     task.add_done_callback(self._read_tasks.discard)

@@ -149,6 +149,32 @@ async def test_spawned_supervisor_binds_before_launch_and_marks_started(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_a_supervisor_whose_deadline_cannot_be_armed_begins_nothing(tmp_path):
+  runtime = FakeRuntime(tmp_path)
+  listener = Listener()
+
+  def refuse(seconds, callback):
+    raise OSError('no timers')
+
+  supervisor = SpawnedSupervisor(
+    cast(Runtime, runtime),
+    listener,
+    'mission',
+    LaunchSpec(),
+    cast(Spawner, runtime),
+    talk=frozenset(),
+    timeout=10,
+    schedule=refuse,
+  )
+  with pytest.raises(OSError):
+    supervisor.begin()
+  await _settle()
+  assert runtime.events is None
+  assert listener.bound == []
+  assert listener.deaths == []
+
+
+@pytest.mark.asyncio
 async def test_spawned_supervisor_folds_started_before_messages_sent_during_launch(tmp_path):
   runtime = FakeRuntime(tmp_path)
   runtime.launch_messages = [

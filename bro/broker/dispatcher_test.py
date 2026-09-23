@@ -171,6 +171,131 @@ def test_unknown_kind_and_lineage_collision_are_denied_without_records():
   assert not dispatcher.journal.knows('unknown')
 
 
+def test_a_raising_handler_is_denied_and_the_next_request_is_served(caplog):
+  dispatcher, runtime = _dispatcher()
+
+  def crash(context, peer, message):
+    raise FileNotFoundError('persona.md')
+
+  dispatcher.on('work', crash)
+  dispatcher.on(PING, ping_handler)
+
+  dispatcher.on_message('requester', _request('work', {}, 'crashed'))
+
+  denial = runtime.sent[-1][1]
+  assert denial.type == Tag.RESULT
+  assert denial.request_id == 'crashed'
+  assert denial.outcome == 'denied'
+  assert 'FileNotFoundError' in denial.payload['error']
+  assert 'persona.md' in denial.payload['error']
+  assert not dispatcher.journal.knows('crashed')
+  assert 'Traceback' in caplog.text
+
+  dispatcher.on_message('requester', _request(PING, {}, 'after'))
+  assert runtime.sent[-1][1].payload == {'outcome': 'ok', 'value': {}}
+
+
+@pytest.mark.asyncio
+async def test_a_handler_raising_after_opening_its_record_gets_no_second_answer(caplog):
+  dispatcher, runtime = _dispatcher()
+
+  def open_then_crash(context, peer, message):
+    context.spawn(
+      LaunchSpec(), cast(Spawner, runtime), peer, talk=frozenset(), type='bro', timeout=None
+    )
+    raise RuntimeError('after open')
+
+  dispatcher.on('work', open_then_crash)
+
+  dispatcher.on_message('requester', _request('work', {}, 'work'))
+  await _settle()
+
+  assert 'after open' in caplog.text
+  assert 'work' in dispatcher.live
+  assert [message.type for _, message in runtime.sent] == ['mark', 'mark']
+
+
+def test_a_handler_raising_after_replying_gets_no_second_answer(caplog):
+  dispatcher, runtime = _dispatcher()
+
+  def reply_then_crash(context, peer, message):
+    context.reply(peer, {'outcome': 'ok'})
+    raise RuntimeError('after reply')
+
+  dispatcher.on('work', reply_then_crash)
+
+  dispatcher.on_message('requester', _request('work', {}, 'work'))
+
+  assert 'after reply' in caplog.text
+  assert [message.payload for _, message in runtime.sent] == [{'outcome': 'ok'}]
+
+
+@pytest.mark.asyncio
+async def test_a_handler_raising_after_deferring_its_answer_gets_no_second_answer(caplog):
+  dispatcher, runtime = _dispatcher()
+  child = dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {}, type='bro')
+
+  def defer_then_crash(context, peer, message):
+    context.query(peer, message)
+    raise RuntimeError('after defer')
+
+  dispatcher.on('work', defer_then_crash)
+
+  dispatcher.on_message('requester', _request('work', {'id': 'child', 'wait': 1}, 'work'))
+
+  assert 'after defer' in caplog.text
+  assert runtime.sent == []
+  dispatcher.journal.end(child, {'outcome': 'ok', 'value': 'answer'})
+  await _settle()
+  assert [
+    message.payload['value']['mission']['result']['value'] for _, message in runtime.sent
+  ] == ['answer']
+
+
+def test_a_primitive_failing_before_supervision_is_denied_without_a_record(caplog):
+  dispatcher, runtime = _dispatcher()
+  dispatcher.on(
+    'work',
+    lambda context, peer, message: context.job(
+      CommandJob(('true',), {}), peer, type='benchmark', timeout=None
+    ),
+  )
+
+  dispatcher.on_message('requester', _request('work', {}, 'work'))
+
+  assert 'no job output' in caplog.text
+  assert runtime.sent[-1][1].outcome == 'denied'
+  assert not dispatcher.journal.knows('work')
+  assert 'work' not in dispatcher.live
+
+
+@pytest.mark.asyncio
+async def test_a_supervisor_failing_to_begin_ends_its_record_with_one_launch_failure(caplog):
+  def refuse(seconds, callback):
+    raise OSError('no timers')
+
+  dispatcher, runtime = _dispatcher(schedule=refuse)
+  dispatcher.on(
+    'work',
+    lambda context, peer, message: context.spawn(
+      LaunchSpec(), cast(Spawner, runtime), peer, talk=frozenset(), type='bro', timeout=None
+    ),
+  )
+
+  dispatcher.on_message('requester', _request('work', {}, 'work'))
+  await _settle()
+
+  assert 'no timers' in caplog.text
+  assert [message.type for _, message in runtime.sent] == ['result']
+  result = runtime.sent[0][1]
+  assert result.outcome == 'failed'
+  assert result.payload['detail']['reason'] == 'launch'
+  assert dispatcher.journal.records['work'].state == 'ended'
+  assert dispatcher.journal.records['work'].settled is True
+  assert 'work' not in dispatcher.live
+  assert runtime.handle is None
+
+
 def test_handler_deny_answers_and_journals_refused_work():
   dispatcher, runtime = _dispatcher()
   dispatcher.on(

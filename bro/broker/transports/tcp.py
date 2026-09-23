@@ -16,12 +16,14 @@ attach raise at the client's constructor instead of silently swallowing
 everything the peer goes on to send.
 
 Concurrency — one event loop, no locks. The server is asyncio-native: each
-accepted connection attaches, fires `Sink.on_connect`, then runs a read task that
-NDJSON-deframes frames into the `Sink`, and `send()` writes through that
-connection's `StreamWriter`. Because everything runs on the single loop, the
-shared per-channel state needs no lock and two coroutines can never interleave a
-partial NDJSON frame. A peer that stops reading is absorbed by its own writer's
-`drain()` backpressure, never by stalling routing to the other peers.
+accepted connection attaches, fires `Sink.on_connect`, then runs a serving task
+that NDJSON-deframes frames into the `Sink` and fires `Sink.on_disconnect` once
+it ends — on the peer leaving, on a refused frame, or on the sink raising — while
+`send()` writes through that connection's `StreamWriter`. Because everything runs
+on the single loop, the shared per-channel state needs no lock and two coroutines
+can never interleave a partial NDJSON frame. A peer that stops reading is absorbed
+by its own writer's `drain()` backpressure, never by stalling routing to the other
+peers.
 
 `TcpClientTransport` is synchronous: a peer is a separate process with no event
 loop of its own.
@@ -153,7 +155,7 @@ async def acknowledge_attach(writer: asyncio.StreamWriter) -> bool:
 @dataclass
 class _Connection:
   writer: asyncio.StreamWriter
-  # the read task; cancelled on a host-side close/shutdown to suppress its EOF on_disconnect
+  # the serving task; cancelled on a host-side close/shutdown to suppress its on_disconnect
   task: asyncio.Task
 
 
@@ -284,13 +286,16 @@ class TcpServerTransport(ServerTransport):
     connection = _Connection(writer=writer, task=task)
     self._connections[channel] = connection
     assert self._sink is not None
-    await self._sink.on_connect(channel)
     try:
+      await self._sink.on_connect(channel)
       await self._read_loop(channel, reader)
+    except Exception:
+      log.exception('broker: serving channel %s failed, dropping it', channel)
     finally:
       if self._connections.get(channel) is connection:  # not already superseded/dropped
         del self._connections[channel]
       writer.close()
+    await self._sink.on_disconnect(channel)
 
   async def _attach(
     self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -310,44 +315,37 @@ class TcpServerTransport(ServerTransport):
       try:
         data = await reader.read(_READ_CHUNK)
       except OSError:
-        await self._notify_disconnect(channel)
         return
       if len(data) == 0:  # peer closed
-        await self._notify_disconnect(channel)
         return
       read_buffer += data
       while True:
         newline_index = read_buffer.find(b'\n')
         if newline_index < 0:
           if len(read_buffer) > MAX_FRAME_BYTES:  # an unterminated frame already over the cap
-            await self._reject_oversize(channel)
+            self._warn_oversize(channel)
             return
           break
         frame = bytes(read_buffer[:newline_index])
         del read_buffer[: newline_index + 1]
         if len(frame) > MAX_FRAME_BYTES:
-          await self._reject_oversize(channel)
+          self._warn_oversize(channel)
           return
         try:
           message = Message.from_bytes(frame)
         except ProtocolError:
           log.warning(f'broker: channel {channel} sent a malformed frame, dropping channel')
-          await self._notify_disconnect(channel)
           return
         assert self._sink is not None
         await self._sink.on_message(channel, message)
 
-  async def _reject_oversize(self, channel: ChannelID) -> None:
+  @staticmethod
+  def _warn_oversize(channel: ChannelID) -> None:
     log.warning(f'broker: channel {channel} sent a frame over {MAX_FRAME_BYTES} bytes, dropping')
-    await self._notify_disconnect(channel)
-
-  async def _notify_disconnect(self, channel: ChannelID) -> None:
-    if self._sink is not None:
-      await self._sink.on_disconnect(channel)
 
   async def _drop_connection(self, channel: ChannelID) -> None:
-    """host-side drop (close/shutdown/supersede): cancel the read task so its EOF
-    does not fire on_disconnect, then close the writer and wait the task out."""
+    """host-side drop (close/shutdown/supersede): cancel the serving task so it
+    fires no on_disconnect, then close the writer and wait the task out."""
     connection = self._connections.pop(channel, None)
     if connection is None:
       return
