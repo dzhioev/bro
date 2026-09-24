@@ -45,7 +45,8 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
 - `tools = [cli('bro list')]` serves one installed CLI command as a generated tool in the `cli` namespace (`cli::bro_list`).
   The command is a program name and any subcommands;
   trailing names narrow what the tool exposes (`cli('bro show', 'name')` withholds `--system-prompt`).
-  Every generated tool also takes `output_offset` / `output_limit`, a window over the command's output, so a command argument of either name must be withheld.
+  Every generated tool also takes `output_offset` / `output_limit`, a window over the command's output, and `timeout_seconds`, after which the command is killed,
+  so a command argument of any of these names must be withheld.
   Nothing is read at declaration:
   the signature is derived at build from the command's own argument declarations, so a command that cannot be read
   — not an installed CLI, a dispatcher rather than a leaf, an argument shape that cannot be described

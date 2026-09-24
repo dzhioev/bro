@@ -4,7 +4,7 @@ import sys
 import pytest
 
 from bro.base.args import Argument, CommandSignature
-from bro.llm.cli_tool import LIMIT, OFFSET, _CommandTool, build_server
+from bro.llm.cli_tool import LIMIT, OFFSET, TIMEOUT, _CommandTool, build_server
 from bro.mcp import cli
 
 
@@ -34,13 +34,15 @@ def _synthetic(*arguments: Argument) -> _CommandTool:
   return _CommandTool('tool_sub', signature, arguments)
 
 
-def _printing(line_count: int) -> _CommandTool:
+def _running(source: str) -> _CommandTool:
   signature = CommandSignature(
-    command=(sys.executable, '-c', f'for index in range({line_count}): print(index)'),
-    description='prints numbered lines',
-    arguments=(),
+    command=(sys.executable, '-c', source), description='runs a snippet', arguments=()
   )
-  return _CommandTool('printing', signature, ())
+  return _CommandTool('running', signature, ())
+
+
+def _printing(line_count: int) -> _CommandTool:
+  return _running(f'for index in range({line_count}): print(index)')
 
 
 class TestDeclaration:
@@ -66,7 +68,7 @@ class TestDeclaration:
 class TestGeneratedSurface:
   def test_globals_are_not_arguments(self):
     tool = _tool('bro list')
-    assert set(tool.parameters['properties']) == {OFFSET, LIMIT}
+    assert set(tool.parameters['properties']) == {OFFSET, LIMIT, TIMEOUT}
     assert tool.parameters['required'] == []
 
   def test_description_carries_the_command_summary(self):
@@ -89,11 +91,13 @@ class TestGeneratedSurface:
     }
 
   def test_exposure_narrows_to_the_named_arguments(self):
-    assert set(_tool('bro show', 'name').parameters['properties']) == {'name', OFFSET, LIMIT}
+    properties = _tool('bro show', 'name').parameters['properties']
+    assert set(properties) == {'name', OFFSET, LIMIT, TIMEOUT}
 
-  def test_exposing_an_output_window_name_raises(self):
-    with pytest.raises(ValueError, match='reserves for its output window'):
-      _synthetic(_argument(LIMIT))
+  @pytest.mark.parametrize('name', [OFFSET, LIMIT, TIMEOUT])
+  def test_exposing_a_tool_parameter_name_raises(self, name):
+    with pytest.raises(ValueError, match='reserves for its own parameters'):
+      _synthetic(_argument(name))
 
   def test_exposure_keeps_the_commands_own_argument_order(self):
     tool = _tool('rewind grep', 'trails', 'color', 'pattern')
@@ -169,9 +173,10 @@ class TestArgv:
     with pytest.raises(ValueError, match='takes one value'):
       _synthetic(_argument('limit'))._argv({'limit': [1, 2]})
 
-  def test_output_window_stays_out_of_the_argv(self):
+  def test_tool_parameters_stay_out_of_the_argv(self):
     tool = _synthetic(_argument('limit'))
-    assert tool._argv({'limit': 5, OFFSET: 2, LIMIT: 3}) == ['tool', 'sub', '--limit=5']
+    values = {'limit': 5, OFFSET: 2, LIMIT: 3, TIMEOUT: 4}
+    assert tool._argv(values) == ['tool', 'sub', '--limit=5']
 
 
 class TestCall:
@@ -202,3 +207,12 @@ class TestCall:
   def test_non_integer_window_raises(self):
     with pytest.raises(ValueError, match='takes an integer'):
       asyncio.run(_printing(1).call({LIMIT: '5'}))
+
+  def test_command_outliving_its_timeout_is_killed(self):
+    blocked = _running('import threading; threading.Event().wait()')
+    result = asyncio.run(blocked.call({TIMEOUT: 1}))
+    assert result.startswith('TIMED OUT after 1s')
+
+  def test_non_positive_timeout_raises(self):
+    with pytest.raises(ValueError, match='must be positive'):
+      asyncio.run(_printing(1).call({TIMEOUT: 0}))

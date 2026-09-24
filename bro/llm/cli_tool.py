@@ -7,7 +7,7 @@ fixed argv — the program and its subcommands come from the declaration, never
 from the model, and no shell interprets it — so a tool reaches the one command
 it was declared for and nothing else. Whether that command is read-only is the
 declaration's business; nothing here constrains it. Beside the command's own
-arguments, every tool takes a window over the command's output.
+arguments, every tool takes a window over the command's output and a timeout.
 """
 
 import subprocess
@@ -20,12 +20,13 @@ from bro.llm.mcp import InProcessMCPServer, Tool
 
 NAMESPACE = 'cli'
 
-TIMEOUT_SECONDS = 45
+DEFAULT_TIMEOUT_SECONDS = 60
 
 OFFSET = 'output_offset'
 LIMIT = 'output_limit'
+TIMEOUT = 'timeout_seconds'
 
-_WINDOW_SCHEMA: dict[str, dict[str, Any]] = {
+_TOOL_SCHEMA: dict[str, dict[str, Any]] = {
   OFFSET: {
     'type': 'integer',
     'minimum': 0,
@@ -39,6 +40,11 @@ _WINDOW_SCHEMA: dict[str, dict[str, Any]] = {
       f'{format_size(BYTE_LIMIT)}'
     ),
   },
+  TIMEOUT: {
+    'type': 'integer',
+    'minimum': 1,
+    'description': f'seconds before the command is killed (default {DEFAULT_TIMEOUT_SECONDS})',
+  },
 }
 
 
@@ -50,11 +56,11 @@ def _description(signature: CommandSignature, arguments: tuple[Argument, ...]) -
     f'runs `{spelled}` and returns its exit code with the command output (stderr '
     f'under a `--- stderr ---` divider). Output past the `{LIMIT}` window is trimmed '
     f'with a skipped-content marker; page through it with `{OFFSET}`{narrowing}. '
-    f'The command is killed after {TIMEOUT_SECONDS}s.'
+    f'The command is killed after `{TIMEOUT}`.'
   )
 
 
-def _window_value(values: dict[str, Any], name: str, default: int) -> int:
+def _integer_value(values: dict[str, Any], name: str, default: int) -> int:
   value = values.get(name)
   if value is None:
     return default
@@ -84,11 +90,11 @@ def _option_argv(option: str, value: str) -> list[str]:
 
 class _CommandTool(Tool):
   def __init__(self, name: str, signature: CommandSignature, arguments: tuple[Argument, ...]):
-    reserved = [argument.name for argument in arguments if argument.name in _WINDOW_SCHEMA]
+    reserved = [argument.name for argument in arguments if argument.name in _TOOL_SCHEMA]
     if len(reserved) > 0:
       raise ValueError(
         f'{" ".join(signature.command)!r} exposes {", ".join(reserved)}, which the tool '
-        'reserves for its output window; withhold it from the exposure'
+        'reserves for its own parameters; withhold it from the exposure'
       )
     self._command = signature.command
     self._arguments = arguments
@@ -98,7 +104,7 @@ class _CommandTool(Tool):
       'type': 'object',
       'properties': {
         **{argument.name: _parameter_schema(argument) for argument in arguments},
-        **_WINDOW_SCHEMA,
+        **_TOOL_SCHEMA,
       },
       'required': [argument.name for argument in arguments if argument.required],
     }
@@ -117,10 +123,10 @@ class _CommandTool(Tool):
 
   def _argv(self, values: dict[str, Any]) -> list[str]:
     known = {argument.name: argument for argument in self._arguments}
-    unknown = sorted(set(values) - set(known) - set(_WINDOW_SCHEMA))
+    unknown = sorted(set(values) - set(known) - set(_TOOL_SCHEMA))
     if len(unknown) > 0:
       raise ValueError(
-        f'unknown arguments: {", ".join(unknown)}; known: {", ".join([*known, *_WINDOW_SCHEMA])}'
+        f'unknown arguments: {", ".join(unknown)}; known: {", ".join([*known, *_TOOL_SCHEMA])}'
       )
     options: list[str] = []
     positionals: list[str] = []
@@ -156,14 +162,20 @@ class _CommandTool(Tool):
 
   async def call(self, arguments: dict[str, Any]) -> str:
     argv = self._argv(arguments)
-    offset = _window_value(arguments, OFFSET, 0)
+    offset = _integer_value(arguments, OFFSET, 0)
     if offset < 0:
       raise ValueError(f'{OFFSET!r} must be non-negative, got {offset}')
-    limit = _window_value(arguments, LIMIT, DEFAULT_LIMIT)
+    limit = _integer_value(arguments, LIMIT, DEFAULT_LIMIT)
+    timeout = _integer_value(arguments, TIMEOUT, DEFAULT_TIMEOUT_SECONDS)
+    if timeout < 1:
+      raise ValueError(f'{TIMEOUT!r} must be positive, got {timeout}')
     try:
-      process = await spawn.run_async(argv, timeout=TIMEOUT_SECONDS)
+      process = await spawn.run_async(argv, timeout=timeout)
     except subprocess.TimeoutExpired:
-      return f'TIMED OUT after {TIMEOUT_SECONDS}s — killed.'
+      return (
+        f'TIMED OUT after {timeout}s — killed. Re-run with a larger {TIMEOUT} if the '
+        'command needs more time.'
+      )
     return spawn.format_result(process, offset=offset, limit=limit)
 
 
