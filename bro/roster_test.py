@@ -120,6 +120,7 @@ async def test_lead_exposes_the_rewind_read_surface_as_generated_commands():
     'trail_id',
     'output_offset',
     'output_limit',
+    'timeout_seconds',
   }
 
 

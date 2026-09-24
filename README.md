@@ -182,14 +182,15 @@ Read the class line by line and nothing is left to configure elsewhere:
 `cli('rewind show', 'trail_id')` reads the arguments `rewind show` declares
 — from its parser, not its help text
 — and serves it as `cli::rewind_show` with the named parameter, the rest withheld,
-beside the window over its output that every generated tool takes.
+beside the output window and timeout that every generated tool takes.
 This is what the model sees:
 
 ```json
 {
   "trail_id": {"type": "string", "description": "trail id (or a legacy claude session id)"},
   "output_offset": {"type": "integer", "minimum": 0, "description": "output lines to skip before the window (default 0)"},
-  "output_limit": {"type": "integer", "description": "max output lines to return (default 100); values above 2,000 are clamped, with the clamp announced inline, and a window also stops at 30.0 KB"}
+  "output_limit": {"type": "integer", "description": "max output lines to return (default 100); values above 2,000 are clamped, with the clamp announced inline, and a window also stops at 30.0 KB"},
+  "timeout_seconds": {"type": "integer", "minimum": 1, "description": "seconds before the command is killed (default 60)"}
 }
 ```
 
