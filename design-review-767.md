@@ -117,13 +117,16 @@ The summon request, the pending manual record, the child's session spec and the 
 so a root started before the upgrade keeps the old rules for every summon it makes.
 
 1. End every running session, finishing first any kept workspace that is to be resumed.
-2. Upgrade every installation that reads `~/.bro.json`.
+2. Upgrade every installation that reads `~/.bro.json`, keeping a copy of the file.
 3. Fix `~/.bro.json` where the upgraded launcher's errors point.
    Each error names the entry and what replaces it:
    - `"grant": ["k+i"]` becomes `"creds": ["k+i"]`, plus `"grant": ["k"]` where the bro doesn't already need `k`;
    - a name some installation doesn't register moves out of `defaults` into the project entries that use it;
    - a credential a summon request used to pass moves into the host config's entry for the summoned bro.
 
+Rolling back is the same flag day in reverse:
+end every session, downgrade every installation, and restore the copy;
+a workspace recorded after the upgrade doesn't resume under the older version.
 A phase verifying this change launches from a root started after the upgrade.
 
 ## What changes in practice
