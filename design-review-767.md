@@ -61,7 +61,8 @@ Rules:
    the configured scope is its needs under the configuration layers, recording's need counted even under `--no-trails`, so a launch's own `--revoke` or `--no-trails` never fails a bro entry.
    A `--cred` for a kind the launch doesn't hold after its own flags fails the same way.
    `defaults` and project `creds` may name kinds a given bro doesn't use.
-   A `$cred` reference inside a loaded value resolves its target through the same picks, whether or not the session holds the target's kind.
+   A `$cred` reference to a kind resolves through the same picks, whether or not the session holds that kind, so an unheld target's pick comes from `defaults` or a project entry;
+   a reference to an instance reads that instance directly.
 4. **Known names.**
    Every name in a layer that applies to a launch must be registered, `defaults` included.
    Reading `~/.bro.json` checks only what holds for every installation, each name's spelling and each entry's shape, so an entry naming a kind this installation doesn't register fails only the launches it applies to.
@@ -71,8 +72,10 @@ Rules:
    An absent name fails too, with one exception:
    an optional kind that no layer picked, whose empty instance isn't present, is skipped.
    A picked instance must be present even when its kind is optional.
-   Grants make nothing required:
-   a held kind is optional exactly when every source that needs it marks it optional.
+   A held kind is optional exactly when some source needs it and every source that needs it marks it optional, so granting an optional need leaves it optional;
+   any other held kind is required, a kind only a grant holds included.
+   The store's own shape is checked whole, as today:
+   a malformed `creds.json` or a material file under a noncanonical name fails every launch that reads the store, whichever kinds it holds.
 6. **Summons.**
    A summon request carries no credential values — no grant, revoke or cred;
    its `@bro` and `:permit` values stay, for #768 to rework.
@@ -92,34 +95,36 @@ In set terms:
 kinds(x)   = needs(x) ∪ grants − revokes                  layer by layer, last word wins
 pick(k)    = the most specific creds / --cred for k, else ε
 held(x)    = { (k, pick(k)) | k ∈ kinds(x) }
-skipped(x) = { (k, ε) | k an optional need, unpicked, (k, ε) not present }
+skipped(x) = { (k, ε) | k optional, unpicked, (k, ε) not present }
 loaded(x)  = held(x) − skipped(x)                          each loads, or the launch fails
+shipped(x) = loaded(x) ∪ the names their kept references reach, transitively
 ```
+
+The session's store holds `shipped(x)`, each name under its kind.
+A value whose `$cred` chain reaches a minting source ships with its references kept, and their targets ship with it;
+a kept reference must name a kind, since the session's store is kind-addressed.
+Any other reference is expanded into the value that holds it.
+Install hooks apply to the kinds of `loaded(x)` alone, never to a kind only a kept reference ships.
 
 Rollout:
 
-Three contracts meet more than one framework version.
+The change ships as a flag day, every installation at once:
+mixed versions aren't kept working.
+Two formats are read by versions other than the one that wrote them, and neither stays readable across the change, in either direction:
+`~/.bro.json`, which every installation on the host reads whole, and the resume record, which `ride resume` loads with whichever installation runs it
+— unless the record names a materialized runtime, which `ride resume` re-executes into before loading it.
+The summon request, the pending manual record, the child's session spec and the scoped store stay inside one party, which runs its root's frozen runtime for its whole life;
+so a root started before the upgrade keeps the old rules for every summon it makes.
 
-- `~/.bro.json`, which every installation on the host parses whole:
-  this checkout's, the frozen runtime of every root still running, whose broker re-reads the file at each summon, and those of other repositories pinning an older framework.
-  An older reader refuses an entry that names one kind in both `creds` and `grant`, and this change refuses a grant naming an instance.
-- The resume record, which `ride resume` loads with whichever installation runs it.
-  Its session spec gains the recorded `--cred` values, and a record loads only when its fields match exactly, so a workspace recorded before this change doesn't resume under it.
-- The summon request, the pending manual record, the child's session spec and the scoped store, which never meet a mixed version:
-  a party runs its root's frozen runtime for its whole life, and a manual child re-executes into its token's runtime.
-  So a party whose root started before the upgrade keeps the old rules for every summon it makes, and a phase verifying this change launches from an upgraded installation.
+1. End every running session, finishing first any kept workspace that is to be resumed.
+2. Upgrade every installation that reads `~/.bro.json`.
+3. Fix `~/.bro.json` where the upgraded launcher's errors point.
+   Each error names the entry and what replaces it:
+   - `"grant": ["k+i"]` becomes `"creds": ["k+i"]`, plus `"grant": ["k"]` where the bro doesn't already need `k`;
+   - a name some installation doesn't register moves out of `defaults` into the project entries that use it;
+   - a credential a summon request used to pass moves into the host config's entry for the summoned bro.
 
-The order:
-
-1. Rewrite each config instance grant, `"grant": ["k+i"]`, into a spelling both versions read the same way:
-   `"creds": ["k+i"]` alone where the bro already needs `k`;
-   otherwise the pick and a bare `"grant": ["k"]` in two entries that both apply to the launch, such as the pick in the project entry and the grant in the bro entry.
-2. End each running root that passes a credential in a summon request, such as a lead in its verify phase:
-   once step 3 gives that credential to the summoned bro, the old rules refuse the root's own grant of it as a no-op.
-   Finish any kept workspace that is to be resumed.
-3. Upgrade every installation that reads the host config, and move each credential a summon request passed into the host config's entry for the summoned bro, in the spellings of step 1.
-   Roots still running on the old runtime keep working on the rewritten file.
-4. Once no older installation reads the file, a pick and its grant may share one entry.
+A phase verifying this change launches from a root started after the upgrade.
 
 ## What changes in practice
 
