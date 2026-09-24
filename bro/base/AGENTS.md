@@ -48,8 +48,9 @@ run those with `--help` for flags.
   An `Attachment` carries a checkout path, a git URL, or both, and every entry either identity names applies
   — which is what lets a `projects` key written as a repository URL follow the checkout across machines.
   The caller supplies both identities, since this layer invokes no git.
-  Every result carries kind → instance, kind → choosing layer, and the matching idempotent grant/revoke layers;
-  config validation is grammar-only for credential and bro names so unknown names survive shared dotfiles.
+  Every result carries kind → instance, kind → choosing layer, and the matching credential-pick/grant/revoke layers.
+  File reads validate grammar without installation registries;
+  a managed launch validates every credential name in its applicable layers so consumer-specific project entries can coexist in shared dotfiles.
   `llm_presets()` reads the host-wide `--llm` preset names (`bro/launch/llm_flags.py` merges them over the operated project's own table),
   `launch_llm(attachment, bro)` the recipes the matching `bros` entries name for one bro, carried as written for that same module to lay a launch's flags over,
   and `summon_depth(project_depth)` resolves the host override over the project value and framework default.

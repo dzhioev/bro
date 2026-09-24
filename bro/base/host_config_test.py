@@ -162,14 +162,14 @@ class TestTwoIdentities:
       config_file,
       tmp_path,
       path_entry={'bros': {'reviewer': {'creds': ['github+laptop']}}},
-      url_entry={'bros': {'reviewer': {'grant': ['github+reviewer', 'aws']}}},
+      url_entry={'bros': {'reviewer': {'creds': ['github+reviewer'], 'grant': ['github', 'aws']}}},
     )
 
     selected = host_config.launch_selection(attachment, 'reviewer')
 
     assert selected.instances == {'github': 'laptop'}
     assert selected.layers == {'github': host_config.PROJECT_PATH_BRO_LAYER}
-    assert selected.grants == {'github', 'aws'}
+    assert selected.scope_layers[0].grant == ('github', 'aws')
 
   def test_a_path_naming_no_entry_still_reads_the_url_entry(self, config_file, tmp_path):
     config_file({'projects': {self.URL: {'creds': ['brog+github']}}})
@@ -234,13 +234,13 @@ class TestLaunchSelection:
 
     assert selected.instances == {'trails': 'write', 'github': 'project'}
 
-  def test_a_bro_grant_selects_its_instance_and_grants_the_kind(self, config_file, tmp_path):
+  def test_a_bro_can_pick_and_grant_the_same_kind(self, config_file, tmp_path):
     config_file(
       {
         'projects': {
           str(tmp_path): {
             'creds': ['github+project'],
-            'bros': {'reviewer': {'grant': ['github+reviewer']}},
+            'bros': {'reviewer': {'creds': ['github+reviewer'], 'grant': ['github']}},
           }
         }
       }
@@ -250,7 +250,7 @@ class TestLaunchSelection:
 
     assert selected.instances == {'github': 'reviewer'}
     assert selected.layers == {'github': host_config.PROJECT_PATH_BRO_LAYER}
-    assert selected.grants == {'github'}
+    assert selected.scope_layers[-1].grant == ('github',)
 
   def test_a_bare_grant_reads_the_instance_the_other_layers_select(self, config_file, tmp_path):
     config_file(
@@ -268,16 +268,20 @@ class TestLaunchSelection:
 
     assert selected.instances == {'github': 'project'}
     assert selected.layers == {'github': host_config.PROJECT_PATH_LAYER}
-    assert selected.grants == {'github'}
+    assert selected.scope_layers[-1].grant == ('github',)
 
   def test_another_bros_grant_does_not_reach_the_launch(self, config_file, tmp_path):
     config_file(
-      {'projects': {str(tmp_path): {'bros': {'reviewer': {'grant': ['github+reviewer']}}}}}
+      {
+        'projects': {
+          str(tmp_path): {'bros': {'reviewer': {'creds': ['github+reviewer'], 'grant': ['github']}}}
+        }
+      }
     )
     attachment = host_config.Attachment(path=str(tmp_path))
 
-    assert host_config.launch_selection(attachment, 'developer').grants == frozenset()
-    assert host_config.project_selection(attachment).grants == frozenset()
+    assert host_config.launch_selection(attachment, 'developer').scope_layers == ()
+    assert host_config.project_selection(attachment).scope_layers == ()
 
 
 class TestScopeLayers:
@@ -290,7 +294,8 @@ class TestScopeLayers:
             'revoke': [':bro.party.join'],
             'bros': {
               'dev': {
-                'grant': ['github+work', ':bro.party.start.unboxed'],
+                'creds': ['github+work'],
+                'grant': ['github', ':bro.party.start.unboxed'],
                 'revoke': ['@reviewer'],
               }
             },
@@ -306,8 +311,9 @@ class TestScopeLayers:
       host_config.ScopeLayer(grant=(':bro.party.join', '@reviewer')),
       host_config.ScopeLayer(revoke=(':bro.party.join',)),
       host_config.ScopeLayer(
-        grant=('github+work', ':bro.party.start.unboxed'),
+        grant=('github', ':bro.party.start.unboxed'),
         revoke=('@reviewer',),
+        creds=('github+work',),
       ),
     )
 
@@ -480,19 +486,24 @@ class TestValidation:
     with pytest.raises(ValueError, match="selects kind 'brog' twice"):
       host_config.tool_selection(None)
 
-  def test_two_grants_of_one_kind_are_rejected(self, config_file):
-    config_file({'projects': {'/repo': {'bros': {'dev': {'grant': ['github+a', 'github']}}}}})
+  def test_repeated_credential_grants_are_harmless(self, config_file):
+    config_file({'projects': {'/repo': {'bros': {'dev': {'grant': ['github', 'github']}}}}})
 
-    with pytest.raises(ValueError, match='scope name is granted more than once'):
-      host_config.tool_selection(None)
+    selected = host_config.launch_selection(host_config.Attachment(path='/repo'), 'dev')
 
-  def test_a_kind_both_selected_and_granted_by_one_bro_is_rejected(self, config_file):
+    assert selected.scope_layers == (host_config.ScopeLayer(grant=('github', 'github')),)
+
+  def test_a_kind_may_be_selected_and_granted_by_one_bro(self, config_file):
     config_file(
-      {'projects': {'/repo': {'bros': {'dev': {'creds': ['github+a'], 'grant': ['github+b']}}}}}
+      {'projects': {'/repo': {'bros': {'dev': {'creds': ['github+a'], 'grant': ['github']}}}}}
     )
 
-    with pytest.raises(ValueError, match="names kind 'github' in both creds and grant"):
-      host_config.tool_selection(None)
+    selected = host_config.launch_selection(host_config.Attachment(path='/repo'), 'dev')
+
+    assert selected.instances == {'github': 'a'}
+    assert selected.scope_layers == (
+      host_config.ScopeLayer(grant=('github',), creds=('github+a',)),
+    )
 
   def test_a_grant_may_name_a_summon_target(self, config_file):
     config_file({'projects': {'/repo': {'bros': {'dev': {'grant': ['@reviewer']}}}}})

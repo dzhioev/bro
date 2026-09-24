@@ -41,7 +41,7 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
   They add the mission id and talk environment, bound child output, handle process-group and record-checked exec kills, and share the party-member registry.
   The module owns a started unboxed child's lifetime workspace lock and throwaway-workspace or joined-member record teardown.
   It also owns a boxed member's local-trail adoption into the ride's host store, private-credential teardown, terminal ownership, and launcher-log redirection.
-- `store.py` — scoped credential tiers, override finalization, directory materialization, and container tar packing
+- `store.py` — scoped credential tiers, directory materialization, and container tar packing
 - `launch_smoke_test.py` — host-only cold-image launch check, run by the gate's Docker stage
 - `host_docker_test_helper.py` — the checkout to build from, a throwaway root the daemon can bind-mount, the host's daemon endpoint, and the host-only skips
   — what a test driving the real docker daemon needs from the host it runs on

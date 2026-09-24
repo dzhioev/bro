@@ -251,6 +251,7 @@ def _start_mode(
     args['env'] = env_assignments(args['env'])
   except (LLMSelectionError, ValueError) as error:
     parser.error(str(error))
+  args['cred'] = args['cred'] or []
   args['grant'] = args['grant'] or []
   args['revoke'] = args['revoke'] or []
   bro = args.pop('bro')
@@ -375,7 +376,12 @@ def main(argv: list[str]) -> Optional[int]:
   if command == 'list':
     return list_workspaces()
   if command == 'resume':
-    return resume_session(args['name'], grant=args['grant'] or [], revoke=args['revoke'] or [])
+    return resume_session(
+      args['name'],
+      cred=args['cred'] or [],
+      grant=args['grant'] or [],
+      revoke=args['revoke'] or [],
+    )
   if command == 'clean':
     return clean_workspaces(force=args['force'], dry_run=args['dry_run'], names=args['names'])
   if command == 'check-clean':

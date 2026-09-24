@@ -129,5 +129,6 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   clean exit removes its records, failure or kill keeps them, and an unboxed member's private credential root is always removed while a boxed member's store dies with the party's container.
   The party ends with its first session, so that session's teardown kills any members still running, whichever spawner runs them.
 - The framework seed permits boxed party starts.
-  Project and host configuration layers apply idempotently before strict launch/request overrides, and every launch exports the effective set through `RIDE_PERMITS` while summon control enforces its own peer-facts copy.
+  Credential grants and revokes apply idempotently through the project, host, launch, and resume layers;
+  summon allow-lists and permits keep strict launch/request overrides, and every launch exports the effective permit set through `RIDE_PERMITS` while summon control enforces its own peer-facts copy.
 - Every console script this distribution ships wraps its `main` in `ride.cli.reports_runtime_errors`, so unusable runtime locations and workspace records fail as CLI errors.

@@ -3,11 +3,15 @@ from bro.base.args import Parser
 
 
 class TestForwardedFlags:
-  def test_extract_forwarded_argv_round_trips_grant_revoke(self):
+  def test_extract_forwarded_argv_round_trips_cred_grant_revoke(self):
     parser = Parser(add_help=False)
     ride_flags.add_forwarded_flags(parser)
-    args = vars(parser.parse_args(['--grant', 'a', '--grant', '@dev', '--revoke', 'c']))
+    args = vars(
+      parser.parse_args(['--cred', 'a+work', '--grant', 'a', '--grant', '@dev', '--revoke', 'c'])
+    )
     assert ride_flags.extract_forwarded_argv(args) == [
+      '--cred',
+      'a+work',
       '--grant',
       'a',
       '--grant',

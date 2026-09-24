@@ -12,7 +12,6 @@ import tarfile
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Optional
 
 from bro.base import credentials, log
 
@@ -37,63 +36,6 @@ class ScopedSecrets:
           f'credential scope entry {name!r} names an instance; use kind {kind!r} '
           'and put its instance in the selection'
         )
-
-
-def credential_revoke_kind(name: str) -> str:
-  kind, instance = credentials.parse_name(name)
-  if instance is not None:
-    raise ValueError(
-      f'cannot revoke credential instance {name!r}; revoke its kind instead (--revoke {kind})'
-    )
-  return kind
-
-
-def grant_instances(grant: list[str]) -> dict[str, Optional[str]]:
-  """kind → the instance a grant spells, None for a bare kind grant; a kind
-  granted more than once raises."""
-  grants: dict[str, Optional[str]] = {}
-  for name in grant:
-    kind, instance = credentials.parse_name(name)
-    if kind in grants:
-      raise ValueError(f'credential kind {kind!r} is granted more than once')
-    grants[kind] = instance
-  return grants
-
-
-def finalize_scoped_secrets(
-  scoped: ScopedSecrets, *, grant: list[str], revoke: list[str], strict: bool = True
-) -> ScopedSecrets:
-  scoped_kinds = scoped.required | scoped.optional
-  grants = grant_instances(grant)
-
-  revoke_kinds = [credential_revoke_kind(name) for name in revoke]
-
-  both = sorted(grants.keys() & set(revoke_kinds))
-  if len(both) > 0:
-    raise ValueError(f'cannot grant and revoke the same credential kind: {", ".join(both)}')
-
-  selection = dict(scoped.selection)
-  required = set(scoped.required)
-  optional = set(scoped.optional)
-  for kind, instance in grants.items():
-    if instance is None:
-      if strict and kind in scoped_kinds:
-        raise ValueError(f'cannot grant {kind!r}: already in the scoped credential set')
-    elif strict and kind in required and selection.get(kind, '') == instance:
-      name = credentials.storage_name(kind, instance)
-      raise ValueError(f'cannot grant {name!r}: already selected in the scoped credential set')
-    else:
-      selection[kind] = instance
-    required.add(kind)
-    optional.discard(kind)
-
-  for kind in revoke_kinds:
-    if strict and kind not in required and kind not in optional:
-      raise ValueError(f'cannot revoke {kind!r}: not in the scoped credential set')
-    required.discard(kind)
-    optional.discard(kind)
-
-  return ScopedSecrets(required=required, optional=optional, selection=selection)
 
 
 def log_scoped_secrets(subject: str, required: Collection[str], optional: Collection[str]) -> None:

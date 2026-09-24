@@ -1,4 +1,3 @@
-import dataclasses
 import json
 import subprocess
 from typing import Any, ClassVar
@@ -76,11 +75,9 @@ class TestScopedSecrets:
     scoped = ride.scope.scoped_secrets('dev', BRO_RUN_RECIPE)
     assert 'openai' in scoped.required
 
-  def test_bro_run_optional_tier_carries_the_bros_optional_secrets(self):
-    # searchable data sources advertise openai best-effort for the query-focused
-    # fetch summary
+  def test_a_required_llm_need_outranks_the_bros_optional_need(self):
     scoped = ride.scope.scoped_secrets('scope-search', BRO_RUN_RECIPE)
-    assert 'openai' in scoped.optional
+    assert 'openai' in scoped.required
 
   def test_project_scope_layer_changes_the_required_credential_tier(self, tmp_path):
     (tmp_path / 'pyproject.toml').write_text(
@@ -264,10 +261,14 @@ class TestHostConfigBroLayer:
   def _scope(self, tmp_path, recipe=CLAUDE_RECIPE):
     return ride.scope.scoped_secrets('scope-search', recipe, attachment=str(tmp_path))
 
-  def test_a_grant_adds_an_undeclared_kind_to_the_required_tier_under_its_instance(
+  def test_a_pick_and_grant_add_an_undeclared_kind_to_the_required_tier(
     self, tmp_path, monkeypatch
   ):
-    self._host_config(tmp_path, monkeypatch, {'grant': ['github+reviewer']})
+    self._host_config(
+      tmp_path,
+      monkeypatch,
+      {'creds': ['github+reviewer'], 'grant': ['github']},
+    )
 
     scoped = self._scope(tmp_path)
 
@@ -282,34 +283,44 @@ class TestHostConfigBroLayer:
     assert 'github' in scoped.required
     assert scoped.selection['github'] == 'project'
 
-  def test_a_grant_promotes_an_optional_kind(self, tmp_path, monkeypatch):
-    self._host_config(tmp_path, monkeypatch, {'grant': ['openai+work']})
+  def test_a_grant_does_not_promote_an_optional_need(self, tmp_path, monkeypatch):
+    self._host_config(
+      tmp_path,
+      monkeypatch,
+      {'creds': ['openai+work'], 'grant': ['openai']},
+    )
 
     scoped = self._scope(tmp_path)
 
-    assert 'openai' in scoped.required
-    assert 'openai' not in scoped.optional
+    assert 'openai' in scoped.optional
+    assert 'openai' not in scoped.required
     assert scoped.selection['openai'] == 'work'
 
-  def test_a_grant_of_a_declared_kind_selects_its_instance(self, tmp_path, monkeypatch):
-    self._host_config(tmp_path, monkeypatch, {'grant': ['catalog+shared']})
+  def test_a_pick_selects_the_instance_of_a_declared_kind(self, tmp_path, monkeypatch):
+    self._host_config(tmp_path, monkeypatch, {'creds': ['brave+shared']})
 
     scoped = self._scope(tmp_path)
 
-    assert 'catalog' in scoped.required
-    assert scoped.selection['catalog'] == 'shared'
+    assert 'brave' in scoped.required
+    assert scoped.selection['brave'] == 'shared'
 
-  def test_a_flag_grant_of_a_granted_kind_stays_a_no_op(self, tmp_path, monkeypatch):
-    self._host_config(tmp_path, monkeypatch, {'grant': ['github+reviewer']})
+  def test_a_flag_grant_of_a_granted_kind_is_harmless(self, tmp_path, monkeypatch):
+    self._host_config(
+      tmp_path,
+      monkeypatch,
+      {'creds': ['github+reviewer'], 'grant': ['github']},
+    )
 
-    with pytest.raises(ValueError, match='already selected'):
-      ride.scope.scoped_secrets(
-        'scope-search',
-        CLAUDE_RECIPE,
-        attachment=str(tmp_path),
-        grant=['github+reviewer'],
-        revoke=[],
-      )
+    scoped = ride.scope.scoped_secrets(
+      'scope-search',
+      CLAUDE_RECIPE,
+      attachment=str(tmp_path),
+      grant=['github'],
+      revoke=[],
+    )
+
+    assert 'github' in scoped.required
+    assert scoped.selection['github'] == 'reviewer'
 
   def test_a_selection_of_an_unread_kind_fails_naming_grant(self, tmp_path, monkeypatch):
     self._host_config(tmp_path, monkeypatch, {'creds': ['github+reviewer']})
@@ -343,15 +354,29 @@ class TestHostConfigBroLayer:
     assert 'openai' in scoped.optional
     assert scoped.selection['openai'] == 'work'
 
-  def test_a_trails_selection_survives_a_dropped_baseline(self, tmp_path, monkeypatch):
+  def test_a_trails_selection_is_valid_even_when_this_launch_does_not_record(
+    self, tmp_path, monkeypatch
+  ):
     self._host_config(tmp_path, monkeypatch, {'creds': ['trails+review']})
 
-    scoped = self._scope(
-      tmp_path, dataclasses.replace(CLAUDE_RECIPE, optional_baseline=frozenset())
+    scoped = ride.scope.scoped_secrets(
+      'scope-search', CLAUDE_RECIPE, attachment=str(tmp_path), recording=False
     )
 
     assert 'trails' not in scoped.optional
     assert scoped.selection['trails'] == 'review'
+
+  def test_a_bro_pick_rejected_by_the_configured_fold_fails(self, tmp_path, monkeypatch):
+    self._host_config(
+      tmp_path,
+      monkeypatch,
+      {'creds': ['trails+review'], 'revoke': ['trails']},
+    )
+
+    with pytest.raises(ride.scope.LaunchScopeError, match=r'selects trails\+review.*"grant"'):
+      ride.scope.scoped_secrets(
+        'scope-search', CLAUDE_RECIPE, attachment=str(tmp_path), recording=False
+      )
 
   def test_a_project_selection_of_an_unread_kind_is_carried(self, tmp_path, monkeypatch):
     self._host_config(tmp_path, monkeypatch, {})
@@ -404,14 +429,12 @@ class TestScopeOverrides:
     assert scoped.selection == {'brog': 'github', 'github': 'reviewer'}
     assert 'brog' in scoped.required
 
-  def test_more_specific_creds_selection_outweighs_an_earlier_instance_grant(
-    self, tmp_path, monkeypatch
-  ):
+  def test_more_specific_creds_selection_outweighs_an_earlier_pick(self, tmp_path, monkeypatch):
     config = tmp_path / 'bro.json'
     config.write_text(
       json.dumps(
         {
-          'defaults': {'grant': ['github+default']},
+          'defaults': {'creds': ['github+default'], 'grant': ['github']},
           'projects': {str(tmp_path): {'creds': ['github+project']}},
         }
       )
@@ -463,17 +486,41 @@ class TestScopeOverrides:
     assert 'brog' in scoped.required
     assert scoped.selection == {}
 
-  def test_a_granted_instance_selects_it_for_the_child(self, tmp_path, monkeypatch):
+  def test_a_launch_pick_selects_the_held_kind_for_the_child(self, tmp_path, monkeypatch):
     self._host_config(tmp_path, monkeypatch, {str(tmp_path / 'other'): {'creds': ['brog+github']}})
     scoped = ride.scope.scoped_secrets(
-      'bro-dev', CLAUDE_RECIPE, attachment=None, grant=['brog+github'], revoke=[]
+      'bro-dev', CLAUDE_RECIPE, attachment=None, cred=['brog+github'], revoke=[]
     )
     assert 'brog' in scoped.required
     assert scoped.selection['brog'] == 'github'
 
-  def test_a_bare_grant_of_a_scoped_kind_is_a_no_op_failure(self):
-    with pytest.raises(ValueError, match='already in the scoped credential set'):
-      ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, grant=['github'])
+  def test_a_bare_grant_of_a_scoped_kind_is_harmless(self):
+    scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, grant=['github'])
+    assert 'github' in scoped.required
+
+  def test_repeated_grants_and_absent_revokes_are_harmless(self):
+    scoped = ride.scope.scoped_secrets(
+      'bro-dev',
+      CLAUDE_RECIPE,
+      grant=['github', 'github'],
+      revoke=['aws', 'aws'],
+    )
+    assert 'github' in scoped.required
+    assert 'aws' not in scoped.required | scoped.optional
+
+  def test_an_instance_spelled_grant_names_the_flag_replacement(self):
+    with pytest.raises(
+      ride.scope.LaunchScopeError,
+      match=r'--grant github\+work.*--cred github\+work plus --grant github',
+    ):
+      ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, grant=['github+work'])
+
+  def test_a_pick_of_an_unheld_kind_names_the_grant(self):
+    with pytest.raises(
+      ride.scope.LaunchScopeError,
+      match=r'--cred selects aws\+work.*add --grant aws',
+    ):
+      ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, cred=['aws+work'])
 
   def test_the_bro_halves_of_the_overrides_do_not_reach_the_scope(self):
     scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, grant=['@dev'], revoke=['@bro'])
@@ -483,7 +530,7 @@ class TestScopeOverrides:
 
 class TestScopeEvaluatesUnderTheLaunchSelection:
   # the gate credential is stored under one instance only, so it resolves for a
-  # launch exactly when a layer or a grant selects that instance
+  # launch exactly when a layer or --cred selects that instance
   def _host(self, tmp_path, monkeypatch, *, bros):
     store = tmp_path / 'store'
     material = store / credentials.MATERIAL_DIR / f'gate+reviewer{credentials.MATERIAL_SUFFIX}'
@@ -513,12 +560,17 @@ class TestScopeEvaluatesUnderTheLaunchSelection:
     assert 'payload' not in scoped.required
     assert 'gate' in scoped.optional
 
-  def test_an_instance_grant_selects_the_gated_component(self, tmp_path, monkeypatch):
+  def test_a_pick_and_grant_select_the_gated_component(self, tmp_path, monkeypatch):
     self._host(tmp_path, monkeypatch, bros={})
     scoped = ride.scope.scoped_secrets(
-      'scope-gated', CLAUDE_RECIPE, attachment=str(tmp_path), grant=['gate+reviewer']
+      'scope-gated',
+      CLAUDE_RECIPE,
+      attachment=str(tmp_path),
+      cred=['gate+reviewer'],
+      grant=['gate'],
     )
-    assert {'gate', 'payload'} <= scoped.required
+    assert 'payload' in scoped.required
+    assert 'gate' in scoped.optional
     assert scoped.selection['gate'] == 'reviewer'
 
   def test_a_revoked_gate_leaves_its_component_out(self, tmp_path, monkeypatch):
