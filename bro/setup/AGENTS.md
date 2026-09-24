@@ -117,7 +117,7 @@ The optional host config selects stored credential instances and layers session 
       "grant": ["@reviewer"],
       "bros": {
         "bro-eyebro": {"creds": ["github+reviewer"], "revoke": [":bro.party.join"]},
-        "eyebro": {"grant": ["github+reviewer"], "llm": "openai:sol:xhigh"}
+        "eyebro": {"creds": ["github+reviewer"], "grant": ["github"], "llm": "openai:sol:xhigh"}
       }
     },
     "/home/me/projects/bro": {
@@ -139,27 +139,32 @@ Every selection list is named `creds`.
 An entry is `kind+instance`, its instance left empty (`kind+`) to select the kind's empty instance;
 one list may name a kind once.
 `defaults`, each project entry, and each `bros.<bro>` entry may also carry `grant` and `revoke` in the full launch-scope grammar:
-a credential kind changes the required tier, an instance-spelled grant also selects that instance, `@bro` changes the summon allow-list, and a `:permit` leaf changes party authority.
+a bare credential kind changes whether the scope holds it, `@bro` changes the summon allow-list, and a `:permit` leaf changes party authority.
+Credential grants and revokes cannot name instances;
+use `creds` to pick an instance and add a bare grant only when the consumer does not already need the kind.
 Worker permits have the form `:<type>.<leaf>`, with one or more dot-separated leaf segments.
 The bro type declares `:bro.party.start.boxed`, `:bro.party.start.unboxed`, and `:bro.party.join`, while the webview type declares `:webview.vnc`;
 `:bro` is malformed and `:bro.party` names an undeclared leaf rather than expanding to its descendants.
-A bro's `creds` selects only among the kinds its launch reads;
+A bro's `creds` selects only among the kinds its configured scope holds;
 a selection of any other kind fails the launch and names `grant`, since it would otherwise sit inert.
-An entry names a credential kind in `creds` or in `grant`, not both.
+The same entry may pick and grant a kind.
 A `bros` entry may also carry `llm`, the recipe the bro runs by default on this project, in the `--llm` grammar.
 It fills what the launch leaves unnamed:
 a launch naming a provider or a model keeps its own pair, an effort or `+fast` it does not name is read from the entry, the path entry fills before the URL entry, and whatever no layer names keeps the bro's declared recipe.
 The settled recipe is what the session records and forwards, so a summon of the bro in the project and `ride scope` read the same entry, while `bro run` and `bro chat` attach to no project and read none.
 A recipe the selected harness cannot run fails the launch as an explicit `--llm` would, and a malformed one fails the launch that reads it, naming the entry.
 The retired `instances` field is rejected with `creds` named as its replacement.
-Validation is grammar-only for credential and bro names, so shared dotfiles may carry names an installation does not register, and a recipe is carried as written for the launch to parse.
+The file read validates credential and bro name grammar without consulting an installation's registries.
+Each launch then requires every credential name in every applicable layer to be registered;
+this lets one shared file carry consumer-specific names in project entries without letting an inapplicable or misspelled name pass silently.
+A recipe is carried as written for the launch to parse.
 
 `defaults.creds` is the root both branches extend.
 `user.creds` covers every command the operator runs outside a session, and `user.tools.<command>.creds` narrows that to one of them;
 a session instead takes the matching project URL, project path, URL-bro, and path-bro layers in that order.
 The project layers' `grant` and `revoke` lists follow the same order after the repository's own `[tool.bro]` layer.
-Configuration layers are idempotent, so a more-specific layer may restate a grant or revoke;
-the launch flags remain strict and reject a no-op.
+Credential grants and revokes are idempotent at every layer, including launch and resume flags, so a more-specific layer may restate either state.
+`@bro` and `:permit` launch overrides retain their strict no-op checks.
 The user and session branches are disjoint, so a `user` entry never reaches a session.
 A kind no layer selects reads its empty instance.
 
@@ -176,7 +181,7 @@ The alias is what any distribution may claim, so keying on it would let two comm
 an entry keyed by the alias of the running command fails the read rather than sitting inert.
 
 A launch whose attachment no project entry names simply reads the layers that do apply, ending at the kind's own stored material.
-A launch can still override its computed selection with `--grant kind+instance`.
+A launch can override its computed selection with `--cred kind+instance` without adding the kind.
 
 Every console script names its module to `bro.base.args.run_cli`, which records the canonical name of the command the process is.
 On first credential access, an ambient resolver reads the host config and applies `defaults`, `user`, and that command's own layer.

@@ -907,7 +907,7 @@ class TestCredentialDeclarations:
     with pytest.raises(ValueError, match=r'InstanceBro\.extra_secrets.*github\+reviewer') as error:
       InstanceBro()
     assert "declare the bare kind 'github'" in str(error.value)
-    assert '~/.bro.json or a --grant flag' in str(error.value)
+    assert '~/.bro.json or a --cred flag' in str(error.value)
 
   def test_toolset_manifest_rejects_an_instance_name_even_when_gated_off(self):
     class InstanceToolset(mcp.Toolset[None]):

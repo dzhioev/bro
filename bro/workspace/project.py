@@ -114,7 +114,7 @@ def project_config_from_text(content: str, source: str) -> ProjectConfig:
   grant = _scope_values(table, source, 'grant')
   revoke = _scope_values(table, source, 'revoke')
   try:
-    validate_scope_layer(ScopeLayer(grant, revoke), allow_credential_instances=False)
+    validate_scope_layer(ScopeLayer(grant, revoke), context='project')
   except ValueError as error:
     raise ValueError(f'[tool.bro] in {source}: {error}') from error
   return ProjectConfig(

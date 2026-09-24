@@ -31,6 +31,7 @@ def _spec(**overrides) -> SessionSpec:
     'isolation': Isolation.BOXED,
     'drop': False,
     'hold': 'attended',
+    'cred': [],
     'grant': [],
     'revoke': [],
     'llm': None,

@@ -57,6 +57,11 @@ class TestSolo:
       'claude',
     ]
 
+  def test_credential_pick_reaches_the_spec(self):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'solo', '--cred', 'github+work', 'dev', 'do it']) == 0
+    assert start.call_args.args[0].cred == ['github+work']
+
   def test_env_additions_reach_the_spec_in_order(self):
     with patch('ride.cli.start_session', return_value=0) as start:
       argv = ['ride', 'solo', '--env', 'IS_SANDBOX=1', '--env', 'PAIR=a=b', 'dev', 'do it']
@@ -244,6 +249,56 @@ class TestHostLLMDefault:
     assert "bros.dev.llm '::ludicrous' (project-path-bro)" in capsys.readouterr().err
 
 
+class TestHostConfigScopeErrors:
+  @pytest.fixture(autouse=True)
+  def config_file(self, tmp_path, monkeypatch):
+    self.path = tmp_path / 'bro.json'
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(self.path))
+
+  def _preflight(self, spec, *_args, **_kwargs):
+    from ride.scope import LaunchScopeError, scoped_secrets
+
+    try:
+      scoped_secrets(
+        spec.bro,
+        get_harness(spec.harness).scope_recipe(),
+        cred=spec.cred,
+        grant=spec.grant,
+        revoke=spec.revoke,
+        llm_spec=spec.llm_spec,
+      )
+    except LaunchScopeError as error:
+      from bro.base import log
+
+      log.error('%s', error)
+      return 1
+    return 0
+
+  def test_instance_spelled_config_grant_names_the_rollout_replacement(self, capsys):
+    self.path.write_text(json.dumps({'defaults': {'grant': ['github+reviewer']}}))
+
+    with (
+      patch('ride.cli.start_session', side_effect=self._preflight),
+      pytest.raises(SystemExit),
+    ):
+      ride_cli.main(['ride', 'solo', '--harness', 'bro', 'dev', 'work'])
+
+    error = capsys.readouterr().err
+    assert 'defaults' in error
+    assert '"creds": ["github+reviewer"]' in error
+    assert '"grant": ["github"]' in error
+
+  def test_unregistered_default_names_the_project_entry_replacement(self, caplog):
+    self.path.write_text(json.dumps({'defaults': {'creds': ['consumer_only+work']}}))
+
+    with patch('ride.cli.start_session', side_effect=self._preflight):
+      code = ride_cli.main(['ride', 'solo', '--harness', 'bro', 'dev', 'work'])
+
+    assert code == 1
+    assert 'defaults names unregistered credential kind(s): consumer_only' in caplog.text
+    assert 'move host-wide picks or scope changes into the project entries' in caplog.text
+
+
 class TestAlong:
   def test_builds_an_attended_claude_session(self):
     with patch('ride.cli.start_session', return_value=0) as start:
@@ -380,9 +435,16 @@ class TestLifecycle:
 
   def test_resume_dispatches_scope_overrides(self):
     with patch('ride.cli.resume_session', return_value=0) as resume:
-      assert ride_cli.main(['ride', 'resume', '--grant', '@dev', 'workspace']) == 0
+      assert (
+        ride_cli.main(['ride', 'resume', '--cred', 'github+work', '--grant', '@dev', 'workspace'])
+        == 0
+      )
     assert resume.call_args.args == ('workspace',)
-    assert resume.call_args.kwargs == {'grant': ['@dev'], 'revoke': []}
+    assert resume.call_args.kwargs == {
+      'cred': ['github+work'],
+      'grant': ['@dev'],
+      'revoke': [],
+    }
 
   def test_scope_dispatches_harness(self):
     with patch('ride.scope_report.report_scope', return_value=0) as report:
@@ -450,6 +512,11 @@ class TestSummonedLaunch:
     assert spec.revoke == ['openai']
     assert spec.runtime_bundle == '/runtime'
     assert start.call_args.kwargs['summoned'] == pending
+
+  def test_user_credential_pick_reaches_the_manual_child(self, pending):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--cred', 'github+work', 'dev'])
+    assert start.call_args.args[0].cred == ['github+work']
 
   def test_user_credential_overrides_layer_on_the_records(self, pending):
     with patch('ride.cli.start_session', return_value=0) as start:

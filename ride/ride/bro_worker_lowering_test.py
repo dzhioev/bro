@@ -154,17 +154,23 @@ def lowering_harness(monkeypatch, tmp_path):
     attachment=None,
     attachment_repository=None,
     llm_spec=None,
+    cred=(),
     grant=(),
     revoke=(),
+    recording=True,
     check_selection=True,
   ):
+    del name, surface, attachment, attachment_repository, llm_spec, recording, check_selection
     grant_credentials, _, _ = ride.scope.split_scope_overrides(grant)
     revoke_credentials, _, _ = ride.scope.split_scope_overrides(revoke)
-    return workspace_store.finalize_scoped_secrets(
-      workspace_store.ScopedSecrets(required={'aws', 'trails'}, optional={'openai'}),
-      grant=grant_credentials,
-      revoke=revoke_credentials,
-    )
+    kinds = {'aws', 'trails', 'openai'} | set(grant_credentials)
+    kinds.difference_update(revoke_credentials)
+    selection = {}
+    for value in cred:
+      kind, _, instance = value.partition('+')
+      selection[kind] = instance
+    optional = {'openai'} & kinds
+    return workspace_store.ScopedSecrets(kinds - optional, optional, selection)
 
   monkeypatch.setattr(ride.bro_worker, 'scoped_secrets', fake_scoped_secrets)
   monkeypatch.setattr(
@@ -326,6 +332,7 @@ class TestSummonLowering:
       attachment=None,
       attachment_repository=None,
       llm_spec=None,
+      cred=(),
       grant=(),
       revoke=(),
       check_selection=True,
@@ -367,7 +374,7 @@ class TestSummonLowering:
     assert lowered.launch.secrets == {'aws', 'trails', 'gmail_creds'}
     assert lowered.launch.optional_secrets == set()
 
-  def test_no_op_credential_override_fails_the_spawn(self, lowering_harness, tmp_path):
+  def test_no_op_credential_override_is_harmless(self, lowering_harness, tmp_path):
     launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
       prompt='p',
@@ -379,12 +386,11 @@ class TestSummonLowering:
       harness='bro',
       grant=('aws',),
     )
-    with pytest.raises(ValueError, match='already in the scoped credential set'):
-      _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
-    # every fallible resolution precedes the workspace record, so nothing to
-    # reclaim is left behind
-    with pytest.raises(ValueError, match='broker-CH'):
-      Workspace.open('broker-CH')
+
+    lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
+
+    assert lowered.launch.secrets == {'aws', 'trails'}
+    assert Workspace.open('broker-CH').name == 'broker-CH'
 
   def test_lowering_records_the_childs_resume_spec(self, lowering_harness, tmp_path):
     launch = ride.bro_worker.SummonLaunchSpec(
@@ -414,6 +420,7 @@ class TestSummonLowering:
         drop=True,
         no_trails=False,
         hold='guided',
+        cred=[],
         grant=['gmail_creds', '@reviewer'],
         revoke=['openai'],
         llm='openai:sol:high',
@@ -1254,6 +1261,7 @@ class TestClaudeSummonLowering:
       attachment=None,
       attachment_repository=None,
       llm_spec=None,
+      cred=(),
       grant=(),
       revoke=(),
       check_selection=True,
