@@ -111,7 +111,7 @@ def require_kind_declaration(name: str, declaration: str) -> None:
     raise ValueError(
       f'{declaration} declares credential {name!r}, which names an instance; '
       f'declare the bare kind {kind!r} instead — instance selection belongs in '
-      '~/.bro.json or a --grant flag'
+      '~/.bro.json or a --cred flag'
     )
 
 

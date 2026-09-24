@@ -256,6 +256,7 @@ def _child_session_spec(
     hold=launch.hold
     if launch.hold is not None
     else default_hold(solo=True, isolation=resolved_isolation),
+    cred=[],
     grant=list(launch.grant),
     revoke=list(launch.revoke),
     llm=llm,
@@ -290,6 +291,7 @@ def _child_launch_scope(
     harness.scope_recipe(),
     attachment=None if repository is None else repository.identity,
     attachment_repository=repository,
+    cred=spec.cred,
     grant=spec.grant,
     revoke=spec.revoke,
     llm_spec=spec.llm_spec,

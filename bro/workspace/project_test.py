@@ -136,7 +136,10 @@ class TestProjectConfig:
       '[tool.bro]\ndefault = "foo"\ngrant = ["github+reviewer"]\n'
     )
 
-    with pytest.raises(ValueError, match='host-specific'):
+    with pytest.raises(
+      ValueError,
+      match=r"grant bare kind 'github'.*host config.*--cred",
+    ):
       project_config()
 
   @pytest.mark.parametrize('value', ['":party"', '":party..start"', '":Party.start"'])

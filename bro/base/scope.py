@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from bro.base import credentials
 
@@ -32,6 +32,8 @@ class ScopeLayer:
 
   grant: tuple[str, ...] = ()
   revoke: tuple[str, ...] = ()
+  creds: tuple[str, ...] = ()
+  source: str = field(default='', compare=False)
 
 
 def split_scope_overrides(values: Iterable[str]) -> tuple[list[str], list[str], list[str]]:
@@ -50,6 +52,27 @@ def split_scope_overrides(values: Iterable[str]) -> tuple[list[str], list[str], 
     else:
       credential_names.append(value)
   return credential_names, bro_names, permits
+
+
+def credential_grant_kind(value: str, *, context: str = 'host config') -> str:
+  """Validate and return the kind named by a credential grant."""
+  kind, instance = credentials.parse_name(value)
+  if instance is None:
+    return kind
+  subject = f'credential grant {value!r}'
+  if context == 'launch flags':
+    subject = f'--grant {value}'
+    remedy = f'use --cred {value} plus --grant {kind}'
+  elif context == 'project':
+    remedy = f'grant bare kind {kind!r}, and select {value!r} in host config "creds" or with --cred'
+  elif context == 'host config':
+    remedy = (
+      f'replace it with "creds": ["{value}"] plus "grant": ["{kind}"] '
+      f'where the bro does not already need {kind!r}'
+    )
+  else:
+    raise ValueError(f'unknown credential grant context {context!r}')
+  raise ValueError(f'{subject} names a credential instance; {remedy}')
 
 
 def scope_override_key(value: str) -> str:
@@ -79,25 +102,19 @@ def scope_revoke_key(value: str) -> str:
   return credential_revoke_name(value)
 
 
-def validate_scope_layer(layer: ScopeLayer, *, allow_credential_instances: bool) -> None:
-  """Validate one configuration layer without consulting installed registries."""
-  grant_credentials, _, _ = split_scope_overrides(layer.grant)
-  revoke_credentials, _, _ = split_scope_overrides(layer.revoke)
-  for value in grant_credentials:
-    _, instance = credentials.parse_name(value)
-    if instance is not None and not allow_credential_instances:
-      raise ValueError(
-        f'credential instance {value!r} is host-specific; grant its bare kind in the project'
-      )
-  for value in revoke_credentials:
-    credential_revoke_name(value)
-  grant_keys = [scope_override_key(value) for value in layer.grant]
-  revoke_keys = [scope_revoke_key(value) for value in layer.revoke]
+def validate_scope_layer(layer: ScopeLayer, *, context: str = 'host config') -> None:
+  """Validate one layer without consulting installed registries."""
+  grant_credentials, grant_bros, grant_permits = split_scope_overrides(layer.grant)
+  revoke_credentials, revoke_bros, revoke_permits = split_scope_overrides(layer.revoke)
+  grant_kinds = {credential_grant_kind(value, context=context) for value in grant_credentials}
+  revoke_kinds = {credential_revoke_name(value) for value in revoke_credentials}
+  grant_keys = [*(f'@{name}' for name in grant_bros), *(f':{name}' for name in grant_permits)]
+  revoke_keys = [*(f'@{name}' for name in revoke_bros), *(f':{name}' for name in revoke_permits)]
   if len(grant_keys) != len(set(grant_keys)):
-    raise ValueError('a scope name is granted more than once in one layer')
+    raise ValueError('a non-credential scope name is granted more than once in one layer')
   if len(revoke_keys) != len(set(revoke_keys)):
-    raise ValueError('a scope name is revoked more than once in one layer')
-  overlap = set(grant_keys) & set(revoke_keys)
+    raise ValueError('a non-credential scope name is revoked more than once in one layer')
+  overlap = grant_kinds & revoke_kinds | (set(grant_keys) & set(revoke_keys))
   if overlap:
     raise ValueError(f'cannot grant and revoke the same scope name: {", ".join(sorted(overlap))}')
 

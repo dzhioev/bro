@@ -10,26 +10,25 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 from bro.base import credentials, host_config
-from bro.base.scope import ScopeLayer, apply_idempotent, split_scope_overrides
+from bro.base.scope import (
+  ScopeLayer,
+  apply_idempotent,
+  credential_grant_kind,
+  credential_revoke_name,
+  split_scope_overrides,
+  validate_scope_layer,
+)
 from bro.launch.llm_flags import with_host_defaults
 from bro.summon import PARTY_START_BOXED
 from ride.repository import Repository, attachment_identities, open_repository
-from ride.workspace.store import (
-  ScopedSecrets,
-  credential_revoke_kind,
-  finalize_scoped_secrets,
-  grant_instances,
-)
+from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
   from bro.llm.llm import LLMSpec
   from bro.mcp import Harness
   from ride.harness import Harness as Driver
 
-# the recording credential every surface hydrates best-effort, regardless of bro:
-# it selects a backend (`bro.trails.store.resolve_config`) rather than enabling
-# recording, so a launch that cannot resolve it still records.
-_TRAILS_BASELINE = frozenset({'trails'})
+_RECORDING_CREDENTIAL = 'trails'
 DEFAULT_PERMITS = frozenset({PARTY_START_BOXED})
 
 
@@ -60,7 +59,6 @@ class ScopeRecipe:
   harness: 'Harness'
   auth_secret: Optional[str]
   llm_key: bool
-  optional_baseline: frozenset[str] = _TRAILS_BASELINE
 
 
 BRO_RUN_RECIPE = ScopeRecipe(
@@ -116,7 +114,7 @@ def configured_scope_layers(
     repository = attachment_repository or open_repository(attachment)
     if repository.read_file('pyproject.toml') is not None:
       config = repository.project_config()
-      project_layers = (ScopeLayer(config.grant, config.revoke),)
+      project_layers = (ScopeLayer(config.grant, config.revoke, source='[tool.bro]'),)
   selected = binding if binding is not None else bind_launch_credentials(attachment, bro_name)
   return (*project_layers, *selected.scope_layers)
 
@@ -186,6 +184,67 @@ def selection_store(
   )
 
 
+def _credential_picks(values: Sequence[str], *, subject: str) -> dict[str, str]:
+  picks: dict[str, str] = {}
+  for value in values:
+    kind, instance = credentials.parse_name(value)
+    if instance is None:
+      raise ValueError(
+        f'{subject} {value!r} names no instance; write {value!r}+<instance>, '
+        f'or {value!r}+ for the empty instance'
+      )
+    if kind in picks:
+      raise ValueError(f'{subject} selects credential kind {kind!r} more than once')
+    picks[kind] = instance
+  return picks
+
+
+def _credential_changes(layer: ScopeLayer) -> tuple[set[str], set[str]]:
+  grant_values, _, _ = split_scope_overrides(layer.grant)
+  revoke_values, _, _ = split_scope_overrides(layer.revoke)
+  context = (
+    'launch flags'
+    if layer.source == 'launch flags'
+    else 'project'
+    if layer.source == '[tool.bro]'
+    else 'host config'
+  )
+  grants = {credential_grant_kind(value, context=context) for value in grant_values}
+  revokes = {credential_revoke_name(value) for value in revoke_values}
+  if grants & revokes:
+    overlap = ', '.join(sorted(grants & revokes))
+    raise ValueError(f'cannot grant and revoke the same credential kind: {overlap}')
+  return grants, revokes
+
+
+def _validate_registered_credentials(layers: Sequence[ScopeLayer], registered: set[str]) -> None:
+  for layer in layers:
+    grants, revokes = _credential_changes(layer)
+    picks = _credential_picks(
+      layer.creds, subject='--cred' if layer.source == 'launch flags' else 'creds'
+    )
+    unknown = sorted((grants | revokes | set(picks)) - registered)
+    if len(unknown) == 0:
+      continue
+    replacement = (
+      '; move host-wide picks or scope changes into the project entries that use them'
+      if layer.source == host_config.DEFAULTS_LAYER
+      else ''
+    )
+    raise ValueError(
+      f'{layer.source or "scope layer"} names unregistered credential kind(s): '
+      f'{", ".join(unknown)}{replacement}'
+    )
+
+
+def _fold_credential_kinds(kinds: Collection[str], layers: Sequence[ScopeLayer]) -> set[str]:
+  result = set(kinds)
+  for layer in layers:
+    grants, revokes = _credential_changes(layer)
+    result = apply_idempotent(result, grant=grants, revoke=revokes)
+  return result
+
+
 def scoped_secrets(
   bro_name: str,
   recipe: ScopeRecipe,
@@ -193,34 +252,15 @@ def scoped_secrets(
   attachment: Optional[str] = None,
   attachment_repository: Optional[Repository] = None,
   llm_spec: Optional['LLMSpec'] = None,
+  cred: Sequence[str] = (),
   grant: Sequence[str] = (),
   revoke: Sequence[str] = (),
+  recording: bool = True,
   check_selection: bool = True,
 ) -> ScopedSecrets:
-  """the credential scope of a launch running as `bro_name` under `recipe`.
-
-  Harness implementations own their recipes; launch surfaces and summon lowering
-  share this one computation over them. Required hydration is strict, so each
-  recipe requests only what it actually uses.
-
-  `llm_spec` is the recipe the launch settled on (`--provider` / `--model` /
-  `--llm`), whose key the scope hydrates in place of the bro's own — a run
-  against another provider needs that provider's key, not the declared one.
-
-  `grant` / `revoke` are the launch's unified override values
-  (`split_scope_overrides`): credential values shape the scope here, while
-  `@bro` and `:permit` values shape the other authority sets. The bro's declarations
-  are evaluated under the selection the launch ends with — the host's defaults,
-  the operated project's and this bro's layers, and the request's instance
-  grants. The project's per-bro `grant` kinds join the required tier under that
-  selection, and a per-bro `creds` selection of a kind the launch does not read
-  fails it — unless `check_selection` is off, for a scope computed to reason
-  about rather than to hydrate. Raises `ValueError` on a no-op override.
-  """
+  """Compute one launch's credential tiers and instance selection."""
   from bro.registry import create_bro
 
-  grant_credentials, _, _ = split_scope_overrides(grant)
-  revoke_credentials, _, _ = split_scope_overrides(revoke)
   with launch_scope_errors():
     binding = bind_launch_credentials(attachment, bro_name)
     configured_layers = configured_scope_layers(
@@ -229,54 +269,59 @@ def scoped_secrets(
       binding,
       attachment_repository,
     )
-  selection = dict(binding.instances)
-  for kind, instance in grant_instances(grant_credentials).items():
-    if instance is not None:
-      selection[kind] = instance
+    launch_layer = ScopeLayer(tuple(grant), tuple(revoke), tuple(cred), 'launch flags')
+    validate_scope_layer(launch_layer, context='launch flags')
+    registered = set(credentials.default_registry())
+    _validate_registered_credentials((*configured_layers, launch_layer), registered)
+    launch_picks = _credential_picks(cred, subject='--cred')
+  selection = {**binding.instances, **launch_picks}
   revoked: set[str] = set()
-  for layer in configured_layers:
-    layer_grant, layer_revoke = _namespace_values(layer, 0)
-    revoked.difference_update(credentials.parse_name(name)[0] for name in layer_grant)
-    revoked.update(credential_revoke_kind(name) for name in layer_revoke)
-  revoked.difference_update(credentials.parse_name(name)[0] for name in grant_credentials)
-  revoked.update(credential_revoke_kind(name) for name in revoke_credentials)
-  required: set[str] = set()
-  optional = set(recipe.optional_baseline)
+  for layer in (*configured_layers, launch_layer):
+    grants, revokes = _credential_changes(layer)
+    revoked.difference_update(grants)
+    revoked.update(revokes)
+  required_needs: set[str] = set()
+  optional_needs: set[str] = set()
   with credentials.as_default_store(selection_store(selection, revoked=revoked)):
     try:
       bro = create_bro(bro_name)
-    except KeyError as e:
-      raise LaunchScopeError(f'unknown bro {bro_name!r}') from e
-    required.update(bro.needed_secrets(harness=recipe.harness))
+    except KeyError as error:
+      raise LaunchScopeError(f'unknown bro {bro_name!r}') from error
+    required_needs.update(bro.needed_secrets(harness=recipe.harness))
+    optional_needs.update(bro.optional_secrets(harness=recipe.harness))
     if recipe.auth_secret is not None:
-      required.add(recipe.auth_secret)
+      required_needs.add(recipe.auth_secret)
     if recipe.llm_key:
-      required.update((llm_spec if llm_spec is not None else bro.llm_spec).needed_secrets())
-    optional.update(bro.optional_secrets(harness=recipe.harness))
-  configured_scope = ScopedSecrets(
-    required=required,
-    optional=optional,
-    selection=dict(binding.instances),
-  )
-  for layer in configured_layers:
-    layer_grant, layer_revoke = _namespace_values(layer, 0)
-    configured_scope = finalize_scoped_secrets(
-      configured_scope,
-      grant=[credentials.parse_name(name)[0] for name in layer_grant],
-      revoke=layer_revoke,
-      strict=False,
-    )
+      required_needs.update((llm_spec if llm_spec is not None else bro.llm_spec).needed_secrets())
+  if recording:
+    optional_needs.add(_RECORDING_CREDENTIAL)
+  optional_needs.difference_update(required_needs)
+  needs = required_needs | optional_needs
+  configured_kinds = _fold_credential_kinds(needs, configured_layers)
   if check_selection:
-    # the recording kind counts as read under `--no-trails`, which empties the recipe's baseline
+    configured_kinds_with_recording = _fold_credential_kinds(
+      needs | {_RECORDING_CREDENTIAL}, configured_layers
+    )
     _require_bro_layer_selections_read(
       binding,
       bro_name,
-      configured_scope.required | configured_scope.optional | _TRAILS_BASELINE,
+      configured_kinds_with_recording,
     )
-  return finalize_scoped_secrets(
-    configured_scope,
-    grant=grant_credentials,
-    revoke=revoke_credentials,
+  held_kinds = _fold_credential_kinds(configured_kinds, (launch_layer,))
+  unheld_picks = sorted(set(launch_picks) - held_kinds)
+  if unheld_picks:
+    rendered = ', '.join(
+      credentials.storage_name(kind, launch_picks[kind]) for kind in unheld_picks
+    )
+    grants = ', '.join(f'--grant {kind}' for kind in unheld_picks)
+    raise LaunchScopeError(
+      f'--cred selects {rendered}, but the launch does not hold its kind; add {grants}'
+    )
+  optional = held_kinds & optional_needs
+  return ScopedSecrets(
+    required=held_kinds - optional,
+    optional=optional,
+    selection=selection,
   )
 
 

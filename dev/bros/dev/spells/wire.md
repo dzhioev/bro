@@ -110,4 +110,4 @@ Do not set `BRO_STORE` for that check:
 an explicit store deliberately bypasses `~/.bro.json`.
 
 Close by telling the user which layers changed and what each consumer now reads.
-A managed launch can still override its computed choice once with `--grant <kind>+<instance>`.
+A managed launch can override its computed choice with `--cred <kind>+<instance>`.

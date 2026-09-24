@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Optional
 
-from bro.base import configs, log
+from bro.base import configs, credentials, log
 from bro.base.scope import scope_override_key, scope_revoke_key
 from bro.broker.environment import BROKER_MISSION, BROKER_UPSTREAM
 from bro.llm.llm import LLMSpec
@@ -91,6 +91,7 @@ class SessionSpec:
   drop: bool
   no_trails: bool
   hold: str
+  cred: list[str]
   grant: list[str]
   revoke: list[str]
   llm: Optional[str]
@@ -158,6 +159,8 @@ class SessionSpec:
     parts.extend(['--harness', self.harness])
     if self.workspace_pinned:
       parts.extend(['--workspace', self.name])
+    for value in self.cred:
+      parts.extend(['--cred', value])
     for value in self.grant:
       parts.extend(['--grant', value])
     for value in self.revoke:
@@ -190,28 +193,85 @@ class SessionSpec:
       arguments=[],
     )
 
-  def with_scope_overrides(self, *, grant: list[str], revoke: list[str]) -> 'SessionSpec':
-    grant_keys = {scope_override_key(name) for name in grant}
-    revoke_keys = {scope_revoke_key(name) for name in revoke}
-    recorded_grant_keys = {scope_override_key(name) for name in self.grant}
-    recorded_revoke_keys = {scope_revoke_key(name) for name in self.revoke}
-    for values, own, flag in ((grant, self.grant, 'grant'), (revoke, self.revoke, 'revoke')):
-      restated = sorted(set(values) & set(own))
-      if len(restated) > 0:
-        raise ValueError(f'already in the recorded --{flag}: {", ".join(restated)}')
-    kept_grant = [
-      name for name in self.grant if scope_override_key(name) not in revoke_keys | grant_keys
+  def with_scope_overrides(
+    self, *, cred: list[str], grant: list[str], revoke: list[str]
+  ) -> 'SessionSpec':
+    def credential_values(values: list[str]) -> list[str]:
+      return [value for value in values if not value.startswith(('@', ':'))]
+
+    def authority_values(values: list[str]) -> list[str]:
+      return [value for value in values if value.startswith(('@', ':'))]
+
+    new_grant_credentials = credential_values(grant)
+    new_revoke_credentials = credential_values(revoke)
+    changed_credential_kinds = {
+      *(credentials.parse_name(value)[0] for value in new_grant_credentials),
+      *(credentials.parse_name(value)[0] for value in new_revoke_credentials),
+    }
+    kept_grant_credentials = [
+      value
+      for value in credential_values(self.grant)
+      if credentials.parse_name(value)[0] not in changed_credential_kinds
     ]
-    kept_revoke = [name for name in self.revoke if scope_override_key(name) not in grant_keys]
+    kept_revoke_credentials = [
+      value
+      for value in credential_values(self.revoke)
+      if credentials.parse_name(value)[0] not in changed_credential_kinds
+    ]
+
+    new_grant_authority = authority_values(grant)
+    new_revoke_authority = authority_values(revoke)
+    recorded_grant_authority = authority_values(self.grant)
+    recorded_revoke_authority = authority_values(self.revoke)
+    for values, recorded, flag in (
+      (new_grant_authority, recorded_grant_authority, 'grant'),
+      (new_revoke_authority, recorded_revoke_authority, 'revoke'),
+    ):
+      restated = sorted(set(values) & set(recorded))
+      if restated:
+        raise ValueError(f'already in the recorded --{flag}: {", ".join(restated)}')
+    grant_keys = {scope_override_key(value) for value in new_grant_authority}
+    revoke_keys = {scope_revoke_key(value) for value in new_revoke_authority}
+    recorded_grant_keys = {scope_override_key(value) for value in recorded_grant_authority}
+    recorded_revoke_keys = {scope_revoke_key(value) for value in recorded_revoke_authority}
+    kept_grant_authority = [
+      value
+      for value in recorded_grant_authority
+      if scope_override_key(value) not in grant_keys | revoke_keys
+    ]
+    kept_revoke_authority = [
+      value for value in recorded_revoke_authority if scope_revoke_key(value) not in grant_keys
+    ]
+
+    new_pick_kinds = {credentials.parse_name(value)[0] for value in cred}
+    revoked_kinds = {credentials.parse_name(value)[0] for value in new_revoke_credentials}
+    kept_cred = [
+      value
+      for value in self.cred
+      if credentials.parse_name(value)[0] not in new_pick_kinds | revoked_kinds
+    ]
     return replace(
       self,
+      cred=[*kept_cred, *cred],
       grant=[
-        *kept_grant,
-        *(name for name in grant if scope_override_key(name) not in recorded_revoke_keys),
+        *kept_grant_credentials,
+        *new_grant_credentials,
+        *kept_grant_authority,
+        *(
+          value
+          for value in new_grant_authority
+          if scope_override_key(value) not in recorded_revoke_keys
+        ),
       ],
       revoke=[
-        *kept_revoke,
-        *(name for name in revoke if scope_override_key(name) not in recorded_grant_keys),
+        *kept_revoke_credentials,
+        *new_revoke_credentials,
+        *kept_revoke_authority,
+        *(
+          value
+          for value in new_revoke_authority
+          if scope_revoke_key(value) not in recorded_grant_keys
+        ),
       ],
     )
 
@@ -712,8 +772,6 @@ def _start_session(
     log.error('%s', auth_error)
     return 1
   recipe = harness.scope_recipe()
-  if spec.no_trails:
-    recipe = dataclasses.replace(recipe, optional_baseline=frozenset())
   try:
     with launch_scope_errors():
       scoped = scoped_secrets(
@@ -722,8 +780,10 @@ def _start_session(
         attachment=spec.repo,
         attachment_repository=repository,
         llm_spec=spec.llm_spec,
+        cred=spec.cred,
         grant=spec.grant,
         revoke=spec.revoke,
+        recording=not spec.no_trails,
       )
     may_summon, permits, store = preflight_scoped_launch(
       scoped,
@@ -814,7 +874,7 @@ def _start_session(
     return 1
 
 
-def resume_session(name: str, *, grant: list[str], revoke: list[str]) -> int:
+def resume_session(name: str, *, cred: list[str], grant: list[str], revoke: list[str]) -> int:
   try:
     workspace = Workspace.open(name)
   except ValueError as error:
@@ -825,7 +885,7 @@ def resume_session(name: str, *, grant: list[str], revoke: list[str]) -> int:
     log.error('no session recorded for %s; start a new one instead', name)
     return 1
   try:
-    spec = spec.with_scope_overrides(grant=grant, revoke=revoke)
+    spec = spec.with_scope_overrides(cred=cred, grant=grant, revoke=revoke)
   except ValueError as error:
     log.error('%s', error)
     return 1

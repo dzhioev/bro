@@ -31,11 +31,18 @@ def add_harness_flags(parser: Parser) -> None:
 def add_scope_flags(parser: Parser) -> None:
   """Register launch-scope credential, summon-target, and permit adjustments."""
   parser.add_argument(
+    '--cred',
+    action='append',
+    default=None,
+    metavar='KIND+INSTANCE',
+    help='select the stored instance a held credential kind reads (repeatable)',
+  )
+  parser.add_argument(
     '--grant',
     action='append',
     default=None,
     metavar='NAME',
-    help=f'add a credential (KIND or KIND+INSTANCE), a summonable bro (@BRO), or a worker permit ({permit_choices()}) to the session scope; an instance grant replaces the kind selection (repeatable)',
+    help=f'add a credential kind (KIND), a summonable bro (@BRO), or a worker permit ({permit_choices()}) to the session scope (repeatable)',
   )
   parser.add_argument(
     '--revoke',

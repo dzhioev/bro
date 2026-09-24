@@ -155,7 +155,7 @@ class TestTaskMode:
     monkeypatch.setattr(
       dive_in,
       '_task_system',
-      lambda repo, grant, revoke, bro, harness, llm: object(),
+      lambda repo, cred, grant, revoke, bro, harness, llm: object(),
     )
 
   def test_every_launch_picks_a_fresh_workspace_name(self, fake_proj, monkeypatch, capsys):
@@ -204,8 +204,9 @@ class TestTaskMode:
   def test_prefetch_binds_the_launch_scope_flags(self, fake_proj, monkeypatch, capsys):
     captured = {}
 
-    def fake_task_system(repo, grant, revoke, bro, harness, llm):
+    def fake_task_system(repo, cred, grant, revoke, bro, harness, llm):
       captured.update(
+        cred=cred,
         grant=grant,
         revoke=revoke,
         bro=bro,
@@ -216,11 +217,12 @@ class TestTaskMode:
 
     monkeypatch.setattr(dive_in, '_task_system', fake_task_system)
     monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
-    argv = ['dive-in', '-n', '-t', UUID, '--grant', 'brog+github', '--effort', 'high']
+    argv = ['dive-in', '-n', '-t', UUID, '--cred', 'brog+github', '--effort', 'high']
     rc = dive_in.main([*argv, '--bro', 'dev'])
     assert rc == 0
     assert captured == {
-      'grant': ['brog+github'],
+      'cred': ['brog+github'],
+      'grant': [],
       'revoke': [],
       'bro': 'dev',
       'harness': 'claude',
@@ -228,7 +230,8 @@ class TestTaskMode:
     }
     # the flags still ride into the forwarded `ride along` untouched
     args, harness_arguments = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
-    assert args['grant'] == ['brog+github']
+    assert args['cred'] == ['brog+github']
+    assert args['grant'] is None
     assert args['revoke'] is None
     assert args['effort'] == 'high'
     assert args['llm'] is None
@@ -251,7 +254,7 @@ class TestTaskMode:
   def test_a_scope_failure_fails_before_any_launch(self, fake_proj, monkeypatch, capsys):
     from ride.scope import LaunchScopeError
 
-    def bad_override(repo, grant, revoke, bro, harness, llm):
+    def bad_override(repo, cred, grant, revoke, bro, harness, llm):
       raise LaunchScopeError("cannot grant 'brog': already in the scoped credential set")
 
     monkeypatch.setattr(dive_in, '_task_system', bad_override)
@@ -300,8 +303,8 @@ class TestTaskSystem:
       dive_in, 'project_config', lambda _repo: SimpleNamespace(default_bro='bro-dev')
     )
 
-    def fake_scoped_secrets(bro_name, surface, *, attachment, llm_spec, grant, revoke):
-      calls['scoped'] = (bro_name, surface, grant, revoke)
+    def fake_scoped_secrets(bro_name, surface, *, attachment, llm_spec, cred, grant, revoke):
+      calls['scoped'] = (bro_name, surface, cred, grant, revoke)
       calls['llm_spec'] = llm_spec
       return 'base-scope'
 
@@ -319,8 +322,14 @@ class TestTaskSystem:
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
-    system = dive_in._task_system(Path('/repo'), ['brog+github'], [], None, 'claude', None)
-    assert calls['scoped'] == ('bro-dev', CLAUDE.scope_recipe(), ['brog+github'], [])
+    system = dive_in._task_system(Path('/repo'), ['brog+github'], [], [], None, 'claude', None)
+    assert calls['scoped'] == (
+      'bro-dev',
+      CLAUDE.scope_recipe(),
+      ['brog+github'],
+      [],
+      [],
+    )
     assert calls['view'] == 'base-scope'
     assert calls['read'] == 'brog'
     assert isinstance(system, brog_github.System)
@@ -330,16 +339,16 @@ class TestTaskSystem:
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
-    dive_in._task_system(Path('/repo'), [], [], 'dev', 'claude', None)
-    assert calls['scoped'] == ('dev', CLAUDE.scope_recipe(), [], [])
+    dive_in._task_system(Path('/repo'), [], [], [], 'dev', 'claude', None)
+    assert calls['scoped'] == ('dev', CLAUDE.scope_recipe(), [], [], [])
 
   def test_bro_harness_scopes_the_native_recipe(self, monkeypatch):
     from ride.scope import BRO_RUN_RECIPE
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
-    dive_in._task_system(Path('/repo'), [], [], None, 'bro', None)
-    assert calls['scoped'] == ('bro-dev', BRO_RUN_RECIPE, [], [])
+    dive_in._task_system(Path('/repo'), [], [], [], None, 'bro', None)
+    assert calls['scoped'] == ('bro-dev', BRO_RUN_RECIPE, [], [], [])
 
   def test_the_prefetch_scope_follows_the_settled_recipe(self, monkeypatch, tmp_path):
     import json
@@ -353,7 +362,7 @@ class TestTaskSystem:
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
-    dive_in._task_system(Path('/repo'), [], [], None, 'bro', '::low')
+    dive_in._task_system(Path('/repo'), [], [], [], None, 'bro', '::low')
     assert calls['llm_spec'] == ride.bro.BRO.resolve_llm('openai:sol:low', 'bro-dev')
 
   def test_a_malformed_config_names_the_launch(self, monkeypatch):
@@ -364,7 +373,7 @@ class TestTaskSystem:
 
     self._fake_wiring(monkeypatch, {}, read=malformed)
     with pytest.raises(LaunchScopeError, match='not valid json'):
-      dive_in._task_system(Path('/repo'), [], [], None, 'claude', None)
+      dive_in._task_system(Path('/repo'), [], [], [], None, 'claude', None)
 
   def test_an_unresolvable_brog_names_the_launch(self, monkeypatch):
     from bro.base import credentials
@@ -375,7 +384,7 @@ class TestTaskSystem:
 
     self._fake_wiring(monkeypatch, {}, read=unresolvable)
     with pytest.raises(LaunchScopeError, match="secret 'brog' not found"):
-      dive_in._task_system(Path('/repo'), [], [], None, 'claude', None)
+      dive_in._task_system(Path('/repo'), [], [], [], None, 'claude', None)
 
   def test_the_backends_own_re_read_names_the_launch(self, monkeypatch):
     from ride.scope import LaunchScopeError
@@ -394,7 +403,7 @@ class TestTaskSystem:
 
     self._fake_wiring(monkeypatch, {}, read=read)
     monkeypatch.setattr(brog_system, 'build_system', capture)
-    dive_in._task_system(Path('/repo'), [], [], None, 'claude', None)
+    dive_in._task_system(Path('/repo'), [], [], [], None, 'claude', None)
     broken.append(True)
     with pytest.raises(LaunchScopeError, match='not valid json'):
       providers[0]()
