@@ -276,8 +276,6 @@ The identity comes from whatever launched the run, never from inside it:
 
 - a managed session or a summon reads the project's entry in the host's `~/.bro.json`:
   `projects.<identity>.bros.<bro>.creds` with `github+<instance>`, `<bro>` being the name your banner's `bro` line gives, so every launch of this bro resolves one;
-- a summon also takes it on the request:
-  grant `github+<instance>`, an instance the summoner's own scope resolves;
 - a direct `bro run` or `bro chat` uses the host's own store:
   an instance selected under `user.creds` (or `user.tools.<command>.creds`) or `defaults.creds` in `~/.bro.json`, or the kind's empty instance when nothing selects one.
 

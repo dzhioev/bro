@@ -80,6 +80,7 @@ def _prefetch_task(system: brog_system.System, task_ref: str) -> tuple[brog_mode
 
 def _task_system(
   repo: Path,
+  cred: list[str],
   grant: list[str],
   revoke: list[str],
   bro: Optional[str],
@@ -102,6 +103,7 @@ def _task_system(
         driver.scope_recipe(),
         attachment=str(repo),
         llm_spec=launch_llm_spec(driver, str(repo), bro_name, llm),
+        cred=cred,
         grant=grant,
         revoke=revoke,
       )
@@ -120,6 +122,7 @@ def dive_in(
   command: Optional[str] = None,
   task: Optional[str] = None,
   new: bool = False,
+  cred: Optional[list[str]] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
   bro: Optional[str] = None,
@@ -145,6 +148,7 @@ def dive_in(
     try:
       system = _task_system(
         repo,
+        cred or [],
         grant or [],
         revoke or [],
         bro,
@@ -227,7 +231,7 @@ def main(argv: list[str]) -> Optional[int]:
     selection = selection_from_args(args, project=config)
   except ValueError as error:
     parser.error(str(error))
-  scope_args = {key: args[key] for key in ('grant', 'revoke', 'bro')}
+  scope_args = {key: args[key] for key in ('cred', 'grant', 'revoke', 'bro')}
   scope_args['llm'] = None if selection.is_empty() else selection.format()
   args['bro'] = None
   forwarded = extract_forwarded_argv(args)

@@ -19,6 +19,7 @@ import ride.runtime_bundle as runtime_bundle_module
 import ride.scope
 import ride.session as ride_session
 from bro.base import credentials
+from bro.base.scope import apply_idempotent, credential_grant_kind, credential_revoke_name
 from bro.monitor import workspace_party_dir, workspace_session_dir
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 from bro.workspace.paths import (
@@ -35,7 +36,6 @@ from ride.scope import ScopedSecrets, split_scope_overrides
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
-from ride.workspace.store import finalize_scoped_secrets
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +54,7 @@ def _spec(
   drop: bool = False,
   no_trails: bool = False,
   hold: str = 'attended',
+  cred: Optional[list[str]] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
   llm: Optional[str] = None,
@@ -75,6 +76,7 @@ def _spec(
     drop=drop,
     no_trails=no_trails,
     hold=hold,
+    cred=cred if cred is not None else [],
     grant=grant if grant is not None else [],
     revoke=revoke if revoke is not None else [],
     llm=llm,
@@ -93,11 +95,13 @@ def _spec(
 def _resume(
   name: str = 'w',
   *,
+  cred: Optional[list[str]] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
 ) -> int:
   return ride_session.resume_session(
     name,
+    cred=cred if cred is not None else [],
     grant=grant if grant is not None else [],
     revoke=revoke if revoke is not None else [],
   )
@@ -173,14 +177,21 @@ def _fake_scoped_secrets(secrets: set[str], optional_secrets: set[str]):
   """a stand-in for `scoped_secrets` over a fixed bro scope, applying the
   launch's credential overrides the way the real one does."""
 
-  def scoped(*_args, grant=(), revoke=(), **_kwargs):
+  def scoped(*_args, cred=(), grant=(), revoke=(), **_kwargs):
     grant_credentials, _, _ = split_scope_overrides(grant)
     revoke_credentials, _, _ = split_scope_overrides(revoke)
-    return finalize_scoped_secrets(
-      ScopedSecrets(set(secrets), set(optional_secrets)),
-      grant=grant_credentials,
-      revoke=revoke_credentials,
+    kinds = apply_idempotent(
+      set(secrets) | set(optional_secrets),
+      grant=(credential_grant_kind(value, context='launch flags') for value in grant_credentials),
+      revoke=(credential_revoke_name(value) for value in revoke_credentials),
     )
+    picks = {}
+    for value in cred:
+      kind, instance = credentials.parse_name(value)
+      assert instance is not None
+      picks[kind] = instance
+    optional = kinds & set(optional_secrets)
+    return ScopedSecrets(kinds - optional, optional, picks)
 
   return scoped
 
@@ -287,9 +298,9 @@ class TestGrantRevoke:
     assert 'gmail_creds' in launch.secrets
     assert 'notion' not in launch.secrets
 
-  def test_start_session_grant_replaces_a_credential_instance(self):
+  def test_start_session_cred_replaces_a_credential_instance(self):
     with _ContainerHarness(secrets={'brog', 'github'}) as harness:
-      rc = ride_session.start_session(_spec(drop=True, grant=['brog+github']))
+      rc = ride_session.start_session(_spec(drop=True, cred=['brog+github']))
     assert rc == 0
     launch = harness.run_started_party.call_args.args[0]
     assert launch.secrets == {'brog', 'github'}
@@ -318,11 +329,11 @@ class TestGrantRevoke:
     assert harness.run_started_party.call_count == 0
     assert 'mint one with `claude setup-token`' in caplog.text
 
-  def test_start_session_grant_already_present_returns_1(self):
-    with _ContainerHarness() as h:
-      rc = ride_session.start_session(_spec(drop=True, grant=['github']))
-    assert rc == 1
-    assert h.run_started_party.call_count == 0
+  def test_start_session_grant_already_present_is_harmless(self):
+    with _ContainerHarness() as harness:
+      code = ride_session.start_session(_spec(drop=True, grant=['github']))
+    assert code == 0
+    assert harness.run_started_party.call_args.args[0].secrets == {'github'}
 
   def test_start_session_injects_the_llm_recipe_into_the_container_command(self):
     with _ContainerHarness() as h:
@@ -333,13 +344,12 @@ class TestGrantRevoke:
 
 
 class TestNoTrails:
-  """the neutral --no-trails handling: the trails scope baseline, env kill
-  switch, and trails mounts are the session layer's, whichever harness runs."""
+  """The neutral recording need, environment switch, and trails mounts."""
 
-  def test_no_trails_strips_the_scope_baseline(self):
-    with _ContainerHarness() as h:
+  def test_no_trails_removes_the_recording_need(self):
+    with _ContainerHarness() as harness:
       assert ride_session.start_session(_spec(drop=True, no_trails=True)) == 0
-    assert h.scoped_secrets.call_args.args[1].optional_baseline == frozenset()
+    assert harness.scoped_secrets.call_args.kwargs['recording'] is False
 
   def test_no_trails_disables_recording_and_binds_no_trails_root(self):
     with _ContainerHarness() as h:
@@ -353,7 +363,7 @@ class TestNoTrails:
       assert ride_session.start_session(_spec(drop=True)) == 0
     launch = h.run_started_party.call_args.args[0]
     assert 'TRAILS_DISABLED' not in launch.env
-    assert h.scoped_secrets.call_args.args[1].optional_baseline == frozenset({'trails'})
+    assert h.scoped_secrets.call_args.kwargs['recording'] is True
 
 
 class TestSummonAllowList:
@@ -683,6 +693,7 @@ class TestCommandArgv:
       drop=True,
       llm='::xhigh+fast',
       bro='dev',
+      cred=['github+work'],
       grant=['gmail_creds', '@bro'],
       revoke=['notion'],
       into='feature',
@@ -690,8 +701,8 @@ class TestCommandArgv:
     ).to_command_argv()
     assert parts == [
       'ride', 'along', '--drop', '--repo', str(Path.cwd()), '--hold', 'attended', '--llm', '::xhigh+fast',
-      '--harness', 'claude', '--workspace', 'w', '--grant', 'gmail_creds',
-      '--grant', '@bro', '--revoke', 'notion', '--into', 'feature', 'dev',
+      '--harness', 'claude', '--workspace', 'w', '--cred', 'github+work',
+      '--grant', 'gmail_creds', '--grant', '@bro', '--revoke', 'notion', '--into', 'feature', 'dev',
       '--', '--foo',
     ]  # fmt: skip
 
@@ -775,42 +786,45 @@ class TestCommandArgv:
 
 class TestScopeOverrides:
   def test_values_join_the_recorded_lists(self):
-    updated = _spec(grant=['brog+github'], revoke=['openai']).with_scope_overrides(
-      grant=['@bro-dev'], revoke=['brave']
+    updated = _spec(cred=['brog+github'], grant=['github'], revoke=['openai']).with_scope_overrides(
+      cred=['trails+write'], grant=['@bro-dev'], revoke=['brave']
     )
-    assert updated.grant == ['brog+github', '@bro-dev']
+    assert updated.cred == ['brog+github', 'trails+write']
+    assert updated.grant == ['github', '@bro-dev']
     assert updated.revoke == ['openai', 'brave']
 
-  def test_an_override_cancels_the_opposite_recorded_one(self):
-    # granting back a revoked credential leaves the computed scope's own selection
+  def test_a_credential_override_replaces_the_opposite_recorded_one(self):
     updated = _spec(grant=['@bro-dev'], revoke=['openai']).with_scope_overrides(
-      grant=['openai'], revoke=['@bro-dev']
+      cred=[], grant=['openai'], revoke=['@bro-dev']
     )
-    assert (updated.grant, updated.revoke) == ([], [])
+    assert (updated.grant, updated.revoke) == (['openai'], [])
 
-  def test_revoke_kind_cancels_a_recorded_instance_grant(self):
-    updated = _spec(grant=['github+reviewer']).with_scope_overrides(grant=[], revoke=['github'])
-    assert (updated.grant, updated.revoke) == ([], [])
-
-  def test_a_new_instance_grant_replaces_the_recorded_same_kind_grant(self):
-    updated = _spec(grant=['github+reviewer']).with_scope_overrides(
-      grant=['github+developer'], revoke=[]
+  def test_revoke_kind_drops_a_recorded_pick(self):
+    updated = _spec(cred=['github+reviewer'], grant=['github']).with_scope_overrides(
+      cred=[], grant=[], revoke=['github']
     )
-    assert updated.grant == ['github+developer']
+    assert updated.cred == []
+    assert (updated.grant, updated.revoke) == ([], ['github'])
 
-  def test_instance_spelled_revoke_is_rejected_on_resume(self):
-    with pytest.raises(ValueError, match=r'revoke its kind instead \(--revoke github\)'):
-      _spec(grant=['github+reviewer']).with_scope_overrides(grant=[], revoke=['github+reviewer'])
+  def test_a_new_pick_replaces_the_recorded_pick_for_the_same_kind(self):
+    updated = _spec(cred=['github+reviewer']).with_scope_overrides(
+      cred=['github+developer'], grant=[], revoke=[]
+    )
+    assert updated.cred == ['github+developer']
 
-  def test_restating_a_recorded_override_raises(self):
+  def test_restating_a_recorded_credential_override_is_harmless(self):
+    updated = _spec(grant=['github'], revoke=['openai']).with_scope_overrides(
+      cred=[], grant=['github'], revoke=['openai']
+    )
+    assert updated.grant == ['github']
+    assert updated.revoke == ['openai']
+
+  def test_restating_a_recorded_authority_override_raises(self):
     with pytest.raises(ValueError, match='already in the recorded --grant: @bro-dev'):
-      _spec(grant=['@bro-dev']).with_scope_overrides(grant=['@bro-dev'], revoke=[])
-    with pytest.raises(ValueError, match='already in the recorded --revoke: openai'):
-      _spec(revoke=['openai']).with_scope_overrides(grant=[], revoke=['openai'])
+      _spec(grant=['@bro-dev']).with_scope_overrides(cred=[], grant=['@bro-dev'], revoke=[])
 
   def test_a_contradicting_pair_survives_for_the_scope_layer(self):
-    # nothing recorded to cancel, so both land and the launch preflight rejects them
-    updated = _spec().with_scope_overrides(grant=['openai'], revoke=['openai'])
+    updated = _spec().with_scope_overrides(cred=[], grant=['openai'], revoke=['openai'])
     assert (updated.grant, updated.revoke) == (['openai'], ['openai'])
 
 
@@ -821,6 +835,7 @@ class TestResumeSpecRecord:
       drop=True,
       llm='::xhigh',
       bro='dev',
+      cred=['github+work'],
       grant=['gmail_creds'],
       into='feature',
       prompt='do it',
@@ -834,10 +849,11 @@ class TestResumeSpecRecord:
     assert loaded is not None and loaded.resume and not loaded.drop
     assert loaded.into is None and loaded.prompt is None and loaded.arguments == []
     # the forwarded flags survive, so the resumed session runs as it was launched
-    assert (loaded.hold, loaded.llm, loaded.bro, loaded.grant, loaded.env) == (
+    assert (loaded.hold, loaded.llm, loaded.bro, loaded.cred, loaded.grant, loaded.env) == (
       'attended',
       '::xhigh',
       'dev',
+      ['github+work'],
       ['gmail_creds'],
       {'IS_SANDBOX': '1'},
     )
@@ -902,10 +918,14 @@ class TestResumeSession:
     assert start.call_args[0][0] == _spec(bro='dev', hold='attended').resume_variant()
 
   def test_scope_overrides_reach_the_relaunch(self, tmp_path):
-    ride_session.record_resume_spec(_workspace(tmp_path), _spec(grant=['brog+github']))
+    ride_session.record_resume_spec(
+      _workspace(tmp_path), _spec(cred=['brog+github'], grant=['brog'])
+    )
     with patch('ride.session.start_session', return_value=0) as start:
       assert _resume(grant=['@bro-dev']) == 0
-    assert start.call_args[0][0].grant == ['brog+github', '@bro-dev']
+    spec = start.call_args[0][0]
+    assert spec.cred == ['brog+github']
+    assert spec.grant == ['brog', '@bro-dev']
 
   def test_a_no_op_override_errors(self, tmp_path, caplog):
     ride_session.record_resume_spec(_workspace(tmp_path), _spec(grant=['@bro-dev']))

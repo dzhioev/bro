@@ -56,6 +56,7 @@ Unboxed sessions have no container boundary, so the guided default retains permi
 It forwards `--boxed`,
 `--unboxed`,
 `--hold`,
+`--cred`,
 `--grant`,
 `--revoke`,
 `--into`,
@@ -65,7 +66,7 @@ It forwards `--boxed`,
 `--harness`,
 and the LLM-selection flags.
 
-Task prefetch reads brog through the selected harness's prospective scope and the same grant/revoke values that the session receives.
+Task prefetch reads brog through the selected harness's prospective scope and the same credential picks and grant/revoke values that the session receives.
 A missing backend or invalid scope override fails before a workspace is launched.
 
 `-n / --dry-run` prints the final `ride along` command with shell quoting.

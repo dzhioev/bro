@@ -82,8 +82,9 @@ it never changes into a join.
 
 The child's scope is a knob too:
 grants and revokes.
-A grant names a credential kind, a `kind+instance`, `@bro` for a summon target of the target's own, or a party permit;
+A grant names a credential kind, `@bro` for a summon target of the target's own, or a party permit;
 a revoke names a credential kind, `@bro`, or a permit.
+Credential grants and revokes cannot name instances.
 The permits are `:bro.party.start.boxed`, `:bro.party.start.unboxed`, and `:bro.party.join`, always as leaves.
 They start from the target's own declarations, not yours
 — nothing of your scope reaches the child unless you name it, and you can only name what you hold yourself:
@@ -91,11 +92,10 @@ a credential in your own scope,
 a bro in your own allow-list,
 or a permit in your own set.
 Grant only what the request actually needs and the user asked for:
-a credential the target's manifest lacks (`staging_api` for an integration run),
-an instance your own scope resolves for that kind,
+a credential kind the target's manifest lacks (`staging_api` for an integration run),
 or a bro the target has to reach onward (`@reviewer` so a developer child can hand off a review).
-An instance grant replaces the target's selection for that kind.
-Both directions are strict, so a no-op grant or a revoke of a kind or bro the target lacks fails the summon rather than passing quietly.
+Credential grants and revokes are idempotent.
+`@bro` and permit changes remain strict, so a no-op authority grant or an authority revoke the target lacks fails the summon rather than passing quietly.
 
 The quest's **talk** is a separate least-authority knob.
 The child gets `worker.say` by default;

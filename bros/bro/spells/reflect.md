@@ -125,7 +125,7 @@ For each finding, name the one surface whose edit prevents the recurrence:
   A tool's behavior is code and outside this loop;
   a tool the run lacked is mounted when it exists, and the text that leaned on it is edited to name the gap when it does not
 - **the launch scope** — what a launch adds to the declaration:
-  the `--grant` / `--revoke` layer of the launch line or of the summon that started the run, the repository's `[tool.bro]` grant and revoke lists, and the host config's layers;
+  the `--cred` / `--grant` / `--revoke` layer of the launch line or of the summon that started the run, the repository's `[tool.bro]` grant and revoke lists, and the host config's layers;
   a spell that composes a launch line or a summon for the user owns the grants it names
 - **the bro's system prompt**
   — the class-level `system_prompt` of the bro or of the ancestor that owns the rule;

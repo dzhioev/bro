@@ -30,7 +30,7 @@ Core's `llm_flags.py` provides shared `--provider` / `--model` / `--effort` / `-
 `bro-native`'s `bro/run.py` is the lightweight dispatcher;
 it imports `run.py` or `call.py` only after selecting a launch verb, so metadata commands do not pull in the launcher stack.
 
-The public verbs deliberately accept no runtime shaping flags (`--summon`, `--grant`, `--revoke`, `--into`, `--no-trails`) and have no in-container refusal.
+The public verbs deliberately accept no runtime shaping flags (`--summon`, `--cred`, `--grant`, `--revoke`, `--into`, `--no-trails`) and have no in-container refusal.
 
 ### Display and holds
 

@@ -14,7 +14,7 @@ Selections live outside repositories and merge from general to specific:
         "https://github.com/foo/api.git": {
           "creds": ["brog+github", "github+dev"],
           "bros": {
-            "eyebro": {"creds": ["trails+review"], "grant": ["github+reviewer"]}
+            "eyebro": {"creds": ["trails+review", "github+reviewer"], "grant": ["github"]}
           }
         },
         "/home/foo/projects/api": {"creds": ["aws+laptop"]}
@@ -28,8 +28,8 @@ select the kind's empty instance.
 A list may name each kind once.
 `defaults`, project entries, and `bros` entries may carry unified `grant` and
 `revoke` lists: credential names, `@bro` targets, and `:permit` leaves.
-An instance-spelled credential grant selects the instance as `creds` does.
-An entry names a credential kind in `creds` or in `grant`, not both.
+Credential grants and revokes name bare kinds only.
+`creds` picks without adding a kind, so one entry may pick and grant the same kind.
 A `bros` entry may also carry `llm`: the recipe the bro runs by default on this
 project, in the `--llm` grammar, beneath the launch's own flags.
 The grammar is installation-independent, so unknown credential and bro names
@@ -52,8 +52,8 @@ Launch selection and scope precedence runs defaults, the URL entry, the path ent
 then each of their `bros` layers in that same order;
 a command's credential selection is its `user.tools` entry, `user`, then defaults.
 A kind no layer selects reads its empty instance.
-The returned layer map attributes every explicit selection, and the returned
-grant set carries the credential kinds left granted by the matching scope layers.
+The returned layer map attributes every explicit selection, and the ordered scope
+layers retain each pick, grant, and revoke for the launch fold.
 `launch_llm` returns the recipes the matching `bros` entries name in that same
 order, each with its layer.
 
@@ -67,13 +67,13 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
 from bro.base import configs, credentials
 from bro.base.git_url import is_git_url, normalize_git_url
-from bro.base.scope import ScopeLayer, split_scope_overrides, validate_scope_layer
+from bro.base.scope import ScopeLayer, validate_scope_layer
 
 # Module-level so tests can point it at a fixture path; read at call time.
 HOST_CONFIG_FILE = configs.DEFAULT_HOST_CONFIG
@@ -123,7 +123,6 @@ class CredentialSelection:
 
   instances: dict[str, str]
   layers: dict[str, str]
-  grants: frozenset[str] = frozenset()
   scope_layers: tuple[ScopeLayer, ...] = ()
 
 
@@ -309,27 +308,13 @@ def _merged(
   instances: dict[str, str] = {}
   sources: dict[str, str] = {}
   scope_layers: list[ScopeLayer] = []
-  granted_credentials: set[str] = set()
   for layer, entry in layers:
     selection = entry.selection if isinstance(entry, _ScopeEntry) else entry
     instances.update(selection)
     sources.update(dict.fromkeys(selection, layer))
-    if not isinstance(entry, _ScopeEntry):
-      continue
-    if entry.scope != ScopeLayer():
-      scope_layers.append(entry.scope)
-    grant_credentials, _, _ = split_scope_overrides(entry.scope.grant)
-    revoke_credentials, _, _ = split_scope_overrides(entry.scope.revoke)
-    granted_credentials.update(credentials.parse_name(value)[0] for value in grant_credentials)
-    granted_credentials.difference_update(
-      credentials.parse_name(value)[0] for value in revoke_credentials
-    )
-  return CredentialSelection(
-    instances,
-    sources,
-    frozenset(granted_credentials),
-    tuple(scope_layers),
-  )
+    if isinstance(entry, _ScopeEntry) and entry.scope != ScopeLayer():
+      scope_layers.append(replace(entry.scope, source=layer))
+  return CredentialSelection(instances, sources, tuple(scope_layers))
 
 
 def _projects(path: Path, value: object) -> dict[str, _Project]:
@@ -367,21 +352,15 @@ def _scope_entry(where: str, value: object) -> _ScopeEntry:
   if not isinstance(value, dict):
     raise ValueError(f'{where} must hold a json object')
   _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY, _REVOKE_KEY}, where)
-  selection = _selection_entries(where, value.get(_CREDS_KEY, []))
+  credential_names = _scope_values(where, value.get(_CREDS_KEY, []), _CREDS_KEY)
+  selection = _selection_entries(where, list(credential_names))
   grant = _scope_values(where, value.get(_GRANT_KEY, []), _GRANT_KEY)
   revoke = _scope_values(where, value.get(_REVOKE_KEY, []), _REVOKE_KEY)
-  scope = ScopeLayer(grant, revoke)
+  scope = ScopeLayer(grant, revoke, credential_names)
   try:
-    validate_scope_layer(scope, allow_credential_instances=True)
+    validate_scope_layer(scope)
   except ValueError as error:
     raise ValueError(f'{where}: {error}') from error
-  grant_credentials, _, _ = split_scope_overrides(grant)
-  for granted in grant_credentials:
-    kind, instance = credentials.parse_name(granted)
-    if kind in selection:
-      raise ValueError(f'{where} names kind {kind!r} in both {_CREDS_KEY} and {_GRANT_KEY}')
-    if instance is not None:
-      selection[kind] = instance
   return _ScopeEntry(selection, scope)
 
 
