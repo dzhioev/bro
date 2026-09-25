@@ -278,25 +278,30 @@ class DynamoStore(TrailsStore):
     extent = decision.attach_to['extent']
     self.migrate_trail(trail_id)
     header = self._required_header(trail_id)
-    fields = {**backends.attached_header(header, request), 'last_alive_at': _now_iso()}
+    restamp = backends.attached_header(header, request)
+    fields = {**restamp.values, 'last_alive_at': _now_iso()}
     expected_format = formats.stored_format(header, description=f'trail {trail_id} header')
     format_condition, format_names, format_values = _stored_format_condition(expected_format)
     names = {
       '#extent': 'extent',
       **format_names,
       **{f'#{field}': field for field in fields},
+      **{f'#{field}': field for field in restamp.removed},
     }
     values = {
       ':extent': _ddb(extent),
       **format_values,
       **{f':{field}': _ddb(value) for field, value in fields.items()},
     }
+    update_expression = 'SET ' + ', '.join(f'#{field} = :{field}' for field in fields)
+    if len(restamp.removed) > 0:
+      update_expression += ' REMOVE ' + ', '.join(f'#{field}' for field in restamp.removed)
     try:
       self._dynamo.update_item(
         TableName=self._trails_table,
         Key=_ddb_item({'id': trail_id}),
         ConditionExpression=f'#extent = :extent AND {format_condition}',
-        UpdateExpression='SET ' + ', '.join(f'#{field} = :{field}' for field in fields),
+        UpdateExpression=update_expression,
         ExpressionAttributeNames=names,
         ExpressionAttributeValues=values,
       )

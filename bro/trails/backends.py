@@ -67,6 +67,12 @@ class OpenedBody:
 
 
 @dataclass(frozen=True)
+class HeaderRestamp:
+  values: dict[str, Any]
+  removed: frozenset[str]
+
+
+@dataclass(frozen=True)
 class Adapter:
   parse: Callable[[Any], ParsedRecord]
   classify: Callable[[ParsedRecord], Classification]
@@ -106,7 +112,7 @@ def blaze_result(
   return result
 
 
-def attached_header(header: dict, request: BlazeRequest) -> dict[str, Any]:
+def attached_header(header: dict, request: BlazeRequest) -> HeaderRestamp:
   """The header values a trail takes on when a lifetime attaches to it: the facts
   the blaze would have minted a trail with, latest-wins over the ones the previous
   lifetime left, and the end mark cleared so the trail is open again. `summoned_by`
@@ -116,13 +122,17 @@ def attached_header(header: dict, request: BlazeRequest) -> dict[str, Any]:
   restamped = {
     key: value for key, value in request.native.items() if key not in _MINTED_NATIVE_FIELDS
   }
-  return {
+  values = {
     'end': None,
     'version': request.version,
     'hold': request.hold,
     'location': request.location,
     'native': {**header.get('native', {}), **restamped},
   }
+  if request.git is not None:
+    values['git'] = request.git
+  removed = frozenset({'git'}) if request.git is None else frozenset()
+  return HeaderRestamp(values, removed)
 
 
 def add_numeric_maps(left: dict, right: dict) -> dict:

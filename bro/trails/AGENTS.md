@@ -57,7 +57,7 @@ bro · claude recorders                     readers
   — and whether any of them stores one record uuid, the mid-write test and the only row read a resolution can make.
   Nothing on this path crosses the wire, and continuity across recorder lifetimes comes from the stored rows alone, through the head they folded.
 - An attach reopens the trail it names:
-  each store clears `end` and restamps the blaze's own lifetime facts over the header latest-wins, leaving `summoned_by` to the run that opened the trail and the row-folded aggregate to the rows
+  each store clears `end` and restamps the blaze's own lifetime facts, including `git`, over the header latest-wins, leaving `summoned_by` to the run that opened the trail and the row-folded aggregate to the rows
   — `backends.attached_header` is the one place that decides which fields those are.
   The write is conditional on the extent the verdict was verified against, since an append landing meanwhile would leave the awarded spans off by its length;
   a lost race answers `backends.ATTACH_CONTENDED` and the caller resolves again.
@@ -108,11 +108,14 @@ bro · claude recorders                     readers
 - `importing.py` owns what every backend's import does alike:
   the unsealed header a recorded one becomes
   — every field as recorded, the read projections and the fold-owned fields dropped, the server-derived native fold cleared down to the minted lineage cuts, the format label kept —
+  the validation of a recorded header's blaze-owned fields, including `git`,
   the identity two recorded headers are matched on and the mark an import leaves on its header until the seal,
   the parent requirements interpreted through the header's in-memory upgrade and digest verification of every stored or carried tool blob,
   the digest match of rows re-sent over ones already stored,
   and the fields a seal writes from a replay of every row.
   Rows are stored as recorded, each keeping its format, so an imported trail reads through the in-memory upgrades and migrates the next time a writer reopens it.
+- `launch_context.py` is the transitional pure fold between a stored launch context and the `git` / `legacy_launch_context` header fields, plus the inverse old readers are served.
+  It rejects malformed stored shapes with the trail named, preserves legacy records whole and in order, and gives an already-restamped header's `git` precedence over the minting launch's record.
 - `transfer.py` moves trails whose imports are complete between stores as directories in the local store layout and refuses a source trail whose import is incomplete:
   `export_trails` writes the named trails and every ancestor reachable through `forked_from` and `summoned_by`, parents first, into a `LocalStore` at the output root through the import path, blobs included;
   `import_layout` reads a layout as stored and imports every trail it holds into any store, parents first.
@@ -142,7 +145,7 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
 
 ## Surfaces
 
-- `model.py` owns `TRAIL_FORMAT`, `BlazeRequest`, shared validation constants, trail/step/lineage records, and body helpers.
+- `model.py` owns `TRAIL_FORMAT`, `BlazeRequest`, the `git` header vocabulary and validator, shared validation constants, trail/step/lineage records, and body helpers.
   `BlazeRequest.from_wire()` / `to_wire()` is the one blaze-envelope validator;
   harness-native validation and body opening remain in each store.
   A step id is an ordinal in rows and lineage pointers.
