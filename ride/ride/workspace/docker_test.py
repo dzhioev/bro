@@ -448,7 +448,7 @@ class TestPrepareContainer:
       workspace_docker.credentials,
       'build_scoped_store',
       lambda store, secrets, optional=(): (
-        events.append(('store', secrets, optional))
+        events.append(('store', store.selection, secrets, optional))
         or ({'creds/x.cred': b'y'}, frozenset({'github'}))
       ),
     )
@@ -472,6 +472,7 @@ class TestPrepareContainer:
       image='runtime-image',
       runtime_bundle_hash='bundle-hash',
       optional_secrets=('openai',),
+      credential_selection={'openai': 'work'},
       extra_mounts=('/host:/container',),
       repo=project,
       base_ref='base-sha',
@@ -481,7 +482,7 @@ class TestPrepareContainer:
       'clone',
       (Repository(str(project), project), workspace.tree, 'workspace-ws', 'base-sha'),
     )
-    assert events[1] == ('store', ('github',), ('openai',))
+    assert events[1] == ('store', {'openai': 'work'}, ('github',), ('openai',))
     argv_event = events[2]
     assert argv_event[0] == 'argv'
     assert argv_event[1] == (
@@ -528,10 +529,15 @@ class TestMemberExec:
 
   def test_prepare_member_exec_delivers_and_reowns_the_store(self, monkeypatch):
     store = {'creds/github.cred': b'material'}
+
+    def build_scoped_store(source, secrets, optional=()):
+      assert source.selection == {'github': 'dev'}
+      return store, frozenset({'github'})
+
     monkeypatch.setattr(
       workspace_docker.credentials,
       'build_scoped_store',
-      lambda source, secrets, optional=(): (store, frozenset({'github'})),
+      build_scoped_store,
     )
     calls: list = []
 

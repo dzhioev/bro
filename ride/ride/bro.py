@@ -54,8 +54,8 @@ class BroHarness:
     selection = LLMSelection() if value is None else parse(value)
     return resolve_native(get_class(bro_name).llm_spec, selection)
 
-  def preflight_auth(self, spec: 'SessionSpec') -> Optional[str]:
-    del spec
+  def preflight_auth(self, spec: 'SessionSpec', scoped: ScopedSecrets) -> Optional[str]:
+    del spec, scoped
     return None
 
   def session_exists(self, workspace: Workspace) -> bool:

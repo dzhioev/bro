@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+from bro.base import credentials
 from bro.base.host_config import (
   PROJECT_PATH_BRO_LAYER,
   PROJECT_PATH_LAYER,
@@ -20,10 +21,11 @@ def _run(
   selection,
   scoped,
   layers=None,
-  available=lambda name: True,
+  present=None,
   bro=None,
   harness='claude',
 ):
+  scoped = ScopedSecrets(scoped.required, scoped.optional, dict(selection))
   with (
     patch(
       'ride.scope_report.project_config',
@@ -37,13 +39,59 @@ def _run(
       ),
     ),
     patch('ride.scope_report.scoped_secrets', return_value=scoped) as scope,
-    patch('ride.scope_report.credentials.available', available),
+    patch(
+      'ride.scope_report.credentials.Store.instance_names',
+      return_value=frozenset(
+        present
+        if present is not None
+        else {
+          f'{name}+{selection[name]}' if selection.get(name) else name
+          for name in scoped.required | scoped.optional
+        }
+      ),
+    ),
   ):
     rc = report_scope(repo=Path('/repo'), bro=bro, harness=harness)
   return rc, capsys.readouterr().out, scope
 
 
 class TestReportScope:
+  def test_real_report_classifies_names_without_loading_them(self, capsys, monkeypatch, tmp_path):
+    (tmp_path / 'pyproject.toml').write_text('[tool.bro]\ndefault = "bro-dev"\n')
+    store = tmp_path / 'store'
+    material = store / credentials.MATERIAL_DIR
+    material.mkdir(parents=True)
+    (material / 'github+reviewer.cred').write_text('github-token')
+    config = tmp_path / 'bro.json'
+    config.write_text(
+      json.dumps(
+        {
+          'projects': {
+            str(tmp_path): {
+              'creds': ['github+reviewer', 'brog+missing', 'openai+work'],
+            }
+          }
+        }
+      )
+    )
+    monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+
+    assert report_scope(repo=tmp_path, bro='bro-dev', harness='claude') == 0
+
+    rows = {
+      line.split()[0]: line
+      for line in capsys.readouterr().out.splitlines()
+      if line.startswith('  ')
+    }
+    assert 'github+reviewer' in rows['github']
+    assert rows['github'].endswith('PRESENT')
+    assert rows['brog'].endswith('MISSING')
+    assert rows['claude_code'].endswith('MISSING')
+    assert rows['openai'].endswith('MISSING')
+    assert 'trails (unpicked)' in rows['trails']
+    assert rows['trails'].endswith('SKIPPED')
+
   def test_names_the_instance_each_selected_kind_reads(self, capsys):
     rc, out, _ = _run(
       capsys,
@@ -75,15 +123,19 @@ class TestReportScope:
       columns.add(row.rindex(state))
     assert len(columns) == 1
 
-  def test_marks_a_selection_that_does_not_resolve(self, capsys):
+  def test_reports_presence_skip_and_failure_by_stored_name(self, capsys):
     rc, out, _ = _run(
       capsys,
-      selection={'brog': 'github'},
-      scoped=ScopedSecrets({'brog'}, set()),
-      available=lambda name: False,
+      selection={'brog': 'github', 'openai': 'work'},
+      scoped=ScopedSecrets({'brog', 'github'}, {'openai', 'trails'}),
+      present={'brog+github'},
     )
     assert rc == 0
-    assert 'MISSING' in out
+    rows = {line.split()[0]: line for line in out.splitlines() if line.startswith('  ')}
+    assert rows['brog'].endswith('PRESENT')
+    assert rows['github'].endswith('MISSING')
+    assert rows['openai'].endswith('MISSING')
+    assert rows['trails'].endswith('SKIPPED')
 
   def test_reads_the_kinds_empty_instance(self, capsys):
     _, out, _ = _run(capsys, selection={'brog': ''}, scoped=ScopedSecrets({'brog'}, set()))

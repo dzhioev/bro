@@ -17,7 +17,7 @@ class TestLogScopedSecrets:
       workspace_store.log_scoped_secrets('ws', {'github', 'aws'}, {'openai', 'github'})
     assert 'scoped secrets for ws: aws, github' in caplog.text
     # the optional line reports only names not already required
-    assert 'optional (best-effort) secrets for ws: openai' in caplog.text
+    assert 'optional secrets for ws: openai' in caplog.text
 
   def test_empty_scope_logs_none_and_skips_the_optional_line(self, caplog):
     with caplog.at_level('INFO'):

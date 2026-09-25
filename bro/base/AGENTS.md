@@ -35,8 +35,9 @@ run those with `--help` for flags.
   `as_default_store(store)` resolves through a given store for the block, in the calling thread or task alone.
   `$cred` references expand during resolution, with kind targets applying the same selection and instance targets reading storage directly.
   `known_names()` is the code registry's kinds, while the CLI's `--instance` list enumerates the store directory and typed annotations.
-  `build_scoped_store(store, names, optional=…)` emits `creds/<kind>.cred` plus typed annotations in `creds.json`, and reports the declared kinds that resolved separately from transitive `$cred` pulls.
-  `scoped_view_store` is the lazy, kinds-bounded sibling over the passed store.
+  `build_scoped_store(store, names, optional=…)` emits `creds/<kind>.cred` plus typed annotations in `creds.json`, and reports the declared kinds that loaded separately from transitive `$cred` pulls.
+  It judges presence through `instance_names`, skips only an unpicked optional empty instance that is absent, and fails every selected load error.
+  `scoped_view_store` applies the same presence rule to a lazy, kinds-bounded sibling over the passed store.
   `install_hooks(registry, kinds, store, directory, env)` applies only the named kinds and resolves hook values through that store.
   Schemas live in `bro/setup/AGENTS.md`.
 - `configs.py` — the exclusive `BRO_STORE` directory (default `~/.bro`), the `~/.bro.json` host config beside it, the default summon depth and harness, and the installed bro distribution version shared by credential consumers and trail records.

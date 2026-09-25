@@ -221,5 +221,7 @@ Common material paths and shapes:
 **Scoped stores.**
 A managed session reads a synthesized store rather than the host's, in this same layout, and the directory is the bound:
 a name not hydrated resolves to `SecretNotFound`, while the code registry's full kind universe remains known for capability checks.
+The host skips only an optional kind whose empty instance is both unpicked and absent;
+every other held name must be present and load successfully before launch.
 How a launch selects, hydrates, and delivers it, install hooks included:
 `bro/reference/ride.md`, "Scoped credential hydration".

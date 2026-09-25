@@ -196,8 +196,9 @@ class MCPServer(ABC):
   needed_secrets: tuple[str, ...] = ()
   # credentials this server's tools use *if present* but degrade without (e.g. the
   # LLM key behind a query-focused summary). unioned into `bro.optional_secrets()`,
-  # which the host hydrates best-effort (`build_scoped_store(optional=...)`) — an
-  # absent one is skipped, not a launch failure. mirrors `needed_secrets`.
+  # whose unpicked empty instance the host may skip when absent
+  # (`build_scoped_store(optional=...)`). a picked or present name must load.
+  # mirrors `needed_secrets`.
   optional_secrets: tuple[str, ...] = ()
   # the flat namespace this server's tools live in (`tasks`, `dev`, `bro`,
   # `<name>-source`). the assembling layer reads it to keep two sources'
