@@ -92,6 +92,12 @@ class TestReportScope:
     assert 'trails (unpicked)' in rows['trails']
     assert rows['trails'].endswith('SKIPPED')
 
+  def test_a_malformed_project_config_is_reported_without_escaping(self, capsys, tmp_path):
+    (tmp_path / 'pyproject.toml').write_text('[tool.bro]\nharness = "unknown"\n')
+
+    assert report_scope(repo=tmp_path, bro='bro-dev', harness='claude') == 1
+    assert 'cannot compute the scope:' in capsys.readouterr().out
+
   def test_names_the_instance_each_selected_kind_reads(self, capsys):
     rc, out, _ = _run(
       capsys,

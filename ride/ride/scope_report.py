@@ -16,23 +16,23 @@ from ride.scope import (
 
 
 def report_scope(repo: Optional[Repository | Path], bro: Optional[str], harness: str) -> int:
-  repo = None if repo is None else as_repository(repo)
-  if repo is None and bro is None:
-    raise ValueError('ride scope requires --bro when detached')
-  config = (
-    None
-    if repo is None
-    else (repo.project_config() if repo.is_url else project_config(repo.git_dir))
-  )
-  if bro is None:
-    assert config is not None
-    bro_name = config.default_bro
-  else:
-    bro_name = bro
-  driver = get_harness(harness)
-  recipe = driver.scope_recipe()
-  attachment = None if repo is None else repo.identity
   try:
+    repo = None if repo is None else as_repository(repo)
+    if repo is None and bro is None:
+      raise ValueError('ride scope requires --bro when detached')
+    config = (
+      None
+      if repo is None
+      else (repo.project_config() if repo.is_url else project_config(repo.git_dir))
+    )
+    if bro is None:
+      assert config is not None
+      bro_name = config.default_bro
+    else:
+      bro_name = bro
+    driver = get_harness(harness)
+    recipe = driver.scope_recipe()
+    attachment = None if repo is None else repo.identity
     binding = bind_launch_credentials(attachment, bro_name)
     llm_spec = launch_llm_spec(driver, attachment, bro_name, None)
     scoped = scoped_secrets(bro_name, recipe, attachment=attachment, llm_spec=llm_spec)

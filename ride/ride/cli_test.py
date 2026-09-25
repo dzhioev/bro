@@ -625,6 +625,19 @@ class TestLifecycle:
       assert ride_cli.main(['ride', 'scope', '--bro', 'dev', '--harness', 'claude']) == 0
     assert report.call_args.kwargs == {'repo': None, 'bro': 'dev', 'harness': 'claude'}
 
+  def test_scope_reports_a_malformed_project_config_as_a_cli_error(self, monkeypatch, capsys):
+    repository = SimpleNamespace(is_url=False, git_dir=Path('/repo'))
+    monkeypatch.setattr(ride_cli, '_resolve_repository_argument', lambda _value: repository)
+
+    with (
+      patch.object(
+        ride_cli, 'project_config', side_effect=ValueError('malformed project configuration')
+      ),
+      pytest.raises(SystemExit),
+    ):
+      ride_cli.main(['ride', 'scope', '--repo', '/repo', '--bro', 'dev'])
+    assert 'malformed project configuration' in capsys.readouterr().err
+
   def test_an_unusable_runtime_location_is_a_cli_error(self, monkeypatch, caplog):
     monkeypatch.setenv('XDG_DATA_HOME', 'share')
     assert ride_cli.main(['ride', 'list']) == 1

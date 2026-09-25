@@ -72,6 +72,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import configs, credentials
+from bro.base.args import CLIError
 from bro.base.git_url import is_git_url, normalize_git_url
 from bro.base.scope import ScopeLayer, validate_scope_layer
 
@@ -84,7 +85,7 @@ PROJECT_URL_LAYER = 'project-url'
 PROJECT_PATH_LAYER = 'project-path'
 PROJECT_URL_BRO_LAYER = 'project-url-bro'
 PROJECT_PATH_BRO_LAYER = 'project-path-bro'
-TOOL_LAYER = 'tool'
+TOOL_LAYER = 'user.tools'
 BRO_LAYERS = frozenset({PROJECT_URL_BRO_LAYER, PROJECT_PATH_BRO_LAYER})
 
 _DEFAULTS_KEY = 'defaults'
@@ -176,6 +177,13 @@ class _Config:
 
 
 def _read() -> _Config:
+  try:
+    return _read_unchecked()
+  except ValueError as error:
+    raise CLIError(str(error)) from error
+
+
+def _read_unchecked() -> _Config:
   path = Path(HOST_CONFIG_FILE)
   if not path.is_file():
     return _Config(_ScopeEntry({}, ScopeLayer()), _User({}, {}), {}, {}, None)
