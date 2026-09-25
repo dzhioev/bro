@@ -614,16 +614,47 @@ def _record_source(root: Path, **overrides) -> tuple[LocalStore, str]:
   return source, trail_id
 
 
+def _old_import_begin(store: TrailsStore, header: dict, launch_context: object) -> dict:
+  if isinstance(store, NetworkStore):
+    return store._send(
+      'POST',
+      f'/v1/admin/trails/{header["id"]}/import',
+      {'header': header, 'launch_context': launch_context},
+    )
+  return store.begin_import(header, launch_context=launch_context)
+
+
+def _old_import(
+  store: TrailsStore,
+  header: dict,
+  rows: list[dict],
+  launch_context: object,
+  *,
+  tools: dict[str, object],
+) -> dict:
+  trail_id = _old_import_begin(store, header, launch_context)['trail_id']
+  store.import_rows(trail_id, 0, rows, tools=tools)
+  return store.seal_import(trail_id)
+
+
 class TestImportContract:
   def test_old_importer_context_folds_and_reimport_is_idempotent(self, trails_store, tmp_path):
     source, trail_id = _record_source(tmp_path / 'old-importer')
     header, rows, _ = _recorded(source, trail_id)
 
-    imported = trails_store.import_trail(
-      header, rows, launch_context=_KAP_CONTEXT, tools={_TOOLS_DIGEST: _TOOLS}
+    imported = _old_import(
+      trails_store,
+      header,
+      rows,
+      _KAP_CONTEXT,
+      tools={_TOOLS_DIGEST: _TOOLS},
     )
-    repeated = trails_store.import_trail(
-      header, rows, launch_context=_KAP_CONTEXT, tools={_TOOLS_DIGEST: _TOOLS}
+    repeated = _old_import(
+      trails_store,
+      header,
+      rows,
+      _KAP_CONTEXT,
+      tools={_TOOLS_DIGEST: _TOOLS},
     )
 
     assert imported == {'trail_id': trail_id, 'extent': 3}
@@ -724,7 +755,7 @@ class TestImportContract:
     with pytest.raises(TrailCollision, match='row 1 differs'):
       trails_store.import_rows(trail_id, 0, [rows[0], changed, rows[2]])
     with pytest.raises(TrailCollision, match='header differs'):
-      trails_store.begin_import(header, launch_context=[{'kind': 'elsewhere'}])
+      _old_import_begin(trails_store, header, [{'kind': 'elsewhere'}])
 
   def test_an_import_requires_parents_and_tool_blobs(self, trails_store, tmp_path):
     source = LocalStore(tmp_path / 'source')
