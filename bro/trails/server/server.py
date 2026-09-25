@@ -259,19 +259,6 @@ async def _handle_get_trail(request: web.Request) -> web.Response:
 
 
 @requires(Permission.READ)
-async def _handle_get_context(request: web.Request) -> web.Response:
-  trail_id = request.match_info['trail_id']
-  store: TrailsStore = request.app['store']
-  try:
-    context = await _dispatch(store.get_launch_context, trail_id)
-  except TrailNotFound:
-    return _trail_not_found(trail_id)
-  except ValueError as exception:
-    return _error(str(exception), 400)
-  return web.json_response({'launch_context': context})
-
-
-@requires(Permission.READ)
 async def _handle_get_step(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   step_id = _parse_ordinal(request.match_info['step_id'], name='step_id')
@@ -348,7 +335,7 @@ async def _handle_begin_import(request: web.Request) -> web.Response:
   payload = await _read_json(request)
   if not isinstance(payload, dict):
     return _error('invalid json', 400)
-  unknown = set(payload) - {'header', 'launch_context'}
+  unknown = set(payload) - {'header'}
   if len(unknown) > 0:
     return _error(f'unknown fields: {sorted(unknown)}', 400)
   header = payload.get('header')
@@ -358,9 +345,7 @@ async def _handle_begin_import(request: web.Request) -> web.Response:
     return _error('header id must name the trail of the path', 400)
   store: TrailsStore = request.app['store']
   try:
-    result = await _dispatch(
-      store.begin_import, header, launch_context=payload.get('launch_context')
-    )
+    result = await _dispatch(store.begin_import, header)
   except TrailCollision as exception:
     return _collision(exception)
   except ValueError as exception:
@@ -460,54 +445,6 @@ def _administered(handler):
     return await handler(request)
 
   return guarded
-
-
-async def _context_operation_payload(
-  request: web.Request,
-) -> tuple[Optional[bool], Optional[web.Response]]:
-  payload = await _read_json(request)
-  if payload is None:
-    payload = {}
-  if not isinstance(payload, dict) or set(payload) - {'dry_run'}:
-    return None, _error('body must contain only optional dry_run', 400)
-  dry_run = payload.get('dry_run', False)
-  if not isinstance(dry_run, bool):
-    return None, _error('dry_run must be a boolean', 400)
-  return dry_run, None
-
-
-@requires(Permission.ADMIN)
-@_administered
-async def _handle_fold_context(request: web.Request) -> web.Response:
-  dry_run, invalid = await _context_operation_payload(request)
-  if invalid is not None:
-    return invalid
-  assert dry_run is not None
-  trail_id = request.match_info['trail_id']
-  admin: DynamoStore = request.app['admin']
-  try:
-    return web.json_response(await _dispatch(admin.fold_context, trail_id, dry_run=dry_run))
-  except TrailNotFound:
-    return _trail_not_found(trail_id)
-  except ValueError as exception:
-    return _error(str(exception), 400)
-
-
-@requires(Permission.ADMIN)
-@_administered
-async def _handle_drop_context(request: web.Request) -> web.Response:
-  dry_run, invalid = await _context_operation_payload(request)
-  if invalid is not None:
-    return invalid
-  assert dry_run is not None
-  trail_id = request.match_info['trail_id']
-  admin: DynamoStore = request.app['admin']
-  try:
-    return web.json_response(await _dispatch(admin.drop_context, trail_id, dry_run=dry_run))
-  except TrailNotFound:
-    return _trail_not_found(trail_id)
-  except ValueError as exception:
-    return _error(str(exception), 400)
 
 
 @requires(Permission.ADMIN)
@@ -652,7 +589,6 @@ def create_app(
   app.router.add_get('/v1/trails/{trail_id}/steps', _handle_get_steps)
   app.router.add_get('/v1/trails/{trail_id}/steps/{step_id}', _handle_get_step)
   app.router.add_get('/v1/trails/{trail_id}/messages', _handle_get_messages)
-  app.router.add_get('/v1/trails/{trail_id}/context', _handle_get_context)
   app.router.add_post('/v1/trails/{trail_id}/end', _handle_end_trail)
   app.router.add_post('/v1/trails/{trail_id}/keepalive', _handle_keepalive)
   app.router.add_get('/v1/tools/{sha256}', _handle_get_tool)
@@ -663,8 +599,6 @@ def create_app(
   app.router.add_post('/v1/admin/trails/{trail_id}/migrate', _handle_migrate_trail)
   app.router.add_delete('/v1/admin/trails/{trail_id}', _handle_delete_trail)
   app.router.add_post('/v1/admin/trails/check', _handle_check)
-  app.router.add_post('/v1/admin/trails/{trail_id}/fold-context', _handle_fold_context)
-  app.router.add_post('/v1/admin/trails/{trail_id}/drop-context', _handle_drop_context)
   app.router.add_post('/v1/admin/trails/{trail_id}/recompute', _handle_recompute)
   app.router.add_post('/v1/admin/trails/{trail_id}/relink', _handle_relink)
   if sweep_interval_seconds is not None:

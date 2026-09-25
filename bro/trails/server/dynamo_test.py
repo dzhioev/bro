@@ -1,19 +1,15 @@
-import asyncio
 import json
-import socket
 import threading
 from collections import Counter
 from collections.abc import Iterator, Mapping
-from concurrent.futures import Future
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from typing import Optional
 
 import boto3
 import pytest
-from aiohttp import web
 from moto import mock_aws
 
-from bro.trails import admin, backends, formats, model
+from bro.trails import backends, formats, model
 from bro.trails.local import LocalStore
 from bro.trails.model import (
   MESSAGE_TYPES,
@@ -22,10 +18,7 @@ from bro.trails.model import (
   payload_sha256,
   tools_sha256,
 )
-from bro.trails.network import NetworkStore
 from bro.trails.server import dynamo as dynamo_store, dynamo_types
-from bro.trails.server.auth import TokenTable
-from bro.trails.server.server import create_app
 from bro.trails.store import (
   AppendConflict,
   ToolNotFound,
@@ -40,23 +33,13 @@ _TRAILS_TABLE = 'headers'
 _STEPS_TABLE = 'steps'
 _UUID_INDEX = dynamo_store.UUID_INDEX
 _BUCKET = 'bucket'
-_ADMIN_TOKEN = 'admin-token'
-_GIT_CONTEXT = [
-  {
-    'kind': 'git',
-    'subtype': 'state',
-    'title': 'git state at launch',
-    'fields': {'branch': 'workspace-stage', 'base_sha': 'base-sha'},
-  }
-]
 _LEGACY_CONTEXT = [
   {
     'kind': 'system_prompt',
     'subtype': 'ride_injected',
     'title': 'ride-injected system prompt (--append-system-prompt)',
     'content': 'prompt',
-  },
-  *_GIT_CONTEXT,
+  }
 ]
 
 
@@ -233,66 +216,6 @@ def components():
       yield store, Tables(dynamo), Bucket(s3, session.client('s3'))
 
 
-@contextmanager
-def _dynamo_server(store: dynamo_store.DynamoStore) -> Iterator[str]:
-  ready: Future[tuple[asyncio.AbstractEventLoop, int]] = Future()
-  tokens = TokenTable.from_config(
-    {
-      'tokens': {
-        'admin': {
-          'token': _ADMIN_TOKEN,
-          'permissions': ['read', 'write', 'admin'],
-        }
-      }
-    }
-  )
-
-  def run() -> None:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    runner = web.AppRunner(create_app(store, tokens, admin=store))
-    try:
-      loop.run_until_complete(runner.setup())
-      listener = socket.socket()
-      listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-      listener.bind(('127.0.0.1', 0))
-      listener.listen()
-      port = listener.getsockname()[1]
-      loop.run_until_complete(web.SockSite(runner, listener).start())
-      ready.set_result((loop, port))
-      loop.run_forever()
-    except BaseException as exception:
-      if not ready.done():
-        ready.set_exception(exception)
-      raise
-    finally:
-      loop.run_until_complete(runner.cleanup())
-      loop.close()
-
-  thread = threading.Thread(target=run, name='trails-dynamo-server')
-  thread.start()
-  loop: Optional[asyncio.AbstractEventLoop] = None
-  try:
-    loop, port = ready.result(timeout=10)
-    yield f'http://127.0.0.1:{port}'
-  finally:
-    if loop is not None:
-      loop.call_soon_threadsafe(loop.stop)
-    thread.join(timeout=10)
-    if thread.is_alive():
-      raise RuntimeError('trails dynamo server did not stop')
-
-
-@pytest.fixture
-def dynamo_network(components, monkeypatch):
-  store, tables, bucket = components
-  with ExitStack() as stack:
-    base_url = stack.enter_context(_dynamo_server(store))
-    network = stack.enter_context(NetworkStore(base_url, _ADMIN_TOKEN))
-    monkeypatch.setattr(admin, 'default_store', lambda: NetworkStore(base_url, _ADMIN_TOKEN))
-    yield store, tables, bucket, network
-
-
 def _blaze_bro(store: dynamo_store.DynamoStore, **overrides) -> str:
   payload = {
     'harness': 'bro',
@@ -331,29 +254,6 @@ def _claude_payload(**overrides) -> dict:
 
 def _blaze_claude(store: dynamo_store.DynamoStore, **overrides) -> str:
   return (store.blaze(BlazeRequest.from_wire(_claude_payload(**overrides))))['id']
-
-
-def _add_stored_context(
-  store: dynamo_store.DynamoStore,
-  dynamo: Tables,
-  trail_id: str,
-  context: list[dict],
-  *,
-  native: bool = False,
-) -> str:
-  key = dynamo_types.context_key(trail_id)
-  store._s3.put_object(
-    Bucket=_BUCKET,
-    Key=key,
-    Body=json.dumps(context).encode(),
-    ContentType='application/json',
-  )
-  with dynamo.editing_header(trail_id) as header:
-    if native:
-      header['native']['context_s3'] = key
-    else:
-      header['context_s3'] = key
-  return key
 
 
 def test_build_dynamo_store_uses_the_shared_credential_shape(monkeypatch):
@@ -606,7 +506,7 @@ def test_migrate_on_append_conditionally_rewrites_older_rows(components, monkeyp
 def test_header_migration_rederives_storage_attributes_from_the_upgraded_header(
   components, monkeypatch
 ):
-  store, dynamo, s3 = components
+  store, dynamo, _ = components
   old_parent = _blaze_bro(store)
   new_parent = _blaze_bro(store)
   trail_id = _blaze_bro(
@@ -618,7 +518,6 @@ def test_header_migration_rederives_storage_attributes_from_the_upgraded_header(
     },
     body={'records': [{'kind': 'system_prompt', 'body': 'prompt', 'turn_index': 0}]},
   )
-  context_key = _add_stored_context(store, dynamo, trail_id, _LEGACY_CONTEXT)
   with dynamo.editing_header(trail_id) as header:
     header.pop('format')
 
@@ -626,7 +525,7 @@ def test_header_migration_rederives_storage_attributes_from_the_upgraded_header(
     logical = {
       key: value
       for key, value in header.items()
-      if key not in {dynamo_store.GSI_PK_ATTRIBUTE, 'forked_from_id', 'segment', 'context_s3'}
+      if key not in {dynamo_store.GSI_PK_ATTRIBUTE, 'forked_from_id', 'segment'}
     }
     return {
       **logical,
@@ -647,9 +546,6 @@ def test_header_migration_rederives_storage_attributes_from_the_upgraded_header(
   assert migrated[dynamo_store.GSI_PK_ATTRIBUTE] == dynamo_store.GSI_PK_VALUE
   assert migrated['forked_from_id'] == new_parent
   assert migrated['segment'] == 'new-segment'
-  assert migrated['context_s3'] == context_key
-  assert context_key in s3.objects
-  assert store.get_launch_context(trail_id) == _LEGACY_CONTEXT
   assert [trail['id'] for trail in store.list_trails(forked_from=new_parent)['trails']] == [
     trail_id
   ]
@@ -916,257 +812,6 @@ def test_the_mid_write_probe_is_one_keys_only_uuid_query(components):
   assert {query['ProjectionExpression'] for query in probes} == {'trail_id'}
 
 
-def test_launch_context_is_folded_without_an_s3_object_and_end_adds_no_step(components):
-  store, dynamo, s3 = components
-  trail_id = _blaze_bro(
-    store,
-    body={
-      'records': [{'kind': 'system_prompt', 'body': 'prompt'}],
-      'launch_context': _LEGACY_CONTEXT,
-    },
-  )
-  header = dynamo.headers[trail_id]
-  assert header['git'] == {'branch': 'workspace-stage', 'base_sha': 'base-sha'}
-  assert header['legacy_launch_context'] == _LEGACY_CONTEXT
-  assert 'context_s3' not in header
-  assert 'context_s3' not in header['native']
-  assert store.get_launch_context(trail_id) == _LEGACY_CONTEXT
-  assert dynamo_types.context_key(trail_id) not in s3.objects
-  before = len(dynamo.steps)
-  store.end_trail(trail_id=trail_id, reason='ok', detail=None)
-  assert len(dynamo.steps) == before
-  assert dynamo.headers[trail_id]['end']['reason'] == 'ok'
-
-
-@pytest.mark.parametrize('native_pointer', (False, True), ids=('context_s3', 'native.context_s3'))
-def test_old_context_pointer_is_folded_for_the_reader_route(components, native_pointer):
-  store, dynamo, _ = components
-  trail_id = _blaze_bro(store)
-  _add_stored_context(
-    store,
-    dynamo,
-    trail_id,
-    _LEGACY_CONTEXT,
-    native=native_pointer,
-  )
-
-  recorded_header = store.get_trail(trail_id)
-  assert 'context_s3' not in recorded_header
-  assert 'context_s3' not in recorded_header['native']
-  assert store.get_launch_context(trail_id) == _LEGACY_CONTEXT
-  assert store.begin_import(recorded_header, launch_context=_LEGACY_CONTEXT) == {
-    'trail_id': trail_id,
-    'extent': 1,
-    'created': False,
-  }
-  assert 'git' not in dynamo.headers[trail_id]
-  assert 'legacy_launch_context' not in dynamo.headers[trail_id]
-
-
-def _json_lines(output: str) -> list[dict]:
-  return [json.loads(line) for line in output.splitlines()]
-
-
-def test_fold_contexts_cli_backfills_and_drops_both_pointer_shapes(dynamo_network, capsys):
-  store, dynamo, s3, network = dynamo_network
-  top_level = _blaze_bro(store)
-  native = _blaze_bro(store)
-  _add_stored_context(store, dynamo, top_level, _LEGACY_CONTEXT)
-  _add_stored_context(store, dynamo, native, _GIT_CONTEXT, native=True)
-  before = {
-    top_level: network.get_launch_context(top_level),
-    native: network.get_launch_context(native),
-  }
-
-  assert admin.main(['trails', 'fold-contexts', '--all', '--dry-run']) == 0
-  dry_run = {line['trail_id']: line for line in _json_lines(capsys.readouterr().out)}
-  assert dry_run[top_level]['pointer_keys'] == {'context_s3': dynamo_types.context_key(top_level)}
-  assert dry_run[top_level]['fold_additions'] == {
-    'git': {'branch': 'workspace-stage', 'base_sha': 'base-sha'},
-    'legacy_launch_context': _LEGACY_CONTEXT,
-  }
-  assert dry_run[native]['pointer_keys'] == {'native.context_s3': dynamo_types.context_key(native)}
-  assert dry_run[native]['fold_additions'] == {
-    'git': {'branch': 'workspace-stage', 'base_sha': 'base-sha'}
-  }
-  assert 'git' not in dynamo.headers[top_level]
-  assert 'git' not in dynamo.headers[native]
-
-  assert admin.main(['trails', 'fold-contexts', '--all']) == 0
-  folded = {line['trail_id']: line for line in _json_lines(capsys.readouterr().out)}
-  assert folded.keys() == {top_level, native}
-  assert dynamo.headers[top_level]['legacy_launch_context'] == _LEGACY_CONTEXT
-  assert dynamo.headers[native]['git'] == {
-    'branch': 'workspace-stage',
-    'base_sha': 'base-sha',
-  }
-  assert network.get_launch_context(top_level) == before[top_level]
-  assert network.get_launch_context(native) == before[native]
-
-  assert admin.main(['trails', 'fold-contexts', '--all', '--dry-run']) == 0
-  repeated = _json_lines(capsys.readouterr().out)
-  assert all(line['carries_fold'] is True and line['fold_additions'] == {} for line in repeated)
-
-  unfolded = _blaze_bro(store)
-  _add_stored_context(store, dynamo, unfolded, _LEGACY_CONTEXT)
-  with pytest.raises(SystemExit, match='has not been folded'):
-    admin.main(['trails', 'fold-contexts', '--drop', unfolded])
-  assert 'context_s3' in dynamo.headers[unfolded]
-  assert admin.main(['trails', 'fold-contexts', unfolded]) == 0
-  capsys.readouterr()
-
-  assert admin.main(['trails', 'fold-contexts', '--all', '--drop', '--dry-run']) == 0
-  dropping = _json_lines(capsys.readouterr().out)
-  assert {line['trail_id'] for line in dropping} == {top_level, native, unfolded}
-  assert all(len(line['dropped']) == 1 for line in dropping)
-  assert 'context_s3' in dynamo.headers[top_level]
-  assert 'context_s3' in dynamo.headers[native]['native']
-
-  assert admin.main(['trails', 'fold-contexts', '--all', '--drop']) == 0
-  dropped = _json_lines(capsys.readouterr().out)
-  assert {line['trail_id'] for line in dropped} == {top_level, native, unfolded}
-  assert 'context_s3' not in dynamo.headers[top_level]
-  assert 'context_s3' not in dynamo.headers[native]['native']
-  assert dynamo_types.context_key(top_level) in s3.objects
-  assert network.get_launch_context(top_level) == before[top_level]
-  assert network.get_launch_context(native) == before[native]
-
-  assert admin.main(['trails', 'fold-contexts', '--all', '--drop', '--dry-run']) == 0
-  assert capsys.readouterr().out == ''
-
-
-def test_context_fold_rereads_after_an_attach_restamps_git(dynamo_network, monkeypatch, capsys):
-  store, dynamo, _, _ = dynamo_network
-  trail_id = _blaze_claude(store)
-  recorded = _claude_assistant('message-1', 'first', uuid='uuid-1')
-  store.append_records(trail_id, offset=0, records=[recorded])
-  _add_stored_context(store, dynamo, trail_id, _LEGACY_CONTEXT)
-  resumed = _claude_assistant('message-2', 'resumed', uuid='uuid-2')
-  lineage = {
-    'segment': 'segment',
-    'lines': [
-      ['uuid-1', payload_sha256(recorded)],
-      ['uuid-2', payload_sha256(resumed)],
-    ],
-  }
-  attached_git = {'branch': 'attached-branch', 'base_sha': 'attached-sha'}
-  original_write = store._write_context_update
-  writes = 0
-
-  def write_after_attach(header: dict, additions: dict, *, drop: bool) -> bool:
-    nonlocal writes
-    writes += 1
-    if writes == 1:
-      attached = store.blaze(
-        BlazeRequest.from_wire(
-          _claude_payload(lineage=lineage, version='attached', git=attached_git)
-        )
-      )
-      assert attached['attached'] is True
-    return original_write(header, additions, drop=drop)
-
-  monkeypatch.setattr(store, '_write_context_update', write_after_attach)
-
-  assert admin.main(['trails', 'fold-contexts', trail_id]) == 0
-  report = _json_lines(capsys.readouterr().out)
-  assert report[0]['fold_additions'] == {'legacy_launch_context': _LEGACY_CONTEXT}
-  assert writes == 2
-  assert dynamo.headers[trail_id]['git'] == attached_git
-  assert dynamo.headers[trail_id]['legacy_launch_context'] == _LEGACY_CONTEXT
-
-
-def test_attach_cannot_restore_a_native_context_pointer_after_drop(components, monkeypatch):
-  store, dynamo, _ = components
-  trail_id = _blaze_claude(store)
-  recorded = _claude_assistant('message-1', 'recorded', uuid='uuid-1')
-  resumed = _claude_assistant('message-2', 'resumed', uuid='uuid-2')
-  store.append_records(trail_id, offset=0, records=[recorded])
-  _add_stored_context(store, dynamo, trail_id, _LEGACY_CONTEXT, native=True)
-  store.fold_context(trail_id)
-  lineage = {
-    'segment': 'segment',
-    'lines': [
-      ['uuid-1', payload_sha256(recorded)],
-      ['uuid-2', payload_sha256(resumed)],
-    ],
-  }
-  request = BlazeRequest.from_wire(_claude_payload(lineage=lineage, version='attached'))
-  original_update = store._dynamo.update_item
-  raced = False
-
-  def update_after_drop(**kwargs):
-    nonlocal raced
-    if not raced and '#version = :version' in kwargs.get('UpdateExpression', ''):
-      raced = True
-      store.drop_context(trail_id)
-    return original_update(**kwargs)
-
-  monkeypatch.setattr(store._dynamo, 'update_item', update_after_drop)
-
-  contended = store.blaze(request)
-  attached = store.blaze(request)
-
-  assert contended == {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
-  assert attached['attached'] is True
-  assert 'context_s3' not in dynamo.headers[trail_id]['native']
-  assert store.get_launch_context(trail_id) == _LEGACY_CONTEXT
-
-
-def test_append_cannot_restore_a_native_context_pointer_after_drop(components, monkeypatch):
-  store, dynamo, _ = components
-  trail_id = _blaze_claude(store)
-  _add_stored_context(store, dynamo, trail_id, _LEGACY_CONTEXT, native=True)
-  store.fold_context(trail_id)
-  original_transaction = store._dynamo.transact_write_items
-  transactions = 0
-
-  def transact_after_drop(**kwargs):
-    nonlocal transactions
-    transactions += 1
-    if transactions == 1:
-      store.drop_context(trail_id)
-    return original_transaction(**kwargs)
-
-  monkeypatch.setattr(store._dynamo, 'transact_write_items', transact_after_drop)
-
-  store.append_records(
-    trail_id,
-    offset=0,
-    records=[_claude_assistant('message-1', 'appended', uuid='uuid-1')],
-  )
-
-  assert 'context_s3' not in dynamo.headers[trail_id]['native']
-  assert store.get_launch_context(trail_id) == _LEGACY_CONTEXT
-
-
-def test_recompute_cannot_restore_a_native_context_pointer_after_drop(components, monkeypatch):
-  store, dynamo, _ = components
-  trail_id = _blaze_claude(store)
-  store.append_records(
-    trail_id,
-    offset=0,
-    records=[_claude_assistant('message-1', 'recorded', uuid='uuid-1')],
-  )
-  _add_stored_context(store, dynamo, trail_id, _LEGACY_CONTEXT, native=True)
-  store.fold_context(trail_id)
-  original_write = store._operations._write_fold
-  writes = 0
-
-  def write_after_drop(trail_id, fields, **kwargs):
-    nonlocal writes
-    writes += 1
-    if writes == 1:
-      store.drop_context(trail_id)
-    return original_write(trail_id, fields, **kwargs)
-
-  monkeypatch.setattr(store._operations, '_write_fold', write_after_drop)
-
-  store.recompute(trail_id)
-
-  assert 'context_s3' not in dynamo.headers[trail_id]['native']
-  assert store.get_launch_context(trail_id) == _LEGACY_CONTEXT
-
-
 def test_the_segment_key_and_lineage_head_ride_the_header_writes(components):
   store, dynamo, _ = components
   trail_id = _blaze_claude(store)
@@ -1206,7 +851,8 @@ def test_attaching_reopens_the_trail_conditional_on_the_extent_it_verified(compo
       _claude_payload(
         lineage=lineage,
         version='3',
-        body={'records': [], 'launch_context': _GIT_CONTEXT},
+        body={'records': []},
+        git={'branch': 'workspace-stage', 'base_sha': 'base-sha'},
       )
     )
   )
@@ -1363,13 +1009,9 @@ def test_delete_manifests_the_trail_and_takes_only_what_it_owns(components):
   store, dynamo, s3 = components
   tool_body = [{'type': 'function', 'name': 'read'}]
   sha256 = tools_sha256(tool_body)
-  trail_id = _blaze_bro(
-    store,
-    body={
-      'records': [{'kind': 'system_prompt', 'body': 'prompt'}],
-      'launch_context': _LEGACY_CONTEXT,
-    },
-  )
+  trail_id = _blaze_bro(store)
+  with dynamo.editing_header(trail_id) as header:
+    header['legacy_launch_context'] = _LEGACY_CONTEXT
   large = 'x' * (dynamo_store.SPILLOVER_THRESHOLD_BYTES + 1)
   store.append_records(
     trail_id,
@@ -1384,11 +1026,11 @@ def test_delete_manifests_the_trail_and_takes_only_what_it_owns(components):
   assert result == {'trail_id': trail_id, 'extent': 2, 'manifest': result['manifest']}
   manifest = json.loads(s3.objects[result['manifest']])
   assert manifest['header']['id'] == trail_id
+  assert manifest['header']['legacy_launch_context'] == _LEGACY_CONTEXT
   assert [step['body'] for step in manifest['steps']] == ['prompt', large]
   assert trail_id not in dynamo.headers
   assert [key for key in dynamo.steps if key[0] == trail_id] == []
   assert spilled not in s3.objects
-  assert dynamo_types.context_key(trail_id) not in s3.objects
   assert dynamo_types.tool_blob_key(sha256) in s3.objects
   with pytest.raises(TrailNotFound):
     store.delete_trail(trail_id)
@@ -1459,55 +1101,22 @@ def test_import_derives_storage_attributes_from_an_upgraded_recorded_header(
   assert stored['segment'] == 'segment'
 
 
-@pytest.mark.parametrize('pointer_location', ('header', 'native'))
-def test_import_drops_a_source_stores_legacy_context_pointer(
-  components, tmp_path, pointer_location
-):
-  store, dynamo, s3 = components
-  source, trail_id, header, rows, sha256 = _recorded_source(tmp_path)
-  source_key = f'source/{trail_id}/context.json'
-  if pointer_location == 'header':
-    header['context_s3'] = source_key
-  else:
-    header['native']['context_s3'] = source_key
-
-  store.import_trail(
-    header,
-    rows,
-    launch_context=_LEGACY_CONTEXT,
-    tools={sha256: source.get_tool(sha256)},
-  )
-
-  stored = dynamo.headers[trail_id]
-  assert 'context_s3' not in stored
-  assert 'context_s3' not in stored['native']
-  assert source_key not in s3.objects
-  assert store.get_launch_context(trail_id) == _LEGACY_CONTEXT
-
-
 def test_import_stores_rows_verbatim_and_serves_the_trail_as_recorded(components, tmp_path):
   store, dynamo, s3 = components
   source, trail_id, header, rows, sha256 = _recorded_source(tmp_path)
   tools = {sha256: source.get_tool(sha256)}
 
-  result = store.import_trail(header, rows, launch_context=_LEGACY_CONTEXT, tools=tools)
-  again = store.import_trail(header, rows, launch_context=_LEGACY_CONTEXT, tools=tools)
+  result = store.import_trail(header, rows, tools=tools)
+  again = store.import_trail(header, rows, tools=tools)
 
   assert result == {'trail_id': trail_id, 'extent': 2}
   assert again == {'trail_id': trail_id, 'extent': 2, 'duplicate': True}
   item = dynamo.headers[trail_id]
   assert item[dynamo_store.GSI_PK_ATTRIBUTE] == 'trail'
-  assert 'context_s3' not in item
-  assert not any(key.startswith(f'trails/{trail_id}/context') for key in s3.objects)
   served = store.get_trail(trail_id)
-  assert served == {
-    **header,
-    'git': {'branch': 'workspace-stage', 'base_sha': 'base-sha'},
-    'legacy_launch_context': _LEGACY_CONTEXT,
-  }
+  assert served == header
   assert 'importing' not in item
-  assert not {dynamo_store.GSI_PK_ATTRIBUTE, 'context_s3'} & set(served)
-  assert store.get_launch_context(trail_id) == _LEGACY_CONTEXT
+  assert dynamo_store.GSI_PK_ATTRIBUTE not in served
   assert dynamo.steps[trail_id, 1]['body_s3'] in s3.objects
   assert store.get_steps(trail_id)['steps'] == rows
   assert store.get_tool(sha256) == tools[sha256]
@@ -1521,7 +1130,7 @@ def dynamo_headers(store: dynamo_store.DynamoStore) -> _Items:
 def test_import_requires_the_tool_blobs_the_bucket_holds(components, tmp_path):
   store, _, s3 = components
   source, trail_id, header, rows, sha256 = _recorded_source(tmp_path)
-  store.begin_import(header, launch_context=_LEGACY_CONTEXT)
+  store.begin_import(header)
 
   with pytest.raises(ValueError, match='neither carried nor stored'):
     store.import_rows(trail_id, 0, rows)
@@ -1558,6 +1167,7 @@ def test_a_begin_that_loses_the_id_leaves_the_winner_its_own_context(
 ):
   store, _, s3 = components
   _, trail_id, header, _, _ = _recorded_source(tmp_path)
+  winner = {**header, 'subject': 'winner'}
   optional_header = store._optional_header
   looked = []
 
@@ -1565,16 +1175,16 @@ def test_a_begin_that_loses_the_id_leaves_the_winner_its_own_context(
     # the first look finds no header, and a rival lands one before the put
     if len(looked) == 0:
       looked.append(looked_up)
-      store.begin_import(header, launch_context=[{'kind': 'winner'}])
+      store.begin_import(winner)
       return None
     return optional_header(looked_up)
 
   monkeypatch.setattr(store, '_optional_header', raced)
 
   with pytest.raises(TrailCollision, match='header differs'):
-    store.begin_import(header, launch_context=[{'kind': 'loser'}])
+    store.begin_import(header)
 
-  assert store.get_launch_context(trail_id) == [{'kind': 'winner'}]
+  assert store.get_trail(trail_id)['subject'] == 'winner'
   assert not any(key.startswith(f'trails/{trail_id}/context') for key in s3.objects)
 
 

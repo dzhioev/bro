@@ -72,7 +72,7 @@ def test_export_writes_the_ancestry_parents_first_and_import_reads_it_back(tmp_p
   assert destination.get_tool(_TOOLS_DIGEST) == _TOOLS
 
 
-def test_export_and_import_carry_folded_header_without_reading_context(tmp_path, monkeypatch):
+def test_export_and_import_carry_header_fields(tmp_path):
   source = LocalStore(tmp_path / 'source')
   git = {
     'repo': '/source/bro',
@@ -81,19 +81,12 @@ def test_export_and_import_carry_folded_header_without_reading_context(tmp_path,
     'base_sha': 'abc123',
   }
   legacy_context = [{'title': 'recorded prompt', 'content': 'historical prompt'}]
-  trail_id = _blaze(
-    source,
-    git=git,
-    body={
-      'records': [{'kind': 'system_prompt', 'body': 'prompt'}],
-      'launch_context': legacy_context,
-    },
-  )
+  trail_id = _blaze(source, git=git)
+  header_path = source.trails_directory / trail_id / 'header.json'
+  header = json.loads(header_path.read_text())
+  header['legacy_launch_context'] = legacy_context
+  header_path.write_text(json.dumps(header))
 
-  def fail_context_read(requested_trail_id: str):
-    raise AssertionError(f'launch context read for {requested_trail_id}')
-
-  monkeypatch.setattr(source, 'get_launch_context', fail_context_read)
   layout = tmp_path / 'layout'
   transfer.export_trails(source, [trail_id], layout)
   destination = LocalStore(tmp_path / 'destination')
@@ -187,30 +180,6 @@ def test_import_layout_carries_each_record_in_the_format_it_was_written_in(tmp_p
   served = destination.get_trail(trail_id)
   assert (served['format'], served['synthetic_header'], served['extent']) == (2, True, 2)
   assert destination.get_step(trail_id, 1)['call_id'] == 'upgraded'
-
-
-def test_import_layout_ignores_a_retained_context_file(tmp_path):
-  source = LocalStore(tmp_path / 'source')
-  trail_id = _blaze(source)
-  context_path = source.trails_directory / trail_id / 'context.json'
-  context_path.write_text(
-    json.dumps(
-      [
-        {
-          'kind': 'git',
-          'subtype': 'state',
-          'title': 'git state at launch',
-          'fields': {'branch': 'old', 'base_sha': 'base'},
-        }
-      ]
-    )
-  )
-  destination = LocalStore(tmp_path / 'destination')
-
-  transfer.import_layout(source.root, destination)
-
-  assert destination.get_launch_context(trail_id) is None
-  assert not (destination.trails_directory / trail_id / 'context.json').exists()
 
 
 def test_import_layout_requires_the_layout(tmp_path):
