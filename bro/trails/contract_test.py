@@ -28,6 +28,38 @@ from bro.trails.store import (
 
 _TOKEN = 'contract-token'
 _CONTRACT_LOCAL_STORES: dict[int, LocalStore] = {}
+_GIT_RECORD = {
+  'kind': 'git',
+  'subtype': 'state',
+  'title': 'git state at launch',
+  'fields': {'branch': 'workspace-stage', 'base_sha': 'base-sha'},
+}
+_PROMPT_RECORD = {
+  'kind': 'system_prompt',
+  'subtype': 'ride_injected',
+  'title': 'ride-injected system prompt (--append-system-prompt)',
+  'content': 'injected prompt',
+}
+_MCP_RECORD = {
+  'kind': 'mcp',
+  'subtype': 'servers',
+  'title': 'MCP servers',
+  'fields': {'servers': ['persona:bro-dev']},
+}
+_INSTRUCTIONS_RECORD = {
+  'kind': 'instructions',
+  'subtype': 'root',
+  'title': 'AGENTS.md (root)',
+  'content': '# Rules',
+}
+_PPP_CONTEXT = [_GIT_RECORD, _PROMPT_RECORD, _MCP_RECORD, _INSTRUCTIONS_RECORD]
+_KAP_GIT_RECORD = {
+  **_GIT_RECORD,
+  'fields': {'branch': 'workspace-stage', 'base_ref': 'origin/master'},
+}
+_KAP_MCP_RECORD = {**_MCP_RECORD, 'fields': {'mode': 'persona', 'servers': ['persona:bro-dev']}}
+_KAP_CONTEXT = [_PROMPT_RECORD, _KAP_GIT_RECORD, _KAP_MCP_RECORD, _INSTRUCTIONS_RECORD]
+_BRO_CONTEXT = [_GIT_RECORD]
 
 
 def _token_table(*permissions: str) -> TokenTable:
@@ -36,7 +68,7 @@ def _token_table(*permissions: str) -> TokenTable:
   )
 
 
-def _bro_request(*, bro='dev', body=None, forked_from=None, subject=None):
+def _bro_request(*, bro='dev', body=None, forked_from=None, subject=None, git=None):
   return BlazeRequest(
     harness='bro',
     version='test',
@@ -48,6 +80,7 @@ def _bro_request(*, bro='dev', body=None, forked_from=None, subject=None):
     hold='unattended',
     forked_from=forked_from,
     subject=subject,
+    git=git,
   )
 
 
@@ -356,14 +389,80 @@ class TestTrailsStoreContract:
       sibling,
     }
 
-  def test_launch_context(self, trails_store):
+  def test_new_writer_git_is_stored_and_rebuilt_for_an_old_reader(self, trails_store):
+    git = {
+      'repo': '/home/example/repo',
+      'url': 'https://example.test/repo',
+      'branch': 'workspace-stage',
+      'base_sha': 'base-sha',
+    }
+    trail_id = trails_store.blaze(_bro_request(git=git))['id']
+
+    assert trails_store.get_trail(trail_id)['git'] == git
+    assert trails_store.get_launch_context(trail_id) == [_GIT_RECORD]
+
+  @pytest.mark.parametrize(
+    ('writer', 'context', 'expected_git', 'keeps_legacy'),
+    (
+      ('ppp', _PPP_CONTEXT, {'branch': 'workspace-stage', 'base_sha': 'base-sha'}, True),
+      ('kap', _KAP_CONTEXT, {'branch': 'workspace-stage'}, True),
+      ('bro', _BRO_CONTEXT, {'branch': 'workspace-stage', 'base_sha': 'base-sha'}, False),
+    ),
+  )
+  def test_old_writer_launch_context_folds_into_the_header(
+    self, trails_store, writer, context, expected_git, keeps_legacy
+  ):
+    if writer == 'bro':
+      request = _bro_request(
+        body={
+          'records': [{'kind': 'system_prompt', 'body': 'prompt'}],
+          'launch_context': context,
+        }
+      )
+    else:
+      request = _claude_request(context=context)
+
+    trail_id = trails_store.blaze(request)['id']
+
+    header = trails_store.get_trail(trail_id)
+    assert header['git'] == expected_git
+    assert ('legacy_launch_context' in header) is keeps_legacy
+    assert trails_store.get_launch_context(trail_id) == context
+    header_path, _ = _stored_paths(trails_store, trail_id)
+    assert not (header_path.parent / 'context.json').exists()
+
+  def test_old_writer_attach_restamps_git_from_its_launch_context(self, trails_store):
     first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
-    trail_id = trails_store.blaze(_claude_request(first, context={'cwd': '/workspace'}))['id']
+    second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
+    trail_id = trails_store.blaze(_claude_request(first, context=_KAP_CONTEXT))['id']
 
-    assert trails_store.get_launch_context(trail_id) == {'cwd': '/workspace'}
+    attached = trails_store.blaze(
+      _claude_request(context=_PPP_CONTEXT, lineage=_lineage(first, second))
+    )
 
-    no_context = trails_store.blaze(_bro_request())['id']
-    assert trails_store.get_launch_context(no_context) is None
+    assert attached['id'] == trail_id
+    assert trails_store.get_trail(trail_id)['git'] == {
+      'branch': 'workspace-stage',
+      'base_sha': 'base-sha',
+    }
+    assert trails_store.get_launch_context(trail_id) == _KAP_CONTEXT
+
+  def test_malformed_old_writer_launch_context_is_a_store_neutral_refusal(self, trails_store):
+    with pytest.raises(InvalidRequest, match='launch context must be a list'):
+      trails_store.blaze(_claude_request(context={}))
+
+  def test_malformed_old_writer_attach_is_a_store_neutral_refusal(self, trails_store):
+    first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
+    second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
+    trails_store.blaze(_claude_request(first))
+
+    with pytest.raises(InvalidRequest, match='launch context must be a list'):
+      trails_store.blaze(_claude_request(context={}, lineage=_lineage(first, second)))
+
+  def test_launch_context_is_absent_without_git_or_legacy_records(self, trails_store):
+    trail_id = trails_store.blaze(_bro_request())['id']
+
+    assert trails_store.get_launch_context(trail_id) is None
     with pytest.raises(TrailNotFound):
       trails_store.get_launch_context('missing')
 
@@ -516,6 +615,24 @@ def _record_source(root: Path, **overrides) -> tuple[LocalStore, str]:
 
 
 class TestImportContract:
+  def test_old_importer_context_folds_and_reimport_is_idempotent(self, trails_store, tmp_path):
+    source, trail_id = _record_source(tmp_path / 'old-importer')
+    header, rows, _ = _recorded(source, trail_id)
+
+    imported = trails_store.import_trail(
+      header, rows, launch_context=_KAP_CONTEXT, tools={_TOOLS_DIGEST: _TOOLS}
+    )
+    repeated = trails_store.import_trail(
+      header, rows, launch_context=_KAP_CONTEXT, tools={_TOOLS_DIGEST: _TOOLS}
+    )
+
+    assert imported == {'trail_id': trail_id, 'extent': 3}
+    assert repeated == {'trail_id': trail_id, 'extent': 3, 'duplicate': True}
+    stored = trails_store.get_trail(trail_id)
+    assert stored['git'] == {'branch': 'workspace-stage'}
+    assert stored['legacy_launch_context'] == _KAP_CONTEXT
+    assert trails_store.get_launch_context(trail_id) == _KAP_CONTEXT
+
   def test_reads_a_tool_blob_by_digest(self, trails_store):
     trail_id = trails_store.blaze(_bro_request())['id']
     trails_store.append_records(
@@ -606,8 +723,8 @@ class TestImportContract:
       trails_store.begin_import({**header, 'bro': 'other'})
     with pytest.raises(TrailCollision, match='row 1 differs'):
       trails_store.import_rows(trail_id, 0, [rows[0], changed, rows[2]])
-    with pytest.raises(TrailCollision, match='launch context differs'):
-      trails_store.begin_import(header, launch_context={'cwd': '/elsewhere'})
+    with pytest.raises(TrailCollision, match='header differs'):
+      trails_store.begin_import(header, launch_context=[{'kind': 'elsewhere'}])
 
   def test_an_import_requires_parents_and_tool_blobs(self, trails_store, tmp_path):
     source = LocalStore(tmp_path / 'source')
@@ -757,9 +874,7 @@ class TestImportContract:
     source = LocalStore(tmp_path / 'source')
     first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
     second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
-    minted = source.blaze(
-      _claude_request(context={'cwd': '/workspace'}, lineage=_lineage(first, second))
-    )
+    minted = source.blaze(_claude_request(context=_PPP_CONTEXT, lineage=_lineage(first, second)))
     source.append_records(minted['id'], 0, [first, second])
     header, rows, context = _recorded(source, minted['id'])
 
@@ -768,4 +883,4 @@ class TestImportContract:
     imported = trails_store.get_trail(minted['id'])
     assert imported['native']['lineage_head']['cuts'] == minted['chunks']
     assert imported == header
-    assert trails_store.get_launch_context(minted['id']) == {'cwd': '/workspace'}
+    assert trails_store.get_launch_context(minted['id']) == _PPP_CONTEXT

@@ -155,6 +155,30 @@ def test_import_layout_carries_each_record_in_the_format_it_was_written_in(tmp_p
   assert destination.get_step(trail_id, 1)['call_id'] == 'upgraded'
 
 
+def test_import_layout_ignores_a_retained_context_file(tmp_path):
+  source = LocalStore(tmp_path / 'source')
+  trail_id = _blaze(source)
+  context_path = source.trails_directory / trail_id / 'context.json'
+  context_path.write_text(
+    json.dumps(
+      [
+        {
+          'kind': 'git',
+          'subtype': 'state',
+          'title': 'git state at launch',
+          'fields': {'branch': 'old', 'base_sha': 'base'},
+        }
+      ]
+    )
+  )
+  destination = LocalStore(tmp_path / 'destination')
+
+  transfer.import_layout(source.root, destination)
+
+  assert destination.get_launch_context(trail_id) is None
+  assert not (destination.trails_directory / trail_id / 'context.json').exists()
+
+
 def test_import_layout_requires_the_layout(tmp_path):
   with pytest.raises(ValueError, match='no trails store layout'):
     transfer.import_layout(tmp_path / 'absent', LocalStore(tmp_path / 'destination'))

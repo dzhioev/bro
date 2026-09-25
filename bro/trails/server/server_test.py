@@ -228,7 +228,14 @@ async def test_read_handlers_dispatch_local_store_semantics(client):
         json.dumps({'type': 'system', 'uuid': 'first'}),
         json.dumps({'type': 'user', 'uuid': 'second', 'message': {'content': 'hello'}}),
       ],
-      'launch_context': {'cwd': '/workspace'},
+      'launch_context': [
+        {
+          'kind': 'git',
+          'subtype': 'state',
+          'title': 'git state at launch',
+          'fields': {'branch': 'workspace', 'base_sha': 'base'},
+        }
+      ],
     },
   )
   created = await client.post('/v1/trails', json=claude, headers=_auth())
@@ -240,7 +247,7 @@ async def test_read_handlers_dispatch_local_store_semantics(client):
 
   assert (await point.json())['uuid'] == 'second'
   assert [message['type'] for message in (await messages.json())['messages']] == ['user_input']
-  assert await context.json() == {'launch_context': {'cwd': '/workspace'}}
+  assert await context.json() == {'launch_context': claude['body']['launch_context']}
 
 
 @pytest.mark.asyncio

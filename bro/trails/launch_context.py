@@ -1,8 +1,9 @@
 """Transitional fold between stored launch contexts and trail headers."""
 
+from dataclasses import replace
 from typing import Any, Optional
 
-from bro.trails.model import validate_git
+from bro.trails.model import BlazeRequest, validate_git
 
 _GIT_RECORD_KEYS = frozenset({'kind', 'subtype', 'title', 'fields'})
 _GIT_FIELDS = frozenset({'branch', 'base_sha'})
@@ -32,6 +33,16 @@ def fold_launch_context(header: dict, launch_context: Any) -> dict:
   elif not _is_plain_git_context(launch_context):
     folded['legacy_launch_context'] = launch_context
   return folded
+
+
+def fold_request_launch_context(request: BlazeRequest, trail_id: str) -> BlazeRequest:
+  if 'launch_context' not in request.body:
+    return request
+  header: dict[str, Any] = {'id': trail_id}
+  if request.git is not None:
+    header['git'] = request.git
+  folded = fold_launch_context(header, request.body['launch_context'])
+  return replace(request, git=folded.get('git'))
 
 
 def rebuild_launch_context(header: dict) -> Optional[Any]:
