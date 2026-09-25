@@ -288,6 +288,52 @@ class TestRuntimeBundle:
     workspace.resume_file.write_text(json.dumps({'runtime_bundle': '/runtime', 'future': 'shape'}))
     assert ride_session.recorded_runtime_reference('w') == '/runtime'
 
+  def test_resume_reexec_carries_only_the_command_scope_overrides(self, monkeypatch, tmp_path):
+    workspace = _workspace(tmp_path)
+    ride_session.record_resume_spec(
+      workspace,
+      _spec(
+        cred=['brog+github'],
+        grant=['github', '@bro', ':bro.party.start.boxed'],
+        revoke=['openai'],
+      ),
+    )
+    calls = []
+
+    def replaced(reference, argv):
+      calls.append((reference, argv))
+      raise _Replaced
+
+    monkeypatch.setattr(ride_session, 'reexec_from_runtime', replaced)
+    with pytest.raises(_Replaced):
+      _resume(
+        cred=['trails+write'],
+        grant=['openai', '@dev'],
+        revoke=['github', ':bro.party.start.boxed'],
+      )
+
+    bundle = _runtime_bundle(tmp_path)
+    assert calls == [
+      (
+        bundle.hash,
+        [
+          'ride',
+          'resume',
+          '--cred',
+          'trails+write',
+          '--grant',
+          'openai',
+          '--grant',
+          '@dev',
+          '--revoke',
+          'github',
+          '--revoke',
+          ':bro.party.start.boxed',
+          'w',
+        ],  # fmt: skip
+      )
+    ]
+
 
 class TestGrantRevoke:
   def test_start_session_applies_grant_and_revoke(self):
