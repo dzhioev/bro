@@ -164,6 +164,7 @@ PYTEST_FILES = [
   'bro/trails/contract_test.py',
   'bro/trails/cost_test.py',
   'bro/trails/model_test.py',
+  'bro/trails/launch_context_test.py',
   'bro/trails/store_test.py',
   'bro/trails/local_test.py',
   'bro/trails/display/config_test.py',

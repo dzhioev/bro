@@ -25,9 +25,17 @@ def test_messages_wire_admits_notifications():
 
 
 def test_blaze_request_round_trips_wire_data_and_is_frozen():
-  request = BlazeRequest.from_wire(_wire_request())
+  wire_request = _wire_request(
+    git={
+      'repo': '/source/bro',
+      'url': 'https://github.com/dzhioev/bro.git',
+      'branch': 'workspace-test',
+      'base_sha': 'abc123',
+    }
+  )
+  request = BlazeRequest.from_wire(wire_request)
 
-  assert request.to_wire() == _wire_request()
+  assert request.to_wire() == wire_request
   mutable_request: Any = request
   with pytest.raises(FrozenInstanceError):
     mutable_request.surface = 'ride'
@@ -41,6 +49,10 @@ def test_blaze_request_round_trips_wire_data_and_is_frozen():
     (_wire_request(hold='sometimes'), 'hold must be one of'),
     (_wire_request(forked_from={'trail_id': 'parent'}), 'invalid pointer shape'),
     (_wire_request(location={'is_container': 'yes'}), 'location.is_container must be a bool'),
+    (_wire_request(git=None), 'git must be a non-empty object'),
+    (_wire_request(git={}), 'git must be a non-empty object'),
+    (_wire_request(git={'repository': 'bro'}), 'git has unknown fields'),
+    (_wire_request(git={'branch': 1}), 'git.branch must be a non-empty string'),
   ],
 )
 def test_blaze_request_rejects_invalid_wire_data(data, message):
