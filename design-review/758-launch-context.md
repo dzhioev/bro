@@ -9,7 +9,7 @@ Its `## Goal`, `## Requirement` and `## Research` sections are the context it an
 The git state moves into the header as a `git` object, and every stored launch context is folded into its trail's header once, so the separate launch-context channel can go.
 Three landings on `master` carry it, with a trails-server deploy after the first and the last:
 an expand landing that accepts both shapes, a switch landing that moves writers and readers, and a contract landing that deletes everything transitional.
-A stage in the first landing hands claude sessions the root `AGENTS.md` through the harness, without depending on Claude Code's remote feature flags or on what the persona's tools allow.
+A stage in the first landing turns Claude Code's remote feature flags off in claude sessions and adds a live probe of what their trails record.
 
 ### Header vocabulary
 
@@ -117,30 +117,28 @@ Landing 3 (contract) deletes what is transitional:
 What stays is the display of `legacy_launch_context`, the one mention of legacy data the Requirement keeps.
 The admin delete's manifest records the header, so it now also keeps a trail's legacy launch context, which it never took from the stored context object.
 
-### Claude sessions and `AGENTS.md`
+### What claude trails record
 
-Claude Code 2.1.280 loads `AGENTS.md` only through its `agents-md` plugin, available while the remotely served flag `tengu_agents_md_mod` is on;
-a process reads the flag once, and ride seeds every new workspace a fresh `.claude.json` without cached flags, so a first session often starts before the flag arrives.
-No setting enables one flag in public builds:
-the per-flag override `CLAUDE_INTERNAL_FC_OVERRIDES` is compiled to a no-op there.
-A line asking the model to read the file is no guarantee either:
-the `lead` persona blocks every file tool (`dev/bros/lead/__init__.py` blocks `claude.FILES`), and a model that skips the line loses the file silently.
+After the change, Claude Code's transcript is the trail's only record of what a claude session's model received.
+It records ride's appended system prompt as a `prompt_snapshot` attachment (from 2.1.265), a loaded `CLAUDE.md` or `AGENTS.md` as an `instructions` attachment (from 2.1.252), and a file the model reads as that tool call's result;
+the trail projects the attachments as notices.
+Ride delivers no instruction file of its own:
+an agent that wants the repository's `AGENTS.md` reads it, and the read is in its trail.
 
-- Ride's session settings set `DISABLE_TELEMETRY=1` in their `env` (`ride/ride/claude/claude_config.py`), so Claude Code reads no remote flag, cached ones included, and never loads `AGENTS.md` itself.
-  Verified at 2.1.280: from a config whose cached flags have the AGENTS.md flag on, the setting kept `AGENTS.md` unloaded in 2 of 2 runs, while the same config without it loaded `AGENTS.md`; the `prompt_snapshot` is still recorded.
-  Every other flag holds the pinned release's default too, a deliberate choice so a pinned release behaves the same until the pin moves:
+- Claude Code decides part of what it loads and records through remotely served feature flags, read once per process.
+  Its `AGENTS.md` loading is one, through the `agents-md` plugin gated by `tengu_agents_md_mod`, and a session starting on a fresh config misses it (ride seeds every new workspace a `.claude.json` without cached flags).
+  No setting pins a single flag in public builds:
+  the per-flag override `CLAUDE_INTERNAL_FC_OVERRIDES` is compiled to a no-op there.
+- Ride's session settings set `DISABLE_TELEMETRY=1` in their `env` (`ride/ride/claude/claude_config.py`), so Claude Code reads no remote flag, cached ones included, and what the pinned release loads and records holds until the pin moves.
+  Verified at 2.1.280: from a config whose cached flags have the `AGENTS.md` flag on, the setting kept `AGENTS.md` unloaded in 2 of 2 runs, while the same config without it loaded it; the `prompt_snapshot` is still recorded.
+  Every other flag holds the pinned release's default too:
   at 2.1.280, 114 served values differ from their built-in defaults among the 277 flags read with a literal default, most of them remote-session, IDE, notification and marketplace plumbing.
-- A `SessionStart` hook in ride's session settings, beside the hooks `ride/ride/claude/claude_argv.py` already installs, hands Claude Code the tree's root `AGENTS.md` as `additionalContext` when the root holds one and no `CLAUDE.md`.
-  It needs no tool and no model compliance, so it reaches every persona.
-  Verified at 2.1.280 in print mode over stream-json: the model received the text, and the transcript recorded it as a `hook_additional_context` attachment, which the trail projects as a notice.
-  Per Claude Code's hook documentation, `SessionStart` also runs on a resume and after a compaction.
-- A live probe in the `llm` stage (`ride/ride/claude/*_llm_test.py`, on the pinned Claude Code) runs one session the way `ride solo` does
-  — ride's settings and appended prompt for the `lead` persona, print mode over stream-json —
-  in a scratch repository holding an `AGENTS.md` and no `CLAUDE.md`, records its transcript through the claude recorder into a store, and asserts the trail's messages:
-  a `hook_additional_context` notice carries the `AGENTS.md` content;
-  no `instructions` notice names `AGENTS.md` (Claude Code did not load it itself);
-  the `prompt_snapshot` notice carries ride's appended prompt.
-  The checklist for moving the Claude Code pin (`ride/ride/workspace/AGENTS.md`, `build_context.py`) runs `run-tests --only llm`, so a release that starts loading `AGENTS.md` itself, or stops recording either, is noticed at the bump.
+- A live probe in the `llm` stage (`ride/ride/claude/*_llm_test.py`, on the pinned Claude Code) runs two sessions the way `ride solo` does
+  — ride's settings and appended prompt, print mode over stream-json —
+  and records each transcript through the claude recorder into a store:
+  in a scratch repository holding a `CLAUDE.md`, the trail's messages carry an `instructions` notice with its content and the `prompt_snapshot` notice with ride's appended prompt;
+  in one holding only an `AGENTS.md`, no `instructions` notice names it.
+  The checklist for moving the Claude Code pin (`ride/ride/workspace/AGENTS.md`, `build_context.py`) runs `run-tests --only llm`, so a release that stops recording either, or starts loading `AGENTS.md` itself, is noticed at the bump.
 
 ### Parties
 
@@ -194,7 +192,7 @@ An old `rewind` refusing claude trails from the current server (`notification mu
 
 ### Rollout
 
-1. Landing 1 (expand, plus the `AGENTS.md` stage) → the user deploys the trails server → the user runs the backfill.
+1. Landing 1 (expand, plus the recording stage) → the user deploys the trails server → the user runs the backfill.
 2. Landing 2 (switch), no deploy → ppp and kap move their pins past it → old workspaces end or are resumed.
 3. The cleanup, by the user.
 4. Landing 3 (contract) → the user deploys it once its gate holds:
@@ -244,12 +242,10 @@ Rollback:
 - Writing the S3 object as well during the transition: it serves only a rollback below landing 1, which switched writers forbid anyway.
 - Two landings, the switch and the contract together: ppp, kap and every live older bundle would stop recording, and their `rewind show` fail, at that deploy.
 - Keeping the S3 objects for a soak, or forever: nothing reads them once the pointers go, and the archive covers recovery.
-- For `AGENTS.md`:
-  a system-prompt line asking the model to read it fails for a persona without file tools and for a model that skips it;
-  seeding the flag into the cached features fixes only the start-up race and leaves the flag Anthropic's;
-  the plugin's own "Project instructions" option, set as `projectInstructions` in `settings.json`, did not stop the native load at 2.1.280;
-  a `CLAUDE.md → AGENTS.md` symlink per workspace tree adds a file to every tree;
-  pasting `AGENTS.md` into the appended prompt bloats every prompt and misses edits made during the session.
+- Delivering `AGENTS.md` to claude sessions, by a system-prompt line, a `SessionStart` hook, a `CLAUDE.md → AGENTS.md` symlink, or its text pasted into the appended prompt:
+  the trail is to keep what the model sees, not to choose it;
+  delivery would override a repository that ships its own `CLAUDE.md`, a hook would repeat a file a `CLAUDE.md` imports, and a prompt line fails for a persona without file tools.
+- Keeping remote flags on, with the `AGENTS.md` flag seeded into the cached features: it fixes only that flag's start-up race and leaves what Claude Code loads and records to server-side changes within a pin.
 - Rewriting an ssh `url` into https: the pairing is a hosting convention (GitHub, GitLab), not a git rule, and ride's clone step already does it for GitHub.
 
 ### Risks
@@ -260,8 +256,8 @@ Rollback:
   a list page over those dates holds fewer headers (Dynamo stops a page at 1 MB), and a write to such a trail costs about 30 times a small header's.
 - With remote flags off, every flag-gated feature holds the pinned default, including ones Anthropic enables later;
   the probe at each pin bump covers what the trails depend on.
-- A release that loads `AGENTS.md` natively despite the flags being off would hand the model the file twice, beside the hook's copy;
-  the probe's `instructions` assertion catches that at the bump.
+- With the flags off, Claude Code never loads `AGENTS.md` itself, so a session sees it only when its agent reads it, and a persona without file tools, such as `lead`, goes without it;
+  the probe notices a release that starts loading it.
 - `legacy_launch_context` is opaque, so a malformed one arriving through an import is stored and fails only when rendered;
   only an administer-token import can carry it.
 - The backfill and cleanup need a trails token holding read and administer and the AWS permissions above; whether they exist is for the user to confirm.
