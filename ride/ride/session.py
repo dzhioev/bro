@@ -719,6 +719,7 @@ def start_session(
   spec: SessionSpec,
   repository: Optional[Repository] = None,
   summoned: Optional[PendingBro] = None,
+  reexec_argv: Optional[list[str]] = None,
 ) -> int:
   try:
     runtime_context = (
@@ -728,7 +729,10 @@ def start_session(
     )
     with runtime_context as runtime_bundle:
       runtime_bundle.materialize_host()
-      reexec_from_runtime(runtime_bundle.reference, spec.to_command_argv())
+      reexec_from_runtime(
+        runtime_bundle.reference,
+        spec.to_command_argv() if reexec_argv is None else reexec_argv,
+      )
       return _start_session(spec, runtime_bundle, repository, summoned)
   except RuntimeBundleError as error:
     log.error('%s', error)
@@ -874,7 +878,17 @@ def _start_session(
     return 1
 
 
+def _resume_argv(name: str, *, cred: list[str], grant: list[str], revoke: list[str]) -> list[str]:
+  parts = ['ride', 'resume']
+  for flag, values in (('--cred', cred), ('--grant', grant), ('--revoke', revoke)):
+    for value in values:
+      parts.extend([flag, value])
+  parts.append(name)
+  return parts
+
+
 def resume_session(name: str, *, cred: list[str], grant: list[str], revoke: list[str]) -> int:
+  reexec_argv = _resume_argv(name, cred=cred, grant=grant, revoke=revoke)
   try:
     workspace = Workspace.open(name)
   except ValueError as error:
@@ -889,4 +903,4 @@ def resume_session(name: str, *, cred: list[str], grant: list[str], revoke: list
   except ValueError as error:
     log.error('%s', error)
     return 1
-  return start_session(spec)
+  return start_session(spec, reexec_argv=reexec_argv)
