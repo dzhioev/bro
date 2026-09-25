@@ -43,10 +43,6 @@ class WebviewType(WorkerType):
   widens_talk = False
   manual = False
 
-  def __init__(self, host):
-    super().__init__(host)
-    self._live_by_owner: dict[str, str] = {}
-
   @override
   def talk(self, request: LaunchRequest) -> Any:
     return frozenset({'owner.question', 'worker.say'})
@@ -66,11 +62,6 @@ class WebviewType(WorkerType):
       raise LaunchDenied(f'the VNC view needs :{VNC_PERMIT}; permits held: {held}')
     if request.owner.type == WEBVIEW:
       raise LaunchDenied('a webview cannot open another webview')
-    live = self._live_by_owner.get(request.owner.mission)
-    if live is not None:
-      raise LaunchDenied(
-        f'this session already holds a live webview {live}; close or cancel it first'
-      )
 
     facts = WebviewFacts(vnc, allowed_origins, blocked_origins)
     options = json.dumps(
@@ -102,17 +93,3 @@ class WebviewType(WorkerType):
       'allowed_origins': list(extension.allowed_origins),
       'blocked_origins': list(extension.blocked_origins),
     }
-
-  @override
-  def subscribers(self):
-    def track(event, record) -> None:
-      if event.type != WEBVIEW or record.parent is None:
-        return
-      if event.transition == 'accepted':
-        self._live_by_owner[record.parent] = record.mission_id
-      elif (
-        event.transition == 'ended' and self._live_by_owner.get(record.parent) == record.mission_id
-      ):
-        del self._live_by_owner[record.parent]
-
-    return (track,)

@@ -227,43 +227,28 @@ async def test_close_waits_for_the_ready_say_before_sending_its_question(monkeyp
     assert json.loads(capsys.readouterr().out)['outcome'] == 'ok'
 
 
-@pytest.mark.asyncio
-async def test_close_defaults_to_the_sessions_live_webview(monkeypatch, capsys):
-  async with running_server(monkeypatch) as server:
-    task = asyncio.create_task(asyncio.to_thread(cli.main, ['webview', 'close']))
-    listing_channel, listing = await next_message(server)
-    await reply(
-      server,
-      listing_channel,
-      listing,
-      outcome='ok',
-      value={
-        'missions': [
-          quest_record('BRO-1', 'started', type='bro'),
-          quest_record(MISSION, 'started', type='webview'),
-        ]
-      },
-    )
-    await _complete_close(server)
+def test_close_without_a_mission_is_a_usage_error(capsys):
+  with pytest.raises(SystemExit) as exited:
+    cli.main(['webview', 'close'])
 
-    assert await task == 0
-    assert json.loads(capsys.readouterr().out)['outcome'] == 'ok'
+  assert exited.value.code == 2
+  assert 'MISSION' in capsys.readouterr().err
 
 
 def test_close_without_a_channel_fails_before_sending_a_command(monkeypatch, caplog):
   monkeypatch.setenv('BROKER_MISSION', 'ROOT')
   monkeypatch.delenv('BROKER_CHANNEL', raising=False)
 
-  assert cli.main(['webview', 'close']) == 1
+  assert cli.main(['webview', 'close', MISSION]) == 1
   assert 'no broker channel' in caplog.text
 
 
-def test_default_close_reports_a_failed_session_proxy(monkeypatch, caplog):
+def test_close_reports_a_failed_session_proxy(monkeypatch, caplog):
   monkeypatch.setenv('BROKER_MISSION', 'ROOT')
   monkeypatch.setenv('BROKER_UPSTREAM', 'tcp://token@127.0.0.1:1')
   monkeypatch.delenv('BROKER_CHANNEL', raising=False)
 
-  assert cli.main(['webview', 'close']) == 1
+  assert cli.main(['webview', 'close', MISSION]) == 1
   assert 'session proxy failed at launch' in caplog.text
 
 

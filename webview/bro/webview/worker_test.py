@@ -4,12 +4,15 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 from bro.webview import worker
 from bro.worker_types import Host, LaunchDenied, LaunchRequest, PeerDescription, installed_type
+
+if TYPE_CHECKING:
+  from bro.broker.journal import Event, Record
 
 
 def _owner(
@@ -146,30 +149,15 @@ class TestWebviewType:
   def test_webview_owner_is_a_leaf(self, tmp_path):
     assert 'cannot open another webview' in _denial(tmp_path, {}, type=worker.WEBVIEW)
 
-  def test_one_live_webview_per_owner_tracks_acceptance_and_end(self, tmp_path):
+  def test_one_owner_may_hold_several_live_webviews(self, tmp_path):
     worker_type = _worker_type()
-    subscriber = worker_type.subscribers()[0]
-    first = _request(tmp_path, {}, request_id='first')
-    first_run = worker_type.launch(first)
-    record = SimpleNamespace(parent='owner', mission_id='first')
+    worker_type.launch(_request(tmp_path, {}, request_id='first'))
+    accepted = cast('Event', SimpleNamespace(type=worker.WEBVIEW, transition='accepted'))
+    record = cast('Record', SimpleNamespace(parent='owner', mission_id='first'))
+    for subscriber in worker_type.subscribers():
+      subscriber(accepted, record)
 
-    subscriber(SimpleNamespace(type=worker.WEBVIEW, transition='accepted'), record)
-    with pytest.raises(LaunchDenied, match='live webview first'):
-      worker_type.launch(_request(tmp_path, {}, request_id='second'))
-
-    subscriber(SimpleNamespace(type=worker.WEBVIEW, transition='ended'), record)
-    second_run = worker_type.launch(_request(tmp_path, {}, request_id='second'))
-    assert second_run.spec == first_run.spec
-
-  def test_unrelated_journal_events_do_not_change_live_ownership(self, tmp_path):
-    worker_type = _worker_type()
-    subscriber = worker_type.subscribers()[0]
-    record = SimpleNamespace(parent='owner', mission_id='other')
-
-    subscriber(SimpleNamespace(type='bro', transition='accepted'), record)
-    subscriber(SimpleNamespace(type=worker.WEBVIEW, transition='started'), record)
-
-    worker_type.launch(_request(tmp_path, {}))
+    worker_type.launch(_request(tmp_path, {}, request_id='second'))
 
   def test_audit_fields_are_json_facts(self):
     facts = worker.WebviewFacts(True, ('https://allowed',), ('https://blocked',))

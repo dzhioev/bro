@@ -21,7 +21,7 @@ Run `sync-scripts --project webview` after adding or removing a CLI, and build t
 `webview open` forwards optional VNC, advisory origin lists, shared artifact refs, and a lifetime bound to `launch`, then waits through the accepted and started marks for the daemon's ready event.
 It prints the mission id and optional noVNC URL as JSON;
 a denial, failed launch, or startup silence exits non-zero, with startup expiry cancelling the launch.
-`webview close [MISSION]` asks the daemon to close, waits for its acknowledgement, terminal outcome, and settled worker supervision, and defaults to the session's one live webview.
+`webview close MISSION` asks the daemon to close, then waits for its acknowledgement, terminal outcome, and settled worker supervision.
 Commands between those verbs use `mission ask <id> '<json>' --wait`, with `mission history <id>` retaining their full payloads.
 `mission share <id> <ref>` makes a later-minted upload available under `/workspace/artifacts/<ref>` without reopening the webview.
 
