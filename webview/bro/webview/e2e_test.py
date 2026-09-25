@@ -26,7 +26,6 @@ from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver, fi
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.spawn import DockerLaunchSpec
-from ride.workspace.store import ScopedSecrets
 
 pytestmark = host_docker.HOST_DAEMON_ONLY
 
@@ -383,7 +382,6 @@ def _run_route(
       workspace=workspace,
       bro='bro-dev',
       permits=permits,
-      credential_scope=ScopedSecrets(set(), set()),
       container_runtime=container_runtime,
       runtime_bundle=runtime_bundle,
     )

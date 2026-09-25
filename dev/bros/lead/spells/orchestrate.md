@@ -352,7 +352,7 @@ When the phase reports a rollout it could not hand off
 
 ### 5 — verify
 
-**Summon:** `into` `master`, which the work is on by then · `talk` `worker.question` · `grant` the credentials its live surface needs
+**Summon:** `into` `master`, which the work is on by then · `talk` `worker.question` · credentials from `projects.<identity>.bros.<the phase bro>` in the host config
 
 Once the work is live
 — merged, and rolled out if it needed a rollout:

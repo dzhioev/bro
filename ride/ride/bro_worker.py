@@ -180,9 +180,8 @@ class SummonLaunchSpec:
   import, scoped-set computation, and any base-ref resolution are blocking work
   the broker loop should not carry.
 
-  `grant`/`revoke` are the request's unified values: the credential halves feed
-  the child's scope and the whole lists its recorded session spec, while the
-  control already resolved the `@bro` halves into `may_summon`, the child's own
+  `grant`/`revoke` are the request's authority values for the recorded session spec.
+  The control already resolved the `@bro` halves into `may_summon`, the child's own
   effective allow-list — never the summoner's, which the child is not authorized
   against — and a request naming no `harness` into the control's summon harness.
   `share` names artifact refs the control already checked against the
@@ -289,8 +288,6 @@ def _child_launch_scope(
     attachment=None if repository is None else repository.identity,
     attachment_repository=repository,
     cred=spec.cred,
-    grant=spec.grant,
-    revoke=spec.revoke,
     llm_spec=spec.llm_spec,
   )
   auth_error = harness.preflight_auth(spec, scoped)
@@ -580,11 +577,6 @@ class Placement:
 class BroFacts:
   bro: str
   allow_list: frozenset[str]
-  grant: tuple[str, ...] = ()
-  revoke: tuple[str, ...] = ()
-  llm: str | None = None
-  harness: str | None = None
-  credential_scope: ScopedSecrets | None = field(default=None, repr=False)
   placement: Placement = Placement('start', Isolation.BOXED)
 
 
@@ -631,32 +623,6 @@ def summon_allow_list(
   return credentials.apply_grant_revoke(
     allow_list, grant=grant, revoke=revoke, subject='summon allow-list'
   )
-
-
-def _summoned_scope(
-  target: str,
-  harness_name: str,
-  llm: str | None,
-  *,
-  attachment: str | None,
-  grant: Sequence[str] = (),
-  revoke: Sequence[str] = (),
-) -> ScopedSecrets:
-  from ride.scope import LaunchScopeError
-
-  harness = get_harness(harness_name)
-  try:
-    return scoped_secrets(
-      target,
-      harness.scope_recipe(),
-      attachment=attachment,
-      grant=list(grant),
-      revoke=list(revoke),
-      llm_spec=launch_llm_spec(harness, attachment, target, llm),
-      check_selection=False,
-    )
-  except LaunchScopeError as error:
-    raise ValueError(str(error)) from error
 
 
 def _validate_bro_arguments(args: dict[str, Any], *, manual: bool) -> None:
@@ -748,59 +714,6 @@ def _placement(
   return Placement('start', resolved)
 
 
-def _credential_refusal(
-  owner: BroFacts,
-  owner_credentials: Callable[[], ScopedSecrets],
-  target: str,
-  *,
-  attachment: str | None,
-  grant_credentials: list[str],
-  harness_name: str | None,
-  llm: str | None,
-  summon_harness: str,
-) -> str | None:
-  widening: set[str] = set()
-  if harness_name is not None or llm is not None:
-    try:
-      requested_scope = _summoned_scope(
-        target,
-        harness_name if harness_name is not None else summon_harness,
-        llm,
-        attachment=attachment,
-      )
-      default_scope = _summoned_scope(target, summon_harness, None, attachment=attachment)
-      widening = (requested_scope.required | requested_scope.optional) - (
-        default_scope.required | default_scope.optional
-      )
-    except ValueError as error:
-      return str(error)
-  if not grant_credentials and not widening:
-    return None
-  held_scope = owner_credentials()
-  held_kinds = held_scope.required | held_scope.optional
-  beyond = []
-  for grant in grant_credentials:
-    kind, instance = credentials.parse_name(grant)
-    if kind not in held_kinds or (
-      instance is not None and held_scope.selection.get(kind, '') != instance
-    ):
-      beyond.append(grant)
-  if beyond:
-    return f'cannot grant credential(s) the summoner does not hold: {", ".join(sorted(beyond))}'
-  missing = sorted(widening - held_kinds)
-  if missing:
-    requested = ' and '.join(
-      f'{key} {value!r}'
-      for key, value in (('harness', harness_name), ('llm', llm))
-      if value is not None
-    )
-    return (
-      f'the requested {requested} needs credential(s) the summoner does not '
-      f'hold: {", ".join(missing)}'
-    )
-  return None
-
-
 class BroType(WorkerType):
   host: BroHost
   name = BRO
@@ -847,9 +760,25 @@ class BroType(WorkerType):
       placement = Placement('join', workspace_isolation(request.owner.workspace))
     grant = args.get('grant', [])
     revoke = args.get('revoke', [])
+    requested_credentials = sorted(
+      {value for value in (*grant, *revoke) if not value.startswith(('@', ':'))}
+    )
+    if requested_credentials:
+      names = ', '.join(requested_credentials)
+      raise LaunchDenied(
+        f'a summon request cannot grant or revoke credential kind(s): {names}; '
+        f'configure them for the child in projects.<identity>.bros.{target}'
+      )
     try:
-      grant_credentials, grant_bros, grant_permits = split_scope_overrides(grant)
+      _, grant_bros, grant_permits = split_scope_overrides(grant)
       _, revoke_bros, _ = split_scope_overrides(revoke)
+      harness = get_harness(args.get('harness') or self.host.summon_harness)
+      launch_llm_spec(
+        harness,
+        self.host.workspace.metadata.repo,
+        target,
+        args.get('llm'),
+      )
       layers = configured_scope_layers(self.host.workspace.metadata.repo, target)
       child_allow_list = summon_allow_list(
         target,
@@ -876,28 +805,12 @@ class BroType(WorkerType):
         'cannot grant permit(s) the summoner does not hold: '
         + ', '.join(f':{permit}' for permit in unheld_permits)
       )
-    refusal = _credential_refusal(
-      owner,
-      lambda: self._credentials(owner, expected=request.owner.expected),
-      target,
-      attachment=self.host.workspace.metadata.repo,
-      grant_credentials=grant_credentials,
-      harness_name=args.get('harness'),
-      llm=args.get('llm'),
-      summon_harness=self.host.summon_harness,
-    )
-    if refusal is not None:
-      raise LaunchDenied(refusal)
     attribution = self.host.peers.attribution_for_mission(self.host.journal, request.owner.mission)
     summoned_by = self._summoned_by(attribution, args)
     worker_permits = frozenset(child_permits)
     facts = BroFacts(
       bro=target,
       allow_list=frozenset(child_allow_list),
-      grant=tuple(grant),
-      revoke=tuple(revoke),
-      llm=args.get('llm'),
-      harness=args.get('harness'),
       placement=placement,
     )
     if request.manual:
@@ -943,28 +856,6 @@ class BroType(WorkerType):
       facts,
       worker_permits,
     )
-
-  def _credentials(self, facts: BroFacts, *, expected: bool) -> ScopedSecrets:
-    if facts.credential_scope is not None:
-      return facts.credential_scope
-    if expected:
-      raise LaunchDenied(
-        "a manual child's credential scope is not attributable; grant the "
-        'credential at its own launch instead'
-      )
-    grant, _, _ = split_scope_overrides(facts.grant)
-    revoke, _, _ = split_scope_overrides(facts.revoke)
-    try:
-      return _summoned_scope(
-        facts.bro,
-        facts.harness or self.host.summon_harness,
-        facts.llm,
-        attachment=self.host.workspace.metadata.repo,
-        grant=grant,
-        revoke=revoke,
-      )
-    except ValueError as error:
-      raise LaunchDenied(str(error)) from error
 
   @staticmethod
   def _summoned_by(attribution: dict[str, str], args: dict[str, Any]) -> dict[str, Any] | None:
@@ -1098,6 +989,12 @@ def pending_bro(launch: Any) -> PendingBro:
     value = data[key]
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
       raise ValueError(f'pending bro launch carries invalid {key}')
+  credential_seeds = {
+    *split_scope_overrides(data['grant'])[0],
+    *split_scope_overrides(data['revoke'])[0],
+  }
+  if credential_seeds:
+    raise ValueError('pending bro launch carries credential seeds')
   for permit in data['permits']:
     from bro.base.scope import permit_name
 

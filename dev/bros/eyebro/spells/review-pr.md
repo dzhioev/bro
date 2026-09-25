@@ -272,7 +272,7 @@ no `github` credential is in its scope, so nothing here can read the pull reques
 Judging a checkout still works ([[review diff]]);
 driving a pull request to a verdict does not.
 
-The identity comes from whatever launched the run, never from inside it:
+The identity comes from configuration for this bro, never from a summon request:
 
 - a managed session or a summon reads the project's entry in the host's `~/.bro.json`:
   `projects.<identity>.bros.<bro>.creds` with `github+<instance>`, `<bro>` being the name your banner's `bro` line gives, so every launch of this bro resolves one;

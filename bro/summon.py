@@ -83,12 +83,11 @@ HARNESS_HELP = (
   '`[tool.bro] summon-harness`'
 )
 GRANT_HELP = (
-  'add a credential (KIND or KIND+INSTANCE), summonable bro (@BRO), or party permit '
-  f"({party_permit_choices()}) to the child's scope (repeatable)"
+  'add a summonable bro (@BRO) or party permit '
+  f"({party_permit_choices()}) to the child's authority (repeatable)"
 )
 REVOKE_HELP = (
-  "remove a credential kind (KIND), summonable bro (@BRO), or party permit from the child's "
-  'scope (repeatable)'
+  "remove a summonable bro (@BRO) or party permit from the child's authority (repeatable)"
 )
 SHARE_HELP = (
   'give the child read access to an artifact ref this session can itself read (repeatable)'

@@ -35,7 +35,6 @@ from ride.workspace.spawn import (
   ProcessLaunchSpec,
   ProcessSpawner,
 )
-from ride.workspace.store import ScopedSecrets
 
 
 @dataclass
@@ -43,7 +42,6 @@ class RideHost:
   workspace: Workspace
   peers: PeerFacts
   artifacts: ArtifactControl
-  credential_kinds: frozenset[str]
   journal: Any
   depth_cap: int
   summon_harness: str
@@ -76,7 +74,6 @@ def run_root_via_broker(
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH,
   summon_harness: str = configs.DEFAULT_SUMMON_HARNESS,
   session_env: Mapping[str, str] = MappingProxyType({}),
-  credential_scope: ScopedSecrets,
   container_runtime: ContainerRuntimeResolver,
   runtime_bundle: RuntimeBundle,
   types: Mapping[str, type[WorkerType]] | None = None,
@@ -89,15 +86,9 @@ def run_root_via_broker(
   docker_spawner = DockerSpawner(host_log=workspace.host_log, party_members=party_members)
   process_spawner = ProcessSpawner(host_log=workspace.host_log, party_members=party_members)
   exec_spawner = ExecSpawner(party_members)
-  root_scope = ScopedSecrets(
-    required=set(credential_scope.required),
-    optional=set(credential_scope.optional),
-    selection=dict(credential_scope.selection),
-  )
   root_extension = BroFacts(
     bro=bro,
     allow_list=frozenset(may_summon),
-    credential_scope=root_scope,
     placement=Placement('start', workspace.isolation),
   )
   facts = PeerFacts(
@@ -146,7 +137,6 @@ def run_root_via_broker(
     workspace=workspace,
     peers=facts,
     artifacts=artifact_control,
-    credential_kinds=frozenset(credential_scope.required | credential_scope.optional),
     journal=facade.journal,
     depth_cap=summon_depth,
     summon_harness=summon_harness,

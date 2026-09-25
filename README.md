@@ -387,9 +387,10 @@ Lend it one more credential for one launch:
 dive-in --grant aws 'why did the deploy fail?'
 ```
 
-Delegation is bounded the same way.
-A child may summon only whom its parent could and hold only what its parent lends it;
-the host authorizes every request and journals it, and the child's trail records who summoned it.
+Delegation is bounded separately.
+A child may summon only whom its parent could;
+its credentials come from its own declaration and host configuration.
+The host authorizes every request and journals it, and the child's trail records who summoned it.
 
 Afterwards, every run on every harness is a recorded trail:
 

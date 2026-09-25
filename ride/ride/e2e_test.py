@@ -19,7 +19,7 @@ H — joining a boxed party (a member `docker exec`'d into the party's running
 container: the store `docker cp`'d in, the `env -i` snapshot, the pid handshake
 read back through the party mount, the member lifecycle routed to the first
 session, and the first session's exit tearing a live member down);
-I — the full boxed → join → unboxed → join → boxed chain through summon control;
+I — spawned and manual credential ownership plus the full boxed → join → unboxed → join → boxed chain through summon control;
 J — native summon-watch wake routes through the real broker, and a native child's turn-end reminder;
 K — a summoned child question, summoner steering and reply, and journal-backed collection;
 L — cancellation of a live child;
@@ -37,6 +37,7 @@ Scenario containers synchronize with the harness through files on the shared
 no tty parsing on the critical path.
 """
 
+import contextlib
 import json
 import os
 import pty
@@ -498,6 +499,7 @@ def isolated_env() -> Iterator[IsolatedEnv]:
         }
       )
     )
+    (credentials_dir / 'openai+summoned.cred').write_text('summoned-openai')
     (home / '.claude.json').write_text(
       json.dumps({'oauthAccount': {'emailAddress': 'e2e@invalid'}, 'userID': 'ride-e2e'})
     )
@@ -1457,7 +1459,199 @@ class TestBoxedPartyJoin:
     assert boxed_join_teardown.member_records_exist
 
 
-# --- I: the full cross-isolation summon route --------------------------------
+# --- I: summon credential ownership and cross-isolation routes ----------------
+
+
+_SUMMON_CREDENTIAL_CHILD = """
+from bro.base import credentials
+from bro.run_lifecycle import RunLifecycle
+
+assert credentials.get('openai') == 'summoned-openai'
+channel = RunLifecycle.from_env()
+assert channel is not None
+channel.trail('summon-credential-child')
+channel.completed('openai', 'ok')
+channel.close()
+"""
+
+
+def test_spawned_summon_hydrates_the_targets_configured_model_credential(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  import ride.bro_worker as ride_spawn
+  import ride.broker_root as broker_root
+  from bro.base import credentials, host_config
+  from ride.runtime_bundle import RuntimeBundle
+  from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
+  from ride.workspace.metadata import Isolation
+  from ride.workspace.model import Workspace
+
+  env = isolated_env
+  name = f'{_NAME_PREFIX}i-credential-party'
+  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  runtime_bundle = RuntimeBundle(
+    env.runtime_root / 'runtime' / env.runtime_bundle_hash,
+    f'{sys.version_info.major}.{sys.version_info.minor}',
+  )
+  container_runtime = ContainerRuntimeResolver.fixed(
+    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
+  )
+  config = env.root / 'summon-credentials.json'
+  config.write_text(
+    json.dumps(
+      {
+        'projects': {
+          str(env.project): {
+            'bros': {'bro': {'creds': ['openai+summoned']}},
+          }
+        }
+      }
+    )
+  )
+  monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(config))
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(env.home / '.bro'))
+  original_started_party_launch = ride_spawn.started_party_launch
+
+  def started_party_launch(*arguments, **keywords):
+    launch = original_started_party_launch(*arguments, **keywords)
+    return replace(launch, command=_session_broxy_probe(_SUMMON_CREDENTIAL_CHILD))
+
+  monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
+  monkeypatch.setenv('HOME', str(env.home))
+  report = workspace.tree / '.summon-credential-report'
+  root_source = """
+from pathlib import Path
+from bro.summon import summon_and_wait
+
+answer = summon_and_wait(
+  'bro',
+  'read the configured credential',
+  llm='openai:sol',
+  harness='bro',
+  timeout=120,
+)
+Path('/workspace/.summon-credential-report').write_text(answer)
+"""
+  launch = DockerLaunchSpec(
+    workspace_docker.Launch(
+      name=name,
+      command=_session_broxy_probe(root_source),
+      env={'RIDE_BRO': 'bro-dev'},
+      secrets=(),
+      tty=False,
+      image=env.image,
+      runtime_bundle_hash=env.runtime_bundle_hash,
+      repo=env.project,
+    )
+  )
+
+  code = broker_root.run_root_via_broker(
+    launch,
+    workspace=workspace,
+    bro='bro-dev',
+    may_summon={'bro'},
+    permits={'bro.party.start.boxed'},
+    summon_depth=2,
+    container_runtime=container_runtime,
+    runtime_bundle=runtime_bundle,
+  )
+
+  assert code == 0
+  assert report.read_text() == 'openai'
+  assert env.live_containers() == []
+
+
+def test_manual_summon_argv_owns_its_credential_scope(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  import ride.cli as ride_cli
+  import ride.scope as ride_scope
+  from bro.base import credentials, host_config
+  from ride import pending_launch
+  from ride.bro_worker import pending_bro
+  from ride.harness import get_harness
+
+  env = isolated_env
+  config = env.root / 'manual-credentials.json'
+  config.write_text('{}')
+  (env.home / '.bro' / 'creds' / 'github+manual.cred').write_text('manual-github')
+  monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(config))
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(env.home / '.bro'))
+  record = pending_launch.PendingLaunch(
+    token='manual-credential-e2e',
+    runtime=env.runtime_bundle_hash,
+    port=7321,
+    channel_token='token',
+    type='bro',
+    talk=('worker.say',),
+    owner_tree=str(env.project),
+    extension={
+      'target': 'bro',
+      'prompt': 'inspect the manual scope',
+      'may_summon': [],
+      'permits': ['bro.party.start.boxed'],
+      'grant': [],
+      'revoke': [],
+      'summoner': None,
+      'repo': None,
+      'into': None,
+    },
+  )
+  captured: dict = {}
+
+  def capture_start(spec, repository=None, summoned=None):
+    harness = get_harness(spec.harness)
+    scoped = ride_scope.scoped_secrets(
+      spec.bro,
+      harness.scope_recipe(),
+      llm_spec=spec.llm_spec,
+      cred=spec.cred,
+      grant=spec.grant,
+      revoke=spec.revoke,
+      recording=not spec.no_trails,
+    )
+    _, _, store = ride_scope.preflight_scoped_launch(
+      scoped,
+      spec.bro,
+      grant=spec.grant,
+      revoke=spec.revoke,
+    )
+    captured.update(spec=spec, store=store, summoned=summoned)
+    return 0
+
+  monkeypatch.setattr(ride_cli, 'reexec_from_runtime', lambda runtime, argv: None)
+  monkeypatch.setattr(ride_cli, 'start_session', capture_start)
+
+  with contextlib.ExitStack() as cleanup:
+    pending_launch.write(record)
+    cleanup.callback(pending_launch.discard, record.token)
+    assert (pending_bro(record).grant, pending_bro(record).revoke) == ((), ())
+    code = ride_cli.main(
+      [
+        'ride',
+        'solo',
+        '--summoned',
+        record.token,
+        '--harness',
+        'bro',
+        '--llm',
+        'echo',
+        '--unboxed',
+        '--cred',
+        'github+manual',
+        '--grant',
+        'github',
+        '--revoke',
+        'trails',
+        'bro',
+      ]
+    )
+
+  assert code == 0
+  assert captured['spec'].cred == ['github+manual']
+  assert captured['store'].kinds == {'github'}
+  assert captured['store']['creds/github.cred'] == b'manual-github'
+  assert captured['summoned'].token == record.token
 
 
 def _cross_isolation_member(prompt: str) -> str:
@@ -1518,7 +1712,6 @@ def test_cross_isolation_summon_chain_uses_both_join_lowerings(
   from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
   from ride.workspace.metadata import Isolation
   from ride.workspace.model import Workspace
-  from ride.workspace.store import ScopedSecrets
 
   env = isolated_env
   name = f'{_NAME_PREFIX}i-chain-party'
@@ -1607,7 +1800,6 @@ time.sleep(2)
     may_summon={'bro'},
     permits={'bro.party.start.boxed', 'bro.party.start.unboxed', 'bro.party.join'},
     summon_depth=5,
-    credential_scope=ScopedSecrets(set(), set()),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
   )
@@ -1777,7 +1969,6 @@ def _run_native_watch_route(
   from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
   from ride.workspace.metadata import Isolation
   from ride.workspace.model import Workspace
-  from ride.workspace.store import ScopedSecrets
 
   name = f'{_NAME_PREFIX}j-{case}-party'
   workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
@@ -1817,7 +2008,6 @@ def _run_native_watch_route(
     may_summon={'bro'},
     permits={'bro.party.start.boxed'},
     summon_depth=2,
-    credential_scope=ScopedSecrets(set(), set()),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
   )
@@ -1987,7 +2177,6 @@ def test_native_child_reminded_at_its_turn_end_chills_and_delivers_the_grandchil
   from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
   from ride.workspace.metadata import Isolation
   from ride.workspace.model import Workspace
-  from ride.workspace.store import ScopedSecrets
 
   env = isolated_env
   name = f'{_NAME_PREFIX}j-remind-party'
@@ -2033,7 +2222,6 @@ def test_native_child_reminded_at_its_turn_end_chills_and_delivers_the_grandchil
     may_summon={'bro'},
     permits={'bro.party.start.boxed'},
     summon_depth=3,
-    credential_scope=ScopedSecrets(set(), set()),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
   )
@@ -2085,7 +2273,6 @@ def test_summon_chat_question_reply_and_steering_cross_the_live_broker(
   from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
   from ride.workspace.metadata import Isolation
   from ride.workspace.model import Workspace
-  from ride.workspace.store import ScopedSecrets
 
   env = isolated_env
   name = f'{_NAME_PREFIX}j-chat-party'
@@ -2149,7 +2336,6 @@ Path('/workspace/.quest-chat-report').write_text(outcome.answer)
     may_summon={'bro'},
     permits={'bro.party.start.boxed'},
     summon_depth=2,
-    credential_scope=ScopedSecrets(set(), set()),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
   )
@@ -2183,7 +2369,6 @@ def test_cancel_kills_a_live_child_and_ends_its_quest_on_reap(
   from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
   from ride.workspace.metadata import Isolation
   from ride.workspace.model import Workspace
-  from ride.workspace.store import ScopedSecrets
 
   env = isolated_env
   name = f'{_NAME_PREFIX}k-cancel-party'
@@ -2249,7 +2434,6 @@ Path('/workspace/.quest-cancel-report').write_text(json.dumps({
     may_summon={'bro'},
     permits={'bro.party.start.boxed'},
     summon_depth=2,
-    credential_scope=ScopedSecrets(set(), set()),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
   )
@@ -2348,7 +2532,6 @@ def test_worker_container_runs_through_the_live_broker(
   from ride.workspace.metadata import Isolation
   from ride.workspace.model import Workspace
   from ride.workspace.spawn import DockerLaunchSpec
-  from ride.workspace.store import ScopedSecrets
 
   class ContainerType(WorkerType):
     name = 'container-e2e'
@@ -2405,7 +2588,6 @@ def test_worker_container_runs_through_the_live_broker(
     launch,
     workspace=workspace,
     bro='bro-dev',
-    credential_scope=ScopedSecrets(set(), set()),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
     types={ContainerType.name: ContainerType},
