@@ -767,24 +767,24 @@ def _start_session(
     log.error("a manual summon child needs the summoner's broker channel")
     return 1
 
-  auth_error = harness.preflight_auth(spec)
-  if auth_error is not None:
-    log.error('%s', auth_error)
-    return 1
   recipe = harness.scope_recipe()
   try:
+    scoped = scoped_secrets(
+      spec.bro,
+      recipe,
+      attachment=spec.repo,
+      attachment_repository=repository,
+      llm_spec=spec.llm_spec,
+      cred=spec.cred,
+      grant=spec.grant,
+      revoke=spec.revoke,
+      recording=not spec.no_trails,
+    )
     with launch_scope_errors():
-      scoped = scoped_secrets(
-        spec.bro,
-        recipe,
-        attachment=spec.repo,
-        attachment_repository=repository,
-        llm_spec=spec.llm_spec,
-        cred=spec.cred,
-        grant=spec.grant,
-        revoke=spec.revoke,
-        recording=not spec.no_trails,
-      )
+      auth_error = harness.preflight_auth(spec, scoped)
+    if auth_error is not None:
+      log.error('%s', auth_error)
+      return 1
     may_summon, permits, store = preflight_scoped_launch(
       scoped,
       spec.bro,

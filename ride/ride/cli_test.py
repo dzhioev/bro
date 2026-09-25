@@ -1,4 +1,6 @@
+import contextlib
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -6,13 +8,22 @@ from unittest.mock import patch
 import pytest
 
 import ride.cli as ride_cli
-from bro.base import configs
+from bro.base import configs, credentials
+from bro.llm.llms.echo import LLMSpec as EchoLLMSpec
 from bro.workspace.paths import workspace_dir
+from bros.bro import Bro
 from ride import pending_launch
 from ride.bro_worker import pending_bro
 from ride.do_ride import command as do_ride_command
 from ride.harness import get_harness
 from ride.workspace.metadata import Isolation
+
+
+class HydrationBro(Bro):
+  name = 'hydration-test'
+  description = 'credential hydration route fixture'
+  extra_secrets = ('github',)
+  llm_spec = EchoLLMSpec()
 
 
 @pytest.fixture(autouse=True)
@@ -297,6 +308,169 @@ class TestHostConfigScopeErrors:
     assert code == 1
     assert 'defaults names unregistered credential kind(s): consumer_only' in caplog.text
     assert 'move host-wide picks or scope changes into the project entries' in caplog.text
+
+
+class TestCredentialHydrationRoutes:
+  @pytest.fixture
+  def route(self, tmp_path, monkeypatch, register_test_bros):
+    register_test_bros(HydrationBro)
+    repository = tmp_path / 'repo'
+    repository.mkdir()
+    (repository / 'pyproject.toml').write_text(
+      '[tool.bro]\ndefault = "hydration-test"\ngrant = ["aws"]\nrevoke = ["openai"]\n'
+    )
+    subprocess.run(['git', 'init', '-q', repository], check=True)
+    subprocess.run(['git', '-C', repository, 'config', 'user.name', 'Test User'], check=True)
+    subprocess.run(
+      ['git', '-C', repository, 'config', 'user.email', 'test@example.com'], check=True
+    )
+    subprocess.run(['git', '-C', repository, 'add', 'pyproject.toml'], check=True)
+    subprocess.run(['git', '-C', repository, 'commit', '-qm', 'test project'], check=True)
+
+    store = tmp_path / 'store'
+    material = store / credentials.MATERIAL_DIR
+    material.mkdir(parents=True)
+
+    def write(name: str, value: str) -> None:
+      (material / f'{name}{credentials.MATERIAL_SUFFIX}').write_text(value)
+
+    for name, value in {
+      'github+project': 'github-project',
+      'github+resume': 'github-resume',
+      'aws+project': 'aws-project',
+      'brog+bro': 'brog-bro',
+      'harbor+launch': 'harbor-launch',
+    }.items():
+      write(name, value)
+
+    config = tmp_path / 'bro.json'
+    config.write_text(
+      json.dumps(
+        {
+          'defaults': {
+            'creds': [
+              'github+default',
+              'aws+default',
+              'brog+default',
+              'harbor+default',
+            ],
+            'grant': ['brog', 'harbor'],
+          },
+          'projects': {
+            str(repository): {
+              'creds': ['github+project', 'aws+project'],
+              'revoke': ['brog'],
+              'bros': {
+                'hydration-test': {
+                  'creds': ['brog+bro'],
+                  'grant': ['brog'],
+                }
+              },
+            }
+          },
+        }
+      )
+    )
+    monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
+
+    class Runtime:
+      reference = 'test-runtime'
+
+      def materialize_host(self) -> None:
+        pass
+
+    @contextlib.contextmanager
+    def runtime_bundle():
+      yield Runtime()
+
+    monkeypatch.setattr('ride.session.resolve_runtime_bundle', runtime_bundle)
+    monkeypatch.setattr('ride.session.reexec_from_runtime', lambda reference, argv: None)
+    captures = []
+
+    def capture_launch(spec, workspace, base_ref, launch_scope, **kwargs):
+      captures.append((spec, launch_scope))
+      return 0
+
+    monkeypatch.setattr('ride.session._launch_session', capture_launch)
+
+    def launch(*scope_flags: str) -> int:
+      result = ride_cli.main(
+        [
+          'ride',
+          'solo',
+          '--unboxed',
+          '--workspace',
+          'hydration-route',
+          '--repo',
+          str(repository),
+          '--harness',
+          'bro',
+          *scope_flags,
+          'hydration-test',
+          'work',
+        ]
+      )
+      assert result is not None
+      return result
+
+    return SimpleNamespace(material=material, captures=captures, launch=launch)
+
+  def test_root_launch_folds_every_layer_and_hydrates_by_selected_name(self, route):
+    assert route.launch('--cred', 'harbor+launch', '--grant', 'github', '--revoke', 'openai') == 0
+
+    spec, launch_scope = route.captures[-1]
+    assert spec.cred == ['harbor+launch']
+    assert launch_scope.scoped.required == {'github', 'aws', 'brog', 'harbor'}
+    assert launch_scope.scoped.optional == {'trails'}
+    assert launch_scope.store['creds/github.cred'] == b'github-project'
+    assert launch_scope.store['creds/aws.cred'] == b'aws-project'
+    assert launch_scope.store['creds/brog.cred'] == b'brog-bro'
+    assert launch_scope.store['creds/harbor.cred'] == b'harbor-launch'
+    assert 'creds/trails.cred' not in launch_scope.store
+
+  def test_root_launch_fails_for_a_picked_absent_instance(self, route, caplog):
+    assert route.launch('--cred', 'harbor+absent') == 1
+
+    assert route.captures == []
+    assert "secret 'harbor+absent' not found" in caplog.text
+
+  def test_root_launch_fails_when_a_present_name_cannot_load(self, route, caplog):
+    path = route.material / f'harbor+broken{credentials.MATERIAL_SUFFIX}'
+    path.write_bytes(b'\xff')
+
+    assert route.launch('--cred', 'harbor+broken') == 1
+
+    assert route.captures == []
+    assert 'harbor+broken.cred is not valid UTF-8 text' in caplog.text
+
+  def test_resume_merges_scope_flags_before_hydrating(self, route):
+    assert route.launch('--cred', 'harbor+launch') == 0
+
+    assert (
+      ride_cli.main(
+        [
+          'ride',
+          'resume',
+          '--cred',
+          'github+resume',
+          '--revoke',
+          'aws',
+          '--grant',
+          'brog',
+          'hydration-route',
+        ]
+      )
+      == 0
+    )
+
+    spec, launch_scope = route.captures[-1]
+    assert spec.cred == ['harbor+launch', 'github+resume']
+    assert spec.revoke == ['aws']
+    assert launch_scope.scoped.required == {'github', 'brog', 'harbor'}
+    assert launch_scope.store['creds/github.cred'] == b'github-resume'
+    assert 'creds/aws.cred' not in launch_scope.store
 
 
 class TestAlong:

@@ -37,7 +37,7 @@ def report_scope(repo: Optional[Repository | Path], bro: Optional[str], harness:
     llm_spec = launch_llm_spec(driver, attachment, bro_name, None)
     scoped = scoped_secrets(bro_name, recipe, attachment=attachment, llm_spec=llm_spec)
     registry = credentials.default_registry()
-    selection = {kind: instance for kind, instance in binding.instances.items() if kind in registry}
+    selection = {kind: instance for kind, instance in scoped.selection.items() if kind in registry}
     store = credentials.Store(registry, credentials.STORE_DIR, selection)
   except (LaunchScopeError, ValueError) as error:
     print(f'cannot compute the scope: {error}')
@@ -64,6 +64,8 @@ def _print_tiers(
   names = [name for _, tier in tiers for name in tier]
   if len(names) == 0:
     return
+  optional = set(dict(tiers).get('optional', ()))
+  present = store.instance_names()
   name_width = max(len(name) for name in names)
   reads_width = max(len(_reads(name, binding)) for name in names)
   for label, tier in tiers:
@@ -71,12 +73,18 @@ def _print_tiers(
       continue
     print(f'{label}:')
     for name in tier:
-      state = 'ok' if store.available(name) else 'MISSING'
+      storage = store.selected_name(name)
+      if storage in present:
+        state = 'PRESENT'
+      elif name in optional and name not in store.selection:
+        state = 'SKIPPED'
+      else:
+        state = 'MISSING'
       print(f'  {name:<{name_width}}  {_reads(name, binding):<{reads_width}}  {state}')
 
 
 def _reads(kind: str, binding: host_config.CredentialSelection) -> str:
   if kind not in binding.instances:
-    return ''
+    return f'{kind} (unpicked)'
   selected = credentials.storage_name(kind, binding.instances[kind])
   return f'{selected} ({binding.layers[kind]})'

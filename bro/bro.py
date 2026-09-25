@@ -1633,8 +1633,8 @@ class BaseBro(ABC):
     # server's + data source's `optional_secrets` over the same per-harness
     # component set as `needed_secrets`, plus the credentials of its gated
     # features and the cast key when this bro has spells. minus anything
-    # already required — a hard requirement is never downgraded. absent
-    # optional secrets degrade the capability instead of failing the launch.
+    # already required — a hard requirement is never downgraded. an unpicked
+    # optional empty instance may be absent without failing a managed launch.
     specs, sources = self._components_for(harness)
     names: set[str] = set()
     for spec in specs:

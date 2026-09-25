@@ -283,9 +283,6 @@ def _child_launch_scope(
   from ride.session import ScopedLaunch
 
   harness = get_harness(spec.harness)
-  auth_error = harness.preflight_auth(spec)
-  if auth_error is not None:
-    raise ValueError(auth_error)
   scoped = scoped_secrets(
     launch.target,
     harness.scope_recipe(),
@@ -296,6 +293,9 @@ def _child_launch_scope(
     revoke=spec.revoke,
     llm_spec=spec.llm_spec,
   )
+  auth_error = harness.preflight_auth(spec, scoped)
+  if auth_error is not None:
+    raise ValueError(auth_error)
   _, _, store = preflight_scoped_launch(
     scoped,
     spec.bro,
