@@ -1039,6 +1039,9 @@ class TestUnboxedSession:
     monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_args: True)
     monkeypatch.setattr(ride_session, 'materialize_scoped_store', _materialize_store)
+    monkeypatch.setattr(
+      ride_session, 'recorded_origin_url', lambda _tree: 'https://example.test/repository.git'
+    )
     monkeypatch.setattr(claude_harness, 'apply_claude_auth', lambda env, **_kwargs: None)
     monkeypatch.setattr(
       claude_harness,
@@ -1102,6 +1105,8 @@ class TestUnboxedSession:
     ]
     assert launch.env['RIDE_ISOLATION'] == 'unboxed'
     assert launch.env['RIDE_HOST'] == socket.gethostname()
+    assert launch.env['RIDE_REPO'] == str(tmp_path)
+    assert launch.env['RIDE_REPO_URL'] == 'https://example.test/repository.git'
     assert launch.env['RIDE_BRANCH'] == 'workspace-w'
     assert launch.env['RIDE_BASE_SHA'] == 'treehead'
     assert launch.env['RIDE_COMMAND'] == spec.ride_command
@@ -1159,6 +1164,7 @@ class TestUnboxedSession:
   ):
     workspace = self._workspace(monkeypatch, tmp_path, attached=False)
     monkeypatch.setenv('RIDE_REPO', '/parent/repository')
+    monkeypatch.setenv('RIDE_REPO_URL', 'https://example.test/parent.git')
     monkeypatch.setenv('RIDE_BRANCH', 'workspace-parent')
     monkeypatch.setenv('BROKER_CHANNEL', 'ambient-channel')
     monkeypatch.setenv('BROKER_UPSTREAM', 'ambient-upstream')
@@ -1187,6 +1193,7 @@ class TestUnboxedSession:
 
     assert isinstance(launch, ride_session.ProcessLaunch)
     assert 'RIDE_REPO' not in launch.env
+    assert 'RIDE_REPO_URL' not in launch.env
     assert 'RIDE_BRANCH' not in launch.env
     assert 'BROKER_CHANNEL' not in launch.env
     assert 'BROKER_UPSTREAM' not in launch.env
@@ -1354,6 +1361,34 @@ class TestUnboxedSession:
     )
     ensure_clone.assert_not_called()
     assert 'no claude session found' in caplog.text
+
+
+class TestBoxedMemberSession:
+  def test_attached_member_publishes_the_repository_origin(self, monkeypatch, tmp_path):
+    workspace = _workspace(tmp_path)
+    workspace.tree.mkdir(parents=True)
+    harness = MagicMock()
+    monkeypatch.setattr(ride_session, 'get_harness', lambda _name: harness)
+    monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: 'container-id')
+    monkeypatch.setattr(ride_session, '_tree_head', lambda _tree: 'treehead')
+    monkeypatch.setattr(
+      ride_session, 'recorded_origin_url', lambda _tree: 'https://example.test/repository.git'
+    )
+
+    launch = ride_session.boxed_member_launch(
+      _spec(),
+      workspace,
+      'broker-member',
+      _launch_scope().scoped,
+      human_env={},
+      runtime_bundle=_runtime_bundle(tmp_path),
+      env={},
+    )
+
+    assert launch.env['RIDE_REPO'] == str(tmp_path)
+    assert launch.env['RIDE_REPO_URL'] == 'https://example.test/repository.git'
+    assert launch.env['RIDE_BRANCH'] == 'workspace-w'
+    assert launch.env['RIDE_BASE_SHA'] == 'treehead'
 
 
 class TestHostBrokerPingRoundTrip:

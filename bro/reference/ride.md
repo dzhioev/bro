@@ -1099,7 +1099,8 @@ Unboxed isolation runs it from the snapshot venv and boxed isolation from the mo
 both expose only pinned session shims plus system paths.
 The distribution declares `do-ride` as both a console script and a session command, so every runtime bundle carries it beside `ride`.
 
-`do-ride` receives `RIDE_ISOLATION` and the attached tree's `RIDE_BRANCH` / `RIDE_BASE_SHA`, then exports the bro git identity, `RIDE_WORKSPACE`, `RIDE_REPO`, `RIDE_BRO`, and the `BRO_HOLD` / `RIDE_RUNNER_PID` pair (see "Forwarded env vars").
+`do-ride` receives `RIDE_ISOLATION` and the attached tree's `RIDE_BRANCH` / `RIDE_BASE_SHA`.
+It then exports the bro git identity, `RIDE_WORKSPACE`, `RIDE_REPO`, `RIDE_REPO_URL`, `RIDE_BRO`, and the `BRO_HOLD` / `RIDE_RUNNER_PID` pair (see "Forwarded env vars").
 It applies the persona's declared workspace provisioning when attached (`BaseBro.provision_workspace`), installs the scoped credential hooks, prepares missing Claude state and the installation's plugin seed, and owns the optional session broxy.
 Each step is idempotent, so a launcher may pre-provision state before invoking it.
 While the harness runs, `runner.pid` under `RIDE_SESSION_DIR` records the executable's pid and operating-system start-time identity as JSON;
@@ -1211,6 +1212,8 @@ Wrappers and session daemons rely on a small set of env vars:
 - `RIDE_REPO` — the root session's resolved checkout path or normalized git URL, absent when detached.
   Set by each launcher and overwritten from `do-ride --repo`;
   banner and summon lowering read this launch state rather than deriving a repository from cwd.
+- `RIDE_REPO_URL` — the attached session tree's sanitized network `origin`, absent when detached or when `origin` is a local path or `file://` URL.
+  Each launcher reads it on the host side, and `do-ride` refreshes it from the prepared tree before the harness starts.
 - `RIDE_BRANCH` — the attached workspace's recorded branch, absent when detached.
   The launcher reads it from `workspace.json` and passes it to `do-ride`.
 - `RIDE_BASE_SHA` — the commit the attached workspace's tree starts the session at, set beside `RIDE_BRANCH` and absent with it:

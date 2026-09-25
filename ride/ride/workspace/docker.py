@@ -14,7 +14,7 @@ from typing import Optional
 from bro.base import credentials, log
 from bro.monitor import PROCESS_FILENAME
 from bro.workspace.paths import runtime_base, workspace_tree
-from ride.repository import Repository, as_repository
+from ride.repository import Repository, as_repository, recorded_origin_url
 from ride.runtime_bundle import SESSION_TERMINAL_ENV, RuntimeBundle
 from ride.workspace import build_context
 from ride.workspace.build_context import CONTAINER_DIR
@@ -635,7 +635,10 @@ def _docker_create_argv(
   owned = {*IMAGE_ENV, *session_facts}
   if repository is not None:
     argv += ['-e', f'RIDE_REPO={repository.identity}']
-    owned.add('RIDE_REPO')
+    owned.update({'RIDE_REPO', 'RIDE_REPO_URL'})
+    repo_url = recorded_origin_url(tree)
+    if repo_url is not None:
+      argv += ['-e', f'RIDE_REPO_URL={repo_url}']
   # a tty is the launcher's own terminal, whose identity crosses with it
   if tty:
     for variable in SESSION_TERMINAL_ENV:

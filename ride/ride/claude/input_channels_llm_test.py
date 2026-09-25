@@ -188,6 +188,8 @@ def _recorded_messages(
     host_workspace=str(repository),
     boxed=False,
     ride_command='ride solo --harness claude bro',
+    repo=None,
+    repo_url=None,
     branch=None,
     base_sha=None,
   )

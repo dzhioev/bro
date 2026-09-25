@@ -37,22 +37,34 @@ class TestManagedSession:
       host_workspace='/home/u/ws/tree',
       boxed=True,
       ride_command='ride along ws',
+      repo=None,
+      repo_url=None,
       branch=None,
       base_sha=None,
     )
     assert session is not None
-    assert session.git_record is None
+    assert session.git is None
 
   def test_an_attached_session_carries_its_git_state(self, monkeypatch):
-    _publish(monkeypatch, RIDE_ISOLATION='unboxed', RIDE_BRANCH='workspace-ws', RIDE_BASE_SHA='abc')
+    _publish(
+      monkeypatch,
+      RIDE_ISOLATION='unboxed',
+      RIDE_REPO='/source/bro',
+      RIDE_BRANCH='workspace-ws',
+      RIDE_BASE_SHA='abc',
+    )
     session = managed_session()
     assert session is not None
     assert (session.boxed, session.branch, session.base_sha) == (False, 'workspace-ws', 'abc')
 
-  def test_the_trail_shapes_pin_the_stored_header_and_context_contract(self, monkeypatch):
-    # the header `location` (`bro/trails/model.py`) and a launch-context record
-    # (`rewind`'s session context preamble) are read back from stored trails as-is
-    _publish(monkeypatch, RIDE_BRANCH='workspace-ws', RIDE_BASE_SHA='abc')
+  def test_the_trail_shapes_pin_the_stored_header_contract(self, monkeypatch):
+    _publish(
+      monkeypatch,
+      RIDE_REPO='https://user:token@GitHub.COM/dzhioev/bro.git?token=x#ref',
+      RIDE_REPO_URL='git@GitHub.COM:dzhioev/bro.git',
+      RIDE_BRANCH='workspace-ws',
+      RIDE_BASE_SHA='abc',
+    )
     session = managed_session()
     assert session is not None
     assert session.location == {
@@ -61,11 +73,11 @@ class TestManagedSession:
       'dir': '/home/u/ws/tree',
       'is_container': True,
     }
-    assert session.git_record == {
-      'kind': 'git',
-      'subtype': 'state',
-      'title': 'git state at launch',
-      'fields': {'branch': 'workspace-ws', 'base_sha': 'abc'},
+    assert session.git == {
+      'repo': 'https://github.com/dzhioev/bro.git',
+      'url': 'git@github.com:dzhioev/bro.git',
+      'branch': 'workspace-ws',
+      'base_sha': 'abc',
     }
 
   @pytest.mark.parametrize(
@@ -81,8 +93,30 @@ class TestManagedSession:
     with pytest.raises(ValueError, match='RIDE_ISOLATION'):
       managed_session()
 
-  @pytest.mark.parametrize('present', ['RIDE_BRANCH', 'RIDE_BASE_SHA'])
-  def test_a_branch_and_its_base_come_together(self, monkeypatch, present):
+  @pytest.mark.parametrize('present', ['RIDE_REPO', 'RIDE_BRANCH', 'RIDE_BASE_SHA'])
+  def test_an_attachment_identity_branch_and_base_come_together(self, monkeypatch, present):
     _publish(monkeypatch, **{present: 'x'})
     with pytest.raises(ValueError, match='together'):
+      managed_session()
+
+  @pytest.mark.parametrize('repo_url', ['/local/origin', 'file:///local/origin'])
+  def test_a_local_origin_is_not_recorded_as_a_url(self, monkeypatch, repo_url):
+    _publish(
+      monkeypatch,
+      RIDE_REPO='/source/bro',
+      RIDE_REPO_URL=repo_url,
+      RIDE_BRANCH='workspace-ws',
+      RIDE_BASE_SHA='abc',
+    )
+    session = managed_session()
+    assert session is not None
+    assert session.git == {
+      'repo': '/source/bro',
+      'branch': 'workspace-ws',
+      'base_sha': 'abc',
+    }
+
+  def test_an_origin_without_an_attachment_is_refused(self, monkeypatch):
+    _publish(monkeypatch, RIDE_REPO_URL='https://example.test/repository.git')
+    with pytest.raises(ValueError, match='only with RIDE_REPO'):
       managed_session()
