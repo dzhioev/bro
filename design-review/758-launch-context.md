@@ -120,8 +120,16 @@ The admin delete's manifest records the header, so it now also keeps a trail's l
 ### What claude trails record
 
 After the change, Claude Code's transcript is the trail's only record of what a claude session's model received.
-It records ride's appended system prompt as a `prompt_snapshot` attachment (from 2.1.265), a loaded `CLAUDE.md` or `AGENTS.md` as an `instructions` attachment (from 2.1.252), and a file the model reads as that tool call's result;
-the trail projects the attachments as notices.
+At 2.1.280 it records the content of each channel that input is built from, and the trail projects every attachment as a notice:
+
+- the system prompt and the tool definitions of the first request, as a `prompt_snapshot` attachment (from 2.1.265):
+  `cliPrefix` and the `systemPrompt` parts, Claude Code's built-in sections and ride's appended prompt together, and `tools`, each with its name, description and schema;
+- tools loaded later, as `deferred_tools_record` and `deferred_tools_delta` attachments carrying each tool's description;
+- a loaded `CLAUDE.md` or `AGENTS.md`, as an `instructions` attachment (from 2.1.252);
+- context a hook adds, as `hook_additional_context`, and the context Claude Code injects itself (`environment`, `date`, `session_context`, `skill_listing`, reminders), each as an attachment of its own kind;
+- the conversation: user input, assistant output, and tool calls with their results, a file the model reads among them.
+
+Checked against this design session's own transcript (2.1.280, interactive): `cliPrefix` beside 12 system-prompt parts, 14 tools with their schemas, and 15 attachment kinds.
 Ride delivers no instruction file of its own:
 an agent that wants the repository's `AGENTS.md` reads it, and the read is in its trail.
 
@@ -134,11 +142,16 @@ an agent that wants the repository's `AGENTS.md` reads it, and the read is in it
   Every other flag holds the pinned release's default too:
   at 2.1.280, 114 served values differ from their built-in defaults among the 277 flags read with a literal default, most of them remote-session, IDE, notification and marketplace plumbing.
 - A live probe in the `llm` stage (`ride/ride/claude/*_llm_test.py`, on the pinned Claude Code) runs two sessions the way `ride solo` does
-  — ride's settings and appended prompt, print mode over stream-json —
-  and records each transcript through the claude recorder into a store:
-  in a scratch repository holding a `CLAUDE.md`, the trail's messages carry an `instructions` notice with its content and the `prompt_snapshot` notice with ride's appended prompt;
-  in one holding only an `AGENTS.md`, no `instructions` notice names it.
-  The checklist for moving the Claude Code pin (`ride/ride/workspace/AGENTS.md`, `build_context.py`) runs `run-tests --only llm`, so a release that stops recording either, or starts loading `AGENTS.md` itself, is noticed at the bump.
+  — ride's settings and appended prompt, print mode over stream-json, plus a fixture MCP server and a fixture `UserPromptSubmit` hook —
+  and records each transcript through the claude recorder into a store.
+  In a scratch repository holding a `CLAUDE.md`, the trail's messages carry one representative of each channel above:
+  the `prompt_snapshot` notice with a non-empty `cliPrefix`, a built-in part beside ride's appended prompt, and a native tool's schema;
+  the fixture MCP tool's description, in the snapshot's tools or a deferred-tools notice;
+  the `instructions` notice with the `CLAUDE.md` content;
+  the fixture hook's `hook_additional_context`;
+  and the conversation's user input, assistant reply and tool result.
+  In one holding only an `AGENTS.md`, no `instructions` notice names it.
+  The checklist for moving the Claude Code pin (`ride/ride/workspace/AGENTS.md`, `build_context.py`) runs `run-tests --only llm`, so a release that stops recording any of these channels, or starts loading `AGENTS.md` itself, is noticed at the bump.
 
 ### Parties
 
