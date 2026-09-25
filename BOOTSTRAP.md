@@ -501,8 +501,9 @@ ride scope --repo . --bro <developer-name>
 Both executables must belong to the selected repository or sidecar environment, not a global tool, stale framework checkout, or another consumer.
 If the developer became the default, also run `ride scope --repo .`.
 When an OpenAI key was wired, also run the scope report with `--harness` naming the harness the project `harness` does not select, so both harnesses' scopes are checked.
-Every required row must report `ok`, the intended instance, and the intended selection layer.
-Only a declined `openai` row and the `trails` row may be missing.
+Every required row must report `PRESENT`, the intended instance, and the intended selection layer.
+Only a declined unpicked `openai` row and the unpicked `trails` row may report `SKIPPED`;
+no row may report `MISSING`.
 
 **Checkpoint 5:** report material names and modes without values, the path and optional portable URL identities, host-config selection layers, and required plus optional scope rows.
 Also report command provenance and the expected GitHub identity that the post-commit managed preflight must verify.
@@ -584,7 +585,7 @@ Diagnose failures from the earliest failing layer:
 1. A wrong or missing command requires a sync, activation of the intended environment, and `type -a ride` inspection.
 2. `unknown bro` requires checking entry-point metadata, class name, import path, package discovery, and the post-edit sync.
 3. A `[tool.bro]` error requires fixing the closed schema, not inventing fallback keys.
-4. A required `MISSING` scope row requires repairing material or host selection, not masking it with `--grant`.
+4. A `MISSING` scope row requires repairing material or host selection, not masking it with `--grant`.
 5. A Claude auth error requires repairing the scalar `claude_code` setup token.
 6. A native run refusing for a missing `bro` command requires `bro-native` in the synced environment and a rebuilt project image;
    an OpenAI auth error requires repairing the `openai` material.

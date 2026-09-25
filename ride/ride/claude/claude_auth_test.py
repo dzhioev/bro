@@ -1,8 +1,9 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 import ride.claude.claude_auth as ride_claude_auth
+from ride.workspace.store import ScopedSecrets
 
 
 @pytest.fixture
@@ -14,6 +15,46 @@ def material_dir(monkeypatch, tmp_path):
   material = tmp_path / credentials.MATERIAL_DIR
   material.mkdir()
   return material
+
+
+class TestClaudeAuthPreflight:
+  def test_reads_the_launch_store_selection(self, tmp_path, monkeypatch):
+    from bro.base import credentials
+    from ride.claude.harness import CLAUDE
+
+    material = tmp_path / credentials.MATERIAL_DIR
+    material.mkdir()
+    (material / 'claude_code+work.cred').write_text('launch-token')
+    monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path))
+    scoped = ScopedSecrets({'claude_code'}, set(), {'claude_code': 'work'})
+
+    assert CLAUDE.preflight_auth(MagicMock(), scoped) is None
+
+  def test_missing_selected_instance_names_the_remedy_path(self, tmp_path, monkeypatch):
+    from bro.base import credentials
+    from ride.claude.harness import CLAUDE
+
+    monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path))
+    scoped = ScopedSecrets({'claude_code'}, set(), {'claude_code': 'work'})
+
+    error = CLAUDE.preflight_auth(MagicMock(), scoped)
+
+    assert error is not None
+    assert str(tmp_path / credentials.MATERIAL_DIR / 'claude_code+work.cred') in error
+
+  def test_a_host_token_excluded_from_the_scope_fails_preflight(self, tmp_path, monkeypatch):
+    from bro.base import credentials
+    from ride.claude.harness import CLAUDE
+
+    material = tmp_path / credentials.MATERIAL_DIR
+    material.mkdir()
+    (material / 'claude_code.cred').write_text('host-token')
+    monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path))
+
+    error = CLAUDE.preflight_auth(MagicMock(), ScopedSecrets(set(), set()))
+
+    assert error is not None
+    assert 'claude_code secret not resolvable' in error
 
 
 class TestApplyClaudeAuth:
@@ -47,6 +88,21 @@ class TestApplyClaudeAuth:
     }
     ride_claude_auth.apply_claude_auth(env)
     assert env == {'UNRELATED': 'kept', 'CLAUDE_CODE_OAUTH_TOKEN': 'oauth-tok'}
+
+  def test_explicit_store_outweighs_the_launchers_ambient_selection(self, material_dir, tmp_path):
+    from bro.base import credentials
+
+    (material_dir / 'claude_code.cred').write_text('ambient-token')
+    launch_store = tmp_path / 'launch'
+    launch_material = launch_store / credentials.MATERIAL_DIR
+    launch_material.mkdir(parents=True)
+    (launch_material / 'claude_code.cred').write_text('launch-token')
+    store = credentials.Store(credentials.default_registry(), launch_store, {})
+    env: dict[str, str] = {}
+
+    ride_claude_auth.apply_claude_auth(env, store=store)
+
+    assert env == {'CLAUDE_CODE_OAUTH_TOKEN': 'launch-token'}
 
   def test_overwrites_inherited_stale_token(self, material_dir):
     # a CLAUDE_CODE_OAUTH_TOKEN exported by the launching shell loses to the

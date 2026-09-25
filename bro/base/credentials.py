@@ -153,6 +153,15 @@ class Source(Protocol):
   def materialize_scoped(self, material_path: Path, value: str) -> tuple[Optional[dict], bytes]: ...
 
 
+def _fetch_source(source: Source, material_path: Path, name: str) -> Optional[str]:
+  try:
+    return source.fetch(material_path)
+  except ValueError:
+    raise
+  except Exception as error:
+    raise ValueError(f'secret {name!r} failed to load: {error}') from error
+
+
 class LocalSource:
   """Read the convention-named material file."""
 
@@ -481,6 +490,12 @@ class Store:
     resolved = self._resolution(name, requested=name)
     return None if isinstance(resolved, _Unresolved) else resolved
 
+  def require_resolution(self, name: str) -> tuple[str, bool]:
+    resolved = self._resolution(self.selected_name(name), requested=name)
+    if isinstance(resolved, _Unresolved):
+      raise SecretNotFound(resolved.name)
+    return resolved
+
   def _resolution(self, name: str, *, requested: str) -> _Resolution:
     storage_name = _stored_spelling(name)
     kind, _ = parse_name(storage_name)
@@ -497,7 +512,7 @@ class Store:
     if kind not in self.registry or (self._readable is not None and kind not in self._readable):
       return _Unresolved(storage_name)
     source = self._source(storage_name)
-    raw = source.fetch(self._material_path(storage_name))
+    raw = _fetch_source(source, self._material_path(storage_name), storage_name)
     if raw is None:
       return _Unresolved(storage_name)
     expanded = self._expand_references(raw.strip(), (*chain, storage_name))
@@ -774,22 +789,30 @@ def _require_one_instance_per_kind(names: Iterable[str]) -> None:
       )
 
 
-def _scoped_selection(
-  store: Store, required: set[str], optional: set[str]
-) -> list[tuple[str, bool]]:
+def _scoped_selection(store: Store, required: set[str], optional: set[str]) -> list[str]:
   _require_one_instance_per_kind(required | optional)
-  selection: list[tuple[str, bool]] = []
+  present = store.instance_names()
+  selection: list[str] = []
   for name in sorted(required):
     kind, _ = parse_name(name)
     if kind not in store.registry:
       raise ValueError(f'unknown secret {name!r} declared in manifest; not in the registry')
-    selection.append((name, True))
+    storage = store.selected_name(name)
+    if storage not in present:
+      raise SecretNotFound(storage)
+    selection.append(name)
   for name in sorted(optional - required):
-    kind, _ = parse_name(name)
+    kind, instance = parse_name(name)
     if kind not in store.registry:
-      log.debug('optional secret %r not in the registry; skipping', name)
+      raise ValueError(f'unknown secret {name!r} declared in manifest; not in the registry')
+    storage = store.selected_name(name)
+    picked = instance is not None or kind in store.selection
+    if storage not in present:
+      if picked:
+        raise SecretNotFound(storage)
+      log.debug('optional secret %r has no empty instance; skipping', name)
       continue
-    selection.append((name, False))
+    selection.append(name)
   return selection
 
 
@@ -815,30 +838,30 @@ def build_scoped_store(
 
   def materialize(name: str, value: str, cacheable: bool) -> None:
     kind, _ = parse_name(name)
+    storage_name = store.selected_name(name)
     source = store.winning_source(name)
     material_path = store.material_path(name)
     if not cacheable:
-      raw = source.fetch(material_path)
+      raw = _fetch_source(source, material_path, storage_name)
       if raw is None:
-        raise ValueError(f'secret {name!r} disappeared during hydration')
+        raise ValueError(f'secret {storage_name!r} disappeared during hydration')
       value = raw.strip()
       for reference in sorted(_referenced_names(value)):
         _require_kind_level(name, reference)
         pending_references.append((name, reference))
-    annotation, content = source.materialize_scoped(material_path, value)
+    try:
+      annotation, content = source.materialize_scoped(material_path, value)
+    except ValueError:
+      raise
+    except Exception as error:
+      raise ValueError(f'secret {storage_name!r} failed to load: {error}') from error
     files[f'{MATERIAL_DIR}/{kind}{MATERIAL_SUFFIX}'] = content
     if annotation is not None:
       typed_sources[kind] = annotation
     scoped.add(kind)
 
-  for name, required in selection:
-    resolved = store.resolve(name)
-    if resolved is None:
-      if required:
-        raise SecretNotFound(store.selected_name(name))
-      log.debug('optional secret %r unresolvable; skipping', name)
-      continue
-    value, cacheable = resolved
+  for name in selection:
+    value, cacheable = store.require_resolution(name)
     materialize(name, value, cacheable)
     declared_hydrated.add(parse_name(name)[0])
 
@@ -846,9 +869,7 @@ def build_scoped_store(
     referrer, reference = pending_references.pop(0)
     if reference in scoped:
       continue
-    resolved = store.resolve(reference)
-    if resolved is None:
-      raise SecretNotFound(store.selected_name(reference))
+    resolved = store.require_resolution(reference)
     log.info('hydrating %r into the scope: referenced by %r', reference, referrer)
     materialize(reference, *resolved)
 
@@ -860,7 +881,7 @@ def scoped_view_store(store: Store, names: Iterable[str], *, optional: Iterable[
   selection = _scoped_selection(store, set(names), set(optional))
   view_selection = dict(store.selection)
   readable: set[str] = set()
-  for name, _ in selection:
+  for name in selection:
     kind, instance = parse_name(name)
     readable.add(kind)
     if instance is not None:

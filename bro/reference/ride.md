@@ -83,7 +83,8 @@ the launcher's own `--log` never reaches the session.
 - `ride exec <workspace> [command ...]` enters a running boxed workspace.
   The exec process is outside the running session's process tree and has no broker channel of its own.
 - `ride check-clean <workspace>` reports whether removal is safe.
-- `ride scope [--repo PATH|URL] [--bro BRO] [--harness HARNESS]` prints the prospective credential tiers and selected credential instances.
+- `ride scope [--repo PATH|URL] [--bro BRO] [--harness HARNESS]` prints the prospective credential tiers, selected credential instances and choosing layers, and name-presence states.
+  `PRESENT` means the selected name has material or a typed-source entry, `SKIPPED` is an unpicked optional empty instance that is absent, and `MISSING` would fail the launch.
   Detached scope requires `--bro`;
   an attachment may supply the project default.
 - `ride banner [--llm]` renders the session facts.
@@ -630,9 +631,10 @@ Instead, the launch provisions a container-private `.claude.json` in the workspa
   Being required, a missing token fails loudly on the launcher at scoped-store hydration, before the container starts (not as a turn-1 401 inside it).
   Bro-run containers request no token;
   only the Claude path does.
-  Unboxed sessions get the same var injected into the claude subprocess env directly (`ride.claude.claude_auth.apply_claude_auth`, applied idempotently by both the outer unboxed launch and the `do-ride` session executable next to claude),
-  and the token is equally required there:
-  the launch aborts up front when the secret doesn't resolve, since the session's private config dir carries no OAuth file to fall back on (see "Unboxed Claude-state isolation").
+  Unboxed sessions get the same var injected into the claude subprocess env directly (`ride.claude.claude_auth.apply_claude_auth`, applied idempotently by both the outer unboxed launch and the `do-ride` session executable next to claude).
+  The outer launch reads it from the launch's scoped store rather than the launcher's ambient credential selection.
+  The token is equally required there:
+  the launch aborts up front when the selected name doesn't load, since the session's private config dir carries no OAuth file to fall back on (see "Unboxed Claude-state isolation").
   The same transform scrubs inherited `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` from the session env:
   both outrank `CLAUDE_CODE_OAUTH_TOKEN` in claude's credential precedence, so a value leaking in from the launching shell would silently hijack the session's auth.
   Full sessions also carry `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK`, since claude resolves fast-mode availability from the credentials file they don't have
@@ -691,7 +693,7 @@ Unboxed scoping is still a convenience rather than a security boundary, because 
   — so a `projects` key written as the repository's URL reaches the everyday `--repo <path>` launch too;
   within each of the two ranks the path entry layers over the URL entry.
   A detached launch or an attachment with no matching project entry falls through the layers that do apply to the kind's own stored material.
-  `ride scope` prints each declared kind's resolved instance, the layer that chose it, and its availability.
+  `ride scope` prints each declared kind's stored name, the layer that picked it (or `unpicked` for the empty instance), and its `PRESENT`, `SKIPPED`, or `MISSING` state without loading it.
 - **Which bro.**
   `ride solo|along` computes the scope for the mode verb's bro positional.
   Summon lowering computes it for the child target, so the child's own project-bro layer applies.
@@ -712,9 +714,12 @@ Unboxed scoping is still a convenience rather than a security boundary, because 
   their launch overrides retain strict no-op checks.
   On resume, each supplied credential grant, revoke, or pick replaces the recorded value for that kind, and `--revoke KIND` also drops its recorded pick.
 - **Hydration.**
-  `credentials.build_scoped_store(store, required, optional=…)` returns an in-memory file map plus the declared kinds that resolved.
-  Required kinds fail on an unknown registry kind or absent material;
-  optional kinds are included only when they resolve.
+  `credentials.build_scoped_store(store, required, optional=…)` returns an in-memory file map plus the declared kinds that loaded.
+  A name is present when `Store.instance_names` finds either its convention material file or its `creds.json` entry, without resolving the source.
+  An optional kind is skipped only when no layer picked it and its empty instance is absent.
+  Every other held name must be present and load successfully;
+  a missing picked instance, source failure, minting failure, malformed value, or unresolved `$cred` reference fails the launch under the credential's name.
+  Whole-store shape validation still runs when the `Store` is constructed.
   Each selected instance materializes under the kind's empty instance, `creds/<kind>.cred`, with typed-source annotations in `creds.json`, so the scoped namespace stays kind-addressed.
   A reference-preserving `$cred` chain hydrates its referenced kinds transitively, but those transitive targets are not reported as declared hydrated kinds.
   Instance-spelled references in reference-preserving material fail because the scoped namespace is kinds-only.
@@ -1325,8 +1330,9 @@ Wrappers and session daemons rely on a small set of env vars:
 
 The Claude runner under `do-ride` starts a `ride.claude.trail-recorder` daemon (via `ride/ride/claude/recorder.py`) before launching Claude and stops it after Claude exits
 — the stop is the recorder's final append and trail end.
-The daemon records continuously through the backend the session's own `trails` credential selects, and to the local filesystem where the session has none
-— the scoped baseline hydrates that credential best-effort, so a session records either way unless `--no-trails` turned recording off, in which case the runner starts no daemon.
+The daemon records continuously through the backend the session's own `trails` credential selects, and to the local filesystem where its unpicked empty instance is absent.
+A selected or present `trails` name must load like every other held credential;
+`--no-trails` removes the recording need and starts no recorder daemon.
 For local storage, the launch description binds the host's `<runtime-root>/trails` at `/var/ride/trails` inside the container, so the trail survives container removal and is visible to host-side `rewind` while the session runs.
 
 The recorder records one claude-harness *trail* per transcript segment and appends newly completed lines at its polling interval (`ride/ride/claude/trail_recorder.py` owns transcript acquisition;

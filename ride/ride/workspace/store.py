@@ -20,8 +20,9 @@ from bro.base import credentials, log
 class ScopedSecrets:
   """a session launch's kinds-only credential scope and instance selection.
 
-  required is hydrated strictly (a missing secret fails launch); optional is the
-  best-effort tier (skipped when unresolvable).
+  required names must be present; an optional kind is skipped only when no layer
+  picked it and its empty instance is absent. every name selected for hydration
+  must load successfully.
   """
 
   required: set[str]
@@ -44,7 +45,7 @@ def log_scoped_secrets(subject: str, required: Collection[str], optional: Collec
   log.info('scoped secrets for %s: %s', subject, ', '.join(names) if len(names) > 0 else '(none)')
   optional_names = sorted(set(optional) - set(required))
   if len(optional_names) > 0:
-    log.info('optional (best-effort) secrets for %s: %s', subject, ', '.join(optional_names))
+    log.info('optional secrets for %s: %s', subject, ', '.join(optional_names))
 
 
 def materialize_scoped_store(files: dict[str, bytes], directory: Path) -> Path:

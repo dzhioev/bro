@@ -9,7 +9,12 @@ from bro.base import credentials, log
 _OUTRANKING_AUTH_VARS = ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')
 
 
-def apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) -> None:
+def apply_claude_auth(
+  env: dict[str, str],
+  *,
+  store: credentials.Store | None = None,
+  warn_when_missing: bool = False,
+) -> None:
   """align a claude session env with the session auth model (reference/ride.md).
 
   scrubs the inherited vars that outrank the session's designated auth, then
@@ -24,13 +29,14 @@ def apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) -
   for var in _OUTRANKING_AUTH_VARS:
     if env.pop(var, None) is not None:
       log.verbose('scrubbed inherited %s from the claude session env', var)
-  token = credentials.try_get('claude_code')
+  credential_store = credentials.default_store() if store is None else store
+  token = credential_store.try_get('claude_code')
   if token is None:
     if warn_when_missing:
       log.warning(
         'claude_code secret not resolvable; the session starts unauthenticated — mint a '
         'token with `claude setup-token` and store it at %s',
-        credentials.default_store().material_path('claude_code'),
+        credential_store.material_path('claude_code'),
       )
     return
   env['CLAUDE_CODE_OAUTH_TOKEN'] = token

@@ -15,7 +15,7 @@ from ride.claude.claude_config import (
   workspace_projects_dir,
 )
 from ride.harness import ContainerExtras
-from ride.scope import ScopeRecipe
+from ride.scope import ScopeRecipe, credential_store
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
@@ -24,10 +24,11 @@ if TYPE_CHECKING:
   from ride.session import SessionSpec
 
 
+_AUTH_SECRET = 'claude_code'
 _SCOPE = ScopeRecipe(
   name='claude',
   harness='claude',
-  auth_secret='claude_code',
+  auth_secret=_AUTH_SECRET,
   llm_key=False,
 )
 
@@ -58,13 +59,15 @@ class ClaudeHarness:
       )
     return resolved
 
-  def preflight_auth(self, spec: 'SessionSpec') -> Optional[str]:
+  def preflight_auth(self, spec: 'SessionSpec', scoped: ScopedSecrets) -> Optional[str]:
     del spec
-    if credentials.try_get('claude_code') is not None:
+    store = credential_store(scoped)
+    held = scoped.required | scoped.optional
+    if _AUTH_SECRET in held and store.try_get(_AUTH_SECRET) is not None:
       return None
-    material_path = credentials.default_store().material_path('claude_code')
+    material_path = store.material_path(_AUTH_SECRET)
     return (
-      'claude_code secret not resolvable — a Claude session authenticates with the '
+      f'{_AUTH_SECRET} secret not resolvable — a Claude session authenticates with the '
       f'setup-token; mint one with `claude setup-token` and store it at {material_path}'
     )
 
@@ -95,7 +98,8 @@ class ClaudeHarness:
     del spec
     claude_dir = provision_unboxed_claude_dir(records, tree)
     env[CLAUDE_CONFIG_DIR_ENV] = str(claude_dir)
-    apply_claude_auth(env)
+    store = credentials.Store(credentials.default_registry(), env['BRO_STORE'], {})
+    apply_claude_auth(env, store=store)
 
   def prepare_boxed_member_env(
     self, spec: 'SessionSpec', records: Path, member_root: PurePath, env: dict[str, str]
