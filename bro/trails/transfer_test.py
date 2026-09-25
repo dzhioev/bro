@@ -13,6 +13,7 @@ _TOOLS_DIGEST = tools_sha256(_TOOLS)
 
 
 def _blaze(store: LocalStore, **overrides) -> str:
+  body = overrides.pop('body', {'records': [{'kind': 'system_prompt', 'body': 'prompt'}]})
   return store.blaze(
     BlazeRequest(
       harness='bro',
@@ -21,7 +22,7 @@ def _blaze(store: LocalStore, **overrides) -> str:
       interactive=False,
       surface='ask',
       native={'llm': {'type': 'echo', 'model': 'echo'}},
-      body={'records': [{'kind': 'system_prompt', 'body': 'prompt'}]},
+      body=body,
       **overrides,
     )
   )['id']
@@ -69,6 +70,39 @@ def test_export_writes_the_ancestry_parents_first_and_import_reads_it_back(tmp_p
   for trail_id in (root, fork, summoned):
     assert _served(destination, trail_id) == _served(source, trail_id)
   assert destination.get_tool(_TOOLS_DIGEST) == _TOOLS
+
+
+def test_export_and_import_carry_folded_header_without_reading_context(tmp_path, monkeypatch):
+  source = LocalStore(tmp_path / 'source')
+  git = {
+    'repo': '/source/bro',
+    'url': 'https://example.test/bro',
+    'branch': 'feature',
+    'base_sha': 'abc123',
+  }
+  legacy_context = [{'title': 'recorded prompt', 'content': 'historical prompt'}]
+  trail_id = _blaze(
+    source,
+    git=git,
+    body={
+      'records': [{'kind': 'system_prompt', 'body': 'prompt'}],
+      'launch_context': legacy_context,
+    },
+  )
+
+  def fail_context_read(requested_trail_id: str):
+    raise AssertionError(f'launch context read for {requested_trail_id}')
+
+  monkeypatch.setattr(source, 'get_launch_context', fail_context_read)
+  layout = tmp_path / 'layout'
+  transfer.export_trails(source, [trail_id], layout)
+  destination = LocalStore(tmp_path / 'destination')
+  transfer.import_layout(layout, destination)
+
+  for store in (LocalStore(layout), destination):
+    header = store.get_trail(trail_id)
+    assert header['git'] == git
+    assert header['legacy_launch_context'] == legacy_context
 
 
 def test_export_fails_on_an_ancestor_the_store_does_not_hold(tmp_path):

@@ -23,7 +23,6 @@ class RecordKind(StrEnum):
   ERROR = 'error'
   HARNESS_EVENT = 'harness-event'
   TRAIL_METADATA = 'trail-metadata'
-  LAUNCH_CONTEXT = 'launch-context'
   SEGMENT_BOUNDARY = 'segment-boundary'
   NATIVE_STEP = 'native-step'
   TRAIL_LIST_ROW = 'trail-list-row'
@@ -179,14 +178,6 @@ class TrailMetadata(Record):
 
 
 @dataclass(frozen=True, kw_only=True)
-class LaunchContextEntry(Record):
-  kind: ClassVar[RecordKind] = RecordKind.LAUNCH_CONTEXT
-  title: str
-  content: str | None = None
-  fields: tuple[tuple[str, Any], ...] = ()
-
-
-@dataclass(frozen=True, kw_only=True)
 class SegmentBoundary(Record):
   kind: ClassVar[RecordKind] = RecordKind.SEGMENT_BOUNDARY
   trail_id: str
@@ -291,7 +282,6 @@ type DisplayRecord = (
   | Error
   | HarnessEvent
   | TrailMetadata
-  | LaunchContextEntry
   | SegmentBoundary
   | NativeStep
   | TrailListRow
@@ -318,7 +308,6 @@ CONVERSATION_RECORD_KINDS = frozenset(
 STRUCTURAL_RECORD_KINDS = frozenset(
   {
     RecordKind.TRAIL_METADATA,
-    RecordKind.LAUNCH_CONTEXT,
     RecordKind.SEGMENT_BOUNDARY,
     RecordKind.NATIVE_STEP,
     RecordKind.TRAIL_LIST_ROW,

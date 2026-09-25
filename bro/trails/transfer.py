@@ -17,8 +17,6 @@ class TrailSource(Protocol):
 
   def rows(self, trail_id: str) -> list[dict]: ...
 
-  def launch_context(self, trail_id: str) -> Optional[Any]: ...
-
   def tool(self, sha256: str) -> Optional[Any]:
     """The blob, or None where the source lacks it and the destination may
     hold it already."""
@@ -37,9 +35,6 @@ class StoreSource:
       {**row, 'body': self._store.resolve_body(row.get('body'))}
       for row in self._store.iter_steps(trail_id)
     ]
-
-  def launch_context(self, trail_id: str) -> Optional[Any]:
-    return self._store.get_launch_context(trail_id)
 
   def tool(self, sha256: str) -> Any:
     if sha256 not in self._tools:
@@ -61,9 +56,6 @@ class LayoutSource:
 
   def rows(self, trail_id: str) -> list[dict]:
     return self._store.stored_rows(trail_id)
-
-  def launch_context(self, trail_id: str) -> Optional[Any]:
-    return None
 
   def tool(self, sha256: str) -> Optional[Any]:
     try:
@@ -138,9 +130,7 @@ def copy_trail(source: TrailSource, header: dict, destination: TrailsStore) -> d
     blob = source.tool(digest)
     if blob is not None:
       tools[digest] = blob
-  return destination.import_trail(
-    header, rows, launch_context=source.launch_context(trail_id), tools=tools
-  )
+  return destination.import_trail(header, rows, tools=tools)
 
 
 def export_trails(store: TrailsStore, trail_ids: list[str], root: Path) -> list[dict]:
