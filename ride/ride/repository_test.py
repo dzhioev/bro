@@ -10,6 +10,7 @@ from ride.repository import (
   clean_managed_mirrors,
   mirror_key,
   open_repository,
+  recorded_origin_url,
   resolve_repository,
 )
 
@@ -84,6 +85,29 @@ class TestAttachmentIdentities:
     assert attachment_identities('https://github.com/foo/api.git') == Attachment(
       url='https://github.com/foo/api.git'
     )
+
+
+class TestRecordedOrigin:
+  def test_the_resolved_network_origin_is_sanitized(self, tmp_path):
+    checkout = tmp_path / 'work'
+    subprocess.run(['git', 'init', '-q', checkout], check=True)
+    _git(
+      checkout,
+      'remote',
+      'add',
+      'origin',
+      'https://user:token@Example.TEST/owner/repository.git?token=secret#ref',
+    )
+
+    assert recorded_origin_url(checkout) == 'https://example.test/owner/repository.git'
+
+  @pytest.mark.parametrize('origin', ['/local/repository', 'file:///local/repository'])
+  def test_a_local_origin_is_not_published(self, tmp_path, origin):
+    checkout = tmp_path / 'work'
+    subprocess.run(['git', 'init', '-q', checkout], check=True)
+    _git(checkout, 'remote', 'add', 'origin', origin)
+
+    assert recorded_origin_url(checkout) is None
 
 
 class TestManagedMirror:

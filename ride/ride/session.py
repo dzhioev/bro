@@ -46,7 +46,13 @@ from ride.do_ride import (
 from ride.flags import default_hold
 from ride.harness import HARNESS_NAMES, Harness, get_harness
 from ride.identity import human_git_identity_env
-from ride.repository import Repository, hold_repository, is_git_url, open_repository
+from ride.repository import (
+  Repository,
+  hold_repository,
+  is_git_url,
+  open_repository,
+  recorded_origin_url,
+)
 from ride.root import ProcessLaunch, run_manual_started_party, run_started_party
 from ride.runtime_bundle import (
   RuntimeBundle,
@@ -380,6 +386,19 @@ def _attached_tree_env(workspace: Workspace, base_sha: str) -> dict[str, str]:
   return {BRANCH_ENV: branch, BASE_SHA_ENV: base_sha}
 
 
+def _attached_session_env(workspace: Workspace, base_sha: str) -> dict[str, str]:
+  if workspace.repo is None:
+    raise ValueError('attached workspace has no repository')
+  environment = {
+    'RIDE_REPO': str(workspace.repo),
+    **_attached_tree_env(workspace, base_sha),
+  }
+  repo_url = recorded_origin_url(workspace.tree)
+  if repo_url is not None:
+    environment['RIDE_REPO_URL'] = repo_url
+  return environment
+
+
 def container_launch(
   harness: Harness,
   spec: SessionSpec,
@@ -486,8 +505,7 @@ def boxed_member_launch(
     **human_env,
   }
   if workspace.repo is not None:
-    launch_env['RIDE_REPO'] = str(workspace.repo)
-    launch_env.update(_attached_tree_env(workspace, _tree_head(workspace.tree)))
+    launch_env.update(_attached_session_env(workspace, _tree_head(workspace.tree)))
   if spec.no_trails:
     launch_env['TRAILS_DISABLED'] = '1'
   harness.prepare_boxed_member_env(spec, records, member_root, launch_env)
@@ -531,8 +549,7 @@ def prepared_unboxed_session_launch(
   runner_env['RIDE_HOST_WORKSPACE'] = str(tree)
   runner_env.update(human_env)
   if workspace.repo is not None:
-    runner_env['RIDE_REPO'] = str(workspace.repo)
-    runner_env.update(_attached_tree_env(workspace, _tree_head(tree)))
+    runner_env.update(_attached_session_env(workspace, _tree_head(tree)))
   store_directory = materialize_scoped_store(launch_scope.store, credential_directory)
   runner_env['BRO_STORE'] = str(store_directory)
   runner_env['BRO_INSTALL_KINDS'] = ' '.join(sorted(launch_scope.hydrated_kinds))
@@ -749,6 +766,7 @@ def _start_session(
   os.environ['RIDE_COMMAND'] = spec.ride_command
   os.environ['RIDE_WORKSPACE'] = spec.name
   os.environ[ISOLATION_ENV] = spec.isolation.value
+  os.environ.pop('RIDE_REPO_URL', None)
   if spec.repo is None:
     os.environ.pop('RIDE_REPO', None)
   else:

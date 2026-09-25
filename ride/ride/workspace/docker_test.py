@@ -692,16 +692,31 @@ class TestDockerCreateArgv:
     repository = Repository(
       'https://example.test/owner/repository.git', tmp_path / 'mirror.git', 'abc'
     )
+    tree = tmp_path / 'tree'
+    subprocess.run(['git', 'init', '-q', tree], check=True)
+    subprocess.run(
+      [
+        'git',
+        '-C',
+        str(tree),
+        'remote',
+        'add',
+        'origin',
+        'https://user:token@Example.TEST/owner/repository.git?token=secret#ref',
+      ],
+      check=True,
+    )
     argv = workspace_docker._docker_create_argv(
       'tag',
       'bundle-hash',
       'ws',
       repository,
-      tmp_path / 'tree',
+      tree,
       ['claude'],
     )
     assert not any(str(repository.git_dir) in value for value in argv)
     assert f'RIDE_REPO={repository.identity}' in argv
+    assert 'RIDE_REPO_URL=https://example.test/owner/repository.git' in argv
 
   def test_no_docker_socket_mount(self, build_argv):
     # the socket is host-daemon control — root on the host, past every scoped
@@ -778,6 +793,7 @@ class TestDockerCreateArgv:
         'IS_SANDBOX': '1',
         'HOME': '/x',
         'RIDE_REPO': '/x',
+        'RIDE_REPO_URL': 'https://forged.example/repository.git',
         'TERM': 'dumb',
         'RIDE_BRO': 'impostor',
         'PATH': '/nowhere',
@@ -789,6 +805,7 @@ class TestDockerCreateArgv:
     names = [token.partition('=')[0] for token in env_tokens]
     for name in ('HOME', 'RIDE_REPO', 'TERM', 'RIDE_BRO'):
       assert names.count(name) == 1
+    assert 'RIDE_REPO_URL' not in names
     # the image's own variables are never on the argv at all
     assert not {'PATH', 'RIDE_IN_CONTAINER'} & set(names)
     assert not {'HOME=/x', 'RIDE_REPO=/x', 'TERM=dumb', 'RIDE_BRO=impostor'} & set(env_tokens)

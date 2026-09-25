@@ -14,7 +14,13 @@ from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from bro.base import host_config
-from bro.base.git_url import git_url_path, is_git_url, normalize_git_url
+from bro.base.git_url import (
+  git_url_path,
+  is_git_url,
+  is_network_git_url,
+  normalize_git_url,
+  sanitize_git_url,
+)
 from bro.workspace.git import git_run, rev_parse_commit
 from bro.workspace.paths import project_root, runtime_base
 from bro.workspace.project import ProjectConfig, project_config, project_config_from_text
@@ -108,6 +114,14 @@ def _origin_url(root: Path) -> Optional[str]:
   result = git_run('remote', 'get-url', 'origin', cwd=root)
   origin = result.stdout.strip()
   return origin if result.returncode == 0 and is_git_url(origin) else None
+
+
+def recorded_origin_url(root: Path) -> Optional[str]:
+  """the network origin of a session tree, safe to publish for recording."""
+  origin = _origin_url(root)
+  if origin is None or not is_network_git_url(origin):
+    return None
+  return sanitize_git_url(origin)
 
 
 def mirror_key(url: str) -> str:

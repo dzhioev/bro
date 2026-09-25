@@ -372,6 +372,17 @@ export PATH="/tmp/e2e-bin:$PATH"
 exec "$@"
 """
 
+_TRAIL_HEADER_WRAPPER = """
+set +e
+"$@"
+status=$?
+set -e
+headers=(/var/ride/trails/trails/*/header.json)
+[ "${#headers[@]}" -eq 1 ]
+cp "${headers[0]}" /workspace/.e2e-trail-header.json
+exit "$status"
+"""
+
 # the launcher driver: one subprocess per live-path scenario, running the exact
 # `ride solo|along` seam (`run_started_party`) under the isolated HOME/project root
 _DRIVER = """
@@ -392,6 +403,11 @@ claude_dir = workspace.path / 'claude'
 session_dir = workspace.path / 'session'
 claude_dir.mkdir()
 session_dir.mkdir()
+extra_mounts = [f'{claude_dir}:/home/ride/.claude', f'{session_dir}:/var/ride/session']
+if os.environ.get('RIDE_E2E_LOCAL_TRAILS') == '1':
+  trails_dir = workspace.path / 'trails'
+  trails_dir.mkdir()
+  extra_mounts.append(f'{trails_dir}:/var/ride/trails')
 launch = Launch(name=name,
                 command=json.loads(os.environ['RIDE_E2E_COMMAND']),
                 env={'CLAUDE_CONFIG_DIR': '/home/ride/.claude',
@@ -405,8 +421,7 @@ launch = Launch(name=name,
                 tty=True,
                 image=os.environ['RIDE_E2E_IMAGE'],
                 runtime_bundle_hash=os.environ['RIDE_E2E_RUNTIME_HASH'],
-                extra_mounts=(f'{claude_dir}:/home/ride/.claude',
-                              f'{session_dir}:/var/ride/session'),
+                extra_mounts=tuple(extra_mounts),
                 repo=project_root())
 runtime_hash = os.environ['RIDE_E2E_RUNTIME_HASH']
 runtime_bundle = RuntimeBundle(runtime_base() / 'runtime' / runtime_hash, f'{sys.version_info.major}.{sys.version_info.minor}')
@@ -1074,6 +1089,20 @@ def _report(env: IsolatedEnv, name: str) -> dict:
   return json.loads(path.read_text())
 
 
+@contextlib.contextmanager
+def _remote_url(repository: Path, url: str) -> Iterator[None]:
+  original = subprocess.check_output(
+    ['git', '-C', str(repository), 'remote', 'get-url', 'origin'], text=True
+  ).strip()
+  subprocess.run(['git', '-C', str(repository), 'remote', 'set-url', 'origin', url], check=True)
+  try:
+    yield
+  finally:
+    subprocess.run(
+      ['git', '-C', str(repository), 'remote', 'set-url', 'origin', original], check=True
+    )
+
+
 @pytest.fixture(scope='module')
 def scenario_f(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> LiveRun:
   env = isolated_env
@@ -1126,6 +1155,54 @@ class TestDoRideContainerCommand:
   ) -> None:
     report = _report(isolated_env, f'{_NAME_PREFIX}f-root')
     assert report['settings']['fastMode'] is True
+
+
+def test_a_launched_native_session_records_the_git_header(
+  isolated_env: IsolatedEnv, request: pytest.FixtureRequest
+) -> None:
+  env = isolated_env
+  name = f'{_NAME_PREFIX}f-git-header'
+  recorded_origin = 'https://user:token@Example.TEST/dzhioev/bro.git?token=secret#recording'
+  with _remote_url(env.project, recorded_origin):
+    driver = _Driver(
+      env,
+      name,
+      [
+        'bash',
+        '-ec',
+        _TRAIL_HEADER_WRAPPER,
+        'ride-e2e-trail-wrapper',
+        'do-ride',
+        'solo',
+        '--workspace',
+        name,
+        '--harness',
+        'bro',
+        '--repo',
+        str(env.project),
+        '--hold',
+        'unattended',
+        '--llm',
+        'echo',
+        'bro',
+        'record the git header',
+      ],
+      extra_env={'RIDE_BRO': 'bro', 'RIDE_E2E_LOCAL_TRAILS': '1'},
+    )
+    request.addfinalizer(driver.close)
+    run = LiveRun(exit_code=driver.wait(300), output=driver.output())
+
+  assert run.exit_code == 0, run.output
+  header = json.loads((env.tree(name) / '.e2e-trail-header.json').read_text())
+  base_sha = subprocess.check_output(
+    ['git', '-C', str(env.project), 'rev-parse', 'HEAD'], text=True
+  ).strip()
+  assert header['git'] == {
+    'repo': str(env.project),
+    'url': 'https://example.test/dzhioev/bro.git',
+    'branch': f'workspace-{name}',
+    'base_sha': base_sha,
+  }
 
 
 # --- G: the stop interrupt — `docker stop` lands in claude ---------------------
