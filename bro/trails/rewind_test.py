@@ -30,7 +30,6 @@ class FakeClient:
     self.trails: dict[str, dict[str, Any]] = {}
     self.records: dict[str, list[str]] = {}
     self.steps: dict[str, list[dict[str, Any]]] = {}
-    self.contexts: dict[str, Any] = {}
 
   def add_claude(self, trail_id: str, lines: list[str], **header: Any) -> None:
     self.trails[trail_id] = {
@@ -124,7 +123,7 @@ class FakeClient:
     yield from selected[: limit if limit is not None else len(selected)]
 
   def get_launch_context(self, trail_id: str) -> Any:
-    return self.contexts.get(trail_id)
+    raise AssertionError(f'launch context read for {trail_id}')
 
 
 def _client(fake: FakeClient) -> TrailsStore:
@@ -174,17 +173,31 @@ def _args(trail_id: str, **changes: Any) -> dict[str, Any]:
 
 
 class TestShow:
-  def test_renders_conversation_context_and_header_through_the_shared_path(self, capsys):
+  def test_renders_conversation_and_header_without_reading_context(self, capsys):
     client = FakeClient()
-    client.add_claude('T1', [_user('hello'), _assistant('hi there')])
-    client.contexts['T1'] = [{'title': 'git state', 'fields': {'branch': 'feature'}}]
+    client.add_claude(
+      'T1',
+      [_user('hello'), _assistant('hi there')],
+      git={
+        'repo': '/source/bro',
+        'url': 'https://example.test/bro',
+        'branch': 'feature',
+        'base_sha': 'abc123',
+      },
+      legacy_launch_context=[
+        {'title': 'recorded prompt', 'content': 'historical prompt\nsecond line'}
+      ],
+    )
 
     assert _command_show(_client(client), _args('T1')) == 0
 
     output = capsys.readouterr().out
     assert 'trail' in output and 'T1' in output
-    assert 'SESSION CONTEXT' in output
-    assert '▸ git state' in output
+    assert '/source/bro' in output and 'https://example.test/bro' in output
+    assert 'feature' in output and 'abc123' in output
+    assert 'legacy launch context' in output
+    assert 'content: |-' in output and 'historical prompt' in output
+    assert 'SESSION CONTEXT' not in output
     assert '#1 USER' in output and 'hello' in output
     assert '#2 ASSISTANT' in output and 'hi there' in output
 
@@ -457,6 +470,17 @@ class TestGrep:
     output = capsys.readouterr().out
     assert 'T-claude:' in output and 'T-bro:' in output
     assert '\x1b[' not in output
+
+  def test_matches_legacy_context_from_the_header(self, capsys):
+    client = FakeClient()
+    client.add_claude(
+      'T-claude',
+      [],
+      legacy_launch_context=[{'title': 'recorded prompt', 'content': 'historical needle'}],
+    )
+
+    assert _command_grep(_client(client), self._grep_args('historical needle')) == 0
+    assert 'T-claude:' in capsys.readouterr().out
 
   def test_matches_notification_output(self, capsys):
     client = FakeClient()

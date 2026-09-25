@@ -261,16 +261,14 @@ class NetworkStore(TrailsStore):
     return self._get(f'/v1/tools/{sha256}', {})['tool']
 
   def begin_import(self, header: dict, *, launch_context: Optional[Any] = None) -> dict:
+    del launch_context
     trail_id = header.get('id')
     if not isinstance(trail_id, str) or len(trail_id) == 0:
       raise ValueError('imported header id must be a non-empty string')
-    payload: dict[str, Any] = {'header': header}
-    if launch_context is not None:
-      payload['launch_context'] = launch_context
     return self._send(
       'POST',
       f'/v1/admin/trails/{trail_id}/import',
-      payload,
+      {'header': header},
       retry_delays=_HARD_RETRY_DELAYS_SECONDS,
     )
 

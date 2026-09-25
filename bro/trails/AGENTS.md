@@ -102,7 +102,7 @@ bro · claude recorders                     readers
   — one flow line while it fits, block form with literal scalars once it does not, so an argument carrying code or a shell command reads as its own lines;
   the single-row layouts and the chat appearance keep their one-line form.
   Tool call and result text that is itself JSON is parsed and rendered the same way.
-  The recorded adapter validates `/messages`, adapts headers/context/native steps/navigation rows, and collects exact fork-bounded segments.
+  The recorded adapter validates `/messages`, adapts headers/native steps/navigation rows, renders `git` and opaque `legacy_launch_context` from the header, and collects exact fork-bounded segments.
   It is a view layer only;
   none of its records enter trail storage or server contracts.
 - `formats.py` owns schema-format validation and the ordered header/row upgrade table.
@@ -122,8 +122,8 @@ bro · claude recorders                     readers
   Dynamo reads still fold a pointer-held object in memory, while local stores ignore retained context files.
   The fold rejects malformed stored shapes with the trail named, preserves legacy records whole and in order, and gives an already-restamped header's `git` precedence over the minting launch's record.
 - `transfer.py` moves trails whose imports are complete between stores as directories in the local store layout and refuses a source trail whose import is incomplete:
-  `export_trails` writes the named trails and every ancestor reachable through `forked_from` and `summoned_by`, parents first, into a `LocalStore` at the output root through the import path, blobs included;
-  `import_layout` reads a layout as stored and imports every trail it holds into any store, parents first.
+  `export_trails` writes the named trails and every ancestor reachable through `forked_from` and `summoned_by`, parents first, into a `LocalStore` at the output root through the import path, carrying each header and its rows and blobs;
+  `import_layout` reads a layout as stored and imports every trail it holds into any store, parents first, with no separate launch-context read or payload.
 - `rows.py` owns aggregate folding, row construction, and message projection.
   `replay` folds a whole stored row stream from the minted state, the one fold `recompute`, `check`, and an import's seal share.
   `backends.SERVER_DERIVED_NATIVE_FIELDS` names what the fold owns:

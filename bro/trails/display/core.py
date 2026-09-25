@@ -34,7 +34,6 @@ from bro.trails.display.records import (
   HarnessEvent,
   InlineStepBody,
   InterimAssistantText,
-  LaunchContextEntry,
   LineageNode,
   LiveSource,
   LLMCall,
@@ -88,8 +87,6 @@ _INLINE_VALUE_WIDTH = 88
 # kinds the rewind layouts print as one row, whatever a value's structure
 _ROW_RECORD_KINDS = frozenset(
   {
-    RecordKind.TRAIL_METADATA,
-    RecordKind.LAUNCH_CONTEXT,
     RecordKind.SEGMENT_BOUNDARY,
     RecordKind.NATIVE_STEP,
     RecordKind.TRAIL_LIST_ROW,
@@ -109,7 +106,6 @@ _STYLE_BY_KIND = {
   RecordKind.ERROR: StyleRole.ERROR,
   RecordKind.HARNESS_EVENT: StyleRole.MUTED,
   RecordKind.TRAIL_METADATA: StyleRole.METADATA,
-  RecordKind.LAUNCH_CONTEXT: StyleRole.METADATA,
   RecordKind.SEGMENT_BOUNDARY: StyleRole.MUTED,
   RecordKind.NATIVE_STEP: StyleRole.METADATA,
   RecordKind.TRAIL_LIST_ROW: StyleRole.METADATA,
@@ -409,14 +405,6 @@ class DisplaySession:
       return tuple(
         self._item(value, record.kind, label=label, style=style) for label, value in record.fields
       )
-    if isinstance(record, LaunchContextEntry):
-      context_items: list[BlockItem] = []
-      if record.content is not None:
-        context_items.append(self._item(record.content, record.kind, style=style))
-      context_items.extend(
-        self._item(value, record.kind, label=label, style=style) for label, value in record.fields
-      )
-      return tuple(context_items)
     if isinstance(record, SegmentBoundary):
       segment_items = [BlockItem(record.trail_id, style=style, label='trail')]
       if record.segment is not None:
@@ -626,8 +614,6 @@ class DisplaySession:
         markers.append('[meta]')
       if len(markers) > 0:
         label = f'{" ".join(markers)} {label}'
-    if isinstance(record, LaunchContextEntry):
-      return record.title
     if isinstance(record, TrailListRow):
       return record.trail_id
     if isinstance(record, LineageNode):
@@ -676,7 +662,7 @@ class DisplaySession:
       return routes.reply
     if isinstance(record, (SystemPrompt, UserInput, InterimAssistantText)):
       return routes.conversation
-    if isinstance(record, (TrailMetadata, LaunchContextEntry, SegmentBoundary, NativeStep)):
+    if isinstance(record, (TrailMetadata, SegmentBoundary, NativeStep)):
       return routes.metadata
     if isinstance(record, (TrailListRow, LineageNode)):
       return routes.metadata
@@ -694,8 +680,6 @@ class DisplaySession:
       return BlockKind.EVENT
     if isinstance(record, TrailMetadata):
       return BlockKind.METADATA
-    if isinstance(record, LaunchContextEntry):
-      return BlockKind.CONTEXT
     if isinstance(record, SegmentBoundary):
       return BlockKind.SEGMENT
     if isinstance(record, NativeStep):

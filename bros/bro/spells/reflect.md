@@ -55,7 +55,7 @@ a spell as the `spell::<name>` or `bro::cast` result,
 the system prompt as a claude trail's `prompt_snapshot` notice or a bro trail's `system_prompt` step (`rewind steps`),
 a doc as the tool served it,
 the scope as the launch line and the banner the run read (`may_summon`, `permits`, the grants on the command).
-What the trail does not carry is recoverable only for a surface the launched repository owns, from the commit the trail's launch line names (its `--into` ref, the git state at launch);
+What the trail does not carry is recoverable only for a surface the launched repository owns, from the commit the trail's launch line and header `git` name (its `--into` ref and `base_sha`);
 a bro or a text an installed package supplied has no version the trail names.
 Where the version in force is unavailable, say so and skip findings on that surface:
 a divergence seen there is reported without a cause, since the words the run saw are not in evidence.

@@ -13,7 +13,6 @@ class BlockKind(StrEnum):
   TOOL_RESULT = 'tool-result'
   EVENT = 'event'
   METADATA = 'metadata'
-  CONTEXT = 'context'
   SEGMENT = 'segment'
   NATIVE_STEP = 'native-step'
   TRAIL_ROW = 'trail-row'

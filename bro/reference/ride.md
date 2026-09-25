@@ -1345,7 +1345,7 @@ an interactive resume's history copy opens a fork trail pointing at the prior on
 The daemon nominates nothing:
 it blazes with the transcript's lineage evidence and the store's harness resolver decides the edge, or declines a transcript claude has not finished writing (`bro/trails/AGENTS.md`).
 The trail carries the launch recipe, plus the managed-session facts a bro-harness session's trail carries alike
-— the session's location, its launch line, and the attached tree's git state, read off the session env by `bro.trails.record.session` in either harness's recorder —
+— the session's location, its launch line, and the attached tree's state in the header's `git`, read off the session env by `bro.trails.record.session` in either harness's recorder —
 and the recorder publishes its current trail id to the session's trail pointer,
 from which summon control stamps the session's summoned children with `summoned_by.trail_id` (see "Summoning another bro").
 The daemon's stderr goes to `claude/session-recorder.log` in the session state dir;

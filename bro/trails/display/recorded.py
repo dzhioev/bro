@@ -13,7 +13,6 @@ from bro.trails.display.records import (
   HarnessEvent,
   InlineStepBody,
   InterimAssistantText,
-  LaunchContextEntry,
   LineageNode,
   LLMCall,
   NativeStep,
@@ -201,9 +200,6 @@ class RecordedAdapter:
     target_id = _require_string(header.get('id'), 'trail id', nonempty=True)
     with _trail_provenance(target_id):
       records: list[DisplayRecord] = [self.trail_metadata(header)]
-      records.extend(
-        self.launch_context_records(target_id, self.client.get_launch_context(target_id))
-      )
       segments = walk_header_chain(header, self.client.get_trail)
       for segment_index, (segment_header, bound) in enumerate(segments):
         segment_id = _require_string(segment_header.get('id'), 'segment trail id', nonempty=True)
@@ -248,6 +244,22 @@ class RecordedAdapter:
     location = header.get('location')
     if isinstance(location, dict):
       fields.extend((key, location[key]) for key in ('workspace', 'host') if key in location)
+    git = header.get('git')
+    if isinstance(git, dict):
+      fields.extend(
+        (label, git[key])
+        for key, label in (
+          ('repo', 'repo'),
+          ('url', 'url'),
+          ('branch', 'branch'),
+          ('base_sha', 'base sha'),
+        )
+        if key in git
+      )
+    elif git is not None:
+      raise ValueError('trail git metadata must be an object')
+    if 'legacy_launch_context' in header:
+      fields.append(('legacy launch context', header['legacy_launch_context']))
     if header.get('subject') is not None:
       fields.append(('subject', header['subject']))
     if header.get('forked_from') is not None:
@@ -268,39 +280,6 @@ class RecordedAdapter:
       timestamp=header.get('started_at') if isinstance(header.get('started_at'), str) else None,
       fields=tuple(fields),
     )
-
-  def launch_context_records(self, trail_id: str, launch_context: Any) -> list[LaunchContextEntry]:
-    if launch_context is None:
-      return []
-    if not isinstance(launch_context, list):
-      raise DisplayDataError(f'trail {trail_id!r} launch context must be a list')
-    records = []
-    for index, entry in enumerate(launch_context):
-      if not isinstance(entry, dict):
-        raise DisplayDataError(f'trail {trail_id!r} launch context entry {index} must be an object')
-      title = entry.get('title')
-      if not isinstance(title, str) or len(title) == 0:
-        title = f'{entry.get("kind", "?")}/{entry.get("subtype", "?")}'
-      content = entry.get('content')
-      if content is not None and not isinstance(content, str):
-        raise DisplayDataError(
-          f'trail {trail_id!r} launch context entry {index} content must be a string'
-        )
-      fields = entry.get('fields', {})
-      if not isinstance(fields, dict):
-        raise DisplayDataError(
-          f'trail {trail_id!r} launch context entry {index} fields must be an object'
-        )
-      records.append(
-        LaunchContextEntry(
-          key=f'recorded:{trail_id}:context:{index}',
-          origin=Origin.RECORDED,
-          title=title,
-          content=content,
-          fields=tuple(fields.items()),
-        )
-      )
-    return records
 
   def native_step(self, trail_id: str, step: dict[str, Any]) -> NativeStep:
     try:

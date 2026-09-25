@@ -50,7 +50,6 @@ class _TerminalFormatter:
     self._configuration = configuration
     self._color = color
     self._rewind_turns: set[int] = set()
-    self._context_open = False
     self._chat_date: str | None = None
 
   def block(self, block: PresentationBlock) -> str:
@@ -92,10 +91,7 @@ class _TerminalFormatter:
     return self._rewind_conversation(continuation)
 
   def finish(self) -> str:
-    if not self._context_open:
-      return ''
-    self._context_open = False
-    return self._styled('─' * 78, StyleRole.MUTED) + '\n'
+    return ''
 
   def _plain_log(self, block: PresentationBlock) -> str:
     if block.route is OutputRoute.REPLY:
@@ -221,28 +217,21 @@ class _TerminalFormatter:
     return f'… <{item.omitted_characters} more chars>'
 
   def _rewind(self, block: PresentationBlock) -> str:
-    prefix = ''
-    if self._context_open and block.kind is not BlockKind.CONTEXT:
-      prefix = self.finish()
     if block.kind is BlockKind.METADATA:
-      return prefix + self._rewind_metadata(block)
-    if block.kind is BlockKind.CONTEXT:
-      return prefix + self._rewind_context(block)
+      return self._rewind_metadata(block)
     if block.kind is BlockKind.SEGMENT:
-      return prefix + self._rewind_segment(block)
+      return self._rewind_segment(block)
     if block.kind is BlockKind.NATIVE_STEP:
-      return prefix + self._rewind_native_step(block)
+      return self._rewind_native_step(block)
     if block.kind is BlockKind.TRAIL_ROW:
-      return prefix + self._rewind_trail_row(block)
+      return self._rewind_trail_row(block)
     if block.kind is BlockKind.LINEAGE_NODE:
-      return prefix + self._rewind_lineage_node(block)
+      return self._rewind_lineage_node(block)
     if block.kind is BlockKind.TOOL_RESULT:
-      return (
-        prefix
-        + self._rewind_turn_heading(block)
-        + ''.join(self._rewind_late_result(item) for item in block.items)
+      return self._rewind_turn_heading(block) + ''.join(
+        self._rewind_late_result(item) for item in block.items
       )
-    return prefix + self._rewind_conversation(block)
+    return self._rewind_conversation(block)
 
   def _rewind_metadata(self, block: PresentationBlock) -> str:
     labelled = [item for item in block.items if item.label is not None]
@@ -255,20 +244,6 @@ class _TerminalFormatter:
       label = self._styled(f'{item.label:<{width}}', label_style)
       lines.append(f'{label} {item.text}{self._rewind_omission(item)}')
     lines.append(self._styled('─' * 78, StyleRole.MUTED))
-    return '\n'.join(lines) + '\n'
-
-  def _rewind_context(self, block: PresentationBlock) -> str:
-    lines = []
-    if not self._context_open:
-      heading = self._configuration.labels.for_kind(RecordKind.LAUNCH_CONTEXT)
-      lines.append(self._styled(heading, StyleRole.HEADING))
-      self._context_open = True
-    lines.append(self._styled(f'▸ {block.label}', StyleRole.METADATA))
-    for item in block.items:
-      if item.label is None:
-        lines.extend(self._styled(f'  {line}', StyleRole.MUTED) for line in item.text.splitlines())
-      else:
-        lines.append(self._styled(f'  {item.label} {item.text}', StyleRole.MUTED))
     return '\n'.join(lines) + '\n'
 
   def _rewind_segment(self, block: PresentationBlock) -> str:
