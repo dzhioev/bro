@@ -9,6 +9,11 @@ from typing import Any, Literal, Optional
 import boto3
 
 from bro.trails import backends, formats, importing, model, rows
+from bro.trails.launch_context import (
+  fold_launch_context,
+  fold_request_launch_context,
+  rebuild_launch_context,
+)
 from bro.trails.lineage import LineageDecision
 from bro.trails.model import (
   UNREPORTED_END_INFERENCE,
@@ -209,17 +214,12 @@ class DynamoStore(TrailsStore):
       native.update(minted_native(native, decision.chunks))
     trail_id = dynamo_types.new_id()
     started_at = _now_iso()
-    launch_context = request.body.get('launch_context')
     with refusing_invalid_requests('blaze body'):
       opened = adapter.open(request.body)
     if len(opened.records) > dynamo_types.MAX_TRANSACTION_RECORDS:
       raise ValueError(
         f'a trail may open with at most {dynamo_types.MAX_TRANSACTION_RECORDS} records'
       )
-    context_key = dynamo_types.context_key(trail_id) if launch_context is not None else None
-    if context_key is not None:
-      self._store_context(context_key, launch_context)
-
     header: dict[str, Any] = {
       'id': trail_id,
       'format': model.TRAIL_FORMAT,
@@ -240,10 +240,14 @@ class DynamoStore(TrailsStore):
       'summoned_by': request.summoned_by,
       'subject': request.subject,
       'location': request.location,
+      'git': request.git,
     }
     header.update({key: value for key, value in optional.items() if value is not None})
     header['extent'] = 0
-    item = _header_item(header, context_key=context_key)
+    if 'launch_context' in request.body:
+      with refusing_invalid_requests('blaze body'):
+        header = fold_launch_context(header, request.body['launch_context'])
+    item = _header_item(header, context_key=None)
     state = AggregateState(item, adapter)
     seen_billing_keys: set[str] = set()
     prepared = self._prepare_rows(
@@ -278,6 +282,8 @@ class DynamoStore(TrailsStore):
     extent = decision.attach_to['extent']
     self.migrate_trail(trail_id)
     header = self._required_header(trail_id)
+    with refusing_invalid_requests('blaze body'):
+      request = fold_request_launch_context(request, trail_id)
     restamp = backends.attached_header(header, request)
     fields = {**restamp.values, 'last_alive_at': _now_iso()}
     expected_format = formats.stored_format(header, description=f'trail {trail_id} header')
@@ -308,14 +314,6 @@ class DynamoStore(TrailsStore):
     except self._dynamo.exceptions.ConditionalCheckFailedException:
       return {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
     return backends.blaze_result(trail_id, header['started_at'], extent, decision)
-
-  def _store_context(self, key: str, context: Any) -> None:
-    self._s3.put_object(
-      Bucket=self._bucket,
-      Key=key,
-      Body=json.dumps(context, ensure_ascii=False).encode('utf-8'),
-      ContentType='application/json',
-    )
 
   def append_records(
     self,
@@ -598,7 +596,7 @@ class DynamoStore(TrailsStore):
     return _from_ddb_item(response.get('Item'))
 
   def _project_header(self, item: dict) -> dict:
-    item = formats.upgrade_header(_without_storage_attributes(item))
+    item = formats.upgrade_header(_without_served_storage_attributes(item))
     raw_usage = item.get('native', {}).get('usage', {})
     if not isinstance(raw_usage, dict):
       raise ValueError('native.usage must be an object')
@@ -606,13 +604,19 @@ class DynamoStore(TrailsStore):
 
   def get_launch_context(self, trail_id: str) -> Optional[Any]:
     header = formats.upgrade_header(self._required_header(trail_id))
+    has_stored_context, stored_context = self._stored_launch_context(header)
+    if has_stored_context:
+      header = fold_launch_context(header, stored_context)
+    return rebuild_launch_context(header)
+
+  def _stored_launch_context(self, header: dict) -> tuple[bool, Any]:
     key = header.get('context_s3')
     if key is None:
       key = header.get('native', {}).get('context_s3')
     if key is None:
-      return None
+      return False, None
     response = self._s3.get_object(Bucket=self._bucket, Key=key)
-    return json.loads(response['Body'].read().decode('utf-8'))
+    return True, json.loads(response['Body'].read().decode('utf-8'))
 
   def find_segment_trails(self, segments: set[str]) -> list[dict]:
     """Return the headers of the trails recording one of `segments`, through the
@@ -926,32 +930,27 @@ class DynamoStore(TrailsStore):
   def begin_import(self, header: dict, *, launch_context: Optional[Any] = None) -> dict:
     with refusing_invalid_requests('imported header'):
       adapter = self._backend(header['harness'])
-      imported = importing.imported_header(header, adapter)
+      folded_header = (
+        fold_launch_context(header, launch_context) if launch_context is not None else header
+      )
+      imported = importing.imported_header(folded_header, adapter)
     trail_id = imported['id']
     importing.require_parents(imported, lambda parent: self._optional_header(parent) is not None)
     existing = self._optional_header(trail_id)
     if existing is None:
-      # the context goes under a key of this call's own, so the header that
-      # wins the id points at the context put beside it and at no other call's
-      context_key = None
-      if launch_context is not None:
-        context_key = dynamo_types.context_key(trail_id, dynamo_types.new_id())
-        self._store_context(context_key, launch_context)
       try:
         self._dynamo.put_item(
           TableName=self._trails_table,
           Item=_ddb_item(
             _header_item(
               imported,
-              context_key=context_key,
+              context_key=None,
               attribute_source=formats.upgrade_header(imported),
             )
           ),
           ConditionExpression='attribute_not_exists(id)',
         )
       except self._dynamo.exceptions.ConditionalCheckFailedException:
-        if context_key is not None:
-          self._s3.delete_object(Bucket=self._bucket, Key=context_key)
         existing = self._required_header(trail_id)
       else:
         return {'trail_id': trail_id, 'extent': 0, 'created': True}
@@ -1146,6 +1145,17 @@ def _header_item(
 
 def _without_storage_attributes(item: dict) -> dict:
   return {key: value for key, value in item.items() if key not in _STORAGE_ATTRIBUTES}
+
+
+def _without_served_storage_attributes(item: dict) -> dict:
+  header = _without_storage_attributes(item)
+  native = header.get('native')
+  if not isinstance(native, dict) or 'context_s3' not in native:
+    return header
+  return {
+    **header,
+    'native': {key: value for key, value in native.items() if key != 'context_s3'},
+  }
 
 
 def _row_puts(table: str, prepared: list[dict]) -> list[dict]:

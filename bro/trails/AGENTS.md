@@ -61,11 +61,12 @@ bro · claude recorders                     readers
   — `backends.attached_header` is the one place that decides which fields those are.
   The write is conditional on the extent the verdict was verified against, since an append landing meanwhile would leave the awarded spans off by its length;
   a lost race answers `backends.ATTACH_CONTENDED` and the caller resolves again.
-- `local.py` stores each trail under `<root>/trails/<id>/` as `header.json`, `steps.jsonl`, and optional `context.json`, with tool blobs under `<root>/trails/tools/<sha256>.json` and delete manifests under `<root>/manifests/delete/`.
+- `local.py` stores each trail under `<root>/trails/<id>/` as `header.json` and `steps.jsonl`, with tool blobs under `<root>/trails/tools/<sha256>.json` and delete manifests under `<root>/manifests/delete/`.
   Appends are ordinal and `flock`-serialized, headers are atomically replaced, bodies remain inline, and listing preserves the selector/cursor contract.
   Reopening an older trail upgrades and atomically replaces its row stream under the same flock before stamping the header and writing.
   A stale open header gets `end.inference = unreported` when read.
-  `stored_trail_ids`, `stored_header`, `stored_rows`, and `stored_launch_context` read the layout as written, formats untouched, for a copy that must not upgrade what it carries.
+  `stored_trail_ids`, `stored_header`, and `stored_rows` read the layout as written, formats untouched, for a copy that must not upgrade what it carries.
+  A retained `context.json` from an older layout is ignored.
   An import builds its initial trail atomically under `<root>/staging/` and renames it into place with an import mark, so two begins of the same id settle on the rename and transfers refuse the live partial state.
 - The local root is the global `bro.workspace.paths.trails_dir` under the runtime state root.
 - `TRAILS_DISABLED` (presence-checked) turns a process's recording off, since a backend resolves for every run.
@@ -115,7 +116,9 @@ bro · claude recorders                     readers
   and the fields a seal writes from a replay of every row.
   Rows are stored as recorded, each keeping its format, so an imported trail reads through the in-memory upgrades and migrates the next time a writer reopens it.
 - `launch_context.py` is the transitional pure fold between a stored launch context and the `git` / `legacy_launch_context` header fields, plus the inverse old readers are served.
-  It rejects malformed stored shapes with the trail named, preserves legacy records whole and in order, and gives an already-restamped header's `git` precedence over the minting launch's record.
+  Stores fold an old writer's blaze or import payload into the header and write no new context object.
+  Dynamo reads still fold a pointer-held object in memory, while local stores ignore retained context files.
+  The fold rejects malformed stored shapes with the trail named, preserves legacy records whole and in order, and gives an already-restamped header's `git` precedence over the minting launch's record.
 - `transfer.py` moves trails whose imports are complete between stores as directories in the local store layout and refuses a source trail whose import is incomplete:
   `export_trails` writes the named trails and every ancestor reachable through `forked_from` and `summoned_by`, parents first, into a `LocalStore` at the output root through the import path, blobs included;
   `import_layout` reads a layout as stored and imports every trail it holds into any store, parents first.
