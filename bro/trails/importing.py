@@ -44,6 +44,8 @@ def imported_header(header: dict, adapter: backends.Adapter) -> dict:
     for key, value in upgraded['native'].items()
     if key not in backends.SERVER_DERIVED_NATIVE_FIELDS
   }
+  if 'git' in upgraded:
+    model.validate_git(upgraded['git'])
   BlazeRequest(
     harness=upgraded['harness'],
     version=upgraded['version'],
@@ -57,6 +59,7 @@ def imported_header(header: dict, adapter: backends.Adapter) -> dict:
     summoned_by=upgraded.get('summoned_by'),
     subject=upgraded.get('subject'),
     location=upgraded.get('location'),
+    git=upgraded.get('git'),
   )
   adapter.validate_create(upgraded_native)
   recorded_native.update(rows.replayed_native(adapter, upgraded))

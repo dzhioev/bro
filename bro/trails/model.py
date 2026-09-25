@@ -42,6 +42,7 @@ class BlazeRequest:
   summoned_by: Optional[dict[str, Any]] = None
   subject: Optional[str] = None
   location: Optional[dict[str, Any]] = None
+  git: Optional[dict[str, Any]] = None
   lineage: Optional[dict[str, Any]] = None
   """harness-specific evidence for the trail's lineage, interpreted by the
   harness adapter's resolver."""
@@ -69,6 +70,8 @@ class BlazeRequest:
     _validate_pointer(self.forked_from, 'forked_from', step_optional=False)
     _validate_pointer(self.summoned_by, 'summoned_by', step_optional=True)
     _validate_location(self.location)
+    if self.git is not None:
+      validate_git(self.git)
 
   @classmethod
   def from_wire(cls, data: dict[str, Any]) -> 'BlazeRequest':
@@ -87,6 +90,7 @@ class BlazeRequest:
       'summoned_by',
       'subject',
       'location',
+      'git',
       'lineage',
     }
     unknown = set(data) - fields
@@ -96,6 +100,8 @@ class BlazeRequest:
     missing = required - set(data)
     if len(missing) > 0:
       raise ValueError(f'missing fields: {sorted(missing)}')
+    if 'git' in data:
+      validate_git(data['git'])
     return cls(
       harness=data['harness'],
       version=data['version'],
@@ -109,6 +115,7 @@ class BlazeRequest:
       summoned_by=data.get('summoned_by'),
       subject=data.get('subject'),
       location=data.get('location'),
+      git=data.get('git'),
       lineage=data.get('lineage'),
     )
 
@@ -121,7 +128,16 @@ class BlazeRequest:
       'body': self.body,
       'native': self.native,
     }
-    for field in ('bro', 'hold', 'forked_from', 'summoned_by', 'subject', 'location', 'lineage'):
+    for field in (
+      'bro',
+      'hold',
+      'forked_from',
+      'summoned_by',
+      'subject',
+      'location',
+      'git',
+      'lineage',
+    ):
       value = getattr(self, field)
       if value is not None:
         data[field] = value
@@ -263,6 +279,17 @@ def _validate_location(value: Any) -> None:
       raise ValueError(f'location.{field} must be a string')
   if value.get('is_container') is not None and not isinstance(value['is_container'], bool):
     raise ValueError('location.is_container must be a bool')
+
+
+def validate_git(value: Any) -> None:
+  if not isinstance(value, dict) or len(value) == 0:
+    raise ValueError('git must be a non-empty object')
+  unknown = set(value) - {'repo', 'url', 'branch', 'base_sha'}
+  if len(unknown) > 0:
+    raise ValueError(f'git has unknown fields: {sorted(unknown)}')
+  for field, item in value.items():
+    if not isinstance(item, str) or len(item) == 0:
+      raise ValueError(f'git.{field} must be a non-empty string')
 
 
 @dataclass(frozen=True)

@@ -267,7 +267,10 @@ class LocalStore(TrailsStore):
       self._migrate_locked(trail_id, header)
       if _extent(header) != extent:
         return {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
-      header.update(backends.attached_header(header, request))
+      restamp = backends.attached_header(header, request)
+      header.update(restamp.values)
+      for field in restamp.removed:
+        header.pop(field, None)
       header['last_alive_at'] = _now_iso()
       _atomic_json(self._trail_directory(trail_id) / 'header.json', header)
     return backends.blaze_result(trail_id, header['started_at'], extent, decision)
