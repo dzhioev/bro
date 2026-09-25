@@ -9,6 +9,7 @@ run those with `--help` for flags.
 
 - `args.py` — `Parser` (subclass of `argparse.ArgumentParser`):
   the one place in the repo that imports `argparse`.
+  `CLIError` marks invalid user-owned input that `run_cli` renders without a traceback.
   Adds repo-wide global flags (`--log`, `--verbose`, `--ic`, `--allow-env`, `--print-env`),
   per-flag env-var overrides,
   mutually-exclusive group declarations,

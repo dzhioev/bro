@@ -43,7 +43,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar, Optional, Protocol
 
 from bro.base import configs, log, template
-from bro.base.args import Parser, canonical_cli_name, current_cli_name
+from bro.base.args import CLIError, Parser, canonical_cli_name, current_cli_name
 from bro.base.condition import StringVariable
 
 __cli_name__ = 'credentials'
@@ -738,8 +738,17 @@ def default_store() -> Store:
 
           configured = host_config.tool_selection(
             canonical_cli_name(), invoked_as=current_cli_name()
-          ).instances
-          selection = {kind: instance for kind, instance in configured.items() if kind in registry}
+          )
+          unknown_by_layer: dict[str, list[str]] = {}
+          for kind in sorted(set(configured.instances) - set(registry)):
+            unknown_by_layer.setdefault(configured.layers[kind], []).append(kind)
+          if unknown_by_layer:
+            details = '; '.join(
+              f'{layer} names unregistered credential kind(s): {", ".join(kinds)}'
+              for layer, kinds in unknown_by_layer.items()
+            )
+            raise CLIError(details)
+          selection = configured.instances
         _default_store = Store(registry, STORE_DIR, selection)
   return _default_store
 

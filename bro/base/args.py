@@ -74,6 +74,11 @@ def _disable_ic() -> None:
 
 _N = TypeVar('_N')
 
+
+class CLIError(ValueError):
+  pass
+
+
 _current_cli_name: Optional[str] = None
 _canonical_cli_name: Optional[str] = None
 
@@ -98,7 +103,11 @@ def run_cli(module: str, argv: list[str]) -> Optional[int]:
   """Run a CLI module's `main`, recording which command this process is."""
   global _canonical_cli_name
   _canonical_cli_name = canonical_script_name(module)
-  return importlib.import_module(module).main(argv)
+  try:
+    return importlib.import_module(module).main(argv)
+  except CLIError as error:
+    log.error('%s', error)
+    return 1
 
 
 # subparser handler stashed via set_handler, popped by dispatch

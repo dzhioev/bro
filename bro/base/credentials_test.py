@@ -1,5 +1,6 @@
 import importlib.metadata
 import json
+import re
 import sys
 import threading
 from datetime import UTC, datetime, timedelta
@@ -9,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from bro.base import credentials, host_config
-from bro.base.args import Parser
+from bro.base.args import CLIError, Parser
 
 
 def _registry(*names: str) -> dict[str, credentials.CredentialKind]:
@@ -577,6 +578,13 @@ class TestDefaultStore:
 
     assert Parser().parse(['rewind']) == {}
 
+  def test_malformed_host_config_fails_as_a_cli_error(self, tmp_path: Path, monkeypatch):
+    self._ambient_store(tmp_path, monkeypatch)
+    Path(host_config.HOST_CONFIG_FILE).write_text('{')
+
+    with pytest.raises(CLIError, match='is not valid json'):
+      credentials.default_store()
+
   def test_explicit_bro_store_never_reads_the_host_config(self, tmp_path: Path, monkeypatch):
     store = self._ambient_store(tmp_path, monkeypatch)
     _write_material(store, 'openai', 'directed')
@@ -586,17 +594,29 @@ class TestDefaultStore:
 
     assert credentials.get('openai') == 'directed'
 
-  def test_unknown_configured_kinds_are_ignored_by_this_installation(
-    self, tmp_path: Path, monkeypatch
+  @pytest.mark.parametrize(
+    ('config', 'command', 'layer'),
+    [
+      ({'defaults': {'creds': ['consumer_only+host']}}, None, 'defaults'),
+      ({'user': {'creds': ['consumer_only+host']}}, None, 'user'),
+      (
+        {'user': {'tools': {'bro.trails.rewind': {'creds': ['consumer_only+host']}}}},
+        'bro.trails.rewind',
+        'user.tools',
+      ),
+    ],
+  )
+  def test_unknown_configured_kinds_fail_the_ambient_store(
+    self, tmp_path: Path, monkeypatch, config: dict, command: str | None, layer: str
   ):
-    store = self._ambient_store(tmp_path, monkeypatch)
-    _write_material(store, 'openai+selected', 'selected')
-    Path(host_config.HOST_CONFIG_FILE).write_text(
-      json.dumps({'defaults': {'creds': ['consumer_only+host', 'openai+selected']}})
-    )
-    monkeypatch.setattr(credentials, 'canonical_cli_name', lambda: None)
+    self._ambient_store(tmp_path, monkeypatch)
+    Path(host_config.HOST_CONFIG_FILE).write_text(json.dumps(config))
+    monkeypatch.setattr(credentials, 'canonical_cli_name', lambda: command)
 
-    assert credentials.get('openai') == 'selected'
+    with pytest.raises(
+      CLIError, match=rf'{re.escape(layer)} names unregistered credential kind\(s\): consumer_only'
+    ):
+      credentials.default_store()
 
   def test_a_block_scoped_store_is_local_to_its_thread(self, tmp_path: Path, monkeypatch):
     self._ambient_store(tmp_path, monkeypatch)

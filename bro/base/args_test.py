@@ -1,12 +1,14 @@
 #!/usr/bin/env python
 import re
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 from bro.base.args import (
   REMAINDER,
   ArgumentTypeError,
+  CLIError,
   Parser,
   canonical_cli_name,
   command_signature,
@@ -188,6 +190,18 @@ class TestRunCli:
 
     assert run_cli('package.time_util', ['rewind', '--flag']) == ['rewind', '--flag']
     assert canonical_cli_name() == 'package.time-util'
+
+  def test_reports_a_cli_error_without_escaping(self, monkeypatch, caplog):
+    def fail(_argv):
+      raise CLIError('malformed user configuration')
+
+    monkeypatch.setattr(
+      'bro.base.args.importlib.import_module',
+      lambda _module: SimpleNamespace(main=fail),
+    )
+
+    assert run_cli('package.command', ['command']) == 1
+    assert 'malformed user configuration' in caplog.text
 
   def test_global_flags_removed_from_args(self):
     parser = Parser()

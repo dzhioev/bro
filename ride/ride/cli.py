@@ -405,15 +405,18 @@ def main(argv: list[str]) -> Optional[int]:
       parser.error(str(error))
     if repository is None and args['bro'] is None:
       parser.error('ride scope requires --bro when detached')
-    harness_name = args['harness'] or (
-      (
-        repository.project_config()
-        if repository is not None and repository.is_url
-        else project_config(None if repository is None else repository.git_dir)
-      ).harness
-      if repository is not None
-      else 'claude'
-    )
+    try:
+      harness_name = args['harness'] or (
+        (
+          repository.project_config()
+          if repository is not None and repository.is_url
+          else project_config(None if repository is None else repository.git_dir)
+        ).harness
+        if repository is not None
+        else 'claude'
+      )
+    except ValueError as error:
+      parser.error(str(error))
     return report_scope(repo=repository, bro=args['bro'], harness=harness_name)
   assert command == 'banner'
   return banner(llm=args['llm'])
