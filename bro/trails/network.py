@@ -162,10 +162,6 @@ class NetworkStore(TrailsStore):
       query.append(('limit', str(limit)))
     return self._get_pairs(f'/v1/trails/{trail_id}/messages', query)
 
-  def get_launch_context(self, trail_id: str) -> Optional[Any]:
-    """the trail's stored launch-context document, or None when it has none."""
-    return self._get(f'/v1/trails/{trail_id}/context', {})['launch_context']
-
   def blaze(self, request: BlazeRequest) -> dict:
     """open a trail (`POST /v1/trails`, harness-native `body` envelope included);
     returns `{id, started_at, extent}` plus the resolver's verdict where the
@@ -196,12 +192,6 @@ class NetworkStore(TrailsStore):
 
   def migrate_trail(self, trail_id: str) -> dict:
     return self._send('POST', f'/v1/admin/trails/{trail_id}/migrate', {})
-
-  def fold_context(self, trail_id: str, *, dry_run: bool = False) -> dict:
-    return self._send('POST', f'/v1/admin/trails/{trail_id}/fold-context', {'dry_run': dry_run})
-
-  def drop_context(self, trail_id: str, *, dry_run: bool = False) -> dict:
-    return self._send('POST', f'/v1/admin/trails/{trail_id}/drop-context', {'dry_run': dry_run})
 
   def recompute(self, trail_id: str) -> dict:
     return self._send('POST', f'/v1/admin/trails/{trail_id}/recompute', {})
@@ -260,8 +250,7 @@ class NetworkStore(TrailsStore):
   def get_tool(self, sha256: str) -> Any:
     return self._get(f'/v1/tools/{sha256}', {})['tool']
 
-  def begin_import(self, header: dict, *, launch_context: Optional[Any] = None) -> dict:
-    del launch_context
+  def begin_import(self, header: dict) -> dict:
     trail_id = header.get('id')
     if not isinstance(trail_id, str) or len(trail_id) == 0:
       raise ValueError('imported header id must be a non-empty string')

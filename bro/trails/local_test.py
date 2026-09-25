@@ -15,15 +15,6 @@ from bro.trails.model import BlazeRequest, canonical_json_bytes, payload_sha256
 from bro.trails.record.bro import Recorder
 from bro.trails.store import AppendConflict, TrailCollision, TrailNotFound, fetch_recorded_trail
 
-_CONTEXT = [
-  {
-    'kind': 'system_prompt',
-    'subtype': 'ride_injected',
-    'title': 'ride-injected system prompt (--append-system-prompt)',
-    'content': 'prompt',
-  }
-]
-
 
 def _bro_request(*, bro: str = 'dev', forked_from: dict | None = None) -> BlazeRequest:
   return BlazeRequest(
@@ -38,10 +29,8 @@ def _bro_request(*, bro: str = 'dev', forked_from: dict | None = None) -> BlazeR
   )
 
 
-def _claude_request(*records: str, context=None, lineage=None) -> BlazeRequest:
+def _claude_request(*records: str, lineage=None) -> BlazeRequest:
   body = {'records': list(records)}
-  if context is not None:
-    body['launch_context'] = context
   return BlazeRequest(
     harness='claude',
     version='test',
@@ -102,7 +91,7 @@ def test_reads_a_store_without_write_access(tmp_path):
       'message': {'content': 'hello'},
     }
   )
-  trail_id = writer.blaze(_claude_request(raw, context=_CONTEXT))['id']
+  trail_id = writer.blaze(_claude_request(raw))['id']
 
   with _read_only_tree(tmp_path):
     reader = LocalStore(tmp_path)
@@ -110,17 +99,7 @@ def test_reads_a_store_without_write_access(tmp_path):
     assert reader.get_step(trail_id, 0)['body'] == raw
     assert reader.get_steps(trail_id)['steps'][0]['body'] == raw
     assert reader.get_messages(trail_id)['messages'][0]['content'] == 'hello'
-    assert reader.get_launch_context(trail_id) == _CONTEXT
     assert reader.list_trails()['trails'][0]['id'] == trail_id
-
-
-def test_retained_context_file_is_not_read(tmp_path):
-  store = LocalStore(tmp_path)
-  trail_id = store.blaze(_bro_request())['id']
-  context_path = store.trails_directory / trail_id / 'context.json'
-  context_path.write_text(json.dumps(_CONTEXT))
-
-  assert store.get_launch_context(trail_id) is None
 
 
 def test_read_creates_a_missing_lock_file(tmp_path):
@@ -143,12 +122,11 @@ def test_claude_rows_store_body_and_project_messages(tmp_path):
       'message': {'content': 'hello'},
     }
   )
-  created = store.blaze(_claude_request(raw, context=_CONTEXT))
+  created = store.blaze(_claude_request(raw))
   trail_id = created['id']
 
   assert store.get_step(trail_id, 0)['body'] == raw
   assert store.get_messages(trail_id)['messages'][0]['type'] == 'user_input'
-  assert store.get_launch_context(trail_id) == _CONTEXT
 
 
 def test_the_lineage_head_folds_across_appends(tmp_path):
@@ -347,7 +325,7 @@ def test_missing_trails_raise_store_neutral_error(tmp_path):
 
 def test_delete_manifests_the_trail_before_removing_its_directory(tmp_path):
   store = LocalStore(tmp_path)
-  trail_id = store.blaze(_claude_request(json.dumps({'type': 'system'}), context=_CONTEXT))['id']
+  trail_id = store.blaze(_claude_request(json.dumps({'type': 'system'})))['id']
 
   result = store.delete_trail(trail_id)
 
@@ -409,6 +387,7 @@ def test_a_begin_that_loses_the_id_observes_the_winner(tmp_path, monkeypatch):
   source = LocalStore(tmp_path / 'source')
   trail_id = source.blaze(_bro_request())['id']
   header = source.get_trail(trail_id)
+  winner = {**header, 'subject': 'winner'}
   destination = LocalStore(tmp_path / 'destination')
   rename = local.os.rename
   raced = []
@@ -416,13 +395,13 @@ def test_a_begin_that_loses_the_id_observes_the_winner(tmp_path, monkeypatch):
   def rival_lands_first(staged, target):
     if len(raced) == 0:
       raced.append(target)
-      destination.begin_import(header, launch_context=[{'kind': 'winner'}])
+      destination.begin_import(winner)
     rename(staged, target)
 
   monkeypatch.setattr(local.os, 'rename', rival_lands_first)
 
   with pytest.raises(TrailCollision, match='header differs'):
-    destination.begin_import(header, launch_context=[{'kind': 'loser'}])
+    destination.begin_import(header)
 
-  assert destination.get_launch_context(trail_id) == [{'kind': 'winner'}]
+  assert destination.get_trail(trail_id)['subject'] == 'winner'
   assert list(destination.staging_directory.iterdir()) == []

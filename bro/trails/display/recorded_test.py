@@ -69,9 +69,6 @@ class FakeClient:
       if message['source']['step_id'] < extent and (types is None or message['type'] in types)
     ]
 
-  def get_launch_context(self, trail_id: str) -> Any:
-    raise AssertionError(f'launch context read for {trail_id}')
-
   def iter_trails(self, **filters: Any):
     parent_id = filters.get('forked_from')
     if not isinstance(parent_id, str):

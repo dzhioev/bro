@@ -42,7 +42,7 @@ bro · claude recorders                     readers
   It maps not-found, append-conflict, refused-permission, unsupported-operation, and transient transport failures onto the store errors and owns operation-specific retry schedules.
   A 404 becomes `TrailNotFound` only when its body reports the missing trail (`model.trail_not_found_body` is the shape both sides read), and a 409 becomes `TrailHasForks` only when its body names them (`model.trail_has_forks_body`);
   a missing tool blob (`model.tool_not_found_body`) and an import collision (`model.trail_collision_body`) are read the same way, and every other 404 surfaces as `HTTPStatusError` carrying what the response said.
-  Its concrete `recompute`, `check`, `relink`, `fold_context`, and `drop_context` methods forward the Dynamo administration endpoints;
+  Its concrete `recompute`, `check`, and `relink` methods forward the Dynamo administration endpoints;
   they are not part of `TrailsStore`.
 - `claude_lineage.py` owns the claude evidence contract and resolves lineage from it:
   the adopted segment, its lines' record uuids and digests, and the sibling segments sharing those records.
@@ -66,7 +66,6 @@ bro · claude recorders                     readers
   Reopening an older trail upgrades and atomically replaces its row stream under the same flock before stamping the header and writing.
   A stale open header gets `end.inference = unreported` when read.
   `stored_trail_ids`, `stored_header`, and `stored_rows` read the layout as written, formats untouched, for a copy that must not upgrade what it carries.
-  A retained `context.json` from an older layout is ignored.
   An import builds its initial trail atomically under `<root>/staging/` and renames it into place with an import mark, so two begins of the same id settle on the rename and transfers refuse the live partial state.
 - The local root is the global `bro.workspace.paths.trails_dir` under the runtime state root.
 - `TRAILS_DISABLED` (presence-checked) turns a process's recording off, since a backend resolves for every run.
@@ -81,10 +80,8 @@ bro · claude recorders                     readers
 - `server/dynamo.py` owns `DynamoStore(TrailsStore)`:
   conditional append transactions, indexes, S3 body spill/resolution, UUID reads, and its store-owned thread pool for the spilled-row fan-out.
   Its migrate-on-write rewrites rows conditionally on their stored formats before conditionally advancing the header, so concurrent current-format rows are left alone and an interrupted migration resumes.
-  Its transitional context administration folds a pointer-held object into the header, then drops either pointer form only after the fold is present;
-  both writes are conditional on the fields they read and retry a lost race.
-  The attributes its keys and indexes read (`gsi_pk`, `forked_from_id`, `segment`, `context_s3`) are derived from the header at the write and left out of served headers;
-  a header migration keeps them outside the format transform, then rederives them from the upgraded logical header while preserving its context object.
+  The attributes its keys and indexes read (`gsi_pk`, `forked_from_id`, `segment`) are derived from the header at the write and left out of served headers;
+  a header migration keeps them outside the format transform, then rederives them from the upgraded logical header.
   `server/dynamo_types.py` owns Dynamo conversion and row constants.
   `server/operations.py` remains the recompute/check engine and owns the manifested destructive operations, relinking and deletion.
 - Stored rows are served rows.
@@ -117,13 +114,9 @@ bro · claude recorders                     readers
   the digest match of rows re-sent over ones already stored,
   and the fields a seal writes from a replay of every row.
   Rows are stored as recorded, each keeping its format, so an imported trail reads through the in-memory upgrades and migrates the next time a writer reopens it.
-- `launch_context.py` is the transitional pure fold between a stored launch context and the `git` / `legacy_launch_context` header fields, plus the inverse old readers are served.
-  Stores fold an old writer's blaze or import payload into the header and write no new context object.
-  Dynamo reads still fold a pointer-held object in memory, while local stores ignore retained context files.
-  The fold rejects malformed stored shapes with the trail named, preserves legacy records whole and in order, and gives an already-restamped header's `git` precedence over the minting launch's record.
 - `transfer.py` moves trails whose imports are complete between stores as directories in the local store layout and refuses a source trail whose import is incomplete:
   `export_trails` writes the named trails and every ancestor reachable through `forked_from` and `summoned_by`, parents first, into a `LocalStore` at the output root through the import path, carrying each header and its rows and blobs;
-  `import_layout` reads a layout as stored and imports every trail it holds into any store, parents first, with no separate launch-context read or payload.
+  `import_layout` reads a layout as stored and imports every trail it holds into any store, parents first.
 - `rows.py` owns aggregate folding, row construction, and message projection.
   `replay` folds a whole stored row stream from the minted state, the one fold `recompute`, `check`, and an import's seal share.
   `backends.SERVER_DERIVED_NATIVE_FIELDS` names what the fold owns:
@@ -168,7 +161,6 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   A page carries `next`, the cursor of the page after it or null past the last row, and `through`, the last step ordinal it evaluated, which a `/messages` type filter does not shorten.
   Large bodies remain inline over the wire.
 - `GET /v1/tools/{sha256}` serves a tool blob by digest under the read permission, answering `model.tool_not_found_body` when the store holds none.
-- `GET /v1/trails/{id}/context` returns `{"launch_context": null}` for an existing trail without context and 404 only when the trail is missing.
 - Bro projection derives reasoning, assistant text, tool calls, and terminal assistant status from `llm_call.response.output`, and copies the response's service tier onto the projected call when present.
   Its text-bodied native kinds are system prompts, user inputs, and notifications, each projected under its own message type.
   The decoding reads the OpenAI Responses API shape.
@@ -182,7 +174,7 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
 - List queries accept exactly one selector
   — `harness`, `bro`, or `forked_from`
   — plus the common time range and opaque cursor.
-- `DELETE /v1/admin/trails/{id}` removes a trail's rows, whatever they spilled, and its launch-context object, after writing a manifest of the header and rows it takes.
+- `DELETE /v1/admin/trails/{id}` removes a trail's rows and whatever they spilled, after writing a manifest of the header and rows it takes.
   Tool blobs are content-addressed and shared across trails, so no single trail's delete removes one.
   A trail some fork still points at is refused with the children named:
   a fork's chain walk resolves every ancestor, so a `forked_from` is never left pointing at nothing.
@@ -198,9 +190,8 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   it owns argument parsing, queries, follow polling, regex matching, and grep context, while every `show`, `steps`, `list`, `tree`, and `grep` record renders through the matching display preset.
   A `show`, `steps`, or `grep` snapshot reads its trail through `TrailsStore.collect_steps` / `collect_messages`, which fetch the step range as concurrent windows, and `--follow` continues on the sequential page cursor.
   `steps` prints every stored record whole.
-- `admin.py` (`trails`) is the operator CLI beside it, carrying `export`, `import`, `migrate`, `delete`, and the transitional `fold-contexts`.
+- `admin.py` (`trails`) is the operator CLI beside it, carrying `export`, `import`, `migrate`, and `delete`.
   Export reads under the read permission and writes a store layout, import and migration reach every backend through the store contract and the administer-permission routes.
-  `fold-contexts` drives the network administration seam over named trails or the full registry, emitting JSONL only for trails that still hold a pointer.
 - `contract_test.py` runs the same contract suite against `LocalStore` and `NetworkStore` over a real loopback aiohttp server backed by `LocalStore`, the import wire and the blob read among it;
   `transfer_test.py` round-trips layouts between local stores;
   `claude_lineage_test.py` drives the resolver over a real store.

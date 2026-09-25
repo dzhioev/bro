@@ -228,14 +228,6 @@ async def test_read_handlers_dispatch_local_store_semantics(client):
         json.dumps({'type': 'system', 'uuid': 'first'}),
         json.dumps({'type': 'user', 'uuid': 'second', 'message': {'content': 'hello'}}),
       ],
-      'launch_context': [
-        {
-          'kind': 'git',
-          'subtype': 'state',
-          'title': 'git state at launch',
-          'fields': {'branch': 'workspace', 'base_sha': 'base'},
-        }
-      ],
     },
   )
   created = await client.post('/v1/trails', json=claude, headers=_auth())
@@ -243,11 +235,9 @@ async def test_read_handlers_dispatch_local_store_semantics(client):
 
   point = await client.get(f'/v1/trails/{trail_id}/steps/1', headers=_auth())
   messages = await client.get(f'/v1/trails/{trail_id}/messages?type=user_input', headers=_auth())
-  context = await client.get(f'/v1/trails/{trail_id}/context', headers=_auth())
 
   assert (await point.json())['uuid'] == 'second'
   assert [message['type'] for message in (await messages.json())['messages']] == ['user_input']
-  assert await context.json() == {'launch_context': claude['body']['launch_context']}
 
 
 @pytest.mark.asyncio
@@ -280,20 +270,6 @@ async def test_list_filters_and_rejects_invalid_queries(client):
   assert conflicting.status == 400
   assert malformed_limit.status == 400
   assert malformed_step.status == 400
-
-
-@pytest.mark.asyncio
-async def test_context_distinguishes_absence_from_a_missing_trail(client):
-  client = await client
-  created = await client.post('/v1/trails', json=_blaze_payload(), headers=_auth())
-  trail_id = (await created.json())['id']
-
-  absent = await client.get(f'/v1/trails/{trail_id}/context', headers=_auth())
-  missing = await client.get('/v1/trails/missing/context', headers=_auth())
-
-  assert absent.status == 200
-  assert await absent.json() == {'launch_context': None}
-  assert missing.status == 404
 
 
 @pytest.mark.asyncio
@@ -330,7 +306,6 @@ async def test_missing_resources_are_404_reporting_the_trail(client):
     '/v1/trails/missing',
     '/v1/trails/missing/steps',
     '/v1/trails/missing/steps/0',
-    '/v1/trails/missing/context',
   ):
     response = await client.get(path, headers=_auth())
     assert response.status == 404
@@ -457,10 +432,8 @@ async def test_admin_routes_report_an_unsupported_backend(client):
   local = await client
   responses = [
     await local.post('/v1/admin/trails/check', json={}, headers=_auth()),
-    await local.post('/v1/admin/trails/T1/fold-context', json={}, headers=_auth()),
-    await local.post('/v1/admin/trails/T1/drop-context', json={}, headers=_auth()),
   ]
-  assert [response.status for response in responses] == [501, 501, 501]
+  assert [response.status for response in responses] == [501]
   bodies = [await response.json() for response in responses]
   assert all('administration surface' in body['error'] for body in bodies)
 
@@ -485,8 +458,8 @@ def test_admin_routes_serve_a_dynamo_backed_store():
   assert app['admin'] is store
   assert '/v1/admin/trails/{trail_id}/migrate' in paths
   assert '/v1/admin/trails/check' in paths
-  assert '/v1/admin/trails/{trail_id}/fold-context' in paths
-  assert '/v1/admin/trails/{trail_id}/drop-context' in paths
+  assert '/v1/admin/trails/{trail_id}/fold-context' not in paths
+  assert '/v1/admin/trails/{trail_id}/drop-context' not in paths
   assert '/v1/admin/trails/{trail_id}/recompute' in paths
   assert '/v1/admin/trails/{trail_id}/relink' in paths
 
