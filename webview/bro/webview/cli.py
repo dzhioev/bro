@@ -178,19 +178,6 @@ def open_webview(
       return OpenedWebview(request.request_id, vnc_url)
 
 
-def _default_live_webview() -> str:
-  try:
-    matches = [live for live in mission.live_missions() if live.type == WEBVIEW]
-  except (mission.MissionError, RuntimeError) as error:
-    raise WebviewError(str(error)) from error
-  if len(matches) == 0:
-    raise WebviewError('this session has no live webview to close')
-  if len(matches) > 1:
-    identifiers = ', '.join(live.mission_id for live in matches)
-    raise WebviewError(f'this session has multiple live webviews; name one of: {identifiers}')
-  return matches[0].mission_id
-
-
 def _worker_has_replied(record: dict[str, Any]) -> bool:
   messages = record.get('messages')
   if not isinstance(messages, list) or not all(isinstance(entry, dict) for entry in messages):
@@ -229,11 +216,11 @@ def _wait_until_ready(client: Client, mission_id: str) -> None:
   raise WebviewError(f'webview {mission_id} ended before it was ready: {reason or state}')
 
 
-def close_webview(mission_id: Optional[str] = None) -> dict[str, Any]:
+def close_webview(mission_id: str) -> dict[str, Any]:
   """Ask a live webview to close and wait for its terminal outcome."""
   from bro.broker.brotocol import Message, Tag
 
-  selected = _default_live_webview() if mission_id is None else mission.resolve(mission_id)
+  selected = mission.resolve(mission_id)
   with _open_client() as client:
     _wait_until_ready(client, selected)
     try:
@@ -296,7 +283,7 @@ def _open(
   return 0
 
 
-def _close(mission_id: Optional[str]) -> int:
+def _close(mission_id: str) -> int:
   try:
     outcome = close_webview(mission_id)
   except (WebviewError, mission.MissionError, ValueError) as error:
@@ -354,12 +341,7 @@ def main(argv: list[str]) -> Optional[int]:
   open_parser.set_handler(_open)
 
   close_parser = verbs.add_parser('close', help='close a webview and wait for its terminal outcome')
-  close_parser.add_argument(
-    'mission_id',
-    nargs='?',
-    metavar='MISSION',
-    help="mission id; omitted selects this session's live webview",
-  )
+  close_parser.add_argument('mission_id', metavar='MISSION', help='mission id')
   close_parser.set_handler(_close)
 
   serve_parser = verbs.add_parser('serve', help='run the container-side webview daemon')
