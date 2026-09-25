@@ -197,6 +197,12 @@ class NetworkStore(TrailsStore):
   def migrate_trail(self, trail_id: str) -> dict:
     return self._send('POST', f'/v1/admin/trails/{trail_id}/migrate', {})
 
+  def fold_context(self, trail_id: str, *, dry_run: bool = False) -> dict:
+    return self._send('POST', f'/v1/admin/trails/{trail_id}/fold-context', {'dry_run': dry_run})
+
+  def drop_context(self, trail_id: str, *, dry_run: bool = False) -> dict:
+    return self._send('POST', f'/v1/admin/trails/{trail_id}/drop-context', {'dry_run': dry_run})
+
   def recompute(self, trail_id: str) -> dict:
     return self._send('POST', f'/v1/admin/trails/{trail_id}/recompute', {})
 

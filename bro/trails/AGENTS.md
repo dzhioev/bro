@@ -42,7 +42,7 @@ bro · claude recorders                     readers
   It maps not-found, append-conflict, refused-permission, unsupported-operation, and transient transport failures onto the store errors and owns operation-specific retry schedules.
   A 404 becomes `TrailNotFound` only when its body reports the missing trail (`model.trail_not_found_body` is the shape both sides read), and a 409 becomes `TrailHasForks` only when its body names them (`model.trail_has_forks_body`);
   a missing tool blob (`model.tool_not_found_body`) and an import collision (`model.trail_collision_body`) are read the same way, and every other 404 surfaces as `HTTPStatusError` carrying what the response said.
-  Its concrete `recompute`, `check`, and `relink` methods forward the Dynamo administration endpoints;
+  Its concrete `recompute`, `check`, `relink`, `fold_context`, and `drop_context` methods forward the Dynamo administration endpoints;
   they are not part of `TrailsStore`.
 - `claude_lineage.py` owns the claude evidence contract and resolves lineage from it:
   the adopted segment, its lines' record uuids and digests, and the sibling segments sharing those records.
@@ -81,6 +81,8 @@ bro · claude recorders                     readers
 - `server/dynamo.py` owns `DynamoStore(TrailsStore)`:
   conditional append transactions, indexes, S3 body spill/resolution, UUID reads, and its store-owned thread pool for the spilled-row fan-out.
   Its migrate-on-write rewrites rows conditionally on their stored formats before conditionally advancing the header, so concurrent current-format rows are left alone and an interrupted migration resumes.
+  Its transitional context administration folds a pointer-held object into the header, then drops either pointer form only after the fold is present;
+  both writes are conditional on the fields they read and retry a lost race.
   The attributes its keys and indexes read (`gsi_pk`, `forked_from_id`, `segment`, `context_s3`) are derived from the header at the write and left out of served headers;
   a header migration keeps them outside the format transform, then rederives them from the upgraded logical header while preserving its context object.
   `server/dynamo_types.py` owns Dynamo conversion and row constants.
@@ -196,8 +198,9 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   it owns argument parsing, queries, follow polling, regex matching, and grep context, while every `show`, `steps`, `list`, `tree`, and `grep` record renders through the matching display preset.
   A `show`, `steps`, or `grep` snapshot reads its trail through `TrailsStore.collect_steps` / `collect_messages`, which fetch the step range as concurrent windows, and `--follow` continues on the sequential page cursor.
   `steps` prints every stored record whole.
-- `admin.py` (`trails`) is the operator CLI beside it, carrying `export`, `import`, `migrate`, and `delete`.
+- `admin.py` (`trails`) is the operator CLI beside it, carrying `export`, `import`, `migrate`, `delete`, and the transitional `fold-contexts`.
   Export reads under the read permission and writes a store layout, import and migration reach every backend through the store contract and the administer-permission routes.
+  `fold-contexts` drives the network administration seam over named trails or the full registry, emitting JSONL only for trails that still hold a pointer.
 - `contract_test.py` runs the same contract suite against `LocalStore` and `NetworkStore` over a real loopback aiohttp server backed by `LocalStore`, the import wire and the blob read among it;
   `transfer_test.py` round-trips layouts between local stores;
   `claude_lineage_test.py` drives the resolver over a real store.
