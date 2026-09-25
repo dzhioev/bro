@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from bro.base.git_url import is_git_url, is_network_git_url, sanitize_git_url
 from bro.monitor import session_dir
 from bro.workspace.paths import BASE_SHA_ENV, BRANCH_ENV, ISOLATION_ENV
 
@@ -18,6 +19,8 @@ class ManagedSession:
   host_workspace: str
   boxed: bool
   ride_command: str
+  repo: Optional[str]
+  repo_url: Optional[str]
   branch: Optional[str]
   base_sha: Optional[str]
 
@@ -32,17 +35,15 @@ class ManagedSession:
     }
 
   @property
-  def git_record(self) -> Optional[dict[str, Any]]:
-    """the `git` launch-context record of an attached session, None for a
-    detached one."""
-    if self.branch is None:
+  def git(self) -> Optional[dict[str, Any]]:
+    """the trail header's `git`, or None for a detached session."""
+    if self.repo is None:
       return None
-    return {
-      'kind': 'git',
-      'subtype': 'state',
-      'title': 'git state at launch',
-      'fields': {'branch': self.branch, 'base_sha': self.base_sha},
-    }
+    repository = sanitize_git_url(self.repo) if is_git_url(self.repo) else self.repo
+    git = {'repo': repository, 'branch': self.branch, 'base_sha': self.base_sha}
+    if self.repo_url is not None and is_network_git_url(self.repo_url):
+      git['url'] = sanitize_git_url(self.repo_url)
+    return git
 
 
 def _required(name: str) -> str:
@@ -60,16 +61,23 @@ def managed_session() -> Optional[ManagedSession]:
   isolation = _required(ISOLATION_ENV)
   if isolation not in ('boxed', 'unboxed'):
     raise ValueError(f'invalid {ISOLATION_ENV}: {isolation!r}')
+  repo = os.environ.get('RIDE_REPO')
+  repo_url = os.environ.get('RIDE_REPO_URL')
   branch = os.environ.get(BRANCH_ENV)
   base_sha = os.environ.get(BASE_SHA_ENV)
-  if (branch is None) != (base_sha is None):
-    raise ValueError(f'{BRANCH_ENV} and {BASE_SHA_ENV} are published together')
+  attached = (repo, branch, base_sha)
+  if any(value is not None for value in attached) and any(value is None for value in attached):
+    raise ValueError(f'RIDE_REPO, {BRANCH_ENV} and {BASE_SHA_ENV} are published together')
+  if repo_url is not None and repo is None:
+    raise ValueError('RIDE_REPO_URL is published only with RIDE_REPO')
   return ManagedSession(
     workspace=_required('RIDE_WORKSPACE'),
     host=_required('RIDE_HOST'),
     host_workspace=_required('RIDE_HOST_WORKSPACE'),
     boxed=isolation == 'boxed',
     ride_command=_required('RIDE_COMMAND'),
+    repo=repo,
+    repo_url=repo_url,
     branch=branch,
     base_sha=base_sha,
   )

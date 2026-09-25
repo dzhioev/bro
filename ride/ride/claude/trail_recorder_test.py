@@ -29,8 +29,13 @@ class _Store(LocalStore):
 
   def __init__(self, root: Path):
     super().__init__(root)
+    self.blazes: list[BlazeRequest] = []
     self.keepalives: list[str] = []
     self.refusals = 0
+
+  def blaze(self, request: BlazeRequest) -> dict:
+    self.blazes.append(request)
+    return super().blaze(request)
 
   def keepalive(self, trail_id: str) -> None:
     self.keepalives.append(trail_id)
@@ -107,6 +112,8 @@ def environment(tmp_path: Path, monkeypatch):
   monkeypatch.setenv('RIDE_HOST_WORKSPACE', '/home/u/ws/tree')
   monkeypatch.setenv('RIDE_ISOLATION', 'unboxed')
   monkeypatch.setenv('RIDE_COMMAND', 'ride along ws')
+  monkeypatch.setenv('RIDE_REPO', '/source/bro')
+  monkeypatch.setenv('RIDE_REPO_URL', 'https://example.test/dzhioev/bro.git')
   monkeypatch.setenv('RIDE_BRANCH', 'workspace-ws')
   monkeypatch.setenv('RIDE_BASE_SHA', 'abc')
   monkeypatch.setenv('RIDE_BRO', 'dev')
@@ -193,10 +200,14 @@ class TestAdoption:
     session = managed_session()
     assert session is not None
     assert header['location'] == session.location
-    assert store.get_launch_context(header['id']) == [session.git_record]
+    assert header['git'] == session.git
+    assert store.blazes[0].git == session.git
+    assert 'launch_context' not in store.blazes[0].body
     assert _rows(store, header['id']) == lines
 
   def test_a_detached_session_attaches_no_context(self, environment, store, monkeypatch):
+    monkeypatch.delenv('RIDE_REPO')
+    monkeypatch.delenv('RIDE_REPO_URL')
     monkeypatch.delenv('RIDE_BRANCH')
     monkeypatch.delenv('RIDE_BASE_SHA')
     _write_segment(environment, 'seg-1', [_user('hello', 'u1'), _assistant('hi', 'a1')])

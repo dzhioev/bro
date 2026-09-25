@@ -40,6 +40,34 @@ def normalize_git_url(value: str) -> str:
   raise ValueError(f'not a git URL: {value!r}')
 
 
+def sanitize_git_url(value: str) -> str:
+  """a normalized git URL safe to record outside a credential boundary."""
+  normalized = normalize_git_url(value)
+  if _SCHEME_URL.match(normalized) is None:
+    host, path = normalized.split(':', 1)
+    path = path.split('#', 1)[0].split('?', 1)[0]
+    return f'{host}:{path}'
+  parsed = urllib.parse.urlsplit(normalized)
+  if parsed.hostname is None:
+    netloc = ''
+  else:
+    hostname = parsed.hostname
+    if ':' in hostname and not hostname.startswith('['):
+      hostname = f'[{hostname}]'
+    port = '' if parsed.port is None else f':{parsed.port}'
+    netloc = f'{hostname}{port}'
+  return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, '', ''))
+
+
+def is_network_git_url(value: str) -> bool:
+  """whether the value names a non-file git remote."""
+  if not is_git_url(value):
+    return False
+  if _SCHEME_URL.match(value) is None:
+    return True
+  return urllib.parse.urlsplit(value).scheme.lower() != 'file'
+
+
 def git_url_path(normalized: str) -> str:
   """the repository path of a `normalize_git_url` result."""
   if _SCHEME_URL.match(normalized) is not None:

@@ -23,6 +23,7 @@ from bro.workspace.paths import ISOLATION_ENV, workspace_dir
 from bro.workspace.session import clear_requested_exit_status, requested_exit_status
 from ride.errors import reports_runtime_errors
 from ride.identity import bro_git_identity_env
+from ride.repository import recorded_origin_url
 
 if TYPE_CHECKING:
   from ride.harness import Harness
@@ -283,8 +284,14 @@ def run_session(harness: 'Harness', run: SessionRun) -> int:
   os.environ['RIDE_WORKSPACE'] = run.name
   if run.repo is None:
     os.environ.pop('RIDE_REPO', None)
+    os.environ.pop('RIDE_REPO_URL', None)
   else:
     os.environ['RIDE_REPO'] = run.repo
+    repo_url = recorded_origin_url(Path.cwd())
+    if repo_url is None:
+      os.environ.pop('RIDE_REPO_URL', None)
+    else:
+      os.environ['RIDE_REPO_URL'] = repo_url
   os.environ['RIDE_BRO'] = run.bro
   os.environ[HOLD_VARIABLE] = run.hold
   os.environ['RIDE_RUNNER_PID'] = str(os.getpid())

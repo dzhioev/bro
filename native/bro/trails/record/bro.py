@@ -43,8 +43,6 @@ class Recorder(Tracker):
     }
     if session is not None:
       native['ride_command'] = session.ride_command
-      if session.git_record is not None:
-        body['launch_context'] = [session.git_record]
     request = BlazeRequest(
       harness='bro',
       bro=bro,
@@ -52,6 +50,7 @@ class Recorder(Tracker):
       native=native,
       body=body,
       location=None if session is None else session.location,
+      git=None if session is None else session.git,
       forked_from=(
         {key: value for key, value in asdict(forked_from).items() if value is not None}
         if forked_from is not None

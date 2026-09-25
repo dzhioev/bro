@@ -183,6 +183,9 @@ class TestRunSession:
     else:
       monkeypatch.delenv('RIDE_PARTY_MEMBER', raising=False)
     monkeypatch.setattr(do_ride, 'bro_git_identity_env', lambda name: {'GIT_AUTHOR_NAME': name})
+    monkeypatch.setattr(
+      do_ride, 'recorded_origin_url', lambda _tree: 'https://example.test/repository.git'
+    )
     declaration = MagicMock()
     monkeypatch.setattr(do_ride, 'create_bro', lambda _name: declaration)
     monkeypatch.setattr(do_ride, '_install_credential_hooks', lambda: None)
@@ -212,6 +215,7 @@ class TestRunSession:
     assert code == 7
     assert os.environ['RIDE_WORKSPACE'] == 'w'
     assert os.environ['RIDE_REPO'] == '/repo'
+    assert os.environ['RIDE_REPO_URL'] == 'https://example.test/repository.git'
     assert os.environ['RIDE_BRO'] == 'dev'
     assert os.environ['GIT_AUTHOR_NAME'] == 'dev'
     assert os.environ['BRO_HOLD'] == 'attended'
@@ -221,8 +225,10 @@ class TestRunSession:
 
   def test_detached_session_skips_persona_provisioning(self, monkeypatch, tmp_path):
     os.environ['RIDE_REPO'] = '/ambient'
+    os.environ['RIDE_REPO_URL'] = 'https://ambient.example/repository.git'
     _, _, declaration = self._run(monkeypatch, tmp_path, repo=False)
     assert 'RIDE_REPO' not in os.environ
+    assert 'RIDE_REPO_URL' not in os.environ
     declaration.provision_workspace.assert_not_called()
 
   def test_party_member_skips_persona_provisioning(self, monkeypatch, tmp_path):
