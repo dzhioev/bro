@@ -158,9 +158,8 @@ def lowering_harness(monkeypatch, tmp_path):
     grant=(),
     revoke=(),
     recording=True,
-    check_selection=True,
   ):
-    del name, surface, attachment, attachment_repository, llm_spec, recording, check_selection
+    del name, surface, attachment, attachment_repository, llm_spec, recording
     grant_credentials, _, _ = ride.scope.split_scope_overrides(grant)
     revoke_credentials, _, _ = ride.scope.split_scope_overrides(revoke)
     kinds = {'aws', 'trails', 'openai'} | set(grant_credentials)
@@ -335,7 +334,6 @@ class TestSummonLowering:
       cred=(),
       grant=(),
       revoke=(),
-      check_selection=True,
     ):
       captured.append(llm_spec)
       return workspace_store.ScopedSecrets(required=set(), optional=set())
@@ -355,43 +353,6 @@ class TestSummonLowering:
     _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert captured == [ride.bro.BRO.resolve_llm('echo', 'dev')]
 
-  def test_credential_overrides_adjust_the_childs_scope(self, lowering_harness):
-    # only the credential halves reach the scope; the `@bro` half was already
-    # resolved into may_summon by the control
-    launch = ride.bro_worker.SummonLaunchSpec(
-      target='dev',
-      prompt='p',
-      parent=PARENT,
-      parent_tree=workspace_tree(PARENT),
-      repo=Path('/proj'),
-      summoner=SUMMONER,
-      may_summon=(),
-      harness='bro',
-      grant=('gmail_creds', '@reviewer'),
-      revoke=('openai',),
-    )
-    lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
-    assert lowered.launch.secrets == {'aws', 'trails', 'gmail_creds'}
-    assert lowered.launch.optional_secrets == set()
-
-  def test_no_op_credential_override_is_harmless(self, lowering_harness, tmp_path):
-    launch = ride.bro_worker.SummonLaunchSpec(
-      target='dev',
-      prompt='p',
-      parent=PARENT,
-      parent_tree=workspace_tree(PARENT),
-      repo=Path('/proj'),
-      summoner=SUMMONER,
-      may_summon=(),
-      harness='bro',
-      grant=('aws',),
-    )
-
-    lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
-
-    assert lowered.launch.secrets == {'aws', 'trails'}
-    assert Workspace.open('broker-CH').name == 'broker-CH'
-
   def test_lowering_records_the_childs_resume_spec(self, lowering_harness, tmp_path):
     launch = ride.bro_worker.SummonLaunchSpec(
       target='dev',
@@ -404,8 +365,7 @@ class TestSummonLowering:
       harness='bro',
       hold='guided',
       llm='openai:sol:high',
-      grant=('gmail_creds', '@reviewer'),
-      revoke=('openai',),
+      grant=('@reviewer',),
     )
     _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     workspace = Workspace.open('broker-CH')
@@ -421,8 +381,8 @@ class TestSummonLowering:
         no_trails=False,
         hold='guided',
         cred=[],
-        grant=['gmail_creds', '@reviewer'],
-        revoke=['openai'],
+        grant=['@reviewer'],
+        revoke=[],
         llm='openai:sol:high',
         resolved_llm=ride.bro.BRO.resolve_llm('openai:sol:high', 'dev').dump(),
         solo=True,
@@ -1089,7 +1049,6 @@ with session_broxy():
     bro='bro-dev',
     may_summon={'dev'},
     permits={'bro.party.join', 'bro.party.start.unboxed'},
-    credential_scope=workspace_store.ScopedSecrets(set(), set()),
     container_runtime=_container_runtime(),
     runtime_bundle=runtime_bundle,
   )
@@ -1264,7 +1223,6 @@ class TestClaudeSummonLowering:
       cred=(),
       grant=(),
       revoke=(),
-      check_selection=True,
     ):
       captured.append(recipe.name)
       return workspace_store.ScopedSecrets(required=set(), optional=set())
@@ -1365,7 +1323,6 @@ class TestRunRootViaBroker:
         launch,
         workspace=workspace,
         bro='bro-dev',
-        credential_scope=workspace_store.ScopedSecrets({'harbor'}, set()),
         container_runtime=_container_runtime(),
         runtime_bundle=MagicMock(),
         types={'test': TestWorkerType},

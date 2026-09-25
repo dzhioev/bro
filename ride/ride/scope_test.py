@@ -331,21 +331,6 @@ class TestHostConfigBroLayer:
     ):
       self._scope(tmp_path)
 
-  def test_an_unchecked_scope_carries_the_unread_selection(self, tmp_path, monkeypatch):
-    self._host_config(tmp_path, monkeypatch, {'creds': ['github+reviewer']})
-
-    scoped = ride.scope.scoped_secrets(
-      'scope-search',
-      CLAUDE_RECIPE,
-      attachment=str(tmp_path),
-      grant=[],
-      revoke=[],
-      check_selection=False,
-    )
-
-    assert 'github' not in scoped.required | scoped.optional
-    assert scoped.selection['github'] == 'reviewer'
-
   def test_a_selection_of_an_optional_kind_is_read(self, tmp_path, monkeypatch):
     self._host_config(tmp_path, monkeypatch, {'creds': ['openai+work']})
 

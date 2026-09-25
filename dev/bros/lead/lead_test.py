@@ -36,3 +36,4 @@ def test_orchestrate_grants_a_derived_eyebro_to_every_pull_request_phase(monkeyp
   granted = bro.get_spell_body('orchestrate', harness='claude')
 
   assert granted.count('`grant` `@<the eyebro>`') == 3
+  assert granted.count('`grant`') == 4

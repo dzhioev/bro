@@ -256,7 +256,6 @@ def scoped_secrets(
   grant: Sequence[str] = (),
   revoke: Sequence[str] = (),
   recording: bool = True,
-  check_selection: bool = True,
 ) -> ScopedSecrets:
   """Compute one launch's credential tiers and instance selection."""
   from bro.registry import create_bro
@@ -301,15 +300,14 @@ def scoped_secrets(
   optional_needs.difference_update(required_needs)
   needs = required_needs | optional_needs
   configured_kinds = _fold_credential_kinds(needs, configured_layers)
-  if check_selection:
-    configured_kinds_with_recording = _fold_credential_kinds(
-      needs | {_RECORDING_CREDENTIAL}, configured_layers
-    )
-    _require_bro_layer_selections_read(
-      binding,
-      bro_name,
-      configured_kinds_with_recording,
-    )
+  configured_kinds_with_recording = _fold_credential_kinds(
+    needs | {_RECORDING_CREDENTIAL}, configured_layers
+  )
+  _require_bro_layer_selections_read(
+    binding,
+    bro_name,
+    configured_kinds_with_recording,
+  )
   held_kinds = _fold_credential_kinds(configured_kinds, (launch_layer,))
   unheld_picks = sorted(set(launch_picks) - held_kinds)
   if unheld_picks:

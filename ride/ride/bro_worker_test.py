@@ -10,7 +10,6 @@ from bro.worker_types import Expect, LaunchDenied, LaunchRequest, PeerDescriptio
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride.bro_worker import BroFacts, BroType, Placement, SummonLaunchSpec
 from ride.workspace.metadata import Isolation
-from ride.workspace.store import ScopedSecrets
 
 
 class Peers:
@@ -40,12 +39,10 @@ def _owner(
   allow_list=('dev',),
   permits=('bro.party.start.boxed',),
   depth=0,
-  credential_scope=(),
 ):
   extension = BroFacts(
     bro='bro-dev',
     allow_list=frozenset(allow_list),
-    credential_scope=ScopedSecrets(set(credential_scope), set()),
   )
   return PeerDescription(
     mission='root',
@@ -92,7 +89,6 @@ def launch_scope(monkeypatch):
       *[value.removeprefix(':') for value in grant if value.startswith(':')],
     },
   )
-  monkeypatch.setattr(bro_worker, '_credential_refusal', lambda *args, **kwargs: None)
   monkeypatch.setattr(bro_worker, 'workspace_isolation', lambda name: Isolation.BOXED)
 
 
@@ -221,6 +217,36 @@ def test_granted_bros_and_permits_must_be_held(tmp_path):
     worker.launch(_request(tmp_path, grant=['@reviewer']))
   with pytest.raises(LaunchDenied, match='does not hold'):
     worker.launch(_request(tmp_path, grant=[':bro.party.start.unboxed']))
+
+
+@pytest.mark.parametrize(
+  ('field', 'value'),
+  [('grant', 'github'), ('grant', 'github+work'), ('revoke', 'openai')],
+)
+def test_credential_values_name_the_childs_host_config_entry(tmp_path, field, value):
+  with pytest.raises(
+    LaunchDenied,
+    match=r'cannot grant or revoke credential kind.*projects\.<identity>\.bros\.dev',
+  ):
+    BroType(Host()).launch(
+      _request(
+        tmp_path,
+        grant=[value] if field == 'grant' else [],
+        revoke=[value] if field == 'revoke' else [],
+      )
+    )
+
+
+def test_harness_and_llm_choices_do_not_answer_to_the_summoners_credentials(tmp_path):
+  run = BroType(Host()).launch(_request(tmp_path, harness='claude', llm=':opus5'))
+
+  launch = cast(SummonLaunchSpec, cast(Spawn, run).launch)
+  assert (launch.harness, launch.llm) == ('claude', ':opus5')
+
+
+def test_an_incompatible_harness_and_llm_are_denied_before_acceptance(tmp_path):
+  with pytest.raises(LaunchDenied, match='claude harness runs Claude Code, not openai'):
+    BroType(Host()).launch(_request(tmp_path, harness='claude', llm='openai:sol'))
 
 
 def test_audit_fields_are_projected_from_bro_facts(tmp_path):

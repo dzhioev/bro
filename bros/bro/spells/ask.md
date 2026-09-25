@@ -80,22 +80,20 @@ it refuses `into`, an isolation choice, and `manual`.
 An unmarked request starts boxed when permitted, then unboxed when that is the available start permit;
 it never changes into a join.
 
-The child's scope is a knob too:
+The child's onward authority is a knob too:
 grants and revokes.
-A grant names a credential kind, `@bro` for a summon target of the target's own, or a party permit;
-a revoke names a credential kind, `@bro`, or a permit.
-Credential grants and revokes cannot name instances.
+A grant or revoke names `@bro` for one of the target's summon targets, or a party permit.
 The permits are `:bro.party.start.boxed`, `:bro.party.start.unboxed`, and `:bro.party.join`, always as leaves.
-They start from the target's own declarations, not yours
-— nothing of your scope reaches the child unless you name it, and you can only name what you hold yourself:
-a credential in your own scope,
-a bro in your own allow-list,
-or a permit in your own set.
-Grant only what the request actually needs and the user asked for:
-a credential kind the target's manifest lacks (`staging_api` for an integration run),
-or a bro the target has to reach onward (`@reviewer` so a developer child can hand off a review).
-Credential grants and revokes are idempotent.
-`@bro` and permit changes remain strict, so a no-op authority grant or an authority revoke the target lacks fails the summon rather than passing quietly.
+They start from the target's own declarations, not yours,
+and you can grant only a bro in your own allow-list or a permit in your own set.
+Grant only what the request actually needs and the user asked for,
+such as `@reviewer` when a developer child must hand off a review.
+A no-op grant or a revoke of authority the target lacks fails the summon rather than passing quietly.
+
+A summon request carries no credentials.
+The child resolves its credentials from its own bro, harness, model, and applicable host configuration, just like a root launch without credential flags.
+A credential name in `grant` or `revoke` is refused;
+configure it under `projects.<identity>.bros.<target>` in the host's `~/.bro.json` instead.
 
 The quest's **talk** is a separate least-authority knob.
 The child gets `worker.say` by default;
@@ -111,11 +109,6 @@ Grant `worker.question` when the work may need a decision, approval, or missing 
 Grant summoner rights only when someone will keep the watch armed and act on those messages.
 The Bash client takes repeatable or comma-separated `--talk <right>` values;
 the tool client takes a `talk` list.
-
-The harness and LLM knobs above answer to that same bound, since the driving loop they pick brings credentials of its own:
-what the pair adds on top of the target's default scope has to be in your scope too, so where summons run natively a session running under the bro harness cannot ask for a `claude` child unless its own launch hydrated the Claude OAuth token.
-Relay that denial like any other
-— the fix is on the user's launch line, not in the request.
 
 Exception — set the timeout unprompted when the child's run is open-ended:
 a full-cycle dev child (a [[fix]] run through [[run pr]] and the review watch, or a [[run pr]] re-entry) idles for human review latency, so the default kills it mid-watch.
@@ -227,7 +220,7 @@ The summoner still needs either party-start permit because the human launch star
 Relay the token to the user as the ready-to-paste interactive command
 — `ride along --summoned <token> <target>`
 — and note they may instead run `ride solo --summoned <token> <target>` for a one-shot request without an interactive terminal.
-They may add their own launch flags (`--unboxed`, `--llm`, `--hold`, `--workspace`, a claude/bro harness).
+They may add their own launch flags (`--unboxed`, `--llm`, `--hold`, `--workspace`, `--cred`, credential `--grant`/`--revoke`, or a claude/bro harness).
 The prompt you passed becomes the session's first message;
 the child bases on this workspace's HEAD *at the moment they launch* (or the `--into` ref you gave).
 
@@ -264,8 +257,9 @@ If the user asked for a follow-up action on the answer, continue with it.
   the fix is relaunching `ride solo|along` (or `ask` / `call` / `dive-in`) with `--grant @<target>`
   — tell the user that;
   nothing in-session can widen it.
-  A summoned bro starts from its own static seeds under the project and host configuration layers, then the summon request's grant/revoke layer.
-  Its onward denials are fixed at the summon that spawned it, so change the request or the applicable configuration rather than retrying it unchanged.
+  A summoned bro's onward authority starts from its own static seeds under the project and host configuration layers, then the request's `@bro` and permit overrides.
+  Its credentials come from the target bro's applicable host configuration, not from the request.
+  Change the relevant source rather than retrying unchanged.
 - **Raised / error** — the target ran but couldn't fulfill the request;
   the reason is the failure text.
   Relay it — rephrasing the prompt or picking another target is a user decision.
