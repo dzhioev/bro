@@ -667,8 +667,8 @@ class TestSummonedLaunch:
         'prompt': 'work this out with the user',
         'may_summon': ['bro'],
         'permits': ['bro.party.start.boxed'],
-        'grant': ['aws'],
-        'revoke': ['openai'],
+        'grant': ['@bro'],
+        'revoke': [':bro.party.join'],
         'summoner': {'trail_id': 'T1'},
         'repo': None,
         'into': None,
@@ -682,8 +682,8 @@ class TestSummonedLaunch:
       assert ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', 'dev']) == 0
     spec = start.call_args.args[0]
     assert spec.prompt == 'work this out with the user'
-    assert spec.grant == ['aws']
-    assert spec.revoke == ['openai']
+    assert spec.grant == ['@bro']
+    assert spec.revoke == [':bro.party.join']
     assert spec.runtime_bundle == '/runtime'
     assert start.call_args.kwargs['summoned'] == pending
 
@@ -695,7 +695,7 @@ class TestSummonedLaunch:
   def test_user_credential_overrides_layer_on_the_records(self, pending):
     with patch('ride.cli.start_session', return_value=0) as start:
       ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--grant', 'github', 'dev'])
-    assert start.call_args.args[0].grant == ['aws', 'github']
+    assert start.call_args.args[0].grant == ['@bro', 'github']
 
   def test_the_partys_env_is_the_manual_childs_own(self, pending):
     with patch('ride.cli.start_session', return_value=0) as start:

@@ -234,9 +234,6 @@ class Host(Protocol):
   @property
   def artifacts(self) -> ArtifactResolver: ...
 
-  @property
-  def credential_kinds(self) -> frozenset[str]: ...
-
 
 class WorkerType(ABC):
   name: str
