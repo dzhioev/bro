@@ -28,6 +28,7 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
 ## Components
 
 - `build_context.py` — normalized, separate runtime and project-image contexts, and the pinned Claude Code version every managed session runs;
+  moving the pin includes `run-tests --only llm`, which probes the model-input channels Claude Code records;
   path attachments read the working tree, URL attachments the resolved commit
 - `docker.py` — runtime/project image hashing and builds, plus lazy per-ride container-runtime resolution with the daemon mount preflight;
   broker-free launch descriptions, root-bounded bind validation, loopback-only published ports, container creation, scoped-store copy, member-exec preparation and checked in-container kills,

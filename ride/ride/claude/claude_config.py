@@ -97,7 +97,7 @@ _SESSION_SETTINGS_JSON: dict = {
   'cleanupPeriodDays': 36500,
   # claude's own default is on
   'autoMemoryEnabled': False,
-  'env': {'DISABLE_AUTOUPDATER': '1'},
+  'env': {'DISABLE_AUTOUPDATER': '1', 'DISABLE_TELEMETRY': '1'},
 }
 
 # the explicit per-session ~/.claude.json base: no onboarding prompts, no
