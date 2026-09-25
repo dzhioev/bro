@@ -128,7 +128,6 @@ class _NoArtifacts:
 class _Host:
   peers: PeerFacts
   artifacts: ArtifactResolver
-  credential_kinds: frozenset[str]
 
 
 class _RunDirectories:
@@ -186,7 +185,7 @@ def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
     root_path=tmp_path / 'root',
   )
   facts.bind_journal(broker.journal)
-  host = _Host(facts, _NoArtifacts(), frozenset())
+  host = _Host(facts, _NoArtifacts())
   control = LaunchControl(
     ride='benchmark-e2e',
     types={BENCHMARK: BenchmarkType(host)},

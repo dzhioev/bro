@@ -828,9 +828,11 @@ The summon surfaces are wrappers over `launch {type: bro, …}`, the same reques
 The target runs as a one-shot, non-TTY session that either starts a party of its own or joins the summoner’s party.
 A *manual* summon instead has the user launch the child themselves either interactively or one-shot;
 see "Manual summon" below.
-The child's credential set, summon allow-list, and permits come from its own seeds and project/host layers under the request's `grant`/`revoke` layer, never by inheriting the summoner's sets.
+The child's credentials come from its own bro, harness, model, and project/host configuration, as for a root launch with no credential flags.
+A request carrying a credential name in `grant` or `revoke` is refused and points to `projects.<identity>.bros.<bro>` in the host config.
+The child's summon allow-list and permits come from its own seeds and project/host layers under the request's `@bro` and `:permit` overrides, never by inheriting the summoner's sets.
 The root launch's `--env` additions are the one input every started child and joined member does inherit, as facts about the environment the party runs in.
-An explicit request grant is bounded by the corresponding credential, target, or permit the summoner holds.
+An explicit request grant is bounded by the corresponding target or permit the summoner holds.
 It runs under the harness the request names, or the launch's `[tool.bro] summon-harness` when it names none.
 Both harnesses run `do-ride solo …`:
 `bro` spawns the target's own LLM process there, while `claude` starts a one-shot managed Claude Code session of the target persona.
@@ -877,8 +879,9 @@ underneath it are two client surfaces over the same request, each split into the
   The forwarded fields are `--timeout <s>` / `--into <ref>` / `--hold <level>` / `--grant <name>` / `--revoke <name>` / `--share <ref>` / `--talk <right>` / `--harness <name>` plus the LLM flags;
   an omitted hold leaves the child's unattended default.
   `--share` hands the child read access to an artifact ref — see "Sharing artifacts between peers".
-  Grant/revoke and the LLM flags shape the child exactly as they shape a managed run — see the shared launch flags above — except that a summon may only widen the child's credential scope with what the summoning session itself holds,
-  whether it names the credential outright or reaches it through `--harness`/the LLM flags.
+  Grant/revoke shape the child's onward authority with `@bro` and `:permit` values only.
+  Harness and LLM flags shape the child's driving loop without answering to the summoner's credentials;
+  the target's own host-config entry supplies whatever credentials that choice needs.
   A blocking wait rides through child says.
   When `worker.question` is granted, a child's question instead prints on stdout and exits 4 so the summoner gets a turn;
   stderr names the question and the exact `quest say <quest> '<answer>' --reply-to <question>` command that answers it.
@@ -943,7 +946,7 @@ The registration is acknowledged with an `accepted` mark once the token is claim
 The summoner relays `<runtime>/venv/bin/ride along --summoned <token> <target>` as the default launch command for an interactive session, using the ride's own host runtime.
 For a one-shot request, the user can instead run `<runtime>/venv/bin/ride solo --summoned <token> <target>` and leave the run unattended.
 Both are otherwise normal launches
-— boxed or unboxed, either harness, the user's own `--llm`/`--hold`/`--workspace`/`--cred`
+— boxed or unboxed, either harness, the user's own `--llm`/`--hold`/`--workspace`/`--cred` and credential `--grant`/`--revoke`
 — except they start no broker of their own.
 The omitted hold follows the selected mode's default:
 `along` is attended when boxed and guided when unboxed, while `solo` is unattended.
@@ -951,8 +954,9 @@ The launcher puts the summoner's provisioned channel in `BROKER_UPSTREAM`, and t
 Its own nested summons therefore route through the summoner's control with per-peer authorization.
 The request fixes what the summoner authorized
 — the target bro, the prompt (delivered as the session's first message), the root session's repository attachment, the base (the request's `into` ref, or the summoner's workspace HEAD read at launch, like a spawned child's at its spawn),
-the child's resolved `may_summon`, permits, and quest talk, the request's credential grant/revoke seeds, and the party's `--env` additions.
-The launch's own `--cred` and credential `--grant`/`--revoke` layer may adjust its material, but `@bro` and `:permit` overrides are refused because the control enforces the sets it resolved at request time.
+the child's resolved `may_summon`, permits, and quest talk, and the party's `--env` additions.
+The pending record carries no credential seeds.
+The launch's own `--cred` and credential `--grant`/`--revoke` layer shapes its material, while `@bro` and `:permit` overrides are refused because the control enforces the sets it resolved at request time.
 `--env` is refused as well:
 the control stamps the party's additions on every summon the child makes, so the child carries exactly those.
 Launch-owned request fields (`timeout`/`hold`/`llm`/`harness`/`party`/`isolation`) are refused at the request:
@@ -966,8 +970,8 @@ The child still completes the broker attach revision check after re-execution, s
 A second launch on the same token fails loudly (two sessions must not share one channel), and a summon that ends unclaimed (root teardown, a failure) discards it, so a stale token fails the launch with the reason.
 The claim records the user-chosen workspace name beside it (`claimed/<token>.json`), which is how the host attributes the manual peer
 — the base-ref source for the child's own summons and the tree its artifact mints resolve against
-— so attribution comes from the launch machinery on the launcher, never from anything the child says on the wire (before the claim, a nested summon from the child is denied with a retry hint,
-and its credential grants are always denied as unattributable — its actual scope was computed by its own launch).
+— so attribution comes from the launch machinery on the launcher, never from anything the child says on the wire.
+Before the claim, a nested summon from the child is denied with a retry hint.
 The child announces the trail mark (`{trail_id}`)
 — the Claude runner from its trail watch, the native chat surface on its first turn.
 The `answer` service tool is mounted in every summoned session with a channel.
@@ -985,28 +989,24 @@ the token works with `quest check` / `quest list` / `quest watch`, reading as ru
 
 Host side, `PeerFacts` (`ride/ride/peer_facts.py`) holds a generic `WorkerFacts` row keyed by the mission a peer undertakes:
 type, workspace and optional joined-member name, permits, expected/artifact-view state, published ports, and a type-owned extension.
-The bro extension carries its name, effective allow-list, credential-scope inputs, and resolved placement.
+The bro extension carries its name, effective allow-list, and resolved placement.
 The journal's host-anchored mission seeds the root row;
 an authorized launch adds its worker row before starting, with a started bro’s channel-named workspace, a joined bro’s inherited workspace plus channel-named member, or the claimed workspace for an expected bro filled at launch.
 Every owner resolves through one join
 — peer to undertaken mission through the dispatcher's worker binding, then mission to facts row
 — and depth is the journal ancestry length.
 `LaunchControl` (`ride/ride/launch_control.py`) validates the common request and `BroType` (`ride/ride/bro_worker.py`) authorizes the summon against that row's extension.
-A child's allow-list and permit set are its static seeds under the project and host configuration layers, then its request's matching grant/revoke values.
+A child's allow-list and permit set are its static seeds under the project and host configuration layers, then its request's matching `@bro` and `:permit` values.
 The configured layers are idempotent;
 a malformed or no-op request override is denied outright.
 Summons chain transitively wherever the seeds chain, and widening is always explicit and bounded by the summoner:
 its own list never passes through
 — only what its request names
 — and it may only name bros it is itself allowed to summon, so authority only narrows down a chain.
-The credential half of the same flags is bounded against the scope computed from the same row (the root row carries its launch-hydrated scope;
-a summoned peer's is recomputed from its recorded scope inputs) and applied in the summon lowering against the child's computed scope, where a bad override fails the launch instead.
-`harness` and `llm` answer to that same credential bound without naming a credential, since the driving loop they select contributes credentials of its own:
-what the request's pair adds on top of the target's default scope under the launch's summon harness must be in the summoner's set too,
-so where summons run natively a bro-harness session cannot ask for a claude child unless its own launch hydrated `claude_code`.
-Only that delta is bounded
-— the target's declared credentials are what the allow-list entry already sanctions, and a summoner routinely holds none of them.
-Resolving the pair on the loop also settles the recipe:
+Credential names in a request's grant or revoke list are denied at the request boundary with the target bro's host-config entry as the remedy.
+The lowering computes the child's scope from that bro, the requested harness and model, and the applicable configuration without launch credential flags.
+The summoner's credential scope therefore never enters peer facts or authorization.
+Resolving the harness and LLM pair on the loop still settles the recipe:
 one the named harness cannot run is denied at the request rather than failing the spawn.
 A peer the control cannot attribute a bro to is denied, and the launch-resolved depth cap guards against seed cycles recursing through real containers.
 The root sits at depth 0, and a request that would create a child past the configured `summon-depth` is denied.

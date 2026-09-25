@@ -183,7 +183,6 @@ class TestBrokerStartedParty:
         summon_depth=4,
         summon_harness='claude',
         session_env={'IS_SANDBOX': '1'},
-        credential_scope=_scope(),
         container_runtime=MagicMock(),
         runtime_bundle=MagicMock(),
       )
@@ -198,7 +197,6 @@ class TestBrokerStartedParty:
       ride.artifacts.view_mount('ws', 'ws', PurePosixPath(CONTAINER_ARTIFACTS_ROOT)),
     )
     assert captured['workspace'] is workspace
-    assert captured['credential_scope'] == _scope()
 
   def test_wraps_an_unboxed_root_as_a_process_spec(self, monkeypatch, tmp_path):
     captured: dict = {}
@@ -224,7 +222,6 @@ class TestBrokerStartedParty:
         summon_depth=2,
         summon_harness='bro',
         session_env={},
-        credential_scope=_scope(),
         container_runtime=MagicMock(),
         runtime_bundle=MagicMock(),
       )

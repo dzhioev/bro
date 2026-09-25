@@ -37,7 +37,6 @@ def _run_via_broker(
   summon_depth: int,
   summon_harness: str,
   session_env: Mapping[str, str],
-  credential_scope: ScopedSecrets,
   container_runtime: ContainerRuntimeResolver,
   runtime_bundle: RuntimeBundle,
 ) -> int:
@@ -80,7 +79,6 @@ def _run_via_broker(
     summon_depth=summon_depth,
     summon_harness=summon_harness,
     session_env=session_env,
-    credential_scope=credential_scope,
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
   )
@@ -140,7 +138,6 @@ def run_started_party(
       summon_depth=summon_depth,
       summon_harness=summon_harness,
       session_env=session_env,
-      credential_scope=credential_scope,
       container_runtime=container_runtime,
       runtime_bundle=runtime_bundle,
     )
