@@ -417,8 +417,6 @@ class Recorder:
     """settle the trail this transcript records into and return the verdict;
     None when the resolver declines to adopt the segment yet."""
     body: dict[str, Any] = {'records': []}
-    if self.session.git_record is not None:
-      body['launch_context'] = [self.session.git_record]
     request = BlazeRequest(
       harness='claude',
       version=configs.VERSION,
@@ -431,6 +429,7 @@ class Recorder:
         'harness_version': 'unknown',
       },
       location=self.session.location,
+      git=self.session.git,
       body=body,
       bro=os.environ.get('RIDE_BRO'),
       hold=session_hold(),

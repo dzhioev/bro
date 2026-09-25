@@ -390,6 +390,7 @@ class TestRecorderStampsTheManagedSession:
   def test_a_run_outside_a_managed_session_carries_no_session_facts(self, monkeypatch):
     payload = self._blaze(monkeypatch)
     assert 'location' not in payload
+    assert 'git' not in payload
     assert 'ride_command' not in payload['native']
     assert 'launch_context' not in payload['body']
 
@@ -401,6 +402,8 @@ class TestRecorderStampsTheManagedSession:
       'RIDE_HOST_WORKSPACE': '/home/u/ws/tree',
       'RIDE_ISOLATION': 'boxed',
       'RIDE_COMMAND': 'ride solo --harness bro dev p',
+      'RIDE_REPO': '/source/bro',
+      'RIDE_REPO_URL': 'https://example.test/dzhioev/bro.git',
       'RIDE_BRANCH': 'workspace-ws',
       'RIDE_BASE_SHA': 'abc',
     }.items():
@@ -411,4 +414,5 @@ class TestRecorderStampsTheManagedSession:
     payload = self._blaze(monkeypatch)
     assert payload['location'] == session.location
     assert payload['native']['ride_command'] == 'ride solo --harness bro dev p'
-    assert payload['body']['launch_context'] == [session.git_record]
+    assert payload['git'] == session.git
+    assert 'launch_context' not in payload['body']
