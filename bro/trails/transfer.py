@@ -63,7 +63,7 @@ class LayoutSource:
     return self._store.stored_rows(trail_id)
 
   def launch_context(self, trail_id: str) -> Optional[Any]:
-    return self._store.stored_launch_context(trail_id)
+    return None
 
   def tool(self, sha256: str) -> Optional[Any]:
     try:
