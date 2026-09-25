@@ -4,7 +4,7 @@ import json
 from collections.abc import Callable
 from typing import Any, Optional
 
-from bro.trails import formats, importing, rows
+from bro.trails import backends, formats, importing, rows
 from bro.trails.server import dynamo_types
 from bro.trails.store import delete_manifest
 
@@ -213,7 +213,21 @@ class Operations:
     names: dict[str, str] = {}
     values: dict[str, Any] = {}
     assignments: list[str] = []
+    folded_native = fields.get('native')
+    if not isinstance(folded_native, dict):
+      raise ValueError('folded native state must be an object')
     for index, (key, value) in enumerate(fields.items()):
+      if key == 'native':
+        names['#native'] = 'native'
+        for native_index, (native_key, native_value) in enumerate(value.items()):
+          if native_key == 'context_s3':
+            continue
+          name = f'#native_field{native_index}'
+          placeholder = f':native_field{native_index}'
+          names[name] = native_key
+          values[placeholder] = _ddb(native_value)
+          assignments.append(f'#native.{name} = {placeholder}')
+        continue
       name = f'#field{index}'
       placeholder = f':field{index}'
       names[name] = key
@@ -227,6 +241,10 @@ class Operations:
       name = f'#remove{index}'
       names[name] = key
       removals.append(name)
+    for index, key in enumerate(sorted(backends.SERVER_DERIVED_NATIVE_FIELDS - set(folded_native))):
+      name = f'#native_remove{index}'
+      names[name] = key
+      removals.append(f'#native.{name}')
     update = 'SET ' + ', '.join(assignments)
     if len(removals) > 0:
       update += ' REMOVE ' + ', '.join(removals)
