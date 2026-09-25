@@ -33,6 +33,23 @@ _TRAILS_TABLE = 'headers'
 _STEPS_TABLE = 'steps'
 _UUID_INDEX = dynamo_store.UUID_INDEX
 _BUCKET = 'bucket'
+_GIT_CONTEXT = [
+  {
+    'kind': 'git',
+    'subtype': 'state',
+    'title': 'git state at launch',
+    'fields': {'branch': 'workspace-stage', 'base_sha': 'base-sha'},
+  }
+]
+_LEGACY_CONTEXT = [
+  {
+    'kind': 'system_prompt',
+    'subtype': 'ride_injected',
+    'title': 'ride-injected system prompt (--append-system-prompt)',
+    'content': 'prompt',
+  },
+  *_GIT_CONTEXT,
+]
 
 
 def _attribute_type(attribute: dynamo_store.DynamoAttribute) -> str:
@@ -246,6 +263,29 @@ def _claude_payload(**overrides) -> dict:
 
 def _blaze_claude(store: dynamo_store.DynamoStore, **overrides) -> str:
   return (store.blaze(BlazeRequest.from_wire(_claude_payload(**overrides))))['id']
+
+
+def _add_stored_context(
+  store: dynamo_store.DynamoStore,
+  dynamo: Tables,
+  trail_id: str,
+  context: list[dict],
+  *,
+  native: bool = False,
+) -> str:
+  key = dynamo_types.context_key(trail_id)
+  store._s3.put_object(
+    Bucket=_BUCKET,
+    Key=key,
+    Body=json.dumps(context).encode(),
+    ContentType='application/json',
+  )
+  with dynamo.editing_header(trail_id) as header:
+    if native:
+      header['native']['context_s3'] = key
+    else:
+      header['context_s3'] = key
+  return key
 
 
 def test_build_dynamo_store_uses_the_shared_credential_shape(monkeypatch):
@@ -508,14 +548,11 @@ def test_header_migration_rederives_storage_attributes_from_the_upgraded_header(
       'llm': {'type': 'openai', 'model': 'gpt-5'},
       'segment': 'old-segment',
     },
-    body={
-      'records': [{'kind': 'system_prompt', 'body': 'prompt', 'turn_index': 0}],
-      'launch_context': {'cwd': '/workspace'},
-    },
+    body={'records': [{'kind': 'system_prompt', 'body': 'prompt', 'turn_index': 0}]},
   )
+  context_key = _add_stored_context(store, dynamo, trail_id, _LEGACY_CONTEXT)
   with dynamo.editing_header(trail_id) as header:
     header.pop('format')
-  context_key = dynamo.headers[trail_id]['context_s3']
 
   def upgrade_header(header: dict) -> dict:
     logical = {
@@ -544,7 +581,7 @@ def test_header_migration_rederives_storage_attributes_from_the_upgraded_header(
   assert migrated['segment'] == 'new-segment'
   assert migrated['context_s3'] == context_key
   assert context_key in s3.objects
-  assert store.get_launch_context(trail_id) == {'cwd': '/workspace'}
+  assert store.get_launch_context(trail_id) == _LEGACY_CONTEXT
   assert [trail['id'] for trail in store.list_trails(forked_from=new_parent)['trails']] == [
     trail_id
   ]
@@ -811,24 +848,51 @@ def test_the_mid_write_probe_is_one_keys_only_uuid_query(components):
   assert {query['ProjectionExpression'] for query in probes} == {'trail_id'}
 
 
-def test_launch_context_is_harness_neutral_and_end_adds_no_step(components):
+def test_launch_context_is_folded_without_an_s3_object_and_end_adds_no_step(components):
   store, dynamo, s3 = components
   trail_id = _blaze_bro(
     store,
     body={
       'records': [{'kind': 'system_prompt', 'body': 'prompt'}],
-      'launch_context': {'cwd': '/workspace'},
+      'launch_context': _LEGACY_CONTEXT,
     },
   )
   header = dynamo.headers[trail_id]
-  assert header['context_s3'] == dynamo_types.context_key(trail_id)
+  assert header['git'] == {'branch': 'workspace-stage', 'base_sha': 'base-sha'}
+  assert header['legacy_launch_context'] == _LEGACY_CONTEXT
+  assert 'context_s3' not in header
   assert 'context_s3' not in header['native']
-  assert store.get_launch_context(trail_id) == {'cwd': '/workspace'}
-  assert dynamo_types.context_key(trail_id) in s3.objects
+  assert store.get_launch_context(trail_id) == _LEGACY_CONTEXT
+  assert dynamo_types.context_key(trail_id) not in s3.objects
   before = len(dynamo.steps)
   store.end_trail(trail_id=trail_id, reason='ok', detail=None)
   assert len(dynamo.steps) == before
   assert dynamo.headers[trail_id]['end']['reason'] == 'ok'
+
+
+@pytest.mark.parametrize('native_pointer', (False, True), ids=('context_s3', 'native.context_s3'))
+def test_old_context_pointer_is_folded_for_the_reader_route(components, native_pointer):
+  store, dynamo, _ = components
+  trail_id = _blaze_bro(store)
+  _add_stored_context(
+    store,
+    dynamo,
+    trail_id,
+    _LEGACY_CONTEXT,
+    native=native_pointer,
+  )
+
+  recorded_header = store.get_trail(trail_id)
+  assert 'context_s3' not in recorded_header
+  assert 'context_s3' not in recorded_header['native']
+  assert store.get_launch_context(trail_id) == _LEGACY_CONTEXT
+  assert store.begin_import(recorded_header, launch_context=_LEGACY_CONTEXT) == {
+    'trail_id': trail_id,
+    'extent': 1,
+    'created': False,
+  }
+  assert 'git' not in dynamo.headers[trail_id]
+  assert 'legacy_launch_context' not in dynamo.headers[trail_id]
 
 
 def test_the_segment_key_and_lineage_head_ride_the_header_writes(components):
@@ -865,11 +929,23 @@ def test_attaching_reopens_the_trail_conditional_on_the_extent_it_verified(compo
     ],
   }
 
-  attached = store.blaze(BlazeRequest.from_wire(_claude_payload(lineage=lineage, version='3')))
+  attached = store.blaze(
+    BlazeRequest.from_wire(
+      _claude_payload(
+        lineage=lineage,
+        version='3',
+        body={'records': [], 'launch_context': _GIT_CONTEXT},
+      )
+    )
+  )
 
   assert (attached['id'], attached['extent'], attached['chunks']) == (trail_id, 1, [[1, 1]])
   assert dynamo.headers[trail_id]['end'] is None
   assert dynamo.headers[trail_id]['version'] == '3'
+  assert dynamo.headers[trail_id]['git'] == {
+    'branch': 'workspace-stage',
+    'base_sha': 'base-sha',
+  }
   assert dynamo.headers[trail_id]['native']['lineage_head']['tail'] == [
     [0, 'uuid-1', payload_sha256(recorded)]
   ]
@@ -1019,7 +1095,7 @@ def test_delete_manifests_the_trail_and_takes_only_what_it_owns(components):
     store,
     body={
       'records': [{'kind': 'system_prompt', 'body': 'prompt'}],
-      'launch_context': {'cwd': '/workspace'},
+      'launch_context': _LEGACY_CONTEXT,
     },
   )
   large = 'x' * (dynamo_store.SPILLOVER_THRESHOLD_BYTES + 1)
@@ -1058,10 +1134,7 @@ def _recorded_source(root) -> tuple[LocalStore, str, dict, list[dict], str]:
         'interactive': False,
         'surface': 'ask',
         'native': {'llm': {'type': 'openai', 'model': 'gpt-5'}},
-        'body': {
-          'records': [{'kind': 'system_prompt', 'body': 'prompt'}],
-          'launch_context': {'cwd': '/workspace'},
-        },
+        'body': {'records': [{'kind': 'system_prompt', 'body': 'prompt'}]},
       }
     )
   )['id']
@@ -1114,25 +1187,55 @@ def test_import_derives_storage_attributes_from_an_upgraded_recorded_header(
   assert stored['segment'] == 'segment'
 
 
+@pytest.mark.parametrize('pointer_location', ('header', 'native'))
+def test_import_drops_a_source_stores_legacy_context_pointer(
+  components, tmp_path, pointer_location
+):
+  store, dynamo, s3 = components
+  source, trail_id, header, rows, sha256 = _recorded_source(tmp_path)
+  source_key = f'source/{trail_id}/context.json'
+  if pointer_location == 'header':
+    header['context_s3'] = source_key
+  else:
+    header['native']['context_s3'] = source_key
+
+  store.import_trail(
+    header,
+    rows,
+    launch_context=_LEGACY_CONTEXT,
+    tools={sha256: source.get_tool(sha256)},
+  )
+
+  stored = dynamo.headers[trail_id]
+  assert 'context_s3' not in stored
+  assert 'context_s3' not in stored['native']
+  assert source_key not in s3.objects
+  assert store.get_launch_context(trail_id) == _LEGACY_CONTEXT
+
+
 def test_import_stores_rows_verbatim_and_serves_the_trail_as_recorded(components, tmp_path):
   store, dynamo, s3 = components
   source, trail_id, header, rows, sha256 = _recorded_source(tmp_path)
   tools = {sha256: source.get_tool(sha256)}
 
-  result = store.import_trail(header, rows, launch_context={'cwd': '/workspace'}, tools=tools)
-  again = store.import_trail(header, rows, launch_context={'cwd': '/workspace'}, tools=tools)
+  result = store.import_trail(header, rows, launch_context=_LEGACY_CONTEXT, tools=tools)
+  again = store.import_trail(header, rows, launch_context=_LEGACY_CONTEXT, tools=tools)
 
   assert result == {'trail_id': trail_id, 'extent': 2}
   assert again == {'trail_id': trail_id, 'extent': 2, 'duplicate': True}
   item = dynamo.headers[trail_id]
   assert item[dynamo_store.GSI_PK_ATTRIBUTE] == 'trail'
-  assert item['context_s3'].startswith(f'trails/{trail_id}/context')
-  assert item['context_s3'] in s3.objects
+  assert 'context_s3' not in item
+  assert not any(key.startswith(f'trails/{trail_id}/context') for key in s3.objects)
   served = store.get_trail(trail_id)
-  assert served == header
+  assert served == {
+    **header,
+    'git': {'branch': 'workspace-stage', 'base_sha': 'base-sha'},
+    'legacy_launch_context': _LEGACY_CONTEXT,
+  }
   assert 'importing' not in item
   assert not {dynamo_store.GSI_PK_ATTRIBUTE, 'context_s3'} & set(served)
-  assert store.get_launch_context(trail_id) == {'cwd': '/workspace'}
+  assert store.get_launch_context(trail_id) == _LEGACY_CONTEXT
   assert dynamo.steps[trail_id, 1]['body_s3'] in s3.objects
   assert store.get_steps(trail_id)['steps'] == rows
   assert store.get_tool(sha256) == tools[sha256]
@@ -1146,7 +1249,7 @@ def dynamo_headers(store: dynamo_store.DynamoStore) -> _Items:
 def test_import_requires_the_tool_blobs_the_bucket_holds(components, tmp_path):
   store, _, s3 = components
   source, trail_id, header, rows, sha256 = _recorded_source(tmp_path)
-  store.begin_import(header, launch_context={'cwd': '/workspace'})
+  store.begin_import(header, launch_context=_LEGACY_CONTEXT)
 
   with pytest.raises(ValueError, match='neither carried nor stored'):
     store.import_rows(trail_id, 0, rows)
@@ -1190,17 +1293,17 @@ def test_a_begin_that_loses_the_id_leaves_the_winner_its_own_context(
     # the first look finds no header, and a rival lands one before the put
     if len(looked) == 0:
       looked.append(looked_up)
-      store.begin_import(header, launch_context={'cwd': '/winner'})
+      store.begin_import(header, launch_context=[{'kind': 'winner'}])
       return None
     return optional_header(looked_up)
 
   monkeypatch.setattr(store, '_optional_header', raced)
 
-  with pytest.raises(TrailCollision, match='launch context differs'):
-    store.begin_import(header, launch_context={'cwd': '/loser'})
+  with pytest.raises(TrailCollision, match='header differs'):
+    store.begin_import(header, launch_context=[{'kind': 'loser'}])
 
-  assert store.get_launch_context(trail_id) == {'cwd': '/winner'}
-  assert len([key for key in s3.objects if key.startswith(f'trails/{trail_id}/context')]) == 1
+  assert store.get_launch_context(trail_id) == [{'kind': 'winner'}]
+  assert not any(key.startswith(f'trails/{trail_id}/context') for key in s3.objects)
 
 
 def test_import_matches_a_live_trail_by_identity_and_refuses_another(components):

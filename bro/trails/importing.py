@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Any, Optional
 
 from bro.trails import backends, formats, model, rows
+from bro.trails.launch_context import fold_launch_context
 from bro.trails.model import BlazeRequest
 from bro.trails.store import collision, refusing_invalid_requests
 
@@ -13,6 +14,7 @@ _HEADER_PROJECTIONS = frozenset({'usage', 'models'})
 # the header fields the row fold owns
 _FOLDED_HEADER_FIELDS = frozenset({'extent', 'turn_count', 'last_billed_message_id'})
 _IMPORT_STATE = 'importing'
+_LEGACY_CONTEXT_POINTER = 'context_s3'
 _PARENT_POINTERS = (('forked_from', 'forked from'), ('summoned_by', 'summoned by'))
 
 
@@ -37,12 +39,12 @@ def imported_header(header: dict, adapter: backends.Adapter) -> dict:
   recorded_native = {
     key: value
     for key, value in header['native'].items()
-    if key not in backends.SERVER_DERIVED_NATIVE_FIELDS
+    if key not in backends.SERVER_DERIVED_NATIVE_FIELDS and key != _LEGACY_CONTEXT_POINTER
   }
   upgraded_native = {
     key: value
     for key, value in upgraded['native'].items()
-    if key not in backends.SERVER_DERIVED_NATIVE_FIELDS
+    if key not in backends.SERVER_DERIVED_NATIVE_FIELDS and key != _LEGACY_CONTEXT_POINTER
   }
   if 'git' in upgraded:
     model.validate_git(upgraded['git'])
@@ -68,7 +70,7 @@ def imported_header(header: dict, adapter: backends.Adapter) -> dict:
     for key, value in header.items()
     if key not in _HEADER_PROJECTIONS
     and key not in _FOLDED_HEADER_FIELDS
-    and key not in {'end', _IMPORT_STATE}
+    and key not in {'end', _IMPORT_STATE, _LEGACY_CONTEXT_POINTER}
   }
   imported.update(
     {
@@ -133,12 +135,16 @@ def verify_same_import(
   launch_context: Optional[Any],
 ) -> None:
   """Raise unless the trail already stored is the one being imported: the
-  same identity and launch context, then the same import under way, or a
-  sealed trail with the recorded extent and end."""
-  if import_identity(existing, adapter) != import_identity(imported, adapter):
+  same identity after folding either launch context, then the same import under
+  way, or a sealed trail with the recorded extent and end."""
+  existing_folded = (
+    fold_launch_context(existing, existing_context) if existing_context is not None else existing
+  )
+  imported_folded = (
+    fold_launch_context(imported, launch_context) if launch_context is not None else imported
+  )
+  if import_identity(existing_folded, adapter) != import_identity(imported_folded, adapter):
     raise collision(trail_id, 'header differs')
-  if existing_context != launch_context:
-    raise collision(trail_id, 'launch context differs')
   announced = imported[_IMPORT_STATE]
   pending = import_state(existing)
   if pending is None:
@@ -218,7 +224,7 @@ def sealed_fields(
   recorded_native = {
     key: value
     for key, value in header['native'].items()
-    if key not in backends.SERVER_DERIVED_NATIVE_FIELDS
+    if key not in backends.SERVER_DERIVED_NATIVE_FIELDS and key != _LEGACY_CONTEXT_POINTER
   }
   recorded_native.update(
     {

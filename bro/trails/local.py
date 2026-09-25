@@ -16,6 +16,11 @@ from typing import Any, Optional
 
 from bro.base.lulid import lulid
 from bro.trails import backends, formats, importing, model, rows
+from bro.trails.launch_context import (
+  fold_launch_context,
+  fold_request_launch_context,
+  rebuild_launch_context,
+)
 from bro.trails.lineage import LineageDecision
 from bro.trails.model import (
   UNREPORTED_END_INFERENCE,
@@ -160,8 +165,8 @@ class LocalStore(TrailsStore):
 
   def get_launch_context(self, trail_id: str) -> Optional[Any]:
     with self._locked(trail_id, shared=True):
-      formats.upgrade_header(self._read_header(trail_id))
-      return self._read_launch_context(trail_id)
+      header = formats.upgrade_header(self._read_header(trail_id))
+    return rebuild_launch_context(header)
 
   def get_tool(self, sha256: str) -> Any:
     try:
@@ -185,10 +190,6 @@ class LocalStore(TrailsStore):
     """The rows as stored, each in the format it was written in."""
     with self._locked(trail_id, shared=True):
       return self._read_stored_rows(trail_id)
-
-  def stored_launch_context(self, trail_id: str) -> Optional[Any]:
-    with self._locked(trail_id, shared=True):
-      return self._read_launch_context(trail_id)
 
   def blaze(self, request: BlazeRequest) -> dict:
     adapter = self._adapter(request.harness)
@@ -233,10 +234,13 @@ class LocalStore(TrailsStore):
       }
       if forked_from is not None:
         header['forked_from'] = forked_from
-      for field in ('bro', 'hold', 'summoned_by', 'subject', 'location'):
+      for field in ('bro', 'hold', 'summoned_by', 'subject', 'location', 'git'):
         value = getattr(request, field)
         if value is not None:
           header[field] = value
+      if 'launch_context' in request.body:
+        with refusing_invalid_requests('blaze body'):
+          header = fold_launch_context(header, request.body['launch_context'])
       state = rows.AggregateState(header, adapter)
       prepared = rows.build_rows(
         trail_id=trail_id,
@@ -249,9 +253,6 @@ class LocalStore(TrailsStore):
       )
       header.update(rows.state_fields(state, len(prepared)))
       self._write_rows(trail_id, prepared, append=False)
-      launch_context = request.body.get('launch_context')
-      if launch_context is not None:
-        _atomic_json(directory / 'context.json', launch_context)
       _atomic_json(directory / 'header.json', header)
       (directory / '.lock').touch()
     return backends.blaze_result(trail_id, started_at, len(prepared), decision)
@@ -267,6 +268,8 @@ class LocalStore(TrailsStore):
       self._migrate_locked(trail_id, header)
       if _extent(header) != extent:
         return {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
+      with refusing_invalid_requests('blaze body'):
+        request = fold_request_launch_context(request, trail_id)
       restamp = backends.attached_header(header, request)
       header.update(restamp.values)
       for field in restamp.removed:
@@ -396,7 +399,10 @@ class LocalStore(TrailsStore):
   def begin_import(self, header: dict, *, launch_context: Optional[Any] = None) -> dict:
     with refusing_invalid_requests('imported header'):
       adapter = self._adapter(header['harness'])
-      imported = importing.imported_header(header, adapter)
+      folded_header = (
+        fold_launch_context(header, launch_context) if launch_context is not None else header
+      )
+      imported = importing.imported_header(folded_header, adapter)
     trail_id = imported['id']
     directory = self._trail_directory(trail_id)
     importing.require_parents(
@@ -408,8 +414,6 @@ class LocalStore(TrailsStore):
     staging = self.staging_directory / f'{trail_id}.{lulid()}'
     with _creating_directory(staging):
       _atomic_bytes(staging / 'steps.jsonl', b'')
-      if launch_context is not None:
-        _atomic_json(staging / 'context.json', launch_context)
       _atomic_json(staging / 'header.json', imported)
       (staging / '.lock').touch()
       try:
@@ -422,10 +426,14 @@ class LocalStore(TrailsStore):
     shutil.rmtree(staging)
     with self._locked(trail_id, shared=True):
       existing = self._read_header(trail_id)
-      existing_context = self._read_launch_context(trail_id)
       stored = len(self._read_row_lines(trail_id))
     importing.verify_same_import(
-      trail_id, adapter, existing, imported, existing_context, launch_context
+      trail_id,
+      adapter,
+      existing,
+      imported,
+      rebuild_launch_context(formats.upgrade_header(existing)),
+      launch_context,
     )
     return {'trail_id': trail_id, 'extent': stored, 'created': False}
 
@@ -516,12 +524,6 @@ class LocalStore(TrailsStore):
     if not is_sha256(sha256):
       raise ValueError(f'invalid tool digest: {sha256!r}')
     return self.trails_directory / 'tools' / f'{sha256}.json'
-
-  def _read_launch_context(self, trail_id: str) -> Optional[Any]:
-    path = self._trail_directory(trail_id) / 'context.json'
-    if not path.is_file():
-      return None
-    return json.loads(path.read_text())
 
   def _require_tools(self, digests: set[str]) -> None:
     for digest in sorted(digests):
