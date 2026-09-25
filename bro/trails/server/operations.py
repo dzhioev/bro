@@ -220,8 +220,6 @@ class Operations:
       if key == 'native':
         names['#native'] = 'native'
         for native_index, (native_key, native_value) in enumerate(value.items()):
-          if native_key == 'context_s3':
-            continue
           name = f'#native_field{native_index}'
           placeholder = f':native_field{native_index}'
           names[name] = native_key
@@ -329,7 +327,7 @@ class Operations:
     }
 
   def delete_trail(self, header: dict) -> dict:
-    """Remove a trail's rows, spilled bodies, launch context and header, in that
+    """Remove a trail's rows, spilled bodies and header, in that
     order — the header goes last so an interrupted delete leaves a trail the same
     call finishes off rather than rows nothing points at."""
     trail_id = header['id']
@@ -358,9 +356,6 @@ class Operations:
     # tool blobs are content-addressed and shared across trails, so they are not
     # this trail's to remove
     objects = [row['body_s3'] for row in stored if row.get('body_s3') is not None]
-    context = header.get('context_s3') or header.get('native', {}).get('context_s3')
-    if context is not None:
-      objects.append(context)
     for key in objects:
       self._s3.delete_object(Bucket=self._bucket, Key=key)
     self._dynamo.delete_item(

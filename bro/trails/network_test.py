@@ -339,26 +339,6 @@ class TestRetryBehavior:
       c.get_trail('T1')
 
 
-class TestLaunchContext:
-  def test_unwraps_the_context_document(self, monkeypatch):
-    fake = _install_fake_connection(monkeypatch)
-    fake.queue((200, b'{"launch_context": [{"title": "git state"}]}'))
-    assert _client().get_launch_context('T1') == [{'title': 'git state'}]
-    method, path, _, _ = fake.requests[0]
-    assert (method, path) == ('GET', '/v1/trails/T1/context')
-
-  def test_absent_context_is_none(self, monkeypatch):
-    fake = _install_fake_connection(monkeypatch)
-    fake.queue((200, b'{"launch_context": null}'))
-    assert _client().get_launch_context('T1') is None
-
-  def test_missing_trail_is_not_found(self, monkeypatch):
-    fake = _install_fake_connection(monkeypatch)
-    fake.queue((404, json.dumps(trail_not_found_body('missing')).encode()))
-    with pytest.raises(TrailNotFound):
-      _client().get_launch_context('missing')
-
-
 class TestWrites:
   def test_blaze_posts_the_payload_verbatim(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
@@ -440,24 +420,18 @@ class TestWrites:
   def test_admin_operations_use_the_server_seam(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((200, b'{"format": 1, "migrated_rows": 0}'))
-    fake.queue((200, b'{"trail_id": "T1", "pointer_keys": {}}'))
-    fake.queue((200, b'{"trail_id": "T1", "pointer_keys": {}}'))
     fake.queue((200, b'{"extent": 2}'))
     fake.queue((200, b'{"ok": true}'))
     fake.queue((200, b'{"extent": 1}'))
     fake.queue((200, b'\n\n{"ok": false}'))
     client = _client()
     assert client.migrate_trail('T1') == {'format': INITIAL_TRAIL_FORMAT, 'migrated_rows': 0}
-    assert client.fold_context('T1', dry_run=True)['trail_id'] == 'T1'
-    assert client.drop_context('T1')['trail_id'] == 'T1'
     assert client.recompute('T1') == {'extent': 2}
     assert client.check('T1') == {'ok': True}
     assert client.relink('T1', {'trail_id': 'parent', 'step_id': 4}, 1) == {'extent': 1}
     assert client.check() == {'ok': False}
     assert [request[1] for request in fake.requests] == [
       '/v1/admin/trails/T1/migrate',
-      '/v1/admin/trails/T1/fold-context',
-      '/v1/admin/trails/T1/drop-context',
       '/v1/admin/trails/T1/recompute',
       '/v1/admin/trails/check',
       '/v1/admin/trails/T1/relink',
@@ -475,7 +449,7 @@ class TestWrites:
     header = {'id': 'T1', 'harness': 'bro', 'end': {'at': 'now', 'reason': 'ok'}}
     rows = [{'trail_id': 'T1', 'step_id': 0}, {'trail_id': 'T1', 'step_id': 1}]
 
-    begun = client.begin_import(header, launch_context={'cwd': '/workspace'})
+    begun = client.begin_import(header)
     appended = client.import_rows('T1', 0, rows, tools={'0' * 64: []})
     sealed = client.seal_import('T1')
     tool = client.get_tool('0' * 64)

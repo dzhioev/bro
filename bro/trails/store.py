@@ -254,9 +254,6 @@ class TrailsStore(ABC):
     )
 
   @abstractmethod
-  def get_launch_context(self, trail_id: str) -> Optional[Any]: ...
-
-  @abstractmethod
   def blaze(self, request: BlazeRequest) -> dict: ...
 
   @abstractmethod
@@ -297,13 +294,13 @@ class TrailsStore(ABC):
     store holds none."""
 
   @abstractmethod
-  def begin_import(self, header: dict, *, launch_context: Optional[Any] = None) -> dict:
+  def begin_import(self, header: dict) -> dict:
     """Create the trail a recorded `header` describes, unsealed and marked with
     the extent and `end` it was recorded with, its rows to follow through
     `import_rows`; returns `{trail_id, extent, created}`. The parents the header
     points at must already be stored. An existing trail answers as itself when
     it is the same import under way, or a sealed trail with the same header,
-    launch context, extent and end; any other is a `TrailCollision`."""
+    extent and end; any other is a `TrailCollision`."""
 
   @abstractmethod
   def import_rows(
@@ -332,7 +329,6 @@ class TrailsStore(ABC):
     header: dict,
     rows: list[dict],
     *,
-    launch_context: Optional[Any] = None,
     tools: Optional[dict[str, Any]] = None,
   ) -> dict:
     """Import one recorded trail whole: begin, every row in chunks, seal. The
@@ -341,7 +337,7 @@ class TrailsStore(ABC):
     first chunk naming them."""
     if header.get('extent') != len(rows):
       raise ValueError(f'header records {header.get("extent")!r} rows, {len(rows)} given')
-    trail_id = self.begin_import(header, launch_context=launch_context)['trail_id']
+    trail_id = self.begin_import(header)['trail_id']
     available = {} if tools is None else tools
     for offset, chunk in import_chunks(rows):
       carried = {

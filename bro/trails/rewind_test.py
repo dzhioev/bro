@@ -122,9 +122,6 @@ class FakeClient:
     limit = filters.get('max_items')
     yield from selected[: limit if limit is not None else len(selected)]
 
-  def get_launch_context(self, trail_id: str) -> Any:
-    raise AssertionError(f'launch context read for {trail_id}')
-
 
 def _client(fake: FakeClient) -> TrailsStore:
   return cast(TrailsStore, fake)

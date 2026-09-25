@@ -29,13 +29,6 @@ def store(tmp_path, monkeypatch):
   return local
 
 
-def test_fold_contexts_requires_exactly_one_target_form(store):
-  with pytest.raises(SystemExit, match='name --all or at least one trail id'):
-    main(['trails', 'fold-contexts'])
-  with pytest.raises(SystemExit, match='name --all or at least one trail id'):
-    main(['trails', 'fold-contexts', '--all', 'T1'])
-
-
 def test_migrate_reports_the_current_format(store, capsys):
   trail_id = _blaze(store)
 
