@@ -19,7 +19,6 @@ from bro.trails.display import (
   HarnessEvent,
   InlineStepBody,
   InterimAssistantText,
-  LaunchContextEntry,
   LiveDisplayObserver,
   LiveSource,
   NativeStep,
@@ -44,7 +43,6 @@ class FakeClient:
     self.headers: dict[str, dict[str, Any]] = {}
     self.messages: dict[str, list[dict[str, Any]]] = {}
     self.steps: dict[str, list[dict[str, Any]]] = {}
-    self.contexts: dict[str, Any] = {}
     self.children: dict[str, list[dict[str, Any]]] = {}
 
   def get_trail(self, trail_id: str) -> dict[str, Any]:
@@ -72,7 +70,7 @@ class FakeClient:
     ]
 
   def get_launch_context(self, trail_id: str) -> Any:
-    return self.contexts.get(trail_id)
+    raise AssertionError(f'launch context read for {trail_id}')
 
   def iter_trails(self, **filters: Any):
     parent_id = filters.get('forked_from')
@@ -313,18 +311,25 @@ class TestCollection:
 
 
 class TestStructures:
-  def test_header_context_native_step_list_and_lineage_have_typed_records(self):
+  def test_header_native_step_list_and_lineage_have_typed_records(self):
     fake = FakeClient()
+    legacy_context = [{'title': 'recorded prompt', 'content': 'legacy text'}]
     fake.headers['root'] = _header(
-      'root', native={'llm': {'model': 'gpt-5'}, 'step_counts_by_kind': {'end': 0, 'user': 1}}
+      'root',
+      native={'llm': {'model': 'gpt-5'}, 'step_counts_by_kind': {'end': 0, 'user': 1}},
+      git={
+        'repo': '/source/bro',
+        'url': 'https://example.test/bro',
+        'branch': 'feature',
+        'base_sha': 'abc123',
+      },
+      legacy_launch_context=legacy_context,
     )
     fake.headers['child'] = _header('child', forked_from={'trail_id': 'root', 'step_id': 2})
-    fake.contexts['root'] = [{'title': 'git state', 'fields': {'branch': 'feature'}}]
     fake.children['root'] = [fake.headers['child']]
     adapter = RecordedAdapter(_client(fake))
 
     metadata = adapter.trail_metadata(fake.headers['root'])
-    context = adapter.launch_context_records('root', fake.contexts['root'])
     inline = adapter.native_step(
       'root', {'step_id': 0, 'kind': 'user_input', 'ts': None, 'body': 'hello'}
     )
@@ -342,7 +347,11 @@ class TestStructures:
 
     assert isinstance(metadata, TrailMetadata)
     assert ('step kinds', {'user': 1}) in metadata.fields
-    assert len(context) == 1 and isinstance(context[0], LaunchContextEntry)
+    assert ('repo', '/source/bro') in metadata.fields
+    assert ('url', 'https://example.test/bro') in metadata.fields
+    assert ('branch', 'feature') in metadata.fields
+    assert ('base sha', 'abc123') in metadata.fields
+    assert ('legacy launch context', legacy_context) in metadata.fields
     assert isinstance(inline, NativeStep) and isinstance(inline.body, InlineStepBody)
     assert isinstance(spilled.body, SpilledStepBody)
     assert spilled.body.size == 42

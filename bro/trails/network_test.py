@@ -492,7 +492,7 @@ class TestWrites:
       ('GET', '/v1/tools/' + '0' * 64),
     ]
     sent = [json.loads(body) for _, _, body, _ in fake.requests[:4] if body is not None]
-    assert sent[0] == {'header': header, 'launch_context': {'cwd': '/workspace'}}
+    assert sent[0] == {'header': header}
     assert sent[2] == {'offset': 0, 'rows': rows, 'tools': {'0' * 64: []}}
     assert sent[3] == {}
 

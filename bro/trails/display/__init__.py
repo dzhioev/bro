@@ -43,7 +43,6 @@ from bro.trails.display.records import (
   HarnessEvent,
   InlineStepBody,
   InterimAssistantText,
-  LaunchContextEntry,
   LineageNode,
   LiveSource,
   LLMCall,

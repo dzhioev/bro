@@ -63,7 +63,7 @@ class FakeTrailsStore:
     ]
 
   def get_launch_context(self, trail_id: str):
-    return None
+    raise AssertionError(f'launch context read for {trail_id}')
 
   def resolve_body(self, body: Any) -> Any:
     descriptor = spill_descriptor(body)

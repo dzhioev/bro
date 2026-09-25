@@ -156,7 +156,6 @@ _DEFAULT_LABEL_PAIRS = (
   (RecordKind.ERROR, 'error'),
   (RecordKind.HARNESS_EVENT, 'harness event'),
   (RecordKind.TRAIL_METADATA, 'trail'),
-  (RecordKind.LAUNCH_CONTEXT, 'session context'),
   (RecordKind.SEGMENT_BOUNDARY, 'resumed'),
   (RecordKind.NATIVE_STEP, 'step'),
   (RecordKind.TRAIL_LIST_ROW, 'trail'),
@@ -283,7 +282,6 @@ def _build_presets() -> Mapping[PresetName, DisplayConfig]:
     (RecordKind.TOOL_RESULT, 'ASSISTANT'),
     (RecordKind.ERROR, 'ERROR'),
     (RecordKind.NOTICE, 'NOTICE'),
-    (RecordKind.LAUNCH_CONTEXT, 'SESSION CONTEXT'),
   )
   log_limits = ContentLimits(
     normal=4000,
@@ -340,7 +338,6 @@ def _build_presets() -> Mapping[PresetName, DisplayConfig]:
     RecordKind.HARNESS_EVENT,
   } | {
     RecordKind.TRAIL_METADATA,
-    RecordKind.LAUNCH_CONTEXT,
     RecordKind.SEGMENT_BOUNDARY,
     RecordKind.NOTICE,
   }
