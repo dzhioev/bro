@@ -16,11 +16,6 @@ from typing import Any, Optional
 
 from bro.base.lulid import lulid
 from bro.trails import backends, formats, importing, model, rows
-from bro.trails.launch_context import (
-  fold_launch_context,
-  fold_request_launch_context,
-  rebuild_launch_context,
-)
 from bro.trails.lineage import LineageDecision
 from bro.trails.model import (
   UNREPORTED_END_INFERENCE,
@@ -163,11 +158,6 @@ class LocalStore(TrailsStore):
     messages = rows.project_messages(self._adapter(header['harness']), page['steps'], types)
     return {'messages': messages, 'next': page['next'], 'through': page['through']}
 
-  def get_launch_context(self, trail_id: str) -> Optional[Any]:
-    with self._locked(trail_id, shared=True):
-      header = formats.upgrade_header(self._read_header(trail_id))
-    return rebuild_launch_context(header)
-
   def get_tool(self, sha256: str) -> Any:
     try:
       payload = self._tool_path(sha256).read_bytes()
@@ -197,6 +187,8 @@ class LocalStore(TrailsStore):
       adapter.validate_create(request.native)
       if request.harness == 'bro' and request.bro is None:
         raise ValueError('bro is required for the bro harness')
+    with refusing_invalid_requests('blaze body'):
+      opened = adapter.open(request.body)
     decision = None
     forked_from = request.forked_from
     native = dict(request.native)
@@ -212,8 +204,6 @@ class LocalStore(TrailsStore):
       native.update(rows.inherited_native(adapter, lambda: self.get_trail(parent_id)))
     if decision is not None:
       native.update(rows.minted_native(native, decision.chunks))
-    with refusing_invalid_requests('blaze body'):
-      records = adapter.open(request.body).records
     trail_id = lulid()
     started_at = _now_iso()
     directory = self._trail_directory(trail_id)
@@ -238,14 +228,11 @@ class LocalStore(TrailsStore):
         value = getattr(request, field)
         if value is not None:
           header[field] = value
-      if 'launch_context' in request.body:
-        with refusing_invalid_requests('blaze body'):
-          header = fold_launch_context(header, request.body['launch_context'])
       state = rows.AggregateState(header, adapter)
       prepared = rows.build_rows(
         trail_id=trail_id,
         offset=0,
-        payloads=records,
+        payloads=opened.records,
         adapter=adapter,
         default_timestamp=started_at,
         state=state,
@@ -268,8 +255,6 @@ class LocalStore(TrailsStore):
       self._migrate_locked(trail_id, header)
       if _extent(header) != extent:
         return {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
-      with refusing_invalid_requests('blaze body'):
-        request = fold_request_launch_context(request, trail_id)
       restamp = backends.attached_header(header, request)
       header.update(restamp.values)
       for field in restamp.removed:
@@ -396,13 +381,10 @@ class LocalStore(TrailsStore):
       shutil.rmtree(directory)
     return {'trail_id': trail_id, 'extent': len(steps), 'manifest': str(manifest)}
 
-  def begin_import(self, header: dict, *, launch_context: Optional[Any] = None) -> dict:
+  def begin_import(self, header: dict) -> dict:
     with refusing_invalid_requests('imported header'):
       adapter = self._adapter(header['harness'])
-      folded_header = (
-        fold_launch_context(header, launch_context) if launch_context is not None else header
-      )
-      imported = importing.imported_header(folded_header, adapter)
+      imported = importing.imported_header(header, adapter)
     trail_id = imported['id']
     directory = self._trail_directory(trail_id)
     importing.require_parents(
@@ -432,8 +414,6 @@ class LocalStore(TrailsStore):
       adapter,
       existing,
       imported,
-      rebuild_launch_context(formats.upgrade_header(existing)),
-      launch_context,
     )
     return {'trail_id': trail_id, 'extent': stored, 'created': False}
 

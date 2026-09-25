@@ -213,6 +213,9 @@ def _bro_classify(record: ParsedRecord) -> Classification:
 
 
 def _bro_open(body: dict) -> OpenedBody:
+  unknown = set(body) - {'records'}
+  if len(unknown) > 0:
+    raise ValueError(f'unknown bro body fields: {sorted(unknown)}')
   records = body.get('records')
   if not isinstance(records, list):
     raise ValueError('bro body.records must be a list')
@@ -389,6 +392,9 @@ def _claude_classify(record: ParsedRecord) -> Classification:
 
 
 def _claude_open(body: dict) -> OpenedBody:
+  unknown = set(body) - {'records'}
+  if len(unknown) > 0:
+    raise ValueError(f'unknown claude body fields: {sorted(unknown)}')
   records = body.get('records')
   if not isinstance(records, list) or not all(isinstance(record, str) for record in records):
     raise ValueError('claude body.records must be a list of strings')

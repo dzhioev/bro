@@ -62,9 +62,6 @@ class FakeTrailsStore:
       if message['source']['step_id'] < extent
     ]
 
-  def get_launch_context(self, trail_id: str):
-    raise AssertionError(f'launch context read for {trail_id}')
-
   def resolve_body(self, body: Any) -> Any:
     descriptor = spill_descriptor(body)
     if descriptor is not None:

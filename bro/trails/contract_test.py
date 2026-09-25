@@ -13,7 +13,7 @@ from aiohttp import web
 from bro.trails import formats, model
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest, payload_sha256, tools_sha256
-from bro.trails.network import NetworkStore
+from bro.trails.network import HTTPStatusError, NetworkStore
 from bro.trails.server.auth import TokenTable
 from bro.trails.server.server import create_app
 from bro.trails.store import (
@@ -28,38 +28,6 @@ from bro.trails.store import (
 
 _TOKEN = 'contract-token'
 _CONTRACT_LOCAL_STORES: dict[int, LocalStore] = {}
-_GIT_RECORD = {
-  'kind': 'git',
-  'subtype': 'state',
-  'title': 'git state at launch',
-  'fields': {'branch': 'workspace-stage', 'base_sha': 'base-sha'},
-}
-_PROMPT_RECORD = {
-  'kind': 'system_prompt',
-  'subtype': 'ride_injected',
-  'title': 'ride-injected system prompt (--append-system-prompt)',
-  'content': 'injected prompt',
-}
-_MCP_RECORD = {
-  'kind': 'mcp',
-  'subtype': 'servers',
-  'title': 'MCP servers',
-  'fields': {'servers': ['persona:bro-dev']},
-}
-_INSTRUCTIONS_RECORD = {
-  'kind': 'instructions',
-  'subtype': 'root',
-  'title': 'AGENTS.md (root)',
-  'content': '# Rules',
-}
-_PPP_CONTEXT = [_GIT_RECORD, _PROMPT_RECORD, _MCP_RECORD, _INSTRUCTIONS_RECORD]
-_KAP_GIT_RECORD = {
-  **_GIT_RECORD,
-  'fields': {'branch': 'workspace-stage', 'base_ref': 'origin/master'},
-}
-_KAP_MCP_RECORD = {**_MCP_RECORD, 'fields': {'mode': 'persona', 'servers': ['persona:bro-dev']}}
-_KAP_CONTEXT = [_PROMPT_RECORD, _KAP_GIT_RECORD, _KAP_MCP_RECORD, _INSTRUCTIONS_RECORD]
-_BRO_CONTEXT = [_GIT_RECORD]
 
 
 def _token_table(*permissions: str) -> TokenTable:
@@ -389,82 +357,16 @@ class TestTrailsStoreContract:
       sibling,
     }
 
-  def test_new_writer_git_is_stored_and_rebuilt_for_an_old_reader(self, trails_store):
-    git = {
-      'repo': '/home/example/repo',
-      'url': 'https://example.test/repo',
-      'branch': 'workspace-stage',
-      'base_sha': 'base-sha',
-    }
-    trail_id = trails_store.blaze(_bro_request(git=git))['id']
-
-    assert trails_store.get_trail(trail_id)['git'] == git
-    assert trails_store.get_launch_context(trail_id) == [_GIT_RECORD]
-
-  @pytest.mark.parametrize(
-    ('writer', 'context', 'expected_git', 'keeps_legacy'),
-    (
-      ('ppp', _PPP_CONTEXT, {'branch': 'workspace-stage', 'base_sha': 'base-sha'}, True),
-      ('kap', _KAP_CONTEXT, {'branch': 'workspace-stage'}, True),
-      ('bro', _BRO_CONTEXT, {'branch': 'workspace-stage', 'base_sha': 'base-sha'}, False),
-    ),
-  )
-  def test_old_writer_launch_context_folds_into_the_header(
-    self, trails_store, writer, context, expected_git, keeps_legacy
-  ):
-    if writer == 'bro':
-      request = _bro_request(
-        body={
-          'records': [{'kind': 'system_prompt', 'body': 'prompt'}],
-          'launch_context': context,
-        }
-      )
-    else:
-      request = _claude_request(context=context)
-
-    trail_id = trails_store.blaze(request)['id']
-
-    header = trails_store.get_trail(trail_id)
-    assert header['git'] == expected_git
-    assert ('legacy_launch_context' in header) is keeps_legacy
-    assert trails_store.get_launch_context(trail_id) == context
-    header_path, _ = _stored_paths(trails_store, trail_id)
-    assert not (header_path.parent / 'context.json').exists()
-
-  def test_old_writer_attach_restamps_git_from_its_launch_context(self, trails_store):
-    first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
-    second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
-    trail_id = trails_store.blaze(_claude_request(first, context=_KAP_CONTEXT))['id']
-
-    attached = trails_store.blaze(
-      _claude_request(context=_PPP_CONTEXT, lineage=_lineage(first, second))
+  def test_launch_context_blazes_are_refused_for_both_harnesses(self, trails_store):
+    old_context = [{'kind': 'git', 'subtype': 'state'}]
+    requests = (
+      _bro_request(body={'records': [], 'launch_context': old_context}),
+      _claude_request(context=old_context),
     )
 
-    assert attached['id'] == trail_id
-    assert trails_store.get_trail(trail_id)['git'] == {
-      'branch': 'workspace-stage',
-      'base_sha': 'base-sha',
-    }
-    assert trails_store.get_launch_context(trail_id) == _KAP_CONTEXT
-
-  def test_malformed_old_writer_launch_context_is_a_store_neutral_refusal(self, trails_store):
-    with pytest.raises(InvalidRequest, match='launch context must be a list'):
-      trails_store.blaze(_claude_request(context={}))
-
-  def test_malformed_old_writer_attach_is_a_store_neutral_refusal(self, trails_store):
-    first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
-    second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
-    trails_store.blaze(_claude_request(first))
-
-    with pytest.raises(InvalidRequest, match='launch context must be a list'):
-      trails_store.blaze(_claude_request(context={}, lineage=_lineage(first, second)))
-
-  def test_launch_context_is_absent_without_git_or_legacy_records(self, trails_store):
-    trail_id = trails_store.blaze(_bro_request())['id']
-
-    assert trails_store.get_launch_context(trail_id) is None
-    with pytest.raises(TrailNotFound):
-      trails_store.get_launch_context('missing')
+    for request in requests:
+      with pytest.raises(InvalidRequest, match=r"unknown .* body fields: \['launch_context'\]"):
+        trails_store.blaze(request)
 
   def test_blaze_resolves_harness_lineage(self, trails_store):
     first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
@@ -588,14 +490,13 @@ _TOOLS = [{'type': 'function', 'name': 'read'}]
 _TOOLS_DIGEST = tools_sha256(_TOOLS)
 
 
-def _recorded(store: TrailsStore, trail_id: str) -> tuple[dict, list[dict], object]:
-  """What an export reads through the contract: the served header, the served
-  rows with their bodies resolved, and the launch context."""
+def _recorded(store: TrailsStore, trail_id: str) -> tuple[dict, list[dict]]:
+  """The served header and rows an export reads through the contract."""
   header = store.get_trail(trail_id)
   rows = [
     {**row, 'body': store.resolve_body(row.get('body'))} for row in store.iter_steps(trail_id)
   ]
-  return header, rows, store.get_launch_context(trail_id)
+  return header, rows
 
 
 def _record_source(root: Path, **overrides) -> tuple[LocalStore, str]:
@@ -614,55 +515,31 @@ def _record_source(root: Path, **overrides) -> tuple[LocalStore, str]:
   return source, trail_id
 
 
-def _old_import_begin(store: TrailsStore, header: dict, launch_context: object) -> dict:
-  if isinstance(store, NetworkStore):
-    return store._send(
-      'POST',
-      f'/v1/admin/trails/{header["id"]}/import',
-      {'header': header, 'launch_context': launch_context},
-    )
-  return store.begin_import(header, launch_context=launch_context)
-
-
-def _old_import(
-  store: TrailsStore,
-  header: dict,
-  rows: list[dict],
-  launch_context: object,
-  *,
-  tools: dict[str, object],
-) -> dict:
-  trail_id = _old_import_begin(store, header, launch_context)['trail_id']
-  store.import_rows(trail_id, 0, rows, tools=tools)
-  return store.seal_import(trail_id)
-
-
 class TestImportContract:
-  def test_old_importer_context_folds_and_reimport_is_idempotent(self, trails_store, tmp_path):
+  def test_import_payload_with_launch_context_is_refused(self, trails_store, tmp_path):
+    if not isinstance(trails_store, NetworkStore):
+      pytest.skip('the import payload is the network contract')
     source, trail_id = _record_source(tmp_path / 'old-importer')
-    header, rows, _ = _recorded(source, trail_id)
+    header, _ = _recorded(source, trail_id)
 
-    imported = _old_import(
-      trails_store,
-      header,
-      rows,
-      _KAP_CONTEXT,
-      tools={_TOOLS_DIGEST: _TOOLS},
-    )
-    repeated = _old_import(
-      trails_store,
-      header,
-      rows,
-      _KAP_CONTEXT,
-      tools={_TOOLS_DIGEST: _TOOLS},
-    )
+    with pytest.raises(InvalidRequest) as refused:
+      trails_store._send(
+        'POST',
+        f'/v1/admin/trails/{trail_id}/import',
+        {'header': header, 'launch_context': []},
+      )
 
-    assert imported == {'trail_id': trail_id, 'extent': 3}
-    assert repeated == {'trail_id': trail_id, 'extent': 3, 'duplicate': True}
-    stored = trails_store.get_trail(trail_id)
-    assert stored['git'] == {'branch': 'workspace-stage'}
-    assert stored['legacy_launch_context'] == _KAP_CONTEXT
-    assert trails_store.get_launch_context(trail_id) == _KAP_CONTEXT
+    assert "unknown fields: ['launch_context']" in str(refused.value)
+
+  def test_context_route_is_retired(self, trails_store):
+    if not isinstance(trails_store, NetworkStore):
+      pytest.skip('the retired route is the network contract')
+    trail_id = trails_store.blaze(_bro_request())['id']
+
+    with pytest.raises(HTTPStatusError) as missing:
+      trails_store._get(f'/v1/trails/{trail_id}/context', {})
+
+    assert missing.value.status == 404
 
   def test_reads_a_tool_blob_by_digest(self, trails_store):
     trail_id = trails_store.blaze(_bro_request())['id']
@@ -680,11 +557,9 @@ class TestImportContract:
 
   def test_an_imported_trail_is_served_as_it_was_recorded(self, trails_store, tmp_path):
     source, trail_id = _record_source(tmp_path / 'source')
-    header, rows, context = _recorded(source, trail_id)
+    header, rows = _recorded(source, trail_id)
 
-    result = trails_store.import_trail(
-      header, rows, launch_context=context, tools={_TOOLS_DIGEST: _TOOLS}
-    )
+    result = trails_store.import_trail(header, rows, tools={_TOOLS_DIGEST: _TOOLS})
 
     assert result == {'trail_id': trail_id, 'extent': 3}
     assert trails_store.get_trail(trail_id) == header
@@ -698,7 +573,7 @@ class TestImportContract:
 
   def test_an_import_restarts_over_what_the_store_already_holds(self, trails_store, tmp_path):
     source, trail_id = _record_source(tmp_path / 'source')
-    header, rows, _ = _recorded(source, trail_id)
+    header, rows = _recorded(source, trail_id)
     trails_store.begin_import(header)
     trails_store.import_rows(trail_id, 0, rows[:2], tools={_TOOLS_DIGEST: _TOOLS})
 
@@ -719,11 +594,11 @@ class TestImportContract:
 
   def test_a_sealed_trail_answers_only_the_import_it_was_recorded_as(self, trails_store, tmp_path):
     source, trail_id = _record_source(tmp_path / 'source')
-    header, rows, _ = _recorded(source, trail_id)
+    header, rows = _recorded(source, trail_id)
     trails_store.import_trail(header, rows, tools={_TOOLS_DIGEST: _TOOLS})
     other = LocalStore(tmp_path / 'other')
     other_id = other.blaze(_bro_request())['id']
-    other_header, other_rows, _ = _recorded(other, other_id)
+    other_header, other_rows = _recorded(other, other_id)
     trails_store.begin_import(other_header)
 
     with pytest.raises(TrailCollision, match='3 rows stored, 1 recorded'):
@@ -746,7 +621,7 @@ class TestImportContract:
 
   def test_a_different_trail_under_the_same_id_is_a_collision(self, trails_store, tmp_path):
     source, trail_id = _record_source(tmp_path / 'source')
-    header, rows, _ = _recorded(source, trail_id)
+    header, rows = _recorded(source, trail_id)
     trails_store.import_trail(header, rows, tools={_TOOLS_DIGEST: _TOOLS})
     changed = {**rows[1], 'body': 'changed', 'payload_sha256': payload_sha256('changed')}
 
@@ -754,15 +629,13 @@ class TestImportContract:
       trails_store.begin_import({**header, 'bro': 'other'})
     with pytest.raises(TrailCollision, match='row 1 differs'):
       trails_store.import_rows(trail_id, 0, [rows[0], changed, rows[2]])
-    with pytest.raises(TrailCollision, match='header differs'):
-      _old_import_begin(trails_store, header, [{'kind': 'elsewhere'}])
 
   def test_an_import_requires_parents_and_tool_blobs(self, trails_store, tmp_path):
     source = LocalStore(tmp_path / 'source')
     parent = source.blaze(_bro_request())['id']
     _, child = _record_source(tmp_path / 'source', forked_from={'trail_id': parent, 'step_id': 0})
-    parent_header, parent_rows, _ = _recorded(source, parent)
-    child_header, child_rows, _ = _recorded(source, child)
+    parent_header, parent_rows = _recorded(source, parent)
+    child_header, child_rows = _recorded(source, child)
 
     with pytest.raises(ValueError, match=f'forked from {parent}, which must be imported first'):
       trails_store.begin_import(child_header)
@@ -784,7 +657,7 @@ class TestImportContract:
 
   def test_an_import_refuses_a_corrupt_stored_tool_blob(self, trails_store, tmp_path):
     source, trail_id = _record_source(tmp_path / 'source')
-    header, rows, _ = _recorded(source, trail_id)
+    header, rows = _recorded(source, trail_id)
     trails_store.begin_import(header)
     local = (
       trails_store
@@ -802,7 +675,7 @@ class TestImportContract:
 
   def test_an_import_refuses_rows_the_adapter_refuses(self, trails_store, tmp_path):
     source, trail_id = _record_source(tmp_path / 'source')
-    header, rows, _ = _recorded(source, trail_id)
+    header, rows = _recorded(source, trail_id)
     trails_store.begin_import(header)
 
     with pytest.raises(InvalidRequest, match='user_input body must be a string'):
@@ -855,8 +728,8 @@ class TestImportContract:
       tmp_path / 'source',
       forked_from={'trail_id': parent, 'step_id': 0},
     )
-    parent_header, parent_rows, _ = _recorded(source, parent)
-    child_header, child_rows, _ = _recorded(source, child)
+    parent_header, parent_rows = _recorded(source, parent)
+    child_header, child_rows = _recorded(source, child)
     child_header['forked_from'] = {'parent': parent, 'ordinal': 0}
 
     def upgrade_header(header: dict) -> dict:
@@ -905,13 +778,12 @@ class TestImportContract:
     source = LocalStore(tmp_path / 'source')
     first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
     second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
-    minted = source.blaze(_claude_request(context=_PPP_CONTEXT, lineage=_lineage(first, second)))
+    minted = source.blaze(_claude_request(lineage=_lineage(first, second)))
     source.append_records(minted['id'], 0, [first, second])
-    header, rows, context = _recorded(source, minted['id'])
+    header, rows = _recorded(source, minted['id'])
 
-    trails_store.import_trail(header, rows, launch_context=context)
+    trails_store.import_trail(header, rows)
 
     imported = trails_store.get_trail(minted['id'])
     assert imported['native']['lineage_head']['cuts'] == minted['chunks']
     assert imported == header
-    assert trails_store.get_launch_context(minted['id']) == _PPP_CONTEXT
