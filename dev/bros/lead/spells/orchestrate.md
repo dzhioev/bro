@@ -6,15 +6,15 @@ This spell should be used when the user wants a large piece of work driven end t
 — "orchestrate this", "kick off the <X> feature", "let's design and build <big thing>", "drive this refactoring end to end", "resume the work at <url>".
 This session becomes the coordinator:
 it opens a root task as the single source of truth,
-then walks the work through design, review and planning, per-stage implementation, integration, and verification,
+then walks the work through design, review and planning, per-stage implementation, integration, rollout, and verification,
 running each phase in a session of its own
-— the design and planning phases as manual summons the user launches into an interactive session, the rest as summoned bros in started parties
+— the design and planning phases, and any rollout step a summon cannot carry, as manual summons the user launches, the rest as summoned bros in started parties
 — and recording each outcome on the root task before starting the next.
 It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.10.0
+version: 2.11.0
 ---
 
 # orchestrate
@@ -78,8 +78,8 @@ Never redo a completed phase.
    where several could take a phase, ask the user which.
    If a phase wants a different bro than the rest
    — the one that does rollouts, say
-   — settle that now too,
-   and say so up front when the list holds nobody who could run a phase, since the list is fixed at launch and only a relaunch widens it.
+   — settle that now too.
+   Then check every phase's summon the way you check any summon, all of them at once, so the user settles each way out before the work starts.
 3. `brog::create_task` with the name,
    tags,
    and a `## Goal` body stating in a few lines what the work must achieve.
@@ -97,7 +97,7 @@ Your own running record lives in the comment stream, not in a section.
 - `## Goal` — written at creation.
 - `## Design` — written by the design phase, finalized by the review-and-plan phase.
 - `## Implementation plan` — written by the review-and-plan phase:
-  the integration branch name plus the ordered stages, each linking its stage task.
+  the landings in order, each with its integration branch and its ordered stages linking their stage tasks, and a `### Rollout` when the work needs one to go live.
 - `## Design changelog` — appended by a stage when a design decision changes mid-build, so later stages and the history see it.
 - `## Verification` — appended by the verification phase:
   what it exercised against the shipped result, and the outcome.
@@ -113,7 +113,7 @@ Every phase below opens with its **launch line**
 — the knobs that phase needs;
 anything the line does not name takes the default.
 Design and review-and-plan are manual summons the user launches into an interactive session;
-the rest are summoned outright.
+the rest are summoned outright, bar the rollout steps your summon check leaves to a manual summon (phase 5).
 
 ### Summoned phases
 
@@ -135,9 +135,9 @@ this spell only says how a phase differs from a one-shot ask.
 - **Hold and effort.** Leave both at the summon defaults.
   A bro with no human channel either delivers or raises with a reason you relay, and these phases execute a settled plan rather than working one out
   — the thinking was bought in the phases before them.
-- **Scope.** A bro starts from its own credentials, not yours.
-  Grant only what a phase needs beyond them and only what you hold yourself:
-  a credential the phase must reach, or `@<bro>` when the phase has to hand work onward.{{when #may_summon contains eyebro}}
+- **Scope.** Your summon check settles what a phase needs.
+  Grant only what it needs beyond its bro's declarations and only what you hold yourself:
+  `@<bro>` when the phase has to hand work onward, or a party permit when it has to start sessions of its own.{{when #may_summon contains eyebro}}
 - **The eyebro.** Every phase that opens or lands a pull request gets it granted,
   under the name your banner's `may_summon` gives rather than `eyebro` itself:
   a child renders [[run pr]]'s and [[land]]'s reviewer steps only where its own allow-list carries one.{{end}}
@@ -188,6 +188,10 @@ A report of a blocker,
 an unmet prerequisite,
 or a design change is yours to resolve
 — fold the fix into the next phase's launch (an added grant, a corrected instruction) rather than reopening the finished one.
+
+Phases 3 to 5 run once per landing, in the plan's order:
+the landing's stages, its integration, then the rollout steps that follow it;
+verification comes after the last.
 
 ### 1 — design
 
@@ -253,42 +257,52 @@ the reviewer ends up holding the deepest understanding of the design, which is w
 > the page is the single source of truth and the repository copy is throwaway.{{end}}
 > Then plan the implementation of the design you just finalized and split it into stages
 > — one stage if the work is small.
+> Group the stages into landings, each a merge to master through an integration branch of its own:
+> one landing, unless the rollout needs steps between merges to master
+> — deploying what accepts both shapes before anything writes the new one, say.
 > For EACH stage call `brog::create_task` to open a stage task whose body carries:
 > the stage's goal and details;
 > "part of the multi-phase work tracked at [`<root-task-name>`](`<root-task-url>`) — read its `## Design` and `## Design changelog` before starting";
-> "land via [[run pr]] with its base argument set to `<integration-branch>`, so this PRs into the integration branch rather than master";
-> "when the PR merges, mark this task done — do not hold it for a rollout, the work rolls out once after integration";
+> "land via [[run pr]] with its base argument set to `<its landing's integration branch>`, so this PRs into the integration branch rather than master";
+> "when the PR merges, mark this task done — do not hold it for a rollout, the coordinator rolls the work out after its landing merges";
 > and "if you change a design decision mid-build, append it to the root task's `## Design changelog` for the history and the later stages".
+> The first stage of each later landing carries one more line, since its branch can only start from what the landing before it left on master:
+> "first create `<its landing's integration branch>` on origin from master, staying on your own workspace branch: `git fetch origin master && git push origin origin/master:refs/heads/<branch>`, skipped where origin already has it".
 > Every end-to-end route the design names is owed automated coverage by the last stage that completes it, and that stage's task names the routes it owes;
 > the verification phase confirms the shipped result against the real system and is never where a route runs for the first time.
-> Then establish the integration branch, named after the root task rather than left as the workspace's own:
+> Then establish the first landing's integration branch, every landing's named after the root task rather than left as the workspace's own:
 > `git fetch origin master && git reset --hard origin/master && git checkout -b integration/<root-task-id>-<short-slug> && git push -u origin HEAD`.
 > The prefix is what lets a repository write branch rules over the branches stages merge into, so the name is part of the contract, not decoration.
 > Finally write `## Implementation plan` on the root task (`brog::append_description`):
-> the integration branch name and the ordered stages, each linking its stage task.
+> the landings in order, each with its integration branch and its ordered stages linking their stage tasks,
+> and, when the work needs a rollout to go live, a `### Rollout` of ordered steps.
+> Each step carries its commands, the check that confirms it, its rollback, and the landing it follows,
+> and names the session that runs it:
+> the bro, its isolation, and the credentials it needs.
+> A step is the user's only where nothing but a human can do it, such as an approving review.
 > Do NOT implement code or open a PR{{when #may_summon contains eyebro}} other than the design review's{{end}},
 > and do not change any task's status.
 > Answer with what you changed in the design and why,{{when #may_summon contains eyebro}}
 > the closed design-review pull request,{{end}}
-> the stage list,
-> the integration branch name,
-> and any prerequisite implementation will still need.
+> the landings with their integration branches and stages,
+> the rollout steps with the session each names,
+> and any prerequisite implementation or rollout will still need.
 
 Outcome:
 a finalized `## Design`,
 stage tasks created and linked under `## Implementation plan`,
-the integration branch pushed,
+the first landing's integration branch pushed,
 and an answer carrying what changed and what the coordinator has to act on.
-Take material objections and open questions to the user before starting stage 1.
+Before starting stage 1, take to the user the material objections, the open questions, and whatever ways out your summon check finds for the rollout's steps.
 
 ### 3 — stages
 
-**Summon:** `into` the integration branch · `timeout` 28800 · `talk` `worker.question`{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}}
+**Summon:** `into` the landing's integration branch, or the commit the previous landing landed for the stage that creates that branch · `timeout` 28800 · `talk` `worker.question`{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}}
 
 The long timeout covers the PR review a phase ends on:
 it idles on human latency, and the summon default kills it mid-watch.
 
-Run them **in order, one at a time**:
+Run the landing's stages **in order, one at a time**:
 each stage builds on the branch state the previous one left.
 For each, summon the bro on the stage task:
 
@@ -310,9 +324,9 @@ the retry is a fresh summon on the same stage task.
 
 ### 4 — integrate
 
-**Summon:** `into` the integration branch · `timeout` 28800 · `talk` `worker.question`{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}} · `grant` `@<the bro that does rollouts>` when the work needs one to go live
+**Summon:** `into` the landing's integration branch · `timeout` 28800 · `talk` `worker.question`{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}}
 
-Once every stage task is done, tell the user what the last step needs from them:
+Once every stage task of the landing is done, tell the user what the last step needs from them:
 where master is a protected base, the approving review that lands the integration PR is theirs to give, and nobody in the run can supply it.
 Then summon:
 
@@ -325,7 +339,7 @@ Then summon:
 > the integration branch is never pushed again.
 > A repository that gates the branches stages merge into refuses every direct push to them, the rebase's included, so a phase that pushed the integration branch would be stuck with nothing to open a PR from
 > — and the two roles want separating anyway, since what stages merge into should not be the thing a merge to master rewrites.
-> Then open ONE pull request for all the stages together with [[run pr]] based on master and land it with [[land]].
+> Then open ONE pull request for all the landing's stages together with [[run pr]] based on master and land it with [[land]].
 > Its body names the stage pull requests and the integration branch their commits landed on
 > — the task's comments carry them
 > — so the reviewer reconciles those approvals instead of re-reading the stages.
@@ -337,20 +351,53 @@ Then summon:
 > — and land when the user's approval arrives.
 > Keep the task at `<root-task-url>` open whatever happens
 > — the coordinating session closes it after verification.
-> If the merged work needs a rollout to take effect, hand it off per [[land]]'s own rules and report what came back.
-> Answer with the merged PR,
-> the landed commit,
-> and the rollout outcome if there was one.
+> Roll nothing out, even where [[land]] would hand a deploy off:
+> the coordinating session runs the rollout as a phase of its own.
+> Answer with the merged PR and the landed commit.
 
 Outcome:
-the work on master as a single commit, rolled out if it needed one.
+the landing on master as a single commit.
 A phase whose time runs out waiting for that approval leaves the pull request open:
 re-fire it on that PR, which [[run pr]] resumes through its `pr` argument, rather than opening a second one.
-When the phase reports a rollout it could not hand off
-— nobody in its allow-list to do it
-— relay the exact command to the user and confirm it ran before verifying.
 
-### 5 — verify
+### 5 — roll out
+
+**Summon:** the bro the step names · `into` the commit its landing landed, as the integration phase answered it · `timeout` sized for the step · `talk` `worker.question`
+
+**Manual summon** where your summon check leaves the step to one:
+launched with what it lacks
+— `--grant <kind>` for a credential its bro does not declare, `--cred <kind>+<instance>` beside it where a non-default instance must be picked, and `--unboxed` only where the step needs the host
+
+Skip this phase when no `### Rollout` step follows the landing.
+Otherwise run the steps that follow it in order, one session each, a step starting once the previous step's check has passed.
+
+> Rollout step <n> of multi-phase work coordinated by another session.
+> Run step <n> of `### Rollout` on the task at `<root-task-url>` as written, then its check;
+> on a failed check, run the step's rollback and stop.
+> Record the outcome on that task (`brog::add_comment`, topic naming the step).
+> Do NOT change code, open a pull request, run any other step, or change the task status.
+> Answer with the check's result and whatever a later step must know.
+
+A manual step keeps the summon's `into` and `talk` on its request and is relayed like the manually summoned phases, its launch line carrying the scope it lacks:
+
+```
+ride along --summoned <token> <bro> <what the step lacks> --harness <claude|bro>
+```
+
+A step that needs this session gone first
+— an upgrade of the installation it runs on, say
+— cannot wait on a token, so hand the user the whole sequence instead, `<repo>` being your banner's `repo`:
+
+1. end this session;
+2. launch the step:
+   `ride along --repo <repo> --into <landed commit> <what the step lacks> <bro> '<step prompt>'`;
+3. once the step has recorded its outcome on the page, relaunch the coordinator fresh from your banner's `ride_command`, dropping its `--workspace` and `--into`, with a prompt naming the root task;
+   it resumes from that outcome.
+
+Outcome:
+every step's check passed and recorded on the page, or a failed step rolled back and surfaced to the user.
+
+### 6 — verify
 
 **Summon:** `into` `master`, which the work is on by then · `talk` `worker.question` · credentials from `projects.<identity>.bros.<the phase bro>` in the host config
 
@@ -371,7 +418,7 @@ Once the work is live
 A failed verification is not a close:
 surface it, and plan a fix stage with the user.
 
-### 6 — close
+### 7 — close
 
 **Closing the root task is yours alone**
 — no phase does it for you.
@@ -387,6 +434,10 @@ Don't leave finished work open.
   or write an instruction that only makes sense to someone who has read the diff
   — stop.
   That belongs in a phase.
+- If you find yourself about to hand the user commands to run
+  — a deploy, a migration, a host-side check
+  — stop.
+  That is a phase too, and the user's part in it is a launch line and the approvals only they can give.
 - If a phase's report contradicts the plan
   — a stage proved infeasible,
   the design moved materially
