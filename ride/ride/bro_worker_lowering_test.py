@@ -1109,7 +1109,7 @@ class TestClaudeSummonLowering:
   def claude_harness(self, lowering_harness, monkeypatch):
     from ride.claude.harness import CLAUDE
 
-    monkeypatch.setattr(CLAUDE, 'preflight_auth', lambda spec: None)
+    monkeypatch.setattr(CLAUDE, 'preflight_auth', lambda spec, store: None)
     monkeypatch.setattr(
       CLAUDE,
       'container_extras',
@@ -1278,7 +1278,9 @@ class TestClaudeSummonLowering:
   ):
     from ride.claude.harness import CLAUDE
 
-    monkeypatch.setattr(CLAUDE, 'preflight_auth', lambda spec: 'claude_code secret not resolvable')
+    monkeypatch.setattr(
+      CLAUDE, 'preflight_auth', lambda spec, store: 'claude_code secret not resolvable'
+    )
     with pytest.raises(ValueError, match='claude_code secret not resolvable'):
       _lower_boxed(self._launch(), 'broker-CH', _container_runtime(), _artifacts())
     with pytest.raises(ValueError, match='broker-CH'):

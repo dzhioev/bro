@@ -581,6 +581,20 @@ class TestScopeEvaluatesUnderTheLaunchSelection:
     assert 'payload' not in scoped.required
     assert 'gate' not in scoped.required | scoped.optional
 
+  def test_a_non_value_gate_load_failure_is_a_named_launch_scope_error(self, tmp_path, monkeypatch):
+    self._host(tmp_path, monkeypatch, bros={'scope-gated': {'creds': ['gate+reviewer']}})
+
+    def fail_load(self, path):
+      raise RuntimeError('source unavailable')
+
+    monkeypatch.setattr(credentials.LocalSource, 'fetch', fail_load)
+
+    with pytest.raises(
+      ride.scope.LaunchScopeError,
+      match="secret 'gate\\+reviewer' failed to load: source unavailable",
+    ):
+      ride.scope.scoped_secrets('scope-gated', CLAUDE_RECIPE, attachment=str(tmp_path))
+
   def test_the_process_store_is_restored_after_the_computation(self, tmp_path, monkeypatch):
     self._host(tmp_path, monkeypatch, bros={'scope-gated': {'creds': ['gate+reviewer']}})
     ride.scope.scoped_secrets('scope-gated', CLAUDE_RECIPE, attachment=str(tmp_path))

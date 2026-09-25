@@ -177,5 +177,6 @@ The host hydrates the per-surface set into a scoped store before a session start
 
 `bro.optional_secrets(harness)` is the manifest's best-effort sibling:
 each declared component's `optional_secrets`, the credentials of the bro's gated features, and the cast key when the bro has spells, minus `needed_secrets()` so a hard requirement is never downgraded.
-It holds credentials a capability uses when present and degrades without, such as the LLM key behind a `SearchableDataSource`'s query-focused summary;
-absent optional names are skipped at hydration, and `bro.base.credentials.available(name)` is the presence predicate behind runtime gates and feature directives in static text.
+It holds credentials a capability uses when present and degrades without, such as the LLM key behind a `SearchableDataSource`'s query-focused summary.
+Hydration skips an optional kind only when no layer picked it and its empty instance is absent;
+a present or explicitly picked name must load, and `bro.base.credentials.available(name)` is the resolution predicate behind runtime gates and feature directives in static text.

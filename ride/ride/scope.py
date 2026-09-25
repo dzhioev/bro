@@ -282,7 +282,10 @@ def scoped_secrets(
     revoked.update(revokes)
   required_needs: set[str] = set()
   optional_needs: set[str] = set()
-  with credentials.as_default_store(selection_store(selection, revoked=revoked)):
+  with (
+    launch_scope_errors(),
+    credentials.as_default_store(selection_store(selection, revoked=revoked)),
+  ):
     try:
       bro = create_bro(bro_name)
     except KeyError as error:

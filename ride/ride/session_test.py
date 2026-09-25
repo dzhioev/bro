@@ -215,7 +215,7 @@ class _ContainerHarness:
         'ride.session.scoped_secrets',
         side_effect=_fake_scoped_secrets(self.secrets, self.optional_secrets),
       ),
-      patch('ride.claude.harness.credentials.try_get', return_value='tok'),
+      patch('ride.claude.harness.CLAUDE.preflight_auth', return_value=None),
       patch('ride.scope.credentials.build_scoped_store', return_value=({}, frozenset())),
       patch('ride.claude.harness.container_claude_state', return_value=([], {})),
       patch('ride.workspace.model.BoxedWorkspace.remove'),
@@ -233,7 +233,7 @@ class _ContainerHarness:
     self.env = entered[0]
     self.env.pop('RIDE_BRO', None)
     self.run_started_party = entered[2]
-    self.try_get = entered[4]
+    self.preflight_auth = entered[4]
     self.build_scoped_store = entered[5]
     self.container_claude_state = entered[6]
     self.remove_workspace = entered[7]
@@ -323,7 +323,9 @@ class TestGrantRevoke:
 
   def test_missing_setup_token_has_actionable_container_error(self, caplog):
     with _ContainerHarness() as harness:
-      harness.try_get.return_value = None
+      harness.preflight_auth.return_value = (
+        'claude_code secret not resolvable — mint one with `claude setup-token`'
+      )
       rc = ride_session.start_session(_spec(drop=True))
     assert rc == 1
     assert harness.run_started_party.call_count == 0
@@ -980,7 +982,7 @@ class TestConcurrentSessionGuard:
   def launch_preflights(self, monkeypatch):
     # start_session runs the auth and scope preflights ahead of the guards these
     # tests drive; without stubs they read the machine's own credential store
-    monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
+    monkeypatch.setattr(claude_harness.CLAUDE, 'preflight_auth', lambda spec, store: None)
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set())
     )
@@ -1390,7 +1392,7 @@ class TestHostBrokerPingRoundTrip:
     monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_a: True)
     monkeypatch.setattr(ride.bro_worker, 'summon_allow_list', lambda *_a, **_k: set())
-    monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
+    monkeypatch.setattr(claude_harness.CLAUDE, 'preflight_auth', lambda spec, store: None)
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set())
     )
@@ -1490,7 +1492,7 @@ client.close(confirm=True)
     monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_a: True)
     monkeypatch.setattr(ride.bro_worker, 'summon_allow_list', lambda *_a, **_k: set())
-    monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
+    monkeypatch.setattr(claude_harness.CLAUDE, 'preflight_auth', lambda spec, store: None)
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set())
     )

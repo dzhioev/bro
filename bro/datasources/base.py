@@ -29,8 +29,8 @@ class DataSource(ABC):
   needed_secrets: tuple[str, ...] = ()
   # credentials this source uses *if present* but degrades without (e.g. the LLM
   # key behind a query-focused fetch summary). unioned into
-  # `bro.optional_secrets()`, hydrated best-effort by the host. mirrors
-  # `needed_secrets`.
+  # `bro.optional_secrets()`; the host may skip an unpicked empty instance only
+  # when absent, while a picked or present name must load. mirrors `needed_secrets`.
   optional_secrets: tuple[str, ...] = ()
   # the source's own rendering vocabulary: feature names its static text (the
   # summary, tool descriptions and parameter annotations) may test with a

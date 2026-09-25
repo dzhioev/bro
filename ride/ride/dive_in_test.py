@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import json
 import os
 import re
 import shlex
@@ -12,6 +13,7 @@ import bro.brog.system as brog_system
 import bro.workspace.paths as workspace_paths
 import ride.cli as ride_cli
 import ride.dive_in as dive_in
+from bro.base import credentials
 
 UUID = '35ad38d8-5a6d-81ea-bce6-e4caf17ece7f'
 HEX = '0123456789abcdef0123456789abcdef'
@@ -288,6 +290,64 @@ class TestTaskMode:
 
 class TestTaskSystem:
   """the prefetch backend reads `brog` through the launch's own scope binding."""
+
+  def test_real_scope_view_reads_selected_brog_and_reference_targets(self, fake_proj, monkeypatch):
+    store = fake_proj / 'store'
+    material = store / credentials.MATERIAL_DIR
+    material.mkdir(parents=True)
+    (material / 'brog+github.cred').write_text(
+      json.dumps({'backend': 'github', 'token': {'$cred': 'github'}, 'repo': 'owner/repo'})
+    )
+    (material / 'github+reviewer.cred').write_text('reviewer-token')
+    (material / 'claude_code.cred').write_text('claude-token')
+    config = fake_proj / 'bro.json'
+    config.write_text(
+      json.dumps(
+        {
+          'projects': {
+            str(fake_proj): {
+              'creds': ['brog+github', 'github+reviewer'],
+            }
+          }
+        }
+      )
+    )
+    monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+    captured = {}
+
+    def build_system(read_config):
+      captured.update(read_config())
+      return 'task-system'
+
+    monkeypatch.setattr(brog_system, 'build_system', build_system)
+
+    system = dive_in._task_system(fake_proj, [], [], [], 'bro-dev', 'claude', None)
+
+    assert system == 'task-system'
+    assert captured == {'backend': 'github', 'token': 'reviewer-token', 'repo': 'owner/repo'}
+
+  def test_real_scope_view_rejects_a_picked_absent_name(self, fake_proj, monkeypatch):
+    store = fake_proj / 'store'
+    material = store / credentials.MATERIAL_DIR
+    material.mkdir(parents=True)
+    (material / 'github.cred').write_text('github-token')
+    (material / 'claude_code.cred').write_text('claude-token')
+    monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
+
+    with pytest.raises(
+      dive_in.LaunchScopeError,
+      match="secret 'brog\\+missing' not found",
+    ):
+      dive_in._task_system(
+        fake_proj,
+        ['brog+missing'],
+        [],
+        [],
+        'bro-dev',
+        'claude',
+        None,
+      )
 
   def _fake_wiring(self, monkeypatch, calls: dict, read=None):
     from types import SimpleNamespace

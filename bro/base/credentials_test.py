@@ -321,19 +321,91 @@ class TestScopedStore:
     with pytest.raises(credentials.SecretNotFound):
       credentials.build_scoped_store(source, {'openai'})
 
-  def test_unknown_required_kind_fails_and_unknown_optional_kind_is_skipped(self, tmp_path: Path):
+  def test_unknown_manifest_kind_fails_in_either_tier(self, tmp_path: Path):
     source = _store(tmp_path, 'openai')
 
     with pytest.raises(ValueError, match='unknown secret'):
       credentials.build_scoped_store(source, {'typo'})
-    files, _ = credentials.build_scoped_store(source, set(), optional={'typo'})
-    assert files == {'creds.json': b'{}'}
+    with pytest.raises(ValueError, match='unknown secret'):
+      credentials.build_scoped_store(source, set(), optional={'typo'})
 
   def test_two_instances_of_one_kind_fail_before_hydration(self, tmp_path: Path):
     source = _store(tmp_path, 'github')
 
     with pytest.raises(ValueError, match='instances of the same kind'):
       credentials.build_scoped_store(source, {'github', 'github+reviewer'})
+
+  def test_a_picked_optional_instance_must_be_present(self, tmp_path: Path):
+    source = _store(tmp_path, 'openai', selection={'openai': 'work'})
+
+    with pytest.raises(credentials.SecretNotFound) as error:
+      credentials.build_scoped_store(source, set(), optional={'openai'})
+    assert error.value.name == 'openai+work'
+
+  def test_an_explicit_empty_pick_must_be_present(self, tmp_path: Path):
+    source = _store(tmp_path, 'openai', selection={'openai': ''})
+
+    with pytest.raises(credentials.SecretNotFound) as error:
+      credentials.build_scoped_store(source, set(), optional={'openai'})
+    assert error.value.name == 'openai'
+
+  def test_a_present_optional_source_that_does_not_load_fails(self, tmp_path: Path, monkeypatch):
+    class ParameterNotFound(Exception):
+      pass
+
+    class Client:
+      exceptions = SimpleNamespace(ParameterNotFound=ParameterNotFound)
+
+      def get_parameter(self, **arguments):
+        raise ParameterNotFound
+
+    monkeypatch.setitem(
+      sys.modules,
+      'boto3',
+      SimpleNamespace(client=lambda service, region_name=None: Client()),
+    )
+    _write_sources(tmp_path, {'openai': {'type': 'ssm', 'parameter': '/openai'}})
+
+    with pytest.raises(credentials.SecretNotFound) as error:
+      credentials.build_scoped_store(_store(tmp_path, 'openai'), set(), optional={'openai'})
+    assert error.value.name == 'openai'
+
+  def test_a_non_value_source_failure_names_the_credential(self, tmp_path: Path, monkeypatch):
+    class Client:
+      exceptions = SimpleNamespace(ParameterNotFound=KeyError)
+
+      def get_parameter(self, **arguments):
+        raise RuntimeError('service unavailable')
+
+    monkeypatch.setitem(
+      sys.modules,
+      'boto3',
+      SimpleNamespace(client=lambda service, region_name=None: Client()),
+    )
+    _write_sources(tmp_path, {'openai': {'type': 'ssm', 'parameter': '/openai'}})
+
+    with pytest.raises(ValueError, match="secret 'openai' failed to load: service unavailable"):
+      credentials.build_scoped_store(_store(tmp_path, 'openai'), {'openai'})
+
+  def test_a_non_cacheable_second_load_failure_names_the_credential(
+    self, tmp_path: Path, ticket_source, monkeypatch
+  ):
+    _write_material(tmp_path, 'github', '{"seed": "abc"}')
+    _write_sources(tmp_path, {'github': {'type': 'ticket', 'prefix': 'minted'}})
+    store = _store(tmp_path, 'github')
+    source = store._sources['github']
+    loads = iter(('first-value', RuntimeError('second load failed')))
+
+    def fetch(material_path):
+      result = next(loads)
+      if isinstance(result, Exception):
+        raise result
+      return result
+
+    monkeypatch.setattr(source, 'fetch', fetch)
+
+    with pytest.raises(ValueError, match="secret 'github' failed to load: second load failed"):
+      credentials.build_scoped_store(store, {'github'})
 
   def test_minting_source_ships_config_and_typed_annotation(self, tmp_path: Path, ticket_source):
     _write_material(tmp_path, 'github', '{"seed": "abc"}')
@@ -378,6 +450,21 @@ class TestScopedStore:
     assert view.get('github') == 'changed'
     assert view.try_get('openai') is None
     assert view.known_names() == frozenset({'github', 'openai'})
+
+  def test_scoped_view_skips_only_an_unpicked_absent_optional_name(self, tmp_path: Path):
+    _write_material(tmp_path, 'github', 'token')
+    source = _store(tmp_path, 'github', 'openai')
+
+    view = credentials.scoped_view_store(source, {'github'}, optional={'openai'})
+
+    assert view.try_get('openai') is None
+    with pytest.raises(credentials.SecretNotFound) as error:
+      credentials.scoped_view_store(
+        _store(tmp_path, 'github', 'openai', selection={'openai': 'work'}),
+        {'github'},
+        optional={'openai'},
+      )
+    assert error.value.name == 'openai+work'
 
 
 class TestInstallHooks:
