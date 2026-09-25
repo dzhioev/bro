@@ -454,9 +454,15 @@ async def test_delete_is_administered_and_reports_a_refusal_as_a_conflict(aiohtt
 
 @pytest.mark.asyncio
 async def test_admin_routes_report_an_unsupported_backend(client):
-  response = await (await client).post('/v1/admin/trails/check', json={}, headers=_auth())
-  assert response.status == 501
-  assert 'administration surface' in (await response.json())['error']
+  local = await client
+  responses = [
+    await local.post('/v1/admin/trails/check', json={}, headers=_auth()),
+    await local.post('/v1/admin/trails/T1/fold-context', json={}, headers=_auth()),
+    await local.post('/v1/admin/trails/T1/drop-context', json={}, headers=_auth()),
+  ]
+  assert [response.status for response in responses] == [501, 501, 501]
+  bodies = [await response.json() for response in responses]
+  assert all('administration surface' in body['error'] for body in bodies)
 
 
 def test_admin_routes_serve_a_dynamo_backed_store():
@@ -479,6 +485,8 @@ def test_admin_routes_serve_a_dynamo_backed_store():
   assert app['admin'] is store
   assert '/v1/admin/trails/{trail_id}/migrate' in paths
   assert '/v1/admin/trails/check' in paths
+  assert '/v1/admin/trails/{trail_id}/fold-context' in paths
+  assert '/v1/admin/trails/{trail_id}/drop-context' in paths
   assert '/v1/admin/trails/{trail_id}/recompute' in paths
   assert '/v1/admin/trails/{trail_id}/relink' in paths
 

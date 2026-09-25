@@ -440,18 +440,24 @@ class TestWrites:
   def test_admin_operations_use_the_server_seam(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((200, b'{"format": 1, "migrated_rows": 0}'))
+    fake.queue((200, b'{"trail_id": "T1", "pointer_keys": {}}'))
+    fake.queue((200, b'{"trail_id": "T1", "pointer_keys": {}}'))
     fake.queue((200, b'{"extent": 2}'))
     fake.queue((200, b'{"ok": true}'))
     fake.queue((200, b'{"extent": 1}'))
     fake.queue((200, b'\n\n{"ok": false}'))
     client = _client()
     assert client.migrate_trail('T1') == {'format': INITIAL_TRAIL_FORMAT, 'migrated_rows': 0}
+    assert client.fold_context('T1', dry_run=True)['trail_id'] == 'T1'
+    assert client.drop_context('T1')['trail_id'] == 'T1'
     assert client.recompute('T1') == {'extent': 2}
     assert client.check('T1') == {'ok': True}
     assert client.relink('T1', {'trail_id': 'parent', 'step_id': 4}, 1) == {'extent': 1}
     assert client.check() == {'ok': False}
     assert [request[1] for request in fake.requests] == [
       '/v1/admin/trails/T1/migrate',
+      '/v1/admin/trails/T1/fold-context',
+      '/v1/admin/trails/T1/drop-context',
       '/v1/admin/trails/T1/recompute',
       '/v1/admin/trails/check',
       '/v1/admin/trails/T1/relink',
