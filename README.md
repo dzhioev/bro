@@ -432,6 +432,9 @@ the container's network is unrestricted, and `--unboxed` runs as the launching u
 Two harnesses and one native provider today, footnoted above;
 installs pin a commit of this repository, with a package index still to come;
 the native loop's third-party skill loader exists with nothing loaded yet.
+A session's git authentication covers github.com alone:
+a repository on another host attaches with its remote as written and gets none from the session;
+a boxed session reaches that remote only where it asks for no authentication, and an unboxed one also through the launching user's own git configuration.
 
 ## Read more
 

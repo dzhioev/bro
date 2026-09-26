@@ -569,6 +569,55 @@ class TestInstallHooks:
     wrapper = (tmp_path / 'environment/bin/gh').read_text()
     assert 'credentials get github' in wrapper
 
+  def test_the_github_hook_owns_github_authentication_alone(self, tmp_path: Path):
+    registry = credentials.default_registry()
+    store_dir = tmp_path / 'store'
+    _write_material(store_dir, 'github', 'session-token')
+    exported = credentials.install_hooks(
+      registry,
+      {'github'},
+      credentials.Store(registry, store_dir, {}),
+      tmp_path / 'environment',
+      dict(os.environ),
+    )
+    user_config = tmp_path / 'gitconfig'
+    user_config.write_text(
+      '[credential]\n\thelper = "!f() { echo username=user; echo password=user-token; }; f"\n'
+    )
+    environment = {
+      **os.environ,
+      **exported,
+      'PATH': os.pathsep.join(
+        [str(Path(console_script('credentials')).parent), os.environ['PATH']]
+      ),
+      'BRO_STORE': str(store_dir),
+      'GIT_CONFIG_GLOBAL': str(user_config),
+      'GIT_CONFIG_NOSYSTEM': '1',
+      'GIT_TERMINAL_PROMPT': '0',
+    }
+
+    def git(*arguments: str, stdin: str = '') -> str:
+      return subprocess.run(
+        ['git', *arguments],
+        input=stdin,
+        env=environment,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+      ).stdout
+
+    def password(host: str) -> str:
+      filled = git('credential', 'fill', stdin=f'protocol=https\nhost={host}\n\n')
+      return dict(line.split('=', 1) for line in filled.splitlines())['password']
+
+    assert password('github.com') == 'session-token'
+    assert password('gitlab.com') == 'user-token'
+    for spelling in ('git@github.com:owner/repo.git', 'ssh://git@github.com/owner/repo.git'):
+      assert git('ls-remote', '--get-url', spelling).strip() == (
+        'https://github.com/owner/repo.git'
+      )
+
   def test_listed_kind_missing_from_store_fails(self, tmp_path: Path):
     registry = self._hook_registry()
     store = credentials.Store(registry, tmp_path / 'store', {})

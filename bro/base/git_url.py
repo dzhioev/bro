@@ -3,7 +3,10 @@ spelling, so the same remote written two ways compares equal."""
 
 import re
 import urllib.parse
+from typing import Optional
 
+_GITHUB_HOST = 'github.com'
+_GITHUB_SCHEMES = frozenset({'https', 'http', 'ssh'})
 _SCHEME_URL = re.compile(r'^[A-Za-z][A-Za-z0-9+.-]*://')
 _SCP_URL = re.compile(r'^(?:[^/@:\s]+@)?[^/:\s]+:.+$')
 
@@ -73,3 +76,30 @@ def git_url_path(normalized: str) -> str:
   if _SCHEME_URL.match(normalized) is not None:
     return urllib.parse.urlsplit(normalized).path
   return normalized.split(':', 1)[-1]
+
+
+def github_repository(value: str) -> Optional[str]:
+  """the `owner/name` a github.com git URL names over one of GitHub's transports,
+  scp spelling included; None for any other URL. Raises when such a URL names no
+  repository."""
+  normalized = normalize_git_url(value)
+  if _SCHEME_URL.match(normalized) is not None:
+    parsed = urllib.parse.urlsplit(normalized)
+    if parsed.scheme not in _GITHUB_SCHEMES or parsed.hostname != _GITHUB_HOST:
+      return None
+    path = parsed.path
+  else:
+    host, path = normalized.split(':', 1)
+    if host.rsplit('@', 1)[-1] != _GITHUB_HOST:
+      return None
+  parts = path.strip('/').removesuffix('.git').split('/')
+  if len(parts) != 2 or '' in parts:
+    raise ValueError(f'{value!r} names no owner/name repository on {_GITHUB_HOST}')
+  return '/'.join(parts)
+
+
+def canonical_github_url(value: str) -> Optional[str]:
+  """the one https spelling every spelling of a github.com repository maps to;
+  None for a URL on any other host."""
+  repository = github_repository(value)
+  return None if repository is None else f'https://{_GITHUB_HOST}/{repository}'

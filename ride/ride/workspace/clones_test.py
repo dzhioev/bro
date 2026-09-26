@@ -71,13 +71,30 @@ def test_clone_has_its_own_objects_upstream_and_workspace_branch(tmp_path):
   assert _git('rev-parse', 'HEAD', cwd=tree).stdout.strip() == head
   assert _git('rev-parse', 'refs/remotes/origin/fresh', cwd=tree).stdout.strip() == head
   assert _git('remote', 'get-url', 'origin', cwd=tree).stdout.strip() == (
-    'https://github.com/owner/repository.git'
+    'https://github.com/owner/repository'
   )
   assert _git('remote', cwd=tree).stdout.split() == ['origin']
   assert not _alternates(tree).exists()
 
   shutil.rmtree(source)
   assert _git('cat-file', '-e', f'{head}^{{commit}}', cwd=tree).returncode == 0
+
+
+@pytest.mark.parametrize(
+  ('origin', 'upstream'),
+  [
+    ('ssh://git@github.com/owner/repository.git', 'https://github.com/owner/repository'),
+    ('git@gitlab.example:owner/repository.git', 'git@gitlab.example:owner/repository.git'),
+    ('file://github.com/owner/repository.git', 'file://github.com/owner/repository.git'),
+  ],
+)
+def test_only_a_github_origin_is_respelled(tmp_path, origin, upstream):
+  source = _source_repository(tmp_path, origin=origin)
+  tree = tmp_path / 'workspace' / 'tree'
+
+  ensure_clone(_repository(source), tree, 'worktree-session')
+
+  assert _git('remote', 'get-url', 'origin', cwd=tree).stdout.strip() == upstream
 
 
 def test_explicit_base_is_checked_out_only_when_the_clone_is_created(tmp_path):

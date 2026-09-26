@@ -181,6 +181,9 @@ Every entry either one names applies, the path entry layering over the URL entry
 A `projects` key is therefore portable across the dotfiles a host config is shared through, without a per-machine copy of the selection beside it.
 An `origin` naming a local path contributes no identity:
 it names the checkout this one was cloned from.
+A github.com repository is one identity in every spelling:
+scp, `ssh://`, and https keys, with or without `.git`, match each other, case-insensitively as GitHub resolves names.
+A URL on any other host keeps its transport, so its scp key does not match its https URL.
 
 A `user.tools` key is the command's canonical console-script name — its import path with the underscores dashed (`bro.trails.rewind`), the name `sync-scripts` publishes every CLI under beside its bare alias.
 The alias is what any distribution may claim, so keying on it would let two commands answer to one entry;
