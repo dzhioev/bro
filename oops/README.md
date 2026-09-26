@@ -81,6 +81,8 @@ It asks for the verdict CloudFormation itself gives, so a plan creates and delet
 The CLI's rendered text puts a logical id and an impact in the same field, so a resource named for one reads as carrying it and the scan errs toward reporting unsafe.
 It runs before the image build, and the service stack synthesizes its image digest from the repository's `latest` tag, so the diff carries structural change alone rather than the task-definition churn every image roll causes.
 The image uses the shared `bro-server-base`, and `image_build.sh` stages the framework wheel through `deploy_lib.sh` before pushing both commit and latest tags.
+Its baked `trails/server/creds.json` is a self-contained store config whose `sources` map annotates the `trails` and `trails_tokens` SSM names;
+the image therefore ships the store shape beside the framework version that reads it (`bro/reference/ride.md`, "Session permissions and credentials").
 
 ## Development
 

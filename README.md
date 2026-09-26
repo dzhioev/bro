@@ -339,7 +339,7 @@ default = "triage"
 ```
 
 The persona is the same on every harness:
-its prompt, its spells, its credentials, its allow-list.
+its prompt, its spells, its credentials, and its `launch` authority.
 What differs is what the harness brings of its own, and the declaration decides what to do with it.
 A Claude session comes with Claude's tools and skills, so the declaration withholds the ones it does not want and adds its namespaces as MCP servers beside the rest;
 bro's own loop serves exactly the declared roster.
@@ -356,11 +356,17 @@ the scope names which stored instance backs each secret for this checkout and th
 ride scope --repo ~/acme --bro triage
 ```
 
-Which instance that is stays out of the repository, in the host's `~/.bro.json`:
+Which instance that is stays out of the repository.
+The host store keeps shared defaults in `~/.bro/creds.json`:
+
+```json
+{"defaults": ["github+me"]}
+```
+
+Project and per-bro overrides live in `~/.bro.json`:
 
 ```json
 {
-  "defaults": {"creds": ["github+me"]},
   "projects": {
     "https://github.com/acme/acme": {
       "creds": ["brog+github", "github+bot"],
@@ -374,9 +380,9 @@ Inside the container, the session finds:
 
 - `/workspace`, a clone on a fresh branch based on the commit the launch names, never your working tree;
 - the framework it was launched from, frozen and read-only, so the project need not install it;
-- a credential store holding exactly the declared kinds, resolved on the host into memory and copied into the container's writable layer.
-  A missing required kind fails on the host before the container exists;
-  an undeclared kind resolves to `SecretNotFound`;
+- a credential store holding the selected instances its declaration needs and the stored names their preserved references reach, resolved on the host into memory and copied into the container's writable layer.
+  A missing required name fails on the host before the container exists;
+  a stored name that was not hydrated resolves to `SecretNotFound`;
   the store dies with the container;
 - its own `~/.claude` and git configuration, constructed by the launch.
   No host `~/.claude.json`, credentials file, `~/.gitconfig`, or Docker socket.
@@ -388,8 +394,8 @@ dive-in --grant aws 'why did the deploy fail?'
 ```
 
 Delegation is bounded separately.
-A child may summon only whom its parent could;
-its credentials come from its own declaration and host configuration.
+A summon request may add only launch authority its parent holds, while the child still starts from its own declaration and host configuration;
+its credentials likewise come from that child-specific configuration.
 The host authorizes every request and journals it, and the child's trail records who summoned it.
 
 Afterwards, every run on every harness is a recorded trail:
@@ -431,7 +437,7 @@ the native loop's third-party skill loader exists with nothing loaded yet.
 
 - [`AGENTS.md`](AGENTS.md) — the repository map, and the rules every change follows
 - [`bro/reference/extending.md`](bro/reference/extending.md) — how to add a bro, a data source, a toolset, and the entry-point groups they register through
-- [`bro/reference/ride.md`](bro/reference/ride.md) — the runtime: workspaces, credentials, summons, recording
+- [`bro/reference/ride.md`](bro/reference/ride.md) — the runtime: workspaces, the session permission document, summons, recording
 - [`bro/reference/conditions.md`](bro/reference/conditions.md) and [`bro/reference/template.md`](bro/reference/template.md) — conditioning in code and in text
 - [`bro/setup/AGENTS.md`](bro/setup/AGENTS.md) — the credential store and the host config
 

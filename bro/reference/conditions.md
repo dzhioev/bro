@@ -101,8 +101,8 @@ The facts pair a conditioning surface knows, exported by `bro/mcp.py` as ready-m
 
 Three more facts sit outside the pair.
 
-`may_summon` — the session's effective summon allow-list, as its launch fixed it
-(`bro.summon.effective_may_summon()` off `RIDE_MAY_SUMMON`, an unpublished list collapsed to empty).
+`may_summon` — the bros in the session's fixed `launch.bro.bros` set
+(`bro.summon.effective_may_summon()` off `RIDE_LAUNCH`, an unpublished section collapsed to empty).
 The session-level text surfaces
 — prompt composition, spell bodies, ride's append prompt
 — supply it, so a spell can gate a delegation branch on a target being summonable:
@@ -111,7 +111,7 @@ Membership is is-a rather than verbatim:
 a granted bro answers to every registered bro it derives from (`bro.registry.lineage`),
 so an `AcmeReviewer(Reviewer)` grant satisfies `contains reviewer`.
 Only the fact widens
-— the host authorizes a summon against the granted names themselves, so a text that resolves a role reads the concrete grant off the banner.
+— the host authorizes a summon against the names in `launch.bro.bros` themselves, so a text that resolves a role reads the concrete members off the banner.
 The universe is the installed persona names plus the list itself, so a typo'd target fails every render while a granted-but-uninstalled one still tests.
 No ready-made placeholder is exported.
 

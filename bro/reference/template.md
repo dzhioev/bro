@@ -71,10 +71,11 @@ file      := prompt file name           file: [A-Za-z0-9._/-]+
 
 ## Rendering surfaces
 
-`bro.mcp.render_text(text, harness=…, creds=…, may_summon=…, talk=…, hold=…, extra=…)` renders directives against the facts the call site knows
-(the facts, `#hold`'s single-purpose supply rule included, are documented in `bro/reference/conditions.md`;
+`bro.mcp.render_text(text, harness=…, creds=…, may_summon=…, talk=…, hold=…, extra=…)` renders directives against the facts the call site knows.
+`may_summon` is the session's `launch.bro.bros` set as described in `bro/reference/conditions.md`;
+the other facts, `#hold`'s single-purpose supply rule included, are documented there too.
 `extra` merges a caller-owned vocabulary next to them
-— the bro surfaces pass the owning bro's `#features`) and resolves `{{include}}` targets through the `prompts` loader.
+— the bro surfaces pass the owning bro's `#features` — and the renderer resolves `{{include}}` targets through the `prompts` loader.
 Each surface renders its copy once, with its own facts:
 
 - `BaseBro.__init__` — the bro-native system prompt (harness `bro`)

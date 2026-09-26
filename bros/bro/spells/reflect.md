@@ -5,14 +5,14 @@ description:
 This spell should be used when the user asks to improve what a session ran under from how its runs went
 — "[[reflect]]", "reflect on this session", "[[reflect on the last few assistant sessions]]", "reflect on trail <id>", "post-mortem this run", "what should we learn from this", "how could this have gone better".
 The improving half of a loop over a bro's definition:
-a session runs under prompt texts (a spell, the bro's system prompt, the shared prompt text every bro gets, a tool description, a doc it leaned on) and under the bro's declaration with the scope its launch gave it (tools and data sources, spells, summon targets, credentials, permits);
+a session runs under prompt texts (a spell, the bro's system prompt, the shared prompt text every bro gets, a tool description, a doc it leaned on) and under the bro's declaration with the scope its launch gave it (tools and data sources, spells, credentials, and its permission document);
 reflect reads one run or several against the version of that definition in force during each
 — step by step and rule by rule through the texts, and through what the run reached for and lacked —
 keeps only the divergences the definition itself caused, and writes its next version as edits small enough for the next runs to test.
 Each edit is fixed in place through this session's pull request, or filed as a task when its surface is out of reach.
 
 parameters: {"material?": "the runs to reflect on instead of the current session: a trail id, or a description such as the last few sessions of a bro"}
-version: 3.0.0
+version: 3.2.0
 ---
 
 # Reflect
@@ -25,9 +25,8 @@ a tool description,
 a doc it leaned on;
 its declaration, with the scope the launch gave it, is the tools and data sources,
 the spells,
-the bros it may summon,
 the credentials,
-the permits.
+and the `launch` authority it holds.
 Reflection is the improving half of the loop over that definition:
 the runs are read against the definition that drove them,
 the definition gets its next version,
@@ -54,7 +53,10 @@ The trail carries most of it:
 a spell as the `spell::<name>` or `bro::cast` result,
 the system prompt as a claude trail's `prompt_snapshot` notice or a bro trail's `system_prompt` step (`rewind steps`),
 a doc as the tool served it,
-the scope as the launch line and the banner the run read (`may_summon`, `permits`, the grants on the command).
+and the `launch` section as the launch line plus the banner's `may_summon` and `permits` projections.
+The banner carries no credentials.
+A trail may show explicit `--cred` and credential grant/revoke overrides or a resolution failure, but it does not retain the complete `creds.use` section;
+when no other recorded output establishes that section, mark it unavailable rather than inferring it from `launch`.
 What the trail does not carry is recoverable only for a surface the launched repository owns, from the commit the trail's launch line and header `git` name (its `--into` ref and `base_sha`);
 a bro or a text an installed package supplied has no version the trail names.
 Where the version in force is unavailable, say so and skip findings on that surface:
@@ -75,7 +77,7 @@ Then walk what the run reached for beyond its texts and did not have:
 a summon denied,
 a credential the scope lacked,
 a tool it did without or improvised around,
-a permit it did not hold.
+launch authority it did not hold.
 Each shows in the trail as a denial, an error, a workaround, or a question that reached the user.
 Where the run diverged, name what in the definition caused it:
 
@@ -109,7 +111,7 @@ A correction the user made is a rule only when they say so, or when the material
 otherwise it stays what it was, a correction made in that run.
 Every added sentence taxes every future run that carries the text, and every added grant widens what every future run may do, so the bar for both is high:
 prefer fixing wording over adding wording, deleting text over both when the text itself caused the problem,
-and widen scope by exactly what the run lacked — the one target, kind, or permit.
+and widen scope by exactly what the run lacked — the one credential kind or `launch` name.
 
 ## Trace each finding to its owning surface
 

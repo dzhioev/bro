@@ -58,13 +58,15 @@ Interpret them as follows:
    `talk: none` means the quest is mute, while an absent line means the launcher published no talk.
    The host enforces these rights and nothing in-session widens them.
 
-7. `permits` lists the worker-type actions this session may request.
-   Worker leaves are shown with their grant markers, including the bro's party permits (`:bro.party.start.boxed`, `:bro.party.start.unboxed`, `:bro.party.join`) and the webview's human-view permit (`:webview.vnc`):
-   `permits: none` means no worker-type action is authorized, and an absent line means the launcher published no set.
-   An unmarked summon starts boxed when that leaf is present, otherwise unboxed when its leaf is present;
-   it is refused when neither start leaf is present and is never turned into a join.
-   Grant a child only permits this session itself holds.
-   The set is fixed at launch, so changing it means relaunching with `--grant` / `--revoke` or shaping a child request.
+7. `permits` renders the non-bro-target names from this session's `launch` section.
+   It includes set members and flags such as `:launch.bro.party.boxed`, `:launch.bro.party.unboxed`, `:launch.bro.party.join`, and `:launch.webview.vnc`, plus a type key such as `:launch.benchmark` when its payload is empty:
+   `permits: none` means no such name is held, and an absent line means the launcher published no `launch` section.
+   `may_summon` renders the `launch.bro.bros` members separately.
+   An unmarked summon starts boxed when that party member is present, otherwise unboxed when its member is present;
+   it is refused when neither is held and is never turned into a join.
+   Grant a child only launch authority this session holds under a held type key.
+   The section is fixed at launch, so changing it means relaunching with `--grant` / `--revoke` or shaping a child request.
+   The complete grammar and fold are `bro/reference/ride.md`, "Session permissions and credentials".
 
 8. `trail_id` is the trail this session is recorded into.
    It can roll mid-session

@@ -27,22 +27,22 @@ run those with `--help` for flags.
   The code registry maps kinds to a required description and an optional install hook;
   it is assembled from `bro/base/registry.json` and installed `bro.credentials` contributions.
   `Store(registry, store_dir, selection, readable=…)` reads one exclusive directory, a `readable` set withholding every other kind:
-  plain material is `creds/<name>.cred`, and `creds.json` may annotate one typed source per name (`ssm` or a `bro.credential_sources` minting type).
+  plain material is `creds/<name>.cred`, and `creds.json` carries the store's `defaults` plus typed annotations under `sources` (`ssm` or a `bro.credential_sources` minting type).
   A stored name is `kind+instance` spelled `kind` when the instance is empty, and a store carrying the other spelling of that name fails at construction.
   `get` / `get_json` / `try_get` / `available` address kinds through the explicit selection;
   the `get_instance` siblings address the stored name exactly.
-  `default_store()` binds an ambient store lazily from the host config's `defaults`, `user`, and running command's layers,
+  `default_store()` binds an ambient store lazily from the store's defaults plus the host config's `user` and running command layers,
   and bypasses that config entirely when `BRO_STORE` directs the process;
   `as_default_store(store)` resolves through a given store for the block, in the calling thread or task alone.
   `$cred` references expand during resolution, with kind targets applying the same selection and instance targets reading storage directly.
   `known_names()` is the code registry's kinds, while the CLI's `--instance` list enumerates the store directory and typed annotations.
-  `build_scoped_store(store, names, optional=…)` emits `creds/<kind>.cred` plus typed annotations in `creds.json`, and reports the declared kinds that loaded separately from transitive `$cred` pulls.
+  `build_scoped_store(store, names, optional=…)` emits each instance under its stored name plus `creds.json` `defaults` and `sources`, and reports the declared kinds that loaded separately from transitive `$cred` pulls.
   It judges presence through `instance_names`, skips only an unpicked optional empty instance that is absent, and fails every selected load error.
   `scoped_view_store` applies the same presence rule to a lazy, kinds-bounded sibling over the passed store.
   `install_hooks(registry, kinds, store, directory, env)` applies only the named kinds and resolves hook values through that store.
   Schemas live in `bro/setup/AGENTS.md`.
 - `configs.py` — the exclusive `BRO_STORE` directory (default `~/.bro`), the `~/.bro.json` host config beside it, the default summon depth and harness, and the installed bro distribution version shared by credential consumers and trail records.
-- `scope.py` — the unified credential / `@bro` / `:permit` grant grammar, party permit leaves, configuration layers, and namespace-aware override keys.
+- `scope.py` — the unified credential / `@bro` / `:launch.…` grant grammar, retired-name checks, idempotent scope layers, and rendering a `launch` section back to grant spelling.
 - `host_config.py` — the host's launch policy (`~/.bro.json`):
   `project_selection(attachment)` merges `defaults` and the projects an `Attachment`'s identities name,
   `launch_selection(attachment, bro)` adds their per-bro selections and ordered scope layers,

@@ -79,11 +79,12 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   Gate components with `when(feature('brog'), …)` (`from bro.bro import feature`) and text with `{{iff #features contains brog}}`;
   a gated component's secrets enter the manifest only where its gates resolve, and the gate's own credential is tiered with the feature.
   See `bro/reference/conditions.md` "Bro features".
-- `may_summon = ('reviewer',)` declares which bros this bro may summon
-  — its static outgoing allow-list, adjusted per launch by `--grant @bro` and `--revoke @bro`.
-  A summoned child may name only bros its summoner could summon, so widening is explicit and bounded by the host's depth cap.
+- `may_summon = ('reviewer',)` seeds members of `launch.bro.bros`, adjusted per launch or summon request by `--grant @bro` and `--revoke @bro`.
+  A summon request may grant the child only launch authority its summoner holds;
+  the child's own seed and configuration are independent, and the host's depth cap separately bounds the launch tree.
   The declaration is MRO-walked and unioned like `extra_secrets`;
-  each seed expands the transitive launch authority and should be added deliberately.
+  each seed expands transitive launch authority and should be added deliberately.
+  The complete permission-document fold is `bro/reference/ride.md`, "Session permissions and credentials".
 - `provisioning = (provision_hooks,)` declares session-start steps for the session's workspace
   — each is a `Callable[[Path], None]` applied to the workspace root by whatever starts the session (`do-ride` for a managed one, on either harness).
   MRO-walked and concatenated like `extra_secrets`.
