@@ -1038,7 +1038,7 @@ def _validate_install_value(name: str, value: object) -> None:
   if key == 'path':
     _validate_install_path(name, target)
   else:
-    parse_name(target)
+    require_kind_declaration(target, f'secret {name!r}: install')
 
 
 def install_hooks(
@@ -1104,7 +1104,7 @@ def _install_value(value: object, directory: Path, store: Store) -> str:
   assert isinstance(target, str)
   if key == 'path':
     return str(directory / target)
-  return store.get_instance(target) if parse_name(target)[1] is not None else store.get(target)
+  return store.get(target)
 
 
 def _command_wrapper(

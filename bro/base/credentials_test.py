@@ -108,6 +108,14 @@ class TestRegistry:
     with pytest.raises(ValueError, match='unknown section'):
       credentials.CredentialKind('github', 'GitHub access', install={'unknown': {'x': 'y'}})
 
+  def test_install_secret_names_a_kind_not_an_instance(self):
+    with pytest.raises(ValueError, match="'github\\+bot', which names an instance"):
+      credentials.CredentialKind(
+        'github',
+        'GitHub access',
+        install={'commands': {'gh': {'env': {'GH_TOKEN': {'secret': 'github+bot'}}}}},
+      )
+
 
 class TestStore:
   def test_local_material_uses_the_convention_path(self, tmp_path: Path):
