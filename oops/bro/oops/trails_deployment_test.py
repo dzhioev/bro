@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from bro.base import credentials
 from bro.base.spawn import console_script
 
 _PROJECT = Path(__file__).resolve().parents[2]
@@ -37,12 +38,16 @@ def test_trails_image_uses_the_shared_base_framework_wheel_and_store():
 
 
 def test_deployed_store_resolves_store_and_tokens_from_ssm():
-  annotations = json.loads((_SERVER / 'creds.json').read_text())
+  config = json.loads((_SERVER / 'creds.json').read_text())
 
-  assert annotations == {
-    'trails': {'type': 'ssm', 'parameter': '/trails/store-config'},
-    'trails_tokens': {'type': 'ssm', 'parameter': '/trails/tokens'},
+  assert config == {
+    'sources': {
+      'trails': {'type': 'ssm', 'parameter': '/trails/store-config'},
+      'trails_tokens': {'type': 'ssm', 'parameter': '/trails/tokens'},
+    }
   }
+  store = credentials.Store(credentials.default_registry(), _SERVER, {})
+  assert store.instance_names() == frozenset({'trails', 'trails_tokens'})
 
 
 def test_local_server_synthesizes_a_plain_store():

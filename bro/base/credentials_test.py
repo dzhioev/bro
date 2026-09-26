@@ -1,6 +1,8 @@
 import importlib.metadata
 import json
+import os
 import re
+import subprocess
 import sys
 import threading
 from datetime import UTC, datetime, timedelta
@@ -11,6 +13,7 @@ import pytest
 
 from bro.base import credentials, host_config
 from bro.base.args import CLIError, Parser
+from bro.base.spawn import console_script
 
 
 def _registry(*names: str) -> dict[str, credentials.CredentialKind]:
@@ -24,9 +27,13 @@ def _write_material(store_dir: Path, name: str, value: str) -> Path:
   return path
 
 
-def _write_sources(store_dir: Path, data: object) -> None:
+def _write_store_config(store_dir: Path, data: object) -> None:
   store_dir.mkdir(parents=True, exist_ok=True)
-  (store_dir / credentials.SOURCES_FILE).write_text(json.dumps(data))
+  (store_dir / credentials.STORE_FILE).write_text(json.dumps(data))
+
+
+def _write_sources(store_dir: Path, data: object) -> None:
+  _write_store_config(store_dir, {'sources': data})
 
 
 def _store(
@@ -118,6 +125,30 @@ class TestStore:
     assert store.get('github') == 'selected'
     assert store.get_instance('github') == 'bare'
     assert store.get_instance('github+reviewer') == 'selected'
+
+  def test_caller_selection_layers_over_the_store_default(self, tmp_path: Path):
+    _write_material(tmp_path, 'github+default', 'default')
+    _write_material(tmp_path, 'github+reviewer', 'selected')
+    _write_store_config(tmp_path, {'defaults': ['github+default']})
+
+    assert _store(tmp_path, 'github').get('github') == 'default'
+    assert _store(tmp_path, 'github', selection={'github': 'reviewer'}).get('github') == 'selected'
+
+  def test_store_defaults_require_registered_kinds_and_one_pick_per_kind(self, tmp_path: Path):
+    for defaults, message in (
+      (['consumer+one'], 'unregistered credential kind'),
+      (['github+one', 'github+two'], 'selects kind.*twice'),
+      (['github'], 'names no instance'),
+    ):
+      _write_store_config(tmp_path, {'defaults': defaults})
+      with pytest.raises(ValueError, match=message):
+        _store(tmp_path, 'github')
+
+  def test_old_top_level_source_shape_names_the_sources_section(self, tmp_path: Path):
+    _write_store_config(tmp_path, {'github': {'type': 'ssm', 'parameter': '/github'}})
+
+    with pytest.raises(ValueError, match='outside "sources"'):
+      _store(tmp_path, 'github')
 
   def test_the_empty_instance_is_selectable_like_any_other(self, tmp_path: Path):
     _write_material(tmp_path, 'github', 'default')
@@ -302,22 +333,27 @@ class TestScopedStore:
 
     files, kinds = credentials.build_scoped_store(source, {'openai'})
 
-    assert files == {'creds/openai.cred': b'key', 'creds.json': b'{}'}
+    assert files['creds/openai+benchmark.cred'] == b'key'
+    assert json.loads(files['creds.json']) == {
+      'defaults': ['openai+benchmark'],
+      'sources': {},
+    }
     assert kinds == frozenset({'openai'})
 
-  def test_explicit_instance_materializes_under_its_kind(self, tmp_path: Path):
+  def test_explicit_instance_materializes_under_its_own_name(self, tmp_path: Path):
     _write_material(tmp_path, 'github+reviewer', 'token')
 
     files, kinds = credentials.build_scoped_store(_store(tmp_path, 'github'), {'github+reviewer'})
 
-    assert files['creds/github.cred'] == b'token'
+    assert files['creds/github+reviewer.cred'] == b'token'
+    assert json.loads(files['creds.json'])['defaults'] == ['github+reviewer']
     assert kinds == frozenset({'github'})
 
   def test_optional_absence_is_skipped_and_required_absence_fails(self, tmp_path: Path):
     source = _store(tmp_path, 'openai')
 
     files, kinds = credentials.build_scoped_store(source, set(), optional={'openai'})
-    assert files == {'creds.json': b'{}'}
+    assert json.loads(files['creds.json']) == {'defaults': [], 'sources': {}}
     assert kinds == frozenset()
     with pytest.raises(credentials.SecretNotFound):
       credentials.build_scoped_store(source, {'openai'})
@@ -330,11 +366,18 @@ class TestScopedStore:
     with pytest.raises(ValueError, match='unknown secret'):
       credentials.build_scoped_store(source, set(), optional={'typo'})
 
-  def test_two_instances_of_one_kind_fail_before_hydration(self, tmp_path: Path):
-    source = _store(tmp_path, 'github')
+  def test_two_instances_of_one_kind_ship_under_their_own_names(self, tmp_path: Path):
+    _write_material(tmp_path, 'github', 'default')
+    _write_material(tmp_path, 'github+reviewer', 'reviewer')
 
-    with pytest.raises(ValueError, match='instances of the same kind'):
-      credentials.build_scoped_store(source, {'github', 'github+reviewer'})
+    files, kinds = credentials.build_scoped_store(
+      _store(tmp_path, 'github'), {'github', 'github+reviewer'}
+    )
+
+    assert files['creds/github.cred'] == b'default'
+    assert files['creds/github+reviewer.cred'] == b'reviewer'
+    assert json.loads(files['creds.json'])['defaults'] == ['github+']
+    assert kinds == frozenset({'github'})
 
   def test_a_picked_optional_instance_must_be_present(self, tmp_path: Path):
     source = _store(tmp_path, 'openai', selection={'openai': 'work'})
@@ -415,7 +458,10 @@ class TestScopedStore:
     files, _ = credentials.build_scoped_store(_store(tmp_path, 'github'), {'github'})
 
     assert files['creds/github.cred'] == b'{"seed": "abc"}'
-    assert json.loads(files['creds.json']) == {'github': {'type': 'ticket', 'prefix': 'minted'}}
+    assert json.loads(files['creds.json']) == {
+      'defaults': ['github+'],
+      'sources': {'github': {'type': 'ticket', 'prefix': 'minted'}},
+    }
 
   def test_reference_chain_to_minting_source_pulls_target_without_declaring_it(
     self, tmp_path: Path, ticket_source
@@ -428,17 +474,26 @@ class TestScopedStore:
 
     assert set(files) == {'creds/brog.cred', 'creds/github.cred', 'creds.json'}
     assert kinds == frozenset({'brog'})
-    assert json.loads(files['creds.json']) == {'github': {'type': 'ticket', 'prefix': 'minted'}}
+    assert json.loads(files['creds.json']) == {
+      'defaults': ['brog+', 'github+'],
+      'sources': {'github': {'type': 'ticket', 'prefix': 'minted'}},
+    }
 
-  def test_reference_preserving_material_rejects_instance_target(
+  def test_reference_preserving_material_ships_an_instance_target_under_its_name(
     self, tmp_path: Path, ticket_source
   ):
     _write_material(tmp_path, 'brog', '{"token": {"$cred": "github+reviewer"}}')
     _write_material(tmp_path, 'github+reviewer', '{"seed": "abc"}')
     _write_sources(tmp_path, {'github+reviewer': {'type': 'ticket', 'prefix': 'minted'}})
 
-    with pytest.raises(ValueError, match='must be spelled at kind level'):
-      credentials.build_scoped_store(_store(tmp_path, 'brog', 'github'), {'brog'})
+    files, kinds = credentials.build_scoped_store(_store(tmp_path, 'brog', 'github'), {'brog'})
+
+    assert files['creds/github+reviewer.cred'] == b'{"seed": "abc"}'
+    assert json.loads(files['creds.json']) == {
+      'defaults': ['brog+'],
+      'sources': {'github+reviewer': {'type': 'ticket', 'prefix': 'minted'}},
+    }
+    assert kinds == frozenset({'brog'})
 
   def test_scoped_view_is_lazy_bounded_and_keeps_selection(self, tmp_path: Path):
     path = _write_material(tmp_path, 'github+reviewer', 'token')
@@ -449,6 +504,7 @@ class TestScopedStore:
     path.write_text('changed')
 
     assert view.get('github') == 'changed'
+    assert view.try_get_instance('github') is None
     assert view.try_get('openai') is None
     assert view.known_names() == frozenset({'github', 'openai'})
 
@@ -550,24 +606,20 @@ class TestDefaultStore:
     store = self._ambient_store(tmp_path, monkeypatch)
     _write_material(store, 'openai+default', 'default')
     _write_material(store, 'openai+benchmark', 'benchmark')
+    _write_store_config(store, {'defaults': ['openai+default']})
     Path(host_config.HOST_CONFIG_FILE).write_text(
-      json.dumps(
-        {
-          'defaults': {'creds': ['openai+default']},
-          'user': {'tools': {'bro.bench.job': {'creds': ['openai+benchmark']}}},
-        }
-      )
+      json.dumps({'user': {'tools': {'bro.bench.job': {'creds': ['openai+benchmark']}}}})
     )
     monkeypatch.setattr(credentials, 'canonical_cli_name', lambda: 'bro.bench.job')
 
     assert credentials.get('openai') == 'benchmark'
 
-  def test_ambient_library_read_uses_defaults_without_a_tool(self, tmp_path: Path, monkeypatch):
+  def test_ambient_library_read_uses_store_defaults_without_a_tool(
+    self, tmp_path: Path, monkeypatch
+  ):
     store = self._ambient_store(tmp_path, monkeypatch)
     _write_material(store, 'openai+default', 'default')
-    Path(host_config.HOST_CONFIG_FILE).write_text(
-      json.dumps({'defaults': {'creds': ['openai+default']}})
-    )
+    _write_store_config(store, {'defaults': ['openai+default']})
     monkeypatch.setattr(credentials, 'canonical_cli_name', lambda: None)
 
     assert credentials.get('openai') == 'default'
@@ -585,9 +637,12 @@ class TestDefaultStore:
     with pytest.raises(CLIError, match='is not valid json'):
       credentials.default_store()
 
-  def test_explicit_bro_store_never_reads_the_host_config(self, tmp_path: Path, monkeypatch):
+  def test_explicit_bro_store_reads_its_defaults_and_never_the_host_config(
+    self, tmp_path: Path, monkeypatch
+  ):
     store = self._ambient_store(tmp_path, monkeypatch)
-    _write_material(store, 'openai', 'directed')
+    _write_material(store, 'openai+directed', 'directed')
+    _write_store_config(store, {'defaults': ['openai+directed']})
     Path(host_config.HOST_CONFIG_FILE).write_text('{')
     monkeypatch.setenv('BRO_STORE', str(store))
     Parser().parse(['rewind'])
@@ -597,7 +652,6 @@ class TestDefaultStore:
   @pytest.mark.parametrize(
     ('config', 'command', 'layer'),
     [
-      ({'defaults': {'creds': ['consumer_only+host']}}, None, 'defaults'),
       ({'user': {'creds': ['consumer_only+host']}}, None, 'user'),
       (
         {'user': {'tools': {'bro.trails.rewind': {'creds': ['consumer_only+host']}}}},
@@ -617,6 +671,51 @@ class TestDefaultStore:
       CLIError, match=rf'{re.escape(layer)} names unregistered credential kind\(s\): consumer_only'
     ):
       credentials.default_store()
+
+  def test_console_script_layers_user_and_tool_picks_over_store_defaults(self, tmp_path: Path):
+    store = tmp_path / '.bro'
+    _write_material(store, 'openai+store', 'store')
+    _write_material(store, 'openai+user', 'user')
+    _write_material(store, 'openai+tool', 'tool')
+    _write_store_config(store, {'defaults': ['openai+store']})
+    (tmp_path / '.bro.json').write_text(
+      json.dumps(
+        {
+          'user': {
+            'creds': ['openai+user'],
+            'tools': {'bro.base.credentials': {'creds': ['openai+tool']}},
+          }
+        }
+      )
+    )
+    environment = {**os.environ, 'HOME': str(tmp_path)}
+    environment.pop('BRO_STORE', None)
+
+    result = subprocess.run(
+      [console_script('credentials'), 'get', 'openai'],
+      capture_output=True,
+      text=True,
+      env=environment,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == 'tool\n'
+
+  def test_directed_console_script_reads_only_that_stores_defaults(self, tmp_path: Path):
+    store = tmp_path / 'directed'
+    _write_material(store, 'openai+directed', 'directed')
+    _write_store_config(store, {'defaults': ['openai+directed']})
+    (tmp_path / '.bro.json').write_text('{')
+
+    result = subprocess.run(
+      [console_script('credentials'), 'get', 'openai'],
+      capture_output=True,
+      text=True,
+      env={**os.environ, 'HOME': str(tmp_path), 'BRO_STORE': str(store)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == 'directed\n'
 
   def test_a_block_scoped_store_is_local_to_its_thread(self, tmp_path: Path, monkeypatch):
     self._ambient_store(tmp_path, monkeypatch)

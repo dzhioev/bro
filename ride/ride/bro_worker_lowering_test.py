@@ -237,6 +237,8 @@ class TestSummonLowering:
         },
         secrets={'aws', 'trails'},
         optional_secrets={'openai'},
+        credential_store={},
+        hydrated_kinds=frozenset({'aws', 'openai', 'trails'}),
         tty=False,
         image='runtime-image',
         runtime_bundle_hash='bundle-hash',

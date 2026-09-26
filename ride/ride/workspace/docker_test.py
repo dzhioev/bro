@@ -447,12 +447,13 @@ class TestPrepareContainer:
     monkeypatch.setattr(
       workspace_docker.credentials,
       'build_scoped_store',
-      lambda store, secrets, optional=(): (
-        events.append(('store', store.selection, secrets, optional))
-        or ({'creds/x.cred': b'y'}, frozenset({'github'}))
-      ),
+      lambda *_args, **_kwargs: pytest.fail('preflighted stores must not be hydrated again'),
     )
-    monkeypatch.setattr(workspace_docker, 'store_tarball', lambda store, root: b'TARBALL')
+    monkeypatch.setattr(
+      workspace_docker,
+      'store_tarball',
+      lambda store, root: events.append(('store', store, root)) or b'TARBALL',
+    )
     monkeypatch.setattr(
       workspace_docker,
       '_docker_create_argv',
@@ -473,6 +474,8 @@ class TestPrepareContainer:
       runtime_bundle_hash='bundle-hash',
       optional_secrets=('openai',),
       credential_selection={'openai': 'work'},
+      credential_store={'creds/openai+work.cred': b'key', 'creds.json': b'{}'},
+      hydrated_kinds={'github'},
       extra_mounts=('/host:/container',),
       repo=project,
       base_ref='base-sha',
@@ -482,8 +485,7 @@ class TestPrepareContainer:
       'clone',
       (Repository(str(project), project), workspace.tree, 'workspace-ws', 'base-sha'),
     )
-    assert events[1] == ('store', {'openai': 'work'}, ('github',), ('openai',))
-    argv_event = events[2]
+    argv_event = events[1]
     assert argv_event[0] == 'argv'
     assert argv_event[1] == (
       'runtime-image',
@@ -504,6 +506,11 @@ class TestPrepareContainer:
       'published_ports': [],
       'additions': {},
     }
+    assert events[2] == (
+      'store',
+      {'creds/openai+work.cred': b'key', 'creds.json': b'{}'},
+      PurePosixPath('.bro'),
+    )
     assert events[3] == ('create', ['docker', 'create'], b'TARBALL', 'ws')
 
 
@@ -517,6 +524,8 @@ class TestMemberExec:
       secrets={'github'},
       optional_secrets={'openai'},
       credential_selection={'github': 'dev'},
+      credential_store={'creds/github+dev.cred': b'material'},
+      hydrated_kinds={'github'},
     )
 
   def test_member_exec_argv_scrubs_with_an_explicit_snapshot(self):
@@ -528,16 +537,11 @@ class TestMemberExec:
     assert argv[15:] == ['ride-member', 'do-ride', 'solo']
 
   def test_prepare_member_exec_delivers_and_reowns_the_store(self, monkeypatch):
-    store = {'creds/github.cred': b'material'}
-
-    def build_scoped_store(source, secrets, optional=()):
-      assert source.selection == {'github': 'dev'}
-      return store, frozenset({'github'})
-
+    store = {'creds/github+dev.cred': b'material'}
     monkeypatch.setattr(
       workspace_docker.credentials,
       'build_scoped_store',
-      build_scoped_store,
+      lambda *_args, **_kwargs: pytest.fail('preflighted stores must not be hydrated again'),
     )
     calls: list = []
 

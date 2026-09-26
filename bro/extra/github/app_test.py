@@ -83,7 +83,9 @@ class TestSource:
     material = tmp_path / credentials.MATERIAL_DIR / 'github.cred'
     material.parent.mkdir()
     material.write_text('{}')
-    (tmp_path / credentials.SOURCES_FILE).write_text(json.dumps({'github': {'type': 'github_app'}}))
+    (tmp_path / credentials.STORE_FILE).write_text(
+      json.dumps({'sources': {'github': {'type': 'github_app'}}})
+    )
 
     store = credentials.Store(credentials.default_registry(), tmp_path, {})
 
@@ -188,8 +190,8 @@ class TestSource:
     material = tmp_path / credentials.MATERIAL_DIR / 'github+bot.cred'
     material.parent.mkdir()
     material.write_text(json.dumps(config))
-    (tmp_path / credentials.SOURCES_FILE).write_text(
-      json.dumps({'github+bot': {'type': 'github_app'}})
+    (tmp_path / credentials.STORE_FILE).write_text(
+      json.dumps({'sources': {'github+bot': {'type': 'github_app'}}})
     )
     mint = MagicMock(
       return_value=app.InstallationToken('ghs_x', datetime.now(UTC) + timedelta(hours=1))
@@ -200,6 +202,9 @@ class TestSource:
     files, kinds = credentials.build_scoped_store(source_store, ['github+bot'])
 
     assert mint.call_count == 1
-    assert json.loads(files['creds/github.cred']) == config
-    assert json.loads(files['creds.json']) == {'github': {'type': 'github_app'}}
+    assert json.loads(files['creds/github+bot.cred']) == config
+    assert json.loads(files['creds.json']) == {
+      'defaults': ['github+bot'],
+      'sources': {'github+bot': {'type': 'github_app'}},
+    }
     assert kinds == frozenset({'github'})

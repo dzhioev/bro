@@ -21,55 +21,44 @@ class TestProjectSelection:
   def test_absent_file_selects_nothing(self, tmp_path, monkeypatch):
     monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(tmp_path / 'nope.json'))
 
-    assert host_config.project_selection(
-      host_config.Attachment(path=str(tmp_path))
+    assert host_config.launch_selection(
+      host_config.Attachment(path=str(tmp_path)), 'developer'
     ) == host_config.CredentialSelection({}, {})
 
-  def test_defaults_and_project_merge_with_attribution(self, config_file, tmp_path):
-    config_file(
-      {
-        'defaults': {'creds': ['github+dev', 'trails+write']},
-        'projects': {
-          str(tmp_path): {'creds': ['github+project', 'brog+']},
-        },
-      }
-    )
+  def test_project_picks_carry_attribution(self, config_file, tmp_path):
+    config_file({'projects': {str(tmp_path): {'creds': ['github+project', 'brog+']}}})
 
-    selected = host_config.project_selection(host_config.Attachment(path=str(tmp_path)))
+    selected = host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'developer')
 
-    assert selected.instances == {'github': 'project', 'trails': 'write', 'brog': ''}
+    assert selected.instances == {'github': 'project', 'brog': ''}
     assert selected.layers == {
       'github': host_config.PROJECT_PATH_LAYER,
-      'trails': host_config.DEFAULTS_LAYER,
       'brog': host_config.PROJECT_PATH_LAYER,
     }
 
-  def test_an_unnamed_attachment_gets_defaults_alone(self, config_file, tmp_path):
+  def test_an_unnamed_attachment_gets_no_project_picks(self, config_file, tmp_path):
     config_file(
       {
-        'defaults': {'creds': ['github+dev']},
         'projects': {
           str(tmp_path / 'api'): {
             'creds': ['github+api', 'brog+github'],
             'bros': {'reviewer': {'creds': ['trails+review']}},
           }
-        },
+        }
       }
     )
 
-    assert host_config.project_selection(
-      host_config.Attachment(path=str(tmp_path / 'elsewhere'))
-    ).instances == {'github': 'dev'}
-
-  def test_a_detached_launch_gets_defaults_alone(self, config_file, tmp_path):
-    config_file(
-      {
-        'defaults': {'creds': ['github+dev']},
-        'projects': {str(tmp_path): {'creds': ['brog+github']}},
-      }
+    assert (
+      host_config.launch_selection(
+        host_config.Attachment(path=str(tmp_path / 'elsewhere')), 'developer'
+      ).instances
+      == {}
     )
 
-    assert host_config.project_selection(None).instances == {'github': 'dev'}
+  def test_a_detached_launch_gets_no_project_picks(self, config_file, tmp_path):
+    config_file({'projects': {str(tmp_path): {'creds': ['brog+github']}}})
+
+    assert host_config.launch_selection(None, 'developer').instances == {}
 
   def test_keys_expand_and_resolve_before_matching(self, config_file, tmp_path, monkeypatch):
     monkeypatch.setenv('HOME', str(tmp_path))
@@ -77,15 +66,15 @@ class TestProjectSelection:
     (tmp_path / 'link').symlink_to(tmp_path / 'repo')
     config_file({'projects': {'~/repo': {'creds': ['brog+github']}}})
 
-    assert host_config.project_selection(
-      host_config.Attachment(path=str(tmp_path / 'link'))
+    assert host_config.launch_selection(
+      host_config.Attachment(path=str(tmp_path / 'link')), 'developer'
     ).instances == {'brog': 'github'}
 
   def test_a_url_key_matches_the_same_url_normalized(self, config_file):
     config_file({'projects': {'HTTPS://GitHub.com/foo/api.git/': {'creds': ['brog+github']}}})
 
-    selected = host_config.project_selection(
-      host_config.Attachment(url='https://github.com/foo/api.git')
+    selected = host_config.launch_selection(
+      host_config.Attachment(url='https://github.com/foo/api.git'), 'developer'
     )
 
     assert selected.instances == {'brog': 'github'}
@@ -101,7 +90,9 @@ class TestProjectSelection:
     )
 
     with pytest.raises(ValueError, match='name the same identity'):
-      host_config.project_selection(host_config.Attachment(url='https://github.com/foo/api.git'))
+      host_config.launch_selection(
+        host_config.Attachment(url='https://github.com/foo/api.git'), 'developer'
+      )
 
 
 class TestTwoIdentities:
@@ -194,10 +185,9 @@ class TestAttachment:
 
 
 class TestLaunchSelection:
-  def test_project_bro_overrides_project_and_defaults(self, config_file, tmp_path):
+  def test_project_bro_overrides_project_picks(self, config_file, tmp_path):
     config_file(
       {
-        'defaults': {'creds': ['github+default', 'trails+write']},
         'projects': {
           str(tmp_path): {
             'creds': ['github+project', 'brog+github'],
@@ -222,17 +212,12 @@ class TestLaunchSelection:
       'brog': host_config.PROJECT_PATH_LAYER,
     }
 
-  def test_an_unlisted_bro_uses_project_and_defaults(self, config_file, tmp_path):
-    config_file(
-      {
-        'defaults': {'creds': ['trails+write']},
-        'projects': {str(tmp_path): {'creds': ['github+project']}},
-      }
-    )
+  def test_an_unlisted_bro_uses_project_picks(self, config_file, tmp_path):
+    config_file({'projects': {str(tmp_path): {'creds': ['github+project']}}})
 
     selected = host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'developer')
 
-    assert selected.instances == {'trails': 'write', 'github': 'project'}
+    assert selected.instances == {'github': 'project'}
 
   def test_a_bro_can_pick_and_grant_the_same_kind(self, config_file, tmp_path):
     config_file(
@@ -281,14 +266,13 @@ class TestLaunchSelection:
     attachment = host_config.Attachment(path=str(tmp_path))
 
     assert host_config.launch_selection(attachment, 'developer').scope_layers == ()
-    assert host_config.project_selection(attachment).scope_layers == ()
 
 
 class TestScopeLayers:
   def test_a_retired_permit_names_its_replacement(self, config_file):
     config_file({'defaults': {'grant': [':webview.vnc']}})
     with pytest.raises(host_config.CLIError, match=':launch.webview.vnc'):
-      host_config.project_selection(None)
+      host_config.launch_selection(None, 'developer')
 
   def test_defaults_project_and_bro_layers_stay_in_precedence_order(self, config_file, tmp_path):
     config_file(
@@ -406,12 +390,11 @@ class TestLaunchLLM:
 
 
 class TestToolSelection:
-  def test_each_layer_overrides_the_one_above_it(self, config_file, tmp_path):
+  def test_the_tool_layer_overrides_the_user_layer(self, config_file, tmp_path):
     config_file(
       {
-        'defaults': {'creds': ['trails+write', 'github+dev', 'aws+shared']},
         'user': {
-          'creds': ['github+me', 'brog+linear'],
+          'creds': ['github+me', 'brog+linear', 'trails+write'],
           'tools': {'bro.trails.rewind': {'creds': ['trails+analyst', 'openai+benchmark']}},
         },
         'projects': {str(tmp_path): {'creds': ['brog+github']}},
@@ -424,24 +407,19 @@ class TestToolSelection:
       'trails': 'analyst',
       'github': 'me',
       'brog': 'linear',
-      'aws': 'shared',
       'openai': 'benchmark',
     }
     assert selected.layers == {
       'trails': host_config.TOOL_LAYER,
       'github': host_config.USER_LAYER,
       'brog': host_config.USER_LAYER,
-      'aws': host_config.DEFAULTS_LAYER,
       'openai': host_config.TOOL_LAYER,
     }
 
-  def test_unknown_command_uses_the_layers_above_it(self, config_file):
-    config_file({'defaults': {'creds': ['github+dev']}, 'user': {'creds': ['brog+linear']}})
+  def test_unknown_command_uses_the_user_layer(self, config_file):
+    config_file({'user': {'creds': ['brog+linear']}})
 
-    assert host_config.tool_selection('other').instances == {
-      'github': 'dev',
-      'brog': 'linear',
-    }
+    assert host_config.tool_selection('other').instances == {'brog': 'linear'}
 
   def test_a_tools_key_naming_the_invoked_alias_is_rejected(self, config_file):
     config_file({'user': {'tools': {'rewind': {'creds': ['trails+analyst']}}}})
@@ -457,13 +435,21 @@ class TestToolSelection:
 
 
 class TestValidation:
+  def test_defaults_creds_names_the_store_defaults(self, config_file):
+    path = config_file({'defaults': {'creds': ['brog+']}})
+
+    with pytest.raises(
+      ValueError, match=rf'{path}: defaults.creds is retired.*creds.json: defaults'
+    ):
+      host_config.tool_selection(None)
+
   def test_trailing_plus_selects_the_empty_instance(self, config_file):
-    config_file({'defaults': {'creds': ['brog+']}})
+    config_file({'user': {'creds': ['brog+']}})
 
     assert host_config.tool_selection(None).instances == {'brog': ''}
 
   def test_unknown_kind_is_carried_without_registry_validation(self, config_file):
-    config_file({'defaults': {'creds': ['consumer_only+special']}})
+    config_file({'user': {'creds': ['consumer_only+special']}})
 
     assert host_config.tool_selection(None).instances == {'consumer_only': 'special'}
 
@@ -471,22 +457,22 @@ class TestValidation:
     config_file({'projects': {str(tmp_path): {'instances': ['brog+github']}}})
 
     with pytest.raises(ValueError, match="'instances' is retired; use 'creds'"):
-      host_config.project_selection(host_config.Attachment(path=str(tmp_path)))
+      host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'developer')
 
   def test_selection_without_a_plus_is_rejected(self, config_file):
-    config_file({'defaults': {'creds': ['brog']}})
+    config_file({'user': {'creds': ['brog']}})
 
     with pytest.raises(ValueError, match="selection 'brog' names no instance"):
       host_config.tool_selection(None)
 
   def test_malformed_instance_is_rejected(self, config_file):
-    config_file({'defaults': {'creds': ['brog+GitHub']}})
+    config_file({'user': {'creds': ['brog+GitHub']}})
 
     with pytest.raises(ValueError, match='malformed secret name'):
       host_config.tool_selection(None)
 
   def test_two_selections_of_one_kind_are_rejected(self, config_file):
-    config_file({'defaults': {'creds': ['brog+github', 'brog+flow']}})
+    config_file({'user': {'creds': ['brog+github', 'brog+flow']}})
 
     with pytest.raises(ValueError, match="selects kind 'brog' twice"):
       host_config.tool_selection(None)
@@ -521,7 +507,7 @@ class TestValidation:
     'data, message',
     [
       ({'defaults': []}, 'defaults must hold a json object'),
-      ({'defaults': {'creds': 'brog+github'}}, 'creds must be a list'),
+      ({'defaults': {'creds': 'brog+github'}}, 'defaults.creds is retired'),
       ({'projects': []}, 'projects must be a json object'),
       ({'projects': {'/repo': {'bros': []}}}, 'bros must be a json object'),
       ({'projects': {'/repo': {'bros': {'dev': []}}}}, 'must hold a json object'),
