@@ -1,3 +1,6 @@
+import json
+
+from bro.base import credentials
 from ride import trails
 from ride.workspace.store import ScopedSecrets
 
@@ -47,6 +50,19 @@ def test_a_service_credential_maps_nothing(monkeypatch):
   _patch_view_store(monkeypatch, {'base_url': 'https://trails.example', 'token': 'secret'})
 
   assert trails.local_trails_mounts(_scope({'github', 'trails'})) == ()
+
+
+def test_the_store_default_selects_the_host_side_trails_view(monkeypatch, tmp_path):
+  store = tmp_path / 'store'
+  material = store / credentials.MATERIAL_DIR
+  material.mkdir(parents=True)
+  (material / 'trails+service.cred').write_text(
+    json.dumps({'base_url': 'https://trails.example', 'token': 'secret'})
+  )
+  (store / credentials.STORE_FILE).write_text(json.dumps({'defaults': ['trails+service']}))
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
+
+  assert trails.local_trails_mounts(_scope({'trails'}, optional=())) == ()
 
 
 def test_a_local_credential_maps_the_host_root_for_a_selected_instance(monkeypatch, tmp_path):

@@ -42,6 +42,7 @@ import json
 import os
 import pty
 import re
+import shlex
 import signal
 import socket
 import subprocess
@@ -99,6 +100,22 @@ def _broxy_probe(python: str, source: str) -> list[str]:
 
 def _session_broxy_probe(source: str) -> list[str]:
   return _broxy_probe(_RUNTIME_PYTHON, source)
+
+
+def _do_ride_bro_probe(command: list[str], source: str, sitecustomize: str) -> list[str]:
+  bro_script = f'#!/bin/sh\nexec {_RUNTIME_PYTHON} -c {shlex.quote(source)}\n'
+  wrapper = '\n'.join(
+    [
+      'mkdir -p /tmp/e2e-bin /tmp/e2e-python',
+      f'printf %s {shlex.quote(bro_script)} > /tmp/e2e-bin/bro',
+      f'printf %s {shlex.quote(sitecustomize)} > /tmp/e2e-python/sitecustomize.py',
+      'chmod +x /tmp/e2e-bin/bro',
+      'export PATH="/tmp/e2e-bin:$PATH"',
+      'export PYTHONPATH=/tmp/e2e-python',
+      'exec "$@"',
+    ]
+  )
+  return ['bash', '-ec', wrapper, 'ride-e2e-do-ride', *command]
 
 
 # --- in-container probes (source for `python -c`; framework code comes from the runtime volume) ---
@@ -1577,11 +1594,42 @@ class TestBoxedPartyJoin:
 # --- I: summon credential ownership and cross-isolation routes ----------------
 
 
+_SUMMON_CREDENTIAL_SITECUSTOMIZE = """
+from datetime import UTC, datetime, timedelta
+from bro.extra.github import app
+
+app.mint_installation_token = lambda **kwargs: app.InstallationToken(
+  'e2e-minted', datetime.now(UTC) + timedelta(hours=1)
+)
+"""
+
+
 _SUMMON_CREDENTIAL_CHILD = """
+import os
+import subprocess
+from pathlib import Path
+
 from bro.base import credentials
 from bro.run_lifecycle import RunLifecycle
 
 assert credentials.get('openai') == 'summoned-openai'
+assert credentials.get('aws') == 'summoned-aws'
+assert credentials.get_json('infra') == {'token': 'e2e-minted'}
+assert credentials.default_store().get_instance('github+reference') == 'e2e-minted'
+assert Path(os.environ['AWS_SHARED_CREDENTIALS_FILE']).read_text() == 'summoned-aws'
+listed = subprocess.run(
+  ['credentials', 'list', '--instance'],
+  check=True,
+  capture_output=True,
+  text=True,
+).stdout.splitlines()
+assert 'openai+summoned' in listed
+assert 'aws+summoned' in listed
+assert 'github+summoned' in listed
+assert 'github+reference' in listed
+assert 'infra+composite' in listed
+assert 'openai' not in listed
+assert 'aws' not in listed
 channel = RunLifecycle.from_env()
 assert channel is not None
 channel.trail('summon-credential-child')
@@ -1593,9 +1641,12 @@ channel.close()
 def test_spawned_summon_hydrates_the_targets_configured_model_credential(
   isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+  from datetime import UTC, datetime, timedelta
+
   import ride.bro_worker as ride_spawn
   import ride.broker_root as broker_root
   from bro.base import credentials, host_config
+  from bro.extra.github import app as github_app
   from ride.runtime_bundle import RuntimeBundle
   from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
   from ride.workspace.metadata import Isolation
@@ -1611,13 +1662,42 @@ def test_spawned_summon_hydrates_the_targets_configured_model_credential(
   container_runtime = ContainerRuntimeResolver.fixed(
     ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
   )
+  host_store = env.home / '.bro'
+  (host_store / 'creds' / 'aws+summoned.cred').write_text('summoned-aws')
+  (host_store / 'creds' / 'github+summoned.cred').write_text('summoned-github')
+  (host_store / 'creds' / 'github+reference.cred').write_text(
+    json.dumps({'app_id': 1, 'installation_id': 2, 'private_key': 'pem'})
+  )
+  (host_store / 'creds' / 'infra+composite.cred').write_text(
+    json.dumps({'token': {'$cred': 'github+reference'}})
+  )
+  (host_store / credentials.STORE_FILE).write_text(
+    json.dumps({'sources': {'github+reference': {'type': 'github_app'}}})
+  )
+  monkeypatch.setattr(
+    github_app,
+    'mint_installation_token',
+    lambda **kwargs: github_app.InstallationToken(
+      'e2e-minted', datetime.now(UTC) + timedelta(hours=1)
+    ),
+  )
   config = env.root / 'summon-credentials.json'
   config.write_text(
     json.dumps(
       {
         'projects': {
           str(env.project): {
-            'bros': {'bro': {'creds': ['openai+summoned']}},
+            'bros': {
+              'bro': {
+                'creds': [
+                  'openai+summoned',
+                  'aws+summoned',
+                  'github+summoned',
+                  'infra+composite',
+                ],
+                'grant': ['aws', 'github', 'infra'],
+              }
+            },
           }
         }
       }
@@ -1629,7 +1709,14 @@ def test_spawned_summon_hydrates_the_targets_configured_model_credential(
 
   def started_party_launch(*arguments, **keywords):
     launch = original_started_party_launch(*arguments, **keywords)
-    return replace(launch, command=_session_broxy_probe(_SUMMON_CREDENTIAL_CHILD))
+    return replace(
+      launch,
+      command=_do_ride_bro_probe(
+        launch.command,
+        _SUMMON_CREDENTIAL_CHILD,
+        _SUMMON_CREDENTIAL_SITECUSTOMIZE,
+      ),
+    )
 
   monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
   monkeypatch.setenv('HOME', str(env.home))
@@ -1763,7 +1850,7 @@ def test_manual_summon_argv_owns_its_credential_scope(
   assert code == 0
   assert captured['spec'].cred == ['github+manual']
   assert captured['store'].kinds == {'github'}
-  assert captured['store']['creds/github.cred'] == b'manual-github'
+  assert captured['store']['creds/github+manual.cred'] == b'manual-github'
   assert captured['summoned'].token == record.token
 
 

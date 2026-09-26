@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -97,6 +98,23 @@ class TestApplyClaudeAuth:
     launch_material = launch_store / credentials.MATERIAL_DIR
     launch_material.mkdir(parents=True)
     (launch_material / 'claude_code.cred').write_text('launch-token')
+    store = credentials.Store(credentials.default_registry(), launch_store, {})
+    env: dict[str, str] = {}
+
+    ride_claude_auth.apply_claude_auth(env, store=store)
+
+    assert env == {'CLAUDE_CODE_OAUTH_TOKEN': 'launch-token'}
+
+  def test_explicit_store_reads_its_default_pick(self, material_dir, tmp_path):
+    from bro.base import credentials
+
+    launch_store = tmp_path / 'launch'
+    launch_material = launch_store / credentials.MATERIAL_DIR
+    launch_material.mkdir(parents=True)
+    (launch_material / 'claude_code+session.cred').write_text('launch-token')
+    (launch_store / credentials.STORE_FILE).write_text(
+      json.dumps({'defaults': ['claude_code+session']})
+    )
     store = credentials.Store(credentials.default_registry(), launch_store, {})
     env: dict[str, str] = {}
 

@@ -5,16 +5,16 @@ The code registry declares credential kinds, descriptions, and optional install
 hooks.
 A store supplies material independently:
 `creds/<name>.cred` is the material for one stored name, while `creds.json`
-optionally annotates a name with one typed source.
-A stored name is `kind+instance`, spelled `kind` when the instance is empty;
-a kind-addressed read falls to that empty instance when no layer selects
-another.
+keeps the store's default picks and optionally annotates stored names with typed
+sources.
+A stored name is `kind+instance`, spelled `kind` when the instance is empty.
+Kind-addressed reads apply caller picks over the store's defaults, then fall to
+the empty instance.
 `BRO_STORE` selects a directed process store.
-Without it, the default `~/.bro` store lazily applies `~/.bro.json`'s defaults,
-its user layer, and the entry for the command this process runs.
+Without it, the default `~/.bro` store layers `~/.bro.json`'s user and running
+command picks over the store's defaults.
 A directed store never consults the host config.
 
-Kind-addressed reads apply the store's explicit kind-to-instance selection.
 Storage-addressed reads use the name exactly as written.
 A JSON value may contain `{"$cred": "<name>"}` reference nodes, optionally with
 `"field": "<key>"`.
@@ -49,7 +49,7 @@ from bro.base.condition import StringVariable
 __cli_name__ = 'credentials'
 
 STORE_DIR = configs.STORE_DIR
-SOURCES_FILE = 'creds.json'
+STORE_FILE = 'creds.json'
 MATERIAL_DIR = 'creds'
 MATERIAL_SUFFIX = '.cred'
 MINTED_SUFFIX = '.minted'
@@ -110,8 +110,8 @@ def require_kind_declaration(name: str, declaration: str) -> None:
   if instance is not None:
     raise ValueError(
       f'{declaration} declares credential {name!r}, which names an instance; '
-      f'declare the bare kind {kind!r} instead — instance selection belongs in '
-      '~/.bro.json or a --cred flag'
+      f'declare the bare kind {kind!r} instead — select its instance through the '
+      "store's defaults, a project or bro creds list, or a --cred flag"
     )
 
 
@@ -350,7 +350,7 @@ class CredentialKind:
       raise ValueError(
         f'credential registry entry {name!r} carries retired or unknown fields {unknown}; '
         f'entries may contain only description and install, source configuration belongs in '
-        f'{SOURCES_FILE}, and material belongs in {MATERIAL_DIR}/<name>{MATERIAL_SUFFIX}'
+        f'{STORE_FILE}, and material belongs in {MATERIAL_DIR}/<name>{MATERIAL_SUFFIX}'
       )
     if 'description' not in data:
       raise ValueError(f'credential registry entry {name!r} is missing required description')
@@ -407,8 +407,12 @@ def _referenced_names(text: str) -> set[str]:
 
 
 class Store:
-  """Resolve one code registry against one exclusive directory and selection;
-  a kind outside `readable`, when given, resolves as absent."""
+  """Resolve one code registry against one exclusive directory and selection.
+
+  Caller picks layer over the directory's defaults.
+  A kind outside `readable`, or a stored name outside `readable_names`, resolves
+  as absent when either bound is given.
+  """
 
   def __init__(
     self,
@@ -417,34 +421,57 @@ class Store:
     selection: Mapping[str, str],
     *,
     readable: Optional[Iterable[str]] = None,
+    readable_names: Optional[Iterable[str]] = None,
   ):
     self.registry = dict(registry)
     self.store_dir = Path(store_dir)
-    self.selection = _validate_selection(selection, self.registry)
+    self.defaults, self._sources = self._load_config()
+    caller_selection = _validate_selection(selection, self.registry)
+    self.selection = {**self.defaults, **caller_selection}
     self._readable = None if readable is None else frozenset(readable)
     if self._readable is not None:
       unknown = sorted(self._readable - self.registry.keys())
       if len(unknown) > 0:
         raise ValueError(f'readable kinds outside the registry: {unknown}')
-    self._sources = self._load_sources()
+    self._readable_names = (
+      None
+      if readable_names is None
+      else frozenset(_stored_spelling(name) for name in readable_names)
+    )
+    if self._readable_names is not None:
+      unknown = sorted(
+        name for name in self._readable_names if parse_name(name)[0] not in self.registry
+      )
+      if len(unknown) > 0:
+        raise ValueError(f'readable names outside the registry: {unknown}')
     self._reject_noncanonical_material()
     self._cache: dict[str, str] = {}
     self._winners: dict[str, Source] = {}
     self._lock = threading.Lock()
 
-  def _load_sources(self) -> dict[str, Source]:
-    path = self.store_dir / SOURCES_FILE
+  def _load_config(self) -> tuple[dict[str, str], dict[str, Source]]:
+    path = self.store_dir / STORE_FILE
     if not path.is_file():
-      return {}
+      return {}, {}
     try:
       data = json.loads(path.read_text())
     except json.JSONDecodeError as error:
-      raise ValueError(f'credential source file {path} is not valid json') from error
+      raise ValueError(f'credential store file {path} is not valid json') from error
     if not isinstance(data, dict):
-      raise ValueError(f'credential source file {path} must be a json object')
+      raise ValueError(f'credential store file {path} must be a json object')
+    unknown = sorted(set(data) - {'defaults', 'sources'})
+    if len(unknown) > 0:
+      raise ValueError(
+        f'{path} has credential entries outside "sources": {", ".join(unknown)}; '
+        'move typed source annotations under "sources"'
+      )
+    defaults = _store_defaults(path, data.get('defaults', []), self.registry)
+    source_data = data.get('sources', {})
+    if not isinstance(source_data, dict):
+      raise ValueError(f'{path}: sources must be a json object')
     sources: dict[str, Source] = {}
-    for name, annotation in data.items():
-      _require_canonical_name(name, f'{path} annotates')
+    for name, annotation in source_data.items():
+      _require_canonical_name(name, f'{path}: sources annotates')
       kind, _ = parse_name(name)
       if not isinstance(annotation, dict):
         raise ValueError(f'credential source annotation {name!r} must be an object')
@@ -461,7 +488,7 @@ class Store:
           _source_from_dict(annotation)
         continue
       sources[name] = _source_from_dict(annotation)
-    return sources
+    return defaults, sources
 
   def _reject_noncanonical_material(self) -> None:
     material_dir = self.store_dir / MATERIAL_DIR
@@ -499,7 +526,11 @@ class Store:
   def _resolution(self, name: str, *, requested: str) -> _Resolution:
     storage_name = _stored_spelling(name)
     kind, _ = parse_name(storage_name)
-    if kind not in self.registry or (self._readable is not None and kind not in self._readable):
+    if (
+      kind not in self.registry
+      or (self._readable is not None and kind not in self._readable)
+      or (self._readable_names is not None and storage_name not in self._readable_names)
+    ):
       return _Unresolved(requested)
     with self._lock:
       return self._resolve(storage_name, chain=())
@@ -664,6 +695,40 @@ class Store:
     return self._material_path(self.selected_name(name))
 
 
+def _selection_spelling(kind: str, instance: str) -> str:
+  return f'{kind}+{instance}'
+
+
+def parse_picks(entries: object, *, where: str, field: str) -> dict[str, str]:
+  """Parse one explicit kind-to-instance pick list."""
+  if not isinstance(entries, list):
+    raise ValueError(f'{where}: {field} must be a list')
+  picks: dict[str, str] = {}
+  for entry in entries:
+    if not isinstance(entry, str):
+      raise ValueError(f'{where}: {field} selection {entry!r} must be a string')
+    kind, instance = parse_name(entry)
+    if instance is None:
+      raise ValueError(
+        f'{where}: selection {entry!r} names no instance; write '
+        f"'{entry}+<instance>', or '{entry}+' for the empty instance"
+      )
+    if kind in picks:
+      raise ValueError(f'{where}: {field} selects kind {kind!r} twice')
+    picks[kind] = instance
+  return picks
+
+
+def _store_defaults(
+  path: Path, entries: object, registry: Mapping[str, CredentialKind]
+) -> dict[str, str]:
+  defaults = parse_picks(entries, where=str(path), field='defaults')
+  for kind in defaults:
+    if kind not in registry:
+      raise ValueError(f'{path}: defaults names unregistered credential kind {kind!r}')
+  return defaults
+
+
 def _validate_selection(
   selection: Mapping[str, str], registry: Mapping[str, CredentialKind]
 ) -> dict[str, str]:
@@ -710,8 +775,8 @@ def _reject_retired_store_files() -> None:
     if path.exists():
       raise ValueError(
         f'retired credential file {path}; credential material belongs at '
-        f'{Path(STORE_DIR) / MATERIAL_DIR}/<name>{MATERIAL_SUFFIX} and typed sources at '
-        f'{Path(STORE_DIR) / SOURCES_FILE}'
+        f'{Path(STORE_DIR) / MATERIAL_DIR}/<name>{MATERIAL_SUFFIX} and typed sources under '
+        f'"sources" in {Path(STORE_DIR) / STORE_FILE}'
       )
 
 
@@ -785,21 +850,7 @@ def known_names() -> frozenset[str]:
   return default_store().known_names()
 
 
-def _require_one_instance_per_kind(names: Iterable[str]) -> None:
-  by_kind: dict[str, list[str]] = {}
-  for name in sorted(set(names)):
-    kind, _ = parse_name(name)
-    by_kind.setdefault(kind, []).append(name)
-  for kind, instances in by_kind.items():
-    if len(instances) > 1:
-      raise ValueError(
-        f'secrets {", ".join(map(repr, instances))} are instances of the same kind '
-        f'{kind!r}; a session installs at most one'
-      )
-
-
 def _scoped_selection(store: Store, required: set[str], optional: set[str]) -> list[str]:
-  _require_one_instance_per_kind(required | optional)
   present = store.instance_names()
   selection: list[str] = []
   for name in sorted(required):
@@ -825,77 +876,88 @@ def _scoped_selection(store: Store, required: set[str], optional: set[str]) -> l
   return selection
 
 
-def _require_kind_level(name: str, reference: str) -> None:
-  kind, instance = parse_name(reference)
-  if instance is not None:
-    raise ValueError(
-      f'secret {name!r} ships reference-preserving text; reference {reference!r} '
-      f'must be spelled at kind level ({kind!r}) — the scoped namespace is kinds-only'
-    )
-
-
 def build_scoped_store(
   store: Store, names: Iterable[str], *, optional: Iterable[str] = ()
 ) -> tuple[dict[str, bytes], frozenset[str]]:
-  """Hydrate a kinds-only store and report the declared kinds that resolved."""
+  """Hydrate stored names and report the loaded kinds whose hooks apply."""
   selection = _scoped_selection(store, set(names), set(optional))
   files: dict[str, bytes] = {}
   typed_sources: dict[str, dict] = {}
-  scoped: set[str] = set()
+  scoped_names: set[str] = set()
+  default_names: dict[str, str] = {}
   pending_references: list[tuple[str, str]] = []
   declared_hydrated: set[str] = set()
 
+  def choose_default(name: str) -> None:
+    kind, instance = parse_name(name)
+    storage = store.selected_name(name)
+    if instance is None or kind not in default_names:
+      default_names[kind] = storage
+
   def materialize(name: str, value: str, cacheable: bool) -> None:
-    kind, _ = parse_name(name)
-    storage_name = store.selected_name(name)
+    storage = store.selected_name(name)
+    if storage in scoped_names:
+      return
     source = store.winning_source(name)
     material_path = store.material_path(name)
     if not cacheable:
-      raw = _fetch_source(source, material_path, storage_name)
+      raw = _fetch_source(source, material_path, storage)
       if raw is None:
-        raise ValueError(f'secret {storage_name!r} disappeared during hydration')
+        raise ValueError(f'secret {storage!r} disappeared during hydration')
       value = raw.strip()
       for reference in sorted(_referenced_names(value)):
-        _require_kind_level(name, reference)
-        pending_references.append((name, reference))
+        pending_references.append((storage, reference))
     try:
       annotation, content = source.materialize_scoped(material_path, value)
     except ValueError:
       raise
     except Exception as error:
-      raise ValueError(f'secret {storage_name!r} failed to load: {error}') from error
-    files[f'{MATERIAL_DIR}/{kind}{MATERIAL_SUFFIX}'] = content
+      raise ValueError(f'secret {storage!r} failed to load: {error}') from error
+    files[f'{MATERIAL_DIR}/{storage}{MATERIAL_SUFFIX}'] = content
     if annotation is not None:
-      typed_sources[kind] = annotation
-    scoped.add(kind)
+      typed_sources[storage] = annotation
+    scoped_names.add(storage)
 
   for name in selection:
-    value, cacheable = store.require_resolution(name)
-    materialize(name, value, cacheable)
+    resolved = store.require_resolution(name)
+    choose_default(name)
+    materialize(name, *resolved)
     declared_hydrated.add(parse_name(name)[0])
 
   while len(pending_references) > 0:
     referrer, reference = pending_references.pop(0)
-    if reference in scoped:
+    reference_storage = store.selected_name(reference)
+    if reference_storage in scoped_names:
       continue
+    if parse_name(reference)[1] is None:
+      choose_default(reference)
     resolved = store.require_resolution(reference)
-    log.info('hydrating %r into the scope: referenced by %r', reference, referrer)
+    log.info('hydrating %r into the scope: referenced by %r', reference_storage, referrer)
     materialize(reference, *resolved)
 
-  files[SOURCES_FILE] = json.dumps(typed_sources).encode()
+  defaults = [
+    _selection_spelling(kind, parse_name(storage)[1] or '')
+    for kind, storage in sorted(default_names.items())
+  ]
+  files[STORE_FILE] = json.dumps({'defaults': defaults, 'sources': typed_sources}).encode()
   return files, frozenset(declared_hydrated)
 
 
 def scoped_view_store(store: Store, names: Iterable[str], *, optional: Iterable[str] = ()) -> Store:
   selection = _scoped_selection(store, set(names), set(optional))
   view_selection = dict(store.selection)
-  readable: set[str] = set()
+  readable_names: set[str] = set()
   for name in selection:
     kind, instance = parse_name(name)
-    readable.add(kind)
+    readable_names.add(store.selected_name(name))
     if instance is not None:
       view_selection[kind] = instance
-  return Store(store.registry, store.store_dir, view_selection, readable=readable)
+  return Store(
+    store.registry,
+    store.store_dir,
+    view_selection,
+    readable_names=readable_names,
+  )
 
 
 def apply_grant_revoke(

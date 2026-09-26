@@ -110,14 +110,14 @@ def _resume(
 def _materialize_store(_store, directory: Path) -> Path:
   """The empty scoped store a host launch materializes."""
   directory.mkdir(parents=True, exist_ok=True)
-  (directory / credentials.SOURCES_FILE).write_text('{}')
+  (directory / credentials.STORE_FILE).write_text('{"defaults": [], "sources": {}}')
   return directory
 
 
 def _scoped_store() -> dict[str, bytes]:
   """a hydrated scope with no secret in it — the registry file `build_scoped_store`
   always emits, and nothing else."""
-  return {credentials.SOURCES_FILE: b'{}'}
+  return {credentials.STORE_FILE: b'{"defaults": [], "sources": {}}'}
 
 
 def _launch_scope(**overrides) -> ride_session.ScopedLaunch:
@@ -1476,7 +1476,7 @@ class TestBoxedMemberSession:
       _spec(),
       workspace,
       'broker-member',
-      _launch_scope().scoped,
+      _launch_scope(),
       human_env={},
       runtime_bundle=_runtime_bundle(tmp_path),
       env={},

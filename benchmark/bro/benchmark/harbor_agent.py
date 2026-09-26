@@ -19,6 +19,7 @@ for the bundle itself to check.
 
 import asyncio
 import contextlib
+import os
 import shlex
 import subprocess
 import tempfile
@@ -52,7 +53,6 @@ from bro.llm.llm import FAILURE_CATEGORIES
 from bro.llm.providers import failure_signatures, known_names, parse
 from ride.harness import HARNESS_NAMES
 from ride.workspace.spawn import PROCESS_TERM_GRACE
-from ride.workspace.store import materialize_scoped_store
 
 AGENT_NAME = 'bro'
 DEFAULT_HARNESS = 'bro'
@@ -184,20 +184,41 @@ def run_timeout(value: Any) -> Optional[int]:
   return seconds
 
 
+_HYDRATE_STORE = """
+import sys
+from pathlib import Path
+
+from bro.base import credentials
+from ride.workspace.store import materialize_scoped_store
+
+source = credentials.default_store()
+files, _ = credentials.build_scoped_store(source, [sys.argv[1]])
+materialize_scoped_store(files, Path(sys.argv[2]))
+"""
+
+
 @contextlib.contextmanager
 def scoped_store(name: str) -> Generator[Path]:
   """the credential store the container resolves against, on disk for an upload.
 
-  `name` is hydrated strictly, so an unknown or unresolvable credential fails
-  here rather than inside a graded trial. The store carries a live API key, and
-  the upload reads it from a file, so it lives in a private directory for no
-  longer than that.
+  `name` is hydrated strictly by the bundle under test, so an incompatible host
+  store or an unresolvable credential fails before a graded trial.
+  The store carries a live API key, and the upload reads it from a file, so it
+  lives in a private directory for no longer than that.
   """
-  source_store = credentials.Store(credentials.default_registry(), credentials.STORE_DIR, {})
-  files, _ = credentials.build_scoped_store(source_store, [name])
+  bundle = benchmark_bundle()
   with tempfile.TemporaryDirectory(prefix='bro-benchmark-store-') as scratch:
     directory = Path(scratch) / 'store'
-    materialize_scoped_store(files, directory)
+    environment = {**os.environ, 'BRO_STORE': str(credentials.STORE_DIR)}
+    hydrated = subprocess.run(
+      [str(bundle.interpreter), '-c', _HYDRATE_STORE, name, str(directory)],
+      capture_output=True,
+      text=True,
+      env=environment,
+    )
+    if hydrated.returncode != 0:
+      detail = hydrated.stderr.strip() or hydrated.stdout.strip() or 'unknown failure'
+      raise RuntimeError(f'benchmark bundle failed to hydrate its credential store: {detail}')
     yield directory
 
 
@@ -376,11 +397,11 @@ class BroAgent(BaseInstalledAgent):
     the bundled `claude` proves it runs there too.
     """
     bundle = benchmark_bundle()
-    await self.exec_as_root(
-      environment, command=f'mkdir -p {BUNDLE.root} {STORE_DIR} && chmod 700 {STORE_DIR}'
-    )
-    await environment.upload_dir(bundle.root, str(BUNDLE.root))
     with scoped_store(self._llm_credential) as directory:
+      await self.exec_as_root(
+        environment, command=f'mkdir -p {BUNDLE.root} {STORE_DIR} && chmod 700 {STORE_DIR}'
+      )
+      await environment.upload_dir(bundle.root, str(BUNDLE.root))
       await environment.upload_dir(directory, str(STORE_DIR))
     # the agent phase runs as root in every task of this dataset, so the store
     # needs no chown — only the private mode the upload does not carry over

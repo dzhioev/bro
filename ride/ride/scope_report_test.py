@@ -67,13 +67,14 @@ class TestReportScope:
     material = store / credentials.MATERIAL_DIR
     material.mkdir(parents=True)
     (material / 'github+reviewer.cred').write_text('github-token')
+    (store / credentials.STORE_FILE).write_text(json.dumps({'defaults': ['github+reviewer']}))
     config = tmp_path / 'bro.json'
     config.write_text(
       json.dumps(
         {
           'projects': {
             str(tmp_path): {
-              'creds': ['github+reviewer', 'brog+missing', 'openai+work'],
+              'creds': ['brog+missing', 'openai+work'],
             }
           }
         }
@@ -89,7 +90,7 @@ class TestReportScope:
       for line in capsys.readouterr().out.splitlines()
       if line.startswith('  ')
     }
-    assert 'github+reviewer' in rows['github']
+    assert 'github+reviewer (store defaults)' in rows['github']
     assert rows['github'].endswith('PRESENT')
     assert rows['brog'].endswith('MISSING')
     assert rows['claude_code'].endswith('MISSING')

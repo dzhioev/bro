@@ -465,7 +465,7 @@ def _lower_join(
       spec,
       workspace,
       member,
-      scoped,
+      launch_scope,
       human_env=human_git_identity_env(repository),
       runtime_bundle=runtime_bundle,
       env=member_env,

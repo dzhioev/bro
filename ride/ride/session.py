@@ -387,7 +387,7 @@ def container_launch(
   harness: Harness,
   spec: SessionSpec,
   workspace: Workspace,
-  scoped: ScopedSecrets,
+  launch_scope: ScopedLaunch,
   container_runtime: ContainerRuntime,
   *,
   repo: Optional[Repository | Path],
@@ -400,6 +400,7 @@ def container_launch(
   neutral session env and mounts around the harness's extras, with the
   surface's own `env` and `mounts` on top, and the spec's `--env` additions as
   the container's own lowest layer."""
+  scoped = launch_scope.scoped
   session_state = workspace_session_dir(workspace.path)
   party_dir = workspace_party_dir(workspace.path)
   # created before the container launch so the bind mounts find them and do not
@@ -432,6 +433,8 @@ def container_launch(
     secrets=scoped.required,
     optional_secrets=scoped.optional,
     credential_selection=scoped.selection,
+    credential_store=launch_scope.store,
+    hydrated_kinds=launch_scope.hydrated_kinds,
     tty=spec.tty,
     image=container_runtime.image,
     runtime_bundle_hash=container_runtime.bundle_hash,
@@ -451,7 +454,7 @@ def boxed_member_launch(
   spec: SessionSpec,
   workspace: Workspace,
   member: str,
-  scoped: ScopedSecrets,
+  launch_scope: ScopedLaunch,
   *,
   human_env: Mapping[str, str],
   runtime_bundle: RuntimeBundle,
@@ -460,6 +463,7 @@ def boxed_member_launch(
   """one joined session exec'd into its boxed party's running container: the
   member-scoped session env around the harness's member extras, with the
   surface's own `env` on top."""
+  scoped = launch_scope.scoped
   harness = get_harness(spec.harness)
   container_id = find_container_id(workspace.tree)
   if container_id is None:
@@ -502,6 +506,8 @@ def boxed_member_launch(
     secrets=scoped.required,
     optional_secrets=scoped.optional,
     credential_selection=scoped.selection,
+    credential_store=launch_scope.store,
+    hydrated_kinds=launch_scope.hydrated_kinds,
   )
 
 
@@ -583,7 +589,7 @@ def started_party_launch(
       harness,
       spec,
       workspace,
-      launch_scope.scoped,
+      launch_scope,
       container_runtime.resolve(),
       repo=workspace.repo if isinstance(workspace.repo, Path) else repository,
       base_ref=base_ref,

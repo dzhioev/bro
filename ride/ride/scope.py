@@ -281,7 +281,7 @@ def _validate_registered_credentials(layers: Sequence[ScopeLayer], registered: s
     if len(unknown) == 0:
       continue
     replacement = (
-      '; move host-wide picks or scope changes into the project entries that use them'
+      '; move host-wide scope changes into the project entries that use them'
       if layer.source == host_config.DEFAULTS_LAYER
       else ''
     )
@@ -443,7 +443,7 @@ def preflight_scoped_launch(
 
 def launch_view_store(scoped: ScopedSecrets) -> credentials.Store:
   """the lazy counterpart of `preflight_scoped_launch`'s hydrated store: the
-  launch's credential binding as a kinds-only read-through store
+  launch's credential binding as a stored-name-bounded read-through store
   (`credentials.scoped_view_store`), for host-side code that reads a credential
   on the session's behalf before the launch exists. raises `LaunchScopeError`
   like the preflight; a read through the returned store is the caller's to wrap
