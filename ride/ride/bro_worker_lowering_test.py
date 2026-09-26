@@ -117,6 +117,10 @@ def _lower_boxed(
   return lowered
 
 
+def _authority(*, targets=(), party=('boxed',)):
+  return {'bro': {'bros': frozenset(targets), 'party': frozenset(party)}}
+
+
 def _artifacts() -> ride.artifacts.ArtifactStore:
   return ride.artifacts.ArtifactStore(
     Workspace.ensure(SESSION, None, Isolation.BOXED), root_boxed=False
@@ -129,7 +133,7 @@ def _facts_expecting(quest: str) -> ride.peer_facts.PeerFacts:
     ride.peer_facts.WorkerFacts(
       'bro',
       'ws',
-      extension=ride.bro_worker.BroFacts('bro-dev', frozenset()),
+      extension=ride.bro_worker.BroFacts('bro-dev'),
     ),
     root_tree=workspace.tree,
     root_path=workspace.path,
@@ -140,7 +144,7 @@ def _facts_expecting(quest: str) -> ride.peer_facts.PeerFacts:
       'bro',
       None,
       expected=True,
-      extension=ride.bro_worker.BroFacts('dev', frozenset()),
+      extension=ride.bro_worker.BroFacts('dev'),
     ),
   )
   return facts
@@ -160,8 +164,8 @@ def lowering_harness(monkeypatch, tmp_path):
     recording=True,
   ):
     del name, surface, attachment, attachment_repository, llm_spec, recording
-    grant_credentials, _, _ = ride.scope.split_scope_overrides(grant)
-    revoke_credentials, _, _ = ride.scope.split_scope_overrides(revoke)
+    grant_credentials, _ = ride.scope.split_scope_overrides(grant)
+    revoke_credentials, _ = ride.scope.split_scope_overrides(revoke)
     kinds = {'aws', 'trails', 'openai'} | set(grant_credentials)
     kinds.difference_update(revoke_credentials)
     selection = {}
@@ -176,8 +180,7 @@ def lowering_harness(monkeypatch, tmp_path):
     ride.bro_worker,
     'preflight_scoped_launch',
     lambda scoped, *_args, **_kwargs: (
-      set(),
-      {'bro.party.start.boxed'},
+      _authority(),
       ride.scope.HydratedStore({}, frozenset(scoped.required | scoped.optional)),
     ),
   )
@@ -202,7 +205,7 @@ class TestSummonLowering:
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
@@ -227,8 +230,7 @@ class TestSummonLowering:
           **_do_ride_environment('broker-CH'),
           'RIDE_BRO': 'dev',
           'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness bro dev deploy the thing',
-          'RIDE_MAY_SUMMON': '',
-          'RIDE_PERMITS': 'bro.party.start.boxed',
+          'RIDE_LAUNCH': '{"bro":{"bros":[],"party":["boxed"]}}',
           'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
           'RIDE_SUMMONED': '1',
           'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
@@ -256,7 +258,7 @@ class TestSummonLowering:
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
     )
     with caplog.at_level('INFO'):
@@ -271,7 +273,7 @@ class TestSummonLowering:
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
       hold='attended',
     )
@@ -286,7 +288,7 @@ class TestSummonLowering:
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
       llm='openai:sol:high+fast',
     )
@@ -310,7 +312,7 @@ class TestSummonLowering:
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
       llm='::low',
     )
@@ -346,7 +348,7 @@ class TestSummonLowering:
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
       llm='echo',
     )
@@ -361,7 +363,7 @@ class TestSummonLowering:
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
       hold='guided',
       llm='openai:sol:high',
@@ -403,7 +405,7 @@ class TestSummonLowering:
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
       isolation=Isolation.UNBOXED,
     )
@@ -444,7 +446,7 @@ class TestSummonLowering:
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
@@ -464,7 +466,7 @@ class TestSummonLowering:
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
@@ -480,11 +482,13 @@ class TestSummonLowering:
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      may_summon=('bro', 'reviewer'),
+      launch_scope=_authority(targets=('bro', 'reviewer')),
       harness='bro',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
-    assert lowered.launch.env['RIDE_MAY_SUMMON'] == 'bro,reviewer'
+    assert json.loads(lowered.launch.env['RIDE_LAUNCH']) == {
+      'bro': {'bros': ['bro', 'reviewer'], 'party': ['boxed']}
+    }
 
   def test_the_child_credits_the_human_of_the_repository_it_shares(
     self, lowering_harness, monkeypatch, tmp_path
@@ -503,7 +507,7 @@ class TestSummonLowering:
       parent_tree=workspace_tree(PARENT),
       repo=repository,
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
@@ -518,7 +522,7 @@ class TestSummonLowering:
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
       into='summon',
     )
@@ -527,8 +531,7 @@ class TestSummonLowering:
       **_do_ride_environment('broker-CH', base_sha='REF-SHA'),
       'RIDE_BRO': 'dev',
       'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness bro --into summon dev p',
-      'RIDE_MAY_SUMMON': '',
-      'RIDE_PERMITS': 'bro.party.start.boxed',
+      'RIDE_LAUNCH': '{"bro":{"bros":[],"party":["boxed"]}}',
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
       'RIDE_SUMMONED': '1',
       'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
@@ -543,7 +546,7 @@ class TestSummonLowering:
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
       into='nope',
     )
@@ -562,7 +565,7 @@ class TestSummonLowering:
       parent='empty',
       parent_tree=workspace_tree('empty'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
@@ -581,8 +584,7 @@ class TestSummonLowering:
       parent=PARENT,
       parent_tree=workspace.tree,
       summoner=SUMMONER,
-      may_summon=('reviewer',),
-      permits=('bro.party.join',),
+      launch_scope=_authority(targets=('reviewer',), party=('join',)),
       harness='bro',
       party='join',
       isolation=None,
@@ -607,8 +609,9 @@ class TestSummonLowering:
     assert lowered.env[SESSION_DIR_ENV] == str(records / 'session')
     assert lowered.env['RIDE_PARTY_MEMBER'] == 'broker-CH'
     assert lowered.env['RIDE_COMMAND'].startswith('summon --join')
-    assert lowered.env['RIDE_MAY_SUMMON'] == 'reviewer'
-    assert lowered.env['RIDE_PERMITS'] == 'bro.party.join'
+    assert json.loads(lowered.env['RIDE_LAUNCH']) == {
+      'bro': {'bros': ['reviewer'], 'party': ['join']}
+    }
     assert lowered.env['RIDE_SUMMONED'] == '1'
     assert lowered.env['IS_SANDBOX'] == '1'
     assert lowered.cleanup_directory is not None
@@ -626,8 +629,7 @@ class TestSummonLowering:
       parent=PARENT,
       parent_tree=workspace.tree,
       summoner=SUMMONER,
-      may_summon=('reviewer',),
-      permits=('bro.party.join',),
+      launch_scope=_authority(targets=('reviewer',), party=('join',)),
       harness='bro',
       party='join',
       isolation=None,
@@ -680,8 +682,7 @@ class TestSummonLowering:
       'RIDE_COMMAND': ride_command,
       'RIDE_PARTY_MEMBER': 'broker-CH',
       'RIDE_SUMMONED': '1',
-      'RIDE_MAY_SUMMON': 'reviewer',
-      'RIDE_PERMITS': 'bro.party.join',
+      'RIDE_LAUNCH': '{"bro":{"bros":["reviewer"],"party":["join"]}}',
       'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
     }
     assert 'BRO_STORE' not in member.env  # delivered into the container at spawn
@@ -696,7 +697,7 @@ class TestSummonLowering:
       parent=PARENT,
       parent_tree=workspace.tree,
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
       party='join',
       isolation=None,
@@ -732,7 +733,7 @@ class TestSummonLowering:
       parent='detached-root',
       parent_tree=workspace_tree('detached-root'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
       isolation=Isolation.UNBOXED,
     )
@@ -796,7 +797,7 @@ raise SystemExit(3)
       parent='detached-root',
       parent_tree=workspace_tree('detached-root'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
       isolation=Isolation.UNBOXED,
     )
@@ -829,7 +830,7 @@ raise SystemExit(3)
       parent_tree=workspace_tree('gone'),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
     )
     with pytest.raises(ValueError, match="summoner's HEAD"):
@@ -867,7 +868,7 @@ raise SystemExit(3)
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
     )
     await spawner.spawn(launch, channel, 'X-1', frozenset({'worker.say'}))
@@ -914,7 +915,7 @@ raise SystemExit(3)
       parent=parent.name,
       parent_tree=parent.tree,
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
       party='join',
       isolation=None,
@@ -948,7 +949,7 @@ raise SystemExit(3)
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      may_summon=(),
+      launch_scope=_authority(),
       harness='bro',
       into='nope',
     )
@@ -1023,14 +1024,14 @@ with session_broxy():
     'dev',
     'first',
     party='join',
-    grant=['@dev', ':bro.party.join'],
+    grant=['@dev', ':launch.bro.party.join'],
     timeout=20,
   )
   owner = summon_and_wait(
     'dev',
     'owner',
     isolation='unboxed',
-    grant=['@dev', ':bro.party.join'],
+    grant=['@dev', ':launch.bro.party.join'],
     timeout=20,
   )
   Path({str(report)!r}).write_text(answer + '|' + owner)
@@ -1047,8 +1048,7 @@ with session_broxy():
     launch,
     workspace=workspace,
     bro='bro-dev',
-    may_summon={'dev'},
-    permits={'bro.party.join', 'bro.party.start.unboxed'},
+    launch_scope=_authority(targets=('dev',), party=('join', 'unboxed')),
     container_runtime=_container_runtime(),
     runtime_bundle=runtime_bundle,
   )
@@ -1086,7 +1086,7 @@ class TestClaudeSummonLowering:
       'parent_tree': workspace_tree(PARENT),
       'repo': Path('/proj'),
       'summoner': SUMMONER,
-      'may_summon': (),
+      'launch_scope': _authority(),
       'harness': 'claude',
       **overrides,
     }
@@ -1170,8 +1170,7 @@ class TestClaudeSummonLowering:
       **_do_ride_environment('broker-CH'),
       'RIDE_BRO': 'dev',
       'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness claude dev deploy the thing',
-      'RIDE_MAY_SUMMON': '',
-      'RIDE_PERMITS': 'bro.party.start.boxed',
+      'RIDE_LAUNCH': '{"bro":{"bros":[],"party":["boxed"]}}',
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
       'RIDE_SUMMONED': '1',
       'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
@@ -1323,6 +1322,7 @@ class TestRunRootViaBroker:
         launch,
         workspace=workspace,
         bro='bro-dev',
+        launch_scope=_authority(),
         container_runtime=_container_runtime(),
         runtime_bundle=MagicMock(),
         types={'test': TestWorkerType},

@@ -122,14 +122,14 @@ class TestProjectConfig:
     (project_dir / 'pyproject.toml').write_text(
       '[tool.bro]\n'
       'default = "foo"\n'
-      'grant = ["github", "@reviewer", ":bro.party.join"]\n'
-      'revoke = ["openai", ":bro.party.start.boxed"]\n'
+      'grant = ["github", "@reviewer", ":launch.bro.party.join"]\n'
+      'revoke = ["openai", ":launch.bro.party.boxed"]\n'
     )
 
     config = project_config()
 
-    assert config.grant == ('github', '@reviewer', ':bro.party.join')
-    assert config.revoke == ('openai', ':bro.party.start.boxed')
+    assert config.grant == ('github', '@reviewer', ':launch.bro.party.join')
+    assert config.revoke == ('openai', ':launch.bro.party.boxed')
 
   def test_project_grant_refuses_a_host_specific_credential_instance(self, project_dir):
     (project_dir / 'pyproject.toml').write_text(
@@ -142,11 +142,19 @@ class TestProjectConfig:
     ):
       project_config()
 
-  @pytest.mark.parametrize('value', ['":party"', '":party..start"', '":Party.start"'])
-  def test_project_scope_requires_a_permit_leaf(self, project_dir, value):
+  @pytest.mark.parametrize('value', ['":launch"', '":launch..party"', '":Launch.bro"'])
+  def test_project_scope_requires_a_launch_name(self, project_dir, value):
     (project_dir / 'pyproject.toml').write_text(f'[tool.bro]\ndefault = "foo"\ngrant = [{value}]\n')
 
-    with pytest.raises(ValueError, match='<type>.<leaf>'):
+    with pytest.raises(ValueError):
+      project_config()
+
+  def test_project_scope_names_a_retired_permits_replacement(self, project_dir):
+    (project_dir / 'pyproject.toml').write_text(
+      '[tool.bro]\ndefault = "foo"\ngrant = [":bro.party.join"]\n'
+    )
+
+    with pytest.raises(ValueError, match=':launch.bro.party.join'):
       project_config()
 
   def test_unknown_key_raises(self, project_dir):

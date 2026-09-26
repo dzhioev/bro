@@ -156,13 +156,13 @@ async def test_open_fails_with_a_launch_denial(monkeypatch, capsys, caplog):
       brotocol.result(
         launch.request_id,
         'denied',
-        error='launch denied: the VNC view needs :webview.vnc',
+        error='launch denied: the VNC view needs :launch.webview.vnc',
       ),
     )
 
     assert await task == 1
     assert capsys.readouterr().out == ''
-    assert ':webview.vnc' in caplog.text
+    assert ':launch.webview.vnc' in caplog.text
 
 
 @pytest.mark.asyncio

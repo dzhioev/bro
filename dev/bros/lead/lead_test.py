@@ -3,7 +3,7 @@ from typing import get_args
 import bro.mcp as mcp
 from bro import spells as spell_store
 from bro.spells import load_spell
-from bro.summon import MAY_SUMMON_ENV
+from bro.summon import LAUNCH_ENV, encode_launch
 from bros.lead import Lead
 
 
@@ -32,7 +32,10 @@ def test_orchestrate_grants_a_derived_eyebro_to_every_pull_request_phase(monkeyp
   ungranted = bro.get_spell_body('orchestrate', harness='claude')
   assert '@<the eyebro>' not in ungranted
 
-  monkeypatch.setenv(MAY_SUMMON_ENV, 'bro-eyebro')
+  monkeypatch.setenv(
+    LAUNCH_ENV,
+    encode_launch({'bro': {'bros': frozenset({'bro-eyebro'})}}),
+  )
   granted = bro.get_spell_body('orchestrate', harness='claude')
 
   assert granted.count('`grant` `@<the eyebro>`') == 3

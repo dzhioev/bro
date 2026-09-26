@@ -285,17 +285,22 @@ class TestLaunchSelection:
 
 
 class TestScopeLayers:
+  def test_a_retired_permit_names_its_replacement(self, config_file):
+    config_file({'defaults': {'grant': [':webview.vnc']}})
+    with pytest.raises(host_config.CLIError, match=':launch.webview.vnc'):
+      host_config.project_selection(None)
+
   def test_defaults_project_and_bro_layers_stay_in_precedence_order(self, config_file, tmp_path):
     config_file(
       {
-        'defaults': {'grant': [':bro.party.join', '@reviewer']},
+        'defaults': {'grant': [':launch.bro.party.join', '@reviewer']},
         'projects': {
           str(tmp_path): {
-            'revoke': [':bro.party.join'],
+            'revoke': [':launch.bro.party.join'],
             'bros': {
               'dev': {
                 'creds': ['github+work'],
-                'grant': ['github', ':bro.party.start.unboxed'],
+                'grant': ['github', ':launch.bro.party.unboxed'],
                 'revoke': ['@reviewer'],
               }
             },
@@ -308,10 +313,10 @@ class TestScopeLayers:
 
     assert selected.instances == {'github': 'work'}
     assert selected.scope_layers == (
-      host_config.ScopeLayer(grant=(':bro.party.join', '@reviewer')),
-      host_config.ScopeLayer(revoke=(':bro.party.join',)),
+      host_config.ScopeLayer(grant=(':launch.bro.party.join', '@reviewer')),
+      host_config.ScopeLayer(revoke=(':launch.bro.party.join',)),
       host_config.ScopeLayer(
-        grant=('github', ':bro.party.start.unboxed'),
+        grant=('github', ':launch.bro.party.unboxed'),
         revoke=('@reviewer',),
         creds=('github+work',),
       ),
@@ -324,8 +329,8 @@ class TestScopeLayers:
       {
         'projects': {
           str(tmp_path): {
-            'grant': [':bro.party.join'],
-            'bros': {'dev': {'revoke': [':bro.party.start.boxed']}},
+            'grant': [':launch.bro.party.join'],
+            'bros': {'dev': {'revoke': [':launch.bro.party.boxed']}},
           }
         }
       }
@@ -333,11 +338,11 @@ class TestScopeLayers:
     attachment = host_config.Attachment(path=str(tmp_path))
 
     assert host_config.launch_selection(attachment, 'reviewer').scope_layers == (
-      host_config.ScopeLayer(grant=(':bro.party.join',)),
+      host_config.ScopeLayer(grant=(':launch.bro.party.join',)),
     )
     assert host_config.launch_selection(attachment, 'dev').scope_layers == (
-      host_config.ScopeLayer(grant=(':bro.party.join',)),
-      host_config.ScopeLayer(revoke=(':bro.party.start.boxed',)),
+      host_config.ScopeLayer(grant=(':launch.bro.party.join',)),
+      host_config.ScopeLayer(revoke=(':launch.bro.party.boxed',)),
     )
 
 

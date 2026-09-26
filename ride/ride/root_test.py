@@ -23,6 +23,10 @@ def _scope() -> ScopedSecrets:
   return ScopedSecrets({'github'}, {'openai'}, {'github': 'reviewer'})
 
 
+def _launch(*, targets=(), party=('boxed',)):
+  return {'bro': {'bros': frozenset(targets), 'party': frozenset(party)}}
+
+
 def _docker_launch() -> workspace_docker.Launch:
   return workspace_docker.Launch(
     name='ws',
@@ -56,6 +60,7 @@ class TestDirectStartedParty:
     code = ride.root.run_started_party(
       _docker_launch(),
       workspace,
+      launch_scope=_launch(),
       credential_scope=_scope(),
       container_runtime=MagicMock(),
       runtime_bundle=MagicMock(),
@@ -85,14 +90,16 @@ class TestDirectStartedParty:
       ride.root.run_started_party(
         launch,
         workspace,
-        permits={'bro.party.start.unboxed'},
+        launch_scope=_launch(party=('unboxed',)),
         credential_scope=_scope(),
         container_runtime=MagicMock(),
         runtime_bundle=MagicMock(),
       )
       == 0
     )
-    assert run.call_args.kwargs['env']['RIDE_PERMITS'] == 'bro.party.start.unboxed'
+    assert run.call_args.kwargs['env'][bro.summon.LAUNCH_ENV] == (
+      '{"bro":{"bros":[],"party":["unboxed"]}}'
+    )
     assert 'BROKER_CHANNEL' not in run.call_args.kwargs['env']
     assert 'BROKER_UPSTREAM' not in run.call_args.kwargs['env']
 
@@ -178,8 +185,7 @@ class TestBrokerStartedParty:
       ride.root._run_via_broker(
         _docker_launch(),
         workspace,
-        may_summon={'dev'},
-        permits={'bro.party.start.boxed'},
+        launch_scope=_launch(targets=('dev',)),
         summon_depth=4,
         summon_harness='claude',
         session_env={'IS_SANDBOX': '1'},
@@ -191,8 +197,9 @@ class TestBrokerStartedParty:
     assert captured['session_env'] == {'IS_SANDBOX': '1'}
     wrapped = captured['launch']
     assert isinstance(wrapped, workspace_spawn.DockerLaunchSpec)
-    assert wrapped.launch.env[bro.summon.MAY_SUMMON_ENV] == 'dev'
-    assert wrapped.launch.env[bro.summon.PERMITS_ENV] == 'bro.party.start.boxed'
+    assert wrapped.launch.env[bro.summon.LAUNCH_ENV] == (
+      '{"bro":{"bros":["dev"],"party":["boxed"]}}'
+    )
     assert wrapped.launch.extra_mounts == (
       ride.artifacts.view_mount('ws', 'ws', PurePosixPath(CONTAINER_ARTIFACTS_ROOT)),
     )
@@ -217,8 +224,7 @@ class TestBrokerStartedParty:
       ride.root._run_via_broker(
         launch,
         workspace,
-        may_summon=(),
-        permits={'bro.party.start.boxed'},
+        launch_scope=_launch(),
         summon_depth=2,
         summon_harness='bro',
         session_env={},

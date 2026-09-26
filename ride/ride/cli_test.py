@@ -678,10 +678,9 @@ class TestSummonedLaunch:
       extension={
         'target': 'dev',
         'prompt': 'work this out with the user',
-        'may_summon': ['bro'],
-        'permits': ['bro.party.start.boxed'],
+        'launch': {'bro': {'bros': ['bro'], 'party': ['boxed']}},
         'grant': ['@bro'],
-        'revoke': [':bro.party.join'],
+        'revoke': [':launch.bro.party.join'],
         'summoner': {'trail_id': 'T1'},
         'repo': None,
         'into': None,
@@ -696,7 +695,7 @@ class TestSummonedLaunch:
     spec = start.call_args.args[0]
     assert spec.prompt == 'work this out with the user'
     assert spec.grant == ['@bro']
-    assert spec.revoke == [':bro.party.join']
+    assert spec.revoke == [':launch.bro.party.join']
     assert spec.runtime_bundle == '/runtime'
     assert start.call_args.kwargs['summoned'] == pending
 
@@ -738,12 +737,19 @@ class TestSummonedLaunch:
   def test_summoned_refuses_bro_overrides(self, pending, capsys):
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--grant', '@bro', 'dev'])
-    assert 'drop the @bro override(s): bro' in capsys.readouterr().err
+    assert 'drop the @bro/:launch override(s): @bro' in capsys.readouterr().err
 
-  def test_summoned_refuses_permit_overrides(self, pending, capsys):
+  def test_summoned_names_a_retired_launch_override_without_a_traceback(self, pending, capsys):
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--grant', ':bro.party.join', 'dev'])
-    assert 'permits were fixed by the summon request' in capsys.readouterr().err
+    assert ':launch.bro.party.join' in capsys.readouterr().err
+
+  def test_summoned_refuses_launch_overrides(self, pending, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(
+        ['ride', 'along', '--summoned', 'TOK-1', '--grant', ':launch.bro.party.join', 'dev']
+      )
+    assert 'launch section was fixed by the summon request' in capsys.readouterr().err
 
   def test_summoned_validates_the_bro_against_the_record(self, pending, capsys):
     with pytest.raises(SystemExit):

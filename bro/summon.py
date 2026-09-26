@@ -21,13 +21,12 @@ broker implementation on pre-gate launch paths.
 import json
 import os
 import shlex
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Optional
 
 import bro.base.args as base_args
 from bro import quest
 from bro.base import log
-from bro.base.scope import permit_name
 from bro.launch.llm_flags import (
   EFFORT_HELP,
   FAST_HELP,
@@ -38,6 +37,7 @@ from bro.launch.llm_flags import (
 from bro.llm.providers import LLMSelectionError
 from bro.mcp import HOLDS
 from bro.quest import BRO, LAUNCH, QuestError
+from bro.worker_types import Launch, dump_launch, parse_launch
 
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message
@@ -48,24 +48,18 @@ __cli_name__ = 'summon'
 SUMMONER_ENV = 'RIDE_SUMMONER'
 # marks a run as a summoned child, written by the surface that launches it
 SUMMONED_ENV = 'RIDE_SUMMONED'
-# carries a run's own effective summon allow-list into it, written by the surface
-# that launches the run: a session root's at launch, a summoned child's at its spawn
-MAY_SUMMON_ENV = 'RIDE_MAY_SUMMON'
-PERMITS_ENV = 'RIDE_PERMITS'
+# carries a run's own launch section into it, written by the launch surface
+LAUNCH_ENV = 'RIDE_LAUNCH'
 PARTY_MEMBER_ENV = 'RIDE_PARTY_MEMBER'
-PARTY_START_BOXED_LEAF = 'party.start.boxed'
-PARTY_START_UNBOXED_LEAF = 'party.start.unboxed'
-PARTY_JOIN_LEAF = 'party.join'
-PARTY_PERMIT_LEAVES = frozenset({PARTY_START_BOXED_LEAF, PARTY_START_UNBOXED_LEAF, PARTY_JOIN_LEAF})
-PARTY_START_BOXED = f'{BRO}.{PARTY_START_BOXED_LEAF}'
-PARTY_START_UNBOXED = f'{BRO}.{PARTY_START_UNBOXED_LEAF}'
-PARTY_JOIN = f'{BRO}.{PARTY_JOIN_LEAF}'
-PARTY_PERMITS = frozenset(f'{BRO}.{leaf}' for leaf in PARTY_PERMIT_LEAVES)
+PARTY_BOXED = 'boxed'
+PARTY_UNBOXED = 'unboxed'
+PARTY_JOIN = 'join'
+PARTY_CHOICES = frozenset({PARTY_BOXED, PARTY_UNBOXED, PARTY_JOIN})
 RUNTIME_ENV = 'RIDE_RUNTIME'
 
 
-def party_permit_choices() -> str:
-  return ', '.join(f':{permit}' for permit in sorted(PARTY_PERMITS))
+def party_launch_choices() -> str:
+  return ', '.join(f':launch.bro.party.{value}' for value in sorted(PARTY_CHOICES))
 
 
 # request-lifecycle bound for a summoned child — sized so the flagship deploy
@@ -83,12 +77,10 @@ HARNESS_HELP = (
   '`[tool.bro] summon-harness`'
 )
 GRANT_HELP = (
-  'add a summonable bro (@BRO) or party permit '
-  f"({party_permit_choices()}) to the child's authority (repeatable)"
+  'add a launch permission '
+  f'(@BRO, :launch.<type>, or one of {party_launch_choices()}) to the child (repeatable)'
 )
-REVOKE_HELP = (
-  "remove a summonable bro (@BRO) or party permit from the child's authority (repeatable)"
-)
+REVOKE_HELP = "remove a launch permission from the child's authority (repeatable)"
 SHARE_HELP = (
   'give the child read access to an artifact ref this session can itself read (repeatable)'
 )
@@ -110,18 +102,9 @@ def manual_launch_command(quest_id: str, target: str) -> str:
   return f'{executable} along --summoned {quest_id} {target}'
 
 
-def encode_may_summon(targets: Collection[str]) -> str:
-  """an effective summon allow-list as the `MAY_SUMMON_ENV` value: the names
-  sorted and comma-joined, empty for a run that may summon nothing."""
-  return ','.join(sorted(set(targets)))
-
-
-def encode_permits(permits: Collection[str]) -> str:
-  """An effective permit set as the `PERMITS_ENV` value."""
-  values = set(permits)
-  for value in values:
-    permit_name(value)
-  return ','.join(sorted(values))
+def encode_launch(value: Mapping[str, Mapping[str, frozenset[str] | bool]]) -> str:
+  """Encode a launch section for the managed-session environment."""
+  return json.dumps(dump_launch(value), ensure_ascii=False, separators=(',', ':'), sort_keys=True)
 
 
 def parse_talk(values: Optional[list[str]]) -> Optional[list[str]]:
@@ -142,17 +125,13 @@ def parse_talk(values: Optional[list[str]]) -> Optional[list[str]]:
 
 
 def summoned_child_env(
-  may_summon: Collection[str],
-  permits: Collection[str],
+  launch_scope: Mapping[str, Mapping[str, frozenset[str] | bool]],
   summoner: Optional[dict[str, Any]],
 ) -> dict[str, str]:
-  """the env that makes a run a summoned child, written by the surface that
-  launches it: the mark, the child's own effective allow-list, and its
-  summoner's attribution when there is one."""
+  """Build the environment that marks and scopes a summoned child."""
   env = {
     SUMMONED_ENV: '1',
-    MAY_SUMMON_ENV: encode_may_summon(may_summon),
-    PERMITS_ENV: encode_permits(permits),
+    LAUNCH_ENV: encode_launch(launch_scope),
   }
   if summoner is not None:
     env[SUMMONER_ENV] = json.dumps(summoner, ensure_ascii=False, separators=(',', ':'))
@@ -165,15 +144,30 @@ def summoned() -> bool:
   return os.environ.get(SUMMONED_ENV) is not None
 
 
-def may_summon() -> Optional[tuple[str, ...]]:
-  """the bros this run may summon, as its launch fixed them — the empty tuple
-  when it may summon none, and None when it was launched by a surface that
-  publishes no list. Read-only: the host authorizes against its own copy, so
-  nothing here can widen it."""
-  raw = os.environ.get(MAY_SUMMON_ENV)
+def launch() -> Optional[Launch]:
+  """The launch section fixed by this run's launcher."""
+  raw = os.environ.get(LAUNCH_ENV)
   if raw is None:
     return None
-  return tuple(name for name in raw.split(',') if len(name) > 0)
+  try:
+    value = json.loads(raw)
+  except json.JSONDecodeError as error:
+    raise ValueError(f'{LAUNCH_ENV} is not valid JSON') from error
+  try:
+    return parse_launch(value, subject=LAUNCH_ENV)
+  except ValueError as error:
+    raise ValueError(f'{LAUNCH_ENV} carries an invalid launch section: {error}') from error
+
+
+def may_summon() -> Optional[tuple[str, ...]]:
+  """The bro targets in the published launch section."""
+  value = launch()
+  if value is None:
+    return None
+  bros = value.get(BRO, {}).get('bros', frozenset())
+  if not isinstance(bros, frozenset):
+    raise ValueError(f'{LAUNCH_ENV}.{BRO}.bros must be a set of strings')
+  return tuple(sorted(bros))
 
 
 def talk() -> Optional[tuple[str, ...]]:
@@ -188,23 +182,9 @@ def talk() -> Optional[tuple[str, ...]]:
   return tuple(sorted(decode_talk(raw)))
 
 
-def permits() -> Optional[tuple[str, ...]]:
-  """The party permits fixed by this run's launcher."""
-  raw = os.environ.get(PERMITS_ENV)
-  if raw is None:
-    return None
-  values = tuple(name for name in raw.split(',') if name)
-  for value in values:
-    try:
-      permit_name(value)
-    except ValueError as error:
-      raise ValueError(f'{PERMITS_ENV} carries an invalid permit: {error}') from error
-  return values
-
-
 def effective_may_summon() -> tuple[str, ...]:
-  """the summon allow-list as a rendering fact (`#may_summon`): the published
-  list, with an unpublished one collapsed to empty — a run whose launcher
+  """the published `launch.bro.bros` set as the `#may_summon` rendering fact,
+  with an unpublished one collapsed to empty — a run whose launcher
   published no list should plan no delegation."""
   return may_summon() or ()
 
@@ -636,21 +616,21 @@ def main(argv: list[str]) -> Optional[int]:
     dest='party',
     action='store_const',
     const='join',
-    help='join the summoner’s party (requires :bro.party.join)',
+    help='join the summoner’s party (requires :launch.bro.party.join)',
   )
   placement.add_argument(
     '--boxed',
     dest='isolation',
     action='store_const',
     const='boxed',
-    help='start a boxed party (requires :bro.party.start.boxed)',
+    help='start a boxed party (requires :launch.bro.party.boxed)',
   )
   placement.add_argument(
     '--unboxed',
     dest='isolation',
     action='store_const',
     const='unboxed',
-    help='start an unboxed party (requires :bro.party.start.unboxed)',
+    help='start an unboxed party (requires :launch.bro.party.unboxed)',
   )
   parser.add_argument('--manual', action='store_true', help=MANUAL_HELP)
   parser.add_argument('--detach', action='store_true', help=DETACH_HELP)

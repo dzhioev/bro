@@ -39,6 +39,11 @@ def _run(
       ),
     ),
     patch('ride.scope_report.scoped_secrets', return_value=scoped) as scope,
+    patch('ride.scope_report.configured_scope_layers', return_value=()),
+    patch(
+      'ride.scope_report.effective_launch',
+      return_value={'bro': {'bros': frozenset({'reviewer'}), 'party': frozenset({'boxed'})}},
+    ),
     patch(
       'ride.scope_report.credentials.Store.instance_names',
       return_value=frozenset(
@@ -108,6 +113,7 @@ class TestReportScope:
     assert rc == 0
     assert 'repository: /repo' in out
     assert 'bro:        bro-dev (claude)' in out
+    assert 'launch:     :launch.bro.party.boxed, @reviewer' in out
     assert f'brog+github ({PROJECT_URL_LAYER})' in out
     assert f'github+reviewer ({PROJECT_PATH_BRO_LAYER})' in out
     assert 'optional:' in out and 'openai' in out

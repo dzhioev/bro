@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Start and inspect raw Harbor jobs through a managed session's broker.
 
-The `benchmark` worker type lets only the session root send a workspace-relative config and an optional timeout through `launch`.
+The `benchmark` worker type accepts a workspace-relative config and an optional timeout through `launch`.
 The host runs `bro.benchmark.job` with Docker access and collects its whole command-job directory as the result artifact.
 
 The `benchmark-job` session command starts that work or reads its retained journal result.
@@ -49,8 +49,6 @@ class BenchmarkType(WorkerType):
   def launch(self, request: LaunchRequest) -> Job:
     from bro.broker.job import OUTPUT_DIRECTORY, CommandJob
 
-    if request.owner.depth != 0:
-      raise LaunchDenied('only the session root may start benchmark jobs')
     unknown = sorted(set(request.args) - {'config'})
     if len(unknown) > 0:
       raise LaunchDenied(f'unknown benchmark field(s): {", ".join(unknown)}')

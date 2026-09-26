@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from bro.monitor import party_member_dir
 from bro.monitor.trail_pointer import read, session_pointer
-from bro.worker_types import PeerDescription, UnattributablePeer
+from bro.worker_types import Launch, PeerDescription, UnattributablePeer
 from bro.workspace.paths import workspace_dir
 from ride import pending_launch
 from ride.workspace.model import Workspace
@@ -27,7 +27,7 @@ class WorkerFacts:
   workspace: str | None
   tree: Path | None = None
   member: str | None = None
-  permits: frozenset[str] = frozenset()
+  launch: Launch = field(default_factory=dict)
   expected: bool = False
   artifact_view: PurePosixPath | None = None
   published_ports: tuple[tuple[int, int], ...] = ()
@@ -121,7 +121,7 @@ class PeerFacts:
       tree=tree,
       type=facts.type,
       bro=bro,
-      permits=facts.permits,
+      launch=facts.launch,
       member=facts.member,
       expected=facts.expected,
       artifact_view=facts.artifact_view,

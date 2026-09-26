@@ -80,6 +80,13 @@ _RUNTIME_PYTHON = '/var/ride/runtime/venv/bin/python'
 _WEDGED_MISSION_TIMEOUT = 2
 
 
+def _bro_launch(*, targets=(), party=('boxed',), extra=None):
+  launch = {'bro': {'bros': frozenset(targets), 'party': frozenset(party)}}
+  if extra is not None:
+    launch.update(extra)
+  return launch
+
+
 def _broxy_probe(python: str, source: str) -> list[str]:
   wrapper = (
     'import sys\n'
@@ -153,23 +160,53 @@ else:
   print('RIDE_E2E_ARTIFACT_WRITABLE', flush=True)
 """
 
-# Scenario M root: launch the benchmark type and read the host job's collected output.
+# Scenario M root: a summoned child receives benchmark launch authority by grant.
 _PROBE_BENCHMARK_TYPE = """
+import json
 from pathlib import Path
 
-from bro.artifact import get_artifact
-from bro.bench.job import run_job
+from bro.summon import summon_and_wait
 
 try:
-  ref = run_job('benchmark/pyproject.toml', timeout=60)
-  run = Path(get_artifact(ref, timeout=30))
-  marker = run / 'output' / 'marker'
-  assert marker.read_text() == 'benchmark-e2e', marker
-  Path('/workspace/.benchmark-type-report').write_text(ref)
+  denied = summon_and_wait('bro', 'denied', llm='echo', harness='bro', timeout=120)
+  accepted = summon_and_wait(
+    'bro',
+    'accepted',
+    grant=[':launch.benchmark'],
+    llm='echo',
+    harness='bro',
+    timeout=120,
+  )
+  Path('/workspace/.benchmark-type-report').write_text(
+    json.dumps({'denied': denied, 'accepted': accepted})
+  )
 except Exception:
   import traceback
   Path('/workspace/.benchmark-type-error').write_text(traceback.format_exc())
   raise
+"""
+
+
+_BENCHMARK_TYPE_CHILD = """
+from pathlib import Path
+
+from bro.artifact import get_artifact
+from bro.bench.job import JobError, run_job
+from bro.run_lifecycle import RunLifecycle
+
+channel = RunLifecycle.from_env()
+assert channel is not None
+channel.trail('benchmark-child')
+try:
+  ref = run_job('benchmark/pyproject.toml', timeout=60)
+except JobError as error:
+  channel.completed('denied:' + str(error), 'ok')
+else:
+  run = Path(get_artifact(ref, timeout=30))
+  marker = run / 'output' / 'marker'
+  assert marker.read_text() == 'benchmark-e2e', marker
+  channel.completed('accepted:' + ref, 'ok')
+channel.close()
 """
 
 # Scenario N root: launch a worker container and retain what it reports over chat.
@@ -428,6 +465,7 @@ runtime_bundle = RuntimeBundle(runtime_base() / 'runtime' / runtime_hash, f'{sys
 code = run_started_party(
     launch,
     workspace,
+    launch_scope={'bro': {'party': frozenset({'boxed'})}},
     credential_scope=ScopedSecrets(set(launch.secrets), set()),
     container_runtime=ContainerRuntimeResolver.fixed(
         ContainerRuntime(
@@ -1626,8 +1664,7 @@ Path('/workspace/.summon-credential-report').write_text(answer)
     launch,
     workspace=workspace,
     bro='bro-dev',
-    may_summon={'bro'},
-    permits={'bro.party.start.boxed'},
+    launch_scope=_bro_launch(targets=('bro',)),
     summon_depth=2,
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
@@ -1665,8 +1702,7 @@ def test_manual_summon_argv_owns_its_credential_scope(
     extension={
       'target': 'bro',
       'prompt': 'inspect the manual scope',
-      'may_summon': [],
-      'permits': ['bro.party.start.boxed'],
+      'launch': {'bro': {'bros': [], 'party': ['boxed']}},
       'grant': [],
       'revoke': [],
       'summoner': None,
@@ -1687,7 +1723,7 @@ def test_manual_summon_argv_owns_its_credential_scope(
       revoke=spec.revoke,
       recording=not spec.no_trails,
     )
-    _, _, store = ride_scope.preflight_scoped_launch(
+    _, store = ride_scope.preflight_scoped_launch(
       scoped,
       spec.bro,
       grant=spec.grant,
@@ -1746,7 +1782,7 @@ if prompt == 'boxed-member':
     'bro',
     'unboxed-owner',
     isolation='unboxed',
-    grant=['@bro', ':bro.party.join'],
+    grant=['@bro', ':launch.bro.party.join'],
     llm='echo',
     harness='bro',
     timeout=120,
@@ -1848,7 +1884,7 @@ answer = summon_and_wait(
   'bro',
   'boxed-member',
   party='join',
-  grant=['@bro', ':bro.party.start.unboxed', ':bro.party.join'],
+  grant=['@bro', ':launch.bro.party.unboxed', ':launch.bro.party.join'],
   llm='echo',
   harness='bro',
   timeout=120,
@@ -1874,8 +1910,10 @@ time.sleep(2)
     launch,
     workspace=workspace,
     bro='bro-dev',
-    may_summon={'bro'},
-    permits={'bro.party.start.boxed', 'bro.party.start.unboxed', 'bro.party.join'},
+    launch_scope=_bro_launch(
+      targets=('bro',),
+      party=('boxed', 'unboxed', 'join'),
+    ),
     summon_depth=5,
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
@@ -2082,8 +2120,7 @@ def _run_native_watch_route(
     launch,
     workspace=workspace,
     bro='bro-dev',
-    may_summon={'bro'},
-    permits={'bro.party.start.boxed'},
+    launch_scope=_bro_launch(targets=('bro',)),
     summon_depth=2,
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
@@ -2296,8 +2333,7 @@ def test_native_child_reminded_at_its_turn_end_chills_and_delivers_the_grandchil
     launch,
     workspace=workspace,
     bro='bro-dev',
-    may_summon={'bro'},
-    permits={'bro.party.start.boxed'},
+    launch_scope=_bro_launch(targets=('bro',)),
     summon_depth=3,
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
@@ -2410,8 +2446,7 @@ Path('/workspace/.quest-chat-report').write_text(outcome.answer)
     launch,
     workspace=workspace,
     bro='bro-dev',
-    may_summon={'bro'},
-    permits={'bro.party.start.boxed'},
+    launch_scope=_bro_launch(targets=('bro',)),
     summon_depth=2,
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
@@ -2508,8 +2543,7 @@ Path('/workspace/.quest-cancel-report').write_text(json.dumps({
     launch,
     workspace=workspace,
     bro='bro-dev',
-    may_summon={'bro'},
-    permits={'bro.party.start.boxed'},
+    launch_scope=_bro_launch(targets=('bro',)),
     summon_depth=2,
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
@@ -2528,6 +2562,7 @@ Path('/workspace/.quest-cancel-report').write_text(json.dumps({
 
 
 def test_benchmark_launch_runs_as_a_registered_type(isolated_env: IsolatedEnv, monkeypatch) -> None:
+  import ride.bro_worker as ride_spawn
   from bro.bench.job import BenchmarkType
   from bro.broker.job import CommandJob
   from bro.worker_types import Job, LaunchRequest
@@ -2562,9 +2597,16 @@ def test_benchmark_launch_runs_as_a_registered_type(isolated_env: IsolatedEnv, m
       ),
       env=run.command.env,
     )
-    return Job(command, run.extension, run.permits)
+    return Job(command, run.extension, run.launch_scope)
 
   monkeypatch.setattr(BenchmarkType, 'launch', quick_launch)
+  original_started_party_launch = ride_spawn.started_party_launch
+
+  def started_party_launch(*arguments, **keywords):
+    launch = original_started_party_launch(*arguments, **keywords)
+    return replace(launch, command=_session_broxy_probe(_BENCHMARK_TYPE_CHILD))
+
+  monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
   monkeypatch.setenv('HOME', str(env.home))
   report = workspace.tree / '.benchmark-type-report'
   error_report = workspace.tree / '.benchmark-type-error'
@@ -2582,6 +2624,7 @@ def test_benchmark_launch_runs_as_a_registered_type(isolated_env: IsolatedEnv, m
   code = run_started_party(
     launch,
     workspace,
+    launch_scope=_bro_launch(targets=('bro',), extra={'benchmark': {}}),
     credential_scope=ScopedSecrets(set(), set()),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
@@ -2589,7 +2632,9 @@ def test_benchmark_launch_runs_as_a_registered_type(isolated_env: IsolatedEnv, m
 
   diagnostic = error_report.read_text() if error_report.is_file() else 'no root error report'
   assert code == 0, diagnostic
-  assert report.read_text().startswith('sha256:')
+  result = json.loads(report.read_text())
+  assert ':launch.benchmark' in result['denied']
+  assert result['accepted'].startswith('accepted:sha256:')
   assert env.live_containers() == []
 
 
@@ -2665,6 +2710,7 @@ def test_worker_container_runs_through_the_live_broker(
     launch,
     workspace=workspace,
     bro='bro-dev',
+    launch_scope={ContainerType.name: {}},
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
     types={ContainerType.name: ContainerType},
