@@ -2,6 +2,9 @@ from datetime import UTC, datetime
 
 import pytest
 
+from bro.trails.local import LocalStore
+from bro.trails.model import BlazeRequest
+from bro.trails.store import local_root
 from bros.analyst.scripts import trails_usage as generate
 
 _ANTHROPIC = {
@@ -200,3 +203,32 @@ class TestRender:
 
   def test_skipped_check_is_stated(self):
     assert '--verify 0' in self._rendered([], 0)
+
+
+class TestMain:
+  def test_reads_the_backend_the_trails_credential_names(self, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+      'bro.base.credentials.get_json', lambda name: {'trails': {'backend': 'local'}}[name]
+    )
+    call = {
+      'kind': 'llm_call',
+      'body': {'response': {'model': 'claude-opus-5', 'usage': _ANTHROPIC}},
+    }
+    with LocalStore(local_root()) as store:
+      store.blaze(
+        BlazeRequest(
+          harness='bro',
+          bro='bro-dev',
+          version='test',
+          interactive=False,
+          surface='ask',
+          native={'llm': {'type': 'anthropic', 'model': 'claude-opus-5'}},
+          body={'records': [call]},
+        )
+      )
+    report = tmp_path / 'report.md'
+
+    generate.main(['trails-usage', '--slug', 'local', '--output', str(report)])
+
+    assert capsys.readouterr().out == f'{report}: 1 trails, 0 unreconciled\n'
+    assert 'reproduced its header aggregate exactly' in report.read_text()
