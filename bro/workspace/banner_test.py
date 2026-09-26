@@ -21,9 +21,8 @@ class TestSessionFacts:
       'RIDE_COMMAND',
       'RIDE_HOST_WORKSPACE',
       'RIDE_REPO',
-      summon.MAY_SUMMON_ENV,
+      summon.LAUNCH_ENV,
       summon.PARTY_MEMBER_ENV,
-      summon.PERMITS_ENV,
       summon.SUMMONED_ENV,
       BROKER_TALK,
     ):
@@ -90,11 +89,14 @@ class TestSessionFacts:
     assert facts.trail_id is None
 
   def test_may_summon_reads_the_launch_published_list(self, monkeypatch):
-    monkeypatch.setenv(summon.MAY_SUMMON_ENV, 'dev,reviewer')
+    monkeypatch.setenv(
+      summon.LAUNCH_ENV,
+      summon.encode_launch({'bro': {'bros': frozenset({'dev', 'reviewer'})}}),
+    )
     assert SessionFacts.collect().may_summon == ('dev', 'reviewer')
 
   def test_may_summon_distinguishes_an_empty_list_from_an_unset_one(self, monkeypatch):
-    monkeypatch.setenv(summon.MAY_SUMMON_ENV, '')
+    monkeypatch.setenv(summon.LAUNCH_ENV, summon.encode_launch({'bro': {}}))
     assert SessionFacts.collect().may_summon == ()
 
   def test_talk_reads_the_launch_published_rights(self, monkeypatch):
@@ -219,11 +221,22 @@ class TestRenderBanner:
   def test_llm_omits_may_summon_when_no_list_was_published(self):
     assert 'may_summon' not in _facts(may_summon=None).render_llm()
 
-  def test_llm_lists_the_party_permits(self):
-    assert (
-      'permits: :bro.party.join, :bro.party.start.unboxed'
-      in _facts(permits=('bro.party.join', 'bro.party.start.unboxed')).render_llm()
+  def test_llm_lists_launch_permissions_except_bro_targets(self):
+    facts = _facts(
+      launch={
+        'bro': {
+          'bros': frozenset({'reviewer'}),
+          'party': frozenset({'join', 'unboxed'}),
+        },
+        'benchmark': {},
+        'webview': {'vnc': True},
+      }
     )
+    assert (
+      'permits: :launch.benchmark, :launch.bro.party.join, '
+      ':launch.bro.party.unboxed, :launch.webview.vnc' in facts.render_llm()
+    )
+    assert '@reviewer' not in facts.render_llm()
 
   def test_llm_and_visual_state_joined_party_membership(self):
     facts = _facts(party_member='broker-CH')

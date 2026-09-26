@@ -229,24 +229,17 @@ class SessionSpec:
     new_revoke_authority = authority_values(revoke)
     recorded_grant_authority = authority_values(self.grant)
     recorded_revoke_authority = authority_values(self.revoke)
-    for values, recorded, flag in (
-      (new_grant_authority, recorded_grant_authority, 'grant'),
-      (new_revoke_authority, recorded_revoke_authority, 'revoke'),
-    ):
-      restated = sorted(set(values) & set(recorded))
-      if restated:
-        raise ValueError(f'already in the recorded --{flag}: {", ".join(restated)}')
     grant_keys = {scope_override_key(value) for value in new_grant_authority}
     revoke_keys = {scope_revoke_key(value) for value in new_revoke_authority}
-    recorded_grant_keys = {scope_override_key(value) for value in recorded_grant_authority}
-    recorded_revoke_keys = {scope_revoke_key(value) for value in recorded_revoke_authority}
     kept_grant_authority = [
       value
       for value in recorded_grant_authority
       if scope_override_key(value) not in grant_keys | revoke_keys
     ]
     kept_revoke_authority = [
-      value for value in recorded_revoke_authority if scope_revoke_key(value) not in grant_keys
+      value
+      for value in recorded_revoke_authority
+      if scope_revoke_key(value) not in grant_keys | revoke_keys
     ]
 
     new_pick_kinds = {credentials.parse_name(value)[0] for value in cred}
@@ -263,21 +256,13 @@ class SessionSpec:
         *kept_grant_credentials,
         *new_grant_credentials,
         *kept_grant_authority,
-        *(
-          value
-          for value in new_grant_authority
-          if scope_override_key(value) not in recorded_revoke_keys
-        ),
+        *new_grant_authority,
       ],
       revoke=[
         *kept_revoke_credentials,
         *new_revoke_credentials,
         *kept_revoke_authority,
-        *(
-          value
-          for value in new_revoke_authority
-          if scope_revoke_key(value) not in recorded_grant_keys
-        ),
+        *new_revoke_authority,
       ],
     )
 
@@ -296,8 +281,7 @@ class SessionSpec:
 @dataclass(frozen=True)
 class ScopedLaunch:
   scoped: ScopedSecrets
-  may_summon: set[str]
-  permits: set[str]
+  launch: dict[str, dict[str, frozenset[str] | bool]]
   store: dict[str, bytes]
   hydrated_kinds: frozenset[str] = frozenset()
 
@@ -358,7 +342,7 @@ def _summoned_env(summoned: PendingBro, spec: SessionSpec, address: str) -> dict
     BROKER_MISSION: summoned.token,
     BROKER_TALK: encode_talk(summoned.talk),
     'RIDE_WORKSPACE': spec.name,
-    **summoned_child_env(summoned.may_summon, summoned.permits, summoned.summoner),
+    **summoned_child_env(summoned.launch_scope, summoned.summoner),
   }
 
 
@@ -706,8 +690,7 @@ def _launch_session(
     return run_started_party(
       launch,
       workspace,
-      may_summon=launch_scope.may_summon,
-      permits=launch_scope.permits,
+      launch_scope=launch_scope.launch,
       summon_depth=spec.summon_depth,
       summon_harness=spec.summon_harness,
       session_env=spec.env,
@@ -807,14 +790,16 @@ def _start_session(
     if auth_error is not None:
       log.error('%s', auth_error)
       return 1
-    may_summon, permits, store = preflight_scoped_launch(
+    computed_launch, store = preflight_scoped_launch(
       scoped,
       spec.bro,
       attachment=spec.repo,
       attachment_repository=repository,
       grant=spec.grant,
       revoke=spec.revoke,
+      fixed_launch=None if summoned is None else summoned.launch_scope,
     )
+    launch_scope = computed_launch
   except LaunchScopeError as error:
     log.error('%s', error)
     return 1
@@ -872,8 +857,7 @@ def _start_session(
     return 1
   launch = ScopedLaunch(
     scoped=scoped,
-    may_summon=may_summon,
-    permits=permits,
+    launch=launch_scope,
     store=store,
     hydrated_kinds=store.kinds,
   )

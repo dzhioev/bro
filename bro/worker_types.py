@@ -6,8 +6,8 @@ import hashlib
 import importlib.metadata
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Collection, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -36,13 +36,73 @@ class ArtifactDenied(Exception):
 
 
 @dataclass(frozen=True)
+class LaunchSet:
+  values: Callable[[], Collection[str]]
+
+
+@dataclass(frozen=True)
+class LaunchFlag:
+  pass
+
+
+LAUNCH_FLAG = LaunchFlag()
+LaunchFieldSchema = LaunchSet | LaunchFlag
+LaunchField = frozenset[str] | bool
+LaunchPayload = dict[str, LaunchField]
+Launch = dict[str, LaunchPayload]
+
+
+def parse_launch(value: object, *, subject: str = 'launch') -> Launch:
+  if not isinstance(value, Mapping):
+    raise ValueError(f'{subject} must be an object')
+  launch: Launch = {}
+  for raw_type, raw_payload in value.items():
+    try:
+      worker_type = type_name(raw_type)
+    except ValueError as error:
+      raise ValueError(f'{subject}: {error}') from error
+    if not isinstance(raw_payload, Mapping):
+      raise ValueError(f'{subject}.{worker_type} must be an object')
+    payload: LaunchPayload = {}
+    for raw_field, raw_field_value in raw_payload.items():
+      if not isinstance(raw_field, str) or _TYPE_NAME.fullmatch(raw_field) is None:
+        raise ValueError(f'{subject}.{worker_type} has invalid field {raw_field!r}')
+      if isinstance(raw_field_value, bool):
+        payload[raw_field] = raw_field_value
+        continue
+      if not isinstance(raw_field_value, (list, tuple, set, frozenset)) or not all(
+        isinstance(member, str) for member in raw_field_value
+      ):
+        raise ValueError(
+          f'{subject}.{worker_type}.{raw_field} must be a boolean or a set of strings'
+        )
+      members = tuple(raw_field_value)
+      if len(members) != len(set(members)):
+        raise ValueError(f'{subject}.{worker_type}.{raw_field} contains a duplicate value')
+      payload[raw_field] = frozenset(members)
+    launch[worker_type] = payload
+  return launch
+
+
+def dump_launch(launch: Mapping[str, Mapping[str, LaunchField]]) -> dict[str, dict[str, object]]:
+  parsed = parse_launch(launch)
+  return {
+    worker_type: {
+      field: sorted(value) if isinstance(value, frozenset) else value
+      for field, value in sorted(payload.items())
+    }
+    for worker_type, payload in sorted(parsed.items())
+  }
+
+
+@dataclass(frozen=True)
 class PeerDescription:
   mission: str
   workspace: str
   tree: Path
   type: str
   bro: str | None
-  permits: frozenset[str]
+  launch: Launch
   member: str | None
   expected: bool
   artifact_view: PurePosixPath | None
@@ -191,28 +251,28 @@ class Spawn:
   launch: Any
   spawner: Any
   extension: Any = None
-  permits: frozenset[str] = frozenset()
+  launch_scope: Launch = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class Job:
   command: CommandJob
   extension: Any = None
-  permits: frozenset[str] = frozenset()
+  launch_scope: Launch = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class Container:
   spec: WorkerContainer
   extension: Any = None
-  permits: frozenset[str] = frozenset()
+  launch_scope: Launch = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class Expect:
   pending: dict[str, Any]
   extension: Any = None
-  permits: frozenset[str] = frozenset()
+  launch_scope: Launch = field(default_factory=dict)
 
 
 Run = Spawn | Job | Container | Expect
@@ -237,7 +297,7 @@ class Host(Protocol):
 
 class WorkerType(ABC):
   name: str
-  permits: frozenset[str] = frozenset()
+  launch_schema: Mapping[str, LaunchFieldSchema] = MappingProxyType({})
   default_timeout: float | None = None
   widens_talk: bool = False
   manual: bool = False
@@ -284,11 +344,16 @@ def _load(entry: importlib.metadata.EntryPoint) -> type[WorkerType]:
     raise ValueError(
       f'worker type entry point {entry.name!r} loads class named {worker_type.name!r}'
     )
-  declared = tuple(worker_type.permits)
-  if len(declared) != len(set(declared)):
-    raise ValueError(f'worker type {entry.name!r} declares a duplicate permit')
-  for permit in declared:
-    _permit_leaf(permit)
+  schema = worker_type.launch_schema
+  if not isinstance(schema, Mapping):
+    raise TypeError(f'worker type {entry.name!r} launch schema must be a mapping')
+  for field_name, field_schema in schema.items():
+    if not isinstance(field_name, str) or _TYPE_NAME.fullmatch(field_name) is None:
+      raise ValueError(f'worker type {entry.name!r} declares invalid launch field {field_name!r}')
+    if not isinstance(field_schema, (LaunchSet, LaunchFlag)):
+      raise TypeError(
+        f'worker type {entry.name!r} launch field {field_name!r} has an invalid schema'
+      )
   return worker_type
 
 
@@ -310,15 +375,6 @@ def installed_types() -> dict[str, type[WorkerType]]:
       raise ValueError(f'duplicate worker type {entry.name!r}')
     types[entry.name] = _load(entry)
   return types
-
-
-def _permit_leaf(value: str) -> str:
-  segments = value.split('.') if isinstance(value, str) else []
-  if len(segments) == 0 or any(_TYPE_NAME.fullmatch(segment) is None for segment in segments):
-    raise ValueError(
-      f'invalid worker permit leaf {value!r}; expected dot-separated [a-z][a-z0-9-]* segments'
-    )
-  return value
 
 
 def tree_path(tree: Path, relative: str) -> Path:

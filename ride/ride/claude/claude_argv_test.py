@@ -132,7 +132,7 @@ class TestRideSessionLaunch:
   def test_a_summoning_session_gets_the_summon_watch_over_a_blocked_shell(self, monkeypatch):
     from bro.bro import QUEST_WATCH_SHELL_COMMANDS, BaseBro
     from bro.harness import claude
-    from bro.summon import MAY_SUMMON_ENV, encode_may_summon
+    from bro.summon import LAUNCH_ENV, encode_launch
 
     class BlockingBro(BaseBro):
       name = 'blocking'
@@ -143,7 +143,10 @@ class TestRideSessionLaunch:
         super().__init__(system_prompt='')
 
     monkeypatch.setattr('bro.registry.create_bro', lambda name: BlockingBro())
-    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    monkeypatch.setenv(
+      LAUNCH_ENV,
+      encode_launch({'bro': {'bros': frozenset({'reviewer'})}}),
+    )
     argv = _ride_session_launch(_spec(bro='blocking'), claude_args=[]).argv
     disallowed = argv[argv.index('--disallowed-tools') + 1].split(',')
     assert 'Bash' not in disallowed
@@ -186,7 +189,7 @@ class TestRideSessionLaunch:
   def test_a_summoning_solo_session_keeps_both_hook_kinds(self, monkeypatch):
     from bro.bro import BaseBro
     from bro.harness import claude
-    from bro.summon import MAY_SUMMON_ENV, encode_may_summon
+    from bro.summon import LAUNCH_ENV, encode_launch
 
     class BlockingBro(BaseBro):
       name = 'blocking'
@@ -197,7 +200,10 @@ class TestRideSessionLaunch:
         super().__init__(system_prompt='')
 
     monkeypatch.setattr('bro.registry.create_bro', lambda name: BlockingBro())
-    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    monkeypatch.setenv(
+      LAUNCH_ENV,
+      encode_launch({'bro': {'bros': frozenset({'reviewer'})}}),
+    )
     argv = _ride_session_launch(
       _spec(bro='blocking', solo=True, hold='unattended', prompt='go'), claude_args=[]
     ).argv

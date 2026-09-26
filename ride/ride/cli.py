@@ -326,16 +326,14 @@ def _validate_summoned(
     parser.error('--summoned takes its base from the summon request; drop --into')
   if len(args['env']) > 0:
     parser.error("a manual child's environment additions are the party's; drop --env")
-  _, bro_overrides, permit_overrides = split_scope_overrides([*args['grant'], *args['revoke']])
-  if len(bro_overrides) > 0:
+  try:
+    _, launch_overrides = split_scope_overrides([*args['grant'], *args['revoke']])
+  except ValueError as error:
+    parser.error(str(error))
+  if launch_overrides:
     parser.error(
-      "a manual child's summon allow-list was fixed by the summon request; drop the "
-      f'@bro override(s): {", ".join(sorted(bro_overrides))}'
-    )
-  if len(permit_overrides) > 0:
-    parser.error(
-      "a manual child's permits were fixed by the summon request; drop the "
-      f':permit override(s): {", ".join(sorted(permit_overrides))}'
+      "a manual child's launch section was fixed by the summon request; drop the "
+      f'@bro/:launch override(s): {", ".join(sorted(launch_overrides))}'
     )
   if bro != pending.target:
     parser.error(f'the summon token names bro {pending.target!r}, not {bro!r}')

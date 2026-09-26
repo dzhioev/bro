@@ -123,8 +123,7 @@ def _scoped_store() -> dict[str, bytes]:
 def _launch_scope(**overrides) -> ride_session.ScopedLaunch:
   base = {
     'scoped': ScopedSecrets({'github'}, set()),
-    'may_summon': set(),
-    'permits': {'bro.party.start.boxed'},
+    'launch': {'bro': {'party': frozenset({'boxed'})}},
     'store': _scoped_store(),
   }
   base.update(overrides)
@@ -178,8 +177,8 @@ def _fake_scoped_secrets(secrets: set[str], optional_secrets: set[str]):
   launch's credential overrides the way the real one does."""
 
   def scoped(*_args, cred=(), grant=(), revoke=(), **_kwargs):
-    grant_credentials, _, _ = split_scope_overrides(grant)
-    revoke_credentials, _, _ = split_scope_overrides(revoke)
+    grant_credentials, _ = split_scope_overrides(grant)
+    revoke_credentials, _ = split_scope_overrides(revoke)
     kinds = apply_idempotent(
       set(secrets) | set(optional_secrets),
       grant=(credential_grant_kind(value, context='launch flags') for value in grant_credentials),
@@ -201,10 +200,15 @@ class _ContainerHarness:
   bro imports, or git side effects."""
 
   def __init__(
-    self, secrets: Optional[set[str]] = None, optional_secrets: Optional[set[str]] = None
+    self,
+    secrets: Optional[set[str]] = None,
+    optional_secrets: Optional[set[str]] = None,
+    *,
+    real_launch_fold: bool = False,
   ):
     self.secrets = secrets if secrets is not None else {'github'}
     self.optional_secrets = optional_secrets if optional_secrets is not None else set()
+    self.real_launch_fold = real_launch_fold
 
   def __enter__(self):
     self._patches = [
@@ -220,8 +224,14 @@ class _ContainerHarness:
       patch('ride.claude.harness.container_claude_state', return_value=([], {})),
       patch('ride.workspace.model.BoxedWorkspace.remove'),
       patch('ride.session._print_resume_hint'),
-      # keep the bro-registry import out; threading is asserted per-test
-      patch('ride.bro_worker.summon_allow_list', return_value=set()),
+      (
+        patch('ride.scope.effective_launch', wraps=ride.scope.effective_launch)
+        if self.real_launch_fold
+        else patch(
+          'ride.scope.effective_launch',
+          return_value={'bro': {'party': frozenset({'boxed'})}},
+        )
+      ),
       patch('ride.session.local_trails_mounts', return_value=()),
       patch(
         'ride.workspace.docker.ContainerRuntimeResolver.resolve',
@@ -238,7 +248,7 @@ class _ContainerHarness:
     self.container_claude_state = entered[6]
     self.remove_workspace = entered[7]
     self.scoped_secrets = entered[3]
-    self.summon_allow_list = entered[9]
+    self.effective_launch = entered[9]
     self.local_trails_mounts = entered[10]
     return self
 
@@ -294,7 +304,7 @@ class TestRuntimeBundle:
       workspace,
       _spec(
         cred=['brog+github'],
-        grant=['github', '@bro', ':bro.party.start.boxed'],
+        grant=['github', '@bro', ':launch.bro.party.boxed'],
         revoke=['openai'],
       ),
     )
@@ -309,7 +319,7 @@ class TestRuntimeBundle:
       _resume(
         cred=['trails+write'],
         grant=['openai', '@dev'],
-        revoke=['github', ':bro.party.start.boxed'],
+        revoke=['github', ':launch.bro.party.boxed'],
       )
 
     bundle = _runtime_bundle(tmp_path)
@@ -328,7 +338,7 @@ class TestRuntimeBundle:
           '--revoke',
           'github',
           '--revoke',
-          ':bro.party.start.boxed',
+          ':launch.bro.party.boxed',
           'w',
         ],  # fmt: skip
       )
@@ -414,29 +424,46 @@ class TestNoTrails:
     assert h.scoped_secrets.call_args.kwargs['recording'] is True
 
 
-class TestSummonAllowList:
-  def test_boxed_session_threads_the_allow_list(self):
-    with _ContainerHarness() as h:
-      h.summon_allow_list.return_value = {'dev'}
-      rc = ride_session.start_session(_spec(drop=True, grant=['@dev']))
-    assert rc == 0
-    assert h.summon_allow_list.call_args == (
-      ('bro-dev',),
-      {'layers': (), 'grant': ['dev'], 'revoke': []},
+class TestLaunchSection:
+  def test_start_session_folds_seed_persona_config_and_flags_into_the_root(self):
+    configured = (
+      ride.scope.ScopeLayer(grant=(':launch.webview', '@bro')),
+      ride.scope.ScopeLayer(grant=(':launch.webview.vnc',)),
     )
-    assert h.run_started_party.call_args.kwargs['may_summon'] == {'dev'}
-
-  def test_boxed_session_threads_permits_into_the_session_and_broker(self):
-    with _ContainerHarness() as harness:
+    with (
+      patch('ride.scope.configured_scope_layers', return_value=configured),
+      _ContainerHarness(real_launch_fold=True) as harness,
+    ):
       code = ride_session.start_session(
         _spec(
           drop=True,
-          grant=[':bro.party.start.unboxed'],
-          revoke=[':bro.party.start.boxed'],
+          grant=[':launch.bro.party.unboxed'],
+          revoke=[':launch.bro.party.boxed'],
         )
       )
     assert code == 0
-    assert harness.run_started_party.call_args.kwargs['permits'] == {'bro.party.start.unboxed'}
+    launch = harness.run_started_party.call_args.kwargs['launch_scope']
+    assert launch['bro']['party'] == frozenset({'unboxed'})
+    assert 'bro' in launch['bro']['bros']
+    assert launch['webview'] == {'vnc': True}
+
+  def test_boxed_session_threads_the_launch_section(self):
+    expected = {
+      'bro': {'bros': frozenset({'dev'}), 'party': frozenset({'unboxed'})},
+      'webview': {'vnc': True},
+    }
+    with _ContainerHarness() as harness:
+      harness.effective_launch.return_value = expected
+      code = ride_session.start_session(
+        _spec(
+          drop=True,
+          grant=['@dev', ':launch.bro.party.unboxed', ':launch.webview.vnc'],
+          revoke=[':launch.bro.party.boxed'],
+        )
+      )
+    assert code == 0
+    assert harness.effective_launch.call_args.args[0] == 'bro-dev'
+    assert harness.run_started_party.call_args.kwargs['launch_scope'] == expected
 
   def test_boxed_session_threads_the_summon_depth(self):
     with _ContainerHarness() as harness:
@@ -453,17 +480,17 @@ class TestSummonAllowList:
     assert harness.run_started_party.call_args.kwargs['summon_harness'] == 'claude'
 
   def test_boxed_session_keys_identity_on_the_bro(self):
-    with _ContainerHarness() as h:
-      rc = ride_session.start_session(_spec(drop=True, bro='dev'))
-    assert rc == 0
-    assert h.summon_allow_list.call_args[0] == ('dev',)
+    with _ContainerHarness() as harness:
+      code = ride_session.start_session(_spec(drop=True, bro='dev'))
+    assert code == 0
+    assert harness.effective_launch.call_args.args[0] == 'dev'
 
-  def test_bad_summon_flag_fails_the_launch(self):
-    with _ContainerHarness() as h:
-      h.summon_allow_list.side_effect = ValueError('unknown summon target(s): devoop')
-      rc = ride_session.start_session(_spec(drop=True, grant=['@devoop']))
-    assert rc == 1
-    assert h.run_started_party.call_count == 0
+  def test_bad_launch_name_fails_the_launch(self):
+    with _ContainerHarness() as harness:
+      harness.effective_launch.side_effect = ValueError('unknown worker type: missing')
+      code = ride_session.start_session(_spec(drop=True, grant=[':launch.missing']))
+    assert code == 1
+    assert harness.run_started_party.call_count == 0
 
 
 def _configure_human(tmp_path, name: str = 'Ada Lovelace', email: str = 'ada@example.com'):
@@ -841,11 +868,17 @@ class TestScopeOverrides:
     assert updated.grant == ['github', '@bro-dev']
     assert updated.revoke == ['openai', 'brave']
 
-  def test_a_credential_override_replaces_the_opposite_recorded_one(self):
+  def test_each_new_override_replaces_the_recorded_one_for_its_name(self):
     updated = _spec(grant=['@bro-dev'], revoke=['openai']).with_scope_overrides(
       cred=[], grant=['openai'], revoke=['@bro-dev']
     )
-    assert (updated.grant, updated.revoke) == (['openai'], [])
+    assert (updated.grant, updated.revoke) == (['openai'], ['@bro-dev'])
+
+  def test_a_new_launch_grant_replaces_a_recorded_revoke(self):
+    updated = _spec(revoke=[':launch.webview']).with_scope_overrides(
+      cred=[], grant=[':launch.webview'], revoke=[]
+    )
+    assert (updated.grant, updated.revoke) == ([':launch.webview'], [])
 
   def test_revoke_kind_drops_a_recorded_pick(self):
     updated = _spec(cred=['github+reviewer'], grant=['github']).with_scope_overrides(
@@ -867,9 +900,15 @@ class TestScopeOverrides:
     assert updated.grant == ['github']
     assert updated.revoke == ['openai']
 
-  def test_restating_a_recorded_authority_override_raises(self):
-    with pytest.raises(ValueError, match='already in the recorded --grant: @bro-dev'):
-      _spec(grant=['@bro-dev']).with_scope_overrides(cred=[], grant=['@bro-dev'], revoke=[])
+  def test_restating_a_recorded_launch_override_is_harmless(self):
+    updated = _spec(grant=['@bro-dev']).with_scope_overrides(cred=[], grant=['@bro-dev'], revoke=[])
+    assert updated.grant == ['@bro-dev']
+
+  def test_restating_a_recorded_launch_revoke_is_harmless(self):
+    updated = _spec(revoke=[':launch.webview']).with_scope_overrides(
+      cred=[], grant=[], revoke=[':launch.webview']
+    )
+    assert updated.revoke == [':launch.webview']
 
   def test_a_contradicting_pair_survives_for_the_scope_layer(self):
     updated = _spec().with_scope_overrides(cred=[], grant=['openai'], revoke=['openai'])
@@ -975,12 +1014,18 @@ class TestResumeSession:
     assert spec.cred == ['brog+github']
     assert spec.grant == ['brog', '@bro-dev']
 
-  def test_a_no_op_override_errors(self, tmp_path, caplog):
+  def test_a_no_op_launch_override_relaunches_harmlessly(self, tmp_path):
     ride_session.record_resume_spec(_workspace(tmp_path), _spec(grant=['@bro-dev']))
-    with patch('ride.session.start_session') as start:
-      assert _resume(grant=['@bro-dev']) == 1
-    assert start.call_count == 0
-    assert 'already in the recorded --grant: @bro-dev' in caplog.text
+    with patch('ride.session.start_session', return_value=0) as start:
+      assert _resume(grant=['@bro-dev']) == 0
+    assert start.call_args.args[0].grant == ['@bro-dev']
+
+  def test_a_retired_permit_in_the_record_names_its_replacement(self, tmp_path, caplog):
+    ride_session.record_resume_spec(_workspace(tmp_path), _spec(grant=[':bro.party.join']))
+    with _ContainerHarness(real_launch_fold=True) as harness:
+      assert _resume() == 1
+    assert harness.run_started_party.call_count == 0
+    assert ':launch.bro.party.join' in caplog.text
 
   def test_unknown_workspace_errors(self, caplog):
     with patch('ride.session.start_session') as start:
@@ -1037,7 +1082,11 @@ class TestConcurrentSessionGuard:
       'build_scoped_store',
       lambda store, names, optional=(): (_scoped_store(), frozenset()),
     )
-    monkeypatch.setattr(ride.bro_worker, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(
+      ride.scope,
+      'effective_launch',
+      lambda *_a, **_k: {'bro': {'party': frozenset({'boxed'})}},
+    )
     # the shared active-container refusal probes docker ahead of the launch body
     monkeypatch.setattr(ride_session, 'find_container_id', lambda tree: None)
     monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda root, ref: 'headsha')
@@ -1359,7 +1408,9 @@ class TestUnboxedSession:
       summon_depth=4,
       summon_harness='claude',
     )
-    scope = _launch_scope(may_summon={'dev'})
+    scope = _launch_scope(
+      launch={'bro': {'bros': frozenset({'dev'}), 'party': frozenset({'boxed'})}}
+    )
 
     assert (
       ride_session._launch_session(
@@ -1377,7 +1428,7 @@ class TestUnboxedSession:
     )
     assert isinstance(captured['launch'], ride_session.ProcessLaunch)
     assert captured['workspace'] is workspace
-    assert captured['may_summon'] == {'dev'}
+    assert captured['launch_scope'] == scope.launch
     assert captured['summon_depth'] == 4
     assert captured['summon_harness'] == 'claude'
 
@@ -1472,7 +1523,11 @@ class TestHostBrokerPingRoundTrip:
     monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_a: True)
     monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_a: True)
-    monkeypatch.setattr(ride.bro_worker, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(
+      ride.scope,
+      'effective_launch',
+      lambda *_a, **_k: {'bro': {'party': frozenset({'boxed'})}},
+    )
     monkeypatch.setattr(claude_harness.CLAUDE, 'preflight_auth', lambda spec, store: None)
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set())
@@ -1572,7 +1627,11 @@ client.close(confirm=True)
     monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_a: True)
     monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_a: True)
-    monkeypatch.setattr(ride.bro_worker, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(
+      ride.scope,
+      'effective_launch',
+      lambda *_a, **_k: {'bro': {'party': frozenset({'boxed'})}},
+    )
     monkeypatch.setattr(claude_harness.CLAUDE, 'preflight_auth', lambda spec, store: None)
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set())
@@ -1588,7 +1647,9 @@ client.close(confirm=True)
         _spec(isolation=Isolation.UNBOXED),
         workspace,
         None,
-        _launch_scope(may_summon={'bro-dev'}),
+        _launch_scope(
+          launch={'bro': {'bros': frozenset({'bro-dev'}), 'party': frozenset({'boxed'})}}
+        ),
         human_env={},
         runtime_bundle=runtime_bundle,
         container_runtime=ContainerRuntimeResolver.fixed(
@@ -1624,8 +1685,7 @@ def _pending_record(tmp_path, **overrides):
   extension = {
     'target': 'bro-dev',
     'prompt': 'pair on this',
-    'may_summon': ['dev'],
-    'permits': ['bro.party.start.boxed'],
+    'launch': {'bro': {'bros': ['dev'], 'party': ['boxed']}},
     'grant': [],
     'revoke': [],
     'summoner': {'trail_id': 'T1'},
@@ -1668,7 +1728,7 @@ class TestSummonedSession:
     launch = run.call_args.args[0]
     assert launch.env['BROKER_UPSTREAM'] == 'tcp://tk@host.docker.internal:7321'
     assert launch.env['RIDE_SUMMONED'] == '1'
-    assert launch.env['RIDE_MAY_SUMMON'] == 'dev'
+    assert json.loads(launch.env['RIDE_LAUNCH']) == {'bro': {'bros': ['dev'], 'party': ['boxed']}}
     assert launch.env['BROKER_TALK'] == 'worker.say'
     assert launch.env['RIDE_WORKSPACE'] == 'w'
     assert json.loads(launch.env['RIDE_SUMMONER']) == {'trail_id': 'T1'}

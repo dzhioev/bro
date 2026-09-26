@@ -29,7 +29,7 @@ from bro.jobs import Job, Registry
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, Tool
 from bro.llm.tracker import ToolStepSource
 from bro.mcp import MCPServerSpec, describe
-from bro.summon import MAY_SUMMON_ENV, SUMMONED_ENV, encode_may_summon
+from bro.summon import LAUNCH_ENV, SUMMONED_ENV, encode_launch
 
 
 class EchoBro(BaseBro):
@@ -523,7 +523,7 @@ class TestToolLayers:
       InvalidBro().blocked_tool_names('claude')
 
   def test_a_summoning_run_reaches_the_summon_watch_over_a_block_of_the_shell(self, monkeypatch):
-    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
     bro = _ShellBlockingBro()
     assert bro.narrowed_tool_commands('claude') == {'Bash': bro_module.QUEST_WATCH_SHELL_COMMANDS}
     blocked = set(bro.blocked_tool_names('claude'))
@@ -531,7 +531,7 @@ class TestToolLayers:
     assert blocked.isdisjoint({'Bash', 'BashOutput', 'KillShell', 'TaskOutput', 'TaskStop'})
 
   def test_a_summoning_run_gains_the_summon_watch_on_a_narrowed_shell(self, monkeypatch):
-    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
 
     class WatchingBro(BaseBro):
       name = 'watching-and-summoning'
@@ -547,7 +547,7 @@ class TestToolLayers:
     }
 
   def test_a_run_that_may_summon_nobody_keeps_its_block_of_the_shell(self, monkeypatch):
-    monkeypatch.delenv(MAY_SUMMON_ENV, raising=False)
+    monkeypatch.delenv(LAUNCH_ENV, raising=False)
     bro = _ShellBlockingBro()
     assert {'Bash', 'Monitor'} <= set(bro.blocked_tool_names('claude'))
     assert bro.narrowed_tool_commands('claude') == {}
@@ -576,7 +576,7 @@ class TestToolLayers:
     assert bro.narrowed_tool_commands('claude') == {}
 
   def test_an_unwithheld_shell_is_left_as_it_is(self, monkeypatch):
-    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
 
     class OpenBro(BaseBro):
       name = 'open-shell'
@@ -2167,7 +2167,7 @@ class TestShellRoster:
     assert bro.narrowed_tool_commands('claude') == {}
 
   def test_summon_watch_is_the_only_native_command_without_a_declaration(self, monkeypatch):
-    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
     selection = EchoBro()._selected_tools_for('bro')
     assert selection.shell_commands == (bro_module.QUEST_WATCH_COMMAND,)
     assert selection.shell_unrestricted is False
@@ -2338,7 +2338,7 @@ class TestJobServiceTools:
 
   @pytest.mark.asyncio
   async def test_summon_watch_admission_mounts_a_single_command_shell(self, monkeypatch):
-    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
     run = StubRun()
     server = _service_server(EchoBro(), run=run)
     tools = {tool.name: tool for tool in await server.list_tools()}
@@ -2353,7 +2353,7 @@ class TestJobServiceTools:
 
   @pytest.mark.asyncio
   async def test_a_summoned_native_run_that_may_ask_gets_the_watch_job(self, monkeypatch):
-    monkeypatch.delenv(MAY_SUMMON_ENV, raising=False)
+    monkeypatch.delenv(LAUNCH_ENV, raising=False)
     monkeypatch.setenv(SUMMONED_ENV, '1')
     monkeypatch.setenv(BROKER_TALK, 'worker.say,worker.question')
     run = StubRun()

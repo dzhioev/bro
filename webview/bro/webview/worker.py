@@ -6,12 +6,20 @@ import json
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import PurePosixPath
+from types import MappingProxyType
 from typing import Any, override
 
-from bro.worker_types import Container, LaunchDenied, LaunchRequest, WorkerContainer, WorkerType
+from bro.worker_types import (
+  LAUNCH_FLAG,
+  Container,
+  LaunchDenied,
+  LaunchRequest,
+  WorkerContainer,
+  WorkerType,
+)
 
 WEBVIEW = 'webview'
-VNC_PERMIT = 'webview.vnc'
+VNC_PERMISSION = ':launch.webview.vnc'
 ARTIFACT_VIEW = PurePosixPath('/workspace/artifacts')
 VNC_PORT = 6080
 
@@ -38,7 +46,7 @@ def _dockerfile() -> bytes:
 
 class WebviewType(WorkerType):
   name = WEBVIEW
-  permits = frozenset({'vnc'})
+  launch_schema = MappingProxyType({'vnc': LAUNCH_FLAG})
   default_timeout = None
   widens_talk = False
   manual = False
@@ -57,11 +65,9 @@ class WebviewType(WorkerType):
       raise LaunchDenied("webview 'vnc' must be a boolean")
     allowed_origins = _origins(request.args, 'allowed_origins')
     blocked_origins = _origins(request.args, 'blocked_origins')
-    if vnc and VNC_PERMIT not in request.owner.permits:
-      held = ', '.join(f':{permit}' for permit in sorted(request.owner.permits)) or '(none)'
-      raise LaunchDenied(f'the VNC view needs :{VNC_PERMIT}; permits held: {held}')
-    if request.owner.type == WEBVIEW:
-      raise LaunchDenied('a webview cannot open another webview')
+    payload = request.owner.launch[WEBVIEW]
+    if vnc and payload.get('vnc') is not True:
+      raise LaunchDenied(f'the VNC view needs {VNC_PERMISSION}')
 
     facts = WebviewFacts(vnc, allowed_origins, blocked_origins)
     options = json.dumps(

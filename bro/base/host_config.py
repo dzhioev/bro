@@ -27,7 +27,7 @@ Every `creds` entry is `kind+instance`, the instance left empty (`kind+`) to
 select the kind's empty instance.
 A list may name each kind once.
 `defaults`, project entries, and `bros` entries may carry unified `grant` and
-`revoke` lists: credential names, `@bro` targets, and `:permit` leaves.
+`revoke` lists: credential names, `@bro` targets, and `:launch.…` names.
 Credential grants and revokes name bare kinds only.
 `creds` picks without adding a kind, so one entry may pick and grant the same kind.
 A `bros` entry may also carry `llm`: the recipe the bro runs by default on this

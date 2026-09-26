@@ -67,7 +67,7 @@ def render_text(
   `#creds` (the closed universe; membership probes `credentials.available`
   lazily, so render in the process that consumes the text, where the store is
   the session's own), `may_summon` → `#may_summon` (the session's effective
-  summon allow-list — `bro.summon.effective_may_summon()`; membership is is-a,
+  `launch.bro.bros` set — `bro.summon.effective_may_summon()`; membership is is-a,
   so a granted bro answers to the bros it derives from (`registry.lineage`) as
   well as to its own name, and the universe adds the installed persona names,
   so a granted-but-uninstalled target still tests), `talk` → `#talk` (the fixed

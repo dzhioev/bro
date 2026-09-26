@@ -108,13 +108,13 @@ class LaunchControl:
       self._deny(context, peer, str(error), self._usable_type(requested_type))
       return
 
-    permits = run.permits
+    launch_scope = run.launch_scope
     self._peers.add(
       request.id,
       WorkerFacts(
         type=request.type,
         workspace=None,
-        permits=permits,
+        launch=launch_scope,
         expected=isinstance(run, Expect),
         extension=run.extension,
       ),
@@ -174,6 +174,8 @@ class LaunchControl:
     if worker_type is None:
       available = ', '.join(sorted(self._types)) or '(none)'
       raise LaunchDenied(f'unknown worker type {name!r}; installed types: {available}')
+    if name not in owner.launch:
+      raise LaunchDenied(f'the owner does not hold :launch.{name}')
 
     timeout_value = args.get('timeout', worker_type.default_timeout)
     if timeout_value is not None and (

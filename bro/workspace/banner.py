@@ -3,7 +3,9 @@ from dataclasses import dataclass
 from typing import Optional
 
 from bro import summon
+from bro.base.scope import launch_names
 from bro.monitor import health, trail_pointer
+from bro.worker_types import Launch
 from bro.workspace.paths import ISOLATION_ENV
 
 # six-line block-letter "B R O" rendered with box-drawing characters;
@@ -51,7 +53,7 @@ class SessionFacts:
       empty when it may summon none, None when it was launched by a surface that
       publishes no list
     - talk — the fixed chat rights of this run's own quest, under the same publication rule
-    - permits — the party actions the session may request, under the same publication rule
+    - launch — the mission types and payload values the session may launch
     - party_member — the member name when this session joined an existing party
     - summoned — whether another session summoned this one and waits on its result
     - trail_id — the trail the session is being recorded into; None when nothing
@@ -70,7 +72,7 @@ class SessionFacts:
   summoned: bool
   trail_id: Optional[str]
   repo: Optional[str] = None
-  permits: Optional[tuple[str, ...]] = None
+  launch: Optional[Launch] = None
   party_member: Optional[str] = None
   talk: Optional[tuple[str, ...]] = None
 
@@ -117,7 +119,7 @@ class SessionFacts:
       ride_command=ride_command,
       recording_problem=health.problem(),
       may_summon=summon.may_summon(),
-      permits=summon.permits(),
+      launch=summon.launch(),
       talk=summon.talk(),
       party_member=summon.party_member(),
       summoned=summon.summoned(),
@@ -203,9 +205,9 @@ class SessionFacts:
       rights = ', '.join(self.talk) or '(none)'
       rows.append(('talk:', '', f'{dim}{rights}{reset}'))
 
-    if self.permits is not None:
-      permits = ', '.join(f':{permit}' for permit in self.permits) or '(none)'
-      rows.append(('permits:', '', f'{dim}{permits}{reset}'))
+    if self.launch is not None:
+      permissions = ', '.join(launch_names(self.launch, include_bros=False)) or '(none)'
+      rows.append(('permits:', '', f'{dim}{permissions}{reset}'))
 
     if self.trail_id is not None:
       rows.append(('trail:', '', f'{dim}{self.trail_id}{reset}'))
@@ -258,9 +260,9 @@ class SessionFacts:
       lines.append(f'may_summon: {targets}')
     if self.talk is not None:
       lines.append(f'talk: {", ".join(self.talk) or "none"}')
-    if self.permits is not None:
-      permits = ', '.join(f':{permit}' for permit in self.permits) or 'none'
-      lines.append(f'permits: {permits}')
+    if self.launch is not None:
+      permissions = ', '.join(launch_names(self.launch, include_bros=False)) or 'none'
+      lines.append(f'permits: {permissions}')
     trail = self.trail_id if self.trail_id is not None else 'none (not published)'
     lines.append(f'trail_id: {trail}')
     return '\n'.join(lines)
