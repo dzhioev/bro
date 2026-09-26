@@ -70,14 +70,15 @@ then reviewed against the code and revised with the user in #768's plan phase (t
    so a type one installation doesn't install fails only the launches that name it.
 4. **Names.**
    Config lists, launch flags and summon requests grant and revoke `launch` by name.
-   A name is a path of segments, each `[a-z][a-z0-9-]*`:
-   `:launch.<type>` is a key (may launch that type), `:launch.<type>.<field>.<value>` a set member, `:launch.<type>.<flag>` a flag.
+   A name is either a colon path of segments, each `[a-z][a-z0-9-]*`, or `@<bro>`:
+   `:launch.<type>` is a key (may launch that type), `:launch.<type>.<field>.<value>` a set member, `:launch.<type>.<flag>` a flag;
+   `@<bro>` is the one spelling of a member of the bro type's `bros`, since a registered bro's name may fall outside the segment grammar.
+   `:launch.bro.bros.…` is refused, naming `@<bro>`, and a persona's `may_summon` declares `@` members.
+   A type's names are the members and flags beneath its key, and for `bro` every `@<bro>` as well.
    Each name stands alone:
-   granting a member or a flag doesn't grant its key, and revoking a key leaves the names beneath it in place.
-   `D.launch` holds a type while its key is held, with the payload the names beneath the key make.
+   granting a member or a flag doesn't grant its key, and revoking a key leaves its type's other names in place.
+   `D.launch` holds a type while its key is held, with the payload its type's held names make, each `@<bro>` a member of `bros`.
    A bare section, `:launch` or `:creds`, is malformed.
-   The bro type's `bros` members have one spelling, `@<bro>`, since a registered bro's name may fall outside the segment grammar:
-   `:launch.bro.bros.…` is refused, naming `@<bro>`, and a persona's `may_summon` declares the same members.
    A bare credential kind in `grant` or `revoke` stands for its `creds.use` entry, folded by #767's rules.
    `:creds.…` is refused, naming `creds` / `--cred` and `grant <kind>`:
    credentials keep their spelling, and the path grammar cannot yet spell a kind with `_` (`claude_code`) or the empty instance.
@@ -160,13 +161,15 @@ then reviewed against the code and revised with the user in #768's plan phase (t
     `creds` reaches the session only as its store, and the banner doesn't show it.
 12. **Reading a permit.**
     Its first segment names the section.
-    Under `launch`, the second is the type of mission it lets the holder launch, and what follows describes those missions, never the holder.
+    Under `launch`, the second is the type of mission it lets the holder launch, and what follows describes those missions, never the holder;
+    `@<bro>` names a bro those `bro` missions may run.
 
 In set terms, over #767's:
 
 ```
-names(x)    = the seed ∪ may_summon(x), then each layer's grants and revokes, name by name
-launch(x)   = { T: the names of names(x) beneath :launch.T | :launch.T ∈ names(x) }
+names(x)    = the seed ∪ { @b | b ∈ may_summon(x) }, then each layer's grants and revokes, name by name
+fields(T,x) = the members and flags beneath :launch.T in names(x), and when T = bro, bros ∋ b for each @b ∈ names(x)
+launch(x)   = { T: fields(T,x) | :launch.T ∈ names(x) }
 use(x)      = loaded(x) ∪ the names their kept references reach   (#767's shipped(x))
 defaults(x) = { (k, pick(k)) | k a kind of loaded(x), or named by a kept kind reference }
 hooks(x)    = the kinds of loaded(x)
