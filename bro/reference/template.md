@@ -88,7 +88,7 @@ Each surface renders its copy once, with its own facts:
   the bro service-tool build additionally injects `#harness`), so no unprocessed directive leaves a server and a standalone server serves final text
   — see `bro/reference/conditions.md` "Server-domain vocabularies"
 - data-source summaries — `DataSource.rendered_summary()`, the source's vocabulary again, rendered where the prompt composes
-- credential install hooks — `bro.base.credentials.Secret.from_dict` renders each registry secret's `install` text with `#name` bound to the secret's own name, its own single-variable vocabulary like the server-domain ones
+- credential install hooks — `bro.base.credentials.CredentialKind` renders each registry kind's `install` text with `#name` bound to the kind, its own single-variable vocabulary like the server-domain ones
 - `FileSource.read` — no facts:
   one rendering is read by every harness, so a served doc must be surface-neutral and a `#harness`/`#creds` directive raises;
   `render=False` opts a source out entirely, for a doc whose payload is the directive syntax itself (this reference and `bro/reference/conditions.md`)
