@@ -170,7 +170,7 @@ def _args(trail_id: str, **changes: Any) -> dict[str, Any]:
 
 
 class TestShow:
-  def test_renders_conversation_and_header_without_reading_context(self, capsys):
+  def test_renders_the_header_fields_and_the_conversation(self, capsys):
     client = FakeClient()
     client.add_claude(
       'T1',
@@ -194,7 +194,6 @@ class TestShow:
     assert 'feature' in output and 'abc123' in output
     assert 'legacy launch context' in output
     assert 'content: |-' in output and 'historical prompt' in output
-    assert 'SESSION CONTEXT' not in output
     assert '#1 USER' in output and 'hello' in output
     assert '#2 ASSISTANT' in output and 'hi there' in output
 

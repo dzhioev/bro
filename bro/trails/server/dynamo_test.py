@@ -1162,10 +1162,8 @@ def test_import_refuses_a_corrupt_stored_tool_blob(components, tmp_path):
     store.import_rows(trail_id, 0, rows, tools={sha256: source.get_tool(sha256)})
 
 
-def test_a_begin_that_loses_the_id_leaves_the_winner_its_own_context(
-  components, tmp_path, monkeypatch
-):
-  store, _, s3 = components
+def test_a_begin_that_loses_the_id_leaves_the_winner_in_place(components, tmp_path, monkeypatch):
+  store, _, _ = components
   _, trail_id, header, _, _ = _recorded_source(tmp_path)
   winner = {**header, 'subject': 'winner'}
   optional_header = store._optional_header
@@ -1185,7 +1183,6 @@ def test_a_begin_that_loses_the_id_leaves_the_winner_its_own_context(
     store.begin_import(header)
 
   assert store.get_trail(trail_id)['subject'] == 'winner'
-  assert not any(key.startswith(f'trails/{trail_id}/context') for key in s3.objects)
 
 
 def test_import_matches_a_live_trail_by_identity_and_refuses_another(components):

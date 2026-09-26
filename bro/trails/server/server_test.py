@@ -458,8 +458,6 @@ def test_admin_routes_serve_a_dynamo_backed_store():
   assert app['admin'] is store
   assert '/v1/admin/trails/{trail_id}/migrate' in paths
   assert '/v1/admin/trails/check' in paths
-  assert '/v1/admin/trails/{trail_id}/fold-context' not in paths
-  assert '/v1/admin/trails/{trail_id}/drop-context' not in paths
   assert '/v1/admin/trails/{trail_id}/recompute' in paths
   assert '/v1/admin/trails/{trail_id}/relink' in paths
 
