@@ -95,7 +95,7 @@ Three sections:
 `files`, written under the session's install directory at 0600 and named relative to it;
 `env`, the variables the launch applies to the session environment;
 and `commands`, a tool shadowed by a wrapper first on the session's PATH carrying its own environment per invocation.
-A value is text, `{"path": "<relative path>"}` for a path inside that directory, or `{"secret": "<name>"}` for a credential's value
+A value is text, `{"path": "<relative path>"}` for a path inside that directory, or `{"secret": "<kind>"}` for the value of that kind's picked instance
 — resolved through the launch's passed store as late as its position allows, so a wrapper re-resolves per invocation and a short-lived minted token is never baked in.
 Every string is a template (`bro/reference/template.md`) rendered with `#name` bound to the kind:
 
