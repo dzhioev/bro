@@ -271,18 +271,28 @@ _plan_unsafe_status() {
 # like one carrying it, and a `Fn::ForEach::` entry goes through a formatter that states no
 # impact at all, so the scan flags both rather than letting a verdict it cannot resolve
 # through. The CLI writes the whole diff to stderr unless CI is set.
+# A task definition is a stateless revision: CloudFormation replaces it by registering a new
+# one the service rolls to, and deregisters the old one only after the update succeeds, so
+# its replacement is an ordinary rollout rather than a loss.
 _CDK_IMPACT_SCANNER="$(
   cat <<'PY'
 import re
 import sys
 
-impact = re.compile(r'^\[[-+~]\] .* (replace|destroy|orphan|may be replaced)( \(OR .*)?$')
+impact = re.compile(
+  r'^\[[-+~]\] (\S+) (?:.* )?(replace|destroy|orphan|may be replaced)(?: \(OR .*)?$'
+)
 loop = re.compile(r'^\[[-~]\] Fn::ForEach::')
+rollouts = {
+  ('AWS::ECS::TaskDefinition', 'replace'),
+  ('AWS::ECS::TaskDefinition', 'may be replaced'),
+}
 flagged = []
 for line in sys.stdin:
   sys.stdout.write(line)
   stripped = line.rstrip('\n')
-  if impact.match(stripped) or loop.match(stripped):
+  change = impact.match(stripped)
+  if (change is not None and change.group(1, 2) not in rollouts) or loop.match(stripped):
     flagged.append(stripped)
 if len(flagged) > 0:
   print('error: the plan cannot certify these live resources survive the deploy:', file=sys.stderr)
