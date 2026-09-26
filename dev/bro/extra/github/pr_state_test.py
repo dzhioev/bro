@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 import json
+from pathlib import Path
 from typing import Any
 
+from bro.base import credentials
 from bro.extra.github import pr_state
 
 
@@ -83,14 +85,24 @@ class TestPrState:
     assert [c['in_reply_to'] for c in comments] == [None, 200]
 
 
+def _picked_github_store(store_dir: Path) -> credentials.Store:
+  (store_dir / 'creds').mkdir()
+  (store_dir / 'creds' / 'github+reviewer.cred').write_text('reviewer-token')
+  (store_dir / 'creds.json').write_text(json.dumps({'defaults': ['github+reviewer']}))
+  registry = {'github': credentials.CredentialKind('github', 'GitHub access')}
+  return credentials.Store(registry, store_dir, {})
+
+
 class TestMain:
-  def test_prints_the_state_as_json(self, monkeypatch, capsys):
+  def test_prints_the_state_as_json(self, monkeypatch, capsys, tmp_path):
     _install(monkeypatch)
-
-    class _Store:
-      def get_instance(self, name: str) -> str:
-        return f'resolved:{name}'
-
-    monkeypatch.setattr(pr_state.credentials, 'default_store', lambda: _Store())
-    assert pr_state.main(['pr-state', 'x/y', '7']) == 0
+    with credentials.as_default_store(_picked_github_store(tmp_path)):
+      assert pr_state.main(['pr-state', 'x/y', '7']) == 0
     assert json.loads(capsys.readouterr().out)['pull_request']['number'] == 7
+
+  def test_the_token_is_the_picked_github_instance(self, monkeypatch, capsys, tmp_path):
+    _install(monkeypatch)
+    monkeypatch.setattr(pr_state.api, 'viewer_login', lambda token: f'acts-for:{token}')
+    with credentials.as_default_store(_picked_github_store(tmp_path)):
+      assert pr_state.main(['pr-state', 'x/y', '7']) == 0
+    assert json.loads(capsys.readouterr().out)['viewer'] == 'acts-for:reviewer-token'

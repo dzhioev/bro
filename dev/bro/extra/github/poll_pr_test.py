@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 import pytest
 
+from bro.base import credentials
 from bro.extra.github import poll_pr
 
 
@@ -889,18 +890,17 @@ class TestMain:
       return 0
 
     monkeypatch.setattr(poll_pr, 'poll_pr', fake_poll)
-
-    class _Store:
-      def get_instance(self, name: str) -> str:
-        return f'resolved:{name}'
-
-    monkeypatch.setattr(poll_pr.credentials, 'default_store', lambda: _Store())
     return captured
 
-  def test_credential_flag_accepts_a_storage_name(self, monkeypatch):
+  def test_the_token_is_the_picked_github_instance(self, monkeypatch, tmp_path):
     captured = self._capture_poll(monkeypatch)
-    assert poll_pr.main(['poll-pr', 'x/y', '1', '--credential', 'github+other']) == 0
-    assert captured['token']() == 'resolved:github+other'
+    (tmp_path / 'creds').mkdir()
+    (tmp_path / 'creds' / 'github+reviewer.cred').write_text('reviewer-token')
+    (tmp_path / 'creds.json').write_text(json.dumps({'defaults': ['github+reviewer']}))
+    registry = {'github': credentials.CredentialKind('github', 'GitHub access')}
+    with credentials.as_default_store(credentials.Store(registry, tmp_path, {})):
+      assert poll_pr.main(['poll-pr', 'x/y', '1']) == 0
+      assert captured['token']() == 'reviewer-token'
 
   def test_failure_grace_flag_reaches_the_watch(self, monkeypatch):
     captured = self._capture_poll(monkeypatch)

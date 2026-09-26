@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 7.8.0
+version: 7.8.1
 ---
 
 # run-pr
@@ -390,7 +390,7 @@ Build commit links from `git remote get-url origin` (strip trailing `.git`).
 ### 14. Launch the review watcher
 
 The watcher is one long-lived `poll-pr` process.
-It authenticates through the credential store (`--credential`, default `github`), re-resolved each cycle so the watch survives short-lived minted tokens, and filters out the account that credential acts for
+It authenticates as the session's `github` credential, re-resolved each cycle so the watch survives short-lived minted tokens, and filters out the account that credential acts for
 — your own comments and reviews:
 
 ```bash

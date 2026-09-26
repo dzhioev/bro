@@ -460,11 +460,6 @@ def branch_tip_probe(checkout: Optional[Path]) -> Callable[[str], bool]:
   return points_at
 
 
-def _token_provider(credential: str) -> Callable[[], str]:
-  # storage-addressed: the flag may name a kind or a kind+instance variant
-  return lambda: credentials.default_store().get_instance(credential)
-
-
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(
     description='poll a GitHub PR for merge status, merge conflicts, check results, pushes, '
@@ -477,12 +472,6 @@ def main(argv: list[str]) -> Optional[int]:
     help='target repo (e.g. owner/repository)',
   )
   parser.add_argument('pr', type=int, help='PR number')
-  parser.add_argument(
-    '--credential',
-    default='github',
-    help='credential-store secret resolved into the token at every poll cycle '
-    '(fresh across short-lived minted tokens)',
-  )
   parser.add_argument('--interval', type=int, default=10, help='poll interval in seconds')
   parser.add_argument(
     '--failure-grace',
@@ -505,7 +494,7 @@ def main(argv: list[str]) -> Optional[int]:
     owner=owner,
     repo=repo,
     pr=namespace['pr'],
-    token=_token_provider(namespace['credential']),
+    token=lambda: credentials.get('github'),
     interval=namespace['interval'],
     failure_grace=namespace['failure_grace'],
     local_tip=branch_tip_probe(namespace['checkout']),

@@ -74,11 +74,8 @@ def main(argv: list[str]) -> Optional[int]:
     help='target repo (e.g. owner/repository)',
   )
   parser.add_argument('pr', type=int, help='PR number')
-  parser.add_argument(
-    '--credential', default='github', help='credential-store secret resolved into the API token'
-  )
   namespace = parser.parse(argv)
   owner, repo = namespace['repo']
-  token = credentials.default_store().get_instance(namespace['credential'])
+  token = credentials.get('github')
   print(json.dumps(pr_state(owner, repo, namespace['pr'], token), indent=2))
   return 0

@@ -311,6 +311,7 @@ PYTEST_FILES = [
   'local/bro/local/import_policy_test.py',
   'local/bro/local/spell_policy_test.py',
   'local/bro/local/sleep_policy_test.py',
+  'local/bro/local/credential_policy_test.py',
   'dev/bro/dev/affected_tests_test.py',
   'dev/bro/dev/packaging_policy_test.py',
   'dev/bro/dev/distribution_test.py',
