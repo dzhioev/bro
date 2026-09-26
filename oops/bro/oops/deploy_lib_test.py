@@ -265,6 +265,7 @@ _IMPACT_LINES = (
   '[-] AWS::DynamoDB::Table Trails TableB2 orphan',
   '[~] AWS::EC2::Volume Data VolumeC3 may be replaced',
   '[~] AWS::ECS::Cluster Cluster ClusterE5 replace (OR move to OtherStack.Res via refactoring)',
+  '[-] AWS::ECS::TaskDefinition TaskDef TaskDefG7 destroy',
 )
 _UPDATE_LINES = (
   '[~] AWS::ECS::Service replace ServiceA1',
@@ -325,6 +326,25 @@ def test_cdk_diff_ignores_nested_property_annotations():
   )
   assert result.returncode == PLAN_UNSAFE_EXIT_CODE
   assert 'TaskDefinition' not in result.stderr
+
+
+_ROLLOUT_LINES = (
+  '[~] AWS::ECS::TaskDefinition TaskDef TaskDefH8 replace',
+  '[~] AWS::ECS::TaskDefinition Worker/TaskDef TaskDefJ9 may be replaced',
+  '[~] AWS::ECS::Service Service ServiceD69',
+)
+
+
+def test_cdk_diff_passes_a_task_definition_replacement_as_a_rollout():
+  printed = '\\n'.join(('Stack StackA', 'Resources', *_ROLLOUT_LINES))
+  result = _run_bash(
+    f"""
+    npx() {{ printf '{printed}\\n'; }}
+    cdk_diff . StackA
+    """
+  )
+  assert result.returncode == 0, result.stderr
+  assert result.stderr == ''
 
 
 def test_cdk_diff_flags_a_logical_id_the_cli_renders_like_an_impact():
