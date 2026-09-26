@@ -57,11 +57,9 @@ ride along dev 'continue the inspection' -- --debug mcp
 
 Shared launch flags are `--repo`, `--boxed`, `--unboxed`, `--hold`, `--cred`, `--grant`, `--revoke`, `--into`, `--no-trails`, `--env`, `--session-log`, and the LLM selection set (`--provider`, `--model`, `--effort`, `--fast`, `--llm`).
 `--cred KIND+INSTANCE` picks the stored instance a held credential kind reads and never adds the kind.
-`--grant` and `--revoke` use the framework's unified grammar:
-bare credential kinds shape the scoped store, `@bro` names shape the summon allow-list, and `:permit` leaves shape party authority.
-Worker permits have the form `:<type>.<leaf>`, with one or more dot-separated leaf segments.
-The bro type declares `:bro.party.start.boxed`, `:bro.party.start.unboxed`, and `:bro.party.join`, while the webview type declares `:webview.vnc` for its human-visible loopback view;
-the framework seed is boxed starts alone, `:bro` is malformed, and `:bro.party` names an undeclared leaf rather than expanding to its descendants.
+`--grant` and `--revoke` use the permission document's unified spelling:
+bare credential kinds shape `creds.use`, `@bro` names shape `launch.bro.bros`, and `:launch.…` names shape worker-launch authority.
+The grammar, fold, bounds, and shipped worker schemas are under "Session permissions and credentials".
 `--no-trails` disables trail recording for the session, whichever harness runs:
 the launch omits recording's optional `trails` need, sets `TRAILS_DISABLED` for the run, and a claude session starts no recorder daemon.
 `--env NAME=VALUE` (repeatable) adds a variable to the session environment of the root and of every party member it summons:
@@ -83,7 +81,7 @@ the launcher's own `--log` never reaches the session.
 - `ride exec <workspace> [command ...]` enters a running boxed workspace.
   The exec process is outside the running session's process tree and has no broker channel of its own.
 - `ride check-clean <workspace>` reports whether removal is safe.
-- `ride scope [--repo PATH|URL] [--bro BRO] [--harness HARNESS]` prints the prospective credential tiers, selected credential instances and choosing layers, and name-presence states.
+- `ride scope [--repo PATH|URL] [--bro BRO] [--harness HARNESS]` prints the prospective `launch` section, credential tiers, selected credential instances and choosing layers, and name-presence states.
   `PRESENT` means the selected name has material or a typed-source entry, `SKIPPED` is an unpicked optional empty instance that is absent, and `MISSING` would fail the launch.
   Detached scope requires `--bro`;
   an attachment may supply the project default.
@@ -362,6 +360,139 @@ Every managed session launches through the same stack, whichever harness drives 
 A neutral session-shaping flag lands once in the outer and reaches both execution modes and every harness;
 a claude-shaping one lands once in the runner or the argv builder and applies to both isolations by construction.
 
+## Session permissions and credentials
+
+A managed session has one permission document with `launch` and `creds` sections, and `creds` always contains `use`.
+The sections are present even when their maps are empty.
+The host computes both once before launch:
+`launch` says which mission types the session may start and with what type-owned authority, while `creds.use` says which stored credential instances enter the session store.
+They travel by different mechanisms rather than as one serialized object:
+`launch` reaches the broker and session environment, and `creds` reaches the session only through its synthesized store.
+
+**The `launch` section.**
+It maps each permitted worker type to the payload that type interprets:
+
+```json
+{
+  "bro": {"bros": ["reviewer"], "party": ["boxed", "join"]},
+  "webview": {"vnc": true},
+  "benchmark": {}
+}
+```
+
+Holding a type key such as `webview` permits launches of that type.
+Each installed `WorkerType` declares its payload fields as either a set of validated strings or a flag.
+A set folds by union on grant and difference on revoke;
+a flag is set by grant and cleared by revoke.
+The host checks the type key before dispatch, then the worker type checks its payload and request.
+An unknown type, field, set member, or malformed payload fails the launch that names it.
+
+Launch authority is written in `grant` and `revoke` lists as independent names:
+
+- `:launch.<type>` holds the type key;
+- `:launch.<type>.<field>.<value>` holds one set member;
+- `:launch.<type>.<flag>` holds one flag;
+- `@<bro>` holds one member of `launch.bro.bros`.
+
+Every colon-path segment matches `[a-z][a-z0-9-]*`.
+Bare `:launch` is malformed, `:launch.bro.bros.…` is refused in favor of `@<bro>`, and `:creds.…` is refused because credential kinds and instances retain their own spelling.
+A field name does not imply its type key, and revoking a key leaves its fields held but inactive until the key is granted again.
+The retired `:bro.party.start.boxed`, `:bro.party.start.unboxed`, `:bro.party.join`, and `:webview.vnc` names fail with their `:launch.…` replacements.
+
+The shipped schemas are:
+
+- `bro`: key `:launch.bro`; `bros`, the installed bro names spelled `@<bro>`; and `party`, whose members are `boxed`, `unboxed`, and `join`;
+- `webview`: key `:launch.webview` and the `:launch.webview.vnc` flag, needed only for a human-visible noVNC endpoint;
+- `benchmark`: key `:launch.benchmark` and no fields, so its empty payload is the complete authority.
+
+Every bro launch starts with the framework seed `:launch.bro` and `:launch.bro.party.boxed`, plus one `@<bro>` for every target its persona's `may_summon` declares.
+The repository's `[tool.bro]` layer follows, then the host config's `defaults`, matching project URL, matching project path, URL-bro, and path-bro layers, then launch flags.
+Each layer folds name by name:
+the last word wins, repeated grants and revokes are harmless, revoking an absent name is harmless, and one layer naming the same value in both lists fails.
+An unknown name fails only when a launch whose applicable layers name it is computed, so one shared host config may contain worker types another installation does not install.
+A resume's `--grant` or `--revoke` replaces the recorded override for that name before the same fold and may harmlessly restate its state.
+
+A summon computes the child's authority from the child's own seed, persona, repository, and host layers, then applies the request's launch grants and revokes last.
+It never inherits the summoner's document.
+A request may grant only a key, member, or flag the summoner holds under a held type key;
+revokes are not bounded, and both are idempotent.
+The `bro` worker additionally requires the target in the summoner's `bros` set and the selected placement in its `party` set.
+An unmarked summon starts boxed when `boxed` is held, otherwise unboxed when `unboxed` is held, and never becomes a join implicitly.
+A manual summon fixes the child's `launch` section when the host accepts the request, then refuses `@` and `:launch` overrides on the user's launch.
+The summon-depth limit is a separate host bound over the launch tree.
+
+The broker keeps each peer's `launch` section and checks every request against it.
+`RIDE_LAUNCH` carries the same section into a bro session as compact JSON;
+`bro.summon.launch()` reads it, and `bro.summon.may_summon()` plus the `#may_summon` rendering fact read `launch.bro.bros` from it.
+The banner keeps the human-facing `may_summon` row for those bro members and renders the remaining held fields, flags, and empty-payload keys on its `permits` row in grant spelling.
+`ride scope` renders the prospective `launch` section the same way, including its `@<bro>` members.
+Credentials appear only through `ride scope`, never on the banner.
+The environment copy is informational:
+the broker's peer facts remain the enforcing copy.
+
+**The `creds` section.**
+`creds.use` maps each registered credential kind to the non-empty set of stored instances that the session store holds;
+the empty instance is spelled `""` in that conceptual map and as the bare kind in storage.
+The launch derives it from the selected bro and harness's required and optional credential kinds after every credential grant and revoke, then adds every stored name reached transitively by a preserved `$cred` reference.
+A summon carries no credential overrides:
+its target computes credentials exactly as a root launch of that bro with no credential flags.
+
+A credential store has this shape:
+
+```text
+<store>/creds/<kind>[+<instance>].cred
+<store>/creds.json
+```
+
+```json
+{
+  "defaults": ["github+dev", "trails+write"],
+  "sources": {
+    "github+reviewer": {"type": "github_app"},
+    "openai": {"type": "ssm", "parameter": "/bro/openai", "region": "eu-west-1"}
+  }
+}
+```
+
+`defaults` uses the `creds` list grammar, selects at most one instance per registered kind, and is the store's own base for kind-addressed reads.
+`sources` annotates stored names with typed source configuration;
+annotations for kinds this installation does not register are skipped after their source shape is validated.
+Both keys are optional, and any credential annotation outside `sources` fails with the migration to the current shape.
+A caller's picks layer over the store's `defaults`, then an unpicked kind reads its empty instance.
+`BRO_STORE` directs a process to that store alone and bypasses `~/.bro.json`.
+
+For host commands, `user.creds` and then `user.tools.<command>.creds` layer over the host store's defaults.
+For a managed launch, the matching project URL, project path, URL-bro, and path-bro `creds` lists layer over the store defaults, and `--cred` is last.
+The host config's `defaults` still owns grant and revoke scope but no credential picks;
+`defaults.creds` is retired in favor of the store's `defaults`.
+A pick never adds a credential kind.
+Bare credential names in `grant` and `revoke` change whether the launch holds the kind, through the same idempotent layer fold as launch names;
+an instance is selected only through `creds` or `--cred`.
+A pick under `bros.<bro>.creds` must name a configured need — from the bro, harness, or recording — that remains held after the project and host grant/revoke layers fold;
+a launch-time grant cannot make that bro-specific pick valid.
+A `--cred` pick is checked later and must name a kind held after the launch's credential grants and revokes.
+A project-wide pick may remain unread by one bro so the same project entry can select instances for several bros.
+`ride scope` prints each kind's selected stored name, choosing layer, and `PRESENT`, `SKIPPED`, or `MISSING` state.
+
+The session store materializes every `creds.use` instance under its own stored name, preserving an instance-spelled `$cred` target as that instance.
+Its `creds.json` records the launch's pick in `defaults` for every loaded kind and every kind reached by a kind-spelled preserved reference, and copies the typed source annotations under `sources`.
+An optional kind is skipped only when no layer picked it and its empty instance is absent;
+every required or explicitly picked name must be present and load successfully before launch.
+A missing source, minting failure, malformed value, or unresolved reference fails the launch under that stored name.
+
+`credentials.build_scoped_store` also returns the declared kinds that loaded.
+Both isolations publish those through `BRO_INSTALL_KINDS` beside `BRO_STORE`, and `do-ride` runs install hooks for those kinds only, each reading the session store's default instance.
+Kinds pulled in only through `$cred` references receive no install hook of their own.
+The hook directory is recreated for each launch, and two hooks claiming the same file, variable, or command fail.
+A boxed session receives the store in its writable container layer at `/home/ride/.bro`;
+an unboxed session and its hook output live under one private temporary root removed by its supervisor.
+Unboxed scoping remains a convenience rather than a security boundary because the process runs as the host user.
+
+The benchmark adapter is a separate store writer and reader boundary.
+The trial bundle's own framework reads the host store with its `defaults`, hydrates the one trial credential into a store of the same shape, and uploads that store beside the same bundle that later reads it.
+The bundle therefore owns both sides of the trial-store format rather than relying on the benchmark launcher's installed framework version.
+
+
 ## Per-project defaults (`[tool.bro]`)
 
 Only `--repo PATH|URL` attaches a repository to `ride solo|along`;
@@ -376,8 +507,8 @@ harness = "claude"                   # optional ride default; claude when omitte
 summon-harness = "bro"               # optional: the harness a summon naming none runs its
                                      # child under; bro when omitted
 summon-depth = 4                      # optional deepest summon generation
-grant = ["github", "@reviewer", ":bro.party.join"]
-revoke = [":bro.party.start.boxed"]
+grant = ["github", "@reviewer", ":launch.bro.party.join"]
+revoke = [":launch.bro.party.boxed"]
 image-repository = "custom-images"   # optional: docker repository for the repo's session-container
                                      # images, defaulting to bro/<default> (bro/foo here)
 build-context-command = "list-files"  # optional: stdout is the session image's context file list,
@@ -402,9 +533,10 @@ the mode verbs still require their bro positional.
 a detached launch reads no project file, so its summons use that default.
 `summon-depth` is an optional positive integer with no imposed ceiling, setting the deepest summon generation with the root at depth 0 and a default of 2.
 The host's `~/.bro.json` value overrides it for the launch, and detached launches use only that host value or the default because they read no project file.
-`grant` and `revoke` are optional lists in the full unified grammar.
-A project may grant bare credential kinds, `@bro` targets, and `:permit` leaves;
+`grant` and `revoke` are optional lists in the permission document's unified grammar.
+A project may grant bare credential kinds, `@bro` targets, and `:launch.…` names;
 it may not name a credential instance, because the repository does not choose host material.
+The full fold and validation rules are under "Session permissions and credentials".
 `image-repository` and `build-context-command` are optional.
 A URL attachment evaluates a build-context command in a temporary extraction of the committed base tree and reads the named files back from that commit.
 `[tool.bro.llm]` names the repo's `--llm` presets, which the host's own `~/.bro.json` `llm` table overrides per name.
@@ -416,7 +548,8 @@ A missing pyproject, table, or default
 — fails the launch.
 Which credential instance backs a kind stays out of the repo:
 the attachment — checkout path or normalized URL
-— keys the host's project selection in `~/.bro.json` (`bro/setup/AGENTS.md`, "Host config"), and `--grant`/`--revoke` overrides it per launch.
+— keys the host's project selection in `~/.bro.json` (`bro/setup/AGENTS.md`, "Host config"), and `--cred` overrides that pick per launch.
+`--grant` and `--revoke` instead change whether the launch holds the credential kind.
 A repository may provide `setup.sh` to provision its workspace clone;
 the launch logs and skips that step when it is absent.
 The project environment need not install `bro-ride`, because session machinery comes from the runtime bundle.
@@ -508,16 +641,17 @@ Layout:
 - a per-launch **scoped credential store** injected into `/home/ride/.bro`.
   Before the container starts, the host resolves only the secrets the session actually uses into an **in-memory** tar and `docker cp`s it into the created-but-unstarted container
   — there is no host-side store and no bind mount.
-  It carries one convention-named file per resolved kind plus typed-source annotations in `creds.json`, while the code registry stays in the frozen runtime bundle, so the store directory bounds the in-container resolver to the scoped set
+  It carries one convention-named file per resolved stored name plus its default picks and typed-source annotations in `creds.json`.
+  The code registry stays in the frozen runtime bundle, so the store directory bounds the in-container resolver to the scoped set
   — any other secret resolves to a clean `SecretNotFound`.
   Hydration is **strict** — a missing secret raises on the launcher before the container is created.
   Living in the container's own writable layer, the store dies with the container:
   `--rm` removes it on normal exit, and an orphaned container (a killed `ride`) is reclaimed by `ride clean`'s container GC
   — secret cleanup piggybacks on the container lifecycle, so no host directory ever holds plaintext and no exit-sweep or signal handlers are needed.
-  See "Scoped credential hydration" below.
+  See "Session permissions and credentials" above.
 - **github** and **aws** are ordinary scoped secrets
   — no out-of-band `/run/secrets/github_token` mount, no `~/.aws` mount.
-  Each carries a static **install hook** in the registry, applied generically by `credentials install-hooks` (see "Scoped credential hydration"):
+  Each carries a static **install hook** in the registry, applied generically by `credentials install-hooks` (see "Session permissions and credentials"):
   `github` → the git configuration the session carries in its own environment
   — a credential helper over a reset of whatever helper a config outside the session declares, plus the rewrite that carries github ssh remotes to it
   — and a PATH-front `gh` wrapper,
@@ -658,82 +792,6 @@ Instead, the launch provisions a container-private `.claude.json` in the workspa
 This means each boxed session has its own private `~/.claude.json` (so MCP server allow-lists are per-workspace) and its own session log directory, while authenticating with the shared,
 non-rotating `claude_code` token (so no session's refresh can blow away another's).
 
-#### Scoped credential hydration
-
-Both workspace isolations hydrate only the credential kinds the selected bro and harness declare.
-The launch keeps the required and optional tiers kind-addressed and carries a separate kind-to-instance selection.
-The resulting store directory is the boundary:
-every unboxed session materializes it under a private temporary root owned by its supervisor;
-each points `BRO_STORE` at its own store, and its install-hook output stays under the same temporary root.
-A boxed launch injects it at `/home/ride/.bro` and explicitly sets `BRO_STORE=/home/ride/.bro`.
-An in-session resolver therefore never consults the host's ambient selection.
-Unboxed scoping is still a convenience rather than a security boundary, because the session runs as the host user.
-
-- **The needs.**
-  A bro's `needed_secrets()` (`bro/bro.py`) is the union of each selected MCP server spec's and data source's `needed_secrets`, the bro's MRO-collected `extra_secrets`, and the credentials of its pinned-on features.
-  It deliberately omits the LLM key, which only surfaces running the bro as an LLM process add.
-  `optional_secrets()` supplies the bro's optional needs, and a launch that records adds `trails` as another optional need.
-  A held kind is optional exactly when at least one source needs it and every source that needs it marks it optional.
-  A grant therefore does not promote an optional need, while a kind held only by a grant is required.
-  Components and manifests declare bare kinds only.
-- **Which instance.**
-  Scope starts with the repository's `[tool.bro]` layer, then applies the host config's `defaults`, matching project URL, project path, URL-bro, and path-bro layers, and finally the launch flags.
-  Each layer's `creds` or `--cred` picks an instance without adding its kind;
-  a held kind with no pick reads its empty instance.
-  A bro layer overrides the project selection for that bro, including when the bro is a summon target.
-  A bro-layer pick of a kind its configured scope does not hold fails and names `grant`;
-  recording's `trails` need counts for this check even under `--no-trails`.
-  A launch `--cred` pick whose kind is absent after the launch's own grant/revoke changes fails and names `--grant`.
-  The bro's declarations are evaluated under the final selection, so a feature gate resolves on the launcher exactly when it resolves in the session.
-  Every credential name in every applicable configuration layer must be registered by the installation.
-  An unregistered name fails the launch with its layer;
-  an unregistered `defaults` name points to the project entries as its narrower replacement.
-  A path attachment matches on two identities
-  — the checkout path and its `origin` URL
-  — so a `projects` key written as the repository's URL reaches the everyday `--repo <path>` launch too;
-  within each of the two ranks the path entry layers over the URL entry.
-  A detached launch or an attachment with no matching project entry falls through the layers that do apply to the kind's own stored material.
-  `ride scope` prints each declared kind's stored name, the layer that picked it (or `unpicked` for the empty instance), and its `PRESENT`, `SKIPPED`, or `MISSING` state without loading it.
-- **Which bro.**
-  `ride solo|along` computes the scope for the mode verb's bro positional.
-  Summon lowering computes it for the child target, so the child's own project-bro layer applies.
-  A bro name the registry does not resolve fails before workspace or container creation.
-  Direct `bro run` and `bro chat` use ambient credentials and do not call this layer.
-- **Per-recipe sets.**
-  Harness implementations own `ScopeRecipe` values and pass them to the shared scope computation.
-  Claude uses the persona's claude-harness manifest plus `claude_code`;
-  the bro harness uses the full manifest plus the resolved LLM recipe's key.
-  Each surface includes the bro's matching optional needs.
-- **Launch overrides.**
-  `--cred KIND+INSTANCE` replaces the computed pick for a held kind.
-  `--grant KIND` adds the kind, and `--revoke KIND` removes it.
-  Credential grants and revokes use the same forgiving fold in configuration, a launch, and a resume:
-  the last layer wins, restating either state is harmless, and revoking an absent kind does nothing.
-  One layer cannot both grant and revoke a credential kind, and credential grants and revokes cannot name instances.
-  `@bro` values adjust the summon allow-list, and `:permit` leaves adjust party authority instead;
-  their launch overrides retain strict no-op checks.
-  On resume, each supplied credential grant, revoke, or pick replaces the recorded value for that kind, and `--revoke KIND` also drops its recorded pick.
-- **Hydration.**
-  `credentials.build_scoped_store(store, required, optional=…)` returns an in-memory file map plus the declared kinds that loaded.
-  A name is present when `Store.instance_names` finds either its convention material file or its `creds.json` entry, without resolving the source.
-  An optional kind is skipped only when no layer picked it and its empty instance is absent.
-  Every other held name must be present and load successfully;
-  a missing picked instance, source failure, minting failure, malformed value, or unresolved `$cred` reference fails the launch under the credential's name.
-  Whole-store shape validation still runs when the `Store` is constructed.
-  Each selected instance materializes under the kind's empty instance, `creds/<kind>.cred`, with typed-source annotations in `creds.json`, so the scoped namespace stays kind-addressed.
-  A reference-preserving `$cred` chain hydrates its referenced kinds transitively, but those transitive targets are not reported as declared hydrated kinds.
-  Instance-spelled references in reference-preserving material fail because the scoped namespace is kinds-only.
-- **Install hooks.**
-  Hooks come from the frozen code registry and apply only for the declared hydrated-kind list returned by the build.
-  Both launch isolations pass that list through `BRO_INSTALL_KINDS` beside `BRO_STORE`.
-  `do-ride` applies it from the same frozen runtime bundle into `BRO_INSTALL_DIR` when one is supplied, otherwise into the isolation's session environment directory, and exports the returned wiring before the harness starts.
-  A listed kind missing from the scoped store fails;
-  a listed kind with no hook is a no-op.
-  Transitively hydrated `$cred` targets are deliberately absent from the list, so a shipped reference never wires tools for its target.
-  The hook directory is recreated per launch, and two hooks contending for one file, variable, or command fail instead of silently ordering.
-- **The container contract.**
-  The scoped store is `docker cp`'d into the created-but-unstarted container and lives only in its writable layer.
-  Its files land mode `0600`, and the entrypoint re-owns the store after remapping the `ride` user's UID/GID.
 
 ### The broker channel
 
@@ -777,8 +835,8 @@ The live broker registers the reserved `ping` kind, so a session can verify its 
 the journal projection logs the root's host-anchored mission
 — its launch carries the mission id in `BROKER_MISSION` beside the channel, and the host process is the owner;
 and the `launch` kind handler over the installed `bro.worker_types` registry, including the bro, benchmark, and webview types.
-The root launch carries the session's summon allow-list (`run_root_via_broker(may_summon=…)`, computed at launch by `ride/ride/bro_worker.py`;
-see the shared launch flags above), while `LaunchControl` enforces common launch arguments and `BroType` enforces per-peer summon authorization (see "Summoning another bro").
+The root launch carries the session's `launch` section in its peer facts.
+`LaunchControl` checks the requested worker-type key before dispatch, while the selected `WorkerType` enforces its payload and request (see "Session permissions and credentials" and "Summoning another bro").
 Because the channel sits on the critical path of every launch, a broker defect would too
 — `BROKER_DISABLED` (presence-checked, parallel to `TRAILS_DISABLED`) is the kill-switch that skips broker provisioning and dispatch entirely, so no launcher starts a broxy.
 The broker-less path runs `docker start -a -i` in boxed isolation and a plain runner spawn in unboxed isolation.
@@ -801,7 +859,7 @@ workspace removal (`--drop`, `ride clean`) deletes it with the workspace.
 
 A registered worker type can return a core `Container(WorkerContainer(…))` run without importing ride.
 The shipped `webview` type is a browser worker container driven through `webview open`, `mission ask`, and `webview close`;
-its optional noVNC loopback view requires `:webview.vnc`.
+its optional noVNC loopback view requires `:launch.webview.vnc`, and every webview launch requires `:launch.webview`.
 Its declaration ships a byte-valued Docker build context whose normalized relative paths include a `Dockerfile` opening with `ARG RUNTIME_IMAGE` and `FROM ${RUNTIME_IMAGE}`, plus a command, environment, and distinct container ports.
 The environment cannot claim host-owned `BROKER_*`, `RIDE_*`, `BRO_*`, `HOME`, or `PATH` names.
 The runtime image tag and sorted build-context files determine the worker image tag `bro/<type>:<hash>`;
@@ -830,18 +888,18 @@ A *manual* summon instead has the user launch the child themselves either intera
 see "Manual summon" below.
 The child's credentials come from its own bro, harness, model, and project/host configuration, as for a root launch with no credential flags.
 A request carrying a credential name in `grant` or `revoke` is refused and points to `projects.<identity>.bros.<bro>` in the host config.
-The child's summon allow-list and permits come from its own seeds and project/host layers under the request's `@bro` and `:permit` overrides, never by inheriting the summoner's sets.
+The child's `launch` section comes from its own seed, persona, and project/host layers under the request's `@bro` and `:launch.…` overrides, never by inheriting the summoner's section.
 The root launch's `--env` additions are the one input every started child and joined member does inherit, as facts about the environment the party runs in.
-An explicit request grant is bounded by the corresponding target or permit the summoner holds.
+An explicit request grant is bounded by the corresponding launch key, member, or flag the summoner holds.
 It runs under the harness the request names, or the launch's `[tool.bro] summon-harness` when it names none.
 Both harnesses run `do-ride solo …`:
 `bro` spawns the target's own LLM process there, while `claude` starts a one-shot managed Claude Code session of the target persona.
 The request’s `party` field accepts `start` or `join`, and a start’s optional `isolation` is `boxed` or `unboxed`.
 The CLI spells those choices as `--start`, `--join`, `--boxed`, and `--unboxed`.
-An unmarked request starts boxed when the summoner holds `:bro.party.start.boxed`, otherwise unboxed when it holds `:bro.party.start.unboxed`, and otherwise fails naming the permits held;
+An unmarked request starts boxed when the summoner holds `:launch.bro.party.boxed`, otherwise unboxed when it holds `:launch.bro.party.unboxed`, and otherwise fails naming the party values held;
 it is never converted into a join.
-An explicitly boxed or unboxed start requires the matching start permit.
-A join is always explicit, requires `:bro.party.join`, inherits the summoner’s party isolation, and refuses `isolation`, `into`, and `manual`.
+An explicitly boxed or unboxed start requires the matching party value.
+A join is always explicit, requires `:launch.bro.party.join`, inherits the summoner’s party isolation, and refuses `isolation`, `into`, and `manual`.
 The started-party lowering emits `DockerLaunchSpec` or `ProcessLaunchSpec` through the common launcher roots use.
 An unboxed join emits a member `ProcessLaunchSpec` in the summoner’s existing tree with an explicit environment snapshot and loopback broker upstream.
 A boxed join emits a member `ExecLaunchSpec`:
@@ -879,7 +937,7 @@ underneath it are two client surfaces over the same request, each split into the
   The forwarded fields are `--timeout <s>` / `--into <ref>` / `--hold <level>` / `--grant <name>` / `--revoke <name>` / `--share <ref>` / `--talk <right>` / `--harness <name>` plus the LLM flags;
   an omitted hold leaves the child's unattended default.
   `--share` hands the child read access to an artifact ref — see "Sharing artifacts between peers".
-  Grant/revoke shape the child's onward authority with `@bro` and `:permit` values only.
+  Grant/revoke shape the child's onward authority with `@bro` and `:launch.…` values only.
   Harness and LLM flags shape the child's driving loop without answering to the summoner's credentials;
   the target's own host-config entry supplies whatever credentials that choice needs.
   A blocking wait rides through child says.
@@ -937,7 +995,7 @@ The recorder stamps the child trail's `summoned_by` from the summoner attributio
 
 A `manual: true` summon (`summon --manual`, or the `summon` tool's `manual` parameter, which never blocks for the answer) inverts the launch.
 It takes the same `talk` / `--talk` widening as a spawned child, so the interactive session can exchange only the roles fixed at registration.
-The summoner needs either party-start permit, but the request refuses `party` and `isolation` because the user's launch owns the actual placement.
+The summoner needs either `:launch.bro.party.boxed` or `:launch.bro.party.unboxed`, but the request refuses `party` and `isolation` because the user's launch owns the actual placement.
 The host spawns nothing and instead registers an *expected external peer*
 — a provisioned broker channel awaiting a child someone else starts
 — and the quest id doubles as the launch token.
@@ -954,9 +1012,9 @@ The launcher puts the summoner's provisioned channel in `BROKER_UPSTREAM`, and t
 Its own nested summons therefore route through the summoner's control with per-peer authorization.
 The request fixes what the summoner authorized
 — the target bro, the prompt (delivered as the session's first message), the root session's repository attachment, the base (the request's `into` ref, or the summoner's workspace HEAD read at launch, like a spawned child's at its spawn),
-the child's resolved `may_summon`, permits, and quest talk, and the party's `--env` additions.
+the child's resolved `launch` section and quest talk, and the party's `--env` additions.
 The pending record carries no credential seeds.
-The launch's own `--cred` and credential `--grant`/`--revoke` layer shapes its material, while `@bro` and `:permit` overrides are refused because the control enforces the sets it resolved at request time.
+The launch's own `--cred` and credential `--grant`/`--revoke` layer shapes its material, while `@bro` and `:launch.…` overrides are refused because the control enforces the section it resolved at request time.
 `--env` is refused as well:
 the control stamps the party's additions on every summon the child makes, so the child carries exactly those.
 Launch-owned request fields (`timeout`/`hold`/`llm`/`harness`/`party`/`isolation`) are refused at the request:
@@ -988,21 +1046,20 @@ The summoner's side is the ordinary detach flow:
 the token works with `quest check` / `quest list` / `quest watch`, reading as running until the user launches.
 
 Host side, `PeerFacts` (`ride/ride/peer_facts.py`) holds a generic `WorkerFacts` row keyed by the mission a peer undertakes:
-type, workspace and optional joined-member name, permits, expected/artifact-view state, published ports, and a type-owned extension.
-The bro extension carries its name, effective allow-list, and resolved placement.
+type, workspace and optional joined-member name, `launch` section, expected/artifact-view state, published ports, and a type-owned extension.
+The bro extension carries its name and resolved placement.
 The journal's host-anchored mission seeds the root row;
 an authorized launch adds its worker row before starting, with a started bro’s channel-named workspace, a joined bro’s inherited workspace plus channel-named member, or the claimed workspace for an expected bro filled at launch.
 Every owner resolves through one join
 — peer to undertaken mission through the dispatcher's worker binding, then mission to facts row
 — and depth is the journal ancestry length.
 `LaunchControl` (`ride/ride/launch_control.py`) validates the common request and `BroType` (`ride/ride/bro_worker.py`) authorizes the summon against that row's extension.
-A child's allow-list and permit set are its static seeds under the project and host configuration layers, then its request's matching `@bro` and `:permit` values.
-The configured layers are idempotent;
-a malformed or no-op request override is denied outright.
-Summons chain transitively wherever the seeds chain, and widening is always explicit and bounded by the summoner:
-its own list never passes through
-— only what its request names
-— and it may only name bros it is itself allowed to summon, so authority only narrows down a chain.
+A child's `launch` section is its static seed and `may_summon` members under the project and host configuration layers, then its request's matching `@bro` and `:launch.…` values.
+Every layer and request override is idempotent;
+a malformed name or a request grant beyond the summoner's section is denied.
+Summons chain transitively wherever the child personas and configuration seed them.
+A request never copies its owner's section wholesale, and any authority it adds is explicit and bounded by the owner's held names.
+The child's own seed and applicable configuration are independent, so they may deliberately give it launch authority its owner does not hold.
 Credential names in a request's grant or revoke list are denied at the request boundary with the target bro's host-config entry as the remedy.
 The lowering computes the child's scope from that bro, the requested harness and model, and the applicable configuration without launch credential flags.
 The summoner's credential scope therefore never enters peer facts or authorization.
@@ -1031,8 +1088,7 @@ Quest verbs keep the bro workflow's type filter, while the mission surface, turn
 The statusLine places a child's pending question beside its live summon, renders another live launch as its worker type, and keeps the most recent terminal outcome briefly visible.
 The scope is the quests the caller requested and nothing beneath them;
 it excludes the parent-owned quest that the caller's own worker answers.
-Each authorized launch also carries the allow-list and permits it will be judged against into the run itself (`RIDE_MAY_SUMMON` and `RIDE_PERMITS`:
-the session root's at launch, a summoned child's own resolved sets at its spawn), so a peer reads its authority off the banner instead of discovering it by denial;
+Each authorized bro launch also carries its `launch` section into the run as `RIDE_LAUNCH`, so a peer reads its authority off the banner instead of discovering it by denial;
 enforcement stays entirely host-side.
 Root exit kills in-flight children with a loud log naming what was killed;
 a result lost that way stays recoverable from the child's trail.
@@ -1272,15 +1328,12 @@ Wrappers and session daemons rely on a small set of env vars:
   An unboxed session gets its ride's own root, since its closed environment carries no data home and an inherited value would be its parent's;
   a boxed party member gets its own `party/<member>/trails` under the party mount, since the ride-wide `/var/ride/trails` bind belongs to the first session and its scope may not have one,
   and the member's supervisor adopts those trails into the ride's own store when it settles.
-- `RIDE_MAY_SUMMON` — the run's own effective summon allow-list, comma-separated and empty when it may summon nothing.
-  The env name and its encoding are owned by `bro.summon`;
-  set by the launch surfaces for a session root and by the summon lowering (or, for a manual child, the `--summoned` launch from the pending record) for a summoned child (its own resolved list, never its summoner's),
-  read by `ride banner` to render the fact, and by `bro.prompts.session_fragment` to tell the surface how to arm or poll the quest watch;
-  the tool fold admits that command through bro-native's roster-gated `job` for such a run, and `watch-run quest watch` with `watch-next` through Claude's `Bash`.
-  Read-only in the session:
-  the launcher authorizes against its own copy, so only a relaunch (or the summon that spawns a child) changes what it may summon.
-- `RIDE_PERMITS` — the run's own effective party permits under the same encoding, publication, and host-side enforcement rule.
-  `ride banner` renders each with its `:` grammar marker.
+- `RIDE_LAUNCH` — compact JSON for the run's own `launch` section.
+  The env name and encoding are owned by `bro.summon`;
+  every bro launch surface publishes it, including a manual child's `--summoned` launch from the pending record.
+  `bro.summon.launch()` reads it, `may_summon()` derives `launch.bro.bros`, and the banner renders the section in grant spelling.
+  It is read-only session information:
+  the broker authorizes against its own peer-facts copy, so only a relaunch or a summon request changes a child's authority.
 - `BROKER_MISSION` — the broker mission this run undertakes.
   Every spawner writes it beside the channel;
   a manual summon's token is its mission id and carries the same value into the user-launched session.

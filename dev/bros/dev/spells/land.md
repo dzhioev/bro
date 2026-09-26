@@ -12,7 +12,7 @@ Also covers landing without a pull request
 — a repo that takes changes straight onto its target branch:
 the rebase-and-push one-liner, and the CI dispatch that stands in for the checks no PR is there to run.
 
-version: 5.2.0
+version: 5.3.0
 ---
 
 # land
@@ -119,7 +119,7 @@ Two cases block or defer the close:
   the task closes only after the deploy succeeds.
   An explicit instruction in the initial request or task body to close without holding for the deploy (e.g. a staged feature flow that deploys once after integration) overrides this whole case:
   close as instructed and note the deferred deploy in the report.
-  Otherwise hand the rollout to the operations bro in your summon allow-list:
+  Otherwise hand the rollout to the operations bro in your banner's `may_summon` row:
   summon it (per [[ask]]) with a terse deploy request
   — `deploy <service or feature>`, naming the target, not the steps;
   the ops bro infers the spells and sequence itself
@@ -130,7 +130,7 @@ Two cases block or defer the close:
   Then:
   - deploy succeeded → close the task done as usual and include the ops bro's answer in the report;
   - deploy failed (raised / error / timeout) → leave the task open and report the failure and its reason;
-  - no summon client in the session (no broker channel), or no operations bro in the allow-list → leave the task open and report the pending deploy, naming the exact summon command (`call <ops-bro> "deploy …"`).
+  - no summon client in the session (no broker channel), or no operations bro in `launch.bro.bros` → leave the task open and report the pending deploy, naming the exact summon command (`call <ops-bro> "deploy …"`).
 - **The user said to keep it open.**
   Phrases in the initial prompt like "keep this open", "leave open with notes", or "only landing a subset" mean the task stays in its current status;
   note it in your report.

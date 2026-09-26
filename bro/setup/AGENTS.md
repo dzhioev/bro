@@ -61,21 +61,26 @@ Material is convention-named:
 ```
 
 `<name>` is a kind (`github`) or instance (`github+reviewer`).
-No `creds.json` entry means the material file is plain text.
-An entry changes how that name is read without changing the path:
+`creds.json` holds the store's default picks and typed source annotations:
 
 ```json
 {
-  "github+reviewer": {"type": "github_app"},
-  "service": {"type": "ssm", "parameter": "/service/credential", "region": "eu-west-1"}
+  "defaults": ["github+dev", "trails+write"],
+  "sources": {
+    "github+reviewer": {"type": "github_app"},
+    "service": {"type": "ssm", "parameter": "/service/credential", "region": "eu-west-1"}
+  }
 }
 ```
 
-A minting source reads its config from the convention material path and writes its cache beside it as `<name>.cred.minted`.
-An SSM source needs no material file.
+`defaults` uses the `creds` list grammar and names at most one instance of each registered kind.
+A caller's picks layer over it, and a kind neither layer picks reads its empty instance.
+A name absent from `sources` reads the convention material file as plain text.
+A minting source reads its config from that path and writes its cache beside it as `<name>.cred.minted`;
+an SSM source needs no material file.
 There is one source per name and no directory fallback.
-Entries whose kinds this installation does not register are skipped so one host store can serve several installations;
-malformed entries still fail.
+Source entries whose kinds this installation does not register are skipped after validation, so one host store can serve several installations.
+Both top-level keys are optional, and any credential annotation outside `sources` fails.
 
 Retired `<store>/registry.json` and `<store>/credentials.json` files fail loudly.
 Use `BRO_STORE` for a synthesized service or session store.
@@ -108,22 +113,21 @@ The optional host config selects stored credential instances and layers session 
 ```json
 {
   "defaults": {
-    "creds": ["github+dev", "trails+write"],
-    "grant": [":bro.party.join"]
+    "grant": [":launch.bro.party.join"]
   },
   "projects": {
     "https://github.com/me/bro": {
       "creds": ["brog+github", "github+dev"],
       "grant": ["@reviewer"],
       "bros": {
-        "bro-eyebro": {"creds": ["github+reviewer"], "revoke": [":bro.party.join"]},
+        "bro-eyebro": {"creds": ["github+reviewer"], "revoke": [":launch.bro.party.join"]},
         "eyebro": {"creds": ["github+reviewer"], "grant": ["github"], "llm": "openai:sol:xhigh"}
       }
     },
     "/home/me/projects/bro": {
       "creds": ["aws+laptop"],
-      "grant": [":bro.party.start.unboxed"],
-      "revoke": [":bro.party.start.boxed"]
+      "grant": [":launch.bro.party.unboxed"],
+      "revoke": [":launch.bro.party.boxed"]
     }
   },
   "user": {
@@ -135,19 +139,19 @@ The optional host config selects stored credential instances and layers session 
 }
 ```
 
-Every selection list is named `creds`.
+Every host-config selection list is named `creds`.
 An entry is `kind+instance`, its instance left empty (`kind+`) to select the kind's empty instance;
 one list may name a kind once.
-`defaults`, each project entry, and each `bros.<bro>` entry may also carry `grant` and `revoke` in the full launch-scope grammar:
-a bare credential kind changes whether the scope holds it, `@bro` changes the summon allow-list, and a `:permit` leaf changes party authority.
+Project entries and `bros.<bro>` entries may carry `creds`, while `defaults` does not:
+the host store's `creds.json` `defaults` is the common base pick for managed sessions and operator commands alike.
+`defaults`, project entries, and bro entries may carry `grant` and `revoke` in the permission document's unified grammar.
+A bare credential kind changes `creds.use`, `@bro` changes `launch.bro.bros`, and `:launch.…` changes worker-launch authority.
 Credential grants and revokes cannot name instances;
 use `creds` to pick an instance and add a bare grant only when the consumer does not already need the kind.
-Worker permits have the form `:<type>.<leaf>`, with one or more dot-separated leaf segments.
-The bro type declares `:bro.party.start.boxed`, `:bro.party.start.unboxed`, and `:bro.party.join`, while the webview type declares `:webview.vnc`;
-`:bro` is malformed and `:bro.party` names an undeclared leaf rather than expanding to its descendants.
 A bro's `creds` selects only among the kinds its configured scope holds;
 a selection of any other kind fails the launch and names `grant`, since it would otherwise sit inert.
 The same entry may pick and grant a kind.
+The full name grammar, layer fold, worker schemas, delegation bound, and credential hydration are documented once in `bro/reference/ride.md`, "Session permissions and credentials".
 A `bros` entry may also carry `llm`, the recipe the bro runs by default on this project, in the `--llm` grammar.
 It fills what the launch leaves unnamed:
 a launch naming a provider or a model keeps its own pair, an effort or `+fast` it does not name is read from the entry, the path entry fills before the URL entry, and whatever no layer names keeps the bro's declared recipe.
@@ -159,14 +163,16 @@ Each launch then requires every credential name in every applicable layer to be 
 this lets one shared file carry consumer-specific names in project entries without letting an inapplicable or misspelled name pass silently.
 A recipe is carried as written for the launch to parse.
 
-`defaults.creds` is the root both branches extend.
+The store's `defaults` is the pick base both branches extend.
 `user.creds` covers every command the operator runs outside a session, and `user.tools.<command>.creds` narrows that to one of them;
 a session instead takes the matching project URL, project path, URL-bro, and path-bro layers in that order.
-The project layers' `grant` and `revoke` lists follow the same order after the repository's own `[tool.bro]` layer.
-Credential grants and revokes are idempotent at every layer, including launch and resume flags, so a more-specific layer may restate either state.
-`@bro` and `:permit` launch overrides retain their strict no-op checks.
+The project layers' `grant` and `revoke` lists follow the same order after the repository's own `[tool.bro]` layer and the host's `defaults` scope layer.
+Credential grants and revokes are idempotent through project, host, launch, and resume layers;
+a summon request refuses them.
+Launch-authority grants and revokes are idempotent through those layers and the summon request.
 The user and session branches are disjoint, so a `user` entry never reaches a session.
-A kind no layer selects reads its empty instance.
+A kind no layer selects reads the store's default, then its empty instance.
+The retired `defaults.creds` field fails with the store's `defaults` named as its replacement.
 
 A session against a checkout carries two identities:
 the checkout's path, and its `origin` remote when that remote is a git URL.
@@ -184,7 +190,7 @@ A launch whose attachment no project entry names simply reads the layers that do
 A launch can override its computed selection with `--cred kind+instance` without adding the kind.
 
 Every console script names its module to `bro.base.args.run_cli`, which records the canonical name of the command the process is.
-On first credential access, an ambient resolver reads the host config and applies `defaults`, `user`, and that command's own layer.
+On first credential access, an ambient resolver reads the store's defaults and applies the host config's `user` and that command's own layer.
 Parsing a CLI that never accesses a credential does not read the host config.
 When `BRO_STORE` is set, the resolver does not consult the host config at all:
 a session or service store is already the product of a selection.
@@ -215,13 +221,11 @@ Common material paths and shapes:
 - `creds/claude_code.cred` — the scalar long-lived OAuth token from `claude setup-token`.
   The `claude_code` install hook exports it as `CLAUDE_CODE_OAUTH_TOKEN`.
 - `creds/aws.cred` — the AWS shared-credentials file installed for SDK and CLI consumers.
-- `creds/github+<instance>.cred` — a GitHub App config such as `{"app_id": ..., "installation_id": ..., "private_key": "<PEM>"}` when the matching `creds.json` entry is `{"github+<instance>": {"type": "github_app"}}`.
+- `creds/github+<instance>.cred` — a GitHub App config such as `{"app_id": ..., "installation_id": ..., "private_key": "<PEM>"}` when `creds.json` annotates the stored name under `{"sources": {"github+<instance>": {"type": "github_app"}}}`.
   Resolution mints an installation token and holds it at `creds/github+<instance>.cred.minted`.
 
 **Scoped stores.**
 A managed session reads a synthesized store rather than the host's, in this same layout, and the directory is the bound:
 a name not hydrated resolves to `SecretNotFound`, while the code registry's full kind universe remains known for capability checks.
-The host skips only an optional kind whose empty instance is both unpicked and absent;
-every other held name must be present and load successfully before launch.
-How a launch selects, hydrates, and delivers it, install hooks included:
-`bro/reference/ride.md`, "Scoped credential hydration".
+The store keeps selected and transitively referenced instances under their own stored names, with its picks under `defaults` and typed annotations under `sources`.
+How `creds.use` is selected, hydrated, and delivered, install hooks included, is `bro/reference/ride.md`, "Session permissions and credentials".

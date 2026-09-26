@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.11.0
+version: 2.12.0
 ---
 
 # orchestrate
@@ -73,7 +73,7 @@ Never redo a completed phase.
    — you are framing the work, not designing it.
    Names start with a lowercase letter (except proper nouns).
 2. Settle the **bro** for each phase.
-   Read your allow-list off the banner (`bro::banner`, `may_summon`):
+   Read your `launch.bro.bros` members off the banner (`bro::banner`, `may_summon`):
    where it names one plausible candidate, take it for every phase;
    where several could take a phase, ask the user which.
    If a phase wants a different bro than the rest
@@ -137,10 +137,10 @@ this spell only says how a phase differs from a one-shot ask.
   — the thinking was bought in the phases before them.
 - **Scope.** Your summon check settles what a phase needs.
   Grant only what it needs beyond its bro's declarations and only what you hold yourself:
-  `@<bro>` when the phase has to hand work onward, or a party permit when it has to start sessions of its own.{{when #may_summon contains eyebro}}
+  `@<bro>` when the phase has to hand work onward, or a `:launch.bro.party.…` member when it has to start sessions of its own.{{when #may_summon contains eyebro}}
 - **The eyebro.** Every phase that opens or lands a pull request gets it granted,
   under the name your banner's `may_summon` gives rather than `eyebro` itself:
-  a child renders [[run pr]]'s and [[land]]'s reviewer steps only where its own allow-list carries one.{{end}}
+  a child renders [[run pr]]'s and [[land]]'s reviewer steps only where its own `launch.bro.bros` set carries one.{{end}}
 - **Self-contained prompts.** A bro shares no context with you:
   spell out the root task URL,
   what to produce,
@@ -172,7 +172,7 @@ ride along --summoned <token> <bro> <launch line> --harness <claude|bro>
   neither phase needs one
   — design only reads the codebase,
   and review-and-plan resets the integration branch to `origin/master` itself.{{when #may_summon contains eyebro}}
-- The eyebro goes to review-and-plan alone, on its summon request rather than the launch line, since the request fixes a manual child's allow-list;
+- The eyebro goes to review-and-plan alone, on its summon request rather than the launch line, since the request fixes a manual child's `launch` section;
   the design phase opens no pull request.{{end}}
 - No talk beyond the default:
   the user is in the session, so its questions go to them rather than to you.

@@ -91,7 +91,7 @@ Terminal-Bench 2.2 would arrive as a new pin file and new task sets naming it;
 task names are names inside one revision, so a 2.1 list is not reused against 2.2 without checking.
 
 Where the job runs depends on where the command runs.
-A managed session carries no docker socket, so from inside one the job goes through the session broker:
+A managed session carries no docker socket and needs `:launch.benchmark`, whose worker payload has no fields, so from inside one the job goes through the session broker:
 the host runs `bro.benchmark.job` with its own Docker access through the registered `benchmark` worker type from `bro-bench`, pointed at the composed config,
 and the finished run comes back as an artifact whose `output/` holds the job directory beside `stdout`, `stderr`, and `status.json`.
 `benchmark-run` prints `results <path>  artifact <ref>`;
@@ -260,7 +260,8 @@ Following a run as it happens means reading the log where
 it is being written:
 `docker exec <task-container> tail -f /logs/agent/bro.log`.
 
-The container gets exactly one credential, the one the `llm_credential` kwarg names:
+The trial store is rooted at the one credential the `llm_credential` kwarg names and includes any stored names its preserved `$cred` references reach.
+The uploaded bundle's own framework reads the host store's default pick and hydrates that store, so the code that writes it is the code inside the bundle that reads it:
 on the bro harness an LLM key
 — use a dedicated, budget-capped instance
 — and on the claude harness a `claude_code` setup token, an account credential no budget caps, so a public run uses a dedicated Claude account whose token is revoked after the run.

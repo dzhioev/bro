@@ -27,7 +27,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   its own parser and argv builder, the session environment and pid/start-time record, credential hooks, missing Claude state and plugin seed, persona provisioning, the session broxy, and SIGTERM-forwarded agent spawning.
 - `ride/errors.py` — the runtime-path and workspace-record error wrapper shared by the distribution's public scripts.
 - `ride/scope.py` — per-surface launch scoping:
-  `ScopeRecipe`, `BRO_RUN_RECIPE`, attachment-bound credential selection, the project/host grant layers, three-way scope override splitting, permit computation, and the strict launch preflight,
+  `ScopeRecipe`, `BRO_RUN_RECIPE`, attachment-bound credential selection, the project/host grant layers, three-way scope override splitting, `launch`-section computation, and the launch preflight,
   plus `bind_launch_llm`, the launch's LLM selection settled over the host's per-bro entry for the attachment and returned as the canonical `--llm` the session records and forwards,
   and `launch_llm_spec`, that value resolved within the driving harness for the surfaces that need only the recipe.
   In-process `bro run` / `bro chat` create no scope.
@@ -101,7 +101,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - A ride preflights its Docker daemon once before its first boxed launch, by reading a nonce through a bind of the runtime root.
   Every boxed bind source must resolve under that root.
 - A launch's credential instances follow its attachment identity and selected bro on every surface that resolves them
-  — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Scoped credential hydration")
+  — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Session permissions and credentials")
   — and so does its default LLM recipe, settled on the host once and carried inward as the canonical `--llm`.
 - Both isolations pass `BRO_STORE` and `BRO_INSTALL_KINDS` to `do-ride`, which installs the hooks through one applier into the named session environment directory,
   so a session's git and `gh` act as the identity it was scoped with and never reach the operator's own configuration.
@@ -128,7 +128,9 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   It has no resume record;
   clean exit removes its records, failure or kill keeps them, and an unboxed member's private credential root is always removed while a boxed member's store dies with the party's container.
   The party ends with its first session, so that session's teardown kills any members still running, whichever spawner runs them.
-- The framework seed permits boxed party starts.
-  Credential grants and revokes apply idempotently through project, host, root-launch, and resume layers, while summon requests refuse them;
-  summon allow-lists and permits keep strict launch/request overrides, and every launch exports the effective permit set through `RIDE_PERMITS` while summon control enforces its own peer-facts copy.
+- The framework seeds `:launch.bro` and `:launch.bro.party.boxed`.
+  Credential grants and revokes apply idempotently through project, host, launch, and resume layers, while summon requests refuse them.
+  Launch grants and revokes additionally fold through summon requests;
+  a request may grant only authority its owner holds, and every bro launch exports the resulting section through `RIDE_LAUNCH` while launch control enforces its peer-facts copy.
+  The complete document and fold are `bro/reference/ride.md`, "Session permissions and credentials".
 - Every console script this distribution ships wraps its `main` in `ride.cli.reports_runtime_errors`, so unusable runtime locations and workspace records fail as CLI errors.

@@ -8,7 +8,7 @@ This spell should be used when the user asks to review a GitHub pull request and
 Reconciles the PR's existing review state, reviews the head, posts findings as PR review comments, watches for the author's answers and pushes with `poll-pr`, re-reviews round by round, and approves once every finding is addressed or conceded.
 
 parameters: {"pr": "pull request URL or number to review"}
-version: 1.7.0
+version: 1.8.0
 ---
 
 {{iff #features contains github}}
@@ -277,7 +277,7 @@ The identity comes from configuration for this bro, never from a summon request:
 - a managed session or a summon reads the project's entry in the host's `~/.bro.json`:
   `projects.<identity>.bros.<bro>.creds` with `github+<instance>`, `<bro>` being the name your banner's `bro` line gives, so every launch of this bro resolves one;
 - a direct `bro run` or `bro chat` uses the host's own store:
-  an instance selected under `user.creds` (or `user.tools.<command>.creds`) or `defaults.creds` in `~/.bro.json`, or the kind's empty instance when nothing selects one.
+  an instance selected by the store's `~/.bro/creds.json` `defaults`, then `user.creds` or `user.tools.<command>.creds` in `~/.bro.json`, or the kind's empty instance when nothing selects one.
 
 Whichever account it is, it must differ from the PR author's, which GitHub refuses to let approve.
 

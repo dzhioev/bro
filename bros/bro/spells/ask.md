@@ -8,11 +8,11 @@ This spell should be used when the user asks to relay a question or job to anoth
 Turns the phrasing into a summon (a scoped one-shot run that starts a party or joins the summoner’s),
 picks whichever summon client the session has, decides foreground vs background,
 and relays the answer with the failure modes handled.
-A summon succeeds only when the target is in the summoner's allow-list
-— the session reads its own off the banner, fixed at launch
+A summon succeeds only when the target is in the summoner's `launch.bro.bros` set
+— the session reads those members from the banner's `may_summon` row, fixed at launch
 — so a denial stays a normal outcome the spell relays.
 
-version: 1.20.0
+version: 1.21.0
 ---
 
 # Ask
@@ -35,7 +35,7 @@ and spawning are host-side.
 From the user's wording extract:
 
 - **target** — the bro to summon (`reviewer`, `deployer`, …).
-  The session's allow-list is on its banner as `may_summon` (`bro::banner`)
+  The session's `launch.bro.bros` members are on its banner as `may_summon` (`bro::banner`)
   — read it rather than probing:
   a target it does not name is denied, and `none` means this session cannot summon at all.
   Being listed is not a promise the run succeeds;
@@ -77,18 +77,20 @@ Placement is a knob when the user asks for it:
 `join` runs the child beside this session in the same workspace and isolation.
 A join shares the working tree, so use it only when concurrent work in that tree is intended;
 it refuses `into`, an isolation choice, and `manual`.
-An unmarked request starts boxed when permitted, then unboxed when that is the available start permit;
+An unmarked request starts boxed when `:launch.bro.party.boxed` is held, then unboxed when `:launch.bro.party.unboxed` is the available member;
 it never changes into a join.
 
 The child's onward authority is a knob too:
 grants and revokes.
-A grant or revoke names `@bro` for one of the target's summon targets, or a party permit.
-The permits are `:bro.party.start.boxed`, `:bro.party.start.unboxed`, and `:bro.party.join`, always as leaves.
-They start from the target's own declarations, not yours,
-and you can grant only a bro in your own allow-list or a permit in your own set.
-Grant only what the request actually needs and the user asked for,
-such as `@reviewer` when a developer child must hand off a review.
-A no-op grant or a revoke of authority the target lacks fails the summon rather than passing quietly.
+A grant or revoke names one permission-document launch name:
+`@bro`, `:launch.<type>`, `:launch.<type>.<set>.<member>`, or `:launch.<type>.<flag>`.
+The bro placement members are `:launch.bro.party.boxed`, `:launch.bro.party.unboxed`, and `:launch.bro.party.join`.
+They fold over the target's own seed and configuration rather than inheriting yours, and repeating either state is harmless.
+You can grant only a name you hold under a type key you hold;
+revokes are unbounded.
+Grant only what the request actually needs and the user asked for, including the type key a field or flag needs,
+such as `@reviewer` when a developer child must hand off a review or `:launch.webview` plus `:launch.webview.vnc` when it must open a visible browser.
+The complete grammar, fold, and worker schemas are `bro/reference/ride.md`, "Session permissions and credentials".
 
 A summon request carries no credentials.
 The child resolves its credentials from its own bro, harness, model, and applicable host configuration, just like a root launch without credential flags.
@@ -215,7 +217,7 @@ and `--talk` still apply;
 It returns the token and launch command once the host accepts;
 a denial fails the call immediately.
 {{end}}
-The summoner still needs either party-start permit because the human launch starts a party.
+The summoner still needs either `:launch.bro.party.boxed` or `:launch.bro.party.unboxed` because the human launch starts a party.
 
 Relay the token to the user as the ready-to-paste interactive command
 — `ride along --summoned <token> <target>`
@@ -246,10 +248,8 @@ If the user asked for a follow-up action on the answer, continue with it.
 
 ## Failure modes
 
-- **Denied** — the target isn't in the summoner's allow-list,
-  a scope override was malformed,
-  a no-op,
-  or beyond what the summoner holds,
+- **Denied** — the target isn't in the summoner's `launch.bro.bros` set,
+  a scope override was malformed or grants authority beyond what the summoner holds,
   or the summon would nest past the depth cap.
   Immediate, no child spawned;
   the error names the reason.
@@ -257,7 +257,7 @@ If the user asked for a follow-up action on the answer, continue with it.
   the fix is relaunching `ride solo|along` (or `ask` / `call` / `dive-in`) with `--grant @<target>`
   — tell the user that;
   nothing in-session can widen it.
-  A summoned bro's onward authority starts from its own static seeds under the project and host configuration layers, then the request's `@bro` and permit overrides.
+  A summoned bro's onward authority starts from its own seed and `may_summon` members under the project and host configuration layers, then the request's `@bro` and `:launch.…` overrides.
   Its credentials come from the target bro's applicable host configuration, not from the request.
   Change the relevant source rather than retrying unchanged.
 - **Raised / error** — the target ran but couldn't fulfill the request;

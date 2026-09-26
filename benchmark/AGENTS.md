@@ -59,7 +59,7 @@ uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
   `built(root)` reports an absent, incomplete, or malformed bundle rather than building one behind the caller's back
 - `bro/benchmark/harbor_agent.py` — `BroAgent`, the `BaseInstalledAgent` harbor imports.
   Its Harbor version is the uploaded bundle's identity, and its recorded name carries the bro and, off the default, the harness.
-  `install()` uploads the bundle and a scoped store holding only the LLM credential, then runs
+  `install()` has the uploaded bundle's own framework hydrate a trial store from the host store's defaults, rooted at the LLM credential and including any preserved-reference dependencies, then uploads both and runs
   `bro show <bro>` through the uploaded bundle
   — the one validation the host cannot make, and a
   smoke test of the bundle in the task's own image
@@ -68,6 +68,7 @@ uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
   `ride solo --unboxed --tree "$PWD" --runtime-bundle <bundle> …` under `setsid`,
   a join-only ride in the task's directory whose records land under the collected agent directory,
   reaped through a fresh root exec when harbor cancels the phase.
+  The root revokes `:launch.bro.party.boxed` and grants `:launch.bro.party.join`, so its summons may join the task tree and start no new party (`bro/reference/ride.md`, "Session permissions and credentials").
   Harbor's `model_name` carries a registered provider's name plus a `--llm` recipe with its provider slot dropped
   — `<provider>/<model>[:<effort>][+fast]`, mapped onto `--llm :<recipe>`, the spelling
   that keeps the persona's own spec;

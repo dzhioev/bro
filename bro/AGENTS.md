@@ -121,7 +121,7 @@ this section is what `BaseBro` renders, mounts, and counts when one runs.
 `BaseBro.__init__` keeps the MRO-concatenated class prompts as `persona`, under a `# Persona: <name>` heading, and composes the bro-native `system_prompt` around it:
 every `bro/prompts/shared/*.md` first, then the persona, the tool-name rule (`bro/prompts/tool_names.md`), a `## Data sources` block describing each declared `DataSource`,
 the `## Spells` contract when the bro has spells, and the `## Skills` block mapping `/<name>` requests to `bro::skill`.
-The composition renders once with its surface facts (`bro.mcp.render_text`: harness `bro`, the environment's credentials and summon allow-list, the `#features` vocabulary).
+The composition renders once with its surface facts (`bro.mcp.render_text`: harness `bro`, the environment's credentials and `launch.bro.bros` members, the `#features` vocabulary).
 A managed Claude session runs under a prompt of its own;
 its append prompt injects `persona` beside the shared prompts (`bro/reference/ride.md`, "Auto-injected system prompt").
 `system_prompt_for(hold=…)` is the text a bro-native run starts under:
@@ -171,7 +171,7 @@ It excludes the LLM key (`llm_spec.needed_secrets()`):
 surfaces that run the bro as an LLM process add it, while a claude-code session authenticates on its own.
 `missing_secrets()` is the manifest plus the LLM key, checked against the process's store;
 `Runner.run()` refuses to start on any missing name, raising `BroRaised` with them all listed, and interactive surfaces reply with the report.
-The host hydrates the per-surface set into a scoped store before a session starts (`bro/reference/ride.md`, "Scoped credential hydration").
+The host hydrates the per-surface set into a scoped store before a session starts (`bro/reference/ride.md`, "Session permissions and credentials").
 
 ### Optional credential tier
 
