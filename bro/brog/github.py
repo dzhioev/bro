@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from typing import Any, Optional
 
 import bro.brog.system as brog_system
+from bro.base.git_url import github_repository, is_git_url
 from bro.brog.model import Comment, Status, Task
 from bro.extra.github import api
 
@@ -35,11 +36,6 @@ _DROPPED_STATE_REASONS = ('not_planned', 'duplicate')
 # the shape add_comment writes the topic in: the body's leading heading line
 _TOPIC_HEADING_RE = re.compile(r'### (?P<topic>.+)')
 
-_ORIGIN_URL_RE = re.compile(
-  r'(?:git@github\.com:|(?:https|ssh)://(?:[^@/]+@)?github\.com/)'
-  r'(?P<repo>[^/]+/[^/]+?)(?:\.git)?/?'
-)
-
 
 def origin_repo() -> str:
   """the `owner/name` of the working directory's `origin` remote"""
@@ -47,10 +43,10 @@ def origin_repo() -> str:
   if result.returncode != 0:
     raise ValueError('the workspace has no origin remote to derive the GitHub repo from')
   url = result.stdout.strip()
-  match = _ORIGIN_URL_RE.fullmatch(url)
-  if match is None:
+  repository = github_repository(url) if is_git_url(url) else None
+  if repository is None:
     raise ValueError(f'cannot derive owner/name from the origin remote {url!r}')
-  return match.group('repo')
+  return repository
 
 
 def _status_from_issue(issue: dict[str, Any]) -> Status:
