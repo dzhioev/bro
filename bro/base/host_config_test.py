@@ -79,12 +79,41 @@ class TestProjectSelection:
 
     assert selected.instances == {'brog': 'github'}
 
+  @pytest.mark.parametrize(
+    'url',
+    ['git@github.com:Foo/API.git', 'ssh://git@github.com/foo/api', 'https://github.com/foo/api'],
+  )
+  def test_any_spelling_of_a_github_repository_matches_its_key(self, config_file, url):
+    config_file({'projects': {'git@github.com:foo/api.git': {'creds': ['brog+github']}}})
+
+    selected = host_config.launch_selection(host_config.Attachment(url=url), 'developer')
+
+    assert selected.instances == {'brog': 'github'}
+
+  def test_a_local_file_url_spelling_github_does_not_match_it(self, config_file):
+    config_file({'projects': {'https://github.com/foo/api': {'creds': ['brog+github']}}})
+
+    selected = host_config.launch_selection(
+      host_config.Attachment(url='file://github.com/foo/api.git'), 'developer'
+    )
+
+    assert selected.instances == {}
+
+  def test_another_hosts_url_keeps_its_transport(self, config_file):
+    config_file({'projects': {'git@gitlab.com:foo/api.git': {'creds': ['brog+github']}}})
+
+    selected = host_config.launch_selection(
+      host_config.Attachment(url='https://gitlab.com/foo/api.git'), 'developer'
+    )
+
+    assert selected.instances == {}
+
   def test_two_keys_naming_one_identity_are_rejected(self, config_file):
     config_file(
       {
         'projects': {
           'https://github.com/foo/api.git': {'creds': ['brog+github']},
-          'https://GitHub.com/foo/api.git/': {'creds': ['brog+flow']},
+          'git@github.com:foo/api': {'creds': ['brog+flow']},
         }
       }
     )

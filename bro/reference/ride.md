@@ -653,12 +653,17 @@ Layout:
   — no out-of-band `/run/secrets/github_token` mount, no `~/.aws` mount.
   Each carries a static **install hook** in the registry, applied generically by `credentials install-hooks` (see "Session permissions and credentials"):
   `github` → the git configuration the session carries in its own environment
-  — a credential helper over a reset of whatever helper a config outside the session declares, plus the rewrite that carries github ssh remotes to it
+  — a credential helper for `https://github.com` over a reset of whatever helper a config outside the session declares there, plus the rewrite that carries both ssh spellings of a github remote to it
   — and a PATH-front `gh` wrapper,
   each resolving the token via `credentials get` per operation (a `github_app`-backed instance mints short-lived tokens, so consumers read at use time rather than off a value baked in at install,
   and `GH_TOKEN` / `GITHUB_TOKEN` inherited from the launching shell are blanked so nothing in the session acts on another identity);
   `aws` → the shared-credentials file it points the CLI at.
   No per-secret logic lives in the entrypoint.
+  The github token therefore authenticates every github remote and nothing else;
+  in an unboxed session any other host keeps whatever the user's own configuration supplies.
+  Two user settings still outrank it in an unboxed session, since git gives the session no way to override them:
+  a `~/.netrc` entry for github.com, which curl uses ahead of any git credential helper,
+  and the user's own `insteadOf` rule carrying github https remotes to ssh, which git applies before a session rule for the same prefix.
 - the host's `/var/run/docker.sock` is **never** mounted:
   its API is root on the launcher with no per-caller authorization, so a socket grant would step past every scoped boundary above.
   Work that needs a daemon
@@ -671,11 +676,11 @@ Layout:
   no state path is relative to `/workspace`.
 
 On an attached workspace's first launch, `prepare_container` clones from the checkout or managed mirror into a temporary sibling and publishes the completed clone atomically.
-It retargets `origin` to the attachment's upstream URL, converting `git@github.com:` to `https://github.com/`, and ref-refreshes the attachment's `refs/remotes/origin/*` without adding another remote.
+It retargets `origin` to the attachment's upstream URL, spelling a github.com one as `https://github.com/<owner>/<name>` and keeping any other host's verbatim, and ref-refreshes the attachment's `refs/remotes/origin/*` without adding another remote.
 It creates the recorded workspace branch from the resolved base:
 a URL attachment's fresh `origin/HEAD`, an explicit `--into`, or a summon's inherited base;
 a path attachment defaults to its current `HEAD`.
-Initialized checkout submodules are cloned from their matching host paths and retargeted to their upstreams;
+Initialized checkout submodules are cloned from their matching host paths and retargeted to their upstreams, spelled the same way;
 a managed bare mirror initializes them from their committed URLs, while an uninitialized checkout submodule is skipped.
 No prepared clone or submodule carries an alternates file.
 Later launches preserve the clone exactly as the session left it.

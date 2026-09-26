@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import log
+from bro.base.git_url import canonical_github_url, is_git_url
 from bro.workspace.git import no_prompt_env
 from ride.repository import Repository
 
@@ -21,15 +22,13 @@ def _git(root: Path, *arguments: str) -> str:
   return result.stdout.strip()
 
 
-def _container_git_url(url: str) -> str:
-  prefix = 'git@github.com:'
-  if url.startswith(prefix):
-    return f'https://github.com/{url.removeprefix(prefix)}'
-  return url
+def _upstream_url(url: str) -> str:
+  github_url = canonical_github_url(url) if is_git_url(url) else None
+  return url if github_url is None else github_url
 
 
 def _origin_url(repository: Path) -> str:
-  return _container_git_url(_git(repository, 'remote', 'get-url', 'origin'))
+  return _upstream_url(_git(repository, 'remote', 'get-url', 'origin'))
 
 
 def _alternates_file(repository: Path) -> Path:
@@ -78,7 +77,7 @@ def _initialize_submodules(repository: Repository, tree: Path) -> None:
       clone_source = str(local_source)
     elif is_bare:
       _git(tree, 'submodule', 'init', '--', str(relative))
-      upstream = _container_git_url(_git(tree, 'config', '--get', f'submodule.{name}.url'))
+      upstream = _upstream_url(_git(tree, 'config', '--get', f'submodule.{name}.url'))
       clone_source = upstream
     else:
       log.verbose('skipping submodule %s: %s is not initialized', name, local_source)

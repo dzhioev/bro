@@ -104,7 +104,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Session permissions and credentials")
   — and so does its default LLM recipe, settled on the host once and carried inward as the canonical `--llm`.
 - Both isolations pass `BRO_STORE` and `BRO_INSTALL_KINDS` to `do-ride`, which installs the hooks through one applier into the named session environment directory,
-  so a session's git and `gh` act as the identity it was scoped with and never reach the operator's own configuration.
+  so a session's git and `gh` reach GitHub as the identity it was scoped with rather than through the operator's own configuration.
   An unboxed process gets a closed environment snapshot with its workspace as `PWD`;
   only the baseline roster and, for a session on the launcher's terminal, its identity cross from the ambient environment,
   and a launch's recorded `--env` additions sit beneath it all, carried by the root and every party member alike.

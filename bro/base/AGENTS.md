@@ -59,7 +59,8 @@ run those with `--help` for flags.
   The scheme and its precedence are `bro/setup/AGENTS.md`, "Host config";
   `ride.scope.scoped_secrets` carries the project-level result to each explicitly constructed credential store
 - `git_url.py` — git remote URL grammar:
-  `is_git_url`, `is_network_git_url`, `normalize_git_url` (the canonical spelling two spellings of one remote compare on), `sanitize_git_url` (the credential-free recorded spelling), and `git_url_path`.
+  `is_git_url`, `is_network_git_url`, `normalize_git_url` (the canonical spelling two spellings of one remote compare on), `sanitize_git_url` (the credential-free recorded spelling), and `git_url_path`,
+  plus the github.com grammar: `github_repository` (the `owner/name` any spelling names) and `canonical_github_url` (the one https spelling they all map to).
   Pure string handling, so callers that never invoke git
   — a project key match, a config read
   — reach it without the workspace layer

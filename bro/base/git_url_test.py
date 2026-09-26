@@ -1,7 +1,9 @@
 import pytest
 
 from bro.base.git_url import (
+  canonical_github_url,
   git_url_path,
+  github_repository,
   is_git_url,
   is_network_git_url,
   normalize_git_url,
@@ -55,3 +57,43 @@ class TestPath:
   def test_the_repository_path_comes_out_of_either_shape(self):
     assert git_url_path('https://github.com/owner/repo.git') == '/owner/repo.git'
     assert git_url_path('git@github.com:owner/repo.git') == 'owner/repo.git'
+
+
+class TestGitHub:
+  @pytest.mark.parametrize(
+    'url',
+    [
+      'git@github.com:Owner/Repo.git',
+      'git@GitHub.com:Owner/Repo',
+      'ssh://git@github.com/Owner/Repo.git',
+      'ssh://git@github.com:22/Owner/Repo',
+      'https://github.com/Owner/Repo.git/',
+      'https://x-access-token@github.com/Owner/Repo',
+      'http://github.com/Owner/Repo',
+    ],
+  )
+  def test_every_spelling_maps_to_one_https_url(self, url):
+    assert github_repository(url) == 'Owner/Repo'
+    assert canonical_github_url(url) == 'https://github.com/Owner/Repo'
+
+  @pytest.mark.parametrize(
+    'url',
+    [
+      'git@gitlab.com:Owner/Repo.git',
+      'https://github.example.com/Owner/Repo.git',
+      'ssh://git@gitlab.com/github.com/Repo.git',
+      'file:///srv/github.com/Owner/Repo.git',
+      'file://github.com/Owner/Repo.git',
+      'git://github.com/Owner/Repo.git',
+    ],
+  )
+  def test_another_host_or_transport_is_not_github(self, url):
+    assert github_repository(url) is None
+    assert canonical_github_url(url) is None
+
+  @pytest.mark.parametrize(
+    'url', ['https://github.com/Owner', 'git@github.com:Owner/Repo/tree', 'https://github.com/']
+  )
+  def test_a_github_url_naming_no_repository_is_rejected(self, url):
+    with pytest.raises(ValueError, match='names no owner/name repository'):
+      github_repository(url)

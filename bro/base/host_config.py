@@ -41,7 +41,7 @@ The store's own `creds.json` defaults are the base credential picks beneath
 `user` for an operator command and `projects` for a managed session.
 A project key is an identity a session names the repository by: the filesystem
 path of its root (`~` and symlinks resolved before matching), or a normalized
-git URL.
+git URL, every spelling of one github.com repository reducing to the same key.
 A launch carries both where it has both — a checkout's path and the origin URL
 naming it portably — and every entry either one matches applies, so the URL
 entry holds what follows the repository across machines and the path entry
@@ -75,7 +75,7 @@ from typing import Optional
 
 from bro.base import configs, credentials
 from bro.base.args import CLIError
-from bro.base.git_url import is_git_url, normalize_git_url
+from bro.base.git_url import canonical_github_url, is_git_url, normalize_git_url
 from bro.base.scope import ScopeLayer, validate_scope_layer
 
 # Module-level so tests can point it at a fixture path; read at call time.
@@ -293,7 +293,7 @@ def _matches(config: _Config, attachment: Optional[Attachment]) -> list[_Match]:
   if attachment is None:
     return []
   identities = [
-    (attachment.url, PROJECT_URL_LAYER, PROJECT_URL_BRO_LAYER, normalize_git_url),
+    (attachment.url, PROJECT_URL_LAYER, PROJECT_URL_BRO_LAYER, _url_key),
     (attachment.path, PROJECT_PATH_LAYER, PROJECT_PATH_BRO_LAYER, _path_key),
   ]
   matches = []
@@ -447,7 +447,12 @@ def _project_key(key: str) -> str:
   """Reduce a `projects` key to the identity an attachment matches it on."""
   if not isinstance(key, str) or key == '':
     raise ValueError('project key must be a non-empty string')
-  return normalize_git_url(key) if is_git_url(key) else _path_key(key)
+  return _url_key(key) if is_git_url(key) else _path_key(key)
+
+
+def _url_key(url: str) -> str:
+  github_url = canonical_github_url(url)
+  return normalize_git_url(url) if github_url is None else github_url.lower()
 
 
 def _path_key(path: str) -> str:
