@@ -3,13 +3,13 @@ name: wire
 description:
 
 Use this spell to wire the host's credentials for the repository you are working in
-— deciding which stored instance of each credential kind this project's sessions and bros read, and recording it in the host's `~/.bro.json`.
+— deciding which stored instance of each credential kind this project's sessions and bros read, and recording shared defaults in `~/.bro/creds.json` or consumer-specific picks in `~/.bro.json`.
 Trigger on "[[wire credentials]]", "configure credentials for this repo", "which github token does this project use", "my sessions pick the wrong task tracker",
 or a launch or host CLI that failed on a missing or wrong credential.
-It runs on the host (a container session cannot reach `~/.bro.json`), changes no repository file, and never invents a secret
+It runs on the host (a container session cannot reach the host's credential store or config), changes no repository file, and never invents a secret
 — a kind with nothing behind it is reported for the user to provide.
 
-version: 2.0.0
+version: 2.2.0
 ---
 
 # Wire credentials
@@ -17,15 +17,16 @@ version: 2.0.0
 A host store may hold several instances of one credential kind:
 two GitHub identities,
 or a task tracker per backend.
-`~/.bro.json` selects among them through host-wide defaults, the user's own command layers, and project and per-bro layers.
-This spell decides the relevant mapping with the user and writes it.
+`~/.bro/creds.json` supplies host-wide default picks, and `~/.bro.json` layers the user's own command picks or project and per-bro picks over them.
+This spell decides the relevant mapping with the user and writes each pick to its owning store or host-config layer.
 
 ## 1. Check you can reach the host config
 
-`~/.bro.json` belongs to the environment that launches `ride`.
+`~/.bro/creds.json` and `~/.bro.json` belong to the environment that launches `ride`.
 Call `bro::banner`.
 A session reporting `isolation: boxed` cannot see it, so stop there and tell the user to re-run with `--unboxed` or from the launcher's terminal.
-An unboxed session can continue against the launcher's file.
+An unboxed session can reach the launcher's files, but it inherits `BRO_STORE` pointing at its private session store.
+Run every credential or scope inspection in this spell through `env -u BRO_STORE` so it reads the host store and host config.
 
 ## 2. Identify the consumer
 
@@ -52,13 +53,13 @@ Its `user.tools.<command>` layer never affects managed launches.
 
 ## 3. Learn what credentials are needed and stored
 
-For a managed launch, `bro show <bro>` lists the required and best-effort credential kinds.
-`ride scope --repo <root> --bro <bro>` shows what the attached launch currently resolves.
+For a managed launch, `env -u BRO_STORE bro show <bro>` lists the required and best-effort credential kinds.
+`env -u BRO_STORE ride scope --repo <root> --bro <bro>` shows what the attached launch currently resolves.
 For a host CLI, inspect the command's credential reads in its module or documentation rather than guessing from neighbouring tools.
 
-`credentials list` prints the code registry's kinds and descriptions.
-`credentials list --instance` enumerates stored names.
-Read the ambient store's `creds/` directory (`~/.bro/creds/` when `BRO_STORE` is unset) and `creds.json` annotations to distinguish candidates;
+`env -u BRO_STORE credentials list` prints the code registry's kinds and descriptions.
+`env -u BRO_STORE credentials list --instance` enumerates stored names.
+Read the host store's `~/.bro/creds/` directory and `creds.json` annotations to distinguish candidates;
 do not look for or edit the retired `~/.bro/registry.json`.
 Never print secret material.
 Use safe metadata already present in a configuration value
@@ -76,12 +77,13 @@ For each needed kind, sort the host into one of three cases:
 
 ## 4. Choose the owning layer
 
-Read `bro/base/host_config.py`'s module docstring before editing the file.
-Its precedence is launch flag, project-bro, project, tool for a host CLI, then defaults;
+Read `bro/base/host_config.py`'s module docstring and `bro/reference/ride.md`'s "Session permissions and credentials" section before editing either file.
+A managed launch layers project URL, project path, URL-bro, path-bro, and `--cred` picks over the store's defaults.
+A host command instead layers `user` and `user.tools.<command>` over those defaults;
 a kind no layer selects reads its empty instance.
 Every selection list is named `creds` and carries `kind+instance`, the instance left empty (`kind+`) for the kind's own `creds/<kind>.cred`.
 
-Put a host-wide choice in `defaults.creds` only when both the user's own commands and unrelated projects should read it.
+Put a host-wide choice in `~/.bro/creds.json`'s `defaults` only when both the user's own commands and unrelated projects should read it.
 Put what the user's own commands read in `user.creds`, and one command's own choice in `user.tools.<command>.creds`.
 Put a repository-wide choice in `projects.<identity>.creds`.
 Put an identity specific to one bro in `projects.<identity>.bros.<bro>.creds`.
@@ -91,23 +93,22 @@ Kinds the consumer has no opinion about stay out of its layer.
 
 ## 5. Record the decision
 
-Merge only the chosen entries into `~/.bro.json`.
-Leave every unrelated default, user, command, project, bro, and `llm` entry untouched.
+Merge a chosen shared default into `~/.bro/creds.json`'s `defaults` list and every other chosen entry into `~/.bro.json`.
+Leave unrelated store defaults and sources, and every unrelated host-config default, user, command, project, bro, and `llm` entry untouched.
 A repository already carrying a path entry that duplicates its URL entry keeps only what differs between them:
 the URL entry holds the shared selection, and the path entry the machine-local remainder.
-Show the user the proposed change before writing it.
+Show the user the proposed change to each file before writing it.
 
 ## 6. Verify
 
-For project wiring, re-run `ride scope --repo <checkout> --bro <bro>` for every project and bro you changed, naming the checkout path even where you keyed the entry by URL
+For project wiring, re-run `env -u BRO_STORE ride scope --repo <checkout> --bro <bro>` for every project and bro you changed, naming the checkout path even where you keyed the entry by URL
 — that is the launch shape the entry has to reach.
-Each selected kind should name the intended instance and report `ok`, and the layer it prints says which entry chose it.
+Each selected kind should name the intended instance and report `PRESENT` or, for an absent unpicked optional kind, `SKIPPED`, and the layer it prints says which entry chose it.
 A `MISSING` kind points at material the store cannot resolve;
 fix it before finishing.
 
-For command wiring, invoke the CLI through a real console script on the cheapest path that reads the credential.
-Do not set `BRO_STORE` for that check:
-an explicit store deliberately bypasses `~/.bro.json`.
+For command wiring, invoke the CLI through `env -u BRO_STORE` and a real console script on the cheapest path that reads the credential.
+A directed store deliberately bypasses `~/.bro.json`, including the session store this unboxed run inherited.
 
 Close by telling the user which layers changed and what each consumer now reads.
 A managed launch can override its computed choice with `--cred <kind>+<instance>`.

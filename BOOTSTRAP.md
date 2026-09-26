@@ -201,7 +201,7 @@ Fetch and read these paths before using their contracts:
 - `bro/workspace/project.py`;
 - `bro/llm/llms/claude_code.py`;
 - `bro/llm/llms/openai.py`;
-- `bro/reference/ride.md`, especially **Harness selection**, **Per-project defaults**, **Summoning another bro**, and **Scoped credential hydration**;
+- `bro/reference/ride.md`, especially **Harness selection**, **Per-project defaults**, **Summoning another bro**, and **Session permissions and credentials**;
 - `bro/reference/dive_in.md`;
 - `ride/ride/dive_in.py`;
 - `ride/ride/bro.py`;
@@ -440,7 +440,7 @@ For GitHub development:
 
 - reuse a suitable stored GitHub instance when possible;
 - otherwise, after `gh auth status`, redirect `gh auth token` directly into `github+<instance>.cred`;
-- for a GitHub App, have the user create its JSON material outside chat and merge `"github+<instance>": {"type": "github_app"}` into `~/.bro/creds.json`;
+- for a GitHub App, have the user create its JSON material outside chat and merge `"github+<instance>": {"type": "github_app"}` under `~/.bro/creds.json`'s `sources` object;
 - record only the expected non-secret acting identity.
 
 When GitHub brog is chosen, create a project-specific material file with this shape:
