@@ -11,7 +11,7 @@ import pytest
 
 from bro.monitor import encode_project_path, health
 from bro.trails.local import LocalStore
-from bro.workspace.paths import trails_dir
+from bro.workspace.paths import BASE_SHA_ENV, BRANCH_ENV, trails_dir
 from ride.claude.recorder import (
   _STOP_TIMEOUT,
   RECORDER_COMMAND,
@@ -106,20 +106,40 @@ _TRANSCRIPT = [
 _RECORDING_TIMEOUT = 90.0
 
 
-def _await_trail(store: LocalStore, segment: Path) -> dict:
-  """the header of the trail the live daemon opens over `segment`.
+def _recorder_log(recorder: _SessionRecorder) -> str:
+  return recorder.log_path.read_text() if recorder.log_path.is_file() else '(no recorder log)'
 
-  the daemon only adopts transcripts modified after it started, and it decides
-  that instant itself — after its own imports — so the segment's mtime is kept
-  current until the trail appears."""
+
+def _require_recorder_running(recorder: _SessionRecorder) -> None:
+  status = recorder.process.poll()
+  if status is not None:
+    raise AssertionError(f'recorder exited {status}: {_recorder_log(recorder)}')
+
+
+def _await_recorder(recorder: _SessionRecorder) -> None:
+  """Wait for the daemon's first health beat."""
+  path = health.health_path()
+  assert path is not None
+  deadline = time.monotonic() + _RECORDING_TIMEOUT
+  while not path.is_file():
+    _require_recorder_running(recorder)
+    if time.monotonic() >= deadline:
+      raise AssertionError(f'recorder did not start: {_recorder_log(recorder)}')
+    time.sleep(0.2)
+  problem = health.problem()
+  if problem is not None:
+    raise AssertionError(f'{problem}: {_recorder_log(recorder)}')
+
+
+def _await_trail(store: LocalStore, recorder: _SessionRecorder) -> dict:
   deadline = time.monotonic() + _RECORDING_TIMEOUT
   while True:
     headers = list(store.iter_trails(harness='claude'))
     if len(headers) > 0:
       return headers[0]
+    _require_recorder_running(recorder)
     if time.monotonic() >= deadline:
-      raise AssertionError(f'no trail recorded within {_RECORDING_TIMEOUT:.0f}s')
-    os.utime(segment)
+      raise AssertionError(f'no trail recorded: {_recorder_log(recorder)}')
     time.sleep(0.2)
 
 
@@ -147,14 +167,17 @@ class TestLiveRecording:
     monkeypatch.setenv('RIDE_ISOLATION', 'unboxed')
     monkeypatch.setenv('RIDE_COMMAND', 'ride along ws')
     segment = projects / 'seg-1.jsonl'
-    segment.write_text('\n'.join(_TRANSCRIPT) + '\n')
     session_env = {**os.environ, 'PATH': str(tmp_path / 'empty')}
+    for variable in ('RIDE_REPO', 'RIDE_REPO_URL', BRANCH_ENV, BASE_SHA_ENV):
+      session_env.pop(variable, None)
 
     store = LocalStore(trails_dir())
     with contextlib.ExitStack() as running:
       recorder = start_session_recorder(workspace, session_env, llm={'model': 'm'})
       running.callback(recorder.stop)
-      header = _await_trail(store, segment)
+      _await_recorder(recorder)
+      segment.write_text('\n'.join(_TRANSCRIPT) + '\n')
+      header = _await_trail(store, recorder)
 
     assert header['native']['segment'] == 'seg-1'
     assert header['native']['ride_command'] == 'ride along ws'
