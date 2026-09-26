@@ -1,6 +1,7 @@
 import json
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -11,6 +12,7 @@ from bro.broker.spawn import Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
 from bro.worker_types import (
+  LAUNCH_FLAG,
   ArtifactDenied,
   Container,
   Expect,
@@ -49,7 +51,7 @@ class Host:
 
 class SampleType(WorkerType):
   name = 'test'
-  permits = frozenset({'use'})
+  launch_schema = MappingProxyType({'use': LAUNCH_FLAG})
   default_timeout = 12.0
   widens_talk = True
   manual = True
@@ -137,7 +139,7 @@ def owner(tmp_path):
     tree=tmp_path,
     type='bro',
     bro='dev',
-    permits=frozenset(),
+    launch={'test': {}},
     member=None,
     expected=False,
     artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
@@ -178,7 +180,7 @@ def _handle(control, message):
 
 
 def test_spawn_resolves_talk_before_launch_and_records_facts(tmp_path, owner):
-  run = Spawn(object(), object(), permits=frozenset({'test.use'}))
+  run = Spawn(object(), object(), launch_scope={'test': {'use': True}})
   control, worker_type, peers, _ = _control(tmp_path, owner, run)
   message = _message(value=1, talk=['owner.say'])
   context = _handle(control, message)
@@ -191,8 +193,16 @@ def test_spawn_resolves_talk_before_launch_and_records_facts(tmp_path, owner):
   }
   facts = peers.facts[message.request_id]
   assert facts.type == 'test'
-  assert facts.permits == frozenset({'test.use'})
+  assert facts.launch == {'test': {'use': True}}
   assert not facts.expected
+
+
+def test_type_key_is_required_before_type_owned_checks(tmp_path, owner):
+  owner = replace(owner, launch={})
+  control, worker_type, _, _ = _control(tmp_path, owner, Spawn(object(), object()))
+  context = _handle(control, _message(deny_talk=True))
+  assert context.denied[0][1] == 'launch denied: the owner does not hold :launch.test'
+  assert worker_type.calls == []
 
 
 def test_request_timeout_overrides_the_type_default(tmp_path, owner):
@@ -270,7 +280,7 @@ def test_container_run_hands_the_spec_and_share_to_the_host_spawner(tmp_path, ow
   control, _, peers, _ = _control(
     tmp_path,
     owner,
-    Container(spec, extension={'worker': 'facts'}, permits=frozenset({'test.use'})),
+    Container(spec, extension={'worker': 'facts'}, launch_scope={'test': {'use': True}}),
     worker_container_spawner=spawner,
   )
   message = _message(share=[ref])
@@ -286,7 +296,7 @@ def test_container_run_hands_the_spec_and_share_to_the_host_spawner(tmp_path, ow
   assert options['type'] == 'test'
   facts = peers.facts[message.request_id]
   assert facts.extension == {'worker': 'facts'}
-  assert facts.permits == frozenset({'test.use'})
+  assert facts.launch == {'test': {'use': True}}
   assert facts.artifact_view is None
 
 

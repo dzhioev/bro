@@ -1,15 +1,18 @@
-"""the credential scope a prospective ride session would hydrate."""
+"""The launch and credential scope a prospective ride session would hold."""
 
 from pathlib import Path
 from typing import Optional
 
 from bro.base import credentials, host_config
+from bro.base.scope import launch_names
 from bro.workspace.project import project_config
 from ride.harness import get_harness
 from ride.repository import Repository, as_repository
 from ride.scope import (
   LaunchScopeError,
   bind_launch_credentials,
+  configured_scope_layers,
+  effective_launch,
   launch_llm_spec,
   scoped_secrets,
 )
@@ -36,6 +39,12 @@ def report_scope(repo: Optional[Repository | Path], bro: Optional[str], harness:
     binding = bind_launch_credentials(attachment, bro_name)
     llm_spec = launch_llm_spec(driver, attachment, bro_name, None)
     scoped = scoped_secrets(bro_name, recipe, attachment=attachment, llm_spec=llm_spec)
+    launch = effective_launch(
+      bro_name,
+      configured_scope_layers(attachment, bro_name, attachment_repository=repo),
+      grant=(),
+      revoke=(),
+    )
     registry = credentials.default_registry()
     selection = {kind: instance for kind, instance in scoped.selection.items() if kind in registry}
     store = credentials.Store(registry, credentials.STORE_DIR, selection)
@@ -44,6 +53,7 @@ def report_scope(repo: Optional[Repository | Path], bro: Optional[str], harness:
     return 1
   print(f'repository: {repo.identity if repo is not None else "(detached)"}')
   print(f'bro:        {bro_name} ({recipe.name})')
+  print(f'launch:     {", ".join(launch_names(launch)) or "(none)"}')
   _print_tiers(
     [
       ('required', sorted(scoped.required)),

@@ -262,23 +262,28 @@ async def test_silent_blocking_wait_returns_an_open_child_question_from_the_jour
     assert capsys.readouterr().out == 'approve?\n'
 
 
-def test_may_summon_round_trips_the_launch_published_list(monkeypatch):
-  monkeypatch.setenv(summon.MAY_SUMMON_ENV, summon.encode_may_summon({'reviewer', 'dev'}))
+def test_launch_round_trips_and_drives_may_summon(monkeypatch):
+  value = {
+    'bro': {'bros': frozenset({'reviewer', 'dev'}), 'party': frozenset({'boxed'})},
+    'webview': {'vnc': True},
+  }
+  monkeypatch.setenv(summon.LAUNCH_ENV, summon.encode_launch(value))
+  assert summon.launch() == value
   assert summon.may_summon() == ('dev', 'reviewer')
 
 
 def test_may_summon_distinguishes_empty_and_unpublished(monkeypatch):
-  monkeypatch.setenv(summon.MAY_SUMMON_ENV, '')
+  monkeypatch.setenv(summon.LAUNCH_ENV, summon.encode_launch({'bro': {}}))
   assert summon.may_summon() == ()
-  monkeypatch.delenv(summon.MAY_SUMMON_ENV)
+  monkeypatch.delenv(summon.LAUNCH_ENV)
   assert summon.may_summon() is None
 
 
-def test_invalid_published_permit_fails(monkeypatch):
-  monkeypatch.setenv(summon.PERMITS_ENV, 'party')
+def test_invalid_published_launch_fails(monkeypatch):
+  monkeypatch.setenv(summon.LAUNCH_ENV, '{"bro": []}')
 
-  with pytest.raises(ValueError, match='unknown permit'):
-    summon.permits()
+  with pytest.raises(ValueError, match='invalid launch section'):
+    summon.launch()
 
 
 def test_errors_without_a_channel(monkeypatch, caplog):
@@ -288,13 +293,12 @@ def test_errors_without_a_channel(monkeypatch, caplog):
 
 
 def test_summoned_child_env_is_what_the_child_reads_back(monkeypatch):
-  for key, value in summon.summoned_child_env(
-    {'reviewer', 'dev'}, {'bro.party.join'}, {'trail_id': 'T1'}
-  ).items():
+  launch = {'bro': {'bros': frozenset({'reviewer', 'dev'}), 'party': frozenset({'join'})}}
+  for key, value in summon.summoned_child_env(launch, {'trail_id': 'T1'}).items():
     monkeypatch.setenv(key, value)
   assert summon.summoned()
+  assert summon.launch() == launch
   assert summon.may_summon() == ('dev', 'reviewer')
-  assert summon.permits() == ('bro.party.join',)
   assert summon.summoned_by_from_env() == {'trail_id': 'T1'}
 
 
@@ -318,7 +322,7 @@ def test_party_member_reads_the_joined_session_mark(monkeypatch):
 
 
 def test_summoned_child_env_without_a_summoner_carries_no_provenance(monkeypatch):
-  env = summon.summoned_child_env((), (), None)
+  env = summon.summoned_child_env({}, None)
   assert summon.SUMMONER_ENV not in env
   for key, value in env.items():
     monkeypatch.setenv(key, value)

@@ -6,6 +6,7 @@ import sys
 import threading
 import urllib.request
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from pathlib import PurePosixPath
 
 import pytest
@@ -16,6 +17,7 @@ import ride.workspace.host_docker_test_helper as host_docker
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride.artifacts import view_mount
 from ride.e2e_test import (
+  _RUNTIME_PYTHON,
   IsolatedEnv,
   _session_broxy_probe,
   _wait_until,
@@ -28,6 +30,85 @@ from ride.workspace.model import Workspace
 from ride.workspace.spawn import DockerLaunchSpec
 
 pytestmark = host_docker.HOST_DAEMON_ONLY
+
+_DENIED_ROUTE = r"""
+import subprocess
+from pathlib import Path
+
+completed = subprocess.run(['webview', 'open'], capture_output=True, text=True)
+assert completed.returncode == 1, completed
+assert ':launch.webview' in completed.stderr, completed.stderr
+Path('/workspace/.webview-denied-report').write_text('denied')
+"""
+
+
+_SUMMON_WEBVIEW_ROUTE = r"""
+from pathlib import Path
+from bro.summon import summon_and_wait
+
+answer = summon_and_wait(
+  'bro',
+  'open the granted webview',
+  grant=[':launch.webview'],
+  llm='echo',
+  harness='bro',
+  timeout=300,
+)
+Path('/workspace/.webview-summon-report').write_text(answer)
+"""
+
+
+_SUMMON_WEBVIEW_CHILD = r"""
+import json
+import subprocess
+from bro.run_lifecycle import RunLifecycle
+
+opened = subprocess.run(['webview', 'open'], capture_output=True, text=True)
+assert opened.returncode == 0, opened.stderr
+mission = json.loads(opened.stdout)['mission']
+closed = subprocess.run(['webview', 'close', mission], capture_output=True, text=True)
+assert closed.returncode == 0, closed.stderr
+channel = RunLifecycle.from_env()
+assert channel is not None
+channel.trail('summoned-webview-child')
+channel.completed('opened', 'ok')
+channel.close()
+"""
+
+
+_NESTED_WEBVIEW_ROUTE = r"""
+import json
+import subprocess
+from pathlib import Path
+
+opened = subprocess.run(['webview', 'open'], capture_output=True, text=True)
+assert opened.returncode == 0, opened.stderr
+Path('/workspace/.webview-nested-report').write_text(json.loads(opened.stdout)['mission'])
+"""
+
+
+_NESTED_WEBVIEW_WORKER = r"""
+import os
+import traceback
+from bro.broker.client import Client
+from bro.broker.environment import BROKER_MISSION
+
+mission = os.environ[BROKER_MISSION]
+client = Client.from_env()
+assert client is not None
+with client:
+  client.listen(mission)
+  try:
+    nested = client.call('launch', {'type': 'webview'}, 30)
+    assert nested.payload.get('outcome') == 'denied', nested.payload
+    assert ':launch.webview' in nested.payload.get('error', ''), nested.payload
+  except Exception:
+    client.result(mission, {'outcome': 'failed', 'error': traceback.format_exc()})
+    raise
+  client.message(mission, {'event': 'ready', 'vnc': None})
+  client.result(mission, {'outcome': 'ok', 'value': {'commands': 0}})
+"""
+
 
 _FULL_ROUTE = r"""
 import json
@@ -77,7 +158,7 @@ def one_file(reply):
 
 try:
   denied = run('webview', 'open', '--vnc', expected=1)
-  assert ':webview.vnc' in denied.stderr, denied.stderr
+  assert ':launch.webview.vnc' in denied.stderr, denied.stderr
 
   upload = workspace / 'upload.txt'
   upload.write_text('shared upload payload')
@@ -341,8 +422,10 @@ def _run_route(
   *,
   suffix: str,
   source: str,
-  permits: set[str],
+  vnc: bool,
   observer: Callable[[Workspace, threading.Event], None],
+  allowed: bool = True,
+  launch_scope: dict | None = None,
 ) -> tuple[int, Workspace]:
   import ride.broker_root as broker_root
 
@@ -381,7 +464,11 @@ def _run_route(
       launch,
       workspace=workspace,
       bro='bro-dev',
-      permits=permits,
+      launch_scope=(
+        launch_scope
+        if launch_scope is not None
+        else ({'webview': {'vnc': True} if vnc else {}} if allowed else {})
+      ),
       container_runtime=container_runtime,
       runtime_bundle=runtime_bundle,
     )
@@ -399,6 +486,80 @@ def _live_containers(workspace: Workspace) -> list[str]:
     for directory in workspace.path.parent.iterdir()
     if find_container_id(directory / 'tree') is not None
   ]
+
+
+def test_webview_open_is_denied_without_its_type_key(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  code, workspace = _run_route(
+    isolated_env,
+    monkeypatch,
+    suffix='denied',
+    source=_DENIED_ROUTE,
+    vnc=False,
+    observer=lambda _workspace, _route_ended: None,
+    allowed=False,
+  )
+  assert code == 0
+  assert (workspace.tree / '.webview-denied-report').read_text() == 'denied'
+
+
+def test_spawned_child_opens_a_granted_webview(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  import ride.bro_worker as ride_spawn
+
+  original_started_party_launch = ride_spawn.started_party_launch
+
+  def started_party_launch(*arguments, **keywords):
+    launch = original_started_party_launch(*arguments, **keywords)
+    return replace(launch, command=_session_broxy_probe(_SUMMON_WEBVIEW_CHILD))
+
+  monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
+  code, workspace = _run_route(
+    isolated_env,
+    monkeypatch,
+    suffix='summoned',
+    source=_SUMMON_WEBVIEW_ROUTE,
+    vnc=False,
+    observer=lambda _workspace, _route_ended: None,
+    launch_scope={
+      'bro': {'bros': frozenset({'bro'}), 'party': frozenset({'boxed'})},
+      'webview': {},
+    },
+  )
+  assert code == 0, _diagnostic(workspace, '.webview-summon-error')
+  assert (workspace.tree / '.webview-summon-report').read_text() == 'opened'
+  assert _live_containers(workspace) == []
+
+
+def test_webview_peer_cannot_launch_without_its_own_type_key(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  from bro.webview.worker import WebviewType
+
+  original_launch = WebviewType.launch
+
+  def nested_launch(worker_type, request):
+    run = original_launch(worker_type, request)
+    return replace(
+      run,
+      spec=replace(run.spec, command=(_RUNTIME_PYTHON, '-c', _NESTED_WEBVIEW_WORKER)),
+    )
+
+  monkeypatch.setattr(WebviewType, 'launch', nested_launch)
+  code, workspace = _run_route(
+    isolated_env,
+    monkeypatch,
+    suffix='nested-denied',
+    source=_NESTED_WEBVIEW_ROUTE,
+    vnc=False,
+    observer=lambda _workspace, _route_ended: None,
+  )
+  diagnostic = workspace.host_log.read_text() if workspace.host_log.is_file() else '(no host log)'
+  assert code == 0, diagnostic
+  assert (workspace.tree / '.webview-nested-report').read_text()
+  assert _live_containers(workspace) == []
 
 
 def test_real_webview_routes_commands_files_sharing_refusals_and_cleanup(
@@ -453,7 +614,7 @@ def test_real_webview_routes_commands_files_sharing_refusals_and_cleanup(
     monkeypatch,
     suffix='full',
     source=_FULL_ROUTE,
-    permits=set(),
+    vnc=False,
     observer=inspect_files,
   )
 
@@ -492,7 +653,7 @@ def test_vnc_open_answers_on_its_published_loopback_port(
     monkeypatch,
     suffix='vnc',
     source=_VNC_ROUTE,
-    permits={'webview.vnc'},
+    vnc=True,
     observer=probe_vnc,
   )
 
@@ -511,7 +672,7 @@ def test_plain_clean_reclaims_a_cancelled_webview_workspace(
     monkeypatch,
     suffix='killed',
     source=_KILLED_ROUTE,
-    permits=set(),
+    vnc=False,
     observer=lambda _workspace, _route_ended: None,
   )
 

@@ -258,7 +258,7 @@ _SUMMON_DESCRIPTION = (
   'whose id every `quest_*` tool takes. '
   '{{iff #harness = bro}}this call returns after host acceptance.{{else}}this call blocks — '
   'typically for minutes — until its answer or a question comes back.{{end}} pass `target` '
-  '(a bro name; you have your own summon allow-list, and '
+  '(a bro name; it must be in your `launch.bro.bros` set, and '
   'a target outside it — or a summon nested past the depth cap — fails immediately '
   'with the reason) and `prompt` (the full request, self-contained — the target '
   'shares no context with you). optional `timeout` (seconds, default 1800) bounds '
@@ -276,10 +276,10 @@ _SUMMON_DESCRIPTION = (
   'provider and model, `:opus5` names a model; a recipe the harness cannot run fails the '
   'summon rather than switching the harness). its scope is shaped by '
   'the optional `grant` / `revoke` lists — entries are '
-  f'`@bro` targets or party permits ({summon.party_permit_choices()}). '
+  f'`@bro`, `:launch.<type>`, or payload names ({summon.party_launch_choices()} for bro placement). '
   'a credential name is refused and belongs in the host config for the target bro. '
-  'you can only grant a bro in your allow-list or a permit you hold yourself; '
-  'no-op grants and revokes remain strict. the '
+  'you can grant only launch names your own section covers; revokes are unrestricted, '
+  'and restating a grant or revoke is harmless. the '
   'optional `share` list names artifact refs (from `artifact mint`) to hand the '
   'child read access to — only refs this session can itself read. '
   'the optional `talk` list widens the child quest from worker.say with owner.say, '
@@ -298,7 +298,7 @@ _SUMMON_DESCRIPTION = (
   '`manual: true` registers a manual summon instead of spawning: acceptance returns '
   'a token and `ride` command to relay to the user, who launches the child session; '
   'manual refuses `timeout`/`hold`/`llm`/`harness`/`party`/`isolation` because the user’s '
-  'launch owns them, and requires either party-start permit.'
+  'launch owns them, and requires boxed or unboxed in its `launch.bro.party` set.'
   '{{when #harness = claude}} CAUTION: this tool is served over MCP, and the harness may '
   'time a blocking call out while the quest keeps running. prefer `detach: true` for '
   'long work, and do NOT re-summon after a timed-out blocking call'
@@ -407,7 +407,7 @@ _BANNER_DESCRIPTION = (
   "return this session's environment facts as `key: value` lines: `isolation` "
   '(`boxed` or `unboxed`), workspace name and paths, the bro persona, the launch '
   'command, joined-party membership, the bros it may delegate to (`may_summon`), its quest '
-  'chat rights (`talk`), party permits, and the trail it is recorded into (`trail_id`). call '
+  'chat rights (`talk`), launch permissions, and the trail it is recorded into (`trail_id`). call '
   'it once at session start to detect your '
   'environment.'
 )
@@ -1336,7 +1336,7 @@ class BaseBro(ABC):
   # what it adds. folded into
   # `needed_secrets()`.
   extra_secrets: tuple[str, ...] = ()
-  # bros this bro may summon — its static outgoing allow-list. root sessions get
+  # bros this bro may summon — the targets seeded into a session's launch section. root sessions get
   # it adjusted per session by `--grant @bro`/`--revoke @bro`; a summoned child
   # follows the bare seeds, so summons chain transitively through seeded bros
   # under the host's depth cap (see ride/ride/bro_worker.py). MRO-walked and

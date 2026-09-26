@@ -1,6 +1,6 @@
-"""per-surface launch scoping of a bro run: which credentials each launch
-surface hydrates, which bros the session may summon, and which party actions it
-may request, computed from static seeds under project, host, and launch layers;
+"""per-surface scoping of a bro run: which credentials each launch hydrates and
+which type-keyed launch permissions it carries, computed from static seeds under
+project, host, and launch layers;
 `bind_launch_llm` settles the launch's LLM recipe over the same host entries.
 """
 
@@ -15,11 +15,12 @@ from bro.base.scope import (
   apply_idempotent,
   credential_grant_kind,
   credential_revoke_name,
+  launch_names,
   split_scope_overrides,
   validate_scope_layer,
 )
 from bro.launch.llm_flags import with_host_defaults
-from bro.summon import PARTY_START_BOXED
+from bro.worker_types import Launch, LaunchFlag, installed_types, parse_launch
 from ride.repository import Repository, attachment_identities, open_repository
 from ride.workspace.store import ScopedSecrets
 
@@ -29,14 +30,15 @@ if TYPE_CHECKING:
   from ride.harness import Harness as Driver
 
 _RECORDING_CREDENTIAL = 'trails'
-DEFAULT_PERMITS = frozenset({PARTY_START_BOXED})
+_LAUNCH_BRO = ':launch.bro'
+_LAUNCH_BRO_BOXED = ':launch.bro.party.boxed'
 
 
 class LaunchScopeError(Exception):
   """a launch failed its scope computation or preflight: a bro the installation
   does not declare, a malformed host config or a per-bro selection of a kind the
-  launch does not read, a malformed or no-op grant/revoke override, an unknown
-  summon target, or an unknown/unresolvable required secret."""
+  launch does not read, a malformed grant/revoke override, an unknown launch
+  name, or an unknown/unresolvable required secret."""
 
 
 @contextlib.contextmanager
@@ -119,55 +121,107 @@ def configured_scope_layers(
   return (*project_layers, *selected.scope_layers)
 
 
-def _namespace_values(layer: ScopeLayer, index: int) -> tuple[list[str], list[str]]:
-  grant = split_scope_overrides(layer.grant)[index]
-  revoke = split_scope_overrides(layer.revoke)[index]
-  return grant, revoke
+def _launch_values(layer: ScopeLayer) -> tuple[list[str], list[str]]:
+  return split_scope_overrides(layer.grant)[1], split_scope_overrides(layer.revoke)[1]
 
 
-def validate_permits(values: Collection[str]) -> None:
-  """Check explicit permit names against only the worker types they name."""
-  from bro.worker_types import installed_type
+def _launch_name_schema(name: str, types: Mapping[str, type]) -> tuple[str, str | None, str | None]:
+  if name.startswith('@'):
+    worker_type = 'bro'
+    field_name = 'bros'
+    value = name.removeprefix('@')
+  else:
+    segments = name.removeprefix(':').split('.')
+    worker_type = segments[1]
+    field_name = segments[2] if len(segments) >= 3 else None
+    value = segments[3] if len(segments) >= 4 else None
+    if len(segments) > 4:
+      raise ValueError(f'launch name {name!r} has too many segments')
+  worker_class = types.get(worker_type)
+  if worker_class is None:
+    available = ', '.join(sorted(types)) or '(none)'
+    raise ValueError(f'unknown worker type {worker_type!r}; installed types: {available}')
+  if field_name is None:
+    return worker_type, None, None
+  field_schema = worker_class.launch_schema.get(field_name)
+  if field_schema is None:
+    raise ValueError(f'worker type {worker_type!r} has no launch field {field_name!r}')
+  if isinstance(field_schema, LaunchFlag):
+    if value is not None:
+      raise ValueError(f'launch flag {name!r} cannot name a value')
+    return worker_type, field_name, None
+  if value is None:
+    raise ValueError(f'launch set {name!r} must name a value')
+  choices = set(field_schema.values())
+  if value not in choices:
+    rendered = ', '.join(sorted(choices)) or '(none)'
+    raise ValueError(
+      f'worker type {worker_type!r} rejects {value!r} for launch field {field_name!r}; '
+      f'choices: {rendered}'
+    )
+  return worker_type, field_name, value
 
-  by_type: dict[str, set[str]] = {}
-  for value in values:
-    type_name, leaf = value.split('.', 1)
-    by_type.setdefault(type_name, set()).add(leaf)
-  for type_name, leaves in sorted(by_type.items()):
-    try:
-      worker_type = installed_type(type_name)
-    except KeyError as error:
-      raise ValueError(error.args[0]) from error
-    unknown = sorted(leaves - set(worker_type.permits))
-    if unknown:
-      rendered = ', '.join(f':{type_name}.{leaf}' for leaf in unknown)
-      raise ValueError(f'worker type {type_name!r} does not declare permit(s): {rendered}')
 
+def effective_launch(
+  bro_name: str,
+  layers: Sequence[ScopeLayer],
+  *,
+  grant: Sequence[str],
+  revoke: Sequence[str],
+) -> Launch:
+  """Fold and validate one launch section from its ordered authority layers."""
+  from bro.registry import create_bro
 
-def effective_permits(
-  layers: Sequence[ScopeLayer], *, grant: Sequence[str], revoke: Sequence[str], strict: bool
-) -> set[str]:
-  """Apply configured and request permit layers to the framework seed."""
   configured: list[tuple[list[str], list[str]]] = []
   explicit: set[str] = set()
   for layer in layers:
-    layer_grant, layer_revoke = _namespace_values(layer, 2)
+    layer_grant, layer_revoke = _launch_values(layer)
+    overlap = set(layer_grant) & set(layer_revoke)
+    if overlap:
+      raise ValueError(f'cannot grant and revoke the same scope name: {", ".join(sorted(overlap))}')
     configured.append((layer_grant, layer_revoke))
     explicit.update(layer_grant)
     explicit.update(layer_revoke)
-  grant_permits = split_scope_overrides(grant)[2]
-  revoke_permits = split_scope_overrides(revoke)[2]
-  explicit.update(grant_permits)
-  explicit.update(revoke_permits)
-  validate_permits(explicit)
-  permits = set(DEFAULT_PERMITS)
+  grant_launch = split_scope_overrides(grant)[1]
+  revoke_launch = split_scope_overrides(revoke)[1]
+  overlap = set(grant_launch) & set(revoke_launch)
+  if overlap:
+    raise ValueError(f'cannot grant and revoke the same scope name: {", ".join(sorted(overlap))}')
+  explicit.update(grant_launch)
+  explicit.update(revoke_launch)
+  types = installed_types()
+  parsed = {name: _launch_name_schema(name, types) for name in explicit}
+  names = {_LAUNCH_BRO, _LAUNCH_BRO_BOXED}
+  names.update(f'@{target}' for target in create_bro(bro_name)._may_summon)
   for layer_grant, layer_revoke in configured:
-    permits = apply_idempotent(permits, grant=layer_grant, revoke=layer_revoke)
-  if strict:
-    return credentials.apply_grant_revoke(
-      permits, grant=grant_permits, revoke=revoke_permits, subject='permit set'
-    )
-  return apply_idempotent(permits, grant=grant_permits, revoke=revoke_permits)
+    names = apply_idempotent(names, grant=layer_grant, revoke=layer_revoke)
+  names = apply_idempotent(names, grant=grant_launch, revoke=revoke_launch)
+  parsed.update({name: _launch_name_schema(name, types) for name in names})
+
+  launch: Launch = {}
+  for name, (worker_type, field_name, _value) in parsed.items():
+    if field_name is None and name in names:
+      launch[worker_type] = {}
+  for name in sorted(names):
+    worker_type, field_name, value = parsed[name]
+    payload = launch.get(worker_type)
+    if payload is None or field_name is None:
+      continue
+    schema = types[worker_type].launch_schema[field_name]
+    if isinstance(schema, LaunchFlag):
+      payload[field_name] = True
+      continue
+    members = payload.setdefault(field_name, frozenset())
+    assert isinstance(members, frozenset)
+    assert value is not None
+    payload[field_name] = members | {value}
+  return launch
+
+
+def launch_covers(launch: Launch, names: Collection[str]) -> tuple[str, ...]:
+  """Return requested grants not held by the launch section."""
+  held = set(launch_names(launch, include_bros=True, include_all_keys=True))
+  return tuple(sorted(set(names) - held))
 
 
 def selection_store(
@@ -200,8 +254,8 @@ def _credential_picks(values: Sequence[str], *, subject: str) -> dict[str, str]:
 
 
 def _credential_changes(layer: ScopeLayer) -> tuple[set[str], set[str]]:
-  grant_values, _, _ = split_scope_overrides(layer.grant)
-  revoke_values, _, _ = split_scope_overrides(layer.revoke)
+  grant_values, _ = split_scope_overrides(layer.grant)
+  revoke_values, _ = split_scope_overrides(layer.revoke)
   context = (
     'launch flags'
     if layer.source == 'launch flags'
@@ -363,43 +417,28 @@ def preflight_scoped_launch(
   attachment_repository: Optional[Repository] = None,
   grant: list[str],
   revoke: list[str],
-) -> tuple[set[str], set[str], HydratedStore]:
-  """the scope preflight every launch surface runs before creating anything
-  (worktree, container, workspace dir): compute the summon allow-list of a launch
-  running as `bro_name` (`bro_worker.summon_allow_list`) from the `@bro`
-  halves of the unified overrides (`split_scope_overrides`; the credential halves
-  already shaped `scoped`), and hydrate the scoped store
-  (`credentials.build_scoped_store`) — any failure raised as a single
-  `LaunchScopeError` for the caller to render on its own error surface.
-
-  returns (allow-list, permits, store). the container launch path rebuilds the store at
-  create, so container callers drop it — the build is the preflight itself; a
-  unboxed session materializes the returned one.
-  """
-  from ride.bro_worker import summon_allow_list
-
+  fixed_launch: Launch | None = None,
+) -> tuple[Launch, HydratedStore]:
+  """Preflight one launch's authority and hydrate its credential store."""
   with launch_scope_errors():
-    configured_layers = configured_scope_layers(
-      attachment,
-      bro_name,
-      attachment_repository=attachment_repository,
-    )
-    may_summon = summon_allow_list(
-      bro_name,
-      layers=configured_layers,
-      grant=split_scope_overrides(grant)[1],
-      revoke=split_scope_overrides(revoke)[1],
-    )
-    permits = effective_permits(
-      configured_layers,
-      grant=grant,
-      revoke=revoke,
-      strict=True,
-    )
+    if fixed_launch is None:
+      configured_layers = configured_scope_layers(
+        attachment,
+        bro_name,
+        attachment_repository=attachment_repository,
+      )
+      launch = effective_launch(
+        bro_name,
+        configured_layers,
+        grant=grant,
+        revoke=revoke,
+      )
+    else:
+      launch = parse_launch(fixed_launch, subject='fixed launch section')
     files, hydrated_kinds = credentials.build_scoped_store(
       credential_store(scoped), scoped.required, optional=scoped.optional
     )
-  return may_summon, permits, HydratedStore(files, hydrated_kinds)
+  return launch, HydratedStore(files, hydrated_kinds)
 
 
 def launch_view_store(scoped: ScopedSecrets) -> credentials.Store:

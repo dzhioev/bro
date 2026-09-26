@@ -2,6 +2,7 @@ import importlib.metadata
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 
 import pytest
 
@@ -13,7 +14,12 @@ from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 
 class AlphaType(WorkerType):
   name = 'alpha'
-  permits = frozenset({'one', 'nested.two'})
+  launch_schema = MappingProxyType(
+    {
+      'choice': worker_types.LaunchSet(lambda: {'one', 'two'}),
+      'enabled': worker_types.LAUNCH_FLAG,
+    }
+  )
 
   def talk(self, request: LaunchRequest):
     return frozenset()
@@ -99,13 +105,35 @@ def test_unknown_type_lists_installed_names_without_loading_them(monkeypatch):
     worker_types.installed_type('missing')
 
 
-def test_permit_grammar_accepts_a_type_and_multisegment_leaf():
-  assert split_scope_overrides([':alpha.nested.two']) == ([], [], ['alpha.nested.two'])
+def test_launch_grammar_accepts_keys_members_flags_and_bros():
+  assert split_scope_overrides(
+    [':launch.alpha', ':launch.alpha.choice.two', ':launch.alpha.enabled', '@reviewer']
+  ) == (
+    [],
+    [':launch.alpha', ':launch.alpha.choice.two', ':launch.alpha.enabled', '@reviewer'],
+  )
 
 
-@pytest.mark.parametrize('value', [':alpha', ':Alpha.one', ':alpha..one', ':alpha.one_2'])
-def test_permit_grammar_rejects_nonleaves(value):
-  with pytest.raises(ValueError, match='<type>.<leaf>'):
+@pytest.mark.parametrize(
+  'value',
+  [':launch', ':Launch.alpha', ':launch..choice', ':launch.alpha.one_2'],
+)
+def test_launch_grammar_rejects_malformed_names(value):
+  with pytest.raises(ValueError):
+    split_scope_overrides([value])
+
+
+@pytest.mark.parametrize(
+  ('value', 'message'),
+  [
+    (':bro.party.join', ':launch.bro.party.join'),
+    (':webview.vnc', ':launch.webview.vnc'),
+    (':creds.github.dev', 'creds / --cred'),
+    (':launch.bro.bros.reviewer', '@<bro>'),
+  ],
+)
+def test_launch_grammar_names_replacements(value, message):
+  with pytest.raises(ValueError, match=message):
     split_scope_overrides([value])
 
 

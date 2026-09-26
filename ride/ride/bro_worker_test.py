@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import cast
@@ -36,21 +37,22 @@ def _owner(
   tmp_path: Path,
   *,
   type: str = 'bro',
-  allow_list=('dev',),
-  permits=('bro.party.start.boxed',),
+  targets=('dev',),
+  party=('boxed',),
   depth=0,
 ):
-  extension = BroFacts(
-    bro='bro-dev',
-    allow_list=frozenset(allow_list),
-  )
+  extension = BroFacts(bro='bro-dev')
   return PeerDescription(
     mission='root',
     workspace='ws',
     tree=tmp_path,
     type=type,
     bro='bro-dev' if type == 'bro' else None,
-    permits=frozenset(permits),
+    launch=(
+      {'bro': {'bros': frozenset(targets), 'party': frozenset(party)}}
+      if type == 'bro'
+      else {'test': {}}
+    ),
     member=None,
     expected=False,
     artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
@@ -78,15 +80,9 @@ def launch_scope(monkeypatch):
   monkeypatch.setattr(bro_worker, 'configured_scope_layers', lambda *args, **kwargs: ())
   monkeypatch.setattr(
     bro_worker,
-    'summon_allow_list',
-    lambda target, **kwargs: {'reviewer'} if target == 'dev' else set(),
-  )
-  monkeypatch.setattr(
-    bro_worker,
-    'effective_permits',
-    lambda layers, *, grant, revoke, strict: {
-      'bro.party.start.boxed',
-      *[value.removeprefix(':') for value in grant if value.startswith(':')],
+    'effective_launch',
+    lambda target, layers, *, grant, revoke: {
+      'bro': {'bros': frozenset({'reviewer'}), 'party': frozenset({'boxed'})}
     },
   )
   monkeypatch.setattr(bro_worker, 'workspace_isolation', lambda name: Isolation.BOXED)
@@ -106,10 +102,11 @@ def test_spawn_launch_carries_the_authorized_child(tmp_path):
   assert run.spawner is host.summon_spawner
   assert run.extension == BroFacts(
     bro='dev',
-    allow_list=frozenset({'reviewer'}),
     placement=Placement('start', Isolation.BOXED),
   )
-  assert run.permits == frozenset({'bro.party.start.boxed'})
+  assert run.launch_scope == {
+    'bro': {'bros': frozenset({'reviewer'}), 'party': frozenset({'boxed'})}
+  }
   launch = cast(SummonLaunchSpec, run.launch)
   assert launch.target == 'dev'
   assert launch.parent == 'ws'
@@ -126,8 +123,7 @@ def test_manual_launch_returns_the_type_owned_pending_extension(tmp_path):
   assert run.pending == {
     'target': 'dev',
     'prompt': 'work',
-    'may_summon': ['reviewer'],
-    'permits': ['bro.party.start.boxed'],
+    'launch': {'bro': {'bros': ['reviewer'], 'party': ['boxed']}},
     'grant': [],
     'revoke': [],
     'summoner': {'trail_id': 'trail'},
@@ -155,9 +151,14 @@ def test_malformed_bro_arguments_are_denied(tmp_path, args, message):
     BroType(Host()).launch(_request(tmp_path, **args))
 
 
-def test_owner_of_another_type_is_denied(tmp_path):
-  with pytest.raises(LaunchDenied, match='another type'):
-    BroType(Host()).launch(_request(tmp_path, owner=_owner(tmp_path, type='test')))
+def test_owner_of_another_type_may_summon_when_its_launch_section_allows_it(tmp_path):
+  owner = _owner(tmp_path, type='test')
+  owner = replace(
+    owner,
+    launch={'bro': {'bros': frozenset({'dev'}), 'party': frozenset({'boxed'})}},
+  )
+  run = BroType(Host()).launch(_request(tmp_path, owner=owner))
+  assert isinstance(run, Spawn)
 
 
 def test_depth_cap_is_enforced(tmp_path):
@@ -166,8 +167,8 @@ def test_depth_cap_is_enforced(tmp_path):
 
 
 def test_target_must_be_in_the_owners_allow_list(tmp_path):
-  with pytest.raises(LaunchDenied, match='summon allow-list'):
-    BroType(Host()).launch(_request(tmp_path, owner=_owner(tmp_path, allow_list=())))
+  with pytest.raises(LaunchDenied, match='launch.bro.bros'):
+    BroType(Host()).launch(_request(tmp_path, owner=_owner(tmp_path, targets=())))
 
 
 def test_unmarked_placement_prefers_boxed_then_unboxed(tmp_path):
@@ -177,7 +178,7 @@ def test_unmarked_placement_prefers_boxed_then_unboxed(tmp_path):
       tmp_path,
       owner=_owner(
         tmp_path,
-        permits=('bro.party.start.boxed', 'bro.party.start.unboxed'),
+        party=('boxed', 'unboxed'),
       ),
     )
   )
@@ -185,7 +186,7 @@ def test_unmarked_placement_prefers_boxed_then_unboxed(tmp_path):
   unboxed = worker.launch(
     _request(
       tmp_path,
-      owner=_owner(tmp_path, permits=('bro.party.start.unboxed',)),
+      owner=_owner(tmp_path, party=('unboxed',)),
     )
   )
   assert cast(BroFacts, unboxed.extension).placement == Placement('start', Isolation.UNBOXED)
@@ -193,12 +194,12 @@ def test_unmarked_placement_prefers_boxed_then_unboxed(tmp_path):
 
 def test_join_needs_its_permit_and_inherits_isolation(tmp_path):
   worker = BroType(Host())
-  with pytest.raises(LaunchDenied, match='bro.party.join'):
+  with pytest.raises(LaunchDenied, match='launch.bro.party.join'):
     worker.launch(_request(tmp_path, party='join'))
   run = worker.launch(
     _request(
       tmp_path,
-      owner=_owner(tmp_path, permits=('bro.party.join',)),
+      owner=_owner(tmp_path, party=('join',)),
       party='join',
     )
   )
@@ -207,16 +208,27 @@ def test_join_needs_its_permit_and_inherits_isolation(tmp_path):
 
 
 def test_explicit_isolation_needs_its_permit(tmp_path):
-  with pytest.raises(LaunchDenied, match='bro.party.start.unboxed'):
+  with pytest.raises(LaunchDenied, match='launch.bro.party.unboxed'):
     BroType(Host()).launch(_request(tmp_path, isolation='unboxed'))
 
 
-def test_granted_bros_and_permits_must_be_held(tmp_path):
+def test_granted_launch_names_must_be_held(tmp_path):
   worker = BroType(Host())
-  with pytest.raises(LaunchDenied, match='may not summon itself'):
+  with pytest.raises(LaunchDenied, match='does not hold'):
     worker.launch(_request(tmp_path, grant=['@reviewer']))
   with pytest.raises(LaunchDenied, match='does not hold'):
-    worker.launch(_request(tmp_path, grant=[':bro.party.start.unboxed']))
+    worker.launch(_request(tmp_path, grant=[':launch.bro.party.unboxed']))
+
+
+def test_summon_request_names_a_retired_permits_replacement(tmp_path):
+  with pytest.raises(LaunchDenied, match=':launch.bro.party.join'):
+    BroType(Host()).launch(_request(tmp_path, grant=[':bro.party.join']))
+
+
+def test_redundant_covered_grant_is_accepted(tmp_path):
+  owner = _owner(tmp_path, targets=('dev', 'reviewer'))
+  run = BroType(Host()).launch(_request(tmp_path, owner=owner, grant=['@reviewer']))
+  assert isinstance(run, Spawn)
 
 
 @pytest.mark.parametrize(

@@ -5,7 +5,7 @@ from bro import spells as spell_store
 from bro.base.condition import SetVariable
 from bro.dev import references
 from bro.spells import load_spell
-from bro.summon import MAY_SUMMON_ENV
+from bro.summon import LAUNCH_ENV, encode_launch
 from bros.dev import Dev
 
 
@@ -78,13 +78,19 @@ def test_review_delegation_renders_only_for_a_granted_eyebro(monkeypatch):
   bro = _TrackerDev()
   assert 'summon' not in bro.get_spell_body('run-pr', harness='claude').lower()
   assert 'eyebro' not in bro.get_spell_body('land', harness='claude')
-  monkeypatch.setenv(MAY_SUMMON_ENV, 'eyebro')
+  monkeypatch.setenv(
+    LAUNCH_ENV,
+    encode_launch({'bro': {'bros': frozenset({'eyebro'})}}),
+  )
   assert 'eyebro' in bro.get_spell_body('run-pr', harness='claude')
   assert 'eyebro' in bro.get_spell_body('land', harness='claude')
 
 
 def test_review_delegation_detaches_only_on_the_claude_harness(monkeypatch):
-  monkeypatch.setenv(MAY_SUMMON_ENV, 'eyebro')
+  monkeypatch.setenv(
+    LAUNCH_ENV,
+    encode_launch({'bro': {'bros': frozenset({'eyebro'})}}),
+  )
   bro = _TrackerDev()
 
   native_body = bro.get_spell_body('run-pr', harness='bro')

@@ -34,9 +34,9 @@ def facts(tmp_path, monkeypatch):
       type='bro',
       workspace='ws',
       tree=workspace.tree,
-      permits=frozenset({'bro.party.start.boxed'}),
+      launch={'bro': {'bros': frozenset({'dev'}), 'party': frozenset({'boxed'})}},
       artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
-      extension=BroFacts('bro-dev', frozenset({'dev'})),
+      extension=BroFacts('bro-dev'),
     ),
     root_tree=workspace.tree,
     root_path=workspace.path,
@@ -59,7 +59,7 @@ def _spawned(facts, context, peer, mission, parent, *, expected=False):
       workspace=None if expected else f'broker-{peer}',
       tree=None if expected else workspace_tree(f'broker-{peer}'),
       expected=expected,
-      extension=BroFacts('dev', frozenset()),
+      extension=BroFacts('dev'),
     ),
   )
   record = context.journal.open(
@@ -83,7 +83,7 @@ def test_root_row_is_seeded_by_the_host_anchored_mission(facts):
     tree=workspace.tree,
     type='bro',
     bro='bro-dev',
-    permits=frozenset({'bro.party.start.boxed'}),
+    launch={'bro': {'bros': frozenset({'dev'}), 'party': frozenset({'boxed'})}},
     member=None,
     expected=False,
     artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
@@ -115,7 +115,7 @@ def test_joined_peer_uses_the_party_tree_and_its_own_trail_pointer(facts):
       'bro',
       'ws',
       member='broker-CH',
-      extension=BroFacts('dev', frozenset()),
+      extension=BroFacts('dev'),
     ),
   )
   record = context.journal.open(

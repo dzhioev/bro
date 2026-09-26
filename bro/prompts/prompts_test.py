@@ -4,7 +4,7 @@ import pytest
 
 from bro.broker.environment import BROKER_TALK
 from bro.prompts import PromptLoader, get_prompt, get_prompt_path, hold_fragment, session_fragment
-from bro.summon import MAY_SUMMON_ENV, PARTY_MEMBER_ENV, SUMMONED_ENV, encode_may_summon
+from bro.summon import LAUNCH_ENV, PARTY_MEMBER_ENV, SUMMONED_ENV, encode_launch
 
 
 class TestContainment:
@@ -83,7 +83,7 @@ class TestHoldFragment:
 class TestSessionFragment:
   def test_an_unsummoned_run_gets_the_hold_fragment_alone(self, monkeypatch):
     monkeypatch.delenv(SUMMONED_ENV, raising=False)
-    monkeypatch.delenv(MAY_SUMMON_ENV, raising=False)
+    monkeypatch.delenv(LAUNCH_ENV, raising=False)
     monkeypatch.delenv(PARTY_MEMBER_ENV, raising=False)
     assert session_fragment('attended', harness='claude') == hold_fragment(
       'attended', harness='claude'
@@ -97,7 +97,7 @@ class TestSessionFragment:
 
   def test_a_summoning_run_keeps_the_summon_watch_armed_on_the_claude_harness(self, monkeypatch):
     monkeypatch.delenv(SUMMONED_ENV, raising=False)
-    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
     fragment = session_fragment('attended', harness='claude')
     assert fragment.startswith('# Summoning session')
     assert '{{' not in fragment
@@ -105,7 +105,7 @@ class TestSessionFragment:
 
   def test_a_summoning_native_run_starts_a_watch_job_and_chills(self, monkeypatch):
     monkeypatch.delenv(SUMMONED_ENV, raising=False)
-    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
     fragment = session_fragment('attended', harness='bro')
     assert "`bro::job('<command>', mode='watch')`" in fragment
     assert '`bro::chill`' in fragment
@@ -121,7 +121,7 @@ class TestSessionFragment:
     self, monkeypatch, harness, marker
   ):
     monkeypatch.delenv(SUMMONED_ENV, raising=False)
-    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
     fragment = session_fragment('unattended', harness=harness)
     assert marker in fragment
     assert 'watches included' not in fragment
@@ -143,7 +143,7 @@ class TestSessionFragment:
   def test_a_summoning_summoned_run_carries_both_contracts_in_order(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     monkeypatch.setenv(BROKER_TALK, 'worker.say')
-    monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
     fragment = session_fragment('attended', harness='claude', talk=('worker.say',))
     assert fragment.index('# Summoning session') < fragment.index('# Summoned session')
 
@@ -204,9 +204,9 @@ def test_the_session_texts_cast_no_spell(monkeypatch):
   talks = ((), ('owner.say', 'worker.say'), ('owner.question',), ('worker.say', 'worker.question'))
   for summoning, summoned in ((True, False), (False, True), (True, True)):
     if summoning:
-      monkeypatch.setenv(MAY_SUMMON_ENV, encode_may_summon(('reviewer',)))
+      monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
     else:
-      monkeypatch.delenv(MAY_SUMMON_ENV, raising=False)
+      monkeypatch.delenv(LAUNCH_ENV, raising=False)
     if summoned:
       monkeypatch.setenv(SUMMONED_ENV, '1')
     else:

@@ -62,8 +62,7 @@ def _container_runtime() -> ContainerRuntimeResolver:
 def _scope(**overrides) -> ScopedLaunch:
   values = {
     'scoped': ScopedSecrets({'openai'}, {'trails'}),
-    'may_summon': {'reviewer'},
-    'permits': {'bro.party.start.boxed'},
+    'launch': {'bro': {'bros': frozenset({'reviewer'}), 'party': frozenset({'boxed'})}},
     'store': {'creds.json': b'{}'},
   }
   values.update(overrides)
@@ -178,7 +177,7 @@ class TestContainerSession:
     assert launch.base_ref == 'abc123'
     assert not launch.tty
     assert captured['workspace'] is workspace
-    assert captured['may_summon'] == {'reviewer'}
+    assert captured['launch_scope'] == _scope().launch
 
   def test_no_trails_disables_recording_in_the_container_env(self, monkeypatch, tmp_path):
     workspace = Workspace.create('w', tmp_path, Isolation.BOXED)

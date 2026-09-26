@@ -184,7 +184,7 @@ def test_the_trial_rides_the_bundle_as_an_unboxed_root_in_the_tasks_directory():
 def test_the_rides_summons_may_join_its_party_and_start_nothing():
   command = ride_command(bro='terminal', instruction='do it', harness='bro', llm=None)
 
-  assert '--revoke :bro.party.start.boxed --grant :bro.party.join' in command
+  assert '--revoke :launch.bro.party.boxed --grant :launch.bro.party.join' in command
 
 
 def test_the_harness_reaches_the_launch():

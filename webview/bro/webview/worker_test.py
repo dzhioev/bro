@@ -20,7 +20,7 @@ def _owner(
   *,
   mission: str = 'owner',
   type: str = 'bro',
-  permits: frozenset[str] = frozenset(),
+  vnc: bool = False,
 ) -> PeerDescription:
   return PeerDescription(
     mission=mission,
@@ -28,7 +28,7 @@ def _owner(
     tree=tmp_path,
     type=type,
     bro='bro-dev' if type == 'bro' else None,
-    permits=permits,
+    launch={'webview': {'vnc': True} if vnc else {}},
     member=None,
     expected=False,
     artifact_view=None,
@@ -43,14 +43,14 @@ def _request(
   *,
   mission: str = 'owner',
   type: str = 'bro',
-  permits: frozenset[str] = frozenset(),
+  vnc: bool = False,
   request_id: str = 'webview-1',
 ) -> LaunchRequest:
   return LaunchRequest(
     id=request_id,
     type=worker.WEBVIEW,
     args=args,
-    owner=_owner(tmp_path, mission=mission, type=type, permits=permits),
+    owner=_owner(tmp_path, mission=mission, type=type, vnc=vnc),
     requested_talk=frozenset(),
     timeout=None,
     share=(),
@@ -74,7 +74,7 @@ class TestWebviewType:
 
     assert installed_type(worker.WEBVIEW) is worker.WebviewType
     assert worker_type.name == 'webview'
-    assert worker_type.permits == frozenset({'vnc'})
+    assert worker_type.launch_schema == {'vnc': worker.LAUNCH_FLAG}
     assert worker_type.default_timeout is None
     assert worker_type.widens_talk is False
     assert worker_type.manual is False
@@ -95,7 +95,7 @@ class TestWebviewType:
       'blocked_origins': [],
     }
     assert run.extension == worker.WebviewFacts(False, (), ())
-    assert run.permits == frozenset()
+    assert run.launch_scope == {}
 
   def test_vnc_and_origins_reach_the_container_facts(self, tmp_path):
     run = _worker_type().launch(
@@ -106,7 +106,7 @@ class TestWebviewType:
           'allowed_origins': ['https://one.example', '*.trusted.example'],
           'blocked_origins': ['https://blocked.example'],
         },
-        permits=frozenset({worker.VNC_PERMIT}),
+        vnc=True,
       )
     )
 
@@ -136,18 +136,13 @@ class TestWebviewType:
   def test_invalid_arguments_are_denied(self, tmp_path, args, message):
     assert message in _denial(tmp_path, args)
 
-  def test_vnc_needs_its_leaf_permit_and_reports_what_is_held(self, tmp_path):
-    message = _denial(
-      tmp_path,
-      {'vnc': True},
-      permits=frozenset({'webview.other', 'bro.party.join'}),
-    )
+  def test_vnc_needs_its_launch_flag(self, tmp_path):
+    message = _denial(tmp_path, {'vnc': True})
+    assert ':launch.webview.vnc' in message
 
-    assert ':webview.vnc' in message
-    assert ':bro.party.join, :webview.other' in message
-
-  def test_webview_owner_is_a_leaf(self, tmp_path):
-    assert 'cannot open another webview' in _denial(tmp_path, {}, type=worker.WEBVIEW)
+  def test_webview_owner_may_open_another_when_its_launch_section_allows_it(self, tmp_path):
+    run = _worker_type().launch(_request(tmp_path, {}, type=worker.WEBVIEW))
+    assert run.extension == worker.WebviewFacts(False, (), ())
 
   def test_one_owner_may_hold_several_live_webviews(self, tmp_path):
     worker_type = _worker_type()
