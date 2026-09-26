@@ -69,15 +69,16 @@ then reviewed against the code and revised with the user in #768's plan phase (t
    each name's grammar and section, and the retired permits;
    so a type one installation doesn't install fails only the launches that name it.
 4. **Names.**
-   Config lists, launch flags and summon requests grant and revoke `launch` by name, each name a path:
+   Config lists, launch flags and summon requests grant and revoke `launch` by name.
+   A name is a path of segments, each `[a-z][a-z0-9-]*`:
    `:launch.<type>` is a key (may launch that type), `:launch.<type>.<field>.<value>` a set member, `:launch.<type>.<flag>` a flag.
    Each name stands alone:
    granting a member or a flag doesn't grant its key, and revoking a key leaves the names beneath it in place.
    `D.launch` holds a type while its key is held, with the payload the names beneath the key make.
    A bare section, `:launch` or `:creds`, is malformed.
-   Two shorthands stand for names:
-   `@<bro>` is `:launch.bro.bros.<bro>`, one name under either spelling, and a persona's `may_summon` declares the same members;
-   a bare credential kind in `grant` or `revoke` stands for its `creds.use` entry, folded by #767's rules.
+   The bro type's `bros` members have one spelling, `@<bro>`, since a registered bro's name may fall outside the segment grammar:
+   `:launch.bro.bros.…` is refused, naming `@<bro>`, and a persona's `may_summon` declares the same members.
+   A bare credential kind in `grant` or `revoke` stands for its `creds.use` entry, folded by #767's rules.
    `:creds.…` is refused, naming `creds` / `--cred` and `grant <kind>`:
    credentials keep their spelling, and the path grammar cannot yet spell a kind with `_` (`claude_code`) or the empty instance.
    The issue that makes credentials spellable by path, such as lending (#748), extends the grammar for both.
@@ -135,8 +136,7 @@ then reviewed against the code and revised with the user in #768's plan phase (t
    an unregistered one fails every read by that installation.
    `sources` keeps today's per-name annotations, skipping entries of kinds the installation doesn't register.
    Both keys are optional.
-   A `Store` layers its caller's picks over its own `defaults`, so a reader that picks nothing reads the store's defaults
-   — the benchmark's trial store takes the host's pick of its LLM kind rather than the kind's empty instance.
+   A `Store` layers its caller's picks over its own `defaults`, so a reader that picks nothing reads the store's defaults.
    On the host, the store's `defaults` replaces `~/.bro.json`'s `defaults.creds` as the base every pick layers over:
    the project URL, project path, bro URL and bro path entries, then `--cred`, for a launch;
    `user`, then `user.tools.<command>`, for the operator's own commands.
@@ -147,10 +147,12 @@ then reviewed against the code and revised with the user in #768's plan phase (t
     Its `creds.json` `sources` annotates each minting name, and its `defaults` records the launch's pick of every loaded kind and of every kind a kept reference names by kind, each one of that kind's `creds.use` instances.
     Install hooks run for the loaded kinds alone (`BRO_INSTALL_KINDS`), each wired to its default;
     a kind-addressed read in the session therefore reads the instance it reads today.
+    The benchmark's trial store is a store of this shape, which the trial bundle's own framework hydrates from the host store's `defaults`, never `~/.bro.json`, so its writer and its reader are one version.
 11. **Where the sections go.**
     The host computes `D` once per launch.
     `launch` goes to the broker, which checks launches and summon grants against it, and to the session's environment:
-    `RIDE_PERMITS` carries it as compact JSON, and `RIDE_MAY_SUMMON` goes, since `summon.may_summon()` and the `#may_summon` fact read `launch.bro.bros` from it.
+    `RIDE_LAUNCH` carries it as compact JSON, replacing both `RIDE_PERMITS` and `RIDE_MAY_SUMMON`;
+    `summon.launch()` reads it, replacing `summon.permits()`, and `summon.may_summon()` and the `#may_summon` fact read `launch.bro.bros` from it.
     The banner's `permits` row renders `launch` as names in the grant spelling, leaves only:
     set members, flags, and each key whose payload is empty.
     The `bro.bros` members stay in its `may_summon` row, as today, rather than under `permits`.
@@ -177,37 +179,46 @@ mixed versions aren't kept working across it, and the order below stands in for 
 What a version other than the writer's reads:
 
 - `~/.bro/creds.json` and `~/.bro.json`, read whole by every installation on the host:
-  each checkout of this repository, each repository that pins the framework (ppp and kap), and the frozen runtime of every live root.
+  each checkout of this repository, each benchmark trial bundle a checkout keeps (`var/benchmark/bundle`), each repository that pins the framework (ppp and kap), and the frozen or materialized runtime of every live root.
   Neither shape stays readable across the change, in either direction:
   an older installation fails on the migrated store, whose `defaults` and `sources` it reads as malformed annotations;
   a newer one fails on either old shape, naming the new place.
   One pairing fails silently:
   an older installation reading a migrated `~/.bro.json` beside a store it can still read loses its `defaults.creds` picks without an error, so every machine sharing one `~/.bro.json` through dotfiles takes the flag day together.
-- The resume record, which `ride resume` loads with whichever installation runs it:
+- The resume record.
+  A record naming a materialized runtime (a `--runtime-bundle` root, and the children it started) makes `ride resume` re-execute into that runtime before loading it, so that runtime's framework reads both the record and the host files:
+  one older than the migrated files fails on them and doesn't resume after the flag day, and one newer doesn't resume once a rollback restores the old files.
+  Any other record is loaded by whichever installation runs `ride resume`:
   a record granting a retired permit doesn't resume under the newer version, and one granting a `:launch.…` name doesn't resume under the older one.
 - Nothing else crosses versions.
-  The summon request, the pending manual record, the peer facts, `RIDE_PERMITS` and the session store stay inside one party, which runs its root's frozen runtime for its whole life;
+  The summon request, the pending manual record, the peer facts, `RIDE_LAUNCH` and the session store stay inside one party, which runs its root's runtime for its whole life;
   so a root started before the upgrade keeps the old rules for every summon it makes, until the host files migrate and its summons fail on them.
-  The trails server reads a store baked into its image beside the code that reads it:
-  `oops/trails/server/creds.json` moves to `sources` in the same change.
+  The benchmark's trial store is written and read by the trial bundle's one framework (rule 10).
+  A self-contained image carries its store beside the code that reads it
+  — the trails server with `oops/trails/server/creds.json`, and ppp's emails Lambda with `ppp/emails/runtime_credentials.json`
+  — so an image built before the change keeps running on its own, and a rebuild pairs the migrated file with the new code:
+  the trails server's in this change, deployed in step 1;
+  ppp's in its bump, deployed when ppp deploys by its own procedure.
 
 The order:
 
 1. Once the landing merges, deploy the trails server from the landed commit, recording its running task definition and `latest` image first;
    `verify.sh` passing is the check, since the server reads both its credentials through the migrated store at startup, and no CI check reads that file.
    Its rollback points the service at the recorded task definition and retags `latest` to the previous image (#796).
-2. Move ppp's and kap's pins past the landing with `[[bump bro]]`, adapting any retired permit they name;
-   their checkouts sync in step 4, with every other installation.
+2. Move ppp's and kap's pins past the landing with `[[bump bro]]` in a boxed workspace of each, adapting every retired permit they name and ppp's baked store.
+   The bump's sync upgrades that workspace's environment alone;
+   the host's checkouts, the installations that read the host files, pull in step 4.
 3. End every running session, finishing first any kept workspace that is to be resumed.
-4. Upgrade every installation that reads `~/.bro.json` or `~/.bro`, keeping a copy of both files.
+4. Upgrade every installation that reads `~/.bro.json` or `~/.bro`, keeping a copy of both files:
+   pull and set up each checkout of this repository and each consumer's, and rebuild each benchmark trial bundle a checkout keeps.
 5. Migrate both files where the upgraded launcher's errors point:
    the store's annotations move under `sources`, `~/.bro.json`'s `defaults.creds` becomes the store's `defaults`, and retired permits take their `:launch.…` names;
    `:launch.webview` and `:launch.benchmark` are granted where sessions open webviews or start benchmarks, since no session holds either by default.
 
 Rolling back is the same flag day in reverse:
-end every session, downgrade every installation, ppp's and kap's pins included, and restore both copies;
+end every session, downgrade every installation, ppp's and kap's pins and the benchmark bundles included, and restore both copies;
 a workspace recorded after the upgrade doesn't resume under the older version.
-The trails server rolls back on its own, as step 1 says.
+The trails server rolls back on its own, as step 1 says, and ppp's live images never moved.
 A phase verifying this change launches from a root started after the upgrade.
 
 An expand-and-contract rollout was rejected:
