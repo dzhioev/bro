@@ -202,10 +202,9 @@ class TestAdoption:
     assert header['location'] == session.location
     assert header['git'] == session.git
     assert store.blazes[0].git == session.git
-    assert 'launch_context' not in store.blazes[0].body
     assert _rows(store, header['id']) == lines
 
-  def test_a_detached_session_attaches_no_context(self, environment, store, monkeypatch):
+  def test_a_detached_session_records_no_git_state(self, environment, store, monkeypatch):
     monkeypatch.delenv('RIDE_REPO')
     monkeypatch.delenv('RIDE_REPO_URL')
     monkeypatch.delenv('RIDE_BRANCH')
@@ -215,6 +214,7 @@ class TestAdoption:
     assert _recorder(environment, store).tick() is True
 
     [header] = _trails(store)
+    assert 'git' not in header
 
   def test_transcripts_older_than_the_launch_are_not_adopted(self, environment, store):
     path = _write_segment(environment, 'seg-old', [_user('old', 'u1')])

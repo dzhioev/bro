@@ -5,6 +5,7 @@ import threading
 from collections.abc import Iterator
 from concurrent.futures import Future
 from contextlib import ExitStack, contextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ from aiohttp import web
 from bro.trails import formats, model
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest, payload_sha256, tools_sha256
-from bro.trails.network import HTTPStatusError, NetworkStore
+from bro.trails.network import NetworkStore
 from bro.trails.server.auth import TokenTable
 from bro.trails.server.server import create_app
 from bro.trails.store import (
@@ -60,16 +61,13 @@ def _lineage(*records, segment='segment', related=()):
   }
 
 
-def _claude_request(*records, context=None, lineage=None, version='test', native=None, **fields):
-  body = {'records': list(records)}
-  if context is not None:
-    body['launch_context'] = context
+def _claude_request(*records, lineage=None, version='test', native=None, **fields):
   return BlazeRequest(
     harness='claude',
     version=version,
     interactive=True,
     surface='ride',
-    body=body,
+    body={'records': list(records)},
     native={
       'llm': {'type': 'claude'},
       'segment': 'segment',
@@ -357,15 +355,12 @@ class TestTrailsStoreContract:
       sibling,
     }
 
-  def test_launch_context_blazes_are_refused_for_both_harnesses(self, trails_store):
-    old_context = [{'kind': 'git', 'subtype': 'state'}]
-    requests = (
-      _bro_request(body={'records': [], 'launch_context': old_context}),
-      _claude_request(context=old_context),
-    )
+  def test_a_body_field_besides_records_is_refused_for_both_harnesses(self, trails_store):
+    body = {'records': [], 'extra': []}
+    requests = (_bro_request(body=body), replace(_claude_request(), body=body))
 
     for request in requests:
-      with pytest.raises(InvalidRequest, match=r"unknown .* body fields: \['launch_context'\]"):
+      with pytest.raises(InvalidRequest, match=r"unknown .* body fields: \['extra'\]"):
         trails_store.blaze(request)
 
   def test_blaze_resolves_harness_lineage(self, trails_store):
@@ -516,30 +511,20 @@ def _record_source(root: Path, **overrides) -> tuple[LocalStore, str]:
 
 
 class TestImportContract:
-  def test_import_payload_with_launch_context_is_refused(self, trails_store, tmp_path):
+  def test_an_import_payload_field_besides_the_header_is_refused(self, trails_store, tmp_path):
     if not isinstance(trails_store, NetworkStore):
       pytest.skip('the import payload is the network contract')
-    source, trail_id = _record_source(tmp_path / 'old-importer')
+    source, trail_id = _record_source(tmp_path / 'source')
     header, _ = _recorded(source, trail_id)
 
     with pytest.raises(InvalidRequest) as refused:
       trails_store._send(
         'POST',
         f'/v1/admin/trails/{trail_id}/import',
-        {'header': header, 'launch_context': []},
+        {'header': header, 'extra': []},
       )
 
-    assert "unknown fields: ['launch_context']" in str(refused.value)
-
-  def test_context_route_is_retired(self, trails_store):
-    if not isinstance(trails_store, NetworkStore):
-      pytest.skip('the retired route is the network contract')
-    trail_id = trails_store.blaze(_bro_request())['id']
-
-    with pytest.raises(HTTPStatusError) as missing:
-      trails_store._get(f'/v1/trails/{trail_id}/context', {})
-
-    assert missing.value.status == 404
+    assert "unknown fields: ['extra']" in str(refused.value)
 
   def test_reads_a_tool_blob_by_digest(self, trails_store):
     trail_id = trails_store.blaze(_bro_request())['id']

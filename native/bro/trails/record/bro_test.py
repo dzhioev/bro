@@ -392,7 +392,6 @@ class TestRecorderStampsTheManagedSession:
     assert 'location' not in payload
     assert 'git' not in payload
     assert 'ride_command' not in payload['native']
-    assert 'launch_context' not in payload['body']
 
   def test_a_managed_session_stamps_its_location_launch_line_and_git_state(self, monkeypatch):
     for name, value in {
@@ -415,4 +414,3 @@ class TestRecorderStampsTheManagedSession:
     assert payload['location'] == session.location
     assert payload['native']['ride_command'] == 'ride solo --harness bro dev p'
     assert payload['git'] == session.git
-    assert 'launch_context' not in payload['body']
