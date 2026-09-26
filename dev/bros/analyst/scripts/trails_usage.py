@@ -18,9 +18,8 @@ from pathlib import Path
 from typing import Optional, Protocol
 
 import bro.llm.usage as usage
-from bro.base import credentials
 from bro.base.args import Parser
-from bro.trails.network import NetworkStore
+from bro.trails.store import configured_store
 from bro.workspace.paths import project_root
 from bro.workspace.project import project_config
 
@@ -33,9 +32,6 @@ class MessageReader(Protocol):
 
 DEFAULT_DAYS = 30
 DEFAULT_VERIFY = 10
-# a spot-check walks a trail's whole step stream, so the client outlives the
-# short timeout a header listing needs
-CLIENT_TIMEOUT_SECONDS = 120.0
 
 
 @dataclass
@@ -313,11 +309,6 @@ def resolve_destination(
   return destination
 
 
-def make_client() -> NetworkStore:
-  config = credentials.get_json('trails')
-  return NetworkStore(config['base_url'], config['token'], timeout=CLIENT_TIMEOUT_SECONDS)
-
-
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='render a Markdown usage report over the recorded trails')
   parser.add_argument('--since', help='ISO start of the window (default: --days before --until)')
@@ -347,7 +338,7 @@ def main(argv: list[str]) -> Optional[int]:
   generated = datetime.now(UTC)
   window = resolve_window(args['since'], args['until'], args['days'])
   destination = resolve_destination(args['output'], args['slug'], generated, force=args['force'])
-  with make_client() as client:
+  with configured_store() as client:
     headers = list(
       client.iter_trails(since=window.stamp(window.since), until=window.stamp(window.until))
     )
