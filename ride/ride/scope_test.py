@@ -151,21 +151,19 @@ class TestScopedSecrets:
     assert 'brog' in scoped.required
     assert scoped.selection == {}
 
-  def test_defaults_select_for_a_detached_scope(self, tmp_path, monkeypatch):
+  def test_store_defaults_select_for_a_detached_scope(self, tmp_path, monkeypatch):
+    store = tmp_path / 'store'
+    store.mkdir()
+    (store / credentials.STORE_FILE).write_text(json.dumps({'defaults': ['brog+default']}))
     config = tmp_path / 'bro.json'
-    config.write_text(
-      json.dumps(
-        {
-          'defaults': {'creds': ['brog+default']},
-          'projects': {str(tmp_path): {'creds': ['brog+project']}},
-        }
-      )
-    )
+    config.write_text(json.dumps({'projects': {str(tmp_path): {'creds': ['brog+project']}}}))
+    monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
 
     scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE)
 
-    assert scoped.selection == {'brog': 'default'}
+    assert scoped.selection == {}
+    assert ride.scope.credential_store(scoped).selection['brog'] == 'default'
 
   @pytest.mark.parametrize('recipe', [CLAUDE_RECIPE, BRO_RUN_RECIPE])
   def test_unknown_bro_fails_the_scope(self, recipe):
@@ -414,21 +412,26 @@ class TestScopeOverrides:
     assert scoped.selection == {'brog': 'github', 'github': 'reviewer'}
     assert 'brog' in scoped.required
 
-  def test_more_specific_creds_selection_outweighs_an_earlier_pick(self, tmp_path, monkeypatch):
+  def test_project_selection_outweighs_the_store_default(self, tmp_path, monkeypatch):
+    store = tmp_path / 'store'
+    store.mkdir()
+    (store / credentials.STORE_FILE).write_text(json.dumps({'defaults': ['github+default']}))
     config = tmp_path / 'bro.json'
     config.write_text(
       json.dumps(
         {
-          'defaults': {'creds': ['github+default'], 'grant': ['github']},
+          'defaults': {'grant': ['github']},
           'projects': {str(tmp_path): {'creds': ['github+project']}},
         }
       )
     )
+    monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
 
     scoped = ride.scope.scoped_secrets('scope-search', CLAUDE_RECIPE, attachment=str(tmp_path))
 
     assert scoped.selection['github'] == 'project'
+    assert ride.scope.credential_store(scoped).selection['github'] == 'project'
     assert 'github' in scoped.required
 
   def test_a_child_target_uses_a_different_instance_than_its_parent(self, tmp_path, monkeypatch):

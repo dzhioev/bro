@@ -77,7 +77,7 @@ def _print_tiers(
   optional = set(dict(tiers).get('optional', ()))
   present = store.instance_names()
   name_width = max(len(name) for name in names)
-  reads_width = max(len(_reads(name, binding)) for name in names)
+  reads_width = max(len(_reads(name, binding, store)) for name in names)
   for label, tier in tiers:
     if len(tier) == 0:
       continue
@@ -90,11 +90,19 @@ def _print_tiers(
         state = 'SKIPPED'
       else:
         state = 'MISSING'
-      print(f'  {name:<{name_width}}  {_reads(name, binding):<{reads_width}}  {state}')
+      reads = _reads(name, binding, store)
+      print(f'  {name:<{name_width}}  {reads:<{reads_width}}  {state}')
 
 
-def _reads(kind: str, binding: host_config.CredentialSelection) -> str:
-  if kind not in binding.instances:
-    return f'{kind} (unpicked)'
-  selected = credentials.storage_name(kind, binding.instances[kind])
-  return f'{selected} ({binding.layers[kind]})'
+def _reads(
+  kind: str,
+  binding: host_config.CredentialSelection,
+  store: credentials.Store,
+) -> str:
+  if kind in binding.instances:
+    selected = credentials.storage_name(kind, binding.instances[kind])
+    return f'{selected} ({binding.layers[kind]})'
+  if kind in store.defaults:
+    selected = credentials.storage_name(kind, store.defaults[kind])
+    return f'{selected} (store defaults)'
+  return f'{kind} (unpicked)'

@@ -299,15 +299,18 @@ class TestHostConfigScopeErrors:
     assert '"creds": ["github+reviewer"]' in error
     assert '"grant": ["github"]' in error
 
-  def test_unregistered_default_names_the_project_entry_replacement(self, caplog):
-    self.path.write_text(json.dumps({'defaults': {'creds': ['consumer_only+work']}}))
+  def test_host_default_picks_name_the_store_defaults(self, capsys):
+    self.path.write_text(json.dumps({'defaults': {'creds': ['github+work']}}))
 
-    with patch('ride.cli.start_session', side_effect=self._preflight):
-      code = ride_cli.main(['ride', 'solo', '--harness', 'bro', 'dev', 'work'])
+    with (
+      patch('ride.cli.start_session', side_effect=self._preflight),
+      pytest.raises(SystemExit),
+    ):
+      ride_cli.main(['ride', 'solo', '--harness', 'bro', 'dev', 'work'])
 
-    assert code == 1
-    assert 'defaults names unregistered credential kind(s): consumer_only' in caplog.text
-    assert 'move host-wide picks or scope changes into the project entries' in caplog.text
+    error = capsys.readouterr().err
+    assert 'defaults.creds is retired' in error
+    assert 'creds.json: defaults' in error
 
 
 class TestCredentialHydrationRoutes:
@@ -342,20 +345,24 @@ class TestCredentialHydrationRoutes:
       'harbor+launch': 'harbor-launch',
     }.items():
       write(name, value)
+    (store / credentials.STORE_FILE).write_text(
+      json.dumps(
+        {
+          'defaults': [
+            'github+default',
+            'aws+default',
+            'brog+default',
+            'harbor+default',
+          ]
+        }
+      )
+    )
 
     config = tmp_path / 'bro.json'
     config.write_text(
       json.dumps(
         {
-          'defaults': {
-            'creds': [
-              'github+default',
-              'aws+default',
-              'brog+default',
-              'harbor+default',
-            ],
-            'grant': ['brog', 'harbor'],
-          },
+          'defaults': {'grant': ['brog', 'harbor']},
           'projects': {
             str(repository): {
               'creds': ['github+project', 'aws+project'],
@@ -424,11 +431,18 @@ class TestCredentialHydrationRoutes:
     assert spec.cred == ['harbor+launch']
     assert launch_scope.scoped.required == {'github', 'aws', 'brog', 'harbor'}
     assert launch_scope.scoped.optional == {'trails'}
-    assert launch_scope.store['creds/github.cred'] == b'github-project'
-    assert launch_scope.store['creds/aws.cred'] == b'aws-project'
-    assert launch_scope.store['creds/brog.cred'] == b'brog-bro'
-    assert launch_scope.store['creds/harbor.cred'] == b'harbor-launch'
+    assert launch_scope.store['creds/github+project.cred'] == b'github-project'
+    assert launch_scope.store['creds/aws+project.cred'] == b'aws-project'
+    assert launch_scope.store['creds/brog+bro.cred'] == b'brog-bro'
+    assert launch_scope.store['creds/harbor+launch.cred'] == b'harbor-launch'
     assert 'creds/trails.cred' not in launch_scope.store
+    store_config = json.loads(launch_scope.store['creds.json'])
+    assert store_config['defaults'] == [
+      'aws+project',
+      'brog+bro',
+      'github+project',
+      'harbor+launch',
+    ]
 
   def test_root_launch_fails_for_a_picked_absent_instance(self, route, caplog):
     assert route.launch('--cred', 'harbor+absent') == 1
@@ -469,8 +483,8 @@ class TestCredentialHydrationRoutes:
     assert spec.cred == ['harbor+launch', 'github+resume']
     assert spec.revoke == ['aws']
     assert launch_scope.scoped.required == {'github', 'brog', 'harbor'}
-    assert launch_scope.store['creds/github.cred'] == b'github-resume'
-    assert 'creds/aws.cred' not in launch_scope.store
+    assert launch_scope.store['creds/github+resume.cred'] == b'github-resume'
+    assert 'creds/aws+project.cred' not in launch_scope.store
 
 
 class TestAlong:

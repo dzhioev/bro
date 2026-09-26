@@ -145,6 +145,8 @@ class Launch:
   runtime_bundle_hash: str
   optional_secrets: Collection[str] = ()
   credential_selection: Mapping[str, str] = field(default_factory=dict)
+  credential_store: Optional[Mapping[str, bytes]] = None
+  hydrated_kinds: Collection[str] = ()
   extra_mounts: Collection[str] = ()
   published_ports: Collection[tuple[int, int]] = ()
   repo: Optional[Repository | Path] = None
@@ -415,13 +417,17 @@ def prepare_container(launch: Launch) -> str:
     if metadata.branch is None:
       raise ValueError('attached boxed workspace has no recorded branch')
     ensure_clone(repository, tree, metadata.branch, launch.base_ref)
-  log.verbose('hydrating the scoped credential store')
-  source_store = credentials.Store(
-    credentials.default_registry(), credentials.STORE_DIR, launch.credential_selection
-  )
-  store, hydrated_kinds = credentials.build_scoped_store(
-    source_store, launch.secrets, optional=launch.optional_secrets
-  )
+  if launch.credential_store is None:
+    log.verbose('hydrating the scoped credential store')
+    source_store = credentials.Store(
+      credentials.default_registry(), credentials.STORE_DIR, launch.credential_selection
+    )
+    store, hydrated_kinds = credentials.build_scoped_store(
+      source_store, launch.secrets, optional=launch.optional_secrets
+    )
+  else:
+    store = dict(launch.credential_store)
+    hydrated_kinds = frozenset(launch.hydrated_kinds)
   launch_env = {
     **launch.env,
     'BRO_STORE': '/home/ride/.bro',
@@ -499,6 +505,8 @@ class MemberExec:
   secrets: Collection[str]
   optional_secrets: Collection[str] = ()
   credential_selection: Mapping[str, str] = field(default_factory=dict)
+  credential_store: Optional[Mapping[str, bytes]] = None
+  hydrated_kinds: Collection[str] = ()
 
 
 def member_exec_argv(launch: MemberExec, env: Mapping[str, str]) -> list[str]:
@@ -546,13 +554,17 @@ def prepare_member_exec(launch: MemberExec) -> list[str]:
   exec argv: hydrate the store, `docker cp` it to the member's own layer path,
   and re-own it as the entrypoint re-owns the root's (a no-op on Linux, where
   `ride` is already remapped to the host uid; required on Docker for Mac)."""
-  log.verbose('hydrating the scoped credential store for member %s', launch.member)
-  source_store = credentials.Store(
-    credentials.default_registry(), credentials.STORE_DIR, launch.credential_selection
-  )
-  store, hydrated_kinds = credentials.build_scoped_store(
-    source_store, launch.secrets, optional=launch.optional_secrets
-  )
+  if launch.credential_store is None:
+    log.verbose('hydrating the scoped credential store for member %s', launch.member)
+    source_store = credentials.Store(
+      credentials.default_registry(), credentials.STORE_DIR, launch.credential_selection
+    )
+    store, hydrated_kinds = credentials.build_scoped_store(
+      source_store, launch.secrets, optional=launch.optional_secrets
+    )
+  else:
+    store = dict(launch.credential_store)
+    hydrated_kinds = frozenset(launch.hydrated_kinds)
   store_root = member_store_dir(launch.member).relative_to(CONTAINER_MEMBER_ROOT.parent)
   tarball = store_tarball(store, store_root)
   cp = subprocess.run(

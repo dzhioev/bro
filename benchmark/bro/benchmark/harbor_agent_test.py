@@ -2,6 +2,7 @@ import asyncio
 import json
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional, cast
@@ -39,13 +40,20 @@ from ride.workspace.spawn import PROCESS_TERM_GRACE
 CREDENTIAL = 'openai'
 INSTANCE = 'openai+benchmark'
 KEY = '{"api_key": "sk-test"}'
+_REAL_SUBPROCESS_RUN = subprocess.run
 
 
 @pytest.fixture(autouse=True)
 def _compose(monkeypatch):
   """answer the host probe every construction runs, without a subprocess and
   without carrying one test's answer into the next."""
-  monkeypatch.setattr(subprocess, 'run', lambda command, **kwargs: _completed(command, 0))
+
+  def run(command, **kwargs):
+    if tuple(command) == harbor_agent.COMPOSE_PROBE:
+      return _completed(command, 0)
+    return _REAL_SUBPROCESS_RUN(command, **kwargs)
+
+  monkeypatch.setattr(subprocess, 'run', run)
   harbor_agent.docker_compose_missing.cache_clear()
   yield
   harbor_agent.docker_compose_missing.cache_clear()
@@ -55,6 +63,21 @@ def _completed(command, returncode: int) -> subprocess.CompletedProcess:
   return subprocess.CompletedProcess(command, returncode)
 
 
+def _write_interpreter(path: Path) -> None:
+  path.parent.mkdir(parents=True)
+  path.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+  path.chmod(0o700)
+
+
+@pytest.fixture
+def bundle_interpreter(monkeypatch):
+  monkeypatch.setattr(
+    harbor_agent,
+    'benchmark_bundle',
+    lambda: SimpleNamespace(interpreter=Path(sys.executable)),
+  )
+
+
 @pytest.fixture
 def store(monkeypatch, tmp_path: Path) -> Path:
   """An exclusive store holding one instance of one kind."""
@@ -62,6 +85,7 @@ def store(monkeypatch, tmp_path: Path) -> Path:
   material = directory / credentials.MATERIAL_DIR / f'{INSTANCE}.cred'
   material.parent.mkdir(parents=True)
   material.write_text(KEY)
+  (directory / credentials.STORE_FILE).write_text(json.dumps({'defaults': [INSTANCE]}))
   monkeypatch.setattr(credentials, 'STORE_DIR', str(directory))
   monkeypatch.setattr(credentials, '_default_store', None)
   return directory
@@ -291,24 +315,26 @@ def test_the_run_environment_points_at_the_store_and_the_record_root(tmp_path):
   assert environment == {'BRO_STORE': str(STORE_DIR), 'XDG_DATA_HOME': '/logs/agent'}
 
 
-def test_the_store_carries_the_named_instance_under_its_kind(store):
-  with scoped_store(INSTANCE) as directory:
-    sources = json.loads((directory / 'creds.json').read_text())
-    assert sources == {}
-    assert (directory / 'creds' / f'{CREDENTIAL}.cred').read_text() == KEY
+def test_the_bundle_follows_the_host_store_default(bundle_interpreter, store):
+  with scoped_store(CREDENTIAL) as directory:
+    config = json.loads((directory / 'creds.json').read_text())
+    assert config == {'defaults': [INSTANCE], 'sources': {}}
+    assert (directory / 'creds' / f'{INSTANCE}.cred').read_text() == KEY
 
 
-def test_the_store_is_private_while_it_exists_and_gone_after(store):
-  with scoped_store(INSTANCE) as directory:
+def test_the_store_is_private_while_it_exists_and_gone_after(bundle_interpreter, store):
+  with scoped_store(CREDENTIAL) as directory:
     assert directory.stat().st_mode & 0o777 == 0o700
-    assert (directory / 'creds' / f'{CREDENTIAL}.cred').stat().st_mode & 0o777 == 0o600
+    assert (directory / 'creds' / f'{INSTANCE}.cred').stat().st_mode & 0o777 == 0o600
     scratch = directory.parent
 
   assert not scratch.exists()
 
 
-def test_a_credential_the_host_cannot_resolve_fails_before_the_container(store):
-  with pytest.raises(credentials.SecretNotFound, match='trails'):
+def test_a_credential_the_bundle_cannot_resolve_fails_before_the_container(
+  bundle_interpreter, store
+):
+  with pytest.raises(RuntimeError, match="secret 'trails' not found"):
     with scoped_store('trails'):
       pass
 
@@ -444,7 +470,8 @@ def test_an_unreadable_store_does_not_cost_the_trial_its_grade(tmp_path):
 
 async def test_the_install_uploads_both_trees_and_proves_the_bro(monkeypatch, tmp_path, store):
   bundle = tmp_path / 'bundle'
-  bundle.mkdir()
+  interpreter = bundle / 'venv' / 'bin' / 'python3'
+  _write_interpreter(interpreter)
   monkeypatch.setattr(harbor_agent, 'workspace_root', lambda: tmp_path)
   monkeypatch.setattr(harbor_agent, 'default_root', lambda root: bundle)
   monkeypatch.setattr(harbor_agent, 'built', lambda root: harbor_agent.Bundle(root))
@@ -458,7 +485,31 @@ async def test_the_install_uploads_both_trees_and_proves_the_bro(monkeypatch, tm
   assert environment.commands[-1].endswith(f'{BUNDLE.script("bro")} show terminal')
 
 
+async def test_an_incompatible_bundle_fails_before_the_environment_is_touched(
+  monkeypatch, tmp_path, store
+):
+  interpreter = tmp_path / 'incompatible-python'
+  interpreter.write_text('#!/bin/sh\necho incompatible store >&2\nexit 1\n')
+  interpreter.chmod(0o700)
+  monkeypatch.setattr(
+    harbor_agent,
+    'benchmark_bundle',
+    lambda: SimpleNamespace(root=tmp_path / 'bundle', interpreter=interpreter),
+  )
+  environment = FakeEnvironment()
+
+  with pytest.raises(RuntimeError, match='incompatible store'):
+    await agent(tmp_path, bro='terminal', llm_credential=CREDENTIAL).install(
+      environment.as_environment()
+    )
+
+  assert environment.commands == []
+  assert environment.uploads == []
+
+
 async def test_the_install_proves_the_bundled_claude_on_its_harness(monkeypatch, tmp_path, store):
+  interpreter = tmp_path / 'venv' / 'bin' / 'python3'
+  _write_interpreter(interpreter)
   monkeypatch.setattr(harbor_agent, 'benchmark_bundle', lambda: harbor_agent.Bundle(tmp_path))
   environment = FakeEnvironment()
 

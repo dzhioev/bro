@@ -5,7 +5,7 @@ separate stored instances of one credential kind.
 Selections live outside repositories and merge from general to specific:
 
     {
-      "defaults": {"creds": ["trails+write"]},
+      "defaults": {"grant": [":launch.webview"]},
       "user": {
         "creds": ["github+dev"],
         "tools": {"bro.trails.rewind": {"creds": ["trails+analyst"]}}
@@ -36,8 +36,9 @@ The grammar is installation-independent, so unknown credential and bro names
 remain valid until a launch resolves them against its installation, and a
 recipe is carried as written for the launch to parse.
 
-`defaults` is the root both branches extend: `user` for a command the operator
-runs outside any session, `projects` for a managed session.
+`defaults` is the root of the grant/revoke scope every managed session extends.
+The store's own `creds.json` defaults are the base credential picks beneath
+`user` for an operator command and `projects` for a managed session.
 A project key is an identity a session names the repository by: the filesystem
 path of its root (`~` and symlinks resolved before matching), or a normalized
 git URL.
@@ -49,8 +50,9 @@ A `user.tools` key is one CLI's canonical console-script name — its import pat
 with the underscores dashed — rather than the bare alias, which several
 distributions may each publish.
 Launch selection and scope precedence runs defaults, the URL entry, the path entry,
-then each of their `bros` layers in that same order;
-a command's credential selection is its `user.tools` entry, `user`, then defaults.
+then each of their `bros` layers in that same order.
+A command's credential selection applies `user`, then its `user.tools` entry,
+over the store's defaults.
 A kind no layer selects reads its empty instance.
 The returned layer map attributes every explicit selection, and the ordered scope
 layers retain each pick, grant, and revoke for the launch fold.
@@ -200,7 +202,7 @@ def _read_unchecked() -> _Config:
     raise ValueError(f'{path}: top-level {_TOOLS_KEY!r} is retired; nest it under {_USER_KEY!r}')
   if len(unknown) > 0:
     raise ValueError(f'unknown key(s) in {path}: {", ".join(unknown)}')
-  defaults = _scope_entry(f'{path}: {_DEFAULTS_KEY}', data.get(_DEFAULTS_KEY, {}))
+  defaults = _defaults_entry(path, data.get(_DEFAULTS_KEY, {}))
   user = _user(path, data.get(_USER_KEY, {}))
   projects = _projects(path, data.get(_PROJECTS_KEY, {}))
   llm = _llm(path, data.get(_LLM_KEY, {}))
@@ -230,16 +232,8 @@ def summon_depth(project_depth: Optional[int] = None) -> int:
   return project_depth
 
 
-def project_selection(attachment: Optional[Attachment]) -> CredentialSelection:
-  """Merge defaults and the matching projects, without a per-bro layer."""
-  config = _read()
-  entries = [(DEFAULTS_LAYER, config.defaults)]
-  entries.extend((match.layer, match.project.entry) for match in _matches(config, attachment))
-  return _merged(entries)
-
-
 def launch_selection(attachment: Optional[Attachment], bro: str) -> CredentialSelection:
-  """Merge defaults, the matching projects, and their `bro` layers."""
+  """Merge the default scope and matching project and `bro` layers."""
   _require_bro_name(bro)
   config = _read()
   matches = _matches(config, attachment)
@@ -272,7 +266,7 @@ def _require_bro_name(bro: str) -> None:
 def tool_selection(
   command: Optional[str], *, invoked_as: Optional[str] = None
 ) -> CredentialSelection:
-  """Merge defaults, the user layer, and the entry for `command`.
+  """Merge the user layer and the entry for `command`.
 
   `command` is the canonical console-script name of the running CLI, None for a
   process that is none. `invoked_as` is the name it was started under, and a
@@ -281,7 +275,7 @@ def tool_selection(
   if command is not None and (not isinstance(command, str) or command == ''):
     raise ValueError('command name must be a non-empty string')
   config = _read()
-  layers = [(DEFAULTS_LAYER, config.defaults.selection), (USER_LAYER, config.user.credentials)]
+  layers = [(USER_LAYER, config.user.credentials)]
   if command is not None:
     if invoked_as is not None and invoked_as != command and invoked_as in config.user.tools:
       raise ValueError(
@@ -354,6 +348,18 @@ def _project(path: Path, project: str, value: object) -> _Project:
       raise ValueError(f'{where}: bro name must not be empty')
     parsed_bros[bro] = _bro_entry(f'{where}: bro {bro!r}', bro_entry)
   return _Project(project_entry, parsed_bros)
+
+
+def _defaults_entry(path: Path, value: object) -> _ScopeEntry:
+  where = f'{path}: {_DEFAULTS_KEY}'
+  if not isinstance(value, dict):
+    raise ValueError(f'{where} must hold a json object')
+  if _CREDS_KEY in value:
+    store_defaults = Path(credentials.STORE_DIR) / credentials.STORE_FILE
+    raise ValueError(
+      f'{where}.{_CREDS_KEY} is retired; move those picks to {store_defaults}: defaults'
+    )
+  return _scope_entry(where, value)
 
 
 def _scope_entry(where: str, value: object) -> _ScopeEntry:
@@ -434,28 +440,7 @@ def _reject_unknown_fields(value: dict, allowed: set[str], where: str) -> None:
 
 
 def _selection_entries(where: str, entries: object) -> dict[str, str]:
-  if not isinstance(entries, list):
-    raise ValueError(f'{where}: {_CREDS_KEY} must be a list')
-  selection: dict[str, str] = {}
-  for entry in entries:
-    kind, instance = _parse_selection(where, entry)
-    if kind in selection:
-      raise ValueError(f'{where} selects kind {kind!r} twice')
-    selection[kind] = instance
-  return selection
-
-
-def _parse_selection(where: str, entry: object) -> tuple[str, str]:
-  if not isinstance(entry, str):
-    raise ValueError(f'{where}: selection {entry!r} must be a string')
-  kind, separator, instance = entry.partition('+')
-  if separator == '':
-    raise ValueError(
-      f'{where}: selection {entry!r} names no instance; write '
-      f"'{entry}+<instance>', or '{entry}+' for the kind's empty instance"
-    )
-  credentials.parse_name(entry)
-  return kind, instance
+  return credentials.parse_picks(entries, where=where, field=_CREDS_KEY)
 
 
 def _project_key(key: str) -> str:
