@@ -47,7 +47,7 @@ def _available(*command: str) -> bool:
 
 def _host_holds_the_llm_keys() -> bool:
   with host_credential_store():
-    return all(credentials.default_store().available_instance(name) for name in _LLM_CREDENTIALS)
+    return all(credentials.default_store().resolve(name) is not None for name in _LLM_CREDENTIALS)
 
 
 _HOST_MISMATCH = host_mismatch()

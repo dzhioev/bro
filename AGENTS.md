@@ -55,7 +55,8 @@ The development style policy is `dev/bro/prompts/dev/style.md`, tool-served to d
 shell scripts follow `dev/bro/dev/shell_policy.py` (prelude sourcing, shebang), enforced repository-wide by `local/bro/local/shell_policy_test.py`,
 and pass ShellCheck, which reads each file's dialect off its shebang and follows the sourced libraries through the root `.shellcheckrc`;
 markdown prose follows the semantic line breaks of `dev/bro/dev/markdown_policy.py`, enforced repository-wide by `local/bro/local/markdown_policy_test.py` and checked over a reflow by `check-markdown`;
-and a test module's sleeps follow `dev/bro/dev/sleep_policy.py` (a yield, a poll interval in a loudly bounded loop, or a marked subject or bound), enforced repository-wide by `local/bro/local/sleep_policy_test.py`.
+a test module's sleeps follow `dev/bro/dev/sleep_policy.py` (a yield, a poll interval in a loudly bounded loop, or a marked subject or bound), enforced repository-wide by `local/bro/local/sleep_policy_test.py`;
+and code outside the credential resolver reads a credential by kind, never through the storage-addressed `get_instance` family, enforced repository-wide by `local/bro/local/credential_policy_test.py`.
 Wheel contents are policy too (`dev/AGENTS.md`, "Wheel contents").
 
 ## Conventions
