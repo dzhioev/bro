@@ -1767,6 +1767,7 @@ def _pending_record(tmp_path, **overrides):
     'launch': {'bro': {'bros': ['dev'], 'party': ['boxed']}},
     'grant': [],
     'revoke': [],
+    'pass': [],
     'summoner': {'trail_id': 'T1'},
     'repo': None,
     'into': None,

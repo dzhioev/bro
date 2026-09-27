@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.12.0
+version: 2.13.0
 ---
 
 # orchestrate
@@ -137,7 +137,10 @@ this spell only says how a phase differs from a one-shot ask.
   — the thinking was bought in the phases before them.
 - **Scope.** Your summon check settles what a phase needs.
   Grant only what it needs beyond its bro's declarations and only what you hold yourself:
-  `@<bro>` when the phase has to hand work onward, or a `:launch.bro.party.…` member when it has to start sessions of its own.{{when #may_summon contains eyebro}}
+  `@<bro>` when the phase has to hand work onward, or a `:launch.bro.party.…` member when it has to start sessions of its own.
+  When a phase needs a credential kind its bro does not declare, pass the required instance if this coordinator's `permits` row carries the matching `:launch.bro.pass.<kind>+<instance>` right.
+  Otherwise the kind and instance must come from `projects.<identity>.bros.<phase-bro>` in the host configuration;
+  do not broaden every run of that bro when an authorized per-phase pass is available.{{when #may_summon contains eyebro}}
 - **The eyebro.** Every phase that opens or lands a pull request gets it granted,
   under the name your banner's `may_summon` gives rather than `eyebro` itself:
   a child renders [[run pr]]'s and [[land]]'s reviewer steps only where its own `launch.bro.bros` set carries one.{{end}}
@@ -157,7 +160,7 @@ Do not let this session end with a phase in flight;
 These want the user in the session rather than a one-shot run, so they go out as manual summons
 — the host registers the phase on a token, and the user launches the session against it.
 The mechanics are [[ask]]'s;
-the summon carries the phase prompt and none of the launch line, since hold, effort, and harness belong to the launch.
+the summon carries the phase prompt and any authorized credential pass, but none of the launch line, since hold, effort, and harness belong to the launch.
 Relay the token as the command the user pastes, the launch line appended and `--harness` selecting Claude Code or the bro's native chat loop:
 
 ```
@@ -362,11 +365,15 @@ re-fire it on that PR, which [[run pr]] resumes through its `pr` argument, rathe
 
 ### 5 — roll out
 
-**Summon:** the bro the step names · `into` the commit its landing landed, as the integration phase answered it · `timeout` sized for the step · `talk` `worker.question`
+**Summon:** use the bro the step names.
+Set `into` to the commit its landing landed, as the integration phase answered it;
+size `timeout` for the step and grant `talk` `worker.question`.
+Pass the step's credential instance when this coordinator holds its pass right;
+otherwise take it from the target bro's host-config entry.
 
 **Manual summon** where your summon check leaves the step to one:
-launched with what it lacks
-— `--grant <kind>` for a credential its bro does not declare, `--cred <kind>+<instance>` beside it where a non-default instance must be picked, and `--unboxed` only where the step needs the host
+launched with what the user-owned session lacks, such as `--unboxed` where the step needs the host;
+the summon request still carries an authorized credential pass, while a credential this coordinator cannot pass comes from the host config's entry for that bro
 
 Skip this phase when no `### Rollout` step follows the landing.
 Otherwise run the steps that follow it in order, one session each, a step starting once the previous step's check has passed.
@@ -399,7 +406,7 @@ every step's check passed and recorded on the page, or a failed step rolled back
 
 ### 6 — verify
 
-**Summon:** `into` `master`, which the work is on by then · `talk` `worker.question` · credentials from `projects.<identity>.bros.<the phase bro>` in the host config
+**Summon:** `into` `master`, which the work is on by then · `talk` `worker.question` · pass a phase-only credential when authorized, otherwise take credentials from `projects.<identity>.bros.<the phase bro>` in the host config
 
 Once the work is live
 — merged, and rolled out if it needed a rollout:
