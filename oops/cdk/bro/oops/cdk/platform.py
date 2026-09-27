@@ -15,7 +15,7 @@ from aws_cdk import (
 )
 from constructs import Construct, IConstruct
 
-from bro.oops.cdk.config import InfrastructureConfig, PlatformConfig
+from bro.oops.config import InfrastructureConfig, PlatformConfig
 
 _LOAD_BALANCER_DISALLOW_ALL_EGRESS = [
   {

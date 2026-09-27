@@ -80,8 +80,9 @@ def test_the_commands_deaf_to_the_environment_are_told_the_color_decision_by_fla
   assert invocations[-1][:2] == (str(Path(sys.executable).parent / 'shellcheck'), '--color=always')
 
 
-def test_benchmark_stage_refuses_to_rewrite_a_stale_lock(monkeypatch, tmp_path):
-  directory = tmp_path / run_tests.BENCHMARK
+def test_a_project_stage_refuses_to_rewrite_a_stale_lock(monkeypatch, tmp_path):
+  project = run_tests.Project(stage='probe', directory='probe', pytest_files=[])
+  directory = tmp_path / project.directory
   directory.mkdir()
   project_file = directory / 'pyproject.toml'
   project_file.write_text(
@@ -102,7 +103,7 @@ package = false
   monkeypatch.setattr(run_tests, 'DIR', tmp_path)
 
   with pytest.raises(subprocess.CalledProcessError) as raised:
-    run_tests.benchmark_stage()
+    run_tests.project_stage(project)
 
   assert raised.value.cmd == ('uv', 'sync', '-q', '--locked', '--all-groups')
   assert '--locked' in raised.value.output
@@ -238,8 +239,6 @@ def repository(monkeypatch, tmp_path):
   write('thing/elsewhere.py')
   write('thing/elsewhere_test.py', 'from thing import elsewhere\n')
   write('thing/policy_test.py', 'import json\n')
-  write('thing/heavy.py')
-  write('thing/heavy_test.py', 'from thing import heavy\n')
   write(f'{run_tests.BENCHMARK}/pyproject.toml', '[project]\nname = "probe-benchmark"\n')
   write(f'{run_tests.BENCHMARK}/bro/benchmark/job.py', 'from thing import store\n')
   for command in (
@@ -261,7 +260,11 @@ def repository(monkeypatch, tmp_path):
       'thing/policy_test.py',
     ],
   )
-  monkeypatch.setattr(run_tests, 'SINGLE_PROCESS_PYTEST_FILES', ['thing/heavy_test.py'])
+  monkeypatch.setattr(
+    run_tests,
+    'PROJECTS',
+    [run_tests.Project(stage='benchmark', directory=run_tests.BENCHMARK, pytest_files=[])],
+  )
   monkeypatch.setattr(
     run_tests,
     'DISTRIBUTIONS',
@@ -283,27 +286,9 @@ def test_a_change_selects_the_tests_that_reach_it(repository):
   ]
 
 
-def test_the_single_process_roster_is_narrowed_the_same_way(repository):
-  (repository / 'thing/heavy.py').write_text('CHANGED = 1\n')
-
-  selection = run_tests.select('main')
-
-  assert selection.single_process_roster == ['thing/heavy_test.py']
-  assert selection.roster == ['thing/policy_test.py']
-
-
-def test_the_single_process_roster_runs_outside_the_worker_pool(invocations):
-  run_tests.unit_stage(['thing/store_test.py'], ['thing/heavy_test.py'])
-
-  assert invocations == [
-    (sys.executable, '-m', 'pytest', '-q', '-n', 'auto', 'thing/store_test.py'),
-    (sys.executable, '-m', 'pytest', '-q', 'thing/heavy_test.py'),
-  ]
-
-
 def test_an_empty_selection_runs_no_pytest_at_all(invocations):
   # a bare `pytest` collects the whole tree, so an empty list is no argument list
-  run_tests.unit_stage([], [])
+  run_tests.unit_stage([])
 
   assert invocations == []
 
@@ -390,9 +375,7 @@ def test_a_dropped_stage_reads_skipped_in_the_verdict(monkeypatch, capsys):
   monkeypatch.setattr(
     run_tests,
     'select',
-    lambda base: run_tests.Selection(
-      roster=(), single_process_roster=(), distributions=(), dropped=frozenset({'benchmark'})
-    ),
+    lambda base: run_tests.Selection(roster=(), distributions=(), dropped=frozenset({'benchmark'})),
   )
 
   assert run_tests.main(['run-tests', '--changed']) is None
@@ -430,7 +413,15 @@ def rosters(repository, monkeypatch):
   (repository / 'thing/e2e_test.py').write_text('')
   (repository / f'{run_tests.BENCHMARK}/bro/benchmark/job_test.py').write_text('')
   monkeypatch.setattr(run_tests, 'BROKER_E2E_PYTEST_FILE', 'thing/e2e_test.py')
-  monkeypatch.setattr(run_tests, 'BENCHMARK_PYTEST_FILES', ['bro/benchmark/job_test.py'])
+  monkeypatch.setattr(
+    run_tests,
+    'PROJECTS',
+    [
+      run_tests.Project(
+        stage='benchmark', directory=run_tests.BENCHMARK, pytest_files=['bro/benchmark/job_test.py']
+      )
+    ],
+  )
   for name in (
     'DOCKER_PYTEST_FILES',
     'WEBVIEW_E2E_PYTEST_FILES',
@@ -458,9 +449,9 @@ def test_a_test_module_no_roster_names_is_a_problem(rosters):
 
 
 def test_a_test_module_two_rosters_name_is_a_problem(rosters, monkeypatch):
-  monkeypatch.setattr(run_tests, 'PYTEST_FILES', [*run_tests.PYTEST_FILES, 'thing/heavy_test.py'])
+  monkeypatch.setattr(run_tests, 'PYTEST_FILES', [*run_tests.PYTEST_FILES, 'thing/e2e_test.py'])
 
-  assert run_tests.roster_problems() == ['thing/heavy_test.py is in 2 rosters']
+  assert run_tests.roster_problems() == ['thing/e2e_test.py is in 2 rosters']
 
 
 def test_the_gate_refuses_to_start_over_a_roster_problem(rosters, monkeypatch):

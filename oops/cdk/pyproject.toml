@@ -1,0 +1,57 @@
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "bro-oops-cdk"
+version = "0.1.0"
+description = "AWS CDK constructs for the platform and services bro-oops deploys"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "aws-cdk-lib==2.250.0",
+  "boto3==1.43.40",
+  "bro",
+  "bro-oops",
+  "constructs==10.6.0",
+  "jsii==1.140.0",
+]
+
+[dependency-groups]
+dev = [
+  "pyright==1.1.414",
+  "pytest==9.1.1",
+]
+
+[tool.uv.sources]
+bro = { path = "../..", editable = true }
+bro-oops = { path = "..", editable = true }
+
+[tool.deptry.package_module_name_map]
+bro = ["bro"]
+bro-oops = ["bro"]
+# the gate reads this project from the workspace venv, which has no aws-cdk-lib
+# to read the module name off
+aws-cdk-lib = ["aws_cdk"]
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = ["bro.oops.cdk"]
+# `bro` and `bro.oops` are namespace packages bro-oops also ships into; this
+# portion carries no __init__.py at either level so the distributions merge
+namespace = true
+wheel-exclude = ["**/*_test.py", "**/*_test_helper.py", "**/conftest.py", "**/AGENTS.md"]
+
+# no [tool.ruff] table: it would make this project a config root of its own, and
+# the repository root's is what formats and lints the directory
+[tool.pytest.ini_options]
+# without this pytest names a test module from the first ancestor lacking an
+# __init__.py, which the namespace portions put below `bro.oops`
+consider_namespace_packages = true
+max_warnings = "0"
+
+[tool.pyright]
+include = ["bro", "deployment", "conftest.py"]
+exclude = [".venv/"]
+venvPath = "."
+venv = ".venv"

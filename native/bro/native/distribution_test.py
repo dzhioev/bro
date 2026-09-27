@@ -17,6 +17,7 @@ _PROJECTS = {
   'bro-dev': _ROOT / 'dev',
   'bro-native': _ROOT / 'native',
   'bro-oops': _ROOT / 'oops',
+  'bro-oops-cdk': _ROOT / 'oops' / 'cdk',
   'bro-ride': _ROOT / 'ride',
 }
 _NATIVE_DOMAIN = {
@@ -50,6 +51,8 @@ _NAMESPACE_MODULES = {
   'bro.extra.github.poll_pr': 'bro/extra/github/poll_pr.py',
   'bro.launch.call': 'bro/launch/call.py',
   'bro.launch.hold': 'bro/launch/hold.py',
+  'bro.oops.cdk.app': 'bro/oops/cdk/app.py',
+  'bro.oops.config': 'bro/oops/config.py',
   'bro.trails.record.bro': 'bro/trails/record/bro.py',
   'bro.trails.record.spine': 'bro/trails/record/spine.py',
 }
@@ -176,13 +179,10 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'markdown-it-py',
     'pytest',
   }
-  assert _project_dependencies(_ROOT / 'oops' / 'pyproject.toml') == {
+  assert _project_dependencies(_ROOT / 'oops' / 'pyproject.toml') == {'bro', 'bro-dev'}
+  assert _project_dependencies(_ROOT / 'oops' / 'cdk' / 'pyproject.toml') >= {
     'aws-cdk-lib',
-    'boto3',
-    'bro',
-    'bro-dev',
-    'constructs',
-    'jsii',
+    'bro-oops',
   }
   assert _project_dependencies(_ROOT / 'bench' / 'pyproject.toml') == {'bro'}
   assert _project_dependencies(_ROOT / 'benchmark' / 'pyproject.toml') >= {
@@ -196,7 +196,9 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
 
 def test_shared_namespaces_resolve_from_editable_source_roots():
   _assert_namespace_modules(
-    os.pathsep.join(str(_ROOT / directory) for directory in ('.', 'dev', 'native'))
+    os.pathsep.join(
+      str(_ROOT / directory) for directory in ('.', 'dev', 'native', 'oops', 'oops/cdk')
+    )
   )
 
 

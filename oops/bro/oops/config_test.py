@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
-from bro.oops.cdk.config import from_mapping, resolve
+from bro.oops.config import from_mapping, resolve
 
 
 def test_defaults_are_consumer_neutral():
@@ -92,7 +92,7 @@ def test_account_names_are_resolved_from_the_infra_namespace():
 
 def test_resolve_reads_the_infra_credential():
   raw = {'delegated_subdomain': 'services.example.com'}
-  with patch('bro.oops.cdk.config.credentials.get_json', return_value=raw) as get_json:
+  with patch('bro.oops.config.credentials.get_json', return_value=raw) as get_json:
     config = resolve()
 
   assert config.delegated_subdomain == 'services.example.com'

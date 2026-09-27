@@ -244,7 +244,7 @@ trigger_image_build() {
 
 # The CDK CLI's diff output is a text contract `cdk_diff` scans, so plan and deploy run one
 # pinned CLI rather than whatever `npx` resolves on the day. Keep it at or above the cloud
-# assembly schema of the `aws-cdk-lib` pin in `oops/pyproject.toml`.
+# assembly schema of the `aws-cdk-lib` pin in `oops/cdk/pyproject.toml`.
 _CDK_CLI_PACKAGE='aws-cdk@2.1139.0'
 
 cdk_deploy() {

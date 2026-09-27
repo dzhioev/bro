@@ -57,8 +57,8 @@ do not build one of those parent trees wholesale.
 
 Every member builds through uv's own backend, which ships each declared module root whole, so a `[tool.uv.build-backend] wheel-exclude` glob is what keeps a file out of the wheel
 — the test modules (`*_test.py`, `*_test_helper.py`, `conftest.py`) among them, held against the built wheels by `dev/bro/dev/packaging_policy.py` and enforced repository-wide by its sibling `packaging_policy_test.py`.
-That module derives the distributions from the root's `members`, so a project shipped from outside the workspace is named to it explicitly;
-`local/` holds the name, next to the gate's other checkout-specific facts
+That module derives the distributions from the root's `members`, so the projects shipped from outside the workspace are named to it explicitly;
+`local/` holds their names, next to the gate's other checkout-specific facts
 — the modules a wheel must carry among them.
 
 ## Commit metadata

@@ -21,6 +21,7 @@ core imports none of them, and `bro-ride` spawns rather than imports `bro-native
 | `dev/` | `bro-dev` | the `bro.dev` and `bro.workflow` packages, `poll-pr` and `pr-state`, and the development personas | `dev/AGENTS.md` |
 | `ride/` | `bro-ride` | top-level `ride`, the managed-workspace runtime and both harness adapters | `ride/AGENTS.md` |
 | `oops/` | `bro-oops` | consumer-neutral deployment and operations machinery | `oops/AGENTS.md` |
+| `oops/cdk/` | `bro-oops-cdk` | the AWS CDK stacks `bro-oops` deploys, and this repository's CDK app; deliberately **not** a member, it locks, syncs and tests in an environment of its own | `oops/cdk/AGENTS.md` |
 | `bench/` | `bro-bench` | the launcher-side benchmark credentials, registered worker type, and session commands | `bench/AGENTS.md` |
 | `webview/` | `bro-webview` | the registered browser worker type, owner command, image, and daemon | `webview/AGENTS.md` |
 | `local/` | `bro-local` | this checkout's own personas and policy scripts, kept out of every published wheel by riding the root's `dev` dependency group | `local/AGENTS.md` |
@@ -36,7 +37,7 @@ Reference docs for framework users live in `bro/reference/` and ship in the whee
 ## Development
 
 `./setup.sh` syncs the workspace and installs the repository hooks;
-it leaves `benchmark/.venv` alone, which is synced on demand, by the gate stage or by hand.
+it leaves the environments of the projects outside the workspace (`benchmark/.venv`, `oops/cdk/.venv`) alone, which are synced on demand, by their gate stages or by hand.
 Run the repository's console scripts and its own shell scripts through `uv run -q <command>` (`uv run -q ./format.sh`, `uv run -q run-tests --changed`) or `.venv/bin/<command>`;
 `-q` keeps uv's own sync report out of the command's output.
 A session that carries a `bro::banner` tool runs on a frozen runtime bundle whose `PATH` publishes these same command names;
@@ -49,7 +50,7 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
   The stages, the narrowing, and the opt-in and host-only stages: `local/AGENTS.md`, "Test gate"
 - `sync-scripts --project <directory>` — regenerate a distribution's `[project.scripts]` and committed `_entrypoints.py`, then `uv sync --all-packages --all-groups --all-extras`
 - `uv build --package <distribution>` — build a member's wheel;
-  `benchmark/`'s is `uv build --directory benchmark`, since it is no member to name with `--package`
+  `benchmark/`'s and `oops/cdk/`'s are `uv build --directory <directory>`, since neither is a member to name with `--package`
 
 The development style policy is `dev/bro/prompts/dev/style.md`, tool-served to dev sessions as `dev-style-source::read`;
 shell scripts follow `dev/bro/dev/shell_policy.py` (prelude sourcing, shebang), enforced repository-wide by `local/bro/local/shell_policy_test.py`,

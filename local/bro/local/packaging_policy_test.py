@@ -2,7 +2,7 @@ from pathlib import Path
 
 from bro.base.suite_environment import rebuild_environment
 from bro.dev.packaging_policy import assert_packaging_policy
-from bro.local.run_tests import BENCHMARK
+from bro.local.run_tests import PROJECTS
 
 _REBUILD_MODULE_PATH = rebuild_environment.__module__.replace('.', '/') + '.py'
 _WEBVIEW_MODULE_PATHS = (
@@ -16,6 +16,6 @@ _WEBVIEW_MODULE_PATHS = (
 def test_repository_packaging_policy():
   assert_packaging_policy(
     Path(__file__).resolve().parents[3],
-    siblings=(BENCHMARK,),
+    siblings=[project.directory for project in PROJECTS],
     required_modules=(_REBUILD_MODULE_PATH, *_WEBVIEW_MODULE_PATHS),
   )

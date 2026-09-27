@@ -2,7 +2,7 @@
 source "$(bro-shell-dir)/prelude.sh"
 
 REPO_ROOT="$HERE/../../.."
-CDK_DIRECTORY="$REPO_ROOT/oops/deployment"
+CDK_DIRECTORY="$REPO_ROOT/oops/cdk/deployment"
 source "$(bro-oops-dir)/deploy_lib.sh"
 source "$HERE/deployment_config.sh"
 load_trails_deployment_config

@@ -26,8 +26,8 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
 - `run-tests` — the test gate, a sequence of named stages:
   `lint` (console-script drift, deptry, ruff's lint and format checks, ShellCheck over the shell scripts),
   `types` (pyright),
-  `unit` (the pytest roster, run in parallel, then a second run in one process for the modules `run_tests.py` holds out of the pool),
-  `benchmark` (the benchmark project's own: it syncs `benchmark/.venv` and runs pyright and pytest inside it, since the workspace venv cannot import `bro.benchmark` at all),
+  `unit` (the pytest roster, run in parallel),
+  `benchmark` and `cdk` (one per project outside the workspace, `benchmark/` and `oops/cdk/`: each syncs the project's own `.venv` and runs pyright and pytest inside it, since the workspace venv cannot import the project at all),
   the opt-in `llm` (the live-LLM behavior probes, run only when `--only` names the stage, since they spend real tokens),
   and the host-only `docker` (the container entrypoint's postconditions and the launch path from a cold image tag),
   `broker_e2e` (the live broker-supervised container launch seam, `ride/ride/e2e_test.py`),
@@ -47,7 +47,7 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
   `unit` drops the test modules the change cannot reach
   — a roster module with no source module of its own holds a repository-wide invariant and runs whatever changed;
   `lint` runs `sync-scripts` and deptry only for the distributions the change lands in, leaving both ruff checks and ShellCheck repo-wide;
-  `benchmark` is skipped whole unless the change reaches something that project imports or edits any project's metadata;
+  a project's stage is skipped whole unless the change reaches something that project imports or edits any project's metadata;
   and `types` is never narrowed, since pyright loads the dependency closure whatever file list it is given, so a shorter list hides errors instead of skipping work.
   Each stage names the scope it ran, and a stage the narrowing drops reads `skipped` in the closing verdict rather than going missing from it.
   A stage that passes over a clean worktree is noted on the tree `HEAD` names,
@@ -62,6 +62,6 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
   the benchmark project holds its graded trials out of directory collection the same way
 
 The root `conftest.py` owns test isolation:
-it rebuilds the suite's environment through `bro.base.suite_environment.rebuild_environment` (`bro/base/AGENTS.md`), as does `benchmark/`'s own conftest,
+it rebuilds the suite's environment through `bro.base.suite_environment.rebuild_environment` (`bro/base/AGENTS.md`), as does each conftest at the root of a project outside the workspace,
 so a run launched from inside a managed session inherits none of it and resolves only what a test installed itself;
 `local/bro/local/environment_policy_test.py` holds every pytest root and each part of the sweep to it repository-wide.

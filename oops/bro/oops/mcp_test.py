@@ -48,7 +48,7 @@ def test_repository_registry_declares_trails_server_from_infra_config(monkeypatc
     platform=SimpleNamespace(cluster_name='example-cluster'),
     trails=SimpleNamespace(service_name='example-service'),
   )
-  monkeypatch.setattr('bro.oops.cdk.config.resolve', lambda: config)
+  monkeypatch.setattr('bro.oops.config.resolve', lambda: config)
 
   target = deploy_targets.registry.targets()['trails-server']
 

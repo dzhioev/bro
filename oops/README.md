@@ -42,35 +42,19 @@ a fixed header value or an SSM parameter-backed header can be selected without t
 This repository's registry is `oops.deploy_targets:registry`.
 Its `trails-server` target resolves region, cluster, service, and URL from the `infra` credential and runs `oops/trails/server/deploy.sh`, `oops/trails/server/plan.sh`, and `oops/trails/server/verify.sh`.
 
-## CDK constructs
+## Deployment configuration
 
-`bro.oops.cdk.config.resolve()` reads the `infra` credential and applies the package's consumer-neutral defaults.
+`bro.oops.config.resolve()` reads the `infra` credential and applies the package's consumer-neutral defaults.
 Deployment-specific overrides live under the credential's `oops` object;
 other top-level fields remain available to the consuming repository.
 The typed configuration carries the region, delegated subdomain, platform stack and cluster names, ECR stack definitions, image-build source and names, and trails resource names.
 Unknown fields inside `oops` fail resolution so a misspelled live-resource name cannot silently select a default.
 
-`PlatformStack` creates the shared VPC, ECS cluster, ALB, HTTPS listener, wildcard certificate, and Route 53 lookup.
-One app deploys it;
-every app carrying a service on that platform finds it instead, so a service and its platform need not live in the same CDK app.
-Tests can pass `HostedZoneReference` to synthesize without an AWS context lookup.
-
-Service stacks take the platform's VPC, cluster, hosted zone, load balancer, and HTTPS listener as a `PlatformHandles` value.
-`PlatformHandles.lookup()` finds the VPC and ALB by their CloudFormation stack tag, the ECS cluster by its configured name, the hosted zone by domain, and the HTTPS listener by port.
-A service assertion test can inject `PlatformStack.handles` or a `PlatformHandles` fixture instead of resolving those lookups.
-
-`RepositoryStack` creates one configured ECR repository while preserving its configured construct id.
-`ImageBuildStack` creates the configured CodeBuild project, grants it pushes to every configured repository, and reads the checkout-relative buildspec and image-build script paths from the same credential.
-A private source needs a GitHub identity:
-`connection_name` has the stack create a connection, `connection_arn` points the project at one that already exists, and neither leaves a public source unauthenticated.
-The project names its connection through the source's `Auth` block rather than through a CodeBuild source credential, which is a single default per account and region and so cannot serve two image-build stacks.
+The CDK stacks built from this configuration ship separately, as `bro-oops-cdk` (`cdk/README.md`).
 
 ## Trails service
 
-`bro.oops.cdk.trails.TrailsServerStack` owns the retained DynamoDB tables and S3 spillover bucket, the store-config parameter, the Fargate service, ALB rule, and DNS record.
-Its DynamoDB table, key, and index declarations come from `bro.trails.server.dynamo`.
-
-The repository app is `deployment/app.py`, and `trails/server/deploy.sh` deploys its stacks in dependency order.
+The repository app is `cdk/deployment/app.py`, which synthesizes in the `bro-oops-cdk` project's own environment, and `trails/server/deploy.sh` deploys its stacks in dependency order.
 A managed session running the trails rollout scripts needs `infra` granted at launch.
 `trails/server/bootstrap.sh` creates the runtime token parameter, `run_local.sh` serves a local store, `verify_image.sh` smoke-tests the image, and `verify.sh` monitors the ECS rollout before probing health.
 `plan.sh` diffs the stack roster `deployment_config.sh` declares

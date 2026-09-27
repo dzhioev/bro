@@ -7,18 +7,11 @@ import pytest
 
 _PROJECT = Path(__file__).resolve().parents[2]
 _REQUIRED_FILES = {
-  'bro/oops/__init__.py',
   'bro/oops/_entrypoints.py',
   'bro/oops/assets.py',
+  'bro/oops/config.py',
   'bro/oops/mcp.py',
   'bro/oops/targets.py',
-  'bro/oops/cdk/__init__.py',
-  'bro/oops/cdk/app.py',
-  'bro/oops/cdk/config.py',
-  'bro/oops/cdk/ecr.py',
-  'bro/oops/cdk/image_build.py',
-  'bro/oops/cdk/platform.py',
-  'bro/oops/cdk/trails.py',
   'bro/oops/infra/buildspec.yml',
   'bro/oops/infra/deploy_lib.sh',
   'bro/oops/infra/monitor_ecs.sh',

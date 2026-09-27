@@ -2,7 +2,7 @@ from bro.oops.targets import Command, DeployTarget, ECSService, HTTPProbe, Targe
 
 
 def _targets() -> dict[str, DeployTarget]:
-  from bro.oops.cdk.config import resolve
+  from bro.oops.config import resolve
 
   config = resolve()
   return {

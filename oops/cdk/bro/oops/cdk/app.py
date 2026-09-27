@@ -3,10 +3,10 @@ from typing import Optional
 
 import aws_cdk as cdk
 
-from bro.oops.cdk.config import InfrastructureConfig
 from bro.oops.cdk.ecr import RepositoryStack
 from bro.oops.cdk.image_build import ImageBuildStack
 from bro.oops.cdk.trails import TrailsServerStack
+from bro.oops.config import InfrastructureConfig
 
 
 @dataclass(frozen=True)
