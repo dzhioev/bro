@@ -175,7 +175,9 @@ an omitted trail id selects the bro's newest recorded call.
 ## Boxed launches and Docker daemons
 
 `ride` can launch from a physical host or from inside another container.
-Before the first boxed root or child in a ride, it starts a throwaway runtime-image container and reads a nonce through a bind of the runtime root.
+When a bundle's container runtime needs materializing, it starts a throwaway runtime-image container and reads a nonce through a bind of the runtime root;
+a marker beside the bundle then carries that verdict against the instance label the volume it was reached for was created with, so later launches against that same volume repeat neither the preflight nor the materialization.
+Another daemon's volume of the same name, or a replacement created in its place, carries a different label and sends the launch back through both.
 A daemon that cannot see the launcher's filesystem fails this preflight with its endpoint and the runtime-root path.
 The nonce covers every boxed bind because each bind source must resolve under the runtime root;
 a launch refuses an outside source rather than sending an unverifiable path to the daemon.

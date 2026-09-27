@@ -32,6 +32,7 @@ from pathlib import Path
 from ride.runtime_bundle import resolve_runtime_bundle
 from ride.workspace.docker import (
   _ensure_runtime_image,
+  _preflight_daemon,
   build_project_image,
   runtime_image_tag,
 )
@@ -41,7 +42,7 @@ with resolve_runtime_bundle() as bundle:
   runtime = runtime_image_tag(bundle.python_version)
   _ensure_runtime_image(runtime, bundle.python_version)
   build_project_image(tag, runtime, project)
-  bundle.materialize_container(runtime)
+  bundle.materialize_container(runtime, preflight=lambda: _preflight_daemon(runtime))
   output.write_text(bundle.hash)
   output.with_name('runtime-tag').write_text(runtime)
 PY

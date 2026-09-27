@@ -100,7 +100,6 @@ class ContainerRuntimeResolver:
     self._bundle = bundle
     self._repo = None if repo is None else as_repository(repo)
     self._resolved = resolved
-    self._preflighted = resolved is not None
     self._lock = threading.Lock()
 
   @classmethod
@@ -117,13 +116,12 @@ class ContainerRuntimeResolver:
         raise RuntimeError('container runtime resolver has neither a bundle nor a resolved runtime')
       runtime_image = runtime_image_tag(self._bundle.python_version)
       _ensure_runtime_image(runtime_image, self._bundle.python_version)
-      if not self._preflighted:
-        _preflight_daemon(runtime_image)
-        self._preflighted = True
       image = (
         runtime_image if self._repo is None else _ensure_project_image(runtime_image, self._repo)
       )
-      self._bundle.materialize_container(runtime_image)
+      self._bundle.materialize_container(
+        runtime_image, preflight=lambda: _preflight_daemon(runtime_image)
+      )
       self._resolved = ContainerRuntime(
         image=image,
         bundle_hash=self._bundle.hash,

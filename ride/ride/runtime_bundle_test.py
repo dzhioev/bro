@@ -546,41 +546,75 @@ class _FakeMaterializerProcess:
     return None
 
 
-def test_container_materialization_populates_a_named_volume_once(monkeypatch, tmp_path, caplog):
-  root = tmp_path / ('a' * 64)
-  (root / 'wheels').mkdir(parents=True)
-  bundle = runtime_bundle.RuntimeBundle(root, '3.12')
+def _fake_container_docker(monkeypatch, held: list[str | None]):
+  """the docker surface `materialize_container` drives, over one daemon holding
+  at most one volume.
+
+  `held[-1]` is that volume's instance label, or None for no volume. Labels
+  follow the daemon: fixed at creation, so creating over an existing volume
+  leaves the label it already carries.
+  """
   calls: list[list[str]] = []
   launches: list[list[str]] = []
   materialized: list[tuple] = []
+  complete: set[str] = set()
 
   def run(command, *args, **kwargs):
     del args, kwargs
     calls.append(command)
     if command[:5] == ['docker', 'exec', 'container-id', 'test', '-f']:
-      return subprocess.CompletedProcess(command, 0 if len(materialized) > 0 else 1, '', '')
+      return subprocess.CompletedProcess(command, 0 if held[-1] in complete else 1, '', '')
+    if command[:3] == ['docker', 'volume', 'inspect']:
+      if held[-1] is None:
+        return subprocess.CompletedProcess(command, 1, '', 'no such volume')
+      return subprocess.CompletedProcess(command, 0, held[-1], '')
+    if command[:3] == ['docker', 'volume', 'rm']:
+      held.append(None)
+      return subprocess.CompletedProcess(command, 0, '', '')
+    if command[:3] == ['docker', 'volume', 'create']:
+      if held[-1] is None:
+        label = command[command.index('--label') + 1]
+        held.append(label.split('=', 1)[1])
+      return subprocess.CompletedProcess(command, 0, '', '')
     return subprocess.CompletedProcess(command, 0, '', '')
 
   def launch(command, **kwargs):
     launches.append(command)
     return _FakeMaterializerProcess(command, **kwargs)
 
+  def materialize(*args, **kwargs):
+    materialized.append((args, kwargs))
+    instance = held[-1]
+    assert instance is not None, 'materialization ran without a volume to run against'
+    complete.add(instance)
+
   monkeypatch.setattr(runtime_bundle.subprocess, 'run', run)
   monkeypatch.setattr(runtime_bundle.subprocess, 'Popen', launch)
-  monkeypatch.setattr(
-    runtime_bundle,
-    '_materialize',
-    lambda *args, **kwargs: materialized.append((args, kwargs)),
-  )
+  monkeypatch.setattr(runtime_bundle, '_materialize', materialize)
+  return calls, launches, materialized
+
+
+def test_container_materialization_and_preflight_settle_once_per_bundle(
+  monkeypatch, tmp_path, caplog
+):
+  root = tmp_path / ('a' * 64)
+  (root / 'wheels').mkdir(parents=True)
+  bundle = runtime_bundle.RuntimeBundle(root, '3.12')
+  preflights: list[str] = []
+  calls, launches, materialized = _fake_container_docker(monkeypatch, [None])
 
   with caplog.at_level('INFO'):
-    bundle.materialize_container('runtime-image')
-    bundle.materialize_container('runtime-image')
+    bundle.materialize_container('runtime-image', preflight=lambda: preflights.append('ran'))
+    bundle.materialize_container('runtime-image', preflight=lambda: preflights.append('ran'))
 
   assert len(materialized) == 1
+  assert preflights == ['ran']
   assert caplog.text.count(f'materializing runtime bundle {bundle.hash[:12]}') == 1
-  assert calls[0][:3] == ['docker', 'volume', 'create']
-  assert len(launches) == 2
+  created = next(command for command in calls if command[:3] == ['docker', 'volume', 'create'])
+  assert (root / '.container-ready').read_text() == created[created.index('--label') + 1].split(
+    '=', 1
+  )[1]
+  assert len(launches) == 1
   create = launches[0]
   assert create[:4] == ['docker', 'run', '--rm', '--interactive']
   assert f'ride-materializer={bundle.hash}' in create
@@ -588,7 +622,26 @@ def test_container_materialization_populates_a_named_volume_once(monkeypatch, tm
   assert f'{root}:/bundle:ro' in create
   assert materialized[0][0] == (Path('/bundle'), Path('/var/ride/runtime'), '/usr/local/bin/python')
   assert any(command[-2:] == ['touch', '/var/ride/runtime/.complete'] for command in calls)
-  assert calls[-1] == ['docker', 'rm', '-f', 'container-id']
+  assert ['docker', 'rm', '-f', 'container-id'] in calls
+  assert calls[-1][:3] == ['docker', 'volume', 'inspect']
+
+
+def test_a_volume_the_marker_was_not_written_for_is_materialized_again(monkeypatch, tmp_path):
+  """the marker is one file across Docker contexts while a volume belongs to one
+  daemon, so a same-named volume the marker was not written for must not pass for
+  the materialized one.
+  """
+  root = tmp_path / ('a' * 64)
+  (root / 'wheels').mkdir(parents=True)
+  bundle = runtime_bundle.RuntimeBundle(root, '3.12')
+  held: list[str | None] = [None]
+  _calls, _launches, materialized = _fake_container_docker(monkeypatch, held)
+
+  bundle.materialize_container('runtime-image', preflight=lambda: None)
+  held.append('a-different-volume-of-the-same-name')
+  bundle.materialize_container('runtime-image', preflight=lambda: None)
+
+  assert len(materialized) == 2
 
 
 def test_session_command_declaration_must_match_the_distributions_console_script(

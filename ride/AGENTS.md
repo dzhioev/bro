@@ -98,7 +98,10 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - Every attached workspace tree is an independent clone on its recorded branch.
   A detached unboxed workspace may instead record one existing external tree outside the runtime root;
   one workspace records that path at a time, resume requires it to remain present, and workspace removal never removes it.
-- A ride preflights its Docker daemon once before its first boxed launch, by reading a nonce through a bind of the runtime root.
+- A ride preflights its Docker daemon by reading a nonce through a bind of the runtime root, whenever a bundle's container runtime is not yet settled;
+  one marker beside the bundle carries that verdict and the volume's materialization together, against the instance label the volume they were reached for was created with.
+  The marker is one file across every Docker context while a volume belongs to one daemon and a name outlives whatever held it, so that label is what sends another daemon's namesake, or a replacement created in its place, back through both.
+  A volume found unlabelled is one this runtime never created, and is replaced rather than trusted.
   Every boxed bind source must resolve under that root.
 - A launch's credential instances follow its attachment identity and selected bro on every surface that resolves them
   — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Session permissions and credentials")
