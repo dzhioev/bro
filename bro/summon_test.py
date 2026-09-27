@@ -22,6 +22,7 @@ def test_help_points_at_quest_and_the_manual_launch(capsys):
   assert 'with `quest`' in output
   assert 'ride solo --summoned <token>' in output
   assert '--detach' in output
+  assert '--pass' in output
 
 
 def test_bare_summon_forwards_the_request(monkeypatch):
@@ -29,7 +30,7 @@ def test_bare_summon_forwards_the_request(monkeypatch):
   monkeypatch.setattr(
     summon,
     'relay_summon',
-    lambda target, prompt, *, timeout, into, hold, grant, revoke, share, llm, harness, party, isolation, talk, manual: (
+    lambda target, prompt, *, timeout, into, hold, grant, revoke, passes, share, llm, harness, party, isolation, talk, manual: (
       calls.append((target, prompt, timeout, into)) or 0
     ),
   )
@@ -89,6 +90,22 @@ async def test_placement_flags_reach_the_request(monkeypatch, flag, field, value
     assert await task == 0
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('flags', [[], ['--join'], ['--manual']])
+async def test_pass_flag_reaches_spawned_joined_and_manual_requests(monkeypatch, flags):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(
+        summon.main,
+        ['summon', '--detach', *flags, '--pass', 'github+work', 'dev', 'work'],
+      )
+    )
+    channel, request = await next_message(server)
+    assert request.args['pass'] == ['github+work']
+    await server.transport.send(channel, brotocol.mark(message_id(request), 'accepted'))
+    assert await task == 0
+
+
 def test_join_refuses_into_before_opening_a_channel(monkeypatch, caplog):
   monkeypatch.delenv(BROKER_CHANNEL, raising=False)
 
@@ -142,8 +159,11 @@ async def test_manual_detached_summon_returns_launch_token_after_acceptance(
 @pytest.mark.asyncio
 async def test_blocking_summon_relays_the_answer(monkeypatch, capsys, caplog):
   async with running_server(monkeypatch) as server:
-    task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'dev', 'work']))
+    task = asyncio.create_task(
+      asyncio.to_thread(summon.main, ['summon', '--pass', 'github+work', 'dev', 'work'])
+    )
     channel, request = await next_message(server)
+    assert request.args['pass'] == ['github+work']
     await server.transport.send(channel, brotocol.mark(message_id(request), 'accepted'))
     await server.transport.send(channel, brotocol.mark(message_id(request), 'trail', trail_id='T1'))
     await reply(server, channel, request, outcome='ok', value='answer')

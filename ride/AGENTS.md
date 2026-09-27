@@ -129,7 +129,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   clean exit removes its records, failure or kill keeps them, and an unboxed member's private credential root is always removed while a boxed member's store dies with the party's container.
   The party ends with its first session, so that session's teardown kills any members still running, whichever spawner runs them.
 - The framework seeds `:launch.bro` and `:launch.bro.party.boxed`.
-  Credential grants and revokes apply idempotently through project, host, launch, and resume layers, while summon requests refuse them.
+  Credential grants and revokes apply idempotently through project, host, launch, and resume layers, while summon requests refuse them and use `pass` for an authorized instance.
+  Each pass becomes the child's credential grant and pick, including in its resume record.
   Launch grants and revokes additionally fold through summon requests;
   a request may grant only authority its owner holds, and every bro launch exports the resulting section through `RIDE_LAUNCH` while launch control enforces its peer-facts copy.
   The complete document and fold are `bro/reference/ride.md`, "Session permissions and credentials".

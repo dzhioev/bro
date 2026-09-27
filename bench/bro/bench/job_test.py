@@ -56,6 +56,7 @@ def _request(tree: Path, args: dict, *, depth: int = 0) -> LaunchRequest:
     owner=_owner(tree, depth=depth),
     requested_talk=frozenset(),
     timeout=job.DEFAULT_TIMEOUT,
+    passes=(),
     share=(),
     manual=False,
   )

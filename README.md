@@ -137,7 +137,7 @@ bro run triage 'is #128 a duplicate of #97?'
 
 On its own authority `triage` may consult the analyst and nobody else;
 the helpers that change code are granted at launch.
-Lend it both for this session:
+Grant it both for this session:
 
 ```console
 dive-in --grant @fixer --grant @reviewer 'triage the queue'
@@ -387,15 +387,16 @@ Inside the container, the session finds:
 - its own `~/.claude` and git configuration, constructed by the launch.
   No host `~/.claude.json`, credentials file, `~/.gitconfig`, or Docker socket.
 
-Lend it one more credential for one launch:
+Give it one more credential for one launch:
 
 ```console
 dive-in --grant aws 'why did the deploy fail?'
 ```
 
 Delegation is bounded separately.
-A summon request may add only launch authority its parent holds, while the child still starts from its own declaration and host configuration;
-its credentials likewise come from that child-specific configuration.
+A summon request may add only launch authority its parent holds, while the child still starts from its own declaration and host configuration.
+Its credentials likewise come from that child-specific configuration unless the parent passes a credential instance covered by a pass right for the mission type;
+the child then holds that kind at the passed instance for the launch.
 The host authorizes every request and journals it, and the child's trail records who summoned it.
 
 Afterwards, every run on every harness is a recorded trail:

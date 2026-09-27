@@ -75,6 +75,10 @@ class TestReportScope:
           'projects': {
             str(tmp_path): {
               'creds': ['brog+missing', 'openai+work'],
+              'grant': [
+                ':launch.bro.pass.github+reviewer',
+                ':launch.bro.pass.brog+missing',
+              ],
             }
           }
         }
@@ -97,6 +101,8 @@ class TestReportScope:
     assert rows['openai'].endswith('MISSING')
     assert 'trails (unpicked)' in rows['trails']
     assert rows['trails'].endswith('SKIPPED')
+    assert rows[':launch.bro.pass.github+reviewer'].endswith('PRESENT')
+    assert rows[':launch.bro.pass.brog+missing'].endswith('MISSING')
 
   def test_a_malformed_project_config_is_reported_without_escaping(self, capsys, tmp_path):
     (tmp_path / 'pyproject.toml').write_text('[tool.bro]\nharness = "unknown"\n')

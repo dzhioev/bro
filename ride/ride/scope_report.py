@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import credentials, host_config
-from bro.base.scope import launch_names
+from bro.base.scope import launch_names, launch_pass_name
 from bro.workspace.project import project_config
 from ride.harness import get_harness
 from ride.repository import Repository, as_repository
@@ -39,21 +39,23 @@ def report_scope(repo: Optional[Repository | Path], bro: Optional[str], harness:
     binding = bind_launch_credentials(attachment, bro_name)
     llm_spec = launch_llm_spec(driver, attachment, bro_name, None)
     scoped = scoped_secrets(bro_name, recipe, attachment=attachment, llm_spec=llm_spec)
+    registry = credentials.default_registry()
+    selection = {kind: instance for kind, instance in scoped.selection.items() if kind in registry}
+    store = credentials.Store(registry, credentials.STORE_DIR, selection)
     launch = effective_launch(
       bro_name,
       configured_scope_layers(attachment, bro_name, attachment_repository=repo),
       grant=(),
       revoke=(),
+      credential_store=None,
     )
-    registry = credentials.default_registry()
-    selection = {kind: instance for kind, instance in scoped.selection.items() if kind in registry}
-    store = credentials.Store(registry, credentials.STORE_DIR, selection)
   except (LaunchScopeError, ValueError) as error:
     print(f'cannot compute the scope: {error}')
     return 1
   print(f'repository: {repo.identity if repo is not None else "(detached)"}')
   print(f'bro:        {bro_name} ({recipe.name})')
   print(f'launch:     {", ".join(launch_names(launch)) or "(none)"}')
+  _print_pass_rights(launch, store)
   _print_tiers(
     [
       ('required', sorted(scoped.required)),
@@ -63,6 +65,22 @@ def report_scope(repo: Optional[Repository | Path], bro: Optional[str], harness:
     store,
   )
   return 0
+
+
+def _print_pass_rights(launch: object, store: credentials.Store) -> None:
+  rights = [name for name in launch_names(launch) if launch_pass_name(name) is not None]
+  if not rights:
+    return
+  present = store.instance_names()
+  width = max(len(right) for right in rights)
+  print('pass:')
+  for right in rights:
+    credential_name = launch_pass_name(right)
+    assert credential_name is not None
+    kind, instance = credentials.parse_name(credential_name)
+    assert instance is not None
+    state = 'PRESENT' if credentials.storage_name(kind, instance) in present else 'MISSING'
+    print(f'  {right:<{width}}  {state}')
 
 
 def _print_tiers(

@@ -36,6 +36,21 @@ class MismatchedType(AlphaType):
   name = 'other'
 
 
+class PassType(AlphaType):
+  name = 'pass-type'
+  launch_schema = MappingProxyType({'pass': worker_types.LAUNCH_PASS})
+
+
+class MisnamedPassType(AlphaType):
+  name = 'misnamed-pass'
+  launch_schema = MappingProxyType({'credentials': worker_types.LAUNCH_PASS})
+
+
+class WrongPassType(AlphaType):
+  name = 'wrong-pass'
+  launch_schema = MappingProxyType({'pass': worker_types.LaunchSet(lambda: {'value'})})
+
+
 class NotAType:
   pass
 
@@ -86,6 +101,35 @@ def test_entry_point_must_load_a_worker_type(monkeypatch):
     worker_types.installed_type('alpha')
 
 
+def test_pass_schema_is_reserved_for_the_pass_field(monkeypatch):
+  monkeypatch.setattr(
+    worker_types,
+    '_entry_points',
+    lambda: (_entry('misnamed-pass', f'{__name__}:MisnamedPassType'),),
+  )
+  with pytest.raises(ValueError, match="pass schema under field 'credentials'"):
+    worker_types.installed_type('misnamed-pass')
+
+
+def test_pass_field_requires_the_framework_pass_schema(monkeypatch):
+  monkeypatch.setattr(
+    worker_types,
+    '_entry_points',
+    lambda: (_entry('wrong-pass', f'{__name__}:WrongPassType'),),
+  )
+  with pytest.raises(ValueError, match='field "pass" must use the pass schema'):
+    worker_types.installed_type('wrong-pass')
+
+
+def test_pass_schema_loads_under_the_pass_field(monkeypatch):
+  monkeypatch.setattr(
+    worker_types,
+    '_entry_points',
+    lambda: (_entry('pass-type', f'{__name__}:PassType'),),
+  )
+  assert worker_types.installed_type('pass-type') is PassType
+
+
 @pytest.mark.parametrize('name', ['', 'Alpha', 'alpha.beta', '-alpha', 'alpha_2'])
 def test_worker_type_name_grammar(name):
   with pytest.raises(ValueError, match='expected'):
@@ -107,10 +151,24 @@ def test_unknown_type_lists_installed_names_without_loading_them(monkeypatch):
 
 def test_launch_grammar_accepts_keys_members_flags_and_bros():
   assert split_scope_overrides(
-    [':launch.alpha', ':launch.alpha.choice.two', ':launch.alpha.enabled', '@reviewer']
+    [
+      ':launch.alpha',
+      ':launch.alpha.choice.two',
+      ':launch.alpha.enabled',
+      ':launch.alpha.pass.claude_code+team',
+      ':launch.alpha.pass.github+',
+      '@reviewer',
+    ]
   ) == (
     [],
-    [':launch.alpha', ':launch.alpha.choice.two', ':launch.alpha.enabled', '@reviewer'],
+    [
+      ':launch.alpha',
+      ':launch.alpha.choice.two',
+      ':launch.alpha.enabled',
+      ':launch.alpha.pass.claude_code+team',
+      ':launch.alpha.pass.github+',
+      '@reviewer',
+    ],
   )
 
 
@@ -120,6 +178,12 @@ def test_launch_grammar_accepts_keys_members_flags_and_bros():
 )
 def test_launch_grammar_rejects_malformed_names(value):
   with pytest.raises(ValueError):
+    split_scope_overrides([value])
+
+
+@pytest.mark.parametrize('value', [':launch.alpha.pass.github', ':launch.alpha.pass'])
+def test_pass_right_requires_an_instance(value):
+  with pytest.raises(ValueError, match=r'github\+<instance>.*github\+|kind\+<instance>'):
     split_scope_overrides([value])
 
 

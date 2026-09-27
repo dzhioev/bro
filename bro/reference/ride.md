@@ -374,16 +374,18 @@ It maps each permitted worker type to the payload that type interprets:
 
 ```json
 {
-  "bro": {"bros": ["reviewer"], "party": ["boxed", "join"]},
+  "bro": {"bros": ["reviewer"], "party": ["boxed", "join"], "pass": ["github+project"]},
   "webview": {"vnc": true},
   "benchmark": {}
 }
 ```
 
 Holding a type key such as `webview` permits launches of that type.
-Each installed `WorkerType` declares its payload fields as either a set of validated strings or a flag.
+Each installed `WorkerType` declares its payload fields as a set of validated strings, a flag, or the framework-owned `pass` field.
 A set folds by union on grant and difference on revoke;
 a flag is set by grant and cleared by revoke.
+A `pass` field is a set of registered credential instances the owner may pass to missions of that type.
+It grants no credential use by itself.
 The host checks the type key before dispatch, then the worker type checks its payload and request.
 An unknown type, field, set member, or malformed payload fails the launch that names it.
 
@@ -392,16 +394,19 @@ Launch authority is written in `grant` and `revoke` lists as independent names:
 - `:launch.<type>` holds the type key;
 - `:launch.<type>.<field>.<value>` holds one set member;
 - `:launch.<type>.<flag>` holds one flag;
+- `:launch.<type>.pass.<kind>+<instance>` holds one pass right, with the empty instance written `<kind>+`;
 - `@<bro>` holds one member of `launch.bro.bros`.
 
-Every colon-path segment matches `[a-z][a-z0-9-]*`.
+Every colon-path segment except a pass right's credential name matches `[a-z][a-z0-9-]*`.
+The credential name uses the `creds` list grammar and is always the fourth segment.
+A bare kind such as `:launch.bro.pass.github` is malformed because it names no instance.
 Bare `:launch` is malformed, `:launch.bro.bros.…` is refused in favor of `@<bro>`, and `:creds.…` is refused because credential kinds and instances retain their own spelling.
 A field name does not imply its type key, and revoking a key leaves its fields held but inactive until the key is granted again.
 The retired `:bro.party.start.boxed`, `:bro.party.start.unboxed`, `:bro.party.join`, and `:webview.vnc` names fail with their `:launch.…` replacements.
 
 The shipped schemas are:
 
-- `bro`: key `:launch.bro`; `bros`, the installed bro names spelled `@<bro>`; and `party`, whose members are `boxed`, `unboxed`, and `join`;
+- `bro`: key `:launch.bro`; `bros`, the installed bro names spelled `@<bro>`; `party`, whose members are `boxed`, `unboxed`, and `join`; and `pass`, the credential instances it may pass;
 - `webview`: key `:launch.webview` and the `:launch.webview.vnc` flag, needed only for a human-visible noVNC endpoint;
 - `benchmark`: key `:launch.benchmark` and no fields, so its empty payload is the complete authority.
 
@@ -409,13 +414,17 @@ Every bro launch starts with the framework seed `:launch.bro` and `:launch.bro.p
 The repository's `[tool.bro]` layer follows, then the host config's `defaults`, matching project URL, matching project path, URL-bro, and path-bro layers, then launch flags.
 Each layer folds name by name:
 the last word wins, repeated grants and revokes are harmless, revoking an absent name is harmless, and one layer naming the same value in both lists fails.
-An unknown name fails only when a launch whose applicable layers name it is computed, so one shared host config may contain worker types another installation does not install.
+An unknown name fails only when a launch whose applicable layers name it is computed, so one shared host config may contain worker types or credential kinds another installation does not install.
+The repository's `[tool.bro]` layer refuses pass rights in `grant` and `revoke` because a repository does not choose host credential instances.
+Every pass right under a held type key must name a registered kind and an instance present in the store the launch reads.
+A missing instance fails the launch and names the configuration layer, launch flags, or summon request that last granted the right.
 A resume's `--grant` or `--revoke` replaces the recorded override for that name before the same fold and may harmlessly restate its state.
 
-A summon computes the child's authority from the child's own seed, persona, repository, and host layers, then applies the request's launch grants and revokes last.
-It never inherits the summoner's document.
-A request may grant only a key, member, or flag the summoner holds under a held type key;
-revokes are not bounded, and both are idempotent.
+A summon first requires every request grant to be a key, member, flag, or pass right the summoner holds under a held type key.
+Only then does it compute the child's authority from the child's own seed, persona, repository, and host layers before applying the request's launch grants and revokes last.
+This order does not reveal whether an instance named by an unheld pass right is registered or present.
+The child never inherits the summoner's document.
+Revokes are not bounded, and both grants and revokes are idempotent.
 The `bro` worker additionally requires the target in the summoner's `bros` set and the selected placement in its `party` set.
 An unmarked summon starts boxed when `boxed` is held, otherwise unboxed when `unboxed` is held, and never becomes a join implicitly.
 A manual summon fixes the child's `launch` section when the host accepts the request, then refuses `@` and `:launch` overrides on the user's launch.
@@ -424,9 +433,9 @@ The summon-depth limit is a separate host bound over the launch tree.
 The broker keeps each peer's `launch` section and checks every request against it.
 `RIDE_LAUNCH` carries the same section into a bro session as compact JSON;
 `bro.summon.launch()` reads it, and `bro.summon.may_summon()` plus the `#may_summon` rendering fact read `launch.bro.bros` from it.
-The banner keeps the human-facing `may_summon` row for those bro members and renders the remaining held fields, flags, and empty-payload keys on its `permits` row in grant spelling.
-`ride scope` renders the prospective `launch` section the same way, including its `@<bro>` members.
-Credentials appear only through `ride scope`, never on the banner.
+The banner keeps the human-facing `may_summon` row for those bro members and renders the remaining held fields, flags, pass rights, and empty-payload keys on its `permits` row in grant spelling.
+`ride scope` renders the prospective `launch` section the same way, including its `@<bro>` members, then lists every pass right as `PRESENT` or `MISSING` without failing on a missing instance.
+Credential use and material appear only through `ride scope` and the session store, never on the banner.
 The environment copy is informational:
 the broker's peer facts remain the enforcing copy.
 
@@ -434,8 +443,9 @@ the broker's peer facts remain the enforcing copy.
 `creds.use` maps each registered credential kind to the non-empty set of stored instances that the session store holds;
 the empty instance is spelled `""` in that conceptual map and as the bare kind in storage.
 The launch derives it from the selected bro and harness's required and optional credential kinds after every credential grant and revoke, then adds every stored name reached transitively by a preserved `$cred` reference.
-A summon carries no credential overrides:
-its target computes credentials exactly as a root launch of that bro with no credential flags.
+A summon may pass credential instances covered by its owner's pass rights.
+Each pass becomes a credential grant and pick on the child, so the child holds that kind at the passed instance over its own project and host configuration.
+Without a pass, the target computes credentials exactly as a root launch of that bro with no credential flags.
 
 A credential store has this shape:
 
@@ -534,7 +544,7 @@ a detached launch reads no project file, so its summons use that default.
 `summon-depth` is an optional positive integer with no imposed ceiling, setting the deepest summon generation with the root at depth 0 and a default of 2.
 The host's `~/.bro.json` value overrides it for the launch, and detached launches use only that host value or the default because they read no project file.
 `grant` and `revoke` are optional lists in the permission document's unified grammar.
-A project may grant bare credential kinds, `@bro` targets, and `:launch.…` names;
+A project may grant bare credential kinds, `@bro` targets, and `:launch.…` names other than pass rights;
 it may not name a credential instance, because the repository does not choose host material.
 The full fold and validation rules are under "Session permissions and credentials".
 `image-repository` and `build-context-command` are optional.
@@ -891,11 +901,17 @@ The summon surfaces are wrappers over `launch {type: bro, …}`, the same reques
 The target runs as a one-shot, non-TTY session that either starts a party of its own or joins the summoner’s party.
 A *manual* summon instead has the user launch the child themselves either interactively or one-shot;
 see "Manual summon" below.
-The child's credentials come from its own bro, harness, model, and project/host configuration, as for a root launch with no credential flags.
-A request carrying a credential name in `grant` or `revoke` is refused and points to `projects.<identity>.bros.<bro>` in the host config.
+The child's credentials come from its own bro, harness, model, and project/host configuration, as for a root launch with no credential flags, plus any instances the request passes.
+A pass is spelled `--pass <kind>+<instance>` on the CLI and as a member of the service tool's `passes` list.
+Each pass must be covered by a `:launch.bro.pass.<kind>+<instance>` right the summoner holds, and a request may pass at most one instance of each kind.
+The child holds the passed kind at that instance even when its configuration revokes the kind or selects another instance;
+its install hook runs, and its resume record carries the resulting credential grant and pick.
+A joined member receives the pass in its own scoped store without changing the summoner's store, though a join's shared environment is not a security boundary between them.
+A request carrying a credential name in `grant` or `revoke` is refused and points to `--pass` or `projects.<identity>.bros.<bro>` in the host config.
 The child's `launch` section comes from its own seed, persona, and project/host layers under the request's `@bro` and `:launch.…` overrides, never by inheriting the summoner's section.
 The root launch's `--env` additions are the one input every started child and joined member does inherit, as facts about the environment the party runs in.
-An explicit request grant is bounded by the corresponding launch key, member, or flag the summoner holds.
+An explicit request grant is first bounded by the corresponding launch key, member, flag, or pass right the summoner holds.
+The child's section is folded only after that bound, and any pass right left under a held key must name a present instance.
 It runs under the harness the request names, or the launch's `[tool.bro] summon-harness` when it names none.
 Both harnesses run `do-ride solo …`:
 `bro` spawns the target's own LLM process there, while `claude` starts a one-shot managed Claude Code session of the target persona.
@@ -939,7 +955,7 @@ underneath it are two client surfaces over the same request, each split into the
 - `summon <target> <prompt>` and `quest <verb> <quest-id>`, for Bash-capable sessions.
   `summon` is blocking by default (quest id + started trail id on stderr, answer on stdout, non-zero exit with the reason on failure);
   `--start` / `--join` / `--boxed` / `--unboxed` select placement.
-  The forwarded fields are `--timeout <s>` / `--into <ref>` / `--hold <level>` / `--grant <name>` / `--revoke <name>` / `--share <ref>` / `--talk <right>` / `--harness <name>` plus the LLM flags;
+  The forwarded fields are `--timeout <s>` / `--into <ref>` / `--hold <level>` / `--grant <name>` / `--revoke <name>` / `--pass <kind>+<instance>` / `--share <ref>` / `--talk <right>` / `--harness <name>` plus the LLM flags;
   an omitted hold leaves the child's unattended default.
   `--share` hands the child read access to an artifact ref — see "Sharing artifacts between peers".
   Grant/revoke shape the child's onward authority with `@bro` and `:launch.…` values only.
@@ -977,6 +993,7 @@ underneath it are two client surfaces over the same request, each split into the
   `rewind show <trail-id>` peeks mid-run.
   Contract details in `bro/summon.py`, `bro/mission.py`, and `bro/quest.py`.
 - the bro service tools (`bro::summon`, then `bro::quest_check` / `quest_history` / `quest_say` / `quest_ask` / `quest_list` / `quest_cancel` on the `quest_id` it returns), for bro LLM processes, and mounted beside the CLIs in a claude session.
+  The summon tool's `passes` list is the CLI's repeatable `--pass` field.
   On the bro harness, `summon` returns the accepted state after host acceptance and has no `detach` parameter;
   answers, questions, replies, refusals, and terminal states arrive through `quest watch`.
   `quest_say` sends and returns, `quest_ask` mints a question id whose reply arrives through the watch;
@@ -999,7 +1016,8 @@ The recorder stamps the child trail's `summoned_by` from the summoner attributio
 ### Manual summon — a child the user launches
 
 A `manual: true` summon (`summon --manual`, or the `summon` tool's `manual` parameter, which never blocks for the answer) inverts the launch.
-It takes the same `talk` / `--talk` widening as a spawned child, so the interactive session can exchange only the roles fixed at registration.
+It takes the same `talk` / `--talk` widening and `passes` / `--pass` credentials as a spawned child.
+The interactive session can exchange only the roles fixed at registration.
 The summoner needs either `:launch.bro.party.boxed` or `:launch.bro.party.unboxed`, but the request refuses `party` and `isolation` because the user's launch owns the actual placement.
 The host spawns nothing and instead registers an *expected external peer*
 — a provisioned broker channel awaiting a child someone else starts
@@ -1018,8 +1036,11 @@ Its own nested summons therefore route through the summoner's control with per-p
 The request fixes what the summoner authorized
 — the target bro, the prompt (delivered as the session's first message), the root session's repository attachment, the base (the request's `into` ref, or the summoner's workspace HEAD read at launch, like a spawned child's at its spawn),
 the child's resolved `launch` section and quest talk, and the party's `--env` additions.
-The pending record carries no credential seeds.
-The launch's own `--cred` and credential `--grant`/`--revoke` layer shapes its material, while `@bro` and `:launch.…` overrides are refused because the control enforces the section it resolved at request time.
+The pending record carries the request's passes.
+They form the manual child's initial credential grants and picks;
+the launch's own `--cred` and credential `--grant`/`--revoke` merge over them through the resume flag rules, so a pick replaces the passed instance and a revoke drops both the passed kind and its pick.
+The merged flags enter the child's resume record.
+`@bro` and `:launch.…` overrides are refused because the control enforces the section it resolved at request time.
 `--env` is refused as well:
 the control stamps the party's additions on every summon the child makes, so the child carries exactly those.
 Launch-owned request fields (`timeout`/`hold`/`llm`/`harness`/`party`/`isolation`) are refused at the request:
@@ -1065,8 +1086,9 @@ a malformed name or a request grant beyond the summoner's section is denied.
 Summons chain transitively wherever the child personas and configuration seed them.
 A request never copies its owner's section wholesale, and any authority it adds is explicit and bounded by the owner's held names.
 The child's own seed and applicable configuration are independent, so they may deliberately give it launch authority its owner does not hold.
-Credential names in a request's grant or revoke list are denied at the request boundary with the target bro's host-config entry as the remedy.
-The lowering computes the child's scope from that bro, the requested harness and model, and the applicable configuration without launch credential flags.
+Credential names in a request's grant or revoke list are denied at the request boundary;
+the remedy is an authorized pass or the target bro's host-config entry.
+The lowering computes the child's scope from that bro, the requested harness and model, and the applicable configuration under the credential grant and pick flags derived from its passes.
 The summoner's credential scope therefore never enters peer facts or authorization.
 Resolving the harness and LLM pair on the loop still settles the recipe:
 one the named harness cannot run is denied at the request rather than failing the spawn.

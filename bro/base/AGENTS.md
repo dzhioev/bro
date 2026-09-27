@@ -42,7 +42,8 @@ run those with `--help` for flags.
   `install_hooks(registry, kinds, store, directory, env)` applies only the named kinds and resolves hook values through that store.
   Schemas live in `bro/setup/AGENTS.md`.
 - `configs.py` — the exclusive `BRO_STORE` directory (default `~/.bro`), the `~/.bro.json` host config beside it, the default summon depth and harness, and the installed bro distribution version shared by credential consumers and trail records.
-- `scope.py` — the unified credential / `@bro` / `:launch.…` grant grammar, retired-name checks, idempotent scope layers, and rendering a `launch` section back to grant spelling.
+- `scope.py` — the unified credential / `@bro` / `:launch.…` grant grammar, including credential-instance pass rights, retired-name checks, project-layer refusal of pass rights, and idempotent scope layers;
+  it also renders a `launch` section back to grant spelling.
 - `host_config.py` — the host's launch policy (`~/.bro.json`):
   `project_selection(attachment)` merges `defaults` and the projects an `Attachment`'s identities name,
   `launch_selection(attachment, bro)` adds their per-bro selections and ordered scope layers,

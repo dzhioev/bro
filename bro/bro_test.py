@@ -1493,6 +1493,7 @@ class TestSummonTool:
       return set(tool.parameters['properties'])
 
     assert 'detach' not in properties(native['summon'])
+    assert 'passes' in properties(native['summon'])
     assert properties(native['quest_check']) == {'quest_id'}
     assert properties(native['quest_history']) == {'quest_id'}
     assert properties(native['quest_say']) == {'quest_id', 'text', 'reply_to'}
@@ -1519,13 +1520,14 @@ class TestSummonTool:
     monkeypatch.setattr(summon_module, 'summon_detached', accepted)
     tool = await _find_tool(EchoBro(), 'summon', run=StubRun(tool_step={'step_id': 9, 'index': 2}))
 
-    assert await tool.call({'target': 'dev', 'prompt': 'work'}) == {
+    assert await tool.call({'target': 'dev', 'prompt': 'work', 'passes': ['github+work']}) == {
       'state': 'accepted',
       'quest_id': 'REQ-1',
     }
     assert calls[0][0:2] == ('dev', 'work')
     assert calls[0][2]['step_id'] == 9
     assert calls[0][2]['index'] == 2
+    assert calls[0][2]['passes'] == ['github+work']
 
   @pytest.mark.asyncio
   async def test_native_quest_ask_asks_without_waiting(self, monkeypatch):
@@ -1638,6 +1640,7 @@ class TestSummonTool:
       hold=None,
       grant=None,
       revoke=None,
+      passes=None,
       share=None,
       llm=None,
       harness=None,
@@ -1752,6 +1755,7 @@ class TestSummonTool:
       hold=None,
       grant=None,
       revoke=None,
+      passes=None,
       share=None,
       llm=None,
       harness=None,
@@ -1863,6 +1867,7 @@ class TestSummonTool:
       hold=None,
       grant=None,
       revoke=None,
+      passes=None,
       share=None,
       llm=None,
       harness=None,
@@ -2063,6 +2068,7 @@ class TestSummonTool:
       hold=None,
       grant=None,
       revoke=None,
+      passes=None,
       share=None,
       llm=None,
       harness=None,

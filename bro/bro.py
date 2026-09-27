@@ -277,7 +277,8 @@ _SUMMON_DESCRIPTION = (
   'summon rather than switching the harness). its scope is shaped by '
   'the optional `grant` / `revoke` lists — entries are '
   f'`@bro`, `:launch.<type>`, or payload names ({summon.party_launch_choices()} for bro placement). '
-  'a credential name is refused and belongs in the host config for the target bro. '
+  'a credential name is refused; use the optional `passes` list to make the child hold '
+  'a credential instance covered by your pass rights, or configure the kind for the target bro. '
   'you can grant only launch names your own section covers; revokes are unrestricted, '
   'and restating a grant or revoke is harmless. the '
   'optional `share` list names artifact refs (from `artifact mint`) to hand the '
@@ -439,6 +440,7 @@ async def _run_summon_request(
   hold: Optional[str],
   grant: Optional[list[str]],
   revoke: Optional[list[str]],
+  passes: Optional[list[str]],
   share: Optional[list[str]],
   llm: Optional[str],
   harness: Optional[str],
@@ -476,6 +478,7 @@ async def _run_summon_request(
       into=into,
       grant=grant,
       revoke=revoke,
+      passes=passes,
       talk=talk,
       step_id=step_id,
       index=index,
@@ -495,6 +498,7 @@ async def _run_summon_request(
       hold=hold,
       grant=grant,
       revoke=revoke,
+      passes=passes,
       share=share,
       llm=llm,
       harness=harness,
@@ -517,6 +521,7 @@ async def _run_summon_request(
       hold=hold,
       grant=grant,
       revoke=revoke,
+      passes=passes,
       share=share,
       llm=llm,
       harness=harness,
@@ -553,6 +558,7 @@ def _claude_summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> ll
     hold: Optional[str] = None,
     grant: Optional[list[str]] = None,
     revoke: Optional[list[str]] = None,
+    passes: Optional[list[str]] = None,
     share: Optional[list[str]] = None,
     llm: Optional[str] = None,
     harness: Optional[str] = None,
@@ -570,6 +576,7 @@ def _claude_summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> ll
       hold=hold,
       grant=grant,
       revoke=revoke,
+      passes=passes,
       share=share,
       llm=llm,
       harness=harness,
@@ -599,6 +606,7 @@ def _summon_tool(
     hold: Optional[str] = None,
     grant: Optional[list[str]] = None,
     revoke: Optional[list[str]] = None,
+    passes: Optional[list[str]] = None,
     share: Optional[list[str]] = None,
     llm: Optional[str] = None,
     harness: Optional[str] = None,
@@ -616,6 +624,7 @@ def _summon_tool(
       hold=hold,
       grant=grant,
       revoke=revoke,
+      passes=passes,
       share=share,
       llm=llm,
       harness=harness,

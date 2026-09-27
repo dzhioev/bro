@@ -343,6 +343,8 @@ class TestCredentialHydrationRoutes:
       'aws+project': 'aws-project',
       'brog+bro': 'brog-bro',
       'harbor+launch': 'harbor-launch',
+      'github+flag': 'github-flag',
+      'trails+host': 'trails-host',
     }.items():
       write(name, value)
     (store / credentials.STORE_FILE).write_text(
@@ -370,7 +372,7 @@ class TestCredentialHydrationRoutes:
               'bros': {
                 'hydration-test': {
                   'creds': ['brog+bro'],
-                  'grant': ['brog'],
+                  'grant': ['brog', ':launch.bro.pass.trails+host'],
                 }
               },
             }
@@ -425,12 +427,25 @@ class TestCredentialHydrationRoutes:
     return SimpleNamespace(material=material, captures=captures, launch=launch)
 
   def test_root_launch_folds_every_layer_and_hydrates_by_selected_name(self, route):
-    assert route.launch('--cred', 'harbor+launch', '--grant', 'github', '--revoke', 'openai') == 0
+    assert (
+      route.launch(
+        '--cred',
+        'harbor+launch',
+        '--grant',
+        'github',
+        '--grant',
+        ':launch.bro.pass.github+flag',
+        '--revoke',
+        'openai',
+      )
+      == 0
+    )
 
     spec, launch_scope = route.captures[-1]
     assert spec.cred == ['harbor+launch']
     assert launch_scope.scoped.required == {'github', 'aws', 'brog', 'harbor'}
     assert launch_scope.scoped.optional == {'trails'}
+    assert launch_scope.launch['bro']['pass'] == frozenset({'github+flag', 'trails+host'})
     assert launch_scope.store['creds/github+project.cred'] == b'github-project'
     assert launch_scope.store['creds/aws+project.cred'] == b'aws-project'
     assert launch_scope.store['creds/brog+bro.cred'] == b'brog-bro'
@@ -449,6 +464,20 @@ class TestCredentialHydrationRoutes:
 
     assert route.captures == []
     assert "secret 'harbor+absent' not found" in caplog.text
+
+  def test_root_launch_fails_for_an_absent_pass_instance(self, route, caplog):
+    assert route.launch('--grant', ':launch.bro.pass.github+absent') == 1
+
+    assert route.captures == []
+    assert 'github+absent' in caplog.text
+    assert 'launch flags' in caplog.text
+
+  def test_root_launch_pass_right_requires_an_instance(self, route, caplog):
+    assert route.launch('--grant', ':launch.bro.pass.github') == 1
+
+    assert route.captures == []
+    assert 'github+<instance>' in caplog.text
+    assert 'github+' in caplog.text
 
   def test_root_launch_fails_when_a_present_name_cannot_load(self, route, caplog):
     path = route.material / f'harbor+broken{credentials.MATERIAL_SUFFIX}'
@@ -473,6 +502,8 @@ class TestCredentialHydrationRoutes:
           'aws',
           '--grant',
           'brog',
+          '--grant',
+          ':launch.bro.pass.github+resume',
           'hydration-route',
         ]
       )
@@ -483,8 +514,52 @@ class TestCredentialHydrationRoutes:
     assert spec.cred == ['harbor+launch', 'github+resume']
     assert spec.revoke == ['aws']
     assert launch_scope.scoped.required == {'github', 'brog', 'harbor'}
+    assert launch_scope.launch['bro']['pass'] == frozenset({'github+resume', 'trails+host'})
     assert launch_scope.store['creds/github+resume.cred'] == b'github-resume'
     assert 'creds/aws+project.cred' not in launch_scope.store
+
+  def test_summoned_child_pass_flags_resume_as_a_root_launch(self, route):
+    assert (
+      route.launch(
+        '--cred',
+        'harbor+launch',
+        '--cred',
+        'github+flag',
+        '--grant',
+        'github',
+      )
+      == 0
+    )
+    route.captures.clear()
+
+    assert ride_cli.main(['ride', 'resume', 'hydration-route']) == 0
+
+    spec, launch_scope = route.captures[-1]
+    assert spec.cred == ['harbor+launch', 'github+flag']
+    assert spec.grant == ['github']
+    assert launch_scope.store['creds/github+flag.cred'] == b'github-flag'
+    assert launch_scope.store.kinds == {'github', 'aws', 'brog', 'harbor'}
+
+  def test_resume_fails_for_an_absent_pass_instance(self, route, caplog):
+    assert route.launch('--cred', 'harbor+launch') == 0
+    route.captures.clear()
+
+    assert (
+      ride_cli.main(
+        [
+          'ride',
+          'resume',
+          '--grant',
+          ':launch.bro.pass.github+absent',
+          'hydration-route',
+        ]
+      )
+      == 1
+    )
+
+    assert route.captures == []
+    assert 'github+absent' in caplog.text
+    assert 'launch flags' in caplog.text
 
 
 class TestAlong:
@@ -695,6 +770,7 @@ class TestSummonedLaunch:
         'launch': {'bro': {'bros': ['bro'], 'party': ['boxed']}},
         'grant': ['@bro'],
         'revoke': [':launch.bro.party.join'],
+        'pass': ['github+passed'],
         'summoner': {'trail_id': 'T1'},
         'repo': None,
         'into': None,
@@ -708,7 +784,8 @@ class TestSummonedLaunch:
       assert ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', 'dev']) == 0
     spec = start.call_args.args[0]
     assert spec.prompt == 'work this out with the user'
-    assert spec.grant == ['@bro']
+    assert spec.cred == ['github+passed']
+    assert spec.grant == ['github', '@bro']
     assert spec.revoke == [':launch.bro.party.join']
     assert spec.runtime_bundle == '/runtime'
     assert start.call_args.kwargs['summoned'] == pending
@@ -721,7 +798,15 @@ class TestSummonedLaunch:
   def test_user_credential_overrides_layer_on_the_records(self, pending):
     with patch('ride.cli.start_session', return_value=0) as start:
       ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--grant', 'github', 'dev'])
-    assert start.call_args.args[0].grant == ['@bro', 'github']
+    assert start.call_args.args[0].grant == ['github', '@bro']
+
+  def test_user_credential_revoke_drops_the_passed_kind_and_pick(self, pending):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--revoke', 'github', 'dev'])
+    spec = start.call_args.args[0]
+    assert spec.cred == []
+    assert spec.grant == ['@bro']
+    assert spec.revoke == ['github', ':launch.bro.party.join']
 
   def test_the_partys_env_is_the_manual_childs_own(self, pending):
     with patch('ride.cli.start_session', return_value=0) as start:

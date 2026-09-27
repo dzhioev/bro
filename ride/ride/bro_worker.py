@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, Optional, Protocol, cast
 
-from bro.base import configs, log
+from bro.base import configs, credentials, log
 from bro.base.scope import split_scope_overrides
 from bro.quest import BRO
 from bro.summon import (
@@ -28,6 +28,7 @@ from bro.summon import (
   summoned_child_env,
 )
 from bro.worker_types import (
+  LAUNCH_PASS,
   Expect,
   Launch,
   LaunchDenied,
@@ -190,6 +191,7 @@ class SummonLaunchSpec:
   import, scoped-set computation, and any base-ref resolution are blocking work
   the broker loop should not carry.
 
+  `passes` become the child's credential picks and grants.
   `grant`/`revoke` are the request's authority values for the recorded session spec.
   The control already resolved them into the child's own launch section and a request
   naming no `harness` into the control's summon harness.
@@ -212,6 +214,7 @@ class SummonLaunchSpec:
   hold: Optional[str] = None
   grant: tuple[str, ...] = ()
   revoke: tuple[str, ...] = ()
+  passes: tuple[str, ...] = ()
   share: tuple[str, ...] = ()
   llm: Optional[str] = None
   party: Literal['start', 'join'] = 'start'
@@ -229,6 +232,16 @@ class SummonLaunchSpec:
 
 def _workspace_name(channel: str) -> str:
   return f'broker-{channel}'
+
+
+def _pass_scope_overrides(passes: Sequence[str]) -> tuple[list[str], list[str]]:
+  credential_grants: list[str] = []
+  for name in passes:
+    kind, instance = credentials.parse_name(name)
+    if instance is None:
+      raise ValueError(f'passed credential {name!r} names no instance')
+    credential_grants.append(kind)
+  return list(passes), credential_grants
 
 
 def _child_session_spec(
@@ -252,6 +265,7 @@ def _child_session_spec(
     raise ValueError('summoned session isolation is unresolved')
   repo = None if launch.repo is None else as_repository(launch.repo).identity
   llm = bind_launch_llm(repo, launch.target, launch.llm)
+  pass_picks, pass_grants = _pass_scope_overrides(launch.passes)
   return SessionSpec(
     name=workspace_name,
     repo=repo,
@@ -263,8 +277,8 @@ def _child_session_spec(
     hold=launch.hold
     if launch.hold is not None
     else default_hold(solo=True, isolation=resolved_isolation),
-    cred=[],
-    grant=list(launch.grant),
+    cred=pass_picks,
+    grant=[*pass_grants, *launch.grant],
     revoke=list(launch.revoke),
     llm=llm,
     resolved_llm=harness.resolve_llm(llm, launch.target).dump(),
@@ -296,6 +310,8 @@ def _child_launch_scope(
     attachment=None if repository is None else repository.identity,
     attachment_repository=repository,
     cred=spec.cred,
+    grant=spec.grant,
+    revoke=spec.revoke,
     llm_spec=spec.llm_spec,
   )
   auth_error = harness.preflight_auth(spec, scoped)
@@ -420,6 +436,8 @@ def _joined_ride_command(launch: SummonLaunchSpec) -> str:
     parts.extend(['--grant', value])
   for value in launch.revoke:
     parts.extend(['--revoke', value])
+  for value in launch.passes:
+    parts.extend(['--pass', value])
   for value in launch.share:
     parts.extend(['--share', value])
   if launch.llm is not None:
@@ -714,6 +732,7 @@ class BroType(WorkerType):
     {
       'bros': LaunchSet(_known_bros),
       'party': LaunchSet(lambda: PARTY_CHOICES),
+      'pass': LAUNCH_PASS,
     }
   )
   default_timeout = DEFAULT_TIMEOUT
@@ -770,7 +789,13 @@ class BroType(WorkerType):
         names = ', '.join(requested_credentials)
         raise LaunchDenied(
           f'a summon request cannot grant or revoke credential kind(s): {names}; '
-          f'configure them for the child in projects.<identity>.bros.{target}'
+          f'pass an instance when the owner holds its pass right, or configure the kind for '
+          f'the child in projects.<identity>.bros.{target}'
+        )
+      beyond = launch_covers(request.owner.launch, grant_launch)
+      if beyond:
+        raise LaunchDenied(
+          'cannot grant launch permission(s) the summoner does not hold: ' + ', '.join(beyond)
         )
       harness = get_harness(args.get('harness') or self.host.summon_harness)
       launch_llm_spec(
@@ -780,16 +805,21 @@ class BroType(WorkerType):
         args.get('llm'),
       )
       layers = configured_scope_layers(self.host.workspace.metadata.repo, target)
-      child_launch = effective_launch(target, layers, grant=grant, revoke=revoke)
-      beyond = launch_covers(request.owner.launch, grant_launch)
+      credential_store = credentials.Store(
+        credentials.default_registry(), credentials.STORE_DIR, {}
+      )
+      child_launch = effective_launch(
+        target,
+        layers,
+        grant=grant,
+        revoke=revoke,
+        credential_store=credential_store,
+        grant_source='summon request',
+      )
     except LaunchDenied:
       raise
     except (RuntimeError, ValueError) as error:
       raise LaunchDenied(str(error)) from error
-    if beyond:
-      raise LaunchDenied(
-        'cannot grant launch permission(s) the summoner does not hold: ' + ', '.join(beyond)
-      )
     attribution = self.host.peers.attribution_for_mission(self.host.journal, request.owner.mission)
     summoned_by = self._summoned_by(attribution, args)
     facts = BroFacts(bro=target, placement=placement)
@@ -801,6 +831,7 @@ class BroType(WorkerType):
           'launch': dump_launch(child_launch),
           'grant': list(grant),
           'revoke': list(revoke),
+          'pass': list(request.passes),
           'summoner': summoned_by,
           'repo': self.host.workspace.metadata.repo,
           'into': args.get('into'),
@@ -824,6 +855,7 @@ class BroType(WorkerType):
         hold=args.get('hold'),
         grant=tuple(grant),
         revoke=tuple(revoke),
+        passes=request.passes,
         share=request.share,
         llm=args.get('llm'),
         party=placement.party,
@@ -914,9 +946,13 @@ class PendingBro:
   launch_scope: Launch
   grant: tuple[str, ...]
   revoke: tuple[str, ...]
+  passes: tuple[str, ...]
   summoner: dict[str, Any] | None
   repo: str | None
   into: str | None
+
+  def credential_scope_overrides(self) -> tuple[list[str], list[str]]:
+    return _pass_scope_overrides(self.passes)
 
   @property
   def token(self) -> str:
@@ -952,6 +988,7 @@ def pending_bro(launch: Any) -> PendingBro:
     'launch',
     'grant',
     'revoke',
+    'pass',
     'summoner',
     'repo',
     'into',
@@ -961,10 +998,16 @@ def pending_bro(launch: Any) -> PendingBro:
   for key in ('target', 'prompt'):
     if not isinstance(data[key], str) or data[key] == '':
       raise ValueError(f'pending bro launch carries no usable {key}')
-  for key in ('grant', 'revoke'):
+  for key in ('grant', 'revoke', 'pass'):
     value = data[key]
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
       raise ValueError(f'pending bro launch carries invalid {key}')
+  try:
+    pass_picks, _ = _pass_scope_overrides(data['pass'])
+  except ValueError as error:
+    raise ValueError(f'pending bro launch carries invalid pass: {error}') from error
+  if len({credentials.parse_name(name)[0] for name in pass_picks}) != len(pass_picks):
+    raise ValueError('pending bro launch carries more than one pass for a credential kind')
   credential_seeds = {
     *split_scope_overrides(data['grant'])[0],
     *split_scope_overrides(data['revoke'])[0],
@@ -986,6 +1029,7 @@ def pending_bro(launch: Any) -> PendingBro:
     launch_scope,
     tuple(data['grant']),
     tuple(data['revoke']),
+    tuple(pass_picks),
     data['summoner'],
     data['repo'],
     data['into'],
