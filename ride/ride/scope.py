@@ -165,6 +165,12 @@ def _launch_name_schema(
       )
     if kind not in credential_kinds:
       raise ValueError(f'launch pass right {name!r} names unregistered credential kind {kind!r}')
+    if field_schema.kinds is not None and kind not in field_schema.kinds:
+      rendered = ', '.join(sorted(field_schema.kinds)) or '(none)'
+      raise ValueError(
+        f'worker type {worker_type!r} rejects {kind!r} for launch field {field_name!r}; '
+        f'choices: {rendered}'
+      )
     return worker_type, field_name, value
   choices = set(field_schema.values())
   if value not in choices:

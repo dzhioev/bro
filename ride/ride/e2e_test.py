@@ -2858,7 +2858,7 @@ def test_worker_container_runs_through_the_live_broker(
           },
           command=('container-e2e-worker',),
           env={'WORKER_MARKER': 'e2e'},
-          published_ports=(8080,),
+          published_ports={8080: None},
         )
       )
 
