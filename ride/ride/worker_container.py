@@ -10,11 +10,11 @@ import socket
 import subprocess
 import tarfile
 import threading
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from bro.base import log
+from bro.base import credentials, log
 from bro.broker.brotocol import Talk
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
@@ -45,6 +45,7 @@ class WorkerContainerLaunch(LaunchSpec):
   type: str
   spec: WorkerContainer
   owner_workspace: str
+  passes: tuple[str, ...]
   share: tuple[str, ...]
 
 
@@ -158,14 +159,24 @@ def ensure_worker_image(worker_type: str, runtime_image: str, spec: WorkerContai
   return tag
 
 
-def _published_ports(container_ports: tuple[int, ...]) -> tuple[tuple[int, int], ...]:
-  selected = []
+def _published_ports(
+  requested_ports: Mapping[int, int | None],
+) -> tuple[tuple[int, int], ...]:
+  selected: dict[int, tuple[int, int]] = {}
   with contextlib.ExitStack() as listeners:
-    for container_port in container_ports:
+    for container_port, requested_host_port in requested_ports.items():
+      if requested_host_port is None:
+        continue
+      listener = listeners.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+      listener.bind(('127.0.0.1', requested_host_port))
+      selected[container_port] = (listener.getsockname()[1], container_port)
+    for container_port, requested_host_port in requested_ports.items():
+      if requested_host_port is not None:
+        continue
       listener = listeners.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
       listener.bind(('127.0.0.1', 0))
-      selected.append((listener.getsockname()[1], container_port))
-  return tuple(selected)
+      selected[container_port] = (listener.getsockname()[1], container_port)
+  return tuple(selected[container_port] for container_port in requested_ports)
 
 
 def _lower_worker_container(
@@ -184,6 +195,10 @@ def _lower_worker_container(
   )
   with contextlib.ExitStack() as cleanup:
     cleanup.callback(workspace.remove)
+    source_store = credentials.Store(
+      credentials.default_registry(), credentials.STORE_DIR, selection={}
+    )
+    credential_store, hydrated_kinds = credentials.build_scoped_store(source_store, launch.passes)
     artifacts.view(workspace_name)
     artifacts.share(launch.share, to=workspace_name, by=launch.owner_workspace)
     published = ','.join(f'{container_port}={host_port}' for host_port, container_port in ports)
@@ -196,6 +211,8 @@ def _lower_worker_container(
         tty=False,
         image=image,
         runtime_bundle_hash=runtime.bundle_hash,
+        credential_store=credential_store,
+        hydrated_kinds=hydrated_kinds,
         extra_mounts=(view_mount(artifacts.ride, workspace_name, launch.spec.artifact_view),),
         published_ports=ports,
       )

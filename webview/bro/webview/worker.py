@@ -84,7 +84,7 @@ class WebviewType(WorkerType):
         files={'Dockerfile': _dockerfile()},
         command=('webview', 'serve'),
         env={'WEBVIEW_OPTIONS': options},
-        published_ports=(VNC_PORT,) if vnc else (),
+        published_ports={VNC_PORT: None} if vnc else {},
         artifact_view=ARTIFACT_VIEW,
       ),
       extension=facts,

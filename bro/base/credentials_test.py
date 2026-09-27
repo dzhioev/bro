@@ -8,6 +8,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
@@ -103,6 +104,17 @@ class TestRegistry:
     )
     with pytest.raises(ValueError, match="duplicates kind 'github'"):
       credentials.default_registry()
+
+  def test_literal_field_is_loaded_and_must_be_boolean(self):
+    entry = credentials.CredentialKind.from_dict(
+      'profile', {'description': 'Browser profile', 'literal': True}
+    )
+    assert entry.literal is True
+
+    with pytest.raises(ValueError, match='literal must be a boolean'):
+      credentials.CredentialKind.from_dict(
+        'profile', {'description': 'Browser profile', 'literal': 'yes'}
+      )
 
   def test_install_template_is_validated_at_registry_load(self):
     with pytest.raises(ValueError, match='unknown section'):
@@ -333,8 +345,49 @@ class TestReferences:
     with pytest.raises(ValueError, match='unknown keys'):
       _store(tmp_path, 'brog', 'github').get('brog')
 
+  def test_literal_kind_keeps_reference_nodes_while_another_kind_expands_them(self, tmp_path: Path):
+    material = '  {"nested": {"$cred": "github"}}\n'
+    _write_material(tmp_path, 'profile', material)
+    _write_material(tmp_path, 'brog', material)
+    _write_material(tmp_path, 'github', 'token')
+    registry = {
+      'profile': credentials.CredentialKind('profile', 'Browser profile', literal=True),
+      'brog': credentials.CredentialKind('brog', 'Task tracker'),
+      'github': credentials.CredentialKind('github', 'GitHub access'),
+    }
+    store = credentials.Store(registry, tmp_path, {})
+
+    assert store.get('profile') == material
+    assert json.loads(store.get('brog')) == {'nested': 'token'}
+
 
 class TestScopedStore:
+  def test_literal_material_hydrates_without_following_its_reference_nodes(self, tmp_path: Path):
+    material = '  {"nested": {"$cred": "missing"}}\n'
+    _write_material(tmp_path, 'profile', material)
+    registry = {
+      'profile': credentials.CredentialKind('profile', 'Browser profile', literal=True),
+      'missing': credentials.CredentialKind('missing', 'Missing target'),
+    }
+    store = credentials.Store(registry, tmp_path, {})
+
+    class NonCacheableLiteralSource:
+      CACHEABLE: ClassVar[bool] = False
+
+      def fetch(self, material_path):
+        return material
+
+      def materialize_scoped(self, material_path, value):
+        return None, value.encode()
+
+    store._sources['profile'] = NonCacheableLiteralSource()
+
+    files, kinds = credentials.build_scoped_store(store, {'profile'})
+
+    assert files['creds/profile.cred'] == material.encode()
+    assert set(files) == {'creds/profile.cred', 'creds.json'}
+    assert kinds == frozenset({'profile'})
+
   def test_hydrates_convention_paths_and_reports_declared_kinds(self, tmp_path: Path):
     _write_material(tmp_path, 'openai+benchmark', 'key')
     source = _store(tmp_path, 'openai', selection={'openai': 'benchmark'})

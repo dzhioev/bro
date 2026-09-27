@@ -50,7 +50,8 @@ Credentials live in one exclusive store:
 `BRO_STORE` when set, otherwise `~/.bro`.
 The repository carries only credential kinds and their behavior.
 A resolver reads the code registry assembled from `bro/base/registry.json` and installed `bro.credentials` entry points;
-each entry is `{description, install?}` and unknown fields fail with the valid storage locations named.
+each entry is `{description, install?, literal?}` and unknown fields fail with the valid storage locations named.
+A literal kind returns its material without expanding `$cred` reference nodes, and scoped-store hydration follows none of them.
 Dotfiles cannot add or override kinds.
 
 Material is convention-named:

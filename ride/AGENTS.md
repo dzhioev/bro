@@ -40,7 +40,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   joined members run in the summoner’s existing tree with member-scoped records and no resume.
 - `ride/launch_control.py` — common `launch` argument validation, owner attribution, worker-type dispatch, run lowering, launch audit, and manual-token lifecycle.
 - `ride/worker_container.py` — off-loop lowering of core `WorkerContainer` runs:
-  coordinated runtime-derived image builds and pruning, detached throwaway workspaces, artifact views, loopback port allocation and facts, and delegation to Docker supervision.
+  coordinated runtime-derived image builds and pruning, detached throwaway workspaces, passed-instance store hydration, artifact views, requested-or-available loopback port allocation and facts, and delegation to Docker supervision.
 - `ride/peer_facts.py` — the mission-keyed generic worker facts and peer directory for one broker root:
   peer resolution through the journal worker binding, workspace/member/type attribution, type-owned extensions, ancestry, and per-member current-trail attribution shared by launch, artifacts, and audit.
 - `ride/artifacts.py` — the ride's artifact store, the `artifact.mint`, `artifact.get`, and owner-authorized `artifact.share` kinds, and the broker's `JobOutput`:
@@ -133,6 +133,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   The party ends with its first session, so that session's teardown kills any members still running, whichever spawner runs them.
 - The framework seeds `:launch.bro` and `:launch.bro.party.boxed`.
   Credential grants and revokes apply idempotently through project, host, launch, and resume layers, while summon requests refuse them and use `pass` for an authorized instance.
+  A container run hydrates exactly those passed instances into its scoped store during off-loop lowering;
+  a missing instance fails before container creation and removes the throwaway workspace, while a job run refuses passes.
   Each pass becomes the child's credential grant and pick, including in its resume record.
   Launch grants and revokes additionally fold through summon requests;
   a request may grant only authority its owner holds, and every bro launch exports the resulting section through `RIDE_LAUNCH` while launch control enforces its peer-facts copy.

@@ -20,7 +20,7 @@ A JSON value may contain `{"$cred": "<name>"}` reference nodes, optionally with
 `"field": "<key>"`.
 A kind-spelled reference applies the same selection and an instance-spelled
 reference reads that stored instance directly.
-References are expanded before values reach consumers.
+References are expanded before values reach consumers unless their credential kind is literal.
 """
 
 from __future__ import annotations
@@ -317,7 +317,14 @@ def _source_from_dict(data: dict) -> Source:
 class CredentialKind:
   """Code-owned metadata for one credential kind."""
 
-  def __init__(self, name: str, description: str, *, install: Optional[dict] = None):
+  def __init__(
+    self,
+    name: str,
+    description: str,
+    *,
+    install: Optional[dict] = None,
+    literal: bool = False,
+  ):
     _require_kind(name)
     if (
       not isinstance(description, str) or description.strip() != description or '\n' in description
@@ -329,8 +336,13 @@ class CredentialKind:
       raise ValueError(
         f'credential kind {name!r}: install must be an object, got {type(install).__name__}'
       )
+    if not isinstance(literal, bool):
+      raise ValueError(
+        f'credential kind {name!r}: literal must be a boolean, got {type(literal).__name__}'
+      )
     self.name = name
     self.description = description
+    self.literal = literal
     self.install_template = install
     self.install = self.install_for(name)
 
@@ -345,16 +357,21 @@ class CredentialKind:
   def from_dict(cls, name: str, data: dict) -> CredentialKind:
     if not isinstance(data, dict):
       raise ValueError(f'credential registry entry {name!r} must be an object')
-    unknown = sorted(set(data) - {'description', 'install'})
+    unknown = sorted(set(data) - {'description', 'install', 'literal'})
     if len(unknown) > 0:
       raise ValueError(
         f'credential registry entry {name!r} carries retired or unknown fields {unknown}; '
-        f'entries may contain only description and install, source configuration belongs in '
+        f'entries may contain only description, install, and literal; source configuration belongs in '
         f'{STORE_FILE}, and material belongs in {MATERIAL_DIR}/<name>{MATERIAL_SUFFIX}'
       )
     if 'description' not in data:
       raise ValueError(f'credential registry entry {name!r} is missing required description')
-    return cls(name, data['description'], install=data.get('install'))
+    return cls(
+      name,
+      data['description'],
+      install=data.get('install'),
+      literal=data.get('literal', False),
+    )
 
 
 def _render_install(install: dict, name: str) -> dict:
@@ -546,7 +563,9 @@ class Store:
     raw = _fetch_source(source, self._material_path(storage_name), storage_name)
     if raw is None:
       return _Unresolved(storage_name)
-    expanded = self._expand_references(raw.strip(), (*chain, storage_name))
+    literal = self.registry[kind].literal
+    text = raw if literal else raw.strip()
+    expanded = (text, True) if literal else self._expand_references(text, (*chain, storage_name))
     if isinstance(expanded, _Unresolved):
       return expanded
     value, references_cacheable = expanded
@@ -904,9 +923,12 @@ def build_scoped_store(
       raw = _fetch_source(source, material_path, storage)
       if raw is None:
         raise ValueError(f'secret {storage!r} disappeared during hydration')
-      value = raw.strip()
-      for reference in sorted(_referenced_names(value)):
-        pending_references.append((storage, reference))
+      kind, _ = parse_name(storage)
+      literal = store.registry[kind].literal
+      value = raw if literal else raw.strip()
+      if not literal:
+        for reference in sorted(_referenced_names(value)):
+          pending_references.append((storage, reference))
     try:
       annotation, content = source.materialize_scoped(material_path, value)
     except ValueError:
