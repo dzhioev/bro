@@ -14,7 +14,7 @@ The canonical entry point for task-driven development work;
 `dive-in` seeds this spell as its first user message.
 
 parameters: {"task?": "ref of the existing task to work on", "new?": "seed text for a new task to create first"}
-version: 4.6.0
+version: 4.7.0
 ---
 
 {{iff #features contains brog}}
@@ -129,8 +129,8 @@ Make the change.
 For anything beyond a small, single-commit edit, **commit completed logical units as you go** rather than leaving the whole change uncommitted until [[run pr]]
 — the session can exhaust its output budget mid-implementation, and uncommitted work is then lost, while committed units survive on the branch as a recoverable checkpoint.
 Keep each checkpoint conventional (commit style from [[run pr]]'s steps 5-6);
-don't run the full suite per checkpoint
-— the one mandatory pass comes later (see step 6).
+don't run the gate per checkpoint
+— its one mandatory pass is [[run pr]]'s.
 
 Stop and ask if the approach turns out to need a different direction than the design you put to the user.
 
@@ -144,11 +144,11 @@ Implementing is where the recoverable checkpoints accumulate
 ## Step 6 — verify
 
 Run the repo's formatter (the repo's own docs name the command), then verify the change with the cheapest evidence that actually exercises it
-— a change-scoped gate selection where the repo offers one, otherwise the affected test files, a CLI smoke, a targeted spell.
+— the affected test files, a CLI smoke, a targeted spell.
 
-A full test-suite pass here is optional:
-[[run pr]] gates the final folded tree, and the pull request's CI runs the suite whole.
-Reach for the full suite early only when broad breakage is plausible
+Leave the repo's gate to [[run pr]]:
+it runs the gate once, on the folded tree that ships, and the pull request's CI runs the suite whole.
+Reach for the gate early only when broad breakage is plausible
 — a shared abstraction changed, a wide import surface moved.
 
 ## Step 7 — hand off

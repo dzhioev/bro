@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import contextlib
 import functools
+import hashlib
 import os
 import subprocess
 import sys
@@ -23,7 +24,7 @@ from bro.dev.affected_tests import (
 from bro.dev.packaging_policy import TEST_MODULE_SUFFIXES, distribution_roots
 from bro.dev.sharding import Shard, parse_shard
 from bro.dev.shell_policy import shell_files
-from bro.local import gate_display
+from bro.local import gate_display, green_trees
 
 __cli_name__ = 'run-tests'
 
@@ -302,6 +303,7 @@ PYTEST_FILES = [
   'webview/bro/webview/serve_test.py',
   'webview/bro/webview/cli_test.py',
   'local/bro/local/run_tests_test.py',
+  'local/bro/local/green_trees_test.py',
   'local/bro/local/gate_display_test.py',
   'local/bro/local/shell_policy_test.py',
   'local/bro/local/markdown_policy_test.py',
@@ -627,6 +629,15 @@ def llm_stage() -> None:
   run(*pytest_command(sys.executable), *LLM_PYTEST_FILES)
 
 
+# the work of a stage that runs everything it covers, which spans any narrowed share of it
+WHOLE = 'whole'
+
+
+def work_digest(members: Sequence[str]) -> str:
+  """a short name for a narrowed stage's share of its work."""
+  return hashlib.sha256('\n'.join(sorted(members)).encode()).hexdigest()[:16]
+
+
 @dataclass(frozen=True)
 class Stage:
   name: str
@@ -634,6 +645,7 @@ class Stage:
   scope: str
   host_only: bool = False
   opt_in: bool = False
+  work: str = WHOLE
 
 
 STAGES = [
@@ -666,16 +678,22 @@ STAGES = [
 def narrow(stage: Stage, selected: Selection) -> Stage:
   """the stage over the selection's share of its work."""
   if stage.name == 'lint':
+    directories = [distribution.directory for distribution in selected.distributions]
     return replace(
       stage,
       run=functools.partial(lint_stage, selected.distributions),
       scope=lint_scope(selected.distributions),
+      work=WHOLE if len(directories) == len(DISTRIBUTIONS) else work_digest(directories),
     )
   if stage.name == 'unit':
+    modules = [*selected.roster, *selected.single_process_roster]
     return replace(
       stage,
       run=functools.partial(unit_stage, selected.roster, selected.single_process_roster),
       scope=unit_scope(selected.roster, selected.single_process_roster),
+      work=WHOLE
+      if len(modules) == len(PYTEST_FILES) + len(SINGLE_PROCESS_PYTEST_FILES)
+      else work_digest(modules),
     )
   return stage
 
@@ -703,6 +721,11 @@ def main(argv: list[str]) -> Optional[int]:
     help='narrow the gate to the work the diff can reach',
   )
   parser.add_argument('--base', help=f'the ref --changed diffs against (default: {DEFAULT_BASE})')
+  parser.add_argument(
+    '--rerun',
+    action='store_true',
+    help='run a stage even where it already passed on this tree',
+  )
   parser.add_argument(
     '--shard',
     metavar='K/N',
@@ -743,12 +766,14 @@ def main(argv: list[str]) -> Optional[int]:
     dropped = selected.dropped
   if shard is not None:
     stages = [
-      replace(stage, run=functools.partial(broker_e2e_stage, shard))
+      replace(stage, run=functools.partial(broker_e2e_stage, shard), work=f'shard {shard}')
       if stage.name == 'broker_e2e'
       else stage
       for stage in stages
     ]
   in_container = Path('/.dockerenv').is_file()
+  tree = green_trees.clean_tree(DIR)
+  green = green_trees.passed(DIR, tree) if tree is not None and not args['rerun'] else frozenset()
   display = gate_display.choose(
     sys.stderr, color=should_color(args['color'], sys.stderr), verbose=log.verbose_enabled()
   )
@@ -776,6 +801,10 @@ def main(argv: list[str]) -> Optional[int]:
           parser.error(f'the {stage.name} stage drives the host docker daemon; run it on the host')
         display.skipped(stage.name, 'inside container; run on host')
         continue
+      if (stage.name, WHOLE) in green or (stage.name, stage.work) in green:
+        display.skipped(stage.name, 'passed on this tree already; --rerun runs it again')
+        verdicts.append((stage.name, 'ok'))
+        continue
       display.stage_started(stage.name, stage.scope)
       started = time.monotonic()
       try:
@@ -788,6 +817,9 @@ def main(argv: list[str]) -> Optional[int]:
         verdict = 'FAILED'
       display.stage_ended(verdict, time.monotonic() - started)
       verdicts.append((stage.name, verdict))
+      # a stage that rewrote the worktree passed on a tree it no longer names
+      if verdict == 'ok' and tree is not None and green_trees.clean_tree(DIR) == tree:
+        green_trees.record(DIR, tree, stage.name, stage.work)
 
   for name, failed_step, error in failures:
     display.failure(name, failed_step, error)

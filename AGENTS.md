@@ -44,7 +44,7 @@ activating the checkout's venv over it would shadow them with the code being edi
 The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for every member, and the test gate for all of them:
 
 - `./format.sh` — format and autofix the whole repository
-- `run-tests --changed` — the pre-push gate, narrowed to what the diff can reach;
+- `run-tests --changed --base origin/<base>` — the pre-push gate, narrowed to what the diff against the pull request's base can reach;
   the whole gate is the pull request's CI.
   The stages, the narrowing, and the opt-in and host-only stages: `local/AGENTS.md`, "Test gate"
 - `sync-scripts --project <directory>` — regenerate a distribution's `[project.scripts]` and committed `_entrypoints.py`, then `uv sync --all-packages --all-groups --all-extras`
