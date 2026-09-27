@@ -55,6 +55,10 @@ RUN gosu ride bash -ec '\
       cp -r "$CLAUDE_CONFIG_DIR/plugins/." /opt/claude-plugins-seed/; \
       rm -rf "$CLAUDE_CONFIG_DIR/plugins" "$CLAUDE_CONFIG_DIR/.claude.json" "$CLAUDE_CONFIG_DIR/backups"'
 
+# The base image ships no bytecode, and a session's container is thrown away, so
+# whatever its interpreters compile at run time dies with it.
+RUN python -m compileall -q -j0 "$(python -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"
+
 WORKDIR /workspace
 ARG IMAGE_RIDE_IN_CONTAINER
 ARG IMAGE_PATH
