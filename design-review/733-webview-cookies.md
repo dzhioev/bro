@@ -218,9 +218,9 @@ The order:
 5. A root started from the upgraded checkout with `--grant :launch.webview --grant :launch.webview.pass.cookies+<instance>` verifies;
    its launch fails unless step 4 left the instance in the host store.
 
-Rolling back takes every `cookies` pass right out of every launch command, ends every root started from the upgraded checkout, and then downgrades the checkout before any root starts from it,
-since the older version takes no image locks;
-stored profiles stay, unread by the older version.
+Rolling back first takes every `cookies` pass right out of every launch command and out of `~/.bro.json`, and any `cookies` pick out of the host store's `creds.json` `defaults`, since an older installation fails on either.
+It then ends every root started from the upgraded checkout and downgrades the checkout before any root starts from it, since the older version takes no image locks.
+Stored profiles and any source annotation of one stay, since an older installation skips both.
 
 ### Rejected alternatives
 
