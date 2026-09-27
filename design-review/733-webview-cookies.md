@@ -12,7 +12,7 @@ Then reviewed against the code and the pinned Playwright MCP 0.0.82 (playwright-
 
 Terms:
 
-- a *profile* is one stored `cookies+<instance>`: a Playwright storage state, the JSON object `{"cookies": [...], "origins": [{"origin", "localStorage", "indexedDB"?}]}`;
+- a *profile* is one stored `cookies+<instance>`: a Playwright storage state stamped with its profile version (rule 13), the JSON object `{"profile_version": N, "cookies": [...], "origins": [{"origin", "localStorage", "indexedDB"?}]}`;
 - *setup* is `webview setup <instance>`, the host command that writes a profile;
 - *capture* is `webview capture`, the container-side verb setup runs;
 - a *foreground run* is a worker type's container run by a host command outside any ride;
@@ -24,7 +24,7 @@ Rules:
    `bro-webview` registers the `cookies` credential kind through `bro.credentials`, literal (rule 10) and with no install hook.
    Its material is a profile.
    Setup is the framework's only writer;
-   a hand-written file of the same shape works alike.
+   a hand-written file of the same shape, `profile_version` included, works alike.
 2. **The webview's `pass` field.**
    `WebviewType` declares `pass` in its launch schema, bounded to `cookies`.
    `LaunchPass` gains an optional `kinds` bound, checked where a launch section folds, beside the registered-kind check:
@@ -48,12 +48,12 @@ Rules:
    The owner's own store never holds the kind.
 5. **The daemon loads the profile.**
    Before starting Playwright MCP, `webview serve` reads the `cookies` kind from its store by kind.
-   When present, it checks the profile's bound (rule 12) and envelope
-   — an object whose members are the lists `cookies` and `origins`, each origin an object whose members are a string `origin`, the list `localStorage`, and optionally the list `indexedDB`
+   When present, it checks the profile's bound (rule 12), its version (rule 13), and its envelope
+   — an object whose members are the integer `profile_version` and the lists `cookies` and `origins`, each origin an object whose members are a string `origin`, the list `localStorage`, and optionally the list `indexedDB`
    — and leaves the members within those storage kinds to Playwright, since a profile crosses versions (`### Rollout`).
    A failed check fails the daemon before `listening`, naming the defect and never a value, since a worker's output tail reaches its owner in its death result;
    a storage kind outside the envelope is such a defect, so a webview never loads part of a profile.
-   The daemon writes the profile at 0600 into the private temporary directory that holds its Playwright config, outside `/workspace`,
+   The daemon writes the profile's storage state, `profile_version` stripped, at 0600 into the private temporary directory that holds its Playwright config, outside `/workspace`,
    and starts Playwright MCP with `--storage-state` on that file beside `--isolated`.
    Without it, the browser starts empty as today.
    The file stays for the webview's life, since Playwright MCP reads it again whenever it re-creates the isolated context, as after `browser_close`;
@@ -76,12 +76,13 @@ Rules:
    It runs `bro/webview:<hash>`, the image webviews run, as a foreground run (rule 9) with `webview capture` as its command and the noVNC port on the launcher's loopback (rule 11), building any missing image first.
    It prints the noVNC URL once the browser is up;
    the user logs in, keeps the browser window open, and presses Enter, or Ctrl-C to discard.
-   Setup then asks capture for the storage state, checks that it is a profile, and writes it to the host store (`BRO_STORE` when set, else `~/.bro`) as `cookies+<instance>`.
+   Setup then asks capture for the storage state, checks its storage kinds against rule 5's envelope, stamps its own `PROFILE_VERSION` on it, and writes it to the host store (`BRO_STORE` when set, else `~/.bro`) as `cookies+<instance>`.
    It prints counts and never a value:
    cookies and their sites, origins with storage, IndexedDB origins, and bytes.
    - **Seeding.**
      Unless `--fresh`, the browser starts with the stored instance loaded, so the user redoes only an expired login, a site that remembers the device skips its 2FA, and a profile gains sites over several runs.
-     A capture structurally identical to the stored instance
+     A stored instance of a newer profile version than setup's own is refused as a seed, naming both, and `--fresh` replaces it.
+     A capture whose storage state is structurally identical to the stored instance's
      — equal as parsed JSON once cookies are ordered by domain, path, and name, and origins by origin
      — writes nothing and says so, which also catches a closed browser window that reset the context to the seed.
    - **IndexedDB.**
@@ -92,8 +93,8 @@ Rules:
      A stored name `creds.json` annotates with a source other than `local` is refused, since material written under it would never be read.
    - **Concurrent runs.**
      Setup holds an exclusive lock on the stored name for its whole run, so a second setup of the same instance refuses at start.
-     Its write replaces the profile only while the store still holds, byte for byte, what setup seeded from, or still holds nothing when setup started empty:
-     a hand edit made during the run aborts the write and stays as edited.
+     Its write replaces the profile only while the store still holds, byte for byte, what it held when setup started, or still holds nothing if it held nothing then:
+     a hand edit made during the run aborts the write and stays as edited, while `--fresh` still replaces the profile it started over.
    - **The write.**
      `bro/base/credentials.py` gains the store's first programmatic writer:
      it writes a stored name's material atomically at 0600 under `creds/`, replacing it only when it still holds the expected material, and it offers the per-name lock.
@@ -115,7 +116,7 @@ Rules:
      A line that is not the next one below, or that runs over its bound, ends the side reading it non-zero,
      as do EOF before the exchange completes and the exit of a process capture supervises;
      setup then writes nothing and shows the container's output tail.
-     1. Setup's first line is `{"seed": <profile>}`, or `{"seed": null}` when it starts empty.
+     1. Setup's first line is `{"seed": <storage state>}`, the stored profile with `profile_version` stripped, or `{"seed": null}` when it starts empty.
      2. Capture writes `{"event": "ready"}` once the browser is up.
      3. When the user presses Enter, setup writes `{"request": "state"}`.
      4. Capture answers `{"event": "state", "state": <storage state>}` and exits 0,
@@ -146,6 +147,15 @@ Rules:
     A profile's serialized JSON is at most 32 MiB, one constant in the webview package.
     Capture answers a larger state with an error, setup's bounded read refuses one and leaves the stored profile as it was, and the daemon refuses a larger stored profile.
     Setup's summary prints the bytes, so a growing IndexedDB shows before it reaches the bound, and `--fresh` without `--indexed-db` drops it.
+13. **The profile version.**
+    Every profile carries the top-level integer `profile_version`, the webview package's `PROFILE_VERSION` when setup wrote it.
+    The daemon and setup's seed read refuse a profile of a newer version than their own, naming both, and read any older one;
+    they strip the member before the storage state reaches Playwright.
+    A Playwright MCP pin bump reads Playwright's release notes between the two pins for storage-state entries,
+    and increments `PROFILE_VERSION` when one changes what capture writes by default, as 1.54's cookie `partitionKey` did;
+    opt-in additions such as `credentials` and `opfs` never reach a profile, since capture asks only for `indexedDB`.
+    The e2e loads a synthetic profile of every earlier version under the current pin, so each bump establishes that newer webviews read older profiles.
+    A webview older than a profile thus refuses it, loudly, rather than loading part of it.
 
 In set terms, over #748's:
 
@@ -171,12 +181,11 @@ What crosses versions:
 - The profile, `creds/cookies+<instance>.cred` in the host store:
   setup writes it at the version of the checkout it runs from, and every ride hydrates it and its webview loads it at the version of that ride's bundle, older or newer.
   An installation older than this change never reads it, since it skips material of an unregistered kind.
-  Between Playwright MCP pins whose storage-state shapes agree, any webview loads any profile.
-  Where they differ, the daemon refuses a storage kind outside its envelope and Playwright's validator refuses a known member it cannot read, each naming the defect;
-  but Playwright drops an unknown member within a known kind, such as a new cookie attribute, without a word.
-  So a pin bump compares the storage-state types of the two pins, and one that finds them changed says so in its pull request and in its landing's rollout (`webview/AGENTS.md`, "Image pin"):
-  once it reaches the host, a profile re-captured after the upgrade is used only from rides started after it,
-  and rolling the bump back means re-running `webview setup --fresh` under the older version for each such profile.
+  Among the rest, a webview reads a profile of its own or an older profile version, which the e2e establishes for every earlier version,
+  and refuses a newer one naming both (rule 13), since Playwright would drop an unknown member within a known storage kind, such as a new cookie attribute, without a word.
+  So after a pin bump that increments the version reaches the host, a profile re-captured under it fails loudly in rides still on an older pin and loads in rides started after the upgrade;
+  no ride has to end first.
+  Rolling such a bump back leaves those profiles refused by the older version, naming both versions, until `webview setup --fresh` there replaces each.
 - `creds.json` in the host store:
   nothing here writes it;
   a `defaults` pick of `cookies` would fail every older installation's store read, since `defaults` refuses an unregistered kind,
@@ -235,8 +244,11 @@ stored profiles stay, unread by the older version.
   a hand-written or earlier profile would still expand.
 - Storing the profile base64-encoded so it never parses as JSON: the file would stop being a readable storage state.
 - A strict profile schema in the daemon down to each cookie's attributes: every Playwright addition to a cookie would fail every older webview.
-- Wrapping the profile with the pin that captured it, or keeping a prior copy for older pins:
-  the file would stop being a plain storage state, or the store would hold the secret twice, for a mismatch that only a pin bump changing the shape brings.
+- Wrapping the storage state in an object of our own, or keeping a prior copy for older pins:
+  the file would stop being a storage state, or the store would hold the secret twice, where one top-level member Playwright never sees carries the version.
+- A drain order for a version-changing pin bump, every ride on the older pin ending before anyone re-captures, in place of the version:
+  nothing would stop a forgotten older root from loading part of a re-captured profile.
+- Relying on Playwright to keep storage states compatible: its docs promise nothing across versions, and although its release notes announce every storage-state change, an older loader drops what it does not know.
 - A view port only for setup: `webview open --vnc` needs the same standing forward on a remote host.
 - Unbounded profiles: a site could grow a profile through `--indexed-db` and every re-capture after it until it fills host memory and disk.
 - Only a per-name lock, or only the compare at write:
@@ -254,6 +266,7 @@ stored profiles stay, unread by the older version.
 - `webview open` fails naming a profile removed since the owner's launch, or one that is not a storage state.
 - A `{"$cred": …}` node a site stored in its IndexedDB stays that node in the site's storage.
 - A second `webview setup alice` while one runs refuses at start, and a capture over 32 MiB leaves the stored profile as it was.
+- After a Playwright MCP bump that increments the profile version, a ride started before the upgrade refuses a profile re-captured after it, naming both versions.
 
 ### Implementation sketch
 
@@ -270,13 +283,13 @@ To settle in the plan phase:
 - `ride/ride/worker_container.py` and `ride/ride/workspace/docker.py`: hydration inside the lowering's cleanup, requested host ports, and the foreground run with its builds that prune nothing.
 - `webview/`:
   - the `cookies` kind (`credentials.py`), and the `pass` field and `vnc_port` (`worker.py`);
-  - the profile's bound and envelope check, its load, and the start-up shared with capture (`serve.py`);
+  - the profile's bound, version, and envelope checks, its load, and the start-up shared with capture (`serve.py`), with `PROFILE_VERSION` and the bound in one module;
   - capture and setup, with the exchange;
   - the CLI verbs: `open --cookies` and `--port`, `setup` with `--port`, and `capture`;
   - `pyproject.toml`: the `bro-ride` dependency, the `bro.credentials` entry point, and the deptry map;
   - the import-policy test.
 - Docs:
-  `webview/AGENTS.md` (the verbs, the daemon's profile, and the storage-state comparison a pin bump owes in "Image pin");
+  `webview/AGENTS.md` (the verbs, the daemon's profile, and in "Image pin" the release-notes check and `PROFILE_VERSION` increment a bump owes);
   `bro/reference/ride.md` ("Session permissions and credentials" for the shipped schemas and passes to containers, "Worker containers" for the store and requested ports);
   `bro/setup/AGENTS.md` (the `cookies` material, literal entries, the writer);
   `ride/AGENTS.md` (`worker_container.py`, the pass invariant);
@@ -291,7 +304,8 @@ To settle in the plan phase:
   - a container's passes carried and a job's refused;
   - hydration into the worker store, and a missing instance failing the launch with the workspace removed;
   - requested host ports: published as requested, refused below 1024, and `vnc_port` refused without `vnc`;
-  - `serve` passing `--storage-state` exactly when a profile is present, failing before `listening` on a malformed, oversize, or extra-kind one with an error that names no value, and never enabling a capability;
+  - `serve` passing `--storage-state` exactly when a profile is present, failing before `listening` on a malformed, oversize, extra-kind, or newer-version one with an error that names no value, and never enabling a capability;
+  - the profile version: stamped by setup, stripped before Playwright, a newer one refused by the daemon and by setup's seed read naming both, an older one read;
   - capture's side of the exchange (each line, its order, its bound, EOF, the error answer, an oversize state), the seed, the IndexedDB flag, and nothing but the exchange on its stdout;
   - setup's refusals (session, terminal, empty instance, a source other than `local`, empty capture, oversize line);
     its lock and the compare that aborts over a changed profile;
@@ -301,7 +315,7 @@ To settle in the plan phase:
   - the import policy.
 - `webview_e2e`, host-only:
   it runs on its own runner in every pull request's CI, a stage's pull request into its integration branch included, while `run-tests` skips it inside a container.
-  - a synthetic `cookies+e2e` with a cookie, an HttpOnly cookie, and a localStorage entry for `https://example.com`;
+  - a synthetic `cookies+e2e` with a cookie, an HttpOnly cookie, and a localStorage entry for `https://example.com`, kept for each profile version so every earlier one keeps loading;
   - a root holding its pass right runs `webview open --cookies e2e`, navigates there, and reads the cookie and the localStorage entry through `browser_evaluate`,
     while the owner's store lacks the kind and neither `browser_evaluate` nor `browser_network_request` output shows the HttpOnly cookie's value;
   - a pass beyond the rights is denied;
