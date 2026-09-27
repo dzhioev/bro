@@ -387,6 +387,7 @@ Each installed `WorkerType` declares its payload fields as a set of validated st
 A set folds by union on grant and difference on revoke;
 a flag is set by grant and cleared by revoke.
 A `pass` field is a set of registered credential instances the owner may pass to missions of that type.
+Its declaration may bound those instances to a set of credential kinds, while an omitted bound accepts every registered kind.
 It grants no credential use by itself.
 The host checks the type key before dispatch, then the worker type checks its payload and request.
 An unknown type, field, set member, or malformed payload fails the launch that names it.
@@ -418,7 +419,8 @@ Each layer folds name by name:
 the last word wins, repeated grants and revokes are harmless, revoking an absent name is harmless, and one layer naming the same value in both lists fails.
 An unknown name fails only when a launch whose applicable layers name it is computed, so one shared host config may contain worker types or credential kinds another installation does not install.
 The repository's `[tool.bro]` layer refuses pass rights in `grant` and `revoke` because a repository does not choose host credential instances.
-Every pass right under a held type key must name a registered kind and an instance present in the store the launch reads.
+Every pass right under a held type key must name a registered kind allowed by the worker type's optional kind bound and an instance present in the store the launch reads.
+A kind outside the bound fails like a member outside a launch set's choices.
 A missing instance fails the launch and names the configuration layer, launch flags, or summon request that last granted the right.
 A resume's `--grant` or `--revoke` replaces the recorded override for that name before the same fold and may harmlessly restate its state.
 
@@ -485,6 +487,9 @@ a launch-time grant cannot make that bro-specific pick valid.
 A `--cred` pick is checked later and must name a kind held after the launch's credential grants and revokes.
 A project-wide pick may remain unread by one bro so the same project entry can select instances for several bros.
 `ride scope` prints each kind's selected stored name, choosing layer, and `PRESENT`, `SKIPPED`, or `MISSING` state.
+
+A credential kind may declare its material literal in the code registry.
+The resolver returns that kind's material without expanding any `$cred` reference node in it, and scoped-store hydration follows none of those nodes.
 
 The session store materializes every `creds.use` instance under its own stored name, preserving an instance-spelled `$cred` target as that instance.
 Its `creds.json` records the launch's pick in `defaults` for every loaded kind and every kind reached by a kind-spelled preserved reference, and copies the typed source annotations under `sources`.
@@ -877,7 +882,10 @@ workspace removal (`--drop`, `ride clean`) deletes it with the workspace.
 A registered worker type can return a core `Container(WorkerContainer(…))` run without importing ride.
 The shipped `webview` type is a browser worker container driven through `webview open`, `mission ask`, and `webview close`;
 its optional noVNC loopback view requires `:launch.webview.vnc`, and every webview launch requires `:launch.webview`.
-Its declaration ships a byte-valued Docker build context whose normalized relative paths include a `Dockerfile` opening with `ARG RUNTIME_IMAGE` and `FROM ${RUNTIME_IMAGE}`, plus a command, environment, and distinct container ports.
+Its declaration ships a byte-valued Docker build context whose normalized relative paths include a `Dockerfile` opening with `ARG RUNTIME_IMAGE` and `FROM ${RUNTIME_IMAGE}`.
+It also declares a command, environment, and a mapping from distinct container ports to requested host ports.
+A `null` host port asks the host to select an available one;
+a requested host port must be distinct and at least 1024.
 The environment cannot claim host-owned `BROKER_*`, `RIDE_*`, `BRO_*`, `HOME`, or `PATH` names.
 The runtime image tag and sorted build-context files determine the worker image tag `bro/<type>:<hash>`;
 ride builds a missing tag lazily under a per-tag lock and prunes unused predecessors from that type's image repository.
@@ -885,13 +893,16 @@ A launch reserves its tag from the build through container creation, so concurre
 A failed build reports the captured output tail with its exit status.
 
 The host lowers each run off the broker loop into a detached throwaway boxed workspace named `<type>-<channel>`.
-It mounts the frozen runtime volume read-only, an empty scoped credential store, and the worker's read-only artifact view at the absolute normalized POSIX path the declaration names, linking every accepted `share` ref before start.
+It hydrates exactly the credential instances in the request's authorized `pass` list into the worker's scoped store, selecting each instance as its kind's default there.
+A missing instance fails the launch by name and removes the throwaway workspace.
+No credential install hook runs in a worker container.
+It mounts the frozen runtime volume read-only and the worker's read-only artifact view at the absolute normalized POSIX path the declaration names, linking every accepted `share` ref before start.
 The view path defaults to `CONTAINER_ARTIFACTS_ROOT` and is a launch fact, so changing it does not rebuild the image.
 It mounts no session, party, or trails state.
 The declared command runs as `broxy run -- <command…>`, so its clients multiplex through the worker's one upstream attach.
 
-For each declared container port, the host reserves an available launcher-loopback port, releases the probe, and creates the container with `-p 127.0.0.1:<host>:<container>`.
-A process taking that host port before `docker start` makes the launch fail rather than moving the binding.
+For each declared container port, the host binds its requested launcher-loopback port or reserves an available one when the declaration gives `null`, releases the probe, and creates the container with `-p 127.0.0.1:<host>:<container>`.
+A requested port already in use fails the launch, and a process taking any selected host port before `docker start` makes the launch fail rather than moving the binding.
 The worker receives the selected mapping as `RIDE_PUBLISHED_PORTS=<container>=<host>,…`, reports any usable address to its owner over its granted talk, and exposes the same host/container pairs through peer facts and the launch audit.
 Docker supervision captures a bounded merged output tail;
 a clean exit removes the throwaway workspace, while a failed or killed worker keeps it and includes the tail in the synthesized death result.

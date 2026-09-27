@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
+from bro.base import credentials
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 
 if TYPE_CHECKING:
@@ -47,7 +48,7 @@ class LaunchFlag:
 
 @dataclass(frozen=True)
 class LaunchPass:
-  pass
+  kinds: frozenset[str] | None = None
 
 
 LAUNCH_FLAG = LaunchFlag()
@@ -139,7 +140,7 @@ class WorkerContainer:
   files: Mapping[str, bytes]
   command: tuple[str, ...]
   env: Mapping[str, str]
-  published_ports: tuple[int, ...]
+  published_ports: Mapping[int, int | None]
   artifact_view: PurePosixPath = PurePosixPath(CONTAINER_ARTIFACTS_ROOT)
 
   def __post_init__(self) -> None:
@@ -228,15 +229,34 @@ class WorkerContainer:
     )
     if reserved:
       raise ValueError(f'worker container env names host-owned variable(s): {", ".join(reserved)}')
-    ports = self.published_ports
-    if not isinstance(ports, tuple) or not all(
-      isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535 for port in ports
+    if not isinstance(self.published_ports, Mapping):
+      raise ValueError('worker container published ports must map container ports to host ports')
+    ports = dict(self.published_ports)
+    if not all(
+      isinstance(container_port, int)
+      and not isinstance(container_port, bool)
+      and 1 <= container_port <= 65535
+      for container_port in ports
     ):
-      raise ValueError('worker container published ports must be a tuple of ports in 1..65535')
-    if len(ports) != len(set(ports)):
-      raise ValueError('worker container published ports must be distinct')
+      raise ValueError('worker container published ports must use container ports in 1..65535')
+    if not all(
+      host_port is None
+      or (
+        isinstance(host_port, int)
+        and not isinstance(host_port, bool)
+        and 1024 <= host_port <= 65535
+      )
+      for host_port in ports.values()
+    ):
+      raise ValueError(
+        'worker container published ports must use host ports in 1024..65535 or None'
+      )
+    requested_ports = [host_port for host_port in ports.values() if host_port is not None]
+    if len(requested_ports) != len(set(requested_ports)):
+      raise ValueError('worker container published ports must request distinct host ports')
     object.__setattr__(self, 'files', MappingProxyType(files))
     object.__setattr__(self, 'env', MappingProxyType(env))
+    object.__setattr__(self, 'published_ports', MappingProxyType(ports))
     object.__setattr__(self, 'artifact_view', normalized_artifact_view)
 
   def image_hash(self, runtime_image: str) -> str:
@@ -361,10 +381,27 @@ def _load(entry: importlib.metadata.EntryPoint) -> type[WorkerType]:
       raise TypeError(
         f'worker type {entry.name!r} launch field {field_name!r} has an invalid schema'
       )
-    if isinstance(field_schema, LaunchPass) and field_name != 'pass':
-      raise ValueError(
-        f'worker type {entry.name!r} declares the pass schema under field {field_name!r}'
-      )
+    if isinstance(field_schema, LaunchPass):
+      if field_name != 'pass':
+        raise ValueError(
+          f'worker type {entry.name!r} declares the pass schema under field {field_name!r}'
+        )
+      if field_schema.kinds is not None:
+        if not isinstance(field_schema.kinds, frozenset):
+          raise TypeError(
+            f'worker type {entry.name!r} launch pass kinds must be a frozenset or None'
+          )
+        for kind in field_schema.kinds:
+          try:
+            parsed_kind, instance = credentials.parse_name(kind)
+          except (TypeError, ValueError) as error:
+            raise ValueError(
+              f'worker type {entry.name!r} launch pass declares invalid credential kind {kind!r}'
+            ) from error
+          if instance is not None or parsed_kind != kind:
+            raise ValueError(
+              f'worker type {entry.name!r} launch pass declares invalid credential kind {kind!r}'
+            )
     if field_name == 'pass' and not isinstance(field_schema, LaunchPass):
       raise ValueError(f'worker type {entry.name!r} launch field "pass" must use the pass schema')
   return worker_type

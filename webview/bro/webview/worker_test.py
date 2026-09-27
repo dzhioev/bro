@@ -87,7 +87,7 @@ class TestWebviewType:
     run = _worker_type().launch(_request(tmp_path, {}))
 
     assert run.spec.command == ('webview', 'serve')
-    assert run.spec.published_ports == ()
+    assert run.spec.published_ports == {}
     assert run.spec.artifact_view == worker.ARTIFACT_VIEW
     assert set(run.spec.files) == {'Dockerfile'}
     assert json.loads(run.spec.env['WEBVIEW_OPTIONS']) == {
@@ -111,7 +111,7 @@ class TestWebviewType:
       )
     )
 
-    assert run.spec.published_ports == (worker.VNC_PORT,)
+    assert run.spec.published_ports == {worker.VNC_PORT: None}
     assert json.loads(run.spec.env['WEBVIEW_OPTIONS']) == {
       'vnc': True,
       'allowed_origins': ['https://one.example', '*.trusted.example'],

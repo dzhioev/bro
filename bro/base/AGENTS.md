@@ -24,7 +24,7 @@ run those with `--help` for flags.
   the console-script name resolves to its module through the two names `sync-scripts` publishes every CLI under,
   and the parser is captured by intercepting the `parse` call the module's `main` ends in, so nothing the command does ever runs.
 - `credentials.py` — client-side secret resolver (`__cli_name__ = 'credentials'`).
-  The code registry maps kinds to a required description and an optional install hook;
+  The code registry maps kinds to a required description, an optional install hook, and an optional literal-material marker;
   it is assembled from `bro/base/registry.json` and installed `bro.credentials` contributions.
   `Store(registry, store_dir, selection, readable=…)` reads one exclusive directory, a `readable` set withholding every other kind:
   plain material is `creds/<name>.cred`, and `creds.json` carries the store's `defaults` plus typed annotations under `sources` (`ssm` or a `bro.credential_sources` minting type).
@@ -34,7 +34,8 @@ run those with `--help` for flags.
   `default_store()` binds an ambient store lazily from the store's defaults plus the host config's `user` and running command layers,
   and bypasses that config entirely when `BRO_STORE` directs the process;
   `as_default_store(store)` resolves through a given store for the block, in the calling thread or task alone.
-  `$cred` references expand during resolution, with kind targets applying the same selection and instance targets reading storage directly.
+  `$cred` references expand during resolution, with kind targets applying the same selection and instance targets reading storage directly;
+  a literal kind skips expansion and transitive hydration.
   `known_names()` is the code registry's kinds, while the CLI's `--instance` list enumerates the store directory and typed annotations.
   `build_scoped_store(store, names, optional=…)` emits each instance under its stored name plus `creds.json` `defaults` and `sources`, and reports the declared kinds that loaded separately from transitive `$cred` pulls.
   It judges presence through `instance_names`, skips only an unpicked optional empty instance that is absent, and fails every selected load error.
