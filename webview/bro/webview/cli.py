@@ -336,8 +336,38 @@ def _serve() -> int:
   return 0
 
 
+def _capture() -> int:
+  from bro.webview.capture import run_capture
+
+  return run_capture()
+
+
+def _setup(
+  instance: str,
+  url: str | None,
+  fresh: bool,
+  indexed_db: bool,
+  port: int | None,
+) -> int:
+  from bro.webview.setup import SetupError, setup_profile
+
+  try:
+    summary = setup_profile(
+      instance,
+      url=url,
+      fresh=fresh,
+      indexed_db=indexed_db,
+      port=port,
+    )
+  except (SetupError, ValueError, OSError) as error:
+    log.error('webview setup failed: %s', error)
+    return 1
+  print(summary)
+  return 0
+
+
 def main(argv: list[str]) -> Optional[int]:
-  parser = Parser(prog='webview', description='open and close browser worker missions')
+  parser = Parser(prog='webview', description='open, close, and set up browser profiles')
   verbs = parser.add_subparsers(dest='verb', metavar='<verb>')
 
   open_parser = verbs.add_parser(
@@ -388,7 +418,30 @@ def main(argv: list[str]) -> Optional[int]:
   close_parser.add_argument('mission_id', metavar='MISSION', help='mission id')
   close_parser.set_handler(_close)
 
+  setup_parser = verbs.add_parser(
+    'setup', help='capture a browser profile through an interactive noVNC view'
+  )
+  setup_parser.add_argument('instance', type=_non_empty_instance, metavar='INSTANCE')
+  setup_parser.add_argument('--url', help='open this URL before the user takes control')
+  setup_parser.add_argument(
+    '--fresh', action='store_true', help='start with an empty browser profile'
+  )
+  setup_parser.add_argument(
+    '--indexed-db',
+    action='store_true',
+    help='include IndexedDB records in the captured profile',
+  )
+  setup_parser.add_argument(
+    '--port',
+    type=_host_port,
+    metavar='PORT',
+    help='publish the noVNC view on this loopback port',
+  )
+  setup_parser.set_handler(_setup)
+
   serve_parser = verbs.add_parser('serve', help='run the container-side webview daemon')
   serve_parser.set_handler(_serve)
+  capture_parser = verbs.add_parser('capture', help='run the container-side profile capture')
+  capture_parser.set_handler(_capture)
 
   return parser.dispatch(argv)

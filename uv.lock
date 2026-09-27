@@ -425,12 +425,14 @@ version = "0.1.0"
 source = { editable = "webview" }
 dependencies = [
     { name = "bro" },
+    { name = "bro-ride" },
     { name = "mcp" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "bro", editable = "." },
+    { name = "bro-ride", editable = "ride" },
     { name = "mcp", specifier = "==1.28.1" },
 ]
 

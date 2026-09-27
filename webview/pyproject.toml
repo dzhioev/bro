@@ -9,6 +9,7 @@ description = "browser worker type and daemon for bro"
 requires-python = ">=3.12"
 dependencies = [
   "bro",
+  "bro-ride",
   "mcp==1.28.1",
 ]
 
@@ -28,9 +29,11 @@ webview = "bro.webview._entrypoints:bro_webview_cli"
 
 [tool.uv.sources]
 bro = { workspace = true }
+bro-ride = { workspace = true }
 
 [tool.deptry.package_module_name_map]
 bro = ["bro"]
+bro-ride = ["ride"]
 
 [tool.uv.build-backend]
 module-root = ""

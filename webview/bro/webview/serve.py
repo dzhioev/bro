@@ -10,6 +10,7 @@ import os
 import socket
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import AsyncIterator, Awaitable, Iterator, Mapping, Sequence
@@ -29,6 +30,7 @@ from bro.broker.client import Client
 from bro.broker.environment import BROKER_MISSION
 from bro.broker.journal import MAX_MESSAGE_BYTES
 from bro.webview.profile import ProfileError, decode_profile
+from bro.webview.worker import vnc_url as format_vnc_url
 
 WORKSPACE = Path('/workspace')
 ARTIFACT_VIEW = WORKSPACE / 'artifacts'
@@ -147,7 +149,7 @@ def _xvfb() -> Iterator[tuple[subprocess.Popen, str]]:
 
 @contextlib.contextmanager
 def _child(name: str, command: Sequence[str]) -> Iterator[subprocess.Popen]:
-  process = subprocess.Popen(tuple(command))
+  process = subprocess.Popen(tuple(command), stdout=sys.stderr)
   try:
     yield process
   finally:
@@ -236,7 +238,13 @@ def _browser_config(storage_state: dict[str, Any] | None) -> Iterator[tuple[Path
     yield config, storage_path
 
 
-def _playwright_arguments(options: Options, config: Path, storage_state: Path | None) -> list[str]:
+def _playwright_arguments(
+  options: Options,
+  config: Path,
+  storage_state: Path | None,
+  output_directory: Path | None = None,
+) -> list[str]:
+  selected_output_directory = OUTPUT_DIRECTORY if output_directory is None else output_directory
   arguments = ['--isolated']
   if storage_state is not None:
     arguments += ['--storage-state', str(storage_state)]
@@ -245,7 +253,7 @@ def _playwright_arguments(options: Options, config: Path, storage_state: Path | 
     '--browser',
     'chromium',
     '--output-dir',
-    str(OUTPUT_DIRECTORY),
+    str(selected_output_directory),
     '--image-responses',
     'omit',
     '--file-paths',
@@ -339,14 +347,24 @@ async def _await_task(task: asyncio.Task[Any]) -> None:
 
 @contextlib.asynccontextmanager
 async def _playwright(
-  options: Options, config: Path, storage_state: Path | None, display: str
+  options: Options,
+  config: Path,
+  storage_state: Path | None,
+  display: str,
+  *,
+  workspace: Path | None = None,
+  output_directory: Path | None = None,
 ) -> AsyncIterator[tuple[ClientSession, subprocess.Popen]]:
+  selected_workspace = WORKSPACE if workspace is None else workspace
   async with AsyncExitStack() as stack:
     process = subprocess.Popen(
-      (PLAYWRIGHT_COMMAND, *_playwright_arguments(options, config, storage_state)),
+      (
+        PLAYWRIGHT_COMMAND,
+        *_playwright_arguments(options, config, storage_state, output_directory),
+      ),
       stdin=subprocess.PIPE,
       stdout=subprocess.PIPE,
-      cwd=WORKSPACE,
+      cwd=selected_workspace,
       env=_playwright_environment(display),
     )
     assert process.stdin is not None
@@ -732,7 +750,7 @@ async def serve() -> None:
       vnc_processes = process_stack.enter_context(_vnc(display))
       sync_processes.extend(vnc_processes)
       host_port = _published_port(VNC_PORT, os.environ.get(PUBLISHED_PORTS_ENV, ''))
-      vnc_url = f'http://127.0.0.1:{host_port}/vnc.html?autoconnect=1&resize=scale'
+      vnc_url = format_vnc_url(host_port)
     config, storage_path = process_stack.enter_context(_browser_config(storage_state))
 
     async with AsyncExitStack() as async_stack:

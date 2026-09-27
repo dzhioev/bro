@@ -24,6 +24,53 @@ def _storage_list(value: Any, field: str) -> list[Any]:
   return value
 
 
+def validate_storage_state(value: Any) -> dict[str, Any]:
+  """Validate the storage kinds webview carries and return their state."""
+  if not isinstance(value, dict):
+    raise ProfileError('profile must be an object')
+  expected = {'cookies', 'origins'}
+  unknown = sorted(set(value) - expected)
+  missing = sorted(expected - set(value))
+  if unknown:
+    raise ProfileError(f'profile has unknown field(s): {", ".join(unknown)}')
+  if missing:
+    raise ProfileError(f'profile is missing field(s): {", ".join(missing)}')
+
+  cookies = _storage_list(value['cookies'], 'cookies')
+  origins = _storage_list(value['origins'], 'origins')
+  for index, origin in enumerate(origins):
+    if not isinstance(origin, dict):
+      raise ProfileError(f'profile origin {index} must be an object')
+    required = {'origin', 'localStorage'}
+    allowed = required | {'indexedDB'}
+    unknown_origin_fields = sorted(set(origin) - allowed)
+    missing_origin_fields = sorted(required - set(origin))
+    if unknown_origin_fields:
+      raise ProfileError(
+        f'profile origin {index} has unknown field(s): {", ".join(unknown_origin_fields)}'
+      )
+    if missing_origin_fields:
+      raise ProfileError(
+        f'profile origin {index} is missing field(s): {", ".join(missing_origin_fields)}'
+      )
+    if not isinstance(origin['origin'], str):
+      raise ProfileError(f"profile origin {index} field 'origin' must be a string")
+    _storage_list(origin['localStorage'], f'origins[{index}].localStorage')
+    if 'indexedDB' in origin:
+      _storage_list(origin['indexedDB'], f'origins[{index}].indexedDB')
+  return {'cookies': cookies, 'origins': origins}
+
+
+def decode_storage_state(raw: str) -> dict[str, Any]:
+  if len(raw.encode()) > PROFILE_MAX_BYTES:
+    raise ProfileError(f'profile exceeds the {PROFILE_MAX_BYTES}-byte limit')
+  try:
+    value = json.loads(raw, parse_constant=_reject_json_constant)
+  except json.JSONDecodeError as error:
+    raise ProfileError('profile is not valid JSON') from error
+  return validate_storage_state(value)
+
+
 def decode_profile(raw: str) -> dict[str, Any]:
   """Validate a stored profile and return its Playwright storage state."""
   if len(raw.encode()) > PROFILE_MAX_BYTES:
@@ -49,28 +96,45 @@ def decode_profile(raw: str) -> dict[str, Any]:
     raise ProfileError(
       f'profile version {version} is newer than supported profile version {PROFILE_VERSION}'
     )
+  return validate_storage_state({'cookies': value['cookies'], 'origins': value['origins']})
 
-  cookies = _storage_list(value['cookies'], 'cookies')
-  origins = _storage_list(value['origins'], 'origins')
-  for index, origin in enumerate(origins):
-    if not isinstance(origin, dict):
-      raise ProfileError(f'profile origin {index} must be an object')
-    required = {'origin', 'localStorage'}
-    allowed = required | {'indexedDB'}
-    unknown_origin_fields = sorted(set(origin) - allowed)
-    missing_origin_fields = sorted(required - set(origin))
-    if unknown_origin_fields:
-      raise ProfileError(
-        f'profile origin {index} has unknown field(s): {", ".join(unknown_origin_fields)}'
-      )
-    if missing_origin_fields:
-      raise ProfileError(
-        f'profile origin {index} is missing field(s): {", ".join(missing_origin_fields)}'
-      )
-    if not isinstance(origin['origin'], str):
-      raise ProfileError(f"profile origin {index} field 'origin' must be a string")
-    _storage_list(origin['localStorage'], f'origins[{index}].localStorage')
-    if 'indexedDB' in origin:
-      _storage_list(origin['indexedDB'], f'origins[{index}].indexedDB')
 
-  return {'cookies': cookies, 'origins': origins}
+def encode_profile(storage_state: dict[str, Any]) -> bytes:
+  state = validate_storage_state(storage_state)
+  try:
+    encoded = json.dumps(
+      {'profile_version': PROFILE_VERSION, **state},
+      ensure_ascii=True,
+      separators=(',', ':'),
+      allow_nan=False,
+    ).encode()
+  except ValueError as error:
+    raise ProfileError('profile is not valid JSON') from error
+  if len(encoded) > PROFILE_MAX_BYTES:
+    raise ProfileError(f'profile exceeds the {PROFILE_MAX_BYTES}-byte limit')
+  return encoded
+
+
+def has_indexed_db(storage_state: dict[str, Any]) -> bool:
+  return any(origin.get('indexedDB') for origin in storage_state['origins'])
+
+
+def has_storage(storage_state: dict[str, Any]) -> bool:
+  return bool(storage_state['cookies']) or any(
+    origin['localStorage'] or origin.get('indexedDB') for origin in storage_state['origins']
+  )
+
+
+def normalized_storage_state(storage_state: dict[str, Any]) -> dict[str, Any]:
+  state = validate_storage_state(storage_state)
+  return {
+    'cookies': sorted(
+      state['cookies'],
+      key=lambda cookie: (
+        str(cookie.get('domain', '')) if isinstance(cookie, dict) else '',
+        str(cookie.get('path', '')) if isinstance(cookie, dict) else '',
+        str(cookie.get('name', '')) if isinstance(cookie, dict) else '',
+      ),
+    ),
+    'origins': sorted(state['origins'], key=lambda origin: origin['origin']),
+  }

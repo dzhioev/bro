@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import fcntl
 import importlib.metadata
 import json
 import os
@@ -34,6 +35,7 @@ import re
 import shlex
 import shutil
 import sys
+import tempfile
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator, Mapping
@@ -132,6 +134,18 @@ _REFERENCE_FIELD = 'field'
 class SecretNotFound(Exception):
   def __init__(self, name: str):
     super().__init__(f'secret {name!r} not found')
+    self.name = name
+
+
+class StoredMaterialChanged(Exception):
+  def __init__(self, name: str):
+    super().__init__(f'secret {name!r} changed since it was read')
+    self.name = name
+
+
+class StoredNameLocked(Exception):
+  def __init__(self, name: str):
+    super().__init__(f'secret {name!r} is locked by another writer')
     self.name = name
 
 
@@ -712,6 +726,74 @@ class Store:
 
   def material_path(self, name: str) -> Path:
     return self._material_path(self.selected_name(name))
+
+  def source_type(self, name: str) -> str:
+    storage = self._writable_storage_name(name)
+    type_name = getattr(self._source(storage), 'TYPE', None)
+    if not isinstance(type_name, str) or type_name == '':
+      raise TypeError(f'secret {storage!r} has a source without a type name')
+    return type_name
+
+  def read_stored_material(self, name: str) -> bytes | None:
+    storage = self._writable_storage_name(name)
+    path = self._material_path(storage)
+    try:
+      return path.read_bytes()
+    except FileNotFoundError:
+      return None
+
+  @contextlib.contextmanager
+  def stored_name_lock(self, name: str, *, blocking: bool = True) -> Iterator[None]:
+    storage = self._writable_storage_name(name)
+    lock_directory = self.store_dir / MATERIAL_DIR / '.locks'
+    lock_directory.mkdir(parents=True, exist_ok=True)
+    path = lock_directory / f'{storage}.lock'
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    os.chmod(path, 0o600)
+    with os.fdopen(descriptor, 'r+') as lock:
+      operation = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+      try:
+        fcntl.flock(lock, operation)
+      except BlockingIOError as error:
+        raise StoredNameLocked(storage) from error
+      yield
+
+  def write_stored_material(
+    self,
+    name: str,
+    material: bytes,
+    *,
+    expected: bytes | None,
+  ) -> None:
+    storage = self._writable_storage_name(name)
+    if not isinstance(material, bytes):
+      raise TypeError('stored credential material must be bytes')
+    if self.source_type(storage) != LocalSource.TYPE:
+      raise ValueError(f'secret {storage!r} has a non-local source and cannot be written')
+    path = self._material_path(storage)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f'.{path.name}.')
+    temporary = Path(temporary_name)
+    try:
+      os.fchmod(descriptor, 0o600)
+      with os.fdopen(descriptor, 'wb') as stream:
+        stream.write(material)
+        stream.flush()
+        os.fsync(stream.fileno())
+      current = self.read_stored_material(storage)
+      if current != expected:
+        raise StoredMaterialChanged(storage)
+      os.replace(temporary, path)
+    except BaseException:
+      temporary.unlink(missing_ok=True)
+      raise
+
+  def _writable_storage_name(self, name: str) -> str:
+    _require_canonical_name(name, 'credential writer received')
+    kind, _ = parse_name(name)
+    if kind not in self.registry:
+      raise ValueError(f'credential writer received unregistered kind {kind!r}')
+    return name
 
 
 def _selection_spelling(kind: str, instance: str) -> str:
