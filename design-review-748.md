@@ -59,6 +59,9 @@ Rules:
    The repository's `[tool.bro]` refuses it in `grant` and `revoke` alike, since the repository names no instance (#767, rule 3).
    A summon request may grant only a pass right the summoner holds, as for any `launch` member;
    a child holds only the pass rights its own configuration and its summon request give it, never its summoner's by inheritance.
+   A request's grants are checked against the summoner's section before the child's section is folded:
+   a pass right the summoner doesn't hold is denied before anything looks up its kind or its presence,
+   so a denial never tells the summoner whether an instance it may not pass exists.
 4. **Presence.**
    Every pass right a launch holds must name an instance present in the store the launch reads, judged by name alone as #767 judges presence.
    It is checked where the `launch` section is folded, which knows the layer or flag that granted each name:
@@ -121,8 +124,8 @@ The change is additive:
 every file and record an older version wrote stays readable by the new one.
 What a version other than the writer's reads:
 
-- `~/.bro.json`, read whole by every installation on the host whenever it launches, or resolves a credential outside a session:
-  each checkout of this repository, each repository that pins the framework (ppp and kap), each `uv tool` installation of it, and the frozen or materialized runtime of every live root, whose broker reads the file at each summon.
+- `~/.bro.json`, read whole by every installation on every machine that shares the file, whenever it launches, or resolves a credential outside a session:
+  each checkout of this repository, each checkout of a repository that pins the framework (ppp and kap), each `uv tool` installation of it, and the frozen or materialized runtime of every live root, whose broker reads the file at each summon.
   A pass right is the one name that doesn't cross versions:
   an older installation refuses `:launch.<type>.pass.…` wherever it reads one, so a pass right in the file fails every launch and every host credential read of that installation.
   The benchmark's trial bundle reads the host store under `BRO_STORE`, never this file.
@@ -145,9 +148,11 @@ The order:
    A phase verifying this change launches from a root started after this step, holding the pass rights it exercises on its launch flags.
 
 Writing a pass right into `~/.bro.json` is no step of this rollout.
-Before one goes in, upgrade every installation that reads the file
-— each other checkout of this repository on the host, each `uv tool` installation, and ppp and kap through `[[bump bro]]`
-— end every root started from an older runtime, and finish every kept workspace recorded under an older materialized runtime.
+Before one goes in, upgrade every installation that reads the file, on every machine that shares it through dotfiles:
+each checkout of this repository, pulled and set up;
+each `uv tool` installation;
+and each checkout of ppp and kap, pulled and set up once `[[bump bro]]` has moved its pin past the landing, since the bump syncs only its own managed workspace.
+Then end every root started from an older runtime, and finish every kept workspace recorded under an older materialized runtime.
 
 Rolling back takes every pass right out of `~/.bro.json` and out of every launch command, then downgrades the checkout;
 a workspace recorded with a pass right among its grants doesn't resume under the older version.
