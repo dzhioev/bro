@@ -29,11 +29,18 @@ SKIP_DIRECTORIES = {'.venv', 'build', '.claude', 'setup', '__pycache__', 'var'}
 
 
 @dataclass(frozen=True)
+class Bridge:
+  """the committed module every console script of a project targets."""
+
+  module: str
+  path: Path
+
+
+@dataclass(frozen=True)
 class Project:
   directory: Path
   pyproject: Path
-  bridge_module: str
-  bridge_path: Path
+  bridge: Optional[Bridge]
 
 
 @dataclass(frozen=True)
@@ -44,8 +51,11 @@ class Entry:
   bridge_module: str
 
 
-def _bridge_module(data: dict, pyproject: Path) -> str:
-  scripts = data.get('project', {}).get('scripts')
+def _bridge_module(data: dict, pyproject: Path) -> Optional[str]:
+  metadata = data.get('project', {})
+  if 'scripts' not in metadata:
+    return None
+  scripts = metadata['scripts']
   if not isinstance(scripts, dict) or len(scripts) == 0:
     raise ValueError(f'[project.scripts] in {pyproject} must contain at least one script')
   targets: list[str] = []
@@ -70,13 +80,15 @@ def _project(path: Path) -> Project:
     raise ValueError(f'missing {pyproject}')
   data = tomllib.loads(pyproject.read_text())
   bridge_module = _bridge_module(data, pyproject)
-  bridge_path = directory.joinpath(*bridge_module.split('.')).with_suffix('.py')
-  return Project(
-    directory=directory,
-    pyproject=pyproject,
-    bridge_module=bridge_module,
-    bridge_path=bridge_path,
+  bridge = (
+    None
+    if bridge_module is None
+    else Bridge(
+      module=bridge_module,
+      path=directory.joinpath(*bridge_module.split('.')).with_suffix('.py'),
+    )
   )
+  return Project(directory=directory, pyproject=pyproject, bridge=bridge)
 
 
 def _ignored_directories(directory: Path) -> set[Path]:
@@ -148,6 +160,7 @@ def _cli_name(tree: ast.Module, module_name: str) -> Optional[str]:
 
 
 def _discover(project: Project) -> list[Entry]:
+  """every CLI the project defines; one a project without a bridge could not publish is refused."""
   entries: list[Entry] = []
   for relative_path in _iter_python_files(project):
     module_name = _module_name(relative_path)
@@ -159,12 +172,17 @@ def _discover(project: Project) -> list[Entry]:
         f'{relative_path}: a CLI at a project root would publish its canonical name '
         f'{module_name!r} into the bare-alias namespace; move it under a package'
       )
+    if project.bridge is None:
+      raise ValueError(
+        f'{relative_path}: a CLI needs a [project.scripts] table in {project.pyproject} '
+        'naming the bridge module its console scripts target'
+      )
     entries.append(
       Entry(
         module=module_name,
         canonical=canonical_script_name(module_name),
         explicit=_cli_name(tree, module_name),
-        bridge_module=project.bridge_module,
+        bridge_module=project.bridge.module,
       )
     )
   return entries
@@ -253,32 +271,31 @@ def _render_entrypoints(entries: list[Entry]) -> str:
   return '\n'.join(lines) + '\n'
 
 
-def _rendered_artifacts(project: Project) -> tuple[str, str]:
-  entries = _discover(project)
-  return (
-    _render_pyproject(project.pyproject.read_text(), entries),
-    _render_entrypoints(entries),
-  )
-
-
 def sync_pyproject(project: Project) -> None:
-  rendered, _ = _rendered_artifacts(project)
-  project.pyproject.write_text(rendered)
+  entries = _discover(project)
+  if project.bridge is None:
+    return
+  project.pyproject.write_text(_render_pyproject(project.pyproject.read_text(), entries))
   log.info('updated %s', project.pyproject)
 
 
 def sync_entrypoints(project: Project) -> None:
-  _, rendered = _rendered_artifacts(project)
-  project.bridge_path.write_text(rendered)
-  log.info('updated %s', project.bridge_path)
+  entries = _discover(project)
+  if project.bridge is None:
+    return
+  project.bridge.path.write_text(_render_entrypoints(entries))
+  log.info('updated %s', project.bridge.path)
 
 
 def check(project: Project) -> bool:
-  rendered_pyproject, rendered_bridge = _rendered_artifacts(project)
+  entries = _discover(project)
+  if project.bridge is None:
+    return True
+  pyproject = project.pyproject.read_text()
   return (
-    project.pyproject.read_text() == rendered_pyproject
-    and project.bridge_path.is_file()
-    and project.bridge_path.read_text() == rendered_bridge
+    pyproject == _render_pyproject(pyproject, entries)
+    and project.bridge.path.is_file()
+    and project.bridge.path.read_text() == _render_entrypoints(entries)
   )
 
 

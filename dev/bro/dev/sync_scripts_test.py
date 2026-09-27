@@ -104,3 +104,29 @@ stale = "_entrypoints:stale"
 
   with pytest.raises(ValueError, match="canonical name 'rewind' into the bare-alias namespace"):
     sync_scripts.sync_pyproject(sync_scripts._project(tmp_path))
+
+
+def test_a_project_declaring_no_scripts_and_defining_no_cli_has_nothing_to_sync(tmp_path):
+  (tmp_path / 'package').mkdir()
+  (tmp_path / 'package' / 'library.py').write_text('def build():\n  return 1\n')
+  pyproject = '[project]\nname = "example"\nversion = "0.1.0"\n'
+  (tmp_path / 'pyproject.toml').write_text(pyproject)
+
+  project = sync_scripts._project(tmp_path)
+  sync_scripts.sync_pyproject(project)
+  sync_scripts.sync_entrypoints(project)
+
+  assert sync_scripts.check(project) is True
+  assert (tmp_path / 'pyproject.toml').read_text() == pyproject
+  assert sorted(path.name for path in tmp_path.iterdir()) == ['package', 'pyproject.toml']
+
+
+def test_a_cli_in_a_project_declaring_no_scripts_is_refused(tmp_path):
+  (tmp_path / 'package').mkdir()
+  (tmp_path / 'package' / 'cli.py').write_text('def main(argv):\n  return argv\n')
+  (tmp_path / 'pyproject.toml').write_text('[project]\nname = "example"\nversion = "0.1.0"\n')
+
+  with pytest.raises(
+    ValueError, match=r'package/cli\.py: a CLI needs a \[project\.scripts\] table'
+  ):
+    sync_scripts.check(sync_scripts._project(tmp_path))
