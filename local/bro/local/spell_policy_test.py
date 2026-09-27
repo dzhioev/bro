@@ -6,7 +6,7 @@ from pathlib import Path
 
 from bro import spells as spell_store
 from bro.dev.packaging_policy import distribution_roots
-from bro.local.run_tests import BENCHMARK
+from bro.local.run_tests import PROJECTS
 from bro.registry import list_classes
 
 _ROOT = Path(__file__).resolve().parents[3]
@@ -25,7 +25,7 @@ def _declared_spell_files() -> set[Path]:
 def test_every_checked_in_spell_file_is_declared_by_a_bro():
   checked_in = {
     path.resolve()
-    for root in distribution_roots(_ROOT, (BENCHMARK,))
+    for root in distribution_roots(_ROOT, [project.directory for project in PROJECTS])
     for path in root.glob('bros/*/spells/**/*.md')
   }
   assert len(checked_in) > 0

@@ -109,7 +109,7 @@ def test_the_live_display_bars_the_progress_pytest_reports_within_a_step():
 
   output.truncate(0)
   output.seek(0)
-  display.step('pytest, 1 single-process module')
+  display.step('pyright')
   console.print(display)
   assert '━' not in output.getvalue()
 

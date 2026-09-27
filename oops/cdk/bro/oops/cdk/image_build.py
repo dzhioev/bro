@@ -10,7 +10,7 @@ from aws_cdk import (
 )
 from constructs import Construct
 
-from bro.oops.cdk.config import InfrastructureConfig
+from bro.oops.config import InfrastructureConfig
 
 
 class ImageBuildStack(Stack):

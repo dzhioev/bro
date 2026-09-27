@@ -8,7 +8,7 @@ load_trails_deployment_config() {
 import json
 from dataclasses import asdict
 
-from bro.oops.cdk.config import resolve
+from bro.oops.config import resolve
 
 print(json.dumps(asdict(resolve())))
 PY

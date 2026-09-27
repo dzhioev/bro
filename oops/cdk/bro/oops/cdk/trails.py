@@ -21,8 +21,8 @@ from aws_cdk import (
 )
 from constructs import Construct
 
-from bro.oops.cdk.config import InfrastructureConfig
 from bro.oops.cdk.platform import PlatformHandles
+from bro.oops.config import InfrastructureConfig
 from bro.trails.server import dynamo as trails_dynamo
 
 CONTAINER_PORT = 8004

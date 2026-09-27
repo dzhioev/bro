@@ -33,9 +33,10 @@ DIR = Path(__file__).resolve().parents[3]
 TEST_MODULE_PATTERN = f'.*({"|".join(TEST_MODULE_SUFFIXES)})\\.py$'
 
 
-# this checkout's one project outside the workspace, which the root metadata
-# names nowhere, so every tool that walks the members is told about it here
+# this checkout's projects outside the workspace, which the root metadata names
+# nowhere, so every tool that walks the members is told about them here
 BENCHMARK = 'benchmark'
+OOPS_CDK = 'oops/cdk'
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,16 @@ class Distribution:
   directory: str
   deptry_exclude: tuple[str, ...]
   deptry_known_first_party: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Project:
+  """a project outside the workspace, and the gate stage that syncs its own
+  environment from its own lock and runs pyright and its roster inside it."""
+
+  stage: str
+  directory: str
+  pytest_files: Sequence[str]
 
 
 DISTRIBUTIONS = [
@@ -90,7 +101,12 @@ DISTRIBUTIONS = [
   ),
   Distribution(
     directory='oops',
-    deptry_exclude=(TEST_MODULE_PATTERN,),
+    deptry_exclude=(TEST_MODULE_PATTERN, '^cdk/'),
+    deptry_known_first_party=('bro',),
+  ),
+  Distribution(
+    directory=OOPS_CDK,
+    deptry_exclude=(TEST_MODULE_PATTERN, '.venv/'),
     deptry_known_first_party=('bro',),
   ),
   Distribution(
@@ -187,7 +203,7 @@ PYTEST_FILES = [
   'bro/show_test.py',
   'bro/shell_test.py',
   'oops/bro/oops/assets_test.py',
-  'oops/bro/oops/cdk/config_test.py',
+  'oops/bro/oops/config_test.py',
   'oops/bro/oops/trails_deployment_test.py',
   'oops/bro/oops/deploy_lib_test.py',
   'oops/bro/oops/distribution_test.py',
@@ -327,10 +343,6 @@ PYTEST_FILES = [
   'dev/bro/dev/sleep_policy_test.py',
   'dev/bro/dev/sharding_test.py',
 ]
-# collected by one process rather than by every worker in the pool: an xdist
-# worker collects the whole roster, not the share it runs, so a module importing
-# `aws_cdk` starts a jsii Node kernel in each of them
-SINGLE_PROCESS_PYTEST_FILES = ['oops/bro/oops/cdk/stacks_test.py']
 # outside both rosters above: they drive the host docker daemon, which the
 # suite's in-container leg has none of
 DOCKER_PYTEST_FILES = [
@@ -339,20 +351,26 @@ DOCKER_PYTEST_FILES = [
 ]
 BROKER_E2E_PYTEST_FILE = 'ride/ride/e2e_test.py'
 WEBVIEW_E2E_PYTEST_FILES = ['webview/bro/webview/e2e_test.py']
-# run from the benchmark project's own environment, the only one that can import
-# it
-BENCHMARK_PYTEST_FILES = [
-  'bro/benchmark/bundle_test.py',
-  'bro/benchmark/cli_test.py',
-  'bro/benchmark/harbor_agent_test.py',
-  'bro/benchmark/harbor_environment_test.py',
-  'bro/benchmark/import_trails_test.py',
-  'bro/benchmark/job_test.py',
-  'bro/benchmark/presets_test.py',
-  'bro/benchmark/publication_test.py',
-  'bro/benchmark/query_test.py',
-  'bro/benchmark/retention_test.py',
-  'bro/benchmark/trajectory_test.py',
+# each run from its project's own environment, the only one that can import it
+PROJECTS = [
+  Project(
+    stage='benchmark',
+    directory=BENCHMARK,
+    pytest_files=[
+      'bro/benchmark/bundle_test.py',
+      'bro/benchmark/cli_test.py',
+      'bro/benchmark/harbor_agent_test.py',
+      'bro/benchmark/harbor_environment_test.py',
+      'bro/benchmark/import_trails_test.py',
+      'bro/benchmark/job_test.py',
+      'bro/benchmark/presets_test.py',
+      'bro/benchmark/publication_test.py',
+      'bro/benchmark/query_test.py',
+      'bro/benchmark/retention_test.py',
+      'bro/benchmark/trajectory_test.py',
+    ],
+  ),
+  Project(stage='cdk', directory=OOPS_CDK, pytest_files=['bro/oops/cdk/stacks_test.py']),
 ]
 # run by hand from the benchmark project, never by a stage: two of them spend real
 # tokens
@@ -378,12 +396,11 @@ def _rosters() -> list[tuple[str, Sequence[str]]]:
   """every roster, with the directory its paths are relative to."""
   return [
     ('.', PYTEST_FILES),
-    ('.', SINGLE_PROCESS_PYTEST_FILES),
     ('.', DOCKER_PYTEST_FILES),
     ('.', [BROKER_E2E_PYTEST_FILE]),
     ('.', WEBVIEW_E2E_PYTEST_FILES),
     ('.', LLM_PYTEST_FILES),
-    (BENCHMARK, BENCHMARK_PYTEST_FILES),
+    *((project.directory, project.pytest_files) for project in PROJECTS),
     (BENCHMARK, BENCHMARK_E2E_PYTEST_FILES),
   ]
 
@@ -513,23 +530,19 @@ def types_stage() -> None:
   run(sys.executable, '-m', 'pyright', extra_env=node_env())
 
 
-def unit_scope(roster: Sequence[str], single_process_roster: Sequence[str]) -> str:
-  selected = len(roster) + len(single_process_roster)
-  total = len(PYTEST_FILES) + len(SINGLE_PROCESS_PYTEST_FILES)
-  scope = 'the whole roster' if selected == total else f'{selected} of {total} modules'
+def unit_scope(roster: Sequence[str]) -> str:
+  scope = (
+    'the whole roster'
+    if len(roster) == len(PYTEST_FILES)
+    else f'{len(roster)} of {len(PYTEST_FILES)} modules'
+  )
   return f'pytest over {scope}'
 
 
-def unit_stage(
-  roster: Sequence[str] = PYTEST_FILES,
-  single_process_roster: Sequence[str] = SINGLE_PROCESS_PYTEST_FILES,
-) -> None:
+def unit_stage(roster: Sequence[str] = PYTEST_FILES) -> None:
   if len(roster) > 0:
     step(f'pytest, {len(roster)} modules in the worker pool')
     run(*pytest_command(sys.executable), '-n', 'auto', *roster)
-  if len(single_process_roster) > 0:
-    step(f'pytest, {len(single_process_roster)} single-process modules')
-    run(*pytest_command(sys.executable), *single_process_roster)
 
 
 @dataclass(frozen=True)
@@ -537,7 +550,6 @@ class Selection:
   """the gate work a change can reach: what each narrowed stage runs, and what is dropped whole."""
 
   roster: Sequence[str]
-  single_process_roster: Sequence[str]
   distributions: Sequence[Distribution]
   dropped: frozenset[str]
 
@@ -563,19 +575,21 @@ def touched_distributions(changed: Sequence[str]) -> list[Distribution]:
 
 def select(base: str) -> Selection:
   """the work a change against `base` can reach, stage by stage."""
-  source_roots = distribution_roots(DIR, (BENCHMARK,))
+  source_roots = distribution_roots(DIR, [project.directory for project in PROJECTS])
   changed = changed_paths(DIR, base)
   print(f'{len(changed)} paths changed against {base}', file=sys.stderr)
   seeds = {name for path in changed if (name := module_name(source_roots, DIR / path)) is not None}
   hit = reachable(import_graph(DIR, source_roots), seeds)
-  benchmark_reached = (
-    not hit.isdisjoint(module_names(DIR / BENCHMARK, source_roots).values())
-    or any(path.startswith(f'{BENCHMARK}/') for path in changed)
-    # the stage's `uv sync --locked` reads the metadata of every project the
-    # benchmark project installs from a path source, so a change to any of them
-    # can leave the lock committed beside it stale
-    or any(path.endswith('pyproject.toml') for path in changed)
-  )
+
+  def project_reached(project: Project) -> bool:
+    return (
+      not hit.isdisjoint(module_names(DIR / project.directory, source_roots).values())
+      or any(path.startswith(f'{project.directory}/') for path in changed)
+      # the stage's `uv sync --locked` reads the metadata of every project the
+      # project installs from a path source, so a change to any of them can
+      # leave the lock committed beside it stale
+      or any(path.endswith('pyproject.toml') for path in changed)
+    )
 
   def reached(test: str) -> bool:
     return (
@@ -585,14 +599,13 @@ def select(base: str) -> Selection:
 
   return Selection(
     roster=[test for test in PYTEST_FILES if reached(test)],
-    single_process_roster=[test for test in SINGLE_PROCESS_PYTEST_FILES if reached(test)],
     distributions=touched_distributions(changed),
-    dropped=frozenset() if benchmark_reached else frozenset({'benchmark'}),
+    dropped=frozenset(project.stage for project in PROJECTS if not project_reached(project)),
   )
 
 
-def benchmark_stage() -> None:
-  directory = DIR / BENCHMARK
+def project_stage(project: Project) -> None:
+  directory = DIR / project.directory
   environment = directory / '.venv'
   # naming the environment uv is about to sync keeps it from reporting the
   # workspace venv this gate runs from as one it is ignoring
@@ -603,7 +616,7 @@ def benchmark_stage() -> None:
   step('pyright')
   run(python, '-m', 'pyright', cwd=directory, extra_env={**in_environment, **node_env()})
   step('pytest')
-  run(*pytest_command(python), *BENCHMARK_PYTEST_FILES, cwd=directory, extra_env=in_environment)
+  run(*pytest_command(python), *project.pytest_files, cwd=directory, extra_env=in_environment)
 
 
 def docker_stage() -> None:
@@ -651,8 +664,15 @@ class Stage:
 STAGES = [
   Stage('lint', lint_stage, lint_scope(DISTRIBUTIONS)),
   Stage('types', types_stage, 'pyright'),
-  Stage('unit', unit_stage, unit_scope(PYTEST_FILES, SINGLE_PROCESS_PYTEST_FILES)),
-  Stage('benchmark', benchmark_stage, 'uv sync, pyright, pytest in benchmark/.venv'),
+  Stage('unit', unit_stage, unit_scope(PYTEST_FILES)),
+  *(
+    Stage(
+      project.stage,
+      functools.partial(project_stage, project),
+      f'uv sync, pyright, pytest in {project.directory}/.venv',
+    )
+    for project in PROJECTS
+  ),
   Stage(
     'docker',
     docker_stage,
@@ -686,14 +706,11 @@ def narrow(stage: Stage, selected: Selection) -> Stage:
       work=WHOLE if len(directories) == len(DISTRIBUTIONS) else work_digest(directories),
     )
   if stage.name == 'unit':
-    modules = [*selected.roster, *selected.single_process_roster]
     return replace(
       stage,
-      run=functools.partial(unit_stage, selected.roster, selected.single_process_roster),
-      scope=unit_scope(selected.roster, selected.single_process_roster),
-      work=WHOLE
-      if len(modules) == len(PYTEST_FILES) + len(SINGLE_PROCESS_PYTEST_FILES)
-      else work_digest(modules),
+      run=functools.partial(unit_stage, selected.roster),
+      scope=unit_scope(selected.roster),
+      work=WHOLE if len(selected.roster) == len(PYTEST_FILES) else work_digest(selected.roster),
     )
   return stage
 

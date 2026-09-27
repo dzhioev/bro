@@ -1,7 +1,7 @@
 from aws_cdk import CfnOutput, Stack, aws_ecr as ecr
 from constructs import Construct
 
-from bro.oops.cdk.config import RepositoryConfig
+from bro.oops.config import RepositoryConfig
 
 
 class RepositoryStack(Stack):

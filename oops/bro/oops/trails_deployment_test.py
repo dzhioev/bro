@@ -9,8 +9,9 @@ from bro.base.spawn import console_script
 
 _PROJECT = Path(__file__).resolve().parents[2]
 _SERVER = _PROJECT / 'trails' / 'server'
+_CDK_APP = _PROJECT / 'cdk' / 'deployment'
 _EXECUTABLES = (
-  _PROJECT / 'deployment' / 'app.py',
+  _CDK_APP / 'app.py',
   _PROJECT / 'image_build.sh',
   _SERVER / 'bootstrap.sh',
   _SERVER / 'deploy.sh',
@@ -146,10 +147,13 @@ def test_the_plan_covers_every_stack_the_deploy_rolls(tmp_path):
   assert {target for target, *_ in deploy_calls} == {'trails-server'}
   assert deployed_stacks == {'RepositoryStack', 'ImageBuildStack', 'ServiceStack'}
   assert diffed_stacks == deployed_stacks
-  assert {Path(directory).resolve() for _, directory, *_ in calls} == {_PROJECT / 'deployment'}
+  assert {Path(directory).resolve() for _, directory, *_ in calls} == {_CDK_APP}
 
 
-def test_repository_cdk_app_runs_from_the_workspace():
-  cdk_config = json.loads((_PROJECT / 'deployment' / 'cdk.json').read_text())
+def test_repository_cdk_app_runs_in_the_environment_of_the_project_shipping_the_constructs():
+  command = json.loads((_CDK_APP / 'cdk.json').read_text())['app'].split()
+  project = next(parent for parent in _CDK_APP.parents if (parent / 'pyproject.toml').is_file())
 
-  assert cdk_config == {'app': 'uv run python app.py'}
+  assert command[:2] == ['uv', 'run']
+  assert (project / 'uv.lock').is_file()
+  assert (project / 'bro' / 'oops' / 'cdk' / 'app.py').is_file()

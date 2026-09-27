@@ -4,7 +4,7 @@ import aws_cdk as cdk
 import boto3
 
 from bro.oops.cdk.app import create_app
-from bro.oops.cdk.config import resolve
+from bro.oops.config import resolve
 
 application = cdk.App()
 infrastructure_config = resolve()
