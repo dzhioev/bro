@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from bro.local import gate_display, run_tests
+from bro.local import gate_display, green_trees, run_tests
+
+CLEAN_TREE = green_trees.clean_tree
 
 
 @pytest.fixture(autouse=True)
@@ -16,6 +18,12 @@ def display(monkeypatch):
   shown.stage_started('probe', 'probe')
   monkeypatch.setattr(run_tests, '_display', shown)
   return shown
+
+
+@pytest.fixture(autouse=True)
+def no_tree_notes(monkeypatch):
+  """the gate as over a worktree with edits, so no run notes anything on this checkout's tree."""
+  monkeypatch.setattr(green_trees, 'clean_tree', lambda root: None)
 
 
 def test_a_failed_command_carries_its_whole_output():
@@ -463,3 +471,73 @@ def test_the_gate_refuses_to_start_over_a_roster_problem(rosters, monkeypatch):
   with pytest.raises(SystemExit, match='thing/api_test.py is in a roster but is no file'):
     run_tests.main([])
   assert ran == []
+
+
+@pytest.fixture
+def noted(rosters, monkeypatch):
+  """the checkout above committed clean, with the gate noting what passes on its tree."""
+  subprocess.run(('git', 'add', '.'), cwd=rosters, check=True, capture_output=True)
+  subprocess.run(('git', 'commit', '-m', 'rosters'), cwd=rosters, check=True, capture_output=True)
+  monkeypatch.setattr(green_trees, 'clean_tree', CLEAN_TREE)
+  return rosters
+
+
+def probe_stages(monkeypatch, ran, *, unit_work=run_tests.WHOLE, unit_fails=False):
+  def unit() -> None:
+    ran.append('unit')
+    if unit_fails:
+      run_tests.step('probe')
+      raise subprocess.CalledProcessError(1, ('probe',), output='')
+
+  monkeypatch.setattr(
+    run_tests,
+    'STAGES',
+    [
+      run_tests.Stage('types', lambda: ran.append('types'), 'a probe'),
+      run_tests.Stage('unit', unit, 'a probe', work=unit_work),
+    ],
+  )
+
+
+def test_a_stage_that_passed_on_the_tree_runs_again_only_on_rerun(noted, monkeypatch, capsys):
+  ran = []
+  probe_stages(monkeypatch, ran)
+
+  assert run_tests.main([]) is None
+  assert run_tests.main([]) is None
+  assert ran == ['types', 'unit']
+  assert capsys.readouterr().err.endswith('gate: types ok | unit ok\n')
+
+  assert run_tests.main(['run-tests', '--rerun']) is None
+  assert ran == ['types', 'unit', 'types', 'unit']
+
+
+def test_a_failed_stage_runs_again_on_the_same_tree(noted, monkeypatch):
+  ran = []
+  probe_stages(monkeypatch, ran, unit_fails=True)
+
+  assert run_tests.main([]) == 1
+  assert run_tests.main([]) == 1
+  assert ran == ['types', 'unit', 'unit']
+
+
+def test_a_whole_pass_covers_a_narrowed_stage_but_not_the_reverse(noted, monkeypatch):
+  ran = []
+  probe_stages(monkeypatch, ran, unit_work=run_tests.work_digest(['thing/api_test.py']))
+  assert run_tests.main([]) is None
+  probe_stages(monkeypatch, ran)
+  assert run_tests.main([]) is None
+  probe_stages(monkeypatch, ran, unit_work=run_tests.work_digest(['thing/store_test.py']))
+  assert run_tests.main([]) is None
+
+  assert ran == ['types', 'unit', 'unit']
+
+
+def test_a_worktree_with_edits_notes_nothing(noted, monkeypatch):
+  ran = []
+  probe_stages(monkeypatch, ran)
+  (noted / 'thing/store.py').write_text('CHANGED = 1\n')
+
+  assert run_tests.main([]) is None
+  assert run_tests.main([]) is None
+  assert ran == ['types', 'unit', 'types', 'unit']

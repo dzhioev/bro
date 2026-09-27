@@ -16,6 +16,7 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
 - `bro/local/prompts.py` — framework-project context shared by those personas.
 - `bro/local/run_tests.py` (`run-tests`) — the checkout-wide staged test gate and explicit test rosters.
 - `bro/local/gate_display.py` — how the gate reports: plain lines on a pipe, a live table on a terminal.
+- `bro/local/green_trees.py` — the gate stages a tree has passed, kept as git notes on the tree object under `refs/notes/run-tests`.
 - `bro/local/*_policy_test.py` — repository-wide policy assertions that have no consumer-neutral package owner.
 
 ## Test gate
@@ -49,7 +50,10 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
   `benchmark` is skipped whole unless the change reaches something that project imports or edits any project's metadata;
   and `types` is never narrowed, since pyright loads the dependency closure whatever file list it is given, so a shorter list hides errors instead of skipping work.
   Each stage names the scope it ran, and a stage the narrowing drops reads `skipped` in the closing verdict rather than going missing from it.
-  `run-tests --changed` is the pre-push gate;
+  A stage that passes over a clean worktree is noted on the tree `HEAD` names,
+  and a later run on that tree skips it where the note covers its work, the whole stage or the same narrowed share, and reads `ok` for it;
+  `--rerun` runs it anyway.
+  `run-tests --changed --base origin/<base>`, `<base>` the pull request's base, is the pre-push gate;
   the whole gate is the pull request's, a runner per stage and per `broker_e2e` shard, with `webview_e2e` on its own runner (`.github/workflows/tests.yml`, on `pull_request`, on `push` to `master`, and on `workflow_dispatch`
   — a push to a feature branch triggers nothing, so a branch that never opens a PR runs on a dispatch or not at all)
 - `run-tests --only llm` — the live-LLM behavior probes (`*_llm_test.py`):

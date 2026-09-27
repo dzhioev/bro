@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 7.8.1
+version: 7.9.0
 ---
 
 # run-pr
@@ -285,7 +285,7 @@ a branch that is final before review cannot account for the work that follows it
 The flow's one mandatory local pass
 — on the folded, rebased tree, which is the tree that ships.
 Run the repo's gate over what the change reaches:
-a change-scoped selection where offered, otherwise affected tests (use the repo's command and environment flags).{{when #harness = bro}} Run long commands through `bro::job` in `fg` mode with an explicit `timeout_seconds` (600 fits)
+a selection scoped to the diff against `<base>` where offered, otherwise affected tests (the repo's command and environment flags).{{when #harness = bro}} Run long commands through `bro::job` in `fg` mode with an explicit `timeout_seconds` (600 fits)
 — the default foreground wait is shorter.{{end}}
 
 What this pass is worth is keeping a broken branch away from a reviewer, and a change-scoped selection buys that at a fraction of the price.
@@ -503,8 +503,8 @@ address every comment that has arrived, then pay one verification pass and one p
 2. Make the requested code changes locally.
 3. Re-run the pre-commit gates (step 2).
 4. Commit (a **new** commit, not `--amend`) with the same conventions as step 5–6.
-5. Verify with the selection step 9 used
-   — a change-scoped gate selection where the repo offers one, otherwise the affected test files.
+5. Verify what the round changed
+   — the repo's change-scoped selection diffed against the head you last pushed where it offers one, otherwise the round's affected test files.
    **Not the full suite:**
    the push in step 7 puts the branch back through the PR's own CI, which runs the whole gate, and the merge is blocked on it
    — a full local pass here duplicates a run that is about to happen anyway and that nothing can land without.
