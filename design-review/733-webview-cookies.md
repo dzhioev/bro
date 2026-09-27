@@ -200,9 +200,11 @@ What crosses versions:
 - Runtime, project, and worker images, shared on the host:
   the image locks (rule 14) bind every process from this change on, whatever its version.
   A ride started before this change neither takes nor honors them:
-  after rebuilding a tag of its own that went missing, it could prune a tag a newer process holds, failing that process's next container, or a setup before it writes anything.
-  So every root started before this change's upgrade ends before the first setup (step 3 below);
-  from then on every process on the host takes the locks, a later change to an image input such as a Playwright MCP pin bump included.
+  building a tag of its own that is absent, whether pruned, cleaned, or never built, it could prune a tag a newer process holds, failing that process's next container, or a setup before it writes anything.
+  So adopting the locks is a one-time drain (step 3 below):
+  every root started before the upgrade ends before any root starts from the upgraded checkout and before the first setup,
+  and from then on every process on the host takes the locks, a later change to an image input such as a Playwright MCP pin bump included.
+  Rolling back drains the other way.
 - Nothing else crosses versions:
   a webview's launch request and store, and the capture exchange, live within one ride or one setup run, each on one frozen installation.
 
@@ -210,12 +212,13 @@ The order:
 
 1. Land the change.
 2. Upgrade the host's checkout.
-3. End every root started before step 2, until `ride list` shows none of them live.
+3. End every root started before step 2's upgrade, step 2's own session included, until `ride list` shows none of them live;
+   no root starts from the upgraded checkout, and no setup runs, before this step is done.
 4. The user runs `webview setup <instance>` from the upgraded checkout and logs in by hand.
 5. A root started from the upgraded checkout with `--grant :launch.webview --grant :launch.webview.pass.cookies+<instance>` verifies;
    its launch fails unless step 4 left the instance in the host store.
 
-Rolling back takes every `cookies` pass right out of every launch command, ends every root started from the upgraded checkout, and then downgrades the checkout,
+Rolling back takes every `cookies` pass right out of every launch command, ends every root started from the upgraded checkout, and then downgrades the checkout before any root starts from it,
 since the older version takes no image locks;
 stored profiles stay, unread by the older version.
 
