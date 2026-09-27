@@ -644,6 +644,22 @@ def test_a_volume_the_marker_was_not_written_for_is_materialized_again(monkeypat
   assert len(materialized) == 2
 
 
+def test_a_process_already_running_from_its_bundle_neither_validates_nor_reexecs(
+  monkeypatch, tmp_path
+):
+  # no `bin/` shim farm, so validation would refuse this layout outright
+  root = tmp_path / 'runtime'
+  (root / 'venv' / 'bin').mkdir(parents=True)
+  monkeypatch.setattr(runtime_bundle.sys, 'prefix', str(root / 'venv'))
+  monkeypatch.setattr(
+    runtime_bundle.os,
+    'execve',
+    lambda *_args: pytest.fail('a process running from its bundle re-execs into it'),
+  )
+
+  runtime_bundle.reexec_from_runtime(str(root), ['ride', 'solo'])
+
+
 def test_session_command_declaration_must_match_the_distributions_console_script(
   monkeypatch,
 ):

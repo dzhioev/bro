@@ -266,7 +266,6 @@ def _bundle_environment() -> dict[str, str]:
 
 def reexec_from_runtime(reference: str, argv: list[str]) -> None:
   root = runtime_root_from_reference(reference)
-  validate_materialized_runtime(root)
   runtime_venv = (root / 'venv').resolve()
   try:
     running_from_runtime = Path(sys.prefix).resolve() == runtime_venv
@@ -274,6 +273,7 @@ def reexec_from_runtime(reference: str, argv: list[str]) -> None:
     running_from_runtime = False
   if running_from_runtime:
     return
+  validate_materialized_runtime(root)
   executable = root / 'venv' / 'bin' / 'ride'
   os.execve(str(executable), [str(executable), *argv[1:]], _bundle_environment())
 
