@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from bro.artifact import is_ref
-from bro.base import log
+from bro.base import credentials, log
 from bro.broker.brotocol import TALK_RIGHTS, Talk
 from bro.worker_types import (
   ArtifactDenied,
@@ -18,6 +18,7 @@ from bro.worker_types import (
   Expect,
   Job,
   LaunchDenied,
+  LaunchPass,
   LaunchRequest,
   PeerDescription,
   Spawn,
@@ -36,7 +37,7 @@ if TYPE_CHECKING:
   from bro.broker.runtime import Peer
   from bro.broker.spawn import Spawner
 
-_COMMON_FIELDS = frozenset({'type', 'timeout', 'share', 'talk', 'manual'})
+_COMMON_FIELDS = frozenset({'type', 'timeout', 'pass', 'share', 'talk', 'manual'})
 
 
 def _json_object(value: Any, subject: str) -> dict[str, Any]:
@@ -78,10 +79,14 @@ class LaunchControl:
     self._session_env = dict(session_env)
     self._worker_container_spawner = worker_container_spawner
     self._audit_fields: dict[str, dict[str, Any]] = {}
+    self._audit_passes: dict[str, tuple[str, ...]] = {}
     self._owners: dict[str, dict[str, str]] = {}
 
   def handle(self, context: Dispatcher, peer: Peer, message: Message) -> None:
     requested_type = message.args.get('type')
+    raw_passes = message.args.get('pass', [])
+    if isinstance(raw_passes, list) and all(isinstance(value, str) for value in raw_passes):
+      self._audit_passes[message.request_id] = tuple(raw_passes)
     try:
       owner = self._peers.resolve(context, peer)
     except UnattributablePeer as error:
@@ -91,6 +96,8 @@ class LaunchControl:
       request, worker_type = self._request(message, owner)
       talk = worker_type.talk(request)
       run = worker_type.launch(request)
+      if request.passes and isinstance(run, (Job, Container)):
+        raise LaunchDenied(f"worker type {request.type!r} cannot honor 'pass' for this run")
       if request.share and isinstance(run, (Job, Expect)):
         raise LaunchDenied(f"worker type {request.type!r} cannot honor 'share' for this run")
       if isinstance(run, Job) and talk:
@@ -120,6 +127,7 @@ class LaunchControl:
       ),
     )
     self._audit_fields[request.id] = fields
+    self._audit_passes[request.id] = request.passes
     self._owners[request.id] = self._peers.attribution_for_mission(context.journal, owner.mission)
     if isinstance(run, Spawn):
       context.spawn(
@@ -177,6 +185,38 @@ class LaunchControl:
     if name not in owner.launch:
       raise LaunchDenied(f'the owner does not hold :launch.{name}')
 
+    pass_value = args.get('pass', [])
+    if not isinstance(pass_value, list) or not all(isinstance(value, str) for value in pass_value):
+      raise LaunchDenied("launch 'pass' must be a list of credential instance names")
+    pass_kinds: set[str] = set()
+    for value in pass_value:
+      try:
+        kind, instance = credentials.parse_name(value)
+      except ValueError as error:
+        raise LaunchDenied(f"launch 'pass': {error}") from error
+      if instance is None:
+        raise LaunchDenied(
+          f"launch 'pass' value {value!r} names no instance; write {kind}+<instance>, "
+          f'or {kind}+ for the empty instance'
+        )
+      if kind in pass_kinds:
+        raise LaunchDenied(
+          f"launch 'pass' names more than one instance of credential kind {kind!r}"
+        )
+      pass_kinds.add(kind)
+    passable: frozenset[str] = frozenset()
+    if isinstance(worker_type.launch_schema.get('pass'), LaunchPass):
+      raw_passable = owner.launch[name].get('pass', frozenset())
+      if not isinstance(raw_passable, frozenset):
+        raise LaunchDenied(f"the owner's {name!r} launch payload has a malformed 'pass' field")
+      passable = raw_passable
+    beyond = sorted(set(pass_value) - passable)
+    if beyond:
+      raise LaunchDenied(
+        f"cannot pass credential instance(s) beyond the owner's :launch.{name}.pass rights: "
+        + ', '.join(beyond)
+      )
+
     timeout_value = args.get('timeout', worker_type.default_timeout)
     if timeout_value is not None and (
       not isinstance(timeout_value, (int, float))
@@ -227,6 +267,7 @@ class LaunchControl:
         owner=owner,
         requested_talk=cast(Talk, frozenset(talk_value)),
         timeout=timeout,
+        passes=tuple(pass_value),
         share=tuple(share_value),
         manual=manual_value,
       ),
@@ -253,6 +294,7 @@ class LaunchControl:
       pending_launch.discard(event.mission)
     if event.transition in ('ended', 'denied'):
       self._audit_fields.pop(event.mission, None)
+      self._audit_passes.pop(event.mission, None)
       self._owners.pop(event.mission, None)
 
   def audit_event(self, event: Event, record: Record) -> None:
@@ -263,6 +305,7 @@ class LaunchControl:
         owner = self._peers.attribution_for_mission(self._journal, record.parent)
       entry['owner'] = owner
     entry['type'] = record.type
+    entry['pass'] = list(self._audit_passes.get(event.mission, ()))
     entry['published_ports'] = []
     try:
       facts = self._peers.for_mission(event.mission)

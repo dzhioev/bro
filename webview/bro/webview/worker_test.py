@@ -53,6 +53,7 @@ def _request(
     owner=_owner(tmp_path, mission=mission, type=type, vnc=vnc),
     requested_talk=frozenset(),
     timeout=None,
+    passes=(),
     share=(),
     manual=False,
   )

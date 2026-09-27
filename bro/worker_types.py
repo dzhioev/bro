@@ -125,6 +125,7 @@ class LaunchRequest:
   owner: PeerDescription
   requested_talk: Talk
   timeout: float | None
+  passes: tuple[str, ...]
   share: tuple[str, ...]
   manual: bool
 

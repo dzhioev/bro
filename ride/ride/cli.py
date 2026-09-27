@@ -257,13 +257,17 @@ def _start_mode(
   bro = args.pop('bro')
   prompt = args.pop('prompt')
   session_log = args.pop('session_log')
+  user_scope_overrides: tuple[list[str], list[str], list[str]] | None = None
   if session_log is not None and log.LEVEL_ENV in args['env']:
     parser.error(f'--session-log and --env {log.LEVEL_ENV} both set the session log level')
   if summoned is not None:
     _validate_summoned(parser, summoned, bro=bro, prompt=prompt, args=args)
     prompt = summoned.prompt
-    args['grant'] = [*summoned.grant, *args['grant']]
-    args['revoke'] = [*summoned.revoke, *args['revoke']]
+    user_scope_overrides = (args['cred'], args['grant'], args['revoke'])
+    pass_picks, pass_grants = summoned.credential_scope_overrides()
+    args['cred'] = pass_picks
+    args['grant'] = [*pass_grants, *summoned.grant]
+    args['revoke'] = list(summoned.revoke)
     args['env'] = dict(summoned.env)
   elif solo and prompt is None:
     parser.error('ride solo requires a prompt unless --summoned supplies it')
@@ -299,6 +303,9 @@ def _start_mode(
     runtime_bundle=runtime_bundle,
     **args,
   )
+  if user_scope_overrides is not None:
+    user_cred, user_grant, user_revoke = user_scope_overrides
+    spec = spec.with_scope_overrides(cred=user_cred, grant=user_grant, revoke=user_revoke)
   return start_session(spec, repository, summoned=summoned)
 
 

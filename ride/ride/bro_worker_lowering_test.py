@@ -370,10 +370,14 @@ class TestSummonLowering:
       hold='guided',
       llm='openai:sol:high',
       grant=('@reviewer',),
+      passes=('github+passed',),
     )
-    _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
+    lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     workspace = Workspace.open('broker-CH')
     assert workspace.metadata.throwaway
+    assert lowered.launch.secrets == {'aws', 'github', 'trails'}
+    assert '--cred github+passed' in lowered.launch.env['RIDE_COMMAND']
+    assert '--grant github' in lowered.launch.env['RIDE_COMMAND']
     assert (
       ride.session.load_resume_spec(workspace)
       == ride.session.SessionSpec(
@@ -384,8 +388,8 @@ class TestSummonLowering:
         drop=True,
         no_trails=False,
         hold='guided',
-        cred=[],
-        grant=['@reviewer'],
+        cred=['github+passed'],
+        grant=['github', '@reviewer'],
         revoke=[],
         llm='openai:sol:high',
         resolved_llm=ride.bro.BRO.resolve_llm('openai:sol:high', 'dev').dump(),
@@ -621,7 +625,11 @@ class TestSummonLowering:
     shutil.rmtree(records)
 
   def _boxed_join(
-    self, monkeypatch, tmp_path, env: dict[str, str] | None = None
+    self,
+    monkeypatch,
+    tmp_path,
+    env: dict[str, str] | None = None,
+    passes: tuple[str, ...] = (),
   ) -> workspace_spawn.ExecLaunchSpec:
     workspace = Workspace.ensure(PARENT, None, Isolation.BOXED)
     monkeypatch.setattr(ride.session, 'find_container_id', lambda tree: 'cid-party')
@@ -633,6 +641,7 @@ class TestSummonLowering:
       summoner=SUMMONER,
       launch_scope=_authority(targets=('reviewer',), party=('join',)),
       harness='bro',
+      passes=passes,
       party='join',
       isolation=None,
       env=env if env is not None else {},
@@ -689,6 +698,21 @@ class TestSummonLowering:
     }
     assert 'BRO_STORE' not in member.env  # delivered into the container at spawn
     shutil.rmtree(records)
+
+  def test_joined_child_launch_carries_the_pass_scope(
+    self, lowering_harness, monkeypatch, tmp_path
+  ):
+    workspace = Workspace.ensure(PARENT, None, Isolation.BOXED)
+    lowered = self._boxed_join(
+      monkeypatch,
+      tmp_path,
+      passes=('github+passed',),
+    )
+
+    assert lowered.launch.secrets == {'aws', 'github', 'trails'}
+    assert lowered.launch.credential_selection == {'github': 'passed'}
+    assert lowered.launch.env['RIDE_COMMAND'].startswith('summon --join --pass github+passed')
+    shutil.rmtree(party_member_dir(workspace.path, 'broker-CH'))
 
   def test_boxed_join_requires_a_running_container(self, lowering_harness, monkeypatch, tmp_path):
     workspace = Workspace.ensure(PARENT, None, Isolation.BOXED)

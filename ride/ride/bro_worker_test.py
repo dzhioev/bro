@@ -43,6 +43,7 @@ def _owner(
   type: str = 'bro',
   targets=('dev',),
   party=('boxed',),
+  pass_rights=(),
   depth=0,
 ):
   extension = BroFacts(bro='bro-dev')
@@ -53,7 +54,13 @@ def _owner(
     type=type,
     bro='bro-dev' if type == 'bro' else None,
     launch=(
-      {'bro': {'bros': frozenset(targets), 'party': frozenset(party)}}
+      {
+        'bro': {
+          'bros': frozenset(targets),
+          'party': frozenset(party),
+          'pass': frozenset(pass_rights),
+        }
+      }
       if type == 'bro'
       else {'test': {}}
     ),
@@ -66,7 +73,7 @@ def _owner(
   )
 
 
-def _request(tmp_path, *, owner=None, manual=False, share=(), talk=(), **args):
+def _request(tmp_path, *, owner=None, manual=False, passes=(), share=(), talk=(), **args):
   return LaunchRequest(
     id='mission',
     type='bro',
@@ -74,6 +81,7 @@ def _request(tmp_path, *, owner=None, manual=False, share=(), talk=(), **args):
     owner=_owner(tmp_path) if owner is None else owner,
     requested_talk=cast(Talk, frozenset(talk)),
     timeout=None if manual else 1800.0,
+    passes=tuple(passes),
     share=tuple(share),
     manual=manual,
   )
@@ -110,7 +118,14 @@ def test_talk_widens_the_bro_default(tmp_path):
 
 def test_spawn_launch_carries_the_authorized_child(tmp_path):
   host = Host()
-  run = BroType(host).launch(_request(tmp_path, hold='guided', share=('sha256:' + 'a' * 64,)))
+  run = BroType(host).launch(
+    _request(
+      tmp_path,
+      hold='guided',
+      passes=('github+work',),
+      share=('sha256:' + 'a' * 64,),
+    )
+  )
   assert isinstance(run, Spawn)
   assert run.spawner is host.summon_spawner
   assert run.extension == BroFacts(
@@ -125,13 +140,16 @@ def test_spawn_launch_carries_the_authorized_child(tmp_path):
   assert launch.parent == 'ws'
   assert launch.parent_tree == tmp_path
   assert launch.hold == 'guided'
+  assert launch.passes == ('github+work',)
   assert launch.share == ('sha256:' + 'a' * 64,)
   assert launch.summoner == {'trail_id': 'trail'}
   assert launch.env == {'ONE': '1'}
 
 
 def test_manual_launch_returns_the_type_owned_pending_extension(tmp_path):
-  run = BroType(Host()).launch(_request(tmp_path, manual=True, into='feature'))
+  run = BroType(Host()).launch(
+    _request(tmp_path, manual=True, into='feature', passes=('github+work',))
+  )
   assert isinstance(run, Expect)
   assert run.pending == {
     'target': 'dev',
@@ -139,6 +157,7 @@ def test_manual_launch_returns_the_type_owned_pending_extension(tmp_path):
     'launch': {'bro': {'bros': ['reviewer'], 'party': ['boxed']}},
     'grant': [],
     'revoke': [],
+    'pass': ['github+work'],
     'summoner': {'trail_id': 'trail'},
     'repo': None,
     'into': 'feature',

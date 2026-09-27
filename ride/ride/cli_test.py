@@ -518,6 +518,28 @@ class TestCredentialHydrationRoutes:
     assert launch_scope.store['creds/github+resume.cred'] == b'github-resume'
     assert 'creds/aws+project.cred' not in launch_scope.store
 
+  def test_summoned_child_pass_flags_resume_as_a_root_launch(self, route):
+    assert (
+      route.launch(
+        '--cred',
+        'harbor+launch',
+        '--cred',
+        'github+flag',
+        '--grant',
+        'github',
+      )
+      == 0
+    )
+    route.captures.clear()
+
+    assert ride_cli.main(['ride', 'resume', 'hydration-route']) == 0
+
+    spec, launch_scope = route.captures[-1]
+    assert spec.cred == ['harbor+launch', 'github+flag']
+    assert spec.grant == ['github']
+    assert launch_scope.store['creds/github+flag.cred'] == b'github-flag'
+    assert launch_scope.store.kinds == {'github', 'aws', 'brog', 'harbor'}
+
   def test_resume_fails_for_an_absent_pass_instance(self, route, caplog):
     assert route.launch('--cred', 'harbor+launch') == 0
     route.captures.clear()
@@ -748,6 +770,7 @@ class TestSummonedLaunch:
         'launch': {'bro': {'bros': ['bro'], 'party': ['boxed']}},
         'grant': ['@bro'],
         'revoke': [':launch.bro.party.join'],
+        'pass': ['github+passed'],
         'summoner': {'trail_id': 'T1'},
         'repo': None,
         'into': None,
@@ -761,7 +784,8 @@ class TestSummonedLaunch:
       assert ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', 'dev']) == 0
     spec = start.call_args.args[0]
     assert spec.prompt == 'work this out with the user'
-    assert spec.grant == ['@bro']
+    assert spec.cred == ['github+passed']
+    assert spec.grant == ['github', '@bro']
     assert spec.revoke == [':launch.bro.party.join']
     assert spec.runtime_bundle == '/runtime'
     assert start.call_args.kwargs['summoned'] == pending
@@ -774,7 +798,15 @@ class TestSummonedLaunch:
   def test_user_credential_overrides_layer_on_the_records(self, pending):
     with patch('ride.cli.start_session', return_value=0) as start:
       ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--grant', 'github', 'dev'])
-    assert start.call_args.args[0].grant == ['@bro', 'github']
+    assert start.call_args.args[0].grant == ['github', '@bro']
+
+  def test_user_credential_revoke_drops_the_passed_kind_and_pick(self, pending):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--revoke', 'github', 'dev'])
+    spec = start.call_args.args[0]
+    assert spec.cred == []
+    assert spec.grant == ['@bro']
+    assert spec.revoke == ['github', ':launch.bro.party.join']
 
   def test_the_partys_env_is_the_manual_childs_own(self, pending):
     with patch('ride.cli.start_session', return_value=0) as start:
