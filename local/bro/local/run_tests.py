@@ -267,6 +267,7 @@ PYTEST_FILES = [
   'ride/ride/workspace/build_context_test.py',
   'ride/ride/workspace/containers_test.py',
   'ride/ride/workspace/docker_test.py',
+  'ride/ride/workspace/image_locks_test.py',
   'bro/workspace/git_test.py',
   'bro/workspace/human_test.py',
   'ride/ride/workspace/model_test.py',
