@@ -758,6 +758,8 @@ def _materialize(
   command_runner(
     ['uv', 'venv', '--python', python, str(venv)], description='cannot create runtime venv'
   )
+  # a boxed session mounts this tree read-only, so bytecode it does not carry
+  # now is bytecode no interpreter can ever write
   install = [
     'uv',
     'pip',
@@ -765,6 +767,7 @@ def _materialize(
     '--python',
     str(venv / 'bin' / 'python'),
     '--no-deps',
+    '--compile-bytecode',
     '-r',
     str(bundle / 'pins.txt'),
     *(str(wheel) for wheel in wheels),

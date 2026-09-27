@@ -344,7 +344,9 @@ def test_a_real_installer_matrix_classifies_by_provenance(monkeypatch, probe):
   )
 
 
-def test_a_git_installation_materializes_from_its_pin(monkeypatch, probe, tmp_path, caplog):
+def test_a_git_installation_materializes_from_its_pin_with_bytecode(
+  monkeypatch, probe, tmp_path, caplog
+):
   monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
   _read_installation(monkeypatch, probe.site_packages['git'])
 
@@ -357,8 +359,12 @@ def test_a_git_installation_materializes_from_its_pin(monkeypatch, probe, tmp_pa
     assert (bundle.root / 'pins.txt').read_text() == (
       f'demo @ git+{probe.source.as_uri()}@{probe.commit}\n'
     )
-    assert _classify(monkeypatch, _site_packages(bundle.host_venv))[0] == [
+    site_packages = _site_packages(bundle.host_venv)
+    assert _classify(monkeypatch, site_packages)[0] == [
       f'demo @ git+{probe.source.as_uri()}@{probe.commit}'
+    ]
+    assert sorted(path.name for path in (site_packages / 'demo' / '__pycache__').iterdir()) == [
+      f'__init__.{sys.implementation.cache_tag}.pyc'
     ]
 
 
