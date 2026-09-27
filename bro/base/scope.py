@@ -21,6 +21,30 @@ def launch_choices() -> str:
   return ':launch.<type>[.<field>[.<value>]] or @<bro>'
 
 
+def launch_pass_name(value: str) -> str | None:
+  """Return the credential name in a pass right, or None for another launch name."""
+  if not isinstance(value, str) or not value.startswith(':launch.'):
+    return None
+  segments = value.removeprefix(SECTION_MARK).split('.')
+  if len(segments) < 3 or segments[2] != 'pass':
+    return None
+  if len(segments) != 4:
+    raise ValueError(
+      f'launch pass right {value!r} must name one credential instance as kind+<instance> '
+      'or kind+ for the empty instance'
+    )
+  if any(_SEGMENT.fullmatch(segment) is None for segment in segments[:3]):
+    raise ValueError(f'unknown launch name {value!r}; expected dot-separated lowercase segments')
+  credential_name = segments[3]
+  kind, instance = credentials.parse_name(credential_name)
+  if instance is None:
+    raise ValueError(
+      f'launch pass right {value!r} names no instance; write {kind}+<instance>, '
+      f'or {kind}+ for the empty instance'
+    )
+  return credential_name
+
+
 def launch_name(value: str) -> str:
   """Validate one launch authority name and return its grant spelling."""
   if not isinstance(value, str):
@@ -34,6 +58,9 @@ def launch_name(value: str) -> str:
     return value
   if not value.startswith(SECTION_MARK):
     raise ValueError(f'unknown launch name {value!r}; expected {launch_choices()}')
+  pass_name = launch_pass_name(value)
+  if pass_name is not None:
+    return value
   segments = value.removeprefix(SECTION_MARK).split('.')
   if any(_SEGMENT.fullmatch(segment) is None for segment in segments):
     raise ValueError(f'unknown launch name {value!r}; expected dot-separated lowercase segments')
@@ -124,6 +151,14 @@ def validate_scope_layer(layer: ScopeLayer, *, context: str = 'host config') -> 
   """Validate one layer without consulting installed registries."""
   grant_credentials, grant_launch = split_scope_overrides(layer.grant)
   revoke_credentials, revoke_launch = split_scope_overrides(layer.revoke)
+  if context == 'project':
+    pass_rights = sorted(
+      name for name in (*grant_launch, *revoke_launch) if launch_pass_name(name) is not None
+    )
+    if pass_rights:
+      raise ValueError(
+        '[tool.bro] cannot name host credential instances in pass rights: ' + ', '.join(pass_rights)
+      )
   grant_kinds = {credential_grant_kind(value, context=context) for value in grant_credentials}
   revoke_kinds = {credential_revoke_name(value) for value in revoke_credentials}
   overlap = grant_kinds & revoke_kinds | (set(grant_launch) & set(revoke_launch))

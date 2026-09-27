@@ -42,7 +42,10 @@ def add_scope_flags(parser: Parser) -> None:
     action='append',
     default=None,
     metavar='NAME',
-    help=f'add a credential kind (KIND) or launch permission ({launch_choices()}) to the session scope (repeatable)',
+    help=(
+      f'add a credential kind (KIND) or launch permission ({launch_choices()}) to the '
+      'session scope; a pass right is :launch.<type>.pass.<kind>+<instance> (repeatable)'
+    ),
   )
   parser.add_argument(
     '--revoke',

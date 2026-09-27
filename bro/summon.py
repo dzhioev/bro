@@ -77,8 +77,9 @@ HARNESS_HELP = (
   '`[tool.bro] summon-harness`'
 )
 GRANT_HELP = (
-  'add a launch permission '
-  f'(@BRO, :launch.<type>, or one of {party_launch_choices()}) to the child (repeatable)'
+  'add a launch permission (@BRO, :launch.<type>[.<field>[.<value>]], including '
+  ':launch.<type>.pass.<kind>+<instance>, or one of '
+  f'{party_launch_choices()}) to the child (repeatable)'
 )
 REVOKE_HELP = "remove a launch permission from the child's authority (repeatable)"
 SHARE_HELP = (

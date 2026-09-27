@@ -20,7 +20,7 @@ from bro.base.scope import (
   validate_scope_layer,
 )
 from bro.launch.llm_flags import with_host_defaults
-from bro.worker_types import Launch, LaunchFlag, installed_types, parse_launch
+from bro.worker_types import Launch, LaunchFlag, LaunchPass, installed_types, parse_launch
 from ride.repository import Repository, attachment_identities, open_repository
 from ride.workspace.store import ScopedSecrets
 
@@ -125,7 +125,11 @@ def _launch_values(layer: ScopeLayer) -> tuple[list[str], list[str]]:
   return split_scope_overrides(layer.grant)[1], split_scope_overrides(layer.revoke)[1]
 
 
-def _launch_name_schema(name: str, types: Mapping[str, type]) -> tuple[str, str | None, str | None]:
+def _launch_name_schema(
+  name: str,
+  types: Mapping[str, type],
+  credential_kinds: Collection[str],
+) -> tuple[str, str | None, str | None]:
   if name.startswith('@'):
     worker_type = 'bro'
     field_name = 'bros'
@@ -152,6 +156,16 @@ def _launch_name_schema(name: str, types: Mapping[str, type]) -> tuple[str, str 
     return worker_type, field_name, None
   if value is None:
     raise ValueError(f'launch set {name!r} must name a value')
+  if isinstance(field_schema, LaunchPass):
+    kind, instance = credentials.parse_name(value)
+    if instance is None:
+      raise ValueError(
+        f'launch pass right {name!r} names no instance; write {kind}+<instance>, '
+        f'or {kind}+ for the empty instance'
+      )
+    if kind not in credential_kinds:
+      raise ValueError(f'launch pass right {name!r} names unregistered credential kind {kind!r}')
+    return worker_type, field_name, value
   choices = set(field_schema.values())
   if value not in choices:
     rendered = ', '.join(sorted(choices)) or '(none)'
@@ -168,18 +182,20 @@ def effective_launch(
   *,
   grant: Sequence[str],
   revoke: Sequence[str],
+  credential_store: credentials.Store | None,
+  grant_source: str = 'launch flags',
 ) -> Launch:
   """Fold and validate one launch section from its ordered authority layers."""
   from bro.registry import create_bro
 
-  configured: list[tuple[list[str], list[str]]] = []
+  configured: list[tuple[list[str], list[str], str]] = []
   explicit: set[str] = set()
   for layer in layers:
     layer_grant, layer_revoke = _launch_values(layer)
     overlap = set(layer_grant) & set(layer_revoke)
     if overlap:
       raise ValueError(f'cannot grant and revoke the same scope name: {", ".join(sorted(overlap))}')
-    configured.append((layer_grant, layer_revoke))
+    configured.append((layer_grant, layer_revoke, layer.source or 'scope layer'))
     explicit.update(layer_grant)
     explicit.update(layer_revoke)
   grant_launch = split_scope_overrides(grant)[1]
@@ -190,13 +206,27 @@ def effective_launch(
   explicit.update(grant_launch)
   explicit.update(revoke_launch)
   types = installed_types()
-  parsed = {name: _launch_name_schema(name, types) for name in explicit}
+  credential_kinds = (
+    credentials.default_registry().keys()
+    if credential_store is None
+    else credential_store.registry.keys()
+  )
+  parsed = {name: _launch_name_schema(name, types, credential_kinds) for name in explicit}
   names = {_LAUNCH_BRO, _LAUNCH_BRO_BOXED}
   names.update(f'@{target}' for target in create_bro(bro_name)._may_summon)
-  for layer_grant, layer_revoke in configured:
-    names = apply_idempotent(names, grant=layer_grant, revoke=layer_revoke)
-  names = apply_idempotent(names, grant=grant_launch, revoke=revoke_launch)
-  parsed.update({name: _launch_name_schema(name, types) for name in names})
+  granted_by: dict[str, str] = {}
+  for layer_grant, layer_revoke, source in configured:
+    names.difference_update(layer_revoke)
+    for name in layer_revoke:
+      granted_by.pop(name, None)
+    names.update(layer_grant)
+    granted_by.update(dict.fromkeys(layer_grant, source))
+  names.difference_update(revoke_launch)
+  for name in revoke_launch:
+    granted_by.pop(name, None)
+  names.update(grant_launch)
+  granted_by.update(dict.fromkeys(grant_launch, grant_source))
+  parsed.update({name: _launch_name_schema(name, types, credential_kinds) for name in names})
 
   launch: Launch = {}
   for name, (worker_type, field_name, _value) in parsed.items():
@@ -215,6 +245,20 @@ def effective_launch(
     assert isinstance(members, frozenset)
     assert value is not None
     payload[field_name] = members | {value}
+  if credential_store is not None:
+    present = credential_store.instance_names()
+    for worker_type, payload in launch.items():
+      pass_names = payload.get('pass', frozenset())
+      assert isinstance(pass_names, frozenset)
+      for pass_name in pass_names:
+        kind, instance = credentials.parse_name(pass_name)
+        assert instance is not None
+        if credentials.storage_name(kind, instance) not in present:
+          right = f':launch.{worker_type}.pass.{pass_name}'
+          raise ValueError(
+            f'pass right {right!r} granted by {granted_by[right]} names an instance '
+            'missing from the credential store'
+          )
   return launch
 
 
@@ -421,6 +465,7 @@ def preflight_scoped_launch(
 ) -> tuple[Launch, HydratedStore]:
   """Preflight one launch's authority and hydrate its credential store."""
   with launch_scope_errors():
+    launch_store = credential_store(scoped)
     if fixed_launch is None:
       configured_layers = configured_scope_layers(
         attachment,
@@ -432,11 +477,12 @@ def preflight_scoped_launch(
         configured_layers,
         grant=grant,
         revoke=revoke,
+        credential_store=launch_store,
       )
     else:
       launch = parse_launch(fixed_launch, subject='fixed launch section')
     files, hydrated_kinds = credentials.build_scoped_store(
-      credential_store(scoped), scoped.required, optional=scoped.optional
+      launch_store, scoped.required, optional=scoped.optional
     )
   return launch, HydratedStore(files, hydrated_kinds)
 
