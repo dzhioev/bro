@@ -899,7 +899,13 @@ Ride builds a missing tag lazily under the same host-wide image-lock protocol as
 The root process holds each worker tag it reaches for until it exits, so no other ride prunes an image its worker may use.
 A failed build reports the captured output tail with its exit status.
 
-The host lowers each run off the broker loop into a detached throwaway boxed workspace named `<type>-<channel>`.
+A host command can instead run a declaration as a foreground worker run outside any ride.
+It freezes the invoking installation, resolves and holds the runtime and worker images under the same image locks, builds missing images, and prunes none.
+It mounts only the read-only runtime volume, publishes every declared port on launcher loopback at its requested or selected host port, and passes the mapping through `RIDE_PUBLISHED_PORTS`.
+The command runs with stdin and stdout piped to the caller and no workspace, credential store, broker, or artifact view;
+leaving the run removes its container.
+
+The host lowers each broker run off the broker loop into a detached throwaway boxed workspace named `<type>-<channel>`.
 It hydrates exactly the credential instances in the request's authorized `pass` list into the worker's scoped store, selecting each instance as its kind's default there.
 A missing instance fails the launch by name and removes the throwaway workspace.
 No credential install hook runs in a worker container.

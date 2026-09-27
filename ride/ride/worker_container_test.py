@@ -4,7 +4,7 @@ import json
 import socket
 import subprocess
 import tarfile
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -138,6 +138,80 @@ def test_worker_image_build_can_skip_pruning(monkeypatch):
     _spec(),
     prune=False,
   )
+
+
+def test_foreground_run_freezes_runtime_publishes_ports_and_removes_container(monkeypatch):
+  calls = []
+  process_arguments = []
+
+  class Bundle:
+    container_volume = 'ride-runtime-bundle'
+
+  @contextlib.contextmanager
+  def runtime_bundle():
+    yield Bundle()
+
+  class Resolver:
+    def __init__(self, bundle, *, prune_images):
+      assert isinstance(bundle, Bundle)
+      assert prune_images is False
+
+    def resolve(self):
+      return ContainerRuntime('runtime-image', 'bundle', 'runtime-image')
+
+  class Process:
+    stdin = object()
+    stdout = object()
+
+    def __init__(self, arguments, **keywords):
+      process_arguments.extend(arguments)
+      cidfile = arguments[arguments.index('--cidfile') + 1]
+      Path(cidfile).write_text('container-id')
+
+    def poll(self):
+      return None
+
+    def wait(self):
+      return 0
+
+    def terminate(self):
+      pytest.fail('cidfile-backed foreground run should be removed through Docker')
+
+  monkeypatch.setattr(worker_container, 'resolve_runtime_bundle', runtime_bundle)
+  monkeypatch.setattr(worker_container, 'ContainerRuntimeResolver', Resolver)
+  monkeypatch.setattr(worker_container, '_published_ports', lambda _ports: ((46080, 6080),))
+
+  def ensure_image(worker_type, runtime_image, spec, *, prune):
+    assert (worker_type, runtime_image, prune) == ('webview', 'runtime-image', False)
+    return 'bro/webview:image'
+
+  monkeypatch.setattr(worker_container, 'ensure_worker_image', ensure_image)
+  monkeypatch.setattr(worker_container.subprocess, 'Popen', Process)
+  monkeypatch.setattr(
+    worker_container.subprocess,
+    'run',
+    lambda arguments, **keywords: calls.append((arguments, keywords)),
+  )
+
+  with worker_container.foreground_worker_run('webview', _spec()) as run:
+    assert run.published_ports == ((46080, 6080),)
+    arguments = process_arguments
+    assert '--interactive' in arguments
+    assert 'ride-runtime-bundle:/var/ride/runtime:ro' in arguments
+    assert ['-p', '127.0.0.1:46080:6080'] == arguments[
+      arguments.index('-p') : arguments.index('-p') + 2
+    ]
+    assert '/workspace' not in arguments
+    assert 'BRO_STORE' not in ' '.join(arguments)
+    assert 'RIDE_PUBLISHED_PORTS=6080=46080' in arguments
+    assert arguments[-3:] == ['worker', 'bro/webview:image', '--serve']
+
+  assert calls == [
+    (
+      ['docker', 'rm', '-f', 'container-id'],
+      {'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL},
+    )
+  ]
 
 
 def test_failed_worker_image_build_reports_the_captured_output_tail(monkeypatch):

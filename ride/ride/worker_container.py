@@ -9,9 +9,10 @@ import io
 import socket
 import subprocess
 import tarfile
-from collections.abc import Mapping
+import tempfile
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from bro.base import credentials, log
 from bro.broker.brotocol import Talk
@@ -21,7 +22,9 @@ from bro.worker_types import WorkerContainer
 from bro.workspace.paths import workspace_tree
 from ride.artifacts import ArtifactStore, view_mount
 from ride.peer_facts import PeerFacts
+from ride.runtime_bundle import resolve_runtime_bundle
 from ride.workspace.docker import (
+  IMAGE_ENV,
   ContainerRuntime,
   ContainerRuntimeResolver,
   Launch as DockerLaunch,
@@ -109,6 +112,82 @@ def ensure_worker_image(
     if prune:
       prune_superseded_images(tag)
   return tag
+
+
+@dataclass(frozen=True)
+class ForegroundWorkerRun:
+  process: subprocess.Popen[bytes]
+  published_ports: tuple[tuple[int, int], ...]
+
+
+@contextlib.contextmanager
+def foreground_worker_run(
+  worker_type: str,
+  spec: WorkerContainer,
+) -> Iterator[ForegroundWorkerRun]:
+  """Run a worker image on the host terminal without a managed workspace."""
+  with resolve_runtime_bundle() as bundle:
+    runtime = ContainerRuntimeResolver(bundle, prune_images=False).resolve()
+    image = ensure_worker_image(
+      worker_type,
+      runtime.runtime_image,
+      spec,
+      prune=False,
+    )
+    ports = _published_ports(spec.published_ports)
+    published = ','.join(f'{container_port}={host_port}' for host_port, container_port in ports)
+    with contextlib.ExitStack() as cleanup:
+      directory = Path(
+        cleanup.enter_context(tempfile.TemporaryDirectory(prefix='ride-foreground-'))
+      )
+      cidfile = directory / 'container-id'
+      arguments = [
+        'docker',
+        'run',
+        '--rm',
+        '--init',
+        '--interactive',
+        '--user',
+        'ride',
+        '--cidfile',
+        str(cidfile),
+        '-v',
+        f'{bundle.container_volume}:/var/ride/runtime:ro',
+      ]
+      for host_port, container_port in ports:
+        arguments += ['-p', f'127.0.0.1:{host_port}:{container_port}']
+      environment = {
+        **IMAGE_ENV,
+        'HOME': '/home/ride',
+        **spec.env,
+        _PUBLISHED_PORTS_ENV: published,
+      }
+      for name, value in environment.items():
+        arguments += ['-e', f'{name}={value}']
+      arguments += [
+        '--entrypoint',
+        spec.command[0],
+        image,
+        *spec.command[1:],
+      ]
+      process = subprocess.Popen(
+        arguments,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+      )
+      try:
+        yield ForegroundWorkerRun(process, ports)
+      finally:
+        if process.poll() is None:
+          if cidfile.is_file():
+            subprocess.run(
+              ['docker', 'rm', '-f', cidfile.read_text().strip()],
+              stdout=subprocess.DEVNULL,
+              stderr=subprocess.DEVNULL,
+            )
+          else:
+            process.terminate()
+        process.wait()
 
 
 def _published_ports(

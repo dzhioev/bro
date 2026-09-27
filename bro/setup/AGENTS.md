@@ -62,6 +62,7 @@ Material is convention-named:
 ```
 
 `<name>` is a kind (`github`) or instance (`github+reviewer`).
+The credential store writer accepts only canonical registered local names, offers a cross-process per-name lock, and atomically writes material at 0600 only while the stored bytes still equal the caller's expected starting value.
 `creds.json` holds the store's default picks and typed source annotations:
 
 ```json

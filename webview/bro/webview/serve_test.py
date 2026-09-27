@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import stat
+import sys
 import textwrap
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
@@ -358,6 +359,28 @@ def test_profile_bound_is_checked_before_parsing(monkeypatch):
 
   with pytest.raises(profile.ProfileError, match='32-byte limit'):
     profile.decode_profile('x' * 33)
+
+
+def test_shared_child_stdout_stays_off_the_capture_exchange(monkeypatch):
+  calls = []
+
+  class Process:
+    def poll(self):
+      return 0
+
+    def wait(self):
+      return 0
+
+  monkeypatch.setattr(
+    serve.subprocess,
+    'Popen',
+    lambda command, **keywords: calls.append((command, keywords)) or Process(),
+  )
+
+  with serve._child('helper', ('helper', '--serve')):
+    pass
+
+  assert calls == [(('helper', '--serve'), {'stdout': sys.stderr})]
 
 
 def test_mount_check_requires_the_declared_view_in_the_process_mount_table(tmp_path, monkeypatch):

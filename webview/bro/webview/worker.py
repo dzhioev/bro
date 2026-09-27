@@ -25,6 +25,10 @@ ARTIFACT_VIEW = PurePosixPath('/workspace/artifacts')
 VNC_PORT = 6080
 
 
+def vnc_url(host_port: int) -> str:
+  return f'http://127.0.0.1:{host_port}/vnc.html?autoconnect=1&resize=scale'
+
+
 @dataclass(frozen=True)
 class WebviewFacts:
   vnc: bool
