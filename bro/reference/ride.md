@@ -741,8 +741,11 @@ Container images are split:
 `ride.workspace.build_context` streams separate normalized contexts to `docker build -`:
 the runtime context contains only runtime assets;
 the project context carries tracked project files, its Dockerfile, and the staged manifests under the reserved `.bro-container/` prefix.
-Superseded tags are pruned per runtime or project repository;
-plain `docker image rm` leaves any image still referenced by a container.
+Each process holds a host-wide shared file lock on every runtime or project tag it resolves until that process exits.
+A missing tag is built under a host-wide per-tag build lock.
+Superseded tags are pruned per image repository only when a non-blocking exclusive lock proves that no current process holds the tag;
+the removal keeps that lock until `docker image rm` finishes.
+A process reaching for a tag during its removal waits and rebuilds it when the removal succeeds.
 
 Network is not restricted by design.
 
@@ -887,9 +890,9 @@ It also declares a command, environment, and a mapping from distinct container p
 A `null` host port asks the host to select an available one;
 a requested host port must be distinct and at least 1024.
 The environment cannot claim host-owned `BROKER_*`, `RIDE_*`, `BRO_*`, `HOME`, or `PATH` names.
-The runtime image tag and sorted build-context files determine the worker image tag `bro/<type>:<hash>`;
-ride builds a missing tag lazily under a per-tag lock and prunes unused predecessors from that type's image repository.
-A launch reserves its tag from the build through container creation, so concurrent builds of different tags cannot prune an image another launch is about to use.
+The runtime image tag and sorted build-context files determine the worker image tag `bro/<type>:<hash>`.
+Ride builds a missing tag lazily under the same host-wide image-lock protocol as runtime and project images and prunes only unlocked predecessors from that type's image repository.
+The root process holds each worker tag it reaches for until it exits, so no other ride prunes an image its worker may use.
 A failed build reports the captured output tail with its exit status.
 
 The host lowers each run off the broker loop into a detached throwaway boxed workspace named `<type>-<channel>`.

@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import signal
@@ -319,12 +320,12 @@ class TestContainerRuntimeResolver:
     events: list = []
     monkeypatch.setattr(
       workspace_docker,
-      '_ensure_runtime_image',
+      'ensure_runtime_image',
       lambda tag, version: events.append(('runtime', tag, version)),
     )
     monkeypatch.setattr(
       workspace_docker,
-      '_ensure_project_image',
+      'ensure_project_image',
       lambda runtime, project: events.append(('project', runtime, project)) or 'project-image',
     )
     monkeypatch.setattr(
@@ -352,10 +353,10 @@ class TestContainerRuntimeResolver:
     from ride.runtime_bundle import RuntimeBundle
 
     bundle = RuntimeBundle(tmp_path / ('a' * 64), '3.12')
-    monkeypatch.setattr(workspace_docker, '_ensure_runtime_image', lambda tag, version: None)
+    monkeypatch.setattr(workspace_docker, 'ensure_runtime_image', lambda tag, version: None)
     monkeypatch.setattr(
       workspace_docker,
-      '_ensure_project_image',
+      'ensure_project_image',
       lambda runtime, repo: pytest.fail('detached launch has no project image'),
     )
     monkeypatch.setattr(
@@ -363,6 +364,33 @@ class TestContainerRuntimeResolver:
     )
     runtime = workspace_docker.ContainerRuntimeResolver(bundle).resolve()
     assert runtime.image == workspace_docker.runtime_image_tag('3.12')
+
+
+def test_runtime_image_build_can_skip_pruning(monkeypatch):
+  events = []
+  monkeypatch.setattr(
+    workspace_docker,
+    'ensure_image',
+    lambda tag: contextlib.nullcontext(events.append(('ensure', tag))),
+  )
+  monkeypatch.setattr(workspace_docker, 'image_present', lambda tag: False)
+  monkeypatch.setattr(
+    workspace_docker,
+    'build_runtime_image',
+    lambda tag, version: events.append(('build', tag, version)),
+  )
+  monkeypatch.setattr(
+    workspace_docker,
+    'prune_superseded_images',
+    lambda tag: pytest.fail(f'no-prune ensure pruned {tag}'),
+  )
+
+  workspace_docker.ensure_runtime_image('bro/runtime:no-prune', '3.12', prune=False)
+
+  assert events == [
+    ('ensure', 'bro/runtime:no-prune'),
+    ('build', 'bro/runtime:no-prune', '3.12'),
+  ]
 
 
 class TestPruneSupersededImages:
@@ -378,6 +406,11 @@ class TestPruneSupersededImages:
       return _FakeProc(returncode=0)
 
     monkeypatch.setattr(workspace_docker.subprocess, 'run', fake_run)
+    monkeypatch.setattr(
+      workspace_docker,
+      'image_removal_lock',
+      lambda _tag: contextlib.nullcontext(True),
+    )
     return calls
 
   def test_removes_all_but_current_smoke_test_and_untagged(self, monkeypatch):
@@ -393,16 +426,20 @@ class TestPruneSupersededImages:
       ['docker', 'image', 'rm', 'bro/framework:old2'],
     ]
 
-  def test_keeps_every_protected_image(self, monkeypatch):
+  def test_keeps_every_locked_image(self, monkeypatch):
     listing = _FakeProc(
       returncode=0,
       stdout='bro/framework:cur\nbro/framework:active\nbro/framework:old\n',
     )
     calls = self._patch_run(monkeypatch, listing)
-    workspace_docker.prune_superseded_images(
-      'bro/framework:cur',
-      protected={'bro/framework:active'},
+    monkeypatch.setattr(
+      workspace_docker,
+      'image_removal_lock',
+      lambda tag: contextlib.nullcontext(tag != 'bro/framework:active'),
     )
+
+    workspace_docker.prune_superseded_images('bro/framework:cur')
+
     removals = [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']]
     assert removals == [['docker', 'image', 'rm', 'bro/framework:old']]
 
