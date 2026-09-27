@@ -150,10 +150,9 @@ Rules:
     Every profile carries the top-level integer `profile_version`, the webview package's `PROFILE_VERSION` when setup wrote it.
     The daemon and setup's seed read refuse a profile of a newer version than their own, naming both, and read any older one;
     they strip the member before the storage state reaches Playwright.
-    A Playwright MCP pin bump reads Playwright's release notes between the two pins for storage-state entries,
-    and increments `PROFILE_VERSION` when one changes what capture writes by default, as 1.54's cookie `partitionKey` did;
-    opt-in additions such as `credentials` and `opfs` never reach a profile, since capture asks only for `indexedDB`.
-    The e2e loads a synthetic profile of every earlier version under the current pin, so each bump establishes that newer webviews read older profiles.
+    Every Playwright MCP pin bump increments `PROFILE_VERSION`, since Playwright promises no storage-state compatibility across versions and its release notes are no complete record:
+    the package pairs each version with the pin it belongs to, and a unit test fails unless the Dockerfile's pin is the newest pair's, so a bump cannot leave the version behind.
+    A bump adds the outgoing version's synthetic profile to the e2e, which loads every earlier version's under the current pin, establishing that newer webviews read older profiles.
     A webview older than a profile thus refuses it, loudly, rather than loading part of it.
 14. **Host-wide image locks.**
     Runtime, project, and worker images are shared by every process on the host,
@@ -191,9 +190,9 @@ What crosses versions:
   An installation older than this change never reads it, since it skips material of an unregistered kind.
   Among the rest, a webview reads a profile of its own or an older profile version, which the e2e establishes for every earlier version,
   and refuses a newer one naming both (rule 13), since Playwright would drop an unknown member within a known storage kind, such as a new cookie attribute, without a word.
-  So after a pin bump that increments the version reaches the host, a profile re-captured under it fails loudly in rides still on an older pin and loads in rides started after the upgrade;
+  So after a pin bump reaches the host, a profile re-captured under it fails loudly in rides still on an older pin and loads in rides started after the upgrade;
   no ride has to end first.
-  Rolling such a bump back leaves those profiles refused by the older version, naming both versions, until `webview setup --fresh` there replaces each.
+  Rolling a pin bump back leaves those profiles refused by the older version, naming both versions, until `webview setup --fresh` there replaces each.
 - `creds.json` in the host store:
   nothing here writes it;
   a `defaults` pick of `cookies` would fail every older installation's store read, since `defaults` refuses an unregistered kind,
@@ -201,10 +200,9 @@ What crosses versions:
 - Runtime, project, and worker images, shared on the host:
   the image locks (rule 14) bind every process from this change on, whatever its version.
   A ride started before this change neither takes nor honors them:
-  after rebuilding a tag of its own that went missing, it can still prune a tag a newer process holds, failing that process's next container, or a setup before it writes anything.
-  This change alters no image input, neither the runtime image's files nor the webview Dockerfile, so it gives no process a reason to build or prune one.
-  The first later change to an image input, such as a Playwright MCP pin bump, rolls out only after every ride started before this change's upgrade has ended;
-  from then on every process on the host takes the locks.
+  after rebuilding a tag of its own that went missing, it could prune a tag a newer process holds, failing that process's next container, or a setup before it writes anything.
+  So every root started before this change's upgrade ends before the first setup (step 3 below);
+  from then on every process on the host takes the locks, a later change to an image input such as a Playwright MCP pin bump included.
 - Nothing else crosses versions:
   a webview's launch request and store, and the capture exchange, live within one ride or one setup run, each on one frozen installation.
 
@@ -212,11 +210,13 @@ The order:
 
 1. Land the change.
 2. Upgrade the host's checkout.
-3. The user runs `webview setup <instance>` from the upgraded checkout and logs in by hand.
-4. A root started from the upgraded checkout with `--grant :launch.webview --grant :launch.webview.pass.cookies+<instance>` verifies;
-   its launch fails unless step 3 left the instance in the host store.
+3. End every root started before step 2, until `ride list` shows none of them live.
+4. The user runs `webview setup <instance>` from the upgraded checkout and logs in by hand.
+5. A root started from the upgraded checkout with `--grant :launch.webview --grant :launch.webview.pass.cookies+<instance>` verifies;
+   its launch fails unless step 4 left the instance in the host store.
 
-Rolling back takes every `cookies` pass right out of every launch command, then downgrades the checkout;
+Rolling back takes every `cookies` pass right out of every launch command, ends every root started from the upgraded checkout, and then downgrades the checkout,
+since the older version takes no image locks;
 stored profiles stay, unread by the older version.
 
 ### Rejected alternatives
@@ -258,7 +258,8 @@ stored profiles stay, unread by the older version.
   the file would stop being a storage state, or the store would hold the secret twice, where one top-level member Playwright never sees carries the version.
 - A drain order for a version-changing pin bump, every ride on the older pin ending before anyone re-captures, in place of the version:
   nothing would stop a forgotten older root from loading part of a re-captured profile.
-- Relying on Playwright to keep storage states compatible: its docs promise nothing across versions, and although its release notes announce every storage-state change, an older loader drops what it does not know.
+- Relying on Playwright to keep storage states compatible: its docs promise nothing across versions, and an older loader drops what it does not know.
+- Incrementing the version only for a bump whose release notes show a storage-state change: the notes are no complete record, and a missed field would load partially again.
 - A view port only for setup: `webview open --vnc` needs the same standing forward on a remote host.
 - Unbounded profiles: a site could grow a profile through `--indexed-db` and every re-capture after it until it fills host memory and disk.
 - Only a per-name lock, or only the compare at write:
@@ -279,7 +280,7 @@ stored profiles stay, unread by the older version.
 - `webview open` fails naming a profile removed since the owner's launch, or one that is not a storage state.
 - A `{"$cred": …}` node a site stored in its IndexedDB stays that node in the site's storage.
 - A second `webview setup alice` while one runs refuses at start, and a capture over 32 MiB leaves the stored profile as it was.
-- After a Playwright MCP bump that increments the profile version, a ride started before the upgrade refuses a profile re-captured after it, naming both versions.
+- After a Playwright MCP pin bump, a ride started before the upgrade refuses a profile re-captured after it, naming both versions.
 - A ride or setup that builds a new image no longer prunes a tag another live process uses.
 
 ### Implementation sketch
@@ -304,7 +305,7 @@ To settle in the plan phase:
   - `pyproject.toml`: the `bro-ride` dependency, the `bro.credentials` entry point, and the deptry map;
   - the import-policy test.
 - Docs:
-  `webview/AGENTS.md` (the verbs, the daemon's profile, and in "Image pin" the release-notes check and `PROFILE_VERSION` increment a bump owes);
+  `webview/AGENTS.md` (the verbs, the daemon's profile, and in "Image pin" the `PROFILE_VERSION` increment and e2e profile a bump owes);
   `bro/reference/ride.md` ("Session permissions and credentials" for the shipped schemas and passes to containers, "Worker containers" for the store, requested ports, and image locks);
   `bro/setup/AGENTS.md` (the `cookies` material, literal entries, the writer);
   `ride/AGENTS.md` (`worker_container.py`, the pass invariant);
@@ -320,7 +321,7 @@ To settle in the plan phase:
   - hydration into the worker store, and a missing instance failing the launch with the workspace removed;
   - requested host ports: published as requested, refused below 1024, and `vnc_port` refused without `vnc`;
   - `serve` passing `--storage-state` exactly when a profile is present, failing before `listening` on a malformed, oversize, extra-kind, or newer-version one with an error that names no value, and never enabling a capability;
-  - the profile version: stamped by setup, stripped before Playwright, a newer one refused by the daemon and by setup's seed read naming both, an older one read;
+  - the profile version: stamped by setup, stripped before Playwright, a newer one refused by the daemon and by setup's seed read naming both, an older one read, and the Dockerfile's pin paired with the newest version;
   - capture's side of the exchange (each line, its order, its bound, EOF, the error answer, an oversize state), the seed, the IndexedDB flag, and nothing but the exchange on its stdout;
   - setup's refusals (session, terminal, empty instance, a source other than `local`, empty capture, oversize line);
     its lock and the compare that aborts over a changed profile;
