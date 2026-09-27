@@ -38,7 +38,9 @@ Interpret them as follows:
 
 5. `may_summon` lists the bros this session may summon
    — the outgoing half, about children this session can spawn, never about where it came from.
-   Plan delegation from it instead of probing:
+   It grants, it never asks:
+   summon only where your instructions call for a summon or leave the delegation to your judgment;
+   plan that summon from this list instead of probing.
    `may_summon: none` means this session may summon nobody,
    and the line's absence means the launcher published no list (an unmanaged environment).
    A listed target can still be denied for another reason, but an unlisted one always is.
