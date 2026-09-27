@@ -13,6 +13,7 @@ from bro.worker_types import (
   LAUNCH_FLAG,
   Container,
   LaunchDenied,
+  LaunchPass,
   LaunchRequest,
   WorkerContainer,
   WorkerType,
@@ -27,6 +28,7 @@ VNC_PORT = 6080
 @dataclass(frozen=True)
 class WebviewFacts:
   vnc: bool
+  vnc_port: int | None
   allowed_origins: tuple[str, ...]
   blocked_origins: tuple[str, ...]
 
@@ -46,7 +48,9 @@ def _dockerfile() -> bytes:
 
 class WebviewType(WorkerType):
   name = WEBVIEW
-  launch_schema = MappingProxyType({'vnc': LAUNCH_FLAG})
+  launch_schema = MappingProxyType(
+    {'vnc': LAUNCH_FLAG, 'pass': LaunchPass(kinds=frozenset({'cookies'}))}
+  )
   default_timeout = None
   widens_talk = False
   manual = False
@@ -57,19 +61,26 @@ class WebviewType(WorkerType):
 
   @override
   def launch(self, request: LaunchRequest) -> Container:
-    unknown = sorted(set(request.args) - {'vnc', 'allowed_origins', 'blocked_origins'})
+    unknown = sorted(set(request.args) - {'vnc', 'vnc_port', 'allowed_origins', 'blocked_origins'})
     if len(unknown) > 0:
       raise LaunchDenied(f'unknown webview field(s): {", ".join(unknown)}')
     vnc = request.args.get('vnc', False)
     if not isinstance(vnc, bool):
       raise LaunchDenied("webview 'vnc' must be a boolean")
+    vnc_port = request.args.get('vnc_port')
+    if vnc_port is not None and (
+      not isinstance(vnc_port, int) or isinstance(vnc_port, bool) or not 1024 <= vnc_port <= 65535
+    ):
+      raise LaunchDenied("webview 'vnc_port' must be an integer in 1024..65535")
+    if vnc_port is not None and not vnc:
+      raise LaunchDenied("webview 'vnc_port' requires 'vnc'")
     allowed_origins = _origins(request.args, 'allowed_origins')
     blocked_origins = _origins(request.args, 'blocked_origins')
     payload = request.owner.launch[WEBVIEW]
     if vnc and payload.get('vnc') is not True:
       raise LaunchDenied(f'the VNC view needs {VNC_PERMISSION}')
 
-    facts = WebviewFacts(vnc, allowed_origins, blocked_origins)
+    facts = WebviewFacts(vnc, vnc_port, allowed_origins, blocked_origins)
     options = json.dumps(
       {
         'allowed_origins': list(allowed_origins),
@@ -84,7 +95,7 @@ class WebviewType(WorkerType):
         files={'Dockerfile': _dockerfile()},
         command=('webview', 'serve'),
         env={'WEBVIEW_OPTIONS': options},
-        published_ports={VNC_PORT: None} if vnc else {},
+        published_ports={VNC_PORT: vnc_port} if vnc else {},
         artifact_view=ARTIFACT_VIEW,
       ),
       extension=facts,
@@ -96,6 +107,7 @@ class WebviewType(WorkerType):
       raise TypeError('webview audit fields need WebviewFacts')
     return {
       'vnc': extension.vnc,
+      'vnc_port': extension.vnc_port,
       'allowed_origins': list(extension.allowed_origins),
       'blocked_origins': list(extension.blocked_origins),
     }

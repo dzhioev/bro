@@ -16,11 +16,25 @@ from bro.broker.brotocol import Message, Tag
 from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION, BROKER_TALK
 from bro.broker.transport import ChannelID
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
-from bro.webview import serve
+from bro.webview import profile, serve
 
 TIMEOUT = 5.0
 MISSION = 'webview-mission'
 REF = 'sha256:' + 'a' * 64
+SECRET_MARKER = 'profile-secret-marker'
+
+
+def _profile(version: int = profile.PROFILE_VERSION) -> dict[str, Any]:
+  return {
+    'profile_version': version,
+    'cookies': [{'name': 'session', 'value': SECRET_MARKER}],
+    'origins': [
+      {
+        'origin': 'https://example.com',
+        'localStorage': [{'name': 'signed-in', 'value': 'yes'}],
+      }
+    ],
+  }
 
 
 FAKE_MCP = r"""#!/usr/bin/env python3
@@ -98,11 +112,19 @@ for line in sys.stdin:
     answer(identifier, content(arguments.get('text', 'written')))
   elif name == 'facts':
     config_index = sys.argv.index('--config') + 1
+    storage = None
+    if '--storage-state' in sys.argv:
+      storage_path = Path(sys.argv[sys.argv.index('--storage-state') + 1])
+      storage = {
+        'mode': oct(storage_path.stat().st_mode & 0o777),
+        'value': json.loads(storage_path.read_text()),
+      }
     answer(identifier, content(json.dumps({
       'cwd': os.getcwd(),
       'environment': dict(os.environ),
       'arguments': sys.argv[1:],
       'config': json.loads(Path(sys.argv[config_index]).read_text()),
+      'storage': storage,
     }, sort_keys=True)))
   elif name == 'tool_error':
     answer(identifier, content(arguments.get('text', 'tool failed'), True))
@@ -230,6 +252,7 @@ def daemon_files(tmp_path, monkeypatch, worker_id):
   monkeypatch.setattr(serve, 'OUTPUT_DIRECTORY', workspace / 'output')
   monkeypatch.setattr(serve, 'PLAYWRIGHT_COMMAND', str(playwright))
   monkeypatch.setattr(serve, '_require_artifact_view', lambda: None)
+  monkeypatch.setattr(serve.credentials, 'try_get', lambda _kind: None)
   monkeypatch.setenv('PATH', f'{binaries}:{os.environ["PATH"]}')
   monkeypatch.setenv('HOME', str(tmp_path / 'home'))
   monkeypatch.setenv(serve.PLAYWRIGHT_BROWSERS_PATH_ENV, str(tmp_path / 'browsers'))
@@ -283,6 +306,60 @@ def test_options_fail_fast_on_malformed_values(raw):
     serve.decode_options(raw)
 
 
+def test_profile_strips_its_version_and_reads_an_older_envelope(monkeypatch):
+  monkeypatch.setattr(profile, 'PROFILE_VERSION', 2)
+
+  assert profile.decode_profile(json.dumps(_profile(version=1))) == {
+    'cookies': [{'name': 'session', 'value': SECRET_MARKER}],
+    'origins': [
+      {
+        'origin': 'https://example.com',
+        'localStorage': [{'name': 'signed-in', 'value': 'yes'}],
+      }
+    ],
+  }
+
+
+def test_profile_refuses_a_newer_version_naming_both_versions():
+  newer = profile.PROFILE_VERSION + 1
+
+  with pytest.raises(profile.ProfileError) as raised:
+    profile.decode_profile(json.dumps(_profile(version=newer)))
+
+  assert f'version {newer}' in str(raised.value)
+  assert f'version {profile.PROFILE_VERSION}' in str(raised.value)
+  assert SECRET_MARKER not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+  'value',
+  [
+    f'not-json-{SECRET_MARKER}',
+    json.dumps({**_profile(), 'sessionStorage': SECRET_MARKER}),
+    json.dumps({**_profile(), 'origins': [{'origin': SECRET_MARKER, 'localStorage': {}}]}),
+    *[
+      (
+        f'{{"profile_version":{profile.PROFILE_VERSION},'
+        f'"cookies":[{{"value":"{SECRET_MARKER}"}},{constant}],"origins":[]}}'
+      )
+      for constant in ('NaN', 'Infinity', '-Infinity')
+    ],
+  ],
+)
+def test_profile_errors_name_the_defect_without_material(value):
+  with pytest.raises(profile.ProfileError) as raised:
+    profile.decode_profile(value)
+
+  assert SECRET_MARKER not in str(raised.value)
+
+
+def test_profile_bound_is_checked_before_parsing(monkeypatch):
+  monkeypatch.setattr(profile, 'PROFILE_MAX_BYTES', 32)
+
+  with pytest.raises(profile.ProfileError, match='32-byte limit'):
+    profile.decode_profile('x' * 33)
+
+
 def test_mount_check_requires_the_declared_view_in_the_process_mount_table(tmp_path, monkeypatch):
   monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
   monkeypatch.setattr(serve, 'MOUNTINFO', tmp_path / 'mountinfo')
@@ -310,6 +387,76 @@ def test_published_port_parser_requires_the_vnc_mapping():
     serve._published_port(6080, '8080=49153')
   with pytest.raises(serve.DaemonError, match='malformed'):
     serve._published_port(6080, 'bad')
+
+
+@pytest.mark.asyncio
+async def test_profile_reaches_playwright_as_private_storage_state(daemon_files, monkeypatch):
+  workspace, _ = daemon_files
+  monkeypatch.setattr(
+    serve.credentials,
+    'try_get',
+    lambda kind: json.dumps(_profile()) if kind == 'cookies' else None,
+  )
+  async with running_broker(monkeypatch, workspace) as sink:
+    daemon = asyncio.create_task(serve.serve())
+    channel, _ = await _ready(sink)
+
+    facts = json.loads((await _ask(sink, channel, {'tool': 'facts'}, 'facts'))['text'])
+    assert facts['storage'] == {
+      'mode': '0o600',
+      'value': {
+        'cookies': [{'name': 'session', 'value': SECRET_MARKER}],
+        'origins': [
+          {
+            'origin': 'https://example.com',
+            'localStorage': [{'name': 'signed-in', 'value': 'yes'}],
+          }
+        ],
+      },
+    }
+    assert facts['arguments'][0:2] == ['--isolated', '--storage-state']
+    assert '--caps' not in facts['arguments']
+
+    await _ask(sink, channel, {'webview': 'close'}, 'close')
+    await sink.next(lambda message: message.type == Tag.RESULT)
+    await asyncio.wait_for(daemon, TIMEOUT)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+  'raw',
+  [
+    f'not-json-{SECRET_MARKER}',
+    json.dumps({**_profile(), 'sessionStorage': SECRET_MARKER}),
+    json.dumps(_profile(version=profile.PROFILE_VERSION + 1)),
+  ],
+)
+async def test_invalid_profile_fails_before_starting_the_display(daemon_files, monkeypatch, raw):
+  monkeypatch.setattr(serve.credentials, 'try_get', lambda _kind: raw)
+  monkeypatch.setattr(
+    serve,
+    '_xvfb',
+    lambda: pytest.fail('display started before profile validation'),
+  )
+
+  with pytest.raises(serve.DaemonError) as raised:
+    await serve.serve()
+
+  assert SECRET_MARKER not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_oversize_profile_fails_before_starting_the_display(daemon_files, monkeypatch):
+  monkeypatch.setattr(profile, 'PROFILE_MAX_BYTES', 32)
+  monkeypatch.setattr(serve.credentials, 'try_get', lambda _kind: 'x' * 33)
+  monkeypatch.setattr(
+    serve,
+    '_xvfb',
+    lambda: pytest.fail('display started before profile validation'),
+  )
+
+  with pytest.raises(serve.DaemonError, match='32-byte limit'):
+    await serve.serve()
 
 
 @pytest.mark.asyncio
@@ -347,6 +494,9 @@ async def test_startup_warms_browser_then_listens_and_commands_reply_verbatim(
     }
     assert facts['environment']['DISPLAY'] == ':73'
     assert facts['config'] == {'browser': {'contextOptions': {'acceptDownloads': False}}}
+    assert facts['storage'] is None
+    assert '--storage-state' not in facts['arguments']
+    assert '--caps' not in facts['arguments']
     assert ['--browser', 'chromium'] == facts['arguments'][2:4]
     assert facts['arguments'][-2:] == ['--blocked-origins', 'https://blocked.example']
     assert ['--allowed-origins', 'https://allowed.example'] == facts['arguments'][-4:-2]
