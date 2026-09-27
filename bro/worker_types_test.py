@@ -41,6 +41,25 @@ class PassType(AlphaType):
   launch_schema = MappingProxyType({'pass': worker_types.LAUNCH_PASS})
 
 
+class BoundedPassType(AlphaType):
+  name = 'bounded-pass'
+  launch_schema = MappingProxyType(
+    {'pass': worker_types.LaunchPass(kinds=frozenset({'github', 'claude_code'}))}
+  )
+
+
+class InvalidBoundedPassType(AlphaType):
+  name = 'invalid-bounded-pass'
+  launch_schema = MappingProxyType(
+    {'pass': worker_types.LaunchPass(kinds=frozenset({'github+reviewer'}))}
+  )
+
+
+class MutableBoundedPassType(AlphaType):
+  name = 'mutable-bounded-pass'
+  launch_schema = MappingProxyType({'pass': worker_types.LaunchPass(kinds={'github'})})  # type: ignore[arg-type]
+
+
 class MisnamedPassType(AlphaType):
   name = 'misnamed-pass'
   launch_schema = MappingProxyType({'credentials': worker_types.LAUNCH_PASS})
@@ -128,6 +147,32 @@ def test_pass_schema_loads_under_the_pass_field(monkeypatch):
     lambda: (_entry('pass-type', f'{__name__}:PassType'),),
   )
   assert worker_types.installed_type('pass-type') is PassType
+
+
+def test_pass_schema_loads_a_bound_of_credential_kinds(monkeypatch):
+  monkeypatch.setattr(
+    worker_types,
+    '_entry_points',
+    lambda: (_entry('bounded-pass', f'{__name__}:BoundedPassType'),),
+  )
+  assert worker_types.installed_type('bounded-pass') is BoundedPassType
+
+
+@pytest.mark.parametrize(
+  ('name', 'type_name', 'message'),
+  [
+    ('invalid-bounded-pass', 'InvalidBoundedPassType', 'invalid credential kind'),
+    ('mutable-bounded-pass', 'MutableBoundedPassType', 'frozenset or None'),
+  ],
+)
+def test_pass_schema_refuses_an_invalid_kind_bound(monkeypatch, name, type_name, message):
+  monkeypatch.setattr(
+    worker_types,
+    '_entry_points',
+    lambda: (_entry(name, f'{__name__}:{type_name}'),),
+  )
+  with pytest.raises((TypeError, ValueError), match=message):
+    worker_types.installed_type(name)
 
 
 @pytest.mark.parametrize('name', ['', 'Alpha', 'alpha.beta', '-alpha', 'alpha_2'])
@@ -233,7 +278,7 @@ def _worker_container(**changes):
     'files': _CONTAINER_FILES,
     'command': ('worker', '--serve'),
     'env': {'WORKER_MODE': 'test'},
-    'published_ports': (8080, 9090),
+    'published_ports': {8080: None, 9090: 49090},
   }
   values.update(changes)
   return worker_types.WorkerContainer(**values)
@@ -242,13 +287,16 @@ def _worker_container(**changes):
 def test_worker_container_copies_its_mappings_and_has_a_stable_image_hash():
   files = dict(_CONTAINER_FILES)
   env = {'WORKER_MODE': 'test'}
-  container = _worker_container(files=files, env=env)
+  ports = {8080: None}
+  container = _worker_container(files=files, env=env, published_ports=ports)
   expected = container.image_hash('bro/ride-runtime:one')
   files['worker/data.bin'] = b'changed'
   env['WORKER_MODE'] = 'changed'
+  ports[9090] = None
 
   assert container.files['worker/data.bin'] == b'payload'
   assert container.env == {'WORKER_MODE': 'test'}
+  assert container.published_ports == {8080: None}
   assert (
     _worker_container(files=dict(reversed(_CONTAINER_FILES.items()))).image_hash(
       'bro/ride-runtime:one'
@@ -356,7 +404,19 @@ def test_worker_container_refuses_a_nul_in_an_environment_value():
     _worker_container(env={'WORKER_MODE': 'bad\0value'})
 
 
-@pytest.mark.parametrize('ports', [(0,), (65536,), (8080, 8080), (True,), [8080]])
+@pytest.mark.parametrize(
+  'ports',
+  [
+    {0: None},
+    {65536: None},
+    {True: None},
+    {8080: 1023},
+    {8080: 65536},
+    {8080: True},
+    {8080: 49090, 9090: 49090},
+    (8080,),
+  ],
+)
 def test_worker_container_refuses_invalid_published_ports(ports):
   with pytest.raises(ValueError, match='published ports'):
     _worker_container(published_ports=ports)

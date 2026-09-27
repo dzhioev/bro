@@ -104,6 +104,48 @@ class TestReportScope:
     assert rows[':launch.bro.pass.github+reviewer'].endswith('PRESENT')
     assert rows[':launch.bro.pass.brog+missing'].endswith('MISSING')
 
+  def test_a_pass_outside_its_worker_bound_is_reported_without_escaping(
+    self, capsys, monkeypatch, tmp_path
+  ):
+    from bro.worker_types import LaunchPass
+    from ride import scope as ride_scope
+
+    (tmp_path / 'pyproject.toml').write_text('[tool.bro]\ndefault = "bro-dev"\n')
+    material = tmp_path / 'store' / credentials.MATERIAL_DIR
+    material.mkdir(parents=True)
+    (material / 'github+work.cred').write_text('token')
+    config = tmp_path / 'bro.json'
+    config.write_text(
+      json.dumps(
+        {
+          'projects': {
+            str(tmp_path): {
+              'grant': [
+                ':launch.bounded',
+                ':launch.bounded.pass.github+work',
+              ]
+            }
+          }
+        }
+      )
+    )
+    bounded = type(
+      'BoundedWorker',
+      (),
+      {'launch_schema': {'pass': LaunchPass(kinds=frozenset({'trails'}))}},
+    )
+    bro_class = ride_scope.installed_types()['bro']
+    monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path / 'store'))
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+    monkeypatch.setattr(
+      ride_scope,
+      'installed_types',
+      lambda: {'bro': bro_class, 'bounded': bounded},
+    )
+
+    assert report_scope(repo=tmp_path, bro='bro-dev', harness='claude') == 1
+    assert "worker type 'bounded' rejects 'github'" in capsys.readouterr().out
+
   def test_a_malformed_project_config_is_reported_without_escaping(self, capsys, tmp_path):
     (tmp_path / 'pyproject.toml').write_text('[tool.bro]\nharness = "unknown"\n')
 

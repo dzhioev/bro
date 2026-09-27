@@ -771,6 +771,35 @@ class TestLaunchLayers:
         credential_store=_credential_store(tmp_path),
       )
 
+  def test_pass_kind_outside_the_worker_types_bound_fails_the_launch_fold(
+    self, tmp_path, monkeypatch
+  ):
+    from bro.worker_types import LaunchPass
+
+    worker_class = type(
+      'BoundedWorker',
+      (),
+      {'launch_schema': {'pass': LaunchPass(kinds=frozenset({'trails'}))}},
+    )
+    bro_class = ride.scope.installed_types()['bro']
+    monkeypatch.setattr(
+      ride.scope,
+      'installed_types',
+      lambda: {'bro': bro_class, 'bounded': worker_class},
+    )
+
+    with pytest.raises(
+      ValueError,
+      match=r"worker type 'bounded' rejects 'github'.*choices: trails",
+    ):
+      ride.scope.effective_launch(
+        'bro-dev',
+        (),
+        grant=[':launch.bounded', ':launch.bounded.pass.github+work'],
+        revoke=[],
+        credential_store=_credential_store(tmp_path, 'github+work'),
+      )
+
   def test_pass_under_a_revoked_type_key_is_inactive(self, tmp_path):
     launch = ride.scope.effective_launch(
       'bro-dev',

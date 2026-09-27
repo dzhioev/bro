@@ -96,7 +96,7 @@ class LaunchControl:
       request, worker_type = self._request(message, owner)
       talk = worker_type.talk(request)
       run = worker_type.launch(request)
-      if request.passes and isinstance(run, (Job, Container)):
+      if request.passes and isinstance(run, Job):
         raise LaunchDenied(f"worker type {request.type!r} cannot honor 'pass' for this run")
       if request.share and isinstance(run, (Job, Expect)):
         raise LaunchDenied(f"worker type {request.type!r} cannot honor 'share' for this run")
@@ -153,6 +153,7 @@ class LaunchControl:
           type=request.type,
           spec=run.spec,
           owner_workspace=request.owner.workspace,
+          passes=request.passes,
           share=request.share,
         ),
         self._worker_container_spawner,

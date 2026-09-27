@@ -376,7 +376,7 @@ def test_container_run_hands_the_spec_and_share_to_the_host_spawner(tmp_path, ow
     files={'Dockerfile': b'ARG RUNTIME_IMAGE\nFROM ${RUNTIME_IMAGE}\n'},
     command=('worker',),
     env={},
-    published_ports=(8080,),
+    published_ports={8080: None},
   )
   spawner = object()
   control, _, peers, _ = _control(
@@ -392,6 +392,7 @@ def test_container_run_hands_the_spec_and_share_to_the_host_spawner(tmp_path, ow
   assert launch.type == 'test'
   assert launch.spec is spec
   assert launch.owner_workspace == owner.workspace
+  assert launch.passes == ()
   assert launch.share == (ref,)
   assert selected_spawner is spawner
   assert peer == ROOT
@@ -402,27 +403,35 @@ def test_container_run_hands_the_spec_and_share_to_the_host_spawner(tmp_path, ow
   assert facts.artifact_view is None
 
 
-@pytest.mark.parametrize(
-  'run',
-  [
-    Job(CommandJob(('true',), {})),
-    Container(
-      WorkerContainer(
-        files={'Dockerfile': b'ARG RUNTIME_IMAGE\nFROM ${RUNTIME_IMAGE}\n'},
-        command=('worker',),
-        env={},
-        published_ports=(),
-      )
-    ),
-  ],
-)
-def test_pass_is_denied_for_runs_without_a_credential_store(tmp_path, owner, run):
+def test_pass_is_denied_for_a_job_run(tmp_path, owner):
   owner = replace(owner, launch={'test': {'pass': frozenset({'github+work'})}})
-  control, _, _, _ = _control(tmp_path, owner, run, type_class=PassType)
+  control, _, _, _ = _control(
+    tmp_path,
+    owner,
+    Job(CommandJob(('true',), {})),
+    type_class=PassType,
+  )
 
   context = _handle(control, _message(**{'pass': ['github+work']}))
 
   assert "cannot honor 'pass'" in context.denied[0][1]
+
+
+def test_container_run_carries_passes_to_the_host_spawner(tmp_path, owner):
+  owner = replace(owner, launch={'test': {'pass': frozenset({'github+work'})}})
+  run = Container(
+    WorkerContainer(
+      files={'Dockerfile': b'ARG RUNTIME_IMAGE\nFROM ${RUNTIME_IMAGE}\n'},
+      command=('worker',),
+      env={},
+      published_ports={},
+    )
+  )
+  control, _, _, _ = _control(tmp_path, owner, run, type_class=PassType)
+
+  context = _handle(control, _message(**{'pass': ['github+work']}))
+
+  assert context.spawned[0][0].passes == ('github+work',)
 
 
 @pytest.mark.parametrize(

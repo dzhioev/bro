@@ -1,6 +1,8 @@
 import asyncio
 import contextlib
 import io
+import json
+import socket
 import subprocess
 import tarfile
 import threading
@@ -12,11 +14,12 @@ from unittest.mock import MagicMock
 import pytest
 
 import ride.worker_container as worker_container
+from bro.base import credentials
 from bro.broker.brotocol import Talk
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
 from bro.worker_types import WorkerContainer
-from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
+from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver, Launch
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
@@ -35,7 +38,7 @@ def _spec(
     },
     command=('worker', '--serve'),
     env={'WORKER_MODE': 'test'},
-    published_ports=(8080, 9090),
+    published_ports={8080: None, 9090: None},
     artifact_view=artifact_view,
   )
 
@@ -311,12 +314,62 @@ async def test_repeated_cancellation_waits_for_async_image_reservation_release(m
   assert worker_container._IMAGE_RESERVATIONS == {}
 
 
+def test_published_ports_keep_a_requested_host_port_and_select_the_rest():
+  with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+    listener.bind(('127.0.0.1', 0))
+    requested = listener.getsockname()[1]
+
+  ports = worker_container._published_ports({8080: requested, 9090: None})
+
+  assert ports[0] == (requested, 8080)
+  assert ports[1][1] == 9090
+  assert ports[1][0] != requested
+
+
+def test_requested_ports_are_reserved_before_automatic_selection(monkeypatch):
+  requested_port = 40000
+  alternate_port = 40001
+  reserved: set[int] = set()
+
+  class ControlledSocket:
+    def __enter__(self):
+      return self
+
+    def __exit__(self, exception_type, exception, traceback):
+      reserved.remove(self.port)
+
+    def bind(self, address):
+      port = address[1]
+      if port == 0:
+        port = requested_port if requested_port not in reserved else alternate_port
+      if port in reserved:
+        raise OSError(f'port {port} is already reserved')
+      reserved.add(port)
+      self.port = port
+
+    def getsockname(self):
+      return ('127.0.0.1', self.port)
+
+  monkeypatch.setattr(
+    worker_container.socket,
+    'socket',
+    lambda address_family, socket_type: ControlledSocket(),
+  )
+
+  ports = worker_container._published_ports({8080: None, 9090: requested_port})
+
+  assert ports == ((alternate_port, 8080), (requested_port, 9090))
+  assert reserved == set()
+
+
 def test_lowering_builds_a_detached_throwaway_launch(monkeypatch, tmp_path):
   monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path))
   monkeypatch.setattr(
     worker_container,
     '_published_ports',
-    lambda ports: ((49152, ports[0]), (49153, ports[1])),
+    lambda ports: tuple(
+      (49152 + index, container_port) for index, container_port in enumerate(ports)
+    ),
   )
   artifacts = _Artifacts()
   runtime = ContainerRuntimeResolver.fixed(
@@ -326,6 +379,7 @@ def test_lowering_builds_a_detached_throwaway_launch(monkeypatch, tmp_path):
     type='webview',
     spec=_spec(PurePosixPath('/workspace/shared')),
     owner_workspace='owner',
+    passes=(),
     share=('sha256:' + 'a' * 64,),
   )
 
@@ -348,6 +402,8 @@ def test_lowering_builds_a_detached_throwaway_launch(monkeypatch, tmp_path):
     tty=False,
     image='bro/webview:image-hash',
     runtime_bundle_hash='bundle-hash',
+    credential_store={'creds.json': b'{"defaults": [], "sources": {}}'},
+    hydrated_kinds=frozenset(),
     extra_mounts=(f'{tmp_path}/ride/artifacts/root/shared/webview-CH:/workspace/shared:ro',),
     published_ports=((49152, 8080), (49153, 9090)),
   )
@@ -359,6 +415,70 @@ def test_lowering_builds_a_detached_throwaway_launch(monkeypatch, tmp_path):
   assert artifacts.shares == [
     (('sha256:' + 'a' * 64,), 'webview-CH', 'owner'),
   ]
+
+
+def test_lowering_hydrates_the_passed_instances_into_the_container_store(monkeypatch, tmp_path):
+  monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
+  monkeypatch.setattr('ride.workspace.model._cleanup_image', lambda repository: None)
+  store = tmp_path / 'store'
+  material = store / credentials.MATERIAL_DIR
+  material.mkdir(parents=True)
+  (material / f'github+work{credentials.MATERIAL_SUFFIX}').write_text('token')
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
+  launch = worker_container.WorkerContainerLaunch(
+    type='webview',
+    spec=_spec(),
+    owner_workspace='owner',
+    passes=('github+work',),
+    share=(),
+  )
+  runtime = ContainerRuntime('project-image', 'bundle-hash', 'runtime-image')
+
+  lowered = worker_container._lower_worker_container(
+    launch,
+    'webview-passed',
+    runtime,
+    'bro/webview:image-hash',
+    cast(Any, _Artifacts()),
+  )
+
+  with contextlib.ExitStack() as cleanup:
+    workspace = Workspace.open('webview-passed')
+    cleanup.callback(workspace.remove)
+    assert lowered.launch.credential_store is not None
+    assert lowered.launch.credential_store['creds/github+work.cred'] == b'token'
+    assert json.loads(lowered.launch.credential_store['creds.json']) == {
+      'defaults': ['github+work'],
+      'sources': {},
+    }
+    assert lowered.launch.hydrated_kinds == frozenset({'github'})
+
+
+def test_missing_pass_removes_the_throwaway_workspace(monkeypatch, tmp_path):
+  monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
+  monkeypatch.setattr('ride.workspace.model._cleanup_image', lambda repository: None)
+  store = tmp_path / 'store'
+  store.mkdir()
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
+  launch = worker_container.WorkerContainerLaunch(
+    type='webview',
+    spec=_spec(),
+    owner_workspace='owner',
+    passes=('github+missing',),
+    share=(),
+  )
+
+  with pytest.raises(credentials.SecretNotFound) as raised:
+    worker_container._lower_worker_container(
+      launch,
+      'webview-missing-pass',
+      ContainerRuntime('project-image', 'bundle-hash', 'runtime-image'),
+      'bro/webview:image-hash',
+      cast(Any, _Artifacts()),
+    )
+
+  assert raised.value.name == 'github+missing'
+  assert not workspace_dir('webview-missing-pass').exists()
 
 
 @pytest.mark.parametrize('operation', ['wait', 'kill'])
@@ -465,6 +585,7 @@ async def test_spawner_records_lowered_facts_and_delegates(monkeypatch):
     type='webview',
     spec=_spec(),
     owner_workspace='owner',
+    passes=(),
     share=(),
   )
   channel = Provisioned('CH', Endpoint(7321, 'token'))
