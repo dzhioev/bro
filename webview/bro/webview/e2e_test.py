@@ -2,6 +2,7 @@
 
 import contextlib
 import json
+import socket
 import sys
 import threading
 import urllib.request
@@ -14,6 +15,8 @@ import pytest
 import ride.clean as ride_clean
 import ride.workspace.docker as workspace_docker
 import ride.workspace.host_docker_test_helper as host_docker
+from bro.base import credentials
+from bro.webview.profile import PROFILE_VERSION
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride.artifacts import view_mount
 from ride.e2e_test import (
@@ -318,6 +321,92 @@ except Exception:
   raise
 """
 
+_PROFILE_ROUTE = r"""
+import json
+import re
+import subprocess
+import traceback
+from pathlib import Path
+
+from bro.base import credentials
+
+workspace = Path('/workspace')
+report_path = workspace / '.webview-profile-report.json'
+error_path = workspace / '.webview-profile-error'
+
+
+def run(*arguments, expected=0):
+  completed = subprocess.run(arguments, capture_output=True, text=True)
+  if completed.returncode != expected:
+    raise RuntimeError(
+      f'{arguments!r} returned {completed.returncode}, expected {expected}'
+      f'\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}'
+    )
+  return completed
+
+
+def ask(mission, payload):
+  completed = run(
+    'mission',
+    'ask',
+    mission,
+    json.dumps(payload, separators=(',', ':')),
+    '--wait',
+    '180',
+  )
+  return json.loads(completed.stdout)
+
+
+try:
+  assert credentials.try_get('cookies') is None
+  denied = run('webview', 'open', '--cookies', 'denied', expected=1)
+  assert "beyond the owner's" in denied.stderr, denied.stderr
+
+  opened = json.loads(run('webview', 'open', '--cookies', 'e2e').stdout)
+  mission = opened['mission']
+  navigated = ask(
+    mission,
+    {'tool': 'browser_navigate', 'arguments': {'url': 'https://example.com/'}},
+  )
+  assert 'error' not in navigated, navigated
+  browser_state = ask(
+    mission,
+    {
+      'tool': 'browser_evaluate',
+      'arguments': {
+        'function': "() => ({cookies: document.cookie, local: localStorage.getItem('profile-state')})"
+      },
+    },
+  )
+  state_text = browser_state.get('text', '')
+  assert 'visible-profile-cookie' in state_text, browser_state
+  assert 'profile-local-storage' in state_text, browser_state
+  assert 'hidden-profile-cookie' not in state_text, browser_state
+
+  requests = ask(
+    mission,
+    {
+      'tool': 'browser_network_requests',
+      'arguments': {'static': True, 'filter': 'example\\.com'},
+    },
+  )
+  indexes = [int(value) for value in re.findall(r'(?m)^(\d+)\.', requests.get('text', ''))]
+  assert indexes, requests
+  request = ask(
+    mission,
+    {'tool': 'browser_network_request', 'arguments': {'index': indexes[-1]}},
+  )
+  assert 'hidden-profile-cookie' not in request.get('text', ''), request
+
+  closed = json.loads(run('webview', 'close', mission).stdout)
+  assert closed['outcome'] == 'ok', closed
+  report_path.write_text(json.dumps({'browser_state': browser_state, 'request': request}))
+except Exception:
+  error_path.write_text(traceback.format_exc())
+  raise
+"""
+
+
 _VNC_ROUTE = r"""
 import json
 import subprocess
@@ -331,7 +420,10 @@ error_path = workspace / '.webview-vnc-error'
 
 try:
   opened_process = subprocess.run(
-    ['webview', 'open', '--vnc'], capture_output=True, text=True, check=True
+    ['webview', 'open', '--vnc', '--port', '__VNC_PORT__'],
+    capture_output=True,
+    text=True,
+    check=True
   )
   opened = json.loads(opened_process.stdout)
   assert isinstance(opened['vnc'], str), opened
@@ -480,6 +572,12 @@ def _diagnostic(workspace: Workspace, error_name: str) -> str:
   return path.read_text() if path.is_file() else 'the root wrote no error report'
 
 
+def _available_port() -> int:
+  with socket.socket() as listener:
+    listener.bind(('127.0.0.1', 0))
+    return listener.getsockname()[1]
+
+
 def _live_containers(workspace: Workspace) -> list[str]:
   return [
     directory.name
@@ -502,6 +600,62 @@ def test_webview_open_is_denied_without_its_type_key(
   )
   assert code == 0
   assert (workspace.tree / '.webview-denied-report').read_text() == 'denied'
+
+
+def test_cookies_pass_loads_profile_without_entering_the_owner_store(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  host_store = isolated_env.home / '.bro'
+  profile_value = {
+    'profile_version': PROFILE_VERSION,
+    'cookies': [
+      {
+        'name': 'visible-profile',
+        'value': 'visible-profile-cookie',
+        'domain': 'example.com',
+        'path': '/',
+        'expires': -1,
+        'httpOnly': False,
+        'secure': True,
+        'sameSite': 'Lax',
+      },
+      {
+        'name': 'hidden-profile',
+        'value': 'hidden-profile-cookie',
+        'domain': 'example.com',
+        'path': '/',
+        'expires': -1,
+        'httpOnly': True,
+        'secure': True,
+        'sameSite': 'Lax',
+      },
+    ],
+    'origins': [
+      {
+        'origin': 'https://example.com',
+        'localStorage': [{'name': 'profile-state', 'value': 'profile-local-storage'}],
+      }
+    ],
+  }
+  (host_store / 'creds' / 'cookies+e2e.cred').write_text(json.dumps(profile_value))
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(host_store))
+  monkeypatch.setattr(credentials, '_default_store', None)
+
+  code, workspace = _run_route(
+    isolated_env,
+    monkeypatch,
+    suffix='profile',
+    source=_PROFILE_ROUTE,
+    vnc=False,
+    observer=lambda _workspace, _route_ended: None,
+    launch_scope={'webview': {'pass': frozenset({'cookies+e2e'})}},
+  )
+
+  assert code == 0, _diagnostic(workspace, '.webview-profile-error')
+  report = json.loads((workspace.tree / '.webview-profile-report.json').read_text())
+  assert 'visible-profile-cookie' in report['browser_state']['text']
+  assert 'hidden-profile-cookie' not in report['request'].get('text', '')
+  assert _live_containers(workspace) == []
 
 
 def test_spawned_child_opens_a_granted_webview(
@@ -629,9 +783,11 @@ def test_real_webview_routes_commands_files_sharing_refusals_and_cleanup(
   assert _live_containers(workspace) == []
 
 
-def test_vnc_open_answers_on_its_published_loopback_port(
+def test_vnc_open_answers_on_its_requested_loopback_port(
   isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+  port = _available_port()
+
   def probe_vnc(workspace: Workspace, route_ended: threading.Event) -> None:
     report = workspace.tree / '.webview-vnc-report.json'
     _wait_until(
@@ -643,6 +799,7 @@ def test_vnc_open_answers_on_its_published_loopback_port(
     if not report.is_file():
       return
     opened = json.loads(report.read_text())
+    assert opened['vnc'].startswith(f'http://127.0.0.1:{port}/')
     with urllib.request.urlopen(opened['vnc'], timeout=15) as response:
       assert response.status == 200
       assert b'noVNC' in response.read()
@@ -652,7 +809,7 @@ def test_vnc_open_answers_on_its_published_loopback_port(
     isolated_env,
     monkeypatch,
     suffix='vnc',
-    source=_VNC_ROUTE,
+    source=_VNC_ROUTE.replace('__VNC_PORT__', str(port)),
     vnc=True,
     observer=probe_vnc,
   )
