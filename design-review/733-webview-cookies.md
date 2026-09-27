@@ -123,8 +123,7 @@ Rules:
         or `{"event": "error", "error": "<reason>"}` and exits non-zero.
 9. **The foreground run.**
    `ride/ride/worker_container.py` gains a context manager that runs a worker type's `WorkerContainer` outside any ride, taking the type's name only for the image tag.
-   It freezes the invoking installation, resolves the runtime image and volume, and builds a missing runtime or worker image, pruning none:
-   pruning stays with rides, so setup never removes a tag a live ride is about to use.
+   It freezes the invoking installation, resolves the runtime image and volume, and builds a missing runtime or worker image under the image locks, pruning none (rule 14).
    It publishes the declared ports on loopback, each on its requested host port or an available one (rule 11), with `RIDE_PUBLISHED_PORTS`,
    and runs the command with the runtime volume read-only and stdin and stdout piped to the caller, with no workspace, store, broker, or artifact view;
    leaving the block removes the container.
@@ -156,6 +155,15 @@ Rules:
     opt-in additions such as `credentials` and `opfs` never reach a profile, since capture asks only for `indexedDB`.
     The e2e loads a synthetic profile of every earlier version under the current pin, so each bump establishes that newer webviews read older profiles.
     A webview older than a profile thus refuses it, loudly, rather than loading part of it.
+14. **Host-wide image locks.**
+    Runtime, project, and worker images are shared by every process on the host,
+    so their reservations become file locks under the runtime state root, as the runtime bundles' are, replacing the process-local `_IMAGE_LOCKS` and `_IMAGE_RESERVATIONS`.
+    Every ride and setup's foreground run take these locks, and their paths are a contract every later version keeps;
+    the foreground run still prunes nothing, since a ride started before this change takes no lock and may be using the tag it would prune.
+    - A process holds a shared `flock` on a tag's lock file from before it ensures the tag until it exits.
+    - Building a missing tag holds an exclusive `flock` on the tag's build lock, so one process builds it and the others then find it present.
+    - Pruning removes a superseded tag only under a non-blocking exclusive `flock` on its lock file, held across `docker image rm`:
+      it skips a tag any live process holds, and a process that reaches for a tag during its removal waits, then builds it again.
 
 In set terms, over #748's:
 
@@ -190,11 +198,13 @@ What crosses versions:
   nothing here writes it;
   a `defaults` pick of `cookies` would fail every older installation's store read, since `defaults` refuses an unregistered kind,
   so none goes in before every installation reading the store is upgraded.
-- Runtime images, worker images, and runtime volumes are content-addressed and shared on the host.
-  A ride's build prunes the superseded runtime and worker tags its own process does not reserve, and setup's foreground run prunes nothing (rule 9).
-  A ride's build can still prune the tag setup just built before setup's `docker run` starts it:
-  that setup fails naming the image, and a re-run rebuilds it.
-  The same race between two rides of different versions predates this change (`### Follow-ups`).
+- Runtime, project, and worker images, shared on the host:
+  the image locks (rule 14) bind every process from this change on, whatever its version.
+  A ride started before this change neither takes nor honors them:
+  after rebuilding a tag of its own that went missing, it can still prune a tag a newer process holds, failing that process's next container, or a setup before it writes anything.
+  This change alters no image input, neither the runtime image's files nor the webview Dockerfile, so it gives no process a reason to build or prune one.
+  The first later change to an image input, such as a Playwright MCP pin bump, rolls out only after every ride started before this change's upgrade has ended;
+  from then on every process on the host takes the locks.
 - Nothing else crosses versions:
   a webview's launch request and store, and the capture exchange, live within one ride or one setup run, each on one frozen installation.
 
@@ -253,7 +263,10 @@ stored profiles stay, unread by the older version.
 - Unbounded profiles: a site could grow a profile through `--indexed-db` and every re-capture after it until it fills host memory and disk.
 - Only a per-name lock, or only the compare at write:
   the lock alone overwrites a hand edit made during the run, and the compare alone tells a second setup only after its user has logged in.
-- A host-wide image lock in this change: it changes every ride's builds, beyond this task (`### Follow-ups`).
+- Setup's foreground run pruning nothing and otherwise living with the process-local reservations:
+  a ride's build could still prune the tag setup is about to run, and setup's retry would be no synchronization.
+- Setup alone protecting its image with a private tag no pruner touches:
+  the race between rides would stay, and a setup killed outright would leave its tag holding a large image.
 
 ### What changes in practice
 
@@ -267,6 +280,7 @@ stored profiles stay, unread by the older version.
 - A `{"$cred": …}` node a site stored in its IndexedDB stays that node in the site's storage.
 - A second `webview setup alice` while one runs refuses at start, and a capture over 32 MiB leaves the stored profile as it was.
 - After a Playwright MCP bump that increments the profile version, a ride started before the upgrade refuses a profile re-captured after it, naming both versions.
+- A ride or setup that builds a new image no longer prunes a tag another live process uses.
 
 ### Implementation sketch
 
@@ -280,7 +294,8 @@ To settle in the plan phase:
   `WorkerContainer.published_ports` as a mapping to requested host ports.
 - `ride/ride/scope.py`: the bound in `_launch_name_schema`.
 - `ride/ride/launch_control.py`: passes refused on a job alone and carried on `WorkerContainerLaunch`.
-- `ride/ride/worker_container.py` and `ride/ride/workspace/docker.py`: hydration inside the lowering's cleanup, requested host ports, and the foreground run with its builds that prune nothing.
+- `ride/ride/workspace/docker.py`: the image locks around ensuring, building, and pruning runtime and project images.
+- `ride/ride/worker_container.py`: hydration inside the lowering's cleanup, requested host ports, worker images under the image locks, and the foreground run with its builds that prune nothing.
 - `webview/`:
   - the `cookies` kind (`credentials.py`), and the `pass` field and `vnc_port` (`worker.py`);
   - the profile's bound, version, and envelope checks, its load, and the start-up shared with capture (`serve.py`), with `PROFILE_VERSION` and the bound in one module;
@@ -290,7 +305,7 @@ To settle in the plan phase:
   - the import-policy test.
 - Docs:
   `webview/AGENTS.md` (the verbs, the daemon's profile, and in "Image pin" the release-notes check and `PROFILE_VERSION` increment a bump owes);
-  `bro/reference/ride.md` ("Session permissions and credentials" for the shipped schemas and passes to containers, "Worker containers" for the store and requested ports);
+  `bro/reference/ride.md` ("Session permissions and credentials" for the shipped schemas and passes to containers, "Worker containers" for the store, requested ports, and image locks);
   `bro/setup/AGENTS.md` (the `cookies` material, literal entries, the writer);
   `ride/AGENTS.md` (`worker_container.py`, the pass invariant);
   root `AGENTS.md` (the webview row);
@@ -311,7 +326,8 @@ To settle in the plan phase:
     its lock and the compare that aborts over a changed profile;
     the structurally unchanged no-write, IndexedDB kept on re-capture, and a summary without values;
   - the writer (atomic, 0600, canonical names, expected material, lock);
-  - the foreground run building a missing image and pruning none;
+  - the image locks across processes: a tag another process holds survives a prune, two builds of one tag run one at a time, and a process reaching for a tag during its removal waits and builds it again;
+  - the foreground run building a missing image under the locks and pruning none;
   - the import policy.
 - `webview_e2e`, host-only:
   it runs on its own runner in every pull request's CI, a stage's pull request into its integration branch included, while `run-tests` skips it inside a container.
@@ -330,10 +346,6 @@ Proposed in this session and not filed:
 
 1. Extract the Claude harness into `bro-claude` over a harness-neutral base image.
 2. Then extract the container runtime (runtime bundle, base image, worker images, the foreground run) into `bro-container` beneath `ride`, which setup's imports then move to.
-
-Proposed in the review:
-
-3. Coordinate image builds and pruning host-wide, through a lock or reservation every process honors, so that no process prunes a runtime or worker tag another is about to use.
 
 ### Open
 
