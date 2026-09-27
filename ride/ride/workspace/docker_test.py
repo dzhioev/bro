@@ -312,10 +312,6 @@ class TestDaemonPreflight:
 
 
 class TestContainerRuntimeResolver:
-  @pytest.fixture(autouse=True)
-  def preflight(self, monkeypatch):
-    monkeypatch.setattr(workspace_docker, '_preflight_daemon', lambda image: None)
-
   def test_resolves_image_and_volume_once(self, monkeypatch, tmp_path):
     from ride.runtime_bundle import RuntimeBundle
 
@@ -334,7 +330,7 @@ class TestContainerRuntimeResolver:
     monkeypatch.setattr(
       RuntimeBundle,
       'materialize_container',
-      lambda self, image: events.append(('volume', image)),
+      lambda self, image, *, preflight: events.append(('volume', image)),
     )
 
     resolver = workspace_docker.ContainerRuntimeResolver(bundle, tmp_path / 'project')
@@ -362,7 +358,9 @@ class TestContainerRuntimeResolver:
       '_ensure_project_image',
       lambda runtime, repo: pytest.fail('detached launch has no project image'),
     )
-    monkeypatch.setattr(RuntimeBundle, 'materialize_container', lambda self, image: None)
+    monkeypatch.setattr(
+      RuntimeBundle, 'materialize_container', lambda self, image, *, preflight: None
+    )
     runtime = workspace_docker.ContainerRuntimeResolver(bundle).resolve()
     assert runtime.image == workspace_docker.runtime_image_tag('3.12')
 

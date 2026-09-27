@@ -12,6 +12,7 @@ import sys
 import tempfile
 import urllib.parse
 import urllib.request
+import uuid
 import zipfile
 from collections.abc import Callable, Generator, Iterable, Mapping
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from bro.workspace.paths import runtime_base
 _SESSION_COMMAND_GROUP = 'bro.session_commands'
 _HASH_PATTERN = re.compile(r'[0-9a-f]{64}')
 _MATERIALIZER_LABEL = 'ride-materializer'
+_VOLUME_INSTANCE = 'ride-volume-instance'
 _RUNTIME_VOLUME_PREFIX = 'ride-runtime-'
 # the zip epoch, the earliest an entry can carry
 _WHEEL_ENTRY_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
@@ -138,43 +140,55 @@ class RuntimeBundle:
   def require_frozen_manifest(self) -> None:
     _ = self.hash
 
-  def materialize_container(self, image: str) -> None:
+  def materialize_container(self, image: str, *, preflight: Callable[[], None]) -> None:
+    """Populate the container runtime volume, once `preflight` has proven the
+    daemon can bind-mount the runtime root.
+
+    A marker beside the bundle records both against the instance label of the
+    volume they were reached for. That marker is one file across every Docker
+    context while a volume belongs to one daemon and a name outlives whatever
+    held it, so only a label minted per volume tells the materialized one from
+    another daemon's namesake or from a replacement created in its place.
+    """
+    ready = self.root / '.container-ready'
     with _locked_file(self.root / '.materialize.lock', fcntl.LOCK_EX):
-      _run(
-        ['docker', 'volume', 'create', self.container_volume],
-        description='cannot create container runtime volume',
-      )
+      instance = _volume_instance(self.container_volume)
+      if instance is not None and ready.is_file() and ready.read_text() == instance:
+        return
+      preflight()
+      if instance is None:
+        instance = _label_new_volume(self.container_volume)
       with _materializer_container(self, image) as container_id:
         complete = subprocess.run(
           ['docker', 'exec', container_id, 'test', '-f', '/var/ride/runtime/.complete'],
           capture_output=True,
         )
-        if complete.returncode == 0:
-          return
-        log.info('materializing runtime bundle %s for the container', self.hash[:12])
-        _container_run(
-          container_id,
-          ['find', '/var/ride/runtime', '-mindepth', '1', '-delete'],
-          description='cannot clear incomplete container runtime',
-        )
-        wheels = sorted((self.root / 'wheels').glob('*.whl'))
-        wheel_names = [wheel.name for wheel in wheels]
-        for wheel in wheels:
-          _assert_pure_wheel(wheel)
-        _materialize(
-          Path('/bundle'),
-          Path('/var/ride/runtime'),
-          '/usr/local/bin/python',
-          wheel_names=wheel_names,
-          run=lambda command, description: _container_run(
-            container_id, command, description=description
-          ),
-        )
-        _container_run(
-          container_id,
-          ['touch', '/var/ride/runtime/.complete'],
-          description='cannot mark container runtime complete',
-        )
+        if complete.returncode != 0:
+          log.info('materializing runtime bundle %s for the container', self.hash[:12])
+          _container_run(
+            container_id,
+            ['find', '/var/ride/runtime', '-mindepth', '1', '-delete'],
+            description='cannot clear incomplete container runtime',
+          )
+          wheels = sorted((self.root / 'wheels').glob('*.whl'))
+          wheel_names = [wheel.name for wheel in wheels]
+          for wheel in wheels:
+            _assert_pure_wheel(wheel)
+          _materialize(
+            Path('/bundle'),
+            Path('/var/ride/runtime'),
+            '/usr/local/bin/python',
+            wheel_names=wheel_names,
+            run=lambda command, description: _container_run(
+              container_id, command, description=description
+            ),
+          )
+          _container_run(
+            container_id,
+            ['touch', '/var/ride/runtime/.complete'],
+            description='cannot mark container runtime complete',
+          )
+      ready.write_text(instance)
 
   def host_session_env(
     self, cwd: Path, *, tty: bool, additions: Mapping[str, str] = MappingProxyType({})
@@ -869,6 +883,48 @@ def resolve_runtime_bundle(reference: str | None = None) -> Generator[RuntimeBun
         root = _persist_bundle(base, manifest, wheels)
         _hold_bundle(lifetime, root)
     yield RuntimeBundle(root, python)
+
+
+def _volume_instance(volume: str) -> str | None:
+  """the instance label `volume` was created with on the current daemon, or None
+  when that daemon holds no such volume or one it did not label."""
+  try:
+    result = subprocess.run(
+      [
+        'docker',
+        'volume',
+        'inspect',
+        '--format',
+        f'{{{{index .Labels "{_VOLUME_INSTANCE}"}}}}',
+        volume,
+      ],
+      capture_output=True,
+      text=True,
+    )
+  except OSError:
+    return None
+  if result.returncode != 0:
+    return None
+  instance = result.stdout.strip()
+  return instance if len(instance) > 0 else None
+
+
+def _label_new_volume(volume: str) -> str:
+  """replace `volume` with an empty one carrying a fresh instance label.
+
+  A label is fixed at creation, so a volume reaching this point unlabelled is
+  one this runtime never created and cannot tell apart from any other.
+  """
+  _run(
+    ['docker', 'volume', 'rm', '-f', volume],
+    description='cannot replace the unlabelled container runtime volume',
+  )
+  instance = uuid.uuid4().hex
+  _run(
+    ['docker', 'volume', 'create', '--label', f'{_VOLUME_INSTANCE}={instance}', volume],
+    description='cannot create container runtime volume',
+  )
+  return instance
 
 
 def _remove_container_volume(bundle_hash: str, *, dry_run: bool) -> bool:
