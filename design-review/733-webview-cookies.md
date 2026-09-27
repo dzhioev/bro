@@ -197,29 +197,31 @@ What crosses versions:
   nothing here writes it;
   a `defaults` pick of `cookies` would fail every older installation's store read, since `defaults` refuses an unregistered kind,
   so none goes in before every installation reading the store is upgraded.
-- Runtime, project, and worker images, shared on the host:
-  the image locks (rule 14) bind every process from this change on, whatever its version.
-  A ride started before this change neither takes nor honors them:
+- Runtime, project, and worker images, shared by every installation that reaches this host's Docker daemon:
+  this checkout, each `uv tool` installation of a framework member, and each checkout of a repository that pins the framework, such as ppp and kap.
+  The image locks (rule 14) bind every process of an installation with this change.
+  A process of an older installation neither takes nor honors them:
   building a tag of its own that is absent, whether pruned, cleaned, or never built, it could prune a tag a newer process holds, failing that process's next container, or a setup before it writes anything.
-  So adopting the locks is a one-time drain (step 3 below):
-  every root started before the upgrade ends before any root starts from the upgraded checkout and before the first setup,
-  and from then on every process on the host takes the locks, a later change to an image input such as a Playwright MCP pin bump included.
-  Rolling back drains the other way.
+  So adopting the locks upgrades every such installation and then drains every root started before (steps 2 to 4 below), and no older installation starts a root afterwards;
+  from then on every process on the host takes the locks, a later change to an image input such as a Playwright MCP pin bump included.
+  Rolling back drains the other way across the same installations.
 - Nothing else crosses versions:
   a webview's launch request and store, and the capture exchange, live within one ride or one setup run, each on one frozen installation.
 
 The order:
 
 1. Land the change.
-2. Upgrade the host's checkout.
-3. End every root started before step 2's upgrade, step 2's own session included, until `ride list` shows none of them live;
-   no root starts from the upgraded checkout, and no setup runs, before this step is done.
-4. The user runs `webview setup <instance>` from the upgraded checkout and logs in by hand.
-5. A root started from the upgraded checkout with `--grant :launch.webview --grant :launch.webview.pass.cookies+<instance>` verifies;
-   its launch fails unless step 4 left the instance in the host store.
+2. Move every repository that pins the framework, ppp and kap, past the landing with `[[bump bro]]`, and land each bump.
+3. Upgrade every installation that reaches this host's Docker daemon:
+   this checkout, each `uv tool` installation of a framework member, and each checkout of ppp and kap.
+4. End every root started before step 3 from any installation, step 3's own sessions included, until `ride list` shows none of them live.
+   No root starts, and no setup runs, before this step is done, and no installation older than this change starts a root after it.
+5. The user runs `webview setup <instance>` from the upgraded checkout and logs in by hand.
+6. A root started from the upgraded checkout with `--grant :launch.webview --grant :launch.webview.pass.cookies+<instance>` verifies;
+   its launch fails unless step 5 left the instance in the host store.
 
 Rolling back first takes every `cookies` pass right out of every launch command and out of `~/.bro.json`, and any `cookies` pick out of the host store's `creds.json` `defaults`, since an older installation fails on either.
-It then ends every root started from the upgraded checkout and downgrades the checkout before any root starts from it, since the older version takes no image locks.
+It then ends every root started from an upgraded installation and downgrades every installation before any root starts from one, since the older version takes no image locks.
 Stored profiles and any source annotation of one stay, since an older installation skips both.
 
 ### Rejected alternatives
