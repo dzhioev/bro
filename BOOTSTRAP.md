@@ -209,7 +209,6 @@ Fetch and read these paths before using their contracts:
 - `bro/base/host_config.py`;
 - `bro/brog/system.py`;
 - `bro/brog/github.py`;
-- `dev/bros/dev/spells/wire.md`;
 - `ride/ride/setup/container/project.Dockerfile`;
 - `ride/ride/workspace/build_context.py` and `ride/ride/workspace/docker.py`.
 
@@ -399,7 +398,7 @@ A repository with no root lock must return no project-image tag; do not manufact
 ### Check
 
 1. Confirm again that this is a host session and `BRO_STORE` is unset.
-2. Read the pinned wire spell, setup schema, host-config module, and scoped-credential manual.
+2. Read the pinned setup schema, host-config module, and scoped-credential manual.
 3. Run `credentials list` and `credentials list --instance` to inspect kinds and instance names without resolving or printing values.
 4. Inspect only safe metadata needed to distinguish existing instances.
 5. Read `git remote get-url origin` exactly.
