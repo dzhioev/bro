@@ -48,10 +48,11 @@ Rules:
    The owner's own store never holds the kind.
 5. **The daemon loads the profile.**
    Before starting Playwright MCP, `webview serve` reads the `cookies` kind from its store by kind.
-   When present, it checks the profile's envelope
-   — an object whose `cookies` and `origins` are lists, each origin an object with a string `origin`
-   — and leaves the rest to Playwright, since a profile crosses versions (`### Rollout`).
-   A failed check fails the daemon before `listening`, naming the defect and never a value, since a worker's output tail reaches its owner in its death result.
+   When present, it checks the profile's bound (rule 12) and envelope
+   — an object whose members are the lists `cookies` and `origins`, each origin an object whose members are a string `origin`, the list `localStorage`, and optionally the list `indexedDB`
+   — and leaves the members within those storage kinds to Playwright, since a profile crosses versions (`### Rollout`).
+   A failed check fails the daemon before `listening`, naming the defect and never a value, since a worker's output tail reaches its owner in its death result;
+   a storage kind outside the envelope is such a defect, so a webview never loads part of a profile.
    The daemon writes the profile at 0600 into the private temporary directory that holds its Playwright config, outside `/workspace`,
    and starts Playwright MCP with `--storage-state` on that file beside `--isolated`.
    Without it, the browser starts empty as today.
@@ -70,6 +71,8 @@ Rules:
 7. **Setup.**
    `webview setup <instance> [--url URL] [--fresh] [--indexed-db] [--port PORT]` runs on the host, in a terminal:
    it refuses inside a managed session (`RIDE_ISOLATION` set), whose store is a scoped copy that dies with it, and without a terminal on stdin, where the user confirms the login.
+   `<instance>` is non-empty, here and in `webview open --cookies`:
+   the empty instance `cookies+`, which #748's grammar lets a pass right and a launch request's `pass` name, reads `creds/cookies.cred`, which no webview command writes or passes.
    It runs `bro/webview:<hash>`, the image webviews run, as a foreground run (rule 9) with `webview capture` as its command and the noVNC port on the launcher's loopback (rule 11), building any missing image first.
    It prints the noVNC URL once the browser is up;
    the user logs in, keeps the browser window open, and presses Enter, or Ctrl-C to discard.
@@ -78,33 +81,49 @@ Rules:
    cookies and their sites, origins with storage, IndexedDB origins, and bytes.
    - **Seeding.**
      Unless `--fresh`, the browser starts with the stored instance loaded, so the user redoes only an expired login, a site that remembers the device skips its 2FA, and a profile gains sites over several runs.
-     A capture identical to the stored instance writes nothing and says so, which also catches a closed browser window that reset the context to the seed.
+     A capture structurally identical to the stored instance
+     — equal as parsed JSON once cookies are ordered by domain, path, and name, and origins by origin
+     — writes nothing and says so, which also catches a closed browser window that reset the context to the seed.
    - **IndexedDB.**
      It is captured with `--indexed-db`, or when the stored instance being re-captured holds any, so a re-run never silently drops it;
      `--fresh` without `--indexed-db` drops it.
    - **Refusals.**
      A capture with no cookies and no origin storage is refused, since it is a logged-out profile.
      A stored name `creds.json` annotates with a source other than `local` is refused, since material written under it would never be read.
+   - **Concurrent runs.**
+     Setup holds an exclusive lock on the stored name for its whole run, so a second setup of the same instance refuses at start.
+     Its write replaces the profile only while the store still holds, byte for byte, what setup seeded from, or still holds nothing when setup started empty:
+     a hand edit made during the run aborts the write and stays as edited.
    - **The write.**
-     `bro/base/credentials.py` gains the store's first programmatic writer, writing a stored name's material atomically at 0600 under `creds/`.
+     `bro/base/credentials.py` gains the store's first programmatic writer:
+     it writes a stored name's material atomically at 0600 under `creds/`, replacing it only when it still holds the expected material, and it offers the per-name lock.
      Setup reads its seed through the resolver, by kind under an explicit selection.
 8. **Capture.**
-   `webview capture` is the container-side verb beside `serve`, and refuses to run without setup's options in its environment.
+   `webview capture` is the container-side verb beside `serve`, and refuses to run without setup's options, the JSON object `{"url", "indexed_db"}` in `WEBVIEW_CAPTURE_OPTIONS`.
    It shares the daemon's start-up: Xvfb, the VNC stack, and Playwright MCP headed with `--isolated`, `--no-sandbox`, and downloads refused, with the view always on and no broker.
-   Its working and output directory is a private temporary directory in the container layer;
-   the seed arrives as the first line on stdin, `null` when setup starts empty, and loads through `--storage-state`;
-   and it navigates to `--url` when given.
-   It says ready on stdout, and on setup's request writes the storage state as one JSON line on stdout:
-   a fixed `browser_run_code_unsafe` snippet has Playwright save `page.context().storageState({ path, indexedDB })` into the private directory, which capture reads and removes.
-   Its stdout carries that exchange alone:
-   the processes it starts write their output to its stderr.
+   Its working and output directory is a private temporary directory in the container layer.
+   It loads the seed through `--storage-state` and navigates to the options' `url` when one is given;
+   a failed navigation goes to its stderr, and the user navigates by hand.
+   It takes the state with a fixed `browser_run_code_unsafe` snippet, which has Playwright save `page.context().storageState({ path, indexedDB })` into the private directory for capture to read and remove.
    Setup's own code is capture's only client, so the tool `serve` withholds from an owner is safe here.
-   EOF on stdin, a supervised process's exit, or a malformed request ends it non-zero;
-   setup then writes nothing and shows the container's output tail.
    The container mounts only the runtime, so the state reaches the host disk only through setup's store write.
+   - **The exchange.**
+     Setup writes to capture's stdin and reads its stdout, one JSON object per line, ASCII-escaped so that no line holds a raw newline;
+     each side reads a line through a read bounded at the profile bound (rule 12) plus 1 KiB for the enclosing object.
+     Capture's stdout carries the exchange alone:
+     the processes it starts write their output to its stderr.
+     A line that is not the next one below, or that runs over its bound, ends the side reading it non-zero,
+     as do EOF before the exchange completes and the exit of a process capture supervises;
+     setup then writes nothing and shows the container's output tail.
+     1. Setup's first line is `{"seed": <profile>}`, or `{"seed": null}` when it starts empty.
+     2. Capture writes `{"event": "ready"}` once the browser is up.
+     3. When the user presses Enter, setup writes `{"request": "state"}`.
+     4. Capture answers `{"event": "state", "state": <storage state>}` and exits 0,
+        or `{"event": "error", "error": "<reason>"}` and exits non-zero.
 9. **The foreground run.**
    `ride/ride/worker_container.py` gains a context manager that runs a worker type's `WorkerContainer` outside any ride, taking the type's name only for the image tag.
-   It freezes the invoking installation, resolves the runtime image and volume, and builds the worker image under its tag reservation.
+   It freezes the invoking installation, resolves the runtime image and volume, and builds a missing runtime or worker image, pruning none:
+   pruning stays with rides, so setup never removes a tag a live ride is about to use.
    It publishes the declared ports on loopback, each on its requested host port or an available one (rule 11), with `RIDE_PUBLISHED_PORTS`,
    and runs the command with the runtime volume read-only and stdin and stdout piped to the caller, with no workspace, store, broker, or artifact view;
    leaving the block removes the container.
@@ -123,6 +142,10 @@ Rules:
     `WorkerContainer.published_ports` maps each container port to its requested host port, `None` where the host picks an available one.
     The host refuses a requested port below 1024, since the Docker daemon binds it as root;
     a port already taken fails the launch or setup, as a port taken before `docker start` does today.
+12. **The profile bound.**
+    A profile's serialized JSON is at most 32 MiB, one constant in the webview package.
+    Capture answers a larger state with an error, setup's bounded read refuses one and leaves the stored profile as it was, and the daemon refuses a larger stored profile.
+    Setup's summary prints the bytes, so a growing IndexedDB shows before it reaches the bound, and `--fresh` without `--indexed-db` drops it.
 
 In set terms, over #748's:
 
@@ -148,14 +171,21 @@ What crosses versions:
 - The profile, `creds/cookies+<instance>.cred` in the host store:
   setup writes it at the version of the checkout it runs from, and every ride hydrates it and its webview loads it at the version of that ride's bundle, older or newer.
   An installation older than this change never reads it, since it skips material of an unregistered kind.
-  Among the rest, the daemon checks only the profile's envelope and Playwright's validator drops the fields it does not know,
-  so a profile captured under a newer Playwright MCP pin loads under an older one.
+  Between Playwright MCP pins whose storage-state shapes agree, any webview loads any profile.
+  Where they differ, the daemon refuses a storage kind outside its envelope and Playwright's validator refuses a known member it cannot read, each naming the defect;
+  but Playwright drops an unknown member within a known kind, such as a new cookie attribute, without a word.
+  So a pin bump compares the storage-state types of the two pins, and one that finds them changed says so in its pull request and in its landing's rollout (`webview/AGENTS.md`, "Image pin"):
+  once it reaches the host, a profile re-captured after the upgrade is used only from rides started after it,
+  and rolling the bump back means re-running `webview setup --fresh` under the older version for each such profile.
 - `creds.json` in the host store:
   nothing here writes it;
   a `defaults` pick of `cookies` would fail every older installation's store read, since `defaults` refuses an unregistered kind,
   so none goes in before every installation reading the store is upgraded.
-- Worker images and runtime volumes are content-addressed and shared on the host:
-  setup's build prunes an unused older `bro/webview` tag as a ride's build does, and a ride whose next webview needs that tag rebuilds it.
+- Runtime images, worker images, and runtime volumes are content-addressed and shared on the host.
+  A ride's build prunes the superseded runtime and worker tags its own process does not reserve, and setup's foreground run prunes nothing (rule 9).
+  A ride's build can still prune the tag setup just built before setup's `docker run` starts it:
+  that setup fails naming the image, and a re-run rebuilds it.
+  The same race between two rides of different versions predates this change (`### Follow-ups`).
 - Nothing else crosses versions:
   a webview's launch request and store, and the capture exchange, live within one ride or one setup run, each on one frozen installation.
 
@@ -204,8 +234,14 @@ stored profiles stay, unread by the older version.
 - Setup refusing a capture that holds a `$cred` key, in place of a literal kind:
   a hand-written or earlier profile would still expand.
 - Storing the profile base64-encoded so it never parses as JSON: the file would stop being a readable storage state.
-- A strict profile schema in the daemon: a profile captured under a newer Playwright MCP pin would fail an older webview.
+- A strict profile schema in the daemon down to each cookie's attributes: every Playwright addition to a cookie would fail every older webview.
+- Wrapping the profile with the pin that captured it, or keeping a prior copy for older pins:
+  the file would stop being a plain storage state, or the store would hold the secret twice, for a mismatch that only a pin bump changing the shape brings.
 - A view port only for setup: `webview open --vnc` needs the same standing forward on a remote host.
+- Unbounded profiles: a site could grow a profile through `--indexed-db` and every re-capture after it until it fills host memory and disk.
+- Only a per-name lock, or only the compare at write:
+  the lock alone overwrites a hand edit made during the run, and the compare alone tells a second setup only after its user has logged in.
+- A host-wide image lock in this change: it changes every ride's builds, beyond this task (`### Follow-ups`).
 
 ### What changes in practice
 
@@ -217,6 +253,7 @@ stored profiles stay, unread by the older version.
 - A pass right for any other kind under `webview` fails wherever it's written.
 - `webview open` fails naming a profile removed since the owner's launch, or one that is not a storage state.
 - A `{"$cred": …}` node a site stored in its IndexedDB stays that node in the site's storage.
+- A second `webview setup alice` while one runs refuses at start, and a capture over 32 MiB leaves the stored profile as it was.
 
 ### Implementation sketch
 
@@ -224,22 +261,22 @@ To settle in the plan phase:
 
 - `bro/base/credentials.py`:
   literal kinds in `CredentialKind`, the resolver, and hydration;
-  the store writer.
+  the store writer with its expected-material compare and per-name lock.
 - `bro/worker_types.py`:
   `LaunchPass.kinds`, validated at type load;
   `WorkerContainer.published_ports` as a mapping to requested host ports.
 - `ride/ride/scope.py`: the bound in `_launch_name_schema`.
 - `ride/ride/launch_control.py`: passes refused on a job alone and carried on `WorkerContainerLaunch`.
-- `ride/ride/worker_container.py`: hydration inside the lowering's cleanup, requested host ports, and the foreground run.
+- `ride/ride/worker_container.py` and `ride/ride/workspace/docker.py`: hydration inside the lowering's cleanup, requested host ports, and the foreground run with its builds that prune nothing.
 - `webview/`:
   - the `cookies` kind (`credentials.py`), and the `pass` field and `vnc_port` (`worker.py`);
-  - the profile check and load, and the start-up shared with capture (`serve.py`);
-  - capture and setup;
+  - the profile's bound and envelope check, its load, and the start-up shared with capture (`serve.py`);
+  - capture and setup, with the exchange;
   - the CLI verbs: `open --cookies` and `--port`, `setup` with `--port`, and `capture`;
   - `pyproject.toml`: the `bro-ride` dependency, the `bro.credentials` entry point, and the deptry map;
   - the import-policy test.
 - Docs:
-  `webview/AGENTS.md`;
+  `webview/AGENTS.md` (the verbs, the daemon's profile, and the storage-state comparison a pin bump owes in "Image pin");
   `bro/reference/ride.md` ("Session permissions and credentials" for the shipped schemas and passes to containers, "Worker containers" for the store and requested ports);
   `bro/setup/AGENTS.md` (the `cookies` material, literal entries, the writer);
   `ride/AGENTS.md` (`worker_container.py`, the pass invariant);
@@ -254,10 +291,13 @@ To settle in the plan phase:
   - a container's passes carried and a job's refused;
   - hydration into the worker store, and a missing instance failing the launch with the workspace removed;
   - requested host ports: published as requested, refused below 1024, and `vnc_port` refused without `vnc`;
-  - `serve` passing `--storage-state` exactly when a profile is present, failing before `listening` on a malformed one with an error that names no value, and never enabling a capability;
-  - capture's exchange, seed, IndexedDB flag, and EOF, with nothing but the exchange on its stdout;
-  - setup's refusals (session, terminal, a source other than `local`, empty), the unchanged no-write, IndexedDB kept on re-capture, and a summary without values;
-  - the writer (atomic, 0600, canonical names);
+  - `serve` passing `--storage-state` exactly when a profile is present, failing before `listening` on a malformed, oversize, or extra-kind one with an error that names no value, and never enabling a capability;
+  - capture's side of the exchange (each line, its order, its bound, EOF, the error answer, an oversize state), the seed, the IndexedDB flag, and nothing but the exchange on its stdout;
+  - setup's refusals (session, terminal, empty instance, a source other than `local`, empty capture, oversize line);
+    its lock and the compare that aborts over a changed profile;
+    the structurally unchanged no-write, IndexedDB kept on re-capture, and a summary without values;
+  - the writer (atomic, 0600, canonical names, expected material, lock);
+  - the foreground run building a missing image and pruning none;
   - the import policy.
 - `webview_e2e`, host-only:
   it runs on its own runner in every pull request's CI, a stage's pull request into its integration branch included, while `run-tests` skips it inside a container.
@@ -276,6 +316,10 @@ Proposed in this session and not filed:
 
 1. Extract the Claude harness into `bro-claude` over a harness-neutral base image.
 2. Then extract the container runtime (runtime bundle, base image, worker images, the foreground run) into `bro-container` beneath `ride`, which setup's imports then move to.
+
+Proposed in the review:
+
+3. Coordinate image builds and pruning host-wide, through a lock or reservation every process honors, so that no process prunes a runtime or worker tag another is about to use.
 
 ### Open
 
