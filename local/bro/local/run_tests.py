@@ -318,6 +318,8 @@ PYTEST_FILES = [
   'bench/bro/bench/run_test.py',
   'webview/bro/webview/worker_test.py',
   'webview/bro/webview/serve_test.py',
+  'webview/bro/webview/capture_test.py',
+  'webview/bro/webview/setup_test.py',
   'webview/bro/webview/cli_test.py',
   'local/bro/local/run_tests_test.py',
   'local/bro/local/green_trees_test.py',
