@@ -30,9 +30,10 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
 - `build_context.py` — normalized, separate runtime and project-image contexts, and the pinned Claude Code version every managed session runs;
   moving the pin includes `run-tests --only llm`, which probes the model-input channels Claude Code records;
   path attachments read the working tree, URL attachments the resolved commit
-- `docker.py` — runtime/project image hashing and builds, plus lazy per-ride container-runtime resolution with the daemon mount preflight;
+- `docker.py` — runtime/project image hashing, locked builds and pruning, plus lazy per-ride container-runtime resolution with the daemon mount preflight;
   broker-free launch descriptions, root-bounded bind validation, loopback-only published ports, container creation, scoped-store copy, member-exec preparation and checked in-container kills,
   attach suspension, Docker inspection, and the bridge gateway a container reaches its launcher through
+- `image_locks.py` — the stable host-wide lock paths and process-lifetime reservation, build, and removal protocol shared by runtime, project, and worker images
 - `metadata.py` — strict `workspace.json` records, boxed/unboxed isolation, and optional external-tree identity
 - `model.py` — workspace factories, namespace/session locking, external-tree ownership, inspection, clean-exit records, and isolation-specific teardown
 - `worktrees.py` — the surviving unboxed `setup.sh` runner

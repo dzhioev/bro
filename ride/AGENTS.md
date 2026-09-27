@@ -103,6 +103,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   The marker is one file across every Docker context while a volume belongs to one daemon and a name outlives whatever held it, so that label is what sends another daemon's namesake, or a replacement created in its place, back through both.
   A volume found unlabelled is one this runtime never created, and is replaced rather than trusted.
   Every boxed bind source must resolve under that root.
+- Runtime, project, and worker image tags use stable host-wide lock paths under the runtime root.
+  A process holds a shared tag lock from before ensure until exit, missing-tag builds serialize on a separate lock, and pruning keeps a non-blocking exclusive tag lock across removal.
 - A launch's credential instances follow its attachment identity and selected bro on every surface that resolves them
   — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Session permissions and credentials")
   — and so does its default LLM recipe, settled on the host once and carried inward as the canonical `--llm`.

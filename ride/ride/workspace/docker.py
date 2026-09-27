@@ -19,6 +19,7 @@ from ride.runtime_bundle import SESSION_TERMINAL_ENV, RuntimeBundle
 from ride.workspace import build_context
 from ride.workspace.build_context import CONTAINER_DIR
 from ride.workspace.clones import ensure_clone
+from ride.workspace.image_locks import ensure_image, image_removal_lock
 from ride.workspace.metadata import read_metadata
 from ride.workspace.store import store_tarball
 
@@ -115,9 +116,9 @@ class ContainerRuntimeResolver:
       if self._bundle is None:
         raise RuntimeError('container runtime resolver has neither a bundle nor a resolved runtime')
       runtime_image = runtime_image_tag(self._bundle.python_version)
-      _ensure_runtime_image(runtime_image, self._bundle.python_version)
+      ensure_runtime_image(runtime_image, self._bundle.python_version)
       image = (
-        runtime_image if self._repo is None else _ensure_project_image(runtime_image, self._repo)
+        runtime_image if self._repo is None else ensure_project_image(runtime_image, self._repo)
       )
       self._bundle.materialize_container(
         runtime_image, preflight=lambda: _preflight_daemon(runtime_image)
@@ -282,8 +283,8 @@ def image_present(tag: str) -> bool:
   return subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True).returncode == 0
 
 
-def prune_superseded_images(current: str, *, protected: Collection[str] = ()) -> None:
-  """untag unused predecessors from the current runtime or project repository."""
+def prune_superseded_images(current: str) -> None:
+  """untag unlocked predecessors from the current image repository."""
   repository = current.rsplit(':', 1)[0]
   listed = subprocess.run(
     ['docker', 'images', repository, '--format', '{{.Repository}}:{{.Tag}}'],
@@ -293,11 +294,14 @@ def prune_superseded_images(current: str, *, protected: Collection[str] = ()) ->
   if listed.returncode != 0:
     return
   for image in listed.stdout.split():
-    if image in (current, _SMOKE_TEST_TAG) or image in protected or image.endswith(':<none>'):
+    if image in (current, _SMOKE_TEST_TAG) or image.endswith(':<none>'):
       continue
-    removed = subprocess.run(['docker', 'image', 'rm', image], capture_output=True, text=True)
-    if removed.returncode == 0:
-      log.info('pruned superseded image %s', image)
+    with image_removal_lock(image) as reserved:
+      if not reserved:
+        continue
+      removed = subprocess.run(['docker', 'image', 'rm', image], capture_output=True, text=True)
+      if removed.returncode == 0:
+        log.info('pruned superseded image %s', image)
 
 
 def build_runtime_image(tag: str, python_version: str) -> None:
@@ -355,23 +359,32 @@ def build_project_image(tag: str, runtime_image: str, project: Repository | Path
   )
 
 
-def _ensure_runtime_image(tag: str, python_version: str) -> None:
-  if image_present(tag):
-    log.verbose('image %s ready', tag)
-    return
-  build_runtime_image(tag, python_version)
-  prune_superseded_images(tag)
+def ensure_runtime_image(tag: str, python_version: str, *, prune: bool = True) -> None:
+  with ensure_image(tag):
+    if image_present(tag):
+      log.verbose('image %s ready', tag)
+      return
+    build_runtime_image(tag, python_version)
+    if prune:
+      prune_superseded_images(tag)
 
 
-def _ensure_project_image(runtime_image: str, project: Repository | Path) -> str:
+def ensure_project_image(
+  runtime_image: str,
+  project: Repository | Path,
+  *,
+  prune: bool = True,
+) -> str:
   tag = project_image_tag(runtime_image, project)
   if tag is None:
     return runtime_image
-  if image_present(tag):
-    log.verbose('image %s ready', tag)
-    return tag
-  build_project_image(tag, runtime_image, project)
-  prune_superseded_images(tag)
+  with ensure_image(tag):
+    if image_present(tag):
+      log.verbose('image %s ready', tag)
+      return tag
+    build_project_image(tag, runtime_image, project)
+    if prune:
+      prune_superseded_images(tag)
   return tag
 
 
