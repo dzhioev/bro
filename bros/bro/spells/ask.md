@@ -12,7 +12,7 @@ A summon succeeds only when the target is in the summoner's `launch.bro.bros` se
 — the session reads those members from the banner's `may_summon` row, fixed at launch
 — so a denial stays a normal outcome the spell relays.
 
-version: 1.21.0
+version: 1.22.0
 ---
 
 # Ask
@@ -92,10 +92,13 @@ Grant only what the request actually needs and the user asked for, including the
 such as `@reviewer` when a developer child must hand off a review or `:launch.webview` plus `:launch.webview.vnc` when it must open a visible browser.
 The complete grammar, fold, and worker schemas are `bro/reference/ride.md`, "Session permissions and credentials".
 
-A summon request carries no credentials.
-The child resolves its credentials from its own bro, harness, model, and applicable host configuration, just like a root launch without credential flags.
+A pass is a separate least-authority scope knob.
+Each value names one credential instance as `<kind>+<instance>` and must be covered by a `:launch.bro.pass.<kind>+<instance>` right this session holds;
+the child then holds that kind at the passed instance, over its own configuration, and at most one instance of each kind may be passed.
+Use it when this run needs a specific instance, including one its bro does not normally declare.
+Without a pass, the child resolves its credentials from its own bro, harness, model, and applicable host configuration, just like a root launch without credential flags.
 A credential name in `grant` or `revoke` is refused;
-configure it under `projects.<identity>.bros.<target>` in the host's `~/.bro.json` instead.
+pass an instance when this session holds its right, or configure the kind under `projects.<identity>.bros.<target>` in the host's `~/.bro.json`.
 
 The quest's **talk** is a separate least-authority knob.
 The child gets `worker.say` by default;
@@ -122,7 +125,9 @@ The session's surface decides the client:
 
 {{iff #harness = claude}}
 **Managed Claude session:** prefer Bash.
-Run `summon <target> '<prompt>'` (`--start` / `--join` / `--boxed` / `--unboxed`, `--timeout <s>`, `--into <ref>`, `--hold <level>`, `--grant <name>`, `--revoke <name>`, `--talk <right>`, `--llm <recipe>`, `--harness <name>`).
+Run `summon <target> '<prompt>'`.
+Placement options are `--start` / `--join` / `--boxed` / `--unboxed`.
+The other options are `--timeout <s>`, `--into <ref>`, `--hold <level>`, `--grant <name>`, `--revoke <name>`, `--pass <kind>+<instance>`, `--talk <right>`, `--llm <recipe>`, and `--harness <name>`.
 It prints the quest id and the started trail id to stderr,
 then blocks until the answer or a child question lands on stdout.
 A child question exits 4 and logs the exact `quest say` reply command;
@@ -207,6 +212,7 @@ a denial fails right there, before any token exists.
 `--into`,
 `--grant`,
 `--revoke`,
+`--pass`,
 and `--talk` still apply;
 `--timeout`,
 `--hold`,
@@ -223,6 +229,8 @@ Relay the token to the user as the ready-to-paste interactive command
 — `ride along --summoned <token> <target>`
 — and note they may instead run `ride solo --summoned <token> <target>` for a one-shot request without an interactive terminal.
 They may add their own launch flags (`--unboxed`, `--llm`, `--hold`, `--workspace`, `--cred`, credential `--grant`/`--revoke`, or a claude/bro harness).
+Their credential flags merge over any pass:
+a `--cred` of the same kind replaces its instance, and `--revoke` drops the passed kind and pick.
 The prompt you passed becomes the session's first message;
 the child bases on this workspace's HEAD *at the moment they launch* (or the `--into` ref you gave).
 
@@ -250,6 +258,7 @@ If the user asked for a follow-up action on the answer, continue with it.
 
 - **Denied** — the target isn't in the summoner's `launch.bro.bros` set,
   a scope override was malformed or grants authority beyond what the summoner holds,
+  a pass is malformed or beyond the summoner's pass rights,
   or the summon would nest past the depth cap.
   Immediate, no child spawned;
   the error names the reason.
@@ -258,8 +267,8 @@ If the user asked for a follow-up action on the answer, continue with it.
   — tell the user that;
   nothing in-session can widen it.
   A summoned bro's onward authority starts from its own seed and `may_summon` members under the project and host configuration layers, then the request's `@bro` and `:launch.…` overrides.
-  Its credentials come from the target bro's applicable host configuration, not from the request.
-  Change the relevant source rather than retrying unchanged.
+  Its credentials come from the target bro's applicable host configuration plus the request's authorized passes.
+  Change the relevant source or pass when authorized rather than retrying unchanged.
 - **Raised / error** — the target ran but couldn't fulfill the request;
   the reason is the failure text.
   Relay it — rephrasing the prompt or picking another target is a user decision.

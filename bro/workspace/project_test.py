@@ -149,6 +149,15 @@ class TestProjectConfig:
     with pytest.raises(ValueError):
       project_config()
 
+  @pytest.mark.parametrize('field', ['grant', 'revoke'])
+  def test_project_scope_refuses_pass_rights(self, project_dir, field):
+    (project_dir / 'pyproject.toml').write_text(
+      f'[tool.bro]\ndefault = "foo"\n{field} = [":launch.bro.pass.github+work"]\n'
+    )
+
+    with pytest.raises(ValueError, match=r'\[tool.bro\].*cannot name.*pass right'):
+      project_config()
+
   def test_project_scope_names_a_retired_permits_replacement(self, project_dir):
     (project_dir / 'pyproject.toml').write_text(
       '[tool.bro]\ndefault = "foo"\ngrant = [":bro.party.join"]\n'

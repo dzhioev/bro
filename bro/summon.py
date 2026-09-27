@@ -77,10 +77,14 @@ HARNESS_HELP = (
   '`[tool.bro] summon-harness`'
 )
 GRANT_HELP = (
-  'add a launch permission '
-  f'(@BRO, :launch.<type>, or one of {party_launch_choices()}) to the child (repeatable)'
+  'add a launch permission (@BRO, :launch.<type>[.<field>[.<value>]], including '
+  ':launch.<type>.pass.<kind>+<instance>, or one of '
+  f'{party_launch_choices()}) to the child (repeatable)'
 )
 REVOKE_HELP = "remove a launch permission from the child's authority (repeatable)"
+PASS_HELP = (
+  'make the child hold a credential instance covered by this session’s pass rights (repeatable)'
+)
 SHARE_HELP = (
   'give the child read access to an artifact ref this session can itself read (repeatable)'
 )
@@ -240,6 +244,7 @@ def _payload(
   index: Optional[int] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
+  passes: Optional[list[str]] = None,
   share: Optional[list[str]] = None,
   llm: Optional[str] = None,
   harness: Optional[str] = None,
@@ -263,6 +268,8 @@ def _payload(
     payload['grant'] = list(grant)
   if revoke is not None:
     payload['revoke'] = list(revoke)
+  if passes is not None:
+    payload['pass'] = list(passes)
   if share is not None:
     payload['share'] = list(share)
   if llm is not None:
@@ -356,6 +363,7 @@ def summon_and_wait(
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
+  passes: Optional[list[str]] = None,
   share: Optional[list[str]] = None,
   llm: Optional[str] = None,
   harness: Optional[str] = None,
@@ -379,6 +387,7 @@ def summon_and_wait(
     index=index,
     grant=grant,
     revoke=revoke,
+    passes=passes,
     share=share,
     llm=llm,
     harness=harness,
@@ -426,6 +435,7 @@ def summon_detached(
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
+  passes: Optional[list[str]] = None,
   share: Optional[list[str]] = None,
   llm: Optional[str] = None,
   harness: Optional[str] = None,
@@ -446,6 +456,7 @@ def summon_detached(
     index=index,
     grant=grant,
     revoke=revoke,
+    passes=passes,
     share=share,
     llm=llm,
     harness=harness,
@@ -466,6 +477,7 @@ def summon_manual(
   into: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
+  passes: Optional[list[str]] = None,
   talk: Optional[list[str]] = None,
   step_id: Optional[int] = None,
   index: Optional[int] = None,
@@ -477,6 +489,7 @@ def summon_manual(
     into=into,
     grant=grant,
     revoke=revoke,
+    passes=passes,
     talk=talk,
     manual=True,
     step_id=step_id,
@@ -497,6 +510,7 @@ def relay_summon(
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
+  passes: Optional[list[str]] = None,
   share: Optional[list[str]] = None,
   llm: Optional[str] = None,
   harness: Optional[str] = None,
@@ -519,6 +533,7 @@ def relay_summon(
     hold=hold,
     grant=grant,
     revoke=revoke,
+    passes=passes,
     share=share,
     llm=llm,
     harness=harness,
@@ -590,6 +605,9 @@ def main(argv: list[str]) -> Optional[int]:
   add_llm_flags(parser, effort_help=EFFORT_HELP, fast_help=FAST_HELP)
   parser.add_argument('--grant', action='append', default=None, metavar='NAME', help=GRANT_HELP)
   parser.add_argument('--revoke', action='append', default=None, metavar='NAME', help=REVOKE_HELP)
+  parser.add_argument(
+    '--pass', action='append', default=None, metavar='KIND+INSTANCE', help=PASS_HELP
+  )
   parser.add_argument('--share', action='append', default=None, metavar='REF', help=SHARE_HELP)
   parser.add_argument(
     '--talk', action='append', default=None, metavar='RIGHT[,RIGHT]', help=TALK_HELP
@@ -669,6 +687,7 @@ def main(argv: list[str]) -> Optional[int]:
           into=args['into'],
           grant=args['grant'],
           revoke=args['revoke'],
+          passes=args['pass'],
           talk=args['talk'],
         )
         log.info('have the user run: %s', manual_launch_command(quest_id, args['target']))
@@ -681,6 +700,7 @@ def main(argv: list[str]) -> Optional[int]:
           hold=args['hold'],
           grant=args['grant'],
           revoke=args['revoke'],
+          passes=args['pass'],
           share=args['share'],
           llm=args['llm'],
           harness=args['harness'],
@@ -701,6 +721,7 @@ def main(argv: list[str]) -> Optional[int]:
     hold=args['hold'],
     grant=args['grant'],
     revoke=args['revoke'],
+    passes=args['pass'],
     share=args['share'],
     llm=args['llm'],
     harness=args['harness'],

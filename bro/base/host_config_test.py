@@ -482,6 +482,24 @@ class TestValidation:
 
     assert host_config.tool_selection(None).instances == {'consumer_only': 'special'}
 
+  def test_pass_right_requires_an_instance(self, config_file):
+    config_file({'defaults': {'grant': [':launch.bro.pass.github']}})
+
+    with pytest.raises(ValueError, match=r'github\+<instance>.*github\+'):
+      host_config.launch_selection(None, 'dev')
+
+  def test_pass_right_unknown_kind_is_carried_to_the_launch_fold(self, config_file):
+    config_file(
+      {
+        'projects': {
+          '/repo': {'bros': {'dev': {'grant': [':launch.bro.pass.consumer_only+special']}}}
+        }
+      }
+    )
+
+    selected = host_config.launch_selection(host_config.Attachment(path='/repo'), 'dev')
+    assert selected.scope_layers[-1].grant == (':launch.bro.pass.consumer_only+special',)
+
   def test_retired_instances_field_names_its_replacement(self, config_file, tmp_path):
     config_file({'projects': {str(tmp_path): {'instances': ['brog+github']}}})
 

@@ -61,7 +61,8 @@ Interpret them as follows:
    The host enforces these rights and nothing in-session widens them.
 
 7. `permits` renders the non-bro-target names from this session's `launch` section.
-   It includes set members and flags such as `:launch.bro.party.boxed`, `:launch.bro.party.unboxed`, `:launch.bro.party.join`, and `:launch.webview.vnc`, plus a type key such as `:launch.benchmark` when its payload is empty:
+   It includes set members and flags such as `:launch.bro.party.boxed`, `:launch.bro.party.unboxed`, `:launch.bro.party.join`, and `:launch.webview.vnc`;
+   it also includes pass rights such as `:launch.bro.pass.github+project`, plus a type key such as `:launch.benchmark` when its payload is empty:
    `permits: none` means no such name is held, and an absent line means the launcher published no `launch` section.
    `may_summon` renders the `launch.bro.bros` members separately.
    An unmarked summon starts boxed when that party member is present, otherwise unboxed when its member is present;

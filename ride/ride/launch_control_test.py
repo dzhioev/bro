@@ -13,6 +13,7 @@ from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
 from bro.worker_types import (
   LAUNCH_FLAG,
+  LAUNCH_PASS,
   ArtifactDenied,
   Container,
   Expect,
@@ -24,6 +25,7 @@ from bro.worker_types import (
   UnattributablePeer,
   WorkerContainer,
   WorkerType,
+  installed_types,
 )
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride import pending_launch
@@ -60,6 +62,7 @@ class SampleType(WorkerType):
     super().__init__(host)
     self.run = run
     self.calls = []
+    self.requests = []
     self.fields: dict[str, Any] = {
       'detail': {'accepted': True},
       'transition': 'type-owned',
@@ -73,6 +76,7 @@ class SampleType(WorkerType):
 
   def launch(self, request: LaunchRequest):
     self.calls.append('launch')
+    self.requests.append(request)
     if request.args.get('deny_launch'):
       raise LaunchDenied('run refused')
     return self.run
@@ -84,6 +88,10 @@ class SampleType(WorkerType):
 
 class FixedTalkType(SampleType):
   widens_talk = False
+
+
+class PassType(SampleType):
+  launch_schema = MappingProxyType({'pass': LAUNCH_PASS})
 
 
 class Peers:
@@ -211,6 +219,100 @@ def test_request_timeout_overrides_the_type_default(tmp_path, owner):
   assert context.spawned[0][3]['timeout'] == 3.0
 
 
+def test_pass_is_authorized_before_the_type_and_reaches_the_request(tmp_path, owner):
+  owner = replace(owner, launch={'test': {'pass': frozenset({'github+work'})}})
+  control, worker_type, _, _ = _control(
+    tmp_path,
+    owner,
+    Spawn(object(), object()),
+    type_class=PassType,
+  )
+
+  context = _handle(control, _message(**{'pass': ['github+work']}))
+
+  assert context.spawned
+  assert worker_type.calls == ['talk', 'launch', 'audit']
+  assert worker_type.requests[0].passes == ('github+work',)
+  assert 'pass' not in worker_type.requests[0].args
+
+
+def test_pass_beyond_the_owners_rights_is_denied_before_the_type(tmp_path, owner):
+  owner = replace(owner, launch={'test': {'pass': frozenset({'github+other'})}})
+  control, worker_type, _, _ = _control(
+    tmp_path,
+    owner,
+    Spawn(object(), object()),
+    type_class=PassType,
+  )
+
+  context = _handle(control, _message(**{'pass': ['github+work']}))
+
+  assert 'beyond' in context.denied[0][1]
+  assert 'github+work' in context.denied[0][1]
+  assert worker_type.calls == []
+
+
+@pytest.mark.parametrize(
+  ('passes', 'message'),
+  [
+    (['github'], 'names no instance'),
+    (['github+one', 'github+two'], 'more than one instance'),
+    ('github+one', 'must be a list'),
+  ],
+)
+def test_malformed_passes_are_denied(tmp_path, owner, passes, message):
+  owner = replace(
+    owner,
+    launch={'test': {'pass': frozenset({'github+one', 'github+two'})}},
+  )
+  control, worker_type, _, _ = _control(
+    tmp_path,
+    owner,
+    Spawn(object(), object()),
+    type_class=PassType,
+  )
+
+  context = _handle(control, _message(**{'pass': passes}))
+
+  assert message in context.denied[0][1]
+  assert worker_type.calls == []
+
+
+def test_a_type_without_a_pass_field_has_no_pass_rights(tmp_path, owner):
+  owner = replace(owner, launch={'test': {}})
+  control, worker_type, _, _ = _control(tmp_path, owner, Spawn(object(), object()))
+
+  context = _handle(control, _message(**{'pass': ['github+work']}))
+
+  assert 'beyond' in context.denied[0][1]
+  assert worker_type.calls == []
+
+
+@pytest.mark.parametrize('worker_name', ['benchmark', 'webview'])
+def test_shipped_types_without_pass_fields_deny_passes(tmp_path, owner, worker_name):
+  worker_class = installed_types()[worker_name]
+  host = Host()
+  worker_type = worker_class(cast(Any, host))
+  owner = replace(owner, launch={worker_name: {}})
+  control = LaunchControl(
+    ride='ride',
+    types={worker_name: worker_type},
+    peers=Peers(owner),
+    journal=cast(Any, object()),
+    audit_file=tmp_path / 'audit.jsonl',
+    runtime_bundle=SimpleNamespace(reference='/runtime'),
+    session_env={},
+    worker_container_spawner=cast(Spawner, object()),
+  )
+
+  context = _handle(
+    control,
+    request('launch', {'type': worker_name, 'pass': ['github+work']}),
+  )
+
+  assert 'beyond' in context.denied[0][1]
+
+
 @pytest.mark.parametrize('timeout', [0, -1, True, '3'])
 def test_invalid_timeout_is_denied(tmp_path, owner, timeout):
   control, _, _, _ = _control(tmp_path, owner, Spawn(object(), object()))
@@ -302,6 +404,29 @@ def test_container_run_hands_the_spec_and_share_to_the_host_spawner(tmp_path, ow
 
 @pytest.mark.parametrize(
   'run',
+  [
+    Job(CommandJob(('true',), {})),
+    Container(
+      WorkerContainer(
+        files={'Dockerfile': b'ARG RUNTIME_IMAGE\nFROM ${RUNTIME_IMAGE}\n'},
+        command=('worker',),
+        env={},
+        published_ports=(),
+      )
+    ),
+  ],
+)
+def test_pass_is_denied_for_runs_without_a_credential_store(tmp_path, owner, run):
+  owner = replace(owner, launch={'test': {'pass': frozenset({'github+work'})}})
+  control, _, _, _ = _control(tmp_path, owner, run, type_class=PassType)
+
+  context = _handle(control, _message(**{'pass': ['github+work']}))
+
+  assert "cannot honor 'pass'" in context.denied[0][1]
+
+
+@pytest.mark.parametrize(
+  'run',
   [Job(CommandJob(('true',), {})), Expect({})],
 )
 def test_share_is_denied_for_runs_without_a_host_workspace(tmp_path, owner, run):
@@ -349,9 +474,15 @@ def test_manual_launch_writes_and_discards_the_pending_record(tmp_path, monkeypa
     pending_launch.peek(message.request_id)
 
 
-def test_audit_fields_are_snapshotted_at_acceptance(tmp_path, owner):
-  message = _message()
-  control, worker_type, peers, _ = _control(tmp_path, owner, Spawn(object(), object()))
+def test_audit_fields_and_passes_are_snapshotted_at_acceptance(tmp_path, owner):
+  owner = replace(owner, launch={'test': {'pass': frozenset({'github+work'})}})
+  message = _message(**{'pass': ['github+work']})
+  control, worker_type, peers, _ = _control(
+    tmp_path,
+    owner,
+    Spawn(object(), object()),
+    type_class=PassType,
+  )
   _handle(control, message)
   worker_type.fields['detail']['accepted'] = False
   event = SimpleNamespace(
@@ -364,6 +495,7 @@ def test_audit_fields_are_snapshotted_at_acceptance(tmp_path, owner):
   [entry] = [json.loads(line) for line in (tmp_path / 'audit.jsonl').read_text().splitlines()]
   assert entry['owner'] == {'workspace': 'ws', 'type': 'bro'}
   assert entry['type'] == 'test'
+  assert entry['pass'] == ['github+work']
   assert entry['published_ports'] == []
   assert entry['transition'] == 'accepted'
   assert entry['extension'] == {

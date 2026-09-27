@@ -45,8 +45,14 @@ class LaunchFlag:
   pass
 
 
+@dataclass(frozen=True)
+class LaunchPass:
+  pass
+
+
 LAUNCH_FLAG = LaunchFlag()
-LaunchFieldSchema = LaunchSet | LaunchFlag
+LAUNCH_PASS = LaunchPass()
+LaunchFieldSchema = LaunchSet | LaunchFlag | LaunchPass
 LaunchField = frozenset[str] | bool
 LaunchPayload = dict[str, LaunchField]
 Launch = dict[str, LaunchPayload]
@@ -119,6 +125,7 @@ class LaunchRequest:
   owner: PeerDescription
   requested_talk: Talk
   timeout: float | None
+  passes: tuple[str, ...]
   share: tuple[str, ...]
   manual: bool
 
@@ -350,10 +357,16 @@ def _load(entry: importlib.metadata.EntryPoint) -> type[WorkerType]:
   for field_name, field_schema in schema.items():
     if not isinstance(field_name, str) or _TYPE_NAME.fullmatch(field_name) is None:
       raise ValueError(f'worker type {entry.name!r} declares invalid launch field {field_name!r}')
-    if not isinstance(field_schema, (LaunchSet, LaunchFlag)):
+    if not isinstance(field_schema, (LaunchSet, LaunchFlag, LaunchPass)):
       raise TypeError(
         f'worker type {entry.name!r} launch field {field_name!r} has an invalid schema'
       )
+    if isinstance(field_schema, LaunchPass) and field_name != 'pass':
+      raise ValueError(
+        f'worker type {entry.name!r} declares the pass schema under field {field_name!r}'
+      )
+    if field_name == 'pass' and not isinstance(field_schema, LaunchPass):
+      raise ValueError(f'worker type {entry.name!r} launch field "pass" must use the pass schema')
   return worker_type
 
 

@@ -81,8 +81,11 @@ _RUNTIME_PYTHON = '/var/ride/runtime/venv/bin/python'
 _WEDGED_MISSION_TIMEOUT = 2
 
 
-def _bro_launch(*, targets=(), party=('boxed',), extra=None):
-  launch = {'bro': {'bros': frozenset(targets), 'party': frozenset(party)}}
+def _bro_launch(*, targets=(), party=('boxed',), passes=(), extra=None):
+  payload = {'bros': frozenset(targets), 'party': frozenset(party)}
+  if passes:
+    payload['pass'] = frozenset(passes)
+  launch = {'bro': payload}
   if extra is not None:
     launch.update(extra)
   return launch
@@ -102,8 +105,13 @@ def _session_broxy_probe(source: str) -> list[str]:
   return _broxy_probe(_RUNTIME_PYTHON, source)
 
 
-def _do_ride_bro_probe(command: list[str], source: str, sitecustomize: str) -> list[str]:
-  bro_script = f'#!/bin/sh\nexec {_RUNTIME_PYTHON} -c {shlex.quote(source)}\n'
+def _do_ride_bro_probe(
+  command: list[str],
+  source: str,
+  sitecustomize: str,
+  runtime_python: str = _RUNTIME_PYTHON,
+) -> list[str]:
+  bro_script = f'#!/bin/sh\nexec {shlex.quote(runtime_python)} -c {shlex.quote(source)}\n'
   wrapper = '\n'.join(
     [
       'mkdir -p /tmp/e2e-bin /tmp/e2e-python',
@@ -1614,6 +1622,7 @@ from bro.run_lifecycle import RunLifecycle
 
 assert credentials.get('openai') == 'summoned-openai'
 assert credentials.get('aws') == 'summoned-aws'
+assert credentials.get('github') == 'passed-github'
 assert credentials.get_json('infra') == {'token': 'e2e-minted'}
 assert credentials.default_store().get_instance('github+reference') == 'e2e-minted'
 assert Path(os.environ['AWS_SHARED_CREDENTIALS_FILE']).read_text() == 'summoned-aws'
@@ -1625,7 +1634,8 @@ listed = subprocess.run(
 ).stdout.splitlines()
 assert 'openai+summoned' in listed
 assert 'aws+summoned' in listed
-assert 'github+summoned' in listed
+assert 'github+passed' in listed
+assert 'github+summoned' not in listed
 assert 'github+reference' in listed
 assert 'infra+composite' in listed
 assert 'openai' not in listed
@@ -1638,8 +1648,11 @@ channel.close()
 """
 
 
-def test_spawned_summon_hydrates_the_targets_configured_model_credential(
-  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize('child_isolation', [None, 'unboxed'])
+def test_spawned_summon_pass_overrides_the_targets_configured_credential(
+  isolated_env: IsolatedEnv,
+  monkeypatch: pytest.MonkeyPatch,
+  child_isolation: str | None,
 ) -> None:
   from datetime import UTC, datetime, timedelta
 
@@ -1647,13 +1660,16 @@ def test_spawned_summon_hydrates_the_targets_configured_model_credential(
   import ride.broker_root as broker_root
   from bro.base import credentials, host_config
   from bro.extra.github import app as github_app
+  from bro.workspace.paths import launch_dir
+  from ride.root import ProcessLaunch
   from ride.runtime_bundle import RuntimeBundle
   from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
   from ride.workspace.metadata import Isolation
   from ride.workspace.model import Workspace
 
   env = isolated_env
-  name = f'{_NAME_PREFIX}i-credential-party'
+  child_placement = 'boxed' if child_isolation is None else child_isolation
+  name = f'{_NAME_PREFIX}i-pass-{child_placement}-party'
   workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
   runtime_bundle = RuntimeBundle(
     env.runtime_root / 'runtime' / env.runtime_bundle_hash,
@@ -1665,6 +1681,7 @@ def test_spawned_summon_hydrates_the_targets_configured_model_credential(
   host_store = env.home / '.bro'
   (host_store / 'creds' / 'aws+summoned.cred').write_text('summoned-aws')
   (host_store / 'creds' / 'github+summoned.cred').write_text('summoned-github')
+  (host_store / 'creds' / 'github+passed.cred').write_text('passed-github')
   (host_store / 'creds' / 'github+reference.cred').write_text(
     json.dumps({'app_id': 1, 'installation_id': 2, 'private_key': 'pem'})
   )
@@ -1692,10 +1709,11 @@ def test_spawned_summon_hydrates_the_targets_configured_model_credential(
                 'creds': [
                   'openai+summoned',
                   'aws+summoned',
-                  'github+summoned',
+                  *(['github+summoned'] if child_isolation is None else []),
                   'infra+composite',
                 ],
-                'grant': ['aws', 'github', 'infra'],
+                'grant': ['aws', 'infra'] + (['github'] if child_isolation is None else []),
+                'revoke': [] if child_isolation is None else ['github'],
               }
             },
           }
@@ -1715,21 +1733,28 @@ def test_spawned_summon_hydrates_the_targets_configured_model_credential(
         launch.command,
         _SUMMON_CREDENTIAL_CHILD,
         _SUMMON_CREDENTIAL_SITECUSTOMIZE,
+        (
+          str(runtime_bundle.host_venv / 'bin' / 'python')
+          if isinstance(launch, ProcessLaunch)
+          else _RUNTIME_PYTHON
+        ),
       ),
     )
 
   monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
   monkeypatch.setenv('HOME', str(env.home))
   report = workspace.tree / '.summon-credential-report'
-  root_source = """
+  root_source = f"""
 from pathlib import Path
 from bro.summon import summon_and_wait
 
 answer = summon_and_wait(
   'bro',
-  'read the configured credential',
+  'read the passed credential',
+  passes=['github+passed'],
   llm='openai:sol',
   harness='bro',
+  isolation={child_isolation!r},
   timeout=120,
 )
 Path('/workspace/.summon-credential-report').write_text(answer)
@@ -1751,7 +1776,11 @@ Path('/workspace/.summon-credential-report').write_text(answer)
     launch,
     workspace=workspace,
     bro='bro-dev',
-    launch_scope=_bro_launch(targets=('bro',)),
+    launch_scope=_bro_launch(
+      targets=('bro',),
+      party=('boxed', 'unboxed'),
+      passes=('github+passed',),
+    ),
     summon_depth=2,
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
@@ -1759,10 +1788,16 @@ Path('/workspace/.summon-credential-report').write_text(answer)
 
   assert code == 0
   assert report.read_text() == 'openai'
+  audit = [json.loads(line) for line in (launch_dir() / f'{name}.jsonl').read_text().splitlines()]
+  summon_events = [
+    entry for entry in audit if entry.get('kind') == 'launch' and entry.get('type') == 'bro'
+  ]
+  assert summon_events
+  assert all(entry['pass'] == ['github+passed'] for entry in summon_events)
   assert env.live_containers() == []
 
 
-def test_manual_summon_argv_owns_its_credential_scope(
+def test_manual_summon_argv_layers_over_the_passed_credential(
   isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
   import ride.cli as ride_cli
@@ -1774,8 +1809,12 @@ def test_manual_summon_argv_owns_its_credential_scope(
 
   env = isolated_env
   config = env.root / 'manual-credentials.json'
-  config.write_text('{}')
+  config.write_text(json.dumps({'defaults': {'revoke': ['github']}}))
+  (env.home / '.bro' / 'creds' / 'github+passed.cred').write_text('passed-github')
   (env.home / '.bro' / 'creds' / 'github+manual.cred').write_text('manual-github')
+  (env.home / '.bro' / credentials.STORE_FILE).write_text(
+    json.dumps({'defaults': ['github+configured']})
+  )
   monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(config))
   monkeypatch.setattr(credentials, 'STORE_DIR', str(env.home / '.bro'))
   record = pending_launch.PendingLaunch(
@@ -1792,6 +1831,7 @@ def test_manual_summon_argv_owns_its_credential_scope(
       'launch': {'bro': {'bros': [], 'party': ['boxed']}},
       'grant': [],
       'revoke': [],
+      'pass': ['github+passed'],
       'summoner': None,
       'repo': None,
       'into': None,
@@ -1825,7 +1865,7 @@ def test_manual_summon_argv_owns_its_credential_scope(
   with contextlib.ExitStack() as cleanup:
     pending_launch.write(record)
     cleanup.callback(pending_launch.discard, record.token)
-    assert (pending_bro(record).grant, pending_bro(record).revoke) == ((), ())
+    assert pending_bro(record).passes == ('github+passed',)
     code = ride_cli.main(
       [
         'ride',
@@ -1839,7 +1879,31 @@ def test_manual_summon_argv_owns_its_credential_scope(
         '--unboxed',
         '--cred',
         'github+manual',
-        '--grant',
+        '--revoke',
+        'trails',
+        'bro',
+      ]
+    )
+    assert code == 0
+    assert captured['spec'].cred == ['github+manual']
+    assert captured['spec'].grant == ['github']
+    assert captured['store'].kinds == {'github'}
+    assert captured['store']['creds/github+manual.cred'] == b'manual-github'
+    assert captured['summoned'].token == record.token
+
+    captured.clear()
+    code = ride_cli.main(
+      [
+        'ride',
+        'solo',
+        '--summoned',
+        record.token,
+        '--harness',
+        'bro',
+        '--llm',
+        'echo',
+        '--unboxed',
+        '--revoke',
         'github',
         '--revoke',
         'trails',
@@ -1848,15 +1912,16 @@ def test_manual_summon_argv_owns_its_credential_scope(
     )
 
   assert code == 0
-  assert captured['spec'].cred == ['github+manual']
-  assert captured['store'].kinds == {'github'}
-  assert captured['store']['creds/github+manual.cred'] == b'manual-github'
-  assert captured['summoned'].token == record.token
+  assert captured['spec'].cred == []
+  assert captured['spec'].grant == []
+  assert captured['spec'].revoke == ['github', 'trails']
+  assert captured['store'].kinds == set()
 
 
 def _cross_isolation_member(prompt: str) -> str:
   return f"""
 import time
+from bro.base import credentials
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import summon_and_wait
 
@@ -1865,6 +1930,7 @@ channel = RunLifecycle.from_env()
 assert channel is not None
 channel.trail('trail-' + prompt)
 if prompt == 'boxed-member':
+  assert credentials.get('github') == 'passed-github'
   answer = summon_and_wait(
     'bro',
     'unboxed-owner',
@@ -1907,6 +1973,7 @@ def test_cross_isolation_summon_chain_uses_both_join_lowerings(
 ) -> None:
   import ride.bro_worker as ride_spawn
   import ride.broker_root as broker_root
+  from bro.base import credentials, host_config
   from ride.root import ProcessLaunch
   from ride.runtime_bundle import RuntimeBundle
   from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
@@ -1914,6 +1981,28 @@ def test_cross_isolation_summon_chain_uses_both_join_lowerings(
   from ride.workspace.model import Workspace
 
   env = isolated_env
+  host_store = env.home / '.bro'
+  (host_store / 'creds' / 'github+configured.cred').write_text('configured-github')
+  (host_store / 'creds' / 'github+passed.cred').write_text('passed-github')
+  config = env.root / 'join-pass-credentials.json'
+  config.write_text(
+    json.dumps(
+      {
+        'projects': {
+          str(env.project): {
+            'bros': {
+              'bro': {
+                'creds': ['github+configured'],
+                'grant': ['github'],
+              }
+            }
+          }
+        }
+      }
+    )
+  )
+  monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(config))
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(host_store))
   name = f'{_NAME_PREFIX}i-chain-party'
   workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
   party_directory = workspace.path / 'party'
@@ -1965,17 +2054,21 @@ def test_cross_isolation_summon_chain_uses_both_join_lowerings(
   root_source = """
 import time
 from pathlib import Path
+from bro.base import credentials
 from bro.summon import summon_and_wait
 
+assert not credentials.available('github')
 answer = summon_and_wait(
   'bro',
   'boxed-member',
   party='join',
+  passes=['github+passed'],
   grant=['@bro', ':launch.bro.party.unboxed', ':launch.bro.party.join'],
   llm='echo',
   harness='bro',
   timeout=120,
 )
+assert not credentials.available('github')
 Path('/workspace/.cross-isolation-report').write_text(answer)
 time.sleep(2)
 """
@@ -2000,6 +2093,7 @@ time.sleep(2)
     launch_scope=_bro_launch(
       targets=('bro',),
       party=('boxed', 'unboxed', 'join'),
+      passes=('github+passed',),
     ),
     summon_depth=5,
     container_runtime=container_runtime,

@@ -120,7 +120,7 @@ The optional host config selects stored credential instances and layers session 
       "creds": ["brog+github", "github+dev"],
       "grant": ["@reviewer"],
       "bros": {
-        "bro-eyebro": {"creds": ["github+reviewer"], "revoke": [":launch.bro.party.join"]},
+        "bro-eyebro": {"creds": ["github+reviewer"], "grant": [":launch.bro.pass.github+reviewer"], "revoke": [":launch.bro.party.join"]},
         "eyebro": {"creds": ["github+reviewer"], "grant": ["github"], "llm": "openai:sol:xhigh"}
       }
     },
@@ -146,7 +146,8 @@ Project entries and `bros.<bro>` entries may carry `creds`, while `defaults` doe
 the host store's `creds.json` `defaults` is the common base pick for managed sessions and operator commands alike.
 `defaults`, project entries, and bro entries may carry `grant` and `revoke` in the permission document's unified grammar.
 A bare credential kind changes `creds.use`, `@bro` changes `launch.bro.bros`, and `:launch.…` changes worker-launch authority.
-Credential grants and revokes cannot name instances;
+A pass right such as `:launch.bro.pass.github+reviewer` lets the bro pass that stored instance to missions of the named type without granting the bro credential use.
+Credential grants and revokes cannot otherwise name instances;
 use `creds` to pick an instance and add a bare grant only when the consumer does not already need the kind.
 A bro's `creds` selects only among the kinds its configured scope holds;
 a selection of any other kind fails the launch and names `grant`, since it would otherwise sit inert.
@@ -159,8 +160,9 @@ The settled recipe is what the session records and forwards, so a summon of the 
 A recipe the selected harness cannot run fails the launch as an explicit `--llm` would, and a malformed one fails the launch that reads it, naming the entry.
 The retired `instances` field is rejected with `creds` named as its replacement.
 The file read validates credential and bro name grammar without consulting an installation's registries.
-Each launch then requires every credential name in every applicable layer to be registered;
-this lets one shared file carry consumer-specific names in project entries without letting an inapplicable or misspelled name pass silently.
+Each launch then requires every credential name in every applicable layer to be registered.
+Every pass right under a held launch key must also name an instance present in the store, or the launch fails naming the layer that granted it.
+This lets one shared file carry consumer-specific names in project entries without letting an applicable misspelling pass silently.
 A recipe is carried as written for the launch to parse.
 
 The store's `defaults` is the pick base both branches extend.
