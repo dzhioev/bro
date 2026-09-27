@@ -377,7 +377,7 @@ It maps each permitted worker type to the payload that type interprets:
 ```json
 {
   "bro": {"bros": ["reviewer"], "party": ["boxed", "join"], "pass": ["github+project"]},
-  "webview": {"vnc": true},
+  "webview": {"vnc": true, "pass": ["cookies+alice"]},
   "benchmark": {}
 }
 ```
@@ -410,8 +410,11 @@ The retired `:bro.party.start.boxed`, `:bro.party.start.unboxed`, `:bro.party.jo
 The shipped schemas are:
 
 - `bro`: key `:launch.bro`; `bros`, the installed bro names spelled `@<bro>`; `party`, whose members are `boxed`, `unboxed`, and `join`; and `pass`, the credential instances it may pass;
-- `webview`: key `:launch.webview` and the `:launch.webview.vnc` flag, needed only for a human-visible noVNC endpoint;
+- `webview`: key `:launch.webview`; the `:launch.webview.vnc` flag, needed only for a human-visible noVNC endpoint; and `pass`, bounded to the `cookies` kind;
 - `benchmark`: key `:launch.benchmark` and no fields, so its empty payload is the complete authority.
+
+A webview launch request may carry `vnc_port` only with `vnc`;
+it asks the worker container to publish the noVNC view on that host port instead of an available one.
 
 Every bro launch starts with the framework seed `:launch.bro` and `:launch.bro.party.boxed`, plus one `@<bro>` for every target its persona's `may_summon` declares.
 The repository's `[tool.bro]` layer follows, then the host config's `defaults`, matching project URL, matching project path, URL-bro, and path-bro layers, then launch flags.
@@ -885,6 +888,7 @@ workspace removal (`--drop`, `ride clean`) deletes it with the workspace.
 A registered worker type can return a core `Container(WorkerContainer(…))` run without importing ride.
 The shipped `webview` type is a browser worker container driven through `webview open`, `mission ask`, and `webview close`;
 its optional noVNC loopback view requires `:launch.webview.vnc`, and every webview launch requires `:launch.webview`.
+`webview open --cookies <instance>` passes one `cookies` profile into the worker's scoped store, while `--vnc --port <port>` requests the noVNC host port.
 Its declaration ships a byte-valued Docker build context whose normalized relative paths include a `Dockerfile` opening with `ARG RUNTIME_IMAGE` and `FROM ${RUNTIME_IMAGE}`.
 It also declares a command, environment, and a mapping from distinct container ports to requested host ports.
 A `null` host port asks the host to select an available one;

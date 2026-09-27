@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import contextlib
 import json
@@ -48,6 +49,8 @@ def _open_client() -> Client:
 def _launch_args(
   *,
   vnc: bool,
+  vnc_port: int | None,
+  cookies: str | None,
   allowed_origins: list[str],
   blocked_origins: list[str],
   share: list[str],
@@ -59,6 +62,10 @@ def _launch_args(
     'allowed_origins': allowed_origins,
     'blocked_origins': blocked_origins,
   }
+  if vnc_port is not None:
+    args['vnc_port'] = vnc_port
+  if cookies is not None:
+    args['pass'] = [f'cookies+{cookies}']
   if len(share) > 0:
     args['share'] = share
   if timeout is not None:
@@ -116,6 +123,8 @@ def _validate_ready(message: Message, transitions: list[str]) -> Optional[str]:
 def open_webview(
   *,
   vnc: bool = False,
+  vnc_port: int | None = None,
+  cookies: str | None = None,
   allowed_origins: Optional[list[str]] = None,
   blocked_origins: Optional[list[str]] = None,
   share: Optional[list[str]] = None,
@@ -124,8 +133,14 @@ def open_webview(
   """Launch a webview and wait through startup until its ready event."""
   from bro.broker.brotocol import Tag
 
+  if vnc_port is not None and not vnc:
+    raise ValueError('webview --port requires --vnc')
+  if cookies == '':
+    raise ValueError('webview --cookies must name a non-empty instance')
   launch_args = _launch_args(
     vnc=vnc,
+    vnc_port=vnc_port,
+    cookies=cookies,
     allowed_origins=[] if allowed_origins is None else allowed_origins,
     blocked_origins=[] if blocked_origins is None else blocked_origins,
     share=[] if share is None else share,
@@ -261,8 +276,23 @@ def _positive_seconds(value: str) -> float:
   return seconds
 
 
+def _host_port(value: str) -> int:
+  port = int(value)
+  if not 1024 <= port <= 65535:
+    raise ValueError('must be an integer in 1024..65535')
+  return port
+
+
+def _non_empty_instance(value: str) -> str:
+  if value == '':
+    raise argparse.ArgumentTypeError('must not be empty')
+  return value
+
+
 def _open(
   vnc: bool,
+  port: int | None,
+  cookies: str | None,
   allowed_origins: Optional[list[str]],
   blocked_origins: Optional[list[str]],
   share: Optional[list[str]],
@@ -271,6 +301,8 @@ def _open(
   try:
     opened = open_webview(
       vnc=vnc,
+      vnc_port=port,
+      cookies=cookies,
       allowed_origins=allowed_origins,
       blocked_origins=blocked_origins,
       share=share,
@@ -312,6 +344,18 @@ def main(argv: list[str]) -> Optional[int]:
     'open', help='launch a webview and wait until its browser is ready'
   )
   open_parser.add_argument('--vnc', action='store_true', help='publish a loopback noVNC view')
+  open_parser.add_argument(
+    '--port',
+    type=_host_port,
+    metavar='PORT',
+    help='publish the noVNC view on this loopback port; requires --vnc',
+  )
+  open_parser.add_argument(
+    '--cookies',
+    type=_non_empty_instance,
+    metavar='INSTANCE',
+    help='start from the passed cookies profile instance',
+  )
   open_parser.add_argument(
     '--allow',
     action='append',

@@ -1,5 +1,4 @@
 import json
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -8,8 +7,16 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
-from bro.webview import worker
-from bro.worker_types import Host, LaunchDenied, LaunchRequest, PeerDescription, installed_type
+from bro.base import credentials
+from bro.webview import profile, worker
+from bro.worker_types import (
+  Host,
+  LaunchDenied,
+  LaunchPass,
+  LaunchRequest,
+  PeerDescription,
+  installed_type,
+)
 
 if TYPE_CHECKING:
   from bro.broker.journal import Event, Record
@@ -75,13 +82,22 @@ class TestWebviewType:
 
     assert installed_type(worker.WEBVIEW) is worker.WebviewType
     assert worker_type.name == 'webview'
-    assert worker_type.launch_schema == {'vnc': worker.LAUNCH_FLAG}
+    assert worker_type.launch_schema == {
+      'vnc': worker.LAUNCH_FLAG,
+      'pass': LaunchPass(kinds=frozenset({'cookies'})),
+    }
     assert worker_type.default_timeout is None
     assert worker_type.widens_talk is False
     assert worker_type.manual is False
     assert worker_type.talk(cast(LaunchRequest, object())) == frozenset(
       {'owner.question', 'worker.say'}
     )
+
+  def test_cookies_credential_is_registered_as_literal_without_an_install_hook(self):
+    kind = credentials.default_registry()['cookies']
+
+    assert kind.literal is True
+    assert kind.install is None
 
   def test_default_launch_builds_the_isolated_container(self, tmp_path):
     run = _worker_type().launch(_request(tmp_path, {}))
@@ -95,7 +111,7 @@ class TestWebviewType:
       'allowed_origins': [],
       'blocked_origins': [],
     }
-    assert run.extension == worker.WebviewFacts(False, (), ())
+    assert run.extension == worker.WebviewFacts(False, None, (), ())
     assert run.launch_scope == {}
 
   def test_vnc_and_origins_reach_the_container_facts(self, tmp_path):
@@ -119,15 +135,25 @@ class TestWebviewType:
     }
     assert run.extension == worker.WebviewFacts(
       True,
+      None,
       ('https://one.example', '*.trusted.example'),
       ('https://blocked.example',),
     )
+
+  def test_vnc_port_pins_the_published_host_port(self, tmp_path):
+    run = _worker_type().launch(_request(tmp_path, {'vnc': True, 'vnc_port': 46080}, vnc=True))
+
+    assert run.spec.published_ports == {worker.VNC_PORT: 46080}
+    assert run.extension.vnc_port == 46080
 
   @pytest.mark.parametrize(
     ('args', 'message'),
     [
       ({'unknown': True}, 'unknown webview field'),
       ({'vnc': 1}, "'vnc' must be a boolean"),
+      ({'vnc': True, 'vnc_port': True}, "'vnc_port' must be an integer"),
+      ({'vnc': True, 'vnc_port': 1023}, "'vnc_port' must be an integer"),
+      ({'vnc_port': 46080}, "'vnc_port' requires 'vnc'"),
       ({'allowed_origins': 'https://example.com'}, "'allowed_origins' must be a list"),
       ({'allowed_origins': ['']}, 'non-empty strings'),
       ({'blocked_origins': ['https://a;https://b']}, "without ';'"),
@@ -143,7 +169,7 @@ class TestWebviewType:
 
   def test_webview_owner_may_open_another_when_its_launch_section_allows_it(self, tmp_path):
     run = _worker_type().launch(_request(tmp_path, {}, type=worker.WEBVIEW))
-    assert run.extension == worker.WebviewFacts(False, (), ())
+    assert run.extension == worker.WebviewFacts(False, None, (), ())
 
   def test_one_owner_may_hold_several_live_webviews(self, tmp_path):
     worker_type = _worker_type()
@@ -156,10 +182,11 @@ class TestWebviewType:
     worker_type.launch(_request(tmp_path, {}, request_id='second'))
 
   def test_audit_fields_are_json_facts(self):
-    facts = worker.WebviewFacts(True, ('https://allowed',), ('https://blocked',))
+    facts = worker.WebviewFacts(True, 46080, ('https://allowed',), ('https://blocked',))
 
     assert _worker_type().audit_fields(facts) == {
       'vnc': True,
+      'vnc_port': 46080,
       'allowed_origins': ['https://allowed'],
       'blocked_origins': ['https://blocked'],
     }
@@ -174,7 +201,8 @@ class TestWebviewType:
 
     dockerfile = first.files['Dockerfile'].decode()
     assert dockerfile.splitlines()[:2] == ['ARG RUNTIME_IMAGE', 'FROM ${RUNTIME_IMAGE}']
-    assert re.search(r'npm install -g @playwright/mcp@\d+\.\d+\.\d+', dockerfile) is not None
+    pin = profile.PLAYWRIGHT_MCP_PROFILE_VERSIONS[profile.PROFILE_VERSION]
+    assert f'npm install -g @playwright/mcp@{pin}' in dockerfile
     assert 'PLAYWRIGHT_ROOT="$(npm root -g)/@playwright"' in dockerfile
     assert '/usr/local/lib/node_modules' not in dockerfile
     assert first.image_hash('runtime:one') == second.image_hash('runtime:one')

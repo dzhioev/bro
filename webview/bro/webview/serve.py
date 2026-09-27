@@ -23,10 +23,12 @@ from mcp.shared.exceptions import McpError
 from mcp.shared.message import SessionMessage
 
 from bro.artifact import ArtifactError, mint_artifact
+from bro.base import credentials
 from bro.broker.brotocol import Message, Tag
 from bro.broker.client import Client
 from bro.broker.environment import BROKER_MISSION
 from bro.broker.journal import MAX_MESSAGE_BYTES
+from bro.webview.profile import ProfileError, decode_profile
 
 WORKSPACE = Path('/workspace')
 ARTIFACT_VIEW = WORKSPACE / 'artifacts'
@@ -220,16 +222,25 @@ def _vnc(display: str) -> Iterator[tuple[tuple[str, subprocess.Popen], ...]]:
 
 
 @contextlib.contextmanager
-def _browser_config() -> Iterator[Path]:
+def _browser_config(storage_state: dict[str, Any] | None) -> Iterator[tuple[Path, Path | None]]:
   with tempfile.TemporaryDirectory(prefix='bro-webview-') as directory:
-    path = Path(directory) / 'playwright.json'
-    path.write_text(json.dumps({'browser': {'contextOptions': {'acceptDownloads': False}}}))
-    yield path
+    root = Path(directory)
+    config = root / 'playwright.json'
+    config.write_text(json.dumps({'browser': {'contextOptions': {'acceptDownloads': False}}}))
+    storage_path = None
+    if storage_state is not None:
+      storage_path = root / 'storage-state.json'
+      descriptor = os.open(storage_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+      with os.fdopen(descriptor, 'w') as storage_file:
+        json.dump(storage_state, storage_file, ensure_ascii=False, separators=(',', ':'))
+    yield config, storage_path
 
 
-def _playwright_arguments(options: Options, config: Path) -> list[str]:
-  arguments = [
-    '--isolated',
+def _playwright_arguments(options: Options, config: Path, storage_state: Path | None) -> list[str]:
+  arguments = ['--isolated']
+  if storage_state is not None:
+    arguments += ['--storage-state', str(storage_state)]
+  arguments += [
     '--no-sandbox',
     '--browser',
     'chromium',
@@ -328,11 +339,11 @@ async def _await_task(task: asyncio.Task[Any]) -> None:
 
 @contextlib.asynccontextmanager
 async def _playwright(
-  options: Options, config: Path, display: str
+  options: Options, config: Path, storage_state: Path | None, display: str
 ) -> AsyncIterator[tuple[ClientSession, subprocess.Popen]]:
   async with AsyncExitStack() as stack:
     process = subprocess.Popen(
-      (PLAYWRIGHT_COMMAND, *_playwright_arguments(options, config)),
+      (PLAYWRIGHT_COMMAND, *_playwright_arguments(options, config, storage_state)),
       stdin=subprocess.PIPE,
       stdout=subprocess.PIPE,
       cwd=WORKSPACE,
@@ -692,11 +703,22 @@ async def _command_loop(
     client.message(mission, await bound_reply(reply), reply_to=question)
 
 
+def _profile_storage_state() -> dict[str, Any] | None:
+  raw = credentials.try_get('cookies')
+  if raw is None:
+    return None
+  try:
+    return decode_profile(raw)
+  except ProfileError as error:
+    raise DaemonError(f'cookies profile is invalid: {error}') from error
+
+
 async def serve() -> None:
   raw_options = os.environ.get(OPTIONS_ENV)
   if raw_options is None:
     raise DaemonError(f'{OPTIONS_ENV} is unset')
   options = decode_options(raw_options)
+  storage_state = _profile_storage_state()
   _require_artifact_view()
   mission = os.environ.get(BROKER_MISSION)
   if not mission:
@@ -711,11 +733,11 @@ async def serve() -> None:
       sync_processes.extend(vnc_processes)
       host_port = _published_port(VNC_PORT, os.environ.get(PUBLISHED_PORTS_ENV, ''))
       vnc_url = f'http://127.0.0.1:{host_port}/vnc.html?autoconnect=1&resize=scale'
-    config = process_stack.enter_context(_browser_config())
+    config, storage_path = process_stack.enter_context(_browser_config(storage_state))
 
     async with AsyncExitStack() as async_stack:
       session, mcp_process = await async_stack.enter_async_context(
-        _playwright(options, config, display)
+        _playwright(options, config, storage_path, display)
       )
       async with _supervising([*sync_processes, ('Playwright MCP', mcp_process)]) as supervisor:
         before_warmup = await asyncio.to_thread(workspace_files)
