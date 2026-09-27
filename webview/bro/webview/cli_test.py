@@ -104,6 +104,10 @@ async def test_open_rides_the_launch_to_ready_and_prints_the_owner_handle(monkey
           'webview',
           'open',
           '--vnc',
+          '--port',
+          '46080',
+          '--cookies',
+          'e2e',
           '--allow',
           'https://allowed.example',
           '--block',
@@ -120,6 +124,8 @@ async def test_open_rides_the_launch_to_ready_and_prints_the_owner_handle(monkey
     assert launch.args == {
       'type': 'webview',
       'vnc': True,
+      'vnc_port': 46080,
+      'pass': ['cookies+e2e'],
       'allowed_origins': ['https://allowed.example'],
       'blocked_origins': ['https://blocked.example'],
       'share': [REF],
@@ -144,6 +150,19 @@ async def test_open_rides_the_launch_to_ready_and_prints_the_owner_handle(monkey
       'mission': launch.request_id,
       'vnc': 'http://127.0.0.1:49152/vnc.html?autoconnect=1&resize=scale',
     }
+
+
+def test_open_port_requires_vnc(caplog):
+  assert cli.main(['webview', 'open', '--port', '46080']) == 1
+  assert '--port requires --vnc' in caplog.text
+
+
+def test_open_cookies_requires_a_non_empty_instance(capsys):
+  with pytest.raises(SystemExit) as exited:
+    cli.main(['webview', 'open', '--cookies', ''])
+
+  assert exited.value.code == 2
+  assert 'must not be empty' in capsys.readouterr().err
 
 
 @pytest.mark.asyncio

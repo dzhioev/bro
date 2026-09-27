@@ -395,8 +395,8 @@ dive-in --grant aws 'why did the deploy fail?'
 
 Delegation is bounded separately.
 A summon request may add only launch authority its parent holds, while the child still starts from its own declaration and host configuration.
-Its credentials likewise come from that child-specific configuration unless the parent passes a credential instance covered by a pass right for the mission type;
-the child then holds that kind at the passed instance for the launch.
+Its credentials likewise come from that mission-specific configuration unless the parent passes a credential instance covered by a pass right for the mission type;
+a bro child holds that kind at the passed instance, while a worker container receives it in its private scoped store and the owner never holds it.
 The host authorizes every request and journals it, and the child's trail records who summoned it.
 
 Afterwards, every run on every harness is a recorded trail:

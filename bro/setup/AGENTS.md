@@ -226,6 +226,7 @@ Common material paths and shapes:
 - `creds/openai.cred`, `creds/anthropic.cred`, and `creds/brave.cred` — JSON objects carrying each service's `api_key`.
 - `creds/claude_code.cred` — the scalar long-lived OAuth token from `claude setup-token`.
   The `claude_code` install hook exports it as `CLAUDE_CODE_OAUTH_TOKEN`.
+- `creds/cookies+<instance>.cred` — a literal, versioned Playwright storage profile passed only to a webview worker
 - `creds/aws.cred` — the AWS shared-credentials file installed for SDK and CLI consumers.
 - `creds/github+<instance>.cred` — a GitHub App config such as `{"app_id": ..., "installation_id": ..., "private_key": "<PEM>"}` when `creds.json` annotates the stored name under `{"sources": {"github+<instance>": {"type": "github_app"}}}`.
   Resolution mints an installation token and holds it at `creds/github+<instance>.cred.minted`.

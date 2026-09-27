@@ -11,20 +11,30 @@ Run `sync-scripts --project webview` after adding or removing a CLI, and build t
 
 ## Components
 
-- `bro/webview/worker.py` — the dependency-light registered type, its `vnc` launch-flag schema, launch validation, and packaged container specification.
+- `bro/webview/worker.py` — the dependency-light registered type, its bounded `pass` and `vnc` launch schema, launch validation, and packaged container specification.
   A caller needs `:launch.webview`, plus `:launch.webview.vnc` for the optional noVNC endpoint (`bro/reference/ride.md`, "Session permissions and credentials")
+- `bro/webview/profile.py` — the profile bound, envelope validation, and profile-version to Playwright MCP pin pairing
 - `bro/webview/container/Dockerfile` — the runtime-derived image with Xvfb, noVNC, Chromium, and the pinned Playwright MCP
-- `bro/webview/serve.py` — the container daemon and Playwright MCP command loop
+- `bro/webview/serve.py` — the container daemon, passed-profile loader, and Playwright MCP command loop
 - `bro/webview/cli.py` (`webview`) — the owner-side `open` and `close` verbs and the container-side `serve` verb
 
 ## Owner command
 
-`webview open` forwards optional VNC, advisory origin lists, shared artifact refs, and a lifetime bound to `launch`, then waits through the accepted and started marks for the daemon's ready event.
+`webview open` forwards optional VNC, a requested VNC port, a `cookies` profile pass, advisory origin lists, shared artifact refs, and a lifetime bound to `launch`, then waits through the accepted and started marks for the daemon's ready event.
+`--cookies <instance>` passes that profile without putting it in the owner's store;
+`--vnc --port <port>` fixes the noVNC view's launcher-loopback port.
 It prints the mission id and optional noVNC URL as JSON;
 a denial, failed launch, or startup silence exits non-zero, with startup expiry cancelling the launch.
 `webview close MISSION` asks the daemon to close, then waits for its acknowledgement, terminal outcome, and settled worker supervision.
 Commands between those verbs use `mission ask <id> '<json>' --wait`, with `mission history <id>` retaining their full payloads.
 `mission share <id> <ref>` makes a later-minted upload available under `/workspace/artifacts/<ref>` without reopening the webview.
+
+## Browser profile
+
+The daemon reads the selected `cookies` kind before it listens and refuses an oversized, malformed, extra-kind, or newer-version profile without exposing its material.
+It strips `profile_version`, writes the Playwright storage state at 0600 in its private configuration directory, and starts Playwright MCP with `--isolated --storage-state <path>`.
+The file remains for the daemon's life so a re-created isolated context starts from the same profile.
+The Playwright MCP `storage` capability and `browser_run_code_unsafe` remain withheld.
 
 ## Mission wire
 
@@ -41,4 +51,6 @@ A webview peer's own `launch` section is empty, so the generic type-key check pr
 ## Image pin
 
 The version on the `npm install -g @playwright/mcp@…` instruction in `container/Dockerfile` pins both the tool roster and Chromium dependency used by the image.
-Bump it by editing that instruction, then run the webview unit tests and build `bro-webview`; the Dockerfile content changes the worker image hash.
+Bump it by editing that instruction, incrementing `PROFILE_VERSION` with the new pin in `profile.py`, and adding the outgoing version's synthetic profile to `webview_e2e`.
+Then run the webview unit tests and build `bro-webview`;
+the Dockerfile content changes the worker image hash.
