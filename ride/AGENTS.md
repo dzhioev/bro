@@ -39,8 +39,9 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   Started parties go through the common isolation-parameterized launcher and carry a resume spec;
   joined members run in the summoner’s existing tree with member-scoped records and no resume.
 - `ride/launch_control.py` — common `launch` argument validation, owner attribution, worker-type dispatch, run lowering, launch audit, and manual-token lifecycle.
-- `ride/worker_container.py` — off-loop lowering of core `WorkerContainer` runs:
-  coordinated runtime-derived image builds and pruning, detached throwaway workspaces, passed-instance store hydration, artifact views, requested-or-available loopback port allocation and facts, and delegation to Docker supervision.
+- `ride/worker_container.py` — container execution for core `WorkerContainer` declarations:
+  off-loop broker lowering with coordinated image builds and pruning, detached throwaway workspaces, passed-instance store hydration, artifact views, and requested-or-available loopback port allocation and facts;
+  plus a no-workspace foreground run whose piped exchange belongs to a host command.
 - `ride/peer_facts.py` — the mission-keyed generic worker facts and peer directory for one broker root:
   peer resolution through the journal worker binding, workspace/member/type attribution, type-owned extensions, ancestry, and per-member current-trail attribution shared by launch, artifacts, and audit.
 - `ride/artifacts.py` — the ride's artifact store, the `artifact.mint`, `artifact.get`, and owner-authorized `artifact.share` kinds, and the broker's `JobOutput`:
@@ -105,6 +106,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   Every boxed bind source must resolve under that root.
 - Runtime, project, and worker image tags use stable host-wide lock paths under the runtime root.
   A process holds a shared tag lock from before ensure until exit, missing-tag builds serialize on a separate lock, and pruning keeps a non-blocking exclusive tag lock across removal.
+  A foreground worker run resolves and holds the invoking installation's runtime and worker images through those locks but prunes none;
+  it mounts only the runtime volume, publishes declared ports on loopback, pipes stdin and stdout, and removes its container on exit.
 - A launch's credential instances follow its attachment identity and selected bro on every surface that resolves them
   — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Session permissions and credentials")
   — and so does its default LLM recipe, settled on the host once and carried inward as the canonical `--llm`.

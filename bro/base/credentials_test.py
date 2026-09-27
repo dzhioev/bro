@@ -298,6 +298,72 @@ class TestStore:
     assert store.get('github') == 'fresh'
 
 
+class TestStoreWriter:
+  def test_write_is_atomic_private_and_compares_expected_material(
+    self, tmp_path: Path, monkeypatch
+  ):
+    path = _write_material(tmp_path, 'profile+work', 'before')
+    path.chmod(0o644)
+    store = _store(tmp_path, 'profile')
+    replaced = []
+    original_replace = credentials.os.replace
+
+    def replace(source, target):
+      assert Path(target).read_bytes() == b'before'
+      assert Path(source).read_bytes() == b'after'
+      replaced.append((Path(source), Path(target)))
+      original_replace(source, target)
+
+    monkeypatch.setattr(credentials.os, 'replace', replace)
+    store.write_stored_material('profile+work', b'after', expected=b'before')
+
+    assert path.read_bytes() == b'after'
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert len(replaced) == 1
+    with pytest.raises(credentials.StoredMaterialChanged):
+      store.write_stored_material('profile+work', b'lost', expected=b'before')
+    assert path.read_bytes() == b'after'
+
+  def test_write_preserves_a_target_changed_while_replacement_is_staged(
+    self, tmp_path: Path, monkeypatch
+  ):
+    path = _write_material(tmp_path, 'profile+work', 'before')
+    store = _store(tmp_path, 'profile')
+    original_fsync = credentials.os.fsync
+
+    def change_target(descriptor):
+      path.write_text('hand edit')
+      original_fsync(descriptor)
+
+    monkeypatch.setattr(credentials.os, 'fsync', change_target)
+
+    with pytest.raises(credentials.StoredMaterialChanged):
+      store.write_stored_material('profile+work', b'after', expected=b'before')
+    assert path.read_text() == 'hand edit'
+    assert list(path.parent.glob(f'.{path.name}.*')) == []
+
+  def test_write_requires_a_canonical_registered_local_name(self, tmp_path: Path):
+    _write_sources(tmp_path, {'profile+remote': {'type': 'ssm', 'parameter': '/profile'}})
+    store = _store(tmp_path, 'profile')
+
+    with pytest.raises(ValueError, match='spells the stored name'):
+      store.write_stored_material('profile+', b'value', expected=None)
+    with pytest.raises(ValueError, match='unregistered kind'):
+      store.write_stored_material('other', b'value', expected=None)
+    with pytest.raises(ValueError, match='non-local source'):
+      store.write_stored_material('profile+remote', b'value', expected=None)
+
+  def test_name_lock_refuses_a_second_writer_and_releases_on_exit(self, tmp_path: Path):
+    store = _store(tmp_path, 'profile')
+
+    with store.stored_name_lock('profile+work', blocking=False):
+      with pytest.raises(credentials.StoredNameLocked):
+        with store.stored_name_lock('profile+work', blocking=False):
+          pass
+    with store.stored_name_lock('profile+work', blocking=False):
+      assert True
+
+
 class TestReferences:
   def test_kind_reference_uses_selection_and_instance_reference_is_exact(self, tmp_path: Path):
     _write_material(tmp_path, 'github', '{"login": "bare"}')

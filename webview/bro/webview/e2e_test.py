@@ -1,14 +1,20 @@
 """Live broker, worker-container, Chromium, artifact, and VNC routes for webview."""
 
 import contextlib
+import errno
 import json
+import os
+import pty
+import select
 import socket
+import subprocess
 import sys
 import threading
+import time
 import urllib.request
 from collections.abc import Callable, Iterator
 from dataclasses import replace
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -578,12 +584,157 @@ def _available_port() -> int:
     return listener.getsockname()[1]
 
 
+@contextlib.contextmanager
+def _setup_terminal_process(
+  arguments: list[str], environment: dict[str, str]
+) -> Iterator[tuple[subprocess.Popen, int]]:
+  master, slave = pty.openpty()
+  process = None
+  try:
+    process = subprocess.Popen(
+      arguments,
+      stdin=slave,
+      stdout=slave,
+      stderr=slave,
+      env=environment,
+    )
+    os.close(slave)
+    slave = -1
+    yield process, master
+  finally:
+    if process is not None and process.poll() is None:
+      process.kill()
+      process.wait()
+    if slave != -1:
+      os.close(slave)
+    os.close(master)
+
+
+def _read_terminal(master: int) -> bytes:
+  try:
+    return os.read(master, 65536)
+  except OSError as error:
+    if error.errno == errno.EIO:
+      return b''
+    raise
+
+
+def _run_setup(store: Path, port: int) -> str:
+  environment = dict(os.environ)
+  environment['BRO_STORE'] = str(store)
+  environment.pop('RIDE_ISOLATION', None)
+  output = bytearray()
+  with _setup_terminal_process(
+    [
+      'webview',
+      'setup',
+      'e2e',
+      '--url',
+      'https://example.com/',
+      '--indexed-db',
+      '--port',
+      str(port),
+    ],
+    environment,
+  ) as (process, master):
+    ready_deadline = time.monotonic() + 1500
+    while b'press Enter to capture' not in output:
+      if process.poll() is not None:
+        break
+      if time.monotonic() >= ready_deadline:
+        raise TimeoutError('webview setup did not publish its login prompt')
+      readable, _, _ = select.select([master], [], [], 0.2)
+      if readable:
+        output.extend(_read_terminal(master))
+    if b'press Enter to capture' not in output:
+      raise RuntimeError(
+        f'webview setup exited before its prompt:\n{output.decode(errors="replace")}'
+      )
+    with urllib.request.urlopen(
+      f'http://127.0.0.1:{port}/vnc.html?autoconnect=1&resize=scale', timeout=15
+    ) as response:
+      assert response.status == 200
+      assert b'noVNC' in response.read()
+    os.write(master, b'\n')
+    finish_deadline = time.monotonic() + 300
+    while process.poll() is None:
+      if time.monotonic() >= finish_deadline:
+        raise TimeoutError('webview setup did not finish its capture')
+      readable, _, _ = select.select([master], [], [], 0.2)
+      if readable:
+        output.extend(_read_terminal(master))
+    while True:
+      readable, _, _ = select.select([master], [], [], 0)
+      if not readable:
+        break
+      chunk = _read_terminal(master)
+      if not chunk:
+        break
+      output.extend(chunk)
+    return_code = process.returncode
+  rendered = output.decode(errors='replace')
+  assert return_code == 0, rendered
+  return rendered
+
+
 def _live_containers(workspace: Workspace) -> list[str]:
   return [
     directory.name
     for directory in workspace.path.parent.iterdir()
     if find_container_id(directory / 'tree') is not None
   ]
+
+
+def test_webview_setup_captures_seeded_cookie_and_indexed_db_on_requested_port(
+  isolated_env: IsolatedEnv,
+) -> None:
+  store = isolated_env.home / '.bro-setup'
+  material = store / 'creds' / 'cookies+e2e.cred'
+  material.parent.mkdir(parents=True)
+  profile_value = {
+    'profile_version': PROFILE_VERSION,
+    'cookies': [
+      {
+        'name': 'setup-profile',
+        'value': 'setup-cookie',
+        'domain': 'example.com',
+        'path': '/',
+        'expires': -1,
+        'httpOnly': False,
+        'secure': True,
+        'sameSite': 'Lax',
+      }
+    ],
+    'origins': [
+      {
+        'origin': 'https://example.com',
+        'localStorage': [],
+        'indexedDB': [
+          {
+            'name': 'setup-database',
+            'version': 1,
+            'stores': [
+              {
+                'name': 'records',
+                'autoIncrement': False,
+                'records': [{'key': 'login', 'value': 'indexed-db-session'}],
+                'indexes': [],
+              }
+            ],
+          }
+        ],
+      }
+    ],
+  }
+  material.write_text(json.dumps(profile_value))
+
+  output = _run_setup(store, _available_port())
+
+  captured = json.loads(material.read_text())
+  assert captured['cookies'][0]['value'] == 'setup-cookie'
+  [database] = captured['origins'][0]['indexedDB']
+  assert database['stores'][0]['records'] == [{'key': 'login', 'value': 'indexed-db-session'}]
+  assert 'profile unchanged; wrote nothing' in output or '1 cookies across 1 sites' in output
 
 
 def test_webview_open_is_denied_without_its_type_key(

@@ -31,6 +31,8 @@ run those with `--help` for flags.
   A stored name is `kind+instance` spelled `kind` when the instance is empty, and a store carrying the other spelling of that name fails at construction.
   `get` / `get_json` / `try_get` / `available` address kinds through the explicit selection;
   the `get_instance` siblings address the stored name exactly.
+  `stored_name_lock` provides the cross-process per-name writer lock;
+  `write_stored_material` atomically replaces a local source at 0600 only while its exact starting bytes still match.
   `default_store()` binds an ambient store lazily from the store's defaults plus the host config's `user` and running command layers,
   and bypasses that config entirely when `BRO_STORE` directs the process;
   `as_default_store(store)` resolves through a given store for the block, in the calling thread or task alone.
