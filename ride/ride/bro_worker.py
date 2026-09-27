@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, Optional, Protocol, cast
 
-from bro.base import configs, log
+from bro.base import configs, credentials, log
 from bro.base.scope import split_scope_overrides
 from bro.quest import BRO
 from bro.summon import (
@@ -28,6 +28,7 @@ from bro.summon import (
   summoned_child_env,
 )
 from bro.worker_types import (
+  LAUNCH_PASS,
   Expect,
   Launch,
   LaunchDenied,
@@ -714,6 +715,7 @@ class BroType(WorkerType):
     {
       'bros': LaunchSet(_known_bros),
       'party': LaunchSet(lambda: PARTY_CHOICES),
+      'pass': LAUNCH_PASS,
     }
   )
   default_timeout = DEFAULT_TIMEOUT
@@ -772,6 +774,11 @@ class BroType(WorkerType):
           f'a summon request cannot grant or revoke credential kind(s): {names}; '
           f'configure them for the child in projects.<identity>.bros.{target}'
         )
+      beyond = launch_covers(request.owner.launch, grant_launch)
+      if beyond:
+        raise LaunchDenied(
+          'cannot grant launch permission(s) the summoner does not hold: ' + ', '.join(beyond)
+        )
       harness = get_harness(args.get('harness') or self.host.summon_harness)
       launch_llm_spec(
         harness,
@@ -780,16 +787,21 @@ class BroType(WorkerType):
         args.get('llm'),
       )
       layers = configured_scope_layers(self.host.workspace.metadata.repo, target)
-      child_launch = effective_launch(target, layers, grant=grant, revoke=revoke)
-      beyond = launch_covers(request.owner.launch, grant_launch)
+      credential_store = credentials.Store(
+        credentials.default_registry(), credentials.STORE_DIR, {}
+      )
+      child_launch = effective_launch(
+        target,
+        layers,
+        grant=grant,
+        revoke=revoke,
+        credential_store=credential_store,
+        grant_source='summon request',
+      )
     except LaunchDenied:
       raise
     except (RuntimeError, ValueError) as error:
       raise LaunchDenied(str(error)) from error
-    if beyond:
-      raise LaunchDenied(
-        'cannot grant launch permission(s) the summoner does not hold: ' + ', '.join(beyond)
-      )
     attribution = self.host.peers.attribution_for_mission(self.host.journal, request.owner.mission)
     summoned_by = self._summoned_by(attribution, args)
     facts = BroFacts(bro=target, placement=placement)

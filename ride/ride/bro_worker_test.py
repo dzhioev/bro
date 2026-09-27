@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -6,7 +7,10 @@ from typing import cast
 import pytest
 
 import ride.bro_worker as bro_worker
+import ride.scope
+from bro.base import credentials
 from bro.broker.brotocol import Talk
+from bro.summon import summoned_child_env
 from bro.worker_types import Expect, LaunchDenied, LaunchRequest, PeerDescription, Spawn
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride.bro_worker import BroFacts, BroType, Placement, SummonLaunchSpec
@@ -75,13 +79,22 @@ def _request(tmp_path, *, owner=None, manual=False, share=(), talk=(), **args):
   )
 
 
+def _real_launch_fold(monkeypatch, tmp_path, layers=()):
+  material = tmp_path / credentials.MATERIAL_DIR
+  material.mkdir(exist_ok=True)
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path))
+  monkeypatch.setattr(bro_worker, 'effective_launch', ride.scope.effective_launch)
+  monkeypatch.setattr(bro_worker, 'configured_scope_layers', lambda *args, **kwargs: layers)
+  return material
+
+
 @pytest.fixture(autouse=True)
 def launch_scope(monkeypatch):
   monkeypatch.setattr(bro_worker, 'configured_scope_layers', lambda *args, **kwargs: ())
   monkeypatch.setattr(
     bro_worker,
     'effective_launch',
-    lambda target, layers, *, grant, revoke: {
+    lambda target, layers, *, grant, revoke, **_kwargs: {
       'bro': {'bros': frozenset({'reviewer'}), 'party': frozenset({'boxed'})}
     },
   )
@@ -229,6 +242,53 @@ def test_redundant_covered_grant_is_accepted(tmp_path):
   owner = _owner(tmp_path, targets=('dev', 'reviewer'))
   run = BroType(Host()).launch(_request(tmp_path, owner=owner, grant=['@reviewer']))
   assert isinstance(run, Spawn)
+
+
+def test_held_pass_right_reaches_the_child_facts_and_environment(monkeypatch, tmp_path):
+  material = _real_launch_fold(monkeypatch, tmp_path)
+  (material / f'github+work{credentials.MATERIAL_SUFFIX}').write_text('token')
+  owner = _owner(tmp_path)
+  owner = replace(
+    owner,
+    launch={
+      'bro': {
+        **owner.launch['bro'],
+        'pass': frozenset({'github+work'}),
+      }
+    },
+  )
+
+  run = BroType(Host()).launch(
+    _request(tmp_path, owner=owner, grant=[':launch.bro.pass.github+work'])
+  )
+
+  assert isinstance(run, Spawn)
+  assert run.launch_scope['bro']['pass'] == frozenset({'github+work'})
+  assert json.loads(summoned_child_env(run.launch_scope, None)['RIDE_LAUNCH'])['bro']['pass'] == [
+    'github+work'
+  ]
+
+
+def test_unheld_pass_right_is_denied_before_presence_is_read(monkeypatch, tmp_path):
+  _real_launch_fold(monkeypatch, tmp_path)
+
+  with pytest.raises(LaunchDenied, match='summoner does not hold'):
+    BroType(Host()).launch(_request(tmp_path, grant=[':launch.bro.pass.github+absent']))
+
+
+def test_child_config_missing_pass_instance_names_its_layer(monkeypatch, tmp_path):
+  layers = (
+    ride.scope.ScopeLayer(grant=(':launch.bro.pass.github+absent',), source='project-path-bro'),
+  )
+  _real_launch_fold(monkeypatch, tmp_path, layers)
+
+  with pytest.raises(LaunchDenied, match=r'github\+absent.*project-path-bro.*missing'):
+    BroType(Host()).launch(_request(tmp_path))
+
+
+def test_summon_pass_right_requires_an_instance(tmp_path):
+  with pytest.raises(LaunchDenied, match=r'github\+<instance>.*github\+'):
+    BroType(Host()).launch(_request(tmp_path, grant=[':launch.bro.pass.github']))
 
 
 @pytest.mark.parametrize(

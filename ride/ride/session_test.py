@@ -15,12 +15,15 @@ import pytest
 
 import ride.bro_worker
 import ride.claude.harness as claude_harness
+import ride.cli as ride_cli
+import ride.root
 import ride.runtime_bundle as runtime_bundle_module
 import ride.scope
 import ride.session as ride_session
 from bro.base import credentials
 from bro.base.scope import apply_idempotent, credential_grant_kind, credential_revoke_name
 from bro.monitor import workspace_party_dir, workspace_session_dir
+from bro.workspace.banner import SessionFacts
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 from bro.workspace.paths import (
   CONTAINER_PARTY_DIR,
@@ -446,6 +449,82 @@ class TestLaunchSection:
     assert launch['bro']['party'] == frozenset({'unboxed'})
     assert 'bro' in launch['bro']['bros']
     assert launch['webview'] == {'vnc': True}
+
+  def test_solo_pass_rights_reach_root_facts_environment_and_banner(self, monkeypatch, tmp_path):
+    (tmp_path / 'pyproject.toml').write_text(
+      '[tool.bro]\ndefault = "bro-dev"\nharness = "claude"\n'
+    )
+    subprocess.run(['git', 'init', '-q', tmp_path], check=True)
+    subprocess.run(['git', '-C', tmp_path, 'add', 'pyproject.toml'], check=True)
+    subprocess.run(
+      [
+        'git',
+        '-C',
+        tmp_path,
+        '-c',
+        'user.name=Test User',
+        '-c',
+        'user.email=test@example.com',
+        'commit',
+        '-qm',
+        'fixture',
+      ],
+      check=True,
+    )
+    material = tmp_path / 'store' / credentials.MATERIAL_DIR
+    material.mkdir(parents=True)
+    for name in ('github+host', 'trails+flag'):
+      (material / f'{name}{credentials.MATERIAL_SUFFIX}').write_text(name)
+    config = tmp_path / 'bro.json'
+    config.write_text(
+      json.dumps(
+        {
+          'projects': {
+            str(tmp_path): {'bros': {'bro-dev': {'grant': [':launch.bro.pass.github+host']}}}
+          }
+        }
+      )
+    )
+    monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path / 'store'))
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+    captured = {}
+
+    def capture_root(launch, _workspace, **kwargs):
+      captured['environment'] = launch.env
+      captured['facts'] = kwargs['launch_scope']
+      return 0
+
+    with (
+      _ContainerHarness(real_launch_fold=True),
+      patch('ride.session.run_started_party', side_effect=ride.root.run_started_party),
+      patch('ride.root.broker_enabled', return_value=True),
+      patch('ride.root._run_via_broker', side_effect=capture_root),
+    ):
+      code = ride_cli.main(
+        [
+          'ride',
+          'solo',
+          '--workspace',
+          'w',
+          '--repo',
+          str(tmp_path),
+          '--harness',
+          'claude',
+          '--grant',
+          ':launch.bro.pass.trails+flag',
+          'bro-dev',
+          'work',
+        ]
+      )
+    assert code == 0
+    expected = frozenset({'github+host', 'trails+flag'})
+    assert captured['facts']['bro']['pass'] == expected
+    environment = captured['environment']
+    assert frozenset(json.loads(environment['RIDE_LAUNCH'])['bro']['pass']) == expected
+    with patch.dict(os.environ, environment, clear=True):
+      banner = SessionFacts.collect().render_llm()
+    assert ':launch.bro.pass.github+host' in banner
+    assert ':launch.bro.pass.trails+flag' in banner
 
   def test_boxed_session_threads_the_launch_section(self):
     expected = {

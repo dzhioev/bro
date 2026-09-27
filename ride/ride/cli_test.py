@@ -343,6 +343,8 @@ class TestCredentialHydrationRoutes:
       'aws+project': 'aws-project',
       'brog+bro': 'brog-bro',
       'harbor+launch': 'harbor-launch',
+      'github+flag': 'github-flag',
+      'trails+host': 'trails-host',
     }.items():
       write(name, value)
     (store / credentials.STORE_FILE).write_text(
@@ -370,7 +372,7 @@ class TestCredentialHydrationRoutes:
               'bros': {
                 'hydration-test': {
                   'creds': ['brog+bro'],
-                  'grant': ['brog'],
+                  'grant': ['brog', ':launch.bro.pass.trails+host'],
                 }
               },
             }
@@ -425,12 +427,25 @@ class TestCredentialHydrationRoutes:
     return SimpleNamespace(material=material, captures=captures, launch=launch)
 
   def test_root_launch_folds_every_layer_and_hydrates_by_selected_name(self, route):
-    assert route.launch('--cred', 'harbor+launch', '--grant', 'github', '--revoke', 'openai') == 0
+    assert (
+      route.launch(
+        '--cred',
+        'harbor+launch',
+        '--grant',
+        'github',
+        '--grant',
+        ':launch.bro.pass.github+flag',
+        '--revoke',
+        'openai',
+      )
+      == 0
+    )
 
     spec, launch_scope = route.captures[-1]
     assert spec.cred == ['harbor+launch']
     assert launch_scope.scoped.required == {'github', 'aws', 'brog', 'harbor'}
     assert launch_scope.scoped.optional == {'trails'}
+    assert launch_scope.launch['bro']['pass'] == frozenset({'github+flag', 'trails+host'})
     assert launch_scope.store['creds/github+project.cred'] == b'github-project'
     assert launch_scope.store['creds/aws+project.cred'] == b'aws-project'
     assert launch_scope.store['creds/brog+bro.cred'] == b'brog-bro'
@@ -449,6 +464,20 @@ class TestCredentialHydrationRoutes:
 
     assert route.captures == []
     assert "secret 'harbor+absent' not found" in caplog.text
+
+  def test_root_launch_fails_for_an_absent_pass_instance(self, route, caplog):
+    assert route.launch('--grant', ':launch.bro.pass.github+absent') == 1
+
+    assert route.captures == []
+    assert 'github+absent' in caplog.text
+    assert 'launch flags' in caplog.text
+
+  def test_root_launch_pass_right_requires_an_instance(self, route, caplog):
+    assert route.launch('--grant', ':launch.bro.pass.github') == 1
+
+    assert route.captures == []
+    assert 'github+<instance>' in caplog.text
+    assert 'github+' in caplog.text
 
   def test_root_launch_fails_when_a_present_name_cannot_load(self, route, caplog):
     path = route.material / f'harbor+broken{credentials.MATERIAL_SUFFIX}'
@@ -473,6 +502,8 @@ class TestCredentialHydrationRoutes:
           'aws',
           '--grant',
           'brog',
+          '--grant',
+          ':launch.bro.pass.github+resume',
           'hydration-route',
         ]
       )
@@ -483,8 +514,30 @@ class TestCredentialHydrationRoutes:
     assert spec.cred == ['harbor+launch', 'github+resume']
     assert spec.revoke == ['aws']
     assert launch_scope.scoped.required == {'github', 'brog', 'harbor'}
+    assert launch_scope.launch['bro']['pass'] == frozenset({'github+resume', 'trails+host'})
     assert launch_scope.store['creds/github+resume.cred'] == b'github-resume'
     assert 'creds/aws+project.cred' not in launch_scope.store
+
+  def test_resume_fails_for_an_absent_pass_instance(self, route, caplog):
+    assert route.launch('--cred', 'harbor+launch') == 0
+    route.captures.clear()
+
+    assert (
+      ride_cli.main(
+        [
+          'ride',
+          'resume',
+          '--grant',
+          ':launch.bro.pass.github+absent',
+          'hydration-route',
+        ]
+      )
+      == 1
+    )
+
+    assert route.captures == []
+    assert 'github+absent' in caplog.text
+    assert 'launch flags' in caplog.text
 
 
 class TestAlong:

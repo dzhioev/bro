@@ -51,6 +51,14 @@ def registered_scope_bros(register_test_bros):
   register_test_bros(SearchBro, GatedBro)
 
 
+def _credential_store(tmp_path, *names: str) -> credentials.Store:
+  material = tmp_path / credentials.MATERIAL_DIR
+  material.mkdir(parents=True)
+  for name in names:
+    (material / f'{name}{credentials.MATERIAL_SUFFIX}').write_text(name)
+  return credentials.Store(credentials.default_registry(), tmp_path, {})
+
+
 class TestScopedSecrets:
   def test_ride_session_set(self):
     # ride-session themed as bro-dev: the claude-harness manifest — extra_secrets
@@ -613,10 +621,9 @@ class TestPreflightScopedLaunch:
     assert store == {'creds/x.cred': b'v'}
     assert store.kinds == frozenset({'x'})
     assert fold.call_args.args[:2] == ('bro-dev', ())
-    assert fold.call_args.kwargs == {
-      'grant': ['gmail_creds', '@dev'],
-      'revoke': ['@bro'],
-    }
+    assert fold.call_args.kwargs['grant'] == ['gmail_creds', '@dev']
+    assert fold.call_args.kwargs['revoke'] == ['@bro']
+    assert fold.call_args.kwargs['credential_store'] is build.call_args.args[0]
     assert build.call_args.args[1] == {'github', 'gmail_creds'}
     assert build.call_args.kwargs == {'optional': {'openai'}}
 
@@ -669,6 +676,7 @@ class TestLaunchLayers:
       ride.scope.configured_scope_layers(str(tmp_path), 'bro-dev'),
       grant=[],
       revoke=[':launch.bro.party.boxed'],
+      credential_store=None,
     )
 
     assert launch['bro']['party'] == frozenset({'join', 'unboxed'})
@@ -679,6 +687,7 @@ class TestLaunchLayers:
       (),
       grant=[':launch.bro', ':launch.bro.party.boxed'],
       revoke=[':launch.webview'],
+      credential_store=None,
     )
     assert launch['bro']['party'] == frozenset({'boxed'})
     assert 'webview' not in launch
@@ -690,21 +699,99 @@ class TestLaunchLayers:
         (),
         grant=[':launch.webview'],
         revoke=[':launch.webview'],
+        credential_store=None,
       )
 
   def test_unknown_type_lists_the_installed_types(self):
     with pytest.raises(ValueError, match="unknown worker type 'missing'.*installed types"):
-      ride.scope.effective_launch('bro-dev', (), grant=[':launch.missing'], revoke=[])
+      ride.scope.effective_launch(
+        'bro-dev', (), grant=[':launch.missing'], revoke=[], credential_store=None
+      )
 
   def test_undeclared_field_is_refused(self):
     with pytest.raises(ValueError, match="no launch field 'unknown'"):
-      ride.scope.effective_launch('bro-dev', (), grant=[':launch.bro.unknown'], revoke=[])
+      ride.scope.effective_launch(
+        'bro-dev', (), grant=[':launch.bro.unknown'], revoke=[], credential_store=None
+      )
 
   def test_set_member_and_flag_shapes_are_checked(self):
     with pytest.raises(ValueError, match='must name a value'):
-      ride.scope.effective_launch('bro-dev', (), grant=[':launch.bro.party'], revoke=[])
+      ride.scope.effective_launch(
+        'bro-dev', (), grant=[':launch.bro.party'], revoke=[], credential_store=None
+      )
     with pytest.raises(ValueError, match='cannot name a value'):
-      ride.scope.effective_launch('bro-dev', (), grant=[':launch.webview.vnc.extra'], revoke=[])
+      ride.scope.effective_launch(
+        'bro-dev', (), grant=[':launch.webview.vnc.extra'], revoke=[], credential_store=None
+      )
+
+  def test_pass_right_is_kept_when_its_instance_is_present(self, tmp_path):
+    launch = ride.scope.effective_launch(
+      'bro-dev',
+      (),
+      grant=[':launch.bro.pass.github+work', ':launch.bro.pass.trails+'],
+      revoke=[],
+      credential_store=_credential_store(tmp_path, 'github+work', 'trails'),
+    )
+
+    assert launch['bro']['pass'] == frozenset({'github+work', 'trails+'})
+
+  def test_missing_pass_instance_names_the_launch_flags(self, tmp_path):
+    with pytest.raises(
+      ValueError,
+      match=r':launch\.bro\.pass\.github\+absent.*launch flags.*missing',
+    ):
+      ride.scope.effective_launch(
+        'bro-dev',
+        (),
+        grant=[':launch.bro.pass.github+absent'],
+        revoke=[],
+        credential_store=_credential_store(tmp_path),
+      )
+
+  def test_missing_pass_instance_names_the_last_config_layer(self, tmp_path):
+    layers = (
+      ride.scope.ScopeLayer(grant=(':launch.bro.pass.github+absent',), source='project-path-bro'),
+    )
+    with pytest.raises(ValueError, match=r'github\+absent.*project-path-bro.*missing'):
+      ride.scope.effective_launch(
+        'bro-dev',
+        layers,
+        grant=[],
+        revoke=[],
+        credential_store=_credential_store(tmp_path),
+      )
+
+  def test_unregistered_pass_kind_fails_only_the_launch_fold(self, tmp_path):
+    with pytest.raises(ValueError, match="unregistered credential kind 'not_registered'"):
+      ride.scope.effective_launch(
+        'bro-dev',
+        (ride.scope.ScopeLayer(grant=(':launch.bro.pass.not_registered+work',)),),
+        grant=[],
+        revoke=[],
+        credential_store=_credential_store(tmp_path),
+      )
+
+  def test_pass_under_a_revoked_type_key_is_inactive(self, tmp_path):
+    launch = ride.scope.effective_launch(
+      'bro-dev',
+      (ride.scope.ScopeLayer(grant=(':launch.bro.pass.github+absent',)),),
+      grant=[],
+      revoke=[':launch.bro'],
+      credential_store=_credential_store(tmp_path),
+    )
+
+    assert 'bro' not in launch
+
+  def test_scope_fold_keeps_a_missing_pass_for_reporting(self):
+    launch = ride.scope.effective_launch(
+      'bro-dev',
+      (),
+      grant=[':launch.bro.pass.github+absent'],
+      revoke=[],
+      credential_store=None,
+    )
+
+    assert launch['bro']['pass'] == frozenset({'github+absent'})
 
 
 class TestLaunchViewStore:
