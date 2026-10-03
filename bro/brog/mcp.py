@@ -152,7 +152,7 @@ def add_comment(
   ],
   body: Annotated[
     str,
-    Field(description='markdown body of the entry; keep it to the why, 2-5 lines'),
+    Field(description='markdown body of the entry; keep it to the why, 2-5 sentences'),
   ],
 ) -> str:
   context.state.add_comment(task_id, topic, body)

@@ -121,7 +121,6 @@ During implementation, add an entry when something non-obvious happens
 — with a short lowercase topic naming the event.
 Skip routine progress;
 a future reader only needs the *why*.
-Keep bodies 2-5 lines.
 
 ## Step 5 — implement
 
