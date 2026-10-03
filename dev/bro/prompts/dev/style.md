@@ -36,6 +36,9 @@
   Never break inside a code block or a table row, or anywhere adjacent to a `{{…}}` group, whose surrounding whitespace renders literally;
   keep a continuation line in its list item's content column, and repeat a `>` marker on every line of a quoted paragraph.
   `check-markdown` holds a reflow to whitespace and flags a paragraph left as one source line.
+  Text posted where a single newline renders as a line break
+  — GitHub issue, pull request, and comment bodies, through `brog` or `gh`
+  — keeps each paragraph on one line instead.
 
 - Write comments and docs for a reader who has the final code and the whole repo but wasn't in the room while you wrote it:
   they never saw the alternatives you weighed, the audit/ticket you worked from, or what the code said before.
