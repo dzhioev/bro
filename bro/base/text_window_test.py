@@ -48,6 +48,11 @@ def test_apply_limit_skipped_before_param_carries_into_marker():
   assert 'skipped after' not in out
 
 
+def test_apply_limit_skipped_after_param_carries_into_marker():
+  out = apply_limit('kept\n', limit=10, skipped_after_lines=42, skipped_after_bytes=900)
+  assert out == 'kept\n[...skipped after: 42 lines / 900 B...]'
+
+
 def test_apply_limit_cuts_one_huge_line_mid_line():
   huge = 'x' * (BYTE_LIMIT + 5_000) + '\n'
   body, _, marker = apply_limit(huge, limit=DEFAULT_LIMIT, keep='head').partition('\n[...')

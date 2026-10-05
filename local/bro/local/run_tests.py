@@ -159,6 +159,7 @@ PYTEST_FILES = [
   'bro/mission_test.py',
   'bro/quest_test.py',
   'bro/artifact_test.py',
+  'bro/artifact_mcp_test.py',
   'bro/run_lifecycle_test.py',
   'native/bro/fork_test.py',
   'native/bro/native/llms/openai_test.py',

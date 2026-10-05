@@ -218,8 +218,10 @@ def effective_launch(
     else credential_store.registry.keys()
   )
   parsed = {name: _launch_name_schema(name, types, credential_kinds) for name in explicit}
+  bro = create_bro(bro_name)
   names = {_LAUNCH_BRO, _LAUNCH_BRO_BOXED}
-  names.update(f'@{target}' for target in create_bro(bro_name)._may_summon)
+  names.update(f'@{target}' for target in bro._may_summon)
+  names.update(f':launch.{worker_type}' for worker_type in bro._may_launch)
   granted_by: dict[str, str] = {}
   for layer_grant, layer_revoke, source in configured:
     names.difference_update(layer_revoke)
