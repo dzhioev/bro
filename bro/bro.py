@@ -250,9 +250,14 @@ def _answer_tool(harness: mcp.Harness, variables: Variables) -> llm_mcp.Tool:
   )
 
 
-# The claude-harness cautions steer long work away from a tool call whose MCP
-# client may time out while the host-owned quest keeps running.
-# The recovery wording remains conditioned on the mounted service roster.
+def _claude_blocking_caution(recovery: str) -> str:
+  return (
+    '{{when #harness = claude}} CAUTION: an interactive session moves a blocking call still '
+    'running after 120 s into a background task, whose result arrives as a notification. '
+    f'{recovery}{{{{end}}}}'
+  )
+
+
 _SUMMON_DESCRIPTION = (
   'summon another bro: it runs your prompt in a new party or joins your party, as a quest '
   'whose id every `quest_*` tool takes. '
@@ -300,12 +305,12 @@ _SUMMON_DESCRIPTION = (
   'a token and `ride` command to relay to the user, who launches the child session; '
   'manual refuses `timeout`/`hold`/`llm`/`harness`/`party`/`isolation` because the user’s '
   'launch owns them, and requires boxed or unboxed in its `launch.bro.party` set.'
-  '{{when #harness = claude}} CAUTION: this tool is served over MCP, and the harness may '
-  'time a blocking call out while the quest keeps running. prefer `detach: true` for '
-  'long work, and do NOT re-summon after a timed-out blocking call'
-  '{{iff #tools contains quest_list}}: recover the quest id with quest_list and '
-  'read its retained outcome with quest_check{{else}}; if you lost the id, surface '
-  'the timeout instead of retrying{{end}}.{{end}}'
+  + _claude_blocking_caution(
+    'prefer `detach: true` for long work, and do NOT re-summon if the background task is '
+    'interrupted{{iff #tools contains quest_list}}: recover the quest id with quest_list and '
+    'read its retained outcome with quest_check{{else}}; if you lost the id, surface the '
+    'interruption instead of retrying{{end}}.'
+  )
 )
 
 
@@ -318,7 +323,9 @@ _QUEST_CHECK_DESCRIPTION = (
   'bounded by optional `timeout` seconds, and at the bound it reports running. unknown ids, '
   'evicted results, and failed or denied quests raise with their reason; `self` is refused, '
   'since the outcome of your own quest is yours to give.'
-  "{{when #harness = claude}} CAUTION: size `timeout` below the harness's idle cap.{{end}}"
+  + _claude_blocking_caution(
+    'if the background task is interrupted, repeat the journal read with the same quest id.'
+  )
 )
 
 
@@ -339,7 +346,9 @@ _QUEST_HISTORY_DESCRIPTION = (
   'dropped. answer each marked question from the other end with `quest_say` and its id as '
   '`reply_to`. `wait: true` long-polls until the next message or the end, bounded by optional '
   '`timeout` seconds, and returns at once while a question awaits you.'
-  "{{when #harness = claude}} CAUTION: size `timeout` below the harness's idle cap.{{end}}"
+  + _claude_blocking_caution(
+    'if the background task is interrupted, repeat the journal read with the same quest id.'
+  )
 )
 
 
@@ -366,8 +375,10 @@ _QUEST_ASK_DESCRIPTION = (
   'blocks for the reply in seconds and returns the answered state; expiry returns the asked '
   'state with the id, while the host keeps the question live. text over the message bound is '
   'refused with its size; mint an artifact and send the ref instead.'
-  '{{when #harness = claude}} CAUTION: keep `wait` below the MCP call cap. After an asked state, '
-  'recover the eventual reply with `quest_history`; do not ask again.{{end}}'
+  + _claude_blocking_caution(
+    'if the background task is interrupted, recover the eventual reply with `quest_history` '
+    'on the same quest; do not ask again.'
+  )
 )
 
 
@@ -386,7 +397,9 @@ _QUEST_CANCEL_DESCRIPTION = (
   'its outcome, or a pending state when the optional `timeout` seconds pass first; the end '
   'still arrives through `quest watch`. fails with the reason for a quest this session does '
   'not own or that has already ended.'
-  "{{when #harness = claude}} CAUTION: size `timeout` below the harness's idle cap.{{end}}"
+  + _claude_blocking_caution(
+    'if the background task is interrupted, recover the end with `quest_check` on the same id.'
+  )
 )
 
 

@@ -10,13 +10,19 @@ import pytest
 import ride.claude.runner as ride_runner
 from bro.llm.llms import claude_code
 from bro.monitor import SESSION_DIR_ENV, trail_pointer
-from bro.summon import SUMMONED_ENV
+from bro.summon import RUNTIME_ENV, SUMMONED_ENV
 from ride.claude.claude_argv import ClaudeLaunch
 from ride.claude.fake_claude_test_helper import fake_claude_env
 from ride.claude.interrupt import StreamedRun
 from ride.claude.mcp import MCPEndpoint
 from ride.claude.shell_prefix import SHELL_PREFIX_ENV
 from ride.session_test import _spec
+
+_PINNED_CLAUDE = Path('/pinned/claude')
+
+
+def _fake_claude(environment: dict[str, str]) -> Path:
+  return Path(environment['PATH'].partition(':')[0]) / 'claude'
 
 
 class _Harness:
@@ -27,6 +33,7 @@ class _Harness:
     self.projects_dir = tmp_path / 'projects'
     self.claude_config_dir = tmp_path / 'claude-config'
     self.session_dir = tmp_path / 'session'
+    self.pinned_claude = tmp_path / 'pinned-claude'
     self.server = MagicMock()
     self.server.endpoint = MCPEndpoint(port=1234, token='tok')
 
@@ -34,6 +41,7 @@ class _Harness:
     self._patches = [
       patch.dict('os.environ', {}, clear=False),
       patch('ride.claude.runner.claude_projects_dir', return_value=self.projects_dir),
+      patch('ride.claude.runner._claude_binary', return_value=self.pinned_claude),
       patch('ride.claude.runner.start_session_mcp_server', return_value=self.server),
       patch(
         'ride.claude.runner.build_claude_launch',
@@ -56,18 +64,57 @@ class _Harness:
     self.env.pop(SUMMONED_ENV, None)
     self.env['CLAUDE_CONFIG_DIR'] = str(self.claude_config_dir)
     self.env[SESSION_DIR_ENV] = str(self.session_dir)
-    self.start_server = entered[2]
-    self.build = entered[3]
-    self.run_claude = entered[4]
-    self.start_recorder = entered[5]
-    self.apply_auth = entered[6]
-    self.start_statusline_projector = entered[7]
+    self.claude_binary = entered[2]
+    self.start_server = entered[3]
+    self.build = entered[4]
+    self.run_claude = entered[5]
+    self.start_recorder = entered[6]
+    self.apply_auth = entered[7]
+    self.start_statusline_projector = entered[8]
     return self
 
   def __exit__(self, *exception):
     for p in reversed(self._patches):
       p.__exit__(*exception)
     return False
+
+
+class TestClaudeBinary:
+  def test_boxed_session_uses_the_image_install(self, monkeypatch):
+    monkeypatch.setenv('RIDE_ISOLATION', 'boxed')
+    cached = MagicMock()
+    monkeypatch.setattr(ride_runner.claude_release, 'cached_binary', cached)
+
+    assert ride_runner._claude_binary() == Path('/opt/claude-code/claude')
+    cached.assert_not_called()
+
+  def test_unboxed_session_uses_the_pinned_host_release(self, monkeypatch, tmp_path):
+    monkeypatch.setenv('RIDE_ISOLATION', 'unboxed')
+    monkeypatch.setenv(RUNTIME_ENV, str(tmp_path / 'runtime'))
+    monkeypatch.setattr(ride_runner, 'claude_code_version', lambda: '2.1.280')
+    monkeypatch.setattr(ride_runner.claude_release, 'host_platform', lambda: 'linux-x64')
+    binary = tmp_path / 'claude'
+    cached = MagicMock(return_value=binary)
+    monkeypatch.setattr(ride_runner.claude_release, 'cached_binary', cached)
+
+    assert ride_runner._claude_binary() == binary
+    cached.assert_called_once_with('2.1.280', 'linux-x64')
+
+  def test_unboxed_session_uses_a_release_carried_by_its_runtime(self, monkeypatch, tmp_path):
+    monkeypatch.setenv('RIDE_ISOLATION', 'unboxed')
+    runtime = tmp_path / 'runtime'
+    carried = runtime / 'claude' / 'claude'
+    carried.parent.mkdir(parents=True)
+    carried.touch()
+    monkeypatch.setenv(RUNTIME_ENV, str(runtime))
+    verified = MagicMock(return_value=carried)
+    cached = MagicMock()
+    monkeypatch.setattr(ride_runner.claude_release, 'verified_binary', verified)
+    monkeypatch.setattr(ride_runner.claude_release, 'cached_binary', cached)
+
+    assert ride_runner._claude_binary() == carried
+    verified.assert_called_once_with(carried)
+    cached.assert_not_called()
 
 
 class TestSessionRun:
@@ -94,7 +141,7 @@ class TestSessionRun:
       h.projects_dir.mkdir()
       (h.projects_dir / 'session-id.jsonl').write_text('{}')
       assert ride_runner.run_session(_spec()) == 0
-      temp_dir = Path(h.run_claude.call_args.args[1]['CLAUDE_CODE_TMPDIR'])
+      temp_dir = Path(h.run_claude.call_args.args[2]['CLAUDE_CODE_TMPDIR'])
       assert temp_dir.stat().st_mode & 0o777 == 0o700
       scratchpad = temp_dir / 'session-id' / 'scratchpad'
       scratchpad.mkdir(parents=True)
@@ -102,15 +149,16 @@ class TestSessionRun:
       working_file.write_text('{}')
 
       assert ride_runner.run_session(_spec(resume=True)) == 0
-      resumed_temp_dir = Path(h.run_claude.call_args.args[1]['CLAUDE_CODE_TMPDIR'])
+      resumed_temp_dir = Path(h.run_claude.call_args.args[2]['CLAUDE_CODE_TMPDIR'])
       assert resumed_temp_dir == temp_dir == h.session_dir / 'claude' / 'tmp'
       assert working_file.read_text() == '{}'
 
-  def test_claude_is_run_against_the_sessions_transcripts(self, monkeypatch, tmp_path):
+  def test_pinned_claude_is_run_against_the_sessions_transcripts(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
+    with _Harness(tmp_path) as harness:
       assert ride_runner.run_session(_spec()) == 0
-      assert h.run_claude.call_args.args[2] == h.projects_dir
+      assert harness.run_claude.call_args.args[0] == tmp_path / 'pinned-claude'
+      assert harness.run_claude.call_args.args[3] == harness.projects_dir
 
   def test_recorder_runs_for_the_session_and_stops_after(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
@@ -206,19 +254,21 @@ class TestSessionRun:
       assert ride_runner.run_session(_spec()) == 0
       assert h.apply_auth.call_args.kwargs == {'warn_when_missing': True}
       # the transformed env is the one claude is spawned with
-      assert h.apply_auth.call_args.args[0] is h.run_claude.call_args.args[1]
+      assert h.apply_auth.call_args.args[0] is h.run_claude.call_args.args[2]
 
-  def test_extends_claudes_mcp_tool_call_timeout(self, monkeypatch, tmp_path):
+  def test_claudes_mcp_limits_are_24_hour_backstops(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
+    with _Harness(tmp_path) as harness:
       assert ride_runner.run_session(_spec()) == 0
-      assert h.run_claude.call_args.args[1]['MCP_TOOL_TIMEOUT'] == '600000'
+      environment = harness.run_claude.call_args.args[2]
+      assert environment['CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT'] == '86400000'
+      assert environment['MCP_TOOL_TIMEOUT'] == '86400000'
 
   def test_claudes_bash_commands_run_through_the_session_path_prefix(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       assert ride_runner.run_session(_spec()) == 0
-      env = h.run_claude.call_args.args[1]
+      env = h.run_claude.call_args.args[2]
       prefix = Path(env[SHELL_PREFIX_ENV])
       assert prefix.parent == h.session_dir / 'claude'
       assert os.access(prefix, os.X_OK)
@@ -229,7 +279,7 @@ class TestSessionRun:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       assert ride_runner.run_session(_spec()) == 0
-      assert h.run_claude.call_args.args[1]['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK'] == '1'
+      assert h.run_claude.call_args.args[2]['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK'] == '1'
 
 
 class _RecordingChannel:
@@ -264,8 +314,12 @@ class TestRunClaudeRootSolo:
     run_claude = MagicMock(return_value=StreamedRun(0, stopped=False, results=('hi',)))
     monkeypatch.setattr(ride_runner, 'run_streaming', run_claude)
 
-    assert ride_runner._run_claude_root_solo(['built'], {'ENV': 'yes'}, 'go') == 0
-    assert run_claude.call_args.args == (['claude', 'built'], {'ENV': 'yes'}, 'go')
+    assert ride_runner._run_claude_root_solo(_PINNED_CLAUDE, ['built'], {'ENV': 'yes'}, 'go') == 0
+    assert run_claude.call_args.args == (
+      [str(_PINNED_CLAUDE), 'built'],
+      {'ENV': 'yes'},
+      'go',
+    )
     assert events == [
       ('trail', 't-root'),
       ('close',),
@@ -289,7 +343,7 @@ class TestRunClaudeRootSolo:
       MagicMock(return_value=StreamedRun(0, stopped=True, results=())),
     )
 
-    assert ride_runner._run_claude_root_solo([], {}, 'go') == 0
+    assert ride_runner._run_claude_root_solo(_PINNED_CLAUDE, [], {}, 'go') == 0
     assert events == []
 
 
@@ -317,7 +371,7 @@ class TestRunClaudeSummoned:
   ):
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-child')
     env = fake_claude_env(tmp_path, 'result("THE REPLY")\nsys.stdin.read()\n')
-    assert ride_runner._run_claude_summoned([], env, 'go') == 0
+    assert ride_runner._run_claude_summoned(_fake_claude(env), [], env, 'go') == 0
     assert channel_events == [
       ('trail', 't-child'),
       ('close',),
@@ -333,7 +387,7 @@ class TestRunClaudeSummoned:
     monkeypatch.setattr(ride_runner, '_TRAIL_POLL_SECONDS', 0.05)
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-child')
     env = fake_claude_env(tmp_path, 'time.sleep(0.4)\nresult("LATE")\nsys.stdin.read()\n')
-    assert ride_runner._run_claude_summoned([], env, 'go') == 0
+    assert ride_runner._run_claude_summoned(_fake_claude(env), [], env, 'go') == 0
     assert channel_events == [
       ('trail', 't-child'),
       ('close',),
@@ -345,14 +399,14 @@ class TestRunClaudeSummoned:
     self, tmp_path, session_state, channel_events
   ):
     env = fake_claude_env(tmp_path, 'result("DONE")\nsys.stdin.read()\n')
-    assert ride_runner._run_claude_summoned([], env, 'go') == 0
+    assert ride_runner._run_claude_summoned(_fake_claude(env), [], env, 'go') == 0
     assert channel_events == [('completed', 'DONE', 'ok', None), ('close',)]
 
   def test_failed_exit_emits_no_terminal_but_echoes(
     self, tmp_path, session_state, channel_events, capfd
   ):
     env = fake_claude_env(tmp_path, 'result("PARTIAL")\nsys.exit(3)\n')
-    assert ride_runner._run_claude_summoned([], env, 'go') == 3
+    assert ride_runner._run_claude_summoned(_fake_claude(env), [], env, 'go') == 3
     assert channel_events == []
     assert capfd.readouterr().out == 'PARTIAL\n'
 
@@ -373,7 +427,7 @@ class TestRunClaudeSummoned:
       'signal.signal(signal.SIGINT, lambda *_: sys.exit(0))\ntime.sleep(0.2)\n'
       'os.kill(os.getppid(), signal.SIGTERM)\ntime.sleep(10)\n',
     )
-    ride_runner._run_claude_summoned([], env, 'go')
+    ride_runner._run_claude_summoned(_fake_claude(env), [], env, 'go')
     assert received_signals[:1] == [signal.SIGINT]
     assert not [event for event in channel_events if event[0] == 'completed']
 
@@ -383,7 +437,7 @@ class TestRunClaudeSummoned:
     monkeypatch.delenv('BROKER_CHANNEL', raising=False)
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-child')
     env = fake_claude_env(tmp_path, 'result("OK")\nsys.stdin.read()\n')
-    assert ride_runner._run_claude_summoned([], env, 'go') == 0
+    assert ride_runner._run_claude_summoned(_fake_claude(env), [], env, 'go') == 0
     assert capfd.readouterr().out == 'OK\n'
 
 
@@ -403,7 +457,7 @@ class TestRunClaudeSummonedInteractive:
 
     monkeypatch.setattr(ride_runner, 'run_interactive', _linger)
     transcripts = tmp_path / 'projects'
-    assert ride_runner._run_claude_summoned_interactive([], {}, transcripts) == 0
+    assert ride_runner._run_claude_summoned_interactive(_PINNED_CLAUDE, [], {}, transcripts) == 0
     # the terminal belongs to the `answer` service tool; an exit without it
     # surfaces to the summoner as the channel-gone failure
     assert channel_events == [('trail', 't-manual'), ('close',)]
@@ -465,7 +519,7 @@ class TestSummonedSession:
         'ride.claude.runner._run_claude_summoned_interactive', return_value=7
       ) as interactive:
         assert ride_runner.run_session(_spec()) == 7
-      assert interactive.call_args.args[2] == h.projects_dir
+      assert interactive.call_args.args[3] == h.projects_dir
       h.run_claude.assert_not_called()
 
   def test_summoner_attribution_is_dropped_from_claudes_env(self, monkeypatch, tmp_path):
@@ -476,4 +530,4 @@ class TestSummonedSession:
       # the recorder daemon starts before the drop, so its snapshot carries it
       assert h.start_recorder.called
       assert 'RIDE_SUMMONER' not in os.environ
-      assert 'RIDE_SUMMONER' not in h.run_claude.call_args.args[1]
+      assert 'RIDE_SUMMONER' not in h.run_claude.call_args.args[2]

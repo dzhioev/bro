@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import platform
@@ -16,7 +17,6 @@ from bro.benchmark.bundle import (
   Bundle,
   build,
   built,
-  claude_code_cache,
   default_root,
   export_command,
   host_mismatch,
@@ -69,6 +69,8 @@ def _fake_bundle(root: Path) -> Bundle:
   (bundle.shims / 'ride').symlink_to(Path('..') / 'venv' / 'bin' / 'ride')
   bundle.claude_dir.mkdir()
   bundle.claude.write_text('')
+  bundle.claude.chmod(0o755)
+  bundle.claude_checksum.write_text(f'{hashlib.sha256(b"").hexdigest()}\n')
   bundle.manifest.write_text(json.dumps(_manifest()))
   return bundle
 
@@ -81,6 +83,7 @@ def test_layout_hangs_off_the_root(tmp_path):
   assert bundle.script('ride') == tmp_path / 'bundle' / 'venv' / 'bin' / 'ride'
   assert bundle.shims == tmp_path / 'bundle' / 'bin'
   assert bundle.claude == tmp_path / 'bundle' / 'claude' / 'claude'
+  assert bundle.claude_checksum == tmp_path / 'bundle' / 'claude' / 'claude.sha256'
   assert bundle.manifest == tmp_path / 'bundle' / 'bundle.json'
 
 
@@ -95,6 +98,15 @@ def test_built_reports_every_missing_part(tmp_path):
 
   assert bundle.missing() == (bundle.claude,)
   with pytest.raises(FileNotFoundError, match='claude'):
+    built(bundle.root)
+
+
+def test_built_requires_the_claude_checksum_record(tmp_path):
+  bundle = _fake_bundle(tmp_path / 'bundle')
+  bundle.claude_checksum.unlink()
+
+  assert bundle.missing() == (bundle.claude_checksum,)
+  with pytest.raises(FileNotFoundError, match='claude.sha256'):
     built(bundle.root)
 
 
@@ -239,7 +251,7 @@ def test_a_build_refuses_a_host_it_does_not_target(monkeypatch, tmp_path):
   monkeypatch.setattr(bundle_module, 'host_mismatch', lambda: 'nope')
 
   with pytest.raises(RuntimeError, match='nope'):
-    build(tmp_path / 'checkout', tmp_path / 'bundle', tmp_path / 'cache')
+    build(tmp_path / 'checkout', tmp_path / 'bundle')
   assert not (tmp_path / 'bundle').exists()
 
 
@@ -283,7 +295,6 @@ def test_the_workspace_is_the_checkout_the_framework_runs_from():
 
   assert (root / 'uv.lock').is_file()
   assert default_root(root) == root / 'var' / 'benchmark' / 'bundle'
-  assert claude_code_cache(root) == root / 'var' / 'benchmark' / 'claude-code'
 
 
 def test_a_framework_outside_a_checkout_has_no_workspace(monkeypatch, tmp_path):

@@ -24,10 +24,6 @@ REQUIRES_CLAUDE_CREDENTIAL = pytest.mark.skipif(
 )
 
 
-def pinned_claude(config: pytest.Config) -> Path:
-  """the pinned Claude Code binary for this host, fetched into the run's cache."""
-  if config.cache is None:
-    raise RuntimeError('the pinned claude is cached through pytest, whose cacheprovider is off')
-  return claude_release.cached_binary(
-    claude_code_version(), claude_release.host_platform(), config.cache.mkdir('claude-code')
-  )
+def pinned_claude() -> Path:
+  """the pinned Claude Code binary for this host, from ride's release cache."""
+  return claude_release.cached_binary(claude_code_version(), claude_release.host_platform())

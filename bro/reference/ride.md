@@ -119,6 +119,14 @@ Claude's recipe remains private to `ride.claude`.
 
 A Claude session retains Claude Code's built-ins, skills, and base prompt while adding the selected bro's persona, spells, filtered MCP namespaces, and blocked-tool declarations.
 It requires the `claude_code` setup token.
+Every managed session runs the version pinned in `ride/ride/setup/container/claude-code-version` by absolute path:
+the runtime image's install in boxed isolation, and a verified standalone release in unboxed isolation.
+An ordinary unboxed runtime caches it under `<runtime-root>/claude-code/<version>/<platform>/`;
+a materialized `--runtime-bundle` may instead carry `claude/claude` and its checksum record as part of its self-contained installation.
+Each copy is checked against the release checksum recorded beside it and needs no network;
+a changed copy fails the launch rather than being replaced.
+A session holds its version against `ride clean` for its whole run, and concurrent first starts serialize the one download.
+The runner sets `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` and `MCP_TOOL_TIMEOUT` to a 24-hour backstop so each tool's own bound or the session supervisor decides first.
 
 The outer runs the separate `do-ride solo|along` session executable.
 Unboxed isolation takes it from the frozen host snapshot;
@@ -133,7 +141,7 @@ when missions are in flight with no background task running, where the exiting p
 or when a background task is running with nothing in flight, where it would hold the session until killed;
 any running task over missions in flight is the wait it should be and passes.
 The stop guard reads `background_tasks`, which Claude Code sends undocumented;
-`ride/ride/claude/stop_guard_llm_test.py` probes it live against the Claude Code release the container pins.
+`ride/ride/claude/stop_guard_llm_test.py` probes it live against the Claude Code release every managed session runs.
 
 Claude Code notifies a finished background command with the path of its output file, never the output.
 Every session's settings therefore wire `ride.claude.watch_delivery` as its `UserPromptSubmit` hook, which Claude Code also runs on a task notification:
@@ -189,7 +197,7 @@ The runtime command is `ride`, and runtime-owned environment facts use `RIDE_*`.
 Persistent runtime data lives outside every checkout under the user's global **`<runtime-root>`**:
 `~/.local/share/ride/`, or `$XDG_DATA_HOME/ride/` where that variable names an absolute path.
 A launch creates it with mode 0700 on first use.
-Its top-level stores are `workspaces/`, `runtime/`, `repos/`, `trails/`, `launch/`, and `broker/`;
+Its top-level stores are `workspaces/`, `runtime/`, `repos/`, `claude-code/`, `trails/`, `launch/`, and `broker/`;
 workspace metadata records which repository, if any, each workspace is attached to.
 
 Workspace metadata is read only in its current strict shape.
@@ -804,7 +812,7 @@ Instead, the launch provisions a container-private `.claude.json` in the workspa
 - `claude/settings.json` — constructed fresh each launch (not mounted from the host), holding only UX prefs (spinner verbs, reduced motion, feedback-survey opt-out),
   an explicit `enabledPlugins` opt-in for the `pyright-lsp` Python language server (the host plugin set no longer leaks in, so the container enables it itself),
   a `cleanupPeriodDays` pin keeping transcripts forever (they back the session recording), an `autoMemoryEnabled: false` opt-out of claude's default-on auto-memory,
-  an `env` block turning claude's auto-updater off (`DISABLE_AUTOUPDATER`, so no session replaces the claude install it runs — the image's here, the user's own on host),
+  an `env` block turning claude's auto-updater off (`DISABLE_AUTOUPDATER`, so no session replaces the pinned binary it runs),
   and `skipDangerousModePermissionPrompt: true`
   — the workspace is an isolated clone, so the `--dangerously-skip-permissions` acceptance dialog is pre-answered (boxed sessions only; an unboxed clone keeps the dialog).
   The plugin is *installed* at image-build time (`ride/ride/setup/container/Dockerfile`) and staged at `/opt/claude-plugins-seed`, which `do-ride` copies into the bind-mounted `~/.claude/plugins` on first run
@@ -1028,8 +1036,9 @@ underneath it are two client surfaces over the same request, each split into the
   `quest_list` is the same paginated journal listing on both harnesses.
   On the claude harness, the blocking service tools retain their polling controls:
   `summon` blocks unless `detach: true`, `quest_ask` may wait for the reply, `quest_check(wait=true)` long-polls to the end or a child question, `quest_history(wait=true)` to the next message, and `quest_cancel` may wait for the terminal.
-  Each MCP blocking call owns its channel client so cancellation aborts the current short wait, while the host journal retains the outcome and chat;
-  its transport cautions keep waits under the harness cap and recover by id instead of sending twice.
+  Each MCP blocking call owns its channel client so cancellation aborts the current short wait, while the host journal retains the outcome and chat.
+  In an interactive Claude session, a call still running after 120 s moves into a background task whose result arrives as a notification;
+  the tool cautions recover an interrupted task by id instead of sending twice.
 
 A claude-harness child is scoped through the claude recipe
 — `claude_code` required, no LLM key
@@ -1222,7 +1231,8 @@ starts the session-local MCP server and surfaces bro spells (both below);
 builds the Claude argv (below);
 starts the session recorder daemon (see "Session recording");
 gates on the server's `/health`;
-then runs `claude` and waits, ending it on a SIGTERM aimed at `do-ride` (`docker stop`, kill, a terminating service tool) as the interrupt a user issues rather than as a signal, so the turn in flight reaches the transcript before Claude goes.
+then runs the isolation's pinned Claude binary by absolute path and waits.
+A SIGTERM aimed at `do-ride` (`docker stop`, kill, a terminating service tool) reaches it as the interrupt a user issues rather than as a signal, so the turn in flight reaches the transcript before Claude goes.
 `ride/ride/claude/interrupt.py` owns that per-flavor split.
 After Claude exits the runner stops the server and recorder (the stop is the recorder's final append and trail end).
 The bro harness's runner resolves a resume's trail from the session's current-trail pointer and spawns the native `bro run|chat …` argv.
